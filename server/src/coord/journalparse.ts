@@ -152,7 +152,7 @@ export function reviveDec(v: unknown): LifecycleDec | null {
 }
 
 /**
- * `LifecycleMeas`'s full twenty-eight keys, and only those — a 29th key is a
+ * `LifecycleMeas`'s full thirty-two keys, and only those — a 33rd key is a
  * compile error here (TS2353) exactly as it is on the interface itself
  * (`shared/api.ts`'s own `LIFECYCLE_MEAS_KEY_MAP`).
  *
@@ -186,7 +186,7 @@ export function reviveDec(v: unknown): LifecycleDec | null {
  * `task-29-report.md`.
  *
  * What the brief's "ten declared, rest lives in raw" design intent survives
- * as: any key a future ccd emits that is NOT one of these twenty-NINE still
+ * as: any key a future ccd emits that is NOT one of these thirty-TWO still
  * never reaches `meas` — it is still recoverable only from `raw`, verbatim.
  */
 export function reviveMeas(v: unknown): LifecycleMeas | null {
@@ -207,8 +207,8 @@ export function reviveMeas(v: unknown): LifecycleMeas | null {
     // fields; see `LifecycleMeas.home`/`.pool`/`.reason`'s own docstrings.
     home: s(o, 'home'), pool: s(o, 'pool'), reason: s(o, 'reason'),
     // D-2605 fix round 2 (D-2782) — what a `purge-incomplete` failure could
-    // not unlink; see `LifecycleMeas.unremoved`'s own docstring.
-    unremoved: s(o, 'unremoved'),
+    // not unlink; then ws-reclaim's run, WIP commit and residue (child reclamation, wave 3).
+    unremoved: s(o, 'unremoved'), childOf: s(o, 'childOf'), wip: s(o, 'wip'), residueBytes: s(o, 'residueBytes'),
   };
 }
 

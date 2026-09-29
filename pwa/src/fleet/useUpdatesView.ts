@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { isReleaseTag, isUpdateChannel, type NodeWire, type UpdatesView } from '../../../shared/api';
 import { isNewerTag } from '../../../shared/semver';
+import { statedOf } from '../../../shared/update-summary';
 import { ApiError, api } from '../lib/api';
 
 /** THE ONE invalid-Date predicate (fix round 1, F13/item 8): a `lastOkAt`/
@@ -67,17 +68,27 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
  *  only ever compared with `===`), only that dereferencing it cannot throw and
  *  that a rendered field is a primitive — so this checks structure (object; a
  *  nullable field is that type or null; `label` a string; `current`, where
- *  present, is an object whose `sha` is a string; `reachable`, where PRESENT,
- *  is a boolean — absent tolerated, wire discipline, but a malformed non-
- *  boolean is not, since `statedOf`/`pendingTag` read it `=== true` and a
- *  stray truthy non-boolean must not silently vouch), the same discipline
+ *  present, is an object whose `sha` is a string; `reachable` a boolean,
+ *  REQUIRED, never tolerated absent — `NodeWire.reachable` is not optional on
+ *  the wire (shared/api.ts), `statedOf`/`pendingTag` read it `=== true` and
+ *  `reachabilityLine` reads a confirmed `=== false`, and an element silent
+ *  about it is neither of those two spellings (W5 review 161, F-B; corrects
+ *  fix round 2 item 5's "absent tolerated", which was itself the bug), the
+ *  same discipline
  *  `asUpdatesView`'s catalogue check already applies one level up. */
 const isNodeElement = (v: unknown): v is NodeWire => {
   if (!isObject(v)) return false;
   if (typeof v.role !== 'string' && v.role !== null) return false;
   if (typeof v.label !== 'string') return false;
   if (typeof v.measuredAt !== 'number' && v.measuredAt !== null) return false;
-  if (v.reachable !== undefined && typeof v.reachable !== 'boolean') return false;
+  // W5 review 161 (F-B): `NodeWire.reachable` is a REQUIRED boolean
+  // (shared/api.ts), never optional — `statedOf`/`pendingTag` read it
+  // `=== true` and `reachabilityLine` reads a confirmed `false`, so an
+  // element that says NOTHING about `reachable` is not one of those two
+  // spellings either; a non-conforming server that omits the field is
+  // dropped exactly as one that sends a stray non-boolean is, never
+  // tolerated as "unknown, treat like absent".
+  if (typeof v.reachable !== 'boolean') return false;
   if (v.current !== null) {
     if (!isObject(v.current) || typeof (v.current as { sha?: unknown }).sha !== 'string') return false;
   }
@@ -183,12 +194,16 @@ export function nodeVersion(n: NodeWire): string | null {
  * nothing to move up to, on any of the three surfaces this one predicate
  * feeds. The settings row still says "unreachable since …" (`reachabilityLine`,
  * unaffected); only the ARROW is gone.
+ *
+ * W5 review 161 (F-J): the measuredAt/stampRead/reachable trio above is
+ * `statedOf`'s (`shared/update-summary.ts`) own three-clause fact — "does
+ * this reading vouch for its version" — read through it rather than
+ * re-derived inline, which was itself a second, undetected copy of the
+ * predicate `single-definition.test.ts` exists to forbid.
  */
 export function pendingTag(n: NodeWire): string | null {
-  if (typeof n.measuredAt !== 'number') return null;
+  if (!statedOf(n)) return null;
   if (!isUpdateChannel(n.channel)) return null;
-  if (n.stampRead !== 'ok') return null;
-  if (n.reachable !== true) return null;
   if (n.os === 'darwin') return null;
   const want = n.desiredTag;
   if (!isReleaseTag(want)) return null;

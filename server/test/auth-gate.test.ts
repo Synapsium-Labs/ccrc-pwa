@@ -124,7 +124,7 @@ const HAS_PWA = existsSync(path.resolve(here, '..', 'dist-pwa', 'index.html'));
 // ── fixtures ─────────────────────────────────────────────────────────────
 
 /** A pty that never touches tmux. REQUIRED, not tidiness: the real `attachPty`
- *  runs `tmux attach -t cc-<id>` on this box, and `/ws/pty/:id` is one of the
+ *  runs `tmux attach -t =cc-<id>:` on this box, and `/ws/pty/:id` is one of the
  *  three sockets swept below. The gate refuses the upgrade before the handler
  *  runs — but the mutation runs that measure this suite DELETE the gate, and a
  *  suite whose mutant spawns tmux against the live box is not a suite anyone can
@@ -241,7 +241,10 @@ describe('the scanner is looking at something', () => {
     // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
     // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
     // projection read `GET /api/updates/intent/:nodeId`, EXEMPT-BUT-AUTHENTICATED.
-    expect(scanRoutes('update/routes.ts').length).toBe(5);
+    // 7 since update-management wave 5 (design 2026-09-20 §12) registered the two
+    // moves, `POST /api/updates/apply` and `POST /api/updates/rollback`, beside
+    // them — session-only and NOT EXEMPT like W2's four, no box token at all.
+    expect(scanRoutes('update/routes.ts').length).toBe(7);
     // The `server.ts` half moved too, and NOT on that ladder: 47 since
     // `POST /api/projects/:project/pool` (account pools wave 3, task 9) — the
     // project-pool tag write, registered in `server.ts` rather than in
@@ -292,7 +295,8 @@ describe('the scanner is looking at something', () => {
     // untouched by this task, so 49 -> 51 and 79 -> 81.
     // 86 since update-management W2 put the third file's five beside the two
     // files' 51 + 30: 81 -> 86.
-    expect(ROUTES.length).toBe(86);
+    // 88 since wave 5's two moves joined that file: 51 + 30 + 7, 86 -> 88.
+    expect(ROUTES.length).toBe(88);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -330,6 +334,8 @@ describe('the scanner is looking at something', () => {
       // reading `update/routes.ts` would lose all of them at once.
       'GET /api/updates', 'POST /api/updates/intent', 'POST /api/updates/refresh',
       'POST /api/updates/ack', 'GET /api/updates/intent/:nodeId',
+      // …and wave 5's two moves, which the same lost-file failure would drop with them.
+      'POST /api/updates/apply', 'POST /api/updates/rollback',
     ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
     // Both a GET and a POST on the same path, which is the case a path-only
     // exempt table would get wrong (the POST is a box-token machine lane, the
@@ -427,7 +433,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 86 scanned + the static wildcard when the bundle is built.
+    // 88 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -877,7 +883,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 83 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 85 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -941,7 +947,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 83 HTTP routes, not the 32 exempt.
+          //    is not itself flag-aware — the assertion that covers all 85 HTTP routes, not the 32 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

@@ -4843,10 +4843,12 @@ describe('the compaction card — the two documents say what the code does (spec
   };
   const SCANNED = ['session-hook.sh', 'ccd'];
   /** NOT FUNCTIONS, and each is here for a stated reason rather than because it
-   *  was in the way. Both are declared by the GENERATED roster projection
+   *  was in the way. All three are declared by the GENERATED roster projection
    *  (`~/.ccrc/accounts.sh`, `shared/generate.mjs`), which this repo builds but
-   *  does not ship as a file under `ccd/`, so no definition can be found here. */
-  const NOT_A_FUNCTION = ['_ccrc_cfg_dir', '_ccrc_pool'];
+   *  does not ship as a file under `ccd/`, so no definition can be found here.
+   *  `_ccrc_secrets_file` joined for D-3524: ccd's auth-dead credential rule
+   *  probes it with `declare -F`, as `_acct_pool` probes `_ccrc_pool`. */
+  const NOT_A_FUNCTION = ['_ccrc_cfg_dir', '_ccrc_pool', '_ccrc_secrets_file'];
 
   /** A comment BLOCK, normalised the way `paragraphs` normalises prose and for
    *  the same measured reason: a retraction is hard-wrapped, so a line-scoped
@@ -8086,6 +8088,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // with empty, not a debt, so a rotted anchor there is repaired, never
     // counted. 161 -> 162 failures overall, +1 on `ccd/ccd` and +0 everywhere
     // else.
+    // RE-MEASURED at the centralised-update W6 versioned-installs wave, S6-R11 (base af5a29f8, tip db846340).
+    // The compaction-card spec and plan are byte-identical at both, checked; README changed in prose that
+    // cites nothing and in the anchors re-anchored BY CONTENT beside it (its own entry is empty at the tip);
+    // so nothing was re-pointed and no rule changed. What moved is this range's growth under frozen anchors:
+    // `ccd/ccd` 26620 -> 26684 lines; `ccd/ccrc` 16578 -> 18802 lines; `server/test/single-definition.test.ts`
+    // 3890 -> 3915 lines. Headline 196 -> 194. Entered: `plan:3240 ccd/ccd:3050-3070`, `spec:2230
+    // ccd/ccd:13618`. Left: `plan:3326 ccd/ccrc:5217`, `spec:1310 ccd/ccd:13602`, `spec:2125 ccd/ccd:13673`,
+    // `spec:2230 ccd/ccd:13673`. Measured by diffing the dumped failure sets of the two trees, never retyped.
+    // No D-number.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
       // RE-DERIVED on the FOURTH merge with main (`ad3d2fbc`, #136), 145 -> 144,
       // and DOWN is the direction that needs an argument rather than a shrug.
@@ -8182,6 +8193,42 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // :13602` and `spec:2123 :13573-13575` leave — Task 3's eight lines above
       // them, measured by the plan's `cite-remeasure.py` against the pre-task
       // tree. An unchanged count is not an unchanged debt. S6-R11, no D-number.
+      // CHILD-RECLAMATION WAVE 3 (Task 5) moves it, across the whole task,
+      // base -> `35d6d510`, 147 -> 149, +2, measured against the pre-Task-5
+      // tree (this task's own base) and diffing the two failure lists: TWO
+      // ENTER, `spec:1210 ccd/ccd:13602` and `spec:2123 ccd/ccd:13573-13575`;
+      // NONE LEAVES — `spec:91 ccd/ccd:13602` still fails at both trees, on a
+      // different token of the same line. None is a repair: the ONE cause,
+      // relative to base, is this task's own net insertion above these lines
+      // — `cmd_ws_audit`'s header, argv parse, one shared-fork call and its
+      // verdict line, plus `cmd_caps`'s verb line and token echo — sliding
+      // other bytes under these same fixed line numbers (review 170 F15:
+      // the dispatcher arm, measured at `35d6d510:ccd/ccd:25440` (added by
+      // `791d2256` at `:25434`), sits below every corpus anchor here and
+      // contributes nothing — corrected in place, not re-measured; review
+      // fr-H M6: 26206 was dfb66cc4's OWN line for the same arm, no tree
+      // named, and goes stale on the next RECLAIM-region insertion).
+      // (Fix round 1, review I1/I2, extracted that shared call,
+      // `_ws_reclaim_fork` — called by both `cmd_ws_audit` and
+      // `_ws_reclaim_locked` — and shrank the net insertion from the first
+      // commit's own shape; that shrink explains the difference FROM
+      // `791d2256`, not the cause relative to base, which is this task's
+      // final net shape alone.) Neither corpus document changed
+      // (`spec`/`plan` byte-identical to this task's base, measured). Still
+      // stale in fact; Task 11 still owns the re-anchor. S6-R11, no D-number.
+      // FIX ROUND 3 (a `ccd-wsaudit-nonpoison.test.ts` regression found after
+      // this task closed — its own pinned counts, outside this census, are
+      // argued in that file) moves it, across the whole task, base -> HEAD,
+      // 147 -> 148, +1: the same two ENTER as above, and now ONE LEAVES,
+      // `spec:2230 ccd/ccd:13618` — a coincidental pass, not a repair (neither
+      // corpus document changed). The cause is this round's one added line: a
+      // one-line pointer comment inside `cmd_ws_audit`'s success arm (`#
+      // never the literal … — see "RECLAIMABLE, SPELLED THROUGH _JSON_STR" in
+      // the RECLAIM region`), which spells the `"verdict":"reclaimable"` line
+      // through `_json_str` instead of as a literal, so
+      // `ccd-wsaudit-nonpoison.test.ts`'s own separate harvest — which has no
+      // `reclaimable` exclusion of its own — stops counting it as a new word.
+      // Task 11 still owns the re-anchor. S6-R11, no D-number.
       'ccd/ccd': 147,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
@@ -8240,7 +8287,19 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // The clause's true anchor is `_inst_atomic()`'s own definition line,
       // `:9650` -> `:9668` here. It is inside the FROZEN spec, so it is
       // COUNTED rather than repaired; Task 11 still owns the re-anchor.
-      'ccd/ccrc': 5,
+      // THE FIVE `ccd/ccrc` CITATIONS THE FROZEN CORPUS HOLDS ARE COUNTED, NEVER RE-ANCHORED
+      // (W4-167 F3; the coordinator's ruling, "the freeze stands"): the spec's three (`spec:91`
+      // `ccd/ccrc:9663`, `:10990`, `:11635`) and the plan's two (`plan:3326` `ccd/ccrc:5217`, `:6531`)
+      // each resolve to a line their citer does not mean, and both documents are recorded FROZEN
+      // above ("COUNTED rather than repaired"), so no document of the corpus was edited. THIS WAVE'S
+      // `ccd/ccrc` GROWTH (`ccd/ccrc` 16578 -> 18802 lines over base..tip, measured by the S6-R11
+      // dump) MOVED THE COUNT BY ONE, 5 -> 4, AND BY COINCIDENCE, NOT REPAIR: `plan:3326`'s
+      // `ccd/ccrc:5217` now lands on `_exp_env_write`'s comment naming `_inst_atomic`'s discipline,
+      // a token its clause quotes, so the audit counts it as resolving. It still means the
+      // `_inst_atomic` call inside `_inst_files` (now at a line far below), it is still stale in
+      // fact, and it stays exactly where it was cited. The other four are unmoved, in the dump
+      // and in the order it prints them. The `**Files:**` pass books the same departure below.
+      'ccd/ccrc': 4,
       // `shared/api.ts` ENTRY REMOVED, 1 -> 0, by the board-placement branch
       // (#137): its own additions moved this file's lines, and repairing the
       // README anchors it broke re-pointed BY CONTENT the one anchor that was
@@ -8440,7 +8499,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // THIS IS WHAT AN ASSERTION OVER THE MERGE COSTS: the value is a function
     // of BRANCH x MAIN, so it can only be derived on the merged tree and only
     // stays true until main moves again. Derive it last, then merge.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(195);
+    // 195 -> 197 at child-reclamation wave 3 (Task 5, fix round 1): the same
+    // +2 the `'ccd/ccd'` entry above carries, and nothing else moved.
+    // 197 -> 196 at fix round 3: the same +1 the `'ccd/ccd'` entry above
+    // carries (one coincidental pass), and nothing else moved.
+    // -> 194 at the centralised-update W6 versioned-installs wave (S6-R11: the note above the map names what moved).
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(194);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8585,6 +8649,13 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // the sentence around it carries. RE-MEASURE AND LOWER IT; never widen the
     // rule, and never "repair" a reference inside a frozen section.
     const set = r.failures.map(refKey);
+    // RE-MEASURED at the centralised-update W6 versioned-installs wave, S6-R11 (base af5a29f8, tip db846340).
+    // The compaction-card spec and plan are byte-identical at both, checked; README changed in prose that
+    // cites nothing and in the anchors re-anchored BY CONTENT beside it (its own entry is empty at the tip);
+    // so nothing was re-pointed and no rule changed. What moved is this range's growth under frozen anchors:
+    // `ccd/ccd` 26620 -> 26684 lines; `ccd/ccrc` 16578 -> 18802 lines; `server/test/single-definition.test.ts`
+    // 3890 -> 3915 lines. Nothing entered. Left: `ccd/ccd:4006-4035`, `ccd/ccrc:5217`. Measured by diffing the
+    // dumped failure sets of the two trees, never retyped. No D-number.
     expect(set, 'a **Files:** reference stopped naming what its clause quotes — re-measure (D-2849)')
       .toEqual([
         // RE-MEASURED at the tree this ships in (fix round 4). The citation
@@ -8604,7 +8675,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // census entry that left: at `origin/main` this range opened on
         // `_auto_swap_check`'s reachability paragraph, and at this tree it opens
         // on `IT MINTS THE DIRECTORY ITSELF`. Same mechanism, opposite sign.
-        'ccd/ccd:4006-4035',
+        // LEFT at the centralised-update W6 versioned-installs wave (S6-R11).
         'ccd/ccd:4045',
         'ccd/ccd:4029',
         'ccd/ccd:4047',
@@ -8615,7 +8686,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/session-hook.sh:1175-1177',
         'deploy/deploy.sh:560',
         'deploy/deploy.sh:629',
-        'ccd/ccrc:5217',
         'ccd/ccrc:6531',
         'ccd/ccrc:7129-7130',
       ]);
@@ -8647,7 +8717,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // asserts the whole of `D2849` is stale — a stronger claim than the one it
     // replaces, not a weaker one. Kept as an empty constant rather than
     // deleted so the next entry has a home and this history stays attached.
-    const D2849_INVISIBLE_SINCE_PR136: string[] = [];
+    // RE-OPENED at the centralised-update W6 versioned-installs wave (S6-R11), and the exception set is no
+    // longer empty: `ccd/ccrc:5217` left the `**Files:**` set above (and the census, `plan:3326`) BY
+    // COINCIDENCE, not by repair. The instrument's dumps of the two trees show it: at the base `:5217`
+    // holds a `#` comment line about a roster refusal ("and 1 when the request was legal and the BOX said no"), at this tip `:5217` holds `_exp_env_write`'s comment
+    // naming `_inst_atomic`'s discipline — a token the frozen clause (`_inst_atomic "$tree/ccd/session-hook.sh" …`
+    // at `_inst_files`) quotes — because this range's growth of `ccd/ccrc` slid that line under the
+    // number. The reference is STILL STALE IN FACT (its clause means the call inside `_inst_files`, now
+    // far below) and lives in the 24,688-byte freeze, so it is counted, never repaired. The constant keeps
+    // its history-bearing name; its meaning here is "stopped failing to this pass, not repaired", and the
+    // day `:5217` fails again THIS entry goes with it and the assertion below reds asking to be read.
+    const D2849_INVISIBLE_SINCE_PR136: string[] = ['ccd/ccrc:5217'];
     expect(D2849.filter((k) => set.includes(k)),
       'the five references Task 10\'s own **Files:** paragraph falsifies (D-2849, and its 2026-09-17 append)')
       .toEqual(D2849.filter((k) => !D2849_INVISIBLE_SINCE_PR136.includes(k)));
@@ -8982,6 +9062,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // Both are still stale in fact and Task 11 still owns re-anchoring them.
     // Values taken from the instrument, in its order. No D-number, on
     // S6-R11's ground.
+    // RE-MEASURED at the centralised-update W6 versioned-installs wave, S6-R11 (base af5a29f8, tip db846340).
+    // The compaction-card spec and plan are byte-identical at both, checked; README changed in prose that
+    // cites nothing and in the anchors re-anchored BY CONTENT beside it (its own entry is empty at the tip);
+    // so nothing was re-pointed and no rule changed. What moved is this range's growth under frozen anchors:
+    // `ccd/ccd` 26620 -> 26684 lines; `ccd/ccrc` 16578 -> 18802 lines; `server/test/single-definition.test.ts`
+    // 3890 -> 3915 lines. Entered: `ccd/ccd:13573-13575`, `ccd/ccd:3037-3089`, `ccd/ccd:13650-13652`,
+    // `ccd/ccd:3070`, `ccd/ccd:3070`, `ccd/ccd:3070`, `ccd/ccd:2433-2439`, `ccd/ccd:5828-5830`,
+    // `ccd/ccd:5819-5823`. Left: `ccd/ccd:11670`, `ccd/ccd:13673`, `ccd/ccd:3050`, `ccd/ccd:3050`. Measured by
+    // diffing the dumped failure sets of the two trees, never retyped. No D-number.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
         // RE-DERIVED on the merge with `f06abdce` (round 7). Both sides of that
@@ -9056,11 +9145,47 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // `origin/main` at this tree, so nothing was re-pointed and every move is
         // that shift. A coincidental pass is not a green anchor. S6-R11 covers
         // the re-measurement, so no D-number.
+        // RE-MEASURED at child-reclamation wave 3 (Task 5, fix round 1), 53 ->
+        // 53, net zero but not unchanged: ONE ENTERS (`:13573-13575`) and ONE
+        // LEAVES (`:13650-13652`), measured against the pre-Task-5 tree (this
+        // task's own base) and diffing the two failure lists. THE MECHANISM,
+        // corrected here (a prior round of this paragraph stated it backwards):
+        // at base, the row's quoted token `_reg_purge "$id"` stands AT
+        // `:13573-13575` itself (`cmd_ws_reap`'s prologue), so that citation
+        // PASSES there. Task 5's net insertion above it — `cmd_ws_audit`'s
+        // header, argv parse, one shared-fork call and its verdict line, plus
+        // `cmd_caps`'s verb line and token echo (review 170 F15: not the
+        // dispatcher arm, which sits below every corpus anchor here and
+        // contributes nothing) — moves `_reg_purge "$id"` DOWN — to
+        // `:13608` at THIS tree (`35d6d510`; it
+        // stood at `:13625` at the fix round's own first commit, `791d2256`,
+        // before `_ws_reclaim_fork`'s extraction shrank the insertion again) —
+        // so `:13573-13575` no longer holds it and now FAILS (enters).
+        // `:13650-13652` now PASSES on some other token of its row landing
+        // there instead. Neither corpus document
+        // changed (byte-identical to this task's base, measured); still stale
+        // in fact, and Task 11 still owns the re-anchor. S6-R11, no D-number.
+        // RE-MEASURED at review 171's second fix round (F-C, F-D, F-E, F-G),
+        // 53 -> 53, and genuinely UNCHANGED — not a coincidental pass masking
+        // a swap: the produced array is byte-identical to this one, in the
+        // same order, measured by running this suite against the round's own
+        // tree rather than inferred. F-C and F-G's new code, and F-D's header
+        // rewrite, sit in the RECLAIM region, below every corpus anchor this
+        // set reaches (the highest is `:19131`, the boundary itself). F-E's
+        // six comment edits are the only ones inside a cited range —
+        // `:3400`'s "the other three" -> "the other four" lies inside
+        // `:3390-3402`, already in this set (below) — and a wording change
+        // inside an already-stale range does not by itself move it into or
+        // out of the set. Neither corpus document changed (byte-identical to
+        // `origin/main` at this tree, measured), so nothing was re-pointed
+        // either. S6-R11 covers the re-measurement, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
         'server/test/ccd-ws-reap.test.ts:344',
+        'ccd/ccd:13573-13575',
         'ccd/ccd:3038',
+        'ccd/ccd:3037-3089',
         'ccd/ccd:5797',
         'ccd/ccd:7568',
         'ccd/ccd:11025',
@@ -9069,14 +9194,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
         'ccd/ccd:13567',
-        'ccd/ccd:13673',
         'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
         'ccd/ccd:19098',
         'ccd/ccd:19120',
         'ccd/ccd:19131',
         'ccd/ccd:11669',
-        'ccd/ccd:11670',
         'ccd/ccd:13650-13652',
         'ccd/ccd:12032-12034',
         'ccd/ccd:5810-5811',
@@ -9097,18 +9220,23 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
+        'ccd/ccd:13573-13575',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         'ccd/session-hook.sh:993',
-        'ccd/ccd:3050',
-        'ccd/ccd:3050',
+        'ccd/ccd:3070',
+        'ccd/ccd:3070',
         'ccd/ccd:2455',
+        'ccd/ccd:2433-2439',
         'ccd/ccd:2793',
+        'ccd/ccd:3070',
         'ccd/session-hook.sh:802',
         'ccd/ccd:5725',
         'ccd/ccd:5385-5388',
         'ccd/ccd:4642-4653',
+        'ccd/ccd:5828-5830',
+        'ccd/ccd:5819-5823',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -9149,6 +9277,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // departures the `|`-row set above records. Only `spec:2125
     // ccd/ccd:13567` is in this intersection, so only it leaves here; same
     // one cause, nothing entering, no repair and no rule change.
+    // RE-MEASURED at the centralised-update W6 versioned-installs wave, S6-R11 (base af5a29f8, tip db846340).
+    // The compaction-card spec and plan are byte-identical at both, checked; README changed in prose that
+    // cites nothing and in the anchors re-anchored BY CONTENT beside it (its own entry is empty at the tip);
+    // so nothing was re-pointed and no rule changed. What moved is this range's growth under frozen anchors:
+    // `ccd/ccd` 26620 -> 26684 lines; `ccd/ccrc` 16578 -> 18802 lines; `server/test/single-definition.test.ts`
+    // 3890 -> 3915 lines. Entered: `spec:2124 ccd/ccd:3037-3089`, `spec:2210 ccd/ccd:13573-13575`, `spec:2220
+    // ccd/ccd:3070`, `spec:2220 ccd/ccd:3070`, `spec:2220 ccd/ccd:3070`. Left: `spec:2125 ccd/ccd:13673`,
+    // `spec:2220 ccd/ccd:3050`, `spec:2220 ccd/ccd:3050`. Measured by diffing the dumped failure sets of the
+    // two trees, never retyped. No D-number.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
       // RE-MEASURED at the tree this ships in (fix round 4). The citation
@@ -9194,15 +9331,39 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // `spec:2125 ccd/ccd:13567` enters; `spec:2123` and `spec:2210`
       // `ccd/ccd:13573-13575` leave. One cause — Task 3's eight lines above
       // them — and nothing re-pointed. S6-R11 covers it, so no D-number.
+      // RE-MEASURED across the whole of child-reclamation wave 3 (Task 5),
+      // base -> `35d6d510`, 35 -> 36: `spec:2123 ccd/ccd:13573-13575` enters
+      // and NOTHING leaves — `spec:2125 ccd/ccd:13567` stands at BOTH the base
+      // and this tree. It is not unmoved in between: it correctly LEFT at the
+      // task's own first commit, `791d2256` (measured there, and right for
+      // that tree), then came back when fix round 1 (review I1, I2) shrank
+      // the net insertion above these lines from +50 (at `791d2256`) to +33
+      // (at `35d6d510`), sliding the row's token back within reach of this
+      // line — the fork extraction's own doing, not a fresh cause relative to
+      // base. This set is NOT derived from the row-pass set above this round
+      // — that one's own mover is `:13650-13652`, which no other pass reaches,
+      // so it is absent here, exactly as this list's own rule states. One
+      // cause, relative to base — this task's net insertion above these lines
+      // (the +33 it ends at) — and nothing re-pointed: both corpus documents
+      // are byte-identical to this task's base, measured. S6-R11, no
+      // D-number.
+      // RE-MEASURED at review 171's second fix round (F-C, F-D, F-E, F-G),
+      // FROM THE SAME RUN as the row-pass set above: 36 -> 36, genuinely
+      // UNCHANGED, same reasoning — every F-C/F-D/F-G insertion sits below
+      // this set's highest anchor (`spec:2125 ccd/ccd:19131`), and F-E's
+      // wording change at `:3400`/`:3401` lies inside the already-stale
+      // `spec:2209 ccd/ccd:3390-3402` / `:3401` entries below, unmoved.
+      // Neither corpus document changed. S6-R11, no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
+        'spec:2123 ccd/ccd:13573-13575',
         'spec:2124 ccd/ccd:3038',
+        'spec:2124 ccd/ccd:3037-3089',
         'spec:2125 ccd/ccd:5797',
         'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13561',
         'spec:2125 ccd/ccd:13567',
-        'spec:2125 ccd/ccd:13673',
         'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
         'spec:2125 ccd/ccd:19098',
@@ -9224,9 +9385,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
+        'spec:2210 ccd/ccd:13573-13575',
         'spec:2220 ccd/session-hook.sh:993',
-        'spec:2220 ccd/ccd:3050',
-        'spec:2220 ccd/ccd:3050',
+        'spec:2220 ccd/ccd:3070',
+        'spec:2220 ccd/ccd:3070',
+        'spec:2220 ccd/ccd:3070',
         'spec:2222 ccd/ccd:5725',
         'spec:2222 ccd/ccd:5385-5388',
       ]);
@@ -9452,6 +9615,42 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
     run(payload({ cwd: tmpRoot, transcript_path: path.join(d, 'x.jsonl') }));
     expect(fs.existsSync(path.join(d, 'memory'))).toBe(false);
     expect(fs.existsSync(storeRoot())).toBe(false);
+  });
+
+  it("skips a marked child's own temp root — the infix (A4)", () => {
+    // A4: `$HOME/.cc-tmp/<id>` is the TMPDIR wave 1 mints for a marked child
+    // (`_child_tmpdir`, ccd/ccd), and its `/.` becomes TWO dashes once
+    // slugified — `--cc-tmp-` — an INFIX, not a prefix, so it needs its own
+    // arm in the `case`. Rooted under `/var/tmp`: under `/tmp` the existing
+    // `-tmp*` prefix arm already matches, and this row would stay green with
+    // the infix arm deleted (A4's own warning).
+    const base = mkProjBase();
+    const childRoot = path.join(base, '.cc-tmp', '7', 'proj');
+    fs.mkdirSync(childRoot, { recursive: true });
+    const childSlug = slugOf(childRoot);
+    expect(isScratchSlug(childSlug),
+      `a marked child's temp root ${childRoot} is not a shape the shipped guard skips`).toBe(true);
+    const d = path.join(home, '.claude-x', 'projects', childSlug);
+    fs.mkdirSync(d, { recursive: true });
+    run(payload({ cwd: childRoot, transcript_path: path.join(d, 'x.jsonl') }));
+    expect(fs.existsSync(path.join(d, 'memory'))).toBe(false);
+    expect(fs.existsSync(storeRoot())).toBe(false);
+  });
+
+  it('does NOT skip a `.cc-tmpx` lookalike root — the infix needs the second dash', () => {
+    // THE CONTROL for the row above: `.cc-tmpx` slugifies to `--cc-tmpx-…`,
+    // one character short of the shipped `--cc-tmp-` arm (the dash the glob
+    // requires right after `tmp` is an `x` here instead), so a careless
+    // widening that dropped the trailing `-` would swallow this fixture too.
+    const base = mkProjBase();
+    const lookalike = path.join(base, '.cc-tmpx', '9', 'proj');
+    fs.mkdirSync(lookalike, { recursive: true });
+    const lookalikeSlug = slugOf(lookalike);
+    expect(isScratchSlug(lookalikeSlug), lookalikeSlug).toBe(false);
+    const d = path.join(home, '.claude-x', 'projects', lookalikeSlug);
+    fs.mkdirSync(d, { recursive: true });
+    run(payload({ cwd: lookalike, transcript_path: path.join(d, 'y.jsonl') }));
+    expect(fs.lstatSync(path.join(d, 'memory')).isSymbolicLink()).toBe(true);
   });
 
   // ── R32: the worktree fixtures ──────────────────────────────────────────

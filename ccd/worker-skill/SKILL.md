@@ -260,6 +260,16 @@ gets `stale-tip` for a wave that was genuinely finished. If a rejection comes
 back, fix the cause, make new commits, and measure again from scratch — never
 re-send the old numbers.
 
+**This workspace ends when its run closes.** A workspace dispatch minted for a
+run is a child, and once the coordinator has finished with it — the last wave,
+a wave that opened a PR after this workspace was created, an abandon — the
+server reclaims it: anything not
+committed on this branch by then is committed for you as a WIP commit and
+attic-pinned, and then the worktree, the branch, the clips directory and this
+session's temp directory are removed. Commit what matters on this branch; a
+secret-shaped file that lives only in this checkout is never committed and
+goes with the tree.
+
 ## When something is wrong
 
 - **You have been sitting idle and no brief ever arrived.** Look at your own

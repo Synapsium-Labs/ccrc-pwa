@@ -69,7 +69,7 @@ with a shell on the fleet host". They are not advice.
 
 1. Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.
 2. The box token is read from `~/.cc-secrets/ccrc-mail.token` and sent as the `x-ccrc-mail-token` header. It is never printed, never pasted into a prompt, never committed.
-3. This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason.
+3. This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server when that child’s run closes; this session’s own workspace is cleaned up by a human, never by a sweep.
 4. This session never unpauses itself. `$REG/coordinator-paused` is the operator’s file; a dispatch refused `paused` is a stop, and the next act is a report, not a retry.
 5. A wave brief is written prose, reviewed like code. The template is the shape; the content is this session’s judgement, and a brief that is missing something the next wave needs is a defect in the ledger.
 6. A `wave-done` is a claim, not a fact. Re-measure it, then submit the fingerprint to `POST /api/runs/:id/advance` and believe the server’s answer over your own.
@@ -389,12 +389,18 @@ not after.
      closed row proves the fingerprint and terminal run state; it does not prove
      a required interface merged. Only then dispatch wave N+1 (step 2).
 7. **Final merge:** `POST /api/runs/:id/close` with `final:true` closes the run
-   and, *if no other open run names this workspace*, releases the hold. Nothing
-   archives the workspace on its own after that: the merged sweep only pushes
-   a notification, so the workspace stays live and supervised until a human
-   archives it. Read `released` in the response: `false`
+   and, *if no other open run names this workspace*, releases the hold. What
+   happens to the workspace next depends on whose it is. A **child** — one
+   dispatch minted for one of your runs — is reclaimed by the server right
+   after the close: the response says `"childReclaim":"queued"`, the act runs
+   after the answer, and its outcome is a row in the feed, never a reply to
+   you (`references/wave-lifecycle.md` §6). **Your own workspace**, and any
+   workspace dispatch did not mint, is not a child: nothing archives it, the
+   merged sweep only pushes a notification, and it stays live and supervised
+   until a human cleans it up. Read `released` in the response: `false`
    means the run closed but the workspace is **still claimed** — another open
-   run owns it, which is exactly the state step 6's open-before-close creates.
+   run owns it, which is exactly the state step 6's open-before-close creates,
+   and nothing is reclaimed while it is.
    The program is not done; close the other run. Do not archive the workspace
    yourself unless the operator asks.
 

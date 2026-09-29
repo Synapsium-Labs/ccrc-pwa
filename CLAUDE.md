@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~3300 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~3600 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -46,12 +46,19 @@ real values: `deploy/reference-fleet.md` (gitignored).
   `ws-archive`/`ws-restore`. `ws-rm`, `ws-reap`, `ws-gc --prune` delete workspaces/branches/clips;
   `ws-archive`/`ws-restore` delete nothing but cost the tmux pane — scrollback and any in-flight turn
   (`cmd_ws_archive`'s header in `ccd/ccd`). All five forbidden; `ws-reap` is **human-only by contract**.
+  **`ws-reclaim` is forbidden to every session too**: it is the SERVER's act on a CHILD workspace only
+  (one dispatch minted for a run, marked `$REG/<id>.child` and held by the server as that run's), composed
+  after that run closes, with a token re-proved on the box — never a session's verb, and never run against
+  the live host from a shell or a test.
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
   long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception
   (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's
   existing sweep may `try-restart` `claude-session@*` units — each ONLY behind its mandatory `KillMode=process`
   preflight (which refuses the sweep when the answer is anything else); panes/tmux stay untouched, and every
-  other actor remains forbidden.
+  other actor remains forbidden. Two callers reach that same `_upd_sweep` THROUGH `cmd_update`, never a copy of
+  it: `ccrc rollback`, and — UNATTENDED — a `server`/`both` Linux box's `ccrc-update-watchdog.timer`, whose
+  `ccrc rollback --from watchdog` sweeps that box's supervisors with no human in the loop (design 2026-09-20 §11:
+  R1 inherited, never re-argued). The gate-failure restore (`--from restore`) never sweeps.
 - **In tests, use FIXTURE HOMEs only — never run `ccd` against the live `$HOME`.** `HOME` is the single isolation
   boundary the whole ccd suite relies on. Harness: `makeCcdHarness(prefix)` (`server/test/ccdWsHelpers.ts`);
   cleanup in `tmpHelpers.ts`. Second boundary: `ghContainedEnv()` plants a poisoned `gh` on PATH so a stray real
@@ -118,7 +125,16 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   preflights each box's recorded `CCRC_ROLE`, pins the version from SHA256SUMS once, runs `ccrc update --to` on the
   fleet box then the server box, stops at the first failure, and re-measures both (`--force` moves a converged fleet
   anyway). An update that completed under a failing doctor exits 3, not 1 — the box IS on the new build, its FAIL lines
-  are its health — and `rollout` relays that, continues, and exits 3 itself (D-3114). Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
+  are its health — and `rollout` relays that, continues, and exits 3 itself (D-3114). An update whose post-install
+  **health gate** fails (its unit not up or not staying up, or — on a `server`/`both` box — `/health` not answering
+  the staged `version`, within `CCRC_UPDATE_HEALTH_S`) restores the previous build itself and exits **4** —
+  `~/.ccrc/update.json`, every run's phase report, names the restore arm — and `rollout` STOPS on 4. One update per
+  box at a time (`~/.ccrc/update.lock`); `ccrc rollback` is the typed way back. A box's tree is the symlink
+  `~/ccrc -> ~/ccrc-versions/<tag>` (a real `~/ccrc` is migrated once and kept as `~/ccrc.migrating` until a gate
+  passes), so a rollback to a kept version — and the gate-failure restore's arm 1 — is a flip with no download, and
+  `ccrc versions` lists and prunes the kept trees. A `server`/`both` Linux box's `ccrc-update-watchdog.timer`
+  re-measures a self-update that died with its updater and rolls back ONLY a box that fails its health probe —
+  a converged or healthy box has its stale report closed or left for the next tick, never reverted. Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
   left alone — `--force` reinstalls there too. **The first move onto the release lane is by hand, once per box (D-3106):**
   `rollout` asks each box `ccrc update --check`, which a `ccrc` placed before 2026-09-19 does not know, and it refuses a
   box whose `~/.ccrc/ccrc.env` records no `CCRC_ROLE` (`deploy.sh` never writes one; a bare `ccrc update` there would
@@ -129,7 +145,11 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113).
   The control plane's per-node inventory — every node's measured stamp, install state, provenance, caps and
   resolved desired tag, re-measured every minute — is read at `GET /api/updates` (session-gated), and
-  `/api/fleet/health`'s `builds` is a view of it. A
+  `/api/fleet/health`'s `builds` is a view of it. The PWA's one tap (`POST /api/updates/apply` or
+  `POST /api/updates/rollback`) ends in the same `ccrc update --to <tag>` or `ccrc rollback --to <tag>` on the
+  node, run `--detach --from pwa` — the fleet node's through the agent's `update` op, the server node's spawned
+  locally, one node at a time and fleet first, a `failed`/`reverted` row halting the rest until `ack` — and
+  `ccrc rollout` stays the path when the console is down. A
   server-role box converges nothing per account — no wrappers, dirs, hooks, skills or session files — and its doctor
   skips those checks (D-3111). Coordinates live in `~/.ccrc/deploy.env`
   (`CCRC_BOX`, `CCRC_AGENT_BOX` — never defaulted from `CCRC_BOX` — `CCRC_SSH_KEY`, `CCRC_SSH_PORT`; real values:
@@ -253,11 +273,11 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   that one file is invisible to the set that pins the doors. The second IS in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
-  decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh` and `POST
-  /api/updates/ack` consult no box token. They are registered from `server/src/update/routes.ts`, a file neither
-  `SESSION_ONLY` nor the kickoff literal can see, so `box-token-census.test.ts` reads it as a lane source of its
-  own and keeps their names in a hand-kept `UPDATE_DOORS`, checked against that file in both directions (programme
-  wave 5, spec W4 part B, adds `apply` and `rollback` there with their routes).
+  decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
+  /api/updates/ack`, `POST /api/updates/apply` and `POST /api/updates/rollback` consult no box token. They are
+  registered from `server/src/update/routes.ts`, a file neither `SESSION_ONLY` nor the kickoff literal can see, so
+  `box-token-census.test.ts` reads it as a lane source of its own and keeps their names in a hand-kept
+  `UPDATE_DOORS`, checked against that file in both directions.
   Don't assume — read the guards.
 - **The dispatch cap counts ACTIVE runs** (`ACTIVE_RUN_STATES` in `shared/api.ts`: `dispatched`, `working`,
   `unknown`) — a run at `awaiting-review`/`merging`/`closing`/`planned` holds no slot, and `advance -> working`

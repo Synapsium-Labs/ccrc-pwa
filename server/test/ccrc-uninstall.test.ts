@@ -22,17 +22,21 @@
 // The verbs run from the CHECKOUT's ccrc, so `$CCRC_HERE` resolves the REAL
 // `install-session-hooks.sh`, `ccrc-wrapper-shape` and `shared/mark.mjs` —
 // the predicate and the marker under test are the shipped ones, not copies.
-import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { describe, it, expect, afterEach } from 'vitest';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import {
   mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync,
-  symlinkSync, rmSync, lstatSync, readlinkSync,
+  symlinkSync, rmSync, lstatSync, readlinkSync, unlinkSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
+// W6 Task 2's one planter of a versioned box: `~/ccrc-versions/<name>/` built
+// from the same fixture tree the install suites place, with its kept stamp and
+// install record, and — for the first name — the `~/ccrc` link.
+import { installVersionedTree } from './installTreeFixture.js';
 // The REAL marker writer — the wrapper fixtures below carry exactly the
 // marker `verifyMarker` recognises, so the "marker-verified only" gate is
 // measured against the shipped format, never a test's re-spelling of it.
@@ -105,14 +109,23 @@ const UNMANAGED_ONLY_SETTINGS =
  *  artifacts, two account homes with settings.json, three wrapper-named
  *  files (marked / marker-less / the upstream ELF), a worktree, an old
  *  backup, and a keep-aside pair. */
-function plantInstalledBox(home: string): void {
-  // The shipped tree and the three executables.
-  mkdirSync(join(home, 'ccrc', 'server', 'dist'), { recursive: true });
-  writeFileSync(join(home, 'ccrc', 'server', 'dist', 'index.js'), '// the installed dist\n');
-  mkdirSync(join(home, 'ccrc', 'ccd'), { recursive: true });
-  writeFileSync(join(home, 'ccrc', 'ccd', 'ccrc'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  mkdirSync(join(home, 'ccrc', 'agent', 'dist'), { recursive: true });
-  writeFileSync(join(home, 'ccrc', 'agent', 'dist', 'index.js'), '// agent dist\n');
+function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): void {
+  // The shipped tree. By default a REAL `~/ccrc` directory: a box installed
+  // before W6, or by deploy.sh onto one. With `versioned`, W6's layout (spec
+  // §11): each name a placed version under `~/ccrc-versions/`, the FIRST the
+  // one `~/ccrc` links to — the shape `_uninst_tree_bins`' sweep exists for.
+  const versioned = opts.versioned ?? [];
+  if (versioned.length === 0) {
+    mkdirSync(join(home, 'ccrc', 'server', 'dist'), { recursive: true });
+    writeFileSync(join(home, 'ccrc', 'server', 'dist', 'index.js'), '// the installed dist\n');
+    mkdirSync(join(home, 'ccrc', 'ccd'), { recursive: true });
+    writeFileSync(join(home, 'ccrc', 'ccd', 'ccrc'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    mkdirSync(join(home, 'ccrc', 'agent', 'dist'), { recursive: true });
+    writeFileSync(join(home, 'ccrc', 'agent', 'dist', 'index.js'), '// agent dist\n');
+  } else {
+    versioned.forEach((name, i) => { installVersionedTree(home, name, { link: i === 0 }); });
+  }
+  // The executables.
   const bin = join(home, '.local', 'bin');
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, 'ccd'), '#!/bin/sh\n# the installed ccd\n', { mode: 0o755 });
@@ -137,6 +150,10 @@ function plantInstalledBox(home: string): void {
   // role, so an installed Linux box has it and `_uninst_tree_bins` must take
   // it away — planted here so that removal can be MEASURED rather than read.
   writeFileSync(join(bin, 'ccd-pool-sync'), '#!/bin/sh\n# pool sync\n', { mode: 0o755 });
+  // programme wave 4: the update-intent puller, placed by `_inst_bins` on the
+  // non-Darwin arm for EVERY role (only its timer is fleet-gated) — planted
+  // so `_uninst_tree_bins`' removal of it is measured rather than read.
+  writeFileSync(join(bin, 'ccd-update-sync'), '#!/bin/sh\n# update sync\n', { mode: 0o755 });
   // spec 2026-09-07 §C: the telemetry keepalive, beside the health probe above.
   writeFileSync(join(bin, 'ccd-telemetry-keepalive'), '#!/bin/sh\n# keepalive\n', { mode: 0o755 });
   // The account wave's own, and UNMARKED exactly as every name above is:
@@ -173,6 +190,10 @@ function plantInstalledBox(home: string): void {
     // every role-gated pair below it, `_inst_units` ships this one on every
     // non-Darwin role — so it is on the box under test whatever role it had.
     'ccd-pool-sync.service', 'ccd-pool-sync.timer',
+    // programme wave 4: the update-intent puller's pair. `_inst_units` ships
+    // it on the `fleet` role only; planted here because the uninstall removes
+    // it whatever role the box had.
+    'ccd-update-sync.service', 'ccd-update-sync.timer',
     // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
     'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
     // Routing slice 0 Task 7: the usage-accounting sweep's pair, on the same
@@ -183,7 +204,9 @@ function plantInstalledBox(home: string): void {
     'ccd-account-health.service', 'ccd-account-health.timer',
     'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
     // C5: the models pair, mirroring the three role-gated siblings above.
-    'ccrc-models.service', 'ccrc-models.timer']) {
+    'ccrc-models.service', 'ccrc-models.timer',
+    // W4a Task 9: the server-role watchdog's pair.
+    'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer']) {
     writeFileSync(join(units, u), `[Unit]\nDescription=fixture ${u}\n`);
   }
   writeFileSync(join(units, 'claude-session@.service.d', 'limits.conf'), '[Service]\n');
@@ -211,6 +234,16 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(home, '.ccrc', 'node-id'), '01234567-89ab-cdef-0123-456789abcdef\n');
   writeFileSync(join(home, '.ccrc', 'ccrc-caps'), 'os linux\nverify\nnode-id\nfloor\n');
   writeFileSync(join(home, '.ccrc', 'floor'), 'v1.0.0\n');
+  // W4 Task 4: the node's update state — install-state like the three above.
+  writeFileSync(join(home, '.ccrc', 'previous'), 'v0.9.0\nfixturesha000000000000000000000000000000\n');
+  writeFileSync(join(home, '.ccrc', 'install-step'), '_inst_skills\n');
+  writeFileSync(join(home, '.ccrc', 'update.json'),
+    '{"target":"v1.0.0","phase":"done","startedAt":1,"updatedAt":2,"detail":null,"from":"cli","pid":4242}\n');
+  writeFileSync(join(home, '.ccrc', 'update.lock'), '');
+  // W4a Task 8: the control plane's projection — install-state too: a box with
+  // no tree follows nothing, and a stale copy would outlive the node's identity.
+  writeFileSync(join(home, '.ccrc', 'update-intent'),
+    'epoch 1\nissued 1\nlease 901\nchannel stable\ndesired none\ndesired-stable none\ndesired-dev none\nauto off\nend\n', { mode: 0o600 });
   writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"fixture":"roster"}\n');
   writeFileSync(join(home, '.ccrc', 'accounts.sh'), [
     '# fixture projection — just enough for install-session-hooks.sh',
@@ -367,13 +400,17 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       // `_uninst_units` had never heard of — `ccrc uninstall` removed the
       // binary's siblings and left this timer ENABLED and orphaned.
       'ccd-pool-sync.service', 'ccd-pool-sync.timer',
+      // programme wave 4: the update-intent puller's pair.
+      'ccd-update-sync.service', 'ccd-update-sync.timer',
       // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
       'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
       'ccd-tmp-sweep.service', 'ccd-tmp-sweep.timer',
       'ccd-account-health.service', 'ccd-account-health.timer',
       'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
       // C5: the models pair, mirroring the three role-gated siblings above.
-      'ccrc-models.service', 'ccrc-models.timer']) {
+      'ccrc-models.service', 'ccrc-models.timer',
+      // W4a Task 9: the server-role watchdog's pair.
+      'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer']) {
       expect(existsSync(join(units, u)), `${u} survived`).toBe(false);
     }
     expect(existsSync(join(units, 'claude-session@.service.d'))).toBe(false);
@@ -386,12 +423,14 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // The half a file-absence assertion cannot see: a unit file deleted under
     // a still-enabled unit leaves systemd holding a dangling enablement.
     expect(calls).toContain('--user disable --now ccd-pool-sync.timer');
+    expect(calls).toContain('--user disable --now ccd-update-sync.timer');
     expect(calls).toContain('--user disable --now ccd-graph-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-usage-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-tmp-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-account-health.timer');
     expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
     expect(calls).toContain('--user disable --now ccrc-models.timer');
+    expect(calls).toContain('--user disable --now ccrc-update-watchdog.timer');
     expect(calls[calls.length - 1]).toBe('--user daemon-reload');
     // The sacred rule holds even here: no claude-session@ instance is ever a
     // systemctl target, and tmux is never touched (poison would have fired).
@@ -546,7 +585,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // the binary would otherwise stay on PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
       'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep',
-      'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'graphify']) {
+      'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync', 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
     expect(r.stdout).toMatch(/uninstall: tree: graphify removed from \$HOME\/\.local\/bin/);
@@ -557,9 +596,14 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // The node's three files are install-state, not config (design 2026-09-20
     // §3, §9): an uninstalled box has no identity to the console, no
     // capabilities and no floor.
-    for (const f of ['node-id', 'ccrc-caps', 'floor']) {
+    for (const f of ['node-id', 'ccrc-caps', 'floor', 'previous', 'install-step', 'update.json', 'update.lock', 'update-intent']) {
       expect(existsSync(join(home, '.ccrc', f)), `${f} survived`).toBe(false);
     }
+    // W4 Task 4: a box with no tree has no update in flight, no baseline to
+    // restore to and no spine step to classify.
+    // W6 Task 6: the line now ENDS with what the versions sweep found — on
+    // this box, a real `~/ccrc` directory, nothing.
+    expect(r.stdout).toMatch(/; the completed-install record and the node's update state \(~\/\.ccrc\/previous, install-step, update\.json, update\.lock, update-intent\) removed; no ~\/ccrc-versions$/m);
     expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
     expect(existsSync(join(home, '.ccrc', 'ccrc.env'))).toBe(true);
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);
@@ -615,6 +659,25 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       .not.toMatch(/uninstall: wrappers: removed .*ccd-pool-sync/);
     expect(r.stdout, 'the bin census does not name it')
       .toMatch(/uninstall: tree: .*ccd-pool-sync.* removed from \$HOME\/\.local\/bin/);
+  });
+
+  it('a STAMPED ccd-update-sync is the bin arm\'s subject too — the uninstall twin of its TOOLCHAIN_EXECUTABLES entry', () => {
+    // programme wave 4: the pool-sync sibling above, for the update-intent
+    // puller. INERT ON A REAL BOX TODAY for the same reason (`_inst_atomic`
+    // never stamps), and pinned for the same reason: only a MARKED fixture
+    // can tell `_uninst_wrappers`' case entry from its absence.
+    const home = mkTmp('ccrc-uninst-updatesync-marked-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, '.local', 'bin', 'ccd-update-sync'),
+      markGenerated('#!/bin/sh\n# update sync\n'), { mode: 0o755 });
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-update-sync')),
+      'the puller survived the uninstall').toBe(false);
+    expect(r.stdout, 'a toolchain executable was counted in the wrapper census')
+      .not.toMatch(/uninstall: wrappers: removed .*ccd-update-sync/);
+    expect(r.stdout, 'the bin census does not name it')
+      .toMatch(/uninstall: tree: .*ccd-update-sync.* removed from \$HOME\/\.local\/bin/);
   });
 
   // Plan 2b-1 Task 4: the GPT-lane's TWO placed executables (Task 2 narrowed
@@ -809,6 +872,173 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(r.stderr).toMatch(/--purge-memory needs --purge/);
     expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
     expect(existsSync(join(home, 'ccrc'))).toBe(true);
+  });
+});
+
+// ── W6 Task 6: the versions root and a stray migration ────────────────────
+// Spec §11's audit gives `cmd_uninstall`'s `rm -rf -- "$BOX_TREE_DIR"` the
+// verdict "removes only the link — gains a sweep of `~/ccrc-versions/`". The
+// sweep takes the kept versions and, D-3452, the
+// pre-versioned tree a one-time migration keeps until a gate that will now
+// never run, with its `~/.ccrc/migrating-to` marker.
+describe('ccrc uninstall: the versions root and a stray migration (W6 Task 6)', () => {
+  // `lstat`, never `existsSync`: a DANGLING `~/ccrc` answers existsSync false,
+  // and a link that survives with nothing behind it is exactly what the
+  // trailing-slash spelling of step 1 leaves (GNU rm empties the version
+  // THROUGH the link, answers 0, keeps the link — measured).
+  const present = (p: string): boolean => {
+    try { lstatSync(p); return true; } catch { return false; }
+  };
+  const plantMemory = (home: string): string => {
+    const d = join(home, '.ccrc', 'memory', 'fixture-project');
+    mkdirSync(d, { recursive: true });
+    const f = join(d, 'MEMORY.md');
+    writeFileSync(f, '# a project\'s durable memory\n');
+    return f;
+  };
+  const plantMigration = (home: string, name: string): void => {
+    mkdirSync(join(home, 'ccrc.migrating', 'server'), { recursive: true });
+    writeFileSync(join(home, 'ccrc.migrating', 'server', 'OLD-MARKER'), 'the pre-versioned tree\n');
+    writeFileSync(join(home, '.ccrc', 'migrating-to'), `${name}\n`);
+  };
+
+  it('a versioned box: the link, every kept version and the root go; backups and memory stay (spec §11 audit: "gains a sweep of ~/ccrc-versions/")', () => {
+    const home = mkTmp('ccrc-uninst-versions-');
+    plantInstalledBox(home, { versioned: ['v9.9.2', 'v9.9.1', 'v9.9.0'] });
+    // A legacy target's staging directory (Task 4's `.<tag>.incoming.<pid>`):
+    // removed WITH the root, never counted as a kept tree.
+    mkdirSync(join(home, 'ccrc-versions', '.v9.9.3.incoming.4242', 'ccd'), { recursive: true });
+    // A flip to v9.9.1 killed between `_plat_ln_swap`'s `ln -sfn` and its
+    // rename (Task 1): the staged link stands beside `~/ccrc`, and only the
+    // NEXT flip would ever replace it — an uninstalled box flips nothing.
+    symlinkSync(join(home, 'ccrc-versions', 'v9.9.1'), join(home, 'ccrc.new'));
+    const memory = plantMemory(home);
+    expect(lstatSync(join(home, 'ccrc')).isSymbolicLink(), 'the fixture is not a W6 box').toBe(true);
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(present(join(home, 'ccrc')), 'the ~/ccrc link survived').toBe(false);
+    expect(present(join(home, 'ccrc-versions')), 'the versions root survived').toBe(false);
+    // `lstat`: with the root gone the staged link DANGLES, and existsSync
+    // would call a surviving one absent.
+    expect(present(join(home, 'ccrc.new')), 'a staged ~/ccrc.new link survived').toBe(false);
+    expect(readFileSync(memory, 'utf8'), '~/.ccrc/memory was touched').toBe('# a project\'s durable memory\n');
+    expect(existsSync(join(home, 'ccrc-backups', '20250101-000000', 'ccd')), 'a backup was removed').toBe(true);
+    expect(r.stdout).toMatch(/^uninstall: tree: ~\/ccrc removed; .*update-intent\) removed; ~\/ccrc-versions removed \(3 kept tree\(s\)\); ~\/ccrc\.new removed$/m);
+    expect(r.stdout).not.toMatch(/ccrc\.migrating removed/);
+  });
+
+  it('a migrated box: ~/ccrc.migrating and ~/.ccrc/migrating-to go too — no gate will ever run to remove them', () => {
+    const home = mkTmp('ccrc-uninst-migrated-');
+    plantInstalledBox(home, { versioned: ['v9.9.1'] });
+    plantMigration(home, 'v9.9.1');
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(present(join(home, 'ccrc.migrating')), '~/ccrc.migrating survived').toBe(false);
+    expect(present(join(home, '.ccrc', 'migrating-to')), 'migrating-to survived').toBe(false);
+    expect(present(join(home, 'ccrc')), 'the ~/ccrc link survived').toBe(false);
+    expect(present(join(home, 'ccrc-versions')), 'the versions root survived').toBe(false);
+    expect(r.stdout).toMatch(/; ~\/ccrc-versions removed \(1 kept tree\(s\)\); ~\/ccrc\.migrating removed$/m);
+  });
+
+  it('a box installed before W6 (a real ~/ccrc directory): today\'s removal, and the line says there was no versions root', () => {
+    const home = mkTmp('ccrc-uninst-prew6-');
+    plantInstalledBox(home);
+    expect(lstatSync(join(home, 'ccrc')).isDirectory()).toBe(true);
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(present(join(home, 'ccrc'))).toBe(false);
+    expect(r.stdout).toMatch(/update-intent\) removed; no ~\/ccrc-versions$/m);
+    expect(r.stdout).not.toMatch(/ccrc\.migrating removed/);
+    expect(r.stdout).not.toMatch(/ccrc\.new/);
+  });
+
+  it('a crashed migration (~/ccrc.migrating and no ~/ccrc): the sweep still runs and nothing dies', () => {
+    const home = mkTmp('ccrc-uninst-crashpair-');
+    plantInstalledBox(home, { versioned: ['v9.9.1'] });
+    // The two-syscall window's crash shape (Task 3): the old tree moved aside,
+    // the marker written, and the link never placed.
+    unlinkSync(join(home, 'ccrc'));
+    plantMigration(home, 'v9.9.1');
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    for (const p of ['ccrc', 'ccrc-versions', 'ccrc.migrating', join('.ccrc', 'migrating-to')]) {
+      expect(present(join(home, p)), `${p} survived`).toBe(false);
+    }
+    expect(r.stdout).toMatch(/; ~\/ccrc-versions removed \(1 kept tree\(s\)\); ~\/ccrc\.migrating removed$/m);
+  });
+
+  it('a ~/ccrc-versions that is not a directory, and a ~/ccrc.new that is not a link, are left in place, and the line says so — ccrc made neither', () => {
+    const home = mkTmp('ccrc-uninst-versions-notdir-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, 'ccrc-versions'), 'not a versions root\n');
+    // `_plat_ln_swap` only ever writes a LINK at `~/ccrc.new` (Task 1), and
+    // refuses to flip over anything else; a directory there is someone else's.
+    mkdirSync(join(home, 'ccrc.new'));
+    writeFileSync(join(home, 'ccrc.new', 'MINE'), 'not ccrc\'s\n');
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, 'ccrc-versions'), 'utf8')).toBe('not a versions root\n');
+    expect(readFileSync(join(home, 'ccrc.new', 'MINE'), 'utf8'), 'a ~/ccrc.new ccrc did not make was touched').toBe('not ccrc\'s\n');
+    expect(r.stdout).toMatch(/update-intent\) removed; ~\/ccrc-versions left in place — it is not a directory ccrc made; ~\/ccrc\.new left in place — it is not a link ccrc made$/m);
+  });
+
+  // ── D-3453 ──────────────────────────────
+  // The sweep above removes what every other writer touches only under
+  // ~/.ccrc/update.lock, so an uninstall PROBES it before removing anything.
+  // A real holder, wave 4's shape: ONE process takes flock and then becomes
+  // `sleep` (exec keeps the pid and the descriptor), killed after each case.
+  const holders: ChildProcess[] = [];
+  afterEach(() => { for (const h of holders.splice(0)) h.kill('SIGKILL'); });
+  const lockPath = (home: string): string => join(home, '.ccrc', 'update.lock');
+  const lockFree = (home: string): boolean =>
+    spawnSync(BASH, ['-c', 'exec 9>>"$1" && flock -n 9', '_', lockPath(home)]).status === 0;
+  const holdLock = (home: string): void => {
+    const h = spawn(BASH, ['-c', 'exec 9>>"$1" && flock 9 && exec sleep 30', '_', lockPath(home)], { stdio: 'ignore' });
+    holders.push(h);
+    const t0 = Date.now();
+    while (lockFree(home)) {
+      if (Date.now() - t0 > 10_000) throw new Error('timed out waiting for the fixture holder to take the lock');
+      spawnSync('sleep', ['0.05']);
+    }
+  };
+  // What a refusal must leave: the gate runs after the live-session gate and
+  // BEFORE `_uninst_units`, so nothing at all was removed or stopped.
+  const untouched = (home: string): void => {
+    expect(present(join(home, 'ccrc')), 'the ~/ccrc link was removed').toBe(true);
+    expect(present(join(home, 'ccrc-versions', 'v9.9.1')), 'a kept version was removed').toBe(true);
+    expect(existsSync(join(home, '.config', 'systemd', 'user', 'ccrc.service')), 'a unit file was removed').toBe(true);
+    expect(existsSync(join(home, 'systemctl-calls')), 'a unit was touched').toBe(false);
+  };
+
+  itLinux('an update holding ~/.ccrc/update.lock refuses the uninstall before anything is removed, naming the holder; --force proceeds past it', () => {
+    const home = mkTmp('ccrc-uninst-lock-held-');
+    plantInstalledBox(home, { versioned: ['v9.9.1'] });
+    holdLock(home);
+    let r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    // The holder's fields come from the `update.json` wave 4 plants in
+    // `plantInstalledBox` (pid 4242, target v1.0.0).
+    expect(r.stderr).toMatch(/^ccrc: an update holds ~\/\.ccrc\/update\.lock \(pid 4242, target v1\.0\.0\) — uninstalling under it would remove the version it is placing or flipping to\. Wait for it to finish, or run: ccrc uninstall --force — nothing on this box was removed$/m);
+    untouched(home);
+    // THE CONTROL: the same box, the holder STILL holding, and --force.
+    r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(present(join(home, 'ccrc-versions')), 'the versions root survived --force').toBe(false);
+  });
+
+  itLinux('a ~/.ccrc/update.lock that cannot be MEASURED refuses with its own sentence — never the holder\'s, and nothing is removed', () => {
+    const home = mkTmp('ccrc-uninst-lock-unmeasured-');
+    plantInstalledBox(home, { versioned: ['v9.9.1'] });
+    // A DIRECTORY where the lock file goes: it exists, and the probe's
+    // `exec {p}>>` on it fails, so `_upd_lock_probe` answers 3 at every uid
+    // (wave 4's own rc-3 fixture; a `chmod 000` file root opens anyway).
+    rmSync(lockPath(home));
+    mkdirSync(lockPath(home));
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: ~\/\.ccrc\/update\.lock could not be measured \(probe rc 3\) — refusing to uninstall past a lock this box cannot see\. Run ccrc uninstall --force to proceed anyway — nothing on this box was removed$/m);
+    expect(r.stderr, 'rc 3 was folded into "held"').not.toMatch(/an update holds/);
+    untouched(home);
   });
 });
 

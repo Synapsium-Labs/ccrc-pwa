@@ -88,6 +88,8 @@ describe('per-verb timeouts', () => {
     [['ws-restore', '--session', 'x'], 60_000],
     [['ws-audit', '--session', 'x'], 90_000],
     [['ws-reap', '--expect', 'a'.repeat(64), '--session', 'x'], 240_000],
+    // Child reclamation: ws-reap's destruction plus a pin phase and a settle.
+    [['ws-reclaim', '--expect', 'a'.repeat(64), '--child-of', '7', '--session', 'x'], 240_000],
     // The two SPAWNING verbs (F8, 2026-08-12). Both run `_spawn`, which blocks
     // in `_accept_first_run_prompts` until the new pane renders a ready banner
     // — a COLD Claude Code start in a fresh workspace HOME, which on the live

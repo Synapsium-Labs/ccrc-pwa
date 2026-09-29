@@ -5641,10 +5641,12 @@ export interface RunHealth {
   /** Deliveries PARKED — `rejected` — for a reason that is NOT a deliberate
    *  cancel: every reason named by `store.ts`'s `DELIBERATE_CANCEL_ERRORS_SQL`
    *  is excluded (PR #75 review round 1, store-7) — a `run closed` park (the
-   *  run ended), a `coordinator reclaimed` park (a chair changed hands) and a
+   *  run ended), a `coordinator reclaimed` park (a chair changed hands), a
    *  `recipient rebound` park (a worker was re-bound to a new session,
-   *  cross-repo §4) are all the machinery working as designed, and reporting
-   *  any of them would announce a change that has already been handled. */
+   *  cross-repo §4) and a `child workspace reclaimed` park (the server
+   *  reclaimed a finished child, spec 2026-09-22 §5.6) are all the machinery
+   *  working as designed, and reporting any of them would announce a change
+   *  that has already been handled. */
   readonly mailParked: number;
   /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
    *  delivery attempts and mail 129 reached 911, each arriving after the work it
@@ -6348,10 +6350,11 @@ export interface MailSummary {
    * store-7). `backOff` and `rejectDelivery` accept arbitrary strings, and the
    * lane currently passes typed `sendPrompt` errors, registry/lifecycle/tmux
    * diagnoses, and a whole English sentence (`MAIL_REPLAY_CEILING_ERROR`).
-   * Three direct SQL writers add the deliberate-cancel sentences `'run
-   * closed'`, `'coordinator reclaimed'`, and `'recipient rebound'`. Those are
-   * examples of the column's contents, not a closed census or vocabulary: it
-   * is a maintainer's grep target and has never been validated on the way in.
+   * Four direct SQL writers add the deliberate-cancel sentences `'run
+   * closed'`, `'coordinator reclaimed'`, `'recipient rebound'` and `'child
+   * workspace reclaimed'`. Those are examples of the column's contents, not
+   * a closed census or vocabulary: it is a maintainer's grep target and has
+   * never been validated on the way in.
    *
    * SO THE RULE FOR EVERY CLIENT, and it is not negotiable: branch on the ONE
    * literal token you have a surface for (`=== 'draft-present'`), never key a
@@ -6904,6 +6907,12 @@ export type LifecycleAct =
   | 'archive' | 'restore'
   | 'attic-drop'    // ws-attic --drop deleted pinned refs
   | 'reap'          // ws-reap
+  | 'reclaim'       // ws-reclaim (spec 2026-09-22 §5.9): a CHILD's pin-then-teardown,
+                    // server-composed. DISTINCT FROM `reap`: a reap is a human's
+                    // confirmed removal of an archived workspace; a reclaim is the
+                    // automated end of a workspace dispatch minted for one run. One
+                    // act per verb, so the journal never has to be read with a verb
+                    // filter to tell the two apart.
   | 'rehome'        // A session's HOME account moving. TWO EMITTERS, both
                     // landed (account pools, wave 2b): the 5-second tick's
                     // own re-seed (`_auto_swap_check`, §5.5.4 — grep
@@ -6949,7 +6958,7 @@ export type LifecycleAct =
 const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
-  'attic-drop': true, reap: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
+  'attic-drop': true, reap: true, reclaim: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
   swap: true, enable: true, stop: true, forget: true, unarchive: true,
   unknown: true,
 };
@@ -7387,10 +7396,10 @@ export interface LifecycleMeas {
   /** How many bytes `ws-reap` measured before destroying the worktree, or
    *  `null` when `_ws_gc_bytes` did not return a plain integer. */
   readonly bytes: number | null;
-  /** The reap PHASE (`children` | `worktree` | `branch` | `clips`) a resumed
-   *  `ws-reap` was interrupted at, read back from the registry's own
-   *  `.reaping` marker — not a boolean; an interrupted reap resumes from
-   *  wherever it stopped. */
+  /** The PHASE a resumed act was interrupted at, read back from the registry's
+   *  own `.reaping` marker — not a boolean, and ONE meaning for both verbs:
+   *  ws-reap's `children|worktree|branch|clips`, or ws-reclaim's
+   *  `children|worktree|branch|artifacts` (its `reclaim:` prefix stripped). */
   readonly resumed: string | null;
   /** The tombstone record's own path, as `_ws_tombstone` returned it. */
   readonly tombstone: string | null;
@@ -7418,6 +7427,22 @@ export interface LifecycleMeas {
    *  removed and there is nothing to name — the two must not be told apart by
    *  reading a sentence. It is prose for a person and never a parsed list. */
   readonly unremoved: string | null;
+  /** The run a `reclaim` act's CHILD was minted for — `ws-reclaim --child-of`,
+   *  equal to the box's `.child` marker or the act never started (child
+   *  reclamation, spec 2026-09-22 §5.5). The decimal string ccd wrote: every
+   *  `meas.` value crosses the encoder as a string, so a reader parses it
+   *  rather than trusting a `number` this seam never carried. */
+  readonly childOf: string | null;
+  /** The WIP commit a `reclaim` made of the child's uncommitted work, or null
+   *  when the tree was clean and no commit was made (ccd passes an empty value,
+   *  which the encoder omits). */
+  readonly wip: string | null;
+  /** The bytes `ws-reclaim`'s residue probe measured OUTSIDE the child's temp
+   *  root and left in place — the decimal string ccd wrote, or the literal
+   *  string `null` when the probe could not measure it (`ws-reap`'s
+   *  `meas.bytes` precedent) — never a fabricated 0. A `null` VALUE here means
+   *  the key was absent: an act that is not a reclaim. */
+  readonly residueBytes: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -7439,7 +7464,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
-  unremoved: true,
+  unremoved: true, childOf: true, wip: true, residueBytes: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -7610,7 +7635,9 @@ export type LcRefusalToken =
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
-  | 'purge-mechanism-absent';  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
+  | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
+  | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): ccrc could not keep the child's work — the pin phase, or one of the tail's per-deletion keeps — so the verb stopped before deleting anything further
+  | 'unit-still-active';      // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before deleting anything further
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -7671,6 +7698,22 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // because one map entry serves four callers.
   'purge-mechanism-absent':
     'The registry row could not be removed: this box cannot take the session\'s compaction lock at all — flock, mktemp or link is missing from the PATH ccd ran with — and the session still has a live generation, so ccrc refused rather than race a compaction it has no way to serialise against. Whatever the verb had already done is done; the row and its generation are still there. Waiting will not help: re-run from a PATH that resolves those tools.',
+  // Child reclamation, wave 3. ws-reclaim's pin phase — the WIP commit and the
+  // attic pins, or the settle's re-pin once the session is stopped — failed, so
+  // the verb stopped BEFORE its next deletion. Only ever rides `_lc_fail`: the
+  // act started (a WIP commit may already exist, which destroys nothing), and a
+  // retry pins again. The sentence claims nothing about the worktree or the
+  // branch: on the vanished arm there is no worktree, and on a resumed act an
+  // earlier attempt may already have removed either.
+  'pin-failed':
+    'ccrc could not keep this workspace’s uncommitted work or its commits, so it stopped before deleting anything further. Reclamation tries again.',
+  // Child reclamation, wave 3. The tail disabled the unit and killed the pane,
+  // then asked the service manager and tmux, and one did not PROVE "stopped":
+  // still up, or not answering (a Restart=always unit; a claude left in its
+  // pane by KillMode=process). Only ever rides `_lc_fail`; the breadcrumb stays
+  // and a retry stops both again. True of every arm and cause: nothing FURTHER went.
+  'unit-still-active':
+    'ccrc could not prove this session’s service and its terminal pane had both stopped, so it stopped before deleting anything further. Reclamation tries again.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the
@@ -8557,7 +8600,8 @@ export interface UpdatesView { catalogue: CatalogueState; releases: ReleaseWire[
 export type UpdateRouteError =
   | 'unauthenticated' | 'not-configured' | 'bad-tag' | 'bad-request' | 'unknown-scope' | 'unknown-node'
   | 'superseded' | 'busy' | 'auto-needs-rollback-gate' | 'rate-limited' | 'no-channel'
-  | 'journal-unreadable' | 'journal-unwritable';
+  | 'journal-unreadable' | 'journal-unwritable'
+  | Exclude<DispatchRefusal, 'no-update-gate' | 'waiting-for-fleet'> | 'no-previous' | 'no-desired';   // wave 5: the moves' 409s (spec §12)
 export interface UpdateRouteRefusal {
   ok: false; error: UpdateRouteError;
   field?: string; nodes?: string[]; detail?: string; retryAfterS?: number;
@@ -8594,12 +8638,16 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *    label-key-taken — `markUnreachable` found no live row for the label and
  *                    could not write the label-keyed placeholder: a row
  *                    already holds that key.
- *    not-busy      — `releaseLease` on a settled row: there is no lease.
- *    stale-report  — a report whose run began before the lease (even the
- *                    last ms its whole-second `startedAt` covers,
- *                    `startedAt*1000 + 999`, is before `updateStartedAt`)
- *                    belongs to a previous run and never moves it (design
- *                    §8's precedence).
+ *    not-busy      — `releaseLease`, `noteLeaseDetail` on a settled row: there
+ *                    is no lease (for the note, a report or the deadline
+ *                    settled it first, and its verdict is not the
+ *                    dispatcher's to overwrite).
+ *    stale-report  — the identity guard refused: `releaseLease`/`settleNode`'s
+ *                    row no longer holds the `updateStartedAt` the caller read
+ *                    (the lease moved on), or `noteLeaseDetail`'s row holds a
+ *                    newer lease than the one the caller acquired (D-3413).
+ *                    Freshness is change plus the lease's tag, never a clock
+ *                    (D-3405).
  *    empty-patch   — `setIntent`'s patch names none of channel/pinnedTag/
  *                    auto/notify.
  *    bad-field     — a named patch field's value is outside its vocabulary
@@ -8627,13 +8675,26 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *                    the tag; nothing is written.
  *    already-notified — `markReleaseNotified` (W3): the tag's `notifiedAt` is
  *                    already set. The first mark stands, and the caller
- *                    sends nothing (design §13: one push per tag). */
+ *                    sends nothing (design §13: one push per tag).
+ *    bad-kind      — `requestNode`/`dispatchNode` (programme wave 5): a kind
+ *                    outside `REQUEST_KINDS`; decided before any SQL.
+ *    no-request    — `dispatchNode`: a rollback with no matching operator
+ *                    rollback request — a move down is never automatic
+ *                    (design decision 8). Nothing is written.
+ *    not-idle      — `noteDispatchRefusal`: the row is not `idle`. A
+ *                    `failed`/`reverted` row's detail is the verdict the halt
+ *                    reads and a busy row's is its lease's; nothing is written.
+ *    no-lease-to-hand — `handOffLease` (D-3412): the donor is not a BUSY row
+ *                    of the heir's label retired TOWARD the heir (absent,
+ *                    live, settled, retired toward another node, or another
+ *                    box's row); nothing is written. */
 export const UPDATE_STORE_REFUSE_CODES = [
   'bad-tag', 'duplicate-tag', 'bad-row', 'empty-listing', 'unknown-node',
   'bad-node-id', 'label-key-taken', 'not-busy', 'stale-report',
   'empty-patch', 'bad-field', 'unknown-scope', 'no-channel', 'journal-unreadable', 'journal-unwritable',
   'single-not-one', 'withdrawn-not-empty',
   'unknown-release', 'already-notified',
+  'bad-kind', 'no-request', 'not-idle', 'no-lease-to-hand',
 ] as const;
 export type UpdateStoreRefuseCode = (typeof UPDATE_STORE_REFUSE_CODES)[number];
 export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode {
@@ -8673,3 +8734,118 @@ export function isTagFileRead(v: unknown): v is TagFileRead {
  *  settings screen, which disables its auto-install control before a tap (D-3297), read
  *  one word. `server/src/update/resolve.ts` re-exports it, so W2's importers keep their path. */
 export const UPDATE_GATE_CAP = 'update-gate';
+
+/** What a `~/.ccrc/update.json` text says about a run IN FLIGHT (design
+ *  2026-09-20 §10). Two callers ask it: the agent's `update` op, before it spawns
+ *  (D-3371), and the server-role local spawn
+ *  (programme wave 5 Task 5). The inventory NEVER asks it: `reportFrom`
+ *  (`server/src/update/inventory.ts`) is that reader, and it answers a different
+ *  question — the five report columns, with `unknown` for garbage. This one
+ *  answers only "is a run in flight right now". So garbage is `null` here, not
+ *  busy, and the node's own lock decides instead (the `--detach` parent's
+ *  `_upd_lock_probe`, then the run's `_upd_lock`). `startedAtS` stays in
+ *  SECONDS (ruling R1) because it is shown, never compared. */
+export interface InFlightReport { phase: UpdatePhase; target: string | null; startedAtS: number | null; pid: number | null }
+/** Non-null iff `text` is ONE JSON object whose `phase` is in
+ *  `IN_FLIGHT_UPDATE_PHASES`. Fields are read BY NAME and every other key is
+ *  ignored (ruling R2: any key this reader does not name). `target` passes
+ *  through `isReleaseTag`, else `null`. `startedAt` must be a positive safe
+ *  integer ≤ `UNIX_SECONDS_MAX` (W2's one declaration, above in this file), else `null`, and the report is still kept.
+ *  `pid` (D-3411) is the WRITER's own pid — wave 4 stamps every in-flight write with the process that wrote it —
+ *  and is a positive safe integer or `null`, never 0 or a negative number: `kill(2)` reads those as a process
+ *  group, so a pid this reader admitted as such would ask about the wrong thing. A report whose pid is `null`
+ *  is kept (its writer is unmeasurable, which is not dead). */
+export function inFlightReport(text: string): InFlightReport | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return null; }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const doc = parsed as Record<string, unknown>;
+  const phase = doc.phase;
+  if (!isUpdatePhase(phase) || !(IN_FLIGHT_UPDATE_PHASES as readonly UpdatePhase[]).includes(phase)) return null;
+  const started = doc.startedAt;
+  return {
+    phase,
+    target: isReleaseTag(doc.target) ? doc.target : null,
+    startedAtS: typeof started === 'number' && Number.isSafeInteger(started) && started > 0 && started <= UNIX_SECONDS_MAX
+      ? started : null,
+    pid: typeof doc.pid === 'number' && Number.isSafeInteger(doc.pid) && doc.pid > 0 ? doc.pid : null,
+  };
+}
+
+/* ---------------------------------------------------------------------------
+ * THE DISPATCHER'S VOCABULARY AND ORDER (design 2026-09-20 §9/§10; programme
+ * wave 5, Task 4). Still inside the end-of-file update block (D-3188, ruling
+ * R13): appended, so no line README or the session-hook audit cites moves.
+ * `server/src/update/dispatch.ts` (L1) decides with these; the update routes
+ * answer with the words; the PWA's move planner sorts with the comparator —
+ * one spelling of each, which `single-definition.test.ts` holds.
+ * ------------------------------------------------------------------------- */
+
+/** Why the dispatcher did not move a node it considered (spec §9/§10). EVERY word is NON-halting: it is noted
+ *  in `updateDetail` on an `idle` row (D-3375) and a standing request stays standing
+ *  (decision 7). The routes answer every word but `no-update-gate` (auto only — a route writes a request, never
+ *  auto) and `waiting-for-fleet` (the order, not a refusal of this node) as a single-node `409`. */
+export const DISPATCH_REFUSALS = [
+  'unknown-tag', 'not-newer', 'refused-by-node', 'stamp-unread', 'floor-unread', 'no-detach-cap',
+  'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet',
+] as const;
+export type DispatchRefusal = (typeof DISPATCH_REFUSALS)[number];
+/** Use THIS, never `DISPATCH_REFUSALS.includes(x as DispatchRefusal)` — `isRunState`'s rule. */
+export function isDispatchRefusal(v: unknown): v is DispatchRefusal {
+  return typeof v === 'string' && (DISPATCH_REFUSALS as readonly string[]).includes(v);
+}
+
+/** THE dispatch order's one spelling (spec §10's standing order: the server reads what the fleet host's hook
+ *  writes, and the agent caches `ccd caps` at boot). `fleet` 0; `server` and `both` 1 — the box the server
+ *  process runs on; `null`, a role token this build cannot name, 2 — last, so an unnamed row never jumps the
+ *  fleet. */
+export function dispatchRank(role: NodeRole | null): 0 | 1 | 2 {
+  if (role === 'fleet') return 0;
+  if (role === 'server' || role === 'both') return 1;
+  return 2;
+}
+
+/** `dispatchRank`, then `label`, then `nodeId`, the last two by UTF-16 code unit — never `localeCompare`, whose
+ *  answer follows the box's locale. The server's `planDispatch` and the PWA's `planMove` both sort with this, so
+ *  a confirm sheet names the nodes in the order the dispatcher will move them. */
+export function compareDispatchOrder(a: { role: NodeRole | null; label: string; nodeId: string }, b: { role: NodeRole | null; label: string; nodeId: string }): number {
+  const rank = dispatchRank(a.role) - dispatchRank(b.role);
+  if (rank !== 0) return rank;
+  if (a.label !== b.label) return a.label < b.label ? -1 : 1;
+  if (a.nodeId !== b.nodeId) return a.nodeId < b.nodeId ? -1 : 1;
+  return 0;
+}
+
+/** `POST /api/updates/apply` (design 2026-09-20 §12, update-management wave 5). Exactly one of `nodeId` / `all`;
+ *  `tag` absent = each named node's resolved `desiredTag`. */
+export type ApplyUpdateBody = ({ nodeId: string } | { all: true }) & { tag?: string };
+/** `POST /api/updates/rollback` (§12). `to` absent = the node's measured `previousVersion`. */
+export interface RollbackUpdateBody { nodeId: string; to?: string }
+/** Why `{all: true}` wrote no request for a live node (D-3385, D-3401):
+ *  the dispatcher's own per-node refusal with the fleet's halt set aside (an update move is never asked for the
+ *  rollback cap, and never `no-update-gate` — that is auto's), or no tag to move it to. Every refusal word but
+ *  `not-newer` is also noted in that node's `updateDetail` (§12), which is where the inventory shows it. A node
+ *  whose OWN lease is already busy is skipped `busy` too (D-3406): a request written there would be silently
+ *  erased the moment that running move settles (`settleNode` clears the request columns unconditionally), and
+ *  the single-node route already answers `409 busy` for the same row rather than writing a doomed request.
+ *
+ *  Two more words a row's OWN state can answer with (D-3408): a row that is ITSELF halting
+ *  (`isHalting`, a `failed`/`reverted` row that is not a provenance verdict) is skipped `halted` before its move
+ *  is even asked — the only door out of a halt is `ack`, which clears the request columns, so a request written
+ *  beside a halting row's own verdict would be silently erased the same way a busy row's would; its detail is
+ *  already the verdict, so nothing is noted either. And once any live FLEET-role row was skipped this call for
+ *  its own busy lease or its own halt, every non-fleet row is skipped `waiting-for-fleet` rather than requested —
+ *  a fleet-first move the operator's tap could not reach must not let the server move ahead of it, and a
+ *  server-role row's own halt does not trigger this (only a fleet-role row's own busy/halted does). */
+export type MoveSkipWhy = Exclude<DispatchRefusal, 'no-update-gate' | 'no-rollback-cap'> | 'no-desired' | 'busy';
+export interface MoveSkip { nodeId: string; why: MoveSkipWhy }
+/** §12's `202 {requested}`, plus `skipped`. `requested` is in dispatch order (`compareDispatchOrder`); a single-node
+ *  move answers `requested: [nodeId]` and `skipped: []`. A request, not a dispatch: the row shows it as
+ *  `request: {tag, kind, at}` until convergence or `ack` clears it. */
+export interface MoveRequestAnswer { ok: true; requested: string[]; skipped: MoveSkip[] }
+
+/** The word a `failed` node's detail begins with when the node refuses a RELEASE, not a fault of its own: a verdict
+ *  on the tag, recorded beside the row (`node_release_refusals`, D-3378) and NOT a halt. Spelled ONCE: `isHalting`
+ *  (update/dispatch.ts) reads it in JS, the store's `haltingRowSql` in SQL (D-3412), and `sweepPlanFor` decides
+ *  the refusal by it. */
+export const PROVENANCE_DETAIL_PREFIX = 'provenance:';

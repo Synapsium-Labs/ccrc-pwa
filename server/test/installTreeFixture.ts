@@ -14,7 +14,7 @@
 // missed the other broke 34 tests in the file nobody touched. This module
 // makes that a structural impossibility rather than a discipline.
 import {
-  copyFileSync, cpSync, mkdirSync, statSync, chmodSync, writeFileSync,
+  copyFileSync, cpSync, mkdirSync, statSync, chmodSync, writeFileSync, symlinkSync,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -140,6 +140,11 @@ export const TREE_FILES = [
   // source the tree does not carry and EVERY Linux describe in the install
   // suite goes red for a fixture reason (measured: 72 of them).
   'ccd/ccd-pool-sync',
+  // programme wave 4 (design 2026-09-20 §9): the update-intent puller,
+  // shipped by `_inst_bins` on the same non-Darwin, every-ROLE arm. Without
+  // this row `_inst_atomic` dies naming a source the tree does not carry, and
+  // every Linux describe in the install suite goes red for a fixture reason.
+  'ccd/ccd-update-sync',
   // The account-connection helper `ccd account-pane` execs. `_inst_bins`
   // places it on BOTH platform arms — it is neither cgroup- nor timer-bound —
   // so unlike the four above it, a Darwin install expects it on PATH too.
@@ -237,5 +242,39 @@ export function installFixtureTree(home: string, sub = 'checkout'): string {
     mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(dest, body);
   }
+  return root;
+}
+
+/** A W6 box's version directory (W6 Task 2): the fixture tree placed at
+ *  `<home>/ccrc-versions/<name>`, the shape `_inst_tree` leaves behind.
+ *
+ *  `complete` (default true) writes the two files a version keeps at its root
+ *  once an install completed from it — `.ccrc-stamp.json`, a stamp
+ *  `_box_build_fields` accepts (`sha` default forty `a`s, `ref` main, a fixed
+ *  `builtAt`, `dirty: false`, and `version` only when given), and
+ *  `.ccrc-installed`, one line naming that sha. Without them the version is
+ *  incomplete, which is what a placement that died leaves.
+ *
+ *  `link` (default true) points `<home>/ccrc` at it with an ABSOLUTE target,
+ *  the value `_plat_ln_swap` writes and `_ver_layout` reads back.
+ *
+ *  Returns the version root. The one helper later W6 tasks plant a
+ *  versioned box with. */
+export function installVersionedTree(
+  home: string, name: string,
+  opts: { link?: boolean; complete?: boolean; stamp?: { sha: string; version?: string } } = {},
+): string {
+  const root = installFixtureTree(home, join('ccrc-versions', name));
+  if (opts.complete ?? true) {
+    const sha = opts.stamp?.sha ?? 'a'.repeat(40);
+    const version = opts.stamp?.version;
+    const stamp = {
+      sha, ref: 'main', builtAt: '2026-09-23T00:00:00Z', dirty: false,
+      ...(version === undefined ? {} : { version }),
+    };
+    writeFileSync(join(root, '.ccrc-stamp.json'), `${JSON.stringify(stamp)}\n`);
+    writeFileSync(join(root, '.ccrc-installed'), `${sha}\n`);
+  }
+  if (opts.link ?? true) symlinkSync(root, join(home, 'ccrc'));
   return root;
 }

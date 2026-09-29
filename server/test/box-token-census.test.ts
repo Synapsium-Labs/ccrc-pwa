@@ -208,14 +208,14 @@ const KICKOFF = '/api/sessions/:id/kickoff';
 
 /** Every coordination write the bullet must describe as carrying no box token. */
 /** The update control plane's session-only routes (design 2026-09-20 §12 census
- *  step (b): the FOUR the W2 wave registers of §12's six). Registered from `server/src/update/routes.ts`,
+ *  step (b): all six of §12's session routes — W2's four and wave 5's two moves). Registered from `server/src/update/routes.ts`,
  *  which `coord-pause-route.test.ts`'s `SESSION_ONLY` harvest cannot see for the
  *  kickoff route's reason. Hand-kept for the NAMES only: the update-surface
  *  describe below derives the same set from the file and compares in both
  *  directions, so a route there cannot join or leave without this literal
- *  moving. Programme wave 5 (spec W4 part B) appends `/api/updates/apply` and
- *  `/api/updates/rollback` with their routes. */
-const UPDATE_DOORS = ['/api/updates', '/api/updates/intent', '/api/updates/refresh', '/api/updates/ack'];
+ *  moving. */
+const UPDATE_DOORS = ['/api/updates', '/api/updates/intent', '/api/updates/refresh', '/api/updates/ack',
+  '/api/updates/apply', '/api/updates/rollback'];
 
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ...UPDATE_DOORS];
@@ -706,6 +706,18 @@ describe('the update surface: one dual-credential read, every other route sessio
       expect(lanesIn(planted), `a planted ${call} went unseen`).toContain('POST /api/updates/ack');
     }
     expect(lanesIn(UPDATE_SRC)).not.toContain('POST /api/updates/ack');
+  });
+
+  it('a box-token call planted in the apply handler is SEEN too — the first write route wave 5 adds', () => {
+    // The same control over the newest registration: the one-tap is the route this census
+    // exists to keep off the box token, so its slice is proved live on its own.
+    const anchor = "app.post('/api/updates/apply', async (req, reply) => {";
+    expect(UPDATE_SRC, 'the apply registration line moved — re-point this control at it').toContain(anchor);
+    for (const call of ['requireMailToken(req, reply);', 'checkMailToken(deps.mailToken ?? null, undefined);']) {
+      const planted = UPDATE_SRC.replace(anchor, `${anchor}\n    ${call}`);
+      expect(lanesIn(planted), `a planted ${call} went unseen`).toContain('POST /api/updates/apply');
+    }
+    expect(lanesIn(UPDATE_SRC)).not.toContain('POST /api/updates/apply');
   });
 
   it('a route registered with a non-get/post verb, or through app.route(), is SEEN by REGISTERED (F14)', () => {

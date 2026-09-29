@@ -95,7 +95,10 @@ export function releaseToNotify(input: NotifyInput): ReleaseNotification | null 
 
 // ── The release push's copy (plan W3 Task 3; design 2026-09-20 §13) ──────────────────────────────────────
 // Pure strings, beside the decision they announce. The summary clause is the CALLER's argument
-// (`versionsSummary`, shared/update-summary.ts), so this file spells no part of it and imports nothing new.
+// (`summaryFromSides` over the sides `versionSides`/`remoteSides` picked — `shared/update-summary.ts`; W5
+// review 161, F-L: the convenience wrapper `versionsSummary` this comment used to name is gone, since the
+// real caller, `watch.ts`'s `pushRelease`, never composed through it — it picks sides itself), so this file
+// spells no part of it and imports nothing new.
 
 /** Where the tap lands: the settings screen's release list (push-sw.js prefers a payload `url`, Task 4). */
 export const RELEASE_PUSH_URL = '/settings';

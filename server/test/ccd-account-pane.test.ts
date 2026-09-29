@@ -136,7 +136,7 @@ describe('ccd account-pane — the pane', () => {
     const killed = runCcd('account-pane', '--id', 'claude-a', '--cancel');
     expect(killed.code).toBe(0);
     expect(JSON.parse(killed.stdout)).toEqual({ cancelled: 'cc-auth-claude-a' });
-    expect(h.calls()).toContain('tmux kill-session -t cc-auth-claude-a');
+    expect(h.calls()).toContain('tmux kill-session -t =cc-auth-claude-a:');
     const none = runCcd('account-pane', '--id', 'claude-a', '--cancel');
     expect(none.code).toBe(0);
     expect(JSON.parse(none.stdout)).toEqual({ cancelled: null });
@@ -166,20 +166,22 @@ describe('ccd account-pane — the structural guards', () => {
   });
 
   it('EVERY tmux send-keys in ccd targets a REGISTRY id, so no typer can reach cc-auth-*', () => {
-    // The auth pane's name is `cc-auth-<id>`, and `_tmux` turns a registry id
-    // into `cc-<id>` — so the only way a ccd typer could reach an auth pane is
-    // a send-keys with a literal target. RE-MEASURED 2026-09-11 on this
+    // The auth pane's name is `cc-auth-<id>`, and `_tmux_t` turns a registry
+    // id into `=cc-<id>:` — so the only way a ccd typer could reach an auth
+    // pane is a send-keys with a literal target. RE-MEASURED 2026-09-11 on this
     // branch: `grep -n 'tmux send-keys' ccd/ccd` returns NINE lines (11547,
     // 11699, 11702, 11707, 11710, 11713, 12114, 12118, 13651) carrying
     // FOURTEEN occurrences, because five of those lines send twice. Every one
-    // names `$t` or `$(_tmux "$id")`; this is the assertion that keeps the
-    // fifteenth honest. The floor is asserted on LINES, which is what the loop
-    // iterates.
+    // names `$t` or `$(_tmux_t "$id")` (D-3525 moved the builder from `_tmux`;
+    // `ccd-tmux-anchor.test.ts` proves every `$t` a target uses is bound from
+    // it). `$(_tmux_at …)` is NOT admitted here: it anchors a NAME, and a name
+    // can be `cc-auth-*`. This is the assertion that keeps the fifteenth
+    // honest. The floor is asserted on LINES, which is what the loop iterates.
     const lines = src.split('\n').filter((l) => l.includes('tmux send-keys'));
     expect(lines.length, 'the scan matched no send-keys at all').toBeGreaterThanOrEqual(9);
     for (const l of lines) {
       expect(l, `send-keys with a target ccd did not derive from a registry id: ${l.trim()}`)
-        .toMatch(/tmux send-keys -t "(\$t|\$\(_tmux "\$id"\))"/);
+        .toMatch(/tmux send-keys -t "(\$t|\$\(_tmux_t "\$id"\))"/);
     }
   });
 

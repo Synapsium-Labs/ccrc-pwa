@@ -4,7 +4,7 @@ import type { FleetIO } from './io.js';
 import { readRegistry, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readLimits } from './limits.js';
-import { liveSessionStatus, readLiveState, readLiveStateMeasured } from './livestate.js';
+import { liveSessionStatus, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
 import type { FleetSession, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
@@ -504,6 +504,10 @@ export async function assembleFleet(
     // apart from the word `busy` alone, and it must (see `statusUnmeasured`'s
     // own docstring in `shared/api.ts`).
     let statusUnmeasured = false;
+    // Whether `status` is an affirmative reading from a build whose own word
+    // already counts a running Workflow (`liveStatusCoversDelegation`). Only
+    // a readable file sets it; every other path leaves the pane row to speak.
+    let liveCoversWorkflows = false;
     if (alive) {
       status = 'idle';
       const pid = await tmux.panePid(r.id);
@@ -532,6 +536,7 @@ export async function assembleFleet(
           // an absent nameSource is an older file whose name a human chose.
           name = live.nameSource === 'derived' ? null : live.name;
           statusUpdatedAt = live.statusUpdatedAt; version = live.version;
+          liveCoversWorkflows = liveStatusCoversDelegation(live.version);
           // Read off the RAW status word, not off `status` — `liveSessionStatus`
           // has already collapsed `waiting` into `busy` by this line, and that
           // collapse is deliberate and frozen (see its docstring). This is the
@@ -573,9 +578,16 @@ export async function assembleFleet(
     const acct = limits[r.wrapper];
     const sl = statuslines?.get(r.id);
     const head = headBranches?.get(r.id) ?? null;
-    // A running Workflow leaves the orchestrator reporting idle while it waits
-    // on subagents — surface it as busy so it doesn't read as finished.
-    if (sl?.workflowActive && status === 'idle') status = 'busy';
+    // The pane's Workflow row speaks only where Claude Code's own file did not:
+    // no readable file (`no-state` leaves the `alive` default `idle`), no
+    // configDir, or a build older than 2.1.277 or naming no version. From
+    // 2.1.277 that file reads busy while any workflow runs, so an idle from it
+    // has already ruled a running one out, and a row still on screen is a
+    // finished run's ~30 s linger — on 2.1.281+ one with a failed or killed
+    // agent even reads as running (statusline.ts) — which must not hold the card
+    // busy, nor the busy→idle "Finished" push back. `=== true`: `undefined`
+    // is a tick that never saw the row (statusline.ts), which promotes nothing.
+    if (sl?.workflowActive === true && status === 'idle' && !liveCoversWorkflows) status = 'busy';
     // STATUS IS FROZEN above this line: `hs` informs dialogPending and the
     // three hook-derived fields below, and MUST NOT feed back into `status` —
     // that derivation is done the moment this line runs.
