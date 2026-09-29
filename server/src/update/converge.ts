@@ -219,7 +219,10 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
   } catch (e) {
     // A SYNCHRONOUS throw from the spawn — the argv builder's RangeError, or a relative or trailing-slash HOME — is a
     // fault of this server that will not mend itself: a halting `spawn-failed` naming the throw (fix round 1 item 9).
-    // It is NOT the rejected-promise arm below, where a transient spawn error lands and the request simply stands.
+    // It is NOT the rejected-promise arm below. That arm is reached only by an errno `child_process.spawn` throws
+    // synchronously inside the runner's executor (E2BIG, ENOMEM, an invalid argument), and nothing started there;
+    // EAGAIN, EMFILE, ENFILE, EACCES and ENOENT arrive as the child's `error` event, which the runner answers as
+    // code 1 `could not start the launcher (<code>)` — a halting `spawn-failed` below (residue R6, review 176 F2).
     return { kind: 'refused', err: 'spawn-failed', detail: e instanceof Error ? e.message : String(e) };
   }
   spawning.add(spawn);
@@ -246,6 +249,7 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
     const detail = stderrLine === 'no message' ? `exit ${res.code} with no stderr from the launcher` : stderrLine;
     return { kind: 'refused', err: 'spawn-failed', detail };
   } catch (e) {
+    // Reached only by an errno spawn() throw synchronously inside the runner's executor (residue R6, review 176 F2).
     return { kind: 'transport', why: 'other', message: e instanceof Error ? e.message : String(e), reached: 'never' };
   }
 }
