@@ -291,7 +291,7 @@ describe('sessionBucket', () => {
       name: 'mekwar-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-claude-a-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
@@ -367,7 +367,7 @@ describe('sessionBucket', () => {
       name: 'calm-mesa', status: 'busy', statusUpdatedAt: 1786973261696, version: '2.1.233',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-demo-calm-mesa') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-demo-calm-mesa:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '9001\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
@@ -407,7 +407,7 @@ describe('sessionBucket', () => {
       statusUpdatedAt: 1786973261696, version: '2.1.233',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-demo-blocked') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-demo-blocked:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '7007\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
@@ -442,7 +442,7 @@ describe('sessionBucket', () => {
       status: 'waiting', statusUpdatedAt: 1786973261696, version: '2.1.233',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-demo-mute') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-demo-mute:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '7008\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
@@ -485,7 +485,7 @@ describe('sessionBucket', () => {
       name: 'mekwar-a1', status: 'idle', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-claude-a-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };

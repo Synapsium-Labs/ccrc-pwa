@@ -1398,9 +1398,15 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
       '4) printf \'build:     unreadable (%s is not a regular file)\\n\' "$BOX_STAMP_FILE" ;;',
       '5) printf \'build:     unreadable (jq is not on PATH, so %s cannot be parsed)\\n\' "$BOX_STAMP_FILE" ;;',
       '*) printf \'build:     unreadable (%s does not parse as a build stamp)\\n\' "$BOX_STAMP_FILE" ;;',
+      // W6 Task 2: `_ver_keep_state` copies the stamp into the version
+      // directory it describes — a reader, through one local.
+      'local from_stamp="$BOX_STAMP_FILE"',
       'mkdir -p "${BOX_STAMP_FILE%/*}" || _ccrc_die "cannot create ${BOX_STAMP_FILE%/*}"',
       '_inst_atomic "$shipped" "$BOX_STAMP_FILE" 644',
       'local src sha ref dirty version vfield tmp why rc=0 dest="$BOX_STAMP_FILE"',
+      // W6 Task 4: `_ver_flip_back` restores a kept version's stamp over the
+      // box's, through a local — `_inst_stamp`'s `dest=` idiom above.
+      'local stamp="$BOX_STAMP_FILE"',
     ]);
     // Scoped to `_box_build_fields`'s OWN body, not the whole file: the
     // `ccrc models` verbs carry their own `jq -r` parses of catalogues and
@@ -1502,6 +1508,9 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // unsigned/verified marker, so `cmd_version` reads both lines in one
       // redirect rather than the record's first line alone.
       '{ IFS= read -r rec || rec=""; IFS= read -r prov || prov=""; } < "$BOX_INSTALLED_FILE"',
+      // W6 Task 2: `_ver_keep_state` copies the record into the version
+      // directory it describes, as that version's completeness mark.
+      'local from_record="$BOX_INSTALLED_FILE"',
       'local rc=0 tmp dest="$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rec < "$BOX_INSTALLED_FILE" && [ "$rec" = "$sha" ]; then',
       // cmd_update (review fix round 1 I4): whether the OLD (running) build
@@ -1511,6 +1520,10 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // 2 restore `previous` instead of falling straight to arm 3.
       'if [ -f "$BOX_INSTALLED_FILE" ] && [ -r "$BOX_INSTALLED_FILE" ]; then',
       'IFS= read -r old_rec < "$BOX_INSTALLED_FILE" 2>/dev/null || old_rec=""',
+      // cmd_update (D-3462): the record's whole body, held before the run clears
+      // it, so a death that replaced nothing can put it back (`_upd_unwind`).
+      'if [ "$old_completed" -eq 1 ] && [ -f "$BOX_INSTALLED_FILE" ] && [ -r "$BOX_INSTALLED_FILE" ]; then',
+      'IFS= read -r -d \'\' old_rec_body < "$BOX_INSTALLED_FILE" 2>/dev/null; old_rec_kept=1',
       // cmd_update (D-3114): cleared right before the staged install, so its
       // presence afterwards means this run's spine completed — the one fact
       // that tells "moved, unhealthy" (exit 3) from "died" (exit 1).
@@ -1529,6 +1542,9 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // review fix round 1 I4) so an absent record prints no stray bash
       // error.
       '&& { [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rb_rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null \\',
+      // W6 Task 4, `cmd_rollback`: a box already on the kept tag has nothing
+      // to do only when its record IS the kept version's (D-3264's rerun).
+      'if [ "$VER_CURRENT" = "$to" ] && [ "$now" = "$to" ] && cmp -s -- "$BOX_INSTALLED_FILE" "$BOX_VERSIONS_ROOT/$to/$VER_RECORD_COPY"; then',
       // W4a Task 9: `cmd_watchdog`'s re-measure reads the record's line 1 on
       // ONE line; its failed-detail sentence names no path (the assertion
       // above). Measured (not the brief's claimed anchor, which put this
@@ -1552,9 +1568,18 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // round 1 I2): the same-tag arm above now `return`s unconditionally,
       // so this is no longer its `elif`.
       'if [ ! -e "$BOX_INSTALLED_FILE" ]; then',
+      // `_upd_unwind` (D-3462): rewrites the record cmd_update cleared, tmp + one rename.
+      'tmp="$BOX_INSTALLED_FILE.tmp.$$"',
+      'if printf \'%s\' "$rec_body" > "$tmp" 2>/dev/null && chmod 644 "$tmp" && _plat_mv_notdir "$tmp" "$BOX_INSTALLED_FILE" 2>/dev/null; then',
       // _upd_restore_arm3 (wave 4, Task 6, D-3260):
       // removes the record a completed spine wrote before its gate failed.
       'if rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then',
+      // W6 Task 4, `_ver_flip_back`: the record, cleared before the kept
+      // version's own spine so its presence afterwards means that spine wrote it.
+      'local rec="$BOX_INSTALLED_FILE"',
+      // W6 Task 4, `_upd_restore_arm1`: a failed arm 1 clears the record, so
+      // arm 2's child cannot read the box as already on the previous tag.
+      'if ! rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then',
       'rm -f -- "$BOX_INSTALLED_FILE" \\',
       '|| _ccrc_die "removing $BOX_INSTALLED_FILE failed"',
     ]);
@@ -2086,14 +2111,14 @@ describe('one ccrc-ddns unit name, spelled once in bash through CCRC_DDNS_UNIT',
   });
 });
 
-// — the account-health probe's token convention —
-describe('one .cc-secrets/<id>-oauth.env convention, in exactly four bash files', () => {
-  // `shared/roster.ts` permits `exec.secretsFile` only on `kind: 'generated'`,
-  // so the mandatory upstream account cannot declare where its credential
-  // lives — and a roster-driven probe would silently skip the primary account.
-  // The convention closes that, and the files that spell it CANNOT share a
-  // constant: `ccd-account-health` and `ccd-telemetry-keepalive` are each
-  // installed alone into $HOME/.local/bin with no library beside them, and
+// — the upstream OAuth fallback convention —
+describe('one upstream .cc-secrets/<id>-oauth.env fallback, in exactly five bash files', () => {
+  // `exec.secretsFile` can declare a credential path for an upstream lane, and
+  // every reader must prefer it. This convention is only its legacy fallback
+  // when the upstream declares none; it is NEVER a filename guessed for every
+  // telemetry-Anthropic lane. The five tools that spell the fallback CANNOT
+  // share a constant: `ccd-account-health` and `ccd-telemetry-keepalive` are
+  // each installed alone into $HOME/.local/bin with no library beside them, and
   // `ccrc-doctor-checks` is loaded by `ccrc` through ${BASH_SOURCE[0]} on a box
   // that may not have either of them at all.
   // So the agreement is MEASURED, the way `.ccrc/remote-control`'s four
@@ -2119,30 +2144,41 @@ describe('one .cc-secrets/<id>-oauth.env convention, in exactly four bash files'
   // into $HOME/.local/bin with no library beside it — so it is measured here
   // on exactly the same terms, and the value comparison below covers it.
   // A FIFTH holder should still have to argue.
+  //
+  // THE FIFTH ARGUES, AND IT NEVER READS THE FILE (D-3524). `ccd/ccd`'s
+  // `_authdead_cred_src` names the upstream's credential file so the auth-dead
+  // marker can expire once the credential it condemned is replaced: it STATS the
+  // file for its ctime and never opens it. The upstream is exactly the account
+  // the roster may give no `secretsFile`, and the file the probe measured dead is
+  // this one — so ccd must build the same path, and it cannot share a constant
+  // for the reason above: ccd is installed as a lone COPY into $HOME/.local/bin.
+  // A declared `exec.secretsFile` wins over it (`_ccrc_secrets_file`, generated);
+  // the convention is the fallback for the upstream alone, never a guess for any
+  // other id. Measured below on the same terms as the other four. A SIXTH
+  // holder should still have to argue.
   const NEEDLE = '-oauth.env';
 
-  it('is spelled by exactly those three files, each named here BY NAME', () => {
+  it('is spelled by exactly those five files, each named here BY NAME', () => {
     expect(holdersOf(NEEDLE)).toEqual([
-      'ccd/ccd-account-auth',         // _auth_write_secret — the WRITER; the other three read what it renames into place
-      'ccd/ccd-account-health',       // _ah_token_file — the probe's own reader
+      'ccd/ccd',                      // _authdead_cred_src — stats the upstream's file, never opens it (D-3524)
+      'ccd/ccd-account-auth',         // _auth_write_secret — the WRITER; the other four read what it renames into place
+      'ccd/ccd-account-health',       // _ah_subjects — selects this fallback only for undeclared upstream credentials
       'ccd/ccd-telemetry-keepalive',  // _ka_turn — the keepalive sources it into the turn
       'ccd/ccrc-doctor-checks',       // _check_credentials — the operator-facing re-measurement
     ]);
   });
 
-  it('and all four build the same path from an id', () => {
+  it('and all five build the same fallback path from an id', () => {
     // NARROWED TO THE CONSTRUCTING LINE, deliberately. `codeLines` drops only
-    // lines whose trimmed start is `#`, and each file names the file TWICE in
-    // shell — once building the path and once in an operator-facing message
-    // that quotes it back (`_ah_say`'s refusal; `bad+=(…)`'s FAIL detail). A
-    // bare `.includes(NEEDLE)` therefore counts 2 on each side and this pin
-    // would be red on arrival for a reason that is not a defect. The message
-    // copies are a feature — an operator is told the exact path — so the
-    // filter names the construction instead of forbidding the mention.
+    // lines whose trimmed start is `#`, and each file can name the fallback in
+    // an operator-facing message as well as its executable construction. A bare
+    // `.includes(NEEDLE)` therefore cannot distinguish a path that is built from
+    // a historical explanation. The filters name the construction in its native
+    // language instead: shell, jq, or the contained Node reader.
     const probe = codeLines(path.join(ccrcRoot, 'ccd', 'ccd-account-health'))
-      .filter((l) => l.includes(NEEDLE) && l.includes('printf'));
+      .filter((l) => l.includes('.cc-secrets/\\($id)-oauth.env'));
     const doctor = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'))
-      .filter((l) => l.includes(NEEDLE) && l.includes('[ -s '));
+      .filter((l) => l.includes('.cc-secrets/${a.id}-oauth.env'));
     // The keepalive's constructing line is its readability TEST — `[ -r "…" ]
     // && . "…"` — which names the path twice on ONE line. That is deliberate
     // there (the guard and the source must not be able to disagree about which
@@ -2156,29 +2192,42 @@ describe('one .cc-secrets/<id>-oauth.env convention, in exactly four bash files'
     // needle; only the `mv` names the path this convention is about.
     const writer = codeLines(path.join(ccrcRoot, 'ccd', 'ccd-account-auth'))
       .filter((l) => l.includes(NEEDLE) && l.includes('mv -f --'));
-    expect(probe.length, `the probe builds it on ${probe.length} lines`).toBe(1);
-    expect(doctor.length, `the doctor builds it on ${doctor.length} lines`).toBe(1);
+    expect(probe.length, `the probe builds its upstream fallback on ${probe.length} lines`).toBe(1);
+    expect(doctor.length, `the doctor builds its upstream fallback on ${doctor.length} lines`).toBe(1);
     expect(keepalive.length, `the keepalive builds it on ${keepalive.length} lines`).toBe(1);
     expect(writer.length, `the writer renames onto it on ${writer.length} lines`).toBe(1);
+    // ccd's constructing line is the upstream arm of `_authdead_cred_src`. Found
+    // through `BASH` by its relative name, never by joining the script's path
+    // here: that spelling belongs to `ccdWsHelpers.ts` alone (the extraction
+    // finding above).
+    const ccdFile = BASH.find((f) => rel(f) === 'ccd/ccd');
+    expect(ccdFile, 'ccd/ccd is in the bash corpus').toBeDefined();
+    const ccdSrc = codeLines(ccdFile!)
+      .filter((l) => l.includes(NEEDLE) && l.includes('f="$HOME/.cc-secrets/'));
+    expect(ccdSrc.length, `ccd builds it on ${ccdSrc.length} lines`).toBe(1);
     // A REAL comparison, not a tautology. Each line is reduced to the path it
-    // BUILDS, with the two files' different spellings of "the secrets dir" and
-    // "the account id" normalised away — the probe's `printf '%s/%s-oauth.env'
-    // "$SECRETS_DIR" "$1"` and the doctor's `[ -s "$HOME/.cc-secrets/$id-oauth.env" ]`
-    // both reduce to the SAME literal. A `shape` that returned a constant for
+    // BUILDS, with the five files' different spellings of "the secrets dir" and
+    // "the account id" normalised away — including jq's `\($id)` and the
+    // contained Node reader's `${a.id}`. A `shape` that returned a constant for
     // anything matching the filter (the first draft of this pin did) could
     // never fail, which is the failure mode this whole file exists to catch.
     const shape = (l: string): string => {
-      const m = /['"]([^'"]*-oauth\.env)['"]/.exec(l);
+      const m = /['"`]([^'"`]*-oauth\.env)['"`]/.exec(l);
       expect(m, `no quoted -oauth.env path on: ${l.trim()}`).not.toBeNull();
       return m![1]!.replace('%s/%s', '<dir>/<id>').replace('$HOME/.cc-secrets/$id', '<dir>/<id>')
+        .replace('.cc-secrets/\\($id)', '<dir>/<id>')
+        .replace('.cc-secrets/${a.id}', '<dir>/<id>')
         .replace('$SECRETS_DIR/$acct', '<dir>/<id>')
-        .replace('$SECRETS_DIR/$AUTH_ID', '<dir>/<id>');
+        .replace('$SECRETS_DIR/$AUTH_ID', '<dir>/<id>')
+        .replace('$HOME/.cc-secrets/$w', '<dir>/<id>');
     };
     expect(shape(probe[0]!), 'the probe builds a path the doctor does not').toBe('<dir>/<id>-oauth.env');
     expect(shape(doctor[0]!), 'the doctor builds a path the probe does not').toBe('<dir>/<id>-oauth.env');
     expect(shape(keepalive[0]!), 'the keepalive builds a path the other two do not')
       .toBe('<dir>/<id>-oauth.env');
-    expect(shape(writer[0]!), 'the writer creates a path its three readers do not watch')
+    expect(shape(writer[0]!), 'the writer creates a path its readers do not watch')
+      .toBe('<dir>/<id>-oauth.env');
+    expect(shape(ccdSrc[0]!), 'ccd stats a path the writer does not create')
       .toBe('<dir>/<id>-oauth.env');
   });
 });

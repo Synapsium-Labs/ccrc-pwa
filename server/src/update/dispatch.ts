@@ -320,10 +320,11 @@ const SKEW_DETAIL =
 export type OpAnswer =
   | { kind: 'accepted'; detail?: string }
   | { kind: 'refused'; err: string; detail: string | null }
-  | { kind: 'transport'; why: 'disconnected' | 'timeout' | 'aborted' | 'other'; message: string };
+  | { kind: 'transport'; why: 'disconnected' | 'timeout' | 'aborted' | 'other'; message: string; reached: 'never' | 'maybe' };
 
-/** What the act does to the lease it holds. `hold` writes nothing: only the inventory sweep (or a met request)
- *  settles a lease, so the row reads `pending` until then (D-3382). */
+/** What the act does to the lease it holds. `hold` settles nothing: only the inventory sweep (or a met request)
+ *  settles a lease, so the row reads `pending` until then (D-3382) — the dispatcher may NOTE the hold's words on
+ *  the lease (D-3413's arms B/D; D-3555's link-failure hold). */
 export type AnswerAction =
   | { kind: 'hold'; detail: string }
   | { kind: 'release'; to: 'idle' | 'failed'; detail: string };
@@ -336,8 +337,9 @@ const said = (text: string | null, none: string): string => (text === null ? non
  * THE ANSWER MAPPING (spec §10). `advertised` is whether the LIVE `FleetState.agentOps` names the op when the
  * answer arrives (always `true` for the server-role spawn): an agent that advertises the op and still answers
  * `bad-request` HALTS, one that does not is version skew and waits. `busy`, `not-queued` (D-3413: the bound's arm A)
- * and every transport failure release
- * the lease `idle` with the request standing (decision 7: a refusal never consumes it); `bad-tag`, `bad-kind`,
+ * and a transport failure that NEVER reached the agent release
+ * the lease `idle` with the request standing (decision 7: a refusal never consumes it); one that MAY have reached
+ * it HOLDS instead, exactly like `accepted` (D-3555) — only a report or the deadline settles it. `bad-tag`, `bad-kind`,
  * `spawn-failed` and any word this build cannot name release it `failed`, which halts until `ack`.
  * Exhaustive over `UpdateOpError`: a word added to UPDATE_OP_ERRORS and not here is a compile error at the
  * `never` below (D-3370).
@@ -351,7 +353,10 @@ export function classifyOpAnswer(a: OpAnswer, advertised: boolean): AnswerAction
     return { kind: 'hold', detail: words === 'no message' ? ACCEPTED_DETAIL : words };
   }
   if (a.kind === 'transport') {
-    const what = a.why === 'other' ? said(a.message, 'no message') : 'the node dropped mid-dispatch';
+    // D-3555: a failure after the op was handed to the link may follow a spawn, so the lease HOLDS
+    // like `accepted`; only a failure proven before the hand-off releases, and the request stands.
+    if (a.reached === 'maybe') return { kind: 'hold', detail: linkFailedHoldDetail(a.why, a.message) };
+    const what = a.why === 'other' ? said(a.message, 'no message') : 'the op never reached the fleet link';
     return { kind: 'release', to: 'idle', detail: `${a.why} — ${what}; the request stands` };
   }
   if (a.err === 'bad-request') {
@@ -426,4 +431,63 @@ export function deadlineDetail(row: Pick<DispatchRow, 'agentOps' | 'updateStarte
   if (own.phase !== 'failed') return DEADLINE_DETAIL;
   const head = `${DEADLINE_DETAIL} — the watchdog's rollback to ${own.target} failed: `;
   return (head + said(own.detail, 'no message').slice(0, Math.max(0, UPDATE_OP_DETAIL_MAX - head.length))).slice(0, UPDATE_OP_DETAIL_MAX);
+}
+
+// ── a fleet-link failure after the hand-off (D-3555, residue R1) ────────────────────────────────────────────────
+
+/** D-3555: the words a lease HELD after the fleet link failed mid-op begins with. This server writes
+ *  them (`converge.ts`, through `noteLeaseDetail`) and `linkFailedDeadlineDetail` reads them back. A node could spell
+ *  them in an arm-B/D detail; that changes only the deadline's WORDS, never its verdict. */
+export const LINK_FAILED_HOLD_PREFIX = 'link failed mid-op';
+
+export function linkFailedHoldDetail(why: 'disconnected' | 'timeout' | 'aborted' | 'other', message: string): string {
+  // Fix round 1 (review 178 O1): the three named post-send arms are measured AFTER `ws.send` returned — the op
+  // DID reach the fleet link, full stop. `other` covers a non-`Error` rejection and any error `request()` does not
+  // name, so it carries no such proof: it says only that the op MAY have reached the link.
+  const reached = why === 'other' ? 'may have reached' : 'reached';
+  const headPrefix = `${LINK_FAILED_HOLD_PREFIX} (`;
+  const tail =
+    `) — the op ${reached} the fleet link and no answer came back, so the node may have started the run; ` +
+    `the lease holds until its report or the deadline`;
+  if (why !== 'other') return `${headPrefix}${why}${tail}`.slice(0, UPDATE_OP_DETAIL_MAX);
+  // Fix round 1 (review 178, item 3): cap the MESSAGE part alone, computed from the fixed parts' own lengths, so
+  // the whole sentence always fits UPDATE_OP_DETAIL_MAX and always ENDS with the tail above — a `.slice` over the
+  // whole string (the old shape) could cut the tail off a long `other` message instead.
+  const budget = Math.max(0, UPDATE_OP_DETAIL_MAX - headPrefix.length - 'other: '.length - tail.length);
+  return `${headPrefix}other: ${said(message, 'no message').slice(0, budget)}${tail}`;
+}
+
+/** The columns `linkFailedDeadlineDetail` reads. `NodeRow` (coord/store.ts) satisfies it structurally. */
+export interface LinkHoldRow { updateDetail: string | null; updateTarget: string | null; reportedTarget: string | null }
+
+/** The failed-deadline words for a lease held after a link failure, or `null` (the caller then uses `deadlineDetail`).
+ *  Only when the row's detail begins `${LINK_FAILED_HOLD_PREFIX} (` and it names a tag. The words always say the link
+ *  failed mid-op; they say "the row's last report does not name <tag>" only when that is true (fix round 1, review
+ *  178 F1) — the row's LAST STORED report is all `reportedTarget` can prove, and the sentence must not claim more
+ *  history than that: a later writer's report can replace this run's own, and D-3214's `stamp-unmeasured` override
+ *  (`inventory.ts`) can write a PREVIOUS report back over a genuine one, so "no run of <tag> was reported" could be
+ *  false in either case. A same-tag report — which may be a previous run's (D-3405's accepted hole; no column keeps
+ *  the report as it stood at the acquire) — gets the qualified sentence instead. */
+export function linkFailedDeadlineDetail(row: LinkHoldRow): string | null {
+  if (row.updateDetail?.startsWith(`${LINK_FAILED_HOLD_PREFIX} (`) !== true || row.updateTarget === null) return null;
+  const target = row.updateTarget;
+  const text = row.reportedTarget !== target
+    ? `${DEADLINE_DETAIL} — the fleet link failed mid-op; the row's last report does not name ${target}`
+    : `${DEADLINE_DETAIL} — the fleet link failed mid-op; the row's last report names ${target}, which may be an earlier run's`;
+  return text.slice(0, UPDATE_OP_DETAIL_MAX);
+}
+
+// ── the answer follows the lease, not the node id (D-3412 amended, residue R5) ───────────────────────────────────
+
+/** R5 (review 176 F1; D-3412 amended): the LIVE row that holds the lease a dispatch run acquired — the same `label`, the
+ *  same `updateStartedAt` (the acquire's `now`, which `handOffLease` copies onto a revived heir), still busy. A revive
+ *  during the op hands the lease to the heir, so the heir is found here and the retired donor (not live) is not. `null`
+ *  unless EXACTLY one row matches — none (a report or the deadline settled it first, or R2's no-revive supersede dropped
+ *  it) or two (a state the one-lease invariant forbids) — and the caller then writes to the id it acquired, whose own
+ *  guards name what happened. `rows` are `nodes()`'s: live rows only. */
+export function leaseHolder(
+  rows: readonly Pick<DispatchRow, 'nodeId' | 'label' | 'updateState' | 'updateStartedAt'>[], label: string, startedAt: number,
+): string | null {
+  const held = rows.filter((r) => r.label === label && r.updateStartedAt === startedAt && !isSettled(r.updateState));
+  return held.length === 1 ? held[0]!.nodeId : null;
 }

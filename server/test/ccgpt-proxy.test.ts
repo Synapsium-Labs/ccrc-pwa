@@ -581,6 +581,52 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     // `afterEach` tears that one down as usual; the second already exited.
   });
 
+  // `HTTPServer.server_bind` fills `server_name` with `socket.getfqdn(host)`,
+  // a reverse lookup of 127.0.0.1 that nothing in the shim reads. On the macOS
+  // CI runner that lookup took 35.0 s in every new process (diagnostic run
+  // 36410278756, 2026-09-28: six of six hand-started shims answered after
+  // 35.4-36.2 s, the main thread's stack parked in `getfqdn` under
+  // `server_bind`), so every `startPair` here cost ~36 s and this file took
+  // 47 min on macOS against 6 s on Linux. The driver makes any `getfqdn` call
+  // fatal and stops at `serve_forever`, so the server `__main__` builds must
+  // reach its serve loop without asking.
+  it('starts without a reverse lookup of its bind address (socket.getfqdn is never called)', async () => {
+    const home = mkTmp('ccgpt-proxy-nofqdn-');
+    const driver = join(home, 'no-fqdn-driver.py');
+    writeFileSync(driver, [
+      'import runpy, socket, socketserver, sys',
+      'def _refuse(*a, **k):',
+      '    raise AssertionError("ccgpt-proxy called socket.getfqdn%r" % (a,))',
+      'socket.getfqdn = _refuse',
+      'def _stop(self, *a, **k):',
+      '    print("reached serve_forever", flush=True)',
+      '    raise SystemExit(0)',
+      'socketserver.BaseServer.serve_forever = _stop',
+      'runpy.run_path(sys.argv[1], run_name="__main__")',
+      '',
+    ].join('\n'));
+    const { child } = spawnPy(driver, {
+      home,
+      args: [ccgptFile('ccgpt-proxy.py')],
+      env: {
+        PYTHONPATH: PYSTUB_DIR,
+        CCGPT_ACCOUNT_ID: mintLane(),
+        CCGPT_PROXY_PORT: String(PROXY_PORT),
+        CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+      },
+    });
+    proc = child;
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (c) => { stdout += c.toString(); });
+    child.stderr?.on('data', (c) => { stderr += c.toString(); });
+    const outcome = await raceExitOrDeadline(child);
+    if (outcome.kind === 'exited') proc = null; // else: still alive — afterEach kills+awaits it.
+    expect(stderr).not.toMatch(/getfqdn/);
+    expect(outcome).toEqual({ kind: 'exited', code: 0 });
+    expect(stdout).toContain('reached serve_forever');
+  });
+
   // commit b56286a4 Fix round 1, M-3 (second half): only CCGPT_LITELLM_PORT's refusal was
   // pinned; the docstring's actual claim is that all three are required.
   it.each(['CCGPT_ACCOUNT_ID', 'CCGPT_PROXY_PORT', 'CCGPT_LITELLM_PORT'] as const)(
@@ -668,6 +714,12 @@ describe.skipIf(!PY)('ccgpt-proxy: the mid-conversation system door', () => {
   // reliably exceed Python's default recursion limit (measured: 2000 is not
   // enough, 20000 is) without depending on the exact crossover, which is an
   // interpreter default and therefore not something to pin exactly.
+  // 20000 stopped being enough on Python 3.14, whose guard measures the C
+  // stack instead of counting frames: the macOS CI runner's 3.14.7 parsed a
+  // 20000-deep array whole, so this case reached the non-object refusal and
+  // never the recursion it exists for (diagnostic run 36410278756,
+  // 2026-09-28: "top-level JSON value is not an object"). A million levels
+  // is past any C stack a thread gets, and still only a 2 MB body.
   //
   // Task 7a (D-3151, arms 1+2 of 3, CLOSED): this body used to be pure
   // passthrough — forwarded unrewritten, `system` intact had there been
@@ -682,7 +734,7 @@ describe.skipIf(!PY)('ccgpt-proxy: the mid-conversation system door', () => {
       reached = true;
       res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
     });
-    const depth = 20_000;
+    const depth = 1_000_000;
     const deeplyNested = '['.repeat(depth) + ']'.repeat(depth);
     const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: deeplyNested,

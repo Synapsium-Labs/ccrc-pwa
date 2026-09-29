@@ -4425,7 +4425,11 @@ export class FleetWatcher {
       //     ctxPct: a stale high reading surviving a tick where the console
       //     could not even see the statusline is worse than showing no
       //     reading, so it is explicitly cleared while model/branch/effort
-      //     ride through untouched.
+      //     ride through untouched. On either retaining branch (3 or 4)
+      //     `boxCols` is never kept — THIS tick's reading or none — and
+      //     `workflowActive` is THIS tick's reading wherever the tick saw the
+      //     statusline row, the last one kept where it did not, as the notes
+      //     beside the code below say.
       if (pane === null) {
         this.statuslines.delete(r.id);
       } else {
@@ -4442,14 +4446,26 @@ export class FleetWatcher {
           this.statuslines.set(r.id, sl);
         } else if (sl.ctxPct !== undefined) {
           const prev = this.statuslines.get(r.id);
-          this.statuslines.set(r.id, prev ? { ...prev, ctxPct: sl.ctxPct, boxCols: sl.boxCols, retained: true } : sl);
+          // ctx is read off the statusline row, so this tick saw it and its
+          // `workflowActive` is defined: the `??` below never falls through
+          // here. Written as on branch 4 so the one rule reads the same on both.
+          this.statuslines.set(r.id, prev ? { ...prev, ctxPct: sl.ctxPct, boxCols: sl.boxCols, workflowActive: sl.workflowActive ?? prev.workflowActive, retained: true } : sl);
         } else {
           // `boxCols` rides with ctxPct, never with identity: it is THIS
           // tick's width or nothing. A kept width would read an overlay tick
           // on a pane just narrowed by an attach as still wide — the one
           // direction the fleet's `narrow` chip must not err in.
+          // `workflowActive` reads the rows BELOW the statusline row. A tick
+          // that saw that row measured them — a `👤`-only row lands on this
+          // branch with no identity and no ctx, and its reading is this
+          // tick's, `true` or `false`. A tick that did not (an overlay, a
+          // pane mid-render) gets `undefined` from `parseStatusline`, and the
+          // LAST measurement rides through, like identity: a stored `false`
+          // there dropped a running Workflow's card to idle, and fired
+          // "✓ Finished", for as long as the overlay stayed up, wherever
+          // fleet.ts reads the row (no live file, or a pre-2.1.277 build).
           const prev = this.statuslines.get(r.id);
-          if (prev) this.statuslines.set(r.id, { ...prev, ctxPct: undefined, boxCols: sl.boxCols, retained: true });
+          if (prev) this.statuslines.set(r.id, { ...prev, ctxPct: undefined, boxCols: sl.boxCols, workflowActive: sl.workflowActive ?? prev.workflowActive, retained: true });
         }
       }
       // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the

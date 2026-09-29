@@ -95,8 +95,11 @@ export function readReadyOps(raw: unknown): string[] {
 
 /**
  * A `ResErr` the AGENT SENT (design 2026-09-20 §10, D-3373), as
- * opposed to a request the LINK failed. A link failure stays a plain `Error`
- * whose message is `disconnected`, `timeout` or `aborted`. The dispatcher must
+ * opposed to a request the LINK failed. A link failure AFTER the send stays a
+ * plain `Error` whose message is `disconnected`, `timeout` or `aborted`; one
+ * before the send is a `LinkNotSentError` (below, D-3555) carrying
+ * `disconnected` or `aborted`, or — for a synchronous `JSON.stringify`/`ws.send`
+ * throw — the thrown message; `timeout` is never pre-send. The dispatcher must
  * tell "the node answered busy" from "the node could not be asked", and a
  * message string cannot do that, because nothing stops an agent word from being
  * spelled `timeout`. `instanceof` can.
@@ -118,6 +121,22 @@ export class AgentOpError extends Error {
     this.name = 'AgentOpError';
     this.code = code;
     this.detail = detail;
+  }
+}
+
+/** D-3555: a request this client never handed to `ws`'s sender — no ready link at the call
+ *  (`disconnected`), a signal already aborted (`aborted`), or a synchronous throw from `JSON.stringify` or `ws.send`
+ *  (the thrown message). `ws.send`'s measured throw sites are before it queues the frame (its `CONNECTING` check, which
+ *  the OPEN test above excludes in the same tick); nothing below it was found to throw synchronously. Every other
+ *  rejection of `request()` — `timeout`, an abort after the send, `disconnected` when the socket closes or `close()`
+ *  runs with the request pending — comes AFTER `ws.send` returned, when the frame may already be with the agent, and
+ *  stays a plain `Error`. `message` is the word a plain `Error` carried before this class existed, so every `.message`
+ *  reader is unchanged; only `instanceof` tells the two apart (the dispatcher's `linkAnswer`). A `send` that returns
+ *  proves the frame reached `ws`'s sender, not the agent: that is all "handed to the link" means. */
+export class LinkNotSentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LinkNotSentError';
   }
 }
 
@@ -225,9 +244,9 @@ export class FleetClient {
 
   request(payload: AgentReqPayload, timeoutMs?: number, signal?: AbortSignal): Promise<ResOk> {
     if (!this.ready || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error('disconnected'));
+      return Promise.reject(new LinkNotSentError('disconnected'));
     }
-    if (signal?.aborted) return Promise.reject(new Error('aborted'));
+    if (signal?.aborted) return Promise.reject(new LinkNotSentError('aborted'));
     const ws = this.socket;
     const id = this.nextId++;
     const wait = timeoutMs ?? this.cfg.requestTimeoutMs;
@@ -254,7 +273,17 @@ export class FleetClient {
       });
       signal?.addEventListener('abort', abort, { once: true });
       const req = { ...payload, t: 'req', id } as AgentReq;
-      ws.send(JSON.stringify(req));
+      try {
+        ws.send(JSON.stringify(req));
+      } catch (e) {
+        // D-3555: `JSON.stringify` or `ws.send` threw before queuing the frame (ws throws only at
+        // CONNECTING, which the OPEN check above excludes), so undo the registration above and say so. After this
+        // `send` returns, every rejection is a plain Error: the frame may already be with the agent.
+        clearTimeout(timer);
+        this.pending.delete(id);
+        dispose();
+        reject(new LinkNotSentError(e instanceof Error ? e.message : String(e)));
+      }
     });
   }
 

@@ -218,9 +218,73 @@ _plat_mv_notdir() {   # <src> <dest> -> 0 iff <src> is now at <dest>
   fi
 }
 
-# `stat -c` -> `stat -f`. Three format letters, three functions, because a
-# single `_plat_stat <fmt> <file>` would put the GNU spelling at every call
-# site and leave this block translating a string it did not choose.
+# `ln -sfn` + GNU `mv -fT`: repoint a symlink in ONE rename(2) — the flip.
+#
+# THE FLIP OF `$HOME/ccrc` (versioned installs, spec 2026-09-20 §11): the
+# tree is a symlink `$HOME/ccrc -> $HOME/ccrc-versions/<name>`, and moving a
+# box onto another version is repointing it. The spec spells that
+# `ln -sfn <target> ~/ccrc.new && mv -T ~/ccrc.new ~/ccrc`, and THE LINUX ARM
+# BELOW IS THAT ARGV, VERBATIM — measured 2026-09-23 under strace on GNU
+# coreutils 9.4 as `renameat2(…, RENAME_NOREPLACE) = -1 EEXIST` and then
+# `renameat("<link>.new", "<link>") = 0`, with no `unlink` anywhere. A reader
+# that resolves `<link>` at any instant sees the old target or the new one,
+# never nothing.
+#
+# THE TWO SHORTER SPELLINGS ARE WRONG, each measured on the same coreutils:
+#   • `ln -sfn <target> <link>` straight onto the live name is unlink +
+#     symlink, the window `_inst_graphify_engine`'s pip-shim swap names ("a
+#     session that types `graphify` in that window gets ENOENT") — and this
+#     name is every unit's ExecStart and the launcher's `exec`;
+#   • `mv -f` without `-T` FOLLOWS a symlink-to-directory destination: it
+#     moves `<link>.new` INSIDE the old version and answers 0 with `<link>`
+#     unchanged — D-2187's shape, the one `_plat_mv_notdir` above exists for.
+#
+# THE DARWIN ARM IS python3's `os.replace`, NOT `_plat_mv_notdir`. BSD `mv`
+# has no `-T`, and `_plat_mv_notdir`'s Darwin arm makes up for it by `rm`-ing
+# a symlink-to-directory destination BEFORE its `mv` — a window in which
+# `<link>` does not exist, which is the one thing this helper is for.
+# `os.replace` is one rename(2) on every POSIX platform and replaces a symlink
+# rather than following it; `ccd/ccd-pool-sync`'s header gives the same reason
+# for its `os.rename` install. python3 comes with the Xcode Command Line
+# Tools, Homebrew's own prerequisite (D-3419).
+#
+# THE CONTRACT: 0 iff `<link>` is now a symlink whose value is exactly
+# `<target>`, placed by ONE rename over the symlink that stood there, or over
+# nothing. 1 otherwise, with nothing at `<link>` changed:
+#   • something that is not a symlink stands at `<link>`. A real directory
+#     there is the one-time migration's case, never this helper's, and it is
+#     refused rather than renamed into or over. One that appears after the
+#     test is refused by the rename itself (`mv -T`: "cannot overwrite
+#     directory"; `os.replace`: IsADirectoryError), so the test is not the
+#     only thing standing between a flip and a real tree;
+#   • something that is not a symlink stands at `<link>.new`. A stale LINK
+#     under the staged name needs nothing from this function: `ln -sfn`
+#     replaces it by itself (`-f`, and `-n` so a link to a directory is
+#     replaced rather than entered — GNU does it as symlink-to-a-temp-name +
+#     rename). But `-f` would DELETE a file there that this function did not
+#     make, and a real directory there would take the new link INSIDE it, so
+#     anything that is not a link is refused before `ln` runs;
+#   • `ln` fails, or the rename fails, and the staged `<link>.new` is removed.
+# `<target>` is written verbatim (callers pass an absolute path); it prints
+# nothing, never dies, and the caller owns the sentence. NOTHING serializes
+# the staged `<link>.new` (the spec's `$HOME/ccrc.new`): an update flips under
+# its lock, a plain install under none, so two flips can interleave and each
+# rc then describes the other's flip (D-3424).
+_plat_ln_swap() {   # <target> <link> -> 0 iff <link> is now a symlink to <target>
+  if [ ! -L "$2" ] && [ -e "$2" ]; then return 1; fi
+  if [ ! -L "$2.new" ] && [ -e "$2.new" ]; then return 1; fi
+  ln -sfn -- "$1" "$2.new" 2>/dev/null || return 1
+  if [ "$CCD_OS" = darwin ]; then
+    python3 -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$2.new" "$2" 2>/dev/null \
+      || { rm -f -- "$2.new"; return 1; }
+  else
+    mv -fT -- "$2.new" "$2" 2>/dev/null || { rm -f -- "$2.new"; return 1; }
+  fi
+}
+
+# `stat -c` -> `stat -f`, one function per format letter: a single `_plat_stat <fmt> <file>` would
+# put the GNU spelling at every call site and leave this block translating a string it did not choose.
+_plat_ctime() { if [ "$CCD_OS" = darwin ]; then stat -f %c "$@"; else stat -c %Z "$@"; fi; }   # <file> -> ctime, epoch seconds: what a restore cannot backdate (D-3524)
 _plat_mtime() {   # <file> -> mtime, epoch seconds
   if [ "$CCD_OS" = darwin ]; then stat -f %m "$@"; else stat -c %Y "$@"; fi
 }
@@ -1146,9 +1210,10 @@ BOX_FLOOR_FILE="$HOME/.ccrc/floor"
 #   W4 — update-json (`_upd_phase` reports every phase, and `--from` is
 #        accepted), update-gate (`_upd_gate`, exit 4, `--no-gate`), rollback
 #        (`ccrc rollback`); and, Linux only, detach — below.
+#   W6 — versions (a kept version is a flip: `_upd_restore_arm1`, `_ver_flip_back`).
 # ccrc-install.test.ts pins every word to the machinery it names, so a word
 # cannot ship ahead of its code.
-CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback)
+CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback versions)
 
 # The words only a LINUX install can do: detach (W4). `--detach` hands the run
 # to a transient unit (`_svc_run_detached`), and `_upd_detach_os_check`
@@ -1348,6 +1413,12 @@ BOX_SESSIONS_FILE="$HOME/.ccrc/sessions.json"
 # in `_inst_shim`, and that is DATA — bytes destined for a file on the box,
 # pinned equal to `deploy.sh`'s copy of the same launcher — not a path this
 # file resolves.
+#
+# SINCE W6 THE NAME IS A LINK, not a directory: `$HOME/ccrc ->
+# $HOME/ccrc-versions/<name>` (BOX_VERSIONS_ROOT below). Every contract above
+# keeps resolving through it unchanged; `_inst_tree` places into the versions
+# root and renames the link, and only `_inst_tree`'s guard and `_ver_layout`
+# ever look at where it points.
 BOX_TREE_DIR="$HOME/ccrc"
 
 # ── WHERE A BOX KEEPS ITS systemd --user UNITS ────────────────────────────
@@ -1392,6 +1463,42 @@ fi
 # the printed command comes to name a directory nothing wrote.
 BOX_BACKUP_ROOT="$HOME/ccrc-backups"
 
+# ── WHERE A BOX KEEPS THE VERSIONS IT INSTALLED (W6 Task 2, spec §11) ─────
+# `~/ccrc-versions/<name>/` holds one placed tree per release this box
+# installed — a sibling of `~/ccrc-backups` above, for the reason that root is
+# one directory: a rollback is a directory, not a hunt. `~/ccrc` (BOX_TREE_DIR)
+# is a symlink to ONE of them, written with an ABSOLUTE target by
+# `_plat_ln_swap`, so every contract that names `$HOME/ccrc` — the launcher,
+# the units, the plist, doctor's `_dr_pkg_candidates` — keeps resolving
+# through the link unchanged, and an install never rewrites the tree that is
+# running: it places the next one beside it, then renames the link.
+#
+# A NAME is one of three shapes, and VER_NAME_RE is their one spelling: the
+# release tag `vX.Y.Z`; `untagged-<sha12>` for a source or deploy.sh-shaped
+# tree (D-3422); `unstamped-<12 hex>` for a tree whose
+# identity nothing measures (D-3425). Only a tag-shaped
+# name is ever handed to `--to`, `previous` or the gate. `~/ccrc.migrating`
+# is the pre-versioned tree while the one-time migration waits for its gate
+# (W6 Task 3 writes it; `_ver_layout` reads it from here).
+#
+# Each version directory keeps two files at its root, dot-named so no reader
+# of a release tree's own `build.json` mistakes one for the artifact's: the
+# box's stamp and its completed-install record as they stood when this version
+# last completed an install here (D-3428). The record
+# copy is written LAST and is the version's completeness mark.
+BOX_VERSIONS_ROOT="$HOME/ccrc-versions"
+BOX_MIGRATING_DIR="$HOME/ccrc.migrating"
+VER_NAME_RE='^(v[0-9]+\.[0-9]+\.[0-9]+|untagged-[0-9a-f]{12}|unstamped-[0-9a-f]{12})$'
+VER_STAMP_COPY=".ccrc-stamp.json"
+VER_RECORD_COPY=".ccrc-installed"
+
+# `~/.ccrc/migrating-to` (W6 Task 3, D-3432) — one
+# line naming the version a one-time migration is linking `~/ccrc` to,
+# written (tmp + one rename) BEFORE the migration's `mv`. It is the ONLY
+# input `_inst_migrate_resume` completes a crashed migration from; removed
+# by `_inst_migrate_finish` and by uninstall.
+BOX_MIGRATION_FILE="$HOME/.ccrc/migrating-to"
+
 # ── THE RELEASE SOURCE (stage 4, Task 6) ──────────────────────────────────
 # One owner/repo pair, and `install.sh:23-24` spells the same one — a
 # DELIBERATE cross-file second spelling of D-92's class: `install.sh
@@ -1420,6 +1527,12 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 # connection must not hang any of them indefinitely. Overridable for the
 # reason `CCRC_HEALTH_TIMEOUT` above is: a test must not wait out a
 # production timeout.
+# MEASURED against a real release fetch (W6 Task 8A, 2026-09-29, read-only
+# curl to the product's own release host: five SHA256SUMS fetches, three of
+# the tarball and of the bundle, a status-only ask): TCP connect took
+# 0.033-0.038 s in every one, so 10 s is ~300x the measured connect. KEPT —
+# the bound exists for a host that never accepts, and a link that needs more
+# than 10 s just to connect is not one a 3.6 MB install should attempt.
 : "${CCRC_RELEASE_CONNECT_TIMEOUT:=10}"
 
 # The SMALL probes — the provenance bundle fetch and `_upd_asset_listed` —
@@ -1432,12 +1545,26 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 # 20s or a slow release host surfaces as W5's own `spawn-failed` timeout
 # rather than this verb's named refusal. Named ONCE, read by every
 # small-probe caller, so they cannot drift apart.
+# MEASURED (W6 Task 8A, 2026-09-29): the status-only ask `_upd_asset_listed`
+# makes took 0.12-0.14 s in total, and the provenance bundle (10,961 bytes)
+# 0.12-0.44 s, both through the release host's two redirects — so 15 s is
+# ~100x the status ask and ~34x the slowest bundle. KEPT. The pre-detach
+# reader of this knob (`_upd_asset_listed`) additionally refuses anything
+# above 18: see its own comment.
 : "${CCRC_RELEASE_PROBE_MAX_TIME:=15}"
 
 # The STALL bound for SHA256SUMS and the tarball fetches
 # (`--speed-limit`/`--speed-time`, never `--max-time` ALONE: a slow but LIVE
 # download must be let finish). A transfer under this many bytes/second for
 # this many seconds running is presumed dead, not merely slow.
+# MEASURED (W6 Task 8A, 2026-09-29): the newest published tarball, 3,633,398
+# bytes, arrived at 8.2-21.4 MB/s (0.17-0.44 s in total) — four orders of
+# magnitude above the 1024 B/s floor, so the floor cannot kill a live
+# transfer; a transfer AT the floor would take about an hour, which is the
+# cost of never putting a total bound on the tarball, chosen above and KEPT.
+# 30 s is the time a dead transfer is allowed to look dead: ~70x the whole
+# measured download. KEPT. (SHA256SUMS, 86 bytes in 0.15 s, never lives long
+# enough for this pair to act; its operative bounds are the two below.)
 : "${CCRC_RELEASE_SPEED_LIMIT:=1024}"
 : "${CCRC_RELEASE_SPEED_TIME:=30}"
 
@@ -1447,6 +1574,12 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 # stall pair above admits a host that keeps sending at or above the floor
 # forever, which for a ~100-byte file is not "a slow but LIVE download", it
 # is a host that never has to stop.
+# MEASURED (W6 Task 8A, 2026-09-29): 86 bytes, 0.14-0.61 s in total — the
+# derivation and the reason for 20 s are in `_upd_resolve`. Both KEPT.
+# `--max-filesize` is enforced for a body of UNKNOWN length (no
+# Content-Length) only by curl 8.4.0 and later; below that curl ignores it
+# for such a body — its manual says so — and only the total bound above
+# holds. That is why the total bound exists at all beside the size bound.
 : "${CCRC_RELEASE_SUMS_MAX_TIME:=20}"
 : "${CCRC_RELEASE_SUMS_MAX_FILESIZE:=4096}"
 
@@ -1500,6 +1633,28 @@ BOX_BUILD=()
 BOX_HEALTH=()
 BOX_HEALTH_WHY=""
 
+# `_ver_layout`'s out-parameters (W6 Task 2), declared at file scope for the
+# `set -u` reason the arrays above are: every reader of the layout reads them
+# whether or not the layout was measured in its own frame.
+VER_LAYOUT=""
+VER_CURRENT=""
+VER_WHY=""
+# `_ver_flip_back`'s second out-parameter (D-3461): the exit of the kept
+# version's own spine, whose last step is its trailing doctor. 0 on every
+# path where that spine did not run; the spine's own rc after it did.
+VER_SPINE_RC=0
+# `ccrc versions` and the GC (W6 Task 5), declared at file scope for the
+# `set -u` reason the arrays above are. The two ASSOCIATIVE arrays,
+# VER_PROTECT (<name> -> the words that keep it) and VER_VERDICT (<name> ->
+# the listing's verdict), are declared `declare -gA` inside the functions
+# that reset them instead: `declare -g` is bash 4.2, and at file scope
+# macOS's /bin/bash 3.2 would print an invalid-option error on every ccrc
+# invocation, ahead of cmd_install's bash-floor refusal.
+VER_NAMES=()                 # _ver_list: the version directories, complete ones newest first
+VER_RUNNING=()               # _ver_running_names: the versions a running unit's command resolves to
+VER_DOOMED=()                # _ver_verdicts: what a prune removes, in order …
+VER_DOOMED_WHY=()            # … and why, index for index
+
 # `cmd_update`'s out-parameters (stage 4, Task 6), declared at file scope for
 # the `set -u` reason the arrays above are: `_upd_fetch` fills the first
 # three, `_upd_backup` the fourth, and `cmd_update`'s tail (and its EXIT
@@ -1513,6 +1668,8 @@ UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<
 UPD_URL_DIR_SAFE=""    # _upd_resolve: same, through _upd_redact — every "fetching …"/WARN line prints THIS, never UPD_URL_DIR, so a credentialed CCRC_RELEASE_BASE_URL never reaches stdout (review 155 C17, fix round 1 item 11); the real curl calls still read UPD_URL_DIR
 UPD_TARNAME=""    # _upd_resolve: the tarball SHA256SUMS names
 UPD_PROVENANCE=""    # _upd_fetch: verified|unsigned, once PROVENANCE settles
+UPD_LAST_PHASE=""    # _upd_last_report: the phase the PREVIOUS run's ~/.ccrc/update.json ended in, read before this run's first write (the floor's refusal names a restored update by it)
+UPD_LAST_TARGET=""   # _upd_last_report: … and its target tag
 UPD_PREV_UNSIGNED=0  # cmd_update, before the staged install: 1 iff the marker's line 2 read `unsigned` (arm 2's precondition)
 UPD_BACKUP_LISTING=0 # _upd_backup_copy's listing mode; only ever set `local` by _upd_backup_pairs
 # The report's state (design §10), at file scope for the same `set -u`
@@ -1654,7 +1811,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollback|channel|rollout|uninstall|backup|logs|passwd|expose|version|watchdog}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollback|versions|channel|rollout|uninstall|backup|logs|passwd|expose|version|watchdog}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -1768,7 +1925,19 @@ already running).
             preflight. A rollback whose gate fails is NOT restored — its
             target was the known-good build. [--detach] (Linux) returns at
             once and runs it as a transient systemd --user unit;
-            [--from <who>] names the caller (${UPD_FROM_WORDS[*]})
+            [--from <who>] names the caller (${UPD_FROM_WORDS[*]}).
+            A version kept under ~/ccrc-versions is rolled back to by a
+            flip of ~/ccrc and its own spine, with no download.
+  versions  list the kept release trees under ~/ccrc-versions (* marks the one ~/ccrc points at);
+            --prune removes the ones nothing needs, under update's lock, and
+            lists what is left. Never pruned: the one ~/ccrc points at, the
+            previous (~/.ccrc/previous), every tag the control plane's
+            projection names (desired, desired-stable, desired-dev) and every
+            version a running ccrc.service or ccrc-agent.service runs from;
+            beyond those it keeps the newest CCRC_VERSIONS_KEEP (default 3)
+            complete ones. An input it cannot measure prunes nothing (exit
+            1). The same prune runs after every install or update whose
+            health gate passed, and that one never removes an incomplete tree
   channel   print this box's update channel as the control plane projects
             it (~/.ccrc/update-intent): one line (state, channel, desired,
             desired-stable, desired-dev, auto), then what 'ccrc update'
@@ -1807,7 +1976,8 @@ already running).
             remove ccrc's own files in ~/.cc-sessions, ~/ccrc and the
             executables. PRESERVES ~/.ccrc, the session registry rows,
             worktrees and ~/ccrc-backups. Refuses while live sessions
-            exist. [--force] proceeds anyway; [--purge] also removes
+            exist, or while an update holds ~/.ccrc/update.lock.
+            [--force] proceeds anyway; [--purge] also removes
             ~/.ccrc's config (roster, identity) and ~/ccrc-backups — but
             still PRESERVES ~/.ccrc/memory (every project's durable memory:
             since 'ccrc memory --apply' it is the SOLE live copy, and a
@@ -1910,14 +2080,34 @@ _upd_redact() {
   local home="${HOME:-}"
   home="${home%/}"
   if [ -n "$home" ]; then
-    s="${s//"$home"\//"~/"}"
-    local b
-    for b in ' ' $'\t' $'\n' '"' "'" ':' ')'; do
-      s="${s//"$home$b"/"~$b"}"
+    # W6 Task 8A, review 167's F5: the boundary BEFORE home is anchored too.
+    # A HOME of `/home/u` is a real match only where the character before it
+    # is no part of a longer path — the start of the string, whitespace, a
+    # quote or backtick, or one of `= : ( [ { , ; < > |`, or the `//` that
+    # ends a `file://` scheme — never a path character, so `/srv/home/u/x`
+    # is left whole instead of becoming `/srv~/x`. A bash glob has no
+    # lookbehind either, so each occurrence is walked in turn and the
+    # character before it read from the text already passed.
+    local seen="" out="" pre="" post="" before="" after="" left=0 right=0
+    while [[ "$s" == *"$home"* ]]; do
+      pre="${s%%"$home"*}"
+      post="${s#*"$home"}"
+      seen+="$pre"
+      before="${seen: -1}"
+      after="${post:0:1}"
+      left=0; right=0
+      case "$before" in
+        ''|' '|$'\t'|$'\n'|'"'|"'"|'`'|'='|':'|'('|'['|'{'|','|';'|'<'|'>'|'|') left=1 ;;
+        '/') case "$seen" in *://) left=1 ;; esac ;;
+      esac
+      case "$after" in
+        ''|'/'|' '|$'\t'|$'\n'|'"'|"'"|':'|')') right=1 ;;
+      esac
+      if [ "$left" -eq 1 ] && [ "$right" -eq 1 ]; then out+="${pre}~"; else out+="${pre}${home}"; fi
+      seen+="$home"
+      s="$post"
     done
-    case "$s" in
-      *"$home") s="${s%"$home"}~" ;;
-    esac
+    s="${out}${s}"
   fi
   printf '%s' "$s"
 }
@@ -1941,6 +2131,52 @@ _upd_redact() {
 # each harness that actually triggers a die also picks `_upd_redact`'s
 # definition beside it, the same way it already picks `PROG=`.
 _ccrc_die() { local m="$*"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && m="$(_upd_redact "$m")"; echo "$PROG: $m" >&2; [ "${UPD_REPORTING:-0}" = 1 ] && [ "$BASHPID" = "$$" ] && _upd_phase failed "${UPD_FAIL_PREFIX:-}$m"; exit 1; }
+# ── ONE EXIT CHAIN — `_exit_add`, `_exit_run`, `_tmp_guard` (W6 Task 8A: W4's
+# worker's carry, the `*.tmp.$$` EXIT-trap class) ───────────────────────────
+# A shell has ONE `EXIT` trap, and `trap '…' EXIT` REPLACES it. This file
+# already had three per-function traps (`cmd_wrappers`' staging directory,
+# `_upd_resolve`'s staging tree, `cmd_rollout`'s stderr file), and the obvious
+# fix for the leaking `<dest>.tmp.$$` files — a trap of its own at each writer —
+# would have clobbered whichever of them was armed first: a `_upd_resolve`
+# whose staging tree then survives a die, or a wrapper generator whose staging
+# directory does. So there is one chain, every arm of it added with
+# `_exit_add`, and one trap that runs it.
+#   * An entry is a command string, `eval`'d at exit (so a variable it names is
+#     read then, as `_upd_resolve`'s own trap always read `$UPD_STAGE`), and it
+#     is recorded with the pid of the shell that added it. `_exit_run` runs an
+#     entry only in THAT shell. The case arises only when a subshell ITSELF
+#     calls `_exit_add` (which arms the trap in that subshell): it has inherited
+#     the whole array and would otherwise run the parent's arms — `rm -rf` its
+#     staging tree — the moment it ended. The real instance is `cmd_rollout`'s
+#     `$( _upd_resolve … )`, whose subshell adds `_upd_resolve`'s staging arm.
+#     A subshell that adds an entry of its own owns and runs that one.
+#   * The same entry is never added twice (`_upd_phase` runs for every phase).
+#   * `trap` is re-armed on every add, so a later `trap - EXIT` (the install
+#     prompt's `stty` restore ends with one) cannot leave the chain unarmed for
+#     the entries added after it.
+#   * `_tmp_guard <path>` is the writers' arm: `rm -f` of a `<dest>.tmp.$$`
+#     that a SIGTERM, Ctrl-C or die caught between its creation and its
+#     rename. A path already renamed away is a no-op there. A SIGKILL is
+#     beyond any trap, and stays the disclosed price it always was.
+# The three interactive `stty echo` traps (account and install prompts) are
+# NOT on the chain: each is armed for one `read` and disarmed after it.
+_EXIT_CHAIN=()
+_exit_run() {
+  local e
+  for e in ${_EXIT_CHAIN[@]+"${_EXIT_CHAIN[@]}"}; do
+    [ "${e%%|*}" = "$BASHPID" ] && { eval "${e#*|}" || :; }
+  done
+  return 0
+}
+_exit_add() {   # <command string, eval'd at exit>
+  local c="$BASHPID|$1" e
+  for e in ${_EXIT_CHAIN[@]+"${_EXIT_CHAIN[@]}"}; do
+    [ "$e" = "$c" ] && { trap '_exit_run' EXIT; return 0; }
+  done
+  _EXIT_CHAIN+=("$c")
+  trap '_exit_run' EXIT
+}
+_tmp_guard() { _exit_add "rm -f -- $(printf '%q' "$1")"; }
 # The one place "unknown argument" is spelled, so the unknown-verb and
 # unknown-top-level-flag paths below cannot drift onto two different
 # messages for what is, to an operator, the same mistake.
@@ -2057,9 +2293,10 @@ _box_build_fields() {
   # well-formed stamp is (single-definition.test.ts counts the `jq -r`
   # parses in this file and fails on a second).
   #
-  # TWO callers pass one, and each reads a RELEASE ARTIFACT'S OWN
-  # `build.json`, never the box's:
-  #   `_inst_stamp_shipped` — the stamp that came inside the artifact,
+  # THREE callers pass one, and none of them reads the box's own stamp:
+  #   `_inst_stamp_shipped` — the stamp that came inside the artifact (or,
+  #     for a placed version run from itself, the copy that version kept,
+  #     W6 Task 2),
   #     validated BEFORE it is installed over the box's own, so a
   #     malformed one is refused rather than becoming what the box claims
   #     to run.
@@ -2069,6 +2306,10 @@ _box_build_fields() {
   #     stamp cannot answer it. It saves and restores `BOX_BUILD` around
   #     the call for exactly that reason: the second parse must not leave
   #     the caller holding the staged tree's fields.
+  #   `_inst_version_name` (W6 Task 2) — a SOURCE tree's `build.json`, read
+  #     only to name the version directory that tree is placed into; it
+  #     saves and restores `BOX_BUILD` around the call, as `_upd_converged`
+  #     does.
   local stamp="${1:-$BOX_STAMP_FILE}"
   BOX_BUILD=()
   [[ -e "$stamp" ]] || return 3
@@ -3215,8 +3456,7 @@ cmd_wrappers() {
   # own fixture helper (server/test/tmpHelpers.ts) exists because 7,830 leaked
   # temp directories were once measured on this box; a leak in the shipped tool
   # is the same defect with no afterAll underneath it.
-  # shellcheck disable=SC2064
-  trap "rm -rf -- $(printf '%q' "$staging")" EXIT
+  _exit_add "rm -rf -- $(printf '%q' "$staging")"
 
   # WHAT THE GENERATOR IS POINTED AT TO *READ*. Normally the bin dir itself.
   # On a dry run against a box that has no `~/.local/bin` at all, there is
@@ -9444,6 +9684,7 @@ CCRC_INST_SPINE=(
 # the path moves the temp INSIDE it and answers 0.
 _inst_step() {   # <fn>
   local fn="$1" tmp="$BOX_INSTALL_STEP_FILE.tmp.$$"
+  _tmp_guard "$tmp"
   if ! { mkdir -p "$HOME/.ccrc" && printf '%s\n' "$fn" > "$tmp" && chmod 644 "$tmp" \
          && _plat_mv_notdir "$tmp" "$BOX_INSTALL_STEP_FILE"; }; then
     rm -f -- "$tmp" 2>/dev/null
@@ -9565,12 +9806,31 @@ cmd_install() {
     # formula is the portable one and takes the same flags.
     command -v flock >/dev/null 2>&1 \
       || _ccrc_die "flock is required by ccrc — ccd serialises every workspace creation with it and refuses rather than racing — and macOS does not ship it. Install it: brew install flock. Nothing on this box was written or changed."
+    # python3: the `$HOME/ccrc` flip (`_plat_ln_swap`, W6) is ONE rename(2),
+    # and macOS's mv cannot replace a symlink to a directory in one step —
+    # its Darwin arm is python3's os.replace. The Xcode Command Line Tools,
+    # Homebrew's own prerequisite, ship it; a box without them would place a
+    # whole tree and then die at the flip.
+    #
+    # The probe RUNS the interpreter, because `command -v` cannot see that
+    # box: every macOS since 10.15 has /usr/bin/python3 as an xcode-select
+    # stub, found on PATH and failing when run until the tools are installed.
+    # `import os` is the flip's own first word, and the harnesses' python3
+    # stubs pass exactly it and the flip's program to the real interpreter
+    # (`DARWIN_PYTHON3_PROGRAMS`, server/test/platformFixtures.ts).
+    python3 -c 'import os' >/dev/null 2>&1 \
+      || _ccrc_die "python3 is required by 'ccrc install' on macOS — the \$HOME/ccrc flip is one rename(2) through os.replace, and macOS's mv cannot replace a symlink to a directory in one step; no python3 on PATH runs (/usr/bin/python3 is only a stub until the Xcode Command Line Tools are installed). Install them: xcode-select --install. Nothing on this box was written or changed."
   else
     command -v systemctl >/dev/null 2>&1 \
     || _ccrc_die "systemctl is required by 'ccrc install' — every ccrc service and every ccd session is a systemd --user unit, and this box has no systemctl on PATH. Install/enable systemd, or do not run a fleet on this box. Nothing on this box was written or changed."
   fi
 
   INST_DEGRADED=()
+  # W6 Task 3: a crashed one-time migration (~/ccrc.migrating standing, no
+  # ~/ccrc) is completed FIRST (design §11) — before the spine, so before
+  # `_inst_banner` names the tree, and outside CCRC_INST_SPINE, so no
+  # install-step marker ever names it (a death here moved nothing).
+  _inst_migrate_resume install
   # The spine, one step at a time, each announced in ~/.ccrc/install-step
   # before it runs (`CCRC_INST_SPINE` above states the order and why).
   local inst_fn
@@ -9619,7 +9879,7 @@ cmd_install() {
   if [ "$INST_ROLE" = fleet ]; then
     echo "install: agent: fleet role — ccrc-agent.service serves this box; set CCRC_AGENT_URL and CCRC_AGENT_TOKEN in the SERVER box's ccrc.env (CCRC_FLEET=remote) to reach it"
     echo "install: next: add your first session with: ccd menu   (and read $BOX_ENV_FILE)"
-    cmd_doctor
+    _inst_doctor_tail
     return
   fi
   local host="" port=""
@@ -9649,7 +9909,7 @@ cmd_install() {
   # hostname it is reached under). An operator who arms the flag from this line
   # alone would find that out one tap at a time.
   echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, then: $(_svc_restart_hint ccrc.service)"
-  cmd_doctor
+  _inst_doctor_tail
 }
 
 # The two facts every later step is computed FROM, printed before any of them
@@ -9896,10 +10156,221 @@ _inst_node_id() {   # seed-once identity (design 2026-09-20 §3): minted when ab
   echo "install: node-id: minted $id ($BOX_NODE_ID_FILE — seed-once, never rewritten, removed by uninstall)"
 }
 
-_inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling
-  # contract assumes (shim target, _dr_pkg_candidates, BASH_SOURCE siblings; see
-  # BOX_TREE_DIR's own header). Runs BEFORE the executables so the launcher's
-  # target exists at the moment the launcher lands on PATH.
+# ── _ver_layout — what $HOME/ccrc is, in one word (W6 Task 2) ─────────────
+# The ONE reader of the versioned layout; every caller that must know whether
+# `~/ccrc` is a version link, a pre-versioned directory, or the debris of a
+# crashed migration asks here, and nobody else resolves the link to decide.
+# Always rc 0 and silent; the answer is in three out-parameters:
+#   VER_LAYOUT   absent | crashed | directory | linked | migrated | foreign | unreadable
+#   VER_CURRENT  the version name `~/ccrc` points at (linked|migrated only, else "")
+#   VER_WHY      for foreign|unreadable, a phrase that completes "$HOME/ccrc is …"
+#
+# PLAIN `readlink`, never `-f`: the question is what the LINK SAYS, and the
+# only value this file writes there is the absolute `$BOX_VERSIONS_ROOT/<name>`
+# (`_plat_ln_swap`'s target, verbatim). Any other value — a relative target,
+# a path elsewhere, a name outside VER_NAME_RE, a dangling or non-directory
+# target — is `foreign`: a link this ccrc did not make, which nothing here may
+# flip over or place through. VER_WHY is built from this function's own words,
+# never from the link's bytes, so a hostile target cannot reach a terminal.
+#
+# `unreadable` is everything that fits no other word: a regular file at the
+# name, a link `readlink` cannot read, or TWO trees — a real `~/ccrc` beside a
+# `~/ccrc.migrating`, where which one the units run is not known — and a
+# `~/ccrc.migrating` that is not a directory.
+_ver_layout() {
+  local link="$BOX_TREE_DIR" mig="$BOX_MIGRATING_DIR" val="" name="" m=none
+  VER_LAYOUT="" VER_CURRENT="" VER_WHY=""
+  if [ -L "$mig" ]; then m=other
+  elif [ -d "$mig" ]; then m=dir
+  elif [ -e "$mig" ]; then m=other
+  fi
+  if [ -L "$link" ]; then
+    if ! val="$(readlink -- "$link" 2>/dev/null)" || [ -z "$val" ]; then
+      VER_LAYOUT=unreadable VER_WHY="a link readlink could not read"
+      return 0
+    fi
+    name="${val#"$BOX_VERSIONS_ROOT"/}"
+    if [ "$val" != "$BOX_VERSIONS_ROOT/$name" ] || [[ ! "$name" =~ $VER_NAME_RE ]] \
+       || [ -L "$val" ] || [ ! -d "$val" ]; then
+      VER_LAYOUT=foreign VER_WHY="a link whose target is not a version directory under \$HOME/ccrc-versions"
+      return 0
+    fi
+    case "$m" in
+      none) VER_LAYOUT=linked VER_CURRENT="$name" ;;
+      dir)  VER_LAYOUT=migrated VER_CURRENT="$name" ;;
+      *)    VER_LAYOUT=unreadable VER_WHY="a version link beside a \$HOME/ccrc.migrating that is not a directory" ;;
+    esac
+    return 0
+  fi
+  if [ ! -e "$link" ]; then
+    case "$m" in
+      none) VER_LAYOUT=absent ;;
+      dir)  VER_LAYOUT=crashed ;;
+      *)    VER_LAYOUT=unreadable VER_WHY="absent beside a \$HOME/ccrc.migrating that is not a directory" ;;
+    esac
+    return 0
+  fi
+  if [ -d "$link" ]; then
+    if [ "$m" = none ]; then
+      VER_LAYOUT=directory
+    else
+      VER_LAYOUT=unreadable VER_WHY="a directory beside a \$HOME/ccrc.migrating — two trees, and which one runs is not known"
+    fi
+    return 0
+  fi
+  VER_LAYOUT=unreadable VER_WHY="neither a directory nor a link"
+  return 0
+}
+
+# ── _inst_git <dir> <git args…> — git's answer for <dir> ITSELF ──────────
+# `GIT_DIR`, `GIT_WORK_TREE` and `GIT_CEILING_DIRECTORIES` in the caller's
+# environment change WHICH repository `git -C <dir>` answers for — an exported
+# `GIT_DIR` makes every answer another repository's — so a call whose answer
+# names or stamps a tree runs with the three unset, as `_inst_git_own`'s does.
+# A subshell, so the caller's environment is untouched and no new tool joins
+# the install path; git's stdout, stderr and exit status pass through.
+_inst_git() {   # <dir> <git args…> -> git's own status and output
+  local dir="$1"; shift
+  ( unset GIT_DIR GIT_WORK_TREE GIT_CEILING_DIRECTORIES; git -C "$dir" "$@" )
+}
+
+# ── _inst_git_own <dir> — is <dir> ITSELF a git repository's top level? ──
+# (D-3463.) `git -C <dir> rev-parse HEAD` answers for the ENCLOSING
+# repository when <dir> is merely inside a work tree — a staged release tree
+# under a TMPDIR that sits in a git-tracked HOME — and a name or a stamp taken
+# from that answer is another tree's commit. So: 0 only when git's top level
+# for <dir> IS <dir>, compared physically; 1 for everything else, including a
+# git that refuses (the callers' own git-failure sentences still speak for
+# that case, they ask git first). `GIT_DIR`, `GIT_WORK_TREE` and
+# `GIT_CEILING_DIRECTORIES` are unset for the call — a subshell, so no new
+# tool joins the install path — because each of them changes which repository
+# `<dir>` belongs to.
+_inst_git_own() {   # <dir> -> 0 iff git's top level for <dir> is <dir> itself
+  local here top
+  here="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  top="$(_inst_git "$here" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  top="$(cd "$top" 2>/dev/null && pwd -P)" || return 1
+  [ "$top" = "$here" ]
+}
+
+# ── _inst_version_name <src> — the directory a source tree is placed into ─
+# (W6 Task 2). `<src>` is the PHYSICAL path of the tree this run installs from
+# (`_inst_tree`'s `pwd -P`). Prints exactly one name matching VER_NAME_RE and
+# never fails. First match wins:
+#   1. `<src>` is a placed version — `<physical versions root>/<n>`, `<n>` a
+#      version name — and names itself, so a run of a kept version's own
+#      `ccd/ccrc` is recognised as that version and nothing is copied.
+#   2. git answers for `<src>` AND `<src>` is the repository's own top level
+#      (`_inst_git_own`, D-3463): the release tag at HEAD, else
+#      `untagged-<sha12>` (D-3422). The same precedence
+#      `_inst_stamp` gives git — a checkout's own state is the truth about a
+#      checkout, and a stray `build.json` beside it never outvotes it. The tag
+#      is picked by bash rather than `grep | head`, which keeps this step's
+#      tool list at the two `pathWithout` gains (`ln`, `readlink`).
+#   3. `<src>/build.json` parses (`_box_build_fields`, the one stamp parser):
+#      its `version`, else `untagged-<sha12>`. The release artifact's case.
+#   4. `<src>` is the physical `~/ccrc` of a pre-versioned box (`directory`)
+#      — a `deploy.sh`-shaped tree, which carries no `.git` and no
+#      `build.json` — and the box's own stamp parses: the same rule on that
+#      stamp.
+#   5. Else `unstamped-<12 hex of _plat_uuid>` (D-3425): a
+#      fresh name per placement, never sha-shaped, because two unmeasured
+#      trees behind one sha-shaped name would be the overloaded value this
+#      file refuses.
+# A candidate that fails VER_NAME_RE (a sha that is not hex, say) falls
+# through to the next rule. `BOX_BUILD` and the three `VER_*` out-parameters
+# are saved and restored, so a caller that holds either keeps it.
+_inst_version_name() {   # <src, physical> -> one VER_NAME_RE name on stdout
+  local src="$1" vroot="" n="" sha="" t="" here=""
+  local sl="$VER_LAYOUT" sc="$VER_CURRENT" sw="$VER_WHY"
+  local -a saved=("${BOX_BUILD[@]}")
+  if [ -d "$BOX_VERSIONS_ROOT" ] && vroot="$(cd "$BOX_VERSIONS_ROOT" 2>/dev/null && pwd -P)" \
+     && [ "${src%/*}" = "$vroot" ] && [[ "${src##*/}" =~ $VER_NAME_RE ]]; then
+    printf '%s\n' "${src##*/}"
+    return 0
+  fi
+  if command -v git >/dev/null 2>&1 && sha="$(_inst_git "$src" rev-parse HEAD 2>/dev/null)" \
+     && [[ "$sha" =~ ^[0-9a-f]{40}$ ]] && _inst_git_own "$src"; then
+    while IFS= read -r t; do
+      if [[ "$t" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then n="$t"; break; fi
+    done < <(_inst_git "$src" tag --points-at HEAD 2>/dev/null)
+    [ -n "$n" ] || n="untagged-${sha:0:12}"
+    if [[ "$n" =~ $VER_NAME_RE ]]; then printf '%s\n' "$n"; return 0; fi
+  fi
+  n=""
+  if [ -f "$src/build.json" ] && _box_build_fields "$src/build.json"; then
+    n="${BOX_BUILD[4]:-untagged-${BOX_BUILD[0]:0:12}}"
+  fi
+  BOX_BUILD=("${saved[@]}")
+  if [ -n "$n" ] && [[ "$n" =~ $VER_NAME_RE ]]; then printf '%s\n' "$n"; return 0; fi
+  n=""
+  _ver_layout
+  if [ "$VER_LAYOUT" = directory ] && here="$(cd "$BOX_TREE_DIR" 2>/dev/null && pwd -P)" \
+     && [ "$src" = "$here" ] && _box_build_fields; then
+    n="${BOX_BUILD[4]:-untagged-${BOX_BUILD[0]:0:12}}"
+  fi
+  BOX_BUILD=("${saved[@]}")
+  VER_LAYOUT="$sl" VER_CURRENT="$sc" VER_WHY="$sw"
+  if [ -n "$n" ] && [[ "$n" =~ $VER_NAME_RE ]]; then printf '%s\n' "$n"; return 0; fi
+  t="$(_plat_uuid 2>/dev/null)" || t=""
+  t="${t//-/}"
+  if [[ "${t:0:12}" =~ ^[0-9a-f]{12}$ ]]; then
+    printf 'unstamped-%s\n' "${t:0:12}"
+  else
+    printf 'unstamped-%04x%04x%04x\n' "$RANDOM" "$RANDOM" "$RANDOM"
+  fi
+  return 0
+}
+
+# ── _ver_keep_state <prefix> — a version keeps what a flip back restores ──
+# (W6 Task 2, D-3428). Copies the box's stamp and its
+# completed-install record, as this completed install left them, into the
+# root of the version `~/ccrc` points at: `$VER_STAMP_COPY`, then
+# `$VER_RECORD_COPY`. A flip back to this version (W6 Task 4) restores both,
+# because `/health` answers the stamp the server read at boot and the install
+# that is being backed out of has already rewritten it — without a kept copy
+# no flip back could pass its own gate.
+#
+# THE RECORD GOES LAST: it is the version's completeness mark, so a run that
+# dies between the two copies leaves a version with a stamp and no record,
+# which every reader treats as incomplete. Each copy is a temp beside its
+# destination, chmod 644, then one rename (`_plat_mv_notdir`: a directory
+# standing at the name refuses rather than swallowing the file). On any
+# failure the record copy is removed first, then the stamp copy, so no half
+# pair survives, and the line says what that costs.
+#
+# NEVER DIES and is silent unless `~/ccrc` is a version link (`linked` or
+# `migrated`) and both files are regular files: a pre-versioned box keeps
+# nothing, and a spine with no stamp has no record to keep.
+_ver_keep_state() {   # <prefix>
+  local prefix="$1" vdir s_dest r_dest s_tmp r_tmp
+  local from_stamp="$BOX_STAMP_FILE"
+  local from_record="$BOX_INSTALLED_FILE"
+  _ver_layout
+  case "$VER_LAYOUT" in linked|migrated) ;; *) return 0 ;; esac
+  [ -f "$from_stamp" ] && [ -f "$from_record" ] || return 0
+  vdir="$BOX_VERSIONS_ROOT/$VER_CURRENT"
+  s_dest="$vdir/$VER_STAMP_COPY"
+  r_dest="$vdir/$VER_RECORD_COPY"
+  s_tmp="$s_dest.tmp.$$"
+  r_tmp="$r_dest.tmp.$$"
+  if cp -- "$from_stamp" "$s_tmp" 2>/dev/null && chmod 644 "$s_tmp" && _plat_mv_notdir "$s_tmp" "$s_dest" \
+     && cp -- "$from_record" "$r_tmp" 2>/dev/null && chmod 644 "$r_tmp" && _plat_mv_notdir "$r_tmp" "$r_dest"; then
+    echo "$prefix: versions: kept $VER_CURRENT's stamp and install record in \$HOME/ccrc-versions/$VER_CURRENT — what a flip back restores"
+    return 0
+  fi
+  rm -f -- "$s_tmp" "$r_tmp" 2>/dev/null
+  rm -f -- "$r_dest" 2>/dev/null
+  rm -f -- "$s_dest" 2>/dev/null
+  echo "$prefix: versions: WARN: could not keep $VER_CURRENT's stamp and install record in its directory — no flip can return to it; arm 2 still can"
+  return 0
+}
+
+_inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
+  # ~/ccrc at it (W6 Task 2) — the link every sibling contract resolves through
+  # (shim target, _dr_pkg_candidates, BASH_SOURCE siblings; see BOX_TREE_DIR's
+  # and BOX_VERSIONS_ROOT's headers). Runs BEFORE the executables so the
+  # launcher's target exists at the moment the launcher lands on PATH.
   #
   # ── THE DIVERGENCE FROM deploy.sh, STATED ONCE ─────────────────────────
   # `deploy.sh` EXCLUDES `dist` from its rsync and runs `npm ci && npm run
@@ -9916,7 +10387,7 @@ _inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling
   # bundle are two different builds with two different remedies (`npm run build`
   # in `server/` vs in `pwa/`); collapsing them into one "the tree is not built"
   # is the overloaded seam this file's header bans.
-  local src dest="$BOX_TREE_DIR" at
+  local src name dest shown vroot="" how="" was="nothing"
   src="$(cd "$CCRC_HERE/.." && pwd -P)" || _ccrc_die "cannot resolve the running tree"
   [ -f "$src/server/dist/server/src/index.js" ] \
     || _ccrc_die "no server build at $src/server/dist — build first: bash install.sh (or npm run build in server/ and pwa/)"
@@ -9946,46 +10417,133 @@ _inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling
   # the fix for an old one.
   [ "$INST_ROLE" != fleet ] || [ -f "$src/agent/dist/agent/src/index.js" ] \
     || _ccrc_die "no agent build at $src/agent/dist — build first: bash install.sh (or npm run build in agent/)"
-  # THE SELF-COPY GUARD, ON PHYSICAL PATHS. On a box a deploy has already
-  # touched — and on every re-run of this verb — `ccrc` IS `~/ccrc/ccd/ccrc`,
-  # so source and destination are one directory. `rsync -a --delete X X/` is not
-  # a no-op there: it copies the tree INTO ITSELF (`~/ccrc/ccrc/…`) and then
-  # runs a `--delete` pass across the live tree it is reading from. `pwd -P` on
-  # both sides because the two spellings arrive by different routes ($HOME, and
-  # `$CCRC_HERE`'s parent from `${BASH_SOURCE[0]}`): a symlinked component in
-  # either — /home -> /export/home is the classic — makes a textual comparison
-  # answer "different" for one directory, which is the exact case that must
-  # not reach rsync.
-  at="$dest"
-  [ -d "$dest" ] && at="$(cd "$dest" && pwd -P)"
-  if [ "$src" = "$at" ]; then
-    echo "install: tree: already running from \$HOME/ccrc"
-  else
-    command -v rsync >/dev/null 2>&1 || _ccrc_die "rsync is required to place the tree — sudo apt install rsync"
-    mkdir -p "$dest" || _ccrc_die "cannot create $dest"
-    # The excludes are deploy.sh's (`:319-326`) minus `dist`, and they are not
-    # tidiness: `*.env` and `ccrc-mail.token` are gitignored files holding LIVE
-    # TOKENS, which `-a` would carry into a second, unmanaged copy at whatever
-    # mode the checkout has. `node_modules` is excluded in both directions —
-    # rsync does not delete what it was told to ignore, so the runtime deps
-    # installed below survive every later `--delete` run instead of being
-    # destroyed and refetched.
-    #
-    # `--checksum` is not optional either. The release tarball is reproducible
-    # (`build-release.sh`: `--mtime=@0`), so `ccrc update` hands this rsync a
-    # tree where every mtime is 0 — and the tree it placed last time has the
-    # same. rsync's default quick check (size + mtime) then SKIPS any changed
-    # file that kept its size. v0.0.11 shipped that way: dist-pwa/index.html
-    # and sw.js wrap equal-length content hashes, so both were skipped while
-    # the new bundle landed and `--delete` removed the old one — index.html
-    # pointed at a file that no longer existed, and every load the service
-    # worker did not answer was a black screen.
-    rsync -a --delete --checksum \
-      --exclude node_modules --exclude .git --exclude '*.env' --exclude ccrc-mail.token \
-      "$src/server" "$src/agent" "$src/shared" "$src/deploy" "$src/ccd" "$dest/" \
-      || _ccrc_die "placing the tree at $dest failed"
-    echo "install: tree: placed at \$HOME/ccrc"
+  # ── (1) WHAT $HOME/ccrc IS, BEFORE ANYTHING IS WRITTEN (W6 Task 2) ─────
+  # One reader decides (`_ver_layout`), and the three words this function
+  # cannot build on refuse here, before a byte is placed. `crashed` never
+  # reaches this line in a working tree: `cmd_install` and `cmd_update`
+  # complete a crashed migration before their spines run (W6 Task 3), so
+  # arriving here with the pair still on disk is a bug, and it is named as
+  # one. `foreign`/`unreadable` are a `~/ccrc` this file did not make — a
+  # link into somewhere else, a file, two trees — and neither a copy nor a
+  # flip over it is safe to guess at.
+  _ver_layout
+  case "$VER_LAYOUT" in
+    crashed)
+      _ccrc_die "a migration of \$HOME/ccrc is incomplete — this run should have completed it first" ;;
+    foreign|unreadable)
+      _ccrc_die "\$HOME/ccrc is $VER_WHY — refusing to place or flip a tree over something this ccrc did not make; \$HOME/ccrc and \$HOME/ccrc-versions were not touched" ;;
+  esac
+  name="$(_inst_version_name "$src")"
+  # ── (2) A PRE-VERSIONED BOX IS PLACED LIKE ANY OTHER (W6 Task 3) ───────
+  # A real directory at `~/ccrc` no longer has an arm of its own. The incoming
+  # tree goes to `~/ccrc-versions/<name>` exactly as on an `absent` box —
+  # VER_CURRENT is empty there, so the guard below answers `copy` unless the
+  # source is itself a placed version — and (5) MIGRATES the directory
+  # instead of flipping it. The live directory is never the rsync's
+  # destination, so the old self-copy skip has nothing left to guard: run
+  # FROM `~/ccrc/ccd/ccrc`, this is a copy OUT of the directory into the
+  # version, never `rsync -a --delete X X/` onto itself.
+  #
+  # THE OLD GUARD'S REASON FOR PHYSICAL PATHS STILL HOLDS. The two spellings
+  # arrive by different routes ($HOME, and `$CCRC_HERE`'s parent from
+  # `${BASH_SOURCE[0]}`): a symlinked component in either — /home ->
+  # /export/home is the classic — makes a textual comparison answer
+  # "different" for one directory, which is the exact case that must not
+  # reach rsync.
+  #
+  # ── (3) THE GUARD, RE-DERIVED AGAINST VERSIONS ─────────────────────────
+  # The question is no longer "is the source the live tree" but "is the
+  # source the version this run would place": `_inst_version_name` names a
+  # placed version after its own directory, so a run of
+  # `~/ccrc-versions/<n>/ccd/ccrc` has `src` = `<vroot>/<n>` exactly. Three
+  # answers, and a fourth for everything else:
+  #   running — the source IS the version `~/ccrc` points at (a re-run of
+  #     `ccrc install` from the box's own launcher): nothing is copied, and
+  #     the sentence is the pre-W6 one, byte for byte.
+  #   placed  — the source IS a placed version, another one: installing
+  #     from it copies nothing, and the flip below points `~/ccrc` at it
+  #     (D-3427).
+  #   copy, same name — the source is a checkout or a staged release
+  #     whose name is the version `~/ccrc` points at: rsync IN PLACE into
+  #     that directory, the one case this wave does not make atomic
+  #     (D-3426).
+  #   copy — a new name: rsync into `~/ccrc-versions/<name>/`, never into
+  #     the live one, and flip after the deps.
+  # `pwd -P` on the versions root for the self-copy guard's reason above;
+  # `src` is already physical.
+  dest="$BOX_VERSIONS_ROOT/$name"
+  shown="\$HOME/ccrc-versions/$name"
+  if [ -d "$BOX_VERSIONS_ROOT" ]; then
+    vroot="$(cd "$BOX_VERSIONS_ROOT" && pwd -P)" || _ccrc_die "cannot resolve $BOX_VERSIONS_ROOT"
   fi
+  if [ -n "$vroot" ] && [ "$src" = "$vroot/$name" ]; then
+    if [ "$name" = "$VER_CURRENT" ]; then how=running; else how=placed; fi
+  else
+    how=copy
+  fi
+  case "$how" in
+    running) echo "install: tree: already running from \$HOME/ccrc" ;;
+    placed)  echo "install: tree: $name is already placed at \$HOME/ccrc-versions/$name — installing from it, no copy" ;;
+    copy)
+      command -v rsync >/dev/null 2>&1 || _ccrc_die "rsync is required to place the tree — sudo apt install rsync"
+      # D-3464: the name must be nothing, or a directory this ccrc made. A
+      # symlink there is written THROUGH by everything below — the record
+      # void, `rsync --delete`, `npm ci` — into wherever it points, possibly
+      # the running version; the flip's re-check refuses a link only at the
+      # end. `_upd_legacy_target` and `_ver_kept` ask the same question.
+      if [ -L "$dest" ] || { [ -e "$dest" ] && [ ! -d "$dest" ]; }; then
+        _ccrc_die "$shown is not a directory ccrc placed — nothing was written; \$HOME/ccrc and \$HOME/ccrc-versions were not touched"
+      fi
+      # A version directory is INCOMPLETE from the first byte this run writes
+      # into it until `_ver_keep_state` marks it again at the spine's end: its
+      # kept install record goes first, so a run that dies half-way never
+      # leaves a directory that says it holds a finished install
+      # (D-3428).
+      rm -f -- "$dest/$VER_RECORD_COPY" \
+        || _ccrc_die "could not void the kept install record of $name before placing over it ($dest/$VER_RECORD_COPY) — nothing was copied"
+      mkdir -p "$dest" || _ccrc_die "cannot create $dest"
+      # The excludes are deploy.sh's (`:319-326`) minus `dist`, and they are not
+      # tidiness: `*.env` and `ccrc-mail.token` are gitignored files holding LIVE
+      # TOKENS, which `-a` would carry into a second, unmanaged copy at whatever
+      # mode the checkout has. `node_modules` is excluded in both directions —
+      # rsync does not delete what it was told to ignore, so the runtime deps
+      # installed below survive every later `--delete` run instead of being
+      # destroyed and refetched.
+      #
+      # `--checksum` is not optional either. The release tarball is reproducible
+      # (`build-release.sh`: `--mtime=@0`), so `ccrc update` hands this rsync a
+      # tree where every mtime is 0 — and the tree it placed last time has the
+      # same. rsync's default quick check (size + mtime) then SKIPS any changed
+      # file that kept its size. v0.0.11 shipped that way: dist-pwa/index.html
+      # and sw.js wrap equal-length content hashes, so both were skipped while
+      # the new bundle landed and `--delete` removed the old one — index.html
+      # pointed at a file that no longer existed, and every load the service
+      # worker did not answer was a black screen.
+      #
+      # The five sources carry no trailing slash, so `--delete` works inside
+      # each of them and never at the destination's top level: a version
+      # directory's two kept files (`$VER_STAMP_COPY`, `$VER_RECORD_COPY`)
+      # are not the rsync's to remove.
+      rsync -a --delete --checksum \
+        --exclude node_modules --exclude .git --exclude '*.env' --exclude ccrc-mail.token \
+        "$src/server" "$src/agent" "$src/shared" "$src/deploy" "$src/ccd" "$dest/" \
+        || _ccrc_die "placing the tree at $dest failed"
+      if [ "$name" = "$VER_CURRENT" ]; then
+        echo "install: tree: reinstalled $name in place at \$HOME/ccrc-versions/$name (the version \$HOME/ccrc points at; same name, same release)"
+      else
+        echo "install: tree: placed $name at \$HOME/ccrc-versions/$name"
+      fi
+      ;;
+  esac
+  # ── (4) THE DEPS ─────────────────────────────────────────────────────────
+  # A placed version whose kept install record is present completed an
+  # install on this box, runtime deps included, so a run FROM it — a re-run,
+  # or a flip back to it (W6 Task 4) — fetches nothing: `npm ci` would empty
+  # `node_modules` and reach the registry to rebuild what is already there
+  # (D-3427). A fleet box also needs the agent's deps,
+  # which a version completed under another role never fetched, so that one
+  # directory is measured too. Every other case runs today's `npm ci`.
+  #
   # `>&2` AND NOT `>/dev/null 2>&1` (fix round 1, Important 2). This is the
   # verb's most likely failure — a registry hiccup, no network, a lockfile out
   # of step with `package.json` — and swallowing npm's own error text left the
@@ -9997,27 +10555,272 @@ _inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling
   # transcript is one `install: <step>: <result>` line per step on stdout and
   # "added 41 packages in 3s" is not this run's result — the file's two-register
   # split (results on stdout, everything else on stderr), applied to a child.
-  ( cd "$dest/server" && npm ci --omit=dev --no-audit --no-fund >&2 ) \
-    || _ccrc_die "npm ci in \$HOME/ccrc/server failed — the service cannot start without runtime deps"
-  echo "install: tree: server runtime deps in place"
-  # D-1161 — THE AGENT NEEDS ITS DEPS TOO, and D-1159 stopped one import short.
-  # That fix made the ENTRY POINT exist; it did not make the tree STARTABLE.
-  # The rsync above excludes `node_modules` in both directions and this function
-  # ran npm in `server/` only, so a fleet install placed `agent/dist` beside no
-  # `agent/node_modules` — and `agent/src/server.ts` imports `ws` on line 6
-  # (`agent/package.json` declares `ws` and `node-pty` as runtime deps).
-  # `_inst_enable` then restarts `ccrc-agent.service` and node dies with the
-  # same ERR_MODULE_NOT_FOUND, one import further in. The reference fleet only
-  # escaped it because an earlier `deploy.sh agent` had left a `node_modules`
-  # behind — which is why the postmortem saw the missing dist and stopped there.
-  # `deploy/build-release.sh` has shipped `agent/package{,-lock}.json` "for
-  # `npm ci --omit=dev` on the box" since it was written; this is the call that
-  # was always meant to make.
-  if [ "$INST_ROLE" = fleet ]; then
-    ( cd "$dest/agent" && npm ci --omit=dev --no-audit --no-fund >&2 ) \
-      || _ccrc_die "npm ci in \$HOME/ccrc/agent failed — ccrc-agent.service cannot start without runtime deps"
-    echo "install: tree: agent runtime deps in place"
+  if [ "$how" != copy ] && [ -f "$dest/$VER_RECORD_COPY" ] \
+     && { [ "$INST_ROLE" != fleet ] || [ -d "$dest/agent/node_modules" ]; }; then
+    echo "install: tree: $name is complete (its kept install record is present) — no npm ci"
+  else
+    ( cd "$dest/server" && npm ci --omit=dev --no-audit --no-fund >&2 ) \
+      || _ccrc_die "npm ci in $shown/server failed — the service cannot start without runtime deps"
+    echo "install: tree: server runtime deps in place"
+    # D-1161 — THE AGENT NEEDS ITS DEPS TOO, and D-1159 stopped one import short.
+    # That fix made the ENTRY POINT exist; it did not make the tree STARTABLE.
+    # The rsync above excludes `node_modules` in both directions and this function
+    # ran npm in `server/` only, so a fleet install placed `agent/dist` beside no
+    # `agent/node_modules` — and `agent/src/server.ts` imports `ws` on line 6
+    # (`agent/package.json` declares `ws` and `node-pty` as runtime deps).
+    # `_inst_enable` then restarts `ccrc-agent.service` and node dies with the
+    # same ERR_MODULE_NOT_FOUND, one import further in. The reference fleet only
+    # escaped it because an earlier `deploy.sh agent` had left a `node_modules`
+    # behind — which is why the postmortem saw the missing dist and stopped there.
+    # `deploy/build-release.sh` has shipped `agent/package{,-lock}.json` "for
+    # `npm ci --omit=dev` on the box" since it was written; this is the call that
+    # was always meant to make.
+    if [ "$INST_ROLE" = fleet ]; then
+      ( cd "$dest/agent" && npm ci --omit=dev --no-audit --no-fund >&2 ) \
+        || _ccrc_die "npm ci in $shown/agent failed — ccrc-agent.service cannot start without runtime deps"
+      echo "install: tree: agent runtime deps in place"
+    fi
   fi
+  # ── A REAL DIRECTORY AT ~/ccrc IS MIGRATED, NOT FLIPPED (W6 Task 3) ──────
+  # Steps 3–4 above placed `$name` FULLY — the tree and its deps — while the
+  # directory kept running (spec §11: "build the versioned tree fully").
+  # `_plat_ln_swap` refuses a real directory at the link by contract, so the
+  # one-time migration takes the flip's place, and is equally the last act.
+  if [ "$VER_LAYOUT" = directory ]; then
+    _inst_migrate "$name"
+    return 0
+  fi
+
+  # ── (5) THE FLIP — the LAST act of this function ───────────────────────
+  # After the deps, so `~/ccrc` never points at a tree whose `node_modules`
+  # is not in place: a death anywhere above leaves the link where it was and
+  # the running version untouched — which `cmd_update` re-measures rather
+  # than assumes (`_upd_tree_untouched`). One rename (`_plat_ln_swap`, spec §11:
+  # `ln -sfn <target> ~/ccrc.new && mv -T ~/ccrc.new ~/ccrc`), with the
+  # absolute `$BOX_VERSIONS_ROOT/<name>` as the target, which is the value
+  # `_ver_layout` reads back. No flip when `~/ccrc` already points at this
+  # name (`running`, and the in-place reinstall). A pre-versioned box never
+  # reaches it: the block above migrates it instead (W6 Task 3).
+  if [ "$name" != "$VER_CURRENT" ]; then
+    [ -n "$VER_CURRENT" ] && was="\$HOME/ccrc-versions/$VER_CURRENT"
+    # W6 Task 5 — THE TARGET IS MEASURED AGAIN AT THE FLIP (D-3456).
+    # A plain install takes no lock, and the GC is a remover that can run
+    # beside it: `ccrc versions --prune` removes an incomplete directory (the
+    # one this run is placing: its record was voided before the rsync), and
+    # another run's automatic GC removes a complete one nothing protects yet
+    # (a version this run is about to flip onto is neither pointed-at nor
+    # previous until it lands). `_plat_ln_swap` never checks its target, and
+    # a flip onto a directory that is gone leaves ~/ccrc dangling, which every
+    # later install refuses as `foreign`. `_inst_migrate` measures the layout
+    # again for the same reason.
+    { [ -d "$dest" ] && [ ! -L "$dest" ] && [ -f "$dest/ccd/ccrc" ]; } \
+      || _ccrc_die "the new tree at \$HOME/ccrc-versions/$name is gone before the flip — a prune may have run beside this install; \$HOME/ccrc was not touched, and the install can be run again"
+    _plat_ln_swap "$dest" "$BOX_TREE_DIR" \
+      || _ccrc_die "could not point \$HOME/ccrc at \$HOME/ccrc-versions/$name (one rename) — the running tree is untouched; the new one is complete at $dest"
+    echo "install: tree: \$HOME/ccrc -> \$HOME/ccrc-versions/$name (was $was) — one rename"
+  fi
+}
+
+# ── THE ONE-TIME MIGRATION (design 2026-09-20 §11; W6 Task 3) ─────────────
+# A box installed before versioned installs has a REAL directory at ~/ccrc.
+# `_inst_tree` has just placed the incoming tree FULLY at
+# ~/ccrc-versions/<name> while that directory kept running; this moves it
+# aside and puts the link in its place:
+#
+#   1. ~/.ccrc/migrating-to <- <name>          tmp + one rename (D-3432)
+#   2. ~/ccrc -> ~/ccrc.migrating               rename(2)
+#   3. ~/ccrc = link to ~/ccrc-versions/<name>  symlink(2)
+#
+# Steps 2–3 are the spec's two-syscall window, once per node: a crash between
+# them leaves ~/ccrc.migrating and no ~/ccrc, which `_inst_migrate_resume`
+# completes FIRST on the next install or update — from the marker written in
+# step 1, never from a guess. Step 2 goes through `_plat_mv_notdir` (one
+# rename; GNU `mv -fT` will not move INTO a non-empty directory standing at
+# the name, the Darwin arm refuses any real one), and step 3 is `ln -sn`
+# (D-3434): measured 2026-09-23 (GNU coreutils
+# 9.4), `ln -s <t> <name>` where <name> is already a symlink to a directory
+# makes a link INSIDE that directory and exits 0; `-n` refuses (BSD `ln` takes
+# it too), and the `[ -L ]` after it catches the one shape `-n` does not
+# cover, a real directory at the name. ~/ccrc.migrating is NOT removed here:
+# only a gate that passed removes it (`_inst_migrate_finish`).
+_inst_migrate() {   # <name>
+  local name="$1" tmp="$BOX_MIGRATION_FILE.tmp.$$"
+  # A plain install takes no lock, and placing <name> took an rsync and an
+  # npm ci: the layout is measured again, here, not trusted from before.
+  _ver_layout
+  [ "$VER_LAYOUT" = directory ] \
+    || _ccrc_die "\$HOME/ccrc changed while this run placed $name (it now reads $VER_LAYOUT) — nothing moved; $name is complete at \$HOME/ccrc-versions/$name"
+  echo "install: tree: migrating — \$HOME/ccrc is a directory; $name is complete at \$HOME/ccrc-versions/$name"
+  if ! { mkdir -p "${BOX_MIGRATION_FILE%/*}" && printf '%s\n' "$name" > "$tmp" && chmod 644 "$tmp" \
+         && _plat_mv_notdir "$tmp" "$BOX_MIGRATION_FILE"; } 2>/dev/null; then
+    rm -f -- "$tmp" 2>/dev/null
+    _ccrc_die "could not record the migration's target in ~/.ccrc/migrating-to — nothing moved; \$HOME/ccrc is still the directory it was"
+  fi
+  _plat_mv_notdir "$BOX_TREE_DIR" "$BOX_MIGRATING_DIR" \
+    || _ccrc_die "could not move \$HOME/ccrc aside to \$HOME/ccrc.migrating — nothing moved; the new tree stays complete at \$HOME/ccrc-versions/$name"
+  if ! { ln -sn -- "$BOX_VERSIONS_ROOT/$name" "$BOX_TREE_DIR" && [ -L "$BOX_TREE_DIR" ]; }; then
+    # D-3436: a failure THIS run can see is
+    # undone HERE, in the staged spine — W6's own code, whichever updater is
+    # the parent — so no crash pair is left for a parent that may have no
+    # resume (wave 4's has none, and its arm 3 would `mkdir -p` a real
+    # ~/ccrc beside ~/ccrc.migrating). Only onto an EMPTY name:
+    # `_plat_mv_notdir` replaces a link standing there (both arms), and a
+    # link there now is another run's resume, not ours to undo; a nested
+    # link (`[ -L ]` refused it) left a real directory there. Either way the
+    # tree stays aside and the crash-pair sentence below is the true one.
+    if [ ! -e "$BOX_TREE_DIR" ] && [ ! -L "$BOX_TREE_DIR" ] \
+       && _plat_mv_notdir "$BOX_MIGRATING_DIR" "$BOX_TREE_DIR" 2>/dev/null; then
+      rm -f -- "$BOX_MIGRATION_FILE" 2>/dev/null
+      _ccrc_die "\$HOME/ccrc could not be linked to \$HOME/ccrc-versions/$name, so it was moved back — nothing moved; \$HOME/ccrc is still the directory it was, and $name is complete at \$HOME/ccrc-versions/$name"
+    fi
+    _ccrc_die "\$HOME/ccrc was moved to \$HOME/ccrc.migrating but the link could not be placed — the next 'ccrc install' completes it from ~/.ccrc/migrating-to; until then run ccrc by its path: bash \$HOME/ccrc-versions/$name/ccd/ccrc install"
+  fi
+  echo "install: tree: \$HOME/ccrc -> \$HOME/ccrc-versions/$name (the pre-versioned tree is kept at \$HOME/ccrc.migrating until a health gate passes)"
+}
+
+# ── _inst_migrate_resume <prefix> — a crash inside the window, completed FIRST
+# (design §11; W6 Task 3). Its one argument is the line prefix (`install`,
+# `update`, …). `crashed` is ~/ccrc.migrating standing with no
+# ~/ccrc. The launcher cannot run at all then (its shim execs
+# $HOME/ccrc/ccd/ccrc), so this is reached from `install.sh`, a checkout, or
+# a placed version's own ccd/ccrc run by its path. It links ONLY what
+# ~/.ccrc/migrating-to names — a real directory under ~/ccrc-versions that
+# carries ccd/ccrc — and refuses anything else with both by-hand remedies:
+# a guess such as the newest directory could link a tree the crashed run
+# never finished placing. Callers run it BEFORE anything else they do to the
+# box: `cmd_install` before its spine (so before `_inst_banner`), and
+# `cmd_update` after its lock and again after its staged spine
+# (D-3433), `_upd_detach` before it queues
+# (D-3437) and `cmd_rollback` before its
+# kept check (W6 Task 4) — those two unlocked, behind a lock probe that
+# answered free.
+_inst_migrate_resume() {
+  local prefix="$1" name="" what="is absent"
+  _ver_layout
+  [ "$VER_LAYOUT" = crashed ] || return 0
+  if [ -e "$BOX_MIGRATION_FILE" ] || [ -L "$BOX_MIGRATION_FILE" ]; then
+    what="does not name a placed version"
+    if [ -f "$BOX_MIGRATION_FILE" ] && [ -r "$BOX_MIGRATION_FILE" ]; then
+      IFS= read -r name < "$BOX_MIGRATION_FILE" || true
+    fi
+  fi
+  if [[ "$name" =~ $VER_NAME_RE ]] && [ ! -L "$BOX_VERSIONS_ROOT/$name" ] \
+     && [ -d "$BOX_VERSIONS_ROOT/$name" ] && [ -f "$BOX_VERSIONS_ROOT/$name/ccd/ccrc" ]; then
+    { ln -sn -- "$BOX_VERSIONS_ROOT/$name" "$BOX_TREE_DIR" && [ -L "$BOX_TREE_DIR" ]; } \
+      || _ccrc_die "a migration of \$HOME/ccrc crashed, and linking \$HOME/ccrc to \$HOME/ccrc-versions/$name failed — nothing else was changed; link it by hand: ln -s \$HOME/ccrc-versions/$name \$HOME/ccrc"
+    echo "$prefix: tree: completed a crashed migration — \$HOME/ccrc was absent beside \$HOME/ccrc.migrating; linked to \$HOME/ccrc-versions/$name (named by ~/.ccrc/migrating-to)"
+    return 0
+  fi
+  _ccrc_die "a migration of \$HOME/ccrc crashed and ~/.ccrc/migrating-to $what — nothing was changed. To go back: mv \$HOME/ccrc.migrating \$HOME/ccrc — or, to go forward: ln -s \$HOME/ccrc-versions/<name> \$HOME/ccrc"
+}
+
+# `_ver_crashed_remedy` — the remedy a READER of a crashed layout prints
+# (`ccrc update --check`, `ccrc versions`), never a repair. The ccrc on PATH
+# is the shim, which execs the missing $HOME/ccrc/ccd/ccrc and cannot run, so
+# the command named is the placed version's own ccrc, run by its path — the
+# one `_inst_migrate_resume` would link, checked the way it checks it. Never
+# deploy.sh, which the shim's own refusal offers: its rsync would place a
+# real ~/ccrc beside ~/ccrc.migrating, which `_ver_layout` reads
+# `unreadable`. Reads only; stdout one clause; rc 0.
+_ver_crashed_remedy() {
+  local name=""
+  if [ -f "$BOX_MIGRATION_FILE" ] && [ -r "$BOX_MIGRATION_FILE" ]; then
+    IFS= read -r name < "$BOX_MIGRATION_FILE" || true
+  fi
+  if [[ "$name" =~ $VER_NAME_RE ]] && [ ! -L "$BOX_VERSIONS_ROOT/$name" ] \
+     && [ -d "$BOX_VERSIONS_ROOT/$name" ] && [ -f "$BOX_VERSIONS_ROOT/$name/ccd/ccrc" ]; then
+    echo "run bash \$HOME/ccrc-versions/$name/ccd/ccrc install (or bash install.sh from a ccrc checkout) to complete it — the ccrc on PATH cannot run until then, and deploy.sh would place a second tree beside it"
+  else
+    echo "~/.ccrc/migrating-to names no placed version, so no install can complete it — link it by hand (ln -s \$HOME/ccrc-versions/<name> \$HOME/ccrc) or move it back (mv \$HOME/ccrc.migrating \$HOME/ccrc); not deploy.sh, which would place a second tree beside it"
+  fi
+}
+
+# ── _inst_migrate_finish <prefix> <gate words> — the old tree goes AFTER a gate
+# (design §11: "delete ~/ccrc.migrating only after the gate passes"). Called
+# only where a gate has just passed: `cmd_update` after `_upd_gate`, and
+# `_inst_doctor_tail` when a plain install is its own gate. rc 0 always — a
+# directory that cannot be removed is disk, not health.
+_inst_migrate_finish() {   # <prefix> <gate words>
+  _ver_layout
+  if [ "$VER_LAYOUT" = linked ]; then
+    # A marker that outlived its migration (the directory removed by hand)
+    # names nothing, and it is ccrc's own write: it goes, silently.
+    rm -f -- "$BOX_MIGRATION_FILE" 2>/dev/null
+    return 0
+  fi
+  [ "$VER_LAYOUT" = migrated ] || return 0
+  if rm -rf -- "$BOX_MIGRATING_DIR" && rm -f -- "$BOX_MIGRATION_FILE"; then
+    echo "$1: migration: \$HOME/ccrc.migrating removed — $2"
+  else
+    echo "$1: migration: WARN: could not remove \$HOME/ccrc.migrating — remove it by hand; nothing else depends on it"
+  fi
+  return 0
+}
+
+# ── _ver_lock_try — ~/.ccrc/update.lock, taken WITHOUT dying (W6 Task 3) ──
+# Wave 4's `_upd_lock` dies when the lock is held; a plain `ccrc install`
+# must ASK instead, because the answer is what tells a plain install (its own
+# gate) from a staged spine run under an updater that holds the lock
+# (D-3431). Wave 4's words (`_upd_lock_probe`, ruling
+# R16): rc 0 this process now holds it in UPD_LOCK_FD (`_upd_unlock`
+# releases it); rc 1 another process holds it; rc 2 no `flock`; rc 3
+# UNMEASURED — ~/.ccrc could not be made, the file could not be opened, or
+# `flock -n` answered anything but 0 or 1. Never folded: a 3 read as 1 would
+# keep the old tree for no reason, and read as 0 would remove it under a lock
+# nobody could see.
+_ver_lock_try() {
+  [ -n "$UPD_LOCK_FD" ] && return 0
+  command -v flock >/dev/null 2>&1 || return 2
+  { [ -d "${BOX_UPDATE_LOCK%/*}" ] || mkdir -p "${BOX_UPDATE_LOCK%/*}"; } 2>/dev/null || return 3
+  # The COMPOUND form (D-3230): a bare `exec {fd}>>… 2>/dev/null` leaks
+  # bash's own open-failure diagnostic.
+  { exec {UPD_LOCK_FD}>>"$BOX_UPDATE_LOCK"; } 2>/dev/null || { UPD_LOCK_FD=""; return 3; }
+  local r=0
+  flock -n "$UPD_LOCK_FD" || r=$?
+  [ "$r" -eq 0 ] && return 0
+  { exec {UPD_LOCK_FD}>&-; } 2>/dev/null
+  UPD_LOCK_FD=""
+  [ "$r" -eq 1 ] && return 1
+  return 3
+}
+
+# ── _inst_doctor_tail — `cmd_install`'s last word, and whether it is a gate ─
+# (W6 Task 3.) The verb's exit code is doctor's (the landing block's rule),
+# so doctor runs FIRST and its rc is what this returns, untouched. Then, on
+# a versioned box only, it decides whether this install is its own gate
+# (D-3431). A plain `ccrc install` is — its doctor is
+# the only measurement it has — but only while ~/.ccrc/update.lock is FREE.
+# A spine run while an updater holds the lock is a staged spine, and the
+# updater's `_upd_gate`, not this doctor, decides whether ~/ccrc.migrating
+# goes. The lock is released again only when this call took it.
+_inst_doctor_tail() {
+  local drc=0 lrc=0 took=0 why=unmeasured
+  cmd_doctor || drc=$?
+  _ver_layout
+  case "$VER_LAYOUT" in linked|migrated) ;; *) return "$drc" ;; esac
+  [ -z "$UPD_LOCK_FD" ] && took=1
+  _ver_lock_try || lrc=$?
+  case "$lrc" in
+    0)
+      if [ "$drc" -eq 0 ]; then
+        _inst_migrate_finish install "ccrc doctor passed; a plain install is its own gate"
+        _ver_gc install auto || :   # W6 Task 5: behind the same gate as the migration's removal (D-3451); its WARN never changes the install's exit
+      elif [ "$VER_LAYOUT" = migrated ]; then
+        echo "install: migration: \$HOME/ccrc.migrating kept — ccrc doctor did not pass; the next install or update whose gate passes removes it"
+      fi
+      [ "$took" -eq 1 ] && _upd_unlock
+      ;;
+    1)
+      [ "$VER_LAYOUT" = migrated ] \
+        && echo "install: migration: \$HOME/ccrc.migrating kept — an update holds ~/.ccrc/update.lock, and its health gate decides"
+      ;;
+    *)
+      [ "$lrc" -eq 2 ] && why="no flock"
+      [ "$VER_LAYOUT" = migrated ] \
+        && echo "install: migration: \$HOME/ccrc.migrating kept — ~/.ccrc/update.lock could not be taken or measured ($why), so no gate is known to have passed"
+      ;;
+  esac
+  return "$drc"
 }
 
 # ── _inst_atomic — the local `install_atomic` ─────────────────────────────
@@ -10378,8 +11181,20 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
 # caller's ordinary skip line. The GIT measurement still wins whenever it is
 # possible: a checkout's own state is the truth about a checkout, and a
 # stray build.json beside a real repository must never outvote it.
+#
+# A PLACED VERSION'S OWN SPINE (W6 Task 2) finds no `build.json` beside it:
+# `_inst_tree`'s rsync carries server/agent/shared/deploy/ccd and nothing at
+# a tree's top level. So when the tree this script runs from has none, the
+# stamp that version KEPT when it last completed an install here
+# (`$VER_STAMP_COPY`, written by `_ver_keep_state`) is installed instead —
+# the same parser, the same census line — and the transcript says which of
+# the two it was (D-3428).
 _inst_stamp_shipped() {
-  local shipped="$CCRC_HERE/../build.json"
+  local shipped="$CCRC_HERE/../build.json" from="shipped in the release artifact"
+  if [ ! -f "$shipped" ]; then
+    shipped="$CCRC_HERE/../$VER_STAMP_COPY"
+    from="kept with its version"
+  fi
   [ -f "$shipped" ] || return 1
   _box_build_fields "$shipped" || return 1
   mkdir -p "${BOX_STAMP_FILE%/*}" || _ccrc_die "cannot create ${BOX_STAMP_FILE%/*}"
@@ -10387,7 +11202,7 @@ _inst_stamp_shipped() {
   local said=""
   [ "${BOX_BUILD[3]}" = true ] && said=", dirty"
   [ -n "${BOX_BUILD[4]}" ] && said="$said, ${BOX_BUILD[4]}"
-  echo "install: stamp: ${BOX_BUILD[0]} (${BOX_BUILD[1]}$said, shipped in the release artifact)"
+  echo "install: stamp: ${BOX_BUILD[0]} (${BOX_BUILD[1]}$said, $from)"
   return 0
 }
 
@@ -10442,10 +11257,18 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
     echo "install: stamp: skipped (no git on PATH) — ccrc version will say unstamped"
     return 0
   fi
-  sha="$(git -C "$src" rev-parse HEAD 2>/dev/null)" || rc=$?
+  sha="$(_inst_git "$src" rev-parse HEAD 2>/dev/null)" || rc=$?
   if [ "$rc" -eq 0 ] && [ -z "$sha" ]; then
     _inst_stamp_shipped && return 0
     echo "install: stamp: skipped (git rev-parse HEAD exited 0 but printed no sha) — ccrc version will say unstamped"
+    return 0
+  fi
+  if [ "$rc" -eq 0 ] && ! _inst_git_own "$src"; then
+    # D-3463: git answered, but for a repository that ENCLOSES this tree (a
+    # release tarball extracted under a git-tracked directory) — its HEAD is
+    # not this tree's. Treated as what it is, a tree that is no checkout.
+    _inst_stamp_shipped && return 0
+    echo "install: stamp: skipped (this tree is not the top level of a git checkout — an enclosing repository's commit is not its own) — ccrc version will say unstamped"
     return 0
   fi
   if [ "$rc" -ne 0 ]; then
@@ -10458,7 +11281,7 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
     # a path that is already the failure path. If this call disagrees with the
     # first — a repository that appeared in between — `why` is empty and the
     # line says so rather than inventing a reason.
-    why="$(git -C "$src" rev-parse HEAD 2>&1 >/dev/null)"
+    why="$(_inst_git "$src" rev-parse HEAD 2>&1 >/dev/null)"
     why="${why%%$'\n'*}"
     why="${why//[[:cntrl:]]/}"
     why="${why:0:200}"
@@ -10466,9 +11289,9 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
     echo "install: stamp: skipped (git rev-parse HEAD exited $rc: $why) — ccrc version will say unstamped"
     return 0
   fi
-  ref="$(git -C "$src" rev-parse --abbrev-ref HEAD 2>/dev/null)" || ref=""
+  ref="$(_inst_git "$src" rev-parse --abbrev-ref HEAD 2>/dev/null)" || ref=""
   [ -n "$ref" ] || ref="HEAD"
-  if git -C "$src" diff --quiet 2>/dev/null && git -C "$src" diff --cached --quiet 2>/dev/null; then
+  if _inst_git "$src" diff --quiet 2>/dev/null && _inst_git "$src" diff --cached --quiet 2>/dev/null; then
     dirty=false
   else
     dirty=true
@@ -10478,7 +11301,7 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   # derivation, translated to this machine. Only the release shape qualifies
   # (which also keeps refname characters a JSON string can't carry, like `"`,
   # out of the stamp); no match is the ordinary case, not a failure.
-  version="$(git -C "$src" tag --points-at HEAD 2>/dev/null \
+  version="$(_inst_git "$src" tag --points-at HEAD 2>/dev/null \
     | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)" || version=""
   vfield=""
   [ -n "$version" ] && vfield=",\"version\":\"$version\""
@@ -10507,7 +11330,19 @@ _inst_caps() {   # what THIS install's ccrc can do (design 2026-09-20 §9, decis
   { printf 'os %s\n' "$CCD_OS"; printf '%s\n' "${cw[@]}"; } > "$tmp" \
     && chmod 644 "$tmp" && mv -f -- "$tmp" "$BOX_CAPS_FILE" \
     || { rm -f -- "$tmp"; _ccrc_die "writing $BOX_CAPS_FILE failed"; }
-  echo "install: caps: ${cw[*]} (os $CCD_OS; $BOX_CAPS_FILE — what this install's ccrc can do, read by the server)"
+  # REDACTED AT THE SOURCE (W6 Task 8A, review 167's F6): this line reaches an
+  # operator's terminal on the OTHER machine — `ccrc rollout` relays the remote
+  # `ccrc update`'s output, and this is the staged spine's own line — and it
+  # carried this box's absolute home. Only the box that wrote the path knows
+  # its own home (`_upd_redact` reads `$HOME`), so the substitution is made
+  # here, not in `cmd_rollout`'s relay, which knows only the rollout machine's.
+  # ONLY THIS LINE is redacted here. Known lines of the relayed transcript that
+  # still print an absolute path, left alone in this round: `_inst_banner`'s
+  # `install: box: $HOME` and `install: tree: ${CCRC_HERE%/*}`, the closing
+  # `install: next:` / `install: PWA:` / `install: gate:` lines that name
+  # `$BOX_ENV_FILE`, and `_inst_node_id`'s `install: node-id:` line, which names
+  # `$BOX_NODE_ID_FILE`.
+  echo "install: caps: ${cw[*]} (os $CCD_OS; $(_upd_redact "$BOX_CAPS_FILE") — what this install's ccrc can do, read by the server)"
 }
 
 # ── _inst_units — the unit files, and the one this box's ROLE decides ─────
@@ -11664,6 +12499,20 @@ _inst_wrappers() {
 # such a HOME now records `unsigned` instead of `verified` — the
 # fail-closed direction, so this is a missed optimisation, not a security
 # defect.
+# WHAT THIS ARM KEEPS OUT, AND WHAT IT DOES NOT (W6 Task 8A, review 167's F9 —
+# narrowed to what it measures): it keeps out a `CCRC_UPDATE_VERIFIED=1` with
+# NO legacy `ccrc … update` parent to explain it — a stale or copy-pasted
+# export reaching a bare `ccrc install`, a wrapper, or a `bash -c` string.
+# It does NOT keep out the same stale export reaching a genuine legacy
+# parent: a v0.0.4–v0.0.10 `ccrc update` never runs its spine under `env -u
+# CCRC_UPDATE_VERIFIED`, so a marker its caller's shell exported rides
+# through it exactly as one it set itself, and the parent's argv is the only
+# thing this arm reads — it cannot tell the two apart. That residue is
+# bounded by the population (boxes still running a release that old, once,
+# until their first update onto a build that sets `CCRC_UPDATE_SPINE`) and by
+# the attribution-not-authentication model above; it is recorded here rather
+# than closed, because closing it would mean refusing every legacy parent —
+# the very first update those boxes need — or reading the parent's own tree.
 _inst_legacy_verified_parent() {
   command -v ps >/dev/null 2>&1 || return 1
   local args=""
@@ -11751,6 +12600,9 @@ _inst_installed() {
     || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
   echo "install: installed: ${BOX_BUILD[0]} (the spine completed under this stamp; ccrc update --check reads it${verified:+; provenance verified})"
   _inst_floor
+  # W6 Task 2: the version this spine completed keeps the stamp and record
+  # a flip back restores (never dies; silent unless ~/ccrc is a version link).
+  _ver_keep_state install
   # THE SPINE ENDED (design §11, W4 Task 4): the record is placed and the floor
   # step returned, so no step is in flight — `_inst_step`'s marker goes. Only
   # HERE: the no-stamp return above keeps it (no record was placed), and a die
@@ -11805,6 +12657,7 @@ _inst_floor() {
     return 0
   fi
   ftmp="$BOX_FLOOR_FILE.tmp.$$"
+  _tmp_guard "$ftmp"
   printf '%s\n' "$ver" > "$ftmp" && chmod 644 "$ftmp" && mv -f -- "$ftmp" "$BOX_FLOOR_FILE" \
     || { rm -f -- "$ftmp"; _ccrc_die "writing $BOX_FLOOR_FILE failed"; }
   echo "install: floor: $ver (${cur:-none} before; ccrc update refuses to go below it without --downgrade)"
@@ -12125,6 +12978,12 @@ cmd_update() {
       unreadable|malformed) echo "this box's floor (~/.ccrc/floor) is $chk_floor — 'ccrc update' refuses until it is fixed by hand" ;;
     esac
     [ -z "$UPD_TARGET_LINE" ] || printf '%s\n' "$UPD_TARGET_LINE"
+    # W6 Task 3: a crashed one-time migration is SAID here, never repaired —
+    # --check writes nothing; an install run by the placed version's own path
+    # (or the next update) completes it — `_ver_crashed_remedy` names which.
+    _ver_layout
+    [ "$VER_LAYOUT" != crashed ] \
+      || echo "this box's migration crashed (\$HOME/ccrc is absent beside \$HOME/ccrc.migrating) — $(_ver_crashed_remedy)"
     case "$state" in
       current)    echo "this box: $box ($sha) · $label: $UPD_VERSION — current"; return 0 ;;
       incomplete) echo "this box: $box ($sha) · $label: $UPD_VERSION — same version, but the install never completed (ccrc version explains); $again"; return 1 ;;
@@ -12154,11 +13013,33 @@ cmd_update() {
   # install path only — --check returned above: it measures, it moves
   # nothing. BEFORE UPD_REPORTING, so a run refused here reports nothing.
   _upd_lock
+  # The PREVIOUS run's report, read before this run's first `_upd_phase`
+  # replaces it (`resolving` is written before the floor is checked).
+  _upd_last_report
 
   # FROM HERE ON THIS RUN REPORTS (design §10): every phase boundary below
   # writes ~/.ccrc/update.json, and `_ccrc_die` makes every refusal a
   # `failed` report. --check returned above, having written nothing.
   UPD_REPORTING=1
+  # W6 Task 3: a crashed one-time migration (`~/ccrc.migrating`, no `~/ccrc`)
+  # is completed FIRST (design §11) — after the lock, so two runs never race
+  # the link, and after UPD_REPORTING, so a refusal here is a `failed`
+  # report; before the preflight, the old-identity read and `_upd_phase
+  # resolving`, none of which needs the tree.
+  _inst_migrate_resume update
+  # D-3429 (W6 Task 4, amending Task 2's): a $HOME/ccrc
+  # this ccrc did not make is refused HERE — before the old-identity read,
+  # the backup and any download — and not left to the staged spine. That
+  # spine's own `_inst_tree` refusal dies AT `_inst_tree`, which
+  # `_upd_step_moved` reads as moved: the gate would fail on the version and
+  # the restore arms would run over the foreign link (arm 2's child is
+  # whatever `ccd/ccrc` it names, an older spine rsyncs `--delete` through
+  # it, arm 3 copies through it). `crashed` was completed on the line above.
+  _ver_layout
+  case "$VER_LAYOUT" in
+    foreign|unreadable)
+      _ccrc_die "update: \$HOME/ccrc is $VER_WHY — refusing to place or flip a tree over something this ccrc did not make; nothing was downloaded or installed, and \$HOME/ccrc and \$HOME/ccrc-versions were not touched" ;;
+  esac
 
   # BY NAME, BEFORE ANYTHING RUNS — `cmd_install`'s own probe discipline: a
   # missing tool three steps in would arrive as that step "failing", and two
@@ -12298,6 +13179,14 @@ cmd_update() {
 
   _upd_phase installing
   echo "update: installing $UPD_VERSION from the verified staged tree${role:+ (recorded role: $role)}"
+  # W6 Task 2 (D-3457): what `~/ccrc` is
+  # BEFORE the staged spine runs, so a spine that dies inside `_inst_tree`
+  # can be measured against it afterwards (`_upd_tree_untouched`, in the
+  # installed-absent arm below). Above everything this run clears and
+  # above W6 Task 4's `_upd_legacy_target`, which acts only on a spine this
+  # measurement never vouches for.
+  _ver_layout
+  local pre_layout="$VER_LAYOUT" pre_current="$VER_CURRENT"
   # ARM 2'S PROVENANCE PRECONDITION, read NOW (design §11): whether the build
   # this run is about to replace was ALREADY unverified is a fact about the
   # marker as it stands before the staged spine rewrites it — the new spine's
@@ -12306,6 +13195,38 @@ cmd_update() {
   # it could not read.
   UPD_PREV_UNSIGNED=0
   _upd_marker_unsigned && UPD_PREV_UNSIGNED=1
+  # D-3440 (W6 Task 4): a staged spine older
+  # than versioned installs rsyncs `--delete` into $HOME/ccrc — through the
+  # link, into the version this run is replacing. Hand it a directory named
+  # for its own tag first. A same-name reinstall writes in place
+  # (D-3426). Here, BEFORE the record, the step
+  # marker and the caps are cleared, so a refusal leaves all three as they were.
+  #   D-3459: `legacy_from` records that the flip happened and from where —
+  # the version `~/ccrc` named before it (equal to `pre_current` above: no
+  # layout change lies between the two reads) — so the moved=0 arm below can
+  # flip back when that spine dies without replacing anything.
+  local legacy_from=""
+  # D-3462: the two files this run clears below, held as they are NOW so a
+  # death that replaced nothing can put them back (`_upd_unwind`). Whole
+  # bodies, `read -d ''` keeping the trailing newline: the record has a second
+  # line (its provenance word) and the caps file has one word per line.
+  local old_rec_body="" old_rec_kept=0 old_caps_body="" old_caps_kept=0
+  if [ "$old_completed" -eq 1 ] && [ -f "$BOX_INSTALLED_FILE" ] && [ -r "$BOX_INSTALLED_FILE" ]; then
+    IFS= read -r -d '' old_rec_body < "$BOX_INSTALLED_FILE" 2>/dev/null; old_rec_kept=1
+  fi
+  if [ -f "$BOX_CAPS_FILE" ] && [ -r "$BOX_CAPS_FILE" ]; then
+    IFS= read -r -d '' old_caps_body < "$BOX_CAPS_FILE" 2>/dev/null; old_caps_kept=1
+  fi
+  _ver_layout
+  if ! grep -q '^BOX_VERSIONS_ROOT=' "$UPD_TREE/ccd/ccrc" 2>/dev/null; then
+    case "$VER_LAYOUT" in
+      linked|migrated)
+        if [ "$VER_CURRENT" != "$UPD_VERSION" ]; then
+          _upd_legacy_target "$UPD_VERSION"
+          legacy_from="$VER_CURRENT"
+        fi ;;
+    esac
+  fi
   # The completed-install record is written LAST by the spine (`_inst_installed`).
   # Cleared here, right before the staged install, its presence afterwards
   # means ONE thing — this run's spine ran to its end — which is what tells a
@@ -12316,8 +13237,12 @@ cmd_update() {
   # reason — after the staged install its presence must mean THIS run's
   # spine wrote it. A marker left by an earlier failed `ccrc install` would
   # otherwise classify this run's death as that run's step.
-  rm -f -- "$BOX_INSTALL_STEP_FILE" \
-    || _ccrc_die "cannot clear ~/.ccrc/install-step before the staged install — a stale marker would misclassify a spine that dies. Nothing was installed; remove it by hand and re-run"
+  if ! rm -f -- "$BOX_INSTALL_STEP_FILE"; then
+    # D-3459 amended: nothing was installed, and the legacy flip (if it
+    # happened) and the cleared record go back first.
+    _upd_unwind "$legacy_from" "$old_rec_kept" "$old_rec_body" 0 ""
+    _ccrc_die "cannot clear ~/.ccrc/install-step before the staged install — a stale marker would misclassify a spine that dies. Nothing was installed${UPD_UNWIND_SAID}; remove it by hand and re-run"
+  fi
   # D-3147: caps cleared beside the marker. A pre-W1 staged spine writes
   # only the one-line marker and never touches caps, so if this run's
   # staged install does not reach `_inst_caps` (an old spine, or one that
@@ -12356,6 +13281,17 @@ cmd_update() {
   else
     "${spine_env[@]}" "${spine[@]}" || inst_rc=$?
   fi
+  # W6 Task 3 (D-3433): a staged spine that died
+  # INSIDE the migration's window — killed between the `mv` and the link; a
+  # failed `ln` moves the tree back inside the spine itself
+  # (D-3436) — left `~/ccrc.migrating` and
+  # no `~/ccrc`. This is parent code: a wave-4 parent, which drives every
+  # box's FIRST move, has none of it (D-3438). Completed
+  # here, from the marker, before anything below reads the tree: the gate
+  # would probe a unit whose tree is gone, arm 2 would find no `~/ccrc/ccd/ccrc` and fall to arm 3, and
+  # arm 3's `_upd_restore_copy` would `mkdir -p` a REAL `~/ccrc` beside the
+  # pre-versioned one.
+  _inst_migrate_resume update
   # ONE EXIT CODE CARRIED TWO FACTS (D-3114, measured on the first live
   # rollout): the staged install ends with doctor, so a box that MOVED and
   # then failed a pre-existing doctor check exited 1 exactly like a spine that
@@ -12393,7 +13329,7 @@ cmd_update() {
       # `_inst_enable` may already have restarted the unit onto new code.
       # The report says `spine died at <step>` and nothing else, so the die
       # below must not overwrite it (`_ccrc_die`'s report hook, Task 1).
-      local step step_desc moved=0 place="before _inst_tree: nothing was replaced"
+      local step step_desc moved=0 replaced_unknown=0 place="before _inst_tree: nothing was replaced"
       step="$(_upd_spine_step)"
       step_desc="$step"
       if [ "$step" = none ]; then
@@ -12411,9 +13347,23 @@ cmd_update() {
         else
           step_desc="an unrecorded step (no step marker; a spine older than W4 writes none)"
           place="and whether the tree was replaced is not known (the stamp, written only after _inst_tree, did not move)"
+          replaced_unknown=1
         fi
       elif _upd_step_moved "$step"; then
         moved=1
+      fi
+      # W6 Task 2 (D-3457): the marker names
+      # `_inst_tree` for ANY death inside it, and since W6 that function
+      # replaces the running tree only at its last act, the flip. A death
+      # before the flip is proven by re-reading the layout, and then it is
+      # what spec §11 says a death before the tree is: nothing was replaced,
+      # exit 1, no gate and no restore — never a gate on the old build whose
+      # arm 2 would re-install the running tag IN PLACE.
+      local untouched=""
+      if [ "$moved" -eq 1 ] && [ "$step" = _inst_tree ] \
+         && untouched="$(_upd_tree_untouched "$pre_layout" "$pre_current")"; then
+        moved=0
+        place="before its flip: nothing was replaced ($untouched)"
       fi
       _upd_phase failed "spine died at $step_desc"
       if [ "$moved" -eq 1 ]; then
@@ -12422,11 +13372,35 @@ cmd_update() {
         # gone, and a later die on this path is a `failed` report like any other.
         UPD_SPINE_DIED="$step_desc"
       else
+        # D-3459: `_upd_legacy_target` pointed ~/ccrc at the older spine's own
+        # directory BEFORE it ran, and that spine replaced nothing — so the
+        # link goes back to the version it named, or the next restart runs a
+        # voided older version (or a copy) under the unchanged stamp. Right
+        # for every moved=0 shape: D-3440 guarantees the version this run
+        # replaces was never written. The directory named for the older tag
+        # stays (GC reads it incomplete). The moved=1 path is the gate's and
+        # the restore arms', unchanged.
+        # D-3462: the completed-install record and the caps this run cleared
+        # go back too — but only when the death PROVED nothing was replaced;
+        # a marker-less spine whose stamp did not move proves nothing, and a
+        # record restored over a tree that may have been replaced would
+        # vouch for the wrong build.
+        local put_rec=0 put_caps=0
+        if [ "$replaced_unknown" -eq 0 ]; then put_rec="$old_rec_kept"; put_caps="$old_caps_kept"; fi
+        _upd_unwind "$legacy_from" "$put_rec" "$old_rec_body" "$put_caps" "$old_caps_body"
+        place="$place$UPD_UNWIND_SAID"
         UPD_REPORTING=0
         _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — spine died at $step_desc, $place; read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
       fi
     fi
   fi
+
+  # D-3428 (W6 Task 4): the version $HOME/ccrc points
+  # at keeps the stamp and record this spine wrote — idempotent after a W6
+  # spine's own `_inst_installed`, and the ONLY writer of them for a spine
+  # older than W6. Silent unless the record is present (a completed spine,
+  # or D-3114's doctor-FAIL arm); a spine that died wrote none.
+  _ver_keep_state update
 
   # ── THE HEALTH GATE (design §11) ─────────────────────────────────────────
   # The staged spine restarted the role's unit onto the new tree (and ran its
@@ -12472,6 +13446,23 @@ cmd_update() {
     exit 1
   fi
 
+  # ── THE MIGRATION'S GATE (design §11; W6 Task 3) ─────────────────────────
+  # `~/ccrc.migrating` — the pre-versioned tree the staged spine moved aside —
+  # goes only once a gate has PASSED, and this is the one point of this verb
+  # that knows one has: a failed gate exited 4 above, after its restore; a
+  # spine that died after the tree exited 1 (D-3240). The staged spine kept
+  # the directory, because its doctor tail found this run's lock held
+  # (D-3431). --no-gate measured nothing, so it keeps
+  # it too — arm 2's restore child included, which always passes --no-gate.
+  if [ "$no_gate" -eq 1 ]; then
+    _ver_layout
+    [ "$VER_LAYOUT" = migrated ] \
+      && echo "update: migration: \$HOME/ccrc.migrating kept — --no-gate measured nothing"
+  else
+    _inst_migrate_finish update "the health gate passed"
+    _ver_gc update auto || :   # W6 Task 5: under this run's lock, after the gate passed; a skipped prune never fails the update
+  fi
+
   if [ "$UPD_FROM" = restore ]; then
     # THE AUTOMATIC RESTORE NEVER SWEEPS (design §11): the parent's gate failed
     # BEFORE its own _upd_sweep ever fired, so the live claude-session@
@@ -12513,6 +13504,45 @@ cmd_update() {
       exit 3
     fi
   fi
+}
+
+# `_rollback_previous_agrees_with_layout` (W6 Task 8A, review 155's C27) — a
+# BARE `ccrc rollback` trusts `~/.ccrc/previous` only while the last move was
+# one this ccrc's layout recorded. The stale shape: a box rolls back to a
+# release X older than wave 4 (`cmd_rollback` never rewrites `previous`, by
+# design), and then X's OWN updater moves it forward to Y. That updater
+# predates W6, so it writes neither `previous` nor the layout: its spine
+# rsyncs through `~/ccrc` into the directory named X and restamps
+# `~/.ccrc/build.json` as Y. `previous` then names what was current before
+# the rollback, not the build before the last update, and a bare rollback
+# would return to it on no evidence.
+# What "the layout records as having run" is the pointed-at version's NAME,
+# which a W6 ccrc last placed and flipped to; it is compared with the box's
+# own stamp, named as `_inst_version_name` names a tree (the stamp's `version`,
+# else `untagged-<sha12>`). A tag-shaped name is compared with the stamp's
+# `version`, an `untagged-<sha12>` name with the stamp's sha12. Where the two
+# DISAGREE the last move was made by something that does not keep the
+# layout (a pre-W6 updater after a rollback, or deploy.sh, which writes
+# through `~/ccrc` and restamps too — the check measures only that the link
+# and the stamp disagree, never which of them moved), and this refuses, naming `previous`'s tag, the pointed-at version
+# and the stamp's, and asks for `--to <tag>`. No verdict — proceed as wave 4
+# did — for an unversioned layout (`directory`, `absent`, and a `crashed` or
+# unreadable one, which other code owns), an `unstamped-*` name, or a stamp
+# that cannot be read. The common first rollback after the move onto W6 agrees
+# (the migration names the directory from the stamp) and proceeds. Never
+# consulted for `--to`. Reads only; changes nothing.
+_rollback_previous_agrees_with_layout() {
+  local cur="" stamp_name="" want="" rc=0
+  _ver_layout
+  case "$VER_LAYOUT" in linked|migrated) ;; *) return 0 ;; esac
+  cur="$VER_CURRENT"
+  case "$cur" in unstamped-*) return 0 ;; esac
+  _box_build_fields || rc=$?
+  [ "$rc" -eq 0 ] || return 0
+  stamp_name="${BOX_BUILD[4]:-untagged-${BOX_BUILD[0]:0:12}}"
+  if [[ "$cur" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then want="${BOX_BUILD[4]}"; else want="untagged-${BOX_BUILD[0]:0:12}"; fi
+  [ "$cur" = "$want" ] && return 0
+  _ccrc_die "rollback: ~/.ccrc/previous names $UPD_PREV_TAG, but it cannot be trusted here — \$HOME/ccrc points at \$HOME/ccrc-versions/$cur while this box's stamp reads $stamp_name, so the last move was made by something that does not keep the layout (for example a pre-W6 release's updater after a rollback, or deploy.sh), and previous may not be the build before the last update. Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z"
 }
 
 # ── cmd_rollback — a verb, not a recipe (design 2026-09-20 §11) ───────────
@@ -12594,7 +13624,8 @@ cmd_rollback() {
   if [ -z "$to" ]; then
     _upd_read_previous || prc=$?
     case "$prc" in
-      0) to="$UPD_PREV_TAG"; via="~/.ccrc/previous" ;;
+      0) to="$UPD_PREV_TAG"; via="~/.ccrc/previous"
+         _rollback_previous_agrees_with_layout ;;
       1) _ccrc_die "rollback: nothing to roll back to — ~/.ccrc/previous is absent (no update has run on this box since W4); name one: ccrc rollback --to vX.Y.Z" ;;
       2) _ccrc_die "rollback: the build before the last update carried no release tag (previous: untagged ${UPD_PREV_SHA:-unstamped}) — name one: ccrc rollback --to vX.Y.Z" ;;
       *) _ccrc_die "rollback: ~/.ccrc/previous is unreadable or malformed (line 1 must be a release tag vX.Y.Z or 'untagged') — fix or remove it by hand, or name one: ccrc rollback --to vX.Y.Z" ;;
@@ -12686,15 +13717,52 @@ cmd_rollback() {
   fi
   command -v curl >/dev/null 2>&1 \
     || _ccrc_die "curl is required by 'ccrc rollback' but is not on PATH — nothing on this box was changed"
-  _upd_asset_listed "$to" SHA256SUMS || erc=$?
-  case "$erc" in
-    0) ;;
-    1) echo "$PROG: rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed" >&2
-       [ "$UPD_REPORTING" = 1 ] \
-         && _upd_phase failed "rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed"
-       exit 2 ;;
-    *) _ccrc_die "rollback: could not ask the release host whether $to exists within ${CCRC_RELEASE_PROBE_MAX_TIME}s (curl failed, timed out, or the host answered neither 200 nor 404) — nothing on this box was changed" ;;
+  # D-3442 (W6 Task 4): a COMPLETE kept
+  # version answers the existence question itself — the tag was installed,
+  # and completed, on this box — so the release host is not asked and
+  # nothing is downloaded. The role is read as `cmd_update` reads it. Any
+  # other tag asks, exactly as before (D-3244). A $HOME/ccrc this ccrc did
+  # not make is refused here, before the release host is asked and before
+  # `--detach` hands the run on — and before the lock is taken, except for
+  # a non-`cli` run without `--detach`, which took it above (D-3429 as
+  # amended; `cmd_update` refuses it too, for the re-install arm).
+  local role="" kept=0 frc=0 now=""
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  case "$role" in server|fleet|both) ;; *) role="" ;; esac
+  # W6 Task 3 (D-3437, applied here): a
+  # crashed migration reads `crashed` — neither `linked` nor `migrated` — so
+  # a kept tag would read as NOT kept, and the rollback would ask the release
+  # host and download. It is completed first, before the kept check and so
+  # before `--detach`'s hand-off to the shim, which cannot run with no
+  # ~/ccrc — but only when this process already holds the lock, or the lock
+  # probe answers FREE: a lock held elsewhere is an
+  # update that owns the link (its own resumes complete it), and every other
+  # probe answer is refused below, in its own words, by `_upd_lock` or
+  # `_upd_detach` (ruling R16), so nothing is folded here.
+  _ver_layout
+  if [ "$VER_LAYOUT" = crashed ] && { [ -n "$UPD_LOCK_FD" ] || _upd_lock_probe; }; then
+    _inst_migrate_resume rollback
+  fi
+  _ver_layout
+  case "$VER_LAYOUT" in
+    linked|migrated) _ver_kept "$to" "$role" && kept=1 ;;
+    foreign|unreadable) _ccrc_die "rollback: \$HOME/ccrc is $VER_WHY — refusing to place or flip a tree over something this ccrc did not make; nothing on this box was changed" ;;
   esac
+  if [ "$kept" -eq 1 ]; then
+    echo "rollback: $to is kept at \$HOME/ccrc-versions/$to — no release-host question and no download"
+  else
+    _upd_asset_listed "$to" SHA256SUMS || erc=$?
+    case "$erc" in
+      0) ;;
+      1) echo "$PROG: rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed" >&2
+         [ "$UPD_REPORTING" = 1 ] \
+           && _upd_phase failed "rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed"
+         exit 2 ;;
+      *) _ccrc_die "rollback: could not ask the release host whether $to exists within ${CCRC_RELEASE_PROBE_MAX_TIME}s (curl failed, timed out, or the host answered neither 200 nor 404) — nothing on this box was changed" ;;
+    esac
+  fi
   # RESET: this scope's own reporting window closes here. `cmd_update`'s own
   # argument-refusal block (D-3257, item 10, the tool preflight — all
   # reached below, whether through `--detach` or straight through) is
@@ -12713,6 +13781,87 @@ cmd_rollback() {
   _upd_lock
   local run_from=rollback
   [ "$from" = watchdog ] && run_from=watchdog
+  if [ "$kept" -eq 1 ]; then
+    # ROLLBACK BY FLIP (design §11: rollback "runs arm 1 or arm 2 above, then
+    # the gate, then _upd_sweep"; "rollback after W5 is arm 1"). Re-measured
+    # under this verb's own lock. A box already on the tag whose install
+    # completed has nothing to do. Otherwise `_ver_flip_back` points ~/ccrc
+    # at the kept version and runs its own spine, then the gate, then the
+    # sweep behind its KillMode=process preflight: a PRIOR update's sweep
+    # moved the supervisors onto the build this replaces. `previous` is never
+    # rewritten; the floor never lowers. A flip that changed nothing falls
+    # through to update's own re-install below.
+    if _box_build_fields; then now="${BOX_BUILD[4]}"; fi
+    _ver_layout
+    if [ "$VER_CURRENT" = "$to" ] && [ "$now" = "$to" ] && cmp -s -- "$BOX_INSTALLED_FILE" "$BOX_VERSIONS_ROOT/$to/$VER_RECORD_COPY"; then
+      echo "rollback: this box already runs $to (\$HOME/ccrc points at \$HOME/ccrc-versions/$to and its install completed) — nothing to do"
+      # Wave 4's re-review clause on its own rollback pre-check: only a
+      # hand-typed run may end without a terminal report (a watchdog or
+      # detached caller waits on one).
+      if [ "$from" != cli ]; then UPD_FROM="$run_from"; UPD_REPORT_TARGET="$to"; _upd_phase done "already converged at $to"; fi
+      _upd_unlock
+      return 0
+    fi
+    UPD_FROM="$run_from"
+    UPD_VERSION="$to"
+    UPD_REPORT_TARGET="$to"
+    UPD_REPORTING=1
+    # A belt: the resume at the top of this verb already ran, so this one is
+    # masked by it — it exists for a crash made in the migration's window
+    # between the two by a lockless plain install (final review F11).
+    _inst_migrate_resume update
+    _upd_phase installing "rollback by flip to $to"
+    echo "rollback: returning this box to $to (named by $via; asked by --from $from) — a flip of \$HOME/ccrc to its kept version and its own spine, as --from $run_from: below the floor if need be, and the floor itself is never lowered"
+    _ver_flip_back "$to" "$role" rollback || frc=$?
+    case "$frc" in
+      0)
+        # D-3243 on this path too: a failed gate is not restored.
+        # Redacted here as `cmd_update`'s own gate-failure line is (final review
+        # F10): `_upd_rollback_no_restore` echoes its argument to stderr, and a
+        # gate reason can name an absolute path of this box.
+        _upd_gate "$role" "$to" || _upd_rollback_no_restore "gate: $(_upd_redact "$UPD_GATE_WHY")"
+        _inst_migrate_finish rollback "the health gate passed"
+        _upd_phase restarting
+        _upd_unlock
+        _upd_sweep
+        # D-3461: the kept spine COMPLETED (its record is written) but its
+        # trailing doctor exited non-zero — wave 4's D-3114 reading, which
+        # `cmd_update` and its re-install rollback already make: the gate
+        # passed, the box IS on <to>, and the exit is 3. The terminal `done`
+        # report is written either way, as `cmd_update` writes it for 3.
+        local doctor_rc="$VER_SPINE_RC"
+        if _upd_report_is_mine; then
+          if [ "$doctor_rc" -ne 0 ]; then
+            _upd_phase done "doctor exited $doctor_rc - the box moved; its health is ccrc doctor's"
+          else
+            _upd_phase done "rolled back by flip to $to"
+          fi
+        else
+          echo "rollback: report: skipped — ~/.ccrc/update.json no longer names this run's pid (${UPD_REPORT_PID:-$$}); a newer update took the lock this run released before the sweep"
+        fi
+        echo "rollback: this box runs $to again — flipped back to \$HOME/ccrc-versions/$to, no download"
+        if [ "$doctor_rc" -ne 0 ]; then
+          echo "rollback: the kept spine completed (its record is written) but its trailing doctor exited $doctor_rc — this box IS on $to; the FAIL lines above are the box's health, not the rollback's"
+          return 3
+        fi
+        return 0 ;;
+      1)
+        # UPD_REPORTING deliberately stays 1 here, unlike the RESET above: this
+        # path has already written a non-terminal `installing "rollback by
+        # flip …"` phase, so a refusal on the way into the in-process
+        # `cmd_update` below must close that report with a terminal `failed`.
+        # Resetting to 0 would leave `installing` as the last phase, which a
+        # watchdog or a detached caller waiting on a terminal report reads as
+        # an updater that died. (`cmd_update` sets it to 1 again itself, right
+        # after its own `_upd_lock`, so today nothing between this line and
+        # that one can die: the rule is for the next line added here.)
+        echo "rollback: $to could not be flipped to ($VER_WHY) — rolling back by re-install instead" ;;
+      *)
+        _upd_phase failed "rollback to $to: the kept spine did not complete; $VER_WHY"
+        UPD_REPORTING=0
+        _ccrc_die "rollback: \$HOME/ccrc points at \$HOME/ccrc-versions/$to, but its own spine did not complete ($VER_WHY) — read its lines above; 'ccrc update --check' says where this box stands" ;;
+    esac
+  fi
   # Asked BEFORE `cmd_update` removes the record (it clears it right before
   # the staged spine), through Task 6's one reader of the record's line 2. An
   # absent or one-line record reads verified: the safe direction, because it
@@ -13143,6 +14292,23 @@ cmd_watchdog() {
   # an update this run never applied. And a box whose running stamp carries
   # no version is never rolled back either — see the comment above the probe.
   if [ "$pre_install" -eq 1 ]; then
+    if [ "$raw_from" = watchdog ]; then
+      # W6 Task 8A, review 167's F8: a report in a pre-install phase whose RAW
+      # `from` is literally `watchdog` is not an update that never began — it
+      # is a PRIOR watchdog rollback killed before its install (the rollback
+      # writes `queued` … `backing-up` like any update, and C29's arm below
+      # cannot see it, because this arm runs first). The rollback's own tree
+      # never moved, but the UPDATE it was called to correct DID move this
+      # box, and nothing has undone that: "tree never moved, nothing
+      # reverted" — the sentence the other case below is true for — would tell
+      # the operator the opposite of the box's state. One revert attempt is
+      # still all there is (terminal, like C29's), and the verdict still leads
+      # so the 200-char cut drops only `$why`'s tail.
+      _upd_phase failed "the watchdog's own rollback died at $phase before it moved anything; the box still runs the build the failed update left; not retrying; box unhealthy: $why"
+      echo "watchdog: stale report ($phase, ${age}s), from watchdog, fails its health probe ($why) — a PRIOR watchdog rollback died at $phase before it moved anything; the box still runs the build the update it was correcting left; not retrying, recorded as failed"
+      _upd_unlock
+      return 0
+    fi
     # B6 (final review, wording only, D-3249's own rule — no number): the
     # verdict now leads so the 200-char cut can only drop `$why`'s tail,
     # never the verdict itself.
@@ -13198,11 +14364,17 @@ cmd_watchdog() {
   # Review fix round 1, I4 (relocating fix round 1 item 18 / review 155
   # C29): a stale in-flight report whose RAW `from` (captured before C6's
   # closed-vocabulary coercion, above) is LITERALLY `watchdog` can only mean
-  # one thing, this far past the re-measurement — pre-install, unversioned
-  # and item 8's "nothing to revert to" have all already ruled themselves
-  # out, and the probe genuinely failed: a PRIOR `ccrc rollback --from
-  # watchdog` this same watchdog ran died mid-flight (OOM, the unit's own
-  # TimeoutStartSec). Rolling back AGAIN retries with no bound — each
+  # one thing, this far past the re-measurement — unversioned and item 8's
+  # "nothing to revert to" have already ruled themselves out, and the probe
+  # genuinely failed: a PRIOR `ccrc rollback --from watchdog` this same
+  # watchdog ran died mid-flight (OOM, the unit's own TimeoutStartSec). This
+  # comment used to list PRE-INSTALL among the ruled-out cases, and that was
+  # false (review 167's F8): a rollback killed at `queued`…`backing-up` is
+  # exactly a pre-install report with `from: watchdog`, and it IS caught
+  # before this line, by the pre-install arm above — which now gives it its
+  # own sentence (the box still runs the build the update it was correcting
+  # left) rather than the "tree never moved" one that is true only of an
+  # update that never began. Rolling back AGAIN retries with no bound — each
   # attempt takes a fresh backup, re-runs the spine and restarts the unit,
   # forever, if the box keeps dying the same way. Placed HERE, not before
   # the re-measurement (review fix round 1 I4 — a genuinely stale report
@@ -13309,6 +14481,16 @@ _upd_detach() {
     2) _upd_flock_die ;;
     *) _ccrc_die "update: ~/.ccrc/update.lock could not be measured (probe rc $prc) — refusing to detach a run past a lock this box cannot see; nothing on this box was changed" ;;
   esac
+  # W6 Task 3 (D-3437): the run handed off
+  # below execs $HOME/.local/bin/ccrc — the shim, which execs
+  # $HOME/ccrc/ccd/ccrc and refuses when a crashed migration left no
+  # ~/ccrc — so the crash is completed HERE, before the `queued` write, or
+  # this parent would print `detached` over a report no run ever advances.
+  # Every probe arm but a free lock has died above (ruling R16), so no update
+  # owns the link; the parent must hold no lock at the spawn, so this runs
+  # unlocked, as a plain install's resume does (`ln -sn` + `[ -L ]` refuse a
+  # concurrent resume's second link, D-3434).
+  _inst_migrate_resume "$verb"
   UPD_REPORT_TARGET="$tag"
   UPD_FROM="$from"
   _upd_phase queued
@@ -13371,6 +14553,7 @@ _upd_phase() {
   detail="$(_upd_redact "$detail")"
   det="$(_upd_json_str "$detail")"
   tmp="$BOX_UPDATE_JSON.tmp.$$"
+  _tmp_guard "$tmp"
   if [ -n "$now" ] \
      && { [ -d "${BOX_UPDATE_JSON%/*}" ] || mkdir -p "${BOX_UPDATE_JSON%/*}"; } 2>/dev/null \
      && [ ! -d "$BOX_UPDATE_JSON" ] \
@@ -14005,13 +15188,27 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   # exactly one `sha256sum` line (`$BR_SHA256 "ccrc-$VERSION.tar.gz" >
   # SHA256SUMS` — one tarball asset, no loop, no `>>`), and `sha256sum`'s own
   # line shape is `<64 hex><two spaces><filename>\n`: 64 + 2 + 1 = 67 bytes of
-  # fixed overhead, plus the filename. `ccrc-vX.Y.Z.tar.gz` stays well under
-  # 25 bytes even for an implausible 3-digit-per-component version
+  # fixed overhead, plus the filename. `ccrc-vX.Y.Z.tar.gz` stays at 24 bytes
+  # or fewer even for an implausible 3-digit-per-component version
   # (`ccrc-v999.999.999.tar.gz` measures 24 bytes) — so a real SHA256SUMS
-  # measures under 91 bytes. 4096 is a ~45x margin over that, comfortably
-  # inside `_upd_validate_timeout`'s own generic shape. 20s matches the
-  # release-host bound this file already uses for a small, one-shot ask
-  # (`_upd_asset_listed`'s own `CCRC_RELEASE_PROBE_MAX_TIME`, review 155 C32).
+  # is AT MOST 91 bytes (64 + 2 + 24 + 1). The derivation is held to the
+  # builder by `build-release.test.ts`'s F4a pin (one line, one `>`, exactly 91
+  # bytes for the worst tag, inside this default) — not by this prose alone.
+  # 4096 is a ~45x margin over that, comfortably inside
+  # `_upd_validate_timeout`'s own generic shape. MEASURED 2026-09-29 against a
+  # real release fetch (W6 Task 8A): the newest published release's SHA256SUMS
+  # is 86 bytes and took 0.14-0.61 s in total (0.61 s cold, the rest 0.14-0.16
+  # s, both redirects followed) — so 4096 is ~47x the real file: KEPT.
+  # THE 20 s IS ITS OWN, NOT THE PROBE KNOB'S: it used to be justified as
+  # matching `CCRC_RELEASE_PROBE_MAX_TIME`, which defaults to 15, and is now
+  # capped at 18 where the pre-detach check reads it. SHA256SUMS is fetched
+  # after `update`'s detach point (or by `--check`/`rollout`), never by the
+  # parent that W5 holds to a 20 s spawn deadline, and the operation deadline
+  # above that (`UPDATE_OP_TIMEOUT_MS`, 30 s) still clears it — so it neither
+  # needs the probe's ceiling nor should move with it. 20 s is ~33x
+  # the slowest measured fetch — room for a slow link's TLS start and the two
+  # redirects to the asset host — while a host that never stops sending still
+  # cannot hold the lock past it: KEPT.
   _upd_validate_timeout CCRC_RELEASE_SUMS_MAX_TIME 20
   _upd_validate_timeout CCRC_RELEASE_SUMS_MAX_FILESIZE 4096 \
     'a whole number of bytes from 1 to 1048576' 1048576
@@ -14021,7 +15218,7 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   UPD_STAGE="$(_plat_mktemp_d)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
   # The staging tree holds nothing this run does not either install or
   # refuse, so it is removed on every exit — success, die, or Ctrl-C.
-  trap '[ -z "$UPD_STAGE" ] || rm -rf "$UPD_STAGE"' EXIT
+  _exit_add '[ -z "$UPD_STAGE" ] || rm -rf "$UPD_STAGE"'
   echo "update: fetching $UPD_URL_DIR_SAFE/SHA256SUMS …"
   # Fix round 1 item 12 / review 155 C22, AMENDED by fix round 2 F4 (review
   # 167): a CONNECT bound plus a STALL bound was the whole story here too,
@@ -14277,20 +15474,25 @@ _upd_converged() {
 # is nothing for arm 2 to restore TO — and falls straight to arm 3, the
 # pre-update backup, which for a same-tag run whose staged sha equals the old
 # build's own AND whose `old_completed` was 1 IS that same release (D-3288,
-# review fix round 1 I3, NARROWED by fix round 2 F1); with `old_completed` 0,
-# arm 3 says only that the PRE-UPDATE tree came back, never `deploy.sh`'s MIXED
-# claim; with `old_completed` 1 and a DIFFERING sha (a PROVEN rebuild, not an
-# unproven tree) it still ends there. AMENDED AGAIN (fix round 2, F1+F2, review
-# 167, rulings item 1): the
-# I4 narrowing above left one case open — a same-tag rerun with NO completed
-# record still finds `previous` naming the exact tag that just failed
-# whenever this keep's own UNCONDITIONAL branch, or D-3254 (b)'s "keep
-# without a well-formed baseline", already left it pointing there (an
-# earlier still-open move, or a prior restore). `_upd_restore_arm2` now also
-# checks `$UPD_PREV_TAG` against `$UPD_VERSION` AFTER reading `previous` —
-# on top of, never instead of, the `old_completed`-keyed check above — so
-# arm 2 never hands its child the tag that just failed either way, whether
-# or not that running build's own install of it had completed.
+# review fix round 1 I3, NARROWED by fix round 2 F1); with the same sha and
+# `old_completed` 0, arm 3 says only that the PRE-UPDATE tree came back, never
+# `deploy.sh`'s MIXED claim; and a staged sha that DIFFERS from the stamp's is
+# MIXED whatever the record says (review 173's F1r, amending D-3288 in place
+# again). AMENDED AGAIN (fix round 2, F1+F2, review 167, rulings item 1;
+# scope corrected by review 173's P3): the I4 narrowing above left open a
+# same-tag rerun with NO completed record that still finds `previous` naming
+# the exact tag that just failed whenever this keep's own UNCONDITIONAL
+# branch, or D-3254 (b)'s "keep without a well-formed baseline", already left
+# it pointing there (an earlier still-open move, or a prior restore) — review
+# 167's F2 input (a). The same check ALSO closes F2 input (b), a
+# DIFFERENT-tag downgrade: the stamp reads v2.0.0 with no record, `previous`
+# names v1.0.0, and `update --to v1.0.0 --downgrade` keeps `previous` (D-3254
+# (b)) so that it names the target that just failed. `_upd_restore_arm2` now
+# checks `$UPD_PREV_TAG` against `$UPD_VERSION` AFTER reading `previous` — on
+# top of, never instead of, the `old_completed`-keyed check above — so arm 2
+# never hands its child the tag that just failed, whichever way `previous`
+# came to name it and whether or not the running build's own install of it
+# had completed.
 _upd_write_previous() {
   local line1="untagged" line2="unstamped" tmp="$BOX_PREVIOUS_FILE.tmp.$$" kept="none" why="" prc=0
   [[ "${1:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && line1="$1"
@@ -14348,6 +15550,7 @@ _upd_write_previous() {
     echo "update: previous: kept ($kept) — $why"
     return 0
   fi
+  _tmp_guard "$tmp"
   if { mkdir -p "$HOME/.ccrc" && printf '%s\n%s\n' "$line1" "$line2" > "$tmp" && chmod 644 "$tmp" \
          && _plat_mv_notdir "$tmp" "$BOX_PREVIOUS_FILE"; }; then
     if [ "$line1" = untagged ]; then
@@ -14429,6 +15632,146 @@ _upd_stamp_moved() {   # <old_sha>
   _box_build_fields && now="${BOX_BUILD[0]}"
   BOX_BUILD=(${box[@]+"${box[@]}"})
   [ -n "$now" ] && [ "$now" != "$old" ]
+}
+
+# ── _upd_tree_untouched <pre_layout> <pre_current> — did a staged spine
+# that died INSIDE `_inst_tree` replace anything? (W6 Task 2) ─────────────
+# `_inst_step` writes the marker as the spine ENTERS a step, so a marker
+# naming `_inst_tree` says only that the spine died somewhere in it, and
+# wave 4's `_upd_step_moved` reads that as "the tree WAS replaced". Since
+# W6, `_inst_tree` replaces the running tree at its LAST act, the flip
+# (`_plat_ln_swap`), or not at all: every death before it — the layout
+# refusals, the rsync, the void, `npm ci` in the new version — leaves the
+# link and the running version as they were
+# (D-3457). This asks the one layout reader
+# again, against what it said before the staged spine ran (`cmd_update`'s
+# `pre_layout`/`pre_current`).
+#
+# rc 0 ONLY when that is proven, with one clause on stdout naming what was
+# measured (the caller's die prints it); rc 1, silent, otherwise — wave 4's
+# reading stands:
+#   - the staged `ccd/ccrc` declares no BOX_VERSIONS_ROOT: a spine older
+#     than W6 writes THROUGH `~/ccrc`, so a link that stayed put proves
+#     nothing (the measurement `_upd_legacy_target`'s condition makes, W6
+#     Task 4);
+#   - `linked|migrated`, and the release's name IS the pointed-at version:
+#     the in-place reinstall (D-3426) writes
+#     INTO the running version. UPD_VERSION is that name: `_upd_fetch`
+#     refuses a staged build.json whose version is not UPD_VERSION, and
+#     `_inst_version_name` names the directory from that field;
+#   - the layout now reads another word, or points at another version;
+#   - `directory`: `_inst_tree`'s `directory` layout places the incoming tree
+#     into `~/ccrc-versions/<name>` exactly as `absent` does — every write
+#     before `_inst_migrate`'s move lands there, never in `~/ccrc` itself —
+#     and only `_inst_migrate` moves the real directory, at its own last act.
+#     A death before that migrates nothing, so `directory` still reading
+#     `directory` proves the same thing the `linked|migrated` row proves
+#     for a versioned box (D-3458) — this reads
+#     `_ver_layout` alone, never `~/.ccrc/migrating-to`, so a marker left
+#     behind by an aside-move that failed (step 2 died before
+#     `~/ccrc.migrating` existed) changes nothing here. A migration whose
+#     link failed and was moved BACK (D-3436) also lands
+#     here: the real directory the spine started with is the one now
+#     standing, byte for byte, so untouched is the true reading of that
+#     shape too;
+#   - `crashed`: `_inst_tree` refuses it before a byte is written (its own
+#     layout-refusal case), so a pre_layout of `crashed` never reaches here
+#     with anything to prove;
+#   - `absent`: NOT covered — `_inst_tree` genuinely places into
+#     `~/ccrc-versions/<name>` and then flips the (previously absent)
+#     `~/ccrc` onto it, so a death at-or-after the flip really did replace
+#     it. This falls through to `return 1`, wave 4's default, the same as
+#     any word this function does not name.
+# `foreign`/`unreadable` count as untouched while they read the same word:
+# `_inst_tree` refuses both before it writes a byte
+# (D-3429). Reads only; never dies.
+_upd_tree_untouched() {   # <pre_layout> <pre_current>
+  local pl="$1" pc="$2"
+  grep -q '^BOX_VERSIONS_ROOT=' "$UPD_TREE/ccd/ccrc" 2>/dev/null || return 1
+  _ver_layout
+  case "$pl" in
+    linked|migrated)
+      [ "$UPD_VERSION" != "$pc" ] || return 1
+      case "$VER_LAYOUT" in linked|migrated) ;; *) return 1 ;; esac
+      [ "$VER_CURRENT" = "$pc" ] || return 1
+      echo "\$HOME/ccrc still points at \$HOME/ccrc-versions/$pc"
+      return 0 ;;
+    directory)
+      # D-3458: nothing before `_inst_migrate`'s move writes into `~/ccrc`
+      # itself, so a `directory` layout that still reads `directory` — no
+      # `~/ccrc.migrating`, no link — proves the real directory was never
+      # touched, whether the spine never reached `_inst_migrate` or reached
+      # it and moved the tree back on a failed link (D-3436). A leftover
+      # `~/.ccrc/migrating-to` from a failed aside-move changes nothing:
+      # `_ver_layout` never reads it.
+      [ "$VER_LAYOUT" = directory ] || return 1
+      echo "\$HOME/ccrc is still the pre-versioned directory; the migration did not leave it moved"
+      return 0 ;;
+    foreign|unreadable)
+      [ "$VER_LAYOUT" = "$pl" ] || return 1
+      echo "\$HOME/ccrc is still $VER_WHY, which the spine refused to place over"
+      return 0 ;;
+  esac
+  return 1
+}
+
+# `_upd_unwind <legacy_from> <put_rec> <rec_body> <put_caps> <caps_body>`
+# (D-3462; D-3459 amended) — undo what `cmd_update` did BEFORE its staged
+# spine, for a run that replaced nothing. Sets `UPD_UNWIND_SAID` to the
+# clauses for the die sentence, each led by `; ` (empty when nothing was
+# done). Never dies.
+#   - `legacy_from`, when `_upd_legacy_target` flipped `~/ccrc`, is the
+#     version it named before: the link goes back (D-3459's mechanism and
+#     sentences), or the next restart runs a voided older version.
+#   - `put_rec` / `put_caps` (1) rewrite the completed-install record and the
+#     caps file the run removed, from the bodies it held: tmp + one rename,
+#     mode 644, as the spine writes them, through `_plat_mv_notdir`. A failed
+#     write names itself, since the box then reads `install: incomplete` and
+#     loses the cap word the control plane's resolver needs. When the legacy
+#     flip happened and the flip BACK failed, `~/ccrc` still names another
+#     tree, so NEITHER file goes back (a record over that link would vouch for
+#     a build the box is not on) and the sentence says so.
+_upd_unwind() {
+  local legacy_from="$1" put_rec="$2" rec_body="$3" put_caps="$4" caps_body="$5"
+  local ok="" bad="" held="" tmp
+  UPD_UNWIND_SAID=""
+  if [ -n "$legacy_from" ]; then
+    if _plat_ln_swap "$BOX_VERSIONS_ROOT/$legacy_from" "$BOX_TREE_DIR"; then
+      UPD_UNWIND_SAID="; \$HOME/ccrc points back at \$HOME/ccrc-versions/$legacy_from"
+    else
+      UPD_UNWIND_SAID="; \$HOME/ccrc still points at \$HOME/ccrc-versions/$UPD_VERSION, and flipping it back to $legacy_from failed"
+      # A record or caps put back over a link that failed to go back would
+      # vouch for a build the box is not on (`current` on the pre-update
+      # build while `~/ccrc` names another directory), and a retry could be
+      # skipped as converged. Neither goes back; the sentence says so.
+      [ "$put_rec" -ne 1 ] || held="completed-install record"
+      [ "$put_caps" -ne 1 ] || held="${held:+$held, }caps"
+      put_rec=0 put_caps=0
+      [ -z "$held" ] || UPD_UNWIND_SAID="$UPD_UNWIND_SAID; not put back — \$HOME/ccrc names another tree: $held"
+    fi
+  fi
+  # `_plat_mv_notdir` (D-2187's idiom), not `mv -f`: a directory standing at
+  # the destination refuses rather than swallowing the file, and the failure
+  # is named below like any failed write.
+  if [ "$put_rec" -eq 1 ]; then
+    tmp="$BOX_INSTALLED_FILE.tmp.$$"
+    if printf '%s' "$rec_body" > "$tmp" 2>/dev/null && chmod 644 "$tmp" && _plat_mv_notdir "$tmp" "$BOX_INSTALLED_FILE" 2>/dev/null; then
+      ok="completed-install record"
+    else
+      rm -f -- "$tmp" 2>/dev/null; bad="completed-install record"
+    fi
+  fi
+  if [ "$put_caps" -eq 1 ]; then
+    tmp="$BOX_CAPS_FILE.tmp.$$"
+    if printf '%s' "$caps_body" > "$tmp" 2>/dev/null && chmod 644 "$tmp" && _plat_mv_notdir "$tmp" "$BOX_CAPS_FILE" 2>/dev/null; then
+      ok="${ok:+$ok, }caps"
+    else
+      rm -f -- "$tmp" 2>/dev/null; bad="${bad:+$bad, }caps"
+    fi
+  fi
+  [ -z "$ok" ] || UPD_UNWIND_SAID="$UPD_UNWIND_SAID; put back as they were: $ok"
+  [ -z "$bad" ] || UPD_UNWIND_SAID="$UPD_UNWIND_SAID; could NOT be put back: $bad (the box reads install: incomplete until the next install)"
+  return 0
 }
 
 # ── _upd_health_version — what the server on THIS box says it runs ───────
@@ -14556,6 +15899,26 @@ _upd_gate() {   # <role> <version> -> 0 at the first pass, 1 when the window end
   return 1
 }
 
+# `_upd_last_report` (W6 Task 8A, the floor's refusal after a restore) — the
+# phase and target the PREVIOUS run left in `~/.ccrc/update.json`, into
+# UPD_LAST_PHASE / UPD_LAST_TARGET. `cmd_update` calls it right after taking
+# the lock and before this run writes anything, because this run's own first
+# report (`resolving`) replaces the file before `_upd_floor_check` runs. Every
+# field is shape-checked (the file is same-user-writable by every session on
+# the box); anything unreadable — absent, unsafe, no jq, not an object —
+# leaves both empty, which the floor's refusal reads as "no such update", never
+# as a guess. Reads only; the one shared guard (`_upd_report_readable`) first.
+_upd_last_report() {
+  local out="" a="" b=""
+  UPD_LAST_PHASE=""; UPD_LAST_TARGET=""
+  _upd_report_readable && command -v jq >/dev/null 2>&1 || return 0
+  out="$(jq -r 'if type == "object" then "\(if (.phase | type) == "string" then .phase else "-" end) \(if (.target | type) == "string" then .target else "-" end)" else empty end' -- "$BOX_UPDATE_JSON" 2>/dev/null)" || out=""
+  read -r a b <<<"$out"
+  [[ "$a" =~ ^[a-z-]{1,32}$ ]] && UPD_LAST_PHASE="$a"
+  [[ "$b" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && UPD_LAST_TARGET="$b"
+  return 0
+}
+
 # ── _upd_floor_check <via> <downgrade> <from> — never below the floor by accident ─
 # (design 2026-09-20 §9, decision 8). Checked against the RESOLVED version,
 # whichever way it was resolved — `--to`, or `latest/download` — because a
@@ -14602,7 +15965,26 @@ _upd_floor_check() {
     echo "update: WARN: $UPD_VERSION is below this box's floor $floor (resolved by $via) — proceeding because --downgrade was typed; the floor stays $floor"
     return 0
   fi
-  _ccrc_die "$UPD_VERSION (resolved by $via) is below this box's floor $floor ($BOX_FLOOR_FILE: the highest version this box completed an install of) — moving down is a typed act: ccrc update --to $UPD_VERSION --downgrade. Nothing on this box was changed"
+  # The floor is raised inside the staged spine, BEFORE the health gate (spec
+  # §9's placement stands), and a restore never lowers it — so a failed
+  # update that restored leaves the floor above the release the box runs.
+  # When the last run's report says exactly that — a `reverted` phase whose
+  # target is the floor's own tag — the refusal names that last update and
+  # that its gate failed and it was restored, so the operator sees why
+  # `--downgrade` is being asked for. It does NOT say the update "raised" the
+  # floor: when the floor already equalled that tag from an earlier install
+  # the update raised nothing, and the sentence has to stay true then too. For
+  # the same reason it carries NO tail about where the box runs now: after a
+  # same-tag restore (floor v2.0.0, `update --to v2.0.0 --force` failed its
+  # gate and was restored) the box runs the floor's own tag, not a release
+  # below it. The clause is exactly what the report proves and no more.
+  # Anything else, including an unreadable or absent report, names the floor
+  # alone.
+  local raised=""
+  if [ "$UPD_LAST_PHASE" = reverted ] && [ "$UPD_LAST_TARGET" = "$floor" ]; then
+    raised=" — the last update, to $floor, failed its health gate and was restored"
+  fi
+  _ccrc_die "$UPD_VERSION (resolved by $via) is below this box's floor $floor ($BOX_FLOOR_FILE: the highest version this box completed an install of)$raised — moving down is a typed act: ccrc update --to $UPD_VERSION --downgrade. Nothing on this box was changed"
 }
 
 # ── _upd_floor_word — the floor as ONE word, for `update --check` (M3) ────
@@ -14810,7 +16192,22 @@ _upd_asset_listed() {
   # own call is the same), so `_upd_resolve`'s validation cannot be relied
   # on to have run first.
   _upd_validate_timeout CCRC_RELEASE_CONNECT_TIMEOUT 10
-  _upd_validate_timeout CCRC_RELEASE_PROBE_MAX_TIME 15
+  # W6 Task 8A (the pre-detach probe's bound, refuted-and-noted in review
+  # 167): THIS call site is the one `cmd_rollback --detach` runs before it
+  # detaches, under W5's `UPDATE_SPAWN_TIMEOUT_MS` (20 s) on that parent — and
+  # the generic validator's ceiling of 3600 let an override of 25 through
+  # silently, so a slow release host surfaced as W5's own `spawn-failed`
+  # timeout instead of this verb's named refusal. The ceiling is applied at
+  # this call site only (`_upd_resolve`'s validation of the same knob keeps the
+  # generic one: nothing spawns it under a deadline): a whole number from 1 to
+  # 18, two seconds under the 20 for the parent's own start-up and its refusal.
+  # An override above it WARNs, naming the variable, and falls back to 15. The
+  # validator REWRITES the global, though, so once this ran the rest of the
+  # process — a later bundle fetch, the refusal sentences that name the bound —
+  # uses the corrected 15 too. That is deliberate: the sentences must name the
+  # bound that was actually applied.
+  _upd_validate_timeout CCRC_RELEASE_PROBE_MAX_TIME 15 \
+    "a whole number of seconds from 1 to 18 (the pre-detach check must answer inside W5's 20-second spawn deadline)" 18
   code="$(curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --max-time "$CCRC_RELEASE_PROBE_MAX_TIME" \
     -o /dev/null -w '%{http_code}' "$(_upd_release_base)/download/$1/$2" 2>/dev/null)" || rc=$?
@@ -14820,10 +16217,11 @@ _upd_asset_listed() {
 }
 
 # ── _upd_restore <role> <reason> <old_version> <old_sha> <old_completed> ──
-# a failed gate returns the box (design 2026-09-20 §11). Arm 1 (a kept
-# version directory) is wave 6's; this wave has arm 2 — re-install the
-# release that was running, as a synchronous child under THIS run's lock —
-# falling to arm 3 — copy this run's backup back. Returns 0; the caller
+# a failed gate returns the box (design 2026-09-20 §11). Arm 1 — flip
+# ~/ccrc back to the previous tag's kept version and re-run its own spine,
+# no download (W6 Task 4) — falling to arm 2 — re-install the release that
+# was running, as a synchronous child under THIS run's lock — falling to
+# arm 3 — copy this run's backup back. Returns 0; the caller
 # exits 4. NO SWEEP: the gate failed before this run's `_upd_sweep` ever
 # fired, so the supervisors never left the build a restore returns to.
 # Called from the main shell only: arm 2's child proves its lock exemption
@@ -14838,6 +16236,7 @@ _upd_restore() {
   local role="$1" reason="$2" old_version="${3:-}" old_sha="${4:-}" old_completed="${5:-0}"
   _upd_phase restoring "$reason"
   echo "update: RESTORING — $reason; returning this box to the build it ran before this update (no supervisor sweep: they never moved in this run)"
+  _upd_restore_arm1 "$role" "$reason" "$old_version" "$old_completed" && return 0
   _upd_restore_arm2 "$reason" "$old_version" "$old_completed" && return 0
   # Fix round 2, F1 (review 167): `old_completed` now reaches arm 3 too — it
   # never did before this round, which is exactly F1's defect (arm 3's
@@ -14877,19 +16276,24 @@ _upd_restore_arm2() {
     *) echo "update: arm 2: ~/.ccrc/previous is unreadable or malformed — arm 3"; return 1 ;;
   esac
   # Fix round 2, F1+F2 (review 167; rulings item 1), ALSO — the check above
-  # covers only the case `old_completed` itself proves; it left F2 open: a
-  # same-tag run with NO completed record (so the check above never fires)
-  # can still find `previous` naming the exact tag that just failed, because
-  # `_upd_write_previous`'s same-tag keep (D-3254 (a)) is UNCONDITIONAL and a
-  # DIFFERENT-tag run with no completed record keeps whatever `previous`
-  # already held (D-3254 (b)) — which an earlier still-open move, or a prior
-  # restore, may already have set to THIS run's own target. Either way, the
-  # tag arm 2 is about to hand its child (`$UPD_PREV_TAG`) is the tag that
-  # just failed its gate (`$UPD_VERSION`) — re-installing it would not
-  # restore anything, per C1 ("arm 2 never 'restores' to the tag whose
-  # install just failed"), so this checks it directly, AFTER the read above,
-  # off what THIS run's own `_upd_write_previous` actually left on disk —
-  # `with or without a completed record` (the coordinator's own words).
+  # covers only the case `old_completed` itself proves; it left F2 open, in
+  # TWO shapes. (a) A same-tag run with NO completed record (so the check
+  # above never fires) can still find `previous` naming the exact tag that
+  # just failed, because `_upd_write_previous`'s same-tag keep (D-3254 (a))
+  # is UNCONDITIONAL and a DIFFERENT-tag run with no completed record keeps
+  # whatever `previous` already held (D-3254 (b)) — which an earlier
+  # still-open move, or a prior restore, may already have set to THIS run's
+  # own target. (b) A different-tag DOWNGRADE with no record: the stamp reads
+  # v2.0.0, `previous` names v1.0.0, and `update --to v1.0.0 --downgrade`
+  # keeps `previous` by (b), so it names the target that just failed even
+  # though `old_version` and `UPD_VERSION` differ (review 173's P3: this
+  # comment once described only (a)). Either way, the tag arm 2 is about to
+  # hand its child (`$UPD_PREV_TAG`) is the tag that just failed its gate
+  # (`$UPD_VERSION`) — re-installing it would not restore anything, per C1
+  # ("arm 2 never 'restores' to the tag whose install just failed"), so this
+  # checks it directly, AFTER the read above, off what THIS run's own
+  # `_upd_write_previous` actually left on disk — `with or without a
+  # completed record` (the coordinator's own words).
   if [ "$UPD_PREV_TAG" = "$UPD_VERSION" ]; then
     echo "update: arm 2: previous ($UPD_PREV_TAG) also names $UPD_VERSION, the release that just failed its gate — re-installing it would not restore anything; arm 3"
     return 1
@@ -14956,44 +16360,59 @@ _upd_restore_arm2() {
 # coord.db), then restarts the role's main unit so it runs the copied-back
 # dists. The tree is usually MIXED: shared/, ccd/ and node_modules are the
 # new install's, the dists the old one's — and the remedy for that is
-# deploy.sh, which the sentence names. Review fix round 1 I3: the ONE
-# exception is a same-tag run (item 2) whose STAGED sha turned out equal to
-# the OLD (running) build's sha AND whose running build was itself a
-# COMPLETED install of that tag (`old_completed` — fix round 2, F1, review
-# 167: NARROWED here; I3 shipped this without it) — a genuine REPEAT, not a
-# rebuild under the same tag — where copying the old dists back over the new
-# shared/ccd/node_modules restores byte-identical content on every side, so
-# nothing is actually mixed. A same-tag run with NO completed record (arm 2
-# already ruled out restoring `previous` there — see its own header) still
-# reaches arm 3, but the backup it copies back is a snapshot of a tree that
-# may ITSELF have been half-installed before this run ever started — so arm
-# 3 says only that the PRE-UPDATE tree came back, not that nothing is mixed.
+# deploy.sh, which the sentence names.
+#
+# THE VERDICT IS THREE CASES, AND THE STAGED SHA DECIDES MIXED (fix round 2,
+# F1, review 167, and the coordinator's ruling on review 173's F1r, W6 Task 8A):
+#   - a staged sha that differs from the pre-update stamp's sha: MIXED, with
+#     or without a completed record. `_upd_backup_set`'s `tree` rows are all
+#     this arm copies back; `_inst_tree`'s wholesale copies (shared/, the
+#     tree's ccd/, node_modules, build.json) stay the new install's, so the
+#     backup disagrees with the staged content whether or not the record says
+#     the old build was ever whole. Same tag or not.
+#   - the same sha with a completed record (`old_completed`): the same build,
+#     not mixed — a genuine REPEAT, where copying the old dists back over the
+#     new shared/ccd/node_modules restores byte-identical content everywhere.
+#   - the same sha with no record: the PRE-UPDATE tree came back, which may
+#     itself have been half-installed before this run ever started.
+# The last two need a SAME-TAG run (`old_version` = `$UPD_VERSION`); a
+# different tag has no same sha to speak of.
+#
+# HOW A RUN REACHES ARM 3 (W6: arm 1 and arm 2 answer first). Arm 1 refuses
+# on a layout that is not versioned, a `previous` that is absent, untagged or
+# malformed, a `previous` naming the target, a same-tag run over a completed
+# install, or a previous version that is not kept complete — and arm 2 then
+# refuses or fails as its own header says. A same-tag run with no completed
+# record reaches arm 3 when `previous` is absent, untagged or malformed, when
+# `previous` names the target (arm 2's skip for the tag that just failed), or
+# when arm 2's child fails. It is NOT that arm 2 "ruled out restoring
+# `previous` there": arm 2 does restore `previous` in that case, and its
+# header and its pin say so. The one-time migration run and an unmigrated
+# layout still reach it too.
 _upd_restore_arm3() {
   local role="$1" reason="$2" old_version="${3:-}" old_sha="${4:-}" old_completed="${5:-0}"
   local class src name back main=ccrc.service n=0 bad=0 missing=0 rrc=0 crc2=0 note="" unrec=""
   [ "$role" = fleet ] && main=ccrc-agent.service
   # D-3288 (found in fix round 1, review 155 C1; AMENDED in place, fix round
-  # 2 F1, review 167 — see the plan's Deviations): a same-tag run
-  # (`old_version = $UPD_VERSION`) whose staged sha equals the OLD build's
-  # sha is a REPEAT of the exact release that was running, not a rebuild —
-  # UNLESS `old_completed` is 0, in which case the OLD build was never
-  # proven whole on that tag to begin with, so the tree the backup holds
-  # might already have been mixed before this run started; "not mixed" is
-  # then a claim arm 3 cannot make. `old_completed` is passed through from
-  # `_upd_restore` (round 1 stopped one call short of doing so — F1's own
-  # defect).
-  # `same_tag` (may-be-mixed, uncertain) fires ONLY when `old_completed=0`:
-  # a same-tag run whose running build WAS proven complete but whose staged
-  # sha DIFFERS is a genuine REBUILD, not an unproven tree — that case still
-  # takes the definite MIXED/deploy.sh branch below, exactly as round 1
-  # shipped it (a fixture pins this: `old_completed=1`, a DIFFERENT staged
-  # sha, still says MIXED).
+  # 2 F1, review 167, and again for review 173's F1r — see the plan's
+  # Deviations): the STAGED SHA decides MIXED, whatever the record says. A
+  # same-tag run (`old_version = $UPD_VERSION`) whose staged sha equals the
+  # OLD build's sha is a REPEAT of the release that was running, not a
+  # rebuild: with a completed record (`old_completed`) that is `same_build`
+  # (not mixed); with none it is `same_tag` (the pre-update tree, which may
+  # itself be mixed — the OLD build was never proven whole, so "not mixed"
+  # is a claim arm 3 cannot make). Any other run — a different tag, or a
+  # staged sha that differs from the stamp's, with or without a record — sets
+  # neither: the backup disagrees with the staged content, and that is real
+  # whether or not the old build was ever whole, so it takes the definite
+  # MIXED/deploy.sh branch below. An unmeasured sha on either side proves
+  # no sameness and reads the same way. `old_completed` is passed through
+  # from `_upd_restore` (round 1 stopped one call short of doing so).
   local same_build=0 same_tag=0
-  if [ -n "$old_version" ] && [ "$old_version" = "$UPD_VERSION" ]; then
+  if [ -n "$old_version" ] && [ "$old_version" = "$UPD_VERSION" ] \
+     && [ -n "$UPD_STAGED_SHA" ] && [ -n "$old_sha" ] && [ "$UPD_STAGED_SHA" = "$old_sha" ]; then
     if [ "$old_completed" -eq 1 ]; then
-      if [ -n "$UPD_STAGED_SHA" ] && [ -n "$old_sha" ] && [ "$UPD_STAGED_SHA" = "$old_sha" ]; then
-        same_build=1
-      fi
+      same_build=1
     else
       same_tag=1
     fi
@@ -15014,6 +16433,29 @@ _upd_restore_arm3() {
     echo "update: arm 3: could not remove the completed-install record — this box may still read as converged on the build being backed out"
     unrec=" (the completed-install record could not be removed)"
   fi
+  # D-3441 (W6 Task 4): the copy below lands
+  # through the link, in the version ~/ccrc points at — which then holds a
+  # MIXED tree. Voided FIRST, as the record above is (D-3260): no later flip
+  # returns to it, and GC reads it incomplete.
+  _ver_layout
+  case "$VER_LAYOUT" in
+    linked|migrated)
+      # The line says what THIS run's verdict will say (review 173's F1r: every
+      # write on this path is true): a definite MIXED tree, one that may be, or
+      # — the same build, the same sha, a completed record — content the
+      # backup and the staged install share. The record is voided in all three:
+      # arm 3's copy is best effort, and no flip should return to a tree it
+      # wrote into.
+      local lands="so it will hold a MIXED tree"
+      [ "$same_tag" -eq 1 ] && lands="so it may hold a MIXED tree"
+      [ "$same_build" -eq 1 ] && lands="and nothing is mixed there (the same build), but arm 3's copy is best effort"
+      if rm -f -- "$BOX_TREE_DIR/$VER_RECORD_COPY" 2>/dev/null; then
+        echo "update: arm 3: \$HOME/ccrc-versions/$VER_CURRENT is where the copy lands, $lands — its kept install record is removed first, so no flip returns to it"
+      else
+        echo "update: arm 3: could not remove \$HOME/ccrc-versions/$VER_CURRENT's kept install record — a later flip could return to a tree arm 3 wrote into"
+        unrec="$unrec (the kept install record of $VER_CURRENT could not be removed)"
+      fi ;;
+  esac
   echo "update: arm 3: copying this run's pre-update backup ($(_upd_redact "$UPD_BACKUP_DIR")) back over the install"
   while IFS=$'\t' read -r class src name; do
     [ "$class" = tree ] || continue
@@ -15078,13 +16520,15 @@ _upd_restore_arm3() {
       _upd_phase reverted "arm3: restored $UPD_VERSION (same build, not mixed) with $missing path(s) MISSING$note; $reason"
     fi
   elif [ "$same_tag" -eq 1 ]; then
-    # Fix round 2, F1 (review 167): the SAME tag came back, but `old_completed`
-    # or the staged sha (or both) do not prove it is the SAME build — so this
-    # is honest about what is actually known: the tree put back is the
-    # PRE-UPDATE tree, which may itself have been mixed (a prior spine that
-    # died half-way through installing this very tag, before this run ever
-    # started). Never `deploy.sh` here — that remedy is for a tree definitely
-    # mixed between two DIFFERENT tags, which this is not.
+    # The SAME tag AND the SAME sha came back, but no completed-install
+    # record proves that sha was ever a whole install — so this is honest
+    # about what is actually known: the tree put back is the PRE-UPDATE tree,
+    # which may itself have been mixed (a prior spine that died half-way
+    # through installing this very build, before this run ever started).
+    # Never `deploy.sh` here: nothing is KNOWN to be mixed — the staged
+    # content and the backup agree, so the one open question is the
+    # pre-update tree's own completeness, which a reinstall answers. (A
+    # staged sha that DIFFERS never reaches this branch; it is MIXED.)
     if [ "$missing" -eq 0 ]; then
       echo "update: REVERTED (arm 3): copied the pre-update backup back — this box's tree is $UPD_VERSION again, the PRE-UPDATE tree, which may itself be MIXED. Read 'ccrc doctor' for its state, or once healthy: ccrc update --to $UPD_VERSION --force. Best effort."
       _upd_phase reverted "arm3: restored $UPD_VERSION (pre-update tree, may be mixed)$note; $reason"
@@ -15093,6 +16537,10 @@ _upd_restore_arm3() {
       _upd_phase reverted "arm3: restored $UPD_VERSION (pre-update tree, may be mixed) with $missing path(s) MISSING$note; $reason"
     fi
   elif [ "$missing" -eq 0 ]; then
+    # MIXED: the staged sha differs from the pre-update stamp's (or the run
+    # is another tag's), whatever the completed-install record says — the
+    # backup's `tree` rows are the old content, the wholesale copies the new,
+    # so the tree is mixed even for a same-tag REBUILD (review 173 F1r).
     echo "update: REVERTED (arm 3): copied the pre-update backup back — the tree is MIXED (new shared/, ccd/ and node_modules under the old dists); the remedy is deploy.sh. Best effort."
     _upd_phase reverted "arm3: tree MIXED, deploy.sh is the remedy$note; $reason"
   else
@@ -15101,6 +16549,317 @@ _upd_restore_arm3() {
     echo "update: REVERTED (arm 3): copied the pre-update backup back — the tree is MIXED AND $missing path(s) are MISSING (read the arm 3 lines above for where); the remedy is deploy.sh. Best effort."
     _upd_phase reverted "arm3: tree MIXED with $missing path(s) MISSING, deploy.sh is the remedy$note; $reason"
   fi
+}
+
+# ── W6 Task 4: a kept version, and the flip back to it ─────────────────────
+# `_ver_kept <name> <role>` — can a flip return to ~/ccrc-versions/<name>?
+# rc 0 complete; rc 1 absent (no REAL directory of that name — a symlink
+# there is nothing this ccrc placed); rc 2 incomplete, VER_WHY naming the
+# first missing piece. "Complete" is the placement's own evidence, never a
+# guess: the tree's `ccd/ccrc` (the spine a flip runs), the role's build
+# (what its unit starts), and the two copies `_ver_keep_state` writes when
+# an install of it COMPLETED — the record last, so its presence is the mark.
+# A tag-shaped name must also be what its kept stamp says, or a flip would
+# restore one build's stamp over another's tree. An empty role reads `both`,
+# the staged spine's own default. Prints nothing.
+_ver_kept() {   # <name> <role> -> 0 complete, 1 absent, 2 incomplete (VER_WHY)
+  local name="$1" role="${2:-both}" vdir="$BOX_VERSIONS_ROOT/$1" v=""
+  local -a saved=()
+  VER_WHY=""
+  if [ -L "$vdir" ] || [ ! -d "$vdir" ]; then
+    VER_WHY="no kept version $name under \$HOME/ccrc-versions"
+    return 1
+  fi
+  [ -f "$vdir/ccd/ccrc" ] || { VER_WHY="no ccd/ccrc"; return 2; }
+  if [ "$role" = fleet ]; then
+    [ -f "$vdir/agent/dist/agent/src/index.js" ] || { VER_WHY="no agent build"; return 2; }
+  else
+    [ -f "$vdir/server/dist/server/src/index.js" ] || { VER_WHY="no server build"; return 2; }
+  fi
+  [ -f "$vdir/$VER_STAMP_COPY" ] || { VER_WHY="no kept stamp"; return 2; }
+  [ -f "$vdir/$VER_RECORD_COPY" ] || { VER_WHY="no kept install record"; return 2; }
+  # The one stamp parser, pointed at the kept copy — `_upd_converged`'s
+  # save-and-restore, so the caller keeps the box's own fields.
+  saved=(${BOX_BUILD[@]+"${BOX_BUILD[@]}"})
+  if ! _box_build_fields "$vdir/$VER_STAMP_COPY"; then
+    BOX_BUILD=(${saved[@]+"${saved[@]}"})
+    VER_WHY="its kept stamp does not parse"
+    return 2
+  fi
+  v="${BOX_BUILD[4]}"
+  BOX_BUILD=(${saved[@]+"${saved[@]}"})
+  if [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$v" != "$name" ]; then
+    VER_WHY="its kept stamp reads ${v:-an unversioned build}, not $name"
+    return 2
+  fi
+  return 0
+}
+
+# `_ver_can_flip` — can this box make the $HOME/ccrc flip? (W6 Task 4,
+# D-3419 as amended). `_plat_ln_swap`'s Darwin arm is
+# python3's os.replace, and `cmd_install`'s Darwin preflight names python3
+# for every spine. Two flips run in the `cmd_update`/`cmd_rollback` PARENT,
+# where no spine preflight has run — `_ver_flip_back`'s and
+# `_upd_legacy_target`'s — and each asks this first, so a missing python3 is
+# named before anything moves instead of surfacing as "the one rename
+# failed". Not a verb-level probe: a Darwin `ccrc update` that flips nothing
+# (a `directory` box moving to an older spine, or `--check`) needs no
+# python3. The probe RUNS the interpreter (`import os`, the flip's own first
+# word — the same probe as `cmd_install`'s preflight), because `command -v` is
+# true on stock macOS for the /usr/bin/python3 xcode-select stub, which fails
+# when run until the Command Line Tools are installed: the named refusal would
+# never fire there and the flip would die as "the one rename failed" (final
+# review F7). Two sentences, because they have two remedies' first steps: no
+# python3 on PATH, and one that does not run.
+_ver_can_flip() {   # -> 0 can flip; 1 cannot (VER_WHY)
+  VER_WHY=""
+  if [ "$CCD_OS" = darwin ] && ! python3 -c 'import os' >/dev/null 2>&1; then
+    if command -v python3 >/dev/null 2>&1; then
+      VER_WHY="python3 is on PATH but does not run (on macOS /usr/bin/python3 is only a stub until the Xcode Command Line Tools are installed) — the \$HOME/ccrc flip is one rename(2) through os.replace; install them: xcode-select --install"
+    else
+      VER_WHY="python3 is not on PATH — on macOS the \$HOME/ccrc flip is one rename(2) through os.replace; install the Xcode Command Line Tools: xcode-select --install"
+    fi
+    return 1
+  fi
+  return 0
+}
+
+# `_ver_flip_back <name> <role> <prefix>` (D-3439)
+# — point ~/ccrc at the kept version (ONE rename, `_plat_ln_swap`), restore
+# its kept stamp, clear the record, and run THAT version's own `ccrc
+# install` from the flipped tree: it re-places what the tree feeds outside
+# itself (`~/.local/bin/ccd` and the other executables, the session hooks,
+# the units), and its `_inst_enable` is the restart. rc 0: flipped, and its
+# spine COMPLETED — the record it writes last is present; a trailing doctor
+# FAIL with the record written is a completed spine (D-3114's reading).
+# rc 1: nothing changed (VER_WHY). rc 2: flipped, but the spine did not
+# complete (VER_WHY) — ~/ccrc stays on <name> and the box reads
+# `incomplete`, which is true.
+#   The STAMP is restored for a spine too old to stamp from its kept copy
+# (`_inst_stamp_shipped`'s fallback is this wave's). The RECORD is cleared,
+# never restored: a record written before the spine would make "present
+# afterwards" true for a spine that never ran — `cmd_update`'s own rule for
+# its staged spine. The spine writes it back, byte-equal to the kept copy,
+# because `CCRC_UPDATE_VERIFIED=1` is passed exactly when that copy says the
+# version was verified: a verified version stays verified, an unverified
+# one is never promoted. The caps file is cleared beside it (D-3147's
+# reason). The lock descriptor is closed for the spine as `cmd_update`
+# closes it for its staged one. Main shell only.
+#   D-3461: rc 0 does not say the spine's trailing doctor was clean — the
+# spine's own exit is left in `VER_SPINE_RC` (0 where it did not run), so the
+# caller that owns the exit table can read a completed spine under a failing
+# doctor as D-3114's 3. The 0/1/2 return contract is unchanged.
+_ver_flip_back() {   # <name> <role> <prefix>
+  local name="$1" role="$2" say="$3" vdir="$BOX_VERSIONS_ROOT/$1" krc=0 src=0 m1="" m2=""
+  local stamp="$BOX_STAMP_FILE"
+  local rec="$BOX_INSTALLED_FILE"
+  local -a spine=(bash "$BOX_TREE_DIR/ccd/ccrc" install)
+  local -a spine_env=(env -u CCRC_UPDATE_LOCK_HELD -u CCRC_UPDATE_VERIFIED -u CCRC_UPDATE_SPINE)
+  VER_SPINE_RC=0
+  _ver_can_flip || return 1
+  _ver_kept "$name" "$role" || krc=$?
+  case "$krc" in
+    0) ;;
+    1) return 1 ;;
+    *) VER_WHY="\$HOME/ccrc-versions/$name is incomplete ($VER_WHY)"; return 1 ;;
+  esac
+  { IFS= read -r m1; IFS= read -r m2; } < "$vdir/$VER_RECORD_COPY" 2>/dev/null || :
+  [ "$m2" = unsigned ] || spine_env=(env -u CCRC_UPDATE_LOCK_HELD CCRC_UPDATE_VERIFIED=1 CCRC_UPDATE_SPINE=$$)
+  [ -n "$role" ] && spine+=(--role "$role")
+  if ! _plat_ln_swap "$vdir" "$BOX_TREE_DIR"; then
+    VER_WHY="the one rename that points \$HOME/ccrc at \$HOME/ccrc-versions/$name failed"
+    return 1
+  fi
+  # THE RECORD AND CAPS GO FIRST (final review F6): rc 2 promises "the box
+  # reads `incomplete`", and a stamp restore that died before this clear
+  # left the OLD build's record beside the flipped link — a box that reads
+  # `current` on a tree nobody finished installing.
+  if ! rm -f -- "$rec" "$BOX_CAPS_FILE"; then
+    VER_WHY="the completed-install record could not be cleared before its spine ran"
+    return 2
+  fi
+  if ! { mkdir -p -- "${stamp%/*}" && cp -- "$vdir/$VER_STAMP_COPY" "$stamp.tmp.$$" \
+           && chmod 644 "$stamp.tmp.$$" && _plat_mv_notdir "$stamp.tmp.$$" "$stamp"; }; then
+    rm -f -- "$stamp.tmp.$$"
+    VER_WHY="its kept stamp could not be put back as this box's stamp"
+    return 2
+  fi
+  echo "$say: flip: \$HOME/ccrc -> \$HOME/ccrc-versions/$name (one rename); its kept stamp restored — running its own spine: bash \$HOME/ccrc/ccd/ccrc install${role:+ --role $role}"
+  if [ -n "${UPD_LOCK_FD:-}" ]; then
+    ( exec {UPD_LOCK_FD}>&-; exec "${spine_env[@]}" "${spine[@]}" ) || src=$?
+  else
+    "${spine_env[@]}" "${spine[@]}" || src=$?
+  fi
+  VER_SPINE_RC="$src"
+  if [ ! -f "$rec" ]; then
+    VER_WHY="its own spine exited $src without writing its completed-install record"
+    return 2
+  fi
+  [ "$src" -eq 0 ] || echo "$say: flip: $name's spine completed (its record is written) but its trailing doctor exited $src — the FAIL lines above are the box's health; the gate decides"
+  echo "$say: flip: \$HOME/ccrc -> \$HOME/ccrc-versions/$name; its stamp and install record restored; its own spine re-placed the executables, hooks and units (no release download)"
+  return 0
+}
+
+# ── _upd_restore_arm1 <role> <reason> — a flip back to the kept previous ───
+# version (design §11's arm 1, W6 Task 4). rc 0 restored; rc 1 fall to arm
+# 2. Every refusal BEFORE a flip names its reason and changes nothing. After
+# the flip, `_ver_flip_back` re-runs the kept version's own spine and the
+# gate runs once more, on THAT tag. A ~/ccrc that never left <prev> is no
+# refusal (D-3445): a staged spine that died leaving the link on <prev>
+# and a step marker `_upd_step_moved` reads as moved WITHOUT
+# `_upd_tree_untouched` ever being consulted (that re-measurement runs only
+# for a marker naming `_inst_tree`, D-3457): an unreadable marker, or a
+# newer spine's step this ccrc's `CCRC_INST_SPINE` does not list. The gate
+# ran and failed while the running version was untouched. (A W6 spine that
+# died inside `_inst_tree` before its flip never gets here: since D-3457 it
+# exits 1 before any gate.) Arm
+# 2 would re-download <prev>, and that child's same-name path would rsync
+# `--delete` and `npm ci` INTO the directory the live units run from. In
+# place, the rename is onto the target the link already names, and the
+# kept spine runs from that version with its kept record present: no copy,
+# no `npm ci`. If either fails
+# (D-3443), ~/ccrc is pointed back at the version
+# this run installed and the completed-install record is cleared: arm 2's
+# child is then the NEW tree's `ccd/ccrc` (wave 4's arm 2 assumes it), and
+# it finds a box that reads `incomplete`. With arm 1's restored stamp and the
+# kept spine's record left in place, that child's `_upd_converged` would
+# answer "already runs <prev>" and install nothing while ~/ccrc names the new
+# version. Main shell only (arm 2's `$PPID` rule is the caller's).
+#   The re-gate rewrites UPD_GATE_WHY, and `cmd_update`'s exit-4 sentence,
+# printed after `_upd_restore` returns, names the FIRST gate's failure from
+# it — so the first gate's words are put back on both results
+# (D-3444).
+_upd_restore_arm1() {   # <role> <reason> <old_version> <old_completed>
+  local role="$1" reason="$2" old_version="${3:-}" old_completed="${4:-0}" prc=0 krc=0 frc=0 cur="" why="" back="" first_why="$UPD_GATE_WHY"
+  local where="" done_as=""
+  _upd_read_previous || prc=$?
+  case "$prc" in
+    0) ;;
+    1) echo "update: arm 1: no ~/.ccrc/previous — arm 2"; return 1 ;;
+    2) echo "update: arm 1: the previous build carried no tag — arm 2"; return 1 ;;
+    *) echo "update: arm 1: ~/.ccrc/previous is unreadable or malformed — arm 2"; return 1 ;;
+  esac
+  # Wave 4's two arm-2 refusals (its fix rounds' same-tag and
+  # previous-is-the-target checks), applied before any flip: a same-tag
+  # rerun over a COMPLETED install of that tag is not returned to `previous`
+  # (the last DIFFERENT release), and `previous` naming the tag that just
+  # failed is nothing to return to.
+  if [ -n "$old_version" ] && [ "$old_version" = "$UPD_VERSION" ] && [ "$old_completed" -eq 1 ]; then
+    echo "update: arm 1: this run's target is $UPD_VERSION, the release that was already running — previous ($UPD_PREV_TAG) is not the build this box ran before; arm 2"
+    return 1
+  fi
+  if [ "$UPD_PREV_TAG" = "$UPD_VERSION" ]; then
+    echo "update: arm 1: previous ($UPD_PREV_TAG) also names $UPD_VERSION, the release that just failed its gate — arm 2"
+    return 1
+  fi
+  _ver_layout
+  case "$VER_LAYOUT" in
+    linked|migrated) ;;
+    *) echo "update: arm 1: \$HOME/ccrc is not versioned ($VER_LAYOUT) — arm 2"; return 1 ;;
+  esac
+  cur="$VER_CURRENT"
+  _ver_kept "$UPD_PREV_TAG" "$role" || krc=$?
+  case "$krc" in
+    0) ;;
+    1) echo "update: arm 1: no kept version $UPD_PREV_TAG under \$HOME/ccrc-versions — arm 2"; return 1 ;;
+    *) echo "update: arm 1: \$HOME/ccrc-versions/$UPD_PREV_TAG is incomplete ($VER_WHY) — arm 2"; return 1 ;;
+  esac
+  if [ "$cur" = "$UPD_PREV_TAG" ]; then
+    # D-3445 — see the header.
+    where="\$HOME/ccrc never left \$HOME/ccrc-versions/$UPD_PREV_TAG; its own spine re-ran"
+    done_as="restored $UPD_PREV_TAG in place"
+    echo "update: arm 1: \$HOME/ccrc still points at $UPD_PREV_TAG, which is kept complete — re-running its own spine in place (no download)"
+  else
+    where="\$HOME/ccrc flipped back to \$HOME/ccrc-versions/$UPD_PREV_TAG"
+    done_as="flipped back to $UPD_PREV_TAG"
+    echo "update: arm 1: $UPD_PREV_TAG is kept at \$HOME/ccrc-versions/$UPD_PREV_TAG — flipping back to it (no download)"
+  fi
+  _ver_flip_back "$UPD_PREV_TAG" "$role" update || frc=$?
+  local spine_rc="$VER_SPINE_RC"
+  case "$frc" in
+    0)
+      # "Run the gate once more" (design §11) — on the tag it returned to.
+      if _upd_gate "$role" "$UPD_PREV_TAG"; then
+        UPD_GATE_WHY="$first_why"
+        # Final review F9: a kept spine that COMPLETED under a failing doctor
+        # (D-3461's `VER_SPINE_RC`) says so, as arm 2's rc-3 arm does — the
+        # report and the line must not read as a clean restore.
+        local doc_rep="" doc_say=""
+        if [ "$spine_rc" -ne 0 ]; then
+          doc_rep=" (its doctor exited $spine_rc)"
+          doc_say=", but its doctor exited $spine_rc ('ccrc doctor' re-reads the FAIL lines)"
+        fi
+        _upd_phase reverted "arm1: $done_as$doc_rep; $reason"
+        echo "update: REVERTED (arm 1): this box runs $UPD_PREV_TAG again — $where, no download$doc_say — $reason"
+        return 0
+      fi
+      why="gate: $UPD_GATE_WHY"
+      UPD_GATE_WHY="$first_why" ;;
+    1)
+      echo "update: arm 1: could not flip to $UPD_PREV_TAG ($VER_WHY) — nothing changed; arm 2"
+      return 1 ;;
+    *)
+      why="the spine did not complete: $VER_WHY" ;;
+  esac
+  if [ "$cur" = "$UPD_PREV_TAG" ]; then
+    back="\$HOME/ccrc stays on $cur, which it never left"
+  elif _plat_ln_swap "$BOX_VERSIONS_ROOT/$cur" "$BOX_TREE_DIR"; then
+    back="\$HOME/ccrc points at $cur again"
+  else
+    back="\$HOME/ccrc could NOT be pointed back at $cur (the one rename failed), so arm 2's child is $UPD_PREV_TAG's own ccrc"
+  fi
+  if ! rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then
+    back="$back; the completed-install record could not be cleared, so arm 2's child may read this box as already on $UPD_PREV_TAG"
+  fi
+  echo "update: arm 1 failed ($why) — $back; falling to arm 2"
+  return 1
+}
+
+# `_upd_legacy_target <tag>` (D-3440) — a staged
+# spine older than versioned installs rsyncs `--delete` into $HOME/ccrc,
+# i.e. THROUGH the link into whichever version it names. So before that
+# spine runs, ~/ccrc is pointed at a directory named for the tag it
+# installs: the kept one, or a copy of the pointed-at version (its two kept
+# copies removed — they described the source), which the old spine then
+# rewrites. The directory's name stays true, and the version this run
+# replaces is never written. A kept directory stops claiming completeness
+# first (its record copy removed): its content is about to be rewritten by
+# a spine that keeps nothing, and `_ver_keep_state update` re-marks it only
+# after that spine completes. `cmd_update` calls this BEFORE it clears the
+# record, the step marker and the caps, so a death here leaves them as they
+# were; only the backup and `previous` this run wrote are new.
+_upd_legacy_target() {   # <tag> -> 0, or dies before anything is installed
+  local tag="$1" cur="$VER_CURRENT" dir="$BOX_VERSIONS_ROOT/$1" inc="$BOX_VERSIONS_ROOT/.$1.incoming.$$" how="kept" made=0
+  local refuse="could not give $tag's older spine a directory of its own under \$HOME/ccrc-versions — nothing was installed; \$HOME/ccrc still points at $cur"
+  _ver_can_flip || _ccrc_die "$refuse ($VER_WHY)"
+  if [ -L "$dir" ] || { [ -e "$dir" ] && [ ! -d "$dir" ]; }; then
+    _ccrc_die "$refuse (\$HOME/ccrc-versions/$tag is not a directory ccrc placed)"
+  fi
+  if [ -d "$dir" ]; then
+    rm -f -- "$dir/$VER_RECORD_COPY" || _ccrc_die "$refuse"
+  else
+    how="a copy of $cur"
+    rm -rf -- "$inc" 2>/dev/null
+    if ! { cp -a -- "$BOX_VERSIONS_ROOT/$cur" "$inc" \
+             && rm -f -- "$inc/$VER_STAMP_COPY" "$inc/$VER_RECORD_COPY" \
+             && _plat_mv_notdir "$inc" "$dir"; }; then
+      rm -rf -- "$inc" 2>/dev/null
+      _ccrc_die "$refuse"
+    fi
+    made=1
+  fi
+  if ! _plat_ln_swap "$dir" "$BOX_TREE_DIR"; then
+    # D-3424: the swap can return 1 with the link ALREADY naming its target (a
+    # plain install flipped it first). Re-read the link: the directory it
+    # names is never removed, and the sentence stops saying `~/ccrc` still
+    # points at `$cur`.
+    if [ "$(readlink -- "$BOX_TREE_DIR" 2>/dev/null)" = "$dir" ]; then
+      _ccrc_die "could not give $tag's older spine a directory of its own under \$HOME/ccrc-versions — nothing was installed; \$HOME/ccrc already names \$HOME/ccrc-versions/$tag (a concurrent install may have flipped it), which was kept"
+    fi
+    [ "$made" -eq 1 ] && rm -rf -- "$dir" 2>/dev/null
+    _ccrc_die "$refuse"
+  fi
+  echo "update: tree: $tag's spine predates versioned installs and writes through \$HOME/ccrc — \$HOME/ccrc now points at \$HOME/ccrc-versions/$tag ($how) for it to write into"
 }
 
 # ── _upd_sweep — step 4: the supervisor sweep (stage 4, Task 7; R1) ───────
@@ -15590,7 +17349,7 @@ cmd_rollout() {
   # cannot hand an assignment back to its parent.
   ROLLOUT_ERRF="$(_plat_mktemp)" \
     || _ccrc_die "rollout: could not create a temp file for the boxes' stderr (mktemp failed) — nothing was touched"
-  trap '[ -z "${ROLLOUT_ERRF:-}" ] || rm -f -- "$ROLLOUT_ERRF"' EXIT
+  _exit_add '[ -z "${ROLLOUT_ERRF:-}" ] || rm -f -- "$ROLLOUT_ERRF"'
 
   # Step 1 — preflight the roles, before touching either box.
   local single=0 frole="" srole="" rrc=0
@@ -15906,6 +17665,391 @@ _bak_prune() {
   done
 }
 
+# ── ccrc versions, and the GC that never removes a needed version ─────────
+# (design 2026-09-20 §11 "GC"; W6 Task 5.) `_bak_prune` above is the sweep
+# this copies — nullglob saved and restored, a fixed shape, newest-N — and
+# the differences are the guards: a version directory is removed only when
+# nothing on this box needs it. Needed means the version `~/ccrc` points at,
+# the previous (`~/.ccrc/previous`), every tag the control plane's projection
+# names (D-3420), and every version a running
+# ccrc.service/ccrc-agent.service runs from (D-3446);
+# beyond those, the newest CCRC_VERSIONS_KEEP complete ones
+# (D-3423). An input that cannot be measured stops the whole
+# prune (D-3447); the automatic GC never removes
+# an incomplete version, which a concurrent plain install may be placing
+# (D-3448). The CALLER holds ~/.ccrc/update.lock.
+
+# `_ver_list` → VER_NAMES: every real directory directly under
+# $BOX_VERSIONS_ROOT whose name is a version name — complete ones (their kept
+# install record present) first, newest record first, then the incomplete
+# ones by name. Dot-names (a legacy target's `.incoming`) and anything else
+# are never listed, so never touched. The ordering is bash-only: no `sort`
+# binary on the install path. rc 1 (VER_WHY) when a record's mtime cannot be
+# read — the order is then unknown, and a prune that needs it is skipped;
+# VER_NAMES is still filled.
+_ver_list() {
+  VER_NAMES=()
+  local had_nullglob=0 d n t i j rc=0
+  local -a cn=() ct=() part=()
+  [ -d "$BOX_VERSIONS_ROOT" ] || return 0
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  for d in "$BOX_VERSIONS_ROOT"/*; do
+    n="${d##*/}"
+    [[ "$n" =~ $VER_NAME_RE ]] || continue
+    { [ -d "$d" ] && [ ! -L "$d" ]; } || continue
+    if [ -f "$d/$VER_RECORD_COPY" ]; then
+      t="$(_plat_mtime "$d/$VER_RECORD_COPY" 2>/dev/null)" || t=""
+      if [[ ! "$t" =~ ^[0-9]+$ ]]; then
+        t=0; rc=1; VER_WHY="the kept install record of $n has no readable mtime"
+      fi
+      cn+=("$n"); ct+=("$t")
+    else
+      part+=("$n")
+    fi
+  done
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob   # the caller's nullglob, restored (_bak_prune's idiom)
+  # Insertion sort, newest first. The glob expanded in name order and a tie
+  # never moves an element, so equal mtimes keep that order.
+  for ((i = 1; i < ${#cn[@]}; i++)); do
+    n="${cn[$i]}"; t="${ct[$i]}"; j=$((i - 1))
+    while [ "$j" -ge 0 ] && [ "${ct[$j]}" -lt "$t" ]; do
+      cn[j + 1]="${cn[$j]}"; ct[j + 1]="${ct[$j]}"; j=$((j - 1))
+    done
+    cn[j + 1]="$n"; ct[j + 1]="$t"
+  done
+  VER_NAMES=("${cn[@]}" "${part[@]}")
+  return "$rc"
+}
+
+# `_ver_running_names` → rc 0 with VER_RUNNING = the version names a RUNNING
+# ccrc.service/ccrc-agent.service command resolves to; rc 1 (VER_WHY) when
+# that cannot be measured. Spec §11 reads `systemctl --user show -p
+# ExecStart` through `readlink -f`. Three things it takes care over:
+#   - systemd prints a STRUCT, `ExecStart={ path=<p> ; argv[]=<argv> ;
+#     ignore_errors=… ; … }`, and `path=` is `/usr/bin/env` for both units:
+#     the tree path is inside argv[], which is what is read.
+#   - `readlink -f` resolves the token's VERSION PREFIX (`$HOME/ccrc`, or
+#     `$HOME/ccrc-versions/<seg>`), not the whole token: GNU `readlink -f`
+#     answers empty, rc 1, when any directory above the last component is
+#     missing (measured 2026-09-23, coreutils 9.4), and which version a
+#     command runs from is decided by its prefix alone
+#     (D-3449).
+#   - an empty answer — from `_svc_is_active` (the manager did not answer),
+#     from `readlink -f` (BSD before macOS 12.3 has no -f) — is UNMEASURED,
+#     never "not running": reading it as "not running" prunes the version the
+#     guard exists for.
+# On macOS the job's own plist is read (`_svc_plist`, `plutil -convert
+# json`), its ProgramArguments split on whitespace with the quotes
+# `_inst_plist_server` puts round the entry path stripped.
+_ver_running_names() {
+  VER_RUNNING=()
+  local unit st line argv tok pfx seg res vroot="" name json
+  local re='^ExecStart=\{ path=([^ ]*) ; argv\[\]=(.*) ; ignore_errors='
+  local -a toks=()
+  for unit in "${BOX_UNIT_NAMES[@]}"; do
+    st="$(_svc_is_active "$unit")"
+    case "$st" in
+      active|activating|deactivating|reloading|refreshing) ;;
+      inactive|failed) continue ;;   # a stopped unit runs nothing
+      *) [[ "$st" =~ ^[a-z-]{1,32}$ ]] || st="${st:+an unrecognised answer}"
+         VER_WHY="the service manager did not say whether $unit is running (${st:-no answer})"
+         return 1 ;;
+    esac
+    if [ "$CCD_OS" = darwin ]; then
+      json="$(plutil -convert json -o - "$(_svc_plist "$unit")" 2>/dev/null)" || json=""
+      argv="$(printf '%s' "$json" | jq -er '.ProgramArguments | if type == "array" and length > 0 then map(tostring) | join(" ") else error("none") end' 2>/dev/null)" \
+        || { VER_WHY="$unit is running and its job file's ProgramArguments could not be read (plutil -convert json)"; return 1; }
+    else
+      line="$(systemctl --user show -p ExecStart "$unit" 2>/dev/null)" || line=""
+      [[ "$line" =~ $re ]] || { VER_WHY="$unit's ExecStart did not parse as systemd's struct form"; return 1; }
+      argv="${BASH_REMATCH[2]}"
+    fi
+    read -r -a toks <<<"$argv"
+    for tok in "${toks[@]}"; do
+      tok="${tok#\'}"; tok="${tok#\"}"; tok="${tok%;}"; tok="${tok%\'}"; tok="${tok%\"}"
+      case "$tok" in
+        "$BOX_TREE_DIR"/*) pfx="$BOX_TREE_DIR" ;;
+        "$BOX_VERSIONS_ROOT"/*) seg="${tok#"$BOX_VERSIONS_ROOT"/}"; pfx="$BOX_VERSIONS_ROOT/${seg%%/*}" ;;
+        *) continue ;;
+      esac
+      res="$(readlink -f -- "$pfx" 2>/dev/null)" || res=""
+      [ -n "$res" ] || { VER_WHY="$unit's command names $tok, which readlink -f could not resolve"; return 1; }
+      if [ -z "$vroot" ]; then
+        vroot="$(readlink -f -- "$BOX_VERSIONS_ROOT" 2>/dev/null)" || vroot=""
+        [ -n "$vroot" ] \
+          || { VER_WHY="\$HOME/ccrc-versions could not be resolved by readlink -f"; return 1; }
+      fi
+      case "$res" in
+        "$vroot"/*) name="${res#"$vroot"/}"; name="${name%%/*}"
+                    [[ "$name" =~ $VER_NAME_RE ]] && VER_RUNNING+=("$name") ;;
+      esac
+    done
+  done
+  return 0
+}
+
+# `_ver_protect_add <name> <word>` — one reason a version is kept, once.
+# Anything that is not a version name (the projection's `none`, an absent
+# tag) protects nothing and is dropped here.
+_ver_protect_add() {
+  [[ "$1" =~ $VER_NAME_RE ]] || return 0
+  case " ${VER_PROTECT[$1]:-} " in *" $2 "*) return 0 ;; esac
+  VER_PROTECT[$1]="${VER_PROTECT[$1]:+${VER_PROTECT[$1]} }$2"
+}
+
+# `_ver_protect` → rc 0 with VER_PROTECT[<name>] = the words that keep it;
+# rc 1 (VER_WHY) when an input cannot be measured. The projection is read in
+# a subshell so the caller's UPD_INTENT_* (cmd_update's own read) is left as
+# it found it. An UNTAGGED previous (wave 4's D-3231 lines `untagged` /
+# <the stamp's sha>) still names a directory: `_inst_version_name` put that
+# build at `untagged-<sha12>` from the same stamp sha, so that is the name
+# kept. Line 2 `unstamped` makes `untagged-unstamped`, which is not a
+# version name, and `_ver_protect_add` drops it.
+_ver_protect() {
+  declare -gA VER_PROTECT=()
+  local prc=0 n
+  local -a iv=()
+  [ -n "$VER_CURRENT" ] && _ver_protect_add "$VER_CURRENT" pointed-at
+  _upd_read_previous || prc=$?
+  case "$prc" in
+    0) _ver_protect_add "$UPD_PREV_TAG" previous ;;
+    2) _ver_protect_add "untagged-${UPD_PREV_SHA:0:12}" previous ;;
+    1) ;;   # no previous: nothing to keep for it
+    *) VER_WHY="~/.ccrc/previous is unreadable or malformed"; return 1 ;;
+  esac
+  mapfile -t iv < <(_upd_intent_state
+    printf '%s\n' "$UPD_INTENT_STATE" "$UPD_INTENT_WHY" "$UPD_INTENT_DESIRED" \
+      "$UPD_INTENT_DESIRED_STABLE" "$UPD_INTENT_DESIRED_DEV")
+  [ "${#iv[@]}" -eq 5 ] \
+    || { VER_WHY="the control plane's projection could not be read"; return 1; }
+  case "${iv[0]}" in
+    ok|none)
+      _ver_protect_add "${iv[2]}" desired
+      _ver_protect_add "${iv[3]}" desired-stable
+      _ver_protect_add "${iv[4]}" desired-dev ;;
+    not-configured) ;;   # no control plane on this box: it names no tag
+    *) VER_WHY="the control plane's projection is ${iv[0]} (${iv[1]}) — its desired tags cannot be read"
+       return 1 ;;
+  esac
+  _ver_running_names || return 1
+  for n in "${VER_RUNNING[@]}"; do _ver_protect_add "$n" running; done
+  return 0
+}
+
+# `_ver_verdicts <auto|prune> <keep>` — the ONE place a version's fate is
+# decided, for the listing and the prune alike, over VER_NAMES in
+# `_ver_list`'s order: protected → kept; complete → the first <keep> kept,
+# the rest doomed; incomplete → doomed by `prune` only. Fills VER_VERDICT
+# and VER_DOOMED / VER_DOOMED_WHY. rc 0.
+_ver_verdicts() {
+  declare -gA VER_VERDICT=()
+  local mode="$1" keep="$2" n slots=0
+  VER_DOOMED=(); VER_DOOMED_WHY=()
+  for n in "${VER_NAMES[@]}"; do
+    # Not bash 4.2's `-v` variable test: bash 3.2 cannot PARSE it inside
+    # `[[ ]]`, and a parse error here would stop the whole file before
+    # cmd_install's bash-floor refusal. `_ver_protect_add` never stores an
+    # empty value, so non-empty is the same question.
+    if [ -n "${VER_PROTECT[$n]:-}" ]; then
+      VER_VERDICT[$n]="kept: ${VER_PROTECT[$n]}"
+    elif [ -f "$BOX_VERSIONS_ROOT/$n/$VER_RECORD_COPY" ]; then
+      if [ "$slots" -lt "$keep" ]; then
+        slots=$((slots + 1)); VER_VERDICT[$n]="kept: newest $keep"
+      else
+        VER_VERDICT[$n]="prunable"
+        VER_DOOMED+=("$n"); VER_DOOMED_WHY+=("complete, not among the newest $keep")
+      fi
+    else
+      VER_VERDICT[$n]="prunable by --prune only"
+      if [ "$mode" = prune ]; then VER_DOOMED+=("$n"); VER_DOOMED_WHY+=("incomplete"); fi
+    fi
+  done
+  return 0
+}
+
+# `_ver_gc <prefix> <auto|prune>` → rc 0 done (or nothing to do), rc 1
+# skipped on an unmeasured input or a removal failed. `auto` is the call
+# after a PASSED gate only — a plain install's doctor under a free lock, an
+# update's `_upd_gate` — never after a failed one, and never inside a restore
+# or a rollback, whose spine runs under its parent's lock
+# (D-3451); it says nothing unless it removes
+# something or skips. `prune` is `ccrc versions --prune`, which also removes
+# incomplete versions.
+_ver_gc() {
+  local pfx="$1" mode="$2" keep="${CCRC_VERSIONS_KEEP:-3}" lead n i cur
+  local rc=0 lrc=0 prc=0 ncomp=0 npart=0 d b pid gone
+  lead="$pfx: versions:"; [ "$pfx" = versions ] && lead="versions:"
+  if [[ ! "$keep" =~ ^[0-9]+$ ]]; then
+    if [ "$mode" = auto ]; then
+      echo "$lead WARN: CCRC_VERSIONS_KEEP is not a number — nothing pruned"
+    else
+      echo "versions: CCRC_VERSIONS_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+    fi
+    return 1
+  fi
+  _ver_layout
+  case "$VER_LAYOUT" in
+    linked|migrated) ;;
+    *) [ "$mode" = auto ] || echo "versions: nothing to prune — \$HOME/ccrc is not versioned ($VER_LAYOUT)"
+       return 0 ;;
+  esac
+  _ver_list || lrc=$?
+  for n in "${VER_NAMES[@]}"; do
+    [ "$n" = "$VER_CURRENT" ] && continue
+    if [ -f "$BOX_VERSIONS_ROOT/$n/$VER_RECORD_COPY" ]; then ncomp=$((ncomp + 1)); else npart=$((npart + 1)); fi
+  done
+  # NOTHING IS PRUNABLE, WHATEVER IS PROTECTED (D-3450):
+  # a protection can only take a version OUT of the removal set, so with no
+  # more complete versions than <keep> beside the pointed-at one (and, for
+  # `auto`, incomplete ones never counted) there is nothing to measure — and
+  # no service manager, projection or previous is read.
+  if [ "$ncomp" -le "$keep" ] && { [ "$mode" = auto ] || [ "$npart" -eq 0 ]; }; then
+    [ "$mode" = auto ] || echo "versions: nothing to prune — $ncomp complete version(s) beside the pointed-at one, within CCRC_VERSIONS_KEEP=$keep, and none incomplete"
+    return 0
+  fi
+  if [ "$lrc" -eq 0 ]; then _ver_protect || prc=$?; else prc=1; fi
+  if [ "$prc" -ne 0 ]; then
+    if [ "$mode" = auto ]; then
+      echo "$lead WARN: nothing pruned — $VER_WHY"
+    else
+      echo "versions: prune skipped — $VER_WHY; nothing was removed"
+    fi
+    return 1
+  fi
+  _ver_verdicts "$mode" "$keep"
+  if [ "${#VER_DOOMED[@]}" -eq 0 ]; then
+    [ "$mode" = auto ] || echo "versions: nothing to prune — every kept tree is protected or among the newest $keep"
+    return 0
+  fi
+  # LEFTOVERS FIRST (D-3460), on the path that is about to remove and never
+  # on a list-only run: a `.pruning-<name>.<pid>` directory is a version an
+  # earlier prune took out of view and did not finish deleting. One whose pid
+  # is dead is finished here. One whose pid is ALIVE is another GC's removal
+  # in flight, and is never touched.
+  for d in "$BOX_VERSIONS_ROOT"/.pruning-*; do
+    { [ -d "$d" ] && [ ! -L "$d" ]; } || continue
+    b="${d##*/}"; pid="${b##*.}"
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    kill -0 "$pid" 2>/dev/null && continue
+    if rm -rf -- "$d"; then
+      echo "$lead removed \$HOME/ccrc-versions/$b (what an earlier prune left; its process is gone)"
+    else
+      echo "$lead could not remove \$HOME/ccrc-versions/$b (what an earlier prune left) — it is already out of the version list"
+      rc=1
+    fi
+  done
+  for i in "${!VER_DOOMED[@]}"; do
+    n="${VER_DOOMED[$i]}"
+    # A belt over `pointed-at`: the link is read again at the moment of the
+    # removal, and a link that names this directory — or cannot be read —
+    # stops it.
+    cur="$(readlink -- "$BOX_TREE_DIR" 2>/dev/null)" || cur=""
+    if [ -z "$cur" ] || [ "${cur%/}" = "$BOX_VERSIONS_ROOT/$n" ]; then
+      echo "$lead could not prune \$HOME/ccrc-versions/$n — \$HOME/ccrc points at it or could not be read; every version above it is intact"
+      rc=1; continue
+    fi
+    # THE VERSION LEAVES EVERY READER'S VIEW IN ONE RENAME, THEN IS DELETED
+    # (D-3460). `rm -rf` walks in readdir order, so one that fails or is killed
+    # part-way leaves a husk under a live version name that can still carry its
+    # kept stamp and install record: `_ver_list` calls it `complete`, `_ver_kept`
+    # (arm 1, a rollback by flip) can choose it, and `_inst_tree` skips
+    # `npm ci` on the strength of the record. The rename takes the name away
+    # first — a dot-name is never listed (VER_NAME_RE), never kept, and fails
+    # `_inst_tree`'s flip re-check — so a half-deleted tree is unreachable, and
+    # D-3456's window is back to the instant between the belt's read above and
+    # this rename, not the length of the delete. A removal that does not finish
+    # leaves `.pruning-<name>.<pid>`, which the next prune finishes (above).
+    gone="$BOX_VERSIONS_ROOT/.pruning-$n.$$"
+    if ! _plat_mv_notdir "$BOX_VERSIONS_ROOT/$n" "$gone"; then
+      echo "$lead could not prune \$HOME/ccrc-versions/$n — every version above it is intact"
+      rc=1; continue
+    fi
+    if rm -rf -- "$gone"; then
+      echo "$lead pruned \$HOME/ccrc-versions/$n (${VER_DOOMED_WHY[$i]})"
+    else
+      echo "$lead could not finish pruning \$HOME/ccrc-versions/$n — it is already out of the version list; its remains are at \$HOME/ccrc-versions/.pruning-$n.$$, which the next prune removes"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
+# `ccrc versions [--prune]` — the kept release trees, and the one hand-run
+# prune (design §11 "GC and `ccrc versions`"). The listing takes no lock and
+# writes nothing; `--prune` takes update's lock (a prune never races an
+# update's flip), completes a crashed migration first, prunes, and then
+# lists what is left. Exit 0 listed or pruned; 1 a prune skipped or a
+# removal failed; 2 usage.
+cmd_versions() {
+  local prune=0 keep="${CCRC_VERSIONS_KEEP:-3}" grc=0 lrc=0 prc=0 n mark cpl line
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --prune) prune=1 ;;
+      -h|--help) usage; exit 0 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+    shift
+  done
+  # A bad knob refuses a PRUNE (exit 1) but not a LISTING: the exit table says
+  # `ccrc versions` lists at 0, and a list removes nothing whatever the knob
+  # reads (final review F8) — so it WARNs, lists, and marks every verdict
+  # unmeasured.
+  local keep_ok=1
+  if ! [[ "$keep" =~ ^[0-9]+$ ]]; then
+    [ "$prune" -eq 0 ] \
+      || _ccrc_die "versions: CCRC_VERSIONS_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+    keep_ok=0
+    echo "versions: WARN: CCRC_VERSIONS_KEEP is not a number — listing only; nothing would be pruned"
+  fi
+  if [ "$prune" -eq 1 ]; then
+    _upd_lock
+    _inst_migrate_resume versions
+    _ver_gc versions prune || grc=$?
+    _upd_unlock
+  fi
+  _ver_layout
+  case "$VER_LAYOUT" in
+    linked|migrated)
+      line="versions: \$HOME/ccrc -> \$HOME/ccrc-versions/$VER_CURRENT"
+      if [[ "$VER_CURRENT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && _box_build_fields; then
+        [ "${BOX_BUILD[4]}" = "$VER_CURRENT" ] \
+          || line="$line (its stamp reads ${BOX_BUILD[4]:-an unversioned build} — something wrote through \$HOME/ccrc)"
+      fi
+      echo "$line"
+      if [ "$VER_LAYOUT" = migrated ]; then
+        echo "versions: \$HOME/ccrc.migrating (the pre-versioned tree) is kept until a health gate passes"
+      fi ;;
+    directory) echo "versions: \$HOME/ccrc is a directory — not versioned yet; the next ccrc install or update migrates it" ;;
+    absent)    echo "versions: no \$HOME/ccrc on this box" ;;
+    crashed)   echo "versions: a migration crashed — \$HOME/ccrc is absent beside \$HOME/ccrc.migrating; $(_ver_crashed_remedy)" ;;
+    *)         echo "versions: \$HOME/ccrc is $VER_WHY — not touching it" ;;
+  esac
+  declare -gA VER_VERDICT=()
+  _ver_list || lrc=$?
+  case "$VER_LAYOUT" in
+    linked|migrated)
+      if [ "$lrc" -eq 0 ]; then _ver_protect || prc=$?; else prc=1; fi
+      if [ "$keep_ok" -eq 0 ]; then
+        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: CCRC_VERSIONS_KEEP is not a number"; done
+      elif [ "$prc" -ne 0 ]; then
+        echo "versions: WARN: $VER_WHY — nothing would be pruned"
+        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: unmeasured"; done
+      else
+        _ver_verdicts prune "$keep"
+      fi ;;
+    *) for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: nothing is pruned while \$HOME/ccrc reads $VER_LAYOUT"; done ;;
+  esac
+  for n in "${VER_NAMES[@]}"; do
+    mark=" "; [ "$n" = "$VER_CURRENT" ] && mark="*"
+    cpl=incomplete; [ -f "$BOX_VERSIONS_ROOT/$n/$VER_RECORD_COPY" ] && cpl=complete
+    printf '  %s %s  %s  %s\n' "$mark" "$n" "$cpl" "${VER_VERDICT[$n]}"
+  done
+  [ "$keep_ok" -eq 1 ] || keep="(not a number)"
+  echo "versions: ${#VER_NAMES[@]} kept tree(s) under \$HOME/ccrc-versions; CCRC_VERSIONS_KEEP=$keep plus the protected set (pointed-at, previous, the projection's desired tags, running units) — 'ccrc versions --prune' removes the prunable ones"
+  return "$grc"
+}
+
 # ── cmd_logs — the journal, thin (stage 4, Task 8; spec §7) ───────────────
 # `journalctl --user -u <this box's unit>` with `-f`/`-n` passed straight
 # through — no parsing, no filtering: journalctl's own interface is the
@@ -16031,6 +18175,33 @@ cmd_uninstall() {
   count="${sessions%% *}"
   if [ "$count" != 0 ] && [ "$force" -eq 0 ]; then
     _ccrc_die "this box holds $count live ccd session(s) ($sessions) — uninstalling under them orphans every supervisor. Stop them first (ccd list, then ccd stop each), or run: ccrc uninstall --force"
+  fi
+
+  # ── THE UPDATE LOCK, SECOND (D-3453) ─────
+  # The sweep in `_uninst_tree_bins` removes ~/ccrc-versions and
+  # ~/ccrc.migrating, which every other writer touches only under
+  # ~/.ccrc/update.lock (`ccrc versions --prune` takes `_upd_lock`, the
+  # migration finish `_ver_lock_try`). An update or rollback in flight — a
+  # `--detach` one runs in a transient unit `_uninst_units` never stops —
+  # could be placing into, or flipping to, a version this removes, and its
+  # rename would then re-create ~/ccrc pointing at nothing. So it is asked
+  # HERE, before anything is removed: refusing halfway would leave a box
+  # neither installed nor not. A PROBE, never an acquire (this run removes the
+  # lock file itself), and its four answers are never folded (ruling R16's
+  # rule for wave 4's callers, applied to this one): 0 free; 1 held; 3, or any
+  # rc it does not define, UNMEASURED, refused with its own sentence; and 2,
+  # no `flock`, proceeds, because no updater that takes this lock runs
+  # without one (`_upd_lock` dies first). `--force` skips it, as it passes
+  # the live-session gate. Not closed: D-3251's window between a detaching
+  # parent's probe and its child's acquire.
+  local lrc=0
+  if [ "$force" -eq 0 ]; then
+    _upd_lock_probe || lrc=$?
+    case "$lrc" in
+      0|2) : ;;
+      1) _ccrc_die "an update holds ~/.ccrc/update.lock ($(_upd_lock_holder)) — uninstalling under it would remove the version it is placing or flipping to. Wait for it to finish, or run: ccrc uninstall --force — nothing on this box was removed" ;;
+      *) _ccrc_die "~/.ccrc/update.lock could not be measured (probe rc $lrc) — refusing to uninstall past a lock this box cannot see. Run ccrc uninstall --force to proceed anyway — nothing on this box was removed" ;;
+    esac
   fi
 
   _uninst_units
@@ -16323,8 +18494,58 @@ _uninst_graphify_skills() {
 # directory entry until this process exits — which is why this step needs no
 # staging dance on the way down.
 _uninst_tree_bins() {
+  # On a versioned box (W6) `$BOX_TREE_DIR` is the LINK `~/ccrc ->
+  # ~/ccrc-versions/<name>`, and `rm` handed a path with no trailing slash
+  # never follows a symlink: this removes the link only, and the sweep below
+  # takes the versions. With a trailing slash GNU rm empties the pointed-at
+  # version THROUGH the link, answers 0 and leaves the link standing —
+  # measured 2026-09-23 (coreutils 9.4); the uninstall suite's linked case
+  # pins this spelling.
   rm -rf -- "$BOX_TREE_DIR" \
     || _ccrc_die "removing $BOX_TREE_DIR failed"
+  # THE VERSIONS ROOT (spec §11's audit: `cmd_uninstall` "gains a sweep of
+  # ~/ccrc-versions/"). Every kept version goes, the one the link named
+  # included: an uninstalled box runs none of them, and GC is a verb of the
+  # ccrc this step removes, so a tree left here is disk nothing reclaims.
+  # Counted first, by `_ver_list`, so the line counts the names VER_NAME_RE
+  # admits; a legacy target's `.<tag>.incoming.<pid>` staging directory goes
+  # with the root and is never counted as a kept tree. Something at that name
+  # that is not a real directory (a file, a link elsewhere) is not a root this
+  # ccrc made: it is left where it is, and the line says so.
+  local vsaid="; no ~/ccrc-versions" msaid="" nsaid=""
+  if [ -d "$BOX_VERSIONS_ROOT" ] && [ ! -L "$BOX_VERSIONS_ROOT" ]; then
+    _ver_list || :   # rc 1 = the ORDER is unknown (Task 5); VER_NAMES is still filled, and a count needs no order
+    vsaid="; ~/ccrc-versions removed (${#VER_NAMES[@]} kept tree(s))"
+    rm -rf -- "$BOX_VERSIONS_ROOT" \
+      || _ccrc_die "removing $BOX_VERSIONS_ROOT failed"
+  elif [ -e "$BOX_VERSIONS_ROOT" ] || [ -L "$BOX_VERSIONS_ROOT" ]; then
+    vsaid="; ~/ccrc-versions left in place — it is not a directory ccrc made"
+  fi
+  # A STRAY PRE-VERSIONED TREE (D-3452). The
+  # one-time migration keeps `~/ccrc.migrating` until a health gate passes,
+  # and no gate runs on a box being uninstalled. Left behind, it and its
+  # `~/.ccrc/migrating-to` marker (removed with the node files below) would
+  # hand a later install a migration pair it could only refuse.
+  if [ -e "$BOX_MIGRATING_DIR" ] || [ -L "$BOX_MIGRATING_DIR" ]; then
+    rm -rf -- "$BOX_MIGRATING_DIR" \
+      || _ccrc_die "removing $BOX_MIGRATING_DIR failed"
+    msaid="; ~/ccrc.migrating removed"
+  fi
+  # A STAGED FLIP LEFT BEHIND (D-3452).
+  # `_plat_ln_swap` (W6 Task 1) stages `~/ccrc.new` with `ln -sfn` and renames
+  # it over `~/ccrc`; a process killed between the two leaves the staged
+  # link, which only the NEXT flip replaces — and an uninstalled box flips
+  # nothing, so it would stand in $HOME pointing into the root removed above.
+  # A LINK only, the one shape that helper makes (its second arm refuses to
+  # flip over anything else): something else at that name is not ccrc's, and
+  # it is left where it is, named.
+  if [ -L "$BOX_TREE_DIR.new" ]; then
+    rm -f -- "$BOX_TREE_DIR.new" \
+      || _ccrc_die "removing $BOX_TREE_DIR.new failed"
+    nsaid="; ~/ccrc.new removed"
+  elif [ -e "$BOX_TREE_DIR.new" ]; then
+    nsaid="; ~/ccrc.new left in place — it is not a link ccrc made"
+  fi
   rm -f -- "$BOX_INSTALLED_FILE" \
     || _ccrc_die "removing $BOX_INSTALLED_FILE failed"
   # The node's three files are install-state, not config (design 2026-09-20
@@ -16336,8 +18557,10 @@ _uninst_tree_bins() {
   # an uninstalled box has no update in flight, no baseline to restore to and
   # no spine step to classify.
   # The control plane's projection goes with them (W4 Task 8): a box with no tree follows nothing.
+  # The migration's target marker goes with them (W6 Task 6): no migration
+  # survives an uninstall, so nothing is left for it to name.
   rm -f -- "$BOX_PREVIOUS_FILE" "$BOX_INSTALL_STEP_FILE" "$BOX_UPDATE_JSON" "$BOX_UPDATE_LOCK" \
-    "$BOX_INTENT_FILE" \
+    "$BOX_INTENT_FILE" "$BOX_MIGRATION_FILE" \
     || _ccrc_die "removing the node's update state files failed"
   # ONE RULE, and the `rm -f` below IS the census: every executable
   # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
@@ -16385,7 +18608,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-update-sync" \
     "$HOME/.local/bin/ccgpt-proxy.py" "$HOME/.local/bin/ccgpt-usage.py" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an
@@ -16564,6 +18787,7 @@ case "$VERB" in
   install) cmd_install "$@" ;;
   update)  cmd_update "$@" ;;
   rollback) cmd_rollback "$@" ;;
+  versions) cmd_versions "$@" ;;
   channel) cmd_channel "$@" ;;
   rollout) cmd_rollout "$@" ;;
   uninstall) cmd_uninstall "$@" ;;

@@ -40,6 +40,12 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   programme, created by the operator from its ticket; each wave goes to a fresh worker workspace running
   subagent-driven development, a review run reads the worker's branch, and the coordinator rules and merges. The
   plans reach a worker only from `main`.
+- **2026-09-28 (evening) — wave 1 re-verified against `023fe94d`.** Child-reclamation wave 3 (#187) and
+  update-management wave 4 (#181) merged. The plan replays unchanged: every Find occurs once, the fixture sweep still
+  touches 31 files, and `readme-reanchor.py` now prints `shared/api.ts:7641-7643, :7683, :7691, :7704` (the plan's own
+  numbers are stated on a `df4fe069` base). Typechecks clean; PWA 3041; server six shards green apart from the two known
+  reds. The fleet box's root disk sat below `ccd`'s 10G `ws-add` floor while measuring, which reds every `ws-add` test
+  on the unedited base too: run the suites with `CCD_DISK_FLOOR_GB=1` when that happens. Wave 2 is unblocked.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -63,4 +69,4 @@ Wave 1 is planned; once the docs PR carrying the spec, this ledger and the plan 
 workspace with the plan path and this file. After it deploys, run the instrument on the server box from the
 installed tree — `python3 deploy/measure-workspace-lifecycle.py` — and record `released_top_level` (target 0,
 baseline 29 of 56 on 2026-09-24), `released_wire_only` (target 0) and the archive→return rows here: the last is what
-wave 3 waits on. Wave 2 is planned once CCR-15 wave 3 has merged.
+wave 3 waits on. Wave 2 is to plan: CCR-15 wave 3 merged on 2026-09-28 (#187).

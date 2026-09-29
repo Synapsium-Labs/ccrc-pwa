@@ -307,8 +307,8 @@ describe('write routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', 'hello'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', 'hello'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -391,8 +391,8 @@ describe('write routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Down'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Down'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -415,7 +415,7 @@ describe('write routes', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Escape']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Escape']]);
     await app.close();
   });
 
@@ -454,7 +454,7 @@ describe('POST /api/sessions/:id/submit', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'half-typed' } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
     await app.close();
   });
 
@@ -488,7 +488,7 @@ describe('POST /api/sessions/:id/submit', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'half-typed' } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
     await app.close();
   });
 
@@ -502,7 +502,7 @@ describe('POST /api/sessions/:id/submit', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'stuck words' } });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'enter-ignored' });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
     await app.close();
   }, 10_000);
 
@@ -583,7 +583,7 @@ describe('POST /api/sessions/:id/ask', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     // Single-select: the digit alone, no Enter — see ask.ts's own comment.
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, '2']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, '2']]);
     await app.close();
   });
 
@@ -668,10 +668,10 @@ describe('prompt route attachment handling', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', clip],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'M-Enter'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', 'what is this'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'M-Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', 'what is this'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -690,8 +690,8 @@ describe('prompt route attachment handling', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', clip],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -1199,7 +1199,7 @@ describe('layer 1 — the guard runner', () => {
   it('testDeps wires the guard onto deps.tmux as well, not just onto deps.runCcd', async () => {
     const deps = testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' }));
     const tmuxRunner = (deps.tmux as unknown as { run: Runner }).run;
-    await expect(tmuxRunner('tmux', ['kill-session', '-t', 'cc-x']))
+    await expect(tmuxRunner('tmux', ['kill-session', '-t', '=cc-x:']))
       .rejects.toThrow(/argv not in the agent EXEC_WHITELIST/);
   });
 });

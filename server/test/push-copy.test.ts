@@ -80,7 +80,7 @@ function runnerFor(info: Map<string, Seeded>, pane = 'ready\n❯ \n'): Runner {
     if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
     if (args[0] === 'list-panes') {
       const target = args[2] ?? '';
-      const id = target.startsWith('cc-') ? target.slice('cc-'.length) : '';
+      const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';   // the exact target `=cc-<id>:` (D-3525)
       const pid = info.get(id)?.pid;
       return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
     }

@@ -96,8 +96,13 @@ description, and keep the mechanical part separate from the judgement part.
 `main` is protected: every change lands by pull request, and there are no direct pushes —
 including by the maintainer.
 
-CI runs the three suites plus a PWA build on every pull request. Fork PRs run with a
-read-only token and no repository secrets.
+CI runs the agent and PWA suites and a PWA build in full on every pull request. The
+server suite runs only the tests the change can affect, as chosen from a traced
+dependency map, plus a fixed set that always runs. A change to the pipeline, a
+manifest or a lockfile runs the whole server suite. The whole suite also runs daily
+on `main` and before any promotion to `stable`, so a green pull request proves its
+selection, not the whole suite. Fork PRs run with a read-only token and no
+repository secrets.
 
 Found a security problem? Do not open an issue — see [`SECURITY.md`](SECURITY.md).
 

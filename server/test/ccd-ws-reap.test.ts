@@ -765,7 +765,7 @@ describe('destruction order', () => {
     // log before the reap starts and a `toContain` passes with (e) deleted.
     // Measured: the mutation sweep reported that assertion's mutant SURVIVED,
     // which is what an assertion that cannot fail looks like from outside.
-    const KILL = 'tmux kill-session -t cc-demo-quiet-basin';
+    const KILL = 'tmux kill-session -t =cc-demo-quiet-basin:';
     const killsBefore = h.calls().filter((l) => l === KILL).length;
     const out = JSON.parse(reap(tok).stdout);
     expect(out.reaped).toBe('demo-quiet-basin');

@@ -22,17 +22,21 @@
 // The verbs run from the CHECKOUT's ccrc, so `$CCRC_HERE` resolves the REAL
 // `install-session-hooks.sh`, `ccrc-wrapper-shape` and `shared/mark.mjs` —
 // the predicate and the marker under test are the shipped ones, not copies.
-import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { describe, it, expect, afterEach } from 'vitest';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import {
   mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync,
-  symlinkSync, rmSync, lstatSync, readlinkSync,
+  symlinkSync, rmSync, lstatSync, readlinkSync, unlinkSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
+// W6 Task 2's one planter of a versioned box: `~/ccrc-versions/<name>/` built
+// from the same fixture tree the install suites place, with its kept stamp and
+// install record, and — for the first name — the `~/ccrc` link.
+import { installVersionedTree } from './installTreeFixture.js';
 // The REAL marker writer — the wrapper fixtures below carry exactly the
 // marker `verifyMarker` recognises, so the "marker-verified only" gate is
 // measured against the shipped format, never a test's re-spelling of it.
@@ -105,14 +109,23 @@ const UNMANAGED_ONLY_SETTINGS =
  *  artifacts, two account homes with settings.json, three wrapper-named
  *  files (marked / marker-less / the upstream ELF), a worktree, an old
  *  backup, and a keep-aside pair. */
-function plantInstalledBox(home: string): void {
-  // The shipped tree and the three executables.
-  mkdirSync(join(home, 'ccrc', 'server', 'dist'), { recursive: true });
-  writeFileSync(join(home, 'ccrc', 'server', 'dist', 'index.js'), '// the installed dist\n');
-  mkdirSync(join(home, 'ccrc', 'ccd'), { recursive: true });
-  writeFileSync(join(home, 'ccrc', 'ccd', 'ccrc'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  mkdirSync(join(home, 'ccrc', 'agent', 'dist'), { recursive: true });
-  writeFileSync(join(home, 'ccrc', 'agent', 'dist', 'index.js'), '// agent dist\n');
+function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): void {
+  // The shipped tree. By default a REAL `~/ccrc` directory: a box installed
+  // before W6, or by deploy.sh onto one. With `versioned`, W6's layout (spec
+  // §11): each name a placed version under `~/ccrc-versions/`, the FIRST the
+  // one `~/ccrc` links to — the shape `_uninst_tree_bins`' sweep exists for.
+  const versioned = opts.versioned ?? [];
+  if (versioned.length === 0) {
+    mkdirSync(join(home, 'ccrc', 'server', 'dist'), { recursive: true });
+    writeFileSync(join(home, 'ccrc', 'server', 'dist', 'index.js'), '// the installed dist\n');
+    mkdirSync(join(home, 'ccrc', 'ccd'), { recursive: true });
+    writeFileSync(join(home, 'ccrc', 'ccd', 'ccrc'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    mkdirSync(join(home, 'ccrc', 'agent', 'dist'), { recursive: true });
+    writeFileSync(join(home, 'ccrc', 'agent', 'dist', 'index.js'), '// agent dist\n');
+  } else {
+    versioned.forEach((name, i) => { installVersionedTree(home, name, { link: i === 0 }); });
+  }
+  // The executables.
   const bin = join(home, '.local', 'bin');
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(bin, 'ccd'), '#!/bin/sh\n# the installed ccd\n', { mode: 0o755 });
@@ -595,7 +608,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     }
     // W4 Task 4: a box with no tree has no update in flight, no baseline to
     // restore to and no spine step to classify.
-    expect(r.stdout).toMatch(/; the completed-install record and the node's update state \(~\/\.ccrc\/previous, install-step, update\.json, update\.lock, update-intent\) removed$/m);
+    // W6 Task 6: the line now ENDS with what the versions sweep found — on
+    // this box, a real `~/ccrc` directory, nothing.
+    expect(r.stdout).toMatch(/; the completed-install record and the node's update state \(~\/\.ccrc\/previous, install-step, update\.json, update\.lock, update-intent\) removed; no ~\/ccrc-versions$/m);
     expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
     expect(existsSync(join(home, '.ccrc', 'ccrc.env'))).toBe(true);
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);
@@ -864,6 +879,173 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(r.stderr).toMatch(/--purge-memory needs --purge/);
     expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
     expect(existsSync(join(home, 'ccrc'))).toBe(true);
+  });
+});
+
+// ── W6 Task 6: the versions root and a stray migration ────────────────────
+// Spec §11's audit gives `cmd_uninstall`'s `rm -rf -- "$BOX_TREE_DIR"` the
+// verdict "removes only the link — gains a sweep of `~/ccrc-versions/`". The
+// sweep takes the kept versions and, D-3452, the
+// pre-versioned tree a one-time migration keeps until a gate that will now
+// never run, with its `~/.ccrc/migrating-to` marker.
+describe('ccrc uninstall: the versions root and a stray migration (W6 Task 6)', () => {
+  // `lstat`, never `existsSync`: a DANGLING `~/ccrc` answers existsSync false,
+  // and a link that survives with nothing behind it is exactly what the
+  // trailing-slash spelling of step 1 leaves (GNU rm empties the version
+  // THROUGH the link, answers 0, keeps the link — measured).
+  const present = (p: string): boolean => {
+    try { lstatSync(p); return true; } catch { return false; }
+  };
+  const plantMemory = (home: string): string => {
+    const d = join(home, '.ccrc', 'memory', 'fixture-project');
+    mkdirSync(d, { recursive: true });
+    const f = join(d, 'MEMORY.md');
+    writeFileSync(f, '# a project\'s durable memory\n');
+    return f;
+  };
+  const plantMigration = (home: string, name: string): void => {
+    mkdirSync(join(home, 'ccrc.migrating', 'server'), { recursive: true });
+    writeFileSync(join(home, 'ccrc.migrating', 'server', 'OLD-MARKER'), 'the pre-versioned tree\n');
+    writeFileSync(join(home, '.ccrc', 'migrating-to'), `${name}\n`);
+  };
+
+  it('a versioned box: the link, every kept version and the root go; backups and memory stay (spec §11 audit: "gains a sweep of ~/ccrc-versions/")', () => {
+    const home = mkTmp('ccrc-uninst-versions-');
+    plantInstalledBox(home, { versioned: ['v9.9.2', 'v9.9.1', 'v9.9.0'] });
+    // A legacy target's staging directory (Task 4's `.<tag>.incoming.<pid>`):
+    // removed WITH the root, never counted as a kept tree.
+    mkdirSync(join(home, 'ccrc-versions', '.v9.9.3.incoming.4242', 'ccd'), { recursive: true });
+    // A flip to v9.9.1 killed between `_plat_ln_swap`'s `ln -sfn` and its
+    // rename (Task 1): the staged link stands beside `~/ccrc`, and only the
+    // NEXT flip would ever replace it — an uninstalled box flips nothing.
+    symlinkSync(join(home, 'ccrc-versions', 'v9.9.1'), join(home, 'ccrc.new'));
+    const memory = plantMemory(home);
+    expect(lstatSync(join(home, 'ccrc')).isSymbolicLink(), 'the fixture is not a W6 box').toBe(true);
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(present(join(home, 'ccrc')), 'the ~/ccrc link survived').toBe(false);
+    expect(present(join(home, 'ccrc-versions')), 'the versions root survived').toBe(false);
+    // `lstat`: with the root gone the staged link DANGLES, and existsSync
+    // would call a surviving one absent.
+    expect(present(join(home, 'ccrc.new')), 'a staged ~/ccrc.new link survived').toBe(false);
+    expect(readFileSync(memory, 'utf8'), '~/.ccrc/memory was touched').toBe('# a project\'s durable memory\n');
+    expect(existsSync(join(home, 'ccrc-backups', '20250101-000000', 'ccd')), 'a backup was removed').toBe(true);
+    expect(r.stdout).toMatch(/^uninstall: tree: ~\/ccrc removed; .*update-intent\) removed; ~\/ccrc-versions removed \(3 kept tree\(s\)\); ~\/ccrc\.new removed$/m);
+    expect(r.stdout).not.toMatch(/ccrc\.migrating removed/);
+  });
+
+  it('a migrated box: ~/ccrc.migrating and ~/.ccrc/migrating-to go too — no gate will ever run to remove them', () => {
+    const home = mkTmp('ccrc-uninst-migrated-');
+    plantInstalledBox(home, { versioned: ['v9.9.1'] });
+    plantMigration(home, 'v9.9.1');
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(present(join(home, 'ccrc.migrating')), '~/ccrc.migrating survived').toBe(false);
+    expect(present(join(home, '.ccrc', 'migrating-to')), 'migrating-to survived').toBe(false);
+    expect(present(join(home, 'ccrc')), 'the ~/ccrc link survived').toBe(false);
+    expect(present(join(home, 'ccrc-versions')), 'the versions root survived').toBe(false);
+    expect(r.stdout).toMatch(/; ~\/ccrc-versions removed \(1 kept tree\(s\)\); ~\/ccrc\.migrating removed$/m);
+  });
+
+  it('a box installed before W6 (a real ~/ccrc directory): today\'s removal, and the line says there was no versions root', () => {
+    const home = mkTmp('ccrc-uninst-prew6-');
+    plantInstalledBox(home);
+    expect(lstatSync(join(home, 'ccrc')).isDirectory()).toBe(true);
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(present(join(home, 'ccrc'))).toBe(false);
+    expect(r.stdout).toMatch(/update-intent\) removed; no ~\/ccrc-versions$/m);
+    expect(r.stdout).not.toMatch(/ccrc\.migrating removed/);
+    expect(r.stdout).not.toMatch(/ccrc\.new/);
+  });
+
+  it('a crashed migration (~/ccrc.migrating and no ~/ccrc): the sweep still runs and nothing dies', () => {
+    const home = mkTmp('ccrc-uninst-crashpair-');
+    plantInstalledBox(home, { versioned: ['v9.9.1'] });
+    // The two-syscall window's crash shape (Task 3): the old tree moved aside,
+    // the marker written, and the link never placed.
+    unlinkSync(join(home, 'ccrc'));
+    plantMigration(home, 'v9.9.1');
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    for (const p of ['ccrc', 'ccrc-versions', 'ccrc.migrating', join('.ccrc', 'migrating-to')]) {
+      expect(present(join(home, p)), `${p} survived`).toBe(false);
+    }
+    expect(r.stdout).toMatch(/; ~\/ccrc-versions removed \(1 kept tree\(s\)\); ~\/ccrc\.migrating removed$/m);
+  });
+
+  it('a ~/ccrc-versions that is not a directory, and a ~/ccrc.new that is not a link, are left in place, and the line says so — ccrc made neither', () => {
+    const home = mkTmp('ccrc-uninst-versions-notdir-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, 'ccrc-versions'), 'not a versions root\n');
+    // `_plat_ln_swap` only ever writes a LINK at `~/ccrc.new` (Task 1), and
+    // refuses to flip over anything else; a directory there is someone else's.
+    mkdirSync(join(home, 'ccrc.new'));
+    writeFileSync(join(home, 'ccrc.new', 'MINE'), 'not ccrc\'s\n');
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, 'ccrc-versions'), 'utf8')).toBe('not a versions root\n');
+    expect(readFileSync(join(home, 'ccrc.new', 'MINE'), 'utf8'), 'a ~/ccrc.new ccrc did not make was touched').toBe('not ccrc\'s\n');
+    expect(r.stdout).toMatch(/update-intent\) removed; ~\/ccrc-versions left in place — it is not a directory ccrc made; ~\/ccrc\.new left in place — it is not a link ccrc made$/m);
+  });
+
+  // ── D-3453 ──────────────────────────────
+  // The sweep above removes what every other writer touches only under
+  // ~/.ccrc/update.lock, so an uninstall PROBES it before removing anything.
+  // A real holder, wave 4's shape: ONE process takes flock and then becomes
+  // `sleep` (exec keeps the pid and the descriptor), killed after each case.
+  const holders: ChildProcess[] = [];
+  afterEach(() => { for (const h of holders.splice(0)) h.kill('SIGKILL'); });
+  const lockPath = (home: string): string => join(home, '.ccrc', 'update.lock');
+  const lockFree = (home: string): boolean =>
+    spawnSync(BASH, ['-c', 'exec 9>>"$1" && flock -n 9', '_', lockPath(home)]).status === 0;
+  const holdLock = (home: string): void => {
+    const h = spawn(BASH, ['-c', 'exec 9>>"$1" && flock 9 && exec sleep 30', '_', lockPath(home)], { stdio: 'ignore' });
+    holders.push(h);
+    const t0 = Date.now();
+    while (lockFree(home)) {
+      if (Date.now() - t0 > 10_000) throw new Error('timed out waiting for the fixture holder to take the lock');
+      spawnSync('sleep', ['0.05']);
+    }
+  };
+  // What a refusal must leave: the gate runs after the live-session gate and
+  // BEFORE `_uninst_units`, so nothing at all was removed or stopped.
+  const untouched = (home: string): void => {
+    expect(present(join(home, 'ccrc')), 'the ~/ccrc link was removed').toBe(true);
+    expect(present(join(home, 'ccrc-versions', 'v9.9.1')), 'a kept version was removed').toBe(true);
+    expect(existsSync(join(home, '.config', 'systemd', 'user', 'ccrc.service')), 'a unit file was removed').toBe(true);
+    expect(existsSync(join(home, 'systemctl-calls')), 'a unit was touched').toBe(false);
+  };
+
+  itLinux('an update holding ~/.ccrc/update.lock refuses the uninstall before anything is removed, naming the holder; --force proceeds past it', () => {
+    const home = mkTmp('ccrc-uninst-lock-held-');
+    plantInstalledBox(home, { versioned: ['v9.9.1'] });
+    holdLock(home);
+    let r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    // The holder's fields come from the `update.json` wave 4 plants in
+    // `plantInstalledBox` (pid 4242, target v1.0.0).
+    expect(r.stderr).toMatch(/^ccrc: an update holds ~\/\.ccrc\/update\.lock \(pid 4242, target v1\.0\.0\) — uninstalling under it would remove the version it is placing or flipping to\. Wait for it to finish, or run: ccrc uninstall --force — nothing on this box was removed$/m);
+    untouched(home);
+    // THE CONTROL: the same box, the holder STILL holding, and --force.
+    r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(present(join(home, 'ccrc-versions')), 'the versions root survived --force').toBe(false);
+  });
+
+  itLinux('a ~/.ccrc/update.lock that cannot be MEASURED refuses with its own sentence — never the holder\'s, and nothing is removed', () => {
+    const home = mkTmp('ccrc-uninst-lock-unmeasured-');
+    plantInstalledBox(home, { versioned: ['v9.9.1'] });
+    // A DIRECTORY where the lock file goes: it exists, and the probe's
+    // `exec {p}>>` on it fails, so `_upd_lock_probe` answers 3 at every uid
+    // (wave 4's own rc-3 fixture; a `chmod 000` file root opens anyway).
+    rmSync(lockPath(home));
+    mkdirSync(lockPath(home));
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: ~\/\.ccrc\/update\.lock could not be measured \(probe rc 3\) — refusing to uninstall past a lock this box cannot see\. Run ccrc uninstall --force to proceed anyway — nothing on this box was removed$/m);
+    expect(r.stderr, 'rc 3 was folded into "held"').not.toMatch(/an update holds/);
+    untouched(home);
   });
 });
 
