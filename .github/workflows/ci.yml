@@ -78,7 +78,7 @@ on:
 # still run every server test; `enforce` makes a pull request run only what
 # was selected. One line, defined once — server/test/ci-pipeline.test.ts.
 env:
-  CCRC_SELECTION: shadow
+  CCRC_SELECTION: enforce
 
 # Pull requests: one group per PR, and a newer push cancels the older run.
 # Everything else never cancels, and each mode has its own group, so a merge's
