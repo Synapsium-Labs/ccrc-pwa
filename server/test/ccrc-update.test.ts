@@ -2592,6 +2592,51 @@ describe('ccrc update --check: what runs here vs what is published (spec §6)', 
     expect(homeSnapshot(home)).toEqual(before);
   });
 
+  it('writes NOTHING on a versioned box either — the ~/ccrc link, both kept versions and the stamp are unchanged (W6 Task 7)', () => {
+    // The case above, on the layout W6 leaves a box in: `~/ccrc` a LINK into
+    // `~/ccrc-versions/v9.9.1`, a second kept version beside it. `--to`, so
+    // the target is named rather than resolved: this case measures what
+    // `--check` WRITES, and `--to` never resolves the target from the projection (it is read only for `projection=`). The W6 guard
+    // is an lstat, not a snapshot line, so the listing itself stays the only
+    // thing under test.
+    const home = freshUpdateBox('ccrc-update-check-writes-nothing-w6-');
+    installVersionedTree(home, 'v9.9.1', { stamp: { sha: 'oldsha0000000000000000000000000000000000', version: 'v9.9.1' } });
+    installVersionedTree(home, 'v9.9.0', { link: false, stamp: { sha: 'b'.repeat(40), version: 'v9.9.0' } });
+    expect(lstatSync(join(home, 'ccrc')).isSymbolicLink(), 'the fixture is not a W6 box').toBe(true);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v9.9.1', 'oldsha0000000000000000000000000000000000'));
+    writeFileSync(join(home, '.ccrc', 'installed'), 'oldsha0000000000000000000000000000000000\n');
+    packRelease(home, stubTree(home, { version: 'v9.9.2' }), { tag: 'v9.9.2', latest: false });
+    // `runUpdate`'s own environment plants, once, in its own order — the
+    // reason is the case above's.
+    updateEnv(home);
+    replantDoctorStubs(home);
+    const before = homeSnapshot(home);
+    const r = runUpdate(home, ['--check', '--to', 'v9.9.2']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stdout.split('\n')[0]).toMatch(/^check: box=v9\.9\.1 sha=\S+ target=v9\.9\.2 (.* )?state=behind$/);
+    expect(homeSnapshot(home)).toEqual(before);
+  });
+
+  it('homeSnapshot records a link by its target: a flip between two same-length version names is a difference (W6 Task 7)', () => {
+    // The harness's own pin. A symlink used to be a leaf recorded as
+    // `<rel>\t<lstat size>`, and a link's lstat size is the LENGTH of its
+    // target: `~/ccrc -> …/v9.9.1` and `~/ccrc -> …/v9.9.0` recorded the
+    // SAME line, so a `--check` that flipped the box passed the case above.
+    const home = mkTmp('ccrc-update-snapshot-link-');
+    installVersionedTree(home, 'v9.9.1');
+    installVersionedTree(home, 'v9.9.0', { link: false });
+    const before = homeSnapshot(home);
+    // The flip as `_plat_ln_swap` performs it: a staged link renamed over the old one.
+    symlinkSync(join(home, 'ccrc-versions', 'v9.9.0'), join(home, 'ccrc.new'));
+    renameSync(join(home, 'ccrc.new'), join(home, 'ccrc'));
+    const after = homeSnapshot(home);
+    expect(after).not.toEqual(before);
+    expect(after).toContain(`ccrc -> ${join(home, 'ccrc-versions', 'v9.9.0')}`);
+    expect(after.filter((l) => l.startsWith('ccrc-versions/v9.9.1/')).length,
+      'the versions root was not walked on its own').toBeGreaterThan(0);
+  });
+
   it('--check and --force are exclusive — one refusal, exit 2, nothing fetched', () => {
     // `--check` MEASURES; `--force` reinstalls a converged box. The check arm
     // returns before `--force` is ever read, so the pair used to mean "drop
