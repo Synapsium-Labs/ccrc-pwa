@@ -1,7 +1,9 @@
 # Worker stall watch — the server notices a silent session, delivers mail past background work, and escalates — design
 
-**Status:** rev 2, draft for the operator, 2026-09-29. Nothing here is approved or planned. §11 lists the decisions
+**Status:** rev 3, draft for the operator, 2026-09-29. Nothing here is approved or planned. §11 lists the decisions
 owed.
+- **Rev 3** applies a two-agent verification of rev 2 (`wf_16d73a3d-58d`: application and consistency, code truth of the
+  new text): 33 findings (9 major), all applied; §12 gains the conflicts rev 2 settled silently.
 - **Rev 2** applies a four-lens adversarial review (`wf_5461f658-6a0`: code truth, binding rules and safety,
   effectiveness, plan-readiness; each lens refuted by a second agent). It filed 96 findings: 60 confirmed, 33 partly
   confirmed, 3 refuted. Every surviving finding is applied here. Where two findings prescribed different fixes, §12
@@ -123,7 +125,7 @@ working session sits idle for hours". The measurements add three things it did n
 
 ### 3.1 Claude Code's live status
 
-`<configDir>/sessions/<pid>.json`'s `status` is computed the same way in every installed version (2.1.277–2.1.284):
+`<configDir>/sessions/<pid>.json`'s `status` is computed the same way in every installed version (seven, 2.1.277–2.1.284):
 - `waiting` when a dialog or elicitation needs a human. A background subagent's permission prompt raises it too.
 - else `busy` when the main query runs **or** any `local_agent`, `remote_agent`, `in_process_teammate` or
   `local_workflow` task is not terminal (`delegatedActive`);
@@ -135,7 +137,8 @@ over background agents. The file is rewritten only on a change, so `statusUpdate
 not of the last turn end.
 
 Four shipped docstrings state otherwise and are corrected in wave 1 (§6.3): `livestate.ts`'s ("a Bash tool command is
-running"), `LiveStateRead`'s and `readLiveState`'s ("the mail gate requires an AFFIRMATIVE idle"), `sweepMail`'s
+running"), `LiveStateRead`'s ("the mail gate requires an AFFIRMATIVE idle") and `readLiveState`'s caller census ("Its
+four callers … both of `watch.ts`'s already-fail-shut gates": there are three, one of them in `watch.ts`), `sweepMail`'s
 conjunct 5 ("the SOLE idle authority"), and D-2016's `turnStall` in `shared/api.ts`, which takes now −
 `statusUpdatedAt` on a `busy` row as the current turn's age.
 
@@ -204,20 +207,26 @@ wave 2's marker read and is `{ok:false, reason:'absent'}` in wave 1. It is calle
 **The mode** comes from one registry listing, the one `sweepMail` already takes: `mail-gate-strict` gives `strict` and
 wins over the others; else `mail-gate-busy` gives `busy`; else `mail-gate-busy-shadow` gives `busy-shadow`; else
 `shell`. The two `busy` markers do nothing until wave 2. An unlistable registry fails shut, as `mail-disabled` does.
+Like §4.2's markers, these live in the fleet box's `~/.cc-sessions` and are touched and removed by hand there:
+`ssh <fleet-host> 'touch ~/.cc-sessions/mail-gate-strict'`, and `rm -f` to remove; the next mail sweep reads them.
 
 **Pane guard.** On the `shell` branch, and on wave 2's `busy` branch (never on `idle`), `sendPrompt` gains
 `refuseIfTurnRunning`. It refuses when the last 8 captured rows match `BUSY_RE` (`esc to interrupt`), which
 `pane/dialog.ts` exports for this as `turnRunning(window)` (following `autoContinueArmed`; the constant is
-module-private today). It is best-effort, and the spec says so. `READER_MIN_COLS`'s docstring records that a phrase
-match is blind below 120 columns, where the line wraps, and a `--remote-control` pane never draws the phrase. So the
+module-private today). It is best-effort, and the spec says so. `READER_MIN_COLS`'s docstring (`shared/api.ts` ~8284)
+records that a phrase match is blind below 120 columns, where the line wraps; `interrupt`'s docstring (`inject/send.ts`
+~1008) and README (~3430) record that a `--remote-control` pane never renders `esc to interrupt`. So the
 guard is a drift tripwire behind §3.1's binary-confirmed rule, not a second proof of idleness, and it adds no width
 condition: `shell` delivery stays width-independent, as `idle` delivery is today.
 
 The refusal is a new `SendResult` member, `turn-running`, placed before the attempts ceiling as `auto-continue-armed`
 is (~3703): `backOff(d.id, 'turn-running', now + MAIL_TURN_HOLD_MS, false)`, where `MAIL_TURN_HOLD_MS` is 60 s
 (*chosen*: a turn may end in seconds; `MAIL_ARMED_HOLD_MS` is sized for a limit reset). Unlike that arm it calls no
-`tellSender`, because a running turn is not a blocked recipient. Falling through to the ceiling would park the mail
-`undeliverable` after `MAIL_MAX_ATTEMPTS` (6). The PWA's `SEND_ERROR_TEXT` gains its row, as `auto-continue-armed`'s did.
+`tellSender`, because a running turn is not a blocked recipient. Falling through would count an attempt: a
+never-delivered row parks `undeliverable` at `MAIL_MAX_ATTEMPTS` (6), and a delivered one backs off toward the 15-minute
+ceiling. `backOff`'s `countsAsAttempt` docstring (`store.ts` ~4331, "three refusal paths") names `turn-running` as the
+fourth: like `auto-continue-armed`, it reaches `sendPrompt` and refuses before any keystroke. The PWA's
+`SEND_ERROR_TEXT` gains its row, as `auto-continue-armed`'s did.
 
 **Effect.** S3's mails 2443/2445 land about a minute after the turn ended, not 48.9 h later. Run 129's 2407 lands
 about a minute after it was queued (09-25 02:28), not 83.5 h later. Run 82's 1778 is expected to behave the same (it
@@ -238,8 +247,9 @@ the claim pair's synchronous try-block.
   tick's `FleetSession` rows.
 - It never reads `FleetSession.status`. That is `liveSessionStatus`'s collapse (`shell` and `waiting` read `busy`), and
   `assembleFleet` paints a pane with no live file `idle` with a null `statusUpdatedAt`. Instead the lane reads each
-  candidate worker's raw word itself: `tmux.panePid`, then `readLiveStateMeasured`. `no-state` and `unmeasured` are
-  holds (hold 1).
+  candidate worker's raw word itself: `tmux.panePid`, `configDirFor`, then `readLiveStateMeasured`. A null pid (which
+  folds a gone pane and a tmux that did not answer), an unresolvable config dir, and the read's `no-state` and
+  `unmeasured` are holds (hold 1).
 - It applies the verdict and decides nothing.
 
 `stallVerdict(input: StallInput, now: number): StallVerdict`, where
@@ -253,14 +263,21 @@ and a `sessionId`, of both work and review kinds. A run in `unknown`, or in any 
 
 When one session is the worker of two or more such runs (runs 29 and 31 overlapped 8.3 h on swift-harbor), the lane
 judges it once, on the most recently dispatched run. The worker's last mail is its newest mail on any of those runs,
-the ball is read across all of them, and the older runs hold. `openRunsForSession` already reads the siblings.
+the ball is read across all of them, and the older runs hold. The candidate read itself supplies the siblings: one
+`store.ts` query (where `INACTIVE_RUN_STATES_SQL` is module-private) returning `id`, `kind`, `state`, `sessionId`,
+`claimedBy` and `dispatchedAt`, grouped by `sessionId`. `openRunsForSession` is not reused: its predicate is
+`NOT IN ${TERMINAL_RUN_STATES_SQL}`, which also returns a wave N+1 run opened `planned` and runs at
+`awaiting-review`/`merging`/`closing`, and it carries no `state` or `dispatchedAt`.
 
 **Whose turn it is (the ball).** From the newest mail on the run between the worker and anyone except the watch
-(`stallMailClass(m)` not null):
+(the watch's own notices: `stallMailClass` answers `check`, `report` or `self-wake`; a `reply` is the worker's mail and
+counts):
 - **The coordinator's** when that mail is the worker's own (`fromId = runs.sessionId`) and is kind `question`; or kind
   `status` with a subject EQUAL to `WAVE_DONE_SUBJECT` or `REVIEW_DONE_SUBJECT` (`'review-done'`, a new export beside
   it in `shared/api.ts`); or a subject beginning `re stall-check: waiting`. It is also the coordinator's when the mail is
-  from the coordinator (the role id `coordinator` or `resolveCoordinator(run)`) with a subject beginning `wait:`.
+  from the coordinator (the role id `coordinator` or `resolveCoordinator(run.id)`) with a subject beginning `wait:`.
+  The lane always passes the run's id, never `resolveCoordinator(null)`, whose single-active-programme fallback is a
+  guess.
 - **The worker's** otherwise, including after the worker's own ordinary `status` mail. This catches "status mail, then
   silence": run 31's 161.7 h and runs 87/88's 40 h. A rule keyed only on "the newest mail is inbound" misses those
   until 24 h.
@@ -276,13 +293,19 @@ inbound mail precedes their Stop.
 
 Two costs of this clock are accepted until wave 2:
 - A worker at `busy` is not judged. It cannot yet be told apart from a turn in flight, so wave 1 treats background
-  agents or workflows as an exemption, uncapped. §4.2's "background work is never an exemption" holds from wave 2.
+  agents or workflows as an exemption, uncapped. From wave 2, background work is never an exemption (below).
 - Before r1, plumbing resets the clock: a respawn, a swap or ccd's auto-compact each restamp `statusUpdatedAt`, which
   delays r1 by up to 2 h (run 87: ccd's `/compact` 9 min into a 40.5 h stall). An open episode is not reset.
 
-**Holds**, evaluated in this order (each is `hold`, never `none`; only the limit hold turns into a notify, at its cap):
-1. any input unmeasured: `FleetSession.unmeasured`, `statusUnmeasured`, the live-state read's `unmeasured` or
-   `no-state`, a failed store read.
+**Background work is never an exemption** from wave 2. S3's live `shell` was an orphaned wait loop; S4's outstanding
+Monitor reported to nobody; an exemption would have lost 9–17 census stalls. Wave 2's `delegates` hold is the one
+bounded exception (§5.1).
+
+**Holds** (each is `hold`, never `none`; only the limit hold turns into a notify, at its cap). The numbers name them;
+they are evaluated in §10's order, where lifecycle (hold 4) comes before holds 2 and 3, so a dead worker reaches wave 2's
+dead arm even while it is asking or limit-held:
+1. any input unmeasured: `FleetSession.unmeasured`, `statusUnmeasured`, a null pane pid, a null config dir, the
+   live-state read's `unmeasured` or `no-state`, a failed store read.
 2. a) a question the worker asked: a fresh hookstate `ask`, or an asks row `held`/`answering`. Uncapped; the asks lane
    owns it (5 legit AskUserQuestion waits ran at most 6.6 h).
    b) `dialogPending` or live `waiting` with no ask behind it: a harness menu such as the Fable consent fallback, or a
@@ -293,25 +316,29 @@ Two costs of this clock are accepted until wave 2:
    10 min + `MAIL_ARMED_HOLD_MS` (`backOff` stores no time of its own, and wave 1 adds no column). A null `limits`, or
    a null window, is neither at the ceiling nor unmeasured for this hold, so a wrapper with no telemetry is judged. The
    hold is capped at 12.5 h of quiet (the longest of 19 legit limit waits); past it, one `limit-cap` operator push per
-   episode.
+   episode. The lane computes the auto-continue hold's start (`nextAttemptAt − MAIL_ARMED_HOLD_MS`) in `watch.ts`, where
+   that constant is module-private, and passes it in `StallInput`; `stall.ts` compares it with
+   `AUTO_CONTINUE_RECENT_MS` and never names `MAIL_ARMED_HOLD_MS`.
 4. lifecycle `restarting`, `null` or `unmeasurable`. The dead words (`lifecycleIsDead`: `stopped`, `orphan`,
    `never-started`) hold in wave 1 and are wave 2's dead arm. `unsupervised` and `unclaimed` are alive panes
    (`sessionLifecycle`'s `input.alive` arm) and are judged as `running`.
 
-**The ladder.** The episode key is `episodeKeyMs = max(the worker's newest mail on the run(s), dispatchedAt)`. It is
-computed before any rung, it changes only when the worker mails (which closes the episode), and it keys every
-observation of the episode, `limit-cap` included.
+**The ladder.** The episode key is `episodeKeyMs = max(the worker's newest mail on the run(s), the coordinator's
+newest `wait:` mail to the worker on the run(s), dispatchedAt)`. It is computed before any rung. It changes only when
+the worker mails or the coordinator sends `wait:`, and either one closes the episode. It keys every observation of the
+episode, `limit-cap` included.
 - **r1 at 2 h of quiet** — a stall-check mail from `operator` to the worker, recorded but not pushed.
 - **r2 at r1 + 1 h** with no worker mail on the run since r1 — a `stall:` mail from `operator` to the coordinator,
   pushed as `⚠ stall › <run workspace>`.
 - **r3 at r2 + 1 h** with still no worker mail — one operator push, `⚠ stalled › <run workspace>`.
 
-Every rung re-runs the verdict when it falls due and fires only while the ball is still the worker's and no hold
-applies; a hold defers a rung and never cancels it. In wave 1 a worker that reads `busy` when r2 or r3 falls due defers
-the rung, and the rung's hour then runs from the moment the raw word reads `idle` or `shell` again. A coordinator
-`wait:` mail hands the ball to the coordinator, so it stops the remaining rungs.
+Every rung re-runs the verdict when it falls due, on r1's inputs except quiet, and fires only while the ball is still
+the worker's and no hold applies; a hold defers a rung and never cancels it. In wave 1 a worker that reads `busy` when r2
+or r3 falls due defers the rung, and the rung's hour then runs from the moment the raw word reads `idle` or `shell`
+again. A coordinator `wait:` mail closes the episode, so it cancels the remaining rungs; a silence after the ball
+returns opens a new episode at r1.
 
-**The coordinator's state at r2** is `measureClaimant`'s verdict (`coord/reclaim.ts`) on `resolveCoordinator(run)`, the
+**The coordinator's state at r2** is `measureClaimant`'s verdict (`coord/reclaim.ts`) on `resolveCoordinator(run.id)`, the
 same re-measurement the reclaim door runs:
 - `alive`: r2 is sent.
 - `unmeasurable`: r2 is deferred.
@@ -353,6 +380,9 @@ body carries its own protocol, so no skill must be installed first. For S4 it wo
 > blocked on a decision — ask it with AskUserQuestion (your skill's question clause); these checks hold while it is open.
 > No mail from you on run 67 by 00:57Z: the coordinator is told. By 01:57Z: the operator.
 
+With a current wave-2 marker (§5.1) the last line reads: "No mail from you on run 67: the coordinator is told when your
+next turn ends without one, and by 02:57Z at the latest; the operator 1 h after that."
+
 Its subject is `stall-check: run 67 — quiet 2h 0m, owed: reply to #2510`. The "owed" part is "first report" when no
 worker mail exists since dispatch, and "next report" when the newest mail is the worker's own status. The reply is the
 report the worker owed, so the coordinator turn it costs is the one the protocol always meant to spend.
@@ -363,25 +393,32 @@ the worker a resume, mail it a subject beginning `wait:` naming what it waits fo
 stall mail never licenses re-dispatching a live worker." It carries its own instruction until wave 3's clause reaches
 every home.
 
-**Push shape.** `stall.ts` exports one classifier, `stallMailClass(m, run?) → 'check' | 'reply' | 'report' |
-'self-wake' | null`, and `pushNewMail` consults it beside `isAskNudgeMail`:
+**Push shape.** `stall.ts` exports one classifier, `stallMailClass(m, bind?) → 'check' | 'reply' | 'report' |
+'self-wake' | null`, where `bind` is `{runSessionId, runId, firstCheckId: number | null}`: `pushNewMail` reads it from the
+store (the lowest id of a `stall-check:` mail from `operator` to that session on that run) for rows whose subject begins
+`re stall-check:`, so `stall.ts` stays pure. `pushNewMail` consults it beside `isAskNudgeMail`:
 - `check` (a `stall-check:` mail from `operator`) and `self-wake` (`orphaned:` or `failed:` from `operator`, wave 2)
   are recorded, not pushed.
-- `reply` is recorded, not pushed, but only when it is bound: `fromId === run.sessionId`, `runId === run.id`, a subject
-  beginning `re stall-check:`, and a `stall-check:` mail from `operator` to that session on that run with a lower mail
-  id exists. Any other mail with that subject is pushed as ordinary mail, so no box-token holder can use the prefix to
-  keep a mail off the phone.
-- `report` (a `stall:` mail from `operator`) is pushed with the title `⚠ stall › <run workspace>`.
+- `reply` is recorded, not pushed, but only when it is bound: `fromId === bind.runSessionId`, `runId === bind.runId`,
+  a subject beginning `re stall-check:`, and `bind.firstCheckId` lower than `m.id`. Any other mail with that subject is
+  pushed as ordinary mail, so no box-token holder can use the prefix to keep a mail off the phone.
+- `report` (a `stall:` mail from `operator`) is pushed with a title by its arm: `⚠ stall`, `⚠ frozen`, `⚠ dead` or
+  `⚠ failed` `› <run workspace>`. The frozen, dead and failed arms' coordinator notices are `stall:` mails, so none of
+  them is pushed a second time through `pushOne`.
 
-Pushes with no mail row (r3, `limit-cap`, `coord-ball`, and wave 2's frozen, dead, coord-deaf, mail-stuck,
-marker-unreadable and delayed orphan pushes) go through `pushOne` with an existing kind (`run` for run arms, `mail` for a
-run-less orphan), `recordAlways: true`, and the tag `stall-<runId|sessionId>-<arm>-<rung>-<episodeKeyMs>`. No
-`NotifyEvent` kind is added; a new kind is a wire change.
+Pushes with no mail row (r3, `limit-cap`, `coord-ball`, and wave 2's coord-deaf, mail-stuck, marker-unreadable and
+delayed orphan pushes) go through `pushOne` with an existing kind (`run` for run arms, `mail` for a run-less orphan),
+`recordAlways: true`, and the tag `stall-<runId|sessionId>-<arm>-<rung>-<key>` (the `key` below), except the delayed
+orphan push, whose tag is `orphaned-<toId>-<restartAt>` (§5.2). No `NotifyEvent` kind is added; a new kind is a wire
+change.
 
 **Spelled once.** The prefixes `stall-check:`, `re stall-check:`, `re stall-check: waiting`, `stall:`, `orphaned:`,
 `failed:` and `wait:`, and the observation-detail pair `stallDetail`/`parseStallDetail`
-(`stall:<arm>:<rung>:<episodeKeyMs>`, and `stall-shadow:…` in shadow), live in `stall.ts`. `single-definition.test.ts`
-reds on a second literal. `SYSTEM_MAIL_SENDER_MAP`'s gloss for `operator` names the watch.
+(`stall:<arm>:<rung>:<key>`, and `stall-shadow:…` in shadow), live in `stall.ts`. `key` is the arm's own event:
+`episodeKeyMs` for `quiet`, `limit-cap`, `coord-ball`, `frozen`, `dead`, `coord-deaf` and `marker-unreadable`; the
+marker's `restartAt` for `orphan-d`; its `stopAt` for `orphan-e` and `failed`; the `deliveryId` for `mail-stuck`. A notice
+to a coordinator with no run to record it on is keyed on its own mail row, as §5.2's run-less D notice is.
+`single-definition.test.ts` reds on a second literal. `SYSTEM_MAIL_SENDER_MAP`'s gloss for `operator` names the watch.
 
 **Durable dedupe, no migration.**
 - `queueStallNotice(run: RunRow | null, notice) → {queued:true, mailId, deliveryId} | {queued:false,
@@ -405,10 +442,14 @@ registry is the fleet box's `~/.cc-sessions`, which the server lists through the
 - `stall-watch-live` absent: **shadow** for every arm: `stall-shadow:*` observation rows and one
   `console.warn('ccrc-server: stall-watch shadow …')` per fire, nothing sent. Present: the notices addressed to the
   stalled session itself are sent (r1, and wave 2's orphan and failed self-mails).
-- `stall-watch-escalate` absent: r2, r3 and every operator push stay shadow even with `stall-watch-live` present.
-  Present: they are sent.
-- `stall-watch-w2-live` absent: every wave-2 arm stays shadow whatever the other markers say, so wave 2's arms are
-  armed only after 48 h of their own shadow rows have been hand-classified.
+- `stall-watch-escalate` absent: every notice addressed to a coordinator (r2, and the frozen, dead and failed
+  coordinator mails) and every operator push stay shadow even with `stall-watch-live` present. Present: they are sent.
+- `stall-watch-w2-live` absent: the lane treats every turn-marker read as `absent` for its verdicts. It keeps wave 1's
+  clock, leaves `busy` workers unjudged, holds on no marker read and keeps wave 1's r1 + 1 h rungs. Every wave-2 arm
+  and every wave-2 rule (the marker clock, the `delegates` hold, restart grace, escalation on proof) is recorded as
+  `stall-shadow:` rows only, whatever the other markers say. Present: they take effect under `stall-watch-live` and
+  `stall-watch-escalate` as above. So wave 2 is armed only after 48 h of its own shadow rows have been hand-classified,
+  and no marker read can hold the lane while `marker-unreadable` is shadowed.
 
 Every marker is touched and removed by hand on the fleet box, the `mail-disabled` precedent:
 `ssh <fleet-host> 'touch ~/.cc-sessions/stall-watch-live'`, and `rm -f` to remove. The lane reads it at its next 60 s
@@ -434,9 +475,11 @@ tick.
 
 ### 5.1 The marker, its readers, and the `busy` arm
 
-**First task.** Capture each installed lane's Stop, StopFailure and subagent payloads in ONE scratch session per lane,
-through a capture hook that the install spine (`_inst_hooks`) places. Never hand-edit a rostered home's
-`settings.json`, and never type into a live pane. Reduce each payload to its key set, its value types and the
+**First task.** Capture each installed lane's Stop, StopFailure and subagent payloads in ONE scratch session per lane.
+The capture is a `session-hook.sh` arm gated on that session's tmux name, shipped with `StopFailure` added to
+`EVENTS_JSON` and given its case arm (the pair `install-session-hooks.test.ts` enforces), and placed by the install spine
+(`_inst_hooks`), which registers one command in every rostered home and has no per-session scope. Never hand-edit a
+rostered home's `settings.json`, and never type into a live pane. Reduce each payload to its key set, its value types and the
 `background_tasks[].type` aliases before anything is committed, because the repo is public and raw payloads carry
 `last_assistant_message` and `transcript_path`.
 
@@ -456,7 +499,9 @@ lostBg, lostKinds, lostIds}`
   `read`, no fork.
 - **Stop:** `done`, `stopAt`. `bg` is the length of the payload's `background_tasks`, or **−1 when the field is absent
   (unmeasured, never 0)**. `bgKinds` is the comma-joined, de-duplicated `background_tasks[].type` display aliases
-  (`subagent,workflow,shell`); characters outside `[a-z_,-]` are deleted, then the value is cut at 200 bytes. `bgIds`
+  (2.1.284: `subagent`, `workflow`, `shell`, `monitor`, `MCP task`, `teammate`, `dream`, `auto-mode scan`,
+  `cloud session`); each is lower-cased and each space turned into `-` before characters outside `[a-z_,-]` are
+  deleted; the value is then cut at 200 bytes. `bgIds`
   is the `background_tasks[].id` values matching `^[A-Za-z0-9_-]{1,64}$`, at most 8, comma-joined. The payload's
   `session_crons` is not read: a scheduled wake does not stop the checks, and clause 16 does not count it as a wake.
 - **`is_interrupt`.** No installed version's Stop payload carries it, so the Stop arm stops reading it and stops writing
@@ -476,8 +521,12 @@ lostBg, lostKinds, lostIds}`
   `_ws_slug_free` never counts it and no late write can hold a slug. The write is skipped when
   `$REG/<id>.generation` is absent. `_reg_purge` removes it under the lock it already holds, line-neutral, by replacing
   the `hookstate.json` removal line (`ccd/ccd` ~3818) with
-  `for f in "$REG/$id.hookstate.json" "$REG/$id".turn.json*; do rm -f "$f" || _reg_purge_unremoved "$f"; done`,
-  and the field inventory above it names the new file. This edits generated `ccd/ccd` and pays its restamp. A write that
+  `for f in "$REG/$id.hookstate.json" "$REG/$id.turn.json"; do rm -f "$f" || _reg_purge_unremoved "$f"; done`,
+  and the field inventory above it names the new file. No glob: `_hook_write_atomic` stages through the dot-leading
+  `.<id>.turn.json.<pid>.<nonce>.hook-write.tmp`, which no `$REG/$id.*` pattern reaches, and a trailing `*` would match
+  another row's `<id>.turn.json-<slug>.uuid` — the cross-id deletion `_reg_purge`'s F3 note exists to prevent. The
+  `_ws_slug_free` header note (`ccd/ccd` ~6143, "one named two-dot file") is edited, line-neutral, to name both
+  files. This edits generated `ccd/ccd` and pays its restamp. A write that
   lands after a purge leaves a file that holds no slug and that the reader answers `foreign` or `stale`; the next row
   of that id overwrites it at its first SessionStart. A leftover `_hook_write_atomic` tmp is dot-leading and holds no
   slug either.
@@ -492,10 +541,13 @@ lostBg, lostKinds, lostIds}`
   `v`, unknown state word, over 4 KiB), `foreign` (`sessionId` ≠ registry uuid), `stale` (`at` and `restartAt` both
   older than the live process's `startedAt`, which `livestate.ts`'s reader gains as an additive field). There is no
   freshness window: the marker changes only on main events, so a days-old `done` is still true. `bg` −1 stays −1.
-- `readHookStateRawMeasured(io, reg, id, currentUuid)` in `hookstate.ts` returns `{ok:true, updatedAt, state, event,
-  sessionId, identity:'current'|'foreign'|'unregistered'}` or `{ok:false, reason:'absent'|'unmeasured'|'malformed'}`,
-  with no freshness cut-off. `readHookStateMeasured` becomes a fold over it that applies `HOOKSTATE_FRESH_MS` in one
-  place ("derived, not duplicated"), and its existing suite stays green unchanged.
+- `readHookStateRawMeasured(io, reg, id, currentUuid)` in `hookstate.ts` returns `{ok:true, state: HookState,
+  sessionId, identity:'current'|'foreign'|'unregistered'}`. It validates every field today's reader validates (the
+  64 KiB cap, `v`, `state`, `updatedAt`, `interrupted`, `event`, `ask`, `subagents`, the graph counters) and applies no
+  identity or freshness cut. Otherwise it returns `{ok:false, reason:'absent'|'unmeasured'|'malformed'}`.
+  `readHookStateMeasured` becomes the fold over it that maps `malformed`, `foreign`, `unregistered` and an `updatedAt`
+  older than `HOOKSTATE_FRESH_MS` to `no-state` in one place ("derived, not duplicated"), so its existing suite stays
+  green unchanged.
 
 **How consumers branch on the marker read.** `absent`, `foreign` and `stale` take the wave-1 path. `unmeasured` never
 delivers on `busy` and makes the stall lane hold. `malformed` never delivers on `busy`; for the stall lane it takes the
@@ -529,10 +581,11 @@ non-watch mail to the worker, and `dispatchedAt`. Respawns and swaps no longer r
   quiet arm. `no-state` is never read as elapsed time.
 
 **Escalation on proof, bounded by a clock.** With a current marker, r2 fires at the first of:
-- (a) the worker's first Stop after a delivered stall-check shows no wake-bearing background task and no worker mail
-  since the check;
-- (b) the orphan (E) arm fires a second time inside the episode (the worker re-armed and ended again without mail);
-- (c) the check is still undelivered 2 h after it was queued;
+- (a) the worker's first Stop after a delivered stall-check carries a measured `bg` (not −1), no `subagent` or
+  `workflow` in `bgKinds` (a `shell` is not a wake, clause 16's rule), and no worker mail since the check;
+- (b) a second `orphan-e` row (a later `stopAt`) is recorded inside the episode: the worker re-armed and ended again
+  without mail;
+- (c) the check is still undelivered `CHECK_UNDELIVERED_MS` (2 h) after it was queued;
 - (d) `STALL_BOUND_MS` has passed since r1 with no worker mail on the run, whatever the Stops showed (§11 decision 7;
   recommended 3 h).
 
@@ -546,7 +599,7 @@ All wave-2 arms are gated by `stall-watch-w2-live` as well as the markers in §4
 | Arm | Who | Fires when | Rung | Basis |
 |---|---|---|---|---|
 | **orphan (D)** | any session | marker `done`, `lostBg > 0`, `restartAt > stopAt`, no main event since, live `idle` for 15 min, episode began within 24 h | a mail to the session itself | 21 orphaned restarts: all 13 self-heals within 2.4 min, earliest human pick-up 37 min; 8 waited 15 min or more (0.4 a day) |
-| **orphan (E)** | run workers and coordinators | a wake-bearing kind at the Stop (`subagent`, `workflow`, `shell`), `statusUpdatedAt ≥ stopAt`, live `idle` for 10 min, no main event since | a mail to the session itself | S4 at ~22:07 instead of 23:57. Operator-interactive sessions are excluded: D and E together, at 10 min on every session, measured about 2.8 a day, mostly operator panes, against about 0.4 for D alone at 15 min |
+| **orphan (E)** | run workers and coordinators | a wake-bearing kind at the Stop (`subagent`, `workflow`, `shell`; here `shell` counts: E detects a task that could have woken the session and did not), `statusUpdatedAt ≥ stopAt`, live `idle` for 10 min, no main event since | a mail to the session itself | S4 at ~22:07 instead of 23:57. Operator-interactive sessions are excluded: D and E together, at 10 min on every session, measured about 2.8 a day, mostly operator panes, against about 0.4 for D alone at 15 min |
 | **failed** | run workers and coordinators | marker `failed` for 10 min, live `idle`; `err` classified by `STOP_FAILURE_ERRORS` below | per class | 5 census stalls, 36 h (run 40: 19 h after "Connection refused"; one was "Prompt is too long") |
 | **frozen** | run workers | marker `working`, live `busy`, and the raw hookstate `updatedAt` (non-plumbing, current) older than 60 min | coordinator mail + push `⚠ frozen` | longest legit call 28.3 min; the 08-27 memory.high freeze (18 h 51 m) and a 4.6 h Bash |
 | **dead** | run workers | lifecycle `stopped`, `orphan` or `never-started` for 10 min | coordinator mail + push | respawn measured at 9 s; 10 min = 5 × `SUPERVISED_FRESH_MS`. §11 decision 10 asks whether a deliberate `stopped` is excluded |
@@ -555,13 +608,16 @@ All wave-2 arms are gated by `stall-watch-w2-live` as well as the markers in §4
 
 **`STOP_FAILURE_ERRORS`** is one total `Record` in `stall.ts` over StopFailure's documented values:
 - **retry:** `server_error`, `overloaded`, `max_output_tokens`, `unknown` — a `failed:` self-mail at 10 min; a second
-  failure within 2 h goes to the coordinator.
-- **account:** `rate_limit`, `billing_error`, `authentication_failed`, `oauth_org_not_allowed`, `account_on_hold`,
-  `cloud_credential_error` — hold; the limit, swap and authdead machinery owns them.
+  failure within `FAILED_REPEAT_MS` (2 h) goes to the coordinator.
+- **account:** `rate_limit`, `billing_error`, `authentication_failed`, `oauth_org_not_allowed`, `account_on_hold`
+  (listed by the binary only behind a feature gate), `verification_required`, `cloud_credential_error` — hold; the
+  limit, swap and authdead machinery owns them.
 - **request:** `invalid_request`, `model_not_found` — a coordinator mail and push at 10 min, no self-mail, because a
   retry fails the same way.
 - any other token (a newer build): hold, plus one `console.warn('ccrc-server: stall-watch unknown StopFailure
   <err>')`. It is never guessed into a self-wake; wave 1's ladder remains the backstop, because the live status is idle.
+
+The thirteen values are 2.1.277–2.1.284's own StopFailure matcher list, identical in every installed lane.
 
 **The orphan mail** names only what the marker carries: `orphaned: <lostBg> background task(s) (<lostKinds>) did not
 survive the <yyyy-mm-ddThh:mm>Z restart`, listing each id in `lostIds` (and, once continuity's `$REG/<id>.inflight`
@@ -576,7 +632,8 @@ on (`run_events.runId` references `runs(id)`, and `recordRunEvent` does nothing 
 keyed on its own mail row: `queueStallNotice(null, notice)` answers `{queued:false, why:'duplicate'}` when any mail row
 in any delivery state (acked, rejected and parked included, not only `hasOutstandingMail`'s outstanding set) has
 `fromId 'operator'`, `runId` null, the same `toId` and the same deterministic subject, checked in the same transaction
-as the insert. The `⚠ orphaned` push fires once, when that row's delivery is still unacked 30 min after `deliveredAt`
+as the insert. The read is landing-order wave 2's `CoordStore.hasMailWithSubject(fromId, runId, toId, subject)` (every
+delivery state, `runId IS ?`); whichever programme lands first adds it. The `⚠ orphaned` push fires once, when that row's delivery is still unacked 30 min after `deliveredAt`
 (or still undelivered 30 min after queueing), with the tag `orphaned-<toId>-<restartAt>`; its latch is in memory, so a
 server restart inside that window may push once more, and the tag collapses the two on the phone. Candidates are the
 registry rows whose marker reads `done` with `lostBg > 0`: one marker read per row per lane tick.
@@ -610,15 +667,17 @@ same commit. It is numbered after landing-order's and continuity's clauses if th
 ### 6.2 The next free worker clause (pinned)
 
 > End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent or workflow you
-> launched from your main thread yourself, or a structured ask. A background shell is never that wake: it has no
-> deadline and may never report. A task a subagent started reports to that subagent, and a restart kills every
+> launched from your main thread yourself, or a structured ask. A background shell or Monitor is never that wake: it has
+> no deadline and may never report. A task a subagent started reports to that subagent, and a restart kills every
 > background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn
 > ends.
 
 It must not name a background Bash as a sufficient wake (S3). Pin impact: `worker-skill.test.ts`'s verbatim array gains
 the clause and its derived count word moves by one; the same test checks that word in SKILL.md ("These fifteen
 clauses" and the D-104 note's "these fifteen lines"), in CLAUDE.md, and at every README occurrence of
-`ccd/worker-skill/SKILL.md` (two live sentences; the dated R2 changelog line is appended to, not rewritten). Until
+`ccd/worker-skill/SKILL.md` (three occurrences: `:1769`, `:2123`, and the dated R2 changelog line `:2487`, whose "now
+carries fifteen clauses" is the first `<word> clauses` after the path and is checked too; its count word moves, its
+parenthetical gains "the stall watch added 16", and the rest of that dated line stays as written). Until
 `_inst_skills` has run in every home, coordinators may repeat its first sentence in briefs (the branch-discipline
 precedent). The watch does not depend on either clause: the stall-check and `stall:` bodies carry their own protocol.
 
@@ -627,8 +686,9 @@ precedent). The watch does not depend on either clause: the stall-check and `sta
 - `2026-09-23-session-continuity-design.md` §5 "Not-stalled restarts": "… and nothing types" becomes "… and nothing
   types at spawn. If the restart orphaned in-flight work (the marker's `lostBg`), the server's stall watch mails the
   session itself once, 15 minutes after the restart."
-- Wave 1 corrects the four docstrings named in §3.1 (`livestate.ts`'s `shell` gloss and consumer list, `LiveStateRead`
-  and `readLiveState`, `sweepMail`'s conjunct 5, D-2016's `turnStall`) and the 2026-08-17 spec's `shell` reading.
+- Wave 1 corrects the docstrings named in §3.1 (`livestate.ts`'s `shell` gloss and consumer list, `LiveStateRead`'s
+  "affirmative idle", `readLiveState`'s caller census, `sweepMail`'s conjunct 5, D-2016's `turnStall`) and the
+  2026-08-17 spec's `shell` reading.
 - README's mail-gate and watcher-lane sections; CLAUDE.md's coordination invariants gain one line on the stall lane.
 
 ## 7. Noise and cost
@@ -639,7 +699,7 @@ precedent). The watch does not depend on either clause: the stall-check and `sta
 | r1 false positives on legit waits | ~1.1 | one worker turn and one reply each |
 | r2 coordinator mails | 1–2 (55% of nudge-started turns send no mail) | `⚠ stall` push, presence-gated |
 | r3 | ~0.1–0.3 | `⚠ stalled` push |
-| orphan (D) | ~0.4 | `⚠ orphaned` only if unanswered after 30 min |
+| orphan (D) | ~0.4 | `⚠ orphaned` only if unacked 30 min after delivery |
 | orphan (E), run participants | ≤ 2 (14 E episodes on all sessions in 7 days; the run share is unmeasured) | none: recorded |
 | failed | unmeasured (StopFailure was never counted; the census floor is 5 stalls in 27.6 days) | none; a coordinator mail on a repeat or a request error |
 | frozen, dead, limit-cap, coord-ball | ~0.04 each | push |
@@ -682,11 +742,13 @@ and one per held delivery per mail sweep.
    `done` during a turn: the pane guard refuses while `esc to interrupt` shows; a nudge that passes it is folded in at
    the next tool boundary (§3.1).
 3. **A Claude Code build that omits `agent_id` on subagent payloads.** Subagent events would count as main-thread ones;
-   behaviour degrades to wave 1's, never misfires. Wave 2's first task captures real payloads from every live lane.
+   behaviour degrades to wave 1's, never misfires. Wave 2's first task captures real payloads from every installed lane,
+   in one scratch session per lane whose capture hook `_inst_hooks` places (§5.1).
 4. **A build where `shell` stops meaning idle.** On a wide, non-RC pane the guard refuses, and the refusal is
    non-counting. On a narrow or RC pane the guard cannot see a running turn: the nudge is typed and folded in at the next
    tool boundary. `mail-gate-strict` is the way back. The stall lane has no such guard: a long busy turn would read as
-   `shell` and draw r1 after 2 h; the pane guard refuses r1's delivery, r2 reaches the coordinator, who re-measures. The
+   `shell` and draw r1 after 2 h; on a wide, non-RC pane the pane guard refuses r1's delivery and r2 reaches the
+   coordinator, who re-measures; on a narrow or RC pane r1 is typed and folded in at the next tool boundary (§3.1). The
    shadow period is where this shows first. §11 decision 11 asks about a doctor probe.
 5. **The agent link down, or the registry unlistable.** `tick()` returns before registry-sourced lanes; the markers fail
    shut; nothing fires. The durable episodes resume afterwards.
@@ -707,7 +769,8 @@ and one per held delivery per mail sweep.
 12. **Injection.** Bodies carry only server-computed facts and ids matching their patterns (§4.2), with `(unprintable)`
     for anything else; no transcript text, subject or task description. The hook clips `bgKinds`, `bgIds` and `err`
     before writing, and the reader answers `malformed` on anything else.
-13. **Clock skew.** Fleet-box epoch ms against the server's `Date.now()`. Every stall threshold is 10 min or more; the
+13. **Clock skew.** Fleet-box epoch ms against the server's `Date.now()`. Every stall threshold is 10 min or more except
+    `RESTART_GRACE_MS` (5 min from the fleet-box `restartAt`), where skew shortens or lengthens the grace by its own size; the
     mail gate's 60 s / 15 s quiet from `stopAt` carries the same exposure `statusUpdatedAt` carries today.
 14. **The markers.** No code writes `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
     `stall-watch-w2-live`, `mail-gate-strict`, `mail-gate-busy-shadow` or `mail-gate-busy`; a test pins that no source
@@ -733,13 +796,17 @@ and one per held delivery per mail sweep.
 | `MAIL_STUCK_MS` | 1.2 h | p90 mail-to-first-read over 1,206 worker mails |
 | `ORPHAN_D_IDLE_MS` | 15 min | 13 of 21 restarts self-healed within 2.4 min; earliest human pick-up 37 min |
 | `ORPHAN_E_IDLE_MS`, `FAILED_IDLE_MS` | 10 min | *chosen* |
+| `FAILED_REPEAT_MS` | 2 h | *chosen*: a second retry-class StopFailure inside it goes to the coordinator |
+| `CHECK_UNDELIVERED_MS` | 2 h | *chosen*: §5.1 (c) |
 | `RESTART_GRACE_MS` | 5 min | *chosen*: covers ccd's redrive after a mid-turn death |
 | `BACKLOG_HORIZON_MS` | 24 h | *chosen*: first enable must not wake long-abandoned sessions |
 | `ORPHAN_PUSH_MS`, `MARKER_UNREADABLE_MS` | 30 min, 1 h | *chosen* |
 | `MAIL_TURN_HOLD_MS` | 60 s | *chosen* |
 | `STALL_SWEEP_MS` | 60 s | `CLAIM_SWEEP_MS` precedent |
 
-**Evaluation order** for a run worker is the spec: (1) run `unknown` or unnamed: hold; (2) any unmeasured input: hold;
+**Evaluation order** for a run worker is the spec: (1) run `unknown` or unnamed: hold; (2) wave 2's `marker-unreadable`
+(a turn-marker read `unmeasured` or `malformed` for `MARKER_UNREADABLE_MS`, once per episode), then any unmeasured input,
+the marker's `unmeasured` included: hold;
 (3) lifecycle: hold, or wave 2's dead arm; (4) hold 2a, then 2b; (5) the limit hold, becoming `limit-cap` at its cap;
 (6) wave 2's restart grace; (7) wave 2's frozen arm; (8) wave 2's `delegates` hold; (9) ball with the coordinator:
 coord-deaf, the coord-ball cap, or none; (10) ball with the worker: the ladder. The D, E and failed arms are separate
@@ -754,8 +821,9 @@ legitimate waits, `rm stall-watch-escalate`; then re-derive.
 **Tests.** Every guard ships with the test that reds when it is deleted, measured before and after (mutation-table
 discipline). The golden fixtures are the measured timestamps: S1–S4, Case D, run 129's shell-gated mail 2407, the 4.6 h
 frozen Bash, a declared-idle legit wait, a hand-off, a rejected wave-done, two overlapping runs on one session. A
-property test sets each unmeasured slot in turn (`unmeasured`, `statusUnmeasured`, the live-state read's `unmeasured`
-and `no-state`, lifecycle `unmeasurable`/`null`, a failed store read) and requires `hold`; its slots exclude `limits`,
+property test sets each unmeasured slot in turn (`unmeasured`, `statusUnmeasured`, a null pane pid, a null config dir,
+the live-state read's `unmeasured` and `no-state`, lifecycle `unmeasurable`/`null`, a failed store read) and requires
+`hold`; its slots exclude `limits`,
 and one row pins that a null `limits` fires exactly as a measured 0 does. Fixture HOMEs only; the marker writer's tests
 use `makeCcdHarness`.
 
@@ -778,6 +846,8 @@ Deviation numbers are minted at run-open (`POST /api/ledger/deviations`); this s
   stage 3 share ONE payload-parse program emitting `agent_id`; whichever lands second rebases onto it.
 - **The in-flight manifest.** When continuity's `$REG/<id>.inflight` exists, the orphan mail lists its validated ids;
   the marker's `lostBg` stays the trigger.
+- **The mail-subject read.** Landing-order wave 2's `hasMailWithSubject` is the every-state read that §5.2's run-less
+  dedupe needs. It has one definition, added by whichever programme lands first.
 - **The rescue path.** Continuity wave 2 rewrites it. The stall lane's limit hold reads the same `limits` fields and
   must not act on a rescue it cannot see; it holds, capped at 12.5 h.
 - **Workspace lifecycle stage 4** abandons a dead coordinator's programme at first-dead + 1 h under a stricter
@@ -789,8 +859,10 @@ Deviation numbers are minted at run-open (`POST /api/ledger/deviations`); this s
 1. **No blocking Stop hook** (§2). The coordinator proposed one; the census says it fires 17–36 times a day, misses
    11–13 of the 36 turn-end stalls and all 13 mid-turn ones (about half of the 49), and has no backstop. Confirm.
 2. **Who hears first, and when coordination is paused.** Recommended: the worker at 2 h, the coordinator at 3 h, the
-   phone at 4 h. A paused coordinator is skipped and the phone is told at 3 h, naming the pause. The coordinator asked
-   to be mailed; an FYI copy on every r1 costs about 3.5 more coordinator turns a day (~10 M tokens).
+   phone at 4 h (wave 1's ladder; with the wave-2 marker r2 fires on proof, at the latest r1 + `STALL_BOUND_MS`, so the
+   phone hears at the latest at 6 h, §5.1). A paused coordinator is skipped and the phone is told at 3 h, naming the
+   pause. The coordinator asked to be mailed; an FYI copy on every r1 costs about 3.5 more coordinator turns a day
+   (~10 M tokens).
 3. **Arming.** Recommended: `stall-watch-live` touched at deploy (r1 only mails the worker and never pushes), and
    `stall-watch-escalate` after 48 h of shadow. A 7-day shadow would give up about 190–370 stall-hours at the census
    rate. The safety judge forbade arming before the clauses reach every home; this spec departs from that because r1
@@ -811,7 +883,7 @@ Deviation numbers are minted at run-open (`POST /api/ledger/deviations`); this s
 10. **A deliberate `stopped` and the dead arm.** Should a worker stopped by `ws-archive` or `ccd stop` be excluded from
     the dead arm's push?
 11. **A doctor probe for `shell`.** Whether wave 2 adds a doctor check that greps each installed lane binary for the
-    idle-derived `shell` relabel, and treats a lane without it as `busy`. Eight lanes (2.1.277–2.1.284) shipped in about
+    idle-derived `shell` relabel, and treats a lane without it as `busy`. Seven installed lanes (2.1.277–2.1.284; 2.1.279 is not installed) shipped in about
     four weeks.
 12. **The kill rules and the shadow periods** (§10, §5.1), as proposed: 48 h for the escalations, the `busy` gate and
     the wave-2 arms.
@@ -819,7 +891,7 @@ Deviation numbers are minted at run-open (`POST /api/ledger/deviations`); this s
 14. **Side findings for separate tickets:** `runs signals` reports swaps 0 despite a swap; on 09-17 one session's pane
     stopped and unsupervised another session's unit during a rolling relaunch; the S4 queue defect for upstream.
 
-## 12. Review resolutions (rev 2)
+## 12. Review resolutions (rev 2 and rev 3)
 
 Where two findings prescribed different fixes, this is the choice made:
 - **The marker's name.** `.turn` (one dot) with an accepted check-then-act residue, or `.turn.json` (two dots) with a
@@ -835,4 +907,18 @@ Where two findings prescribed different fixes, this is the choice made:
 - **Ids in the orphan mail.** Counts and kinds only, or clipped task ids. Chosen: `bgIds`/`lostIds` clipped to
   `^[A-Za-z0-9_-]{1,64}$`, at most 8, because a count-only notice gives the woken session nothing to act on.
 - **Session crons in the marker.** A new hold, or not read. Chosen: not read.
+- **What a coordinator `wait:` does to an open episode.** Keep the episode open with the ball moved, or close it.
+  Chosen: close it. With the episode kept open, a second silence after the ball returns reuses the spent rungs' key and
+  draws no r1.
+- **The delayed `⚠ orphaned` push.** A second durable mail row (`orphaned-unanswered:`), or an in-memory latch with a
+  collapsing tag. Chosen: the latch. A restart inside the 30 min window may push once more, and the tag collapses the
+  two (§9.7); a second mail row would type into the session again.
+- **A Monitor in clause 16.** A Monitor with a timeout as a wake, or not a wake. Chosen: not a wake, because a shell
+  Monitor is a `local_bash` task (§3.1) and S4's was armed by a subagent. The clause says "A background shell or Monitor
+  is never that wake".
+- **StopFailure request errors.** Leave them to wave 1's ladder, or a coordinator mail and push at 10 min. Chosen: the
+  coordinator at 10 min, because a self-wake re-fails the same way.
+- **The push classifier's home and kind.** `rundefs.ts` with kind `mail`, or `stall.ts` with kind `run` for run arms.
+  Chosen: `stall.ts`, pure, with its store facts passed in, and `run` (`mail` only for a run-less orphan), so every
+  stall literal is spelled in one module.
 - **`HookState.interrupted`.** Retire it, or keep it as an always-false field. Chosen: keep it, so no reader narrows.
