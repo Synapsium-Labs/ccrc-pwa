@@ -8638,12 +8638,16 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *    label-key-taken — `markUnreachable` found no live row for the label and
  *                    could not write the label-keyed placeholder: a row
  *                    already holds that key.
- *    not-busy      — `releaseLease` on a settled row: there is no lease.
- *    stale-report  — a report whose run began before the lease (even the
- *                    last ms its whole-second `startedAt` covers,
- *                    `startedAt*1000 + 999`, is before `updateStartedAt`)
- *                    belongs to a previous run and never moves it (design
- *                    §8's precedence).
+ *    not-busy      — `releaseLease`, `noteLeaseDetail` on a settled row: there
+ *                    is no lease (for the note, a report or the deadline
+ *                    settled it first, and its verdict is not the
+ *                    dispatcher's to overwrite).
+ *    stale-report  — the identity guard refused: `releaseLease`/`settleNode`'s
+ *                    row no longer holds the `updateStartedAt` the caller read
+ *                    (the lease moved on), or `noteLeaseDetail`'s row holds a
+ *                    newer lease than the one the caller acquired (D-3413).
+ *                    Freshness is change plus the lease's tag, never a clock
+ *                    (D-3405).
  *    empty-patch   — `setIntent`'s patch names none of channel/pinnedTag/
  *                    auto/notify.
  *    bad-field     — a named patch field's value is outside its vocabulary
@@ -8679,7 +8683,11 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *                    (design decision 8). Nothing is written.
  *    not-idle      — `noteDispatchRefusal`: the row is not `idle`. A
  *                    `failed`/`reverted` row's detail is the verdict the halt
- *                    reads and a busy row's is its lease's; nothing is written. */
+ *                    reads and a busy row's is its lease's; nothing is written.
+ *    no-lease-to-hand — `handOffLease` (D-3412): the donor is not a BUSY row
+ *                    of the heir's label retired TOWARD the heir (absent,
+ *                    live, settled, retired toward another node, or another
+ *                    box's row); nothing is written. */
 export const UPDATE_STORE_REFUSE_CODES = [
   'bad-tag', 'duplicate-tag', 'bad-row', 'empty-listing', 'unknown-node',
   'bad-node-id', 'label-key-taken', 'not-busy', 'stale-report',

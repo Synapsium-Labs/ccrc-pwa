@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:f
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { RunningAgent } from '../../agent/src/server.js';
-import { connectFleet, FleetClient, readReadyOps, type ConnectedFleet } from '../src/remote/client.js';
+import { connectFleet, FleetClient, LinkNotSentError, readReadyOps, type ConnectedFleet } from '../src/remote/client.js';
 import { MAX_CAP_WORDS } from '../../shared/api.js';
 import { TOKEN, bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 
@@ -784,4 +784,186 @@ describe('the ~/.ccrc node files over a REAL agent — what the inventory sweep 
     symlinkSync(path.join(ccrc, 'no-such-target'), path.join(ccrc, 'update.json'));
     expect(await fleet!.io.lstatMeasured(path.join(ccrc, 'update.json'))).toEqual({ ok: true, kind: 'symlink' });
   });
+});
+
+/** A minimal hello->ready server, same shape as the scaffold in the
+ *  `every settlement releases its pending resources` describe above, plus a
+ *  record of every `req` frame it sees and the socket that sent the last one
+ *  — so a case can terminate exactly the connection that carries a pending
+ *  request. */
+async function listen(): Promise<{
+  server: WebSocketServer;
+  port: number;
+  requestFrames: Array<Record<string, unknown>>;
+  reqSocket(): WebSocket | undefined;
+}> {
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  const requestFrames: Array<Record<string, unknown>> = [];
+  let lastReqSocket: WebSocket | undefined;
+  server.on('connection', (ws) => {
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
+      if (msg.t === 'hello') ws.send(JSON.stringify({ t: 'ready', v: 1 }));
+      else if (msg.t === 'req') {
+        requestFrames.push(msg);
+        lastReqSocket = ws;
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+  const address = server.address();
+  const port = typeof address === 'object' && address !== null ? address.port : 0;
+  return { server, port, requestFrames, reqSocket: () => lastReqSocket };
+}
+
+describe('FleetClient.request — what never reached the link is a LinkNotSentError, and nothing after the send is (D-3555, residue R1)', () => {
+  let wss: WebSocketServer | undefined;
+  let fleet: ConnectedFleet | undefined;
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    await fleet?.close();
+    fleet = undefined;
+    if (wss) {
+      for (const client of wss.clients) client.terminate();
+      await new Promise<void>((resolve) => wss!.close(() => resolve()));
+    }
+    wss = undefined;
+  });
+
+  it('no ready link at the call: LinkNotSentError(disconnected), nothing left pending', async () => {
+    fleet = connectFleet({
+      url: 'ws://127.0.0.1:1', token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000,
+    });
+    const reachable = fleet.client as unknown as { pending: Map<number, unknown> };
+    const request = fleet.client.request({ t: 'req', op: 'caps' });
+    await expect(request).rejects.toBeInstanceOf(LinkNotSentError);
+    await expect(request).rejects.toMatchObject({ message: 'disconnected' });
+    expect(reachable.pending.size).toBe(0);
+  });
+
+  it('a signal already aborted: LinkNotSentError(aborted), no frame ever reaches the server', async () => {
+    const l = await listen();
+    wss = l.server;
+    fleet = connectFleet({ url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+    const controller = new AbortController();
+    controller.abort();
+    const request = fleet.client.request({ t: 'req', op: 'caps' }, 60_000, controller.signal);
+    await expect(request).rejects.toBeInstanceOf(LinkNotSentError);
+    await expect(request).rejects.toMatchObject({ message: 'aborted' });
+    expect(l.requestFrames).toEqual([]);
+  });
+
+  it('a synchronous send throw: LinkNotSentError(the thrown message), and the registration above is undone', async () => {
+    const l = await listen();
+    wss = l.server;
+    fleet = connectFleet({ url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+    const socket = (fleet.client as unknown as { socket: WebSocket }).socket;
+    vi.spyOn(socket, 'send').mockImplementation(() => { throw new Error('send refused'); });
+
+    vi.useFakeTimers();
+    const timersBefore = vi.getTimerCount();
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, 'removeEventListener');
+    const reachable = fleet.client as unknown as { pending: Map<number, unknown> };
+
+    const request = fleet.client.request({ t: 'req', op: 'caps' }, 60_000, controller.signal);
+
+    await expect(request).rejects.toBeInstanceOf(LinkNotSentError);
+    await expect(request).rejects.toMatchObject({ message: 'send refused' });
+    expect(reachable.pending.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(timersBefore);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+    expect(l.requestFrames).toEqual([]);
+  });
+
+  type PostSendCase = {
+    label: string;
+    message: string;
+    // Boxed in `{ p }`, never returned bare: an `async` function auto-awaits
+    // (flattens) a returned promise before its own caller's `await` sees
+    // anything, which would let the rejection this case is arranging escape
+    // BEFORE the test attaches its `.rejects` assertion — an unhandled
+    // rejection, not a failed expectation.
+    arrange(ctx: {
+      fleet: ConnectedFleet;
+      l: Awaited<ReturnType<typeof listen>>;
+      controller: AbortController;
+    }): Promise<{ p: Promise<unknown> }>;
+  };
+
+  const postSendCases: PostSendCase[] = [
+    {
+      label: 'a timeout',
+      message: 'timeout',
+      arrange: async ({ fleet: f, l }) => {
+        const p = f.client.request({ t: 'req', op: 'caps' }, 25);
+        // Node flags `p` unhandled the instant its timer fires if that lands
+        // before the caller's `.rejects` chain attaches — which can beat the
+        // `vi.waitFor` poll below on a loaded box. A no-op catch here (same
+        // pattern as the two `void request.catch(() => {});` calls above in
+        // this file) is silent by construction and never swallows the
+        // rejection itself: the returned `p` is what the caller still awaits.
+        void p.catch(() => {});
+        await vi.waitFor(() => expect(l.requestFrames.length).toBe(1), { timeout: 3000 });
+        return { p };
+      },
+    },
+    {
+      label: 'a socket close',
+      message: 'disconnected',
+      arrange: async ({ fleet: f, l }) => {
+        const p = f.client.request({ t: 'req', op: 'caps' }, 60_000);
+        void p.catch(() => {});
+        await vi.waitFor(() => expect(l.requestFrames.length).toBe(1), { timeout: 3000 });
+        l.reqSocket()!.terminate();
+        return { p };
+      },
+    },
+    {
+      label: 'close()',
+      message: 'disconnected',
+      arrange: async ({ fleet: f, l }) => {
+        const p = f.client.request({ t: 'req', op: 'caps' }, 60_000);
+        void p.catch(() => {});
+        await vi.waitFor(() => expect(l.requestFrames.length).toBe(1), { timeout: 3000 });
+        void f.close();
+        return { p };
+      },
+    },
+    {
+      label: 'an abort',
+      message: 'aborted',
+      arrange: async ({ fleet: f, l, controller }) => {
+        const p = f.client.request({ t: 'req', op: 'caps' }, 60_000, controller.signal);
+        void p.catch(() => {});
+        await vi.waitFor(() => expect(l.requestFrames.length).toBe(1), { timeout: 3000 });
+        controller.abort();
+        return { p };
+      },
+    },
+  ];
+
+  it.each(postSendCases.map((c) => [c.label, c] as const))(
+    '%s after the send stays a plain Error, never the marker',
+    async (_label, c) => {
+      const l = await listen();
+      wss = l.server;
+      fleet = connectFleet({
+        url: `ws://127.0.0.1:${l.port}`, token: TOKEN, heartbeatMs: 60_000, reconnectMinMs: 60_000,
+      });
+      await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+
+      const controller = new AbortController();
+      const { p: request } = await c.arrange({ fleet, l, controller });
+      await expect(request).rejects.toThrow(c.message);
+      await expect(request).rejects.not.toBeInstanceOf(LinkNotSentError);
+    },
+  );
 });
