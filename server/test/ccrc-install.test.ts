@@ -2433,10 +2433,13 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(stamp, 'the stamp took the enclosing repository\'s sha').not.toContain(esha);
   });
 
-  it('an exported GIT_DIR naming ANOTHER repository changes neither the name nor the stamp: the source is named and stamped from its own HEAD (final-review fix wave, Step 0c)', () => {
-    // `git -C <src> rev-parse HEAD` under an ambient GIT_DIR answers for that
-    // repository, and `_inst_git_own` (which already unsets it) then agrees
-    // that <src> is a top level — a name taken from another tree's commit.
+  it('an exported GIT_DIR naming ANOTHER repository changes nothing a git read answers: the name, the stamp\'s sha, ref, dirty and version all come from the source\'s own repository (final-review fix wave, Step 0c; fix round 1)', () => {
+    // `git -C <src> <verb>` under an ambient GIT_DIR answers for that
+    // repository, and `_inst_git_own` (which unsets it) then agrees that <src>
+    // is a top level — a name and a stamp taken from another tree's commit,
+    // branch, tag and worktree state. `other` differs from `repo` in all four:
+    // another commit, a `v9.9.9` release tag at its HEAD, another branch, and a
+    // modified tracked file.
     const home = mkTmp('ccrc-ver-name-git-dir-');
     installFixtureTree(home, 'repo');
     installFixtureTree(home, 'other');
@@ -2446,15 +2449,26 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     const sha = gitInit(repo);
     const osha = gitInit(other);
     expect(osha, 'the two fixture repositories share a commit — the pin would prove nothing').not.toBe(sha);
+    const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
+    const ogit = (...args: string[]): void => {
+      const r = spawnSync('git', ['-C', other, ...args], { env: gitEnv, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`fixture git ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    ogit('tag', 'v9.9.9');
+    ogit('checkout', '-q', '-b', 'other-branch');
+    writeFileSync(join(other, 'ONLY-IN-OTHER'), 'modified after the commit\n');
+    // (`other`'s tracked file is now dirty; `repo` is clean, on fixture-branch, untagged.)
     const env = `export GIT_DIR='${other}/.git' GIT_WORK_TREE='${other}'; `;
     const n = sourced(home, join(REPO, 'ccd', 'ccrc'), `${env}_inst_version_name "$(cd '${repo}' && pwd -P)"`);
     expect(n.code, n.stderr).toBe(0);
-    expect(n.stdout.trim()).toBe(`untagged-${sha.slice(0, 12)}`);
+    expect(n.stdout.trim(), 'the name took the ambient GIT_DIR repository\'s release tag').toBe(`untagged-${sha.slice(0, 12)}`);
     const r = sourced(home, join(REPO, 'ccd', 'ccrc'), `${env}CCRC_HERE='${repo}/ccd'; _inst_stamp`);
     expect(r.code, r.stderr).toBe(0);
-    const stamp = readFileSync(join(home, '.ccrc', 'build.json'), 'utf8');
-    expect(stamp).toContain(sha);
-    expect(stamp, 'the stamp took the ambient GIT_DIR repository\'s sha').not.toContain(osha);
+    const stamp = JSON.parse(readFileSync(join(home, '.ccrc', 'build.json'), 'utf8')) as Record<string, unknown>;
+    expect(stamp['sha']).toBe(sha);
+    expect(stamp['ref'], 'the stamp\'s ref is another repository\'s branch').toBe('fixture-branch');
+    expect(stamp['dirty'], 'the stamp\'s dirty is another repository\'s worktree state').toBe(false);
+    expect('version' in stamp, 'the stamp carries another repository\'s release tag').toBe(false);
   });
 
   it('a fresh box: the tree lands in ~/ccrc-versions/<name>/, never at the live name, and ~/ccrc becomes an absolute link to it — after the deps, by one rename', () => {

@@ -10248,7 +10248,7 @@ _inst_git() {   # <dir> <git args…> -> git's own status and output
 _inst_git_own() {   # <dir> -> 0 iff git's top level for <dir> is <dir> itself
   local here top
   here="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
-  top="$( unset GIT_DIR GIT_WORK_TREE GIT_CEILING_DIRECTORIES; git -C "$here" rev-parse --show-toplevel 2>/dev/null )" || return 1
+  top="$(_inst_git "$here" rev-parse --show-toplevel 2>/dev/null)" || return 1
   top="$(cd "$top" 2>/dev/null && pwd -P)" || return 1
   [ "$top" = "$here" ]
 }
