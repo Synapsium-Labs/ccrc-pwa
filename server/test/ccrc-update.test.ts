@@ -1393,11 +1393,15 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     }), { tag: 'v2.0.0' });
     const before = treeDigest(join(home, 'ccrc-versions', 'v1.0.0'));
     const r = runUpdate(home);
+    // FIRST, before the exit code: a run that wrote into the running version
+    // (the rsync's destination naming `~/ccrc` instead of the new version
+    // directory) dies later, at its own exit code, and this is the assertion
+    // that must name the defect (review 179 item 15).
+    expect(treeDigest(join(home, 'ccrc-versions', 'v1.0.0')),
+      'the update wrote into the version it was replacing').toEqual(before);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(lstatSync(join(home, 'ccrc')).isSymbolicLink()).toBe(true);
     expect(readlinkSync(join(home, 'ccrc'))).toBe(join(home, 'ccrc-versions', 'v2.0.0'));
-    expect(treeDigest(join(home, 'ccrc-versions', 'v1.0.0')),
-      'the update wrote into the version it was replacing').toEqual(before);
     expect(r.stdout).toMatch(/^install: tree: placed v2\.0\.0 at \$HOME\/ccrc-versions\/v2\.0\.0$/m);
     expect(r.stdout).toMatch(/^install: tree: \$HOME\/ccrc -> \$HOME\/ccrc-versions\/v2\.0\.0 \(was \$HOME\/ccrc-versions\/v1\.0\.0\) — one rename$/m);
     expect(readFileSync(join(home, 'npm-cwd'), 'utf8').trim().split('\n')[0])

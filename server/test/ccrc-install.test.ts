@@ -2528,10 +2528,17 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     const home = freshBox('ccrc-install-ver-new-');
     installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
     shipStamp(treeRoot(home), 'b'.repeat(40), 'v9.9.1');
+    // A file only the RUNNING version has. Its tree is otherwise the source's
+    // own bytes, so an rsync that landed in it would rewrite equal bytes and
+    // the digest below would stay green; `--delete` removes this one.
+    writeFileSync(vroot(home, 'v9.9.0', 'server', 'ONLY-IN-THE-RUNNING-VERSION'), 'a unit may be running this\n');
     const before = treeBytes(vroot(home, 'v9.9.0'));
     const r = runInstall(home, ['install'], {}, { stubs: { ln: lnRecorder } });
-    expect(r.code, r.stderr).toBe(0);
+    // FIRST, before the exit code: a run that wrote into the running version
+    // dies later, at its own exit code, and this is the assertion that must
+    // name the defect (review 179 item 15).
     expect(treeBytes(vroot(home, 'v9.9.0')), 'the running version was written into').toEqual(before);
+    expect(r.code, r.stderr).toBe(0);
     // The flip went through the staged name: `ln` wrote `~/ccrc.new`, and no
     // `ln` in the whole run targeted `~/ccrc` itself (unlink + symlink).
     const lns = read(join(home, 'ln-argv')).trim().split('\n');
