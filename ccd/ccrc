@@ -13801,7 +13801,10 @@ cmd_rollback() {
     case "$frc" in
       0)
         # D-3243 on this path too: a failed gate is not restored.
-        _upd_gate "$role" "$to" || _upd_rollback_no_restore "gate: $UPD_GATE_WHY"
+        # Redacted here as `cmd_update`'s own gate-failure line is (final review
+        # F10): `_upd_rollback_no_restore` echoes its argument to stderr, and a
+        # gate reason can name an absolute path of this box.
+        _upd_gate "$role" "$to" || _upd_rollback_no_restore "gate: $(_upd_redact "$UPD_GATE_WHY")"
         _inst_migrate_finish rollback "the health gate passed"
         _upd_phase restarting
         _upd_unlock

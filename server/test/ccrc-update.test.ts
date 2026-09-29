@@ -9327,6 +9327,18 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(calls(home).join('\n')).not.toMatch(/try-restart/);
   });
 
+  it('a rollback by flip whose gate reason carries a home path is REDACTED on stderr as cmd_update redacts it (F10)', () => {
+    const { home } = flipBox('ccrc-rollback-flip-gate-redact-');
+    // An env file that declares a host and no port: the gate's reason names
+    // the file's ABSOLUTE path (`_box_server_addr`), on the box that wrote it.
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\nCCRC_HOST=127.0.0.1\n');
+    withSweep(home);
+    const r = rollbackRun(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: rollback: v1\.0\.0 was installed but failed its health gate \(gate: ~\/\.ccrc\/ccrc\.env declares CCRC_HOST but no CCRC_PORT\) — no automatic restore/m);
+    expect(r.stderr, 'the box\'s absolute home reached stderr').not.toContain(home);
+  });
+
   it('a kept version the flip cannot reach (the one rename refused) falls back to update\'s own re-install; that release\'s older spine gets no directory either, so it dies BEFORE anything is installed — the record as it was, no spine run', () => {
     const { home } = flipBox('ccrc-rollback-flip-rename-');
     // `_plat_ln_swap` refuses to clear a real directory at <link>.new (Task 1).
