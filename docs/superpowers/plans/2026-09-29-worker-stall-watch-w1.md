@@ -100,7 +100,8 @@ anything.
 - **Deviation numbers are issued, never chosen.** The planning departures below carry the eighteen numbers minted
   at run-open by the allocator (3561 through 3578), each defined there by its own number. An implementer never calls the allocator: a departure found while
   executing is reported with its evidence, under a slug, and the controller mints it. `D-TBD-<slug>` never lands in
-  tracked text. Code comments cite a departure by its number and slug together.
+  tracked text. The plan's code comments cite departures by slug (they were drafted before minting); the final
+  review's fix wave adds each number beside its slug in one mechanical sweep.
 - **Commit on the workspace branch only.** At least one commit per task, prefixed `feat(stall):`, `test(stall):` or
   `docs(stall):`.
 
