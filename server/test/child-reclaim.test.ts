@@ -6,7 +6,7 @@
 // The runner is `testDeps`', so every argv the executor composes crosses the
 // agent's REAL exec whitelist first (`guardRunner`) — a `ws-reclaim` without
 // its `--expect` grant would throw here, not merely on the fleet.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
@@ -1116,5 +1116,43 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     if (!('id' in coordRun)) throw new Error(`openRun coordRun refused: ${JSON.stringify(coordRun)}`);
     const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
+  });
+
+  it('a throwing open-siblings read answers failed, never rejects — step 4 is try-wrapped like every other read', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    const spy = vi.spyOn(f.coord, 'openRunsForSession').mockImplementation(() => { throw new Error('boom'); });
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    await expect(releaseRetiredChildHold(f.deps, req)).resolves.toBe('failed');
+    expect(f.calls).toEqual([]);
+    spy.mockRestore();
+  });
+
+  it('the accounted run is no longer terminal — the accounting re-check catches it — no release', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    // Not a live path — a terminal run's own state does not move in
+    // production (see the check's own comment in `childReclaim.ts`). Isolated
+    // from the COUNT re-check (step 3) on purpose: a raw `UPDATE … SET
+    // state='working'` on the real row would also make `programOpenRunCount`
+    // — a SEPARATE query over the same table — read the programme as open
+    // again, so that mutant would be caught by step 3 regardless of step 2.
+    // Only THIS read's own answer is doctored; the real row underneath stays
+    // terminal, so the count re-check genuinely reads zero and cannot be
+    // what catches a step-2 mutant.
+    const real = f.coord.run.bind(f.coord);
+    const spy = vi.spyOn(f.coord, 'run').mockImplementation((id: number) => {
+      const r = real(id);
+      if (id !== runId || !r.ok || r.run === null) return r;
+      return { ok: true as const, run: { ...r.run, state: 'working' as const } };
+    });
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
+    expect(f.calls).toEqual([]);
+    spy.mockRestore();
   });
 });

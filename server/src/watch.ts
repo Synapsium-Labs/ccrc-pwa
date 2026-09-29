@@ -3037,7 +3037,16 @@ export class FleetWatcher {
                 sessionId: r.id, runId: v.runId, reason: release.reason, program: release.program,
                 accountedRunId: release.accountedRunId,
               }).then(
-                () => {},
+                (outcome) => {
+                  // A `failed` answer composes no argv on the box and leaves
+                  // the hold standing — an operator watching only the feed
+                  // (the job writes no feed row of its own) would otherwise
+                  // never learn a box keeps refusing `ws-release`.
+                  if (outcome === 'failed') {
+                    console.warn(`ccrc-server: sweepChildReclaim: releasing ${r.id}'s retired hold answered failed `
+                      + '— the hold stays; retried after two fresh sightings');
+                  }
+                },
                 (err: unknown) => {
                   console.warn(`ccrc-server: sweepChildReclaim: releasing ${r.id}'s retired hold threw `
                     + `(${err instanceof Error ? err.message : String(err)}) — left for the next pass`);

@@ -972,7 +972,11 @@ export type ChildReclaimReleaseOutcome = 'released' | 'not-held' | 'changed' | '
  *   2. the accounting — `accountedRunId` is still a TERMINAL run, and its
  *      CURRENT fields render to the row's CURRENT held text (re-derived
  *      fresh, never compared against the cached `reason` a second time —
- *      only against a rendering built from what this re-read just measured);
+ *      only against a rendering built from what this re-read just measured).
+ *      A terminal run's own fields do not move in the live system — this
+ *      re-derivation is defence in depth, not a path a live rollback or
+ *      re-dispatch can actually reach, since a terminal `r`'s identity is
+ *      immutable (see the check's own comment below);
  *   3. that run's programme — still zero open runs;
  *   4. the child's own open runs — still none;
  *   5. the coordinator read — this child has still never coordinated a run.
@@ -1029,6 +1033,14 @@ export async function releaseRetiredChildHold(
   }
   if (!accounted.ok) return 'failed';
   const r = accounted.run;
+  // NOT independently re-checked here: that `r` still NAMES this child (its
+  // `sessionId` or its own id is still the candidate a match was found
+  // against). A terminal run's identity is immutable — `clearSession` only
+  // ever nulls a `'planned'` row, and every `bindSession` caller binds an
+  // OPEN run — so a terminal `r` cannot have moved off this child between
+  // the deciding pass and this re-read. The re-derived rendering below is
+  // what actually re-proves the accounting; this comment states the
+  // dependency it stands on rather than repeating a check nothing can fail.
   if (r === null || !isChildReclaimTerminalState(r.state)) return 'changed';
   const open = holdReason(r.program, r.wave, r.waveOf, r.id);
   const close = holdReason(r.program, r.wave + 1, r.waveOf, null);
@@ -1045,8 +1057,18 @@ export async function releaseRetiredChildHold(
   }
   if (count > 0) return 'changed';
 
-  // 4 — the child's own open runs: still none.
-  const sib = deps.coord.openRunsForSession(sessionId);
+  // 4 — the child's own open runs: still none. `openRunsForSession` throws
+  // bare (its `db.prepare().all()` sits outside any catch in `store.ts`), so
+  // this is its own try like every other read above — never a throw that
+  // rejects the job instead of answering `failed`.
+  let sib: ReturnType<CoordStore['openRunsForSession']>;
+  try {
+    sib = deps.coord.openRunsForSession(sessionId);
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: re-reading ${sessionId}'s open siblings failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
   if (!sib.ok) return 'failed';
   if (sib.siblings.length > 0) return 'changed';
 
