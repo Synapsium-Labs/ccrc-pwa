@@ -50,7 +50,8 @@ const shStatus = (snippet: string, env: NodeJS.ProcessEnv = {}): { status: numbe
  *  mode), and resolves the real chmod once, by measuring: the first executable
  *  `chmod` on this process's PATH, walked here rather than asked of a bash that
  *  `ccd-workspaces`' containment scan would have to exempt. On macOS the real
- *  chmod is already BSD-order and the shim changes nothing. */
+ *  chmod was measured BSD-order on the CI macOS runner (test-macos 2/2, job
+ *  107809367324), so the shim changes nothing there. */
 const REAL_CHMOD = (process.env['PATH'] ?? '').split(':').filter(Boolean)
   .map((d) => path.join(d, 'chmod'))
   .find((p) => { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile(); } catch { return false; } }) ?? '';
@@ -263,7 +264,14 @@ describe.each(CHMODS)('_spawn_start exports TMPDIR for a child, and only for a c
       expect(news).toHaveLength(1);
       expect(news[0]).not.toContain('TMPDIR=');
     });
+});
 
+// Review 163, F3: this case does not depend on chmod argument order at
+// all — it is a static census of which function reads the marker — so
+// running it once per CHMODS entry duplicated it for no reason (3512's
+// "bsd-cases-plus-resume" wording). A plain `describe` runs it once; the
+// executed test count drops by exactly one (CHMODS has two entries: 2 -> 1).
+describe('_spawn_start is the one function that reads the child marker', () => {
     it('the decision lives in _spawn_start and NOWHERE else — one reader, every spawn path', () => {
       // Every launcher funnels through `_spawn_start` (`ccd-spawn-split.test.ts`
       // pins that caller list), so one call there covers ws-add, ws-restore,
@@ -326,7 +334,9 @@ describe('no shipped shell script writes `chmod <operand> --` (D-3510)', () => {
   // after a chmod/chown/chgrp operand, which BSD getopt reads as a file — on a
   // non-comment line. It does NOT prove the scripts are free of GNU-only
   // argument orders in general: an option after an operand, a GNU-only long
-  // option, or the same shape through a variable all pass it.
+  // option, a command split across a line continuation (the regex runs
+  // per-line, so a `\`-broken `chmod … --` never matches), or the same
+  // shape through a variable all pass it.
   it('finds no such line under ccd/ and deploy/', () => {
     const files = shellScripts([path.join(REPO, 'ccd'), path.join(REPO, 'deploy')]);
     expect(files, 'the walk must reach the file this defect lived in').toContain(CCD);

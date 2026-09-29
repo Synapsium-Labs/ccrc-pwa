@@ -736,8 +736,7 @@ whole time, which is the only prevention this ordering rule buys.
    MERGED with `headRefOid` equal to it — the coordinator merges with
    `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` (plus
    `--admin` where the repository's ruleset requires it) for exactly this
-   reason. An UNMARKED producer — every workspace minted without a marker,
-   before wave 1's deploy, or by a dispatch that journaled `child-omitted`
+   reason. An UNMARKED producer — every workspace minted without a marker: by a box whose ccd did not yet mark children, or by a dispatch that journaled `child-omitted`
    (§2) — is never refused this way; dropping its `sessionId` anyway is
    still safe and follows the same one-PR rule. The same-project arm is for
    a producer whose workspace
@@ -823,8 +822,8 @@ a PR after it was created, or a close that leaves your program with no open
 run — the server
 RELEASES it rather than holding it for a next wave, and the close response
 carries `"childReclaim":"queued"`. The reclaim itself runs after the answer,
-on the child's own queue: it commits anything left uncommitted on the child's
-branch as a WIP commit — except a secret-shaped file, which is never
+on the child's own queue: it records anything left uncommitted as a WIP commit pinned in the attic
+(it moves no branch) — except a secret-shaped file, which is never
 committed and is deleted with the tree — pins every commit and stash in the
 attic, writes a tombstone, and then removes the pane, the worktree, the
 branch, the clips directory and the child's temp directory. Its outcome

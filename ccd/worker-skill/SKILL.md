@@ -260,7 +260,7 @@ gets `stale-tip` for a wave that was genuinely finished. If a rejection comes
 back, fix the cause, make new commits, and measure again from scratch — never
 re-send the old numbers.
 
-**This workspace ends when its run closes.** A workspace dispatch minted for a
+**This workspace ends when the coordinator is finished with it — usually when its run closes.** A workspace dispatch minted for a
 run is a child, and once the coordinator has finished with it — the last wave,
 a wave that opened a PR after this workspace was created, an abandon — the
 server reclaims it: anything not
