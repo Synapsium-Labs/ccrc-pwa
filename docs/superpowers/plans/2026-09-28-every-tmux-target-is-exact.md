@@ -75,10 +75,14 @@ Design:
    with a count floor; TS pins on `tmuxTarget` and both attach argvs; classifier cases for the anchored
    death message.
 
-- [ ] Red: the tests below, each measured red before the fix.
-- [ ] Green: design items 1–4, then every test that pins a bare spelling updated to the exact one.
-- [ ] Re-stamp `ccd/ccd`; confirm the citation census is unmoved (or run S6-R11); mutation table; full
+- [x] Red: the tests below, each measured red before the fix.
+- [x] Green: design items 1–4, then every test that pins a bare spelling updated to the exact one.
+- [x] Re-stamp `ccd/ccd`; confirm the citation census is unmoved (or run S6-R11); mutation table; full
   sharded server suite plus PWA, agent, build and tsc.
+
+Validation 2026-09-29: focused private-socket, source-census, TypeScript, citation and package suites pass.
+The complete server run had 17,442 passing tests and six unrelated load/environment failures; its
+`ccd-auto-compact` failure passes in isolation.
 
 Tests (red first), on the real private socket with `cc-demo` absent and `cc-demo-2` live:
 `_session_probe demo` → `gone` (today `live`); `_pane_born demo` → empty (today the sibling's epoch);
