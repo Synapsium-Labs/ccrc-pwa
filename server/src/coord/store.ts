@@ -1260,12 +1260,26 @@ class IntentJournalFault extends Error {
 /** The exact shape `reclaimProgram` writes for each run it displaces —
  *  `reclaim:<from> -> <to>` (below, `this.recordRunEvent(m.id, 'operator',
  *  \`reclaim:${m.claimedBy} -> ${to}\`, at)`, one call per row the UPDATE just
- *  rewrote). Anchored `^…$`, and both sides `\S+`: a session id never carries
- *  whitespace (registry naming), so an EXTENDED or reworded message — this
- *  writer's own future edit, or a hand-written row that merely starts with the
- *  same prefix — never matches. `childReclaimCoordinatorIds` is this pattern's
- *  one reader. */
-const CHILD_RECLAIM_DISPLACED_DETAIL = /^reclaim:(\S+) -> (\S+)$/;
+ *  rewrote). The two sides do NOT share a shape, and the pattern reads each
+ *  as what it actually is rather than what a session id ideally would be:
+ *  `from` is `runs.claimedBy` as `POST /api/runs` stored it, checked there
+ *  only for "non-empty string" — untrimmed, no charset guard
+ *  (`shared/api.ts`'s own `isSessionIdShape` doc says so: that check exists
+ *  precisely because the route does not enforce it) — so `from` may carry
+ *  internal whitespace, a trailing space, or even its own literal ` -> `,
+ *  and the pattern below admits ALL of it via a greedy `(.+)`. `to` cannot:
+ *  `POST /api/runs/:id/reclaim` trims it (`routes.ts`, `body.claimedBy.trim()`)
+ *  and `reclaimRun` (`reclaim.ts`) then requires `readSessionRecord` to find
+ *  it as a real, listed registry row before this UPDATE ever runs — a
+ *  registry id ccd mints or a human types by hand, never a value with a
+ *  space in practice — so `(\S+)` for `to`, anchored at the END, is what
+ *  makes the split land at the LAST literal ` -> ` in the string rather than
+ *  the first: a `from` that happens to embed ` -> ` of its own does not fool
+ *  it. A row that still fails this shape — a hand-written one that merely
+ *  starts with the same prefix, or a future reword of the writer itself —
+ *  THROWS at the one reader, `childReclaimCoordinatorIds`, below; it does
+ *  not silently drop. */
+const CHILD_RECLAIM_DISPLACED_DETAIL = /^reclaim:(.+) -> (\S+)$/;
 
 /**
  * Every read and every write of the coordination database, in one class, and
@@ -2878,10 +2892,11 @@ export class CoordStore {
    *
    *  UNIONED WITH THE DISPLACED SIDE too (fix, measured): a bare `SELECT
    *  DISTINCT claimedBy` alone answers "who coordinates each programme NOW",
-   *  not "who ever has" — `reclaimProgram` OVERWRITES `claimedBy` on every run
-   *  of a programme, terminal runs included (`:1619` above), so the OUTGOING
-   *  coordinator's own runs no longer name it anywhere in this table once an
-   *  heir takes the chair. The only surviving trace is the `run_events` row
+   *  not "who ever has" — `reclaimProgram`'s own `UPDATE runs SET claimedBy = ?,
+   *  coordProject = ? WHERE program = ? AND claimedBy IS NOT NULL` (above)
+   *  OVERWRITES `claimedBy` on every run of a programme, terminal runs included, so
+   *  the OUTGOING coordinator's own runs no longer name it anywhere in this table
+   *  once an heir takes the chair. The only surviving trace is the `run_events` row
    *  that move writes once per displaced run: `causedBy:'operator',
    *  detail:'reclaim:<from> -> <to>'`. That `causedBy`+prefix pair is unique to
    *  this writer — grepped across `server/src`: every other `recordRunEvent`/

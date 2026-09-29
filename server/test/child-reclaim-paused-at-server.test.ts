@@ -226,18 +226,18 @@ describe('reclaimChild — the coordinating re-read, before the pause', () => {
   });
 });
 
-// Reviewer Important 1: `reclaimProgram` OVERWRITES `claimedBy` on every run of
-// a programme, terminal runs included, so a bare `SELECT DISTINCT claimedBy`
-// alone loses the coordinator it just displaced the instant an heir takes the
-// chair. `childReclaimCoordinatorIds` now unions in the `from` side of every
-// `reclaim:<from> -> <to>` row `reclaimProgram` writes.
+// `reclaimProgram` OVERWRITES `claimedBy` on every run of a programme,
+// terminal runs included, so a bare `SELECT DISTINCT claimedBy` alone loses
+// the coordinator it just displaced the instant an heir takes the chair.
+// `childReclaimCoordinatorIds` unions in the `from` side of every
+// `reclaim:<from> -> <to>` row `reclaimProgram` writes (spec §1, rules 3-4).
 describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
   const bareStore = (): CoordStore => {
     const home = mkTmp('ccrc-child-reclaim-coordinator-ids-');
     return new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   };
 
-  it('unions in the coordinator a reclaim displaced, not just its heir — the reviewer\'s measured gap', () => {
+  it('unions in the coordinator a reclaim displaced, not just its heir', () => {
     const coord = bareStore();
     const opened = coord.openRun({ program: 'w4-displaced', title: 'w4-displaced', project: 'demo',
       wave: 1, waveOf: null, claimedBy: 'demo-a' });
@@ -252,6 +252,45 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
     const ids = coord.childReclaimCoordinatorIds();
     expect(ids.has('demo-a')).toBe(true);   // the displaced coordinator — the fix
     expect(ids.has('heir-x')).toBe(true);   // the heir — unaffected by the fix
+  });
+
+  // `POST /api/runs` checks `claimedBy` only for a non-empty string — no trim,
+  // no charset guard (`shared/api.ts`'s `isSessionIdShape` exists precisely
+  // because the route does not enforce it) — so `from` (`runs.claimedBy`) can
+  // reach `reclaimProgram` carrying whitespace or its own literal ` -> `. Each
+  // case here round-trips exactly such a `from` through the real writer
+  // (`coord.reclaimProgram`, never a hand-typed `run_events` row) and reads it
+  // back verbatim. `to` cannot carry the same hazard: the reclaim route trims
+  // it, and `reclaimRun` (`reclaim.ts`) then requires `readSessionRecord` to
+  // find it as a real, listed registry row before this UPDATE ever runs.
+  it('round-trips a from with an inner space', () => {
+    const coord = bareStore();
+    const from = 'demo x';
+    const opened = coord.openRun({ program: 'w4-inner-space', title: 'w4-inner-space', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: from });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    expect(coord.reclaimProgram(opened.id, 'heir-space', Date.now(), null)).toMatchObject({ ok: true });
+    expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
+  });
+
+  it('round-trips a from with a trailing space', () => {
+    const coord = bareStore();
+    const from = 'demo-x ';
+    const opened = coord.openRun({ program: 'w4-trailing-space', title: 'w4-trailing-space', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: from });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    expect(coord.reclaimProgram(opened.id, 'heir-trail', Date.now(), null)).toMatchObject({ ok: true });
+    expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
+  });
+
+  it('round-trips a from with its own embedded " -> " — the split lands at the LAST occurrence', () => {
+    const coord = bareStore();
+    const from = 'demo -> x';
+    const opened = coord.openRun({ program: 'w4-embedded-arrow', title: 'w4-embedded-arrow', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: from });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    expect(coord.reclaimProgram(opened.id, 'heir-arrow', Date.now(), null)).toMatchObject({ ok: true });
+    expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
   });
 
   it('a reclaim: row from the exact writer that does not parse THROWS, never drops silently', () => {
@@ -282,10 +321,10 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
   });
 });
 
-// Reviewer minor 1: both shipped `FleetIO` adapters fold every `readdir`
-// failure to `null`, so there is no live throw path today — but a future one
-// that REJECTS must still land on the executor's own `deferred(...)`, with its
-// one feed row, rather than an uncaught rejection.
+// Both shipped `FleetIO` adapters fold every `readdir` failure to `null`, so
+// there is no live throw path today — but a future one that REJECTS must
+// still land on the executor's own `deferred(...)`, with its one feed row,
+// rather than an uncaught rejection.
 describe('reclaimChild — a rejecting readdir still defers, with a feed row', () => {
   it('paused-at-server, never an uncaught rejection', async () => {
     const f = await fixture();
