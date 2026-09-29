@@ -521,6 +521,8 @@ update.json: {"phase":"done","target":"v0.0.35","from":"rollback","detail":"roll
 
 **Outcome:** every expectation above held.
 
+Amended (review 179, fix round 1; the two lines above are the generator's output as printed, and stay): the live-box line says less than it reads. It is a comparison of six summary values, not of the box: `~/ccrc`'s link value (or its inode and mtime, for a directory), the PRESENCE of `~/ccrc-versions` and of `~/ccrc.migrating`, and the sha256 of `build.json`, `installed` and `previous`. Nothing below `~/ccrc` or `~/ccrc-versions`, nothing else in `~/.ccrc`, nothing in `~/.local/bin`, no user unit, and no unit state of the live user manager is read. What kept the live box out of the run is the containment listed under Task 8's controls, not that comparison.
+
 Superseded by R6r below (D-3461): this run predates the rollback's exit-3 reading of a failing kept-spine doctor.
 
 Fixture environment: the fixture's own server (the published build it ran when R7 started) wrote `~/.ccrc/update-intent` (epoch 0, `desired none`, lease in force), so R7a printed no `versions: WARN` and R7ch read `state=none`, and R7ch2's plant was skipped by the brief's own rule. D-3447's absent-projection → prune-skipped path was therefore NOT exercised in this rehearsal. The suites carry it by composition: an absent projection reads `unreadable (absent)`, and `_ver_protect`'s `*)` arm, which unreadable and stale share, prunes nothing. No suite case runs an absent projection end to end through `versions --prune`.
@@ -590,7 +592,7 @@ health: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
 update.json: {"phase":"done","target":"v0.0.35","from":"rollback","detail":"doctor exited 1 - the box moved; its health is ccrc doctor's"}
 ```
 
-Teardown: `ccrc.service` `inactive`; the live box measured identical before the containment proof and after R6r; no process naming the harness was left running; the poison log holds only `tmux -V` and `gh auth status` probes, each refused.
+Teardown: `ccrc.service` `inactive`; the live box's six probed values (`~/ccrc`'s link value or inode and mtime, the presence of `~/ccrc-versions` and `~/ccrc.migrating`, the sha256 of `build.json`, `installed` and `previous`; nothing else — see Task 8's controls) measured identical before the containment proof and after R6r; no process naming the harness was left running; the poison log holds only `tmux -V` and `gh auth status` probes, each refused.
 
 ### The live half — the coordinator's, at rollout (not run here)
 
@@ -7864,7 +7866,23 @@ git commit -m "test(ccrc): walk spec §11's satisfied audit rows through a symli
 - No §18 row: the fixture suites of Tasks 1–7 carry every row. This task's controls are measurements whose failure would make a green record vacuous:
   - the crash stub bites only when armed (Step 4);
   - the `curl` recorder is live (R4's release fetches counted beside R6's zero);
-  - the live box is byte-for-byte what it was (Steps 4 and 12).
+  - the live box's probed summary is what it was (Steps 4 and 12). This is NOT "the live box is byte-for-byte what it was" (corrected in review 179, fix round 1; the first wording overstated it). The probe compares, and only compares:
+    - `~/ccrc`'s link value, or `stat -c '%i %Y'` (inode and mtime) when it is a directory;
+    - the presence only of `~/ccrc-versions` and of `~/ccrc.migrating`;
+    - the sha256 of `~/.ccrc/build.json`, `~/.ccrc/installed` and `~/.ccrc/previous`.
+  - What the probe does not compare:
+    - the contents below `~/ccrc` and `~/ccrc-versions` (a rewrite inside either is invisible to it);
+    - the rest of `~/.ccrc` (`update.json`, the lock, `ccrc.env`, the caps, floor and intent files, `coord.db`);
+    - `~/.local/bin`;
+    - the user units and their drop-ins;
+    - the live user manager's unit states. This one matters most: under the harness's `env -i` ccrc derives `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` itself, so a `systemctl` that the PATH stub had missed would have reached the live manager, and the probe reads nothing of it.
+  - What containment rests on, stated exactly (the equality above is a check on it, not the proof):
+    - Five of the ten names its proof asks `command -v` about were poisoned stubs: `tmux`, `ssh`, `gh`, `systemd-run`, `launchctl`. `loginctl` and `journalctl` were answering stubs.
+    - `systemctl` was a fixture that runs the placed server, not a poison.
+    - `curl` passed through to the real `curl` for the release fetches, and recorded every argv.
+    - `ln` passed through to the real `ln`, with the crash arm (Task 3's stub).
+    - The `command -v` proof (each of the ten answering `$S/bin/<tool>`, with `TMUX=unset` and `HOME=$H`) is recorded for the R6 re-run only, not for the first run.
+    - No absolute-path tool call exists in the tip, in v0.0.34's `install.sh` or in v0.0.35's spine: that was measured by grep at the reviewed tip (the tip's only absolute-path tool names are text written into generated units, and one `launchctl` path comparison).
 
 - What this rehearsal cannot measure (D-3455, found planning this task — the coordinator adds it to *Deviations found* and numbers it): the fixture half runs before this wave merges, so every published release predates W6. `N` and `N-1` are only ever SPINES here, each on D-3440's path, and the W6 code runs from this checkout and its placed copy `$U`. What a W6 release artifact's own spine does on a real box is first measured on real bytes by the live half:
   - `_inst_tree` placing a tag-named directory from a staged tarball and flipping to it (Task 2's case (d) under `update`);
@@ -8195,8 +8213,9 @@ EOF
 
 cat > "$S/live-probe.sh" <<'EOF' && chmod 755 "$S/live-probe.sh" || exit 1
 #!/usr/bin/env bash
-# live-probe.sh — the LIVE box's tree and install state, READ-ONLY: what the rehearsal must leave exactly
-# as it found it. Its output stays in the scratch logs (it names the live home); only its equality is recorded.
+# live-probe.sh — a SUMMARY of the LIVE box's tree and install state, READ-ONLY: six values the rehearsal must
+# leave as it found them (not the box's contents; see Task 8's controls). Its output stays in the scratch
+# logs (it names the live home); only its equality is recorded.
 . "${BASH_SOURCE[0]%/*}/env.sh"
 h="$REAL_HOME"
 if [ -L "$h/ccrc" ]; then printf 'ccrc: link %s\n' "$(readlink "$h/ccrc")"
@@ -8427,7 +8446,7 @@ if not live: differs.append('control: the live box probe differs before and afte
 out += ['### Controls', '',
         f'- the curl recorder is live: R4 fetched from the release host {r4} time(s) (a zero here would make the next line vacuous);',
         f'- R6, the rollback by arm 1, asked the release host {r6} time(s);',
-        f'- the live box (its `~/ccrc`, `~/ccrc-versions`, `~/ccrc.migrating`, `~/.ccrc/build.json`, `~/.ccrc/installed`, `~/.ccrc/previous`) measured {"identical" if live else "DIFFERENT"} before R1 and after R7c;',
+        f'- the live box\'s probe summary (`~/ccrc`\'s link value, or its inode and mtime for a directory; only the presence of `~/ccrc-versions` and `~/ccrc.migrating`; the sha256 of `~/.ccrc/build.json`, `~/.ccrc/installed` and `~/.ccrc/previous`; nothing below `~/ccrc` or `~/ccrc-versions`, nothing else in `~/.ccrc`, no unit state) measured {"identical" if live else "DIFFERENT"} before R1 and after R7c;',
         f'- poisoned tools (`tmux`, `ssh`, `gh`, `systemd-run`, `launchctl`) were reached {poison} time(s), each refused.', '',
         '**Outcome:** ' + ('every expectation above held.' if not differs else
                            'DIFFERS — ' + '; '.join(differs) + '. Each is a finding this task records under Deviations found or as a Task-N fix before it closes.'), '']
@@ -8605,12 +8624,12 @@ Expected: exit `0` with the line `versions: pruned $HOME/ccrc-versions/<U> (comp
 ```bash
 . "$SCRATCHPAD/w6-rehearsal/env.sh"
 echo teardown > "$S/logs/current-step"; "$S/bin/systemctl" --user stop ccrc.service; "$S/bin/systemctl" --user is-active ccrc.service
-bash "$S/live-probe.sh" > "$S/logs/live-after"; cmp "$S/logs/live-before" "$S/logs/live-after" && echo "live box untouched"
+bash "$S/live-probe.sh" > "$S/logs/live-after"; cmp "$S/logs/live-before" "$S/logs/live-after" && echo "live probe summary unchanged"
 cut -f1 "$S/logs/curl-argv" | sort | uniq -c
 for l in R4 R5 R6; do printf '%s release-host fetches: %s\n' "$l" "$(grep "^$l	" "$S/logs/curl-argv" | grep -cF "$BASE")"; done
 cat "$S/logs/poison" 2>/dev/null | "$S/scrub.sh"
 ```
-Expected: `inactive`; `live box untouched`; the per-step `curl` counts; `R4 release-host fetches: <n ≥ 3>` (SHA256SUMS, the tarball, the bundle), `R5 …: <n ≥ 3>`, `R6 …: 0`. Then the poison log — each line a tool the fixture reached and was refused, typically `ccd`'s `tmux` probes from the fixture server; none is a failure. A `cmp` difference is a finding of the first order — the rehearsal touched the live box. Stop, and report it to the coordinator with both files before anything else. Leave `$S` in place until the wave-done is accepted; it is the evidence.
+Expected: `inactive`; `live probe summary unchanged` (the six values `live-probe.sh` prints, and nothing else — see Task 8's controls for what it does not read); the per-step `curl` counts; `R4 release-host fetches: <n ≥ 3>` (SHA256SUMS, the tarball, the bundle), `R5 …: <n ≥ 3>`, `R6 …: 0`. Then the poison log — each line a tool the fixture reached and was refused, typically `ccd`'s `tmux` probes from the fixture server; none is a failure. A `cmp` difference is a finding of the first order — the rehearsal touched the live box. Equality proves less than it reads: it means only that those six values did not move, and containment rests on the stubs (Task 8's controls), not on this comparison. Stop, and report it to the coordinator with both files before anything else. Leave `$S` in place until the wave-done is accepted; it is the evidence.
 
 - [ ] **Step 13: Write the record into the plan, then check it for residue**
 
