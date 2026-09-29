@@ -1210,50 +1210,149 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(bundle!).not.toMatch(/--max-filesize/);
   });
 
-  // Fix round 2, F4 (review 167): a release host that ACCEPTS the TCP
-  // connection and then TRICKLES bytes forever — never idle long enough to
-  // trip the STALL bound (`--speed-limit`/`--speed-time`), so only
-  // SHA256SUMS's NEW total `--max-time` can end this. A real
-  // `net.createServer`, NEVER a stubbed curl, so the REAL curl's own
-  // `--max-time` is what is measured (modelled on the never-answering-socket
-  // pin for `_upd_asset_listed`, fix round 1 item 12 / review 155 C32,
-  // below) — `updateEnv` alone, like that pin, NEVER `runUpdate`/
-  // `freshUpdateBox`'s own `replantDoctorStubs`, which would shadow the real
-  // curl with the LOCAL-URL-only fixture shim (it never writes `-o`'s
-  // destination file for a bare `http://` URL, so a run through it "fails"
-  // for a fixture reason having nothing to do with the bound this pins). The
-  // bound is overridden small so this pin finishes in seconds.
-  itLinux('SHA256SUMS from a release host that trickles bytes forever is refused by its own total bound, named in the sentence (F4, review 167)', async () => {
-    const server = createNetServer((socket) => {
-      socket.write('HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n');
-      const iv = setInterval(() => { try { socket.write('a'); } catch { /* closed */ } }, 100);
-      socket.on('close', () => clearInterval(iv));
-      socket.on('error', () => clearInterval(iv));
+  // Fix round 2, F4 (review 167), CORRECTED by W6 Task 8A (review 173's F4b):
+  // a release host that ACCEPTS the TCP connection and then TRICKLES bytes
+  // forever. The first version of this pin trickled at 10 B/s — BELOW the
+  // 1024 B/s stall floor — so the stall bound (or the test's own kill) could
+  // end it and F4's real input, a host that never stops but never stalls, was
+  // never exercised. This one sends 256 bytes every 100 ms (2560 B/s, above the
+  // floor, so no stall can end it), with the size bound lifted to the
+  // validator's ceiling (2 s of 2560 B/s is ~5 KB, well under it) and the stall
+  // window shortened to 1 s (so a trickle below the floor WOULD have ended
+  // early): only SHA256SUMS's total `--max-time` is left to end the transfer,
+  // and the assertions below measure that it did, at its own bound and not
+  // before. A real `net.createServer`, NEVER a stubbed curl (modelled on the
+  // never-answering-socket pin for `_upd_asset_listed`, fix round 1 item 12 /
+  // review 155 C32, below) — `updateEnv` alone, like that pin, NEVER
+  // `runUpdate`/`freshUpdateBox`'s own `replantDoctorStubs`, which would shadow
+  // the real curl with the LOCAL-URL-only fixture shim (it never writes `-o`'s
+  // destination file for a bare `http://` URL, so a run through it "fails" for
+  // a fixture reason having nothing to do with the bound this pins).
+  // THE HOST IS A SEPARATE PROCESS, and that is not incidental: these pins run
+  // the real `ccrc` through `spawnSync`, which BLOCKS this process's event
+  // loop for as long as the child lives — an in-process `net.createServer`
+  // would accept the connection in the kernel and never get to write a byte.
+  // That is what the first version of the F4 trickle pin actually was: an
+  // accept-and-never-answer host, whatever its handler said (measured under
+  // W6 Task 8A: the handler never ran, and curl ended on its stall bound).
+  // The host child answers HTTP/1.0 with NO Content-Length and writes
+  // `bytes` every `everyMs` until it is told to stop, then prints how much it
+  // sent, so a test can assert the rate the host really held.
+  const HOST_JS = [
+    "const { createServer } = require('node:net');",
+    "const [bytes, everyMs] = [Number(process.argv[1]), Number(process.argv[2])];",
+    "let sent = 0; const chunk = 'a'.repeat(bytes);",
+    "const s = createServer((sock) => {",
+    "  sock.write('HTTP/1.0 200 OK\\r\\nContent-Type: text/plain\\r\\n\\r\\n');",
+    "  const iv = setInterval(() => { try { sock.write(chunk); sent += bytes; } catch (e) {} }, everyMs);",
+    "  sock.on('close', () => clearInterval(iv)); sock.on('error', () => clearInterval(iv));",
+    "});",
+    "s.listen(0, '127.0.0.1', () => process.stdout.write(String(s.address().port) + '\\n'));",
+    "process.on('SIGTERM', () => { process.stdout.write('sent ' + sent + '\\n'); process.exit(0); });",
+  ].join('\n');
+  const startHost = async (bytes: number, everyMs: number): Promise<{ port: number; stop: () => Promise<number> }> => {
+    const child = spawn(process.execPath, ['-e', HOST_JS, String(bytes), String(everyMs)], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = '';
+    child.stdout!.on('data', (d: Buffer) => { out += d.toString(); });
+    const port = await new Promise<number>((resolve, reject) => {
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        const m = /^(\d+)\n/.exec(out);
+        if (m) { clearInterval(iv); resolve(Number(m[1])); }
+        else if (Date.now() - t0 > 10_000) { clearInterval(iv); reject(new Error('the fixture host never listened')); }
+      }, 20);
     });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const port = (server.address() as AddressInfo).port;
+    const stop = async (): Promise<number> => {
+      if (child.exitCode === null && child.signalCode === null) {
+        await new Promise<void>((resolve) => { child.once('exit', () => resolve()); child.kill('SIGTERM'); });
+      }
+      const m = /sent (\d+)/.exec(out);
+      return m ? Number(m[1]) : 0;
+    };
+    return { port, stop };
+  };
+
+  itLinux('SHA256SUMS from a release host that trickles above the stall floor forever is ended by its total bound alone, named in the sentence (F4, review 167; F4b, review 173)', async () => {
+    // 256 bytes every 100 ms = 2560 B/s: above the 1024 B/s floor, so no
+    // stall can end it; the size bound is lifted to the validator's ceiling
+    // (2 s of 2560 B/s is ~5 KB, far under it); the stall WINDOW is shortened
+    // to 1 s so a trickle below the floor would have ended early. Only the
+    // total `--max-time` is left, and the assertions measure that it fired,
+    // at its own bound and not before.
+    const host = await startHost(256, 100);
+    let sent = 0;
     try {
       const home = mkTmp('ccrc-update-sums-trickle-');
       mkdirSync(join(home, '.ccrc'), { recursive: true });
       const env = {
         ...updateEnv(home),
-        CCRC_RELEASE_BASE_URL: `http://127.0.0.1:${port}/rel`,
+        CCRC_RELEASE_BASE_URL: `http://127.0.0.1:${host.port}/rel`,
         CCRC_RELEASE_SUMS_MAX_TIME: '2',
+        CCRC_RELEASE_SUMS_MAX_FILESIZE: '1048576',
+        CCRC_RELEASE_SPEED_TIME: '1',
         CCRC_RELEASE_CONNECT_TIMEOUT: '2',
       };
       const t0 = Date.now();
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update'],
         { env, encoding: 'utf8', timeout: 20_000 });
       const elapsedMs = Date.now() - t0;
+      sent = await host.stop();
       expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
-      // Bounded by the OVERRIDDEN total bound (2s), not left trickling
-      // forever, or to curl's own defaults, or to this test's own kill.
+      // Ended by the OVERRIDDEN total bound (2 s): not before it (a stall or a
+      // size bound would have ended it sooner), and not left trickling to
+      // curl's own defaults or to this test's own kill.
+      expect(elapsedMs, `took ${elapsedMs}ms; stderr: ${r.stderr}`).toBeGreaterThanOrEqual(1800);
       expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(10_000);
-      expect(r.stderr).toMatch(/download failed: .*\/SHA256SUMS \(is there a release, or did the connection stall.*or did it time out after 2s \/ exceed \d+ bytes\)/);
+      // The host really was above the floor the whole time.
+      expect(sent / (elapsedMs / 1000), `sent ${sent} bytes in ${elapsedMs}ms`).toBeGreaterThan(1500);
+      expect(r.stderr).toMatch(/curl: \(28\) Operation timed out after 2\d{3} milliseconds/);
+      expect(r.stderr).toMatch(/download failed: .*\/SHA256SUMS \(is there a release, or did the connection stall.*or did it time out after 2s \/ exceed 1048576 bytes\)/);
     } finally {
-      server.close();
+      await host.stop();
     }
-  }, 20_000);
+  }, 30_000);
+
+  // W6 Task 8A (review 173's F4b): the SIZE bound, measured. Until now it had
+  // only the argv regex in the flag-set pin above, so a default raised to
+  // 1048576 would have stayed green. A host that answers a close-delimited
+  // body (HTTP/1.0, NO Content-Length — the case curl cannot judge from the
+  // headers) and keeps sending fast is ended by `--max-filesize` alone, well
+  // inside the total bound, which is set high here so it cannot be what fires:
+  // the fetch must refuse in a couple of seconds, naming the SHIPPED size bound.
+  // FLOOR: curl 8.4.0. Below it curl ignores `--max-filesize` for a body of
+  // unknown length (its manual says so), and only the time bound holds — so
+  // this case is skipped there, not weakened.
+  const curlV = /curl (\d+)\.(\d+)\.(\d+)/.exec(spawnSync('curl', ['--version'], { encoding: 'utf8' }).stdout ?? '');
+  const curlHasUnknownLengthMaxFilesize = curlV !== null
+    && (Number(curlV[1]) > 8 || (Number(curlV[1]) === 8 && Number(curlV[2]) >= 4));
+  it.skipIf(process.platform === 'darwin' || !curlHasUnknownLengthMaxFilesize)('SHA256SUMS whose body has no Content-Length and never stops is refused at --max-filesize, the shipped 4096 bytes named in the sentence (F4b, review 173)', async () => {
+    // 1 KiB every 10 ms = ~100 KB/s: the shipped 4096 bytes arrive in well
+    // under a second, while a bound raised to a megabyte would run for ~10 s.
+    const host = await startHost(1024, 10);
+    try {
+      const home = mkTmp('ccrc-update-sums-oversize-');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      const env: NodeJS.ProcessEnv = {
+        ...updateEnv(home),
+        CCRC_RELEASE_BASE_URL: `http://127.0.0.1:${host.port}/rel`,
+        CCRC_RELEASE_SUMS_MAX_TIME: '30',
+        CCRC_RELEASE_CONNECT_TIMEOUT: '2',
+      };
+      delete env['CCRC_RELEASE_SUMS_MAX_FILESIZE'];
+      const t0 = Date.now();
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update'],
+        { env, encoding: 'utf8', timeout: 25_000 });
+      const elapsedMs = Date.now() - t0;
+      expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      // Ended by the size bound: curl 63, quickly — and the 30 s total bound
+      // (set high on purpose) is nowhere near.
+      expect(r.stderr).toMatch(/curl: \(63\)/);
+      expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(5_000);
+      expect(r.stderr).toMatch(/download failed: .*\/SHA256SUMS \(.*or did it time out after 30s \/ exceed 4096 bytes\)/);
+    } finally {
+      await host.stop();
+    }
+  }, 40_000);
 
   it('happy path on a VERSIONED box (W6 Task 2): v2.0.0 is placed in ~/ccrc-versions/v2.0.0, ~/ccrc flips to it, and v1.0.0\'s directory is byte-unchanged', () => {
     // The staged spine is the real one (FULL flavour), so this is the
