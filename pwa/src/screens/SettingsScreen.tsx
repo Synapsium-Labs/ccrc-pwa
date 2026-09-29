@@ -10,7 +10,7 @@
 // -title`, fleet.css): a back chevron that returns to the fleet, then the <h1>.
 // It adds no scroll logic of its own — the D-161 pane reset in app.tsx puts
 // `.shell-detail` back at the top on every route change, this one included.
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AuthStatus, AutoMode, CatalogueErrorReason, CatalogueState, NodeWire, NotifyMode, ReleaseWire, UpdateChannel, UpdateRouteError, UpdateRouteRefusal, UpdatesView } from '../../../shared/api';
 import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, SETTLED_UPDATE_STATES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode, isReleaseTag, isStampRead, isUpdateChannel } from '../../../shared/api';
@@ -19,8 +19,10 @@ import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
 import { NotificationBell } from '../fleet/NotificationBell';
+import { isManagedNode, planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
+import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
 import { isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
-import { ApiError, MOVE_DISABLED_TEXT, api, updateErrorText } from '../lib/api';
+import { ApiError, api, updateErrorText } from '../lib/api';
 import { readAuthStatus } from '../lib/auth';
 import { elapsedWords } from '../lib/elapsed';
 import { pushSupported } from '../lib/push';
@@ -177,9 +179,9 @@ export function catalogueReasonText(reason: string): string {
 //     to React as one text child of a <pre>: no markdown pass, no HTML, no link
 //     detection, and no raw-HTML prop anywhere in this file (a source scan
 //     holds that literally).
-// The move button is rendered and DISABLED in this wave: its routes are
-// programme wave 5's, and MOVE_DISABLED_TEXT is the one sentence every
-// disabled move control carries (Task 5).
+// The move button opens the one move sheet (UpdateMoveSheet, programme wave
+// 5): Install asks for the tag on every node it takes forward, Roll back asks
+// for it node by node, and the sheet names those nodes in dispatch order.
 
 export function sortReleases(releases: readonly ReleaseWire[]): ReleaseWire[] {
   const tagged = releases.filter((r) => isReleaseTag(r.tag));
@@ -195,8 +197,11 @@ export function verifiedAt(tag: string, nodes: readonly NodeWire[]): boolean {
 }
 
 export function releaseDirection(tag: string, nodes: readonly NodeWire[]): 'install' | 'rollback' {
-  if (!isReleaseTag(tag) || nodes.length === 0) return 'install';
-  return nodes.every((n) => {
+  // D-3410: over the nodes a move can name — planMove's own filter (isManagedNode), so a Mac lagging behind
+  // never turns a Roll back row into Install while the sheet would move the Linux nodes.
+  const managed = nodes.filter(isManagedNode);
+  if (!isReleaseTag(tag) || managed.length === 0) return 'install';
+  return managed.every((n) => {
     const v = nodeVersion(n);
     return v !== null && isNewerTag(v, tag);
   }) ? 'rollback' : 'install';
@@ -219,10 +224,17 @@ export function releaseDate(ms: number): string {
   return typeof ms === 'number' && isPlaceableInstant(ms) ? new Date(ms).toISOString().slice(0, 10) : '—';
 }
 
-function ReleaseItem({ release: r, nodes }: { release: ReleaseWire; nodes: readonly NodeWire[] }): ReactNode {
-  const noteId = useId();
+function ReleaseItem({ release: r, nodes, onMove }: {
+  release: ReleaseWire; nodes: readonly NodeWire[]; onMove: (intent: MoveIntent) => void;
+}): ReactNode {
   const refused = refusedLine(r, nodes);
   const direction = releaseDirection(r.tag, nodes);
+  // By DIRECTION (§13): a release every node runs newer than is a rollback to
+  // it, anything else an install of it — the same releaseDirection that
+  // labels the button, so the label and the request cannot disagree.
+  const intent: MoveIntent = direction === 'rollback'
+    ? { scope: 'fleet', direction: 'rollback', to: r.tag }
+    : { scope: 'fleet', direction: 'update', tag: r.tag };
   return (
     <li className="settings-release" data-tag={r.tag}>
       <div className="settings-release-head">
@@ -238,20 +250,21 @@ function ReleaseItem({ release: r, nodes }: { release: ReleaseWire; nodes: reado
       {refused !== null && <p className="settings-release-refused">{refused}</p>}
       {typeof r.notes === 'string' && r.notes !== '' && <pre className="settings-release-notes">{r.notes}</pre>}
       <div className="settings-release-actions">
-        <button type="button" className="btn-ghost settings-move" disabled aria-describedby={noteId}>
+        <button type="button" className="btn-ghost settings-move" onClick={() => onMove(intent)}>
           {direction === 'rollback' ? 'Roll back' : 'Install'}
         </button>
-        <span id={noteId} className="settings-move-note">{MOVE_DISABLED_TEXT}</span>
       </div>
     </li>
   );
 }
 
-function ReleaseList({ releases, nodes }: { releases: readonly ReleaseWire[]; nodes: readonly NodeWire[] }): ReactNode {
+function ReleaseList({ releases, nodes, onMove }: {
+  releases: readonly ReleaseWire[]; nodes: readonly NodeWire[]; onMove: (intent: MoveIntent) => void;
+}): ReactNode {
   if (releases.length === 0) return null;
   return (
     <ul className="settings-releases" aria-label="Releases">
-      {sortReleases(releases).map((r) => <ReleaseItem key={r.tag} release={r} nodes={nodes} />)}
+      {sortReleases(releases).map((r) => <ReleaseItem key={r.tag} release={r} nodes={nodes} onMove={onMove} />)}
     </ul>
   );
 }
@@ -278,8 +291,9 @@ function ReleaseList({ releases, nodes }: { releases: readonly ReleaseWire[]; no
 //   * macOS IS NOT MANAGED (decision 17). A Darwin row says so in place of its
 //     desired and offers no move (D-3308); its arrow is
 //     already null in pendingTag (D-3309).
-// Update and Roll back are rendered DISABLED beside MOVE_DISABLED_TEXT (their
-// routes are programme wave 5's). Ack is live — its route is W2's — and is
+// Update and Roll back open the one move sheet (UpdateMoveSheet, programme
+// wave 5): Update iff pendingTag names a tag, Roll back iff previousVersion
+// is a tag the node runs newer than. Ack is live — its route is W2's — and is
 // offered only on a SETTLED lease, because W2's ackNode acks from nothing
 // else (D-3183; D-3310). The route stays the
 // authority: a row that went busy between the poll and the tap comes back as
@@ -348,13 +362,18 @@ export function reachabilityLine(n: NodeWire, now: number): string | null {
     : 'unreachable';
 }
 
-function NodeItem({ node: n, releases, now, onAcked }: {
+function NodeItem({ node: n, releases, now, onAcked, onMove }: {
   node: NodeWire; releases: readonly ReleaseWire[]; now: number; onAcked: () => void;
+  onMove: (intent: MoveIntent) => void;
 }): ReactNode {
-  const noteId = useId();
   const [acking, setAcking] = useState(false);
   const darwin = n.os === 'darwin';
   const next = pendingTag(n);   // null for a Darwin node too — the predicate's own guard
+  // Roll back needs somewhere to go: the stamp's previous version, when it is a tag this node runs NEWER than
+  // (or the stamp carries no tag to compare it with). A rollback leaves `previous` in place (wave 4's D-3262),
+  // so a node just rolled back reads previousVersion === its running tag: a tap there would be a 202 filed `met`.
+  const v = nodeVersion(n);
+  const previous = isReleaseTag(n.previousVersion) && (v === null || isNewerTag(v, n.previousVersion)) ? n.previousVersion : null;
   const reach = reachabilityLine(n, now);
   const request = requestLine(n, now);
   const ackable = canAck(n, releases);
@@ -405,12 +424,28 @@ function NodeItem({ node: n, releases, now, onAcked }: {
       {reach !== null && <p className="settings-node-detail">{reach}</p>}
       {request !== null && <p className="settings-node-detail">{request}</p>}
       <p className="settings-node-detail">{nodeStateLine(n)}</p>
+      {/* The dispatcher's own word for this row (`updateDetail` on the wire): halted, busy — …, a spawn's stderr
+          line, deadline, met: … — one printable line the server already bounds, rendered as a text child. */}
+      {typeof n.update?.detail === 'string' && n.update.detail !== '' && <p className="settings-node-detail">{n.update.detail}</p>}
       <div className="settings-node-actions">
         {!darwin && (
           <>
-            <button type="button" className="btn-ghost settings-move" disabled aria-describedby={noteId}>Update</button>
-            <button type="button" className="btn-ghost settings-move" disabled aria-describedby={noteId}>Roll back</button>
-            <span id={noteId} className="settings-move-note">{MOVE_DISABLED_TEXT}</span>
+            <button
+              type="button"
+              className="btn-ghost settings-move"
+              disabled={next === null}
+              onClick={() => { if (next !== null) onMove({ scope: 'node', direction: 'update', nodeId: n.nodeId, tag: next }); }}
+            >
+              Update
+            </button>
+            <button
+              type="button"
+              className="btn-ghost settings-move"
+              disabled={previous === null}
+              onClick={() => { if (previous !== null) onMove({ scope: 'node', direction: 'rollback', nodeId: n.nodeId, to: previous }); }}
+            >
+              Roll back
+            </button>
           </>
         )}
         <button type="button" className="btn-ghost settings-move" disabled={!ackable || acking} onClick={ack}>Ack</button>
@@ -419,13 +454,14 @@ function NodeItem({ node: n, releases, now, onAcked }: {
   );
 }
 
-function NodeList({ nodes, releases, now, onAcked }: {
+function NodeList({ nodes, releases, now, onAcked, onMove }: {
   nodes: readonly NodeWire[]; releases: readonly ReleaseWire[]; now: number; onAcked: () => void;
+  onMove: (intent: MoveIntent) => void;
 }): ReactNode {
   if (nodes.length === 0) return null;
   return (
     <ul className="settings-nodes" aria-label="Nodes">
-      {nodes.map((n) => <NodeItem key={n.nodeId} node={n} releases={releases} now={now} onAcked={onAcked} />)}
+      {nodes.map((n) => <NodeItem key={n.nodeId} node={n} releases={releases} now={now} onAcked={onAcked} onMove={onMove} />)}
     </ul>
   );
 }
@@ -608,11 +644,39 @@ function UpdatesBody({ view, stale, now, reload }: {
   // when the route named these ids, alongside the ids themselves — not just
   // the ids — so a LATER poll can be told from the one already in hand at
   // 409-time by identity, never by content (every real poll answer is a
-  // fresh object even when nothing about the fleet changed, so content
-  // would supersede the route's just-given answer on its own immediate
-  // reload, which is not what a later poll means here).
+  // fresh object even when nothing about the fleet changed, so an identity
+  // test, not a content one, is what "a later poll" means here).
+  //
+  // W5 review 161 (F-A, the coordinator's ruling; corrects this comment's
+  // earlier text, which said the opposite): the write's OWN immediate reload
+  // (`writeIntent`'s `.finally(reload)`) IS that later poll. The latest
+  // measurement supersedes the route's node list, so the route's list is
+  // what the note names only until that reload lands, and from then on the
+  // note names the poll's own `missing`.
+  //
+  // W5 review 161 (F-A): "the view that was current when the route named
+  // these ids" is the view live at 409-LANDING time, never the one closed
+  // over at TAP time. `writeIntent` is redefined every render, so its own
+  // `.then`/`.catch` closes over whatever `view` this function's PARAMETER
+  // was on the render that DEFINED it — the render active when the radio was
+  // tapped. A routine 60 s poll landing anywhere in that gap (before the 409
+  // arrives, and so before this instance's own reload) re-renders the
+  // component with a NEW `view` object; the closure does not see it. Stamping
+  // `gateRefusal.view` from that stale closure would then compare unequal to
+  // the CURRENT `view` prop on the very next render — superseding the note
+  // immediately, before it was ever shown, off a poll that was never "later"
+  // than the 409 it is compared against. `viewRef` below is written on every
+  // render, so the catch handler reads the view genuinely current at the
+  // instant the 409 lands; the write's OWN `.finally()` reload is then the
+  // first poll that can ever supersede it, exactly as F5 intended.
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const [gateRefusal, setGateRefusal] = useState<{ ids: string[]; view: UpdatesView } | null>(null);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
+  // The move the operator is confirming — a plan taken at the tap, so a poll
+  // landing while the sheet is open cannot change the list under a thumb.
+  const [move, setMove] = useState<PlannedMove | null>(null);
+  const openMove = (intent: MoveIntent): void => setMove(planMove(view, intent));
 
   const fleet = view.intent.find((i) => i.scope === FLEET_SCOPE) ?? null;
   const missing = autoGateMissing(view.nodes);
@@ -647,7 +711,10 @@ function UpdatesBody({ view, stale, now, reload }: {
         (answer) => { if (answer === 'unreadable') toast(UNCONFIRMED_TEXT); },
         (err: unknown) => {
           const refused = gateRefusalOf(err);
-          if (refused !== null) setGateRefusal({ ids: refused, view });
+          // viewRef.current, not the closed-over `view` param (W5 F-A): the
+          // view genuinely current when this 409 lands, never the one active
+          // at the tap that started the write.
+          if (refused !== null) setGateRefusal({ ids: refused, view: viewRef.current });
           else toast(updateErrorText(err), 'error');
         },
       )
@@ -721,8 +788,9 @@ function UpdatesBody({ view, stale, now, reload }: {
       <p className={line.tone === 'calm' ? 'settings-catalogue' : `settings-catalogue settings-catalogue--${line.tone}`}>
         {line.text}
       </p>
-      {view !== null && <ReleaseList releases={view.releases} nodes={view.nodes} />}
-      {view !== null && <NodeList nodes={view.nodes} releases={view.releases} now={now} onAcked={reload} />}
+      {view !== null && <ReleaseList releases={view.releases} nodes={view.nodes} onMove={openMove} />}
+      {view !== null && <NodeList nodes={view.nodes} releases={view.releases} now={now} onAcked={reload} onMove={openMove} />}
+      <UpdateMoveSheet open={move !== null} plan={move} onClose={() => setMove(null)} onDone={reload} />
     </>
   );
 }

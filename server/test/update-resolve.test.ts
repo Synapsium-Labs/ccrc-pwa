@@ -301,10 +301,19 @@ describe('isIngestibleReleaseTag (fix round 1, D-3216, F11) — ingress-only, on
   // before the byte cap is even relevant — `RELEASE_TAG_INGRESS_MAX_BYTES`
   // is unreachable on its own for `v`'s fixed three-component grammar, since
   // three components at `RELEASE_TAG_COMPONENT_MAX_DIGITS` digits each is
-  // only 57 bytes. This pins the byte cap against the shape that still
-  // reaches it — a single grossly oversized component, which the digit cap
-  // ALSO refuses — and the true effective maximum under both caps together.
-  it('the effective maximum under both caps (three max-digit components) is kept; a grossly oversized component is refused', () => {
+  // only 57 bytes. P7 (correcting this comment): this does NOT pin the byte
+  // cap — under the 18-digit component cap a three-component tag is at
+  // most 57 bytes, so `RELEASE_TAG_INGRESS_MAX_BYTES` (64) is UNREACHABLE
+  // for any tag `RELEASE_TAG`'s grammar admits, and no pin here (or
+  // anywhere) can red its removal: the shape below that overshoots it
+  // (`grosslyOversized`, 65 bytes) is ALREADY refused by the digit cap
+  // alone (60 digits > 18), so deleting the byte-length check changes
+  // nothing observable. It is kept as defence in depth against a future
+  // grammar change (e.g. a fourth component), never because a mutation
+  // currently catches its removal. This pins the true effective maximum
+  // under BOTH caps together, and the grossly-oversized refusal (by the
+  // digit cap, not the byte cap).
+  it('the effective maximum under both caps (three max-digit components) is kept; a grossly oversized component is refused by the DIGIT cap, never the (unreachable) byte cap', () => {
     expect(RELEASE_TAG_INGRESS_MAX_BYTES).toBe(64);
     const maxPart = '1'.repeat(RELEASE_TAG_COMPONENT_MAX_DIGITS);
     const atEffectiveMax = `v${maxPart}.${maxPart}.${maxPart}`;

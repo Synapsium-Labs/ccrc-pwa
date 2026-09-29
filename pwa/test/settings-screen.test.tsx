@@ -28,7 +28,7 @@ import {
 } from '../src/screens/SettingsScreen';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
-import { ApiError, MOVE_DISABLED_TEXT, api, updateErrorText } from '../src/lib/api';
+import { ApiError, api, apiErrorText, updateErrorText } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
 import { declValue, ruleIn } from './cssRule';
 
@@ -475,6 +475,42 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}server`)).toBeInTheDocument());
   });
 
+  it("a poll landing MID-WRITE is not a LATER poll — the refusal is stamped with the view live when the 409 LANDS, never the one closed over at the tap (W5 review 161, F-A)", async () => {
+    // The bug this pins: `writeIntent` closes over `view` at the render that
+    // DEFINED it — the tap-time view. If a routine poll lands anywhere
+    // between the tap and the 409 (before this write's own `.finally()`
+    // reload), a stale tap-time stamp would compare unequal to the view
+    // already active by the time the 409 arrives and read as ALREADY
+    // superseded — hiding the route's own answer the instant it lands. Two
+    // genuinely distinct poll objects (never one reused response, F5's own
+    // trap) and a controlled write prove it names the RIGHT node either way.
+    const tapView = t7View({ nodes: [t7Node({ caps: ['verify', 'node-id', 'floor'] }), t7Server({ caps: T7_GATED })] });
+    const midWriteView = t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: ['verify', 'node-id', 'floor'] })] });
+    vi.spyOn(api, 'updates')
+      .mockResolvedValueOnce(tapView)          // the mount poll
+      .mockResolvedValueOnce(midWriteView)     // a routine poll, mid-write — BEFORE the 409
+      .mockReturnValue(new Promise<UpdatesView>(() => {}));   // the write's own reload: never resolves here
+    const write = Promise.withResolvers<never>();
+    vi.spyOn(api, 'setUpdateIntent').mockReturnValue(write.promise);
+    render(<><ToastHost /><SettingsScreen /></>);
+    const region = await screen.findByRole('region', { name: 'Updates' });
+    await within(region).findByText(`${T7_GATE_NOTE}fleet`);   // tapView: fleet lacks the gate
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));   // the tap
+    // A routine poll lands WHILE the write is still in flight, before the 409
+    // — a fresh, distinct object naming a DIFFERENT missing node.
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    await within(region).findByText(`${T7_GATE_NOTE}server`);   // midWriteView landed: server lacks it now
+    // The 409 lands. Stamping the stale TAP-time view (`fleet` missing) would
+    // compare unequal to the CURRENT view (`server` missing) and read as
+    // already superseded, silently falling back to midWriteView's own
+    // "server" note and dropping the route's answer. Stamping the view LIVE
+    // AT LANDING time makes the two compare equal, so the route's own list —
+    // naming fleet, never server — stands.
+    write.reject(new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
+    await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}fleet`)).toBeInTheDocument());
+    expect(within(region).queryByText(`${T7_GATE_NOTE}server`)).toBeNull();
+  });
+
   it('a 409 auto-needs-rollback-gate naming an EMPTY node list falls back to the route\'s own toast, not an empty "not yet on:" note', async () => {
     vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
       new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [] }));
@@ -571,6 +607,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
 const T8_T0 = Date.UTC(2026, 8, 23, 12, 0, 0);
 const T8_NODE_A = '11111111-1111-4111-8111-111111111111';
 const T8_NODE_B = '22222222-2222-4222-8222-222222222222';
+const T8_NODE_C = '33333333-3333-4333-8333-333333333333';
 /** A stamp at `version`; `undefined` = an unversioned (deploy.sh) build — the key is ABSENT, as the parser leaves it. */
 const t8Stamp = (version: string | undefined): BuildInfo => ({
   sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-23T12:00:00Z', dirty: false,
@@ -620,6 +657,14 @@ describe('SettingsScreen — the release list: helpers', () => {
     expect(releaseDirection('v0.0.9', [both10[0]!, t8Server({ current: null, measuredAt: null })])).toBe('install');
     expect(releaseDirection('v0.0.9', [])).toBe('install');
     expect(releaseDirection('vnext', both10)).toBe('install');           // never handed to the comparator, which throws
+  });
+
+  it('releaseDirection leaves a macOS node out, as planMove does (D-3410): a lagging Mac never turns Roll back into Install', () => {
+    const linux12 = [t8Node({ current: t8Stamp('v0.0.12') }), t8Server({ current: t8Stamp('v0.0.12') })];
+    const mac9 = t8Node({ nodeId: T8_NODE_C, label: 'mac', os: 'darwin', current: t8Stamp('v0.0.9') });
+    expect(releaseDirection('v0.0.10', [...linux12, mac9])).toBe('rollback');
+    expect(releaseDirection('v0.0.10', [mac9])).toBe('install');           // nothing managed to roll back
+    expect(releaseDirection('v0.0.10', [])).toBe('install');
   });
 
   it('refusedLine: distinct refusing nodes out of the live count; null with no refusal; a malformed element is ignored', () => {
@@ -738,7 +783,7 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
     expect(within(rowOf(list, 'v0.0.9')).getByRole('button', { name: 'Install' })).toBeInTheDocument();
   });
 
-  it('renders every move button DISABLED, described by the one W3 sentence (§18 "the move controls are disabled in W3")', async () => {
+  it('renders every move button ENABLED, with no note beside it (spec §13 "W4 adds" — W3 rendered them disabled)', async () => {
     const list = await renderList(
       [t8Release('v0.0.10'), t8Release('v0.0.9'), t8Release('v0.0.8', { channel: 'dev' })],
       [t8Node({ current: t8Stamp('v0.0.9') }), t8Server({ current: t8Stamp('v0.0.9') })],
@@ -746,10 +791,92 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
     const buttons = within(list).getAllByRole('button');
     expect(buttons.map((b) => b.textContent)).toEqual(['Install', 'Install', 'Roll back']);
     for (const b of buttons) {
-      expect(b).toBeDisabled();
-      expect(b).toHaveAccessibleDescription(MOVE_DISABLED_TEXT);
+      expect(b).not.toBeDisabled();
+      expect(b).not.toHaveAttribute('aria-describedby');
     }
-    expect(within(list).getAllByText(MOVE_DISABLED_TEXT)).toHaveLength(3);
+    expect(list.querySelector('.settings-move-note')).toBeNull();
+  });
+
+  it('Install opens the move sheet naming the nodes fleet-then-server whatever the wire order, and sends apply {all: true, tag} (§18 "Install names the order and the direction")', async () => {
+    const apply = vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [T8_NODE_A, T8_NODE_B], skipped: [] });
+    const rollback = vi.spyOn(api, 'rollbackUpdate');
+    const list = await renderList(
+      [t8Release('v0.0.10')],
+      [t8Server({ current: t8Stamp('v0.0.9') }), t8Node({ current: t8Stamp('v0.0.9') })],   // the server row first on the wire
+    );
+    fireEvent.click(within(list).getByRole('button', { name: 'Install' }));
+    const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      '1. fleet (fleet) v0.0.9 → v0.0.10',
+      '2. server (server) v0.0.9 → v0.0.10',
+    ]);
+    expect(apply).not.toHaveBeenCalled();   // opening is not confirming
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    await waitFor(() => expect(screen.queryByRole('list', { name: 'Nodes this moves, in order' })).toBeNull());
+    expect(apply.mock.calls).toEqual([[{ all: true, tag: 'v0.0.10' }]]);
+    expect(rollback).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.updates).toHaveBeenCalledTimes(2));   // the 202 re-polled the screen
+  });
+
+  it('a release every node runs newer than reads Roll back and sends one rollback {nodeId, to} per node, fleet first', async () => {
+    const rollback = vi.spyOn(api, 'rollbackUpdate')
+      .mockResolvedValueOnce({ ok: true, requested: [T8_NODE_A], skipped: [] })
+      .mockResolvedValueOnce({ ok: true, requested: [T8_NODE_B], skipped: [] });
+    const apply = vi.spyOn(api, 'applyUpdate');
+    const list = await renderList(
+      [t8Release('v0.0.10'), t8Release('v0.0.9')],
+      [t8Server({ current: t8Stamp('v0.0.10') }), t8Node({ current: t8Stamp('v0.0.10') })],
+    );
+    fireEvent.click(within(rowOf(list, 'v0.0.9')).getByRole('button', { name: 'Roll back' }));
+    const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      '1. fleet (fleet) v0.0.10 → v0.0.9',
+      '2. server (server) v0.0.10 → v0.0.9',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back to v0.0.9' }));
+    await waitFor(() => expect(rollback).toHaveBeenCalledTimes(2));
+    expect(rollback.mock.calls).toEqual([[{ nodeId: T8_NODE_A, to: 'v0.0.9' }], [{ nodeId: T8_NODE_B, to: 'v0.0.9' }]]);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it('a Mac lagging behind does not hide Roll back: the row reads Roll back and the sheet names the Linux nodes only (D-3410)', async () => {
+    const rollback = vi.spyOn(api, 'rollbackUpdate')
+      .mockResolvedValueOnce({ ok: true, requested: [T8_NODE_A], skipped: [] })
+      .mockResolvedValueOnce({ ok: true, requested: [T8_NODE_B], skipped: [] });
+    const list = await renderList(
+      [t8Release('v0.0.12'), t8Release('v0.0.10')],
+      [
+        t8Node({ current: t8Stamp('v0.0.12') }), t8Server({ current: t8Stamp('v0.0.12') }),
+        t8Node({ nodeId: T8_NODE_C, label: 'mac', role: null, os: 'darwin', current: t8Stamp('v0.0.9') }),
+      ],
+    );
+    fireEvent.click(within(rowOf(list, 'v0.0.10')).getByRole('button', { name: 'Roll back' }));
+    const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      '1. fleet (fleet) v0.0.12 → v0.0.10',
+      '2. server (server) v0.0.12 → v0.0.10',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back to v0.0.10' }));
+    await waitFor(() => expect(rollback).toHaveBeenCalledTimes(2));
+    expect(rollback.mock.calls).toEqual([[{ nodeId: T8_NODE_A, to: 'v0.0.10' }], [{ nodeId: T8_NODE_B, to: 'v0.0.10' }]]);
+  });
+
+  it('a refusal on the first node leaves the second unsent; the sheet says why and stays open', async () => {
+    const refusal = new ApiError(409, { ok: false, error: 'no-rollback-cap' });
+    const rollback = vi.spyOn(api, 'rollbackUpdate')
+      .mockResolvedValue({ ok: true, requested: [T8_NODE_B], skipped: [] })
+      .mockRejectedValueOnce(refusal);
+    const list = await renderList(
+      [t8Release('v0.0.10'), t8Release('v0.0.9')],
+      [t8Server({ current: t8Stamp('v0.0.10') }), t8Node({ current: t8Stamp('v0.0.10') })],
+    );
+    fireEvent.click(within(rowOf(list, 'v0.0.9')).getByRole('button', { name: 'Roll back' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Roll back to v0.0.9' }));
+    const said = await screen.findByText(updateErrorText(refusal));
+    expect(said).toHaveAttribute('role', 'alert');
+    expect(rollback.mock.calls).toEqual([[{ nodeId: T8_NODE_A, to: 'v0.0.9' }]]);
+    expect(screen.getByRole('button', { name: 'Roll back to v0.0.9' })).not.toBeDisabled();
+    expect(api.updates).toHaveBeenCalledTimes(1);   // nothing was requested — nothing to re-poll
   });
 
   it('badges the channel (dev / stable, none for an unknown one) and marks a yanked release', async () => {
@@ -1002,21 +1129,85 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     expect(row.textContent).not.toContain('→');
     expect(within(row).queryByRole('button', { name: 'Update' })).toBeNull();
     expect(within(row).queryByRole('button', { name: 'Roll back' })).toBeNull();
-    expect(within(row).queryByText(MOVE_DISABLED_TEXT)).toBeNull();
     expect(within(row).getByRole('button', { name: 'Ack' })).toBeDisabled();   // idle, nothing to acknowledge
   });
 
-  it('renders Update and Roll back DISABLED on every managed row, described by the one W3 sentence (§18 "the move controls are disabled in W3")', async () => {
-    const { list } = await renderNodes([t9Node({ desiredTag: 'v0.0.10' }), t9Server()]);
-    for (const id of [T9_NODE_A, T9_NODE_B]) {
-      const row = rowOf(list, id);
-      for (const name of ['Update', 'Roll back']) {
-        const b = within(row).getByRole('button', { name });
-        expect(b, `${id} ${name}`).toBeDisabled();
-        expect(b).toHaveAccessibleDescription(MOVE_DISABLED_TEXT);
-      }
-      expect(within(row).getAllByText(MOVE_DISABLED_TEXT)).toHaveLength(1);
+  it('enables Update iff the node has a pendingTag and Roll back iff previousVersion is a tag — no note on any row (spec §13 "W4 adds")', async () => {
+    const { list } = await renderNodes([
+      t9Node({ desiredTag: 'v0.0.10', previousVersion: 'v0.0.8' }),
+      t9Server({ previousVersion: 'not-a-tag' }),   // on its desired tag; a previous that is no tag
+    ]);
+    const a = rowOf(list, T9_NODE_A);
+    expect(within(a).getByRole('button', { name: 'Update' })).not.toBeDisabled();
+    expect(within(a).getByRole('button', { name: 'Roll back' })).not.toBeDisabled();
+    const b = rowOf(list, T9_NODE_B);
+    expect(within(b).getByRole('button', { name: 'Update' })).toBeDisabled();
+    expect(within(b).getByRole('button', { name: 'Roll back' })).toBeDisabled();
+    for (const row of [a, b]) {
+      for (const button of within(row).getAllByRole('button')) expect(button).not.toHaveAttribute('aria-describedby');
     }
+    expect(list.querySelector('.settings-move-note')).toBeNull();
+  });
+
+  it('Update on a node row opens the sheet for that node alone and sends apply {nodeId, tag: pendingTag}', async () => {
+    const apply = vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [T9_NODE_A], skipped: [] });
+    const { list, updates } = await renderNodes([t9Node({ desiredTag: 'v0.0.10' }), t9Server()]);
+    fireEvent.click(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Update' }));
+    const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['1. fleet (fleet) v0.0.9 → v0.0.10']);
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));   // a 202 re-polls
+    expect(apply.mock.calls).toEqual([[{ nodeId: T9_NODE_A, tag: 'v0.0.10' }]]);
+    await waitFor(() => expect(screen.queryByRole('list', { name: 'Nodes this moves, in order' })).toBeNull());
+  });
+
+  it('Roll back on a node row sends rollback {nodeId, to: previousVersion}', async () => {
+    const rollback = vi.spyOn(api, 'rollbackUpdate').mockResolvedValue({ ok: true, requested: [T9_NODE_A], skipped: [] });
+    const { list } = await renderNodes([t9Node({ previousVersion: 'v0.0.8' })]);
+    fireEvent.click(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Roll back' }));
+    const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['1. fleet (fleet) v0.0.9 → v0.0.8']);
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back to v0.0.8' }));
+    await waitFor(() => expect(rollback).toHaveBeenCalledTimes(1));
+    expect(rollback).toHaveBeenCalledWith({ nodeId: T9_NODE_A, to: 'v0.0.8' });
+  });
+
+  it('a single-node 409 not-newer renders its sentence inside the sheet, which stays open and re-polls nothing', async () => {
+    const refusal = new ApiError(409, { ok: false, error: 'not-newer' });
+    vi.spyOn(api, 'applyUpdate').mockRejectedValue(refusal);
+    const { list, updates } = await renderNodes([t9Node({ desiredTag: 'v0.0.10' })]);
+    fireEvent.click(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Update' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.10' }));
+    const said = await screen.findByText(updateErrorText(refusal));
+    expect(said).toHaveAttribute('role', 'alert');
+    expect(updateErrorText(refusal)).not.toBe(apiErrorText(refusal));   // the update table's own word (Task 6)
+    expect(screen.getByRole('button', { name: 'Update v0.0.10' })).not.toBeDisabled();
+    expect(updates).toHaveBeenCalledTimes(1);
+  });
+
+  it('Roll back needs somewhere to go: disabled when previousVersion is the running tag or a newer one (a rollback leaves previous in place, wave 4 D-3262)', async () => {
+    const AHEAD = '5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a5a';
+    const BARE = '6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b';
+    const { list } = await renderNodes([
+      t9Node({ previousVersion: 'v0.0.8' }),                                    // on v0.0.9: back to v0.0.8
+      t9Server({ previousVersion: 'v0.0.9' }),                                  // just rolled back: previous IS current
+      t9Node({ nodeId: AHEAD, label: 'ahead', previousVersion: 'v0.0.10' }),    // a "previous" newer than current
+      t9Node({ nodeId: BARE, label: 'bare', current: t9Stamp(undefined), previousVersion: 'v0.0.8' }),   // no tag to compare
+    ]);
+    expect(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Roll back' })).not.toBeDisabled();
+    expect(within(rowOf(list, T9_NODE_B)).getByRole('button', { name: 'Roll back' })).toBeDisabled();
+    expect(within(rowOf(list, AHEAD)).getByRole('button', { name: 'Roll back' })).toBeDisabled();
+    expect(within(rowOf(list, BARE)).getByRole('button', { name: 'Roll back' })).not.toBeDisabled();
+  });
+
+  it("renders the dispatcher's own word for the row — update.detail — under the state line (spec §12: per-node refusals are reported through updateDetail)", async () => {
+    const HALT = 'halted — another node failed; acknowledge it to go on';
+    const { list } = await renderNodes([
+      t9Node({ update: { state: 'idle', target: null, startedAt: null, detail: HALT } }),
+      t9Server({ update: { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: 'deadline' } }),
+    ]);
+    expect(within(rowOf(list, T9_NODE_A)).getByText(HALT)).toHaveClass('settings-node-detail');
+    expect(within(rowOf(list, T9_NODE_B)).getByText('deadline')).toHaveClass('settings-node-detail');
   });
 
   it('an idle node with no request and no refusal has Ack disabled', async () => {

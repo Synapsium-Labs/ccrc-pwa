@@ -132,7 +132,7 @@ export const RELEASE_TAG_INGRESS_MAX_BYTES = 64;
 export const RELEASE_TAG_COMPONENT_MAX_DIGITS = 18;
 export function isIngestibleReleaseTag(v: unknown): v is string {
   if (!isReleaseTag(v)) return false;
-  if (Buffer.byteLength(v, 'utf8') > RELEASE_TAG_INGRESS_MAX_BYTES) return false;
+  if (Buffer.byteLength(v, 'utf8') > RELEASE_TAG_INGRESS_MAX_BYTES) return false;   // defence in depth: unreachable for `RELEASE_TAG`'s three 18-digit components (57 bytes at most)
   const parts = v.slice(1).split('.');
   return parts.every((p) => (p === '0' || p[0] !== '0') && p.length <= RELEASE_TAG_COMPONENT_MAX_DIGITS);
 }

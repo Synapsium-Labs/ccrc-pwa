@@ -33,6 +33,9 @@ import {
 import type { PushPayload } from '../src/push.js';
 import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { UPDATE_GATE_CAP } from '../src/update/resolve.js';
+import { DETACH_CAP } from '../src/update/dispatch.js';
+import type { LocalUpdateSpawn } from '../src/update/converge.js';
+import { spawnFromRunner } from './updateSpawnFake.js';
 import { REFRESH_MIN_INTERVAL_MS, parseIntentBody, toNodeWire } from '../src/update/routes.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import type { CatalogueState, NodeWire, UpdatesView } from '../../shared/api.js';
@@ -139,6 +142,7 @@ const open = async (
     // the route and `f.coord`), which does not exist until `open()` creates it —
     // hence a factory, never a pre-built poller, for this one case.
     catalogueFactory?: (coord: CoordStore) => CataloguePoller;
+    updateRunner?: LocalUpdateSpawn;
   } = {},
 ): Promise<Opened> => {
   const home = mkTmp('ccrc-update-routes-');
@@ -160,6 +164,7 @@ const open = async (
     ...(o.catalogue ? { catalogue: o.catalogue } : {}),
     ...(o.catalogueFactory ? { catalogue: o.catalogueFactory(coord) } : {}),
     ...(o.push ? { push: o.push as never } : {}),
+    ...(o.updateRunner ? { updateRunner: o.updateRunner } : {}),
     // Task 11's `fleetState` fixture shape, disconnected: the sweep writes the
     // agent connection's row as unreachable on the sweep that sees it.
     ...(o.remote
@@ -676,8 +681,10 @@ describe('POST /api/updates/refresh', () => {
   // back, v0.0.10 included, so under the OLD shape the confirmed withdrawal
   // was applied straight over the listing's own contradicting evidence.
   // Ruled: the listing wins — v0.0.10 stays `yanked: false`. The sibling
-  // case below keeps the ORIGINAL "withdrawal really applies" shape by
-  // having the listing omit v0.0.10.
+  // case below (C2b) has the listing omit v0.0.10, but it does NOT keep the
+  // original "withdrawal really applies" shape: the yank there is the
+  // listing's own 'complete'-coverage absence judgment, reached without
+  // `applyWithdrawn` (review 149's F5; C2b's own comment says so).
   const listingBody = (rows: readonly ReleaseListingRow[]): string => JSON.stringify(rows.map((r) => ({
     tag_name: r.tag, name: r.tag, draft: false, prerelease: r.channel === 'dev',
     published_at: new Date(r.publishedAt).toISOString(), target_commitish: null, body: null,
@@ -793,14 +800,17 @@ describe('POST /api/updates/refresh', () => {
   });
 
   // Mutations (measured by hand, on a scratch copy): hand-typing
-  // `REFRESH_MIN_INTERVAL_MS = 60_000` back reds the derivation case above at
-  // both the exact-value assertion and the door-behaviour assertions (the
-  // second refresh, one minute in, would be admitted, and `p.polls()` would
-  // read 2 where the case expects 1). Dropping B2's own
-  // `listing.tags!.has(pendingK!)` check in `catalogue.ts` (applying every
-  // pending withdrawal unconditionally on a fresh listing, the fix round 2
-  // shape) reds C2 above — v0.0.10 would end `yanked: true` against a
-  // listing that just named it stable.
+  // `REFRESH_MIN_INTERVAL_MS = 60_000` back reds ONE case, the door case
+  // named "REFRESH_MIN_INTERVAL_MS is derived, never hand-typed, …" (above
+  // the C2 pair, not adjacent to this comment since the C2 real-poller case
+  // was inserted between them; P8, wave 5's Task 8A), at both the
+  // exact-value assertion and the door-behaviour assertions (the second
+  // refresh, one minute in, would be admitted, and `p.polls()` would read 2
+  // where the case expects 1); C2 and C2b stay green under it. Making
+  // `listingContradictsPending` (`catalogue.ts`) answer `false` for every
+  // pending (applying every pending withdrawal unconditionally on a fresh
+  // listing, the fix round 2 shape) reds C2 above — v0.0.10 would end
+  // `yanked: true` against a listing that just named it stable.
 });
 
 describe('POST /api/updates/ack', () => {
@@ -1041,5 +1051,42 @@ describe('POST /api/updates/refresh announces what its poll listed (plan W3 Task
     expect(r.statusCode, r.body).toBe(200);
     expect(sent.map((x) => [x.title, x.tag, x.url])).toEqual([['ccrc v0.0.10 is out', 'release-v0.0.10', '/settings']]);
     expect(f.coord.releases().find((x) => x.tag === 'v0.0.10')?.notifiedAt).toEqual(expect.any(Number));
+  });
+});
+
+describe('POST /api/updates/intent dispatches in the same request (update-management wave 5, spec §10\'s triggers)', () => {
+  it('an auto write on a gated box is followed, before the reply, by the lease acquire it makes possible', async () => {
+    // The local spawn answers at once with a refused `--detach` parent: the case measures only
+    // that the acquire happened in the request, and which arm it reached.
+    const calls: [string, string[]][] = [];
+    const refusing: Runner = async (cmd, args) => {
+      calls.push([cmd, [...args]]);
+      return { code: 1, stdout: '', stderr: 'update: fixture refusal\n' };
+    };
+    // The spawn's `home` only builds the launcher path (`updateLauncherPath`), which `refusing` never
+    // executes — the argv itself is pinned by `update-apply-routes.test.ts`, not here.
+    const f = await open({ watcher: true, updateRunner: spawnFromRunner(refusing, '/nonexistent-fixture-home') });
+    catalogue(f.coord);
+    // The server's OWN row and no other. Planted so `ensureInventory` does not sweep the fixture box and
+    // write a capless one (the auto gate would answer 409); no fleet row, because in local mode no
+    // `sendUpdateOp` is wired and Task 5's `runDispatch` notes a link-less move WITHOUT a lease — so the
+    // move the dispatcher can make here is the server row's, through the wired local spawn.
+    plant(f.coord, measured({
+      nodeId: SERVER_LABEL, label: SERVER_LABEL, role: 'both', agentOps: null,
+      caps: ['verify', 'node-id', 'floor', UPDATE_GATE_CAP, DETACH_CAP],
+    }));
+    const before = Date.now();
+    const r = await post(f.app, '/api/updates/intent', { scope: '*', auto: 'stable' });
+    expect(r.statusCode, r.body).toBe(200);
+    const row = f.coord.node(SERVER_LABEL)!;
+    expect(row.desiredTag).toBe('v0.0.10');
+    // `updateTarget`/`updateStartedAt` outlive a release (W2's releaseLease writes state and
+    // detail only), so this reads the acquire whatever the spawn answered after it.
+    expect(row.updateTarget, 'no dispatch ran in the intent request').toBe('v0.0.10');
+    expect(row.updateStartedAt!).toBeGreaterThanOrEqual(before);
+    expect(row.requestedTag, 'an auto move writes no request').toBeNull();
+    // Let the run finish before the fixture closes: the refused parent is a halting spawn-failed.
+    await vi.waitFor(() => expect(f.coord.node(SERVER_LABEL)!.updateState).toBe('failed'), { timeout: 3000 });
+    expect(calls, 'the move reached the local spawn once').toHaveLength(1);
   });
 });
