@@ -12,11 +12,15 @@
 // every answer gets the executor's one feed row (spec §5.9: "One feed row per
 // outcome").
 //
-// A11 amendment: this file also covers the coordinating re-read that sits
-// BETWEEN the sibling re-read and the pause read (spec §1, rules 3-4) — a
-// session that has EVER coordinated a run, in any state, is never reclaimed
+// This file also covers the coordinating re-read that sits BETWEEN the
+// sibling re-read and the pause read (spec §1, rules 3-4, "Manual cleanup
+// should be reserved ONLY FOR COORDINATOR WORKSPACE CLEANUP") — a session
+// that has EVER coordinated a run, in any state, is never reclaimed
 // automatically, and it is checked before the pause so the more specific
 // answer (`siblings-open`) wins over `paused-at-server` when both are true.
+// "Ever" covers both a reclaim's HEIR and the coordinator that SAME reclaim
+// displaced (`CoordStore.childReclaimCoordinatorIds`'s own docstring states
+// the full scope and its one residual).
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -127,7 +131,36 @@ describe('reclaimChild — the pause, read before any argv', () => {
     const out = await reclaimChild(f.deps, {
       sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
     });
-    expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-open' });
+    // The detail pins WHICH branch answered: the sibling re-read's own
+    // wording, never 2a's `"<id> has coordinated run(s)"` — the two branches
+    // both answer `siblings-open`, so only the detail proves this case
+    // exercised the sibling re-read and not the coordinating one.
+    expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-open',
+      detail: `open run(s) #${next.id} still name this workspace` });
+  });
+
+  it('the sibling re-read wins when BOTH apply — pins 2a strictly AFTER it, not just the "why"', async () => {
+    // `demo-a` in this case satisfies BOTH the sibling re-read's own question
+    // (an open run still names it) AND 2a's (it has coordinated a — separate,
+    // terminal — programme). Both branches answer the same `why`, so only the
+    // detail can prove which one actually fired first; the earlier case above
+    // cannot, because its `demo-a` never satisfies 2a's own predicate, so a
+    // mutant that swapped 2 and 2a would still pass it.
+    const f = await fixture();
+    const coordinated = f.coord.openRun({ program: 'w4-both-a', title: 'w4-both-a', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: 'demo-a' });
+    if (!('id' in coordinated)) throw new Error(`openRun refused: ${JSON.stringify(coordinated)}`);
+    expect(f.coord.closeRun({ runId: coordinated.id, finalState: 'failed', causedBy: 'test',
+      handoffCommit: null, program: 'w4-both-a', viaClosing: false }).ok).toBe(true);
+    const next = f.coord.openRun({ program: 'w4-both-b', title: 'w4-both-b', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+    if (!('id' in next)) throw new Error(`openRun refused: ${JSON.stringify(next)}`);
+    f.coord.setSession(next.id, 'demo-a');
+    const out = await reclaimChild(f.deps, {
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+    });
+    expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-open',
+      detail: `open run(s) #${next.id} still name this workspace` });
   });
 
   it('gets the executor\'s ONE feed row, like every other deferral — never a second writer, never none', async () => {
@@ -152,7 +185,7 @@ describe('reclaimChild — the pause, read before any argv', () => {
   });
 });
 
-describe('reclaimChild — A11: the coordinating re-read, before the pause', () => {
+describe('reclaimChild — the coordinating re-read, before the pause', () => {
   it('is read BEFORE the pause, and covers a TERMINAL run too: a session that has ever coordinated defers siblings-open, paused or not', async () => {
     const f = await fixture();
     // `demo-a` coordinated this run once, and it is now terminal — unlike
@@ -190,5 +223,91 @@ describe('reclaimChild — A11: the coordinating re-read, before the pause', () 
     } finally {
       f.coord.childReclaimCoordinatorIds = original;
     }
+  });
+});
+
+// Reviewer Important 1: `reclaimProgram` OVERWRITES `claimedBy` on every run of
+// a programme, terminal runs included, so a bare `SELECT DISTINCT claimedBy`
+// alone loses the coordinator it just displaced the instant an heir takes the
+// chair. `childReclaimCoordinatorIds` now unions in the `from` side of every
+// `reclaim:<from> -> <to>` row `reclaimProgram` writes.
+describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
+  const bareStore = (): CoordStore => {
+    const home = mkTmp('ccrc-child-reclaim-coordinator-ids-');
+    return new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  };
+
+  it('unions in the coordinator a reclaim displaced, not just its heir — the reviewer\'s measured gap', () => {
+    const coord = bareStore();
+    const opened = coord.openRun({ program: 'w4-displaced', title: 'w4-displaced', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: 'demo-a' });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    expect(coord.closeRun({ runId: opened.id, finalState: 'failed', causedBy: 'test',
+      handoffCommit: null, program: 'w4-displaced', viaClosing: false }).ok).toBe(true);
+    expect(coord.childReclaimCoordinatorIds().has('demo-a')).toBe(true);
+    // `reclaimProgram` rewrites `claimedBy` on every run of the programme —
+    // the just-closed row included — so a bare `SELECT DISTINCT claimedBy`
+    // alone would drop `demo-a` the instant this runs.
+    expect(coord.reclaimProgram(opened.id, 'heir-x', Date.now(), null)).toMatchObject({ ok: true });
+    const ids = coord.childReclaimCoordinatorIds();
+    expect(ids.has('demo-a')).toBe(true);   // the displaced coordinator — the fix
+    expect(ids.has('heir-x')).toBe(true);   // the heir — unaffected by the fix
+  });
+
+  it('a reclaim: row from the exact writer that does not parse THROWS, never drops silently', () => {
+    const coord = bareStore();
+    const opened = coord.openRun({ program: 'w4-mangled', title: 'w4-mangled', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: 'demo-a' });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    // Same actor (`'operator'`), same prefix, but not the writer's own
+    // `<from> -> <to>` shape — the one row this build cannot attribute to a
+    // `from` id, and so must not silently exclude.
+    coord.recordRunEvent(opened.id, 'operator', 'reclaim:mangled-with-no-arrow');
+    expect(() => coord.childReclaimCoordinatorIds()).toThrow(/unparseable reclaim-displacement row/);
+  });
+
+  it('the executor defers siblings-open for a coordinator the reclaim door displaced, never reaching ccd', async () => {
+    const f = await fixture();
+    const coordinated = f.coord.openRun({ program: 'w4-displaced-exec', title: 'w4-displaced-exec', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: 'demo-a' });
+    if (!('id' in coordinated)) throw new Error(`openRun refused: ${JSON.stringify(coordinated)}`);
+    expect(f.coord.closeRun({ runId: coordinated.id, finalState: 'failed', causedBy: 'test',
+      handoffCommit: null, program: 'w4-displaced-exec', viaClosing: false }).ok).toBe(true);
+    expect(f.coord.reclaimProgram(coordinated.id, 'heir-y', Date.now(), null)).toMatchObject({ ok: true });
+    const out = await reclaimChild(f.deps, {
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+    });
+    expect(out).toMatchObject({ kind: 'deferred', why: 'siblings-open', detail: 'demo-a has coordinated run(s)' });
+    expect(f.ccdCalls()).toEqual([]);
+  });
+});
+
+// Reviewer minor 1: both shipped `FleetIO` adapters fold every `readdir`
+// failure to `null`, so there is no live throw path today — but a future one
+// that REJECTS must still land on the executor's own `deferred(...)`, with its
+// one feed row, rather than an uncaught rejection.
+describe('reclaimChild — a rejecting readdir still defers, with a feed row', () => {
+  it('paused-at-server, never an uncaught rejection', async () => {
+    const f = await fixture();
+    // The FIRST `readdir` is step 1's marker re-read (`readSessionRecord`,
+    // `registry.ts:1225`) — it must succeed, or the case would red for a
+    // reason unrelated to 2b. The SECOND is `childReclaimPauseRead`'s own
+    // call, on the same directory — that is the one this case makes reject.
+    let readdirCalls = 0;
+    const rejectingIo = {
+      ...f.deps.io,
+      readdir: async (dir: string, timeoutMs?: number, signal?: AbortSignal) => {
+        readdirCalls += 1;
+        if (readdirCalls === 1) return f.deps.io.readdir(dir, timeoutMs, signal);
+        throw new Error('readdir exploded');
+      },
+    };
+    const deps: ChildReclaimDeps = { ...f.deps, io: rejectingIo };
+    const out = await reclaimChild(deps, {
+      sessionId: 'demo-a', runId: f.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+    });
+    expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
+    expect(f.ccdCalls()).toEqual([]);
+    expect(f.feed()).toEqual(['child reclaim deferred']);
   });
 });

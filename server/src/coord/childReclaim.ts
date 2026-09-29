@@ -588,11 +588,12 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   }
   // 2a — COORDINATING, ANY STATE (spec §1, rules 3-4: manual cleanup is
   // reserved for a coordinator's OWN workspace, never a sub-workspace a sweep
-  // may act on). A child that has EVER been named `claimedBy` of a run —
-  // including a run made this session's by the reclaim door's `claimedBy`
-  // rewrite, or any nested coordinator — is never reclaimed automatically,
-  // whatever state that run reaches later. Read after the sibling re-read
-  // (which answers a narrower, LIVE question) and before the pause: an
+  // may act on). A child that has EVER been named `claimedBy` of a run — the
+  // session a reclaim made an heir, the session the SAME reclaim displaced, or
+  // any nested coordinator — is never reclaimed automatically, whatever state
+  // that run reaches later (`childReclaimCoordinatorIds`'s own docstring
+  // states what "ever" covers and its one residual). Read after the sibling
+  // re-read (which answers a narrower, LIVE question) and before the pause: an
   // unreadable coordination table is `siblings-unreadable`, the same word
   // this function already uses for an unreadable `openRunsForSession` — never
   // silently treated as "never coordinated".
@@ -614,8 +615,18 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   // presence). Through this function's own `deferred(...)`, so `reclaimChild`
   // writes its one feed row for it like every other deferral. ccd's rung 3,
   // read on the box inside the lock at the instant of deletion, is still the
-  // read that matters.
-  const pause = await childReclaimPauseRead(deps.io, deps.cfg.registryDir);
+  // read that matters. Try-wrapped like 2a above: both shipped `FleetIO`
+  // adapters fold every failure to `null` (the `unmeasurable` arm), so there
+  // is no live throw path today, but a REJECTING `readdir` must still land on
+  // this function's own `deferred(...)` — never an uncaught rejection that
+  // skips the executor's one feed row.
+  let pause: MarkerState;
+  try {
+    pause = await childReclaimPauseRead(deps.io, deps.cfg.registryDir);
+  } catch (err) {
+    return deferred('paused-at-server', `whether ${RECLAIM_PAUSE_MARKER} is raised could not be read `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+  }
   if (pause !== 'clear') {
     return deferred('paused-at-server', pause === 'set'
       ? `${RECLAIM_PAUSE_MARKER} is raised: automatic reclamation is paused fleet-wide`

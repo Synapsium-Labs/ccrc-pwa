@@ -1257,6 +1257,16 @@ class IntentJournalFault extends Error {
   }
 }
 
+/** The exact shape `reclaimProgram` writes for each run it displaces —
+ *  `reclaim:<from> -> <to>` (below, `this.recordRunEvent(m.id, 'operator',
+ *  \`reclaim:${m.claimedBy} -> ${to}\`, at)`, one call per row the UPDATE just
+ *  rewrote). Anchored `^…$`, and both sides `\S+`: a session id never carries
+ *  whitespace (registry naming), so an EXTENDED or reworded message — this
+ *  writer's own future edit, or a hand-written row that merely starts with the
+ *  same prefix — never matches. `childReclaimCoordinatorIds` is this pattern's
+ *  one reader. */
+const CHILD_RECLAIM_DISPLACED_DETAIL = /^reclaim:(\S+) -> (\S+)$/;
+
 /**
  * Every read and every write of the coordination database, in one class, and
  * SYNCHRONOUS throughout — `DatabaseSync` has no async surface, so a whole
@@ -2866,6 +2876,48 @@ export class CoordStore {
    *  an already-terminal run still counts: the workspace coordinated it once,
    *  and a later close does not retroactively make that false.
    *
+   *  UNIONED WITH THE DISPLACED SIDE too (fix, measured): a bare `SELECT
+   *  DISTINCT claimedBy` alone answers "who coordinates each programme NOW",
+   *  not "who ever has" — `reclaimProgram` OVERWRITES `claimedBy` on every run
+   *  of a programme, terminal runs included (`:1619` above), so the OUTGOING
+   *  coordinator's own runs no longer name it anywhere in this table once an
+   *  heir takes the chair. The only surviving trace is the `run_events` row
+   *  that move writes once per displaced run: `causedBy:'operator',
+   *  detail:'reclaim:<from> -> <to>'`. That `causedBy`+prefix pair is unique to
+   *  this writer — grepped across `server/src`: every other `recordRunEvent`/
+   *  `advanceInner` call site either uses `causedBy:'coordinator'` or passes no
+   *  `reclaim:`-shaped detail (an ordinary transition's `detail` defaults to
+   *  `null`, which no `LIKE 'reclaim:%'` ever matches) — so the WHERE clause
+   *  below reads exactly `reclaimProgram`'s own rows and nothing another
+   *  writer has ever produced.
+   *
+   *  PARSED, not compared: unlike a hold's grammar (`holdReasonVerdict`,
+   *  compared against the server's own rendering, never parsed back), nothing
+   *  else ever reads this string, so there is no server-rendered form to
+   *  compare it against — it must be parsed. Anchored whole-string against
+   *  `CHILD_RECLAIM_DISPLACED_DETAIL`, below; a `reclaim:`-prefixed row from
+   *  this exact writer that does NOT match that shape THROWS rather than being
+   *  silently dropped — a row this build cannot attribute to a `from` id is a
+   *  row this build cannot prove is NOT evidence of past coordination, and
+   *  excluding it silently would be the exact fail-open this fix exists to
+   *  close. The executor's own try/catch around this call turns the throw into
+   *  a `siblings-unreadable` deferral (fail shut), the same word it already
+   *  uses for an unreadable `openRunsForSession`.
+   *
+   *  WHAT "EVER" NOW COVERS: every session currently named `claimedBy` of any
+   *  run (any state), UNION every session `reclaimProgram` has ever displaced
+   *  from a programme's chair — closing the gap where a nested coordinator
+   *  dies and an heir takes over (the reclaim door requires the outgoing
+   *  claimant to measure dead or registry-absent first) and the outgoing
+   *  session's own workspace would otherwise fall back into the reclaimable
+   *  population.
+   *  RESIDUAL: a lost or rebuilt `coord.db` loses this history along with
+   *  everything else the database holds — a rebuilt `runs`/`run_events` pair
+   *  starts from nothing, so a pre-loss displacement is unrecoverable here.
+   *  That is the same class of loss every other read in this file accepts as
+   *  fail-closed rather than reconstructible; closing it is not this method's
+   *  job.
+   *
    *  Returns the whole set, not a per-session boolean, because the reclaim
    *  sweep reads it ONCE per pass and checks many children against it — a
    *  per-child query issued once per child would repeat the same table scan
@@ -2878,9 +2930,20 @@ export class CoordStore {
    *  `openRunsForSession`'s own docstring for why that is not an oversight to
    *  be wrapped. */
   childReclaimCoordinatorIds(): ReadonlySet<string> {
-    return new Set((this.db.prepare(
+    const ids = new Set((this.db.prepare(
       'SELECT DISTINCT claimedBy FROM runs WHERE claimedBy IS NOT NULL',
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy));
+    const displacements = this.db.prepare(
+      "SELECT detail FROM run_events WHERE causedBy = 'operator' AND detail LIKE 'reclaim:%'",
+    ).all() as { detail: string }[];
+    for (const row of displacements) {
+      const m = CHILD_RECLAIM_DISPLACED_DETAIL.exec(row.detail);
+      if (!m) {
+        throw new Error(`run_events carries an unparseable reclaim-displacement row: ${JSON.stringify(row.detail)}`);
+      }
+      ids.add(m[1]!);
+    }
+    return ids;
   }
 
   /** `detail` joins the SELECT (fix, found in Task 9 review — D-47): `advance`
