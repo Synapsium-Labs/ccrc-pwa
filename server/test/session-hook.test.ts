@@ -4843,10 +4843,12 @@ describe('the compaction card — the two documents say what the code does (spec
   };
   const SCANNED = ['session-hook.sh', 'ccd'];
   /** NOT FUNCTIONS, and each is here for a stated reason rather than because it
-   *  was in the way. Both are declared by the GENERATED roster projection
+   *  was in the way. All three are declared by the GENERATED roster projection
    *  (`~/.ccrc/accounts.sh`, `shared/generate.mjs`), which this repo builds but
-   *  does not ship as a file under `ccd/`, so no definition can be found here. */
-  const NOT_A_FUNCTION = ['_ccrc_cfg_dir', '_ccrc_pool'];
+   *  does not ship as a file under `ccd/`, so no definition can be found here.
+   *  `_ccrc_secrets_file` joined for D-3524: ccd's auth-dead credential rule
+   *  probes it with `declare -F`, as `_acct_pool` probes `_ccrc_pool`. */
+  const NOT_A_FUNCTION = ['_ccrc_cfg_dir', '_ccrc_pool', '_ccrc_secrets_file'];
 
   /** A comment BLOCK, normalised the way `paragraphs` normalises prose and for
    *  the same measured reason: a retraction is hard-wrapped, so a line-scoped

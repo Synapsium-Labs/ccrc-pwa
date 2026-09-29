@@ -194,7 +194,7 @@ describe('cmd_stop', () => {
       // `_reg_purge`'s call sites.
       `tmux list-panes -a -F #{session_name} #{pane_pid}`,
       `systemctl --user disable --now claude-session@${ID}`,
-      `tmux kill-session -t cc-${ID}`,
+      `tmux kill-session -t =cc-${ID}:`,
     ]);
     expect(h.reg(ID, 'stopped')).toMatch(/^\d{10} pwa$/);
   });

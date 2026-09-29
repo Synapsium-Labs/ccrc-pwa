@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1c3cbb929dd0b9fd6d03f786e472b043ca6278cfac551a2db6fbd1de3a0ddbea
+# ccrc:generated 1 sha256=378d263c3fa5e8cfed5e0f92ba7f1b38bd7386db9151d790ac7da13ffc681cdf
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -223,9 +223,9 @@ _plat_ln_swap() {   # <target> <link> -> 0 iff <link> is now a symlink to <targe
   fi
 }
 
-# `stat -c` -> `stat -f`. Three format letters, three functions, because a
-# single `_plat_stat <fmt> <file>` would put the GNU spelling at every call
-# site and leave this block translating a string it did not choose.
+# `stat -c` -> `stat -f`, one function per format letter: a single `_plat_stat <fmt> <file>` would
+# put the GNU spelling at every call site and leave this block translating a string it did not choose.
+_plat_ctime() { if [ "$CCD_OS" = darwin ]; then stat -f %c "$@"; else stat -c %Z "$@"; fi; }   # <file> -> ctime, epoch seconds: what a restore cannot backdate (D-3524)
 _plat_mtime() {   # <file> -> mtime, epoch seconds
   if [ "$CCD_OS" = darwin ]; then stat -f %m "$@"; else stat -c %Y "$@"; fi
 }
@@ -1270,8 +1270,8 @@ RESUME_INTERRUPTED_TURN=1
 # is gone, and with it every background task it owned. NO SINGLE QUOTE: the
 # string is single-quoted into the tmux command line (ccd-resume-flag.test.ts).
 RESUME_PROMPT="Continue from where you left off. Note: ccd restarted this session (an account swap or a supervisor revival) after its previous process was stopped mid-turn, and the operator has not sent a new message since. Any background task, Workflow or subagent of the previous process is gone: re-check their journals and outputs, and re-verify anything time-sensitive (branch state, running processes, prior partial work) before continuing."
-# D-2230 — empty = no age cap on the re-drive (ruling R5). Set to a number of
-# milliseconds to make Claude Code suppress the re-drive of a turn older than that.
+# D-2230 — empty leaves the variable unset (ruling R5 meant: no age cap), but on 2.1.28x unset means Claude Code's
+# OWN default cap, six hours (read from the 2.1.283 bundle, D-3526). Set to a number of milliseconds to change it.
 RESUME_REDRIVE_MAX_AGE_MS=""
 REDRIVE_WAIT_S=20               # D-2231 — seconds _redrive_after_spawn gives Claude Code's own re-drive before typing one
 REDRIVE_TAIL_LINES=60           # physical transcript lines the stall detector reads (`tail -n`); the state machine additionally IGNORES attachment/system/local-command rows inside that window, but they still consume lines of it
@@ -1586,11 +1586,11 @@ _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
 }
 
 _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
-# The account-health probe's durable verdict, in the same `"<epoch> <reason>"`
-# format `swapblocked` uses. WRITTEN BY `ccd-account-health` (a sibling
-# executable, never this file — ccd makes no outbound network call, and adding
-# one would be a new dependency class); CLEARED by that probe on a 403, by a
-# successful spawn (`_spawn_settle`), and by an operator `rm`.
+# The auth-dead verdict, in `swapblocked`'s `"<epoch> <reason>"` format. WRITTEN BY
+# `ccd-account-health` on a 401 (ccd itself makes no outbound call) and by a rescue off
+# this process's own 401 (D-3522); CLEARED by that probe on a 403 and by an operator `rm`;
+# EXPIRED here once the account's credential file changes (`_authdead_cred_changed`,
+# D-3524), and at `_spawn_settle` rc 0 on that rule, or outright where ccd names none.
 #
 # DOTLESS AND PER-ACCOUNT, which is what keeps it out of every registry glob —
 # and since D-2605 that takes TWO clauses rather than one. `_reg_purge`,
@@ -1658,7 +1658,7 @@ _authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands f
   # FIELD-path grammar — could not contain it.
   [[ -f "$f" && ! -L "$f" ]] || return 1
   t=$(cat "$f" 2>/dev/null); t="${t%% *}"
-  [[ "$t" =~ ^[0-9]+$ ]]
+  [[ "$t" =~ ^[0-9]+$ ]] && ! _authdead_expired "$1" "$t"   # D-3524: a verdict about a credential no longer on disk is not one
 }
 # THE GRAMMAR IS ASCII, AND `LC_ALL=C` IS WHAT MAKES IT SO (D-2522). `[a-z]`
 # in bash's `=~` is a COLLATION range, not a codepoint range: under
@@ -2695,9 +2695,9 @@ _pool_mismatch_why() {   # account-id account-state project project-pool-state -
   echo "$1 is in pool '${2#named }' (measured from the projection, $REG/pool-epoch — not the declared roster) and project '$3' is in pool '${4#named }'"
 }
 _id()    { echo "$1-$2"; }                                  # wrapper project -> id
-_tmux()  { echo "cc-$1"; }                                  # id -> tmux name
+_tmux()  { echo "cc-$1"; }                                  # id -> tmux NAME, for `new-session -s` only; a -t target is `_tmux_t` (D-3525)
 # `tmux has-session` answers THREE questions with one exit status, and every
-# failure is rc=1. Measured 2026-08-19 on an isolated socket:
+# failure is rc=1. Measured 2026-08-19 on an isolated socket; the three rows tmux answers re-measured 2026-09-28 (tmux 3.4) with the EXACT target `=cc-demo:` this probe now sends, same words (D-3525):
 #
 #   session gone           can't find session: cc-demo
 #   no server / no socket  error connecting to <path> (No such file or directory)
@@ -2718,7 +2718,7 @@ _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
 # the second fact with the subshell. Same classifier, same polarity — the probe
 # IS the one classifier now; `_session_verdict` merely re-derives from it.
 _session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unknown only),
-                     #       PROBE_SUBSTRATE=present|absent|unmeasured; rc 0
+                     #       PROBE_SUBSTRATE=present|absent|unmeasured; rc 0. A 2nd arg (ws-reclaim's `anchored`, #187) is accepted and IGNORED: every probe is exact, `_tmux_t` (D-3525)
   # PROBE_SUBSTRATE IS NOT A FOURTH VERDICT, AND MUST NEVER BECOME ONE. It answers a
   # DIFFERENT question from PROBE_VERDICT — "is there a tmux server at all", not "is this
   # session alive" — and exactly one caller reads it: `cmd_supervise`'s pre-flight, which
@@ -2736,9 +2736,9 @@ _session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unkn
   # stubbed substrate needs no deadline, it cannot wedge.
   local out rc
   if [[ $(type -t tmux) == function ]]; then
-    out=$(tmux has-session -t "${2:+=}$(_tmux "$1")" 2>&1); rc=$?
+    out=$(tmux has-session -t "$(_tmux_t "$1")" 2>&1); rc=$?
   else
-    out=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux has-session -t "${2:+=}$(_tmux "$1")" 2>&1); rc=$?
+    out=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux has-session -t "$(_tmux_t "$1")" 2>&1); rc=$?
   fi
   if (( rc == 0 )); then PROBE_VERDICT=live; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; return 0; fi
   # rc 124 is timeout's own kill: tmux printed nothing, so the reason is SYNTHESIZED —
@@ -2949,11 +2949,11 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 170
-# invocations across 141 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 176
+# invocations across 147 non-comment lines.
 #
-# THE LAST MOVE WAS the RECLAIM region's reads (CCR-15 wave 3, Task 5);
-# before it `_child_tmpdir`'s `.child` read and CCR-10's archive check.
+# THE LAST MOVE WAS D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in
+# `_carried_in_note`); before it the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
 # bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
@@ -3701,18 +3701,18 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; CCR-15's `child` made 39 — by addition, NOT a fresh census of
+  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 39: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
-  # `child`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
+  # The 41: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # `carriednote`, `child`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `reaping`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
-  # `swapnarrownote`, `tickstuck`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
+  # `swapnarrownote`, `tdate`, `tickstuck`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
   # of one word in one file, disclosed rather than renamed. That is a WIDER
   # set than `_reg_set`/`_reg_get`: the inventory
@@ -4960,7 +4960,7 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
     gone)    echo idle; return 0 ;;   # no pane at all: nothing is running
     unknown) return 1 ;;              # could not ask — say so, do not guess
   esac
-  pid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  pid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   sf="$cfg/sessions/$pid.json"
   # D-2379: the one unguarded reader of this path family — `_sync_uuid`
@@ -7680,7 +7680,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     meas.atticsrc "$atticsrc"
 
   _ws_unsupervise "$id"
-  tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
 
   if (( registered == 0 )); then
     # Not gated on the directory existing: `git worktree remove` clears the
@@ -8873,8 +8873,8 @@ cmd_win_size() {   # ccd win-size --session <id> --mode smallest|canonical — p
   # validated id that is a unique prefix of a live session resizes THAT session,
   # at rc 0, silently. `set-option` needs the colon against an exact name too
   # (row 3), so the colon is not optional on either mutating arm — it is the
-  # anchor, not its spelling. `has-session` takes a SESSION target and gets
-  # `=$t` with no colon; it is the one command for which `=` alone binds.
+  # anchor, not its spelling. `has-session` alone binds with `=` and no colon, but
+  # all three now take `_tmux_at "$t"` — one exact spelling for every target (D-3525).
   #
   # `aggressive-resize` is deliberately left alone — measured a no-op for a
   # one-window session, which every cc-* session is.
@@ -8903,16 +8903,16 @@ cmd_win_size() {   # ccd win-size --session <id> --mode smallest|canonical — p
     *) die "bad mode: $mode (want smallest|canonical)" ;;
   esac
   t=$(_tmux "$id")
-  tmux has-session -t "=$t" 2>/dev/null || die "no such session: $t"
+  tmux has-session -t "$(_tmux_at "$t")" 2>/dev/null || die "no such session: $t"
   # `set -uo pipefail` with NO `-e`: an unguarded failure would fall straight
   # through to the echo and report a size change that did not happen. Wave 3's
   # `sizer.unpin` keys on this exit code to tell 'ok' from 'failed'.
   if [[ "$mode" == smallest ]]; then
-    tmux set-option -t "=$t:" window-size smallest \
+    tmux set-option -t "$(_tmux_at "$t")" window-size smallest \
       || die "could not un-pin $t — the window is STILL at its pinned size"
     echo "smallest"
   else
-    tmux resize-window -t "=$t:" -x 220 -y 50 \
+    tmux resize-window -t "$(_tmux_at "$t")" -x 220 -y 50 \
       || die "could not pin $t — the window is NOT at the canonical grid"
     echo "canonical"
   fi
@@ -8970,8 +8970,8 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
     # `null`, not a refusal: "there is no pane" is the state --cancel exists to
     # reach, so reaching it is success. The caller that wants to know whether it
     # killed anything reads the field.
-    if tmux has-session -t "$pane" 2>/dev/null; then
-      tmux kill-session -t "$pane" || die "could not kill $pane"
+    if tmux has-session -t "$(_tmux_at "$pane")" 2>/dev/null; then
+      tmux kill-session -t "$(_tmux_at "$pane")" || die "could not kill $pane"
       printf '{"cancelled":%s}\n' "$(_json_str "$pane")"
     else
       printf '{"cancelled":null}\n'
@@ -8992,7 +8992,7 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
   # and tmux itself is the backstop there: `new-session -d -s <name>` on a
   # live name exits non-zero with `duplicate session`, which the `||` below
   # turns into a refusal rather than a second helper.
-  ! tmux has-session -t "$pane" 2>/dev/null \
+  ! tmux has-session -t "$(_tmux_at "$pane")" 2>/dev/null \
     || die "auth-in-progress: $pane is already running (ccd account-pane --id $id --cancel to stop it)"
   _tmux_new_session -d -s "$pane" -x 120 -y 40 \
     "exec '$HOME/.local/bin/ccd-account-auth' '$id' '$method'" \
@@ -9672,7 +9672,7 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   _reg_set "$id" archivemanifest "$manifest"$'\n'
 
   _ws_unsupervise "$id"                                   # clears Restart=always
-  tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
 
   # Truthful in three values, not always "merged": a workspace can be archived
   # with a PR the gh-verified prphase machinery has confirmed merged, PR
@@ -14538,7 +14538,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # not only the parent's.
   if [[ -z "$resumed" ]]; then
     _ws_unsupervise "$id"                                                  # (d)
-    tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true              # (e)
+    tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true              # (e)
   fi
 
   # THE STEP-(f) DISJUNCTION, RULE: this step runs whenever the run has
@@ -15626,7 +15626,7 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
   # the registry in step means resurrection resumes where the session actually was.
   local id="$1" cfg pid sid
   cfg=$(_cfg_dir "$(_reg_get "$id" wrapper)"); [[ -n "$cfg" ]] || return 0
-  pid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  pid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   [[ -n "$pid" && -f "$cfg/sessions/$pid.json" ]] || return 0
   sid=$(grep -oE '"sessionId":"[0-9a-f-]{36}"' "$cfg/sessions/$pid.json" | head -1 | cut -d'"' -f4)
   [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] && _reg_set "$id" uuid "$sid"
@@ -16342,8 +16342,8 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     # so `_avail` passes a home whose credential is dead; the rescue that moved a
     # session OFF it would move it straight back after SWAP_COOLDOWN, and a
     # forced call would skip the candidate loop's rank-101 demotion by landing
-    # here first. `ccd-account-health` writes the marker on its own 401 and
-    # clears it on a live answer, so this holds exactly as long as it is true.
+    # here first. The probe clears the marker on a live answer, and `_authdead`
+    # expires it once a credential file ccd can name changes (D-3524) — no spawn.
     if [[ "$hrc" -eq 0 ]] \
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
       && ! _authdead "$home" && _avail "$home"; then
@@ -16651,7 +16651,7 @@ _pane_measurable() {   # id -> rc 0 when cc-<id>'s ACTIVE pane is at least READE
   # review — naming the function instead of a distance is what keeps this claim
   # from rotting the same way again.)
   local rows w
-  rows=$(tmux list-panes -t "$(_tmux "$1")" -F '#{pane_active} #{pane_width}' 2>/dev/null) || return 1
+  rows=$(tmux list-panes -t "$(_tmux_t "$1")" -F '#{pane_active} #{pane_width}' 2>/dev/null) || return 1
   w=$(awk '$1 == 1 { print $2; exit }' <<<"$rows")
   # Regex before the arithmetic test: `$w` is bytes off tmux's stdout.
   [[ "$w" =~ ^[0-9]+$ ]] || return 1
@@ -16720,10 +16720,10 @@ _pane_born() {   # id -> the epoch the session's tmux session was created, i.e. 
   # `_tmux_new_session`, swap and revival alike), so this bounds the process
   # that owns the pane. `session_created`, never `session_activity`, which moves
   # on every redraw and would discard every row as "earlier".
-  tmux display-message -p -t "$(_tmux "$1")" '#{session_created}' 2>/dev/null
+  tmux display-message -p -t "$(_tmux_t "$1")" '#{session_created}' 2>/dev/null
 }
 
-_session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, OR the transcript's newest real row is a rate-limit banner or this process's 401, and nobody is typing (D-2363, D-3522)
+_session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, OR the transcript's newest real row is a rate-limit banner or this process's 401, and nobody is typing — never a banner a swap carried in from before this process (D-2363, D-3522, D-3526)
   # THE PANE FIRST, UNCHANGED. `_pane_hard_blocked` is the detector every landing,
   # rescue and strand verdict has run on since Wave 3 and it stays primary — its
   # contract (a visible banner swaps, draft or not) is not touched here. The
@@ -16767,7 +16767,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # A cached 1 keeps a strand verdict stable until the next scan, but the DRAFT
   # GUARD stays outside the cache and is re-asked on every positive: caching a
   # transcript must never let a swap carry away what a human started typing.
-  local id="$1" pane="$2" f last now scan scan_ts scan_verdict verdict=0 born
+  local id="$1" pane="$2" last now scan scan_ts scan_verdict verdict=0 born
   # WHICH DETECTOR FIRED, SAID BY THE FUNCTION THAT KNOWS (D-3101). The
   # `auto-rescue` line used to re-ask `_pane_hard_blocked` to decide whether to
   # write ` via=transcript`, which was sound only while this function had exactly
@@ -16792,7 +16792,9 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # pane. rc 1 is "not hard blocked", which is what "no verdict" has to look
   # like to a boolean caller.
   _pane_measurable "$id" || return 1   # unmeasurable -> NO VERDICT (§6.3): the rescue this feeds is a restart that types
-  _pane_hard_blocked "$pane" && { HARD_BLOCK_VIA=pane; return 0; }
+  # A CARRIED-IN BANNER IS NOT A BLOCK, on any rung (D-3526): a pane positive the transcript dates to an
+  # earlier process, with a swap after it, answers no (`_pane_carried_in`); `_limit_dated` holds the rule.
+  _pane_hard_blocked "$pane" && { _pane_carried_in "$id" pane "$pane" && return 1; HARD_BLOCK_VIA=pane; return 0; }
   # THE SECOND PANE RUNG (D-3100), and it is a PANE rung rather than a third
   # arm below the transcript deliberately: a banner Claude Code is rendering on
   # screen right now is the same condition `_pane_hard_blocked` answers, merely
@@ -16800,7 +16802,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # the pane arm's cost (a `grep` over eight lines), its immediacy (no 30-second
   # cache) and its contract. Below `_pane_hard_blocked` so that a pane matching
   # both still reports the older, more specific detector.
-  _pane_limit_banner "$pane" && { HARD_BLOCK_VIA=banner; return 0; }
+  _pane_limit_banner "$pane" && { _pane_carried_in "$id" banner "$pane" && return 1; HARD_BLOCK_VIA=banner; return 0; }
   grep -q "esc to interrupt" <<<"$pane" && return 1
   now=$(date +%s); last=$(_reg_get "$id" stalepress)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_RESUME_GRACE" ]] && return 1
@@ -16811,16 +16813,14 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
     verdict="$scan_verdict"
   else
     born=$(_pane_born "$id")
-    if f=$(_transcript_path "$id") && _transcript_limit_banner "$f" stuck "$born" >/dev/null; then
-      verdict=1
-    fi
+    _limit_dated "$id" transcript "$born" && verdict=1   # rc 3, carried in, caches as 0 like any no (D-3526)
     _reg_set "$id" tscan "$now $verdict" 2>/dev/null || true
   fi
   [[ "$verdict" -eq 1 ]] || return 1
   # SPELLED OUT rather than left as the function's trailing exit status, because
   # the provenance has to be stamped on the success side only: `! cmd` as a tail
   # says the same thing about the rc and gives nowhere to write the word.
-  _pane_box_has_content "$(tmux capture-pane -t "$(_tmux "$id")" -p -e 2>/dev/null)" && return 1
+  _pane_box_has_content "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)" && return 1
   HARD_BLOCK_VIA=transcript
   return 0
 }
@@ -16845,7 +16845,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   # and the cooldown, which also keeps the box-not-empty line from repeating
   # every five seconds (D-2361).
   local id="$1" t pane now last
-  t=$(_tmux "$id")
+  t=$(_tmux_t "$id")
   _pane_measurable "$id" || { _pane_narrow_note "$id" stale; return 0; }   # unmeasurable -> no Enter (§6.3): a wrapped "esc to interrupt" reads as idle
   pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
@@ -16932,8 +16932,8 @@ _pane_limit_banner() {   # pane text -> success iff the pane carries Claude Code
   # is untouched: `_spawn_settle` and `_redrive_after_spawn` keep exactly the
   # vocabulary they had. This predicate has ONE caller —
   # `_session_hard_blocked` — whose two callers are the rescue arm and the strand
-  # half, and the rescue arm sits below `SWAP_COOLDOWN`, which a landing has just
-  # stamped, so a re-render cannot reach a relocation through it.
+  # half. This said the rescue arm sits below `SWAP_COOLDOWN`, which a landing has just stamped, so a
+  # re-render cannot reach a relocation: FALSE, the cooldown expires. A carried-in banner is now dated (D-3526).
   #
   # THE SEPARATOR IS PART OF THE PATTERN, and it is what keeps this from being a
   # prose detector. Every banner in the family is `You've hit your <what> limit ·
@@ -17091,7 +17091,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
-  local id="$1" wrapper home now last pane target hard_blocked="" blocked bts authf authtmp
+  local id="$1" wrapper home now last pane target hard_blocked="" blocked bts authf authtmp authborn
   local project pps prc prjrc crossed="" ctrc wrc hrc strc stuck="" new aff_verb=auto-home
   # §6.3: a relocation is a restart that re-drives, and the only thing standing
   # between it and a running turn is the `esc to interrupt` match further down.
@@ -17390,7 +17390,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     [[ -z "$stuck" ]] && _tick_decided "$id"   # a refused swap is a decision too — see above
     return 0
   fi
-  pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8)
+  pane=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
   # THE VERDICT BEFORE THE BLANK-PANE RETURN (D-2363): a blank capture used to
   # return here, ahead of any classifier, and a limited session with a blank
   # pane was never rescued. `_session_hard_blocked` reads the transcript for
@@ -17584,11 +17584,11 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # cannot probe — so without this a session rescued off a 401 went back to
     # it after SWAP_COOLDOWN. Re-measured, not read off the cached verdict: a
     # FRESH stuck-mode scan must name the 401 this pane's process wrote. Never
-    # over a standing marker (the probe re-stamps its own; readers see a boolean).
-    # The probe clears it on a live answer; a clean spawn still clears it too.
-    if _is_valid_wrapper "$wrapper" && ! _authdead "$wrapper" \
-       && authf=$(_transcript_path "$id") \
-       && [[ "$(_transcript_limit_banner "$authf" stuck "$(_pane_born "$id")" | cut -f3)" == authentication_failed ]]; then
+    # over a standing marker (readers see a boolean), and NOT when the account's credential
+    # file changed at or after the pane was born: that 401 was about older bytes (D-3524).
+    if _is_valid_wrapper "$wrapper" && ! _authdead "$wrapper" && authf=$(_transcript_path "$id") \
+       && authborn=$(_pane_born "$id") && [[ "$(_transcript_limit_banner "$authf" stuck "$authborn" | cut -f3)" == authentication_failed ]] \
+       && ! _authdead_cred_changed "$wrapper" "$authborn"; then
       authtmp=$(mktemp "$REG/$wrapper-authdead.tmp.XXXXXX") \
         && printf '%s %s' "$now" rescue-401 > "$authtmp" && mv -f "$authtmp" "$REG/$wrapper-authdead" \
         || rm -f "$authtmp"
@@ -17644,7 +17644,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   echo "$pane" | grep -q "esc to interrupt" && return 0    # mid-turn: wait for the gap
   echo "$pane" | grep -q "❯" || return 0                    # not at a prompt yet
   local spid sf st sua
-  spid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  spid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
   # `-f` BEFORE THE GREP, for `_authdead`'s reason (#69 review round 3, R2):
   # `grep FILE` opens by name and blocks for ever on a FIFO with no writer or on
@@ -18204,7 +18204,7 @@ _pane_for_keystroke() {   # id — 0 with the last 8 pane rows in `KS_PANE`; 1 w
   # `ccd-auto-compact.test.ts` pins the 8-ROW window against exactly that regression.
   local id="$1" prc pane
   KS_PANE=""; KS_WHY=""; KS_DETAIL=""
-  pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8); prc=$?
+  pane=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8); prc=$?
   [[ "$prc" == 0 ]] || { KS_WHY=pane-unreadable; KS_DETAIL="tmux capture-pane rc=$prc"; return 1; }
   [[ -n "$pane" ]] || { KS_WHY=pane-blank; KS_DETAIL="tmux capture-pane rc=0, empty capture"; return 1; }
   _pane_auto_continue_armed "$pane" && { KS_WHY=auto-continue; KS_DETAIL="Claude Code is waiting out a limit on its own; a keystroke would cancel it (D-2229)"; return 1; }
@@ -18240,7 +18240,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   echo "$pane" | grep -q "esc to interrupt" && { KS_WHY=mid-turn; KS_DETAIL="$ctxnote"; return 1; }
   echo "$pane" | grep -q "❯" || { KS_WHY=no-prompt; KS_DETAIL="$ctxnote"; return 1; }
   wrapper=$(_reg_get "$id" wrapper)
-  spid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  spid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   # D-2013 AT THE NARROWEST SEAM: "MEASURED BUSY" IS NOT "COULD NOT MEASURE". An earlier cut of
   # this function put `${st:-unreadable}` in the DETAIL and left one `not-idle` slug for both,
   # which is the same collapse one seam over — the detail is floored out of swap.log after the
@@ -18302,7 +18302,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # the escape codes to tell a real draft from the dim ghost-suggestion — see
   # `_pane_box_draft`, which refused every suggestion-showing session for ever
   # when it was handed a plain capture.
-  t=$(_tmux "$id")
+  t=$(_tmux_t "$id")
   _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
     && { KS_WHY=drafting; KS_DETAIL="$ctxnote"; return 1; }
   return 0
@@ -18417,7 +18417,7 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # below that wants it, and a predicate that answered a second value through a global would be
   # a wider contract than "is this pane typeable" for one string.
   wrapper=$(_reg_get "$id" wrapper)
-  t=$(_tmux "$id")
+  t=$(_tmux_t "$id")
   # Nothing is being declined any more, so the field must go — the `auto-compact` line below is
   # this tick's record, and a surviving `compactskip` beside it would claim a refusal that did
   # not happen. Cleared BEFORE the send-keys for the same reason `_reg_set lastcompact` is: what
@@ -18899,7 +18899,7 @@ _route_escape() {   # id — leave the pane as we found it after an unacknowledg
   # reason this function takes an id rather than the tmux name its callers
   # already hold (controller ruling S4-R14). `ccd-account-pane.test.ts` reads
   # every key-sending call in this file and requires each target to be `$t` or
-  # `$(_tmux "$id")`, because `_tmux` can only ever name `cc-<id>` — so no ccd
+  # `$(_tmux_t "$id")`, because `_tmux_t` can only ever name `cc-<id>` — so no ccd
   # typer can reach an auth pane (`cc-auth-<id>`), whose whole safety property is
   # that nothing types into it. A bare `"$1"` here would be a literal target as
   # far as that scan is concerned, and a caller one refactor away could hand it
@@ -18917,7 +18917,7 @@ _route_escape() {   # id — leave the pane as we found it after an unacknowledg
   # ONCE, not until-clear. One `Escape` closes each of the three shapes measured
   # (D-2808, D-2811 and the slice-4 picker probe); a loop would be a second,
   # unmeasured claim, and pressing Escape at a bare prompt is a no-op anyway.
-  local t; t=$(_tmux "$1")
+  local t; t=$(_tmux_t "$1")
   tmux send-keys -t "$t" Escape; sleep 1
   return 0
 }
@@ -18939,10 +18939,10 @@ _route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no sli
   # of the measured order would leave every level above it pointing one row low,
   # and the only symptom is a pane running the wrong effort.
   # The ID, not the tmux name (ruling S4-R14, and `_route_escape`'s own note):
-  # every target this function presses a key into is `_tmux`'s answer, so the
+  # every target this function presses a key into is `_tmux_t`'s answer, so the
   # auth-pane scan in `ccd-account-pane.test.ts` can see it derive.
   local id="$1" level="$2" t n i
-  t=$(_tmux "$id")
+  t=$(_tmux_t "$id")
   local -a stops=()
   if [[ "$level" == ultracode ]]; then
     tmux send-keys -t "$t" -l "/effort ultracode"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
@@ -19068,7 +19068,7 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
   # and let the tick record it and the settle apply it.
   # The ID, not the tmux name — `_route_type_effort`'s note, same reason.
   local id="$1" cls="$2" w="$3" t rows n cur label desc want target=0 curs=0 i tlabel="" tdesc=""
-  t=$(_tmux "$id")
+  t=$(_tmux_t "$id")
   tmux send-keys -t "$t" -l "/model"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
   rows=$(_route_picker_rows "$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -12)")
   if [[ "$cls" == default || -z "$cls" ]]; then want="Default"; else want="${cls^}"; fi
@@ -19402,7 +19402,7 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
   # vanished mid-poll; 4 = the window expired with no marker; 5 = a hard block (limit/spend banner,
   # or lost auth): waiting longer cannot fix it; 6 = a live pane under READER_MIN_COLS, or of unreadable width, so every gate stood down. 3 and 4 both used to be "0 after ~15
   # minutes" (M6): the caller printed `started`/`ensured` over a session that was never there.
-  local t="$1" fromswap="${2:-0}" bound i pane t0
+  local t fromswap="${2:-0}" bound i pane t0; t=$(_tmux_at "$1")
   # A WALL-CLOCK bound as well as the iteration cap. The cap alone is not a
   # bound anyone can reason about: gate branches sleep 2 EXTRA seconds each, so
   # the same 450 iterations are ~900s plain and ~1350s when gates fire. The
@@ -20328,7 +20328,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # shrink, so it is precisely the number a later measurement will want to find.
   if [[ "$mode" == "resume" ]]; then
     sleep "$SPAWN_RESUME_SETTLE_S"
-    if ! tmux has-session -t "$tname" 2>/dev/null; then
+    if ! tmux has-session -t "$(_tmux_at "$tname")" 2>/dev/null; then
       echo "ccd: $id: --resume '$uuid' left no session; retrying once with --session-id" >&2
       # `$launchflags`, the SAME value the primary line above used — computed
       # once, before either spawn (it carries `$rcflag` plus the routing
@@ -20358,11 +20358,11 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   fi
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
   # aware hotkey (ccclip) can target exactly the session you're looking at, even with many open.
-  tmux set-option -t "$tname" set-titles on 2>/dev/null
-  tmux set-option -t "$tname" set-titles-string '#S' 2>/dev/null
+  tmux set-option -t "$(_tmux_at "$tname")" set-titles on 2>/dev/null
+  tmux set-option -t "$(_tmux_at "$tname")" set-titles-string '#S' 2>/dev/null
   # PIN, THEN FOLLOW: -x/-y lose to any narrow client on the server (tmux 3.4, measured: born 60x19 = spawn rc 6); pin FIRST, as `latest` then keeps it, so an attach still fits (ccd-spawn-split).
-  tmux resize-window -t "=$tname:" -x 220 -y 50 2>/dev/null
-  tmux set-option -t "$tname" window-size latest 2>/dev/null
+  tmux resize-window -t "$(_tmux_at "$tname")" -x 220 -y 50 2>/dev/null
+  tmux set-option -t "$(_tmux_at "$tname")" window-size latest 2>/dev/null
   # VALIDATED TO THE TWO LEGAL WORDS, and the FAILURE DIRECTION is why the check
   # survived the move off stdout: fromswap=1 picks the cheap auto-compact
   # landing, fromswap=0 keeps full fidelity, so anything unrecognised must
@@ -20408,16 +20408,16 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
     # A revival supersedes an earlier deliberate stop (§4.1). `rm -f` on an absent file is a no-op,
     # so this is correct whether or not the .stopped stamp itself has landed yet.
     #
-    # AND THE AUTH-DEAD MARKER FOR THIS ACCOUNT, on rc 0 and only rc 0. A TUI
-    # that came up on `$wrapper` is proof that account's credential
-    # authenticates — a clearing owner beside the probe's own 403 and an operator
-    # `rm`; the probe's 401 and a rescue's (D-3522) write it. Deliberately NOT the
-    # `cmd_start` shape one screen down, which clears `swapblocked` on the
-    # ATTEMPT: a refused swap is a stale banner a human act supersedes, while
-    # this is a MEASUREMENT and erasing one without evidence is a guess. rc 2
-    # ("waiting for login") and rc 5 ("hard-blocked at startup … or lost auth")
-    # are the opposite of evidence and are pinned to keep the marker.
-    0) rm -f "$REG/$id.stopped" "$REG/$wrapper-authdead" ;;
+    # AND THE AUTH-DEAD MARKER, on rc 0 only — but no longer on rc 0 alone (D-3524).
+    # A TUI coming up is NOT proof the credential authenticates: 2.1.280 draws its
+    # prompt on a dead OAuth token (measured), so this used to wipe the marker a
+    # rescue had just written and send the rescued session back into the 401. The
+    # evidence is the credential FILE: `_authdead_clear_on_spawn` keeps the marker
+    # while that file predates it, and clears it when the file changed since or ccd
+    # cannot name one (the old rule, kept for a lane ccd cannot see). Unlike
+    # `cmd_start`'s `swapblocked` clear this is a MEASUREMENT; rc 2 ("waiting for
+    # login") and rc 5 ("… or lost auth") are the opposite of evidence and keep it.
+    0) rm -f "$REG/$id.stopped"; _authdead_clear_on_spawn "$wrapper" ;;
     # $id and $wrapper are only in scope HERE, not inside _accept_first_run_prompts (which knows
     # only the tmux name), so the operator-facing warnings — naming both, spec §5 — live on this
     # side of the return.
@@ -20511,7 +20511,7 @@ _inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the
   # side effect only (the haiku+effort refusal note and the unrecognised-value
   # reject note) — its return value is never typed, so nothing unrecognised
   # reaches a keystroke because nothing recognised does either.
-  local t="$1" id="${1#cc-}" level
+  local t id="${1#cc-}" level; t=$(_tmux_at "$1")
   _pane_measurable "$id" || { echo "ccd: pane is under ${READER_MIN_COLS} columns, skipped /effort $SPAWN_EFFORT (§6.3)" >&2; return 0; }
   if [[ -e "$REG/$id.effort" ]]; then
     _route_effort_for "$id" "$(_route_get "$id" class)" >/dev/null
@@ -20566,7 +20566,7 @@ _transcript_stalled_pair() {   # transcript-path -> 0 the newest real turn is th
   [[ "$state" -eq 2 ]]
 }
 
-_transcript_limit_banner() {   # transcript-path [stuck since-epoch] -> 0 the newest real row is a rate-limit banner (prints "<resetsAt>\t<rateLimitType>"; stuck mode's 401 prints "\t\tauthentication_failed") | 1 not | 2 unreadable (D-2362, D-2456)
+_transcript_limit_banner() {   # transcript-path [stuck since-epoch] -> 0 the newest real row is a rate-limit banner (prints "<resetsAt>\t<rateLimitType>"; stuck mode's 401 prints "\t\tauthentication_failed") | 1 not | 2 unreadable | 3 stuck mode: that banner provably predates since-epoch (prints its epoch; D-3526) (D-2362, D-2456)
   # STRUCTURAL, NOT TEXTUAL. The row Claude Code appends on a 429 carries
   # TOP-LEVEL `isApiErrorMessage:true` and `error:"rate_limit"` (measured
   # 2026-09-10: `quotaLimits:{status:"rejected",resetsAt:<epoch s>,
@@ -20590,7 +20590,12 @@ _transcript_limit_banner() {   # transcript-path [stuck since-epoch] -> 0 the ne
   # account's 401 stays the newest real row on the new account and swaps a
   # healthy session every SWAP_COOLDOWN. No `since`, or an unreadable timestamp,
   # and the row does not count. `billing_error` and `server_error` stay out.
-  # The default mode is unchanged.
+  # THE SAME CLOCK DATES A RATE LIMIT (D-3526), for the same carried transcript
+  # — but PROOF-ONLY and as its own answer: a `rate_limit` row still counts
+  # (rc 0) unless `since` is digits, the row's timestamp parses and it is
+  # EARLIER than `since`; then it answers rc 3 with the row's epoch, a banner
+  # this process did not write. Never folded into rc 1: the caller keeps the block when no
+  # swap came after the row, or this process never came up. The default mode is unchanged.
   local f="$1" mode="${2:-}" since="${3:-}" rows rc
   [[ -f "$f" && -r "$f" ]] || return 2
   rows=$(tail -n "$REDRIVE_TAIL_LINES" "$f" 2>/dev/null) || return 2
@@ -20603,14 +20608,24 @@ stuck = sys.argv[1:2] == ["stuck"]
 since = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
 
 
-def born(row):
+def stamp(row):
     ts = row.get("timestamp")
     if since is None or not isinstance(ts, str):
-        return False
+        return None
     try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() >= since
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
     except ValueError:
-        return False
+        return None
+
+
+def born(row):
+    at = stamp(row)
+    return at is not None and at >= since
+
+
+def predates(row):
+    at = stamp(row)
+    return at is not None and at < since
 
 
 found = None
@@ -20643,6 +20658,9 @@ for raw in sys.stdin:
 
 if found is None:
     raise SystemExit(1)
+if stuck and found.get("error") != "authentication_failed" and predates(found):
+    print(int(stamp(found)))
+    raise SystemExit(3)
 if found.get("error") == "authentication_failed":
     print("\t\tauthentication_failed")
     raise SystemExit(0)
@@ -20654,7 +20672,7 @@ reset = str(reset) if isinstance(reset, int) and not isinstance(reset, bool) els
 print(f"{reset}\t{kind if isinstance(kind, str) else chr(0)}".rstrip(chr(0)))
 ' "$mode" "$since" 2>/dev/null
   rc=$?
-  [[ "$rc" -le 1 ]] && return "$rc"
+  [[ "$rc" -le 1 || "$rc" -eq 3 ]] && return "$rc"
   return 2
 }
 
@@ -20819,7 +20837,7 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   # function's window turns "redrive-skip … hard-blocked pane" into a silent, permanent stand-down
   # on precisely the sessions this fallback exists to rescue. `_pane_box_has_content` alone keeps
   # the full `-e` capture: it scopes itself from the LAST `❯` to the closing box rule.
-  local id="$1" t="$2" fromswap="${3:-0}" f i rc pane
+  local id="$1" t fromswap="${3:-0}" f i rc pane; t=$(_tmux_at "$2")
   _pane_measurable "$id" || { echo "$(date '+%F %T') redrive-skip $id: pane is under ${READER_MIN_COLS} columns (§6.3)" >> "$REG/swap.log"; return 0; }
   f=$(_transcript_path "$id") || return 0
   for ((i = 0; i < REDRIVE_WAIT_S; i++)); do
@@ -22182,6 +22200,163 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
   return 1
 }
 
+# ── A CARRIED-IN BANNER IS NOT A BLOCK (D-3526; the continuity spec's C12, slug
+# `carried-in-banner-is-not-a-block`) ─────────────────────────────────────────
+# `cmd_swap` carries the transcript with every row's own timestamp, so the old
+# account's `error:"rate_limit"` row lands on the new account unchanged. It
+# stays the newest real row whenever the new process writes nothing: its TUI
+# never came up (`_spawn_settle` rc 4, a blank pane), or Claude Code declined to
+# re-drive a turn whose API-error row is six hours old (2.1.28x's default, see
+# RESUME_REDRIVE_MAX_AGE_MS). Once SWAP_COOLDOWN lapsed, `_session_hard_blocked`
+# read that row as a block ON THE NEW ACCOUNT and the session was moved again.
+# Measured over the swap log, the lifecycle journal and the transcripts: 26 of
+# 259 auto-rescues since 2026-09-08 (25 via the transcript, 1 via the pane);
+# none since 2026-09-16. Another 6 pane rescues had no rate-limit row in the
+# window at all, so nothing here dates them and nothing here suppresses them.
+#
+# TWO CONDITIONS, BOTH PROVED. (1) THE CLOCK IS D-3522's, the pane's tmux
+# `session_created` (`_pane_born`): ccd creates a fresh tmux session per spawn,
+# so a row older than it was written by an earlier process. (2) A SWAP CAME
+# AFTER THE ROW: `$REG/<id>.lastswap` is later than the row's epoch. The clock
+# alone cannot tell a row a swap carried in from one this same account wrote
+# before a restart (an OOM kill, a supervisor revival, `ccd stop`/`start`), and
+# a restart more than six hours after a real block gets no re-drive, so the
+# clock alone retracted a standing strand and never moved that session when a
+# target freed (round-1 harm review, measured in a fixture). `lastswap` is
+# stamped by the rescue and affinity dispatches and by cmd_swap's landing, and
+# `_swap_refuse` DELETES it — a refused carry restarts on the same account — so
+# a missing, unreadable or not-later `lastswap` means the row is this account's
+# own and it stays a block. The spec named a new `$REG/<id>.landed` stamp
+# instead; D-3526 records why these two ship (one clock for the 401 and the
+# rate limit, no new write in `cmd_swap`, nothing to bootstrap) and the one
+# place they differ from it: a dispatch that neither landed nor reached
+# `_swap_refuse` (an early `die` in cmd_swap, a failed `systemd-run`) leaves its
+# stamp, and a same-account restart after that reads a pre-dispatch row as
+# carried in.
+#
+# PROOF-ONLY. A row counts unless the reader can PROVE it is older than born
+# and the registry proves a swap after it: born unknown, an unparseable
+# timestamp, an unresolvable transcript or a torn `lastswap` keeps today's
+# answer. And a pane positive is dated by the transcript's NEWEST REAL row, not
+# by the newest rate-limit row: once this process has written a real row,
+# nothing here can suppress what its pane says.
+#
+# THE ONE EXCEPTION, the operator's ruling of 2026-09-28: a process that never
+# came up. 24 of the 26 were landings whose Claude Code never started, and the
+# false rescue was what moved them off a dead target. `.spawn` is rewritten on
+# EVERY settle as "<epoch> <rc>" (only its journal line is debounced), so "this
+# process settled with no live TUI" is readable — epoch at or after born, rc 4 —
+# and then the carried row stays a block and the session moves exactly as before.
+#
+# NOT TOUCHED: `_redrive_after_spawn`'s pane stand-down and
+# `_accept_first_run_prompts`' rc 5 read `_pane_hard_blocked` directly; neither
+# relocates anything (D-2364), and the stand-down has never fired on this fleet.
+# CARRIED: the 30 s `tscan` cache is not keyed on the process, so a positive
+# cached by the previous process can outlive a same-account restart by up to
+# 30 s — as D-3522's 401 arm already can.
+_limit_dated() {   # id via born -> 0 the transcript's newest real row is a block | 3 a rate-limit row older than born and than the last swap: carried in, and noted | 1 neither, or no transcript (D-3526)
+  local id="$1" via="$2" born="$3" f out rc sw
+  f=$(_transcript_path "$id") || return 1
+  out=$(_limit_read "$id" "$f" "$born"); rc=$?
+  (( rc == 0 )) && return 0
+  (( rc == 3 )) || return 1
+  # Condition (2): the regex goes FIRST, so the arithmetic never sees an
+  # unvalidated field (D-299), and `10#` keeps a leading zero from reading as
+  # octal. Strictly later: a swap in the row's own second is not proof.
+  sw=$(_reg_get "$id" lastswap)
+  [[ "$sw" =~ ^[0-9]+$ && "$out" =~ ^[0-9]+$ ]] && (( 10#$sw > 10#$out )) || return 0
+  _never_came_up "$id" "$born" && return 0
+  _carried_in_note "$id" "$via" "$out" "$born"
+  return 3
+}
+
+_limit_read() {   # id transcript-path born -> the stuck-mode read's rc (0|1|2|3; on 3 prints the row's epoch), cached in `$REG/<id>.tdate` on the process and the file (D-3526)
+  # THE PANE RUNGS ASK THIS ON EVERY TICK OF A POSITIVE, for as long as a real
+  # block sits stranded (the round-1 review read 24 strands in swap.log since
+  # 2026-09-11: a median of 75 to 160 minutes, the longest 1852) and as long as a
+  # suppressed carried-in banner stays on screen, so an uncached read put
+  # D-2444's python pass back on the 5 s tick. The answer is a pure function
+  # of the file and of `since`, so it is cached on exactly those:
+  # "<born> <mtime> <size> <rc> <row-epoch|-> <path>", and read again the moment
+  # any of them changes. Every row Claude Code appends grows the file, so a fresh
+  # block is never hidden by the cache — the rule the pane rungs keep, that an
+  # old answer must not overrule what is on screen now. `lastswap` and `.spawn`
+  # are NOT cached: they are single registry reads applied after this on every
+  # call, so a refusal's deletion or a settle counts at once. rc 2 (unreadable)
+  # is never cached: it can be transient, and a stuck session's file does not
+  # change to clear it. Born unknown, or a file stat cannot measure, reads
+  # uncached — today's answer. A record for any other key, or a torn one, is
+  # read past, never trusted: the regex admits digits and the path only.
+  local id="$1" f="$2" born="$3" m s key="" rec out rc cached_key cached_rc cached_row cached_path
+  local re='^([0-9]+ [0-9]+ [0-9]+) ([013]) ([0-9]+|-) (.+)$'
+  m=$(_plat_mtime "$f" 2>/dev/null); s=$(_plat_size "$f" 2>/dev/null)
+  [[ "$born" =~ ^[0-9]+$ && "$m" =~ ^[0-9]+$ && "$s" =~ ^[0-9]+$ ]] && key="$born $m $s"
+  if [[ -n "$key" ]]; then
+    rec=$(_reg_get "$id" tdate)
+    if [[ "$rec" =~ $re ]]; then
+      cached_key="${BASH_REMATCH[1]}"; cached_rc="${BASH_REMATCH[2]}"
+      cached_row="${BASH_REMATCH[3]}"; cached_path="${BASH_REMATCH[4]}"
+      # An rc 3 has a dated row; rc 0/1 has no row. A record that mixes the
+      # two is torn, not a safe cached verdict.
+      if [[ "$cached_key" == "$key" && "$cached_path" == "$f" ]] \
+        && { [[ "$cached_rc" == 3 && "$cached_row" =~ ^[0-9]+$ ]] \
+          || [[ "$cached_rc" =~ ^[01]$ && "$cached_row" == - ]]; }; then
+        [[ "$cached_rc" == 3 ]] && printf '%s\n' "$cached_row"
+        return "$cached_rc"
+      fi
+    fi
+  fi
+  out=$(_transcript_limit_banner "$f" stuck "$born"); rc=$?
+  if [[ -n "$key" ]]; then
+    if (( rc == 0 || rc == 1 )); then
+      _reg_set "$id" tdate "$key $rc - $f" 2>/dev/null || true
+    elif (( rc == 3 )) && [[ "$out" =~ ^[0-9]+$ ]]; then
+      _reg_set "$id" tdate "$key 3 $out $f" 2>/dev/null || true
+    fi
+  fi
+  (( rc == 3 )) && printf '%s\n' "$out"
+  return "$rc"
+}
+
+_never_came_up() {   # id born -> 0 iff this pane's process settled with no live TUI: `.spawn` reads "<epoch> 4" with epoch >= born (D-3526)
+  # Both operands are bytes off disk or out of tmux: the regex goes FIRST, so
+  # the arithmetic never sees an unvalidated field (D-299), and `10#` keeps a
+  # leading zero from reading as octal. The whole two-token record is grammar:
+  # a torn suffix must not turn an undecidable settle into a reason to relocate.
+  local st at
+  st=$(_reg_get "$1" spawn)
+  [[ "$st" =~ ^([0-9]+)\ 4$ ]] || return 1
+  at="${BASH_REMATCH[1]}"
+  [[ "${2:-}" =~ ^[0-9]+$ ]] && (( 10#$at >= 10#$2 ))
+}
+
+_pane_carried_in() {   # id via pane-text -> 0 iff a pane rung's positive is a carried-in banner, not a block (D-3526)
+  # Asked only on a positive, but on EVERY tick of one — a stranded block and a
+  # suppressed carried-in banner both stay on screen for hours — so the dated
+  # read is cached on the process and the file (`_limit_read`), never on time:
+  # a 30 s-old transcript answer (`tscan`) must not overrule what is on screen
+  # now, and a grown file is read again. An auth failure on the pane (outside
+  # the box, as the rung reads it) is not a rate limit and is not dated against
+  # one. Born unknown, or any answer but carried-in, keeps the positive: the
+  # reader cannot prove a row older than a `since` it was not given.
+  grep -qiE "Invalid API key|Please run /login" <<<"$(_pane_outside_box "$3")" && return 1
+  _limit_dated "$1" "$2" "$(_pane_born "$1")"
+  (( $? == 3 ))
+}
+
+_carried_in_note() {   # id via row-epoch born — one swap.log line per process, floored by `$REG/<id>.carriednote` = the born last noted (D-3526)
+  # Keyed on the PROCESS, not on time: the verdict is re-asked every tick (the
+  # pane rungs through the `tdate` cache, the transcript rung every
+  # TRANSCRIPT_ARM_INTERVAL), and a new process is a new floor. `spawn=` is the
+  # rc this row's last settle recorded — 24 of the 26 measured cases were
+  # landings that settled rc 4.
+  local id="$1" st
+  [[ "$(_reg_get "$id" carriednote)" == "$4" ]] && return 0
+  _reg_set "$id" carriednote "$4" 2>/dev/null || true
+  st=$(_reg_get "$id" spawn)
+  echo "$(date '+%F %T') carried-in $id: via=$2 rate-limit row at $3 predates this pane's process (born $4) — not a block [wrapper=$(_reg_get "$id" wrapper)] [spawn=${st##* }]" >> "$REG/swap.log"
+}
+
 _strand_clear() {   # id — the strand is over; say so exactly once per strand.
   # THE `-e` TEST IS LOAD-BEARING, and it is not a micro-optimisation.
   # `_auto_swap_check` calls this on EVERY healthy tick of EVERY session.
@@ -22705,7 +22880,7 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # would be the same fabricated positive claim this commit removes one seam
   # up. `_session_hard_blocked` is the same classifier the ordinary rescue path
   # uses, asked pane-first with D-2363's transcript fallback; it needs only
-  # `_tmux "$1"`, never the field that could not be read.
+  # `_tmux_t "$1"`, never the field that could not be read.
   # THE CAPTURE'S COST, DISCLOSED (#69 review round 1 S7, ruled NO FIX as
   # D-2162, re-measured in round 3, and re-measured AGAIN on the #70 merge —
   # which moved it). This `capture-pane` is unconditional and sits above
@@ -22760,7 +22935,7 @@ _tick_strand_undecidable() {   # id field [wrapper] — the LOUD half of standin
   # 12 survive — while un-stranding a hard-blocked row and stranding a healthy
   # one, with every case green.
   local pane blocked=""
-  pane=$(tmux capture-pane -t "$(_tmux "$1")" -p 2>/dev/null | tail -8)
+  pane=$(tmux capture-pane -t "$(_tmux_t "$1")" -p 2>/dev/null | tail -8)
   # AN UNMEASURABLE PANE WITH NO TRANSCRIPT VERDICT CLEARS NOTHING (#69 review,
   # S2, amended by D-2363). An empty capture is normally a pane nobody could
   # read; only `_session_hard_blocked`'s transcript fallback may make a positive
@@ -23051,7 +23226,7 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
     return 1
   fi
   _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
-  tmux kill-session -t "$(_tmux "$id")" 2>/dev/null
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null
   sleep 1                                                  # let claude flush its final transcript entries
   # A SWAP IS NOT AN ABANDONMENT. Between the stop and the start this row is
   # not alive and, after 120 seconds, would also stop looking watched — and
@@ -23397,7 +23572,7 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   # the journal keeps the two apart.
   _lc_done stop "$id" "" dec.surface "$(_lc_surface_norm "$declared")"
   _ws_unsupervise "$id" "$surface" "$declared"
-  tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
   echo "stopped $id"
 }
 
@@ -23487,7 +23662,7 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
   _lc_intent forget "$id" "$lctx" verb forget dec.reason "$reason" meas.wrapper "$(_reg_get "$id" wrapper)" \
     meas.project "$(_reg_get "$id" project)" meas.uuid "$(_reg_get "$id" uuid)"
   _ws_unsupervise "$id"
-  tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
   # ── D-2605: THIS CALLER READS `_reg_purge`'s STATUS ─────────────────────
   # It reached here AFTER irreversible action, so a refusal is a FAILURE, not a
   # refusal — that is `_lc_fail`'s documented distinction from `_lc_refuse`: a
@@ -23605,12 +23780,47 @@ cmd_ls() {
   echo "(open $CLAUDE_AI_BASE in the matching account and pick the session whose name == ID)"
 }
 
+# ── EVERY tmux TARGET IS EXACT (D-3525, closing D-2781 and D-2862) ──────────
+# `_tmux` answers a session's NAME — what `new-session -s` creates. A `-t`
+# argument is not a name to tmux, it is a SEARCH: the exact name, then a UNIQUE
+# PREFIX of a name, then an fnmatch pattern; and for a window- or pane-type
+# command with no colon, first a WINDOW NAME in the most recently used session.
+# Measured 2026-09-28, tmux 3.4, private `-L` socket, `cc-x` gone and `cc-x-2`
+# live, bare `-t cc-x`: has-session rc 0 (`_session_probe` said `live`, so
+# `cmd_supervise` never respawned and every tick helper acted on the sibling),
+# capture-pane/send-keys/set-option/resize-window/attach all acted on `cc-x-2`,
+# and kill-session KILLED it — `cmd_stop`, `cmd_swap`, `ws-rm`, `ws-archive`,
+# `ws-reap` and `account-pane --cancel` alike. display-message never fails.
+#
+#     target        MISS (cc-x gone, cc-x-2 live)        PLAIN (cc-x live)
+#     `cc-x`        every command hits cc-x-2           window/pane cmds may hit
+#                                                       a later WINDOW named cc-x
+#     `=cc-x`       list-panes/resize-window still      capture-pane, send-keys,
+#                   prefix-match cc-x-2                 set-option FAIL (silently,
+#                                                       behind 2>/dev/null)
+#     `=cc-x:`      `can't find session: cc-x`, every   exact, every command
+#                   command — the ONE death message
+#
+# So `=` + name + `:` — "the current window of exactly this session" — and the
+# name REWRITTEN the way tmux rewrites it: `-s cc-w-my.site` creates
+# `cc-w-my_site` (`.` and `:` become `_`, measured), and `_ws_project_valid`
+# admits a dot. Anchoring the unrewritten name answers `can't find session`
+# for a LIVE session, which `_session_probe` reads as `gone` — destroy-eligible.
+#
+# NEVER anchor an `-s`: `new-session -s =cc-y` creates a session literally named
+# `=cc-y` (measured). The TypeScript twin is `shared/tmux-target.ts`'s
+# `tmuxTarget`; the keepalive, which cannot source this file, spells the same
+# form once. `ccd-tmux-anchor.test.ts` runs these against real tmux and scans
+# every `-t` in this file for them. REQUIRES tmux >= 2.1 (the first with `=`).
+_tmux_at() { local n="${1//[.:]/_}"; echo "=$n:"; }          # tmux NAME -> exact TARGET
+_tmux_t()  { _tmux_at "$(_tmux "$1")"; }                      # id -> exact TARGET
+
 cmd_attach() {   # create-on-demand, then exec tmux attach
   local wrapper="${1:?usage: ccd attach <wrapper> <project>}" project="${2:?}"
   local id; id=$(_id "$wrapper" "$project")
   [[ -f "$REG/$id.uuid" ]] || cmd_start "$wrapper" "$project" >/dev/null || die "start failed"
   _alive "$id" || cmd_ensure "$id" >/dev/null || die "ensure failed for $id"
-  exec tmux attach -t "$(_tmux "$id")"
+  exec tmux attach -t "$(_tmux_t "$id")"
 }
 
 cmd_menu() {   # interactive picker → attach. The universal entry point for any SSH/terminal app:
@@ -23630,7 +23840,7 @@ cmd_menu() {   # interactive picker → attach. The universal entry point for an
   [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#ids[@]} )) || { echo "invalid choice"; return 1; }
   id="${ids[$((choice - 1))]}"
   _alive "$id" || cmd_ensure "$id" >/dev/null || die "ensure failed for $id"
-  exec tmux attach -t "$(_tmux "$id")"
+  exec tmux attach -t "$(_tmux_t "$id")"
 }
 
 # <dir> <src> — destination for a filed clip. Split out of cmd_clip so it can be
@@ -23660,7 +23870,7 @@ cmd_clip() {   # <png-path> [id] — file an image into a session and inject its
   local dir="$HOME/.cc-clips/$id"; mkdir -p "$dir"
   local dest; dest="$(_clip_dest "$dir" "$png")"
   mv -f "$png" "$dest"
-  tmux send-keys -t "$(_tmux "$id")" -l "$dest "
+  tmux send-keys -t "$(_tmux_t "$id")" -l "$dest "
   echo "clip -> $dest (injected into $id)"
 }
 
@@ -24263,11 +24473,11 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   _ws_reclaim_plain_path "$workdir" \
     || { _reap_refuse containment-unproven "the registry spells $id's workdir as '$workdir' — not one plain absolute path, so ccd cannot prove the tree at that path is $id's own"; return 1; }
   main="$PROJECTS_ROOT/$project"
-  # 5 — presence ON THE BOX: a tmux client attached to THIS session. ANCHORED
-  # (`=`): a bare `-t cc-<id>` is an fnmatch pattern and resolves a prefix to a
-  # DIFFERENT session (`cmd_win_size`'s measured case). Whether the session is
+  # 5 — presence ON THE BOX: a tmux client attached to THIS session. EXACT
+  # (`_tmux_t`, `=cc-<id>:`): a bare `-t cc-<id>` is a search and resolves a prefix
+  # to a DIFFERENT session (D-3525's measured case). Whether the session is
   # up is asked through `_session_probe` — ccd's ONE classifier, with its
-  # deadline — and its second argument is what anchors the target there. Only
+  # deadline — which is exact for every caller; the `anchored` it is passed is kept, ignored. Only
   # `gone` (`can't find session`) passes: a session that does not exist has no
   # client. `unknown` — a refused connection, a socket nobody serves, no socket
   # at all, no answer in time — means tmux could NOT BE ASKED, never "no
@@ -24281,7 +24491,7 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
     case "$PROBE_VERDICT" in
       gone) : ;;
       live)
-        clients=$(tmux list-clients -t "=$(_tmux "$id")" -F '#{client_tty}' 2>/dev/null) \
+        clients=$(tmux list-clients -t "$(_tmux_t "$id")" -F '#{client_tty}' 2>/dev/null) \
           || { _reap_refuse attached "$(_tmux "$id") exists and would not list its clients — presence unmeasured is not absence"; return 1; }
         [[ -z "$clients" ]] \
           || { _reap_refuse attached "a terminal is attached to $(_tmux "$id"): ${clients//$'\n'/, }"; return 1; } ;;
@@ -25866,8 +26076,8 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # tree is gone can still be up. Both are idempotent: running them twice
   # costs nothing, and skipping them once leaves `claude-session@<id>.service`
   # (Restart=always) respawning forever against a workspace with no row. The
-  # target is ANCHORED (`=`) — a bare `cc-<id>` is an fnmatch pattern and
-  # resolves a prefix to a DIFFERENT session (`cmd_win_size`'s measured case).
+  # target is EXACT (`_tmux_t`, `=cc-<id>:`) — a bare `cc-<id>` is a search and
+  # resolves a prefix to a DIFFERENT session, and KILLS it (D-3525, measured).
   # The stamp is the declared surface when one arrived and `ccd` otherwise; the
   # DECLARATION is passed only when one arrived (`none` is the journal's word
   # for "nothing was declared", never a surface `_ws_unsupervise` may record).
@@ -25875,7 +26085,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   stamp=ccd
   case "$surface" in cli|pwa|agent) stamp="$surface" ;; esac
   _ws_unsupervise "$id" "$stamp" "$declared"
-  tmux kill-session -t "=$(_tmux "$id")" 2>/dev/null; killrc=$?
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null; killrc=$?
   # RE-MEASURED, because `_ws_unsupervise` answers 0 whatever systemd did: a
   # failed `_svc_disable_now` is a stderr warning and nothing more. A unit that
   # is still up is exactly the Restart=always hazard this arm exists for (spec
@@ -26641,6 +26851,126 @@ _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` br
 # `server/test/wsaudit.test.ts` harvests the whole file, so its sentence is
 # found here all the same.
 # ── end ws-reap's mirror ─────────────────────────────────────────────────── MIRROR-END ──
+
+# ── THE AUTH-DEAD MARKER'S CREDENTIAL RULE (D-3524) ─────────────────────────
+# `$REG/<account>-authdead` is a verdict about ONE credential: the one the lane
+# had loaded when the probe or a rescue measured its 401. So the evidence that
+# ends it is the credential FILE changing, not a TUI coming up — 2.1.280 draws
+# its prompt on a dead OAuth token (measured 2026-09-28), which is how
+# `_spawn_settle`'s old rc-0 clear wiped a rescue's fresh marker and sent the
+# rescued session straight back into the 401, one bounce per wipe per session.
+#
+# CTIME, NEVER MTIME. Every re-login path ccrc knows rewrites the file with a
+# tmp + `mv -f` (`ccd-account-auth`'s `_auth_write_secret`, `ccrc account
+# credential`'s `_acct_write_secret`), which moves its ctime; a hand edit does;
+# and a restore from backup does too, while `cp -p` BACKDATES mtime (measured).
+# ctime cannot be set back, so "ctime at or after the verdict" never misses a
+# changed credential. A `chmod` also moves it: a false "changed" costs at most
+# the single bounce the old rule cost every time.
+#
+# The owners, whole: `ccd-account-health` writes on a 401 and clears on a live
+# 403; a rescue writes (D-3522); a credential change EXPIRES it at any reader
+# here and at rc 0; rc 0 on a lane ccd cannot name a credential for clears it
+# (the old rule — any lane whose roster declares no secrets file, a login lane or
+# an external one, and every lane under an accounts.sh from before
+# `_ccrc_secrets_file`); and an operator `rm`.
+#
+# WHICH LANES THE PROBE COVERS, exactly: `ccd-account-health` runs only where its
+# systemd timer does (Linux, any role but `server`; macOS has none), starts at
+# roster accounts with `telemetry: "anthropic"` and selects only OAuth credentials:
+# an upstream's declared `exec.secretsFile` or legacy `.cc-secrets/<id>-oauth.env`
+# fallback, or a declared generated Anthropic setup-token file. It REFUSES API-key,
+# login, external, Codex and malformed launcher shapes before a guessed OAuth file
+# can answer for them. So on a lane ccd can name that the probe cannot measure
+# (API-key anywhere; every lane on macOS), a marker stands until its file is rewritten
+# or an operator `rm` (an API-key 401 needs a new key); otherwise the next spawn ends it.
+# CARRIED: a probed account revived with no local trace (a transient API-side
+# 401) keeps its marker until the probe's next live answer. The keepalive's and
+# the server's readers of the marker do not expire it; they converge when a
+# reader here removes the file.
+
+_authdead_cred_src() {   # wrapper -> the absolute path of the file that lane's credential lives in; rc 1 = ccd cannot name one (D-3524)
+  # IN THIS ORDER, and never a glob over `.cc-secrets/<id>-*`: ids prefix one
+  # another on a real fleet (an `x` beside an `x-corp`), so a glob reads
+  # another account's file.
+  #   1. the roster's `exec.secretsFile`, projected as `_ccrc_secrets_file`;
+  #   2. the upstream's `<id>-oauth.env`, the legacy fallback `_ah_subjects`
+  #      selects only when that upstream has no declared `exec.secretsFile`;
+  #   3. otherwise nothing. An accounts.sh with no `_ccrc_secrets_file` cannot
+  #      say whether a secrets file was declared, so only rule 2 survives it.
+  # NEVER a config dir's `.credentials.json` (round 1 of D-3524). A lane that
+  # declares no secrets file — a login lane — keeps its login there, but that file
+  # changes without a re-login (7 of 17 on the fleet box had a ctime 0-3 h old,
+  # cause unmeasured), so judging by it skipped the rescue's marker and expired a
+  # standing one within hours: D-3522's loop, back. Such a lane is unnameable —
+  # the rescue marks as D-3522 did, rc 0 clears as §A.6 did, nothing expires here.
+  # A regular file and not a symlink, `_authdead`'s own rungs: a link would let
+  # any file re-date the verdict, and a FIFO is no credential. STAT'D BY THE
+  # CALLER, NEVER OPENED — the file holds a secret.
+  local w="$1" rel="" f=""
+  declare -F _ccrc_secrets_file >/dev/null 2>&1 && rel=$(_ccrc_secrets_file "$w" 2>/dev/null)
+  if [[ -n "$rel" ]]; then
+    f="$HOME/$rel"
+  elif [[ -n "$w" && "$w" == "${CCRC_UPSTREAM:-}" ]]; then
+    f="$HOME/.cc-secrets/$w-oauth.env"
+  fi
+  [[ -n "$f" && -f "$f" && ! -L "$f" ]] || return 1
+  printf '%s\n' "$f"
+}
+
+_authdead_cred_changed() {   # wrapper epoch -> 0 the lane's credential file changed at or after epoch | 1 it is older | 2 nobody can say (D-3524)
+  # 2 is: no nameable file, a failed `stat`, or an epoch or ctime that is not a
+  # plain number. `>=`, so a tie in the same second reads as changed and fails
+  # toward reviving the account — the old rule's direction, never a stuck one.
+  # Bounded to 18 digits and read base 10: the epoch is bytes off disk, and
+  # bash arithmetic would read a leading 0 as octal and wrap past 2^63.
+  local src ct
+  [[ "${2:-}" =~ ^[0-9]{1,18}$ ]] || return 2
+  src=$(_authdead_cred_src "$1") || return 2
+  ct=$(_plat_ctime "$src" 2>/dev/null) || return 2
+  [[ "$ct" =~ ^[0-9]{1,18}$ ]] || return 2
+  (( 10#$ct >= 10#$2 )) && return 0
+  return 1
+}
+
+_authdead_expired() {   # wrapper epoch -> success iff the lane's credential changed at or after the marker's epoch, having removed the marker. Silent. (D-3524)
+  # `_authdead`'s tail, so every ccd reader — the condemned placement tier, the
+  # home-recovered arm, rank 101, the rescue's own check — revives a re-logged-in
+  # account at its next decision, with no spawn and no probe.
+  #
+  # REMOVED ONLY WHILE IT IS STILL THE VERDICT THAT WAS JUDGED (round 1). Deciding
+  # forks for the source and for `stat` (~7 ms, the review measured at load ~37); the probe's
+  # `_ah_mark` and a rescue both `mv -f` a FRESH verdict onto this same path; one
+  # landing in that window was deleted by a remove-by-path, which then answered
+  # "not dead" about a credential just measured dead. So the first field is read
+  # again — a builtin, past the same `-f`/`! -L` rungs — and the file goes only
+  # while it still carries the epoch this decision was made on. Anything else (a
+  # newer epoch, a marker gone or no longer a regular file) answers "dead" for this
+  # one decision; the next read judges whatever stands then. STILL OPEN, smaller:
+  # a rename landing between that read and `rm`'s unlink — one fork and exec wide —
+  # is deleted all the same. A claim-by-rename would close it, at the price of an
+  # interval in which every other reader finds no marker at all.
+  local f="$REG/$1-authdead" now=""
+  _authdead_cred_changed "$1" "$2" || return 1
+  if [[ -f "$f" && ! -L "$f" ]]; then IFS= read -r now 2>/dev/null < "$f"; now="${now%% *}"; fi
+  [[ "$now" == "$2" ]] || return 1
+  rm -f -- "$f" 2>/dev/null
+  return 0
+}
+
+_authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the marker (D-3524)
+  # Clears unless the account's credential file PREDATES the marker (answer 1):
+  # then the TUI came up on the very credential measured dead, which is what
+  # 2.1.280 does. Answer 0 is a changed credential; answer 2 is a lane ccd cannot
+  # see, where the old rc-0 clear stands. An absent, malformed or non-regular
+  # marker has no epoch, answers 2, and is removed exactly as before; the epoch
+  # is read only past `_authdead`'s `-f`/`! -L` rungs, so a FIFO never blocks.
+  local f="$REG/$1-authdead" t=""
+  if [[ -f "$f" && ! -L "$f" ]]; then t=$(cat "$f" 2>/dev/null); t="${t%% *}"; fi
+  _authdead_cred_changed "$1" "$t"
+  [[ $? -eq 1 ]] && return 0
+  rm -f -- "$f"
+}
 
 # Guard so the script can be `source`d by tests without running a command.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

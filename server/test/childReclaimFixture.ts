@@ -24,11 +24,15 @@ export const CHILD_BRANCH = 'ws/quiet-basin';
  *  fixture HOME, in tmux's own words (the messages `_session_probe`'s header
  *  in `ccd/ccd` lists as measured):
  *
- *  - `$HOME/tmux-sessions`, one session name per line (absent: none). A
- *    `=name` target matches EXACTLY; a bare target matches exactly first and
- *    otherwise the first session it is a PREFIX of — tmux's own resolution,
- *    so an unanchored `cc-<id>` finds a sibling `cc-<id>x`, and the anchoring
- *    is something a case can see fail. No match: `can't find session: <t>`.
+ *  - `$HOME/tmux-sessions`, one session name per line (absent: none). An
+ *    exact `=name:` target — what ccd's `_tmux_t` builds (D-3525) — matches
+ *    EXACTLY (so does a colon-less `=name`, as it does in tmux for the
+ *    session-type verbs modelled here); a bare target matches exactly first
+ *    and otherwise the first session it is a PREFIX of — tmux's own
+ *    resolution, so an unanchored `cc-<id>` finds a sibling `cc-<id>x`, and
+ *    the anchoring is something a case can see fail. No match: `can't find
+ *    session: <name>`, with the `=` and the `:` stripped as tmux strips them
+ *    (measured, tmux 3.4: `=cc-x:` answers `can't find session: cc-x`).
  *  - `$HOME/tmux-clients-<name>`: what `list-clients` prints for that session.
  *  - `$HOME/tmux-fault`: while it exists, EVERY call prints its text to
  *    stderr and exits 1 — the server could not be asked (`error connecting
@@ -44,15 +48,16 @@ export const CHILD_BRANCH = 'ws/quiet-basin';
  *    exited 0 — tmux unaskable right AFTER a kill that succeeded.
  *  Every other verb exits 1. */
 const TMUX_MODEL = [
-  'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; local verb="$1" t="" s hit=""; shift;',
+  'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; local verb="$1" t="" n="" s hit=""; shift;',
   ' while (( $# )); do case "$1" in -t) t="$2"; shift 2 ;; *) shift ;; esac; done;',
+  ' n="$t"; [[ "$t" == =* ]] && { n="${t#=}"; n="${n%:}"; };',
   ' if [[ -e "$HOME/tmux-fault" ]]; then cat "$HOME/tmux-fault" >&2; return 1; fi;',
   ' if [[ -f "$HOME/tmux-sessions" ]]; then while IFS= read -r s; do',
-  '  if [[ "$t" == =* ]]; then [[ "$s" == "${t#=}" ]] && hit="$s";',
+  '  if [[ "$t" == =* ]]; then [[ "$s" == "$n" ]] && hit="$s";',
   '  elif [[ "$s" == "$t" ]]; then hit="$s"; break;',
   '  elif [[ -z "$hit" && "$s" == "$t"* ]]; then hit="$s"; fi;',
   ' done < "$HOME/tmux-sessions"; fi;',
-  ' [[ -n "$hit" ]] || { echo "can\'t find session: $t" >&2; return 1; };',
+  ' [[ -n "$hit" ]] || { echo "can\'t find session: $n" >&2; return 1; };',
   ' case "$verb" in',
   '  has-session) return 0 ;;',
   '  list-clients) cat "$HOME/tmux-clients-$hit" 2>/dev/null; return 0 ;;',

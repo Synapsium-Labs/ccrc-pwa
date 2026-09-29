@@ -299,6 +299,9 @@ describe('the Linux arms are the original GNU commands', () => {
     ['_plat_ppid', /sed -n 's\/\^PPid:\[\[:space:\]\]\*\/\/p' "\/proc\/\$\{1-\}\/status"/],
     ['_plat_cgroup', /sed -n 's\/\^0::\/\/p' "\/proc\/\$\$\/cgroup"/],
     ['_plat_mode', /else stat -c%a "\$@"; fi/],
+    // D-3524's ctime, the one timestamp a credential restore cannot backdate.
+    // New rather than ported, so the row binds the NAME as well as the arm.
+    ['_plat_ctime', /^_plat_ctime\(\) \{ if \[ "\$CCD_OS" = darwin \]; then stat -f %c "\$@"; else stat -c %Z "\$@"; fi; \}/m],
     ['_plat_bytes', /du -sb "\$1" \| head -n1 \| cut -f1/],
     ['_svc_run_detached', /systemd-run --user --collect --quiet "\$@"/],
   ];

@@ -4650,6 +4650,51 @@ describe('ccrc doctor: credentials', () => {
     expect(r.stderr).not.toContain('SENTINEL');
   });
 
+  it('uses a declared upstream setup-token path rather than the legacy filename', () => {
+    const home = healthy('ccrc-doctor-cred-upstream-declared-');
+    writeRoster(home, [{ id: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream', secretsFile: '.private/claude-setup.env' }, telemetry: 'anthropic' }]);
+    mkdirSync(join(home, '.private'), { recursive: true });
+    writeFileSync(join(home, '.private', 'claude-setup.env'), 'TOKEN=x\n');
+    rmSync(join(home, '.cc-secrets', 'claude-oauth.env'));
+
+    expect(runDoctor(home).stdout).toMatch(/^PASS credentials: 1 account/m);
+  });
+
+  it('does not accept a stale legacy upstream file when its declaration is absent', () => {
+    const home = healthy('ccrc-doctor-cred-upstream-declared-missing-');
+    writeRoster(home, [{ id: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream', secretsFile: '.private/claude-setup.env' }, telemetry: 'anthropic' }]);
+
+    const r = runDoctor(home);
+
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^FAIL credentials: claude has no readable token at \$HOME\/\.private\/claude-setup\.env/m);
+  });
+
+  it('fails an invalid declared setup-token path rather than falling back to legacy OAuth', () => {
+    const home = healthy('ccrc-doctor-cred-invalid-declared-');
+    writeRoster(home, [{ id: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream', secretsFile: '.cc-secrets/../outside.env' }, telemetry: 'anthropic' }]);
+
+    const r = runDoctor(home);
+
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^FAIL credentials: claude has an invalid declared setup-token credential path/m);
+  });
+
+  it('checks a declared generated Anthropic setup token but ignores API-key and login lanes', () => {
+    const home = healthy('ccrc-doctor-cred-subjects-');
+    writeRoster(home, [UPSTREAM,
+      { id: 'setup', exec: { kind: 'generated', provider: 'anthropic', secretsFile: '.private/setup.env' }, telemetry: 'anthropic' },
+      { id: 'api', exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/api-openrouter.env' }, telemetry: 'anthropic' },
+      { id: 'login', exec: { kind: 'generated', provider: 'anthropic' }, telemetry: 'anthropic' }]);
+    mkdirSync(join(home, '.private'), { recursive: true });
+    writeFileSync(join(home, '.private', 'setup.env'), 'TOKEN=x\n');
+
+    expect(runDoctor(home).stdout).toMatch(/^PASS credentials: 2 account/m);
+  });
+
   it('ignores a telemetry:none account — it has no Anthropic credential to have', () => {
     const home = healthy('ccrc-doctor-cred-none-');
     writeRoster(home, [UPSTREAM,

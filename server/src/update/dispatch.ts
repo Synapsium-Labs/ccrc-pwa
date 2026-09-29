@@ -441,11 +441,20 @@ export function deadlineDetail(row: Pick<DispatchRow, 'agentOps' | 'updateStarte
 export const LINK_FAILED_HOLD_PREFIX = 'link failed mid-op';
 
 export function linkFailedHoldDetail(why: 'disconnected' | 'timeout' | 'aborted' | 'other', message: string): string {
-  const what = why === 'other' ? `other: ${said(message, 'no message')}` : why;
-  return (
-    `${LINK_FAILED_HOLD_PREFIX} (${what}) — the op reached the fleet link and no answer came back, so the node ` +
-    `may have started the run; the lease holds until its report or the deadline`
-  ).slice(0, UPDATE_OP_DETAIL_MAX);
+  // Fix round 1 (review 178 O1): the three named post-send arms are measured AFTER `ws.send` returned — the op
+  // DID reach the fleet link, full stop. `other` covers a non-`Error` rejection and any error `request()` does not
+  // name, so it carries no such proof: it says only that the op MAY have reached the link.
+  const reached = why === 'other' ? 'may have reached' : 'reached';
+  const headPrefix = `${LINK_FAILED_HOLD_PREFIX} (`;
+  const tail =
+    `) — the op ${reached} the fleet link and no answer came back, so the node may have started the run; ` +
+    `the lease holds until its report or the deadline`;
+  if (why !== 'other') return `${headPrefix}${why}${tail}`.slice(0, UPDATE_OP_DETAIL_MAX);
+  // Fix round 1 (review 178, item 3): cap the MESSAGE part alone, computed from the fixed parts' own lengths, so
+  // the whole sentence always fits UPDATE_OP_DETAIL_MAX and always ENDS with the tail above — a `.slice` over the
+  // whole string (the old shape) could cut the tail off a long `other` message instead.
+  const budget = Math.max(0, UPDATE_OP_DETAIL_MAX - headPrefix.length - 'other: '.length - tail.length);
+  return `${headPrefix}other: ${said(message, 'no message').slice(0, budget)}${tail}`;
 }
 
 /** The columns `linkFailedDeadlineDetail` reads. `NodeRow` (coord/store.ts) satisfies it structurally. */
@@ -453,14 +462,17 @@ export interface LinkHoldRow { updateDetail: string | null; updateTarget: string
 
 /** The failed-deadline words for a lease held after a link failure, or `null` (the caller then uses `deadlineDetail`).
  *  Only when the row's detail begins `${LINK_FAILED_HOLD_PREFIX} (` and it names a tag. The words always say the link
- *  failed mid-op; they say "no run of <tag> was reported" only when the row holds no report of THAT tag. A same-tag
- *  report — which may be a previous run's (D-3405's accepted hole; no column keeps the report as it stood at the
- *  acquire) — gets the qualified sentence instead. */
+ *  failed mid-op; they say "the row's last report does not name <tag>" only when that is true (fix round 1, review
+ *  178 F1) — the row's LAST STORED report is all `reportedTarget` can prove, and the sentence must not claim more
+ *  history than that: a later writer's report can replace this run's own, and D-3214's `stamp-unmeasured` override
+ *  (`inventory.ts`) can write a PREVIOUS report back over a genuine one, so "no run of <tag> was reported" could be
+ *  false in either case. A same-tag report — which may be a previous run's (D-3405's accepted hole; no column keeps
+ *  the report as it stood at the acquire) — gets the qualified sentence instead. */
 export function linkFailedDeadlineDetail(row: LinkHoldRow): string | null {
   if (row.updateDetail?.startsWith(`${LINK_FAILED_HOLD_PREFIX} (`) !== true || row.updateTarget === null) return null;
   const target = row.updateTarget;
   const text = row.reportedTarget !== target
-    ? `${DEADLINE_DETAIL} — the fleet link failed mid-op and no run of ${target} was reported`
+    ? `${DEADLINE_DETAIL} — the fleet link failed mid-op; the row's last report does not name ${target}`
     : `${DEADLINE_DETAIL} — the fleet link failed mid-op; the row's last report names ${target}, which may be an earlier run's`;
   return text.slice(0, UPDATE_OP_DETAIL_MAX);
 }

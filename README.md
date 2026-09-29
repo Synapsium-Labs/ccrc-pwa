@@ -631,39 +631,39 @@ measured node already runs is recorded without a push. It has no session, so an 
 it; tapping it opens `/settings`.
 
 **Moving a node from the console (update-management W4, server side).** Install and Roll back on a release, Update and Roll
-back on a node, and Update all on the fleet screen's banner each open one confirm sheet that names the nodes the move
-takes, fleet first, and sends `POST /api/updates/apply` (`{nodeId}` or `{all: true}`, with an optional `tag` — without one,
-the node's desired tag) or `POST /api/updates/rollback` (`{nodeId}`, with an optional `to` — without one, the node's
-previous version). Both are session-only: the box token never moves a node. A single-node move the dispatcher would refuse
-answers `409` with its word in the same request (not newer, an unread stamp or floor, halted, the node's own lease busy, a
-missing capability, an agent that predates the op, an unknown or refused tag, no previous version, no desired tag); `{all:
-true}` always answers `202`, writing a request only for a node the tag takes forward and the dispatcher could move, and
-naming every other live node as skipped, with its word: a node whose own lease is busy, or that is itself halting, is
-skipped, and while a fleet node is skipped for either, so is every server-role node (`waiting-for-fleet`); a halt caused by
-another row still writes the request. What is written is a **request** on the node's row, never a command. On a `server` or
-`both` box the dispatcher reads the rows after every inventory sweep, every intent write and every request write, and moves
-at most one node at a time across the fleet: fleet-role nodes before server-role ones, and the server node waits while any
-fleet node's request is outstanding. A fleet node is moved over the agent link by the `update` op, which only an agent that
-advertises it in its ready frame is ever sent (an older agent's node is refused `agent-predates-update-op` until that box
-is updated by hand). The agent answers `busy` while a run is in flight (its report's writer alive, or no readable pid) or
-the lock is held; otherwise it runs `~/.local/bin/ccrc update --to <tag> --detach --from pwa`, or `rollback` in place of
-`update` — two fixed argument lists with the tag the only word that varies, outside the exec whitelist — and answers
-`accepted` once the detaching parent has exited 0 (killed at its bound it answers `accepted` too if it queued or cannot be
-attributed). The server node is spawned the same way on its own box, after the same `busy` check. `accepted` only holds the
-lease (the row reads `pending`): the node settles when a later sweep measures it on the target, and a request for the tag a
-node already runs is settled without a move. A refusal releases the lease in the same turn and never consumes the request —
-`busy`, or a link that was down before the op left the server, returns the row to `idle`; a link that fails after the op
-was handed to it holds the lease until the node's own report of the run settles it or the deadline fails it, because the
-node may already have started the run — while a spawn that fails, a tag or kind the agent refuses, or a `bad-request` from
-an agent that advertised the op fails it; a capability refusal takes no lease, is noted on the row and waits. A `failed` or
-`reverted` row **halts** every further move until **Ack** (`POST /api/updates/ack`) returns it to idle and clears its
-request and refusals; a `provenance:` verdict on a release does not halt (the row keeps `failed` and that detail), and the
-node moves on to the next release eligible for it. A lease is failed `deadline` once `CCRC_UPDATE_DEADLINE_MS` (default 15
-minutes) has passed since the later of the dispatch and the node's last report, and at all events four deadlines after the
-dispatch; that halts too. With `auto` on (`stable` only for a node on the stable channel), the dispatcher moves a node to
-its desired tag with no request, and refuses a node whose `ccrc-caps` lacks `update-gate` at that moment, whatever the
-intent route admitted. A macOS node lists no `detach` capability (`--detach` is Linux-only), so the console offers it no
-move and the dispatcher refuses one; `ccrc rollout` stays the path when the console itself is down.
+back on a node, and Update all on the fleet screen's banner each open one confirm sheet that names the nodes the move takes,
+fleet first, and sends `POST /api/updates/apply` (`{nodeId}` or `{all: true}`, with an optional `tag` — without one, the
+node's desired tag) or `POST /api/updates/rollback` (`{nodeId}`, with an optional `to` — without one, the node's previous
+version). Both are session-only: the box token never moves a node. A single-node move the dispatcher would refuse answers
+`409` with its word in the same request (not newer, an unread stamp or floor, halted, the node's own lease busy, a missing
+capability, an agent that predates the op, an unknown or refused tag, no previous version, no desired tag); `{all: true}`
+always answers `202`, writing a request only for a node the tag takes forward and the dispatcher could move, and naming every
+other live node as skipped, with its word: a node whose own lease is busy, or that is itself halting, is skipped, and while a
+fleet node is skipped for either, so is every server-role node (`waiting-for-fleet`); a halt caused by another row still
+writes the request. What is written is a **request** on the node's row, never a command. On a `server` or `both` box the
+dispatcher reads the rows after every inventory sweep, every intent write and every request write, and moves at most one node
+at a time across the fleet: fleet-role nodes before server-role ones, and the server node waits while any fleet node's
+request is outstanding. A fleet node is moved over the agent link by the `update` op, which only an agent that advertises it
+in its ready frame is ever sent (an older agent's node is refused `agent-predates-update-op` until that box is updated by
+hand). The agent answers `busy` while a run is in flight (its report's writer alive, or no readable pid) or the lock is held;
+otherwise it runs `~/.local/bin/ccrc update --to <tag> --detach --from pwa`, or `rollback` in place of `update` — two fixed
+argument lists with the tag the only word that varies, outside the exec whitelist — and answers `accepted` once the detaching
+parent has exited 0 (killed at its bound it answers `accepted` too if it queued or cannot be attributed). The server node is
+spawned the same way on its own box, after the same `busy` check. `accepted` only holds the lease (the row reads `pending`):
+it settles on the node's own report naming the tag, not a sweep measuring the target, and a request for the tag a node
+already runs is settled without a move. A refusal releases the lease in the same turn and never consumes the request —
+`busy`, or a link that was down before the op left the server, returns the row to `idle`; a link that fails after the op was
+handed to it holds the lease until the node's own report of the run settles it or the deadline fails it, because the node may
+already have started the run — while a spawn that fails, a tag or kind the agent refuses, or a `bad-request` from an agent
+that advertised the op fails it; a capability refusal takes no lease, is noted on the row and waits. A `failed` or `reverted`
+row **halts** every further move until **Ack** (`POST /api/updates/ack`) returns it to idle and clears its request and
+refusals; a `provenance:` verdict on a release does not halt (the row keeps `failed` and that detail), and the node moves on
+to the next release eligible for it. A lease is failed `deadline` once `CCRC_UPDATE_DEADLINE_MS` (default 15 minutes) has
+passed since the later of the dispatch and the node's last report, and at all events four deadlines after the dispatch; that
+halts too. With `auto` on (`stable` only for a node on the stable channel), the dispatcher moves a node to its desired tag
+with no request, and refuses a node whose `ccrc-caps` lacks `update-gate` at that moment, whatever the intent route admitted.
+A macOS node lists no `detach` capability (`--detach` is Linux-only), so the console offers it no move and the dispatcher
+refuses one; `ccrc rollout` stays the path when the console itself is down.
 
 **Versioned installs, and rollback by flip.** A box keeps each release it installs as a tree of its own under
 `~/ccrc-versions/<name>/` — the release tag; `untagged-<the first twelve hex digits of its sha>` for a checkout that
@@ -904,7 +904,7 @@ without it neither half of ccrc runs:
 produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
 `CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
 `CCRC_UPSTREAM`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
-`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool` — the whole emitted surface, because a
+`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_secrets_file` — the whole emitted surface, because a
 field the projection drops is a field no drift detector can see), and the
 deploy generates it from the
 roster **read back off the box**, never from the local file, so ccd's routing
@@ -1089,10 +1089,12 @@ ccrc wrappers                        # the other direction: roster → ~/.local/
   every tagged account, so two boxes whose pools disagree read `divergent` and
   the banner's existing remedy is the right one. `hidden` is **outside** it:
   nothing in `accounts.sh` carries that key, so two copies that disagree about
-  `hidden` project byte-identical bash and report `agreed` — the same gap
-  `exec.secretsFile` and a `generated`/`external` `exec.kind` sit in (an
-  `upstream` flip is visible, because it moves `CCRC_UPSTREAM`), and the reason `ccrc doctor`'s
-  wrapper check rather than the fingerprint is what catches those. Between the
+  `hidden` project byte-identical bash and report `agreed` — the same gap a
+  `generated`/`external` `exec.kind` sits in (an `upstream` flip is visible,
+  because it moves `CCRC_UPSTREAM`), and the reason `ccrc doctor`'s wrapper check
+  rather than the fingerprint is what catches that. `exec.secretsFile` left that
+  gap with D-3524: `_ccrc_secrets_file` is emitted for every account that declares
+  one, so it is **inside** the digest, like `pool`. Between the
   two lanes of one agent-first deploy that changes pools, `divergent` is
   EXPECTED for the minutes in between, and the deploy says so as it runs.
 
@@ -1480,10 +1482,47 @@ The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
   this account. Same stand-downs, same cache. A rescue off such a 401 writes the account's auth-dead
   marker (`rescue-401`) unless one stands, and `_swap_target`'s "home recovered" arm no longer sends a
   session back to an auth-dead home; the candidate loop still ranks one last rather than never, so a
-  rescue always has somewhere to go. `ccd-account-health` clears the marker on a live answer, and a
-  clean spawn on the account still clears it. A 403, exhausted credit (`billing_error`) and a 529 are
+  rescue always has somewhere to go. `ccd-account-health` clears the marker on a live answer; the next
+  point says what else ends it. A 403, exhausted credit (`billing_error`) and a 529 are
   not read. No pane reader was widened: `--resume` re-renders old API-error rows, which is what D-2364
   feared.
+- **The auth-dead marker lasts until the credential changes (D-3524).** A clean spawn is no evidence:
+  Claude Code 2.1.280 shows its prompt on a dead OAuth token, so the old rc-0 clear wiped a rescue's
+  fresh marker and the home arm sent the session back into the 401. The account's credential FILE
+  decides instead — the roster's `exec.secretsFile` (projected into `accounts.sh` as
+  `_ccrc_secrets_file`), else the upstream's `.cc-secrets/<id>-oauth.env`. Once its ctime is at or
+  after the marker's epoch, any ccd reader expires the marker, so a re-login revives the account at
+  the next placement or home decision with no spawn. A clean spawn clears the marker only then, or on
+  a lane whose credential ccd cannot name — any lane that declares no `secretsFile` (a login lane, an
+  external lane) or an older `accounts.sh`; a config dir's `.credentials.json` is never read, because
+  it changes without a re-login. A rescue writes none when the named file changed after the pane was
+  born. `ccd-account-health` measures only what its timer reaches (Linux, not a `server`-role box) whose
+  `telemetry: "anthropic"` credential identity is an OAuth setup token: an upstream lane's declared
+  `exec.secretsFile` (or its legacy `.cc-secrets/<id>-oauth.env`) and a generated Anthropic lane with a
+  declared setup-token file. API-key and login lanes are refused before a stale guessed OAuth file can
+  answer for them. On a lane it cannot measure but ccd can name (an API-key lane's
+  `<id>-<provider>.env`, any lane on macOS) the marker stands until that file is rewritten or an operator
+  `rm`; a probed account revived
+  with no local trace (a transient 401) keeps its marker until the probe's next live answer.
+- **A carried-in banner is not a block (D-3526).** A swap carries the transcript with every row's own
+  timestamp, so the old account's rate-limit row lands on the new account unchanged, and it stays the
+  newest real row when the new process writes nothing. Once `SWAP_COOLDOWN` lapsed the rescue read it
+  as a block on the new account and moved the session again (26 of 259 rescues from 2026-09-08). The
+  rate limit is now dated against the same clock as the 401, the pane's tmux `session_created`: a
+  `rate_limit` row provably older than it answers rc 3 in `stuck` mode, with the row's epoch. It is
+  carried in only if a swap also came after it — `$REG/<id>.lastswap` (stamped by the rescue and
+  affinity dispatches and by the landing, deleted by a refused swap) later than the row — so a
+  same-account restart (an OOM kill, a revival, stop/start) keeps its own account's block: the strand
+  stays, and the session moves when a target frees. A carried-in row is not a block on any rung — the
+  pane rungs ask the same read before they fire, unless the pane shows an auth failure, and cache its
+  answer in `$REG/<id>.tdate` on the pane's birth and the transcript's path, mtime and size, so a
+  stranded pane re-reads nothing until the file changes. The one exception is a process that never came
+  up (`$REG/<id>.spawn` records rc 4 at or after its birth): that session is still moved. Each process
+  logs one `carried-in <id>: via=<transcript|pane|banner> rate-limit row at <epoch> predates this pane's
+  process (born <epoch>) — not a block [wrapper=<w>] [spawn=<rc>]` line in `swap.log`, floored by
+  `$REG/<id>.carriednote`. A pane positive is dated by the transcript's newest real row, so once the
+  process has written a real row nothing is suppressed. Carried: the 30-second `tscan` cache is not
+  keyed on the process, and a dispatch that neither lands nor is refused leaves its `lastswap` stamp.
 - **The banner is a system line in the PWA** — `usage limit · resets HH:MM` in your clock,
   Claude Code's sentence as the tooltip (`origin: 'limit'`, `resetsAt` in epoch seconds).
 - **The mail nudge holds while an auto-continue is armed.** `sendPrompt` refuses
@@ -1757,8 +1796,8 @@ general remote-shell:
   heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
   rides the existing `$HOME/.claude*` grant, and the heartbeat exists so the
   server never asks systemd anything — nothing under `~/.config/systemd`.
-- **pty**: `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>`, with
-  `sessionId` sanitized to `[A-Za-z0-9_-]+` — never an arbitrary command.
+- **pty**: `ptyOpen` only ever spawns `tmux attach -t =cc-<sessionId>:` — the EXACT target, since a bare
+  name is a tmux prefix search (D-3525) — with `sessionId` sanitized to `[A-Za-z0-9_-]+`, never an arbitrary command.
 - **Update op**: `update` only ever spawns `~/.local/bin/ccrc update` or `rollback`, as
   `--to <tag> --detach --from pwa`, with the tag checked by the one release-tag guard
   first — never through the exec whitelist, never an arbitrary command. The agent
@@ -2873,7 +2912,7 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21546`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
+  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21564`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
   AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:20279-20281`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
 - **What a purge does now.** `_reg_purge` takes the same mutex, so a row cannot be destroyed underneath a
   hook that is mid-transaction. It answers with THREE distinct statuses rather than a boolean — a pre-emit
@@ -3468,7 +3507,7 @@ but the pane is still scraped, and two jobs genuinely need it: reading the
 input-box draft, and proving that the menu on screen is the one an answer is
 about. Both drift between Claude Code versions. After any upgrade, re-capture
 the fixtures under `server/test/fixtures/panes/` (e.g.
-`tmux capture-pane -t cc-<id> -p`) and re-run `test/dialog.test.ts` /
+`tmux capture-pane -t =cc-<id>: -p`) and re-run `test/dialog.test.ts` /
 `test/send.test.ts` / `test/ask-route.test.ts`.
 
 Hook *delivery* drifts too, and silently: Claude Code 2.1.222 delivers

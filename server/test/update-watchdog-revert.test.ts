@@ -475,6 +475,7 @@ describe('the watchdog\'s REAL revert sequence, then the server\'s deadline (F6,
     const box = watchdogBox('update-watchdog-revert-old-');
     const r = runWatchdogRollback(box);
     expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expectContained(box.home);
     const s = server(box.home);
     // The lease begins AFTER the revert's last report: that report is an earlier run's.
     const t0 = Date.now() + 5_000;
@@ -488,6 +489,7 @@ describe('the watchdog\'s REAL revert sequence, then the server\'s deadline (F6,
     const box = watchdogBox('update-watchdog-revert-cli-');
     const r = runWatchdogRollback(box);
     expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expectContained(box.home);
     const file = join(box.home, '.ccrc', 'update.json');
     const doc = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
     expect(doc['from']).toBe('watchdog');
@@ -503,6 +505,7 @@ describe('the watchdog\'s REAL revert sequence, then the server\'s deadline (F6,
     const box = watchdogBox('update-watchdog-revert-fleet-');
     const r = runWatchdogRollback(box);
     expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expectContained(box.home);
     const s = server(box.home, { fleet: true });
     // The fleet row holds the lease, taken well before the box's real revert report.
     const t = Date.now();

@@ -54,6 +54,42 @@ export function liveSessionStatus(status: string): SessionStatus {
 }
 
 /**
+ * Whether the live file's `status` already counts delegated work — a running
+ * Workflow among it — for the Claude Code build that wrote it (`version`).
+ *
+ * From 2.1.277 the writer is `status: h.isLoading || h.delegatedActive ? "busy"
+ * : "idle"`, where `delegatedActive` is any non-terminal task whose type is in
+ * `new Set(["local_agent","remote_agent","in_process_teammate",
+ * "local_workflow"])`. Found in the binaries of 2.1.277, 2.1.278 and
+ * 2.1.280–2.1.283, and measured on 2.1.281–2.1.283: a workflow's orchestrator
+ * reads `busy` after its own turn ends, and `idle` only when the workflow does.
+ * So an `idle` from such a file has ruled a running workflow out, and the pane's
+ * Workflow row must not overrule it (fleet.ts).
+ *
+ * `false` — keep the pane row as the fallback — for no version, for a build
+ * below 2.1.277 (unmeasured, none on the fleet), and for any string that does
+ * not open with `X.Y.Z`. Parsed here rather than by `shared/semver.ts`'s
+ * `compareReleaseTags`, which takes release TAGS (`vX.Y.Z`) and throws on
+ * anything else: this string comes from Claude Code's file, not from us.
+ *
+ * KNOWN LIMIT: the floor has no ceiling. Every build from 2.1.277 up is
+ * trusted, the unmeasured ones above 2.1.283 (and 3.x) included, while the
+ * unmeasured ones below 2.1.277 are not. A later Claude Code that narrows
+ * `delegatedActive` — it already leaves out idle teammates and long-running
+ * remote agents — would read a Workflow's orchestrator idle mid-run, and
+ * this gate would silence the one pane row that could notice. Re-measure the
+ * writer and the delegation set on every Claude Code bump; this function is
+ * the single place to narrow the trust (a ceiling at the highest measured
+ * build, say).
+ */
+export function liveStatusCoversDelegation(version: string | null): boolean {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version ?? '');
+  if (!m) return false;
+  const [major, minor, patch] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  return major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 277)));
+}
+
+/**
  * What `<configDir>/sessions/<pid>.json` — Claude Code's own live status file
  * — had to say about this pane, and, on the `false` arm, whether anything was
  * said at all.

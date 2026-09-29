@@ -3143,23 +3143,19 @@ _check_accounts() {
 }
 
 # ── credentials: does every account this box will PROBE have a token file? ──
-# `ccd-account-health` derives each token's path by CONVENTION —
-# `$HOME/.cc-secrets/<id>-oauth.env` for every `telemetry: "anthropic"` account
-# — because `shared/roster.ts` permits `exec.secretsFile` only on
-# `kind: "generated"`, so the mandatory upstream account structurally cannot
-# declare where its credential lives. A roster-driven probe would have covered
-# the generated accounts and SILENTLY SKIPPED the primary one: precisely the
-# class of defect the health work exists to remove.
-#
-# A convention with no measurement is that silent skip waiting to happen. The
-# probe REFUSES an account whose token file is absent or empty — the fourth
-# outcome, and the correct one — but a refusal that only reaches a journal is
-# indistinguishable from a fleet where nothing went wrong. THIS is where absence
-# becomes loud.
+# `ccd-account-health` measures declared Anthropic setup-token credentials, not
+# every `telemetry: "anthropic"` account. Telemetry controls usage publishing;
+# it says nothing about a lane's authentication shape. An upstream declaration
+# wins, otherwise only the upstream retains the legacy `<id>-oauth.env` path. A
+# generated Anthropic lane needs a declared setup-token path. API-key, login,
+# external and Codex lanes are not usage-endpoint subjects: a stale guessed OAuth
+# file must not bless or condemn them.
 #
 # READ BY NODE, NOT JQ, for `_check_wrappers`' stated reason: this check must not
 # fail for a reason that belongs to another one, and a box with no jq already
-# gets exactly one FAIL, from the jq check.
+# gets exactly one FAIL, from the jq check. The raw roster has not passed
+# `parseRoster`, so the selector accepts only a safe relative path before Bash
+# joins it to `$HOME`; an invalid declaration is a named FAIL, not a path lookup.
 #
 # NOT ONE BYTE OF ANY FILE IS READ. `[ -s ]` answers existence and non-emptiness
 # together, which is the whole question — and this file's standing rule (see
@@ -3182,58 +3178,94 @@ _check_credentials() {
       "install Node first — see the 'node' check above"
     return 1
   fi
-  local ids rc
-  ids="$(CCRC_DOCTOR_ROSTER="$roster" node -e '
+  local subjects rc
+  subjects="$(CCRC_DOCTOR_ROSTER="$roster" node -e '
     const fs = require("fs");
     let j;
     try { j = JSON.parse(fs.readFileSync(process.env.CCRC_DOCTOR_ROSTER, "utf8")); }
     catch (e) { process.exit(3); }
     if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
-    // Only ids that match the shared grammar reach stdout: an id outside it can
-    // name no file, and it must never be printed at a terminal that acts on
-    // control bytes (see `_check_wrappers`, which escapes for the same reason).
-    const ok = /^[a-z][a-z0-9-]{0,31}$/;
-    process.stdout.write(j.accounts
-      .filter((a) => a && typeof a === "object" && a.telemetry === "anthropic" && ok.test(a.id))
-      .map((a) => a.id).join("\n"));
+    const idOk = (v) => typeof v === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(v);
+    const pathOk = (v) => typeof v === "string" && v !== "" && !v.startsWith("/")
+      && !v.endsWith("/") && !v.includes("..") && /^[A-Za-z0-9._/-]+$/.test(v);
+    for (const a of j.accounts) {
+      if (!a || typeof a !== "object" || a.telemetry !== "anthropic" || !idOk(a.id)) continue;
+      const e = a.exec;
+      let state = "unsupported", rel = "";
+      if (e && typeof e === "object" && e.kind === "upstream") {
+        rel = Object.hasOwn(e, "secretsFile") ? e.secretsFile : `.cc-secrets/${a.id}-oauth.env`;
+        state = pathOk(rel) ? "eligible" : "invalid";
+      } else if (e && typeof e === "object" && e.kind === "generated") {
+        const provider = Object.hasOwn(e, "provider") ? e.provider : "anthropic";
+        if (provider === "anthropic") {
+          if (Object.hasOwn(e, "secretsFile")) {
+            rel = e.secretsFile;
+            state = pathOk(rel) ? "eligible" : "invalid";
+          } else state = "login";
+        } else if (typeof provider === "string") state = "api-key";
+      }
+      process.stdout.write(`${a.id}\t${state}\t${state === "eligible" ? rel : ""}\n`);
+    }
   ' 2>/dev/null)"; rc=$?
   if [ "$rc" -ne 0 ]; then
     _dr_skip credentials "\$HOME/.ccrc/accounts.json could not be read as a roster — the 'wrappers' check above owns that"
     return 3
   fi
-  if [ -z "$ids" ]; then
-    _dr_skip credentials "no account on this box declares telemetry \"anthropic\", so there is no Anthropic credential to look for"
+  if [ -z "$subjects" ]; then
+    _dr_skip credentials "no account on this box declares an OAuth setup-token credential, so there is nothing for the OAuth usage probe to measure"
     return 3
   fi
-  # SKIP, NOT FAIL, WHEN THE DIRECTORY ITSELF IS ABSENT: a box with a roster
-  # but no $HOME/.cc-secrets at all has not been PROVISIONED with credentials
-  # yet — a state the operator is legitimately in, most concretely right
-  # before the first `ccrc install` on a fresh box, or in an install fixture
-  # HOME that never creates the directory. `ccrc install` runs `cmd_doctor`
-  # and aborts on any FAIL, so failing this check here would block the very
-  # install that has to happen BEFORE provisioning can — an unmeasurable
-  # "not provisioned yet" is not the same finding as a measured "provisioned,
-  # and THIS account's file is missing", which stays a FAIL below.
-  if [ ! -d "$HOME/.cc-secrets" ]; then
-    _dr_skip credentials "no \$HOME/.cc-secrets directory — this box has not been provisioned with credentials yet; run again once \$HOME/.cc-secrets/<id>-oauth.env exists for each account declaring telemetry \"anthropic\""
+  local id state rel n=0 miss=0 invalid=0 all_under_secrets=1
+  local -a eligible=() bad=()
+  while IFS=$'\t' read -r id state rel <&8; do
+    case "$state" in
+      eligible)
+        n=$((n + 1))
+        eligible+=("$id:$rel")
+        [[ "$rel" == .cc-secrets/* ]] || all_under_secrets=0
+        ;;
+      invalid)
+        invalid=$((invalid + 1))
+        bad+=("$id has an invalid declared setup-token credential path")
+        ;;
+      api-key|login|unsupported) ;;
+      *)
+        invalid=$((invalid + 1))
+        bad+=("$id has an unrecognised credential subject")
+        ;;
+    esac
+  done 8<<< "$subjects"
+  if [ "$invalid" -gt 0 ]; then
+    _dr_fail credentials "$(_dr_join "${bad[@]}")" \
+      "fix each declared setup-token credential path to be a safe relative path under \$HOME; the account-health probe refuses malformed declarations"
+    return 1
+  fi
+  if [ "$n" -eq 0 ]; then
+    _dr_skip credentials "no account on this box declares an OAuth setup-token credential, so there is nothing for the OAuth usage probe to measure"
     return 3
   fi
-  local id n=0 miss=0
-  local -a bad=()
-  for id in $ids; do
-    n=$((n + 1))
-    # THE CONVENTION, SPELLED ONCE IN THIS FILE — the second and last holder;
-    # `single-definition.test.ts` pins the pair and compares their shape.
-    [ -s "$HOME/.cc-secrets/$id-oauth.env" ] && continue
+  # A fresh, legacy-shaped box has no credentials directory until provisioning,
+  # so it SKIPs instead of blocking the install that must happen first. A
+  # declared path elsewhere is already a specific claim and remains a FAIL below.
+  if [ "$all_under_secrets" -eq 1 ] && [ ! -d "$HOME/.cc-secrets" ]; then
+    _dr_skip credentials "no \$HOME/.cc-secrets directory — this box has not been provisioned with setup-token credentials yet; run again once each declared credential file exists"
+    return 3
+  fi
+  local item f
+  for item in "${eligible[@]}"; do
+    id="${item%%:*}"
+    rel="${item#*:}"
+    f="$HOME/$rel"
+    [ -s "$f" ] && continue
     miss=$((miss + 1))
-    bad+=("$id has no readable token at \$HOME/.cc-secrets/$id-oauth.env")
+    bad+=("$id has no readable token at \$HOME/$rel")
   done
   if [ "$miss" -gt 0 ]; then
     _dr_fail credentials "$(_dr_join "${bad[@]}")" \
-      "the account-health probe refuses an account with no token, so its liveness is never measured — put the account's CLAUDE_CODE_OAUTH_TOKEN in that file (0600), or set telemetry to \"none\" for an account this box does not authenticate to Anthropic"
+      "the account-health probe refuses an account with no setup token, so its liveness is never measured — put the account's CLAUDE_CODE_OAUTH_TOKEN in its declared file (0600)"
     return 1
   fi
-  _dr_pass credentials "$n account(s) declaring telemetry \"anthropic\", each with a token file under \$HOME/.cc-secrets"
+  _dr_pass credentials "$n account(s) declaring an OAuth setup-token credential, each with a readable token file"
 }
 
 # ── the project pool tags (account pools, spec §5.4.6) ────────────────────
