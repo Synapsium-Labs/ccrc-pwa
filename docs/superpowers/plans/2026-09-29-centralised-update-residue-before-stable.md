@@ -241,16 +241,16 @@ Do not add `{ cause }`: `server.ts:460`'s standing reason, "NO `{ cause: err }`,
 
 | # | Guard | Mutation (`server/src/remote/client.ts`) | Must red | Measured |
 |---|---|---|---|---|
-| M1 | no-ready arm carries the marker | `:228` back to `new Error('disconnected')` | case 1 | |
-| M2 | pre-aborted arm carries the marker | `:230` back to `new Error('aborted')` | case 2 | |
-| M3 | a synchronous send throw is not-sent and unregistered | the `try { … } catch` back to the bare `ws.send(JSON.stringify(req));` | case 3 (not the marker; `pending.size` 1) | |
-| M4 | a socket close after the send is NOT not-sent | `onClose`'s `rejectAllPending(new Error('disconnected'))` (`:476`) → `rejectAllPending(new LinkNotSentError('disconnected'))` | case 4, socket-close row | |
-| M4b | a `close()` after the send is NOT not-sent | `close()`'s `this.rejectAllPending(new Error('disconnected'))` (`:283`) → `new LinkNotSentError('disconnected')` | case 4, `close()` row | |
-| M5 | a timeout is NOT not-sent | `:247` → `reject(new LinkNotSentError('timeout'))` | case 4, timeout row | |
-| M6 | an abort after the send is NOT not-sent | `:241` → `reject(new LinkNotSentError('aborted'))` | case 4, abort row | |
-| M7 | the catch drops the pending entry | drop `this.pending.delete(id);` from the catch | case 3 (`pending.size`) | |
-| M8 | the catch clears the timer | drop `clearTimeout(timer);` from the catch | case 3 (timer count) | |
-| M9 | the catch removes the abort listener | drop `dispose();` from the catch | case 3 (`removeEventListener` count) | |
+| M1 | no-ready arm carries the marker | `:228` back to `new Error('disconnected')` | case 1 | 1 failed — "no ready link at the call" (`toBeInstanceOf(LinkNotSentError)`) |
+| M2 | pre-aborted arm carries the marker | `:230` back to `new Error('aborted')` | case 2 | 1 failed — "a signal already aborted" (`toBeInstanceOf(LinkNotSentError)`) |
+| M3 | a synchronous send throw is not-sent and unregistered | the `try { … } catch` back to the bare `ws.send(JSON.stringify(req));` | case 3 (not the marker; `pending.size` 1) | 1 failed — "a synchronous send throw" (`toBeInstanceOf(LinkNotSentError)`, first assertion; test stops there) |
+| M4 | a socket close after the send is NOT not-sent | `onClose`'s `rejectAllPending(new Error('disconnected'))` (`:476`) → `rejectAllPending(new LinkNotSentError('disconnected'))` | case 4, socket-close row | 1 failed — "a socket close after the send" (`.not.toBeInstanceOf(LinkNotSentError)`) |
+| M4b | a `close()` after the send is NOT not-sent | `close()`'s `this.rejectAllPending(new Error('disconnected'))` (`:283`) → `new LinkNotSentError('disconnected')` | case 4, `close()` row | 1 failed — "close() after the send" (`.not.toBeInstanceOf(LinkNotSentError)`) |
+| M5 | a timeout is NOT not-sent | `:247` → `reject(new LinkNotSentError('timeout'))` | case 4, timeout row | 1 failed — "a timeout after the send" (`.not.toBeInstanceOf(LinkNotSentError)`) |
+| M6 | an abort after the send is NOT not-sent | `:241` → `reject(new LinkNotSentError('aborted'))` | case 4, abort row | 1 failed — "an abort after the send" (`.not.toBeInstanceOf(LinkNotSentError)`) |
+| M7 | the catch drops the pending entry | drop `this.pending.delete(id);` from the catch | case 3 (`pending.size`) | 1 failed — "a synchronous send throw" (`pending.size` 1, expected 0) |
+| M8 | the catch clears the timer | drop `clearTimeout(timer);` from the catch | case 3 (timer count) | 1 failed — "a synchronous send throw" (timer count 1, expected 0) |
+| M9 | the catch removes the abort listener | drop `dispose();` from the catch | case 3 (`removeEventListener` count) | 1 failed — "a synchronous send throw" (`removeEventListener` called 0 times, expected 1) |
 
 ### Task 2: A link failure after the hand-off holds the lease (R1, dispatcher half)
 
