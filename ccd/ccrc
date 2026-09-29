@@ -1764,10 +1764,21 @@ ROLLOUT_VERSION=""   # cmd_rollout: the ONE version both boxes are moved to
 # steps read it, cmd_install overwrites it — a direct _inst_* call must meet a
 # stated default, never an unbound-variable death.
 INST_ROLE=both
-# Did THIS run place the bytes of the version `~/ccrc` points at? `_inst_tree`
-# sets it (1 only for `how=copy`); `_inst_installed` hands it to
-# `_ver_keep_state`, which records a fresh digest only then (D-3465 (b)).
-INST_TREE_PLACED=0
+# The NAME of the version THIS run placed the bytes of, or "". `_inst_tree`
+# sets it (only for `how=copy`, only after its rsync); `_inst_installed` hands
+# it to `_ver_keep_state`, which records a fresh digest only when the version
+# `~/ccrc` points at then is that name (D-3465 (b); review 179 M3 — a
+# concurrent plain install may have re-pointed the link between the flip and
+# the keep, and this run did not place THOSE bytes).
+INST_TREE_PLACED=""
+# What `_inst_tree` decided about the source tree — `running`, `placed`,
+# `copy`, or "" before it ran, and the version name it worked out
+# (`INST_TREE_NAME`). `_inst_stamp_shipped` reads both: `running`/`placed` say
+# the source tree IS `$HOME/ccrc-versions/$INST_TREE_NAME`, and a flip onto
+# another version (`placed`, or a copy) leaves the box stamp naming the build
+# the box LEFT unless that step removes it (D-3465 (d)).
+INST_TREE_HOW=""
+INST_TREE_NAME=""
 
 # The ONE spelling of the graphify engine version ccrc installs (spec §A, O1).
 # Bumping it is a reviewed commit; the corpus guard and graph-sweep row 13 are
@@ -10503,7 +10514,7 @@ _ver_digest_write() {   # <dir>
   return 0
 }
 
-# ── _ver_keep_state <prefix> [placed] — a version keeps what a flip back restores ──
+# ── _ver_keep_state <prefix> [placed-name] — a version keeps what a flip back restores ──
 # (W6 Task 2, D-3428). Copies the box's stamp and its
 # completed-install record, as this completed install left them, into the
 # root of the version `~/ccrc` points at: `$VER_STAMP_COPY`, then
@@ -10512,12 +10523,14 @@ _ver_digest_write() {   # <dir>
 # server read at boot and the install that is being backed out of has already
 # rewritten it — without a kept copy no flip back could pass its own gate.
 #
-# THE DIGEST (D-3465, review 179 F2). `placed` is 1 only when THIS run placed
-# the version's bytes (`_inst_tree`'s `how=copy`, or a legacy spine after
-# `_upd_legacy_target`): the tree is then measured and the digest recorded.
-# Otherwise (`running`, `placed`, an idempotent re-call) the keep is taken
-# again ONLY if the digest recorded earlier re-measures equal — a tree
-# something wrote through stays not kept, and nothing is rewritten.
+# THE DIGEST (D-3465, review 179 F2). `placed-name` is the name of the version
+# THIS run placed the bytes of (`_inst_tree`'s `how=copy`, or a legacy spine
+# after `_upd_legacy_target`), and it counts only when it is the version
+# `~/ccrc` points at now: the tree is then measured and the digest recorded.
+# Otherwise (`running`, `placed`, an idempotent re-call, or a link that names
+# some other version by now — M3) the keep is taken again ONLY if the digest
+# recorded earlier re-measures equal — a tree something wrote through stays
+# not kept, and nothing is rewritten.
 #
 # THE RECORD GOES LAST: it is the version's completeness mark, so a run that
 # dies between the copies leaves a version with a stamp and no record,
@@ -10530,13 +10543,20 @@ _ver_digest_write() {   # <dir>
 # NEVER DIES and is silent unless `~/ccrc` is a version link (`linked` or
 # `migrated`) and both files are regular files: a pre-versioned box keeps
 # nothing, and a spine with no stamp has no record to keep.
-_ver_keep_state() {   # <prefix> [placed]
-  local prefix="$1" placed="${2:-0}" vdir s_dest r_dest s_tmp r_tmp
+_ver_keep_state() {   # <prefix> [placed-name]
+  local prefix="$1" placed_name="${2:-}" placed=0 vdir s_dest r_dest s_tmp r_tmp
   local from_stamp="$BOX_STAMP_FILE"
   local from_record="$BOX_INSTALLED_FILE"
   _ver_layout
   case "$VER_LAYOUT" in linked|migrated) ;; *) return 0 ;; esac
   [ -f "$from_stamp" ] && [ -f "$from_record" ] || return 0
+  if [ -n "$placed_name" ]; then
+    if [ "$placed_name" = "$VER_CURRENT" ]; then
+      placed=1
+    else
+      echo "$prefix: versions: this run placed $placed_name, but \$HOME/ccrc names $VER_CURRENT by now — no fresh digest is recorded for bytes this run did not place"
+    fi
+  fi
   vdir="$BOX_VERSIONS_ROOT/$VER_CURRENT"
   s_dest="$vdir/$VER_STAMP_COPY"
   r_dest="$vdir/$VER_RECORD_COPY"
@@ -10588,7 +10608,9 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
   # in `server/` vs in `pwa/`); collapsing them into one "the tree is not built"
   # is the overloaded seam this file's header bans.
   local src name dest shown vroot="" how="" was="nothing"
-  INST_TREE_PLACED=0
+  INST_TREE_PLACED=""
+  INST_TREE_HOW=""
+  INST_TREE_NAME=""
   src="$(cd "$CCRC_HERE/.." && pwd -P)" || _ccrc_die "cannot resolve the running tree"
   [ -f "$src/server/dist/server/src/index.js" ] \
     || _ccrc_die "no server build at $src/server/dist — build first: bash install.sh (or npm run build in server/ and pwa/)"
@@ -10682,6 +10704,8 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
   else
     how=copy
   fi
+  INST_TREE_HOW="$how"
+  INST_TREE_NAME="$name"
   case "$how" in
     running) echo "install: tree: already running from \$HOME/ccrc" ;;
     placed)  echo "install: tree: $name is already placed at \$HOME/ccrc-versions/$name — installing from it, no copy" ;;
@@ -10734,7 +10758,7 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
         --exclude node_modules --exclude .git --exclude '*.env' --exclude ccrc-mail.token \
         "$src/server" "$src/agent" "$src/shared" "$src/deploy" "$src/ccd" "$dest/" \
         || _ccrc_die "placing the tree at $dest failed"
-      INST_TREE_PLACED=1
+      INST_TREE_PLACED="$name"
       if [ "$name" = "$VER_CURRENT" ]; then
         echo "install: tree: reinstalled $name in place at \$HOME/ccrc-versions/$name (the version \$HOME/ccrc points at; same name, same release)"
       else
@@ -10771,7 +10795,7 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
   if [ "$how" != copy ]; then _ver_kept "$name" "$INST_ROLE" || kept_rc=$?; else kept_rc=9; fi
   if [ "$kept_rc" -eq 0 ] \
      && { [ "$INST_ROLE" != fleet ] || [ -d "$dest/agent/node_modules" ]; }; then
-    echo "install: tree: $name is complete (its kept install record is present) — no npm ci"
+    echo "install: tree: $name is kept (its install record is present and its digest re-measures equal) — no npm ci"
   else
     ( cd "$dest/server" && npm ci --omit=dev --no-audit --no-fund >&2 ) \
       || _ccrc_die "npm ci in $shown/server failed — the service cannot start without runtime deps"
@@ -11403,6 +11427,26 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
 # (`$VER_STAMP_COPY`, written by `_ver_keep_state`) is installed instead —
 # the same parser, the same census line — and the transcript says which of
 # the two it was (D-3428).
+# D-3465 (d), review 179 I1: the refusal above leaves the box with no stamp of
+# this tree's own. When THIS run flipped `~/ccrc` onto another version
+# (`_inst_tree`'s `placed`, or a copy), the stamp already on the box names the
+# build the box just LEFT, and `_inst_installed` would record it as a completed
+# install of a build that is not running (`update --check` then converges on
+# the old build, `/health` answers it, and a rollback to it answers "nothing to
+# do"). It is removed, so the box reads unstamped and `_inst_installed` takes
+# its no-stamp arm. A `running` run (the launcher) did not move `~/ccrc`: the
+# stamp there names the version it still points at, and stays.
+_inst_stamp_unname() {
+  case "$INST_TREE_HOW" in placed|copy) ;; *) return 0 ;; esac
+  local dest="$BOX_STAMP_FILE" left="unreadable"
+  [ -e "$dest" ] || [ -L "$dest" ] || return 0
+  if _box_build_fields; then left="${BOX_BUILD[0]:0:12}"; fi
+  rm -f -- "$dest" \
+    || _ccrc_die "cannot remove the box's stamp $dest, which names the build this box just left — it would be recorded as this install's"
+  BOX_BUILD=()
+  echo "install: stamp: removed the box's stamp (it named $left, the build this box just left) — ccrc version will say unstamped"
+}
+
 _inst_stamp_shipped() {
   local shipped="$CCRC_HERE/../build.json" from="shipped in the release artifact"
   if [ ! -f "$shipped" ]; then
@@ -11414,17 +11458,22 @@ _inst_stamp_shipped() {
     # say the box runs a build the tree no longer is — the answer is the one
     # `_ver_kept` gives for the version this tree IS; a tree that is no placed
     # version, or one that is not kept, installs no stamp.
-    local kdir="" kroot="" kname="" krc=0
-    kdir="$(cd "$CCRC_HERE/.." && pwd -P)" || return 1
-    [ -d "$BOX_VERSIONS_ROOT" ] && kroot="$(cd "$BOX_VERSIONS_ROOT" && pwd -P)"
-    kname="${kdir##*/}"
-    if [ -z "$kroot" ] || [ "${kdir%/*}" != "$kroot" ]; then
+    #   Which version this tree IS is what `_inst_tree` already measured — its
+    # self-copy guard's physical resolution, the one constraint 3 allows — so
+    # this reads `INST_TREE_HOW`/`INST_TREE_NAME` and resolves nothing itself
+    # (review 179 M6): `running` and `placed` say the source tree IS
+    # `$HOME/ccrc-versions/<name>`; anything else (a copy, or no `_inst_tree`
+    # run at all) is not a version.
+    local kname="$INST_TREE_NAME" krc=0
+    if { [ "$INST_TREE_HOW" != running ] && [ "$INST_TREE_HOW" != placed ]; } || [ -z "$kname" ]; then
       echo "install: stamp: the kept stamp beside this tree is not installed — this tree is not a version under \$HOME/ccrc-versions"
+      _inst_stamp_unname
       return 1
     fi
     _ver_kept "$kname" "$INST_ROLE" || krc=$?
     if [ "$krc" -ne 0 ]; then
       echo "install: stamp: $kname's kept stamp is not installed — it is not a kept version ($VER_WHY)"
+      _inst_stamp_unname
       return 1
     fi
   fi
@@ -13634,9 +13683,11 @@ cmd_update() {
   # older than W6. Silent unless the record is present (a completed spine,
   # or D-3114's doctor-FAIL arm); a spine that died wrote none.
   # D-3465 (b): the bytes were placed by THIS run only when a spine older than
-  # W6 wrote them into the directory `_upd_legacy_target` gave it; a W6
-  # spine recorded its own digest and this call only re-takes the keep on it.
-  _ver_keep_state update "$([ -n "$legacy_from" ] && echo 1 || echo 0)"
+  # W6 wrote them into the directory `_upd_legacy_target` gave it (named
+  # `$UPD_VERSION`, which `_ver_keep_state` requires `~/ccrc` to name still —
+  # review 179 M3); a W6 spine recorded its own digest and this call only
+  # re-takes the keep on it.
+  _ver_keep_state update "${legacy_from:+$UPD_VERSION}"
 
   # ── THE HEALTH GATE (design §11) ─────────────────────────────────────────
   # The staged spine restarted the role's unit onto the new tree (and ran its
@@ -18497,7 +18548,8 @@ cmd_versions() {
   esac
   # D-3465 (d): the listing says a version's tree was WRITTEN THROUGH since it
   # was kept — `_ver_kept`'s rc 3, asked through the recorded role as
-  # `cmd_rollback` asks it. The new word is display only: it never reaches
+  # `cmd_rollback` asks it — and UNMEASURED for its rc 2 (or any other
+  # non-zero answer) beside a record. Both words are display only: they never reach
   # `_ver_verdicts` (D-3423's verdicts, the count and the order by record
   # mtime read the record file, exactly as before).
   local vrole="" krc=0
@@ -18511,7 +18563,16 @@ cmd_versions() {
     if [ -f "$BOX_VERSIONS_ROOT/$n/$VER_RECORD_COPY" ]; then
       cpl=complete; krc=0
       _ver_kept "$n" "$vrole" || krc=$?
-      [ "$krc" -eq 3 ] && cpl=written-through
+      case "$krc" in
+        0) ;;
+        3) cpl=written-through ;;
+        # Review 179 M1: rc 2 (no digest — every version kept before digests
+        # existed — or one that cannot be measured) is not `complete`: a
+        # rollback to it takes the release host. Its own word, as
+        # `written-through` has, so two conditions the callers handle
+        # differently are not one word here.
+        *) cpl=unmeasured ;;
+      esac
     fi
     printf '  %s %s  %s  %s\n' "$mark" "$n" "$cpl" "${VER_VERDICT[$n]}"
   done

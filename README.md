@@ -704,7 +704,7 @@ it cleared before it: the caps file, and the install record only when it was a c
 build's own sha, provided `~/ccrc` names the tree it named before (D-3462); neither comes back for a marker-less
 spine whose stamp did not move, or when a legacy flip-back failed. Arm 3's MIXED tree loses its kept record, so no
 flip returns to it. `ccrc versions` lists the kept trees (`*` marks the one `~/ccrc` points at; `written-through` marks one whose
-bytes are no longer the kept ones, which changes no prune verdict). After an install or
+bytes are no longer the kept ones, and `unmeasured` one kept before digests existed or whose tree cannot be measured; neither changes a prune verdict). After an install or
 update whose gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename to a
 dot-name first: never the one `~/ccrc` points at, `previous`, a tag this node's projection names, or a version a
 running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
