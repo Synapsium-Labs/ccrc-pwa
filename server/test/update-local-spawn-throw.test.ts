@@ -72,10 +72,12 @@ describe('item 9: a SYNCHRONOUS throw from the local spawn halts; a rejected pro
     expect(next.plan.gate.haltedBy).toEqual([SERVER_ID]);
   });
 
-  // PLATFORM-ONLY: this premise is Linux kernel behaviour (`execve`'s ARG_MAX rejection is synchronous only on
-  // Linux; the plan's own Task 4 Step 2 contingency, fix round 1, review 178 F2). On macOS the promise RESOLVES
-  // instead of rejecting — measured `test-macos 1/2`, run 36552172708: `{ code: 1, stderr: 'could not start the
-  // launcher (ENOENT)' }` — so a darwin arm has nothing to assert here.
+  // PLATFORM-ONLY: stating only what was measured (fix round 1, review 178 F2 — the plan's own Task 4 Step 2
+  // contingency). Measured `test-macos 1/2`, run 36552172708: on macOS the promise RESOLVES instead of
+  // rejecting, `{ code: 1, stderr: 'could not start the launcher (ENOENT)' }`. The cause was not measured
+  // there; a plausible one is that macOS ships `/usr/bin/true`, not `/bin/true` (this case's hardcoded path),
+  // making the launcher itself the ENOENT rather than an E2BIG from `execve`'s argv limit — so a darwin arm
+  // has nothing to assert here.
   itLinux('premise (b): only the synchronous arm rejects — a 3 MiB single argument throws E2BIG before anything execs', async () => {
     await expect(boundedUpdateSpawn('/bin/true', ['x'.repeat(3 * 1024 * 1024)], { env: { PATH: '/nonexistent' } }))
       .rejects.toMatchObject({ code: 'E2BIG' });
