@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { makeCcdHarness, ghContainedEnv } from './ccdWsHelpers.js';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, readdirSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 const h = makeCcdHarness('pool-sync');
@@ -20,12 +20,25 @@ afterEach(() => h.cleanup());
  *  a test can assert the negative (never in argv), not merely the positive
  *  (reaches stdin) — which is the whole claim "never let the box token reach
  *  argv or the environment" needs proven, not half of it. */
+/** W6 Task 8A: the script's body now lands via `-o <file>` (the bounded read
+ *  that replaced `-o -` through `$( )`), and only the status reaches stdout —
+ *  so the stub honours that flag the way a real curl does. Everything before
+ *  the body is the recording this file has always done. */
+const CURL_STUB_HEAD = `#!/usr/bin/env bash
+printf '%s\\n' "$*" > "$HOME/curl.argv"
+cat > "$HOME/curl.stdin"
+outfile=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then outfile="$a"; fi
+  prev="$a"
+done
+`;
 function stubCurl(body: string, status = '200'): string {
   const bin = path.join(h.home, 'bin');
   mkdirSync(bin, { recursive: true });
   const p = path.join(bin, 'curl');
   writeFileSync(p,
-    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" > "$HOME/curl.argv"\ncat > "$HOME/curl.stdin"\nprintf '%s\\n%s' '${body}' '${status}'\n`,
+    CURL_STUB_HEAD + `printf '%s' '${body}' > "$outfile"\nprintf '%s' '${status}'\n`,
     'utf8');
   chmodSync(p, 0o755);
   return bin;
@@ -365,6 +378,89 @@ describe('ccd-pool-sync', () => {
     expect(strays).toBe('0');
   });
 
+  // W6 Task 8A (W4's worker's carry: "ccd-pool-sync's unbounded read"; and
+  // review 167's F7 for this sibling). The body used to be `-o -` captured
+  // through `$( )`, with no bound on what a control plane could stream into
+  // this script's memory; it now goes to a file under `--max-filesize`, and
+  // the validator reads at most 1 MiB + 1 byte of it. `--max-time` is
+  // validated too: curl reads `0` as no limit at all.
+  /** The real script with stderr captured, contained at the call site (the
+   *  ccd-workspaces scan reads this window, not a helper's). */
+  const runFull = (bin: string, extra: NodeJS.ProcessEnv = {}): { rc: number; out: string; err: string } => {
+    const env = ghContainedEnv(h.home, { ...process.env, CCRC_POOL_SYNC_TIMEOUT: undefined, ...extra, HOME: h.home, PATH: `${bin}:${process.env.PATH}` },
+      { systemd: true, tmux: true });
+    const r = spawnSync('bash', [path.resolve('../ccd/ccd-pool-sync')], { encoding: 'utf8', env });
+    return { rc: r.status ?? -1, out: r.stdout ?? '', err: r.stderr ?? '' };
+  };
+  const strays = (): string[] => readdirSync(path.join(h.home, '.cc-sessions')).filter((n) => n.startsWith('.pool-epoch.'));
+
+  it('hands curl its own size bound and writes the body to a file, not stdout (--max-filesize 1048576, -o <file>)', () => {
+    const bin = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{}}');
+    const r = runFull(bin);
+    expect(r.rc, r.err).toBe(0);
+    expect(curlArgv()).toContain('--max-filesize 1048576');
+    expect(curlArgv()).toMatch(/-o \S*\.pool-epoch\.\d+\.body\.tmp\b/);
+    expect(curlArgv()).not.toMatch(/-o -( |$)/);
+    expect(strays(), 'a temp file outlived the run').toEqual([]);
+  });
+
+  it('refuses a body over 1 MiB however well-formed it is, naming the cap, writing nothing and leaving no temp file — the read is bounded whatever curl did', () => {
+    // A VALID document padded past the cap: were the read unbounded it would be
+    // accepted and installed. The stub writes it as a real curl would have on
+    // an older release that ignores --max-filesize for a body of unknown length.
+    const body = JSON.stringify({ epoch: 1, issuedAt: 1, leaseUntil: 9999999999, accounts: {}, pad: 'x'.repeat(1_100_000) });
+    const bin = path.join(h.home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(h.home, 'oversized-body.json'), body, 'utf8');
+    writeFileSync(path.join(bin, 'curl'), `${CURL_STUB_HEAD}cat "$HOME/oversized-body.json" > "$outfile"\nprintf '200'\n`, 'utf8');
+    chmodSync(path.join(bin, 'curl'), 0o755);
+    const r = runFull(bin);
+    expect(r.rc).not.toBe(0);
+    expect(r.err).toContain('response body is over the 1048576-byte cap');
+    expect(existsSync(path.join(h.home, '.cc-sessions', 'pool-epoch'))).toBe(false);
+    expect(strays()).toEqual([]);
+  });
+
+  it('a body just under the cap is still read whole (the bound is a bound, not a cut)', () => {
+    const body = JSON.stringify({ epoch: 5, issuedAt: 1, leaseUntil: 9999999999, accounts: {}, pad: 'x'.repeat(900_000) });
+    const bin = path.join(h.home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(h.home, 'oversized-body.json'), body, 'utf8');
+    writeFileSync(path.join(bin, 'curl'), `${CURL_STUB_HEAD}cat "$HOME/oversized-body.json" > "$outfile"\nprintf '200'\n`, 'utf8');
+    chmodSync(path.join(bin, 'curl'), 0o755);
+    const r = runFull(bin);
+    expect(r.rc, r.err).toBe(0);
+    expect(doc()).toBe('epoch 5\nissued 1\nlease 9999999999\nend\n');
+  });
+
+  it('names curl 63 (the size bound fired) as its own sentence', () => {
+    const bin = path.join(h.home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(path.join(bin, 'curl'), `${CURL_STUB_HEAD}exit 63\n`, 'utf8');
+    chmodSync(path.join(bin, 'curl'), 0o755);
+    const r = runFull(bin);
+    expect(r.rc).toBe(1);
+    expect(r.err).toContain('unmeasured — curl exited 63 (response exceeded the 1048576-byte cap)');
+  });
+
+  it.each([
+    ['0', '0'], ['a negative', '-5'], ['not a number', 'soon'], ['over an hour', '3601'], ['a float', '1.5'],
+  ])('CCRC_POOL_SYNC_TIMEOUT %s (%j) warns, is never handed to curl, and the pull falls back to 20 (review 167 F7)', (_what, bad) => {
+    const bin = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{}}');
+    const r = runFull(bin, { CCRC_POOL_SYNC_TIMEOUT: bad });
+    expect(r.rc, r.err).toBe(0);
+    expect(r.err).toContain(`ccd-pool-sync: WARN: CCRC_POOL_SYNC_TIMEOUT='${bad}' is not a whole number of seconds from 1 to 3600 — using 20`);
+    expect(curlArgv()).toContain('--max-time 20 ');
+  });
+
+  it('CCRC_POOL_SYNC_TIMEOUT: a good value passes unchanged and unwarned', () => {
+    const bin = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{}}');
+    const r = runFull(bin, { CCRC_POOL_SYNC_TIMEOUT: '45' });
+    expect(r.rc, r.err).toBe(0);
+    expect(r.err).not.toContain('WARN');
+    expect(curlArgv()).toContain('--max-time 45 ');
+  });
+
   // C1 (fix round 1, Critical): `ccrc install --role fleet` writes either
   // `ws://`/`wss://` or `http://`/`https://`, and the installer's own prompt
   // offers `ws://…` first — without the swap curl refuses the protocol
@@ -473,7 +569,7 @@ describe('ccd-pool-sync', () => {
     const bodyFile = path.join(h.home, 'oversized-body.json');
     writeFileSync(bodyFile, body, 'utf8');
     writeFileSync(path.join(bin, 'curl'),
-      `#!/usr/bin/env bash\nprintf '%s\\n' "$*" > "$HOME/curl.argv"\ncat > "$HOME/curl.stdin"\ncat "$HOME/oversized-body.json"\nprintf '\\n200'\n`,
+      `${CURL_STUB_HEAD}cat "$HOME/oversized-body.json" > "$outfile"\nprintf '200'\n`,
       'utf8');
     chmodSync(path.join(bin, 'curl'), 0o755);
     expect(run(bin).rc).not.toBe(0);

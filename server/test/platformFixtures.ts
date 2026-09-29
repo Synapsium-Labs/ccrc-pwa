@@ -27,6 +27,30 @@ export const describeDarwin = describe.skipIf(!IS_DARWIN);
 export const itLinux = it.skipIf(IS_DARWIN);
 export const itDarwin = it.skipIf(!IS_DARWIN);
 
+/** The two `python3 -c` programs `ccrc install` runs on macOS (W6 Task 2),
+ *  in the bytes `ccd/ccrc` spells them: the Darwin arm of `_plat_ln_swap` —
+ *  the `~/ccrc` flip, one `os.replace` — and `cmd_install`'s preflight
+ *  probe, which proves an interpreter RUNS (macOS's `/usr/bin/python3` is an
+ *  `xcode-select` stub until the Command Line Tools are installed). The
+ *  `python3` stubs of `ccrc-install.test.ts` and `ccrc-update.test.ts` hand
+ *  exactly these to the real interpreter and refuse every other `-c`, so a
+ *  new `python3 -c` on the install path is seen, not silently run.
+ *  `macos-platform.test.ts` pins the first against `_plat_ln_swap`'s argv
+ *  with its own `PY` (W6 Task 1). */
+export const DARWIN_PYTHON3_PROGRAMS = [
+  'import os, sys; os.replace(sys.argv[1], sys.argv[2])',
+  'import os',
+] as const;
+
+/** The stubs' `-c` arm: one sh line, empty when `real` (a resolved
+ *  python3) is empty — a box with no python3 runs every Linux case, whose
+ *  flip is `mv -fT` and whose preflight asks for no python3. */
+export function python3ProgramArm(real: string): string[] {
+  if (real === '') return [];
+  const pats = DARWIN_PYTHON3_PROGRAMS.map((prog) => `'${prog}'`).join('|');
+  return [`if [ "$1" = "-c" ]; then case "$2" in ${pats}) exec '${real}' "$@" ;; esac; fi`];
+}
+
 /** The service manager binary a fixture must stub on this platform. */
 export const MANAGER_BIN = IS_DARWIN ? 'launchctl' : 'systemctl';
 

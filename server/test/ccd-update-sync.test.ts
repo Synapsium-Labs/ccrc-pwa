@@ -202,6 +202,35 @@ describe('ccd-update-sync: one GET of the node\'s own route, installed by rename
     expect(readFileSync(join(wss, 'curl.argv'), 'utf8')).toContain('--max-time 20');
   });
 
+  // W6 Task 8A, review 167's F7 (needs an environment ccrc did not write):
+  // curl reads `--max-time 0` as NO LIMIT, so an unvalidated `0` in the user
+  // manager's environment removed the pull's only time bound. Each bad value
+  // warns naming the variable, falls back to 20, and the pull still runs.
+  it.each([
+    ['0', '0'], ['a negative', '-5'], ['not a number', 'soon'], ['a float', '1.5'],
+    ['over an hour', '3601'], ['leading zeros', '007'], ['whitespace', ' 5'],
+  ])('CCRC_UPDATE_SYNC_TIMEOUT %s (%j) warns, is never handed to curl, and the pull falls back to 20 (review 167 F7)', (_what, bad) => {
+    const home = box('upd-sync-timeout-bad-');
+    answer(home, intentDoc());
+    const r = sync(home, { CCRC_UPDATE_SYNC_TIMEOUT: bad });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toContain(`ccd-update-sync: WARN: CCRC_UPDATE_SYNC_TIMEOUT='${bad}' is not a whole number of seconds from 1 to 3600 — using 20`);
+    const argv = readFileSync(join(home, 'curl.argv'), 'utf8');
+    expect(argv).toContain('--max-time 20 ');
+    expect(argv).not.toMatch(/--max-time (0|-|soon|1\.5|3601|007| )/);
+  });
+
+  it('CCRC_UPDATE_SYNC_TIMEOUT: a good value passes unchanged and unwarned, and so do unset and empty (the default, silently)', () => {
+    for (const [v, want] of [['1', '1'], ['3600', '3600'], ['45', '45'], [undefined, '20'], ['', '20']] as const) {
+      const home = box('upd-sync-timeout-ok-');
+      answer(home, intentDoc());
+      const r = sync(home, v === undefined ? {} : { CCRC_UPDATE_SYNC_TIMEOUT: v });
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr, `${v}`).not.toContain('WARN');
+      expect(readFileSync(join(home, 'curl.argv'), 'utf8'), `${v}`).toContain(`--max-time ${want} `);
+    }
+  });
+
   it('hands the box token to curl on STDIN — never in argv, never in the environment', () => {
     const home = box('upd-sync-token-');
     answer(home, intentDoc());
@@ -305,6 +334,36 @@ describe('ccd-update-sync: a transport failure writes nothing', () => {
 });
 
 describe('ccd-update-sync: no credential or absolute home path in a printed line (fix round 1 item 11 / review 155 C18)', () => {
+  // W6 Task 8A, review 167's F5: `redact`'s HOME rule is anchored BEFORE the
+  // home as well as after it, exactly as ccd/ccrc's `_upd_redact` is — and the
+  // two copies' HOME sections are byte-identical, so neither can drift.
+  it('redact: a HOME that is the suffix of a longer path stays whole (`/srv/home/u/x`), a real one still becomes ~, and the section equals _upd_redact\'s (review 167 F5)', () => {
+    const src = readFileSync(SYNC, 'utf8');
+    const block = /^redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
+    expect(block, 'ccd-update-sync has no redact block').not.toBeNull();
+    const home = mkTmp('upd-sync-redact-unit-');
+    const call = (text: string, h: string): string => {
+      const env = ghContainedEnv(home, { HOME: h, PATH: process.env['PATH'] ?? '' }, { systemd: true, tmux: true });
+      const p = spawnSync('bash', ['-c', [block![0], 'redact "$1"'].join('\n'), '_', text], { env, encoding: 'utf8' });
+      expect(p.status, p.stderr).toBe(0);
+      return p.stdout;
+    };
+    expect(call('/srv/home/u/x', '/home/u')).toBe('/srv/home/u/x');
+    expect(call('/srv/home/u:/usr/bin', '/home/u')).toBe('/srv/home/u:/usr/bin');
+    expect(call('/srv/home/u', '/home/u')).toBe('/srv/home/u');
+    expect(call('cannot read /home/u/.ccrc/agent.env', '/home/u')).toBe('cannot read ~/.ccrc/agent.env');
+    expect(call('K=/home/u/x', '/home/u')).toBe('K=~/x');
+    expect(call('/home/u', '/home/u')).toBe('~');
+    expect(call('http://h/p', '/')).toBe('http://h/p');
+    const section = (text: string, fn: string): string => {
+      const i = text.indexOf('  local home="${HOME:-}"\n', text.indexOf(`${fn}() {`));
+      return text.slice(i, text.indexOf("  printf '%s' \"$s\"\n}", i));
+    };
+    const ccrcSrc = readFileSync(CCRC, 'utf8');
+    expect(section(src, 'redact').length, 'the HOME section was not found').toBeGreaterThan(200);
+    expect(section(src, 'redact')).toBe(section(ccrcSrc, '_upd_redact'));
+  });
+
   it('a CCRC_SERVER_URL carrying userinfo never reaches stderr on a curl failure (rc 6)', () => {
     const secret = 'hunter2';
     const home = box('upd-sync-redact-url-', { url: `http://alice:${secret}@nonexistent.invalid` });
