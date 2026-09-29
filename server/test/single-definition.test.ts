@@ -1401,6 +1401,10 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
       // W6 Task 2: `_ver_keep_state` copies the stamp into the version
       // directory it describes — a reader, through one local.
       'local from_stamp="$BOX_STAMP_FILE"',
+      // D-3465 (d), review 179 I1: `_inst_stamp_unname` removes the box's stamp
+      // after a refused kept-stamp fallback on a run that flipped `~/ccrc` — a
+      // writer, through one local (`_inst_stamp`'s `dest=` idiom below).
+      'local dest="$BOX_STAMP_FILE" left="unreadable"',
       'mkdir -p "${BOX_STAMP_FILE%/*}" || _ccrc_die "cannot create ${BOX_STAMP_FILE%/*}"',
       '_inst_atomic "$shipped" "$BOX_STAMP_FILE" 644',
       'local src sha ref dirty version vfield tmp why rc=0 dest="$BOX_STAMP_FILE"',

@@ -8832,7 +8832,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     // The kept spine ran FROM the running version: Task 2's `running` answer,
     // with its kept record present, so nothing was copied and no npm ci ran.
     expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
-    expect(r.stdout).toMatch(/^install: tree: v1\.0\.0 is complete \(its kept install record is present\) — no npm ci$/m);
+    expect(r.stdout).toMatch(/^install: tree: v1\.0\.0 is kept \(its install record is present and its digest re-measures equal\) — no npm ci$/m);
     expect(r.stdout).toMatch(/^update: gate: both answers on v1\.0\.0 /m);
     expect(r.stdout).toMatch(new RegExp(`^update: REVERTED \\(arm 1\\): this box runs v1\\.0\\.0 again — \\$HOME/ccrc never left \\$HOME/ccrc-versions/v1\\.0\\.0; its own spine re-ran, no download — spine died at ${named}; gate: `, 'm'));
     expect(r.stdout).not.toMatch(/^update: arm 2|REVERTED \(arm [23]\)/m);
@@ -8888,7 +8888,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     // The kept spine ran FROM the running version: Task 2's `running` answer,
     // with its kept record present, so nothing was copied and no npm ci ran.
     expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
-    expect(r.stdout).toMatch(/^install: tree: v1\.0\.0 is complete \(its kept install record is present\) — no npm ci$/m);
+    expect(r.stdout).toMatch(/^install: tree: v1\.0\.0 is kept \(its install record is present and its digest re-measures equal\) — no npm ci$/m);
     expect(r.stdout).toMatch(/^update: gate: both answers on v1\.0\.0 /m);
     expect(r.stdout).toContain('update: REVERTED (arm 1): this box runs v1.0.0 again — $HOME/ccrc never left $HOME/ccrc-versions/v1.0.0; its own spine re-ran, no download — spine died at _inst_tree');
     expect(r.stdout).not.toMatch(/^update: arm 2|REVERTED \(arm [23]\)/m);
@@ -10875,6 +10875,13 @@ describe('"kept" is a statement about the version\'s bytes: a digest in the reco
     { what: 'a name holding a backslash cannot be measured either',
       plant: (root) => writeFileSync(join(root, 'agent', 'a\\b'), 'x\n'),
       says: 'rc=2 why=its digest could not be measured (a path holds a newline or a backslash in a name)' },
+    // GNU `sha256sum` escapes a carriage return in a name exactly as it does a
+    // newline or a backslash (its line then starts with `\`), and the batched read
+    // refuses the line — by a different route than the two names above, with the
+    // same answer: unmeasured. BSD `shasum` does not escape it, so this row is Linux's.
+    ...(process.platform === 'darwin' ? [] : [{ what: 'a name holding a carriage return cannot be measured either (sha256sum escapes it, so the batched read refuses the line — a different route to the same answer)',
+      plant: (root: string) => writeFileSync(join(root, 'agent', 'a\rb'), 'x\n'),
+      says: 'rc=2 why=its digest could not be measured (a file could not be hashed)' }]),
     { what: 'a fifo cannot be measured',
       plant: (root) => { spawnSync('mkfifo', [join(root, 'agent', 'ff')]); },
       says: 'rc=2 why=its digest could not be measured (an entry that is neither a regular file, a directory nor a link (agent/ff))' },
@@ -11052,6 +11059,46 @@ describe('"kept" is a statement about the version\'s bytes: a digest in the reco
     expect(dp.code).toBe(cp.code);
     expect(dp.stdout.replace(/written-through/g, 'complete')).toBe(cp.stdout);
     expect(readdirSync(join(dirty, 'ccrc-versions')).sort()).toEqual(readdirSync(join(clean, 'ccrc-versions')).sort());
+  }, 120_000);
+});
+
+// ── M1 (review 179 fix round 1): the listing's third word ─────────────────────
+describe('`ccrc versions` says `unmeasured` for a version kept before digests existed — not `complete` (review 179 M1, D-3465 (d))', () => {
+  it('a version with a record and no digest lists `unmeasured`; the verdicts, the count and what --prune removes are exactly what they are for the same box with that version clean', () => {
+    const NAMES = ['v1.0.4', 'v1.0.3', 'v1.0.2', 'v1.0.1', 'v1.0.0'];
+    const box = (prefix: string, predigest: string[]): string => {
+      const home = freshUpdateBox(prefix);
+      NAMES.forEach((n, i) => {
+        const root = installVersionedTree(home, n, { link: i === 0, digest: !predigest.includes(n), stamp: { sha: 'b'.repeat(40), version: n } });
+        const t = 1_800_000_000 - i * 100;
+        utimesSync(join(root, '.ccrc-installed'), t, t);
+      });
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v1.0.4', 'b'.repeat(40)));
+      writeFileSync(join(home, 'fixture-unit-state'), 'inactive\n');
+      return home;
+    };
+    const versions = (home: string, args: string[] = []): Result => {
+      const env = { ...updateEnv(home), CCRC_VERSIONS_KEEP: '2' };
+      replantDoctorStubs(home);
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'versions', ...args], { env, encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    const clean = box('ccrc-fix1-m1-clean-', []);
+    const pre = box('ccrc-fix1-m1-predigest-', ['v1.0.3', 'v1.0.0']);
+    const cl = versions(clean);
+    const pl = versions(pre);
+    expect(pl.code).toBe(cl.code);
+    expect(pl.stdout).toMatch(/^ {4}v1\.0\.3 {2}unmeasured {2}kept: newest 2$/m);
+    expect(pl.stdout).toMatch(/^ {4}v1\.0\.0 {2}unmeasured {2}prunable$/m);
+    expect(pl.stdout).toMatch(/^ {4}v1\.0\.2 {2}complete {2}kept: newest 2$/m);
+    // The word never feeds a verdict: replace it, and the two listings are the same bytes.
+    expect(pl.stdout.replace(/unmeasured/g, 'complete')).toBe(cl.stdout);
+    const cp = versions(clean, ['--prune']);
+    const pp = versions(pre, ['--prune']);
+    expect(pp.code).toBe(cp.code);
+    expect(pp.stdout.replace(/unmeasured/g, 'complete')).toBe(cp.stdout);
+    expect(readdirSync(join(pre, 'ccrc-versions')).sort()).toEqual(readdirSync(join(clean, 'ccrc-versions')).sort());
   }, 120_000);
 });
 

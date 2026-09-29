@@ -666,6 +666,9 @@ function runInstall(home: string, args: string[] = ['install'],
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
+/** The tool `_plat_sha256` runs on this platform (the platform layer's two arms). */
+const SHA256_TOOL = process.platform === 'darwin' ? 'shasum' : 'sha256sum';
+
 /** A PATH with everything this verb shells out to EXCEPT one named tool: the
  *  poison directory at the head (so `gh`/`curl`/`systemctl`/`loginctl` stay
  *  contained) then a directory of symlinks to the real binaries the steps use.
@@ -728,10 +731,19 @@ function pathWithout(home: string, missing: string): string {
   // `ln -sfn`, and `_ver_layout` reads the link back with plain `readlink`.
   // A PATH without them is a box that places a whole tree and then cannot
   // point at it — a second absence inside a fixture about one.
+  //
+  // `sha256sum` (`shasum` on macOS — `_plat_sha256`'s two arms) joins it in
+  // review 179 fix round 1 (M2), for the same trap in a fourth shape: it is
+  // now an INSTALL-path tool. Every placing run measures the tree's digest
+  // through it (`_ver_digest_r1`, D-3465), and a PATH without it makes that
+  // measurement impossible — so `pathWithout(home, 'git')` would have been a
+  // fixture about TWO absences, whose placing run keeps nothing with a WARN.
+  // The absence that IS the subject has its own case (`pathWithout(home,
+  // SHA256_TOOL)`): the digest is uncomputable, so the version is not kept.
   for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod', 'cmp', 'date',
     'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
     'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat', 'grep', 'awk', 'realpath',
-    'ln', 'readlink',
+    'ln', 'readlink', SHA256_TOOL,
     // macOS: the service manager, its plist linter, and `uname`. The last one
     // is not decoration — `ccd`'s platform detection prefers bash's own
     // `$OSTYPE` precisely so a PATH without `uname` cannot silently answer
@@ -2567,7 +2579,7 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
     expect(existsSync(join(home, 'rsync-argv')), 'rsync ran against the running version').toBe(false);
-    expect(r.stdout).toMatch(/^install: tree: v9\.9\.0 is complete \(its kept install record is present\) — no npm ci$/m);
+    expect(r.stdout).toMatch(/^install: tree: v9\.9\.0 is kept \(its install record is present and its digest re-measures equal\) — no npm ci$/m);
     expect(existsSync(join(home, 'npm-argv')), 'npm ci emptied the running version\'s node_modules').toBe(false);
     expect(r.stdout).not.toMatch(/one rename$/m);
     expect(readlinkSync(join(home, 'ccrc'))).toBe(vroot(home, 'v9.9.0'));
@@ -2749,7 +2761,7 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     writeFileSync(join(home, '.ccrc', 'build.json'), read(join(root, '.ccrc-stamp.json')));
     writeFileSync(join(home, '.ccrc', 'installed'), `${'9'.repeat(40)}\n`);
-    const r = sourced(home, join(REPO, 'ccd', 'ccrc'), '_plat_sha256() { return 1; }; _ver_keep_state install 1');
+    const r = sourced(home, join(REPO, 'ccd', 'ccrc'), "_plat_sha256() { return 1; }; _ver_keep_state install v9.9.0");
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toContain("install: versions: WARN: could not keep v9.9.0's stamp and install record in its directory (its digest could not be measured (a file could not be read)) — no flip can return to it; arm 2 still can");
     for (const f of ['.ccrc-stamp.json', '.ccrc-digest', '.ccrc-installed']) {
@@ -2783,7 +2795,7 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
     // (d) the npm-ci skip takes the bytes' answer: this is an in-place npm ci.
-    expect(r.stdout).not.toMatch(/is complete \(its kept install record is present\) — no npm ci/);
+    expect(r.stdout).not.toMatch(/is kept \(its install record is present and its digest re-measures equal\) — no npm ci/);
     expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([vroot(home, 'v9.9.0', 'server')]);
     // (d) the kept-stamp fallback takes it too: the box keeps ITS stamp.
     expect(r.stdout).toMatch(/^install: stamp: v9\.9\.0's kept stamp is not installed — it is not a kept version \(its tree is no longer the one that was kept /m);
@@ -2826,6 +2838,140 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(r.stdout).not.toMatch(/^install: versions: kept v9\.9\.1's stamp/m);
     expect(read(join(other, '.ccrc-digest'))).toBe(digestBefore);
     expect(keptAnswer(home, 'v9.9.1')).toMatch(/^rc=3 /);
+  });
+
+  it('the other refusal: a source tree that is NOT a placed version but carries a stray kept stamp is PLACED by copy (how=copy) — its kept stamp is refused as "not a version under $HOME/ccrc-versions", and because that run flipped `~/ccrc` the stale box stamp is removed too (review 179 I1)', () => {
+    const home = freshBox('ccrc-install-ver-stray-stamp-');
+    const tree = treeRoot(home);
+    writeFileSync(join(tree, '.ccrc-stamp.json'), `${JSON.stringify({ sha: 'd'.repeat(40), ref: 'main', builtAt: '2026-09-23T00:00:00Z', dirty: false, version: 'v9.9.9' })}\n`);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), `${JSON.stringify({ sha: 'e'.repeat(40), ref: 'main', builtAt: '2026-09-20T00:00:00Z', dirty: false })}\n`);
+    writeFileSync(join(home, '.ccrc', 'installed'), `${'e'.repeat(40)}\n`);
+    const r = runInstall(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^install: tree: placed /m);
+    expect(r.stdout).toMatch(/^install: stamp: the kept stamp beside this tree is not installed — this tree is not a version under \$HOME\/ccrc-versions$/m);
+    expect(r.stdout).toMatch(/^install: stamp: removed the box's stamp \(it named eeeeeeeeeeee, the build this box just left\) — ccrc version will say unstamped$/m);
+    expect(existsSync(join(home, '.ccrc', 'build.json')), 'the box kept a stamp naming a build it no longer runs').toBe(false);
+    expect(r.stdout).toMatch(/^install: installed: not recorded — this box has no readable build stamp/m);
+  });
+
+  it('`_inst_stamp_shipped` resolves no path physically: it reads the version name `_inst_tree` measured (`INST_TREE_HOW`/`INST_TREE_NAME`) — constraint 3 lists the only physical resolutions, and a second `pwd -P` on `~/ccrc` is not among them (review 179 M6). A literal-absence pin, honest as one', () => {
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const start = src.indexOf('\n_inst_stamp_shipped() {');
+    expect(start, '_inst_stamp_shipped is gone or renamed — update this pin WITH the name').toBeGreaterThan(0);
+    const end = src.indexOf('\n}\n', start);
+    const body = src.slice(start, end);
+    expect(body).toContain('INST_TREE_NAME');
+    for (const banned of ['pwd -P', 'readlink -f', 'realpath', 'cd -P']) {
+      expect(body, `_inst_stamp_shipped resolves a path physically (${banned})`).not.toContain(banned);
+    }
+  });
+
+  it('the digest is an install-path tool now: with `sha256sum` (`shasum` on macOS) ABSENT from PATH a placing run cannot measure the tree, so it keeps NOTHING — the WARN names why, no stamp copy, digest or record is written, and the version never reads kept (review 179 M2, D-3465 (c))', () => {
+    const home = freshBox('ccrc-install-ver-no-sha256-');
+    const sha = gitInit(treeRoot(home));
+    const name = `untagged-${sha.slice(0, 12)}`;
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, SHA256_TOOL) });
+    expect(r.stdout, `stderr: ${r.stderr}`).toMatch(new RegExp(`^install: versions: WARN: could not keep ${name}'s stamp and install record in its directory \\(its digest could not be measured \\(`, 'm'));
+    for (const f of ['.ccrc-stamp.json', '.ccrc-digest', '.ccrc-installed']) {
+      expect(existsSync(vroot(home, name, f)), `${f} was written by a run that could not measure the tree`).toBe(false);
+    }
+    // never "kept": a version with no record reads incomplete (rc 2), whatever the PATH
+    expect(keptAnswer(home, name)).toMatch(/^rc=2 why=no /);
+  });
+
+  it('_ver_keep_state records a fresh digest only for the version THIS run placed: a placed name that `~/ccrc` no longer names records nothing — a concurrent plain install re-pointed the link between this run\'s flip and its keep (review 179 M3, D-3465 (b))', () => {
+    const home = mkTmp('ccrc-install-ver-placed-name-');
+    const root = installVersionedTree(home, 'v9.9.0', { digest: false, stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), read(join(root, '.ccrc-stamp.json')));
+    writeFileSync(join(home, '.ccrc', 'installed'), `${'9'.repeat(40)}\n`);
+    expect(keptAnswer(home, 'v9.9.0')).toMatch(/^rc=2 why=no kept digest /);
+    // this run placed v9.9.1, but ~/ccrc names v9.9.0 by now: the bytes under v9.9.0 are not this run's
+    const other = sourced(home, join(REPO, 'ccd', 'ccrc'), '_ver_keep_state install v9.9.1');
+    expect(other.code, other.stderr).toBe(0);
+    expect(other.stdout).toContain('install: versions: this run placed v9.9.1, but $HOME/ccrc names v9.9.0 by now — no fresh digest is recorded for bytes this run did not place');
+    expect(other.stdout).toMatch(/^install: versions: v9\.9\.0 is NOT kept again by this run — no kept digest /m);
+    expect(existsSync(join(root, '.ccrc-digest')), 'a digest was blessed over bytes this run did not place').toBe(false);
+    expect(keptAnswer(home, 'v9.9.0')).toMatch(/^rc=2 why=no kept digest /);
+    // control: the name it placed IS the name ~/ccrc has — a fresh digest, and the version reads kept
+    const same = sourced(home, join(REPO, 'ccd', 'ccrc'), '_ver_keep_state install v9.9.0');
+    expect(same.code, same.stderr).toBe(0);
+    expect(same.stdout).toMatch(/^install: versions: kept v9\.9\.0's stamp and install record /m);
+    expect(read(join(root, '.ccrc-digest'))).toMatch(/^1:[0-9a-f]{64}\n$/);
+    expect(keptAnswer(home, 'v9.9.0')).toBe('rc=0 why=');
+  });
+
+  it('_ver_keep_state with NO placed name (a `running`/`placed` spine, or a pre-W6 spine that wrote in place) takes the keep again exactly when the recorded digest re-measures equal — re-placed bytes that measure equal are re-kept, bytes that differ are not (review 179 M4; D-3465 (b))', () => {
+    const home = mkTmp('ccrc-install-ver-rekeep-');
+    const root = installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), read(join(root, '.ccrc-stamp.json')));
+    writeFileSync(join(home, '.ccrc', 'installed'), `${'9'.repeat(40)}\n`);
+    const digest = read(join(root, '.ccrc-digest'));
+    const eq = sourced(home, join(REPO, 'ccd', 'ccrc'), "_ver_keep_state update ''");
+    expect(eq.stdout).toMatch(/^update: versions: kept v9\.9\.0's stamp and install record /m);
+    expect(read(join(root, '.ccrc-digest'))).toBe(digest);
+    writeFileSync(join(root, 'shared', 'WRITTEN-THROUGH'), 'x\n');
+    const differ = sourced(home, join(REPO, 'ccd', 'ccrc'), "_ver_keep_state update ''");
+    expect(differ.stdout).toMatch(/^update: versions: v9\.9\.0 is NOT kept again by this run — its tree is no longer the one that was kept /m);
+    expect(read(join(root, '.ccrc-digest')), 'the digest was rewritten over bytes this run did not place').toBe(digest);
+  });
+
+  /** A W6 box that ALREADY completed an install of v9.9.0 (pointed at, kept,
+   *  its stamp and record in `~/.ccrc`) plus a second placed version v9.9.1
+   *  that is not pointed at. The state the review's I1 probe started from —
+   *  the existing `ANOTHER placed version` pin starts from a box with NO
+   *  stamp, which is why it could not see the carry-forward. */
+  const stampedBoxWithOther = (prefix: string, other: { writeThrough: boolean }): { home: string; oldRoot: string; otherRoot: string } => {
+    const home = mkTmp(prefix);
+    const oldRoot = installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    const otherRoot = installVersionedTree(home, 'v9.9.1', { link: false, stamp: { sha: 'c'.repeat(40), version: 'v9.9.1' } });
+    healthyDoctorBox(home);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), read(join(oldRoot, '.ccrc-stamp.json')));
+    writeFileSync(join(home, '.ccrc', 'installed'), `${'9'.repeat(40)}\n`);
+    if (other.writeThrough) writeFileSync(join(otherRoot, 'shared', 'WRITTEN-THROUGH'), 'x\n');
+    return { home, oldRoot, otherRoot };
+  };
+
+  it('a run of ANOTHER placed version\'s ccrc, that version written through, from a box that ALREADY carries a stamp: the flip happens, so the box stamp that names the build the box LEFT is removed — the install is not recorded as completed for a build that is not running, and `ccrc version` says unstamped (D-3465 (d); review 179 I1)', () => {
+    const { home, otherRoot } = stampedBoxWithOther('ccrc-install-ver-other-wt-stamped-', { writeThrough: true });
+    expect(keptAnswer(home, 'v9.9.1'), 'the control is broken: the placed tree must read as written through').toMatch(/^rc=3 /);
+    const r = runInstall(home, ['install'], {}, { from: vroot(home, 'v9.9.1', 'ccd', 'ccrc') });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^install: tree: v9\.9\.1 is already placed at /m);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(otherRoot);
+    // the stamp that named v9.9.0's build is gone, and the run says so
+    expect(existsSync(join(home, '.ccrc', 'build.json')), 'the box kept a stamp naming the build it just left').toBe(false);
+    expect(r.stdout).toMatch(/^install: stamp: v9\.9\.1's kept stamp is not installed — it is not a kept version /m);
+    expect(r.stdout).toMatch(/^install: stamp: removed the box's stamp \(it named 999999999999, the build this box just left\) — ccrc version will say unstamped$/m);
+    // so `_inst_installed` takes its no-stamp arm: nothing is recorded as completed, nothing is kept
+    expect(r.stdout).toMatch(/^install: installed: not recorded — this box has no readable build stamp/m);
+    expect(r.stdout).not.toMatch(/^install: installed: 9{40} /m);
+    expect(r.stdout).not.toMatch(/^install: versions: kept v9\.9\.1's stamp/m);
+    // what the box then says of itself
+    const v = runInstall(home, ['version'], {}, { from: join(home, 'ccrc', 'ccd', 'ccrc') });
+    expect(`${v.stdout}${v.stderr}`).toMatch(/unstamped \(no /m);
+    expect(keptAnswer(home, 'v9.9.1')).toMatch(/^rc=3 /);
+  });
+
+  it('control: the same flip onto a version that IS kept installs that version\'s kept stamp, so the box names the build it now runs (nothing is removed)', () => {
+    const { home } = stampedBoxWithOther('ccrc-install-ver-other-kept-stamped-', { writeThrough: false });
+    expect(keptAnswer(home, 'v9.9.1')).toBe('rc=0 why=');
+    const r = runInstall(home, ['install'], {}, { from: vroot(home, 'v9.9.1', 'ccd', 'ccrc') });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).not.toMatch(/removed the box's stamp/);
+    expect(JSON.parse(read(join(home, '.ccrc', 'build.json'))).sha).toBe('c'.repeat(40));
+  });
+
+  it('control: `ccrc install` from the LAUNCHER (how=running) over a written-through pointed-at version keeps the box stamp — it names the version `~/ccrc` still points at, so nothing is removed', () => {
+    const { home, boxStamp } = writtenThroughBox('ccrc-install-ver-launcher-wt-stamp-keep-');
+    const r = runInstall(home, ['install'], {}, { from: join(home, 'ccrc', 'ccd', 'ccrc') });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).not.toMatch(/removed the box's stamp/);
+    expect(read(join(home, '.ccrc', 'build.json'))).toBe(boxStamp);
   });
 
   itDarwin('refuses on macOS without python3, before anything is written — the flip is one rename through os.replace', () => {
