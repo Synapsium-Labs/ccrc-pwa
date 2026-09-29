@@ -1570,7 +1570,7 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       'if [ ! -e "$BOX_INSTALLED_FILE" ]; then',
       // `_upd_unwind` (D-3462): rewrites the record cmd_update cleared, tmp + one rename.
       'tmp="$BOX_INSTALLED_FILE.tmp.$$"',
-      'if printf \'%s\' "$rec_body" > "$tmp" 2>/dev/null && chmod 644 "$tmp" && mv -f -- "$tmp" "$BOX_INSTALLED_FILE" 2>/dev/null; then',
+      'if printf \'%s\' "$rec_body" > "$tmp" 2>/dev/null && chmod 644 "$tmp" && _plat_mv_notdir "$tmp" "$BOX_INSTALLED_FILE" 2>/dev/null; then',
       // _upd_restore_arm3 (wave 4, Task 6, D-3260):
       // removes the record a completed spine wrote before its gate failed.
       'if rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then',
