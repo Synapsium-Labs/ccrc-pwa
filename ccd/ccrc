@@ -18477,7 +18477,8 @@ _ver_gc() {
     # D-3456's window is back to the instant between the belt's read above and
     # this rename, not the length of the delete. A removal that does not finish
     # leaves `.pruning-<name>.<pid>`, which the next prune removes first
-    # (`_ver_sweep_leftovers`, called once before anything can stop it).
+    # (`_ver_sweep_leftovers`, called once the KEEP knob and the layout check
+    # have passed: a refused knob or a foreign/dangling `~/ccrc` sweeps nothing).
     gone="$BOX_VERSIONS_ROOT/.pruning-$n.$$"
     if ! _plat_mv_notdir "$BOX_VERSIONS_ROOT/$n" "$gone"; then
       echo "$lead could not prune \$HOME/ccrc-versions/$n — every version above it is intact"
@@ -18486,7 +18487,7 @@ _ver_gc() {
     if rm -rf -- "$gone"; then
       echo "$lead pruned \$HOME/ccrc-versions/$n (${VER_DOOMED_WHY[$i]})"
     else
-      echo "$lead could not finish pruning \$HOME/ccrc-versions/$n — it is already out of the version list and out of every reader's reach (a rename took it there; that is not a proof that nothing runs from it); its remains are at \$HOME/ccrc-versions/.pruning-$n.$$, which the next prune removes first, before it measures anything"
+      echo "$lead could not finish pruning \$HOME/ccrc-versions/$n — it is already out of the version list and out of every reader's reach (a rename took it there; that is not a proof that nothing runs from it); its remains are at \$HOME/ccrc-versions/.pruning-$n.$$, which the next prune removes first, once its KEEP knob and \$HOME/ccrc pass the prune's own checks (a refused knob, or a \$HOME/ccrc that is not a link to a version here, sweeps nothing)"
       rc=1
     fi
   done

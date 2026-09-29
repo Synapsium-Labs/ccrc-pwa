@@ -10516,7 +10516,7 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
       + `exec ${REAL_RM} "$@"\n`, { mode: 0o755 });
     const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
-    expect(r.stdout).toMatch(/^versions: could not finish pruning \$HOME\/ccrc-versions\/v1\.0\.0 — it is already out of the version list and out of every reader's reach \(a rename took it there; that is not a proof that nothing runs from it\); its remains are at \$HOME\/ccrc-versions\/\.pruning-v1\.0\.0\.[0-9]+, which the next prune removes first, before it measures anything$/m);
+    expect(r.stdout).toMatch(/^versions: could not finish pruning \$HOME\/ccrc-versions\/v1\.0\.0 — it is already out of the version list and out of every reader's reach \(a rename took it there; that is not a proof that nothing runs from it\); its remains are at \$HOME\/ccrc-versions\/\.pruning-v1\.0\.0\.[0-9]+, which the next prune removes first, once its KEEP knob and \$HOME\/ccrc pass the prune's own checks \(a refused knob, or a \$HOME\/ccrc that is not a link to a version here, sweeps nothing\)$/m);
     // not listed, and no directory under the version's own name
     expect(r.stdout).not.toMatch(/^ {4}v1\.0\.0 /m);
     const dirs = versionDirs(home);
