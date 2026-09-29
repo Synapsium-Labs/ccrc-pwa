@@ -8428,6 +8428,66 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(r.stderr).toContain(`update: v2.0.0 was installed, but the box did not come back healthy on it (${GATE_DENIED.slice('gate: '.length)}) — exit 4.`);
   }, 60_000);
 
+  // C26 (review 155; W6 Task 8A). Arm 2 runs its restore child from the tree
+  // just installed. After `ccrc update --to <a release older than wave 4>
+  // --downgrade` whose gate fails, that tree's `ccrc` does not know
+  // `--no-gate` or `--from`, so the child exits 2 and arm 3 used to leave a
+  // MIXED tree. The pre-update version directory is kept, so arm 1 — the flip
+  // back — answers before arm 2 is reached.
+  it('C26: a gate-failed downgrade onto a release older than wave 4 ends on ARM 1 — ~/ccrc flipped back to the previous version directory, byte-unchanged, and no mixed tree: the old tree\'s ccrc, which refuses --no-gate and --from, is never asked to be the restore child (review 155 C26; spec §11 arm 1)', () => {
+    const home = freshUpdateBox('ccrc-update-arm1-preW4-');
+    const cur = plantW6Box(home, 'v2.0.0', V2_SHA, 'server');
+    // v2.0.0's own spine is the recorder, and it clears the stub shim's
+    // `fixture-health-version` so that, once the kept stamp is back, /health
+    // answers the box's stamp (v2.0.0) and not the release just "installed".
+    writeFileSync(join(cur, 'ccd', 'ccrc'), KEPT_SPINE.replace('#!/bin/sh\n', '#!/bin/sh\nrm -f "$HOME/fixture-health-version"\n'), { mode: 0o755 });
+    // The release older than wave 4: its spine writes THROUGH ~/ccrc (it
+    // predates versioned installs, so `_upd_legacy_target` hands it a
+    // directory of its own) and places a `ccd/ccrc` that knows neither flag
+    // arm 2's child needs. It stamps the box as its own release.
+    packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
+    writeFileSync(join(home, 'fixture-old-stamp.json'), shippedStamp('v1.0.0', V1_SHA));
+    writeFileSync(join(home, 'fixture-on-install'), [
+      'mkdir -p "$HOME/ccrc/ccd" && cat > "$HOME/ccrc/ccd/ccrc" <<\'PREW4\'',
+      '#!/bin/sh',
+      'printf \'%s\\n\' "$0" "$@" > "$HOME/pre-w4-ccrc-argv"',
+      'case " $* " in *" --no-gate "*|*" --from "*) echo "ccrc: unknown option: $*" >&2; exit 2 ;; esac',
+      'exit 0',
+      'PREW4',
+      'chmod 755 "$HOME/ccrc/ccd/ccrc"',
+      'cp "$HOME/fixture-old-stamp.json" "$HOME/.ccrc/build.json"',
+    ].join('\n') + '\n');
+    writeFileSync(join(home, 'fixture-stub-installed'), 'yes\n');
+    // Its release never comes up; v2.0.0's does, once its stamp is back.
+    writeFileSync(join(home, 'fixture-health-deny'), 'v1.0.0\n');
+    const curBefore = treeDigest(cur);
+    const keptStamp = fileText(join(cur, '.ccrc-stamp.json'));
+    const keptRec = fileText(join(cur, '.ccrc-installed'));
+    const r = runUpdate(home, ['--to', 'v1.0.0', '--downgrade']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — /m);
+    expect(r.stdout).toContain('update: arm 1: v2.0.0 is kept at $HOME/ccrc-versions/v2.0.0 — flipping back to it (no download)');
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 1\): this box runs v2\.0\.0 again — \$HOME\/ccrc flipped back to \$HOME\/ccrc-versions\/v2\.0\.0, no download — /m);
+    // Arm 2 and arm 3 never ran: the old tree's ccrc was never the child,
+    // and nothing says MIXED.
+    expect(existsSync(join(home, 'pre-w4-ccrc-argv')), 'the old release\'s ccrc was run as arm 2\'s child').toBe(false);
+    expect(r.stdout).not.toMatch(/arm 2|arm 3|MIXED|deploy\.sh/);
+    expect(String(lastReport(home)['detail'])).toMatch(/^arm1: flipped back to v2\.0\.0; /);
+    expect(lastReport(home)['phase']).toBe('reverted');
+    // The previous version directory is what is active, byte for byte, with
+    // its stamp and record the box's again; the floor is where it was.
+    expect(linkOf(home)).toBe(cur);
+    expect(treeDigest(cur), 'the version the update replaced was written').toEqual(curBefore);
+    expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(keptStamp);
+    expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
+    expect(fileText(join(home, '.ccrc', 'floor'))).toBe('v2.0.0\n');
+    // The directory the old spine wrote into is not the active one. (It stays
+    // kept: `_ver_keep_state update` marks a completed spine before the gate,
+    // as it does for a W6 spine whose gate then fails — that is not this
+    // item's, and no restore path reads it as `current`.)
+    expect(linkOf(home)).not.toBe(join(home, 'ccrc-versions', 'v1.0.0'));
+  }, 60_000);
+
   // The marker the dying spine leaves, as the stub npm writes it. Since D-3457
   // an `_inst_tree`-marked death before the flip is "nothing replaced" (exit 1,
   // no gate), so these are the two shapes `_upd_step_moved` still reads as
