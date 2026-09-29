@@ -13850,13 +13850,19 @@ _rollback_previous_agrees_with_layout() {   # [role]
 # lock (a `--to` run, a detached run's child, a flip that cannot be made).
 # `why`, when given, is a whole line of its own — why the killed-flip state
 # (the one disagreement a rollback may act on, and only by flip) does not carry
-# this run — printed BEFORE the sentence, so the sentence stays byte-for-byte
-# what C27 always said.
+# this run, and the re-install that IS available (`ccrc update --to <tag>
+# --downgrade`) — printed BEFORE the sentence, so the sentence stays
+# byte-for-byte what C27 always said.
 # A `--to` run never read `previous`, so it is read here, for the sentence only.
 _rollback_refuse_layout() {   # <cur> <stamp_name> [why]
   local cur="$1" stamp_name="$2" why="${3:-}"
   [ -n "$UPD_PREV_TAG" ] || _upd_read_previous || :
-  [ -z "$why" ] || echo "$PROG: rollback: $(_upd_redact "$why")" >&2
+  # The reason line carries the WORKING remedy (review 179 fix round 1, R-B1):
+  # the sentence below ends "--to vX.Y.Z", which in this state meets the same
+  # refusal (a `--to` run of the stamp's own version is the killed-flip state
+  # too), so the way out — the typed re-install, never a rollback's fall-through
+  # — is said here, where `stamp_name` is the state's target (condition 1).
+  [ -z "$why" ] || echo "$PROG: rollback: $(_upd_redact "$why") — re-installing $stamp_name is a typed act, not a rollback's: ccrc update --to $stamp_name --downgrade" >&2
   _ccrc_die "rollback: ~/.ccrc/previous names ${UPD_PREV_TAG:-nothing usable}, but it cannot be trusted here — \$HOME/ccrc points at \$HOME/ccrc-versions/$cur while this box's stamp reads $stamp_name, so the last move was made by something that does not keep the layout (for example a pre-W6 release's updater after a rollback, or deploy.sh), and previous may not be the build before the last update. Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z"
 }
 

@@ -11242,7 +11242,13 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     expect(r.stderr).toMatch(SENTENCE);
     // The reason line, when conditions (1) to (3) held and (4)-(6) did not; none otherwise.
     if (reason === undefined) expect(r.stderr).not.toContain('the killed-flip state does not hold');
-    else expect(r.stderr).toContain(`rollback: the killed-flip state does not hold — ${reason}`);
+    else {
+      expect(r.stderr).toContain(`rollback: the killed-flip state does not hold — ${reason}`);
+      // R-B1: the sentence's own remedy (`--to vX.Y.Z`) meets this refusal again, so the
+      // WORKING one — the typed re-install — rides the reason line.
+      expect(r.stderr).toContain(`${reason} — re-installing v1.0.0 is a typed act, not a rollback's: ccrc update --to v1.0.0 --downgrade\n`);
+    }
+    if (reason === undefined) expect(r.stderr).not.toContain('ccrc update --to');
     expect(r.stderr).toContain('Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z');
     expectNoReinstall(home, link);
     expect(existsSync(join(home, '.ccrc', 'installed')) ? fileText(join(home, '.ccrc', 'installed')) : null,
@@ -11508,7 +11514,7 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     const r = rollbackRun(home, args);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(r.stderr).toMatch(SENTENCE);
-    expect(r.stderr).toContain('rollback: the killed-flip state holds, so this rollback may only flip, and the flip could not be made (the one rename that points $HOME/ccrc at $HOME/ccrc-versions/v1.0.0 failed) — it does not fall back to a re-install');
+    expect(r.stderr).toContain('rollback: the killed-flip state holds, so this rollback may only flip, and the flip could not be made (the one rename that points $HOME/ccrc at $HOME/ccrc-versions/v1.0.0 failed) — it does not fall back to a re-install — re-installing v1.0.0 is a typed act, not a rollback\'s: ccrc update --to v1.0.0 --downgrade\n');
     expect(r.stdout).not.toContain('rolling back by re-install instead');
     expectNoReinstall(home, v2);
     expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
