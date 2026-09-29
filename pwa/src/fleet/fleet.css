@@ -3309,6 +3309,7 @@ button.proj-card-pool::before {
   margin: 0;
   font-size: var(--fs-sm);
   color: var(--status-dead-text);
+}
 
 /* ------------------------------------------------------------------ *
  *  Typing caret (TypedLabel.tsx) — a plain glyph, never a blinking    *

@@ -16,8 +16,7 @@ import type { AuthStatus, AutoMode, CatalogueErrorReason, CatalogueState, NodeWi
 import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, SETTLED_UPDATE_STATES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode, isReleaseTag, isStampRead, isUpdateChannel } from '../../../shared/api';
 import { LOOPBACK_HOSTS } from '../../../shared/base-url';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
-import { Skeleton } from '../components/Skeleton';
-import { toast } from '../components/Toast';
+import { Skeleton, toast } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { isManagedNode, planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';

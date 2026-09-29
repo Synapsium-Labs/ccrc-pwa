@@ -922,11 +922,11 @@ describe('the hold composer', () => {
 describe('the pool chip and the strand are real cells, and the chip is a real target', () => {
   it('gives the tappable form a full-width 44px overlay without growing the chip', () => {
     const chip = ruleFor('.proj-card-pool');
-    expect(declValue(chip, 'line-height')).toBe('var(--leading-tight)');
+    expect(declValue(chip, 'line-height')).toBe('var(--lh-tight)');
 
     const rule = ruleFor('button.proj-card-pool::before');
     expect(declValue(rule, 'position')).toBe('absolute');
-    const vertical = norm('calc((var(--text-2xs) * var(--leading-tight) - var(--tap-min)) / 2)');
+    const vertical = norm('calc((var(--fs-2xs) * var(--lh-tight) - var(--tap-min)) / 2)');
     expect(declValue(rule, 'top')).toBe(vertical);
     expect(declValue(rule, 'bottom')).toBe(vertical);
     const horizontal = norm('min(0px, calc((100% - var(--tap-min)) / 2))');
@@ -1041,17 +1041,27 @@ describe('maximum pool name account-row fit (D-2688)', () => {
   });
 
   it('makes only the pool label yield room to the fixed gauges at 320px', () => {
-    const primitives = readFileSync(
-      path.join(import.meta.dirname, '..', 'src', 'components', 'primitives.css'), 'utf8');
+    // WAVE 2 CHANGED HOW THIS IS EXPRESSED, NOT WHAT IT IS. The sheet panel's
+    // horizontal padding used to be a `padding` declaration in primitives.css;
+    // it is now the `px-4` utility on the primitive's cva. The chain this
+    // assertion walks is therefore three links instead of one —
+    // `px-4` -> `--spacing-4` -> `--sp-4` -> 16px — and each is pinned below so
+    // breaking any one of them still reds this test.
+    const sheet = readFileSync(
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'sheet.tsx'), 'utf8');
+    const theme = readFileSync(
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'styles', 'theme.css'), 'utf8');
     const tokens = readFileSync(
-      path.join(import.meta.dirname, '..', 'src', 'styles', 'tokens.css'), 'utf8');
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'styles', 'tokens.css'), 'utf8');
     const viewportWidth = 320;
-    const sheetPanel = ruleIn(primitives, '.sheet-panel');
     const spacingFour = declValue(ruleIn(tokens, ':root'), '--sp-4');
     const rule = ruleFor('.acct-pool');
 
     expect(spacingFour).toBe('16px');
-    expect(declValue(sheetPanel, 'padding')).toContain('var(--sp-4)');
+    // the ordinary (non-full) panel pads by 4; the full variant deliberately
+    // runs to the glass edge with px-0, which is why this names the branch.
+    expect(sheet, 'the ordinary sheet panel no longer pads by 4').toContain('px-4');
+    expect(theme, '--spacing-4 no longer maps to --sp-4').toContain('--spacing-4: var(--sp-4)');
     expect(viewportWidth - 2 * Number.parseInt(spacingFour ?? '', 10)).toBe(288);
     expect(declValue(rule, 'flex')).toBe('1 1 0');
     expect(declValue(rule, 'min-width')).toBe('0');

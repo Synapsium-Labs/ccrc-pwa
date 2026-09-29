@@ -341,6 +341,16 @@ const GRANDFATHERED_UNCOVERED = new Set([
   'chat.css .ask-state.ask-unanswered',
   'chat.css .prompt-glyph',
   'chat.css .composer-input',
+  // The vendored preflight's own placeholder default (@ccrc/ui's reset.css),
+  // caught by THIS guard the first time both halves met: main introduced the
+  // grandfathered-census check, wave 1 introduced the stylesheet. It is
+  // unmeasurable by construction rather than by neglect — the selector is BARE
+  // `::placeholder`, so there is no host to recover a ground from, and the
+  // colour is `color-mix(in oklab, currentcolor 50%, transparent)`, i.e. a
+  // derivative of whatever ink its host already carries. The app's only real
+  // placeholder, `.composer-input::placeholder`, is listed on its own right
+  // below and measured where it actually renders.
+  'reset.css ::placeholder',
   'chat.css .composer-input::placeholder',
   'chat.css .attach-btn',
   'chat.css .attach-btn:disabled',

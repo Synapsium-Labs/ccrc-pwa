@@ -24,7 +24,7 @@ import type { ReactNode } from 'react';
 import type { RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { POOL_NAME_RE } from '../../../shared/roster';
-import { Sheet } from '../components/Sheet';
+import { Sheet } from '@ccrc/ui';
 import { poolOptions } from '../lib/pools';
 import './fleet.css';
 

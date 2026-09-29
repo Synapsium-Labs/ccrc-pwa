@@ -55,6 +55,16 @@ export function Sheet({
   return (
     <Drawer.Root
       open={open}
+      // THE FULL VARIANT GIVES THE PANEL'S DRAG BACK TO ITS CONTENT. Every
+      // other sheet holds a list that vaul's own scroll detection handles, so
+      // a downward swipe anywhere is a dismissal and should stay one. The
+      // terminal is not a list: its glass owns the wheel and the touch drag
+      // (that is the whole of the history this drawer exists to reach), and a
+      // panel that also claims the gesture wins it — measured on a phone, a
+      // swipe over the console collapsed the drawer instead of scrolling it.
+      // `handleOnly` leaves exactly one place that drags the panel: the
+      // grabber, which is why it becomes a real `Drawer.Handle` below.
+      handleOnly={full}
       onOpenChange={(next) => {
         if (!next) onClose();
       }}
@@ -84,14 +94,24 @@ export function Sheet({
           )}
         >
           {/* On-well furniture restates itself in the well's ink so it survives
-              the dark glass in the light theme too. */}
-          <div
-            aria-hidden="true"
-            className={cn(
-              'sheet-grabber mx-auto h-1 w-9 flex-none rounded-full',
-              full ? 'mb-2 bg-ink-on-well/30' : 'mt-1 mb-4 bg-edge-strong',
-            )}
-          />
+              the dark glass in the light theme too.
+
+              A DECORATIVE BAR CANNOT BE THE ONE THING THAT DRAGS. With
+              `handleOnly` above, the full sheet's only drag target is this
+              element, so it becomes vaul's own handle: that carries the
+              pointer wiring and an invisible hit area larger than the 4px bar
+              a thumb would otherwise have to find. The plain div stays for
+              every other sheet, where the whole panel is still the drag target
+              and the bar is only a hint. */}
+          {full
+            ? <Drawer.Handle
+                aria-hidden="true"
+                className="sheet-grabber mx-auto mb-2 h-1 w-9 flex-none rounded-full bg-ink-on-well/30"
+              />
+            : <div
+                aria-hidden="true"
+                className="sheet-grabber mx-auto mt-1 mb-4 h-1 w-9 flex-none rounded-full bg-edge-strong"
+              />}
           {eyebrow ? (
             <p
               className={cn(

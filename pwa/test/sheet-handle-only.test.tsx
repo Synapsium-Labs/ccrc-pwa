@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { Sheet } from '../src/components/Sheet';
+import { Sheet } from '@ccrc/ui';
 
 afterEach(cleanup);
 
@@ -110,7 +110,12 @@ describe('the full-height sheet census', () => {
   });
 
   it('every full-height Sheet gets its handle from Sheet itself, in the same branch as the flag', () => {
-    const src = readFileSync(path.join(SRC, 'components', 'Sheet.tsx'), 'utf8');
+    // The primitive moved to @ccrc/ui in wave 1; the invariant did not. Both
+    // assertions below are unchanged — the flag and the handle must still be
+    // chosen in ONE branch, or a future edit can set `handleOnly` without
+    // giving the panel a handle to drag by.
+    const src = readFileSync(
+      path.join(REPO, 'ui', 'src', 'primitives', 'sheet.tsx'), 'utf8');
     expect(src, 'the full variant no longer stands the panel down').toMatch(/handleOnly=\{full\}/);
     expect(src, 'the full variant renders no vaul handle to drag by')
       .toMatch(/full\s*\r?\n?\s*\?\s*<Drawer\.Handle/);

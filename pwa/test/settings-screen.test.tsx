@@ -29,7 +29,7 @@ import {
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { ApiError, api, apiErrorText, updateErrorText } from '../src/lib/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { declValue, ruleIn } from './cssRule';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');

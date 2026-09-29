@@ -14,7 +14,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { SessionScreen } from '../src/screens/SessionScreen';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { TEST_ROSTER } from './rosterFixture';

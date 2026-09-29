@@ -16,7 +16,7 @@ import type { BuildInfo } from '../../shared/buildinfo';
 import { ApiError, api, apiErrorText, moveSkipText, updateErrorText } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { planMove, type MoveIntent, type PlannedMove } from '../src/fleet/movePlan';
 import {
   MOVE_NOTHING_REQUESTED_TEXT, MOVE_REST_TEXT, MOVE_UNREADABLE_TEXT, MoveSendError, UpdateMoveSheet, sendMove,
