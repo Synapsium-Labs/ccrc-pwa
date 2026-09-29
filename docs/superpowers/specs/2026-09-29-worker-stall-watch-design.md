@@ -1,7 +1,12 @@
 # Worker stall watch — the server notices a silent session, delivers mail past background work, and escalates — design
 
-**Status:** rev 3, draft for the operator, 2026-09-29. Nothing here is approved or planned. §11 lists the decisions
+**Status:** rev 3.1, draft for the operator, 2026-09-29. Nothing here is approved or planned. §11 lists the decisions
 owed.
+- **Rev 3.1** applies the MekWarLive coordinator's read-back of S4 (mail 2526), checked against the worker's and the
+  implementer's transcripts. §3.2 gains the measured self-resume contrast. §6.2's clause stops counting an agent whose
+  completion says it may resume on its own as a wake; rev 3's text would have allowed S4's last turn-end. §2 prices the
+  coordinator's proposed Stop-hook variant, and the S4 row gains what the silence left exposed. Nothing else changed,
+  and these edits have not been re-reviewed.
 - **Rev 3** applies a two-agent verification of rev 2 (`wf_16d73a3d-58d`: application and consistency, code truth of the
   new text): 33 findings (9 major), all applied; §12 gains the conflicts rev 2 settled silently.
 - **Rev 2** applies a four-lens adversarial review (`wf_5461f658-6a0`: code truth, binding rules and safety,
@@ -40,7 +45,7 @@ working session sits idle for hours."
 | S1 | 09-16 20:00:04 | 71.4 h | turn ended mid-Task-3, pane summary, no mail | the coordinator was idle, then weekly-limit-locked; the worker's account later hit its monthly spend limit | operator typed "Resume" |
 | S2 | 09-19 21:13:35 | 157.5 h | turn ended mid-fix-round ("then the mail carrying F9's SHA…"), no mail — one hour after the worker mailed "I am not ending a turn without one again" | nothing woke either side | operator asked the coordinator "where are we?" |
 | S3 | 09-26 13:03:15 | 48.9 h | turn ended after a push, no mail | coordinator mails 2443/2445 gated `not-idle` for 2 days: an orphaned background wait loop (a `pgrep -f` self-match) held the live status at `shell`. Mail 2445's `gateCount` of 1,526 was read by both parties as "1,500 delivery attempts"; `gateCount` counts gate hits, and `attempts` was 0 | the memory-pressure reaper killed the loop; its task-notification woke the worker |
-| S4 | 09-28 21:52:51 | 8.3 h | turn ended on "The implementer is still running: it's waiting on `typecheck`", no mail | the notice it waited for was queued under a finished subagent's id and never drained (§3.2) | this spec's author mailed the coordinator by hand (mail 2524, 06:14) |
+| S4 | 09-28 21:52:51 | 8.3 h | turn ended on "The implementer is still running: it's waiting on `typecheck`", no mail; a faithful reading of the implementer's completion note (§3.2) | the notice it waited for was queued under a finished subagent's id and never drained (§3.2); for 8.3 h the implementer's work sat in 7 uncommitted files, beside 5 local commits held unpushed by design (coordinator's count, mail 2526) | this spec's author mailed the coordinator by hand (mail 2524, 06:14) |
 
 On 09-28, from 14:02 to about 19:40, five coordinator rulings (2448, 2450, 2458, 2463, 2464; one a D-number
 correction) also sat `queued`, gate `not-idle` (gate counts 369, 340, 275, 105, 105), while the worker kept working:
@@ -99,9 +104,16 @@ The coordinator offered two fixes. This spec builds the second, widened, and doe
 - The design-grade gate built for this review (held turn-ends, exempting only waits on a main-launched Agent, Workflow,
   Monitor or cron) fires 36 times a day (992 in 27.6 days), 87% followed by activity within 30 minutes, and catches 25
   of the 36.
-- Either one misses all 13 strict stalls that begin mid-turn (post-swap idle, API-error aborts, the consent gate, a
-  frozen tool), so it reaches about half of the 49. It cannot see Case D (no turn runs, so no Stop fires) or
-  undelivered mail.
+- After S4 the MekWarLive coordinator proposed a third variant (mail 2526): refuse a turn-end with no mail while a
+  background agent or Monitor is registered, or while the tree is dirty. That condition is the complement of the
+  tightest variant's exemption. 2,199 of the no-mail turn-ends had background work outstanding, about 80 a day before
+  the dirty-tree term is added. It reaches the 9–17 stalls that exemption loses, plus whatever the dirty-tree term
+  adds (unmeasured). In S4 it would have fired on all three of the worker's no-mail turn-ends in under four minutes
+  (21:49:06, 21:50:24, 21:52:51). Each one ended on the implementer, and the worker was actively steering it in each.
+  §5.2's E arm reaches S4's shape 10 minutes after the awaited task ends, and fires only then.
+- Every variant misses all 13 strict stalls that begin mid-turn (post-swap idle, API-error aborts, the consent gate, a
+  frozen tool), so none reaches more than 36 of the 49, and the two measured ones reach about half. None can see Case
+  D (no turn runs, so no Stop fires) or undelivered mail.
 - It has no backstop. It blocks once per turn (`stop_hook_active` is sticky per query), so a model that ends the turn
   again, or satisfies it with any mail, stalls unbounded. S2 began an hour after the worker promised compliance.
 - Its remedy is a mail that wakes the coordinator, at a measured p50 of 2.9 M tokens per coordinator mail turn, so its
@@ -160,8 +172,16 @@ to the main agent that is neither passive nor a poll event. Three kinds of item 
   Monitor `b989ocn62` expired at 21:56:31, was queued under the implementer's id, and sat there. A 3-day census found
   58 such notices never drained; a 7-day one found 11 idle episodes of 10 minutes or more plus 3 still open (up to 122 h).
 
-A background agent resumed with SendMessage does emit its completion, with a note that it "may resume on its own"
-while its own children run. In S4 that promised resume never happened.
+A background agent that stops while background work of its own still runs emits its completion with a note: it "may
+resume on its own when that work completes or reports … the result below may be interim". In S4 that promise held once
+and then failed:
+- The implementer's Monitor `bdao1etsu` expired at 21:49:51. It was drained into the stopped implementer within a
+  second and resumed it, and the implementer stopped again at 21:50:08.
+- The worker resumed it with SendMessage at 21:50:21. It armed Monitor `b989ocn62` and stopped at 21:52:48 with the same
+  note. That Monitor expired at 21:56:31 and was never drained.
+The worker's last sentence ("still running: it's waiting on `typecheck`") was a faithful reading of that note, not a
+stale belief. One contrast is not a mechanism: whether the SendMessage resume is what cost the self-resume is
+unmeasured.
 
 ### 3.3 The hook file is shared with subagents
 
@@ -667,12 +687,15 @@ same commit. It is numbered after landing-order's and continuity's clauses if th
 ### 6.2 The next free worker clause (pinned)
 
 > End a turn only on a wake you can name: a mail you sent that asks for an answer, a background agent or workflow you
-> launched from your main thread yourself, or a structured ask. A background shell or Monitor is never that wake: it has
-> no deadline and may never report. A task a subagent started reports to that subagent, and a restart kills every
+> launched from your main thread yourself that has not yet reported, or a structured ask. A background shell or Monitor
+> is never that wake: it has no deadline and may never report. A task a subagent started reports to that subagent, so an
+> agent whose completion says it may resume on its own has reported, and is not that wake either. A restart kills every
 > background task. When none of those holds, mail the coordinator what you did and what wakes you next before the turn
 > ends.
 
-It must not name a background Bash as a sufficient wake (S3). Pin impact: `worker-skill.test.ts`'s verbatim array gains
+It must not name a background Bash as a sufficient wake (S3). Nor may it count an agent's interim completion as one
+(S4). Rev 3's text named "a background agent … you launched from your main thread yourself" without qualification, and
+the S4 worker's last turn-end satisfied it word for word (§3.2). Pin impact: `worker-skill.test.ts`'s verbatim array gains
 the clause and its derived count word moves by one; the same test checks that word in SKILL.md ("These fifteen
 clauses" and the D-104 note's "these fifteen lines"), in CLAUDE.md, and at every README occurrence of
 `ccd/worker-skill/SKILL.md` (three occurrences: `:1769`, `:2123`, and the dated R2 changelog line `:2487`, whose "now
