@@ -57,7 +57,7 @@ import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm } from './platformFixtures.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
-import { TREE_STUBS, installFixtureTree, installVersionedTree } from './installTreeFixture.js';
+import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest } from './installTreeFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -2532,6 +2532,7 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     // own bytes, so an rsync that landed in it would rewrite equal bytes and
     // the digest below would stay green; `--delete` removes this one.
     writeFileSync(vroot(home, 'v9.9.0', 'server', 'ONLY-IN-THE-RUNNING-VERSION'), 'a unit may be running this\n');
+    keepDigest(vroot(home, 'v9.9.0'), home);   // the plant is part of v9.9.0's kept bytes (D-3465)
     const before = treeBytes(vroot(home, 'v9.9.0'));
     const r = runInstall(home, ['install'], {}, { stubs: { ln: lnRecorder } });
     // FIRST, before the exit code: a run that wrote into the running version
