@@ -96,7 +96,15 @@ Plan-level departures from the spec's literal text. D-3555 was minted by the coo
     - `server/test/remote-connect.test.ts`: the three pre-send arms carry the marker, and the synchronous throw unregisters its timer, pending entry and abort listener; the four post-send arms do not carry it.
     - `server/test/update-op-answer.test.ts`: `never` releases, `maybe` holds, both for each `why`; `linkFailedDeadlineDetail`'s three outcomes.
     - `server/test/update-converge.test.ts`: every post-send failure holds; the server is not dispatched and no `met` settles beside the held row; a report naming the tag settles it; another tag's report does not; the deadline's words, each way; a pre-send failure still releases.
-  - **Mutation-measured:** Task 1's and Task 2's tables, carried here with their measured counts.
+  - **Mutation-measured.** Task 1 (`remote-connect.test.ts`): M1–M9, incl. M4b, each 1 failed — its own targeted
+    assertion (M3's stops at its first, `pending.size` still 1; M7/M8/M9 isolate the same synchronous-throw case's
+    later assertions, independently). Task 2 (`update-op-answer.test.ts` + `update-converge.test.ts`): M1 19 failed
+    (every `maybe` op-answer row, converge cases 1/2/4/5/6, the rewritten `:398` case), M2 11 failed (the same
+    converge cases as M1), M3 1 failed (the rewritten `:381` `LinkNotSentError` case), M4 9 failed (case 1's rows,
+    cases 4/5/6, the rewritten `:398` case), M5 3 failed (cases 4/5/6), M6 2 failed (case 6, the op-answer
+    `reportedTarget: 'v0.0.10'` row), M7 3 failed (the `:494` never-wrote-a-report deadline case, the op-answer
+    `accepted —` and null-detail rows), M8 4 failed (the op-answer `never` rows, the rewritten `:381` case). Every
+    row applied to a `cp` backup under `$SCRATCH`, run, then restored with `cp` and `cmp` byte-identical.
   - **Cost if wrong:** a transport failure that truly never reached the agent but lacks the marker holds the lease to the deadline. That is an over-hold, bounded, with an ack exit. It never lets a second node move.
 - **No separate number for releasing by lease identity.** Measured: spec §10 releases "the lease in the same turn through `releaseLease`" (`:812-813`) and names no row id. Releasing the lease where it now lives is therefore what the spec says. R5 changes what D-3412 describes (its hand-off can land during an in-flight op), so D-3412 is AMENDED IN PLACE in the wave 5 plan (Task 3), with no new number.
 - **Amended in place, with no new number:** D-3373 in the wave 5 plan (Task 1: a transport failure is a plain `Error` only after the send; a pre-send one is `LinkNotSentError`), D-3400 in the wave 5 plan (Task 2: its "DID NOT REMOVE" sentence now points at D-3555; Task 4: its ITEM 9 premise), and D-3412 in the wave 5 plan (Task 3).
@@ -421,14 +429,14 @@ export function linkFailedDeadlineDetail(row: LinkHoldRow): string | null;
 
 | # | Guard | Mutation | Must red | Measured |
 |---|---|---|---|---|
-| M1 | a `maybe` holds | `dispatch.ts`: drop the `if (a.reached === 'maybe') return { kind: 'hold', … }` line (every transport releases idle, today's behaviour) | op-answer `maybe` rows; converge describe cases 1, 2, 4, 5, 6; the rewritten `:398` case | |
-| M2 | only the marker is "never" | `converge.ts` `linkAnswer`: `reached: 'never'` for every non-`AgentOpError` | the same converge cases as M1 | |
-| M3 | the marker releases | `converge.ts` `linkAnswer`: `reached: 'maybe'` for every rejection | the rewritten `:381` case | |
-| M4 | the hold's words are written | `converge.ts`: drop `\|\| answer.kind === 'transport'` from the note condition | case 1's `updateDetail`; cases 4, 5, 6 (the words fall back to `deadline`) | |
-| M5 | the deadline reads the hold | `converge.ts:275`: drop `linkFailedDeadlineDetail(row) ??` | cases 4, 5, 6 | |
-| M6 | "no run was reported" only where true | `linkFailedDeadlineDetail`: always return the "no run … was reported" sentence (drop the `reportedTarget` branch) | case 6; the op-answer `reportedTarget: 'v0.0.10'` row | |
-| M7 | only a link-failure hold gets the sentence (control) | `linkFailedDeadlineDetail`: drop the prefix test | the existing `a lease whose node never wrote a report … fails \`deadline\`` case (`update-converge.test.ts:494`); the op-answer `accepted —` row | |
-| M8 | the not-sent words are true | `dispatch.ts`: `'the op never reached the fleet link'` → `'the node dropped mid-dispatch'` | the op-answer `never` rows; the rewritten `:381` case | |
+| M1 | a `maybe` holds | `dispatch.ts`: drop the `if (a.reached === 'maybe') return { kind: 'hold', … }` line (every transport releases idle, today's behaviour) | op-answer `maybe` rows; converge describe cases 1, 2, 4, 5, 6; the rewritten `:398` case | 19 failed (8 op-answer `maybe` rows, 4 `why` × 2 `advertised` + 11 converge tests: the rewritten `:398` case and all 10 in the appended describe, incl. case 3's fallout — the row's state change under the mutation also breaks the case-3 stale-report assertion, over-coverage beyond the table's minimum) |
+| M2 | only the marker is "never" | `converge.ts` `linkAnswer`: `reached: 'never'` for every non-`AgentOpError` | the same converge cases as M1 | 11 failed (the rewritten `:398` case, and all 10 tests in the appended describe — op-answer unaffected since this mutation is converge.ts-only) |
+| M3 | the marker releases | `converge.ts` `linkAnswer`: `reached: 'maybe'` for every rejection | the rewritten `:381` case | 1 failed (exactly the rewritten `:381` `LinkNotSentError` case) |
+| M4 | the hold's words are written | `converge.ts`: drop `\|\| answer.kind === 'transport'` from the note condition | case 1's `updateDetail`; cases 4, 5, 6 (the words fall back to `deadline`) | 9 failed (case 1's 5 `why` rows + cases 4, 5, 6 + the rewritten `:398` case) |
+| M5 | the deadline reads the hold | `converge.ts:275`: drop `linkFailedDeadlineDetail(row) ??` | cases 4, 5, 6 | 3 failed (exactly cases 4, 5, 6) |
+| M6 | "no run was reported" only where true | `linkFailedDeadlineDetail`: always return the "no run … was reported" sentence (drop the `reportedTarget` branch) | case 6; the op-answer `reportedTarget: 'v0.0.10'` row | 2 failed (exactly case 6 + the op-answer `reportedTarget: 'v0.0.10'` row) |
+| M7 | only a link-failure hold gets the sentence (control) | `linkFailedDeadlineDetail`: drop the prefix test | the existing `a lease whose node never wrote a report … fails \`deadline\`` case (`update-converge.test.ts:494`); the op-answer `accepted —` row | 3 failed (the `:494` case, the op-answer `accepted —` row, and the op-answer null-detail row the same dropped guard also stops catching) |
+| M8 | the not-sent words are true | `dispatch.ts`: `'the op never reached the fleet link'` → `'the node dropped mid-dispatch'` | the op-answer `never` rows; the rewritten `:381` case | 4 failed (the 3 op-answer `never` rows + the rewritten `:381` case) |
 
 ### Task 3: The answer follows the lease, not the node id (R5)
 

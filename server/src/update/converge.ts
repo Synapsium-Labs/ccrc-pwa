@@ -20,14 +20,15 @@ import {
   type KillProbeOutcome, type ResOk, type UpdateReportRead, type UpdateSpawnResult,
 } from '../../../shared/agent-protocol.js';
 import {
-  classifyOpAnswer, deadlineDetail, deadlineExpired, dispatchRefusalDetail, parseReportOrigin, planDispatch,
+  classifyOpAnswer, deadlineDetail, deadlineExpired, dispatchRefusalDetail, linkFailedDeadlineDetail, parseReportOrigin,
+  planDispatch,
   type DispatchMove, type DispatchNodeView, type DispatchPlan, type OpAnswer, type ReportOrigin,
 } from './dispatch.js';
 import { resolveNodeIntent } from './resolve.js';
 import { resolveInputFor } from './project.js';
 import { INVENTORY_BUDGET_MS, readNodeFile } from './inventory.js';
 import { openPoolReadDeadline } from '../pools.js';
-import { AgentOpError } from '../remote/client.js';
+import { AgentOpError, LinkNotSentError } from '../remote/client.js';
 import { boundedUpdateSpawn, type BoundedSpawnOpts } from './spawn.js';
 import type { FleetIO } from '../io.js';
 import type { FleetState } from '../fleetstate.js';
@@ -114,6 +115,7 @@ export function dispatchViewsFor(
 
 export type MoveOutcome =
   | { nodeId: string; result: 'accepted'; detail: string }
+  | { nodeId: string; result: 'held'; detail: string }
   | { nodeId: string; result: 'released'; to: 'idle' | 'failed'; detail: string }
   | { nodeId: string; result: 'release-refused'; to: 'idle' | 'failed'; detail: string; why: Extract<ReleaseLeaseResult, { ok: false }>['why'] }
   | { nodeId: string; result: 'not-sent'; detail: string }
@@ -142,7 +144,7 @@ function transportWhy(message: string): 'disconnected' | 'timeout' | 'aborted' |
 
 /** The link's answer. An AgentOpError is a word the NODE said; any other rejection is the transport. */
 async function linkAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAnswer> {
-  if (deps.fleet === null) return { kind: 'transport', why: 'disconnected', message: NO_FLEET_LINK_DETAIL };
+  if (deps.fleet === null) return { kind: 'transport', why: 'disconnected', message: NO_FLEET_LINK_DETAIL, reached: 'never' };
   try {
     const res = await deps.fleet.send(move.target, move.kind);
     if (res.accepted !== true) return { kind: 'refused', err: OK_WITHOUT_ACCEPTED, detail: null };
@@ -152,7 +154,9 @@ async function linkAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAns
   } catch (e) {
     if (e instanceof AgentOpError) return { kind: 'refused', err: e.code, detail: e.detail };
     const message = e instanceof Error ? e.message : String(e);
-    return { kind: 'transport', why: transportWhy(message), message };
+    // D-3555: only the client's positive marker proves the frame never left; anything else — a
+    // timeout, a close or abort after the send, a rejection this build cannot name — MAY have reached the agent.
+    return { kind: 'transport', why: transportWhy(message), message, reached: e instanceof LinkNotSentError ? 'never' : 'maybe' };
   }
 }
 
@@ -200,7 +204,7 @@ const spawning = new WeakSet<LocalUpdateSpawn>();
  *  the one read after it (D-3400 amended, D-3413), never by the kill alone. */
 async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAnswer> {
   const spawn = deps.runLocal;
-  if (spawn === null) return { kind: 'transport', why: 'other', message: NO_LOCAL_RUNNER_DETAIL };
+  if (spawn === null) return { kind: 'transport', why: 'other', message: NO_LOCAL_RUNNER_DETAIL, reached: 'never' };
   // D-3411: a report says busy only while its writer lives; a dead writer's is a leftover and the op spawns,
   // and the parent's own lock probe decides. (F2 of review run 175; D-3384 read the file alone.)
   // D-3413: the SAME read is the bound's snapshot.
@@ -242,7 +246,7 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
     const detail = stderrLine === 'no message' ? `exit ${res.code} with no stderr from the launcher` : stderrLine;
     return { kind: 'refused', err: 'spawn-failed', detail };
   } catch (e) {
-    return { kind: 'transport', why: 'other', message: e instanceof Error ? e.message : String(e) };
+    return { kind: 'transport', why: 'other', message: e instanceof Error ? e.message : String(e), reached: 'never' };
   }
 }
 
@@ -272,7 +276,7 @@ export async function runDispatch(deps: ConvergeDeps, now: number): Promise<Disp
   const expired: string[] = [];
   for (const row of store.nodes()) {
     if (!deadlineExpired(row, now, deps.deadlineMs)) continue;
-    if (store.releaseLease(row.nodeId, 'failed', deadlineDetail(row, ownReport), null).ok) expired.push(row.nodeId);
+    if (store.releaseLease(row.nodeId, 'failed', linkFailedDeadlineDetail(row) ?? deadlineDetail(row, ownReport), null).ok) expired.push(row.nodeId);
   }
   // (2) The plan, over rows read after those writes.
   const views = dispatchViewsFor(store);
@@ -308,12 +312,14 @@ export async function runDispatch(deps: ConvergeDeps, now: number): Promise<Disp
   const advertised = move.viaLink ? deps.fleet !== null && liveOps(deps.fleet.state).includes(UPDATE_OP) : true;
   const action = classifyOpAnswer(answer, advertised);
   if (action.kind === 'hold') {
-    // D-3413: a hold that carries the node's own words (the bound's arm B or D) writes them where the operator reads
-    // them, on the lease this run acquired (`now`, its identity). A refused note (a report settled the row first, or a
-    // newer lease) is silent: the row's own state already says more than this sentence.
-    if (answer.kind === 'accepted' && answer.detail !== undefined) store.noteLeaseDetail(move.nodeId, action.detail, now);
+    // D-3413: the bound's arms B/D carry the node's words; D-3555: a link failure after the hand-off
+    // carries the server's. Either is written on the lease this run acquired (`now`, its identity); a refused note
+    // is silent (a report settled the row first, or a newer lease).
+    if ((answer.kind === 'accepted' && answer.detail !== undefined) || answer.kind === 'transport') {
+      store.noteLeaseDetail(move.nodeId, action.detail, now);
+    }
     deps.onAccepted();
-    return done({ nodeId: move.nodeId, result: 'accepted', detail: action.detail });
+    return done({ nodeId: move.nodeId, result: answer.kind === 'transport' ? 'held' : 'accepted', detail: action.detail });
   }
   const released = store.releaseLease(move.nodeId, action.to, action.detail, null);
   if (!released.ok) {

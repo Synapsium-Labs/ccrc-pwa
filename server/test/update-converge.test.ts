@@ -17,14 +17,14 @@ import { CoordStore, type NodeMeasurement, type ReleaseListingRow } from '../src
 import { realRunner, type ExecResult, type Runner } from '../src/exec.js';
 import type { FleetState } from '../src/fleetstate.js';
 import { localIO, type FleetIO } from '../src/io.js';
-import { AgentOpError } from '../src/remote/client.js';
+import { AgentOpError, LinkNotSentError } from '../src/remote/client.js';
 import type { Deps } from '../src/server.js';
 import {
   LINK_DOWN_DETAIL, LOCAL_SPAWNING_DETAIL, NO_FLEET_LINK_DETAIL, NO_LOCAL_RUNNER_DETAIL,
   dispatchViewsFor, localUpdateSpawnFor, runDispatch,
   type ConvergeDeps, type DispatchRunResult, type LocalUpdateSpawn, type SendUpdateOp,
 } from '../src/update/converge.js';
-import { AGENT_REJECTED_DETAIL, DEADLINE_DETAIL } from '../src/update/dispatch.js';
+import { AGENT_REJECTED_DETAIL, DEADLINE_DETAIL, LINK_FAILED_HOLD_PREFIX, linkFailedHoldDetail } from '../src/update/dispatch.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepPlanFor, type SweepPlan } from '../src/update/inventory.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
@@ -378,13 +378,13 @@ describe('runDispatch — the answer decides only what happens to the lease (§1
     expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'failed', updateDetail: 'agent answered ok-without-accepted' });
   });
 
-  it('disconnected during the send → idle, the request standing; not sent while the sweep says unreachable; sent again once measured reachable', async () => {
+  it('a link that failed BEFORE the frame was handed (LinkNotSentError) → idle, the request standing; not sent while the sweep says unreachable; sent again once measured reachable (D-3555)', async () => {
     let calls = 0;
-    const h = harness({ send: async () => { calls += 1; if (calls === 1) throw new Error('disconnected'); return ACCEPTED; } });
+    const h = harness({ send: async () => { calls += 1; if (calls === 1) throw new LinkNotSentError('disconnected'); return ACCEPTED; } });
     seedFleet(h);
     ran(await runDispatch(h.deps, T0 + 1000));
     expect(h.store.node(FLEET_ID)).toMatchObject({
-      updateState: 'idle', updateDetail: 'disconnected — the node dropped mid-dispatch; the request stands', requestedTag: 'v0.0.10',
+      updateState: 'idle', updateDetail: 'disconnected — the op never reached the fleet link; the request stands', requestedTag: 'v0.0.10',
     });
     expect(h.store.markUnreachable(FLEET_LABEL, 'fleet', T0 + 2000).ok).toBe(true);
     ran(await runDispatch(h.deps, T0 + 2500));
@@ -395,23 +395,25 @@ describe('runDispatch — the answer decides only what happens to the lease (§1
     expect(h.store.node(FLEET_ID)?.updateState).toBe('pending');
   });
 
-  it('a send that timed out, then a node that converged out of band → the next run settles the request `met`, and sends nothing (Review Focus 1)', async () => {
+  it('a send that timed out after the frame was handed HOLDS the lease; the detached run\'s own report of the tag settles it and clears the request, and nothing is sent twice (Review Focus 1, D-3555)', async () => {
     const h = harness({ send: async () => { throw new Error('timeout'); } });
     seedFleet(h);
-    ran(await runDispatch(h.deps, T0 + 1000));
+    const r0 = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r0.outcome).toEqual({ nodeId: FLEET_ID, result: 'held', detail: linkFailedHoldDetail('timeout', 'timeout') });
     expect(h.store.node(FLEET_ID)).toMatchObject({
-      updateState: 'idle', updateDetail: 'timeout — the node dropped mid-dispatch; the request stands', requestedTag: 'v0.0.10',
+      updateState: 'pending', updateDetail: linkFailedHoldDetail('timeout', 'timeout'), requestedTag: 'v0.0.10',
     });
-    // The detached run the op started finished anyway; the sweep measures the new stamp on an idle row.
-    expect(sweepOnce(h.store, fleetMeas({ currentVersion: 'v0.0.10', highestVersion: 'v0.0.10', measuredAt: T0 + 120_000 }))
-      .lease.kind).toBe('none');
-    const r = ran(await runDispatch(h.deps, T0 + 121_000));
-    expect(r.settled).toEqual([FLEET_ID]);
-    expect(r.outcome).toBeNull();
+    expect(h.accepted()).toBe(1);
+    // The detached run the op started finished anyway; the sweep measures the new stamp with the node's own report.
+    expect(sweepOnce(h.store, fleetMeas({
+      currentVersion: 'v0.0.10', highestVersion: 'v0.0.10', measuredAt: T0 + 60_000,
+      report: { phase: 'done', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 50_000, detail: null },
+    })).lease.kind).toBe('settle');
+    expect(h.store.node(FLEET_ID)).toMatchObject({
+      updateState: 'idle', updateDetail: 'done: v0.0.10', requestedTag: null,
+    });
+    ran(await runDispatch(h.deps, T0 + 61_000));
     expect(h.sent).toHaveLength(1);
-    expect(h.store.node(FLEET_ID)).toMatchObject({
-      updateState: 'idle', updateDetail: 'met: v0.0.10', requestedTag: null, requestedKind: null, requestedAt: null,
-    });
   });
 });
 
@@ -916,5 +918,114 @@ describe('the composition root binds the two update ports (a text pin over index
     const raw: NonNullable<Deps['updateRunner']> = realRunner;
     void raw;
     expect(typeof localUpdateSpawnFor('/h')).toBe('function');
+  });
+});
+
+describe('runDispatch — a fleet-link failure after the op was handed holds the lease, and only a report or the deadline ends it (D-3555, residue R1)', () => {
+  it.each([
+    ['timeout', new Error('timeout')],
+    ['disconnected', new Error('disconnected')],
+    ['aborted', new Error('aborted')],
+    ['EPIPE', new Error('EPIPE')],
+    ['a non-Error rejection', 'not an Error at all'],
+  ] as const)('every post-send failure holds (%s)', async (_label, thrown) => {
+    const h = harness({ send: async () => { throw thrown; } });
+    seedFleet(h);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    const why = message === 'disconnected' || message === 'timeout' || message === 'aborted' ? message : 'other';
+    const detail = linkFailedHoldDetail(why, message);
+    expect(r.outcome).toEqual({ nodeId: FLEET_ID, result: 'held', detail });
+    expect(detail.startsWith(`${LINK_FAILED_HOLD_PREFIX} (`)).toBe(true);
+    expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'pending', updateDetail: detail, requestedTag: 'v0.0.10' });
+    expect(h.accepted()).toBe(1);
+    expect(h.sent).toHaveLength(1);
+    if (why === 'other') expect(detail).toContain('(other: ');
+  });
+
+  it('the one-lease invariant: a fleet run possibly still live after a link failure blocks the server row too (class-1 pin)', async () => {
+    const h = harness({ send: async () => { throw new Error('timeout'); } });
+    seedFleet(h);
+    seedServer(h);
+    ran(await runDispatch(h.deps, T0 + 1000));
+    // The fleet node's own run finished while its link was down: measured AT the target, with NO report at all.
+    expect(sweepOnce(h.store, fleetMeas({ currentVersion: 'v0.0.10', highestVersion: 'v0.0.10', measuredAt: T0 + 120_000 }))
+      .lease).toEqual({ kind: 'none', why: 'no-report' });
+    for (const now of [T0 + 121_000, T0 + 181_000]) {
+      const r = ran(await runDispatch(h.deps, now));
+      expect(r.settled).toEqual([]);
+      expect(r.plan.gate.leaseHeldBy).toBe(FLEET_ID);
+    }
+    expect(h.store.node(FLEET_ID)?.updateState).toBe('pending');
+    expect(h.spawned).toEqual([]);
+  });
+
+  it('a report naming another tag never settles it', async () => {
+    const h = harness({ send: async () => { throw new Error('timeout'); } });
+    seedFleet(h);
+    ran(await runDispatch(h.deps, T0 + 1000));
+    const plan = sweepOnce(h.store, fleetMeas({
+      measuredAt: T0 + 2000,
+      report: { phase: 'installing', target: 'v0.0.9', startedAt: T0 + 2000, updatedAt: T0 + 3000, detail: null },
+    }));
+    expect(plan.lease).toEqual({ kind: 'none', why: 'stale-report' });
+    expect(h.store.node(FLEET_ID)?.updateState).toBe('pending');
+  });
+
+  it('words at the deadline, and they halt', async () => {
+    const h = harness({ send: async () => { throw new Error('timeout'); } });
+    seedFleet(h);
+    seedServer(h);
+    ran(await runDispatch(h.deps, T0 + 1000));
+    const before = ran(await runDispatch(h.deps, T0 + 1000 + DEADLINE - 1));
+    expect(before.expired).toEqual([]);
+    expect(h.store.node(FLEET_ID)?.updateState).toBe('pending');
+    const after = ran(await runDispatch(h.deps, T0 + 1000 + DEADLINE + 1));
+    expect(after.expired).toEqual([FLEET_ID]);
+    expect(h.store.node(FLEET_ID)).toMatchObject({
+      updateState: 'failed',
+      updateDetail: 'deadline — the fleet link failed mid-op and no run of v0.0.10 was reported',
+      requestedTag: 'v0.0.10',
+    });
+    expect(after.plan.gate.haltedBy).toEqual([FLEET_ID]);
+    expect(h.spawned).toEqual([]);
+    expect(h.store.ackNode(FLEET_ID).ok).toBe(true);
+    expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'idle', requestedTag: null });
+  });
+
+  it("the same words follow another tag's report (case 3's stale report), the deadline measured from its updatedAt", async () => {
+    const h = harness({ send: async () => { throw new Error('timeout'); } });
+    seedFleet(h);
+    ran(await runDispatch(h.deps, T0 + 1000));
+    expect(sweepOnce(h.store, fleetMeas({
+      measuredAt: T0 + 2000,
+      report: { phase: 'installing', target: 'v0.0.9', startedAt: T0 + 2000, updatedAt: T0 + 3000, detail: null },
+    })).lease).toEqual({ kind: 'none', why: 'stale-report' });
+    const before = ran(await runDispatch(h.deps, T0 + 3000 + DEADLINE - 1));
+    expect(before.expired).toEqual([]);
+    const after = ran(await runDispatch(h.deps, T0 + 3000 + DEADLINE + 1));
+    expect(after.expired).toEqual([FLEET_ID]);
+    expect(h.store.node(FLEET_ID)).toMatchObject({
+      updateState: 'failed',
+      updateDetail: 'deadline — the fleet link failed mid-op and no run of v0.0.10 was reported',
+    });
+  });
+
+  it('a report of the tag itself gets the qualified words at the deadline, halting', async () => {
+    const h = harness({ send: async () => { throw new Error('timeout'); } });
+    seedFleet(h);
+    ran(await runDispatch(h.deps, T0 + 1000));
+    expect(sweepOnce(h.store, fleetMeas({
+      measuredAt: T0 + 2000,
+      report: { phase: 'installing', target: 'v0.0.10', startedAt: T0 + 2000, updatedAt: T0 + 3000, detail: null },
+    })).lease).toEqual({ kind: 'none', why: 'in-flight' });
+    expect(h.store.node(FLEET_ID)?.updateState).toBe('pending');
+    const after = ran(await runDispatch(h.deps, T0 + 3000 + DEADLINE + 1));
+    expect(after.expired).toEqual([FLEET_ID]);
+    expect(h.store.node(FLEET_ID)).toMatchObject({
+      updateState: 'failed',
+      updateDetail: "deadline — the fleet link failed mid-op; the row's last report names v0.0.10, which may be an earlier run's",
+    });
+    expect(after.plan.gate.haltedBy).toEqual([FLEET_ID]);
   });
 });
