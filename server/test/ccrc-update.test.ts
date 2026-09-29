@@ -9611,6 +9611,33 @@ describe('ccrc update: a spine older than W6 gets a directory named for its own 
       expect(treeDigest(cur)).toEqual(before);
     });
 
+    it('_upd_legacy_target never removes the directory ~/ccrc names: a swap that returned 1 with the link already on it (D-3424\'s concurrent plain install) dies and keeps that directory (F5)', () => {
+      const home = freshUpdateBox('ccrc-update-legacy-swap-linked-');
+      plantW6Box(home, 'v2.0.0', V2_SHA);
+      const dir = join(home, 'ccrc-versions', 'v1.0.0');
+      // A swap that links, THEN reports failure: the shape `_plat_ln_swap`
+      // has when a concurrent install flips first.
+      const r = sourcedCcrc(home,
+        '_ver_layout; _plat_ln_swap() { ln -sfn "$1" "$2"; return 1; }; _upd_legacy_target v1.0.0; echo survived');
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stdout).not.toContain('survived');
+      expect(r.stderr).toContain('could not give v1.0.0\'s older spine a directory of its own');
+      expect(linkOf(home), 'the link names the directory').toBe(dir);
+      expect(existsSync(join(dir, 'server')), 'the directory the link names was removed').toBe(true);
+    });
+
+    it('_upd_legacy_target\'s copy is moved onto an ABSENT name: a directory that appeared meanwhile makes the move fail, never nest the copy inside it (F5)', () => {
+      const home = freshUpdateBox('ccrc-update-legacy-appeared-');
+      const cur = plantW6Box(home, 'v2.0.0', V2_SHA);
+      const r = sourcedCcrc(home,
+        '_ver_layout; cp() { command cp "$@"; mkdir -p "$HOME/ccrc-versions/v1.0.0/appeared"; }; _upd_legacy_target v1.0.0; echo survived');
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stdout).not.toContain('survived');
+      expect(readdirSync(join(home, 'ccrc-versions', 'v1.0.0')), 'the copy was nested inside the directory that appeared').toEqual(['appeared']);
+      expect(readdirSync(join(home, 'ccrc-versions')).sort(), 'the incoming copy was left behind').toEqual(['v1.0.0', 'v2.0.0']);
+      expect(linkOf(home)).toBe(cur);
+    });
+
     it('the moved=1 path is unchanged: a spine that dies AT or AFTER _inst_tree is gated, not flipped back (the control)', () => {
       const { home } = dyingBox('ccrc-update-legacy-back-moved-', false);
       writeFileSync(join(home, 'fixture-install-step'), '_inst_skills\n');

@@ -16787,13 +16787,20 @@ _upd_legacy_target() {   # <tag> -> 0, or dies before anything is installed
     rm -rf -- "$inc" 2>/dev/null
     if ! { cp -a -- "$BOX_VERSIONS_ROOT/$cur" "$inc" \
              && rm -f -- "$inc/$VER_STAMP_COPY" "$inc/$VER_RECORD_COPY" \
-             && mv -- "$inc" "$dir"; }; then
+             && _plat_mv_notdir "$inc" "$dir"; }; then
       rm -rf -- "$inc" 2>/dev/null
       _ccrc_die "$refuse"
     fi
     made=1
   fi
   if ! _plat_ln_swap "$dir" "$BOX_TREE_DIR"; then
+    # D-3424: the swap can return 1 with the link ALREADY naming its target (a
+    # plain install flipped it first). Re-read the link: the directory it
+    # names is never removed, and the sentence stops saying `~/ccrc` still
+    # points at `$cur`.
+    if [ "$(readlink -- "$BOX_TREE_DIR" 2>/dev/null)" = "$dir" ]; then
+      _ccrc_die "could not give $tag's older spine a directory of its own under \$HOME/ccrc-versions — nothing was installed; \$HOME/ccrc already names \$HOME/ccrc-versions/$tag (a concurrent install may have flipped it), which was kept"
+    fi
     [ "$made" -eq 1 ] && rm -rf -- "$dir" 2>/dev/null
     _ccrc_die "$refuse"
   fi
