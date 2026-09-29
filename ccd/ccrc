@@ -2317,7 +2317,10 @@ _box_build_fields() {
   # well-formed stamp is (single-definition.test.ts counts the `jq -r`
   # parses in this file and fails on a second).
   #
-  # THREE callers pass one, and none of them reads the box's own stamp:
+  # SIX callers pass one, and none of them reads the box's own stamp (a
+  # function that takes the parse for its own answer saves and restores
+  # `BOX_BUILD` around the call; `_inst_stamp_shipped` alone keeps the fields
+  # it parsed, because they are what it goes on to install):
   #   `_inst_stamp_shipped` — the stamp that came inside the artifact (or,
   #     for a placed version run from itself, the copy that version kept,
   #     W6 Task 2),
@@ -2330,10 +2333,20 @@ _box_build_fields() {
   #     stamp cannot answer it. It saves and restores `BOX_BUILD` around
   #     the call for exactly that reason: the second parse must not leave
   #     the caller holding the staged tree's fields.
+  #   `_upd_fetch` — the same staged stamp, read once to bind the extracted
+  #     version to the one the release was resolved as, and to capture the
+  #     staged tree's own sha for arm 3; it saves and restores `BOX_BUILD`
+  #     as `_upd_converged` does.
   #   `_inst_version_name` (W6 Task 2) — a SOURCE tree's `build.json`, read
   #     only to name the version directory that tree is placed into; it
   #     saves and restores `BOX_BUILD` around the call, as `_upd_converged`
   #     does.
+  #   `_ver_kept` (W6 Task 4) — a version's KEPT stamp copy, read to check
+  #     that it parses and names the version; it saves and restores
+  #     `BOX_BUILD` around the call, as `_upd_converged` does.
+  #   `_rollback_killed_flip_state` (review 179 fix round 1, D-3466) — the
+  #     same kept copy, read for its sha, condition (5); it saves and
+  #     restores `BOX_BUILD` around the call, as `_upd_converged` does.
   local stamp="${1:-$BOX_STAMP_FILE}"
   BOX_BUILD=()
   [[ -e "$stamp" ]] || return 3
