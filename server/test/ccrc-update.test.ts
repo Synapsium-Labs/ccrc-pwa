@@ -6246,14 +6246,50 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       };
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.1', '--from', 'pwa'],
         { env, encoding: 'utf8' });
+      // The probe's own ceiling is the pre-detach one (W6 Task 8A); the
+      // connect knob keeps the generic 1..3600 sentence.
+      const what = envVar === 'CCRC_RELEASE_PROBE_MAX_TIME'
+        ? 'a whole number of seconds from 1 to 18 \\(the pre-detach check must answer inside W5\'s 20-second spawn deadline\\)'
+        : 'a whole number of seconds from 1 to 3600';
       expect(r.stdout, `${envVar}=${badValue} stdout`).toMatch(
-        new RegExp(`^update: WARN: ${envVar}='${badValue}' is not a whole number of seconds from 1 to 3600 — using ${defaultVal}$`, 'm'));
+        new RegExp(`^update: WARN: ${envVar}='${badValue}' is not ${what} — using ${defaultVal}$`, 'm'));
       // A measurement, not just an absence: the run still went on to ask
       // the release host — `_upd_asset_listed`'s own die, which always
       // names PROBE_MAX_TIME's (corrected) value in "within Ns", whichever
       // of the two variables was the bad one.
       expect(r.stderr, `${envVar}=${badValue} stderr`).toMatch(/within 15s/);
     }
+  });
+
+  // W6 Task 8A: the pre-detach probe's own ceiling. `cmd_rollback --detach`
+  // asks the release host BEFORE it detaches, under W5's 20-second spawn
+  // deadline, so an override of the total bound above 18 s must not pass
+  // silently — it WARNs and falls back to 15. Measured through `rollback`,
+  // which reaches only `_upd_asset_listed`'s validation. 18 itself, and the
+  // generic knobs' own ceiling (a connect bound of 3600), still pass.
+  it('CCRC_RELEASE_PROBE_MAX_TIME above 18 s WARNs and falls back to 15 at the pre-detach probe; 18 passes (W6 Task 8A)', () => {
+    const run = (value: string): { stdout: string; stderr: string } => {
+      const home = mkTmp('ccrc-probe-cap-');
+      mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+      writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+      const env = {
+        ...process.env, HOME: home,
+        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        CCRC_RELEASE_PROBE_MAX_TIME: value,
+      };
+      return spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.1', '--from', 'pwa'],
+        { env, encoding: 'utf8' });
+    };
+    const warn = (v: string): RegExp => new RegExp(
+      `^update: WARN: CCRC_RELEASE_PROBE_MAX_TIME='${v}' is not a whole number of seconds from 1 to 18 \\(the pre-detach check must answer inside W5's 20-second spawn deadline\\) — using 15$`, 'm');
+    for (const v of ['19', '25', '3600']) {
+      const r = run(v);
+      expect(r.stdout, `${v} stdout`).toMatch(warn(v));
+      expect(r.stderr, `${v} stderr`).toMatch(/within 15s/);
+    }
+    const ok = run('18');
+    expect(ok.stdout).not.toContain('WARN');
+    expect(ok.stderr).toMatch(/within 18s/);
   });
 
   // Review fix round 1, M5, closing a coverage gap the mutation table found:

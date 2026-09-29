@@ -15963,7 +15963,18 @@ _upd_asset_listed() {
   # own call is the same), so `_upd_resolve`'s validation cannot be relied
   # on to have run first.
   _upd_validate_timeout CCRC_RELEASE_CONNECT_TIMEOUT 10
-  _upd_validate_timeout CCRC_RELEASE_PROBE_MAX_TIME 15
+  # W6 Task 8A (the pre-detach probe's bound, refuted-and-noted in review
+  # 167): THIS call site is the one `cmd_rollback --detach` runs before it
+  # detaches, under W5's `UPDATE_SPAWN_TIMEOUT_MS` (20 s) on that parent — and
+  # the generic validator's ceiling of 3600 let an override of 25 through
+  # silently, so a slow release host surfaced as W5's own `spawn-failed`
+  # timeout instead of this verb's named refusal. Capped here, and only here
+  # (`_upd_resolve`'s validation of the same knob keeps the generic ceiling:
+  # nothing spawns it under a deadline): a whole number from 1 to 18, two
+  # seconds under the 20 for the parent's own start-up and its refusal. An
+  # override above it WARNs, naming the variable, and falls back to 15.
+  _upd_validate_timeout CCRC_RELEASE_PROBE_MAX_TIME 15 \
+    "a whole number of seconds from 1 to 18 (the pre-detach check must answer inside W5's 20-second spawn deadline)" 18
   code="$(curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --max-time "$CCRC_RELEASE_PROBE_MAX_TIME" \
     -o /dev/null -w '%{http_code}' "$(_upd_release_base)/download/$1/$2" 2>/dev/null)" || rc=$?
