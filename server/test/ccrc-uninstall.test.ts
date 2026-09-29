@@ -1147,6 +1147,12 @@ describe('ccrc backup: CCRC_BACKUP_KEEP is one bounded number, the same validato
     r = runVerb(home, 'backup', [], { CCRC_BACKUP_KEEP: 'many\x1b[0m' });
     expect(r.code, r.stderr).toBe(1);
     expect(r.stderr).toContain(`ccrc: ${WHY('many?[0m')} — nothing was pruned`);
+    // `08` in bash arithmetic is an invalid octal number: normalised, it is eight and prunes nothing here.
+    home = box('ccrc-backup-keep-octal-');
+    r = runVerb(home, 'backup', [], { CCRC_BACKUP_KEEP: '0008' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).not.toMatch(/value too great for base/);
+    expect(readdirSync(join(home, 'ccrc-backups'))).toHaveLength(4);
     home = box('ccrc-backup-keep-zeros-');
     r = runVerb(home, 'backup', [], { CCRC_BACKUP_KEEP: '0002' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);

@@ -10089,6 +10089,10 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
       expect(r.stderr).toContain(`ccrc: versions: ${WHY('10000')} — nothing was pruned`);
       expect(versionDirs(home)).toEqual([...NAMES].sort());
+      // A leading zero is decimal, and the number is said as a number: `0008` is 8.
+      r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0008' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain('within CCRC_VERSIONS_KEEP=8, and none incomplete');
       // `0002` is two, never octal-or-error arithmetic: the newest 2 beside the pointed-at one stay.
       r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0002' });
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
