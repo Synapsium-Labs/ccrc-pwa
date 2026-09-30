@@ -777,6 +777,24 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     So a full run was dispatched on `main` (run 36652768968). If its macOS legs are red, whether to promote is the
     operator's decision: either the reds are fixed first, or macOS is ruled out of the gate.
 
+- **2026-09-30 01:20 UTC — the full run on `main` `a742eb6a` (run 36652768968): every Linux leg green, macOS red, so
+  `full-suite` is red and the `stable` gate refuses.**
+  - **Linux, in full:** five server shards, agent, pwa, the server typecheck and the pwa build all pass. This is the
+    first full CI measure of this tree, because PRs run a selection since #211.
+  - **macOS: 9 cases in 5 files.**
+
+    | Shard | File | Cases | From |
+    |---|---|---|---|
+    | 1 | `ccd-tmux-anchor` | 1: the dotted-id rename | D-3525, the residue batch |
+    | 1 | `ccrc-update` | 3: `_upd_redact`'s jq `\/`, the long-HOME floor, `BASHPID` unbound | wave 4 |
+    | 1 | `ccrc-update` | 1: the killed-flip control runs `--detach`, which is Linux-only | wave 6's fix round |
+    | 2 | `update-spawn` | 2: a grandchild that holds the pipes | wave 5 |
+    | 3 | `ccrc-install` | 2: the versioned-tree cases | wave 6 |
+  - Both live boxes are Linux. They already run v0.0.48, which is wave 6's first cut, and was moved there by another
+    session.
+  - **For the operator:** whether `stable` waits for the macOS reds to be fixed, or macOS becomes advisory in the
+    gate as the 2026-09-28 ruling reads; and whether v0.0.49 is rolled out to both boxes now, ahead of `stable`.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
