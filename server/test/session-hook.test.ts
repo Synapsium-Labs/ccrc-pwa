@@ -481,11 +481,11 @@ describe('event → state mapping', () => {
     run({ hook_event_name: 'SessionStart' });
     expect(readState().state).toBe('done');
   });
-  it('Stop is done and clears ask; interrupted survives when the payload says so', () => {
+  it('Stop is done and clears ask; a Stop carrying is_interrupt writes no interrupted key', () => {
     run({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: { questions: [] } });
     run({ hook_event_name: 'Stop', is_interrupt: true });
     const s = readState();
-    expect(s).toMatchObject({ state: 'done', ask: null, interrupted: true });
+    expect(s).toMatchObject({ state: 'done', ask: null }); expect(s).not.toHaveProperty('interrupted');
   });
   it('PostCompact: auto is working, manual is done', () => {
     run({ hook_event_name: 'PostCompact', trigger: 'auto' });

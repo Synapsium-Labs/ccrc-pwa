@@ -194,3 +194,233 @@ describe('the capture arm (§5.1 first task; capture-arm-keyed-on-hookcap)', () 
     });
   });
 });
+
+// ── The turn marker's writer core (worker stall watch §5.1, wave 2 Task 3) ──
+// `$REG/<id>.turn.json`: one JSON line, main-thread events only, written in the
+// hook's TAIL (README anchors the hook at :2900, so nothing new lands above it).
+// Module scope, so the restart rows (Task 4) and the reader's round-trip row
+// (Task 6) read the same file through the same helpers.
+const turnFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.turn.json');
+const turnRaw = (): string => fs.readFileSync(turnFile(), 'utf8');
+const turnMark = (): any => JSON.parse(turnRaw());
+const plantTurn = (line: string): void => { fs.writeFileSync(turnFile(), line); };
+/** The writer's key order: the base object in TURN_MARK_PROGRAM fixes it. */
+const TURN_KEYS: readonly string[] = ['v', 'sessionId', 'state', 'event', 'at', 'turnAt', 'stopAt', 'bg', 'bgKinds',
+  'bgIds', 'err', 'restartAt', 'lostBg', 'lostKinds', 'lostIds'];
+
+describe('the turn marker (§5.1)', () => {
+  /** A Stop's line with nothing carried: what the writer emits over a foreign or unreadable previous line. */
+  const freshStop = (at: number): Record<string, unknown> => ({ v: 1, sessionId: 'uuid-1', state: 'done',
+    event: 'Stop', at, turnAt: null, stopAt: at, bg: -1, bgKinds: '', bgIds: '', err: null, restartAt: null,
+    lostBg: 0, lostKinds: '', lostIds: '' });
+
+  it("UserPromptSubmit on no marker writes ONE line, exactly, keys in the writer's order", () => {
+    const t0 = Date.now();
+    run({ hook_event_name: 'UserPromptSubmit' });
+    const t1 = Date.now();
+    const raw = turnRaw();
+    const at = JSON.parse(raw).at as number;
+    expect(at).toBeGreaterThanOrEqual(t0);
+    expect(at).toBeLessThanOrEqual(t1);
+    expect(raw).toBe(JSON.stringify({ v: 1, sessionId: 'uuid-1', state: 'working', event: 'UserPromptSubmit', at,
+      turnAt: at, stopAt: null, bg: -1, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0,
+      lostKinds: '', lostIds: '' }) + '\n');
+    expect(Object.keys(JSON.parse(raw))).toEqual(TURN_KEYS);
+  });
+
+  it('the marker and the hookstate share ONE stamp per hook run (one-stamp-per-hook-run)', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(readState().updatedAt).toBe(turnMark().at);
+  });
+
+  it('a main TOOL event while already working is a builtin read: same bytes, same mtime', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    const past = new Date(Date.now() - 3_600_000);
+    fs.utimesSync(turnFile(), past, past);
+    const bytes = turnRaw();
+    const mtime = fs.statSync(turnFile()).mtimeMs;
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+    run({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'true' } });
+    expect(turnRaw()).toBe(bytes);
+    expect(fs.statSync(turnFile()).mtimeMs).toBe(mtime);
+  });
+
+  it('a prompt after an interrupted turn (marker still working) opens a new turn: turnAt moves (a-prompt-always-opens-a-turn)', () => {
+    // An Esc interrupt ends a turn with no Stop, so the line still reads working under THIS session id.
+    plantTurn(JSON.stringify({ v: 1, sessionId: 'uuid-1', state: 'working', event: 'PostToolUse', at: 5, turnAt: 5,
+      stopAt: null, bg: 2, bgKinds: 'shell', bgIds: 'b1', err: null, restartAt: null, lostBg: 0, lostKinds: '',
+      lostIds: '' }) + '\n');
+    run({ hook_event_name: 'UserPromptSubmit' });
+    const m = turnMark();
+    expect(m).toMatchObject({ sessionId: 'uuid-1', state: 'working', event: 'UserPromptSubmit', stopAt: null, bg: 2,
+      bgKinds: 'shell', bgIds: 'b1' });
+    expect(m.at).toBeGreaterThan(5);
+    expect(m.turnAt).toBe(m.at);
+  });
+
+  it('a working line under ANOTHER session id is rewritten, not skipped', () => {
+    plantTurn(JSON.stringify({ v: 1, sessionId: 'uuid-OLD', state: 'working', event: 'PostToolUse', at: 5, turnAt: 5,
+      stopAt: null, bg: -1, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '',
+      lostIds: '' }) + '\n');
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+    const m = turnMark();
+    expect(m).toMatchObject({ sessionId: 'uuid-1', state: 'working', event: 'PostToolUse' });
+    expect(m.at).toBeGreaterThan(5);
+    expect(m.turnAt).toBe(m.at);
+  });
+
+  it('Stop measures background_tasks: count, cleaned de-duplicated kinds, shaped ids', () => {
+    const out = run({ hook_event_name: 'Stop', background_tasks: [
+      { id: 'b989ocn62', type: 'Monitor' }, { id: 'x y', type: 'MCP task' }, { type: 'subagent' }] });
+    expect(out).toBe('');
+    const m = turnMark();
+    expect(m).toMatchObject({ state: 'done', event: 'Stop', bg: 3, bgKinds: 'mcp-task,monitor,subagent',
+      bgIds: 'b989ocn62' });
+    expect(m.stopAt).toBe(m.at);
+  });
+
+  it('bg is -1, never 0, unless background_tasks is an ARRAY (absent, a string, an object)', () => {
+    const cases = [
+      ['absent', {}],
+      ['a string', { background_tasks: 'x' }],
+      ['an object', { background_tasks: { a: { type: 'subagent', id: 'z' } } }],
+    ] as const;
+    for (const [name, extra] of cases) {
+      run({ hook_event_name: 'Stop', ...extra });
+      const m = turnMark();
+      expect([m.bg, m.bgKinds, m.bgIds], name).toEqual([-1, '', '']);
+    }
+  });
+
+  it('ids keep at most eight; each alias is cleaned per element and de-duplicated', () => {
+    run({ hook_event_name: 'Stop',
+      background_tasks: Array.from({ length: 9 }, (_, i) => ({ id: `id${i + 1}`, type: 'shell' })) });
+    expect(turnMark()).toMatchObject({ bg: 9, bgKinds: 'shell', bgIds: 'id1,id2,id3,id4,id5,id6,id7,id8' });
+    run({ hook_event_name: 'Stop', background_tasks: [{ type: 'a,b' }, { type: 'Shell' }, { type: 'shell' }] });
+    expect(turnMark()).toMatchObject({ bg: 3, bgKinds: 'ab,shell', bgIds: '' });
+  });
+
+  it('40 aliases fit WHOLE under 200 bytes: no half alias, no trailing comma (alias-list-fits-whole-aliases)', () => {
+    const L = 'abcdefghijklmnopqrstuvwxyz';
+    // Letters only: the writer deletes every character outside [a-z_-], so digits would collide.
+    const aliases = Array.from({ length: 40 }, (_, i) => `kind${L.charAt(Math.floor(i / 26))}${L.charAt(i % 26)}zz`);
+    run({ hook_event_name: 'Stop', background_tasks: aliases.map((type) => ({ type })) });
+    const want = [...aliases].sort().slice(0, 22).join(',');   // 22 × 8 bytes + 21 commas = 197
+    expect(want.length).toBe(197);
+    expect(turnMark().bgKinds).toBe(want);
+    expect(turnMark().bg).toBe(40);
+  });
+
+  it('StopFailure writes failed with a cleaned err and a stopAt, and still no hookstate', () => {
+    run({ hook_event_name: 'StopFailure', error: 'server_error' });
+    const m = turnMark();
+    expect(m).toMatchObject({ state: 'failed', event: 'StopFailure', err: 'server_error' });
+    expect(m.stopAt).toBe(m.at);
+    expect(fs.existsSync(stateFile()), 'StopFailure leaves hookstate alone').toBe(false);
+    run({ hook_event_name: 'StopFailure', error: 'Rate-Limit!' });
+    expect(turnMark().err).toBe('ateimit');
+  });
+
+  it('a subagent PostToolUse after a main Stop leaves the done line byte-identical (the parse row)', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'Stop' });
+    const done = turnRaw();
+    expect(JSON.parse(done).state).toBe('done');
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a-1' });
+    expect(turnRaw()).toBe(done);
+  });
+
+  it('a non-empty agent_id never touches the marker; an empty one is the main thread', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'Stop' });
+    const done = turnRaw();
+    for (const ev of ['UserPromptSubmit', 'PreToolUse', 'Stop', 'StopFailure'] as const) {
+      run({ hook_event_name: ev, agent_id: 'a-1', tool_name: 'Bash', tool_input: { command: 'true' } });
+      expect(turnRaw(), `${ev} from a subagent`).toBe(done);
+    }
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: '' });
+    expect(turnMark().state, 'agent_id "" is the main thread').toBe('working');
+  });
+
+  it('the env session id wins; an empty env falls back to the payload id, cleaned (marker-identity-from-env)', () => {
+    run({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-9' });
+    expect(turnMark().sessionId, 'the env id wins').toBe('uuid-1');
+    fs.rmSync(turnFile());
+    run({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-9' }, { CLAUDE_CODE_SESSION_ID: '' });
+    expect(turnMark().sessionId, 'an empty env falls back to the payload').toBe('sess-9');
+    fs.rmSync(turnFile());
+    run({ hook_event_name: 'UserPromptSubmit', session_id: 'sess;9 x' }, { CLAUDE_CODE_SESSION_ID: '' });
+    expect(turnMark().sessionId, 'the payload id is cleaned to [A-Za-z0-9_-]').toBe('sess9x');
+  });
+
+  it('a hook_event_name carrying a newline is cleaned to letters and falls to the default arm (event-name-sanitised-in-parse)', () => {
+    const r = runFull({ hook_event_name: 'Stop\nX' });
+    expect(r.stdout).toBe('');
+    expect(fs.existsSync(turnFile()), 'no marker').toBe(false);
+    expect(fs.existsSync(stateFile()), 'no hookstate').toBe(false);
+  });
+
+  it('no .generation on the row: no marker, and the hookstate is still written', () => {
+    fs.rmSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.generation'));
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(fs.existsSync(turnFile())).toBe(false);
+    expect(readState().state, 'the hookstate does not depend on the generation').toBe('working');
+  });
+
+  it('Stop and StopFailure print nothing, on either stream, and leave no marker temp behind', () => {
+    expect(run({ hook_event_name: 'UserPromptSubmit' })).toBe('');
+    const stop = runFull({ hook_event_name: 'Stop', background_tasks: [{ id: 'b1', type: 'shell' }] });
+    expect([stop.stdout, stop.stderr]).toEqual(['', '']);
+    const fail = runFull({ hook_event_name: 'StopFailure', error: 'server_error' });
+    expect([fail.stdout, fail.stderr]).toEqual(['', '']);
+    expect(turnMark().state).toBe('failed');
+    expect(fs.readdirSync(path.join(home, '.cc-sessions')).filter((n) => n.endsWith('.hook-write.tmp'))).toEqual([]);
+  });
+
+  it('carries: turnAt survives Stop; bg and kinds survive working; working clears lost*', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    const turnAt = turnMark().turnAt as number;
+    run({ hook_event_name: 'Stop', background_tasks: [{ id: 'b1', type: 'shell' }, { id: 'b2', type: 'subagent' }] });
+    expect(turnMark()).toMatchObject({ state: 'done', turnAt, bg: 2, bgKinds: 'shell,subagent', bgIds: 'b1,b2' });
+    expect(turnMark().stopAt).toBeGreaterThanOrEqual(turnAt);
+    plantTurn(JSON.stringify({ ...turnMark(), lostBg: 2, lostKinds: 'shell', lostIds: 'b9' }) + '\n');
+    run({ hook_event_name: 'UserPromptSubmit' });
+    const m = turnMark();
+    expect(m).toMatchObject({ state: 'working', bg: 2, bgKinds: 'shell,subagent', bgIds: 'b1,b2', lostBg: 0,
+      lostKinds: '', lostIds: '' });
+    expect(m.turnAt).toBe(m.at);
+  });
+
+  it('a foreign previous line is not carried', () => {
+    plantTurn(JSON.stringify({ v: 1, sessionId: 'uuid-OLD', state: 'done', event: 'Stop', at: 7, turnAt: 5, stopAt: 6,
+      bg: 4, bgKinds: 'shell', bgIds: 'b1', err: 'x', restartAt: 7, lostBg: 2, lostKinds: 'shell',
+      lostIds: 'b1' }) + '\n');
+    run({ hook_event_name: 'Stop' });
+    const m = turnMark();
+    expect(m).toEqual(freshStop(m.at));
+  });
+
+  it('an unreadable previous line (not JSON, or v other than 1) reads as absent', () => {
+    const v2 = JSON.stringify({ v: 2, sessionId: 'uuid-1', state: 'done', event: 'Stop', at: 7, turnAt: 5, stopAt: 6,
+      bg: 4, bgKinds: 'shell', bgIds: 'b1', err: null, restartAt: 7, lostBg: 2, lostKinds: 'shell', lostIds: 'b1' });
+    for (const [name, line] of [['not JSON', 'not json\n'], ['v 2', `${v2}\n`]] as const) {
+      plantTurn(line);
+      run({ hook_event_name: 'Stop' });
+      const m = turnMark();
+      expect(m, name).toEqual(freshStop(m.at));
+    }
+  });
+
+  it('TURN_MARK_PROGRAM is one single-quoted constant naming only its own jq variables', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src.split('\n').filter((l) => l.startsWith('TURN_MARK_PROGRAM='))).toEqual(["TURN_MARK_PROGRAM='"]);
+    const open = src.indexOf("TURN_MARK_PROGRAM='") + "TURN_MARK_PROGRAM='".length;
+    const body = src.slice(open, src.indexOf("'", open));
+    // The first quote after the opening one must close the PROGRAM. A shell splice (`'"$x"'`) inside it
+    // would end the constant early, and this is where that shows.
+    expect(body.trimEnd().endsWith('else empty end'), 'the constant ends where the program does').toBe(true);
+    const names = [...new Set([...body.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]!))].sort();
+    expect(names).toEqual(['at', 'b', 'bg', 'bgi', 'bgk', 'err', 'ev', 'k', 'kind', 'p', 'prev', 'raw', 'same', 'sid']);
+    expect(src.split('"$TURN_MARK_PROGRAM"').length - 1, 'one use, one jq').toBe(1);
+  });
+});
