@@ -1485,12 +1485,21 @@ BOX_BACKUP_ROOT="$HOME/ccrc-backups"
 # of a release tree's own `build.json` mistakes one for the artifact's: the
 # box's stamp and its completed-install record as they stood when this version
 # last completed an install here (D-3428). The record
-# copy is written LAST and is the version's completeness mark.
+# copy is written LAST and is the version's completeness mark. A third
+# file, written BEFORE the record, carries the digest of the version's bytes
+# (D-3465): "kept" is a statement about the tree, and the two copies alone
+# cannot see a write-through that did not restamp. All three are top-level
+# `.ccrc-*` names, which the digest itself excludes.
 BOX_VERSIONS_ROOT="$HOME/ccrc-versions"
 BOX_MIGRATING_DIR="$HOME/ccrc.migrating"
 VER_NAME_RE='^(v[0-9]+\.[0-9]+\.[0-9]+|untagged-[0-9a-f]{12}|unstamped-[0-9a-f]{12})$'
 VER_STAMP_COPY=".ccrc-stamp.json"
 VER_RECORD_COPY=".ccrc-installed"
+VER_DIGEST_COPY=".ccrc-digest"
+# The recipe a keep records today. A later recipe takes a new id and every id
+# that has ever shipped stays computable in `_ver_digest_of`; an id this ccrc
+# does not know reads as unmeasured, never as equal.
+VER_DIGEST_RECIPE=1
 
 # `~/.ccrc/migrating-to` (W6 Task 3, D-3432) — one
 # line naming the version a one-time migration is linking `~/ccrc` to,
@@ -1668,7 +1677,7 @@ UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<
 UPD_URL_DIR_SAFE=""    # _upd_resolve: same, through _upd_redact — every "fetching …"/WARN line prints THIS, never UPD_URL_DIR, so a credentialed CCRC_RELEASE_BASE_URL never reaches stdout (review 155 C17, fix round 1 item 11); the real curl calls still read UPD_URL_DIR
 UPD_TARNAME=""    # _upd_resolve: the tarball SHA256SUMS names
 UPD_PROVENANCE=""    # _upd_fetch: verified|unsigned, once PROVENANCE settles
-UPD_LAST_PHASE=""    # _upd_last_report: the phase the PREVIOUS run's ~/.ccrc/update.json ended in, read before this run's first write (the floor's refusal names a restored update by it)
+UPD_LAST_PHASE=""    # _upd_last_report: the phase the PREVIOUS run's ~/.ccrc/update.json ended in, read before this run's first write (a foreground run's floor refusal names a restored update by it; a detached run's cannot — its parent's `queued` write replaced the report first)
 UPD_LAST_TARGET=""   # _upd_last_report: … and its target tag
 UPD_PREV_UNSIGNED=0  # cmd_update, before the staged install: 1 iff the marker's line 2 read `unsigned` (arm 2's precondition)
 UPD_BACKUP_LISTING=0 # _upd_backup_copy's listing mode; only ever set `local` by _upd_backup_pairs
@@ -1755,6 +1764,21 @@ ROLLOUT_VERSION=""   # cmd_rollout: the ONE version both boxes are moved to
 # steps read it, cmd_install overwrites it — a direct _inst_* call must meet a
 # stated default, never an unbound-variable death.
 INST_ROLE=both
+# The NAME of the version THIS run placed the bytes of, or "". `_inst_tree`
+# sets it (only for `how=copy`, only after its rsync); `_inst_installed` hands
+# it to `_ver_keep_state`, which records a fresh digest only when the version
+# `~/ccrc` points at then is that name (D-3465 (b); review 179 M3 — a
+# concurrent plain install may have re-pointed the link between the flip and
+# the keep, and this run did not place THOSE bytes).
+INST_TREE_PLACED=""
+# What `_inst_tree` decided about the source tree — `running`, `placed`,
+# `copy`, or "" before it ran, and the version name it worked out
+# (`INST_TREE_NAME`). `_inst_stamp_shipped` reads both: `running`/`placed` say
+# the source tree IS `$HOME/ccrc-versions/$INST_TREE_NAME`, and a flip onto
+# another version (`placed`, or a copy) leaves the box stamp naming the build
+# the box LEFT unless that step removes it (D-3465 (d)).
+INST_TREE_HOW=""
+INST_TREE_NAME=""
 
 # The ONE spelling of the graphify engine version ccrc installs (spec §A, O1).
 # Bumping it is a reviewed commit; the corpus guard and graph-sweep row 13 are
@@ -2293,7 +2317,10 @@ _box_build_fields() {
   # well-formed stamp is (single-definition.test.ts counts the `jq -r`
   # parses in this file and fails on a second).
   #
-  # THREE callers pass one, and none of them reads the box's own stamp:
+  # SIX callers pass one, and none of them reads the box's own stamp (a
+  # function that takes the parse for its own answer saves and restores
+  # `BOX_BUILD` around the call; `_inst_stamp_shipped` alone keeps the fields
+  # it parsed, because they are what it goes on to install):
   #   `_inst_stamp_shipped` — the stamp that came inside the artifact (or,
   #     for a placed version run from itself, the copy that version kept,
   #     W6 Task 2),
@@ -2306,10 +2333,20 @@ _box_build_fields() {
   #     stamp cannot answer it. It saves and restores `BOX_BUILD` around
   #     the call for exactly that reason: the second parse must not leave
   #     the caller holding the staged tree's fields.
+  #   `_upd_fetch` — the same staged stamp, read once to bind the extracted
+  #     version to the one the release was resolved as, and to capture the
+  #     staged tree's own sha for arm 3; it saves and restores `BOX_BUILD`
+  #     as `_upd_converged` does.
   #   `_inst_version_name` (W6 Task 2) — a SOURCE tree's `build.json`, read
   #     only to name the version directory that tree is placed into; it
   #     saves and restores `BOX_BUILD` around the call, as `_upd_converged`
   #     does.
+  #   `_ver_kept` (W6 Task 4) — a version's KEPT stamp copy, read to check
+  #     that it parses and names the version; it saves and restores
+  #     `BOX_BUILD` around the call, as `_upd_converged` does.
+  #   `_rollback_killed_flip_state` (review 179 fix round 1, D-3466) — the
+  #     same kept copy, read for its sha, condition (5); it saves and
+  #     restores `BOX_BUILD` around the call, as `_upd_converged` does.
   local stamp="${1:-$BOX_STAMP_FILE}"
   BOX_BUILD=()
   [[ -e "$stamp" ]] || return 3
@@ -10322,45 +10359,241 @@ _inst_version_name() {   # <src, physical> -> one VER_NAME_RE name on stdout
   return 0
 }
 
-# ── _ver_keep_state <prefix> — a version keeps what a flip back restores ──
+# ── _ver_digest_* — "kept" is a statement about the version's BYTES ───────
+# (review 179 F2, D-3465). Recipe id 1, frozen; every id that has shipped
+# stays computable in `_ver_digest_of`, and an id this ccrc does not know is
+# unmeasured, never equal. Everything below runs in ONE subshell under
+# `LC_ALL=C`, in bash and the install path's own tools only (`readlink`, and
+# `_plat_sha256` for content — the platform layer's, called from outside it).
+#
+#   PATHS are relative to the version root and ordered as `LC_ALL=C sort`
+#   orders the whole path strings, byte for byte. The walk gets that order
+#   without a `sort` binary: each directory's entries are insertion-sorted by
+#   the key `name` (a file or a link) or `name/` (a directory we descend
+#   into), which is exactly where the descendants' paths fall.
+#   EACH ENTRY is one of three, read without following a link:
+#     f  a regular file without an executable bit  — its content's sha256
+#     x  a regular file WITH one (`[ -x <file> ]`, never `stat`) — likewise
+#     l  a symlink                                 — its target's exact text
+#   and directories contribute only their entries. Anything else (a fifo, a
+#   socket, a device) is unmeasured.
+#   FRAMING: the stream fed to the outer sha256 is `<type> NUL <path> NUL
+#   <payload> NUL` per entry. A name cannot hold a NUL, so no two trees can
+#   collide by concatenation — and a name holding a NEWLINE or a BACKSLASH is
+#   REFUSED as unmeasured, because `sha256sum` prints such a name escaped and
+#   the batched read below pairs a digest to its file by line.
+#   EXCLUDED, at every depth: `node_modules` (npm ci's output is not stable
+#   bytes — node-pty builds native code, and a pre-W6 spine re-runs npm ci on
+#   every flip back; a kept version whose node_modules went missing is caught
+#   by the health gate, whose failure runs the restore arms) and `.DS_Store`;
+#   and, at the ROOT only, every `.ccrc-*` name — the record files and their
+#   `.tmp.<pid>` temps, including the digest file itself.
+# Prints the bare hex digest on rc 0; on rc 1 prints the reason instead.
+_ver_digest_r1() {   # <dir>
+  (
+    LC_ALL=C
+    export LC_ALL
+    shopt -s dotglob nullglob
+    local root="$1" p="" i=0 j=0 k=0 rel="" h="" line="" n=0 bad="" out=""
+    local -a ents=() types=() files=() hashes=() chunk=() lines=() payloads=()
+    cd -- "$root" 2>/dev/null || { echo "cannot read $root"; exit 1; }
+    # `_dw <dir>` — append the entries below <dir> (`.` or `./a/b`), sorted.
+    _dw() {
+      local d="$1" x="" nm="" key="" a=0 tmp=""
+      local -a kids=() keys=()
+      for x in "$d"/*; do
+        nm="${x##*/}"
+        case "$nm" in node_modules|.DS_Store) continue ;; esac
+        if [ "$d" = . ] && [[ "$nm" == .ccrc-* ]]; then continue; fi
+        case "$nm" in
+          *$'\n'*|*\\*) bad="a path holds a newline or a backslash in a name"; return 1 ;;
+        esac
+        key="$nm"
+        if [ ! -L "$x" ] && [ -d "$x" ]; then key="$nm/"; fi
+        a=${#kids[@]}
+        kids[a]="$x"; keys[a]="$key"
+        while [ "$a" -gt 0 ] && [[ "${keys[a-1]}" > "${keys[a]}" ]]; do
+          tmp="${kids[a-1]}"; kids[a-1]="${kids[a]}"; kids[a]="$tmp"
+          tmp="${keys[a-1]}"; keys[a-1]="${keys[a]}"; keys[a]="$tmp"
+          a=$((a - 1))
+        done
+      done
+      for x in ${kids[@]+"${kids[@]}"}; do
+        if [ -L "$x" ]; then
+          ents+=("$x"); types+=(l)
+        elif [ -d "$x" ]; then
+          { [ -r "$x" ] && [ -x "$x" ]; } || { nm="${x#./}"; bad="an unreadable directory (${nm//[[:cntrl:]]/?})"; return 1; }
+          _dw "$x" || return 1
+        elif [ -f "$x" ]; then
+          ents+=("$x"); files+=("$x")
+          if [ -x "$x" ]; then types+=(x); else types+=(f); fi
+        else
+          nm="${x#./}"; bad="an entry that is neither a regular file, a directory nor a link (${nm//[[:cntrl:]]/?})"; return 1
+        fi
+      done
+      return 0
+    }
+    _dw . || { echo "$bad"; exit 1; }
+    # Content: batched, in order (a per-file fork costs ~0.8 s a tree; one
+    # call per hundred files ~0.02 s). Line i of a batch is file i.
+    n=${#files[@]}
+    for ((i = 0; i < n; i += 100)); do
+      chunk=()
+      for ((j = i; j < n && j < i + 100; j++)); do chunk+=("${files[j]}"); done
+      lines=()
+      while IFS= read -r line; do lines+=("$line"); done < <(_plat_sha256 "${chunk[@]}" 2>/dev/null)
+      [ "${#lines[@]}" -eq "${#chunk[@]}" ] || { echo "a file could not be read"; exit 1; }
+      for ((k = 0; k < ${#chunk[@]}; k++)); do
+        h="${lines[k]%% *}"
+        [[ "$h" =~ ^[0-9a-f]{64}$ ]] || { echo "a file could not be hashed"; exit 1; }
+        hashes+=("$h")
+      done
+    done
+    [ "${#hashes[@]}" -eq "$n" ] || { echo "a file could not be hashed"; exit 1; }
+    # The payloads, all of them, BEFORE the stream is written: a link that
+    # cannot be read must stop here, not vanish into a pipe.
+    j=0
+    for ((i = 0; i < ${#ents[@]}; i++)); do
+      if [ "${types[i]}" = l ]; then
+        rel="$(readlink -- "${ents[i]}" && printf x)" || { echo "a link could not be read"; exit 1; }
+        payloads+=("${rel%$'\n'x}")
+      else
+        payloads+=("${hashes[j]}")
+        j=$((j + 1))
+      fi
+    done
+    out="$(
+      for ((i = 0; i < ${#ents[@]}; i++)); do
+        p="${ents[i]}"
+        printf '%s\0%s\0%s\0' "${types[i]}" "${p#./}" "${payloads[i]}"
+      done | _plat_sha256 2>/dev/null
+    )" || { echo "the outer digest could not be computed"; exit 1; }
+    printf '%s' "${out%% *}"
+  )
+}
+
+# `_ver_digest_of <id> <dir>` → VER_DIGEST_NOW = `<id>:<hex>`. rc 0 measured;
+# rc 1 the tree cannot be measured; rc 2 the recipe is unknown. VER_WHY names it.
+_ver_digest_of() {
+  local id="$1" dir="$2" out=""
+  VER_DIGEST_NOW=""
+  case "$id" in
+    1)
+      out="$(_ver_digest_r1 "$dir")" || { VER_WHY="its digest could not be measured ($out)"; return 1; }
+      [[ "$out" =~ ^[0-9a-f]{64}$ ]] || { VER_WHY="its digest could not be measured (no digest came back)"; return 1; }
+      VER_DIGEST_NOW="1:$out" ;;
+    *) VER_WHY="its recorded digest names recipe $id, which this ccrc does not know"; return 2 ;;
+  esac
+  return 0
+}
+
+# `_ver_digest_check <dir>` — the recorded digest against the tree NOW.
+# rc 0 equal; rc 1 unmeasured (no digest recorded, one that does not parse,
+# an unknown recipe, or a tree that cannot be measured — all "not kept", never
+# folded into equal); rc 3 WRITTEN THROUGH: the digest was measured and the
+# bytes are not the ones that were kept.
+_ver_digest_check() {   # <dir>
+  local dir="$1" rec="" id="" rc=0
+  if [ ! -f "$dir/$VER_DIGEST_COPY" ]; then
+    VER_WHY="no kept digest (this version was kept before digests existed, or its keep never finished)"
+    return 1
+  fi
+  IFS= read -r rec < "$dir/$VER_DIGEST_COPY" 2>/dev/null || :
+  if [[ ! "$rec" =~ ^([0-9]+):[0-9a-f]{64}$ ]]; then
+    VER_WHY="its kept digest does not parse"
+    return 1
+  fi
+  id="${BASH_REMATCH[1]}"
+  _ver_digest_of "$id" "$dir" || return 1
+  if [ "$VER_DIGEST_NOW" != "$rec" ]; then
+    VER_WHY="its tree is no longer the one that was kept — something wrote through it since (deploy.sh, an older ccrc's spine, or a restore copy)"
+    return 3
+  fi
+  return 0
+}
+
+# `_ver_digest_write <dir>` — measure by the CURRENT recipe and record it, tmp
+# beside the destination, chmod 644, one rename. rc 1 (VER_WHY) writes nothing.
+# Callers write it BEFORE the record.
+_ver_digest_write() {   # <dir>
+  local dir="$1" tmp="$1/$VER_DIGEST_COPY.tmp.$$"
+  _ver_digest_of "$VER_DIGEST_RECIPE" "$dir" || return 1
+  if ! { printf '%s\n' "$VER_DIGEST_NOW" > "$tmp" && chmod 644 "$tmp" \
+         && _plat_mv_notdir "$tmp" "$dir/$VER_DIGEST_COPY"; } 2>/dev/null; then
+    rm -f -- "$tmp" 2>/dev/null
+    VER_WHY="its digest could not be recorded"
+    return 1
+  fi
+  return 0
+}
+
+# ── _ver_keep_state <prefix> [placed-name] — a version keeps what a flip back restores ──
 # (W6 Task 2, D-3428). Copies the box's stamp and its
 # completed-install record, as this completed install left them, into the
 # root of the version `~/ccrc` points at: `$VER_STAMP_COPY`, then
-# `$VER_RECORD_COPY`. A flip back to this version (W6 Task 4) restores both,
-# because `/health` answers the stamp the server read at boot and the install
-# that is being backed out of has already rewritten it — without a kept copy
-# no flip back could pass its own gate.
+# `$VER_DIGEST_COPY`, then `$VER_RECORD_COPY`. A flip back to this version (W6
+# Task 4) restores the two copies, because `/health` answers the stamp the
+# server read at boot and the install that is being backed out of has already
+# rewritten it — without a kept copy no flip back could pass its own gate.
+#
+# THE DIGEST (D-3465, review 179 F2). `placed-name` is the name of the version
+# THIS run placed the bytes of (`_inst_tree`'s `how=copy`, or a legacy spine
+# after `_upd_legacy_target`), and it counts only when it is the version
+# `~/ccrc` points at now: the tree is then measured and the digest recorded.
+# Otherwise (`running`, `placed`, an idempotent re-call, or a link that names
+# some other version by now — M3) the keep is taken again ONLY if the digest
+# recorded earlier re-measures equal — a tree something wrote through stays
+# not kept, and nothing is rewritten.
 #
 # THE RECORD GOES LAST: it is the version's completeness mark, so a run that
-# dies between the two copies leaves a version with a stamp and no record,
+# dies between the copies leaves a version with a stamp and no record,
 # which every reader treats as incomplete. Each copy is a temp beside its
 # destination, chmod 644, then one rename (`_plat_mv_notdir`: a directory
 # standing at the name refuses rather than swallowing the file). On any
-# failure the record copy is removed first, then the stamp copy, so no half
-# pair survives, and the line says what that costs.
+# failure the record copy is removed first, then the digest, then the stamp
+# copy, so no half set survives, and the line says what that costs.
 #
 # NEVER DIES and is silent unless `~/ccrc` is a version link (`linked` or
 # `migrated`) and both files are regular files: a pre-versioned box keeps
 # nothing, and a spine with no stamp has no record to keep.
-_ver_keep_state() {   # <prefix>
-  local prefix="$1" vdir s_dest r_dest s_tmp r_tmp
+_ver_keep_state() {   # <prefix> [placed-name]
+  local prefix="$1" placed_name="${2:-}" placed=0 vdir s_dest r_dest s_tmp r_tmp
   local from_stamp="$BOX_STAMP_FILE"
   local from_record="$BOX_INSTALLED_FILE"
   _ver_layout
   case "$VER_LAYOUT" in linked|migrated) ;; *) return 0 ;; esac
   [ -f "$from_stamp" ] && [ -f "$from_record" ] || return 0
+  if [ -n "$placed_name" ]; then
+    if [ "$placed_name" = "$VER_CURRENT" ]; then
+      placed=1
+    else
+      echo "$prefix: versions: this run placed $placed_name, but \$HOME/ccrc names $VER_CURRENT by now — no fresh digest is recorded for bytes this run did not place"
+    fi
+  fi
   vdir="$BOX_VERSIONS_ROOT/$VER_CURRENT"
   s_dest="$vdir/$VER_STAMP_COPY"
   r_dest="$vdir/$VER_RECORD_COPY"
   s_tmp="$s_dest.tmp.$$"
   r_tmp="$r_dest.tmp.$$"
+  if [ "$placed" = 1 ]; then
+    if ! _ver_digest_of "$VER_DIGEST_RECIPE" "$vdir"; then
+      rm -f -- "$r_dest" "$vdir/$VER_DIGEST_COPY" "$s_dest" 2>/dev/null
+      echo "$prefix: versions: WARN: could not keep $VER_CURRENT's stamp and install record in its directory ($VER_WHY) — no flip can return to it; arm 2 still can"
+      return 0
+    fi
+  elif ! _ver_digest_check "$vdir"; then
+    echo "$prefix: versions: $VER_CURRENT is NOT kept again by this run — $VER_WHY; a flip back cannot return to it, and a run that places it from a release can"
+    return 0
+  fi
   if cp -- "$from_stamp" "$s_tmp" 2>/dev/null && chmod 644 "$s_tmp" && _plat_mv_notdir "$s_tmp" "$s_dest" \
+     && { [ "$placed" != 1 ] || _ver_digest_write "$vdir"; } \
      && cp -- "$from_record" "$r_tmp" 2>/dev/null && chmod 644 "$r_tmp" && _plat_mv_notdir "$r_tmp" "$r_dest"; then
     echo "$prefix: versions: kept $VER_CURRENT's stamp and install record in \$HOME/ccrc-versions/$VER_CURRENT — what a flip back restores"
     return 0
   fi
   rm -f -- "$s_tmp" "$r_tmp" 2>/dev/null
   rm -f -- "$r_dest" 2>/dev/null
+  rm -f -- "$vdir/$VER_DIGEST_COPY" 2>/dev/null
   rm -f -- "$s_dest" 2>/dev/null
   echo "$prefix: versions: WARN: could not keep $VER_CURRENT's stamp and install record in its directory — no flip can return to it; arm 2 still can"
   return 0
@@ -10388,6 +10621,9 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
   # in `server/` vs in `pwa/`); collapsing them into one "the tree is not built"
   # is the overloaded seam this file's header bans.
   local src name dest shown vroot="" how="" was="nothing"
+  INST_TREE_PLACED=""
+  INST_TREE_HOW=""
+  INST_TREE_NAME=""
   src="$(cd "$CCRC_HERE/.." && pwd -P)" || _ccrc_die "cannot resolve the running tree"
   [ -f "$src/server/dist/server/src/index.js" ] \
     || _ccrc_die "no server build at $src/server/dist — build first: bash install.sh (or npm run build in server/ and pwa/)"
@@ -10481,6 +10717,8 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
   else
     how=copy
   fi
+  INST_TREE_HOW="$how"
+  INST_TREE_NAME="$name"
   case "$how" in
     running) echo "install: tree: already running from \$HOME/ccrc" ;;
     placed)  echo "install: tree: $name is already placed at \$HOME/ccrc-versions/$name — installing from it, no copy" ;;
@@ -10501,6 +10739,11 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
       # (D-3428).
       rm -f -- "$dest/$VER_RECORD_COPY" \
         || _ccrc_die "could not void the kept install record of $name before placing over it ($dest/$VER_RECORD_COPY) — nothing was copied"
+      # D-3465 (e): the digest goes with the record — it describes the bytes
+      # this run is about to replace. The record is already gone, so a death
+      # here leaves an incomplete version, which is true.
+      rm -f -- "$dest/$VER_DIGEST_COPY" \
+        || _ccrc_die "could not void the kept digest of $name before placing over it ($dest/$VER_DIGEST_COPY) — nothing was copied"
       mkdir -p "$dest" || _ccrc_die "cannot create $dest"
       # The excludes are deploy.sh's (`:319-326`) minus `dist`, and they are not
       # tidiness: `*.env` and `ccrc-mail.token` are gitignored files holding LIVE
@@ -10528,6 +10771,7 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
         --exclude node_modules --exclude .git --exclude '*.env' --exclude ccrc-mail.token \
         "$src/server" "$src/agent" "$src/shared" "$src/deploy" "$src/ccd" "$dest/" \
         || _ccrc_die "placing the tree at $dest failed"
+      INST_TREE_PLACED="$name"
       if [ "$name" = "$VER_CURRENT" ]; then
         echo "install: tree: reinstalled $name in place at \$HOME/ccrc-versions/$name (the version \$HOME/ccrc points at; same name, same release)"
       else
@@ -10536,7 +10780,8 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
       ;;
   esac
   # ── (4) THE DEPS ─────────────────────────────────────────────────────────
-  # A placed version whose kept install record is present completed an
+  # A placed version that is KEPT (`_ver_kept`: its install record present and
+  # its digest matching, D-3465) completed an
   # install on this box, runtime deps included, so a run FROM it — a re-run,
   # or a flip back to it (W6 Task 4) — fetches nothing: `npm ci` would empty
   # `node_modules` and reach the registry to rebuild what is already there
@@ -10555,9 +10800,15 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
   # transcript is one `install: <step>: <result>` line per step on stdout and
   # "added 41 packages in 3s" is not this run's result — the file's two-register
   # split (results on stdout, everything else on stderr), applied to a child.
-  if [ "$how" != copy ] && [ -f "$dest/$VER_RECORD_COPY" ] \
+  # D-3465 (d): "kept" is a statement about the bytes, so this asks the ONE
+  # answer (`_ver_kept`) rather than "is the record file there": a tree
+  # something wrote through — or one kept before digests existed — takes the
+  # `npm ci` below, IN PLACE, in the directory its units may still run from.
+  local kept_rc=0
+  if [ "$how" != copy ]; then _ver_kept "$name" "$INST_ROLE" || kept_rc=$?; else kept_rc=9; fi
+  if [ "$kept_rc" -eq 0 ] \
      && { [ "$INST_ROLE" != fleet ] || [ -d "$dest/agent/node_modules" ]; }; then
-    echo "install: tree: $name is complete (its kept install record is present) — no npm ci"
+    echo "install: tree: $name is kept (its install record is present and its digest re-measures equal) — no npm ci"
   else
     ( cd "$dest/server" && npm ci --omit=dev --no-audit --no-fund >&2 ) \
       || _ccrc_die "npm ci in $shown/server failed — the service cannot start without runtime deps"
@@ -11189,11 +11440,100 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
 # (`$VER_STAMP_COPY`, written by `_ver_keep_state`) is installed instead —
 # the same parser, the same census line — and the transcript says which of
 # the two it was (D-3428).
+# D-3465 (d), review 179 I1: the refusal above leaves the box with no stamp of
+# this tree's own. When THIS run moved `~/ccrc` onto another version
+# (`_inst_tree`'s `placed`, or a copy), a stamp already on the box that names a
+# DIFFERENT build would be recorded by `_inst_installed` as a completed install
+# of a build that is not running (`update --check` then converges on the old
+# build, `/health` answers it, and a rollback to it answers "nothing to do").
+# It is removed, so the box reads unstamped and `_inst_installed` takes its
+# no-stamp arm. A `running` run (the launcher) did not move `~/ccrc`: the stamp
+# there names the version it still points at, and stays.
+#
+# THE RULE, re-measured in the re-review's N1: the stamp is removed only when
+# it does not name the version this run moved TO. Names are compared as
+# `_inst_version_name` makes them — the stamp's `version` when it has one, else
+# `untagged-<sha12>` — against `INST_TREE_NAME`. Only three names ever reach
+# this comparison, because it runs only on the two refusals above, which need a
+# source with no usable git and no `build.json` (a checkout whose git answers,
+# or a release, takes `_inst_stamp`'s git or shipped-stamp arm and never gets here): the
+# placed directory's own name (`_inst_version_name` rule 1, a tag or an
+# `untagged-<sha12>`); a migrated pre-versioned `~/ccrc`'s name, which rule 4
+# takes from the box's own stamp with this very expression, so it is always
+# equal; and `unstamped-<12 hex>`, which is never equal to a stamp's name, so
+# the stamp goes. A stamp that cannot be read names nothing comparable and goes
+# too: it could not have been recorded as an install either. A stamp that names
+# the version this run moved to is the box's TRUE stamp — a killed flip's
+# leftover repaired by hand, a migration whose target already held one — and
+# stays, with the line saying so; the caller then returns 0, because nothing
+# is "skipped" and the box does not read unstamped. ONE exception (A3-1): when
+# `_ver_kept` answered 3 for that version — its tree WRITTEN THROUGH since it
+# was kept — the stamp goes whatever it names, since nothing shows the bytes to
+# be that build; a digestless or unmeasured target (rc 2) keeps the stay.
+_inst_stamp_unname() {   # [krc] — `_ver_kept`'s answer for the target, when this run asked it
+  case "$INST_TREE_HOW" in placed|copy) ;; *) return 1 ;; esac
+  local krc="${1:-}" dest="$BOX_STAMP_FILE" what="it could not be read, so it cannot be shown to name a version this box is on" sname=""
+  [ -e "$dest" ] || [ -L "$dest" ] || return 1
+  if _box_build_fields; then
+    sname="${BOX_BUILD[4]:-untagged-${BOX_BUILD[0]:0:12}}"
+    if [ "$sname" != "$INST_TREE_NAME" ]; then
+      what="it names $sname, not $INST_TREE_NAME, the version this run moved \$HOME/ccrc to"
+    elif [ "$krc" = 3 ]; then
+      # A3-1 (review of FX-A2, M1): the name matches, but the target's tree is
+      # WRITTEN THROUGH — something changed its bytes after they were kept, so
+      # nothing shows they are the build this stamp names. Recording an install
+      # complete over them is the false reading D-3465 exists to remove. (A
+      # digestless or unmeasured target, rc 2, has no such evidence against it:
+      # its stamp still stays.)
+      what="it names $sname, the version this run moved \$HOME/ccrc to, but that version's tree was written through since it was kept — nothing shows those bytes to be that build"
+    else
+      echo "install: stamp: the box's stamp already names $INST_TREE_NAME, the version this run moved \$HOME/ccrc to — it stays"
+      return 0
+    fi
+  fi
+  rm -f -- "$dest" \
+    || _ccrc_die "cannot remove the box's stamp $dest, which this run cannot vouch for as the version it moved \$HOME/ccrc to — it would be recorded as this install's"
+  BOX_BUILD=()
+  echo "install: stamp: removed the box's stamp ($what) — ccrc version will say unstamped"
+  return 1
+}
+
 _inst_stamp_shipped() {
   local shipped="$CCRC_HERE/../build.json" from="shipped in the release artifact"
   if [ ! -f "$shipped" ]; then
     shipped="$CCRC_HERE/../$VER_STAMP_COPY"
     from="kept with its version"
+    [ -f "$shipped" ] || return 1
+    # D-3465 (d): a kept stamp describes the version's bytes only while those
+    # bytes are the ones that were kept. Installed as the BOX's stamp it would
+    # say the box runs a build the tree no longer is — the answer is the one
+    # `_ver_kept` gives for the version this tree IS; a tree that is no placed
+    # version, or one that is not kept, installs no stamp.
+    #   Which version this tree IS is what `_inst_tree` already measured — its
+    # self-copy guard's physical resolution, the one constraint 3 allows — so
+    # this reads `INST_TREE_HOW`/`INST_TREE_NAME` and resolves nothing itself
+    # (review 179 M6): `running` and `placed` say the source tree IS
+    # `$HOME/ccrc-versions/<name>`; anything else (a copy, or no `_inst_tree`
+    # run at all) is not a version.
+    local kname="$INST_TREE_NAME" krc=0
+    if { [ "$INST_TREE_HOW" != running ] && [ "$INST_TREE_HOW" != placed ]; } || [ -z "$kname" ]; then
+      if [ "$INST_TREE_HOW" = copy ]; then
+        # `copy` was measured BEFORE a migration made the copy the version
+        # `~/ccrc` points at, so "not a version" would be false of a tree that
+        # is one by now; what is true is what the run did (re-review N1, B).
+        echo "install: stamp: the kept stamp beside this tree is not installed — this run placed the tree by copy, and only a version already placed under \$HOME/ccrc-versions is read for its kept stamp"
+      else
+        echo "install: stamp: the kept stamp beside this tree is not installed — this tree is not a version under \$HOME/ccrc-versions"
+      fi
+      _inst_stamp_unname && return 0
+      return 1
+    fi
+    _ver_kept "$kname" "$INST_ROLE" || krc=$?
+    if [ "$krc" -ne 0 ]; then
+      echo "install: stamp: $kname's kept stamp is not installed — it is not a kept version ($VER_WHY)"
+      _inst_stamp_unname "$krc" && return 0
+      return 1
+    fi
   fi
   [ -f "$shipped" ] || return 1
   _box_build_fields "$shipped" || return 1
@@ -12602,7 +12942,7 @@ _inst_installed() {
   _inst_floor
   # W6 Task 2: the version this spine completed keeps the stamp and record
   # a flip back restores (never dies; silent unless ~/ccrc is a version link).
-  _ver_keep_state install
+  _ver_keep_state install "$INST_TREE_PLACED"
   # THE SPINE ENDED (design §11, W4 Task 4): the record is placed and the floor
   # step returned, so no step is in flight — `_inst_step`'s marker goes. Only
   # HERE: the no-stamp return above keeps it (no record was placed), and a die
@@ -13014,7 +13354,10 @@ cmd_update() {
   # nothing. BEFORE UPD_REPORTING, so a run refused here reports nothing.
   _upd_lock
   # The PREVIOUS run's report, read before this run's first `_upd_phase`
-  # replaces it (`resolving` is written before the floor is checked).
+  # replaces it (`resolving` is written before the floor is checked). For a
+  # `--detach` run the "previous" report is already the PARENT's `queued`
+  # (`_upd_detach` writes it before this child starts), so this read cannot
+  # see what the last update left.
   _upd_last_report
 
   # FROM HERE ON THIS RUN REPORTS (design §10): every phase boundary below
@@ -13400,7 +13743,12 @@ cmd_update() {
   # spine's own `_inst_installed`, and the ONLY writer of them for a spine
   # older than W6. Silent unless the record is present (a completed spine,
   # or D-3114's doctor-FAIL arm); a spine that died wrote none.
-  _ver_keep_state update
+  # D-3465 (b): the bytes were placed by THIS run only when a spine older than
+  # W6 wrote them into the directory `_upd_legacy_target` gave it (named
+  # `$UPD_VERSION`, which `_ver_keep_state` requires `~/ccrc` to name still —
+  # review 179 M3); a W6 spine recorded its own digest and this call only
+  # re-takes the keep on it.
+  _ver_keep_state update "${legacy_from:+$UPD_VERSION}"
 
   # ── THE HEALTH GATE (design §11) ─────────────────────────────────────────
   # The staged spine restarted the role's unit onto the new tree (and ran its
@@ -13531,8 +13879,15 @@ cmd_update() {
 # that cannot be read. The common first rollback after the move onto W6 agrees
 # (the migration names the directory from the stamp) and proceeds. Never
 # consulted for `--to`. Reads only; changes nothing.
-_rollback_previous_agrees_with_layout() {
-  local cur="" stamp_name="" want="" rc=0
+#   ONE DISAGREEMENT IS ADMITTED (D-3466, review 179 F1): the killed-flip
+# state — `_rollback_killed_flip_state`, below. A W6 update killed between
+# `_inst_tree`'s flip and `_inst_stamp` leaves exactly this disagreement (link
+# on the new version, stamp on the old build, `previous` naming that old
+# build, no record), and the watchdog's bare rollback is the one recovery it
+# has, tried once. Refusing it here would strand the box, so this admits it
+# — to a FLIP only, which `cmd_rollback` re-measures under its lock.
+_rollback_previous_agrees_with_layout() {   # [role]
+  local role="${1:-}" cur="" stamp_name="" want="" rc=0 krc=0
   _ver_layout
   case "$VER_LAYOUT" in linked|migrated) ;; *) return 0 ;; esac
   cur="$VER_CURRENT"
@@ -13542,7 +13897,97 @@ _rollback_previous_agrees_with_layout() {
   stamp_name="${BOX_BUILD[4]:-untagged-${BOX_BUILD[0]:0:12}}"
   if [[ "$cur" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then want="${BOX_BUILD[4]}"; else want="untagged-${BOX_BUILD[0]:0:12}"; fi
   [ "$cur" = "$want" ] && return 0
-  _ccrc_die "rollback: ~/.ccrc/previous names $UPD_PREV_TAG, but it cannot be trusted here — \$HOME/ccrc points at \$HOME/ccrc-versions/$cur while this box's stamp reads $stamp_name, so the last move was made by something that does not keep the layout (for example a pre-W6 release's updater after a rollback, or deploy.sh), and previous may not be the build before the last update. Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z"
+  _rollback_killed_flip_state "$UPD_PREV_TAG" "$role" || krc=$?
+  [ "$krc" -eq 0 ] && return 0
+  _rollback_refuse_layout "$cur" "$stamp_name" "$KF_WHY"
+}
+
+# `_rollback_refuse_layout <cur> <stamp_name> [why]` — C27's sentence, the ONE
+# definition of it (D-3466). Every refusal of a rollback whose layout and stamp
+# disagree ends here: C27 itself, and `cmd_rollback`'s re-measurement under its
+# lock (a `--to` run, a detached run's child, a flip that cannot be made).
+# `why`, when given, is a whole line of its own — why the killed-flip state
+# (the one disagreement a rollback may act on, and only by flip) does not carry
+# this run, and the re-install that IS available (`ccrc update --to <tag>
+# --downgrade`) — printed BEFORE the sentence, so the sentence stays
+# byte-for-byte what C27 always said.
+# A `--to` run never read `previous`, so it is read here, for the sentence only.
+_rollback_refuse_layout() {   # <cur> <stamp_name> [why]
+  local cur="$1" stamp_name="$2" why="${3:-}"
+  [ -n "$UPD_PREV_TAG" ] || _upd_read_previous || :
+  # The reason line carries the WORKING remedy (review 179 fix round 1, R-B1):
+  # the sentence below ends "--to vX.Y.Z", which in this state meets the same
+  # refusal (a `--to` run of the stamp's own version is the killed-flip state
+  # too), so the way out — the typed re-install, never a rollback's fall-through
+  # — is said here, where `stamp_name` is the state's target (condition 1).
+  [ -z "$why" ] || echo "$PROG: rollback: $(_upd_redact "$why") — re-installing $stamp_name is a typed act, not a rollback's: ccrc update --to $stamp_name --downgrade" >&2
+  _ccrc_die "rollback: ~/.ccrc/previous names ${UPD_PREV_TAG:-nothing usable}, but it cannot be trusted here — \$HOME/ccrc points at \$HOME/ccrc-versions/$cur while this box's stamp reads $stamp_name, so the last move was made by something that does not keep the layout (for example a pre-W6 release's updater after a rollback, or deploy.sh), and previous may not be the build before the last update. Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z"
+}
+
+# `_rollback_killed_flip_state <to> <role>` (D-3466, review 179 F1) — the ONE
+# measurement of the killed-flip state, called by C27 and, again, under the
+# lock where `cmd_rollback` decides the flip. rc 0: the state holds, ALL SIX
+# conditions. rc 1: conditions (1) to (3) do not all hold — no verdict, the
+# rollback goes on exactly as before this function existed. rc 2: (1) to (3)
+# hold and one of (4) to (6) does not — `KF_WHY` names it. Reads only.
+#   (1) the target is the stamp's non-empty version — `BOX_BUILD[4]`, never
+#       the `untagged-<sha12>` name `stamp_name` falls back to; for a bare
+#       rollback the target is `UPD_PREV_TAG`;
+#   (2) nothing is at `~/.ccrc/installed` (`[ ! -e ] && [ ! -L ]`);
+#   (3) `~/ccrc` names a different version;
+#   (4) the target's version is kept — `_ver_kept` answers 0, which after
+#       D-3465 also says its bytes are the ones that were kept;
+#   (5) its kept stamp's sha is the box stamp's — the stamp still describes
+#       that version's build;
+#   (6) its `ccd/ccrc` carries `^BOX_VERSIONS_ROOT=`, the probe `cmd_update`
+#       uses: a pre-W6 version's own spine runs `npm ci` in `~/ccrc` with no
+#       condition, and in this state the units still run that tree.
+# An unreadable stamp, or an unversioned layout, is rc 1: today's behaviour.
+# Absence of the record alone means nothing — five things remove it
+# (`cmd_update`, `_ver_flip_back`, `_upd_restore_arm3`, `_upd_restore_arm1`'s
+# failure path, `_uninst_tree_bins`) — which is why (1), (3) and (4) to (6)
+# stand beside (2). Sets `KF_WHY`; leaves `BOX_BUILD` the box's own stamp.
+KF_WHY=""
+_rollback_killed_flip_state() {   # <to> <role> -> 0 holds, 1 not applicable, 2 applies but fails (KF_WHY)
+  local to="$1" role="${2:-}" brc=0 krc=0 vdir="$BOX_VERSIONS_ROOT/$1" box_sha="" kept_sha="" kwhy=""
+  local -a saved=()
+  KF_WHY=""
+  _ver_layout
+  case "$VER_LAYOUT" in linked|migrated) ;; *) return 1 ;; esac
+  _box_build_fields || brc=$?
+  [ "$brc" -eq 0 ] || return 1
+  # (1)
+  [ -n "${BOX_BUILD[4]}" ] && [ "${BOX_BUILD[4]}" = "$to" ] || return 1
+  box_sha="${BOX_BUILD[0]}"
+  # (2)
+  { [ ! -e "$BOX_INSTALLED_FILE" ] && [ ! -L "$BOX_INSTALLED_FILE" ]; } || return 1
+  # (3)
+  [ "$VER_CURRENT" != "$to" ] || return 1
+  # (4)
+  _ver_kept "$to" "$role" || krc=$?
+  if [ "$krc" -ne 0 ]; then
+    kwhy="$VER_WHY"
+    case "$krc" in
+      1) KF_WHY="the killed-flip state does not hold — the target is not kept ($kwhy)" ;;
+      3) KF_WHY="the killed-flip state does not hold — the target was written through since it was kept ($kwhy)" ;;
+      *) KF_WHY="the killed-flip state does not hold — the target is not kept complete ($kwhy)" ;;
+    esac
+    return 2
+  fi
+  # (5)
+  saved=(${BOX_BUILD[@]+"${BOX_BUILD[@]}"})
+  if _box_build_fields "$vdir/$VER_STAMP_COPY"; then kept_sha="${BOX_BUILD[0]}"; fi
+  BOX_BUILD=(${saved[@]+"${saved[@]}"})
+  if [ -z "$kept_sha" ] || [ "$kept_sha" != "$box_sha" ]; then
+    KF_WHY="the killed-flip state does not hold — the target's kept stamp is not this box's stamp (another build's sha)"
+    return 2
+  fi
+  # (6)
+  if ! grep -q '^BOX_VERSIONS_ROOT=' "$vdir/ccd/ccrc" 2>/dev/null; then
+    KF_WHY="the killed-flip state does not hold — the target's own ccd/ccrc predates versioned installs, so its spine would npm ci in the tree the units run"
+    return 2
+  fi
+  return 0
 }
 
 # ── cmd_rollback — a verb, not a recipe (design 2026-09-20 §11) ───────────
@@ -13552,16 +13997,22 @@ _rollback_previous_agrees_with_layout() {
 # never rewrites. There is NO fallback to latest/download: a rollback that
 # guessed its target would be an update.
 #
-# UPDATE'S OWN PATH, IN-PROCESS — never a second one. The lock is taken here,
-# then `cmd_update --to <tag> --downgrade --from rollback|watchdog` runs the
-# verify, the backup, the staged spine, the gate and `_upd_sweep`: the sweep
-# behind its own mandatory KillMode=process preflight and DEGRADED sentence,
-# CALLED, never restated — R1 is inherited, never re-argued. A standalone
-# rollback needs that sweep, because a PRIOR update's sweep already moved the
-# supervisors onto the build this one replaces. `--downgrade` because a
-# rollback is by definition a move below the floor the last update raised;
-# the floor file itself is never lowered (`_inst_installed` only raises it) —
-# D-3236.
+# TWO PATHS, ONE SWEEP. A rollback by re-install runs UPDATE'S OWN PATH,
+# IN-PROCESS: the lock is taken here, then `cmd_update --to <tag> --downgrade
+# --from rollback|watchdog` runs the verify, the backup, the staged spine, the
+# gate and `_upd_sweep`: the sweep behind its own mandatory KillMode=process
+# preflight and DEGRADED sentence, CALLED, never restated — R1 is inherited,
+# never re-argued. A rollback BY FLIP (a kept version, no download) is a
+# second path, and shares only that sweep: it does not go through
+# `cmd_update`, and this verb calls `_upd_sweep` itself, after `_ver_flip_back`
+# and the gate — still the one function, never a copy, and still behind its
+# own preflight, since the preflight lives inside `_upd_sweep`. So
+# `_upd_sweep` has exactly two call sites, `cmd_update`'s and this verb's flip
+# arm. A standalone rollback needs that sweep, because a PRIOR update's sweep
+# already moved the supervisors onto the build this one replaces.
+# `--downgrade` because a rollback is by definition a move below the floor the
+# last update raised; the floor file itself is never lowered (`_inst_installed`
+# only raises it) — D-3236.
 #
 # WHO ASKED vs WHAT KIND OF RUN (D-3262). `--from
 # <who>` is the caller's attribution — cli by hand, pwa from the console,
@@ -13621,11 +14072,20 @@ cmd_rollback() {
   # spelling of the refusal (`_upd_detach` repeats it as its step 0).
   [ "$detach" -eq 1 ] && _upd_detach_os_check
 
+  # The box's role, read as `cmd_update` reads it — before the target is
+  # resolved, because C27's killed-flip admission (D-3466) asks whether the
+  # target is KEPT, and a kept version's build is the role's.
+  local role="" kept=0 frc=0 now="" krc=0 kf=0 kf_cur=""
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  case "$role" in server|fleet|both) ;; *) role="" ;; esac
+
   if [ -z "$to" ]; then
     _upd_read_previous || prc=$?
     case "$prc" in
       0) to="$UPD_PREV_TAG"; via="~/.ccrc/previous"
-         _rollback_previous_agrees_with_layout ;;
+         _rollback_previous_agrees_with_layout "$role" ;;
       1) _ccrc_die "rollback: nothing to roll back to — ~/.ccrc/previous is absent (no update has run on this box since W4); name one: ccrc rollback --to vX.Y.Z" ;;
       2) _ccrc_die "rollback: the build before the last update carried no release tag (previous: untagged ${UPD_PREV_SHA:-unstamped}) — name one: ccrc rollback --to vX.Y.Z" ;;
       *) _ccrc_die "rollback: ~/.ccrc/previous is unreadable or malformed (line 1 must be a release tag vX.Y.Z or 'untagged') — fix or remove it by hand, or name one: ccrc rollback --to vX.Y.Z" ;;
@@ -13726,11 +14186,7 @@ cmd_rollback() {
   # `--detach` hands the run on — and before the lock is taken, except for
   # a non-`cli` run without `--detach`, which took it above (D-3429 as
   # amended; `cmd_update` refuses it too, for the re-install arm).
-  local role="" kept=0 frc=0 now=""
-  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
-    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
-  fi
-  case "$role" in server|fleet|both) ;; *) role="" ;; esac
+  # (`role` was read above, before the target was resolved.)
   # W6 Task 3 (D-3437, applied here): a
   # crashed migration reads `crashed` — neither `linked` nor `migrated` — so
   # a kept tag would read as NOT kept, and the rollback would ask the release
@@ -13747,7 +14203,13 @@ cmd_rollback() {
   fi
   _ver_layout
   case "$VER_LAYOUT" in
-    linked|migrated) _ver_kept "$to" "$role" && kept=1 ;;
+    linked|migrated)
+      krc=0
+      _ver_kept "$to" "$role" || krc=$?
+      case "$krc" in
+        0) kept=1 ;;
+        3) echo "rollback: \$HOME/ccrc-versions/$to was written through since it was kept ($VER_WHY) — it is not a kept version, so this rolls back by re-install" ;;
+      esac ;;
     foreign|unreadable) _ccrc_die "rollback: \$HOME/ccrc is $VER_WHY — refusing to place or flip a tree over something this ccrc did not make; nothing on this box was changed" ;;
   esac
   if [ "$kept" -eq 1 ]; then
@@ -13781,6 +14243,23 @@ cmd_rollback() {
   _upd_lock
   local run_from=rollback
   [ "$from" = watchdog ] && run_from=watchdog
+  # D-3466 (review 179 F1): the killed-flip state, RE-MEASURED under the lock
+  # where the flip is decided, and keyed on conditions (1) to (3), never on C27
+  # having run — a detached run's child gets `--to` and never runs C27. When
+  # (1) to (3) hold the rollback may only FLIP: (4) to (6) failing here dies
+  # with C27's sentence (the report closed `failed` first, as the flip's own
+  # refusals close it), and the flip below is the target's kept version or
+  # nothing — it never falls through to `cmd_update --to … --downgrade`,
+  # whose re-install would rsync --delete and `npm ci` into the tree the
+  # units still run. The state's own measurement decides `kept`: what it read
+  # a moment ago, under this lock, is what the flip acts on.
+  _rollback_killed_flip_state "$to" "$role" || kf=$?
+  kf_cur="$VER_CURRENT"
+  case "$kf" in
+    0) kept=1 ;;
+    2) UPD_FROM="$run_from"; UPD_REPORT_TARGET="$to"; UPD_REPORTING=1
+       _rollback_refuse_layout "$kf_cur" "$to" "$KF_WHY" ;;
+  esac
   if [ "$kept" -eq 1 ]; then
     # ROLLBACK BY FLIP (design §11: rollback "runs arm 1 or arm 2 above, then
     # the gate, then _upd_sweep"; "rollback after W5 is arm 1"). Re-measured
@@ -13846,6 +14325,9 @@ cmd_rollback() {
         fi
         return 0 ;;
       1)
+        # D-3466: in the killed-flip state a flip that cannot be made is a
+        # refusal, never a re-install (see the guard above).
+        [ "$kf" -eq 0 ] && _rollback_refuse_layout "$kf_cur" "$to" "the killed-flip state holds, so this rollback may only flip, and the flip could not be made ($VER_WHY) — it does not fall back to a re-install"
         # UPD_REPORTING deliberately stays 1 here, unlike the RESET above: this
         # path has already written a non-terminal `installing "rollback by
         # flip …"` phase, so a refusal on the way into the in-process
@@ -15903,7 +16385,11 @@ _upd_gate() {   # <role> <version> -> 0 at the first pass, 1 when the window end
 # phase and target the PREVIOUS run left in `~/.ccrc/update.json`, into
 # UPD_LAST_PHASE / UPD_LAST_TARGET. `cmd_update` calls it right after taking
 # the lock and before this run writes anything, because this run's own first
-# report (`resolving`) replaces the file before `_upd_floor_check` runs. Every
+# report (`resolving`) replaces the file before `_upd_floor_check` runs. That
+# holds for a foreground run only: a `--detach` run's parent has already
+# written `queued` over the last update's report (`_upd_detach`, before the
+# child reads anything), so a detached run reads `queued` and its floor
+# refusal names the floor alone (pinned, with a foreground control). Every
 # field is shape-checked (the file is same-user-writable by every session on
 # the box); anything unreadable — absent, unsafe, no jq, not an object —
 # leaves both empty, which the floor's refusal reads as "no such update", never
@@ -15979,7 +16465,10 @@ _upd_floor_check() {
   # gate and was restored) the box runs the floor's own tag, not a release
   # below it. The clause is exactly what the report proves and no more.
   # Anything else, including an unreadable or absent report, names the floor
-  # alone.
+  # alone — and so does EVERY `--detach` update run (the console's update tap
+  # among them): `_upd_detach` writes `queued` before the child reads the last
+  # report, so the child never sees `reverted`. A rollback never meets this
+  # refusal at all: `--from rollback|watchdog` passes the case above.
   local raised=""
   if [ "$UPD_LAST_PHASE" = reverted ] && [ "$UPD_LAST_TARGET" = "$floor" ]; then
     raised=" — the last update, to $floor, failed its health gate and was restored"
@@ -16554,15 +17043,24 @@ _upd_restore_arm3() {
 # ── W6 Task 4: a kept version, and the flip back to it ─────────────────────
 # `_ver_kept <name> <role>` — can a flip return to ~/ccrc-versions/<name>?
 # rc 0 complete; rc 1 absent (no REAL directory of that name — a symlink
-# there is nothing this ccrc placed); rc 2 incomplete, VER_WHY naming the
-# first missing piece. "Complete" is the placement's own evidence, never a
+# there is nothing this ccrc placed); rc 2 incomplete or unmeasured, VER_WHY
+# naming the first missing piece; rc 3 WRITTEN THROUGH, VER_WHY saying so.
+# "Complete" is the placement's own evidence, never a
 # guess: the tree's `ccd/ccrc` (the spine a flip runs), the role's build
-# (what its unit starts), and the two copies `_ver_keep_state` writes when
+# (what its unit starts), and the copies `_ver_keep_state` writes when
 # an install of it COMPLETED — the record last, so its presence is the mark.
 # A tag-shaped name must also be what its kept stamp says, or a flip would
-# restore one build's stamp over another's tree. An empty role reads `both`,
-# the staged spine's own default. Prints nothing.
-_ver_kept() {   # <name> <role> -> 0 complete, 1 absent, 2 incomplete (VER_WHY)
+# restore one build's stamp over another's tree.
+#   AND THE BYTES (D-3465, review 179 F2): the digest recorded when the
+# version was kept is re-measured for EVERY version this is asked about,
+# pointed-at or not. A mismatch is rc 3, its own answer — the tree is not the
+# one that was kept; no digest, a digest that does not parse, a recipe this
+# ccrc does not know, and a tree that cannot be measured are rc 2 (not kept,
+# unmeasured), never folded into either neighbour. Every caller treats
+# anything but 0 as "not kept"; rc 3 is never misread as kept because no
+# caller tests for a nonzero-but-fine code. An empty role reads `both`, the
+# staged spine's own default. Prints nothing.
+_ver_kept() {   # <name> <role> -> 0 complete, 1 absent, 2 incomplete/unmeasured, 3 written through (VER_WHY)
   local name="$1" role="${2:-both}" vdir="$BOX_VERSIONS_ROOT/$1" v=""
   local -a saved=()
   VER_WHY=""
@@ -16592,6 +17090,13 @@ _ver_kept() {   # <name> <role> -> 0 complete, 1 absent, 2 incomplete (VER_WHY)
     VER_WHY="its kept stamp reads ${v:-an unversioned build}, not $name"
     return 2
   fi
+  local drc=0
+  _ver_digest_check "$vdir" || drc=$?
+  case "$drc" in
+    0) ;;
+    3) return 3 ;;
+    *) return 2 ;;
+  esac
   return 0
 }
 
@@ -16661,6 +17166,7 @@ _ver_flip_back() {   # <name> <role> <prefix>
   case "$krc" in
     0) ;;
     1) return 1 ;;
+    3) VER_WHY="\$HOME/ccrc-versions/$name was written through since it was kept ($VER_WHY)"; return 1 ;;
     *) VER_WHY="\$HOME/ccrc-versions/$name is incomplete ($VER_WHY)"; return 1 ;;
   esac
   { IFS= read -r m1; IFS= read -r m2; } < "$vdir/$VER_RECORD_COPY" 2>/dev/null || :
@@ -16762,6 +17268,7 @@ _upd_restore_arm1() {   # <role> <reason> <old_version> <old_completed>
   case "$krc" in
     0) ;;
     1) echo "update: arm 1: no kept version $UPD_PREV_TAG under \$HOME/ccrc-versions — arm 2"; return 1 ;;
+    3) echo "update: arm 1: \$HOME/ccrc-versions/$UPD_PREV_TAG was written through since it was kept ($VER_WHY) — arm 2"; return 1 ;;
     *) echo "update: arm 1: \$HOME/ccrc-versions/$UPD_PREV_TAG is incomplete ($VER_WHY) — arm 2"; return 1 ;;
   esac
   if [ "$cur" = "$UPD_PREV_TAG" ]; then
@@ -16823,9 +17330,11 @@ _upd_restore_arm1() {   # <role> <reason> <old_version> <old_completed>
 # copies removed — they described the source), which the old spine then
 # rewrites. The directory's name stays true, and the version this run
 # replaces is never written. A kept directory stops claiming completeness
-# first (its record copy removed): its content is about to be rewritten by
-# a spine that keeps nothing, and `_ver_keep_state update` re-marks it only
-# after that spine completes. `cmd_update` calls this BEFORE it clears the
+# first (its record copy removed, and with it the digest of the bytes about to
+# change — D-3465 (e)): its content is about to be rewritten by
+# a spine that keeps nothing, and `_ver_keep_state update` re-marks it — on a
+# FRESH digest, this run having placed the bytes — only after that spine
+# completes. `cmd_update` calls this BEFORE it clears the
 # record, the step marker and the caps, so a death here leaves them as they
 # were; only the backup and `previous` this run wrote are new.
 _upd_legacy_target() {   # <tag> -> 0, or dies before anything is installed
@@ -16836,12 +17345,14 @@ _upd_legacy_target() {   # <tag> -> 0, or dies before anything is installed
     _ccrc_die "$refuse (\$HOME/ccrc-versions/$tag is not a directory ccrc placed)"
   fi
   if [ -d "$dir" ]; then
-    rm -f -- "$dir/$VER_RECORD_COPY" || _ccrc_die "$refuse"
+    # D-3465 (e): the digest goes with the record — the old spine is about to
+    # rewrite the bytes it describes.
+    rm -f -- "$dir/$VER_RECORD_COPY" "$dir/$VER_DIGEST_COPY" || _ccrc_die "$refuse"
   else
     how="a copy of $cur"
     rm -rf -- "$inc" 2>/dev/null
     if ! { cp -a -- "$BOX_VERSIONS_ROOT/$cur" "$inc" \
-             && rm -f -- "$inc/$VER_STAMP_COPY" "$inc/$VER_RECORD_COPY" \
+             && rm -f -- "$inc/$VER_STAMP_COPY" "$inc/$VER_RECORD_COPY" "$inc/$VER_DIGEST_COPY" \
              && _plat_mv_notdir "$inc" "$dir"; }; then
       rm -rf -- "$inc" 2>/dev/null
       _ccrc_die "$refuse"
@@ -17638,6 +18149,25 @@ cmd_backup() {
   _bak_prune
 }
 
+# `_keep_ok <value>` and `_keep_why <knob> <value>` — the ONE validator for
+# every KEEP knob (review 179 F6; D-3423): `CCRC_BACKUP_KEEP` below,
+# `CCRC_VERSIONS_KEEP` in `_ver_gc` and `cmd_versions`. A whole number of one
+# to four digits, `0` to `9999`, and nothing else. `^[0-9]+$` let
+# `99999999999999999999` through, and there `[ -le ]`, `[ -lt ]` and bash
+# arithmetic fail or WRAP (`18446744073709551615` is -1), which read as "remove
+# everything" — an operator who meant "keep everything" got the opposite. Four
+# digits is far past any number of trees or backups a box keeps, and no value
+# that long can overflow anything. `_keep_why` is the refusal's own sentence:
+# it names the knob and the value, the value sanitised as `_upd_validate_timeout`
+# does (a non-printable byte becomes `?`) and capped at 32 characters, so a hostile
+# or absurd value cannot fill a line or drive a terminal.
+_keep_ok() { [[ "$1" =~ ^[0-9]{1,4}$ ]]; }
+_keep_why() {   # <knob> <value>
+  local val="$2"
+  [ "${#val}" -le 32 ] || val="${val:0:32}..."
+  printf "%s='%s' is not a whole number from 0 to 9999" "$1" "${val//[![:print:]]/?}"
+}
+
 # Keep the newest ${CCRC_BACKUP_KEEP:-10} TIMESTAMPED backups —
 # `deploy.sh`'s `prune_backups` glob exactly (`[0-9]{8}-[0-9]{6}`, the shape
 # `_upd_backup`'s `date +%Y%m%d-%H%M%S` writes), because the directory also
@@ -17647,8 +18177,8 @@ cmd_backup() {
 # chronological order.
 _bak_prune() {
   local keep="${CCRC_BACKUP_KEEP:-10}"
-  [[ "$keep" =~ ^[0-9]+$ ]] \
-    || _ccrc_die "CCRC_BACKUP_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+  _keep_ok "$keep" || _ccrc_die "$(_keep_why CCRC_BACKUP_KEEP "$keep") — nothing was pruned"
+  keep=$((10#$keep))   # `0002` is two: the loop below is ARITHMETIC, where a leading 0 is octal (or an error)
   local -a dirs=()
   local had_nullglob=0 d
   shopt -q nullglob && had_nullglob=1
@@ -17682,8 +18212,10 @@ _bak_prune() {
 # `_ver_list` → VER_NAMES: every real directory directly under
 # $BOX_VERSIONS_ROOT whose name is a version name — complete ones (their kept
 # install record present) first, newest record first, then the incomplete
-# ones by name. Dot-names (a legacy target's `.incoming`) and anything else
-# are never listed, so never touched. The ordering is bash-only: no `sort`
+# ones by name. Dot-names (a legacy target's `.incoming`, a prune's
+# `.pruning-`) and anything else are never listed, so never chosen or kept;
+# `_ver_sweep_leftovers` removes a dead process's two kinds, and nothing else
+# touches them. The ordering is bash-only: no `sort`
 # binary on the install path. rc 1 (VER_WHY) when a record's mtime cannot be
 # read — the order is then unknown, and a prune that needs it is skipped;
 # VER_NAMES is still filled.
@@ -17841,10 +18373,14 @@ _ver_protect() {
 # decided, for the listing and the prune alike, over VER_NAMES in
 # `_ver_list`'s order: protected → kept; complete → the first <keep> kept,
 # the rest doomed; incomplete → doomed by `prune` only. Fills VER_VERDICT
-# and VER_DOOMED / VER_DOOMED_WHY. rc 0.
+# and VER_DOOMED / VER_DOOMED_WHY. rc 0. rc 1 (VER_WHY) when a numeric test
+# ERRORED — a <keep> that is not a number bash can compare (review 179 F6's
+# belt over `_keep_ok`, which every caller has asked first): `[ -lt ]` answers 2,
+# which the plain `if` below reads as "no", i.e. `prunable`. Then EVERY
+# version is `kept: unmeasured` and nothing is doomed, never one guess.
 _ver_verdicts() {
   declare -gA VER_VERDICT=()
-  local mode="$1" keep="$2" n slots=0
+  local mode="$1" keep="$2" n slots=0 trc
   VER_DOOMED=(); VER_DOOMED_WHY=()
   for n in "${VER_NAMES[@]}"; do
     # Not bash 4.2's `-v` variable test: bash 3.2 cannot PARSE it inside
@@ -17854,7 +18390,13 @@ _ver_verdicts() {
     if [ -n "${VER_PROTECT[$n]:-}" ]; then
       VER_VERDICT[$n]="kept: ${VER_PROTECT[$n]}"
     elif [ -f "$BOX_VERSIONS_ROOT/$n/$VER_RECORD_COPY" ]; then
-      if [ "$slots" -lt "$keep" ]; then
+      trc=0; [ "$slots" -lt "$keep" ] 2>/dev/null || trc=$?
+      if [ "$trc" -gt 1 ]; then
+        VER_WHY="the keep count could not be compared (an integer expression expected) — no version is pruned on a guess"
+        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: unmeasured"; done
+        VER_DOOMED=(); VER_DOOMED_WHY=()
+        return 1
+      elif [ "$trc" -eq 0 ]; then
         slots=$((slots + 1)); VER_VERDICT[$n]="kept: newest $keep"
       else
         VER_VERDICT[$n]="prunable"
@@ -17868,6 +18410,45 @@ _ver_verdicts() {
   return 0
 }
 
+# `_ver_sweep_leftovers <lead>` → rc 0, or 1 when a leftover could not be
+# removed. Two kinds of directory under $BOX_VERSIONS_ROOT are a dead
+# process's leavings, each already OUT of every version list (a dot-name is
+# never listed, kept or chosen — VER_NAME_RE): `.pruning-<name>.<pid>`, the
+# rename target of a prune whose removal did not finish (D-3460), and
+# `.<tag>.incoming.<pid>`, the staging directory of `_upd_legacy_target`
+# (D-3440), which nothing removed until this. One whose pid is dead is
+# removed, with `kill -0` as today's pid test; one whose pid is ALIVE is
+# another process's work in flight and is never touched. WHY THIS ADDS NO
+# EXPOSURE: only the prune loop makes a `.pruning-` name and only
+# `_upd_legacy_target` makes an `.incoming.` one, and the rename that made
+# each took the directory out of every reader's reach — so the sweep removes
+# nothing a reader could still find. That is NOT a proof that nothing runs
+# from one: `_ver_running_names` resolves a unit through the CURRENT link, so
+# a unit not restarted since a flip counts as running the pointed-at version,
+# and a directory that was such a version's is only as unreachable as that
+# read is true. That root cause is deferred item 3 (review 179) and stays on
+# the residue list; this sweep neither adds to it nor closes it.
+_ver_sweep_leftovers() {   # <lead>
+  local lead="$1" d b pid what rc=0
+  for d in "$BOX_VERSIONS_ROOT"/.pruning-* "$BOX_VERSIONS_ROOT"/.v*.incoming.*; do
+    { [ -d "$d" ] && [ ! -L "$d" ]; } || continue
+    b="${d##*/}"; pid="${b##*.}"
+    case "$b" in
+      .pruning-*) what="prune" ;;
+      *) [[ "$b" =~ ^\.v[0-9]+\.[0-9]+\.[0-9]+\.incoming\.[0-9]+$ ]] || continue; what="update" ;;
+    esac
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    kill -0 "$pid" 2>/dev/null && continue
+    if rm -rf -- "$d"; then
+      echo "$lead removed \$HOME/ccrc-versions/$b (what an earlier $what left, already out of the version list; its process is gone)"
+    else
+      echo "$lead could not remove \$HOME/ccrc-versions/$b (what an earlier $what left, already out of the version list) — it stays out of every listing"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
 # `_ver_gc <prefix> <auto|prune>` → rc 0 done (or nothing to do), rc 1
 # skipped on an unmeasured input or a removal failed. `auto` is the call
 # after a PASSED gate only — a plain install's doctor under a free lock, an
@@ -17875,25 +18456,37 @@ _ver_verdicts() {
 # or a rollback, whose spine runs under its parent's lock
 # (D-3451); it says nothing unless it removes
 # something or skips. `prune` is `ccrc versions --prune`, which also removes
-# incomplete versions.
+# incomplete versions. Both first refuse a KEEP value `_keep_ok` does not
+# accept (WARN and rc 1 for `auto`, which its callers ignore), then read the
+# layout (only `linked`/`migrated` prunes), then sweep a dead process's
+# leftovers ONCE (`_ver_sweep_leftovers`) — all before any return that could
+# end the prune early.
 _ver_gc() {
   local pfx="$1" mode="$2" keep="${CCRC_VERSIONS_KEEP:-3}" lead n i cur
-  local rc=0 lrc=0 prc=0 ncomp=0 npart=0 d b pid gone
+  local rc=0 lrc=0 prc=0 ncomp=0 npart=0 gone
   lead="$pfx: versions:"; [ "$pfx" = versions ] && lead="versions:"
-  if [[ ! "$keep" =~ ^[0-9]+$ ]]; then
+  if ! _keep_ok "$keep"; then
     if [ "$mode" = auto ]; then
-      echo "$lead WARN: CCRC_VERSIONS_KEEP is not a number — nothing pruned"
+      echo "$lead WARN: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — nothing pruned"
     else
-      echo "versions: CCRC_VERSIONS_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+      echo "versions: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — nothing was pruned"
     fi
     return 1
   fi
+  keep=$((10#$keep))   # decimal: `0002` is two, whatever a later arithmetic context would make of a leading 0
   _ver_layout
   case "$VER_LAYOUT" in
     linked|migrated) ;;
     *) [ "$mode" = auto ] || echo "versions: nothing to prune — \$HOME/ccrc is not versioned ($VER_LAYOUT)"
        return 0 ;;
   esac
+  # LEFTOVERS, ONCE, FIRST (D-3460, amended by review 179 F7): on a layout ccrc
+  # made and a knob it can read — never before them: a dangling `~/ccrc` reads
+  # `foreign` above and must sweep nothing — and before EVERY return below that
+  # can end this prune early (the KEEP short-circuit, an empty removal set, an
+  # input that cannot be measured), so a leftover no longer waits for a prune that
+  # happens to have a version to remove. Its rc rides those returns.
+  _ver_sweep_leftovers "$lead" || rc=1
   _ver_list || lrc=$?
   for n in "${VER_NAMES[@]}"; do
     [ "$n" = "$VER_CURRENT" ] && continue
@@ -17906,7 +18499,7 @@ _ver_gc() {
   # no service manager, projection or previous is read.
   if [ "$ncomp" -le "$keep" ] && { [ "$mode" = auto ] || [ "$npart" -eq 0 ]; }; then
     [ "$mode" = auto ] || echo "versions: nothing to prune — $ncomp complete version(s) beside the pointed-at one, within CCRC_VERSIONS_KEEP=$keep, and none incomplete"
-    return 0
+    return "$rc"
   fi
   if [ "$lrc" -eq 0 ]; then _ver_protect || prc=$?; else prc=1; fi
   if [ "$prc" -ne 0 ]; then
@@ -17917,28 +18510,18 @@ _ver_gc() {
     fi
     return 1
   fi
-  _ver_verdicts "$mode" "$keep"
+  if ! _ver_verdicts "$mode" "$keep"; then
+    if [ "$mode" = auto ]; then
+      echo "$lead WARN: nothing pruned — $VER_WHY"
+    else
+      echo "versions: prune skipped — $VER_WHY; nothing was removed"
+    fi
+    return 1
+  fi
   if [ "${#VER_DOOMED[@]}" -eq 0 ]; then
     [ "$mode" = auto ] || echo "versions: nothing to prune — every kept tree is protected or among the newest $keep"
-    return 0
+    return "$rc"
   fi
-  # LEFTOVERS FIRST (D-3460), on the path that is about to remove and never
-  # on a list-only run: a `.pruning-<name>.<pid>` directory is a version an
-  # earlier prune took out of view and did not finish deleting. One whose pid
-  # is dead is finished here. One whose pid is ALIVE is another GC's removal
-  # in flight, and is never touched.
-  for d in "$BOX_VERSIONS_ROOT"/.pruning-*; do
-    { [ -d "$d" ] && [ ! -L "$d" ]; } || continue
-    b="${d##*/}"; pid="${b##*.}"
-    [[ "$pid" =~ ^[0-9]+$ ]] || continue
-    kill -0 "$pid" 2>/dev/null && continue
-    if rm -rf -- "$d"; then
-      echo "$lead removed \$HOME/ccrc-versions/$b (what an earlier prune left; its process is gone)"
-    else
-      echo "$lead could not remove \$HOME/ccrc-versions/$b (what an earlier prune left) — it is already out of the version list"
-      rc=1
-    fi
-  done
   for i in "${!VER_DOOMED[@]}"; do
     n="${VER_DOOMED[$i]}"
     # A belt over `pointed-at`: the link is read again at the moment of the
@@ -17959,7 +18542,9 @@ _ver_gc() {
     # `_inst_tree`'s flip re-check — so a half-deleted tree is unreachable, and
     # D-3456's window is back to the instant between the belt's read above and
     # this rename, not the length of the delete. A removal that does not finish
-    # leaves `.pruning-<name>.<pid>`, which the next prune finishes (above).
+    # leaves `.pruning-<name>.<pid>`, which the next prune removes first
+    # (`_ver_sweep_leftovers`, called once the KEEP knob and the layout check
+    # have passed: a refused knob or a foreign/dangling `~/ccrc` sweeps nothing).
     gone="$BOX_VERSIONS_ROOT/.pruning-$n.$$"
     if ! _plat_mv_notdir "$BOX_VERSIONS_ROOT/$n" "$gone"; then
       echo "$lead could not prune \$HOME/ccrc-versions/$n — every version above it is intact"
@@ -17968,7 +18553,7 @@ _ver_gc() {
     if rm -rf -- "$gone"; then
       echo "$lead pruned \$HOME/ccrc-versions/$n (${VER_DOOMED_WHY[$i]})"
     else
-      echo "$lead could not finish pruning \$HOME/ccrc-versions/$n — it is already out of the version list; its remains are at \$HOME/ccrc-versions/.pruning-$n.$$, which the next prune removes"
+      echo "$lead could not finish pruning \$HOME/ccrc-versions/$n — it is already out of the version list and out of every reader's reach (a rename took it there; that is not a proof that nothing runs from it); its remains are at \$HOME/ccrc-versions/.pruning-$n.$$, which the next prune removes first, once its KEEP knob and \$HOME/ccrc pass the prune's own checks (a refused knob, or a \$HOME/ccrc that is not a link to a version here, sweeps nothing)"
       rc=1
     fi
   done
@@ -17996,11 +18581,13 @@ cmd_versions() {
   # reads (final review F8) — so it WARNs, lists, and marks every verdict
   # unmeasured.
   local keep_ok=1
-  if ! [[ "$keep" =~ ^[0-9]+$ ]]; then
+  if ! _keep_ok "$keep"; then
     [ "$prune" -eq 0 ] \
-      || _ccrc_die "versions: CCRC_VERSIONS_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+      || _ccrc_die "versions: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — nothing was pruned"
     keep_ok=0
-    echo "versions: WARN: CCRC_VERSIONS_KEEP is not a number — listing only; nothing would be pruned"
+    echo "versions: WARN: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — listing only; nothing would be pruned"
+  else
+    keep=$((10#$keep))
   fi
   if [ "$prune" -eq 1 ]; then
     _upd_lock
@@ -18031,21 +18618,46 @@ cmd_versions() {
     linked|migrated)
       if [ "$lrc" -eq 0 ]; then _ver_protect || prc=$?; else prc=1; fi
       if [ "$keep_ok" -eq 0 ]; then
-        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: CCRC_VERSIONS_KEEP is not a number"; done
+        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999"; done
       elif [ "$prc" -ne 0 ]; then
         echo "versions: WARN: $VER_WHY — nothing would be pruned"
         for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: unmeasured"; done
-      else
-        _ver_verdicts prune "$keep"
+      elif ! _ver_verdicts prune "$keep"; then
+        echo "versions: WARN: $VER_WHY — nothing would be pruned"   # verdicts: `kept: unmeasured`, set by the belt itself
       fi ;;
     *) for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: nothing is pruned while \$HOME/ccrc reads $VER_LAYOUT"; done ;;
   esac
+  # D-3465 (d): the listing says a version's tree was WRITTEN THROUGH since it
+  # was kept — `_ver_kept`'s rc 3, asked through the recorded role as
+  # `cmd_rollback` asks it — and UNMEASURED for its rc 2 (or any other
+  # non-zero answer) beside a record. Both words are display only: they never reach
+  # `_ver_verdicts` (D-3423's verdicts, the count and the order by record
+  # mtime read the record file, exactly as before).
+  local vrole="" krc=0
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    vrole="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  case "$vrole" in server|fleet|both) ;; *) vrole="" ;; esac
   for n in "${VER_NAMES[@]}"; do
     mark=" "; [ "$n" = "$VER_CURRENT" ] && mark="*"
-    cpl=incomplete; [ -f "$BOX_VERSIONS_ROOT/$n/$VER_RECORD_COPY" ] && cpl=complete
+    cpl=incomplete
+    if [ -f "$BOX_VERSIONS_ROOT/$n/$VER_RECORD_COPY" ]; then
+      cpl=complete; krc=0
+      _ver_kept "$n" "$vrole" || krc=$?
+      case "$krc" in
+        0) ;;
+        3) cpl=written-through ;;
+        # Review 179 M1: rc 2 (no digest — every version kept before digests
+        # existed — or one that cannot be measured) is not `complete`: a
+        # rollback to it takes the release host. Its own word, as
+        # `written-through` has, so two conditions the callers handle
+        # differently are not one word here.
+        *) cpl=unmeasured ;;
+      esac
+    fi
     printf '  %s %s  %s  %s\n' "$mark" "$n" "$cpl" "${VER_VERDICT[$n]}"
   done
-  [ "$keep_ok" -eq 1 ] || keep="(not a number)"
+  [ "$keep_ok" -eq 1 ] || keep="(not a whole number from 0 to 9999)"
   echo "versions: ${#VER_NAMES[@]} kept tree(s) under \$HOME/ccrc-versions; CCRC_VERSIONS_KEEP=$keep plus the protected set (pointed-at, previous, the projection's desired tags, running units) — 'ccrc versions --prune' removes the prunable ones"
   return "$grc"
 }

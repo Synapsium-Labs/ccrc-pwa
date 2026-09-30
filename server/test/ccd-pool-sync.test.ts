@@ -404,10 +404,14 @@ describe('ccd-pool-sync', () => {
     expect(strays(), 'a temp file outlived the run').toEqual([]);
   });
 
-  it('refuses a body over 1 MiB however well-formed it is, naming the cap, writing nothing and leaving no temp file — the read is bounded whatever curl did', () => {
-    // A VALID document padded past the cap: were the read unbounded it would be
-    // accepted and installed. The stub writes it as a real curl would have on
+  it('refuses a body over 1 MiB (RAW_CAP) however well-formed it is, whatever curl did, naming the cap, writing nothing and leaving no temp file — it pins the refusal, NOT the bound on how much is read', () => {
+    // A VALID document padded past the cap: were the cap not checked it would
+    // be accepted and installed. The stub writes it as a real curl would have on
     // an older release that ignores --max-filesize for a body of unknown length.
+    // What this does NOT pin: that the validator reads at most RAW_CAP + 1
+    // bytes. A validator that read the whole file into memory and then compared
+    // its length to RAW_CAP would pass this case unchanged, so the memory bound
+    // is pinned by nothing (`ccd-pool-sync` says the same beside the read).
     const body = JSON.stringify({ epoch: 1, issuedAt: 1, leaseUntil: 9999999999, accounts: {}, pad: 'x'.repeat(1_100_000) });
     const bin = path.join(h.home, 'bin');
     mkdirSync(bin, { recursive: true });

@@ -55,10 +55,11 @@ real values: `deploy/reference-fleet.md` (gitignored).
   (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's
   existing sweep may `try-restart` `claude-session@*` units — each ONLY behind its mandatory `KillMode=process`
   preflight (which refuses the sweep when the answer is anything else); panes/tmux stay untouched, and every
-  other actor remains forbidden. Two callers reach that same `_upd_sweep` THROUGH `cmd_update`, never a copy of
-  it: `ccrc rollback`, and — UNATTENDED — a `server`/`both` Linux box's `ccrc-update-watchdog.timer`, whose
-  `ccrc rollback --from watchdog` sweeps that box's supervisors with no human in the loop (design 2026-09-20 §11:
-  R1 inherited, never re-argued). The gate-failure restore (`--from restore`) never sweeps.
+  other actor remains forbidden. `ccrc rollback` reaches that same `_upd_sweep` through `cmd_update`, or — for a
+  rollback by flip to a kept version — directly from `cmd_rollback`; never a copy of it, always behind its own
+  preflight, no actor added. So does — UNATTENDED — a `server`/`both` Linux box's `ccrc-update-watchdog.timer`,
+  whose `ccrc rollback --from watchdog` sweeps that box's supervisors with no human in the loop, by either route
+  (design 2026-09-20 §11: R1 inherited, never re-argued). The gate-failure restore (`--from restore`) never sweeps.
 - **In tests, use FIXTURE HOMEs only — never run `ccd` against the live `$HOME`.** `HOME` is the single isolation
   boundary the whole ccd suite relies on. Harness: `makeCcdHarness(prefix)` (`server/test/ccdWsHelpers.ts`);
   cleanup in `tmpHelpers.ts`. Second boundary: `ghContainedEnv()` plants a poisoned `gh` on PATH so a stray real
@@ -87,7 +88,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 - **Run suites in the FOREGROUND, timeout ≥600000ms.** Backgrounding hides a hang; the suites are load-sensitive.
 - **Known load flakes** (real suites — re-run IN ISOLATION before calling a real break): `ccd-ws-gc`,
   `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`, `ccd-bounded-reads`. CI on the quiet box is
-  the arbiter; a flake CI passes is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
+  the arbiter, but only for a file it RAN: a pull request runs its selection, so first check that the PR's `select
+  tests` summary lists the file. If it is not listed, the arbiter is the daily run's `test (server)` or a
+  `workflow_dispatch` full run (`gh workflow run ci.yml --ref <branch> -f mode=full`). A flake that CI ran and passed
+  is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
   re-stamps while it carries` (`expected ['mid-carry:orphan'] to include 'mid-carry:restarting'`) — measured
   2026-08-16 at 2/4 full runs and 1/3 under concurrent load, but **0/6 on an idle box**, so isolation alone can
   clear it and a single green isolated run is not proof it was the load. `ccd-bounded-reads`' D4 family bounds
@@ -100,9 +104,8 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   summary `test (server)`; `test (agent)`, `test (pwa)`, `build-pwa` and `probe-macos` run in full, and
   `test-macos` runs the same selection, advisory. A change under `.github/` or `server/scripts/`, to any
   `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`, `.gitattributes` or `.npmrc`, or a missing
-  map, runs the full suite instead — and **while
-  `CCRC_SELECTION` in `ci.yml` reads `shadow`, the selection is only reported and every server test still
-  runs.** **A merge to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
+  map, runs the full suite instead. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
+  `shadow`, the selection is only reported and every server test runs. **A merge to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
   **Daily**, on `main`, every leg runs in full, macOS included, and the map is rebuilt — skipped when `main`'s
   head already has a green `full-suite` job from a trusted run (a daily or manual full run on `main`, or a stable
   gate; never a pull request's). **A promotion to `stable`** needs such a green `full-suite` on the commit:

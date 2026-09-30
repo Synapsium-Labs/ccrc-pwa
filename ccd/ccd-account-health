@@ -25,8 +25,10 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — see SECRETS below
 #                                                            CLEAR NOTHING
 #   token file missing or empty ............... refuse    -> report, no request
 #
-# Unsupported and malformed roster subjects also REFUSE with a named reason;
-# they are deliberately not folded into an absent credential or an empty pass.
+# Unsupported subjects REFUSE with a named reason. A malformed roster refuses
+# the WHOLE pass before any credential is sourced or marker changes: one id must
+# map to exactly one account and the upstream identity must be unique. Validation
+# and subject derivation consume one immutable snapshot, never two pathname reads.
 #
 # The third row's second half is the one to protect: a standing verdict survives
 # a pass that could not measure. A probe that cleared on every non-401 would
@@ -66,8 +68,10 @@ set -uo pipefail
 
 REG="$HOME/.cc-sessions"
 ROSTER="$HOME/.ccrc/accounts.json"
+ROSTER_CHECK="$HOME/ccrc/deploy/gen-accounts.mjs"
 PAUSE="$HOME/.ccrc/account-health-paused"
 LOCK="$HOME/.ccrc/account-health.lock"
+ROSTER_SNAPSHOT=""
 : "${CCRC_HEALTH_URL:=https://api.anthropic.com/api/oauth/usage}"
 : "${CCRC_HEALTH_TIMEOUT:=20}"
 # The account-id grammar. A THIRD spelling of `shared/roster.ts`'s ID_RE, after
@@ -129,7 +133,7 @@ _ah_subjects() {   # stdout: id<TAB>eligible|api-key|login|unsupported<TAB>relat
         [$id, "unsupported", ""]
       end
     | @tsv
-  ' "$ROSTER"
+  ' "$ROSTER_SNAPSHOT"
 }
 
 # The token, read in a SUBSHELL (command substitution) so the file's own
@@ -183,6 +187,8 @@ command -v curl >/dev/null 2>&1 \
   || { _ah_say "curl is not on PATH — nothing was measured"; exit 1; }
 command -v jq >/dev/null 2>&1 \
   || { _ah_say "jq is not on PATH — nothing was measured"; exit 1; }
+command -v node >/dev/null 2>&1 \
+  || { _ah_say "node is not on PATH — the account roster cannot be validated; nothing was measured"; exit 1; }
 command -v flock >/dev/null 2>&1 \
   || { _ah_say "flock is not on PATH — nothing was measured"; exit 1; }
 
@@ -198,13 +204,27 @@ exec 9>"$LOCK" \
   || { _ah_say 'cannot open the lock at $HOME/.ccrc/account-health.lock — nothing was measured'; exit 1; }
 flock -n 9 || exit 0
 [ -e "$PAUSE" ] && exit 0
-rm -f -- "$REG"/*-authdead.tmp.* 2>/dev/null
 
 [ -r "$ROSTER" ] \
   || { _ah_say 'no roster at $HOME/.ccrc/accounts.json — nothing says which accounts exist'; exit 1; }
+[ -r "$ROSTER_CHECK" ] \
+  || { _ah_say 'the shipped roster validator at $HOME/ccrc/deploy/gen-accounts.mjs is missing — nothing was measured'; exit 1; }
+ROSTER_SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/ccrc-account-health.XXXXXX")" \
+  || { _ah_say 'cannot stage an immutable roster snapshot — nothing was measured'; exit 1; }
+trap 'rm -f -- "$ROSTER_SNAPSHOT"' EXIT
+cat -- "$ROSTER" > "$ROSTER_SNAPSHOT" \
+  || { _ah_say 'the roster at $HOME/.ccrc/accounts.json could not be snapshotted — nothing was measured'; exit 1; }
+ROSTER_WHY="$(node "$ROSTER_CHECK" "$ROSTER_SNAPSHOT" 2>&1 >/dev/null)"; rc=$?
+if [ "$rc" -ne 0 ]; then
+  ROSTER_WHY="${ROSTER_WHY#gen-accounts: "$ROSTER_SNAPSHOT": }"
+  ROSTER_WHY="${ROSTER_WHY%%$'\n'*}"
+  _ah_say "the roster at \$HOME/.ccrc/accounts.json is invalid — $ROSTER_WHY nothing was measured"
+  exit 1
+fi
+rm -f -- "$REG"/*-authdead.tmp.* 2>/dev/null
 
 SUBJECTS="$(_ah_subjects 2>/dev/null)" \
-  || { _ah_say 'the roster at $HOME/.ccrc/accounts.json does not parse — nothing was measured'; exit 1; }
+  || { _ah_say 'the validated roster snapshot does not parse — nothing was measured'; exit 1; }
 
 # ONE LINE IS ONE classified subject, and the loop is built so that nothing can
 # make it two. An unquoted expansion would split an id carrying a space into two

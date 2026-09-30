@@ -257,8 +257,11 @@ this table, not reconstructed.
   workers, clamped to **1–5**.
 - macOS: at most **2** shards on any pull request — even one that fell back to full — and **4** on a scheduled,
   dispatched or called full run, so the organisation's 5-job macOS cap still leaves room for `probe-macos` and a
-  second pull request (§15.10). Each macOS shard still runs one vitest worker — sharding across machines is the lever,
-  and `maxWorkers: '40%'` is left alone.
+  second pull request (§15.10). Each macOS shard runs **two** vitest workers; this supersedes the original one-worker
+  ruling after the repeated hosted-runner evidence in §15.17 (`D-3527`).
+- A profile's worker count is one value end to end: it divides the planner's estimated load, is copied onto every
+  planned shard and matrix row, and is passed to Vitest as `--maxWorkers` or trace-run as `--jobs`. The planner cannot
+  assume concurrency that the runner command does not use.
 - If there are no durations at all, test shards fall back to vitest's own `--shard=i/n` (hash-partitioned by path);
   trace shards, which run an exact list, are packed with the default weight instead.
 
@@ -390,8 +393,9 @@ alongside: the selected share of server runtime across the last 100 merged PRs.
   never expands (§4.2).
 - **Selecting `agent` and `pwa`** — under three minutes together; not worth the risk (§3).
 - **A `stable` ruleset required check** — refuses `schedule` and `workflow_dispatch` evidence (§8).
-- **Raising macOS `maxWorkers`** — the vitest config argues against it for flake reasons; machine-level sharding is
-  used instead (§7.1).
+- **Raising macOS `maxWorkers` without hosted-runner evidence** — originally rejected because the vitest config
+  argues against it for flake reasons. §15.17 records the repeated evidence that later superseded this rejection;
+  machine-level sharding and two workers are now used together (§7.1, `D-3527`).
 - **Sharding alone** — shortens wall-clock but cuts no compute; ruling 4 asked for both.
 
 ## 14. Documentation corrected in the same change
@@ -488,3 +492,13 @@ The bounded second review round (closure of the 43, plus a fresh pass over the n
     green-full-suite`). The live tests are listed with `git ls-tree -z`, so a name git would quote still runs and one
     no list can carry is refused (§6.3); every cache path lives under the runner's temp directory, where a pull request
     cannot plant a map; and a test that skips cases under trace is written `unknown` (`SKIPS_UNDER_TRACE`, §5.2).
+17. **Two macOS workers after repeated hosted-runner evidence (2026-09-28, `D-3527`).** Diagnostic run
+    `36410278756` identified a separate 35-second reverse lookup in each proxy process start; that product defect was
+    removed before judging worker concurrency. A/B run `36413685222` then ran the same four shards at one and two
+    workers: two workers cut the critical path from 20.64 to 12.99 minutes (37.1%, about 1.59x), with identical file,
+    case, skip and complete failure identities. Independent two-worker repetitions `36418766581` and `36418790643`
+    completed at 12.44 and 12.25 minutes and matched those identities again. Across all three two-worker executions,
+    the only 37 failures were the diagnostic branch's expected workflow-shape failures; no product-only or
+    load-sensitive failure appeared. The old one-worker choice and rejected-alternative entry are therefore
+    superseded. Both macOS profiles use two workers, and every profile's `workers` value travels through `Shard` and
+    the matrix to the exact Vitest or trace-run command, so planning and execution cannot drift independently.
