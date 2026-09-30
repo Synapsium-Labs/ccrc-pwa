@@ -58,6 +58,10 @@ const ev = (out: Out, name: string): EventOut => {
   return e as EventOut;
 };
 
+/** A two-letter name for index i ('aa', 'ab', ...): a key with no digit, so a row that
+ *  builds a wide object pins the WIDTH bound and is not collapsed by the digit rule. */
+const alpha = (i: number): string => String.fromCharCode(97 + Math.floor(i / 26), 97 + (i % 26));
+
 /** Every string a payload carries that must never reach the output. */
 const SENTINELS = [
   'SENTINEL-last-message', '/home/secret-host/x', 'SENTINEL-prompt-text', 'sid-sentinel-0001',
@@ -141,6 +145,23 @@ describe('hook-capture-reduce (worker stall watch §5.1)', () => {
     expect(JSON.stringify(out).includes('b989ocn62')).toBe(false);
   });
 
+  it('collapses a background_tasks element with a digit in any key to (map), so elementKeys never prints the key', () => {
+    cap('Stop', 1, 's', { hook_event_name: 'Stop', background_tasks: [{ b989ocn62: 1, type: 'x' }] });
+    cap('Stop', 2, 's', { hook_event_name: 'Stop', background_tasks: [{ id: 'k', type: 'monitor' }] });
+    const out = reduce();
+    // Control: a clean element still lists its keys, and the collapsed one is the only (map).
+    expect(ev(out, 'Stop').backgroundTasks.elementKeys).toEqual([['(map)'], ['id', 'type']]);
+    expect(JSON.stringify(out).includes('b989ocn62')).toBe(false);
+  });
+
+  it('collapses a background_tasks element wider than 50 keys to (map) in elementKeys too', () => {
+    const wide = Object.fromEntries(Array.from({ length: 51 }, (_, i) => [`k${alpha(i)}`, i]));
+    cap('Stop', 1, 's', { hook_event_name: 'Stop', background_tasks: [wide, { id: 'k', type: 'monitor' }] });
+    const out = reduce();
+    expect(ev(out, 'Stop').backgroundTasks.elementKeys).toEqual([['(map)'], ['id', 'type']]);
+    expect(JSON.stringify(out).includes('kaa')).toBe(false);
+  });
+
   it('prints a hostile or over-long type as (unprintable), and keeps a token with a space', () => {
     cap('Stop', 1, 's', {
       hook_event_name: 'Stop',
@@ -164,7 +185,6 @@ describe('hook-capture-reduce (worker stall watch §5.1)', () => {
   it('collapses an object wider than 50 keys to one (map) segment, and descends one of exactly 50', () => {
     // Letters only (alpha), never a digit: a digit in a key collapses an object to (map)
     // on its own, and these two rows pin the WIDTH bound and nothing else.
-    const alpha = (i: number): string => String.fromCharCode(97 + Math.floor(i / 26), 97 + (i % 26));
     const wide = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`k${alpha(i)}`, i]));
     const fifty = Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`m${alpha(i)}`, 'v']));
     cap('Stop', 1, 's', { hook_event_name: 'Stop', big: wide, mid: fifty });

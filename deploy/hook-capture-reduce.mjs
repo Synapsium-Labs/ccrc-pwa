@@ -9,19 +9,34 @@
 // `transcript_path`, `prompt`, `cwd` and tool arguments, and this repository is
 // public. This tool prints ONE JSON document that holds only:
 //   - key paths and their JSON types (never a value), to depth 4, with an array
-//     one `[]` segment, `tool_input`/`tool_response` never descended, and a key
-//     segment that fails the token test printed `(unprintable)`. An object is
-//     collapsed to one `(map)` segment, its keys never printed, when it is wider
-//     than 50 keys, or, below the payload root, when any of its keys carries a
-//     digit: a map keyed by ids (task ids, agent ids, session ids) is the one
-//     shape whose KEYS are data, and no field name of a hook payload has a digit.
-//     That digit test is a heuristic, not a proof: an id spelled with letters
-//     only would still print as a key segment;
+//     one `[]` segment and `tool_input`/`tool_response` never descended. A key
+//     name is printed only if it passes the KEY test (letters, digits, `_`, `.`,
+//     `-`, 1 to 40 characters, NO space); any other prints `(unprintable)`. That
+//     is its own rule, apart from the token test below, which admits a space.
+//     An object is collapsed to one `(map)` segment, and NONE of its keys is
+//     printed, when it is wider than 50 keys or when any of its keys carries a
+//     digit. That holds on both paths that print key names taken from the
+//     payload: the key paths above and background_tasks' `elementKeys` (an
+//     element is an object too). The only other key names printed are the
+//     `error`/`reason` fields below, which a fixed pattern picks out and which
+//     are not collected from the object. The payload ROOT is exempt from the
+//     digit test only (a root wider than 50 keys still collapses). The digit test
+//     exists because a map keyed by ids (task ids, agent ids, session ids) is the
+//     one shape whose KEYS are data. It rests on an ASSUMPTION the tool cannot
+//     check: that no field name of a hook payload carries a digit. The root exemption is the guard for the day it fails: a
+//     new top-level field such as `mcp_v2` then keeps the hook's own top-level
+//     key names visible, where collapsing the root would erase them all. A
+//     digit-bearing name below the root does collapse its object, and that shows
+//     as a `(map)` in the output, which is the cue to revisit the test. The digit
+//     test is also a heuristic, not a proof: an id spelled with letters only
+//     would still print as a key;
 //   - counts, and booleans turned into counts: agent_id (absent, empty,
-//     nonEmpty); the pane's meta-line id against the payload's session_id
-//     (absent: the meta line names no id; equalsPayload and differsFromPayload:
-//     both ids are strings; payloadAbsent: the payload has no string
-//     session_id); and background_tasks' shape (absent, notArray, array);
+//     nonEmpty); the pane's meta-line id against the payload's session_id; and
+//     background_tasks' shape (absent, notArray, array). The meta-line counts
+//     have a fixed precedence: a meta line that names no id counts under
+//     `absent` FIRST, whatever the payload says; only then does a payload with no
+//     string `session_id` count under `payloadAbsent`; and only when both ids are
+//     strings do `equalsPayload` and `differsFromPayload` apply;
 //   - three kinds of string value. A background_tasks element's `type` and
 //     SessionStart's `source` pass the token test (letters, digits, space, `_`,
 //     `.`, `-`, at most 40). StopFailure's error-field values pass a STRICTER
@@ -57,6 +72,8 @@ const tok = (v) => (typeof v === 'string' && TOKEN.test(v) ? v : UNPRINTABLE);
 const errValue = (v) => (typeof v === 'string' && ERROR_VALUE.test(v) ? v : UNPRINTABLE);
 const seg = (k) => (KEY.test(k) ? k : UNPRINTABLE);
 const idKeyed = (names) => names.some((k) => DIGIT.test(k));
+/** An object whose keys are not printed: too wide, or (below the payload root) a digit in a key. */
+const asMap = (names, atRoot) => names.length > MAP_WIDTH || (!atRoot && idKeyed(names));
 const typeOf = (v) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const sorted = (set) => [...set].sort();
@@ -70,7 +87,7 @@ function add(keys, p, t) {
 /** The members of an object at `segs` (the payload itself at `[]`). */
 function walkObject(obj, segs, keys) {
   const names = Object.keys(obj);
-  if (names.length > MAP_WIDTH || (segs.length > 0 && idKeyed(names))) {
+  if (asMap(names, segs.length === 0)) {
     for (const k of names) add(keys, [...segs, MAP].join('.'), typeOf(obj[k]));
     return;
   }
@@ -171,7 +188,8 @@ for (const f of files) {
     a.bg.array += 1;
     for (const e of bt) {
       if (!isObject(e)) continue;
-      a.elementKeys.add(JSON.stringify(Object.keys(e).map(seg).sort()));
+      const names = Object.keys(e);
+      a.elementKeys.add(JSON.stringify(asMap(names, false) ? [MAP] : names.map(seg).sort()));
       if (e.type !== undefined) a.types.add(tok(e.type));
     }
   }
