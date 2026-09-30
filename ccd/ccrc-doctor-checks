@@ -1795,9 +1795,10 @@ _check_exposure() {
 # be a second holder. Every one below is a variable.
 _check_update-exposure() {
   if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_CADDYFILE:-}" ] || [ -z "${CCRC_DDNS_UNIT:-}" ] \
-     || [ -z "${BOX_ENV_FILE:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
+     || [ -z "${BOX_ENV_FILE:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1 \
+     || ! declare -F _box_unit_env >/dev/null 2>&1; then
     _dr_fail update-exposure "ccrc's own config and exposure constants are not loaded, so whether this box's update routes are gated was never measured" \
-      "this is a bug in ccrc, not a fact about your box — _check_update-exposure reads BOX_ENV_FILE and CCRC_EXPOSURE_FILE through _box_env_value and looks for CCRC_CADDYFILE and the CCRC_DDNS_UNIT unit, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+      "this is a bug in ccrc, not a fact about your box — _check_update-exposure reads this box's recorded CCRC_ROLE through _box_env_value, and the CCRC_AUTH flag and the CCRC_HOST bind through _box_unit_env, and looks for CCRC_CADDYFILE and the CCRC_DDNS_UNIT unit, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
     return 1
   fi
   local envok=0 role=""

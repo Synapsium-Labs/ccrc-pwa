@@ -3344,6 +3344,24 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
     expect(r.status).toBe(1);
   });
+
+  // Fix round 1 item 4 / review 196 F5: `_check_auth`'s guard tests
+  // `_box_unit_env` too (`:1282`). Unlike D8, this sources BOTH files intact
+  // and removes only the FUNCTION, so every constant the guard also checks
+  // stays present — a dropped `_box_unit_env` term is the only thing that can
+  // red this pin. `BUE_VAL=on` is preset AFTER sourcing ccrc (a shell
+  // assignment, never an env entry — `ccd/ccrc:2768` resets it at file scope
+  // on load), so a guard that skips the missing function reads a stale ARMED
+  // instead of failing shut.
+  it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, not a stale ARMED PASS', () => {
+    const nowhere = join(REPO, 'no-such-home-for-check-auth-bue');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(CCRC_SRC)}; . ${shq(CHECKS_SRC)}; unset -f _box_unit_env; BUE_VAL=on; _check_auth`],
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
+    expect(r.stdout).toMatch(/^FAIL auth: ccrc's own config reader is not loaded/m);
+    expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
+    expect(r.status).toBe(1);
+  });
 });
 
 // ── what this box's sessions are spawned AS ───────────────────────────────
@@ -7557,6 +7575,25 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
       expect(writerArms, `${arm}: the real writer stopped arming`).toBe(true);
       expect(fixtureArms, `${arm}: writeExposureEnv drifted from _exp_env_write`).toBe(writerArms);
     }
+  });
+
+  // Fix round 1 item 4 / review 196 F5: `_check_update-exposure` now calls
+  // `_box_unit_env` (armed/reachable), but its not-loaded guard tested only
+  // `_box_env_value`. The guard now names `_box_unit_env` too. This sources
+  // BOTH files intact and removes only the FUNCTION (never `unset
+  // CCRC_EXPOSURE_FILE`, which the guard tests first and would mask the
+  // mutation), with `BUE_VAL=on` preset AFTER sourcing ccrc as a shell
+  // assignment (an env entry is reset at ccrc's own file scope, `:2768`) — a
+  // guard missing this term reads that stale value as ARMED instead of
+  // failing shut.
+  it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, not a stale ARMED PASS', () => {
+    const nowhere = join(REPO, 'no-such-home-for-check-update-exposure-bue');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(CCRC_SRC)}; . ${shq(CHECKS_SRC)}; unset -f _box_unit_env; BUE_VAL=on; _check_update-exposure`],
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
+    expect(r.stdout).toMatch(/^FAIL update-exposure: ccrc's own config and exposure constants are not loaded/m);
+    expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
+    expect(r.status).toBe(1);
   });
 });
 
