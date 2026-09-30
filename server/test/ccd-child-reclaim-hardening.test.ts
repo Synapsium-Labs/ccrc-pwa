@@ -1050,38 +1050,236 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     fs.symlinkSync(path.join(h.home, 'elsewhere', 'sub'), path.join(h.home, 'lnk'));
   };
 
-  it('`..` in the ENTERED prefix whose logical walk fails once `gone` goes: bash’s `cd` would fall back to the kernel’s walk, which is not where the session lives — unmeasured, no token, and ws-reclaim removes nothing', () => {
+  // THE ENVIRONMENTS a reclaim may run in (spec §5.5, rung 9). A bare `cd` or
+  // `pwd` is environment-shaped: a physical mode carried in (`set -P`), or a
+  // function of that name imported through the environment, which bash
+  // installs in the very shell that sources ccd. Each hostile one answers
+  // PHYSICALLY where the pane's own shell entered LOGICALLY.
+  type Env = 'normal' | 'set -P' | 'an imported cd' | 'an imported pwd';
+  const ENVS: Record<Env, { pre: string; vars: Record<string, string> }> = {
+    normal: { pre: '', vars: {} },
+    'set -P': { pre: 'set -P;', vars: {} },
+    // Physical, and deaf to its caller's own `-L`: it enters its LAST argument.
+    'an imported cd': { pre: '', vars: { 'BASH_FUNC_cd%%': '() { builtin cd -P -- "${@: -1}"; }' } },
+    // Deaf to `-P`: it prints the logical path the shell entered by.
+    'an imported pwd': { pre: '', vars: { 'BASH_FUNC_pwd%%': '() { builtin pwd -L; }' } },
+  };
+  const ALL = Object.keys(ENVS) as Env[];
+  const THREE: readonly Env[] = ['normal', 'set -P', 'an imported cd'];
+  /** A snippet in `env`, answering instead of throwing. */
+  const shIn = (env: Env, snippet: string): { code: number; stdout: string; stderr: string } => {
+    try { return { code: 0, stdout: h.sh(`${ENVS[env].pre} ${snippet}`, ENVS[env].vars), stderr: '' }; } catch (e) {
+      const err = e as { status?: number; stdout?: string; stderr?: string };
+      return { code: err.status ?? 1, stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? '') };
+    }
+  };
+  /** The ladder's own answer in `env`, as `evalOf` reads it. */
+  const evalIn = (env: Env): { verdict: string; token: string; detail: string } => {
+    const [verdict = '', token = '', detail = ''] = shIn(env, `${CHILD_STUBS} _ws_reclaim_eval ${CHILD_ID} 0 '' >/dev/null;`
+      + ` printf '%s\\x1f%s\\x1f%s' "$REAP_VERDICT" "$REAP_TOKEN" "$REAP_DETAIL"`).stdout.split('\x1f');
+    return { verdict, token, detail };
+  };
+  /** `ws-reclaim` in `env`, as `childReclaimVerb` runs it; `pre` runs after the stubs. */
+  const verbIn = (env: Env, token: string, pre = ''): { code: number; stdout: string; stderr: string } =>
+    shIn(env, `${CHILD_STUBS} ${pre} ${CHILD_ENV} cmd_ws_reclaim --expect ${token} --child-of ${CHILD_RUN} --session ${CHILD_ID}`);
+  /** The resolver's answer for `p` in `env`: `<rc>\x1f<canonical>`. */
+  const resolveIn = (env: Env, p: string): string =>
+    shIn(env, `_ws_reclaim_resolve "${p}"; printf '%s\\x1f%s' "$?" "$_WS_RESOLVED"`).stdout;
+  /** THE CONTROL that the hostility is in force, so a crash or an import that did nothing cannot pass as green:
+   *  where a BARE `cd` of `$HOME/lnk/..` lands, and what a bare `pwd -P` says after a logical entry of `$HOME/lnk`. */
+  const expectHostile = (env: Env): void => {
+    const [cd = '', pwd = ''] = shIn(env, '( cd -- "$HOME/lnk/.." >/dev/null 2>&1 && pwd -P ); printf \'\\x1f\';'
+      + ' ( builtin cd -L -- "$HOME/lnk" >/dev/null 2>&1 && pwd -P )').stdout.split('\x1f').map((x) => x.trim());
+    const physical = env === 'set -P' || env === 'an imported cd';
+    expect(cd, `the CONTROL (${env}): where a bare \`cd\` of <lnk>/.. lands`)
+      .toBe(physical ? fs.realpathSync(path.join(h.home, 'elsewhere')) : (env === 'normal' ? fs.realpathSync(h.home) : h.home));
+    expect(pwd, `the CONTROL (${env}): what a bare \`pwd -P\` says inside <lnk>`)
+      .toBe(env === 'an imported pwd' ? `${h.home}/lnk` : fs.realpathSync(path.join(h.home, 'elsewhere', 'sub')));
+  };
+  /** The prefix row's raw spelling, `$HOME/lnk/../gone/../<the child's path below $HOME>`. */
+  const prefixRowOf = (c: Child): string => `${h.home}/lnk/../gone/../${path.relative(h.home, c.wt)}`;
+
+  for (const env of ALL) {
+    it(`STANDING, under ${env}: \`$HOME/lnk/../gone/../<child path>\` with \`gone\` standing IS the child — SHARED, and one resolver places both sides`, () => {
+      const c = makeChild(h);
+      plantLinkedPrefix();
+      fs.mkdirSync(path.join(h.home, 'gone'));
+      expectHostile(env);
+      const raw = prefixRowOf(c);
+      otherRowOf(DOTDOT, raw);
+      expect(h.sh(`cd -- "${raw}" && pwd -P`), 'the CONTROL: a pane entering the row lands in the child').toBe(fs.realpathSync(c.wt));
+      const r = evalIn(env);
+      expect(r.token, `a destructive token was minted — ${r.verdict}: ${r.detail}`).toBe('');
+      expect(r.verdict, r.detail).toBe('containment-unproven');
+      expect(r.detail).toContain(`is also named by registry row(s) ${DOTDOT}`);
+      const child = fs.realpathSync(c.wt);
+      expect(resolveIn(env, raw), 'the resolver places the row at the child').toBe(`0\x1f${child}`);
+      expect(resolveIn(env, c.wt), 'and the child at itself — the SAME operation answers both sides').toBe(`0\x1f${child}`);
+    }, 60_000);
+  }
+
+  for (const env of THREE) {
+    it(`VANISHED, under ${env}: once \`gone\` goes the logical walk fails — never the kernel’s fallback: unmeasured, no token, and ws-reclaim removes nothing`, () => {
+      const c = makeChild(h);
+      const rel = path.relative(h.home, c.wt);
+      plantLinkedPrefix();
+      // The REAL token, taken before the row exists: the rows are no input to it.
+      const tok = evalOf(h).token;
+      expect(tok, 'the CONTROL: without the row the ladder passes').toMatch(/^[0-9a-f]{64}$/);
+      expect(evalIn(env).token, `the CONTROL: under ${env}, without the row, the ladder mints the SAME token`).toBe(tok);
+      fs.mkdirSync(path.join(h.home, 'gone'));
+      const raw = prefixRowOf(c);
+      otherRowOf(DOTDOT, raw);
+      plantTmux(h, { sessions: [`cc-${DOTDOT}`] });
+      expect(h.sh(`cd -- "${raw}" && pwd -P`), 'the CONTROL: a pane entering the row now lands in the child').toBe(fs.realpathSync(c.wt));
+      const before = treeOf(c.wt);
+      fs.rmdirSync(path.join(h.home, 'gone'));
+      expectHostile(env);
+      const elsewhere = fs.realpathSync(path.join(h.home, 'elsewhere'));
+      expect(h.sh(`cd -- "${h.home}/lnk/../gone/.." && pwd -P`), 'the CONTROL: bash’s own `cd` falls back to the kernel’s walk').toBe(elsewhere);
+      expect(h.sh(`_ws_realpath "${raw}"`), 'the CONTROL: so `_ws_realpath` answers a path outside the child').toBe(`${elsewhere}/${rel}`);
+      const r = evalIn(env);
+      expect(r.token, `the evaluation minted a destructive token — ${r.verdict}: ${r.detail}`).toBe('');
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.detail).toContain(`registry row(s) ${DOTDOT} ${UNRESOLVED}`);
+      expect(resolveIn(env, raw), 'the resolver answers unresolvable, and names no path').toBe('1\x1f');
+      const v = verbIn(env, tok);
+      expect(v.stdout, 'the verb reclaimed the child — the live session’s tree').not.toContain('"reclaimed"');
+      preserved(c, raw, before);
+      expect(v.code, v.stdout + v.stderr).toBe(1);
+      const o = JSON.parse(v.stdout) as { failed: string; detail: string };
+      expect(o.failed, 'refused at evaluation, before anything started').toBe('probe-unmeasured');
+      expect(o.detail).toContain(`registry row(s) ${DOTDOT} ${UNRESOLVED}`);
+    }, 90_000);
+
+    it(`VANISHED at REMOVAL TIME on the fresh arm, under ${env}: the row appears and \`gone\` goes after the verb’s own evaluation passed — the tail’s re-check refuses`, () => {
+      const c = makeChild(h);
+      const rel = path.relative(h.home, c.wt);
+      plantLinkedPrefix();
+      fs.mkdirSync(path.join(h.home, 'gone'));
+      plantTmux(h, { sessions: [`cc-${DOTDOT}`] });
+      expectHostile(env);
+      const tok = evalIn(env).token;
+      expect(tok, `the CONTROL: under ${env}, without the row, the ladder passes`).toMatch(/^[0-9a-f]{64}$/);
+      const raw = prefixRowOf(c);
+      const before = treeOf(c.wt);
+      // The seam is the tail's first act, after the evaluation and the pin and before `_ws_reclaim_owned`.
+      const pre = '_ws_unsupervise() { echo "unsupervise $*" >> "$HOME/ccd-calls";'
+        + ` printf '%s' 'u-${DOTDOT}' > "$HOME/.cc-sessions/${DOTDOT}.uuid";`
+        + ` printf '%s' "$HOME/lnk/../gone/../${rel}" > "$HOME/.cc-sessions/${DOTDOT}.workdir";`
+        + ' rmdir "$HOME/gone"; };';
+      const v = verbIn(env, tok, pre);
+      expect(fs.existsSync(path.join(c.wt, 'f1.txt')), `the tail removed the live session’s tree — ${v.stdout}`).toBe(true);
+      expect(h.calls().some((l) => l.startsWith(`unsupervise ${CHILD_ID} `)), 'the CONTROL: the tail was reached').toBe(true);
+      expect(fs.existsSync(path.join(h.home, 'gone')), 'the CONTROL: `gone` was removed at the seam').toBe(false);
+      preserved(c, raw, before);
+      expect(v.code, v.stdout + v.stderr).toBe(1);
+      const o = JSON.parse(v.stdout) as { failed: string; detail: string };
+      expect(o.failed).toBe('worktree-remove-failed');
+      expect(o.detail).toContain(`registry row(s) ${DOTDOT} ${UNRESOLVED}`);
+      failedPairAgrees(v);
+      expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb the fresh arm wrote stays').toBe('reclaim:children');
+    }, 90_000);
+
+    it(`VANISHED at REMOVAL TIME on a resumed arm, under ${env}: no evaluation in front of it — the tail’s re-check refuses`, () => {
+      const c = makeChild(h);
+      plantLinkedPrefix();
+      interrupted(c, 'worktree');
+      const tok = resumeToken('worktree');
+      expect(tok, 'the CONTROL: the resume token was minted before the row').toMatch(/^[0-9a-f]{64}$/);
+      fs.mkdirSync(path.join(h.home, 'gone'));
+      const raw = prefixRowOf(c);
+      otherRowOf(DOTDOT, raw);
+      plantTmux(h, { sessions: [`cc-${DOTDOT}`] });
+      fs.rmdirSync(path.join(h.home, 'gone'));
+      expectHostile(env);
+      const before = treeOf(c.wt);
+      const v = verbIn(env, tok);
+      expect(treeOf(c.wt), `the resumed tail removed the live session’s tree — ${v.stdout}`).toEqual(before);
+      preserved(c, raw, before);
+      expect(v.code, v.stdout + v.stderr).toBe(1);
+      const o = JSON.parse(v.stdout) as { failed: string; detail: string };
+      expect(o.failed).toBe('worktree-remove-failed');
+      expect(o.detail).toContain(`registry row(s) ${DOTDOT} ${UNRESOLVED}`);
+      failedPairAgrees(v);
+      expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');
+    }, 90_000);
+  }
+
+  for (const env of ALL) {
+    it(`the CHILD’s own canonical comes from the same resolver, under ${env}: a child under a linked ancestor, and a row spelled by its real path — SHARED`, () => {
+      const c = makeChild(h);
+      fs.renameSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtreal'));
+      fs.symlinkSync(path.join(h.home, 'wtreal'), path.join(h.home, 'worktrees'));
+      plantLinkedPrefix();
+      expectHostile(env);
+      const real = `${h.home}/wtreal/${path.relative(path.join(h.home, 'worktrees'), c.wt)}`;
+      otherRowOf('demo-real', real);
+      const r = evalIn(env);
+      expect(r.token, `a destructive token was minted — ${r.verdict}: ${r.detail}`).toBe('');
+      expect(r.verdict, r.detail).toBe('containment-unproven');
+      expect(r.detail).toContain('is also named by registry row(s) demo-real');
+      const child = fs.realpathSync(c.wt);
+      expect(resolveIn(env, c.wt), 'the child, by its registry spelling').toBe(`0\x1f${child}`);
+      expect(resolveIn(env, real), 'the row, by the real path — one canonical').toBe(`0\x1f${child}`);
+    }, 60_000);
+  }
+
+  it('a CHILD whose own workdir cannot be resolved is compared with no fallback: a row not literally at or below it cannot be placed against it, and a literal one is still refused', () => {
     const c = makeChild(h);
-    const rel = path.relative(h.home, c.wt);
+    fs.mkdirSync(path.join(c.wt, 'server'));
+    fs.mkdirSync(path.join(h.home, 'elsewhere'));
+    const demo = path.dirname(c.wt);
+    otherRowOf('demo-else', path.join(h.home, 'elsewhere'));
+    expect(evalOf(h).verdict, 'the CONTROL: searchable, a row outside places nowhere').toBe('reclaimable');
+    fs.chmodSync(demo, 0o000);
+    let out: { verdict: string; token: string; detail: string };
+    let nested: { verdict: string; token: string; detail: string };
+    let own: string;
+    try {
+      own = h.sh(`_ws_reclaim_resolve "${c.wt}"; printf '%s\\x1f%s' "$?" "$_WS_RESOLVED"`);
+      out = evalOf(h);
+      otherRowOf('demo-nested', path.join(c.wt, 'server'));
+      nested = evalOf(h);
+    } finally { fs.chmodSync(demo, 0o755); }
+    expect(own, 'the CONTROL: the child’s own workdir does not resolve').toBe('1\x1f');
+    expect(out.token).toBe('');
+    expect(out.verdict, out.detail).toBe('unmeasured');
+    expect(out.detail).toContain(`registry row(s) demo-else cannot be placed against this child: ${CHILD_ID}'s own workdir cannot be resolved`);
+    expect(nested.verdict, `a literal row outranks it — ${nested.detail}`).toBe('containment-unproven');
+    expect(nested.detail).toContain('registry row(s) demo-nested rooted inside');
+  }, 60_000);
+
+  it('`CDPATH` never redirects the resolver’s entry — helper level: a row reaches the resolver only once proven absolute, and `CDPATH` never applies to an operand opening with `/`', () => {
+    fs.mkdirSync(path.join(h.home, 'rel'));
+    fs.mkdirSync(path.join(h.home, 'cdp', 'rel'), { recursive: true });
+    const home = fs.realpathSync(h.home);
+    expect(h.sh('CDPATH="$HOME/cdp"; ( cd -- rel >/dev/null 2>&1 && pwd -P )'), 'the CONTROL: a bare `cd` follows CDPATH')
+      .toBe(`${home}/cdp/rel`);
+    expect(h.sh('CDPATH="$HOME/cdp"; _ws_reclaim_resolve rel/gone; printf \'%s\\x1f%s\' "$?" "$_WS_RESOLVED"'),
+      'entered where the walk found it (the cwd), never through CDPATH').toBe(`0\x1f${home}/rel/gone`);
+  }, 60_000);
+
+  it('in a NORMAL environment the resolver answers exactly what `_ws_realpath` answers, for every spelling these suites use that it resolves', () => {
+    const c = makeChild(h);
     plantLinkedPrefix();
-    // The REAL token, taken before the row exists: the rows are no input to it.
-    const tok = evalOf(h).token;
-    expect(tok, 'the CONTROL: without the row the ladder passes').toMatch(/^[0-9a-f]{64}$/);
-    fs.mkdirSync(path.join(h.home, 'gone'));
-    const raw = `${h.home}/lnk/../gone/../${rel}`;
-    otherRowOf(DOTDOT, raw);
-    plantTmux(h, { sessions: [`cc-${DOTDOT}`] });
-    expect(h.sh(`cd -- "${raw}" && pwd -P`), 'the CONTROL: a pane entering the row now lands in the child').toBe(fs.realpathSync(c.wt));
-    const shared = evalOf(h);
-    expect(shared.verdict, `the CONTROL: with \`gone\` standing the row resolves to the child — ${shared.detail}`).toBe('containment-unproven');
-    expect(shared.detail).toContain(`is also named by registry row(s) ${DOTDOT}`);
-    const before = treeOf(c.wt);
-    fs.rmdirSync(path.join(h.home, 'gone'));
-    const elsewhere = fs.realpathSync(path.join(h.home, 'elsewhere'));
-    expect(h.sh(`cd -- "${h.home}/lnk/../gone/.." && pwd -P`), 'the CONTROL: bash’s own `cd` falls back to the kernel’s walk').toBe(elsewhere);
-    expect(h.sh(`_ws_realpath "${raw}"`), 'the CONTROL: so `_ws_realpath` answers a path outside the child').toBe(`${elsewhere}/${rel}`);
-    const r = evalOf(h);
-    expect(r.token, `the evaluation minted a destructive token — ${r.verdict}: ${r.detail}`).toBe('');
-    expect(r.verdict, r.detail).toBe('unmeasured');
-    expect(r.detail).toContain(`registry row(s) ${DOTDOT} ${UNRESOLVED}`);
-    const v = childReclaimVerb(h, tok);
-    expect(v.stdout, 'the verb reclaimed the child — the live session’s tree').not.toContain('"reclaimed"');
-    preserved(c, raw, before);
-    expect(v.code, v.stdout + v.stderr).toBe(1);
-    const o = JSON.parse(v.stdout) as { failed: string; detail: string };
-    expect(o.failed, 'refused at evaluation, before anything started').toBe('probe-unmeasured');
-    expect(o.detail).toContain(`registry row(s) ${DOTDOT} ${UNRESOLVED}`);
-  }, 90_000);
+    fs.mkdirSync(path.join(h.home, 'elsewhere', 'x'));
+    fs.symlinkSync(`/${path.join(h.home, 'elsewhere')}`, path.join(h.home, 'dsl'));
+    fs.symlinkSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtlink'));
+    const H = h.home; const W = c.wt;
+    const spellings = [W, `${W}/`, `${W}//`, `${H}//worktrees/demo/quiet-basin`, `${W}/server`, `${W}/a/b/c`, `${W}/a//b/`,
+      `${H}/deleted/long/ago`, `${H}/elsewhere`, `${W}/..`, `${W}/../../../elsewhere`, `${H}/lnk`, `${H}/lnk/`, `${H}/lnk/..`,
+      `${H}/lnk/x`, `${H}/lnk/../${path.relative(H, W)}`, `${H}/lnk/../elsewhere/x`, `${H}/gone/./x`, `${H}/dsl/server`,
+      `${H}/dsl/x/y`, `${H}/wtlink/demo/quiet-basin`, `${H}/wtlink/demo/quiet-basin/gone`, '/', '/nonexistent-ccrc-root/x'];
+    const out = h.sh(`for p in ${spellings.map((p) => `'${p}'`).join(' ')}; do _ws_reclaim_resolve "$p"; rc=$?;`
+      + ` printf '%s\\x1f%s\\x1f%s\\x1f%s\\x1e' "$p" "$rc" "$_WS_RESOLVED" "$(_ws_realpath "$p")"; done`);
+    const rows = out.split('\x1e').filter(Boolean).map((l) => l.split('\x1f'));
+    expect(rows.map((r) => r[0]), 'the CONTROL: every spelling was asked').toEqual(spellings);
+    for (const [p, rc, resolved, realpath] of rows) {
+      expect(rc, `${p} resolves`).toBe('0');
+      expect(resolved, `${p}: the resolver and \`_ws_realpath\` agree`).toBe(realpath);
+    }
+  }, 60_000);
 
   it('the CONTROL: a `<link>/../<existing>/…` spelling whose logical walk SUCCEEDS still resolves, and places as it always did', () => {
     const c = makeChild(h);
