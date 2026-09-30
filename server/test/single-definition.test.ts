@@ -15,6 +15,7 @@
 // bar is "a reasonable person adding a fourth copy in the ordinary way is
 // stopped before review", not "unforgeable".
 import { describe, it, expect, beforeAll } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1801,9 +1802,17 @@ describe('the model files, and who reads each one', () => {
     // and only one of them is in this repo to be pinned.
     expect(holdersOf('.handoff/litellm-config.yaml')).toEqual(['ccd/ccrc']);
     const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
+    // D-3482: the helper grew a codex-lane arm (an id argument),
+    // so the one spelling is now its no-argument line — still one line, and
+    // still inside `_models_litellm_path`, which the second pin binds.
     expect(code.filter((l) => l.includes('.handoff/litellm-config.yaml'))).toEqual([
-      '_models_litellm_path()     { printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"; }',
+      '  printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"',
     ]);
+    const helper = /^_models_litellm_path\(\) \{[^\n]*\n([\s\S]*?)\n\}$/m
+      .exec(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8'));
+    expect(helper, 'ccd/ccrc still defines _models_litellm_path as a block').toBeTruthy();
+    expect(helper![1]!.split('\n'))
+      .toContain('  printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"');
   });
 
   it('the ownership whitelist is read by exactly one thing in this repo', () => {
@@ -3101,6 +3110,50 @@ describe('graphify — one pin, one census path', () => {
     const holders = holdersOf('graph-sweep.json');
     expect(holders).toEqual(
       ['ccd/ccd-graph-sweep', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh']);
+  });
+});
+
+// — Plan 2b-2 Task 3 (D-3487): the Codex runtime's LiteLLM requirement —
+describe('the Codex runtime — one LiteLLM requirement, in one file', () => {
+  // `graphify`'s two rows above, for the second venv this tree builds: the
+  // requirement (extra, floor and ceiling in ONE string) lives in
+  // `ccd/ccgpt-runtime`, and every other reader reads the STAMP a passing
+  // build writes. The third row exists because the first two cannot see the
+  // files most likely to grow a second copy: `isBash` rejects every dotted
+  // name, so a `litellm==` in `ccd/ccgpt-usage.py`, `shared/litellm.mjs` or a
+  // `deploy/*.yaml` scores no hit in `holdersOf` at all (runtime-probe HR13).
+  it("the requirement literal 'litellm[proxy]' lives in exactly one bash file, ccd/ccgpt-runtime", () => {
+    expect(holdersOf('litellm[proxy]')).toEqual(['ccd/ccgpt-runtime']);
+  });
+
+  it('LITELLM_REQUIREMENT is assigned in exactly one bash file, ccd/ccgpt-runtime', () => {
+    const holders = BASH.filter((f) =>
+      codeLines(f).some((l) => /^\s*LITELLM_REQUIREMENT=/.test(l))).map(rel).sort();
+    expect(holders).toEqual(['ccd/ccgpt-runtime']);
+  });
+
+  it('no other file under ccd, deploy, shared or install.sh — of ANY type — spells a litellm version spec', () => {
+    // EVERY line, comments included: this is a literal-absence pin, and prose
+    // naming a version is the first draft of a second pin. `--others
+    // --exclude-standard` as well as the index, so a new file is seen before
+    // it is staged — a gate over the index alone cannot see an uncommitted
+    // definition. It refuses to answer when git cannot list the tree.
+    const r = spawnSync('git', ['-C', ccrcRoot, 'ls-files', '-z', '--cached', '--others', '--exclude-standard',
+      '--', 'ccd', 'deploy', 'shared', 'install.sh'], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    const files = [...new Set(r.stdout.split('\0').filter(Boolean))].sort();
+    // The floor: a scan over too few files passes everything, and these five
+    // are the ones this row exists to see — three of them dotted.
+    expect(files.length).toBeGreaterThan(50);
+    for (const f of ['ccd/ccgpt-runtime', 'ccd/ccgpt-proxy.py', 'ccd/ccgpt-usage.py', 'shared/litellm.mjs', 'install.sh']) {
+      expect(files, f).toContain(f);
+    }
+    const SPEC = /\blitellm\[|\blitellm\s*(?:===|==|~=|>=|<=|!=|<|>)\s*\d/;
+    const holders = files.filter((f) => {
+      const p = path.join(ccrcRoot, f);
+      return existsSync(p) && statSync(p).isFile() && SPEC.test(readFileSync(p, 'utf8'));
+    });
+    expect(holders).toEqual(['ccd/ccgpt-runtime']);
   });
 });
 

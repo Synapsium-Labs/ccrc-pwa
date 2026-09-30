@@ -206,8 +206,8 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  and the reason it was added ahead of that day. */
 const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
   'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync', 'ccd-tmp-sweep', 'ccd-update-sync',
-  // GPT lane common executables are ccrc-owned before Plan 2 installs them.
-  'ccgpt', 'ccgpt-runtime']);
+  // GPT-lane launcher and runtime builder, placed by _inst_bins since Plan 2b-2; ccgpt is not ours (D-3478).
+  'ccrc-codex', 'ccgpt-runtime']);
 
 /** Reads an existing wrapper at `path` and reports what is there against the
  *  text this run staged for it. SIX outcomes, never five: `absent` (nothing

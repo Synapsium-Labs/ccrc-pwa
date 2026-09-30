@@ -13,9 +13,9 @@ const one = (over: Record<string, unknown> = {}) => ({
 const TOOLCHAIN_EXEC_KINDS = ['upstream', 'generated', 'external', 'codex'] as const;
 type ToolchainExecKind = typeof TOOLCHAIN_EXEC_KINDS[number];
 
-/** A valid roster except for an id that can collide with a GPT-lane command.
- *  Every kind is represented because the collision is about the launcher name,
- *  not the account's current execution contract. */
+/** A valid roster except for a reserved GPT-lane id — ccrc's `ccrc-codex` or `ccgpt-runtime`, or `ccgpt`,
+ *  another repository's live launcher (D-3478). Every kind is represented because the collision is
+ *  about the launcher name, not the account's current execution contract. */
 const toolchainCollisionRoster = (id: string, kind: ToolchainExecKind) => ({
   version: 1,
   accounts: [
@@ -63,8 +63,8 @@ describe('parseRoster', () => {
     expect(r.byId.get('claude')!.configDirSuffix).toBe('.claude');
   });
 
-  it.each(['ccgpt', 'ccgpt-runtime'] as const)(
-    'refuses the %s GPT-lane toolchain id for every execution kind',
+  it.each(['ccrc-codex', 'ccgpt-runtime', 'ccgpt'] as const)(
+    'refuses the reserved GPT-lane id %s for every execution kind',
     (id) => {
       for (const kind of TOOLCHAIN_EXEC_KINDS) {
         try {

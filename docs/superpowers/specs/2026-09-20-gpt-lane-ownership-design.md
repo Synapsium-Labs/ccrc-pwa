@@ -39,7 +39,7 @@ separate authorisation, and only then is the other repository's copy deleted.
 | The tracked launcher is NOT what the box runs | Tracked `infra/handoff/ccgpt` starts both tiers with `nohup` (`:190`, `:198`). The installed `~/.local/bin/ccgpt` starts them with `systemd-run --user --collect --unit=… --slice=app.slice -p Restart=always -p RestartSec=3` and keeps `nohup` only for a box with no user manager (`_start_tier`, `:274`). That behaviour appears in no commit of that repository. |
 | Installed launchers already disagree with each other | One lane's launcher is a symlink to `ccgpt`; the other is a 15-line hand-written `755` file carrying no ownership marker. The common executables are regular files — `ccgpt` 366 lines, `ccgpt-proxy` 317, `ccgpt-usage` 146 — and `litellm` is a symlink into a venv. |
 | The runtime is one symlink away from wrong, and nothing declares it | Ambient `python3` is 3.12.3 and has **no `litellm` at all**. The lane's interpreter is whatever `~/.local/bin/litellm` resolves to: today a venv holding litellm 1.101.0, openai 2.54.0, httpx 0.28.1, fastapi 0.141.1, uvicorn 0.53.0, pydantic 2.13.5. A sibling backup venv holds litellm 1.93.0 — the last upgrade was a hand-made swap with a hand-made rollback. |
-| The behaviour the lane leans on is upstream's EXPERIMENTAL surface | In the live venv, the mid-conversation system translator is `litellm/llms/anthropic/experimental_pass_through/adapters/transformation.py`, and `chatgpt` is not a member of `litellm.provider_list`. Version tolerance therefore has to be measured, not assumed from a version string. |
+| The behaviour the lane leans on is upstream's EXPERIMENTAL surface | In the live venv, the mid-conversation system translator is `litellm/llms/anthropic/experimental_pass_through/adapters/transformation.py`. Version tolerance therefore has to be measured, not assumed from a version string. *(Amended 2026-09-28, D-3481: this row also said `chatgpt` is not a member of `litellm.provider_list`. Measured twice on litellm 1.101.0, it is, so the argument stands on the experimental surface alone.)* |
 | The shim's ports default SILENTLY | `infra/handoff/ccgpt-proxy:55-56` gives both `CCGPT_PROXY_PORT` and `CCGPT_LITELLM_PORT` hard-coded fallbacks, and those fallbacks are the first lane's live pair. A lane started without both bound therefore binds another lane's ports — a collision that routes one account's traffic through another account's OAuth, silently. (The values are this box's topology and are deliberately not written here.) |
 | Two relay defects are measured and still open | `_relay` reads `Content-Length` only, so a `Transfer-Encoding: chunked` request forwards with no body at all (measured: the sink received 0 bytes). `_rewrite_messages_body`'s `except ValueError: return body` arm forwards a gzip-encoded body unrewritten, `system` intact. |
 | ccd already treats a Codex lane as first-class | `CCRC_CODEX_BACKEND` is emitted from `telemetry === 'codex'` (`shared/generate.mjs:233`); `_codex_lane_status` reads `$WRAPPER_DIR/<lane>` and the kill-switch file (`ccd/ccd:1906-1912`); both lanes have been home-able placement targets since 2026-09-11 (`ccd/ccd:1051-1058`). A rostered Codex lane with no installed wrapper already reports `not installed` rather than being skipped (`ccd/ccd:22986-22990`). |
@@ -198,7 +198,7 @@ usability feature with its own design, not a prerequisite for owning the lane.
 
 ### 4.4 The lane's identity IS its config directory
 
-The generated launcher exports `CLAUDE_CONFIG_DIR` and execs the common `ccgpt` with no arguments (§5.3). `ccgpt` recovers which lane it is by reverse-mapping that directory through the roster — the same mapping `ccd` already generates into `accounts.sh` (`shared/generate.mjs`'s `dirIdArms`).
+The generated launcher exports `CLAUDE_CONFIG_DIR` and execs the common `ccrc-codex`, adding no argument of its own (§5.3). `ccrc-codex` recovers which lane it is by reverse-mapping that directory through the roster: it sources `accounts.sh` and asks its `_ccrc_dir_id`, the same mapping `ccd` already generates there (`shared/generate.mjs`'s `dirIdArms`). *(Amended 2026-09-28, D-3478: the launcher was `ccgpt`, a path another repository's live launcher occupies on the fleet box.)*
 
 That reverse map is **total and injective by an invariant this repo already enforces**: `parseRoster` refuses a roster in which two accounts share a `configDirSuffix` (`shared/roster.ts:983-989`). So the launcher cannot disagree with `ccd` about which account it is, because it does not hold a second opinion — it holds no opinion at all.
 
@@ -242,15 +242,15 @@ The release tarball carries exactly `install.sh shared ccd deploy` plus the thre
 
 | File | What it is |
 |---|---|
-| `ccd/ccgpt` | the common launcher and lifecycle verb — start, stop, status, login, run |
+| `ccd/ccrc-codex` | the common launcher: it starts its lane, then execs Claude Code with its argv untouched, and interprets no argument. The lifecycle verbs are `ccrc codex start\|stop\|status\|login <id>`, in `ccd/ccrc` *(amended 2026-09-28, D-3478, D-3479: this row was `ccd/ccgpt`, "the common launcher and lifecycle verb — start, stop, status, login, run")* |
 | `ccd/ccgpt-proxy.py` | the Anthropic→Codex request adapter |
 | `ccd/ccgpt-usage.py` | the usage-window publisher |
 | `ccd/ccgpt-runtime` | builds and probes the isolated LiteLLM runtime (§5.2) |
 | `deploy/systemd/ccgpt-usage@.service`, `@.timer` | the per-lane usage instance pair |
 
-**The two Python files keep their `.py` extension, deliberately.** A dotless name in `~/.local/bin` is id-shaped, and an id-shaped name needs three declarations that a dotted one needs none of: `TOOLCHAIN_EXECUTABLES` (`deploy/gen-wrappers.mjs:201`), `_uninst_wrappers`' exclusion `case` (`ccd/ccrc:12203`) and `_inst_bins`' placement list. `ccd-usage-sweep.py` is the shipped precedent and its dotted name is documented as exactly this choice. `ccgpt` and `ccgpt-runtime` ARE dotless — they are commands an operator types — so both take all three declarations, and `gen-wrappers.test.ts` already derives the `_inst_bins` and `TOOLCHAIN_EXECUTABLES` lists from source and reds when one has an entry the other lacks.
+**The two Python files keep their `.py` extension, deliberately.** A dotless name in `~/.local/bin` is id-shaped, and an id-shaped name needs three declarations that a dotted one needs none of: `TOOLCHAIN_EXECUTABLES` (`deploy/gen-wrappers.mjs:201`), `_uninst_wrappers`' exclusion `case` (`ccd/ccrc:12203`) and `_inst_bins`' placement list. `ccd-usage-sweep.py` is the shipped precedent and its dotted name is documented as exactly this choice. `ccrc-codex` and `ccgpt-runtime` ARE dotless — commands on `PATH` — so both take all three declarations (and `ccgpt` stays a reserved roster id, D-3478), and `gen-wrappers.test.ts` already derives the `_inst_bins` and `TOOLCHAIN_EXECUTABLES` lists from source and reds when one has an entry the other lacks.
 
-`_uninst_tree_bins`' `rm -f` census and `_uninst_units`' two lists are hand-kept, have gone stale three separate times (D-1347, D-2594, and a routing-slice recurrence), and no test derives them. **This work adds that derivation** — the same shape `gen-wrappers.test.ts` already uses for the install side. It is in scope because four new names and a unit template pair are exactly the payload those lists go stale on.
+`_uninst_tree_bins`' `rm -f` census and `_uninst_units`' two lists are hand-kept, have gone stale three separate times (D-1347, D-2594, and a routing-slice recurrence), and until then no test derived them. **This work adds that derivation**, in `server/test/install-census.test.ts`: the same shape `gen-wrappers.test.ts` already uses for the install side. *(Amended 2026-09-28, bookkeeping: this said "no test derives them", which was already false when Plan 2b-2 began.)* It is in scope because four new names and a unit template pair are exactly the payload those lists go stale on.
 
 ### 5.2 The isolated runtime
 
@@ -269,13 +269,13 @@ guardrail is fatal, a per-lane capability degrades.
 
 `ccd/ccgpt-runtime` owns `~/.ccrc/runtime/codex/`:
 
-- It builds into a **staging** directory, never over the live one.
-- It installs LiteLLM within a declared, supported **range** — the standing preference is tolerance over freezing, and freezing is the wrong instrument here anyway (see below).
-- It then **probes behaviour, not version strings**: that `litellm.llms.chatgpt.authenticator.Authenticator` imports; that the chat and responses transformations import; and that an Anthropic-shaped request with a top-level `system`, a mid-conversation `system` turn and a `reasoning` effort survives translation to the Codex request shape. This is measured offline, with no network and no credential.
-- Only a staged runtime that passes becomes current, by rename. The previous one stays until the swap succeeds and is kept for one generation, so a failed upgrade is a rollback rather than an outage.
-- A rebuild happens only when the declared range or the probe set changes.
+- It builds each runtime as a new **generation**, `gen-<UTC>-<pid>` under `~/.ccrc/runtime/codex/`, at its final path, never over the live one *(amended 2026-09-28, D-3480: this said "into a staging directory", but a renamed venv's console scripts exit 127)*.
+- It installs LiteLLM within a declared, supported **range** — the standing preference is tolerance over freezing, and freezing is the wrong instrument here anyway (see below). The range is `litellm[proxy]>=1.101.0,<1.110`, declared once, as `LITELLM_REQUIREMENT` in `ccd/ccgpt-runtime` *(amended 2026-09-28, D-3487: this section named no range)*.
+- It then **probes behaviour, not version strings**: that `litellm.llms.chatgpt.authenticator.Authenticator` imports; that the chat and responses transformations import; and that an Anthropic-shaped request with a top-level `system`, a mid-conversation `system` turn and a `reasoning` effort survives translation to the Codex request shape. This is measured offline, with no network and no credential. The request the gate asserts on is the one the shim forwards, with both system doors already folded (§6.1). Claude Code's raw shape is translated too, as a canary that reports and never gates (amended: §19.3, D-3481, D-3484).
+- Only a generation that passes becomes current, by an atomic swap of the `current` symlink, and tiers start from the RESOLVED generation, never through `current` (amended: §19.3, D-3480; this said "by rename"). The previous one stays until the swap succeeds and is kept for one generation, so a failed upgrade is a rollback rather than an outage.
+- A box rebuilds only when `check` fails: no runtime, the requirement or the probe bytes moved, or the installed litellm no longer matches its stamp *(amended 2026-09-28, D-3487, ruling PF-6: this said "only when the declared range or the probe set changes", but the builder also rebuilds an absent or mutated runtime)*.
 
-Version strings are insufficient evidence here because the behaviour the lane leans on is upstream's **experimental** surface: the mid-conversation system translator measured in the live venv lives at `litellm/llms/anthropic/experimental_pass_through/adapters/transformation.py`, and `chatgpt` is not even a member of `litellm.provider_list`. A range plus a behavioural probe says what a pin only asserts.
+Version strings are insufficient evidence here because the behaviour the lane leans on is upstream's **experimental** surface: the mid-conversation system translator measured in the live venv lives at `litellm/llms/anthropic/experimental_pass_through/adapters/transformation.py`. A range plus a behavioural probe says what a pin only asserts. *(Amended 2026-09-28, D-3481: this sentence also said `chatgpt` is not even a member of `litellm.provider_list`. Measured twice on litellm 1.101.0, it is, so the argument stands on the experimental surface alone.)*
 
 The measured live runtime — python 3.12.3, litellm 1.101.0, openai 2.54.0, httpx 0.28.1, fastapi 0.141.1, uvicorn 0.53.0, pydantic 2.13.5 — is the reference point the initial range is drawn around, not a floor to freeze at.
 
@@ -283,27 +283,27 @@ The measured live runtime — python 3.12.3, litellm 1.101.0, openai 2.54.0, htt
 
 This is the single most consequential measurement in this design. `_wrap_parse_shape` (`ccd/ccrc-wrapper-shape`) accepts a shebang, then exactly two or three significant lines in a fixed order, and its exec line must be literally `exec "$HOME/.local/bin/<target>" "$@"` with `<target>` matching the account-id regex — and it says so in its own comment: *target not judged here*.
 
-So a Codex launcher is:
+So a Codex launcher is (amended: §19.2, D-3478; the exec target was `ccgpt`):
 
 ```bash
 #!/usr/bin/env bash
 # Generated from ~/.ccrc/accounts.json. Do not edit — `ccrc wrappers` rewrites it.
 export CLAUDE_CONFIG_DIR="$HOME/.claude-codex-a"
-exec "$HOME/.local/bin/ccgpt" "$@"
+exec "$HOME/.local/bin/ccrc-codex" "$@"
 ```
 
-Two significant lines, same order, differing from a `generated` wrapper only in its exec target — and `ccgpt` is an id-shaped name. Consequences, every one of them measured rather than hoped for:
+Two significant lines, same order, differing from a `generated` wrapper only in its exec target — and `ccrc-codex` is an id-shaped name *(amended, D-3478)*. Consequences, every one of them measured rather than hoped for:
 
 - `cmd_wrappers`' staged read-back through the same reader passes unchanged (`ccd/ccrc:2968-2970`).
-- **Lock 4** (a wrapper that would exec itself) is unaffected; an account literally named `ccgpt` is refused there with a clear message, and the roster gains an explicit refusal for an account id that collides with a toolchain executable so the refusal arrives earlier and says why.
+- **Lock 4** (a wrapper that would exec itself) is unaffected; an account literally named `ccrc-codex` is refused there with a clear message, and the roster gains an explicit refusal for an account id that collides with a toolchain executable so the refusal arrives earlier and says why. `ccgpt` stays one of those reserved ids: a wrapper written at that path would shadow the other repository's live launcher. *(Amended 2026-09-28, D-3478.)*
 - **Lock 5**, the witness index, keeps working: the file parses as the full generated shape, so it still casts a vote, and a box whose only launchers are Codex lanes does not go silent.
 - The disk-versus-staged comparison is on the `(target, suffix, secrets)` triple and *deliberately* not against roster fields (`ccd/ccrc:3140-3152`), so `--adopt` and `--force` keep their exact meanings.
 - `markGenerated`/`verifyMarker` stamp and check it like any other generated file.
 
 What must change is small and nameable:
 
-- `generateWrapperBody` accepts `codex` and chooses `ccgpt` as the exec target instead of the upstream id. Its refusal for `upstream`/`external` stays verbatim.
-- `_check_wrappers`' target comparison — `[ -n "$upstream_id" ] && [ "$target" != "$upstream_id" ]` (`ccd/ccrc-doctor-checks:2640`) — learns that a `codex` account's expected target is `ccgpt`. Without this, every Codex lane FAILs doctor for executing the right file.
+- `generateWrapperBody` accepts `codex` and chooses `ccrc-codex` as the exec target *(amended, D-3478)* instead of the upstream id. Its refusal for `upstream`/`external` stays verbatim.
+- `_check_wrappers`' target comparison — `[ -n "$upstream_id" ] && [ "$target" != "$upstream_id" ]` (`ccd/ccrc-doctor-checks:2640`) — learns that a `codex` account's expected target is `ccrc-codex` *(amended, D-3478)*. Without this, every Codex lane FAILs doctor for executing the right file.
 - `gen-wrappers.mjs` counts the kind (§4.5) **and stops protecting it**: its `protected` list is
   `execKind !== 'generated'`, so a Codex account would otherwise be classified as one ccrc must never write —
   and the `ccd/ccrc` assertion that would catch the mismatch reports it as a truncated manifest, naming a
@@ -315,8 +315,8 @@ What must change is small and nameable:
 they still answer for a box that has not cut over, and for any other alias an operator makes — but this spec
 says plainly that they stop being how a Codex lane is recognised, so nobody later reads their silence as a
 regression. And the four common executables are **bin-arm artifacts, never marker-stamped**: a marker on
-`ccgpt` would make it an orphan account-wrapper report *and* a `_uninst_wrappers` deletion candidate, since
-that function's skip `case` does not name it. They are declared in §5.1's three lists instead.
+`ccrc-codex` would make it an orphan account-wrapper report *and* a `_uninst_wrappers` deletion candidate, since
+that function's skip `case` does not name it. They are declared in §5.1's three lists instead. *(Amended 2026-09-28, D-3478: the launcher named in this paragraph's last sentence was `ccgpt`.)*
 
 **The marker is binary across shapes**: `verifyMarker` says which tool wrote a file, never which *kind* it was written for. So if an id is reclassified between `generated` and `codex`, the file at that path is ccrc's either way and is rewritten by the next `ccrc wrappers` run — which is the correct outcome, and the spec states it so nobody has to rediscover it.
 
@@ -330,19 +330,19 @@ that function's skip `case` does not name it. They are declared in §5.1's three
 ~/.ccrc/logs/codex/<id>/shim.log
 ```
 
-`lane.json` holds no credential and is the one thing `ccgpt`, the shim and the publisher read, so none of them re-derives a path from a naming convention. It is written by the same materialiser that writes the lane's model files, atomically, tmp-then-rename.
+`lane.json` holds no credential and is the one thing `ccgpt`, the shim and the publisher read, so none of them re-derives a path from a naming convention. It is written by the same materialiser that writes the lane's model files, atomically, tmp-then-rename. *(Amended 2026-09-28, D-3478: the launcher that reads it is `ccrc-codex`. The sentence stays as written because `ccd/ccgpt-usage.py` and `server/test/models-op.test.ts` quote it. The lifecycle writes four more kinds of file beside it: amended: §19.1.)*
 
 `runtime.env` exists because **`_inst_env` is seed-once**: `~/.ccrc/ccrc.env` is user-owned and never rewritten, so a new key there could never reach an already-installed box. A second, ccrc-owned environment file is the shipped precedent (`ccrc expose`'s `$CCRC_EXPOSURE_FILE`, carried as a second `EnvironmentFile=`), and it is also how the gateway key stops appearing in `systemd-run --setenv` metadata.
 
 ### Pins
 
 - A generated Codex launcher round-trips through `_wrap_parse_shape` (extend `wrapper-roundtrip.test.ts`).
-- `_check_wrappers` PASSes a Codex lane whose launcher execs `ccgpt`, and FAILs one that execs anything else.
+- `_check_wrappers` PASSes a Codex lane whose launcher execs `ccrc-codex`, and FAILs one that execs anything else *(amended 2026-09-28, D-3478)*.
 - The witness index still counts a box whose only launchers are Codex lanes.
 - `TOOLCHAIN_EXECUTABLES`, `_uninst_wrappers`' case and `_inst_bins` agree on the dotless names — derived, both directions.
 - A derived guard over `_uninst_tree_bins` and `_uninst_units`, red when a shipped name or unit is missing from either.
-- The runtime probe fails on a runtime missing the `chatgpt` authenticator, and the failed staging never becomes current.
-- `runtime.env` is `0600`, and no process argv or unit property carries the key (assert over `systemctl show` output in a fixture, and over the launcher's own `systemd-run` argv).
+- The runtime probe fails on a runtime missing the `chatgpt` authenticator, and the failed generation never becomes current (D-3480).
+- `runtime.env` is `0600`, and no process argv or unit property carries the key. This is asserted over the recorded `systemd-run` argv: no `--setenv` pair carries the key, and it reaches LiteLLM only through `-p EnvironmentFile=`. It is not asserted over `systemctl show` output, because a planted `show` answer proves only what the test typed *(amended 2026-09-28, D-3491: this said "assert over `systemctl show` output in a fixture, and over the launcher's own `systemd-run` argv")*.
 
 ## 6. The proxy
 
@@ -389,8 +389,8 @@ The tiers are started through ccrc's **existing platform layer**, not through a 
 lives in the region measured byte-identical between `ccd/ccd` and `ccd/ccrc`. What it does not take is a unit
 name, a slice, a restart policy or a log destination, so this work adds one sibling — `_svc_run_supervised` —
 **above the closing sentinel in BOTH files**, which is that region's own stated rule and what
-`macos-platform.test.ts` asserts. Writing a fifth spelling of `systemd-run` inside `ccgpt` is precisely the
-drift the sentinel exists to refuse.
+`macos-platform.test.ts` asserts. Writing a fifth spelling of `systemd-run` inside the launcher (`ccrc-codex`, D-3478) is precisely the
+drift the sentinel exists to refuse. The helper's signature and its secret-name rule: amended: §19.4.
 
 On a box with a usable user manager it produces, per tier:
 
@@ -413,15 +413,15 @@ Where there is no user manager — macOS, a container, a box without lingering �
 answers 0 for a command that is not there and the caller checks that status. That probe is `_svc_run_detached`'s
 existing argument, inherited rather than re-derived. This is a supported path with its own tests: `_inst_bins`
 already has a non-Darwin block, every `_svc_*` helper already has a launchd arm, and `macos-platform.test.ts`
-already exists to hold them.
+already exists to hold them. `_svc_have_user_manager` is how a box without a usable user manager is detected: `command -v systemd-run` and `systemctl --user show-environment` must both succeed, and on Darwin it never answers yes *(amended 2026-09-28, D-3483: this section said nothing on detection)*.
 
 ### 7.4 Adoption, stopping, and restart-after-update
 
-**Starting is idempotent and identity-checked.** Before starting a tier, `ccgpt` asks whether one is already listening: `GET /ccgpt/lane` must answer this lane's id for the shim, and the LiteLLM tier's process must hold this lane's config path. That probe is the only thing standing between a second lane and another lane's gateway — the failure it prevents (a lane silently attaching to another lane's proxy and billing the wrong account) is a real, dated incident, not a hypothetical, and any reimplementation without it reintroduces it exactly.
+**Starting is idempotent and identity-checked.** Before starting a tier, `ccrc codex start <id>` asks whether one is already running: `GET /ccgpt/lane` must answer this lane's id for the shim, and the LiteLLM tier's process must hold this lane's config path and itself hold the listening socket on the lane's port (amended: §19.5, D-3479, D-3528). That probe is the only thing standing between a second lane and another lane's gateway — the failure it prevents (a lane silently attaching to another lane's proxy and billing the wrong account) is a real, dated incident, not a hypothetical, and any reimplementation without it reintroduces it exactly.
 
-**Stopping is by exact unit, then by verified identity.** `ccgpt stop <id>` stops `ccgpt-<id>-litellm.service` and `ccgpt-<id>-shim.service` by name, then cleans up a legacy `nohup` listener only after proving the listener is this lane's. Killing a service-owned PID without stopping its unit lets `Restart=always` race whatever comes next.
+**Stopping is identity-gated, then by exact unit or verified pid.** `ccrc codex stop <id>` stops a tier only when `_codex_tier_ours` proves it this lane's, running or starting. Only then does it stop `ccgpt-<id>-litellm.service` or `ccgpt-<id>-shim.service` by name, or a `nohup` tier's verified pid. A foreign or unmeasurable tier is left running and named, because another program's live tiers use these same unit names (amended: §19.5, D-3488, D-3479; this said "by exact unit, then by verified identity", through `ccgpt stop <id>`). Killing a service-owned PID without stopping its unit lets `Restart=always` race whatever comes next.
 
-**Restart after an update belongs in `_inst_enable`.** `_upd_sweep` is the only sanctioned toucher of `claude-session@*` units and only behind its mandatory `KillMode=process` preflight; nothing else may go there. `_inst_enable` runs on install and on update (update re-runs the spine) and is where a "restart what we just replaced" step goes. It restarts **only** tiers that are currently active for a rostered Codex lane, leaves inactive lanes lazy, and reports a restart it could not perform as its own result rather than leaving doctor to infer it later — a running Python process keeps its old code after the file under it is replaced, so "updated" and "running the update" are two claims.
+**Restart after an update is its own spine step, `_inst_codex_tiers`, right after `_inst_enable`.** `_upd_sweep` is the only sanctioned toucher of `claude-session@*` units and only behind its mandatory `KillMode=process` preflight; nothing else may go there. `_inst_codex_tiers` runs on install and on update (update re-runs the spine), is visible in the pinned step list, and is platform-neutral. It restarts **only** tiers that are running, proven this lane's and stale, by stop then start (a `systemctl restart` of a transient unit re-runs the old generation's argv), re-measures after each stop (D-3531), leaves inactive lanes lazy, and reports a restart it could not perform as its own result rather than leaving doctor to infer it later — a running Python process keeps its old code after the file under it is replaced, so "updated" and "running the update" are two claims. *(Amended 2026-09-28, D-3485: this said the step "belongs in `_inst_enable`"; see §19.5.)*
 
 Two ordering rules that `cmd_install`'s own pins make non-negotiable: nothing is added **after** `_inst_installed` (`cmd_update` deletes that record before the staged install and uses its presence to tell "spine died" from "spine completed, doctor failed" — the exit-3 semantics `ccrc rollout` relays), and `cmd_install` still **ends** with `cmd_doctor`, whose exit code it is.
 
@@ -429,25 +429,25 @@ Two ordering rules that `cmd_install`'s own pins make non-negotiable: nothing is
 
 - Two lanes start, run and stop independently; stopping one leaves the other's units active.
 - A tier whose unit name exists but whose listener answers another lane's id is refused, not adopted.
-- The unit properties are asserted: `app.slice`, `Restart=always`, transient, log paths — and no key in any property.
+- The unit properties are asserted over the recorded `systemd-run` argv: `--slice=app.slice`, `Restart=always`, a transient `--unit`, the log paths, and no key in any `--setenv` pair *(amended 2026-09-28, D-3491: no fixture models a transient unit's properties)*.
 - The `nohup` arm is exercised on a fixture with no user manager.
-- `_inst_enable` restarts an active tier after the binaries change and reports a failed restart distinctly; an inactive lane is left alone.
+- `_inst_codex_tiers` restarts a running, stale tier of this lane after the binaries change, and reports a failed restart distinctly; an inactive lane is left alone *(amended 2026-09-28, D-3485: this named `_inst_enable`)*.
 - The `cmd_install` step-list `toEqual` and the ends-with-`cmd_doctor` pin both stay green.
 
 ## 8. LiteLLM configuration, per lane
 
 `shared/litellm.mjs` and `deploy/litellm-config.template.yaml` stay the canonical renderer and template.
 `deploy/models-op.mjs`'s litellm op already takes its destination as a plain caller-supplied argument and
-computes no box-global path of its own, so **the whole per-lane fix is in `ccd/ccrc`**:
+computes no box-global path of its own, so **the whole per-lane fix is in `ccd/ccrc`**. Plan 2b-2 lands it for `codex`-kind lanes only (amended: §19.6, D-3482):
 
-- `_models_litellm_path` becomes a function of the account id already in scope at its call site, answering
+- `_models_litellm_path` becomes a function of the account id already in scope at its call site (for a `codex`-kind lane, its optional id argument), answering
   `~/.ccrc/codex/<id>/litellm.yaml`. Both the check-phase and commit-phase calls pass the id through.
 - `_models_litellm_running` stops being `pgrep -f "litellm .*<path>"`. That pattern interpolates a
   filesystem path into a regex unescaped, matches a process ccrc does not own, and can match a waiter's own
   command line — and it is the sole guard on the stop-then-write decision. It is replaced by the exact
   question: is `ccgpt-<id>-litellm.service` active, and does the listener on the lane's `litellmPort` hold
-  this lane's config?
-- The bare `ccgpt stop` becomes `ccgpt stop <id>`, which stops that lane's two units by name (§7.4).
+  this lane's config? For a `codex`-kind lane that question is `_codex_tier_ours <id> litellm`, which also proves that the lane's own pid holds the socket (D-3528). An `external` lane keeps the `pgrep` until Plan 3 retires that arm.
+- For a `codex`-kind lane, the bare `ccgpt stop` becomes `_codex_stop_tier <id> litellm`, under the lane's lock and identity-gated (§7.4), and the restart goes through `_codex_start_tier`. An `external` lane keeps the bare `ccgpt stop`, byte for byte, until Plan 3's cutover *(amended 2026-09-28, D-3482, D-3488: this said `ccgpt stop <id>`, "which stops that lane's two units by name")*.
 
 **The STOP-THEN-WRITE doctrine is preserved verbatim**, because it is right and was argued once already:
 phase 1 renders and compares without writing; if the bytes changed and a tier holds the old ones, the stop
@@ -483,9 +483,9 @@ Two things the rendered config must continue **not** to contain:
    puts it", and that there is deliberately **no credential assertion** because the lane is not ccrc's. Under
    this design ccrc *is* the launcher, so that function is rewritten rather than reused as-is: it still drives
    a pty (the device flow needs one), it still asserts no credential *content*, and its
-   `pane-unsupported-here` refusal stays — but it now invokes `ccgpt login <id>`, which runs the **isolated
-   runtime's** `Authenticator` with that lane's `authDir` exported, and it can say so. `ccrc account
-   auth-start` routes a `codex` lane through it.
+   `pane-unsupported-here` refusal stays — but for a `codex` lane it now invokes `ccrc codex login <id>`, which runs the **isolated
+   runtime's** `Authenticator` with that lane's `authDir` exported, and it can say so. The route named here, `ccrc account
+   auth-start`, does not exist (measured), so the pane's existing door is routed instead (amended: §19.7, D-3489, D-3530).
 
 `_acct_credential`'s refusal currently gates on `external` **only**, so every other kind is rotatable by
 default — and the comment beside it records that this exact hole was once measured as a live token written
@@ -509,7 +509,7 @@ The fixed `ccgpt-usage.timer` is retired at cutover. Today it and an instance ti
 is two writers over one limits row; and the two units are not even symmetrical — the fixed one sets no
 `Environment=` at all and leans on the publisher's own `CCGPT_ACCOUNT_ID:-<first lane>` shell default, while
 the template sets the id and `PATH` explicitly. A template that always names its instance removes both the
-race and the asymmetry, and the publisher loses its lane default: an unnamed lane is an error, not lane one.
+race and the asymmetry, and the publisher loses its lane default: an unnamed lane is an error, not lane one. The instance's `ExecStart` runs the isolated runtime's interpreter, `%h/.ccrc/runtime/codex/current/bin/python -I`, with `LITELLM_LOCAL_MODEL_COST_MAP=True`; a oneshot resolves `current` afresh on every run. The pair itself stays unplaced until Plan 3 arms it (D-3172). *(Amended 2026-09-28, D-3486.)*
 
 What the publisher keeps, because its consumers already depend on it:
 
@@ -545,7 +545,7 @@ model policy.
 ## 11. Install, role, release, and the fallback deploy
 
 **Placement.** The four executables go through `_inst_bins`; the unit template pair through `_inst_units`
-and `_inst_enable`. `cmd_install`'s step list is pinned by an exact `toEqual` over the `_inst_*` lines in
+and `_inst_enable`, once Plan 3 places the pair: until then nothing places it (D-3172). `cmd_install`'s step list is pinned by an exact `toEqual` over the `_inst_*` lines in
 its body, so any new step is a deliberate, visible edit — and nothing is added after `_inst_installed`,
 and the verb still ends with `cmd_doctor` (§7.4).
 
@@ -618,9 +618,9 @@ the verdict that counts is doctor's **re-measurement**, never the fixer's word.
 ## 13. Uninstall
 
 Removed: the four executables (by the `_uninst_tree_bins` census, which gains its derived guard — §5.1), the
-usage unit template pair and every enabled instance of it, marker-verified per-account launchers, the
-isolated runtime under `~/.ccrc/runtime/codex/`, and any transient tier still running, stopped by exact unit
-name.
+usage unit template pair and every enabled instance of it once Plan 3 places them (until then nothing placed the pair, D-3172, so there is nothing to remove), marker-verified per-account launchers, the
+isolated runtime under `~/.ccrc/runtime/codex/`, and any transient tier still running that `_codex_tier_ours` proves this lane's, stopped by exact unit
+name or verified pid under the lane's lock; a foreign or unmeasurable tier is left running and named (amended: §19.8, D-3488, D-3490).
 
 Kept, deliberately and stated so nobody has to infer it: **OAuth directories**, Claude config directories and
 transcripts, `~/.ccrc/models/*`, `~/.cc-limits/*`, `~/.ccrc/logs/codex/*`, and `~/.ccrc/codex/<id>/` itself.
@@ -723,14 +723,14 @@ repository's history is that repository's to decide about, and this design does 
 
 | Path | What |
 |---|---|
-| `ccd/ccgpt` | common launcher and lifecycle verb |
+| `ccd/ccrc-codex` | common launcher; the lifecycle verb is `ccrc codex …`, in `ccd/ccrc` *(amended 2026-09-28, D-3478, D-3479: this row was `ccd/ccgpt`)* |
 | `ccd/ccgpt-proxy.py` | request adapter |
 | `ccd/ccgpt-usage.py` | usage publisher |
 | `ccd/ccgpt-runtime` | isolated LiteLLM runtime builder and behaviour probe |
 | `deploy/systemd/ccgpt-usage@.service`, `ccgpt-usage@.timer` | per-lane usage instance pair |
 | `server/test/ccgpt-proxy.test.ts` | the shim's cases, vitest-over-python3 |
 | `server/test/ccgpt-usage.test.ts` | the publisher's cases |
-| `server/test/ccgpt-lifecycle.test.ts` | start/stop/adopt, both platforms' arms |
+| `server/test/ccrc-codex.test.ts` | the lane library and start/stop/status/adopt, both platforms' arms, beside `ccrc-codex-launcher.test.ts` and `ccgpt-runtime.test.ts` (amended: §19.9; this row named `ccgpt-lifecycle.test.ts`) |
 | `server/test/roster-exec-parity.test.ts` | TS/MJS `EXEC_KINDS` derived parity |
 
 **Edited**
@@ -748,7 +748,7 @@ or neither · `ccd/ccd-account-auth` (`_auth_openai_login`) · `server/test/topo
 class) · `server/test/macos-platform.test.ts` (the new helper's sentinel membership) ·
 `server/test/installTreeFixture.ts` and the install/uninstall/doctor/gen-wrappers/build-release/wrapper-roundtrip
 suites · `docs/superpowers/specs/2026-09-08-model-class-registry-design.md` and
-`2026-09-05-account-connections-ui-design.md` (amended where they record the old ownership).
+`2026-09-05-account-connections-ui-design.md` (amended where they record the old ownership). Plan 2b-2's edits beyond this list: amended: §19.9.
 
 **Deleted, in the other repository, in step 4 only** — `infra/handoff/{ccgpt,ccgpt-proxy,ccgpt-usage}`, its
 four usage units, `litellm-config.yaml`, `lanes/*`, `INSTALL-model-class-registry.md`, and the GPT-only test
@@ -756,7 +756,7 @@ methods.
 
 ## 18. The mutation table this design owes
 
-Every row is a guard that must go **red** when it is deleted or mutated, measured before and after.
+Every row is a guard that must go **red** when it is deleted or mutated, measured before and after. For each row Plan 2b-2 owns, the task and the case that hold it: amended: §19.10.
 
 | Guard | Red when |
 |---|---|
@@ -766,7 +766,7 @@ Every row is a guard that must go **red** when it is deleted or mutated, measure
 | TS/MJS `EXEC_KINDS` parity | a member is added to one set only |
 | `EXEC_KEYS` completeness | the `codex` key set is removed (compile error) |
 | launcher round-trips `_wrap_parse_shape` | the emitted body gains a line or reorders |
-| `_check_wrappers` expects `ccgpt` for a codex lane | the expected-target branch is removed |
+| `_check_wrappers` expects `ccrc-codex` for a codex lane *(amended, D-3478)* | the expected-target branch is removed |
 | `_check_wrappers`' unknown-kind sentence | the `*)` arm is widened or deleted — today nothing pins it |
 | manifest five-count summary and both `cmd_wrappers` gates | a count is dropped or a gate loosened |
 | `TOOLCHAIN_EXECUTABLES` / `_uninst_wrappers` / `_inst_bins` agreement | a name is added to one list only |
@@ -778,10 +778,10 @@ Every row is a guard that must go **red** when it is deleted or mutated, measure
 | an unsupported encoding refuses | the explicit error becomes a passthrough |
 | effort precedence and the single-slot cache | a level is reordered or the cache key loses `mtime` |
 | stop-before-write, per lane | the refusal path is removed, or the stop stops the wrong lane |
-| listener identity before adoption | the `/ccgpt/lane` (or config-path) check is removed |
+| listener identity before adoption | the `/ccgpt/lane` (or config-path, or LISTEN-socket ownership) check is removed *(amended, D-3528)* |
 | unit properties: `app.slice`, `Restart=always`, transient | the slice or restart policy changes |
 | no secret in argv or unit properties | the key moves back into `--setenv` |
-| `_inst_enable` restarts only active tiers, and reports a failure | the restart or its distinct failure result is removed |
+| `_inst_codex_tiers` restarts only running, proven, stale tiers, and reports a failure *(amended, D-3485: this named `_inst_enable`)* | the restart or its distinct failure result is removed |
 | role gate `!= server` | the gate is removed (a server box converges per-account state) |
 | runtime behaviour probe | the probe is skipped, or a failing staged runtime becomes current |
 | doctor SKIPs an empty population | the empty case returns PASS |
@@ -795,3 +795,180 @@ Every row is a guard that must go **red** when it is deleted or mutated, measure
 | the runtime build degrades rather than dying | a failed build aborts the install |
 | topology-clean has an email class | the class is removed, or an address ships green |
 | release and fixture manifests carry every new file | a file is dropped from either |
+
+## 19. Amendments (Plan 2b-2)
+
+Plan 2b-2 (`docs/superpowers/plans/2026-09-23-gpt-lane-ownership-2b2-the-lane-runs.md`) made the lane run. Where its tree departs from a sentence above and the correction does not fit on that sentence's own line, the sentence carries a same-line pointer, `(amended: §19.N, D-NNNN)`, and the item here says what the tree does. **No line above this section moved.** The tree cites this document by line number (`ccd/ccgpt-usage.py` cites §5.4 line 333, and the Plan 2a plan cites lines 497 and 698), so every amendment above rewrites its own line and nothing more. Each D-number is defined in that plan's Deviations found. *(Added 2026-09-28. The final-review fix wave amended §19.2, §19.3, §19.5, §19.6, §19.7, §19.8 and §19.9 the same day, all inside this section.)*
+
+### 19.1 The lane state the lifecycle writes (§5.4)
+
+§5.4's list is what the materialiser writes. The lifecycle writes these beside it:
+
+```
+~/.ccrc/codex/<id>/litellm.yaml.prev   # the rendering the litellm op replaced, 0600
+~/.ccrc/codex/<id>/litellm.started     # {"generation","code"} the tier was started from
+~/.ccrc/codex/<id>/shim.started
+~/.ccrc/codex/<id>/litellm.pid         # the nohup arm only
+~/.ccrc/codex/<id>/shim.pid
+~/.ccrc/codex/<id>/.lock               # the per-lane flock every start and stop takes
+```
+
+- `runtime.env` is exactly one line, `LITELLM_MASTER_KEY=sk-<48 lowercase hex>`, at mode 0600. It is minted through `mktemp` in the same directory, so its temp file is owner-only from its first byte, and a symlink planted at a predictable name is never followed (D-3529).
+- Account removal reaps these files plus `lane.json`, `runtime.env`, `litellm.yaml` and any `runtime.env.tmp.*` leftover. It never touches the logs or `authDir`.
+
+### 19.2 The launcher and the lifecycle verbs (§4.4, §5.1, §5.3, §7, §8, §9.3, §17)
+
+- **The launcher.** The common launcher is `ccd/ccrc-codex`, placed at `~/.local/bin/ccrc-codex` on every role but `server` (D-3478).
+  - On the fleet box, `~/.local/bin/ccgpt` is another repository's live launcher, so ccrc never writes that path. `ccgpt` stays a reserved roster id.
+  - `ccgpt-runtime`, `ccgpt-proxy.py` and `ccgpt-usage.py` keep their names, because nothing of the other repository's occupies those paths.
+- **What the launcher does.** It interprets no argument (D-3479). It needs `CLAUDE_CONFIG_DIR`, and reverse-maps it through `accounts.sh`'s `_ccrc_dir_id`. It runs `ccrc codex start <id>`, and requires the lane's `settings.json` to name `env.ANTHROPIC_MODEL`. Then it execs Claude Code against the lane's shim, with its argv untouched.
+- **What the launcher refuses first** (final review B3, E6). Before it asks ccrc anything, it refuses `no-home` (`HOME` unset or not a directory) and `no-node` (`node` is not on the pane's `PATH`, which `ccrc codex start` needs). A pane's `PATH` is the tmux server's, inherited from the user manager, not the login shell's. A config directory `accounts.sh` does not map refuses `unmapped`, and its remedy is `ccrc install`: that regenerates the projection from the roster and rewrites every lane's wrapper, where `ccrc wrappers` alone leaves `accounts.sh` as it was.
+- **The lifecycle verbs** are `ccrc codex start|stop|status|login <id>`, in `ccd/ccrc` (`cmd_codex`), rather than in the launcher.
+  - Why there: `_svc_run_supervised` lives in the platform region that only `ccd/ccd` and `ccd/ccrc` carry (D-3479).
+  - `start` is an idempotent ensure, and `status --json` is one object.
+  - Every refusal is one line, `ccrc codex: <code>: <sentence naming the remedy>`: exit 2 for usage, 1 otherwise.
+- **The tier unit names** stay `ccgpt-<id>-litellm.service` and `ccgpt-<id>-shim.service`. §19.5 is what makes a same-named foreign unit safe.
+
+### 19.3 The isolated runtime (§5.2)
+
+- **Generations** (D-3480). `~/.ccrc/runtime/codex/` holds venv generations, `gen-<YYYYmmddTHHMMSSZ>-<pid>/`, and a relative `current` symlink.
+  - A generation is built at its final path, because a renamed venv's console scripts exit 127.
+  - `current` is swapped by an `ln -s` to a temp name, then one `os.replace` onto `current`, because a bare `mv -f` onto a symlink to a directory follows it.
+  - Tiers start from the RESOLVED generation, which `ccgpt-runtime python` answers. A process started through the symlink keeps the unresolved path as `sys.prefix`, so after a swap it would lazily import the next generation's files.
+  - The builder keeps the current generation and the one it replaced. It also keeps any generation a lane's tier was started from (named by that tier's `<tier>.started`, so a venv is never deleted under a running tier) and any generation another build is still writing (the pid in its name is alive).
+- **The requirement** is `litellm[proxy]>=1.101.0,<1.110`, declared once in `ccd/ccgpt-runtime` (D-3487). A box rebuilds only when `check` fails: no runtime, the requirement or the probe bytes moved, or the installed litellm no longer matches its stamp. Installing it needs pip 22.2 or later (`pip install --report`), which a fresh venv on an older python does not have, so the build brings its own (see **The build**, D-3554).
+- **The behaviour probe** gates on the shim's folded output: the request it translates is the one the shim forwards, with both system doors already folded (D-3481).
+  - Claude Code's raw shape is translated too, as a canary. The stamp records it (`raw-shape-leaks-system-role=<yes|no|unknown>`, where `unknown` means the raw-shape call failed or captured something other than one request), and it never gates.
+  - On litellm 1.101.0 a block-list mid-turn system entry still leaks a `{"role":"system"}` input item in the raw shape, so gating on the raw shape would refuse the runtime the box runs today.
+  - `chatgpt` IS a member of `litellm.provider_list` there (measured twice), so §1's and §5.2's argument stands on the experimental translation surface alone.
+- **The cost map.** Every litellm import this plan adds (both tiers, the probe, `ccrc codex login`, the usage unit) runs with the cost map local; `ccd/ccrc-models-probe`'s import is Plan 3's (carry-forward 7) (D-3484). Without it, `import litellm` fetches a mutable remote JSON on every start, with three retries.
+- **The build** (D-3554, the final-review fix wave's hardening of the plan's build procedure; review B1, B2, B4):
+  - **pip first.** The build measures the new venv's pip (`-m pip --version`). A pip older than `_RT_PIP_FLOOR` (`22.2`, one spelling in `ccd/ccgpt-runtime`) is upgraded INSIDE the venv, bounded and non-interactive, before litellm is installed. A pip still too old afterwards (the upgrade failed, timed out, or left it old: an offline box) fails the `pip` stage as `pip-too-old`, remedy first, with nothing installed. A pip whose version cannot be read is left alone, and the install's own error, if any, is the line.
+  - **pip is isolated.** Every pip call runs from the generation's own directory, with every `PYTHON*` variable unset, so a `PYTHONPATH` that carries a litellm can no longer make pip install nothing. It is not `-I`, which the review suggested: measured equivalent offline, and the install suite's builder fixture now answers `-I -m pip` as well, so that switch is one line.
+  - **Deadlines.** Both pip calls and the probe run under a deadline, through `_rt_timeout`, a byte-for-byte copy of the platform region's `_plat_timeout` (this file sources nothing). The probe's bounded child shell owns its `< probe.py` redirection, so the pure-Bash fallback cannot replace caller-fed stdin with `/dev/null`. The knobs are whole seconds: `CCRC_RUNTIME_PIP_S` (default 1200) and `CCRC_RUNTIME_PROBE_S` (default 300), and a malformed value falls back to the default. A deadline hit fails its stage as `timed-out`, naming the knob. The probe's bytes did not change, so no box rebuilds for this.
+  - **What it reads.** No roster and no credential, and of a lane only each `<tier>.started` record, to keep the generation a tier runs from.
+- **A failed build degrades, and never kills the install.** The previous generation stays current and the install continues. The one line the build prints names the stage that failed: `venv`, `pip`, `probe`, `stamp` or `swap`. A `pip` stage's line says `pip-too-old`, `timed-out`, or `pip could not install <requirement> (exit <n>): <pip's last line>`, and a probe's may say `timed-out`.
+
+### 19.4 The two platform helpers (§7.1, §7.3)
+
+Both sit above the platform region's closing sentinel, byte-identical in `ccd/ccd` and `ccd/ccrc`.
+
+- **`_svc_have_user_manager`** answers 0 only off Darwin, when `command -v systemd-run` succeeds and `systemctl --user show-environment` answers (D-3483). That is how a box without a usable user manager is detected. On a box whose user manager is wedged, the probe waits for systemd's own D-Bus timeout.
+- **`_svc_run_supervised <unit> <log> <envfile|-> [NAME=value ...] -- <cmd> [args...]`**:
+  - **Refusals.** It refuses (rc 64, one line, never echoing a value) any `NAME` whose last `_`-separated segment ends with `KEY`, `TOKEN`, `SECRET`, `PASSWORD` or `PASSWD`, in any case. It also refuses a malformed argv. Secrets travel only through `<envfile>`.
+  - **The systemd arm** runs one transient unit. It takes `--collect`, `--slice=app.slice` and `--working-directory=$HOME`, plus these properties:
+    - `Restart=always` and `RestartSec=3`;
+    - bounded start limits;
+    - `StandardOutput` and `StandardError` set to `append:<log>`;
+    - `EnvironmentFile=<envfile>`.
+
+    Each pair travels as a `--setenv`.
+  - **The `nohup` arm** probes that the command exists before it backgrounds anything. It starts from a scrubbed environment: `env -i`, then `HOME`, `PATH`, `LANG` (when set), the envfile's assignments and the pairs. So it matches the systemd arm's clean unit environment.
+
+### 19.5 Identity, stopping and restart (§7.4)
+
+- **Identity.** `_codex_tier_ours <id> <tier>` answers one of five codes:
+  - 0: ours, running;
+  - 1: not running;
+  - 2: foreign;
+  - 3: cannot ask;
+  - 4: ours, starting. A live handle proves the lane, but the port does not answer yet.
+- **The shim's identity** is `GET /ccgpt/lane` answering `{"lane":"<id>"}`. The shim also carries the inert argv word `--ccrc-lane=<id>`, so its pid is provable by its `ps` args.
+- **LiteLLM's identity** is a pid, the unit's `MainPID` or the pidfile's on the `nohup` arm. The pid's args must hold `--config $HOME/.ccrc/codex/<id>/litellm.yaml`, AND the pid itself must hold the LISTEN socket on the lane's port (D-3528).
+  - A pid proven by its args while another process holds the port answers 2, `listener-other-process`. The shim answers the same word for its own argv-proven pid (`--ccrc-lane=<id>`) while another process holds its port (the fix wave's shim twin, D-3528).
+  - Ownership that cannot be measured answers 3. That includes a `readlink` that reads none of the pid's fds. On Darwin, a pid that appears in the port-wide `lsof` list holds the port.
+- **Stale handles.** A live pidfile pid whose args do not prove the lane is a stale pidfile, and it is read past. An active unit whose `MainPID` does not prove the lane answers 2.
+- **Stopping** (D-3488, D-3528). Every ccrc path that stops a tier stops it only when `_codex_tier_is_our_handle` reads the answer as this lane's own, and only then by its exact unit name or its verified pid. This lane's own means 0, 4, or the 2 `listener-other-process` on either tier: that tier's proven process is stopped, and the port's holder is left running and named. Every other 2, and a 3, is left running and named.
+  - The `nohup` arm's SIGKILL, after its TERM, goes only to a pid that still proves the tier (`_codex_pid_is_tier`), never on liveness alone.
+  - A crash-looping ccrc tier reads 2 in its own `RestartSec` window, `unit-unproven`, because its unit is live with `MainPID=0`.
+  - That sentence says the identity is unproven, and suggests a retry. `ccrc codex status` prints the tier `UNPROVEN` with it (its `--json` state stays `foreign`). Account removal refuses on it, and uninstall leaves it running with the by-hand clause (§19.8).
+- **Naming a holder.** Every consumer of a 2 takes its words from `_codex_foreign_what` (the sentence, and its remedy), never a "not this lane" sentence of its own: `status`, `start`, the spine, `ccrc models`, account removal and uninstall.
+- **Account removal** of a codex lane stops the lane, then re-measures each tier. This lane's own tier (the handle predicate above), a `unit-unproven` 2 and a 3 each refuse the removal (`codex-reap-failed`, with the roster standing), so the files a live tier restarts from, its pidfile included, are never reaped under it. Only a foreign 2 is left running, as an operator step in `_codex_foreign_what`'s words (D-3528).
+- **The lane lock.** Every start and stop takes the lane's `flock` on `~/.ccrc/codex/<id>/.lock`. The lock is re-entrant in the shell that holds it.
+- **Restart after an update** is the bare spine step `_inst_codex_tiers`, right after `_inst_enable` (D-3485).
+  - It restarts only tiers that are running, proven this lane's, and stale against the resolved generation and the shim's bytes.
+  - It restarts by stop then start, because a `systemctl restart` of a transient unit re-runs the OLD generation's argv.
+  - A tier still starting (4) is never restarted.
+- **Re-measure after every stop** (D-3531). Every stop-then-start re-measures after the stop, and starts only on a fresh 1. That covers the spine step, the per-lane config write (§19.6) and `start`'s own restart of LiteLLM after a new gateway key. A holder that arrived after the stop is named by `_codex_foreign_what`. `start` refuses with that helper's code (`port-foreign` or `unit-foreign`), `ccrc models` refuses `tier-foreign` with the sentence in its detail, and the spine prints no code and counts the tier not restarted. Each says the lane's own tier is now DOWN.
+  - In `ccrc models`, both questions (the first one, and the re-check before the restart) run in a subshell whose verdict is read from its last line, a `CX-VERDICT rc=<n>` marker, never from its exit status, and the naming runs nested in a subshell of its own. A missing or malformed marker reads 3, `tier-unmeasured`, so a fault inside the lane library can never read as free and write or start anything (D-3531).
+
+### 19.6 Per-lane LiteLLM configuration (§8)
+
+- **`codex`-kind lanes.** §8's rework lands in Plan 2b-2 for these lanes (D-3482):
+  - `_models_litellm_path <id>` answers `~/.ccrc/codex/<id>/litellm.yaml`;
+  - the running question is `_codex_tier_ours <id> litellm`;
+  - the stop is `_codex_stop_tier`, under the lane lock and identity-gated;
+  - the restart is `_codex_start_tier`.
+- **The doctrine holds.** STOP-THEN-WRITE holds exactly as §8 argues it, and the restart re-measures after the stop (D-3531; its refusal codes, and the verdict marker, are in §19.5). A write that fails after the stop starts the tier again on the previous bytes.
+- **`ccrc codex start`** renders an absent config through the same arm.
+- **`external` lanes** keep today's box-global path, the `pgrep` and the bare `ccgpt stop`, byte for byte, until Plan 3's cutover retires that arm.
+
+### 19.7 Login (§9.3)
+
+- **The door.** `ccrc account auth-start` does not exist (measured). A codex lane therefore logs in through the pane's existing door: `ccd account-pane --method openai-login` → `_auth_openai_login` → `ccrc codex login <id>` (D-3489).
+- **What the login does.** `ccrc codex login` runs the isolated runtime's `Authenticator`, with the lane's `authDir` as `CHATGPT_TOKEN_DIR` and the cost map local. Then it asserts that `auth.json` exists. It checks only that the file exists, never what it holds.
+- **The pane's gate** reads the lane's wrapper as well as the roster (D-3530). A lane whose wrapper execs `ccrc-codex` never takes the external arm, whatever the roster answers. The roster read, `_auth_exec_kind`, answers exactly one word: `absent`, `dangling`, `undecidable`, `no-row`, `no-kind`, or `kind:<the roster's own exec.kind>` (the tag keeps a kind spelled like a state word from reading as that state). For a `ccrc-codex` wrapper these are refused by name:
+  - a roster that is absent (`roster-absent`). The remedy puts a copy back and retries; otherwise it notes which accounts `accounts.sh` lists, runs `ccrc install` (which seeds a one-account default and drops every other account from `accounts.sh`), declares the lane, and runs `ccrc install` again;
+  - a roster that is a symlink to nothing (`roster-dangling`). It names the link's target and says to restore the roster there, or re-point the link, and not to run `ccrc install` first, which replaces the link;
+  - a roster that is unreadable or unparseable (`roster-unreadable`);
+  - a roster that lacks the row, or names a `generated`, `external` or `upstream` kind for it (`roster-not-codex`). For a missing row it says to restore the row and retry before any install, and names `ccrc wrappers` to see the orphan;
+  - a row with no usable kind, or a kind outside `EXEC_KINDS` (`roster-kind-invalid`: fix `exec.kind`, because `ccrc wrappers` and `ccrc install` refuse the whole roster).
+
+  A wrapper that cannot be read, under an undecided roster word, refuses as `launcher-unreadable` (grep exit 2), `dependency-missing` (grep could not run: exit 126 or 127) or `launcher-unmeasured` (any other exit). Decided kinds are unchanged, and external lanes are byte-identical.
+
+### 19.8 Uninstall (§13)
+
+- **When it runs.** `_uninst_codex` runs right after `_uninst_units`. The uninstall half lands with the runtime it removes (D-3490).
+- **What it stops.** For each rostered codex lane, under its lock, it stops only tiers `_codex_tier_is_our_handle` reads as this lane's own (0, 4, or a proven process whose port another holds), through `_codex_stop_tier`, which is identity-gated itself. The front tier goes first, by exact unit or verified pid. A foreign or unmeasurable tier is left running and named in `_codex_foreign_what`'s words (D-3488, D-3528).
+- **What it skips.** On a box whose `ccrc.env` records `CCRC_ROLE=server` it reads, locks and probes nothing, and says so in one line, as install's two codex steps do nothing there. A rostered lane with no lane directory (`~/.ccrc/codex/<id>/`, which every ccrc start of its tiers writes first) never ran on this box: it prints "nothing to stop", and is not locked, so no `.lock` is created there.
+- **What it removes.** It then removes `~/.ccrc/runtime/codex/`, unconditionally.
+- **What it leaves.** The usage unit template pair is not removed, because nothing places it yet (D-3172). Plan 3 arms the pair and owns its removal.
+- **Finishing by hand** (D-3532). Five lines say how to finish once ccrc is gone: a lane whose lock could not be taken, a tier whose identity could not be measured, a tier proven this lane's that could not be stopped, a unit whose identity is only unproven, and a roster that could not be read. Each carries the same clause, spelled once (`_uninst_codex_by_hand`): run `systemctl --user status ccgpt-<id>-<tier>` (or, where no user manager runs, read the pid in `~/.ccrc/codex/<id>/<tier>.pid`), confirm that the `MainPID`'s or pid's argv names this lane (`--ccrc-lane=<id>`, or a path under `~/.ccrc/runtime/codex`), and only then stop it, because a same-named unit may belong to another tool on this box.
+- **What it keeps**, as §13 says: OAuth directories, `~/.ccrc/codex/<id>/`, `~/.ccrc/logs/codex/*`, `~/.ccrc/models/*` and `~/.cc-limits/*`.
+
+### 19.9 Files (§17)
+
+New, as Plan 2b-2 leaves them:
+
+| Path | What |
+|---|---|
+| `ccd/ccrc-codex` | the common launcher (§19.2) |
+| `ccd/ccgpt-runtime` | the isolated runtime builder and its behaviour probe (§19.3) |
+| `server/test/ccrc-codex.test.ts` | the lane library and `ccrc codex start\|stop\|status\|login`, both platforms' arms |
+| `server/test/ccrc-codex-launcher.test.ts` | the launcher |
+| `server/test/ccgpt-runtime.test.ts` | the runtime builder and the probe |
+| `server/test/codexLaneFixture.ts` | the shared lane fixture (no `describe`) |
+| `server/test/laneReaper.ts` | observation-only `psArgs` assertion helper; it has no numeric-PID signal authority. Fixture teardown is scoped to in-memory current-run product-stop callbacks and directly held child/supervisor handles: a callback can request only a named manager stop, never signal an observed PID. Each fake-manager unit has a per-unit Python supervisor/control channel: fake `systemd-run` writes `starting`, PID zero and `spawned` before it backgrounds the supervisor, which alone then writes state and PID (`active` and the PID as soon as its one `subprocess.Popen` tier exists, before any wait); fake `systemctl`, which carries no signal vocabulary at all, validates the unit directory, creates its request and awaits completion. Once fake `systemd-run` marks a unit spawned, even a still-starting supervisor remains manager-owned and receives only that request; it never falls back to the seeded-unit path. The supervisor's child control never depends on evidence files: every event, state, PID and completion write is best-effort, and a stop request, a vanished unit directory (a fixture HOME that `afterAll` deleted under a live unit), a TERM/HUP/INT to the supervisor, and its finite 120-second default expiry (above the normal 90-second readiness bound, overridable by focused tests, and working with the HOME gone) all take one stop path, so an ordinary passing run leaves no fixture process and no later run gains PID authority. The same direct Python-supervisor shape covers reparented stand-ins. Account HOMEs register before starts so ordinary setup rejection proves process disappearance/process-row absence and port closure; a supervisor records TERM, waits six seconds, records TIMEOUT then requests KILL only on `TimeoutExpired`, performs the final exact wait unconditionally, and emits `WAIT:<returncode>` only from each completed `Popen.wait(...)`. Thus the responsive and resistant protocols pin final exact-child waiting/reaping before manager completion/cleanup returns, and a manager supervisor lingers three seconds after completion without reaping more, so a skipped wait stays visible as a zombie; responsive teardown never requests KILL, while resistant teardown requests KILL and emits `WAIT:-9` only after its final wait returns. Persisted PIDs and request/completion/event protocol files are observation/control data only; the supervisor is never generically killed mid-reap. No descendant-tree ownership, cross-run recovery, or ambient authority is claimed. The accepted residual is manual cleanup of a child orphaned by a SIGKILLed supervisor, or of one left by an interrupted run in which its supervisor died or a directly spawned fixture child carried no expiry (D-3533) |
+
+**Edited beyond §17's list:**
+- `ccd/ccrc`: `cmd_codex` and the `_codex_*` lane library, `_inst_codex_runtime`, `_inst_codex_tiers` and `_uninst_codex`;
+- `ccd/ccd-account-auth`: the pane's codex arm;
+- `deploy/deploy.sh`: the fallback installer places the two new executables;
+- `deploy/systemd/ccgpt-usage@.service` (D-3486);
+- the install, update, uninstall, models, account, doctor, wrappers and census suites;
+- `server/vitest.config.ts`: no lane reaper `globalSetup`; fixture cleanup takes current-run product-stop callbacks while state exists, then directly held child/supervisor handles. Persisted PIDs remain observations only (D-3533).
+
+`ccgpt-lifecycle.test.ts` was never created: `ccrc-codex.test.ts` holds its cases. The other test files §17 names are earlier plans' own.
+
+### 19.10 Who holds each mutation-table row (§18)
+
+Each §18 row Plan 2b-2 owns, with the task and the cases that hold it. Rows not listed are earlier plans'.
+
+| §18 row | Task | Held by |
+|---|---|---|
+| launcher round-trips `_wrap_parse_shape` | 1 (the target's rename) | `wrapper-roundtrip.test.ts`: "round-trips codex-a unmarked" and "round-trips codex-a once the provenance marker is stamped on" (one pair per fixture row) |
+| `_check_wrappers` expects `ccrc-codex` for a codex lane | 1 | `ccrc-doctor.test.ts`: "a Codex launcher execing the upstream account instead of ccrc-codex fails and names both", and "a Codex launcher execing ccgpt — another repository's launcher on the fleet box — fails and names ccrc-codex (D-3478)" |
+| `TOOLCHAIN_EXECUTABLES` / `_uninst_wrappers` / `_inst_bins` agreement | 9 | `install-census.test.ts`: the "the id-shaped executables: TOOLCHAIN_EXECUTABLES, _inst_bins and _uninst_wrappers' case are one list" describe |
+| `_uninst_tree_bins` and `_uninst_units` completeness | 9 | `install-census.test.ts`: the "ccd/ccrc: the install census and the uninstall census cannot drift apart" describe |
+| `_acct_remove` keeps the OAuth directory | 8 | `ccrc-account.test.ts`: "C1: reaps a codex lane's generated state and reports it, keeping its logs and its OAuth" |
+| stop-before-write, per lane | 6 | `ccrc-models.test.ts`: "a tier holding the previous rendering is STOPPED, then the bytes land, then it is STARTED on them", "a stop that fails writes NOTHING and starts nothing — restart-failed — and the next run retries", and "rendering one lane stops and starts THAT lane's tier only …" |
+| listener identity before adoption | 4, 5 | `ccrc-codex.test.ts`: L5, L17, L29, L30, and the `_codex_tier_ours` describe (D-3528's cases) |
+| unit properties: `app.slice`, `Restart=always`, transient | 2, 5 | `macos-platform.test.ts`: "the systemd arm: one transient unit, its whole argv in order, and no key material anywhere"; `ccrc-codex.test.ts`: L11 |
+| no secret in argv or unit properties | 2, 5 | `macos-platform.test.ts`: "refuses a NAME whose last _-segment ends with a secret word, in any case …"; `ccrc-codex.test.ts`: L11 (D-3491) |
+| `_inst_codex_tiers` restarts only running, proven, stale tiers, and reports a failure | 10 | `ccrc-install.test.ts`: the "ccrc install: the codex tier restart step, measured in isolation (_inst_codex_tiers)" describe, and on a real spine "a restart the user manager refuses is its own FAILED line, and the closing line names codex-tiers" |
+| role gate `!= server` | 9, 10 | `install-census.test.ts`: "the name every generated Codex launcher execs is placed by _inst_bins behind its `!= server` gate"; `ccrc-install.test.ts`: "--role server builds nothing and restarts nothing, and says nothing about either" |
+| runtime behaviour probe | 3 | `ccgpt-runtime.test.ts`, by default: the two "the behaviour probe over … copies of the litellm stub" describes (for example "without the authenticator FAILS authenticator-import") and "the install suite's own venv python — exit 0 for anything, no stdout — fails the probe (H5)". The translation assertions themselves (M2–M5, for example "M3: the gate fed the unfolded body FAILS a system-door assertion") run only against a real litellm, opt-in through `CCRC_TEST_LITELLM_PY` |
+| `_svc_run_supervised` sits inside the platform sentinels in both files | 2 | `macos-platform.test.ts`: "holds every _plat_/_svc_ definition INSIDE the sentinels, in both files" |
+| the Darwin arm probes before backgrounding | 2 | `macos-platform.test.ts`: "forced Darwin: a missing command answers 1 and backgrounds NOTHING — probed before the `&`" |
+| the runtime build degrades rather than dying | 10 | `ccrc-install.test.ts`: "a runtime whose probe FAILS degrades the install, never fails it, and the previous runtime stays current" |
+| release and fixture manifests carry every new file | 9 | `install-census.test.ts`: the "every file `ccrc install` copies out of the tree rides the release tarball (spec §11)" describe |
