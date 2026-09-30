@@ -2767,7 +2767,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 event=$(jq -r '.hook_event_name // empty' <<<"$payload" 2>/dev/null) || exit 0
 [[ -n "$event" ]] || exit 0
 
-state="" ask_json="null" interrupted="false" src="" gcmd=""
+state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail=""
 case "$event" in
   UserPromptSubmit) state="working" ;;
   PostToolUse)
@@ -2907,9 +2907,13 @@ case "$event" in
   Stop)
     state="done"
     [[ $(jq -r '.is_interrupt // false' <<<"$payload" 2>/dev/null) == true ]] && interrupted="true" ;;
+  StopFailure) stopfail=1 ;;
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
   *) exit 0 ;;
 esac
+# StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm only
+# raised the flag (stopfailure-sets-a-flag), and nothing below may run for it.
+[[ -n "$stopfail" ]] && exit 0
 
 f="$REG/$id.hookstate.json"
 # Prior subagent set survives state transitions; a corrupt file reads as [].
