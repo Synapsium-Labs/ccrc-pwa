@@ -839,8 +839,9 @@ or `not-finished` — the last is
 the ordinary non-final close holding a child for wave N+1.
 `not-finished-undated`, `-merge-commit` and `-unmeasured` hold a child whose
 spent evidence the server could not use: a PR from its branch that no dated
-row places in this workspace's life, a registry PR number the live read
-dated to an earlier workspace of the same name, or a spent read that did not
+row places in this workspace's life, a fast-path PR number (the registry's
+own, or a `.prhistory` row) the live read dated to an earlier workspace of the
+same name, or a spent read that did not
 answer. A next wave's bind re-reads it and refuses `workspace-spent` or
 `spent-unmeasured` rather than take a spent child; the server reclaims it
 once your program has no open run. `has-coordinated` means the child has

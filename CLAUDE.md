@@ -48,7 +48,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
   (`cmd_ws_archive`'s header in `ccd/ccd`). All five forbidden; `ws-reap` is **human-only by contract**.
   **`ws-reclaim` is forbidden to every session too**: it is the SERVER's act on a CHILD workspace only
   (one dispatch minted for a run, marked `$REG/<id>.child` and held by the server as that run's), composed
-  after that run closes, with a token re-proved on the box — never a session's verb, and never run against
+  after that run closes or binds a different session, with a token re-proved on the box — never a session's verb, and never run against
   the live host from a shell or a test.
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
   long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception

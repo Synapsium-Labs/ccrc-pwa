@@ -2483,6 +2483,19 @@ refuses outright (`409 refused:'mail-disabled'`) rather than resuming a
 worker and injecting `/clear` into a context whose wave brief would then sit
 held by the very kill-switch the operator just raised.
 
+**The reclaim sweep, and how to stop it.** Besides the close path, the server
+runs an automatic sweep (once a minute) that reclaims CHILD workspaces through
+`ccd ws-reclaim` — only a child whose minting run is terminal, or has bound a
+different session, with no other open run, no hold and no coordination history,
+asked on two consecutive passes and at most one at a time (**A child is not a
+reap**, above). Its switch is `$REG/reclaim-paused`: tap the reclaim row on
+`/runs` (`POST /api/coord/reclaim-pause`, session-gated, no box token), or run
+`ccd reclaim-pause --state on` on the fleet host; `--state off` lowers it. While
+it stands the sweep and the close path ask for nothing, and `ws-reclaim` itself
+refuses `paused` on the box. The same row lists the children that need a
+human's eye: each standing under a terminal refusal, and each whose reclaim
+has kept failing for 15 minutes.
+
 **The honest boundary.** The coordinator acts through this server's HTTP
 API — one recorded chokepoint for every irreversible act (dispatch, close,
 mail) — and that chokepoint is what makes the caps and the pause file real
