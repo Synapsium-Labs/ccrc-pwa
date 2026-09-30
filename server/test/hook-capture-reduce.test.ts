@@ -128,7 +128,7 @@ describe('hook-capture-reduce (worker stall watch §5.1)', () => {
       background_tasks: [{ id: 'b989ocn62', type: 'monitor' }, { id: 'x', type: 'subagent', extra: 1 }, 'not-an-object'],
     });
     cap('Stop', 3, 's', { hook_event_name: 'Stop', background_tasks: 'x' });
-    cap('Stop', 4, 's', { hook_event_name: 'Stop', background_tasks: { a: { type: 'subagent', id: 'z' } } });
+    cap('Stop', 4, 's', { hook_event_name: 'Stop', background_tasks: { b989ocn62: { type: 'subagent', id: 'z' } } });
     const out = reduce();
     const bt = ev(out, 'Stop').backgroundTasks;
     expect(bt).toEqual({
@@ -136,6 +136,8 @@ describe('hook-capture-reduce (worker stall watch §5.1)', () => {
       elementKeys: [['extra', 'id', 'type'], ['id', 'type']], types: ['monitor', 'subagent'],
     });
     expect(ev(out, 'Stop').keys['background_tasks.[].id']).toEqual(['string']);
+    // The id-keyed object is one (map) segment: its key never prints (a digit in a key collapses it).
+    expect(ev(out, 'Stop').keys['background_tasks.(map)']).toEqual(['object']);
     expect(JSON.stringify(out).includes('b989ocn62')).toBe(false);
   });
 
@@ -160,15 +162,38 @@ describe('hook-capture-reduce (worker stall watch §5.1)', () => {
   });
 
   it('collapses an object wider than 50 keys to one (map) segment, and descends one of exactly 50', () => {
-    const wide = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`k${i}`, i]));
-    const fifty = Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`m${i}`, 'v']));
+    // Letters only (alpha), never a digit: a digit in a key collapses an object to (map)
+    // on its own, and these two rows pin the WIDTH bound and nothing else.
+    const alpha = (i: number): string => String.fromCharCode(97 + Math.floor(i / 26), 97 + (i % 26));
+    const wide = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`k${alpha(i)}`, i]));
+    const fifty = Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`m${alpha(i)}`, 'v']));
     cap('Stop', 1, 's', { hook_event_name: 'Stop', big: wide, mid: fifty });
     const keys = ev(reduce(), 'Stop').keys;
     expect(keys['big']).toEqual(['object']);
     expect(keys['big.(map)']).toEqual(['number']);
     expect(Object.keys(keys).filter((k) => k.startsWith('big.k'))).toEqual([]);
-    expect(keys['mid.m0']).toEqual(['string']);
+    expect(keys['mid.maa']).toEqual(['string']);
     expect(keys['mid.(map)']).toBeUndefined();
+  });
+
+  it('collapses a nested object with a digit in any key to (map), and keeps a payload-root key with a digit', () => {
+    cap('Stop', 1, 's', {
+      hook_event_name: 'Stop', x2_field: 1,
+      by_task: { b989ocn62: { type: 'monitor' } },
+      mixed: { plain: 1, id7: 2 },
+      clean: { plain: 1, other: 'v' },
+      nested: { deeper: { t5: true } },
+    });
+    const out = reduce();
+    const keys = ev(out, 'Stop').keys;
+    expect(keys['x2_field']).toEqual(['number']);   // the root is the hook's own schema, never an id map
+    expect(keys['by_task']).toEqual(['object']);
+    expect(keys['by_task.(map)']).toEqual(['object']);
+    expect(keys['mixed.(map)']).toEqual(['number']);
+    expect(keys['clean.plain']).toEqual(['number']);
+    expect(keys['clean.(map)']).toBeUndefined();
+    expect(keys['nested.deeper.(map)']).toEqual(['boolean']);
+    for (const leak of ['b989ocn62', 'id7', 't5']) expect(JSON.stringify(out).includes(leak), leak).toBe(false);
   });
 
   it('walks to depth 4 and no deeper', () => {
@@ -183,8 +208,16 @@ describe('hook-capture-reduce (worker stall watch §5.1)', () => {
     cap('PostToolUse', 2, 'sid-1', { hook_event_name: 'PostToolUse', session_id: 'sid-2' });
     cap('PostToolUse', 3, null, { hook_event_name: 'PostToolUse', session_id: 'sid-1' });
     const out = reduce();
-    expect(ev(out, 'PostToolUse').envSid).toEqual({ absent: 1, equalsPayload: 1, differsFromPayload: 1 });
+    expect(ev(out, 'PostToolUse').envSid).toEqual({ absent: 1, equalsPayload: 1, differsFromPayload: 1, payloadAbsent: 0 });
     expect(JSON.stringify(out).includes('sid-1')).toBe(false);
+  });
+
+  it('counts a payload with no string session_id as payloadAbsent, never as differing', () => {
+    cap('PostToolUse', 1, 'sid-1', { hook_event_name: 'PostToolUse' });
+    cap('PostToolUse', 2, 'sid-1', { hook_event_name: 'PostToolUse', session_id: 5 });
+    cap('PostToolUse', 3, 'sid-1', { hook_event_name: 'PostToolUse', session_id: 'sid-1' });
+    cap('PostToolUse', 4, null, { hook_event_name: 'PostToolUse' });
+    expect(ev(reduce(), 'PostToolUse').envSid).toEqual({ absent: 1, equalsPayload: 1, differsFromPayload: 0, payloadAbsent: 2 });
   });
 
   it('lists SessionStarts in epoch order (numeric, not by filename) with first, same, changed and unmeasured', () => {
@@ -214,6 +247,20 @@ describe('hook-capture-reduce (worker stall watch §5.1)', () => {
       fields: ['error', 'reason'], values: ['(unprintable)', 'rate_limit', 'server_error'],
     });
     expect(ev(out, 'Stop')).not.toHaveProperty('error');
+  });
+
+  it('prints a StopFailure error-field value as (unprintable) unless it is enum-shaped, and keeps the field name', () => {
+    cap('StopFailure', 1, 's', {
+      hook_event_name: 'StopFailure', error: 'server_error', error_details: 'SENTINEL host x.example.org',
+    });
+    const out = reduce();
+    const text = JSON.stringify(out);
+    expect(text.includes('SENTINEL')).toBe(false);
+    expect(text.includes('example.org')).toBe(false);
+    // Control: the field was read — its NAME is reported and the enum value came through.
+    expect(ev(out, 'StopFailure').error).toEqual({
+      fields: ['error', 'error_details'], values: ['(unprintable)', 'server_error'],
+    });
   });
 
   it('counts an unparseable payload, and ignores files outside the capture grammar', () => {

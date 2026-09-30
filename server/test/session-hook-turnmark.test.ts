@@ -190,7 +190,7 @@ describe('the capture arm (§5.1 first task; capture-arm-keyed-on-hookcap)', () 
       expect(out).toMatchObject({ files: 3, unparsed: 0 });
       expect(out.sessionStarts).toEqual([{ source: 'startup', envSidVsPrevious: 'first' }]);
       expect(out.events['Stop']?.backgroundTasks).toMatchObject({ array: 1, types: ['shell'] });
-      expect(out.events['UserPromptSubmit']?.envSid).toEqual({ absent: 0, equalsPayload: 1, differsFromPayload: 0 });
+      expect(out.events['UserPromptSubmit']?.envSid).toEqual({ absent: 0, equalsPayload: 1, differsFromPayload: 0, payloadAbsent: 0 });
     });
   });
 });

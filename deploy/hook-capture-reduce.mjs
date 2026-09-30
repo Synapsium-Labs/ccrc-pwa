@@ -9,18 +9,30 @@
 // `transcript_path`, `prompt`, `cwd` and tool arguments, and this repository is
 // public. This tool prints ONE JSON document that holds only:
 //   - key paths and their JSON types (never a value), to depth 4, with an array
-//     one `[]` segment, `tool_input`/`tool_response` never descended, a key
-//     segment that fails the token test printed `(unprintable)`, and an object
-//     wider than 50 keys collapsed to one `(map)` segment;
-//   - counts, and booleans turned into counts (agent_id, the env/payload
-//     session-id comparison, background_tasks' shape);
-//   - three kinds of string value, each through the token test: a
-//     background_tasks element's `type`, SessionStart's `source`, and
-//     StopFailure's error-field values;
+//     one `[]` segment, `tool_input`/`tool_response` never descended, and a key
+//     segment that fails the token test printed `(unprintable)`. An object is
+//     collapsed to one `(map)` segment, its keys never printed, when it is wider
+//     than 50 keys, or, below the payload root, when any of its keys carries a
+//     digit: a map keyed by ids (task ids, agent ids, session ids) is the one
+//     shape whose KEYS are data, and no field name of a hook payload has a digit.
+//     That digit test is a heuristic, not a proof: an id spelled with letters
+//     only would still print as a key segment;
+//   - counts, and booleans turned into counts: agent_id (absent, empty,
+//     nonEmpty); the pane's meta-line id against the payload's session_id
+//     (absent: the meta line names no id; equalsPayload and differsFromPayload:
+//     both ids are strings; payloadAbsent: the payload has no string
+//     session_id); and background_tasks' shape (absent, notArray, array);
+//   - three kinds of string value. A background_tasks element's `type` and
+//     SessionStart's `source` pass the token test (letters, digits, space, `_`,
+//     `.`, `-`, at most 40). StopFailure's error-field values pass a STRICTER
+//     enum test (`[a-z0-9_]`, at most 40: `server_error`, `rate_limit`), because
+//     a sibling field such as `error_details` may hold free text that the token
+//     test would let through. The names of the `error` and `reason` fields (with
+//     an optional lowercase suffix, `error_details`) are reported as they are;
 //   - the time-ordered `sequence` of (event, agent_id class), so the checkpoint's
 //     C1 can see WHERE the non-empty agent_ids fall (inside a SubagentStart ..
 //     SubagentStop window, or not), which per-event counts alone cannot show.
-// Ids are never emitted: not a session id, not an agent id, not a task id.
+// No id is emitted as a VALUE: not a session id, not an agent id, not a task id.
 //
 // Usage: node deploy/hook-capture-reduce.mjs <capture-dir>
 // Exit 0 with the document on stdout; exit 2 with one stderr line when the
@@ -32,6 +44,8 @@ const TOKEN = /^[A-Za-z0-9 _.-]{1,40}$/;
 const KEY = /^[A-Za-z0-9_.-]{1,40}$/;
 const CAP_NAME = /^([A-Za-z]{1,40})-([0-9]{1,16})-([0-9]{1,10})\.cap$/;
 const ERROR_KEY = /^(error|reason)(_[a-z]+)?$/;
+const ERROR_VALUE = /^[a-z0-9_]{1,40}$/;
+const DIGIT = /[0-9]/;
 const MAX_DEPTH = 4;
 const MAP_WIDTH = 50;
 const OPAQUE = new Set(['tool_input', 'tool_response']);
@@ -40,7 +54,9 @@ const MAP = '(map)';
 const ABSENT = '(absent)';
 
 const tok = (v) => (typeof v === 'string' && TOKEN.test(v) ? v : UNPRINTABLE);
+const errValue = (v) => (typeof v === 'string' && ERROR_VALUE.test(v) ? v : UNPRINTABLE);
 const seg = (k) => (KEY.test(k) ? k : UNPRINTABLE);
+const idKeyed = (names) => names.some((k) => DIGIT.test(k));
 const typeOf = (v) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const sorted = (set) => [...set].sort();
@@ -54,7 +70,7 @@ function add(keys, p, t) {
 /** The members of an object at `segs` (the payload itself at `[]`). */
 function walkObject(obj, segs, keys) {
   const names = Object.keys(obj);
-  if (names.length > MAP_WIDTH) {
+  if (names.length > MAP_WIDTH || (segs.length > 0 && idKeyed(names))) {
     for (const k of names) add(keys, [...segs, MAP].join('.'), typeOf(obj[k]));
     return;
   }
@@ -91,7 +107,7 @@ function newAcc() {
   return {
     count: 0, keys: new Map(),
     agentId: { absent: 0, empty: 0, nonEmpty: 0 },
-    envSid: { absent: 0, equalsPayload: 0, differsFromPayload: 0 },
+    envSid: { absent: 0, equalsPayload: 0, differsFromPayload: 0, payloadAbsent: 0 },
     bg: { absent: 0, notArray: 0, array: 0 }, elementKeys: new Set(), types: new Set(),
     source: new Set(), errFields: new Set(), errValues: new Set(),
   };
@@ -144,6 +160,7 @@ for (const f of files) {
   sequence.push({ event: f.event, agentId: cls });
 
   if (envSid === null) a.envSid.absent += 1;
+  else if (typeof p.session_id !== 'string') a.envSid.payloadAbsent += 1;
   else if (p.session_id === envSid) a.envSid.equalsPayload += 1;
   else a.envSid.differsFromPayload += 1;
 
@@ -164,7 +181,7 @@ for (const f of files) {
     for (const k of Object.keys(p)) {
       if (!ERROR_KEY.test(k) || typeof p[k] !== 'string') continue;
       a.errFields.add(k);
-      a.errValues.add(tok(p[k]));
+      a.errValues.add(errValue(p[k]));
     }
   }
 }
