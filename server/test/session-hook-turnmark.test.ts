@@ -462,3 +462,98 @@ describe('the turn marker (§5.1)', () => {
     expect(src.split('"$TURN_MARK_PROGRAM"').length - 1, 'one use, one jq').toBe(1);
   });
 });
+
+// ── The turn marker across a restart (worker stall watch §5.1, wave 2 Task 4) ──
+// A SessionStart other than compact is a new process: the old one's background
+// tasks died with it, so a same-session `done` moves bg/bgKinds/bgIds into lost*.
+// compact fires mid-turn and is inert (D-306); clear starts a fresh line.
+describe('the turn marker across a restart (§5.1, SessionStart)', () => {
+  const stopWith = (tasks: Array<{ id?: string; type?: string }>): void => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'Stop', background_tasks: tasks });
+  };
+  const THREE = [{ id: 'b1', type: 'shell' }, { id: 'b2', type: 'subagent' }, { id: 'b3', type: 'shell' }];
+
+  it('a resume after a done moves the dead tasks into lost*, keeping stopAt and turnAt', () => {
+    stopWith(THREE);
+    const done = turnMark();
+    expect(done).toMatchObject({ state: 'done', bg: 3, bgKinds: 'shell,subagent', bgIds: 'b1,b2,b3', lostBg: 0 });
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    const m = turnMark();
+    expect(Object.keys(m)).toEqual(TURN_KEYS);
+    expect(m).toEqual({ ...done, event: 'SessionStart', at: m.at, restartAt: m.at, bg: 0, bgKinds: '', bgIds: '',
+      lostBg: 3, lostKinds: 'shell,subagent', lostIds: 'b1,b2,b3' });
+    expect(m.at).toBeGreaterThanOrEqual(done.at);
+  });
+
+  it('a SECOND resume keeps lostBg AND lostKinds/lostIds (lost-kinds-accumulate)', () => {
+    stopWith(THREE);
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    const m = turnMark();
+    expect(m).toMatchObject({ state: 'done', bg: 0, lostBg: 3, lostKinds: 'shell,subagent', lostIds: 'b1,b2,b3' });
+    expect(m.restartAt).toBe(m.at);
+  });
+
+  it("startup, an absent source and an unknown source all behave as resume (D-1248's rule)", () => {
+    for (const source of ['startup', undefined, 'weird'] as const) {
+      fs.rmSync(turnFile(), { force: true });
+      stopWith([{ id: 'b1', type: 'shell' }]);
+      run(source === undefined ? { hook_event_name: 'SessionStart' } : { hook_event_name: 'SessionStart', source });
+      const m = turnMark();
+      expect(m, String(source)).toMatchObject({ state: 'done', bg: 0, lostBg: 1, lostKinds: 'shell', lostIds: 'b1' });
+      expect(m.restartAt, String(source)).toBe(m.at);
+    }
+  });
+
+  it('a resume after a working line keeps turnAt > stopAt and adds no lost', () => {
+    stopWith([{ id: 'b1', type: 'shell' }, { id: 'b2', type: 'shell' }]);
+    run({ hook_event_name: 'UserPromptSubmit' });   // the next turn: working, lost* cleared, bg 2 carried
+    const working = turnMark();
+    expect(working.state).toBe('working');
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    const m = turnMark();
+    expect(m).toMatchObject({ state: 'done', turnAt: working.turnAt, stopAt: working.stopAt, bg: 0, lostBg: 0,
+      lostKinds: '', lostIds: '' });
+    expect(m.turnAt).toBeGreaterThan(m.stopAt);
+    expect(m.restartAt).toBe(m.at);
+  });
+
+  it('a resume under a different session id writes a fresh line with restartAt', () => {
+    stopWith(THREE);
+    run({ hook_event_name: 'SessionStart', source: 'resume' }, { CLAUDE_CODE_SESSION_ID: 'uuid-2' });
+    const m = turnMark();
+    expect(m).toEqual({ v: 1, sessionId: 'uuid-2', state: 'done', event: 'SessionStart', at: m.at, turnAt: null,
+      stopAt: null, bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: m.at, lostBg: 0, lostKinds: '',
+      lostIds: '' });
+  });
+
+  it('clear writes the fresh line', () => {
+    stopWith(THREE);
+    run({ hook_event_name: 'SessionStart', source: 'clear' });
+    const m = turnMark();
+    expect(m).toEqual({ v: 1, sessionId: 'uuid-1', state: 'done', event: 'SessionStart', at: m.at, turnAt: null,
+      stopAt: null, bg: -1, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '',
+      lostIds: '' });
+  });
+
+  it('compact leaves the marker byte-identical (D-306: it fires mid-turn)', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    const past = new Date(Date.now() - 3_600_000);
+    fs.utimesSync(turnFile(), past, past);
+    const bytes = turnRaw();
+    const mtime = fs.statSync(turnFile()).mtimeMs;
+    run({ hook_event_name: 'SessionStart', source: 'compact' });
+    expect(turnRaw()).toBe(bytes);
+    expect(fs.statSync(turnFile()).mtimeMs).toBe(mtime);
+  });
+
+  it('a previous bg of -1 (unmeasured) adds 0 to lostBg, never subtracts', () => {
+    plantTurn(JSON.stringify({ v: 1, sessionId: 'uuid-1', state: 'done', event: 'Stop', at: 2000, turnAt: 1000,
+      stopAt: 2000, bg: -1, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 2, lostKinds: 'shell',
+      lostIds: 'b1' }) + '\n');
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    expect(turnMark()).toMatchObject({ state: 'done', turnAt: 1000, stopAt: 2000, bg: 0, lostBg: 2,
+      lostKinds: 'shell', lostIds: 'b1' });
+  });
+});

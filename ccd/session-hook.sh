@@ -2969,6 +2969,7 @@ fi
 # `fitk` keeps WHOLE aliases inside 200 bytes: a byte cut after the join can leave
 # half an alias or a trailing comma, which the reader refuses
 # (alias-list-fits-whole-aliases). `fiti` keeps at most 8 ids.
+# restart: a same-session done moves bg* into lost* (a union, lost-kinds-accumulate); clear: a fresh line.
 TURN_MARK_PROGRAM='
 def csv: split(",") | map(select(length > 0));
 def fitk: reduce .[] as $k (""; if (length + (if length > 0 then 1 else 0 end) + ($k|length)) <= 200 then (if length > 0 then . + "," + $k else $k end) else . end);
@@ -2990,6 +2991,10 @@ def fiti: .[0:8] | join(",");
 | if $kind == "working" then $b + {state: "working", turnAt: $at, lostBg: 0, lostKinds: "", lostIds: ""}
   elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti)}
   elif $kind == "failed" then $b + {state: "failed", stopAt: $at, err: $err}
+  elif $kind == "restart" then $b
+    + (if $same and $p.state == "done" then {lostBg: (($p.lostBg // 0) + ([($p.bg // -1), 0] | max)), lostKinds: ((($p.lostKinds // "") + "," + ($p.bgKinds // "")) | csv | unique | fitk), lostIds: ((($p.lostIds // "") + "," + ($p.bgIds // "")) | csv | fiti)} else {} end)
+    + {restartAt: $at, bg: 0, bgKinds: "", bgIds: ""}
+  elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: ""}
   else empty end'
 _hook_turn_mark() {   # <kind: working|done|failed|restart|clear> -> 0 written; 1 not written (never fatal)
   local kind="$1" mf="$REG/$id.turn.json" prev="" out
@@ -3010,7 +3015,7 @@ if [[ -z "$paid" && -e "$REG/$id.generation" ]]; then
       [[ "$tmline" == *'"state":"working"'* && "$tmline" == *"\"sessionId\":\"$msid\""* ]] || tmkind=working ;;
     Stop) tmkind=done ;;
     StopFailure) tmkind=failed ;;
-    SessionStart) tmkind="" ;;   # restart and clear are not written yet
+    SessionStart) [[ "$src" == clear ]] && tmkind=clear || tmkind=restart ;;   # compact exited in its arm (D-306); absent or unknown is a restart (D-1248)
   esac
   if [[ -n "$tmkind" ]]; then hts="${hcat:-$(_hook_epoch_ms)}"; _hook_turn_mark "$tmkind" || true; fi
 fi
