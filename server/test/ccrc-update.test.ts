@@ -381,8 +381,15 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     // probe is a non-blocking `flock -n <file> -c true`: it succeeds (rc 0)
     // while the file is free and fails once the spawned holder has it,
     // bounded so a broken probe fails the case loudly rather than hanging.
+    // Fix round 1: `-F` (--no-fork) — without it `flock FILE sleep 30` FORKS
+    // and `$!` names the flock PARENT, not the `sleep` CHILD that inherits
+    // the lock fd; killing only the parent (afterEach) orphans `sleep`,
+    // which keeps holding the lock for its own 30s regardless (a leaked
+    // process AND a stuck fixture lock for any later case in the same
+    // suite run). `-F` makes flock EXEC into `sleep` in place — one PID,
+    // and killing it releases the lock immediately.
     '    if [ -f "$HOME/fixture-sweep-hold-lock" ]; then',
-    '      flock "$HOME/.ccrc/update.lock" sleep 30 </dev/null >/dev/null 2>&1 &',
+    '      flock -F "$HOME/.ccrc/update.lock" sleep 30 </dev/null >/dev/null 2>&1 &',
     '      echo $! > "$HOME/sweep-lock-holder-pid"',
     '      i=0',
     '      while flock -n "$HOME/.ccrc/update.lock" -c true >/dev/null 2>&1; do',
@@ -11549,11 +11556,12 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
 describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed run, never its own (wave 8 item B)', () => {
   // Describe-local kill list, copied as a pattern from the lock describe's
   // `holders`/`lingerers` (never referenced — that describe's array is its
-  // own), for P12's background lock holder.
-  const holders: ChildProcess[] = [];
+  // own), for P12's background lock holder. Only `lingerers` (pid-file
+  // based) is used here — P12's holder is a fixture-side spawn, never a
+  // `ChildProcess` this file holds a handle to, so `holders` is dropped
+  // (fix round 1, item 4: it was declared and iterated but never pushed to).
   const lingerers: string[] = [];
   afterEach(() => {
-    for (const h of holders.splice(0)) h.kill('SIGKILL');
     for (const f of lingerers.splice(0)) {
       if (!existsSync(f)) continue;
       const pid = Number(readFileSync(f, 'utf8').trim());
@@ -11597,6 +11605,16 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(join(home, 'systemd-run-argv')), 'systemd-run was touched — no case here drives --detach').toBe(false);
     expect(existsSync(join(home, 'tmux-argv')), 'the tmux recorder was touched').toBe(false);
     expect(existsSync(join(home, 'gh-calls')), 'the gh recorder was touched').toBe(false);
+  };
+  /** Fix round 1, item 1: the FULL-flavour cases (P4's flip re-runs a real
+   *  kept spine, P8a stages a real `fullTree`) run a REAL `cmd_install`,
+   *  whose own `cmd_doctor` pass legitimately calls `tmux`/`gh` — measured
+   *  (P4 and P8a both red on `assertNoExtras`'s tmux check before this fix).
+   *  What still holds for every case, STUB or FULL, is `--detach`: nothing
+   *  in this describe ever passes it, so `systemd-run-argv` stays the one
+   *  invariant these two assert. */
+  const assertNoDetach = (home: string): void => {
+    expect(existsSync(join(home, 'systemd-run-argv')), 'systemd-run was touched — no case here drives --detach').toBe(false);
   };
   /** `ccrc backup` (P17, B-M14b): the same runner shape as `runUpdate`, for
    *  the ONE verb this describe otherwise never drives. */
@@ -11726,6 +11744,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     }
     const calls = readFileSync(join(home, 'date-calls'), 'utf8').split('\n').filter((l) => l === '+%Y%m%d-%H%M%S');
     expect(calls.length, 'the floor call and the backup-name call').toBeGreaterThanOrEqual(2);
+    assertNoExtras(home);
   });
 
   it('P4: a FLIP rollback takes no backup of its own — the setup\'s own dirs are pruned by the same rule as a planted one, its newest tree backup kept', () => {
@@ -11749,6 +11768,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(join(backupRoot(home), setup2[1]!)), 'the newer setup dir carries the tree entry — the earlier tree backup').toBe(true);
     expect(existsSync(join(backupRoot(home), setup2[0]!)), 'the older setup dir is not protected — nothing else keeps it').toBe(false);
     expect(r.stdout).toMatch(new RegExp(`^rollback: backups: pruned \\$HOME/ccrc-backups/${setup2[0]}`, 'm'));
+    assertNoDetach(home);
   }, 60_000);
 
   it('P5: no prune on a failed gate (exit 4) — the parent\'s own backup and every planted dir survive', () => {
@@ -11763,6 +11783,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
     expect(existsSync(join(backupRoot(home), '20250102-000000'))).toBe(true);
     expect(r.stdout).not.toMatch(/backups:/);
+    assertNoExtras(home);
   });
 
   it('P6: no prune on --no-gate — the parent\'s own backup and every planted dir survive', () => {
@@ -11776,6 +11797,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(backup)).toBe(true);
     expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
     expect(r.stdout).not.toMatch(/backups:/);
+    assertNoExtras(home);
   });
 
   it('P7: no prune on a sweep death — the announced backup and every planted dir survive', () => {
@@ -11795,6 +11817,10 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
     expect(existsSync(join(backupRoot(home), '20250102-000000'))).toBe(true);
     expect(r.stdout).not.toMatch(/backups: pruned/);
+    // The sweep's own try-restart records to `systemctl-calls`, never
+    // `systemd-run-argv` (that stub is `--detach` only) — reaching the
+    // sweep does not change what this assertion checks.
+    assertNoExtras(home);
   });
 
   it('P8a: exit 3 (a spine that completed under a failing doctor, D-3114) still prunes', () => {
@@ -11807,12 +11833,13 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     }), { tag: 'v2.0.0' });
     plantDir(home, '20250101-000000');
     plantDir(home, '20250102-000000');
-    plantDir(home, '20250103-000000');
-    // KEEP counts every timestamped dir, this run's own included (D-3593):
-    // of the 4 total, KEEP=2 leaves the newest 2 by count — this run's own
-    // is one of those two by construction, so exactly ONE old dir (the
-    // newest) survives by count; the other two are the removal set.
-    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '2' });
+    // Fix round 1, item 2: KEEP=1, per the brief. KEEP counts every
+    // timestamped dir, this run's own included (D-3593): of the 3 total (2
+    // old + this run's own), KEEP=1 leaves the newest 1 by count — this
+    // run's own, dated today, by construction — so BOTH old dirs are the
+    // removal set; neither carries a coord.db or a tree entry, so nothing
+    // else protects them.
+    const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '1' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(3);
     const backup = announcedBackupDir(r.stdout, home);
     expect(existsSync(backup)).toBe(true);
@@ -11820,8 +11847,8 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(r.stdout).toMatch(/^update: backups: pruned \$HOME\/ccrc-backups\/20250102-000000/m);
     expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(false);
     expect(existsSync(join(backupRoot(home), '20250102-000000'))).toBe(false);
-    expect(existsSync(join(backupRoot(home), '20250103-000000'))).toBe(true);
     expect(lastReport(home)['phase']).toBe('done');
+    assertNoDetach(home);
   }, 60_000);
 
   it('P8b: exit 3 on a rollback flip whose kept spine completed under a failing doctor (D-3461) still prunes', () => {
@@ -11837,6 +11864,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(false);
     expect(existsSync(join(backupRoot(home), '20250102-000000'))).toBe(true);
     expect(lastReport(home)['phase']).toBe('done');
+    assertNoExtras(home);
   });
 
   it('P9: a failed flip gate exits 1 before any prune', () => {
@@ -11848,27 +11876,39 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
     expect(r.stdout).not.toMatch(/backups:/);
+    assertNoExtras(home);
   });
 
-  it.skipIf(IS_DARWIN || process.getuid?.() === 0)('P10: a prune failure only WARNs — update.json still reads done', () => {
-    const home = freshUpdateBox('ccrc-fx-b-p10-');
-    plantOldBox(home, { version: 'v1.0.0' });
-    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
-    const roDir = join(backupRoot(home), '20250101-000000', 'ro');
-    mkdirSync(roDir, { recursive: true });
-    writeFileSync(join(roDir, 'f'), 'unremovable\n');
-    plantDir(home, '20250102-000000', { tree: true });
-    chmodSync(roDir, 0o500);
-    try {
-      const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
-      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-      expect(r.stdout).toMatch(/^update: backups: WARN: could not prune \$HOME\/ccrc-backups\/20250101-000000 — every newer backup is intact$/m);
-      expect(existsSync(join(backupRoot(home), '20250101-000000', 'ro', 'f'))).toBe(true);
-      expect(lastReport(home)['phase']).toBe('done');
-    } finally {
-      chmodSync(roDir, 0o700);
-    }
-  });
+  // Fix round 1, item 3: `itLinux` alone for the platform (the suite-wide,
+  // unstated idiom), but root's skip gets its OWN branch with a title that
+  // SAYS why — root can `rm -rf` inside a 0500 directory regardless (it
+  // owns the removal, permission bits don't bind it), so this case cannot
+  // force the removal failure it measures and folding that into a bare
+  // `skipIf` would report a green "skip" with no reason visible anywhere.
+  if (process.getuid?.() === 0) {
+    it.skip('P10: a prune failure only WARNs — update.json still reads done (root bypasses the 0500 mode this case uses to force a removal failure — nothing here is measurable as root)', () => { /* stated skip only */ });
+  } else {
+    itLinux('P10: a prune failure only WARNs — update.json still reads done', () => {
+      const home = freshUpdateBox('ccrc-fx-b-p10-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      const roDir = join(backupRoot(home), '20250101-000000', 'ro');
+      mkdirSync(roDir, { recursive: true });
+      writeFileSync(join(roDir, 'f'), 'unremovable\n');
+      plantDir(home, '20250102-000000', { tree: true });
+      chmodSync(roDir, 0o500);
+      try {
+        const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
+        expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+        expect(r.stdout).toMatch(/^update: backups: WARN: could not prune \$HOME\/ccrc-backups\/20250101-000000 — every newer backup is intact$/m);
+        expect(existsSync(join(backupRoot(home), '20250101-000000', 'ro', 'f'))).toBe(true);
+        expect(lastReport(home)['phase']).toBe('done');
+        assertNoExtras(home);
+      } finally {
+        chmodSync(roDir, 0o700);
+      }
+    });
+  }
 
   it.each([['abc'], ['10000']])('P11: a bad CCRC_BACKUP_KEEP (%s) only WARNs and prunes nothing', (bad) => {
     const home = freshUpdateBox(`ccrc-fx-b-p11-${bad}-`);
@@ -11879,6 +11919,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout).toMatch(new RegExp(`^update: backups: WARN: CCRC_BACKUP_KEEP='${bad}' is not a whole number from 0 to 9999 — nothing pruned$`, 'm'));
     expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
+    assertNoExtras(home);
   });
 
   it('P12: another ccrc holding ~/.ccrc/update.lock at prune time — skipped, nothing removed', () => {
@@ -11893,6 +11934,9 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout).toMatch(/^update: backups: skipped — another ccrc run holds ~\/\.ccrc\/update\.lock; nothing was pruned$/m);
     expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
+    // Reaching the sweep's try-restart records to `systemctl-calls`, never
+    // `systemd-run-argv` — see P7's note.
+    assertNoExtras(home);
   });
 
   it('P13: the refused (unpublished-tag) rollback prunes nothing', () => {
@@ -11903,6 +11947,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
     expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(true);
     expect(r.stdout).not.toMatch(/backups:/);
+    assertNoExtras(home);
   });
 
   it('P14: the floor sits INSIDE the removal set — both dirs at or after it survive though only the newer is kept by count', () => {
@@ -11917,6 +11962,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(join(backupRoot(home), '20991231-235958')), 'above the floor, saved though not kept by count').toBe(true);
     expect(existsSync(join(backupRoot(home), '20991231-235959')), 'above the floor AND kept by count').toBe(true);
     expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(false);
+    assertNoExtras(home);
   });
 
   it('P15: another run\'s tree backup (server-dist or agent-dist) is the newest-earlier kept, even at KEEP=0', () => {
@@ -11929,6 +11975,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(existsSync(join(backupRoot(home), '20250103-000000'))).toBe(true);
     expect(existsSync(join(backupRoot(home), '20250104-000000'))).toBe(false);
+    assertNoExtras(home);
   });
 
   it('P16: KEEP is a COUNT of every timestamped dir of any origin, not merely the class being pruned', () => {
@@ -11947,6 +11994,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(join(backupRoot(home), '20250112-000000'))).toBe(true);
     expect(existsSync(join(backupRoot(home), '20250111-000000'))).toBe(true);
     expect(existsSync(join(backupRoot(home), '20250110-000000'))).toBe(false);
+    assertNoExtras(home);
   });
 
   it('P17: `ccrc backup`\'s own prune echo is byte-identical to main\'s (B-M14b control)', () => {
@@ -11957,5 +12005,6 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout).toContain(
       `backup: pruned ${join(backupRoot(home), '20250101-000000')} (keeping the newest 1 timestamped backups; hand-made siblings are never touched)`);
+    assertNoExtras(home);
   });
 });
