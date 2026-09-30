@@ -36,6 +36,7 @@ import { ACTOR_FLAGS_CAP, CCD_ARGV, sweepDec } from '../src/ccdargv.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { childReclaimReleaseActor } from '../src/coord/childReclaim.js';
 import { configDirFor } from '../src/config.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
@@ -235,9 +236,14 @@ const SITES: readonly Site[] = [
   // the path, on a hold this build proved was its own claim over a programme
   // that has since retired. The label names the run whose accounting was
   // released and the programme it belonged to, not `close.ts`'s bare run id.
+  // The label is COMPOSED by `childReclaimReleaseActor` (which keeps it
+  // inside ccd's byte cap), so this site's capture is the helper CALL — any
+  // other expression passed here, a literal included, captures different
+  // text and reds — and the helper's own template, the text that carries the
+  // label, is pinned by the describe after this table.
   { file: 'coord/childReclaim.ts', what: 'the hold-release job — a retired programme\'s hand-over hold',
-    find: /CCD_ARGV\.wsRelease\(sessionId,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
-    label: '`run:${runId} reclaim sweep: program ${program} retired`' },
+    find: /CCD_ARGV\.wsRelease\(sessionId, sweepDec\(deps\.fleetState, (.+?)\)\);/,
+    label: 'childReclaimReleaseActor(runId, program)' },
   { file: 'coord/routes.ts', what: 'open-then-hold, sessionId reclaim',
     find: /const argv = CCD_ARGV\.wsHold\(\n\s+sessionId, opened\.holdReason,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\),\n\s+\);/,
     label: '`run:${opened.id} open`' },
@@ -261,6 +267,27 @@ describe('each unattended label is pinned to its own call site', () => {
     expect(m, `the anchor for this site was not found in ${file} — it moved or was rewritten; `
       + 'update the anchor before trusting this guard again').not.toBeNull();
     expect(m![1], `${file} — ${find} captured the wrong text`).toBe(label);
+  });
+});
+
+// The hold-release site above passes a HELPER's answer, not a template, so
+// the label it records lives in `childReclaimReleaseActor`. Pinned twice, in
+// the file's two shapes: the helper's template text, anchored on the
+// helper's own signature, and its answer at runtime — an ordinary programme
+// name verbatim, and a name long enough to be cut still naming the sweep.
+describe('the hold-release job\'s actor helper names the unattended lane', () => {
+  it('its template is exactly the job\'s label, `reclaim sweep` included', () => {
+    const src = readFileSync(path.join(srcRoot, 'coord/childReclaim.ts'), 'utf8');
+    const m = /export function childReclaimReleaseActor\(runId: number, program: string\): string \{\n\s+const actor = \(p: string\): string => (`[^`]*`);/.exec(src);
+    expect(m, 'childReclaimReleaseActor\'s template was not found — it moved or was rewritten').not.toBeNull();
+    expect(m![1]).toBe('`run:${runId} reclaim sweep: program ${p} retired`');
+  });
+
+  it('answers the label at runtime, and a cut name still names the sweep', () => {
+    expect(childReclaimReleaseActor(41, 'demo')).toBe('run:41 reclaim sweep: program demo retired');
+    const cut = childReclaimReleaseActor(41, 'x'.repeat(2000));
+    expect(cut.startsWith('run:41 reclaim sweep: program ')).toBe(true);
+    expect(cut.endsWith('… retired')).toBe(true);
   });
 });
 
