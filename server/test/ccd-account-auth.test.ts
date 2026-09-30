@@ -9,7 +9,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
-import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import {
+  makeCcdHarness, ghContainedEnv, harnessBin, seedAccountsSh, CCD, type CcdHarness,
+} from './ccdWsHelpers.js';
+import { DEFAULT_TEST_ROSTER } from './helpers.js';
+import { markGenerated } from '../../shared/mark.mjs';
+import { generateWrapperBody } from '../../shared/wrapper.mjs';
 
 const CCD_ROOT = path.resolve(__dirname, '../../ccd');
 const HELPER = path.join(CCD_ROOT, 'ccd-account-auth');
@@ -847,8 +852,10 @@ describe('ccd-account-auth — setup-token, and the token that reaches one file'
 });
 
 describe('the secrets-file name is agreed across three writers, or it is agreed in none', () => {
-  // `ccd-account-auth` does not read `~/.ccrc/accounts.json` and the projection
-  // it DOES read carries no `secretsFile` — `generateAccountsSh` emits ids,
+  // `ccd-account-auth` reads `~/.ccrc/accounts.json` for ONE fact — a lane's
+  // `exec.kind`, which picks openai-login's program (Plan 2b-2 Task 8) — and
+  // never its `secretsFile`; the projection it reads for everything else
+  // carries none either — `generateAccountsSh` emits ids,
   // home-ability, CCRC_MEASURED, the upstream id, config dirs, labels and hues
   // and nothing else. So the mint's destination is CONSTRUCTED here, and it is
   // only safe to construct because two other writers derive the same name: the
@@ -956,6 +963,920 @@ describe('ccd-account-auth — openai-login runs somebody else\'s program', () =
     expect(r.code).toBe(1);
     expect(r.stderr).toContain('launcher-absent');
     expect(status('gpt')).toMatchObject({ state: 'failed' });
+  });
+
+  it('keys on exec.kind, never on telemetry: an EXTERNAL lane with codex telemetry still runs `<launcher> login`', () => {
+    // A fixture lane, `ext-a`, in the live Codex lanes' shape: exec.kind
+    // external, telemetry codex. CCRC_CODEX_BACKEND is telemetry-keyed, so it
+    // DOES name this lane (the control below), and routing on it would send
+    // another repository's lane down ccrc's verb.
+    const EXT_A = {
+      id: 'ext-a', label: 'ext-a', configDirSuffix: '.claude-ext-a',
+      exec: { kind: 'external' }, homeAble: false, hue: 'amber', telemetry: 'codex',
+    };
+    const roster = { version: 1, accounts: [...DEFAULT_TEST_ROSTER.accounts, EXT_A] };
+    seedAccountsSh(h.home, roster);
+    fs.writeFileSync(path.join(h.home, '.ccrc', 'accounts.json'), `${JSON.stringify(roster, null, 2)}\n`);
+    expect(fs.readFileSync(path.join(h.home, '.ccrc', 'accounts.sh'), 'utf8'))
+      .toMatch(/^CCRC_CODEX_BACKEND=\(ext-a\)$/m);
+    plantLauncher('ext-a', OAI_REPLAY);
+    plantLauncher('ccrc', '#!/bin/sh\nprintf \'%s\\n\' "$*" > "$HOME/seen-ccrc-argv"\nexit 0\n');
+    const r = runOai('ext-a');
+    expect(r.code).toBe(0);
+    expect(fs.readFileSync(path.join(h.home, 'seen-argv'), 'utf8').trim()).toBe('login');
+    expect(fs.existsSync(path.join(h.home, 'seen-ccrc-argv')), 'an external lane ran ccrc codex login').toBe(false);
+  });
+
+  // The "a roster JSON it cannot read is not a codex verdict" case that used
+  // to live here (added in Task 8's own commit) is MERGED into F5b below
+  // (review round 2, finding N6): both planted the same `router` lane over
+  // the same unparseable roster and asserted the same thing, the external
+  // arm running unchanged, so keeping both was two copies of one fact.
+});
+
+describe('ccd-account-auth — openai-login for a CODEX lane runs ccrc\'s own verb', () => {
+  /** DEFAULT_TEST_ROSTER plus one codex lane, written to BOTH files a box
+   *  carries: `accounts.sh` (what `_auth_rostered` reads) and `accounts.json`
+   *  (where the kind is read from — the projection carries none). The ports are
+   *  parse-only vocabulary: nothing here opens a socket. */
+  const CODEX_ROW = {
+    id: 'codex-a', label: 'codex-a', configDirSuffix: '.claude-codex-a', homeAble: false,
+    hue: 'amber', telemetry: 'codex',
+    exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+      authDir: '.local/share/ccrc/codex/codex-a' },
+  };
+  const WITH_CODEX = { version: 1, accounts: [...DEFAULT_TEST_ROSTER.accounts, CODEX_ROW] };
+  const seedBoth = (roster: unknown): void => {
+    seedAccountsSh(h.home, roster);
+    fs.writeFileSync(path.join(h.home, '.ccrc', 'accounts.json'), `${JSON.stringify(roster, null, 2)}\n`);
+  };
+  /** The lane's own generated launcher, as a recorder: it must NEVER run. */
+  const LANE_LAUNCHER = '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" > "$HOME/seen-argv"\nexit 0\n';
+  /** `~/.local/bin/ccrc`, standing in for `ccrc codex login` (whose own cases
+   *  live in ccrc-codex.test.ts): records its argv and whether it has a tty,
+   *  prints the runtime's device-flow shape, exits `rc`. */
+  const FAKE_CCRC = (rc: number): string =>
+    '#!/usr/bin/env bash\n'
+    + 'printf \'%s\\n\' "$*" > "$HOME/seen-ccrc-argv"\n'
+    + '[ -t 1 ] && echo tty > "$HOME/seen-ccrc-tty"\n'
+    + 'echo "Sign in with ChatGPT using device code:"\n'
+    + 'echo "1) Visit https://orchard-api/device"\n'
+    + 'echo "2) Enter code: WXYZ-4321"\n'
+    + (rc === 0 ? 'echo "ccrc codex: codex-a: logged in"\n' : 'echo "ccrc codex: login-failed: fixture" >&2\n')
+    + `exit ${rc}\n`;
+
+  const runLane = (id: string, env: NodeJS.ProcessEnv = {}): { code: number; stdout: string; stderr: string } => {
+    // THE LANE LIBRARY'S TWO KNOBS ARE DELETED (ruling R23: every harness
+    // whose verb can reach the lane library). This verb's codex arm execs
+    // `~/.local/bin/ccrc codex login`, which reaches `_codex_row`. `login`
+    // itself reads neither knob, and every ccrc here is a fake, so the deletion
+    // is the ruling's line kept, not a measured need. It sits above `opts` so
+    // the spawn's containment window (ccd-workspaces.test.ts) is unchanged.
+    const base: NodeJS.ProcessEnv = { ...process.env };
+    delete base['CCRC_CODEX_PROBE_S'];
+    delete base['CCRC_CODEX_READY_S'];
+    const opts = {
+      encoding: 'utf8' as const, cwd: h.home, timeout: 60_000,
+      env: ghContainedEnv(h.home,
+        { ...base, HOME: h.home, CCRC_AUTH_TICK: '0.2', CCRC_AUTH_TIMEOUT: '15',
+          CLAUDE_CODE_OAUTH_TOKEN: PARENT_TOKEN, ...env },
+        { systemd: true, tmux: true }),
+    };
+    try { return { code: 0, stdout: execFileSync('bash', [HELPER, id, 'openai-login'], opts), stderr: '' }; }
+    catch (e) {
+      const err = e as { status?: number; stdout?: string; stderr?: string };
+      return { code: err.status ?? 1, stdout: String(err.stdout ?? ''), stderr: String(err.stderr ?? '') };
+    }
+  };
+
+  it('B1: runs `ccrc codex login <id>` under a pty — never the lane\'s launcher, which would hand `login` to Claude Code', () => {
+    seedBoth(WITH_CODEX);
+    plantLauncher('codex-a', LANE_LAUNCHER);
+    plantLauncher('ccrc', FAKE_CCRC(0));
+    const r = runLane('codex-a');
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.readFileSync(path.join(h.home, 'seen-ccrc-argv'), 'utf8').trim()).toBe('codex login codex-a');
+    // The device flow wants a terminal, and the spec keeps the pty (§9.3).
+    expect(fs.existsSync(path.join(h.home, 'seen-ccrc-tty')), 'ccrc codex login ran without a pty').toBe(true);
+    expect(fs.existsSync(path.join(h.home, 'seen-argv')), 'the lane\'s own launcher ran').toBe(false);
+    expect(status('codex-a')).toMatchObject({
+      state: 'done', url: 'https://orchard-api/device', userCode: 'WXYZ-4321',
+    });
+    expect(r.stdout).toContain('2) Enter code: WXYZ-4321');
+    // The verb's status file is read once, then removed, so it does not
+    // outlive the run.
+    expect(fs.existsSync(path.join(REG(h.home), '.auth', 'codex-a.run', 'verb.rc')),
+      'the verb\'s status file outlived its run').toBe(false);
+  });
+
+  it('B2: a non-zero exit from the verb is failed, and names the verb rather than a launcher', () => {
+    // ON LINUX THIS MEASURES THE STATUS FILE, NOT `wait`: util-linux
+    // `script` without `-e` exits 0 whatever its child did
+    // (script-shim-platform.test.ts's util-linux control), so an arm that
+    // trusted the vehicle's rc would stamp this run `done`.
+    seedBoth(WITH_CODEX);
+    plantLauncher('ccrc', FAKE_CCRC(1));
+    const r = runLane('codex-a');
+    expect(r.code).toBe(1);
+    expect(status('codex-a')).toMatchObject({
+      state: 'failed', error: expect.stringContaining('ccrc codex login codex-a exited 1'),
+    });
+    expect(r.stderr).not.toContain("the launcher's login exited");
+  });
+
+  it('B3: ccrc-absent refuses before any pipe, and never falls back to the lane\'s launcher', () => {
+    seedBoth(WITH_CODEX);
+    plantLauncher('codex-a', LANE_LAUNCHER);
+    const r = runLane('codex-a');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('ccrc-absent');
+    expect(status('codex-a')).toMatchObject({ state: 'failed', error: expect.stringContaining('ccrc-absent') });
+    expect(fs.existsSync(path.join(REG(h.home), '.auth', 'codex-a.run'))).toBe(false);
+    expect(fs.existsSync(path.join(h.home, 'seen-argv'))).toBe(false);
+  });
+
+  it('B4: keeps pane-unsupported-here — a box with no script(1) cannot run a device flow either', () => {
+    seedBoth(WITH_CODEX);
+    plantLauncher('ccrc', FAKE_CCRC(0));
+    const r = runLane('codex-a', { CCRC_AUTH_SCRIPT: 'ccrc-no-such-pty-vehicle' });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('pane-unsupported-here');
+    expect(fs.existsSync(path.join(h.home, 'seen-ccrc-argv'))).toBe(false);
+    expect(fs.existsSync(path.join(REG(h.home), '.auth', 'codex-a.run'))).toBe(false);
+  });
+
+  it('B5: a pty vehicle that ran nothing is not a login, and an earlier run\'s status is never read as this one\'s', () => {
+    // THE UTIL-LINUX BLIND SPOT, made deterministic. `script` without `-e`
+    // exits 0 whatever its child did. `true` is a vehicle that exits 0 and
+    // runs NOTHING, which is that blind spot with the verb taken away. A
+    // `verb.rc` holding 0 sits in the run directory beforehand, as a run that
+    // a cancel cut short leaves one (`_auth_cancelled` exits past the arm). A
+    // helper that read the file without clearing it first would stamp `done`.
+    seedBoth(WITH_CODEX);
+    plantLauncher('ccrc', FAKE_CCRC(0));
+    const runDir = path.join(REG(h.home), '.auth', 'codex-a.run');
+    fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(runDir, 'verb.rc'), '0\n');
+    const r = runLane('codex-a', { CCRC_AUTH_SCRIPT: 'true' });
+    expect(fs.existsSync(path.join(h.home, 'seen-ccrc-argv')),
+      'the vehicle ran the verb — this case would measure nothing').toBe(false);
+    expect(r.code).toBe(1);
+    expect(status('codex-a')).toMatchObject({
+      state: 'failed', error: expect.stringContaining('ccrc codex login codex-a reported no exit status'),
+    });
+    expect(fs.existsSync(path.join(runDir, 'verb.rc')), 'the stale status outlived the run').toBe(false);
+  });
+
+  /** The REAL generated wrapper (shared/wrapper.mjs's own shape, not a
+   *  recorder stub) execing the REAL ccrc-codex execing the REAL ccrc, so a
+   *  case that plants this measures the shipped chain's actual exit code,
+   *  not a simulated one. `claude`'s stub upstream binary is planted
+   *  automatically by `makeCcdHarness` (it is home-able in
+   *  DEFAULT_TEST_ROSTER), which is what lets `ccrc-codex` get past its own
+   *  `no-upstream` gate before it ever reaches the roster. */
+  const plantRealCodexWrapper = (): void => {
+    plantLauncher('codex-a', markGenerated(generateWrapperBody(
+      { id: 'codex-a', configDirSuffix: CODEX_ROW.configDirSuffix, execKind: 'codex' }, 'claude')));
+    fs.symlinkSync(path.join(CCD_ROOT, 'ccrc-codex'), path.join(harnessBin(h.home), 'ccrc-codex'));
+    fs.symlinkSync(path.join(CCD_ROOT, 'ccrc'), path.join(harnessBin(h.home), 'ccrc'));
+  };
+
+  /** The tree's non-live external row (external, telemetry none), the shape
+   *  `models-op.test.ts` and the "openai-login runs somebody else's
+   *  program" describe above both use. Its wrapper is a human-written file,
+   *  never a `ccrc-codex` one, so the wrapper gate must never touch it. */
+  const ROUTER = {
+    id: 'router', label: 'router', configDirSuffix: '.claude-router',
+    exec: { kind: 'external' }, homeAble: false, hue: 'blue', telemetry: 'none',
+  };
+
+  // FINDING F5 — MEASURED, not assumed (round 1), then WIDENED (round 2,
+  // finding N3). The two round-1 reviewers disagreed on what a codex lane's
+  // `openai-login` publishes when `~/.ccrc/accounts.json` EXISTS but cannot
+  // be parsed. `accounts.sh` (the projection) stays VALID in every case
+  // below — only `accounts.json`, read only for the kind lookup, is broken
+  // — so the wrapper's own reverse map still resolves the lane correctly
+  // and reaches its real chain: the generated wrapper execs `ccrc-codex`,
+  // which sources the (valid) projection, maps the config dir to `codex-a`,
+  // and runs `ccrc codex start codex-a`. That refuses (the roster it reads
+  // directly is the same broken file) and exits 1, so `ccrc-codex` exits 1
+  // too, in place.
+  //
+  // MEASURED (this fixture, before the round-1 fix): the EXTERNAL arm's pty
+  // vehicle IS util-linux `script` without `-e` (hazard 16's own blind
+  // spot, the one `_auth_openai_login_codex` exists to avoid and the one
+  // `_auth_openai_login` — this OLD arm, unchanged by Task 8 — still
+  // carries by design for a genuinely external lane). `script` without
+  // `-e` exits 0 whatever its child did
+  // (`script-shim-platform.test.ts`'s own control), so `wait "$child"` read
+  // 0 regardless of `ccrc-codex`'s real exit, and the published status was
+  // `{"state":"done", ...}` — a FALSE success, not the honest failure one
+  // round-1 reviewer assumed, because rc never left `script` as anything
+  // but 0.
+  //
+  // ROUND 1's fix answered a third word, `undecidable`, when the file
+  // exists but cannot be read or parsed, and refused a `ccrc-codex` wrapper
+  // by name on THAT word alone. ROUND 2's re-review (findings N1, N3)
+  // measured that the false `done` survived for every codex-shaped wrapper
+  // whose roster answer was the ordinary EMPTY string instead: an absent
+  // roster, a dangling-symlink roster, a valid roster missing the row,
+  // `{}`, and — because the old jq call accepted a truncated file as "no
+  // match" rather than "cannot parse" — a zero-byte, whitespace-only or
+  // `null` roster too. ROUND 2's fix (see `_auth_exec_kind` and
+  // `_auth_openai_login`'s own comments) widens the wrapper gate to every
+  // answer other than `codex`, and sharpens `_auth_exec_kind`'s own filter
+  // (a jq SLURP, checking for exactly one JSON object) so those roster
+  // shapes read `undecidable` rather than empty. The two now-distinct
+  // refusals are `roster-unreadable` (the file exists but could not be
+  // read as one JSON object — permissions, malformed JSON, or jq off PATH)
+  // and `roster-not-codex` (the file parses fine but does not declare this
+  // id an exec.kind "codex" account).
+  it('F5a: a CODEX-shaped wrapper over an UNPARSEABLE roster is refused by name, roster-unreadable, before the false-done blind spot can fire', () => {
+    seedBoth(WITH_CODEX);
+    fs.writeFileSync(path.join(h.home, '.ccrc', 'accounts.json'), '{ not json\n');
+    plantRealCodexWrapper();
+    const r = runLane('codex-a');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('roster-unreadable');
+    const s = status('codex-a');
+    expect(s['state'], `published status: ${JSON.stringify(s)}`).toBe('failed');
+    expect(String(s['error'])).toContain('roster-unreadable');
+    // NEVER a false done, and NEVER a spawn: the refusal fires before any
+    // pipe opens, exactly as `ccrc-absent`/`pane-unsupported-here` do.
+    expect(fs.existsSync(path.join(REG(h.home), '.auth', 'codex-a.run'))).toBe(false);
+  });
+
+  // MERGED (round 2, finding N6) with the round-1 case that used to live in
+  // the "openai-login runs somebody else's program" describe above: both
+  // planted `router` over the same unparseable roster and asserted the same
+  // external-arm-unchanged fact, so keeping both was two copies of it.
+  it('F5b: a genuinely EXTERNAL lane with the same unparseable roster is unaffected — the external arm still runs', () => {
+    // `router`'s wrapper is a human-written file, never a `ccrc-codex` one,
+    // so the wrapper gate — on EITHER a codex-negative empty answer or
+    // `undecidable` — must never touch it.
+    seedBoth({ version: 1, accounts: [...DEFAULT_TEST_ROSTER.accounts, ROUTER] });
+    fs.writeFileSync(path.join(h.home, '.ccrc', 'accounts.json'), '{ not json\n');
+    plantLauncher('router', '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" > "$HOME/seen-argv"\nexit 0\n');
+    const r = runLane('router');
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.readFileSync(path.join(h.home, 'seen-argv'), 'utf8').trim()).toBe('login');
+    expect(status('router')).toMatchObject({ state: 'done' });
+  });
+
+  // FINDING N3 — the wrapper gate now applies to the EMPTY answer too, not
+  // only `undecidable`. Each of these roster states is syntactically fine
+  // (or simply absent) — `_auth_exec_kind` correctly answers empty, or the
+  // named OTHER kind — but a `ccrc-codex` wrapper still cannot safely take
+  // the external arm on ANY of them, because the same false-done blind spot
+  // fires exactly as it does on `undecidable`. FINDING R2-3 (round 3): the
+  // refusal WORD now depends on which of these states it is, because each
+  // names a different real cause with a different real remedy —
+  // `roster-absent` (no file at all: `ccrc install` seeds one, but not this
+  // id's row), or `roster-not-codex` (a readable roster that simply does
+  // not make this id a codex lane right now, whether because its row is
+  // gone or because it names some other kind). Neither is
+  // `roster-unreadable`, which means the file could not be parsed at all.
+  it.each([
+    ['an ABSENT roster', 'roster-absent', (home: string): void => {
+      fs.rmSync(path.join(home, '.ccrc', 'accounts.json'), { force: true });
+    }],
+    // FINAL REVIEW (X2): a dangling link is its OWN word now. It used to share
+    // `roster-absent`'s "does not exist, run ccrc install" text, and that
+    // install REPLACES the link (measured); the remedy case below pins it.
+    ['a DANGLING-SYMLINK roster', 'roster-dangling', (home: string): void => {
+      fs.rmSync(path.join(home, '.ccrc', 'accounts.json'), { force: true });
+      fs.symlinkSync(path.join(home, '.ccrc', 'nowhere.json'), path.join(home, '.ccrc', 'accounts.json'));
+    }],
+    ['a VALID roster missing the row', 'roster-not-codex', (home: string): void => {
+      fs.writeFileSync(path.join(home, '.ccrc', 'accounts.json'),
+        `${JSON.stringify({ version: 1, accounts: DEFAULT_TEST_ROSTER.accounts }, null, 2)}\n`);
+    }],
+    ['`{}`', 'roster-not-codex', (home: string): void => { fs.writeFileSync(path.join(home, '.ccrc', 'accounts.json'), '{}\n'); }],
+  ])('F5c: %s + a CODEX-shaped wrapper is refused %s, not left to the false-done blind spot',
+    (_what, expectWord, corrupt) => {
+      seedBoth(WITH_CODEX);
+      corrupt(h.home);
+      plantRealCodexWrapper();
+      const r = runLane('codex-a');
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain(expectWord);
+      expect(r.stderr).not.toContain('roster-unreadable');
+      const s = status('codex-a');
+      expect(s['state'], `published status: ${JSON.stringify(s)}`).toBe('failed');
+      expect(String(s['error'])).toContain(expectWord);
+      expect(fs.existsSync(path.join(REG(h.home), '.auth', 'codex-a.run'))).toBe(false);
+    });
+
+  // FINDING R2-4/S (round 3), the `generated` half of probe P16: the roster
+  // NAMES this id, but as `generated`, while its on-disk launcher is still
+  // the stale `ccrc-codex` one — a case the reviewer's mutation S (skip the
+  // gate entirely when the roster declares a non-codex kind) stayed green
+  // on before this row existed. The remedy wording is asserted specifically
+  // (not just the shared `roster-not-codex` word both this and the
+  // `external` case below share), because `ccrc wrappers` genuinely treats
+  // `generated` and every other named kind differently — MEASURED directly
+  // (see the round-3 report section): for `generated`, `ccrc wrappers`
+  // rewrote a stale-but-unmodified ccrc-marked wrapper on its own, no flags
+  // needed.
+  it('F5c: a roster naming codex-a exec.kind "generated", with a stale ccrc-codex wrapper, is refused roster-not-codex, "rewrites" wording', () => {
+    const GENERATED_ROW = {
+      id: 'codex-a', label: 'codex-a', configDirSuffix: '.claude-codex-a', homeAble: true,
+      hue: 'amber', telemetry: 'anthropic', exec: { kind: 'generated' },
+    };
+    seedBoth(WITH_CODEX);
+    fs.writeFileSync(path.join(h.home, '.ccrc', 'accounts.json'),
+      `${JSON.stringify({ version: 1, accounts: [...DEFAULT_TEST_ROSTER.accounts, GENERATED_ROW] }, null, 2)}\n`);
+    plantRealCodexWrapper();
+    const r = runLane('codex-a');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('roster-not-codex');
+    expect(r.stderr).toContain('"generated"');
+    expect(r.stderr).toContain('rewrites');
+    expect(r.stderr).not.toContain('replace');
+    expect(r.stderr).not.toContain('by hand');
+    const s = status('codex-a');
+    expect(s['state'], `published status: ${JSON.stringify(s)}`).toBe('failed');
+    expect(String(s['error'])).toContain('roster-not-codex');
+  });
+
+  // FINDING R2-4/S (round 3), the `external` half of probe P17: the roster
+  // names `router` exec.kind "external" — a DECIDED, correct answer — but
+  // its on-disk launcher is still a stale `ccrc-codex` one, from before the
+  // lane was switched to external. `router`'s wrapper is not one
+  // `plantRealCodexWrapper` can write (that helper is `codex-a`-specific),
+  // so this plants the identical shape by hand. The remedy wording is
+  // asserted specifically for the same reason as the `generated` case
+  // above: MEASURED directly, `ccrc wrappers` — even with `--force` — never
+  // writes an `external` (or any non-`generated`) lane's launcher at all,
+  // so the remedy must say "by hand", never "rewrites".
+  it('F5c: a roster naming router exec.kind "external", with a stale ccrc-codex wrapper, is refused roster-not-codex, "by hand" wording', () => {
+    seedBoth({ version: 1, accounts: [...DEFAULT_TEST_ROSTER.accounts, ROUTER] });
+    plantLauncher('router', markGenerated(generateWrapperBody(
+      { id: 'router', configDirSuffix: ROUTER.configDirSuffix, execKind: 'codex' }, 'claude')));
+    fs.symlinkSync(path.join(CCD_ROOT, 'ccrc-codex'), path.join(harnessBin(h.home), 'ccrc-codex'));
+    fs.symlinkSync(path.join(CCD_ROOT, 'ccrc'), path.join(harnessBin(h.home), 'ccrc'));
+    const r = runLane('router');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('roster-not-codex');
+    expect(r.stderr).toContain('"external"');
+    expect(r.stderr).toContain('by hand');
+    expect(r.stderr).not.toContain('rewrites');
+    const s = status('router');
+    expect(s['state'], `published status: ${JSON.stringify(s)}`).toBe('failed');
+    expect(String(s['error'])).toContain('roster-not-codex');
+  });
+
+  // FINDING N1 — the SLURP filter: a file that has no complete JSON value in
+  // it at all (zero bytes, whitespace only, or a bare `null`/`[]`, none of
+  // them an object) must answer `undecidable`, not empty — the plain `-r`
+  // filter round 1 shipped accepted these as "no match" (jq exits 0 with no
+  // output for `null | .accounts[]?`), so a codex wrapper over a truncated
+  // roster — the likeliest real way a file becomes unparseable — still
+  // published a false `done` after round 1's own fix.
+  it.each([
+    ['a ZERO-BYTE roster', ''],
+    ['a WHITESPACE-ONLY roster', '   \n\t \n'],
+    ['a bare `null` roster', 'null\n'],
+    ['a bare `[]` roster', '[]\n'],
+    // FINDING R2-4/N1a (round 3): the slurp filter's `length == 1` check,
+    // not `length >= 1` — two JSON objects concatenated in one file (no
+    // array, no separator, just back to back — a shape a bad merge or a
+    // doubled write can leave behind) must still answer `undecidable`. The
+    // reviewer's own mutation `length == 1` → `length >= 1` stayed green
+    // 78/78 before this row existed, because nothing exercised a
+    // MULTI-document file — `length == 1` would take only `.[0]` (the
+    // first object) and silently ignore the second.
+    ['TWO JSON objects in one file', '{"a":1}\n{"b":2}\n'],
+  ])('F5d: %s reads undecidable, not empty — refused roster-unreadable', (_what, content) => {
+    seedBoth(WITH_CODEX);
+    fs.writeFileSync(path.join(h.home, '.ccrc', 'accounts.json'), content);
+    plantRealCodexWrapper();
+    const r = runLane('codex-a');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('roster-unreadable');
+    const s = status('codex-a');
+    expect(s['state'], `published status: ${JSON.stringify(s)}`).toBe('failed');
+    expect(String(s['error'])).toContain('roster-unreadable');
+  });
+
+  // FINDING N2 — the "cannot be READ" half of `undecidable` (as opposed to
+  // "reads fine but does not parse", F5a's case) had no case at all: M4
+  // (the re-reviewer's own mutation, folding an unreadable roster to empty)
+  // stayed green under round 1's suite.
+  it.skipIf(process.getuid?.() === 0)('F5e: accounts.json at mode 000 is unreadable, not empty — refused roster-unreadable', () => {
+    seedBoth(WITH_CODEX);
+    const roster = path.join(h.home, '.ccrc', 'accounts.json');
+    fs.chmodSync(roster, 0o000);
+    plantRealCodexWrapper();
+    try {
+      const r = runLane('codex-a');
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('roster-unreadable');
+      const s = status('codex-a');
+      expect(s['state']).toBe('failed');
+      expect(String(s['error'])).toContain('roster-unreadable');
+    } finally {
+      fs.chmodSync(roster, 0o644);
+    }
+  });
+
+  // FINDING N5 — grep's exit status is now BRANCHED (0 match / 1 no-match /
+  // ≥2 cannot-read), not folded by a bare `2>/dev/null`, which used to make
+  // a wrapper this function could not even read look identical to one that
+  // genuinely is not a `ccrc-codex` wrapper (the old adapter narrowed a
+  // distinction it received). Before this fix the case below fell through
+  // to the external arm, which then could not read the same file either,
+  // and `script`'s blind spot published a false `done` regardless.
+  it.skipIf(process.getuid?.() === 0)('F5f: a wrapper this function cannot even read is refused by name, launcher-unreadable — never silently treated as external', () => {
+    seedBoth(WITH_CODEX);
+    fs.writeFileSync(path.join(h.home, '.ccrc', 'accounts.json'), '{ not json\n');
+    plantRealCodexWrapper();
+    const wrapper = path.join(harnessBin(h.home), 'codex-a');
+    fs.chmodSync(wrapper, 0o111);
+    try {
+      const r = runLane('codex-a');
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('launcher-unreadable');
+      expect(r.stderr).not.toContain('roster-unreadable');
+      expect(r.stderr).not.toContain('roster-not-codex');
+      const s = status('codex-a');
+      expect(s['state']).toBe('failed');
+      expect(String(s['error'])).toContain('launcher-unreadable');
+    } finally {
+      fs.chmodSync(wrapper, 0o755);
+    }
+  });
+
+  // FINDING R2-1 (round 3), probes P18/P18b: a CORRECTLY-rostered `external`
+  // lane (a DECIDED answer, never empty or `undecidable`) whose launcher
+  // this function cannot read must be BYTE-IDENTICAL to base — an
+  // unreadable launcher takes the external arm exactly as it always did,
+  // launcher-unreadable is for empty/undecidable only. MEASURED (this
+  // fixture) what "the external arm as before" actually is, since this
+  // task does not touch that arm and is not fixing it: a mode-0111 BINARY
+  // (P18) can be exec'd without read permission (the kernel's own rule —
+  // read is not required to execute, only to interpret a shebang), so it
+  // runs for real and the pane reaches `done` honestly. A mode-0111 SCRIPT
+  // (P18b) cannot: the shebang line has to be READ to find the interpreter,
+  // so the exec fails ("Permission denied", printed on the pty's own
+  // stdout) — but `script` without `-e` still exits 0 (hazard 16's
+  // pre-existing blind spot on THIS arm, `_auth_openai_login`'s OLD code,
+  // untouched here), so the published state is STILL `done` — a false one,
+  // but the SAME false one base already published, not a new failure mode
+  // this fix introduces. Both cases assert only that none of the WRAPPER
+  // GATE's three refusal words fire; the external arm's own pre-existing
+  // blind spot (P19's directory case is the same shape) is out of this
+  // ruling's scope.
+  // `skipIf(uid === 0)` like F5e, F5f and P3b: root reads a mode-0111
+  // file, so under root the gate reads this launcher and the case measures
+  // nothing (final review, C1).
+  it.skipIf(process.getuid?.() === 0).each([
+    ['a BINARY launcher (P18)', (wrapper: string): void => { fs.copyFileSync('/bin/true', wrapper); }],
+    ['a SCRIPT launcher (P18b)', (wrapper: string): void => {
+      fs.writeFileSync(wrapper, '#!/usr/bin/env bash\necho hi\nexit 0\n');
+    }],
+  ])('%s at mode 0111, under a CORRECT external roster row, is untouched by the wrapper gate', (_what, plant) => {
+    seedBoth({ version: 1, accounts: [...DEFAULT_TEST_ROSTER.accounts, ROUTER] });
+    const wrapper = path.join(harnessBin(h.home), 'router');
+    plant(wrapper);
+    fs.chmodSync(wrapper, 0o111);
+    try {
+      const r = runLane('router');
+      expect(r.stderr).not.toContain('roster-not-codex');
+      expect(r.stderr).not.toContain('roster-unreadable');
+      expect(r.stderr).not.toContain('launcher-unreadable');
+    } finally {
+      fs.chmodSync(wrapper, 0o755);
+    }
+  });
+
+  // ROUND 2 RE-REVIEW PROBE P3b: an EXTERNAL lane is unaffected by the
+  // roster's own permissions, exactly as it is by the roster's own content
+  // (F5b) — the gate's verdict comes from `router`'s WRAPPER, and grep never
+  // touches the roster file at all.
+  it.skipIf(process.getuid?.() === 0)('P3b: an EXTERNAL lane is unaffected by a mode-000 roster too', () => {
+    seedBoth({ version: 1, accounts: [...DEFAULT_TEST_ROSTER.accounts, ROUTER] });
+    const roster = path.join(h.home, '.ccrc', 'accounts.json');
+    fs.chmodSync(roster, 0o000);
+    plantLauncher('router', '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" > "$HOME/seen-argv"\nexit 0\n');
+    try {
+      const r = runLane('router');
+      expect(r.code, r.stderr).toBe(0);
+      expect(fs.readFileSync(path.join(h.home, 'seen-argv'), 'utf8').trim()).toBe('login');
+      expect(status('router')).toMatchObject({ state: 'done' });
+    } finally {
+      fs.chmodSync(roster, 0o644);
+    }
+  });
+
+  // ROUND 2 RE-REVIEW PROBE P8: a wrapper that is a SYMLINK to a real
+  // `ccrc-codex` wrapper is still recognised — `-f` and `grep` both follow a
+  // symlink to its target transparently, so the gate needs no special case
+  // for one.
+  it('P8: a wrapper that is a SYMLINK to a real ccrc-codex wrapper is still recognised', () => {
+    seedBoth(WITH_CODEX);
+    fs.writeFileSync(path.join(h.home, '.ccrc', 'accounts.json'), '{ not json\n');
+    const real = path.join(h.home, 'real-codex-a-wrapper');
+    fs.writeFileSync(real, markGenerated(generateWrapperBody(
+      { id: 'codex-a', configDirSuffix: CODEX_ROW.configDirSuffix, execKind: 'codex' }, 'claude')), { mode: 0o755 });
+    const wrapper = path.join(harnessBin(h.home), 'codex-a');
+    fs.rmSync(wrapper, { force: true });
+    fs.symlinkSync(real, wrapper);
+    const r = runLane('codex-a');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('roster-unreadable');
+  });
+
+  // FINDING N5 (the `-f` half): a wrapper path that is NOT a regular file
+  // must never reach the gate's `grep` at all. Uses the REAL
+  // `_auth_openai_login` end to end (`runLane`, not a hand-copied snippet —
+  // a copy would not catch a regression in the shipped `-f` check), with a
+  // DIRECTORY at the wrapper path rather than a FIFO: `-f` is false for a
+  // directory exactly as it is for a FIFO, but a directory fails `exec`
+  // (`EISDIR`) at once instead of blocking on an open with no writer, so
+  // this case runs fast and needs no bespoke timeout. What the PRE-EXISTING
+  // external arm then does with an unexecutable wrapper (this box measures
+  // `script`'s own blind spot again, on a `126` it never sees either) is
+  // that arm's own business, untouched by this fix; what this case pins is
+  // only that the WRAPPER GATE itself never mistakes a directory for a
+  // `ccrc-codex` wrapper and never fails trying to read one as a file.
+  it('F5g: a wrapper that is a DIRECTORY, not a regular file, is left to the external arm — the gate never reads it', () => {
+    seedBoth(WITH_CODEX);
+    fs.writeFileSync(path.join(h.home, '.ccrc', 'accounts.json'), '{ not json\n');
+    const wrapper = path.join(harnessBin(h.home), 'codex-a');
+    fs.rmSync(wrapper, { force: true });
+    fs.mkdirSync(wrapper, { mode: 0o755 });
+    const r = runLane('codex-a');
+    expect(r.stderr).not.toContain('roster-unreadable');
+    expect(r.stderr).not.toContain('roster-not-codex');
+    expect(r.stderr).not.toContain('launcher-unreadable');
+  });
+
+  // ── FINAL REVIEW (F2): every word names its own state, and every remedy is
+  // the one that was run in that state ────────────────────────────────────
+  // Each case below refuses, performs the remedy the refusal names, and
+  // RETRIES: a remedy is pinned by what the retry reaches, not by its text
+  // alone. The commands a remedy names that this suite cannot run (`ccrc
+  // install`, `ccrc wrappers`) were run in the same states through their own
+  // harnesses; the fix wave's report holds those transcripts.
+  //
+  // The wrapper here is the generated `ccrc-codex` body with NOTHING behind
+  // it: no `ccrc-codex`, and `ccrc` is `FAKE_CCRC`. A refusal must fire
+  // before anything runs, and a retry that reaches the codex arm runs only
+  // the fake. Never `plantRealCodexWrapper` in these cases: its `ccrc` is a
+  // symlink into the repository, and a later `plantLauncher('ccrc', …)`
+  // would write THROUGH it.
+  const plantCodexWrapperOnly = (): void => {
+    plantLauncher('codex-a', markGenerated(generateWrapperBody(
+      { id: 'codex-a', configDirSuffix: CODEX_ROW.configDirSuffix, execKind: 'codex' }, 'claude')));
+    plantLauncher('ccrc', FAKE_CCRC(0));
+  };
+  const rosterPath = (): string => path.join(h.home, '.ccrc', 'accounts.json');
+  const withCodexJson = `${JSON.stringify(WITH_CODEX, null, 2)}\n`;
+  /** A roster whose codex-a row carries `exec` as given (`undefined` drops
+   *  the key). accounts.sh keeps WITH_CODEX's projection, so `_auth_rostered`
+   *  still admits the id and the gate is what answers. */
+  const rosterWithExec = (exec: unknown): string => {
+    const { exec: _drop, ...rest } = CODEX_ROW;
+    void _drop;
+    const row = exec === undefined ? rest : { ...rest, exec };
+    return `${JSON.stringify({ version: 1, accounts: [...DEFAULT_TEST_ROSTER.accounts, row] }, null, 2)}\n`;
+  };
+  /** The retry reached the codex arm and ran `ccrc codex login codex-a`. */
+  const expectCodexArm = (r: { code: number; stderr: string }): void => {
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.readFileSync(path.join(h.home, 'seen-ccrc-argv'), 'utf8').trim()).toBe('codex login codex-a');
+    expect(status('codex-a')).toMatchObject({ state: 'done' });
+  };
+  const refusedWith = (r: { code: number; stderr: string }, word: string): string => {
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`${word}:`);
+    const s = status('codex-a');
+    expect(s['state'], `published status: ${JSON.stringify(s)}`).toBe('failed');
+    expect(String(s['error']).startsWith(`${word}:`), String(s['error'])).toBe(true);
+    expect(fs.existsSync(path.join(h.home, 'seen-ccrc-argv')), 'a refusal ran ccrc').toBe(false);
+    return String(s['error']);
+  };
+
+  // X3: `_auth_exec_kind`'s own words, one per state, asserted directly. The
+  // old function answered '' for the first four rows after `undecidable`'s,
+  // and its caller could split only "no file" back out of them.
+  it.each([
+    ['no file', 'absent', (): void => { fs.rmSync(rosterPath(), { force: true }); }],
+    ['a link to nothing', 'dangling', (): void => {
+      fs.rmSync(rosterPath(), { force: true });
+      fs.symlinkSync(path.join(h.home, 'nowhere.json'), rosterPath());
+    }],
+    ['a link to a real roster (read through)', 'kind:codex', (): void => {
+      fs.renameSync(rosterPath(), path.join(h.home, 'real.json'));
+      fs.symlinkSync(path.join(h.home, 'real.json'), rosterPath());
+    }],
+    ['not JSON', 'undecidable', (): void => { fs.writeFileSync(rosterPath(), '{ not json\n'); }],
+    ['no row for the id', 'no-row', (): void => {
+      fs.writeFileSync(rosterPath(), `${JSON.stringify({ version: 1, accounts: DEFAULT_TEST_ROSTER.accounts })}\n`);
+    }],
+    ['`{}`', 'no-row', (): void => { fs.writeFileSync(rosterPath(), '{}\n'); }],
+    ['a row with exec {}', 'no-kind', (): void => { fs.writeFileSync(rosterPath(), rosterWithExec({})); }],
+    ['a row with exec.kind 7', 'no-kind', (): void => { fs.writeFileSync(rosterPath(), rosterWithExec({ kind: 7 })); }],
+    ['a row with exec "codex" (a string, not an object)', 'no-kind', (): void => { fs.writeFileSync(rosterPath(), rosterWithExec('codex')); }],
+    ['a row with no exec at all', 'no-kind', (): void => { fs.writeFileSync(rosterPath(), rosterWithExec(undefined)); }],
+    ['a codex row', 'kind:codex', (): void => { /* seedBoth's own */ }],
+    ['an invalid kind', 'kind:bogus', (): void => { fs.writeFileSync(rosterPath(), rosterWithExec({ kind: 'bogus' })); }],
+    // THE TAG'S REASON: a kind SPELLED like a state word is still a kind.
+    ['a kind spelled "absent"', 'kind:absent', (): void => { fs.writeFileSync(rosterPath(), rosterWithExec({ kind: 'absent' })); }],
+    // The FIRST string kind among the id's rows, as before the split: a
+    // roster naming the id twice answers what it answered at BASE.
+    ['the id twice, the first row kindless', 'kind:external', (): void => {
+      const { exec: _e, ...rest } = CODEX_ROW; void _e;
+      fs.writeFileSync(rosterPath(), `${JSON.stringify({ version: 1, accounts: [
+        ...DEFAULT_TEST_ROSTER.accounts, { ...rest, exec: {} }, { ...rest, exec: { kind: 'external' } }] })}\n`);
+    }],
+  ])('X3: _auth_exec_kind answers ONE word per state — %s → %s', (_what, word, shape) => {
+    seedBoth(WITH_CODEX);
+    shape();
+    expect(fn('AUTH_ID=codex-a; _auth_exec_kind')).toBe(word);
+  });
+
+  // X1: roster-absent's remedy. "Put it back" is run here; the `ccrc
+  // install` sequence was run through the install harness (the first install
+  // seeds a one-account default and regenerates accounts.sh from it, which
+  // drops codex-a and every other account; `ccrc wrappers` leaves accounts.sh
+  // as it was, so the login answers unknown-account; a second install after
+  // the lane is declared again reaches the codex arm).
+  it('X1: roster-absent names put-it-back first and ends with a SECOND `ccrc install`, never `ccrc wrappers` — and putting it back reaches the codex arm', () => {
+    seedBoth(WITH_CODEX);
+    fs.rmSync(rosterPath(), { force: true });
+    plantCodexWrapperOnly();
+    const err = refusedWith(runLane('codex-a'), 'roster-absent');
+    expect(err).toContain('If you have a copy, put it back and retry');
+    expect(err).toContain('drops every other account');
+    expect(err).toContain('Re-declare codex-a');
+    expect(err).toContain('re-declare every other account you noted');
+    expect(err).toContain("then run 'ccrc install' again");
+    expect(err).toContain("'ccrc wrappers' does not regenerate accounts.sh");
+    expect(err).not.toMatch(/and run 'ccrc wrappers'\.$/);
+    fs.writeFileSync(rosterPath(), withCodexJson);
+    expectCodexArm(runLane('codex-a'));
+  });
+
+  // X2: a dangling link names its target, anchors a relative target at the
+  // accounts.json directory, and warns that `ccrc install` replaces the link
+  // (measured through the install harness:
+  // after it, accounts.json is a regular file holding the one default
+  // account, and the link's target is still missing).
+  it('X2: an absolute dangling-symlink roster names its target and warns off install — restoring it reaches the codex arm', () => {
+    seedBoth(WITH_CODEX);
+    const target = path.join(h.home, 'roster-store', 'accounts.json');
+    fs.rmSync(rosterPath(), { force: true });
+    fs.symlinkSync(target, rosterPath());
+    plantCodexWrapperOnly();
+    const err = refusedWith(runLane('codex-a'), 'roster-dangling');
+    expect(err).toContain(`is a symlink to ${target}, which does not resolve`);
+    expect(err).toContain(`Put the roster back at ${target}`);
+    expect(err).toContain("Do not run 'ccrc install' first");
+    expect(err).toContain('replaces the link itself');
+    expect(err).not.toContain('does not exist');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, withCodexJson);
+    expectCodexArm(runLane('codex-a'));
+    // …and the other half of the remedy: re-pointing the link.
+    fs.rmSync(path.join(h.home, 'seen-ccrc-argv'));
+    fs.rmSync(rosterPath());
+    fs.symlinkSync(path.join(h.home, 'nowhere-else.json'), rosterPath());
+    refusedWith(runLane('codex-a'), 'roster-dangling');
+    fs.rmSync(rosterPath());
+    fs.symlinkSync(target, rosterPath());
+    expectCodexArm(runLane('codex-a'));
+  });
+
+  it('X2: a relative dangling target is resolved from accounts.json directory, not the process cwd', () => {
+    seedBoth(WITH_CODEX);
+    fs.rmSync(rosterPath(), { force: true });
+    fs.symlinkSync('../roster-store/accounts.json', rosterPath());
+    plantCodexWrapperOnly();
+    const resolved = path.join(h.home, 'roster-store', 'accounts.json');
+    const err = refusedWith(runLane('codex-a'), 'roster-dangling');
+    expect(err).toContain('symlink target ../roster-store/accounts.json');
+    const spelled = `${path.dirname(rosterPath())}/../roster-store/accounts.json`;
+    expect(err).toContain(`resolves relative to ${path.dirname(rosterPath())} as ${spelled}`);
+    expect(err).toContain(`Put the roster back at ${spelled}`);
+    expect(err).not.toContain(`${process.cwd()}/../roster-store/accounts.json`);
+    fs.mkdirSync(path.dirname(resolved), { recursive: true });
+    fs.writeFileSync(resolved, withCodexJson);
+    expectCodexArm(runLane('codex-a'));
+  });
+
+  it.each([
+    ['fails', '#!/bin/sh\nexit 1\n'],
+    ['returns an empty target', '#!/bin/sh\nexit 0\n'],
+  ])('X2: readlink that %s is reported as unmeasured, never as a blank target', (_what, readlink) => {
+    seedBoth(WITH_CODEX);
+    fs.rmSync(rosterPath(), { force: true });
+    fs.symlinkSync('../roster-store/accounts.json', rosterPath());
+    plantCodexWrapperOnly();
+    plantLauncher('readlink', readlink);
+    const err = refusedWith(runLane('codex-a'), 'roster-dangling-target-unmeasured');
+    expect(err).toContain('readlink did not return one non-empty target');
+    expect(err).toContain('Inspect or replace the link by hand');
+    expect(err).not.toContain('symlink to ,');
+    expect(fs.existsSync(path.join(h.home, 'seen-ccrc-argv'))).toBe(false);
+  });
+
+  // The no-row remedy, the same class as X1: `ccrc install` reports the same
+  // orphan `ccrc wrappers` does, but it also regenerates accounts.sh without
+  // the id (measured), so the text no longer offers install as a way to see
+  // the orphan, and says a row restored after one needs a second.
+  it('no-row: roster-not-codex offers `ccrc wrappers`, not install, to see the orphan — and restoring the row reaches the codex arm', () => {
+    seedBoth(WITH_CODEX);
+    fs.writeFileSync(rosterPath(), `${JSON.stringify({ version: 1, accounts: DEFAULT_TEST_ROSTER.accounts }, null, 2)}\n`);
+    plantCodexWrapperOnly();
+    const err = refusedWith(runLane('codex-a'), 'roster-not-codex');
+    expect(err).toContain('no longer lists codex-a');
+    expect(err).toContain("Run 'ccrc wrappers' to see it reported as an orphan");
+    expect(err).not.toContain("(or 'ccrc install')");
+    expect(err).toContain("before any 'ccrc install'");
+    fs.writeFileSync(rosterPath(), withCodexJson);
+    expectCodexArm(runLane('codex-a'));
+  });
+
+  // X3 + X4: a row with no usable kind, and a kind the validator does not
+  // know, are one word with one remedy — fix exec.kind — because `ccrc
+  // wrappers` and `ccrc install` both refuse the WHOLE roster over either
+  // (measured: "missing or invalid exec.kind", nothing written, rc 1). The
+  // old texts were "no longer lists it" (false: it does) and the external
+  // arm's "replace by hand" (a rewrite is not what is wrong).
+  it.each([
+    ['exec {}', {}, 'with no usable exec.kind'],
+    ['exec.kind 7', { kind: 7 }, 'with no usable exec.kind'],
+    ['exec "codex" (a string)', 'codex', 'with no usable exec.kind'],
+    ['no exec at all', undefined, 'with no usable exec.kind'],
+    ['exec.kind "bogus"', { kind: 'bogus' }, 'declares codex-a exec.kind "bogus", which is not a kind ccrc knows'],
+    ['exec.kind "absent" (spelled like a state word)', { kind: 'absent' }, 'declares codex-a exec.kind "absent", which is not a kind ccrc knows'],
+  ])('X3/X4: a codex-a row with %s is roster-kind-invalid, "fix exec.kind" — and fixing it reaches the codex arm', (_what, exec, says) => {
+    seedBoth(WITH_CODEX);
+    fs.writeFileSync(rosterPath(), rosterWithExec(exec));
+    plantCodexWrapperOnly();
+    const err = refusedWith(runLane('codex-a'), 'roster-kind-invalid');
+    expect(err).toContain(says);
+    expect(err).toContain("'ccrc wrappers' and 'ccrc install' both refuse the whole roster");
+    expect(err).toContain('Set exec.kind for codex-a');
+    expect(err).not.toContain('no longer lists');
+    expect(err).not.toContain('by hand');
+    expect(err).not.toContain('never writes');
+    fs.writeFileSync(rosterPath(), withCodexJson);
+    expectCodexArm(runLane('codex-a'));
+  });
+
+  // X4's other edge: EVERY kind the roster validator accepts has its own arm
+  // in the gate, derived from the validator rather than typed here, so a kind
+  // added to EXEC_KINDS and not to the helper reds HERE instead of reaching a
+  // phone as "not a kind ccrc knows".
+  const VALIDATOR_KINDS = ((): string[] => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../shared/roster-json.mjs'), 'utf8');
+    const m = /const EXEC_KINDS = new Set\(\[([^\]]*)\]\)/.exec(src);
+    return m ? m[1]!.split(',').map((t) => t.trim().replace(/^'|'$/g, '')).filter(Boolean) : [];
+  })();
+  it('X4: the validator\'s EXEC_KINDS is read, and names codex among at least four kinds', () => {
+    expect(VALIDATOR_KINDS).toContain('codex');
+    expect(VALIDATOR_KINDS.length).toBeGreaterThanOrEqual(4);
+  });
+  it.each(VALIDATOR_KINDS)('X4: exec.kind "%s", which the validator accepts, is never roster-kind-invalid', (kind) => {
+    seedBoth(WITH_CODEX);
+    fs.writeFileSync(rosterPath(), kind === 'codex' ? withCodexJson : rosterWithExec({ kind }));
+    plantCodexWrapperOnly();
+    const r = runLane('codex-a');
+    if (kind === 'codex') { expectCodexArm(r); return; }
+    const err = refusedWith(r, 'roster-not-codex');
+    expect(err).toContain(`exec.kind "${kind}"`);
+  });
+
+  // C1: the gate's rc ≥ 2 refusals fire for EVERY undecided word — the old
+  // `''` half of this list had no case, and deleting it stayed green 83/83
+  // (measured, final review). Each row's retry after the remedy ("make it
+  // readable") reaches that state's OWN word, never launcher-unreadable.
+  it.skipIf(process.getuid?.() === 0).each([
+    ['absent', 'roster-absent', (): void => { fs.rmSync(rosterPath(), { force: true }); }],
+    ['dangling', 'roster-dangling', (): void => {
+      fs.rmSync(rosterPath(), { force: true });
+      fs.symlinkSync(path.join(h.home, 'nowhere.json'), rosterPath());
+    }],
+    ['no-row', 'roster-not-codex', (): void => { fs.writeFileSync(rosterPath(), '{}\n'); }],
+    ['no-kind', 'roster-kind-invalid', (): void => { fs.writeFileSync(rosterPath(), rosterWithExec({})); }],
+    ['undecidable', 'roster-unreadable', (): void => { fs.writeFileSync(rosterPath(), '{ not json\n'); }],
+  ])('C1: a mode-0111 ccrc-codex wrapper under a(n) %s roster is launcher-unreadable, and made readable it is %s', (_word, after, shape) => {
+    seedBoth(WITH_CODEX);
+    shape();
+    plantCodexWrapperOnly();
+    const wrapper = path.join(harnessBin(h.home), 'codex-a');
+    fs.chmodSync(wrapper, 0o111);
+    try {
+      const err = refusedWith(runLane('codex-a'), 'launcher-unreadable');
+      expect(err).toContain('Make it readable, or move it aside');
+    } finally {
+      fs.chmodSync(wrapper, 0o755);
+    }
+    const retry = runLane('codex-a');
+    expect(retry.stderr).toContain(`${after}:`);
+    expect(retry.stderr).not.toContain('launcher-unreadable');
+  });
+
+  it.skipIf(process.getuid?.() === 0)('C1: "move it aside" — the retry is the external arm\'s own launcher-absent, and nothing ran', () => {
+    seedBoth(WITH_CODEX);
+    fs.rmSync(rosterPath(), { force: true });
+    plantCodexWrapperOnly();
+    const wrapper = path.join(harnessBin(h.home), 'codex-a');
+    fs.chmodSync(wrapper, 0o111);
+    refusedWith(runLane('codex-a'), 'launcher-unreadable');
+    fs.renameSync(wrapper, `${wrapper}.aside`);
+    fs.chmodSync(`${wrapper}.aside`, 0o755);
+    const r = runLane('codex-a');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('launcher-absent:');
+    expect(fs.existsSync(path.join(h.home, 'seen-ccrc-argv'))).toBe(false);
+  });
+
+  // D3: grep's rc is split by WHY. With grep off PATH (127) or not executable
+  // (126), bash could not run it at all, which is a missing dependency and
+  // not an unreadable wrapper; a grep that DIED (a signal, 128+n) is neither.
+  // The PATH below is REAL absence — a directory of links to the few tools
+  // the path to the refusal needs, with no grep among them — not a stub that
+  // exits 127.
+  const toolsDir = (grep: 'none' | 'not-executable'): string => {
+    const d = path.join(h.home, `tools-${grep}`);
+    fs.mkdirSync(d, { recursive: true });
+    // Resolved in-process from this runner's PATH, not by spawning a shell.
+    const dirs = (process.env['PATH'] ?? '').split(':').filter(Boolean);
+    for (const t of ['bash', 'jq', 'date', 'mkdir', 'chmod', 'mv', 'rm']) {
+      const real = dirs.map((x) => path.join(x, t)).find((p) => fs.existsSync(p));
+      if (real === undefined) throw new Error(`this box has no ${t} on PATH — the fixture needs it`);
+      fs.symlinkSync(real, path.join(d, t));
+    }
+    if (grep === 'not-executable') fs.writeFileSync(path.join(d, 'grep'), '#!/bin/sh\nexit 0\n', { mode: 0o644 });
+    return d;
+  };
+  it.each([
+    ['grep absent from PATH', 'dependency-missing', 'exit 127', (): NodeJS.ProcessEnv => ({ PATH: toolsDir('none') })],
+    ['grep not executable', 'dependency-missing', 'exit 126', (): NodeJS.ProcessEnv => ({ PATH: toolsDir('not-executable') })],
+    ['grep killed by a signal', 'launcher-unmeasured', 'grep exited 137', (): NodeJS.ProcessEnv => {
+      // Shadows the real grep from the head of PATH (harnessBin).
+      plantLauncher('grep', '#!/bin/sh\nkill -KILL $$\n');
+      return {};
+    }],
+  ])('D3: %s is %s, never launcher-unreadable — and the retry with a working grep is the gate\'s own verdict', (_what, word, says, env) => {
+    seedBoth(WITH_CODEX);
+    fs.rmSync(rosterPath(), { force: true });
+    plantCodexWrapperOnly();
+    const err = refusedWith(runLane('codex-a', env()), word);
+    expect(err).toContain(says);
+    expect(err).not.toContain('could not be read');
+    fs.rmSync(path.join(harnessBin(h.home), 'grep'), { force: true });
+    const retry = runLane('codex-a');
+    expect(retry.stderr).toContain('roster-absent:');
+  });
+
+  // X4: the phone gets no review jargon. Every `_auth_die` text is published
+  // to the status file the phone renders, so none may cite a finding, a
+  // review round, a mutation or a deviation number.
+  it('X4: no refusal text this helper publishes carries review jargon', () => {
+    const dies = fs.readFileSync(HELPER, 'utf8').split('\n')
+      .filter((l) => !/^\s*#/.test(l) && l.includes('_auth_die "'));
+    expect(dies.length).toBeGreaterThanOrEqual(20);
+    const jargon = dies.filter((l) => /\bfinding\b|\bR\d+-\d+\b|\bD-\d+\b|\bround \d|\bmeasured\b/i.test(l));
+    expect(jargon).toEqual([]);
+  });
+
+  // THE TWO-READ WINDOW (final review): the roster is read by
+  // `_auth_exec_kind` and again by `ccrc-codex`'s `ccrc codex start`. On the
+  // old path a roster REPAIRED between the two let the second read start the
+  // lane with "login" as Claude Code's prompt (measured with the gate
+  // disabled: the upstream received `login`). The injection below repairs
+  // the roster the instant after the first read. The gate answers from that
+  // first read's word and the wrapper's bytes, so `ccrc codex start` is never
+  // reached. `ccrc-codex` here is the REAL launcher and `ccrc` a recorder, so
+  // a gate that let it through would show as `codex start codex-a` below.
+  it('the two-read window: a roster repaired between the first read and ccrc-codex\'s own is never read a second time from this arm', () => {
+    seedBoth(WITH_CODEX);
+    const repaired = path.join(h.home, 'repaired.json');
+    fs.writeFileSync(repaired, withCodexJson);
+    fs.writeFileSync(rosterPath(), '{ not json\n');
+    plantCodexWrapperOnly();
+    fs.symlinkSync(path.join(CCD_ROOT, 'ccrc-codex'), path.join(harnessBin(h.home), 'ccrc-codex'));
+    const inject = 'eval "$(declare -f _auth_exec_kind | sed "1s/_auth_exec_kind/_f2_first_read/")"; '
+      + '_auth_exec_kind() { local a; a="$(_f2_first_read)"; cp "$REPAIRED" "$HOME/.ccrc/accounts.json"; printf %s "$a"; }';
+    let code = 0; let stderr = '';
+    try {
+      execFileSync('bash', ['-c', `source "${HELPER}"; unset CCRC_AUTH_NO_MAIN; ${inject}; _auth_main codex-a openai-login`], {
+        encoding: 'utf8', cwd: h.home, timeout: 60_000,
+        env: ghContainedEnv(h.home,
+          { ...process.env, HOME: h.home, CCRC_AUTH_NO_MAIN: '1', CCRC_AUTH_TICK: '0.2', CCRC_AUTH_TIMEOUT: '15', REPAIRED: repaired },
+          { systemd: true, tmux: true }),
+      });
+    } catch (e) { const err = e as { status?: number; stderr?: string }; code = err.status ?? 1; stderr = String(err.stderr ?? ''); }
+    expect(fs.readFileSync(rosterPath(), 'utf8'), 'the injection never ran — this case would measure nothing').toBe(withCodexJson);
+    expect(code).toBe(1);
+    expect(stderr).toContain('roster-unreadable:');
+    expect(fs.existsSync(path.join(h.home, 'seen-ccrc-argv')), 'ccrc-codex reached the second read').toBe(false);
+    expect(status('codex-a')).toMatchObject({ state: 'failed' });
   });
 });
 

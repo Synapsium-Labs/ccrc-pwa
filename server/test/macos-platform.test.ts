@@ -17,11 +17,11 @@
 //     restated here.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process'; import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync, lstatSync, existsSync, readlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD } from './ccdWsHelpers.js'; import { mkTmp } from './tmpHelpers.js';
 import { itLinux } from './platformFixtures.js';
 
 const IS_DARWIN = process.platform === 'darwin';
@@ -304,6 +304,9 @@ describe('the Linux arms are the original GNU commands', () => {
     ['_plat_ctime', /^_plat_ctime\(\) \{ if \[ "\$CCD_OS" = darwin \]; then stat -f %c "\$@"; else stat -c %Z "\$@"; fi; \}/m],
     ['_plat_bytes', /du -sb "\$1" \| head -n1 \| cut -f1/],
     ['_svc_run_detached', /systemd-run --user --collect --quiet "\$@"/],
+    ['_svc_have_user_manager', /command -v systemd-run >\/dev\/null 2>&1 && systemctl --user show-environment >\/dev\/null 2>&1/],
+    ['_svc_run_supervised', /local -a sr=\(--user --collect --quiet "--unit=\$unit" --slice=app\.slice "--working-directory=\$HOME"\n\s+-p Restart=always -p RestartSec=3 -p StartLimitIntervalSec=300 -p StartLimitBurst=20\n\s+-p "StandardOutput=append:\$log" -p "StandardError=append:\$log"\)/],
+    ['_svc_run_supervised (the call)', /systemctl --user reset-failed "\$unit" >\/dev\/null 2>&1\n\s+systemd-run "\$\{sr\[@\]\}" -- "\$@" \|\| return \$\?/],
   ];
   for (const [name, re] of arms) {
     it(`${name} still runs the GNU command on Linux`, () => {
@@ -861,6 +864,417 @@ describe('_plat_ln_swap: one rename, both arms (W6 Task 1)', () => {
     } finally {
       rmSync(f.d, { recursive: true, force: true });
     }
+  });
+});
+
+// ── _svc_have_user_manager / _svc_run_supervised: both arms, on whichever box runs this ──
+// UNCONDITIONAL. Every behavioural case sources the REAL block and FORCES
+// `CCD_OS` in the same payload — the idiom the describe above uses — so the
+// Linux arms run on the macOS leg and the Darwin arm runs here. Nothing below
+// is platform-gated. The one case that sources nothing is the PF-3 literal
+// pin, a text match over ccd's bytes like the `arms` rows above.
+//
+// CONTAINMENT, THREE LAYERS, because a leaked call would start a real transient
+// unit on the developer's own user manager: recording `systemd-run` and
+// `systemctl` first on PATH in EVERY case, including the ones whose subject
+// never reaches them (a mutant that does must meet a recorder); a preamble that
+// exits 99 unless `command -v` resolves each name to its stub; and a bus address
+// that points at nothing. No fixture unit carries a real lane's unit prefix.
+describe('_svc_run_supervised and _svc_have_user_manager — both arms, forced, on whichever box runs this', () => {
+  type Fx = { home: string; bin: string; runLog: string; ctlLog: string };
+
+  /** A fixture HOME with RECORDING `systemd-run` and `systemctl` in `stub-bin/`. */
+  function svcFixture(opts: { withSystemdRun?: boolean } = {}): Fx {
+    const home = mkTmp('ccrc-svc-sup-');
+    const bin = path.join(home, 'stub-bin');
+    mkdirSync(bin);
+    const runLog = path.join(home, 'systemd-run.argv');
+    const ctlLog = path.join(home, 'systemctl.calls');
+    if (opts.withSystemdRun !== false) {
+      // ONE ARGV ELEMENT PER LINE and a terminator per call: an element that
+      // carries a space stays one element, and `toEqual` sees the order.
+      writeFileSync(path.join(bin, 'systemd-run'), [
+        '#!/bin/sh',
+        `for a in "$@"; do printf '%s\\n' "$a"; done >> '${runLog}'`,
+        `printf '%s\\n' '--end-of-call--' >> '${runLog}'`,
+        'exit "${SVC_RUN_RC:-0}"',
+      ].join('\n') + '\n', { mode: 0o755 });
+    }
+    writeFileSync(path.join(bin, 'systemctl'), [
+      '#!/bin/sh',
+      `printf '%s\\n' "$*" >> '${ctlLog}'`,
+      'case "$*" in "--user show-environment") exit "${SVC_SHOWENV_RC:-0}" ;; esac',
+      'exit 0',
+    ].join('\n') + '\n', { mode: 0o755 });
+    return { home, bin, runLog, ctlLog };
+  }
+
+  const lines = (f: string): string[] =>
+    (existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : []);
+  /** Every `systemd-run` call, each as its own argv. */
+  const runCalls = (fx: Fx): string[][] => {
+    const calls: string[][] = [];
+    let cur: string[] = [];
+    for (const l of lines(fx.runLog)) {
+      if (l === '--end-of-call--') { calls.push(cur); cur = []; } else cur.push(l);
+    }
+    return calls;
+  };
+  /** Everything either manager binary was asked, in one list — empty means "never asked". */
+  const managerCalls = (fx: Fx): string[] =>
+    [...lines(fx.ctlLog), ...runCalls(fx).map((a) => `systemd-run ${a.join(' ')}`)];
+  const pause = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+  /** Bounded wait; the caller asserts afterwards, so a timeout reds with the caller's message. */
+  const until = (pred: () => boolean, ms = 10_000): void => {
+    const end = Date.now() + ms;
+    while (!pred() && Date.now() < end) pause(50);
+  };
+  const argsOf = (pid: number): string =>
+    (spawnSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8' }).stdout ?? '').trim();
+  const reap = (pid: number): void => { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } };
+
+  /** Source the block, force the platform, put the stubs first on PATH, and
+   *  refuse (99) unless every manager name resolves to its stub. `stubsOnly`
+   *  replaces PATH with the stub directory alone — the one way to model "no
+   *  systemd-run on this box" on a box that has one. */
+  function svc(fx: Fx, os: 'linux' | 'darwin', expr: string,
+    opts: { env?: NodeJS.ProcessEnv; stubsOnly?: boolean; cwd?: string } = {}):
+    { status: number | null; stdout: string; stderr: string } {
+    const run = path.join(fx.bin, 'systemd-run');
+    const ctl = path.join(fx.bin, 'systemctl');
+    const script = [
+      'set -uo pipefail',
+      platformBlock(ccd),
+      `CCD_OS=${os}`,
+      opts.stubsOnly ? `export PATH='${fx.bin}'` : `export PATH='${fx.bin}':"$PATH"`,
+      `[ "$(command -v systemctl)" = '${ctl}' ] || { echo 'containment: systemctl is not the stub' >&2; exit 99; }`,
+      opts.stubsOnly
+        ? `[ -z "$(command -v systemd-run)" ] || { echo 'containment: a systemd-run is reachable' >&2; exit 99; }`
+        : `[ "$(command -v systemd-run)" = '${run}' ] || { echo 'containment: systemd-run is not the stub' >&2; exit 99; }`,
+      expr,
+    ].join('\n') + '\n';
+    const r = spawnSync('bash', ['-c', script], {
+      encoding: 'utf8', timeout: 15_000, cwd: opts.cwd ?? fx.home,
+      env: {
+        ...process.env,
+        HOME: fx.home,
+        XDG_RUNTIME_DIR: path.join(fx.home, 'no-runtime-dir'),
+        DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(fx.home, 'no-bus')}`,
+        ...opts.env,
+      },
+    });
+    expect(r.status, `the payload's containment preamble refused: ${r.stderr}`).not.toBe(99);
+    return { status: r.status, stdout: (r.stdout ?? '').trim(), stderr: (r.stderr ?? '').trim() };
+  }
+
+  it('_svc_have_user_manager answers 0 only off Darwin, with systemd-run on PATH AND a manager that answers', () => {
+    // The probe the live launcher runs, and the one `_svc_run_detached` never
+    // had: "systemctl installed, no user bus" must answer NO, which is the row
+    // PATH presence alone gets wrong.
+    const rows: Array<{ os: 'linux' | 'darwin'; sr: boolean; showEnvRc: number; want: string; asked: string[] }> = [
+      { os: 'linux', sr: true, showEnvRc: 0, want: 'rc=0', asked: ['--user show-environment'] },
+      { os: 'linux', sr: true, showEnvRc: 1, want: 'rc=1', asked: ['--user show-environment'] },
+      { os: 'linux', sr: false, showEnvRc: 0, want: 'rc=1', asked: [] },
+      { os: 'darwin', sr: true, showEnvRc: 0, want: 'rc=1', asked: [] },
+    ];
+    for (const row of rows) {
+      const fx = svcFixture({ withSystemdRun: row.sr });
+      const r = svc(fx, row.os, '_svc_have_user_manager; echo "rc=$?"',
+        { stubsOnly: !row.sr, env: { SVC_SHOWENV_RC: String(row.showEnvRc) } });
+      const label = JSON.stringify(row);
+      expect(r.stdout, label).toBe(row.want);
+      expect(lines(fx.ctlLog), `${label}: what the probe asked the manager`).toEqual(row.asked);
+    }
+  });
+
+  it('the systemd arm: one transient unit, its whole argv in order, and no key material anywhere', () => {
+    const fx = svcFixture();
+    // GENERATED, never asserted by value — only its ABSENCE is asserted, and
+    // with a boolean so a failure does not print it either.
+    const key = `sk-${randomBytes(24).toString('hex')}`;
+    const envfile = path.join(fx.home, 'runtime.env');
+    writeFileSync(envfile, `LITELLM_MASTER_KEY=${key}\n`, { mode: 0o600 });
+    const log = path.join(fx.home, 'logs', 'litellm.log');
+    mkdirSync(path.dirname(log));
+    const tokDir = path.join(fx.home, '.local/share/ccrc/codex/codex-a');
+    const cfg = path.join(fx.home, 'a dir', 'litellm.yaml');
+    const r = svc(fx, 'linux', [
+      `_svc_run_supervised fixture-codex-a-litellm.service '${log}' '${envfile}' \\`,
+      `  CCGPT_ACCOUNT_ID=codex-a 'CHATGPT_TOKEN_DIR=${tokDir}' LITELLM_LOCAL_MODEL_COST_MAP=True 'HOME=${fx.home}' \\`,
+      `  -- /fixture/runtime/bin/python -m litellm.proxy.proxy_cli --config '${cfg}'`,
+      'echo "rc=$?"',
+    ].join('\n'));
+    // KEY ABSENCE FIRST, as booleans, before anything that prints what it
+    // compared: a key that leaked into the argv must red HERE, not on the
+    // census `toEqual` below, whose failure would print the argv — key
+    // included (final-review residue).
+    for (const [where, text] of [
+      ['the systemd-run argv', readFileSync(fx.runLog, 'utf8')],
+      ['the systemctl calls', readFileSync(fx.ctlLog, 'utf8')],
+      ['stdout', r.stdout], ['stderr', r.stderr],
+    ] as const) {
+      expect(text.includes(key), `the gateway key reached ${where}`).toBe(false);
+    }
+    expect(r.stdout, r.stderr).toBe('systemd fixture-codex-a-litellm.service\nrc=0');
+    // THE ARGV IS THE PIN, not a `systemctl show` listing (D-3491):
+    // a planted property answer would prove only what this file typed into it.
+    expect(runCalls(fx)).toEqual([[
+      '--user', '--collect', '--quiet',
+      '--unit=fixture-codex-a-litellm.service', '--slice=app.slice', `--working-directory=${fx.home}`,
+      '-p', 'Restart=always', '-p', 'RestartSec=3',
+      '-p', 'StartLimitIntervalSec=300', '-p', 'StartLimitBurst=20',
+      '-p', `StandardOutput=append:${log}`, '-p', `StandardError=append:${log}`,
+      '-p', `EnvironmentFile=${envfile}`,
+      '--setenv=CCGPT_ACCOUNT_ID=codex-a', `--setenv=CHATGPT_TOKEN_DIR=${tokDir}`,
+      '--setenv=LITELLM_LOCAL_MODEL_COST_MAP=True', `--setenv=HOME=${fx.home}`,
+      '--',
+      '/fixture/runtime/bin/python', '-m', 'litellm.proxy.proxy_cli', '--config', cfg,
+    ]]);
+    expect(lines(fx.ctlLog), 'the probe first, then clear a failed unit of the same name, then nothing')
+      .toEqual(['--user show-environment', '--user reset-failed fixture-codex-a-litellm.service']);
+  });
+
+  it('the systemd arm with envfile `-` and no pairs carries neither, and relays a refused start as its own rc with no `systemd` line', () => {
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'shim.log');
+    const ok = svc(fx, 'linux',
+      `_svc_run_supervised fixture-codex-a-shim.service '${log}' - -- /fixture/python -I /fixture/proxy.py; echo "rc=$?"`);
+    expect(ok.stdout, ok.stderr).toBe('systemd fixture-codex-a-shim.service\nrc=0');
+    const [argv] = runCalls(fx);
+    expect(argv!.slice(argv!.indexOf(`StandardError=append:${log}`) + 1),
+      'nothing between the log and `--`: no EnvironmentFile, no --setenv')
+      .toEqual(['--', '/fixture/python', '-I', '/fixture/proxy.py']);
+    const refused = svc(fx, 'linux',
+      `_svc_run_supervised fixture-codex-a-shim.service '${log}' - -- /fixture/python; echo "rc=$?"`,
+      { env: { SVC_RUN_RC: '5' } });
+    expect(refused.stdout, 'systemd-run\'s refusal is the rc, and nothing claims a start').toBe('rc=5');
+  });
+
+  it('Linux with no user manager takes the nohup arm: the log is APPENDED, `nohup <pid>` is the COMMAND, env and cwd agree with the systemd arm', () => {
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'shim.log');
+    writeFileSync(log, 'an-earlier-line\n');
+    const envfile = path.join(fx.home, 'runtime.env');
+    writeFileSync(envfile, 'FROM_ENVFILE=file-value\nSHARED=from-file\n', { mode: 0o600 });
+    const elsewhere = mkTmp('ccrc-svc-cwd-');
+    const r = svc(fx, 'linux', [
+      '_svc_have_user_manager() { return 1; }',
+      `_svc_run_supervised fixture-codex-a-shim.service '${log}' '${envfile}' SVC_PAIR=pair-value SHARED=from-pair \\`,
+      `  -- sh -c 'echo "pair=$SVC_PAIR file=$FROM_ENVFILE shared=$SHARED cwd=$(pwd -P)"; exec sleep 30'`,
+      'echo "rc=$?"',
+    ].join('\n'), { cwd: elsewhere });
+    const m = /^nohup (\d+)\nrc=0$/.exec(r.stdout);
+    expect(m, `stdout: ${r.stdout} / stderr: ${r.stderr}`).not.toBeNull();
+    const pid = Number(m![1]);
+    try {
+      until(() => readFileSync(log, 'utf8').includes('pair='));
+      // THE ENVFILE BEATS A PAIR — systemd documents EnvironmentFile= over
+      // Environment=, and the two arms must agree. The cwd is $HOME, as
+      // --working-directory is, and NOT the caller's.
+      expect(readFileSync(log, 'utf8'))
+        .toBe(`an-earlier-line\npair=pair-value file=file-value shared=from-file cwd=${fx.home}\n`);
+      // EXACT, not a substring: every shell in the chain carries `sleep 30` in
+      // its own argv (the payload's text, the wrapper's "$@"), so only the
+      // whole line tells the command from a shell that forgot to `exec`.
+      until(() => argsOf(pid) === 'sleep 30');
+      expect(argsOf(pid), 'the printed pid IS the command — the exec chain kept it').toBe('sleep 30');
+      expect(runCalls(fx), 'the nohup arm never reaches systemd-run').toEqual([]);
+    } finally {
+      reap(pid);
+    }
+  });
+
+  it('the nohup arm starts from a SCRUBBED environment: a variable the caller exported never reaches the child; HOME, PATH, the pairs and a set LANG do', () => {
+    // A unit's environment is the manager's, never the caller's, so the nohup
+    // child starts from `env -i` too. The sentinel belongs to NO family on
+    // purpose: `env -i` names none, and a sentinel named `CLAUDE_…` would also
+    // pass a mutant that scrubbed only `CLAUDE_*`. The child prints NAMED
+    // variables only, never `env`, so a mutant that leaks the caller's whole
+    // environment cannot copy a developer's own token into this log or a diff.
+    const fx = svcFixture();
+    const rows: Array<{ lang: string | undefined; want: string }> = [
+      { lang: 'C', want: 'lang=C' },
+      // `${LANG:+…}`: a caller with no LANG gives the child no LANG, not an empty one.
+      { lang: undefined, want: 'lang=absent' },
+    ];
+    for (const row of rows) {
+      const log = path.join(fx.home, `scrub-${row.lang ?? 'unset'}.log`);
+      const r = svc(fx, 'linux', [
+        '_svc_have_user_manager() { return 1; }',
+        // THE CONTROL: the plant reached the caller, or the absence below is vacuous.
+        'echo "caller=${SVC_CALLER_SENTINEL-absent}"',
+        `_svc_run_supervised fixture-scrub.service '${log}' - SVC_PAIR=pair-value \\`,
+        `  -- sh -c 'echo "sentinel=\${SVC_CALLER_SENTINEL-absent} pair=\${SVC_PAIR-absent} home=\${HOME-absent} path-head=\${PATH%%:*} lang=\${LANG-absent}"'`,
+        'echo "rc=$?"',
+      ].join('\n'), { env: { SVC_CALLER_SENTINEL: 'planted-by-the-caller', LANG: row.lang } });
+      const m = /^caller=planted-by-the-caller\nnohup (\d+)\nrc=0$/.exec(r.stdout);
+      expect(m, `${row.want}: stdout: ${r.stdout} / stderr: ${r.stderr}`).not.toBeNull();
+      const pid = Number(m![1]);
+      try {
+        until(() => readFileSync(log, 'utf8').includes('sentinel='));
+        expect(readFileSync(log, 'utf8'), row.want)
+          .toBe(`sentinel=absent pair=pair-value home=${fx.home} path-head=${fx.bin} ${row.want}\n`);
+      } finally {
+        reap(pid);
+      }
+    }
+    expect(runCalls(fx), 'the nohup arm never reaches systemd-run').toEqual([]);
+  });
+
+  it('the nohup arm SOURCES the envfile inside its own `sh`, never lists the file\'s lines as `env` argv — a literal pin (PF-3)', () => {
+    // NO BEHAVIOURAL CASE CAN SEE THIS. Listed as `env` arguments after the
+    // pairs, the file's lines give the child the SAME environment, file after
+    // pairs, so every case in this describe stays green on that mutant — but
+    // the gateway key would then sit in `env`'s argv, which `ps` shows to every
+    // user on the box for the life of that process. That is the one channel the
+    // secret refusal exists to close, so the sourcing line is pinned by its
+    // TEXT, together with the argument line that makes its `$1` the envfile's
+    // PATH. The price is a red on a pure reformat of those two lines; a red
+    // beats a disclosure.
+    expect(ccd, 'the nohup arm no longer sources the envfile by path inside its `sh -c`').toContain(
+      `      sh -c 'if [ "$1" != - ]; then set -a; . "$1" || exit 1; set +a; fi; shift; exec nohup "$@"' \\\n      sh "$envfile" "$@"\n`);
+  });
+
+  it('forced Darwin: a missing command answers 1 and backgrounds NOTHING — probed before the `&`', () => {
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'never.log');
+    const r = svc(fx, 'darwin', [
+      `_svc_run_supervised fixture-x.service '${log}' - -- ccrc-fixture-no-such-command-7c1e --flag`,
+      'rc=$?; echo "rc=$rc jobs=$(jobs -p | wc -l | tr -d \' \')"',
+    ].join('\n'));
+    // A bare `nohup … &` answers 0 and leaves a job in the table: both are
+    // read in the SAME shell, immediately, so neither waits on a race.
+    expect(r.stdout).toBe('rc=1 jobs=0');
+    expect(r.stderr.split('\n'), 'one line').toHaveLength(1);
+    expect(r.stderr).toContain('ccrc-fixture-no-such-command-7c1e');
+    expect(existsSync(log) ? readFileSync(log, 'utf8') : '', 'nothing ran, so nothing wrote').toBe('');
+    expect(managerCalls(fx), 'Darwin never asks systemd').toEqual([]);
+  });
+
+  it('forced Darwin: a real command takes the nohup arm even with systemd-run on PATH, and asks systemd nothing', () => {
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'darwin.log');
+    const r = svc(fx, 'darwin',
+      `_svc_run_supervised fixture-x.service '${log}' - -- sh -c 'echo darwin-arm-ran'; echo "rc=$?"`);
+    const m = /^nohup (\d+)\nrc=0$/.exec(r.stdout);
+    expect(m, `stdout: ${r.stdout} / stderr: ${r.stderr}`).not.toBeNull();
+    const pid = Number(m![1]);
+    try {
+      until(() => readFileSync(log, 'utf8').includes('darwin-arm-ran'));
+      expect(readFileSync(log, 'utf8')).toBe('darwin-arm-ran\n');
+      expect(managerCalls(fx), 'the Darwin answer is decided before the manager is asked').toEqual([]);
+    } finally {
+      reap(pid);
+    }
+  });
+
+  it('refuses a NAME whose last _-segment ends with a secret word, in any case — 64, one stderr line naming it, its value never echoed, nothing asked', () => {
+    // ALL FIVE ALTERNATIVES, each named by at least one row, so deleting any
+    // one of them reds a row here: KEY (`LITELLM_MASTER_KEY`, `OPENAI_APIKEY`),
+    // TOKEN (`ANTHROPIC_AUTH_TOKEN`), SECRET (`CLIENT_SECRET`), PASSWORD
+    // (`DB_PASSWORD`) and PASSWD (`DB_PASSWD`). The name that PASSES is the
+    // next case. Each is spelled as written AND lowercased: the rule is
+    // case-insensitive, and only the lowercase spelling makes that a pinned
+    // fact rather than a comment.
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'refused.log');
+    const value = `sk-${randomBytes(24).toString('hex')}`;
+    for (const written of ['LITELLM_MASTER_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_APIKEY', 'CLIENT_SECRET', 'DB_PASSWORD', 'DB_PASSWD']) {
+      for (const name of [written, written.toLowerCase()]) {
+        const r = svc(fx, 'linux',
+          `_svc_run_supervised fixture-x.service '${log}' - FIXTURE_OK=1 '${name}=${value}' -- /fixture/py; echo "rc=$?"`);
+        expect(r.stdout, name).toBe('rc=64');
+        expect(r.stderr.split('\n'), `${name}: one line`).toHaveLength(1);
+        expect(r.stderr, name).toContain(name);
+        expect(r.stderr.includes(value), `${name}: the value was echoed`).toBe(false);
+      }
+    }
+    expect(managerCalls(fx), 'a refusal asks and starts nothing').toEqual([]);
+    expect(existsSync(log), 'a refusal is decided before the log is touched').toBe(false);
+  });
+
+  it('passes CHATGPT_TOKEN_DIR, in any case — its last segment is DIR, so there is nothing to refuse and nothing to exempt', () => {
+    // The lane's own litellm start passes this name. It is LiteLLM's variable
+    // and says WHERE a credential lives; the rule reads the tail, and the
+    // `TOKEN` inside it is not the tail. The fifth of the plan's five names.
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'dir.log');
+    for (const name of ['CHATGPT_TOKEN_DIR', 'chatgpt_token_dir']) {
+      const r = svc(fx, 'linux',
+        `_svc_run_supervised fixture-x.service '${log}' - ${name}=/fixture/tok -- /fixture/py; echo "rc=$?"`);
+      expect(r.stdout, `${name}: ${r.stderr}`).toBe('systemd fixture-x.service\nrc=0');
+    }
+    expect(runCalls(fx).map((argv) => argv.filter((a) => a.startsWith('--setenv='))),
+      'each spelling reached its unit as a pair, and nothing else did')
+      .toEqual([['--setenv=CHATGPT_TOKEN_DIR=/fixture/tok'], ['--setenv=chatgpt_token_dir=/fixture/tok']]);
+  });
+
+  it('refuses a malformed argv — 64, one stderr line naming what is wrong, never an argument, nothing asked or started', () => {
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'shape.log');
+    const stray = `sk-${randomBytes(24).toString('hex')}`;
+    const rows: Array<[string, string, string]> = [
+      ['no arguments at all', '', 'fewer than three arguments'],
+      ['two arguments', `u.service '${log}'`, 'fewer than three arguments'],
+      ['an empty unit', `'' '${log}' - -- /fixture/py`, 'the unit name is empty'],
+      ['an empty log', `u.service '' - -- /fixture/py`, 'the log must be an absolute path'],
+      ['a relative log', `u.service logs/x.log - -- /fixture/py`, 'the log must be an absolute path'],
+      ['an empty envfile', `u.service '${log}' '' -- /fixture/py`, 'the envfile must be - or an absolute path'],
+      ['a relative envfile', `u.service '${log}' runtime.env -- /fixture/py`, 'the envfile must be - or an absolute path'],
+      ["systemd's ignore-if-missing envfile form", `u.service '${log}' '-${fx.home}/runtime.env' -- /fixture/py`,
+        'the envfile must be - or an absolute path'],
+      ['no -- (the command read as a pair)', `u.service '${log}' - A=1 /fixture/py`, 'argument 5 is not NAME=value'],
+      ['no -- and no command', `u.service '${log}' - A=1`, 'no -- before the command'],
+      ['nothing after --', `u.service '${log}' - --`, 'nothing to run after --'],
+      ['a stray value with no NAME=', `u.service '${log}' - '${stray}' -- /fixture/py`, 'argument 4 is not NAME=value'],
+      ['a NAME starting with a digit', `u.service '${log}' - 1BAD=x -- /fixture/py`, 'argument 4 is not NAME=value'],
+      ['a NAME with a dash', `u.service '${log}' - BAD-NAME=x -- /fixture/py`, 'argument 4 is not NAME=value'],
+      ['an empty NAME', `u.service '${log}' - =x -- /fixture/py`, 'argument 4 is not NAME=value'],
+      ['a non-ASCII NAME', `u.service '${log}' - NAMÉ=x -- /fixture/py`, 'argument 4 is not NAME=value'],
+    ];
+    for (const [label, args, why] of rows) {
+      const r = svc(fx, 'linux', `_svc_run_supervised ${args}; echo "rc=$?"`);
+      expect(r.stdout, label).toBe('rc=64');
+      expect(r.stderr.split('\n'), `${label}: one line`).toHaveLength(1);
+      expect(r.stderr, label).toContain(why);
+      expect(r.stderr.includes(stray), `${label}: an argument was echoed`).toBe(false);
+    }
+    expect(managerCalls(fx), 'a malformed argv asks and starts nothing').toEqual([]);
+    expect(existsSync(log), 'and touches no log').toBe(false);
+  });
+
+  it('probes the states neither arm can report later — 1, one stderr line, before the manager is asked or anything backgrounds', () => {
+    const fx = svcFixture();
+    const log = path.join(fx.home, 'state.log');
+    const envDir = path.join(fx.home, 'env-is-a-dir');
+    mkdirSync(envDir);
+    // A REGULAR FILE THE CALLER CANNOT READ. The two rows above are refused by
+    // `-f` alone, so this is the row that makes the `-r` conjunct a pinned fact:
+    // without it, a mode-000 key file reaches the manager and starts a unit
+    // that cannot read its own environment. ROOT READS MODE 000, so under root
+    // the row would be a false red and is left out; CI's runners are not root.
+    const unreadable = path.join(fx.home, 'unreadable.env');
+    writeFileSync(unreadable, 'FIXTURE_OK=1\n');
+    chmodSync(unreadable, 0o000);
+    const asRoot = process.getuid?.() === 0;
+    const rows: Array<[string, 'linux' | 'darwin', string, string]> = [
+      ['an absent envfile', 'linux', `fixture-x.service '${log}' '${fx.home}/absent.env' -- /fixture/py`, 'absent.env'],
+      ['an envfile that is a directory', 'linux', `fixture-x.service '${log}' '${envDir}' -- /fixture/py`, 'env-is-a-dir'],
+      ...(asRoot ? [] : [['an envfile with mode 000', 'linux',
+        `fixture-x.service '${log}' '${unreadable}' -- /fixture/py`, 'unreadable.env'] as [string, 'linux' | 'darwin', string, string]]),
+      ['a log whose directory is missing (systemd arm)', 'linux',
+        `fixture-x.service '${fx.home}/no-such-dir/x.log' - -- /fixture/py`, 'no-such-dir'],
+      ['a log whose directory is missing (nohup arm)', 'darwin',
+        `fixture-x.service '${fx.home}/no-such-dir/x.log' - -- sh -c true`, 'no-such-dir'],
+    ];
+    for (const [label, os, args, names] of rows) {
+      const r = svc(fx, os,
+        `_svc_run_supervised ${args}\nrc=$?; echo "rc=$rc jobs=$(jobs -p | wc -l | tr -d ' ')"`);
+      expect(r.stdout, label).toBe('rc=1 jobs=0');
+      expect(r.stderr.split('\n'), `${label}: one line`).toHaveLength(1);
+      expect(r.stderr, label).toContain(names);
+    }
+    expect(managerCalls(fx), 'every state is decided before the manager is asked').toEqual([]);
   });
 });
 
