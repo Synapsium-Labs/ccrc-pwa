@@ -838,6 +838,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       is box config.
   - **Monitoring:** an hourly read-only probe runs from the coordinator's session. It reports only a change or an
     anomaly.
+    - **2026-09-30 14:37 UTC — auto moved both boxes onto v0.0.50** (`c88625aa`, #212, a docs-only merge),
+      measured read-only as it happened:
+      - The release was published at 14:07:15.
+      - The fleet box ran 14:31:12–14:35:33, 24 min after publication.
+      - The server box ran 14:35:55–14:36:16, 22 s after the fleet box finished: one node at a time, fleet first.
+      - Both reports read `phase: done` (and `from: pwa`, defect A).
+      - `/health` answers v0.0.50.
+      - Both inventory rows were idle and complete by 14:37:31. The server row read `pending`/`incomplete` for one
+        measurement, taken before its restart; the next tick cleared it.
+      - STATUS: fleet and server v0.0.50, newest v0.0.50, intent `*` dev/auto=channel, backups fleet 270M/server
+        672M.
+      - Correcting B's figure: each update's backup is about 12 MB on the fleet box but **about 44 MB on the server
+        box** (41 and 23 dirs).
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
