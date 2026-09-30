@@ -7,6 +7,13 @@ import { decideAllocation } from './ledger.js';
 // policy — the house port pattern. This read exists to feed that policy and
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
+// Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
+// the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
+// reads below implement them.
+import type { StallMailRow, StallReadFailure, StallRunRow, StallWriteMiss } from './stall.js';
+// Type-only: ties `AUTO_CONTINUE_ARMED_LAST_ERROR` below to the send adapter's
+// own refusal word, so a rename there is a compile error here, not a silent miss.
+import type { SendResult } from '../inject/send.js';
 import type { LedgerLog } from './ledgerlog.js';
 import type { PoolEdgeLog } from './pooledgelog.js';
 import type { UpdateIntentLog } from './updateintentlog.js';
@@ -702,6 +709,20 @@ export type OpenSiblingsResult =
   | { ok: true; siblings: OpenSibling[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
+/** What `insertStallObservation`/`recordStallObservation` did, said out loud
+ *  (stall watch wave 1, spec 2026-09-29 §4.2 "Durable dedupe, no migration").
+ *  NOT `recordRunEvent`'s `void`: that writer no-ops silently on an absent run,
+ *  and a stall rung must tell "already recorded" (never send it again) from "the
+ *  run is gone" (nothing left to watch) from "recorded now" (send it).
+ *  `run-gone` means the run is ABSENT or NO LONGER ACTIVE, an idle or terminal
+ *  state (D-3584 run-gone-includes-inactive): the spec's word meant absent only,
+ *  but a run that closed while the lane awaited is just as unwatchable, and a
+ *  row or mail written for it would outlive its close.
+ *  `eventId` is the row's own `run_events.id`. */
+export type StallObservation =
+  | { recorded: true; eventId: number }
+  | { recorded: false; why: StallWriteMiss };
+
 export type CoordPlacementStampsResult =
   | { ok: true; stamps: CoordPlacementStamp[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
@@ -868,11 +889,22 @@ const OUTSTANDING_STATES_SQL = "('queued','delivered')";
  *  (D-1406). */
 const TERMINAL_DELIVERY_SQL = `('${TERMINAL_DELIVERY_STATES.join("','")}')`;
 
+/** The `lastError` the mail sweep's auto-continue arm hands `backOff` (`watch.ts`,
+ *  passing on `sendPrompt`'s refusal of the same spelling), read back by
+ *  `autoContinueHeldUntil` for the stall watch's limit hold. Typed against the
+ *  send adapter's own union, so the two cannot drift apart silently.
+ *  `mail-routes.test.ts`'s kebab scan admits the word by name, as a send
+ *  refusal passing through, the way it admits its `enter-ignored` sibling. */
+const AUTO_CONTINUE_ARMED_LAST_ERROR: Extract<Extract<SendResult, { ok: false }>['error'], 'auto-continue-armed'> =
+  'auto-continue-armed';
+
 /** The cap's predicate, NEGATIVE over everything that is not active — the idle
  *  and terminal lists, both L0, joined the way `TERMINAL_DELIVERY_SQL` is
  *  (design 2026-09-14 §7.1 as corrected by D-2803): a raw state token this build
  *  cannot name is neither idle nor terminal and so COUNTS, which is the safe
- *  direction for a cap and the reason `unknown` sits in `ACTIVE_RUN_STATES`. */
+ *  direction for a cap and the reason `unknown` sits in `ACTIVE_RUN_STATES`.
+ *  `stallCandidates` reads it too (stall watch wave 1), for the same safe
+ *  direction: an unnamed state is a candidate, and the lane's verdict holds it. */
 const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES].join("','")}')`;
 /** Every "still open" predicate in this file — `runs()`, `programOpenRunCount`,
  *  `openRunsForSession`, the strands query, `advanceInner`'s `closedAt` CASE —
@@ -1916,7 +1948,7 @@ export class CoordStore {
    *     non-NULL state on every row it can select. It is `GET
    *     /api/mail?program=`'s default, non-`all`, arm.
    *
-   * On the narrower `OUTSTANDING_STATES_SQL` — eleven holders, in file order:
+   * On the narrower `OUTSTANDING_STATES_SQL` — twelve holders, in file order:
    *   `OUTSTANDING_OR_ABANDONED_SQL`'s own definition — the composed constant,
    *     no reader of its own.
    *   `cancelKickoffsTo` and `repointCoordinatorMail` — both run BEFORE this
@@ -1986,6 +2018,14 @@ export class CoordStore {
    *     alone would then be resting on `m.subject` happening to differ.
    *   `hasOutstandingPeerDuplicate` and `outstandingPeerCount` are
    *     `m.runId IS NULL`-scoped and therefore unreachable too.
+   *   `autoContinueHeldUntil` (stall watch wave 1) is a READ, never a writer:
+   *     the latest `nextAttemptAt` among one session's outstanding deliveries
+   *     held back by an armed auto-continue. A re-queued row reaches it only
+   *     after that row is itself refused by an armed auto-continue on its NEW
+   *     recipient's pane, and it is correct then too: the heir's pane really is
+   *     waiting out a limit, which is the fact the stall lane's limit hold
+   *     reads. A terminal row never counts, so an acked or parked refusal
+   *     cannot keep a worker's limit hold alive.
    *
    * BOUNDED by the role-addressed reports of ONE program that parked while its
    * coordinator was dead, at most one new row per `mail` row, and deliberately
@@ -2205,6 +2245,54 @@ export class CoordStore {
     this.db.prepare(
       'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(runId, at, row.state, row.state, causedBy, detail);
+  }
+
+  /**
+   * The stall watch's observation row (spec 2026-09-29 §4.2 "Durable dedupe, no
+   * migration"): one `run_events` row per rung, with `detail` the rung's
+   * `stallDetail` and `fromState = toState` = the run's current state, so
+   * `pushNewRuns` skips it as a non-transition, as it does every
+   * `recordRunEvent` row. `causedBy` is `operator`, the role the watch speaks for.
+   *
+   * NOT `recordRunEvent`: that writer returns `void` and no-ops on an absent run.
+   * This one answers `StallObservation` and refuses a second row with the same
+   * `(runId, detail)`, which is the dedupe that survives a restart: the ladder
+   * reads its rung times back from these rows, never from memory.
+   *
+   * `run-gone` covers a run that is absent or no longer active (D-3584, the
+   * comment in the body), so a close that landed after the lane's candidate read
+   * is never given a row or a mail.
+   *
+   * OPENS NO TRANSACTION, so `queueStallNotice` (`rundefs.ts`) can hold this
+   * row and its mail in ONE. `tx` is not re-entrant. A caller with no
+   * transaction of its own uses `recordStallObservation` below, so the check and
+   * the insert are never split by another writer.
+   */
+  insertStallObservation(runId: number, detail: string, at: number): StallObservation {
+    // D-3584 run-gone-includes-inactive: "gone" is absent OR no longer active. The
+    // lane awaits between `stallCandidates` and this write (the pane pid, the live
+    // file, `measureClaimant`), so a close can land in that window, and a stall mail
+    // queued after close's `cancelOutstandingDeliveries` would be delivered on a
+    // closed run (`dueDeliveries` does not filter on run state). The fragment is
+    // `stallCandidates`' own, so the candidate and the write cannot disagree about
+    // which states are live, and `unknown` still counts as active.
+    const run = this.db.prepare(
+      `SELECT state FROM runs WHERE id = ? AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
+    ).get(runId) as { state: string } | undefined;
+    if (run === undefined) return { recorded: false, why: 'run-gone' };
+    const seen = this.db.prepare('SELECT 1 AS x FROM run_events WHERE runId = ? AND detail = ? LIMIT 1').get(runId, detail);
+    if (seen !== undefined) return { recorded: false, why: 'duplicate' };
+    const res = this.db.prepare(
+      'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(runId, at, run.state, run.state, 'operator', detail);
+    return { recorded: true, eventId: Number(res.lastInsertRowid) };
+  }
+
+  /** `insertStallObservation` in exactly one transaction: the stall lane's shadow
+   *  rows and its push-only rungs (r3 and the three caps), each recorded BEFORE
+   *  it is pushed. */
+  recordStallObservation(runId: number, detail: string, at: number): StallObservation {
+    return tx(this.db, () => this.insertStallObservation(runId, detail, at));
   }
 
   /**
@@ -2835,6 +2923,51 @@ export class CoordStore {
       siblings.push({ id: m.nums.id, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf });
     }
     return { ok: true, siblings };
+  }
+
+  /**
+   * The stall watch's candidates (spec 2026-09-29 §4.2 "Candidates"): every run
+   * in an ACTIVE state that names a worker, of both kinds, with the columns the
+   * lane's verdict and its notices read. `state NOT IN ${INACTIVE_RUN_STATES_SQL}`
+   * is the dispatch cap's own predicate, reused and never respelled, so a run in
+   * `unknown`, or in a state this build cannot name, IS a candidate, and the
+   * verdict holds it rather than this read hiding it. `openRunsForSession` is not
+   * reused: its predicate also returns `planned` and idle runs, and it carries no
+   * `state`, `kind` or `dispatchedAt`.
+   *
+   * CAST AND PROVEN (D-2545's idiom, `openRunsForSession`'s shape): `id`, `wave`,
+   * `waveOf` and `reviews` through `measureRunNumbers`, so the two reads cannot
+   * disagree about the domain, and `dispatchedAt` through `persistedInt`.
+   * ALL-OR-FAILURE: one unrepresentable row refuses the whole read, and the lane
+   * holds every worker that tick. A partial list is how a silent worker would go
+   * unwatched with nothing said. The row shape is `StallRunRow`, declared by its
+   * consumer (`stall.ts`).
+   */
+  stallCandidates(): { ok: true; runs: StallRunRow[] } | { ok: false; kind: Extract<StallReadFailure, 'run-unreadable'>; detail: string } {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, kind, state, sessionId, claimedBy, ' +
+      'CAST(dispatchedAt AS TEXT) AS dispatchedAtText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, project, workspace FROM runs ' +
+      `WHERE state NOT IN ${INACTIVE_RUN_STATES_SQL} AND sessionId IS NOT NULL ORDER BY id`,
+    ).all() as unknown as
+      { idText: string; kind: string; state: string; sessionId: string; claimedBy: string | null;
+        dispatchedAtText: string | null; program: string; waveText: string; waveOfText: string | null;
+        reviewsText: string | null; project: string; workspace: string | null }[];
+    const runs: StallRunRow[] = [];
+    for (const r of rows) {
+      const nums = measureRunNumbers(r);
+      if (!nums.ok) return { ok: false, kind: 'run-unreadable', detail: nums.detail };
+      let dispatchedAt: number | null = null;
+      if (r.dispatchedAtText !== null) {
+        const at = persistedInt(r.dispatchedAtText, 'run dispatchedAt');
+        if (!at.ok) return { ok: false, kind: 'run-unreadable', detail: at.detail };
+        dispatchedAt = at.value;
+      }
+      runs.push({ id: nums.nums.id, kind: r.kind, state: r.state, sessionId: r.sessionId, claimedBy: r.claimedBy,
+        dispatchedAt, program: r.program, wave: nums.nums.wave, waveOf: nums.nums.waveOf,
+        project: r.project, workspace: r.workspace });
+    }
+    return { ok: true, runs };
   }
 
   /** The sessions COORDINATING something live: every distinct `claimedBy` of a
@@ -3703,6 +3836,66 @@ export class CoordStore {
   }
 
   /**
+   * Every mail row on the stall subject's runs, oldest id first, in ONE read
+   * (stall watch wave 1). The lane's L1 derives the worker's last mail, the
+   * newest inbound mail, the coordinator's `wait:`, the ball and the episode key
+   * from it. The mail table has no index but its key, so this is one scan per
+   * subject rather than one per derived fact.
+   *
+   * An empty id list answers `{ok:true, mail:[]}` with no query at all. `id` and
+   * `at` are CAST and proven (D-2545), all-or-failure, so an unrepresentable row
+   * answers in words rather than throwing out of the lane. `runId` is read raw,
+   * because every selected row's value EQUALS one of the ids bound here, which the
+   * caller took from `stallCandidates`' proven rows. `kind` is the raw column: the
+   * verdict compares it with words, and an unnamed kind matches none of them.
+   */
+  mailOnRuns(runIds: readonly number[]): { ok: true; mail: StallMailRow[] } | { ok: false; kind: Extract<StallReadFailure, 'mail-unreadable'>; detail: string } {
+    if (runIds.length === 0) return { ok: true, mail: [] };
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, CAST(at AS TEXT) AS atText, runId, fromId, toId, kind, subject ' +
+      `FROM mail WHERE runId IN (${placeholders(runIds.length)}) ORDER BY id`,
+    ).all(...runIds) as unknown as
+      { idText: string; atText: string; runId: number; fromId: string; toId: string; kind: string; subject: string }[];
+    const mail: StallMailRow[] = [];
+    for (const r of rows) {
+      const id = persistedInt(r.idText, 'mail id');
+      if (!id.ok) return { ok: false, kind: 'mail-unreadable', detail: id.detail };
+      const at = persistedInt(r.atText, 'mail at');
+      if (!at.ok) return { ok: false, kind: 'mail-unreadable', detail: at.detail };
+      mail.push({ id: id.value, at: at.value, runId: r.runId, fromId: r.fromId, toId: r.toId, kind: r.kind,
+        subject: r.subject });
+    }
+    return { ok: true, mail };
+  }
+
+  /**
+   * The LOWEST id of a mail on `runId` from `fromId` to `toId` (the mail's own
+   * addressee column) whose subject begins with `prefix`, or null. Stall watch
+   * wave 1: `pushNewMail`'s reply bind reads the first stall-check to a worker,
+   * so a reply older than every check is never bound. PREFIX BY `substr`, NEVER
+   * `LIKE`: `LIKE` folds ASCII case and reads `_` and `%` in the prefix as
+   * wildcards, so it would widen what counts as a check.
+   */
+  firstMailIdWithPrefix(runId: number, fromId: string, toId: string, prefix: string): number | null {
+    const row = this.db.prepare(
+      'SELECT MIN(id) AS id FROM mail WHERE runId = ? AND fromId = ? AND toId = ? ' +
+      'AND substr(subject, 1, length(?)) = ?',
+    ).get(runId, fromId, toId, prefix, prefix) as { id: number | null } | undefined;
+    return row?.id ?? null;
+  }
+
+  /** The delivered and acked times on a mail's NEWEST delivery row, or null when
+   *  the mail has no delivery (stall watch wave 1: r2's body reports when r1 was
+   *  delivered and acked). Newest by delivery id, because a re-queue gives one
+   *  mail a second delivery (`requeueAbandonedMail`), and the live one is newest. */
+  deliveryTimesFor(mailId: number): { deliveredAt: number | null; ackedAt: number | null } | null {
+    const row = this.db.prepare(
+      'SELECT deliveredAt, ackedAt FROM mail_deliveries WHERE mailId = ? ORDER BY id DESC LIMIT 1',
+    ).get(mailId) as { deliveredAt: number | null; ackedAt: number | null } | undefined;
+    return row === undefined ? null : { deliveredAt: row.deliveredAt, ackedAt: row.ackedAt };
+  }
+
+  /**
    * `'coordinator'` is a ROLE, not a session id (Task 7's own docstring on the
    * ingress route). With a `runId`, it is that run's own claim; with none, it
    * is the claim of the ONE active program — ambiguous (more than one active
@@ -4024,9 +4217,11 @@ export class CoordStore {
    * and this method never re-derives its argument — it only stores what the
    * caller already computed.
    *
-   * GUARDED. The three direct callers expand to FIVE reachable paths, all in
+   * GUARDED. The three direct callers expand to SIX reachable paths, all in
    * the same transaction as their `queueDelivery`: the mail route's send `tx`,
-   * the system-mail queue's own `tx`, `dispatchRun`'s dispatch `tx` through
+   * the system-mail queue's own `tx` and the stall watch's (`queueSystemMail`
+   * and `queueStallNotice`, each around `rundefs.ts`'s `insertSystemMailTx`),
+   * `dispatchRun`'s dispatch `tx` through
    * `markDispatched` -> `bindSession` -> `requeueAbandonedMail`,
    * `reclaimProgram`'s `tx`, and the open route's post-hold `tx` through
    * `setSession` -> `bindSession` (D-2505). `tx` is `BEGIN IMMEDIATE` over a
@@ -4328,17 +4523,40 @@ export class CoordStore {
    *  other writer of this column is: the row's recorded reason for its own
    *  terminal state should name the write that actually caused it.
    *
-   *  `countsAsAttempt` (default `true`): `false` belongs to three refusal paths
+   *  `countsAsAttempt` (default `true`): `false` belongs to four refusal paths
    *  that are not send failures. The registry-unmeasurable and tmux-unknown
-   *  branches never reach `sendPrompt`; D-2369's `auto-continue-armed` hold
-   *  reaches it but refuses before any keystroke. `attempts` is SEND-FAILURE
-   *  budget (`MAIL_MAX_ATTEMPTS`'s own docstring), so none may march toward the
-   *  same park ceiling as a prompt that was actually attempted and failed. */
+   *  branches never reach `sendPrompt`; D-2369's `auto-continue-armed` hold and
+   *  the stall watch's `turn-running` hold reach it but refuse before any
+   *  keystroke. `attempts` is SEND-FAILURE budget (`MAIL_MAX_ATTEMPTS`'s own
+   *  docstring): none may march toward the park ceiling of a failed prompt. */
   backOff(id: number, lastError: string, nextAttemptAt: number, countsAsAttempt = true): void {
     this.db.prepare(
       'UPDATE mail_deliveries SET attempts = attempts + ?, lastError = ?, nextAttemptAt = ? ' +
       `WHERE id = ? AND state NOT IN ${TERMINAL_DELIVERY_SQL}`,
     ).run(countsAsAttempt ? 1 : 0, lastError, nextAttemptAt, id);
+  }
+
+  /**
+   * The stall watch's hold-3 read (spec 2026-09-29 §4.2 hold 3): the LATEST
+   * `nextAttemptAt` over still-outstanding deliveries to `toId` that the mail
+   * sweep backed off because the recipient's pane had an auto-continue armed
+   * (`AUTO_CONTINUE_ARMED_LAST_ERROR`, a `backOff` reason and never a
+   * `MailGate`), or null when there is none. The lane subtracts
+   * `MAIL_ARMED_HOLD_MS` in `watch.ts`, where that constant is private, to get
+   * the hold's START; this read derives no time of its own. OUTSTANDING ONLY
+   * (`OUTSTANDING_STATES_SQL`, named in the reader walk above): an acked or
+   * parked row is not a hold on anyone. `nextAttemptAt` is CAST and proven
+   * (D-2545), so an unrepresentable value answers in words rather than
+   * throwing out of the lane.
+   */
+  autoContinueHeldUntil(toId: string): { ok: true; until: number | null } | { ok: false; kind: Extract<StallReadFailure, 'delivery-unreadable'>; detail: string } {
+    const row = this.db.prepare(
+      'SELECT CAST(MAX(nextAttemptAt) AS TEXT) AS untilText FROM mail_deliveries ' +
+      `WHERE toId = ? AND lastError = ? AND state IN ${OUTSTANDING_STATES_SQL}`,
+    ).get(toId, AUTO_CONTINUE_ARMED_LAST_ERROR) as { untilText: string | null } | undefined;
+    if (row === undefined || row.untilText === null) return { ok: true, until: null };
+    const until = persistedInt(row.untilText, 'delivery nextAttemptAt');
+    return until.ok ? { ok: true, until: until.value } : { ok: false, kind: 'delivery-unreadable', detail: until.detail };
   }
 
   /**
@@ -4555,17 +4773,25 @@ export class CoordStore {
    * way `project`/`workspace` are — those degrade because they have no
    * meaning without a run; `runId` itself is the fact the predicate needs
    * verbatim, null included.
+   *
+   * `runSessionId` (stall watch wave 1) is the RUN's worker, `runs.sessionId`
+   * off the same `LEFT JOIN`: null for run-less mail and for a run not yet
+   * dispatched. `pushNewMail`'s stall reply bind needs it, because a reply's own
+   * `fromId` is only a CLAIM to be the worker, and the bind checks that claim
+   * against the run. Additive: every existing reader ignores it.
    */
   mailQueuedSince(sinceId: number): { deliveryId: number; mailId: number; toId: string; fromId: string;
                                        runId: number | null; kind: string; subject: string;
-                                       project: string | null; workspace: string | null }[] {
+                                       project: string | null; workspace: string | null;
+                                       runSessionId: string | null }[] {
     return this.db.prepare(
       'SELECT d.id AS deliveryId, m.id AS mailId, d.toId, m.fromId, m.runId, m.kind, m.subject, ' +
-      'r.project, r.workspace ' +
+      'r.project, r.workspace, r.sessionId AS runSessionId ' +
       'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId LEFT JOIN runs r ON r.id = m.runId ' +
       'WHERE d.id > ? ORDER BY d.id',
     ).all(sinceId) as { deliveryId: number; mailId: number; toId: string; fromId: string; runId: number | null;
-                         kind: string; subject: string; project: string | null; workspace: string | null }[];
+                         kind: string; subject: string; project: string | null; workspace: string | null;
+                         runSessionId: string | null }[];
   }
 
   /** `run_events`'s current high-water id — same priming role as

@@ -29,6 +29,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
 import { MAIL_GATES } from '../../shared/api.js';
 import { okRun } from './coordReadHelpers.js';
+import { MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -57,6 +58,7 @@ const MAIL_MAX_ATTEMPTS = 6;
 const MAIL_BACKOFF_BASE_MS = 30_000;
 const MAIL_BACKOFF_MAX_MS = 900_000; // watch.ts's own PR_BACKOFF_MAX_MS, mirrored — see its own comment
 const MAIL_ARMED_HOLD_MS = 300_000;
+const MAIL_TURN_HOLD_MS = 60_000;
 const PAST_SWEEP_MS = MAIL_SWEEP_MS + 1_000; // clears the lane's own re-sweep gate
 
 // The STORED envelope's own bytes — `mail_deliveries.envelope`, what
@@ -1865,10 +1867,12 @@ describe('sweepMail: the /clear a dispatch stranded', () => {
 // wave — and the session that needed to know is the one that sent it.
 //
 // A DURABLE FEED ROW AND A PUSH, NOT A `run_events` ROW (operator-accepted
-// deviation from §4.5). `advanceInner` is the only writer of `run_events` and
-// its own docstring says so; every insert there is paired with a state
-// transition validated against `RUN_TRANSITIONS`, which has no self-transition
-// for any state. A park is not a run transition. `pushOne` already records
+// deviation from §4.5). `advanceInner` is the only TRANSITION writer of
+// `run_events`: every insert there is paired with a state transition validated
+// against `RUN_TRANSITIONS`, which has no self-transition for any state. The
+// other writers (`recordRunEvent`, the stall watch's `insertStallObservation`)
+// write `fromState === toState` observation rows, which the notify lane skips.
+// A park is not a run transition. `pushOne` already records
 // into the durable feed archive at exactly the right point, which is the
 // durability the spec was asking for.
 describe('sweepMail: a blocked delivery reaches its SENDER', () => {
@@ -2601,5 +2605,221 @@ describe('sweepMail: the coordinator quiet window', () => {
     await w.sweepMail();
     expect(literalSends(h.calls)).toEqual([NUDGE]);
     expect(deliveryRow(coord, d.id).lastGate).toBe('cooldown');
+  });
+});
+
+// ── Worker stall watch §4.1: `shell` is an idle main loop ─────────────────
+//
+// Claude Code relabels `idle` as `shell` while a `local_bash` task runs (a
+// background shell, a shell Monitor), and never while a turn runs (spec §3.1).
+// Typed input is not held by background work, so the gate now delivers on
+// `shell`, unless `$REG/mail-gate-strict` is listed. On `shell`, and never on
+// `idle`, the send carries `refuseIfTurnRunning`. A pane showing
+// `esc to interrupt` means a build where `shell` stopped meaning idle; the
+// nudge is then held for a minute, and the hold is not counted.
+describe('sweepMail: shell is an idle main loop (worker stall watch §4.1)', () => {
+  const TURN_SHOWN = '✻ Cogitating… (12s · esc to interrupt)\n❯ \n';
+  /** The recipient, gate-ready but for its live word, plus a resolvable SENDER
+   *  registry row: `tellSender` could then push, so asserting that nobody is
+   *  told actually measures something. */
+  const seedAll = (h: Harness, live: Record<string, unknown> = {}): void => {
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home, live);
+    seedRegistry(h.home, FROM_ID, FROM_UUID);
+  };
+  const strict = (h: Harness): void => {
+    writeFileSync(path.join(h.home, '.cc-sessions', MAIL_GATE_STRICT_MARKER), '');
+  };
+  const seedCoordinatorRun = (coord: CoordStore): void => {
+    const opened = coord.openRun({ program: 'program-leverage', title: 'Program leverage', project: 'demo',
+      wave: 6, waveOf: 8, claimedBy: ID });
+    if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
+  };
+  const seedWorkerRun = (coord: CoordStore): void => {
+    const r = coord.openRun({ program: 'program-leverage', title: 'Program leverage', project: 'demo',
+      wave: 6, waveOf: 8, claimedBy: 'some-other-coordinator' }) as { id: number };
+    coord.markDispatched(r.id, ID, 'demo', 'ws/demo', false, NOW);
+  };
+
+  it('delivers to a worker whose live word is shell, once MAIL_QUIET_MS has passed', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedAll(h, { status: 'shell' });
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
+  it('under $REG/mail-gate-strict, shell is refused not-idle again (the way back)', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedAll(h, { status: 'shell' });
+    strict(h);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    const row = deliveryRow(coord, id);
+    expect(row.lastGate).toBe('not-idle');
+    expect(row.state).toBe('queued');
+    expect(row.attempts).toBe(0);
+  });
+
+  it('the strict marker changes nothing for idle', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedAll(h);
+    strict(h);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
+  it('still refuses busy, waiting, an empty word and an unknown word: not-idle, no attempt', async () => {
+    // `compacting` is a word no measured build writes: it stands for "unknown".
+    for (const word of ['busy', 'waiting', '', 'compacting']) {
+      const h = harness({ panes: HAPPY_PANES });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord);
+      seedAll(h, { status: word });
+      const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+      await w.sweepMail();
+      expect(literalSends(h.calls), JSON.stringify(word)).toEqual([]);
+      const row = deliveryRow(coord, id);
+      expect(row.lastGate, JSON.stringify(word)).toBe('not-idle');
+      expect(row.attempts, JSON.stringify(word)).toBe(0);
+    }
+  });
+
+  it('still holds shell below MAIL_QUIET_MS: not-quiet', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedAll(h, { status: 'shell', statusUpdatedAt: NOW - (MAIL_QUIET_MS - 5_000) });
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).lastGate).toBe('not-quiet');
+  });
+
+  it('a turn on screen holds the shell nudge: no keystroke, one minute, no attempt, nobody told', async () => {
+    const h = harness({ panes: [TURN_SHOWN, emptyBox, echoedBox(NUDGE), emptyBox] });
+    const coord = store(h.home);
+    const { sent, push } = pushSpy();
+    const { w } = await primedWatcher(h, coord, { push: push as never });
+    seedAll(h, { status: 'shell' });
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(keyPresses(h.calls)).toEqual([]);
+    const row = deliveryRow(coord, id);
+    expect(row.state).toBe('queued');
+    expect(row.lastError).toBe('turn-running');
+    expect(row.attempts, 'a running turn is not a failed send').toBe(0);
+    expect(row.nextAttemptAt).toBe(Date.now() + MAIL_TURN_HOLD_MS);
+    expect(sent, 'a running turn is not a blocked recipient: the sender is not told').toEqual([]);
+
+    // Inside the hold, the row is not due and nothing is captured or typed.
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    // Past it the turn has ended (the next capture is an empty box), and the nudge lands.
+    advance(MAIL_TURN_HOLD_MS); await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+    expect(sent).toEqual([]);
+  });
+
+  it('a turn-running hold one attempt short of the ceiling is NOT parked', async () => {
+    const h = harness({ panes: [TURN_SHOWN] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedAll(h, { status: 'shell' });
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.db.prepare('UPDATE mail_deliveries SET attempts = ? WHERE id = ?').run(MAIL_MAX_ATTEMPTS - 1, id);
+
+    await w.sweepMail();
+    const row = deliveryRow(coord, id);
+    expect(row.lastError, 'the hold is what refused it, so this case is about the hold').toBe('turn-running');
+    expect(row.state).toBe('queued');
+    expect(row.attempts).toBe(MAIL_MAX_ATTEMPTS - 1);
+    expect(row.rejectCode).toBeNull();
+  });
+
+  it('idle never carries the pane guard: the same screen is typed into when the live word is idle', async () => {
+    // The guard is a tripwire for `shell` (a build where `shell` stopped meaning
+    // idle). It is never a second check on `idle`, which delivers exactly as it
+    // did before wave 1, whatever the pane shows.
+    const h = harness({ panes: [TURN_SHOWN, echoedBox(NUDGE), emptyBox] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedAll(h);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
+  it('a COORDINATOR on shell gets its 15 s window', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    const quietFor = COORD_QUIET_MS + 1_000;
+    expect(quietFor).toBeGreaterThan(COORD_QUIET_MS);
+    expect(quietFor).toBeLessThan(MAIL_QUIET_MS);
+    seedAll(h, { status: 'shell', statusUpdatedAt: NOW - quietFor });
+    seedCoordinatorRun(coord);
+    queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+  });
+
+  it('a WORKER on shell in that same window is still not-quiet', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedAll(h, { status: 'shell', statusUpdatedAt: NOW - (COORD_QUIET_MS + 1_000) });
+    seedWorkerRun(coord);
+    const d = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, d.id).lastGate).toBe('not-quiet');
+  });
+
+  it("run 129's mail 2407 (queued 09-25 02:28 UTC) lands one quiet window after it was queued, not 83.5 h later", async () => {
+    // A golden fixture (spec §1 census, and the Effect paragraph of §4.1). A
+    // subagent's orphaned `pgrep` wait loop held the worker's live word at
+    // `shell`, and the mail was gated not-idle 1,528 times. The census does not
+    // record when the relabel happened, so it is taken as the queue minute, the
+    // latest it can be.
+    const RUN129_QUEUED = Date.UTC(2026, 8, 25, 2, 28, 0);
+    vi.setSystemTime(RUN129_QUEUED);
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID);
+    seedHookState(h.home, ID, { updatedAt: RUN129_QUEUED - 61_000 });
+    seedLiveState(h.home, { status: 'shell', statusUpdatedAt: RUN129_QUEUED });
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).lastGate, 'shell is idle now; only the quiet window holds it').toBe('not-quiet');
+
+    advance(MAIL_QUIET_MS);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
   });
 });

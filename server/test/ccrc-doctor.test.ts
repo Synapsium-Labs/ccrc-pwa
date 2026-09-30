@@ -1215,7 +1215,7 @@ function healthyCodexBox(prefix: string): string {
     },
     telemetry: 'codex',
   }]);
-  writeWrapper(home, 'codex-a', { cfgDir: '.claude-codex-a', target: 'ccgpt' });
+  writeWrapper(home, 'codex-a', { cfgDir: '.claude-codex-a', target: 'ccrc-codex' });
   return home;
 }
 
@@ -4008,13 +4008,38 @@ describe('ccrc doctor: wrappers', () => {
     expect(r.code).toBe(0);
   });
 
-  it('a Codex launcher execing the upstream account instead of ccgpt fails and names both', () => {
+  it('a Codex launcher execing the upstream account instead of ccrc-codex fails and names both', () => {
     const home = healthyCodexBox('ccrc-doctor-wrappers-codex-target-');
     writeWrapper(home, 'codex-a', { cfgDir: '.claude-codex-a', target: 'claude' });
     const r = runDoctor(home);
     expect(r.stdout).toMatch(
-      /FAIL wrappers: codex-a's wrapper execs \$HOME\/\.local\/bin\/claude, not ccgpt/);
+      /FAIL wrappers: codex-a's wrapper execs \$HOME\/\.local\/bin\/claude, not ccrc-codex/);
     expect(r.code).toBe(1);
+  });
+
+  it('a Codex launcher execing ccgpt — another repository\'s launcher on the fleet box — fails and names ccrc-codex (D-3478)', () => {
+    // The one wrong target that LOOKS right: Plan 1 shipped `ccgpt` as the
+    // expected value, and on the fleet box that name is another repository's
+    // live launcher, which picks its own first lane when none is named.
+    const home = healthyCodexBox('ccrc-doctor-wrappers-codex-ccgpt-');
+    writeWrapper(home, 'codex-a', { cfgDir: '.claude-codex-a', target: 'ccgpt' });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(
+      /FAIL wrappers: codex-a's wrapper execs \$HOME\/\.local\/bin\/ccgpt, not ccrc-codex/);
+    expect(r.code).toBe(1);
+  });
+
+  it('the launcher the writer generates for a Codex lane passes — writer and checker name one target', async () => {
+    // The literal cases above pin each side's spelling; this pins that the two
+    // sides AGREE, through the real writer, so renaming one side alone reds here.
+    const { generateWrapperBody } = await import('../../shared/wrapper.mjs');
+    const { markGenerated } = await import('../../shared/mark.mjs');
+    const home = healthyCodexBox('ccrc-doctor-wrappers-codex-writer-');
+    writeFileSync(join(binDir(home), 'codex-a'), markGenerated(generateWrapperBody(
+      { id: 'codex-a', configDirSuffix: '.claude-codex-a', execKind: 'codex' }, 'claude')), { mode: 0o755 });
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'wrappers'), r.stdout).toMatch(/^PASS wrappers: /);
+    expect(r.code).toBe(0);
   });
 
   it('an absent Codex launcher fails in the absent bucket with the ccrc-wrappers remedy', () => {

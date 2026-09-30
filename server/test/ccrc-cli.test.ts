@@ -200,9 +200,15 @@ describe('ccrc: dispatch and usage', () => {
     // never removes a version the box needs. Same split:
     // `server/test/ccrc-update.test.ts` owns what it does, this line owns that
     // an operator can find it.
+    //
+    // `codex` joined it in Plan 2b-2 Task 5 — `ccrc codex start|stop|status|login <id>`,
+    // which runs a Codex lane's two tiers. Placed after `models` because it is the
+    // lane's other half: models says what the lane routes, codex runs it. Same
+    // split as every verb above: `server/test/ccrc-codex.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\|watchdog\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\|watchdog\}/);
+    expect(r.stdout).toMatch(/^ {2}codex {5}run a Codex lane's two tiers/m);
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
     expect(r.stdout).toMatch(/^ {2}models {4}the model-class registry/m);

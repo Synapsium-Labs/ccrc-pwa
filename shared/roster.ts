@@ -414,9 +414,9 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
 const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
 
 const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external', 'codex']);
-/** Dotless GPT-lane commands also fit the account-id grammar. Reserve these two
- *  names here, before wrapper convergence can reach its self-exec lock. */
-const GPT_TOOLCHAIN_ACCOUNT_IDS: ReadonlySet<string> = new Set(['ccgpt', 'ccgpt-runtime']);
+/** Dotless GPT-lane names fit the account-id grammar, so refuse them before wrapper convergence reaches its
+ *  self-exec lock: ccrc's `ccrc-codex` and `ccgpt-runtime`, and `ccgpt`, another repository's launcher. */
+const GPT_TOOLCHAIN_ACCOUNT_IDS: ReadonlySet<string> = new Set(['ccrc-codex', 'ccgpt-runtime', 'ccgpt']);
 const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(
   ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden', 'pool'],

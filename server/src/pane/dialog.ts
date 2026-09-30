@@ -12,6 +12,14 @@ const BUSY_RE = /esc to interrupt/;
  *  (D-2367). */
 export const AUTO_CONTINUE_RE = /continuing automatically|continuing shortly/i;
 export function autoContinueArmed(pane: string): boolean { return AUTO_CONTINUE_RE.test(pane); }
+/** A turn is RUNNING: Claude Code's spinner row ends "· esc to interrupt)". This
+ *  is BUSY_RE itself, exported rather than copied. `inject/send.ts`'s
+ *  `refuseIfTurnRunning` asks it of the pane's last 8 rows, the window it
+ *  already hands `autoContinueArmed`. It is BEST-EFFORT: a `--remote-control`
+ *  pane never renders the phrase, and a narrow pane can wrap it, so `false`
+ *  proves nothing. It is a drift tripwire behind the live status file, never a
+ *  proof of idleness (worker stall watch §4.1). */
+export function turnRunning(pane: string): boolean { return BUSY_RE.test(pane); }
 const MENU_RE = /Enter to (confirm|select)/;
 const SGR = /\x1b\[[0-9;]*m/g; // any ANSI colour/attr code — same idiom as inject/send.ts:80
 const MULTISELECT_RE = /Space to select/;

@@ -1,0 +1,797 @@
+#!/usr/bin/env bash
+# ccgpt-runtime — build, check and probe the isolated LiteLLM runtime every
+# `codex` lane runs on (spec §5.2). It owns ~/.ccrc/runtime/codex/ and nothing
+# else: it reads no roster and no credential, and of a lane only the
+# `<tier>.started` records under ~/.ccrc/codex/*/, to keep the generation a
+# tier runs from (`_rt_in_use`); and it starts nothing.
+#
+#   ccgpt-runtime build [--force]   build + probe + swap, unless `check` passes
+#   ccgpt-runtime check             exit 0 iff `current` is what this file builds
+#   ccgpt-runtime python            the current generation's interpreter, RESOLVED
+#   ccgpt-runtime probe-source      the behaviour probe, byte for byte
+#
+# ── GENERATIONS AND A SYMLINK, NEVER A RENAMED VENV ───────────────────────
+# Each build is a venv at its FINAL path, gen-<UTC>-<pid>/, and `current` is
+# a relative symlink to the one that passed. A venv is not relocatable:
+# measured, a renamed venv's console scripts exit 127, because their shebang
+# and pip's trampoline embed the build path. And a process started THROUGH
+# `current` keeps the unresolved path as sys.prefix, so a long-lived tier
+# would lazily import the NEXT generation's files after a swap. So `python`
+# prints the generation `current` resolves to, never a path through it, and
+# a tier started from that stays on its generation until a restart moves it.
+#
+# ── THE PROBE IS THE ACCEPTANCE TEST ─────────────────────────────────────
+# A version string says what pip resolved; the lane leans on upstream's
+# EXPERIMENTAL translation surface. So a build becomes current only when the
+# probe below exits 0 AND prints a stdout line starting
+# `behaviour_probe: PASS `. The positive marker is the gate, never the exit
+# code alone: an interpreter that exits 0 and says nothing — the install
+# suite's venv stub is exactly that, measured — fails by construction.
+#
+# ── WHEN IT REBUILDS ─────────────────────────────────────────────────────
+# Only when `check` fails: no usable `current` (absent), the requirement below
+# moved (requirement-moved), the probe's bytes moved (probe-moved), or the
+# generation no longer matches its own stamp (mutated). pip takes the highest
+# version in range at build time, so two boxes built on different days may
+# differ inside the range; each stamp records what its box resolved, and a
+# box does not drift after its build.
+#
+# ── A FAILED BUILD DEGRADES, IT NEVER BRICKS ─────────────────────────────
+# Any failure deletes the half-built generation, prints ONE line naming the
+# stage, and exits 2; the previous generation stays current. Exit 1 is a
+# refusal: usage, no HOME, no python3, no $RT, a generation name already taken.
+#
+# ── WHAT IT RUNS ─────────────────────────────────────────────────────────
+# The system `python3` ONLY as `python3 -m venv <path>`, argv exactly that:
+# the install suite's stub answers it positionally and refuses every other
+# python3 call. Everything else runs in the generation's OWN interpreter, so
+# no PYTHONPATH, cwd or user-site litellm can satisfy an import the
+# generation itself lacks:
+#   - the probe, the version re-measure, the hash, the stamp and the swap
+#     under `-I`;
+#   - pip as `-m pip`, from the generation's own directory, with every
+#     PYTHON* variable unset (`_rt_pip`), in a venv whose site.py already
+#     turns the user site off. That is what `-I` does for pip
+#     (MEASURED offline, pip 24.0: a PYTHONPATH carrying a litellm dist-info
+#     made the unscrubbed install answer "Requirement already satisfied" and
+#     install nothing; `-I` and this scrub both refused it). It is spelled as a
+#     scrub rather than `-I` because the install suite's builder fixture
+#     answers pip POSITIONALLY, `$1 = -m`, `$2 = pip`, and hands any other argv
+#     to the box's REAL python3 — which would make a `-I -m pip` a real,
+#     networked install.
+#
+# ── PIP IS A MEASURED DEPENDENCY, NOT AN ASSUMED ONE ─────────────────────
+# `pip install --report` is new in pip 22.2, and a fresh venv's pip is
+# ensurepip's: 22.0.2 on Ubuntu 22.04, 21.2.4 under Apple's python3. So the
+# pip stage MEASURES the venv's pip first, and only a pip older than
+# `_RT_PIP_FLOOR` is upgraded, inside the venv, before anything else is
+# installed; a pip that is still too old afterwards fails the build as
+# `pip-too-old`, naming the remedy, with nothing installed. A pip whose
+# version cannot be read is left alone, and the install's own error, if any,
+# is the line.
+#
+# ── EVERY STEP THAT CAN WAIT ON SOMETHING ELSE HAS A DEADLINE ────────────
+# pip (the upgrade and the install) waits on a package index and the probe on
+# upstream code, so both run under `_rt_timeout` — `_plat_timeout`'s body
+# byte for byte — and a hit fails its stage as `timed-out`, naming the knob:
+# `CCRC_RUNTIME_PIP_S` (default 1200) and `CCRC_RUNTIME_PROBE_S` (default
+# 300), whole seconds. Without them a probe that never exits hangs
+# `ccrc install`, `ccrc update` and a rollout on every lane box.
+#
+# PORTABILITY: `macos-platform.test.ts`' GNU-spelling sweep scans this file
+# WHOLE — it carries none of ccd's platform sentinels and sources nothing. So
+# no GNU-only hash tool (the generation's hashlib hashes the probe), no
+# `mv` with a no-target-directory flag (the swap is ONE os.replace, which
+# replaces the `current` symlink itself instead of following it into the
+# directory it names — the trap a bare `mv -f` falls into, measured in
+# ccrc-models-probe's `_probe_mv_notdir`), no bare deadline wrapper (the
+# deadline is `_rt_timeout`), and no template-less temp file: every scratch
+# name is under $RT with the pid in it, except `_rt_timeout`'s own fallback
+# stamp, which is `_plat_timeout`'s.
+set -uo pipefail
+
+PROG=ccgpt-runtime
+
+# The ONE spelling of the LiteLLM requirement the Codex runtime is built from
+# (spec §5.2): the extra, the floor and the ceiling in one string. Tolerance
+# over freezing, bounded because the surface it serves is upstream's
+# experimental one; moving or widening it is a reviewed commit, and the
+# behaviour probe below is its acceptance test. Everything outside this file
+# reads the STAMP a passing build writes — never a second copy
+# (`server/test/single-definition.test.ts` pins that over every file type).
+LITELLM_REQUIREMENT='litellm[proxy]>=1.101.0,<1.110'
+
+# The oldest pip the install below can run on: `--report` is new in pip 22.2
+# (pip's changelog; the final review read pip's own source, and the option is
+# absent at 22.0.2 and 22.1.2 and present at 22.2). MAJOR.MINOR, and the one
+# spelling of it: the comparison and the in-venv upgrade both read it.
+_RT_PIP_FLOOR='22.2'
+
+RT="${HOME:-}/.ccrc/runtime/codex"
+STAMP=.ccrc-runtime.json
+GEN_RE='^gen-[0-9]{8}T[0-9]{6}Z-[0-9]+$'
+_RT_SHA_PY='import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+# json.dump DEFAULTS, written by the generation's own interpreter, tmp then
+# os.replace — the stamp is read by `check` and by later readers, never half.
+_RT_STAMP_PY='
+import json, os, sys
+path, requirement, sha, litellm, canary, built = sys.argv[1:7]
+doc = {"requirement": requirement, "probeSha256": sha, "litellm": litellm,
+       "python": "%d.%d.%d" % sys.version_info[:3], "canary": canary, "builtAt": built}
+with open(path + ".tmp", "w") as f:
+    json.dump(doc, f)
+    f.write("\n")
+os.replace(path + ".tmp", path)
+'
+_RT_READ_PY='
+import json, sys
+d = json.load(open(sys.argv[1]))
+v = [d.get(k) for k in ("requirement", "probeSha256", "litellm")]
+if not all(isinstance(x, str) and x and "\n" not in x for x in v):
+    sys.exit(1)
+print("\n".join(v))
+'
+
+say() { printf '%s: %s\n' "$PROG" "$1" >&2; }
+
+usage() {
+  echo "usage: $PROG build [--force] | check | python | probe-source" >&2
+}
+
+# ── THE DEADLINE SHIM ────────────────────────────────────────────────────
+# A LOCAL COPY of `_plat_timeout`, deliberately, and it is `ccd-account-auth`'s
+# situation exactly: this file is placed on its own in ~/.local/bin and runs
+# with no ccd or ccrc to source (sourcing either RUNS it), and the portability
+# sweep rules out a bare deadline binary. So the body below is `_plat_timeout`'s
+# BYTE FOR BYTE, comments included — they speak of ccd's call sites, and they
+# are part of the copy — and `server/test/ccgpt-runtime.test.ts` pins it to
+# ccd/ccrc's: a copy that drifts is the failure this shape invites, and the pin
+# is what makes it a copy somebody is watching. rc 124 is the one answer the
+# callers below read as "the deadline fired".
+_rt_timeout() {   # <seconds> <cmd> [args...]
+  local secs="$1" bin rc=0 t0 el grace dl stamp pid watcher
+  # THE GRACE BETWEEN THE DEADLINE'S TERM AND THE KILL THAT ENFORCES IT, and
+  # both clamps are MEASURED rather than chosen. `-k 0` does not mean "kill at
+  # once": GNU accepts it and then never escalates at all - measured, a
+  # one-second deadline with `-k 0` sat through a TERM-ignoring child's full
+  # five seconds and still answered 124 - so a caller reaching for "no grace"
+  # would turn the whole bound off with no error. A value that is not a whole
+  # number is worse: GNU exits 125 in five milliseconds WITHOUT RUNNING THE
+  # COMMAND, and one bad environment variable would then read, at these call
+  # sites simultaneously, as a wedged tmux, an unwalkable reap scan and a gh
+  # that needs re-authenticating. The ceiling is `ccd-account-auth`'s own pump
+  # backstop (`CCRC_AUTH_PUMP_GRACE`, 10s): this escalation must finish INSIDE
+  # it, or that last resort becomes the first one. `10#` because a value like
+  # `08` is not octal here, and a bare `$(( 08 ))` writes a bash error to the
+  # stderr this call's caller may be capturing.
+  grace="${CCD_TIMEOUT_KILL_AFTER:-3}"
+  case "$grace" in ''|*[!0-9]*) grace=3 ;; esac
+  grace=$(( 10#$grace ))
+  [ "$grace" -lt 2 ] && grace=2
+  [ "$grace" -gt 8 ] && grace=8
+  # WHEN OUR OWN ESCALATION CAN HAVE LANDED - and nothing else is claimed. The
+  # binary sends TERM at the deadline and waits the WHOLE grace before the
+  # KILL, so an escalated run cannot return before `secs + grace`, and an outer
+  # signal that beat the escalation cannot return after it. A deadline this
+  # shim cannot read as whole seconds (empty, suffixed, or so long the
+  # arithmetic would wrap) leaves `dl` empty, and then no `-k` is passed and no
+  # code is reinterpreted: that call degrades to exactly today's behaviour
+  # rather than to a guess.
+  dl=''
+  case "${secs%%[.,]*}" in
+    ''|*[!0-9]*|??????????*) : ;;
+    *) dl=$(( 10#${secs%%[.,]*} + grace )) ;;
+  esac
+  t0=$SECONDS
+  for bin in timeout gtimeout; do
+    command -v "$bin" >/dev/null 2>&1 || continue
+    # `-k` IS PROVED, NEVER ASSUMED, AND THE PROOF IS THE CHILD'S OWN BYTES.
+    # An unknown flag measured rc 125 on GNU, rc 1 on busybox and rc 127 with
+    # no `printf` to run - and rc 1 lands on NO branch at any of the twenty
+    # call sites, so there it would read as an ordinary command failure.
+    # Asking "did this exit 0" would therefore believe a parser that swallowed
+    # the flag; asking "did the COMMAND run" cannot, because only a parser that
+    # consumed `-k`, consumed its argument and then exec'd the command can
+    # print these bytes. Measured: GNU 9.4 and busybox 1.36.1 both answer
+    # `ccd-k-ok`; a wrapper that rejects the flag with rc 1 answers nothing and
+    # is refused, and the argv it logged shows no `-k` ever reached it.
+    # The probe runs `printf`, never a caller's command, and that is what makes
+    # a probe possible here at all: the commands below include `gh pr create`
+    # and a billed `claude -p` turn, so "pass `-k`, and retry without it on an
+    # ambiguous code" is not available at any price.
+    if [ -z "${_CCD_TIMEOUT_K:-}" ]; then
+      if [ "$("$bin" -k 1 1 printf ccd-k-ok 2>/dev/null)" = ccd-k-ok ]; then
+        _CCD_TIMEOUT_K=yes
+      else
+        _CCD_TIMEOUT_K=no
+      fi
+    fi
+    # `2>&6 6<&-` ON THE COMMAND AND `6>&2 2>/dev/null` ON THE GROUP, and it is
+    # the difference between a reason and a corrupted one. When the KILL lands,
+    # the binary reports it by re-raising SIGKILL on ITSELF, so THIS shell
+    # prints its own job-status line - `<file>: line N: <pid> Killed ...`.
+    # MEASURED: at a call carrying its own redirections that line lands in the
+    # caller's stderr file, which `_ws_nested_checkouts` and
+    # `_ws_sensitive_inside` read back as `$err`; and at `ccd-account-auth`'s
+    # backgrounded `2>&1` it lands in `$AUTH_RUN/out`, the FIFO `_auth_pump`
+    # parses line by line. Command substitutions are immune (measured clean in
+    # all three shapes), which is why nobody had seen it: until this change the
+    # line needed an OUTER signal to appear at all. Handing the child the
+    # ORIGINAL stderr on fd 6 and silencing this shell's own keeps every byte
+    # the child wrote and drops the line about the shell's job - measured both
+    # ways. `6<&-` closes fd 6 IN THE CHILD, so nothing inherits a descriptor
+    # it was not handed; fd 6 is free, the only numbered descriptors these
+    # files use being 3, 4, 7, 8 and 9.
+    if [ "${_CCD_TIMEOUT_K:-}" = yes ] && [ -n "$dl" ]; then
+      { "$bin" -k "$grace" "$@" 2>&6 6<&-; rc=$?; } 6>&2 2>/dev/null
+    else
+      { "$bin" "$@" 2>&6 6<&-; rc=$?; } 6>&2 2>/dev/null
+    fi
+    el=$(( SECONDS - t0 ))
+    # 137 BECOMES 124 ONLY ON PROOF, AND 137 IS NOT THE PROOF. coreutils'
+    # `timeout.c` relabels any status to 124 once its deadline has fired, with
+    # ONE deliberate exception - `sig == SIGKILL && kill_after`, commented
+    # "Allow users to distinguish if command was forcibly killed" - and that
+    # exception is the whole reason a 137 appears here. No call site can act on
+    # the distinction it exposes, while 137 ALREADY has a meaning in this tree
+    # ("an outer kill landed", `_lc_obs` says so in as many words), so
+    # propagating it would give one number two meanings. The CLOCK separates
+    # them, and only it can: our escalation cannot land before `secs + grace`,
+    # an outer kill that beat it cannot land after. MEASURED, the real binary
+    # SIGKILLed at t=3s of a two-second deadline with a three-second grace: rc
+    # stays 137 and the orphaned child ran to completion - the honest answer,
+    # because our deadline never got to enforce anything. `$SECONDS` is whole
+    # seconds (the declared bash floor is 4.4 and `EPOCHREALTIME` is 5.0), so
+    # the boundary is soft by up to one second in the direction of claiming an
+    # outer kill that landed in the last second before our own; both codes
+    # refuse at every call site, so that is a label, not a decision.
+    if [ "$rc" = 137 ] && [ "${_CCD_TIMEOUT_K:-}" = yes ] && [ -n "$dl" ] \
+       && [ "$el" -ge "$dl" ]; then
+      rc=124
+    fi
+    return "$rc"
+  done
+  shift
+  # THE PURE-BASH ARM DOES NOT ESCALATE, AND THAT IS A RULING, NOT AN OVERSIGHT
+  # (D-2764). The only escalation available here is a watcher subshell issuing
+  # `kill -KILL "$pid"`, and bash reaps background children ASYNCHRONOUSLY -
+  # measured: a child is unwaitable two seconds after it exits with no `wait`
+  # ever run - so a sibling watcher genuinely can signal a RECYCLED pid. On
+  # this fleet that pid could be a `ccd supervise`, a `claude-session@*` child
+  # or tmux, all three of which CLAUDE.md's SAFETY section forbids touching,
+  # and `ccrc-account.test.ts` deliberately contains PATH to force this arm on
+  # whatever box runs the suite - including the fleet box. A stamp handshake
+  # narrows that window but cannot be made to go red under mutation, which is
+  # an argument rather than a mechanism. So this arm keeps today's single TERM
+  # and reports what it always did; `ccd-plat-timeout.test.ts` text-scans all
+  # three copies for `kill -9`/`kill -KILL` so the ruling is a mechanism too.
+  stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
+  rm -f -- "$stamp" 2>/dev/null
+  "$@" &
+  pid=$!
+  # `|| exit 0` ON THE SLEEP, and it is the difference between a deadline and
+  # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
+  # with no coreutils — it returns INSTANTLY, and without this guard the
+  # watcher would stamp and signal in the same breath: every call would report
+  # 124 having given the command no time at all. A sleep that cannot run means
+  # THIS CALL GETS NO DEADLINE, which is the same honest degradation the
+  # callers had before a shim existed ("a box without coreutils' `timeout`
+  # still gets an answer, just without a deadline"). Caught by
+  # `ccrc-doctor.test.ts`'s "answers on a box with no coreutils timeout".
+  # BOTH OF THE WATCHER'S OWN STREAMS GO NOWHERE, AND IT IS THE DIFFERENCE
+  # BETWEEN A DEADLINE AND A FLOOR (D-2272). Called inside a command
+  # substitution the caller reads, this subshell inherits that pipe on fd 1 -
+  # and on fd 2 as well wherever the call site joins the two, which
+  # `ccrc-doctor-checks` does. `kill -TERM` on the subshell below kills the
+  # SUBSHELL and orphans the sleeper it was waiting on, so the sleeper keeps the
+  # write end open and the substitution cannot see EOF until the full duration
+  # has run out, long after the command answered. MEASURED on a box with no
+  # coreutils, a 10-second deadline and a command that answers instantly: 10 006
+  # ms before this redirection, 9 ms after. Neither stream carries anything a
+  # caller wants - the watcher exists for its stamp file and its signal - so
+  # discarding both costs nothing and is what keeps the sleeper off the pipe.
+  #
+  # THE ACCOUNT PROBE IS WHERE THIS WAS NOTICED, NOT WHERE IT BECAME REACHABLE
+  # (D-2332, correcting D-2272). The finding was filed saying that probe is the
+  # tree's FIRST caller inside a command substitution. It is the eleventh of
+  # eleven, measured 2026-09-09: five in ccd, three in ccrc-doctor-checks and
+  # three in ccrc - and eight of the other ten predate the account-connections
+  # branch entirely, so on a box with no coreutils this floor has been under ccd's
+  # tmux liveness probe, its two gh pr queries and the doctor's gh auth status
+  # check for as long as the shim has existed: each of them paid its whole
+  # deadline on every run instead of answering when its command did. The fix
+  # below is unchanged and was always right; what was understated is that it is
+  # a fix for the WHOLE call-site population, not for one new call site. The
+  # population is measured in ccrc-account.test.ts rather than counted here, so
+  # the claim cannot rot back into a claim about one caller.
+  ( sleep "$secs" 2>/dev/null || exit 0; printf 1 > "$stamp" 2>/dev/null; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  watcher=$!
+  wait "$pid" 2>/dev/null; rc=$?
+  kill -TERM "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
+  if [ -s "$stamp" ]; then rc=124; fi
+  rm -f -- "$stamp" 2>/dev/null
+  return "$rc"
+}
+
+# _rt_secs <value> <default> — a deadline in whole seconds, `_codex_probe_secs`'
+# rule (ccd/ccrc): empty, not all digits, five characters or longer, or zero in
+# any spelling (GNU `timeout 00` means NO deadline) falls back to the default.
+_rt_secs() {
+  local s="$1"
+  case "$s" in ''|*[!0-9]*|?????*) s="$2" ;; esac
+  s=$(( 10#$s ))
+  [ "$s" -ge 1 ] || s="$2"
+  printf '%s' "$s"
+}
+
+# _rt_pip <gen> <secs> <pip args...> — the generation's pip, bounded, run from
+# the generation's own directory with every PYTHON* variable unset (the
+# header's WHAT IT RUNS says why that, and not `-I`). In a subshell, so neither
+# the scrub nor the cd reaches the caller.
+_rt_pip() {
+  local gen="$1" secs="$2" v
+  shift 2
+  (
+    for v in ${!PYTHON@}; do unset "$v"; done
+    cd "$gen" || exit 1
+    _rt_timeout "$secs" "$gen/bin/python" -m pip "$@"
+  )
+}
+
+# _rt_pip_version <gen> <secs> — the generation's pip version, as pip itself
+# reports it (`pip X.Y[.Z] from …`); rc 1 and nothing when it cannot be read.
+_rt_pip_version() {
+  local out re='^pip ([0-9]{1,4}\.[0-9]{1,4}[^[:space:]]*)'
+  out="$(_rt_pip "$1" "$2" --version 2>/dev/null)" || return 1
+  [[ "$out" =~ $re ]] || return 1
+  printf '%s' "${BASH_REMATCH[1]}"
+}
+
+# _rt_pip_ok <version> — 0 iff its MAJOR.MINOR is at least _RT_PIP_FLOOR's.
+_rt_pip_ok() {
+  local re='^([0-9]{1,4})\.([0-9]{1,4})' maj min fmaj="${_RT_PIP_FLOOR%%.*}" fmin="${_RT_PIP_FLOOR#*.}"
+  [[ "$1" =~ $re ]] || return 1
+  maj=$(( 10#${BASH_REMATCH[1]} )); min=$(( 10#${BASH_REMATCH[2]} ))
+  [ "$maj" -gt "$fmaj" ] || { [ "$maj" -eq "$fmaj" ] && [ "$min" -ge "$fmin" ]; }
+}
+
+_rt_need_home() {
+  [ -n "${HOME:-}" ] && [ -d "$HOME" ] \
+    || { say "HOME is not set to a directory — nothing was read or built"; exit 1; }
+}
+
+# _rt_tail <text> — its last non-blank line, bounded: a failure line is ONE line.
+_rt_tail() {
+  local line last=""
+  while IFS= read -r line; do
+    [ -n "${line//[[:space:]]/}" ] && last="$line"
+  done <<<"$1"
+  printf '%s' "${last:0:200}"
+}
+
+# _rt_current — the generation `current` names: ONE hop, relative, gen-shaped,
+# a directory. Anything else (absolute, dotted, dangling, a real directory
+# called current) is not a generation, and every caller reads it as absent
+# rather than following it somewhere this file did not put it.
+_rt_current() {
+  local name
+  [ -L "$RT/current" ] || return 1
+  name="$(readlink "$RT/current" 2>/dev/null)" || return 1
+  [[ "$name" =~ $GEN_RE ]] && [ -d "$RT/$name" ] || return 1
+  printf '%s\n' "$name"
+}
+
+_rt_litellm_version() {   # <python> — the installed distribution's own version
+  "$1" -I -c 'import importlib.metadata as m; print(m.version("litellm"))' 2>/dev/null
+}
+
+# _rt_verdict — sets RT_WORD, RT_NAME, RT_VER; rc 0 (RT_WORD=ok) iff the
+# current generation is exactly what this file would build now. The four
+# other words are `check`'s whole vocabulary.
+_rt_verdict() {
+  local py fields req sha want
+  RT_WORD=absent RT_NAME="" RT_VER=""
+  RT_NAME="$(_rt_current)" || { RT_NAME=""; return 1; }
+  py="$RT/$RT_NAME/bin/python"
+  RT_WORD=mutated
+  [ -x "$py" ] && [ -f "$RT/$RT_NAME/$STAMP" ] || return 1
+  fields="$("$py" -I -c "$_RT_READ_PY" "$RT/$RT_NAME/$STAMP" 2>/dev/null)" || return 1
+  { IFS= read -r req; IFS= read -r sha; IFS= read -r RT_VER; } <<<"$fields"
+  [ "$req" = "$LITELLM_REQUIREMENT" ] || { RT_WORD=requirement-moved; return 1; }
+  want="$(_rt_probe_source | "$py" -I -c "$_RT_SHA_PY" 2>/dev/null)" || return 1
+  [ "$sha" = "$want" ] || { RT_WORD=probe-moved; return 1; }
+  [ "$(_rt_litellm_version "$py")" = "$RT_VER" ] || return 1
+  RT_WORD=ok
+}
+
+# _rt_fail <stage> <gen> <detail> — delete the half-built generation (only
+# ever a fresh gen-* under $RT: never `current`'s target, whose name differs by
+# construction), then say the one line.
+_rt_fail() {
+  local detail="${3//$'\n'/ }"
+  case "$2" in "$RT"/gen-*) rm -rf -- "$2" ;; esac
+  say "build failed at $1: ${detail:0:300} — the previous runtime (if any) stays current"
+}
+
+# _rt_in_use <gen-name> — 0 iff some lane's `<tier>.started` names it, i.e. a
+# tier may be running from it right now.
+_rt_in_use() {
+  local f
+  for f in "$HOME"/.ccrc/codex/*/*.started; do
+    [ -f "$f" ] && grep -qF -- "$1" "$f" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+# _rt_prune <current> <previous> — keep the new current and the one it
+# replaced; remove every other gen-* EXCEPT one another build is still writing
+# (the pid in its name is alive and is not ours) and one a lane's tier was
+# started from. Deleting a venv under a running tier is an outage its next
+# lazy import reports, so two hand-run `build --force`s in a row must not.
+_rt_prune() {
+  local d name pid
+  for d in "$RT"/gen-*; do
+    [ -d "$d" ] || continue
+    name="${d##*/}"
+    [[ "$name" =~ $GEN_RE ]] || continue
+    if [ "$name" = "$1" ] || [ "$name" = "$2" ]; then continue; fi
+    pid="${name##*-}"
+    if [ "$pid" != "$$" ] && kill -0 "$pid" 2>/dev/null; then continue; fi
+    if _rt_in_use "$name"; then continue; fi
+    rm -rf -- "$d" || say "could not remove the old generation $name — left in place"
+  done
+}
+
+_rt_build() {   # <force: 0|1>
+  local why gen py out rc line pass="" fail="" detail errtail ver sha canary built prev link pip_s probe_s pipv now
+  _rt_need_home
+  if [ "$1" = 1 ]; then
+    why=forced
+  elif _rt_verdict; then
+    printf '%s: current %s litellm=%s\n' "$PROG" "$RT_NAME" "$RT_VER"
+    return 0
+  else
+    why="$RT_WORD"
+  fi
+  command -v python3 >/dev/null 2>&1 \
+    || { say "python3 is not on PATH, so no venv can be made — nothing was built, and the previous runtime (if any) stays current"; return 1; }
+  mkdir -p "$RT" || { say "cannot create $RT — nothing was built"; return 1; }
+  gen="$RT/gen-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  [ ! -e "$gen" ] || { say "$gen already exists — refusing to build over it; nothing was changed"; return 1; }
+
+  # venv — argv EXACTLY `-m venv <path>` (see the header).
+  if ! out="$(python3 -m venv "$gen" 2>&1)"; then
+    errtail="$(_rt_tail "$out")"
+    _rt_fail venv "$gen" "python3 -m venv exited non-zero${errtail:+: $errtail}"; return 2
+  fi
+  py="$gen/bin/python"
+  [ -x "$py" ] || { _rt_fail venv "$gen" "the new venv has no executable bin/python"; return 2; }
+
+  # pip — the generation's own, through `_rt_pip` (bounded, scrubbed). Its
+  # version is MEASURED first, and only a pip older than _RT_PIP_FLOOR is
+  # upgraded, inside the venv, before anything else is installed (the
+  # header's PIP IS A MEASURED DEPENDENCY).
+  pip_s="$(_rt_secs "${CCRC_RUNTIME_PIP_S:-}" 1200)"
+  probe_s="$(_rt_secs "${CCRC_RUNTIME_PROBE_S:-}" 300)"
+  pipv="$(_rt_pip_version "$gen" "$pip_s")" || pipv=""
+  if [ -n "$pipv" ] && ! _rt_pip_ok "$pipv"; then
+    out="$(_rt_pip "$gen" "$pip_s" install --quiet --disable-pip-version-check --no-input "pip>=$_RT_PIP_FLOOR" 2>&1)"; rc=$?
+    now=""
+    if [ "$rc" -eq 0 ]; then now="$(_rt_pip_version "$gen" "$pip_s")" || now=""; fi
+    if [ -z "$now" ] || ! _rt_pip_ok "$now"; then
+      if [ "$rc" -eq 124 ]; then
+        detail="timed out after ${pip_s}s"
+      elif [ "$rc" -ne 0 ]; then
+        errtail="$(_rt_tail "$out")"; detail="exit $rc${errtail:+: $errtail}"
+      else
+        detail="exit 0, and pip then reported ${now:-no version}"
+      fi
+      # The remedy BEFORE the tail: `_rt_fail` cuts the detail at 300 bytes.
+      _rt_fail pip "$gen" "pip-too-old: the new venv's pip is $pipv, older than the $_RT_PIP_FLOOR this build needs (install --report), so nothing was installed; make the package index reachable, or use a python3 whose venv ships pip >= $_RT_PIP_FLOOR. The in-venv upgrade: $detail"; return 2
+    fi
+  fi
+  out="$(_rt_pip "$gen" "$pip_s" install --quiet --disable-pip-version-check --no-input \
+      --report "$gen/.ccrc-pip-report.json" "$LITELLM_REQUIREMENT" 2>&1)"; rc=$?
+  if [ "$rc" -eq 124 ]; then
+    _rt_fail pip "$gen" "timed-out: pip did not finish installing $LITELLM_REQUIREMENT within ${pip_s}s (CCRC_RUNTIME_PIP_S sets the bound)"; return 2
+  elif [ "$rc" -ne 0 ]; then
+    errtail="$(_rt_tail "$out")"
+    _rt_fail pip "$gen" "pip could not install $LITELLM_REQUIREMENT (exit $rc)${errtail:+: $errtail}"; return 2
+  fi
+
+  # probe — the bytes `probe-source` prints, kept in the generation as the
+  # record of what passed. Stdout is the verdict; stderr is only a detail.
+  # THE PROBE'S STDIN IS BOUND INSIDE THE BOUNDED COMMAND, never on the call.
+  # `_rt_timeout`'s pure-bash arm — the one a box with neither `timeout` nor
+  # `gtimeout` takes, stock macOS among them — runs `"$@" &`, and bash hands an
+  # async command /dev/null as stdin unless that command carries a stdin
+  # redirection of its OWN; a `< probe.py` on the function call is not its own.
+  # MEASURED at 68beba7e: on such a PATH the probe read 0 bytes and every build
+  # failed at `probe`. So a child shell opens the file and execs the generation's
+  # python with the same `-I -` argv, whichever arm of the bound runs it.
+  _rt_probe_source > "$gen/.ccrc-probe.py" \
+    || { _rt_fail probe "$gen" "could not write the probe into the new generation"; return 2; }
+  out="$(_rt_timeout "$probe_s" "$BASH" -c 'exec "$1" -I - < "$2"' _ "$py" "$gen/.ccrc-probe.py" 2>"$gen/.ccrc-probe.stderr")"; rc=$?
+  while IFS= read -r line; do
+    case "$line" in
+      'behaviour_probe: PASS '*) [ -n "$pass" ] || pass="$line" ;;
+      'behaviour_probe: FAIL '*) [ -n "$fail" ] || fail="${line#behaviour_probe: FAIL }" ;;
+    esac
+  done <<<"$out"
+  if [ "$rc" -ne 0 ] || [ -z "$pass" ]; then
+    if [ -n "$fail" ]; then
+      detail="$fail"
+    elif [ "$rc" -eq 124 ]; then
+      # A PASS followed by a process that never exits (a non-daemon thread
+      # upstream starts at import) is still a probe that never exited.
+      detail="timed-out: the probe did not exit within ${probe_s}s${pass:+, after its PASS line} (CCRC_RUNTIME_PROBE_S sets the bound)"
+    elif [ -n "$pass" ]; then
+      detail="exit $rc despite a PASS line — both are required"
+    else
+      errtail="$(_rt_tail "$(cat "$gen/.ccrc-probe.stderr" 2>/dev/null)")"
+      detail="exit $rc and no 'behaviour_probe: PASS' line on stdout${errtail:+ (stderr: $errtail)}"
+    fi
+    _rt_fail probe "$gen" "$detail"; return 2
+  fi
+
+  # stamp — every value from the generation itself, measured with the same
+  # instruments `check` re-measures with.
+  ver="$(_rt_litellm_version "$py")"
+  [ -n "$ver" ] || { _rt_fail stamp "$gen" "the new generation passed its probe but cannot report its litellm version"; return 2; }
+  sha="$("$py" -I -c "$_RT_SHA_PY" < "$gen/.ccrc-probe.py" 2>/dev/null)"
+  [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { _rt_fail stamp "$gen" "could not hash the probe that ran"; return 2; }
+  canary=unknown
+  case "$pass" in
+    *' raw-shape-leaks-system-role='*) canary="${pass##* raw-shape-leaks-system-role=}"; canary="${canary%% *}" ;;
+  esac
+  case "$canary" in yes|no|unknown) ;; *) canary=unknown ;; esac
+  canary="raw-shape-leaks-system-role=$canary"
+  built="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  "$py" -I -c "$_RT_STAMP_PY" "$gen/$STAMP" "$LITELLM_REQUIREMENT" "$sha" "$ver" "$canary" "$built" 2>/dev/null \
+    || { _rt_fail stamp "$gen" "could not write $STAMP"; return 2; }
+
+  # swap — `current` is read HERE, so "previous" is what this swap replaced.
+  prev="$(_rt_current)" || prev=""
+  link="$RT/.current.tmp.$$"
+  rm -f -- "$link"
+  if ! ln -s "${gen##*/}" "$link" 2>/dev/null \
+     || ! "$py" -I -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$link" "$RT/current" 2>/dev/null; then
+    rm -f -- "$link"
+    _rt_fail swap "$gen" "could not point $RT/current at ${gen##*/} (is current a real directory?)"; return 2
+  fi
+  _rt_prune "${gen##*/}" "$prev"
+  printf '%s: built %s litellm=%s %s (%s; previous: %s)\n' "$PROG" "${gen##*/}" "$ver" "$canary" "$why" "${prev:-none}"
+}
+
+_rt_check() {
+  _rt_need_home
+  if _rt_verdict; then
+    printf '%s: current %s litellm=%s\n' "$PROG" "$RT_NAME" "$RT_VER"
+    return 0
+  fi
+  say "$RT_WORD"
+  return 1
+}
+
+_rt_python() {
+  local name
+  _rt_need_home
+  name="$(_rt_current)" || { say absent; return 1; }
+  [ -x "$RT/$name/bin/python" ] && [ -f "$RT/$name/$STAMP" ] || { say mutated; return 1; }
+  printf '%s\n' "$RT/$name/bin/python"
+}
+
+# ── THE BEHAVIOUR PROBE ──────────────────────────────────────────────────
+# The heredoc below is the probe, and `probe-source` prints it verbatim: its
+# bytes are what the stamp's probeSha256 hashes, so ANY edit between the two
+# PY lines — a comment included — rebuilds every box's runtime on its next
+# install. That is the rebuild trigger spec §5.2 names ("the probe set
+# changes"), and it is also why a change to the shim's output shape, which
+# changes SHIM_OUT, rebuilds.
+_rt_probe_source() {
+  cat <<'PY'
+# ccgpt-runtime's behaviour probe (spec §5.2). Run as `<generation>/bin/python -I -`
+# with these bytes on stdin.
+#
+#   PASS: exit 0 and  behaviour_probe: PASS litellm=<v> raw-shape-leaks-system-role=<yes|no|unknown>
+#   FAIL: exit 1 and  behaviour_probe: FAIL <name>: <detail>
+#
+# OFFLINE BY CONSTRUCTION: an audit hook denies every socket connect and name
+# lookup BEFORE litellm is imported, and the cost map is forced local (without
+# that, importing litellm fetches a mutable remote JSON, three retries).
+# CREDENTIAL-FREE: HOME and CHATGPT_TOKEN_DIR point into a fresh temp dir holding
+# a synthetic token, and every CHATGPT_*/LITELLM_*/OPENAI_* variable is scrubbed
+# first, because LiteLLM's Authenticator mkdirs its token dir and can rewrite
+# auth.json — this must never touch a lane's own.
+#
+# IT GATES ON THE SHIM'S OUTPUT SHAPE. ccgpt-proxy.py folds both system doors
+# before LiteLLM sees a request, so SHIM_OUT is what a lane really sends;
+# server/test/ccgpt-runtime.test.ts pins SHIM_OUT to the shipped shim's
+# _rewrite_messages_body(RAW), and DEPLOYMENT to shared/litellm.mjs's rendered
+# entry, so neither literal can drift from what it stands for. RAW (Claude
+# Code's own shape) runs too, as a canary that NEVER gates: `yes` says LiteLLM
+# still leaks a system role without the shim's fold.
+#
+# The failure names keep the HARNESS's dependencies (translate,
+# one-upstream-request: the async router, the httpx sink, the SSE parse) apart
+# from BEHAVIOUR (no-system-role, effort-reaches-reasoning, ...), so a red says
+# which kind of change upstream made.
+import sys
+sys.dont_write_bytecode = True  # a borrowed interpreter (the opt-in suite's) is never written to
+import asyncio, atexit, json, os, shutil, tempfile, time
+
+_attempts = []
+
+
+def _deny(event, args):
+    if event in ("socket.connect", "socket.getaddrinfo", "socket.sendto", "socket.sendmsg",
+                 "socket.gethostbyname", "socket.gethostbyname_ex", "socket.gethostbyaddr"):
+        _attempts.append(event)
+        raise OSError("behaviour_probe: network denied")
+
+
+sys.addaudithook(_deny)
+
+_tmp = tempfile.mkdtemp(prefix="ccgpt-runtime-probe.")
+atexit.register(shutil.rmtree, _tmp, True)
+for _k in [k for k in os.environ if k.startswith(("CHATGPT_", "LITELLM_", "OPENAI_"))]:
+    del os.environ[_k]
+os.environ.update(HOME=_tmp, CHATGPT_TOKEN_DIR=os.path.join(_tmp, "tok"), LITELLM_LOCAL_MODEL_COST_MAP="True")
+os.makedirs(os.environ["CHATGPT_TOKEN_DIR"])
+with open(os.path.join(os.environ["CHATGPT_TOKEN_DIR"], "auth.json"), "w") as _f:
+    json.dump({"access_token": "probe-not-a-secret", "expires_at": time.time() + 3600, "account_id": "probe"}, _f)
+
+MODEL, TOP, MID = "probe-model", "PROBE-TOP-SYSTEM", "PROBE-MID-SYSTEM"
+# What the shim sends for RAW: both system doors folded, effort resolved.
+SHIM_OUT = {"model": MODEL, "max_tokens": 64, "stream": False,
+            "messages": [{"role": "user", "content": f"{TOP}\n\nU1"},
+                         {"role": "assistant", "content": [{"type": "text", "text": "A1"}]},
+                         {"role": "user", "content": [{"type": "text", "text": MID}]},
+                         {"role": "user", "content": [{"type": "text", "text": "U2"}]}],
+            "tools": [{"name": "probe_tool", "description": "d",
+                       "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}}}],
+            "reasoning": {"effort": "high"}}
+# Claude Code's own shape: a top-level system string, a block-list mid-turn
+# system entry, output_config.effort and adaptive thinking, and no `reasoning`.
+RAW = dict({k: v for k, v in SHIM_OUT.items() if k != "reasoning"},
+           system=TOP, output_config={"effort": "high"}, thinking={"type": "adaptive"},
+           messages=[{"role": "user", "content": "U1"}, SHIM_OUT["messages"][1],
+                     {"role": "system", "content": [{"type": "text", "text": MID}]}, SHIM_OUT["messages"][3]])
+# One entry in the shape shared/litellm.mjs renders into a lane's litellm.yaml.
+DEPLOYMENT = {"model_name": MODEL, "model_info": {"mode": "responses"},
+              "litellm_params": {"model": f"chatgpt/{MODEL}"}}
+
+
+def fail(name, detail=""):
+    detail = " ".join(str(detail).split())[:300]
+    print(f"behaviour_probe: FAIL {name}{': ' + detail if detail else ''}", flush=True)
+    sys.exit(1)
+
+
+try:
+    import litellm  # noqa: F401 - a missing transitive dependency is its own claim, named here
+except Exception as e:
+    fail("litellm-import", f"{type(e).__name__}: {e}")
+try:
+    from litellm.llms.chatgpt.authenticator import Authenticator
+    if not callable(getattr(Authenticator, "get_access_token", None)):
+        raise AttributeError("Authenticator has no callable get_access_token")
+except Exception as e:
+    fail("authenticator-import", f"{type(e).__name__}: {e}")
+try:
+    from litellm.llms.chatgpt.chat.transformation import ChatGPTConfig  # noqa: F401
+    from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig  # noqa: F401
+except Exception as e:
+    fail("transformation-import", f"{type(e).__name__}: {e}")
+
+_sent = []
+_SSE = ("event: response.completed\ndata: " + json.dumps({"type": "response.completed", "response": {
+    "id": "r", "object": "response", "created_at": 1, "status": "completed", "model": MODEL,
+    "output": [{"type": "message", "id": "m", "status": "completed", "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}]}],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}}) + "\n\n").encode()
+
+try:
+    import httpx
+
+    async def _sink(self, request):
+        try:
+            body = json.loads(request.read() or b"{}")
+        except ValueError:
+            body = {}
+        _sent.append((request.url.path, body))
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_SSE, request=request)
+
+    httpx.AsyncHTTPTransport.handle_async_request = _sink
+    litellm.drop_params = True               # the rendered config's litellm_settings.drop_params
+    litellm.disable_aiohttp_transport = True  # so the httpx sink above IS the transport
+    router = litellm.Router(model_list=[DEPLOYMENT])
+except Exception as e:
+    fail("translate", f"{type(e).__name__}: {e}")
+
+
+async def _one(body):
+    _sent.clear()
+    try:
+        reply = await router.aanthropic_messages(**json.loads(json.dumps(body)))
+        return list(_sent), reply, None
+    except Exception as e:
+        return list(_sent), None, e
+
+
+async def _both():  # ONE event loop for both calls
+    return await _one(SHIM_OUT), await _one(RAW)
+
+
+try:
+    (sent, reply, err), (raw_sent, _raw_reply, raw_err) = asyncio.run(_both())
+except Exception as e:
+    fail("translate", f"{type(e).__name__}: {e}")
+
+if _attempts:
+    fail("offline", f"{len(_attempts)} network attempt(s)")
+# The captured PATH is read before the reply or the error: a deployment without
+# `mode: responses` goes to .../chat/completions and only then fails to parse
+# the Responses-SSE reply — the endpoint, not the parse, is the claim.
+for _path, _ in sent:
+    if not _path.endswith("/responses"):
+        fail("responses-endpoint", _path)
+if err is not None:
+    fail("translate", f"{type(err).__name__}: {err}")
+if len(sent) != 1:
+    fail("one-upstream-request", f"{len(sent)} captured")
+req = sent[0][1]
+items = [i for i in req.get("input", []) if isinstance(i, dict)]
+
+
+def blob(o):
+    return json.dumps(o, ensure_ascii=False)
+
+
+roles = [i.get("role") for i in items]
+if "system" in req or "system" in roles:
+    fail("no-system-role", blob(roles))
+if TOP not in blob(items[:1]):
+    fail("top-system-in-leading-turn", blob(roles))
+mid = [n for n, i in enumerate(items) if MID in blob(i)]
+if mid != [2] or items[2].get("role") != "user":
+    fail("mid-system-kept-in-place-as-user", blob(mid))
+if (req.get("reasoning") or {}).get("effort") != "high":
+    fail("effort-reaches-reasoning", blob(req.get("reasoning")))
+tools = [t.get("name") for t in req.get("tools") or [] if isinstance(t, dict)]
+if "probe_tool" not in tools:
+    fail("tool-survives", blob(tools))
+content = reply.get("content") if isinstance(reply, dict) else None
+if not (isinstance(content, list) and content and isinstance(content[0], dict) and content[0].get("text") == "ok"):
+    fail("response-translates-back", repr(reply)[:200])
+
+# The canary, never gating: a raw-shape failure is information, not a verdict.
+if raw_err is not None or len(raw_sent) != 1:
+    leak = "unknown"
+else:
+    leak = "yes" if any(isinstance(i, dict) and i.get("role") == "system"
+                        for i in raw_sent[0][1].get("input", [])) else "no"
+try:
+    from importlib import metadata as _md
+    _version = _md.version("litellm")
+except Exception:
+    _version = "unknown"
+print(f"behaviour_probe: PASS litellm={_version} raw-shape-leaks-system-role={leak}", flush=True)
+PY
+}
+
+case "${1:-}" in
+  build)
+    case "$#:${2:-}" in
+      1:) _rt_build 0 ;;
+      2:--force) _rt_build 1 ;;
+      *) usage; exit 1 ;;
+    esac
+    exit $?
+    ;;
+  check)        [ $# -eq 1 ] || { usage; exit 1; }; _rt_check;        exit $? ;;
+  python)       [ $# -eq 1 ] || { usage; exit 1; }; _rt_python;       exit $? ;;
+  probe-source) [ $# -eq 1 ] || { usage; exit 1; }; _rt_probe_source; exit $? ;;
+  -h|--help)    usage; exit 0 ;;
+  *)            usage; exit 1 ;;
+esac

@@ -1535,10 +1535,10 @@ export function sessionBucket(
 export type TurnStallInput = Pick<FleetSession, 'status' | 'statusUpdatedAt'>;
 
 /**
- * D-2016 — the wedge's other half, WITH NO NEW WIRE FIELD. `statusUpdatedAt`
- * already ticks only on a busy↔idle transition (`ccd/ccd:12386-12388`), so
- * `now - statusUpdatedAt` on a `busy` row IS the current turn's age; this is
- * that subtraction plus a threshold, nothing more.
+ * D-2016 — the wedge's other half, WITH NO NEW WIRE FIELD. The live file is
+ * rewritten only when its word changes, so `now - statusUpdatedAt` on a `busy`
+ * row is how long that word has stood: a turn's age, OR how long an idle main
+ * loop has waited on background agents (or held a collapsed `shell`/`waiting`).
  *
  * Deliberately NOT a new `sessionBucket` rung, and not even a call this
  * function makes itself: "attention" means a human answer unblocks the
@@ -8289,19 +8289,19 @@ export type PaneHistoryReply =
  * WHAT DOES NOT YET HONOUR IT. `ccd/ccd` is the only code that GATES on it.
  * The one other code reference in server/src, pwa/src or agent/src is the
  * PWA's actions sheet, which prints it in the `narrow` spawn note — it names
- * the floor, it enforces none; every other hit in those trees is prose. In
- * particular the server's mail
- * lane is NOT width-aware: `server/src/watch.ts` asks for the hold with
- * `sendPrompt(…, holdIfAutoContinueArmed: true)` and `server/src/inject/send.ts`
- * decides it with `autoContinueArmed(armWindow)` over the last 8 captured rows —
- * a phrase match (`AUTO_CONTINUE_RE`) with no width measurement anywhere on that
- * path. The failure direction is the dangerous one: on a pane below this width
- * Claude Code's own limit-recovery line WRAPS, the phrase is no longer on one
- * row, `autoContinueArmed` answers false, the hold does NOT fire, and the server
- * types into a pane whose auto-continue was armed — cancelling it. An earlier
- * version of this docstring said "and the mail lane holds"; nothing shipped ever
- * made that true. Teaching that lane this floor is a deliberate later widening,
- * not something to infer from this constant's existence.
+ * the floor, it enforces none; every other hit in those trees is prose. The
+ * server's mail lane is NOT width-aware: `server/src/inject/send.ts` runs two
+ * phrase matches over the last 8 captured rows and measures no width for
+ * either — `autoContinueArmed(armWindow)` (`AUTO_CONTINUE_RE`, asked for with
+ * `holdIfAutoContinueArmed`) and `turnRunning(armWindow)` (`esc to interrupt`,
+ * asked for with `refuseIfTurnRunning` on a `shell` delivery). Below this width
+ * each phrase WRAPS off one row and its match answers false: the armed hold
+ * does NOT fire and the server types into a pane whose auto-continue was armed,
+ * cancelling it; the turn guard does NOT refuse, and a nudge typed into a
+ * running turn is folded in at its next tool boundary — which is why that guard
+ * is a drift tripwire, never a proof of idleness. An earlier version of this
+ * docstring said "and the mail lane holds"; nothing shipped ever made that true.
+ * Teaching the lane this floor is a deliberate later widening, not an inference.
  *
  * DERIVED, not chosen. Claude Code's TUI is Ink, which wraps its own status
  * line at the terminal width before tmux ever stores the row. This tree cannot
@@ -8874,3 +8874,11 @@ export function rollbackTargetRefusal(
 export function settledDoneDetail(tag: string): string {
   return `done: ${tag}`;
 }
+
+/** Design 2026-09-14: the subject a reviewer's done-claim mail carries (`kind: 'status'`). It is the review run's
+ *  sibling of `WAVE_DONE_SUBJECT`, and it is compared by EQUALITY, never as a prefix: `close.ts`'s review rejection
+ *  subject begins with the same characters and means the opposite. ONE spelling: the stall watch
+ *  (`server/src/coord/stall.ts`) reads it to hand the ball to the coordinator, and the reviewer skill quotes it
+ *  (`stall-vocabulary.test.ts` pins the two together). It is appended at the end of this file, not beside
+ *  `WAVE_DONE_SUBJECT`, because an insertion there would move README's citation anchors into this file. */
+export const REVIEW_DONE_SUBJECT = 'review-done';

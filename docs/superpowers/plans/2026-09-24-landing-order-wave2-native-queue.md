@@ -1,26 +1,22 @@
 # Landing order, wave 2 — GitHub's native merge queue, repository code (SERVER-FIRST) Implementation Plan
 
-> **Status: Tasks 1 and 3–5, and Task 7's precondition, need a re-plan before this wave is dispatched.** Ruled by the orchestrator 2026-09-24: Tasks 3, 4 and 5 are RE-PLANNED after child-reclamation wave 3 merges, and no worker executes them from the text below. Task 2 is not re-planned (re-measured 2026-09-24 on `65c5bb34` and 2026-09-28 on main `c62e22b9`); Task 1 is, since 2026-09-28 (below). Task 6's PR-body items 3–5 and whole-branch counts, and Task 7 Step 5's enqueue command, checks (e) and (f) and stop rule 4, restate Tasks 3–5 and are re-planned with them. The reason is the interaction with child-reclamation: #178's **One PR per child** plus wave 3's **reclaim-on-close**. A PR-bearing producer's run is closed `final:true`, `released:true` BEFORE its PR merges (`ccd/coordinator-skill/references/wave-lifecycle.md:718-738`, the close at `:725-729`, the merge proof it defers to at `:730-738`; the release is `ws-release`, `server/src/coord/close.ts:347-353`), and wave 3 then reclaims its workspace, removing the registry row with the worktree and pane (`docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md:132-133` and `:366-368`; the trigger is `:376-382`; the ladder ignores `not-merged`, `:275-277`). So, as written:
->
-> 1. **(i) Task 3's dequeue lane mails nobody.** It is keyed on an OPEN run naming the workspace and on the session's registry row, and the producer has neither once it closes and is reclaimed.
-> 2. **(ii) Task 5's clause-15 spelling `gh pr merge <n>` drops #178's exact-SHA binding** `--match-head-commit <handoffCommit>` (`wave-lifecycle.md:737-738`). Task 3's `renderDequeueBrief` uses the same spelling.
-> 3. **(iii) Task 4's merge deny is keyed on a wave hold,** so it has a window after the final close releases the hold and before the PR lands.
->
-> The measured facts, the recommended directions for each, and the other inputs to the re-plan are Pre-flight finding 12.
->
-> **Re-measured 2026-09-28 against main `c62e22b9`: Task 1 and Task 7's precondition are re-planned too.** CI test selection (#183, `814fc53d`) landed first and reshaped `ci.yml`: one top-level `concurrency:` block already carries the `pull_request` arm, `test-macos` already has a job-level `if:`, `probe-macos`'s event allow-list already excludes `merge_group` (pinned by `ci-pipeline.test.ts`), a `full-suite` job reds on a skipped macOS leg, and `decideMode` sends `merge_group` to `full`. Steps 4–5 as written produce duplicate `concurrency:` and `if:` keys. Two re-derivations measured green on a copy of `c62e22b9` — `merge_group` runs in `full` mode with its own run-unique group and skips the macOS legs and `full-suite`, or `merge_group` joins the `pull_request` arm of `select.mjs` and `verdict.mjs` — **The operator ruled 2026-09-28: a queue run runs the selected tests, like a PR** (the `select.mjs`/`verdict.mjs` arm), consistent with the 2026-09-23 CI ruling (selected on a PR, full daily and at the stable gate, no full run per merge); the macOS legs and `full-suite` skip a queue run either way, because a selection fallback runs `full`. Task 7's "main is green" precondition is vacuous for the same reason: a push to `main` now runs `refresh` mode, whose required jobs report success without testing; main's evidence is the daily `full` run. Task 2 still holds and its moved numbers are corrected below.
+> **Status: re-planned 2026-09-29 on `main` `6da36f0b`; ready to dispatch once wave 1 has merged.** Tasks 1 and 3–5, Task 6's PR body and counts, and Task 7's precondition and proof run were rewritten; Task 2 is unchanged but for what `6da36f0b` moved — its line hints, two more statements of the old bound, and the census (Pre-flight findings 14, 15 and 17). Why: CI test selection (#183) landed first and reshaped `ci.yml`, so Task 1 now merges into that shape, and a push to `main` no longer tests anything, so Task 7 reads main's health from a full run. Child-reclamation wave 3 (#187) reclaims a producer's workspace when its run closes, so on a native-queue project the producer now LANDS BEFORE IT CLOSES (Task 5): its run waits at `merging`, holding the child, so the dequeue lane (Task 3) still has an open run, a registry row and a `pr-state` line to read, and the merge deny (Task 4) still has a hold — and a child marker besides, for the window after any close. Every landing spelling keeps #178's `--match-head-commit <handoffCommit>`. Every count below was measured on a copy of `6da36f0b` with wave 1 applied first, from wave 1's own code blocks, then this plan's, one task at a time. It implements two operator rulings: **2026-09-23** (CI runs the selected tests on a pull request, and the full suite daily and at the stable gate; there is no full run per merge) and **2026-09-28** (a merge-queue run runs the selected tests, like a pull request).
+
+> **Fix round, 2026-09-29.** Three independent reviews of this re-plan (correctness, tests and mutations, executability) found 21 defects, one a blocker: gh 2.45 ARMS auto-merge, rather than queueing, a PR whose required checks have not passed, and prints the same success line — so a landing could stall silently at `merging` (Pre-flight finding 20). Every finding is applied. The landing rule now measures whether the project requires the queue, enqueues only once the required checks passed, reads the queue entry back, disarms what only armed and before any fix round, and covers the programme's last wave; a coordinator the hook refuses goes to the operator's shell; the hook's quote strip reads `#` comments and backslash escapes as bash does; the dequeue brief reads the queue's own CI run; three guards the plan argued for gained cases; the runbook's census fails closed and catches a held coordinator, and the proof run measures the armed path. The operator ruled the re-plan's four open questions as it defaulted (Global Constraints). Every count and mutation row the fixes touch, or could move, was re-measured on a fresh prototype built from this plan's own blocks — wave 1 first, then Tasks 1–5, one task at a time, tests before code.
+
+> **Main moved before this plan merged (checked 2026-09-29 at `cf24e4be`).** Task 1 was re-applied there from this plan's own blocks after CI selection went from shadow to enforced (#211) and the macOS shards were rebuilt (#204): every red-first and green count above reproduced (`ci-merge-queue` 4|1 then 5, `ci-pipeline` 5|34 then 39, `ci-select-cli` 2|39 then 41, `ci-verdict` 4523, `oss-metadata` 22, `ci-main-artifact` 16) and the file loads as YAML. Since `6da36f0b`, `main` has also changed `ccd/ccd` (#207, #208, #209 — exact tmux targets among them) and `server/src/watch.ts`, which Tasks 2–5 edit, and `ccd/ccrc`, which wave 1 edits. This wave dispatches only after wave 1 has merged, so the dispatching coordinator's first act is to re-measure Tasks 2–5 on the `main` it cuts the workspace from: anchors are located by content, and a count that differs with every case passing is not a red.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make this repository ready for GitHub's native merge queue and make the queue's one silent failure loud — without changing a single repository setting. `ci.yml` answers `merge_group` (so a queue entry gets its required checks), skips the two non-required macOS legs on a queue run, and cancels a superseded `pull_request` run; `ccd pr-state --project` makes ONE GraphQL query per repository per sweep, under its own timeout, and stamps every full line with an additive `queue` word (`queued | dequeued | landed | none | unmeasured`); the server turns a `dequeued` reading into a `queue` feed record and a `status` mail to the run's coordinator, once per removal — across a server restart too, and never latched as told when the read or the mail failed; the session hook DENIES `gh pr merge` to any session whose hold names a programme wave, and lets the coordinator's plain `gh pr merge <n>` (which enqueues) through; coordinator clause 15 says so. The last task is the operator's post-merge runbook: the queue ruleset, approvals to 0, R9's break-glass, and the proof run that gates wave 2b.
+**Goal:** Make this repository ready for GitHub's native merge queue, and make the queue's silent outcomes loud, without changing a single repository setting. `ci.yml` answers `merge_group`, and a queue run runs what a pull request runs — the selected server tests and every other required leg, the plain-bash pipeline check included — in a concurrency group of its own, with no macOS leg and no `full-suite`. `ccd pr-state --project` makes ONE GraphQL query per repository per sweep, under its own timeout, and stamps every full line with an additive `queue` word (`queued | dequeued | landed | none | unmeasured`). The server tells the coordinator of the open run that names the workspace both landing outcomes, once each, across a server restart too, and never latched as told when the read or the mail failed: a `dequeued` reading becomes a `queue` feed record and a `status` mail, and a merge while that run waits at `merging` becomes a `status` mail. The session hook DENIES `gh pr merge` to any session whose hold names a programme wave, and to any workspace that carries the child marker; the coordinator's `gh pr merge <n> --match-head-commit <handoffCommit>` passes and enqueues. Coordinator clause 15 and the lifecycle reference say how the coordinator lands: that spelling, no `--squash`, no `--admin`, only once the PR's required checks have passed and with its queue entry read back, and the producer lands before it closes — the last wave's too. The last task is the operator's post-merge runbook: the queue ruleset, approvals to 0, R9's break-glass, and the proof run that gates wave 2b.
 
-**Architecture:** Five mechanisms, each with a test that reds when it is deleted or mutated. (1) `ci.yml`: a `merge_group` trigger, `if: github.event_name != 'merge_group'` on every job that `runs-on: macos-*` and on no other job, and a workflow `concurrency` whose `pull_request` arm is keyed by PR number and cancels, while every other event gets a run-unique group. (2) `ccd/ccd`: `_gh_pr_queue` (one constant GraphQL document — the hundred NEWEST open PRs, `gh pr list`'s own order — `-f` variables, `PR_GH_QUEUE_TIMEOUT`), `_pr_queue_stamp` and `_pr_queue_py` — all three placed below `cmd_clip`, beneath every frozen citation anchor — wired into `cmd_pr_state` by ONE in-place line that pipes the per-session loop through the stamp; the stamp buffers the sweep and falls back to the unstamped lines on any failure of its own. The server's outer bound on `pr-state` rises 20 s → 25 s so the three calls' timeouts still leave `pr-timeout-budget.test.ts`'s 30 % for the local loop. (3) `server/src/prstate.ts`: `queueFor(line)`, the ONE reader of `queue`/`queueAt`, answering the five words plus `absent` (a line from an older ccd or from `--session`, never folded into `unmeasured`). (4) `server/src/watch.ts`: `sweepDequeued`, after `sweepMerged`, once per (workspace, PR, removal time) — an in-memory latch written only AFTER the notice landed, and a DURABLE "already told" read (`CoordStore.hasMailWithSubject`, every delivery state; `CoordStore.hasFeedEvent` for the feed-only arm) so a restart re-announces nothing; unreadable run rows defer rather than fold into "no open run" — raising a new `NotifyEvent` kind `queue` (additive; `shared/api.ts` line-neutral, `MailScreen`'s two total maps) and, only when an open run names the workspace and its coordinator resolves, `queueSystemMail(..., kind:'status', subject:'dequeued:#<n>@<queueAt>')` BEFORE the feed record, so a thrown mail is retried without a second record. (5) `ccd/session-hook.sh`: the hold grammar hoisted to ONE spelling, `CCRC_HOLD_WAVE_RE` (line-neutral), and a PreToolUse block below the graph gate that denies a command-head `gh pr merge` (quoted text removed first, in the same jq that reads the command, so a commit message or PR body that mentions it passes) when `_ct_read`'s hold is within `CCRC_HOLD_MAX` and matches that grammar; a deny replaces an `additionalContext` advisory on the same call and never replaces the graph gate's deny.
+**Architecture:** Six mechanisms, each with a test that reds when it is deleted or mutated. (1) `ci.yml` and CI selection's two modules: a `merge_group` trigger and mode-table row; `merge_group` joins the `pull_request` arm of `decideMode`, `modeInvariantViolation` (`.github/ci/select.mjs`) and `serverVerdict` (`.github/ci/verdict.mjs`); the pipeline check asks a queue run the pull request's question against `merge_group.base_sha`; ONE arm in the existing concurrency group, `queue-<run id>`, ahead of the shared `refresh` group and never cancelled; and a leading `github.event_name != 'merge_group'` conjunct on `test-macos`'s and `full-suite`'s existing `if:`. (2) `ccd/ccd`: `_gh_pr_queue` (one constant GraphQL document — the hundred NEWEST open PRs, `gh pr list`'s own order — `-f` variables, `PR_GH_QUEUE_TIMEOUT`), `_pr_queue_stamp` and `_pr_queue_py`, placed below `cmd_clip` and below ws-reap's mirror block, beneath every frozen citation anchor, wired into `cmd_pr_state` by ONE in-place line; the stamp buffers the sweep and falls back to the unstamped lines on any failure of its own. The server's outer bound on `pr-state` rises 20 s → 25 s so the three calls' timeouts still leave `pr-timeout-budget.test.ts`'s 30 % for the local loop. (3) `server/src/prstate.ts`: `queueFor(line)`, the ONE reader of `queue`/`queueAt`, answering the five words plus `absent` (a line from an older ccd or from `--session`, never folded into `unmeasured`). (4) `server/src/watch.ts`: `sweepLanding`, after `sweepMerged` — the recipient is the coordinator of the open run `survivorOf` picks from the runs that name the workspace; a `dequeued` reading is a `status` mail `dequeued:#<n>@<queueAt>` and a `queue` feed record (the record alone when no open run names it, never a guessed coordinator), and a merge while that run waits at `merging` is a `status` mail `merged:#<n>`; an in-memory latch written only after the notice landed, a DURABLE "already told" read (`CoordStore.hasMailWithSubject`, every delivery state; `CoordStore.hasFeedEvent` for the feed-only arm), unreadable run rows deferred rather than folded into "no open run", and the mail queued BEFORE the record so a thrown mail is retried without a second record. The two subjects are spelled once, in `rundefs.ts`. A new `NotifyEvent` kind `queue` is additive (`shared/api.ts` line-neutral, `MailScreen`'s two total maps). (5) `ccd/session-hook.sh`: the hold grammar hoisted to ONE spelling, `CCRC_HOLD_WAVE_RE` (line-neutral), and a PreToolUse block below wave 1's advisory that denies a command-head `gh pr merge` (backslash escapes, quoted text and `#` comments removed first, leftmost as bash reads them, in the same jq that reads the command, so a commit message, PR body or comment that mentions it passes and none of them can hide one) when `_ct_read`'s hold is within `CCRC_HOLD_MAX` and matches that grammar, or when `$REG/<id>.child` exists; a deny replaces an `additionalContext` advisory on the same call and never replaces the graph gate's deny. (6) The coordinator skill: clause 15's native-queue sentence, and `wave-lifecycle.md` §5's **Landing on a native-queue project** paragraph — measure that the project requires the queue, advance to `merging`, enqueue at the exact SHA only once the required checks passed, read the queue entry back (disarming an auto-merge that only armed), end the turn, prove the merge on `merged:#<pr>` and only then close, the last wave included (SKILL.md step 7 and §6 point at it); answer `dequeued:` from the queue's own CI run by re-enqueueing or with a fix round on `merging → working`; a coordinator the hook refuses has the operator enqueue — pinned verbatim, with every `gh pr merge` the corpus spells held to `--match-head-commit <handoffCommit>` (the exact disarm spelling excepted) and the paragraph held to the server's own two subjects and to each of those rules.
 
-**Tech Stack:** bash 5.2 (`ccd/ccd`, `ccd/session-hook.sh`), python 3.12 (the stamping pass, embedded in `ccd/ccd`), TypeScript (server, shared, pwa), GitHub Actions YAML, GitHub's GraphQL API through `gh api graphql` (gh 2.45 on the fleet box), vitest 4.1.
+**Tech Stack:** bash 5.2 (`ccd/ccd`, `ccd/session-hook.sh`), python 3.12 (the stamping pass, embedded in `ccd/ccd`), TypeScript (server, shared, pwa), Node 22 ES modules (`.github/ci/*.mjs`, dependency-free), GitHub Actions YAML, GitHub's GraphQL API through `gh api graphql` (gh 2.45 on the fleet box), vitest 4.1.
 
-**Spec:** `docs/superpowers/specs/2026-09-23-landing-order-and-main-churn-design.md` — §5.2 (stage 2: "Repository code", "Operator configuration", "Rollout order inside stage 2"), §3 R3, R5, R9, §4 (roles table: the worker and coordinator rows), §7 (wire additive, `FLEET_PROTO` stays 1, one reader per field), §9 (stage 2 lands with or after stage 1), §10 (stage 2 metrics), §12. Programme ledger: `docs/superpowers/programs/landing-order.md` (wave 2 row; carried constraints — another programme edits `ci.yml`; skill pins move with the clauses). **OUT of scope** (wave 2b, after the proof run): the every-session `--admin` deny and the `gh api` pulls-merge deny.
+**Spec:** `docs/superpowers/specs/2026-09-23-landing-order-and-main-churn-design.md` — §5.2 (stage 2: "Repository code", "Operator configuration", "Rollout order inside stage 2"), §3 R3, R5, R9, §4 (roles table: the worker and coordinator rows), §7 (wire additive, `FLEET_PROTO` stays 1, one reader per field), §9 (stage 2 lands with or after stage 1; its wave re-planned against CCR-15; CI selection's shape), §10 (stage 2 metrics), §12. Programme ledger: `docs/superpowers/programs/landing-order.md` (wave 2 row; carried constraints — CI selection landed first; skill pins move with the clauses). This plan departs from the spec's literal text in ten places, each argued where it is made and listed by slug under `## Deviations found` for the coordinator to number: the last queue act of EITHER kind (finding 3), the 25 s bound (findings 1 and 14), the eighth feed kind and the `operator` sender (finding 5), the lands-before-close rule and the landing lane's `merged:` notice (finding 12 (i), (i′)), the deny's child-marker arm (finding 12 (iii)), the pipeline check on a queue run (finding 13), the enqueue gated on the required checks and read back (finding 20), a coordinator the deny refuses enqueueing through the operator (finding 22), and the SERVER-FIRST rollout against §9's AGENT-FIRST (Global Constraints). **OUT of scope** (wave 2b, after the proof run): the every-session `--admin` deny and the `gh api` merge denies — the pulls merge endpoint and the GraphQL merge mutations (`mergePullRequest`, `enqueuePullRequest`, `enablePullRequestAutoMerge`), each measured passing this wave's deny under a wave hold.
 
-**Prerequisite:** landing-order **wave 1 has merged to `main`** — it adds coordinator clause 15 (Task 5 appends to it) and the PreToolUse sync advisory (Task 4's deny supersedes it on a shared call). This wave's workspace is a fresh child from current `main`; Task 1 Step 0 refuses to start without wave 1.
+**Prerequisite:** landing-order **wave 1 has merged to `main`** — it adds coordinator clause 15 (Task 5 appends to it) and the PreToolUse sync advisory (Task 4's deny supersedes it on a shared call). Child-reclamation wave 3 (#187) is on `main` since `1ffdf947`. This wave's workspace is a fresh child from current `main`; Task 1 Step 0 refuses to start without wave 1.
 
 ---
 
@@ -28,53 +24,61 @@
 
 Copied from `CLAUDE.md`, the spec and the programme ledger. Every task's requirements implicitly include this section.
 
-- **Deploy class for THIS wave: SERVER-FIRST, by `ccrc rollout --to <tag> --server-first`.** `CLAUDE.md`: "`--server-first` when a wave's server arm is a reader-widening". This one is: the server gains a reader for an additive field and a wider bound (`'pr-state': 25_000`) that the new ccd's third gh call needs. A new server beside the old ccd reads `absent` and stays silent; the old server beside the new ccd would kill a slow three-call sweep at the old 20 s for the minutes between the two moves. The hook ships to the fleet box with ccd and needs no server. Restated as Task 6's post-merge step.
-- **The coordinator merges, workers never do, nothing merges unattended** (spec §3 R5). Nothing in this wave enqueues, merges, re-runs or re-enqueues anything: the dequeue lane only records and mails; the hook only denies.
+- **Deploy class for THIS wave: SERVER-FIRST, by `ccrc rollout --to <tag> --server-first`.** `CLAUDE.md`: "`--server-first` when a wave's server arm is a reader-widening". This one is: the server gains a reader for an additive field and a wider bound (`'pr-state': 25_000`) that the new ccd's third gh call needs. A new server beside the old ccd reads `absent` and stays silent; the old server beside the new ccd would kill a slow three-call sweep at the old 20 s for the minutes between the two moves. The hook and the coordinator skill reach the fleet box with ccd, after the server — so by the time a coordinator reads "land before you close", the server that sends it `merged:#<pr>` is already running. Restated as Task 6's post-merge step.
+- **The coordinator merges, workers never do, nothing merges unattended** (spec §3 R5). Nothing in this wave enqueues, merges, re-runs or re-enqueues anything: the landing lane only records and mails; the hook only denies.
 - **No repository SETTING changes in any code task.** The ruleset, the approval count, bypass actors and the proof run are Task 7, the operator's, after merge. Coordinator clause 15 forbids a coordinator writing rulesets; a worker does not either.
-- **SAFETY — sacred.** NEVER run destructive `ccd` verbs against the live host (`ws-rm`, `ws-reap`, `ws-gc --prune`, `ws-archive`/`ws-restore`). NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly — Task 6's deploy checks READ the installed hook and ccd with `grep -c`, nothing more. NEVER print secret file CONTENTS. `gh` stays off the exec whitelist: `ccd` calls it on the fleet box, the PWA never can.
-- **In tests, use FIXTURE HOMEs only — never run `ccd` against the live `$HOME`.** Harness: `makeCcdHarness(prefix)` (`server/test/ccdWsHelpers.ts`) and `makePrHarness(prefix)` (`server/test/ccdPrHelpers.ts`), whose `gh` is a shell function that wins over PATH and whose base harness plants a poisoned `gh` behind it. **Every `bash` spawn in a `ccd-*.test.ts` file goes through the harness** (`h.sh`), which routes it through `ghContainedEnv(home, env, { systemd: true, tmux: true })` — `ccd-workspaces.test.ts`'s "routes EVERY bash call site in every ccd test file through ALL THREE poisons" reads the source. `session-hook-merge-deny.test.ts` runs the HOOK (not ccd) under a fixture HOME with a stub `tmux`, the way `session-hook.test.ts` does.
+- **SAFETY — sacred.** NEVER run destructive `ccd` verbs against the live host (`ws-rm`, `ws-reap`, `ws-gc --prune`, `ws-archive`/`ws-restore`). NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly — Task 6's deploy checks READ the installed hook and ccd with `grep -c`, and Task 7's census reads marker files with `test -e`, nothing more. NEVER print secret file CONTENTS (Task 7's census reads the open runs through `ccrc-api`, which never prints the token). `gh` stays off the exec whitelist: `ccd` calls it on the fleet box, the PWA never can.
+- **In tests, use FIXTURE HOMEs only — never run `ccd` against the live `$HOME`.** Harness: `makeCcdHarness(prefix)` (`server/test/ccdWsHelpers.ts`) and `makePrHarness(prefix)` (`server/test/ccdPrHelpers.ts`), whose `gh` is a shell function that wins over PATH and whose base harness plants a poisoned `gh` behind it. **Every `bash` spawn in a `ccd-*.test.ts` file goes through the harness** (`h.sh`), which routes it through `ghContainedEnv(home, env, { systemd: true, tmux: true })` — `ccd-workspaces.test.ts`'s "routes EVERY bash call site in every ccd test file through ALL THREE poisons" reads the source. `session-hook-merge-deny.test.ts` runs the HOOK (not ccd) under a fixture HOME with a stub `tmux`, the way `session-hook.test.ts` does. The CI tests run `select.mjs` and bash step scripts against fixture git repos in `mkTmp` directories, never the real Actions environment.
 - **No root `package.json`, no root runner.** Four packages, each `"type":"module"`, run cd'd in:
 
       cd server && npm ci && npm run test    # vitest run — hermetic
       cd agent  && npm ci && npm run test
       cd pwa    && npm ci && npm run test
 
+  `tsc --noEmit` over `server/src` reaches `agent/src/server.ts`, which imports `ws`: run `npm ci` in `agent/` too before any server typecheck.
 - **Single suite: `./node_modules/.bin/vitest run test/foo.test.ts` from inside the package. NEVER bare `npx vitest`.**
-- **Run suites in the FOREGROUND, timeout ≥600000ms, ONE vitest process at a time.** The server suite does not fit one 600 s call on the loaded fleet box — Task 6 runs it as twelve sequential shards whose union is every file once. Never background a suite.
-- **Known load flakes** (re-run IN ISOLATION before calling a real break): `ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`, `ccd-bounded-reads`; also `boot.test.ts`'s two p95 timing cases.
-- **Rings:** L0 `shared/*.ts` imports nothing — this wave changes two lines of `shared/api.ts` IN PLACE (the `NotifyEvent.kind` union and `NOTIFY_KINDS`) and imports nothing. `queueFor` is L1-pure (no fs, no clock). **No overloaded null at a seam:** `queueFor` answers `absent` for "nothing was asked" and `unmeasured` for "asked, not answered"; `_pr_queue_py` keeps "the call did not answer" (`None` → `unmeasured` on every line) apart from "the bound PR is not in the window" (`unmeasured` for that line only) and from "no bound PR" (`none`).
-- **Wire discipline — additive-only.** `queue` and `queueAt` are new keys on the ccd→server `pr-state` line, emitted only by `--project`, read by exactly one function (`queueFor`); absence permits. `NotifyEvent.kind` gains `queue`; an older client degrades it to `unknown` through `reviveNotifyEvent`, and an older server reads a stored `queue` row through `isNotifyKind` as `unknown`. `PrState` and `FleetSession` do NOT change. **`FLEET_PROTO` is NOT bumped.**
-- **Workflow-file safety.** Every expression this wave adds to `ci.yml` reads `github.event_name`, `github.workflow`, `github.event.pull_request.number` or `github.run_id` — none of them attacker-controlled text — and none of them appears in a `run:` line. `pull_request` stays, `pull_request_target` stays absent, `permissions: contents: read` stays (`oss-metadata.test.ts`).
-- **Mutation-table discipline:** a new guard ships WITH a test that goes RED when the guard is deleted/mutated, measured before/after. Every mutation row in this plan was run on a prototype of exactly these edits at `905360dc`, each restored from a saved COPY of the file (never `git checkout --`), and its red is quoted. The review revision re-measured at `af64d9d2` (`905360dc` plus two docs-only commits): Q1 and the new Q9 (Task 2), every Task 3 row except P1 (L1–L14, K1), every Task 4 row (H1–H14, C1, C2), and the red-first counts of `pr-queue-lane` and `session-hook-merge-deny`. The rows that depend on wave 1 (Task 4's advisory row, Task 5's clause rows) say how they were measured and what the worker re-measures.
-- **`ccd/ccd` is a provenance-STAMPED file** (line 2 is `# ccrc:generated 1 sha256=…`). **Every task that edits `ccd/ccd` re-stamps before running any suite**, or `server/test/ownership.test.ts` reds:
+- **Run suites in the FOREGROUND, timeout ≥600000ms, ONE vitest process at a time — and, while the fleet box is loaded, one test FILE per process for every task's own runs (Task 6 Step 1's whole-suite pass is the one exception: `agent` and `pwa` whole, `server` in sequential shards).** Every count in this plan was measured that way (`--maxWorkers=1`). The server suite does not fit one 600 s call on the loaded fleet box — Task 6 runs it as twelve sequential shards whose union is every file once. Never background a suite.
+- **Known load flakes** (re-run IN ISOLATION before calling a real break): `ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`, `ccd-bounded-reads`; also `boot.test.ts`'s two p95 timing cases. `tmp-sweep`'s FAILS-CLOSED case is red on the fleet box on `main` itself (pre-existing, red in isolation) — report it, do not chase it.
+- **Rings:** L0 `shared/*.ts` imports nothing — this wave changes two lines of `shared/api.ts` IN PLACE (the `NotifyEvent.kind` union and `NOTIFY_KINDS`) and imports nothing. `queueFor` is L1-pure (no fs, no clock); `dequeuedSubject`/`mergedSubject` are pure. **No overloaded null at a seam:** `queueFor` answers `absent` for "nothing was asked" and `unmeasured` for "asked, not answered"; `_pr_queue_py` keeps "the call did not answer" (`None` → `unmeasured` on every line) apart from "the bound PR is not in the window" (`unmeasured` for that line only) and from "no bound PR" (`none`); `sweepLanding` keeps "run rows unreadable" (defer) apart from "no open run" (feed-only).
+- **Wire discipline — additive-only.** `queue` and `queueAt` are new keys on the ccd→server `pr-state` line, emitted only by `--project`, read by exactly one function (`queueFor`); absence permits. `NotifyEvent.kind` gains `queue`; an older client degrades it to `unknown` through `reviveNotifyEvent`, and an older server reads a stored `queue` row through `isNotifyKind` as `unknown`. The `merged:` notice is a mail, not a new frame. `PrState` and `FleetSession` do NOT change. **`FLEET_PROTO` is NOT bumped.**
+- **Workflow-file safety.** Every expression this wave adds to `ci.yml` reads `github.event_name`, `github.run_id` or `github.event.merge_group.base_sha` — the last a commit sha GitHub sets, not text anybody writes — and none of them is interpolated into a `run:` line: the base sha reaches the pipeline check through its step's `env:` and is handed to `git` as a quoted argument. `pull_request` stays, `pull_request_target` stays absent, `permissions: contents: read` stays (`oss-metadata.test.ts`), and `main-artifact.mjs` still trusts no `merge_group` run (`TRUSTED_EVENTS` is `push`, `schedule`, `workflow_dispatch`; a queue run's branch is `gh-readonly-queue/…`, never `main`) — so a queue run can never be the stable gate's evidence or publish a map.
+- **Mutation-table discipline:** a new guard ships WITH a test that goes RED when the guard is deleted/mutated, measured before/after. Every mutation row in this plan was run on 2026-09-29 on a prototype built from `6da36f0b`, wave 1 applied from wave 1's own code blocks and this plan's tasks applied in order from THIS plan's blocks, each row restored from a saved COPY of the file (never `git checkout --`), one test file per vitest process, and its red is quoted. Task 2's rows were first measured at `905360dc`, and every row reproduced on the new base.
+- **`ccd/ccd` is a provenance-STAMPED file** (line 2 is `# ccrc:generated 1 sha256=…`). **Every task that edits `ccd/ccd` re-stamps before running any suite**, or `server/test/ownership.test.ts` reds. With wave 1 merged the re-stamp is its own verb, `ccd/ccrc restamp ccd/ccd`; the `node -e` below is the same `markGenerated`:
 
       node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; \
         const { markGenerated } = await import('./shared/mark.mjs'); \
         writeFileSync('ccd/ccd', markGenerated(readFileSync('ccd/ccd', 'utf8')))"
 
-- **The citation tax is owed by every CITED file.** `server/test/session-hook.test.ts` audits every `file:line` in two FROZEN corpus documents and `README.md`. This wave edits THREE cited files: `ccd/ccd` (Task 2), `ccd/session-hook.sh` (Task 4) and `shared/api.ts` (Task 3). The plan pays by LAYOUT: every added line in `ccd/ccd` sits below `cmd_clip` (below every frozen anchor and below both README anchors); every added line in `session-hook.sh` sits below the graph gate (below every frozen anchor and README's `ccd/session-hook.sh:2900`), and its three edits above that are line-neutral in place; `shared/api.ts`'s two edits are in place. Measured on the prototype with the instrument (see "The citation tax, mechanised"): `147 / 195 / 53 / 35`, stated == base == tree, empty composition, both corpus documents untouched — and again at `af64d9d2` with the review revision's Tasks 2–4 applied (the hook-aware instrument, both files swapped): the same four numbers, `other byFile keys moved: none`. **Nothing in `session-hook.test.ts` changes in this wave.** If the instrument shows movement, an insertion landed above an anchor — find out why before going on.
-- **The `_reg_get` census:** this wave adds NO `_reg_get` call to `ccd/ccd` (the stamp reads the line's `number`, never the registry). Task 2 runs `ccd-reg-get-census.test.ts` to prove it.
-- **Locate code by CONTENT.** Line numbers are "at `905360dc`" and are hints, never addresses. Wave 1 edits `session-hook.sh`, both skills and their pins; CI test selection (spec on `ws/ccrc-ci-runs-optimization`) reshapes `ci.yml`; centralised-update-management and child-reclamation are live against `ccd/ccd`.
-- **Every forecast number is "at `905360dc`"** (`origin/main` `a3a93b41` plus the two approved specs and the programme ledgers). Where the base has moved, a different line number or test total with every case PASSING is not a red — the instrument's output is the authority and the difference goes in the commit message. Stop only on a FAILING case or a moved census composition you cannot explain.
+- **The citation tax is owed by every CITED file.** `server/test/session-hook.test.ts` audits every `file:line` in two FROZEN corpus documents and `README.md`. This wave edits THREE cited files: `ccd/ccd` (Task 2), `ccd/session-hook.sh` (Task 4) and `shared/api.ts` (Task 3). The plan pays by LAYOUT: every added line in `ccd/ccd` sits below `cmd_clip` and below ws-reap's mirror block (below every frozen anchor and below both README anchors); every added line in `session-hook.sh` sits below the graph gate and wave 1's advisory (below every frozen anchor and README's `ccd/session-hook.sh:2900`), and its three edits above that are line-neutral in place; `shared/api.ts`'s two edits are in place. Measured 2026-09-29 on the prototype with the instrument after each of Tasks 2 and 4 (see "The citation tax, mechanised"): every `byFile` key stated == base == tree (`ccd/ccd` 148 … `shared/api.ts` 1), total 196, the `|`-row array 53 and the site array 36, every composition empty; the citation cases `7 passed | 328 skipped (335)` after every task. (#187 moved the base from `147 / 195 / 53 / 35` to `148 / 196 / 53 / 36`; this wave moves nothing.) **Nothing in `session-hook.test.ts` changes in this wave.** If the instrument shows movement, an insertion landed above an anchor — find out why before going on.
+- **The `_reg_get` census:** this wave adds NO `_reg_get` call to `ccd/ccd` (the stamp reads the line's `number`, never the registry; the hook reads `.child` with a bare `-e`, never through ccd). Task 2 runs `ccd-reg-get-census.test.ts` to prove it.
+- **Locate code by CONTENT.** Line numbers are "at `6da36f0b`" (with wave 1 applied where the file is one wave 1 edits) and are hints, never addresses.
+- **Every forecast number is "at `6da36f0b` with wave 1 applied".** Where the base has moved, a different line number or test total with every case PASSING is not a red — the instrument's output is the authority and the difference goes in the commit message. Stop only on a FAILING case or a moved census composition you cannot explain.
 - **Shell state does not survive between Bash calls.** Every block that names `$SCRATCH` sets it itself; `SCRATCH=<…>` means "paste your own session's scratchpad, as an ABSOLUTE path". Never run half a block.
 - **Branch discipline:** commit on this workspace's own branch only; never a separate feature branch (a feature branch wedges every close with `stale-tip`). One commit per task.
 - **Commit trailers:** end every commit message with the attribution line your own session is given. The heredocs below end at the body for that reason.
 - **No hostnames, IPs, tailnet names, docserver URLs, account names or the GitHub owner's name** anywhere in a committed file (`topology-clean.test.ts`). Task 7's commands say `{owner}/{repo}`, which `gh api` fills in from the checkout it runs in.
 - **`## Deviations found` numbers are ISSUED, never chosen** — see that section at the foot of this plan.
-- **Cross-programme: CI test selection reshapes `ci.yml`.** Whichever PR lands second MERGES the other's shape rather than overwriting it (programme ledger, carried constraint 1). This wave's three `ci.yml` edits are written to survive that design as specified: its PR concurrency group has the same name (`ci-<workflow>-pr-<number>`, its §4.3); its "no job-level `if:` on a matrix that carries a required name" (§4.2) is kept, because the only `if:` added here is on non-required macOS jobs; its macOS shard jobs will be `runs-on: macos-*` and so fall under `ci-merge-queue.test.ts`'s derived rule without that test learning their names. What that programme must ADD if it lands second: a `merge_group` row in its mode table (§3) that runs every required leg, and a `merge_group` arm in its summary job's success rule (§4.2). If it lands FIRST, this wave keeps its per-mode groups and adds only a run-unique group for `merge_group`, then re-words `ci-merge-queue.test.ts`'s third case to assert that arm.
+- **Cross-programme: CI test selection LANDED FIRST (#183, `814fc53d`), so this wave merges INTO its shape and overwrites none of it** (programme ledger, carried constraint 1). What `main` already has: ONE top-level `concurrency:` block whose `pull_request` arm is `ci-<workflow>-pr-<number>` and cancels — a second block would be a duplicate key, invalid YAML that `ci-pipeline.test.ts`'s `section()` cannot see because it reads the first (Task 1's test refuses a second, and Step 7 loads the file with a duplicate-key loader); a job-level `if:` on `test-macos`; an event ALLOW-list on `probe-macos` (`pull_request || schedule`, pinned `toBe`), which already keeps a queue run out and is not edited; `full-suite`, `full` mode only, which needs `test-macos` and reds on a skipped leg; and `decideMode`, whose SAFE fallthrough answers an unlisted event — `merge_group` — `full / none`. The operator ruled on 2026-09-28 that a queue run runs the SELECTED tests, like a pull request, so `merge_group` joins the `pull_request` arm; a queue run keeps a run-unique group (never the shared push-to-main `refresh` group, which may drop pending runs); the macOS legs and `full-suite` skip a queue run (a `selected` run falls back to `full` on any selection fallback, and `full-suite` would read the skipped macOS leg as red). No job a required check needs mentions `merge_group`, but for the pipeline check's own step. The 2026-09-23 ruling stands: no full run per merge.
+- **Cross-programme: child-reclamation.** Wave 3 (#187) is on `main`: a close that finishes with a child (a `final` close, an abandon, a spent child's close, a close that retires the programme) releases it and queues its reclaim, which removes the pane, the worktree, the branch and — last — the registry row. That is why Task 5 has a producer land before it closes, and why Task 4's deny also keys on the child marker. Wave 4 (`docs/superpowers/plans/2026-09-22-child-reclamation-wave4-sweep-and-switch.md`, dispatched as run 174) edits four files this wave also edits: `server/src/watch.ts` (imports, fields beside `private coord`, `sweepChildReclaim`, one `tick()` dispatch — none adjacent to this wave's), `shared/api.ts` (an insertion ABOVE README's `shared/api.ts` anchors, whose S6-R11 tax re-measures the census's `'shared/api.ts'` entry and total — this wave's two edits are in place and move nothing, but if wave 4 lands first the census numbers here are read from the base, never from this plan), `server/test/coordinator-skill.test.ts` (`EXEMPT` and one forbid-mention case after `never names the caps dial`) and `server/test/single-definition.test.ts` (one `describe`). Whichever lands second keeps both sides; `coordinator-skill`'s count then reads 153 plus wave 4's case. Wave 4's sweep refuses a held child (`held`), so a producer waiting at `merging` is safe from it as it is from the close.
+- **Cross-programme: centralised update management.** Waves 4, 5 and 7 (#181, #201, #203) moved `server/src/coord/store.ts`, `shared/api.ts` and `server/src/watch.ts` by thousands of lines; this plan locates every edit in them by content, and the line hints are `6da36f0b`'s.
+- **Operator rulings, 2026-09-29** (each the re-plan's default): (1) an INDEPENDENT wave N+1 still dispatches only after wave N closes — §5's order stands, and on a native-queue project the queue's latency, about one queue CI run, is accepted; (2) the `merged:#<n>` wake-up mail ships in this wave (finding 12 (i′)); (3) the 2026-09-24 ruling of 25 s for both `pr-state` modes stands, and with it the close's ~50 s worst case against the 30 s client timeout (finding 14) — Task 2 rewrites the four statements of the old bound; (4) if the proof run's enqueue is refused because the repository has `allow_auto_merge: false`, stop rule 4 halts the proof and the operator decides then — no task changes that setting.
 
 ---
 
 ## Review Focus
 
-Six inputs or failure modes the spec implies and nothing on `main` tests. Each is given a test in its owning task, and each test has a mutation row that reds it.
+Ten inputs or failure modes the spec implies and nothing on `main` tests. Each is given a test in its owning task, and each test has a mutation row that reds it.
 
-1. **A required leg skipped on a queue run reads as PASSING.** GitHub reports a job skipped by `if:` as success, so an `if: github.event_name != 'merge_group'` on `test` or `build-pwa` would let the queue merge a tree nobody tested. → Task 1, case "skips merge_group on every macOS job, and on no other job"; row M3.
-2. **A shared concurrency group drops runs the queue needs.** GitHub keeps ONE pending run per group and cancels the older pending one even with `cancel-in-progress: false`; a group shared by `merge_group` runs (or by `push` runs on `main`) would cancel another entry's checks or a merge's post-merge run. → Task 1, case "cancels a superseded pull_request run and nothing else"; rows M4, M5.
-3. **The queue read must never cost the rows, and must never say `none` for a read that did not happen.** A failed call, an answer of the wrong shape, and a stamping pass that itself fails each leave `phase`, `number`, `rows` and `checks` exactly as `_pr_state_one` printed them. → Task 2, describe "the queue read may not cost the rows"; rows Q5, Q6.
-4. **No evidence, no notice — and no guessed recipient.** A line from an older ccd, a `--session` line, and an `unmeasured` read never produce a dequeue notice; a dequeued PR whose workspace no open run names is recorded in the feed and mailed to NOBODY, even when `resolveCoordinator(null)` would answer the one active programme's coordinator. → Task 3, cases "says nothing for…" and "with no open run…"; rows L5, L6, L7.
-5. **The deny holds at every parseable command head — reserved words, grouping and wrappers included — never fires on a QUOTED mention (a commit message, a PR body, a grep pattern), and never treats a hold that is not a whole, readable wave hold as one.** What it cannot parse is stated in its header, not hidden. → Task 4, cases "refuses every spelling…", "leaves every other gh…", "lets a hold that names no programme wave through…"; rows H2–H7, H9–H14.
-6. **One notice per removal — across a restart, and never lost to a failure.** The latch is in memory and a rollout restarts the server, while `queueSystemMail`'s dedupe sees only OUTSTANDING mail: without a durable read an acked notice is mailed again after every restart, and a PR can sit dequeued through a whole fix round. And a latch set before the read or the mail turns a transient `run-unreadable` or a thrown `database is locked` into a removal nobody hears about. → Task 3, describe "the dequeue lane latches only what it told"; rows L3, L9–L13.
+1. **A required leg skipped on a queue run reads as PASSING.** GitHub reports a job skipped by `if:` as success, and a matrix whose every STEP skips (`CCRC_LEG: skip`) reports green having run nothing — so a `merge_group` mention anywhere in a required leg's closure (`server`, `select`, `server-shard`, `server-typecheck`, `test`, `build-pwa`) would let the queue merge a tree nobody tested. → Task 1, case "keeps every macOS job, and every job that needs one, off a queue run — and no required prerequisite mentions merge_group" (derived: macOS jobs from `runs-on`, the required closure from `needs:`); rows M8, M9.
+2. **A shared or cancellable concurrency group drops runs the queue needs.** GitHub keeps ONE pending run per group and cancels the older pending one even with `cancel-in-progress: false`; a queue run in the shared `refresh` group, or in any group another run can share, would lose its checks and the queue would remove the entry. → Task 1, case "gives a queue run a concurrency group of its own, and never cancels one"; rows M2–M4.
+3. **A pull request choosing its own queue run's tests.** A queue run runs the selected tests (ruling 2026-09-28), and the selector is code in the pull request; the plain-bash pipeline check is what forces a pipeline-changing PR to run everything, and it was `pull_request`-only. → Task 1, `ci-pipeline`'s "runs on pull_request and on merge_group…" and "a merge-queue run asks it too, against the base sha…"; rows M14, M15. And the selector and the verdict may never disagree about which triggers can answer `tests: none` → the agreement case; rows M11–M13.
+4. **The queue read must never cost the rows, and must never say `none` for a read that did not happen.** A failed call, an answer of the wrong shape, and a stamping pass that itself fails each leave `phase`, `number`, `rows` and `checks` exactly as `_pr_state_one` printed them. → Task 2, describe "the queue read may not cost the rows"; rows Q5, Q6.
+5. **No evidence, no notice — and no guessed recipient.** A line from an older ccd, a `--session` line, and an `unmeasured` read never produce a dequeue notice; a dequeued PR whose workspace no open run names is recorded in the feed and mailed to NOBODY, even when `resolveCoordinator(null)` would answer the one active programme's coordinator; with two open runs on a workspace the recipient is the close's own survivor. → Task 3, cases "says nothing for…", "with no open run…", "names the survivor…"; rows L5, L6, L15.
+6. **One notice per removal, and one per merge — across a restart, and never lost to a failure.** The latch is in memory and a rollout restarts the server, while `queueSystemMail`'s dedupe sees only OUTSTANDING mail: without a durable read an acked notice is mailed again after every restart. And a latch set before the read or the mail turns a transient `run-unreadable` or a thrown `database is locked` into a removal nobody hears about. → Task 3, describe "the landing lane latches only what it told"; rows L3, L9–L13, L17. The merged notice has the same two guards — an unreadable run row defers, and the latch follows the mail — and a dequeue's record ignores the presence gate, so an operator watching the pane cannot erase a removal's only record → the merged defer-and-retry case and the presence case; rows L19–L21.
+7. **A coordinator that enqueued and ended its turn, woken by nothing.** A queue merge is asynchronous and the coordinator never polls (clause 7). The `merged:#<n>` mail is its wake-up, and only a run that waits at `merging` — the coordinator's own declaration that it is landing — asks for it. → Task 3, describe "the landing lane — a merge while the run waits at merging"; rows L16, L17. And the premise that makes the lane reach a PR at all — the producer lands BEFORE it closes, so the reclaim cannot take its row, its line and its worker — is the coordinator's rule → Task 5's landing case; rows S7, S8. And the enqueue itself: gh 2.45 ARMS auto-merge, rather than queueing, a PR whose required checks have not passed, with the same success line — the PR reads `none` and the lane is silent (finding 20) — so the coordinator measures that the project requires the queue, enqueues only once `gh pr checks <pr> --required` exits 0 — waiting for pending checks in the foreground (`--watch`), never by ending its turn, since no mail comes when checks finish — reads the queue entry back, disarms what only armed and before any fix round, and lands the LAST wave before its close too → the same case; rows S9–S14 and S18. A dequeue's why is the queue's own run, not the PR head's checks, which can read green (finding 23) → rows L22, S16.
+8. **The deny holds at every parseable command head — reserved words, grouping and wrappers included — never fires on a QUOTED mention (a commit message, a PR body, a grep pattern), never treats a hold that is not a whole, readable wave hold as one, and still holds after a close released the hold but before the reclaim took the pane.** What it cannot parse is stated in its header, not hidden. → Task 4, cases "refuses every spelling…", "leaves every other gh…", "lets a hold that names no programme wave through…", "refuses a released child…", "a child marker that cannot be read…"; rows H2–H7, H9–H16. A `#` comment or a backslash-escaped quote may not open a quoted span that swallows a live merge after it (finding 21) → rows H18, H19; and a merge deny never replaces the graph gate's counted deny (D-1689) → the graph-gate case; row H17.
+9. **A landing spelling that drops the exact-SHA binding.** #178 put `--match-head-commit <handoffCommit>` into the coordinator's merge for the merge proof; nothing on `main` pins it (`grep -rn match-head-commit server/test` finds nothing). → Task 5's derived case over every `gh pr merge` the coordinator corpus spells, and Task 3's brief case; rows S2–S4, L18. Its one exemption, the disarm spelling `gh pr merge <pr> --disable-auto`, merges nothing — and is exempt ONLY in exactly that spelling → row S17.
+10. **A coordinator the deny refuses.** A self-claimed run's hold, or a reclaim heir's hold and marker, look like a worker's to the hook (finding 22). Closing to shed them would reclaim the coordinator's own pane, so the paragraph sends it to the operator's shell → Task 5's landing case; row S15; and Task 7 Step 1's census stops on either shape, and on a read of the open runs that did not answer.
 
 ---
 
@@ -82,57 +86,86 @@ Six inputs or failure modes the spec implies and nothing on `main` tests. Each i
 
 | File | Created / Modified | Its one responsibility |
 |---|---|---|
-| `.github/workflows/ci.yml` | Modify — `merge_group:` in `on:`; a top-level `concurrency:` block; `if:` on `test-macos` and `probe-macos` (Task 1) | The queue gets its required checks; macOS stays off queue runs; a superseded PR run stops |
-| `server/test/ci-merge-queue.test.ts` | Create (Task 1) | The three `ci.yml` properties, read from the file, the macOS set derived from `runs-on` |
-| `ccd/ccd` | Modify — `PR_GH_QUEUE_TIMEOUT`, `PR_QUEUE_QUERY`, `_gh_pr_queue`, `_pr_queue_stamp`, `_pr_queue_py` inserted between `cmd_clip` and the source guard; ONE line of `cmd_pr_state` in place; two length-neutral prose rewrites (the outer-bound paragraph, `cmd_pr_state`'s budget header) (Task 2) | The third `--project` call and the `queue`/`queueAt` stamp |
-| `server/src/remote/runner.ts` | Modify — `'pr-state': 20_000` → `25_000`, its comment (the three calls, and the two `--session` consumers that wait on the same key) and `ws-rename`'s (Task 2) | The outer bound the three calls fit inside |
-| `server/src/coord/childSpent.ts` | Modify — ONE docstring line in place: `pr-state`'s `20 s` remote budget → `25 s` (Task 2) | States the bound `childSpent`'s live gh round trip waits on |
-| `server/src/coord/routes.ts` | Modify — ONE comment line in place, in `POST /api/runs`'s rule-3 gate: `pr-state`'s `20 s` budget → `25 s` (Task 2) | States what `childBindGate` can cost inside `coordMutex` |
+| `.github/workflows/ci.yml` | Modify — a `merge_group` mode-table row; `merge_group:` in `on:`; ONE arm in the existing `concurrency.group`; the pipeline check's `if:` and `BASE`; a leading skip conjunct on `test-macos`'s and `full-suite`'s existing `if:` (Task 1) | The queue gets its required checks from a pull request's run; macOS and `full-suite` stay off a queue run; a queue run's group is its own |
+| `.github/ci/select.mjs` | Modify — `decideMode`'s rule 1 and `modeInvariantViolation`'s first arm take `merge_group`, with their docstring (Task 1) | A queue run is selected like a pull request, and never answers `tests: none` |
+| `.github/ci/verdict.mjs` | Modify — `serverVerdict`'s `tests: none` arm refuses `merge_group`, with its docstring (Task 1) | `test (server)` is red on a queue run that tested nothing |
+| `CLAUDE.md` | Modify — one sentence in the **What CI runs** bullet (Task 1) | Says what a queue run runs |
+| `server/test/ci-merge-queue.test.ts` | Create (Task 1) | Five properties, derived from `ci.yml` and the two modules |
+| `server/test/ci-pipeline.test.ts` | Modify — the pipeline step's `if:`/`BASE` pin, its three `runStep` environments, one queue case, the `full-suite` `if:` pin (Task 1) | CI selection's shape pins, moved with the shape |
+| `server/test/ci-select-cli.test.ts` | Modify — one invariant case, one CLI case (Task 1) | `merge_group` through the real CLI |
+| `server/test/ci-verdict.test.ts` | Modify — `EVENTS`, the oracle, one named case (Task 1) | The exhaustive table crosses `merge_group` |
+| `ccd/ccd` | Modify — `PR_GH_QUEUE_TIMEOUT`, `PR_QUEUE_QUERY`, `_gh_pr_queue`, `_pr_queue_stamp`, `_pr_queue_py` inserted directly above the source guard (below ws-reap's mirror block); ONE line of `cmd_pr_state` in place; two length-neutral prose rewrites (the outer-bound paragraph, `cmd_pr_state`'s budget header) (Task 2) | The third `--project` call and the `queue`/`queueAt` stamp |
+| `server/src/remote/runner.ts` | Modify — `'pr-state': 20_000` → `25_000`, its comment (the three calls, and every consumer that waits on the same key inside `coordMutex`) and `ws-rename`'s (Task 2) | The outer bound the three calls fit inside |
+| `server/src/coord/childSpent.ts` | Modify — TWO docstring lines in place: `pr-state`'s `20 s` remote budget → `25 s` (Task 2) | States the bound `childSpent`'s live gh round trip waits on |
+| `server/src/coord/routes.ts` | Modify — ONE comment line in place, in `POST /api/runs`'s rule-3 gate: `20 s` → `25 s` (Task 2) | States what `childBindGate` can cost inside `coordMutex` |
+| `server/src/coord/close.ts` | Modify — TWO docstring lines in place, `childGateAtClose`'s: `~40 s` → `~50 s`, `20 s` → `25 s` (Task 2) | States what the close's two reads can cost |
 | `server/test/remote-runner.test.ts` | Modify — the `pr-state` row and its comment (Task 2) | The new bound, pinned |
 | `server/test/pr-timeout-budget.test.ts` | Modify — header, the budget sums THREE timeouts (Task 2) | The cross-language budget |
 | `server/test/ccd-pr-queue.test.ts` | Create (Task 2) | One call per sweep, `-f` variables, its own timeout, the five words, and "may not cost the rows" |
 | `server/src/prstate.ts` | Modify — `CcdPrLine.queue`/`queueAt` (raw), `PR_QUEUE_MAP`, `PrQueue`, `PrQueueRead`, `queueFor` (Task 3) | The ONE reader of the new fields |
-| `server/src/watch.ts` | Modify — import, `prQueues`, `dequeuedNotified`, one line in `sweepPr`'s full-line arm, one call after `sweepMerged`, `sweepDequeued`, `dequeuedSubject`, `renderDequeueBrief` (Task 3) | The dequeue lane |
-| `server/src/coord/store.ts` | Modify — two reads: `hasMailWithSubject` after `hasOutstandingMail`, `hasFeedEvent` after `feedEvents` (Task 3) | The dequeue lane's durable "already told" |
-| `server/src/coord/rundefs.ts` | Modify — the `operator` sender gloss; `queueSystemMail`'s caller list (Task 3) | Says who raises the dequeue notice |
+| `server/src/coord/rundefs.ts` | Modify — the `operator` sender gloss; `queueSystemMail`'s caller list, all seven named; `dequeuedSubject`, `mergedSubject` (Task 3) | Who raises the landing notices, and their one spelling each |
+| `server/src/watch.ts` | Modify — two imports, `prQueues`, `landingNotified`, one line in `sweepPr`'s full-line arm, one call after `sweepMerged`, `sweepLanding`, `renderDequeueBrief` (why from the queue's own run; disarm before a fix round), `renderMergedBrief` (Task 3) | The landing lane |
+| `server/src/coord/store.ts` | Modify — two reads: `hasMailWithSubject` after `hasOutstandingMail`, `hasFeedEvent` after `feedEvents` (Task 3) | The lane's durable "already told" |
 | `shared/api.ts` | Modify — two lines IN PLACE: `NotifyEvent.kind` and `NOTIFY_KINDS` gain `'queue'` (Task 3) | The eighth feed kind |
 | `pwa/src/screens/MailScreen.tsx` | Modify — `KIND_WORD`/`KIND_GLYPH` gain `queue` (Task 3) | The two total maps name it |
 | `pwa/test/mail-screen.test.tsx` | Modify — one `it` after the coord-kind one (Task 3) | The word and glyph actually render |
-| `server/test/pr-queue-lane.test.ts` | Create (Task 3) | `queueFor`'s answers; the lane's once-per-removal feed record and mail, its silences; a deferred read, a thrown mail, a restart |
-| `ccd/session-hook.sh` | Modify — `CCRC_HOLD_WAVE_RE` (line-neutral), `_hook_hold_card`'s gate reads it (in place), the class note (in place), the deny block above the subagent block (Task 4) | The worker merge deny |
+| `server/test/pr-queue-lane.test.ts` | Create (Task 3) | `queueFor`'s answers; both notices, once each, and their silences; the survivor; a deferred read, a thrown mail, a restart — on both arms; the record under the presence gate |
+| `ccd/session-hook.sh` | Modify — `CCRC_HOLD_WAVE_RE` (line-neutral), `_hook_hold_card`'s gate reads it (in place), the class note (in place), the deny block below wave 1's advisory, above the subagent block; its jq strips backslash escapes, quoted spans and `#` comments (Task 4) | The worker merge deny, hold arm and marker arm |
 | `server/test/run-routes.test.ts` | Modify — the hold-grammar pin reads the hoisted spelling (Task 4) | One grammar, pinned where it is assigned |
-| `server/test/session-hook-merge-deny.test.ts` | Create (Task 4) | The deny's refusals and its passes |
-| `ccd/coordinator-skill/SKILL.md` | Modify — clause 15 gains one sentence (Task 5) | Landing on a native-queue project is `gh pr merge <n>`, no `--admin` |
-| `server/test/coordinator-skill.test.ts` | Modify — `CONTRACT`'s clause-15 element gains the same sentence (Task 5) | The clause stays pinned verbatim |
+| `server/test/session-hook-merge-deny.test.ts` | Create (Task 4) | The deny's refusals and its passes; the graph gate's counted deny kept |
+| `ccd/coordinator-skill/SKILL.md` | Modify — clause 15 gains one sentence; step 6's **Clean** arm gains one pointer sentence; step 7 gains the last wave's (Task 5) | The landing spelling, and "land before you close", the last wave's too |
+| `ccd/coordinator-skill/references/wave-lifecycle.md` | Modify — §5 step 3: the #178 merge sentence names the queue landing; the **Landing on a native-queue project** paragraph; §6 opens with the last wave's landing (Task 5) | How the coordinator lands — the queue measured, the required checks green, the entry read back, an armed request disarmed — answers both notices, and lands the last wave; what a coordinator the hook refuses does |
+| `server/test/coordinator-skill.test.ts` | Modify — `CONTRACT`'s clause-15 element gains the same sentence; the `rundefs.js` import; two cases (Task 5) | The clause stays pinned verbatim; every merge spelling binds the SHA (the exact disarm spelling excepted); the paragraph names the server's subjects and each landing rule; step 7 and §6 point at it |
 
-**Not modified, deliberately:** `agent/src/whitelist.ts` (the `['pr-state','--project']` grant already carries this verb; no new argv), `server/src/ccdargv.ts` (no new argv form), `release-main.yml` (tags per push; the proof run measures whether that is per merge), `README.md` (it documents neither the pr-state calls nor the feed kinds — measured, `grep -n "gh call\|rollup\|feed kind" README.md` finds nothing this wave makes stale), every ruleset and repository setting (Task 7, the operator's), the worker skill (wave 1 owns clause 16), `CLAUDE.md`.
+Eighteen shipped files (`CLAUDE.md` and the two skill documents among them) and twelve test files, four of them new.
+
+**Not modified, deliberately:** `agent/src/whitelist.ts` (the `['pr-state','--project']` grant already carries this verb; no new argv), `server/src/ccdargv.ts` (no new argv form), `.github/ci/main-artifact.mjs` (it already trusts no `merge_group` run), `probe-macos`'s `if:` (its allow-list already keeps a queue run out, and `ci-pipeline.test.ts` pins it `toBe`), `select.mjs`'s macOS budget line (no job reads the macOS matrix on a queue run, so an edit would carry no test that could red), `release-main.yml` (tags per push; the proof run measures whether that is per merge), `README.md` (it documents neither the pr-state calls, the feed kinds nor CI's modes — measured, `grep -n "gh call\|rollup\|feed kind\|merge_group\|full-suite" README.md` finds nothing this wave makes stale), the RUN state machine (`awaiting-review → merging → closing` and `merging → working` exist; `merging` is IDLE and holds no dispatch slot — `coord-store.test.ts`: "merging: the coordinator's wait"), every ruleset and repository setting (Task 7, the operator's), the worker skill (wave 1 owns clause 16; the worker's R5 is the hook's), the reviewer skill.
 
 ---
 
 ## Pre-flight findings (measured while planning; not deviations)
 
-Each was measured on a prototype of this plan's exact edits in an isolated worktree at `905360dc`. They are why the tasks look the way they do.
+Findings 1–11 were measured on a prototype of this plan's first edits in an isolated worktree at `905360dc`, and each that states a count reproduced at `6da36f0b`; findings 12–19 were measured on 2026-09-29 on a prototype built from `6da36f0b`, wave 1 applied first from its own blocks and this plan's tasks after it from this plan's blocks; findings 20–25 were measured by the three reviews of that re-plan the same day, and re-measured on the fix round's prototype. They are why the tasks look the way they do.
 
-1. **The existing budget has no room for a third call.** `pr-timeout-budget.test.ts` requires the gh timeouts to sum to at most 70 % of `CCD_VERB_TIMEOUT_MS['pr-state']`: `8 + 5 = 13 ≤ 14` at 20 s, so a third call could have at most 1 s. The queue query measured 0.72–1.39 s, so 1 s is not a bound. The plan raises the outer bound to 25 s and gives the call 4 s: `8 + 5 + 4 = 17 ≤ 17.5`. Row B1 (bound back at 20) reds with `the three gh calls (8s + 5s + 4s) leave only 3s of the 20s pr-state bound … expected 17 to be less than or equal to 14`. **RULED 2026-09-24 (the orchestrator, option a): 25 s for BOTH `pr-state` modes.** The map is keyed by the verb alone (`server/src/remote/runner.ts:115`, `CCD_VERB_TIMEOUT_MS[args[0] ?? '']`), so `--session`, which makes one gh call, rises with `--project`. Measured at `65c5bb34`: `verifyDone`'s `--session` read has waited inside `coordMutex` since 2026-08 (at close, `server/src/coord/close.ts:283` under `routes.ts:1535`'s `coordMutex.run`; at advance, `routes.ts:1774` inside `:1723`'s), so all of them rise to 25 s; #178 added two MORE waits — `childSpent` calls it (`server/src/coord/childSpent.ts:116`, `CCD_ARGV.prStateSession`) through `childBindGate`, which `POST /api/runs` awaits (`server/src/coord/routes.ts:1356`, inside the `coordMutex.run` at `:1187`) and dispatch's resume arm awaits (`server/src/coord/dispatch.ts:729`, inside `routes.ts:1511`'s `coordMutex.run(() => dispatchRun(…))`) — and it stated the old bound as a fact twice (`childSpent.ts:103`, `routes.ts:1351`). Task 2 Step 7 names both consumers in the runner comment and rewrites both statements in place.
+1. **The existing budget has no room for a third call.** `pr-timeout-budget.test.ts` requires the gh timeouts to sum to at most 70 % of `CCD_VERB_TIMEOUT_MS['pr-state']`: `8 + 5 = 13 ≤ 14` at 20 s, so a third call could have at most 1 s. The queue query measured 0.72–1.39 s, so 1 s is not a bound. The plan raises the outer bound to 25 s and gives the call 4 s: `8 + 5 + 4 = 17 ≤ 17.5`. Row B1 (bound back at 20) reds with `the three gh calls (8s + 5s + 4s) leave only 3s of the 20s pr-state bound … expected 17 to be less than or equal to 14`. **RULED 2026-09-24 (the orchestrator, option a): 25 s for BOTH `pr-state` modes.** The map is keyed by the verb alone (`server/src/remote/runner.ts:115`, `CCD_VERB_TIMEOUT_MS[args[0] ?? '']`), so `--session`, which makes one gh call, rises with `--project`. Measured at `65c5bb34`: `verifyDone`'s `--session` read has waited inside `coordMutex` since 2026-08 (at close, `server/src/coord/close.ts:283` under `routes.ts:1535`'s `coordMutex.run`; at advance, `routes.ts:1774` inside `:1723`'s), so all of them rise to 25 s; #178 added two MORE waits — `childSpent` calls it (`server/src/coord/childSpent.ts:116`, `CCD_ARGV.prStateSession`) through `childBindGate`, which `POST /api/runs` awaits (`server/src/coord/routes.ts:1356`, inside the `coordMutex.run` at `:1187`) and dispatch's resume arm awaits (`server/src/coord/dispatch.ts:729`, inside `routes.ts:1511`'s `coordMutex.run(() => dispatchRun(…))`) — and it stated the old bound as a fact twice (`childSpent.ts:103`, `routes.ts:1351`). Task 2 Step 7 names both consumers in the runner comment and rewrites both statements in place. **Since #187 there is a third consumer and two more statements** — finding 14.
 2. **The query, measured read-only against this project's own public repository** (`gh api graphql`, no mutation; the owner is not written here): the single-window form (`first: 100, states: [OPEN, MERGED], orderBy UPDATED_AT`) answered in 2.13–2.69 s over four runs; the two-window form this plan ships (100 OPEN, the 20 most recently updated MERGED) answered in 0.72–1.39 s over five runs, rc 0, `{open: 11 nodes, merged: 20 nodes}`, every node carrying `number`, `state`, `mergeQueueEntry` (null — no queue exists yet) and `timelineItems` (empty). So the schema accepts every field the query names. Re-measured at review with the open window ordered `CREATED_AT DESC` (the form this plan now ships): 0.74–1.12 s over five runs, rc 0, `{open: 12, merged: 20}`, the open numbers newest-first. `gh pr list` itself orders `CREATED_AT DESC` (read from gh 2.45's embedded `pullRequests(… orderBy: {field: CREATED_AT, direction: DESC})` query), so every open PR `_gh_pr_list`'s `--state all --limit 100` window can bind is inside the queue read's hundred.
 3. **The spec's "last `REMOVED_FROM_MERGE_QUEUE_EVENT`" alone is ambiguous** for a MERGED PR: "dequeued, re-enqueued, landed" and "dequeued, then merged by hand" both have a removal and no entry. The query asks for the last queue act of EITHER kind (`timelineItems(last: 1, itemTypes: [ADDED_…, REMOVED_…])`). Pinned by the case "none — a MERGED PR whose last queue act is a removal was merged BY HAND"; row Q4 (`MERGED` alone reads as landed) reds it.
 4. **`GH_STUB` answers every `gh` call with the rows**, so every existing `ccd-pr-state.test.ts` case now meets a list where the GraphQL object should be. `_pr_queue_py` reads that as "not the query's shape" → `unmeasured`, and the existing suite stays green: `ownership` + `ccd-pr-state` 113/113 on the prototype. No existing test asserted an exact line object or a call count that the third call moves.
 5. **`NotifyEvent.kind` is closed and `MailScreen`'s `KIND_WORD`/`KIND_GLYPH` are TOTAL `Record`s**, so a new kind is a compile error until both name it, and at runtime a missing entry renders NOTHING (the coord-kind precedent's measured note). `watch.ts`'s `tellSender` comment argues for reusing a kind to avoid that edit; a dequeue fits none (`merged` would render "merged" beside a PR that did not merge; `mail` is what the coordinator's notice already records). So `queue` is the eighth kind, and `shared/api.ts`'s two edits are made IN PLACE so its cited lines do not move.
 6. **`run-routes.test.ts` pins the hook's hold grammar INLINE** (`'[[ "$h" =~ ^program:[A-Za-z0-9._-]+\' \'wave:…'`). A second inline spelling in the deny would be the drift the single-definition doctrine forbids and that pin could not see, so the grammar is hoisted to `CCRC_HOLD_WAVE_RE`, the card reads it, the deny reads it, and the pin moves to the assignment (rows C1, C2). The assignment sits in the constants block that runs before the event `case`, so the card never reads it unset; the paragraph above it is rewrapped so the block stays exactly fifteen lines.
 7. **The hook runs under `set -u`.** A first mutation that deleted the hold predicate outright crashed the hook (`$CT_V` unbound → exit 1) — a red for the wrong reason. Row H2 is therefore spelled "the hold is read, never judged", which reds on the assertion it names.
-8. **The citation census does not move**: `147 / 195 / 53 / 35`, stated == base == tree, empty composition, measured by `cite-remeasure.py` (for `ccd/ccd`) and by its one-line variant that also swaps `ccd/session-hook.sh` (for Task 4), with `repoint-readme.py` leaving README byte-identical (`cmd_ensure mint -> ccd/ccd:21202`, `genrc == 1 arm -> ccd/ccd:19989-19991` at `905360dc`).
+8. **The citation census does not move**: `147 / 195 / 53 / 35`, stated == base == tree, empty composition, measured by `cite-remeasure.py` (for `ccd/ccd`) and by its one-line variant that also swaps `ccd/session-hook.sh` (for Task 4), with `repoint-readme.py` leaving README byte-identical (`cmd_ensure mint -> ccd/ccd:21202`, `genrc == 1 arm -> ccd/ccd:19989-19991` at `905360dc`). At `6da36f0b` #187 has moved the BASE to `148 / 196 / 53 / 36`, and this wave still moves nothing (finding 17).
 9. **The repository's current settings, measured read-only** (`gh api …/rulesets`, `…/rulesets/<id>`, `…/branches/main/protection`, `…/<repo>`): the `main` ruleset has ONE rule, `pull_request`, with `required_approving_review_count: 1` and `allowed_merge_methods: [merge, squash, rebase]`, and TWO bypass actors — `RepositoryRole` 5 (admin) and `RepositoryRole` 2 (maintain), both `bypass_mode: pull_request`; classic protection requires the four contexts `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa`, `strict: false`, `enforce_admins: true`, approvals 0; `allow_auto_merge: false`, `allow_update_branch: false`, `delete_branch_on_merge: true`. Task 7 is written against these values. R9 reads "the repository-admin role STAYS the ruleset's only bypass actor", and the maintain role is a second one today — RULED (the orchestrator's decision record, 2026-09-24, confirmed by the operator the same day): the runbook removes it, R9 as ruled; Task 7 Step 3 records it. The rulesets LIST endpoint returns summaries only (no `conditions`, `rules` or `bypass_actors` — measured), so Task 7 finds the main ruleset by reading each ruleset in full.
-10. **Red-first, measured at `905360dc` with each new test written first:** `ci-merge-queue` 3 failed of 3; `ccd-pr-queue` 10 failed | 3 passed (the three that pass are the "absence" and "passes through" guards, true before and after; re-measured at `af64d9d2` with the ordered-window assertion, unchanged); `pr-queue-lane` 10 failed | 1 passed, re-measured at `af64d9d2` with the review revision's four new cases (vitest leaves a missing named export `undefined`, so the reds are `TypeError: queueFor is not a function` and empty feeds, not an import crash); `session-hook-merge-deny` 4 failed | 3 passed (the three that pass are the pass-through cases; re-measured at `af64d9d2` with the widened lists, unchanged).
+10. **Red-first, measured at `6da36f0b` with wave 1 and the earlier tasks applied, each new test written first:** `ci-merge-queue` `4 failed | 1 passed (5)` (the agreement case holds before and after — with no `merge_group` trigger it has nothing to disagree about; rows M11–M13 prove it is not vacuous), with `ci-verdict` `76 failed | 4447 passed (4523)`, `ci-select-cli` `2 failed | 39 passed (41)` and `ci-pipeline` `5 failed | 34 passed (39)` beside it; `ccd-pr-queue` `10 failed | 3 passed (13)` (the three that pass are the "absence" and "passes through" guards, true before and after — unchanged since `905360dc`); `pr-queue-lane` `16 failed | 2 passed (18)` (vitest leaves a missing named export `undefined`, so the reds are `TypeError: queueFor is not a function` and empty feeds, not an import crash; the two silence cases pass); `session-hook-merge-deny` `6 failed | 4 passed (10)` (the four that pass are the three pass-through cases and the graph-gate case, whose deny is the gate's own); `coordinator-skill` `3 failed | 150 passed (153)`.
 11. **Two shapes of the first deny were measured wrong at review, and are why Task 4 strips quotes and widens the head.** Probed through the real hook with a wave hold: it DENIED ``git commit -m "the coordinator lands with `gh pr merge <n>` …"``, `git commit -m "docs (gh pr merge 42)"`, a heredoc commit message quoting `` `gh pr merge --admin` `` and ``gh pr create --body '… `gh pr merge <n>` …'`` — the commit messages and PR bodies this very programme writes — and it PASSED `if gh pr checks 42; then gh pr merge 42; fi`, `for …; do gh pr merge $n; done`, `{ gh pr merge 42; }`, `! …`, `time …`, `timeout 60 …`, `env GH_TOKEN=x …` and `gh pr --repo o/r merge 42`. The revised block removes '…' spans and $(-free "…" spans in the jq it already runs (no new fork), drops the backtick from the head separators, and accepts reserved-word, grouping and wrapper heads and flags between `pr` and `merge`; the new cases and rows H9–H14 pin both directions.
-12. **Tasks 3–5 need a re-plan before this wave is dispatched (ruled by the orchestrator 2026-09-24).** Re-plan them after child-reclamation wave 3 merges. Tasks 1 and 2 are not re-planned by this ruling, though direction (i) below may reopen Task 2's output shape; Task 6's PR-body items 3–5 and whole-branch counts, and Task 7 Step 5's enqueue command, checks (e) and (f) and stop rule 4, restate Tasks 3–5 and are re-planned with them. Measured 2026-09-24 at `65c5bb34`. The cause is #178's One PR per child plus wave 3's reclaim-on-close. A PR-bearing producer is SPENT, and the coordinator closes its run `final:true`, requires `released:true` and opens wave N+1 without its `sessionId` (`ccd/coordinator-skill/references/wave-lifecycle.md:718-729`). A merge proof is required only when wave N+1 depends on the producer's code (`:730-738`), so the close ordinarily lands BEFORE the PR merges. That close's `ws-release` removes the hold (`server/src/coord/close.ts:347-353`). Wave 3 then reclaims the child on the same close, because the close is `final` or the child is `spent` (`docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md:376-382`). The ladder that reclaims it ignores `not-merged` (`:275-277`). It removes the pane, the worktree, the branch and, last, the registry row (`:132-133`, `:366-368`). Three interactions with this plan's text follow:
-    - **(i) The dequeue lane mails nobody.** `cmd_pr_state` prints one line per REGISTRY id (`ccd/ccd:10684`, `for id in "${ids[@]}"`). Task 2's stamp annotates only those lines. Task 3's `sweepDequeued` walks the registry `records`, and it mails only when `openRunsForSession` (`server/src/coord/store.ts:2661`) finds an OPEN run naming the workspace. After the final close there is no open run, so the lane writes the feed record and mails nobody. After the reclaim there is no registry row, so there is no line and no queue word, and not even the feed record gets written. Yet a dequeue of the PR the coordinator enqueued is the one the programme must hear. **Direction:** key the lane on the PR the coordinator enqueued, not on a session row. Mail `resolveCoordinator` of the newest run that named that workspace. `resolveCoordinator(runId)` reads the run's `claimedBy` with no state predicate (`store.ts:3554-3559`). Two reads outlive the registry row. `runsTouching` (`store.ts:1399`) returns runs in any state, ordered by id; filter it to `sessionId`. `runs.prLineage` is folded from `.prhistory` at close (`close.ts:325`, `store.ts:2486`) and names the run's PRs. The re-plan must also decide where a PR that no line binds gets its queue word. Task 2's stamp answers only on per-session lines. If the lane needs a per-repository record of queue facts, that reopens Task 2's output shape and its pins (`ccd-pr-queue.test.ts`, rows Q1–Q9). That decision is the re-plan's to make, not this ruling's.
-    - **(ii) Clause 15's spelling drops the exact-SHA binding.** Task 5's sentence says landing is `gh pr merge <n>` with no `--admin`, and Task 3's `renderDequeueBrief` says the same (`gh pr merge ${pr}`). Both drop `--match-head-commit <handoffCommit>`. #178 put that flag in the coordinator's merge "for exactly this reason": the exact-SHA merge proof (`wave-lifecycle.md:734-739`). **Direction:** keep `--match-head-commit <handoffCommit>`. Pass no `--squash` and no `--admin` on a native-queue project, because the queue's merge method applies. Task 7's proof run gains a measurement that gh enqueues with `--match-head-commit`. Task 5 then ALSO edits `wave-lifecycle.md` §5 (`## 5`, `:683`). On this tree `:737-738` read ``gh pr merge <pr> --squash --match-head-commit <handoffCommit>` (plus `--admin` where the repository's ruleset requires it)``. That edit goes in Task 5's Files, the File Structure table and its `git add`, with exact old and new text. No test pins that spelling today (`grep -rn "match-head-commit" server/test` finds nothing).
-    - **(iii) The merge deny has a window.** Task 4 judges `$REG/<id>.hold` (read as `_hook_hold_card` reads it, `ccd/session-hook.sh:808`) against the wave grammar. The final close's `ws-release` removes that hold while the PR is still open. From then until the PR lands, the producer's session carries no hold, so `gh pr merge` passes. The window lasts until wave 3's reclaim kills the pane, and the ladder can defer that on `paused` or `attached` (spec `:288`, `:290`; `held`, `:289`, only if a new hold is placed after the release; the attached defer is bounded at 15 minutes, `:460`). **Direction:** the deny also keys on the child marker `$REG/<id>.child`. `cmd_ws_add` writes the marker (`ccd/ccd:7117`, `_reg_set "$id" child …`), and it outlives the hold. The re-plan measures that no coordinator session carries one.
-   **Other inputs to the re-plan (the verifier's):** (a) Task 3 Step 7 rewrites `rundefs.ts`'s `queueSystemMail` comment to "all six of its callers". On this tree the comment says "all five" (`server/src/coord/rundefs.ts:274-278`), and the callers are SIX: `closeRun` (`close.ts:293`), `closeReviewRun` (`close.ts:474`, which the comment omits), `dispatchRun` (`dispatch.ts:1098`), `queueProgramKickoff` (`kickoff.ts:157`), the `POST /api/runs/:id/advance` handler (`routes.ts:1781`) and `FleetWatcher.hold` (`watch.ts:4427`). With `sweepDequeued` that is seven. Name all seven, or name only the addition and drop the count. (b) Task 5 never edited `wave-lifecycle.md`. Direction (ii) above adds it. (c) `sweepDequeued` picks `sib.siblings[sib.siblings.length - 1]` by hand. It should use `rundefs.ts`'s `survivorOf` (`server/src/coord/rundefs.ts:160`, the same rule; `close.ts:309` and `dispatch.ts:282` call it), so the lane cannot drift from the close's choice of survivor.
+12. **Tasks 3–5, re-planned on the reclaim-on-close world (the orchestrator's 2026-09-24 ruling; unblocked when child-reclamation wave 3 merged as #187).** Measured at `6da36f0b`: a PR-bearing producer is spent, and §5 of `wave-lifecycle.md` closes it `final:true` and requires `released:true` before its PR merges unless wave N+1 builds on its code (§5 step 3, ≈718–754). That close's `ws-release` removes the hold, and — the workspace being a marked child, with no open sibling, on a `final` close — wave 3 queues its reclaim, which purges the pane, the worktree, the branch and, last, the registry row (child-reclamation spec §5.6's teardown order, §5.7's trigger). The three directions, and what this plan did with each:
+    - **(i) Its aim followed; its mechanism refuted by measurement.** The direction keyed the dequeue lane on the PR the coordinator enqueued. Measured on the prototype with Task 2 applied: a workspace whose PR the queue read answers `dequeued` gets the word on its line; purge that workspace's registry row as the reclaim's last step does, and `ccd pr-state --project` prints NOTHING — no line, and no queue call either (`_pr_queue_stamp` returns on an empty sweep). No key the server holds can hear a reclaimed producer's dequeue unless ccd prints a per-repository record of queue facts — a reshape of Task 2's output and pins, which this re-plan does not make (Task 2 holds as written) — and even then the notice's remedy, a fix round, has no worker: the reclaim took the worktree, the branch and the pane. So the lane stays keyed on the OPEN RUN that names the workspace, and the plan makes that run survive: **on a native-queue project the producer lands BEFORE it closes** (Task 5). Its run waits at `merging` — IDLE, holding no dispatch slot (`coord-store.test.ts`: "merging: the coordinator's wait"; `RUN_TRANSITIONS` has `awaiting-review → merging → closing` and `merging → working`) — and keeps the child's hold, so neither the close's reclaim (there is no close yet) nor wave 4's sweep (it refuses a `held` child) can take it: the row, the line, the queue word and the worker all outlive the queue. The direction's "mail `resolveCoordinator` of the newest run that named that workspace" is exactly `resolveCoordinator(survivorOf(open runs).id)` — finding 12(c) below; a CLOSED run is not mailed (spec §5.2: "when an open run names the PR's workspace"), because a coordinator that closed before the landing broke clause 15, and the reclaim would take the line within seconds anyway.
+    - **(i′) What the directions did not name: nothing wakes a coordinator when the queue lands.** A queue merge is asynchronous, and the coordinator never polls (clause 7). Under #178's order a dependent wave N+1 waited on "proven merged" with nothing to wake the coordinator; with `--admin` the merge was synchronous and the gap never showed. So the lane has a second notice: a `status` mail `merged:#<n>` when the PR reads merged while its run waits at `merging` — the coordinator's own declaration that it enqueued this PR. It reads the phase `sweepPr` already derives, not the queue word, so a queue that records a trailing removal on success (Task 7 stop rule 6) cannot silence it; it depends instead on `boundRow` still binding after a queue merge, which Task 7 (d) measures. Ruled 2026-09-29 (the operator): the notice ships in this wave.
+    - **(ii) Followed.** Every landing spelling keeps `--match-head-commit <handoffCommit>` — clause 15's sentence, the lifecycle paragraph, and the dequeue brief — with no `--squash` (the queue's method applies) and never `--admin`; `wave-lifecycle.md` §5 is in Task 5's Files, with exact old and new text; the proof run gains the gh measurement (finding 16; Task 7 Step 5 (a0)). No test pinned the spelling on `main` (`grep -rn match-head-commit server/test` finds nothing); Task 5 pins every spelling the corpus has, derived.
+    - **(iii) Followed, and measured.** The deny also keys on `$REG/<id>.child`. One writer: `cmd_ws_add`'s `_reg_set "$id" child "$lc_child"` (≈7117; one hit), reached only through `CCD_ARGV.wsAddWorker`'s `--child`, built only by `dispatch.ts` (≈589); child-reclamation spec §4: "There is no path by which a human's workspace, a coordinator's workspace, or any workspace that exists today becomes a child." Task 7 Step 1 re-measures it on the live registry, read-only, before the queue is turned on. With the lifecycle rule the window shrinks to "after any close, before the reclaim"; the marker covers it, and its EXISTENCE decides (a marker the hook cannot read is still one).
+    - **The verifier's other inputs, all taken:** (a) `queueSystemMail`'s comment names every caller and drops the count word — six at `6da36f0b` (`closeRun` `close.ts:327`, `closeReviewRun` `:519`, `dispatchRun` `dispatch.ts:1098`, `queueProgramKickoff` `kickoff.ts:157`, the advance handler `routes.ts:1806`, `FleetWatcher.hold` `watch.ts:4680`) plus `sweepLanding`; (b) Task 5 edits `wave-lifecycle.md`; (c) the recipient run is `survivorOf`'s (`rundefs.ts`, the close's and dispatch's own rule), pinned by row L15.
+13. **CI test selection's shape and the queue run (#183), measured.** Applied literally, the pre-#183 Steps 4–5 gave two top-level `concurrency:` keys and two job-level `if:` keys per macOS job — a file PyYAML's duplicate-key loader refuses while `ci-pipeline` stays green, its reader stopping at the first key. `decideMode` sends `merge_group` to its fallthrough `full/none`. Under the operator's ruling `merge_group` joins the `pull_request` arm; and then:
+    - `full-suite` still needs the skip: `select.mjs`'s `testsOut = 'full'` on any selection fallback (no map, an unreadable one, a `.github/` change, a lockfile) turns a queue run into a `full` one, whose `full-suite` finds `test-macos` skipped and reds on it.
+    - the plain-bash pipeline check was `pull_request`-only (`ci-pipeline.test.ts` pinned it so), and a `merge_group` event has no `github.base_ref`: without the edit, a queue run would run a selector the entry itself changed. It now diffs against `github.event.merge_group.base_sha`, and a base it cannot diff still answers "changed" — the safe direction.
+    - the existing fallthrough group already keys a queue run by its `gh-readonly-queue/…` ref, which is per entry but not per run; the explicit `queue-<run id>` arm makes it run-unique, as spec §5.2 and the ledger's carried constraint require.
+    - `probe-macos`'s allow-list already excludes `merge_group`; `times-build` needs `refs/heads/main`; `trace-shard` and `map-build` need a trace a `selected` run never asks for; `main-artifact.mjs` trusts no `merge_group` run. None is edited.
+    - The other re-derivation the 2026-09-28 re-measure took green — a `full` row with `select.mjs` unedited — is the one the operator did not choose; only its measured facts are reused here.
+14. **The 20 s bound, re-censused at `6da36f0b`: four statements and a third consumer.** #187 added `childGateAtClose`, which calls `childSpent` (`close.ts:647`) from `closeRun`'s abandon arm, `closeRun` and `closeReviewRun` (`:231`, `:351`, `:534`) and states the bound in its docstring — "Up to ~40 s against the 30 s client timeout … each call bounded by `pr-state`'s 20 s remote budget" (`:610` and `:612`) — beside `childSpent.ts`'s two statements (`:173`, `:241`) and `routes.ts`'s one (`:1376`). At 25 s the close's two reads are ~50 s against the 30 s client timeout that docstring already accepts by design (wave 4's reuse of `verifyDone`'s measurement is where it says the aggregate is addressed). The 2026-09-24 ruling (25 s for both modes) stands — re-affirmed by the operator on 2026-09-29, the ~50 s close worst case accepted; Task 2 rewrites all four in place, and names the close in the runner comment and the commit message.
+15. **The source guard no longer follows `cmd_clip` (#187).** At `6da36f0b` wave 3's `RECLAIM-BEGIN`…`RECLAIM-END` region and ws-reap's `MIRROR-BEGIN`…`MIRROR-END` block sit between `cmd_clip` (≈23585) and `# Guard so the script can be \`source\`d …` (≈26581). Task 2's block still goes directly above the guard: below every anchor, and outside both marked blocks, which `ccd-wsaudit-nonpoison.test.ts` cuts out before counting refusal tokens (measured with Task 2 in: `3 passed`, and `wsaudit` `24 passed`). Numstat `190	25`, as before.
+16. **gh 2.45 carries the exact-SHA binding into its queue path — read statically, not measured.** From the installed binary with `strings` (`dpkg -s gh`: `2.45.0-1ubuntu0.3`; gh itself was not run): a package-local `merge.EnablePullRequestAutoMergeInput` with `ExpectedHeadOid json:"expectedHeadOid,omitempty"`, the `enablePullRequestAutoMerge(input: $input)` mutation, and `shouldAddToMergeQueue`, `mergeQueueRequired`, `isMergeQueueEnabled`. gh adds a PR to a required queue through that mutation, so `--match-head-commit` is expected to bind the enqueue. A binary's strings are not the call's behaviour: Task 7's proof run measures it, with a deliberately wrong sha that must be refused (Step 5 (a0), stop rules 4 and 7). The same help text says a PR whose required checks have NOT passed gets auto-merge armed instead of a queue entry — finding 20.
+17. **The citation census at `6da36f0b`:** `byFile` `ccd/ccd` 148, `ccd/ccrc` 5, `ccd/compact-card.mjs` 4, `ccd/session-hook.sh` 21, `deploy/deploy.sh` 2, `server/test/ccd-workspaces.test.ts` 5, `server/test/ccd-ws-reap.test.ts` 2, `server/test/single-definition.test.ts` 8, `shared/api.ts` 1 — total 196; `|`-row array 53, site array 36. Stated == base == tree after Task 2 (`--files ccd/ccd,README.md`) and after Task 4 (`--files ccd/session-hook.sh`), every composition empty; the re-pointer prints `ccd/ccd:21482` and `ccd/ccd:20215-20217` and leaves README byte-identical; the citation cases `7 passed | 328 skipped (335)` after every task.
+18. **The deny under wave 1, measured.** With wave 1's advisory on the base, row H8 (a deny no longer supersedes advice) is RED — `the advisory won and the merge went through` — where at `905360dc` and `af64d9d2` nothing put a non-deny envelope on a Bash call and the row was green. Wave 1's own `session-hook-sync-advisory` stays `37 passed` and `update-branch-absent` `2 passed` with the deny in: the block spells no `update-branch`, and it replaces the advisory only when it fires.
+19. **The typecheck needs `agent/node_modules`.** `server`'s `tsc --noEmit` reaches `agent/src/server.ts`, which imports `ws`; on a copy without `agent/`'s modules it reports `TS2307: Cannot find module 'ws'` — an environment gap, measured, then green with them installed.
+20. **gh 2.45 ARMS auto-merge, rather than queueing, a PR whose required checks have not passed — and prints the same line either way** (the correctness review's blocker; read statically with `strings` from the installed binary, gh not run). Its `pr merge` help reads "If required checks have not yet passed, auto-merge will be enabled." and "If required checks have passed, the pull request will be added to the merge queue.", and the queue path's only success message is `%s Pull request #%d will be added to the merge queue for %s when ready`. An armed PR has no queue entry and no queue act, so Task 2's read answers `none`, and `sweepLanding` — which fires on `dequeued` or a merge — says nothing: a coordinator that enqueued and ended its turn would wait at `merging` for ever, holding the child. An armed request can also queue a head no review read: GitHub disarms auto-merge on a push only from a login WITHOUT write access (documented, not measured here), and the fleet pushes with one write-scoped login, so a fix round's new head would queue once green. The server lane is unchanged — it cannot tell "armed" from "not enqueued yet", and says so in its docstring. The coordinator's rule carries it (Task 5): enqueue only once `gh pr checks <pr> --required` exits 0 (`--required` — "Only show checks that are required" in the same binary — because the non-required macOS legs gate nothing, by the operator's 2026-09-28 ruling, and a red one must not block a landing), read the queue entry back, and disarm with `gh pr merge <pr> --disable-auto` (the flag is in the same binary) what only armed, and before any fix round from `merging`. Task 7 Step 5 (a1) measures the armed path, and whether an armed request survives this login's push.
+21. **The quote strip read an apostrophe in a `#` comment, or a backslash-escaped quote, as the start of a '…' span** (measured at review through the real hook under a wave hold: `# don't merge until CI is green` / `gh pr merge 42` / `echo 'done'`, and `echo it\'s time; gh pr merge 42; echo 'ok'`, both passed). The strip now removes, leftmost first as bash reads them, a backslash escape, a '…' span, a `$(`-free "…" span and a `#` comment that starts a word, in the same jq (no new fork); re-probed on this fix round's prototype, both spellings are denied, `echo hi # gh pr merge 42` passes, and `x=${#y}; gh pr merge 42` and `echo 'a\' ; gh pr merge 42` are still denied (a `#` inside `${…}` starts no comment; a backslash inside '…' escapes nothing). The header now names what still passes unparsed, a wrapper's own flags among it (`sudo -E`, `command -p`, and an unlisted wrapper such as `nice -n 5`, each measured passing). Rows H18, H19.
+22. **A coordinator can carry a wave hold or the child marker.** `POST /api/runs` refuses `claimant-is-a-worker` only for a claimant OTHER than itself, then places `program:<slug> wave:N/M run:<id>` on the named workspace — the coordinator's own, on a self-claimed run (`server/src/coord/routes.ts` ≈1340–1366 and ≈1460 at `6da36f0b`); and `POST /api/runs/:id/reclaim` admits the programme's own live worker as heir (`reclaim.ts` ≈325–347), which keeps its worker run's hold and its child marker. The hook cannot tell either from a worker, so it refuses its enqueue (probed at review: deny, with and without `--match-head-commit`). Closing to shed the hold would reclaim the coordinator's own pane (a final close of a child reclaims it), so Task 5's paragraph sends such a coordinator to the operator's shell; and Task 7 Step 1's census stops on either shape before the queue is turned on — it now also fails CLOSED on a read of the open runs that did not answer (the old one printed `census-done` alone when `jq` was missing, the call failed or the body had no `.runs`).
+23. **A dequeue's why is the queue's own run.** `statusCheckRollup` is the PR head's checks; a queue failure is the `merge_group` run on the `gh-readonly-queue/<base>/pr-<n>-…` commit, which that rollup never includes — so the old brief read green and re-enqueued into the same red, one CI run and one fresh `dequeued:` per round. The brief and the paragraph now find the run with `gh run list --event merge_group` by its `headBranch` and read it with `gh run view <id> --log-failed` (flags and fields read statically from gh 2.45); `mergeStateStatus` still answers a conflict. Rows L22, S16.
+24. **The last wave had no landing rule.** The paragraph opened "once … wave N+1 is open", and SKILL.md step 7 and `wave-lifecycle.md` §6 — the last wave's close — said to close `final:true` outright: a last producer closed before its PR lands retires the programme and is reclaimed under a PR still queued, and nothing can then hear its dequeue (finding 12 (i)). Step 7 and §6 now point at the rule, and the paragraph names the last wave; rows S9, S10.
+25. **Three guards the plan argued for had no test** (the tests review, each measured): the merged arm's deferral on an unreadable run row and its latch-after-mail (either mutation stayed `16 passed`), the deny's rule never to replace the graph gate's counted deny (dropping the conjunct stayed `9 passed`, and `session-hook` `335 passed`), and the dequeue record's presence exemption (`recordAlways: false` stayed green — the harness never made the pane visible). Each now has a case and a row: L19, L20, H17, L21. And two of the census's own claims were wrong: close.ts's two edited lines are 610 and 612, one line apart (finding 14); and `ccd-prhistory.test.ts` runs `cmd_pr_state --project` through the stamping pipe three times and was in no list — Task 2 Step 9 and Task 6 Step 3 now run it (`18 passed`).
 
 ---
 
-## The citation tax, mechanised (S6-R11)
+## The citation tax, and the mutation tables, mechanised (S6-R11)
 
 `server/test/session-hook.test.ts` audits every `file:line` citation in two FROZEN corpus documents (`docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md`, `docs/superpowers/plans/2026-09-10-graphify-compaction-card-plan-a.md`) and in `README.md`. Any line inserted into a cited file moves every anchor below it. The standing rule S6-R11: **README is REPAIRED, by content, never counted; everything else is RE-MEASURED from the instrument, with the composition stated; no rule is widened and no D-number is spent.** This wave's layout is chosen so the instrument measures NO movement; the tools below are how that is proved, and what to use if the base has moved.
 
@@ -173,26 +206,32 @@ print(f'genrc == 1 arm    -> ccd/ccd:{l - 1}-{l + 1}  (elif at {l})')
 open('README.md', 'w', encoding='utf8').write(new)
 ```
 
-- [ ] **Write the census re-measurer** to `$SCRATCH/cite-remeasure.py` (verbatim from the same plan):
+- [ ] **Write the census re-measurer** to `$SCRATCH/cite-remeasure.py` — landing-order wave 1's tool (the child-reclamation wave 1 tool with ONE change: the files it swaps back to the base are a `--files` argument, default `ccd/ccd,README.md`, and it prints every `byFile` key). This wave edits three cited files, one per task, so each task names its own: `--files ccd/ccd,README.md` (Task 2), `--files ccd/session-hook.sh` (Task 4); Task 3's `shared/api.ts` edits are in place and are proved by the citation cases alone.
 
 ```python
 #!/usr/bin/env python3
 """Re-measure session-hook.test.ts's citation census FROM THE INSTRUMENT (S6-R11).
 
-Run from the repo root AFTER ccd/ccd is re-stamped and README.md is re-pointed.
-It runs ONLY the citation cases twice — once with ccd/ccd and README.md as they
-stand at <base-ref>, once as they stand in the working tree — each time with
-four dump probes inserted above the assertions they feed, and restores every
-file it touched byte-for-byte (asserted). It prints what the test STATES, what
-the instrument MEASURES, and the COMPOSITION (which references entered and
-which left, base -> tree), which is what the S6-R11 comment must state.
+The child-reclamation wave-1 plan's tool, with ONE change: the set of files it
+swaps back to <base-ref> is `--files` (comma-separated, default
+`ccd/ccd,README.md`, which is the original tool exactly), because this wave
+edits cited files other than `ccd/ccd` — `ccd/session-hook.sh`, `ccd/ccrc` and
+`README.md`. Everything else is the original: it runs ONLY the citation cases
+twice — once with the named files as they stand at <base-ref>, once as they
+stand in the working tree — each time with four dump probes inserted above the
+assertions they feed, restores every file it touched byte-for-byte (asserted),
+and prints what the test STATES, what the instrument MEASURES, and the
+COMPOSITION (which references entered and which left, base -> tree).
 With --write it rewrites exactly four literals in the test — `'ccd/ccd': N` in
 the byFile map, `.toBe(N)` on `total`, and the two ref arrays of the `|`-row
 case — in the instrument's own order. It never edits a comment.
-usage: python3 cite-remeasure.py <scratch-dir> <base-ref> [--write]
+usage: python3 cite-remeasure.py <scratch-dir> <base-ref> [--files a,b,c] [--write]
 """
 import collections, json, os, re, shutil, subprocess, sys
 scratch, base = sys.argv[1], sys.argv[2]; write = '--write' in sys.argv
+FILES = ('ccd/ccd', 'README.md')
+if '--files' in sys.argv:
+    FILES = tuple(sys.argv[sys.argv.index('--files') + 1].split(','))
 T = 'server/test/session-hook.test.ts'
 out = os.path.join(scratch, 'cite'); os.makedirs(out, exist_ok=True)
 src = open(T, encoding='utf8').read()
@@ -204,10 +243,6 @@ ROW_ANCHOR = "    expect(r.failures.map(refKey), 'a `|` row stopped naming what 
 BYFILE_ANCHOR = "    expect(byFile, 'the citation debt moved"
 
 def probed(dump):
-    """The test with the probes in. The site-level list is computed ABOVE the
-    row array's expect, because that expect reds first and would stop the `it`
-    before the site-level one ran; the two expression lines are asserted above
-    to be the test's own, so this copy cannot drift from what it copies."""
     t = src
     for a in (ROW_ANCHOR, BYFILE_ANCHOR):
         assert t.count(a) == 1, f'probe anchor not unique: {a[:50]}'
@@ -237,7 +272,7 @@ def measure(label):
     return (b['byFile'], b['sites'], json.load(open(os.path.join(dump, 'rows.json'))),
             json.load(open(os.path.join(dump, 'sites.json'))))
 
-saved = {p: open(p, encoding='utf8').read() for p in ('ccd/ccd', 'README.md')}
+saved = {p: open(p, encoding='utf8').read() for p in FILES}
 try:
     for p in saved:
         open(p, 'w', encoding='utf8').write(
@@ -252,9 +287,6 @@ assert open(T, encoding='utf8').read() == src, 'the test file was not restored b
 
 ENTRY = re.compile(r"^        '[^']*',$")
 def array_block(text, head):
-    """[start, end) of the CONTIGUOUS run of `        '<ref>',` lines in this
-    expect's array. Comments above the first entry lie outside it and are never
-    touched; a non-entry line INSIDE the run is refused."""
     i = text.index(head); j = text.index('.toEqual([', i); k = text.index('\n      ]);', j)
     lines = text[j:k].split('\n')
     idx = [n for n, l in enumerate(lines) if ENTRY.match(l)]
@@ -271,11 +303,13 @@ def moved(a, b):
 ROW_HEAD = "expect(r.failures.map(refKey), 'a `|` row stopped naming"
 SITE_HEAD = "expect(r.failures.map(site).filter((k) => seen.has(k)),"
 by, total = N[0], sum(N[0].values())
-stated_cc = re.search(r"^      'ccd/ccd': (\d+),$", src, re.M).group(1)
 stated_total = re.search(r"this is it'\)\.toBe\((\d+)\);", src).group(1)
-print(f"byFile['ccd/ccd']  stated {stated_cc}  base {B[0].get('ccd/ccd')}  tree {by.get('ccd/ccd')}")
+print(f"files swapped to {base}: {', '.join(FILES)}")
+for key in sorted(set(B[0]) | set(by)):
+    m = re.search(r"^      '" + re.escape(key) + r"': (\d+),$", src, re.M)
+    flag = '' if (m and int(m.group(1)) == B[0].get(key) == by.get(key)) else '   <-- MOVED or unstated'
+    print(f"byFile[{key!r}]  stated {m.group(1) if m else '-'}  base {B[0].get(key)}  tree {by.get(key)}{flag}")
 print(f"total              stated {stated_total}  base {sum(B[0].values())}  tree {total}")
-print(f"other byFile keys moved: {sorted(k for k in set(B[0]) | set(by) if k != 'ccd/ccd' and B[0].get(k) != by.get(k)) or 'none'}")
 e, l = moved(B[1], N[1]); print(f"byFile composition  ENTERED {e}\n                    LEFT    {l}")
 for name, head, bv, nv in (('row array', ROW_HEAD, B[2], N[2]), ('site array', SITE_HEAD, B[3], N[3])):
     e, l = moved(bv, nv)
@@ -291,23 +325,12 @@ if write:
     print('rewrote the four literals from the instrument; now write the S6-R11 composition comment by hand')
 ```
 
-- [ ] **Derive the hook-aware variant** (Task 4 edits `ccd/session-hook.sh`, which the verbatim tool does not swap to the base, so it could not see a hook anchor move). ONE line differs — the swap set gains the hook:
-
-```bash
-SCRATCH=<your scratchpad, absolute>
-sed "s|for p in ('ccd/ccd', 'README.md')|for p in ('ccd/ccd', 'README.md', 'ccd/session-hook.sh')|" \
-  "$SCRATCH/cite-remeasure.py" > "$SCRATCH/cite-remeasure-hook.py"
-diff "$SCRATCH/cite-remeasure.py" "$SCRATCH/cite-remeasure-hook.py"
-```
-
-Expected: exactly one changed line (`62c62`). Its `--write` still rewrites only the `ccd/ccd` literal: if the variant ever reports `other byFile keys moved: ['ccd/session-hook.sh']`, an insertion landed above a hook anchor — undo it and re-place it, never re-measure a hook key by hand in this wave.
-
 **The procedure, per task that edits a cited file** (each task restates it as numbered steps):
 
 1. Re-stamp `ccd/ccd` if it was edited.
 2. `SCRATCH=<abs path>; python3 "$SCRATCH/repoint-readme.py"` — expected: README byte-identical (`git diff --quiet -- README.md && echo readme-untouched`).
-3. `SCRATCH=<abs path>; python3 "$SCRATCH/cite-remeasure.py" "$SCRATCH" HEAD` (Task 2) or `…/cite-remeasure-hook.py …` (Task 4) — read-only. **If any `base` differs from its `stated`, the tree was red before your edit: stop and report it.** Expected at `905360dc`: `147 / 195 / 53 / 35` on all four lines, `other byFile keys moved: none`, every `ENTERED`/`LEFT` empty. Re-measured 2026-09-24 at `08701c22` (`main` `b501698a` merged, no task applied) with `cite-remeasure-hook.py … HEAD`: the same four numbers, stated == base == tree, `other byFile keys moved: none`; the re-pointer printed `ccd/ccd:21202` and `ccd/ccd:19989-19991` and left README byte-identical. At `c62e22b9` (2026-09-28) it prints `ccd/ccd:21428` and `ccd/ccd:20180-20182` — `main` re-pointed README itself — and still leaves README byte-identical; the citation cases stay `7 passed | 326 skipped (333)`.
-4. The citation cases green: `cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'` → `7 passed | 326 skipped`.
+3. `SCRATCH=<abs path>; python3 "$SCRATCH/cite-remeasure.py" "$SCRATCH" HEAD --files <the task's files>` — read-only. **If any `base` differs from its `stated`, the tree was red before your edit: stop and report it.** Expected at `6da36f0b` (finding 17): every `byFile` key `stated N base N tree N` with no `<-- MOVED` (`ccd/ccd` 148 … `shared/api.ts` 1), `total stated 196 base 196 tree 196`, arrays 53 and 36, every `ENTERED`/`LEFT` empty. If child-reclamation wave 4 has landed first, its `shared/api.ts` insertion will have moved the base's `'shared/api.ts'` entry and total: read them from the base, never from this plan; what must hold is stated == base == tree.
+4. The citation cases green: `cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'` → `7 passed | 328 skipped (335)`.
 5. **Both corpus documents byte-identical to `origin/main`**:
 
        git fetch origin main && git diff --quiet origin/main -- \
@@ -316,19 +339,104 @@ Expected: exactly one changed line (`62c62`). Its `--write` still rewrites only 
 
    Expected: `corpus-frozen`.
 
+- [ ] **Write the mutation runner** to `$SCRATCH/mutate.py` — landing-order wave 1's runner with two changes, both for the loaded fleet box: each named test file runs in its OWN vitest process with `--maxWorkers=1`, and a row may carry `"restamp": true` (re-stamp `ccd/ccd` after the edit, so `ownership` never confounds a red) and `"t"` (passed as `-t`). A test named `pwa:test/…` runs from `pwa/`. It copies the file ASIDE into the scratchpad (never `git checkout --`, which restores to HEAD and eats uncommitted work; never beside the file — a backup inside a skill directory reds that skill's reference census on every row), applies one exact replacement (refusing an `old` that is not unique), prints each file's totals and first failures, restores the copy and asserts byte-equality:
+
+```python
+#!/usr/bin/env python3
+"""Mutation runner (one vitest FILE per process, foreground). Run from the tree root.
+
+usage: mutate.py <spec.json> [row ids...]
+spec.json: [{"id": "M1", "file": "rel/path", "old": "...", "new": "...",
+             "tests": ["test/x.test.ts" | "pwa:test/y.test.tsx"], "restamp": false, "t": "optional -t filter"}]
+Each row: copy the file ASIDE into the scratchpad (never `git checkout --`),
+replace exactly one occurrence of `old` with `new` (refusing an `old` that is
+not unique), re-stamp ccd/ccd if asked, run each named test file in its own
+vitest process from server/ (or pwa/), print the totals and the first failing
+titles and assertion lines, restore the copy, and assert byte-equality."""
+import json, os, re, shutil, subprocess, sys
+
+ROOT = os.getcwd()
+HERE = os.path.dirname(os.path.abspath(__file__))
+LOG = os.path.join(HERE, 'mutate.log')
+spec = json.load(open(sys.argv[1]))
+only = set(sys.argv[2:])
+
+
+def say(s):
+    print(s)
+    with open(LOG, 'a') as f:
+        f.write(s + '\n')
+
+
+say(f'### mutate.py {os.path.basename(sys.argv[1])} root={ROOT}')
+for row in spec:
+    if only and row['id'] not in only:
+        continue
+    path = os.path.join(ROOT, row['file'])
+    backup = os.path.join(HERE, 'mutbak-' + row['id'])
+    shutil.copy2(path, backup)
+    stamp_backup = None
+    orig = open(path, 'rb').read()
+    try:
+        text = orig.decode('utf8')
+        n = text.count(row['old'])
+        if n != 1:
+            say(f"== {row['id']}: SKIPPED — `old` occurs {n} times in {row['file']}")
+            continue
+        open(path, 'w', encoding='utf8').write(text.replace(row['old'], row['new'], 1))
+        if row.get('restamp'):
+            stamp_backup = open(os.path.join(ROOT, 'ccd/ccd'), 'rb').read() if row['file'] != 'ccd/ccd' else None
+            subprocess.run(['node', '--input-type=module', '-e',
+                            "import { readFileSync, writeFileSync } from 'node:fs';"
+                            "const { markGenerated } = await import('./shared/mark.mjs');"
+                            "writeFileSync('ccd/ccd', markGenerated(readFileSync('ccd/ccd', 'utf8')))"], check=True)
+        say(f"== {row['id']}: {row['file']}")
+        for t in row['tests']:
+            pkg, tf = ('pwa', t[4:]) if t.startswith('pwa:') else ('server', t)
+            args = ['./node_modules/.bin/vitest', 'run', '--maxWorkers=1', tf]
+            if row.get('t'):
+                args += ['-t', row['t']]
+            r = subprocess.run(args, cwd=os.path.join(ROOT, pkg), capture_output=True, text=True, timeout=590)
+            out = re.sub(r'\x1b\[[0-9;]*m', '', r.stdout + r.stderr)
+            tot = [l.strip() for l in out.splitlines() if re.match(r'\s*Tests\s', l)]
+            fails = [l.strip() for l in out.splitlines() if l.strip().startswith('FAIL ')]
+            errs = [l.strip() for l in out.splitlines() if re.match(r'\s*(AssertionError|TypeError|Error):', l)]
+            say(f"   [{pkg}] {tf}  rc={r.returncode}  {tot[-1] if tot else '(no totals)'}")
+            for f in fails[:6]:
+                say('      ' + f[:300])
+            for e in errs[:4]:
+                say('      ' + e[:360])
+    finally:
+        shutil.copy2(backup, path)
+        os.remove(backup)
+        if stamp_backup is not None:
+            open(os.path.join(ROOT, 'ccd/ccd'), 'wb').write(stamp_backup)
+        assert open(path, 'rb').read() == orig, f'{path} was not restored byte-for-byte'
+say('all restored')
+```
+
+Use: write a task's rows to `$SCRATCH/mut-<task>.json`, then from the worktree root `python3 "$SCRATCH/mutate.py" "$SCRATCH/mut-<task>.json"` (optionally followed by row ids). One vitest process at a time, in the foreground. After the run, `git status --short` must list exactly the files the task changed.
+
 ---
 
-### Task 1: `ci.yml` answers the merge queue
+### Task 1: `ci.yml` answers the merge queue — a queue run runs what a pull request runs
 
-**Model routing:** `sonnet`, effort `medium`. One workflow file and one text-reading test.
+**Model routing:** `sonnet`, effort `high` — one workflow file on CI test selection's shape, the two selector modules' pull-request arm, and four test files, three of them CI selection's own.
 
 **Files:**
-- Modify: `.github/workflows/ci.yml` — `merge_group:` directly after `  pull_request:`; a top-level `concurrency:` block directly above `jobs:`; one `if:` under `runs-on: macos-latest` in `test-macos` and in `probe-macos`
-- Test: `server/test/ci-merge-queue.test.ts` (new)
+- Modify: `.github/workflows/ci.yml` — a `merge_group` row in the header's mode table; `merge_group:` directly after `  pull_request:`; ONE arm in the existing `concurrency.group`, with its paragraph; the `select` job's pipeline check runs on a queue run too, against the queue's base sha; `test-macos`'s and `full-suite`'s existing `if:` each gain a leading `github.event_name != 'merge_group' && ` conjunct. `probe-macos` is NOT edited: its event allow-list already keeps a queue run out, and `ci-pipeline.test.ts` pins it with `toBe`.
+- Modify: `.github/ci/select.mjs` — `decideMode`'s rule 1 and `modeInvariantViolation`'s first arm take `merge_group` beside `pull_request`, with their docstrings
+- Modify: `.github/ci/verdict.mjs` — `serverVerdict`'s `tests: none` arm refuses `merge_group` as it refuses `pull_request`, with its docstring
+- Modify: `CLAUDE.md` — the **What CI runs** bullet gains one sentence (a queue run)
+- Test: `server/test/ci-merge-queue.test.ts` (new); `server/test/ci-pipeline.test.ts`, `server/test/ci-select-cli.test.ts`, `server/test/ci-verdict.test.ts` (modify)
 
 **Interfaces:**
-- Consumes: nothing in the tree. GitHub's documented behaviour: a queue runs the required checks on `merge_group` events; a job skipped by `if:` reports success; one pending run per concurrency group.
-- Produces: required checks (`test (server)`, `test (agent)`, `test (pwa)`, `build-pwa`) that report on a queue's group; the concurrency group name `ci-<workflow>-pr-<number>` that CI test selection §4.3 also uses. Task 7's proof run consumes all of it.
+- Consumes: CI test selection's shape on `main` (#183): the mode table in `ci.yml`'s header; `decideMode`, `modeInvariantViolation` (`.github/ci/select.mjs`) and `serverVerdict` (`.github/ci/verdict.mjs`); the one top-level `concurrency:` block whose `pull_request` arm is `ci-<workflow>-pr-<number>` and cancels; the `select` job's plain-bash pipeline check; `test-macos` (matrix, job-level `if:`), `probe-macos` (event allow-list), `full-suite` (`full` mode only, needs `test-macos`, reds on a skipped leg). GitHub's documented behaviour: a queue runs the required checks on `merge_group` events; a job skipped by `if:` reports success; one PENDING run per concurrency group; a `merge_group` event carries no `github.base_ref` and names its base as `github.event.merge_group.base_sha`.
+- Produces: required checks (`test (server)`, `test (agent)`, `test (pwa)`, `build-pwa`) that report on a queue's group, from the SELECTED server tests plus every other required leg in full — exactly a pull request's run (the operator's 2026-09-28 ruling; and the 2026-09-23 CI ruling: selected on a PR, full daily and at the stable gate, no full run per merge); a queue run's own concurrency group `ci-<workflow>-queue-<run id>`, never cancelled; no macOS leg and no `full-suite` on a queue run. Task 7's proof run consumes all of it.
+
+**Why `full-suite` needs the skip even though a queue run is `selected`:** a `selected` run FALLS BACK to `full` on any selection fallback (`select.mjs`'s `testsOut = 'full'`: no map, an unreadable one, a `.github/` change, a lockfile), and `full-suite` runs in `full` mode, needs `test-macos` — which a queue run skips — and its first step reds on a skipped leg. Without the conjunct, every queue run that fell back would carry a red `full-suite` (non-required, so the queue would not wait on it, but the run would conclude `failure`). Measured: Pre-flight finding 13.
+
+**Why the pipeline check runs on a queue run:** it is what keeps a pull request that edits `.github/ci/select-tests.mjs` from choosing its own tests, and the queue run is the one that gates the merge. Left `pull_request`-only (`ci-pipeline.test.ts` pinned it so), a queue run would run the selector the entry itself changed.
 
 - [ ] **Step 0: Confirm the base — wave 1 merged, this branch fresh from `main`**
 
@@ -340,52 +448,64 @@ cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts \
   -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'
 ```
 
-Expected: `branch carries origin/main`; `1` (coordinator clause 15 exists — wave 1's); a count of at least `1`; `7 passed | 326 skipped`. **A `0` on the second line means wave 1 has not merged: stop and report — Task 5 has nothing to append to and Task 4's advisory interplay is unmeasurable.** If `origin/main` is not an ancestor, merge it (`git merge --no-edit origin/main`) and stop on any conflict.
+Expected: `branch carries origin/main`; `1` (coordinator clause 15 exists — wave 1's); `1` (clause 15 names it once, to forbid it); `7 passed | 328 skipped (335)` (measured at `6da36f0b` with wave 1 applied). **A `0` on the second line means wave 1 has not merged: stop and report — Task 5 has nothing to append to and Task 4's advisory interplay is unmeasurable.** If `origin/main` is not an ancestor, merge it (`git merge --no-edit origin/main`) and stop on any conflict.
 
 - [ ] **Step 1: Write the failing test** — `server/test/ci-merge-queue.test.ts`:
 
 ```typescript
 /**
  * The merge queue's half of `.github/workflows/ci.yml` (landing-order stage 2,
- * spec §5.2). Three properties, each read from the file rather than trusted to
- * the comments beside them:
+ * spec §5.2), on CI test selection's shape (#183). Five properties, each read
+ * from the file or from the modules it runs, never trusted to a comment:
  *
  *  1. `merge_group` is a trigger. Without it a queue entry's required checks
  *     never report, and the queue removes the entry at its timeout.
- *  2. Every macOS job skips a `merge_group` run, and NO other job mentions
- *     `merge_group` at all. The second half is the dangerous one: GitHub
- *     reports a job skipped by `if:` as passing, so a required leg that skipped
- *     the queue would let the queue merge a tree nobody tested.
- *  3. A `pull_request` run cancels its superseded predecessor, and every other
- *     event runs in a group of its own — GitHub keeps one PENDING run per group
- *     and cancels the rest even with `cancel-in-progress: false`, so a shared
- *     group would let one queue entry's run cancel another's.
+ *  2. A queue run has a concurrency group of its OWN, and nothing cancels it.
+ *     GitHub keeps one PENDING run per group and cancels the older one even
+ *     with `cancel-in-progress: false`, so a queue run in the shared `refresh`
+ *     group (or any group another run shares) could lose its checks.
+ *  3. A queue run skips every macOS job and every job that needs one
+ *     (`full-suite`), and NOTHING a required check needs mentions
+ *     `merge_group` — but for the one step that asks the pipeline question of
+ *     a queue run too. The second half is the dangerous one: GitHub reports a
+ *     job skipped by `if:` as passing, so a required leg that skipped the
+ *     queue would let the queue merge a tree nobody tested.
+ *  4. A queue run runs what a pull request runs (operator ruling 2026-09-28):
+ *     the header's mode table says so, and `decideMode` agrees for every input.
+ *  5. The selector and the verdict agree on which triggers may never answer
+ *     `tests: none` — derived from `on:`, so a trigger added to one module's
+ *     pull-request arm and not the other's reds here.
  *
  * DERIVED, not listed: "a macOS job" is any job whose block says
- * `runs-on: macos-…`, so a job the CI test selection programme adds later (a
- * macOS shard) is held to rule 2 without this file learning its name.
+ * `runs-on: macos-…`, "needs one" is the transitive `needs:` closure, and the
+ * required legs' prerequisites are the closure of the three jobs that carry a
+ * required name — so a job CI selection adds later is held to rule 3 without
+ * this file learning its name.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { decideMode, modeInvariantViolation } from '../../.github/ci/select.mjs';
+import { serverVerdict } from '../../.github/ci/verdict.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ci = (): string => readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
 
-/** The lines of one TOP-LEVEL key's block: everything after `^<key>:` up to
- *  the next line that opens another top-level key. */
+/** The lines of one TOP-LEVEL key's block: everything after `^<key>:` up to the
+ *  next line that opens another top-level key. A SECOND block with the same key
+ *  is a duplicate YAML key — invalid, and invisible to a reader that stops at
+ *  the first — so this refuses one. */
 function topBlock(yml: string, key: string): string[] {
   const lines = yml.split('\n');
-  const start = lines.findIndex((l) => l === `${key}:`);
-  if (start < 0) return [];
-  const rest = lines.slice(start + 1);
+  const heads = lines.flatMap((l, i) => (l === `${key}:` || l.startsWith(`${key}: `) ? [i] : []));
+  expect(heads.length, `ci.yml carries ${heads.length} top-level \`${key}:\` keys`).toBe(1);
+  const rest = lines.slice(heads[0]! + 1);
   const end = rest.findIndex((l) => /^[A-Za-z_][\w-]*:/.test(l));
   return end < 0 ? rest : rest.slice(0, end);
 }
 
-/** `jobs:` as job name -> that job's lines, read the way `oss-metadata.test.ts`
- *  reads it (every job key at two-space indent). */
+/** `jobs:` as job id -> that job's lines (every job key at two-space indent). */
 function jobs(yml: string): Map<string, string[]> {
   const out = new Map<string, string[]>();
   let cur: string[] | null = null;
@@ -394,170 +514,661 @@ function jobs(yml: string): Map<string, string[]> {
     if (head) { cur = []; out.set(head[1]!, cur); continue; }
     cur?.push(l);
   }
+  expect(out.size, 'parsed no jobs at all').toBeGreaterThan(0);
   return out;
 }
 
-const SKIP = "    if: github.event_name != 'merge_group'";
-const isMac = (block: string[]): boolean => block.some((l) => /^ {4}runs-on: macos-/.test(l));
+/** Every occurrence of a job-level scalar key (four-space indent) — more than
+ *  one is a duplicate key. */
+function jobKeys(block: string[], key: string): string[] {
+  return block.flatMap((l) => { const m = new RegExp(`^ {4}${key}: (.*)$`).exec(l); return m ? [m[1]!] : []; });
+}
 
-describe('ci.yml and the merge queue (landing-order stage 2)', () => {
+const needsOf = (block: string[]): string[] => {
+  const v = jobKeys(block, 'needs')[0];
+  return v === undefined ? [] : v.replace(/^\[|\]$/g, '').split(',').map((s) => s.trim()).filter(Boolean);
+};
+
+/** Split an expression at its TOP level (outside parentheses) on `op`. */
+function topLevel(expr: string, op: ' && ' | ' || '): string[] {
+  const parts: string[] = [];
+  let depth = 0; let start = 0;
+  for (let i = 0; i < expr.length; i++) {
+    const c = expr[i];
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (depth === 0 && expr.startsWith(op, i)) { parts.push(expr.slice(start, i)); start = i + op.length; i += op.length - 1; }
+  }
+  parts.push(expr.slice(start));
+  return parts.map((p) => p.trim());
+}
+
+const SKIP = "github.event_name != 'merge_group'";
+const ALLOW_LIST = /^github\.event_name == '[a-z_]+'(?: \|\| github\.event_name == '[a-z_]+')*$/;
+
+/** Whether a job-level `if:` keeps a `merge_group` run out: either the skip is
+ *  one of its TOP-LEVEL conjuncts and it has no top-level `||` (a disjunct
+ *  would route around the conjunct), or it is a pure event allow-list that does
+ *  not name `merge_group`. */
+function skipsQueue(cond: string | undefined): boolean {
+  if (cond === undefined) return false;
+  if (topLevel(cond, ' || ').length > 1) return ALLOW_LIST.test(cond) && !cond.includes('merge_group');
+  return topLevel(cond, ' && ').includes(SKIP);
+}
+
+const onKeys = (): string[] => topBlock(ci(), 'on').flatMap((l) => { const m = /^ {2}([a-z_]+):/.exec(l); return m ? [m[1]!] : []; });
+
+/** The ONE place the required closure may name the event: `select`'s pipeline
+ *  check, a STEP (never a job-level condition), which asks a queue run the
+ *  pull request's question against the queue's base (rule 4). */
+const PIPELINE_STEP_LINES = [
+  "        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'",
+  "          BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}",
+];
+
+describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s shape)', () => {
   it('triggers on merge_group, beside pull_request', () => {
-    const on = topBlock(ci(), 'on').map((l) => /^ {2}([a-z_]+):/.exec(l)?.[1]).filter(Boolean);
+    const on = onKeys();
     expect(on, 'ci.yml no longer triggers on pull_request').toContain('pull_request');
     expect(on, 'ci.yml does not trigger on merge_group — a queue entry would never get its required checks')
       .toContain('merge_group');
   });
 
-  it('skips merge_group on every macOS job, and on no other job', () => {
+  it('gives a queue run a concurrency group of its own, and never cancels one', () => {
+    const block = topBlock(ci(), 'concurrency');
+    const group = block.find((l) => l.startsWith('  group: ')) ?? '';
+    // Run-unique: `github.run_id` is unique per run. An arm keyed on the ref,
+    // the sha or the mode could be shared, and a shared group drops pending runs.
+    expect(group, 'a merge_group run has no group of its own — it falls through to a shared one')
+      .toContain("github.event_name == 'merge_group' && format('queue-{0}', github.run_id)");
+    // …and it is taken BEFORE the shared push-to-main group can be reached.
+    expect(group.indexOf("format('queue-{0}', github.run_id)"), 'the queue arm sits after the shared refresh arm')
+      .toBeLessThan(group.indexOf("'refresh'"));
+    expect(block, 'cancel-in-progress must be the pull_request event and nothing wider — a cancelled queue run removes the entry')
+      .toContain("  cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
+  });
+
+  it('keeps every macOS job, and every job that needs one, off a queue run — and no required prerequisite mentions merge_group', () => {
     const all = jobs(ci());
-    // Guard the guard: a reader that parsed no macOS job would make the loop
-    // below vacuous, and there are two today.
+    const isMac = (b: string[]): boolean => b.some((l) => /^ {4}runs-on: macos-/.test(l));
+    // Guard the guard: a reader that parsed no macOS job makes the loop vacuous.
     const macs = [...all].filter(([, b]) => isMac(b)).map(([n]) => n);
     expect(macs.length, 'parsed no macOS job at all — this test went blind').toBeGreaterThan(0);
-    for (const [name, block] of all) {
-      if (isMac(block)) {
-        expect(block, `macOS job \`${name}\` runs on merge_group — non-required, and it holds a macOS runner the queue does not wait for`)
-          .toContain(SKIP);
-      } else {
-        expect(block.join('\n'), `job \`${name}\` mentions merge_group — a required leg skipped by if: reports as PASSING, and the queue would merge an untested tree`)
-          .not.toContain('merge_group');
+    // Every job that needs a macOS job, transitively (full-suite needs test-macos).
+    const needsMac = (id: string, seen = new Set<string>()): boolean => {
+      if (seen.has(id)) return false; seen.add(id);
+      return needsOf(all.get(id) ?? []).some((n) => macs.includes(n) || needsMac(n, seen));
+    };
+    const offQueue = [...all.keys()].filter((id) => macs.includes(id) || needsMac(id));
+    expect(offQueue, 'full-suite no longer needs a macOS leg — re-derive this rule').toContain('full-suite');
+    for (const id of offQueue) {
+      const conds = jobKeys(all.get(id)!, 'if');
+      expect(conds.length, `job \`${id}\` carries ${conds.length} job-level if: keys`).toBeLessThanOrEqual(1);
+      expect(skipsQueue(conds[0]), `job \`${id}\` runs on a merge_group run: ${conds[0] ?? '(no if:)'}`).toBe(true);
+    }
+    // The required legs and everything they need: none may mention merge_group,
+    // because a required leg skipped by `if:` reads as PASSING to the queue.
+    const req = new Set<string>();
+    const walk = (id: string): void => { if (req.has(id)) return; req.add(id); needsOf(all.get(id) ?? []).forEach(walk); };
+    ['server', 'test', 'build-pwa'].forEach(walk);
+    expect([...req].sort()).toEqual(['build-pwa', 'select', 'server', 'server-shard', 'server-typecheck', 'test']);
+    for (const id of req) {
+      const code = (all.get(id) ?? []).filter((l) => !/^\s*#/.test(l) && !PIPELINE_STEP_LINES.includes(l)).join('\n');
+      expect(code, `\`${id}\` mentions merge_group — a required leg skipped by if: reports as PASSING, and the queue would merge an untested tree`)
+        .not.toContain('merge_group');
+    }
+  });
+
+  it('runs what a pull request runs: the mode table has the row, and decideMode agrees for every input', () => {
+    const header = ci().split('\n').filter((l) => l.startsWith('#'));
+    const row = (ev: string): string | undefined => header.map((l) => new RegExp(`^#   ${ev}\\s{2,}(\\w+)`).exec(l)?.[1]).find(Boolean);
+    expect(row('merge_group'), 'the header mode table has no merge_group row').toBeDefined();
+    expect(row('merge_group')).toBe(row('pull_request'));
+    expect(row('merge_group')).toBe(decideMode({ event: 'merge_group', fullGreen: false }).tests);
+    for (const inputMode of [undefined, 'full', 'rebuild']) {
+      for (const fullGreen of [false, true]) {
+        expect(decideMode({ event: 'merge_group', inputMode, fullGreen }), `inputMode=${inputMode} fullGreen=${fullGreen}`)
+          .toEqual(decideMode({ event: 'pull_request', inputMode, fullGreen }));
       }
     }
   });
 
-  it('cancels a superseded pull_request run and nothing else', () => {
-    const block = topBlock(ci(), 'concurrency');
-    const group = block.find((l) => l.startsWith('  group: '));
-    expect(group, 'ci.yml has no concurrency group').toBeDefined();
-    // The PR arm is keyed by the PR number, and ONLY a pull_request event takes it.
-    expect(group).toContain("github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)");
-    // Every other event falls to a key no other run shares.
-    expect(group, 'a non-PR event shares a group — GitHub keeps one pending run per group and cancels the rest')
-      .toMatch(/\|\| github\.run_id \}\}$/);
-    expect(block, 'cancel-in-progress must be the pull_request event and nothing wider')
-      .toContain("  cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
+  it('the selector and the verdict agree on which triggers may never answer tests: none', () => {
+    const events = onKeys();
+    expect(events.length, 'parsed no triggers').toBeGreaterThan(0);
+    for (const event of events) {
+      const neverNone = [undefined, 'full', 'rebuild'].every((inputMode) =>
+        [false, true].every((fullGreen) => decideMode({ event, inputMode, fullGreen }).tests !== 'none'));
+      expect(modeInvariantViolation(event, undefined, 'none') !== null, `${event}: select.mjs's invariant disagrees with decideMode`)
+        .toBe(neverNone);
+      const v = serverVerdict({ select: 'success', typecheck: '', shards: '', tests: 'none', count: '', event });
+      expect(v.ok, `${event}: verdict.mjs reads tests: none as ${v.ok ? 'green' : 'red'}, decideMode says it ${neverNone ? 'can never' : 'can'} happen`)
+        .toBe(!neverNone);
+    }
   });
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [ ] **Step 2: Write the failing cases in CI selection's own three test files.**
+
+(a) `server/test/ci-verdict.test.ts` — the exhaustive table crosses a third event, and its independent oracle gains the ruling. Replace
+
+```typescript
+const EVENTS = ['pull_request', 'push'];
+```
+
+with
+
+```typescript
+// `merge_group` since landing-order wave 2: a merge-queue run runs what a pull
+// request runs (operator ruling 2026-09-28), so it never answers tests none.
+const EVENTS = ['pull_request', 'push', 'merge_group'];
+```
+
+and replace
+
+```typescript
+  if (tests === 'none') return event !== 'pull_request';
+```
+
+with
+
+```typescript
+  if (tests === 'none') return event !== 'pull_request' && event !== 'merge_group';
+```
+
+and directly after the `it('tests none on a pull_request -> red: a pull request always runs server tests (ruling T2)', …)` case's closing `  });`, insert:
+
+```typescript
+
+  it('tests none on a merge_group -> red too: a merge-queue run runs what a pull request runs (operator ruling 2026-09-28)', () => {
+    const v = serverVerdict({
+      select: 'success', typecheck: '', shards: '', tests: 'none', count: '', event: 'merge_group',
+    });
+    expect(v).toEqual({ ok: false, reason: expect.stringContaining('merge_group') });
+  });
+```
+
+(b) `server/test/ci-select-cli.test.ts` — in `describe('modeInvariantViolation: what a trigger can never answer (ruling T2)'`, directly after the `it('a pull_request never answers tests none', …)` case's closing `  });`, insert:
+
+```typescript
+
+  it('a merge_group never answers tests none either — a queue run runs what a pull request runs (operator ruling 2026-09-28)', () => {
+    expect(modeInvariantViolation('merge_group', undefined, 'none')).toMatch(/merge_group/);
+    expect(modeInvariantViolation('merge_group', undefined, 'selected')).toBeNull();
+    expect(modeInvariantViolation('merge_group', 'full', 'full')).toBeNull();
+  });
+```
+
+and in `describe('select.mjs CLI — pull_request'`, directly after the first case (`it('enforce: selects exactly the rule-3/4/2 files, table carries the reasons, matrices carry only the selection', …)`)'s closing `  });`, insert:
+
+```typescript
+
+  it('merge_group (a merge-queue run) -> the SAME selection as the pull request, matrices and all (operator ruling 2026-09-28)', () => {
+    const { repo, mapFile, baseSha } = buildMainFixture();
+    const pr = runSelect(repo, { event: 'pull_request', selection: 'enforce', mapFile });
+    const queue = runSelect(repo, { event: 'merge_group', selection: 'enforce', mapFile });
+    expect(queue.status).toBe(0);
+    expect(queue.outputs.tests).toBe('selected');
+    expect(queue.outputs.map_sha).toBe(baseSha);
+    expect(queue.outputs.count).toBe(pr.outputs.count);
+    expect(queue.outputs.server_matrix).toBe(pr.outputs.server_matrix);
+    expect(queue.summary).toContain('- event: `merge_group`');
+  });
+```
+
+(c) `server/test/ci-pipeline.test.ts` — four edits. In `it('full-suite needs every leg — …', …)` replace
+
+```typescript
+    expect(jobKey(b, 'if')).toBe("always() && needs.select.outputs.tests == 'full'");
+```
+
+with
+
+```typescript
+    // Never on a merge-queue run (landing-order stage 2): a queue run skips
+    // test-macos, and a queue run that fell back to `full` would read that skip
+    // as a red leg here (ci-merge-queue.test.ts derives the rule).
+    expect(jobKey(b, 'if')).toBe("always() && github.event_name != 'merge_group' && needs.select.outputs.tests == 'full'");
+```
+
+In `describe('ci.yml: a pull request that changes the pipeline runs everything, decided in plain bash (ruling T3)'`, replace
+
+```typescript
+  it('runs only on pull_request, and hands select --input-mode full when it answers changed=true', () => {
+    expect(pipelineStep()).toMatch(/^ {8}if: github\.event_name == 'pull_request'$/m);
+```
+
+with
+
+```typescript
+  it('runs on pull_request and on merge_group, and hands select --input-mode full when it answers changed=true', () => {
+    // A merge-queue run asks the same question (operator ruling 2026-09-28:
+    // it runs what a pull request runs), or a pull request that edits the
+    // selector would choose the tests of the queue run that gates its merge.
+    expect(pipelineStep()).toMatch(/^ {8}if: github\.event_name == 'pull_request' \|\| github\.event_name == 'merge_group'$/m);
+    // A queue run has no base_ref; its base is the sha the queue built on.
+    expect(pipelineStep()).toMatch(/^ {10}BASE: \$\{\{ github\.event_name == 'merge_group' && github\.event\.merge_group\.base_sha \|\| format\('origin\/\{0\}', github\.base_ref\) \}\}$/m);
+```
+
+and replace the three `runStep` environments by content — `{ BASE_REF: 'main' }` (three occurrences) → `{ BASE: 'origin/main' }`, and `{ BASE_REF: 'nope' }` (one) → `{ BASE: 'origin/nope' }`:
+
+```bash
+sed -i "s/{ BASE_REF: 'main' }/{ BASE: 'origin\/main' }/g; s/{ BASE_REF: 'nope' }/{ BASE: 'origin\/nope' }/" server/test/ci-pipeline.test.ts
+grep -c "BASE_REF" server/test/ci-pipeline.test.ts
+```
+
+Expected: `0`. Then, directly after the `it('diffs from the merge base, so a pipeline change main made since the branch point is not this pull request\'s', …)` case's closing `  });`, insert:
+
+```typescript
+
+  it('a merge-queue run asks it too, against the base sha the queue built its group on', () => {
+    // `prRepo`'s origin/main is the base the entry sits on; a queue run names
+    // it by sha (`merge_group.base_sha`), never by a branch name it lacks.
+    const head = (dir: string): string => execFileSync('git', ['rev-parse', 'origin/main'], { cwd: dir, encoding: 'utf8' }).trim();
+    const pipe = prRepo('.github/ci/select-tests.mjs');
+    expect(runStep(pipelineStep(), pipe, { BASE: head(pipe) })).toMatchObject({ status: 0, output: 'changed=true\n' });
+    const other = prRepo('server/y.ts');
+    expect(runStep(pipelineStep(), other, { BASE: head(other) })).toMatchObject({ status: 0, output: 'changed=false\n' });
+  });
+```
+
+- [ ] **Step 3: Run them to verify they fail — one file at a time**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/ci-merge-queue.test.ts
+./node_modules/.bin/vitest run test/ci-verdict.test.ts
+./node_modules/.bin/vitest run test/ci-select-cli.test.ts
+./node_modules/.bin/vitest run test/ci-pipeline.test.ts
 ```
 
-Expected (measured at `905360dc`): `3 failed`, with `ci.yml does not trigger on merge_group — … expected [ 'push', 'pull_request', …(1) ] to include 'merge_group'`, `macOS job \`test-macos\` runs on merge_group …`, and `ci.yml has no concurrency group: expected undefined to be defined`.
+Expected (measured at `6da36f0b` with wave 1 applied, each file alone, `--maxWorkers=1`):
 
-- [ ] **Step 3: Add the trigger.** Locate `  pull_request:` inside `on:` (`grep -n '^  pull_request:$' .github/workflows/ci.yml` — one hit, ≈21) and insert directly after it, above the `workflow_dispatch` comment:
+- `ci-merge-queue` — `4 failed | 1 passed (5)`: "triggers on merge_group…" (`expected [ 'push', 'pull_request', …(3) ] to include 'merge_group'`), "gives a queue run a concurrency group of its own…" (`a merge_group run has no group of its own — it falls through to a shared one`), "keeps every macOS job…" (``job `test-macos` runs on a merge_group run: needs.select.outputs.macos_count != '0' && …``) and "runs what a pull request runs…" (`the header mode table has no merge_group row: expected undefined to be defined`). The agreement case passes before and after: with no `merge_group` trigger it has nothing to disagree about, and rows M11–M13 prove it is not vacuous.
+- `ci-verdict` — `76 failed | 4447 passed (4523)`: the 75 exhaustive rows with `select='success' tests='none' event='merge_group'` (`reason: tests: none — nothing was selected to run: expected true to be false`) and the new named case.
+- `ci-select-cli` — `2 failed | 39 passed (41)`: the new invariant case (`TypeError: .toMatch() expects to receive a string, but got object` — the arm answers `null`) and the new CLI case (`expected 'full' to be 'selected'` — `merge_group` falls through `decideMode`'s rule 6 today).
+- `ci-pipeline` — `5 failed | 34 passed (39)`: the moved step pin, the two `runStep` cases whose `BASE` the unedited script ignores, the new queue case, and the moved `full-suite` pin.
+
+- [ ] **Step 4: The workflow.** Five edits to `.github/workflows/ci.yml`, each located by content.
+
+(a) The mode table. Replace the three lines
+
+```yaml
+#   pull_request        selected — the server tests the change can affect
+#                       (a measured dependency map, .github/ci/select-tests.mjs),
+#                       sharded; agent, pwa, build-pwa and probe-macos in full.
+```
+
+with
+
+```yaml
+#   pull_request        selected — the server tests the change can affect
+#                       (a measured dependency map, .github/ci/select-tests.mjs),
+#                       sharded; agent, pwa, build-pwa and probe-macos in full.
+#   merge_group         selected — a merge-queue run runs what a pull request
+#                       runs (operator ruling 2026-09-28), the pipeline check
+#                       included, in a concurrency group of its own; no macOS
+#                       leg and no full-suite.
+```
+
+(b) The trigger. Directly after the line `  pull_request:` (one hit, ≈45 at `6da36f0b`; the next line is `  schedule:`), insert:
 
 ```yaml
   # THE MERGE QUEUE (landing-order stage 2, spec §5.2). A queue runs the
   # REQUIRED checks on the group it built before it merges, and a workflow that
   # does not listen for `merge_group` never reports them — the entry waits out
-  # the queue's timeout and is removed. So this trigger is what lets a ruleset
-  # require the queue at all, and it is on `main` BEFORE the operator turns the
-  # queue on (the spec's rollout step 1). `push` stays `branches: [main]`, so
-  # the queue's own `gh-readonly-queue/main/*` branches start no second run.
+  # the queue's timeout and is removed. This trigger is on `main` BEFORE the
+  # operator turns the queue on (the spec's rollout step 1). A queue run runs
+  # what a pull request runs (the mode table above). `push` stays
+  # `branches: [main]`, so the queue's own `gh-readonly-queue/main/*` branches
+  # start no second run.
   merge_group:
 ```
 
-- [ ] **Step 4: Add the concurrency block.** Locate `^jobs:$` (one hit, ≈30 before Step 3) and insert directly above it (after the blank line that follows `  workflow_dispatch:`):
+(c) The concurrency group. Replace
 
 ```yaml
-# ONE RUN PER PULL REQUEST, NOT ONE PER PUSH (landing-order stage 2). A push
-# that supersedes a PR's head makes the older run's answer worthless, and it
-# kept holding runners — macOS ones among them — until it finished. So every
-# `pull_request` run of one PR shares a group, and the newer cancels the older.
-#
-# EVERY OTHER EVENT GETS A GROUP OF ITS OWN (`github.run_id` is unique per
-# run), and that is not decoration: GitHub keeps at most ONE pending run per
-# group and cancels the older pending one even with `cancel-in-progress:
-# false`. A shared group would let one queue entry's `merge_group` run cancel
-# another's, and drop a merge's `push` run on `main`. The PR arm is spelled
-# `ci-<workflow>-pr-<number>`, the name the CI test selection design (§4.3)
-# gives the same group, so that programme's reshaping keeps this one's key.
+# called run would wait on the caller's own group.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || (github.event_name == 'push' && !inputs.mode) && 'refresh' || format('{0}-{1}-{2}', inputs.mode || 'full', github.event_name, github.ref_name) }}
 ```
 
-- [ ] **Step 5: Keep both macOS legs off queue runs.** In `test-macos` (locate `^  test-macos:$`), directly under its `    runs-on: macos-latest` line, insert:
+with
 
 ```yaml
-    # NOT ON A MERGE QUEUE RUN (landing-order stage 2). Non-required, so the
-    # queue does not wait for it — but it would still start, on the org's
-    # five-job macOS cap, and it is the leg that runs into its 55-minute
-    # deadline. The `push` run on `main` after the merge still runs it.
-    if: github.event_name != 'merge_group'
+# called run would wait on the caller's own group.
+#
+# A MERGE-QUEUE RUN gets a group of its OWN, `queue-<run id>` (landing-order
+# stage 2, spec §5.2), taken before the shared `refresh` group can be reached.
+# GitHub keeps at most one PENDING run per group and cancels the older pending
+# one even with `cancel-in-progress: false`: a queue run in a shared group
+# could lose its checks, and the queue would remove the entry. Nothing cancels
+# one either — `cancel-in-progress` stays the pull_request event alone.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('queue-{0}', github.run_id) || (github.event_name == 'push' && !inputs.mode) && 'refresh' || format('{0}-{1}-{2}', inputs.mode || 'full', github.event_name, github.ref_name) }}
 ```
 
-In `probe-macos` (locate `^  probe-macos:$`), directly under its `    runs-on: macos-latest` line, insert:
+(d) The pipeline check. In the `select` job replace
 
 ```yaml
-    # Not on a merge queue run either, for `test-macos`'s reason: it reports,
-    # it does not gate, and the queue is a gate.
-    if: github.event_name != 'merge_group'
+      # A base it cannot diff against answers "changed": the safe direction.
+      - name: Does this pull request change the pipeline?
+        id: pipeline
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if base=$(git merge-base "origin/$BASE_REF" HEAD) && changed=$(git diff --name-only "$base" HEAD -- .github/); then
 ```
 
-`timeout-minutes` stays each job's first `timeout-minutes` key, so `oss-metadata.test.ts`'s reader is unaffected.
+with
 
-- [ ] **Step 6: Run the tests to verify they pass**
+```yaml
+      # A base it cannot diff against answers "changed": the safe direction.
+      # A MERGE-QUEUE RUN asks the same question of the same change (operator
+      # ruling 2026-09-28: it runs what a pull request runs), against the sha
+      # the queue built its group on — it has no `github.base_ref` — so a pull
+      # request that edits the selector cannot choose its own queue run's tests.
+      - name: Does this pull request change the pipeline?
+        id: pipeline
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}
+        run: |
+          if base=$(git merge-base "$BASE" HEAD) && changed=$(git diff --name-only "$base" HEAD -- .github/); then
+```
+
+and, in the same step, replace
+
+```yaml
+            echo "::warning::could not diff this pull request against origin/$BASE_REF; treating its pipeline as changed"
+```
+
+with
+
+```yaml
+            echo "::warning::could not diff this change against $BASE; treating its pipeline as changed"
+```
+
+(e) The macOS leg and the job that needs it. Replace
+
+```yaml
+    needs: select
+    if: needs.select.outputs.macos_count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')
+```
+
+with
+
+```yaml
+    needs: select
+    # Never on a merge-queue run (landing-order stage 2): non-required, so the
+    # queue does not wait for it, but every entry would still take the
+    # organisation's scarce macOS slots. `probe-macos` keeps a queue run out by
+    # its own event allow-list.
+    if: github.event_name != 'merge_group' && needs.select.outputs.macos_count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')
+```
+
+and in `full-suite` replace
+
+```yaml
+    needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos]
+    if: always() && needs.select.outputs.tests == 'full'
+```
+
+with
+
+```yaml
+    needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos]
+    # Never on a merge-queue run: a queue run skips test-macos, and one that
+    # fell back to `full` would read that skip as a red leg (landing-order
+    # stage 2; a queue run is never the stable gate's evidence anyway —
+    # main-artifact.mjs trusts no merge_group run).
+    if: always() && github.event_name != 'merge_group' && needs.select.outputs.tests == 'full'
+```
+
+- [ ] **Step 5: The selector and the verdict — the pull-request arm takes the queue.**
+
+In `.github/ci/select.mjs` replace
+
+```javascript
+ *   1. `pull_request`                          -> selected / none — or full / none with `inputMode === 'full'`,
+ *                                                 which ci.yml passes when the PR changes `.github/` (a plain-bash
+ *                                                 check, so a PR cannot talk its own selector out of a full run)
+```
+
+with
+
+```javascript
+ *   1. `pull_request` or `merge_group`         -> selected / none — or full / none with `inputMode === 'full'`,
+ *                                                 which ci.yml passes when the change touches `.github/` (a
+ *                                                 plain-bash check, so a PR cannot talk its own selector out of a
+ *                                                 full run). A merge-queue run runs what a pull request runs
+ *                                                 (operator ruling 2026-09-28, landing-order wave 2).
+```
+
+and
+
+```javascript
+export function decideMode({ event, inputMode, fullGreen }) {
+  if (event === 'pull_request') {
+```
+
+with
+
+```javascript
+export function decideMode({ event, inputMode, fullGreen }) {
+  if (event === 'pull_request' || event === 'merge_group') {
+```
+
+and
+
+```javascript
+ * What a trigger can never answer (ruling T2), checked on decideMode's answer before anything runs: a pull
+ * request always runs server tests (never `none`), and a schedule, a refresh push or a rebuild never runs a
+```
+
+with
+
+```javascript
+ * What a trigger can never answer (ruling T2), checked on decideMode's answer before anything runs: a pull
+ * request, and a merge-queue run (landing-order wave 2), always runs server tests (never `none`), and a
+ * schedule, a refresh push or a rebuild never runs a
+```
+
+and
+
+```javascript
+  if (event === 'pull_request' && tests === 'none') return 'a pull_request answered tests: none';
+```
+
+with
+
+```javascript
+  if ((event === 'pull_request' || event === 'merge_group') && tests === 'none') return `a ${event} answered tests: none`;
+```
+
+In `.github/ci/verdict.mjs` replace
+
+```javascript
+ * so checking it there would read a `skipped` as a failure. A pull request
+ * can never answer `none` (it always runs server tests — ruling T2), so
+ * `none` with `event === 'pull_request'` is red; the event comes from the
+ * workflow's own context, not from select's outputs.
+```
+
+with
+
+```javascript
+ * so checking it there would read a `skipped` as a failure. A pull request
+ * can never answer `none` (it always runs server tests — ruling T2), and nor
+ * can a merge-queue run, which runs what a pull request runs (operator ruling
+ * 2026-09-28, landing-order wave 2), so `none` with `event === 'pull_request'`
+ * or `'merge_group'` is red; the event comes from the workflow's own context,
+ * not from select's outputs.
+```
+
+and
+
+```javascript
+  if (tests === 'none') {
+    return event === 'pull_request'
+      ? { ok: false, reason: 'tests: none on a pull_request — a pull request always runs server tests' }
+```
+
+with
+
+```javascript
+  if (tests === 'none') {
+    return event === 'pull_request' || event === 'merge_group'
+      ? { ok: false, reason: `tests: none on a ${event} — a pull request or a merge-queue run always runs server tests` }
+```
+
+and, in the same docstring's Rules list, replace
+
+```javascript
+ *   2. `tests === 'none'` -> ok (nothing was supposed to run) — except on a
+ *      `pull_request`, which fails.
+```
+
+with
+
+```javascript
+ *   2. `tests === 'none'` -> ok (nothing was supposed to run) — except on a
+ *      `pull_request` or a `merge_group`, which fails.
+```
+
+`select.mjs`'s macOS budget line (`event !== 'pull_request' && testsOut === 'full' ? PROFILES.macosFull : …`) is deliberately NOT edited: no job reads the macOS matrix on a queue run (Step 4 (e)), so an edit there would carry no test that could red.
+
+- [ ] **Step 6: `CLAUDE.md`'s CI bullet.** In **What CI runs**, replace
+
+```
+  runs.** **A merge to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
+```
+
+with
+
+```
+  runs.** **A merge-queue run** (`merge_group`) runs what a pull request runs, its pipeline check included, in a
+  concurrency group of its own, and never the macOS legs or `full-suite` (operator ruling 2026-09-28). **A merge
+  to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
+```
+
+- [ ] **Step 7: Run the tests to verify they pass — one file at a time — and prove the YAML has no duplicate key**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/ci-merge-queue.test.ts test/oss-metadata.test.ts
+cd server && ./node_modules/.bin/vitest run test/ci-merge-queue.test.ts
+./node_modules/.bin/vitest run test/ci-pipeline.test.ts
+./node_modules/.bin/vitest run test/ci-verdict.test.ts
+./node_modules/.bin/vitest run test/ci-select-cli.test.ts
+./node_modules/.bin/vitest run test/oss-metadata.test.ts
+./node_modules/.bin/vitest run test/ci-main-artifact.test.ts
+./node_modules/.bin/vitest run test/typecheck-tests.test.ts
+cd .. && python3 -c "
+import yaml, sys
+class U(yaml.SafeLoader): pass
+def m(loader, node, deep=False):
+    keys = [loader.construct_object(k, deep=deep) for k, _ in node.value]
+    d = [k for k in set(keys) if keys.count(k) > 1]
+    if d: sys.exit(f'duplicate key(s) {d} at line {node.start_mark.line + 1}')
+    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+U.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, m)
+w = yaml.load(open('.github/workflows/ci.yml'), U)
+print('yaml-ok', sorted(w[True].keys()))"
 ```
 
-Expected (measured): `2 passed (2)` files, `25 passed (25)` tests (3 new + 22 existing).
+Expected (measured at `6da36f0b` with wave 1 applied): `ci-merge-queue` `5 passed (5)`; `ci-pipeline` `39 passed (39)`; `ci-verdict` `4523 passed (4523)`; `ci-select-cli` `41 passed (41)`; `oss-metadata` `22 passed (22)`; `ci-main-artifact` `16 passed (16)` (it trusts no `merge_group` run, and was not edited); `typecheck-tests` PASS (the new file imports both `.mjs` modules the way `ci-select-cli` and `ci-verdict` already do); and `yaml-ok ['merge_group', 'pull_request', 'push', 'schedule', 'workflow_call', 'workflow_dispatch']` — a strict duplicate-key loader, because the text-reading pins cannot see a second `concurrency:` or `if:` key (the 2026-09-28 re-measure applied the old Steps 4–5 literally and got a file PyYAML's duplicate-key loader refuses while `ci-pipeline` stayed green).
 
-- [ ] **Step 7: Mutation check, then commit**
+- [ ] **Step 8: Mutation check, then commit**
 
-Six mutations, each restored from a saved copy of the Step 5 file (`cp .github/workflows/ci.yml "$SCRATCH/ci.yml.task1"` first; restore with `cp` back, never `git checkout --`). Every red below was measured on the prototype:
+Fifteen mutations, each restored from a saved COPY (never `git checkout --`), run with the mutation runner (`$SCRATCH/mutate.py`, "The mutation tables, mechanised") one test FILE per process. Every red below was measured at `6da36f0b` with wave 1 applied; "only" means every other case in that file stayed green:
 
-| # | Exact edit in `.github/workflows/ci.yml` | Command (from `server/`) | Expected red |
+| # | Exact edit | Test file(s) | Expected red (measured) |
 |---|---|---|---|
-| M1 | delete the line `  merge_group:` | `./node_modules/.bin/vitest run test/ci-merge-queue.test.ts` | "triggers on merge_group…" only — `expected [ 'push', 'pull_request', …(1) ] to include 'merge_group'` |
-| M2 | delete `test-macos`'s `    if: github.event_name != 'merge_group'` | same | "skips merge_group on every macOS job…" only — `macOS job \`test-macos\` runs on merge_group …` |
-| M2b | delete `probe-macos`'s `    if: github.event_name != 'merge_group'` | same | same case — `macOS job \`probe-macos\` runs on merge_group …` |
-| M3 | add `    if: github.event_name != 'merge_group'` under `build-pwa`'s `    runs-on: ubuntu-latest` | same | same case — `job \`build-pwa\` mentions merge_group — a required leg skipped by if: reports as PASSING …` |
-| M4 | `  cancel-in-progress: ${{ github.event_name == 'pull_request' }}` → `  cancel-in-progress: true` | same | "cancels a superseded pull_request run and nothing else" only — `cancel-in-progress must be the pull_request event and nothing wider` |
-| M5 | `\|\| github.run_id }}` → `\|\| github.ref }}` | same | same case — `a non-PR event shares a group — GitHub keeps one pending run per group and cancels the rest: expected '  group: ci-${{ github.workflow }}-${…' to match /\|\| github\.run_id \}\}$/` |
+| M1 | `ci.yml`: delete the line `  merge_group:` | `ci-merge-queue` | `1 failed \| 4 passed` — "triggers on merge_group…" only: `expected [ 'push', 'pull_request', …(3) ] to include 'merge_group'` |
+| M2 | `ci.yml`: delete ` \|\| github.event_name == 'merge_group' && format('queue-{0}', github.run_id)` from the group | `ci-merge-queue` | `1 failed` — "gives a queue run a concurrency group of its own…": `a merge_group run has no group of its own — it falls through to a shared one` |
+| M3 | `ci.yml`: `format('queue-{0}', github.run_id)` → `format('queue-{0}', github.ref_name)` (a group two runs could share) | `ci-merge-queue` | `1 failed` — same case, same message |
+| M4 | `ci.yml`: `  cancel-in-progress: ${{ github.event_name == 'pull_request' }}` → `  cancel-in-progress: ${{ github.event_name != 'push' }}` (cancels queue runs) | `ci-merge-queue`, `ci-pipeline` | `1 failed` each — `cancel-in-progress must be the pull_request event and nothing wider — a cancelled queue run removes the entry`; and "cancels superseded runs for pull requests only…" |
+| M5 | `ci.yml` `test-macos`: `    if: github.event_name != 'merge_group' && needs.select.outputs.macos_count` → `    if: needs.select.outputs.macos_count` | `ci-merge-queue` | `1 failed` — "keeps every macOS job…": ``job `test-macos` runs on a merge_group run: …`` |
+| M6 | `ci.yml` `full-suite`: drop the `github.event_name != 'merge_group' && ` conjunct | `ci-merge-queue`, `ci-pipeline` | `1 failed` each — ``job `full-suite` runs on a merge_group run: always() && needs.select.outputs.tests == 'full'``; and "full-suite needs every leg…" (`expected 'always() && needs.select.outputs.test…' to be 'always() && github.event_name != \'me…'`) |
+| M7 | `ci.yml` `probe-macos`: `    if: github.event_name == 'pull_request' \|\| github.event_name == 'schedule'` → `    if: github.event_name != 'push'` | `ci-merge-queue`, `ci-pipeline` | `1 failed` each — ``job `probe-macos` runs on a merge_group run: github.event_name != 'push'``; and "probe-macos runs on pull requests and the daily schedule only…" |
+| M8 | `ci.yml` `build-pwa`: add `    if: github.event_name != 'merge_group'` under its `# Required by name…` comment (a required leg skipped on the queue) | `ci-merge-queue`, `ci-pipeline` | `1 failed` each — ``\`build-pwa\` mentions merge_group — a required leg skipped by if: reports as PASSING, and the queue would merge an untested tree``; and "the required matrix and build-pwa carry no job-level if: and no needs:" |
+| M9 | `ci.yml` `test`: `CCRC_LEG`'s skip condition gains ` \|\| github.event_name == 'merge_group'` (every STEP of `test (agent)`/`test (pwa)` skipped on a queue run — green without testing) | `ci-merge-queue`, `ci-pipeline` | `1 failed` each — ``\`test\` mentions merge_group — …``; and "the required legs skip by STEP, only on a refresh or a rebuild" |
+| M10 | `ci.yml`: delete the four-line `merge_group` row of the mode table | `ci-merge-queue` | `1 failed` — "runs what a pull request runs…": `the header mode table has no merge_group row` |
+| M11 | `select.mjs`: `  if (event === 'pull_request' \|\| event === 'merge_group') {` → `  if (event === 'pull_request') {` | `ci-merge-queue`, `ci-select-cli` | `2 failed \| 3 passed` — "runs what a pull request runs…" (`expected 'selected' to be 'full'`) and the agreement case (`merge_group: select.mjs's invariant disagrees with decideMode: expected true to be false`); and the CLI case (`1 failed \| 40 passed`) |
+| M12 | `select.mjs`: `modeInvariantViolation`'s arm back to `event === 'pull_request' && tests === 'none'` | `ci-merge-queue`, `ci-select-cli` | `1 failed` each — `merge_group: select.mjs's invariant disagrees with decideMode: expected false to be true`; and the invariant case |
+| M13 | `verdict.mjs`: `    return event === 'pull_request' \|\| event === 'merge_group'` → `    return event === 'pull_request'` | `ci-merge-queue`, `ci-verdict` | `1 failed` — `merge_group: verdict.mjs reads tests: none as green, decideMode says it can never happen`; and `76 failed \| 4447 passed (4523)` |
+| M14 | `ci.yml` pipeline step: `        if: github.event_name == 'pull_request' \|\| github.event_name == 'merge_group'` → `        if: github.event_name == 'pull_request'` | `ci-merge-queue`, `ci-pipeline` | `ci-merge-queue` GREEN (the step is its sanctioned exception; M14 is its control); `ci-pipeline` `1 failed` — "runs on pull_request and on merge_group…" |
+| M15 | `ci.yml` pipeline step: the `BASE` line → `          BASE: ${{ format('origin/{0}', github.base_ref) }}` (a queue run would diff against `origin/` and run full every time) | `ci-merge-queue`, `ci-pipeline` | `ci-merge-queue` GREEN; `ci-pipeline` `1 failed` — the same case, on the exact `BASE` line |
+
+Rows (`$SCRATCH/mut-task1.json`):
+
+```json
+[
+ {"id": "M1", "file": ".github/workflows/ci.yml", "old": "  merge_group:\n", "new": "", "tests": ["test/ci-merge-queue.test.ts"]},
+ {"id": "M2", "file": ".github/workflows/ci.yml", "old": " || github.event_name == 'merge_group' && format('queue-{0}', github.run_id)", "new": "", "tests": ["test/ci-merge-queue.test.ts"]},
+ {"id": "M3", "file": ".github/workflows/ci.yml", "old": "format('queue-{0}', github.run_id)", "new": "format('queue-{0}', github.ref_name)", "tests": ["test/ci-merge-queue.test.ts"]},
+ {"id": "M4", "file": ".github/workflows/ci.yml", "old": "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}", "new": "  cancel-in-progress: ${{ github.event_name != 'push' }}", "tests": ["test/ci-merge-queue.test.ts", "test/ci-pipeline.test.ts"]},
+ {"id": "M5", "file": ".github/workflows/ci.yml", "old": "    if: github.event_name != 'merge_group' && needs.select.outputs.macos_count", "new": "    if: needs.select.outputs.macos_count", "tests": ["test/ci-merge-queue.test.ts"]},
+ {"id": "M6", "file": ".github/workflows/ci.yml", "old": "    if: always() && github.event_name != 'merge_group' && needs.select.outputs.tests == 'full'\n", "new": "    if: always() && needs.select.outputs.tests == 'full'\n", "tests": ["test/ci-merge-queue.test.ts", "test/ci-pipeline.test.ts"]},
+ {"id": "M7", "file": ".github/workflows/ci.yml", "old": "    if: github.event_name == 'pull_request' || github.event_name == 'schedule'\n", "new": "    if: github.event_name != 'push'\n", "tests": ["test/ci-merge-queue.test.ts", "test/ci-pipeline.test.ts"]},
+ {"id": "M8", "file": ".github/workflows/ci.yml", "old": "    # Required by name, like `test`: no job-level `if:`, steps skip instead.\n", "new": "    # Required by name, like `test`: no job-level `if:`, steps skip instead.\n    if: github.event_name != 'merge_group'\n", "tests": ["test/ci-merge-queue.test.ts", "test/ci-pipeline.test.ts"]},
+ {"id": "M9", "file": ".github/workflows/ci.yml", "old": "      CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}\n    strategy:", "new": "      CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild' || github.event_name == 'merge_group') && 'skip' || 'run' }}\n    strategy:", "tests": ["test/ci-merge-queue.test.ts", "test/ci-pipeline.test.ts"]},
+ {"id": "M10", "file": ".github/workflows/ci.yml", "old": "#   merge_group         selected — a merge-queue run runs what a pull request\n#                       runs (operator ruling 2026-09-28), the pipeline check\n#                       included, in a concurrency group of its own; no macOS\n#                       leg and no full-suite.\n", "new": "", "tests": ["test/ci-merge-queue.test.ts"]},
+ {"id": "M11", "file": ".github/ci/select.mjs", "old": "  if (event === 'pull_request' || event === 'merge_group') {", "new": "  if (event === 'pull_request') {", "tests": ["test/ci-merge-queue.test.ts", "test/ci-select-cli.test.ts"]},
+ {"id": "M12", "file": ".github/ci/select.mjs", "old": "  if ((event === 'pull_request' || event === 'merge_group') && tests === 'none') return `a ${event} answered tests: none`;", "new": "  if (event === 'pull_request' && tests === 'none') return `a ${event} answered tests: none`;", "tests": ["test/ci-merge-queue.test.ts", "test/ci-select-cli.test.ts"]},
+ {"id": "M13", "file": ".github/ci/verdict.mjs", "old": "    return event === 'pull_request' || event === 'merge_group'\n", "new": "    return event === 'pull_request'\n", "tests": ["test/ci-merge-queue.test.ts", "test/ci-verdict.test.ts"]},
+ {"id": "M14", "file": ".github/workflows/ci.yml", "old": "        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'\n", "new": "        if: github.event_name == 'pull_request'\n", "tests": ["test/ci-merge-queue.test.ts", "test/ci-pipeline.test.ts"]},
+ {"id": "M15", "file": ".github/workflows/ci.yml", "old": "          BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}\n", "new": "          BASE: ${{ format('origin/{0}', github.base_ref) }}\n", "tests": ["test/ci-merge-queue.test.ts", "test/ci-pipeline.test.ts"]}
+]
+```
 
 ```bash
-git add .github/workflows/ci.yml server/test/ci-merge-queue.test.ts
+git add .github/workflows/ci.yml .github/ci/select.mjs .github/ci/verdict.mjs CLAUDE.md \
+  server/test/ci-merge-queue.test.ts server/test/ci-pipeline.test.ts server/test/ci-select-cli.test.ts \
+  server/test/ci-verdict.test.ts
 git commit -m "$(cat <<'MSG'
-ci: answer the merge queue, keep macOS off queue runs, cancel superseded PR runs
+ci: answer the merge queue — a queue run runs what a pull request runs
 
 ci.yml gains merge_group beside pull_request, so a queue entry gets its
 required checks (landing-order stage 2, spec §5.2 rollout step 1: this lands
-before the operator turns the queue on). test-macos and probe-macos skip a
-merge_group run — non-required, and a job skipped by if: reports as passing,
-so ci-merge-queue.test.ts also pins that NO other job mentions merge_group.
-A workflow concurrency group keyed ci-<workflow>-pr-<number> cancels a
-superseded pull_request run; every other event gets a run-unique group,
-because GitHub keeps one pending run per group and cancels the rest.
+before the operator turns the queue on). Operator ruling 2026-09-28: a
+queue run runs the SELECTED tests, like a pull request — merge_group joins
+the pull_request arm of select.mjs's decideMode and modeInvariantViolation
+and of verdict.mjs's serverVerdict (tests: none on a queue run is red), and
+the plain-bash pipeline check asks a queue run the same question against
+merge_group.base_sha, so a PR that edits the selector cannot choose its own
+queue run's tests. The 2026-09-23 CI ruling stands: no full run per merge.
 
-The PR group's name is the one the CI test selection design (§4.3) gives the
-same group; whichever programme lands second merges the other's shape.
+On CI test selection's shape (#183), merged into rather than overwritten:
+one arm in the existing concurrency group, queue-<run id>, ahead of the
+shared refresh group and never cancelled; a leading
+github.event_name != 'merge_group' conjunct on test-macos's and full-suite's
+existing if: (a selected run falls back to full, and full-suite reds on the
+skipped macOS leg); probe-macos untouched (its allow-list already excludes a
+queue run); a merge_group row in the header's mode table. No job a required
+check needs mentions merge_group but the pipeline step's own two lines.
+
+ci-merge-queue.test.ts pins the five properties, derived from ci.yml and
+the two modules; ci-pipeline, ci-select-cli and ci-verdict gain the queue's
+cases and move their pins with the shape. CLAUDE.md's CI bullet says it.
 MSG
 )"
 ```
 
 ---
-
 ### Task 2: `ccd pr-state --project` reads the merge queue — one query per repository per sweep
 
 **Model routing:** `sonnet`, effort `high` — `ccd`'s pr-state lane, a new embedded python pass, the cross-language budget, and the corpus tax.
 
 **Files:**
-- Modify: `ccd/ccd` — insert the queue block between `cmd_clip`'s closing `}` and `# Guard so the script can be \`source\`d …`; replace ONE line in `cmd_pr_state` (the per-session loop); rewrite IN PLACE `cmd_pr_state`'s nine-line budget header and the sixteen-line outer-bound paragraph above `PR_GH_CHECKS_TIMEOUT=5`
+- Modify: `ccd/ccd` — insert the queue block directly above `# Guard so the script can be \`source\`d …` (below `cmd_clip` and below ws-reap's mirror block, which child-reclamation wave 3 put between the two); replace ONE line in `cmd_pr_state` (the per-session loop); rewrite IN PLACE `cmd_pr_state`'s nine-line budget header and the sixteen-line outer-bound paragraph above `PR_GH_CHECKS_TIMEOUT=5`
 - Modify: `server/src/remote/runner.ts`, `server/test/remote-runner.test.ts`, `server/test/pr-timeout-budget.test.ts`
-- Modify: `server/src/coord/childSpent.ts` and `server/src/coord/routes.ts` — ONE comment line each, `20 s` → `25 s` in place (length-neutral; #178's two shipped statements of the old bound, located by content)
+- Modify: `server/src/coord/childSpent.ts` (two comment lines), `server/src/coord/routes.ts` (one) and `server/src/coord/close.ts` (two, `childGateAtClose`'s docstring) — `20 s` → `25 s`, and close.ts's `~40 s` → `~50 s`, all in place (length-neutral; the four shipped statements of the old bound #178 and child-reclamation wave 3 (#187) left, located by content)
 - Test: `server/test/ccd-pr-queue.test.ts` (new)
 
 **Interfaces:**
 - Consumes: `_gh_repo_slug`'s `OWNER/NAME` (anchored to `[A-Za-z0-9._-]`), `_plat_timeout`, each full `_pr_state_one` line's `number`, `id` and `rows`.
-- Produces: on every FULL line of `ccd pr-state --project` (a line with `id` and `rows`), `queue` ∈ `queued | dequeued | landed | none | unmeasured`, plus `queueAt` (ISO-8601 `Z` timestamp of the last queue act) only when present and well-shaped. `--session` lines, failure objects and older builds carry neither key. `CCD_VERB_TIMEOUT_MS['pr-state'] = 25_000` — for BOTH modes (ruled 2026-09-24), so `childBindGate`'s `--session` read on `POST /api/runs` and on dispatch's resume arm can hold `coordMutex` 25 s where it held 20. Task 3 reads both keys through `queueFor`.
+- Produces: on every FULL line of `ccd pr-state --project` (a line with `id` and `rows`), `queue` ∈ `queued | dequeued | landed | none | unmeasured`, plus `queueAt` (ISO-8601 `Z` timestamp of the last queue act) only when present and well-shaped. `--session` lines, failure objects and older builds carry neither key. `CCD_VERB_TIMEOUT_MS['pr-state'] = 25_000` — for BOTH modes (ruled 2026-09-24), so `childBindGate`'s `--session` read on `POST /api/runs` and on dispatch's resume arm can hold `coordMutex` 25 s where it held 20, and the close's child gate (`childGateAtClose`, #187), which makes up to TWO such reads inside the mutex, ~50 s where it held ~40 (Pre-flight finding 14). Task 3 reads both keys through `queueFor`.
 
 - [ ] **Step 1: Write the failing test** — `server/test/ccd-pr-queue.test.ts`:
 
@@ -792,9 +1403,9 @@ describe('the queue read may not cost the rows', () => {
 cd server && ./node_modules/.bin/vitest run test/ccd-pr-queue.test.ts
 ```
 
-Expected (measured at `905360dc`): `10 failed | 3 passed (13)`. The three that pass — `--session` carries no key, a failed stamp prints unstamped lines, a whole-repo failure passes through — are true before this task and must stay true after it.
+Expected (measured at `905360dc`, and again at `6da36f0b` with wave 1 and Task 1 applied): `10 failed | 3 passed (13)`. The three that pass — `--session` carries no key, a failed stamp prints unstamped lines, a whole-repo failure passes through — are true before this task and must stay true after it.
 
-- [ ] **Step 3: Insert the queue block below `cmd_clip`.** Locate `grep -n '^# Guard so the script can be `source`d by tests without running a command.$' ccd/ccd` (one hit, ≈23323 at `905360dc`, ≈23549 at `c62e22b9`, directly after `cmd_clip`'s closing `}` and one blank line) and insert this block directly ABOVE that comment line — below every frozen corpus anchor and below both README anchors, so it moves none of them:
+- [ ] **Step 3: Insert the queue block below `cmd_clip`.** Locate `grep -n '^# Guard so the script can be `source`d by tests without running a command.$' ccd/ccd` (one hit, ≈26581 at `6da36f0b`) and insert this block directly ABOVE that comment line — below every frozen corpus anchor and below both README anchors, so it moves none of them. Since child-reclamation wave 3 (#187) the line above the guard is no longer `cmd_clip`'s closing `}`: its `RECLAIM-BEGIN`…`RECLAIM-END` region and ws-reap's `MIRROR-BEGIN`…`MIRROR-END` block sit between the two, and the guard now follows `# ── end ws-reap's mirror … MIRROR-END ──` and one blank line. Inserting there keeps the block OUTSIDE both marked blocks, which `ccd-wsaudit-nonpoison.test.ts` cuts out before it counts refusal tokens (Step 9 runs it):
 
 ```bash
 # ── THE MERGE QUEUE, READ ONCE PER REPOSITORY PER SWEEP (landing-order wave 2) ──
@@ -966,7 +1577,7 @@ PY
 
 (The block ends with one blank line, so the source-guard comment keeps its blank separator.)
 
-- [ ] **Step 4: Wire it with ONE in-place line.** Locate `grep -n 'do _pr_state_one "\$id" "\$main" "\$repo" "\$rows" "\$answeredAt" "\$head"; done$' ccd/ccd` (one hit, the last statement of `cmd_pr_state`, ≈10684) and replace that line with:
+- [ ] **Step 4: Wire it with ONE in-place line.** Locate `grep -n 'do _pr_state_one "\$id" "\$main" "\$repo" "\$rows" "\$answeredAt" "\$head"; done$' ccd/ccd` (one hit, the last statement of `cmd_pr_state`, ≈10687 at `6da36f0b`) and replace that line with:
 
 ```bash
   { for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt" "$head"; done; } | _pr_queue_stamp "$mode" "$repo"
@@ -974,7 +1585,7 @@ PY
 
 `PR_CHECKS_UNMEASURED` is `local -x`, so the loop's subshell still exports it to `_pr_py`; the loop's last status and the stamp's `return 0` keep the verb's exit code what it was.
 
-- [ ] **Step 5: Rewrite `cmd_pr_state`'s budget header IN PLACE — nine lines for nine.** Locate `grep -n 'A CONSTANT NUMBER OF gh CALLS PER REPO' ccd/ccd` (≈10489) and replace these nine lines:
+- [ ] **Step 5: Rewrite `cmd_pr_state`'s budget header IN PLACE — nine lines for nine.** Locate `grep -n 'A CONSTANT NUMBER OF gh CALLS PER REPO' ccd/ccd` (≈10492 at `6da36f0b`) and replace these nine lines:
 
 ```bash
   # A CONSTANT NUMBER OF gh CALLS PER REPO, never one per session — one for
@@ -1002,7 +1613,7 @@ with:
   # honest stale.
 ```
 
-- [ ] **Step 6: Rewrite the outer-bound paragraph IN PLACE — sixteen lines for sixteen.** Locate `grep -n 'THE OUTER BOUND IS 20 s, NOT 90' ccd/ccd` (≈5116) and replace the sixteen lines from it through `# request; that test is the mechanism.` with:
+- [ ] **Step 6: Rewrite the outer-bound paragraph IN PLACE — sixteen lines for sixteen.** Locate `grep -n 'THE OUTER BOUND IS 20 s, NOT 90' ccd/ccd` (≈5116 at `6da36f0b`) and replace the sixteen lines from it through `# request; that test is the mechanism.` with:
 
 ```bash
 # THE OUTER BOUND IS 25 s, NOT 90, AND EVERY CALL HERE HAS TO FIT INSIDE IT.
@@ -1042,7 +1653,8 @@ with:
   // VERB, so `--session` (one gh call) is bounded at 25 s too, and it is read
   // INSIDE `coordMutex` — by `verifyDone` at close and at advance, and through
   // `childSpent` by every child-bind check (`childBindGate` on `POST /api/runs`,
-  // dispatch's resume arm) — so every other coordination write can queue
+  // dispatch's resume arm) and by the close's child gate (`childGateAtClose`,
+  // up to two reads per close) — so every other coordination write can queue
   // behind one slow read for up to this long.
   'pr-state': 25_000,
   // Same reach as pr-state: it shells out to `git ls-remote` against origin
@@ -1147,27 +1759,31 @@ and replace the two `it`s (from `  it('the two gh calls together leave real room
   });
 ```
 
-**And the two shipped comments that state the old bound as a fact** — both added by #178 (child-reclamation wave 2), both on `--session`'s path, both true only at 20 s. Census them by content first:
+**And the four shipped comments that state the old bound as a fact** — two added by #178 (child-reclamation wave 2) on `--session`'s path, two by #187 (child-reclamation wave 3) in the close's child gate, all true only at 20 s. Census them by content first:
 
 ```bash
 grep -rn "pr-state\`'s 20 s" server/src
+grep -n "Up to ~40 s against the 30 s client timeout" server/src/coord/close.ts
 ```
 
-Expected at `65c5bb34` (measured 2026-09-24): exactly two hits —
+Expected at `6da36f0b` (measured 2026-09-29): exactly four hits, then one —
 
-    server/src/coord/childSpent.ts:103: * gh call on the fleet box, bounded by `pr-state`'s 20 s remote budget, and it
-    server/src/coord/routes.ts:1351:    // at most `pr-state`'s 20 s budget, and only for a CHILD with no PR on
+    server/src/coord/childSpent.ts:173: * gh call on the fleet box, bounded by `pr-state`'s 20 s remote budget, and it
+    server/src/coord/childSpent.ts:241: * COST: one gh call on the fleet box, bounded by `pr-state`'s 20 s remote
+    server/src/coord/routes.ts:1376:    // at most `pr-state`'s 20 s budget, and only for a CHILD with no PR on
+    server/src/coord/close.ts:612: * `pr-state`'s 20 s remote budget. Accepted by design; wave 4 (reusing
+    610: * ordinary PR-bearing wave. Up to ~40 s against the 30 s client timeout
 
-(the second is `POST /api/runs`'s rule-3 comment, the one that records the wait happens INSIDE `coordMutex`). In each hit replace `20 s` with `25 s` and change nothing else on the line — length-neutral, so no line moves:
+(`routes.ts`'s is `POST /api/runs`'s rule-3 comment, the one that records the wait happens INSIDE `coordMutex`; `close.ts`'s two are `childGateAtClose`'s docstring, whose "~40 s" is its TWO sequential reads at 20 s each, and so becomes ~50 s at 25). In each, change the number and nothing else on the line — length-neutral, so no line moves:
 
 ```bash
-sed -i "s/bounded by \`pr-state\`'s 20 s remote budget, and it/bounded by \`pr-state\`'s 25 s remote budget, and it/" server/src/coord/childSpent.ts
-sed -i "s/at most \`pr-state\`'s 20 s budget, and only for a CHILD/at most \`pr-state\`'s 25 s budget, and only for a CHILD/" server/src/coord/routes.ts
-grep -rn "pr-state\`'s 20 s" server/src; echo "rc=$?"
-git diff --numstat -- server/src/coord/childSpent.ts server/src/coord/routes.ts
+sed -i "s/\`pr-state\`'s 20 s/\`pr-state\`'s 25 s/" server/src/coord/childSpent.ts server/src/coord/routes.ts server/src/coord/close.ts
+sed -i "s/ordinary PR-bearing wave. Up to ~40 s against the 30 s client timeout/ordinary PR-bearing wave. Up to ~50 s against the 30 s client timeout/" server/src/coord/close.ts
+grep -rn "pr-state\`'s 20 s\|Up to ~40 s" server/src; echo "rc=$?"
+git diff --numstat -- server/src/coord/childSpent.ts server/src/coord/routes.ts server/src/coord/close.ts
 ```
 
-Expected: no hit and `rc=1`; `1	1	server/src/coord/childSpent.ts` and `1	1	server/src/coord/routes.ts`. The exact-spelling census cannot see a statement worded another way, so widen it once before the edit: `grep -rnE "(^|[^0-9.])20 ?s([^a-z0-9]|$)" server/src | grep -v _000` — at `65c5bb34` with the `runner.ts` edit above in (measured 2026-09-24) five hits: the two above, `server/src/server.ts:1322` and `:2240` (`:2259` at `c62e22b9`; the PWA's 20 s poll cadence, not this bound), and `server/src/remote/runner.ts:40` (the new `ws-rename` comment, which narrates the past and stays). Census the CALLERS too, because a caller that states no bound is invisible to both greps: `grep -rn "childSpent(\|childBindGate(" server/src | grep -v '^\S*:\s*\*' | grep -v 'function '` — at `65c5bb34` three: `childBind.ts:62` (`childSpent`), `routes.ts:1356` and `dispatch.ts:729` (`childBindGate`). Any other caller — child-reclamation wave 3's `childGateAtClose` passes the birth to `childSpent` (its plan, `:7278`) — is a consumer: name it in the runner comment's parenthesis and in the commit message, whether or not its docstring states the bound. **If the bound census finds a THIRD statement of this bound** — child-reclamation wave 3's plan tells its worker to state "pr-state's 20 s budget" in the close's `childGateAtClose` docstring (`docs/superpowers/plans/2026-09-22-child-reclamation-wave3-ws-reclaim-and-close.md:7280` and `:7434`), and this wave is dispatched only after wave 3 merges — rewrite it the same way, in place, add its file to this task's `git add`, and name the close as a third consumer in the runner comment above and in the commit message; say so in the wave-done mail. Any other hit that states the LIVE bound gets the same edit; a sentence that narrates the past (`ccd-pr-open.test.ts:363`'s and `ccd-pr-state.test.ts:214`'s "measured the pair against the 20 s … ceiling that actually ships", `ccd-pr-state.test.ts:300`'s "the outer bound the pr-lifecycle spec set for this verb (20 s)") stays as written — they are in `server/test`, which this census does not read, deliberately.
+Expected: no hit and `rc=1`; `2	2	server/src/coord/childSpent.ts`, `1	1	server/src/coord/routes.ts` and `2	2	server/src/coord/close.ts` (the two close.ts lines are 610 and 612, one line apart). The exact-spelling census cannot see a statement worded another way, so widen it once, with the `runner.ts` edit and the two `sed`s above in: `grep -rnE "(^|[^0-9.])20 ?s([^a-z0-9]|$)" server/src | grep -v _000` — at `6da36f0b` (measured 2026-09-29) three hits, none a statement of this bound: `server/src/server.ts:1331` and `:2268` (the PWA's 20 s poll cadence) and `server/src/remote/runner.ts:41` (the new `ws-rename` comment, which narrates the past and stays). Census the CALLERS too, because a caller that states no bound is invisible to both greps: `grep -rn "childSpent(\|childBindGate(\|childGateAtClose(" server/src | grep -v '^\S*:\s*\*' | grep -v 'function '` — at `6da36f0b` seven: `childBind.ts:79` and `close.ts:647` (`childSpent`, the second inside `childGateAtClose`), `routes.ts:1381` and `dispatch.ts:729` (`childBindGate`), and `close.ts:231`, `:351` and `:534` (`childGateAtClose`, from `closeRun`'s abandon arm, `closeRun` and `closeReviewRun`). Every one is named in the runner comment above. Any other hit that states the LIVE bound gets the same edit; a sentence that narrates the past (`ccd-pr-open.test.ts`'s and `ccd-pr-state.test.ts`'s "measured the pair against the 20 s … ceiling that actually ships", `ccd-pr-state.test.ts`'s "the outer bound the pr-lifecycle spec set for this verb (20 s)") stays as written — they are in `server/test`, which this census does not read, deliberately.
 
 - [ ] **Step 8: Re-stamp, then pay (and prove) the citation tax**
 
@@ -1179,31 +1795,43 @@ node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:f
 bash -n ccd/ccd && echo syntax-ok
 git diff --numstat -- ccd/ccd
 python3 "$SCRATCH/repoint-readme.py" && git diff --quiet -- README.md && echo readme-untouched
-python3 "$SCRATCH/cite-remeasure.py" "$SCRATCH" HEAD
+python3 "$SCRATCH/cite-remeasure.py" "$SCRATCH" HEAD --files ccd/ccd,README.md
 ```
 
-Expected (measured on the prototype at `af64d9d2`, with the ordered open window): `syntax-ok`; `190	25	ccd/ccd` (the 165-line block plus the stamp, the loop line and the two in-place rewrites — nothing net above `cmd_clip` but the stamp line's own bytes; `185	25` before the review revision's five comment lines); the re-pointer prints `cmd_ensure mint -> ccd/ccd:21202` and `genrc == 1 arm -> ccd/ccd:19989-19991` at `905360dc` (the instrument's values are the authority on a moved base) and `readme-untouched`; the re-measurer prints `stated == base == tree` on all four lines (`147 / 195 / 53 / 35`), `other byFile keys moved: none`, and EMPTY `ENTERED`/`LEFT` everywhere. Re-measured 2026-09-28 at `c62e22b9` (#182 and #195 inserted lines in `ccd/ccd` below 16238; `main` re-pointed README's two anchors itself), on a scratch copy with Steps 1 and 3–6 applied by script: `syntax-ok`; `190	25`; the re-pointer printed `ccd/ccd:21428` and `ccd/ccd:20180-20182` and README stayed byte-identical; the citation cases `7 passed | 326 skipped (333)`; `ccd-pr-queue` `10 failed | 3 passed (13)` before the edits and `13 passed (13)` after. Re-measured 2026-09-24 at `65c5bb34` (`main` `b501698a` merged), with Steps 1 and 3–7 applied by script from this plan's own blocks, the two `sed` edits run as written: `syntax-ok`; `190	25	ccd/ccd`; the re-pointer printed `ccd/ccd:21202` and `ccd/ccd:19989-19991` and `readme-untouched`; the re-measurer `147 / 195 / 53 / 35` stated == base == tree, `other byFile keys moved: none`, every `ENTERED`/`LEFT` empty.
+Expected (measured 2026-09-29 at `6da36f0b` with wave 1 and Task 1 applied, Steps 1 and 3–7 applied by script from this plan's own blocks): `syntax-ok`; `190	25	ccd/ccd` (the 165-line block plus the stamp, the loop line and the two in-place rewrites — nothing net above `cmd_clip` but the stamp line's own bytes; unchanged since `af64d9d2`); the re-pointer prints `cmd_ensure mint -> ccd/ccd:21482` and `genrc == 1 arm -> ccd/ccd:20215-20217` (main re-pointed README itself; `21428` and `20180-20182` at `c62e22b9`, `21202` and `19989-19991` at `905360dc` — the instrument's values are the authority on a moved base) and `readme-untouched`; the re-measurer prints every `byFile` key `stated N base N tree N` — `ccd/ccd` 148, `ccd/ccrc` 5, `ccd/compact-card.mjs` 4, `ccd/session-hook.sh` 21, `deploy/deploy.sh` 2, `server/test/ccd-workspaces.test.ts` 5, `server/test/ccd-ws-reap.test.ts` 2, `server/test/single-definition.test.ts` 8, `shared/api.ts` 1 — `total stated 196 base 196 tree 196`, `row array` 53 and `site array` 36, and EMPTY `ENTERED`/`LEFT` three times (#187 moved the base to 148 / 196 / 36 from 147 / 195 / 35; this task moves nothing).
 
-- [ ] **Step 9: Run the tests to verify they pass**
+- [ ] **Step 9: Run the tests to verify they pass — one file at a time**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/ccd-pr-queue.test.ts
-./node_modules/.bin/vitest run test/ownership.test.ts test/ccd-pr-state.test.ts
-./node_modules/.bin/vitest run test/pr-timeout-budget.test.ts test/remote-runner.test.ts
-./node_modules/.bin/vitest run test/ccd-reg-get-census.test.ts test/ccd-bounded-reads.test.ts
-./node_modules/.bin/vitest run test/macos-platform.test.ts test/prphase.test.ts test/pr-routes.test.ts test/whitelist-subset.test.ts
+./node_modules/.bin/vitest run test/ownership.test.ts
+./node_modules/.bin/vitest run test/ccd-pr-state.test.ts
+./node_modules/.bin/vitest run test/ccd-prhistory.test.ts
+./node_modules/.bin/vitest run test/pr-timeout-budget.test.ts
+./node_modules/.bin/vitest run test/remote-runner.test.ts
+./node_modules/.bin/vitest run test/ccd-reg-get-census.test.ts
+./node_modules/.bin/vitest run test/ccd-bounded-reads.test.ts
+./node_modules/.bin/vitest run test/macos-platform.test.ts
+./node_modules/.bin/vitest run test/prphase.test.ts
+./node_modules/.bin/vitest run test/pr-routes.test.ts
+./node_modules/.bin/vitest run test/whitelist-subset.test.ts
 ./node_modules/.bin/vitest run test/ccd-workspaces.test.ts -t 'EVERY bash call site'
 ./node_modules/.bin/vitest run test/session-hook.test.ts \
   -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'
-./node_modules/.bin/vitest run test/child-reclaim-bind.test.ts test/child-reclaim-spent.test.ts \
-  test/child-reclaim-refusals.test.ts test/coord-routes-single-file.test.ts
+./node_modules/.bin/vitest run test/child-reclaim-bind.test.ts
+./node_modules/.bin/vitest run test/child-reclaim-spent.test.ts
+./node_modules/.bin/vitest run test/child-reclaim-refusals.test.ts
+./node_modules/.bin/vitest run test/child-reclaim-close.test.ts
+./node_modules/.bin/vitest run test/coord-routes-single-file.test.ts
+./node_modules/.bin/vitest run test/ccd-wsaudit-nonpoison.test.ts
+./node_modules/.bin/vitest run test/wsaudit.test.ts
 ```
 
-Expected (measured on the prototype): `13 passed (13)`; `113 passed (113)` (ownership proves the re-stamp; every existing pr-state case survives the third call — its stub answers the GraphQL call with rows, which reads as `unmeasured`); `23 passed (23)`; `49 passed (49)` (the `_reg_get` census did not move — this task adds no `_reg_get`); PASS (`98 passed | 10 skipped` for the first two, then the route and whitelist files); `1 passed | 78 skipped`; `7 passed | 326 skipped`; PASS (the two comment edits are length-neutral and touch no string a test reads). Re-measured 2026-09-24 at `65c5bb34` with this task applied (each command above with `--maxWorkers=1`, one process at a time): `13 passed (13)`; `113 passed (113)`; `23 passed (23)`; `49 passed (49)`; `218 passed | 10 skipped (228)` for the four files together, of which `98 passed | 10 skipped (108)` for the first two; `1 passed | 78 skipped (79)`; `7 passed | 326 skipped (333)`; and `68 passed (68)` for the last line.
+Expected (measured 2026-09-29 at `6da36f0b` with wave 1 and Task 1 applied, each file alone, `--maxWorkers=1`): `13 passed (13)`; `14 passed (14)` (ownership proves the re-stamp); `99 passed (99)` (every existing pr-state case survives the third call — its stub answers the GraphQL call with rows, which reads as `unmeasured`); `18 passed (18)` (`ccd-prhistory` runs `cmd_pr_state --project` through `GH_STUB` three times — the path the stamping pipe wraps); `2 passed (2)`; `22 passed (22)` (21 at `c62e22b9`); `3 passed (3)` (the `_reg_get` census did not move — this task adds no `_reg_get`); `46 passed (46)`; `59 passed | 10 skipped (69)`; `40 passed (40)`; `44 passed (44)`; `86 passed (86)`; `1 passed | 78 skipped (79)`; `7 passed | 328 skipped (335)` (333 at `c62e22b9`; #187 added two cases); `22 passed (22)`; `66 passed (66)`; `20 passed (20)`; `25 passed (25)` (the close's docstring edit is length-neutral and touches no string a test reads); `3 passed (3)`; `3 passed (3)` and `24 passed (24)` (the block sits outside the `RECLAIM` region and ws-reap's mirror block, and adds no refusal token the scan counts). ccd's harness prints stderr lines such as `IsADirectoryError` and `refusing to append to a non-regular-file prhistory` from cases that plant exactly those shapes; they are not failures.
 
 - [ ] **Step 10: Mutation check, then commit**
 
-Eleven mutations, each restored from a saved copy (`cp ccd/ccd "$SCRATCH/ccd.task2"` and `cp server/src/remote/runner.ts "$SCRATCH/runner.task2"` after Step 8; restore with `cp` back — the copy is already stamped, so no re-stamp is needed between rows; never `git checkout --`). Every red below was measured on the prototype, and all eleven again on 2026-09-24 at `65c5bb34` with this task applied from this plan's blocks, each restored from the saved copy: the same failing cases and the same quoted reds (B1's second red is the `--session` row, `sends ["pr-state","--session","x"] with a 25000 ms budget` — the key is the verb, so both modes move together, as ruled):
+Eleven mutations, run with `$SCRATCH/mutate.py` (each file restored from a saved COPY after its row; `ccd/ccd` rows re-stamp before the test runs, so `ownership` never confounds a red). Every red below was measured on the prototype, and all eleven again on 2026-09-29 at `6da36f0b` with wave 1 and Task 1 applied — the same failing cases and the same quoted reds as on every earlier base (B1's second red is the `--session` row, `sends ["pr-state","--session","x"] with a 25000 ms budget` — the key is the verb, so both modes move together, as ruled):
 
 | # | Exact edit | Command (from `server/`) | Expected red |
 |---|---|---|---|
@@ -1215,14 +1843,32 @@ Eleven mutations, each restored from a saved copy (`cp ccd/ccd "$SCRATCH/ccd.tas
 | Q6 | `ccd/ccd`: in `facts_in`, `        raw = ''\n    if not raw:\n        return None` → `… return {}` | same | "a failed call says unmeasured on every line…" only — `expected 'none' to be 'unmeasured'` (the no-bound-PR line) |
 | Q7 | `ccd/ccd`: delete `  if [[ $mode != --project ]]; then printf '%s\n' "$lines"; return 0; fi` | same | "--session makes no queue call…" only — `expected [ 'api graphql' ] to deeply equal []` |
 | Q8 | `ccd/ccd`: `    at = at if isinstance(at, str) and ISO.match(at) else None` → `    at = at if isinstance(at, str) else None` | same | "drops a queueAt that is not shaped like a timestamp…" only — `expected true to be false` |
-| Q9 | `ccd/ccd`: `    open: pullRequests(first: 100, states: [OPEN], orderBy: {field: CREATED_AT, direction: DESC}) { nodes { ...Q } }` → `    open: pullRequests(first: 100, states: [OPEN]) { nodes { ...Q } }` (GitHub's default order: the OLDEST hundred) | same | "makes one GraphQL call…" only — `1 failed \| 12 passed`, `expected 'query=query($owner: String!, $name: S…' to contain 'open: pullRequests(first: 100, states…'` (measured at `af64d9d2`) |
-| B1 | `server/src/remote/runner.ts`: `  'pr-state': 25_000,` → `  'pr-state': 20_000,` | `./node_modules/.bin/vitest run test/pr-timeout-budget.test.ts test/remote-runner.test.ts` | `2 failed` — `the three gh calls (8s + 5s + 4s) leave only 3s of the 20s pr-state bound … expected 17 to be less than or equal to 14` and `expected 20000 to be 25000` |
+| Q9 | `ccd/ccd`: `    open: pullRequests(first: 100, states: [OPEN], orderBy: {field: CREATED_AT, direction: DESC}) { nodes { ...Q } }` → `    open: pullRequests(first: 100, states: [OPEN]) { nodes { ...Q } }` (GitHub's default order: the OLDEST hundred) | same | "makes one GraphQL call…" only — `1 failed \| 12 passed`, `expected 'query=query($owner: String!, $name: S…' to contain 'open: pullRequests(first: 100, states…'` (measured at `af64d9d2`, and at `6da36f0b`) |
+| B1 | `server/src/remote/runner.ts`: `  'pr-state': 25_000,` → `  'pr-state': 20_000,` | `./node_modules/.bin/vitest run test/pr-timeout-budget.test.ts`, then `… test/remote-runner.test.ts` | `1 failed \| 1 passed (2)` — `the three gh calls (8s + 5s + 4s) leave only 3s of the 20s pr-state bound … expected 17 to be less than or equal to 14`; and `1 failed \| 21 passed (22)` — `expected 20000 to be 25000` |
 | B2 | `ccd/ccd`: `PR_GH_QUEUE_TIMEOUT=4` → `PR_GH_QUEUE_TIMEOUT=6` | `./node_modules/.bin/vitest run test/pr-timeout-budget.test.ts` | `1 failed` — `the three gh calls (8s + 5s + 6s) leave only 6s of the 25s pr-state bound … expected 19 to be less than or equal to 17.5` |
+
+Rows (`$SCRATCH/mut-task2.json`):
+
+```json
+[
+ {"id": "Q1", "file": "ccd/ccd", "old": "; } | _pr_queue_stamp \"$mode\" \"$repo\"", "new": "; }", "tests": ["test/ccd-pr-queue.test.ts"], "restamp": true},
+ {"id": "Q2", "file": "ccd/ccd", "old": "-f owner=\"${repo%%/*}\" -f name=\"${repo#*/}\"", "new": "-F owner=\"${repo%%/*}\" -F name=\"${repo#*/}\"", "tests": ["test/ccd-pr-queue.test.ts"], "restamp": true},
+ {"id": "Q3", "file": "ccd/ccd", "old": "out=$(_plat_timeout \"$PR_GH_QUEUE_TIMEOUT\" gh api graphql", "new": "out=$(gh api graphql", "tests": ["test/ccd-pr-queue.test.ts"], "restamp": true},
+ {"id": "Q4", "file": "ccd/ccd", "old": "    if state == 'MERGED' and act == 'AddedToMergeQueueEvent':", "new": "    if state == 'MERGED':", "tests": ["test/ccd-pr-queue.test.ts"], "restamp": true},
+ {"id": "Q5", "file": "ccd/ccd", "old": "  if (( src == 0 )) && [[ -n \"$stamped\" ]]; then printf '%s\\n' \"$stamped\"; else printf '%s\\n' \"$lines\"; fi", "new": "  printf '%s\\n' \"$stamped\"", "tests": ["test/ccd-pr-queue.test.ts"], "restamp": true},
+ {"id": "Q6", "file": "ccd/ccd", "old": "        raw = ''\n    if not raw:\n        return None", "new": "        raw = ''\n    if not raw:\n        return {}", "tests": ["test/ccd-pr-queue.test.ts"], "restamp": true},
+ {"id": "Q7", "file": "ccd/ccd", "old": "  if [[ $mode != --project ]]; then printf '%s\\n' \"$lines\"; return 0; fi\n", "new": "", "tests": ["test/ccd-pr-queue.test.ts"], "restamp": true},
+ {"id": "Q8", "file": "ccd/ccd", "old": "    at = at if isinstance(at, str) and ISO.match(at) else None", "new": "    at = at if isinstance(at, str) else None", "tests": ["test/ccd-pr-queue.test.ts"], "restamp": true},
+ {"id": "Q9", "file": "ccd/ccd", "old": "    open: pullRequests(first: 100, states: [OPEN], orderBy: {field: CREATED_AT, direction: DESC}) { nodes { ...Q } }", "new": "    open: pullRequests(first: 100, states: [OPEN]) { nodes { ...Q } }", "tests": ["test/ccd-pr-queue.test.ts"], "restamp": true},
+ {"id": "B1", "file": "server/src/remote/runner.ts", "old": "  'pr-state': 25_000,", "new": "  'pr-state': 20_000,", "tests": ["test/pr-timeout-budget.test.ts", "test/remote-runner.test.ts"]},
+ {"id": "B2", "file": "ccd/ccd", "old": "PR_GH_QUEUE_TIMEOUT=4", "new": "PR_GH_QUEUE_TIMEOUT=6", "tests": ["test/pr-timeout-budget.test.ts"], "restamp": true}
+]
+```
 
 ```bash
 git add ccd/ccd server/src/remote/runner.ts server/test/remote-runner.test.ts \
   server/test/pr-timeout-budget.test.ts server/test/ccd-pr-queue.test.ts \
-  server/src/coord/childSpent.ts server/src/coord/routes.ts
+  server/src/coord/childSpent.ts server/src/coord/routes.ts server/src/coord/close.ts
 git commit -m "$(cat <<'MSG'
 feat(ccd): pr-state --project reads the merge queue, once per repository per sweep
 
@@ -1244,68 +1890,76 @@ third call could have had 1 s; measured 0.72-1.39 s). Spec §5.2.
 The key is the verb, so --session (one gh call) is bounded at 25 s too
 (ruled 2026-09-24: 25 s for both modes). It is read inside coordMutex by
 verifyDone at close and advance (since 2026-08) and, through childSpent,
-by childBindGate on POST /api/runs and dispatch's resume arm (#178), so
-other coordination writes can now queue up to 25 s, not 20, behind one read. The
-two shipped comments that stated the old bound (childSpent.ts's docstring,
-routes.ts's rule-3 gate) say 25 s, in place.
+by childBindGate on POST /api/runs and dispatch's resume arm (#178) and by
+the close's child gate, childGateAtClose (#187, up to two reads per close:
+~50 s where it was ~40, against the same 30 s client timeout its docstring
+already accepts by design), so other coordination writes can now queue up
+to 25 s, not 20, behind one read. The four shipped comments that stated the
+old bound (childSpent.ts twice, routes.ts's rule-3 gate, childGateAtClose's
+docstring) say 25 s, in place.
 
-S6-R11: the block sits below cmd_clip, beneath every frozen anchor; the one
-line in cmd_pr_state and both prose rewrites are in place. Census 147 / 195
-/ 53 / 35, stated == base == tree; README untouched.
+S6-R11: the block sits below cmd_clip and below ws-reap's mirror block,
+beneath every frozen anchor and outside both marked blocks; the one line in
+cmd_pr_state and both prose rewrites are in place. Census 148 / 196 / 53 /
+36, stated == base == tree; README untouched.
 MSG
 )"
 ```
 
 ---
 
-### Task 3: The server reads the queue word once, and turns a dequeue into a feed record and a coordinator mail
+### Task 3: The server reads the queue word once, and tells the coordinator both landing outcomes
 
-> **RE-PLAN PENDING — do not execute this task from this text.** See the Status block under the plan header and Pre-flight finding 12 (ruled 2026-09-24).
-
-**Model routing:** `sonnet`, effort `high` — a new wire reader, a new watcher lane, a new feed kind across three packages.
+**Model routing:** `sonnet`, effort `high` — a new wire reader, a new watcher lane with two notices, a new feed kind across three packages.
 
 **Files:**
 - Modify: `server/src/prstate.ts` — `CcdPrLine.queue`/`queueAt`; `PR_QUEUE_MAP`, `PrQueue`, `PrQueueRead`, `queueFor` directly above `repoCellFor`'s docstring
-- Modify: `server/src/watch.ts` — the `./prstate.js` import; `prQueues` and `dequeuedNotified` after `mergedNotified`; one line after `this.prStates.set(line.id, phaseFor(line));`; one call after `this.sweepMerged(records);`; `sweepDequeued` after `sweepMerged`; `dequeuedSubject` and `renderDequeueBrief` directly above `renderAskBrief`'s docstring
-- Modify: `server/src/coord/store.ts` — `hasMailWithSubject` directly after `hasOutstandingMail`; `hasFeedEvent` directly after `feedEvents`
-- Modify: `server/src/coord/rundefs.ts` — the `operator` gloss; `queueSystemMail`'s caller list
-- Modify: `shared/api.ts` — two lines in place
+- Modify: `server/src/coord/rundefs.ts` — the `operator` gloss; `queueSystemMail`'s caller list (all seven, named); `dequeuedSubject` and `mergedSubject` directly above the ask nudge's subject prefix
+- Modify: `server/src/watch.ts` — the `./prstate.js` and `./coord/rundefs.js` imports; `prQueues` and `landingNotified` after `mergedNotified`; one line after `this.prStates.set(line.id, phaseFor(line));`; one call after `this.sweepMerged(records);`; `sweepLanding` after `sweepMerged`; `renderDequeueBrief` and `renderMergedBrief` directly above `renderAskBrief`'s docstring
+- Modify: `server/src/coord/store.ts` — two reads: `hasMailWithSubject` after `hasOutstandingMail`, `hasFeedEvent` after `feedEvents`
+- Modify: `shared/api.ts` — two lines IN PLACE
 - Modify: `pwa/src/screens/MailScreen.tsx`, `pwa/test/mail-screen.test.tsx`
 - Test: `server/test/pr-queue-lane.test.ts` (new)
 
 **Interfaces:**
-- Consumes: Task 2's `queue`/`queueAt` on full `pr-state` lines; `CoordStore.openRunsForSession` (and its `run-unreadable` arm), `CoordStore.resolveCoordinator(runId)`, `queueSystemMail`, `FleetWatcher.pushOne`.
-- Produces: `queueFor(line: CcdPrLine): PrQueueRead` (`{ state: PrQueue | 'absent'; at: string | null }`); `NotifyEvent.kind` `'queue'`; `CoordStore.hasMailWithSubject(fromId, runId, toId, subject)` (every delivery state) and `CoordStore.hasFeedEvent(kind, sessionId, body)`; `dequeuedSubject(pr, at)`; a `feed_events` row of kind `queue` per (workspace, PR, removal time), its body carrying the removal time; a `status` mail with subject `dequeued:#<n>@<queueAt>` from `operator` to the run's coordinator, on that run — neither repeated after a server restart. Task 5's clause-15 sentence is what the mail's body points the coordinator at.
+- Consumes: Task 2's `queue`/`queueAt` on full `pr-state` lines, and the phase `sweepPr` already derives (`phaseFor`); `CoordStore.openRunsForSession` (and its `run-unreadable` arm), `CoordStore.run(id)` (the run's `state`), `CoordStore.resolveCoordinator(runId)`, `survivorOf` (`rundefs.ts`), `queueSystemMail`, `FleetWatcher.pushOne`. And Task 5's lifecycle rule, which is what makes this lane reach a PR at all: on a native-queue project the coordinator advances the producer's run to `merging` and enqueues, and closes it only once the PR reads merged — so the run, its hold, the child's registry row and its `pr-state` line all outlive the queue.
+- Produces: `queueFor(line: CcdPrLine): PrQueueRead` (`{ state: PrQueue | 'absent'; at: string | null }`); `NotifyEvent.kind` `'queue'`; `CoordStore.hasMailWithSubject(fromId, runId, toId, subject)` (every delivery state) and `CoordStore.hasFeedEvent(kind, sessionId, body)`; `dequeuedSubject(pr, at)` and `mergedSubject(pr)` (`rundefs.ts`, the ONE spelling of each — Task 5's skill text names both, pinned equal); per (workspace, PR, removal) a `status` mail `dequeued:#<n>@<queueAt>` from `operator` to the coordinator of the open run that names the workspace (the `survivorOf` pick) and a `queue` feed record, or the record alone when no open run names it; per (workspace, PR) a `status` mail `merged:#<n>` to that coordinator when the PR reads merged while that run waits at `merging` — none of them repeated after a server restart. Task 5's clause-15 sentence and lifecycle paragraph are what both mails point the coordinator at.
 
 - [ ] **Step 1: Write the failing test** — `server/test/pr-queue-lane.test.ts`:
 
 ```typescript
 /**
  * The server half of landing-order wave 2 (spec §5.2): `queueFor`, the ONE
- * reader of ccd's additive `queue`/`queueAt` fields, and the dequeue lane that
- * turns a `dequeued` reading into a `queue` feed record and a `status` mail to
- * the run's coordinator — once per (workspace, PR, removal), across a server
- * restart too, and never for any other word, for an unmeasured read, or for a
- * line from an older ccd. A read that fails or a mail that throws is retried,
- * never latched as told.
+ * reader of ccd's additive `queue`/`queueAt` fields, and the landing lane —
+ * the coordinator's two notices about a PR it is landing through the merge
+ * queue. A `dequeued` reading is a `queue` feed record and a `status` mail to
+ * the coordinator of the open run that names the workspace, once per
+ * (workspace, PR, removal); a PR that reads merged while that run waits at
+ * `merging` is a `status` mail too, once per (workspace, PR). Once means once
+ * across a server restart as well, and never for any other word, for an
+ * unmeasured read, or for a line from an older ccd. A read that fails or a
+ * mail that throws is retried, never latched as told.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
-import { FleetWatcher, dequeuedSubject } from '../src/watch.js';
+import { FleetWatcher, renderDequeueBrief, renderMergedBrief } from '../src/watch.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { queueFor, type CcdPrLine } from '../src/prstate.js';
+import { dequeuedSubject, mergedSubject } from '../src/coord/rundefs.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { PushPayload } from '../src/push.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import type { RunState } from '../../shared/api.js';
 
 const ID = 'demo-quiet-basin';
 const T1 = '2026-09-23T11:30:00Z';
 const T2 = '2026-09-23T12:05:00Z';
+const COORDINATOR = 'ccrc-pwa-coordinator';
 
 function seed(): string {
   const home = mkTmp('ccrc-queue-');
@@ -1329,30 +1983,62 @@ const openLine = (extra: Record<string, unknown>, number = 42): string => JSON.s
   phase: 'open', number, checkedAt: 1785300000000, reason: null, ...extra,
 });
 
+/** The same PR, MERGED and bound (`pr-sweep.test.ts`'s `mergedLine`). */
+const mergedLine = (extra: Record<string, unknown> = {}, number = 42): string => JSON.stringify({
+  id: ID, project: 'demo', repo: 'o/r', branch: 'ws/' + ID, base: 'origin/main', baseShort: 'main',
+  tip: 'f'.repeat(40), ahead: 1, dirty: 0, commits: [], template: null,
+  rows: [{ number, state: 'MERGED', headRefName: 'ws/' + ID, headRefOid: 'deadbee', baseRefName: 'main',
+    isCrossRepository: false, mergedAt: '2026-09-23T12:30:00Z', mergeCommit: { oid: '7a68ca0' }, url: 'u',
+    title: 't', isDraft: false, statusCheckRollup: null, ours: true }],
+  phase: 'merged', number, checkedAt: 1785300000000, reason: null, ...extra,
+});
+
 const runnerFor = (out: () => string): Runner => async (_cmd, args) => {
   if (args[0] === 'pr-state') return { code: 0, stdout: out(), stderr: '' };
   if (args[0] === 'list-panes') return { code: 0, stdout: '4242\n', stderr: '' };
   return { code: 0, stdout: '', stderr: '' };
 };
 
-async function harness(first: string, withRun = true) {
+/** Walk a run through the ONE path `RUN_TRANSITIONS` allows to `to`. */
+const PATH: Record<string, RunState[]> = {
+  planned: [], 'awaiting-review': ['dispatched', 'working', 'awaiting-review'],
+  merging: ['dispatched', 'working', 'awaiting-review', 'merging'],
+};
+const walk = (coord: CoordStore, id: number, to: RunState): void => {
+  for (const s of PATH[to]!) expect(coord.advance(id, s, 'test').ok, `advance to ${s}`).toBe(true);
+};
+
+/** `run`: whose workspace the ONE open programme's run names — this one
+ *  (`mine`), or ANOTHER (`other`), so `resolveCoordinator(null)` would answer
+ *  a real session and the lane must not take that guess. `state`: where the
+ *  run waits (default `merging` — the coordinator is landing). `second`: a
+ *  SECOND open run naming this workspace (wave N+1 on the same workspace).
+ *  `visible`: the operator is looking at this pane — the presence gate
+ *  `pushOne` consults, which a `recordAlways` record must not heed. */
+async function harness(first: string, opts: { run?: 'mine' | 'other'; state?: RunState; second?: boolean; visible?: boolean } = {}) {
   const home = seed();
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  let runId: number | null = null;
-  // With `withRun` false the ONE open programme belongs to ANOTHER workspace, so
-  // `resolveCoordinator(null)` would answer a real session — the guess the lane
-  // must not make for a PR no run of that coordinator names.
   const opened = coord.openRun({ program: 'landing', title: 't', project: 'demo',
-    wave: 2, waveOf: 5, claimedBy: 'ccrc-pwa-coordinator' });
+    wave: 2, waveOf: 5, claimedBy: COORDINATOR });
   if (!('id' in opened)) throw new Error('fixture openRun refused');
-  coord.setSession(opened.id, withRun ? ID : 'demo-still-cove');
-  if (withRun) runId = opened.id;
+  const mine = (opts.run ?? 'mine') === 'mine';
+  coord.setSession(opened.id, mine ? ID : 'demo-still-cove');
+  walk(coord, opened.id, opts.state ?? 'merging');
+  let runId: number | null = mine ? opened.id : null;
+  if (opts.second) {
+    const next = coord.openRun({ program: 'landing', title: 't', project: 'demo',
+      wave: 3, waveOf: 5, claimedBy: COORDINATOR });
+    if (!('id' in next)) throw new Error('fixture second openRun refused');
+    coord.setSession(next.id, ID);
+    runId = next.id;
+  }
   const log = new NotifyLog(path.join(home, 'notify.json'));
   await log.load();
   const sent: PushPayload[] = [];
   let out = first;
   const deps = { ...testDeps(home, runnerFor(() => out)), coord, notifyLog: log,
-    push: { notify: async (p: PushPayload) => { sent.push(p); } } as never };
+    push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
+    presence: { isVisible: () => opts.visible === true } as never };
   let w = new FleetWatcher(deps, new Bus(), 10_000);
   const sweep = async (next?: string): Promise<void> => {
     if (next !== undefined) out = next;
@@ -1365,8 +2051,8 @@ async function harness(first: string, withRun = true) {
   const restart = (): void => { w.stop(); w = new FleetWatcher(deps, new Bus(), 10_000); };
   const stop = (): void => { w.stop(); };
   const queueFeed = () => coord.feedEvents(200).filter((e) => e.kind === 'queue');
-  const mail = () => coord.mailForRecipient('ccrc-pwa-coordinator');
-  return { coord, sweep, restart, stop, sent, queueFeed, mail, runId };
+  const mail = () => coord.mailForRecipient(COORDINATOR);
+  return { coord, sweep, restart, stop, sent, queueFeed, mail, runId, firstRunId: opened.id };
 }
 
 describe('queueFor — the one reader of the queue fields', () => {
@@ -1390,8 +2076,8 @@ describe('queueFor — the one reader of the queue fields', () => {
   });
 });
 
-describe('the dequeue lane', () => {
-  it('records a queue feed event and mails the run\'s coordinator, once', async () => {
+describe('the landing lane — a dequeue', () => {
+  it('records a queue feed event and mails the coordinator of the open run, once', async () => {
     const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }));
     await f.sweep();
     expect(f.queueFeed()).toHaveLength(1);
@@ -1403,7 +2089,7 @@ describe('the dequeue lane', () => {
     expect(m[0]!.subject).toBe(dequeuedSubject(42, T1));
     expect(m[0]!.kind).toBe('status');
     expect(m[0]!.runId).toBe(f.runId);
-    expect(f.sent.find((p) => p.tag === `queue-${ID}#42@${T1}`)).toBeDefined();
+    expect(f.sent.find((p) => p.tag === `queue-${ID}#42:dequeued@${T1}`)).toBeDefined();
     // The same reading on the next sweep is the same fact: no second anything —
     // and, latched in memory, it costs no second read of the run rows.
     const reads = vi.spyOn(f.coord, 'openRunsForSession');
@@ -1424,8 +2110,17 @@ describe('the dequeue lane', () => {
     f.stop();
   });
 
-  it('with no open run, records the feed event and mails nobody', async () => {
-    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), false);
+  it('names the survivor — with two open runs on the workspace, the newer, the close\'s own rule', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), { second: true });
+    await f.sweep();
+    expect(f.runId).not.toBe(f.firstRunId);
+    expect(f.mail().map((m) => m.runId)).toEqual([f.runId]);
+    expect(f.queueFeed()[0]!.runId).toBe(f.runId);
+    f.stop();
+  });
+
+  it('with no open run, records the feed event and mails nobody — never a guessed coordinator', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), { run: 'other' });
     await f.sweep();
     expect(f.queueFeed()).toHaveLength(1);
     expect(f.queueFeed()[0]!.body).toContain('No open run names a coordinator');
@@ -1433,7 +2128,19 @@ describe('the dequeue lane', () => {
     f.stop();
   });
 
+  it('records the dequeue even while the operator is looking at the pane — the record is never presence-gated', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), { visible: true });
+    await f.sweep();
+    expect(f.queueFeed(), 'the operator watching the pane erased the record of a removal').toHaveLength(1);
+    f.stop();
+  });
+
   it('says nothing for queued, landed, none, unmeasured, or a line from an older ccd', async () => {
+    // `none` at `merging` is silent BY DESIGN, and it is also what a PR reads
+    // when the coordinator's enqueue only ARMED auto-merge (gh 2.45 does that
+    // for a PR whose required checks have not passed, with the same success
+    // line): the coordinator's own read-back of the queue entry is what makes
+    // that case loud (`wave-lifecycle.md` §5), not this lane.
     for (const extra of [{ queue: 'queued' }, { queue: 'landed' }, { queue: 'none' },
       { queue: 'unmeasured' }, {}]) {
       const f = await harness(openLine(extra));
@@ -1443,9 +2150,49 @@ describe('the dequeue lane', () => {
       f.stop();
     }
   });
+
+  it('the dequeue brief reads why from the queue\'s own run, disarms before a fix round, re-enqueues at the exact SHA and never with --admin; the merged brief asks for the merge proof', () => {
+    const b = renderDequeueBrief(ID, 42);
+    expect(b).toContain('`gh pr merge 42 --match-head-commit <handoffCommit>`');
+    expect(b.replace('never `--admin`', '')).not.toContain('--admin');
+    expect(b).not.toContain('--squash');
+    // A queue failure is the merge_group run's, on the queue branch's commit;
+    // the PR head's own checks never include it and can read green.
+    expect(b).toContain('`gh run list --event merge_group');
+    expect(b).not.toContain('statusCheckRollup');
+    // An armed auto-merge queues whatever head a fix round pushes.
+    expect(b).toContain('`gh pr merge 42 --disable-auto`');
+    expect(renderMergedBrief(ID, 42)).toContain('`gh pr view 42 --json state,headRefOid`');
+  });
 });
 
-describe('the dequeue lane latches only what it told', () => {
+describe('the landing lane — a merge while the run waits at merging', () => {
+  it('mails the coordinator merged:#<n> once, and records no queue event', async () => {
+    const f = await harness(mergedLine({ queue: 'landed', queueAt: T2 }));
+    await f.sweep();
+    const m = f.mail();
+    expect(m).toHaveLength(1);
+    expect(m[0]!.subject).toBe('merged:#42');
+    expect(m[0]!.subject).toBe(mergedSubject(42));
+    expect(m[0]!.kind).toBe('status');
+    expect(m[0]!.runId).toBe(f.runId);
+    expect(f.queueFeed()).toEqual([]);
+    await f.sweep();
+    expect(f.mail()).toHaveLength(1);
+    f.stop();
+  });
+
+  it('says nothing when the run is not at merging, or no open run names the workspace', async () => {
+    for (const opts of [{ state: 'awaiting-review' as RunState }, { state: 'planned' as RunState }, { run: 'other' as const }]) {
+      const f = await harness(mergedLine(), opts);
+      await f.sweep();
+      expect(f.mail(), JSON.stringify(opts)).toEqual([]);
+      f.stop();
+    }
+  });
+});
+
+describe('the landing lane latches only what it told', () => {
   it('an unreadable run read is not "no open run": it defers, records nothing, and mails once it reads', async () => {
     const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -1460,7 +2207,7 @@ describe('the dequeue lane latches only what it told', () => {
     await f.sweep();
     expect(f.mail(), 'the deferred notice was never sent').toHaveLength(1);
     expect(f.queueFeed()).toHaveLength(1);
-    expect(f.queueFeed()[0]!.body).toContain('Mailed coordinator ccrc-pwa-coordinator');
+    expect(f.queueFeed()[0]!.body).toContain(`Mailed coordinator ${COORDINATOR}`);
     warn.mockRestore();
     f.stop();
   });
@@ -1486,7 +2233,7 @@ describe('the dequeue lane latches only what it told', () => {
     f.stop();
   });
 
-  it('a restart re-announces nothing it already mailed — acked or not — and still hears a new removal', async () => {
+  it('a restart re-announces no dequeue it already mailed — acked or not — and still hears a new removal', async () => {
     const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }));
     await f.sweep();
     const m = f.mail();
@@ -1501,13 +2248,53 @@ describe('the dequeue lane latches only what it told', () => {
     f.stop();
   });
 
-  it('a restart re-records no feed-only notice either', async () => {
-    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), false);
+  it('a restart re-records no feed-only dequeue either', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), { run: 'other' });
     await f.sweep();
     f.restart();
     await f.sweep();
     expect(f.queueFeed()).toHaveLength(1);
     expect(f.mail()).toEqual([]);
+    f.stop();
+  });
+
+  it('a merge whose run row cannot be read defers, and a merged notice whose mail throws is retried — neither is latched as told', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = await harness(mergedLine());
+    const realRun = f.coord.run.bind(f.coord);
+    let n = 0;
+    vi.spyOn(f.coord, 'run').mockImplementation((id) => (n++ === 0
+      ? { ok: false as const, kind: 'run-unreadable' as const, detail: 'fixture' } : realRun(id)));
+    await f.sweep();
+    expect(f.mail(), 'an unreadable run row was read as "not at merging"').toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('deferred (run rows unreadable: fixture)'));
+    await f.sweep();
+    expect(f.mail(), 'the deferred merged notice was never sent').toHaveLength(1);
+    f.stop();
+    const g = await harness(mergedLine());
+    const real = g.coord.hasOutstandingMail.bind(g.coord);
+    let k = 0;
+    vi.spyOn(g.coord, 'hasOutstandingMail').mockImplementation((...a) => {
+      if (k++ === 0) throw new Error('database is locked');
+      return real(...a);
+    });
+    await g.sweep();
+    expect(g.mail()).toEqual([]);
+    await g.sweep();
+    expect(g.mail(), 'the thrown merged notice was never retried').toHaveLength(1);
+    warn.mockRestore();
+    g.stop();
+  });
+
+  it('a restart re-mails no merge it already told — acked', async () => {
+    const f = await harness(mergedLine());
+    await f.sweep();
+    const m = f.mail();
+    expect(m).toHaveLength(1);
+    f.coord.markAcked(m[0]!.deliveryId, Date.now());
+    f.restart();
+    await f.sweep();
+    expect(f.mail()).toHaveLength(1);
     f.stop();
   });
 });
@@ -1519,7 +2306,7 @@ describe('the dequeue lane latches only what it told', () => {
 cd server && ./node_modules/.bin/vitest run test/pr-queue-lane.test.ts
 ```
 
-Expected (measured at `af64d9d2`; re-measured 2026-09-24 at `08701c22`, `main` `b501698a` merged, identical): `10 failed | 1 passed (11)` — `TypeError: queueFor is not a function` on the three reader cases and `expected [] to have a length of 1 but got +0` (or its `of 2` form, or `the thrown notice was never retried`) on the seven lane cases; "says nothing for…" passes (nothing announces yet) and must stay passing.
+Expected (measured 2026-09-29 at `6da36f0b` with wave 1 and Tasks 1–2 applied): `16 failed | 2 passed (18)` — `TypeError: queueFor is not a function` on the three reader cases, `expected [] to have a length of 1 but got +0` (or its `of 2` form, `the operator watching the pane erased the record of a removal`, `the thrown notice was never retried`, or `expected "warn" to be called with arguments`) on the lane cases, and on the brief case `renderDequeueBrief is not a function` (vitest leaves a missing named export `undefined`, so the reds are the lane's, not an import crash). The two silence cases — "says nothing for queued, landed, …" and "says nothing when the run is not at merging…" — pass today (nothing announces yet) and must stay passing. And `cd ../pwa && ./node_modules/.bin/vitest run test/mail-screen.test.tsx` → `1 failed | 25 passed (26)` once Step 4's `it` is in: `no glyph for queue: expected '' to be '⤺'`.
 
 - [ ] **Step 3: The one reader, in `server/src/prstate.ts`.** In `CcdPrLine`, directly after `  checksUnmeasured?: boolean;`, insert:
 
@@ -1553,8 +2340,8 @@ const PR_QUEUE_WORDS: readonly string[] = Object.keys(PR_QUEUE_MAP);
  *  `unmeasured`: a line with no `queue` key comes from a ccd that predates the
  *  read, or from `--session`, which never makes it — nothing was asked, where
  *  `unmeasured` means ccd asked and GitHub did not answer. Both mean "no
- *  evidence" to the dequeue lane; they are kept apart so no later reader has to
- *  re-derive which one it was holding. */
+ *  evidence" to the landing lane; they are kept apart so no later reader has
+ *  to re-derive which one it was holding. */
 export interface PrQueueRead { state: PrQueue | 'absent'; at: string | null }
 
 const QUEUE_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
@@ -1597,7 +2384,7 @@ with
 const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'queue', 'unknown'];
 ```
 
-(No line is added: `shared/api.ts` is cited by line from README and the frozen plan. The argument for the new kind lives at `sweepDequeued`, Step 5.) In `pwa/src/screens/MailScreen.tsx` replace
+(No line is added: `shared/api.ts` is cited by line from README and the frozen plan. The argument for the new kind lives at `sweepLanding`, Step 6.) In `pwa/src/screens/MailScreen.tsx` replace
 
 ```typescript
   coord: 'config', unknown: 'unknown',
@@ -1640,7 +2427,58 @@ In `pwa/test/mail-screen.test.tsx`, directly after the `it('renders a coord-kind
   });
 ```
 
-- [ ] **Step 5: The lane, in `server/src/watch.ts`.** Replace the import line
+- [ ] **Step 5: The subjects and who sends them, in `server/src/coord/rundefs.ts`.** Replace
+
+```typescript
+    'watcher on their behalf (the ask nudge); never a session speaking for itself',
+```
+
+with
+
+```typescript
+    'watcher on their behalf (the ask nudge, the landing notices); never a session speaking for itself',
+```
+
+and in `queueSystemMail`'s comment replace
+
+```typescript
+    // `queueSystemMail` — all five of its callers: `close.ts`'s `closeRun`,
+    // `dispatch.ts`'s `dispatchRun`, `kickoff.ts`'s `queueProgramKickoff`,
+    // `routes.ts`'s `POST /api/runs/:id/advance` handler, and `watch.ts`'s
+    // `FleetWatcher.hold` (the ask pre-emption lane's parent nudge, added
+    // after this file's other four) — deliberately:
+```
+
+with
+
+```typescript
+    // `queueSystemMail` — every one of its callers: `close.ts`'s `closeRun`
+    // and `closeReviewRun`, `dispatch.ts`'s `dispatchRun`, `kickoff.ts`'s
+    // `queueProgramKickoff`, `routes.ts`'s `POST /api/runs/:id/advance`
+    // handler, and `watch.ts`'s `FleetWatcher.hold` (the ask pre-emption
+    // lane's parent nudge) and `FleetWatcher.sweepLanding` (the merge queue's
+    // two landing notices, landing-order wave 2, which catches the throw per
+    // row) — deliberately:
+```
+
+and directly above `/** The ask pre-emption lane's own nudge-mail subject prefix — the ONE source`, insert:
+
+```typescript
+/** The landing lane's two notice subjects (landing-order wave 2), each spelled
+ *  ONCE: `watch.ts`'s `sweepLanding` queues them and asks `hasMailWithSubject`
+ *  about them, and the coordinator skill tells its reader to expect them
+ *  (`references/wave-lifecycle.md` §5) — `coordinator-skill.test.ts` holds the
+ *  skill's spelling to these. A dequeue is unique per REMOVAL — the PR and the
+ *  removal's own time (`queueAt`, shape-gated by `queueFor`) — so a second
+ *  removal of the same PR is a new notice, and a reading with no well-shaped
+ *  time falls back to the PR alone; a merge happens once per PR. */
+export const dequeuedSubject = (pr: number, at: string | null): string =>
+  at === null ? `dequeued:#${pr}` : `dequeued:#${pr}@${at}`;
+export const mergedSubject = (pr: number): string => `merged:#${pr}`;
+
+```
+
+- [ ] **Step 6: The lane, in `server/src/watch.ts`.** Replace the import line
 
 ```typescript
 import { isFullLine, parsePrLines, phaseFor, repoCellFor, type CcdPrFailure } from './prstate.js';
@@ -1654,24 +2492,43 @@ import {
 } from './prstate.js';
 ```
 
+and
+
+```typescript
+import {
+  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, askNudgeSubject, isAskNudgeMail, queueSystemMail,
+} from './coord/rundefs.js';
+```
+
+with
+
+```typescript
+import {
+  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, askNudgeSubject, dequeuedSubject, isAskNudgeMail,
+  mergedSubject, queueSystemMail, survivorOf,
+} from './coord/rundefs.js';
+```
+
 Directly after `  private mergedNotified = new Set<string>();`, insert:
 
 ```typescript
   /** The merge-queue word each session's last full pr-state line carried
    *  (`queueFor`), kept beside `prStates` and written by the same arm of
-   *  `sweepPr`. Read by `sweepDequeued` and nothing else. */
+   *  `sweepPr`. Read by `sweepLanding` and nothing else. */
   private prQueues = new Map<string, PrQueueRead>();
-  /** `sweepDequeued`'s in-memory latch, per (workspace, PR, removal time) —
-   *  the `mergedNotified` shape plus the removal's own timestamp, because a PR
-   *  can be dequeued, re-enqueued and dequeued AGAIN, and each removal is a new
-   *  fact the coordinator has to hear. Written only AFTER the notice landed, or
-   *  after a durable read proved an earlier process sent it — never before: a
-   *  latch set ahead of a failed read or a thrown mail would make that removal
-   *  a landing that silently stops. It is NOT what stops a restart
-   *  re-announcing (a PR can sit dequeued through a whole fix round, and every
-   *  rollout restarts this process); that is `sweepDequeued`'s DURABLE read.
-   *  This set spares a latched removal the coord.db reads on every later sweep. */
-  private dequeuedNotified = new Set<string>();
+  /** `sweepLanding`'s in-memory latch, per (workspace, PR, notice, removal
+   *  time) — the `mergedNotified` shape plus the notice and the removal's own
+   *  timestamp, because a PR can be dequeued, re-enqueued and dequeued AGAIN,
+   *  and each removal is a new fact the coordinator has to hear. Written only
+   *  AFTER the notice landed, after a durable read proved an earlier process
+   *  sent it, or once the lane has decided there is nobody to tell — never
+   *  before a read: a latch set ahead of a failed read or a thrown mail would
+   *  make that removal a landing that silently stops. It is NOT what stops a
+   *  restart re-announcing (a PR can sit dequeued through a whole fix round,
+   *  and every rollout restarts this process); that is `sweepLanding`'s
+   *  DURABLE read. This set spares a latched notice the coord.db reads on
+   *  every later sweep. */
+  private landingNotified = new Set<string>();
 ```
 
 Directly after `          this.prStates.set(line.id, phaseFor(line));` (one hit, `sweepPr`'s full-line arm), insert:
@@ -1683,7 +2540,7 @@ Directly after `          this.prStates.set(line.id, phaseFor(line));` (one hit,
 Directly after `      this.sweepMerged(records);` (one hit), insert:
 
 ```typescript
-      this.sweepDequeued(records);
+      this.sweepLanding(records);
 ```
 
 After `sweepMerged`'s closing brace (its last statement is `      this.announceMerged(key, r, pr.number, reason);`, then `    }`, then `  }`), insert:
@@ -1691,71 +2548,124 @@ After `sweepMerged`'s closing brace (its last statement is `      this.announceM
 ```typescript
 
   /**
-   * The dequeue lane (landing-order wave 2, spec §5.2). GitHub does NOT
-   * re-enqueue a PR its merge queue removed, so a removal nobody hears about is
-   * a landing that silently stops. Once per (workspace, PR, removal):
+   * The landing lane (landing-order wave 2, spec §5.2): the coordinator's two
+   * notices about a PR it is landing through the merge queue. It ANNOUNCES; it
+   * never enqueues, merges, re-runs or re-enqueues anything (R5).
    *
-   *  - a `status` MAIL to the coordinator, when the workspace belongs to an
-   *    open run whose coordinator resolves. The coordinator re-enqueues or
-   *    sends a fix round; this lane decides neither and acts on nothing — no
-   *    enqueue, no merge, no re-run. With no open run there is no coordinator to
-   *    tell without guessing (`resolveCoordinator(null)`'s arm is a guess here,
-   *    `tellSender`'s reason), so the feed record is the whole notice.
-   *  - a `queue` FEED record, always — `recordAlways`, because a removal is a
-   *    fact about the programme whether or not the operator is watching this
-   *    pane. A NEW kind rather than `merged` or `mail`: a dequeue is the one PR
-   *    outcome that is not a merge, and `MailScreen`'s two total maps name it;
-   *    an older client degrades it to `unknown` through `reviveNotifyEvent`.
+   *  - DEQUEUED (`queueFor` reads `dequeued`). GitHub does NOT re-enqueue a PR
+   *    its queue removed, so a removal nobody hears about is a landing that
+   *    silently stops. Once per (workspace, PR, removal): a `status` mail
+   *    (`dequeuedSubject`) to the coordinator of the open run that names the
+   *    workspace — who re-enqueues or sends a fix round — and a `queue` FEED
+   *    record, always (`recordAlways`: a removal is a fact about the
+   *    programme whether or not anyone is watching this pane). With no open
+   *    run there is nobody to tell without guessing (`resolveCoordinator(null)`
+   *    answers whichever programme is the single active one, `tellSender`'s
+   *    reason), so the record is the whole notice. A NEW kind rather than
+   *    `merged` or `mail`: a dequeue is the one PR outcome that is not a
+   *    merge; `MailScreen`'s two total maps name it, and an older client
+   *    degrades it to `unknown` through `reviveNotifyEvent`.
+   *  - MERGED (the phase `sweepPr` derived reads `merged`) while that run
+   *    waits at `merging`: a `status` mail (`mergedSubject`) to its
+   *    coordinator, once per (workspace, PR). `merging` is the coordinator's
+   *    own declaration that it is landing this PR; on a native-queue project
+   *    it enqueued and ended its turn (clause 15; `wave-lifecycle.md` §5), and
+   *    this mail is what wakes it to prove the merge and close the run — it
+   *    never polls (clause 7). The run's state is all this reads, not whether
+   *    the project has a queue: a synchronous merge elsewhere that a sweep
+   *    reads before the close is mailed too, and the skill says to prove and
+   *    close as usual. No feed record: `sweepMerged` writes the `merged` one.
+   *    A merged PR whose run is elsewhere — a hand merge, a close that came
+   *    first — asked for nothing, and the first sweep that reads the merge
+   *    decides so.
    *
-   * ONCE ACROSS RESTARTS TOO. Before announcing, the lane asks coord.db whether
-   * this removal was ALREADY told: the mail arm through `hasMailWithSubject` —
-   * the subject carries the removal time, and every delivery state counts,
-   * because `queueSystemMail`'s own dedupe sees OUTSTANDING rows only and an
-   * acked notice would otherwise be mailed again after every rollout — and the
-   * feed-only arm through `hasFeedEvent` on the exact body, which carries the
-   * removal time too. A hit latches and says nothing.
+   * WHY THE OPEN RUN IS THE KEY. Under "One PR per child" a producer that
+   * closed before its PR landed would be reclaimed (child-reclamation wave 3:
+   * registry row, worktree and pane gone), and a reclaimed workspace has no
+   * pr-state line to carry a queue word — nor a worker to take a fix round.
+   * On a native-queue project the coordinator therefore lands BEFORE it
+   * closes (clause 15): the run waits at `merging` holding the child, so the
+   * row, the line and the worker all outlive the queue. The run is the one
+   * `survivorOf` picks — the close's and dispatch's own rule.
+   *
+   * ONCE ACROSS RESTARTS TOO. Before telling, the lane asks coord.db whether
+   * this notice was ALREADY told: a mail through `hasMailWithSubject` — every
+   * delivery state, because `queueSystemMail`'s own dedupe sees OUTSTANDING
+   * rows only and an acked notice would otherwise be mailed again after every
+   * rollout — and the feed-only dequeue through `hasFeedEvent` on the exact
+   * body, which carries the removal time. A hit latches and says nothing.
    *
    * THREE OUTCOMES, KEPT APART. Run rows that cannot be read are NOT "no open
    * run" (the overloaded null `sweepMerged` also refuses): the lane defers,
-   * says nothing and latches nothing, and the next sweep re-reads. A mail that
-   * throws (`node:sqlite`, synchronously) is caught with nothing recorded and
-   * nothing latched, so the next sweep tries again — the mail is queued BEFORE
-   * the feed record for exactly that reason, so a retry leaves one record. Only
-   * a notice that landed, or one a durable read found, is latched.
+   * says nothing and latches nothing, and the next sweep re-reads. A mail
+   * that throws (`node:sqlite`, synchronously) is caught with nothing recorded
+   * and nothing latched, so the next sweep tries again — the mail is queued
+   * BEFORE the feed record for exactly that reason, so a retry leaves one
+   * record. Only a notice that landed, one a durable read found, or a
+   * decision that there is nobody to tell, is latched.
    *
-   * `unmeasured` and `absent` NEVER announce, and neither do `queued`,
-   * `landed` or `none`: the lane fires on the one word that asks for an act.
+   * `unmeasured` and `absent` NEVER announce a dequeue, and neither do
+   * `queued`, `landed` or `none`: the lane fires on the one word that asks
+   * for an act. A PR the coordinator's enqueue only ARMED reads `none` too
+   * (gh 2.45 arms auto-merge, rather than queueing, a PR whose required
+   * checks have not passed, and prints the same line either way): the lane
+   * cannot tell that from "not enqueued yet", so the coordinator reads the
+   * queue entry back before it ends its turn (`wave-lifecycle.md` §5).
    */
-  private sweepDequeued(records: SessionRecord[]): void {
+  private sweepLanding(records: SessionRecord[]): void {
     const coord = this.deps.coord;
+    if (coord === undefined) return;
     for (const r of records) {
       if (measuredIdentity(r) === null) continue;
       if (r.workspace === null || r.archivedAt !== null) continue;
+      const pr = this.prStates.get(r.id);
       const q = this.prQueues.get(r.id);
-      const number = this.prStates.get(r.id)?.number ?? null;
-      if (q?.state !== 'dequeued' || number === null) continue;
-      const key = `${r.id}#${number}@${q.at ?? ''}`;
-      if (this.dequeuedNotified.has(key)) continue;
+      const number = pr?.number ?? null;
+      const dequeued = q?.state === 'dequeued';
+      if (number === null || (!dequeued && pr?.phase !== 'merged')) continue;
+      const at = dequeued ? q.at : null;
+      const key = `${r.id}#${number}:${dequeued ? 'dequeued' : 'merged'}@${at ?? ''}`;
+      if (this.landingNotified.has(key)) continue;
       // ONE BAD ROW MAY NOT COST THE REST OF THE SWEEP: `node:sqlite` throws
       // synchronously, and this runs inside the void-dispatched `sweepPr`.
       try {
-        const sib = coord?.openRunsForSession(r.id);
-        if (sib !== undefined && !sib.ok) {
-          console.warn(`ccrc-server: dequeue notice for ${r.id} deferred (run rows unreadable: ${sib.detail})`);
+        const sib = coord.openRunsForSession(r.id);
+        if (!sib.ok) {
+          console.warn(`ccrc-server: landing notice for ${r.id} deferred (run rows unreadable: ${sib.detail})`);
           continue;
         }
-        const run = sib?.ok ? sib.siblings[sib.siblings.length - 1] : undefined;
-        const coordinator = run !== undefined ? coord!.resolveCoordinator(run.id) : null;
-        const subject = dequeuedSubject(number, q.at);
+        const run = survivorOf(sib.siblings);
+        const coordinator = run === null ? null : coord.resolveCoordinator(run.id);
+        if (!dequeued) {
+          // A MERGE: told only to a coordinator whose run waits at `merging`.
+          if (run === null || coordinator === null) { this.landingNotified.add(key); continue; }
+          const read = coord.run(run.id);
+          if (!read.ok) {
+            console.warn(`ccrc-server: landing notice for ${r.id} deferred (run rows unreadable: ${read.detail})`);
+            continue;
+          }
+          if (read.run?.state === 'merging') {
+            const subject = mergedSubject(number);
+            if (!coord.hasMailWithSubject('operator', run.id, coordinator, subject)) {
+              queueSystemMail(coord, run, {
+                fromId: 'operator', toId: coordinator, runId: run.id, kind: 'status',
+                subject, body: renderMergedBrief(r.id, number),
+              });
+            }
+          }
+          this.landingNotified.add(key);
+          continue;
+        }
+        const subject = dequeuedSubject(number, at);
         const body = `PR #${number} left the merge queue without landing`
-          + (q.at === null ? '' : ` (removed ${q.at})`) + '; GitHub does not re-enqueue it. '
+          + (at === null ? '' : ` (removed ${at})`) + '; GitHub does not re-enqueue it. '
           + (coordinator === null ? 'No open run names a coordinator to tell.' : `Mailed coordinator ${coordinator}.`);
-        const told = run !== undefined && coordinator !== null
-          ? coord!.hasMailWithSubject('operator', run.id, coordinator, subject)
-          : coord?.hasFeedEvent('queue', r.id, body) === true;
+        const told = run !== null && coordinator !== null
+          ? coord.hasMailWithSubject('operator', run.id, coordinator, subject)
+          : coord.hasFeedEvent('queue', r.id, body);
         if (!told) {
-          if (run !== undefined && coordinator !== null) {
-            queueSystemMail(coord!, run, {
+          if (run !== null && coordinator !== null) {
+            queueSystemMail(coord, run, {
               fromId: 'operator', toId: coordinator, runId: run.id, kind: 'status',
               subject, body: renderDequeueBrief(r.id, number),
             });
@@ -1768,9 +2678,9 @@ After `sweepMerged`'s closing brace (its last statement is `      this.announceM
             recordAlways: true,
           }, this.activeProjects);
         }
-        this.dequeuedNotified.add(key);
+        this.landingNotified.add(key);
       } catch (err) {
-        console.warn(`ccrc-server: dequeue notice for ${r.id} failed (${err instanceof Error ? err.message : String(err)})`);
+        console.warn(`ccrc-server: landing notice for ${r.id} failed (${err instanceof Error ? err.message : String(err)})`);
       }
     }
   }
@@ -1779,35 +2689,48 @@ After `sweepMerged`'s closing brace (its last statement is `      this.announceM
 Directly above the docstring that begins `/**\n * The parent's ENTIRE evidentiary surface (design spec §6.1)` (the one above `function renderAskBrief(`), insert:
 
 ```typescript
-/** The dequeue notice's subject, unique per REMOVAL: the PR and the removal's
- *  own time (`queueAt`, shape-gated by `queueFor`), so `sweepDequeued`'s
- *  durable read tells "this removal was already mailed" from "a new removal of
- *  the same PR". A reading with no well-shaped time falls back to the PR alone,
- *  which is what `dequeuedNotified`'s key does with it too. */
-export const dequeuedSubject = (pr: number, at: string | null): string =>
-  at === null ? `dequeued:#${pr}` : `dequeued:#${pr}@${at}`;
-
 /** The dequeue notice's body. Every value in it is this server's own — a PR
  *  number, a registry-validated session id — and nothing GitHub wrote (the
- *  removal's reason is never carried): this text lands in a model's context. */
+ *  removal's reason is never carried): this text lands in a model's context.
+ *  The re-enqueue spelling is clause 15's, exact-SHA binding and all. The why
+ *  is the QUEUE's own CI run: a queue failure is the `merge_group` run on the
+ *  queue branch's commit, which the PR head's checks never include, so they
+ *  can read green while the queue reads red. A fix round disarms first: an
+ *  armed auto-merge would queue whatever head the round pushes. */
 export function renderDequeueBrief(sessionId: string, pr: number): string {
   return `PR #${pr} (workspace \`${sessionId}\`) was removed from this repository's merge queue without landing. ` +
     `GitHub does not re-enqueue a PR after a failed group.\n` +
-    `Read why from your own shell: \`gh pr view ${pr} --json statusCheckRollup,mergeStateStatus\`.\n` +
-    `Then either re-enqueue it — \`gh pr merge ${pr}\`, never \`--admin\` (clause 15) — ` +
-    `or send the owning worker a fix round.\n\n` +
+    `Read why from the QUEUE's own CI run, not the PR's checks — they ran on a different commit and can read green: ` +
+    `\`gh run list --event merge_group --limit 20 --json databaseId,headBranch,conclusion\` finds it by its ` +
+    `\`headBranch\` (\`gh-readonly-queue/<base>/pr-${pr}-…\`), \`gh run view <id> --log-failed\` says why, and ` +
+    `\`gh pr view ${pr} --json mergeStateStatus\` answers a conflict.\n` +
+    `Then either re-enqueue it — \`gh pr merge ${pr} --match-head-commit <handoffCommit>\`, the run's verified ` +
+    `handoffCommit, never \`--admin\` (clause 15) — or disarm any armed auto-merge ` +
+    `(\`gh pr merge ${pr} --disable-auto\`) and send the owning worker a fix round on the ` +
+    `\`merging → working\` edge.\n\n` +
+    `Run the ccrc-coordinator skill.`;
+}
+
+/** The merged notice's body — the same provenance rule as the dequeue's. It
+ *  asks for the merge PROOF before the close, because a merged PR is not yet
+ *  proof that the exact head the review read is the one that landed. */
+export function renderMergedBrief(sessionId: string, pr: number): string {
+  return `PR #${pr} (workspace \`${sessionId}\`) merged while its run waited at \`merging\`.\n` +
+    `Prove it from your own shell — \`gh pr view ${pr} --json state,headRefOid\` answers MERGED with ` +
+    `\`headRefOid\` equal to the run's verified handoffCommit — then close the run as ` +
+    `references/wave-lifecycle.md §5 closes a producer.\n\n` +
     `Run the ccrc-coordinator skill.`;
 }
 
 ```
 
-- [ ] **Step 6: The two durable reads, in `server/src/coord/store.ts`.** Directly after `hasOutstandingMail`'s closing brace (its last statement is `    return row !== undefined;`, one hit inside that method), insert:
+- [ ] **Step 7: The two durable reads, in `server/src/coord/store.ts`.** Directly after `hasOutstandingMail`'s closing brace (its last statement is `    return row !== undefined;`, one hit inside that method), insert:
 
 ```typescript
 
   /** Whether ANY mail with this exact (fromId, runId, toId, subject) was ever
    *  queued — in EVERY delivery state, which is the whole difference from
-   *  `hasOutstandingMail` above. `sweepDequeued`'s durable "already told" read
+   *  `hasOutstandingMail` above. `sweepLanding`'s durable "already told" read
    *  (landing-order wave 2): its latch is in memory, `queueSystemMail`'s dedupe
    *  sees outstanding rows only, and a PR that stays dequeued through a fix
    *  round would otherwise be mailed again after every server restart once its
@@ -1827,7 +2750,7 @@ Directly after `feedEvents`'s closing brace (the method that begins `  feedEvent
 ```typescript
 
   /** Whether the feed archive holds a record of this kind, about this session,
-   *  with exactly this body — `sweepDequeued`'s durable "already told" read for
+   *  with exactly this body — `sweepLanding`'s durable "already told" read for
    *  a removal no open run names (landing-order wave 2), whose body carries the
    *  removal time. Bounded by `FEED_RETENTION` like every feed read: a record
    *  pruned out of the archive reads as never recorded, and is announced again. */
@@ -1839,125 +2762,154 @@ Directly after `feedEvents`'s closing brace (the method that begins `  feedEvent
   }
 ```
 
-Both are reads: neither names `mail_deliveries`, so `mail-hardening.test.ts`'s delivery-writer census and `single-definition.test.ts`'s state-set scans do not see them (measured: 18 and 160 passed with both in; re-measured 2026-09-24 at `08701c22` — `main` `b501698a` merged, whose three commits since `a3a93b41` took `single-definition` from 160 to 214 cases — as 18 and 214, by `./node_modules/.bin/vitest run test/mail-hardening.test.ts` and `… test/single-definition.test.ts test/coord-store.test.ts` = 383 = 214 + 169, with Task 3's server edits applied). `mail` has no pruning writer anywhere in `server/src/coord/`; `feed_events` prunes to `FEED_RETENTION`, which the second docstring says.
+Both are reads: neither names `mail_deliveries`, so `mail-hardening.test.ts`'s delivery-writer census and `single-definition.test.ts`'s state-set scans do not see them (Step 8 runs both). `mail` has no pruning writer anywhere in `server/src/coord/`; `feed_events` prunes to `FEED_RETENTION`, which the second docstring says.
 
-- [ ] **Step 7: Say who raises it, in `server/src/coord/rundefs.ts`.** Replace
-
-```typescript
-    'watcher on their behalf (the ask nudge); never a session speaking for itself',
-```
-
-with
-
-```typescript
-    'watcher on their behalf (the ask nudge, the dequeue notice); never a session speaking for itself',
-```
-
-and in `queueSystemMail`'s comment replace
-
-```typescript
-    // `queueSystemMail` — all five of its callers: `close.ts`'s `closeRun`,
-    // `dispatch.ts`'s `dispatchRun`, `kickoff.ts`'s `queueProgramKickoff`,
-    // `routes.ts`'s `POST /api/runs/:id/advance` handler, and `watch.ts`'s
-    // `FleetWatcher.hold` (the ask pre-emption lane's parent nudge, added
-    // after this file's other four) — deliberately:
-```
-
-with
-
-```typescript
-    // `queueSystemMail` — all six of its callers: `close.ts`'s `closeRun`,
-    // `dispatch.ts`'s `dispatchRun`, `kickoff.ts`'s `queueProgramKickoff`,
-    // `routes.ts`'s `POST /api/runs/:id/advance` handler, and `watch.ts`'s
-    // `FleetWatcher.hold` (the ask pre-emption lane's parent nudge, added
-    // after this file's other four) and `FleetWatcher.sweepDequeued` (the
-    // merge queue's dequeue notice, landing-order wave 2, which catches the
-    // throw per row) — deliberately:
-```
-
-- [ ] **Step 8: Run the tests to verify they pass**
+- [ ] **Step 8: Run the tests to verify they pass — one file at a time**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/pr-queue-lane.test.ts
-./node_modules/.bin/vitest run test/pr-sweep.test.ts test/prstate.test.ts
-./node_modules/.bin/vitest run test/single-definition.test.ts test/coord-store.test.ts
+./node_modules/.bin/vitest run test/pr-sweep.test.ts
+./node_modules/.bin/vitest run test/prstate.test.ts
+./node_modules/.bin/vitest run test/single-definition.test.ts
+./node_modules/.bin/vitest run test/coord-store.test.ts
 ./node_modules/.bin/vitest run test/mail-hardening.test.ts
+./node_modules/.bin/vitest run test/mail-sweep.test.ts
 ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/tsc -p test/tsconfig.tests.json --noEmit && echo tsc-ok
 ./node_modules/.bin/vitest run test/session-hook.test.ts \
   -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'
-cd ../pwa && ./node_modules/.bin/vitest run test/mail-screen.test.tsx test/feed.test.ts test/notifymark.test.ts
+cd ../pwa && ./node_modules/.bin/vitest run test/mail-screen.test.tsx
+./node_modules/.bin/vitest run test/feed.test.ts
+./node_modules/.bin/vitest run test/notifymark.test.ts
 ```
 
-Expected (measured on the prototype at `af64d9d2`; the server half re-measured 2026-09-24 at `08701c22`, `main` `b501698a` merged, with Task 3's server edits applied from this plan's own blocks): `11 passed (11)`; `95 passed (95)`; `383 passed (383)` (was `329` at `af64d9d2`; `main`'s three commits since `a3a93b41` took `single-definition` from 160 to 214 cases); `18 passed (18)`; `tsc-ok`; `7 passed | 326 skipped` (the two in-place `shared/api.ts` lines moved no citation); `52 passed (52)` and `Type Errors  no errors` (26 mail-screen cases, the new one among them).
+Expected (measured 2026-09-29 at `6da36f0b` with wave 1 and Tasks 1–2 applied, each file alone): `18 passed (18)`; `pr-sweep` `37 passed (37)`; `prstate` `58 passed (58)`; `single-definition` `230 passed (230)`; `coord-store` `169 passed (169)`; `mail-hardening` `18 passed (18)` (both new reads name no `mail_deliveries`, so the delivery-writer census does not see them); `mail-sweep` `79 passed (79)`; `tsc-ok` (with `agent/node_modules` installed — `server/src` reaches `agent/src/server.ts`, which imports `ws`); `7 passed | 328 skipped (335)` (the two in-place `shared/api.ts` lines moved no citation); `mail-screen` `26 passed (26)`, `feed` `15 passed (15)`, `notifymark` `11 passed (11)`, each `Type Errors  no errors`.
 
 - [ ] **Step 9: Mutation check, then commit**
 
-Sixteen mutations, each restored from a saved copy (`cp` of `server/src/watch.ts`, `server/src/prstate.ts`, `shared/api.ts`, `pwa/src/screens/MailScreen.tsx` into `$SCRATCH` after Step 8; restore with `cp`). Every red below was measured on the prototype — L1–L14 and K1 re-measured at `af64d9d2` against the revised lane (P1 as the planner measured it at `905360dc`). "The lane cases" are the seven that expect a record: once, second removal, no open run, and the four in "latches only what it told":
+Twenty-five mutations, run with `$SCRATCH/mutate.py` (restored from a saved COPY after each row). Every red below was measured on 2026-09-29 at `6da36f0b` with wave 1 and Tasks 1–2 applied. "The dequeue cases" are the nine that expect a dequeue notice or record: once, second removal, survivor, no open run, the watched pane, and the unreadable, thrown-mail, restart-mailed and restart-feed-only cases of "latches only what it told":
 
-| # | Exact edit | Command | Expected red |
+| # | Exact edit | Test file | Expected red (measured) |
 |---|---|---|---|
-| L1 | `watch.ts`: delete `      this.sweepDequeued(records);` | `cd server && ./node_modules/.bin/vitest run test/pr-queue-lane.test.ts` | `7 failed \| 4 passed` — the seven lane cases: `expected [] to have a length of 1 but got +0`, `… of 2 but got +0`, `expected "warn" to be called with arguments: [ StringContaining{…} ]` |
-| L2 | `watch.ts`: delete `          this.prQueues.set(line.id, queueFor(line));` (mutate the CALL SITE, not the reader) | same | same seven, same reds |
-| L3 | `watch.ts`: delete `      if (this.dequeuedNotified.has(key)) continue;` | same | "…mails the run's coordinator, once" only — `a latched removal re-read the run rows on the next sweep: expected "openRunsForSession" to not be called at all, but actually been called 1 times` (the durable read still stops a second notice; the in-memory latch is what spares the reads) |
-| L4 | `watch.ts`: ``const key = `${r.id}#${number}@${q.at ?? ''}`;`` → ``const key = `${r.id}#${number}`;`` | same | `3 failed` — "announces a SECOND removal…" (`expected [ { seq: 1, … } ] to have a length of 2 but got 1`), the first case's tag lookup (`expected undefined to be defined`) and the restart case's new removal (`expected { mail: 1, feed: 1 } to deeply equal { mail: 2, feed: 2 }`) |
-| L5 | `watch.ts`: `if (q?.state !== 'dequeued' \|\| number === null) continue;` → `if ((q?.state !== 'dequeued' && q?.state !== 'unmeasured') \|\| number === null) continue;` | same | "says nothing for…" only — `{"queue":"unmeasured"}: expected [ { seq: 1, … } ] to deeply equal []` |
-| L6 | `watch.ts`: `const coordinator = run !== undefined ? coord!.resolveCoordinator(run.id) : null;` → `const coordinator = coord!.resolveCoordinator(run?.id ?? null);` (guess the coordinator) | same | "with no open run…" only — `expected 'PR #42 left the merge queue without l…' to contain 'No open run names a coordinator'` |
-| L7 | `prstate.ts`: `return { state: 'absent', at: null };` → `return { state: 'unmeasured', at: null };` | same | "answers absent…" only — `expected { state: 'unmeasured', at: null } to deeply equal { state: 'absent', at: null }` |
-| L8 | `prstate.ts`: `typeof line.queueAt === 'string' && QUEUE_AT_RE.test(line.queueAt)` → `typeof line.queueAt === 'string'` | same | "keeps queueAt only when…" only — `expected '$(reboot)' to be null` |
-| L9 | `watch.ts`: latch BEFORE the lookup — insert `      this.dequeuedNotified.add(key);` directly after `      if (this.dequeuedNotified.has(key)) continue;` | same | `2 failed` — "an unreadable run read is not…" (`the deferred notice was never sent: expected [] to have a length of 1 but got +0`) and "a mail that throws is retried…" (`the thrown notice was never retried: expected [] to have a length of 1 but got +0`) |
-| L10 | `watch.ts`: delete the four-line `if (sib !== undefined && !sib.ok) { … continue; }` guard (fold unreadable into "no open run") | same | "an unreadable run read is not…" only — `an unreadable run read was announced as "no open run": expected [ { seq: 1, … } ] to deeply equal []` |
-| L11 | `watch.ts`: `? coord!.hasMailWithSubject('operator', run.id, coordinator, subject)` → `? coord!.hasOutstandingMail('operator', run.id, coordinator, subject)` (the outstanding-only dedupe) | same | "a restart re-announces nothing it already mailed…" only — `expected { mail: 2, feed: 2 } to deeply equal { mail: 1, feed: 1 }` |
-| L12 | `watch.ts`: `: coord?.hasFeedEvent('queue', r.id, body) === true;` → `: false;` | same | "a restart re-records no feed-only notice either" only — `expected [ { seq: 1, …(6) }, { seq: 2, …(6) } ] to have a length of 1 but got 2` |
-| L13 | `watch.ts`: inside `if (!told) { … }`, move the `this.pushOne({ … }, this.activeProjects);` statement ABOVE the `if (run !== undefined && coordinator !== null) { queueSystemMail(…); }` statement (record before mail) | same | "a mail that throws is retried…" only — `a record was left for a notice that was never sent: expected [ { seq: 1, … } ] to deeply equal []` |
-| L14 | `watch.ts`: ``  at === null ? `dequeued:#${pr}` : `dequeued:#${pr}@${at}`;`` → ``  `dequeued:#${pr}`;`` (subject per PR, not per removal) | same | `3 failed` — `expected 'dequeued:#42' to be 'dequeued:#42@2026-09-23T11:30:00Z'`, "announces a SECOND removal…" (`… to have a length of 2 but got 1`) and the restart case's new removal (`expected { mail: 1, feed: 1 } to deeply equal { mail: 2, feed: 2 }`) |
-| K1 | `shared/api.ts`: `'run', 'coord', 'queue', 'unknown'];` → `'run', 'coord', 'unknown'];` | same | the same seven lane cases — the stored row reads back through `isNotifyKind` as `unknown`: `expected [] to have a length of 1 but got +0` |
-| P1 | `MailScreen.tsx`: delete `queue: '⤺', ` | `cd pwa && ./node_modules/.bin/vitest run test/mail-screen.test.tsx` | "renders a queue-kind feed record…" only — `no glyph for queue: expected '' to be '⤺'` |
+| L1 | `watch.ts`: delete `      this.sweepLanding(records);` | `pr-queue-lane` | `12 failed \| 6 passed` — the nine dequeue cases, the merged-once case, the merged defer-and-retry case and the merged-restart case: `expected [] to have a length of 1 but got +0` |
+| L2 | `watch.ts`: delete `          this.prQueues.set(line.id, queueFor(line));` (mutate the CALL SITE, not the reader) | `pr-queue-lane` | `9 failed \| 9 passed` — the nine dequeue cases; the merged cases stay green, because they read the phase, not the word |
+| L3 | `watch.ts`: delete `      if (this.landingNotified.has(key)) continue;` | `pr-queue-lane` | `1 failed` — "…mails the coordinator of the open run, once": `a latched removal re-read the run rows on the next sweep: expected "openRunsForSession" to not be called at all, but actually been called 1 times` (the durable read still stops a second notice; the in-memory latch is what spares the reads) |
+| L4 | `watch.ts`: drop `@${at ?? ''}` from the latch key | `pr-queue-lane` | `3 failed` — the once case's tag lookup (`expected undefined to be defined`), "announces a SECOND removal…" (`… to have a length of 2 but got 1`) and the restart case's new removal (`expected { mail: 1, feed: 1 } to deeply equal { mail: 2, feed: 2 }`) |
+| L5 | `watch.ts`: `      const dequeued = q?.state === 'dequeued';` → `… === 'dequeued' \|\| q?.state === 'unmeasured';` | `pr-queue-lane` | `1 failed` — "says nothing for…": `{"queue":"unmeasured"}: expected [ { seq: 1, … } ] to deeply equal []` |
+| L6 | `watch.ts`: `        const coordinator = run === null ? null : coord.resolveCoordinator(run.id);` → `        const coordinator = coord.resolveCoordinator(run?.id ?? null);` (guess the coordinator) | `pr-queue-lane` | `1 failed` — "with no open run…": `expected 'PR #42 left the merge queue without l…' to contain 'No open run names a coordinator'` |
+| L7 | `prstate.ts`: `return { state: 'absent', at: null };` → `return { state: 'unmeasured', at: null };` | `pr-queue-lane` | `1 failed` — "answers absent…": `expected { state: 'unmeasured', at: null } to deeply equal { state: 'absent', at: null }` |
+| L8 | `prstate.ts`: `typeof line.queueAt === 'string' && QUEUE_AT_RE.test(line.queueAt)` → `typeof line.queueAt === 'string'` | `pr-queue-lane` | `1 failed` — "keeps queueAt only when…": `expected '$(reboot)' to be null` |
+| L9 | `watch.ts`: latch BEFORE the lookup — insert `      this.landingNotified.add(key);` directly after `      if (this.landingNotified.has(key)) continue;` | `pr-queue-lane` | `3 failed` — `the deferred notice was never sent: expected [] to have a length of 1 but got +0`, `the thrown notice was never retried: expected [] to have a length of 1 but got +0`, and the merged arm's `the deferred merged notice was never sent` |
+| L10 | `watch.ts`: fold an unreadable read into "no open run" — `const sib = coord.openRunsForSession(r.id);` → `const read0 = coord.openRunsForSession(r.id);` + `const sib = read0.ok ? read0 : { ok: true as const, siblings: [] };` | `pr-queue-lane` | `1 failed` — `an unreadable run read was announced as "no open run": expected [ { seq: 1, … } ] to deeply equal []` |
+| L11 | `watch.ts`: `? coord.hasMailWithSubject('operator', run.id, coordinator, subject)` → `? coord.hasOutstandingMail(…)` (the outstanding-only dedupe) | `pr-queue-lane` | `1 failed` — "a restart re-announces no dequeue…": `expected { mail: 2, feed: 2 } to deeply equal { mail: 1, feed: 1 }` |
+| L12 | `watch.ts`: `: coord.hasFeedEvent('queue', r.id, body);` → `: false;` | `pr-queue-lane` | `1 failed` — "a restart re-records no feed-only dequeue either": `expected [ { seq: 1, …(6) }, { seq: 2, …(6) } ] to have a length of 1 but got 2` |
+| L13 | `watch.ts`: inside `if (!told) { … }`, move the `this.pushOne({ … }, this.activeProjects);` statement ABOVE the `queueSystemMail(…)` block (record before mail) | `pr-queue-lane` | `1 failed` — `a record was left for a notice that was never sent: expected [ { seq: 1, … } ] to deeply equal []` |
+| L14 | `rundefs.ts`: ``  at === null ? `dequeued:#${pr}` : `dequeued:#${pr}@${at}`;`` → ``  `dequeued:#${pr}`;`` (subject per PR, not per removal) | `pr-queue-lane` | `3 failed` — `expected 'dequeued:#42' to be 'dequeued:#42@2026-09-23T11:30:00Z'`, "announces a SECOND removal…" and the restart case's new removal |
+| L15 | `watch.ts`: `        const run = survivorOf(sib.siblings);` → `        const run = sib.siblings[0] ?? null;` (the oldest, not the close's survivor) | `pr-queue-lane` | `1 failed` — "names the survivor…": `expected [ 1 ] to deeply equal [ 2 ]` |
+| L16 | `watch.ts`: `          if (read.run?.state === 'merging') {` → `          if (read.run !== null) {` | `pr-queue-lane` | `1 failed` — "says nothing when the run is not at merging…": `{"state":"awaiting-review"}: expected [ { id: 1, … } ] to deeply equal []` |
+| L17 | `watch.ts`: the merged arm's `if (!coord.hasMailWithSubject('operator', run.id, coordinator, subject)) {` → `if (!coord.hasOutstandingMail(…)) {` | `pr-queue-lane` | `1 failed` — "a restart re-mails no merge it already told — acked": `expected [ …(2) ] to have a length of 1 but got 2` |
+| L18 | `watch.ts`: `gh pr merge ${pr} --match-head-commit <handoffCommit>` → `gh pr merge ${pr}` (the brief drops the exact-SHA binding) | `pr-queue-lane` | `1 failed` — the brief case: `expected 'PR #42 (workspace \`demo-quiet-basin\`)…' to contain '\`gh pr merge 42 --match-head-commit <…'` |
+| L19 | `watch.ts`: the merged arm's `if (!read.ok) {` → `if (false) {` (an unreadable run row read as "not at `merging`") | `pr-queue-lane` | `1 failed` — the merged defer-and-retry case: `expected "warn" to be called with arguments: [ StringContaining{…} ]` |
+| L20 | `watch.ts`: latch the merged arm BEFORE its mail — insert `          this.landingNotified.add(key);` directly above `          if (read.run?.state === 'merging') {` | `pr-queue-lane` | `1 failed` — the same case: `the thrown merged notice was never retried: expected [] to have a length of 1 but got +0` |
+| L21 | `watch.ts`: the dequeue record's `recordAlways: true,` → `recordAlways: false,` (the presence gate may drop it) | `pr-queue-lane` | `1 failed` — "records the dequeue even while the operator is looking at the pane…": `the operator watching the pane erased the record of a removal: expected [] to have a length of 1 but got +0` |
+| L22 | `watch.ts`: the brief's four read-why lines → the old `` Read why from your own shell: `gh pr view ${pr} --json statusCheckRollup,mergeStateStatus`. `` (the PR head's checks, not the queue's run) | `pr-queue-lane` | `1 failed` — the brief case: `expected 'PR #42 (workspace \`demo-quiet-basin\`)…' to contain '\`gh run list --event merge_group'` |
+| L23 | `watch.ts`: the brief drops the disarm — `— or disarm any armed auto-merge ` + `` (`gh pr merge ${pr} --disable-auto`) and send the owning worker `` → `— or send the owning worker` | `pr-queue-lane` | `1 failed` — the brief case: `… to contain '\`gh pr merge 42 --disable-auto\`'` |
+| K1 | `shared/api.ts`: `'run', 'coord', 'queue', 'unknown'];` → `'run', 'coord', 'unknown'];` | `pr-queue-lane` | `9 failed \| 9 passed` — the nine dequeue cases: the stored row reads back through `isNotifyKind` as `unknown` (`expected [] to have a length of 1 but got +0`, and `TypeError: Cannot read properties of undefined (reading 'runId')` on the survivor case) |
+| P1 | `MailScreen.tsx`: delete `queue: '⤺', ` | `pwa:` `mail-screen` | `1 failed \| 25 passed` — "renders a queue-kind feed record…": `no glyph for queue: expected '' to be '⤺'` |
+
+Rows (`$SCRATCH/mut-task3.json`; a `pwa:` prefix runs the file from `pwa/`):
+
+```json
+[
+ {"id": "L1", "file": "server/src/watch.ts", "old": "      this.sweepLanding(records);\n", "new": "", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L2", "file": "server/src/watch.ts", "old": "          this.prQueues.set(line.id, queueFor(line));\n", "new": "", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L3", "file": "server/src/watch.ts", "old": "      if (this.landingNotified.has(key)) continue;\n", "new": "", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L4", "file": "server/src/watch.ts", "old": "const key = `${r.id}#${number}:${dequeued ? 'dequeued' : 'merged'}@${at ?? ''}`;", "new": "const key = `${r.id}#${number}:${dequeued ? 'dequeued' : 'merged'}`;", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L5", "file": "server/src/watch.ts", "old": "      const dequeued = q?.state === 'dequeued';", "new": "      const dequeued = q?.state === 'dequeued' || q?.state === 'unmeasured';", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L6", "file": "server/src/watch.ts", "old": "        const coordinator = run === null ? null : coord.resolveCoordinator(run.id);", "new": "        const coordinator = coord.resolveCoordinator(run?.id ?? null);", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L7", "file": "server/src/prstate.ts", "old": "  if (line.queue === undefined) return { state: 'absent', at: null };", "new": "  if (line.queue === undefined) return { state: 'unmeasured', at: null };", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L8", "file": "server/src/prstate.ts", "old": "typeof line.queueAt === 'string' && QUEUE_AT_RE.test(line.queueAt)", "new": "typeof line.queueAt === 'string'", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L9", "file": "server/src/watch.ts", "old": "      if (this.landingNotified.has(key)) continue;\n", "new": "      if (this.landingNotified.has(key)) continue;\n      this.landingNotified.add(key);\n", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L10", "file": "server/src/watch.ts", "old": "        const sib = coord.openRunsForSession(r.id);\n        if (!sib.ok) {", "new": "        const read0 = coord.openRunsForSession(r.id);\n        const sib = read0.ok ? read0 : { ok: true as const, siblings: [] };\n        if (!sib.ok) {", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L11", "file": "server/src/watch.ts", "old": "          ? coord.hasMailWithSubject('operator', run.id, coordinator, subject)", "new": "          ? coord.hasOutstandingMail('operator', run.id, coordinator, subject)", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L12", "file": "server/src/watch.ts", "old": "          : coord.hasFeedEvent('queue', r.id, body);", "new": "          : false;", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L13", "file": "server/src/watch.ts", "old": "          if (run !== null && coordinator !== null) {\n            queueSystemMail(coord, run, {\n              fromId: 'operator', toId: coordinator, runId: run.id, kind: 'status',\n              subject, body: renderDequeueBrief(r.id, number),\n            });\n          }\n          this.pushOne({\n            kind: 'queue', sessionId: r.id, project: r.project,\n            title: `⤺ dequeued › ${r.workspace}`, body,\n            runId: run?.id ?? null,\n            tag: `queue-${key}`,\n            recordAlways: true,\n          }, this.activeProjects);\n", "new": "          this.pushOne({\n            kind: 'queue', sessionId: r.id, project: r.project,\n            title: `⤺ dequeued › ${r.workspace}`, body,\n            runId: run?.id ?? null,\n            tag: `queue-${key}`,\n            recordAlways: true,\n          }, this.activeProjects);\n          if (run !== null && coordinator !== null) {\n            queueSystemMail(coord, run, {\n              fromId: 'operator', toId: coordinator, runId: run.id, kind: 'status',\n              subject, body: renderDequeueBrief(r.id, number),\n            });\n          }\n", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L14", "file": "server/src/coord/rundefs.ts", "old": "  at === null ? `dequeued:#${pr}` : `dequeued:#${pr}@${at}`;", "new": "  `dequeued:#${pr}`;", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L15", "file": "server/src/watch.ts", "old": "        const run = survivorOf(sib.siblings);", "new": "        const run = sib.siblings[0] ?? null;", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L16", "file": "server/src/watch.ts", "old": "          if (read.run?.state === 'merging') {", "new": "          if (read.run !== null) {", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L17", "file": "server/src/watch.ts", "old": "            if (!coord.hasMailWithSubject('operator', run.id, coordinator, subject)) {", "new": "            if (!coord.hasOutstandingMail('operator', run.id, coordinator, subject)) {", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L18", "file": "server/src/watch.ts", "old": "gh pr merge ${pr} --match-head-commit <handoffCommit>", "new": "gh pr merge ${pr}", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L19", "file": "server/src/watch.ts", "old": "          const read = coord.run(run.id);\n          if (!read.ok) {", "new": "          const read = coord.run(run.id);\n          if (false) {", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L20", "file": "server/src/watch.ts", "old": "          if (read.run?.state === 'merging') {\n            const subject = mergedSubject(number);", "new": "          this.landingNotified.add(key);\n          if (read.run?.state === 'merging') {\n            const subject = mergedSubject(number);", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L21", "file": "server/src/watch.ts", "old": "            tag: `queue-${key}`,\n            recordAlways: true,", "new": "            tag: `queue-${key}`,\n            recordAlways: false,", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L22", "file": "server/src/watch.ts", "old": "    `Read why from the QUEUE's own CI run, not the PR's checks — they ran on a different commit and can read green: ` +\n    `\\`gh run list --event merge_group --limit 20 --json databaseId,headBranch,conclusion\\` finds it by its ` +\n    `\\`headBranch\\` (\\`gh-readonly-queue/<base>/pr-${pr}-…\\`), \\`gh run view <id> --log-failed\\` says why, and ` +\n    `\\`gh pr view ${pr} --json mergeStateStatus\\` answers a conflict.\\n` +", "new": "    `Read why from your own shell: \\`gh pr view ${pr} --json statusCheckRollup,mergeStateStatus\\`.\\n` +", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "L23", "file": "server/src/watch.ts", "old": "— or disarm any armed auto-merge ` +\n    `(\\`gh pr merge ${pr} --disable-auto\\`) and send the owning worker", "new": "— or send the owning worker", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "K1", "file": "shared/api.ts", "old": "'run', 'coord', 'queue', 'unknown'];", "new": "'run', 'coord', 'unknown'];", "tests": ["test/pr-queue-lane.test.ts"]},
+ {"id": "P1", "file": "pwa/src/screens/MailScreen.tsx", "old": "queue: '⤺', ", "new": "", "tests": ["pwa:test/mail-screen.test.tsx"]}
+]
+```
 
 ```bash
 git add server/src/prstate.ts server/src/watch.ts server/src/coord/store.ts server/src/coord/rundefs.ts \
   shared/api.ts pwa/src/screens/MailScreen.tsx pwa/test/mail-screen.test.tsx server/test/pr-queue-lane.test.ts
 git commit -m "$(cat <<'MSG'
-feat(server): a merge-queue dequeue becomes a feed record and a coordinator mail
+feat(server): the landing lane — a dequeue and a merge reach the coordinator
 
 queueFor is the ONE reader of ccd's additive queue/queueAt fields: the five
 words, a stranger token as unmeasured, and absent for a line that never asked
-(an older ccd, or --session) — never folded into unmeasured. sweepDequeued,
-after sweepMerged, fires on `dequeued` alone, once per (workspace, PR, removal
-time): a `status` mail `dequeued:#<n>@<queueAt>` to the coordinator only when
-an open run names the workspace — never to a guessed one — and then a `queue`
-feed record always. It enqueues, merges and re-runs nothing (spec §5.2, R5).
+(an older ccd, or --session) — never folded into unmeasured. sweepLanding,
+after sweepMerged, tells the coordinator of the open run that names the
+workspace (survivorOf, the close's own pick) two things: a `dequeued` reading,
+once per (workspace, PR, removal time), as a status mail dequeued:#<n>@<at>
+and a `queue` feed record (the record alone when no open run names it —
+never a guessed coordinator); and a merge while that run waits at `merging`,
+once per (workspace, PR), as a status mail merged:#<n> — the wake-up a
+coordinator that enqueued and ended its turn needs (clause 7: it never
+polls). It enqueues, merges and re-runs nothing (spec §5.2, R5).
+
+Why the open run is the key: under One PR per child a producer that closed
+before its PR landed is reclaimed (child-reclamation wave 3), and a reclaimed
+workspace has no pr-state line and no worker. So on a native-queue project the
+coordinator lands before it closes (clause 15, Task 5): the run waits at
+merging holding the child, and the row, the line and the worker outlive the
+queue. The dequeue brief re-enqueues at the exact SHA (--match-head-commit
+<handoffCommit>, never --admin); the merged brief asks for the merge proof.
 
 Once means once across a restart too: CoordStore.hasMailWithSubject (every
 delivery state — queueSystemMail's dedupe sees outstanding rows only) and
-hasFeedEvent (the feed-only arm) say "already told", and a hit latches and
-says nothing. The in-memory latch is written only after the notice landed:
-unreadable run rows defer (never "no open run"), and a thrown mail is retried
-on the next sweep with no record left behind.
+hasFeedEvent (the feed-only arm) say "already told". The in-memory latch is
+written only after the notice landed or the lane decided there is nobody to
+tell: unreadable run rows defer (never "no open run"), and a thrown mail is
+retried on the next sweep with no record left behind.
+
+The dequeue brief reads why from the queue's own merge_group run — the PR
+head's checks never include it and can read green — and disarms any armed
+auto-merge before a fix round. A PR whose enqueue only ARMED auto-merge reads
+`none` and the lane stays silent by design; the coordinator's read-back of
+the queue entry is what catches it (the lane's docstring says so). Pinned:
+the merged arm's deferral and latch-after-mail, and the dequeue record's
+exemption from the presence gate.
 
 `queue` is the eighth NotifyEvent kind: additive, degraded to `unknown` by an
 older client, named in MailScreen's two total maps. shared/api.ts's two lines
 change in place, so no cited line moves. No FLEET_PROTO bump; PrState and
-FleetSession are unchanged.
+FleetSession are unchanged. The two subjects are spelled once, in rundefs.ts.
 MSG
 )"
 ```
 
 ---
-
-### Task 4: The hook denies `gh pr merge` to a programme wave's session
-
-> **RE-PLAN PENDING — do not execute this task from this text.** See the Status block under the plan header and Pre-flight finding 12 (ruled 2026-09-24).
+### Task 4: The hook denies `gh pr merge` to a programme wave's session and to every dispatched child
 
 **Model routing:** `sonnet`, effort `high` — the hook is on every tool call of ~20 sessions, and it is the gate R5 leans on.
 
 **Files:**
-- Modify: `ccd/session-hook.sh` — `_hook_hold_card`'s shape-gate line (in place); the `CCRC_PROJ_CLASS` note's two lines naming the third spelling (in place); the fifteen lines from `# The hold's own bound.` through `CCRC_HOLD_MAX=127` rewritten as fifteen lines that also assign `CCRC_HOLD_WAVE_RE`; the deny block directly above `if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then`
+- Modify: `ccd/session-hook.sh` — `_hook_hold_card`'s shape-gate line (in place); the `CCRC_PROJ_CLASS` note's two lines naming the third spelling (in place); the fifteen lines from `# The hold's own bound.` through `CCRC_HOLD_MAX=127` rewritten as fifteen lines that also assign `CCRC_HOLD_WAVE_RE`; the deny block directly above `if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then` (on this branch that is directly below wave 1's sync advisory, which sits between the graph gate and the subagent block)
 - Modify: `server/test/run-routes.test.ts` — the hold-grammar pin
 - Test: `server/test/session-hook-merge-deny.test.ts` (new)
 
 **Interfaces:**
-- Consumes: `$REG/<id>.hold` (read through `_ct_read`, judged under `CCRC_HOLD_MAX` by `CCRC_HOLD_WAVE_RE`), the PreToolUse payload's `tool_name` and `tool_input.command` (read by the one jq, which also removes quoted spans — jq's `gsub`, Oniguruma, lookahead included; measured with jq 1.7), `_hook_deny_json`, `pre_json` and its single print site.
-- Produces: `CCRC_HOLD_WAVE_RE` — the ONE spelling of "a hold that names a programme wave" in the hook; a PreToolUse deny whose reason quotes the hold and says the coordinator lands. Wave 2b extends this block with the every-session `--admin` deny and the `gh api` pulls-merge deny.
+- Consumes: `$REG/<id>.hold` (read through `_ct_read`, judged under `CCRC_HOLD_MAX` by `CCRC_HOLD_WAVE_RE`); `$REG/<id>.child`, the child marker `cmd_ws_add --child` writes (`_reg_set "$id" child …`, ≈7117 at `6da36f0b`) and nothing else does — its EXISTENCE only, never its contents; the PreToolUse payload's `tool_name` and `tool_input.command` (read by the one jq, which also removes backslash escapes, quoted spans and `#` comments — jq's `gsub`, Oniguruma, lookahead and lookbehind included; measured with jq 1.7), `_hook_deny_json`, `pre_json` and its single print site.
+- Produces: `CCRC_HOLD_WAVE_RE` — the ONE spelling of "a hold that names a programme wave" in the hook; a PreToolUse deny whose reason quotes the hold (or names the child marker) and says the coordinator lands. The marker arm is what closes Pre-flight finding 12's window (iii): a close's `ws-release` removes the hold and wave 3's reclaim is asynchronous (and deferred while `attached`, `paused`, `tree-busy`…), while the marker outlives both until the reclaim purges the registry row with the pane. Wave 2b extends this block with the every-session `--admin` deny and the `gh api` merge denies (the pulls merge endpoint, and the GraphQL merge mutations).
 
 - [ ] **Step 1: Write the failing test** — `server/test/session-hook-merge-deny.test.ts`:
 
@@ -1965,8 +2917,12 @@ MSG
 /**
  * The worker merge deny (landing-order wave 2, spec §5.2, ruling R5): the
  * session hook's PreToolUse arm DENIES `gh pr merge` in a session whose hold
- * names a programme wave, and lets every other session's merge through — the
- * coordinator's plain `gh pr merge <n>` is how it enqueues.
+ * names a programme wave, and in any workspace that carries the child marker
+ * (`$REG/<id>.child`, which only a dispatch writes) — a child whose run has
+ * let it go keeps its pane until the reclaim, and it is still a worker. Every
+ * other session's merge passes: the coordinator's `gh pr merge <n>
+ * --match-head-commit <sha>` is how it enqueues. A deny never replaces the
+ * graph gate's, which has already counted the denial it prints (D-1689).
  *
  * Runs `ccd/session-hook.sh` for real in a fixture HOME, the way
  * `session-hook.test.ts` does: a stub `tmux` answers the session name, stdin
@@ -1995,6 +2951,8 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
 const hold = (text: string): void => { fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.hold`), text); };
+/** The child marker, as `cmd_ws_add --child 17` writes it. */
+const marker = (): void => { fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.child`), '17'); };
 
 /** One PreToolUse Bash call through the real hook. Exit 0 and a silent stderr
  *  are the hook's standing contract, asserted on every call. */
@@ -2025,8 +2983,22 @@ describe('the worker merge deny', () => {
     expect(r.deny).toContain('the coordinator merges, workers never do');
   });
 
-  it('lets a coordinator\'s plain enqueue through — a session with no hold is never asked', () => {
+  it('lets a coordinator\'s enqueue through — a session with no wave hold and no child marker is never asked', () => {
+    expect(bash('gh pr merge 42 --match-head-commit ' + 'a'.repeat(40)).deny).toBeNull();
     expect(bash('gh pr merge 42').deny).toBeNull();
+  });
+
+  it('refuses a released child — the marker outlives the hold, in the window before the reclaim', () => {
+    marker();
+    const r = bash('gh pr merge 42');
+    expect(r.deny, 'a child whose run let it go merged').not.toBeNull();
+    expect(r.deny).toContain('child');
+    expect(r.deny).toContain('the coordinator merges, workers never do');
+  });
+
+  it('a child marker that cannot be read is still a child — it is the marker\'s existence that counts', () => {
+    fs.mkdirSync(path.join(home, '.cc-sessions', `${ID}.child`));
+    expect(bash('gh pr merge 42').deny).not.toBeNull();
   });
 
   it('refuses a close-claimed hold too — `wave:N` with no run is still a wave', () => {
@@ -2050,6 +3022,7 @@ describe('the worker merge deny', () => {
     hold(WAVE_HOLD);
     for (const c of [
       'gh pr merge 42 --squash', 'gh pr merge --auto 42', 'cd /tmp && gh pr merge 42',
+      `gh pr merge 42 --match-head-commit ${'a'.repeat(40)}`,
       'GH_TOKEN=x gh pr merge 42', 'env gh pr merge 42', 'command gh pr merge 42',
       '/usr/bin/gh pr merge 42', 'gh -R owner/repo pr merge 42', 'echo ok; gh pr merge 42',
       'x=$(gh pr merge 42)', 'echo ok\ngh pr merge 42',
@@ -2062,6 +3035,10 @@ describe('the worker merge deny', () => {
       // A "…" span that holds a `$(` runs it, so it is never stripped; and a
       // quote INSIDE a "…" span does not open a '…' one.
       'x="$(gh pr merge 42)"', 'echo "it\'s" && gh pr merge 42',
+      // A `#` comment and a backslash-escaped quote open no '…' span: bash
+      // reads neither as a quote, so neither may hide the merge after it.
+      '# don\'t merge before CI is green\ngh pr merge 42\necho \'done\'',
+      "echo it\\'s time; gh pr merge 42; echo 'ok'",
     ]) {
       expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
     }
@@ -2077,12 +3054,41 @@ describe('the worker merge deny', () => {
     expect(r.deny, 'the advisory won and the merge went through').not.toBeNull();
   });
 
+  it('never replaces the graph gate\'s counted deny — a search that is also a merge keeps the gate\'s reason', () => {
+    // The gate has already COUNTED the denial it prints (D-1689); a merge deny
+    // written over it would spend the session's bound on a denial it never saw.
+    hold(WAVE_HOLD);
+    const tree = path.join(home, 'tree');
+    fs.mkdirSync(tree, { recursive: true });
+    const git = (...a: string[]): string => spawnSync('git',
+      ['-C', tree, '-c', 'user.email=f@example.invalid', '-c', 'user.name=fixture', ...a], { encoding: 'utf8' }).stdout.trim();
+    git('init', '-q');
+    fs.writeFileSync(path.join(tree, 'c.txt'), '0\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'c');
+    fs.mkdirSync(path.join(tree, 'graphify-out'));
+    fs.writeFileSync(path.join(tree, 'graphify-out', 'graph.json'),
+      `{\n  "hyperedges": [],\n  "built_at_commit": "${git('rev-parse', 'HEAD')}"\n}\n`);
+    fs.writeFileSync(path.join(tree, 'graphify-out', '.graphify_engine'), '0.9.9\n');
+    const r = spawnSync('bash', [HOOK], {
+      input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash',
+        tool_input: { command: 'rg assembleFleet src && gh pr merge 42' }, cwd: tree }),
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
+    });
+    expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+    expect(r.stdout.trim(), 'the gate did not fire — this case went blind').not.toBe('');
+    const reason = String(JSON.parse(r.stdout.trim()).hookSpecificOutput.permissionDecisionReason);
+    expect(reason, 'the merge deny replaced the graph gate\'s counted deny').toContain('Denial 1 of 3');
+  });
+
   it('leaves every other gh and every mention of the words alone', () => {
     hold(WAVE_HOLD);
     for (const c of [
       'gh pr view 42', 'gh pr list --search merge', 'gh pr merged 42',
       "grep -rn 'gh pr merge' docs", 'echo "gh pr merge 42"', 'ghx pr merge 42',
-      'echo run gh pr merge later',
+      'echo run gh pr merge later', 'echo hi # gh pr merge 42 after the CI run',
       // What a wave on THIS feature writes about it: commit messages and PR
       // bodies that quote the command, in Markdown code spans and in prose.
       'git commit -m "docs (gh pr merge 42 enqueues)"',
@@ -2103,9 +3109,9 @@ describe('the worker merge deny', () => {
 cd server && ./node_modules/.bin/vitest run test/session-hook-merge-deny.test.ts
 ```
 
-Expected (measured at `905360dc`): `4 failed | 3 passed (7)` — the four refusal cases (`a wave session's gh pr merge went through: expected null not to be null`, `not denied: gh pr merge 42 --squash …`); the three pass-through cases pass before and after.
+Expected (measured 2026-09-29 at `6da36f0b` with wave 1 and Tasks 1–3 applied): `6 failed | 4 passed (10)` — the six refusal cases (`a wave session's gh pr merge went through: expected null not to be null`, `a child whose run let it go merged: expected null not to be null`, `not denied: gh pr merge 42 --squash …`, and, on this wave-1 tree, `the advisory won and the merge went through`); the three pass-through cases and the graph-gate case pass before and after (the gate's deny is there before the merge deny exists).
 
-- [ ] **Step 3: One spelling of the wave grammar — three in-place edits, no line count moves.** (a) In `_hook_hold_card`, replace the ONE line
+- [ ] **Step 3: One spelling of the wave grammar — three in-place edits, no line count moves.** (a) In `_hook_hold_card`, replace the ONE line (≈839 at `6da36f0b`)
 
 ```bash
   [[ "$h" =~ ^program:[A-Za-z0-9._-]+' 'wave:[0-9]+(/[0-9]+)?(' 'run:[0-9]+)?$ ]] || return 0
@@ -2173,7 +3179,7 @@ with
 
 The case's own `hookGrammar` regex below it is unchanged — it already spells the same language, and its SUBSET loop still proves every hold the server writes is inside it.
 
-- [ ] **Step 4: The deny.** Locate the line `if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then` (the one at column 0, directly after the graph gate's closing `fi` and a blank line; ≈3116 at `905360dc`, later on a tree carrying wave 1's advisory) and insert directly ABOVE it:
+- [ ] **Step 4: The deny.** Locate the line `if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then` (the one at column 0; ≈3116 at `6da36f0b`, ≈3175 with wave 1's advisory in — on this branch it follows that advisory block and a blank line) and insert directly ABOVE it:
 
 ```bash
 # ── THE WORKER MERGE DENY (landing-order wave 2, spec §5.2) ─────────────
@@ -2181,8 +3187,10 @@ The case's own `hookGrammar` regex below it is unchanged — it already spells t
 # here needed the admin bypass. Once the operator sets the ruleset's approval
 # count to 0, any session holding the fleet's one login could land with a
 # plain `gh pr merge`. So a session whose hold names a programme wave — a
-# dispatched worker's or reviewer's, the only sessions a dispatch holds — is
-# DENIED `gh pr merge` in every spelling this file can parse at a COMMAND HEAD:
+# dispatched worker's or reviewer's, the only sessions a dispatch holds — and
+# any workspace that carries the CHILD MARKER (`$REG/<id>.child`, written by
+# `ws-add --child` for a dispatch and by nothing else) is DENIED `gh pr merge`
+# in every spelling this file can parse at a COMMAND HEAD:
 # after a line start or `;` `&` `|` `(` or `$(`; past `VAR=value` prefixes,
 # the reserved words and grouping a head can follow (`if` `then` `do` `else`
 # `elif` `while` `until` `{` `!`), the wrappers `time` `env` `command` `exec`
@@ -2192,27 +3200,51 @@ The case's own `hookGrammar` regex below it is unchanged — it already spells t
 # merge flag are the same act from a worker and are denied with it.
 #
 # QUOTED TEXT IS REMOVED BEFORE MATCHING, in the same jq that reads the
-# command: every '…' span, and every "…" span that holds no `$(` — so a commit
-# message, a PR body or a grep pattern that MENTIONS `gh pr merge` passes. A
-# "…" span that holds a `$(` is kept, because that substitution runs.
-# WHAT PASSES UNPARSED, said rather than hidden: a merge inside a quoted
-# string (`bash -c "…"`), a quoted command word (`"gh" pr merge`), a legacy
-# backtick substitution, and `xargs`-style indirection. What is DENIED though
-# it is not a merge: a heredoc BODY line that begins `gh pr merge` (heredocs
-# are not stripped) — write such text through a quoted string instead. The
-# hook is a contract the fleet honours, not an access boundary (spec §4), and
-# identity on this box is attribution. A session with NO wave hold — the
-# coordinator's, the operator's — is never asked, so the coordinator's plain
-# `gh pr merge <n>` enqueues.
-# Denying `--admin` to EVERY session, and the `gh api` merge call, is wave
-# 2b's, after the operator's queue ruleset and proof run (spec §5.2 step 4).
+# command, leftmost first as bash reads it: a backslash escape, every '…'
+# span, every "…" span that holds no `$(`, and a `#` comment that starts a
+# word — so a commit message, a PR body, a grep pattern or a comment that
+# MENTIONS `gh pr merge` passes, and neither an apostrophe in a comment nor
+# an escaped quote opens a span that swallows a live merge after it. A "…"
+# span that holds a `$(` is kept, because that substitution runs.
+# WHAT PASSES UNPARSED, said rather than hidden: `bash -c "…"`, a quoted
+# command word (`"gh" pr merge`), legacy backticks, `xargs`, an unlisted
+# wrapper (`nice`, `stdbuf`), a named wrapper's own flags (`sudo -E`,
+# `command -p`; only `timeout`'s one argument is parsed), a `$'…'` string
+# holding `\'`, and a `#` comment straight after a `)`. What is DENIED
+# though it is not a merge: a heredoc BODY line that begins `gh pr merge`
+# (heredocs are not stripped) — write such text through a quoted string
+# instead. The hook is a contract the fleet honours, not an access boundary
+# (spec §4), and identity on this box is attribution. A session with neither
+# — a coordinator's own, the operator's — is never asked, so the
+# coordinator's `gh pr merge <n> --match-head-commit <sha>` enqueues. A
+# coordinator whose workspace DOES carry one is refused like a worker: a
+# self-claimed run's hold (`POST /api/runs` admits a claimant that is its own
+# session), or a reclaim heir that was the programme's own worker (hold and
+# marker both). The hook cannot tell it from a worker; the lifecycle
+# reference sends that coordinator to the operator's shell.
+#
+# WHY THE MARKER TOO. A close releases the hold (`ws-release`), and a child's
+# reclaim runs AFTER the close answers, on its own queue, and defers while the
+# pane is attached, the tree is busy or reclaim is paused: between the two a
+# released child still has its pane and its login, and no hold. The marker is
+# written at birth and purged only with the registry row, at the END of the
+# reclaim, so it covers that window. Its EXISTENCE decides — a marker this
+# hook cannot read is still a marker — and its contents are never read.
+# Only a dispatch mints a child; a coordinator carries one only as that
+# reclaim heir (above).
+# Denying `--admin` to EVERY session, and a `gh api` merge — the pulls merge
+# endpoint, or a GraphQL merge mutation (`mergePullRequest`,
+# `enqueuePullRequest`, `enablePullRequestAutoMerge`) — is wave 2b's, after
+# the operator's queue ruleset and proof run (spec §5.2 step 4); until then
+# each passes this deny, measured.
 #
 # ORDER IS BUDGET, this arm's rule: the tool name is already read, the
 # substring prefilter costs no fork, and only a Bash payload carrying `merge`
 # pays the one jq for its command. The hold is read through `_ct_read` and
 # judged by `CCRC_HOLD_WAVE_RE` under `CCRC_HOLD_MAX` — the card's own reader,
 # shape and bound — so an absent, unreadable, empty, oversized or non-wave hold
-# is not a worker wave and passes, exactly as the card declines to call it one.
+# is not a worker wave, exactly as the card declines to call it one; such a
+# session is then asked only whether it is a marked child.
 #
 # A DENY SUPERSEDES ADVICE: `pre_json` may already hold an `additionalContext`
 # for this same call (the Read nudge, or a sync advisory); the merge deny
@@ -2222,69 +3254,113 @@ GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[[:space:]]*(([!{]|if|then|do|else|elif|while|u
 if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
   mcmd=$(jq -r --arg q "'" 'if .tool_name == "Bash" then ((.tool_input.command // "")
-      | gsub($q + "[^" + $q + "]*" + $q + "|\"(?:[^\"\\\\$]|\\\\.|\\$(?!\\())*\""; "")) else "" end' \
+      | gsub("\\\\.|" + $q + "[^" + $q + "]*" + $q + "|\"(?:[^\"\\\\$]|\\\\.|\\$(?!\\())*\"|(?<![^\\s;&|(])#[^\\n]*"; "")) else "" end' \
     <<<"$payload" 2>/dev/null) || mcmd=""
-  if [[ -n "$mcmd" && "$mcmd" =~ $GH_MERGE_RE ]] && _ct_read "$REG/$id.hold" \
-     && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then
-    mreason="ccrc: this workspace's hold reads \`$CT_V\` — a programme wave's session, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
-    mreason+=" Report wave-done to your coordinator; it lands the PR."
-    pre_json=$(_hook_deny_json "$mreason") || pre_json=""
+  if [[ -n "$mcmd" && "$mcmd" =~ $GH_MERGE_RE ]]; then
+    mwhy=""
+    if _ct_read "$REG/$id.hold" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then
+      mwhy="this workspace's hold reads \`$CT_V\` — a programme wave's session"
+    elif [[ -e "$REG/$id.child" ]]; then
+      mwhy="this workspace carries the child marker — a dispatched child, whose run has let it go"
+    fi
+    if [[ -n "$mwhy" ]]; then
+      mreason="ccrc: $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
+      mreason+=" Report wave-done to your coordinator; it lands the PR."
+      pre_json=$(_hook_deny_json "$mreason") || pre_json=""
+    fi
   fi
 fi
 
 ```
 
-(The block ends with one blank line, so the subagent block keeps its blank separator. The single quote the strip needs reaches jq as `--arg q "'"`, because the jq program is itself single-quoted.) The deny is PRINTED at the file's one PreToolUse print site, after the hookstate rename — so, like the graph gate's, a registry the hook cannot write prints nothing (the file's standing fail-open).
+(The block ends with one blank line, so the subagent block keeps its blank separator. The single quote the strip needs reaches jq as `--arg q "'"`, because the jq program is itself single-quoted. The strip's four alternatives are tried at each position leftmost first, as bash reads the line: a backslash escape, a '…' span, a "…" span, and a `#` that only a line start, a blank or `;` `&` `|` `(` precedes — so a backslash inside '…' escapes nothing, and a `#` inside `${#…}` starts no comment.) The deny is PRINTED at the file's one PreToolUse print site, after the hookstate rename — so, like the graph gate's, a registry the hook cannot write prints nothing (the file's standing fail-open).
 
-- [ ] **Step 5: Pay (and prove) the citation tax — the hook-aware instrument**
+- [ ] **Step 5: Pay (and prove) the citation tax**
 
 ```bash
 SCRATCH=<your scratchpad, absolute>
 bash -n ccd/session-hook.sh && echo syntax-ok
 git diff --numstat -- ccd/session-hook.sh
-python3 "$SCRATCH/cite-remeasure-hook.py" "$SCRATCH" HEAD
+python3 "$SCRATCH/cite-remeasure.py" "$SCRATCH" HEAD --files ccd/session-hook.sh
 ```
 
-Expected (measured on the prototype at `af64d9d2`): `syntax-ok`; `70	14	ccd/session-hook.sh` (the 56-line deny block below the graph gate; the three in-place edits balance); `stated == base == tree` on all four lines (`147 / 195 / 53 / 35`), `other byFile keys moved: none`, every `ENTERED`/`LEFT` empty. On a tree carrying wave 1 the numstat differs by nothing (this task's own lines) and the census is whatever wave 1 left, unmoved.
+Expected (measured 2026-09-29 at `6da36f0b` with wave 1 and Tasks 1–3 applied): `syntax-ok`; `103	14	ccd/session-hook.sh` (the 89-line deny block, its closing blank line included, below wave 1's advisory; the three in-place edits balance); every `byFile` key `stated = base = tree` (`ccd/ccd` 148, `ccd/session-hook.sh` 21, …), `total stated 196 base 196 tree 196`, arrays 53 and 36, every `ENTERED`/`LEFT` empty. If `ccd/session-hook.sh` reads `<-- MOVED`, an insertion landed above a hook anchor — undo it and re-place it, never re-measure a hook key by hand in this wave.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [ ] **Step 6: Run the tests to verify they pass — one file at a time**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/session-hook-merge-deny.test.ts
 ./node_modules/.bin/vitest run test/run-routes.test.ts -t 'binds the shared cap'
+./node_modules/.bin/vitest run test/session-hook-sync-advisory.test.ts
+./node_modules/.bin/vitest run test/update-branch-absent.test.ts
+./node_modules/.bin/vitest run test/ask-instance-guard.test.ts
+./node_modules/.bin/vitest run test/install-session-hooks.test.ts
+./node_modules/.bin/vitest run test/hookstate.test.ts
 ./node_modules/.bin/vitest run test/session-hook.test.ts
-./node_modules/.bin/vitest run test/ask-instance-guard.test.ts test/install-session-hooks.test.ts test/hookstate.test.ts
 ```
 
-Expected (measured on the prototype at `af64d9d2`): `7 passed (7)`; `1 passed | 220 skipped`; `333 passed (333)` (≈113 s — every hold-card case still speaks through the hoisted grammar; the citation cases are green); PASS (measured as `75 passed` for these three files plus `mail-hardening.test.ts` in one run).
+Expected (measured 2026-09-29 at `6da36f0b` with wave 1 and Tasks 1–3 applied): `10 passed (10)`; `1 passed | 229 skipped (230)`; `37 passed (37)` (wave 1's advisory still speaks on every sync spelling — the deny only replaces it when it fires); `2 passed (2)` (the block spells no `update-branch`); `3 passed (3)`; `13 passed (13)`; `41 passed (41)`; `335 passed (335)` (≈160 s — every hold-card case still speaks through the hoisted grammar; the citation cases are green).
 
 - [ ] **Step 7: Mutation check, then commit**
 
-Sixteen mutations, each restored from a saved copy (`cp ccd/session-hook.sh "$SCRATCH/hook.task4"` after Step 6; restore with `cp`). Every red below was measured on the prototype at `af64d9d2`, except row H8, which needs wave 1's advisory. A row on a list case names the FIRST command of that list that reds — vitest stops the case there:
+Twenty-one mutations, run with `$SCRATCH/mutate.py` (restored from a saved COPY after each row). Every red below was measured on 2026-09-29 at `6da36f0b` with wave 1 and Tasks 1–3 applied — H8 included, now that wave 1's advisory is on the base. A row on a list case names the FIRST command of that list that reds — vitest stops the case there:
 
-| # | Exact edit in `ccd/session-hook.sh` | Command (from `server/`) | Expected red |
+| # | Exact edit in `ccd/session-hook.sh` | Test file | Expected red (measured) |
 |---|---|---|---|
-| H1 | `    pre_json=$(_hook_deny_json "$mreason") \|\| pre_json=""` → `    :` | `./node_modules/.bin/vitest run test/session-hook-merge-deny.test.ts` | `4 failed \| 3 passed` — `a wave session's gh pr merge went through: expected null not to be null`, `not denied: gh pr merge 42 --squash …` |
-| H2 | the hold is read, never judged: ` && _ct_read "$REG/$id.hold" \`⏎`     && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then` → ` && { _ct_read "$REG/$id.hold"; true; }; then` | same | `2 failed` — "lets a coordinator's plain enqueue through…" (`expected 'ccrc: this workspace\'s hold reads ``…' to be null`) and "lets a hold that names no programme wave through…" (`a hand hold is not a worker wave`). (Deleting the predicate OUTRIGHT crashes the hook under `set -u` — exit 1, a red for the wrong reason; Pre-flight finding 7.) |
-| H3 | delete `(( ${#CT_V} <= CCRC_HOLD_MAX )) && ` | same | "lets a hold that names no programme wave through…" only — `an oversized hold is unspeakable, never a wave: expected 'ccrc: this workspace\'s hold reads \`p…' to be null` |
-| H4 | `[[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then` (in the deny) → `[[ -n "$CT_V" ]]; then` | same | same case — `a hand hold is not a worker wave: expected 'ccrc: this workspace\'s hold reads \`o…' to be null` |
-| H5 | unanchored: `GH_MERGE_RE=$'(^\|[;&\|(\n]\|\\$\\()[[:space:]]*` → `GH_MERGE_RE=$'[[:space:]]*` | same | "leaves every other gh…" only — `denied: echo run gh pr merge later: expected 'ccrc: …' to be null` |
-| H6 | no global-flag arm: `gh([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+pr(` → `gh[[:space:]]+pr(` | same | "refuses every spelling…" only — `not denied: gh -R owner/repo pr merge 42: expected null not to be null` |
-| H7 | no path-prefix arm: `([^[:space:];&\|()]*/)?gh(` → `gh(` | same | same case — `not denied: /usr/bin/gh pr merge 42: expected null not to be null` |
-| H8 | a deny no longer supersedes advice: `&& "$pre_json" != *'"permissionDecision":"deny"'* ]]; then` → `&& -z "$pre_json" ]]; then` | same | **UNMEASURED at `905360dc` and at `af64d9d2`** — nothing on those trees puts a non-deny envelope on a Bash call, so this row is green there (measured green at `af64d9d2`, `7 passed`). Measure it on this branch (wave 1 merged): the expected red is "a deny supersedes a sync advisory…" — `the advisory won and the merge went through` or the one-line assertion. If it stays GREEN on the wave-1 tree, wave 1's advisory does not fire on `git merge origin/main && …`: report the measured command set rather than weakening the case. |
-| H9 | no reserved-word or grouping head: `([!{]\|if\|then\|do\|else\|elif\|while\|until\|time\|env\|command\|exec\|nohup\|sudo)` → `(time\|env\|command\|exec\|nohup\|sudo)` | same | "refuses every spelling…" only — `not denied: if gh pr checks 42 --watch; then gh pr merge 42; fi: expected null not to be null` |
-| H10 | the backtick back among the head separators: `GH_MERGE_RE=$'(^\|[;&\|(\n]\|\\$\\()` → ``GH_MERGE_RE=$'(^\|[;&\|(`\n]\|\\$\\()`` | same | "leaves every other gh…" only — ``denied: git commit -m "$(cat <<'MSG'`` (the heredoc commit message quoting `` `gh pr merge --admin` ``: its `"…"` holds a `$(` and is kept, so only the separator class decides) |
-| H11 | no quote strip: the jq line `      \| gsub($q + "[^" + $q + "]*" + $q + "\|\"(?:[^\"\\\\$]\|\\\\.\|\\$(?!\\())*\""; "")) else "" end' \` → `      ) else "" end' \` | same | "leaves every other gh…" only — `denied: git commit -m "docs (gh pr merge 42 enqueues)": expected 'ccrc: this workspace\'s hold reads \`p…' to be null` |
-| H12 | strip a `"…"` span even when it holds a `$(`: `\|\\$(?!\\())*` → `\|\\$)*` | same | "refuses every spelling…" only — `not denied: x="$(gh pr merge 42)": expected null not to be null` |
-| H13 | no flags between `pr` and `merge`: `pr([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+merge` → `pr[[:space:]]+merge` | same | same case — `not denied: gh pr --repo o/r merge 42: expected null not to be null` |
-| H14 | no assignment prefix: `\|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*([^[:space:];&\|()]*/)?gh` → `)*([^[:space:];&\|()]*/)?gh` | same | same case — `not denied: GH_TOKEN=x gh pr merge 42: expected null not to be null` |
-| C1 | `_hook_hold_card`: `  [[ "$h" =~ $CCRC_HOLD_WAVE_RE ]] \|\| return 0` → the old inline regex line | `./node_modules/.bin/vitest run test/run-routes.test.ts -t 'binds the shared cap'` | `1 failed` — `expected '#!/usr/bin/env bash\n# session-hook.s…' to contain '[[ "$h" =~ $CCRC_HOLD_WAVE_RE ]] \|\| r…'` |
-| C2 | `CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'` → `CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:'` | same | `1 failed` — `… to contain 'CCRC_HOLD_WAVE_RE=\'^program:[A-Za-z0…'` |
+| H1 | `      pre_json=$(_hook_deny_json "$mreason") \|\| pre_json=""` → `      :` | `session-hook-merge-deny` | `6 failed \| 4 passed` — every refusal case: `a wave session's gh pr merge went through: expected null not to be null`, `a child whose run let it go merged`, `not denied: gh pr merge 42 --squash`, `the advisory won and the merge went through` |
+| H2 | the hold is read, never judged: `    if _ct_read "$REG/$id.hold" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then` → `    if { _ct_read "$REG/$id.hold"; true; }; then` | same | `3 failed` — "lets a coordinator's enqueue through…" (`expected 'ccrc: this workspace\'s hold reads ``…' to be null`), "refuses a released child…" (the hold arm now answers first: `… to contain 'child'`) and "lets a hold that names no programme wave through…" (`a hand hold is not a worker wave`). (Deleting the predicate OUTRIGHT crashes the hook under `set -u` — exit 1, a red for the wrong reason; Pre-flight finding 7.) |
+| H3 | delete `(( ${#CT_V} <= CCRC_HOLD_MAX )) && ` | same | `1 failed` — `an oversized hold is unspeakable, never a wave: expected 'ccrc: this workspace\'s hold reads \`p…' to be null` |
+| H4 | `[[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then` (in the deny) → `[[ -n "$CT_V" ]]; then` | same | `1 failed` — `a hand hold is not a worker wave: expected 'ccrc: this workspace\'s hold reads \`o…' to be null` |
+| H5 | unanchored: `GH_MERGE_RE=$'(^\|[;&\|(\n]\|\\$\\()[[:space:]]*` → `GH_MERGE_RE=$'[[:space:]]*` | same | `1 failed` — `denied: echo run gh pr merge later` |
+| H6 | no global-flag arm: `gh([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+pr(` → `gh[[:space:]]+pr(` | same | `1 failed` — `not denied: gh -R owner/repo pr merge 42` |
+| H7 | no path-prefix arm: `([^[:space:];&\|()]*/)?gh(` → `gh(` | same | `1 failed` — `not denied: /usr/bin/gh pr merge 42` |
+| H8 | a deny no longer supersedes advice: `&& "$pre_json" != *'"permissionDecision":"deny"'* ]]; then` → `&& -z "$pre_json" ]]; then` | same | `1 failed` — "a deny supersedes a sync advisory…": `the advisory won and the merge went through: expected null not to be null` (measured on this wave-1 tree; green on a tree without wave 1, where nothing puts a non-deny envelope on a Bash call) |
+| H9 | no reserved-word or grouping head: `([!{]\|if\|then\|do\|else\|elif\|while\|until\|time\|env\|command\|exec\|nohup\|sudo)` → `(time\|env\|command\|exec\|nohup\|sudo)` | same | `1 failed` — `not denied: if gh pr checks 42 --watch; then gh pr merge 42; fi` |
+| H10 | the backtick back among the head separators | same | `1 failed` — ``denied: git commit -m "$(cat <<'MSG'`` (the heredoc commit message quoting `` `gh pr merge --admin` ``) |
+| H11 | no strip at all (the jq `gsub` line → `      ) else "" end' \`) | same | `1 failed` — `denied: git commit -m "docs (gh pr merge 42 enqueues)"` |
+| H12 | strip a `"…"` span even when it holds a `$(`: `\|\\$(?!\\())*` → `\|\\$)*` | same | `1 failed` — `not denied: x="$(gh pr merge 42)"` |
+| H13 | no flags between `pr` and `merge` | same | `1 failed` — `not denied: gh pr --repo o/r merge 42` |
+| H14 | no assignment prefix | same | `1 failed` — `not denied: GH_TOKEN=x gh pr merge 42` |
+| H15 | delete the marker arm (the `elif [[ -e "$REG/$id.child" ]]; then` line and its `mwhy=` line) | same | `2 failed` — `a child whose run let it go merged: expected null not to be null`, and the unreadable-marker case |
+| H16 | `    elif [[ -e "$REG/$id.child" ]]; then` → `    elif [[ -f "$REG/$id.child" ]]; then` (a marker that is not a regular file stops counting) | same | `1 failed` — "a child marker that cannot be read is still a child…": `expected null not to be null` |
+| H17 | drop the `&& "$pre_json" != *'"permissionDecision":"deny"'*` conjunct from the block's `if` (a merge deny may replace the graph gate's) | same | `1 failed` — "never replaces the graph gate's counted deny…": `the merge deny replaced the graph gate's counted deny: expected 'ccrc: this workspace\'s hold reads \`p…' to contain 'Denial 1 of 3'` (`session-hook` alone stays `335 passed` under it — measured at review) |
+| H18 | the strip loses its comment alternative: `\|(?<![^\\s;&\|(])#[^\\n]*` deleted | same | `1 failed` — `not denied: # don't merge before CI is green` (the apostrophe in the comment opens a '…' span that swallows the merge) |
+| H19 | the strip loses its escape alternative: `"\\\\.\|" + ` deleted | same | `1 failed` — `not denied: echo it\'s time; gh pr merge 42; echo 'ok'` |
+| C1 | `_hook_hold_card`: `  [[ "$h" =~ $CCRC_HOLD_WAVE_RE ]] \|\| return 0` → the old inline regex line | `run-routes -t 'binds the shared cap'` | `1 failed \| 229 skipped` — `expected '#!/usr/bin/env bash\n# session-hook.s…' to contain '[[ "$h" =~ $CCRC_HOLD_WAVE_RE ]] \|\| r…'` |
+| C2 | `CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'` → `CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:'` | same | `1 failed \| 229 skipped` — `… to contain 'CCRC_HOLD_WAVE_RE=\'^program:[A-Za-z0…'` |
+
+Rows (`$SCRATCH/mut-task4.json`; a `t` field is passed to vitest as `-t`):
+
+```json
+[
+ {"id": "H1", "file": "ccd/session-hook.sh", "old": "      pre_json=$(_hook_deny_json \"$mreason\") || pre_json=\"\"", "new": "      :", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H2", "file": "ccd/session-hook.sh", "old": "    if _ct_read \"$REG/$id.hold\" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ \"$CT_V\" =~ $CCRC_HOLD_WAVE_RE ]]; then", "new": "    if { _ct_read \"$REG/$id.hold\"; true; }; then", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H3", "file": "ccd/session-hook.sh", "old": "(( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ \"$CT_V\" =~ $CCRC_HOLD_WAVE_RE ]]; then", "new": "[[ \"$CT_V\" =~ $CCRC_HOLD_WAVE_RE ]]; then", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H4", "file": "ccd/session-hook.sh", "old": "[[ \"$CT_V\" =~ $CCRC_HOLD_WAVE_RE ]]; then", "new": "[[ -n \"$CT_V\" ]]; then", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H5", "file": "ccd/session-hook.sh", "old": "GH_MERGE_RE=$'(^|[;&|(\\n]|\\\\$\\\\()[[:space:]]*", "new": "GH_MERGE_RE=$'[[:space:]]*", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H6", "file": "ccd/session-hook.sh", "old": "gh([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+pr(", "new": "gh[[:space:]]+pr(", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H7", "file": "ccd/session-hook.sh", "old": "([^[:space:];&|()]*/)?gh(", "new": "gh(", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H8", "file": "ccd/session-hook.sh", "old": "&& \"$pre_json\" != *'\"permissionDecision\":\"deny\"'* ]]; then", "new": "&& -z \"$pre_json\" ]]; then", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H9", "file": "ccd/session-hook.sh", "old": "([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)", "new": "(time|env|command|exec|nohup|sudo)", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H10", "file": "ccd/session-hook.sh", "old": "GH_MERGE_RE=$'(^|[;&|(\\n]|\\\\$\\\\()", "new": "GH_MERGE_RE=$'(^|[;&|(`\\n]|\\\\$\\\\()", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H11", "file": "ccd/session-hook.sh", "old": "      | gsub(\"\\\\\\\\.|\" + $q + \"[^\" + $q + \"]*\" + $q + \"|\\\"(?:[^\\\"\\\\\\\\$]|\\\\\\\\.|\\\\$(?!\\\\())*\\\"|(?<![^\\\\s;&|(])#[^\\\\n]*\"; \"\")) else \"\" end' \\", "new": "      ) else \"\" end' \\", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H12", "file": "ccd/session-hook.sh", "old": "|\\\\$(?!\\\\())*", "new": "|\\\\$)*", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H13", "file": "ccd/session-hook.sh", "old": "pr([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+merge", "new": "pr[[:space:]]+merge", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H14", "file": "ccd/session-hook.sh", "old": "|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*([^[:space:];&|()]*/)?gh", "new": ")*([^[:space:];&|()]*/)?gh", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H15", "file": "ccd/session-hook.sh", "old": "    elif [[ -e \"$REG/$id.child\" ]]; then\n      mwhy=\"this workspace carries the child marker — a dispatched child, whose run has let it go\"\n", "new": "", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H16", "file": "ccd/session-hook.sh", "old": "    elif [[ -e \"$REG/$id.child\" ]]; then", "new": "    elif [[ -f \"$REG/$id.child\" ]]; then", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H17", "file": "ccd/session-hook.sh", "old": "if [[ \"$event\" == PreToolUse && \"${tool:-}\" == Bash && \"$payload\" == *merge* \\\n      && \"$pre_json\" != *'\"permissionDecision\":\"deny\"'* ]]; then", "new": "if [[ \"$event\" == PreToolUse && \"${tool:-}\" == Bash && \"$payload\" == *merge* ]]; then", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H18", "file": "ccd/session-hook.sh", "old": "|(?<![^\\\\s;&|(])#[^\\\\n]*\"; \"\"))", "new": "\"; \"\"))", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H19", "file": "ccd/session-hook.sh", "old": "gsub(\"\\\\\\\\.|\" + $q", "new": "gsub($q", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "C1", "file": "ccd/session-hook.sh", "old": "  [[ \"$h\" =~ $CCRC_HOLD_WAVE_RE ]] || return 0", "new": "  [[ \"$h\" =~ ^program:[A-Za-z0-9._-]+' 'wave:[0-9]+(/[0-9]+)?(' 'run:[0-9]+)?$ ]] || return 0", "tests": ["test/run-routes.test.ts"], "t": "binds the shared cap"},
+ {"id": "C2", "file": "ccd/session-hook.sh", "old": "CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'", "new": "CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:'", "tests": ["test/run-routes.test.ts"], "t": "binds the shared cap"}
+]
+```
 
 ```bash
 git add ccd/session-hook.sh server/test/run-routes.test.ts server/test/session-hook-merge-deny.test.ts
 git commit -m "$(cat <<'MSG'
-feat(hook): deny gh pr merge to a programme wave's session
+feat(hook): deny gh pr merge to a programme wave's session and to every child
 
 The coordinator merges, workers never do (landing-order R5). Once the
 operator sets approvals to 0, a plain `gh pr merge` from any session holding
@@ -2293,94 +3369,389 @@ command head spells it — after ; & | ( or $(, past VAR=value prefixes, the
 reserved words and grouping a head follows (if/then/do/else/elif/while/
 until, { and !), the wrappers time/env/command/exec/nohup/sudo/timeout <n>,
 a path to the binary, and gh's flags before or after `pr` — in a session
-whose hold is whole (<= CCRC_HOLD_MAX) and names a programme wave. No hold,
-a hand hold, an unreadable or oversized one: passes, so the coordinator's
-plain `gh pr merge <n>` enqueues. A deny replaces an advisory on the same
-call and never replaces the graph gate's counted deny.
+whose hold is whole (<= CCRC_HOLD_MAX) and names a programme wave, or whose
+workspace carries the child marker. The marker arm closes the window a close
+opens: ws-release removes the hold at once, but the child's reclaim runs
+after the close answers and defers while the pane is attached or the tree
+busy; the marker, written at birth, goes only with the registry row at the
+end of the reclaim. No wave hold and no marker: passes, so the coordinator's
+gh pr merge <n> --match-head-commit <sha> enqueues. A coordinator carries
+one only on a self-claimed run or as a reclaim heir; it is refused like a
+worker, and the skill sends it to the operator's shell. A deny replaces an
+advisory on the same call and never replaces the graph gate's counted deny
+(pinned: the graph-gate case).
 
-Quoted text is removed before matching, in the jq that already reads the
-command: '...' spans and "..." spans holding no $( — so a commit message or
-PR body that quotes the command passes, and a "$(...)" that runs it does
-not. What it cannot parse (bash -c "...", a quoted command word, legacy
-backticks, xargs) is stated in the block's header, as is the one known false
-deny: a heredoc body line that begins with the command. The hook is a
-contract, not an access boundary (spec §4). The every-session --admin deny
-and the gh api merge deny are wave 2b's, after the proof run.
+Quoted text is removed before matching, leftmost first as bash reads it, in
+the jq that already reads the command: a backslash escape, '...' spans, "..."
+spans holding no $(, and a # comment that starts a word — so a commit
+message, PR body or comment that quotes the command passes, a "$(...)" that
+runs it does not, and neither an apostrophe in a comment nor an escaped quote
+can open a span that hides a live merge. What it cannot parse (bash -c
+"...", a quoted command word, legacy backticks, xargs, a wrapper's own
+flags) is stated in the block's header, as is the one known false deny: a
+heredoc body line that begins with the command. The hook is a contract, not
+an access boundary (spec §4). The every-session --admin deny and the gh api
+merge denies (REST and GraphQL) are wave 2b's, after the proof run.
 
 The hold grammar is spelled ONCE now, CCRC_HOLD_WAVE_RE, read by the card and
 the deny; run-routes.test.ts pins it where it is assigned. The assignment and
-two in-place edits are line-neutral and the deny sits below the graph gate:
-census 147 / 195 / 53 / 35 unmoved (the hook-aware re-measurer).
+two in-place edits are line-neutral and the deny sits below the graph gate
+and wave 1's advisory: census 148 / 196 / 53 / 36 unmoved (the re-measurer
+with --files ccd/session-hook.sh).
 MSG
 )"
 ```
 
 ---
 
-### Task 5: Coordinator clause 15 names the native queue
+### Task 5: The coordinator lands at the exact SHA, and lands before it closes
 
-> **RE-PLAN PENDING — do not execute this task from this text.** See the Status block under the plan header and Pre-flight finding 12 (ruled 2026-09-24).
-
-**Model routing:** `sonnet`, effort `medium`. One sentence, pinned verbatim.
+**Model routing:** `sonnet`, effort `high` — a pinned clause sentence, the lifecycle reference's landing paragraph, and two derived pins that bind the skill to the server's subjects and to the exact-SHA spelling.
 
 **Files:**
-- Modify: `ccd/coordinator-skill/SKILL.md` — the end of clause 15 (wave 1's)
-- Modify: `server/test/coordinator-skill.test.ts` — the matching `CONTRACT` element
+- Modify: `ccd/coordinator-skill/SKILL.md` — the end of clause 15 (wave 1's); ONE sentence in step 6's **Clean** arm, ahead of its **Same project:** arm; step 7's first line becomes four (the last wave lands first)
+- Modify: `ccd/coordinator-skill/references/wave-lifecycle.md` — §5 step 3: the #178 merge sentence names the native-queue landing; a new **Landing on a native-queue project** paragraph directly above **Same project:**; a four-line paragraph opening §6
+- Modify: `server/test/coordinator-skill.test.ts` — `CONTRACT`'s clause-15 element gains the same sentence; two new cases; the `rundefs.js` import
+- (No count word moves: no clause is added. `README.md` and `CLAUDE.md` are untouched.)
 
 **Interfaces:**
-- Consumes: wave 1's clause 15 (the coordinator never calls `update-branch`, never writes rulesets, protection or auto-merge…), pinned verbatim in `CONTRACT`.
-- Produces: the sentence the dequeue notice (Task 3) points at — "On a native-queue project, landing is `gh pr merge <n>` with no `--admin`, which enqueues." Wave 2b's deny makes `--admin` a mechanism for every session; this sentence is what makes the plain spelling the coordinator's.
+- Consumes: wave 1's clause 15, pinned verbatim in `CONTRACT`; #178's "One PR per child" paragraph and its exact-SHA merge proof (`wave-lifecycle.md` §5 step 3); `RUN_TRANSITIONS`' `awaiting-review → merging → closing` and `merging → working` edges (`shared/api.ts`); Task 3's `dequeuedSubject`/`mergedSubject` (`server/src/coord/rundefs.ts`) and the two notices `sweepLanding` sends.
+- Produces: the landing spelling on a native-queue project — `gh pr merge <n> --match-head-commit <handoffCommit>`, no `--squash`, never `--admin` — and the rules that make it an enqueue — whether the project requires the queue is measured at each landing, the PR's required checks have passed (`gh pr checks <pr> --required` exits 0; gh 2.45 ARMS auto-merge, rather than queueing, any other PR, with the same line), the queue entry is read back, and an armed request is disarmed (`gh pr merge <pr> --disable-auto`) before any fix round — and the rule that makes Task 3's lane and Task 4's hold arm sound: **the producer lands BEFORE it closes**, the last wave's included (SKILL.md step 7 and §6 point at it), its run waiting at `merging` (holding the child, so the reclaim cannot take it) until the PR reads MERGED at `handoffCommit`, the `merged:#<pr>` mail waking the coordinator to prove the merge and close; a `dequeued:#<pr>@<time>` mail is answered from the queue's own CI run by re-enqueueing or by a fix round on `merging → working`, to the worker that is still there; a coordinator the hook refuses (a self-claimed run, a reclaim heir) has the operator enqueue. Pinned: every `gh pr merge` the coordinator corpus spells binds `--match-head-commit <handoffCommit>` but the exact disarm spelling, and the landing paragraph names the server's own two subjects and each of those rules.
 
-- [ ] **Step 1: Locate clause 15, in both files, by content**
+- [ ] **Step 1: Locate clause 15, and the two passages, by content**
 
 ```bash
-grep -n '^15\. ' ccd/coordinator-skill/SKILL.md
-awk '/^const CONTRACT = \[/,/^\];/' server/test/coordinator-skill.test.ts | grep -n 'update-branch'
+grep -n '^15\. ' ccd/coordinator-skill/SKILL.md | cut -c1-80
+awk '/^const CONTRACT = \[/,/^\];/' server/test/coordinator-skill.test.ts | grep -c 'update-branch'
+grep -n 'arm is for a producer whose workspace opened no PR' ccd/coordinator-skill/SKILL.md
+grep -n '^7\. \*\*Final merge:\*\* `POST /api/runs/:id/close` with `final:true` closes the run$' ccd/coordinator-skill/SKILL.md
+grep -n 'reason. An UNMARKED producer — every workspace minted without a marker,' ccd/coordinator-skill/references/wave-lifecycle.md
+grep -n "^   \*\*Same project:\*\* open wave N+1 first with this producer's \`sessionId\`, then" ccd/coordinator-skill/references/wave-lifecycle.md
+grep -n '^## 6 — Final merge$' ccd/coordinator-skill/references/wave-lifecycle.md
 ```
 
-Expected: exactly one line in `SKILL.md` (the whole clause is that one line, like clauses 1–14); exactly one `CONTRACT` element mentioning `update-branch` — the fifteenth, wave 1's clause 15. If either answers zero or two, stop and report: the clause's shape is not what this step assumes.
+Expected (measured 2026-09-29 at `6da36f0b` with wave 1 applied): one line `84:15. This session never calls \`update-branch\` …`; `1` (the fifteenth `CONTRACT` element, wave 1's clause 15 — its only `update-branch`-bearing element); one hit at ≈377; one at ≈392 (step 7); one at ≈739; one at ≈756; one at ≈788 (§6). If any answers zero or two, stop and report: the shape is not what this task assumes.
 
-- [ ] **Step 2: Append the sentence to clause 15 — same line, both files, one commit**
+- [ ] **Step 2: Write the failing tests** — in `server/test/coordinator-skill.test.ts`:
 
-In `ccd/coordinator-skill/SKILL.md`, append to the END of the `15. …` line (after its final period, one space first):
+(a) Append to the fifteenth `CONTRACT` string — wave 1's clause 15, the element that ends `It commits programme-ledger documents on its own ledger PR, never inside a feature PR.` — immediately before its closing `'`, this text (one leading space; no apostrophe, so the single-quoted element takes it unchanged):
 
 ```
- On a native-queue project, landing is `gh pr merge <n>` with no `--admin`, which enqueues.
+ On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`.
 ```
 
-In `server/test/coordinator-skill.test.ts`, append the same text — the same leading space — to the fifteenth `CONTRACT` string, immediately before its closing quote, inside whichever quote character that element already uses (it contains no `'` of its own in this sentence, so either quote style takes it unchanged). The count words ("These fifteen sentences", README's and `CLAUDE.md`'s) do not move: no clause is added.
+(b) Replace the import line
 
-- [ ] **Step 3: Run the test to verify it passes**
+```typescript
+import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+```
+
+with
+
+```typescript
+import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+import { dequeuedSubject, mergedSubject } from '../src/coord/rundefs.js';
+```
+
+(c) Directly above `  it('tells the session how to learn its own id the ONE way that is actually its own', () => {` (inside `describe('the coordinator skill: its contract'`, below wave 1's census `it`), insert:
+
+```typescript
+  it('binds the exact SHA in every `gh pr merge` it spells — and the native-queue spelling carries no --squash and no --admin (landing-order wave 2)', () => {
+    // DERIVED: every backtick code span in the whole corpus that runs
+    // `gh pr merge`. #178 put `--match-head-commit <handoffCommit>` into the
+    // coordinator's merge "for exactly this reason" — the exact-SHA merge proof
+    // — and a spelling that drops it merges whatever head the PR has by then.
+    // `--disable-auto` DISARMS an armed auto-merge: it merges nothing, so it
+    // binds no SHA. Only that exact spelling is exempt — a disarm span that
+    // carries any other flag is held to the binding like every merge.
+    const DISARM = /^gh pr merge <(?:n|pr)> --disable-auto$/;
+    const spans = [...allSkillText.matchAll(/`([^`\n]*\bgh pr merge\b[^`\n]*)`/g)].map((m) => m[1]!)
+      .filter((s) => !DISARM.test(s));
+    expect(spans.length, 'fewer gh pr merge spellings than the three this corpus carries (clause 15, the queue landing, #178\'s squash merge) — a landing spelling was dropped, or this pin went blind').toBeGreaterThanOrEqual(3);
+    for (const s of spans) {
+      expect(s, `\`${s}\` merges without binding the exact SHA`).toContain('--match-head-commit <handoffCommit>');
+    }
+    expect(spans).toContain('gh pr merge <n> --match-head-commit <handoffCommit>');
+    expect(spans).toContain('gh pr merge <pr> --match-head-commit <handoffCommit>');
+  });
+
+  it('lands before it closes on a native-queue project — the last wave too — enqueues only a green PR and proves the entry, and names the landing notices by the server\'s own subjects (landing-order wave 2)', () => {
+    const wl = refs('wave-lifecycle.md');
+    const at = wl.indexOf('**Landing on a native-queue project**');
+    expect(at, 'wave-lifecycle.md lost its native-queue landing paragraph').toBeGreaterThanOrEqual(0);
+    const para = flat(wl.slice(at, wl.indexOf('**Same project:**', at)));
+    expect(para).toContain('the producer LANDS BEFORE IT CLOSES');
+    expect(para).toContain('advance the producer\'s run to `merging`');
+    expect(para).toContain('`merging → working`');
+    // The subjects the server sends (Task 3), derived from the ONE builder of
+    // each — the skill may not name a mail the server never sends.
+    const merged = mergedSubject(7).replace('#7', '#<pr>');
+    const dequeued = dequeuedSubject(7, '<time>').replace('#7', '#<pr>');
+    expect(para, `the paragraph no longer names ${merged}`).toContain('`' + merged + '`');
+    expect(para, `the paragraph no longer names ${dequeued}`).toContain('`' + dequeued + '`');
+    // Whether the project requires the queue is MEASURED at each landing: it
+    // changes when the operator turns the queue on or rolls it back.
+    expect(para).toContain('.type == "merge_queue"');
+    // gh 2.45 ARMS auto-merge, rather than queueing, a PR whose required
+    // checks have not passed, and prints the same line either way — so the
+    // enqueue waits on them, the entry is read back, and an armed request is
+    // disarmed, before any fix round too.
+    expect(para).toContain('`gh pr checks <pr> --required` exits 0');
+    expect(para).toContain('never by ending your turn: no mail comes when checks finish');
+    expect(para).toContain('answers a non-null `mergeQueueEntry`');
+    expect(para).toContain('`gh pr merge <pr> --disable-auto`');
+    // A dequeue's why is the QUEUE's own run; the PR's checks can read green.
+    expect(para).toContain('`gh run list --event merge_group');
+    // A coordinator the hook refuses — a self-claimed run, a reclaim heir —
+    // has the operator enqueue, and never closes to shed its hold.
+    expect(para).toContain('ask the operator to enqueue, or disarm');
+    // SKILL.md step 6 points at it BEFORE its succession arms, where a
+    // coordinator deciding when to close reads.
+    const start = skill.indexOf('6. **Rule on the report**');
+    expect(flat(skill.slice(start, skill.indexOf('**Same project:**', start))))
+      .toContain('the producer LANDS before it closes');
+    // …and so does the LAST wave, whose close is step 7's and §6's: no wave
+    // N+1 is open there, so a close-first retires the programme outright.
+    const seven = skill.indexOf('7. **Final merge:**');
+    expect(flat(skill.slice(seven, skill.indexOf('\n## ', seven))))
+      .toContain("the last wave's producer LANDS before this close");
+    const six = wl.indexOf('## 6 — Final merge');
+    expect(flat(wl.slice(six, wl.indexOf('\n## ', six + 1))))
+      .toContain("the last wave's producer lands BEFORE this close");
+  });
+
+```
+
+- [ ] **Step 3: Run it to verify it fails**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts
 ```
 
-Expected: PASS, with the same test total the file had on this branch before the edit (147 at `905360dc`, plus whatever wave 1 added).
+Expected (measured 2026-09-29 at `6da36f0b` with wave 1 and Tasks 1–4 applied): `3 failed | 150 passed (153)` — "carries all fifteen clauses verbatim" (`missing contract clause: This session never calls \`update-branch\` by any …`), the exact-SHA case (`fewer gh pr merge spellings than the three this corpus carries … expected 1 to be greater than or equal to 3` — #178's squash spelling is the only one today) and the landing case (`wave-lifecycle.md lost its native-queue landing paragraph: expected -1 to be greater than or equal to 0`). The file read 151 with wave 1 alone; it reads 153 with this task's two new cases.
 
-- [ ] **Step 4: Mutation check, then commit**
+- [ ] **Step 4: The clause and the pointer, in `ccd/coordinator-skill/SKILL.md`.** Append to the END of the `15. …` line (after its final period) exactly the text Step 2 (a) appended to the `CONTRACT` element, with the same one leading space:
 
-Two mutations, restored from a saved copy of `SKILL.md`. **Measured on a stand-in at `905360dc`**, where clause 15 does not exist: the same sentence appended to clause 14 in both files (147/147 green), then each edit below applied to `SKILL.md`. On this branch the red names clause 15's first 48 characters instead of clause 14's:
+```
+ On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`.
+```
 
-| # | Exact edit in `ccd/coordinator-skill/SKILL.md` | Command (from `server/`) | Expected red |
-|---|---|---|---|
-| S1 | delete ` On a native-queue project, landing is \`gh pr merge <n>\` with no \`--admin\`, which enqueues.` | `./node_modules/.bin/vitest run test/coordinator-skill.test.ts` | "carries all fifteen clauses verbatim" (the case's title after wave 1) only — `missing contract clause: <clause 15's first 48 characters>…` (stand-in: `missing contract clause: The review brief names the held-out panel in \`re…`) |
-| S2 | soften it: `with no \`--admin\`, which enqueues.` → `which enqueues.` | same | same case, same red |
+and in step 6's **Clean** arm replace the line
+
+```
+     arm is for a producer whose workspace opened no PR.
+```
+
+with
+
+```
+     arm is for a producer whose workspace opened no PR. On a native-queue
+     project the producer LANDS before it closes (clause 15;
+     `references/wave-lifecycle.md` §5, "Landing on a native-queue project").
+```
+
+and in step 7 replace the line
+
+```
+7. **Final merge:** `POST /api/runs/:id/close` with `final:true` closes the run
+```
+
+with
+
+```
+7. **Final merge:** on a native-queue project the last wave's producer LANDS
+   before this close, as every producer does (clause 15;
+   `references/wave-lifecycle.md` §5, "Landing on a native-queue project").
+   `POST /api/runs/:id/close` with `final:true` closes the run
+```
+
+- [ ] **Step 5: The landing paragraph, in `ccd/coordinator-skill/references/wave-lifecycle.md` §5 step 3.** Replace the line
+
+```
+   reason. An UNMARKED producer — every workspace minted without a marker,
+```
+
+with
+
+```
+   reason — and on a native-queue project it lands with the same binding, as
+   "Landing on a native-queue project" below says. An UNMARKED producer —
+   every workspace minted without a marker,
+```
+
+and directly above the line `   **Same project:** open wave N+1 first with this producer's \`sessionId\`, then` (and its preceding blank line), insert — followed by one blank line:
+
+```
+   **Landing on a native-queue project** (one whose `main` requires GitHub's
+   merge queue — measure it before each landing, never from memory: from a
+   checkout of its repository,
+   `gh api 'repos/{owner}/{repo}/rules/branches/main' --jq 'any(.[]; .type == "merge_queue")'`
+   answers `true`): the producer LANDS BEFORE IT CLOSES. Once its review is
+   clean and wave N+1 is open — or, on the programme's LAST wave, which has
+   no wave N+1, once its review is clean (its close is SKILL.md step 7's and
+   §6's) — advance the producer's run to `merging` (§4 — from
+   `awaiting-review`, re-measured). Enqueue only a PR whose required checks
+   have all passed — `gh pr checks <pr> --required` exits 0 (8 is pending, 1
+   is failed): for any other PR gh arms auto-merge instead of queueing it,
+   and prints the same "will be added to the merge queue … when ready" line
+   either way. On `8`, wait for them in the foreground —
+   `gh pr checks <pr> --required --watch`, again if the call times out —
+   never by ending your turn: no mail comes when checks finish. On `1`,
+   send the owning worker a fix round (below), or, for a red that is not
+   this PR's own, one `gh run rerun <run id> --failed` and the same wait.
+   Then, from your own session, enqueue its PR with
+   `gh pr merge <pr> --match-head-commit <handoffCommit>`: no `--squash`,
+   because the queue's merge method applies, and never `--admin`. Prove it
+   is IN the queue before you rely on the server:
+   `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { mergeQueueEntry { state } } } }'`
+   answers a non-null `mergeQueueEntry`. A null one means nothing is queued
+   and nothing will tell you so: disarm it (`gh pr merge <pr> --disable-auto`)
+   and read why before you do anything else. Disarm the same way before any
+   fix round from `merging` — an armed auto-merge queues whatever head the
+   branch carries once its checks pass, and GitHub disarms it on a push only
+   from a login without write access. End your turn. The run waits at
+   `merging`, holding the child, so its workspace is not reclaimed under a PR
+   still in the queue, and the server tells you how the queue answered: a
+   `status` mail `merged:#<pr>` once the PR reads merged, or
+   `dequeued:#<pr>@<time>` when the queue removed it without landing (GitHub
+   does not re-enqueue). On `merged:`, prove the merge exactly as above —
+   MERGED, `headRefOid` equal to `handoffCommit` — then close the producer as
+   this step closes a spent one (on the last wave, as §6 closes it), and only
+   then dispatch wave N+1. A `merged:#<pr>` can also reach a run at `merging`
+   on a project without the queue, when a sweep reads your own synchronous
+   merge before your close: prove and close as usual; a run already closed
+   needs nothing. On `dequeued:`, read why from the queue's own CI run, not
+   the PR's checks, which ran on a different commit and can read green —
+   `gh run list --event merge_group --json databaseId,headBranch,conclusion`
+   finds it by its `headBranch` (`gh-readonly-queue/<base>/pr-<pr>-…`) and
+   `gh run view <id> --log-failed` says why, while
+   `gh pr view <pr> --json mergeStateStatus` answers a conflict. Then either
+   enqueue it again exactly as above — checks first, then the read-back — or
+   send the owning worker a fix round on the `merging → working` edge
+   (SKILL.md step 6's send-back; its fresh wave-done gets a fresh review run,
+   and a fresh `merging`). Closing before the landing would hand a PR still
+   in the queue to a reclaim: nothing could then tell you of its dequeue, and
+   no worker would be left to fix it. A coordinator whose own workspace
+   carries a programme-wave hold or the child marker — a self-claimed run's,
+   or a reclaim heir that was the programme's own worker — is refused its
+   enqueue by the session hook, like any worker. Do not close to shed the
+   hold (a final close of a child reclaims your own pane): ask the operator
+   to enqueue, or disarm, with the same spellings from their own shell, and
+   wait at `merging` as above.
+```
+
+and directly below the heading `## 6 — Final merge` and its blank line, insert — followed by one blank line:
+
+```
+On a native-queue project the last wave's producer lands BEFORE this close,
+exactly as §5's "Landing on a native-queue project" says: with no wave N+1
+open, closing it first would retire the programme and reclaim the child
+under a PR still queued.
+```
+
+- [ ] **Step 6: Run the tests to verify they pass — one file at a time**
 
 ```bash
-git add ccd/coordinator-skill/SKILL.md server/test/coordinator-skill.test.ts
-git commit -m "$(cat <<'MSG'
-skill(coordinator): clause 15 — on a native-queue project, landing is gh pr merge <n>, no --admin
+cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts
+./node_modules/.bin/vitest run test/child-reclaim-refusals.test.ts
+./node_modules/.bin/vitest run test/crossrepo-prose.test.ts
+./node_modules/.bin/vitest run test/child-reclaim-prose.test.ts
+./node_modules/.bin/vitest run test/install-coordinator-skill.test.ts
+./node_modules/.bin/vitest run test/routing-references.test.ts
+./node_modules/.bin/vitest run test/reviewer-skill.test.ts
+```
 
-Spec §5.2: a plain `gh pr merge <n>` enqueues on a project whose main requires
-the merge queue, and the queue is the composition test. Appended to clause 15
-and to its verbatim pin in the same commit; the clause count is unchanged.
+Expected (measured 2026-09-29 at `6da36f0b` with wave 1 and Tasks 1–4 applied, each file alone): `coordinator-skill` `153 passed (153)` (the landing case now also pins step 7, §6 and each landing rule; the `gh api` and `gh run` spans in the paragraph carry no `gh pr merge`, and its one disarm span is the exempt spelling); `child-reclaim-refusals` `20 passed (20)` (§5 still states One PR per child ahead of the **Same project:** arm — the landing paragraph sits between them and names no refusal code); `crossrepo-prose` `17 passed (17)`; `child-reclaim-prose` `4 passed (4)`; `install-coordinator-skill` `16 passed (16)`; `routing-references` `11 passed (11)`; `reviewer-skill` `13 passed (13)`. The succession-order pins (`orders each SKILL.md succession arm independently…`, `orders each succession branch independently before consumer dispatch`) stay green because the new text sits ABOVE **Same project:** and says "dispatch wave N+1" in lower case — `boundary.indexOf('Dispatch wave N+1')` must still find step 5's line first.
+
+- [ ] **Step 7: Mutation check, then commit**
+
+Eighteen mutations, run with `$SCRATCH/mutate.py`. Every red below was measured on 2026-09-29 at `6da36f0b` with wave 1 and Tasks 1–4 applied; the backup copy lives in the scratchpad, never beside the file (a `SKILL.md.mutbak` in a skill directory reds the reference census on every row — wave 1's Pre-flight finding 10):
+
+| # | Exact edit | Test file | Expected red (measured) |
+|---|---|---|---|
+| S1 | `SKILL.md`: delete the appended sentence (with its leading space) | `coordinator-skill` | `2 failed \| 151 passed` — "carries all fifteen clauses verbatim" and the exact-SHA case (`… expected 2 to be greater than or equal to 3`) |
+| S2 | `SKILL.md` clause 15: `` `gh pr merge <n> --match-head-commit <handoffCommit>` `` → `` `gh pr merge <n>` `` | same | `2 failed` — the verbatim case, and ``\`gh pr merge <n>\` merges without binding the exact SHA`` |
+| S3 | `wave-lifecycle.md`: the landing paragraph's `` `gh pr merge <pr> --match-head-commit <handoffCommit>` `` → `` `gh pr merge <pr>` `` (its line) | same | `1 failed` — ``\`gh pr merge <pr>\` merges without binding the exact SHA`` |
+| S4 | `wave-lifecycle.md`: #178's `` `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` `` → `` `gh pr merge <pr> --squash` `` | same | `1 failed` — ``\`gh pr merge <pr> --squash\` merges without binding the exact SHA`` (a pin that did not exist before this wave: `grep -rn match-head-commit server/test` found nothing on `main`) |
+| S5 | `wave-lifecycle.md`: `` `dequeued:#<pr>@<time>` `` → `` `dequeued:#<pr>` `` | same | `1 failed` — `the paragraph no longer names dequeued:#<pr>@<time>` |
+| S6 | `rundefs.ts`: `mergedSubject` answers `` `landed:#${pr}` `` (the server renames the mail; the skill does not follow) | `coordinator-skill`, `pr-queue-lane` | `1 failed` — `the paragraph no longer names landed:#<pr>`; and `1 failed \| 17 passed` — `expected 'landed:#42' to be 'merged:#42'` |
+| S7 | `SKILL.md` step 6: remove the pointer sentence (the two lines after `…opened no PR.`) | `coordinator-skill` | `1 failed` — `expected '6. **Rule on the report**. The \`revie…' to contain 'the producer LANDS before it closes'` |
+| S8 | `wave-lifecycle.md`: `the producer LANDS BEFORE IT CLOSES.` → `the producer closes, then lands.` | same | `1 failed` — `expected '**Landing on a native-queue project**…' to contain 'the producer LANDS BEFORE IT CLOSES'` |
+| S9 | `SKILL.md` step 7: the three pointer lines removed (`7. **Final merge:** \`POST /api/runs/:id/close\`…` again) | same | `1 failed` — `expected '7. **Final merge:** \`POST /api/runs/:…' to contain 'the last wave\'s producer LANDS befor…'` |
+| S10 | `wave-lifecycle.md`: §6's opening paragraph removed | same | `1 failed` — `expected '## 6 — Final merge \`POST /api/runs/:i…' to contain 'the last wave\'s producer lands BEFOR…'` |
+| S11 | `wave-lifecycle.md`: `` `gh pr checks <pr> --required` exits 0 `` → `` `gh pr checks <pr>` exits 0 `` (a red non-required leg would block every landing) | same | `1 failed` — `… to contain '\`gh pr checks <pr> --required\` exits 0'` |
+| S12 | `wave-lifecycle.md`: the read-back removed — from `Prove it` through `` answers a non-null `mergeQueueEntry`. `` | same | `1 failed` — ``… to contain 'answers a non-null `mergeQueueEntry`'`` |
+| S13 | `wave-lifecycle.md`: `` disarm it (`gh pr merge <pr> --disable-auto`) `` → nothing (an armed request is left armed) | same | `1 failed` — `… to contain '\`gh pr merge <pr> --disable-auto\`'` |
+| S14 | `wave-lifecycle.md`: `.type == "merge_queue"` → `.type == "pull_request"` (the measurement asks the wrong rule) | same | `1 failed` — `… to contain '.type == "merge_queue"'` |
+| S15 | `wave-lifecycle.md`: the held coordinator's `Do not close to shed the hold … ask the operator to enqueue, or disarm, …` → `Close to shed the hold, then enqueue.` | same | `1 failed` — `… to contain 'ask the operator to enqueue, or disarm'` |
+| S16 | `wave-lifecycle.md`: `` `gh run list --event merge_group --json databaseId,headBranch,conclusion` `` → `` `gh pr view <pr> --json statusCheckRollup` `` (the PR's checks again) | same | `1 failed` — `… to contain '\`gh run list --event merge_group'` |
+| S17 | `wave-lifecycle.md`: the disarm span gains a flag — `` (`gh pr merge <pr> --disable-auto --admin`) `` (the exemption is ONE exact spelling) | same | `2 failed` — ``\`gh pr merge <pr> --disable-auto --admin\` merges without binding the exact SHA`` and the landing case's disarm pin. (Under a filter that exempts any span carrying `--disable-auto`, measured: `1 failed` — only the landing case's exact-span pin catches it.) |
+| S18 | `wave-lifecycle.md`: `` never by ending your turn: no mail comes when checks finish. On `1`, `` → `` then end your turn: no mail comes when checks finish. On `1`, `` (a pending landing parked on mail that never comes) | same | `1 failed` — ``… to contain 'never by ending your turn: no mail co…'`` |
+
+Rows (`$SCRATCH/mut-task5.json`):
+
+```json
+[
+ {"id": "S1", "file": "ccd/coordinator-skill/SKILL.md", "old": " On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`.", "new": "", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S2", "file": "ccd/coordinator-skill/SKILL.md", "old": "it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never", "new": "it lands a PR with `gh pr merge <n>`, never", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S3", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "   `gh pr merge <pr> --match-head-commit <handoffCommit>`: no `--squash`,", "new": "   `gh pr merge <pr>`: no `--squash`,", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S4", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "`gh pr merge <pr> --squash --match-head-commit <handoffCommit>`", "new": "`gh pr merge <pr> --squash`", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S5", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "`dequeued:#<pr>@<time>`", "new": "`dequeued:#<pr>`", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S6", "file": "server/src/coord/rundefs.ts", "old": "export const mergedSubject = (pr: number): string => `merged:#${pr}`;", "new": "export const mergedSubject = (pr: number): string => `landed:#${pr}`;", "tests": ["test/coordinator-skill.test.ts", "test/pr-queue-lane.test.ts"]},
+ {"id": "S7", "file": "ccd/coordinator-skill/SKILL.md", "old": "     arm is for a producer whose workspace opened no PR. On a native-queue\n     project the producer LANDS before it closes (clause 15;\n     `references/wave-lifecycle.md` §5, \"Landing on a native-queue project\").\n", "new": "     arm is for a producer whose workspace opened no PR.\n", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S8", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "the producer LANDS BEFORE IT CLOSES.", "new": "the producer closes, then lands.", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S9", "file": "ccd/coordinator-skill/SKILL.md", "old": "7. **Final merge:** on a native-queue project the last wave's producer LANDS\n   before this close, as every producer does (clause 15;\n   `references/wave-lifecycle.md` §5, \"Landing on a native-queue project\").\n   `POST /api/runs/:id/close`", "new": "7. **Final merge:** `POST /api/runs/:id/close`", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S10", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "On a native-queue project the last wave's producer lands BEFORE this close,\nexactly as §5's \"Landing on a native-queue project\" says: with no wave N+1\nopen, closing it first would retire the programme and reclaim the child\nunder a PR still queued.\n\n", "new": "", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S11", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "`gh pr checks <pr> --required` exits 0", "new": "`gh pr checks <pr>` exits 0", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S12", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "Prove it\n   is IN the queue before you rely on the server:\n   `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { mergeQueueEntry { state } } } }'`\n   answers a non-null `mergeQueueEntry`. ", "new": "", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S13", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": " disarm it (`gh pr merge <pr> --disable-auto`)\n   and read why", "new": " read why", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S14", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": ".type == \"merge_queue\"", "new": ".type == \"pull_request\"", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S15", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "Do not close to shed the\n   hold (a final close of a child reclaims your own pane): ask the operator\n   to enqueue, or disarm, with the same spellings from their own shell, and\n   wait at `merging` as above.", "new": "Close to shed the hold,\n   then enqueue.", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S16", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "`gh run list --event merge_group --json databaseId,headBranch,conclusion`", "new": "`gh pr view <pr> --json statusCheckRollup`", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S17", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "(`gh pr merge <pr> --disable-auto`)", "new": "(`gh pr merge <pr> --disable-auto --admin`)", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "S18", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "   never by ending your turn: no mail comes when checks finish. On `1`,", "new": "   then end your turn: no mail comes when checks finish. On `1`,", "tests": ["test/coordinator-skill.test.ts"]}
+]
+```
+
+```bash
+git add ccd/coordinator-skill/SKILL.md ccd/coordinator-skill/references/wave-lifecycle.md server/test/coordinator-skill.test.ts
+git commit -m "$(cat <<'MSG'
+skill(coordinator): land at the exact SHA, and land before closing, on a native-queue project
+
+Spec §5.2: a plain enqueue lands on a project whose main requires the merge
+queue, and the queue is the composition test. Clause 15 now says so, keeping
+#178's exact-SHA binding: gh pr merge <n> --match-head-commit
+<handoffCommit>, never --squash (the queue's method applies) or --admin.
+
+And it lands BEFORE it closes: under One PR per child a producer closed
+before its PR landed is reclaimed (child-reclamation wave 3), taking with it
+the pr-state line the dequeue lane reads and the worker a fix round needs.
+So the run waits at merging, holding the child, until the merged:#<pr> mail
+wakes the coordinator to prove the merge and close; a dequeued:#<pr>@<time>
+mail is answered by re-enqueueing or a fix round on merging -> working.
+wave-lifecycle.md §5 carries the paragraph; SKILL.md steps 6 and 7 and §6
+point at it — the last wave lands before its close too.
+
+The enqueue waits on the PR's required checks (gh pr checks <pr> --required:
+gh 2.45 ARMS auto-merge, rather than queueing, any other PR, and prints the
+same line), is read back through mergeQueueEntry, and an armed request is
+disarmed (gh pr merge <pr> --disable-auto) before any fix round. Whether
+the project requires the queue is measured at each landing. A dequeue's why
+is read from the queue's own merge_group run. A coordinator the hook
+refuses — a self-claimed run, a reclaim heir — asks the operator to enqueue
+rather than closing to shed its hold.
+
+Pinned: clause 15 verbatim; every gh pr merge the corpus spells binds
+--match-head-commit <handoffCommit> (derived), the exact disarm spelling
+alone excepted; the paragraph names the server's own two subjects, derived
+from rundefs.ts's builders, and each landing rule; steps 6 and 7 and §6
+point at it. The clause
+count is unchanged.
 MSG
 )"
 ```
 
 ---
-
 ### Task 6: Whole-branch verification, the PR — and the SERVER-FIRST deploy
 
 **Model routing:** `sonnet`, effort `high`.
@@ -2394,39 +3765,57 @@ MSG
 - [ ] **Step 1: Run all three package suites, in the foreground, one process at a time**
 
 ```bash
-cd server && npm ci
+cd agent  && npm ci && npm run test
+cd ../pwa && npm ci && npm run test
+cd ../server && npm ci
 ./node_modules/.bin/vitest run --shard=1/12     # … then 2/12, 3/12, … 12/12, one call each
-cd ../agent && npm ci && npm run test
-cd ../pwa   && npm ci && npm run test
 ```
 
-Expected: PASS everywhere. `agent` is untouched and must be green unchanged. Report the twelve shard summaries and their sum. If ANY shard is killed by the 600 s ceiling, re-run the WHOLE server suite as `--shard=k/24`, k = 1…24. Re-run any known load flake IN ISOLATION before calling it a break.
+Expected: PASS everywhere. `agent` is untouched and must be green unchanged (its `npm ci` also gives `server`'s typecheck the `ws` it reaches through `agent/src/server.ts`). Report the twelve shard summaries and their sum. If ANY shard is killed by the 600 s ceiling, re-run the WHOLE server suite as `--shard=k/24`, k = 1…24. Re-run any known load flake IN ISOLATION before calling it a break; `tmp-sweep`'s FAILS-CLOSED case is red on `main` on this box and is reported, not chased. (The re-planner did not run the whole suites — the 2026-09-29 brief forbade a whole suite on the loaded box — so there is no forecast total here; every file the wave touches or depends on was run alone, Step 3's list among them.)
 
-- [ ] **Step 2: Cross-tree guards, and the corpus premise**
+- [ ] **Step 2: Cross-tree guards, the corpus premise, and the workflow file**
 
 ```bash
-git fetch origin main && cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts test/topology-clean.test.ts
+git fetch origin main && cd server
+./node_modules/.bin/vitest run test/deviation-refs.test.ts
+./node_modules/.bin/vitest run test/dtbd.test.ts
+./node_modules/.bin/vitest run test/topology-clean.test.ts
+./node_modules/.bin/vitest run test/typecheck-tests.test.ts
 cd .. && git diff --quiet origin/main -- \
   docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md \
   docs/superpowers/plans/2026-09-10-graphify-compaction-card-plan-a.md && echo corpus-frozen
+python3 -c "
+import yaml, sys
+class U(yaml.SafeLoader): pass
+def m(loader, node, deep=False):
+    keys = [loader.construct_object(k, deep=deep) for k, _ in node.value]
+    d = [k for k in set(keys) if keys.count(k) > 1]
+    if d: sys.exit(f'duplicate key(s) {d} at line {node.start_mark.line + 1}')
+    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+U.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, m)
+yaml.load(open('.github/workflows/ci.yml'), U); print('yaml-ok')"
 ```
 
-Expected: PASS, and `corpus-frozen`. If `origin/main` moved `ccd/ccd`, `ccd/session-hook.sh`, `README.md` or `ci.yml` since Task 4, merge it, re-run Tasks 2 and 4's tax steps against the merge's first parent, re-run the citation cases, and resolve any `ci.yml` overlap with CI test selection by the Global Constraints' rule — never by dropping either side's shape.
+Expected: PASS four times, `corpus-frozen`, `yaml-ok`. If `origin/main` moved `ccd/ccd`, `ccd/session-hook.sh`, `README.md`, `shared/api.ts`, `.github/workflows/ci.yml`, `.github/ci/*.mjs` or the coordinator skill since Task 5, merge it, re-run Tasks 2 and 4's tax steps against the merge's first parent, re-run the citation cases and every Task 1 test file, and resolve any overlap with child-reclamation wave 4 or CI selection by keeping BOTH sides (Global Constraints) — never by dropping either side's shape.
 
-- [ ] **Step 3: The wave's own surface in one run**
+- [ ] **Step 3: The wave's own surface — one file per process**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/ci-merge-queue.test.ts test/oss-metadata.test.ts \
-  test/ccd-pr-queue.test.ts test/pr-timeout-budget.test.ts test/remote-runner.test.ts test/ownership.test.ts
-./node_modules/.bin/vitest run test/pr-queue-lane.test.ts test/pr-sweep.test.ts test/prstate.test.ts
-./node_modules/.bin/vitest run test/session-hook-merge-deny.test.ts test/coordinator-skill.test.ts
+cd server
+for f in ci-merge-queue ci-pipeline ci-verdict ci-select-cli oss-metadata ci-main-artifact \
+         ccd-pr-queue pr-timeout-budget remote-runner ownership ccd-pr-state ccd-prhistory \
+         pr-queue-lane pr-sweep prstate single-definition coord-store mail-hardening \
+         session-hook-merge-deny session-hook-sync-advisory update-branch-absent \
+         coordinator-skill child-reclaim-refusals crossrepo-prose; do
+  ./node_modules/.bin/vitest run --maxWorkers=1 "test/$f.test.ts" | grep -E '^ +Tests '
+done
+./node_modules/.bin/vitest run test/run-routes.test.ts -t 'binds the shared cap'
 ./node_modules/.bin/vitest run test/session-hook.test.ts \
   -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'
+cd ../pwa && ./node_modules/.bin/vitest run test/mail-screen.test.tsx
 ```
 
-Expected: PASS. If `ownership` reds, `ccd/ccd` was edited after the last re-stamp.
-
-> **RE-PLAN PENDING for this step's PR-body items 3–5 and Step 2's whole-branch counts** — they restate Tasks 3–5. See the Status block under the plan header and Pre-flight finding 12 (ruled 2026-09-24).
+Expected (measured 2026-09-29 on the fix round's prototype, every task applied, each file alone): `ci-merge-queue` 5, `ci-pipeline` 39, `ci-verdict` 4523, `ci-select-cli` 41, `oss-metadata` 22, `ci-main-artifact` 16, `ccd-pr-queue` 13, `pr-timeout-budget` 2, `remote-runner` 22, `ownership` 14, `ccd-pr-state` 99, `ccd-prhistory` 18, `pr-queue-lane` 18, `pr-sweep` 37, `prstate` 58, `single-definition` 230, `coord-store` 169, `mail-hardening` 18, `session-hook-merge-deny` 10, `session-hook-sync-advisory` 37, `update-branch-absent` 2, `coordinator-skill` 153, `child-reclaim-refusals` 20, `crossrepo-prose` 17 — every one `N passed (N)`; `1 passed | 229 skipped (230)`; `7 passed | 328 skipped (335)`; `mail-screen` `26 passed (26)`. Against the wave-1 base the wave adds 1,553 cases across these files: `ci-verdict` 3022 → 4523 (1,500 exhaustive rows and one named case), `ci-select-cli` 39 → 41, `ci-pipeline` 38 → 39, `coordinator-skill` 151 → 153, `mail-screen` 25 → 26, and the four new files' 5 + 13 + 18 + 10. The whole diff against the wave-1 base: 30 files, +1882 / −117 (18 shipped, 12 test, 4 new). If `ownership` reds, `ccd/ccd` was edited after the last re-stamp. Step 2's guards measured on the same prototype: `dtbd` 1, `topology-clean` 55, `typecheck-tests` 12, `yaml-ok` (and `mail-routes` 59, `unattended-actor` 21, `box-token-census` 23, the pwa typecheck clean); `deviation-refs` `29 passed` with its two history cases red ONLY because the prototype is a one-commit copy (`eee5fa1a is unreachable — this checkout is too shallow…`, identical on the wave-1 base) — on a real checkout it must read `31 passed`.
 
 - [ ] **Step 4: Confirm the author, push, and open the PR**
 
@@ -2443,15 +3832,15 @@ Wave 2 of the landing-order programme (spec `docs/superpowers/specs/2026-09-23-l
 
 What it does:
 
-1. **`ci.yml`** — `merge_group` beside `pull_request`, so a queue entry gets its required checks; `test-macos` and `probe-macos` skip a queue run (and `ci-merge-queue.test.ts` pins that NO other job mentions `merge_group`, because a job skipped by `if:` reports as passing); a `concurrency` group `ci-<workflow>-pr-<number>` cancels a superseded PR run, and every other event gets a run-unique group (one pending run per group).
-2. **`ccd pr-state --project`** — ONE GraphQL query per repository per sweep (the 100 newest open PRs' `mergeQueueEntry`, in `gh pr list`'s own order, and the 20 most recently updated merged, each with its last queue act of either kind), own 4 s timeout, `-f` variables, answering `queued | dequeued | landed | none | unmeasured` in an additive `queue` field (+ `queueAt`). A failed or garbled read says `unmeasured` and never touches a row, phase or checks value. The server's `pr-state` bound rises 20 s → 25 s so the three timeouts keep the budget test's 30 % for the local loop.
-3. **Server** — `queueFor`, the one reader (`absent` for an older ccd, kept apart from `unmeasured`); `sweepDequeued` mails the run's coordinator `dequeued:#<n>@<removal time>` and records a `queue` feed event (the eighth `NotifyEvent` kind, additive) once per removal — never a guessed coordinator; once across a server restart too (two durable `CoordStore` reads), and never latched as told when the run rows were unreadable or the mail threw. Nothing enqueues or merges.
-4. **Hook** — PreToolUse denies `gh pr merge` at any parseable command head (reserved words, grouping and wrappers included) in a session whose hold names a programme wave; quoted text is removed first, so a commit message or PR body that quotes the command passes; the coordinator's plain `gh pr merge <n>` passes. The hold grammar is spelled once (`CCRC_HOLD_WAVE_RE`).
-5. **Coordinator clause 15** — "On a native-queue project, landing is `gh pr merge <n>` with no `--admin`, which enqueues."
+1. **CI** — `ci.yml` answers `merge_group`, and a queue run runs what a pull request runs (operator ruling 2026-09-28): `merge_group` joins the `pull_request` arm of `select.mjs` (`decideMode`, `modeInvariantViolation`) and `verdict.mjs` (`serverVerdict` — `tests: none` on a queue run is red), and the plain-bash pipeline check asks a queue run the same question against `merge_group.base_sha`, so a PR that edits the selector cannot choose its own queue run's tests. Merged into CI selection's shape (#183), overwriting none of it: ONE arm in the existing concurrency group, `queue-<run id>`, ahead of the shared `refresh` group and never cancelled; `test-macos` and `full-suite` skip a queue run (a selected run falls back to full, and `full-suite` would red on the skipped macOS leg); `probe-macos` already did. No job a required check needs mentions `merge_group` but the pipeline step. `ci-merge-queue.test.ts` pins five properties, derived; `ci-pipeline`, `ci-select-cli` and `ci-verdict` move with the shape. No full run per merge (the 2026-09-23 ruling stands).
+2. **`ccd pr-state --project`** — ONE GraphQL query per repository per sweep (the 100 newest open PRs' `mergeQueueEntry`, in `gh pr list`'s own order, and the 20 most recently updated merged, each with its last queue act of either kind), own 4 s timeout, `-f` variables, answering `queued | dequeued | landed | none | unmeasured` in an additive `queue` field (+ `queueAt`). A failed or garbled read says `unmeasured` and never touches a row, phase or checks value. The server's `pr-state` bound rises 20 s → 25 s so the three timeouts keep the budget test's 30 % for the local loop; the four comments that stated 20 s (two in `childSpent.ts`, `routes.ts`'s rule-3 gate, `childGateAtClose`'s) say 25 s.
+3. **Server — the landing lane** — `queueFor`, the one reader (`absent` for an older ccd, kept apart from `unmeasured`). `sweepLanding` tells the coordinator of the open run that names the workspace (`survivorOf`'s pick): a dequeue as `dequeued:#<n>@<removal time>` plus a `queue` feed event (the eighth `NotifyEvent` kind, additive), and a merge while that run waits at `merging` as `merged:#<n>` — the wake-up a coordinator that enqueued and ended its turn needs. The dequeue mail reads why from the queue's own `merge_group` run (the PR head's checks can read green) and disarms any armed auto-merge before a fix round. Never a guessed coordinator; once each across a server restart (two durable `CoordStore` reads); never latched as told when the run rows were unreadable or the mail threw. Nothing enqueues or merges.
+4. **Hook** — PreToolUse denies `gh pr merge` at any parseable command head (reserved words, grouping and wrappers included) in a session whose hold names a programme wave, or whose workspace carries the child marker (a close releases the hold before the reclaim takes the pane); backslash escapes, quoted text and `#` comments are removed first, as bash reads them, so a commit message, PR body or comment that quotes the command passes and none of them can hide one; the graph gate's counted deny is never replaced; the coordinator's `gh pr merge <n> --match-head-commit <sha>` passes (a coordinator the deny does refuse — a self-claimed run, a reclaim heir — has the operator enqueue). The hold grammar is spelled once (`CCRC_HOLD_WAVE_RE`).
+5. **Coordinator clause 15 and `wave-lifecycle.md` §5** — on a native-queue project (measured at each landing) the coordinator lands with `gh pr merge <n> --match-head-commit <handoffCommit>`, no `--squash`, no `--admin`, only once `gh pr checks <pr> --required` passes — gh 2.45 ARMS auto-merge, rather than queueing, any other PR, with the same success line — then reads the queue entry back and disarms what only armed; and the producer LANDS BEFORE IT CLOSES, the last wave's too (SKILL.md step 7, §6): its run waits at `merging`, holding the child, until `merged:#<pr>`; a `dequeued:` is answered from the queue's own CI run by re-enqueueing or a fix round on `merging → working`, disarmed first. Every `gh pr merge` the corpus spells is pinned to `--match-head-commit <handoffCommit>` (the exact disarm spelling excepted); the paragraph is pinned to the server's own two subjects and to each landing rule.
 
-Citation corpus (S6-R11): every added line sits below the frozen anchors; census 147 / 195 / 53 / 35 unmoved, README untouched. No `FLEET_PROTO` bump.
+Citation corpus (S6-R11): every added line sits below the frozen anchors; census 148 / 196 / 53 / 36 unmoved, README untouched. No `FLEET_PROTO` bump.
 
-Out of scope: wave 2b — the every-session `--admin` deny and the `gh api` merge deny, after the operator's ruleset and proof run.
+Out of scope: wave 2b — the every-session `--admin` deny and the `gh api` merge denies (the pulls merge endpoint and the GraphQL merge mutations), after the operator's ruleset and proof run.
 
 **Deploy: `ccrc rollout --to <this merge's tag> --server-first`.**
 
@@ -2461,7 +3850,7 @@ EOF
 
 - [ ] **Step 5: Report (the wave-done mail)**
 
-Report to the coordinator, per the worker skill: the branch tip sha; the three suites' results (the twelve server shard summaries and their sum); Tasks 2 and 4's instrument outputs (re-pointer lines, census composition); every mutation row's measured red, including H8's result on this branch (Task 4); S1/S2's reds as measured on clause 15; every departure from this plan, named by what it is (the coordinator assigns numbers — see `## Deviations found`). Then stop: the deploy below runs after the merge, by whoever merges.
+Report to the coordinator, per the worker skill: the branch tip sha; the three suites' results (the twelve server shard summaries and their sum); Tasks 2 and 4's instrument outputs (re-pointer lines, census composition); every mutation row's measured red; every departure from this plan, named by what it is (the coordinator assigns numbers — see `## Deviations found`). Then stop: the deploy below runs after the merge, by whoever merges.
 
 - [ ] **Step 6: Deploy — SERVER FIRST (post-merge, from a machine holding `~/.ccrc/deploy.env`)**
 
@@ -2484,14 +3873,15 @@ fi
 
 Expected: `merge: <sha>  tag: vX.Y.Z`, then the check prints one `rollout: <server|fleet>: <box> (<sha>) → vX.Y.Z [current]` line per box. The check names `--to "$TAG"` because a bare `ccrc rollout --check` pins its target from `latest/download` — the newest STABLE release — and this wave's build is a dev prerelease, so the bare form would report two converged boxes as behind an older stable. A rollout exits 3 when a box moved but its doctor has FAIL lines — read them first.
 
-(c) Prove the fleet box carries both halves — READ-ONLY, on the fleet box:
+(c) Prove the fleet box carries both halves and the skill — READ-ONLY, on the fleet box:
 
 ```bash
 grep -c '^GH_MERGE_RE=' "$HOME/.cc-sessions/session-hook.sh"
 grep -c '^PR_GH_QUEUE_TIMEOUT=4$' "$HOME/.local/bin/ccd"
+ccrc doctor 2>&1 | grep -E '^(PASS|WARN|FAIL|SKIP) skills:'
 ```
 
-Expected: `1` and `1`. A `0` means the fleet box did not take the build — stop; the server is harmless without it (it reads `absent`), but no worker is denied a merge.
+Expected: `1`, `1`, and `PASS skills: …` — every rostered home carries the shipped coordinator skill, clause 15's native-queue sentence included. A `0` means the fleet box did not take the build — stop; the server is harmless without it (it reads `absent`), but no worker is denied a merge and no coordinator has been told to land before it closes.
 
 Rolling back, if ever needed: `ccrc update --to <the previous tag> --downgrade` on each box, fleet box first (the reverse of the reader-widening order).
 
@@ -2502,25 +3892,51 @@ Rolling back, if ever needed: `ccrc update --to <the previous tag> --downgrade` 
 **Who:** the operator, from their own shell or GitHub's UI. **Not a worker and not the coordinator** (coordinator clause 15: never writes rulesets or protection). Every read below is read-only; the two writes are marked.
 
 **Interfaces:**
-- Consumes: Task 6's merged and rolled-out build (`merge_group` on `main`'s `ci.yml`, the queue read, the dequeue lane, the worker deny).
+- Consumes: Task 6's merged and rolled-out build (`merge_group` on `main`'s `ci.yml`, a queue run that runs the selected tests, the queue read, the landing lane, the worker deny, clause 15's landing spelling).
 - Produces: the measured go/no-go for wave 2b, written into `docs/superpowers/programs/landing-order.md` by the coordinator.
 
 Every `gh api` path below uses `{owner}/{repo}`, which `gh` fills in from the checkout it runs in — run each block from inside a checkout of this repository.
 
-- [ ] **Step 1: Preconditions — measured, read-only**
+- [ ] **Step 1: Preconditions — main's health from a run that RAN the required legs, the build on both boxes, and the coordinator census**
+
+Since CI test selection (#183) a push to `main` runs `refresh` mode: `test (agent)`, `test (pwa)` and `build-pwa` skip every STEP (`CCRC_LEG: skip`) and `test (server)`'s verdict answers `tests: none` → ok on a non-PR event, so the newest push run's four required checks read `success` having tested nothing — the old precondition could not fail. Main's health is read instead from a TRUSTED FULL run: this workflow's daily `schedule` run or a manual `workflow_dispatch` (both `full` mode, both trusted by `main-artifact.mjs`), on a commit that carries this wave's merge, whose `server k/n` shards actually ran — a daily run that skipped because main's head already carried a green `full-suite` ran no shard and is passed over. The macOS legs and `full-suite` are NOT read: they gate nothing by the operator's 2026-09-28 ruling, and `full-suite` needs them.
 
 ```bash
 git fetch origin main
 git show origin/main:.github/workflows/ci.yml | grep -c '^  merge_group:$'
-RID=$(gh run list --workflow ci.yml --branch main --event push --limit 1 --json databaseId --jq '.[0].databaseId')
-gh run view "$RID" --json jobs \
-  --jq '.jobs[] | select(.name | test("^(test \\((server|agent|pwa)\\)|build-pwa)$")) | [.name, .conclusion] | @tsv'
+M=<this wave's merge commit, from Task 6 Step 6>
+RID=""
+for r in $(gh run list --workflow ci.yml --branch main --limit 40 --json databaseId,event \
+             --jq '.[] | select(.event == "schedule" or .event == "workflow_dispatch") | .databaseId'); do
+  sha=$(gh run view "$r" --json headSha --jq .headSha)
+  git merge-base --is-ancestor "$M" "$sha" 2>/dev/null || continue
+  n=$(gh run view "$r" --json jobs --jq '[.jobs[] | select(.name | test("^server [0-9]+/[0-9]+$")) | select(.conclusion != "skipped")] | length')
+  [ "$n" -gt 0 ] && { RID=$r; echo "full run $RID on $sha ($n server shards)"; break; }
+done
+[ -n "$RID" ] || echo "NO FULL RUN YET — start one (a WRITE: it starts CI, it changes no setting): gh workflow run ci.yml --ref main -f mode=full, wait for it, and re-run this block"
+[ -z "$RID" ] || gh run view "$RID" --json jobs \
+  --jq '.jobs[] | select(.name | test("^(test \\((server|agent|pwa)\\)|build-pwa|server [0-9]+/[0-9]+|typecheck \\(server\\))$")) | [.name, .conclusion] | @tsv'
 ssh <fleet box> ccrc version | grep '^version '
 ssh <server box> ccrc version | grep '^version '
 ccrc rollout --check --to <the tag those two lines name>
+ssh <fleet box> 'bash -s' <<'CENSUS'
+set -o pipefail
+command -v jq >/dev/null || { echo "STOP: no jq"; exit 1; }
+body=$(~/.local/bin/ccrc-api runs list) || { echo "STOP: the open runs could not be read"; exit 1; }
+cs=$(printf '%s\n' "$body" | jq -er '.runs | map(.claimedBy // empty) | unique | join(" ")') \
+  || { echo "STOP: the open runs could not be read"; exit 1; }
+ss=" $(printf '%s\n' "$body" | jq -r '.runs | map(.sessionId // empty) | unique | join(" ")') "
+n=0
+for c in $cs; do
+  n=$((n + 1))
+  test -e "$HOME/.cc-sessions/$c.child" && echo "MARKED COORDINATOR: $c"
+  case "$ss" in *" $c "*) echo "HELD COORDINATOR: $c (an open run names its own workspace)" ;; esac
+done
+echo "census-done: $n coordinator(s) checked"
+CENSUS
 ```
 
-Expected: `1`; the four REQUIRED jobs of the newest push run on `main` — `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa` — each `success` (the run's own conclusion is usually `cancelled`, because the non-required `test-macos` leg on `main` hits its 55-minute cap; that is not a failure of this precondition, and `test-macos`/`probe-macos` are deliberately not read); both boxes name the same `version`, equal to Task 6's tag or a later one; the check prints `[current]` for both boxes. (`--to` because a bare `--check` measures against the newest STABLE release, not the dev build the fleet is on.) **Stop if the first answers `0`** — enabling the queue before `merge_group` is on `main` leaves every entry waiting for checks that never report (spec §5.2 rollout step 1 before step 2). **Stop on any required job that is not `success`.**
+Expected: `1`; one `full run <id> on <sha> (<n> server shards)` line; then every listed job — `typecheck (server)`, each `server k/n`, `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa` — `success`; both boxes name the same `version`, equal to Task 6's tag or a later one; the check prints `[current]` for both boxes (`--to` because a bare `--check` measures against the newest STABLE release, not the dev build the fleet is on); and `census-done: <n> coordinator(s) checked` alone, `n` the number of distinct coordinators of the open runs (`0` when no programme is open) — no coordinator carries the child marker (a reclaim heir that was the programme's own worker would) and no open run names a coordinator's own workspace (a self-claimed run would), so Task 4's deny refuses no coordinator's enqueue (Pre-flight findings 12 (iii) and 22; the census reads the open runs through `ccrc-api` and the marker files with `test -e`, and writes nothing). The census was exercised on 2026-09-29 against a stub `ccrc-api` in a throwaway HOME: a clean list, a marker, a self-claimed run, a `503 runs-unreadable` body (which `ccrc-api` answers with exit 0), a transport failure (exit 3) and an empty list each answered as described here. **Stop if the first answers `0`** — enabling the queue before `merge_group` is on `main` leaves every entry waiting for checks that never report (spec §5.2 rollout step 1 before step 2). **Stop on any listed job that is not `success`**; on any `STOP:` line — the census could not read the open runs, and a read that did not happen is not a clean census; and on any `MARKED COORDINATOR` or `HELD COORDINATOR` line — that coordinator's enqueue would be denied, so settle how it lands (the operator's shell, Task 5's paragraph) before the queue is turned on.
 
 - [ ] **Step 2: Read the settings as they stand**
 
@@ -2587,17 +4003,41 @@ Expected: `main ruleset: <id>`, and the diff shows exactly three changes — the
 
 Expected: the ruleset, with `rules: ["pull_request","merge_queue"]` and one bypass actor (`RepositoryRole` 5). No output at all means the saved `ruleset-before.json` is not the ruleset `RS` names (or `RS` is empty), so nothing was written — re-run (4a). The `merge_queue` parameter names are GitHub's REST ruleset schema; they were NOT exercised while planning (no write was made). If the PUT refuses a parameter, use the UI and re-read with Step 2's per-ruleset read. Keep `ruleset-rollback.json`: `gh api -X PUT "repos/{owner}/{repo}/rulesets/$RS" --input ruleset-rollback.json` is the rollback, and restores the ruleset exactly as it was, maintain bypass included.
 
-> **RE-PLAN PENDING for this step's enqueue command, checks (e) and (f), and stop rule 4** — they restate Tasks 3–5 (the landing spelling, the dequeue lane, the merge deny). See the Status block under the plan header and Pre-flight finding 12 (ruled 2026-09-24).
-
 - [ ] **Step 5: THE PROOF RUN — spec §5.2 rollout step 3, stage 2's own gate**
 
-Make two or three TRIVIAL PRs from fleet workspaces (so `is_ours` has a workspace to bind — e.g. three `ws-add` workspaces, each committing a one-line change to a different line of a doc file nothing pins), wait for each PR's own CI to go green, then enqueue all of them within a minute, from a session with no wave hold or from the operator's shell:
+Make FIVE TRIVIAL PRs from fleet workspaces (so `is_ours` has a workspace to bind — e.g. five `ws-add` workspaces, each committing a one-line change to a different line of a doc file nothing pins) and wait for the first four PRs' own CI to go green; the fifth is (a1)'s, pushed to while its checks run. The landing spelling is clause 15's: `gh pr merge <n> --match-head-commit <sha>`, no `--squash`, no `--admin`; outside a programme the sha is the head the operator read.
+
+(a0) **The exact-SHA binding holds on a queue enqueue** (Pre-flight finding 16) — FIRST, on the fourth PR, a deliberately WRONG sha, then the queue read:
 
 ```bash
-for n in <pr-a> <pr-b> <pr-c>; do gh pr merge "$n"; done
+gh pr merge <pr-d> --match-head-commit 0000000000000000000000000000000000000000; echo "rc=$?"
+gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr-d> -f query='
+  query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { headRefOid mergeQueueEntry { state } } } }' \
+  --jq '.data.repository.pullRequest'
 ```
 
-Expected: each answers that the PR was added to the merge queue. Then measure, read-only:
+Expected: a non-zero `rc` whose message names the head (the expected sha does not match), and `mergeQueueEntry: null` — the PR was NOT queued. A refusal naming auto-merge, an approval or anything but the head is NOT this pass: it is stop rule 4, and (a0) is re-run once the enqueue path works. A wrong sha that was accepted is stop rule 7 (remove the entry in GitHub's UI first).
+
+(a1) **An enqueue whose required checks have not passed ARMS auto-merge; it does not queue** (Pre-flight finding 20; gh 2.45's own help: "If required checks have not yet passed, auto-merge will be enabled") — on the FIFTH PR, push one more commit and, while its checks are still running, from the operator's shell:
+
+```bash
+gh pr merge <pr-e> --match-head-commit "$(gh pr view <pr-e> --json headRefOid -q .headRefOid)"; echo "rc=$?"
+gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr-e> -f query='
+  query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { headRefOid mergeQueueEntry { state } autoMergeRequest { enabledAt } } } }' \
+  --jq '.data.repository.pullRequest'
+```
+
+Expected: gh's `will be added to the merge queue … when ready` line, `mergeQueueEntry: null` and a non-null `autoMergeRequest` — armed, not queued; `ccd pr-state --project` reads the PR `none` and the landing lane says nothing, which is why Task 5's paragraph reads the entry back. A refusal naming auto-merge instead is stop rule 4's reading (the operator's 2026-09-29 ruling: the proof halts and the operator decides). Push one more commit before those checks finish and run the read again: a non-null `autoMergeRequest` means an armed request survives this login's push and would queue a head no review read — the paragraph's disarm rule is load-bearing; record the reading with Step 7. Then `gh pr merge <pr-e> --disable-auto`, read once more (`autoMergeRequest: null`), and close the PR.
+
+Then enqueue the other three within a minute, from a session with no wave hold and no child marker, or from the operator's shell:
+
+```bash
+for n in <pr-a> <pr-b> <pr-c>; do
+  gh pr merge "$n" --match-head-commit "$(gh pr view "$n" --json headRefOid -q .headRefOid)"
+done
+```
+
+Expected: each answers that the PR was added to the merge queue. Right after each enqueue, run (a0)'s read for that PR: expected a non-null `mergeQueueEntry` at once — the read-back Task 5's paragraph relies on before it would disarm. A null that reads non-null a minute later is recorded with Step 7: the paragraph's read-back must then wait before it disarms, a fix before wave 2b. Then measure, read-only:
 
 (a) **Queued, then landed, one at a time** — on the fleet box, the same call the server's sweep makes every 120 s:
 
@@ -2636,16 +4076,16 @@ gh run list --workflow release-main.yml --limit 4 --json headSha,conclusion,crea
 gh release list --limit 4
 ```
 
-Expected: the three newest first-parent commits on `main` are the three squashed PRs, one each; each carries its own `vX.Y.Z` tag; there is one `ci` push run and one `release-main` run per sha; three new prereleases.
+Expected: the three newest first-parent commits on `main` are the three squashed PRs, one each; each carries its own `vX.Y.Z` tag; there is one `release-main` run per sha and three new prereleases; and a `ci` push run was CREATED per sha — but since #183 every push to `main` shares the `refresh` concurrency group, where GitHub keeps one pending run and cancels the older pending one, so in a burst an intermediate push run may read `cancelled` (CI selection §4.3 calls that harmless: the next refresh re-traces from the map it finds). A cancelled intermediate `ci` push run is expected behaviour, not stop rule 1; a sha with no `ci` push run at all, or a missing tag or prerelease, is.
 
-(c) **The queue's own CI run, macOS skipped:**
+(c) **The queue's own CI run: a pull request's run, macOS and `full-suite` skipped:**
 
 ```bash
 gh run list --workflow ci.yml --event merge_group --limit 3 --json databaseId,conclusion,headBranch
 gh run view <one merge_group run id> --json jobs --jq '.jobs[] | [.name, .conclusion] | @tsv'
 ```
 
-Expected: three `merge_group` runs, `success`; in each, `test (server)`, `test (agent)`, `test (pwa)` and `build-pwa` `success`, `test-macos` and `probe-macos` `skipped`.
+Expected: three `merge_group` runs, `success`, none of them cancelled (each ran in its own `queue-<run id>` group); in each, `select tests`, `typecheck (server)`, every `server k/n` shard, `test (server)`, `test (agent)`, `test (pwa)` and `build-pwa` `success`; `test-macos` (reported under its unexpanded matrix name), `probe-macos`, `full-suite`, `trace …`, `map-build` and `times-build` `skipped`. On each run's summary page the **CI test selection** table reads event `merge_group` and tests `selected` — or `full` with a fallback reason (a missing map, a `.github/` change); while `CCRC_SELECTION` reads `shadow` a `selected` run still runs every server test, exactly as a pull request's does.
 
 (d) **`is_ours` still binds after a queue merge** — for each workspace, on the fleet box:
 
@@ -2661,9 +4101,9 @@ Expected: `merged <its PR number> None` for all three — never `unknown merge-u
 ~/.local/bin/ccrc-api feed list --limit 10
 ```
 
-Expected: one `queue` event titled `⤺ dequeued › <workspace>`, its body naming `(removed <time>)`; and, if that workspace belongs to an open run, its coordinator received a `status` mail `dequeued:#<n>@<time>`; and still NO `queue` event names any of the three PRs that landed in (a)–(b) — one that does is a spurious dequeue (stop rule 6). Close the fourth PR afterwards.
+Expected: one `queue` event titled `⤺ dequeued › <workspace>`, its body naming `(removed <time>)` and `No open run names a coordinator to tell.` — a proof PR's workspace belongs to no run, so the lane records and mails nobody; and still NO `queue` event names any of the three PRs that landed in (a)–(b) — one that does is a spurious dequeue (stop rule 6). Close the fourth PR afterwards. The lane's two MAILS need an open run at `merging`, which the proof does not stage: the first programme landing after this runbook measures them (Step 7).
 
-(f) **A worker cannot merge** — in a session whose workspace hold names a programme wave (a live worker's, or a scratch workspace held with `POST /api/sessions/:id/hold` and a `program:<slug> wave:1/1` reason, released afterwards), ask the session to run `gh pr merge <any closed PR number>`. Expected: the tool call is refused with `ccrc: this workspace's hold reads …`.
+(f) **A worker cannot merge** — in a session whose workspace hold names a programme wave (a live worker's, or a scratch workspace held with `POST /api/sessions/:id/hold` and a `program:<slug> wave:1/1` reason, released afterwards), ask the session to run `gh pr merge <any closed PR number>`. Expected: the tool call is refused with `ccrc: this workspace's hold reads …`. A dispatched child in the window after its close (no hold, marker present) is refused by the marker arm — `ccrc: this workspace carries the child marker …`; that window is minutes long and rarely caught live, so Task 4's cases are its proof, and a live catch is a bonus for the ledger.
 
 - [ ] **Step 6: Stop rules**
 
@@ -2672,13 +4112,14 @@ Stop, report to the coordinator, and do NOT plan or dispatch wave 2b if any of t
 1. **A single push to `main` carried more than one commit** (b), or a merge sha has no tag: the group settings did not take. Keep group size and build concurrency at 1 and re-run the proof; if they ARE 1, `release-main.sh` must tag every commit in the pushed range before the queue is used (spec §5.2 step 3) — a new wave.
 2. **`is_ours` failed to bind** after a queue merge (d): a finding against `pr-state`; the queue stays on only if the operator rules so.
 3. **A `merge_group` run failed for a reason that is not the PR's own** (c) — e.g. a guard that needs a base the queue checkout does not have. Roll back: re-apply `ruleset-rollback.json` (queue off, approvals 1, maintain bypass back). Landing returns to `--admin` exactly as before this runbook, because the every-session `--admin` deny (wave 2b) is not live.
-4. **`gh pr merge <n>` (no `--admin`) was refused as needing an approval**: Step 4 did not take; re-read with Step 2.
+4. **`gh pr merge <n> --match-head-commit <sha>` (no `--admin`) was refused** as needing an approval — Step 4 did not take; re-read with Step 2 — or because the repository has auto-merge disabled (gh reaches a required queue through the auto-merge mutation, finding 16): that is a setting this runbook does not change and clause 15 forbids a coordinator to write; the proof halts here and the operator decides then (operator ruling 2026-09-29). (a0) and (a1) answer the same way until the operator has.
 5. **An entry sat queued past the status-check timeout**: the required contexts are not reporting on `merge_group`; roll back as in 3.
 6. **A successful queue merge leaves a trailing removal** ((a) reads `merged … none`, or (a2)'s last node is a `RemovedFromMergeQueueEvent`), **or a `queue` event names a PR that landed** ((a2), (e)). `landed` is then unreachable, and the dequeue lane can announce a removal for a PR that merged: the lane must not announce until it has seen the removal on two consecutive sweeps with the PR still OPEN — a fix wave before 2b, with the (a2) readings as its evidence. The queue may stay on (nothing is merged wrongly; the cost is a false notice), if the operator rules so.
+7. **(a0)'s wrong-sha enqueue was ACCEPTED** (the PR entered the queue): gh's queue path does not carry `--match-head-commit`, so clause 15's spelling binds nothing on this gh and the exact-SHA merge proof rests on the coordinator's own reads alone. A fix wave before 2b decides the remedy (the programme ledger records the reading); the queue may stay on only if the operator rules so.
 
 - [ ] **Step 7: Record the result**
 
-The coordinator writes the proof run's measured answers — (a), (a2) and (b) through (f), with the run ids, shas, tags and times, and Step 3's bypass removal — into `docs/superpowers/programs/landing-order.md` under "Decisions & deviations", on its own ledger PR (coordinator clause 15), and the wave-2 row's state. Wave 2b is planned only on a clean proof; it is the deny on `--admin` in every fleet session and on a `gh api` call to the pulls merge endpoint.
+The coordinator writes the proof run's measured answers — Step 1's full run and census, (a0), (a1), (a), (a2) and (b) through (f), with the run ids, shas, tags and times, and Step 3's bypass removal — into `docs/superpowers/programs/landing-order.md` under "Decisions & deviations", on its own ledger PR (coordinator clause 15), and the wave-2 row's state. The first programme landing after this runbook adds the two readings the proof cannot stage: that `merged:#<pr>` woke the coordinator of a run waiting at `merging` (and how long after the merge), and — if one happens — that a real dequeue mailed it `dequeued:#<pr>@<time>`. Wave 2b is planned only on a clean proof; it is the deny on `--admin` in every fleet session, on a `gh api` call to the pulls merge endpoint, and on a `gh api graphql` merge mutation (`mergePullRequest`, `enqueuePullRequest`, `enablePullRequestAutoMerge`) — measured passing this wave's deny under a wave hold.
 
 ---
 
@@ -2688,14 +4129,25 @@ Numbers are ISSUED, never chosen. This programme's deviation block is allocated 
 
 Two deliberate absences: no block is written as a range, and no headroom accounting lives in this plan.
 
-The pre-flight findings above are not deviations: they were measured before this plan existed and shaped it. The places where this plan departs from the spec's literal text — the last queue act of EITHER kind rather than the last removal alone (finding 3), the outer bound raised to 25 s (finding 1), the eighth `NotifyEvent` kind (finding 5), and the `operator` role as the dequeue notice's sender — are argued there and at the code, and are the reviewer's to weigh against the spec.
+The pre-flight findings above are not deviations: they were measured before this plan existed and shaped it. The places where this plan departs from the spec's literal text AS IT STOOD AT `6da36f0b` are argued there and at the code, and are the reviewer's to weigh against the spec; the spec's 2026-09-29 amendments (its Status line) now state each of them, so each slug's parenthesis quotes the text an amendment replaced. The coordinator numbers them at run-open, by these slugs:
+
+- `queue-act-either-kind` — the last queue act of EITHER kind rather than the last removal alone (finding 3).
+- `pr-state-bound-25s` — the outer bound raised to 25 s for both modes (finding 1, as ruled), and with it the close's two reads at ~50 s (finding 14).
+- `queue-feed-kind` — the eighth `NotifyEvent` kind (finding 5), and the `operator` role as the landing notices' sender.
+- `land-before-close` — on a native-queue project the producer lands BEFORE it closes, waiting at `merging` (finding 12 (i); spec §5.2 assumed the run stayed open, §9 names the assumption; Task 5 makes it the coordinator's rule).
+- `landing-merged-notice` — the landing lane's second notice, `merged:#<n>`, the coordinator's wake-up after an asynchronous queue merge (finding 12 (i′); §5.2 names only the dequeue).
+- `deny-child-marker` — the deny's second arm, on `$REG/<id>.child` (finding 12 (iii); §5.2 and §6's session-hook row name only the wave hold).
+- `queue-pipeline-check` — the plain-bash pipeline check asks a queue run the pull request's question, against `merge_group.base_sha` (finding 13; the ruling says a queue run runs what a PR runs, and this is the part of a PR's run that keeps the selector honest).
+- `server-first-rollout` — this wave deploys SERVER-FIRST (a reader-widening, `CLAUDE.md`), against spec §9's "Rollout inside each stage follows AGENT-FIRST"; the skill's `merged:` wake-up depends on the server moving first.
+- `enqueue-only-green` — the coordinator enqueues only a PR whose required checks passed, reads its queue entry back and disarms an auto-merge that only armed (finding 20; §5.2's clause-15 bullet says a plain `gh pr merge <n>` enqueues, which gh 2.45 does only for such a PR).
+- `held-coordinator-operator-enqueues` — a coordinator whose own workspace carries a wave hold or the child marker (a self-claimed run, a reclaim heir) is denied like a worker and has the operator enqueue (finding 22; §5.2's mutation row says a coordinator's enqueue passes).
 
 ---
 
 ## Review lenses
 
-Three lenses for this wave, all `opus`, effort `high` — a twenty-two-file diff as this plan stands on 2026-09-24 (the File Structure table: thirteen shipped files and nine test files; the Tasks 3–5 re-plan re-counts it), sized per the fleet policy (3–5 reviewers for a 4-file PR; three concerns cover this diff because most of it is tests each lens reads against its own concern), one `sonnet` refute pass per finding. The hook is the gate R5 leans on, so lens 2 reads it as security-sensitive.
+Three lenses for this wave, all `opus`, effort `high` — a thirty-file diff (the File Structure table: eighteen shipped files and twelve test files, four of them new; +1882 / −117 against the wave-1 base, 90 mutation rows), sized per the fleet policy (3–5 reviewers for a 4-file PR; three concerns cover this diff because most of it is tests each lens reads against its own concern), one `sonnet` refute pass per finding. The hook is the gate R5 leans on, and the landing lane and the lifecycle rule decide who is told a merge happened, so lens 2 reads both as security-sensitive.
 
-1. **The queue read and its wire (opus, high).** `_gh_pr_queue` sends one constant document with `-f` variables only, under `PR_GH_QUEUE_TIMEOUT`, and only in `--project`, its open window the newest hundred in `gh pr list`'s own order; the stamp buffers and falls back to the unstamped lines on its own failure, never costs a row, phase or `checks`, and says `unmeasured` — never `none` — for a read that did not happen; the five words are derived the way the spec's §5.2 intends, with the last act of either kind; `queueAt` is shape-gated before it reaches a latch key; `queueFor` is the ONE reader and keeps `absent` apart from `unmeasured`; the budget test sums THREE timeouts and the 25 s bound is argued; the server-first deploy order matches `CLAUDE.md`'s reader-widening rule; no `FLEET_PROTO` bump, no `PrState` change.
-2. **The worker merge deny and the dequeue lane's authority (opus, high, security-sensitive).** The deny fires at every command head the regex claims and on no quoted mention (the pass list), and its header states what it cannot parse and its one known false deny; a hold is a wave only if whole (≤ `CCRC_HOLD_MAX`) and matching `CCRC_HOLD_WAVE_RE` — the card's own reader, bound and grammar, spelled once; a deny replaces advice and never the graph gate's counted deny; exit 0 and a silent stderr on every path; what it does NOT stop is stated in its header (quoted strings; `--admin` and `gh api` for non-workers are wave 2b's). The dequeue lane enqueues, merges and re-runs nothing; it mails only a coordinator an open run names, never `resolveCoordinator(null)`'s guess; its mail body carries no GitHub-sourced string; it latches only what it told (an unreadable run read defers, a thrown mail retries) and a restart repeats nothing (the two durable reads).
-3. **CI shape, guard fidelity and the citation tax (opus, high).** Every mutation row really mutates the guard it names and reds for the stated reason (H2's `set -u` crash is the counter-example the plan already fixed; H8 is measured on the wave-1 tree); `ci-merge-queue.test.ts` derives the macOS set from `runs-on` and forbids `merge_group` on every other job; the concurrency groups cannot drop a queue run; the CI test selection overlap is handled by merging shapes; the census stayed `147 / 195 / 53 / 35` with the hook-aware instrument, `shared/api.ts` changed in place, README untouched; Task 7's commands are read-only except the marked writes, name no owner, find the main ruleset through the per-ruleset read (the list endpoint carries no conditions), check the fleet with `--to` the dev tag, read main's REQUIRED jobs rather than the run's conclusion, and its stop rules cover every proof-run failure the spec names plus the trailing-removal question.
+1. **The queue read and its wire (opus, high).** `_gh_pr_queue` sends one constant document with `-f` variables only, under `PR_GH_QUEUE_TIMEOUT`, and only in `--project`, its open window the newest hundred in `gh pr list`'s own order; the stamp buffers and falls back to the unstamped lines on its own failure, never costs a row, phase or `checks`, and says `unmeasured` — never `none` — for a read that did not happen; the five words are derived the way the spec's §5.2 intends, with the last act of either kind; `queueAt` is shape-gated before it reaches a latch key; `queueFor` is the ONE reader and keeps `absent` apart from `unmeasured`; the budget test sums THREE timeouts, the 25 s bound is argued, and all four statements of the old bound are rewritten; the server-first deploy order matches `CLAUDE.md`'s reader-widening rule; no `FLEET_PROTO` bump, no `PrState` change.
+2. **The worker merge deny, the landing lane's authority, and the lifecycle rule (opus, high, security-sensitive).** The deny fires at every command head the regex claims and on no quoted mention (the pass list), and its header states what it cannot parse and its one known false deny; a hold is a wave only if whole (≤ `CCRC_HOLD_MAX`) and matching `CCRC_HOLD_WAVE_RE` — the card's own reader, bound and grammar, spelled once; the child marker decides by existence and has one writer, reached only through dispatch; the strip reads a backslash escape and a `#` comment as bash does, so neither opens a span that hides a merge; a deny replaces advice and never the graph gate's counted deny (H17); exit 0 and a silent stderr on every path; what it does NOT stop is stated in its header (quoted strings, unlisted wrappers and a wrapper's own flags; `--admin` and the REST and GraphQL `gh api` merges for non-workers are wave 2b's), and so is whom it refuses though they coordinate (a self-claimed run, a reclaim heir). The landing lane enqueues, merges and re-runs nothing; it mails only the coordinator of the open run `survivorOf` picks, never `resolveCoordinator(null)`'s guess, and the merged notice only to a run waiting at `merging`; its mail bodies carry no GitHub-sourced string and bind the exact SHA; it latches only what it told (an unreadable run read defers, a thrown mail retries) and a restart repeats nothing (the two durable reads). The lifecycle rule — land before close, at `merging` — is sound against the state machine (`awaiting-review → merging → closing`, `merging → working`), costs no dispatch slot, and leaves no path where a child is reclaimed under a PR still in the queue while the coordinator follows clause 15 — the last wave included; the enqueue is an enqueue only because it waits on the required checks and is read back (gh 2.45 arms auto-merge otherwise, with the same line), an armed request is disarmed before a fix round, a dequeue's why is read from the queue's own run, and a coordinator the hook refuses goes to the operator, never to a close.
+3. **CI shape, guard fidelity and the citation tax (opus, high).** Every mutation row really mutates the guard it names and reds for the stated reason (H2's `set -u` crash is the counter-example the plan already fixed; H8 is measured on the wave-1 tree; M14/M15 are `ci-merge-queue`'s controls; L19–L21 and H17 pin the guards the first review found untested; S17 proves the disarm exemption is one exact spelling); `ci-merge-queue.test.ts` derives the macOS set from `runs-on`, the jobs that need one from `needs:`, and the required closure from the three required jobs' `needs:`, and refuses a duplicate top-level key; a queue run runs the selected tests (the 2026-09-28 ruling) with the pipeline check, and `select.mjs` and `verdict.mjs` agree on `tests: none`; the concurrency groups cannot drop or cancel a queue run; the CI selection overlap is handled by merging shapes, and the YAML loads under a duplicate-key loader; the census stayed `148 / 196 / 53 / 36`, `shared/api.ts` changed in place, README untouched; Task 7's commands are read-only except the marked writes, name no owner, find the main ruleset through the per-ruleset read (the list endpoint carries no conditions), read main's health from a trusted full run whose shards ran rather than a refresh push, check the fleet with `--to` the dev tag, measure the exact-SHA binding with a refused wrong sha, and its stop rules cover every proof-run failure the spec names plus the trailing-removal and binding questions.

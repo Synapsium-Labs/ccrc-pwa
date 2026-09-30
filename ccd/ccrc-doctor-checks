@@ -2842,8 +2842,8 @@ _check_wrappers() {
           wr_hard+=("$id sources $wsecrets but the roster declares ${wr_secrets[$id]}")
         fi
         if [ "${wr_kind[$id]}" = codex ]; then
-          if [ "$target" != ccgpt ]; then
-            wr_hard+=("$id's wrapper execs \$HOME/.local/bin/$target, not ccgpt — a Codex lane's launcher hands off to the common GPT-lane launcher")
+          if [ "$target" != ccrc-codex ]; then
+            wr_hard+=("$id's wrapper execs \$HOME/.local/bin/$target, not ccrc-codex — a Codex lane's launcher hands off to ccrc's own Codex launcher")
           fi
         elif [ -n "$upstream_id" ] && [ "$target" != "$upstream_id" ]; then
           wr_hard+=("$id's wrapper execs \$HOME/.local/bin/$target, not the roster's upstream account $upstream_id")

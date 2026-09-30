@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { hasMenu, parseDialog, paneOptionRows, paneState } from '../src/pane/dialog.js';
+import { hasMenu, parseDialog, paneOptionRows, paneState, turnRunning } from '../src/pane/dialog.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -941,5 +941,33 @@ describe('parseDialog on real 2.1.280 menus', () => {
     expect(d.options.map((o) => o.label)).toEqual(['Default (recommended) ✔', 'Opus (1M context)', 'Fable']);
     expect(d.options[2]!.description).toBe('Fable 5.1 · Most capable for your hardest and longest-running tasks · $10/$50 per Mtok');
     expect(d.title).toBe('Select model');
+  });
+});
+
+// Worker stall watch §4.1 (wave 1): `turnRunning` is BUSY_RE exported, the
+// first production reader of that constant. Its caller is `sendPrompt`'s
+// `refuseIfTurnRunning`, which hands it the pane's LAST 8 ROWS only; send.test.ts
+// pins that window. It is best-effort by design: a --remote-control pane never
+// renders the phrase and a narrow pane can wrap it, so these cases say what a
+// match means and never that a miss proves idleness.
+describe('turnRunning', () => {
+  it("reads Claude Code's real spinner row as a running turn", () => {
+    expect(turnRunning(fixture('busy.txt'))).toBe(true);
+  });
+  it.each([
+    ['an empty prompt box', 'some output\n❯ \n'],
+    ["Claude Code's armed limit line", 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel\n❯ \n'],
+    ['a menu footer', '❯ 1. Yes\n  2. No\n  Enter to select\n'],
+  ])('%s is not a running turn', (_name, pane) => {
+    expect(turnRunning(pane)).toBe(false);
+  });
+  it("gives paneState's busy arm's answer on every captured pane: one regex, one answer", () => {
+    const names = readdirSync(panesDir).filter((f) => f.endsWith('.txt'));
+    expect(names).toContain('busy.txt');           // the set holds a running pane…
+    expect(names.length).toBeGreaterThan(1);       // …and panes that are not running
+    for (const f of names) {
+      const p = fixture(f);
+      expect(turnRunning(p), f).toBe(paneState(p) === 'busy');
+    }
   });
 });

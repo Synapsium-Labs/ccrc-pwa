@@ -49,6 +49,11 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   // cancels it) — only the mail lane's `holdIfAutoContinueArmed` opt-in ever
   // produces this code (dialog.ts's `autoContinueArmed`, send.ts's own doc).
   'auto-continue-armed': 'Claude is waiting out a usage limit and will continue by itself — sending now would cancel that.',
+  // Worker stall watch §4.1: the recipient's pane shows a turn running ("esc to
+  // interrupt"). Only the mail lane's `refuseIfTurnRunning` opt-in ever produces
+  // this code (dialog.ts's `turnRunning`, send.ts's own doc); it holds the nudge
+  // for a minute and counts no attempt.
+  'turn-running': 'Claude is in the middle of a turn — the message waits until it finishes.',
 };
 
 /**

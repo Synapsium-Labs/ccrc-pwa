@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { localIO } from '../src/io.js';
-import { readHookState, readHookStateMeasured, HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
+import { readHookState, readHookStateMeasured, readHookStateUnaged, HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 
@@ -455,5 +456,59 @@ describe('graphGateDenials', () => {
     const out = await readHookState(localIO, reg, ID, UUID, NOW);
     expect(out?.graphQueries).toBe(1);
     expect(out?.graphGateDenials).toBe(3);
+  });
+});
+
+// The stall watch's hold 2a (spec 2026-09-29 §4.2, planning departure D-3565 `ask-hold-correlates-the-dialog`): the lane
+// correlates a hookstate ask with the live `waiting` word by TIME, so it needs the ask after
+// HOOKSTATE_FRESH_MS has aged it out. Every other gate must still run.
+describe('readHookStateUnaged — identity-gated, never aged', () => {
+  // The hook's question envelope, the shape both AskUserQuestion arms of ccd/session-hook.sh write
+  // (shared/api.ts's HookAsk). The old {approval:{tool:'AskUserQuestion'}} shape is the bug that hook no
+  // longer writes.
+  const question = { questions: [{ question: 'Which lane?', options: [{ label: 'a' }, { label: 'b' }] }] };
+
+  it('reads an ask the aged read already calls stale, and still says when it was written', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    const now = Date.now();
+    const old = now - HOOKSTATE_FRESH_MS - 60_000;
+    seed(reg, ID, base({ state: 'waiting', updatedAt: old, ask: question }));
+    // The control: the aged read drops this very file.
+    expect(await readHookStateMeasured(localIO, reg, ID, UUID, now)).toEqual({ ok: false, reason: 'no-state' });
+    const out = await readHookStateUnaged(localIO, reg, ID, UUID);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.state.updatedAt).toBe(old);
+    expect(out.state.ask).toEqual(question);
+  });
+
+  it('keeps the identity gate: another process\'s file, or no registry uuid at all, is no-state', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ state: 'waiting', ask: question }));
+    expect(await readHookStateUnaged(localIO, reg, ID, '2'.repeat(36))).toEqual({ ok: false, reason: 'no-state' });
+    expect(await readHookStateUnaged(localIO, reg, ID, null)).toEqual({ ok: false, reason: 'no-state' });
+    expect((await readHookStateUnaged(localIO, reg, ID, UUID)).ok).toBe(true);   // the control
+  });
+
+  it('keeps the unmeasured arm: a file this box could not read is unmeasured, never no-state', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ state: 'waiting', ask: question }));
+    const io = degradedReadIO((p) => p.endsWith(`${ID}.hookstate.json`));
+    expect(await readHookStateUnaged(io, reg, ID, UUID)).toEqual({ ok: false, reason: 'unmeasured' });
+  });
+
+  it('keeps every parse rejection: a malformed ask is no-state, never a partial read', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ state: 'waiting', ask: { approval: { tool: 7 } } }));
+    expect(await readHookStateUnaged(localIO, reg, ID, UUID)).toEqual({ ok: false, reason: 'no-state' });
+  });
+
+  it('shares the parse: hookstate.ts holds ONE JSON.parse and ONE age comparison, comments blanked', () => {
+    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../src/hookstate.ts'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
+    expect(src).toContain('export async function readHookStateUnaged(');
+    expect(src.match(/JSON\.parse\(/g)).toHaveLength(1);
+    expect(src.match(/>\s*HOOKSTATE_FRESH_MS/g)).toHaveLength(1);
   });
 });

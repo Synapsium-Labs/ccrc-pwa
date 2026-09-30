@@ -15,6 +15,7 @@
 // bar is "a reasonable person adding a fourth copy in the ordinary way is
 // stopped before review", not "unforgeable".
 import { describe, it, expect, beforeAll } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1801,9 +1802,17 @@ describe('the model files, and who reads each one', () => {
     // and only one of them is in this repo to be pinned.
     expect(holdersOf('.handoff/litellm-config.yaml')).toEqual(['ccd/ccrc']);
     const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc'));
+    // D-3482: the helper grew a codex-lane arm (an id argument),
+    // so the one spelling is now its no-argument line — still one line, and
+    // still inside `_models_litellm_path`, which the second pin binds.
     expect(code.filter((l) => l.includes('.handoff/litellm-config.yaml'))).toEqual([
-      '_models_litellm_path()     { printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"; }',
+      '  printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"',
     ]);
+    const helper = /^_models_litellm_path\(\) \{[^\n]*\n([\s\S]*?)\n\}$/m
+      .exec(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8'));
+    expect(helper, 'ccd/ccrc still defines _models_litellm_path as a block').toBeTruthy();
+    expect(helper![1]!.split('\n'))
+      .toContain('  printf \'%s\' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"');
   });
 
   it('the ownership whitelist is read by exactly one thing in this repo', () => {
@@ -3104,6 +3113,50 @@ describe('graphify — one pin, one census path', () => {
   });
 });
 
+// — Plan 2b-2 Task 3 (D-3487): the Codex runtime's LiteLLM requirement —
+describe('the Codex runtime — one LiteLLM requirement, in one file', () => {
+  // `graphify`'s two rows above, for the second venv this tree builds: the
+  // requirement (extra, floor and ceiling in ONE string) lives in
+  // `ccd/ccgpt-runtime`, and every other reader reads the STAMP a passing
+  // build writes. The third row exists because the first two cannot see the
+  // files most likely to grow a second copy: `isBash` rejects every dotted
+  // name, so a `litellm==` in `ccd/ccgpt-usage.py`, `shared/litellm.mjs` or a
+  // `deploy/*.yaml` scores no hit in `holdersOf` at all (runtime-probe HR13).
+  it("the requirement literal 'litellm[proxy]' lives in exactly one bash file, ccd/ccgpt-runtime", () => {
+    expect(holdersOf('litellm[proxy]')).toEqual(['ccd/ccgpt-runtime']);
+  });
+
+  it('LITELLM_REQUIREMENT is assigned in exactly one bash file, ccd/ccgpt-runtime', () => {
+    const holders = BASH.filter((f) =>
+      codeLines(f).some((l) => /^\s*LITELLM_REQUIREMENT=/.test(l))).map(rel).sort();
+    expect(holders).toEqual(['ccd/ccgpt-runtime']);
+  });
+
+  it('no other file under ccd, deploy, shared or install.sh — of ANY type — spells a litellm version spec', () => {
+    // EVERY line, comments included: this is a literal-absence pin, and prose
+    // naming a version is the first draft of a second pin. `--others
+    // --exclude-standard` as well as the index, so a new file is seen before
+    // it is staged — a gate over the index alone cannot see an uncommitted
+    // definition. It refuses to answer when git cannot list the tree.
+    const r = spawnSync('git', ['-C', ccrcRoot, 'ls-files', '-z', '--cached', '--others', '--exclude-standard',
+      '--', 'ccd', 'deploy', 'shared', 'install.sh'], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ls-files exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    const files = [...new Set(r.stdout.split('\0').filter(Boolean))].sort();
+    // The floor: a scan over too few files passes everything, and these five
+    // are the ones this row exists to see — three of them dotted.
+    expect(files.length).toBeGreaterThan(50);
+    for (const f of ['ccd/ccgpt-runtime', 'ccd/ccgpt-proxy.py', 'ccd/ccgpt-usage.py', 'shared/litellm.mjs', 'install.sh']) {
+      expect(files, f).toContain(f);
+    }
+    const SPEC = /\blitellm\[|\blitellm\s*(?:===|==|~=|>=|<=|!=|<|>)\s*\d/;
+    const holders = files.filter((f) => {
+      const p = path.join(ccrcRoot, f);
+      return existsSync(p) && statSync(p).isFile() && SPEC.test(readFileSync(p, 'utf8'));
+    });
+    expect(holders).toEqual(['ccd/ccgpt-runtime']);
+  });
+});
+
 describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTree', () => {
   // The same shape as "extraction finding — one path to the ccd script"
   // above, applied to a copy that was made for a stated reason and copied
@@ -3946,5 +3999,125 @@ describe('the dispatcher refusal words and the dispatch order are declared once,
 
   it('no source across the four roots spells a second list of the words — shared/api.ts holds the one', () => {
     expect(ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+  });
+});
+
+// WORKER STALL WATCH, WAVE 1 (design 2026-09-29 §4.2, "Spelled once"). APPENDED, not nested, for the reason stated
+// at this file's other appended describes: `session-hook.test.ts`'s citation audit cites this file by line.
+// The needles are anchored on BOTH sides by the same quote, single or double, for three reasons:
+// - `stall-check:` must not be found inside `re stall-check:`;
+// - `review-done` must not be found inside the review-rejection subject `close.ts` spells;
+// - `stall` must not be found inside `stall-shadow`.
+// KNOWN WIDTH: a copy written in backticks, or as the head of a longer template, is not seen. Backticks are left out
+// ON PURPOSE: docstrings name these prefixes in backticks, and a pin that fired on a comment would be a false red.
+describe('the stall watch spells its prefixes, its detail heads and the review-done subject once (design 2026-09-29 §4.2)', () => {
+  const quoted = (needle: string): RegExp => {
+    const escaped = needle.replace(/[.*+?^$()|[\]\\{}]/g, (c) => `\\${c}`);
+    return new RegExp(`(['"])${escaped}\\1`);
+  };
+  const ONE_HOME: ReadonlyArray<readonly [string, string]> = [
+    ['stall-check:', 'server/src/coord/stall.ts'],
+    ['re stall-check:', 'server/src/coord/stall.ts'],
+    ['re stall-check: waiting', 'server/src/coord/stall.ts'],
+    ['stall:', 'server/src/coord/stall.ts'],
+    ['wait:', 'server/src/coord/stall.ts'],
+    ['stall', 'server/src/coord/stall.ts'],
+    ['stall-shadow', 'server/src/coord/stall.ts'],
+    ['review-done', 'shared/api.ts'],
+  ];
+
+  it('CONTROL: a quote-anchored needle finds either quote, and never a longer sibling or a backticked mention', () => {
+    expect(quoted('stall-check:').test(`x = 're stall-check:'`)).toBe(false);
+    expect(quoted('re stall-check:').test(`x = 're stall-check: waiting'`)).toBe(false);
+    expect(quoted('review-done').test(`subject: 'review-done-rejected'`)).toBe(false);
+    expect(quoted('stall').test(`'stall-shadow'`)).toBe(false);
+    expect(quoted('stall-check:').test(`"stall-check:"`)).toBe(true);
+    expect(quoted('stall-check:').test(`'stall-check:'`)).toBe(true);
+    expect(quoted('stall-check:').test(`'stall-check:"`)).toBe(false);
+    expect(quoted('wait:').test('a docstring naming `wait:`')).toBe(false);
+  });
+
+  for (const [needle, home] of ONE_HOME) {
+    it(`'${needle}' is a quoted literal in exactly one source file, ${home}`, () => {
+      const re = quoted(needle);
+      const holders = ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel);
+      expect(holders).toEqual([home]);
+    });
+  }
+});
+
+// ── Worker stall watch, wave 1 (spec 2026-09-29 §9.14 and §4.2 "Spelled once").
+// APPENDED after the last describe, never nested above it: session-hook.test.ts's
+// citation audit cites this file by line, so nothing above this point may move.
+
+/** Comment LINES removed — the filter the setDeliveryEnvelope describe keeps
+ *  block-local as `codeOnly` (hoisting it would move this file's cited lines,
+ *  so the two stall describes below share this appended copy) — so a sentence
+ *  ABOUT a name is never counted as spelling it. */
+const stallCodeText = (t: string): string =>
+  t.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
+const stallCode = (f: string): string => stallCodeText(readFileSync(f, 'utf8'));
+
+describe('worker stall watch: the four operator-switch markers have no writer in the tree (spec §9.14)', () => {
+  // Each marker is touched and removed BY HAND in the fleet box's
+  // `~/.cc-sessions` — the `mail-disabled` precedent, whose own no-writer
+  // claim nothing pins. So the only code that may spell one is the pure
+  // module that READS it, in two halves: no non-comment line of shell (ccd/,
+  // deploy/, install.sh — `holdersOf` above) names it at all, and across the
+  // four TS roots exactly one file names it on a code line — its definer,
+  // which reaches no `node:` module and so cannot write a file. A template
+  // (`${reg}/stall-watch-live`) is seen: the TS half scans the bare name on
+  // code lines, not a quoted literal. KNOWN WIDTH: a name assembled from pieces
+  // (`'stall-watch-' + w`) is not seen; the bar is the ordinary copy.
+  const MARKERS: [string, string][] = [
+    ['mail-gate-strict', 'server/src/turnidle.ts'],
+    ['stall-watch-disabled', 'server/src/coord/stall.ts'],
+    ['stall-watch-live', 'server/src/coord/stall.ts'],
+    ['stall-watch-escalate', 'server/src/coord/stall.ts'],
+  ];
+
+  it('CONTROL: both corpora were walked, and the filter keeps code and drops prose', () => {
+    expect(BASH.length).toBeGreaterThan(10);
+    expect(ALL.length).toBeGreaterThan(100);
+    expect(stallCodeText("  // touch stall-watch-live\n   * stall-watch-live\n/* stall-watch-live */\nconst m = `${reg}/stall-watch-live`;"))
+      .toBe('const m = `${reg}/stall-watch-live`;');
+  });
+
+  it.each(MARKERS)('%s: no shell line names it, and its one TS holder is its definer (%s)', (name, definer) => {
+    expect(holdersOf(name), `${name}: a line of shell names it — a writer, or a reader this design never had`).toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(name)).map(rel).sort(),
+      `${name}: spelled on a code line outside ${definer}`).toEqual([definer]);
+    expect(stallCode(path.join(ccrcRoot, definer)), `${definer} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+});
+
+describe('worker stall watch: the wave-done subject is spelled once (spec §4.2 "Whose turn it is")', () => {
+  // `WAVE_DONE_SUBJECT` is L0's, and the stall ball rule compares it by
+  // EQUALITY — so a second literal is a second rule. Task 4's appended pins
+  // already hold the five prefixes, the detail heads and `REVIEW_DONE_SUBJECT`;
+  // this row adds the one done subject that predates the watch.
+  // QUOTE-ANCHORED at both ends for '…' and "…" — so `'re stall-check:'` never
+  // counts as a copy of `'stall-check:'`, nor close.ts's `'review-done-rejected'`
+  // as `'review-done'` — and at the open for a template, whose tail is
+  // interpolated. Code lines only: prose names `wave-done` in backticks all
+  // over the coord ring, and a sentence is not a definition. KNOWN WIDTH: a
+  // literal assembled from pieces is not seen.
+  const LITERALS: [string, string][] = [
+    ['wave-done', 'shared/api.ts'],
+  ];
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const spelling = (lit: string): RegExp => new RegExp(`'${esc(lit)}'|"${esc(lit)}"|\`${esc(lit)}`);
+
+  it('CONTROL: the anchor tells a constant from its longer neighbours', () => {
+    expect(spelling('stall-check:').test("const P = 're stall-check:';")).toBe(false);
+    expect(spelling('re stall-check:').test("const P = 're stall-check: waiting';")).toBe(false);
+    expect(spelling('review-done').test("subject: 'review-done-rejected'")).toBe(false);
+    expect(spelling('wave-done').test('const S = "wave-done";')).toBe(true);
+    expect(spelling('stall:').test('const d = `stall:${arm}`;')).toBe(true);
+  });
+
+  it.each(LITERALS)("'%s' is spelled on a code line in %s alone", (lit, home) => {
+    expect(ALL.filter((f) => spelling(lit).test(stallCode(f))).map(rel).sort(), `a second '${lit}'`).toEqual([home]);
   });
 });

@@ -1,7 +1,7 @@
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
+import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
@@ -12,8 +12,9 @@ import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, verbSupported, sweepDec } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, repoCellFor, type CcdPrFailure } from './prstate.js';
-import { liveSessionStatus, readLiveState } from './livestate.js';
-import { readHookState, type HookState } from './hookstate.js';
+import { readLiveState, readLiveStateMeasured } from './livestate.js';
+import { mailTurnIdle, mailTurnModeOf } from './turnidle.js';
+import { readHookState, readHookStateUnaged, type HookState } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { sendPrompt } from './inject/send.js';
 import { askActions, askKey } from './askkey.js';
@@ -39,11 +40,18 @@ import { JournalMirror } from './coord/mirror.js';
 // a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
 // literals exist. `single-definition.test.ts` pins both halves of that split.
 import {
-  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, askNudgeSubject, isAskNudgeMail, queueSystemMail,
+  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, askNudgeSubject, isAskNudgeMail, queueStallNotice, queueSystemMail,
 } from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
+import { measureClaimant } from './coord/reclaim.js';
+import {
+  STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf, stallCheckMail, stallDelivery, stallDetail,
+  stallFacts, stallLastCheck, stallMailClass, stallPushText, stallReportMail, stallSubjects, stallVerdict,
+  type AskRowFact, type HookAskFact, type LiveWordRead, type StallArming, type StallInput, type StallNotice,
+  type StallNotify, type StallSubject, type StallWorker,
+} from './coord/stall.js';
 // `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
 // evidence string alike — the sweep below only feeds it files and applies
 // its answer, so LEDGER_SEED_GAP itself is not imported here.
@@ -121,6 +129,11 @@ export const LC_SWEEP_MS = 5_000;
  *  cadence. Renew and lapse each keep their own clock so neither starves the
  *  other's first run. */
 const CLAIM_SWEEP_MS = 60_000;
+
+/** The stall watch's lane (spec 2026-09-29 §4.2, §10). It runs at `CLAIM_SWEEP_MS`'s cadence, for that
+ *  constant's reason: a 2 h threshold does not need the 2 s tick. EXPORTED for its suite, as `LC_SWEEP_MS`
+ *  and `READINESS_SWEEP_MS` are. */
+export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;
 
 /** D13's two ledger lanes. The floor scan reads every plan and spec of every
  *  registry-named project, so it runs HOURLY; reconcile reads only the plans
@@ -265,7 +278,10 @@ const MAIL_SWEEP_MS = 10_000;
  *  own `COMPACT_QUIET` (`ccd/ccd:142`), taken rather than re-derived: this is
  *  the same judgement about the same panes, and two numbers for one policy is
  *  two numbers to get out of step. Measured from `statusUpdatedAt`, which
- *  Claude Code ticks on every busy<->idle transition (`ccd/ccd:7047-7048`). */
+ *  Claude Code rewrites only when the live word changes: under `idle` or
+ *  `shell` the main loop has been idle at least that long (the worker stall
+ *  watch design's §3.1), which is all this quiet needs. `mailTurnIdle`
+ *  (`turnidle.ts`) applies it. */
 const MAIL_QUIET_MS = 60_000;
 
 /** The ask-release lane's own self-throttle (RULING F4, task-7-brief). Not how
@@ -353,6 +369,16 @@ const MAIL_BACKOFF_MAX_MS = PR_BACKOFF_MAX_MS;
  *  minutes against a reset that may be hours away: cheap re-reads, and the
  *  first sweep after the session resumes delivers. */
 const MAIL_ARMED_HOLD_MS = 300_000;
+
+/** Worker stall watch §4.1: how long a nudge is held when `sendPrompt` refused
+ *  it `turn-running`. The live word delivered it (`shell`), but the pane's last
+ *  8 rows showed `esc to interrupt`. Like `MAIL_ARMED_HOLD_MS`, this is not a
+ *  backoff step. The recipient is not failing, so the hold counts no attempt
+ *  and `MAIL_MAX_ATTEMPTS` cannot park it. Unlike that hold, the sender is not
+ *  told, because a running turn is not a blocked recipient. *Chosen*, 60 s: a
+ *  turn may end in seconds, while `MAIL_ARMED_HOLD_MS` is sized for a usage-limit
+ *  reset. */
+const MAIL_TURN_HOLD_MS = 60_000;
 
 /** The ceiling on successful, UNACKED replays (review finding 20) — see
  *  `MAIL_MAX_ATTEMPTS`'s own docstring for why that counter cannot serve
@@ -612,6 +638,10 @@ export class FleetWatcher {
   /** The claim lanes' clocks (build 9 wave 7, D12). */
   private lastClaimRenew = 0;
   private lastClaimLapse = 0;
+  /** The stall lane's own clock (`STALL_SWEEP_MS`), with the same `!== 0` never-run idiom. */
+  private lastStallSweep = 0;
+  /** True while a `sweepStalls` pass awaits its reads. A second pass started meanwhile returns at once. */
+  private stallSweepRunning = false;
   /** The ledger lanes' clocks (build 9 wave 7, D13). */
   private lastLedgerFloor = 0;
   private lastLedgerReconcile = 0;
@@ -1598,6 +1628,11 @@ export class FleetWatcher {
       } catch (err) {
         console.warn(`ccrc-server: claim sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
       }
+      // The stall watch (spec 2026-09-29 §4.2) runs after the claim lanes, on THIS tick's `sessions` and on
+      // its registry listing (the listing carries the markers). It is never awaited: its reads are async, so it
+      // cannot sit in the claim pair's synchronous try-block. It gates itself on `primed`, which is set below,
+      // so the priming tick never judges.
+      void this.sweepStalls(sessions, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepDivergences`: each is a
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
@@ -1881,20 +1916,39 @@ export class FleetWatcher {
    * question the hold exists to keep off it, defeating the deferral it was
    * built to implement — the watermark still advances for these rows
    * exactly like every other, so this is a push-only exemption, not a skip.
+   *
+   * The stall watch's own mail follows the same rule (spec 2026-09-29 §4.2, "Push shape"), classified
+   * by `stallMailClass`:
+   * - A `check` (the watch's r1 to a worker) is recorded, never pushed.
+   * - A `reply` is recorded, never pushed, and only when it is BOUND: from the run's own worker, on that run,
+   *   and newer than the first check on it. The bind is read from the store only for a `re stall-check:`
+   *   subject. Any other mail wearing that prefix is pushed as ordinary mail, so no box-token holder can use
+   *   the prefix to keep a mail off the phone.
+   * - A `report` (the watch's r2 to the coordinator) is pushed under its own title, `⚠ stall › <run
+   *   workspace>`. The lane never pushes r2 itself, so this is its only push.
    */
   private pushNewMail(projects: Set<string>, sessionProjects: Map<string, string>): void {
     const coord = this.deps.coord;
     if (!coord) return;
     for (const m of coord.mailQueuedSince(this.lastMailNotifyId)) {
       const project = m.project ?? sessionProjects.get(m.toId) ?? '';
+      const bind = m.subject.startsWith(STALL_REPLY_PREFIX)
+        ? {
+          runSessionId: m.runSessionId,
+          runId: m.runId,
+          firstCheckId: m.runId === null ? null
+            : coord.firstMailIdWithPrefix(m.runId, 'operator', m.fromId, STALL_CHECK_PREFIX),
+        }
+        : undefined;
+      const stall = stallMailClass(m, bind);
       this.pushOne({
         kind: 'mail', sessionId: m.toId, project,
-        title: `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
+        title: stall === 'report' ? `⚠ stall › ${m.workspace ?? m.toId}` : `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
         body: m.subject,
         runId: m.runId,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
-        ...(isAskNudgeMail(m) ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || stall === 'check' || stall === 'reply' ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -1986,12 +2040,13 @@ export class FleetWatcher {
   private pushOne(e: {
     kind: NotifyEvent['kind']; sessionId: string; project: string; title: string; body: string;
     /** WHICH RUN this push is about, when the lane raising it knows one
-     *  (`NotifyEvent.runId`). OPTIONAL here and REQUIRED on the wire: four of
-     *  this method's seven call sites are about a session and about no run at
-     *  all, and an omitted field and an explicit `null` are the SAME fact for
-     *  this one field — "about no run" — which is why folding them costs
-     *  nothing. The three lanes that know a run pass the one they already
-     *  have: the mail lane, the run lane, and the blocked-sender lane. */
+     *  (`NotifyEvent.runId`). OPTIONAL here and REQUIRED on the wire: most of
+     *  this method's call sites are about a session and about no run at all
+     *  (no count here — the last one went stale at "seven"), and an omitted
+     *  field and an explicit `null` are the SAME fact for this one field —
+     *  "about no run" — which is why folding them costs nothing. The lanes
+     *  that know a run pass the one they already have: the mail lane, the run
+     *  lane, the blocked-sender lane and the stall lane (`sweepStalls`). */
     runId?: number | null;
     actions?: PushPayload['actions'];
     /** Overrides the default `${kind}-${sessionId}` collapse key. Mail MUST
@@ -2834,6 +2889,205 @@ export class FleetWatcher {
   }
 
   /**
+   * The stall watch's lane (spec 2026-09-29 §4.2, wave 1). `stallVerdict` (L1, `coord/stall.ts`) decides
+   * everything. This method READS the inputs and APPLIES the answer, as `renewClaims` applies `claimExpiry`'s.
+   * `tick()` dispatches it after the claim lanes and never awaits it. It has its own clock (`STALL_SWEEP_MS`)
+   * and its own in-flight flag, and it returns with no store.
+   *
+   * The clock is COMPARED before the in-flight flag and STAMPED after it, so a pass refused by the flag does
+   * not use up the next minute.
+   *
+   * It reads the raw live word and never `FleetSession.status`. `liveSessionStatus` folds `shell` and `waiting`
+   * into `busy`, and a pane with no live file paints `idle` with a null time.
+   *
+   * It reads the hookstate ask UNAGED (`readHookStateUnaged`), because hold 2a correlates it with the dialog
+   * by time, and a legit question outlives `HOOKSTATE_FRESH_MS`.
+   *
+   * Each mutation is durable and deduped by its observation row (`queueStallNotice`,
+   * `recordStallObservation`), so a restart re-sends nothing.
+   *
+   * Each subject runs in its own try/catch: `node:sqlite` throws synchronously, and one bad subject must not
+   * starve the next. PUBLIC for `stall-sweep.test.ts`.
+   */
+  async sweepStalls(sessions: readonly FleetSession[], names: readonly string[]): Promise<void> {
+    if (!this.primed) return;
+    const store = this.deps.coord;
+    if (!store) return;
+    const now = Date.now();
+    if (this.lastStallSweep !== 0 && now - this.lastStallSweep < STALL_SWEEP_MS) return;
+    if (this.stallSweepRunning) return;
+    this.lastStallSweep = now;
+    this.stallSweepRunning = true;
+    try {
+      const arming = stallArmingOf(names);
+      if (arming.disabled) return;
+      const paused = names.includes(COORDINATOR_PAUSE_MARKER);
+      let candidates: ReturnType<CoordStore['stallCandidates']>;
+      try {
+        candidates = store.stallCandidates();
+      } catch (err) {
+        console.warn(`ccrc-server: stall-watch candidate read failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+        return;
+      }
+      if (!candidates.ok) {
+        console.warn(`ccrc-server: stall-watch candidates unreadable (${candidates.kind}: ${candidates.detail}) — nothing judged this sweep`);
+        return;
+      }
+      for (const subject of stallSubjects(candidates.runs)) {
+        try {
+          await this.judgeStall(store, subject, sessions, arming, paused, now);
+        } catch (err) {
+          console.warn(`ccrc-server: stall-watch run ${subject.primary.id} (${subject.primary.sessionId}) failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
+        }
+      }
+    } catch (err) {
+      // A throw outside the per-subject catch (`stallArmingOf`, `stallSubjects`) would reach the tick's silent
+      // `.catch`, and the lane would die every minute with no trace. One line per bad sweep instead.
+      console.warn(`ccrc-server: stall-watch sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+    } finally {
+      this.stallSweepRunning = false;
+    }
+  }
+
+  /** One subject of `sweepStalls`: read, decide, apply. Its throws are the caller's to catch. */
+  private async judgeStall(
+    store: CoordStore, subject: StallSubject, sessions: readonly FleetSession[],
+    arming: StallArming, paused: boolean, now: number,
+  ): Promise<void> {
+    const primary = subject.primary;
+    const worker = await this.stallWorkerFor(store, sessions.find((s) => s.id === primary.sessionId));
+    const mail = store.mailOnRuns(subject.runs.map((r) => r.id));
+    if (!mail.ok) {
+      console.warn(`ccrc-server: stall-watch run ${primary.id} mail unreadable (${mail.kind}: ${mail.detail}) — held this sweep`);
+      return;
+    }
+    const notices: StallNotice[] = [];
+    for (const e of store.runEvents(primary.id)) {
+      const parsed = parseStallDetail(e.detail);
+      if (parsed !== null) notices.push({ ...parsed, at: e.at });
+    }
+    let input: StallInput = {
+      subject, worker, mail: mail.mail, notices, arming, coordinationPaused: paused, coordinator: null,
+    };
+    let v = stallVerdict(input, now);
+    if (v.act === 'measure-coordinator') {
+      // D-3570 `r2-measures-on-demand`: the reclaim door's own re-measurement, only when r2 falls due.
+      const measured = await measureClaimant(
+        { coord: store, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux }, v.coordinatorId, now);
+      input = { ...input, coordinator: measured.state };
+      v = stallVerdict(input, now);
+    }
+    if (v.act !== 'notify') return;
+    this.applyStall(store, input, v, now);
+  }
+
+  /** The worker's facts. They come from this tick's fleet row, except the raw live word and the unaged
+   *  hookstate ask, which this lane reads itself (see `sweepStalls`). A failed auto-continue read has no slot
+   *  of its own: it is a failed store read, hold 1, so it raises `unmeasured`. */
+  private async stallWorkerFor(store: CoordStore, s: FleetSession | undefined): Promise<StallWorker> {
+    if (s === undefined) return { present: false };
+    const live = await this.stallLiveWord(s);
+    const hookAsk = await this.stallHookAsk(s.id);
+    const ask = store.currentAskFor(s.id);
+    const askRow: AskRowFact = !ask.ok ? { kind: 'unmeasured' }
+      : ask.ask === null ? { kind: 'none' } : { kind: 'row', state: ask.ask.state, at: ask.ask.at };
+    const held = store.autoContinueHeldUntil(s.id);
+    return {
+      present: true,
+      unmeasured: s.unmeasured.length > 0 || s.statusUnmeasured || !held.ok,
+      lifecycle: s.lifecycle,
+      limits: s.limits,
+      dialogPending: s.dialogPending,
+      stranded: s.stranded !== null,
+      swapBlocked: s.swapBlocked !== null,
+      live,
+      hookAsk,
+      askRow,
+      // `backOff` stores no time of its own, so the START of the hold is `nextAttemptAt − MAIL_ARMED_HOLD_MS`.
+      // It is computed here because that constant is private to this file (spec §4.2, hold 3).
+      autoContinueHeldAt: held.ok && held.until !== null ? held.until - MAIL_ARMED_HOLD_MS : null,
+    };
+  }
+
+  /** The raw live word. A null pid (which folds a gone pane and a tmux that did not answer), an unrostered
+   *  wrapper, and the read's `no-state` and `unmeasured` are each a named hold (hold 1). */
+  private async stallLiveWord(s: FleetSession): Promise<LiveWordRead> {
+    const pid = await this.deps.tmux.panePid(s.id);
+    if (!pid) return { ok: false, reason: 'no-pane' };
+    const cfgDir = configDirFor(this.deps.cfg, s.wrapper);
+    if (!cfgDir) return { ok: false, reason: 'no-config-dir' };
+    const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+    return read.ok
+      ? { ok: true, word: read.state.status, since: read.state.statusUpdatedAt }
+      : { ok: false, reason: read.reason };
+  }
+
+  /** The hookstate ask, identity-gated but unaged. `FleetSession` carries no uuid, so the registry's `.uuid`
+   *  is read measured:
+   *  - absent → no uuid, which the reader answers `no-state`;
+   *  - unreadable → `unmeasured`, never folded into "no ask".
+   *  Only a QUESTION (`{questions}`) is an ask. A PermissionRequest `{approval}` envelope is a dialog with no
+   *  question behind it: hold 2b, spec §4.2 (a background subagent's permission prompt raises `waiting` too),
+   *  capped by the dialog-cap. `askkey.ts` and `watch.ts`'s ask lane split the two the same way. */
+  private async stallHookAsk(id: string): Promise<HookAskFact> {
+    const uuid = await fieldMeasured(this.deps.io, this.deps.cfg.registryDir, id, 'uuid');
+    if (!uuid.ok && uuid.reason !== 'absent') return { kind: 'unmeasured' };
+    const hs = await readHookStateUnaged(this.deps.io, this.deps.cfg.registryDir, id, uuid.ok ? uuid.content : null);
+    if (!hs.ok) return hs.reason === 'unmeasured' ? { kind: 'unmeasured' } : { kind: 'none' };
+    return hs.state.ask !== null && 'questions' in hs.state.ask ? { kind: 'ask', at: hs.state.updatedAt } : { kind: 'none' };
+  }
+
+  /** Applies a notify, and decides nothing. `stallDelivery` picks shadow or send from the markers.
+   *  - Shadow: record a `stall-shadow:` row and warn once.
+   *  - Send to the worker or the coordinator: one `queueStallNotice` transaction (the row, then the mail).
+   *  - Send to the operator: record the row first, then push, and only when the row is new.
+   *  A refused write (`duplicate`, or `run-gone`: absent or no longer active, D-3584) sends and warns nothing. */
+  private applyStall(store: CoordStore, input: StallInput, n: StallNotify, now: number): void {
+    const primary = input.subject.primary;
+    const worker = primary.sessionId;
+    if (stallDelivery(n.to, input.arming) === 'shadow') {
+      const obs = store.recordStallObservation(primary.id, stallDetail('shadow', n.arm, n.rung, n.key), now);
+      if (obs.recorded) console.warn(`ccrc-server: stall-watch shadow ${n.arm} r${n.rung} run ${primary.id} ${worker}`);
+      return;
+    }
+    const detail = stallDetail('live', n.arm, n.rung, n.key);
+    const facts = stallFacts(input);
+    if (n.to === 'worker') {
+      const text = stallCheckMail(input, facts, now);
+      queueStallNotice(store, primary, { detail, at: now, toId: worker, kind: 'status', subject: text.subject, body: text.body });
+      return;
+    }
+    if (n.to === 'coordinator') {
+      // r2's body cites r1: its earliest LIVE row when one exists, else its earliest row. Arming mid-episode
+      // leaves a shadow r1 before the live one, and citing the shadow row would tell the coordinator that no
+      // check was sent when one was (D-3572 `shadow-rung-accounting`). Its mail is `stallLastCheck`'s, the one
+      // `stallReportMail` cites, which is null when r1 only ever ran in shadow. A check with no delivery row
+      // hands null too, never a row of nulls: the body tells "no delivery row" from "not delivered".
+      const r1Rows = input.notices
+        .filter((x) => x.arm === 'quiet' && x.rung === 1 && x.key === n.key)
+        .sort((a, b) => a.at - b.at);
+      const r1 = r1Rows.find((x) => x.mode === 'live') ?? r1Rows[0];
+      if (r1 === undefined) {
+        console.warn(`ccrc-server: stall-watch run ${primary.id} r2 fell due with no r1 row — not sent`);
+        return;
+      }
+      const r1Mail = stallLastCheck(input);
+      const r1Times = r1Mail === null ? null : store.deliveryTimesFor(r1Mail.id);
+      const r1Delivery = r1Mail === null || r1Times === null ? null : { queuedAt: r1Mail.at, ...r1Times };
+      const text = stallReportMail(input, facts, r1, r1Delivery, now);
+      queueStallNotice(store, primary, { detail, at: now, toId: n.coordinatorId, kind: 'status', subject: text.subject, body: text.body });
+      return;
+    }
+    const obs = store.recordStallObservation(primary.id, detail, now);
+    if (!obs.recorded) return;
+    const text = stallPushText(input, facts, n, now);
+    this.pushOne({
+      kind: 'run', sessionId: worker, project: primary.project, title: text.title, body: text.body,
+      runId: primary.id, tag: `stall-${primary.id}-${n.arm}-${n.rung}-${n.key}`, recordAlways: true,
+    }, this.activeProjects);
+  }
+
+  /**
    * D13: the allocator SELF-SEEDS. Hourly, per registry-named project (the
    * same bound `sweepDivergences` states: the fleet's active projects, never
    * every checkout on the box): floor = max(D-<n>) + LEDGER_SEED_GAP, and
@@ -3072,8 +3326,13 @@ export class FleetWatcher {
    *      `hookstate.ts:149-154`) is NON-BLOCKING here: idle authority moved
    *      wholly to conjunct 5 below, so a resumed long-idle worker, or one
    *      whose `/clear` emitted no registered hook, is still deliverable;
-   *   5. the live status file says AFFIRMATIVELY idle and `statusUpdatedAt` is
-   *      at least `MAIL_QUIET_MS` old — the SOLE idle authority. Affirmatively,
+   *   5. `mailTurnIdle` (`turnidle.ts`) reads the RAW live word as a finished
+   *      turn — `idle`, or `shell` (an idle main loop over a background shell)
+   *      unless `$REG/mail-gate-strict` is listed — and `statusUpdatedAt` is at
+   *      least `MAIL_QUIET_MS` old (`COORD_QUIET_MS` for a coordinator): the
+   *      SOLE turn-idle authority. A `shell` delivery also asks `sendPrompt`
+   *      to refuse a pane showing `esc to interrupt` (`turn-running`), a
+   *      tripwire only. It never asks `liveStatus`,
    *      because `liveStatus` answers `'idle'` for a missing pid, a missing
    *      config dir and an unreadable file (`fleet.ts:118-131`) —
    *      the deleted `archiveSafety`'s rule ("MUST NOT collapse `unknown` to
@@ -3166,6 +3425,11 @@ export class FleetWatcher {
     // Fail-shut: a registry we cannot list is a kill-switch we cannot read.
     const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
     if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) return;
+    // The gate's mode comes from this SAME listing (worker stall watch §4.1,
+    // `turnidle.ts`). An unlistable registry has already returned above, so a
+    // mode is never read from a listing that failed: the strict marker fails
+    // shut at no extra cost.
+    const mode = mailTurnModeOf(listing);
 
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
@@ -3561,7 +3825,11 @@ export class FleetWatcher {
         const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
         if (!cfgDir) { gated(d, 'no-config-dir'); continue; }
         const live = await readLiveState(this.deps.io, cfgDir, pid);
-        if (!live || liveSessionStatus(live.status) !== 'idle') { gated(d, 'not-idle'); continue; }
+        // ONE decision for both gates (worker stall watch §4.1, `turnidle.ts`).
+        // `idle` delivers as before. So does `shell`, an idle main loop over
+        // background shell work, unless `$REG/mail-gate-strict` is listed. A
+        // null read is `not-idle`, as `!live` was.
+        const turn = mailTurnIdle(live, now, isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS, mode);
         // THE GATE TOKEN DOES NOT FORK, deliberately (D-1167). `MailGate`'s own
         // docstring sets the rule — one member per CONDITION, not per `continue`
         // — and `no-pane`/`no-config-dir` were split because an operator acts on
@@ -3572,8 +3840,12 @@ export class FleetWatcher {
         // `coord-not-quiet` member would cost a union entry, a total-map entry in
         // `shared/api.ts` and a phrase in `MailStrip.tsx` to record a distinction
         // nobody acts on.
-        if (live.statusUpdatedAt === null ||
-            now - live.statusUpdatedAt < (isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS)) { gated(d, 'not-quiet'); continue; }
+        //
+        // Both tokens are spelled as LITERALS in a ternary on purpose. The D-792
+        // structure scan (`mail-sweep.test.ts`) counts a gate only where its name
+        // is written at the call, so `gated(d, turn.gate)` would leave both with
+        // no call site it can see.
+        if (!turn.deliver) { const notIdle = turn.gate === 'not-idle'; gated(d, notIdle ? 'not-idle' : 'not-quiet'); continue; }
 
         // `seen` is added only HERE, once every gate above has passed and the
         // send is actually about to be attempted — it means "one message per
@@ -3625,8 +3897,15 @@ export class FleetWatcher {
         // With no run event to read, nothing is passed and `sendPrompt`
         // refuses `draft-present` exactly as it does today.
         const ownStrandedClear = store.strandedClear(d.toId);
+        // `refuseIfTurnRunning` only when the live word that delivered is not
+        // `idle` (worker stall watch §4.1). It is a tripwire for a build where
+        // `shell` stopped meaning idle: the last 8 captured rows showing
+        // `esc to interrupt`. It is best-effort: blind below `READER_MIN_COLS`,
+        // where the line wraps, and on a `--remote-control` pane, which never
+        // renders it.
         const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, renderMailNudge(d.toId),
-          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true });
+          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
+            refuseIfTurnRunning: turn.via !== 'idle' });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           store.markDelivered(d.id, now);
@@ -3666,12 +3945,15 @@ export class FleetWatcher {
          * plus `NOTIFY_KINDS`, and every older client renders `undefined`.
          *
          * AND A DURABLE FEED ROW, NOT A `run_events` ROW (operator-accepted
-         * deviation from §4.5). `advanceInner` is the only writer of
-         * `run_events` and its own docstring says so; every insert there is
-         * paired with a transition validated against `RUN_TRANSITIONS`, which
-         * has no self-transition for any state. A park is not a run
-         * transition, so writing one would either invent a second writer or
-         * lie about the run's state. `pushOne` mirrors into
+         * deviation from §4.5). `advanceInner` is the only TRANSITION writer
+         * of `run_events`: every insert there is paired with a transition
+         * validated against `RUN_TRANSITIONS`, which has no self-transition
+         * for any state. The other writers (`recordRunEvent`, the stall
+         * watch's `insertStallObservation`) write `fromState === toState`
+         * observation rows, which `pushNewRuns` skips, so they push nothing.
+         * A park is not a run transition, so a transition row would lie about
+         * the run's state and an observation row would never reach the
+         * sender. `pushOne` mirrors into
          * `CoordStore.recordFeedEvent` — the durable archive behind the feed —
          * at exactly this point, which is the durability that was wanted.
          */
@@ -3720,6 +4002,17 @@ export class FleetWatcher {
               `mail-blocked-${d.id}`);
           }
           store.backOff(d.id, res.error, now + MAIL_ARMED_HOLD_MS, false);
+          continue;
+        }
+
+        if (res.error === 'turn-running') {
+          // Worker stall watch §4.1. The pane guard saw `esc to interrupt` and
+          // refused before any keystroke. This arm sits before the attempts
+          // ceiling, as the hold above does, because a running turn is not a
+          // failed send. There is NO `tellSender`: a running turn is not a
+          // blocked recipient, and the first sweep after the hold reads the
+          // live word again.
+          store.backOff(d.id, res.error, now + MAIL_TURN_HOLD_MS, false);
           continue;
         }
 
