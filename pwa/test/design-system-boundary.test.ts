@@ -28,8 +28,34 @@ import path from 'node:path';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 
-/** Class names whose only legitimate source is @ccrc/ui's cva. */
-const OWNED = ['btn-primary', 'btn-ghost'];
+/** Class names whose only legitimate source is a cva in @ccrc/ui.
+ *
+ *  Every entry is emitted by the primitive named beside it and by nothing else,
+ *  so a call site that writes one by hand has forked the design system without
+ *  saying so. The list is the WHOLE owned vocabulary, not just the button's:
+ *  buttons were what drifted, but nothing made the other five safer.
+ *
+ *  What is deliberately NOT here, and why the distinction matters:
+ *    - `skel--user`, `proj-skel`, `limit-row` on an app layout: MODIFIERS a
+ *      call site passes through `className`. `<Skeleton className="proj-skel">`
+ *      is the sanctioned shape, and the matcher is word-bounded so `skel--user`
+ *      never reads as `skel`.
+ *    - `qc-consequence` / `qc-actions`: hook classes the SHEETS carry, not the
+ *      primitive — `QuickConfirm` is one way to build a confirm, and the three
+ *      sheets that roll their own still want the same hooks for tests and for
+ *      scoped rules.
+ *    - `pr-dot`, `tool-dot--run`, `chat-skel`: chat.css's own vocabulary, which
+ *      only looks like the primitive's. Word-bounded matching keeps them out. */
+const OWNED = [
+  'btn-primary', 'btn-ghost',                                    // Button / buttonVariants
+  'dot', 'dot--busy', 'dot--attention', 'dot--idle',             // StatusDot / dotVariants
+  'dot--done', 'dot--cleanup', 'dot--dead',
+  'limits', 'limit-track', 'limit-fill',                         // LimitBar / fillVariants / LIMIT_TRACK
+  'limit-fill--ok', 'limit-fill--warn', 'limit-fill--crit',
+  'skel',                                                        // Skeleton
+  'sheet-panel', 'sheet-panel--full', 'sheet-scrim', 'sheet-grabber', // Sheet
+  'toast', 'toast--error', 'toast-action',                       // ToastHost / toast()
+];
 
 /** Every `className="..."` / `className={'...'}` string literal in a file. */
 export function ownedClassLiterals(source: string): string[] {
@@ -80,6 +106,25 @@ describe('the design-system boundary', () => {
   it('does not fire on a substring or an unrelated class', () => {
     expect(ownedClassLiterals('<div className="btn-primary-ish" />')).toEqual([]);
     expect(ownedClassLiterals('<div className="settings-move" />')).toEqual([]);
+  });
+
+  it('fires on every owned vocabulary, not just the button that drifted', () => {
+    expect(ownedClassLiterals('<span className="dot dot--busy" />'))
+      .toEqual(['dot', 'dot--busy']);
+    expect(ownedClassLiterals('<span className="limit-fill limit-fill--crit" />'))
+      .toEqual(['limit-fill', 'limit-fill--crit']);
+    expect(ownedClassLiterals('<div className="sheet-panel" />')).toEqual(['sheet-panel']);
+  });
+
+  it('leaves the sanctioned shapes alone', () => {
+    // a modifier passed to the primitive, the sheets' own hook classes, and
+    // chat.css's look-alike vocabulary
+    expect(ownedClassLiterals('<Skeleton className="proj-skel" />')).toEqual([]);
+    expect(ownedClassLiterals('<Skeleton lines={1} className="skel--user" />')).toEqual([]);
+    expect(ownedClassLiterals('<div className="qc-actions grid gap-2" />')).toEqual([]);
+    expect(ownedClassLiterals('<span className="pr-dot" />')).toEqual([]);
+    expect(ownedClassLiterals('<span className="tool-dot--run" />')).toEqual([]);
+    expect(ownedClassLiterals('<div className="chat-skel" />')).toEqual([]);
   });
 
   it('does not fire on the variant call, which is the sanctioned route', () => {

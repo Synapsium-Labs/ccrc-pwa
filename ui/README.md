@@ -77,8 +77,20 @@ nothing else. A call site never writes them by hand:
 | a bar in a layout that is not `LimitBar`'s own row | `fillVariants`, `LIMIT_TRACK` |
 | a status glyph | `StatusDot` |
 
-`pwa/test/design-system-boundary.test.ts` enforces the button half of that
-table and reds on any `.tsx` that hand-writes those two class names.
+`pwa/test/design-system-boundary.test.ts` enforces the WHOLE table — every
+class in the list above, not just the button's — and reds on any `.tsx` that
+hand-writes one, naming the file and the classes.
+
+It is word-bounded on purpose, because three shapes must stay legal:
+
+- **a modifier passed to the primitive** — `<Skeleton className="proj-skel">`,
+  `<Skeleton className="skel--user">`. That is how a call site adapts a
+  primitive to its layout, and it never forks the styling.
+- **the sheets' own hook classes** — `qc-consequence`, `qc-actions`. Those
+  belong to the three sheets that roll their own confirm rather than to
+  `QuickConfirm`, and tests and scoped rules select on them.
+- **chat.css's look-alikes** — `pr-dot`, `tool-dot--run`, `chat-skel` are a
+  different vocabulary that merely resembles this one.
 
 **Why a guard and not a convention.** The convention failed once, silently and
 expensively. Wave 2 retired `pwa/src/styles/legacy.css`, the last copy of the
