@@ -58,7 +58,13 @@ export const SENTENCES: Record<string, string> = {
   // narrows `nested-checkouts-present` above to STRAY checkouts only — a
   // checkout `ccd` itself registered as a worktree of this project gets one of
   // these four instead.
-  'child-dirty': 'A checkout nested under this workspace has uncommitted work of its own.',
+  // `child-dirty` has three causes: changed tracked files, untracked files, and
+  // files the child ignores (its own worktree config can ignore anything). So
+  // the sentence names all three and a read that shows all three. A plain `git
+  // status` never lists an ignored file, and it hides untracked AND ignored
+  // files under the child's own `status.showUntrackedFiles=no`; `--ignored
+  // --untracked-files=all` shows both, whatever that config says (git 2.43).
+  'child-dirty': 'A checkout nested under this workspace has work in no commit — changed tracked files, untracked files or ignored files — and removing it would lose that work. `git -C <child path> status --ignored --untracked-files=all` lists all three; commit, move or delete them in that checkout, then reap again.',
   'child-busy': 'A checkout nested under this workspace is mid-operation — finish or abort it there first.',
   // Whole-branch review, finding I3: the old sentence ("carries commits that
   // exist nowhere else") is false for the case this rung exists to catch —

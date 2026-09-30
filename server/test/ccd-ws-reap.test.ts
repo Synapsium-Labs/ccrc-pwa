@@ -3074,8 +3074,10 @@ describe('ignored files are dirt in a nested child — a child’s own excludesF
   /** A `git` on PATH, inside the fixture HOME, that fails ONLY an `ls-files`
    *  call carrying `--ignored` and records the call; every other call execs
    *  the real git. `rc`: exit 1, nothing on stdout or stderr. `stderr`: exit 0,
-   *  one diagnostic, nothing on stdout. Prepended in the snippet, after the
-   *  harness's own bin, so its poisoned `gh` still answers. */
+   *  one diagnostic, nothing on stdout. The snippet puts this directory FIRST
+   *  on PATH, ahead of the harness's own bin; that bin's poisoned `gh` (and
+   *  its systemd and tmux stubs) still answer because this directory holds
+   *  only `git`. */
   const shim = (mode: 'rc' | 'stderr'): string => {
     const real = h.sh('command -v git');
     expect(real, 'the CONTROL: the real git resolved').toMatch(/\/git$/);

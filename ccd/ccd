@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=fd880139022c6a33490439b147b793ab4c28a4df649abf00d35e42756d42c8ce
+# ccrc:generated 1 sha256=da8bded6bd7da92617b24a486e669449739e3ed6ab628fef1f5828f122ddfb66
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -27325,13 +27325,14 @@ _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` br
 # counted when `"$1/D"` is EXACTLY one path of the caller's own registered set:
 # `$children` fresh, `$rcchildren` on resume, both `_ws_children` lines
 # (`path<TAB>branch<TAB>head`, resolved). A registered grandchild carries a
-# `.git` file, so git prints it as that one entry of the child holding it, and
-# without the skip every nested reap would refuse. The skip is sound because the
-# same loop reads that grandchild ITSELF. Fresh, that means its ownership pair,
-# its status and this read, all before anything is removed. On resume it is
-# re-read as a consented live child. And the teardown removes it innermost-first,
-# before its holder. Everything else counts: a file (even at a registered path),
-# an unregistered nested repository, and a spelling that is not a whole
+# `.git` file, so git prints it as that one entry of its holder, and without the
+# skip every nested reap would refuse. Sound because the same loop reads that
+# grandchild ITSELF: fresh, its ownership pair, status and this read, before
+# anything is removed; on resume, its status and this read but NO ownership
+# pair, so a foreign repository at its path is stopped by `_ws_reap_tail`'s
+# ownership re-proof before each `worktree remove`, run innermost-first, before
+# the holder is reached. Everything else counts: a file (even at a registered
+# path), an unregistered nested repository, and a spelling that is not a whole
 # registered path (a prefix is not a match).
 _ws_child_ignored_count() {   # childdir set -> ignored entries in childdir, set's registered worktrees skipped; rc 1 = unread
   local out err rc e n=0
