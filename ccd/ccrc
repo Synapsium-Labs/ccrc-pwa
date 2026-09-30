@@ -2583,6 +2583,47 @@ _box_env_value() {
   [ "$found" -eq 1 ]
 }
 
+# Out-params, at file scope — `_box_unit_env`'s own comment argues why
+# presence must be told from empty, the same reason `_box_env_value`'s own
+# header gives for its return code.
+BUE_VAL=""     # _box_unit_env: the value ccrc.service receives for the key ("" when neither file names it)
+BUE_SRC=""     # the file whose line decided ("" when neither readable file names the key)
+BUE_NAMED=0    # 1 iff either READABLE file named the key at all (presence, not a non-empty value)
+BUE_ENV=""     # ccrc.env's state: ok | unreadable | absent
+BUE_EXP=""     # the exposure file's state: absent | readable | unreadable
+
+# ── _box_unit_env — ONE KEY AS ccrc.service RECEIVES IT (wave 8 item D) ────
+# The unit carries two EnvironmentFile lines, ccrc.env then $CCRC_EXPOSURE_FILE, and the later wins by PRESENCE: a
+# bare `KEY=` in the exposure file overrides ccrc.env's value, exactly as systemd's second EnvironmentFile does
+# (`_box_env_value`'s rc tells that apart). THE one copy of that precedence: `_check_auth`, `_check_update-exposure`
+# and install's gate line read through it. It never reads this shell's environment. It narrows nothing: an
+# exposure file that is THERE AND UNREADABLE answers rc 2 (UNMEASURED — its value would have won), never absent;
+# BUE_VAL/BUE_SRC then carry what ccrc.env alone says, for a caller that must word that. rc 0 measured.
+_box_unit_env() {   # <KEY>
+  local key="$1" v rc
+  BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0; BUE_ENV=absent; BUE_EXP=absent
+  if [ -e "$BOX_ENV_FILE" ]; then
+    if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+      BUE_ENV=ok
+      v="$(_box_env_value "$BOX_ENV_FILE" "$key")"; rc=$?
+      if [ "$rc" -eq 0 ]; then BUE_VAL="$v"; BUE_SRC="$BOX_ENV_FILE"; BUE_NAMED=1; fi
+    else
+      BUE_ENV=unreadable
+    fi
+  fi
+  if [ -n "${CCRC_EXPOSURE_FILE:-}" ] && [ -e "$CCRC_EXPOSURE_FILE" ]; then
+    if [ -f "$CCRC_EXPOSURE_FILE" ] && [ -r "$CCRC_EXPOSURE_FILE" ]; then
+      BUE_EXP=readable
+      v="$(_box_env_value "$CCRC_EXPOSURE_FILE" "$key")"; rc=$?
+      if [ "$rc" -eq 0 ]; then BUE_VAL="$v"; BUE_SRC="$CCRC_EXPOSURE_FILE"; BUE_NAMED=1; fi
+    else
+      BUE_EXP=unreadable
+      return 2
+    fi
+  fi
+  return 0
+}
+
 # ── _box_auth_path — WHICH FILE IS THIS BOX'S PASSPHRASE SECRET (D-143) ───
 # `server/src/config.ts:339` is `env.CCRC_AUTH_SECRET_PATH || <default>`, so a
 # box CAN redirect the gate's secret, and the two things in this tree that
@@ -9947,8 +9988,8 @@ cmd_install() {
   # PROMPTED for cannot be read at all — `install.sh` is documented as
   # `curl … | bash`, where stdin is the script itself, so a `read` here would
   # consume the installer's own text (`cmd_passwd`'s tty refusal is the same
-  # hazard from the other side). So the box lands with the gate DARK, which is
-  # the shipped default (`CCRC_AUTH` off), and doctor's `auth` check WARNs
+  # hazard from the other side). So a fresh box lands with the gate DARK, which
+  # is the shipped default (`CCRC_AUTH` off), and doctor's `auth` check WARNs
   # about exactly that four lines below this one.
   #
   # THE THREE VARIABLES ARE NAMED TOGETHER because setting `CCRC_AUTH` alone
@@ -9957,7 +9998,39 @@ cmd_install() {
   # about a wrong one at boot (behind `tailscale serve` it never learns the
   # hostname it is reached under). An operator who arms the flag from this line
   # alone would find that out one tap at a time.
-  echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, then: $(_svc_restart_hint ccrc.service)"
+  #
+  # THIS LINE NOW FOLLOWS THE FILE (wave 8 item G, D-3598), where a fresh
+  # install cannot: a re-run of `ccrc install` over an already-passworded,
+  # already-exposed box lands here too, and a bare "no passphrase" line would
+  # be a lie on that box. So the passphrase file is resolved through
+  # `_box_auth_path` (a relative override is undecidable, exactly as doctor's
+  # `auth` check refuses it) and the flag through `_box_unit_env` — the SAME
+  # precedence ccrc.service itself gets, ccrc.env then the exposure file,
+  # later wins by presence. The fresh-box line (no file, flag off) is
+  # byte-identical to what this line always said.
+  local gsec grc urc=0
+  gsec="$(_box_auth_path)"; grc=$?
+  if [ "$grc" -eq 3 ]; then
+    echo "install: gate: CCRC_AUTH_SECRET_PATH in $BOX_ENV_FILE is RELATIVE ($gsec), so install cannot say whether this box has a PWA passphrase — make it absolute (or remove the line); ccrc doctor's auth check says the rest"
+  elif [ -e "$gsec" ]; then
+    _box_unit_env CCRC_AUTH || urc=$?
+    if [ "$urc" -ne 0 ]; then
+      echo "install: gate: a PWA passphrase file is at $gsec, and $CCRC_EXPOSURE_FILE is there and cannot be read, so whether CCRC_AUTH is on was not measured — ccrc doctor's auth check says what to do"
+    elif [ "$BUE_VAL" = on ]; then
+      echo "install: gate: CCRC_AUTH=on in $BUE_SRC, and a PWA passphrase file is at $gsec (arming also needs CCRC_RP_ID and CCRC_ORIGIN beside the flag; ccrc doctor's auth check measures whether the file is usable)"
+    else
+      local gate_how="set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE (or run ccrc expose)"
+      [ "$BUE_SRC" != "$CCRC_EXPOSURE_FILE" ] || gate_how="set CCRC_AUTH=on in $CCRC_EXPOSURE_FILE, which overrides $BOX_ENV_FILE (ccrc expose writes it with CCRC_RP_ID and CCRC_ORIGIN)"
+      echo "install: gate: a PWA passphrase file is at $gsec, but the gate is OFF. To arm it: $gate_how, then: $(_svc_restart_hint ccrc.service)"
+    fi
+  else
+    _box_unit_env CCRC_AUTH || urc=$?
+    if [ "$urc" -eq 0 ] && [ "$BUE_VAL" = on ]; then
+      echo "install: gate: CCRC_AUTH=on in $BUE_SRC and this box has NO PWA passphrase — the gate is failing SHUT: every route answers 401 until: ccrc passwd"
+    else
+      echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, then: $(_svc_restart_hint ccrc.service)"
+    fi
+  fi
   _inst_doctor_tail
 }
 
@@ -17542,7 +17615,14 @@ _upd_sweep() {
       _ccrc_job_stayed_up "$u" \
         || _ccrc_die "$u was restarted and did not stay up ($CCRC_STAYED_DETAIL) — read: $(_svc_status_hint "$u"). The pre-update backup is complete at $UPD_BACKUP_DIR"
     done
-    echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (AbandonProcessGroup verified in every job file; ${#kicked[@]} restarted and re-measured still up)"
+    # Wave 8 item G: a claim of "every … now runs the ccd this update
+    # installed" is false on a box with nothing loaded — there was nothing to
+    # verify. `kicked` is the set `_svc_try_restart` actually touched.
+    if [ "${#kicked[@]}" -eq 0 ]; then
+      echo "update: sweep: no loaded claude-session@ supervisor on this box, so nothing was restarted (AbandonProcessGroup is checked per job file when there is one)"
+    else
+      echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (AbandonProcessGroup verified in every job file; ${#kicked[@]} restarted and re-measured still up)"
+    fi
     return 0
   fi
   # The bus contingency `_inst_enable` carries, for the same reason: without
@@ -17550,8 +17630,17 @@ _upd_sweep() {
   # for a reason that has nothing to do with this box.
   : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
   : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
-  local u km
-  for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk '{print $1}') \
+  local u km listing lu _ll la _lr
+  local -a before=() after=() failed=()
+  listing="$(systemctl --user list-units "claude-session@*" --plain --no-legend)" || :
+  # Wave 8 item G: the supervisors the restart below can touch are the ones
+  # ACTIVE before it runs — read from THIS listing's ACTIVE column (`--plain
+  # --no-legend`: UNIT LOAD ACTIVE SUB DESCRIPTION), so no systemctl call is
+  # added — the argv-order pin (`ccrc-update.test.ts:2470-2502`) stays green.
+  while read -r lu _ll la _lr; do
+    [ "$la" = active ] && before+=("$lu")
+  done <<< "$listing"
+  for u in $(printf '%s\n' "$listing" | awk '{print $1}') \
            claude-session@ccrc-update-preflight.service; do
     km="$(systemctl --user show -p KillMode "$u" 2>/dev/null)" || km=""
     if [ "$km" != "KillMode=process" ]; then
@@ -17567,6 +17656,7 @@ _upd_sweep() {
   # update's doing, must not fail it, must not be silent either.
   for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk '{print $1}'); do
     echo "update: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2
+    failed+=("$u")
   done
   # Each restarted supervisor is held to the same standard as the services the
   # staged install just verified — verify-service.sh out of the NEW tree,
@@ -17579,7 +17669,23 @@ _upd_sweep() {
       bash "$verify" "$u" \
         || _ccrc_die "$u was restarted and did not stay up — read: systemctl --user status $u. The pre-update backup is complete at $UPD_BACKUP_DIR"
     fi
+    after+=("$u")
   done
+  # Wave 8 item G: a claim that "every … now runs the ccd this update
+  # installed" is false for a unit that WAS active before try-restart and is
+  # neither active nor failed after it — this sweep did not verify it, and
+  # the operator needs to know which one. Keyed on the PRE-restart set,
+  # `before`, never `after` (a unit this box never had cannot be a miss).
+  local b a seen
+  for b in ${before[@]+"${before[@]}"}; do
+    seen=0
+    for a in ${after[@]+"${after[@]}"} ${failed[@]+"${failed[@]}"}; do [ "$a" = "$b" ] && { seen=1; break; }; done
+    [ "$seen" -eq 1 ] || echo "update: warning: $b was active before try-restart and is not active after it — this sweep did not verify it. On the box: systemctl --user status $b" >&2
+  done
+  if [ "${#before[@]}" -eq 0 ]; then
+    echo "update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart (KillMode=process verified before the restart; panes untouched)"
+    return 0
+  fi
   echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (KillMode=process verified per unit before any restart; panes untouched)"
 }
 

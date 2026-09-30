@@ -1241,13 +1241,18 @@ _check_config() {
 #   file present, no build -> WARN. Nothing measured it; that is neither a
 #                             PASS nor a known fault.
 #
-# ── THE FLAG IS READ FROM ccrc.env, NEVER FROM THIS SHELL ─────────────────
-# The server gets its environment from `ccrc.service`'s `EnvironmentFile=`,
-# i.e. from `~/.ccrc/ccrc.env` — so that file is what decides whether the gate
-# is armed, and an exported `CCRC_AUTH` in the operator's own shell decides
-# nothing at all. Reading `${CCRC_AUTH:-}` here would report a box that does
-# not exist. Same reader and same path as `_check_config` (D-85): `ccrc`'s
-# `_box_env_value` and `BOX_ENV_FILE`, never a private copy.
+# ── THE FLAG IS READ AS ccrc.service GETS IT, NEVER FROM THIS SHELL ───────
+# The unit carries TWO `EnvironmentFile=` lines — `~/.ccrc/ccrc.env`, then
+# $CCRC_EXPOSURE_FILE — and the LATER one wins by PRESENCE, even when its
+# value is empty (wave 8 item D, D-3596): `ccrc expose` writes CCRC_AUTH=on
+# into the exposure file and never into ccrc.env, so a check that read
+# ccrc.env alone called every correctly exposed box unarmed. An exported
+# `CCRC_AUTH` in the operator's own shell decides nothing at all, either way.
+# Same reader `_check_update-exposure` and install's gate line now share:
+# `ccrc`'s `_box_unit_env`, never a private copy. An exposure file that is
+# THERE AND UNREADABLE cannot say which value would have won — its verdict is
+# UNMEASURED, not a guess at either answer (D-3596; `_box_unit_env`'s own
+# header argues the same rc).
 #
 # ── THE FILE IS MEASURED BY THE SERVER'S OWN PARSER, THROUGH NODE ─────────
 # `_check_wrappers` already reads a JSON file with `node -e` rather than
@@ -1272,12 +1277,13 @@ _check_auth() {
   # reason, that `_check_config` opens with. A table sourced by something that
   # is not `ccrc` has neither, and must say so rather than measure a default it
   # invented.
-  if [ -z "${BOX_AUTH_FILE:-}" ] || [ -z "${BOX_ENV_FILE:-}" ] \
+  if [ -z "${BOX_AUTH_FILE:-}" ] || [ -z "${BOX_ENV_FILE:-}" ] || [ -z "${CCRC_EXPOSURE_FILE:-}" ] \
      || ! declare -F _box_env_value >/dev/null 2>&1 \
+     || ! declare -F _box_unit_env >/dev/null 2>&1 \
      || ! declare -F _box_auth_path >/dev/null 2>&1 \
      || ! declare -F _box_sessions_path >/dev/null 2>&1; then
     _dr_fail auth "ccrc's own config reader is not loaded, so neither this box's CCRC_AUTH flag nor its passphrase file was measured" \
-      "this is a bug in ccrc, not a fact about your box — _check_auth reads BOX_ENV_FILE through _box_env_value and resolves the secret's and the session store's paths through _box_auth_path and _box_sessions_path, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+      "this is a bug in ccrc, not a fact about your box — _check_auth reads CCRC_AUTH through _box_unit_env (BOX_ENV_FILE and CCRC_EXPOSURE_FILE) and resolves the secret's and the session store's paths through _box_auth_path and _box_sessions_path, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
     return 1
   fi
 
@@ -1301,10 +1307,12 @@ _check_auth() {
   # and has three arms for it — but the flag's PROVENANCE is named in every
   # verdict below, so a reader can tell "the file says off" from "there is no
   # file" without this check having to duplicate that check's arms.
-  local flag="" where="$BOX_ENV_FILE"
-  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
-    flag="$(_box_env_value "$BOX_ENV_FILE" CCRC_AUTH)"
-  else
+  local flag="" where="$BOX_ENV_FILE" unmeasured=0 expnamed=0
+  _box_unit_env CCRC_AUTH || unmeasured=1
+  flag="$BUE_VAL"
+  if [ "$BUE_SRC" = "$CCRC_EXPOSURE_FILE" ]; then
+    where="$CCRC_EXPOSURE_FILE (it overrides $BOX_ENV_FILE)"; expnamed=1
+  elif [ "$BUE_ENV" != ok ]; then
     where="no readable $BOX_ENV_FILE"
   fi
 
@@ -1370,6 +1378,14 @@ _check_auth() {
           "this is a bug in ccrc, not a fact about your box — see _check_auth in $CCRC_HERE/ccrc-doctor-checks and --check in $helper"
         return 1
       fi
+      # Wave 8 item D, D-3596: a passphrase this box CAN use, but whether the
+      # gate is armed was not measured — the exposure file is there, unreadable,
+      # and its CCRC_AUTH would win. Neither PASS arm below is honest here.
+      if [ "$unmeasured" -eq 1 ]; then
+        _dr_warn auth "$secret$via holds a usable passphrase ($detail), but $CCRC_EXPOSURE_FILE is there and cannot be read, and its CCRC_AUTH would win over $BOX_ENV_FILE's — whether logins are gated was not measured" \
+          "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) — on macOS an unreadable one also stops the server job — then re-run: ccrc expose duckdns (or: ccrc expose byo); it rewrites the file 0600"
+        return 2
+      fi
       if [ "$armed" -eq 1 ]; then
         _dr_pass auth "$gate, and $secret$via holds a usable passphrase ($detail) — logins are gated"
         return 0
@@ -1381,6 +1397,14 @@ _check_auth() {
       _dr_pass auth "$secret$via holds a usable passphrase ($detail), but $gate, so no request is gated yet"
       return 0 ;;
     3)
+      # Wave 8 item D, D-3596: same reasoning as rc 0's — with no passphrase
+      # file EITHER, whether the gate is armed (and failing shut) is the one
+      # fact this box needs and the one this check cannot give it.
+      if [ "$unmeasured" -eq 1 ]; then
+        _dr_warn auth "there is no passphrase file at $secret$via, and $CCRC_EXPOSURE_FILE is there and cannot be read, so whether the gate is armed (and failing shut) was not measured" \
+          "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) and re-run ccrc expose; if the gate is meant to be armed, run: ccrc passwd"
+        return 2
+      fi
       if [ "$armed" -eq 1 ]; then
         _dr_fail auth "$gate and there is NO passphrase file at $secret$via — the gate is armed and failing SHUT: every route answers 401 and no login can succeed" \
           "run: ccrc passwd (no restart needed — the gate re-reads the file per request)"
@@ -1401,7 +1425,13 @@ _check_auth() {
       # rule reached by a different road: the state is a fact about how the box
       # is configured, and the line's job is to say so plainly enough that
       # nobody reads it as "we are protected".
-      _dr_pass auth "no passphrase file at $secret$via, and $gate — the shipped default, so nothing is gated and anyone who can reach this box can drive it; to arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE and restart ccrc.service"
+      # The arming words name the file that would actually decide it (wave 8
+      # item D): a box whose exposure file already overrides ccrc.env is told
+      # to set the flag THERE, not in the file the unit no longer reads it
+      # from.
+      local arming="set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE and restart ccrc.service"
+      [ "$expnamed" -eq 0 ] || arming="set CCRC_AUTH=on in $CCRC_EXPOSURE_FILE, which overrides $BOX_ENV_FILE, together with CCRC_RP_ID and CCRC_ORIGIN (ccrc expose writes all three), and restart ccrc.service"
+      _dr_pass auth "no passphrase file at $secret$via, and $gate — the shipped default, so nothing is gated and anyone who can reach this box can drive it; to arm the gate: ccrc passwd, then $arming"
       return 0 ;;
     4)
       # BOTH ARMS ARE A FAIL, and the difference between them is tense, not
@@ -1418,7 +1448,11 @@ _check_auth() {
       # expiring them. Printing `ccrc passwd` alone here would send an operator
       # to a command that is about to refuse.
       local when="the moment CCRC_AUTH=on is set, the server will refuse to boot on it"
-      [ "$armed" -eq 0 ] || when="with $gate the server REFUSES TO BOOT on it — readAuthSecret is called uncaught at startup"
+      if [ "$unmeasured" -eq 1 ]; then
+        when="if CCRC_AUTH is on ($CCRC_EXPOSURE_FILE, which decides it, cannot be read), the server refuses to boot on it"
+      elif [ "$armed" -eq 1 ]; then
+        when="with $gate the server REFUSES TO BOOT on it — readAuthSecret is called uncaught at startup"
+      fi
       # ── AND THE SESSION FILE IS RESOLVED, NOT ASSUMED (D-148) ────────────
       # This clause used to be a hard-coded `rm -f ~/.ccrc/sessions.json`,
       # printed in the same breath as a `$secret` that WAS resolved through
@@ -1719,20 +1753,26 @@ _check_exposure() {
 #     for a key in both the LATER file wins, EVEN WHEN its value is empty —
 #     that is what a second `EnvironmentFile=` does, not merely what a
 #     non-empty override does. `ccrc expose` writes CCRC_AUTH=on into the
-#     exposure file and never into ccrc.env (`_exp_env_write`, D-162), so
-#     `_check_auth`'s ccrc.env-only read — deliberate THERE, where the
-#     question is the passphrase — would call every correctly exposed box
-#     unarmed. `_check_exposure`'s CCRC_HOST read above is the precedent this
-#     copies, and BOTH arms below are told apart the same way (fix round 1
-#     item 7 / review 155 C13): PRESENCE, not a non-empty value, wins —
-#     `_box_env_value`'s own return code says whether the exposure file named
-#     the key AT ALL, told apart from the key printing empty because the file
-#     never mentioned it. A hand-written bare `CCRC_AUTH=` line now reads here
-#     exactly as systemd reads it: OFF, overriding ccrc.env=on, not "not set,
-#     fall back". `ccrc expose` itself never writes that bare line — this is
-#     the hand-edited case, and a doctor that folded it into "unset" was a
-#     false PASS over a gate that is actually off.
-#   REACHABLE — not the bind alone: a correctly exposed box keeps CCRC_HOST at
+#     exposure file and never into ccrc.env (`_exp_env_write`, D-162), so a
+#     ccrc.env-only read would call every correctly exposed box unarmed.
+#     `_check_exposure`'s CCRC_HOST read above is the precedent this copies,
+#     and (wave 8 item D, D-3596) it is now the ONE shared reader, `ccrc`'s
+#     `_box_unit_env` — the same function `_check_auth` and install's gate
+#     line read the flag through, so all three cannot disagree. PRESENCE, not
+#     a non-empty value, wins (fix round 1 item 7 / review 155 C13):
+#     `_box_env_value`'s own return code, which `_box_unit_env` carries
+#     forward, says whether the exposure file named the key AT ALL, told
+#     apart from the key printing empty because the file never mentioned it.
+#     A hand-written bare `CCRC_AUTH=` line now reads here exactly as systemd
+#     reads it: OFF, overriding ccrc.env=on, not "not set, fall back". `ccrc
+#     expose` itself never writes that bare line — this is the hand-edited
+#     case, and a doctor that folded it into "unset" was a false PASS over a
+#     gate that is actually off. An exposure file that is there and cannot be
+#     read is UNMEASURED, never folded into either answer — see below.
+#   REACHABLE — not the bind alone, and CCRC_HOST is read through the SAME
+#     `_box_unit_env` (its one other caller, D-3597's exception is
+#     `_check_exposure`'s own CCRC_HOST read above, left as it was): a correctly
+#     exposed box keeps CCRC_HOST at
 #     its loopback default (config.ts) because Caddy on 443 proxies
 #     127.0.0.1. So reachable is a non-loopback CCRC_HOST (same precedence) OR
 #     any exposure artifact present — $CCRC_EXPOSURE_FILE, $CCRC_CADDYFILE, or
@@ -1781,35 +1821,24 @@ _check_update-exposure() {
   fi
 
   # ── ARMED ────────────────────────────────────────────────────────────────
-  local auth="" authsrc="" v="" vrc=0
-  if [ "$envok" -eq 1 ]; then
-    auth="$(_box_env_value "$BOX_ENV_FILE" CCRC_AUTH)"
-    [ -z "$auth" ] || authsrc="$BOX_ENV_FILE"
-  fi
-  if [ "$expok" -eq 1 ]; then
-    # PRESENCE wins, not a non-empty value (fix round 1 item 7 / review 155
-    # C13): `_box_env_value`'s return code, 0 iff the exposure file named
-    # CCRC_AUTH at all — a bare `CCRC_AUTH=` line answers rc 0 with v="",
-    # which must still override ccrc.env's CCRC_AUTH=on, exactly as
-    # systemd's second EnvironmentFile does at runtime.
-    v="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_AUTH)"; vrc=$?
-    if [ "$vrc" -eq 0 ]; then auth="$v"; authsrc="$CCRC_EXPOSURE_FILE"; fi
-  fi
+  # Wave 8 item D, D-3596: through the ONE shared reader now, `_box_unit_env`
+  # — the three-state expok/expunread above is unchanged (the WARN it drives
+  # still fires below), and so is envok, which only the role read above still
+  # uses. No printed-source rule is kept here: a source is printed only where
+  # its value is `on`, and there BUE_SRC is the file that named it — exactly
+  # what the old `[ -z "$auth" ] || authsrc=…` line was working around by hand.
+  local auth="" authsrc=""
+  _box_unit_env CCRC_AUTH || :
+  auth="$BUE_VAL"; authsrc="$BUE_SRC"
 
   # ── REACHABLE ────────────────────────────────────────────────────────────
+  # The identical sibling read, same reader: a bare `CCRC_HOST=` in the
+  # exposure file is systemd's own way of reasserting the loopback default
+  # over whatever ccrc.env named, not "no opinion, keep reading ccrc.env's
+  # bind" — `_box_unit_env`'s presence rule gives that for free.
   local bindhost="" bindsrc=""
-  if [ "$envok" -eq 1 ]; then
-    bindhost="$(_box_env_value "$BOX_ENV_FILE" CCRC_HOST)"
-    [ -z "$bindhost" ] || bindsrc="$BOX_ENV_FILE"
-  fi
-  if [ "$expok" -eq 1 ]; then
-    # The identical sibling defect, same fix (fix round 1 item 7): a bare
-    # `CCRC_HOST=` in the exposure file is systemd's own way of reasserting
-    # the loopback default over whatever ccrc.env named, not "no opinion,
-    # keep reading ccrc.env's bind".
-    v="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_HOST)"; vrc=$?
-    if [ "$vrc" -eq 0 ]; then bindhost="$v"; bindsrc="$CCRC_EXPOSURE_FILE"; fi
-  fi
+  _box_unit_env CCRC_HOST || :
+  bindhost="$BUE_VAL"; bindsrc="$BUE_SRC"
   local -a reach=()
   case "$bindhost" in
     # Empty is config.ts's default (127.0.0.1); every 127/8 address and both

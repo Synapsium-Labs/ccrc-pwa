@@ -2532,6 +2532,25 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).not.toMatch(/DEGRADED/);
   });
 
+  // G-M8 control: the pre-restart set is read from the ACTIVE column, not
+  // from "every listed unit" — a unit the unfiltered listing shows as
+  // already FAILED (never active) must not be warned about as an unverified
+  // vanish, and must not appear in the old success line's implicit claim.
+  itLinux('G1b-control: a unit already FAILED in the unfiltered listing (never active) is not warned about and does not block the old success line', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-prefailed-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'),
+      `${UNIT_LINES}claude-session@gamma.service loaded failed failed fixture supervisor\n`);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).not.toMatch(/claude-session@gamma\.service was active before try-restart/);
+    expect(r.stdout).toMatch(
+      /^update: sweep: every live claude-session@ supervisor now runs the ccd this update installed \(KillMode=process verified per unit before any restart; panes untouched\)$/m);
+  });
+
   // Fix round 1 item 5 / review 155 C2 (your Q5), narrowed by review fix
   // round 1 m2: the lock is released BEFORE the sweep (§10 requires it), so
   // a SECOND `ccrc update` can take it mid-sweep and write its own
@@ -2567,6 +2586,57 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).toMatch(/^update: build: v1\.0\.0 \(oldsha0+\) -> v1\.0\.0 \(oldsha0+\)$/m);
     // The sweep itself still ran — the skip is only the closing phase write.
     expect(r.stdout).toMatch(/^update: sweep: /m);
+  });
+
+  // ── wave 8 item G: the success line claims no more than was measured ────
+  // A claim of "every … now runs the ccd this update installed" is false
+  // when nothing was active before try-restart ran (there was nothing to
+  // verify), and false for a unit that WAS active before and is not seen
+  // active or failed after (this sweep did not verify it — it is named).
+
+  itLinux('G1a: NO fixture-sweep-units and no fixture-sweep-active — the pre-restart set is truly empty: the zero line, never the old success line', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-zero-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(
+      /^update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart \(KillMode=process verified before the restart; panes untouched\)$/m);
+    expect(r.stdout).not.toContain('every live claude-session@ supervisor now runs the ccd this update installed');
+    expect(r.stderr).not.toMatch(/was active before try-restart/);
+  });
+
+  itLinux('G1b: UNIT_LINES in both fixture-sweep-units and fixture-sweep-active — the old success line, byte-identical; no zero line, no new warning', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-full-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(
+      /^update: sweep: every live claude-session@ supervisor now runs the ccd this update installed \(KillMode=process verified per unit before any restart; panes untouched\)$/m);
+    expect(r.stdout).not.toContain('no claude-session@ supervisor was active when the sweep began');
+    expect(r.stderr).not.toMatch(/was active before try-restart/);
+  });
+
+  itLinux('G1d: UNIT_LINES in fixture-sweep-units, fixture-sweep-active ABSENT — both units named on stderr as unverified, but the old success line still prints', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-vanish-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).not.toContain('no claude-session@ supervisor was active when the sweep began');
+    expect(r.stderr).toMatch(
+      /^update: warning: claude-session@alpha\.service was active before try-restart and is not active after it — this sweep did not verify it\. On the box: systemctl --user status claude-session@alpha\.service$/m);
+    expect(r.stderr).toMatch(
+      /^update: warning: claude-session@beta\.service was active before try-restart and is not active after it — this sweep did not verify it\. On the box: systemctl --user status claude-session@beta\.service$/m);
+    expect(r.stdout).toMatch(
+      /^update: sweep: every live claude-session@ supervisor now runs the ccd this update installed \(KillMode=process verified per unit before any restart; panes untouched\)$/m);
   });
 
   itLinux('with the drop-in ABSENT the sweep is REFUSED — loud, naming the drop-in — and the update still exits 0 with a degraded line', () => {
@@ -2624,6 +2694,38 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).toMatch(/^update: sweep: /m);
     expect(r.stdout).toContain('2 restarted and re-measured still up');
     expect(r.stdout).not.toMatch(/DEGRADED/);
+  });
+
+  // Wave 8 item G, G1c: zero loaded session jobs (no plist planted at all —
+  // `_svc_list_sessions` enumerates nothing) give the Darwin zero line, never
+  // a false "N restarted and re-measured still up".
+  itDarwin('G1c: with NO session plist at all, the sweep kickstarts nothing and says so — never "restarted and re-measured still up"', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-darwin-zero-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(existsSync(join(home, 'launchctl-calls')) ? readFileSync(join(home, 'launchctl-calls'), 'utf8') : '')
+      .not.toMatch(/kickstart/);
+    expect(r.stdout).toMatch(
+      /^update: sweep: no loaded claude-session@ supervisor on this box, so nothing was restarted \(AbandonProcessGroup is checked per job file when there is one\)$/m);
+    expect(r.stdout).not.toContain('restarted and re-measured still up');
+    expect(r.stdout).not.toMatch(/DEGRADED/);
+  });
+
+  // G1c's direct twin — `sourcedCcrc`'s technique (CCD_OS forced after the
+  // `.`) reaches `_upd_sweep`'s Darwin arm from a Linux runner too, so this
+  // one line's mutation is measurable on every box this suite runs on, not
+  // only a macOS leg.
+  it('G1c-direct: _upd_sweep\'s Darwin arm (CCD_OS forced), zero plists — the zero line, never "restarted and re-measured still up"', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-darwin-direct-zero-');
+    const r = sourcedCcrc(home, 'CCD_OS=darwin; UPD_BACKUP_DIR="$HOME/ccrc-backups/fixture"; _upd_sweep');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(
+      /^update: sweep: no loaded claude-session@ supervisor on this box, so nothing was restarted \(AbandonProcessGroup is checked per job file when there is one\)$/m);
+    expect(r.stdout).not.toContain('restarted and re-measured still up');
+    expect(existsSync(join(home, 'launchctl-calls')) ? readFileSync(join(home, 'launchctl-calls'), 'utf8') : '')
+      .not.toMatch(/kickstart/);
   });
 
   itDarwin('a job file missing AbandonProcessGroup REFUSES the sweep — loud on stderr, DEGRADED on stdout, and NO kickstart for ANY session', () => {
