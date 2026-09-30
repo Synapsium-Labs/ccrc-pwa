@@ -281,8 +281,8 @@ describe('rosterFromJson is importable, and carries the fields the wrapper write
     expect(r.upstreamId).toBe('claude');
   });
 
-  it.each(['ccgpt', 'ccgpt-runtime'] as const)(
-    'rosterFromJson refuses the %s GPT-lane toolchain id for every execution kind',
+  it.each(['ccrc-codex', 'ccgpt-runtime', 'ccgpt'] as const)(
+    'rosterFromJson refuses the reserved GPT-lane id %s for every execution kind',
     (id) => {
       for (const kind of TOOLCHAIN_EXEC_KINDS) {
         expect(() => rosterFromJsonSync(toolchainCollisionRoster(id, kind)))
@@ -527,6 +527,22 @@ describe('the mirror\'s derived lists agree with the table it cannot import', ()
     // The loopback set has exactly two homes (`shared/base-url.ts` and its
     // `.mjs` twin) and this file is neither of them.
     expect(src).not.toContain("'127.0.0.1'");
+  });
+
+  it('its reserved GPT-lane id set is the parser\'s, SOURCE for source (D-3478)', () => {
+    // Two hand-kept copies of one reservation, and D-3478 edits both in one
+    // commit. The per-id rows above drive each parser separately, so neither can
+    // see a member added to ONE mirror only; this can.
+    const setOf = (file: string): string[] => {
+      const src = readFileSync(path.join(ccrcRoot, file), 'utf8');
+      const m = /const GPT_TOOLCHAIN_ACCOUNT_IDS(?:: ReadonlySet<string>)? = new Set\(\[([^\]]*)\]\);/.exec(src);
+      expect(m, `${file} must declare \`const GPT_TOOLCHAIN_ACCOUNT_IDS … = new Set([…]);\``).not.toBeNull();
+      return m![1]!.split(',').map((s) => s.trim().replace(/^'|'$/g, '')).filter((s) => s !== '');
+    };
+    const ts = setOf('shared/roster.ts');
+    // Anti-vacuity: an extraction that matched an empty list would equal an empty list.
+    expect(ts.length, 'the extraction found no reserved ids in shared/roster.ts — re-read it').toBeGreaterThanOrEqual(2);
+    expect(setOf('shared/roster-json.mjs')).toEqual(ts);
   });
 });
 

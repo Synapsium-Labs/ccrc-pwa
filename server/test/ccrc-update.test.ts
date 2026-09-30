@@ -52,6 +52,10 @@ import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
 // Fix round 1 item 3 / review 155 C31: W2's OWN reader (never a hand copy),
 // the same import pattern `update-intent-cross-side.test.ts` already uses.
 import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
+import {
+  SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,
+  spineSystemdRun,
+} from './codexLaneFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -270,6 +274,55 @@ function healthyBox(home: string): void {
     '\x7fELF\x02\x01\x01\x00not-a-real-binary-just-a-fixture-marker', { mode: 0o755 });
 }
 
+/** Composes the source-owned Codex spine front with this target-owned update
+ * fixture's detached-run controls. `codexLaneFixture.ts` stays byte-identical
+ * to the reviewed source; the shared update suite alone owns this composition. */
+function updateSpineSystemdRun(): string {
+  const source = spineSystemdRun();
+  const failureGate = [
+    'if [ -f "$HOME/fixture-systemd-run-fail" ]; then',
+    '  IFS= read -r bad < "$HOME/fixture-systemd-run-fail"',
+    '  case " $* " in',
+    '    *" --unit=$bad "*) echo "Failed to start transient service unit: fixture refusal for $bad" >&2; exit 1 ;;',
+    '  esac',
+    'fi',
+  ].join('\n');
+  const terminalRefusal = [
+    'echo "fixture systemd-run: no fake user manager is planted in this HOME — a spine harness never starts a real transient unit" >&2',
+    'exit 97',
+  ].join('\n');
+  if (!source.includes(failureGate) || !source.endsWith(`${terminalRefusal}\n`)) {
+    throw new Error('updateSpineSystemdRun: the source spine front changed; recompose its detached-update adapter');
+  }
+  const detachedControls = [
+    'printf \'%s\\n\' "$*" >> "$HOME/systemd-run-argv"',
+    'if [ -f "$HOME/fixture-systemd-run-exec" ]; then',
+    '  [ "$1 $2 $3" = "--user --collect --quiet" ] || { echo "fixture systemd-run: unexpected argv: $*" >&2; exit 90; }',
+    '  shift 3',
+    '  setsid "$@" </dev/null >"$HOME/detached.log" 2>&1 &',
+    '  echo "$!" > "$HOME/systemd-run-exec-pid"',
+    'fi',
+    'if [ -f "$HOME/fixture-systemd-run-linger" ]; then',
+    '  sleep 20 </dev/null >/dev/null 2>&1 &',
+    '  echo "$!" > "$HOME/systemd-run-linger-pid"',
+    'fi',
+    'if [ -f "$HOME/fixture-systemd-run-exit" ]; then',
+    '  IFS= read -r code < "$HOME/fixture-systemd-run-exit"',
+    '  exit "$code"',
+    'fi',
+  ].join('\n');
+  const ordinaryDetach = [
+    'case " $* " in',
+    '  *" --unit=fixture-containment-probe.service "*)',
+    `    ${terminalRefusal.replace('\n', '; ')} ;;`,
+    'esac',
+    'exit 0',
+  ].join('\n');
+  return source
+    .replace(failureGate, `${detachedControls}\n${failureGate}`)
+    .replace(`${terminalRefusal}\n`, `${ordinaryDetach}\n`);
+}
+
 /** `ccrcEnv` (ccrc-install.test.ts), trimmed: the poisoned gh from
  *  `ghContainedEnv` (later shadowed by the doctor stub — the shadow answers,
  *  never execs), journalctl poisoned, systemctl/loginctl as RECORDERS that
@@ -327,42 +380,20 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
   plant('plutil', '#!/bin/sh\nexit 0\n');
 
   // W4 Task 3: `--detach` re-execs through `_svc_run_detached`, whose Linux
-  // arm is `systemd-run --user --collect --quiet "$@"`. RECORDED, never real:
-  // `ghContainedEnv` above is called WITHOUT `{ systemd: true }`, so before
-  // this line a detached run would have reached this box's own user manager.
-  // Knobs are FILES, this harness's rule: `fixture-systemd-run-exit` is the
-  // job-creation answer, and `fixture-systemd-run-linger` makes the recorder
-  // leave a `sleep` behind — stdio closed so `spawnSync` does not wait on it,
-  // every OTHER descriptor inherited — which is how the "no lock fd at the
-  // spawn" pin observes a descriptor the parent must not have held.
-  // `fixture-systemd-run-exec` RUNS the handed argv, minus the three manager
-  // flags, in a session of its own (`setsid`, stdio to `detached.log`). That
-  // is what the transient unit gives the real run: a kill aimed at the
-  // parent's process group cannot reach it (§16's parent-kill fixture). It
-  // runs in the CALLER's environment, which the real unit does not, so it
-  // measures the process chain and not the environment contract.
-  plant('systemd-run', [
-    '#!/bin/sh',
-    'printf \'%s\\n\' "$*" >> "$HOME/systemd-run-argv"',
-    'if [ -f "$HOME/fixture-systemd-run-exec" ]; then',
-    '  [ "$1 $2 $3" = "--user --collect --quiet" ] || { echo "fixture systemd-run: unexpected argv: $*" >&2; exit 90; }',
-    '  shift 3',
-    '  setsid "$@" </dev/null >"$HOME/detached.log" 2>&1 &',
-    '  echo "$!" > "$HOME/systemd-run-exec-pid"',
-    'fi',
-    'if [ -f "$HOME/fixture-systemd-run-linger" ]; then',
-    '  sleep 20 </dev/null >/dev/null 2>&1 &',
-    '  echo "$!" > "$HOME/systemd-run-linger-pid"',
-    'fi',
-    'code=0; [ -f "$HOME/fixture-systemd-run-exit" ] && IFS= read -r code < "$HOME/fixture-systemd-run-exit"',
-    'exit "$code"',
-  ].join('\n') + '\n');
+  // arm is `systemd-run --user --collect --quiet "$@"`. The shared adapter
+  // retains target detached-update controls around the source-owned Codex front.
+  adoptPlantedSystemd(home);
+  plant('systemd-run', updateSpineSystemdRun());
 
   plant('systemctl', [
     '#!/bin/sh',
     'printf \'%s\\n\' "$*" >> "$HOME/systemctl-calls"',
     '[ "$1" = "--user" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     'shift',
+    // Plan 2b-2 Task 10: the codex tiers' verbs, before this stub's own arms —
+    // its `is-active) echo active; exit 0` answers every unit active, which
+    // would read every rostered codex lane as a FOREIGN tier.
+    ...spineSystemctlArms(),
     'case "$1" in',
     '  daemon-reload) exit 0 ;;',
     '  enable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
@@ -555,7 +586,7 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     `exec ${REAL_NODE} "$@"`,
   ].join('\n') + '\n');
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
-    'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_VERSIONS_KEEP']) delete env[k];
+    'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
   // The health gate (design §11) probes once and decides at a 0 s deadline;
@@ -574,6 +605,10 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
   writeFileSync(join(gfxPkg, 'skill.md'), '# fixture graphify skill\n');
   writeFileSync(join(gfxPkg, 'skills', 'claude', 'references', 'fixture-ref.md'), 'fixture ref\n');
   env['CCRC_GRAPHIFY_PKG'] = gfxPkg;
+  // Fix round 2 (N1): a builder-level layer too — harmless here (nothing
+  // after this point in `updateEnv` touches PATH or these two names), and
+  // `runUpdate`'s own call on the truly final env is the one that counts.
+  assertSpineFrontContained(env, home);
   return env;
 }
 
@@ -838,6 +873,15 @@ function runUpdate(home: string, args: string[] = [],
     ...extraEnv,
   };
   replantDoctorStubs(home);
+  // Fix round 2 (N1/N5): on the FINAL merged env, immediately before the
+  // spawn. `updateEnv` plants no PRE-EXISTING fake manager for
+  // `adoptPlantedSystemd` to adopt (unlike verbEnv's/ccrcEnv's real-lane
+  // cases, where `plantSystemd` runs first) — its own `plant('systemd-run',
+  // …)`/`plant('systemctl', …)` calls are the ONLY layer that ever ran here
+  // before this round, with no structural fallback if either line were ever
+  // lost. This call is that fallback. No case in this file legitimately
+  // reaches no manager at all.
+  assertSpineFrontContained(env, home);
   const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', ...args],
     { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
@@ -4304,9 +4348,7 @@ describe('ccrc update: one update at a time (the lock)', () => {
 
   it('no flock on PATH is refused by name before anything else runs — macOS\'s sentence names brew', () => {
     const home = freshUpdateBox('ccrc-update-lock-noflock-');
-    const empty = join(home, 'empty-bin');
-    mkdirSync(empty, { recursive: true });
-    const r = runUpdate(home, [], { PATH: empty });
+    const r = runUpdate(home, [], { PATH: pathWithoutFlock(home) });
     expect(r.code).toBe(1);
     if (process.platform === 'darwin') {
       expect(r.stderr).toMatch(/^ccrc: flock is required by 'ccrc update' — it serialises updates and refuses rather than racing — and macOS does not ship it\. Install it: brew install flock\. Nothing on this box was changed$/m);
@@ -11521,5 +11563,39 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     if (args.includes('--from') && args[args.indexOf('--from') + 1] !== 'cli') {
       expect(lastReport(home)['phase'], 'the report was left non-terminal').toBe('failed');
     }
+  });
+});
+
+describe('ccrc update: the codex steps ride the staged spine (Plan 2b-2 Task 10)', () => {
+  it('the harness contains the transient-unit launcher: it resolves inside this HOME and refuses', () => {
+    const home = freshUpdateBox('ccrc-update-sdrun-contained-');
+    const r = spawnSync(BASH, ['-c', SPINE_CONTAINMENT_PROBE], { env: updateEnv(home), encoding: 'utf8' });
+    expect(r.stdout).toContain(`at=${join(home, '.local', 'bin', 'systemd-run')}\n`);
+    expect(r.stdout).toMatch(/^run-rc=97$/m);
+    expect(r.stdout).toMatch(/^env-rc=0$/m);
+    expect(spineRunCalls(home).join('\n')).toContain('--unit=fixture-containment-probe.service');
+  });
+
+  it('an update re-runs both codex steps, in spine order: the runtime before the services, the restart after them', () => {
+    // `cmd_update` runs the STAGED tree's `cmd_install` as a process
+    // (m-spine §1), so a runtime rebuild and a stale-tier restart ride every
+    // update with no `_upd_*` code at all; this is the proof that they do, and
+    // that the staged spine keeps D-3485's order.
+    const home = freshUpdateBox('ccrc-update-codex-steps-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const out = r.stdout.split('\n');
+    const at = (re: RegExp): number => out.findIndex((l) => re.test(l));
+    const runtime = at(/^install: codex runtime: none — no codex lane in the roster$/);
+    const services = at(/^install: services: /);
+    const tiers = at(/^install: codex tiers: none — no codex lane in the roster$/);
+    expect(runtime, 'the staged spine never ran _inst_codex_runtime').toBeGreaterThan(-1);
+    expect(tiers, 'the staged spine never ran _inst_codex_tiers').toBeGreaterThan(-1);
+    expect(runtime).toBeLessThan(services);
+    expect(tiers).toBeGreaterThan(services);
+    expect(spineRunCalls(home)).toEqual([]);
   });
 });

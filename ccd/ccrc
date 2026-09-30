@@ -1092,6 +1092,161 @@ _svc_run_detached() {   # <cmd> [args...]
   nohup "$@" >/dev/null 2>&1 &
   return 0
 }
+
+# `_svc_have_user_manager` — can this box start a TRANSIENT USER SERVICE now?
+#
+# NEW LOGIC, NOT INHERITED (D-3483). `_svc_run_detached` above
+# never asks: its Linux arm runs `systemd-run --user` and hands back whatever
+# that answers, with no fallback. `_have_systemctl` is PATH presence only —
+# "can this box supervise a session at all" — and says yes on a box that has
+# systemctl installed and no user bus to reach: a container, a user with no
+# lingering and no login, a context with no `XDG_RUNTIME_DIR`. So two
+# conjuncts, both required: `systemd-run` on PATH, AND a user manager that
+# answers `show-environment` over the bus. The second is the one that tells
+# those boxes apart.
+#
+# THE CALLER EXPORTS THE BUS DEFAULTS FIRST. Nothing between these sentinels
+# sets `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`: ccd defaults both at
+# source time, below the block, and ccrc does it per function (`_inst_enable`'s
+# idiom). Asked without them from a non-interactive context, this answers "no
+# manager" on a box that has one, and the caller is handed the nohup arm.
+#
+# DARWIN ALWAYS ANSWERS 1. launchd has no transient service short of a plist
+# written, bootstrapped and reaped per start — the trade `_svc_run_detached`
+# declines for the same reason — so the nohup arm below IS the Darwin arm.
+#
+# ITS OWN FUNCTION so a harness can stub it by name, which is also why
+# `_have_systemctl` is one.
+_svc_have_user_manager() {   # -> 0 iff a transient user service can be started now
+  if [ "$CCD_OS" = darwin ]; then return 1; fi
+  command -v systemd-run >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1
+}
+
+# `_svc_run_supervised` — start a LONG-LIVED process as one named transient
+# user service (a slice, a restart policy, a log), or, where
+# `_svc_have_user_manager` finds no manager, as a `nohup` child writing the
+# same log. A sibling of `_svc_run_detached`, not an extension of it: that one
+# fires a two-second job and takes none of those four things, and its argv is
+# pinned as it stands (spec §7.1).
+#
+# SECRETS NEVER RIDE ARGV. A `--setenv=NAME=value` becomes the unit's
+# `Environment=` property, which `systemctl --user show` prints to anyone who
+# asks — measured 2026-09-23 on a live lane run by another launcher, whose
+# gateway key sat in both tier units' `Environment=`. So a NAME whose LAST
+# `_`-segment ENDS WITH KEY, TOKEN, SECRET, PASSWORD or PASSWD, in any case,
+# is REFUSED, 64, and its value travels in <envfile>: systemd records only
+# that file's PATH (`EnvironmentFiles=`), and the nohup arm sources it inside
+# the child. The rule reads the TAIL, so `CHATGPT_TOKEN_DIR` — LiteLLM's own
+# name, which says where a credential lives — passes, and so does a secret
+# word that is not last (`SECRET_KEY_BASE`, `…_TOKEN_FILE`). None of the five
+# words contains `_`, so "the last segment ends with W" is the same test as
+# "the NAME ends with W", which is how the `case` below spells it. A refusal
+# names the NAME and never a value — not even for an argument it could not
+# parse, which may be a value passed by mistake.
+# The grammar is ENUMERATED bracket lists, never `[A-Z]`. A range is ASCII
+# only while `globasciiranges` is on — bash 5's default, not the 4.4 floor's;
+# with it off, en_US.UTF-8 lets `[!A-Za-z0-9_]` pass `É` (measured). A list can't.
+#
+# 64 IS A SHAPE, 1 IS A STATE. Shape: fewer than three leading arguments, an
+# empty unit, a log or envfile that is not absolute (systemd takes neither
+# relative, so neither arm does), a pair that is not NAME=value, no `--`, or
+# nothing after it. State: an envfile that is not a readable file, a log that
+# cannot be opened for append, a command the nohup arm cannot find. Every
+# state is PROBED BEFORE ANYTHING STARTS, because neither arm can report it
+# afterwards: a backgrounded child answers 0 whatever happens next, and
+# `systemd-run` reports that the UNIT WAS CREATED, not that its process could
+# start — the promise `_svc_run_detached`'s probe keeps, kept the same way.
+#
+# ONE CONTRACT, TWO ARMS. A unit's environment is the MANAGER's plus its
+# pairs plus its file, never the caller's, so the nohup child starts from
+# `env -i` as well: HOME, PATH, LANG when the caller has one, then the pairs,
+# and nothing else the caller exported — an `ANTHROPIC_*`, `CHATGPT_*` or
+# `CLAUDE_*` from a session pane cannot reach a tier. The file is sourced by
+# a `sh` INSIDE that clean environment, after the pairs, because systemd
+# documents `EnvironmentFile=` overriding `Environment=`. Listing its lines
+# as `env` arguments instead would put the key in that process's argv, which
+# `ps` shows to every user on the box. The child runs in `$HOME`, as
+# `--working-directory` does, and its stdin is `/dev/null` explicitly,
+# because a block sourced into an interactive shell has job control on,
+# where an async job keeps the terminal. The envfile is read by two parsers —
+# systemd's and the shell's — so its lines must be plain `NAME=value` with
+# nothing to quote, which is the one shape its writer produces. What the
+# nohup arm cannot give is the restart policy or a cgroup of its own: the
+# child stays in the CALLER's, so a caller that forgot the bus defaults above
+# loses the process with the pane that started it (spec §7.2).
+#
+# THE ANSWER IS ONE LINE ON STDOUT: `systemd <unit>`, or `nohup <pid>` where
+# <pid> is the COMMAND's own — the child is a subshell that `exec`s `env`,
+# which execs the `sh` that sources the file, which `exec`s `nohup`, which
+# execs the command — so a later identity check reads the right
+# `ps -o args=`. The redirect sits on that subshell, so a caller's `$(…)`
+# returns at once instead of waiting on a pipe the child inherited.
+_svc_run_supervised() {   # <unit> <log> <envfile|-> [NAME=value ...] -- <cmd> [args...]
+  local use='_svc_run_supervised: usage: <unit> <log> <envfile|-> [NAME=value ...] -- <cmd> [args...]'
+  if [ "$#" -lt 3 ]; then printf '%s — fewer than three arguments\n' "$use" >&2; return 64; fi
+  local unit="$1" log="$2" envfile="$3" kv name n=3
+  local -a pairs=()
+  shift 3
+  if [ -z "$unit" ]; then printf '%s — the unit name is empty\n' "$use" >&2; return 64; fi
+  case "$log" in
+    /*) ;;
+    *) printf '%s — the log must be an absolute path\n' "$use" >&2; return 64 ;;
+  esac
+  case "$envfile" in
+    -|/*) ;;
+    *) printf '%s — the envfile must be - or an absolute path\n' "$use" >&2; return 64 ;;
+  esac
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
+    kv="$1"; shift; n=$((n + 1))
+    case "$kv" in *=*) name="${kv%%=*}" ;; *) name="" ;; esac
+    case "$name" in
+      ''|[0123456789]*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]*)
+        printf '%s — argument %s is not NAME=value (not echoed: it may be a value)\n' "$use" "$n" >&2
+        return 64 ;;
+    esac
+    case "$name" in
+      *[Kk][Ee][Yy]|*[Tt][Oo][Kk][Ee][Nn]|*[Ss][Ee][Cc][Rr][Ee][Tt]|*[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|*[Pp][Aa][Ss][Ss][Ww][Dd])
+        printf '_svc_run_supervised: %s: refused %s — a secret travels in the envfile, never in argv or unit metadata\n' \
+          "$unit" "$name" >&2
+        return 64 ;;
+    esac
+    pairs+=("$kv")
+  done
+  if [ "$#" -eq 0 ]; then printf '%s — no -- before the command\n' "$use" >&2; return 64; fi
+  shift
+  if [ "$#" -eq 0 ]; then printf '%s — nothing to run after --\n' "$use" >&2; return 64; fi
+  if [ "$envfile" != - ] && ! { [ -f "$envfile" ] && [ -r "$envfile" ]; }; then
+    printf '_svc_run_supervised: %s: envfile %s is not a readable file — nothing was started\n' "$unit" "$envfile" >&2
+    return 1
+  fi
+  if ! { : >>"$log"; } 2>/dev/null; then
+    printf '_svc_run_supervised: %s: log %s cannot be opened for append — nothing was started\n' "$unit" "$log" >&2
+    return 1
+  fi
+  if _svc_have_user_manager; then
+    local -a sr=(--user --collect --quiet "--unit=$unit" --slice=app.slice "--working-directory=$HOME"
+      -p Restart=always -p RestartSec=3 -p StartLimitIntervalSec=300 -p StartLimitBurst=20
+      -p "StandardOutput=append:$log" -p "StandardError=append:$log")
+    [ "$envfile" = - ] || sr+=(-p "EnvironmentFile=$envfile")
+    for kv in ${pairs[@]+"${pairs[@]}"}; do sr+=("--setenv=$kv"); done
+    systemctl --user reset-failed "$unit" >/dev/null 2>&1
+    systemd-run "${sr[@]}" -- "$@" || return $?
+    printf 'systemd %s\n' "$unit"
+    return 0
+  fi
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf '_svc_run_supervised: %s: %s is not a command here — nothing was started\n' "$unit" "$1" >&2
+    return 1
+  fi
+  (
+    cd -- "$HOME" || exit 1
+    exec env -i HOME="$HOME" PATH="$PATH" ${LANG:+LANG="$LANG"} ${pairs[@]+"${pairs[@]}"} \
+      sh -c 'if [ "$1" != - ]; then set -a; . "$1" || exit 1; set +a; fi; shift; exec nohup "$@"' \
+      sh "$envfile" "$@"
+  ) </dev/null >>"$log" 2>&1 &
+  printf 'nohup %s\n' "$!"
+  return 0
+}
 # ── END PLATFORM LAYER — the byte-identical region ends HERE ────────────
 # Add a new `_plat_*`/`_svc_*` helper ABOVE this line, in BOTH files, or the
 # pin test (`macos-platform.test.ts`) cannot see it: the compared region is
@@ -1138,6 +1293,17 @@ _models_answer() {
     0|1|2) : ;;
     *) _models_refuse no-answer 1 "deploy/models-op.mjs exited $rc, outside this build's 0/1/2 contract, after printing a JSON object — its own exit code broke, not yours. ccrc and deploy/models-op.mjs ship together and must be one build. Re-run the install (or redeploy), then re-run this. Nothing was written." ;;
   esac
+  # THE REMEDY reaches the human stream too (carry-forward 10). The op puts
+  # a `.remedy` on exactly two answers — `init` of an unseeded probe, and a
+  # mutation that leaves a codex lane's haiku null — and before this line
+  # both reached only the JSON a person never reads: mutations have no
+  # summary, and `_models_summary` serves `show`, whose bodies carry none
+  # (m-spine §8 — this is the site, not that function). STDERR, the stream
+  # `_models_refuse` already uses for its sentence; stdout keeps its one
+  # object. Keyed on the field being a string, so an answer without one
+  # prints nothing here.
+  printf '%s' "$body" \
+    | jq -r --arg p "$PROG" 'if (.remedy | type) == "string" then "\($p): \(.remedy)" else empty end' >&2
   printf '%s\n' "$body"
   return "$rc"
 }
@@ -1835,7 +2001,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollback|versions|channel|rollout|uninstall|backup|logs|passwd|expose|version|watchdog}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|logs|passwd|expose|version|watchdog}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -1882,6 +2048,19 @@ already running).
             model and no reasoning keys, because effort has exactly one
             owner — and restarts the proxy only if it is holding the
             previous rendering
+  codex     run a Codex lane's two tiers - its LiteLLM gateway and the shim
+            Claude Code talks to - as transient user services, or under
+            nohup on a box with no user manager. "ccrc codex start <id>"
+            starts what is not running, adopts what already answers as this
+            lane or is still starting, refuses a port or unit it cannot
+            identify, and waits until both tiers answer; "stop <id>" stops
+            only what it proves is this lane's - its unit by exact name, or
+            its verified pid - and leaves anything else running, named;
+            "status <id> [--json]" reports each tier; "login <id>" signs a
+            codex lane in through the lane's own runtime (a device code,
+            shown in the terminal or the account pane) and writes nothing
+            but what that runtime writes into the lane's exec.authDir.
+            Needs jq and node. Refused on a server-role box
   install   converge this box from the shipped tree: seed ~/.ccrc config
             (never overwriting yours), install executables, units and hooks,
             generate wrappers, then run doctor. Single-box, localhost.
@@ -7768,7 +7947,7 @@ _acct_credential() {
   # `exec.authDir` names where it lives precisely so that ccrc can pass the path
   # without ever opening it.
   [ "$ACCT_KIND" != codex ] \
-    || _acct_refuse 1 codex-lane "account $id is a codex lane: its credential is the ChatGPT OAuth directory exec.authDir names, which a browser device flow writes and ccrc only ever passes the path of. This verb will not put a file on disk for it. Reauthentication is unavailable in this release and will use ccrc's Codex login flow once the runtime ships. Nothing was written."
+    || _acct_refuse 1 codex-lane "account $id is a codex lane: its credential is the ChatGPT OAuth directory exec.authDir names, which a browser device flow writes and ccrc only ever passes the path of. This verb will not put a file on disk for it. Sign the lane in again with 'ccrc codex login $id', which runs the lane's own runtime over that directory. Nothing was written."
 
   # TOKEN LANES ONLY, and `not-managed` names the difference rather than hiding
   # it. A login lane's credential is Claude Code's own `.credentials.json`
@@ -7916,9 +8095,9 @@ _acct_unprovision() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
 }
 
 _acct_remove() {
-  local id="" v="" flag="" item="" sid="" field="" f="" model="" stands="" modelfiles=""
+  local id="" v="" flag="" item="" sid="" field="" f="" model="" stands="" modelfiles="" lane_dir="" tier="" unit="" port="" q=0
   local keepcred=0 seen_id=0 seen_keep=0 was_placeable=0 rc=0 already=0
-  local -a rehomed=() rehomed_fields=() kept=() removed=() operator_steps=()
+  local -a rehomed=() rehomed_fields=() kept=() removed=() operator_steps=() lane_before=() lane_left=()
   while [ $# -gt 0 ]; do
     flag="${1%%=*}"
     case "$1" in
@@ -7990,6 +8169,107 @@ _acct_remove() {
       || _acct_refuse 1 last-home-able "account $id is the only globally placeable lane - every other home-able account is disabled or has no executable launcher, so removing it would leave no fresh-placement destination. Nothing was written."
   fi
 
+  # A CODEX LANE'S TIERS ARE STOPPED HERE: BEFORE THE FIRST REGISTRY MOVE,
+  # BEFORE THE ROSTER DROP. Its FILES are reaped only AFTER the drop, in the
+  # arm below `_acct_projection`. Each position is an argument (spec §9):
+  #   * the stop goes through the lane library, which reads the roster ROW
+  #     (`_codex_tier_ours` → `_codex_row`) and lane.json's unit names. After
+  #     `drop` it would answer not-rostered and stop nothing;
+  #   * a stop that failed AFTER the drop would leave a running gateway for an
+  #     id no verb names any more, because `ccrc codex stop` and `_uninst_codex`
+  #     both go by the roster. The only safe failure is one that leaves the
+  #     roster standing and names the remedy;
+  #   * `_acct_live` above has proved that no pane runs on this lane, and
+  #     `_acct_marker_lock` holds the placement lock, so no ccd placement can
+  #     start the lane again between here and the drop;
+  #   * THE LANE LOCK (`_codex_lock`, rulings R11, R16, R19) is taken around the
+  #     stop and its verdict, inside the placement lock (placement, then lane),
+  #     and released through `_codex_unlock`, the only release, BEFORE the
+  #     drop. Every path that starts a tier takes it, so a start already in
+  #     flight finishes before this stop runs, and no start can run between the
+  #     stop and the verdict that re-measures it. The drop is not under it: a
+  #     hand-run `ccrc codex start` between the unlock and the drop can still
+  #     start the lane. No ccd placement can, because the placement lock is
+  #     held throughout, so that starter is the operator racing their own
+  #     removal;
+  #   * the file reap removes `.lock` itself (rulings R10, R11). If the reap ran
+  #     while the lane was still rostered, the next starter would open a NEW
+  #     `.lock`, lock it at once, find the row, and start the lane between the
+  #     reap and the drop. After the drop, every starter finds no row.
+  #
+  # EVERY STOP IS IDENTITY-GATED (D-3488, ruling R8). `_codex_stop_lane`
+  # stops a tier only when `_codex_tier_ours` proves it this lane's (0 or 4),
+  # and then only by exact unit name or verified pid. The live Codex lanes'
+  # tiers run under these same `ccgpt-<id>-*` unit names, from another
+  # repository.
+  # ITS VERDICT IS RE-MEASURED, NOT TAKEN FROM ITS RC. This verb's question is
+  # "does a tier ccrc owns still run on this lane?", and `_codex_tier_ours`
+  # answers it again, tier by tier, after the stop:
+  #   * 1, not running: nothing to do;
+  #   * 2, FOREIGN: left running and NAMED as an operator step, in the envelope
+  #     a caller keeps, in `_codex_foreign_what`'s words (review A2). It blocks
+  #     nothing. It is not this lane's, so removing the account cannot orphan
+  #     it, and refusing would leave the account un-removable for as long as
+  #     another tool holds the port;
+  #   * 0 or 4 (ours, still running), the 2 that carries a proven handle
+  #     (`listener-other-process`, read through `_codex_tier_is_our_handle`:
+  #     review A1), a 2 whose identity is only UNPROVEN (`unit-unproven`,
+  #     ruling PF-13: this lane's own tier between two restarts reads so), or 3
+  #     (cannot ask): refused, with the roster standing. None of them proves the
+  #     lane down, and the file reap would then delete the only handle
+  #     (`<tier>.pid`) on a live tier, or the files a restarting one reads.
+  #
+  # THE LIBRARY'S STDOUT GOES TO STDERR. This verb's stdout is exactly one JSON
+  # object, and the lane library talks to a terminal.
+  # WHAT THE REAP REMOVES IS MEASURED, NOT SPELLED: the lane directory is listed
+  # HERE, before this run touches it, dot-files included, and again after the
+  # reap. So this function holds no second copy of `_codex_reap_files`' list,
+  # and a `.lock` that only this run's own lock created is not reported as
+  # something the account had.
+  #
+  # `external` never reaches this. The live Codex lanes are external.
+  if [ "$ACCT_KIND" = codex ]; then
+    lane_dir="$(_codex_lane_dir "$id")"
+    for f in "$lane_dir"/* "$lane_dir"/.[!.]* "$lane_dir"/..?*; do
+      { [ -e "$f" ] || [ -L "$f" ]; } && lane_before+=("$f")
+    done
+    _codex_lock "$id" >&2 \
+      || _acct_refuse 1 codex-reap-failed "codex lane $id's lock could not be taken, so its tiers cannot be stopped without racing a start - the lane library's reason is on stderr. The roster, projection, launcher, registry rows and every account artifact still stand. Retry the removal once 'ccrc codex status $id' shows no start in progress."
+    _codex_stop_lane "$id" >&2 || :
+    for tier in $CODEX_TIERS; do
+      q=0; _codex_tier_ours "$id" "$tier" >&2 || q=$?
+      # This lane's own tier, still there after the stop — the one 2 that
+      # carries a proven handle included (review A1: a proven process whose
+      # port another holds is still THIS lane's, and the reap would delete
+      # its only handle) — refuses, through the one reading of it.
+      if _codex_tier_is_our_handle "$q"; then lane_left+=("$tier"); continue; fi
+      case "$q" in
+        1) : ;;
+        2)
+          _codex_foreign_what "$id" "$tier"
+          if [ "${CX_TIER_WHY:-}" = unit-unproven ]; then
+            # NOT PROVEN FOREIGN (review A2/D2, ruling PF-13): this lane's
+            # own crash-looping tier reads exactly so between two restarts,
+            # and a removal past it would reap the files it restarts from.
+            # It refuses, like a 3, with the helper's own sentence here.
+            _codex_say "$CX_FOREIGN_CODE" "$CX_FOREIGN_WHAT. $CX_FOREIGN_FIX" >&2
+            lane_left+=("$tier")
+          else
+            port="$(_codex_tier_port "$tier")" || port='?'
+            unit="$(_codex_unit "$id" "$tier")" || unit=""
+            operator_steps+=("Codex lane $id's $tier tier, port $port${unit:+ and unit name $unit}: $CX_FOREIGN_WHAT, so it was left running - ccrc stops only a tier it proves its own. If nothing on this box should still hold it, stop that owner by hand.")
+          fi ;;
+        *) lane_left+=("$tier") ;;
+      esac
+    done
+    # THE ONLY RELEASE (ruling R19), and it comes HERE, before the drop and
+    # before either answer below (ruling R16): the verdict is in, and the file
+    # reap after the drop removes the very `.lock` this lock sits on.
+    _codex_unlock
+    [ "${#lane_left[@]}" -eq 0 ] \
+      || _acct_refuse 1 codex-reap-failed "codex lane $id's ${lane_left[*]} tier(s) still run as this lane's after the stop, could not be asked, or read as a live unit whose identity is unproven - the lane library's reason is on stderr. The roster, projection, launcher, registry rows and every other account artifact still stand; a tier that did stop starts again with the lane's next session. Stop the lane with 'ccrc codex stop $id', then retry the removal in a few seconds."
+  fi
+
   for item in ${ACCT_ROW_FIELDS[@]+"${ACCT_ROW_FIELDS[@]}"}; do
     sid="${item%%:*}"; field="${item#*:}"; rc=0
     _acct_rehome "$sid" "$field" "$id" "$ACCT_UPSTREAM_ID" || rc=$?
@@ -8026,6 +8306,33 @@ _acct_remove() {
   _acct_write_op "$stands" drop --file "$(_acct_roster_path)" --id "$id" --stands "$stands"
   stands="The roster no longer contains $id, but \$HOME/.ccrc/accounts.sh still projects the old roster and all account artifacts still stand. Registry fields and home cleanup are not rolled back; the config directory and transcript history remain intentionally."
   _acct_projection "$stands"
+
+  # THE CODEX LANE'S FILES, NOW THAT NO ROW NAMES IT. The stop arm above says
+  # why this half waits for the drop. `_codex_reap_files` removes exactly
+  # ruling R10's list plus `.lock` (R11) under the lane directory, then the
+  # directory if that emptied it, and it needs no row. It runs under no lane
+  # lock: the stop arm released it before the drop (ruling R16), so nothing
+  # here holds the `.lock` it removes. Every starter that takes the lock from
+  # the drop on finds no row and starts nothing.
+  # `deploy/models-op.mjs`'s `rm` names this owner outright: an id removed and
+  # re-added would otherwise inherit the old `lane.json` (its authDir and its
+  # ports), "one lane spending another account's OAuth".
+  #
+  # KEPT, and each is out of the reap's reach by construction:
+  #   * the logs (`~/.ccrc/logs/codex/<id>/`, reported as kept);
+  #   * `exec.authDir`, which the roster refuses under `~/.ccrc` (see the OAuth
+  #     paragraph below).
+  # A FAILURE HERE IS `artifact-remove`, the refusal every removal after the
+  # drop uses, and it says what is already true: no row names the lane.
+  if [ "$ACCT_KIND" = codex ]; then
+    _codex_reap_files "$id" >&2 \
+      || _acct_refuse 1 artifact-remove "could not remove every generated file of codex lane $id under $lane_dir - the lane library's sentence on stderr names each one. The roster and projection no longer name $id; other removal effects remain. Remove those files by hand, keeping the logs."
+    for f in ${lane_before[@]+"${lane_before[@]}"}; do
+      { [ -e "$f" ] || [ -L "$f" ]; } || removed+=("$f")
+    done
+    f="$HOME/.ccrc/logs/codex/$id"
+    { [ -e "$f" ] || [ -L "$f" ]; } && kept+=("$f")
+  fi
 
   # THREE answers, not two, and each is stated rather than inherited from an
   # `else`. `external` is somebody else's file and is KEPT. `generated` and
@@ -9375,13 +9682,31 @@ _models_refresh_one() {   # <id> <probe> <baseUrl> -> 0 iff the probe wrote a fr
   return "$rc"
 }
 
-# Where a box keeps LiteLLM's config, and the template it is rendered from. The
-# destination is the ONE thing `ccgpt` and this verb must agree about
-# (`infra/handoff/ccgpt:20` reads `${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}`),
-# so the same override is honoured here.
-_models_litellm_path()     { printf '%s' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"; }
+# Where a box keeps LiteLLM's config, and the template it is rendered from.
+# TWO ARMS, and the CALLER picks (spec §8, D-3482):
+#   - no argument: the EXTERNAL lane's box-global file — byte for byte what
+#     this helper answered before it took one. The destination is the ONE
+#     thing `ccgpt` (another repository's live launcher) and this verb must
+#     agree about (`infra/handoff/ccgpt:20` reads
+#     `${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}`), so the same
+#     override is honoured here.
+#   - an id: that CODEX-kind lane's own file, `_codex_litellm_yaml "$1"`
+#     (ruling PF-40 — one spelling, the same one `_codex_start_tier`'s
+#     `--config` and `_codex_litellm_ensure`'s presence check use).
+#     UNCONDITIONAL, on purpose: this helper never reads the roster, so no
+#     caller holding an id — a reap after the roster row is gone included —
+#     can ever be answered with the box-global path, which an identity check
+#     would then match against the OTHER repository's live LiteLLM. And
+#     CCGPT_CONFIG, that repository's variable, never redirects a lane ccrc
+#     owns. Which arm a lane takes is `_models_litellm_codex`'s question, not
+#     this helper's.
+_models_litellm_path() {   # [<codex accountId>] -> the LiteLLM config file
+  [ $# -eq 0 ] || { printf '%s' "$(_codex_litellm_yaml "$1")"; return 0; }
+  printf '%s' "${CCGPT_CONFIG:-$HOME/.handoff/litellm-config.yaml}"
+}
 _models_litellm_template() { printf '%s' "$CCRC_HERE/../deploy/litellm-config.template.yaml"; }
 
+# The EXTERNAL arm's question only — a codex-kind lane asks `_codex_tier_ours` (`_models_litellm_lane_held`, below).
 # "Is LiteLLM up against this config?" — `pgrep -f`, matching the argv `ccgpt`
 # starts it with (`infra/handoff/ccgpt`'s own launch line: `litellm --config
 # "$CONFIG" …` — cited by shape, not by line number, because it lives in the
@@ -9390,6 +9715,288 @@ _models_litellm_template() { printf '%s' "$CCRC_HERE/../deploy/litellm-config.te
 # is listening on THESE bytes, and the question here is exactly whether the
 # process holds a config this run just replaced.
 _models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }
+
+# WHICH ARM (D-3482): `exec.kind == "codex"` read off
+# ~/.ccrc/accounts.json by the lane library's ONE reader of that question
+# (`_codex_lanes`) — never accounts.sh's CCRC_CODEX_BACKEND, which is keyed
+# on `telemetry` and names today's EXTERNAL live lanes. An unreadable roster
+# (`_codex_lanes` rc 1, no ids) answers "not codex" here and still cannot
+# write through the external arm: that arm's PHASE 1 hands the same file to
+# the op, whose `readRoster` refuses before anything is rendered, in its own
+# sentence. The library's `ccrc codex: roster-invalid:` line is discarded,
+# because it would be the wrong verb's prefix in a `ccrc models` run.
+_models_litellm_codex() {   # <accountId> -> 0 iff the roster row is exec.kind "codex"
+  local l
+  while IFS= read -r l; do [ "$l" = "$1" ] && return 0; done < <(_codex_lanes 2>/dev/null)
+  return 1
+}
+
+# THE CODEX ARM of `_models_litellm` (spec §8, D-3482): the id's SHAPE, then
+# the lane's LOCK, then the body (`_models_litellm_lane_held`, below).
+# THE ID SHAPE (ruling PF-25), before any mkdir: `_codex_lanes` reads
+# ~/.ccrc/accounts.json RAW (`.id | strings`, no shape check of its own — see
+# its own header), so a malformed roster row's id — or any other direct
+# caller that never passed through `cmd_models`'s own `_models_id_ok` gate —
+# must not reach `mkdir -p` unchecked: an id like `../x` would otherwise
+# build a directory OUTSIDE ~/.ccrc/codex/. `_codex_shape` sources
+# `$WRAPPER_ID_RE` lazily, because a caller that reaches this function
+# directly (this task's own tests included) may not have sourced it yet.
+# TWO SEPARATE FAILURES (F6): a missing or older `ccrc-wrapper-shape` is
+# `install-incomplete` — this box's own build is inconsistent, and the id it
+# was handed may be perfectly fine — never `bad-account-id`, which is
+# reserved for an id this box CAN check and did.
+# THE LANE LOCK: every ccrc path that starts or stops a tier
+# takes `_codex_lock <id>`, and this arm does both. It is taken BEFORE the
+# compare, so the whole decision — compare, ask, stop, write, start — is one
+# critical section against `ccrc codex start|stop`, the install spine and
+# another render; taken after "changed", two renders could both see a
+# difference, and the second would stop the tier the first had just started
+# to write the same bytes.
+# IN A SUBSHELL, so the lock's scope is exactly this render: it is released
+# as the render ends, and its fd never outlives the render in the caller's
+# shell. A caller that renders two lanes in one shell would otherwise still
+# hold the first lane's fd under the second, and a tier started there would
+# inherit it for its whole life. The subshell's stdout is the caller's, so
+# `_models_refuse` still ends the render with its one JSON object.
+# `_codex_lock` is the one library call made OUTSIDE a `( … )` — a lock
+# taken in a subshell is released as that subshell exits — so this relies
+# on its contract of RETURNING, which the install spine needs as well.
+# ON A FLOCK-LESS BOX (ruling PF-22), `_codex_lock` returns rc 0 with
+# NOTHING held — Task 5's accepted fallback — so this critical section is
+# not actually serialised there: a start, a stop and a render can interleave,
+# which is this race's behaviour without the lock and no worse than today.
+# The directory comes first because the lock's file lives in it. The op's
+# own `mkdir -p` carries no mode, and `runtime.env` lives here too: create
+# it 0700 when absent (a later mkdir cannot tighten it — carry-forward 9).
+# A failure here surfaces as the lock's refusal, or as the op's own
+# `config-unwritable`, which names the path.
+_models_litellm_lane() {   # <codex accountId> -> prints exactly one JSON object, as `_models_litellm` does
+  local out id="$1"
+  # The library's own `ccrc codex: install-incomplete:` line is discarded
+  # (fix wave): it carries the wrong verb's prefix in a `ccrc models` run,
+  # and the refusal below names the same remedy in this verb's envelope.
+  _codex_shape 2>/dev/null \
+    || _models_refuse install-incomplete 1 "the wrapper shape contract is missing or older than this ccrc, so lane \"$id\"'s id cannot be checked before a path is built from it. The files ship together: re-run the install (or redeploy). Nothing was written."
+  [[ "$id" =~ $WRAPPER_ID_RE ]] \
+    || _models_refuse bad-account-id 2 "\"$id\" is not an account id: a lowercase letter followed by up to 31 of letters, digits and \"-\", so no lane directory is built from it. Nothing was written."
+  out="$(_models_litellm_path "$id")"
+  ( umask 077; mkdir -p "${out%/*}" ) 2>/dev/null || :
+  (
+    _codex_lock "$id" >/dev/null \
+      || _models_refuse lock-failed 1 "lane $id's lock could not be taken: another ccrc command holds it (a start, a stop, an install or another render), or its lock file could not be opened. Re-run once that command has finished — 'ccrc codex status $id' shows the lane. Nothing was written."
+    _models_litellm_lane_held "$id"
+  )
+}
+
+# THE BODY of the codex arm, for a caller that ALREADY HOLDS `_codex_lock
+# <id>`: `_models_litellm_lane` above, and `_codex_litellm_ensure` (`ccrc
+# codex start` holds the lock when it asks). It never takes the lock itself —
+# not because a second `_codex_lock` in the holding shell would deadlock (it
+# is RE-ENTRANT there and returns 0 at once, R38), but because taking it
+# here would blur one render's lock scope across two levels and hide that
+# from the fake's call log. The lane directory exists by that precondition:
+# the lock's file is in it.
+# The STOP-THEN-WRITE doctrine below is preserved verbatim — a stop that
+# fails writes NOTHING, so the next run sees the same difference and
+# retries — with all three of "the bytes", "the tier" and "the stop" named
+# per lane:
+#   - the bytes: `_models_litellm_path <id>`, this lane's own file;
+#   - the tier: `_codex_tier_ours <id> litellm`, which answers FIVE ways,
+#     and each has its own arm. 0 (ours, running) and 4 (ours,
+#     starting — a live handle whose args prove this lane before its port
+#     answers) are this lane's own: stop, write, start. 1 is not running:
+#     write. 2 is FOREIGN — something holds this lane's port or unit that is
+#     not provably this lane's tier — and refuses `tier-foreign`, the models
+#     envelope's one code for it, with `_codex_foreign_what`'s sentence for
+#     the holder in its detail (review A2/A3). 3 is CANNOT ASK (a row
+#     `_codex_row` refused, or the socket owner or the port could not be
+#     measured — `tier-unmeasured`; its sentence is on stderr either way) and
+#     refuses `tier-unmeasured`, carrying that sentence; so does any code
+#     outside the five (a library that is not there answers 127) — fail
+#     closed. Folding
+#     2 or 3 into a neighbour is the defect: into 0 would stop what ccrc
+#     cannot identify, into 1 would write under a process that may hold the
+#     old bytes, and 3 read as 2 would name a listener that may not exist.
+#   - the stop AND the start: ccrc's own `_codex_stop_tier`/
+#     `_codex_start_tier` for exactly this id — never `ccgpt`, which on a
+#     live box is another repository's launcher and, called bare, acts on
+#     ITS first lane. ONLY a 0 or a 4 reaches the stop
+#     (D-3488); a 2 or a 3 is LEFT RUNNING and named in the refusal,
+#     and the stop itself is by exact unit name or verified pid, which is
+#     `_codex_stop_tier`'s own gate.
+# THE STOP'S WORD IS CAPTURED (ruling PF-21), never folded: rc 0 from
+# `_codex_stop_tier` covers THREE answers — `stopped`, `not running`,
+# `foreign` — not only "the tier is down". A `foreign` word at rc 0 means
+# `_codex_stop_tier`'s OWN identity gate re-measured (a race against the
+# question this arm already asked) and found the tier not provably this
+# lane's, so it left it running and still answered rc 0: writing over that
+# tier would be exactly the hazard `tier-foreign` above exists to refuse, so
+# this arm refuses it here too, under the same code, before PHASE 2. ITS
+# STDERR IS CAPTURED TOO (finding F4/F5, folded under D-3488 "left running
+# AND named"): a tmp file, never argv — `_codex_stop_tier` prints ONE line
+# naming what it found, on a `foreign` word (what holds the port — the same
+# `$CX_FOREIGN_WHAT` note the sibling `2)` arm's own sentence would have
+# named) and on a stop-failed rc 1 (the SPECIFIC reason, e.g. "neither a
+# unit nor a pidfile … must be stopped by hand" — not just this arm's
+# generic sentence). Both refusals below append its last line.
+# START follows the write because this arm stopped a tier live sessions were
+# using; the external arm leaves that to the next session because it never
+# owned its tier. "Started" is the promise `_svc_run_supervised` keeps — the
+# job was created — not readiness, which is `ccrc codex start`'s question.
+# A write that fails after the stop starts the tier again on the bytes still
+# on disk, so the box is back where it was and the next run retries. Both
+# `start-failed` details append `_codex_start_tier`'s own last stderr line
+# (ruling PF-26), so its specific remedy — a stale unit, a missing runtime —
+# reaches the terminal and not just this arm's generic sentence.
+# Every library call runs in a SUBSHELL with stdout discarded: this verb's
+# contract is one JSON object on stdout on every path, and the library is
+# written for `ccrc codex`'s own stdout — a stray line or an `exit` inside
+# it must not reach this envelope. The tier question keeps its STDERR,
+# captured, because a 3's reason is there; the stop and both starts keep
+# theirs captured too, for the same reason.
+# A LANE-LIBRARY VERDICT READ OUT OF A SUBSHELL (the fix wave's B1, at
+# every site). `_models_litellm_lane_held` asks `_codex_tier_ours` inside
+# `$( … )`, so that a 2's holder is named where CX_TIER_WHY lives. That
+# substitution's own EXIT STATUS cannot carry the verdict: a fault inside
+# the library itself — an unbound variable under `set -u` — exits the
+# subshell 1, which is "not running", free, and a write and a start would
+# follow. So the subshell's LAST act prints `CX-VERDICT rc=<n>` on a line of
+# its own, and the verdict is read from that marker ALONE. No marker (the
+# shell died before it), or a malformed one, is 3, CANNOT ASK, with
+# CX_VERDICT_MARKED=0 so the refusal can say the library ended without an
+# answer. CX_VERDICT_SAID is the captured text's last non-empty line, the
+# marker removed: the library's sentence, or the holder's naming.
+_models_lane_verdict() {   # <captured text> -> sets CX_VERDICT_RC, CX_VERDICT_MARKED, CX_VERDICT_SAID
+  local cap="$1" last
+  last="${cap##*$'\n'}"
+  if [[ "$last" =~ ^CX-VERDICT\ rc=([0-9]{1,3})$ ]]; then
+    CX_VERDICT_RC="${BASH_REMATCH[1]}"; CX_VERDICT_MARKED=1
+    case "$cap" in *$'\n'*) cap="${cap%$'\n'*}" ;; *) cap='' ;; esac
+  else
+    CX_VERDICT_RC=3; CX_VERDICT_MARKED=0
+  fi
+  while [[ "$cap" == *$'\n' ]]; do cap="${cap%$'\n'}"; done
+  CX_VERDICT_SAID="${cap##*$'\n'}"
+}
+
+_models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON object; the caller holds `_codex_lock <id>`
+  local file out check crc ours said held=0 w wrc stoperr wsay recheck rrc ans
+  local CX_VERDICT_RC CX_VERDICT_MARKED CX_VERDICT_SAID
+  file="$(_models_roster_path)"
+  out="$(_models_litellm_path "$1")"
+  # PHASE 1 — render and compare; never write.
+  check="$(_models_answer litellm --file "$file" --id "$1" \
+             --template "$(_models_litellm_template)" --out "$out")"; crc=$?
+  [ "$crc" -eq 0 ] || { printf '%s\n' "$check"; return "$crc"; }
+  if [ "$(printf '%s' "$check" | jq -r '.changed')" != "true" ]; then
+    printf '%s\n' "$check"
+    return 0
+  fi
+  # THE TIER — asked only now, when the bytes differ, as the external arm asks.
+  # A 2 is NAMED in the same subshell as the measurement (CX_TIER_WHY lives
+  # only there), through `_codex_foreign_what` (review A2), and that naming
+  # runs in a subshell OF ITS OWN (fix wave, the Task 10 B1 shape): the rc of
+  # this substitution IS the verdict, so a fault while naming — an unbound
+  # variable exits its shell 1 under `set -u` — must end the naming alone,
+  # never turn a 2 into a 1, "free", and a write. And the VERDICT itself is
+  # the substitution's last line, never its exit status
+  # (`_models_lane_verdict`): a fault inside `_codex_tier_ours` leaves no
+  # marker, and reads 3, cannot ask.
+  said="$(
+    _codex_tier_ours "$1" litellm 2>&1 >/dev/null; rc=$?
+    if [ "$rc" -eq 2 ]; then
+      ( _codex_foreign_what "$1" litellm >/dev/null 2>&1; printf '%s. %s' "$CX_FOREIGN_WHAT" "$CX_FOREIGN_FIX" )
+    fi
+    printf '\nCX-VERDICT rc=%s' "$rc"
+  )"
+  _models_lane_verdict "$said"
+  ours="$CX_VERDICT_RC"; said="$CX_VERDICT_SAID"
+  ans="answered $ours"; [ "$CX_VERDICT_MARKED" -eq 1 ] || ans="ended without an answer"
+  case "$ours" in
+    0|4) held=1
+         # F4/F5: the stop's OWN stderr line, captured in a tmp file (never
+         # argv), so both refusals below can carry the SPECIFIC reason —
+         # what holds the port on `foreign`, or why the stop itself failed —
+         # rather than only this arm's generic sentence. A `_plat_mktemp`
+         # failure degrades to `/dev/null`: the specific line is lost, never
+         # the refusal itself.
+         stoperr="$(_plat_mktemp 2>/dev/null)" || stoperr=''
+         w="$( _codex_stop_tier "$1" litellm 2>"${stoperr:-/dev/null}" )"; wrc=$?
+         wsay=''
+         if [ -n "$stoperr" ]; then
+           wsay="$(tail -n1 "$stoperr" 2>/dev/null)"
+           rm -f -- "$stoperr"
+         fi
+         [ "$wrc" -eq 0 ] \
+           || _models_refuse restart-failed 1 "lane $1's LiteLLM tier is running (or still starting) on the PREVIOUS config and could not be stopped.${wsay:+ $wsay} Run 'ccrc codex stop $1', then re-run this command — until then this lane serves the old model list. Nothing was written."
+         if [ "$w" = foreign ]; then
+           _models_refuse tier-foreign 1 "lane $1's LiteLLM tier is not provably this lane's; ccrc left it running.${wsay:+ $wsay} Run 'ccrc codex status $1' to see what holds it, then re-run this command. Nothing was written."
+         fi
+         # CLASS FIX (review round 2, N1/N3/N4): `_codex_stop_tier` answers
+         # `foreign` only when it stopped nothing; after a REAL stop it
+         # answers `stopped`, and a taker arriving after ITS OWN second
+         # measurement is invisible to it. Re-measure right before the
+         # restart this function owes, and start only on a freshly measured
+         # 1. The re-check runs in its OWN subshell (`$( … )`), so
+         # CX_TIER_WHY it sets there never reaches this scope — the holder
+         # description is built and printed INSIDE that subshell instead
+         # (N1), the same way `said` above captures the first call's stderr.
+         # The naming is nested in a subshell of its own (fix wave, Task 10
+         # B1): this substitution's rc is the verdict, and a fault while
+         # naming must never fold a 2 into a 1 ("free", then write + start).
+         # Its verdict is the marker too, never the exit status (above).
+         recheck="$(
+           _codex_tier_ours "$1" litellm 2>&1 >/dev/null; rc=$?
+           if [ "$rc" -eq 2 ]; then
+             ( _codex_foreign_what "$1" litellm >/dev/null 2>&1; printf '%s' "$CX_FOREIGN_WHAT" )
+           fi
+           printf '\nCX-VERDICT rc=%s' "$rc"
+         )"
+         _models_lane_verdict "$recheck"
+         rrc="$CX_VERDICT_RC"; recheck="$CX_VERDICT_SAID"
+         ans="answered $rrc"; [ "$CX_VERDICT_MARKED" -eq 1 ] || ans="ended without an answer"
+         if [ "$rrc" -eq 2 ]; then
+           _models_refuse tier-foreign 1 "lane $1's LiteLLM tier was stopped for this rendering, and a re-check right before the restart it is owed found its port or unit held by something ccrc cannot prove is this lane's${recheck:+ ($recheck)}; that tier is DOWN. Run 'ccrc codex status $1' to see what holds it, then 'ccrc codex start $1' to bring it back. Nothing was written."
+         elif [ "$rrc" -ne 1 ]; then
+           _models_refuse tier-unmeasured 1 "whether lane $1's LiteLLM tier's port is free right before the restart it is owed could not be measured (the lane library $ans${recheck:+: $recheck}), so it was not started again; that tier is DOWN. Run 'ccrc codex start $1' to bring it back. Nothing was written."
+         fi ;;
+    1) : ;;
+    2) [ -n "$said" ] && said=": $said" || said='.'
+       _models_refuse tier-foreign 1 "lane $1's LiteLLM tier is not provably this lane's$said ccrc cannot tell whether it is serving the previous rendering, and it never stops what it cannot identify, so it was left running. Run 'ccrc codex status $1' to see what holds it, then re-run this command. Nothing was written." ;;
+    *) _models_refuse tier-unmeasured 1 "ccrc could not ask whether lane $1's LiteLLM tier is running (the lane library $ans${said:+: $said}), so whatever holds it was left running and nothing was stopped — ccrc never stops what it cannot identify. Fix what that names, then re-run this command. Nothing was written." ;;
+  esac
+  # PHASE 2 — the write.
+  local body
+  body="$(_models_answer litellm --file "$file" --id "$1" \
+            --template "$(_models_litellm_template)" --out "$out" --commit true)"; crc=$?
+  if [ "$crc" -ne 0 ]; then
+    if [ "$held" -eq 1 ]; then
+      local rerr rline why
+      if rerr="$( ( _codex_start_tier "$1" litellm ) 2>&1 >/dev/null )"; then
+        echo "$PROG: started lane $1's LiteLLM tier again on the previous rendering — the new one could not be written." >&2
+      else
+        why="$(printf '%s' "$body" | jq -r '.detail // "no reason given"' 2>/dev/null)"
+        rline="${rerr##*$'\n'}"
+        _models_refuse start-failed 1 "the new model list could not be written ($why), and lane $1's LiteLLM tier — stopped to take it — did not start again on the previous one, so this lane has no LiteLLM tier until it does. Run 'ccrc codex start $1' (every session launched on this lane runs it too).${rline:+ $rline}"
+      fi
+    fi
+    printf '%s\n' "$body"
+    return "$crc"
+  fi
+  # START — this arm stopped a tier sessions were using, so it owes them one.
+  local restarted=false
+  if [ "$held" -eq 1 ]; then
+    local serr sline
+    if ! serr="$( ( _codex_start_tier "$1" litellm ) 2>&1 >/dev/null )"; then
+      sline="${serr##*$'\n'}"
+      _models_refuse start-failed 1 "the new model list WAS written to $out, but lane $1's LiteLLM tier — stopped to take it — did not start again, so this lane has no LiteLLM tier until it does. Run 'ccrc codex start $1' (every session launched on this lane runs it too).${sline:+ $sline}"
+    fi
+    restarted=true
+    echo "$PROG: restarted lane $1's LiteLLM tier — it was holding the previous rendering, and it now reads $out." >&2
+  fi
+  printf '%s\n' "$(printf '%s' "$body" | jq -c --argjson r "$restarted" '. + {restarted: $r}')"
+  return 0
+}
 
 # STOP-THEN-WRITE (fix round 1, this task's controller ruling). Restart is
 # owed only when BOTH halves are true: the bytes changed AND a proxy is
@@ -9405,6 +10012,11 @@ _models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/n
 # worth paying for a config that has changed and not one for a config that
 # has not.
 _models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's final answer, or a refusal
+  # A codex-kind lane takes its own arm (`_models_litellm_lane`, above).
+  # Everything below is the EXTERNAL arm, unchanged byte for byte
+  # (D-3482): the live lanes are external, and another
+  # repository's LiteLLM reads that arm's file. Plan 3 retires it at cutover.
+  if _models_litellm_codex "$1"; then _models_litellm_lane "$1"; return $?; fi
   local file check crc
   file="$(_models_roster_path)"
   check="$(_models_answer litellm --file "$file" --id "$1" \
@@ -9436,6 +10048,37 @@ _models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's 
     printf '%s\n' "$body"
   fi
   return "$crc"
+}
+
+# `ccrc codex start`'s config step (design contract `start`:
+# "litellm.yaml present, else render via `_models_litellm <id>`'s codex
+# arm"). PRESENCE only — staleness is `ccrc models refresh`'s question,
+# asked hourly by its timer. Rendered by the ONE writer, through the arm's
+# body `_models_litellm_lane_held` DIRECTLY rather than through
+# `_models_litellm`'s dispatch: this caller must never reach the external
+# arm, whose failure mode is the live box's box-global file and a bare
+# `ccgpt stop`. And never through `_models_litellm_lane`, which takes the
+# lane lock: THE CALLER HOLDS IT (`_codex_cmd_start` takes it before
+# this step). `_codex_lock` is RE-ENTRANT there (R38: a second call would
+# return 0 at once, not wait), but this function still never calls it, to
+# keep the lock's scope to `_codex_cmd_start`'s own call and the fake's
+# call log honest. Its answer is CAPTURED, never
+# printed: `ccrc codex` prints its own line on stdout, and the models JSON
+# is not it. A refusal is ONE `litellm-unrendered` line, through the one
+# refusal printer, carrying the op's own `.detail`, which names the specific
+# remedy (never-probed → refresh). PF-40: the presence check reads
+# `_codex_litellm_yaml <id>` directly — the same spelling
+# `_codex_start_tier`'s `--config` and `_models_litellm_path`'s id arm use.
+_codex_litellm_ensure() {   # <codex id> -> 0 iff ~/.ccrc/codex/<id>/litellm.yaml exists (rendered now when absent); else one stderr line, rc 1. The caller holds `_codex_lock <id>`.
+  local path body rc=0 detail
+  path="$(_codex_litellm_yaml "$1")"
+  [ -f "$path" ] && return 0
+  body="$(_models_litellm_lane_held "$1" 2>/dev/null)" || rc=$?
+  [ "$rc" -eq 0 ] && [ -f "$path" ] && return 0
+  detail="$(printf '%s\n' "$body" | tail -n1 | jq -r '.detail // empty' 2>/dev/null)"
+  [ -n "$detail" ] || detail="the render answered rc $rc and wrote nothing"
+  _codex_say litellm-unrendered "lane $1 has no LiteLLM config at $path, and rendering one was refused: $detail — run 'ccrc models litellm $1' to see the whole answer"
+  return 1
 }
 
 # The box-wide half of the verb group: the CATALOGUES the class registries are
@@ -9612,6 +10255,1604 @@ _models_box_sub() {   # <subcommand> [args…]
   esac
 }
 
+# ── THE CODEX LANE LIBRARY (spec §4.3, §5.4, §7.4; Plan 2b-2) ───────────
+# What every `ccrc codex` verb, the `ccrc-codex` launcher's `start` call and the
+# install spine read a lane THROUGH. Nothing here starts or stops a process —
+# `_codex_start_tier`/`_codex_stop_tier`/`_codex_stop_lane`, and `_acct_remove`'s codex arms (Task 8),
+# are the lifecycle half and sit below this block.
+#
+# THE ROSTER IS READ FOR `exec.kind`, NEVER FOR TELEMETRY. `accounts.sh`'s
+# `CCRC_CODEX_BACKEND` (and ccd's own `_codex_lanes`, a DIFFERENT function of
+# the same name in a file this one never sources) is keyed on
+# `telemetry == "codex"` — a usage-vocabulary question. The live Codex lanes
+# are `exec.kind: "external"` rows, which that list can name and this library
+# must never treat as lanes it runs: an external lane's launcher and tiers
+# belong to somebody else.
+#
+# ONE SPELLING PER FACT: the lane directory is `_codex_lane_dir`, the shim's
+# code file `_codex_shim_file`, the runtime CLI `_codex_runtime_cli`, the
+# lane's litellm.yaml path `_codex_litellm_yaml`, the tier vocabulary
+# `CODEX_TIERS`, and the unit names are READ from lane.json (whose one writer,
+# `deploy/models-op.mjs`'s `laneManifest`, is also their one derivation). The
+# start half builds its argv from the same helpers, so the identity checks
+# here and the argv they check cannot drift apart.
+CODEX_TIERS="litellm shim"
+
+# Every codex-lane refusal in this file, from the library, the lifecycle
+# verbs, the spine and account removal alike, prints through this one
+# function, and none of them spells the shape again.
+_codex_say() {   # <code> <sentence> — the one refusal shape, `ccrc codex: <code>: <sentence>`, on stderr
+  printf '%s codex: %s: %s\n' "$PROG" "$1" "$2" >&2
+}
+
+_codex_lane_dir()    { printf '%s' "$HOME/.ccrc/codex/$1"; }
+_codex_shim_file()   { printf '%s' "$HOME/.local/bin/ccgpt-proxy.py"; }
+_codex_runtime_cli() { printf '%s' "$HOME/.local/bin/ccgpt-runtime"; }
+_codex_litellm_yaml() { printf '%s' "$(_codex_lane_dir "$1")/litellm.yaml"; }
+
+# `$WRAPPER_ID_RE` and `$WRAPPER_SUFFIX_SAFE_RE`, from the one contract that
+# spells them — `_acct_shape`'s idiom. Loaded HERE rather than trusted to the
+# caller because the install spine reaches this library long before
+# `_inst_wrappers` sources the shape, and an unset regex under `set -u` would
+# end the install rather than refuse one lane.
+_codex_shape() {
+  [ -n "${WRAPPER_ID_RE:-}" ] && [ -n "${WRAPPER_SUFFIX_SAFE_RE:-}" ] && return 0
+  local shape="$CCRC_HERE/ccrc-wrapper-shape"
+  # shellcheck source=ccrc-wrapper-shape
+  if [ -f "$shape" ] && . "$shape" && [ -n "${WRAPPER_ID_RE:-}" ] && [ -n "${WRAPPER_SUFFIX_SAFE_RE:-}" ]; then
+    return 0
+  fi
+  _codex_say install-incomplete "the wrapper shape contract $shape is missing or older than this ccrc, so no account id can be checked before a path is built from it. The files ship together: re-run the install. Nothing was changed."
+  return 1
+}
+
+_codex_tier_ok() {   # <token> -> 0 iff it is one of CODEX_TIERS
+  local t
+  for t in $CODEX_TIERS; do [ "$t" = "${1:-}" ] && return 0; done
+  return 1
+}
+
+_codex_port_ok() {   # <token> -> 0 iff it can be a TCP port
+  [[ "${1:-}" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ]
+}
+
+# THE ONE tier -> port mapping (the fix wave's ruling: four hand-written
+# copies had drifted, one with the default inverted). It reads the row
+# `_codex_row` just set, so a caller asks `_codex_row` first. rc 1, printing
+# nothing, for a tier word this build does not know or a row not read: a
+# third tier, or a caller that skipped the row, can never fall through to
+# another tier's port.
+_codex_tier_port() {   # <tier> -> the port of that tier in `_codex_row`'s CX_*
+  local p
+  case "${1:-}" in
+    litellm) p="${CX_LITELLM:-}" ;;
+    shim)    p="${CX_PROXY:-}" ;;
+    *) return 1 ;;
+  esac
+  [ -n "$p" ] || return 1
+  printf '%s' "$p"
+}
+
+_codex_probe_secs() {   # the per-probe bound, whole seconds; a malformed override falls back to 2
+  # GNU `timeout 00` means NO TIMEOUT (measured: `timeout 00 sleep 2` exits 0
+  # after 2s — the duration parses as zero, and `timeout` treats zero as
+  # "don't bound it"), so any all-zero digit string must fall back too, not
+  # pass through as a literal probe bound: `10#$s` reads it in base 10
+  # (stripping leading zeros) and a result below 1 falls back the same as an
+  # empty or non-digit override. Capped at four digits (`?????*`) so an
+  # absurdly long digit string cannot become a multi-second arithmetic
+  # expansion nobody asked for.
+  local s="${CCRC_CODEX_PROBE_S:-2}"
+  case "$s" in ''|*[!0-9]*|?????*) s=2 ;; esac
+  s=$((10#$s))
+  [ "$s" -ge 1 ] || s=2
+  printf '%s' "$s"
+}
+
+# `_inst_enable`'s two lines, for the tier probes — `systemctl --user` from a
+# non-interactive context needs both, and `_svc_have_user_manager`'s callers
+# supply them (its contract says so). Nothing on darwin: no user manager.
+_codex_bus_defaults() {
+  [ "$CCD_OS" = darwin ] && return 0
+  : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+  : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+}
+
+# The rostered codex lanes, one id per line, in roster order. EMPTY OUTPUT AT
+# rc 0 IS "none" AND NOTHING ELSE: a roster that cannot be read answers rc 1
+# with its own sentence, because the spine's "no codex lane in the roster" line
+# would be a lie over a file it never read. NO jq ON PATH IS rc 2, with a
+# `missing-dependency` sentence, never rc 1 (review C2): the install spine
+# probes node and systemctl by name but not jq, so there a missing jq is the
+# likely cause of a roster that "cannot be read", and a `roster-invalid`
+# sentence would send the operator to fix a roster that is valid.
+_codex_lanes() {
+  local out
+  if ! command -v jq >/dev/null 2>&1; then
+    _codex_say missing-dependency "jq is not on PATH, and it is what reads \$HOME/.ccrc/accounts.json, so which roster lanes are codex lanes cannot be told. Install jq, or put it on PATH, then re-run."
+    return 2
+  fi
+  if out="$(jq -r '.accounts | if type == "array" then .[] else error("accounts is not an array") end
+                   | select(type == "object" and (.exec | type) == "object" and .exec.kind == "codex")
+                   | .id | strings' "$(_models_roster_path)" 2>/dev/null)"; then
+    [ -z "$out" ] || printf '%s\n' "$out"
+    return 0
+  fi
+  _codex_say roster-invalid "\$HOME/.ccrc/accounts.json could not be read as a roster, so its codex lanes are unknown — 'ccrc wrappers' prints the validator's own sentence for it."
+  return 1
+}
+
+# One codex lane's row. Sets CX_ID CX_KIND CX_CFG CX_AUTH CX_PROXY CX_LITELLM,
+# every one EMPTY after a refusal (so a caller cannot act on the previous row's
+# values), and refuses with one stderr line: rc 2 for `usage` (a malformed id)
+# and rc 1 for every other refusal. The two stay apart because `ccrc codex`
+# exits 2 on a usage error and 1 on a bad answer (this file's EXIT CODES
+# header), and a caller can only keep a distinction it is handed. The roster
+# is read RAW here — `parseRoster` is TypeScript — so the three fields a path or a socket
+# is built from are bounded again; the roster's validator stays the authority
+# on everything else, and `ccrc wrappers` is where its sentence is printed.
+_codex_row() {   # <id>
+  CX_ID=''; CX_KIND=''; CX_CFG=''; CX_AUTH=''; CX_PROXY=''; CX_LITELLM=''
+  local id="${1:-}"
+  local -a f=()
+  _codex_shape || return 1
+  if ! [[ "$id" =~ $WRAPPER_ID_RE ]]; then
+    _codex_say usage "'$id' is not an account id (a lowercase letter, then lowercase letters, digits and '-', at most 32)."
+    return 2
+  fi
+  # ONE FIELD PER LINE AND AN `END` SENTINEL — `deploy/account-op.mjs`'s `lane`
+  # op's grammar and its reason: TAB is IFS whitespace, so an empty middle field
+  # would shift every later one, and `mapfile` over a process substitution
+  # cannot see jq's exit status, so a jq that died is a missing `END`.
+  mapfile -t f < <(jq -r --arg id "$id" '
+      [ (.accounts | if type == "array" then .[] else error("accounts") end)
+        | select(type == "object" and .id == $id) ] as $m
+      | ( if ($m | length) == 0 then "absent"
+          elif ($m | length) > 1 then "duplicate"
+          else $m[0] as $a | ($a.exec | if type == "object" then . else {} end) as $x
+            | "row", ($x.kind // "" | tostring), ($a.configDirSuffix // "" | tostring),
+              ($x.authDir // "" | tostring), ($x.proxyPort // "" | tostring),
+              ($x.litellmPort // "" | tostring)
+          end ), "END"' "$(_models_roster_path)" 2>/dev/null)
+  if [ "${#f[@]}" -lt 2 ] || [ "${f[${#f[@]}-1]}" != END ]; then
+    _codex_say roster-invalid "\$HOME/.ccrc/accounts.json could not be read as a roster, so account '$id' cannot be looked up — 'ccrc wrappers' prints the validator's own sentence for it."
+    return 1
+  fi
+  case "${f[0]}" in
+    absent)
+      _codex_say not-rostered "account '$id' is not in \$HOME/.ccrc/accounts.json. Add it as an exec.kind \"codex\" lane (with its two ports and authDir), then run 'ccrc wrappers'."
+      return 1 ;;
+    row) [ "${#f[@]}" -eq 7 ] || { _codex_say roster-invalid "account '$id''s roster row could not be read field by field — 'ccrc wrappers' prints the validator's own sentence for it."; return 1; } ;;
+    *)
+      _codex_say roster-invalid "\$HOME/.ccrc/accounts.json names account '$id' more than once — 'ccrc wrappers' prints the validator's own sentence for it."
+      return 1 ;;
+  esac
+  if [ "${f[1]}" != codex ]; then
+    _codex_say not-codex "account '$id' is exec.kind \"${f[1]}\", not \"codex\". Only a codex lane's tiers run under 'ccrc codex'; an \"external\" lane's launcher and tiers belong to somebody else."
+    return 1
+  fi
+  local cfg="${f[2]}" auth="${f[3]}" pp="${f[4]}" lp="${f[5]}" bad=''
+  [[ "$cfg" =~ $WRAPPER_SUFFIX_SAFE_RE ]] || bad=configDirSuffix
+  # exec.authDir: `shared/roster.ts`'s `parseAuthDir`, rule for rule — its
+  # charset, its four path refusals, a trailing `/`, and NOTHING AT OR UNDER
+  # `.ccrc` (review D1). This reader builds the path `ccrc codex login`
+  # writes the credential into, and `_uninst_purge` empties ~/.ccrc, so a
+  # hand-edited row that never met the validator must not put a credential
+  # where a purge reaches it. `.ccrc-backups` and its like stay legal: the
+  # refusal is `.ccrc` itself, or `.ccrc/` WITH the separator.
+  case "$auth" in
+    ''|.|./*|*/./*|/*|*/|*..*|.ccrc|.ccrc/*) bad="${bad:+$bad, }exec.authDir" ;;
+    *) [[ "$auth" =~ ^[A-Za-z0-9._/-]+$ ]] || bad="${bad:+$bad, }exec.authDir" ;;
+  esac
+  { _codex_port_ok "$pp" && _codex_port_ok "$lp" && [ "$pp" != "$lp" ]; } \
+    || bad="${bad:+$bad, }exec.proxyPort/exec.litellmPort"
+  if [ -n "$bad" ]; then
+    _codex_say roster-invalid "account '$id''s codex row does not validate ($bad) — 'ccrc wrappers' prints the validator's own sentence for it."
+    return 1
+  fi
+  CX_ID="$id"; CX_KIND=codex; CX_CFG="$cfg"; CX_AUTH="$auth"; CX_PROXY="$pp"; CX_LITELLM="$lp"
+  return 0
+}
+
+# Is lane.json this roster row's projection? `current`, `stale` or `absent`
+# on stdout, rc 0; `_codex_row`'s own rc (2 usage, 1 any other refusal, with
+# its sentence) when the row itself cannot be read — passed on, never folded.
+# `units` is checked for PRESENCE, not value, deliberately:
+# its one derivation is `laneManifest`'s, a second one here is exactly what
+# single-definition forbids, and its only input — `id` — IS compared.
+_codex_lane_json_state() {   # <id>
+  _codex_row "$1" || return $?
+  local lane; lane="$(_codex_lane_dir "$CX_ID")/lane.json"
+  if [ ! -e "$lane" ] && [ ! -L "$lane" ]; then printf 'absent\n'; return 0; fi
+  if [ -f "$lane" ] && jq -e --arg id "$CX_ID" --arg cfg "$CX_CFG" --arg auth "$CX_AUTH" \
+       --argjson pp "$CX_PROXY" --argjson lp "$CX_LITELLM" '
+       type == "object" and .id == $id and .configDir == $cfg and .authDir == $auth
+       and .proxyPort == $pp and .litellmPort == $lp
+       and (.units | type) == "object"
+       and (.units.litellm | type) == "string" and (.units.litellm | length) > 0
+       and (.units.shim | type) == "string" and (.units.shim | length) > 0' "$lane" >/dev/null 2>&1; then
+    printf 'current\n'
+  else
+    printf 'stale\n'
+  fi
+  return 0
+}
+
+# lane.json equals the roster row, or is made to by the ONE writer:
+# `deploy/models-op.mjs`'s existing `materialise` op. Converged is a no-op —
+# no node, no rewrite — because materialise also rewrites the lane's
+# settings.json env block, TSV and effort file, and a launcher calls this on
+# every session start.
+_codex_lane_json_ensure() {   # <id>
+  local st ans rc err detail
+  # `_codex_row` IN THIS SHELL, not only inside the `$( … )` below: a command
+  # substitution is a subshell, and the CX_* it sets there never reach here.
+  # Its rc is passed on as it came (2 usage, 1 otherwise).
+  _codex_row "${1:-}" || return $?
+  st="$(_codex_lane_json_state "$CX_ID")" || return 1
+  [ "$st" = current ] && return 0
+  ans="$(_models_node materialise --file "$(_models_roster_path)" --id "$CX_ID" 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ] || ! printf '%s' "$ans" | jq -e '.ok == true' >/dev/null 2>&1; then
+    err="$(printf '%s' "$ans" | jq -r '.error // empty' 2>/dev/null)"
+    detail="$(printf '%s' "$ans" | jq -r '.detail // empty' 2>/dev/null)"
+    _codex_say lane-unwritable "'ccrc models' could not render $(_codex_lane_dir "$CX_ID")/lane.json (models-op exited $rc${err:+: $err}${detail:+ — $detail}). lane.json was not written; models-op renders the lane's other model files first, so those may already be new."
+    return 1
+  fi
+  if printf '%s' "$ans" | jq -e '.wrote == null' >/dev/null 2>&1; then
+    _codex_say no-registry "account '$CX_ID' has no class registry, and lane.json is rendered from it. Run 'ccrc models $CX_ID init codex', then retry. Nothing was written."
+    return 1
+  fi
+  if printf '%s' "$ans" | jq -e '.wrote.lane == null' >/dev/null 2>&1; then
+    _codex_say not-codex "deploy/models-op.mjs did not read account '$CX_ID' as a codex lane, so it wrote no lane.json — the roster changed under this run; re-run it."
+    return 1
+  fi
+  st="$(_codex_lane_json_state "$CX_ID")" || return 1
+  [ "$st" = current ] && return 0
+  _codex_say lane-unwritable "$(_codex_lane_dir "$CX_ID")/lane.json still does not match the roster after it was rendered — something else is writing it. Nothing else was changed."
+  return 1
+}
+
+# The lane's LiteLLM gateway key: `runtime.env`, EXACTLY one line
+# `LITELLM_MASTER_KEY=sk-<48 lowercase hex>` and mode 0600 (spec §5.4). The
+# lane directory's own 0700 is `materialise`'s, set at creation only, so this
+# file sets its own mode rather than trusting the directory's (Plan 2b-1
+# carry-forward 9). Sets CX_ENV_ACTION to what it did — `kept`, `rechmod`,
+# `created` or `replaced` — because a key that CHANGED under a running LiteLLM
+# tier is a restart the caller owes, and only the caller knows the tier.
+#
+# THE KEY NEVER REACHES AN ARGV AND NEVER REACHES STDOUT OR STDERR. It is born
+# in a `$( … )` from `od | tr`, whose own argv is fixed, and written by the
+# `printf` BUILTIN into a tmp file `mktemp` already created at 0600 — so the
+# tmp file is 0600 from its first byte (mktemp's own guarantee, independent of
+# the ambient umask; not a chmod race) and no process on this box is ever
+# handed the value. `mktemp`'s TEMPLATE form also means the tmp path is never
+# predictable: a plain `> "$f.tmp.$$"` follows a pre-existing symlink at that
+# exact, guessable name and silently overwrites whatever it points at; a
+# template mktemp instead always creates a FRESH, never-before-existing path,
+# so a symlink planted at any `runtime.env.tmp.*` name is simply never
+# touched.
+_codex_runtime_env_ensure() {   # <id>
+  CX_ENV_ACTION=''
+  local id="${1:-}" dir f tmp key line mode was=created
+  _codex_shape || return 1
+  if ! [[ "$id" =~ $WRAPPER_ID_RE ]]; then
+    _codex_say usage "'$id' is not an account id, so no runtime.env path is built from it."
+    return 2
+  fi
+  dir="$(_codex_lane_dir "$id")"; f="$dir/runtime.env"
+  if [ ! -d "$dir" ] && ! ( umask 077 && mkdir -p -- "$dir" ); then
+    _codex_say lane-unwritable "could not create $dir for account '$id''s gateway key. Nothing was written."
+    return 1
+  fi
+  if [ -f "$f" ] && [ ! -L "$f" ]; then
+    { line="$(<"$f")"; } 2>/dev/null || line=''
+    # The line, and EXACTLY one newline after it: `$(<f)` strips trailing
+    # newlines, so the size is what tells one line from a line and a blank.
+    if [[ "$line" =~ ^LITELLM_MASTER_KEY=sk-[0-9a-f]{48}$ ]] \
+       && [ "$(_plat_size "$f" 2>/dev/null)" = "$(( ${#line} + 1 ))" ]; then
+      mode="$(_plat_mode "$f" 2>/dev/null)"
+      if [ "$mode" = 600 ]; then CX_ENV_ACTION=kept; return 0; fi
+      if chmod -- 600 "$f"; then CX_ENV_ACTION=rechmod; return 0; fi
+      _codex_say lane-unwritable "$f is mode $mode and could not be made 0600. Nothing else was changed."
+      return 1
+    fi
+  fi
+  { [ -e "$f" ] || [ -L "$f" ]; } && was=replaced
+  key="$(od -An -tx1 -N24 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  if ! [[ "$key" =~ ^[0-9a-f]{48}$ ]]; then
+    _codex_say lane-unwritable "could not read 24 random bytes from /dev/urandom, so no gateway key was minted for account '$id'. Nothing was written."
+    return 1
+  fi
+  tmp="$(mktemp "$f.tmp.XXXXXX" 2>/dev/null)" || {
+    _codex_say lane-unwritable "could not create a temp file next to $f to mint account '$id''s gateway key (mktemp failed). Nothing was written."
+    return 1
+  }
+  if printf 'LITELLM_MASTER_KEY=sk-%s\n' "$key" > "$tmp" \
+     && chmod -- 600 "$tmp" && _plat_mv_notdir "$tmp" "$f" 2>/dev/null; then
+    CX_ENV_ACTION="$was"
+    return 0
+  fi
+  rm -f -- "$tmp"
+  _codex_say lane-unwritable "could not write $f for account '$id'. Nothing else was changed."
+  return 1
+}
+
+# 0 when something on 127.0.0.1:<port> completes a TCP connect inside the
+# bound; 1 when nothing does (refused); 2 when the connect OUTLIVED the bound
+# — something holds the port and is not answering, which is not "free" and
+# must never be started over; 3 when <port> is not a port. Bash's own
+# `/dev/tcp`, in a child under `_plat_timeout`, because a connect has no
+# timeout of its own and the probe must not become a hang.
+_codex_port_listening() {   # <port>
+  _codex_port_ok "${1:-}" || return 3
+  _plat_timeout "$(_codex_probe_secs)" "$BASH" -c 'exec 3<>"/dev/tcp/127.0.0.1/$1"' _ "$1" 2>/dev/null
+  case $? in
+    0) return 0 ;;
+    124) return 2 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Who answers `GET /ccgpt/lane` on <port>? Prints the lane id and answers 0
+# only for ccrc's shim's EXACT shape — status 200, `Content-Type:
+# application/json`, a body that is a JSON object whose only key is a string
+# `lane` (`ccd/ccgpt-proxy.py`'s `_lane`). 1 = nothing answered; 2 = something
+# answered in another shape. The other repository's shim answers `text/plain`
+# with the bare id, and that is exactly the listener this must not adopt.
+_codex_lane_answer() {   # <port>
+  local resp head body status line ok=0 ct_re='^[[:space:]]*application/json([[:space:]]*;.*)?[[:space:]]*$'
+  _codex_port_ok "${1:-}" || return 1
+  resp="$(_plat_timeout "$(_codex_probe_secs)" "$BASH" -c '
+    exec 3<>"/dev/tcp/127.0.0.1/$1" || exit 1
+    printf "GET /ccgpt/lane HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n" >&3 || exit 1
+    IFS= read -r -N 65536 r <&3
+    printf "%s" "$r"' _ "$1" 2>/dev/null)"
+  [ -n "$resp" ] || return 1
+  resp="${resp//$'\r'/}"
+  case "$resp" in *$'\n\n'*) : ;; *) return 2 ;; esac
+  head="${resp%%$'\n\n'*}"; body="${resp#*$'\n\n'}"
+  status="${head%%$'\n'*}"
+  [[ "$status" =~ ^HTTP/1\.[01]\ 200(\ |$) ]] || return 2
+  while IFS= read -r line; do
+    case "${line,,}" in
+      content-type:*) [[ "${line#*:}" =~ $ct_re ]] && ok=1 ;;
+    esac
+  done <<< "${head#*$'\n'}"
+  [ "$ok" -eq 1 ] || return 2
+  printf '%s' "$body" | jq -er 'if type == "object" and keys == ["lane"] and (.lane | type) == "string"
+                                then .lane else error("not a ccrc shim") end' 2>/dev/null || return 2
+  return 0
+}
+
+# The unit name lane.json records for <tier> — READ, never derived (see the
+# block header). rc 1, silently, when lane.json names none; the caller then
+# has no unit to ask about, which is a fact, not a refusal.
+_codex_unit() {   # <id> <tier>
+  local u
+  u="$(jq -r --arg t "$2" '.units[$t] // empty | strings' "$(_codex_lane_dir "$1")/lane.json" 2>/dev/null)" || return 1
+  [[ "$u" =~ ^[A-Za-z0-9][A-Za-z0-9@._:-]*\.service$ ]] || return 1
+  printf '%s\n' "$u"
+}
+
+# Is <pid> this lane's <tier>, BY ITS COMMAND LINE? litellm: the argv carries
+# `--config <this lane's litellm.yaml>` as a whole word. shim: the argv carries
+# `<the shim file> --ccrc-lane=<id>`, the word the start half puts after the
+# shim file on both arms. The shim reads no argv at all, so that marker is
+# inert to it and is the ONLY lane-specific thing its command line can hold.
+# Without it every lane's shim has the same command line, and a stale pidfile
+# would hand this lane another lane's live shim to stop.
+# `-ww` because procps honours $COLUMNS even into a pipe (measured: COLUMNS=40
+# cut a 366-byte argv to 40), and a truncated argv would read a live tier as
+# a stranger.
+_codex_pid_is_tier() {   # <id> <tier> <pid>
+  local args want
+  args="$(ps -ww -o args= -p "$3" 2>/dev/null)" || return 1
+  case "$2" in
+    litellm) want="--config $(_codex_litellm_yaml "$1")" ;;
+    shim)    want="$(_codex_shim_file) --ccrc-lane=$1" ;;
+    *) return 1 ;;
+  esac
+  case " $args " in *" $want "*) return 0 ;; esac
+  return 1
+}
+
+# Does <pid> ITSELF hold a LISTEN socket on TCP <port>? 0 yes; 1 no: a
+# LISTEN socket on the port IS visible, and it is not <pid>'s (another
+# process holds it, or <pid> is gone); 3 CANNOT ASK, with the reason in
+# CX_LISTEN_WHY — and NO LISTEN SOCKET VISIBLE FOR THE PORT IS A 3, never a 1
+# (review N4): the caller asks only after a connect succeeded, so an empty
+# table disagrees with the kernel's own answer (a race, or an incomplete
+# /proc/net, as under gVisor or WSL1), and a 1 there would be rendered as
+# "another process holds the port", which nothing measured. The LiteLLM
+# tier's identity needs it (review F1): a proven command line says a process
+# IS this lane's LiteLLM, and a connect says SOMETHING listens, but only this
+# says the two are one process. A LiteLLM that has not bound yet, or has just
+# died on EADDRINUSE, while another process holds its port, is otherwise
+# read as "ours, running" from its argv alone.
+# - Linux: the LISTEN (`st` 0A) entries of /proc/net/tcp and /proc/net/tcp6
+#   whose local port is <port>, by socket inode — LISTEN only, because a
+#   process that is not listening can hold a socket whose LOCAL port is
+#   <port> too (bound to 127.0.0.2:<port> and connected to the listener on
+#   127.0.0.1:<port>: review N2, measured) — then whether any of <pid>'s fds
+#   reads back, by `readlink`, as exactly `socket:[<inode>]`. One readlink per
+#   fd, never a parse of `ls -l`, whose link-target spelling follows an
+#   ambient QUOTING_STYLE even into a pipe (review N1, measured: under shell,
+#   shell-escape, c, locale and clocale the target prints quoted, and a
+#   healthy LiteLLM read 1). No `ss`. /proc/net/tcp unreadable, no readlink
+#   on PATH, a live <pid>'s fd directory unreadable (another user's
+#   process; a zombie's), or a readlink that reads none of a live <pid>'s
+#   fds is 3.
+# - Darwin: `lsof -nP -a -p <pid> -iTCP:<port> -sTCP:LISTEN -t`, and when
+#   that names nothing, the same query for every process
+#   (`lsof -nP -iTCP:<port> -sTCP:LISTEN -t`): <pid> itself in that list is
+#   0 (it bound between the two queries), another holder it can see is 1,
+#   none is 3, as on Linux. Each lsof runs under `_plat_timeout
+#   "$(_codex_probe_secs)"`, as every probe in this block does (review N3):
+#   macOS lsof stat()s mounts, a hung network mount hangs it, and the
+#   readiness wait's own bound is only checked between probes. A bound that
+#   expires, or any status that is neither lsof's 0 nor its 1, is 3. No lsof
+#   on PATH is 3.
+_codex_pid_listens() {   # <pid> <port> -> 0 listens; 1 another holds it; 3 cannot ask (CX_LISTEN_WHY)
+  CX_LISTEN_WHY=''
+  local pid="${1:-}" port="${2:-}" hex inodes fd l ino secs out rc nread=0
+  local -a nets=()
+  if ! [[ "$pid" =~ ^[1-9][0-9]*$ ]] || ! _codex_port_ok "$port"; then
+    CX_LISTEN_WHY="'$pid' and '$port' are not a pid and a port"
+    return 3
+  fi
+  if [ "$CCD_OS" = darwin ]; then
+    if ! command -v lsof >/dev/null 2>&1; then
+      CX_LISTEN_WHY='lsof is not on PATH'
+      return 3
+    fi
+    secs="$(_codex_probe_secs)"
+    out="$(_plat_timeout "$secs" lsof -nP -a -p "$pid" -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null)"; rc=$?
+    case "$rc" in
+      0|1) ;;
+      124) CX_LISTEN_WHY="lsof did not answer inside the ${secs}s probe bound"; return 3 ;;
+      *)   CX_LISTEN_WHY="lsof exited $rc"; return 3 ;;
+    esac
+    [ -n "$out" ] && return 0
+    out="$(_plat_timeout "$secs" lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null)"; rc=$?
+    case "$rc" in
+      0|1) ;;
+      124) CX_LISTEN_WHY="lsof did not answer inside the ${secs}s probe bound"; return 3 ;;
+      *)   CX_LISTEN_WHY="lsof exited $rc"; return 3 ;;
+    esac
+    # <pid> itself in the port-wide list is 0, never 1 (fix wave): it bound
+    # between the two queries, and "another process holds it" would be false.
+    case $'\n'"$out"$'\n' in *$'\n'"$pid"$'\n'*) return 0 ;; esac
+    [ -n "$out" ] && return 1
+    CX_LISTEN_WHY="no LISTEN socket on port $port is visible to lsof"
+    return 3
+  fi
+  if [ ! -r /proc/net/tcp ]; then
+    CX_LISTEN_WHY='/proc/net/tcp is unreadable'
+    return 3
+  fi
+  if ! command -v readlink >/dev/null 2>&1; then
+    CX_LISTEN_WHY='readlink is not on PATH'
+    return 3
+  fi
+  nets=(/proc/net/tcp)
+  [ -r /proc/net/tcp6 ] && nets+=(/proc/net/tcp6)
+  printf -v hex ':%04X' "$port"
+  inodes="$(awk -v p="$hex" 'FNR > 1 && $4 == "0A" && substr($2, length($2) - 4) == p { print $10 }' "${nets[@]}" 2>/dev/null)"
+  if [ -z "$inodes" ]; then
+    CX_LISTEN_WHY="no LISTEN socket on port $port is visible in /proc/net/tcp or /proc/net/tcp6"
+    return 3
+  fi
+  [ -e "/proc/$pid" ] || return 1
+  if ! { [ -r "/proc/$pid/fd" ] && [ -x "/proc/$pid/fd" ]; }; then
+    CX_LISTEN_WHY="/proc/$pid/fd is unreadable"
+    return 3
+  fi
+  # An fd closed since the glob expanded fails its readlink and is skipped,
+  # so a busy LiteLLM never reads "cannot ask" for it; a pid gone since the
+  # test above expands to nothing it holds. But NOT ONE readlink succeeding,
+  # over a pid that is still there, is 3 (fix wave, the argument N1b made for
+  # a missing readlink): a readlink that fails on every fd measured nothing,
+  # and a 1 would be read as "another process holds the port" for the very
+  # process that holds it.
+  for fd in "/proc/$pid/fd/"*; do
+    l="$(readlink "$fd" 2>/dev/null)" || continue
+    nread=$((nread + 1))
+    for ino in $inodes; do
+      [ "$l" = "socket:[$ino]" ] && return 0
+    done
+  done
+  if [ "$nread" -eq 0 ] && [ -e "/proc/$pid" ]; then
+    CX_LISTEN_WHY="readlink read none of /proc/$pid/fd's entries"
+    return 3
+  fi
+  return 1
+}
+
+# Is <tier> of lane <id> running, and is it OURS?
+#   0 = OURS, RUNNING: the port answers and the tier is proven this lane's —
+#       for LiteLLM, the pid its command line proves ITSELF holds the port's
+#       listening socket (`_codex_pid_listens`, review F1).
+#   1 = NOT RUNNING: nothing answers on the tier's port, no unit of its name is
+#       live, and its pidfile proves no live process of this lane's (a dead pid,
+#       or a STALE one: see below).
+#   2 = FOREIGN: something holds the port and is not proven this lane's, or a
+#       unit of this tier's name is live and its MainPID's command line does
+#       not prove this lane (the other repository's tiers run under these same
+#       unit names). Never adopted, never stopped, never started over. ONE 2
+#       CARRIES A PROVEN HANDLE: `listener-other-process`, this lane's own
+#       tier — LiteLLM or the shim — alive by its command line while ANOTHER
+#       process holds its port. The holder is foreign; the proven process is
+#       still this lane's, so a stop stops it through that handle and leaves
+#       the holder running. `_codex_tier_is_our_handle` is the ONE reading of
+#       that exception; no consumer re-derives it.
+#   3 = CANNOT ASK: a tier word this build does not know, or a row `_codex_row`
+#       refuses (its sentence is on stderr). THIS FOLDS `_codex_row`'s OWN RC
+#       (2 usage, 1 any other refusal) INTO ONE CODE (ruling R3 keeps that
+#       fold here, unlike inside `_codex_row` itself): a caller that must
+#       exit 2 on a USAGE refusal and 1 on any other — as `ccrc codex`'s own
+#       verbs do — cannot read that distinction off this function's rc 3
+#       alone, and calls `_codex_row` itself first if it needs the two apart.
+#       Also 3, with a `tier-unmeasured` sentence: a proven pid on a port
+#       that answers (for the shim, answers not as this lane), when whether
+#       the pid holds that port cannot be measured (`_codex_pid_listens` 3).
+#   4 = OURS, STARTING: a live handle whose command line PROVES this lane while
+#       the port does not answer yet, refused or unresponsive. That is a tier
+#       still importing litellm. It is never foreign: `start` waits for it, a
+#       stop stops it, the spine never restarts it, `status` prints `starting`.
+#
+# Identity (spec §7.4): the shim is whoever answers `/ccgpt/lane` as this lane
+# (`_codex_lane_answer`); LiteLLM is a live process — the unit's MainPID when a
+# user manager answers, else `<tier>.pid` — whose command line is this lane's
+# (`_codex_pid_is_tier`) and which ITSELF listens on `litellmPort`
+# (`_codex_pid_listens`). A handle —
+# either tier's MainPID or pidfile pid — is PROVEN by `_codex_pid_is_tier`
+# alone, and a proven handle on a port that does not answer is a 4.
+#
+# A STALE PIDFILE IS NO HANDLE. A pidfile is only ever this file's own note,
+# and it outlives its process across a reboot, so a pid in it whose command
+# line does not prove this lane's tier is pid reuse or a hand edit, not a tier.
+# It is IGNORED: never adopted, never foreign, never signalled. The port alone
+# decides, so it reads 1 while nothing answers and 2 when something unproven
+# does. `_codex_start_tier` deletes such a file before it starts. A unit is
+# different: a live unit of this name is a real service somebody runs, and one
+# not proven this lane's is foreign.
+#
+# Sets CX_TIER_VIA (`systemd`, `nohup`, or empty: no proven handle — a shim
+# proven by its answer alone has none), CX_TIER_PID (the proven pid, or empty)
+# and CX_TIER_WHY (on rc 2 only: `listener-answers-other-lane`,
+# `listener-unidentified`, `listener-unresponsive`; `listener-other-process`,
+# a proven pid of either tier that does not hold its port; `unit-unproven`, a unit of
+# this tier's name is live and its MainPID is not this lane's) for the verb's
+# sentence and `status --json`.
+_codex_tier_ours() {   # <id> <tier>
+  CX_TIER_VIA=''; CX_TIER_PID=''; CX_TIER_WHY=''
+  local id="${1:-}" tier="${2:-}" port unit st mp p pf lane arc lrc orc unit_live=0 pid='' via=''
+  if ! _codex_tier_ok "$tier"; then
+    _codex_say usage "a tier is one of: $CODEX_TIERS (got '$tier')."
+    return 3
+  fi
+  _codex_row "$id" || return 3
+  port="$(_codex_tier_port "$tier")" || return 3
+  _codex_bus_defaults
+  if unit="$(_codex_unit "$id" "$tier")" && _svc_have_user_manager; then
+    st="$(_svc_is_active "$unit")"
+    case "$st" in
+      active|activating|deactivating|reloading|refreshing)
+        unit_live=1
+        mp="$(systemctl --user show -p MainPID --value "$unit" 2>/dev/null)"
+        if [[ "$mp" =~ ^[1-9][0-9]*$ ]] && kill -0 "$mp" 2>/dev/null && _codex_pid_is_tier "$id" "$tier" "$mp"; then
+          pid="$mp"; via=systemd
+        fi ;;
+    esac
+  fi
+  pf="$(_codex_lane_dir "$id")/$tier.pid"
+  if [ -z "$pid" ] && [ -f "$pf" ]; then
+    p=''; { p="$(<"$pf")"; } 2>/dev/null
+    # Proven, or ignored: a dead pid and a live stranger are both no handle
+    # (see STALE PIDFILE above). `_codex_pid_is_tier`'s `ps -p` already fails
+    # on a dead pid, so no separate liveness test is asked.
+    if [[ "$p" =~ ^[1-9][0-9]*$ ]] && _codex_pid_is_tier "$id" "$tier" "$p"; then
+      pid="$p"; via=nohup
+    fi
+  fi
+  CX_TIER_PID="$pid"; CX_TIER_VIA="$via"
+  _codex_port_listening "$port"; lrc=$?
+  # `ccrc codex status` asks through this function too, so its own
+  # tier-unmeasured sentence never points at itself (fix wave): the
+  # pointer is left off when the caller is status (CX_TIER_ASKER, a
+  # `local` of `_codex_cmd_status`'s, read here by bash's dynamic scope).
+  local ptr=" 'ccrc codex status $id' reports the lane."
+  [ "${CX_TIER_ASKER:-}" = status ] && ptr=''
+  case "$lrc" in
+    0)
+      if [ "$tier" = shim ]; then
+        lane="$(_codex_lane_answer "$port")"; arc=$?
+        [ "$arc" -eq 0 ] && [ "$lane" = "$id" ] && return 0
+        # THE SHIM'S PROVEN HANDLE, the LiteLLM rule's twin (fix wave, the
+        # class D-3528 fixed for LiteLLM): a shim pid this lane's by its
+        # command line, while ANOTHER process holds the port and answers
+        # in its place, is `listener-other-process` — its handle is kept,
+        # so a stop can end this lane's own shim (a `Restart=always` one
+        # crash-looping against the holder included) and leave the holder
+        # running. The proven pid holding the port itself, answering in
+        # another shape, keeps its answer's word below.
+        if [ -n "$pid" ]; then
+          _codex_pid_listens "$pid" "$port"; orc=$?
+          case "$orc" in
+            1) CX_TIER_WHY=listener-other-process; return 2 ;;
+            3)
+              _codex_say tier-unmeasured "$id's $tier tier: pid $pid is this lane's by its command line and port $port answers, but not as this lane, and whether pid $pid holds that port cannot be measured here ($CX_LISTEN_WHY), so it is neither adopted as this lane's nor called foreign.$ptr"
+              return 3 ;;
+          esac
+        fi
+        if [ "$arc" -eq 0 ]; then CX_TIER_WHY=listener-answers-other-lane; else CX_TIER_WHY=listener-unidentified; fi
+        return 2
+      fi
+      if [ -n "$pid" ]; then
+        # Proven by its command line, and something listens: ours only if
+        # that something IS the proven pid (review F1).
+        _codex_pid_listens "$pid" "$port"; orc=$?
+        case "$orc" in
+          0) return 0 ;;
+          1) CX_TIER_WHY=listener-other-process; return 2 ;;
+        esac
+        _codex_say tier-unmeasured "$id's $tier tier: pid $pid is this lane's by its command line and port $port answers, but whether pid $pid holds that port cannot be measured here ($CX_LISTEN_WHY), so it is neither adopted as this lane's nor called foreign.$ptr"
+        return 3
+      fi
+      CX_TIER_WHY=listener-unidentified
+      return 2 ;;
+    3) return 3 ;;
+  esac
+  # The port does not answer: refused (1), or the connect outlived the bound
+  # (2). A proven handle outranks both, so ccrc's own starting tier is never
+  # read as a stranger.
+  [ -n "$pid" ] && return 4
+  if [ "$lrc" -eq 2 ]; then CX_TIER_WHY=listener-unresponsive; return 2; fi
+  if [ "$unit_live" -eq 1 ]; then CX_TIER_WHY=unit-unproven; return 2; fi
+  return 1
+}
+
+# `_codex_tier_is_our_handle <rc>` — THE ONE READING of "is what
+# `_codex_tier_ours` just answered this lane's own tier, to stop through its
+# handle?" (the fix wave's ruling on review A1). Call it DIRECTLY after that
+# call, with its rc: it reads the CX_TIER_WHY that call set.
+#   - 0 (ours, running) and 4 (ours, starting): yes.
+#   - 2 with `listener-other-process`: yes. The port's holder is foreign, but
+#     the proven process is this lane's, so a stop ends it through its
+#     handle and leaves the holder running, and a re-measure that still
+#     reads it is a tier of this lane's STILL RUNNING, never a foreign one.
+#   - Every other 2, a 1, a 3, and anything else: no.
+# `_codex_stop_tier` (both of its measurements), `_acct_remove`'s re-measure
+# and `_uninst_codex`'s gate read the exception through this, and nowhere
+# else: three consumers that each re-derived it had already disagreed.
+_codex_tier_is_our_handle() {   # <rc of the _codex_tier_ours call just made>
+  case "${1:-}" in
+    0|4) return 0 ;;
+    2) [ "${CX_TIER_WHY:-}" = listener-other-process ] ;;
+    *) return 1 ;;
+  esac
+}
+
+# The record `_codex_start_tier` writes to `<tier>.started`, computed NOW:
+# `{"generation":"<resolved gen dir>","code":"<sha256 of the tier's code file>"}`
+# — the litellm tier's code is the generation's `.ccrc-runtime.json`, the shim's
+# is the placed `ccgpt-proxy.py`. ONE DEFINITION: the start half writes exactly
+# this output and `_codex_tier_stale` compares against exactly this output, so
+# "stale" cannot mean two things. rc 1 when it cannot be computed: no runtime
+# (`ccgpt-runtime python` says `absent`) or an unreadable code file.
+_codex_started_json() {   # <tier>
+  local py gen code sum
+  py="$("$(_codex_runtime_cli)" python 2>/dev/null)" || return 1
+  gen="${py%/bin/python}"
+  { [ "$gen" != "$py" ] && [ -d "$gen" ]; } || return 1
+  case "${1:-}" in
+    litellm) code="$gen/.ccrc-runtime.json" ;;
+    shim)    code="$(_codex_shim_file)" ;;
+    *) return 1 ;;
+  esac
+  { [ -f "$code" ] && [ -r "$code" ]; } || return 1
+  sum="$(_plat_sha256 < "$code" 2>/dev/null)" || return 1
+  sum="${sum%% *}"
+  [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || return 1
+  jq -cn --arg g "$gen" --arg c "$sum" '{generation: $g, code: $c}'
+}
+
+# 0 = <tier>'s `.started` record differs from what a start would write now
+# (absent, unreadable and unparseable all count: a tier nobody can vouch for is
+# stale); 1 = current; 2 = CANNOT TELL — there is no runtime to start on, or
+# the code file cannot be read — which is never "stale", because the spine
+# restarts on stale and a stop with nothing to start is an outage.
+_codex_tier_stale() {   # <id> <tier>
+  local now was rec
+  _codex_shape || return 2
+  [[ "${1:-}" =~ $WRAPPER_ID_RE ]] || return 2
+  _codex_tier_ok "${2:-}" || return 2
+  now="$(_codex_started_json "$2")" || return 2
+  rec="$(_codex_lane_dir "$1")/$2.started"
+  [ -f "$rec" ] || return 0
+  was="$(jq -c . "$rec" 2>/dev/null)" || return 0
+  [ "$was" = "$now" ] && return 1
+  return 0
+}
+
+# The FILE half of `_acct_remove`'s codex arms (Task 8; spec §9's reap, Plan 2b-1 carry-forward
+# 8): removes EXACTLY the lane's generated state under `~/.ccrc/codex/<id>/`:
+# lane.json, runtime.env, litellm.yaml and the `.prev` the litellm op keeps
+# beside it, every tier's `.started`/`.pid` (litellm.started, shim.started,
+# litellm.pid, shim.pid), `.lock`, the file `_codex_lock` takes its per-lane
+# `flock` on, and any `runtime.env.tmp.*` leftover an interrupted
+# `_codex_runtime_env_ensure` mint left behind (its `mktemp` name is random,
+# so this is a GLOB, not a fixed name — a key-bearing tmp file left by a
+# killed mint must not survive account removal, and its presence must not
+# make the directory's final `rmdir` silently fail). Then it removes the
+# directory, only if that left it empty. It NEVER removes the logs
+# (`~/.ccrc/logs/codex/<id>/`) or the OAuth directory, which is a credential
+# ccrc never obtained, and it leaves any other file in the directory alone.
+# It needs no roster row, only a well-formed id: account removal reaps a lane
+# whose row may already be gone. It stops nothing: the stop arm runs
+# `_codex_lock` → `_codex_stop_lane` → `_codex_unlock` before the roster drop,
+# and this file half runs AFTER it — a pidfile removed under a live tier is a
+# handle lost for good.
+_codex_reap_files() {   # <id>
+  local id="${1:-}" dir f t rc=0 had_nullglob=0
+  local -a names=(lane.json runtime.env litellm.yaml litellm.yaml.prev .lock)
+  local -a tmps=()
+  _codex_shape || return 1
+  if ! [[ "$id" =~ $WRAPPER_ID_RE ]]; then
+    _codex_say usage "'$id' is not an account id, so no lane directory is built from it. Nothing was removed."
+    return 2
+  fi
+  dir="$(_codex_lane_dir "$id")"
+  [ -d "$dir" ] || return 0
+  for t in $CODEX_TIERS; do names+=("$t.started" "$t.pid"); done
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  tmps=("$dir"/runtime.env.tmp.*)
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+  for f in "${names[@]}"; do
+    { [ -e "$dir/$f" ] || [ -L "$dir/$f" ]; } || continue
+    rm -f -- "$dir/$f" 2>/dev/null && continue
+    _codex_say lane-unwritable "could not remove $dir/$f."
+    rc=1
+  done
+  for f in "${tmps[@]}"; do
+    rm -f -- "$f" 2>/dev/null && continue
+    _codex_say lane-unwritable "could not remove $f."
+    rc=1
+  done
+  rmdir -- "$dir" 2>/dev/null || true
+  return "$rc"
+}
+
+# ── `ccrc codex` — a Codex lane's two tiers, RUN (Plan 2b-2 Task 5) ────────
+# The lane library above this block ANSWERS questions (Task 4). What follows
+# ACTS on them, and redefines none of them (ruling R5):
+#   - `_codex_ready_secs`: the one parse of CCRC_CODEX_READY_S (ruling R27);
+#   - `_codex_lock` / `_codex_unlock`: the one per-lane lock (ruling R11), and
+#     its only release (ruling R19);
+#   - `_codex_start_tier` / `_codex_stop_tier` / `_codex_stop_lane`: the
+#     design contract's interfaces, which the models op (Task 6), account removal's
+#     codex arms (Task 8), the install spine (Task 10) and uninstall (Task 11)
+#     also call;
+#   - `cmd_codex` and its three verbs, and the `login` arm that routes to
+#     `_codex_login` (ruling R18).
+#
+# IDENTITY BEFORE ACTION, both ways (spec §7.4; ruling R8, D-3488):
+#   - start never adopts, and never kills, a listener or unit it cannot
+#     identify as this lane's — the dated incident of one lane attaching to
+#     another's gateway;
+#   - stop stops a tier ONLY when `_codex_tier_ours` proves it this lane's
+#     (0 running, 4 starting), and only through the handle that proved it.
+#     Anything else is left running and named: on the fleet box the other
+#     repository's live tiers run under these same unit names;
+#   - a pidfile naming a live process that does not prove this lane is STALE,
+#     not foreign (ruling R34): start deletes it, stop removes it, and neither
+#     ever signals its pid.
+#
+# Refusals print through `_codex_say`. The code `usage` exits 2 (this file's
+# EXIT CODES table; ruling R3); every other code exits 1.
+
+# The readiness bound `start` waits for both tiers inside, in whole seconds:
+# `CCRC_CODEX_READY_S`, default 90. It falls back to 90, exactly as
+# `_codex_probe_secs` falls back for its own bound (ruling PF-19), on a value
+# that is empty, not all digits, five characters or longer (which `$(( ))`
+# could wrap), or ZERO in any spelling (`0`, `00`, …), because a zero bound
+# fails every start whose first probe is not already an answer. The length
+# cap reads the RAW string, before anything is normalised, so `00007` falls
+# back too; what passes it is then read in base 10 (`10#`, never octal) and
+# the zero test runs on that value. The lane lock's wait is this plus 30,
+# because the longest holder is a start waiting out its own bound. PUBLIC
+# (ruling R27): the install spine's restart (Task 10) waits on the same
+# bound, so it asks this function and never parses the variable itself.
+# Prints the number with no newline; always rc 0.
+_codex_ready_secs() {
+  local s="${CCRC_CODEX_READY_S:-90}"
+  case "$s" in ''|*[!0-9]*|?????*) s=90 ;; esac
+  s=$(( 10#$s ))
+  [ "$s" -ge 1 ] || s=90
+  printf '%s' "$s"
+}
+
+# `ccrc codex`'s two dependencies, proven before any lane is read (ruling R22).
+# jq reads every lane's roster row, lane.json and tier records; node runs
+# deploy/models-op.mjs, lane.json's one writer. Without this probe a missing
+# jq reads as `roster-invalid` (Task 4's hazard 9), naming the wrong remedy.
+# `_models_deps` is NOT reused: it dies through `_ccrc_die` as `ccrc: … is
+# required by 'ccrc models' …`, which is neither this verb's refusal shape nor
+# its name.
+# `login` NEEDS NO NODE (ruling PF-31): it never runs models-op.mjs, and the
+# pane that reaches it runs under the tmux server's own PATH, which need not
+# carry every tool `ccrc codex start|stop|status` do. So the phone's sign-in
+# must not die on a dependency it never uses — AND IT MUST NOT BE TOLD IT
+# DOES (review fix round 1, findings spec-5/mut-5). The refusal sentence is
+# now BUILT FROM `$tools`, so a `login` caller reads only what `login`
+# actually reads: `$tools` is `jq` alone for `login`, so `$miss` there can
+# only ever be `jq`, one tool, never the "needs both" sentence that used to
+# print unconditionally and told the phone's own sign-in it needed a
+# dependency PF-31 exists to drop.
+_codex_deps() {   # <sub> -> rc 0; rc 1 + one missing-dependency line naming each tool that is absent
+  local sub="${1:-}" t miss='' verb=is tools='jq node' need
+  [ "$sub" = login ] && tools=jq
+  for t in $tools; do
+    command -v "$t" >/dev/null 2>&1 || miss="${miss:+$miss and }$t"
+  done
+  [ -z "$miss" ] && return 0
+  case "$miss" in *' and '*) verb=are ;; esac
+  if [ "$tools" = jq ]; then
+    need="'ccrc codex login' needs jq, which reads the lane's roster row."
+  else
+    need="'ccrc codex' needs both: jq reads every lane's roster row and lane.json, and node runs ${CCRC_HERE%/*}/deploy/models-op.mjs, lane.json's one writer."
+  fi
+  _codex_say missing-dependency "$miss $verb not on PATH, and $need Install what is missing, or put it on PATH, then re-run. Nothing was read, started or stopped."
+  return 1
+}
+
+# `_codex_lock <id>` — THE ONE PER-LANE LOCK (ruling R11): an exclusive
+# `flock` on `~/.ccrc/codex/<id>/.lock`, held by THIS shell until
+# `_codex_unlock` or exit. Every path that starts or stops a tier takes it
+# before it asks `_codex_tier_ours` anything: `ccrc codex start|stop`,
+# `_acct_remove`'s codex arms, `_models_litellm_lane`, `_inst_codex_tiers`,
+# `_uninst_codex`. A tier is provable only once its handle exists, so without
+# the lock two starters can both read "not running" and both start it, and a
+# stop can stop the tier a start is waiting on.
+# - THE CONTRACT (ruling R19). rc 0 with the lock HELD and CX_LOCK_FD set
+#   (CX_LOCK_ID = <id>); rc 0 with CX_LOCK_FD EMPTY where `flock` is missing;
+#   rc 1 (one refusal line) and rc 2 (usage) with CX_LOCK_FD empty.
+#   `_codex_unlock` is the ONLY release: no caller closes CX_LOCK_FD itself,
+#   because a closed fd left in CX_LOCK_FD would read, to the next call in
+#   this shell, as this lane's lock still held.
+# - ONE LEVEL. flock attaches to the open file description, so a second open
+#   of this path in this shell is a stranger to the first and would wait on a
+#   lock this very process holds (`_acct_marker_lock` says the same of its
+#   own). The functions the entry points call — `_codex_start_tier`,
+#   `_codex_stop_tier`, `_codex_stop_lane` — take none. A second call for the
+#   lane this shell already holds is a no-op; a call for another lane releases
+#   the first through `_codex_unlock` (one lane's lock per shell).
+# - THE FD MUST NOT REACH A TIER. A process forked while the lock is held
+#   inherits the fd and holds the lock for its whole life (measured), so
+#   `_codex_start_tier` closes CX_LOCK_FD inside each spawn's substitution,
+#   and any new spawn path must do the same. That close drops a subshell's
+#   copy only; it is not a release.
+# - Where `flock` is missing, rc 0 with nothing held and CX_LOCK_FD empty:
+#   starts and stops then run unserialised, which is this race's behaviour
+#   without the lock and no worse. install requires flock on macOS, and
+#   util-linux ships it on Linux.
+_codex_lock() {   # <id> -> rc 0 held (CX_LOCK_FD set) or no flock (CX_LOCK_FD empty); rc 1 + one refusal line; rc 2 usage
+  local id="${1:-}" d fd bound
+  _codex_shape || return 1
+  if ! [[ "$id" =~ $WRAPPER_ID_RE ]]; then
+    _codex_say usage "'$id' is not an account id, so no lane lock is built from it."
+    return 2
+  fi
+  if [ -n "${CX_LOCK_FD:-}" ]; then
+    [ "${CX_LOCK_ID:-}" = "$id" ] && return 0
+    _codex_unlock
+  fi
+  command -v flock >/dev/null 2>&1 || return 0
+  d="$(_codex_lane_dir "$id")"
+  if ! { [ -d "$d" ] || ( umask 077 && mkdir -p -- "$d" ); } 2>/dev/null \
+     || ! { exec {fd}>>"$d/.lock"; } 2>/dev/null; then
+    _codex_say lane-unwritable "$d/.lock could not be opened, so this start or stop cannot be serialised against another on lane $id. Fix $d, then re-run. Nothing was started or stopped."
+    return 1
+  fi
+  bound=$(( $(_codex_ready_secs) + 30 ))
+  if ! flock -w "$bound" "$fd"; then
+    exec {fd}>&-   # never held and never published, so this is no release
+    _codex_say tier-not-ready "another 'ccrc codex' start or stop has held lane $id's lock ($d/.lock) for ${bound}s without finishing. 'ccrc codex status $id' shows the lane; re-run once that has ended. Nothing was started or stopped."
+    return 1
+  fi
+  CX_LOCK_FD="$fd"; CX_LOCK_ID="$id"
+  return 0
+}
+
+# THE ONLY RELEASE of `_codex_lock` (ruling R19): closes CX_LOCK_FD when set
+# and clears CX_LOCK_FD and CX_LOCK_ID both. A no-op when nothing is held.
+_codex_unlock() {   # always rc 0
+  if [ -n "${CX_LOCK_FD:-}" ]; then exec {CX_LOCK_FD}>&-; fi
+  CX_LOCK_FD=''; CX_LOCK_ID=''
+  return 0
+}
+
+# Names what a 2 from `_codex_tier_ours` found, for start's refusal and
+# stop's notice alike, so the two say the same thing about one fact. Call it
+# DIRECTLY, right after that 2: it reads CX_TIER_WHY and `_codex_row`'s CX_*,
+# and it sets CX_FOREIGN_CODE, CX_FOREIGN_WHAT and CX_FOREIGN_FIX.
+#   - A live unit of this tier's name, whatever else answers: `unit-foreign`.
+#     Asked first because it is the fleet box's incident shape, the other
+#     repository's tier under this lane's unit name (m-livebox §3). Ruling R34
+#     keeps it foreign: that unit is not ccrc's to call stale.
+#     When CX_TIER_WHY is `unit-unproven` (nothing answers on the port, and no
+#     live process of the unit proves this lane), the sentence says the
+#     identity is UNPROVEN and suggests a retry, and never names another tool
+#     (ruling PF-13): a crash-looping tier of THIS lane reads exactly so
+#     inside its RestartSec window, with MainPID 0. That word is named from
+#     itself, before any unit is asked about again (fix wave).
+#   - Anything else holding the port: `port-foreign`.
+#   - `listener-other-process` is asked BEFORE the unit (review F1): this
+#     lane's own tier (LiteLLM, or the shim), proven by its command line (a
+#     unit's MainPID included), while another process holds its port. The
+#     unit is this lane's there, so the unit sentence would be false; the
+#     port is what is foreign, `port-foreign`.
+# EVERY rc-2 CONSUMER'S WORDING COMES FROM HERE (the fix wave's ruling on
+# review A2): `ccrc codex start|stop|status`, the install spine's gate and
+# its re-measure, `ccrc models`' codex arm, account removal and uninstall.
+# None writes a "not this lane" sentence of its own.
+# A pidfile naming a live process that does not prove this lane is never a 2
+# (ruling R34): it is a stale pidfile, which `_codex_tier_ours` reads past, so
+# it has no sentence here.
+_codex_foreign_what() {   # <id> <tier>
+  local id="$1" tier="$2" unit port label=shim
+  CX_FOREIGN_CODE=''; CX_FOREIGN_WHAT=''; CX_FOREIGN_FIX=''
+  port="$(_codex_tier_port "$tier")" || port='?'
+  [ "$tier" = litellm ] && label=LiteLLM
+  if [ "${CX_TIER_WHY:-}" = listener-other-process ]; then
+    CX_FOREIGN_CODE=port-foreign
+    CX_FOREIGN_WHAT="port $port ($id's $tier tier) is held by a process that is not this lane's $label: pid ${CX_TIER_PID:-?} is this lane's by its command line, and another process holds the port's listening socket"
+    CX_FOREIGN_FIX="Stop whatever holds port $port, or give $id other ports in ~/.ccrc/accounts.json."
+    return 0
+  fi
+  # `unit-unproven` IS the measurement's own verdict that a unit of this
+  # name is live (fix wave): it is named from that word, never from a
+  # second read of the manager, which could disagree with the first and
+  # turn "identity unproven, retry" into "its identity check failed".
+  if [ "${CX_TIER_WHY:-}" = unit-unproven ]; then
+    CX_FOREIGN_CODE=unit-foreign
+    if unit="$(_codex_unit "$id" "$tier" 2>/dev/null)"; then
+      CX_FOREIGN_WHAT="the unit $unit is active, but its identity as $id's $tier tier is unproven: a unit of that name is live with no process that proves this lane, and port $port does not answer"
+      CX_FOREIGN_FIX="Re-run in a few seconds: this lane's own tier reads this way between two of its restarts, and proves itself once its process is back. If it still reads this way, '$(_svc_status_hint "$unit")' shows what the unit runs."
+    else
+      CX_FOREIGN_WHAT="a unit of $id's $tier tier's name is active, but its identity as that tier is unproven: no process of it proves this lane, and port $port does not answer"
+      CX_FOREIGN_FIX="Re-run in a few seconds: this lane's own tier reads this way between two of its restarts, and proves itself once its process is back."
+    fi
+    return 0
+  fi
+  if unit="$(_codex_unit "$id" "$tier")" && _svc_have_user_manager; then
+    case "$(_svc_is_active "$unit")" in
+      active|activating|deactivating|reloading|refreshing)
+        CX_FOREIGN_CODE=unit-foreign
+        CX_FOREIGN_WHAT="the unit $unit is active but is not $id's $tier tier: its MainPID's command line does not prove this lane"
+        CX_FOREIGN_FIX="If another tool runs a lane under this name, stop that lane with that tool first."
+        return 0 ;;
+    esac
+  fi
+  CX_FOREIGN_CODE=port-foreign
+  case "${CX_TIER_WHY:-}" in
+    listener-answers-other-lane)
+      CX_FOREIGN_WHAT="port $port ($id's $tier tier) is held by a listener that is not this lane's: it answers as another lane" ;;
+    listener-unresponsive)
+      CX_FOREIGN_WHAT="port $port ($id's $tier tier) is held by a listener that is not this lane's: it completes no connection inside the probe bound" ;;
+    *)
+      CX_FOREIGN_WHAT="port $port ($id's $tier tier) is held by a listener that is not this lane's: its identity check failed" ;;
+  esac
+  CX_FOREIGN_FIX="Stop whatever holds port $port, or give $id other ports in ~/.ccrc/accounts.json."
+  return 0
+}
+
+# The ONE spelling of a missing placed shim (ruling PF-15, review F3): the
+# start pre-check and `_codex_start_tier` both say it, and only the pre-check
+# adds its tail.
+_codex_shim_absent() {   # <id> [<tail>]
+  _codex_say shim-absent "the lane shim $(_codex_shim_file) is missing or unreadable, so $1's shim tier has nothing to run. 'ccrc update' places it; re-run after.${2:+ $2}"
+}
+
+# `_codex_start_tier <id> <tier>` — start ONE tier through the platform layer's
+# supervised helper. It never re-checks identity and takes no lock: its callers
+# hold `_codex_lock` and asked `_codex_tier_ours` first, and this runs only on
+# a 1.
+# - ONE MEASUREMENT names both the interpreter and the record. The argv's
+#   python is the generation `_codex_started_json` resolved (D-3480:
+#   resolved, never `current`, because a process started through the symlink
+#   keeps the unresolved path as sys.prefix and would load a later
+#   generation's files). `<tier>.started` is that function's output and
+#   nothing else, so `_codex_tier_stale` compares like with like.
+# - The argv is built from Task 4's helpers, so it is exactly what
+#   `_codex_pid_is_tier` proves: litellm's `--config <lane's litellm.yaml>`
+#   (`_codex_litellm_yaml`, ruling PF-40) as two words, and the shim's
+#   `<shim file> --ccrc-lane=<id>` (ruling R6 — the shim reads no argv, so
+#   the word is inert to it, and it is the only lane-specific thing the
+#   shim's command line can carry).
+# - LITELLM RUNS ISOLATED, `-I -m` (ruling R45), as the shim already does.
+#   Both arms start a tier in $HOME, and `-m` without `-I` puts the working
+#   directory first on sys.path, so a `~/litellm/` would load instead of the
+#   generation's litellm, the one `ccgpt-runtime`'s own `-I` probe proved.
+# - The gateway key reaches LiteLLM ONLY as `runtime.env`, an EnvironmentFile
+#   (spec §5.4). The shim gets no env file, because it is value-blind
+#   (m-tiers §5).
+# - THE LOCK FD IS CLOSED INSIDE EACH SPAWN'S SUBSTITUTION. A tier forked while
+#   the caller holds the lane's flock would inherit the fd and hold the lock
+#   for its whole life, so every later start and stop would wait out its bound
+#   (measured: the control kept the lock after its parent exited). The close
+#   happens in the `$( … )` subshell only, so the caller keeps its lock.
+# - A PIDFILE HERE IS STALE (ruling R34). This runs only on a 1, so a
+#   `<tier>.pid` names no live process, or a live one whose command line does
+#   not prove this lane (pid reuse, or a hand edit). It goes BEFORE the spawn,
+#   on both arms, and its pid is never signalled: that process is somebody
+#   else's. On the unit arm nothing else would remove the file, and on either
+#   arm a failed spawn would otherwise leave it behind.
+_codex_start_tier() {   # <id> <tier> -> rc 0 + "systemd <unit>" | "nohup <pid>" on stdout; rc 1 + one refusal line; rc 2 usage
+  local id="${1:-}" tier="${2:-}" d unit rec gen py log ans rc p
+  _codex_row "$id" || return $?
+  if ! _codex_tier_ok "$tier"; then
+    _codex_say usage "a tier is one of: $CODEX_TIERS (got '$tier')."
+    return 2
+  fi
+  d="$(_codex_lane_dir "$id")"
+  if ! unit="$(_codex_unit "$id" "$tier")"; then
+    _codex_say lane-unwritable "$d/lane.json names no usable $tier unit, so there is no name to run $id's $tier tier under. 'ccrc codex start $id' re-renders it; if it still names none, run 'ccrc models $id init codex'."
+    return 1
+  fi
+  if ! "$(_codex_runtime_cli)" python >/dev/null 2>&1; then
+    _codex_say runtime-absent "no LiteLLM runtime is current on this box, so $id's $tier tier has no interpreter to start from. Build one with 'ccgpt-runtime build' (or 'ccrc update', which builds it), then re-run."
+    return 1
+  fi
+  if ! rec="$(_codex_started_json "$tier")"; then
+    if [ "$tier" = shim ]; then
+      _codex_shim_absent "$id"
+    else
+      _codex_say runtime-absent "the current runtime generation carries no readable stamp (.ccrc-runtime.json), so what $id's litellm tier would run cannot be recorded. Rebuild it with 'ccgpt-runtime build --force', then re-run."
+    fi
+    return 1
+  fi
+  gen="$(printf '%s' "$rec" | jq -r '.generation // empty' 2>/dev/null)" || gen=''
+  py="$gen/bin/python"
+  if [ -z "$gen" ] || [ ! -x "$py" ]; then
+    _codex_say runtime-absent "the current runtime's interpreter ${gen:+$py }is not executable, so $id's $tier tier cannot start. Rebuild it with 'ccgpt-runtime build --force', then re-run."
+    return 1
+  fi
+  log="$HOME/.ccrc/logs/codex/$id/$tier.log"
+  # 0700: a tier's log can carry request fragments on an error path.
+  if ! ( umask 077; mkdir -p -- "${log%/*}" ) 2>/dev/null; then
+    _codex_say lane-unwritable "${log%/*} could not be created, so $id's $tier tier would have nowhere to log. Fix that directory, then re-run."
+    return 1
+  fi
+  if ! rm -f -- "$d/$tier.pid" 2>/dev/null; then
+    _codex_say lane-unwritable "$d/$tier.pid is a stale pidfile (it names no running tier of $id's) and could not be removed. Fix $d, then re-run. Nothing was started."
+    return 1
+  fi
+  _codex_bus_defaults
+  if [ "$tier" = litellm ]; then
+    ans="$( [ -z "${CX_LOCK_FD:-}" ] || exec {CX_LOCK_FD}>&-
+      _svc_run_supervised "$unit" "$log" "$d/runtime.env" \
+        "CHATGPT_TOKEN_DIR=$HOME/$CX_AUTH" LITELLM_LOCAL_MODEL_COST_MAP=True "HOME=$HOME" \
+        -- "$py" -I -m litellm.proxy.proxy_cli --config "$(_codex_litellm_yaml "$id")" --host 127.0.0.1 --port "$CX_LITELLM" )"; rc=$?
+  else
+    ans="$( [ -z "${CX_LOCK_FD:-}" ] || exec {CX_LOCK_FD}>&-
+      _svc_run_supervised "$unit" "$log" - \
+        "CCGPT_ACCOUNT_ID=$id" "CCGPT_PROXY_PORT=$CX_PROXY" "CCGPT_LITELLM_PORT=$CX_LITELLM" "HOME=$HOME" \
+        -- "$py" -I "$(_codex_shim_file)" "--ccrc-lane=$id" )"; rc=$?
+  fi
+  ans="${ans##*$'\n'}"
+  if [ "$rc" -ne 0 ]; then
+    _codex_say tier-not-ready "$id's $tier tier could not be started: the platform helper answered rc $rc (its reason is the line above). Read $log; 'ccrc codex status $id' shows what is running."
+    return 1
+  fi
+  case "$ans" in
+    "systemd $unit")
+      # The unit is the handle. Any stale pidfile went before the spawn.
+      : ;;
+    "nohup "*)
+      p="${ans#nohup }"
+      case "$p" in ''|*[!0-9]*) p='' ;; esac
+      if [ -z "$p" ] || ! { printf '%s\n' "$p" > "$d/$tier.pid.$$" && mv -f -- "$d/$tier.pid.$$" "$d/$tier.pid"; }; then
+        rm -f -- "$d/$tier.pid.$$"
+        _codex_say lane-unwritable "$id's $tier tier was started under nohup (\"$ans\"), but its pid could not be recorded in $d/$tier.pid, and without it nothing can stop it by verified identity. Stop it by hand, fix $d, then re-run."
+        return 1
+      fi ;;
+    *)
+      _codex_say tier-not-ready "the platform helper answered \"$ans\" for $id's $tier tier, which names neither its unit nor a pid. Read $log."
+      return 1 ;;
+  esac
+  if ! { printf '%s\n' "$rec" > "$d/$tier.started.$$" && mv -f -- "$d/$tier.started.$$" "$d/$tier.started"; }; then
+    rm -f -- "$d/$tier.started.$$"
+    _codex_say lane-unwritable "$id's $tier tier IS running, but $d/$tier.started could not be written, so the next update will read that tier as stale and restart it. Fix $d."
+    return 1
+  fi
+  printf '%s\n' "$ans"
+}
+
+# `_codex_stop_tier <id> <tier>` — stop ONE tier, IDENTITY FIRST (ruling R8,
+# D-3488, which departs from spec §7.4's "by exact unit, then by
+# verified identity"). It takes no lock: its callers hold `_codex_lock`.
+#   1. It stops the tier ONLY when `_codex_tier_ours` answers 0 (ours,
+#      running) or 4 (ours, starting), and only through the handle that proof
+#      came through: the unit, by the exact name lane.json gives it, when the
+#      proof was the unit's MainPID (CX_TIER_VIA=systemd); the verified pid
+#      when it was the pidfile's (nohup). A unit is never stopped for its NAME,
+#      because on the fleet box the other repository's live tiers run under
+#      these same names (m-livebox §3). A service-owned pid is never killed
+#      around its unit, because `Restart=always` would race the kill.
+#   2. A 2 (foreign: a listener on the port, or a same-named unit whose
+#      MainPID is not this lane's) is LEFT RUNNING and named on stderr, and the
+#      word is `foreign`. A 3 stops nothing and is stop-failed, because "down"
+#      cannot be claimed over a tier nobody measured. The one 2 that carries
+#      a proven handle, `listener-other-process` (review F1: this lane's own
+#      tier alive while another process holds its port), is this lane's for
+#      the stop, at BOTH measurements, through `_codex_tier_is_our_handle`
+#      (the one reading of it): that process is stopped through its handle,
+#      and still-alive after the stop is stop-failed, never `foreign`,
+#      because rc 0 promises no tier of this lane runs. The holder of the port
+#      is left running and named. On the nohup arm the SIGKILL that follows an
+#      unanswered TERM goes only to a pid that STILL proves this lane's tier
+#      (review A4): a pid reused inside the wait is never signalled.
+#   3. MEASURED AGAIN. The answer is what runs now, not what was asked: this
+#      lane's tier still answering (0 or 4) is stop-failed. Otherwise the
+#      tier's `.pid`/`.started` go. They describe no running tier of this
+#      lane. A pidfile naming a live process that does not prove this lane is
+#      ccrc's own STALE file (ruling R34): `_codex_tier_ours` read past it, the
+#      word is `not running`, and the file goes WITHOUT its pid ever being
+#      signalled.
+# rc 0 means no tier of THIS lane runs, and nothing more: every caller
+# CAPTURES the word and never folds `foreign` into stopped (ruling PF-21),
+# because `foreign` is a tier left running that something else holds.
+_codex_stop_tier() {   # <id> <tier> -> rc 0 + "stopped" | "not running" | "foreign" on stdout; rc 1 + one stop-failed line; rc 2 usage
+  local id="${1:-}" tier="${2:-}" d unit q pid did='not running' n note=''
+  _codex_row "$id" || return $?
+  if ! _codex_tier_ok "$tier"; then
+    _codex_say usage "a tier is one of: $CODEX_TIERS (got '$tier')."
+    return 2
+  fi
+  d="$(_codex_lane_dir "$id")"
+  _codex_tier_ours "$id" "$tier"; q=$?
+  if _codex_tier_is_our_handle "$q"; then
+    pid="$CX_TIER_PID"
+    case "$CX_TIER_VIA" in
+      systemd)
+        if unit="$(_codex_unit "$id" "$tier")" && _svc_stop "$unit"; then did=stopped; fi ;;
+      nohup)
+        kill -TERM "$pid" 2>/dev/null
+        n=0
+        while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 10 ]; do sleep 1; n=$(( n + 1 )); done
+        # THE KILL IS RE-PROVEN, never sent on liveness alone (review A4,
+        # D-3488): the TERM above went to a pid proven by its command line,
+        # but a tier that exited inside the wait can have its pid reused, so
+        # `kill -0` alone would put SIGKILL on a stranger. A pid that no
+        # longer proves this lane's tier is left alone, and the measurement
+        # below says what runs now.
+        if kill -0 "$pid" 2>/dev/null && _codex_pid_is_tier "$id" "$tier" "$pid"; then
+          kill -KILL "$pid" 2>/dev/null
+          n=0
+          while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 5 ]; do sleep 1; n=$(( n + 1 )); done
+        fi
+        did=stopped ;;
+    esac
+  elif [ "$q" -eq 3 ]; then
+    _codex_say stop-failed "$id's $tier tier could not be measured, so nothing was stopped and it cannot be called down. 'ccrc codex status $id' shows what answers."
+    return 1
+  fi
+  _codex_tier_ours "$id" "$tier"; q=$?
+  if _codex_tier_is_our_handle "$q"; then
+    if [ -z "$CX_TIER_VIA" ]; then
+      _codex_say stop-failed "$id's $tier tier answers as this lane, but neither a unit nor a pidfile of this lane's holds it, so there is no verified handle to stop it by: it was started outside ccrc and must be stopped by hand."
+    else
+      _codex_say stop-failed "$id's $tier tier is still running after the stop ($CX_TIER_VIA${CX_TIER_PID:+, pid $CX_TIER_PID}). 'ccrc codex status $id' shows it; re-run the stop, or stop it by hand."
+    fi
+    return 1
+  fi
+  case "$q" in
+    3)
+      _codex_say stop-failed "$id's $tier tier could not be measured after the stop, so it cannot be called down. 'ccrc codex status $id' shows what answers."
+      return 1 ;;
+    2)
+      _codex_foreign_what "$id" "$tier"
+      note="$CX_FOREIGN_WHAT — ccrc left it running"
+      [ "$did" = stopped ] || did=foreign ;;
+  esac
+  rm -f -- "$d/$tier.pid" "$d/$tier.started"
+  [ -z "$note" ] || printf '%s codex: %s: %s.\n' "$PROG" "$id" "$note" >&2
+  printf '%s\n' "$did"
+}
+
+# `_codex_stop_lane <id>` — both tiers, the FRONT one first: the shim closes
+# before the gateway behind it (the live launcher's own order, m-tiers §3).
+# Both are always attempted, so one tier that will not stop never leaves the
+# other running. It takes no lock: its callers hold `_codex_lock`. It RETURNS,
+# never exits, because account removal's codex arm (Task 8, ruling R16) calls
+# it between `_codex_lock` and `_codex_unlock`, BEFORE the roster drop (the
+# stop reads the row's ports and lane.json's unit names), and must still print
+# its envelope; that arm reaps the files with Task 4's `_codex_reap_files`
+# only AFTER the drop.
+_codex_stop_lane() {   # <id> -> rc 0 + "litellm <word>, shim <word>" on stdout; rc 1 when a tier of this lane still runs (its line is on stderr); rc 2 usage
+  local s l rc=0
+  _codex_row "${1:-}" || return $?
+  s="$(_codex_stop_tier "$CX_ID" shim)" || rc=1
+  l="$(_codex_stop_tier "$CX_ID" litellm)" || rc=1
+  [ "$rc" -eq 0 ] || return 1
+  printf 'litellm %s, shim %s\n' "$l" "$s"
+}
+
+# `ccrc codex start <id>` — the idempotent ensure the launcher runs on every
+# session start.
+# - EVERY REFUSAL LANDS BEFORE ANYTHING IS SPAWNED: login, runtime, config,
+#   BOTH tiers' unit names, start records and the placed shim file (ruling
+#   PF-15), and BOTH tiers' identity are all decided first. A refusal here
+#   is a session that dies at once, and ccd parks one that dies five times
+#   in 120 s as FAILED (m-ccd-launcher §3); a half-started lane would be a
+#   second problem on top.
+# - It holds the lane lock (ruling R11) from before the key is minted and
+#   before any `_codex_tier_ours` until it exits (ruling PF-14), so a second
+#   start waits and then adopts, and a stop waits for this start to finish.
+# - 0 (ours, running) and 4 (ours, starting: ruling R7) are adopted, never
+#   started over; 1 is started; 2 is refused by name; 3 has already said why.
+#   Then it waits, bounded, until both tiers answer as this lane (0).
+# - A KEY MINTED OR REPLACED UNDER THIS LANE'S LITELLM (ruling R21) restarts
+#   that tier: stopped, identity-gated, after every refusal has been decided,
+#   then started from the new runtime.env, under this start's lock, before the
+#   readiness wait.
+_codex_cmd_start() {   # <id>
+  local id d py tier q lq=1 sq=1 lv='' lp='' sv='' sp='' via pid out h hl='' hs='' limit t0 rekey=0 w
+  _codex_row "${1:-}" || exit $?
+  id="$CX_ID"
+  _codex_lane_json_ensure "$id" || exit 1
+  d="$(_codex_lane_dir "$id")"
+  if [ ! -f "$HOME/$CX_AUTH/auth.json" ]; then
+    _codex_say not-logged-in "$id has no OAuth login: ~/$CX_AUTH holds no auth.json (existence is all ccrc checks; it never reads one). Log the lane in with 'ccrc codex login $id', then re-run. Nothing was started."
+    exit 1
+  fi
+  py="$("$(_codex_runtime_cli)" python 2>/dev/null)" || py=''
+  if [ -z "$py" ] || [ ! -x "$py" ]; then
+    _codex_say runtime-absent "no LiteLLM runtime is current on this box ('ccgpt-runtime python' answered none). Build one with 'ccgpt-runtime build' (or 'ccrc update', which builds it), then re-run. Nothing was started."
+    exit 1
+  fi
+  _codex_lock "$id" || exit 1
+  _codex_runtime_env_ensure "$id" || exit 1
+  # Read at once, in this shell (Task 4's hazard 3): the ensure's own answer.
+  case "$CX_ENV_ACTION" in created|replaced) rekey=1 ;; esac
+  # §8 (D-3482): the lane's LiteLLM config, rendered
+  # through the codex arm of `ccrc models litellm` when absent — never a
+  # second renderer here. Under the lane lock this function already
+  # holds, which is why the ensure never takes it.
+  _codex_litellm_ensure "$id" || exit 1
+  # BOTH TIERS' START PREREQUISITES, before either tier is classified or
+  # started (ruling PF-15): `_codex_start_tier` checks each for itself, but it
+  # runs one tier at a time, so a shim that cannot start would otherwise be
+  # found only after LiteLLM was spawned, leaving a half-started lane. The
+  # placed shim file is asked by name first, because its absence is
+  # `shim-absent` (`ccrc update` places it), never `runtime-absent`.
+  if ! { [ -f "$(_codex_shim_file)" ] && [ -r "$(_codex_shim_file)" ]; }; then
+    _codex_shim_absent "$id" "Nothing was started."
+    exit 1
+  fi
+  for tier in $CODEX_TIERS; do
+    if ! _codex_unit "$id" "$tier" >/dev/null; then
+      _codex_say lane-unwritable "$d/lane.json names no usable $tier unit, so there is no name to run $id's $tier tier under. Run 'ccrc models $id init codex', then re-run. Nothing was started."
+      exit 1
+    fi
+    if ! _codex_started_json "$tier" >/dev/null; then
+      _codex_say runtime-absent "what $id's $tier tier would run cannot be recorded: the current runtime generation carries no readable stamp (.ccrc-runtime.json), or the tier's code file cannot be hashed. Rebuild the runtime with 'ccgpt-runtime build --force', then re-run. Nothing was started."
+      exit 1
+    fi
+  done
+  for tier in $CODEX_TIERS; do
+    _codex_tier_ours "$id" "$tier"; q=$?
+    case "$q" in
+      0|1|4) ;;
+      2)
+        _codex_foreign_what "$id" "$tier"
+        _codex_say "$CX_FOREIGN_CODE" "$CX_FOREIGN_WHAT. ccrc never adopts or stops what it cannot identify. $CX_FOREIGN_FIX Nothing was started."
+        exit 1 ;;
+      *) exit 1 ;;   # 3: `_codex_tier_ours` has printed why
+    esac
+    if [ "$tier" = litellm ]; then lq="$q"; lv="$CX_TIER_VIA"; lp="$CX_TIER_PID"
+    else sq="$q"; sv="$CX_TIER_VIA"; sp="$CX_TIER_PID"; fi
+  done
+  # A KEY THAT CHANGED UNDER A RUNNING LITELLM (ruling R21; Task 4's hazard
+  # 4). LiteLLM reads LITELLM_MASTER_KEY from runtime.env once, when it
+  # starts, and the launcher reads runtime.env on every session start. So a
+  # file the ensure above created or replaced while this lane's LiteLLM runs
+  # (0) or is starting (4) would hand the session a key its gateway refuses.
+  # That tier is stopped here, through `_codex_stop_tier` (identity-gated, so
+  # it stops only what proves this lane's), and the loop below starts it from
+  # the new file. `kept` and `rechmod` are the key it already holds. The shim
+  # holds no key (m-tiers §5) and is never restarted for one. Whatever takes
+  # the port between this stop and that start is never adopted or killed:
+  # `_codex_tier_ours` answers 0 for LiteLLM only when the pid its command
+  # line proves ITSELF holds the port (`_codex_pid_listens`, review F1), so a
+  # port another process holds reads 2 through the whole readiness wait, and
+  # the start ends `tier-not-ready`, by name. The stop's word is CAPTURED
+  # (ruling PF-21): `foreign` means the tier this start measured as this
+  # lane's is not provably this lane's now, and was left running, so nothing
+  # is started over it.
+  if [ "$rekey" -eq 1 ] && [ "$lq" -ne 1 ]; then
+    w="$(_codex_stop_tier "$id" litellm)" || exit 1
+    if [ "$w" = foreign ]; then
+      _codex_say tier-foreign "$id's litellm tier was this lane's when this start measured it, and is not provably this lane's now, so it was not restarted for the new gateway key; ccrc left it running. 'ccrc codex status $id' shows what answers. Nothing was started."
+      exit 1
+    fi
+    # CLASS FIX (review round 2, N0 — the same shape as Task 10's and Task
+    # 6's own sites): `_codex_stop_tier` answers `foreign` only when it
+    # stopped nothing; after a REAL stop it answers `stopped`, and a taker
+    # arriving after ITS OWN second measurement is invisible to it. Re-ask
+    # here, right before the restart this rekey owes, and start only on a
+    # freshly measured 1 — the tier really is down now (this block already
+    # stopped it), so a foreign or unmeasurable answer here is never
+    # "left running", it is "now down and not restarted".
+    _codex_tier_ours "$id" litellm; q=$?
+    case "$q" in
+      1) ;;
+      2)
+        _codex_foreign_what "$id" litellm
+        _codex_say "$CX_FOREIGN_CODE" "$CX_FOREIGN_WHAT. It took the port after $id's litellm tier was stopped for the new gateway key, so that tier is now DOWN. $CX_FOREIGN_FIX Bring it back once that clears: ccrc codex start $id."
+        exit 1 ;;
+      *)
+        _codex_say tier-unmeasured "whether $id's litellm tier's port is free right before the restart could not be measured (the lane library answered $q), so it was not started again for the new gateway key; $id's litellm tier is now DOWN. Bring it back with: ccrc codex start $id."
+        exit 1 ;;
+    esac
+    lq=1
+  fi
+  for tier in $CODEX_TIERS; do
+    if [ "$tier" = litellm ]; then q="$lq"; via="$lv"; pid="$lp"; else q="$sq"; via="$sv"; pid="$sp"; fi
+    if [ "$q" -eq 1 ]; then
+      out="$(_codex_start_tier "$id" "$tier")" || exit 1
+      h="started ($out)"
+    else
+      case "$via" in
+        systemd) h="adopted (systemd $(_codex_unit "$id" "$tier"))" ;;
+        nohup)   h="adopted (nohup $pid)" ;;
+        *)       h="adopted (a listener answering as $id that no unit or pidfile of this lane's holds)" ;;
+      esac
+    fi
+    if [ "$tier" = litellm ]; then hl="$h"; else hs="$h"; fi
+  done
+  limit="$(_codex_ready_secs)"
+  t0=$SECONDS
+  while :; do
+    _codex_tier_ours "$id" litellm; lq=$?
+    _codex_tier_ours "$id" shim; sq=$?
+    [ "$lq" -eq 0 ] && [ "$sq" -eq 0 ] && break
+    # 3: `_codex_tier_ours` has printed why (a row it refuses, or a LiteLLM
+    # whose ownership of its port cannot be measured), and waiting cannot
+    # change that, so the start ends here and never repeats that line.
+    { [ "$lq" -eq 3 ] || [ "$sq" -eq 3 ]; } && exit 1
+    if [ $(( SECONDS - t0 )) -ge "$limit" ]; then
+      tier=litellm; [ "$lq" -eq 0 ] && tier=shim
+      _codex_say tier-not-ready "$id's $tier tier did not answer as this lane within ${limit}s. Read $HOME/.ccrc/logs/codex/$id/$tier.log. What was started was left under its unit or pid: 'ccrc codex status $id' reports it, and 'ccrc codex stop $id' stops it."
+      exit 1
+    fi
+    sleep 1
+  done
+  printf '%s\n' "$PROG codex: $id: litellm $hl, shim $hs"
+}
+
+# `ccrc codex stop <id>` — both tiers, identity-gated (ruling R8), under the
+# lane lock (ruling R11). Exit 0 whenever no tier of this lane still runs,
+# including when a foreign one was left running and named.
+_codex_cmd_stop() {   # <id>
+  local out
+  _codex_row "${1:-}" || exit $?
+  _codex_lock "$CX_ID" || exit 1
+  out="$(_codex_stop_lane "$CX_ID")" || exit 1
+  printf '%s\n' "$PROG codex: $CX_ID: $out"
+}
+
+# `ccrc codex status <id> [--json]` — READ-ONLY (no lock, no ensure), and exit
+# 0 whatever it finds. A tier is `running` (this lane's, answering, and how it
+# is held), `starting` (this lane's proven handle, its port not answering
+# yet: ruling R7), `stopped` (a stale pidfile included: ruling R34),
+# `foreign` (something answers on its port or holds its unit, and is not this
+# lane's), or `unknown` (it could not be asked, which is never folded into
+# `foreign`).
+# ONE `foreign` CARRIES A HANDLE (review S1): `listener-other-process`, this
+# lane's own tier running by its command line while another process holds
+# its port. Its `via` and `pid` are kept, in the JSON too, and its sentence
+# says what `ccrc codex stop` does there: stops this lane's process through
+# that handle and leaves the holder running (`_codex_stop_tier`, review F1).
+# Every other `foreign` is named by `_codex_foreign_what` (review A2), and a
+# unit whose identity is only UNPROVEN (`unit-unproven`, ruling PF-13) reads
+# `UNPROVEN` on the terminal, with that helper's retry, never `FOREIGN`; its
+# JSON state stays `foreign`, the contract's word for "not adopted".
+_codex_cmd_status() {   # <id> <1 = --json>
+  local id json="$2" d py gen='' lane tier q state via pid sg port why said
+  local ls='' lv='' lp='' lw='' lf='' ss='' sv='' sp='' sw='' sf=''
+  # Read by `_codex_tier_ours` through bash's dynamic scope: its rc-3
+  # sentence then omits its "'ccrc codex status <id>' reports the lane"
+  # pointer, which from here would point at this very verb (fix wave).
+  local CX_TIER_ASKER=status
+  # A variable, not the literal, as the `${via:-…}` default below: bash reads
+  # an apostrophe inside a double-quoted `${…:-word}` as a quote (measured,
+  # bash 5.2: `unexpected EOF while looking for matching`).
+  local nohandle="held by no unit or pidfile of this lane's"
+  _codex_row "${1:-}" || exit $?
+  id="$CX_ID"
+  d="$(_codex_lane_dir "$id")"
+  py="$("$(_codex_runtime_cli)" python 2>/dev/null)" || py=''
+  if [ -n "$py" ]; then gen="${py%/bin/python}"; gen="${gen##*/}"; fi
+  lane="$(_codex_lane_json_state "$id")" || lane=''
+  for tier in $CODEX_TIERS; do
+    _codex_tier_ours "$id" "$tier"; q=$?
+    via=''; pid=''; why=''; said=''
+    case "$q" in
+      0) state=running;  via="$CX_TIER_VIA"; pid="$CX_TIER_PID" ;;
+      4) state=starting; via="$CX_TIER_VIA"; pid="$CX_TIER_PID" ;;
+      1) state=stopped ;;
+      2) state=foreign; why="$CX_TIER_WHY"
+         if _codex_tier_is_our_handle "$q"; then via="$CX_TIER_VIA"; pid="$CX_TIER_PID"; fi
+         # Named HERE, right after the 2 (it reads CX_TIER_WHY, which the
+         # next tier's question overwrites), by the one helper every rc-2
+         # consumer names through (review A2).
+         _codex_foreign_what "$id" "$tier"
+         said="$CX_FOREIGN_WHAT. $CX_FOREIGN_FIX" ;;
+      *) state=unknown ;;
+    esac
+    if [ "$tier" = litellm ]; then ls="$state"; lv="$via"; lp="$pid"; lw="$why"; lf="$said"
+    else ss="$state"; sv="$via"; sp="$pid"; sw="$why"; sf="$said"; fi
+  done
+  if [ "$json" -eq 1 ]; then
+    jq -cn --arg id "$id" --arg ls "$ls" --arg lv "$lv" --arg lp "$lp" \
+      --arg ss "$ss" --arg sv "$sv" --arg sp "$sp" --arg gen "$gen" --arg lane "$lane" '
+      def s: if . == "" then null else . end;
+      def n: if . == "" then null else tonumber end;
+      {id: $id,
+       tiers: {litellm: {state: $ls, via: ($lv | s), pid: ($lp | n)},
+               shim:    {state: $ss, via: ($sv | s), pid: ($sp | n)}},
+       runtime: {generation: ($gen | s)},
+       lane: {json: ($lane | s)}}'
+    return 0
+  fi
+  for tier in $CODEX_TIERS; do
+    if [ "$tier" = litellm ]; then state="$ls"; via="$lv"; pid="$lp"; why="$lw"; said="$lf"
+    else state="$ss"; via="$sv"; pid="$sp"; why="$sw"; said="$sf"; fi
+    port="$(_codex_tier_port "$tier")" || port='?'
+    case "$state" in
+      running)
+        sg="$(jq -r '.generation // empty' "$d/$tier.started" 2>/dev/null)" || sg=''
+        printf '%s\n' "$PROG codex: $id: $tier running (${via:-$nohandle}${pid:+, pid $pid}${sg:+, started from ${sg##*/}})" ;;
+      starting)
+        printf '%s\n' "$PROG codex: $id: $tier starting ($via${pid:+, pid $pid}) — this lane's, and port $port does not answer yet" ;;
+      stopped)
+        printf '%s\n' "$PROG codex: $id: $tier stopped" ;;
+      foreign)
+        # THREE SENTENCES, the wording `_codex_foreign_what`'s own (review
+        # A2): the handle-carrying 2 says what `stop` does with it; a unit
+        # whose identity is UNPROVEN (ruling PF-13 — this lane's own tier
+        # between two restarts reads so) says so and suggests a retry,
+        # never "foreign"; every other 2 is foreign, named.
+        if [ -n "$pid" ]; then
+          printf '%s\n' "$PROG codex: $id: $tier FOREIGN — this lane's $tier process is running ($via, pid $pid) but does not hold port $port: another process does. 'ccrc codex stop $id' stops this lane's process and leaves the other running"
+        elif [ "$why" = unit-unproven ]; then
+          printf '%s\n' "$PROG codex: $id: $tier UNPROVEN — $said"
+        else
+          printf '%s\n' "$PROG codex: $id: $tier FOREIGN — $said ccrc will neither adopt nor stop it."
+        fi ;;
+      *)
+        printf '%s\n' "$PROG codex: $id: $tier UNKNOWN — its state could not be measured" ;;
+    esac
+  done
+  printf '%s\n' "$PROG codex: $id: runtime ${gen:-absent}; lane.json ${lane:-unknown}"
+}
+
+# ── ccrc codex login <id> ─────────────────────────────────────────────────
+# THE LANE'S OWN RUNTIME SIGNS IT IN, OVER ITS OWN authDir (spec §9.3,
+# D-3479). The ISOLATED runtime's Authenticator runs with this
+# lane's `exec.authDir` as its token directory. It is never a `litellm` found
+# on PATH, and never the user-site fork D-3164 measured.
+# `get_access_token()` does one of three things:
+#   * returns a still-valid token without a network call;
+#   * refreshes an expired one;
+#   * or runs the device flow, which prints a URL and a code on stdout.
+# Those printed lines are the whole transcript an operator needs, in a terminal
+# or in `ccd-account-auth`'s pane. The function's return value IS the access
+# token, so it is discarded and never printed.
+#
+# FOUR THINGS ARE DONE TO THE CHILD'S ENVIRONMENT, each read from the runtime's
+# own authenticator source:
+#   * every CHATGPT_*, LITELLM_* and OPENAI_* variable is UNSET, the same three
+#     prefixes the behaviour probe scrubs. The authenticator reads
+#     CHATGPT_AUTH_FILE and os.path.join()s it onto the token dir, so an ambient
+#     absolute value would put this lane's credential outside its authDir;
+#   * CHATGPT_TOKEN_DIR is set to the roster's authDir, under $HOME;
+#   * LITELLM_LOCAL_MODEL_COST_MAP=True (D-3484). Importing the
+#     authenticator imports litellm, which would otherwise fetch a remote file
+#     three times before the device flow could print;
+#   * umask 077. The authenticator mkdirs a missing token dir and writes
+#     auth.json with Python's default modes. A dir that already exists (an
+#     adopted one, spec §9.2) keeps whatever mode it has.
+#
+# EXIT STATUS FIRST, THEN EXISTENCE, AND NEVER CONTENTS. The authenticator
+# writes `device_code_requested_at` INTO auth.json before it polls. So an
+# abandoned or refused device flow leaves an auth.json that holds no token, and
+# only the exit status can tell that apart from a login. ccrc never opens the
+# file (spec §9).
+#
+# NOTHING IS PRINTED BEFORE THE RUNTIME'S OWN LINES. `ccd-account-auth`
+# publishes the FIRST `XXXX-XXXX`-shaped run it sees as the device code. A
+# generation name (`gen-<UTC>-<pid>`) carries one (`…000Z-4242`), so a progress
+# line naming the interpreter would put a wrong code on the operator's phone.
+#
+# ONE ID, ALREADY PARSED (ruling R18). `cmd_codex` refuses a missing id, a
+# flag-shaped one and any extra argument before its role gate and dependency
+# probe, and only then routes `login` here. So this function checks no arity.
+#
+# rc 2 ON A USAGE REFUSAL, 1 ON EVERY OTHER (this file's EXIT CODES header).
+# The one usage refusal left to this function is a malformed id, which is
+# `_codex_row`'s. `_codex_row`'s own rc is passed on as it came, because it
+# already keeps a malformed id (2) apart from a bad answer (1), and folding the
+# two here would narrow a distinction this function was handed. It takes no
+# lane lock: it starts and stops no tier (ruling R11's list is the paths that
+# do).
+_codex_login() {   # <id> (one, parsed by cmd_codex) — rc 0 iff the runtime exited 0 AND auth.json exists in the lane's authDir
+  local id="$1" py dir rc=0 v
+  _codex_row "$id" || return $?
+  py="$("$(_codex_runtime_cli)" python 2>/dev/null)" && [ -x "$py" ] \
+    || { _codex_say runtime-absent "this box has no built Codex runtime, so $id cannot be signed in. Build it with: ccgpt-runtime build (ccrc install runs the same build), then retry ccrc codex login $id"; return 1; }
+  dir="$HOME/$CX_AUTH"
+  (
+    umask 077
+    for v in ${!CHATGPT_@} ${!LITELLM_@} ${!OPENAI_@}; do unset "$v"; done
+    export CHATGPT_TOKEN_DIR="$dir" LITELLM_LOCAL_MODEL_COST_MAP=True
+    exec "$py" -I -c 'from litellm.llms.chatgpt.authenticator import Authenticator; Authenticator().get_access_token()'
+  ) || rc=$?
+  [ "$rc" -eq 0 ] \
+    || { _codex_say login-failed "the Codex runtime's sign-in for $id exited $rc (its own message is above), so $id is not logged in. Retry with: ccrc codex login $id"; return 1; }
+  [ -e "$dir/auth.json" ] \
+    || { _codex_say login-failed "the Codex runtime's sign-in for $id exited 0 but left no auth.json in its authDir, so $id is not logged in. Retry with: ccrc codex login $id"; return 1; }
+  printf '%s codex: %s: logged in (auth.json is present in its authDir)\n' "$PROG" "$id"
+}
+
+# `ccrc codex {start|stop|status|login} <id>` — the lane's lifecycle verb (D-3479).
+# The usage parse comes first and reads nothing. The role gate comes next: a
+# server-role box runs no sessions, so it runs no lanes, and it is refused
+# before any lane is read or locked. Then the dependency probe (ruling R22),
+# so no subcommand reads a lane without jq, and start/stop/status without node
+# too — `login` alone skips the node half (ruling PF-31): it never runs
+# models-op.mjs, and the pane that reaches it runs under the tmux server's own
+# PATH. `login` rides the same parse and the same two gates (ruling R18), and
+# its body, Task 8's `_codex_login`, takes the one parsed id and re-checks no
+# arity.
+cmd_codex() {
+  case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+  esac
+  local sub="${1:-}" id json=0
+  case "$sub" in
+    start|stop|status|login) shift ;;
+    '') _codex_say usage "ccrc codex needs a subcommand: ccrc codex {start|stop|status|login} <id> (status also takes --json)."; exit 2 ;;
+    *)  _codex_say usage "ccrc codex has no subcommand \"$sub\" in this build; it implements start, stop, status and login."; exit 2 ;;
+  esac
+  id="${1:-}"
+  case "$id" in
+    ''|-*) _codex_say usage "ccrc codex $sub needs a lane id: ccrc codex $sub <id>. 'ccrc status' lists this box's accounts."; exit 2 ;;
+  esac
+  shift
+  if [ "$sub" = status ] && [ "${1:-}" = --json ]; then json=1; shift; fi
+  if [ $# -gt 0 ]; then
+    _codex_say usage "ccrc codex $sub takes one lane id$([ "$sub" = status ] && printf ' and an optional --json'), and got \"$1\"."
+    exit 2
+  fi
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] \
+      && [ "$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)" = server ]; then
+    _codex_say server-role "this box records CCRC_ROLE=server in $BOX_ENV_FILE, and a server box runs no sessions, so no Codex lane either. Run 'ccrc codex $sub $id' on the fleet box."
+    exit 1
+  fi
+  _codex_deps "$sub" || exit 1
+  _codex_bus_defaults
+  case "$sub" in
+    start)  _codex_cmd_start "$id" ;;
+    stop)   _codex_cmd_stop "$id" ;;
+    status) _codex_cmd_status "$id" "$json" ;;
+    login)  _codex_login "$id" ;;
+  esac
+}
+
 cmd_models() {
   case "${1:-}" in
     -h|--help) usage; exit 0 ;;
@@ -9696,7 +11937,9 @@ CCRC_INST_SPINE=(
   _inst_stamp
   _inst_caps
   _inst_units
+  _inst_codex_runtime
   _inst_enable
+  _inst_codex_tiers
   _inst_linger
   _inst_dirs
   _inst_graphify_engine
@@ -11293,25 +13536,35 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   # that is the DEFAULT path on a platform is not the no-op `ccd-cap-scopes`'
   # own comment warns about.
   _inst_atomic "$tree/ccd/ccd-account-auth" "$bin/ccd-account-auth" 755
-  # Plan 2b-1: the two GPT-lane files that exist in the tree today, BEFORE
-  # the platform `if` below, so on BOTH arms — but ROLE-gated, `!= server`,
-  # which no other name in this function is (spec §11 says so, and why): the
-  # lane they serve needs a converged per-account launcher, and a server-role
-  # box converges nothing per account (D-3111). `_uninst_tree_bins` removes
-  # them on every role, as it does every name here. `ccgpt` and
-  # `ccgpt-runtime` join this gate in Plan 2b-2, IN THE SAME COMMIT that
-  # writes the real files at `ccd/ccgpt` and `ccd/ccgpt-runtime` —
-  # `_inst_atomic` dies on a missing source by design (never soften that
-  # here), and every commit on `main` must be installable.
-  # `ccgpt-usage.py` is placed on BOTH arms so an operator can run it by
-  # hand; its timer is placed by no installer yet (`_inst_units` says why),
-  # and whether macOS gets a launchd equivalent is Plan 3's decision too.
-  # `lane_bins` is what the closing line claims, set under the same gate.
+  # The GPT lane's four common executables, BEFORE the platform `if` below, so
+  # on BOTH arms — but ROLE-gated, `!= server`, which no other name in this
+  # function is (spec §11 says so, and why): the lane they serve needs a
+  # converged per-account launcher, and a server-role box converges nothing per
+  # account (D-3111). `_uninst_tree_bins` removes them on every role, as it
+  # does every name here. Plan 2b-1 placed the two `.py` files. Plan 2b-2
+  # placed the runtime builder `ccgpt-runtime` and the launcher `ccrc-codex`
+  # every generated Codex wrapper execs, after the commits that wrote them, and
+  # in one commit with their `_uninst_tree_bins` and `_uninst_wrappers` entries.
+  # A name joins this gate NO EARLIER than the commit that writes its source —
+  # `_inst_atomic` dies on a missing source by design (never soften that here),
+  # and every commit on `main` must be installable. Dependencies first and the
+  # launcher last, so a session a wrapper starts mid-run finds the new launcher
+  # only once what it runs is already in place.
+  # The launcher is `ccrc-codex`, NOT `ccgpt` (D-3478): on a live fleet box
+  # `$HOME/.local/bin/ccgpt` is another repository's launcher, and
+  # `_inst_atomic` has no ownership check, so a file placed there would cut
+  # every lane over at once, silently. `ccgpt-usage.py` is placed on BOTH arms
+  # so an operator can run it by hand; its timer is placed by no installer yet
+  # (`_inst_units` says why), and whether macOS gets a launchd equivalent is
+  # Plan 3's decision too. `lane_bins` is what the closing line claims, set
+  # under the same gate — both closing lines below carry it.
   local lane_bins="" lane_note=" (no GPT-lane executables: a server box converges nothing per account)"
   if [ "$INST_ROLE" != server ]; then
     _inst_atomic "$tree/ccd/ccgpt-proxy.py"  "$bin/ccgpt-proxy.py"  755
     _inst_atomic "$tree/ccd/ccgpt-usage.py"  "$bin/ccgpt-usage.py"  755
-    lane_bins=", ccgpt-proxy.py, ccgpt-usage.py" lane_note=""
+    _inst_atomic "$tree/ccd/ccgpt-runtime"   "$bin/ccgpt-runtime"   755
+    _inst_atomic "$tree/ccd/ccrc-codex"      "$bin/ccrc-codex"      755
+    lane_bins=", ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex" lane_note=""
   fi
   # `ccd-cap-scopes` FINDS UNCAPPED tmux pane CGROUP SCOPES and caps them.
   # macOS has neither cgroups nor scopes, and `_inst_units`' Darwin arm
@@ -11994,6 +14247,105 @@ _inst_units() {
   echo "install: units: $role_unit, claude-session@.service, ccd-cap-scopes.{service,timer} and both drop-ins in \$HOME/.config/systemd/user"
 }
 
+# ── _inst_codex_runtime — the Codex lanes' LiteLLM runtime (spec §5.2) ────
+# `ccgpt-runtime` owns ~/.ccrc/runtime/codex/ whole — generations, the
+# behaviour probe, the stamp, the `current` swap, the pruning (D-3480,
+# D-3481, D-3487). This step only asks it, and reports what it
+# RE-MEASURES afterwards: the generation named on the transcript is what
+# `ccgpt-runtime python` resolves, never a parse of the builder's own prose,
+# which is why the builder's stdout is not relayed. Its failure sentence is
+# on stderr, uncaptured, verbatim.
+#
+# IT DEGRADES, IT NEVER DIES — `_inst_graphify_engine` is fatal on the same
+# three failures and this step departs from it on purpose (spec §5.2): a
+# LiteLLM environment is orders of magnitude heavier than one wheel, and an
+# unreachable package index must not turn an update of a box whose Anthropic
+# lanes are healthy into a failed one. A failed build leaves the previous
+# runtime current, is counted in INST_DEGRADED (`codex-runtime`), and the
+# spine runs on to `_inst_installed`, so `cmd_update` reads "spine completed".
+#
+# THE GATE IS `exec.kind`, READ FROM accounts.json by `_codex_lanes` — never
+# accounts.sh's `CCRC_CODEX_BACKEND`, which is keyed on telemetry and names
+# today's EXTERNAL lanes (m-spine H8). A box with no codex lane does the cheap
+# part only. A roster `_codex_lanes` cannot read (rc 1, its own
+# `roster-invalid` sentence on stderr) is NOT a box with no codex lane: this
+# step says so, builds nothing, and degrades — "none" printed over a file
+# nobody read would be an overloaded empty. A server-role box converges
+# nothing per account (D-3111), and `_inst_bins` places no builder there.
+#
+# IT SAYS THE BUILD IS RUNNING BEFORE IT RUNS: a pip build can take minutes,
+# and an install that goes silent that long reads as hung. The requirement it
+# names is READ from the placed builder's own `LITELLM_REQUIREMENT='…'` line,
+# its one home (D-3487) — single-definition forbids this file to spell it,
+# comments included. The line is said even when the builder then finds the
+# runtime current: only the build can tell, and the result line says which.
+#
+# POSITION: after `_inst_bins` (the builder) and immediately before
+# `_inst_enable`, whose `ccrc-models.timer` refresh can stop and start a codex
+# lane's tiers through the functions that resolve `ccgpt-runtime python`, and
+# before `_inst_codex_tiers`, which measures staleness against what this step
+# made current (m-spine H4). The cmd_install pin states both reasons.
+_inst_codex_runtime() {
+  [ "$INST_ROLE" = server ] && return 0
+  local rt lanes n req before after gen why prev rc=0 lrc=0
+  rt="$(_codex_runtime_cli)"
+  lanes="$(_codex_lanes)" || lrc=$?
+  # rc 2 is a missing jq, never a bad roster (review C2): `cmd_install`
+  # probes node and systemctl by name, not jq, and the roster has already
+  # been validated through node by `_inst_accounts_sh`.
+  if [ "$lrc" -eq 2 ]; then
+    echo "install: codex runtime: NOT BUILT — jq is not on PATH (the ccrc codex: missing-dependency line above says so), so this step cannot read which roster lanes are codex lanes. This install continues. Install jq, then re-run: ccrc install"
+    INST_DEGRADED+=(codex-runtime)
+    return 0
+  fi
+  if [ "$lrc" -ne 0 ]; then
+    echo "install: codex runtime: NOT BUILT — \$HOME/.ccrc/accounts.json could not be read as a roster (the ccrc codex: roster-invalid line above says why), so this step cannot tell whether any codex lane needs a runtime. This install continues. Fix the roster (ccrc wrappers prints the validator's sentence), then re-run: ccrc install"
+    INST_DEGRADED+=(codex-runtime)
+    return 0
+  fi
+  if [ -z "$lanes" ]; then
+    echo "install: codex runtime: none — no codex lane in the roster"
+    return 0
+  fi
+  n="$(printf '%s\n' "$lanes" | grep -c .)"
+  if [ ! -x "$rt" ]; then
+    echo "install: codex runtime: NOT BUILT — $rt is not on this box, so $n codex lane(s) have no runtime to start from; re-run ccrc install from a complete tree"
+    INST_DEGRADED+=(codex-runtime)
+    return 0
+  fi
+  before="$("$rt" python 2>/dev/null)" || before=""
+  req="$(sed -n "s/^LITELLM_REQUIREMENT='\([^']*\)'\$/\1/p" "$rt" 2>/dev/null | head -n1)"
+  [ -n "$req" ] || req="(the requirement $rt declares could not be read)"
+  echo "install: codex runtime: building $req — pip may take minutes"
+  "$rt" build >/dev/null || rc=$?
+  after="$("$rt" python 2>/dev/null)" || after=""
+  if [ "$rc" -ne 0 ] || [ -z "$after" ]; then
+    # TWO failures, one outcome, two sentences: a build that said no, and a
+    # build that said yes while nothing resolves — an overloaded success this
+    # step refuses to report as one.
+    if [ "$rc" -ne 0 ]; then
+      why="ccgpt-runtime build exited $rc (its reason is the ccgpt-runtime line on stderr)"
+    else
+      why="ccgpt-runtime build exited 0 but no runtime resolves (ccgpt-runtime python answers nothing)"
+    fi
+    # What is current NOW, re-measured after the failure — not assumed.
+    if [ -n "$after" ]; then
+      prev="${after%/bin/python}"; prev="the previous runtime ${prev##*/} stays current"
+    else
+      prev="there is no runtime at all, so no codex lane can start until a build passes"
+    fi
+    echo "install: codex runtime: NOT BUILT — $why; $prev. This install continues. Re-run: ccgpt-runtime build"
+    INST_DEGRADED+=(codex-runtime)
+    return 0
+  fi
+  gen="${after%/bin/python}"; gen="${gen##*/}"
+  if [ "$after" = "$before" ]; then
+    echo "install: codex runtime: $gen already current (requirement, probe and litellm version re-measured unchanged) for $n codex lane(s)"
+  else
+    echo "install: codex runtime: $gen built, probed and current for $n codex lane(s)"
+  fi
+}
+
 # ── _inst_enable — ask systemd to read them, then prove one stayed up ─────
 # `deploy.sh:461-466`'s chain, in the same order and for the same reasons, with
 # the agent's unit replaced by this box's own.
@@ -12151,6 +14503,225 @@ _inst_enable() {
   echo "install: services: $main and ccd-cap-scopes.timer enabled, and $main restarted onto the tree this run placed"
 }
 
+# ── _inst_codex_tiers — restart what this run replaced, and nothing else ──
+# Spec §7.4, as D-3485 places it: a BARE step right after
+# `_inst_enable` (visible in the pinned sequence; platform-neutral — Darwin's
+# `_inst_enable` returns before anything below it, m-spine H7), never code in
+# `_upd_sweep`, the one sanctioned toucher of `claude-session@*`. It runs on
+# install AND update, because update re-runs this spine from the staged tree.
+#
+# ONLY A TIER THAT IS RUNNING, VERIFIED THIS LANE'S, AND STALE — the stop is
+# identity-gated (D-3488), and only `_codex_tier_ours` = 0 is ever
+# stopped here. A lazy lane stays lazy (1 is never started). A port or unit
+# that answers as something else (2) — on the fleet box a same-named unit of
+# another repository is live today (m-livebox §3) — is left alone and said
+# so, and so, in its own sentence, is an answer this step cannot read (3). A
+# tier of this lane's that is still STARTING (4: its handle proves the lane,
+# its port does not answer yet) is never restarted: that would kill it
+# mid-import and start it again. It is named with its remedy. Stale means
+# `<tier>.started` differs from `_codex_started_json`'s answer now: a new
+# generation, or new shim code — a running Python keeps its old code after
+# the file under it is replaced. "Cannot tell" (2) is not stale, and is said.
+#
+# ONE LOCK PER LANE, `_codex_lock`, held from the lane's first question to its
+# last act and released through `_codex_unlock`, its ONLY release, before the
+# next lane's is taken. `ccrc-models.timer`'s refresh and a session's `ccrc
+# codex start` stop and start tiers through the same functions and take the
+# same lock; a question asked outside it would be a check-then-act race. It is
+# taken HERE, once — the tier functions never take it again. `_codex_lock` is
+# re-entrant in this shell (a call for the lane CX_LOCK_ID already names
+# returns 0 at once, and a subshell inherits that), so a nested call would add
+# nothing; a deadlock comes only through a second RAW open of `.lock`, which
+# flock counts as a second locker. A lane whose lock cannot be taken is not
+# touched at all. A box with no `flock` answers 0 with CX_LOCK_FD empty: that
+# is not a refusal, and the lane is handled unserialised, as Task 5's own
+# verbs handle it there.
+#
+# STOP, THEN START — NEVER `systemctl restart`: a transient unit's argv was
+# fixed at `systemd-run` time and carries the RESOLVED generation path
+# (D-3480), so a restart re-runs the OLD one. And never STOP what this
+# step could not START again: with no runtime resolving, a stale tier stays up
+# on the old code and is reported, rather than taken down.
+#
+# THE STOP'S STDOUT WORD IS CAPTURED, NEVER JUST ITS RC (ruling PF-21):
+# `_codex_stop_tier` answers rc 0 for BOTH "stopped" and "foreign" — its own
+# identity gate (D-3488) can find, between this step's own gate above and the
+# stop call, that the tier is no longer provably this lane's, and it leaves it
+# running rather than force it. A caller that read only the rc would treat
+# that rc 0 as a successful stop and start over a tier it never touched, so
+# this step reads the WORD: `foreign` counts as NOT restarted, is named on its
+# own line, and no start follows it — the same rule Task 6's consumer applies
+# to the same verb.
+#
+# "RESTARTED" IS A MEASUREMENT: after the start, the tier must answer as this
+# lane (`_codex_tier_ours` = 0; a 4 is still starting, so the wait goes on)
+# within `_codex_ready_secs` — the verb's own bound, and the ONE parse of
+# CCRC_CODEX_READY_S (default 90), which this step never parses itself — or it
+# is a FAILED restart. Every failure is its own line on stderr and one
+# `codex-tiers` in INST_DEGRADED — a per-lane capability degrades; it is not
+# the guardrail `_inst_enable` is. An unreadable roster (`_codex_lanes` rc 1)
+# is a failure too, never "no codex lane".
+_inst_codex_tiers() {
+  [ "$INST_ROLE" = server ] && return 0
+  local lanes id tier ours stale py ready deadline back stopword rc lrc=0
+  local restarted=0 kept=0 failed=0
+  local -a ids=()
+  lanes="$(_codex_lanes)" || lrc=$?
+  # rc 2 is a missing jq, never a bad roster (review C2; the runtime step's
+  # own comment says why).
+  if [ "$lrc" -eq 2 ]; then
+    echo "install: codex tiers: NOT measured — jq is not on PATH (the ccrc codex: missing-dependency line above says so), so no codex lane's tiers were checked or restarted; install jq, then re-run: ccrc install" >&2
+    INST_DEGRADED+=(codex-tiers)
+    return 0
+  fi
+  if [ "$lrc" -ne 0 ]; then
+    echo "install: codex tiers: NOT measured — \$HOME/.ccrc/accounts.json could not be read as a roster (the ccrc codex: roster-invalid line above says why), so no codex lane's tiers were checked or restarted; fix the roster, then re-run: ccrc install" >&2
+    INST_DEGRADED+=(codex-tiers)
+    return 0
+  fi
+  if [ -z "$lanes" ]; then
+    echo "install: codex tiers: none — no codex lane in the roster"
+    return 0
+  fi
+  mapfile -t ids <<<"$lanes"
+  _codex_bus_defaults
+  py="$("$(_codex_runtime_cli)" python 2>/dev/null)" || py=""
+  ready="$(_codex_ready_secs)"
+  for id in "${ids[@]}"; do
+    [ -n "$id" ] || continue
+    # rc 0 is the lock held, or no `flock` on this box (CX_LOCK_FD empty):
+    # both go on. Only a non-zero answer is a refusal.
+    # R33's reason: `_codex_lock`'s own bound is `_codex_ready_secs() + 30`
+    # (Task 5), so a `ccrc codex start` or `ccrc models refresh` that holds
+    # this lane's lock can make this step go silent for that long. Said
+    # BEFORE the call, so a transcript read mid-wait names what is running
+    # rather than reading as hung — printed even when the lock returns at
+    # once, the same reason the build's own R33 line is.
+    echo "install: codex tiers: $id: waiting up to $((ready + 30))s for its lane lock"
+    if ! _codex_lock "$id"; then
+      echo "install: codex tiers: $id: NOT measured — its lane lock could not be taken (the line above says why), so neither of its tiers was checked or restarted; re-run ccrc install once it is free (read: ccrc codex status $id)" >&2
+      for tier in $CODEX_TIERS; do failed=$((failed + 1)); done
+      continue
+    fi
+    for tier in $CODEX_TIERS; do
+      _codex_tier_ours "$id" "$tier"; ours=$?
+      case "$ours" in
+        0) ;;
+        1) continue ;;
+        2)
+          # Named by `_codex_foreign_what`, the one helper every rc-2
+          # consumer names through (review A2): a unit whose identity is
+          # only UNPROVEN says so, with its retry, never "not this lane".
+          _codex_foreign_what "$id" "$tier"
+          if [ "${CX_TIER_WHY:-}" = listener-other-process ]; then
+            echo "install: codex tiers: $id $tier: left alone — $CX_FOREIGN_WHAT; another process owns its port, so restarting this proven lane process could not rebind it; stop this lane's process with: ccrc codex stop $id (read: ccrc codex status $id)"
+          else
+            echo "install: codex tiers: $id $tier: left alone — $CX_FOREIGN_WHAT, and this step never stops what it cannot prove it started. $CX_FOREIGN_FIX (read: ccrc codex status $id)"
+          fi
+          kept=$((kept + 1)); continue ;;
+        4)
+          echo "install: codex tiers: $id $tier: left alone — it is this lane's own tier and still starting (its port does not answer yet), and this step never restarts a tier mid-start; if it runs code this install replaced, restart it once it answers: ccrc codex stop $id, then ccrc codex start $id"
+          kept=$((kept + 1)); continue ;;
+        *)
+          echo "install: codex tiers: $id $tier: left alone — whether it is this lane's could not be measured, and this step never stops what it cannot prove it started (read: ccrc codex status $id)"
+          kept=$((kept + 1)); continue ;;
+      esac
+      _codex_tier_stale "$id" "$tier"; stale=$?
+      case "$stale" in
+        0) ;;
+        1) kept=$((kept + 1)); continue ;;
+        *)
+          # 2 is "cannot tell" — no runtime to start on, or a code file that
+          # cannot be read — and so is any answer that is not a clean 0 or 1:
+          # a tier nobody can prove stale is never restarted.
+          echo "install: codex tiers: $id $tier: left alone — whether it runs code this install replaced could not be measured (no runtime resolves, or its code file cannot be read), and a tier nobody can prove stale is never restarted"
+          kept=$((kept + 1)); continue ;;
+      esac
+      # The runtime this step measured at its start (`py`, above, read ONCE
+      # before the lane loop); belt-and-braces against a stale answer.
+      # `_codex_tier_stale` already answers 2 when no runtime resolves, so
+      # this guard binds only through the isolation harness, which can stub
+      # `_codex_tier_stale` to answer 0 (stale) while `py` is separately
+      # forced empty — a shape the real library does not produce, except
+      # when a runtime becomes current mid-step, between the pre-loop `py`
+      # read and this tier's own `_codex_tier_stale` call.
+      if [ -z "$py" ]; then
+        echo "install: codex tiers: $id $tier: NOT restarted — it runs code this install replaced, but no codex runtime resolves (ccgpt-runtime python answers nothing), and a tier this step could not start again is never stopped; it stays up on the old code until: ccgpt-runtime build, then ccrc codex stop $id and ccrc codex start $id" >&2
+        failed=$((failed + 1)); continue
+      fi
+      # The stop's own STDOUT WORD is captured, never only its rc (ruling
+      # PF-21): `_codex_stop_tier` returns rc 0 for both "stopped" and
+      # "foreign", and only the word tells them apart.
+      stopword="$(_codex_stop_tier "$id" "$tier")"; rc=$?
+      if [ "$stopword" = foreign ]; then
+        echo "install: codex tiers: $id $tier: NOT restarted — the stop found it no longer provably this lane's, so it was left running rather than forced; this step never starts over a tier it cannot prove it stopped (read: ccrc codex status $id)" >&2
+        failed=$((failed + 1)); continue
+      fi
+      if [ "$rc" -ne 0 ]; then
+        echo "install: codex tiers: $id $tier: restart FAILED — it could not be stopped, so it is still running the code this install replaced (read: ccrc codex status $id)" >&2
+        failed=$((failed + 1)); continue
+      fi
+      # CLASS FIX (review round 2, N3/N4 — the same shape at every
+      # stop-then-start consumer): `_codex_stop_tier` answers `foreign` only
+      # when it stopped nothing; after a REAL stop it answers `stopped` (or
+      # `not running`), and a taker that arrives after ITS OWN second
+      # measurement is invisible to it. Re-measure right before the start,
+      # and start ONLY on a freshly measured 1 — never assume the port is
+      # free just because the stop said so. A 2 is named, through
+      # `_codex_foreign_what` (the same helper the identity gate above now
+      # names through too, review A2), because this step just stopped this
+      # lane's own tier and owes
+      # an operator the same "what holds it now" it would give for any other
+      # foreign answer; anything else (0, 3, 4, or a code this step has
+      # never seen) is unmeasured, and both leave this tier DOWN rather than
+      # "left running" — the stop already ran.
+      _codex_tier_ours "$id" "$tier"; ours=$?
+      case "$ours" in
+        1) ;;
+        2)
+          _codex_foreign_what "$id" "$tier"
+          echo "install: codex tiers: $id $tier: NOT restarted — the stop said \"$stopword\", but a re-measurement right before the start found $CX_FOREIGN_WHAT; this tier is DOWN (it was stopped, and this step never starts over a port it cannot prove is free). $CX_FOREIGN_FIX Bring it back once that clears: ccrc codex start $id" >&2
+          failed=$((failed + 1)); continue ;;
+        *)
+          echo "install: codex tiers: $id $tier: NOT restarted — the stop said \"$stopword\", but a re-measurement right before the start could not tell whether the port is free (answered $ours), so this step never starts over what it cannot prove is free; this tier is DOWN. Bring it back with: ccrc codex start $id" >&2
+          failed=$((failed + 1)); continue ;;
+      esac
+      # BELT-AND-BRACES, not the binding guard: `install.sh` is run as
+      # `curl … | bash`, so this redirect keeps the installer's own text off
+      # a spawned tier's stdin even if the platform layer ever changed. The
+      # real guard is `_svc_run_supervised`'s own `</dev/null` on the nohup
+      # arm's spawn, and `systemd-run` without `--pty`/`--pipe` never
+      # forwards this shell's stdin either way.
+      if ! _codex_start_tier "$id" "$tier" </dev/null >/dev/null; then
+        echo "install: codex tiers: $id $tier: restart FAILED — it was stopped and would not start again, so this tier is DOWN; bring it back with: ccrc codex start $id" >&2
+        failed=$((failed + 1)); continue
+      fi
+      # R33's reason again: the readiness wait below can take up to
+      # ${ready}s, and a transcript that goes silent that long reads as hung.
+      # Said right after the start returns, before the wait begins.
+      echo "install: codex tiers: $id $tier: started, waiting up to ${ready}s for it to answer"
+      back=1; deadline=$((SECONDS + ready))
+      while :; do
+        if _codex_tier_ours "$id" "$tier"; then back=0; break; fi
+        [ "$SECONDS" -lt "$deadline" ] || break
+        sleep 1
+      done
+      if [ "$back" -ne 0 ]; then
+        echo "install: codex tiers: $id $tier: restart FAILED — it was started again and did not answer as this lane within ${ready}s, so this tier is DOWN; read: ccrc codex status $id, then: ccrc codex start $id" >&2
+        failed=$((failed + 1)); continue
+      fi
+      echo "install: codex tiers: $id $tier: restarted — it was running code this install replaced"
+      restarted=$((restarted + 1))
+    done
+    # The release is `_codex_unlock`, the lock's ONLY release — never an
+    # inline close, which would leave CX_LOCK_ID naming a lock that is gone —
+    # so no later spawn, the next lane's tiers included, inherits it.
+    _codex_unlock
+  done
+  [ "$failed" -eq 0 ] || INST_DEGRADED+=(codex-tiers)
+  echo "install: codex tiers: ${#ids[@]} codex lane(s) — $restarted restarted, $kept left as they were, $failed not restarted"
+}
+
 # ── _inst_linger — the one step that reports a failure and CONTINUES ──────
 # Without linger, `/run/user/$UID` is torn down when the last login session
 # ends, taking every `systemd --user` unit with it — the whole fleet, plus the
@@ -12182,7 +14753,9 @@ _inst_linger() {
   # It was the ONLY writer of `INST_DEGRADED` when this comment was first
   # written, and that sentence stopped being true the day the graphify steps
   # landed: `graphify-read-rule` (`_inst_graph_always_on_off`, D-1244) and
-  # `graphify-path` (`_inst_graphify_engine`, D-1348/D-1349) write it too, for
+  # `graphify-path` (`_inst_graphify_engine`, D-1348/D-1349) write it too, and
+  # so, since Plan 2b-2, do `codex-runtime` (`_inst_codex_runtime`) and
+  # `codex-tiers` (`_inst_codex_tiers`), for
   # the same reason and under the same rule — a step that neither converged nor
   # is entitled to take the box down says so and is counted. Kept as a census
   # rather than a claim, because a hand-kept "only" is exactly the sentence a
@@ -18816,7 +21389,14 @@ cmd_uninstall() {
     esac
   fi
 
+  # The RECORDED role (`ccrc.env`'s CCRC_ROLE, `cmd_codex`'s own reader):
+  # `_uninst_codex` gates on it as install's codex steps gate on theirs.
+  local role=''
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
   _uninst_units
+  _uninst_codex "$role"
   _uninst_hooks
   _uninst_wrappers
   _uninst_cc_sessions
@@ -18925,6 +21505,233 @@ _uninst_units() {
   echo "uninstall: units: stopped, disabled and removed (incl. both drop-ins and the slice escape)"
 }
 
+# ── _uninst_codex — stop the Codex lanes' tiers, remove their runtime ─────
+# Spec §13. REMOVED: the isolated runtime (~/.ccrc/runtime/codex, every
+# generation and `current`) and every tier of a rostered codex lane that is
+# RUNNING OR STARTING AND VERIFIED THIS LANE'S, stopped through the lane
+# library — by exact unit where a user manager exists, by verified pid where
+# not. KEPT, stated so nobody has to infer it: ~/.ccrc/codex/<id>/ (diagnosis
+# material, and every byte of it regenerable), ~/.ccrc/logs/codex/, and every
+# lane's authDir — ccrc never obtained that credential, and removing it would
+# end a subscription session it did not start. `--purge` takes ~/.ccrc whole
+# as before; authDir is never under ~/.ccrc (the roster refuses it), so a
+# purge cannot reach a credential either.
+#
+# A PLAIN UNINSTALL REMOVES A VENV, which no step did before: graphify's venv
+# survives until `--purge`. That departure is spec §13's own — the runtime is
+# hundreds of MB per generation and rebuilt by the next install.
+#
+# IDENTITY, NOT THE NAME, DECIDES WHAT STOPS (D-3488). Only a tier
+# `_codex_tier_ours` answers 0 (ours, running) or 4 (ours, still starting —
+# ccrc's own, which would otherwise outlive its runtime), or the one 2 that
+# carries a proven handle (`listener-other-process`: this lane's own process
+# while another holds its port, review A1) — all three read through
+# `_codex_tier_is_our_handle` — is asked to stop, through `_codex_stop_tier`,
+# which is identity-gated itself. Any other tier it calls foreign (2), named
+# in `_codex_foreign_what`'s words (review A2) — a unit whose identity is
+# only UNPROVEN says so, with the way to finish by hand — or cannot ask about
+# (3, or anything else), is LEFT RUNNING and named, each in its own sentence:
+# on the fleet box a
+# transient unit with a lane's exact tier name is live today and belongs to
+# another repository (m-livebox §3), and an uninstall removes only what ccrc
+# placed (`_uninst_units`' own rule, D-3172). A tier that is not running (1)
+# has nothing to stop.
+#
+# THE STOP'S STDOUT WORD IS CAPTURED, NEVER ONLY ITS RC (ruling PF-21):
+# `_codex_stop_tier` answers rc 0 for BOTH "stopped" and "foreign" — its own
+# identity gate, RE-MEASURED, can find between this step's own check above and
+# the stop call that the tier is no longer provably this lane's, and leaves it
+# running rather than force it. Reading only the rc would fold that race into
+# "stopped". So `foreign` is reported exactly like this step's own "left
+# alone" (2) sentence, and never counted as stopped; only a NON-ZERO RC is a
+# failed stop, its own stderr line. `not running` at rc 0 — a tier that exited
+# between this step's own check and the stop call, or the R34 stale-pidfile
+# path — is counted under `stopped:` too, same as the word `stopped` itself:
+# the goal this step promises, no tier of this lane running, is met either
+# way (review fix round 1, spec-4: corrects this comment, which previously
+# said "or any other word" — the code never singled `not running` out). The
+# runtime is removed regardless, as §13 says.
+#
+# FRONT-FIRST, THE SAME ORDER `_codex_stop_lane` STOPS IN (ruling PF-18): the
+# shim closes before the gateway behind it. Hardcoded, exactly as
+# `_codex_stop_lane` hardcodes it, rather than looped over `$CODEX_TIERS`
+# (declared "litellm shim" — the library's OTHER order, for its composed
+# "litellm <word>, shim <word>" answer, not a stop sequence).
+#
+# ONE LOCK PER LANE, `_codex_lock`, held from the lane's first identity
+# question to its last stop and released through `_codex_unlock`, its ONLY
+# release, before the next lane's is taken: a session's `ccrc codex start`
+# takes the same lock, and a check made outside it would be a check-then-act
+# race. A lane whose lock cannot be taken is not asked or stopped, and is
+# named — with a caution (review fix round 1, spec-3/mut-5): a same-named
+# ccgpt-<id>-* unit may belong to another tool on this box, so an operator
+# stopping it by hand must first check its MainPID's argv names THIS lane
+# (--ccrc-lane=<id>, or a path under $HOME/.ccrc/runtime/codex). The rc-3
+# "could not be measured" sentence carries the same caution, for the same
+# reason. A box with no `flock` answers 0 with CX_LOCK_FD empty: that is not
+# a refusal, and the lane is measured and stopped unserialised, as Task 5's
+# own verbs handle it there. A roster `_codex_lanes` cannot read (rc 1,
+# its `roster-invalid` sentence on stderr) is NOT a roster with no codex lane:
+# nothing is stopped, the closing line says the roster could not be read, and
+# a companion stderr line (review fix round 1, spec-3) warns that a codex
+# tier ccrc had started may still be running over the runtime this step is
+# about to remove, since it was never measured or stopped.
+#
+# THE REMOVAL'S TARGET IS BELT-AND-BRACES GUARDED: `${rt:?}` would refuse —
+# aborting the whole script, never silently falling through — rather than let
+# an empty or unset `rt` expand into a wider `rm -rf`. `rt` is always
+# "$HOME/.ccrc/runtime/codex", a fixed literal SUFFIX that can never be
+# empty. `set -u` catches only an UNSET $HOME, and not here: it dies when
+# this file is SOURCED, at the platform block's top-level `_SVC_REG="$HOME/…"`
+# (measured: `env -u HOME bash ccd/ccrc version` stops there, long before
+# any step runs; fix wave, N4) — an EMPTY $HOME
+# (`HOME=`) is still SET, so `set -u` does not fire, and `rt` becomes
+# "/.ccrc/runtime/codex": narrower, not wider, still bounded by the literal
+# suffix, and still not empty (review fix round 2, N4: corrects round 1's
+# claim that an empty HOME "dies" too — measured, `env HOME= bash -u -c
+# '...'` exits 0). So `:?` can never actually fire today, from either an
+# unset or an empty $HOME; it guards only a future edit that built `rt` some
+# other way. Its case (`the runtime removal is guarded…`) is a TEXT pin over
+# this line's own source — it reads for the literal `${rt:?…}`, not a
+# behaviour, because no fixture can make `rt` empty to measure the refusal
+# directly (review fix round 1, spec-5/mut-4).
+#
+# POSITION: right after `_uninst_units`, whose `disable --now` takes
+# `ccrc-models.timer` down first — its refresh stops and starts a codex
+# lane's tiers — and before `_uninst_tree_bins` removes the lane's
+# executables.
+# HOW TO FINISH BY HAND what `_uninst_codex` could not (spec §19.8, D-3532),
+# spelled ONCE for every line that needs it. ccrc itself is gone once the
+# uninstall finishes, so it names only the box's own tools: the tier's unit
+# where a user manager runs, and its pidfile where none does (fix wave, N3:
+# on Darwin, or on a Linux box with no user manager, every tier runs on the
+# nohup arm, and its pid is in `~/.ccrc/codex/<id>/<tier>.pid`, which the
+# uninstall keeps). A same-named unit may belong to another tool on this box,
+# so the argv is checked before anything is stopped.
+_uninst_codex_by_hand() {   # <id> <tier, or '*'> -> one clause on stdout, no newline
+  printf "systemctl --user status ccgpt-%s-%s (or, where no user manager runs, the pid in \$HOME/.ccrc/codex/%s/%s.pid), confirm that MainPID's or pid's argv names this lane (--ccrc-lane=%s, or a path under \$HOME/.ccrc/runtime/codex) — a same-named unit may belong to another tool on this box — and only then stop it" \
+    "$1" "$2" "$1" "$2" "$1"
+}
+
+_uninst_codex() {   # [<the role ccrc.env records>]
+  local role="${1:-}" lanes id tier rc w sc rt="$HOME/.ccrc/runtime/codex" rt_word roster=read lanes_rc=0
+  local stopped="" left="" nostop=""
+  local -a ids=()
+  # Front-first (ruling PF-18): the shim closes before the gateway behind it,
+  # `_codex_stop_lane`'s own order — hardcoded here the same way, not looped
+  # over `$CODEX_TIERS` (declared "litellm shim").
+  local -a tiers=(shim litellm)
+  # THE ROLE GATE (review C3), install's own: `_inst_codex_runtime` and
+  # `_inst_codex_tiers` do nothing on a server-role box, so no codex tier
+  # of ccrc's runs there, and nothing is read, locked or probed for one.
+  if [ "$role" = server ]; then
+    roster=server
+  else
+    lanes="$(_codex_lanes)" || lanes_rc=$?
+    if [ "$lanes_rc" -eq 0 ]; then
+      [ -z "$lanes" ] || mapfile -t ids <<<"$lanes"
+    elif [ "$lanes_rc" -eq 2 ]; then
+      roster=missing-jq
+    else
+      roster=unreadable
+    fi
+  fi
+  _codex_bus_defaults
+  for id in ${ids[@]+"${ids[@]}"}; do
+    [ -n "$id" ] || continue
+    # A LANE THAT NEVER RAN ON THIS BOX (review C3): every ccrc start of its
+    # tiers writes its lane directory first (lane.json, the start records,
+    # the pidfiles), so without one there is nothing of ccrc's to stop. It
+    # is not locked, because the lock would CREATE that directory and a
+    # `.lock` in it just before the closing line calls the directory kept.
+    if [ ! -d "$(_codex_lane_dir "$id")" ]; then
+      echo "uninstall: codex: $id: nothing to stop — it has no lane directory (\$HOME/.ccrc/codex/$id), which every ccrc start of its tiers writes first; nothing was measured or locked"
+      continue
+    fi
+    # rc 0 is the lock held, or no `flock` on this box (CX_LOCK_FD empty):
+    # both go on. Only a non-zero answer is a refusal.
+    if ! _codex_lock "$id"; then
+      for tier in "${tiers[@]}"; do nostop="$nostop${nostop:+, }$id $tier"; done
+      echo "uninstall: codex: $id: not stopped — its lane lock could not be taken (the line above says why), so neither of its tiers was measured. ccrc itself is gone once uninstall finishes, so stop them by hand before any reinstall: $(_uninst_codex_by_hand "$id" '*')" >&2
+      continue
+    fi
+    for tier in "${tiers[@]}"; do
+      _codex_tier_ours "$id" "$tier"; rc=$?
+      # This lane's own tier — the one 2 that carries a proven handle
+      # included (review A1: its port's holder is foreign, the proven
+      # process is not) — is stopped through `_codex_stop_tier`, which is
+      # identity-gated itself; the exception is read through the one
+      # predicate that reads it.
+      if _codex_tier_is_our_handle "$rc"; then
+        # The stop's own stdout WORD is captured, never only its rc (ruling
+        # PF-21): `_codex_stop_tier` returns rc 0 for both "stopped" and
+        # "foreign", and only the word tells them apart. On `foreign` the
+        # stop has already named the holder on stderr, in
+        # `_codex_foreign_what`'s words.
+        w="$(_codex_stop_tier "$id" "$tier")"; sc=$?
+        if [ "$w" = foreign ]; then
+          left="$left${left:+, }$id $tier"
+          echo "uninstall: codex: $id $tier: left alone — the stop found it no longer provably this lane's (the ccrc codex: line above names what holds it), and an uninstall stops only what ccrc started"
+        elif [ "$sc" -ne 0 ]; then
+          nostop="$nostop${nostop:+, }$id $tier"
+          echo "uninstall: codex: $id $tier: could not be stopped — it is still running, and ccrc itself is gone once uninstall finishes, so stop it by hand before any reinstall: $(_uninst_codex_by_hand "$id" "$tier")" >&2
+        else
+          stopped="$stopped${stopped:+, }$id $tier"
+        fi
+        continue
+      fi
+      case "$rc" in
+        1) ;;
+        2)
+          # Named by `_codex_foreign_what` (review A2), never a "not this
+          # lane" sentence of this step's own. A unit whose identity is only
+          # UNPROVEN (ruling PF-13) may be this lane's own tier between two
+          # restarts: it is left running, as unproven, with the way to
+          # finish once ccrc is gone.
+          _codex_foreign_what "$id" "$tier"
+          left="$left${left:+, }$id $tier"
+          if [ "${CX_TIER_WHY:-}" = unit-unproven ]; then
+            echo "uninstall: codex: $id $tier: left alone — $CX_FOREIGN_WHAT, and an uninstall stops only what it can prove ccrc started. It may be this lane's own tier between two of its restarts; once uninstall finishes: $(_uninst_codex_by_hand "$id" "$tier")"
+          else
+            echo "uninstall: codex: $id $tier: left alone — $CX_FOREIGN_WHAT, and an uninstall stops only what ccrc started"
+          fi ;;
+        *)
+          left="$left${left:+, }$id $tier"
+          echo "uninstall: codex: $id $tier: left alone — whether it is this lane's could not be measured, and an uninstall stops only what it can prove ccrc started. Once uninstall finishes: $(_uninst_codex_by_hand "$id" "$tier")" ;;
+      esac
+    done
+    # The release is `_codex_unlock`, the lock's ONLY release — never an
+    # inline close, which would leave CX_LOCK_ID naming a lock that is gone —
+    # so nothing started after this, the next lane's lock included, inherits it.
+    _codex_unlock
+  done
+  rt_word="was not installed"
+  if [ -e "$rt" ] || [ -L "$rt" ]; then
+    rm -rf -- "${rt:?_uninst_codex: rt is empty or unset}" \
+      || _ccrc_die "removing $rt failed — the codex runtime is still on this box"
+    rt_word="removed"
+  fi
+  if [ "$roster" = server ]; then
+    echo "uninstall: codex: a server-role box (ccrc.env records CCRC_ROLE=server) runs no codex lane — no lane was read, measured or stopped; the runtime at \$HOME/.ccrc/runtime/codex $rt_word"
+    return 0
+  fi
+  if [ "$roster" = missing-jq ]; then
+    echo "uninstall: codex: jq is not on PATH (the ccrc codex: missing-dependency line above says so), so no codex lane was read and no tier was measured or stopped; the runtime at \$HOME/.ccrc/runtime/codex $rt_word; kept: \$HOME/.ccrc/codex/<id>/, \$HOME/.ccrc/logs/codex/ and every lane's authDir"
+    echo "uninstall: codex: any codex tier ccrc had started may still be running — its runtime at \$HOME/.ccrc/runtime/codex $rt_word, so it cannot be restarted from there. ccrc itself is gone by the time uninstall finishes, so check by hand: $(_uninst_codex_by_hand '<id>' '*')" >&2
+    return 0
+  fi
+  if [ "$roster" = unreadable ]; then
+    echo "uninstall: codex: the roster could not be read (the ccrc codex: roster-invalid line above says why), so no codex lane's tier was measured or stopped; the runtime at \$HOME/.ccrc/runtime/codex $rt_word; kept: \$HOME/.ccrc/codex/<id>/, \$HOME/.ccrc/logs/codex/ and every lane's authDir"
+    echo "uninstall: codex: any codex tier ccrc had started may still be running — its runtime at \$HOME/.ccrc/runtime/codex $rt_word, so it cannot be restarted from there. ccrc itself is gone by the time uninstall finishes, so check by hand: $(_uninst_codex_by_hand '<id>' '*')" >&2
+    return 0
+  fi
+  if [ "${#ids[@]}" -eq 0 ]; then
+    echo "uninstall: codex: no codex lane in the roster — nothing to stop; the runtime at \$HOME/.ccrc/runtime/codex $rt_word"
+    return 0
+  fi
+  echo "uninstall: codex: ${#ids[@]} codex lane(s) in the roster — stopped: ${stopped:-none}; left alone: ${left:-none}; not stopped: ${nostop:-none}; the runtime at \$HOME/.ccrc/runtime/codex $rt_word; kept: \$HOME/.ccrc/codex/<id>/, \$HOME/.ccrc/logs/codex/ and every lane's authDir"
+}
+
 # THE TREE'S OWN installer, in `--remove` mode — never the INSTALLED copy at
 # ~/.cc-sessions (the opposite of `_inst_hooks`' choice, for a reason that
 # only exists on this path): an installed copy that predates the flag does
@@ -19007,9 +21814,17 @@ _uninst_wrappers() {
     # The day it gains one, `ccrc uninstall` would delete it as a WRAPPER and
     # `_uninst_tree_bins` — which owns this name — would never get a say,
     # which is verbatim what this case exists to prevent. `ccd-tmp-sweep`
-    # joins on those same terms: id-shaped, unmarked, ours.
-    # `ccd-update-sync` (programme wave 4) joins on them once more.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-pool-sync|ccd-update-sync) continue ;; esac
+    # joins on those same terms: id-shaped, unmarked, ours. So do the GPT
+    # lane's two id-shaped executables, `ccgpt-runtime` and its launcher
+    # `ccrc-codex` (Plan 2b-2, in the commit that placed them). From that
+    # commit on, this list is not checked by eye: `install-census.test.ts`
+    # derives it against `_inst_bins`' id-shaped placements and
+    # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` and requires the
+    # three EQUAL (spec §5 Pin 4). NOT `ccgpt`: on a live fleet box that name
+    # is another repository's unmarked launcher, which the marker test below
+    # already keeps, and nothing here places it (D-3478). `ccd-update-sync`
+    # joins on the same terms as the timer-bound binary from programme wave 4.
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -19187,15 +22002,17 @@ _uninst_tree_bins() {
   # prevent) and the
   # usage sweep's PAIR — `ccd-usage-sweep` and its Python engine
   # `ccd-usage-sweep.py`, which `_inst_bins` installs as two files and which
-  # must therefore be removed as two. Plan 2b-1 Task 4 adds the GPT-lane's
-  # two placed executables, `ccgpt-proxy.py` and `ccgpt-usage.py` — Task 2
-  # narrowed `_inst_bins` to exactly these two: the lane's launcher and
-  # runtime binaries are not in the tree yet, `_inst_atomic` dies on a
-  # missing source, so nothing places them and this census names none of
-  # them either. They are placed on both `_inst_bins` arms, so this census
-  # removes them on every platform — the same orphan this rule already exists
-  # to prevent. (`graphify`, below, keeps its own rule and its own paragraph:
-  # it is the one name in this census that is not ccrc's own binary.)
+  # must therefore be removed as two. The GPT lane's four placed executables
+  # follow the same rule: `ccgpt-proxy.py` and `ccgpt-usage.py` (Plan 2b-1),
+  # and the runtime builder `ccgpt-runtime` and the launcher `ccrc-codex`
+  # (Plan 2b-2, which added them here in the commit that placed them).
+  # `_inst_bins` places all four on both platform arms and on every role but
+  # server, so this census removes them on every platform and every role — on
+  # a server box that is a no-op, never an error. NOT `ccgpt`, and never: on a
+  # live fleet box that name is another repository's launcher, which ccrc never
+  # placed and so never removes (D-3478). (`graphify`, below, keeps its own
+  # rule and its own paragraph: it is the one name in this census that is not
+  # ccrc's own binary.)
   #
   # `ccd-update-sync` (programme wave 4, the update-intent puller) joins on
   # `ccd-pool-sync`'s exact terms: `_inst_bins` places it on every
@@ -19219,8 +22036,9 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-tmp-sweep" "$HOME/.local/bin/ccd-pool-sync" \
     "$HOME/.local/bin/ccd-update-sync" \
     "$HOME/.local/bin/ccgpt-proxy.py" "$HOME/.local/bin/ccgpt-usage.py" \
+    "$HOME/.local/bin/ccgpt-runtime" "$HOME/.local/bin/ccrc-codex" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an
@@ -19396,6 +22214,7 @@ case "$VERB" in
   account) cmd_account "$@" ;;
   memory)  cmd_memory "$@" ;;
   models)  cmd_models "$@" ;;
+  codex)   cmd_codex "$@" ;;
   install) cmd_install "$@" ;;
   update)  cmd_update "$@" ;;
   rollback) cmd_rollback "$@" ;;

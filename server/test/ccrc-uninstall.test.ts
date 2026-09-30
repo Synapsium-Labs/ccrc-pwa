@@ -24,12 +24,14 @@
 // the predicate and the marker under test are the shipped ones, not copies.
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync,
-  symlinkSync, rmSync, lstatSync, readlinkSync, unlinkSync,
+  mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, chmodSync,
+  symlinkSync, rmSync, lstatSync, readlinkSync, realpathSync, unlinkSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
@@ -41,7 +43,19 @@ import { installVersionedTree } from './installTreeFixture.js';
 // marker `verifyMarker` recognises, so the "marker-verified only" gate is
 // measured against the shipped format, never a test's re-spelling of it.
 import { markGenerated } from '../../shared/mark.mjs';
-import { itLinux, itDarwin } from './platformFixtures.js';
+import { itLinux, itDarwin, describeLinux } from './platformFixtures.js';
+// Plan 2b-2 Task 11: the codex lane library's fixture, Task 4's/5's writers
+// and processes, Task 10's spine join to the fake user manager, and its
+// extraction harness helpers — one definition each, imported rather than
+// re-spelled here (Interfaces).
+import {
+  codexRoster, plantCodexBins, plantFakeRuntime, plantSystemd, spawnListener, killLaneProcesses,
+  registerLaneCleanup, trackChild, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms, spineSystemdRun, SPINE_CONTAINMENT_PROBE,
+  managerCalls, spineRunCalls, isolationManagerStubs, assertIsolationWallFirst, strayManagerCalls, ccrcFunction,
+  ccrcLine, recordingStub, lockStub, freeLanes, portAccepts, laneAnswer, eventually, authDirOf, plantLaneAuth,
+  plantLaneConfig, laneUnits, GPT_LANE_BINS, type StubRc, type LanePorts,
+} from './codexLaneFixture.js';
+import { psArgs } from './laneReaper.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -55,10 +69,24 @@ const BASH = realPath('bash');
 
 interface Result { code: number; stdout: string; stderr: string }
 
-/** Recorders and poisons on the fixture PATH. systemctl RECORDS and answers
- *  the two shapes uninstall asks (`disable --now`, `daemon-reload`);
- *  journalctl RECORDS (the `logs` passthrough pin); tmux is a poison —
- *  neither verb has any business near a pane. */
+/** Recorders and poisons on the fixture PATH. systemctl answers uninstall's
+ *  own two shapes (`disable --now`, `daemon-reload`) PLUS, since Plan 2b-2
+ *  Task 11, the codex-tier verbs `spineSystemctlArms()` forwards to an
+ *  adopted `plantSystemd` delegate (`stop` by exact unit among them);
+ *  `systemd-run` is the contained recorder `spineSystemdRun()` plants, which
+ *  refuses with 97 unless a delegate was adopted. `adoptPlantedSystemd`
+ *  itself now also writes a front the instant it moves anything aside
+ *  (belt-and-braces: Task 11 review fix round 1), and this function's own
+ *  last act, `assertSpineFrontContained`, THROWS unless BOTH `systemd-run`
+ *  and `systemctl` resolve to `<home>/.local/bin/<name>` and carry the spine
+ *  mark (systemctl joined in fix round 2, N1). `runVerb` repeats that check
+ *  on its FINAL env, after `extraEnv` is spread over this one. So a later
+ *  edit here that drops either plant() call leaves that name fronted by
+ *  adopt's own write or refused by the check, never resolving to the box's
+ *  real binary. What the check proves is those two names; the other tools
+ *  below are contained by their own plants, unchecked. journalctl RECORDS
+ *  (the `logs` passthrough pin); tmux is a poison — neither verb has any
+ *  business near a pane. */
 function verbEnv(home: string): NodeJS.ProcessEnv {
   const env = ghContainedEnv(home, { ...process.env, HOME: home });
   const plant = (name: string, body: string): void =>
@@ -78,11 +106,24 @@ function verbEnv(home: string): NodeJS.ProcessEnv {
     '  *) echo "fixture launchctl: unexpected argv: $*" >&2; exit 90 ;;',
     'esac',
   ].join('\n') + '\n');
+  // ── Plan 2b-2 Task 11: the transient-unit launcher, contained ──────────
+  // Same reasoning as ccrcEnv's/updateEnv's own comment (ccrc-install.test.ts,
+  // ccrc-update.test.ts): `_uninst_codex` reaches `systemd-run` through the
+  // lane library's identity checks and stops, and this harness planted none
+  // until now (m-platform §3.2).
+  adoptPlantedSystemd(home);
+  plant('systemd-run', spineSystemdRun());
+
   plant('systemctl', [
     '#!/bin/sh',
     'printf \'%s\\n\' "$*" >> "$HOME/systemctl-calls"',
     '[ "$1" = "--user" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     'shift',
+    // Plan 2b-2 Task 11: the codex tiers' verbs (`stop` by exact unit among
+    // them), forwarded to an adopted `plantSystemd`, or answered as a manager
+    // that never loaded a codex unit — this stub knew only daemon-reload and
+    // `disable --now` (m-platform §3.3).
+    ...spineSystemctlArms(),
     'case "$1" in',
     '  daemon-reload) exit 0 ;;',
     '  disable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
@@ -92,7 +133,11 @@ function verbEnv(home: string): NodeJS.ProcessEnv {
   plant('journalctl',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/journalctl-argv"\nexit 0\n');
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_RELEASE_BASE_URL',
-    'CCRC_BACKUP_KEEP', 'CCRC_ROLE']) delete env[k];
+    'CCRC_BACKUP_KEEP', 'CCRC_ROLE', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
+  // Task 11 review fix round 1 (spec-1/mut-1 CRITICAL): the harness's own
+  // final check, after every plant() above — THROWS before this env can be
+  // handed to any runVerb/spawn if systemd-run is not the contained front.
+  assertSpineFrontContained(env, home);
   return env;
 }
 
@@ -161,6 +206,15 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   // carries no marker either. It is also the only one `_inst_bins` places on
   // BOTH platform arms.
   writeFileSync(join(bin, 'ccd-account-auth'), '#!/bin/sh\n# account auth\n', { mode: 0o755 });
+  // The GPT lane's four, which `_inst_bins` places on both platform arms and
+  // every role but server — so a `both`/`fleet` box has them and
+  // `_uninst_tree_bins` must take them away. UNMARKED, as `_inst_atomic`
+  // leaves them. `ccrc-codex` is the launcher every generated Codex wrapper
+  // execs — NOT `ccgpt`, which on a live box is another repository's (D-3478).
+  for (const name of GPT_LANE_BINS) {
+    const shell = name.endsWith('.py') ? 'python3' : 'bash';
+    writeFileSync(join(bin, name), `#!/usr/bin/env ${shell}\n# fixture ${name}\n`, { mode: 0o755 });
+  }
   // ── the one name in ~/.local/bin that is not a ccrc binary (it read
   // "the EIGHTH" while the list above had grown to nine; `_uninst_tree_bins`
   // retired its own ordinals for the same reason, routing slice 0)
@@ -309,9 +363,33 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(home, '.tmux.conf.pre-ccrc-20260101T000000Z'), '# the operator\'s own\n');
 }
 
+/** Every command currently reachable on this process's PATH except `missing`,
+ *  collapsed into one link farm. This models one absent dependency without
+ *  also losing the ordinary tools that happen to share its system directory. */
+function pathWithout(home: string, missing: string): string {
+  const farm = join(home, `no-${missing}-bin`);
+  mkdirSync(farm);
+  const seen = new Set<string>([missing]);
+  for (const dir of (process.env['PATH'] ?? '/usr/bin:/bin').split(':')) {
+    let names: string[] = [];
+    try { names = readdirSync(dir); } catch { continue; }
+    for (const name of names) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      symlinkSync(join(dir, name), join(farm, name));
+    }
+  }
+  return `${join(home, '.local', 'bin')}:${farm}`;
+}
+
 function runVerb(home: string, verb: string, args: string[] = [],
   extraEnv: NodeJS.ProcessEnv = {}): Result {
   const env = { ...verbEnv(home), ...extraEnv };
+  // Fix round 2 (N5): on the FINAL merged env — verbEnv's own internal call
+  // (its last act) only ever saw the env BEFORE extraEnv was spread over it,
+  // so this is the check that actually covers what the spawn below runs
+  // under. No case in this file legitimately reaches no manager at all.
+  assertSpineFrontContained(env, home);
   const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), verb, ...args],
     { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
@@ -583,9 +661,13 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // account-pool-membership wave 1, Task 4 fix round 1 (F4): `ccd-pool-sync`
     // joins the set on `ccd-graph-sweep`'s own terms — its units go above and
     // the binary would otherwise stay on PATH for ever.
+    // Plan 2b-2: the GPT lane's four join the set on `ccd-pool-sync`'s terms —
+    // `_inst_bins` places them, so an uninstall that left them strands them on
+    // PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
       'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep',
-      'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync', 'graphify']) {
+      'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync',
+      ...GPT_LANE_BINS, 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
     expect(r.stdout).toMatch(/uninstall: tree: graphify removed from \$HOME\/\.local\/bin/);
@@ -680,23 +762,47 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       .toMatch(/uninstall: tree: .*ccd-update-sync.* removed from \$HOME\/\.local\/bin/);
   });
 
-  // Plan 2b-1 Task 4: the GPT-lane's TWO placed executables (Task 2 narrowed
-  // `_inst_bins` to these — the lane's launcher and runtime binaries are not
-  // in the tree yet, `_inst_atomic` dies on a missing source, so nothing
-  // places them and this census names none of them either). The usage-window
-  // publisher's `ccgpt-usage@.{service,timer}` pair is the other half of this
-  // case since the final review's F-1: no installer places it, because on a
-  // live fleet box those two names hold ANOTHER repository's pair with an
-  // instance enabled, so an uninstall that removed them would delete a live
-  // unit ccrc never wrote. They must survive byte for byte, their enabled
-  // instance's wants link too, and no systemctl verb may name them. `itLinux`,
-  // as every other systemd-argv assertion in this file.
-  itLinux('uninstall removes the two GPT-lane executables and leaves a ccgpt-usage@ unit pair it never placed alone', () => {
+  it('STAMPED ccgpt-runtime and ccrc-codex are the bin arm\'s subject too, never counted as wrappers', () => {
+    // The uninstall twin of their `TOOLCHAIN_EXECUTABLES` entries, on the terms
+    // the two cases above state for `ccd-account-auth` and `ccd-pool-sync`:
+    // `_inst_atomic` does not stamp, so a real box's copies are unmarked and the
+    // wrapper arm keeps them whether or not `_uninst_wrappers`' case names them.
+    // A marked fixture is the only thing that tells the two worlds apart.
+    // `install-census.test.ts` derives the case's MEMBERSHIP; this measures
+    // what the membership DOES.
+    // The lane's ID-SHAPED two — the ones with no dot, which is what makes a
+    // name id-shaped — derived from the one test-side list (final review F4).
+    const idShaped = GPT_LANE_BINS.filter((n) => !n.includes('.'));
+    expect(idShaped).toEqual(['ccgpt-runtime', 'ccrc-codex']);
+    for (const name of idShaped) {
+      const home = mkTmp(`ccrc-uninst-${name}-marked-`);
+      plantInstalledBox(home);
+      writeFileSync(join(home, '.local', 'bin', name), markGenerated(`#!/usr/bin/env bash\n# ${name}\n`), { mode: 0o755 });
+      const r = runVerb(home, 'uninstall');
+      expect(r.code, r.stderr).toBe(0);
+      expect(existsSync(join(home, '.local', 'bin', name)), `${name} survived the uninstall`).toBe(false);
+      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      expect(r.stdout, `${name} was counted in the wrapper census`)
+        .not.toMatch(new RegExp(`uninstall: wrappers: removed .*/${esc}(?![\\w-])`));
+      expect(r.stdout, `the bin census does not name ${name}`)
+        .toMatch(new RegExp(`uninstall: tree: .*(?<![\\w-])${esc}(?![\\w-]).* removed from \\$HOME/\\.local/bin`));
+    }
+  });
+
+  // The GPT lane's FOUR placed executables (`plantInstalledBox` plants them),
+  // and never a bare `ccgpt` — on a live fleet box that name is another
+  // repository's launcher (D-3478). The usage-window publisher's
+  // `ccgpt-usage@.{service,timer}` pair is the other half of this case since
+  // 2b-1's final review, F-1: no installer places it, because on a live fleet
+  // box those two names hold ANOTHER repository's pair with an instance
+  // enabled, so an uninstall that removed them would delete a live unit ccrc
+  // never wrote. They must survive byte for byte, their enabled instance's
+  // wants link too, and no systemctl verb may name them. `itLinux`, as every
+  // other systemd-argv assertion in this file.
+  itLinux('uninstall removes the four GPT-lane executables and leaves a ccgpt-usage@ unit pair it never placed alone', () => {
     const home = mkTmp('ccrc-uninst-ccgpt-');
     plantInstalledBox(home);
     const bin = join(home, '.local', 'bin');
-    writeFileSync(join(bin, 'ccgpt-proxy.py'), '#!/usr/bin/env python3\n# fixture proxy\n', { mode: 0o755 });
-    writeFileSync(join(bin, 'ccgpt-usage.py'), '#!/usr/bin/env python3\n# fixture usage\n', { mode: 0o755 });
     const units = join(home, '.config', 'systemd', 'user');
     const foreignSvc = '[Unit]\nDescription=FOREIGN-FIXTURE ccgpt-usage@.service, not ccrc\'s\n';
     const foreignTimer = '[Unit]\nDescription=FOREIGN-FIXTURE ccgpt-usage@.timer, not ccrc\'s\n';
@@ -707,9 +813,16 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     symlinkSync(join(units, 'ccgpt-usage@.timer'), wants);
     const r = runVerb(home, 'uninstall', ['--force']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+    for (const name of GPT_LANE_BINS) {
       expect(existsSync(join(bin, name)), `${name} survived uninstall`).toBe(false);
+      // FLANKED: a name must be printed on its own, never satisfied by a
+      // longer sibling that happens to contain it.
+      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      expect(r.stdout, `the bin census does not name ${name} on its own`)
+        .toMatch(new RegExp(`uninstall: tree: .*(?<![\\w-])${esc}(?![\\w-]).* removed from \\$HOME/\\.local/bin`));
     }
+    expect(r.stdout, 'the bin census claims to remove a bare ccgpt, which ccrc never placed')
+      .not.toMatch(/uninstall: tree: .*(?<![\w-])ccgpt(?![\w-])/);
     expect(readFileSync(join(units, 'ccgpt-usage@.service'), 'utf8'), 'the foreign .service was removed or changed')
       .toBe(foreignSvc);
     expect(readFileSync(join(units, 'ccgpt-usage@.timer'), 'utf8'), 'the foreign .timer was removed or changed')
@@ -718,10 +831,6 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(readlinkSync(wants)).toBe(join(units, 'ccgpt-usage@.timer'));
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
     expect(calls, 'a systemctl verb named a ccgpt-usage unit, template or instance').not.toContain('ccgpt-usage');
-    expect(r.stdout, 'the bin census does not name ccgpt-proxy.py')
-      .toMatch(/uninstall: tree: .*ccgpt-proxy\.py.* removed from \$HOME\/\.local\/bin/);
-    expect(r.stdout, 'the bin census does not name ccgpt-usage.py')
-      .toMatch(/uninstall: tree: .*ccgpt-usage\.py.* removed from \$HOME\/\.local\/bin/);
   });
 
   // The other half of D-1347, and the half that makes the removal safe: the
@@ -1226,4 +1335,923 @@ describe('ccrc logs: a thin, role-aware journalctl passthrough', () => {
     expect(r.code).toBe(2);
     expect(existsSync(join(home, 'journalctl-argv'))).toBe(false);
   });
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// Plan 2b-2 Task 11 — `_uninst_codex`: stop what ccrc started, remove the
+// runtime, keep the lane state, the logs and the credential (spec §13).
+//
+// TIER ORDER: FRONT-FIRST — shim, then litellm (ruling PF-18), matching
+// `_codex_stop_lane`'s own order (ccd/ccrc: "both tiers, the FRONT one
+// first: the shim closes before the gateway behind it"). `CODEX_TIERS` is
+// declared "litellm shim" for a DIFFERENT purpose (that function's composed
+// "litellm <word>, shim <word>" answer), so every call-order and
+// closing-line assertion below lists shim before litellm.
+// ════════════════════════════════════════════════════════════════════════
+const READY = { CCRC_CODEX_READY_S: '20' };
+const realPy = (): string => realPath('python3');
+
+describe('ccrc uninstall: the codex step, in order and contained (Plan 2b-2 Task 11)', () => {
+  it('the harness contains the transient-unit launcher: it resolves inside this HOME and refuses', () => {
+    const home = mkTmp('ccrc-uninst-sdrun-contained-');
+    const r = spawnSync(BASH, ['-c', SPINE_CONTAINMENT_PROBE], { env: verbEnv(home), encoding: 'utf8' });
+    expect(r.stdout).toContain(`at=${join(home, '.local', 'bin', 'systemd-run')}\n`);
+    expect(r.stdout).toMatch(/^run-rc=97$/m);
+    expect(r.stdout).toMatch(/^env-rc=0$/m);
+    expect(spineRunCalls(home).join('\n')).toContain('--unit=fixture-containment-probe.service');
+  });
+
+  // ── Fix round 2, N2: harness-only pins on the two new containment
+  // guards themselves (codexLaneFixture.ts) — no verb, no spawn of ccrc or
+  // ccd, matching the HARD RULE. A bare env, not any builder's, so these
+  // pin the GUARDS, not one file's use of them.
+  const bareEnv = (home: string): NodeJS.ProcessEnv =>
+    ({ ...process.env, HOME: home, PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}` });
+
+  it('adoptPlantedSystemd alone fronts and marks both systemctl and systemd-run (fix round 2, N2a)', () => {
+    const home = mkTmp('ccrc-uninst-adopt-alone-');
+    // Task 4/5's real fake manager — the thing adoptPlantedSystemd must move
+    // aside. No harness's own SUBSEQUENT plant() runs after this: the point
+    // is what adoptPlantedSystemd leaves behind on its own.
+    plantSystemd(home, { userManager: true });
+    adoptPlantedSystemd(home);
+    // Proven the same way a runner proves it — through the shared check,
+    // not by re-reading the mark text here.
+    expect(() => assertSpineFrontContained(bareEnv(home), home)).not.toThrow();
+    expect(existsSync(join(home, '.local', 'bin', '.codex-systemctl')), 'the delegate systemctl was never adopted').toBe(true);
+    expect(existsSync(join(home, '.local', 'bin', '.codex-systemd-run')), 'the delegate systemd-run was never adopted').toBe(true);
+  });
+
+  it('assertSpineFrontContained throws on an unfronted HOME, an unmarked front, and separately for systemctl and systemd-run (fix round 2, N2b)', () => {
+    // (i) Nothing planted at all: neither name can resolve to <home>'s front.
+    const unfronted = mkTmp('ccrc-uninst-assert-unfronted-');
+    mkdirSync(join(unfronted, '.local', 'bin'), { recursive: true });
+    expect(() => assertSpineFrontContained(bareEnv(unfronted), unfronted)).toThrow(/systemd-run/);
+
+    // (ii) systemd-run planted at the right path, but WITHOUT the mark.
+    const unmarkedRun = mkTmp('ccrc-uninst-assert-unmarked-run-');
+    mkdirSync(join(unmarkedRun, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(unmarkedRun, '.local', 'bin', 'systemd-run'), '#!/bin/sh\nexit 97\n', { mode: 0o755 });
+    expect(() => assertSpineFrontContained(bareEnv(unmarkedRun), unmarkedRun))
+      .toThrow(/systemd-run.*does not carry the spine front mark/);
+
+    // (iii) systemd-run correctly fronted (via adoptPlantedSystemd), but
+    // systemctl overwritten WITHOUT the mark — proves systemctl is checked
+    // SEPARATELY, never satisfied by systemd-run alone passing (N1's gap).
+    const unmarkedCtl = mkTmp('ccrc-uninst-assert-unmarked-ctl-');
+    plantSystemd(unmarkedCtl, { userManager: true });
+    adoptPlantedSystemd(unmarkedCtl);
+    writeFileSync(join(unmarkedCtl, '.local', 'bin', 'systemctl'), '#!/bin/sh\nexit 97\n', { mode: 0o755 });
+    expect(() => assertSpineFrontContained(bareEnv(unmarkedCtl), unmarkedCtl))
+      .toThrow(/systemctl.*does not carry the spine front mark/);
+
+    // (iv) systemctl correctly fronted, systemd-run removed entirely after —
+    // proves systemd-run is checked too, never skipped once systemctl passes.
+    const noRun = mkTmp('ccrc-uninst-assert-no-run-');
+    plantSystemd(noRun, { userManager: true });
+    adoptPlantedSystemd(noRun);
+    rmSync(join(noRun, '.local', 'bin', 'systemd-run'));
+    expect(() => assertSpineFrontContained(bareEnv(noRun), noRun)).toThrow(/systemd-run/);
+
+    // (v) Fix round 3 (C3): `expectAbsent` REFUSES a resolution, it never
+    // trusts one. systemd-run is correctly fronted; systemctl is NOT in the
+    // fixture bin, and /usr/bin is on PATH, so on a Linux box with systemd
+    // `command -v` finds the REAL one. That is the shape runInstall's
+    // `omit: ['systemctl']` produces if its `pathWithout` override is lost.
+    // A decoy directory AFTER /usr/bin makes the resolution non-empty on
+    // every box, one with no systemd at all included. Nothing is executed:
+    // the check only asks `command -v`.
+    const absentFound = mkTmp('ccrc-uninst-assert-absent-found-');
+    mkdirSync(join(absentFound, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(absentFound, '.local', 'bin', 'systemd-run'), spineSystemdRun(), { mode: 0o755 });
+    const decoy = join(absentFound, 'decoy-bin');
+    mkdirSync(decoy, { recursive: true });
+    writeFileSync(join(decoy, 'systemctl'), '#!/bin/sh\nexit 97\n', { mode: 0o755 });
+    const absentEnv = (tail: string): NodeJS.ProcessEnv =>
+      ({ ...process.env, HOME: absentFound, PATH: `${join(absentFound, '.local', 'bin')}:${tail}` });
+    expect(() => assertSpineFrontContained(absentEnv(`/usr/bin:${decoy}`), absentFound, { expectAbsent: ['systemctl'] }))
+      .toThrow(/systemctl was expected absent .* but resolved to /);
+    // The control: the same HOME with systemctl resolving NOWHERE passes, so
+    // the throw above is the resolution's, not a broken fixture's.
+    expect(() => assertSpineFrontContained(absentEnv(join(absentFound, 'no-such-dir')), absentFound,
+      { expectAbsent: ['systemctl'] })).not.toThrow();
+  });
+
+  it('every runner calls assertSpineFrontContained on its final env, immediately before the spawn (fix round 2, N2c)', () => {
+    // A TEXT pin, cross-file: each runner's own body, from its function
+    // header to the point it spawns, must contain the call — not merely
+    // somewhere in the file.
+    const between = (src: string, header: RegExp, spawnMarker: string): string => {
+      const m = header.exec(src);
+      expect(m, `no match for ${header} in this file`).toBeTruthy();
+      const from = m!.index;
+      const to = src.indexOf(spawnMarker, from);
+      expect(to, `no ${JSON.stringify(spawnMarker)} after ${header}`).toBeGreaterThan(from);
+      return src.slice(from, to);
+    };
+    const uninstallSrc = readFileSync(join(here, 'ccrc-uninstall.test.ts'), 'utf8');
+    const installSrc = readFileSync(join(here, 'ccrc-install.test.ts'), 'utf8');
+    const updateSrc = readFileSync(join(here, 'ccrc-update.test.ts'), 'utf8');
+    expect(between(uninstallSrc, /^function runVerb\(/m, 'spawnSync(BASH'))
+      .toMatch(/assertSpineFrontContained\(env, home\)/);
+    expect(between(updateSrc, /^function runUpdate\(/m, 'spawnSync(BASH'))
+      .toMatch(/assertSpineFrontContained\(env, home\)/);
+
+    // Fix round 3 (C4): "on its FINAL env" is an ORDER, and the order is
+    // what is pinned. `replantDoctorStubs` and the `opts.stubs` loop both
+    // write into `<home>/.local/bin`, so a check above either of them
+    // validates a directory the spawn no longer runs against — an unmarked
+    // `opts.stubs` systemctl would pass it.
+    const indexIn = (s: string, what: RegExp, why: string): number => {
+      const i = s.search(what);
+      expect(i, why).toBeGreaterThan(-1);
+      return i;
+    };
+    const inst = between(installSrc, /^function runInstall\(/m, 'const ccrc = opts.from');
+    const instCall = indexIn(inst, /assertSpineFrontContained\(env, home,/,
+      'runInstall does not call assertSpineFrontContained before its spawn');
+    const instReplant = indexIn(inst, /replantDoctorStubs\(home\);/,
+      'runInstall no longer calls replantDoctorStubs(home) — re-anchor this pin');
+    const stubsLoop = indexIn(inst, /for \(const \[name, body\] of Object\.entries\(opts\.stubs \?\? \{\}\)\) \{/,
+      'runInstall no longer has its opts.stubs loop — re-anchor this pin');
+    const stubsLoopEnd = inst.indexOf('\n  }\n', stubsLoop);
+    expect(stubsLoopEnd, 'the opts.stubs loop has no closing brace at two spaces').toBeGreaterThan(stubsLoop);
+    expect(instCall, 'runInstall checks BEFORE replantDoctorStubs(home)').toBeGreaterThan(instReplant);
+    expect(instCall, 'runInstall checks BEFORE its opts.stubs loop has finished').toBeGreaterThan(stubsLoopEnd);
+
+    // Fix round 3 (C4): runInstallTty, sliced up to its pty spawn — the
+    // call deleted there was green before this round. Same ORDER rule:
+    // after the doctor-stub replant, and after `env` is filled from ccrcEnv.
+    const tty = between(installSrc, /^function runInstallTty\(/m, 'pty.spawn(');
+    const ttyCall = indexIn(tty, /assertSpineFrontContained\(env, home\)/,
+      'runInstallTty does not call assertSpineFrontContained before its pty.spawn');
+    const ttyReplant = indexIn(tty, /replantDoctorStubs\(home\);/,
+      'runInstallTty no longer calls replantDoctorStubs(home) — re-anchor this pin');
+    const ttyFill = indexIn(tty, /for \(const \[k, v\] of Object\.entries\(raw\)\)/,
+      'runInstallTty no longer fills env from ccrcEnv — re-anchor this pin');
+    expect(ttyCall, 'runInstallTty checks BEFORE replantDoctorStubs(home)').toBeGreaterThan(ttyReplant);
+    expect(ttyCall, 'runInstallTty checks BEFORE env is filled').toBeGreaterThan(ttyFill);
+
+    // Fix round 3 (C1): `ccrc version` through the installed launcher runs
+    // the shipped ccrc, so it is a runner too. It has ONE spelling in the
+    // file, inside `runLauncherVersion`, and that runner checks the env it
+    // spawns with on the line before the spawn. A literal-shape pin: an
+    // inline spawn spelled this way again is red; a differently-spelled
+    // one is not, and nothing here claims otherwise.
+    const launcherSpawn = /spawnSync\(BASH, \[join\(home, '\.local', 'bin', 'ccrc'\)/g;
+    expect([...installSrc.matchAll(launcherSpawn)].length,
+      'the installed launcher is spawned somewhere other than runLauncherVersion').toBe(1);
+    expect(between(installSrc, /^function runLauncherVersion\(/m, 'spawnSync(BASH'))
+      .toMatch(/const env = ccrcEnv\(home\);\n\s*assertSpineFrontContained\(env, home\);\n\s*const r = $/);
+  });
+
+  // ── Fix round 3, C2: the ISOLATION harnesses' wall, checked. Harness
+  // level — the wall builder and the check only, no step, no spawn.
+  it('assertIsolationWallFirst throws unless BOTH manager names resolve to the isolation wall (fix round 3, C2)', () => {
+    // The two harnesses' own env shape: the wall first, then the caller's PATH.
+    const wallEnv = (home: string, first: string): NodeJS.ProcessEnv =>
+      ({ PATH: `${first}:${process.env['PATH'] ?? ''}`, HOME: home });
+    // (i) control: the wall isolationManagerStubs builds, first on PATH, passes.
+    const ok = mkTmp('ccrc-uninst-wall-ok-');
+    expect(() => assertIsolationWallFirst(wallEnv(ok, isolationManagerStubs(ok)), ok)).not.toThrow();
+    // (ii) the wall built but NOT on PATH: whatever PATH resolves (the real
+    // one, or nothing) is not the wall.
+    const offPath = mkTmp('ccrc-uninst-wall-off-path-');
+    isolationManagerStubs(offPath);
+    expect(() => assertIsolationWallFirst({ PATH: process.env['PATH'] ?? '', HOME: offPath }, offPath))
+      .toThrow(/(systemd-run|systemctl) resolved to .*, not .*isolation-bin\/(systemd-run|systemctl)/);
+    // (iii) the wall missing systemd-run: checked on its own, never
+    // satisfied by systemctl passing.
+    const noRun = mkTmp('ccrc-uninst-wall-no-run-');
+    const noRunWall = isolationManagerStubs(noRun);
+    rmSync(join(noRunWall, 'systemd-run'));
+    expect(() => assertIsolationWallFirst(wallEnv(noRun, noRunWall), noRun))
+      .toThrow(/systemd-run resolved to .*, not .*isolation-bin\/systemd-run/);
+    // (iv) the wall missing systemctl: the same, the other way round.
+    const noCtl = mkTmp('ccrc-uninst-wall-no-ctl-');
+    const noCtlWall = isolationManagerStubs(noCtl);
+    rmSync(join(noCtlWall, 'systemctl'));
+    expect(() => assertIsolationWallFirst(wallEnv(noCtl, noCtlWall), noCtl))
+      .toThrow(/systemctl resolved to .*, not .*isolation-bin\/systemctl/);
+    // (v) the wall complete, but not FIRST: a directory ahead of it wins.
+    const shadowed = mkTmp('ccrc-uninst-wall-shadowed-');
+    const shadowedWall = isolationManagerStubs(shadowed);
+    const ahead = join(shadowed, 'ahead-bin');
+    mkdirSync(ahead, { recursive: true });
+    writeFileSync(join(ahead, 'systemctl'), '#!/bin/sh\nexit 97\n', { mode: 0o755 });
+    expect(() => assertIsolationWallFirst(wallEnv(shadowed, `${ahead}:${shadowedWall}`), shadowed))
+      .toThrow(/systemctl resolved to .*ahead-bin\/systemctl/);
+  });
+
+  // ── Final review F4: the wall is proven by WHAT the file is, not only by
+  // where the name resolves. Harness level: the wall builder and the check
+  // only, and the check only reads the file a name resolves to.
+  it('assertIsolationWallFirst refuses a symlink to the real manager and an unmarked stub at the wall\'s own path (final review F4)', () => {
+    const wallEnv = (home: string, first: string): NodeJS.ProcessEnv =>
+      ({ PATH: `${first}:${process.env['PATH'] ?? ''}`, HOME: home });
+    // (i) the review's measured shape: the wall's systemctl replaced by a
+    // symlink to the box's real one (READ here, never run). Before this fix
+    // the check passed it, because it resolves at the wall's own path.
+    const real = spawnSync('/bin/sh', ['-c', 'command -v systemctl'], { encoding: 'utf8' }).stdout.trim();
+    const linked = mkTmp('ccrc-uninst-wall-symlink-');
+    const linkedWall = isolationManagerStubs(linked);
+    rmSync(join(linkedWall, 'systemctl'));
+    symlinkSync(real !== '' ? real : '/bin/sh', join(linkedWall, 'systemctl'));
+    expect(() => assertIsolationWallFirst(wallEnv(linked, linkedWall), linked))
+      .toThrow(/isolation-bin\/systemctl does not carry the isolation wall mark/);
+    // (ii) an unmarked stub at the wall's own path, for the other name.
+    const plain = mkTmp('ccrc-uninst-wall-unmarked-');
+    const plainWall = isolationManagerStubs(plain);
+    writeFileSync(join(plainWall, 'systemd-run'), '#!/bin/sh\nexit 97\n', { mode: 0o755 });
+    expect(() => assertIsolationWallFirst(wallEnv(plain, plainWall), plain))
+      .toThrow(/isolation-bin\/systemd-run does not carry the isolation wall mark/);
+    // The control: the wall as built passes, so the throws above are the mark's.
+    const ok = mkTmp('ccrc-uninst-wall-marked-');
+    expect(() => assertIsolationWallFirst(wallEnv(ok, isolationManagerStubs(ok)), ok)).not.toThrow();
+  });
+
+  // These cases stay within fixture HOMEs and use direct ChildProcess handles
+  // for unconditional cleanup; persisted PIDs grant no teardown authority.
+  describeLinux('lane fixture cleanup ownership', () => {
+    const children: ChildProcess[] = [];
+    const living = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+    afterEach(async () => {
+      await Promise.all(children.splice(0).map((child) => new Promise<void>((resolve) => {
+        if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
+        child.once('exit', () => resolve());
+        child.kill('SIGKILL');
+      })));
+    });
+
+    const controlledChild = (home: string, childHome: string): ChildProcess => {
+      const child = spawn('bash', ['-c', 'exec -a "$1" sleep 300', '_', `${home}/controlled-tier`], {
+        cwd: home,
+        env: { ...process.env, HOME: childHome },
+        stdio: 'ignore',
+      });
+      expect(child.pid, 'the controlled fixture process has no pid').toBeDefined();
+      children.push(child);
+      return child;
+    };
+
+    it('persisted fixture evidence never grants teardown signal authority', async () => {
+      const home = mkTmp('ccrc-uninst-reaper-evidence-');
+      const child = controlledChild(home, home);
+      const pid = child.pid!;
+      await eventually(() => psArgs(pid).includes(`${home}/`), 'the controlled fixture argv');
+
+      // Each shape is a product observation, deliberately containing the same
+      // current-run PID. None is an ownership capability for fixture teardown.
+      const unit = join(home, 'fake-systemd', 'units', 'fixture.service');
+      mkdirSync(unit, { recursive: true });
+      writeFileSync(join(home, 'fake-systemd', 'spawned'), `${pid}\n`);
+      writeFileSync(join(unit, 'pid'), `${pid}\n`);
+      mkdirSync(join(home, 'fake-procs'), { recursive: true });
+      writeFileSync(join(home, 'fake-procs', 'litellm-1.json'), `${JSON.stringify({ pid })}\n`);
+      const lane = join(home, '.ccrc', 'codex', 'codex-a');
+      mkdirSync(lane, { recursive: true });
+      writeFileSync(join(lane, 'litellm.pid'), `${pid}\n`);
+      writeFileSync(join(lane, 'shim.pid'), `${pid}\n`);
+
+      await killLaneProcesses(home);
+      expect(living(pid), 'fixture teardown signalled a PID only persisted as evidence').toBe(true);
+    });
+
+    it('current-run callbacks run before direct handles and tolerate failures', async () => {
+      const home = mkTmp('ccrc-uninst-reaper-callback-');
+      const order: string[] = [];
+      const child = controlledChild(home, home);
+      child.once('exit', () => order.push('child'));
+      trackChild(home, child);
+      registerLaneCleanup(home, 'first', () => { order.push('first'); });
+      registerLaneCleanup(home, 'failure', () => { order.push('failure'); throw new Error('expected fixture cleanup failure'); });
+      registerLaneCleanup(home, 'last', () => { order.push('last'); });
+
+      await killLaneProcesses(home);
+      expect(order.slice(0, 3)).toEqual(['first', 'failure', 'last']);
+      expect(order).toContain('child');
+      await killLaneProcesses(home);
+      expect(order).toEqual(['first', 'failure', 'last', 'child']);
+    });
+
+    it('the reaper has no numeric-PID teardown authority, registry, or ambient sweep machinery', () => {
+      const reaper = readFileSync(join(here, 'laneReaper.ts'), 'utf8');
+      for (const symbol of ['processHome', 'killIfOurs', 'LANE_REGISTRY', 'sweepableHome', 'registerLaneHome', 'unregisterLaneHome', 'reapOrphanedLaneHomes']) {
+        expect(reaper, `${symbol} survived in laneReaper.ts`).not.toContain(symbol);
+      }
+      expect(reaper).not.toMatch(/ps[^\n]*eww|['"]eww['"]|process\.kill|rmSync|readdirSync|recursive:/);
+
+      const fixture = readFileSync(join(here, 'codexLaneFixture.ts'), 'utf8');
+      expect(fixture).not.toContain('killIfOurs');
+      expect(fixture).not.toMatch(/const pids = new Set|filter\(\(pid\).*kill/);
+      const config = readFileSync(join(REPO, 'server', 'vitest.config.ts'), 'utf8');
+      expect(config).not.toMatch(/globalSetup|laneReaper\.ts/);
+    });
+  });
+
+  it('Darwin-reachable fixture cleanup keeps current-run handle authority', () => {
+    const codex = readFileSync(join(here, 'ccrc-codex.test.ts'), 'utf8');
+    // Direct tiers and supervised reparented tiers both retain current-run
+    // ChildProcess authority on every supported platform. L35's holder is
+    // likewise a tracked helper; it has no numeric-PID teardown path.
+    expect(codex).toMatch(/it\('L0b the instrument: spawnFakeLitellm \(supervised\)/);
+    expect(codex).toMatch(/it\('L35 a rekey restart whose REAL stop frees the port, and a current-run foreign helper/);
+    expect(codex).toMatch(/trackChild\(home, helper\)/);
+    expect(codex).not.toMatch(/killIfOurs|foreignPid|nohup .*foreign-holder/);
+    expect(codex).not.toMatch(/it\('L16 a tier whose proven handle lives/);
+    expect(codex).toMatch(/itLinux\('L16 a tier whose proven handle lives/);
+
+    // Product-started tiers have callbacks registered before start, so their
+    // happy-path stops are behavioral assertions rather than failure cleanup.
+    const account = readFileSync(join(here, 'ccrc-account.test.ts'), 'utf8');
+    const foreignHelper = account.slice(account.indexOf('async function spawnForeign('), account.indexOf('/** C3\'S LOCK PROBE'));
+    expect(foreignHelper).not.toMatch(/reparent:\s*true/);
+    const c6 = account.slice(account.indexOf("it.skipIf(!PY3)('C6:"), account.indexOf("it('C7:"));
+    expect(c6).toMatch(/finally \{ await killLaneProcesses\(home\); \}/);
+    expect(account).toMatch(/it\.skipIf\(!PY3 \|\| process\.platform === 'darwin'\)\('C9:/);
+  });
+
+  it('both isolation harnesses check the env they spawn with, on the line before the spawn (fix round 3, C2)', () => {
+    // A TEXT pin, cross-file. The call must sit IMMEDIATELY before the
+    // harness's one spawn and name the same `env` object that spawn takes,
+    // so nothing can be planted or merged between the check and the run.
+    const installSrc = readFileSync(join(here, 'ccrc-install.test.ts'), 'utf8');
+    const uninstallSrc = readFileSync(join(here, 'ccrc-uninstall.test.ts'), 'utf8');
+    const CHECKED_SPAWN =
+      /assertIsolationWallFirst\(env, home\);\n\s*const p = spawnSync\(BASH, \['-c', harness\], \{ env, encoding: 'utf8' \}\);/;
+    for (const [src, header] of [
+      [installSrc, /^function runStepHarness\(/m],
+      [uninstallSrc, /^function runUninstCodex\(/m],
+    ] as const) {
+      const m = header.exec(src);
+      expect(m, `no match for ${header}`).toBeTruthy();
+      const end = src.indexOf('\n}\n', m!.index);
+      expect(end, `${header} has no closing brace at column 0`).toBeGreaterThan(m!.index);
+      const body = src.slice(m!.index, end);
+      expect(body, `${header} spawns without checking its wall on the line before`).toMatch(CHECKED_SPAWN);
+      expect(body.match(/spawnSync\(/g) ?? [], `${header} spawns more than once`).toHaveLength(1);
+    }
+  });
+
+  it('cmd_uninstall stops the codex lanes immediately after the units, before anything else is removed', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const body = /\ncmd_uninstall\(\) \{([\s\S]*?)\n\}/.exec(src);
+    expect(body, 'ccd/ccrc has no cmd_uninstall').toBeTruthy();
+    // A step may take ONE quoted variable (the fix wave's `_uninst_codex
+    // "$role"`, review C3's role gate), so the call is read by its name.
+    const calls = body![1]!.split('\n').map((l) => l.trim()).filter((l) => /^_uninst_[a-z_]+( "\$[a-z_]+")?$/.test(l));
+    expect(calls).toContain('_uninst_codex "$role"');
+    const steps = calls.map((l) => l.split(' ')[0]!);
+    expect(steps).toEqual([
+      '_uninst_units',
+      // Plan 2b-2 Task 11. After `_uninst_units`, whose `disable --now` takes
+      // `ccrc-models.timer` down first — its refresh stops and starts a codex
+      // lane's tiers — and before `_uninst_tree_bins` removes the lane's
+      // executables.
+      '_uninst_codex',
+      '_uninst_hooks',
+      '_uninst_wrappers',
+      '_uninst_cc_sessions',
+      '_uninst_graphify_skills',
+      '_uninst_tree_bins',
+      '_uninst_keep_asides',
+    ]);
+  });
+
+  it('a roster with no codex lane: nothing to stop, the runtime still goes, and one line says so', () => {
+    const home = mkTmp('ccrc-uninst-codex-none-');
+    plantInstalledBox(home);
+    // A REAL roster, upstream only. `plantInstalledBox`'s own accounts.json,
+    // `{"fixture":"roster"}`, is not a roster, and it is the next case.
+    codexRoster(home, []);
+    // A built-looking runtime, generation and `current`: Task 4's one writer of
+    // that layout (ruling R28), never a generation typed here.
+    plantFakeRuntime(home);
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.ccrc', 'runtime', 'codex'))).toBe(false);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('uninstall: codex:')))
+      .toEqual(['uninstall: codex: no codex lane in the roster — nothing to stop; the runtime at $HOME/.ccrc/runtime/codex removed']);
+    // A readable roster with no codex lane is silent on stderr: rc 0 + empty
+    // is Task 4's "none". MEASURED AT THE BASE (Step 0): the pre-task tree's
+    // uninstall stderr on this fixture carries no `jq: ` line.
+    expect(r.stderr).not.toMatch(/codex|^jq: /m);
+    expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
+    // A box that never had a runtime says so, rather than claiming a removal.
+    const home2 = mkTmp('ccrc-uninst-codex-none-absent-');
+    plantInstalledBox(home2);
+    codexRoster(home2, []);
+    const r2 = runVerb(home2, 'uninstall');
+    expect(r2.stdout).toMatch(/^uninstall: codex: no codex lane in the roster — nothing to stop; the runtime at \$HOME\/\.ccrc\/runtime\/codex was not installed$/m);
+  });
+
+  // Review C3: a lane that never ran on this box has no lane directory —
+  // every ccrc start of its tiers writes one first — so there is nothing of
+  // ccrc's to stop, and its lock, which would CREATE that directory and a
+  // `.lock` in it, is never taken.
+  it('a rostered codex lane with no lane directory is not locked or probed, and no directory is created for it (review C3)', async () => {
+    const home = mkTmp('ccrc-uninst-codex-never-ran-');
+    plantInstalledBox(home);
+    const [lane] = await freeLanes(['codex-a']);
+    codexRoster(home, [lane!]);
+    plantFakeRuntime(home);
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.ccrc', 'codex', 'codex-a')), 'the uninstall created the lane directory of a lane that never ran').toBe(false);
+    expect(r.stdout).toMatch(/^uninstall: codex: codex-a: nothing to stop — it has no lane directory \(\$HOME\/\.ccrc\/codex\/codex-a\), which every ccrc start of its tiers writes first; nothing was measured or locked$/m);
+    expect(r.stdout).toMatch(/^uninstall: codex: 1 codex lane\(s\) in the roster — stopped: none; left alone: none; not stopped: none; the runtime at \$HOME\/\.ccrc\/runtime\/codex removed; /m);
+    expect(existsSync(join(home, '.ccrc', 'runtime', 'codex'))).toBe(false);
+  });
+
+  // Review C3: install's codex steps do nothing on a server-role box, so the
+  // uninstall reads, locks and probes nothing for a lane there either — even
+  // one whose directory exists. The runtime goes regardless (spec §13).
+  it('a server-role box reads, locks and probes no codex lane, says so in one line, and still removes the runtime (review C3)', async () => {
+    const home = mkTmp('ccrc-uninst-codex-server-role-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\n');
+    const [lane] = await freeLanes(['codex-a']);
+    codexRoster(home, [lane!]);
+    mkdirSync(join(home, '.ccrc', 'codex', 'codex-a'), { recursive: true });
+    plantFakeRuntime(home);
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.ccrc', 'codex', 'codex-a', '.lock')), 'the uninstall took a lane lock on a server-role box').toBe(false);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('uninstall: codex:')))
+      .toEqual(['uninstall: codex: a server-role box (ccrc.env records CCRC_ROLE=server) runs no codex lane — no lane was read, measured or stopped; the runtime at $HOME/.ccrc/runtime/codex removed']);
+    expect(existsSync(join(home, '.ccrc', 'runtime', 'codex'))).toBe(false);
+  });
+
+  it('a file that is not a roster is never read as "no codex lane": its own line, nothing stopped, and the runtime still goes', () => {
+    // `plantInstalledBox`'s accounts.json is `{"fixture":"roster"}`. Task 4's
+    // `_codex_lanes` answers rc 1 there with `roster-invalid` — so this line
+    // is what every other uninstall case on that fixture now prints too.
+    const home = mkTmp('ccrc-uninst-codex-unreadable-');
+    plantInstalledBox(home);
+    plantFakeRuntime(home);   // Task 4's one runtime writer (ruling R28)
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/^ccrc codex: roster-invalid: /m);
+    // Fix round 1 (spec-3/mut-5): the companion stderr line, on the real verb.
+    expect(r.stderr).toMatch(/^uninstall: codex: any codex tier ccrc had started may still be running/m);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('uninstall: codex:')))
+      .toEqual(['uninstall: codex: the roster could not be read (the ccrc codex: roster-invalid line above says why), so no codex lane\'s tier was measured or stopped; the runtime at $HOME/.ccrc/runtime/codex removed; kept: $HOME/.ccrc/codex/<id>/, $HOME/.ccrc/logs/codex/ and every lane\'s authDir']);
+    expect(existsSync(join(home, '.ccrc', 'runtime', 'codex'))).toBe(false);
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe('{"fixture":"roster"}\n');
+  });
+});
+
+/** `_uninst_codex` alone: its two lane-library seams stubbed by table, Task 5's
+ *  `_codex_lock` and `_codex_unlock` by `lockStub` (ruling R19), Task 4's
+ *  `CODEX_TIERS` and the real `PROG`/`_ccrc_die` read out of ccd/ccrc, and a
+ *  HOME holding what §13 removes (a runtime from Task 4's `plantFakeRuntime`,
+ *  ruling R28) and keeps. `stopWords` (ruling PF-21) fakes `_codex_stop_tier`'s
+ *  own stdout word — `foreign` at rc 0 — the race this step's consumer must
+ *  never fold into `stopped`. */
+function runUninstCodex(c: {
+  lanes?: string[]; lanesRc?: number; withoutJq?: boolean; ours?: Record<string, StubRc>; stopRc?: Record<string, StubRc>;
+  stopWords?: Record<string, string>; runtime?: boolean; lockRefuse?: string[]; lockNoFlock?: string[];
+  /** The CX_TIER_WHY the `_codex_tier_ours` stub sets per `<id> <tier>` key
+   *  (the final-review fix wave's addition, `runTiersStep`'s own knob): the
+   *  step reads it through `_codex_tier_is_our_handle` and names a 2 through
+   *  `_codex_foreign_what`. */
+  oursWhy?: Record<string, string>;
+}): {
+  code: number; stdout: string; stderr: string; calls: string[]; home: string; kept: Record<string, string>;
+  /** `CX_LOCK_FD` and `CX_LOCK_ID` after the step returned: empty unless a
+   *  lane's lock was never released through `_codex_unlock`. */
+  lockAfter: string;
+} {
+  const home = mkTmp('ccrc-uninst-codex-step-');
+  const lanes = c.lanes ?? ['codex-a'];
+  const kept: Record<string, string> = {};
+  const keep = (rel: string, text: string): void => {
+    mkdirSync(join(home, path.dirname(rel)), { recursive: true });
+    writeFileSync(join(home, rel), text);
+    kept[rel] = text;
+  };
+  for (const id of lanes) {
+    for (const f of ['lane.json', 'runtime.env', 'litellm.yaml']) keep(`.ccrc/codex/${id}/${f}`, `fixture ${f} for ${id}\n`);
+    keep(`.ccrc/logs/codex/${id}/shim.log`, 'fixture log\n');
+    keep(`.local/share/ccrc/codex/${id}/auth.json`, '{"fixture": "test-token-not-a-secret"}\n');
+  }
+  if (c.runtime !== false) plantFakeRuntime(home);
+  const lanesDef = c.withoutJq
+    ? ccrcFunction('_codex_lanes')
+    : (c.lanesRc ?? 0) === 0
+      ? `_codex_lanes() { ${lanes.length === 0 ? ':' : `printf '%s\\n' ${lanes.join(' ')}`}; }`
+      : `_codex_lanes() { echo "ccrc codex: roster-invalid: fixture: the roster could not be read" >&2; return ${c.lanesRc}; }`;
+  const harness = [
+    'set -uo pipefail',
+    ccrcLine(/^PROG=.*$/m, 'PROG='),
+    ccrcLine(/^_ccrc_die\(\) \{.*\}$/m, '_ccrc_die'),
+    ...(c.withoutJq ? [ccrcFunction('_codex_say')] : []),
+    // Fix round 2 (Leftover): `_uninst_codex` no longer reads $CODEX_TIERS
+    // (it hardcodes its own front-first order, pinned separately below), so
+    // splicing that declaration into this harness is dead.
+    lanesDef,
+    '_codex_bus_defaults() { :; }',
+    // The final-review fix wave's seams (review A1, A2, C1, C3, N3): the lane
+    // directory's one spelling, the one handle predicate and the by-hand
+    // clause, REAL, read out of ccd/ccrc; `_codex_foreign_what` STUBBED, as
+    // the tier question is — its fixture sentence names the WHY it was
+    // handed, so a case sees that the step's words are the helper's. (The
+    // real sentences are pinned on a real lane, below.)
+    ccrcLine(/^_codex_lane_dir\(\).*$/m, '_codex_lane_dir'),
+    ccrcFunction('_codex_tier_is_our_handle'),
+    ccrcFunction('_uninst_codex_by_hand'),
+    '_codex_foreign_what() { CX_FOREIGN_CODE=fixture-code; CX_FOREIGN_WHAT="fixture holder of $1\'s $2 tier (${CX_TIER_WHY:-no why})"; CX_FOREIGN_FIX=\'fixture remedy.\'; }',
+    lockStub(c.lockRefuse ?? [], c.lockNoFlock ?? []),
+    recordingStub('_codex_tier_ours', c.ours, 1, {}, c.oursWhy ?? {}),
+    recordingStub('_codex_stop_tier', c.stopRc, 0, c.stopWords ?? {}),
+    ccrcFunction('_uninst_codex'),
+    '_uninst_codex; rc=$?',
+    'printf \'%s\\n\' "${CX_LOCK_FD:-}" "${CX_LOCK_ID:-}" > "$HOME/lock-after"',
+    'exit "$rc"',
+  ].join('\n');
+  // Task 10's isolation wall, FIRST on PATH (the containment rule): the step
+  // stops tiers only through the stubbed `_codex_stop_tier`, so a direct
+  // `systemctl` or `systemd-run` from its body is a thrown, named red, never
+  // the real binary. Fix round 3 (C2): the wall is CHECKED on the env the
+  // spawn takes, on the line before it — `strayManagerCalls` reads only the
+  // wall's own log, so a name the wall lost would reach the real binary
+  // unrecorded.
+  const wall = isolationManagerStubs(home);
+  const env = {
+    PATH: c.withoutJq ? `${wall}:${pathWithout(home, 'jq')}` : `${wall}:${process.env['PATH'] ?? ''}`,
+    HOME: home,
+  };
+  assertIsolationWallFirst(env, home);
+  const p = spawnSync(BASH, ['-c', harness], { env, encoding: 'utf8' });
+  const stray = strayManagerCalls(home);
+  if (stray.length > 0) {
+    throw new Error(`_uninst_codex reached the user manager directly, not through the stubbed lane library:\n${stray.join('\n')}\n${p.stderr ?? ''}`);
+  }
+  const lines = (f: string): string[] =>
+    (existsSync(join(home, f)) ? readFileSync(join(home, f), 'utf8').split('\n').filter(Boolean) : []);
+  return {
+    code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '', calls: lines('calls'), home, kept,
+    lockAfter: lines('lock-after').join('\n'),
+  };
+}
+
+describe('ccrc uninstall: the codex step, measured in isolation (_uninst_codex)', () => {
+  const RT = '$HOME/.ccrc/runtime/codex';
+  const KEPT = 'kept: $HOME/.ccrc/codex/<id>/, $HOME/.ccrc/logs/codex/ and every lane\'s authDir';
+  const LOCK_A = '_codex_lock codex-a';
+  const LOCK_B = '_codex_lock codex-b';
+  // `lockStub`'s record of Task 5's `_codex_unlock`, the lock's ONLY release
+  // (ruling R19): an inline close leaves no such line.
+  const UNLOCK_A = '_codex_unlock codex-a';
+  const UNLOCK_B = '_codex_unlock codex-b';
+  const keptIntact = (r: ReturnType<typeof runUninstCodex>): void => {
+    for (const [rel, text] of Object.entries(r.kept)) {
+      expect(readFileSync(join(r.home, rel), 'utf8'), `${rel} was removed or changed`).toBe(text);
+    }
+  };
+  /** `_uninst_codex_by_hand`'s clause, typed out ONCE here so each line's
+   *  pin reads what an operator reads (spec §19.8, D-3532; the fix wave's
+   *  N3 adds the pidfile). */
+  const byHand = (id: string, tier: string): string =>
+    `systemctl --user status ccgpt-${id}-${tier} (or, where no user manager runs, the pid in $HOME/.ccrc/codex/${id}/${tier}.pid), `
+    + `confirm that MainPID's or pid's argv names this lane (--ccrc-lane=${id}, or a path under $HOME/.ccrc/runtime/codex) `
+    + '— a same-named unit may belong to another tool on this box — and only then stop it';
+
+  it('missing jq is its own roster read failure and names missing-dependency, never roster-invalid', () => {
+    // `cmd_uninstall` itself preflights jq because later removal steps need it;
+    // this isolates the step, but uses its REAL `_codex_lanes` under a PATH
+    // from which jq is genuinely absent rather than synthesising rc 2.
+    const r = runUninstCodex({ withoutJq: true });
+    expect(r.code, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain('jq is not on PATH (the ccrc codex: missing-dependency line above says so), so no codex lane was read');
+    expect(r.stdout).not.toContain('roster-invalid line above');
+    expect(r.stderr).toMatch(/^ccrc codex: missing-dependency: jq is not on PATH/m);
+    expect(r.stderr).not.toMatch(/roster-invalid/);
+    expect(r.stderr).toContain('any codex tier ccrc had started may still be running');
+  });
+
+  // Review A1: the one 2 that carries a proven handle is this lane's own
+  // process, and an uninstall that left it alone removed its runtime from
+  // under it. It is stopped, through `_codex_stop_tier` (identity-gated
+  // itself), read through `_codex_tier_is_our_handle`.
+  it('this lane\'s own process while another holds its port (listener-other-process) is STOPPED through _codex_stop_tier, never left alone (review A1)', () => {
+    const r = runUninstCodex({ ours: { 'codex-a litellm': 2 }, oursWhy: { 'codex-a litellm': 'listener-other-process' } });
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim',
+      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', UNLOCK_A]);
+    expect(r.stdout).toMatch(/— stopped: codex-a litellm; left alone: none; not stopped: none; /);
+  });
+
+  // Review A2/E2 (ruling PF-13): a live unit whose identity is only UNPROVEN
+  // may be this lane's own tier between two restarts. Left running — an
+  // uninstall stops only what it proves — named in the helper's words, as
+  // unproven, with the way to finish once ccrc is gone.
+  it('a unit whose identity is only unproven is left running, named in _codex_foreign_what\'s words, with the way to finish by hand — never "not this lane" (review A2/E2)', () => {
+    const r = runUninstCodex({ ours: { 'codex-a litellm': 2 }, oursWhy: { 'codex-a litellm': 'unit-unproven' } });
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim', '_codex_tier_ours codex-a litellm', UNLOCK_A]);
+    expect(r.stdout).toContain('uninstall: codex: codex-a litellm: left alone — fixture holder of codex-a\'s litellm tier (unit-unproven), '
+      + 'and an uninstall stops only what it can prove ccrc started. It may be this lane\'s own tier between two of its restarts; '
+      + `once uninstall finishes: ${byHand('codex-a', 'litellm')}\n`);
+    expect(r.stdout).not.toMatch(/not this lane/);
+    expect(r.stdout).toMatch(/— stopped: none; left alone: codex-a litellm; not stopped: none; /);
+  });
+
+  it('no codex lane: nothing is asked, the runtime is removed, and one line says both', () => {
+    const r = runUninstCodex({ lanes: [] });
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([]);
+    expect(r.stdout).toBe(`uninstall: codex: no codex lane in the roster — nothing to stop; the runtime at ${RT} removed\n`);
+    expect(existsSync(join(r.home, '.ccrc', 'runtime', 'codex'))).toBe(false);
+  });
+
+  it('no runtime on the box: the line says it was not installed, never that it was removed', () => {
+    const r = runUninstCodex({ lanes: [], runtime: false });
+    expect(r.stdout).toBe(`uninstall: codex: no codex lane in the roster — nothing to stop; the runtime at ${RT} was not installed\n`);
+  });
+
+  it('the runtime removal is guarded against an empty or unset path variable (a TEXT pin, not a behavioural one)', () => {
+    // A TEXT pin over this line's own source, never behaviourally reachable:
+    // `rt` is always "$HOME/.ccrc/runtime/codex", a fixed literal SUFFIX that
+    // can never be empty. An UNSET HOME dies while ccrc is sourced, at the
+    // top-level `_SVC_REG="$HOME/…"`, before `_uninst_codex` or `rt` exists;
+    // an EMPTY HOME is still SET, so `rt` becomes
+    // "/.ccrc/runtime/codex" instead (narrower, not wider — measured, `env
+    // HOME= bash -u -c '...'` exits 0: round 2, N4 corrects round 1's claim
+    // that an empty HOME "dies" too). Either way `${rt:?}` can never actually
+    // fire. The live-box hazard rules still call for `rm -rf` to be guarded
+    // with `${var:?}` or an explicit non-empty-plus-literal-suffix check,
+    // belt-and-braces against a future edit that builds `rt` some other way
+    // (review fix round 1, spec-5/mut-4). Read the real source, not the
+    // isolation stub.
+    const src = ccrcFunction('_uninst_codex');
+    expect(src).toMatch(/rm -rf -- "\$\{rt:\?[^}]*\}"/);
+  });
+
+  it('the hardcoded front-first tier set is CODEX_TIERS reversed, so a third tier cannot be silently missed', () => {
+    // Fix round 1 (spec-6): `local -a tiers=(shim litellm)` is a second
+    // hand-kept list of the tiers, in PF-18's stop order — the same
+    // precedent `_codex_stop_lane` sets. This pin catches a future
+    // CODEX_TIERS that grows (or changes) without this step following: the
+    // SET must match (a missing/extra tier reds the sorted-equality check),
+    // and the ORDER must be the exact reverse of CODEX_TIERS's own
+    // declaration (litellm first, for its "litellm <word>, shim <word>"
+    // answer — the opposite of a stop sequence).
+    const codexTiersLine = ccrcLine(/^CODEX_TIERS=.*$/m, 'CODEX_TIERS=');
+    const m1 = /^CODEX_TIERS="([^"]*)"$/.exec(codexTiersLine);
+    expect(m1, `CODEX_TIERS= is not the expected quoted-string shape: ${codexTiersLine}`).toBeTruthy();
+    const declared = m1![1]!.trim().split(/\s+/).filter(Boolean);
+    const src = ccrcFunction('_uninst_codex');
+    const m2 = /local -a tiers=\(([^)]*)\)/.exec(src);
+    expect(m2, '_uninst_codex has no hardcoded `local -a tiers=(...)`').toBeTruthy();
+    const hardcoded = m2![1]!.trim().split(/\s+/).filter(Boolean);
+    expect(hardcoded.slice().sort()).toEqual(declared.slice().sort());
+    expect(hardcoded).toEqual([...declared].reverse());
+  });
+
+  it('a roster that cannot be read: no lane is asked or stopped, it is said in its own line, and the runtime still goes', () => {
+    // `ours: 0` is the CONTROL: a step that read rc 1 as a lane list, or
+    // guessed one, would ask and stop.
+    const r = runUninstCodex({ lanesRc: 1, ours: { 'codex-a litellm': 0, 'codex-a shim': 0 } });
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([]);
+    expect(r.stderr).toMatch(/^ccrc codex: roster-invalid: /m);
+    expect(r.stdout).toBe(`uninstall: codex: the roster could not be read (the ccrc codex: roster-invalid line above says why), so no codex lane's tier was measured or stopped; the runtime at ${RT} removed; ${KEPT}\n`);
+    // Fix round 1 (spec-3/mut-5): a companion stderr line, since nothing was
+    // measured or stopped but the runtime it ran from is gone regardless.
+    // Fix round 2 (N3): the remedy names `systemctl --user status`, not
+    // `ccrc codex status` — `_uninst_tree_bins` removes ccrc itself later in
+    // this same verb, so a remedy naming it would not work by the time an
+    // operator reads it. It carries the same-named-unit caution too.
+    // Final-review fix wave (N3): the pidfile too — on Darwin, or a Linux box
+    // with no user manager, every tier runs on the nohup arm.
+    expect(r.stderr).toContain(`uninstall: codex: any codex tier ccrc had started may still be running — its runtime at ${RT} removed, so it cannot be restarted from there. ccrc itself is gone by the time uninstall finishes, so check by hand: ${byHand('<id>', '*')}\n`);
+    expect(existsSync(join(r.home, '.ccrc', 'runtime', 'codex'))).toBe(false);
+    keptIntact(r);
+  });
+
+  it('a running lane of ours: each tier is identity-checked under the lane lock, then stopped front-first; the runtime goes; everything §13 keeps is byte-identical', () => {
+    const r = runUninstCodex({ ours: { 'codex-a litellm': 0, 'codex-a shim': 0 } });
+    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim', '_codex_stop_tier codex-a shim',
+      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', UNLOCK_A]);
+    expect(r.stdout).toBe(`uninstall: codex: 1 codex lane(s) in the roster — stopped: codex-a shim, codex-a litellm; left alone: none; not stopped: none; the runtime at ${RT} removed; ${KEPT}\n`);
+    expect(existsSync(join(r.home, '.ccrc', 'runtime', 'codex'))).toBe(false);
+    expect(r.lockAfter).toBe('');
+    keptIntact(r);
+  });
+
+  it('a tier of ours that is still STARTING (4) is stopped too — it is ccrc\'s own, and would outlive its runtime', () => {
+    const r = runUninstCodex({ ours: { 'codex-a litellm': 4 } });
+    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim',
+      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', UNLOCK_A]);
+    expect(r.stdout).toMatch(/— stopped: codex-a litellm; left alone: none; not stopped: none; /);
+  });
+
+  it('a tier whose port or unit answers as something else is NEVER stopped — an uninstall stops only what ccrc started', () => {
+    // `codex-a shim` at rc 1 is the CONTROL for the next mutation row: a
+    // step that stopped every non-zero tier would stop it too.
+    const r = runUninstCodex({ ours: { 'codex-a litellm': 2 }, oursWhy: { 'codex-a litellm': 'listener-unidentified' } });
+    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim', '_codex_tier_ours codex-a litellm', UNLOCK_A]);
+    // Review A2: named in `_codex_foreign_what`'s words (its fixture here),
+    // never a "not this lane" sentence of the step's own.
+    expect(r.stdout).toMatch(/^uninstall: codex: codex-a litellm: left alone — fixture holder of codex-a's litellm tier \(listener-unidentified\), and an uninstall stops only what ccrc started$/m);
+    expect(r.stdout).not.toMatch(/not this lane/);
+    expect(r.stdout).toMatch(/— stopped: none; left alone: codex-a litellm; not stopped: none; /);
+    keptIntact(r);
+  });
+
+  it('an identity answer the step cannot read is left alone too, in its own sentence, with the same-named-unit caution (fix round 1)', () => {
+    const r = runUninstCodex({ ours: { 'codex-a shim': 3 } });
+    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim', '_codex_tier_ours codex-a litellm', UNLOCK_A]);
+    expect(r.stdout).toContain(`uninstall: codex: codex-a shim: left alone — whether it is this lane's could not be measured, and an uninstall stops only what it can prove ccrc started. Once uninstall finishes: ${byHand('codex-a', 'shim')}\n`);
+    expect(r.stdout).toMatch(/left alone: codex-a shim;/);
+  });
+
+  it('a stop that fails is its own stderr line and is not counted as stopped; the runtime is still removed', () => {
+    const r = runUninstCodex({ ours: { 'codex-a litellm': 0 }, stopRc: { 'codex-a litellm': 1 } });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/^uninstall: codex: codex-a litellm: could not be stopped — it is still running/m);
+    // Review C1: how to finish once ccrc is gone — never a ccrc verb.
+    expect(r.stderr).toContain(`uninstall: codex: codex-a litellm: could not be stopped — it is still running, and ccrc itself is gone once uninstall finishes, so stop it by hand before any reinstall: ${byHand('codex-a', 'litellm')}\n`);
+    expect(r.stdout).toMatch(/— stopped: none; left alone: none; not stopped: codex-a litellm; the runtime at \$HOME\/\.ccrc\/runtime\/codex removed; /);
+  });
+
+  it('a stop that finds the tier foreign after all is left alone, never counted as stopped (ruling PF-21)', () => {
+    // `_codex_stop_tier` answers rc 0 for BOTH "stopped" and "foreign" — its
+    // own identity gate, RE-MEASURED, can find between this step's own check
+    // above and the stop call that the tier is no longer provably this
+    // lane's, and leaves it running rather than force it. A consumer that
+    // read only the rc would treat that rc 0 as a successful stop.
+    const r = runUninstCodex({ ours: { 'codex-a litellm': 0 }, stopWords: { 'codex-a litellm': 'foreign' } });
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim',
+      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', UNLOCK_A]);
+    expect(r.stderr).toBe('');
+    // The stop names the holder itself (its `_codex_foreign_what` note, on
+    // stderr); this line points at that, and never says "not this lane" of
+    // its own (review A2).
+    expect(r.stdout).toMatch(/^uninstall: codex: codex-a litellm: left alone — the stop found it no longer provably this lane's \(the ccrc codex: line above names what holds it\), and an uninstall stops only what ccrc started$/m);
+    expect(r.stdout).toMatch(/— stopped: none; left alone: codex-a litellm; not stopped: none; /);
+  });
+
+  it('two lanes: only the running one is stopped, each under its own lock, released through _codex_unlock before the next is taken', () => {
+    // `LOCK-STILL-HELD` is the stub's record of a lock entered while the
+    // previous one was never released; `lockAfter` is the last lane's
+    // `CX_LOCK_FD` and `CX_LOCK_ID`, which an inline close leaves naming a lane.
+    const r = runUninstCodex({ lanes: ['codex-a', 'codex-b'], ours: { 'codex-a litellm': 0, 'codex-a shim': 0 } });
+    expect(r.calls.filter((l) => l.startsWith('_codex_stop_tier'))).toEqual(['_codex_stop_tier codex-a shim', '_codex_stop_tier codex-a litellm']);
+    expect(r.calls.filter((l) => /^(_codex_lock|_codex_unlock|LOCK-STILL-HELD) /.test(l))).toEqual([LOCK_A, UNLOCK_A, LOCK_B, UNLOCK_B]);
+    expect(r.calls.indexOf(UNLOCK_A)).toBeGreaterThan(r.calls.indexOf('_codex_stop_tier codex-a litellm'));
+    expect(r.lockAfter).toBe('');
+    expect(r.stdout).toMatch(/^uninstall: codex: 2 codex lane\(s\) in the roster — stopped: codex-a shim, codex-a litellm; /m);
+  });
+
+  it('a lane whose lock cannot be taken is not asked or stopped: named as not stopped, and the next lane still runs', () => {
+    const r = runUninstCodex({
+      lanes: ['codex-a', 'codex-b'], lockRefuse: ['codex-a'],
+      ours: { 'codex-a litellm': 0, 'codex-b litellm': 0 },
+    });
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([LOCK_A, LOCK_B, '_codex_tier_ours codex-b shim',
+      '_codex_tier_ours codex-b litellm', '_codex_stop_tier codex-b litellm', UNLOCK_B]);
+    expect(r.stderr).toMatch(/^uninstall: codex: codex-a: not stopped — its lane lock could not be taken/m);
+    // Fix round 1 (spec-3/mut-5): the same-named-unit caution, one line, once
+    // per unstoppable-lock lane (not once per tier — this arm names the lane).
+    // Fix wave (N3): the unit where a user manager runs, the pidfile where
+    // none does, and the caution, from the one by-hand clause.
+    expect(r.stderr).toContain(`uninstall: codex: codex-a: not stopped — its lane lock could not be taken (the line above says why), so neither of its tiers was measured. ccrc itself is gone once uninstall finishes, so stop them by hand before any reinstall: ${byHand('codex-a', '*')}\n`);
+    expect(r.stdout).toMatch(/— stopped: codex-b litellm; left alone: none; not stopped: codex-a shim, codex-a litellm; the runtime at \$HOME\/\.ccrc\/runtime\/codex removed; /);
+    expect(r.lockAfter).toBe('');
+  });
+
+  it('a box with no flock: the lock answers 0 with nothing held, and the lane is still measured and stopped, unserialised', () => {
+    // Task 5's contract (ruling R19): rc 0 with CX_LOCK_FD EMPTY means "no
+    // flock on this box", never a refusal. A step that read the empty
+    // descriptor as a failed lock would leave every tier of such a box running
+    // over a removed runtime. `_codex_unlock -` is the release of nothing.
+    const r = runUninstCodex({ lockNoFlock: ['codex-a'], ours: { 'codex-a litellm': 0, 'codex-a shim': 0 } });
+    expect(r.calls).toEqual([LOCK_A, '_codex_tier_ours codex-a shim', '_codex_stop_tier codex-a shim',
+      '_codex_tier_ours codex-a litellm', '_codex_stop_tier codex-a litellm', '_codex_unlock -']);
+    expect(r.stderr).not.toMatch(/its lane lock could not be taken/);
+    expect(r.stdout).toMatch(/— stopped: codex-a shim, codex-a litellm; left alone: none; not stopped: none; /);
+    expect(r.lockAfter).toBe('');
+  });
+});
+
+// PLATFORM-ONLY: stopping a tier by its exact unit is the user-manager arm,
+// faked by Task 4's `plantSystemd`; on Darwin `_svc_have_user_manager` is
+// always false and the nohup arm (Task 5's subject) is the only one.
+describeLinux('ccrc uninstall: the codex lanes on a real lane (Plan 2b-2 Task 11)', () => {
+  const homes: string[] = [];
+  // `killLaneProcesses` runs registered product stops while fixture state
+  // remains, then ends every current-run child Task 4's fixture tracked.
+  afterEach(async () => {
+    for (const h of homes.splice(0)) await killLaneProcesses(h);
+  });
+
+  /** An installed box whose roster carries `ids` as codex lanes, with the
+   *  shipped shim and builder on PATH (Task 4's `plantCodexBins`: copies, 0755),
+   *  every lane's rendered config (Task 5's `plantLaneConfig`, ruling R20: a
+   *  case's `ccrc codex start` refuses `litellm-unrendered` without one), and
+   *  Task 4's fake runtime and fake user manager. */
+  async function codexUninstallBox(prefix: string, ids: string[]): Promise<{ home: string; lanes: LanePorts[] }> {
+    const lanes = await freeLanes(ids);
+    const home = mkTmp(prefix);
+    homes.push(home);
+    plantInstalledBox(home);
+    codexRoster(home, lanes);
+    for (const l of lanes) plantLaneConfig(home, l.id);
+    plantCodexBins(home);
+    plantFakeRuntime(home, { version: '1.101.0' });
+    plantSystemd(home, { userManager: true });
+    for (const lane of lanes) {
+      // Register before a caller can initialise or start this lane. The real
+      // fixture product path runs before teardown removes any state it needs.
+      registerLaneCleanup(home, `uninstall-codex:${lane.id}`, () => {
+        runVerb(home, 'codex', ['stop', lane.id], READY);
+      });
+    }
+    return { home, lanes };
+  }
+  const initLane = (home: string, id: string): void => {
+    const init = runVerb(home, 'models', [id, 'init', 'codex']);
+    if (init.code !== 0) throw new Error(`ccrc models ${id} init codex:\n${init.stderr}`);
+  };
+  const stops = (home: string): string[] => managerCalls(home).filter((l) => /^systemctl --user stop\b/.test(l));
+
+  it('a running lane is stopped by its exact units, the runtime goes, and the lane state, logs and credential stay', async () => {
+    const { home, lanes: [lane] } = await codexUninstallBox('ccrc-uninst-codex-running-', ['codex-a']);
+    initLane(home, 'codex-a');
+    plantLaneAuth(home, 'codex-a');
+    const s = runVerb(home, 'codex', ['start', 'codex-a'], READY);
+    expect(s.code, `ccrc codex start codex-a:\n${s.stdout}\n${s.stderr}`).toBe(0);
+    expect(existsSync(join(home, '.local', 'bin', '.codex-systemctl')),
+      'plantSystemd did not plant into ~/.local/bin, so this harness cannot adopt it (Task 10 Interfaces)').toBe(true);
+    const units = laneUnits(home, 'codex-a');
+    const ans = await laneAnswer(lane!.proxyPort);   // Task 5's {status, type, body} (ruling R30)
+    expect(ans?.type).toMatch(/^application\/json/);
+    expect(JSON.parse(ans!.body)).toEqual({ lane: 'codex-a' });
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    for (const u of [units.litellm, units.shim]) {
+      expect(stops(home).some((l) => l.includes(u)), `${u} was not stopped by name:\n${managerCalls(home).join('\n')}`).toBe(true);
+    }
+    // Task 5's `eventually` THROWS on timeout and never resolves false (ruling R30).
+    await eventually(async () => !(await portAccepts(lane!.proxyPort)), 'the shim to stop listening', 5000);
+    await eventually(async () => !(await portAccepts(lane!.litellmPort)), 'litellm to stop listening', 5000);
+    expect(existsSync(join(home, '.ccrc', 'runtime', 'codex'))).toBe(false);
+    for (const f of ['lane.json', 'runtime.env', 'litellm.yaml']) {
+      expect(existsSync(join(home, '.ccrc', 'codex', 'codex-a', f)), `${f} was removed`).toBe(true);
+    }
+    expect(existsSync(join(home, '.ccrc', 'logs', 'codex', 'codex-a'))).toBe(true);
+    expect(existsSync(join(authDirOf(home, 'codex-a'), 'auth.json')), 'the credential was removed').toBe(true);
+    // Front-first (ruling PF-18): shim before litellm.
+    expect(r.stdout).toMatch(/^uninstall: codex: 1 codex lane\(s\) in the roster — stopped: codex-a shim, codex-a litellm; left alone: none; not stopped: none; the runtime at \$HOME\/\.ccrc\/runtime\/codex removed; kept: /m);
+    expect(r.stdout).toMatch(/^uninstall: done — /m);
+  }, 120_000);
+
+  it('a foreign listener on the lane port survives the uninstall', async () => {
+    // The OTHER repository's shim shape (`text/plain`, the bare id — m-tiers
+    // §1) on this lane's shim port: Task 4's `spawnListener`, bound when it
+    // resolves. The lane was never materialised (no lane.json). Its directory
+    // exists only because `codexUninstallBox` planted its config, so the lock's
+    // missing-directory behaviour is Task 10's lazy case's to pin, not this one's.
+    const { home, lanes: [lane] } = await codexUninstallBox('ccrc-uninst-codex-foreign-', ['codex-a']);
+    const foreign = await spawnListener(home, { answer: 'text', lane: 'codex-a', port: lane!.proxyPort });
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    // Review A2: the REAL `_codex_foreign_what` sentence, end to end.
+    expect(r.stdout).toContain(`uninstall: codex: codex-a shim: left alone — port ${lane!.proxyPort} (codex-a's shim tier) is held by a listener that is not this lane's: its identity check failed, and an uninstall stops only what ccrc started\n`);
+    expect(stops(home)).toEqual([]);
+    expect(() => process.kill(foreign.pid, 0)).not.toThrow();
+    expect(await portAccepts(lane!.proxyPort)).toBe(true);
+  }, 120_000);
+
+  it('a same-named ACTIVE unit that is not this lane is never stopped', async () => {
+    // The fleet box's shape (m-livebox §3): a transient unit with the lane's
+    // own unit name, active, holding the litellm port — owned by another
+    // repository. Identity, not the name, decides.
+    const { home, lanes: [lane] } = await codexUninstallBox('ccrc-uninst-codex-namesake-', ['codex-a']);
+    initLane(home, 'codex-a');   // lane.json, so the unit name is read, not re-derived
+    const units = laneUnits(home, 'codex-a');
+    const env = verbEnv(home);
+    const root = join(home, 'foreign-unit-root');
+    mkdirSync(root, { recursive: true });
+    const log = join(home, 'foreign-unit.log');
+    const sd = spawnSync(join(home, '.local', 'bin', 'systemd-run'), ['--user', '--collect', '--quiet',
+      `--unit=${units.litellm}`, '-p', `StandardOutput=append:${log}`, '-p', `StandardError=append:${log}`,
+      '--', realPy(), '-m', 'http.server', String(lane!.litellmPort), '--bind', '127.0.0.1', '--directory', root],
+    { env, encoding: 'utf8' });
+    expect(sd.status, `the fake user manager would not start the namesake unit:\n${sd.stderr}`).toBe(0);
+    await eventually(() => portAccepts(lane!.litellmPort), 'the namesake to bind', 5000);
+    const active = spawnSync(join(home, '.local', 'bin', 'systemctl'), ['--user', 'is-active', units.litellm], { env, encoding: 'utf8' });
+    expect(active.stdout.trim(), 'the fixture does not model a same-named ACTIVE unit, so this case would measure nothing').toBe('active');
+    rmSync(join(home, 'manager-calls'), { force: true });
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^uninstall: codex: codex-a litellm: left alone — /m);
+    expect(stops(home).filter((l) => l.includes(units.litellm))).toEqual([]);
+    expect(await portAccepts(lane!.litellmPort)).toBe(true);
+  }, 120_000);
 });
