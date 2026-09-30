@@ -383,6 +383,19 @@ Added by the orchestrator's rulings on the skeleton and on the drafts:
 - **D-3692** `has-mail-with-subject-returns-boolean`: It is byte-identical to landing-order wave 2's definition, which
   returns a boolean, not a result union.
 
+**Found while executing** (minted 2026-09-30 at the task reviews, each a controller ruling):
+
+- **D-3693** `reducer-error-values-enum-shaped`: the reducer prints a StopFailure error-field VALUE only when it matches
+  `/^[a-z0-9_]{1,40}$/`, and `(unprintable)` otherwise; the field NAMES print as before. The planned `TOKEN` test admits
+  spaces and dots, so short free text in `error_details` (a host name, a user name) would have reached the committed,
+  public checkpoint table. C5 needs only the name; `TOKEN` itself stays wide for C3's `types`.
+- **D-3694** `reducer-collapses-digit-keyed-maps`: an object below the payload root with any digit-bearing key
+  collapses to `(map)`, so a map keyed by task or agent ids never prints its ids as key segments. The payload root is
+  exempt, so one digit-bearing top-level field cannot erase every key name of an event. It is a heuristic: an
+  all-letter id would still print, and the reducer's header says so.
+- **D-3695** `reducer-counts-an-absent-payload-id`: `envSid` gains `payloadAbsent` for a payload whose `session_id` is
+  missing or not a string. The plan counted it as `differsFromPayload`, a false "differs" for C6.
+
 ## File structure
 
 | File | Ring | Responsibility | Task |
@@ -882,6 +895,9 @@ Captured on `<yyyy-mm-dd>`. Part A merged as `#<pr>`. Fleet box on `<tag>`.
   - Capture file grammar: `$HOME/.ccrc/hook-capture/<id>/<event>-<epochms>-<pid>.cap`, mode 0600, in a 0700 directory. Line 1 is `{"envSid":"<CLAUDE_CODE_SESSION_ID stripped to [A-Za-z0-9-]>"}`, and the rest is the payload bytes. At most 200 `.cap` files per id.
   - CLI: `node deploy/hook-capture-reduce.mjs <capture-dir>` prints one JSON document and exits 0; a missing argument or a missing directory exits 2 with one stderr line. Its output is `{ v: 1, files, unparsed, events: { <event>: { count, keys, agentId: {absent, empty, nonEmpty}, envSid: {absent, equalsPayload, differsFromPayload}, backgroundTasks: {absent, notArray, array, elementKeys, types}, source? (SessionStart only), error? (StopFailure only): {fields, values} } }, sessionStarts: [{ source, envSidVsPrevious: 'first'|'same'|'changed'|'unmeasured' }], sequence: [{ event, agentId: 'absent'|'empty'|'nonEmpty'|'unparsed' }] }`.
   - The PART A TIP: this task's commit sha, recorded in Step 12 for the checkpoint's step 1.
+  - Amended at this task's review (D-3693, D-3694, D-3695): error-field VALUES print only when enum-shaped, an object
+    with a digit-bearing key collapses to `(map)` below the payload root, and `envSid` gains `payloadAbsent`. The
+    code blocks below are the pre-review text; the shipped `deploy/hook-capture-reduce.mjs` is the authority.
 
 **Drafter notes (departures from the skeleton's letter, each argued):**
 - **`sequence` is added to the reducer's output.** C1 needs to know that subagent-origin tool events carry a non-empty `agent_id` and main-thread ones do not. Per-event counts cannot show that, because main and subagent `PreToolUse`/`PostToolUse` land in one bucket. `sequence` lists each file's event name and agent_id CLASS in time order. It emits no payload value (event names are already the `events` keys), so the no-value rule holds. The checkpoint's C1 reads it.
