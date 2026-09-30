@@ -2745,6 +2745,10 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
     expect(calls).not.toMatch(/try-restart/);
     expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
+    // The refusal is the KillMode refusal's own exit code and update.json —
+    // never a new failure (review 196's ruling, item 1).
+    expect(JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>)
+      .toMatchObject({ phase: 'done', detail: null, from: 'cli' });
   });
 
   // (a) on the OTHER caller — a rollback by flip reaches `_upd_sweep` from
@@ -2767,6 +2771,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).toMatch(
       /^update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted\. Once systemctl --user list-units 'claude-session@\*' answers, confirm KillMode=process on each unit, then restart them\.$/m);
     expect(r.stdout).not.toContain('Fix the KillMode above');
+    expect(r.stdout).not.toContain('no claude-session@ supervisor was active when the sweep began');
     const calls = existsSync(join(home, 'systemctl-calls')) ? readFileSync(join(home, 'systemctl-calls'), 'utf8') : '';
     expect(calls).not.toMatch(/try-restart/);
     expect(JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>)
