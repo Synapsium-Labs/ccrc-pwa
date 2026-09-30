@@ -29,7 +29,7 @@ numbers; the spec wave each one implements is named beside it.
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **MERGED** `af5a29f8` (PR #201, run 132 done) 2026-09-29 06:40 UTC, released as v0.0.36 (dev). The merged tree is byte-identical to the tested tip `325d4072` (`main` unmoved at `023fe94d`, every Linux leg green). Scoped review 176 met none of the committed bar's four classes; F1 and F2 to F5 go to the residue list as R5 and R6 (`rulings-run176.md`). Earlier: **run 132 open, planned**; plan commits in cherry-pick order: `6acbff6d`, `287caa07`, `7210c4f6`, `a8c28b42`, `a404b1ac`, `419d626f`, `d5f923e8`, `e821ceba`, `fddf8370`, `d8db956a`, `0003a6c3` (re-point against W3's merge `4b2ff904`), `8d6f2515` (re-point against wave 4's reviewed tree `f546715d6`); **final scoped review** (run 176, dispatched 2026-09-29 06:00 UTC to `ccrc-pwa-soft-delta`) of fix round 1, done at `325d4072`: 33 commits, no merge (`main` unmoved at `023fe94d`), numbers 3411, 3412 and 3413 spent (bare: their definitions are on the worker branch). After it, #201 merges under the committed bar. Was: fix round 1 (`rulings-run132-fix1.md`, mail 2514, 2026-09-28 22:55 UTC) on review 175 at `8e9a9bf3`: 15 findings, the two important ones (F1, F2) ruled together, and the bar for the one scoped review after it committed now. Was: wave-done 2026-09-28 at `8e9a9bf3`, PR #201, 10/10 items, reserve spent: seven numbers, 3404 through 3410 (bare: their definitions are on the worker branch); `main` did not move during the wave; review run 175 dispatched 21:45 UTC to `ccrc-pwa-still-ridge`. Was: dispatched 2026-09-28 16:57 UTC to `ccrc-pwa-warm-harbor` |
 | 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | **MERGED** in two parts: the first cut as `c1c22489` (#202, 12:46 UTC, not by the coordinator), and fix round 1 as `a742eb6a` (#214, 2026-09-30 ~00:55 UTC, run 133 done; released as v0.0.49). #214's merged tree is byte-identical to its tested tip `29656594`, with `main` unmoved at `0ffa07f3` and every Linux leg green. Its two `test-macos` legs were red; they gate no merge (operator ruling 2026-09-28). Scoped review 181 met none of the bar's five classes; R1 was ruled inside item 2's accepted place (2); its findings are residue R9. Was: **Fix round 1 done** 2026-09-29 at `29656594` as new PR #214 (numbers 3465 and 3466 spent, bare: their definitions are on the worker branch; the full six local shards green at `b686e8d1`, the one later commit is prose); scoped review run 181 dispatched 23:55 UTC; after it, #214 merges. Was: **MERGED mid-round at its pre-round head** `751eb5da` as `c1c22489` (#202, 2026-09-29 12:46:52 UTC), NOT by the coordinator. So `main` carries wave 6 without fix round 1, and the round lands as a new PR from `ws/quiet-basin`. `stable` is held until it merges. Was: **Fix round 1 sent** 2026-09-29 12:05 UTC (mail 2552, `rulings-run133-fix1.md`) on review 179 at `751eb5da`: six behaviour defects the delta introduced, so the bar gives the one full round; a scoped review follows, then #202 merges. Was: **wave-done** 2026-09-29 at `751eb5da` (PR #202, 10/10 items; its one merge of `main` at `af5a29f8` has an empty remerge-diff; every Linux leg green in shadow mode; reserve spent: seven numbers, 3458 through 3464, bare: their definitions are on the worker branch); review run 179 dispatched under the bar committed before it. Was: **run 133 open, planned**; plan commits in cherry-pick order: `079f1881`, `edc98508`, `14f77194`, `e27aacae` (re-point against wave 4's reviewed tree `f546715d6`), `4e05173a` (review 173's residue); **DISPATCHED** 2026-09-28 16:57 UTC to `ccrc-pwa-quiet-basin` |
 | 7 | — (residue) | before stable: a fleet-link failure after the op's hand-off holds the lease (R1), the answer follows the lease by identity (R5), wave 5's prose and pins (R6) | server | — | **MERGED** in two parts: the first cut as `6da36f0b` (#203, 12:46 UTC, not by the coordinator), and fix round 1 as `5964e7f2` (#205, 2026-09-29 ~14:47 UTC, run 177 done). #205's merged tree is byte-identical to its tested tip `2e984395`, with `main` unmoved at `1ae3411b` and every Linux leg green. Scoped review 180 met none of the bar's four classes; its five coverage/prose findings are residue R7. Was: **Fix round 1 done** 2026-09-29 at `2e984395` as new PR #205 (it merges `main` at `1ae3411b`; its diff against `main` has exactly the changed lines of the round's own `5f6eae8e..bb5c26f8`, measured; full gate on the merged tree; no number spent). Scoped review run 180 dispatched 14:28 UTC; after it, #205 merges. Was: **MERGED mid-round at its pre-round head** `5f6eae8e` as `6da36f0b` (#203, 2026-09-29 12:46:28 UTC), NOT by the coordinator. Its fix round lands as a new PR from `ws/quiet-summit`, on a merge of `main` with a full gate. `stable` is held until it merges. Was: **Fix round 1 sent** 2026-09-29 11:40 UTC (mail 2550, `rulings-run177-fix1.md`) on review 178 at `5f6eae8e`: its F1, a deadline sentence that can be false, is a behaviour defect the delta introduced, so the bar gives the one round; a scoped review follows, then #203 merges. Was: **wave-done** 2026-09-29 at `5f6eae8e` (PR #203, 4/4 items, no reserve number spent; `main` unmoved at `af5a29f8`); review run 178 dispatched under the bar committed before it. Was: **DISPATCHED** 2026-09-29 07:25 UTC to `ccrc-pwa-quiet-summit` (run 177); plan `c3382e95` (one departure, 3555, defined in it; a five-number reserve named in the brief) |
-| 8 | — (live audit) | the live audit's residue: a move's source on record (A), backups pruned after a completed run (B), no one-tap rollback a node will refuse (C), doctor reads the armed gate (D), Settings wording (F), two box lines (G); E dropped by ruling | server + node | — | **Wave-done** 2026-09-30 21:10 UTC at `1eb9b011` (PR #219, 5/5 items). Its one merge of `main` at `1f9fa22d` hand-resolved two conflicts, both end-of-file appends, by keeping both sides (measured by remerge-diff). No reserve number was spent, and `DEP-move-record-kind` did not fire, so it is withdrawn unminted. Review run 196 is dispatched under the bar committed before it. Its merge reaches both boxes by auto within about 35 min. Was: **DISPATCHED** 2026-09-30 12:22 UTC to `ccrc-pwa-soft-ridge` (run 182); plan `8e73f825` (13 departures defined in it, one contingent by slug; a five-number reserve named in the brief). |
+| 8 | — (live audit) | the live audit's residue: a move's source on record (A), backups pruned after a completed run (B), no one-tap rollback a node will refuse (C), doctor reads the armed gate (D), Settings wording (F), two box lines (G); E dropped by ruling | server + node | — | **Fix round 1 sent** 2026-09-30 22:50 UTC (`rulings-run182-fix1.md`) on review 196 at `1eb9b011`: F1 (item G's zero line over a failed listing) is a behaviour defect the delta introduced, so the bar gives the one round, with reserve number 3599 for the fail-closed sweep (bare: its definition goes on the worker branch); a scoped review follows, then #219 merges. Was: **Wave-done** 2026-09-30 21:10 UTC at `1eb9b011` (PR #219, 5/5 items). Its one merge of `main` at `1f9fa22d` hand-resolved two conflicts, both end-of-file appends, by keeping both sides (measured by remerge-diff). No reserve number was spent, and `DEP-move-record-kind` did not fire, so it is withdrawn unminted. Review run 196 is dispatched under the bar committed before it. Its merge reaches both boxes by auto within about 35 min. Was: **DISPATCHED** 2026-09-30 12:22 UTC to `ccrc-pwa-soft-ridge` (run 182); plan `8e73f825` (13 departures defined in it, one contingent by slug; a five-number reserve named in the brief). |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
 
 **Order.** 2 → {3, 4} → {5, 6} → rollout. Waves 3 and 4 touch disjoint files (PWA + notifier vs `ccd/ccrc` +
@@ -911,6 +911,35 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - After that review, #219 merges. Its merge reaches both boxes by auto, so no merge happens before the
       review's verdict.
 
+- **2026-09-30 22:50 UTC — review 196 closed; wave 8 gets its one fix round, by the committed bar.**
+  - **The review** (66 agents; six lenses; three refuters per finding) measured the first live prune on fixtures of
+    both boxes:
+    - the update INTO this build prunes nothing;
+    - the next removes the 31 oldest timestamped dirs on the fleet box and the 9 oldest on the server box;
+    - it never removes a sibling, a plain file, the run's own backup, the previous tree backup or the newest earlier
+      coord.db;
+    - a gate failure, `--no-gate`, a restore child and a refused run prune nothing.
+  - **F1 is a behaviour defect this delta introduced.** Item G's new zero sweep line says no supervisor was active
+    when the pre-sweep listing merely FAILED. The bar's first-review rule gives it the round.
+  - **Two attack rounds on my rulings** (workflows `wf_e87b8d0a-51d`, three Opus; `wf_672d8ccd-837`, two Opus) found
+    more under F1:
+    - the same failed listing also empties the per-unit KillMode preflight, so `try-restart` runs with only the
+      template probe checked. That is pre-existing: `main` and `deploy.sh` share it;
+    - a failed verify listing makes item G's new "not active after it" warnings false.
+  - **Ruled:**
+    - An unmeasured pre-sweep listing is a failed preflight: the sweep refuses and restarts nothing, which is R1's
+      terms applied to an input they did not name.
+    - An unmeasured verify listing verifies nothing.
+    - Both take reserve number 3599 (bare: its definition goes on the worker branch).
+    - The trade-off is accepted: a refused sweep is visible only in that run's output (R10k).
+  - **The round also carries** F2 and F4 through F10: the comments, the D-3596 premise (the WARN stays; no text
+    asserts unmeasured service-manager behaviour), the guards, the citations, and pins for timestamp-shaped links and
+    files. F3 and the refuted R-b, R-c and R-f go to residue R10.
+  - **The bar's class 1, clarified** in the tightening direction: it names a top-level entry that is not a timestamped
+    backup, or anything a timestamp-named link points to. "Timestamped backup" is `main`'s `_bak_prune` shape, a
+    `YYYYMMDD-HHMMSS` name that `[ -d ]` accepts.
+  - The rulings are in `.superpowers/rulings-run182-fix1.md` on the coordinator's worktree.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
@@ -976,6 +1005,25 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   - `_ver_verdicts`' error-rc path is untested.
   - FX-B M9 cannot red.
   - The launcher-stay line still says "unstamped".
+- **R10 (wave 8, review 196; `rulings-run182-fix1.md`).**
+  - **R10a (F3).** doctor's reader trims only a trailing CR. systemd discards surrounding whitespace, so `CCRC_AUTH=on `
+    arms the gate while doctor PASSes it as OFF. The test pins the opposite premise. It is reachable only by a hand
+    edit.
+  - **R10b (F2).** The no-passphrase OFF line names ccrc.env even when the exposure file sets the key, and reads OFF
+    when that file cannot be read.
+  - **R10c (R-b).** The kill window between the sweep and `done`:
+    - on a `server`/`both` box, the watchdog records `failed "abandoned … converged"` and the console halts until ack;
+    - on a fleet-role box nothing rewrites `restarting`;
+    - `deploy.sh`'s sweep still restarts behind the template probe alone when its listing fails.
+  - **R10d (R-f).** `ssh` is unstubbed in `updateEnv` and `ccrcEnv`, which inherit the real `XDG_RUNTIME_DIR` and
+    `DBUS_SESSION_BUS_ADDRESS`. It is unreached.
+  - **R10e (R-e).** Non-canonical hand-written shapes can read ARMED where the gate is off.
+  - **R10f (R-c).** Mixed-TZ backup names sort by name at KEEP≤1.
+  - **R10g.** `ccrc backup` racing an update's prune.
+  - **R10h.** Task 4's commit body gets its census arithmetic and extra-dir cause wrong. The squash body corrects it.
+  - **R10i.** A timestamp-named link is a backup, so it can hold a protection.
+  - **R10j.** The Darwin sweep arm cannot tell a failed `launchctl print` from an unloaded job.
+  - **R10k.** A refused sweep is invisible to `update.json`, the inventory and doctor. Nothing re-sweeps.
 - **R9 (wave 6, review 181).**
   - **R1, first among them.** The live boxes' kept versions carry no digest, so their first update onto v0.0.49,
     if killed between `_inst_stamp` and `_inst_enable`, is rolled back unattended by an in-place re-install
