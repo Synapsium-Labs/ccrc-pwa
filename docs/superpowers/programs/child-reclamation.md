@@ -61,8 +61,9 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     functions, inherited options/CDPATH, a second destructive-path command, and a behavioral removal/authorization
     mutation. A fresh Opus/xhigh destructive SAFETY rereview attacks that boundary before any wave-done.
   - No second deviation allocation is permitted mid-wave. The supporting slug
-    `ccd-imported-functions-hijack-reclaim-reads` is folded into the already-issued D-3538 in the worker plan in the same
-    tracked act, with prose distinguishing ambient command discovery from path spelling. No unissued token is written.
+    `ccd-imported-functions-hijack-reclaim-reads` is folded into the already-issued
+    `resolvable-dotdot-physical-fallback` entry in the worker plan in the same tracked act, with prose distinguishing
+    ambient command discovery from path spelling. No unissued token is written.
   - Deployment remains automatic-updater-only. The coordinator will not manually roll out this wave.
 - **2026-09-28 — wave 3 DEPLOYED (v0.0.33) and measured live; wave 4 dispatched (run 174).**
   - **Rollout.** `ccrc rollout --to v0.0.33`, 16:16–16:21 UTC: fleet box first, rc 0, both boxes agreed at `1ffdf947`.
