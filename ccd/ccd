@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e7ef40a2f3973da154c8d735fdfaee70cfdf758133d230f676e26a7464312f1f
+# ccrc:generated 1 sha256=ceb34e9738aabffccd7ebd732e002284d45059c348185fce4950420fea2b7287
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24308,8 +24308,9 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # child's row naming ANOTHER live session's worktree with no link anywhere
   # in sight; the pin would then commit that session's work and the tail would
   # remove its tree. Compared twice: the literal path, and the resolved one
-  # (`_ws_reclaim_resolve`: the `pwd -P` of the path's longest directory
-  # prefix, entered logically, and the rest as written), so two spellings of one
+  # (`_ws_reclaim_resolve`: where a logical `cd` of it lands — the `pwd -P` of
+  # its longest directory prefix, entered logically, and the rest as written,
+  # a path holding `..` re-walked from that entry), so two spellings of one
   # directory are one directory — save one that resolves to a `//` spelling,
   # which is not placed at all (below). The literal arm is implied by the resolved
   # one — one string resolves one way — and stays as the spec's stated form;
@@ -24442,7 +24443,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     [[ "$mine" != //[!/]* ]] \
       || minewhy="resolves to a path opening with //, so ccd cannot compare another row with it — re-point the link whose target opens with //"
   else
-    minewhy="cannot be resolved (a directory or link on its path cannot be entered or followed, or it holds a control character), so ccd cannot compare another row with it — make it searchable, or remove what stands at it"
+    minewhy="cannot be resolved (a directory or link on its path cannot be entered or followed, something on its path is not a directory, or it holds a control character), so ccd cannot compare another row with it — make it searchable, or remove what stands at it"
   fi
   while IFS= read -r n; do
     [[ -n "$n" ]] || continue
@@ -24487,40 +24488,71 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
 }
 
 _WS_RESOLVED=''
-_ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where path leads, canonically: the
-  #                           physical path (`builtin pwd -P`) of its longest prefix that is a
-  #                           directory (its own walk, fork-free), entered LOGICALLY, then the rest
-  #                           as written, one `/` between components — the rest's first component
-  #                           PROVEN absent (`_ws_reclaim_absent`); rc 1, _WS_RESOLVED='', otherwise
+_ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd` of path would land,
+  #                           canonically: the physical path (`builtin pwd -P`) of its longest prefix
+  #                           that is a directory (its own walk, fork-free), entered LOGICALLY, then
+  #                           the rest as written, one `/` between components — the rest's first
+  #                           component PROVEN absent (`_ws_reclaim_absent`), and a path whose entered
+  #                           prefix holds `..` re-walked from where that entry lands; rc 1,
+  #                           _WS_RESOLVED='', otherwise
   # WHERE A ROW'S SESSION LIVES, AND WHETHER THAT CAN BE SAID AT ALL — ONE
   # OPERATION, so the two can never disagree (spec §5.5, rung 9).
   # `_ws_reclaim_workdir_shared` places every row, and the child itself, by
-  # this answer alone. The prefix is entered LOGICALLY — `<link>/..` is the
-  # link's parent, not its target's (the kernel's answer) — because the
-  # pane's own shell entered the workdir that way (`cd '$workdir'`), so where
-  # that logical walk succeeds the session lives where this says. Where it
-  # fails — a component before a `..` is no longer a directory, or the path
-  # it names does not exist — bash's `cd` silently falls back to the kernel's
-  # walk of the path as written, which is not where a pane that entered while
-  # the logical path stood lives, so this entry runs under `set -o posix`,
-  # which refuses instead. And no AMBIENT `cd` or `pwd` decides it: each is
-  # environment-shaped — a physical mode carried in (`set -P`, `SHELLOPTS`) or
-  # a function of that name imported through the environment (bash installs
-  # one in the shell that sources ccd) answered the kernel's walk, and the
-  # reclaim then placed a live row wherever that led (measured). So the entry
-  # is `builtin cd -L` with `CDPATH` emptied and the read `builtin pwd -P`,
-  # read through an `x` suffix (a command substitution drops EVERY trailing
-  # newline) and returned in a global, as `_ws_reclaim_workdir_shared`'s own
-  # answers are. `_ws_realpath`, which other verbs use, is not edited, and
-  # nothing on this path reads it. `-d` is false on EACCES as on ENOENT, so a
-  # component that stands but cannot be followed (a link across an
-  # unsearchable directory, or one that cannot be looked at) stops the walk as
-  # if it were missing and fails the absence proof. Never resolvable: a path
-  # holding a control character (a `dirname`/`basename` capture drops a
-  # trailing newline, so a textual walk reads another directory), and one
-  # whose unresolved rest holds a `..` component (exactly `..`): below a
-  # missing directory it names wherever that directory once led, so the
-  # textual re-attachment is not where the session lives.
+  # this answer alone. The pane's own shell entered the workdir LOGICALLY
+  # (`cd '$workdir'`): `<link>/..` is the link's parent, not its target's (the
+  # kernel's answer). So the prefix is entered logically, and where that
+  # logical walk fails — a component before a `..` is no longer a directory,
+  # or the path it names does not exist — bash's `cd` would silently fall
+  # back to the kernel's walk of the path as written, which is not where a
+  # pane that entered while the logical path stood lives: this entry runs in
+  # POSIX mode, which refuses instead.
+  # THE WALK AND THE ENTRY AGREE. The `-d` walk that finds the prefix, and
+  # the absence proof of the rest, are the KERNEL's. A `..` is the only
+  # component the kernel and a logical `cd` read apart, so for a spelling
+  # holding none they are the logical walk too. Where the prefix holds a `..`
+  # the walk only finds it to enter it: below `<link>/..` it searched the
+  # link's TARGET's parent, where nothing need stand, while the logical path
+  # continues from the link's own — through another link, a linked worktrees
+  # root included — so the rest, re-attached as text, kept a link nothing
+  # resolved, the row read as outside the child, and the verb removed the
+  # live tree (measured). So such a path is answered as
+  # `<where its entry landed>/<rest>`, which holds no `..` (the rest never
+  # does — below) and so is walked, proven and entered as a logical `cd` of
+  # the row would be; no `..` is ever normalised as text. Asked of the
+  # PREFIX, so the re-walk ends by construction: where its entry landed holds
+  # no `..`, so one in the re-walk's own prefix comes from the rest, and each
+  # re-walk's rest is shorter than the one before.
+  # NO AMBIENT `cd`, `pwd` OR `printf` DECIDES IT: each is environment-shaped —
+  # a physical mode carried in (`set -P`, `SHELLOPTS`), or a function of that
+  # name, or of `builtin` or `set`, imported through the environment (bash
+  # installs it in the shell that sources ccd) answered the kernel's walk,
+  # swallowed `set -o posix`, or wrote into the answer, and the reclaim then
+  # placed a live row wherever that led (measured). So the entry's subshell
+  # enters POSIX mode by ASSIGNING `POSIXLY_CORRECT` — an assignment calls
+  # nothing a function can shadow, where `set -o posix` called a function
+  # named `set` — and then runs the special builtin `unset`, which POSIX mode
+  # finds before any function, to remove every function named after a
+  # command it then calls. The entry is `builtin cd -L` with `CDPATH`
+  # emptied, the read `builtin pwd -P`, then `builtin printf x` — each name
+  # bypassed twice, by `unset -f` and by `builtin`, and `unset -f builtin` is
+  # what makes the second hold. The read goes through the `x` suffix (a
+  # command substitution drops EVERY trailing newline) and is returned in a
+  # global, as `_ws_reclaim_workdir_shared`'s own answers are. Out of this
+  # subshell's reach, and not closed here: `BASH_ENV`, which runs code in
+  # ccd's own shell before its first line and can make a function `readonly`
+  # (`unset` then fails, and the function stays); and a function imported for
+  # a command called OUTSIDE this subshell (`_ws_reclaim_absent`'s `dirname`
+  # and `stat` among them). `_ws_realpath`, which other verbs use, is not
+  # edited, and nothing on this path reads it. `-d` is false on EACCES as on
+  # ENOENT, so a component that stands but cannot be followed (a link across
+  # an unsearchable directory, or one that cannot be looked at) stops the
+  # walk as if it were missing and fails the absence proof. Never resolvable:
+  # a path holding a control character (a `dirname`/`basename` capture drops
+  # a trailing newline, so a textual walk reads another directory) — the
+  # re-walked `<where its entry landed>/<rest>` included — and one whose
+  # unresolved rest holds a `..` component (exactly `..`): below a missing
+  # directory it names wherever that directory once led, so the textual
+  # re-attachment is not where the session lives.
   local p="$1" head="$1" rest real c out=''
   _WS_RESOLVED=''
   [[ "$p" != *[[:cntrl:]]* && "$p" != *$'\n'* ]] || return 1
@@ -24530,7 +24562,8 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where path leads, c
       *)   head=. ;;
     esac
   done
-  real=$(set -o posix; CDPATH= builtin cd -L -- "$head" >/dev/null 2>&1 && builtin pwd -P 2>/dev/null && printf x) \
+  real=$(POSIXLY_CORRECT=y; unset -f builtin cd pwd printf 2>/dev/null; \
+         CDPATH= builtin cd -L -- "$head" >/dev/null 2>&1 && builtin pwd -P 2>/dev/null && builtin printf x) \
     || return 1
   [[ "$real" == *$'\n'x ]] || return 1
   real="${real%$'\n'x}"
@@ -24539,6 +24572,7 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where path leads, c
   while [[ "$rest" == /* ]]; do rest="${rest#/}"; done
   if [[ -z "$rest" ]]; then _WS_RESOLVED="$real"; return 0; fi
   case "/$rest/" in */../*) return 1 ;; esac
+  case "/$head/" in */../*) _ws_reclaim_resolve "${real%/}/$rest"; return ;; esac
   _ws_reclaim_absent "${head%/}/${rest%%/*}" || return 1
   while [[ -n "$rest" ]]; do
     c="${rest%%/*}"
