@@ -67,6 +67,11 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     a tracked placeholder. The slug therefore remains in mail evidence only. The worker must finish and report fix
     round 3, then stop: fix round 4 needs an operator-authorized separately opened scope with allocation at run-open,
     and automatic reclamation remains blocked meanwhile.
+  - **Operator ruling (2026-09-30): split a safety prerequisite.** After fix round 3 reports, open a fresh run and
+    fresh child with a new run-open deviation block; land the reclaim-entry repair in its own PR before PR #215 may
+    proceed. This is not wave 5 and inherits none of wave 5's product scope. Run 174 remains `working`, its items remain
+    pending, and no old or new wave-done can advance it until the prerequisite is merged and the Wave 4 branch is
+    synchronized and freshly handed off. One child per PR remains intact.
   - Deployment remains automatic-updater-only. The coordinator will not manually roll out this wave.
 - **2026-09-28 — wave 3 DEPLOYED (v0.0.33) and measured live; wave 4 dispatched (run 174).**
   - **Rollout.** `ccrc rollout --to v0.0.33`, 16:16–16:21 UTC: fleet box first, rc 0, both boxes agreed at `1ffdf947`.
