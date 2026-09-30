@@ -10,10 +10,11 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { UPDATE_LOCK_HELD_PREFIX, UPDATE_OP_DETAIL_MAX, UPDATE_SPAWN_TIMEOUT_MS, inFlightBusyDetail, isUpdateLockHeldLine, type ResOk } from '../../shared/agent-protocol.js';
-import type { NodeRole, RequestKind } from '../../shared/api.js';
+import { FLEET_SCOPE, UPDATE_GATE_CAP, type NodeRole, type RequestKind } from '../../shared/api.js';
 import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, type NodeMeasurement, type ReleaseListingRow } from '../src/coord/store.js';
+import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/updateintentlog.js';
 import { realRunner, type ExecResult, type Runner } from '../src/exec.js';
 import type { FleetState } from '../src/fleetstate.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -1223,5 +1224,49 @@ describe('runDispatch — a revive during the op hands the lease to the heir, an
     expect(r.outcome).toEqual({
       nodeId: FLEET_ID2, result: 'release-refused', to: 'idle', detail: `busy — ${IN_FLIGHT}`, why: 'not-busy',
     });
+  });
+});
+
+describe('runDispatch — a rollback the node is known to refuse (wave 8 item C, D-3587, D-3588)', () => {
+  /** v0.0.8's row, re-applied with its provenance bundle unlisted (`coverage: 'single'`, an upsert by tag —
+   *  `seedReleases` already planted v0.0.8/9/10, all bundled). */
+  const noBundleV8 = (store: CoordStore): void => {
+    expect(store.applyReleaseListing([{ ...rel('v0.0.8', T0 - 3000), bundleListed: false }], T0, 'single').ok).toBe(true);
+  };
+
+  it('(a) a pre-W8 standing rollback request to a no-bundle tag never sends, and the request stands (decision 7)', async () => {
+    const h = harness();
+    noBundleV8(h.store);
+    expect(h.store.upsertNodeMeasurement(fleetMeas()).ok).toBe(true);
+    expect(h.store.requestNode(FLEET_ID, 'v0.0.8', 'rollback', T0).ok).toBe(true);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toBeNull();
+    expect(h.sent).toEqual([]);
+    expect(h.spawned).toEqual([]);
+    expect(r.plan.gate.haltedBy).toEqual([]);
+    const row = h.store.node(FLEET_ID)!;
+    expect(row.updateState).toBe('idle');
+    expect(row.updateDetail).toMatch(/^no-bundle — /);
+    expect(row.requestedTag).toBe('v0.0.8');
+    expect(row.requestedKind).toBe('rollback');
+  });
+
+  it('(b) that request on the FLEET row, plus a server row with an AUTO move: the server\'s op sends in the same run', async () => {
+    const h = harness();
+    noBundleV8(h.store);
+    const capsWithGate = ['verify', 'node-id', 'floor', 'update-json', 'detach', 'rollback', UPDATE_GATE_CAP];
+    expect(h.store.upsertNodeMeasurement(fleetMeas({ caps: capsWithGate })).ok).toBe(true);
+    expect(h.store.requestNode(FLEET_ID, 'v0.0.8', 'rollback', T0).ok).toBe(true);
+    expect(h.store.upsertNodeMeasurement(serverMeas({ caps: capsWithGate })).ok).toBe(true);
+    // A fleet-wide auto intent (D-3588's exclusion applies to BOTH holds; neither may hold the server here).
+    const log = new UpdateIntentLog(defaultUpdateIntentLogPath(h.deps.ccrcDir));
+    expect(h.store.setIntent(FLEET_SCOPE, { channel: 'stable', auto: 'channel' }, log, T0).ok).toBe(true);
+    expect(h.store.resolveNode(FLEET_ID, { channel: 'stable', desiredTag: 'v0.0.10', resolveDetail: null }).ok).toBe(true);
+    expect(h.store.resolveNode(SERVER_ID, { channel: 'stable', desiredTag: 'v0.0.10', resolveDetail: null }).ok).toBe(true);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
+    expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: LAUNCHER_ARGV }]);
+    expect(h.sent).toEqual([]);   // the fleet row's own refused request is never sent over the link
+    expect(h.store.node(FLEET_ID)!.updateDetail).toMatch(/^no-bundle — /);
   });
 });

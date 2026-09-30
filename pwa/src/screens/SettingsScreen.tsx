@@ -13,16 +13,16 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AuthStatus, AutoMode, CatalogueErrorReason, CatalogueState, NodeWire, NotifyMode, ReleaseWire, UpdateChannel, UpdateRouteError, UpdateRouteRefusal, UpdatesView } from '../../../shared/api';
-import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, SETTLED_UPDATE_STATES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode, isReleaseTag, isStampRead, isUpdateChannel } from '../../../shared/api';
+import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, SETTLED_UPDATE_STATES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode, isReleaseTag, isStampRead, isUpdateChannel, rollbackTargetRefusal } from '../../../shared/api';
 import { LOOPBACK_HOSTS } from '../../../shared/base-url';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
 import { NotificationBell } from '../fleet/NotificationBell';
-import { isManagedNode, planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
+import { isManagedNode, planMove, rollbackBlockers, type MoveIntent, type PlannedMove, type RollbackBlocker } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
 import { isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
-import { ApiError, api, updateErrorText } from '../lib/api';
+import { ApiError, api, moveSkipText, noBundleRollbackText, updateErrorText } from '../lib/api';
 import { readAuthStatus } from '../lib/auth';
 import { elapsedWords } from '../lib/elapsed';
 import { pushSupported } from '../lib/push';
@@ -224,11 +224,25 @@ export function releaseDate(ms: number): string {
   return typeof ms === 'number' && isPlaceableInstant(ms) ? new Date(ms).toISOString().slice(0, 10) : '—';
 }
 
+/** Wave 8 item C: the reason a Roll back to `tag` is not offered, grouped by word. `no-bundle` is said with the tag
+ *  (noBundleRollbackText); any other word through the route's own copy (`moveSkipText` reads `UPDATE_ERROR_TEXT`,
+ *  and has a fallback for a word it does not know). */
+export function rollbackBlockedText(blockers: readonly RollbackBlocker[], tag: string): string | null {
+  if (blockers.length === 0) return null;
+  const words = [...new Set(blockers.map((b) => b.word))];
+  return words.map((w) => {
+    const who = blockers.filter((b) => b.word === w).map((b) => b.label).join(', ');
+    return `Roll back not offered for ${who}: ${w === 'no-bundle' ? noBundleRollbackText(tag) : moveSkipText(w)}`;
+  }).join(' ');
+}
+
 function ReleaseItem({ release: r, nodes, onMove }: {
   release: ReleaseWire; nodes: readonly NodeWire[]; onMove: (intent: MoveIntent) => void;
 }): ReactNode {
   const refused = refusedLine(r, nodes);
   const direction = releaseDirection(r.tag, nodes);
+  const blockers = direction === 'rollback' ? rollbackBlockers(nodes, r, r.tag) : [];
+  const blocked = rollbackBlockedText(blockers, r.tag);
   // By DIRECTION (§13): a release every node runs newer than is a rollback to
   // it, anything else an install of it — the same releaseDirection that
   // labels the button, so the label and the request cannot disagree.
@@ -249,8 +263,9 @@ function ReleaseItem({ release: r, nodes, onMove }: {
       </div>
       {refused !== null && <p className="settings-release-refused">{refused}</p>}
       {typeof r.notes === 'string' && r.notes !== '' && <pre className="settings-release-notes">{r.notes}</pre>}
+      {blocked !== null && <p className="settings-release-refused" data-testid="settings-release-blocked">{blocked}</p>}
       <div className="settings-release-actions">
-        <button type="button" className="btn-ghost settings-move" onClick={() => onMove(intent)}>
+        <button type="button" className="btn-ghost settings-move" disabled={blockers.length > 0} onClick={() => onMove(intent)}>
           {direction === 'rollback' ? 'Roll back' : 'Install'}
         </button>
       </div>
@@ -374,6 +389,12 @@ function NodeItem({ node: n, releases, now, onAcked, onMove }: {
   // so a node just rolled back reads previousVersion === its running tag: a tap there would be a 202 filed `met`.
   const v = nodeVersion(n);
   const previous = isReleaseTag(n.previousVersion) && (v === null || isNewerTag(v, n.previousVersion)) ? n.previousVersion : null;
+  // Wave 8 item C: computed for a managed row only — a Darwin row offers no Roll back at all (decision 17), so a
+  // reason line there would imply a one-tap exists for it.
+  const previousRefusal = darwin || previous === null
+    ? null : rollbackTargetRefusal(releases.find((r) => r.tag === previous), n.provenance);
+  const previousBlocked = previousRefusal === null || previous === null
+    ? null : rollbackBlockedText([{ label: n.label, word: previousRefusal }], previous);
   const reach = reachabilityLine(n, now);
   const request = requestLine(n, now);
   const ackable = canAck(n, releases);
@@ -427,6 +448,7 @@ function NodeItem({ node: n, releases, now, onAcked, onMove }: {
       {/* The dispatcher's own word for this row (`updateDetail` on the wire): halted, busy — …, a spawn's stderr
           line, deadline, met: … — one printable line the server already bounds, rendered as a text child. */}
       {typeof n.update?.detail === 'string' && n.update.detail !== '' && <p className="settings-node-detail">{n.update.detail}</p>}
+      {previousBlocked !== null && <p className="settings-node-detail">{previousBlocked}</p>}
       <div className="settings-node-actions">
         {!darwin && (
           <>
@@ -441,8 +463,8 @@ function NodeItem({ node: n, releases, now, onAcked, onMove }: {
             <button
               type="button"
               className="btn-ghost settings-move"
-              disabled={previous === null}
-              onClick={() => { if (previous !== null) onMove({ scope: 'node', direction: 'rollback', nodeId: n.nodeId, to: previous }); }}
+              disabled={previous === null || previousRefusal !== null}
+              onClick={() => { if (previous !== null && previousRefusal === null) onMove({ scope: 'node', direction: 'rollback', nodeId: n.nodeId, to: previous }); }}
             >
               Roll back
             </button>

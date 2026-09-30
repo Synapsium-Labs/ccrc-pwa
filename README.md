@@ -632,38 +632,38 @@ it; tapping it opens `/settings`.
 
 **Moving a node from the console (update-management W4, server side).** Install and Roll back on a release, Update and Roll
 back on a node, and Update all on the fleet screen's banner each open one confirm sheet that names the nodes the move takes,
-fleet first, and sends `POST /api/updates/apply` (`{nodeId}` or `{all: true}`, with an optional `tag` — without one, the
-node's desired tag) or `POST /api/updates/rollback` (`{nodeId}`, with an optional `to` — without one, the node's previous
-version). Both are session-only: the box token never moves a node. A single-node move the dispatcher would refuse answers
-`409` with its word in the same request (not newer, an unread stamp or floor, halted, the node's own lease busy, a missing
-capability, an agent that predates the op, an unknown or refused tag, no previous version, no desired tag); `{all: true}`
-always answers `202`, writing a request only for a node the tag takes forward and the dispatcher could move, and naming every
-other live node as skipped, with its word: a node whose own lease is busy, or that is itself halting, is skipped, and while a
-fleet node is skipped for either, so is every server-role node (`waiting-for-fleet`); a halt caused by another row still
-writes the request. What is written is a **request** on the node's row, never a command. On a `server` or `both` box the
-dispatcher reads the rows after every inventory sweep, every intent write and every request write, and moves at most one node
-at a time across the fleet: fleet-role nodes before server-role ones, and the server node waits while any fleet node's
-request is outstanding. A fleet node is moved over the agent link by the `update` op, which only an agent that advertises it
-in its ready frame is ever sent (an older agent's node is refused `agent-predates-update-op` until that box is updated by
-hand). The agent answers `busy` while a run is in flight (its report's writer alive, or no readable pid) or the lock is held;
-otherwise it runs `~/.local/bin/ccrc update --to <tag> --detach --from pwa`, or `rollback` in place of `update` — two fixed
-argument lists with the tag the only word that varies, outside the exec whitelist — and answers `accepted` once the detaching
-parent has exited 0 (killed at its bound it answers `accepted` too if it queued or cannot be attributed). The server node is
-spawned the same way on its own box, after the same `busy` check. `accepted` only holds the lease (the row reads `pending`):
-it settles on the node's own report naming the tag, not a sweep measuring the target, and a request for the tag a node
-already runs is settled without a move. A refusal releases the lease in the same turn and never consumes the request —
-`busy`, or a link that was down before the op left the server, returns the row to `idle`; a link that fails after the op was
-handed to it holds the lease until the node's own report of the run settles it or the deadline fails it, because the node may
-already have started the run — while a spawn that fails, a tag or kind the agent refuses, or a `bad-request` from an agent
-that advertised the op fails it; a capability refusal takes no lease, is noted on the row and waits. A `failed` or `reverted`
-row **halts** every further move until **Ack** (`POST /api/updates/ack`) returns it to idle and clears its request and
-refusals; a `provenance:` verdict on a release does not halt (the row keeps `failed` and that detail), and the node moves on
-to the next release eligible for it. A lease is failed `deadline` once `CCRC_UPDATE_DEADLINE_MS` (default 15 minutes) has
-passed since the later of the dispatch and the node's last report, and at all events four deadlines after the dispatch; that
-halts too. With `auto` on (`stable` only for a node on the stable channel), the dispatcher moves a node to its desired tag
-with no request, and refuses a node whose `ccrc-caps` lacks `update-gate` at that moment, whatever the intent route admitted.
-A macOS node lists no `detach` capability (`--detach` is Linux-only), so the console offers it no move and the dispatcher
-refuses one; `ccrc rollout` stays the path when the console itself is down.
+fleet first, and sends `POST /api/updates/apply` (`{nodeId}` or `{all: true}`, with an optional `tag` — without one, the node's
+desired tag) or `POST /api/updates/rollback` (`{nodeId}`, with an optional `to` — without one, the node's previous version).
+Both are session-only: the box token never moves a node. A single-node move the dispatcher would refuse answers `409` with its
+word in the same request (not newer, an unread stamp or floor, halted, the node's own lease busy, a missing capability, an
+agent that predates the op, an unknown or refused tag, a rollback to a release the catalogue lists no provenance bundle for on
+a verified node, no previous version, no desired tag); `{all: true}` always answers `202`, writing a request only for a node
+the tag takes forward and the dispatcher could move, and naming every other live node as skipped, with its word: a node whose
+own lease is busy, or that is itself halting, is skipped, and while a fleet node is skipped for either, so is every server-role
+node (`waiting-for-fleet`); a halt caused by another row still writes the request. What is written is a **request** on the
+node's row, never a command. On a `server` or `both` box the dispatcher reads the rows after every inventory sweep, every
+intent write and every request write, and moves at most one node at a time across the fleet: fleet-role nodes before
+server-role ones, and the server node waits while any fleet node's request is outstanding. A fleet node is moved over the agent
+link by the `update` op, which only an agent that advertises it in its ready frame is ever sent (an older agent's node is
+refused `agent-predates-update-op` until that box is updated by hand). The agent answers `busy` while a run is in flight (its
+report's writer alive, or no readable pid) or the lock is held; otherwise it runs `~/.local/bin/ccrc update --to <tag> --detach
+--from pwa`, or `rollback` in place of `update` — two fixed argument lists with the tag the only word that varies, outside the
+exec whitelist — and answers `accepted` once the detaching parent has exited 0 (killed at its bound it answers `accepted` too
+if it queued or cannot be attributed). The server node is spawned the same way on its own box, after the same `busy` check.
+`accepted` only holds the lease (the row reads `pending`): it settles on the node's own report naming the tag, not a sweep
+measuring the target, and a request for the tag a node already runs is settled without a move. A refusal releases the lease in
+the same turn and never consumes the request — `busy`, or a link that was down before the op left the server, returns the row
+to `idle`; a link that fails after the op was handed to it holds the lease until the node's own report of the run settles it or
+the deadline fails it, because the node may already have started the run — while a spawn that fails, a tag or kind the agent
+refuses, or a `bad-request` from an agent that advertised the op fails it; a capability refusal takes no lease, is noted on the
+row and waits. A `failed` or `reverted` row **halts** every further move until **Ack** (`POST /api/updates/ack`) returns it to
+idle and clears its request and refusals; a `provenance:` verdict on a release does not halt (the row keeps `failed` and that
+detail), and the node moves on to the next release eligible for it. A lease is failed `deadline` once `CCRC_UPDATE_DEADLINE_MS`
+(default 15 minutes) has passed since the later of the dispatch and the node's last report, and at all events four deadlines
+after the dispatch; that halts too. With `auto` on (`stable` only for a node on the stable channel), the dispatcher moves a
+node to its desired tag with no request, and refuses a node whose `ccrc-caps` lacks `update-gate` at that moment, whatever the
+intent route admitted. A macOS node lists no `detach` capability (`--detach` is Linux-only), so the console offers it no move
+and the dispatcher refuses one; `ccrc rollout` stays the path when the console itself is down.
 
 **Versioned installs, and rollback by flip.** A box keeps each release it installs as a tree of its own under
 `~/ccrc-versions/<name>/` — the release tag; `untagged-<the first twelve hex digits of its sha>` for a checkout that

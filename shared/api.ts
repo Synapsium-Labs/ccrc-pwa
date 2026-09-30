@@ -8787,7 +8787,7 @@ export function inFlightReport(text: string): InFlightReport | null {
  *  auto) and `waiting-for-fleet` (the order, not a refusal of this node) as a single-node `409`. */
 export const DISPATCH_REFUSALS = [
   'unknown-tag', 'not-newer', 'refused-by-node', 'stamp-unread', 'floor-unread', 'no-detach-cap',
-  'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet',
+  'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet', 'no-bundle',
 ] as const;
 export type DispatchRefusal = (typeof DISPATCH_REFUSALS)[number];
 /** Use THIS, never `DISPATCH_REFUSALS.includes(x as DispatchRefusal)` — `isRunState`'s rule. */
@@ -8837,7 +8837,7 @@ export interface RollbackUpdateBody { nodeId: string; to?: string }
  *  its own busy lease or its own halt, every non-fleet row is skipped `waiting-for-fleet` rather than requested —
  *  a fleet-first move the operator's tap could not reach must not let the server move ahead of it, and a
  *  server-role row's own halt does not trigger this (only a fleet-role row's own busy/halted does). */
-export type MoveSkipWhy = Exclude<DispatchRefusal, 'no-update-gate' | 'no-rollback-cap'> | 'no-desired' | 'busy';
+export type MoveSkipWhy = Exclude<DispatchRefusal, 'no-update-gate' | 'no-rollback-cap' | 'no-bundle'> | 'no-desired' | 'busy';
 export interface MoveSkip { nodeId: string; why: MoveSkipWhy }
 /** §12's `202 {requested}`, plus `skipped`. `requested` is in dispatch order (`compareDispatchOrder`); a single-node
  *  move answers `requested: [nodeId]` and `skipped: []`. A request, not a dispatch: the row shows it as
@@ -8849,3 +8849,21 @@ export interface MoveRequestAnswer { ok: true; requested: string[]; skipped: Mov
  *  (update/dispatch.ts) reads it in JS, the store's `haltingRowSql` in SQL (D-3412), and `sweepPlanFor` decides
  *  the refusal by it. */
 export const PROVENANCE_DETAIL_PREFIX = 'provenance:';
+
+/** Wave 8 item C: a ROLLBACK the node is known to refuse, decidable from the inventory alone, or null. THE one
+ *  spelling: the dispatcher's `moveRefusal` and `planDispatch`'s fleet holds (server/src/update/dispatch.ts) and the
+ *  PWA's release and node rows (pwa/src/fleet/movePlan.ts, pwa/src/screens/SettingsScreen.tsx) all call it.
+ *  `unknown-tag`: no catalogue row, the inventory's one proxy for `cmd_rollback`'s "not a published release" (404).
+ *  `no-bundle`: the catalogue lists no provenance bundle for the tag and the node's install is VERIFIED, so its ccrc
+ *  refuses to DOWNLOAD the tag without --allow-unsigned, which the one-tap never passes. A kept copy of the tag would
+ *  flip with no such question, but the inventory has no kept fact, so this refuses anyway (conservative; the no-bundle
+ *  sentences name `ccrc rollback --to <tag>` on that box, D-3589). Everything else is undecidable here and stays
+ *  permitted: an `unverified` node passes --allow-unsigned itself, an `unknown` one reads only its own marker, a
+ *  yanked release may be a kept copy. `provenance` is required on NodeWire since W6; `undefined` (a pre-W6 server)
+ *  reads as not verified. */
+export function rollbackTargetRefusal(
+  release: { bundleListed: boolean } | undefined, provenance: ProvenanceState | undefined,
+): 'unknown-tag' | 'no-bundle' | null {
+  if (release === undefined) return 'unknown-tag';
+  return release.bundleListed !== true && provenance === 'verified' ? 'no-bundle' : null;
+}

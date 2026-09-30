@@ -879,6 +879,36 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
     expect(api.updates).toHaveBeenCalledTimes(1);   // nothing was requested — nothing to re-poll
   });
 
+  it('an unbundled tag on a verified node disables Roll back and names the reason — a MIXED fleet: only the verified node blocks (wave 8 item C, D-3587)', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.11'), t8Release('v0.0.10', { bundleListed: false })],
+      [
+        t8Server({ current: t8Stamp('v0.0.11') }),   // verified (default): blocks
+        t8Node({ current: t8Stamp('v0.0.11'), provenance: 'unverified' }),   // does not block
+      ],
+    );
+    const row = rowOf(list, 'v0.0.10');
+    expect(within(row).getByRole('button', { name: 'Roll back' })).toBeDisabled();
+    const said = within(row).getByTestId('settings-release-blocked');
+    expect(said.textContent).toContain('server');
+    expect(said.textContent).toContain('ccrc rollback --to v0.0.10');
+    expect(said.textContent).toContain('ccrc update --to v0.0.10 --downgrade --allow-unsigned');
+    expect(said.textContent).not.toContain('<');
+  });
+
+  it('the same with every node unverified: Roll back stays enabled, with no reason line (wave 8 item C)', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.11'), t8Release('v0.0.10', { bundleListed: false })],
+      [
+        t8Server({ current: t8Stamp('v0.0.11'), provenance: 'unverified' }),
+        t8Node({ current: t8Stamp('v0.0.11'), provenance: 'unverified' }),
+      ],
+    );
+    const row = rowOf(list, 'v0.0.10');
+    expect(within(row).getByRole('button', { name: 'Roll back' })).not.toBeDisabled();
+    expect(within(row).queryByTestId('settings-release-blocked')).toBeNull();
+  });
+
   it('badges the channel (dev / stable, none for an unknown one) and marks a yanked release', async () => {
     const list = await renderList(
       [
@@ -1136,7 +1166,7 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     const { list } = await renderNodes([
       t9Node({ desiredTag: 'v0.0.10', previousVersion: 'v0.0.8' }),
       t9Server({ previousVersion: 'not-a-tag' }),   // on its desired tag; a previous that is no tag
-    ]);
+    ], [t9Release('v0.0.9'), t9Release('v0.0.8'), t9Release('v0.0.10')]);   // wave 8 item C: v0.0.8 catalogued and bundled
     const a = rowOf(list, T9_NODE_A);
     expect(within(a).getByRole('button', { name: 'Update' })).not.toBeDisabled();
     expect(within(a).getByRole('button', { name: 'Roll back' })).not.toBeDisabled();
@@ -1163,13 +1193,46 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
 
   it('Roll back on a node row sends rollback {nodeId, to: previousVersion}', async () => {
     const rollback = vi.spyOn(api, 'rollbackUpdate').mockResolvedValue({ ok: true, requested: [T9_NODE_A], skipped: [] });
-    const { list } = await renderNodes([t9Node({ previousVersion: 'v0.0.8' })]);
+    const { list } = await renderNodes(
+      [t9Node({ previousVersion: 'v0.0.8' })],
+      [t9Release('v0.0.9'), t9Release('v0.0.8')],   // wave 8 item C: previousVersion's own catalogue row, bundled
+    );
     fireEvent.click(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Roll back' }));
     const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
     expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['1. fleet (fleet) v0.0.9 → v0.0.8']);
     fireEvent.click(screen.getByRole('button', { name: 'Roll back to v0.0.8' }));
     await waitFor(() => expect(rollback).toHaveBeenCalledTimes(1));
     expect(rollback).toHaveBeenCalledWith({ nodeId: T9_NODE_A, to: 'v0.0.8' });
+  });
+
+  it('a previousVersion with no listed bundle disables Roll back on a verified node, with the reason line (wave 8 item C, D-3587)', async () => {
+    const { list } = await renderNodes(
+      [t9Node({ previousVersion: 'v0.0.8' })],
+      [t9Release('v0.0.9'), t9Release('v0.0.8', { bundleListed: false })],
+    );
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByRole('button', { name: 'Roll back' })).toBeDisabled();
+    expect(row.textContent).toContain('ccrc rollback --to v0.0.8');
+    expect(row.textContent).toContain('ccrc update --to v0.0.8 --downgrade --allow-unsigned');
+  });
+
+  it('a previousVersion with its bundle listed leaves Roll back enabled (wave 8 item C)', async () => {
+    const { list } = await renderNodes(
+      [t9Node({ previousVersion: 'v0.0.8' })],
+      [t9Release('v0.0.9'), t9Release('v0.0.8', { bundleListed: true })],
+    );
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByRole('button', { name: 'Roll back' })).not.toBeDisabled();
+  });
+
+  it('a Darwin row with an unbundled previousVersion shows no reason line and no Roll back button (decision 17, wave 8 item C)', async () => {
+    const { list } = await renderNodes(
+      [t9Node({ os: 'darwin', previousVersion: 'v0.0.8' })],
+      [t9Release('v0.0.9'), t9Release('v0.0.8', { bundleListed: false })],
+    );
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).queryByRole('button', { name: 'Roll back' })).toBeNull();
+    expect(row.textContent).not.toContain('provenance bundle');
   });
 
   it('a single-node 409 not-newer renders its sentence inside the sheet, which stays open and re-polls nothing', async () => {
@@ -1193,7 +1256,7 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
       t9Server({ previousVersion: 'v0.0.9' }),                                  // just rolled back: previous IS current
       t9Node({ nodeId: AHEAD, label: 'ahead', previousVersion: 'v0.0.10' }),    // a "previous" newer than current
       t9Node({ nodeId: BARE, label: 'bare', current: t9Stamp(undefined), previousVersion: 'v0.0.8' }),   // no tag to compare
-    ]);
+    ], [t9Release('v0.0.9'), t9Release('v0.0.8'), t9Release('v0.0.10')]);   // wave 8 item C: every named previous tag catalogued and bundled
     expect(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Roll back' })).not.toBeDisabled();
     expect(within(rowOf(list, T9_NODE_B)).getByRole('button', { name: 'Roll back' })).toBeDisabled();
     expect(within(rowOf(list, AHEAD)).getByRole('button', { name: 'Roll back' })).toBeDisabled();

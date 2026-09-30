@@ -4,10 +4,10 @@
 // dispatcher's (compareDispatchOrder), the set is what the move takes
 // somewhere, and tag order is semver across the v0.0.9/v0.0.10 boundary.
 import { describe, expect, it } from 'vitest';
-import type { NodeWire, UpdatesView } from '../../shared/api';
+import type { NodeWire, ReleaseWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import {
-  moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, moveTarget, planMove, type MoveIntent,
+  moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, moveTarget, planMove, rollbackBlockers, type MoveIntent,
 } from '../src/fleet/movePlan';
 
 const T0 = Date.UTC(2026, 8, 23, 12, 0, 0);
@@ -42,6 +42,9 @@ const view = (nodes: NodeWire[]): UpdatesView => ({
 });
 const ids = (intent: MoveIntent, nodes: NodeWire[]): string[] =>
   planMove(view(nodes), intent).nodes.map((n) => n.nodeId);
+const rel = (tag: string, o: Partial<ReleaseWire> = {}): ReleaseWire => ({
+  tag, version: tag, channel: 'stable', publishedAt: 1_000, commitSha: null, bundleListed: true, yanked: false, refused: [], notes: null, ...o,
+});
 
 const UP: MoveIntent = { scope: 'fleet', direction: 'update', tag: 'v0.0.10' };
 const DOWN: MoveIntent = { scope: 'fleet', direction: 'rollback', to: 'v0.0.8' };
@@ -171,6 +174,32 @@ describe('moveEmptyText — an empty plan says only what was measured', () => {
     expect(moveEmptyText({ scope: 'node', direction: 'rollback', nodeId: ID_E, to: 'v0.0.8' }))
       .toBe('Nothing to move — that node is no longer in the inventory.');
     expect(moveEmptyText({ scope: 'fleet', direction: 'update', tag: 'vnext' })).toBe('Nothing to move — vnext is not a release tag.');
+  });
+});
+
+describe('rollbackBlockers — the fleet nodes a rollback would name that the server refuses (wave 8 item C)', () => {
+  const v8NoBundle = rel('v0.0.8', { bundleListed: false });
+
+  it('two managed nodes above v0.0.8, one verified and one unverified: one blocker, the verified node', () => {
+    const verified = node({ nodeId: ID_A, label: 'verified-node', current: stamp('v0.0.10'), provenance: 'verified' });
+    const unverified = node({ nodeId: ID_B, label: 'unverified-node', current: stamp('v0.0.10'), provenance: 'unverified' });
+    expect(rollbackBlockers([verified, unverified], v8NoBundle, 'v0.0.8')).toEqual([{ label: 'verified-node', word: 'no-bundle' }]);
+  });
+
+  it('both unverified: no blockers', () => {
+    const a = node({ nodeId: ID_A, label: 'a', current: stamp('v0.0.10'), provenance: 'unverified' });
+    const b = node({ nodeId: ID_B, label: 'b', current: stamp('v0.0.10'), provenance: 'unverified' });
+    expect(rollbackBlockers([a, b], v8NoBundle, 'v0.0.8')).toEqual([]);
+  });
+
+  it('a verified Mac above the tag is not named — not a managed node', () => {
+    const mac = node({ nodeId: ID_C, label: 'mac', os: 'darwin', current: stamp('v0.0.10'), provenance: 'verified' });
+    expect(rollbackBlockers([mac], v8NoBundle, 'v0.0.8')).toEqual([]);
+  });
+
+  it('a non-tag to names nothing', () => {
+    const verified = node({ nodeId: ID_A, label: 'verified-node', current: stamp('v0.0.10'), provenance: 'verified' });
+    expect(rollbackBlockers([verified], v8NoBundle, 'vnext')).toEqual([]);
   });
 });
 
