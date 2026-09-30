@@ -7,8 +7,10 @@
 // reads it, the containment's inherited git variables, a workdir holding a
 // control character, the memo's scope, the absence walk's `dirname`, and the
 // shapes rung 9's row placement answers for a `//` spelling and an
-// unresolvable one. Last, the tombstone's `reflog` field, read from the child's
-// own HEAD and branch reflogs only. Every case builds its child in a fixture HOME.
+// unresolvable one — a `..` in the suffix below a missing directory included,
+// at evaluation and at removal time. Last, the tombstone's `reflog` field,
+// read from the child's own HEAD and branch reflogs only. Every case builds
+// its child in a fixture HOME.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -18,12 +20,14 @@ import { CCD, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
 import { asManagerCalls } from './platformFixtures.js';
 import {
   CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, atticReach, childReclaimVerb, evalOf, gcNow, hasCommit,
-  looseCommits, makeChild, type Child,
+  looseCommits, makeChild, plantTmux, tmuxSessions, type Child,
 } from './childReclaimFixture.js';
+import { verbHelpers } from './childReclaimVerbHelpers.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-hardening-'); });
 afterEach(() => { h.cleanup(); });
+const { interrupted, resumeToken, failedPairAgrees, treeOf } = verbHelpers(() => h);
 
 /** A bash spawn that answers instead of throwing, with its OWN deadline — the
  *  harness's `sh` has none, and vitest cannot interrupt a synchronous spawn. */
@@ -787,7 +791,9 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     }
   }, 60_000);
 
-  const UNRESOLVED = 'name a workdir that cannot be resolved (a directory or link on its path cannot be entered or followed), so ccd cannot place them against this child';
+  const UNRESOLVED = 'name a workdir that cannot be resolved (a directory or link on its path cannot be entered or followed,'
+    + ' or a \'..\' in it follows a directory that no longer exists), so ccd cannot place them against this child';
+  const UNRESOLVED_REMEDY = 'make it searchable, or, when a directory on it is gone, stop and purge the row';
 
   it('an absolute OTHER row that cannot be resolved — a link to the child, into a directory that cannot be entered — is unplaced, and `<child>/server` stands', () => {
     const { wt } = makeChild(h);
@@ -885,6 +891,142 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     otherRowOf('demo-gone', path.join(h.home, 'deleted', 'long', 'ago'));
     const r = evalOf(h);
     expect(r.verdict, r.detail).toBe('reclaimable');
+  }, 60_000);
+
+  // A `..` IN THE UNRESOLVED SUFFIX. An older `ccd start` stored a workdir as
+  // given, so a pane that entered `$HOME/gone/../<child path>` while `gone`
+  // stood lives in the child's tree. Once `gone` is removed, `_ws_realpath`
+  // stops at `$HOME` and re-attaches `gone/../…` AS WRITTEN — a spelling no
+  // compare places inside the child — while the first missing component
+  // (`gone`) is proven absent. Every string below is built by concatenation,
+  // never `path.join`, which would collapse the `..` the row is about.
+  const DOTDOT = 'demo-dotdot';
+  const rowFile = (field: string): string => path.join(h.home, '.cc-sessions', `${DOTDOT}.${field}`);
+  /** The legacy row's raw spelling, `$HOME/gone/../<the child's path below $HOME>`. */
+  const dotdotOf = (c: Child): string => `${h.home}/gone/../${path.relative(h.home, c.wt)}`;
+  /** The row, WRITTEN WHILE `$HOME/gone` STANDS, and its session's pane stand-in (`TMUX_MODEL`). */
+  const plantDotdot = (c: Child): string => {
+    fs.mkdirSync(path.join(h.home, 'gone'));
+    const raw = dotdotOf(c);
+    otherRowOf(DOTDOT, raw);
+    plantTmux(h, { sessions: [`cc-${DOTDOT}`] });
+    expect(fs.readFileSync(rowFile('workdir'), 'utf8'), 'the CONTROL: the raw spelling is what the registry holds').toBe(raw);
+    return raw;
+  };
+  /** Everything a refusal must leave standing: the child's tree byte for byte, its branch at its tip, the live
+   *  row exactly as written, and that row's session — its pane and its unit never touched. */
+  const preserved = (c: Child, raw: string, before: string[] | 'gone'): void => {
+    expect(treeOf(c.wt), 'the child’s tree — the live session’s — survives byte for byte').toEqual(before);
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the child’s branch stands at its tip').toBe(c.tip);
+    expect(fs.readFileSync(rowFile('workdir'), 'utf8'), 'the live row stands, as written').toBe(raw);
+    expect(fs.readFileSync(rowFile('uuid'), 'utf8')).toBe(`u-${DOTDOT}`);
+    expect(tmuxSessions(h), 'the live session’s pane stands').toContain(`cc-${DOTDOT}`);
+    expect(h.calls().filter((l) => l.includes(DOTDOT)), 'its unit and pane were never touched').toEqual([]);
+  };
+
+  it('`..` in the unresolved suffix: while `gone` stands the row IS the child’s path (the CONTROL); once `gone` goes, the evaluation mints NO token — unmeasured, naming the row as unresolvable', () => {
+    const c = makeChild(h);
+    const raw = plantDotdot(c);
+    const shared = evalOf(h);
+    expect(shared.verdict, `the CONTROL: with \`gone\` standing the row resolves to the child — ${shared.detail}`).toBe('containment-unproven');
+    expect(shared.detail).toContain(`is also named by registry row(s) ${DOTDOT}`);
+    const before = treeOf(c.wt);
+    fs.rmdirSync(path.join(h.home, 'gone'));
+    const home = fs.realpathSync(h.home);
+    expect(h.sh(`_ws_realpath "${raw}"`), 'the CONTROL: `_ws_realpath` re-attaches `gone/../…` as written')
+      .toBe(`${home}/gone/../${path.relative(h.home, c.wt)}`);
+    expect(h.sh(`_ws_realpath "${c.wt}"`), 'the CONTROL: which is not the child’s own resolved path').toBe(`${home}/${path.relative(h.home, c.wt)}`);
+    const r = evalOf(h);
+    expect(r.token, `the evaluation minted a destructive token — ${r.verdict}: ${r.detail}`).toBe('');
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.detail).toContain(`registry row(s) ${DOTDOT} ${UNRESOLVED}`);
+    // The sentence names THIS cause — a `..` following a directory that is gone — and a remedy true of it.
+    expect(r.detail).toContain('or a \'..\' in it follows a directory that no longer exists');
+    expect(r.detail).toContain(`against this child — ${UNRESOLVED_REMEDY}`);
+    expect(r.detail, 'the value is never printed').not.toContain('gone/..');
+    preserved(c, raw, before);
+  }, 60_000);
+
+  it('`..` in the unresolved suffix: ws-reclaim with a token minted BEFORE the row existed removes nothing — its own evaluation answers unmeasured', () => {
+    const c = makeChild(h);
+    // The REAL token: the rows are no input to it, so without the guard the verb accepts it.
+    const tok = evalOf(h).token;
+    expect(tok, 'the CONTROL: without the row the ladder passes').toMatch(/^[0-9a-f]{64}$/);
+    const raw = plantDotdot(c);
+    fs.rmdirSync(path.join(h.home, 'gone'));
+    const before = treeOf(c.wt);
+    const v = childReclaimVerb(h, tok);
+    expect(v.stdout, 'the verb reclaimed the child — the live session’s tree').not.toContain('"reclaimed"');
+    preserved(c, raw, before);
+    expect(v.code, v.stdout + v.stderr).toBe(1);
+    const o = JSON.parse(v.stdout) as { failed: string; detail: string };
+    expect(o.failed, 'refused at evaluation, before anything started').toBe('probe-unmeasured');
+    expect(o.detail).toContain(`registry row(s) ${DOTDOT} ${UNRESOLVED}`);
+    expect(h.calls().filter((l) => l.startsWith('unsupervise')), 'the tail was never reached').toEqual([]);
+    expect(h.reg(CHILD_ID, 'reaping'), 'no breadcrumb was written').toBeNull();
+  }, 90_000);
+
+  it('`..` in the unresolved suffix, at REMOVAL TIME on the fresh arm: the row appears and `gone` goes after the verb’s own evaluation passed — the tail’s re-check refuses, nothing further is deleted', () => {
+    const c = makeChild(h);
+    fs.mkdirSync(path.join(h.home, 'gone'));
+    plantTmux(h, { sessions: [`cc-${DOTDOT}`] });
+    const tok = evalOf(h).token;
+    expect(tok, 'the CONTROL: without the row the ladder passes').toMatch(/^[0-9a-f]{64}$/);
+    const raw = dotdotOf(c);
+    const before = treeOf(c.wt);
+    // The tail's first act (`_ws_unsupervise`, recorded) is the seam: after the evaluation and the pin, before
+    // `_ws_reclaim_owned`. There the row is written while `gone` stands, and then `gone` is removed.
+    const pre = '_ws_unsupervise() { echo "unsupervise $*" >> "$HOME/ccd-calls";'
+      + ` printf '%s' 'u-${DOTDOT}' > "$HOME/.cc-sessions/${DOTDOT}.uuid";`
+      + ` printf '%s' "$HOME/gone/../${path.relative(h.home, c.wt)}" > "$HOME/.cc-sessions/${DOTDOT}.workdir";`
+      + ' rmdir "$HOME/gone"; };';
+    const v = childReclaimVerb(h, tok, { pre });
+    expect(fs.existsSync(path.join(c.wt, 'f1.txt')), `the tail removed the live session’s tree — ${v.stdout}`).toBe(true);
+    expect(h.calls().some((l) => l.startsWith(`unsupervise ${CHILD_ID} `)), 'the CONTROL: the tail was reached').toBe(true);
+    expect(fs.existsSync(path.join(h.home, 'gone')), 'the CONTROL: `gone` was removed at the seam').toBe(false);
+    preserved(c, raw, before);
+    expect(v.code, v.stdout + v.stderr).toBe(1);
+    const o = JSON.parse(v.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('worktree-remove-failed');
+    expect(o.detail).toContain(`registry row(s) ${DOTDOT} ${UNRESOLVED}`);
+    failedPairAgrees(v);
+    expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb the fresh arm wrote stays').toBe('reclaim:children');
+  }, 90_000);
+
+  it('`..` in the unresolved suffix, at REMOVAL TIME on a resumed arm — which has no evaluation in front of it — the tail’s re-check refuses', () => {
+    const c = makeChild(h);
+    interrupted(c, 'worktree');
+    const tok = resumeToken('worktree');
+    expect(tok, 'the CONTROL: the resume token was minted before the row').toMatch(/^[0-9a-f]{64}$/);
+    const raw = plantDotdot(c);
+    fs.rmdirSync(path.join(h.home, 'gone'));
+    const before = treeOf(c.wt);
+    const v = childReclaimVerb(h, tok);
+    expect(treeOf(c.wt), `the resumed tail removed the live session’s tree — ${v.stdout}`).toEqual(before);
+    preserved(c, raw, before);
+    expect(v.code, v.stdout + v.stderr).toBe(1);
+    const o = JSON.parse(v.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('worktree-remove-failed');
+    expect(o.detail).toContain(`registry row(s) ${DOTDOT} ${UNRESOLVED}`);
+    failedPairAgrees(v);
+    expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');
+  }, 90_000);
+
+  it('only a `..` COMPONENT of the unresolved suffix refuses: `..x`, `.`, and a `..` in the entered prefix reach the ordinary absence answer — and those rows place outside the child', () => {
+    const c = makeChild(h);
+    const rel = path.relative(h.home, c.wt);
+    const resolvable = (p: string): string => h.sh(`_ws_reclaim_resolvable "${p}"; printf '%s' "$?"`);
+    for (const p of [`${h.home}/gone/../${rel}`, `${h.home}/gone/sub/../../${rel}`, `${h.home}/gone/..`]) {
+      expect(resolvable(p), `${p} is never resolvable`).toBe('1');
+    }
+    const controls = [`${h.home}/gone/..x/${rel}`, `${h.home}/gone/./${rel}`, `${h.home}/worktrees/../gone/${rel}`];
+    for (const p of controls) expect(resolvable(p), `${p} is resolvable: \`gone\` is proven absent`).toBe('0');
+    controls.forEach((p, i) => {
+      otherRowOf(`demo-ctl${i}`, p);
+      const r = evalOf(h);
+      expect(r.verdict, `${p}: ${r.detail}`).toBe('reclaimable');
+      dropRowOf(`demo-ctl${i}`);
+    });
   }, 60_000);
 });
 

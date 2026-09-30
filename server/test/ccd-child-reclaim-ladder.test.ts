@@ -857,8 +857,12 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
     // still exists and re-attaches the rest as written, so `<child>/..`
     // resolves to `<child>/..` itself — below the child as a string, and not
     // one plain path. Strings, not `path.join`, which would normalise it.
-    // The third spelling reaches the child through a symlinked ANCESTOR, so
-    // only its resolved form is below the child — and it is not plain either.
+    // The third spelling reaches the child through a symlinked ANCESTOR, so it
+    // is not literally below the child and is asked whether it resolves at
+    // all — and it does not: a `..` below a missing component (`quiet-basin/..`,
+    // the child's tree gone) names wherever that directory once led, which
+    // cannot be placed. So that row is UNRESOLVABLE — `unmeasured`, a retry,
+    // never a placement — and not spelled through.
     const { wt } = makeChild(h);
     fs.rmSync(wt, { recursive: true, force: true });
     fs.mkdirSync(path.join(h.home, 'elsewhere'));
@@ -867,8 +871,15 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
       ['demo-alias-up', `${path.join(h.home, 'wtlink', 'demo', 'quiet-basin')}/..`]] as const) {
       otherRow(id, spelled);
       const r = evalOf(h);
-      expect(r.verdict, `${spelled}: ${r.detail}`).toBe('containment-unproven');
-      expect(r.detail).toContain(`registry row(s) ${id} spell their workdir through ${wt}, not as one plain path`);
+      if (id === 'demo-alias-up') {
+        expect(r.verdict, `${spelled}: ${r.detail}`).toBe('unmeasured');
+        expect(r.token).toBe('');
+        expect(r.detail).toContain(`registry row(s) ${id} name a workdir that cannot be resolved`);
+        expect(r.detail).toContain('or a \'..\' in it follows a directory that no longer exists');
+      } else {
+        expect(r.verdict, `${spelled}: ${r.detail}`).toBe('containment-unproven');
+        expect(r.detail).toContain(`registry row(s) ${id} spell their workdir through ${wt}, not as one plain path`);
+      }
       expect(r.detail, 'it is not inside the child, and the detail does not say it is').not.toContain('rooted inside');
       fs.rmSync(path.join(h.home, '.cc-sessions', `${id}.uuid`));
       fs.rmSync(path.join(h.home, '.cc-sessions', `${id}.workdir`));
