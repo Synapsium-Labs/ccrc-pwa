@@ -1100,7 +1100,7 @@ describe('SettingsScreen — the node inventory: helpers', () => {
     expect(nodeStateLine({ ...t9Node(), update: undefined } as unknown as NodeWire), 'update absent').toBe('unknown');
   });
 
-  it('finishedLine: merges only when update.detail is EXACTLY what the settle wrote for a done/failed/reverted report of the lease\'s own target (wave 8 item F4, D-3591)', () => {
+  it('finishedLine: merges only when update.detail is EXACTLY what the settle wrote for a done/failed/reverted report of the lease\'s own target (wave 8 item F4)', () => {
     const T = T9_T0 + 3 * T9_MIN;
     const done = t9Node({
       update: { state: 'idle', target: 'v0.0.49', startedAt: T9_T0, detail: 'done: v0.0.49' },
@@ -1502,7 +1502,7 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     expect(row.textContent).not.toMatch(/up to date/i);
   });
 
-  // Wave 8 item F4 (D-3591): a finished move — a settled lease whose update.detail is exactly what the settle
+  // Wave 8 item F4: a finished move — a settled lease whose update.detail is exactly what the settle
   // wrote for the report that named it — merges the request/state/detail lines into ONE dated line.
   it('a finished done move merges the state and detail lines into one, dated (wave 8 item F4)', async () => {
     const T = T9_T0 + 3 * T9_MIN;

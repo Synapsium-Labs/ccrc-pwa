@@ -437,6 +437,10 @@ describe('a rollback the node is known to refuse is refused before any lease (wa
     expect(d).not.toContain('ccrc rollback --to v0.0.8 --allow-unsigned');
   });
 
+  it('(k) D-3587\'s ordering: a verified node that has ALREADY refused the same unbundled tag still answers no-bundle, never refused-by-node', () => {
+    expect(refusalOf(view(fleet(), 'off', ['v0.0.12']), 'rollback', 'v0.0.12')).toBe('no-bundle');
+  });
+
   // (j) the premise pin already exists: `update-dispatch.test.ts:104`'s "a failed row whose detail BEGINS
   // provenance: does not halt" — cited here, nothing added.
 });
@@ -483,6 +487,18 @@ describe('a standing fleet rollback the server refuses holds no server move (wav
     });
     expect(p.move).toMatchObject({ nodeId: SERVER_ID, source: 'request', target: 'v0.0.10' });
     expect(words(p)).toEqual([[FLEET_ID, 'no-bundle']]);
+  });
+
+  it('(e) a standing rollback request to a tag with NO catalogue row holds nothing either — unknown-tag excludes it from fleetAsk exactly as no-bundle does (D-3588)', () => {
+    const p = planDispatch({
+      nodes: [
+        view(fleet({ requestedTag: 'v0.0.99', requestedKind: 'rollback', requestedAt: 1_000, desiredTag: 'v0.0.10' }), 'channel'),
+        view(server({ desiredTag: 'v0.0.10' }), 'stable'),
+      ],
+      releases: RELEASES_V8_NO_BUNDLE,
+    });
+    expect(p.move?.nodeId).toBe(SERVER_ID);
+    expect(words(p)).toEqual([[FLEET_ID, 'unknown-tag']]);
   });
 });
 

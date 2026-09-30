@@ -152,7 +152,7 @@ describe('moveHeadline / moveLines / moveTarget — what the sheet says', () => 
     expect(moveTarget(DOWN)).toBe('v0.0.8');
   });
 
-  it('rollbackHowText: the flip-or-download sentence, makes no per-node claim (wave 8 item F3, D-3591)', () => {
+  it('rollbackHowText: the flip-or-download sentence, makes no per-node claim (wave 8 item F3)', () => {
     const s = rollbackHowText('v0.0.8');
     expect(s).toContain('kept copy of v0.0.8');
     expect(s).toContain('downloads v0.0.8 and re-installs it');
