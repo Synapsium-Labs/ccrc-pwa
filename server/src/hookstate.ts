@@ -228,6 +228,38 @@ export async function readHookStateMeasured(
   currentUuid: string | null,
   now: number,
 ): Promise<HookStateRead> {
+  return readHookStateGated(io, registryDir, id, currentUuid, now);
+}
+
+/**
+ * `readHookStateMeasured` without its AGE gate, and without nothing else. The identity gate, the size cap,
+ * every parse rejection and the `unmeasured` arm are the SAME code (`readHookStateGated`, below). This is a
+ * second door onto one parse, never a copy of it: `io.ts`'s own rule, that two hand-kept ladders over the
+ * same gates drift.
+ *
+ * Its one reader is the stall watch's hold 2a (`watch.ts`'s `sweepStalls`, spec 2026-09-29 §4.2). The hook
+ * writes only on events, so a legit question outlives `HOOKSTATE_FRESH_MS` (the census's longest ran 6.6 h).
+ * The lane therefore correlates `updatedAt` with the live status time instead of trusting age. The caller
+ * decides what an old ask means, not this reader. Every other reader wants the aged answer and keeps it.
+ */
+export async function readHookStateUnaged(
+  io: FleetIO,
+  registryDir: string,
+  id: string,
+  currentUuid: string | null,
+): Promise<HookStateRead> {
+  return readHookStateGated(io, registryDir, id, currentUuid, null);
+}
+
+/** The ONE parse behind both reads above. `now === null` skips ONLY the `HOOKSTATE_FRESH_MS` gate; every
+ *  other gate runs for both. Module-private: a caller chooses a door, never the flag. */
+async function readHookStateGated(
+  io: FleetIO,
+  registryDir: string,
+  id: string,
+  currentUuid: string | null,
+  now: number | null,
+): Promise<HookStateRead> {
   // `readFileMeasured`, not `readFile`: this seam is the ONLY place the
   // absent-vs-unreadable line still exists as evidence (`io.ts`'s
   // `MeasuredRead`), and folding it here is what D-115 named. A proven
@@ -271,7 +303,7 @@ export async function readHookStateMeasured(
 
   const updatedAt = raw['updatedAt'];
   if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) return NO_STATE;
-  if (now - updatedAt > HOOKSTATE_FRESH_MS) return NO_STATE;
+  if (now !== null && now - updatedAt > HOOKSTATE_FRESH_MS) return NO_STATE;
 
   const interruptedRaw = raw['interrupted'];
   if (interruptedRaw !== undefined && typeof interruptedRaw !== 'boolean') return NO_STATE;
