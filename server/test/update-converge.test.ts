@@ -902,11 +902,24 @@ describe('a move the node took leaves one feed record naming its source (wave 8 
     hThrow.deps.recordMove = () => { throw new Error('boom'); };
     seedFleet(hThrow);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const rThrow = ran(await runDispatch(hThrow.deps, T0 + 1000));
+    // Settled, never awaited bare: a mutation that drops the try/catch (M-A4) or that moves the call before the
+    // send (M-A8) makes `runDispatch` REJECT with the bare `boom`, and a bare `await` would die on it — a crash
+    // is not a pin (mutation-table discipline). Both facts are asserted SOFT, unconditionally, so neither masks
+    // the other: `settled.ok` alone fires for M-A4 (the send already ran; only the safety net is gone, so `sent`
+    // still reads 1); both `settled.ok` AND `sent` fire for M-A8 (the record — and its throw — now happen BEFORE
+    // `deps.fleet.send` is ever called, so `sent` stays empty) — that second fact is what tells the two mutants
+    // apart.
+    const settled = await runDispatch(hThrow.deps, T0 + 1000).then(
+      (r) => ({ ok: true as const, r }),
+      (e: unknown) => ({ ok: false as const, e }),
+    );
+    expect.soft(settled.ok, 'runDispatch must resolve, never reject, even when recordMove throws').toBe(true);
+    expect.soft(hThrow.sent, 'the send must already have happened by the time recordMove runs').toHaveLength(1);
+    if (!settled.ok) return; // the shape below is the genuine (non-mutant) resolution only
 
+    const rThrow = ran(settled.r);
     expect(rThrow.outcome).toEqual(rNull.outcome);
     expect(hThrow.store.node(FLEET_ID)).toEqual(hNull.store.node(FLEET_ID));
-    expect(hThrow.sent).toHaveLength(1);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]![0]).toMatch(/^ccrc-server: the update move's feed record was not written/);
   });
