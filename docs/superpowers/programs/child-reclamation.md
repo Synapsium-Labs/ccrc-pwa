@@ -43,6 +43,27 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-09-30 — wave 4 post-handoff safety rounds remain open; no fresh handoff accepted.**
+  - The original wave-done and its fingerprint are superseded. Run 174 remains `working`; items 817–834 remain pending;
+    no official review run is open and PR #215 is not merge-eligible from coordinator evidence.
+  - At local worker commit `1fd35e76d`, the ruled shared logical resolver places both the child and every competing row
+    from one result. The rereview still measured two blocking resolver failures: imported `builtin`/`set` can shadow
+    the primitive, and its physical prefix discovery can disagree with logical entry on a linked-root `..` spelling.
+    Fix round 3 owns those two findings and two truthful-prose minors; its claims are 850–853.
+  - The same rereview measured a separate R31 destruction: an imported `find` can return success with an empty registry
+    listing at both evaluation and final ownership remeasurement, fabricate that no competing row names the tree, and
+    let unattended `ws-reclaim` remove a live child. Mail 2807 ruled this **blocking** despite the inherited environment
+    not being remote-request input: existing ccd contracts explicitly tolerate inherited shell state, and the mandatory
+    xhigh SAFETY lens requires this fail direction shut before automatic deletion ships.
+  - After fix round 3, a distinct fix round 4 hardens ccd's direct process entry under PATH-selected Bash >=4.4
+    privileged-mode semantics while preserving Homebrew Bash selection on macOS and intentional source-mode fixtures.
+    It must cover systemd/launchd, agent and local-server execution, detached self-reexec, `BASH_ENV` plus readonly
+    functions, inherited options/CDPATH, a second destructive-path command, and a behavioral removal/authorization
+    mutation. A fresh Opus/xhigh destructive SAFETY rereview attacks that boundary before any wave-done.
+  - No second deviation allocation is permitted mid-wave. The supporting slug
+    `ccd-imported-functions-hijack-reclaim-reads` is folded into the already-issued D-3538 in the worker plan in the same
+    tracked act, with prose distinguishing ambient command discovery from path spelling. No unissued token is written.
+  - Deployment remains automatic-updater-only. The coordinator will not manually roll out this wave.
 - **2026-09-28 — wave 3 DEPLOYED (v0.0.33) and measured live; wave 4 dispatched (run 174).**
   - **Rollout.** `ccrc rollout --to v0.0.33`, 16:16–16:21 UTC: fleet box first, rc 0, both boxes agreed at `1ffdf947`.
     The server box's doctor now reads 0 failed; its standing agent-unit FAIL is gone. The fleet box's `ccd caps` lists
