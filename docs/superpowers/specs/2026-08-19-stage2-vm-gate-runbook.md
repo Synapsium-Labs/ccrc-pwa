@@ -723,14 +723,9 @@ closing doctor, and the supervisor sweep:
 update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (KillMode=process verified per unit before any restart; panes untouched)
 ```
 
-On a box with no live sessions the sweep closes instead with:
-
-```
-update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart (KillMode=process verified before the restart; panes untouched)
-```
-
-— the `KillMode=process` preflight still ran, against an uninstantiated instance of the
-template. If you instead see `update: sweep REFUSED — …` and an `update: DEGRADED: …` line, the
+On a box with no live sessions the sweep closes instead with
+`update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart (KillMode=process verified before the restart; panes untouched)` — the `KillMode=process` preflight still ran, against an
+uninstantiated instance of the template. If you instead see `update: sweep REFUSED — …` and an `update: DEGRADED: …` line, the
 update itself still converged (it exits 0); the refusal names the resolved KillMode and the
 drop-in path that fixes it — a real finding on that box, not a broken update. The transcript
 closes with the from→to report, your boxes' own two shas in the parentheses:

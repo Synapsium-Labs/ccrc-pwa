@@ -3243,13 +3243,44 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   });
 
   it.skipIf(process.getuid?.() === 0)(
+    // Controller fix round 1: "one WARN auth, rc 2" is a COUNT, not just a
+    // shape — a mutation that fired the block twice (once per flag-dependent
+    // arm it guards) would still match `/^WARN auth: /` on the FIRST line
+    // `lineFor` returns. `rc 2` itself is `_dr_warn`'s own return, pinned
+    // generically elsewhere (the header's own "`_dr_warn` exists and returns
+    // rc 2" measurement); the class this check answers with is WARN, and
+    // that class is observable only through the verdict word on the line —
+    // there is no separate "rc 2" annotation doctor prints per check.
     'D4: an exposure file that is there and cannot be read is UNMEASURED — one WARN, naming the file, with a usable passphrase', () => {
       const home = healthy('ccrc-doctor-auth-exp-unread-');
       chmodSync(join(home, '.ccrc', 'exposure.env'), 0o000);
       const r = runDoctor(home);
+      const warnLines = r.stdout.split('\n').filter((l) => l.startsWith('WARN auth: '));
+      expect(warnLines.length, r.stdout).toBe(1);
+      expect(warnLines[0]).toContain(join(home, '.ccrc', 'exposure.env'));
+      expect(warnLines[0]).toMatch(/was not measured/);
       expect(authLine(r.stdout)).toMatch(/^WARN auth: /);
-      expect(authLine(r.stdout)).toContain(join(home, '.ccrc', 'exposure.env'));
-      expect(authLine(r.stdout)).toMatch(/was not measured/);
+    });
+
+  it.skipIf(process.getuid?.() === 0)(
+    // Controller fix round 1: item D's rc-3 unmeasured block is UNPINNED by
+    // D4/D5/D6 alone — all three keep an auth.scrypt, so deleting the rc-3
+    // block (as opposed to the rc-0 one D4 already pins) never reds any of
+    // them. This is the rc-3 twin: no passphrase file EITHER, same unreadable
+    // exposure file — the false verdict item D exists to stop is exactly
+    // "PASS auth: … the gate is OFF …" on a box whose real armed state
+    // nothing here measured. Root reads through a chmod 000, so this case
+    // cannot run as uid 0 — skipped there, not weakened.
+    'D4b: the SAME unreadable exposure file with NO passphrase file either is still UNMEASURED — one WARN, never the false "gate is OFF" PASS', () => {
+      const home = healthy('ccrc-doctor-auth-exp-unread-nofile-');
+      chmodSync(join(home, '.ccrc', 'exposure.env'), 0o000);
+      rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+      const r = runDoctor(home);
+      const warnLines = r.stdout.split('\n').filter((l) => l.startsWith('WARN auth: '));
+      expect(warnLines.length, r.stdout).toBe(1);
+      expect(warnLines[0]).toContain(join(home, '.ccrc', 'exposure.env'));
+      expect(warnLines[0]).toMatch(/was not measured/);
+      expect(r.stdout).not.toMatch(/^PASS auth: /m);
     });
 
   it.skipIf(process.getuid?.() === 0)(
@@ -3259,6 +3290,11 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       writeAuthSecret(home, 'not a secret line at all\n');
       const r = runDoctor(home);
       expect(authLine(r.stdout)).toMatch(/^FAIL auth: /);
+      // rc 4's third tense (unmeasured=1): the armed-vs-unarmed wording
+      // never applies here — neither ccrc.env nor the exposure file's
+      // CCRC_AUTH is knowable, so the sentence hedges on the condition
+      // itself rather than asserting either state.
+      expect(authLine(r.stdout)).toContain('if CCRC_AUTH is on (');
       expect(r.stdout).not.toMatch(/^WARN auth: /m);
     });
 
