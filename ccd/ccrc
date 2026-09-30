@@ -2776,7 +2776,8 @@ BUE_EXP=""     # the exposure file's state: absent | readable | unreadable
 # bare `KEY=` in the exposure file overrides ccrc.env's value, exactly as systemd's second EnvironmentFile does
 # (`_box_env_value`'s rc tells that apart). THE one copy of that precedence: `_check_auth`, `_check_update-exposure`
 # and install's gate line read through it. It never reads this shell's environment. It narrows nothing: an
-# exposure file that is THERE AND UNREADABLE answers rc 2 (UNMEASURED — its value would have won), never absent;
+# exposure file that is THERE AND UNREADABLE answers rc 2 (UNMEASURED — what the service manager receives from it
+# was not measured), never absent;
 # BUE_VAL/BUE_SRC then carry what ccrc.env alone says, for a caller that must word that. rc 0 measured.
 _box_unit_env() {   # <KEY>
   local key="$1" v rc
@@ -12247,10 +12248,15 @@ cmd_install() {
   # already-exposed box lands here too, and a bare "no passphrase" line would
   # be a lie on that box. So the passphrase file is resolved through
   # `_box_auth_path` (a relative override is undecidable, exactly as doctor's
-  # `auth` check refuses it) and the flag through `_box_unit_env` — the SAME
-  # precedence ccrc.service itself gets, ccrc.env then the exposure file,
-  # later wins by presence. The fresh-box line (no file, flag off) is
-  # byte-identical to what this line always said.
+  # `auth` check refuses it) and the flag through `_box_unit_env`. With a
+  # passphrase file, an exposure file that cannot be read prints "not
+  # measured"; otherwise a measured CCRC_AUTH=on, from either file with the
+  # later one winning, names the file that decides. With no passphrase file, a
+  # measured CCRC_AUTH=on names the file that decides too; every other case —
+  # including an exposure file that sets CCRC_AUTH to anything but on, or one
+  # that cannot be read — prints main's else-arm line unchanged, naming
+  # ccrc.env. The fresh-box line (no file, flag off) is byte-identical to
+  # what this line always said.
   local gsec grc urc=0
   gsec="$(_box_auth_path)"; grc=$?
   if [ "$grc" -eq 3 ]; then

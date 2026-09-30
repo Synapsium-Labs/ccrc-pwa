@@ -1244,15 +1244,15 @@ _check_config() {
 # ── THE FLAG IS READ AS ccrc.service GETS IT, NEVER FROM THIS SHELL ───────
 # The unit carries TWO `EnvironmentFile=` lines — `~/.ccrc/ccrc.env`, then
 # $CCRC_EXPOSURE_FILE — and the LATER one wins by PRESENCE, even when its
-# value is empty (wave 8 item D, D-3596): `ccrc expose` writes CCRC_AUTH=on
+# value is empty (wave 8 item D (decision D)): `ccrc expose` writes CCRC_AUTH=on
 # into the exposure file and never into ccrc.env, so a check that read
 # ccrc.env alone called every correctly exposed box unarmed. An exported
 # `CCRC_AUTH` in the operator's own shell decides nothing at all, either way.
 # Same reader `_check_update-exposure` and install's gate line now share:
 # `ccrc`'s `_box_unit_env`, never a private copy. An exposure file that is
-# THERE AND UNREADABLE cannot say which value would have won — its verdict is
-# UNMEASURED, not a guess at either answer (D-3596; `_box_unit_env`'s own
-# header argues the same rc).
+# THERE AND UNREADABLE cannot say what the service manager received — its
+# verdict is UNMEASURED, not a guess at either answer (D-3596; `_box_unit_env`'s
+# own header argues the same rc).
 #
 # ── THE FILE IS MEASURED BY THE SERVER'S OWN PARSER, THROUGH NODE ─────────
 # `_check_wrappers` already reads a JSON file with `node -e` rather than
@@ -1380,10 +1380,11 @@ _check_auth() {
       fi
       # Wave 8 item D, D-3596: a passphrase this box CAN use, but whether the
       # gate is armed was not measured — the exposure file is there, unreadable,
-      # and its CCRC_AUTH would win. Neither PASS arm below is honest here.
+      # and what the service manager does with it was not measured either.
+      # Neither PASS arm below is honest here.
       if [ "$unmeasured" -eq 1 ]; then
-        _dr_warn auth "$secret$via holds a usable passphrase ($detail), but $CCRC_EXPOSURE_FILE is there and cannot be read, and its CCRC_AUTH would win over $BOX_ENV_FILE's — whether logins are gated was not measured" \
-          "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) — on macOS an unreadable one also stops the server job — then re-run: ccrc expose duckdns (or: ccrc expose byo); it rewrites the file 0600"
+        _dr_warn auth "$secret$via holds a usable passphrase ($detail), but $CCRC_EXPOSURE_FILE is there and cannot be read, so whether logins are gated was not measured" \
+          "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE) — then re-run: ccrc expose duckdns (or: ccrc expose byo); it rewrites the file 0600"
         return 2
       fi
       if [ "$armed" -eq 1 ]; then
@@ -1449,7 +1450,7 @@ _check_auth() {
       # to a command that is about to refuse.
       local when="the moment CCRC_AUTH=on is set, the server will refuse to boot on it"
       if [ "$unmeasured" -eq 1 ]; then
-        when="if CCRC_AUTH is on ($CCRC_EXPOSURE_FILE, which decides it, cannot be read), the server refuses to boot on it"
+        when="if CCRC_AUTH is on (whether it is was not measured: $CCRC_EXPOSURE_FILE cannot be read), the server refuses to boot on it"
       elif [ "$armed" -eq 1 ]; then
         when="with $gate the server REFUSES TO BOOT on it — readAuthSecret is called uncaught at startup"
       fi
@@ -1756,7 +1757,7 @@ _check_exposure() {
 #     exposure file and never into ccrc.env (`_exp_env_write`, D-162), so a
 #     ccrc.env-only read would call every correctly exposed box unarmed.
 #     `_check_exposure`'s CCRC_HOST read above is the precedent this copies,
-#     and (wave 8 item D, D-3596) it is now the ONE shared reader, `ccrc`'s
+#     and (wave 8 item D (decision D)) it is now the ONE shared reader, `ccrc`'s
 #     `_box_unit_env` — the same function `_check_auth` and install's gate
 #     line read the flag through, so all three cannot disagree. PRESENCE, not
 #     a non-empty value, wins (fix round 1 item 7 / review 155 C13):
@@ -1814,19 +1815,21 @@ _check_update-exposure() {
   fi
 
   # The exposure file in three states, never two: absent, readable, or THERE
-  # AND UNREADABLE — the last is unmeasured, because its value would have won.
+  # AND UNREADABLE — the last is unmeasured, because what the service manager
+  # does with it was not measured.
   local expok=0 expunread=0
   if [ -e "$CCRC_EXPOSURE_FILE" ]; then
     if [ -f "$CCRC_EXPOSURE_FILE" ] && [ -r "$CCRC_EXPOSURE_FILE" ]; then expok=1; else expunread=1; fi
   fi
 
   # ── ARMED ────────────────────────────────────────────────────────────────
-  # Wave 8 item D, D-3596: through the ONE shared reader now, `_box_unit_env`
-  # — the three-state expok/expunread above is unchanged (the WARN it drives
-  # still fires below), and so is envok, which only the role read above still
-  # uses. No printed-source rule is kept here: a source is printed only where
-  # its value is `on`, and there BUE_SRC is the file that named it — exactly
-  # what the old `[ -z "$auth" ] || authsrc=…` line was working around by hand.
+  # Wave 8 item D (decision D): through the ONE shared reader now, `_box_unit_env`
+  # — the three-state expok/expunread above is unchanged (the WARN it drives,
+  # D-3596, still fires below), and so is envok, which only the role read
+  # above still uses. No printed-source rule is kept here: a source is
+  # printed only where its value is `on`, and there BUE_SRC is the file that
+  # named it — exactly what the old `[ -z "$auth" ] || authsrc=…` line was
+  # working around by hand.
   local auth="" authsrc=""
   _box_unit_env CCRC_AUTH || :
   auth="$BUE_VAL"; authsrc="$BUE_SRC"

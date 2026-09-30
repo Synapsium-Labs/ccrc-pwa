@@ -2832,7 +2832,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   };
   const authLine = (out: string): string => lineFor(out, 'auth') ?? '';
 
-  // Wave 8 item D correction (D-3596): `healthy()`'s exposure file carries
+  // Wave 8 item D (decision D) correction: `healthy()`'s exposure file carries
   // CCRC_AUTH=on (`writeExposureEnv`, :769-790) — under the fix, `_check_auth`
   // reads the flag through `_box_unit_env`, which honours that file, so every
   // case below that expected the gate OFF while building on `healthy()` alone
@@ -3201,8 +3201,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     expect(r.stdout).not.toMatch(/^SKIP auth: /m);
   });
 
-  // ── wave 8 item D: the flag as ccrc.service actually gets it ─────────────
-  // (D-3596). The unit carries TWO EnvironmentFile lines, ccrc.env then the
+  // ── wave 8 item D (decision D): the flag as ccrc.service actually gets it ─
+  // The unit carries TWO EnvironmentFile lines, ccrc.env then the
   // exposure file, and the later one wins by PRESENCE — `_box_unit_env`,
   // shared with `_check_update-exposure` and install's gate line.
 
@@ -3260,6 +3260,15 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       expect(warnLines[0]).toContain(join(home, '.ccrc', 'exposure.env'));
       expect(warnLines[0]).toMatch(/was not measured/);
       expect(authLine(r.stdout)).toMatch(/^WARN auth: /);
+      // Fix round 1 item 3 / review 196 F4: the verdict no longer claims which
+      // file would have won — what the service manager does with an
+      // unreadable exposure file was not measured, on either platform.
+      expect(warnLines[0]).not.toContain('would win');
+      expect(warnLines[0]).not.toContain('would have won');
+      // …and the remedy no longer states the macOS-stops-the-job premise that
+      // was wrong; it still points the operator at the file itself.
+      expect(remedyFor(r.stdout, 'auth')).not.toContain('stops the server job');
+      expect(remedyFor(r.stdout, 'auth')).toContain('ls -ld');
     });
 
   it.skipIf(process.getuid?.() === 0)(
@@ -3296,6 +3305,10 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       // itself rather than asserting either state.
       expect(authLine(r.stdout)).toContain('if CCRC_AUTH is on (');
       expect(r.stdout).not.toMatch(/^WARN auth: /m);
+      // Fix round 1 item 3 / review 196 F4: the hedge no longer names the
+      // exposure file as the one "which decides it" — which file would win
+      // was never measured either.
+      expect(authLine(r.stdout)).not.toContain('which decides it');
     });
 
   it.skipIf(process.getuid?.() === 0)(
@@ -7483,7 +7496,7 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     expect(line(r.stdout)).toMatch(/^FAIL update-exposure: /);
   });
 
-  it('an exposure.env that is there and cannot be read WARNs as unmeasured — its value would have won', () => {
+  it('an exposure.env that is there and cannot be read WARNs as unmeasured', () => {
     const home = unexposed('ccrc-doctor-upx-exp-dir-');
     mkdirSync(join(home, '.ccrc', 'exposure.env'));
     const r = runDoctor(home);

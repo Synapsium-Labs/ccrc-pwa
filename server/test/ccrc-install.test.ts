@@ -5292,7 +5292,13 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
   // A fresh install cannot say "no passphrase" honestly on a box that already
   // has one — a re-run over an already-passworded, already-exposed box lands
   // here too. The file is resolved through `_box_auth_path`, the flag through
-  // `_box_unit_env` — the SAME precedence ccrc.service itself gets.
+  // `_box_unit_env`. With a passphrase file, an exposure file that cannot be
+  // read prints "not measured"; otherwise a measured CCRC_AUTH=on, from
+  // either file with the later one winning, names the file that decides.
+  // With no passphrase file, a measured CCRC_AUTH=on names the file that
+  // decides too; every other case — including an exposure file that sets
+  // CCRC_AUTH to anything but on, or one that cannot be read — prints main's
+  // else-arm line unchanged, naming ccrc.env.
   const gateLine = (out: string): string => out.split('\n').find((l) => l.startsWith('install: gate: ')) ?? '';
 
   it('G2b: a passphrase file at the default path with the flag OFF — "a PWA passphrase file is at", and the OFF remedy names ccrc.env', () => {
