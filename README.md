@@ -672,9 +672,15 @@ identity cannot be measured — and `~/ccrc` is a symlink to the one that runs, 
 and doctor all resolve through it unchanged. An install places the new tree beside the running one, runs `npm ci`
 there, and only then points `~/ccrc` at it in one rename (GNU `ln -sfn` then `mv -fT`; on macOS python3's
 `os.replace`, so `ccrc install` there needs the Xcode Command Line Tools). A reinstall of the name already running
-writes in place, and a complete kept version run from its own directory copies nothing and runs no `npm ci`. A
+writes in place, and a kept version (its record present and its digest matching) run from its own directory
+copies nothing and runs no `npm ci`. A
 symlink or a non-directory standing at a version's name is refused before anything is written. Every completed
-install keeps a copy of the box's stamp and install record inside its version directory; a flip back restores both.
+install keeps a copy of the box's stamp and install record inside its version directory, and a digest of the
+version's bytes (`.ccrc-digest`, written before the record; `node_modules` excluded, because `npm ci`'s output is not
+stable bytes); a flip back restores the stamp and the record. "Kept" means the record is there AND the digest still
+re-measures equal: `deploy.sh`, a pre-W6 `ccrc` run from a kept version, or a restore copy that changes the bytes
+makes the version read written through, so no flip returns to it and the install that would have trusted it runs
+`npm ci` in place instead.
 A box whose `~/ccrc` is a real directory is migrated once: the new tree is placed fully, the old one is moved to
 `~/ccrc.migrating`, the link is placed, and `~/ccrc.migrating` is removed only after a gate passes — `ccrc update`'s
 or `ccrc rollback`'s health gate, or a plain `ccrc install`'s own doctor when that install can take
@@ -691,21 +697,24 @@ version's stamp and record, re-runs its own install spine (the executables, hook
 runs the gate once more, falling to arm 2 only when there is no kept version or that fails. `ccrc rollback` to a
 kept version makes the same flip, spine and gate, and asks the release host nothing: below the floor if need be, the
 floor itself never lowered, and exit 3 when the kept spine's doctor fails after the gate passes; a bare one checks
-`previous` against the layout before it trusts it. A staged release older than this layout is first given a
+`previous` against the layout before it trusts it, and admits the one disagreement a killed update leaves (the link on
+the new version, the stamp on the old build, no install record, the old build kept) to a flip and nothing else
+(D-3466). A staged release older than this layout is first given a
 directory named for its own tag to write into, and `~/ccrc` goes back to the version it named when that spine dies
 before replacing anything. A staged spine that dies having replaced nothing, of any age, has the run put back what
 it cleared before it: the caps file, and the install record only when it was a completed install of the running
 build's own sha, provided `~/ccrc` names the tree it named before (D-3462); neither comes back for a marker-less
 spine whose stamp did not move, or when a legacy flip-back failed. Arm 3's MIXED tree loses its kept record, so no
-flip returns to it. `ccrc versions` lists the kept trees (`*` marks the one `~/ccrc` points at). After an install or
+flip returns to it. `ccrc versions` lists the kept trees (`*` marks the one `~/ccrc` points at; `written-through` marks one whose
+bytes are no longer the kept ones, and `unmeasured` one kept before digests existed or whose tree cannot be measured; neither changes a prune verdict). After an install or
 update whose gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename to a
 dot-name first: never the one `~/ccrc` points at, `previous`, a tag this node's projection names, or a version a
 running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
-stay. An input that cannot be read prunes nothing, and only `--prune` removes an incomplete tree. `deploy.sh` still
+stay. An input that cannot be read prunes nothing (a `CCRC_VERSIONS_KEEP` that is not a whole number from 0 to 9999 is one), a dead process's `.pruning-`/`.incoming.` leftover is swept once per prune, and only `--prune` removes an incomplete tree. `deploy.sh` still
 pushes its tree through `~/ccrc`, into whichever version directory that points at.
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
-directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
+directory shape, pruned to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — hand-made
 siblings are never touched). `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own
 unit (`ccrc.service`, or `ccrc-agent.service` when the recorded role is `fleet`). `ccrc uninstall`
 takes the box off ccrc and leaves reinstall safe: it refuses while live sessions exist, and while an update holds
@@ -3463,7 +3472,8 @@ it.
 **Restore** (manual, from the target box — pick the `<ts>` to roll back to). The first remedy is `ccrc rollback`:
 to a version still kept under `~/ccrc-versions` it is a flip with no download. The `cp -a` lines below write
 THROUGH `~/ccrc` into the version directory it points at, which then holds a MIXED tree under its release's name —
-remove that directory's `.ccrc-installed` afterwards, as arm 3 does, so no flip ever returns to it:
+its digest then reads it as written through, and removing its `.ccrc-installed` as well, as arm 3 does, makes it
+incomplete outright, so no flip ever returns to it:
 
 ```bash
 # fleet host (agent target)

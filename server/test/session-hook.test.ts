@@ -8097,6 +8097,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // ccd/ccd:13618`. Left: `plan:3326 ccd/ccrc:5217`, `spec:1310 ccd/ccd:13602`, `spec:2125 ccd/ccd:13673`,
     // `spec:2230 ccd/ccd:13673`. Measured by diffing the dumped failure sets of the two trees, never retyped.
     // No D-number.
+    // RE-MEASURED at the centralised-update W6 versioned-installs wave, S6-R11 (base 751eb5da, tip 56b8e80a).
+    // The compaction-card spec and plan are byte-identical at both, checked; README changed in prose that
+    // cites nothing and in the anchors re-anchored BY CONTENT beside it (its own entry is empty at the tip);
+    // so nothing was re-pointed and no rule changed. What moved is this range's growth under frozen anchors:
+    // `ccd/ccd` 26684 -> 27014 lines; `ccd/ccrc` 18802 -> 19414 lines; `server/test/ccd-workspaces.test.ts`
+    // 1607 -> 1607 lines; `server/test/ccd-ws-reap.test.ts` 2860 -> 2860 lines; `server/test/single-
+    // definition.test.ts` 3915 -> 3950 lines; `shared/api.ts` 8843 -> 8851 lines. Headline 194 -> 195.
+    // Entered: `plan:3326 ccd/ccrc:5217`. Nothing left. Measured by diffing the dumped failure sets of the two
+    // trees, never retyped. No D-number.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
       // RE-DERIVED on the FOURTH merge with main (`ad3d2fbc`, #136), 145 -> 144,
       // and DOWN is the direction that needs an argument rather than a shrug.
@@ -8299,7 +8308,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // `_inst_atomic` call inside `_inst_files` (now at a line far below), it is still stale in
       // fact, and it stays exactly where it was cited. The other four are unmoved, in the dump
       // and in the order it prints them. The `**Files:**` pass books the same departure below.
-      'ccd/ccrc': 4,
+      // 4 -> 5 at review 179's fix round 1 (S6-R11, from the dumped failure sets of 751eb5da and this tree):
+      // `plan:3326`'s `ccd/ccrc:5217` FAILS AGAIN, and it is the coincidence above ending, not a new
+      // citation and not a repair. The instrument's dumps show it: at the base `:5217` is `_exp_env_write`'s
+      // comment naming `_inst_atomic`'s discipline (a token the frozen clause quotes); at this tip this
+      // range's growth of `ccd/ccrc` has slid a line under it that names nothing the clause quotes
+      // (`# ── ARMED HERE, IN THE SAME ARM THAT INSTALLED IT`, inside `_exp_…`'s Darwin arm). Still
+      // stale in fact, still frozen, still counted. The other four are unmoved. The `**Files:**` pass books
+      // the same departure below, and the D-2849 pin's exception set is empty again.
+      'ccd/ccrc': 5,
       // `shared/api.ts` ENTRY REMOVED, 1 -> 0, by the board-placement branch
       // (#137): its own additions moved this file's lines, and repairing the
       // README anchors it broke re-pointed BY CONTENT the one anchor that was
@@ -8504,7 +8521,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 197 -> 196 at fix round 3: the same +1 the `'ccd/ccd'` entry above
     // carries (one coincidental pass), and nothing else moved.
     // -> 194 at the centralised-update W6 versioned-installs wave (S6-R11: the note above the map names what moved).
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(194);
+    // -> 195 at review 179's fix round 1 (S6-R11: `plan:3326 ccd/ccrc:5217` fails again; the note above the map names it).
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(195);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8656,6 +8674,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `ccd/ccd` 26620 -> 26684 lines; `ccd/ccrc` 16578 -> 18802 lines; `server/test/single-definition.test.ts`
     // 3890 -> 3915 lines. Nothing entered. Left: `ccd/ccd:4006-4035`, `ccd/ccrc:5217`. Measured by diffing the
     // dumped failure sets of the two trees, never retyped. No D-number.
+    // RE-MEASURED at the centralised-update W6 versioned-installs wave, S6-R11 (base 751eb5da, tip 56b8e80a).
+    // The compaction-card spec and plan are byte-identical at both, checked; README changed in prose that
+    // cites nothing and in the anchors re-anchored BY CONTENT beside it (its own entry is empty at the tip);
+    // so nothing was re-pointed and no rule changed. What moved is this range's growth under frozen anchors:
+    // `ccd/ccd` 26684 -> 27014 lines; `ccd/ccrc` 18802 -> 19414 lines; `server/test/ccd-workspaces.test.ts`
+    // 1607 -> 1607 lines; `server/test/ccd-ws-reap.test.ts` 2860 -> 2860 lines; `server/test/single-
+    // definition.test.ts` 3915 -> 3950 lines; `shared/api.ts` 8843 -> 8851 lines. Entered: `ccd/ccrc:5217`.
+    // Nothing left. Measured by diffing the dumped failure sets of the two trees, never retyped. No D-number.
     expect(set, 'a **Files:** reference stopped naming what its clause quotes — re-measure (D-2849)')
       .toEqual([
         // RE-MEASURED at the tree this ships in (fix round 4). The citation
@@ -8686,6 +8712,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/session-hook.sh:1175-1177',
         'deploy/deploy.sh:560',
         'deploy/deploy.sh:629',
+        // ENTERS at review 179's fix round 1 (S6-R11): `ccd/ccrc:5217` fails again, see the census entry.
+        'ccd/ccrc:5217',
         'ccd/ccrc:6531',
         'ccd/ccrc:7129-7130',
       ]);
@@ -8727,7 +8755,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // far below) and lives in the 24,688-byte freeze, so it is counted, never repaired. The constant keeps
     // its history-bearing name; its meaning here is "stopped failing to this pass, not repaired", and the
     // day `:5217` fails again THIS entry goes with it and the assertion below reds asking to be read.
-    const D2849_INVISIBLE_SINCE_PR136: string[] = ['ccd/ccrc:5217'];
+    // EMPTY AGAIN at review 179's fix round 1 (S6-R11), by the mechanism the paragraph above says: this
+    // round's growth of `ccd/ccrc` moved `:5217` off the comment that named `_inst_atomic`'s discipline,
+    // it fails this pass again (the instrument's `d2849` dump lists all five of D2849 in the set), and the
+    // assertion below went red asking to be read. All five are visible; the exception set is empty.
+    const D2849_INVISIBLE_SINCE_PR136: string[] = [];
     expect(D2849.filter((k) => set.includes(k)),
       'the five references Task 10\'s own **Files:** paragraph falsifies (D-2849, and its 2026-09-17 append)')
       .toEqual(D2849.filter((k) => !D2849_INVISIBLE_SINCE_PR136.includes(k)));

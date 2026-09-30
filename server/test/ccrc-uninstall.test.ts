@@ -1112,6 +1112,55 @@ describe('ccrc backup: update\'s step 2 standalone, with CCRC_BACKUP_KEEP prunin
   });
 });
 
+describe('ccrc backup: CCRC_BACKUP_KEEP is one bounded number, the same validator as CCRC_VERSIONS_KEEP (F6)', () => {
+  const PLANTED = ['20250101-000000', '20250102-000000', '20250103-000000'];
+  const WHY = (v: string): string => `CCRC_BACKUP_KEEP='${v}' is not a whole number from 0 to 9999`;
+  const box = (prefix: string): string => {
+    const home = mkTmp(prefix);
+    plantInstalledBox(home);
+    for (const ts of PLANTED) mkdirSync(join(home, 'ccrc-backups', ts), { recursive: true });
+    return home;
+  };
+
+  it('18446744073709551615 wraps in arithmetic and used to prune EVERY backup, the new one included: it is refused and nothing is pruned', () => {
+    const home = box('ccrc-backup-keep-wrap-');
+    const r = runVerb(home, 'backup', [], { CCRC_BACKUP_KEEP: '18446744073709551615' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toContain(`ccrc: ${WHY('18446744073709551615')} — nothing was pruned`);
+    // the three planted ones, and this run's own (the backup is taken before the prune is asked)
+    const left = readdirSync(join(home, 'ccrc-backups')).sort();
+    expect(left.slice(0, 3)).toEqual(PLANTED);
+    expect(left).toHaveLength(4);
+  });
+
+  it('controls: 9999 works, 10000 is refused, a non-number is refused naming its value, and 0002 is two', () => {
+    let home = box('ccrc-backup-keep-9999-');
+    let r = runVerb(home, 'backup', [], { CCRC_BACKUP_KEEP: '9999' });
+    expect(r.code, r.stderr).toBe(0);
+    expect(readdirSync(join(home, 'ccrc-backups'))).toHaveLength(4);
+    home = box('ccrc-backup-keep-10000-');
+    r = runVerb(home, 'backup', [], { CCRC_BACKUP_KEEP: '10000' });
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toContain(`ccrc: ${WHY('10000')} — nothing was pruned`);
+    expect(readdirSync(join(home, 'ccrc-backups'))).toHaveLength(4);
+    home = box('ccrc-backup-keep-word-');
+    r = runVerb(home, 'backup', [], { CCRC_BACKUP_KEEP: 'many\x1b[0m' });
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toContain(`ccrc: ${WHY('many?[0m')} — nothing was pruned`);
+    // `08` in bash arithmetic is an invalid octal number: normalised, it is eight and prunes nothing here.
+    home = box('ccrc-backup-keep-octal-');
+    r = runVerb(home, 'backup', [], { CCRC_BACKUP_KEEP: '0008' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).not.toMatch(/value too great for base/);
+    expect(readdirSync(join(home, 'ccrc-backups'))).toHaveLength(4);
+    home = box('ccrc-backup-keep-zeros-');
+    r = runVerb(home, 'backup', [], { CCRC_BACKUP_KEEP: '0002' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readdirSync(join(home, 'ccrc-backups')).sort().slice(0, 1)).toEqual(['20250103-000000']);
+    expect(readdirSync(join(home, 'ccrc-backups'))).toHaveLength(2);
+  });
+});
+
 describe('ccrc logs: a thin, role-aware journalctl passthrough', () => {
   itLinux('defaults to ccrc.service and passes -f / -n through — the recorded argv is the pin', () => {
     const home = mkTmp('ccrc-logs-server-');
