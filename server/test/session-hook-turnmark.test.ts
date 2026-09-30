@@ -300,6 +300,12 @@ describe('the turn marker (§5.1)', () => {
     expect(turnMark()).toMatchObject({ bg: 3, bgKinds: 'ab,shell', bgIds: '' });
   });
 
+  it('an id or type ending in a newline cannot end the field early: the newline id is refused, the later id survives', () => {
+    // Oniguruma's `$` matches before a final newline, which would pass `b1\n` and let `read -r` cut bgIds at `b1`.
+    run({ hook_event_name: 'Stop', background_tasks: [{ id: 'b1\n', type: 'shell\n' }, { id: 'b2', type: 'monitor' }] });
+    expect(turnMark()).toMatchObject({ bg: 2, bgKinds: 'monitor,shell', bgIds: 'b2' });
+  });
+
   it('40 aliases fit WHOLE under 200 bytes: no half alias, no trailing comma (alias-list-fits-whole-aliases)', () => {
     const L = 'abcdefghijklmnopqrstuvwxyz';
     // Letters only: the writer deletes every character outside [a-z_-], so digits would collide.
@@ -340,6 +346,38 @@ describe('the turn marker (§5.1)', () => {
     }
     run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: '' });
     expect(turnMark().state, 'agent_id "" is the main thread').toBe('working');
+  });
+
+  it('the first main PreToolUse after a Stop writes working: fresh at and turnAt, stopAt kept (first-tool-event-after-done)', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'Stop' });
+    const done = turnMark();
+    expect(done.state).toBe('done');
+    run({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'true' } });
+    const m = turnMark();
+    expect(m).toMatchObject({ sessionId: 'uuid-1', state: 'working', event: 'PreToolUse', stopAt: done.stopAt });
+    expect(m.at).toBeGreaterThan(done.at);
+    expect(m.turnAt).toBe(m.at);
+  });
+
+  it('the first main PostToolUse after a StopFailure writes working (first-tool-event-after-failed)', () => {
+    run({ hook_event_name: 'StopFailure', error: 'server_error' });
+    const failed = turnMark();
+    expect(failed.state).toBe('failed');
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+    const m = turnMark();
+    expect(m).toMatchObject({ sessionId: 'uuid-1', state: 'working', event: 'PostToolUse', stopAt: failed.stopAt });
+    expect(m.at).toBeGreaterThan(failed.at);
+    expect(m.turnAt).toBe(m.at);
+  });
+
+  it('a SUBAGENT PreToolUse after a Stop leaves the done line byte-identical', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    run({ hook_event_name: 'Stop' });
+    const done = turnRaw();
+    run({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, agent_id: 'a-1' });
+    expect(turnRaw()).toBe(done);
+    expect(JSON.parse(done).state).toBe('done');
   });
 
   it('the env session id wins; an empty env falls back to the payload id, cleaned (marker-identity-from-env)', () => {

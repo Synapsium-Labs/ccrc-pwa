@@ -2909,7 +2909,7 @@ case "$event" in
     # `is_interrupt` is no longer read: no installed lane's Stop carries it (spec §5.1). `interrupted` stays false
     # here; the Subagent branch below still carries an older file's value forward. The fork it paid measures
     # `background_tasks` instead: bg -1 unless it is an ARRAY (bg-kinds-only-from-an-array), each alias cleaned alone.
-    { read -r bg; read -r bgk; read -r bgi; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | (if $a == null then -1 else ($a|length) end), ([$a[]? | objects | .type | strings | ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}$"))] | .[0:8] | join(","))' <<<"$payload" 2>/dev/null) ;;
+    { read -r bg; read -r bgk; read -r bgi; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | (if $a == null then -1 else ($a|length) end), ([$a[]? | objects | .type | strings | ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}\\z"))] | .[0:8] | join(","))' <<<"$payload" 2>/dev/null) ;;
   StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
   *) exit 0 ;;
@@ -3014,8 +3014,9 @@ if [[ -z "$paid" && -e "$REG/$id.generation" ]]; then
   esac
   if [[ -n "$tmkind" ]]; then hts="${hcat:-$(_hook_epoch_ms)}"; _hook_turn_mark "$tmkind" || true; fi
 fi
-# StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm only
-# raised the flag (stopfailure-sets-a-flag), and nothing below may run for it.
+# StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm raised
+# the flag and read `err` for the marker above (stopfailure-sets-a-flag), and nothing
+# below may run for it.
 [[ -n "$stopfail" ]] && exit 0
 
 f="$REG/$id.hookstate.json"
