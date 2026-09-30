@@ -8867,3 +8867,10 @@ export function rollbackTargetRefusal(
   if (release === undefined) return 'unknown-tag';
   return release.bundleListed !== true && provenance === 'verified' ? 'no-bundle' : null;
 }
+
+/** Wave 8 item F4: the words a lease settles with when its node reports `done` of the tag and runs it. Spelled
+ *  ONCE: the inventory sweep writes them (server/src/update/inventory.ts) and the PWA recognises them to show a
+ *  finished move as one line (pwa/src/screens/SettingsScreen.tsx). */
+export function settledDoneDetail(tag: string): string {
+  return `done: ${tag}`;
+}

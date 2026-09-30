@@ -7,7 +7,8 @@ import { describe, expect, it } from 'vitest';
 import type { NodeWire, ReleaseWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import {
-  moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, moveTarget, planMove, rollbackBlockers, type MoveIntent,
+  moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, moveTarget, planMove, rollbackBlockers, rollbackHowText,
+  type MoveIntent,
 } from '../src/fleet/movePlan';
 
 const T0 = Date.UTC(2026, 8, 23, 12, 0, 0);
@@ -149,6 +150,13 @@ describe('moveHeadline / moveLines / moveTarget — what the sheet says', () => 
     expect(moveHeadline({ scope: 'node', direction: 'rollback', nodeId: FLEET_ID, to: 'v0.0.8' })).toBe('Roll back to v0.0.8');
     expect(moveTarget(UP)).toBe('v0.0.10');
     expect(moveTarget(DOWN)).toBe('v0.0.8');
+  });
+
+  it('rollbackHowText: the flip-or-download sentence, makes no per-node claim (wave 8 item F3, D-3591)', () => {
+    const s = rollbackHowText('v0.0.8');
+    expect(s).toContain('kept copy of v0.0.8');
+    expect(s).toContain('downloads v0.0.8 and re-installs it');
+    expect(s).toContain('it can be refused or can fail');
   });
 
   it('lines: numbered in plan order, current → target; an unknown role, an unversioned build and an unread stamp each say so', () => {

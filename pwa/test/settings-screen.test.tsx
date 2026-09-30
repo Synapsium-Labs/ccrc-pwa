@@ -23,8 +23,8 @@ import { LOOPBACK_HOSTS } from '../../shared/base-url';
 import {
   ACK_UNREADABLE_TEXT, AUTO_LABELS, CHANNEL_SENTENCES, MACOS_UNMANAGED_TEXT, NOTIFY_LABELS, SettingsScreen,
   UNARMED_EXPOSURE_TEXT, UNCONFIRMED_TEXT, autoGateMissing, canAck, catalogueLine, catalogueReasonText, clockTime,
-  currentIsAmber, currentText, dayClock, nodeStateLine, reachabilityLine, refusedLine, releaseDate,
-  releaseDirection, requestLine, sortReleases, unarmedExposure, verifiedAt,
+  currentIsAmber, currentText, dayClock, finishedLine, nodeStateLine, reachabilityLine, refusedLine, releaseDate,
+  releaseDirection, releaseRunningText, requestLine, resolveDetailLine, sortReleases, unarmedExposure, verifiedAt,
 } from '../src/screens/SettingsScreen';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
@@ -652,7 +652,8 @@ describe('SettingsScreen — the release list: helpers', () => {
   it('releaseDirection: Roll back only when EVERY node runs a newer tag, compared by semver across v0.0.9/v0.0.10', () => {
     const both10 = [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp('v0.0.10') })];
     expect(releaseDirection('v0.0.9', both10)).toBe('rollback');          // string order would call v0.0.10 older
-    expect(releaseDirection('v0.0.10', both10)).toBe('install');          // equal is not newer
+    // Wave 8 item F2 (D-3591): every managed node running the tag is now 'running', not 'install'.
+    expect(releaseDirection('v0.0.10', both10)).toBe('running');          // equal — every node runs it already
     expect(releaseDirection('v0.0.9', [both10[0]!, t8Server({ current: t8Stamp(undefined) })])).toBe('install');
     expect(releaseDirection('v0.0.9', [both10[0]!, t8Server({ current: null, measuredAt: null })])).toBe('install');
     expect(releaseDirection('v0.0.9', [])).toBe('install');
@@ -665,6 +666,29 @@ describe('SettingsScreen — the release list: helpers', () => {
     expect(releaseDirection('v0.0.10', [...linux12, mac9])).toBe('rollback');
     expect(releaseDirection('v0.0.10', [mac9])).toBe('install');           // nothing managed to roll back
     expect(releaseDirection('v0.0.10', [])).toBe('install');
+  });
+
+  it("releaseDirection: 'running' is every MANAGED node on the tag by last measurement — a lagging Mac does not stop it, no tag is never running (wave 8 item F2, D-3591)", () => {
+    const both10 = [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp('v0.0.10') })];
+    const both9 = [t8Node({ current: t8Stamp('v0.0.9') }), t8Server({ current: t8Stamp('v0.0.9') })];
+    expect(releaseDirection('v0.0.10', both10)).toBe('running');
+    expect(releaseDirection('v0.0.10', both9)).toBe('install');
+    // EVERY managed node, not just one: a mixed pair (one on the tag, one not) is 'install', never 'running'.
+    expect(releaseDirection('v0.0.10', [both10[0]!, both9[1]!])).toBe('install');
+    const mac9 = t8Node({ nodeId: T8_NODE_C, label: 'mac', os: 'darwin', current: t8Stamp('v0.0.9') });
+    expect(releaseDirection('v0.0.10', [...both10, mac9])).toBe('running');   // D-3410: the Mac is not managed
+    expect(releaseDirection('v0.0.10', [mac9])).toBe('install');              // nothing managed to be running
+    expect(releaseDirection('vnext', both10)).toBe('install');                // not a release tag at all
+  });
+
+  it('releaseRunningText names the set it measured: reachable count, and a macOS node on another version (wave 8 item F2, D-3591)', () => {
+    const both10 = [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp('v0.0.10') })];
+    expect(releaseRunningText('v0.0.10', both10)).toBe('Running on every managed node');
+    const oneAway = [both10[0]!, t8Server({ current: t8Stamp('v0.0.10'), reachable: false })];
+    expect(releaseRunningText('v0.0.10', oneAway)).toContain('1 of them not reachable, as last measured');
+    const mac9 = t8Node({ nodeId: T8_NODE_C, label: 'mac', os: 'darwin', current: t8Stamp('v0.0.9') });
+    expect(releaseRunningText('v0.0.10', [...both10, mac9])).toContain('macOS nodes are not moved from here');
+    expect(releaseRunningText('v0.0.10', [...both10, mac9])).not.toContain('not reachable');
   });
 
   it('refusedLine: distinct refusing nodes out of the live count; null with no refusal; a malformed element is ignored', () => {
@@ -766,13 +790,14 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
     expect(within(list).getAllByRole('listitem').map((li) => li.getAttribute('data-tag'))).toEqual(['v0.0.10', 'v0.0.9']);
   });
 
-  it('names the move by direction: Roll back when every node runs a newer tag, Install otherwise', async () => {
+  it('names the move by direction: Roll back when every node runs a newer tag, Install otherwise, Running when every node is already there (wave 8 item F2, D-3591)', async () => {
     const list = await renderList(
       [t8Release('v0.0.10'), t8Release('v0.0.9')],
       [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp('v0.0.10') })],
     );
     expect(within(rowOf(list, 'v0.0.9')).getByRole('button', { name: 'Roll back' })).toBeInTheDocument();
-    expect(within(rowOf(list, 'v0.0.10')).getByRole('button', { name: 'Install' })).toBeInTheDocument();
+    expect(within(rowOf(list, 'v0.0.10')).queryByRole('button')).toBeNull();
+    expect(within(rowOf(list, 'v0.0.10')).getByText('Running on every managed node')).toHaveClass('settings-release-running');
   });
 
   it('an unversioned node makes the move Install, never Roll back', async () => {
@@ -788,8 +813,10 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
       [t8Release('v0.0.10'), t8Release('v0.0.9'), t8Release('v0.0.8', { channel: 'dev' })],
       [t8Node({ current: t8Stamp('v0.0.9') }), t8Server({ current: t8Stamp('v0.0.9') })],
     );
+    // v0.0.9 is what both nodes run already: no button there, the running row instead (wave 8 item F2).
+    expect(within(rowOf(list, 'v0.0.9')).queryByRole('button')).toBeNull();
     const buttons = within(list).getAllByRole('button');
-    expect(buttons.map((b) => b.textContent)).toEqual(['Install', 'Install', 'Roll back']);
+    expect(buttons.map((b) => b.textContent)).toEqual(['Install', 'Roll back']);
     for (const b of buttons) {
       expect(b).not.toBeDisabled();
       expect(b).not.toHaveAttribute('aria-describedby');
@@ -907,6 +934,17 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
     const row = rowOf(list, 'v0.0.10');
     expect(within(row).getByRole('button', { name: 'Roll back' })).not.toBeDisabled();
     expect(within(row).queryByTestId('settings-release-blocked')).toBeNull();
+  });
+
+  it('a running row whose tag is unbundled, on a verified node, shows neither a button nor a blocked line — blockers are a rollback-only computation (wave 8 item F2, D-3591)', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.10', { bundleListed: false })],
+      [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp('v0.0.10') })],   // verified (default), already running it
+    );
+    const row = rowOf(list, 'v0.0.10');
+    expect(within(row).queryByRole('button')).toBeNull();
+    expect(within(row).queryByTestId('settings-release-blocked')).toBeNull();
+    expect(within(row).getByText('Running on every managed node')).toHaveClass('settings-release-running');
   });
 
   it('badges the channel (dev / stable, none for an unknown one) and marks a yanked release', async () => {
@@ -1062,6 +1100,53 @@ describe('SettingsScreen — the node inventory: helpers', () => {
     expect(nodeStateLine({ ...t9Node(), update: undefined } as unknown as NodeWire), 'update absent').toBe('unknown');
   });
 
+  it('finishedLine: merges only when update.detail is EXACTLY what the settle wrote for a done/failed/reverted report of the lease\'s own target (wave 8 item F4, D-3591)', () => {
+    const T = T9_T0 + 3 * T9_MIN;
+    const done = t9Node({
+      update: { state: 'idle', target: 'v0.0.49', startedAt: T9_T0, detail: 'done: v0.0.49' },
+      report: { phase: 'done', target: 'v0.0.49', startedAt: T9_T0, updatedAt: T, detail: null },
+    });
+    const doneLine = finishedLine(done, T9_T0 + 10 * T9_MIN);
+    expect(doneLine).not.toBeNull();
+    expect(doneLine).toContain('done v0.0.49');
+    expect(doneLine).toContain(dayClock(T, T9_T0 + 10 * T9_MIN));
+
+    // A failed report whose OWN detail equals update.detail: the lead is not doubled ("failed — failed"),
+    // because the lease state IS the report's phase here.
+    const failed = t9Node({
+      update: { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: 'health check did not pass' },
+      report: { phase: 'failed', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T, detail: 'health check did not pass' },
+    });
+    const failedLine = finishedLine(failed, T9_T0 + 10 * T9_MIN);
+    expect(failedLine).not.toBeNull();
+    expect(failedLine).toContain('health check did not pass');
+    expect(failedLine).not.toMatch(/failed — failed/);
+
+    // Controls, every one null:
+    // (a) update.detail holds the ack's own words, not the settle's.
+    expect(finishedLine(t9Node({
+      update: { state: 'idle', target: 'v0.0.49', startedAt: T9_T0, detail: 'acknowledged' },
+      report: { phase: 'done', target: 'v0.0.49', startedAt: T9_T0, updatedAt: T, detail: null },
+    }), T9_T0), 'ack words, not the settle\'s').toBeNull();
+    // (b) a FAILED report whose detail equals update.detail, but whose OWN target differs from update.target.
+    expect(finishedLine(t9Node({
+      update: { state: 'failed', target: 'v0.0.11', startedAt: T9_T0, detail: 'health check did not pass' },
+      report: { phase: 'failed', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T, detail: 'health check did not pass' },
+    }), T9_T0), 'target mismatch').toBeNull();
+    // (c) a busy lease.
+    expect(finishedLine(t9Node({
+      update: { state: 'applying', target: 'v0.0.10', startedAt: T9_T0, detail: null },
+      report: { phase: 'fetching', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T, detail: null },
+    }), T9_T0), 'busy').toBeNull();
+    // (d) an in-flight phase.
+    expect(finishedLine(t9Node({
+      update: { state: 'idle', target: null, startedAt: null, detail: null },
+      report: { phase: 'fetching', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T, detail: null },
+    }), T9_T0), 'in-flight phase').toBeNull();
+    // (e) no report.
+    expect(finishedLine(t9Node({ report: null }), T9_T0), 'no report').toBeNull();
+  });
+
   it('reachabilityLine: only reachable === false speaks; an absent field claims nothing', () => {
     expect(reachabilityLine(t9Node(), T9_T0)).toBeNull();
     expect(reachabilityLine(t9Node({ reachable: false, unreachableSince: T9_T0 - 5 * T9_MIN }), T9_T0))
@@ -1075,19 +1160,30 @@ describe('SettingsScreen — the node inventory: helpers', () => {
   it("spells spec §13's Darwin sentence", () => {
     expect(MACOS_UNMANAGED_TEXT).toBe('macOS: not centrally managed');
   });
+
+  it('resolveDetailLine: qualified only while lastOkAt is null or the node is unreachable, otherwise verbatim (wave 8 item F1, D-3590)', () => {
+    const DETAIL = 'runs v0.0.9, the newest eligible release on stable in the catalogue as last read';
+    expect(resolveDetailLine(DETAIL, t9Node(), T9_T0)).toBe(DETAIL);
+    expect(resolveDetailLine(DETAIL, t9Node(), null))
+      .toBe(`${DETAIL} (the catalogue has not answered since the server started)`);
+    expect(resolveDetailLine(DETAIL, t9Node({ reachable: false }), T9_T0))
+      .toBe(`${DETAIL} (this node is not reachable; last measured)`);
+  });
 });
 
 describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §13)', () => {
-  const view = (nodes: NodeWire[], releases: ReleaseWire[] = [t9Release('v0.0.9')]): UpdatesView => ({
-    catalogue: { lastOkAt: T9_T0, lastError: null },
+  const view = (
+    nodes: NodeWire[], releases: ReleaseWire[] = [t9Release('v0.0.9')], catalogue: CatalogueState = { lastOkAt: T9_T0, lastError: null },
+  ): UpdatesView => ({
+    catalogue,
     releases,
     nodes,
     intent: [{ scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: T9_T0, setBy: 'test' }],
   });
   /** Render the screen (with the one toast subscriber) over one answer and return the inventory list — every case
    *  reads INSIDE it, because the release list (Task 8) renders the same tags on the same screen. */
-  const renderNodes = async (nodes: NodeWire[], releases?: ReleaseWire[]) => {
-    const updates = vi.spyOn(api, 'updates').mockResolvedValue(view(nodes, releases));
+  const renderNodes = async (nodes: NodeWire[], releases?: ReleaseWire[], catalogue?: CatalogueState) => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(view(nodes, releases, catalogue));
     render(<><ToastHost /><SettingsScreen /></>);
     const list = await screen.findByRole('list', { name: 'Nodes' });
     return { list, updates };
@@ -1366,6 +1462,72 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     expect(declValue(ruleIn(css, '.settings-node-label'), 'overflow-wrap')).toBe('anywhere');
     // The row's three buttons carry Task 8's pair; its compound rule is what keeps them inline.
     expect(declValue(ruleIn(css, '.btn-ghost.settings-move'), 'width')).toBe('auto');
+  });
+
+  // Wave 8 item F1 (D-3590): a node at its own floor, on the newest eligible release, renders the resolver's own
+  // atNewest sentence — never "up to date" — qualified while lastOkAt is null/unplaceable or the node is
+  // unreachable. `resolveDetail` is a hand-copied fixture string here, never the real atNewest wording — the
+  // pin is on the QUALIFIER, not on resolve.ts's own text (see server/test/update-resolve.test.ts for that).
+  const AT_NEWEST = 'runs v0.0.9, the newest eligible release on stable in the catalogue as last read';
+
+  it('a node at its own floor shows the resolver\'s sentence unqualified when the catalogue answered and the node is reachable (wave 8 item F1)', async () => {
+    const { list } = await renderNodes([t9Node({ desiredTag: null, resolveDetail: AT_NEWEST })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(AT_NEWEST)).toHaveClass('settings-node-detail');
+    expect(row.textContent).not.toMatch(/up to date/i);
+  });
+
+  it('qualifies the same sentence when the catalogue has not answered since the server started (lastOkAt null, wave 8 item F1)', async () => {
+    const { list } = await renderNodes(
+      [t9Node({ desiredTag: null, resolveDetail: AT_NEWEST })], undefined, { lastOkAt: null, lastError: null },
+    );
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(`${AT_NEWEST} (the catalogue has not answered since the server started)`)).toBeInTheDocument();
+    expect(row.textContent).not.toMatch(/up to date/i);
+  });
+
+  it('qualifies the same sentence for an UNPLACEABLE lastOkAt exactly as for a null one (wave 8 item F1)', async () => {
+    const { list } = await renderNodes(
+      [t9Node({ desiredTag: null, resolveDetail: AT_NEWEST })], undefined, { lastOkAt: 1e20, lastError: null },
+    );
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(`${AT_NEWEST} (the catalogue has not answered since the server started)`)).toBeInTheDocument();
+    expect(row.textContent).not.toMatch(/up to date/i);
+  });
+
+  it('qualifies the same sentence when the node is not reachable, last measured (wave 8 item F1)', async () => {
+    const { list } = await renderNodes([t9Node({ desiredTag: null, resolveDetail: AT_NEWEST, reachable: false })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(`${AT_NEWEST} (this node is not reachable; last measured)`)).toBeInTheDocument();
+    expect(row.textContent).not.toMatch(/up to date/i);
+  });
+
+  // Wave 8 item F4 (D-3591): a finished move — a settled lease whose update.detail is exactly what the settle
+  // wrote for the report that named it — merges the request/state/detail lines into ONE dated line.
+  it('a finished done move merges the state and detail lines into one, dated (wave 8 item F4)', async () => {
+    const T = T9_T0 + 3 * T9_MIN;
+    const { list } = await renderNodes([t9Node({
+      update: { state: 'idle', target: 'v0.0.10', startedAt: T9_T0, detail: 'done: v0.0.10' },
+      report: { phase: 'done', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T, detail: null },
+    })]);
+    const row = rowOf(list, T9_NODE_A);
+    const finished = within(row).getByTestId('settings-node-finished');
+    expect(finished).toHaveClass('settings-node-detail');
+    expect(finished.textContent).toContain('done v0.0.10');
+    expect(finished.textContent).toContain(dayClock(T, Date.now()));
+    expect(within(row).getAllByTestId('settings-node-finished')).toHaveLength(1);
+  });
+
+  it('an ack (update.detail not the settle\'s own words) keeps its two separate lines, never merged (wave 8 item F4)', async () => {
+    const T = T9_T0 + 3 * T9_MIN;
+    const { list } = await renderNodes([t9Node({
+      update: { state: 'idle', target: 'v0.0.10', startedAt: T9_T0, detail: 'acknowledged' },
+      report: { phase: 'done', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T, detail: null },
+    })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).queryByTestId('settings-node-finished')).toBeNull();
+    expect(within(row).getByText('acknowledged')).toHaveClass('settings-node-detail');
+    expect(within(row).getByText('idle — done')).toHaveClass('settings-node-detail');
   });
 });
 

@@ -118,6 +118,15 @@ export function moveHeadline(intent: MoveIntent): string {
   return intent.direction === 'update' ? `Update ${intent.tag}` : `Roll back to ${intent.to}`;
 }
 
+/** Wave 8 item F3: how a rollback happens, said on every rollback sheet with a node in it. True on every
+ *  cmd_rollback path: an intact kept copy flips; otherwise a re-install downloads the tag. Either can be refused
+ *  (by the server before any spawn — a 409 shown in this sheet or a notice — or by the node, on its row) or can fail
+ *  (a gate that fails is not restored, `_upd_rollback_no_restore`; a kept spine that does not complete). It makes no
+ *  per-node claim: the kept state is not inventoried. */
+export function rollbackHowText(to: string): string {
+  return `A rollback flips each node to its kept copy of ${to} when that copy is intact; otherwise the node downloads ${to} and re-installs it. Either way it can be refused or can fail, and the reason is shown: here or in a notice when the server refuses the move, and on the node's row when the node does.`;
+}
+
 /** What a node runs, in the words the inventory row keeps apart (wave 3's currentText): a tag, an unversioned
  *  build (a stamp that was read and carries none), or a stamp that was never read — never folded together. */
 function currentWord(n: NodeWire): string {

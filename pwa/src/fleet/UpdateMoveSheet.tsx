@@ -46,7 +46,7 @@ import type { MoveRequestAnswer } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
 import { ApiError, api, moveSkipText, updateErrorText } from '../lib/api';
-import { moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, type PlannedMove } from './movePlan';
+import { moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, rollbackHowText, type PlannedMove } from './movePlan';
 import './fleet.css';
 
 export const MOVE_UNREADABLE_TEXT = "Requested — the server's answer could not be read; the screen will re-check.";
@@ -243,6 +243,9 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
           <ol className="update-move-list" role="list" aria-label="Nodes this moves, in order">
             {plan.nodes.map((n, i) => <li key={n.nodeId} className="update-move-node">{lines[i]}</li>)}
           </ol>
+        )}
+        {plan.intent.direction === 'rollback' && lines.length > 0 && (
+          <p className="qc-consequence">{rollbackHowText(plan.intent.to)}</p>
         )}
         <div className="qc-actions">
           {lines.length > 0 && !answered && (
