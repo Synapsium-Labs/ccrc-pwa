@@ -877,7 +877,7 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **The stakes:** auto on dev installs its merge on both boxes within about 35 min. B's prune takes effect from
     the release after that, because the update INTO wave 8 runs v0.0.49's script.
 
-- **2026-09-30 21:30 UTC — wave 8's wave-done at `1eb9b011` (PR #219); review run 196 dispatched.**
+- **2026-09-30 21:20 UTC — wave 8's wave-done (mail at 21:10:56) at `1eb9b011` (PR #219); review run 196 dispatched.**
   - **Re-measured:** 15 commits, all by the noreply identity, 38 files, +3877/−236. The branch merges `main` at
     `1f9fa22d`. That merge's two hand resolutions, in `server/test/ccrc-update.test.ts` and `shared/api.ts`, keep
     both sides of an end-of-file append (remerge-diff). Run 182's first advance to `awaiting-review` was refused
