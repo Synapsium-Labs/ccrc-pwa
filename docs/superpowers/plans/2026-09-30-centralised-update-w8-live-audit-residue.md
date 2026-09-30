@@ -628,7 +628,7 @@ Check that `moveSkipText`'s parameter (`MoveSkipWhy | (string & {})`) accepts `'
 | M-C8 | `fleetAsk` excludes a known-refused rollback | drop `fleetAsk`'s `&& !knownRefusedAsk(v)` | 2(a), 2(d), 5(b) | `update-dispatch`, `update-converge` | pending |
 | M-C8b | `fleetAuto` excludes a known-refused rollback | drop `fleetAuto`'s `&& !knownRefusedAsk(v)` | 2(a), 5(b) (2(d) stays green: it has no auto; that is its control) | `update-dispatch`, `update-converge` | pending |
 | M-C9 | the remedy names commands that exist | `REFUSAL_SENTENCE['no-bundle']`'s remedy → `ccrc rollback --to ${t} --allow-unsigned` | 1(i) | `update-dispatch` | pending |
-| M-C10 | `skipWord` refuses `no-bundle` | drop the `r === 'no-bundle'` clause | none: defence in depth, unreachable for an update move (the predicate is rollback-only). No pin claimed | n/a | not run |
+| M-C10 | `skipWord` refuses `no-bundle` | drop the `r === 'no-bundle'` clause | pin: `tsc TS2322` against `MoveSkipWhy`; red (fix round 1 item 8 / review 196 F9, measured): `src/update/routes.ts(334,3): error TS2322: Type '"agent-predates-update-op" \| "floor-unread" \| "no-bundle" \| "no-detach-cap" \| "not-newer" \| "refused-by-node" \| "stamp-unread" \| "unknown-tag"' is not assignable to type 'MoveSkipWhy'.` | `tsc --noEmit` (CI's typecheck job) | measured |
 | M-C11 | no reason line on a Darwin row | `NodeItem`: drop `darwin \|\|` from `previousRefusal` | 7(e) | `settings-screen` | pending |
 | M-C12 | the PWA's no-bundle words carry the tag | `rollbackBlockedText` uses `moveSkipText(w)` for every word | 7(a)'s command and no-`<` assertions | `settings-screen` | pending |
 
