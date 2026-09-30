@@ -5613,6 +5613,7 @@ import {
 
 Append at the END of the file:
 ```ts
+
 // ── Wave 2's vocabulary (plan Task 10; design 2026-09-29 §5.1, §5.2, §10) ─────────────────────────────────────
 const W2_H = 3_600_000;
 const W2_MIN = 60_000;
@@ -5876,6 +5877,7 @@ import type { StallW2Facts } from '../src/coord/stall.js';
 ```
 Append at the END of the file:
 ```ts
+
 // ── Wave 2's vocabulary in the facts (plan Task 10) ──────────────────────────────────────────────────────────
 describe('wave 2 vocabulary: a self-wake notice is the watch’s own, never mail on the run', () => {
   const selfWake = (subject: string): StallMailRow => mailRow(3000, NOW - H, 'operator', WORKER, 'status', subject);
@@ -9942,7 +9944,7 @@ New:
 
 - [ ] **Step 5: `stallPushText`: replace Task 11's minimal wave-2 cases with the texts**
 
-In `stallPushText`'s `switch (n.arm)`, delete the NINE lines Task 11 Step 6 inserted directly ABOVE `    case 'coord-ball': {`, from `    case 'frozen':` through its `` return { title: `⚠ ${n.arm} › ${ws}`, … `` line: seven `case` labels (`frozen`, `dead`, `failed`, `coord-deaf`, `mail-stuck`, `marker-unreadable` and `orphan-d`), the one `// Wave 2's operator pushes, minimal until their wording lands: …` comment line, and that one `return` line. Leave `    case 'coord-ball': {` and its block as they are. Then, directly after the `coord-ball` block, which ends:
+In `stallPushText`'s `switch (n.arm)`, delete the NINE lines Task 11 Step 6 inserted directly ABOVE `    case 'coord-ball': {`, from `    case 'frozen':` through its `` return { title: `⚠ ${n.arm} › ${ws}`, … `` line: seven `case` labels (`frozen`, `dead`, `failed`, `coord-deaf`, `mail-stuck`, `marker-unreadable` and `orphan-d`), the one `// Wave 2's operator pushes, minimal until their wording lands: …` comment line, and that one `return` line. Leave `    case 'coord-ball': {` and its block as they are. Then KEEP the `coord-ball` block unchanged, and directly AFTER its last line (the anchor below, which stays; this is an insert-after, not a replace) insert the cases. The anchor, unchanged:
 ```ts
       return {
         title: `⚠ waiting › ${ws}`,
@@ -12987,7 +12989,7 @@ Nothing else in the plan consumes `stallBackoff`. **To drop it:**
 
 - [ ] **Step 1: Confirm the two lines this task and its mutations touch.**
   - Run: `grep -n 'now - quietStart >= STALL_QUIET_MS' server/src/coord/stall.ts`. Expected: exactly ONE line, Task 11's marker-branch r1 line.
-    - Its expected shape is `    if (r1At === null) return now - quietStart >= STALL_QUIET_MS ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;`. Indentation and tail are Task 11's.
+    - Its expected shape is `  if (r1At === null) return now - quietStart >= STALL_QUIET_MS ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;`. Indentation and tail are Task 11's.
     - If the grep prints zero lines or more than one, STOP and report: Task 11 spelled its threshold differently, and this task must not guess which comparison is the marker branch's.
   - Run: `grep -n 'now - since >= STALL_QUIET_MS' server/src/coord/stall.ts`. Expected: exactly one line, wave 1's step-7 r1 line, shipped byte-for-byte (`if (r1At === null) return now - since >= STALL_QUIET_MS ? … : VERDICT_NONE;`). Mutation 17.5 edits it.
 
@@ -13079,7 +13081,7 @@ describe('stallBackoff: r1\'s threshold doubles per check the worker answered on
     ['one check answered by working', [check(1), working(2)], 1, 4 * H],
     ['two checks, each answered by working', [check(1), working(2), check(3), working(4)], 2, 8 * H],
     ['three checks, each answered by working (capped)', [check(1), working(2), check(3), working(4), check(5), working(6)], 3, 8 * H],
-  ] as const)('%s: streak %i', (_name, mail, streak, quietMs) => {
+  ] as const)('%s', (_name, mail, streak, quietMs) => {
     expect(stallBackoff(input(mail))).toEqual({ streak, quietMs });
   });
 
@@ -13204,7 +13206,7 @@ export function stallBackoff(input: StallInput): { readonly streak: number; read
 
 - [ ] **Step 5: Wire it into the marker branch only (one token, same line count).**
   - On the ONE line Step 1's first grep printed, replace `now - quietStart >= STALL_QUIET_MS` with `now - quietStart >= stallBackoff(input).quietMs`. Nothing else on the line changes.
-  - At the expected shape, the line becomes `    if (r1At === null) return now - quietStart >= stallBackoff(input).quietMs ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;`.
+  - At the expected shape, the line becomes `  if (r1At === null) return now - quietStart >= stallBackoff(input).quietMs ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;`.
   - Then prove the scope:
     - `grep -c 'stallBackoff(input)' server/src/coord/stall.ts` prints `1`;
     - `grep -n 'now - since >= STALL_QUIET_MS' server/src/coord/stall.ts` still prints wave 1's one line, unchanged.
@@ -13234,7 +13236,7 @@ export function stallBackoff(input: StallInput): { readonly streak: number; read
   - Edit: change `2 ** Math.min(streak, STALL_WORKING_BACKOFF_CAP)` to `2 ** streak`.
   - Run the stall-backoff suite.
   - Expected:
-    - the `three checks … (capped): streak 3` table row fails: `quietMs` `57600000` vs `28800000`;
+    - the `three checks, each answered by working (capped)` table row fails: `quietMs` `57600000` vs `28800000`;
     - `three checks answered by working: capped at 8 h` fails at `NOW + 5 * H`, receiving `{ act: 'none' }`.
   - Revert and prove clean, as in Step 8.
 
