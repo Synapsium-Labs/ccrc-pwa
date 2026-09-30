@@ -79,6 +79,23 @@ Tailwind v4 directives rather than compiled output, so pointing `cssEntry` at it
 ship uncompiled CSS. `[CSS_FROM_STORYBOOK]` picks up the storybook's own compiled
 `iframe-*.css` instead, which is the real generated utility set. This is deliberate.
 
+## If a history rewrite ever runs on this branch, re-stage before syncing
+
+`git filter-branch` (used once, 2026-09-30, to purge 11 MB of build artifacts a
+stray `git add -A` had tracked during a rebase) updates the WORKING TREE as well
+as history: files tracked in the old HEAD and absent from the new one are
+deleted from disk. That emptied `ds-bundle/`, `.design-sync/sb-reference/` and
+the staged `.ds-sync/*.mjs` scripts, while leaving `.ds-sync/node_modules` — so
+the next converter run failed with `Cannot find module .ds-sync/package-build.mjs`
+rather than anything sync-shaped.
+
+Recovery is the §2.4 `cp -r` line plus a storybook rebuild; nothing is lost,
+because all three are regenerable. What DID survive, and what matters:
+`.design-sync/.cache/compare/*.grade.json` (all seven grades) and the durable
+set. A second trap follows immediately: the converter refuses
+`[OUT_UNSAFE]` on a `ds-bundle/` left as empty directories — `rm -rf ds-bundle`
+first, it is regenerable output.
+
 ## Re-sync risks
 
 - **The `types` field and the nested `dist/`.** If anyone flattens the build or drops
