@@ -55,15 +55,18 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     let unattended `ws-reclaim` remove a live child. Mail 2807 ruled this **blocking** despite the inherited environment
     not being remote-request input: existing ccd contracts explicitly tolerate inherited shell state, and the mandatory
     xhigh SAFETY lens requires this fail direction shut before automatic deletion ships.
-  - After fix round 3, a distinct fix round 4 hardens ccd's direct process entry under PATH-selected Bash >=4.4
-    privileged-mode semantics while preserving Homebrew Bash selection on macOS and intentional source-mode fixtures.
-    It must cover systemd/launchd, agent and local-server execution, detached self-reexec, `BASH_ENV` plus readonly
-    functions, inherited options/CDPATH, a second destructive-path command, and a behavioral removal/authorization
-    mutation. A fresh Opus/xhigh destructive SAFETY rereview attacks that boundary before any wave-done.
-  - No second deviation allocation is permitted mid-wave. The supporting slug
-    `ccd-imported-functions-hijack-reclaim-reads` is folded into the already-issued
-    `resolvable-dotdot-physical-fallback` entry in the worker plan in the same tracked act, with prose distinguishing
-    ambient command discovery from path spelling. No unissued token is written.
+  - Two independent audits corrected mail 2807 in mail 2818. A complete wave-4 repair may be a pre-Bash,
+    source-safe, argv-selective boundary for direct `ws-reclaim` and `ws-audit --reclaim`; every ccd verb need not
+    change. The boundary must establish and remeasure PATH-selected Bash >=4.4 privileged-mode semantics before any
+    Bash body or `BASH_ENV` runs. Normal systemd/launchd, agent, local-server and installed-path entry are in scope;
+    detached swap self-reexec is not covered because its ordinary outer `bash -c` runs first. A `find`-only patch is
+    insufficient because other decision-critical commands remain ambient.
+  - Mail 2818 also retracts the proposed deviation fold. `resolvable-dotdot-physical-fallback` is explicitly a
+    path-spelling departure; `ccd-imported-functions-hijack-reclaim-reads` is a distinct cross-cutting mechanism.
+    The run-open block is exhausted, coordinator clause 10 forbids another mid-wave allocation, and plan R-12 forbids
+    a tracked placeholder. The slug therefore remains in mail evidence only. The worker must finish and report fix
+    round 3, then stop: fix round 4 needs an operator-authorized separately opened scope with allocation at run-open,
+    and automatic reclamation remains blocked meanwhile.
   - Deployment remains automatic-updater-only. The coordinator will not manually roll out this wave.
 - **2026-09-28 — wave 3 DEPLOYED (v0.0.33) and measured live; wave 4 dispatched (run 174).**
   - **Rollout.** `ccrc rollout --to v0.0.33`, 16:16–16:21 UTC: fleet box first, rc 0, both boxes agreed at `1ffdf947`.
