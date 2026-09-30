@@ -11606,16 +11606,6 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(join(home, 'tmux-argv')), 'the tmux recorder was touched').toBe(false);
     expect(existsSync(join(home, 'gh-calls')), 'the gh recorder was touched').toBe(false);
   };
-  /** Fix round 1, item 1: the FULL-flavour cases (P4's flip re-runs a real
-   *  kept spine, P8a stages a real `fullTree`) run a REAL `cmd_install`,
-   *  whose own `cmd_doctor` pass legitimately calls `tmux`/`gh` — measured
-   *  (P4 and P8a both red on `assertNoExtras`'s tmux check before this fix).
-   *  What still holds for every case, STUB or FULL, is `--detach`: nothing
-   *  in this describe ever passes it, so `systemd-run-argv` stays the one
-   *  invariant these two assert. */
-  const assertNoDetach = (home: string): void => {
-    expect(existsSync(join(home, 'systemd-run-argv')), 'systemd-run was touched — no case here drives --detach').toBe(false);
-  };
   /** `ccrc backup` (P17, B-M14b): the same runner shape as `runUpdate`, for
    *  the ONE verb this describe otherwise never drives. */
   const runBackup = (home: string, args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}): Result => {
@@ -11768,7 +11758,16 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(join(backupRoot(home), setup2[1]!)), 'the newer setup dir carries the tree entry — the earlier tree backup').toBe(true);
     expect(existsSync(join(backupRoot(home), setup2[0]!)), 'the older setup dir is not protected — nothing else keeps it').toBe(false);
     expect(r.stdout).toMatch(new RegExp(`^rollback: backups: pruned \\$HOME/ccrc-backups/${setup2[0]}`, 'm'));
-    assertNoDetach(home);
+    // Fix round 2, item 1: this case's own kept-version spine runs a REAL
+    // `cmd_install`, whose doctor pass legitimately calls tmux and gh — so
+    // "shows only what the case drove" means the EXACT bytes, not their
+    // absence. Recorders were cleared right after setup's own real updates
+    // (above), so what remains is only this run's. Measured (healthyBox's
+    // doctor-stub tmux/gh, contained): `tmux -V` and `tmux display-message
+    // -p '#{version}'`; `gh auth status --hostname github.com`.
+    expect(existsSync(join(home, 'systemd-run-argv')), 'systemd-run was touched — no case here drives --detach').toBe(false);
+    expect(readFileSync(join(home, 'tmux-argv'), 'utf8')).toBe('-V\ndisplay-message -p #{version}\n');
+    expect(readFileSync(join(home, 'gh-calls'), 'utf8')).toBe('auth status --hostname github.com\n');
   }, 60_000);
 
   it('P5: no prune on a failed gate (exit 4) — the parent\'s own backup and every planted dir survive', () => {
@@ -11800,7 +11799,8 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     assertNoExtras(home);
   });
 
-  it('P7: no prune on a sweep death — the announced backup and every planted dir survive', () => {
+  // Fix round 2 (controller ruling): itLinux — `fixture-try-restart-fail` lives only in the systemctl stub's try-restart arm, which Darwin's launchctl sweep never reaches.
+  itLinux('P7: no prune on a sweep death — the announced backup and every planted dir survive', () => {
     const home = freshUpdateBox('ccrc-fx-b-p7-');
     plantOldBox(home, { version: 'v1.0.0' });
     packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
@@ -11848,7 +11848,14 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(existsSync(join(backupRoot(home), '20250101-000000'))).toBe(false);
     expect(existsSync(join(backupRoot(home), '20250102-000000'))).toBe(false);
     expect(lastReport(home)['phase']).toBe('done');
-    assertNoDetach(home);
+    // Fix round 2, item 1: this case stages a REAL `fullTree`, whose staged
+    // `cmd_install` runs a real doctor pass that legitimately calls tmux and
+    // gh — see P4's identical note. No separate setup update ran here
+    // (`plantOldBox` places files, it does not run `ccrc update`), so the
+    // recorders hold only this run's own calls with no clearing needed.
+    expect(existsSync(join(home, 'systemd-run-argv')), 'systemd-run was touched — no case here drives --detach').toBe(false);
+    expect(readFileSync(join(home, 'tmux-argv'), 'utf8')).toBe('-V\ndisplay-message -p #{version}\n');
+    expect(readFileSync(join(home, 'gh-calls'), 'utf8')).toBe('auth status --hostname github.com\n');
   }, 60_000);
 
   it('P8b: exit 3 on a rollback flip whose kept spine completed under a failing doctor (D-3461) still prunes', () => {
@@ -11922,7 +11929,8 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     assertNoExtras(home);
   });
 
-  it('P12: another ccrc holding ~/.ccrc/update.lock at prune time — skipped, nothing removed', () => {
+  // Fix round 2 (controller ruling): itLinux — this fixture's `fixture-sweep-hold-lock` knob lives only in the systemctl stub's try-restart arm (Darwin's launchctl sweep never reaches it), and its `flock -F` is util-linux only.
+  itLinux('P12: another ccrc holding ~/.ccrc/update.lock at prune time — skipped, nothing removed', () => {
     const home = freshUpdateBox('ccrc-fx-b-p12-');
     plantOldBox(home, { version: 'v1.0.0' });
     packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
