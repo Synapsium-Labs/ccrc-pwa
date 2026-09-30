@@ -72,6 +72,17 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     proceed. This is not wave 5 and inherits none of wave 5's product scope. Run 174 remains `working`, its items remain
     pending, and no old or new wave-done can advance it until the prerequisite is merged and the Wave 4 branch is
     synchronized and freshly handed off. One child per PR remains intact.
+  - Fix round 3 reported `DONE_WITH_CONCERNS` at local worker commit
+    `1a02baac7abfbb1a88a1a7a251c7326c11ae9f08`, parent
+    `1fd35e76d7fbde678e4ca66235639267bf8cac75`; it closes only the two scoped resolver findings and two prose
+    minors. The worker stopped correctly: the branch is clean, no push and no new wave-done occurred, and PR #215
+    remains at remote head `e21247286b5cd2dcce5b5f097df3c68254114af8`.
+  - The prerequisite is the separate one-wave programme `reclaim-entry-safety`. Its number-free skeleton and
+    this parent update commit before run-open. At run-open it receives its own eight-number deviation block; the
+    first issued number defines `ccd-imported-functions-hijack-reclaim-reads` in a tracked plan committed at an
+    exact coordinator handoff SHA. A fresh child copies that blob byte-for-byte with read-only `git show`, commits
+    it first, and opens the prerequisite's one PR. No coordinator ancestry is cherry-picked and no separate docs
+    merge is inserted before the prerequisite.
   - Deployment remains automatic-updater-only. The coordinator will not manually roll out this wave.
 - **2026-09-28 — wave 3 DEPLOYED (v0.0.33) and measured live; wave 4 dispatched (run 174).**
   - **Rollout.** `ccrc rollout --to v0.0.33`, 16:16–16:21 UTC: fleet box first, rc 0, both boxes agreed at `1ffdf947`.
@@ -707,13 +718,15 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 
 ## Next-wave brief
 
-**Wave 3 is dispatched (run 148).** Brief: the plan with its binding Pre-dispatch amendments; contract §9 R24–R31; the
-three A1 settlements and review 147's text corrections above. Its review panel keeps the plan's mandatory xhigh
-safety lens. After it merges: roll out AGENT-FIRST (fleet box first).
+**The next act is the separate `reclaim-entry-safety` prerequisite.** Commit and push its number-free programme
+skeleton plus this parent update, then open its one-wave run on a fresh child. Allocate eight deviation numbers
+exactly once at run-open. Immediately write the finalized tracked plan: its first issued number defines
+`ccd-imported-functions-hijack-reclaim-reads`, and its metadata names the exact run and block. Commit and push that
+plan, then dispatch the fresh child with the full handoff SHA and plan path. The child copies the blob byte-for-byte
+with read-only `git show`, verifies equality, and commits it first before implementation. Its four declared items,
+routing, exclusions and review boundary are in `docs/superpowers/programs/reclaim-entry-safety.md`.
 
-**Wave 4 dispatches the moment wave 3 merges** (operator, 2026-09-24). Its pre-dispatch amendments are written
-(2026-09-26) and reach main in the coordinator's docs PR, which merges right after #187. The brief names:
-- the plan, with its binding amendments A1 to A15;
-- contract §9 and §10;
-- a fresh deviation block, allocated at its run-open;
-- the routing: the plan's per-task lines, and `opus` at `xhigh` for Task 2c.
+**Wave 4 remains blocked after its Fix Round 3 report.** Run 174 stays `working`; items 817–834 stay pending;
+PR #215 stays open. Once the prerequisite PR merges, `swift-hollow` merges `origin/main` (never rebases), resolves
+`ccd/ccd` through regeneration and re-stamping, reruns the required gates, and submits a fresh exact handoff. Only a
+server-accepted fingerprint at that fresh tip can advance Wave 4 to its official held-out review.
