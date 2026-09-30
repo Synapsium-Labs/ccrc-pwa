@@ -2973,9 +2973,10 @@ export class FleetWatcher {
     // them as it holds `ws-reclaim`'s. A retryable verdict found there is
     // journaled nowhere and needs no exclusion — it is retried by design.
     // Between the executor's `refused` answer and the mirror lane's ingest
-    // (`LC_SWEEP_MS`) the child's twice-observed entry is forgotten
-    // (`childReclaimNextEntry`), so it cannot be asked for again until two
-    // fresh passes — long after.
+    // (`LC_SWEEP_MS`) the child's entry is KEPT, not forgotten:
+    // `childReclaimNextEntry` stamps its `refusedAt`, and `childReclaimDue`
+    // holds off any re-ask until a whole defer ceiling after that — long
+    // after the mirror has ingested the terminal line this set then reads.
     const terminal = new Set(latest
       .filter((row) => childReclaimTerminalRefusal(row, childReclaimTokenKind)).map((row) => row.sessionId));
     const seen = new Set<string>();

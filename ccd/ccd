@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7e455dacbb54a71c0de2a30abcf05daa268894724856a225a04e224b2b31ae07
+# ccrc:generated 1 sha256=0e25aa421cbd142deb20a82df8fa999f511ad9f75af2083b2be9e144d79abe3c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23915,7 +23915,7 @@ cmd_reclaim_pause() {   # ccd reclaim-pause --state on|off — raise or lower th
     touch -- "$marker" || die "could not raise the reclaim pause marker — reclamation is NOT paused"
     echo "paused"
   else
-    if [[ -e $marker ]]; then
+    if [[ -e $marker || -L $marker ]]; then   # -L: a dangling link reads as paused on every reader
       rm -f -- "$marker" || die "could not clear the reclaim pause marker — reclamation is STILL paused"
     fi
     echo "running"
@@ -24379,8 +24379,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # there skips both resolved-`//` clauses: the chain below always refuses it,
   # and a terminal refusal must never read as a retry.
   #
-  # TWO SHAPES THAT FOLLOW, STATED (the plan's review-171 fix, pinned by
-  # their own cases). For an ORDINARY child, a row literally inside it whose
+  # TWO SHAPES THAT FOLLOW, STATED so neither reads as an accident (spec §5.5;
+  # each is pinned by its own case). For an ORDINARY child, a row literally inside it whose
   # resolved spelling opens with `//` (spelled through a link inside the
   # child) is NESTED — `containment-unproven`, terminal, never unplaced: its
   # spelling goes with the child whatever it resolves to. And a child whose
@@ -24712,8 +24712,8 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
     || { _reap_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
   RECLAIM_CHILDOF="$mark"
   # 3 — the kill-switch, read HERE, at the instant of deletion (spec §5.8). -e,
-  # not -f: a pause file that is a directory, or unreadable, still pauses.
-  [[ ! -e "$REG/reclaim-paused" ]] \
+  # not -f, and -L: a directory, an unreadable file or a DANGLING link pauses.
+  [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
     || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
   # 4 — held. -e for the same reason: an unreadable hold is still a hold.
   if [[ -e "$REG/$id.hold" ]]; then
@@ -25068,7 +25068,7 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
   [[ -z "$childof" || "$mark" == "$childof" ]] \
     || { _reap_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
   RECLAIM_CHILDOF="$mark"
-  [[ ! -e "$REG/reclaim-paused" ]] \
+  [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
     || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
   if [[ -e "$REG/$id.hold" ]]; then
     _reap_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1

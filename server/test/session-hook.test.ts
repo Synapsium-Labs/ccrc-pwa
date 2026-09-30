@@ -8250,7 +8250,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // `spec:2230 ccd/ccd:13673`; left `spec:91 ccd/ccd:13602` — which is
       // weak-anchored now, on `ccd` alone (see THE TWO CORPUS FACTS). Measured by
       // diffing the dumped failure sets of the two trees, never retyped; no rule
-      // changed. S6-R11, no D-number.
+      // changed. S6-R11, no deviation number.
       'ccd/ccd': 149,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
@@ -8392,6 +8392,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   a coincidental pass and never a repair; main's own inserts moved it
       //   off again. The whole failure set was diffed against `origin/main`'s:
       //   identical, 195 = 195.
+      //   Child-reclamation wave 4, Task 4 (`CoordStatus.reclaim`,
+      //   `ChildReclaimAttention`): ONE hunk, `@@ -3766,5 +3766,48 @@` (`git
+      //   diff -U0` of that task's own commit), a net +43 wholly above the
+      //   referent, which — measured by the same bytes — goes `:5918` ->
+      //   `:5961`. Still not `:5644`, so the entry stays 1 -> 1.
       'shared/api.ts': 1,
       // `server/test/single-definition.test.ts` 0 -> 8, A NEW ENTRY, and the
       // whole of it is ONE shift. This wave's Task 1 added 23 lines low in that
@@ -9227,7 +9232,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // Against main: entered `ccd/ccd:11670`, `ccd/ccd:13673`; left
         // `ccd/ccd:13650-13652`. Measured by diffing the dumped failure sets of
         // the two trees, never retyped; values in the instrument's order. No
-        // rule changed; S6-R11, no D-number.
+        // rule changed; S6-R11, no deviation number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9418,7 +9423,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // the merged layout's +2 over main (the branch's `cmd_caps` lines) is what
       // moved. Against main: entered `spec:2125 ccd/ccd:13673`; none left.
       // Measured by diffing the dumped sets of the two trees, never retyped. No
-      // rule changed; S6-R11, no D-number.
+      // rule changed; S6-R11, no deviation number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',

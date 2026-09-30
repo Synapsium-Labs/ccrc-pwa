@@ -124,6 +124,14 @@ describe('rungs 3 to 6 — the retryable ones', () => {
     fs.rmSync(pause);
     fs.mkdirSync(pause);
     expect(evalOf(h).verdict, '-e, not -f').toBe('paused');
+    // A DANGLING link: `-e` follows it and reads false; the server lists the
+    // name and reads paused. The box must be the stricter reader — on the
+    // fresh arm AND the resume arm.
+    fs.rmdirSync(pause);
+    fs.symlinkSync(path.join(h.home, 'nowhere'), pause);
+    expect(evalOf(h).verdict, 'a dangling link, fresh arm').toBe('paused');
+    expect(h.sh(`${CHILD_STUBS} _ws_reclaim_resume_eval ${CHILD_ID} 0 '' children >/dev/null;`
+      + ` printf '%s' "$REAP_VERDICT"`), 'a dangling link, resume arm').toBe('paused');
   }, 60_000);
 
   it('refuses held on a hold, and on an unreadable hold', () => {

@@ -627,4 +627,14 @@ describe('the worker skill: the routing clauses (routing slice 2)', () => {
     expect(skill, 'the worked mail-send JSON no longer carries the exact wave-done subject')
       .toContain(`"subject":"${WAVE_DONE_SUBJECT}"`);
   });
+
+  // The reclaim switch is the operator's alone (child-reclamation spec §5.8).
+  // ccd has no caller auth, so `ccd reclaim-pause --state on` from a session's
+  // own shell is a door the route's session gate cannot close — and the
+  // session most motivated to walk through it is the one whose workspace is
+  // about to be reclaimed. The skill names neither the verb nor the marker it
+  // writes (`reclaim-paused` contains the same token).
+  it('never names the reclaim switch — neither the route nor the bare ccd verb', () => {
+    expect(skill).not.toContain('reclaim-pause');
+  });
 });

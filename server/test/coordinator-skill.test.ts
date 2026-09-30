@@ -1463,8 +1463,12 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // PERMITS the omission; this is what FORBIDS the mention. Rule 4 takes
     // the reclamation of a coordinator's children out of every session's
     // hands and gives it to the server; the one switch over that is the
-    // operator's, from the phone.
+    // operator's, from the phone. The BARE verb too, not only the route: ccd
+    // has no caller auth, so `ccd reclaim-pause --state on` from a session's
+    // own shell is the shorter door (and `reclaim-paused`, the marker it
+    // writes, contains the same token).
     expect(allSkillText).not.toContain('/api/coord/reclaim-pause');
+    expect(allSkillText).not.toContain('reclaim-pause');
   });
 
   it('never names the break door — a door the claimant is not the one to walk through', () => {

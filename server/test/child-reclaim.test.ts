@@ -13,7 +13,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, MAIL_CHILD_RECLAIMED_ERROR, type OpenSiblingsResult } from '../src/coord/store.js';
 import {
   CHILD_RECLAIM_TOKEN_KIND, childReclaimDecision, childReclaimRowListing, isChildReclaimDeferWhy,
-  parseChildReclaimAudit, parseChildReclaimResult, reclaimChild, releaseRetiredChildHold,
+  childReclaimReleaseActor, parseChildReclaimAudit, parseChildReclaimResult, reclaimChild, releaseRetiredChildHold,
   type ChildReclaimDecisionInput, type ChildReclaimDeps, type ChildReclaimReleaseRequest, type ChildReclaimToken,
 } from '../src/coord/childReclaim.js';
 import { NotifyLog } from '../src/notifylog.js';
@@ -21,7 +21,7 @@ import { readSessionRecord } from '../src/registry.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
 import { SENTENCES } from '../src/wsaudit.js';
-import { holdReason } from '../../shared/api.js';
+import { LC_REASON_MAX_BYTES, holdReason } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -980,6 +980,29 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
       '--surface', 'agent', '--actor', `run:${runId} reclaim sweep: program demo retired`]]);
   });
 
+  // ccd refuses an `--actor` over `LC_REASON_MAX_BYTES` bytes, and a
+  // programme name written before today's route shaping may be any length:
+  // the actor is shortened to fit, so the release is not failed on every pass.
+  it('a very long programme name is cut inside the actor, which stays within ccd\'s cap — and the release still runs', async () => {
+    const f = await rrig();
+    const program = `${'p'.repeat(300)}${'é'.repeat(400)}`;
+    // Today's `openRun` refuses such a name, so the legacy row is written the
+    // way only an older build could have: straight into the run's column.
+    const runId = terminalRun(f.coord, 'demo');
+    const db = (f.coord as unknown as { db: { prepare(sql: string): { run(...a: unknown[]): unknown } } }).db;
+    db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES (?, 'legacy', 0, 'done')").run(program);
+    db.prepare('UPDATE runs SET program = ? WHERE id = ?').run(program, runId);
+    const reason = holdReason(program, 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program, accountedRunId: runId };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('released');
+    const actor = f.calls[0]![f.calls[0]!.indexOf('--actor') + 1]!;
+    expect(Buffer.byteLength(actor, 'utf8')).toBeLessThanOrEqual(LC_REASON_MAX_BYTES);
+    expect(actor).toMatch(new RegExp(`^run:${runId} reclaim sweep: program p{300}é+… retired$`));
+    // …and an ordinary name is never touched.
+    expect(childReclaimReleaseActor(7, 'demo')).toBe('run:7 reclaim sweep: program demo retired');
+  });
+
   it('ccd\'s own idempotent no-op — the hold was already gone on the box — answers not-held', async () => {
     const f = await rrig({ script: () => ({ code: 0, stdout: `not held ${RID}\n` }) });
     const runId = terminalRun(f.coord, 'demo');
@@ -1116,6 +1139,39 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     if (!('id' in coordRun)) throw new Error(`openRun coordRun refused: ${JSON.stringify(coordRun)}`);
     const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
+  });
+
+  // Step 6: a release queued before an operator raised `reclaim-paused`
+  // must not remove the hold the operator may have raised it to keep —
+  // `cmd_ws_release` does not read the marker itself.
+  it('reclaim-paused raised before the job ran — no release, and ccd is never called', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
+    expect(f.calls).toEqual([]);
+  });
+
+  it('a switch that cannot be read — the listing fails at step 6 alone — answers failed, and ccd is never called', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    // Every read before step 6 succeeds; the listing fails only once the
+    // coordinator read (step 5, the last one before it) has run.
+    let pastStep5 = false;
+    const original = f.coord.childReclaimCoordinatorIds.bind(f.coord);
+    vi.spyOn(f.coord, 'childReclaimCoordinatorIds').mockImplementation(() => { pastStep5 = true; return original(); });
+    const deps: ChildReclaimDeps = { ...f.deps, io: { ...f.deps.io,
+      readdir: async (dir: string, timeoutMs?: number, signal?: AbortSignal) =>
+        (pastStep5 ? null : f.deps.io.readdir(dir, timeoutMs, signal)) } };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(deps, req)).toBe('failed');
+    expect(pastStep5).toBe(true);
+    expect(f.calls).toEqual([]);
   });
 
   it('a throwing open-siblings read answers failed, never rejects — step 4 is try-wrapped like every other read', async () => {

@@ -239,8 +239,13 @@ export const SENTENCES: Record<string, string> = {
   'reclaim-in-progress': 'An interrupted reclamation of this workspace is waiting to finish, and ws-reap never finishes another verb’s work. Nothing was removed.',
 };
 
+/** An OWN key only: `SENTENCES` is a plain object literal, so a bare
+ *  `SENTENCES[token]` answers `Object.prototype`'s members for a token such
+ *  as `constructor` or `toString` — and the reclaim attention list, which
+ *  hands this a journal token as ccd wrote it, would then render a
+ *  function's source text as the sentence. */
 export function refusalSentence(token: string): string {
-  return SENTENCES[token] ?? `ccrc declined: ${token}.`;
+  return Object.prototype.hasOwnProperty.call(SENTENCES, token) ? SENTENCES[token]! : `ccrc declined: ${token}.`;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;

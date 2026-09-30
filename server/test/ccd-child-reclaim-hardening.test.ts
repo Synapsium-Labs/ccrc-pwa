@@ -86,10 +86,12 @@ describe('the tail’s anchored kill is BOUNDED — a wedged tmux answers unit-s
 });
 
 describe('the hidden-edit read’s ancestor walk takes no fork per path, and siblings under one missing directory share one walk (spec §5.5 step 2)', () => {
-  // THE BOUND is twice the fork-free walk's own time, measured on the fleet
-  // box under its ordinary load (median of five runs: 919ms). The walk that
-  // forked `dirname` once per path took 15.4-16.0s on the same box and read.
-  const HIDDEN_READ_BOUND_MS = 1840;
+  // THE BOUND is about 5x the fork-free walk's own time, measured on the fleet
+  // box under its ordinary load (median of five runs: 919ms; worst seen under
+  // load 1181ms), so a loaded CI runner does not red this case on time alone —
+  // and still a third of the walk that forked `dirname` once per path, which
+  // took 15.4-16.0s on the same box and read. That regression still reds it.
+  const HIDDEN_READ_BOUND_MS = 5000;
   const N = 5000;
 
   /** N skip-worktree entries under `gone/`, a directory that is not on disk —

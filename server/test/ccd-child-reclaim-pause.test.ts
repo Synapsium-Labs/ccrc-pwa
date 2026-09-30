@@ -125,6 +125,16 @@ describe('ccd reclaim-pause', () => {
       }
     });
 
+  // A DANGLING link at the marker's name reads as paused on every reader —
+  // the server lists the name, and `ws-reclaim` tests `-e || -L` — so `off`
+  // must remove it too, or the phone's toggle could never settle.
+  it('removes a DANGLING link at the marker with --state off, and says running', () => {
+    fs.symlinkSync(path.join(h.home, 'nowhere'), marker());
+    expect(fs.lstatSync(marker()).isSymbolicLink()).toBe(true);
+    expect(h.sh('cmd_reclaim_pause --state off')).toBe('running');
+    expect(() => fs.lstatSync(marker())).toThrow(/ENOENT/);
+  });
+
   it('refuses LOUDLY when the marker cannot be removed — reclamation is STILL paused', () => {
     // `rm -f` suppresses ENOENT only. A directory at the path fails for any uid.
     fs.mkdirSync(marker());
@@ -203,12 +213,13 @@ describe('ccd reclaim-pause', () => {
     // mistyped TEST expression with its message left alone still names the
     // path once outside the writer, so `outside` stays >= 1. Pin the reader
     // side separately: the exact expression both readers use,
-    // `[[ ! -e "$REG/reclaim-paused" ]]`, must appear inside EACH of wave 3's
+    // `[[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]]` (a
+    // dangling link at that name pauses too), must appear inside EACH of wave 3's
     // two eval functions — the fresh arm (`_ws_reclaim_eval`, its rung 3) and
     // the resume arm (`_ws_reclaim_resume_eval`) — sliced by their own
     // `name() {` … `^}`, so mistyping either reader's path reds this suite on
     // its own function, independently of the other and of the writer.
-    const READER = /\[\[ ! -e "\$REG\/reclaim-paused" \]\]/;
+    const READER = /\[\[ ! -e "\$REG\/reclaim-paused" && ! -L "\$REG\/reclaim-paused" \]\]/;
     const sliceFn = (name: string): string[] => {
       const fnStart = src.findIndex((l) => l.startsWith(`${name}() {`));
       expect(fnStart, `${name} is not defined at column 0`).toBeGreaterThan(-1);

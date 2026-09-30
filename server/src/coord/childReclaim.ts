@@ -11,7 +11,7 @@ import type { ChildSpentVerdict } from './childSpent.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import {
-  CHILD_RUN_ID, TERMINAL_RUN_STATES, holdReason, type ChildMark, type LifecycleAct, type LifecycleOutcome,
+  CHILD_RUN_ID, LC_REASON_MAX_BYTES, TERMINAL_RUN_STATES, holdReason, type ChildMark, type LifecycleAct, type LifecycleOutcome,
   type MarkerState, type MirroredLifecycleEvent, type RunState,
 } from '../../../shared/api.js';
 
@@ -959,6 +959,25 @@ export interface ChildReclaimReleaseRequest {
  *  non-zero/unreadable ccd exit. */
 export type ChildReclaimReleaseOutcome = 'released' | 'not-held' | 'changed' | 'failed';
 
+/** The release job's `--actor`, kept inside ccd's cap on it
+ *  (`LC_REASON_MAX_BYTES` bytes; ccd dies on a longer one). A programme name
+ *  shaped by today's route is short, but a row written before that shaping
+ *  may carry any length, and an over-cap actor would fail this child's
+ *  release on every pass. The actor is this server's own attribution text,
+ *  not a person's words, so it is SHORTENED to fit — the programme name cut
+ *  at a code point and marked with an ellipsis — never refused. */
+export function childReclaimReleaseActor(runId: number, program: string): string {
+  const actor = (p: string): string => `run:${runId} reclaim sweep: program ${p} retired`;
+  const bytes = (t: string): number => new TextEncoder().encode(t).length;
+  if (bytes(actor(program)) <= LC_REASON_MAX_BYTES) return actor(program);
+  // Every code point is at least one byte, so no fitting cut keeps more than
+  // the cap's own count of them: the search starts there, not at the end.
+  const points = Array.from(program);
+  let keep = Math.min(points.length, LC_REASON_MAX_BYTES);
+  while (keep > 0 && bytes(actor(`${points.slice(0, keep).join('')}…`)) > LC_REASON_MAX_BYTES) keep -= 1;
+  return actor(`${points.slice(0, keep).join('')}…`);
+}
+
 /**
  * Release a hold this build proved belongs to one of a child's own runs, once
  * that accounting has retired (spec §5.7's "no hold" conjunct). The sweep
@@ -979,7 +998,13 @@ export type ChildReclaimReleaseOutcome = 'released' | 'not-held' | 'changed' | '
  *      immutable (see the check's own comment below);
  *   3. that run's programme — still zero open runs;
  *   4. the child's own open runs — still none;
- *   5. the coordinator read — this child has still never coordinated a run.
+ *   5. the coordinator read — this child has still never coordinated a run;
+ *   6. the reclaim switch (`childReclaimPauseRead`, the read the executor's
+ *      own step 2b makes) — still down. A release queued behind the child's
+ *      `KeyedQueue` before an operator raised `reclaim-paused` must not
+ *      remove the hold the operator may have raised the switch to keep:
+ *      `cmd_ws_release` does not read the marker itself. `set` answers
+ *      `changed`; `unmeasurable` answers `failed`.
  * A throw or an `ok:false` from any of these answers `failed` and composes no
  * argv — never a guess standing in for a read this process could not finish.
  * Only once every one of them agrees does it compose `ws-release`, gated by
@@ -1083,10 +1108,22 @@ export async function releaseRetiredChildHold(
   }
   if (coordinating.has(sessionId)) return 'changed';
 
+  // 6 — the reclaim switch: still down. Read last, nearest the argv, like
+  // the executor's own step 2b.
+  let pause: MarkerState;
+  try {
+    pause = await childReclaimPauseRead(deps.io, deps.cfg.registryDir);
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: reading the reclaim switch failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (pause === 'set') return 'changed';
+  if (pause !== 'clear') return 'failed';
+
   // Only now: the one write this job may ever compose. It deletes nothing
   // but the hold file (`cmd_ws_release`'s own docstring).
-  const argv = CCD_ARGV.wsRelease(sessionId,
-    sweepDec(deps.fleetState, `run:${runId} reclaim sweep: program ${program} retired`));
+  const argv = CCD_ARGV.wsRelease(sessionId, sweepDec(deps.fleetState, childReclaimReleaseActor(runId, program)));
   if (!verbSupported(deps.fleetState, argv)) return 'failed';
   const res = await deps.runCcd(argv);
   if (!res.ok) return 'failed';

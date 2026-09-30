@@ -299,7 +299,8 @@ describe('the scanner is looking at something', () => {
     // 86 since update-management W2 put the third file's five beside the two
     // files' 51 + 30: 81 -> 86.
     //
-    // 87 since the same route: registered in `coord/routes.ts`, so that half
+    // 87 since child-reclamation wave 4's `POST /api/coord/reclaim-pause`
+    // (the route whose own comment sits above): registered in `coord/routes.ts`, so that half
     // moved 30 -> 31 and `server.ts` stayed at 51 — 51 + 31 + 5 = 87. Its home is
     // not taste: in `server.ts` it would sit outside the literal
     // `coord-pause-route.test.ts`'s `SESSION_ONLY` census scans.

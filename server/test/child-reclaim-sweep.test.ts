@@ -815,18 +815,37 @@ describe('sweepChildReclaim — what reaches the executor', () => {
   });
 
   it('never dispatches a child twice while its reclaim is still in flight', async () => {
-    let release!: () => void;
-    const f = fixture({ outcome: (req) => new Promise<ChildReclaimOutcome>((resolve) => {
-      release = () => resolve({ kind: 'reclaimed', sessionId: req.sessionId, runId: req.runId, wip: { kind: 'none' }, secretsDropped: 0 });
-    }) });
-    finishedChild(f);
+    // With one slot, an in-flight child holds the slot itself, so the bound
+    // alone would hide a missing in-flight check. So demo-a's request never
+    // settles and outlives CHILD_RECLAIM_STALL_MS — it stops counting against
+    // the bound — and a second child, demo-b, proves the slot really is free:
+    // only the in-flight check is left to keep demo-a from being asked again.
+    const f = fixture({ outcome: (req) => (req.sessionId === 'demo-a'
+      ? new Promise<ChildReclaimOutcome>(() => { /* never resolves, deliberately */ })
+      : { kind: 'reclaimed', sessionId: req.sessionId, runId: req.runId, wip: { kind: 'none' }, secretsDropped: 0 }) });
+    finishedChild(f, 'demo-a');
+    f.next(); finishedChild(f, 'demo-b');
     await f.pass(); f.next();
-    const first = f.pass();                                   // dispatches; the executor has not answered
-    await vi.waitFor(() => expect(f.requests).toHaveLength(1));
-    f.next(); await f.pass();                                 // a pass while in flight
-    expect(f.requests).toHaveLength(1);
-    release();
-    await first;
+    void f.pass();                                            // dispatches demo-a, which never answers
+    await vi.waitFor(() => expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a']));
+    // Each later pass is OBSERVED, never awaited: a re-asked demo-a would
+    // never settle and would hang an awaited pass, turning this case's red
+    // into a timeout. The pass either finishes or makes a new request, and
+    // the assertion after it decides which.
+    const observedPass = async (): Promise<void> => {
+      const before = f.requests.length;
+      let settled = false;
+      void f.pass().then(() => { settled = true; });
+      await vi.waitFor(() => expect(settled || f.requests.length > before).toBe(true));
+    };
+    f.advance(CHILD_RECLAIM_STALL_MS + 1); f.next();
+    await observedPass();                                     // the slot is free: demo-b, never demo-a
+    expect(f.requests.map((q) => q.sessionId), 'demo-a was asked again while still in flight')
+      .toEqual(['demo-a', 'demo-b']);
+    f.next();
+    await observedPass();                                     // and not on a later pass either
+    expect(f.requests.map((q) => q.sessionId), 'demo-a was asked again while still in flight')
+      .toEqual(['demo-a', 'demo-b']);
   });
 
   it('drops an answer that comes back after a pass cleared the memory — the pause still needs two FRESH passes', async () => {
@@ -1191,6 +1210,47 @@ describe('the attention list — derived from the mirror, carried on the coord f
       sentence: childReclaimFailingSentence(lcRefusalWord('pin-failed') ?? refusalSentence('pin-failed')), at: since,
     }]);
     expect(f.requests.map((q) => q.sessionId), 'a failing child was excluded like a terminal refusal').toEqual(['demo-a']);
+  });
+
+  // The list is derived BEFORE the lane learns whether it may act, so a
+  // failing child stays listed while `reclaim-paused` stands — and nothing
+  // retries it then. Its sentence must be true in that state: no
+  // unconditional claim that ccrc is retrying.
+  it('a failing child listed while reclaim-paused stands is not said to be retried, and is not asked for', async () => {
+    const f = fixture();
+    finishedChild(f);
+    f.journal('demo-a', 'failed', 'pin-failed');
+    await f.pass();
+    writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
+    f.advance(CHILD_RECLAIM_DEFER_CEILING_MS);
+    f.journal('demo-a', 'intent', null);
+    f.journal('demo-a', 'failed', 'pin-failed');
+    f.next(); await f.pass();
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    const listed = f.watcher.currentCoord()?.childReclaimAttention ?? [];
+    expect(listed.map((a) => a.sessionId)).toEqual(['demo-a']);
+    expect(listed[0]!.sentence).not.toMatch(/keeps retrying/);
+    expect(listed[0]!.sentence).toContain('While automatic reclamation is running, ccrc retries it');
+    expect(f.requests, 'the paused lane asked for the child it lists').toEqual([]);
+  });
+
+  // `refusalSentence`'s table is a plain object literal: a failure token
+  // spelled like an `Object.prototype` member must render the ordinary
+  // fallback, never a function's source text.
+  it('a failure token spelled `constructor` renders the fallback sentence, not a function\'s source', async () => {
+    const f = fixture();
+    finishedChild(f);
+    f.journal('demo-a', 'failed', 'constructor');
+    await f.pass();
+    f.advance(CHILD_RECLAIM_DEFER_CEILING_MS);
+    f.journal('demo-a', 'intent', null);
+    f.journal('demo-a', 'failed', 'constructor');
+    await f.pass();
+    await f.watcher.tick();
+    const listed = f.watcher.currentCoord()?.childReclaimAttention ?? [];
+    expect(listed.map((a) => a.sentence)).toEqual([childReclaimFailingSentence('ccrc declined: constructor.')]);
+    expect(listed[0]!.sentence).not.toMatch(/function|native code/);
   });
 
   it('reads a run of failures within the current generation: an earlier workspace\'s failures under a recycled id do not count', async () => {

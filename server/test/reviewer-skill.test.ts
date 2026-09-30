@@ -201,4 +201,14 @@ describe('the reviewer skill: the report lands where the close route can read it
       "the agent's read allowlist must still grant .cc-clips, or the reviewer skill's report path stops being readable")
       .toContain(".cc-clips");
   });
+
+  // The reclaim switch is the operator's alone (child-reclamation spec §5.8).
+  // ccd has no caller auth, so `ccd reclaim-pause --state on` from a session's
+  // own shell is a door the route's session gate cannot close — and the
+  // session most motivated to walk through it is the one whose workspace is
+  // about to be reclaimed. The skill names neither the verb nor the marker it
+  // writes (`reclaim-paused` contains the same token).
+  it('never names the reclaim switch — neither the route nor the bare ccd verb', () => {
+    expect(skill).not.toContain('reclaim-pause');
+  });
 });

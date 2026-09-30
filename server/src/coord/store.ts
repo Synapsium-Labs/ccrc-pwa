@@ -1394,16 +1394,36 @@ class IntentJournalFault extends Error {
  *  (`substr(detail, 1, 8) = 'reclaim:'`, wave 4's fix — SQLite's `LIKE` is
  *  case-insensitive for ASCII by default and would have handed this reader a
  *  row it can never attribute, such as an operator's own `RECLAIM:x -> y`
- *  note, which is exactly the "hand-written" case this function throws on. */
+ *  note, which is exactly the "hand-written" case this function throws on.
+ *
+ *  THE LENGTH BOUND. A candidate longer than
+ *  `CHILD_RECLAIM_MAX_SESSION_ID_CHARS` (255) is never returned, and the
+ *  search stops at the first occurrence past that offset. Safe because a
+ *  session id is a FILENAME component — the registry holds `<id>.uuid`, and
+ *  no filesystem this runs on takes a component over 255 bytes, which no
+ *  string over 255 characters can fit in — so no longer id can ever be a
+ *  reclaimable child: dropping such a candidate can only fail to protect a
+ *  session that cannot exist. Every `from` of 255 characters or fewer is
+ *  still among the prefixes, exactly as before. Necessary because `from`
+ *  is unbounded upstream (the Fastify body limit is its only cap): a
+ *  megabyte `claimedBy` built of repeated ` -> ` yielded one prefix per
+ *  occurrence, up to a megabyte each, and every pass inserted them all into
+ *  a `Set` — seconds of synchronous event-loop stall per call, on every
+ *  sweep pass and every close. The bound makes the work per row
+ *  proportional to 255, not to the row. `null` still means "no ` -> ` at
+ *  all"; a row whose every candidate is too long parses to `[]`. */
+const CHILD_RECLAIM_MAX_SESSION_ID_CHARS = 255;
 function childReclaimDisplacedCandidates(detail: string): string[] | null {
   const prefix = 'reclaim:';
   if (!detail.startsWith(prefix)) return null;
   const body = detail.slice(prefix.length);
+  const first = body.indexOf(' -> ');
+  if (first === -1) return null;
   const out: string[] = [];
-  for (let i = body.indexOf(' -> '); i !== -1; i = body.indexOf(' -> ', i + 1)) {
+  for (let i = first; i !== -1 && i <= CHILD_RECLAIM_MAX_SESSION_ID_CHARS; i = body.indexOf(' -> ', i + 1)) {
     out.push(body.slice(0, i));
   }
-  return out.length > 0 ? out : null;
+  return out;
 }
 
 /**
@@ -3115,8 +3135,12 @@ export class CoordStore {
     // One hand-written note in the wrong case would have broken automatic
     // reclamation fleet-wide. `substr` selects only what the writer's own
     // `reclaim:${…}` template can produce.
+    // `DISTINCT`: `reclaimProgram` writes one identical row per run of the
+    // programme it moves, so N runs would otherwise parse the same text N
+    // times; the candidate length bound is `childReclaimDisplacedCandidates`'s
+    // own (its docstring states why dropping a longer one is safe).
     const displacements = this.db.prepare(
-      "SELECT detail FROM run_events WHERE causedBy = 'operator' AND substr(detail, 1, 8) = 'reclaim:'",
+      "SELECT DISTINCT detail FROM run_events WHERE causedBy = 'operator' AND substr(detail, 1, 8) = 'reclaim:'",
     ).all() as { detail: string }[];
     for (const row of displacements) {
       const froms = childReclaimDisplacedCandidates(row.detail);

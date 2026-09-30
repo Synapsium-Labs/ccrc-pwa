@@ -84,9 +84,13 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
  * `verbSupported` call, and widening this past named verbs would let a
  * missing one hide behind an unrelated `capSupported` in the same function.
  *
- * `reclaim-pause` joins it (child-reclamation wave 4): its route gates on
- * `capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)` alone, for the reason
- * above — a box that echoes the token necessarily dispatches the verb.
+ * The other two members argue the same way. `ws-reclaim` (child-reclamation
+ * wave 3): the executor composes it only behind
+ * `capSupported(deps.fleetState, RECLAIM_CAP)` — no `reclaim-v1` token, no
+ * argv. `reclaim-pause` (wave 4): its route gates on
+ * `capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)` alone. For both, a box
+ * that echoes the token necessarily dispatches the verb, so `route`'s
+ * argument above holds for each of them unchanged.
  */
 const CAP_GATED_VERBS: ReadonlySet<string> = new Set(['route', 'ws-reclaim', 'reclaim-pause']);
 

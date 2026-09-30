@@ -302,6 +302,15 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   // birth (plus the clock-skew allowance) cannot be the run that minted THIS
   // incarnation — run ids restart after a coordination-database loss. A
   // child whose own birth this read could not place is doubt, and doubt waits.
+  // THE ONE RESIDUAL, ACCEPTED: the allowance is symmetric, so just after a
+  // coordination-database loss a NEW run whose id collides with a pre-loss
+  // child's marker, and which opened within `skewMs` (120 s) after that
+  // child's own `create`, passes this fence and is read as the child's minting
+  // run — an unrelated run whose state (terminal, or open and bound to another
+  // session, the orphan branch above) can then make the child eligible.
+  // Reaching it needs the new database to count up to that id inside those
+  // two minutes of the child's birth, so it is negligible in practice; it is
+  // the fence's only fail-open direction.
   if (i.childBornAt === null) return { eligible: false, why: 'child-birth-unplaced' };
   if (run.openedAt > i.childBornAt + i.skewMs) return { eligible: false, why: 'minting-run-postdates-child' };
   // A hold this build proved belongs to one of this child's own runs (spec
@@ -519,10 +528,17 @@ export const childReclaimFailingPastCeiling = (row: ChildReclaimJournalRow, nowM
 
 /** The server's sentence for a child listed because its reclaim keeps failing
  *  — the last failure's own word inside it, or a plain statement that ccd
- *  gave none. Says it is still retried, because it is: a report, not a stop. */
+ *  gave none. A report, not a stop. It says the retry is CONDITIONAL, because
+ *  this list is derived before the lane learns whether it may act: while
+ *  `reclaim-paused` stands, or the fleet box lacks the reclaim capabilities,
+ *  the same item is listed and nothing retries it — so an unconditional
+ *  "ccrc keeps retrying" would be false under the very switch an operator
+ *  raises on seeing it (spec §5.9's "retries back off in between" describes
+ *  the sweep, which only asks while reclamation is running). */
 export const childReclaimFailingSentence = (word: string | null): string =>
-  `Every attempt to reclaim this child has failed for at least ${CHILD_RECLAIM_DEFER_CEILING_MS / 60_000} minutes; `
-  + `ccrc keeps retrying, backing off in between. The last failure: ${word ?? 'ccd recorded no reason.'}`;
+  `Every attempt to reclaim this child has failed for at least ${CHILD_RECLAIM_DEFER_CEILING_MS / 60_000} minutes. `
+  + 'While automatic reclamation is running, ccrc retries it, backing off in between. '
+  + `The last failure: ${word ?? 'ccd recorded no reason.'}`;
 
 export interface ChildReclaimAttentionInput {
   readonly latest: readonly ChildReclaimJournalRow[];

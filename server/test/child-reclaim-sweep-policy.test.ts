@@ -641,6 +641,17 @@ describe('childReclaimAttention', () => {
     ], [['demo-a', 7], ['demo-b', 8]]))).toEqual([]);
   });
 
+  // The sentence's own words, pinned literally: the list is shown while
+  // reclamation is paused or unsupported too, when nothing retries, so the
+  // retry is stated as conditional — never "ccrc keeps retrying".
+  it('the failing sentence states the retry as conditional on reclamation running', () => {
+    expect(childReclaimFailingSentence('W.')).toBe(
+      'Every attempt to reclaim this child has failed for at least 15 minutes. '
+      + 'While automatic reclamation is running, ccrc retries it, backing off in between. '
+      + 'The last failure: W.');
+    expect(childReclaimFailingSentence(null)).toMatch(/The last failure: ccd recorded no reason\.$/);
+  });
+
   it('a failure word outside the journal-only map takes the server\'s sentence; no word at all says so', () => {
     const since = NOW - C;
     expect(childReclaimAttention(input([

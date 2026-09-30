@@ -232,6 +232,9 @@ describe('reclaimChild — the coordinating re-read, before the pause', () => {
 // `childReclaimCoordinatorIds` unions in the `from` side of every
 // `reclaim:<from> -> <to>` row `reclaimProgram` writes (spec §1, rule 4).
 describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
+  // The size case's bound: the bounded read measured about 7 ms on the fleet
+  // box, the unbounded one about 7.8 s; 1000 ms sits far from both.
+  const CHILD_RECLAIM_COORDINATOR_IDS_BOUND_MS = 1000;
   const bareStore = (): CoordStore => {
     const home = mkTmp('ccrc-child-reclaim-coordinator-ids-');
     return new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
@@ -388,6 +391,66 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
       expect(ids.has(to)).toBe(true);
     });
   }
+
+  // THE LENGTH BOUND. A session id is a filename component (`<id>.uuid`), so
+  // no id over 255 characters can be a reclaimable child, and the reader
+  // drops every longer candidate. Both edges of that bound, through the real
+  // writer: a 255-character `from` still joins (its own separator sits at
+  // offset 255, the last one the search takes), and the arrows inside it
+  // still yield their shorter prefixes.
+  it('round-trips a from of exactly 255 characters holding its own arrows', () => {
+    const coord = bareStore();
+    const from = `${'a'.repeat(240)} -> ${'b'.repeat(11)}`;
+    expect(from.length).toBe(255);
+    const opened = coord.openRun({ program: 'w4-255', title: 'w4-255', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: from });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    expect(coord.reclaimProgram(opened.id, 'heir-255', Date.now(), null)).toMatchObject({ ok: true });
+    const ids = coord.childReclaimCoordinatorIds();
+    expect(ids.has(from)).toBe(true);
+    expect(ids.has('a'.repeat(240))).toBe(true);
+    expect(ids.has('heir-255')).toBe(true);
+  });
+
+  it('a from of 256 characters is dropped — it could never be a session id — and the read neither throws nor loses the heir', () => {
+    const coord = bareStore();
+    const from = 'c'.repeat(256);
+    const opened = coord.openRun({ program: 'w4-256', title: 'w4-256', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: from });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    expect(coord.reclaimProgram(opened.id, 'heir-256', Date.now(), null)).toMatchObject({ ok: true });
+    let ids: ReadonlySet<string> | undefined;
+    expect(() => { ids = coord.childReclaimCoordinatorIds(); }).not.toThrow();
+    expect(ids!.has(from)).toBe(false);
+    expect(ids!.has('heir-256')).toBe(true);
+  });
+
+  // THE SIZE CASE. `POST /api/runs` bounds `claimedBy` only by the body
+  // limit, and `reclaimProgram` writes one displacement row per run it moves.
+  // A megabyte `claimedBy` of repeated ` -> ` over three rows once cost this
+  // read about 7.8 s of synchronous event-loop time per call (it runs on
+  // every sweep pass and every close): every row's prefixes are the same
+  // strings, which made a `Set` of them quadratic. With the length bound it
+  // measured a few milliseconds on the fleet box; the bound below is a
+  // generous multiple of that and far below the regression. Three
+  // programmes, one distinct text each, so the rows stay distinct after the
+  // read's own `DISTINCT` and this case measures the length bound alone.
+  it('three rows displaced from megabyte claimedBy values of repeated arrows read back in bounded time', () => {
+    const coord = bareStore();
+    for (const n of [1, 2, 3]) {
+      const opened = coord.openRun({ program: `w4-huge-${n}`, title: 'w4-huge', project: 'demo',
+        wave: 1, waveOf: null, claimedBy: `${' -> '.repeat(250_000)}x${n}` });
+      if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened).slice(0, 200)}`);
+      expect(coord.reclaimProgram(opened.id, `heir-huge-${n}`, Date.now(), null)).toMatchObject({ ok: true });
+    }
+    for (let call = 0; call < 2; call += 1) {
+      const t0 = performance.now();
+      const ids = coord.childReclaimCoordinatorIds();
+      const ms = performance.now() - t0;
+      expect(ids.has('heir-huge-3')).toBe(true);
+      expect(ms).toBeLessThan(CHILD_RECLAIM_COORDINATOR_IDS_BOUND_MS);
+    }
+  });
 
   it('a reclaim: row from the exact writer that does not parse THROWS, never drops silently', () => {
     const coord = bareStore();
