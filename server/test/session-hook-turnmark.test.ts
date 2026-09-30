@@ -556,4 +556,48 @@ describe('the turn marker across a restart (§5.1, SessionStart)', () => {
     expect(turnMark()).toMatchObject({ state: 'done', turnAt: 1000, stopAt: 2000, bg: 0, lostBg: 2,
       lostKinds: 'shell', lostIds: 'b1' });
   });
+
+  it('the lost ids are the previous lost ids then the dead bg ids, cut to the FIRST 8 (fiti)', () => {
+    plantTurn(JSON.stringify({ v: 1, sessionId: 'uuid-1', state: 'done', event: 'Stop', at: 2000, turnAt: 1000,
+      stopAt: 2000, bg: 6, bgKinds: 'shell', bgIds: 'b1,b2,b3,b4,b5,b6', err: null, restartAt: null, lostBg: 6,
+      lostKinds: 'shell', lostIds: 'l1,l2,l3,l4,l5,l6' }) + '\n');
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    // The program joins the previous lost ids FIRST and the dead bg ids after, with no sort and no dedupe, and
+    // keeps 8 of the 12: the six lost ids, then b1 and b2.
+    expect(turnMark()).toMatchObject({ state: 'done', bg: 0, bgIds: '', lostBg: 12, lostIds: 'l1,l2,l3,l4,l5,l6,b1,b2' });
+  });
+
+  it('the lost kinds are the sorted union cut to WHOLE aliases inside 200 bytes: no half alias, no trailing comma (fitk)', () => {
+    const k = (c: string): string => c.repeat(60);   // letters only: the alias charset is [a-z_-]
+    const lost = [k('a'), k('c'), k('e')].join(',');   // 182 bytes, fits on its own
+    const dead = [k('b'), k('d')].join(',');   // 121 bytes, fits on its own
+    expect(lost.length).toBeLessThanOrEqual(200);
+    expect(dead.length).toBeLessThanOrEqual(200);
+    plantTurn(JSON.stringify({ v: 1, sessionId: 'uuid-1', state: 'done', event: 'Stop', at: 2000, turnAt: 1000,
+      stopAt: 2000, bg: 2, bgKinds: dead, bgIds: '', err: null, restartAt: null, lostBg: 3, lostKinds: lost,
+      lostIds: '' }) + '\n');
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    const kinds = turnMark().lostKinds as string;
+    // The union sorts to a..e (304 bytes); a, b and c fill 182, and d or e would make 243.
+    expect(kinds).toBe([k('a'), k('b'), k('c')].join(','));
+    expect(kinds.length).toBeLessThanOrEqual(200);
+    expect(kinds.endsWith(',')).toBe(false);
+    expect(kinds.split(',').every((a) => [k('a'), k('b'), k('c'), k('d'), k('e')].includes(a))).toBe(true);
+    expect(turnMark().lostBg).toBe(5);
+  });
+
+  it('a resume after a failed line flips it to done, keeps err, turnAt and stopAt, and moves no tasks into lost*', () => {
+    stopWith(THREE);
+    run({ hook_event_name: 'UserPromptSubmit' });   // working: bg 3 and its kinds and ids carried, lost* cleared
+    run({ hook_event_name: 'StopFailure', error: 'server_error' });
+    const failed = turnMark();
+    expect(failed).toMatchObject({ state: 'failed', err: 'server_error', bg: 3, bgKinds: 'shell,subagent', bgIds: 'b1,b2,b3' });
+    run({ hook_event_name: 'SessionStart', source: 'resume' });
+    const m = turnMark();
+    // Only a same-session DONE line's tasks are moved. A failed line's are dropped: bg, bgKinds and bgIds reset,
+    // lostBg stays 0 and the lost lists stay empty.
+    expect(m).toEqual({ ...failed, state: 'done', event: 'SessionStart', at: m.at, restartAt: m.at, bg: 0, bgKinds: '',
+      bgIds: '', lostBg: 0, lostKinds: '', lostIds: '' });
+    expect(m.err).toBe('server_error');
+  });
 });
