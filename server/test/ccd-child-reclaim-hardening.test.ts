@@ -421,7 +421,12 @@ describe('rung 9’s count never reads an unreadable reflog as zero (spec §5.5)
     try {
       const r = evalOf(h);
       expect(r.verdict, r.detail).toBe('unmeasured');
-      expect(r.detail).toContain(`${path.join(ext, 'logs')} cannot be listed (find answered 1: find: '${heads}': Permission denied)`);
+      // ccd's own sentence is platform-neutral; find's own stderr after it is not — GNU find
+      // quotes the path (`find: '<path>': Permission denied`), BSD find does not (`find: <path>:
+      // Permission denied`). Assert the ccd-owned prefix and that find's stderr names the path,
+      // without pinning either tool's quoting.
+      expect(r.detail).toContain(`${path.join(ext, 'logs')} cannot be listed (find answered 1: `);
+      expect(r.detail).toContain(heads);
     } finally { fs.chmodSync(heads, 0o755); fs.chmodSync(path.join(ext, 'logs', 'HEAD'), 0o644); }
   }, 60_000);
 
