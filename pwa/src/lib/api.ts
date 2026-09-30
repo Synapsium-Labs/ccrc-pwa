@@ -308,6 +308,16 @@ export interface UpdateIntentRequest {
   notify?: NotifyMode;
 }
 
+/** Wave 8 item C: the no-bundle refusal's words, with the tag when the caller knows it (a release or node row) and
+ *  without a literal placeholder when it does not (a 409 answered to a sheet or a toast). ONE spelling:
+ *  UPDATE_ERROR_TEXT['no-bundle'] is this with `null`. */
+export function noBundleRollbackText(tag: string | null): string {
+  const how = tag === null
+    ? 'On the node itself, ccrc rollback --to with that tag flips to a kept copy if the node keeps one; otherwise ccrc update --to with that tag, plus --downgrade --allow-unsigned, installs it.'
+    : `On the node itself, ccrc rollback --to ${tag} flips to a kept copy if the node keeps one; otherwise ccrc update --to ${tag} --downgrade --allow-unsigned installs it.`;
+  return `The catalogue lists no provenance bundle for ${tag ?? 'that release'} and the node’s install is verified, so it is not sent from here: a verified node refuses to download a release without --allow-unsigned, which a one-tap never passes. ${how} Tap Refresh if a bundle was published since the last poll, or pick a newer release.`;
+}
+
 /**
  * The update routes' refusals (W2 Task 13's route table), the sixth code table
  * in this file (after SEND, SUBMIT, UPLOAD, API and KICKOFF) — and the first
@@ -336,16 +346,6 @@ export interface UpdateIntentRequest {
  * scheduled poll both set, so `lastOkAt` may still be null — and nothing says
  * "checked" while it is (spec §18).
  */
-/** Wave 8 item C: the no-bundle refusal's words, with the tag when the caller knows it (a release or node row) and
- *  without a literal placeholder when it does not (a 409 answered to a sheet or a toast). ONE spelling:
- *  UPDATE_ERROR_TEXT['no-bundle'] is this with `null`. */
-export function noBundleRollbackText(tag: string | null): string {
-  const how = tag === null
-    ? 'On the node itself, ccrc rollback --to with that tag flips to a kept copy if the node keeps one; otherwise ccrc update --to with that tag, plus --downgrade --allow-unsigned, installs it.'
-    : `On the node itself, ccrc rollback --to ${tag} flips to a kept copy if the node keeps one; otherwise ccrc update --to ${tag} --downgrade --allow-unsigned installs it.`;
-  return `The catalogue lists no provenance bundle for ${tag ?? 'that release'} and the node’s install is verified, so it is not sent from here: a verified node refuses to download a release without --allow-unsigned, which a one-tap never passes. ${how} Tap Refresh if a bundle was published since the last poll, or pick a newer release.`;
-}
-
 const UPDATE_ERROR_TEXT: Record<Exclude<UpdateRouteError, 'unauthenticated'> | 'waiting-for-fleet', string> = {
   'not-configured': 'This box has no update control plane — it runs without a coordination database.',
   'bad-tag': 'That is not a release tag this server accepts — tags look like v0.0.9, with no leading zeros.',

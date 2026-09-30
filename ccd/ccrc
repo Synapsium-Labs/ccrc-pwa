@@ -18345,9 +18345,9 @@ _bak_prune() {
 # `|| :`. It keeps the newest $CCRC_BACKUP_KEEP timestamped dirs of any origin (the ONE bounded validator,
 # `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them; read from the process env only), and four
 # more that can only LEAVE the removal set: this run's own backup by its exact path; every dir named at or after
-# this run's lock second (UPD_BAK_FLOOR); and, among the dirs neither of those protects, the newest tree backup (a
+# this run's lock second (UPD_BAK_FLOOR); and, among the dirs neither of those protects, the newest tree backup (D-3594; a
 # `server-dist` or `agent-dist` entry: another run's, a deploy's, or the previous update's) and the newest coord.db
-# snapshot. The lock was released before the sweep (design §10), so it is RE-TAKEN without dying: any other holder
+# snapshot (D-3595). The lock was released before the sweep (design §10), so it is RE-TAKEN (D-3592) without dying: any other holder
 # means nothing is pruned.
 _bak_gc() {   # <lead word: update|rollback>
   local lead="$1" keep="${CCRC_BACKUP_KEEP:-10}"

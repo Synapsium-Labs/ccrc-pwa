@@ -185,7 +185,7 @@ export function moveRefusal(view: DispatchNodeView, move: { kind: RequestKind; t
     if (tagOk && floor !== null && !isNewerTag(move.target, floor)) return 'not-newer';
     if (known === undefined || known.yanked || !known.bundleListed) return 'unknown-tag';
   } else {
-    // Wave 8 item C: a rollback the node is KNOWN to refuse is refused here, before any lease or spawn, with
+    // Wave 8 item C, D-3587: a rollback the node is KNOWN to refuse is refused here, before any lease or spawn, with
     // L0's predicate (the PWA calls the same one). A non-tag target leaves `known` undefined: 'unknown-tag', as
     // before. Before refused-by-node, as unknown-tag already was: the target's own fact comes first.
     const rb = rollbackTargetRefusal(known, row.provenance);
@@ -515,7 +515,7 @@ export function leaseHolder(
   return held.length === 1 ? held[0]!.nodeId : null;
 }
 
-// ── each move's own record (wave 8 item A) ─────────────────────────────────────────────────────────────────────
+// ── each move's own record (wave 8 item A, D-3586) ──────────────────────────────────────────────────────────────
 
 /** What a move that TOOK A LEASE got back, as `runDispatch` returns it: converge.ts's MoveOutcome arms after the
  *  answer satisfy this structurally (L1 never imports L3). */

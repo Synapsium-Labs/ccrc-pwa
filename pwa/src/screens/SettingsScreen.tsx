@@ -201,7 +201,7 @@ export function releaseDirection(tag: string, nodes: readonly NodeWire[]): 'inst
   // never turns a Roll back row into Install while the sheet would move the Linux nodes.
   const managed = nodes.filter(isManagedNode);
   if (!isReleaseTag(tag) || managed.length === 0) return 'install';
-  // Wave 8 item F2: the release every managed node runs (by last measurement) is a state, not a move.
+  // Wave 8 item F2, D-3591: the release every managed node runs (by last measurement) is a state, not a move.
   if (managed.every((n) => nodeVersion(n) === tag)) return 'running';
   return managed.every((n) => {
     const v = nodeVersion(n);
@@ -209,7 +209,7 @@ export function releaseDirection(tag: string, nodes: readonly NodeWire[]): 'inst
   }) ? 'rollback' : 'install';
 }
 
-/** Wave 8 item F2: the running row's words, naming the set they measured: the managed nodes, how many of those are
+/** Wave 8 item F2, D-3591: the running row's words, naming the set they measured: the managed nodes, how many of those are
  *  unreachable (their version is the last measurement), and a macOS node on another version (not moved from here). */
 export function releaseRunningText(tag: string, nodes: readonly NodeWire[]): string {
   const managed = nodes.filter(isManagedNode);
