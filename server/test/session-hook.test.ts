@@ -602,11 +602,11 @@ describe('the fleet gate and failure polarity', () => {
   // symmetric midpoint T=182 -> 9.6%/12.0%). An absolute ms number is the
   // wrong shape for an arm timed on a box whose own load varies run to run.
   //
-  // THE RATIO, measured the same way (15 isolated runs each, same box, same
-  // interleaved-in-one-run method): shipped `case` gates gave ratios of
-  // 3.03-3.47 (mean 3.30, n=15); the ERE mutation gave ratios of 4.48-5.61
-  // (mean 4.87, n=15) — non-overlapping, 15/15 under and 15/15 over R=4 with
-  // ~13% margin on the shipped side and ~12% margin on the mutated side of R.
+  // THE RATIO, same method (15 isolated runs each, interleaved in one run). D-1898:
+  // shipped `case` gates 3.03-3.47 (mean 3.30), ERE mutation 4.48-5.61 (mean 4.87).
+  // Wave 2's turn marker, remedy (a): the cheap arm carries agent_id, so it never writes
+  // the marker, and SessionStart pays its jq+mv in both bands. Re-measured, n=15 each:
+  // shipped 2.86-3.97 (mean 3.40), ERE 4.33-5.94 (mean 5.15), R=4.1 (+3%/+5%).
   //
   // WHAT THIS GUARD CANNOT SEE — its masking window, recorded here rather than
   // in a gitignored measurement file, because this repo's convention is that a
@@ -616,14 +616,14 @@ describe('the fleet gate and failure polarity', () => {
   // denominator, and it is not frozen: it forks jq on a prefilter hit and reads
   // the hookstate back. If that arm slows down on its own, the ratio falls
   // while the SessionStart arm is exactly as slow as it was. Against the
-  // measured mutated band, a compound regression of >=12% in the cheap arm
-  // (4.48/4 = 1.12) pulls the mutation's BEST case back under R=4, and ~13%
-  // would put a typical mutated run there — so a >=10-13% cheap-arm regression
+  // measured mutated band, a compound regression of >=5% in the cheap arm
+  // (4.33/4.1 = 1.05) pulls the mutation's BEST case back under R=4.1, and a little
+  // more puts a typical mutated run there, so a >=5% cheap-arm regression
   // is enough to mask the very mutation this test exists to catch, silently and
   // with the suite green. The absolute p95 budget in the test above is what
   // still binds the cheap arm; if that budget is ever raised, this ratio's
   // masking window widens with it, and the two must be re-argued together.
-  it('SessionStart costs no more than 4x the cheap PostToolUse arm, on a 200-row registry', () => {
+  it('SessionStart costs no more than 4.1x the cheap PostToolUse arm, on a 200-row registry', () => {
     const reg = path.join(home, '.cc-sessions');
     const now = Math.floor(Date.now() / 1000);
     for (let i = 0; i < 200; i++) {
@@ -646,7 +646,7 @@ describe('the fleet gate and failure polarity', () => {
     const mainTimes: number[] = [];
     for (let i = 0; i < 20; i++) {
       const t0 = process.hrtime.bigint();
-      run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+      run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a-1' });
       cheapTimes.push(Number(process.hrtime.bigint() - t0) / 1e6);
       const t1 = process.hrtime.bigint();
       run({ hook_event_name: 'SessionStart', cwd: tree, source: 'startup' });
@@ -657,7 +657,7 @@ describe('the fleet gate and failure polarity', () => {
       return s[Math.floor(s.length * 0.95) - 1]!;
     };
     const ratio = p95(mainTimes) / p95(cheapTimes);
-    expect(ratio).toBeLessThan(4);
+    expect(ratio).toBeLessThan(4.1);
   });
 });
 
