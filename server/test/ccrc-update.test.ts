@@ -458,9 +458,24 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     '    state=""',
     '    for a in "$@"; do case "$a" in --state=*) state="${a#--state=}" ;; esac; done',
     '    case "$state" in',
-    '      "") [ -f "$HOME/fixture-sweep-units" ] && cat "$HOME/fixture-sweep-units" ;;',
+    // fix round 1 item 1 (D-3599): flag-gated failure arms for the unfiltered
+    // and `--state=active` listings — a distinctive rc plus a bus message on
+    // stderr, modelling the transient failure review 196's F1 measured.
+    '      "")',
+    '        if [ -f "$HOME/fixture-sweep-units-fail" ]; then',
+    '          echo "Failed to connect to bus: No such file or directory" >&2',
+    '          exit 93',
+    '        fi',
+    '        [ -f "$HOME/fixture-sweep-units" ] && cat "$HOME/fixture-sweep-units"',
+    '        ;;',
     '      failed) [ -f "$HOME/fixture-sweep-failed" ] && cat "$HOME/fixture-sweep-failed" ;;',
-    '      active) [ -f "$HOME/fixture-sweep-active" ] && cat "$HOME/fixture-sweep-active" ;;',
+    '      active)',
+    '        if [ -f "$HOME/fixture-sweep-active-fail" ]; then',
+    '          echo "Failed to connect to bus: No such file or directory" >&2',
+    '          exit 94',
+    '        fi',
+    '        [ -f "$HOME/fixture-sweep-active" ] && cat "$HOME/fixture-sweep-active"',
+    '        ;;',
     '      *) echo "fixture systemctl: unexpected argv: $*" >&2; exit 90 ;;',
     '    esac',
     '    exit 0 ;;',
@@ -2702,6 +2717,101 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
     expect(calls).not.toMatch(/try-restart/);
     expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
+  });
+
+  // ── fix round 1 item 1 (D-3599, review 196 F1): the sweep claims nothing ──
+  // it did not measure. (a) the unfiltered pre-sweep listing fails — the
+  // sweep REFUSES, restarting nothing, rather than print a zero line nobody
+  // measured. G1b's setup (both fixture-sweep-units/-active carry UNIT_LINES,
+  // KillMode=process drop-in present, so a successful listing would sweep
+  // clean), with ONLY the unfiltered listing failing.
+  itLinux('(a) the unfiltered pre-sweep listing fails — the sweep is REFUSED, not the old zero line: stderr names the rc, stdout is DEGRADED with no "Fix the KillMode above" and no restart, no zero line, no old success line, no restart call', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-listing-fail-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-units-fail'), '');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).toMatch(
+      /^update: sweep REFUSED — systemctl --user list-units "claude-session@\*" --plain --no-legend failed \(rc 93\), so the supervisors to be checked could not be listed\.$/m);
+    expect(r.stdout).toMatch(
+      /^update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted\. Once systemctl --user list-units 'claude-session@\*' answers, confirm KillMode=process on each unit, then restart them\.$/m);
+    expect(r.stdout).not.toContain('Fix the KillMode above');
+    expect(r.stdout).not.toContain('no claude-session@ supervisor was active when the sweep began');
+    expect(r.stdout).not.toContain('every live claude-session@ supervisor now runs the ccd this update installed');
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
+    expect(calls).not.toMatch(/try-restart/);
+    expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
+  });
+
+  // (a) on the OTHER caller — a rollback by flip reaches `_upd_sweep` from
+  // `cmd_rollback` itself, not through `cmd_update`, so the refusal is pinned
+  // at that call site too (review 179 item 5's pattern, applied to D-3599).
+  itLinux('(a) on a rollback BY FLIP: the unfiltered pre-sweep listing fails and the flip\'s own sweep is REFUSED the same way — the flip itself still completes, exit 0, phase done', () => {
+    const home = freshUpdateBox('ccrc-rollback-flip-sweep-listing-fail-');
+    plantW6Box(home, 'v2.0.0', V2_SHA, 'server');
+    const kept = keptVersion(home, 'v1.0.0', V1_SHA);
+    writeFileSync(join(home, '.ccrc', 'previous'), `v1.0.0\n${V1_SHA}\n`);
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-units-fail'), '');
+    const r = rollbackRun(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(linkOf(home)).toBe(kept);
+    expect(r.stderr).toMatch(
+      /^update: sweep REFUSED — systemctl --user list-units "claude-session@\*" --plain --no-legend failed \(rc 93\), so the supervisors to be checked could not be listed\.$/m);
+    expect(r.stdout).toMatch(
+      /^update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted\. Once systemctl --user list-units 'claude-session@\*' answers, confirm KillMode=process on each unit, then restart them\.$/m);
+    expect(r.stdout).not.toContain('Fix the KillMode above');
+    const calls = existsSync(join(home, 'systemctl-calls')) ? readFileSync(join(home, 'systemctl-calls'), 'utf8') : '';
+    expect(calls).not.toMatch(/try-restart/);
+    expect(JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>)
+      .toMatchObject({ phase: 'done', from: 'rollback' });
+  });
+
+  // (b) the verify (`--state=active`) listing fails — DEGRADED in place of
+  // the per-unit "not active after it" warnings and the old success line;
+  // the restart itself already happened (its rc is untouched), so
+  // try-restart IS in the recording.
+  itLinux('(b) the verify listing fails after a real restart — two DEGRADED lines replace the per-unit warnings and the old success line, rc stays 0', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-verify-fail-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active-fail'), '');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).toMatch(
+      /^update: warning: the post-restart set could not be listed \(systemctl --user list-units "claude-session@\*" --state=active --plain --no-legend failed, rc 94\) — no supervisor was verified\.$/m);
+    expect(r.stdout).toMatch(
+      /^update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep\.$/m);
+    expect(r.stderr).not.toMatch(/was active before try-restart/);
+    expect(r.stdout).not.toContain('every live claude-session@ supervisor now runs the ccd this update installed');
+    expect(r.stdout).not.toContain('no claude-session@ supervisor was active when the sweep began');
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
+    expect(calls).toMatch(/--user try-restart claude-session@\*/);
+  });
+
+  // G1a with the verify listing ALSO failing: `before` measures truly empty
+  // (no fixture-sweep-units at all), so (b)'s fork must not fire — the zero
+  // line prints exactly as G1a's plain case does, and no DEGRADED (b) line.
+  itLinux('G1a with the verify listing failing too: still the zero line, never a (b) DEGRADED line — nothing was restarted, so nothing needed verifying', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-zero-verify-fail-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-active-fail'), '');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(
+      /^update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart \(KillMode=process verified before the restart; panes untouched\)$/m);
+    expect(r.stdout).not.toMatch(/DEGRADED/);
+    expect(r.stderr).not.toMatch(/post-restart set could not be listed/);
   });
 
   // ── The Darwin siblings: the same outcomes, launchd's vocabulary ─────────
@@ -12158,6 +12268,52 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(r.stdout).toContain(
       `backup: pruned ${join(backupRoot(home), '20250101-000000')} (keeping the newest 1 timestamped backups; hand-made siblings are never touched)`);
     assertNoExtras(home);
+  });
+
+  // fix round 1 item 9 (review 196 F10): a timestamp-named SYMLINK is a
+  // timestamped backup for this prune (the glob matches the name; `_bak_list`
+  // accepts it because `[ -d ]` follows a symlink to a directory) — so it is
+  // counted and REMOVED AS A LINK, and its target must survive untouched.
+  // Two link cases (a fixture dir outside ~/ccrc-backups, and onKeptV1's real
+  // kept v1.0.0 — this box carries no v0.0.50) plus a plain timestamp-named
+  // file, which is not a timestamped backup at all and must survive
+  // unpruned. CCRC_BACKUP_KEEP=0 and every planted name below the run's lock
+  // second (2025…) put all three squarely in the removal set; neither target
+  // holds a coord.db, server-dist or agent-dist, so neither can be chosen as
+  // the protected newest-earlier snap or tree keep. Assertions read the
+  // FILESYSTEM (lstat for the links, a content digest for their targets),
+  // never the `pruned` echo — a `rm -rf -- "$d/"` on a symlink would empty
+  // the target and still print it.
+  it('P18: a timestamp-named symlink is pruned as a link, its target untouched; a timestamp-named plain file is not a backup and survives', () => {
+    const home = onKeptV1('ccrc-fx-b-p18-');
+    const v1 = join(home, 'ccrc-versions', 'v1.0.0');
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
+    const up = runUpdate(home);
+    expect(up.code, `the move onto v2.0.0 must complete — stderr: ${up.stderr}\nstdout: ${up.stdout}`).toBe(0);
+    for (const f of ['curl-argv', 'update-json-writes', 'systemctl-calls', 'tmux-argv', 'gh-calls']) rmSync(join(home, f), { force: true });
+    const outside = join(home, 'fixture-outside-backup-root');
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, 'marker.txt'), 'outside target content\n');
+    const linkToOutside = join(backupRoot(home), '20250101-000000');
+    symlinkSync(outside, linkToOutside);
+    const linkToKept = join(backupRoot(home), '20250102-000000');
+    symlinkSync(v1, linkToKept);
+    const plainFile = join(backupRoot(home), '20250103-000000');
+    writeFileSync(plainFile, 'a plain file, not a timestamped backup directory\n');
+    const outsideBefore = treeDigest(outside);
+    const keptBefore = treeDigest(v1);
+    const plainBefore = fileText(plainFile);
+    expect(Object.keys(outsideBefore).length, 'the outside fixture must carry a real file').toBeGreaterThan(0);
+    expect(Object.keys(keptBefore).length, 'the kept v1.0.0 tree must carry real files').toBeGreaterThan(0);
+    const r = rollbackRun(home, [], { CCRC_BACKUP_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const linkGone = (p: string): boolean => { try { lstatSync(p); return false; } catch { return true; } };
+    expect(linkGone(linkToOutside), 'the link to the outside target must be gone').toBe(true);
+    expect(linkGone(linkToKept), 'the link to the kept version must be gone').toBe(true);
+    expect(treeDigest(outside), 'the outside target\'s content must survive untouched').toEqual(outsideBefore);
+    expect(treeDigest(v1), 'the kept version\'s content must survive untouched').toEqual(keptBefore);
+    expect(existsSync(plainFile), 'the plain timestamp-named file is not a timestamped backup').toBe(true);
+    expect(fileText(plainFile)).toBe(plainBefore);
   });
 });
 
