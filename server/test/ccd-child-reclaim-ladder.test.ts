@@ -852,7 +852,7 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
     expect(r.detail).toContain('rooted inside');
   }, 60_000);
 
-  it('the vanished arm: a row spelled THROUGH the gone child (`<child>/..`) refuses as spelled through, never "rooted inside"', () => {
+  it('the vanished arm: a row spelled THROUGH the gone child (`<child>/..`) refuses as spelled through — or, reached through a linked ancestor, as unresolvable — never "rooted inside"', () => {
     // With the child's tree gone, `_ws_realpath` resolves only the prefix that
     // still exists and re-attaches the rest as written, so `<child>/..`
     // resolves to `<child>/..` itself — below the child as a string, and not
@@ -875,7 +875,7 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
         expect(r.verdict, `${spelled}: ${r.detail}`).toBe('unmeasured');
         expect(r.token).toBe('');
         expect(r.detail).toContain(`registry row(s) ${id} name a workdir that cannot be resolved`);
-        expect(r.detail).toContain('or a \'..\' in it follows a directory that no longer exists');
+        expect(r.detail).toContain('; a \'..\' in it follows a directory that no longer exists, or cannot otherwise be placed;');
       } else {
         expect(r.verdict, `${spelled}: ${r.detail}`).toBe('containment-unproven');
         expect(r.detail).toContain(`registry row(s) ${id} spell their workdir through ${wt}, not as one plain path`);

@@ -791,9 +791,12 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     }
   }, 60_000);
 
-  const UNRESOLVED = 'name a workdir that cannot be resolved (a directory or link on its path cannot be entered or followed,'
-    + ' or a \'..\' in it follows a directory that no longer exists), so ccd cannot place them against this child';
-  const UNRESOLVED_REMEDY = 'make it searchable, or, when a directory on it is gone, stop and purge the row';
+  // The sentence names every cause `_ws_reclaim_resolvable` answers 1 for, one clause each, and one remedy true of all.
+  const DOTDOT_CLAUSE = 'a \'..\' in it follows a directory that no longer exists, or cannot otherwise be placed';
+  const CNTRL_CLAUSE = 'or it holds a control character';
+  const UNRESOLVED = 'name a workdir that cannot be resolved (a directory or link on its path cannot be entered or followed;'
+    + ` ${DOTDOT_CLAUSE}; ${CNTRL_CLAUSE}), so ccd cannot place them against this child`;
+  const UNRESOLVED_REMEDY = 'make it searchable, or stop and purge the row';
 
   it('an absolute OTHER row that cannot be resolved — a link to the child, into a directory that cannot be entered — is unplaced, and `<child>/server` stands', () => {
     const { wt } = makeChild(h);
@@ -884,6 +887,9 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     const r = evalOf(h);
     expect(r.verdict, r.detail).toBe('unmeasured');
     expect(r.detail).toContain(`registry row(s) demo-nl ${UNRESOLVED}`);
+    // Its link can be followed and it holds no `..`: the sentence names THIS cause, and a remedy true of it.
+    expect(r.detail).toContain(`; ${CNTRL_CLAUSE}), so ccd cannot place them`);
+    expect(r.detail).toContain(`against this child — ${UNRESOLVED_REMEDY}`);
   }, 60_000);
 
   it('the CONTROL: a row whose directory was simply deleted still resolves — it places, and a stale row outside never strands the child', () => {
@@ -941,7 +947,7 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     expect(r.verdict, r.detail).toBe('unmeasured');
     expect(r.detail).toContain(`registry row(s) ${DOTDOT} ${UNRESOLVED}`);
     // The sentence names THIS cause — a `..` following a directory that is gone — and a remedy true of it.
-    expect(r.detail).toContain('or a \'..\' in it follows a directory that no longer exists');
+    expect(r.detail).toContain(`; ${DOTDOT_CLAUSE};`);
     expect(r.detail).toContain(`against this child — ${UNRESOLVED_REMEDY}`);
     expect(r.detail, 'the value is never printed').not.toContain('gone/..');
     preserved(c, raw, before);
@@ -1027,6 +1033,78 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
       expect(r.verdict, `${p}: ${r.detail}`).toBe('reclaimable');
       dropRowOf(`demo-ctl${i}`);
     });
+  }, 60_000);
+
+  // A `..` IN THE ENTERED PREFIX whose logical walk no longer succeeds. bash's
+  // `cd` canonicalises `<link>/../gone/..` textually, asking that each
+  // component before a `..` be a directory; when one no longer is, it FALLS
+  // BACK to the kernel's walk of the path as written, which goes through the
+  // link's target — silently, outside POSIX mode. A pane that entered while
+  // `$HOME/gone` stood lives in the child; the fallback reads the row as
+  // `$HOME/elsewhere/<child path>`, outside. `$HOME/elsewhere/gone` stands, so
+  // the kernel's walk of the prefix succeeds and the `-d` walk stops there.
+  /** `$HOME/lnk -> $HOME/elsewhere/sub`, with `$HOME/elsewhere/gone` standing. */
+  const plantLinkedPrefix = (): void => {
+    fs.mkdirSync(path.join(h.home, 'elsewhere', 'sub'), { recursive: true });
+    fs.mkdirSync(path.join(h.home, 'elsewhere', 'gone'));
+    fs.symlinkSync(path.join(h.home, 'elsewhere', 'sub'), path.join(h.home, 'lnk'));
+  };
+
+  it('`..` in the ENTERED prefix whose logical walk fails once `gone` goes: bash’s `cd` would fall back to the kernel’s walk, which is not where the session lives — unmeasured, no token, and ws-reclaim removes nothing', () => {
+    const c = makeChild(h);
+    const rel = path.relative(h.home, c.wt);
+    plantLinkedPrefix();
+    // The REAL token, taken before the row exists: the rows are no input to it.
+    const tok = evalOf(h).token;
+    expect(tok, 'the CONTROL: without the row the ladder passes').toMatch(/^[0-9a-f]{64}$/);
+    fs.mkdirSync(path.join(h.home, 'gone'));
+    const raw = `${h.home}/lnk/../gone/../${rel}`;
+    otherRowOf(DOTDOT, raw);
+    plantTmux(h, { sessions: [`cc-${DOTDOT}`] });
+    expect(h.sh(`cd -- "${raw}" && pwd -P`), 'the CONTROL: a pane entering the row now lands in the child').toBe(fs.realpathSync(c.wt));
+    const shared = evalOf(h);
+    expect(shared.verdict, `the CONTROL: with \`gone\` standing the row resolves to the child — ${shared.detail}`).toBe('containment-unproven');
+    expect(shared.detail).toContain(`is also named by registry row(s) ${DOTDOT}`);
+    const before = treeOf(c.wt);
+    fs.rmdirSync(path.join(h.home, 'gone'));
+    const elsewhere = fs.realpathSync(path.join(h.home, 'elsewhere'));
+    expect(h.sh(`cd -- "${h.home}/lnk/../gone/.." && pwd -P`), 'the CONTROL: bash’s own `cd` falls back to the kernel’s walk').toBe(elsewhere);
+    expect(h.sh(`_ws_realpath "${raw}"`), 'the CONTROL: so `_ws_realpath` answers a path outside the child').toBe(`${elsewhere}/${rel}`);
+    const r = evalOf(h);
+    expect(r.token, `the evaluation minted a destructive token — ${r.verdict}: ${r.detail}`).toBe('');
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.detail).toContain(`registry row(s) ${DOTDOT} ${UNRESOLVED}`);
+    const v = childReclaimVerb(h, tok);
+    expect(v.stdout, 'the verb reclaimed the child — the live session’s tree').not.toContain('"reclaimed"');
+    preserved(c, raw, before);
+    expect(v.code, v.stdout + v.stderr).toBe(1);
+    const o = JSON.parse(v.stdout) as { failed: string; detail: string };
+    expect(o.failed, 'refused at evaluation, before anything started').toBe('probe-unmeasured');
+    expect(o.detail).toContain(`registry row(s) ${DOTDOT} ${UNRESOLVED}`);
+  }, 90_000);
+
+  it('the CONTROL: a `<link>/../<existing>/…` spelling whose logical walk SUCCEEDS still resolves, and places as it always did', () => {
+    const c = makeChild(h);
+    const rel = path.relative(h.home, c.wt);
+    plantLinkedPrefix();
+    const resolvable = (p: string): string => h.sh(`_ws_reclaim_resolvable "${p}"; printf '%s' "$?"`);
+    const home = fs.realpathSync(h.home);
+    // At the child's own path: resolved logically, it is the child — SHARED, terminal.
+    const atChild = `${h.home}/lnk/../${rel}`;
+    expect(resolvable(atChild)).toBe('0');
+    expect(h.sh(`_ws_realpath "${atChild}"`)).toBe(`${home}/${rel}`);
+    otherRowOf('demo-at', atChild);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail).toContain('is also named by registry row(s) demo-at');
+    dropRowOf('demo-at');
+    // Outside the child: resolved logically to `$HOME/elsewhere/x`, which places nowhere.
+    const outside = `${h.home}/lnk/../elsewhere/x`;
+    expect(resolvable(outside)).toBe('0');
+    expect(h.sh(`_ws_realpath "${outside}"`)).toBe(`${home}/elsewhere/x`);
+    otherRowOf('demo-out', outside);
+    const o = evalOf(h);
+    expect(o.verdict, o.detail).toBe('reclaimable');
   }, 60_000);
 });
 

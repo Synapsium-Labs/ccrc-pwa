@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a6494d9680eafb2705ee2c6ebb7d6aa30886a1d25db952cfd7c620b3efde3522
+# ccrc:generated 1 sha256=3cdaa9b855d916a9aea956d31f04b5de3be2349316c937a43c3facc490631066
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24295,7 +24295,9 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   #                                 ('' = none); rc 2 when that could
   #                                 not be asked (_WS_SHARED_WHY): the registry would not list, a row's
   #                                 `.workdir` would not read, a row's `.workdir` is not absolute,
-  #                                 opens with `//`, lies under `/proc`, cannot be resolved, or resolves
+  #                                 opens with `//`, lies under `/proc`, cannot be resolved (a directory
+  #                                 or link on it cannot be entered or followed, a `..` in it cannot be
+  #                                 placed, or it holds a control character), or resolves
   #                                 to a path opening with `//`, or the child's own
   #                                 workdir resolves to one (the row cannot be placed) — every case after
   #                                 the listing only when the same pass found no SHARED, NESTED or THROUGH
@@ -24396,7 +24398,16 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # the child the audit answered reclaimable (the verb then refused, only
   # because the audit's permission pass had made that directory searchable);
   # through one OUTSIDE the child, which no permission pass touches, the verb
-  # removed that session's tree. Asked by `_ws_reclaim_resolvable`, not
+  # removed that session's tree. The same holds for a `..` it cannot place:
+  # one in the unresolved suffix, below a missing directory, which
+  # `_ws_realpath` re-attaches as written though it names wherever that
+  # directory once led; and one in the entered prefix whose logical walk
+  # fails (a component before it is no longer a directory, or the path it
+  # names does not exist), where bash's `cd` falls back to the kernel's
+  # walk. And for a spelling holding a
+  # control character, which `_ws_realpath`'s `dirname`/`basename` captures
+  # misread. Both `..` shapes were measured: the verb removed the live tree
+  # each names. Asked by `_ws_reclaim_resolvable`, not
   # literally at or below the child (the chain refuses a literal one as it
   # is), collected and decided after the loop, as an unplaced row is. The
   # child's own spelling needs no such test: one that cannot be entered fails
@@ -24442,7 +24453,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   [[ -z "$unproc" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unproc name a workdir under /proc, which names whatever the reading process's own cwd or descriptors are, so ccd cannot place them against this child — stop each and start it again from a plain path, or purge its row"
   [[ -z "$unres" ]] \
-    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved (a directory or link on its path cannot be entered or followed, or a '..' in it follows a directory that no longer exists), so ccd cannot place them against this child — make it searchable, or, when a directory on it is gone, stop and purge the row"
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved (a directory or link on its path cannot be entered or followed; a '..' in it follows a directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place them against this child — make it searchable, or stop and purge the row"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2
   return 0
 }
@@ -24454,7 +24465,14 @@ _ws_reclaim_resolvable() {   # path -> 0 when `_ws_realpath` resolves path: the 
   #                              leads. Its `cd` is LOGICAL: `<link>/..` is the link's parent, not its
   #                              target's (the kernel's answer). That is the answer that matters here,
   #                              because the pane's own shell enters the workdir the same way (`cd
-  #                              '$workdir'`, logical), so the session lives where `_ws_realpath` says. `-d` is false on EACCES as on ENOENT, so a component that stands
+  #                              '$workdir'`, logical), so where that logical walk succeeds the session
+  #                              lives where `_ws_realpath` says. Where it fails — a component before a
+  #                              `..` is no longer a directory, or the path it names does not exist —
+  #                              bash's `cd` silently falls back to the kernel's walk of the path as
+  #                              written, which is not where a pane that entered while the logical path
+  #                              stood lives; so this `cd` runs under `set -o posix`, which refuses
+  #                              instead, and such a path is never resolvable
+  #                              (`_ws_realpath` is not edited: its answer is judged here). `-d` is false on EACCES as on ENOENT, so a component that stands
   #                              but cannot be followed (a link across an unsearchable directory, or one
   #                              that cannot be looked at) stops that walk as if it were missing. A path
   #                              holding a control character is never resolvable: `_ws_realpath`'s
@@ -24470,7 +24488,7 @@ _ws_reclaim_resolvable() {   # path -> 0 when `_ws_realpath` resolves path: the 
       *)   head=. ;;
     esac
   done
-  ( cd -- "$head" >/dev/null 2>&1 && pwd -P >/dev/null 2>&1 ) || return 1
+  ( set -o posix; cd -- "$head" >/dev/null 2>&1 && pwd -P >/dev/null 2>&1 ) || return 1
   rest="${p#"$head"}"
   while [[ "$rest" == /* ]]; do rest="${rest#/}"; done
   [[ -n "$rest" ]] || return 0
