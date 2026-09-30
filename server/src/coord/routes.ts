@@ -11,7 +11,7 @@ import { assembleFleet } from '../fleet.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
-import { CCD_ARGV, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
+import { CCD_ARGV, RECLAIM_PAUSE_CAP, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
 import { escalate, demote, classRungEffortReset, EFFORT_LADDER, type Demotion, type RungCurrent, type RungTarget } from '../../../shared/routing-ladder.js';
 import { CLASSES, type ModelClass } from '../../../shared/models.js';
 import { decideCaps } from './caps.js';
@@ -2280,6 +2280,50 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, requested: body.paused });
   });
 
+  /** `POST /api/coord/reclaim-pause` — the operator's door onto
+   *  `$REG/reclaim-paused` (child-reclamation spec §5.8), the fleet-wide switch
+   *  on the AUTOMATIC reclamation of child workspaces. Body `{ state: 'on' |
+   *  'off' }` — ccd's own vocabulary, passed through, rather than the pause
+   *  route's boolean: there is no mapping here for a route to get wrong.
+   *
+   *  SESSION-GATED, AND NO BOX TOKEN — `coord-pause-route.test.ts`'s
+   *  `SESSION_ONLY`, beside `/api/coord/caps`, and deliberately NOT `UNGATED`.
+   *  The box token gates machine lanes; an operator toggling this from the phone
+   *  is not one, and gating it on the fleet's shared secret would put it behind
+   *  a key the phone does not hold. Nor is it a release valve: raising it
+   *  releases no wedge, so the release-valve argument does not apply. Armed,
+   *  it sits behind `auth/gate.ts` like every other PWA write. The
+   *  coordinator skill is exempt from naming it AND forbidden from it (`coordinator-skill.test.ts`):
+   *  a coordinator told about this door would be told how to stop or restart
+   *  the reclamation of its own children.
+   *
+   *  THE SKEW GATE IS THE CAPABILITY TOKEN, read with `capSupported` — no
+   *  evidence REFUSES. `verbSupported` would permit on an absent verb list and
+   *  send `ccd reclaim-pause` to a box whose ccd answers a usage error, which
+   *  the phone would render as a broken switch rather than an older fleet host.
+   *
+   *  NOT a guard on anything that deletes, and it says so: `ws-reclaim` reads
+   *  the file on the box, inside its lock, at the instant of deletion, and that
+   *  read is what makes the switch real. This route only moves the file.
+   *
+   *  No `coordMutex` (it writes no coordination row) and no `notConfigured` arm
+   *  (a box with no coordination database can still carry the file) — the
+   *  pause route's two reasons, unchanged. */
+  app.post('/api/coord/reclaim-pause', async (req, reply) => {
+    const body = (req.body ?? {}) as { state?: unknown };
+    if (body.state !== 'on' && body.state !== 'off') {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    if (!capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)) {
+      return reply.code(501).send({ ok: false, error: 'unsupported' });
+    }
+    const res = await deps.runCcd(CCD_ARGV.reclaimPause(body.state));
+    if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+    // `requested`, never `paused`: the authoritative answer is the next
+    // `{type:'coord'}` frame's `reclaim` field, and the toggle settles on that.
+    return reply.code(200).send({ ok: true, requested: body.state });
+  });
+
   /** `GET`/`POST /api/coord/caps` — the two coordination caps become an
    *  OPERATOR DIAL. Before this, `CoordStore.setCaps` had no caller anywhere in
    *  `server/src`: the only way to change `maxConcurrentWorkers` or
@@ -2309,7 +2353,10 @@ export function registerCoordRoutes(
    *
    *  THE READ HALF EXISTS BECAUSE NOTHING ELSE CARRIES THESE NUMBERS (D-1209).
    *  `capsUsage` is computed server-side and reaches the PWA nowhere;
-   *  `CoordStatus` carries `pause` and `mail` and no numbers at all. Caps are
+   *  `CoordStatus` carries `pause`, `mail`, `reclaim` and `childReclaimAttention`
+   *  (child-reclamation wave 4) — the last holding `runId`/`at` numbers of its
+   *  own, but only for a child that currently needs the operator's attention,
+   *  a cached list rather than a value re-derived on every tick. Caps are
    *  deliberately NOT added to that frame: `emitCoord` states it needs no
    *  try/catch precisely because it touches no `node:sqlite`, and
    *  `dispatchedIn24h` moves with the clock, so the frame's byte-equality guard

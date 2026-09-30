@@ -56,7 +56,7 @@ import {
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
-  type LifecycleGap, type LifecycleGapReason,
+  type LifecycleAct, type LifecycleGap, type LifecycleGapReason,
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState,
@@ -91,8 +91,24 @@ export interface PrLineageEntry { pr: number; branch: string; phase: string; rec
  * made, kept here for the board-placement policy to read server-side. It is
  * NOT one of the design's two wire additions, so it stays off `RunSummary`
  * and gets stripped by `toRunSummary` alongside `prLineage`.
+ *
+ * `sessionBornAt` (child-reclamation spec §5.1, §5.3): the child's BIRTH,
+ * write-once per BOUND session — `bindSession` below is the one writer of a
+ * NON-NULL birth (`clearSession` and migration 15's backfill also touch the
+ * column, both only ever to NULL or to seed it), on `coordProject`'s idiom of
+ * a server-side measurement nothing on the wire needs. `childBirthOf`
+ * (`coord/childSpent.ts`) reads it, never `dispatchStartedAt`, which keeps its
+ * own every-attempt meaning unchanged. `sessionBornFor` rides beside it: the
+ * session the birth was recorded FOR, so a cross-build rollback that rebinds
+ * `sessionId` through an older build's `clearSession`/`setSession` — which
+ * never touch either column — leaves a birth `childBirthOf` can prove is no
+ * longer this occupant's own (spec §5.3, the recycled-slug hazard extended
+ * across a rollback).
  */
-export interface RunRow extends RunSummary { prLineage: PrLineageEntry[]; coordProject: string | null }
+export interface RunRow extends RunSummary {
+  prLineage: PrLineageEntry[]; coordProject: string | null;
+  sessionBornAt: number | null; sessionBornFor: string | null;
+}
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
  *  the three consumers (`closeRun`, `FleetWatcher.sweepMerged`, the by-hand
@@ -125,9 +141,12 @@ export type { CoordPlacementStamp };
  *  server-side, and NOT one of that design's two wire additions — see
  *  `RunRow`'s own docstring. Shared by `GET /api/runs` (`coord/routes.ts`)
  *  and the `runs` WS frame's own emitter (`watch.ts`'s `emitRuns`, Task 10)
- *  rather than each holding its own copy of the strip. */
+ *  rather than each holding its own copy of the strip. Strips `sessionBornAt`
+ *  and `sessionBornFor` (migration 15) on the same idiom: server-only
+ *  measurements, never sent. */
 export const toRunSummary = (row: RunRow): RunSummary => {
-  const { prLineage: _prLineage, coordProject: _coordProject, ...summary } = row;
+  const { prLineage: _prLineage, coordProject: _coordProject, sessionBornAt: _sessionBornAt,
+          sessionBornFor: _sessionBornFor, ...summary } = row;
   return summary;
 };
 
@@ -702,6 +721,21 @@ export type OpenSiblingsResult =
   | { ok: true; siblings: OpenSibling[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
+/** `runsNamingSession`'s row — `OpenSibling` plus `sessionId` (the session
+ *  this whole read is scoped to, carried per row so a caller building
+ *  `ChildReclaimHoldCandidate`s never has to remember it separately) and
+ *  `state` (child-reclamation wave 4: unlike `OpenSibling`'s rows, which are
+ *  non-terminal by construction, these span every state, and the hold read
+ *  needs to know which ones are terminal). */
+export interface ChildReclaimNamingRow {
+  readonly id: number; readonly sessionId: string; readonly program: string;
+  readonly wave: number; readonly waveOf: number | null; readonly state: RunState;
+}
+
+export type RunsNamingSessionResult =
+  | { readonly ok: true; readonly runs: readonly ChildReclaimNamingRow[] }
+  | { readonly ok: false; readonly kind: 'run-unreadable'; readonly detail: string };
+
 export type CoordPlacementStampsResult =
   | { ok: true; stamps: CoordPlacementStamp[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
@@ -752,6 +786,8 @@ interface RunRowDb {
   briefQueued: number | null;
   clearError: string | null;
   coordProject: string | null;
+  sessionBornAt: number | null;
+  sessionBornFor: string | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -771,7 +807,8 @@ const RUN_ROW_COLUMNS =
   'r.workspace, r.branch, r.state, r.kind, CAST(r.reviews AS TEXT) AS reviewsText, r.claimedBy, ' +
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
-  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject';
+  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
+  'r.sessionBornFor';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -1312,6 +1349,81 @@ class IntentJournalFault extends Error {
   constructor(readonly why: 'journal-unreadable' | 'journal-unwritable', cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause));
   }
+}
+
+/** Every id that may be the `from` of one `reclaimProgram` row, or `null`
+ *  for a row the writer cannot have produced. The writer emits
+ *  `reclaim:<from> -> <to>` (below, `this.recordRunEvent(m.id, 'operator',
+ *  \`reclaim:${m.claimedBy} -> ${to}\`, at)`, one call per row the UPDATE just
+ *  rewrote). A row the reader cannot use makes it throw, and `run_events`
+ *  rows are never deleted, so one such row stops every automatic
+ *  reclamation for good: this must accept EVERY string the writer can emit.
+ *
+ *  Neither side has a shape it can be split on. `from` is `runs.claimedBy`
+ *  as sqlite reads it back; `POST /api/runs` checks it only with
+ *  `claimedBy.trim() === ''` and no charset guard (`shared/api.ts`'s
+ *  `isSessionIdShape` exists precisely because the route does not enforce
+ *  one), so `from` may hold whitespace, a line terminator beside other
+ *  characters, its own ` -> `, or nothing at all — `trim` keeps NUL, and
+ *  node:sqlite reads `"\u0000demo"` back truncated to `""`. `to` is the
+ *  trimmed id `reclaimRun` (`reclaim.ts`) found as `<to>.uuid` in the
+ *  registry listing: never empty, but a filename, so it may hold a space, a
+ *  tab, a line feed or a ` -> ` of its own, or start with `-> `. With an
+ *  arrow on both sides, `reclaim:<from> -> <to>` has more than one reading,
+ *  and no single split recovers `from` in every case.
+ *
+ *  So this does not pick a split. It returns the prefix before EVERY
+ *  occurrence of ` -> ` in the text after `reclaim:`, overlapping ones
+ *  included (the search resumes one character past each hit, so `a -> -> b`
+ *  yields both `a` and `a ->`). The writer's own separator is one of those
+ *  occurrences, so the true `from` is always among the prefixes, whatever
+ *  either side contains. THE COST IS OVER-PROTECTION: the extra prefixes
+ *  join the set of ids that have coordinated, so a session whose id happens
+ *  to equal one of them — `demo` beside a displaced `demo -> x`, say — is
+ *  never reclaimed automatically. That is the fail-shut direction (it can
+ *  only leave a workspace for a human to clean up), where choosing one split
+ *  could silently drop the real `from` and let the displaced coordinator's
+ *  workspace be reclaimed. A well-shaped row (`demo-a -> heir-x`) has one
+ *  occurrence and yields exactly its `from`.
+ *
+ *  `null` — which the one reader, `childReclaimCoordinatorIds`, below, turns
+ *  into a THROW rather than a silent drop — only for text that does not
+ *  start with `reclaim:` or holds no ` -> ` at all: the writer always emits
+ *  the prefix and one separator, so such a row is hand-written or a future
+ *  reword of the writer. The SQL selection below is case-SENSITIVE
+ *  (`substr(detail, 1, 8) = 'reclaim:'`, wave 4's fix — SQLite's `LIKE` is
+ *  case-insensitive for ASCII by default and would have handed this reader a
+ *  row it can never attribute, such as an operator's own `RECLAIM:x -> y`
+ *  note, which is exactly the "hand-written" case this function throws on.
+ *
+ *  THE LENGTH BOUND. A candidate longer than
+ *  `CHILD_RECLAIM_MAX_SESSION_ID_CHARS` (255) is never returned, and the
+ *  search stops at the first occurrence past that offset. Safe because a
+ *  session id is a FILENAME component — the registry holds `<id>.uuid`, and
+ *  no filesystem this runs on takes a component over 255 bytes, which no
+ *  string over 255 characters can fit in — so no longer id can ever be a
+ *  reclaimable child: dropping such a candidate can only fail to protect a
+ *  session that cannot exist. Every `from` of 255 characters or fewer is
+ *  still among the prefixes, exactly as before. Necessary because `from`
+ *  is unbounded upstream (the Fastify body limit is its only cap): a
+ *  megabyte `claimedBy` built of repeated ` -> ` yielded one prefix per
+ *  occurrence, up to a megabyte each, and every pass inserted them all into
+ *  a `Set` — seconds of synchronous event-loop stall per call, on every
+ *  sweep pass and every close. The bound makes the work per row
+ *  proportional to 255, not to the row. `null` still means "no ` -> ` at
+ *  all"; a row whose every candidate is too long parses to `[]`. */
+const CHILD_RECLAIM_MAX_SESSION_ID_CHARS = 255;
+function childReclaimDisplacedCandidates(detail: string): string[] | null {
+  const prefix = 'reclaim:';
+  if (!detail.startsWith(prefix)) return null;
+  const body = detail.slice(prefix.length);
+  const first = body.indexOf(' -> ');
+  if (first === -1) return null;
+  const out: string[] = [];
+  for (let i = first; i !== -1 && i <= CHILD_RECLAIM_MAX_SESSION_ID_CHARS; i = body.indexOf(' -> ', i + 1)) {
+    out.push(body.slice(0, i));
+  }
+  return out;
 }
 
 /**
@@ -2417,11 +2529,39 @@ export class CoordStore {
    * later SQLite failure rolls the binding, re-issued delivery and event back
    * together (D-2505).
    */
-  bindSession(runId: number, sessionId: string): { rebound: boolean; reissued: number } {
+  bindSession(runId: number, sessionId: string, bornAt?: number | null): { rebound: boolean; reissued: number } {
     const row = this.db.prepare('SELECT sessionId FROM runs WHERE id = ?')
       .get(runId) as { sessionId: string | null } | undefined;
     const predecessor = row?.sessionId ?? null;
     this.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(sessionId, runId);
+    // The child's BIRTH is write-once PER BOUND SESSION, never a first stamp
+    // per run (child-reclamation spec §5.1, §5.3 — `childBirthOf` reads these
+    // two columns, `coord/childSpent.ts`). An EXPLICIT `bornAt` — only the
+    // fresh-spawn dispatch arm passes one, because it alone knows whether this
+    // spawn is genuinely new or an adoption of an earlier attempt's workspace —
+    // wins outright: a real stamp writes `sessionBornFor = sessionId` beside
+    // it, and an explicit `null` (the adopted arm) writes `sessionBornFor =
+    // NULL` too — there is no birth to attribute, so nothing is attributed.
+    // Omitting the argument means this bind is not the moment of birth: a
+    // same-session re-statement leaves BOTH columns untouched (this call is
+    // outside a `tx()` on the fresh-spawn arm — see below — so the invariant
+    // `sessionId IS NULL ⇒ sessionBornAt IS NULL` is what keeps a crash
+    // between the two UPDATEs fail-closed: the predecessor there is always
+    // NULL, never a bound session whose birth this branch could leave
+    // orphaned), and an occupant change nulls both, because a birth dated to
+    // a session that no longer holds this run is not this session's birth —
+    // `sessionBornFor` is how `childBirthOf` catches a birth an OLDER build
+    // left stale across a rollback (a build that predates this column rebinds
+    // `sessionId` through `clearSession`/two-argument `setSession` without
+    // touching either). Neither statement below names `sessionId` in its SET
+    // list, so the one-writer scan above still counts exactly one write of
+    // that column per statement.
+    if (bornAt !== undefined) {
+      this.db.prepare('UPDATE runs SET sessionBornAt = ?, sessionBornFor = ? WHERE id = ?')
+        .run(bornAt, bornAt === null ? null : sessionId, runId);
+    } else if (predecessor !== sessionId) {
+      this.db.prepare('UPDATE runs SET sessionBornAt = NULL, sessionBornFor = NULL WHERE id = ?').run(runId);
+    }
     // NULL is a FIRST bind, not a re-bind, and it re-issues nothing: there is no
     // predecessor to inherit from, and every wave-1 dispatch on the box lands
     // here. The same-session case is a re-statement, not a change of occupant.
@@ -2453,7 +2593,7 @@ export class CoordStore {
    * sentence in the paragraph above is still true of what this method DOES;
    * what changed is only where the statement lives.
    */
-  setSession(runId: number, sessionId: string): { rebound: boolean; reissued: number } {
+  setSession(runId: number, sessionId: string, bornAt?: number | null): { rebound: boolean; reissued: number } {
     // Delegated, not re-implemented: `bindSession` above is the writer of this
     // column. Its answer is RETURNED, not dropped (D-2351; PR #75 review
     // round 1, store-2): the open route is a live RE-bind path — a retried open of a
@@ -2461,7 +2601,13 @@ export class CoordStore {
     // predecessor — and records what it was told on the run's trail. The
     // fresh-spawn arm (`dispatch.ts`) binds a run that names no session yet,
     // where the answer is always `{rebound:false, reissued:0}` and is ignored.
-    return this.bindSession(runId, sessionId);
+    //
+    // `bornAt` (migration 15) is forwarded as-is, undefined included:
+    // `bindSession` is where the write-once-birth logic lives, on both the
+    // explicit and the omitted arm, so this method adds nothing of its own.
+    // The open route (`routes.ts`) calls the two-argument form, never naming a
+    // birth — it re-binds an already-dispatched wave, not a fresh spawn.
+    return this.bindSession(runId, sessionId, bornAt);
   }
 
   /**
@@ -2497,8 +2643,13 @@ export class CoordStore {
       const row = this.db.prepare("SELECT sessionId FROM runs WHERE id = ? AND state = 'planned'")
         .get(runId) as { sessionId: string | null } | undefined;
       if (row === undefined || row.sessionId === null) return { ok: true as const, cleared: false };
+      // `sessionBornAt`/`sessionBornFor` clear alongside `sessionId` (migration
+      // 15): the spent occupant's birth belongs to nobody once the run names no
+      // session, and the next dispatch's fresh-spawn arm mints a fresh birth
+      // for whichever session it binds.
       this.db.prepare(
-        "UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL WHERE id = ? AND state = 'planned'",
+        "UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL, " +
+        "sessionBornAt = NULL, sessionBornFor = NULL WHERE id = ? AND state = 'planned'",
       ).run(runId);
       this.recordRunEvent(runId, 'coordinator', `session-unbound: ${row.sessionId} (workspace-spent #${pr})`);
       return { ok: true as const, cleared: true };
@@ -2837,6 +2988,36 @@ export class CoordStore {
     return { ok: true, siblings };
   }
 
+  /** `openRunsForSession`'s shape, with its `state NOT IN …` filter REMOVED
+   *  (child-reclamation wave 4, spec §5.7's "no hold" conjunct): every run
+   *  naming `sessionId`, in ANY state, TERMINAL included. `openRunsForSession`
+   *  answers "is this workspace still claimed?" and deliberately excludes a
+   *  terminal run; the hold read needs the OPPOSITE population — a run that
+   *  has FINISHED, because only a terminal run's own claim can be what a held
+   *  child's text renders. `state` rides on every row (`openRunsForSession`'s
+   *  narrower row omits it — every row it returns is non-terminal by
+   *  construction, so its caller never needs to ask): the hold read compares
+   *  each candidate's `state` itself. ALL-OR-FAILURE, `openRunsForSession`'s
+   *  own rule: a partial candidate list is how a hold this build did write can
+   *  read as one it never wrote. */
+  runsNamingSession(sessionId: string): RunsNamingSessionResult {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state FROM runs ' +
+      'WHERE sessionId = ? ORDER BY id',
+    ).all(sessionId) as unknown as
+      { idText: string; program: string; waveText: string; waveOfText: string | null;
+        reviewsText: string | null; state: string }[];
+    const runs: ChildReclaimNamingRow[] = [];
+    for (const r of rows) {
+      const m = measureRunNumbers(r);
+      if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
+      runs.push({ id: m.nums.id, sessionId, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf,
+        state: isRunState(r.state) ? r.state : 'unknown' });
+    }
+    return { ok: true, runs };
+  }
+
   /** The sessions COORDINATING something live: every distinct `claimedBy` of a
    *  run this build calls non-terminal. NOT `openRunsForSession`'s question one
    *  method up — that one keys on `sessionId`, the WORKER column, which is the
@@ -2868,6 +3049,107 @@ export class CoordStore {
       'SELECT DISTINCT claimedBy FROM runs ' +
       `WHERE claimedBy IS NOT NULL AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
+  }
+
+  /** Every session EVER named `claimedBy` of any run, in ANY state — the
+   *  past-tense counterpart of `openCoordinatorIds` one method up (which
+   *  answers only LIVE coordination, `state NOT IN` the terminal set, and so
+   *  drops a claim that has since reached a terminal run). Child-workspace
+   *  reclamation (spec 2026-09-22 §1, rules 3–4: manual cleanup is reserved
+   *  for a coordinator's OWN workspace, never a sub-workspace a sweep may
+   *  act on) needs the historical question, not the live one: a child made a
+   *  programme's HEIR — the reclaim door rewrites `claimedBy` onto it — became
+   *  that programme's coordinator the moment the rewrite landed, whatever
+   *  state the run later reaches, so nothing here is excluded by state the
+   *  way `openCoordinatorIds` excludes it. A row `reclaimProgram` rewrote onto
+   *  an already-terminal run still counts: the workspace coordinated it once,
+   *  and a later close does not retroactively make that false.
+   *
+   *  UNIONED WITH THE DISPLACED SIDE too (fix, measured): a bare `SELECT
+   *  DISTINCT claimedBy` alone answers "who coordinates each programme NOW",
+   *  not "who ever has" — `reclaimProgram`'s own `UPDATE runs SET claimedBy = ?,
+   *  coordProject = ? WHERE program = ? AND claimedBy IS NOT NULL` (above)
+   *  OVERWRITES `claimedBy` on every run of a programme, terminal runs included, so
+   *  the OUTGOING coordinator's own runs no longer name it anywhere in this table
+   *  once an heir takes the chair. The only surviving trace is the `run_events` row
+   *  that move writes once per displaced run: `causedBy:'operator',
+   *  detail:'reclaim:<from> -> <to>'`. That `causedBy`+prefix pair is unique to
+   *  this writer — grepped across `server/src`: every other `recordRunEvent`/
+   *  `advanceInner` call site either uses `causedBy:'coordinator'` or passes no
+   *  `reclaim:`-shaped detail (an ordinary transition's `detail` defaults to
+   *  `null`, which no `LIKE 'reclaim:%'` ever matches) — so the WHERE clause
+   *  below reads exactly `reclaimProgram`'s own rows and nothing another
+   *  writer has ever produced.
+   *
+   *  PARSED, not compared: unlike a hold's grammar (`holdReasonVerdict`,
+   *  compared against the server's own rendering, never parsed back), nothing
+   *  else ever reads this string, so there is no server-rendered form to
+   *  compare it against — it must be parsed, by
+   *  `childReclaimDisplacedCandidates` (above the class), which returns every
+   *  reading of the row that could be its `from` — all of them join the set,
+   *  and that function states what the over-protection costs. A
+   *  `reclaim:`-prefixed row it cannot read at all (no ` -> ` in it) THROWS
+   *  rather than being silently dropped — a row this build cannot attribute
+   *  to a `from` id is a row this build cannot prove is NOT evidence of past
+   *  coordination, and excluding it silently would be the exact fail-open
+   *  this fix exists to close. The executor's own try/catch around this call turns the throw into
+   *  a `siblings-unreadable` deferral (fail shut), the same word it already
+   *  uses for an unreadable `openRunsForSession`.
+   *
+   *  WHAT "EVER" NOW COVERS: every session currently named `claimedBy` of any
+   *  run (any state), UNION every session `reclaimProgram` has ever displaced
+   *  from a programme's chair — closing the gap where a nested coordinator
+   *  dies and an heir takes over (the reclaim door requires the outgoing
+   *  claimant to measure dead or registry-absent first) and the outgoing
+   *  session's own workspace would otherwise fall back into the reclaimable
+   *  population.
+   *  RESIDUAL: a lost or rebuilt `coord.db` loses this history along with
+   *  everything else the database holds — a rebuilt `runs`/`run_events` pair
+   *  starts from nothing, so a pre-loss displacement is unrecoverable here.
+   *  That is the same class of loss every other read in this file accepts as
+   *  fail-closed rather than reconstructible; closing it is not this method's
+   *  job.
+   *
+   *  Returns the whole set, not a per-session boolean, because the reclaim
+   *  sweep reads it ONCE per pass and checks many children against it — a
+   *  per-child query issued once per child would repeat the same table scan
+   *  every pass. The close-path executor and the close decision call it once
+   *  per session and check membership the same way, so the three
+   *  `childReclaim*` consumers share ONE read instead of three spellings of
+   *  the same SELECT.
+   *
+   *  Synchronous, like every other read on this store — see
+   *  `openRunsForSession`'s own docstring for why that is not an oversight to
+   *  be wrapped. */
+  childReclaimCoordinatorIds(): ReadonlySet<string> {
+    const ids = new Set((this.db.prepare(
+      'SELECT DISTINCT claimedBy FROM runs WHERE claimedBy IS NOT NULL',
+    ).all() as { claimedBy: string }[]).map((r) => r.claimedBy));
+    // `substr(...) = 'reclaim:'`, never `LIKE 'reclaim:%'` (child-reclamation
+    // wave 4): SQLite's `LIKE` is case-insensitive for ASCII
+    // by default, so an unrelated OPERATOR note that merely starts
+    // `RECLAIM:…` would have matched the old pattern and then reached
+    // `childReclaimDisplacedCandidates`, whose own `startsWith('reclaim:')`
+    // is case-SENSITIVE — a mismatch it reads as "not this writer's row" and
+    // therefore throws on (a row this build cannot attribute to a `from`).
+    // One hand-written note in the wrong case would have broken automatic
+    // reclamation fleet-wide. `substr` selects only what the writer's own
+    // `reclaim:${…}` template can produce.
+    // `DISTINCT`: `reclaimProgram` writes one identical row per run of the
+    // programme it moves, so N runs would otherwise parse the same text N
+    // times; the candidate length bound is `childReclaimDisplacedCandidates`'s
+    // own (its docstring states why dropping a longer one is safe).
+    const displacements = this.db.prepare(
+      "SELECT DISTINCT detail FROM run_events WHERE causedBy = 'operator' AND substr(detail, 1, 8) = 'reclaim:'",
+    ).all() as { detail: string }[];
+    for (const row of displacements) {
+      const froms = childReclaimDisplacedCandidates(row.detail);
+      if (froms === null) {
+        throw new Error(`run_events carries an unparseable reclaim-displacement row: ${JSON.stringify(row.detail)}`);
+      }
+      for (const from of froms) ids.add(from);
+    }
+    return ids;
   }
 
   /** `detail` joins the SELECT (fix, found in Task 9 review — D-47): `advance`
@@ -3242,6 +3524,22 @@ export class CoordStore {
       // this stays off the wire (`toRunSummary` strips it alongside
       // `prLineage`).
       coordProject: row.coordProject,
+      // The child's BIRTH (migration 15, child-reclamation spec §5.1, §5.3),
+      // read straight through on `coordProject`'s idiom directly above: a
+      // server-side measurement, `bindSession`'s one writer of a NON-NULL
+      // value, stripped off the wire by `toRunSummary` the same way. NULL
+      // means no fresh-spawn bind has ever stamped a birth for the CURRENT
+      // occupant of `sessionId` — an unbound run, an adopted spawn
+      // (deliberately unplaceable), or a predecessor's birth nulled by a
+      // later re-bind.
+      sessionBornAt: row.sessionBornAt,
+      // The session the birth above was recorded FOR (migration 15), read
+      // through on the same idiom. `childBirthOf` refuses to place a birth
+      // unless this equals `sessionId` — the guard against a cross-build
+      // rollback leaving a stale birth on a row an older build has since
+      // rebound (spec §5.3's recycled-slug hazard, extended across a
+      // rollback).
+      sessionBornFor: row.sessionBornFor,
     };
   }
 
@@ -4879,7 +5177,49 @@ export class CoordStore {
           refusal: string | null; detail: string | null; truncated: number;
           obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
         }[];
-    return rows.map((r) => ({
+    return rows.map((r) => CoordStore.reviveLifecycleRow(r));
+  }
+
+  /** One session's `create` rows ALONE, oldest-first, UNCAPPED by
+   *  `LIFECYCLE_PAGE_MAX` (child-reclamation wave 4, spec §5.1's birth fence):
+   *  a failing child's ordinary window (`lifecycleFor`, 500 rows) scrolls past
+   *  its own opening `create` in days of retried refusals, and the run-id fence
+   *  needs that row for the LIFE of the workspace, not for as long as it fits
+   *  a page. Bounded to one ACT: `lifecycle_by_session` is `(sessionId, id)`,
+   *  so this still walks every row of the session (filtering `act` after the
+   *  index narrows to the session) rather than a narrower index on `act`
+   *  itself — a cost bound on the SESSION, not the whole table, and never
+   *  the oldest `create` either, which would skip every recycled slug
+   *  (spec §5.6): `childReclaimGeneration`, this read's one caller, is what
+   *  narrows "every create this session ever had" down to the CURRENT
+   *  generation's own opening row. Same column set, same reviver, as
+   *  `lifecycleFor` — `reviveLifecycleRow` is the one definition both share. */
+  lifecycleCreatesFor(sessionId: string): MirroredLifecycleEvent[] {
+    const c = CoordStore.LC_COLS;
+    const act: LifecycleAct = 'create';
+    const rows = this.db.prepare(
+      `SELECT ${c} FROM lifecycle_events WHERE sessionId = ? AND act = ? ORDER BY id ASC`,
+    ).all(sessionId, act) as {
+      uid: string | null; gen: string; at: number | null; ingestedAt: number;
+      act: string; badact: string | null; outcome: string; badoutcome: string | null;
+      verb: string | null; sessionId: string | null; tx: string | null;
+      refusal: string | null; detail: string | null; truncated: number;
+      obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
+    }[];
+    return rows.map((r) => CoordStore.reviveLifecycleRow(r));
+  }
+
+  /** The reviver `lifecycleFor` and `lifecycleCreatesFor` share, extracted so
+   *  a column gaining a field lands in both readers or neither — never one and
+   *  not the other. Private and static: it touches no instance state. */
+  private static reviveLifecycleRow(r: {
+    uid: string | null; gen: string; at: number | null; ingestedAt: number;
+    act: string; badact: string | null; outcome: string; badoutcome: string | null;
+    verb: string | null; sessionId: string | null; tx: string | null;
+    refusal: string | null; detail: string | null; truncated: number;
+    obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
+  }): MirroredLifecycleEvent {
+    return {
       uid: r.uid, gen: r.gen, at: r.at, ingestedAt: r.ingestedAt,
       // Through the guards, never a cast — the same discipline `feedEvents`
       // gives `kind` and `programs()` gives `state`. A token a NEWER build
@@ -4904,7 +5244,25 @@ export class CoordStore {
       dec: reviveDec(jsonOrNull(r.decJson)),
       meas: reviveMeas(jsonOrNull(r.measJson)),
       raw: r.raw,
-    }));
+    };
+  }
+
+  /** Every session id the lifecycle mirror holds a `reclaim` row for
+   *  (child-reclamation wave 4, spec §5.9) — the NARROWING read before the
+   *  sweep's per-session history reads: it asks `lifecycleFor`/
+   *  `lifecycleCreatesFor` only for the listed rows in this set, so a registry
+   *  full of non-children costs one statement a sweep, not one per row. A
+   *  SUPERSET on purpose: it names ids whose only `reclaim` rows belong to an
+   *  EARLIER workspace under a recycled slug (spec §5.6), and the generation
+   *  fence (`childReclaimGeneration`) is what drops those — this method
+   *  decides nothing about generations. The act is BOUND, typed against its
+   *  union, so it is not a second hand-spelled literal. */
+  childReclaimSessionIds(): Set<string> {
+    const act: LifecycleAct = 'reclaim';
+    const rows = this.db.prepare(
+      'SELECT DISTINCT sessionId FROM lifecycle_events WHERE act = ? AND sessionId IS NOT NULL',
+    ).all(act) as { sessionId: string }[];
+    return new Set(rows.map((r) => r.sessionId));
   }
 
   /** The holes, newest-first — a timeline with a hole in it says so. */

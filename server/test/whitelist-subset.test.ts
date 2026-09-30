@@ -73,6 +73,8 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsRelease: ['demo-quiet-basin', null],
   wsRename: ['demo-quiet-basin', 'ws/brainstorm-helix-and-slide-notes', null],
   coordPause: ['on'],
+  // CHILD RECLAMATION wave 4 — `coordPause`'s shape exactly.
+  reclaimPause: ['on'],
   // Two ENTRIES, not one parameterised by `pool: string | null` — the
   // `start`/`enable` rule stated in `CCD_ARGV`'s `enable` docstring: the route
   // picks between two words, the argv shapes differ in their tail, and layer
@@ -314,6 +316,23 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.winSize('demo-quiet-basin', 'canonical')])).toBe(true);
   });
 
+  // Enrolled for its ARGUMENT SURFACE, `coord-pause`'s reason, and reached
+  // from a door as open: `POST /api/coord/reclaim-pause` carries no box token.
+  // What this verb guards is whether automation may DELETE child workspaces,
+  // so a bare `['reclaim-pause']` — green in layer 2 and in layer 3's
+  // reachability check, because it is a genuine prefix of the argv
+  // `CCD_ARGV.reclaimPause` builds — is refused here, cross-PACKAGE and
+  // object-reading, for the reasons the ws-reap assertion above states.
+  it('reclaim-pause is grantable ONLY with --state', () => {
+    const rp = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'reclaim-pause');
+    expect(rp.length, 'exactly one reclaim-pause grant').toBe(1);
+    expect(rp[0]).toEqual(['reclaim-pause', '--state']);
+    expect(isExecAllowed('ccd', ['reclaim-pause', 'on'])).toBe(false);
+    expect(isExecAllowed('ccd', ['reclaim-pause'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.reclaimPause('on')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.reclaimPause('off')])).toBe(true);
+  });
+
   // The other half of the same decision, and the half a `not.toContain(
   // 'set-option')` check cannot carry: `tmux set-option` is NOT granted and
   // must never be — prefix matching leaves every later token unconstrained, so
@@ -498,6 +517,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsRelease: ['ws-release', '--session', 'demo-quiet-basin'],
     wsRename: ['ws-rename', '--session', 'demo-quiet-basin', '--branch', 'ws/brainstorm-helix-and-slide-notes'],
     coordPause: ['coord-pause', '--state', 'on'],
+    reclaimPause: ['reclaim-pause', '--state', 'on'],
     projectPoolSet: ['project-pool', '--project', 'demo', '--pool', 'pool-a'],
     projectPoolClear: ['project-pool', '--project', 'demo', '--clear'],
     route: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high'],

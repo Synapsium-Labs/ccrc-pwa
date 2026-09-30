@@ -36,10 +36,13 @@ export type ChildSpentVerdict =
   | { readonly kind: 'unmeasured'; readonly detail: string };
 
 /**
- * A child's BIRTH: the instant its workspace was minted, which every PR row
- * on its branch is dated against. It is the MINTING run's `dispatchStartedAt`
- * — the server's own clock, stamped immediately before the `ws-add` that
- * minted the session, and never cleared (`CoordStore.markDispatchStarted`).
+ * A child's BIRTH: the instant its CURRENT occupant's session was bound to
+ * this run, which every PR row on its branch is dated against. It is the
+ * MINTING run's `sessionBornAt` (migration 15) — the server's own clock,
+ * stamped once by the fresh-spawn dispatch arm and write-once per bound
+ * session (`CoordStore.bindSession`), never `dispatchStartedAt`, which moves
+ * on every fresh-spawn attempt including retries and so cannot say which
+ * attempt this OCCUPANT belongs to.
  * A REQUIRED input to `childSpent` and `childSpentLive`, never optional: a
  * caller that omitted it would silently change what every row means. Its own
  * second arm is `unplaceable`, a word no row placement uses (`childBirthOf`
@@ -83,33 +86,77 @@ export function placeChildRow(createdAt: unknown, birth: ChildBirth): ChildRowPl
   return 'unplaced';
 }
 
-/** The minting run's row as the birth reads it — the two columns it needs
+/** The minting run's row as the birth reads it — the four columns it needs
  *  out of `CoordStore.run`'s answer, which satisfies this type structurally,
  *  so a caller hands the store's own read over unchanged. Its three answers
- *  stay three: a row, no row, and a row that could not be read. */
+ *  stay three: a row, no row, and a row that could not be read.
+ *  `sessionBornAt`, never used alone for the placed instant: the latter half
+ *  of `childBirthOf`'s check reads `dispatchStartedAt` too, which moves on
+ *  every fresh-spawn attempt, including retries — a genuine re-mint of the
+ *  SAME session id (a recycled slug, spec §5.5, redrawn under a workspace's
+ *  own former name) re-stamps it, and a stale `sessionBornAt` no longer
+ *  agrees. `sessionBornFor` names the session the birth was recorded for — a
+ *  cross-build rollback (an older build's `clearSession` or two-argument
+ *  `setSession` never touches any of these three columns) can leave a stale
+ *  birth on a row whose `sessionId` has since moved past it; only a birth
+ *  still bound to its own occupant, and still dated to its own occupant's own
+ *  dispatch, is placeable. */
 export type ChildBirthRunRead =
   | { readonly ok: true;
-      readonly run: { readonly sessionId: string | null; readonly dispatchStartedAt: number | null } | null }
+      readonly run: { readonly sessionId: string | null; readonly sessionBornAt: number | null;
+                       readonly sessionBornFor: string | null; readonly dispatchStartedAt: number | null } | null }
   | { readonly ok: false; readonly detail: string };
 
 /**
  * The birth of session `sessionId`, from the read of the run its marker names
  * (spec §5.1: the marker names the MINTING run). UNPLACEABLE — each in its own
  * words — when the row could not be read, when there is no such row, when its
- * `dispatchStartedAt` is null (no fresh-spawn dispatch ever started), or when
- * its `sessionId` is not this session: a run whose retry minted another
- * workspace, leaving this one an orphan the stamp does not describe.
+ * `sessionBornAt` is null (no birth was ever recorded for this occupant — an
+ * unbound run, an adopted spawn, or a predecessor's birth nulled by a later
+ * re-bind), when its `sessionId` is not this session (a run whose retry
+ * minted another workspace, leaving this one an orphan the stamp does not
+ * describe), when `sessionBornFor` does not equal `sessionId` (the birth
+ * belongs to an earlier occupant under a DIFFERENT id — a cross-build
+ * rollback can rebind `sessionId` without moving either birth column, which
+ * would otherwise date a genuinely new occupant to a stranger's mint), or
+ * when `sessionBornAt` does not equal `dispatchStartedAt` (the birth belongs
+ * to an earlier occupant under the SAME recycled id — a cross-build rollback
+ * followed by a same-slug redraw leaves `sessionId`/`sessionBornFor` both
+ * matching, since the id never changed, but a genuine re-mint always
+ * re-stamps `dispatchStartedAt` first, so a birth still dated to the earlier
+ * occupant no longer agrees with it).
+ *
+ * TWO conditions, both required, and NEITHER subsumes the other: the
+ * `sessionBornFor` check catches a rollback that hands the run to a
+ * DIFFERENT id; the `dispatchStartedAt` check catches one that redraws the
+ * SAME id (spec §5.5's recycled slug, extended across a rollback — the case
+ * `sessionBornFor` cannot see, because the id never changed). No further
+ * residual is known: every writer of `sessionId` also writes
+ * `dispatchStartedAt` on a genuine fresh mint (`CoordStore.markDispatchStarted`,
+ * the fresh-spawn arm's only caller), on every build this repository has ever
+ * shipped, migration 5 onward — so a birth that survives both checks is
+ * provably this occupant's own. The accepted liveness cost: a bound run whose
+ * `dispatchStartedAt` moves for a reason OTHER than a fresh mint — there is
+ * none in this codebase today, `markDispatchStarted`'s own docstring names its
+ * one call site — would read unplaceable too, and the close would simply hold
+ * rather than reclaim; fail-closed, never fail-open.
  */
 export function childBirthOf(read: ChildBirthRunRead, sessionId: string): ChildBirth {
   if (!read.ok) return { kind: 'unplaceable', detail: `the minting run could not be read: ${read.detail}` };
   if (read.run === null) return { kind: 'unplaceable', detail: 'the minting run is absent' };
-  if (read.run.dispatchStartedAt === null) {
-    return { kind: 'unplaceable', detail: 'the minting run never stamped a dispatch start' };
+  if (read.run.sessionBornAt === null) {
+    return { kind: 'unplaceable', detail: 'the minting run recorded no birth for this session' };
   }
   if (read.run.sessionId !== sessionId) {
     return { kind: 'unplaceable', detail: 'the minting run is bound to another session' };
   }
-  return { kind: 'at', ms: read.run.dispatchStartedAt };
+  if (read.run.sessionBornFor !== read.run.sessionId) {
+    return { kind: 'unplaceable', detail: "the minting run's birth does not belong to its current session" };
+  }
+  if (read.run.sessionBornAt !== read.run.dispatchStartedAt) {
+    return { kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth" };
+  }
+  return { kind: 'at', ms: read.run.sessionBornAt };
 }
 
 /** The ports this verdict reads through — consumer-declared (L2), the same
@@ -169,13 +216,17 @@ const LIVE_PHASE: Readonly<Record<PrPhase, 'spent' | 'unspent' | 'unmeasured'>> 
  * workspace wearing this slug the PR belongs to. `birth` is spent by rung 3
  * alone, and is REQUIRED here anyway so no caller can reach rung 3 without it.
  *
- * COST, measured rather than assumed: steps 1–2 are file reads; step 3 is one
- * gh call on the fleet box, bounded by `pr-state`'s 20 s remote budget, and it
- * runs only for a CHILD with no PR on record — never for a workspace with no
- * marker (`childBindGate` returns before calling this).
+ * COST, measured rather than assumed: steps 1–2 are file reads; step 3, absent
+ * a pre-read `line`, is one gh call on the fleet box, bounded by `pr-state`'s
+ * 20 s remote budget, and it runs only for a CHILD with no PR on record —
+ * never for a workspace with no marker (`childBindGate` returns before
+ * calling this). A caller already holding this session's own measured
+ * `pr-state` line (spec §5.7 — the close reusing `verifyDone`'s line)
+ * passes it as `line`, and step 3 makes NO gh call at all: it runs the pure
+ * `childSpentLiveFrom` over the line handed in, never `childSpentLive`'s fetch.
  */
 export async function childSpent(
-  deps: ChildSpentDeps, rec: SessionRecord, birth: ChildBirth,
+  deps: ChildSpentDeps, rec: SessionRecord, birth: ChildBirth, line?: CcdPrLine,
 ): Promise<ChildSpentVerdict> {
   if (rec.prNumber !== null) {
     return { kind: 'spent', pr: rec.prNumber, source: 'registry', incarnation: 'unplaced' };
@@ -187,7 +238,7 @@ export async function childSpent(
   for (const e of history.entries) if (newest === null || e.recordedAt >= newest.recordedAt) newest = e;
   if (newest !== null) return { kind: 'spent', pr: newest.pr, source: 'prhistory', incarnation: 'unplaced' };
 
-  return childSpentLive(deps, rec, birth);
+  return line !== undefined ? childSpentLiveFrom(line, rec, birth) : childSpentLive(deps, rec, birth);
 }
 
 /**
@@ -198,19 +249,58 @@ export async function childSpent(
  * this to DATE that PR, and treats only spent/this as finished. It therefore
  * reads no fast path of its own: `rec.prNumber` is ignored here.
  *
- * A LIVE `ccd pr-state --session <id>` — nothing in this system learns of a
- * PR by push, and the sweep's cadence is minutes while a coordinator opens
- * wave N+1 seconds after the worker's done mail. Gated like every other
- * caller of the verb (`verbSupported`). The operator's rule (D-3347): a PR
- * OPENED FROM THE CHILD'S BRANCH SPENDS IT, in any state, whatever its base,
- * whether or not it BINDS — binding (`boundRow`'s base/`ours` conjuncts) is a
- * fact about which PR a workspace's control renders, not about whether the
- * branch has been spent. So this rung reads every row of `line.rows` —
- * measured 2026-09-23 to survive ccd's own `--head` filter unfiltered, base
- * and `ours` included — for one whose `isCrossRepository` is exactly `false`
- * (passed through from gh's own JSON unchanged; `ours`, not this field, is
- * what ccd itself computes and annotates) and whose `headRefName` names
- * `line.branch`.
+ * THE FETCH ONLY (spec §5.7): a LIVE `ccd pr-state --session <id>` —
+ * nothing in this system learns of a PR by push, and the sweep's cadence is
+ * minutes while a coordinator opens wave N+1 seconds after the worker's done
+ * mail. Gated like every other caller of the verb (`verbSupported`). Every
+ * rung of judgment over the answered line lives in the pure
+ * `childSpentLiveFrom` below, which this calls once the line is in hand — the
+ * split exists so a caller already holding this session's own measured line
+ * (the close reusing `verifyDone`'s) can skip this fetch entirely and call
+ * `childSpentLiveFrom` directly, at the cost of one fewer `pr-state` call
+ * inside the same mutex section.
+ *
+ * COST: one gh call on the fleet box, bounded by `pr-state`'s 20 s remote
+ * budget — for the close, inside whatever lock the close holds.
+ */
+export async function childSpentLive(
+  deps: ChildSpentDeps, rec: SessionRecord, birth: ChildBirth,
+): Promise<ChildSpentVerdict> {
+  const argv = CCD_ARGV.prStateSession(rec.id);
+  if (!verbSupported(deps.fleetState, argv)) {
+    return { kind: 'unmeasured', detail: 'the fleet host cannot answer pr-state' };
+  }
+  const res = await deps.runCcd(argv);
+  if (!res.ok) return { kind: 'unmeasured', detail: `pr-state failed: ${res.stderr.trim()}` };
+  const lines = parsePrLines(res.stdout);
+  const line = lines.find((l): l is CcdPrLine => isFullLine(l) && l.id === rec.id);
+  if (line === undefined) {
+    const failure = lines.find((l) => !isFullLine(l));
+    return { kind: 'unmeasured', detail: failure === undefined
+      ? 'pr-state answered no line for this session'
+      : `pr-state answered ${failure.reason ?? 'unknown'}` };
+  }
+  return childSpentLiveFrom(line, rec, birth);
+}
+
+/**
+ * The PURE judgment half of the live rung (spec §5.7), split out of
+ * `childSpentLive` so a caller already holding this session's own measured
+ * `pr-state` line — the close, reusing `verifyDone`'s line — can reach it
+ * with no `pr-state` call of its own. `rec` is accepted only so this
+ * function's signature matches `childSpent`'s and `childSpentLive`'s own
+ * (spec §5.7's naming); it plays no role in the judgment below — every fact
+ * comes from `line` and `birth` alone, never from the registry.
+ *
+ * The operator's rule: a PR OPENED FROM THE CHILD'S BRANCH SPENDS
+ * IT, in any state, whatever its base, whether or not it BINDS — binding
+ * (`boundRow`'s base/`ours` conjuncts) is a fact about which PR a workspace's
+ * control renders, not about whether the branch has been spent. So this reads
+ * every row of `line.rows` — measured 2026-09-23 to survive ccd's own `--head`
+ * filter unfiltered, base and `ours` included — for one whose
+ * `isCrossRepository` is exactly `false` (passed through from gh's own JSON
+ * unchanged; `ours`, not this field, is what ccd itself computes and
+ * annotates) and whose `headRefName` names `line.branch`.
  *
  * EVERY SUCH ROW IS PLACED against `birth` (`placeChildRow`): a child's branch
  * name is a recycled slug (spec §5.5), and a row created before this child
@@ -238,26 +328,9 @@ export async function childSpent(
  * branch's PR), a whole-repo failure, a failed ccd call, an unparseable or
  * foreign line — answers `unmeasured`, with the reason in `detail`.
  *
- * COST: one gh call on the fleet box, bounded by `pr-state`'s 20 s remote
- * budget — for the close, inside whatever lock the close holds.
+ * COST: none — no I/O, synchronous over an already-measured line.
  */
-export async function childSpentLive(
-  deps: ChildSpentDeps, rec: SessionRecord, birth: ChildBirth,
-): Promise<ChildSpentVerdict> {
-  const argv = CCD_ARGV.prStateSession(rec.id);
-  if (!verbSupported(deps.fleetState, argv)) {
-    return { kind: 'unmeasured', detail: 'the fleet host cannot answer pr-state' };
-  }
-  const res = await deps.runCcd(argv);
-  if (!res.ok) return { kind: 'unmeasured', detail: `pr-state failed: ${res.stderr.trim()}` };
-  const lines = parsePrLines(res.stdout);
-  const line = lines.find((l): l is CcdPrLine => isFullLine(l) && l.id === rec.id);
-  if (line === undefined) {
-    const failure = lines.find((l) => !isFullLine(l));
-    return { kind: 'unmeasured', detail: failure === undefined
-      ? 'pr-state answered no line for this session'
-      : `pr-state answered ${failure.reason ?? 'unknown'}` };
-  }
+export function childSpentLiveFrom(line: CcdPrLine, rec: SessionRecord, birth: ChildBirth): ChildSpentVerdict {
   // D-3351: without this check, a line with no `branch` at all (and a string
   // `tip`, and only rows with string heads) falls through to `phaseFor` and
   // answers `unspent` — not by matching anything below, but by matching

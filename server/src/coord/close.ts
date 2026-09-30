@@ -18,7 +18,8 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import { readSessionRecord } from '../registry.js';
-import { childBirthOf, childSpent, childSpentLive } from './childSpent.js';
+import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './childSpent.js';
+import type { CcdPrLine } from '../prstate.js';
 import {
   childReclaimDecision, childReclaimRowListing, type ChildReclaimDecision, type ChildReclaimMinting,
   type ChildReclaimNotWhy, type ChildReclaimRequest, type ChildReclaimReviewed,
@@ -228,7 +229,11 @@ export async function closeRun(
       const siblings = sibRead.siblings;
       // An abandon is FINISHED (spec §5.7), so an eligible child is exactly
       // the no-survivor case below — it is already released, never re-held.
-      childGate = await childGateAtClose(deps, run, run.sessionId, sibRead, false, 'failed');
+      // An abandon never runs `verifyDone` (there is no done-claim to
+      // re-measure — see step 1 below), so there is no measured line to
+      // reuse — `null` here is not a decision, it is what "verifyDone did not
+      // run" IS on this arm.
+      childGate = await childGateAtClose(deps, run, run.sessionId, sibRead, false, 'failed', null);
       const survivor = survivorOf(siblings);
       // DECIDED ONCE, USED TWICE (review finding, W2b). The act and the
       // reported field used to come from two independent expressions —
@@ -312,7 +317,14 @@ export async function closeRun(
 
   // 1: verifyDone re-measures a DONE CLAIM. `state:'failed'` is an explicit
   // operator ABANDON, not a claim of doneness (deviation D-49) — it skips
-  // this step entirely.
+  // this step entirely, and `verifiedLine` stays null on that arm — there is
+  // nothing to reuse.
+  //
+  // Spec §5.7: `verdict.line` is the exact `pr-state` row this call already
+  // measured for `run.sessionId` — carried past this block so the child-spent
+  // redate below (`childGateAtClose`) can reuse it instead of asking
+  // `pr-state` a second time inside the same mutex section.
+  let verifiedLine: CcdPrLine | null = null;
   if (state !== 'failed') {
     const verdict = await verifyDone(
       { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
@@ -328,6 +340,7 @@ export async function closeRun(
         kind: 'status', subject: 'wave-done-rejected', body: `${verdict.code}: ${verdict.detail}` });
       return { ok: false, kind: 'doneVerdict', code: verdict.code, detail: verdict.detail };
     }
+    verifiedLine = verdict.line;
   }
 
   // Decide and validate the hold before any close-path write. In particular,
@@ -348,7 +361,7 @@ export async function closeRun(
   // has FINISHED with is RELEASED, never re-held. That includes a non-final
   // close that retires its program, whose hold would claim the child for a
   // wave that can never be opened, and a hold defers reclaim for ever.
-  const childGate = await childGateAtClose(deps, run, run.sessionId, sibRead, final, state);
+  const childGate = await childGateAtClose(deps, run, run.sessionId, sibRead, final, state, verifiedLine);
   const needsHold = !((state === 'failed' && archive && safe) || (final && safe) || childGate.decision.reclaim);
   const nextHold: HoldReasonVerdict | null = needsHold
     ? survivor === null
@@ -531,7 +544,12 @@ async function closeReviewRun(
   // act — but its reviewer child is NOT finished while the run it reviews is
   // open (spec §5.7): the decision answers `review-report-live`, and
   // the sweep reclaims the reviewer once the reviewed run is terminal.
-  const childGate = await childGateAtClose(deps, run, sessionId, sibRead, true, state);
+  // `null`: this arm re-measures through `verifyReviewDone`, never `verifyDone`
+  // (design 2026-09-14 §5.3-5.4 — a review run has no PR-bearing done-claim to
+  // reuse a `pr-state` line from), so there is nothing to hand in — the fast
+  // path, when reached, fetches `pr-state` itself exactly as `childGateAtClose`
+  // already does whenever no line is given.
+  const childGate = await childGateAtClose(deps, run, sessionId, sibRead, true, state, null);
   const survivor = survivorOf(sibRead.siblings);
   const release = releaseIsSafe(sibRead.siblings) || survivor === null;
   // Spelled hand-over-first so the compiler narrows `survivor` on the arm that
@@ -593,28 +611,27 @@ const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child
  * rungs) answers `spent` with `incarnation:'unplaced'` — it carries no date,
  * and a child's branch name is a recycled slug (spec §5.5), so unplaced
  * evidence may belong to an earlier workspace. The close never reclaims on
- * that alone: it re-dates the same PR through `childSpentLive` and decides on
+ * that alone: it re-dates the same PR through the live rung and decides on
  * the LIVE answer ONLY — `spent`/`this` finishes the child, anything else
  * (unspent, unmeasured, or still `unplaced`) holds it.
  *
- * COST (review m3, stated truthfully rather than as "the second of two"):
- * `childSpentLive` HERE REPLACES `childSpent`'s own would-be live rung — the
- * fast path already answered, so `childSpent` never calls it a second time —
- * so this is not a second gh round trip on top of one `childSpent` would
- * have made anyway. But `verifyDone` (`fingerprint.ts`) always makes its own
- * `pr-state` call first, on the SAME session, before this function is reached
- * (`state !== 'failed'`), so a non-final `done` close of a child with no open
- * sibling makes TWO sequential `pr-state` calls inside the mutex in BOTH of
- * its cases: a fast-path spent re-dated here through `childSpentLive`, and a
- * fast-path MISS, where `childSpent`'s own live rung makes the second — the
- * ordinary PR-bearing wave. Up to ~40 s against the 30 s client timeout
- * `CloseRunDeps.childReclaim`'s docstring cites, each call bounded by
- * `pr-state`'s 20 s remote budget. Accepted by design; wave 4 (reusing
- * `verifyDone`'s measurement) is where the aggregate would be addressed.
+ * COST (spec §5.7 — measured, not the ~40 s an earlier wave accepted by
+ * design): `verifiedLine` is `verifyDone`'s own measured `pr-state` row for
+ * this SAME session, taken moments earlier inside this same mutex section
+ * (`state !== 'failed'` is exactly when `verifyDone` ran at all). When its
+ * `.id` names `sessionId`, every live rung below — the initial `childSpent`
+ * call and, when the fast path answers spent, the redate — runs the PURE
+ * `childSpentLiveFrom` over that one line instead of asking `pr-state` again,
+ * so a non-final `done` close makes AT MOST ONE `pr-state` call in total
+ * (`verifyDone`'s own), never two. A line that names a different session, or
+ * no line at all (the abandon and review-close arms, which never run
+ * `verifyDone`), falls back to fetching fresh, exactly as before this task —
+ * the fetch is still a live read taken inside this same mutex section, so a
+ * PR opened in the gap can only HOLD the child, never make one vanish.
  */
 async function childGateAtClose(
   deps: CloseRunDeps, run: RunRow, sessionId: string, siblings: OpenSiblingsResult,
-  final: boolean, state: 'done' | 'failed',
+  final: boolean, state: 'done' | 'failed', verifiedLine: CcdPrLine | null,
 ): Promise<ChildGate> {
   const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
   let mark: ChildMark;
@@ -630,8 +647,28 @@ async function childGateAtClose(
   }
   const minting: ChildReclaimMinting = mark.kind === 'child' ? mintingRowOf(deps.coord, mark.runId) : { kind: 'absent' };
   const reviewed = reviewedRowOf(deps.coord, minting);
+  // Whether this session has EVER coordinated a run (spec §1 rule 4): read
+  // beside the sibling list, the same store call the executor makes for the
+  // same question (`childReclaim.ts`'s own step 2a). An unreadable read is
+  // not "never coordinated" — but it is also NOT folded into
+  // `siblings-unreadable` HERE: doing so ahead of calling the decision would
+  // outrank `not-a-child` and `marker-unreadable` for every close, coordinated
+  // or not, whenever one bad `run_events` row makes the read throw. It is
+  // carried into the pure decision as a THIRD value instead
+  // (`hasCoordinated: 'unreadable'`), which `childReclaimDecision` folds into
+  // `siblings-unreadable` at the exact place the sibling check itself ranks —
+  // after the mark/minting checks, never ahead of them.
+  let hasCoordinated: boolean | 'unreadable';
+  try {
+    hasCoordinated = deps.coord.childReclaimCoordinatorIds().has(sessionId);
+  } catch (err) {
+    console.warn(`ccrc-server: childReclaimCoordinatorIds() failed at close `
+      + `(${err instanceof Error ? err.message : String(err)}) — ${sessionId}'s coordination history unreadable`);
+    hasCoordinated = 'unreadable';
+  }
   const input = {
     mark, minting, sessionId, siblings, reviewed, final, state, spent: { kind: 'unasked' } as const,
+    spentFastPath: false, hasCoordinated,
     // D-51's predicate with THIS run set aside — the retirement check
     // `CoordStore.closeRun` runs after the commit, asked before it.
     retiresProgram: deps.coord.programOpenRunCount(run.program, run.id) === 0,
@@ -640,20 +677,37 @@ async function childGateAtClose(
   if (!decision.reclaim && decision.why === 'not-finished' && read.found && minting.kind === 'row') {
     // The minting row is guaranteed present here — `childReclaimDecision`
     // only answers `not-finished` past its own `minting.kind==='row'` check —
-    // so `minting.dispatchStartedAt` is this child's birth, read once, never
-    // a second `coord.run` query.
+    // so `minting.sessionBornAt`/`minting.sessionBornFor`/
+    // `minting.dispatchStartedAt` are this child's birth, read once, never a
+    // second `coord.run` query.
     const birth = childBirthOf(
-      { ok: true, run: { sessionId: minting.sessionId, dispatchStartedAt: minting.dispatchStartedAt } }, sessionId);
-    let spent = await childSpent(deps, read.record, birth);
+      { ok: true, run: { sessionId: minting.sessionId, sessionBornAt: minting.sessionBornAt,
+                          sessionBornFor: minting.sessionBornFor,
+                          dispatchStartedAt: minting.dispatchStartedAt } },
+      sessionId);
+    // Spec §5.7: reuse `verifyDone`'s own measured line for THIS session —
+    // the same argv, the same parser — rather than fetch a second time.
+    // `undefined` (never fetched, and `childSpent`/the redate below fetch
+    // fresh) whenever `verifyDone` did not run or answered for a different
+    // session — `verifyDone`'s own `.find(isFullLine)` is NOT filtered by
+    // session id the way `childSpentLive`'s fetch is (`fingerprint.ts`), so
+    // this check is the fail-closed guard: a line proven to belong to
+    // ANOTHER session must never be trusted for this one's spent verdict.
+    const line = verifiedLine !== null && verifiedLine.id === sessionId ? verifiedLine : undefined;
+    let spent = await childSpent(deps, read.record, birth, line);
     // A2/P6: a fast-path spent (registry `.prnumber` or `.prhistory`, always
     // `incarnation:'unplaced'`) is never trusted alone — it is re-dated
     // through the live rung, and the close decides on THAT answer only. A
     // `spent`/`'live'` verdict already IS that live answer (childSpent's own
-    // rung 3), so it is not asked twice.
-    if (spent.kind === 'spent' && spent.source !== 'live') {
-      spent = await childSpentLive(deps, read.record, birth);
+    // rung 3), so it is not asked twice. `spentFastPath` carries WHICH case
+    // this was (spec §5.3), so a re-dated `unspent` answer can still say why
+    // it is not finished (`not-finished-merge-commit`) rather than the
+    // ordinary unspent hand-over.
+    const spentFastPath = spent.kind === 'spent' && spent.source !== 'live';
+    if (spentFastPath) {
+      spent = line !== undefined ? childSpentLiveFrom(line, read.record, birth) : await childSpentLive(deps, read.record, birth);
     }
-    decision = childReclaimDecision({ ...input, spent });
+    decision = childReclaimDecision({ ...input, spent, spentFastPath });
   }
   return {
     decision,
@@ -670,7 +724,9 @@ function mintingRowOf(coord: CoordStore, runId: number): ChildReclaimMinting {
   const r = coord.run(runId);
   if (!r.ok) return { kind: 'unreadable' };
   return r.run === null ? { kind: 'absent' }
-    : { kind: 'row', sessionId: r.run.sessionId, reviews: r.run.reviews, dispatchStartedAt: r.run.dispatchStartedAt };
+    : { kind: 'row', sessionId: r.run.sessionId, reviews: r.run.reviews,
+        sessionBornAt: r.run.sessionBornAt, sessionBornFor: r.run.sessionBornFor,
+        dispatchStartedAt: r.run.dispatchStartedAt };
 }
 
 /** The run a REVIEW child's minting run reviews (spec §5.7) — `none` when the

@@ -956,6 +956,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  Ungated (no box token): the route is deliberately open, the same way
      *  every other same-origin PWA write is. */
     coordPause: (paused: boolean) => post('/api/coord/pause', { paused }),
+    /** `POST /api/coord/reclaim-pause` (child-reclamation wave 4, spec §5.8) —
+     *  the switch on automatic child reclamation. `state` is ccd's own on|off,
+     *  passed through. Like `coordPause`, `ChildReclaimBanner` ignores the
+     *  response and waits for the next `{type:'coord'}` frame's `reclaim` to
+     *  confirm. No box token: an operator's same-origin write. */
+    childReclaimPause: (state: 'on' | 'off') => post('/api/coord/reclaim-pause', { state }),
     /** `GET /api/coord/caps` — the two limits AND the two derived counts, in one
      *  shape and one round trip. They travel together because a cap without its
      *  usage is a number an operator cannot act on. 501 `not-configured` on a

@@ -56,6 +56,21 @@ export const MAIL_DISABLED_MARKER = 'mail-disabled';
  *  a lane kill-switch — it must not read as one there. */
 export const COORDINATOR_PAUSE_MARKER = 'coordinator-paused';
 
+/** `$REG/reclaim-paused` — the fleet-wide kill-switch on the AUTOMATIC
+ *  reclamation of child workspaces (child-reclamation spec §5.8). Written only
+ *  by `ccd reclaim-pause` (through `POST /api/coord/reclaim-pause`), read by
+ *  FOUR parties, spec §5.8's four: the watcher's frame (`emitCoord`, which
+ *  renders it); the watcher's sweep (`sweepChildReclaim`, which skips before
+ *  asking); the one executor both triggers share (`reclaimChild`, through
+ *  `childReclaimPauseRead` in `childReclaimOutcome`, which defers
+ *  `paused-at-server` after its sibling re-read and before presence or any
+ *  argv — that is the close path's skip, and the sweep's for a reclaim that
+ *  was queued before the switch went up); and — the one that matters —
+ *  `ws-reclaim` itself on the box, which refuses `paused`. Not
+ *  `-disabled`-suffixed, for `COORDINATOR_PAUSE_MARKER`'s reason: `limits.ts`
+ *  reads `<name>-disabled` as a wrapper's lane switch. */
+export const RECLAIM_PAUSE_MARKER = 'reclaim-paused';
+
 /**
  * `run_events.detail` for a dispatch whose post-resume `/clear` was refused
  * (D-47) — built here rather than spelled at the two ends, because for the

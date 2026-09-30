@@ -124,6 +124,14 @@ describe('rungs 3 to 6 — the retryable ones', () => {
     fs.rmSync(pause);
     fs.mkdirSync(pause);
     expect(evalOf(h).verdict, '-e, not -f').toBe('paused');
+    // A DANGLING link: `-e` follows it and reads false; the server lists the
+    // name and reads paused. The box must be the stricter reader — on the
+    // fresh arm AND the resume arm.
+    fs.rmdirSync(pause);
+    fs.symlinkSync(path.join(h.home, 'nowhere'), pause);
+    expect(evalOf(h).verdict, 'a dangling link, fresh arm').toBe('paused');
+    expect(h.sh(`${CHILD_STUBS} _ws_reclaim_resume_eval ${CHILD_ID} 0 '' children >/dev/null;`
+      + ` printf '%s' "$REAP_VERDICT"`), 'a dangling link, resume arm').toBe('paused');
   }, 60_000);
 
   it('refuses held on a hold, and on an unreadable hold', () => {
@@ -1504,5 +1512,62 @@ describe('the hidden-edit PATH set is a fingerprint input — the audit and the 
     expect(r.verdict, r.detail).toBe('unmeasured');
     expect(r.token).toBe('');
     expect(r.detail).toContain('db.yml');
+  }, 60_000);
+});
+
+describe('rung 6’s parity for a NESTED same-repository checkout — a held index lock or an operation in progress defers (spec §5.5)', () => {
+  // The pin copies a nested checkout’s index and commits its work exactly as
+  // it does the child’s, so rung 9 asks rung 6’s two questions of it too,
+  // under the same deferral: `--defer-expired` passes both.
+  const nestedOf = (): { wt: string; inner: string } => {
+    const { wt, main } = makeChild(h);
+    const inner = path.join(wt, 'inner');
+    h.git(main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    return { wt, inner };
+  };
+  const gitPath = (dir: string, what: string): string =>
+    h.git(dir, 'rev-parse', '--path-format=absolute', '--git-path', what);
+
+  it('the CONTROL: a nested checkout with neither is reclaimable', () => {
+    nestedOf();
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('reclaimable');
+  }, 60_000);
+
+  it('a held index lock in the nested checkout → tree-busy, naming the nested path — and --defer-expired passes it', () => {
+    const { inner } = nestedOf();
+    const lock = `${gitPath(inner, 'index')}.lock`;
+    expect(lock.startsWith(inner), 'the CONTROL: a linked worktree’s index lives in its admin directory').toBe(false);
+    fs.writeFileSync(lock, '');
+    const busy = evalOf(h);
+    expect(busy.verdict, busy.detail).toBe('tree-busy');
+    expect(busy.detail).toBe(`a git command holds the index lock of the nested checkout at ${inner} (${lock})`);
+    expect(busy.token).toBe('');
+    const deferred = evalOf(h, { defer: 1 });
+    expect(deferred.verdict, deferred.detail).toBe('reclaimable');
+  }, 60_000);
+
+  it('a dangling-link index lock in the nested checkout is held too', () => {
+    const { inner } = nestedOf();
+    const lock = `${gitPath(inner, 'index')}.lock`;
+    fs.symlinkSync(path.join(h.home, 'nowhere'), lock);
+    expect(evalOf(h).verdict).toBe('tree-busy');
+  }, 60_000);
+
+  it('a rebase in progress in the nested checkout → tree-busy, naming the nested path — and --defer-expired passes it', () => {
+    const { inner } = nestedOf();
+    fs.mkdirSync(gitPath(inner, 'rebase-merge'));
+    const busy = evalOf(h);
+    expect(busy.verdict, busy.detail).toBe('tree-busy');
+    expect(busy.detail).toBe(`rebase in progress at the nested checkout at ${inner}`);
+    const deferred = evalOf(h, { defer: 1 });
+    expect(deferred.verdict, deferred.detail).toBe('reclaimable');
+  }, 60_000);
+
+  it('a nested index that cannot be located is unmeasured, naming the nested path — never a pass', () => {
+    const { inner } = nestedOf();
+    const r = evalOf(h, { pre: `git() { case "$*" in *"-C ${inner} rev-parse --path-format=absolute --git-path index"*) return 128 ;; esac; command git "$@"; };` });
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.detail).toBe(`could not locate the index of the nested checkout at ${inner}`);
   }, 60_000);
 });

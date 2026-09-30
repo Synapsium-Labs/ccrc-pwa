@@ -69,7 +69,7 @@ with a shell on the fleet host". They are not advice.
 
 1. Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.
 2. The box token is read from `~/.cc-secrets/ccrc-mail.token` and sent as the `x-ccrc-mail-token` header. It is never printed, never pasted into a prompt, never committed.
-3. This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server when that child’s run closes; this session’s own workspace is cleaned up by a human, never by a sweep.
+3. This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server once this session is finished with it — at its run’s close when nothing still needs it, otherwise later by the server’s sweep (a child held for its program’s next wave once that program has no open run, a review child once the run it reviewed has closed, a child whose reclaim was deferred or never started); this session’s own workspace is cleaned up by a human, never by a sweep.
 4. This session never unpauses itself. `$REG/coordinator-paused` is the operator’s file; a dispatch refused `paused` is a stop, and the next act is a report, not a retry.
 5. A wave brief is written prose, reviewed like code. The template is the shape; the content is this session’s judgement, and a brief that is missing something the next wave needs is a defect in the ledger.
 6. A `wave-done` is a claim, not a fact. Re-measure it, then submit the fingerprint to `POST /api/runs/:id/advance` and believe the server’s answer over your own.
@@ -370,10 +370,11 @@ not after.
      which is why, when wave N+1 builds on wave N's code, it dispatches only
      once wave N's PR is proven merged, exactly as §5's "One PR per child"
      requires. An UNMARKED producer — every workspace minted without a
-     marker, before wave 1's deploy, or by a dispatch that journaled
-     `child-omitted` — is never refused this way; dropping its `sessionId`
-     anyway is still safe and follows the same one-PR rule. The same-project
-     arm is for a producer whose workspace opened no PR.
+     marker: by a box whose ccd did not yet mark children, or by a
+     dispatch that journaled `child-omitted` — is never refused this way;
+     dropping its `sessionId` anyway is still safe and follows the same
+     one-PR rule. The same-project arm is for a producer whose workspace opened
+     no PR.
      **Same project:** open wave N+1 first with this producer's `sessionId`, close
      the producer with `final:false` so its hold transfers to the already-open
      successor on the same workspace, then run `"$API" runs list --closed 1`,

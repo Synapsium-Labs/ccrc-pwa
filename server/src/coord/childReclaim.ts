@@ -9,7 +9,11 @@ import { readSessionRecord } from '../registry.js';
 import { refusalSentence } from '../wsaudit.js';
 import type { ChildSpentVerdict } from './childSpent.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
-import { CHILD_RUN_ID, TERMINAL_RUN_STATES, type ChildMark, type RunState } from '../../../shared/api.js';
+import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
+import {
+  CHILD_RUN_ID, LC_REASON_MAX_BYTES, TERMINAL_RUN_STATES, holdReason, type ChildMark, type LifecycleAct, type LifecycleOutcome,
+  type MarkerState, type MirroredLifecycleEvent, type RunState,
+} from '../../../shared/api.js';
 
 /**
  * CHILD-WORKSPACE RECLAMATION, the server half (spec 2026-09-22 §5.5–§5.7).
@@ -71,6 +75,98 @@ export const CHILD_RECLAIM_TOKEN_KIND: Readonly<Record<ChildReclaimToken, 'gone'
 
 export function isChildReclaimToken(v: unknown): v is ChildReclaimToken {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_TOKEN_KIND, v);
+}
+
+/** `CHILD_RECLAIM_TOKEN_KIND` read TOTALLY: a token's classification, or null
+ *  for one this build was never compiled to know (a newer ccd's), which is
+ *  therefore never terminal and never listed. Never a cast: the journal's
+ *  `refusal` is free text. `hasOwnProperty`, not `in`: `'toString' in {}` is
+ *  true.
+ *
+ *  THE ONE LOOKUP, exported beside the table it reads (child-reclamation
+ *  wave 4, spec §5.9): the kind map is spelled once, and a second reader
+ *  would be a second place a classification could drift. The sweep
+ *  (`watch.ts`) imports it and injects it into the L1 attention derivation as
+ *  `kindOf`; wave 5's run chip imports it as-is and moves nothing. */
+export const childReclaimTokenKind = (token: string): 'gone' | 'terminal' | 'retry' | null =>
+  Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_TOKEN_KIND, token)
+    ? CHILD_RECLAIM_TOKEN_KIND[token as ChildReclaimToken]
+    : null;
+
+const CREATE_ACT: LifecycleAct = 'create';
+const CREATE_DONE: LifecycleOutcome = 'done';
+const RECLAIM_ACT: LifecycleAct = 'reclaim';
+
+/** ONE WORKSPACE GENERATION of one session's lifecycle events (child-
+ *  reclamation wave 4, spec §5.6, §5.9). Session ids are slugs and slugs
+ *  recycle: once a child is reclaimed or reaped, ws-add may mint a NEW
+ *  workspace under the same id, and "the latest `reclaim` event for this
+ *  session" would then describe a workspace that no longer exists —
+ *  inheriting a terminal refusal would list the new child and keep the sweep
+ *  off it for good. So every such read is taken within one generation: from
+ *  the last `create` row with outcome `done` whose `at` is at or before `at`,
+ *  up to (not including) the first such `create` after it.
+ *
+ *  NO OPENING `create`, NO GENERATION. When no placed `done` create lies at
+ *  or before `at` — a workspace minted before the mirror existed, one whose
+ *  `create` has scrolled out of the window read or carried no clock, or a
+ *  history of rows alone — the answer is `[]`: there is no evidence which
+ *  workspace those rows describe, and a guess would be another generation's
+ *  rows.
+ *
+ *  `events` is ONE session's rows in the mirror's `id` order, oldest first —
+ *  `CoordStore.lifecycleFor({ sessionId })`'s or `lifecycleCreatesFor`'s
+ *  answer — and the answer keeps that order: `id` orders, never `at`. TIME IS
+ *  CCD'S CLOCK ALONE, and it only PLACES the fence. The mirror's `ingestedAt`
+ *  is the server's clock and is never read as an event time (D8,
+ *  `coord/schema.ts`), so a `done` create whose line carried no `at` cannot be
+ *  placed: it is no boundary — it opens nothing and closes nothing — and it,
+ *  like every row between two boundaries, belongs to the generation its `id`
+ *  falls in, whatever its `at`. Only a `done` create opens or closes a
+ *  generation: a refused `ws-add` minted nothing, and an `intent` without its
+ *  `done` is a create that never completed.
+ *
+ *  THE ONE IMPLEMENTATION. The sweep's attention list calls it with `at` =
+ *  now; the birth fence calls it over `lifecycleCreatesFor` alone, so its
+ *  single-row answer is the opening `create` itself; wave 5's run chip
+ *  imports it and calls it with `at` = the run's `closedAt`.
+ *  `child-reclaim-generation.test.ts` scans for a second. */
+export function childReclaimGeneration(
+  events: readonly MirroredLifecycleEvent[], at: number,
+): readonly MirroredLifecycleEvent[] {
+  /** A generation BOUNDARY: a `done` create that ccd placed in time. */
+  const bound = (e: MirroredLifecycleEvent): e is MirroredLifecycleEvent & { readonly at: number } =>
+    e.act === CREATE_ACT && e.outcome === CREATE_DONE && e.at !== null;
+  let start = -1;
+  for (let k = 0; k < events.length; k += 1) {
+    const e = events[k]!;
+    if (bound(e) && e.at <= at) start = k;
+  }
+  if (start === -1) return [];
+  let end = events.length;
+  for (let k = start + 1; k < events.length; k += 1) {
+    if (bound(events[k]!)) { end = k; break; }
+  }
+  return events.slice(start, end);
+}
+
+/** The LATEST `reclaim` event of a generation, of ANY outcome — `intent`
+ *  included — or null when it holds none (child-reclamation wave 4). An
+ *  `intent` newer than every outcome is an attempt in flight, or
+ *  one that died mid-way: what it will find is not known yet, so the
+ *  attention list lists nothing for that child and the chip falls through to
+ *  its row rule (spec §5.9 — a report of what stands, never of what an
+ *  unfinished attempt might say). The mirror's `id` order decides "latest",
+ *  never ccd's nullable clock (`lifecycleFor`'s rule).
+ *
+ *  THE ONE RULE: the sweep's attention list reads it over
+ *  `childReclaimGeneration(events, now)`; wave 5's chip imports it as-is.
+ *  `child-reclaim-generation.test.ts` scans for a second. */
+export function childReclaimLatest(events: readonly MirroredLifecycleEvent[]): MirroredLifecycleEvent | null {
+  for (let k = events.length - 1; k >= 0; k -= 1) {
+    if (events[k]!.act === RECLAIM_ACT) return events[k]!;
+  }
+  return null;
 }
 
 /** Why a reclaim did not happen YET. The server's own reasons first, then the
@@ -139,6 +235,17 @@ export function isChildReclaimResume(v: unknown): v is ChildReclaimResume {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_RESUME, v);
 }
 
+/** The ONE ccd `{failed:…}` word `parseChildReclaimResult` gives its own
+ *  treatment: the presence rungs' own in-lock tmux probe (spec §5.7,
+ *  "Presence, and its bound" — rungs 5 and 6) failing BEFORE any act, which —
+ *  because no breadcrumb can exist yet at that point (spec §5.6, "The tail,
+ *  the breadcrumb and the resume") — unlike every other
+ *  post-start failure word, free ccd text this file never compares against a
+ *  literal — decides `ChildReclaimResume` itself (`not-resumable`, never
+ *  `resumable`: nothing was left to resume from). Named so
+ *  `isChildReclaimKebab` admits it without a second hand-kept literal. */
+const CHILD_RECLAIM_PROBE_UNMEASURED = 'probe-unmeasured';
+
 export type ChildReclaimOutcome =
   | { readonly kind: 'reclaimed'; readonly sessionId: string; readonly runId: number;
       readonly wip: ChildReclaimWip; readonly secretsDropped: number | 'unreadable' }
@@ -184,17 +291,28 @@ export interface ChildReclaimDeps {
  *  on differently, so none folds into another (carried constraint 2):
  *  `not-a-child` is ordinary; `marker-unreadable` is a box that could not be
  *  read (the sweep retries); `siblings-*` mean another run still has — or may
- *  have — this workspace; `review-report-live` is a REVIEW child kept while the
- *  run it reviewed is not terminal, because the coordinator cites the report
- *  in its clips by path (spec §5.7); `not-finished` is the ordinary
- *  non-final close. */
+ *  have — this workspace; `has-coordinated` is a child that has itself ever
+ *  been named `claimedBy` of a run — the session a reclaim made an heir, the
+ *  session it displaced, or any nested coordinator (spec §1 rule 4):
+ *  manual cleanup is reserved for a coordinator's own workspace, never a
+ *  sub-workspace a close may act on; `review-report-live` is a REVIEW child
+ *  kept while the run it reviewed is not terminal, because the coordinator
+ *  cites the report in its clips by path (spec §5.7); the ordinary non-final
+ *  close splits by WHY the spent evidence (spec §5.3) could not finish it:
+ *  `not-finished-undated` — the live rung answered spent, but no dated row
+ *  proves this incarnation; `not-finished-unmeasured` — the spent verdict was
+ *  unmeasured; `not-finished-merge-commit` — a fast-path (registry or
+ *  `.prhistory`) spent answer was re-dated `unspent`; plain `not-finished` is
+ *  the ordinary unspent hand-over. */
 export type ChildReclaimNotWhy =
-  | 'not-a-child' | 'marker-unreadable' | 'siblings-open' | 'siblings-unreadable' | 'review-report-live'
+  | 'not-a-child' | 'marker-unreadable' | 'siblings-open' | 'siblings-unreadable' | 'has-coordinated'
+  | 'review-report-live' | 'not-finished-undated' | 'not-finished-unmeasured' | 'not-finished-merge-commit'
   | 'not-finished';
 
 const CHILD_RECLAIM_NOT_WHY: Readonly<Record<ChildReclaimNotWhy, true>> = {
   'not-a-child': true, 'marker-unreadable': true, 'siblings-open': true, 'siblings-unreadable': true,
-  'review-report-live': true, 'not-finished': true,
+  'has-coordinated': true, 'review-report-live': true, 'not-finished-undated': true,
+  'not-finished-unmeasured': true, 'not-finished-merge-commit': true, 'not-finished': true,
 };
 
 export type ChildReclaimDecision =
@@ -204,13 +322,16 @@ export type ChildReclaimDecision =
 /** The minting run's row, read by the id the marker names — the SERVER's half
  *  of spec §5.1's two authorities. Three answers, never two. `reviews` is the
  *  row's own column: the work run a REVIEW run reads, `null` on a work run.
- *  `dispatchStartedAt` is the same column `childBirthOf` reads (`childSpent.ts`)
- *  — carried here so the close (Task 9) can place a fast-path spent verdict's
- *  evidence against this child's own birth before it decides; it plays no
- *  part in `childReclaimDecision`'s own logic, which reads only `spent.kind`
- *  and `spent.incarnation`, already resolved by the caller. */
+ *  `sessionBornAt`/`sessionBornFor`/`dispatchStartedAt` (migration 15, and
+ *  migration 5 for the last) are the same columns `childBirthOf` reads
+ *  (`childSpent.ts`) — carried here so the close (Task 9) can place a
+ *  fast-path spent verdict's evidence against this child's own birth before
+ *  it decides; they play no part in `childReclaimDecision`'s own logic, which
+ *  reads only `spent.kind` and `spent.incarnation`, already resolved by the
+ *  caller. */
 export type ChildReclaimMinting =
   | { readonly kind: 'row'; readonly sessionId: string | null; readonly reviews: number | null;
+      readonly sessionBornAt: number | null; readonly sessionBornFor: string | null;
       readonly dispatchStartedAt: number | null }
   | { readonly kind: 'absent' }
   | { readonly kind: 'unreadable' };
@@ -257,6 +378,26 @@ export interface ChildReclaimDecisionInput {
    *  close (amendment A2): the branch name is a recycled slug (spec §5.5),
    *  and unplaced evidence could belong to an earlier workspace that wore it. */
   readonly spent: ChildSpentVerdict | { readonly kind: 'unasked' };
+  /** True exactly when `spent.kind === 'spent' && spent.source !== 'live'`
+   *  triggered the caller's re-date through `childSpentLive` (spec §5.3): the
+   *  fast path (registry `.prnumber` or `.prhistory`) answered spent, never
+   *  trusted alone, and was re-asked live. Carried so a fast-path answer that
+   *  re-dates to `unspent` can still say WHY it is not finished —
+   *  `not-finished-merge-commit` — rather than the ordinary unspent hand-over. */
+  readonly spentFastPath: boolean;
+  /** Whether this session has EVER been named `claimedBy` of a run, or was the
+   *  session a reclaim DISPLACED from a programme's chair (`CoordStore.
+   *  childReclaimCoordinatorIds`'s own union — the heir side is already
+   *  covered by being `claimedBy` itself; the set's one EXTRA member is the
+   *  `from` side of a `reclaim:` displacement) (spec §1 rule 4): a
+   *  coordinator's own workspace, cleaned up by a human, never reclaimed
+   *  automatically. `'unreadable'` when the caller's store read itself
+   *  failed — decided at the SAME place the sibling check ranks (right after
+   *  it, never ahead of `not-a-child`/`marker-unreadable`), so a throw folds
+   *  into the existing `siblings-unreadable` only where an unreadable
+   *  sibling list already would, never on every close. No overloaded
+   *  boolean: `true`/`false`/`'unreadable'` are three answers, never two. */
+  readonly hasCoordinated: boolean | 'unreadable';
   /** No OTHER open run of this run's program: `CoordStore.programOpenRunCount`
    *  with this run excluded — D-51's predicate, not a second spelling. */
   readonly retiresProgram: boolean;
@@ -264,10 +405,11 @@ export interface ChildReclaimDecisionInput {
 
 /**
  * Has the coordinator FINISHED with this child? (spec §5.7). Eligible iff
- * child ∧ no open sibling ∧ (final ∨ spent-and-proven-this-incarnation ∨ an
- * abandon ∨ this close retires the program). "No open sibling" ALONE is also
- * true on the ordinary non-final close, which is claiming the child for wave
- * N+1 — reclaiming on it would be the 2026-09-10 harm through a new door.
+ * child ∧ no open sibling ∧ never coordinated ∧ (final ∨
+ * spent-and-proven-this-incarnation ∨ an abandon ∨ this close retires the
+ * program). "No open sibling" ALONE is also true on the ordinary non-final
+ * close, which is claiming the child for wave N+1 — reclaiming on it would be
+ * the 2026-09-10 harm through a new door.
  *
  * Two authorities, EQUAL (spec §5.1): the box's marker names a run, and that
  * run's row names THIS session. A marker naming a run whose row is absent, or
@@ -289,7 +431,19 @@ export interface ChildReclaimDecisionInput {
  * live row cannot say WHICH workspace wearing this recycled slug (spec §5.5)
  * the evidence belongs to, and this decision may DESTROY the workspace — so
  * unplaced evidence HOLDS on a non-final close exactly like an unspent child,
- * never reclaims on a guess.
+ * never reclaims on a guess. A close that HOLDS on unproven spent evidence
+ * says why (spec §5.3): `not-finished-undated` (a proven `spent` verdict left
+ * undated), `not-finished-unmeasured` (the verdict itself could not be read)
+ * or `not-finished-merge-commit` (the fast path's own answer was re-dated
+ * `unspent`) — otherwise plain `not-finished`, the ordinary unspent hand-over.
+ *
+ * A child that has EVER coordinated a run (spec §1 rule 4) is never
+ * reclaimed automatically, whatever else this close would otherwise decide:
+ * checked right after the sibling read, the same place that read's own
+ * unreadable answer ranks — so a `hasCoordinated: 'unreadable'` input folds
+ * into `siblings-unreadable` only there, never ahead of `not-a-child` or
+ * `marker-unreadable` for an ordinary non-child close whose own coordination
+ * history happens to be unreadable.
  */
 export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildReclaimDecision {
   const no = (why: ChildReclaimNotWhy): ChildReclaimDecision => ({ reclaim: false, why });
@@ -299,13 +453,19 @@ export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildRec
   if (input.minting.kind === 'absent' || input.minting.sessionId !== input.sessionId) return no('not-a-child');
   if (!input.siblings.ok) return no('siblings-unreadable');
   if (input.siblings.siblings.length > 0) return no('siblings-open');
+  if (input.hasCoordinated === 'unreadable') return no('siblings-unreadable');
+  if (input.hasCoordinated) return no('has-coordinated');
   if (input.minting.reviews !== null) {
     if (input.reviewed.kind === 'unreadable') return no('marker-unreadable');
     if (input.reviewed.kind !== 'row' || !isChildReclaimTerminalState(input.reviewed.state)) return no('review-report-live');
   }
   const finished = input.final || input.state === 'failed' || input.retiresProgram
     || (input.spent.kind === 'spent' && input.spent.incarnation === 'this');
-  return finished ? { reclaim: true } : no('not-finished');
+  if (finished) return { reclaim: true };
+  if (input.spent.kind === 'spent') return no('not-finished-undated');
+  if (input.spent.kind === 'unmeasured') return no('not-finished-unmeasured');
+  if (input.spent.kind === 'unspent' && input.spentFastPath) return no('not-finished-merge-commit');
+  return no('not-finished');
 }
 
 /** `mail-routes.test.ts`'s kebab scanner reads every quoted hyphenated literal
@@ -323,6 +483,7 @@ export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildRec
  *  different meaning. */
 export function isChildReclaimKebab(v: unknown): boolean {
   return isChildReclaimToken(v) || isChildReclaimDeferWhy(v) || isChildReclaimResume(v)
+    || v === CHILD_RECLAIM_PROBE_UNMEASURED
     || (typeof v === 'string' && (Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_NOT_WHY, v) || v === 'not-queued'));
 }
 
@@ -488,8 +649,14 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
       // Fix round 2, review minor C: an empty `detail` must not render
       // "…failed: ." — omit the separator rather than leave it dangling.
       const detail = typeof v.detail === 'string' ? v.detail : '';
-      return { kind: 'failed', resume: 'resumable',
-        detail: detail === '' ? v.failed : `${v.failed}: ${detail}` };
+      // `probe-unmeasured` (spec §5.7's presence rungs, §5.6's breadcrumb) is the
+      // presence rungs' own in-lock tmux probe failing BEFORE any act — the
+      // destructive tail never started, so unlike every other post-start
+      // `{failed:…}` document there is no breadcrumb to resume from. A retry
+      // starts completely afresh, exactly as `not-resumable` already reads
+      // (`childReclaimFeedBody`'s tail text: "It is retried from the start.").
+      const resume: ChildReclaimResume = v.failed === CHILD_RECLAIM_PROBE_UNMEASURED ? 'not-resumable' : 'resumable';
+      return { kind: 'failed', resume, detail: detail === '' ? v.failed : `${v.failed}: ${detail}` };
     }
   }
   const err = stderr.trim();
@@ -503,8 +670,9 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
 
 /**
  * Reclaim ONE child, from either trigger (spec §5.7). Re-reads everything it
- * decides on — the marker against `req.runId`, the open siblings, presence,
- * the capability — then `ws-audit --reclaim` → token → `ws-reclaim`. On
+ * decides on — the marker against `req.runId`, the open siblings, the
+ * reclaim switch (`childReclaimPauseRead`, wave 4), presence, the
+ * capability — then `ws-audit --reclaim` → token → `ws-reclaim`. On
  * `reclaimed` — and on a row step 1 measures ABSENT, whose earlier attempt's
  * box half finished without its cancel — it cancels every outstanding
  * delivery addressed to the child.
@@ -520,6 +688,22 @@ export async function reclaimChild(deps: ChildReclaimDeps, req: ChildReclaimRequ
   const outcome = await childReclaimOutcome(deps, req);
   if (outcome.kind !== 'gone') recordChildReclaimFeed(deps, outcome, req);
   return outcome;
+}
+
+/** The server's read of the reclaim kill-switch (child-reclamation spec §5.8,
+ *  wave 4) — the close path's skip, and the one server-side read that covers a
+ *  sweep reclaim queued behind a session's `KeyedQueue` before the switch went
+ *  up. `emitCoord`'s mapping of the same listing: THREE answers, because "the
+ *  registry did not list" is not "the switch is down". NOT the authority —
+ *  `ws-reclaim` re-reads the file inside its lock at rung 3 and again on
+ *  resume; this spares the box an audit walk the server already knows ccd will
+ *  refuse. */
+export async function childReclaimPauseRead(
+  io: Pick<FleetIO, 'readdir'>, registryDir: string,
+): Promise<MarkerState> {
+  const names = await io.readdir(registryDir);
+  if (names === null) return 'unmeasurable';
+  return names.includes(RECLAIM_PAUSE_MARKER) ? 'set' : 'clear';
 }
 
 async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
@@ -567,13 +751,52 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   if (sib.siblings.length > 0) {
     return deferred('siblings-open', `open run(s) ${sib.siblings.map((s) => `#${s.id}`).join(', ')} still name this workspace`);
   }
-  // WAVE 4 ADDS THE SERVER-SIDE PAUSE READ HERE (spec §5.8: the close path
-  // and the sweep skip): a `paused-at-server` deferral through `deferred(…)`
-  // above when the registry carries `RECLAIM_PAUSE_MARKER`, before presence,
-  // the capability or any argv — an early skip that returns through this
-  // function's one exit like every other outcome, never inside the
-  // `reclaimChild` wrapper. ccd's own rung 3, read on the box at the instant
-  // of deletion (Task 2), is the read that matters, and it does not change.
+  // 2a — COORDINATING, ANY STATE (spec §1, rule 4: manual cleanup is
+  // reserved for a coordinator's OWN workspace, never a sub-workspace a sweep
+  // may act on). A child that has EVER been named `claimedBy` of a run — the
+  // session a reclaim made an heir, the session the SAME reclaim displaced, or
+  // any nested coordinator — is never reclaimed automatically, whatever state
+  // that run reaches later (`childReclaimCoordinatorIds`'s own docstring
+  // states what "ever" covers and its one residual). Read after the sibling
+  // re-read (which answers a narrower, LIVE question) and before the pause: an
+  // unreadable coordination table is `siblings-unreadable`, the same word
+  // this function already uses for an unreadable `openRunsForSession` — never
+  // silently treated as "never coordinated".
+  let coordinated: ReadonlySet<string>;
+  try {
+    coordinated = deps.coord.childReclaimCoordinatorIds();
+  } catch (err) {
+    return deferred('siblings-unreadable', `whether ${sessionId} has coordinated a run could not be read `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+  }
+  if (coordinated.has(sessionId)) {
+    return deferred('siblings-open', `${sessionId} has coordinated run(s)`);
+  }
+  // 2b — THE SWITCH, READ BY THE SERVER (spec §5.8: "the close path skips").
+  // After the marker and sibling re-reads and BEFORE presence, the capability
+  // and any argv: a raised switch — or a registry that did not list, which
+  // cannot rule one out — defers, on EITHER trigger and WHATEVER
+  // `deferExpired` says (the ceiling bounds presence; the pause is not
+  // presence). Through this function's own `deferred(...)`, so `reclaimChild`
+  // writes its one feed row for it like every other deferral. ccd's rung 3,
+  // read on the box inside the lock at the instant of deletion, is still the
+  // read that matters. Try-wrapped like 2a above: both shipped `FleetIO`
+  // adapters fold every failure to `null` (the `unmeasurable` arm), so there
+  // is no live throw path today, but a REJECTING `readdir` must still land on
+  // this function's own `deferred(...)` — never an uncaught rejection that
+  // skips the executor's one feed row.
+  let pause: MarkerState;
+  try {
+    pause = await childReclaimPauseRead(deps.io, deps.cfg.registryDir);
+  } catch (err) {
+    return deferred('paused-at-server', `whether ${RECLAIM_PAUSE_MARKER} is raised could not be read `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+  }
+  if (pause !== 'clear') {
+    return deferred('paused-at-server', pause === 'set'
+      ? `${RECLAIM_PAUSE_MARKER} is raised: automatic reclamation is paused fleet-wide`
+      : `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out`);
+  }
   // 3 — a human looking at it, unless the defer's ceiling was reached.
   if (!req.deferExpired && deps.presence?.isVisible(sessionId) === true) {
     return deferred('presence', 'someone is viewing this session');
@@ -709,6 +932,205 @@ async function childReclaimAct(
     sweepDec(deps.fleetState, `run:${req.runId} reclaim ${req.trigger}`));
   const res = await deps.runCcd(argv);
   return parseChildReclaimResult(req.sessionId, res.stdout, res.stderr);
+}
+
+// ── the hold-release job ─────────────────────────────────────────────────────
+
+/** A hold this build proved was written by one of a child's own runs, whose
+ *  accounting has since retired — `childReclaimSweepVerdict`'s `hold-retired`
+ *  verdict (`server/src/childReclaimSweep.ts`), and its `release` payload.
+ *  `ws-reclaim`'s own rung 4 refuses any hold, so such a child can never
+ *  become eligible through the ordinary path until its hold is released, and
+ *  a hand-over hold is exactly what THIS build wrote for THIS child, never
+ *  something to guess at by re-deriving it a second time here. */
+export interface ChildReclaimReleaseRequest {
+  readonly sessionId: string;
+  readonly runId: number;
+  readonly reason: string;
+  readonly program: string;
+  readonly accountedRunId: number;
+}
+
+/** `releaseRetiredChildHold`'s answer. `released`/`not-held` are ccd's own two
+ *  documents for `ws-release` — both printed at exit 0, `cmd_ws_release`'s own
+ *  idempotent design (`ccd/ccd`); `changed` is this job's OWN re-read finding
+ *  a condition it relied on no longer holds, decided before ccd is ever
+ *  called; `failed` is a throw, an `ok:false` read, an unsupported box, or a
+ *  non-zero/unreadable ccd exit. */
+export type ChildReclaimReleaseOutcome = 'released' | 'not-held' | 'changed' | 'failed';
+
+/** The release job's `--actor`, kept inside ccd's cap on it
+ *  (`LC_REASON_MAX_BYTES` bytes; ccd dies on a longer one). A programme name
+ *  shaped by today's route is short, but a row written before that shaping
+ *  may carry any length, and an over-cap actor would fail this child's
+ *  release on every pass. The actor is this server's own attribution text,
+ *  not a person's words, so it is SHORTENED to fit — the programme name cut
+ *  at a code point and marked with an ellipsis — never refused. */
+export function childReclaimReleaseActor(runId: number, program: string): string {
+  const actor = (p: string): string => `run:${runId} reclaim sweep: program ${p} retired`;
+  const bytes = (t: string): number => new TextEncoder().encode(t).length;
+  if (bytes(actor(program)) <= LC_REASON_MAX_BYTES) return actor(program);
+  // Every code point is at least one byte, so no fitting cut keeps more than
+  // the cap's own count of them: the search starts there, not at the end.
+  const points = Array.from(program);
+  let keep = Math.min(points.length, LC_REASON_MAX_BYTES);
+  while (keep > 0 && bytes(actor(`${points.slice(0, keep).join('')}…`)) > LC_REASON_MAX_BYTES) keep -= 1;
+  return actor(`${points.slice(0, keep).join('')}…`);
+}
+
+/**
+ * Release a hold this build proved belongs to one of a child's own runs, once
+ * that accounting has retired (spec §5.7's "no hold" conjunct). The sweep
+ * queues this on the child's own `KeyedQueue` key after TWO CONSECUTIVE
+ * `hold-retired` passes, never on the first — a transient read glitch must
+ * not fire it. By the time this job runs the deciding pass may be minutes
+ * old, so it re-reads EVERY fact it relied on, in order, before it ever
+ * touches the box:
+ *   1. the row — the marker still names `runId`, and the held text is still
+ *      the exact trimmed bytes this job was queued with;
+ *   2. the accounting — `accountedRunId` is still a TERMINAL run, and its
+ *      CURRENT fields render to the row's CURRENT held text (re-derived
+ *      fresh, never compared against the cached `reason` a second time —
+ *      only against a rendering built from what this re-read just measured).
+ *      A terminal run's own fields do not move in the live system — this
+ *      re-derivation is defence in depth, not a path a live rollback or
+ *      re-dispatch can actually reach, since a terminal `r`'s identity is
+ *      immutable (see the check's own comment below);
+ *   3. that run's programme — still zero open runs;
+ *   4. the child's own open runs — still none;
+ *   5. the coordinator read — this child has still never coordinated a run;
+ *   6. the reclaim switch (`childReclaimPauseRead`, the read the executor's
+ *      own step 2b makes) — still down. A release queued behind the child's
+ *      `KeyedQueue` before an operator raised `reclaim-paused` must not
+ *      remove the hold the operator may have raised the switch to keep:
+ *      `cmd_ws_release` does not read the marker itself. `set` answers
+ *      `changed`; `unmeasurable` answers `failed`.
+ * A throw or an `ok:false` from any of these answers `failed` and composes no
+ * argv — never a guess standing in for a read this process could not finish.
+ * Only once every one of them agrees does it compose `ws-release`, gated by
+ * `verbSupported` exactly as the close route gates the same verb.
+ *
+ * THE RESIDUAL, ACCEPTED: a hold written between this job's last re-read and
+ * ccd's own unlink is removed anyway — that window is under a second (one
+ * agent exec, ccd startup, its journal write), and a hand hold lost this way
+ * is reclaimed two passes later by the ordinary path, which pins its commits
+ * and uncommitted work but not its pane, clips, temp root or ignored files. A
+ * re-bind inside that same window stays protected by its own open run and is
+ * re-held at its own dispatch. A hand hold byte-identical to the server's own
+ * last-written claim is treated as that claim — this job cannot tell the two
+ * apart, and nothing here tries to: parsing a hold back is exactly what this
+ * whole lane refuses to do (`run-routes.test.ts`'s "NOTHING in the tree
+ * parses one back").
+ *
+ * NEVER PARSES a hold: every comparison below is byte equality against a
+ * RENDERING (`holdReason`), never a scan for structure inside the text
+ * itself.
+ */
+export async function releaseRetiredChildHold(
+  deps: ChildReclaimDeps, req: ChildReclaimReleaseRequest,
+): Promise<ChildReclaimReleaseOutcome> {
+  const { sessionId, runId, reason, program, accountedRunId } = req;
+
+  // 1 — the row: the marker still names this run, and the held text is
+  // still the exact bytes this job was queued with.
+  let read: Awaited<ReturnType<typeof readSessionRecord>>;
+  try {
+    read = await readSessionRecord(deps.io, deps.cfg, sessionId);
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: reading ${sessionId}'s row failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (!read.found) return read.reason === 'unlistable' ? 'failed' : 'changed';
+  const mark = read.record.child;
+  if (mark.kind !== 'child' || mark.runId !== runId) return 'changed';
+  if (read.record.held === null || read.record.held.trim() !== reason) return 'changed';
+
+  // 2 — the accounting: `accountedRunId` is still a TERMINAL run, and its
+  // CURRENT fields still render to the CURRENT held text.
+  let accounted: ReturnType<CoordStore['run']>;
+  try {
+    accounted = deps.coord.run(accountedRunId);
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: re-reading run ${accountedRunId} failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (!accounted.ok) return 'failed';
+  const r = accounted.run;
+  // NOT independently re-checked here: that `r` still NAMES this child (its
+  // `sessionId` or its own id is still the candidate a match was found
+  // against). A terminal run's identity is immutable — `clearSession` only
+  // ever nulls a `'planned'` row, and every `bindSession` caller binds an
+  // OPEN run — so a terminal `r` cannot have moved off this child between
+  // the deciding pass and this re-read. The re-derived rendering below is
+  // what actually re-proves the accounting; this comment states the
+  // dependency it stands on rather than repeating a check nothing can fail.
+  if (r === null || !isChildReclaimTerminalState(r.state)) return 'changed';
+  const open = holdReason(r.program, r.wave, r.waveOf, r.id);
+  const close = holdReason(r.program, r.wave + 1, r.waveOf, null);
+  if (reason !== open && reason !== close) return 'changed';
+
+  // 3 — that run's programme, re-counted: still zero open runs.
+  let count: number;
+  try {
+    count = deps.coord.programOpenRunCount(r.program);
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: re-counting ${r.program}'s open runs failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (count > 0) return 'changed';
+
+  // 4 — the child's own open runs: still none. `openRunsForSession` throws
+  // bare (its `db.prepare().all()` sits outside any catch in `store.ts`), so
+  // this is its own try like every other read above — never a throw that
+  // rejects the job instead of answering `failed`.
+  let sib: ReturnType<CoordStore['openRunsForSession']>;
+  try {
+    sib = deps.coord.openRunsForSession(sessionId);
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: re-reading ${sessionId}'s open siblings failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (!sib.ok) return 'failed';
+  if (sib.siblings.length > 0) return 'changed';
+
+  // 5 — the coordinator read: this child has still never coordinated a run.
+  let coordinating: ReadonlySet<string>;
+  try {
+    coordinating = deps.coord.childReclaimCoordinatorIds();
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: re-reading ${sessionId}'s coordination history failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (coordinating.has(sessionId)) return 'changed';
+
+  // 6 — the reclaim switch: still down. Read last, nearest the argv, like
+  // the executor's own step 2b.
+  let pause: MarkerState;
+  try {
+    pause = await childReclaimPauseRead(deps.io, deps.cfg.registryDir);
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: reading the reclaim switch failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (pause === 'set') return 'changed';
+  if (pause !== 'clear') return 'failed';
+
+  // Only now: the one write this job may ever compose. It deletes nothing
+  // but the hold file (`cmd_ws_release`'s own docstring).
+  const argv = CCD_ARGV.wsRelease(sessionId, sweepDec(deps.fleetState, childReclaimReleaseActor(runId, program)));
+  if (!verbSupported(deps.fleetState, argv)) return 'failed';
+  const res = await deps.runCcd(argv);
+  if (!res.ok) return 'failed';
+  const out = res.stdout.trim();
+  if (out === `released ${sessionId}`) return 'released';
+  if (out === `not held ${sessionId}`) return 'not-held';
+  return 'failed';
 }
 
 // ── the feed row ─────────────────────────────────────────────────────────────

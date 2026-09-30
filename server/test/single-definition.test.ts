@@ -2300,6 +2300,25 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
   });
 });
 
+// — Child-reclamation wave 4: the reclaim switch's file name —
+describe("child-reclamation wave 4 — one 'reclaim-paused' literal", () => {
+  it("'reclaim-paused' is a literal in exactly one source file", () => {
+    // `RECLAIM_PAUSE_MARKER` (`server/src/coord/rundefs.ts`) is the ONE
+    // definition. A second literal is how the banner and the sweep would come
+    // to disagree about what "paused" means — one reading a name the other
+    // never checks, with the deleting side the one that is wrong.
+    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'reclaim-paused'")).map(rel);
+    expect(holders).toEqual(['server/src/coord/rundefs.ts']);
+  });
+
+  it('watch.ts reaches the reclaim marker through the shared constant, never a copy', () => {
+    // Not just "no second literal" — that is satisfied by deleting the reader.
+    const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'watch.ts'), 'utf8');
+    expect(src).toContain('names.includes(RECLAIM_PAUSE_MARKER)');
+    expect(src).toMatch(/import \{[^}]*\bRECLAIM_PAUSE_MARKER\b[^}]*\} from '\.\/coord\/rundefs\.js'/);
+  });
+});
+
 // — Build 4, Task 15: one envelope grammar —
 describe('Build 4 — one ccrc-mail fence', () => {
   // The GRAMMAR is minted server-side (`renderEnvelope`) and parsed back

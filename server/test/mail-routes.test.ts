@@ -623,6 +623,7 @@ describe('the rejection table is total, in both directions', () => {
                                // asymmetry `refused-project`/`unlistable` above
                                // records.
       'coordinator-paused',   // $REG marker filename, not a code
+      'reclaim-paused',       // $REG marker filename, not a code (child-reclamation wave 4)
       'bad-request',          // the generic body-shape refusal server.ts
                                // already uses throughout; not a mail code
       'not-found',            // GET /api/mail/:id's generic 404 for an

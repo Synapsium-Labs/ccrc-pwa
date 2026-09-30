@@ -2678,13 +2678,61 @@ button.proj-card-pool::before {
 }
 .coord-toggle:active { transform: scale(0.96); }
 .coord-toggle:disabled { cursor: default; }
-/* Named-ancestor descendant of `.coord-banner` (self-grounded, above) — same
-   idiom as `.coord-banner .coord-glyph` a few lines up — so `design/audit.mjs`
-   can actually recover a ground for this pair and measure it, rather than
-   filing it under `uncovered` the way a bare `.coord-error { color: … }`
-   selector would (review fix round 1, Minor 3: hand-computed 6.80 DARK /
-   5.73 LIGHT against --bg-surface, but unmeasured by the automatic gate
-   until this selector named its ancestor). */
+/* The reclaim row (child-reclamation wave 4) — the pause banner's shape and its
+   discipline: a switch is a STATE, not a living pane, so no --glow, no animation
+   and no box-shadow anywhere under .child-reclaim-*. Self-grounded (its own
+   color AND background) so `design/audit.mjs` recovers a ground for every
+   descendant below; every ink here is one the coord banner already measures on
+   --bg-surface, so no new colour pair is priced. */
+.child-reclaim-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--tap-min);
+  padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-secondary);
+}
+/* The switch readout (glyph, word, toggle,
+   error) is its OWN flex context, carrying `role="status"` in the markup, so
+   only ITS changes enter a live region — the attention list below is a
+   separate sibling and never re-announces its sentences on every sweep tick.
+   `flex: 1` so it still claims the row's spare width exactly as its three
+   children did as direct flex items of `.child-reclaim-banner` before. */
+.child-reclaim-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); flex: 1; min-width: 0; }
+.child-reclaim-banner .child-reclaim-glyph { color: var(--ink-tertiary); flex: none; }
+.child-reclaim-word { flex: 1; min-width: 0; }
+.child-reclaim-toggle {
+  flex: none;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift);
+}
+.child-reclaim-toggle:active { transform: scale(0.96); }
+.child-reclaim-toggle:disabled { cursor: default; }
+.child-reclaim-banner .child-reclaim-error { flex-basis: 100%; margin: 0; color: var(--ink-secondary); }
+.child-reclaim-banner .child-reclaim-attention {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-secondary);
+}
+.child-reclaim-banner .child-reclaim-item { display: flex; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; }
+.child-reclaim-banner .child-reclaim-who { color: var(--ink-tertiary); }
 /* Wave 6, spec §8: the caps dial, beside the pause banner and grounded the same
    way. Self-grounded (both `color` and `background`) so `design/audit.mjs` can
    recover a ground and measure the contrast — a colourless rule lands in
@@ -2777,6 +2825,15 @@ button.proj-card-pool::before {
   overflow: hidden;
 }
 
+/* Named-ancestor descendant of `.coord-banner` (self-grounded, above) — same
+   idiom as `.coord-banner .coord-glyph` a few lines up — so `design/audit.mjs`
+   can actually recover a ground for this pair and measure it, rather than
+   filing it under `uncovered` the way a bare `.coord-error { color: … }`
+   selector would (hand-computed 6.80 DARK / 5.73 LIGHT against --bg-surface,
+   but unmeasured by the automatic gate until this selector named its
+   ancestor). It stays directly beside `.coord-banner .coord-error` below —
+   not under `.child-reclaim-who`, where it would read as that rule's own
+   docstring instead. */
 .coord-banner .coord-error {
   flex-basis: 100%;
   margin: 0;
