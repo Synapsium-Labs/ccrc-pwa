@@ -54,8 +54,8 @@ function ready(ignore: string[] = []): { main: string; wt: string; tip: string }
 const tokenOf = (): string =>
   JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`)).token;
 
-const reap = (tok: string) =>
-  h.run(`${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
+const reap = (tok: string, pre = '') =>
+  h.run(`${pre}${GH_STUB} ${ARCH} cmd_ws_reap --expect ${tok} --session demo-quiet-basin`);
 
 /**
  * Read EVERY refusal through this. `ws-reap` is the only destructive verb in
@@ -70,8 +70,8 @@ const reap = (tok: string) =>
  * ITSELF (the branch-moved case): asserting it still exists there would assert
  * the opposite of the fixture. Pass null and say so inline — never silently.
  */
-const refused = (tok: string, wt: string | null, main: string | null): Record<string, any> => {
-  const r = reap(tok);
+const refused = (tok: string, wt: string | null, main: string | null, pre = ''): Record<string, any> => {
+  const r = reap(tok, pre);
   expect(r.code, `a refusal is an ANSWER — exit 0 with JSON on stdout. stderr: ${r.stderr}`).toBe(0);
   const o = JSON.parse(r.stdout);
   expect(o.refused, 'expected a refusal, got no `refused` key').toBeTruthy();
@@ -3024,4 +3024,227 @@ describe('untracked files are dirt whatever status.showUntrackedFiles says — p
       expect(h.reg('demo-quiet-basin', 'reaping')).toBe('children');
     }, 60000);
   }
+});
+
+describe('ignored files are dirt in a nested child — a child’s own excludesFile hides nothing from ws-reap, fresh or resume', () => {
+  // `status --untracked-files=all` never lists an IGNORED file, a child's own
+  // worktree config can make any file ignored in that child alone, and `git
+  // worktree remove` then deletes it with no --force (git 2.43). So both
+  // nested-child decision points read the child's ignored entries
+  // (`_ws_child_ignored_count`): fresh, one refuses `child-dirty`; on resume,
+  // `state-changed`; an enumeration that fails is `tree-unreadable`. The one
+  // entry never counted is a registered worktree the same loop reads itself —
+  // git prints a nested checkout as ONE entry of the child that holds it.
+  const addChild = (main: string, parentDir: string, leaf = 'agent-a', branch = 'ca'): string => {
+    const dir = path.join(parentDir, '.claude', 'worktrees', leaf);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    h.git(main, 'worktree', 'add', dir, '-b', branch);
+    return dir;
+  };
+  /** `core.excludesFile` in `dir`'s OWN worktree config only, naming `name`.
+   *  The excludes file lives in the fixture HOME, outside every tree, so it is
+   *  not itself an entry anywhere. */
+  const ignoreIn = (main: string, dir: string, name: string): void => {
+    const f = path.join(h.home, 'child-excludes');
+    fs.writeFileSync(f, `${name}\n`);
+    h.git(main, 'config', 'extensions.worktreeConfig', 'true');
+    h.git(dir, 'config', '--worktree', 'core.excludesFile', f);
+  };
+  /** The CONTROLS every case states: what a plain status read, and git's own
+   *  ignored listing, say in `dir`. */
+  const plainStatus = (dir: string): string => h.git(dir, 'status', '--porcelain');
+  const gitIgnored = (dir: string): string => h.git(dir, 'ls-files', '--others', '--ignored', '--exclude-standard');
+  const audit = (pre = ''): Record<string, any> =>
+    JSON.parse(h.sh(`${pre}${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+  /** An interrupted reap with breadcrumb `children`: `locked`'s own removal
+   *  fails on a lock, then the lock is lifted. */
+  const stopAtChildren = (main: string, locked: string, tok: string): void => {
+    h.git(main, 'worktree', 'lock', locked);
+    expect(JSON.parse(reap(tok).stdout).refused, 'the CONTROL: the run stopped at the child').toBe('worktree-remove-failed');
+    expect(h.reg('demo-quiet-basin', 'reaping')).toBe('children');
+    h.git(main, 'worktree', 'unlock', locked);
+  };
+  /** What every refusal here leaves, beyond `refused()`'s own workdir, branch
+   *  and registry checks: the file with its content, the tree holding it, and
+   *  every child branch. */
+  const expectKept = (main: string, file: string, content: string, branches: string[]): void => {
+    expect(fs.readFileSync(file, 'utf8'), `${file} survives with its content`).toBe(content);
+    for (const b of branches) expect(h.git(main, 'branch', '--list', b), `the child branch ${b} survives`).toContain(b);
+  };
+  /** A `git` on PATH, inside the fixture HOME, that fails ONLY an `ls-files`
+   *  call carrying `--ignored` and records the call; every other call execs
+   *  the real git. `rc`: exit 1, nothing on stdout or stderr. `stderr`: exit 0,
+   *  one diagnostic, nothing on stdout. Prepended in the snippet, after the
+   *  harness's own bin, so its poisoned `gh` still answers. */
+  const shim = (mode: 'rc' | 'stderr'): string => {
+    const real = h.sh('command -v git');
+    expect(real, 'the CONTROL: the real git resolved').toMatch(/\/git$/);
+    const dir = path.join(h.home, 'git-shim');
+    fs.mkdirSync(dir, { recursive: true });
+    const fail = mode === 'rc' ? 'exit 1' : 'echo "warning: could not open directory" >&2; exit 0';
+    fs.writeFileSync(path.join(dir, 'git'),
+      `#!/bin/sh\ncase " $* " in *" ls-files "*" --ignored "*) printf '%s\\n' "$*" >> "$HOME/ignored-reads"; ${fail} ;; esac\n`
+      + `exec "${real}" "$@"\n`, { mode: 0o755 });
+    return 'PATH="$HOME/git-shim:$PATH"; ';
+  };
+  const shimCalls = (): string[] => {
+    const f = path.join(h.home, 'ignored-reads');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean) : [];
+  };
+
+  for (const hidden of [false, true]) {
+    const label = hidden ? 'UNDER the child worktree’s own core.excludesFile' : '— the control, no config';
+    it(`fresh: a file in a registered child refuses child-dirty ${label}`, () => {
+      const { main, wt } = ready(['.claude/']);
+      const child = addChild(main, wt);
+      const tok = tokenOf();
+      if (hidden) ignoreIn(main, child, 'notes.md');
+      fs.writeFileSync(path.join(child, 'notes.md'), 'draft\n');
+      expect(plainStatus(child), 'the CONTROL').toBe(hidden ? '' : '?? notes.md');
+      expect(gitIgnored(child), 'the CONTROL').toBe(hidden ? 'notes.md' : '');
+      const detail = hidden ? `1 ignored file(s) in ${child}` : `1 uncommitted file(s) in ${child}`;
+      const a = audit();
+      expect(a.verdict).toBe('child-dirty');
+      expect(a.detail).toBe(detail);
+      const o = refused(tok, wt, main);
+      expect(o.refused).toBe('child-dirty');
+      expect(o.detail).toBe(detail);
+      expectKept(main, path.join(child, 'notes.md'), 'draft\n', ['ca']);
+    }, 60000);
+
+    it(`resume: a file written into a consented child in the gap refuses state-changed ${label}`, () => {
+      const { main, wt } = ready(['.claude/']);
+      const child = addChild(main, wt);
+      const tok = tokenOf();
+      stopAtChildren(main, child, tok);
+      if (hidden) ignoreIn(main, child, 'notes.md');
+      fs.writeFileSync(path.join(child, 'notes.md'), 'draft\n');
+      expect(plainStatus(child), 'the CONTROL').toBe(hidden ? '' : '?? notes.md');
+      const o = refused(tok, wt, main);
+      expect(o.refused).toBe('state-changed');
+      expect(o.detail).toContain(hidden ? `${child} has 1 ignored file(s) now` : `${child} is dirty now`);
+      expectKept(main, path.join(child, 'notes.md'), 'draft\n', ['ca']);
+      expect(h.reg('demo-quiet-basin', 'reaping'), 'the breadcrumb stays').toBe('children');
+    }, 60000);
+  }
+
+  for (const mode of ['rc', 'stderr'] as const) {
+    const label = mode === 'rc' ? 'exit 1, nothing on stderr' : 'exit 0, a diagnostic on stderr';
+    it(`fresh: a child ignored enumeration that fails (${label}) refuses tree-unreadable`, () => {
+      const { main, wt } = ready(['.claude/']);
+      const child = addChild(main, wt);
+      const tok = tokenOf();
+      ignoreIn(main, child, 'notes.md');
+      fs.writeFileSync(path.join(child, 'notes.md'), 'draft\n');
+      expect(plainStatus(child), 'the CONTROL: the status read before it sees nothing').toBe('');
+      const pre = shim(mode);
+      const a = audit(pre);
+      expect(a.verdict).toBe('tree-unreadable');
+      expect(a.detail).toBe(`could not read the child at ${child}`);
+      expect(shimCalls().some((c) => c.includes(`-C ${child} ls-files`)), 'the CONTROL: the failed read was the child’s').toBe(true);
+      const o = refused(tok, wt, main, pre);
+      expect(o.refused).toBe('tree-unreadable');
+      expect(o.detail).toBe(`could not read the child at ${child}`);
+      expectKept(main, path.join(child, 'notes.md'), 'draft\n', ['ca']);
+    }, 60000);
+
+    it(`resume: a child ignored enumeration that fails (${label}) refuses tree-unreadable`, () => {
+      const { main, wt } = ready(['.claude/']);
+      const child = addChild(main, wt);
+      const tok = tokenOf();
+      stopAtChildren(main, child, tok);
+      ignoreIn(main, child, 'notes.md');
+      fs.writeFileSync(path.join(child, 'notes.md'), 'draft\n');
+      expect(plainStatus(child), 'the CONTROL: the status read before it sees nothing').toBe('');
+      const pre = shim(mode);
+      const o = refused(tok, wt, main, pre);
+      expect(o.refused).toBe('tree-unreadable');
+      expect(o.detail).toBe(`could not read the child at ${child} — refusing to finish the cleanup on a guess`);
+      expect(shimCalls().some((c) => c.includes(`-C ${child} ls-files`)), 'the CONTROL: the failed read was the child’s').toBe(true);
+      expectKept(main, path.join(child, 'notes.md'), 'draft\n', ['ca']);
+      expect(h.reg('demo-quiet-basin', 'reaping'), 'the breadcrumb stays').toBe('children');
+    }, 60000);
+  }
+
+  it('fresh: a registered GRANDCHILD holding an ignored file refuses child-dirty naming the grandchild — each registered worktree is read by its own iteration', () => {
+    const { main, wt } = ready(['.claude/']);
+    const child = addChild(main, wt);
+    const grand = addChild(main, child, 'agent-inner', 'cb');
+    expect(gitIgnored(child), 'the CONTROL: git lists the registered grandchild as one ignored entry of the child')
+      .toBe('.claude/worktrees/agent-inner/');
+    const tok = tokenOf();
+    expect(tok, 'the CONTROL: that entry alone is skipped — the nested layout is reapable').toMatch(/^[0-9a-f]{64}$/);
+    fs.mkdirSync(path.join(grand, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(grand, '.claude', 'cache.txt'), 'kept\n');
+    expect(plainStatus(grand), 'the CONTROL: the grandchild’s status read sees nothing').toBe('');
+    const a = audit();
+    expect(a.verdict).toBe('child-dirty');
+    expect(a.detail).toBe(`1 ignored file(s) in ${grand}`);
+    const o = refused(tok, wt, main);
+    expect(o.refused).toBe('child-dirty');
+    expect(o.detail).toBe(`1 ignored file(s) in ${grand}`);
+    expectKept(main, path.join(grand, '.claude', 'cache.txt'), 'kept\n', ['ca', 'cb']);
+    expect(fs.existsSync(child), 'the holding child survives').toBe(true);
+  }, 60000);
+
+  it('resume: a registered grandchild given an ignored file in the gap refuses state-changed naming the grandchild, and its holder’s entry for it is still skipped', () => {
+    const { main, wt } = ready(['.claude/']);
+    const child = addChild(main, wt);
+    const grand = addChild(main, child, 'agent-inner', 'cb');
+    const tok = tokenOf();
+    // Innermost-first: the grandchild's removal fails first, so nothing is removed.
+    stopAtChildren(main, grand, tok);
+    expect(fs.existsSync(grand) && fs.existsSync(child), 'the CONTROL: both still stand').toBe(true);
+    fs.mkdirSync(path.join(grand, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(grand, '.claude', 'cache.txt'), 'kept\n');
+    const o = refused(tok, wt, main);
+    expect(o.refused).toBe('state-changed');
+    expect(o.detail).toContain(`${grand} has 1 ignored file(s) now`);
+    expect(o.detail, 'the holder’s one entry for its registered grandchild is not counted').not.toContain(`${child} has`);
+    expectKept(main, path.join(grand, '.claude', 'cache.txt'), 'kept\n', ['ca', 'cb']);
+    expect(fs.existsSync(child), 'the holding child survives').toBe(true);
+    expect(h.reg('demo-quiet-basin', 'reaping'), 'the breadcrumb stays').toBe('children');
+  }, 60000);
+
+  it('the skip is EXACT — an unregistered nested repository (even one a registered path begins with) and a file at a registered path each count', () => {
+    // Read through the helper itself, with the loop's own set, because end to
+    // end an unregistered nested repository never reaches it: the stray rung
+    // (`_ws_nested_checkouts`) refuses `nested-checkouts-present` first — the
+    // case below this one.
+    const { main, wt } = ready(['.claude/']);
+    const child = addChild(main, wt);
+    const grand = addChild(main, child, 'agent-inner', 'cb');
+    const count = (): string => h.sh(`_ws_child_ignored_count "${child}" "$(_ws_children "${main}" "${wt}")"`);
+    expect(count(), 'the CONTROL: the registered grandchild alone is skipped').toBe('0');
+    const stray = path.join(child, '.claude', 'worktrees', 'agent-in');
+    fs.mkdirSync(stray, { recursive: true });
+    execFileSync('git', ['init', '-q', stray]);
+    expect(gitIgnored(child).split('\n'), 'the CONTROL: git lists the stray as one entry, beside the grandchild')
+      .toEqual(['.claude/worktrees/agent-in/', '.claude/worktrees/agent-inner/']);
+    expect(`${grand}`.startsWith(stray), 'the CONTROL: the registered path begins with the stray’s').toBe(true);
+    expect(count(), 'an unregistered nested repository counts, prefix or no prefix').toBe('1');
+    fs.rmSync(stray, { recursive: true, force: true });
+    // A FILE where a registered worktree's directory stood: git still records
+    // the worktree, and the file sits at exactly its path.
+    const gone = addChild(main, child, 'agent-gone', 'cg');
+    fs.rmSync(gone, { recursive: true, force: true });
+    fs.writeFileSync(gone, 'a file\n');
+    expect(h.sh(`_ws_children "${main}" "${wt}"`).split('\n').map((l) => l.split('\t')[0]),
+      'the CONTROL: git still records the worktree at that path').toContain(gone);
+    expect(count(), 'a file at a registered path counts — only the collapsed directory form is skipped').toBe('1');
+  }, 60000);
+
+  it('end to end, an unregistered nested repository in a child’s ignored directory refuses at the stray rung, before the child’s own reads', () => {
+    const { main, wt } = ready(['.claude/']);
+    const child = addChild(main, wt);
+    const tok = tokenOf();
+    const stray = path.join(child, '.claude', 'nested');
+    fs.mkdirSync(stray, { recursive: true });
+    execFileSync('git', ['init', '-q', stray]);
+    fs.writeFileSync(path.join(stray, 'work.txt'), 'kept\n');
+    expect(gitIgnored(child), 'the CONTROL: git lists it as one ignored entry of the child').toBe('.claude/nested/');
+    const o = refused(tok, wt, main);
+    expect(o.refused).toBe('nested-checkouts-present');
+    expectKept(main, path.join(stray, 'work.txt'), 'kept\n', ['ca']);
+  }, 60000);
 });

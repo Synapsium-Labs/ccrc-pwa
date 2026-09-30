@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0e25aa421cbd142deb20a82df8fa999f511ad9f75af2083b2be9e144d79abe3c
+# ccrc:generated 1 sha256=fd880139022c6a33490439b147b793ab4c28a4df649abf00d35e42756d42c8ce
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -12183,7 +12183,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       { (( rc == 0 )) && [[ -z "$err" ]]; } \
         || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }
       local cdirty; cdirty=$(printf '%s' "$dirt" | grep -c . || true)
-      (( cdirty == 0 )) || { _reap_refuse child-dirty "$cdirty uncommitted file(s) in $cpath"; return 1; }
+      (( cdirty == 0 )) || { _reap_refuse child-dirty "$cdirty uncommitted file(s) in $cpath"; return 1; }; local cign; cign=$(_ws_child_ignored_count "$cpath" "$children") || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }; (( cign == 0 )) || { _reap_refuse child-dirty "$cign ignored file(s) in $cpath"; return 1; }
       local cbase; cbase=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD) \
         || { _reap_refuse child-unpushed "no origin/HEAD to prove $cpath against"; return 1; }
       local cahead; cahead=$(git -C "$cpath" rev-list --count "$cbase..HEAD" 2>/dev/null) \
@@ -14032,7 +14032,7 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
                   "$(_json_str "could not read the child at $_rccpath — refusing to finish the cleanup on a guess")"
                 return 0
               }
-              [[ -z "$_rcdirt" ]] || rcchanged+="$_rccpath is dirty now; "
+              [[ -z "$_rcdirt" ]] || rcchanged+="$_rccpath is dirty now; "; local _rcign; _rcign=$(_ws_child_ignored_count "$_rccpath" "$rcchildren") || { printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' "$(_json_str "could not read the child at $_rccpath — refusing to finish the cleanup on a guess")"; return 0; }; (( _rcign == 0 )) || rcchanged+="$_rccpath has $_rcign ignored file(s) now; "
             fi
           else
             rcchanged+="$_rcline is not among the consented children; "
@@ -27304,6 +27304,48 @@ _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` br
 # out as it cuts the region, whose words are ws-reclaim's alone (its header's
 # fourteen). `wsaudit.test.ts` harvests the whole file, so both words are found.
 # ── end ws-reap's mirror ─────────────────────────────────────────────────── MIRROR-END ──
+
+# ── ws-reap's ignored read of a nested child (spec 2026-09-22 §1, §5.5) ────────
+# `_ws_reap_eval`'s per-child descent and `_ws_reap_locked`'s children-phase
+# resume each call this right after the child's `status` read, and each call
+# decides: fresh, a counted entry refuses `child-dirty`; on resume, it refuses
+# `state-changed`; rc 1 is `tree-unreadable` at both. `status
+# --untracked-files=all` never lists an IGNORED file, a child's own worktree
+# config (`config --worktree core.excludesFile`) can make any file ignored in
+# that child alone, and `git worktree remove` deletes ignored files without
+# --force. "Ignored files die with the tree" is ws-reclaim's rule, and it comes
+# after that verb's classify-and-pin (§1, §5.5). ws-reap pins nothing, so it
+# refuses instead.
+#
+# CHECKED, as the status read beside each call is: rc != 0 or ANY stderr is a
+# read that did not complete. stdout goes to a FILE because `-z` output carries
+# NUL bytes, which `$(…)` drops.
+#
+# ONE SKIP. An entry `D/` (git's collapsed form for a nested repository) is not
+# counted when `"$1/D"` is EXACTLY one path of the caller's own registered set:
+# `$children` fresh, `$rcchildren` on resume, both `_ws_children` lines
+# (`path<TAB>branch<TAB>head`, resolved). A registered grandchild carries a
+# `.git` file, so git prints it as that one entry of the child holding it, and
+# without the skip every nested reap would refuse. The skip is sound because the
+# same loop reads that grandchild ITSELF. Fresh, that means its ownership pair,
+# its status and this read, all before anything is removed. On resume it is
+# re-read as a consented live child. And the teardown removes it innermost-first,
+# before its holder. Everything else counts: a file (even at a registered path),
+# an unregistered nested repository, and a spelling that is not a whole
+# registered path (a prefix is not a match).
+_ws_child_ignored_count() {   # childdir set -> ignored entries in childdir, set's registered worktrees skipped; rc 1 = unread
+  local out err rc e n=0
+  out=$(_plat_mktemp) || return 1
+  err=$(_plat_mktemp) || { rm -f "$out"; return 1; }
+  git -C "$1" ls-files --others --ignored --exclude-standard -z >"$out" 2>"$err"; rc=$?
+  if (( rc != 0 )) || [[ -s "$err" ]]; then rm -f "$out" "$err"; return 1; fi
+  while IFS= read -r -d '' e || [[ -n "$e" ]]; do
+    [[ "$e" == */ && $'\n'"$2" == *$'\n'"$1/${e%/}"$'\t'* ]] && continue
+    n=$(( n + 1 ))
+  done <"$out"
+  rm -f "$out" "$err"
+  printf '%s\n' "$n"
+}
 
 # ── THE AUTH-DEAD MARKER'S CREDENTIAL RULE (D-3524) ─────────────────────────
 # `$REG/<account>-authdead` is a verdict about ONE credential: the one the lane
