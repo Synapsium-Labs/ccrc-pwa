@@ -851,6 +851,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         672M.
       - Correcting B's figure: each update's backup is about 12 MB on the fleet box but **about 44 MB on the server
         box** (41 and 23 dirs).
+    - **2026-09-30 17:18 UTC — auto moved both boxes onto v0.0.52** (`1f9fa22d`, #216), skipping v0.0.51 (#217):
+      - v0.0.51 was published at 17:00:11 and v0.0.52 at 17:03:45.
+      - The fleet box ran 17:07:12–17:11:34.
+      - The server box ran 17:12:32–17:12:53, straight after the fleet box, one node at a time.
+      - v0.0.51 was never installed. Auto resolves to the newest dev release at the move, which is as designed.
+      - Both reports read `phase: done`, and `/health` answers v0.0.52.
+      - STATUS: fleet and server v0.0.52, newest v0.0.52, intent `*` dev/auto=channel, backups fleet 282M/server
+        716M (one backup each).
+      - Each box keeps five versions: v0.0.47–v0.0.50 and v0.0.52. That is `~/ccrc`, `previous` (v0.0.50) and the
+        newest `CCRC_VERSIONS_KEEP`=3 complete others. v0.0.46 was pruned, so W6's version GC holds live.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
