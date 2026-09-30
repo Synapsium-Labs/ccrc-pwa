@@ -57,6 +57,7 @@ export function harness(o: {
     fleet: { state, send: (tag, kind) => { sent.push({ tag, kind }); return send(tag, kind); } },
     runLocal: o.runLocal ?? spawnFromRunner(recording, home, o.boundMs, o.answer),
     onAccepted: () => { accepted += 1; },
+    recordMove: null,
   };
   h.accepted = () => accepted;
   return h;

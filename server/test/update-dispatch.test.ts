@@ -10,8 +10,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DEADLINE_DETAIL, DETACH_CAP, PROVENANCE_DETAIL_PREFIX, ROLLBACK_CAP, UNVERSIONED_DETAIL, UPDATE_DEADLINE_HARD_CAP_FACTOR,
-  autoPermits, deadlineExpired, dispatchRefusalDetail, fleetGate, isHalting, moveRefusal, planDispatch,
-  type DispatchNodeView, type DispatchPlan, type DispatchRow, type FleetGate,
+  autoPermits, deadlineExpired, dispatchRefusalDetail, fleetGate, isHalting, moveFeedRecord, moveRefusal, planDispatch,
+  type DispatchMove, type DispatchNodeView, type DispatchPlan, type DispatchRow, type FleetGate, type LeasedMoveResult,
 } from '../src/update/dispatch.js';
 import type { EligibilityRow } from '../src/update/resolve.js';
 import type { NodeRow } from '../src/coord/store.js';
@@ -19,7 +19,7 @@ import {
   DISPATCH_REFUSALS, UPDATE_GATE_CAP, UPDATE_STATES, compareDispatchOrder, dispatchRank, isDispatchRefusal, rollbackTargetRefusal,
   type AutoMode, type DispatchRefusal, type NodeRole, type ProvenanceState, type RequestKind, type UpdateState,
 } from '../../shared/api.js';
-import { UPDATE_OP } from '../../shared/agent-protocol.js';
+import { UPDATE_OP, UPDATE_OP_DETAIL_MAX } from '../../shared/agent-protocol.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -740,6 +740,50 @@ describe('the ring (programme wave 5, D-3383)', () => {
       '../../../shared/api.js', '../../../shared/agent-protocol.js', '../../../shared/semver.js', './resolve.js',
     ]));
     expect(/\brequire\(|import\(/.test(src)).toBe(false);
+  });
+});
+
+describe('moveFeedRecord — the audit row a leased move writes (wave 8 item A, D-3586)', () => {
+  const move = (o: Partial<DispatchMove> = {}): DispatchMove => ({
+    nodeId: FLEET_ID, kind: 'update', target: 'v0.0.10', source: 'request', viaLink: true,
+    detail: 'requested update from v0.0.9 to v0.0.10', ...o,
+  });
+  const accepted: LeasedMoveResult = { result: 'accepted', detail: 'accepted — the node queued a detached run' };
+
+  it('an auto move titles itself auto; a requested one titles itself requested', () => {
+    expect(moveFeedRecord(move({ source: 'auto' }), 'fleet', accepted)?.title).toBe('update fleet: auto update to v0.0.10');
+    expect(moveFeedRecord(move({ source: 'request' }), 'fleet', accepted)?.title).toBe('update fleet: requested update to v0.0.10');
+  });
+
+  it('the unversioned row: the source still comes from move.source, never move.detail (M-A3)', () => {
+    const rec = moveFeedRecord(move({ source: 'auto', detail: UNVERSIONED_DETAIL }), 'fleet', accepted);
+    expect(rec?.title).toBe('update fleet: auto update to v0.0.10');
+    expect(rec?.body).toContain(UNVERSIONED_DETAIL);
+  });
+
+  it('accepted, held, released-failed and release-refused bodies', () => {
+    const m = move();
+    expect(moveFeedRecord(m, 'fleet', accepted)?.body)
+      .toBe(`${m.detail} — lease held: accepted — the node queued a detached run`);
+    expect(moveFeedRecord(m, 'fleet', { result: 'held', detail: 'link failed mid-op (timeout: timeout)' })?.body)
+      .toBe(`${m.detail} — lease held: link failed mid-op (timeout: timeout)`);
+    expect(moveFeedRecord(m, 'fleet', { result: 'released', to: 'failed', detail: 'spawn-failed — boom' })?.body)
+      .toBe(`${m.detail} — released failed: spawn-failed — boom`);
+    expect(moveFeedRecord(m, 'fleet', { result: 'release-refused', to: 'failed', detail: 'spawn-failed — boom', why: 'not-busy' })?.body)
+      .toBe(`${m.detail} — release refused (not-busy) — the answer was: spawn-failed — boom`);
+  });
+
+  it('a released-idle result records nothing (M-A9)', () => {
+    expect(moveFeedRecord(move(), 'fleet', { result: 'released', to: 'idle', detail: 'busy — in flight' })).toBeNull();
+  });
+
+  it('a 500-character detail: the body is bounded and starts with the full head', () => {
+    const long = 'x'.repeat(500);
+    const rec = moveFeedRecord(move(), 'fleet', { result: 'accepted', detail: long });
+    expect(rec).not.toBeNull();
+    expect(rec!.body.length).toBeLessThanOrEqual(UPDATE_OP_DETAIL_MAX);
+    const head = 'requested update from v0.0.9 to v0.0.10 — lease held: ';
+    expect(rec!.body.startsWith(head)).toBe(true);
   });
 });
 

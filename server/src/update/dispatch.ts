@@ -514,3 +514,32 @@ export function leaseHolder(
   const held = rows.filter((r) => r.label === label && r.updateStartedAt === startedAt && !isSettled(r.updateState));
   return held.length === 1 ? held[0]!.nodeId : null;
 }
+
+// ── each move's own record (wave 8 item A) ─────────────────────────────────────────────────────────────────────
+
+/** What a move that TOOK A LEASE got back, as `runDispatch` returns it: converge.ts's MoveOutcome arms after the
+ *  answer satisfy this structurally (L1 never imports L3). */
+export type LeasedMoveResult =
+  | { result: 'accepted' | 'held'; detail: string }
+  | { result: 'released'; to: 'idle' | 'failed'; detail: string }
+  | { result: 'release-refused'; to: 'idle' | 'failed'; detail: string; why: string };
+/** The audit row `watch.ts` writes as a `kind: 'update'` feed event. Every move's argv says `--from pwa` whatever
+ *  asked for it (spec §10, unchanged), and settle, ack and later notes overwrite `updateDetail`, so this row is where
+ *  an auto move stays told from a requested one. The SOURCE comes from `move.source`, never from `move.detail`:
+ *  `UNVERSIONED_DETAIL` carries no source word. */
+export interface MoveFeedRecord { title: string; body: string }
+/** `null` for an idle release (busy, not-queued, version skew, a link that never reached the node): the node did not
+ *  move, the row's own updateDetail says why, and the same answer repeats every dispatch run while the condition
+ *  stands — a row per run would evict the whole feed. A refused release is recorded, and never worded "released". */
+export function moveFeedRecord(move: DispatchMove, label: string, r: LeasedMoveResult): MoveFeedRecord | null {
+  if (r.result === 'released' && r.to === 'idle') return null;
+  const title = `update ${label}: ${move.source === 'auto' ? 'auto' : 'requested'} ${move.kind} to ${move.target}`;
+  // `r.result === 'accepted' || r.result === 'held' ? … : r.result === 'released' ? … : …` does not narrow under
+  // strict mode — TS does not eliminate a discriminant member whose own literal is itself a union (`'accepted' |
+  // 'held'`) across a `||` check, so the final arm's `r.why` is unreachable to the checker even though it is the
+  // only shape left at runtime. `in` narrows on property presence instead, which is unaffected by that limitation.
+  const what = 'why' in r ? `release refused (${r.why}) — the answer was`
+    : 'to' in r ? `released ${r.to}`
+    : 'lease held';
+  return { title, body: `${move.detail} — ${what}: ${r.detail}`.slice(0, UPDATE_OP_DETAIL_MAX) };
+}
