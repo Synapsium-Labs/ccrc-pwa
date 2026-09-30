@@ -485,11 +485,11 @@ box records the install as unsigned, which `ccrc version` says); extract, check 
 (the cheaper refusal, so it runs first — D-3149), then bind the extracted `build.json` to the resolved
 version; back up to `~/ccrc-backups/<ts>/` (coord.db via
 `VACUUM INTO`, dists, ccd, units, `~/.ccrc/memory`) before any install write; re-run the install spine from
-the staged tree (role-aware, atomic, seed-once files untouched, every rostered home's skills converged; it
-places the tree in a version directory of its own and flips `~/ccrc` to it — Versioned installs, below; it
-mints `~/.ccrc/node-id` once, rewrites `~/.ccrc/ccrc-caps` with what this install can do, and raises the
-floor last); the health gate (below); the supervisor sweep behind its mandatory `KillMode=process` preflight;
-then the from→to report.
+the staged tree (role-aware, atomic, seed-once files untouched, every rostered home's skills converged; it places the
+tree in a version directory of its own and flips `~/ccrc` to it — Versioned installs, below; it mints `~/.ccrc/node-id`
+once, rewrites `~/.ccrc/ccrc-caps` with what this install can do, and raises the floor last); the health gate (below);
+the supervisor sweep behind its mandatory `KillMode=process` preflight; then the from→to report, and, after a passed
+gate and a finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP` from the process environment, default 10).
 Rolling back is `ccrc rollback` (below), which, like any move below the floor, prints the coord.db restore commands rather than
 auto-restoring. **Across a two-box fleet, `ccrc rollout [--to] [--server-first] [--check] [--force]`** (with `--channel`,
 `--downgrade` and `--allow-unsigned`, below) from a machine holding `~/.ccrc/deploy.env`
@@ -713,9 +713,9 @@ running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_K
 stay. An input that cannot be read prunes nothing (a `CCRC_VERSIONS_KEEP` that is not a whole number from 0 to 9999 is one), a dead process's `.pruning-`/`.incoming.` leftover is swept once per prune, and only `--prune` removes an incomplete tree. `deploy.sh` still
 pushes its tree through `~/ccrc`, into whichever version directory that points at.
 
-**The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
-directory shape, pruned to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — hand-made
-siblings are never touched). `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own
+**The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape, pruned
+to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — hand-made siblings are never touched), as
+update and rollback do after a passed gate. `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own
 unit (`ccrc.service`, or `ccrc-agent.service` when the recorded role is `fleet`). `ccrc uninstall`
 takes the box off ccrc and leaves reinstall safe: it refuses while live sessions exist, and while an update holds
 `~/.ccrc/update.lock` or that lock cannot be measured (`--force` passes both; D-3453), removes the units, ccrc's
