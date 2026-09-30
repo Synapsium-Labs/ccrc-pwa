@@ -1516,6 +1516,13 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     expect(finished.textContent).toContain('done v0.0.10');
     expect(finished.textContent).toContain(dayClock(T, Date.now()));
     expect(within(row).getAllByTestId('settings-node-finished')).toHaveLength(1);
+    // Fix round 1, Important 1: `getAllByTestId(...).toHaveLength(1)` alone is tautological (only one element
+    // ever carries this testid) — it does not prove the OLD two lines are GONE. Pin that directly: exactly one
+    // `p.settings-node-detail` in the row (the finished line, never the old state line PLUS it), and the old
+    // lines' own texts are absent.
+    expect(row.querySelectorAll('p.settings-node-detail')).toHaveLength(1);
+    expect(within(row).queryByText('idle — done')).toBeNull();
+    expect(within(row).queryByText('done: v0.0.10')).toBeNull();
   });
 
   it('an ack (update.detail not the settle\'s own words) keeps its two separate lines, never merged (wave 8 item F4)', async () => {
@@ -1528,6 +1535,8 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     expect(within(row).queryByTestId('settings-node-finished')).toBeNull();
     expect(within(row).getByText('acknowledged')).toHaveClass('settings-node-detail');
     expect(within(row).getByText('idle — done')).toHaveClass('settings-node-detail');
+    // Fix round 1, Important 1: the control for the count above — the ack row keeps BOTH old lines (never merged).
+    expect(row.querySelectorAll('p.settings-node-detail')).toHaveLength(2);
   });
 });
 
