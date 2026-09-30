@@ -395,6 +395,11 @@ Added by the orchestrator's rulings on the skeleton and on the drafts:
   all-letter id would still print, and the reducer's header says so.
 - **D-3695** `reducer-counts-an-absent-payload-id`: `envSid` gains `payloadAbsent` for a payload whose `session_id` is
   missing or not a string. The plan counted it as `differsFromPayload`, a false "differs" for C6.
+- **D-3704** `ratio-row-reads-the-median`: the D-1898 SessionStart/PostToolUse ratio row reads the MEDIAN of its 20
+  runs, not p95, and its bound is re-argued on median bands (shipped 3.19-3.64, ERE mutation 4.88-5.73, R=4.2,
+  margins +15%/+16%). Under wave 2's marker, p95 bands measured at load 17-25 gave margins of +3%/+5% and overlapped
+  when pooled (a mutated 3.79 against a shipped 3.97). The sibling compact row had already moved to the median for the
+  same reason: p95 of n=20 is the second-largest value.
 
 ## File structure
 
