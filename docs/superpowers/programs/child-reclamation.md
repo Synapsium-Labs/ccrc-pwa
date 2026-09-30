@@ -718,13 +718,14 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 
 ## Next-wave brief
 
-**The next act is the separate `reclaim-entry-safety` prerequisite.** Commit and push its number-free programme
-skeleton plus this parent update, then open its one-wave run on a fresh child. Allocate eight deviation numbers
-exactly once at run-open. Immediately write the finalized tracked plan: its first issued number defines
-`ccd-imported-functions-hijack-reclaim-reads`, and its metadata names the exact run and block. Commit and push that
-plan, then dispatch the fresh child with the full handoff SHA and plan path. The child copies the blob byte-for-byte
-with read-only `git show`, verifies equality, and commits it first before implementation. Its four declared items,
-routing, exclusions and review boundary are in `docs/superpowers/programs/reclaim-entry-safety.md`.
+**The next act is the separate `reclaim-entry-safety` prerequisite.** Its number-free programme skeleton plus
+this parent update are committed and pushed at `5f90a36d0`; its one-wave run is 199. Eight deviation numbers were
+allocated exactly once at run-open, beginning at 3696. The finalized tracked plan defines the first issued number
+as `ccd-imported-functions-hijack-reclaim-reads`, and its metadata names run 199 and the block. Commit and push the
+plan and these post-allocation ledger updates as one immutable handoff, then dispatch the fresh child with that
+full handoff SHA and plan path. The child copies the blob byte-for-byte with read-only `git show`, verifies equality,
+and commits it first before implementation. Its four declared items, routing, exclusions and review boundary are
+in `docs/superpowers/programs/reclaim-entry-safety.md`.
 
 **Wave 4 remains blocked after its Fix Round 3 report.** Run 174 stays `working`; items 817–834 stay pending;
 PR #215 stays open. Once the prerequisite PR merges, `swift-hollow` merges `origin/main` (never rebases), resolves

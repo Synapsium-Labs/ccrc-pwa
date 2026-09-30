@@ -15,11 +15,12 @@ direct reclaim argv shapes before automatic reclamation can ship.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | preparing — no run, child, allocation or PR exists yet |
+| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | **planned** — run 199; fresh child not yet dispatched; no PR |
 
-**Deviation block:** allocate eight numbers exactly once at this run's open. The first issued number defines
-`ccd-imported-functions-hijack-reclaim-reads` in the worker's tracked copy of the plan. No issued number is
-rendered as a `D-` token until that plan defines it, and unused headroom remains unrendered.
+**Deviation block: eight numbers, the first of them 3696** (allocated once at run 199 open, 2026-09-30; floor
+now 3704). The finalized plan defines the first as `ccd-imported-functions-hijack-reclaim-reads`. No other issued
+number is rendered as a `D-` token unless a measured departure is defined in that plan; unused headroom remains
+unrendered.
 
 ## Decisions & deviations
 
@@ -32,9 +33,9 @@ rendered as a `D-` token until that plan defines it, and unused headroom remains
   Linux and macOS, enter privileged mode, and have the Bash body remeasure both direct mode and actual privileged
   state without trusting an inherited marker.
 - **Source mode remains structurally supported.** Fixture calls that intentionally `source ccd/ccd` do not pass
-  through the direct-entry boundary. Explicit `bash ccd ...` is not a supported production entry, because it
-  bypasses a shebang. Detached swap self-reexec is outside this narrow claim because its ordinary outer
-  `bash -c` has already started.
+  through the direct-entry boundary. Explicit `bash ccd/ccd ...` exists in tests and in the wider product, but it
+  bypasses this pre-Bash launcher and receives no security guarantee from this prerequisite. Detached swap
+  self-reexec is outside this narrow claim because its ordinary outer `bash -c` has already started.
 - **The plan handoff follows the stronger same-repository `ws-slug-collision` commit-blob precedent.** A fresh
   child starts from `origin/main` and cannot see coordinator-only files. Before run-open the coordinator commits
   and pushes this number-free programme skeleton and the parent-ledger update. After allocation it writes the
@@ -53,9 +54,10 @@ rendered as a `D-` token until that plan defines it, and unused headroom remains
 
 - Fixture HOMEs only. Never run `ws-reclaim`, `ws-reap`, `ws-rm`, `ws-gc --prune`, `ws-archive`, `ws-restore` or
   any other destructive ccd verb against the live HOME.
-- Protect the whole decision-critical direct reclaim execution, not only `find`: cover imported `BASH_FUNC_*`,
-  `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `CDPATH`, relevant PATH poisoning, and every command whose answer can
-  permit deletion. A refusal or unmeasured boundary fails shut.
+- Protect inherited Bash startup, function and option state across supported installed direct reclaim entry:
+  `BASH_FUNC_*`, `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS` and `CDPATH`. Runtime PATH and the executables it selects
+  are trusted prerequisites; privileged Bash does not authenticate them. A failed or unmeasured decision-critical
+  command still fails shut.
 - Preserve supported production entry on Linux and macOS. macOS uses a PATH-selected Homebrew Bash because
   `/bin/bash` 3.2 is unsupported. The standing operator ruling makes macOS CI legs non-gating, but portability
   evidence and fixture probes remain required and must be reported honestly.
@@ -69,12 +71,13 @@ rendered as a `D-` token until that plan defines it, and unused headroom remains
 
 ## Next-wave brief
 
-One wave, four machine-readable units mirrored exactly in the dispatch body:
+One wave, four machine-readable units mirrored exactly in the dispatch body (the strings omit terminal
+punctuation):
 
-1. Install the argv-selective privileged Bash boundary for direct reclaim entry.
-2. Pin hostile inherited environments across every supported reclaim entry path.
-3. Prove fail-shut reclaim behavior with second-command and authorization mutations.
-4. Merge current main, run the required gates, and open the prerequisite PR.
+1. `Install the argv-selective privileged Bash boundary for direct reclaim entry`
+2. `Pin hostile inherited environments across every supported reclaim entry path`
+3. `Prove fail-shut reclaim behavior with second-command and authorization mutations`
+4. `Merge current main, run the required gates, and open the prerequisite PR`
 
 The brief names `superpowers:executing-plans`, the finalized absolute plan artifact, the exact eight-number block,
 and the routing above. It explicitly excludes wave 5's reclaim chip, R25/R36 orphan temp-root collection, wave 5
