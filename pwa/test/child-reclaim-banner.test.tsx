@@ -79,6 +79,14 @@ describe('the reclaim row', () => {
     expect(screen.getByText(CHILD_RECLAIM_MARKER_WORD.unmeasurable)).toBeInTheDocument();
   });
 
+  // The same word serves a value the registry DID list but this build cannot
+  // read (above) and a registry that did not list at all, so it names
+  // neither cause.
+  it("the 'unmeasurable' word blames no cause — it also covers a value the registry did list", () => {
+    expect(CHILD_RECLAIM_MARKER_WORD.unmeasurable).toBe('reclaim switch unreadable');
+    expect(CHILD_RECLAIM_MARKER_WORD.unmeasurable).not.toMatch(/registry/i);
+  });
+
   // The server sends `reclaim` unconditionally, even from a fleet box that
   // lacks the reclaim capabilities — where the sweep
   // does nothing and the route answers 501. `clear` must claim only the
@@ -243,6 +251,25 @@ describe('the reclaim row', () => {
     expect(status.querySelector('.child-reclaim-attention')).toBeNull();
     expect(status.textContent).toContain(CHILD_RECLAIM_MARKER_WORD.clear);
     expect(document.querySelector('.child-reclaim-attention')).not.toBeNull();
+  });
+
+  // The twin of `coord-banner.test.tsx`'s own case: a NEW reading of this
+  // row's switch retires an inline refusal about the old one, so a 501 never
+  // sits under a word that has since moved on.
+  it('clears an inline refusal when a later frame moves the reclaim switch — no stale 501 under a row that has moved on', async () => {
+    const store = makeStore();
+    seen(store, coord({ reclaim: 'clear' }));
+    const childReclaimPause = vi.fn().mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
+    render(<ChildReclaimBanner store={store} childReclaimPause={childReclaimPause} />);
+    fireEvent.click(screen.getByRole('button'));
+    expect(await screen.findByText(COORD_UNSUPPORTED_TEXT)).toBeInTheDocument();
+
+    // The switch is raised another way (by hand on the box, or from a second
+    // phone): the refusal above belonged to before.
+    seen(store, coord({ reclaim: 'set' }));
+    expect(screen.queryByText(COORD_UNSUPPORTED_TEXT)).toBeNull();
+    expect(document.querySelector('.child-reclaim-error')).toBeNull();
+    expect(screen.getByText(CHILD_RECLAIM_MARKER_WORD.set)).toBeInTheDocument();
   });
 
   // This row's own direction: the

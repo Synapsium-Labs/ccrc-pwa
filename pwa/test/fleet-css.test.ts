@@ -743,15 +743,23 @@ describe('the coord banner is not a living pane, and its toggle is a real target
 // Child-reclamation wave 4: the reclaim row is the pause banner's shape, and
 // holds its discipline — a switch is a STATE, not a living pane.
 describe('the reclaim row is not a living pane, and its toggle is a real target', () => {
-  const SELECTORS = ['.child-reclaim-banner', '.child-reclaim-banner .child-reclaim-glyph', '.child-reclaim-word',
-    '.child-reclaim-toggle', '.child-reclaim-banner .child-reclaim-error', '.child-reclaim-banner .child-reclaim-attention',
-    '.child-reclaim-banner .child-reclaim-who'];
+  // DERIVED from the stylesheet, never hand-listed: every rule whose selector
+  // names a `.child-reclaim-` class, so a rule added later (as
+  // `.child-reclaim-status` once was) is checked the moment it exists.
+  const RULES = [...stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .map((m) => ({ sel: norm(m[1] ?? ''), body: norm(m[2] ?? '') }))
+    .filter((r) => r.sel.includes('.child-reclaim-'));
   it('no .child-reclaim-* rule glows, breathes or animates', () => {
-    for (const sel of SELECTORS) {
-      const rule = norm(stripComments(ruleIn(css, sel)));
-      expect(rule, sel).not.toContain('--glow');
-      expect(rule, sel).not.toContain('animation');
-      expect(rule, sel).not.toContain('box-shadow');
+    // The derivation is not vacuous: the row's live region and its list items
+    // are among the rules it found.
+    const sels = RULES.map((r) => r.sel);
+    expect(sels).toContain('.child-reclaim-status');
+    expect(sels).toContain('.child-reclaim-banner .child-reclaim-item');
+    expect(sels).toContain('.child-reclaim-toggle');
+    for (const { sel, body } of RULES) {
+      expect(body, sel).not.toContain('--glow');
+      expect(body, sel).not.toContain('animation');
+      expect(body, sel).not.toContain('box-shadow');
     }
   });
   it('.child-reclaim-toggle and the row clear the tap floor, off the shared token', () => {

@@ -20,7 +20,11 @@ import { isMarkerState, type ChildReclaimAttention, type MarkerState } from '../
 export const CHILD_RECLAIM_MARKER_WORD: Record<MarkerState, string> = {
   clear: 'reclaim not paused',
   set: 'child reclaim paused',
-  unmeasurable: 'reclaim switch unreadable — the registry did not list',
+  // Names no cause. Two producers reach this word: the server's own
+  // `unmeasurable` (its registry did not list) and `childReclaimMarker`'s
+  // degrade arm for a value this build does not recognise — where the
+  // registry DID list and a newer server said something this row cannot read.
+  unmeasurable: 'reclaim switch unreadable',
 };
 
 export const CHILD_RECLAIM_MARKER_GLYPH: Record<MarkerState, string> = {
