@@ -17910,7 +17910,7 @@ _upd_lock() {
   fi
   # Wave 8 item B: the second this run first held the lock. `_bak_gc` never prunes a backup named at or after it:
   # this run's own, its spine installers', and anything a writer on this box's clock started since. Set once per
-  # process (cmd_rollback's earlier lock wins over cmd_update's in-process re-entry, which returns above).
+  # process (cmd_rollback's earlier lock wins over cmd_update's in-process re-entry, which returns above). D-3593.
   [ -n "$UPD_BAK_FLOOR" ] || UPD_BAK_FLOOR="$(date +%Y%m%d-%H%M%S)"
   return 0
 }
@@ -20203,13 +20203,25 @@ _upd_sweep() {
   # for a reason that has nothing to do with this box.
   : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
   : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
-  local u km listing lu _ll la _lr
+  local u km listing lu _ll la _lr lrc=0
   local -a before=() after=() failed=()
-  listing="$(systemctl --user list-units "claude-session@*" --plain --no-legend)" || :
+  listing="$(systemctl --user list-units "claude-session@*" --plain --no-legend)" || lrc=$?
+  # fix round 1 item 1 (D-3599): the plan's Task 5 code dropped this rc with
+  # `|| :` and built `before` from this listing alone, so a transient failure
+  # here (an unread listing) left `before` empty and the zero line below
+  # claimed no supervisor was active even while every one of them was — an
+  # unmeasured pre-sweep listing is now a failed preflight: the sweep refuses
+  # and restarts nothing, exactly as the KillMode preflight below already
+  # does, rather than claim a clean sweep it never measured.
+  if [ "$lrc" -ne 0 ]; then
+    echo "update: sweep REFUSED — systemctl --user list-units \"claude-session@*\" --plain --no-legend failed (rc $lrc), so the supervisors to be checked could not be listed." >&2
+    echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Once systemctl --user list-units 'claude-session@*' answers, confirm KillMode=process on each unit, then restart them."
+    return 0
+  fi
   # Wave 8 item G: the supervisors the restart below can touch are the ones
   # ACTIVE before it runs — read from THIS listing's ACTIVE column (`--plain
   # --no-legend`: UNIT LOAD ACTIVE SUB DESCRIPTION), so no systemctl call is
-  # added — the argv-order pin (`ccrc-update.test.ts:2470-2502`) stays green.
+  # added, and the argv order below is unchanged.
   while read -r lu _ll la _lr; do
     [ "$la" = active ] && before+=("$lu")
   done <<< "$listing"
@@ -20222,6 +20234,11 @@ _upd_sweep() {
       return 0
     fi
   done
+  # fix round 1 item 7 (review 196 F8): the argv-order pin is
+  # `ccrc-update.test.ts`'s "with KillMode=process resolving per unit, the
+  # sweep runs: preflight, try-restart, the failed warn query, the active
+  # verify query — in that argv order" case — cited by title, since its line
+  # range moves.
   systemctl --user try-restart "claude-session@*" \
     || _ccrc_die "systemctl --user try-restart claude-session@* failed — the supervisors' state is now mixed; read: systemctl --user list-units 'claude-session@*'"
   # try-restart is a no-op on a failed unit (its own man page), so a
@@ -20237,7 +20254,21 @@ _upd_sweep() {
   # here and NOT above: handing verify-service.sh a unit try-restart never
   # touched is deploy.sh's final-review finding 6.
   local verify="$BOX_TREE_DIR/deploy/verify-service.sh"
-  for u in $(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend | awk '{print $1}'); do
+  local after_listing arc=0
+  after_listing="$(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend)" || arc=$?
+  # fix round 1 item 1 (D-3599): the same unmeasured-listing hazard, on the
+  # verify side — an unmeasured verify listing verifies nothing, so when
+  # something WAS restarted (`before` non-empty) the per-unit "not active
+  # after it" warnings and the success line below must not fire over a set
+  # nobody actually re-listed. When `before` was measured empty, nothing that
+  # was running was restarted, so this fork is skipped and the zero line
+  # below prints exactly as it does today.
+  if [ "$arc" -ne 0 ] && [ "${#before[@]}" -gt 0 ]; then
+    echo "update: warning: the post-restart set could not be listed (systemctl --user list-units \"claude-session@*\" --state=active --plain --no-legend failed, rc $arc) — no supervisor was verified." >&2
+    echo "update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep."
+    return 0
+  fi
+  for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do
     if [ -f "$verify" ]; then
       bash "$verify" "$u" \
         || _ccrc_die "$u was restarted and did not stay up — read: systemctl --user status $u. The pre-update backup is complete at $UPD_BACKUP_DIR"
@@ -20918,7 +20949,7 @@ _bak_prune() {
 # `|| :`. It keeps the newest $CCRC_BACKUP_KEEP timestamped dirs of any origin (the ONE bounded validator,
 # `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them; read from the process env only), and four
 # more that can only LEAVE the removal set: this run's own backup by its exact path; every dir named at or after
-# this run's lock second (UPD_BAK_FLOOR); and, among the dirs neither of those protects, the newest tree backup (D-3594; a
+# this run's lock second (UPD_BAK_FLOOR) — both D-3593; and, among the dirs neither of those protects, the newest tree backup (D-3594; a
 # `server-dist` or `agent-dist` entry: another run's, a deploy's, or the previous update's) and the newest coord.db
 # snapshot (D-3595). The lock was released before the sweep (design §10), so it is RE-TAKEN (D-3592) without dying: any other holder
 # means nothing is pruned.
@@ -20956,8 +20987,8 @@ _bak_gc() {   # <lead word: update|rollback>
   done
   for ((i = 0; i < n - keep; i++)); do
     d="${BAK_DIRS[$i]}"; name="${d##*/}"
-    [ "$d" = "$UPD_BACKUP_DIR" ] && continue
-    [ "$((10#${name//-/}))" -ge "$floor" ] && continue
+    [ "$d" = "$UPD_BACKUP_DIR" ] && continue   # D-3593
+    [ "$((10#${name//-/}))" -ge "$floor" ] && continue   # D-3593
     [ "$d" = "$snap" ] && continue
     [ "$d" = "$tree" ] && continue
     shown="$d"; case "$d" in "$HOME"/*) shown="\$HOME${d#"$HOME"}" ;; esac
