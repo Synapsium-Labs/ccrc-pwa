@@ -795,6 +795,49 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **For the operator:** whether `stable` waits for the macOS reds to be fixed, or macOS becomes advisory in the
     gate as the 2026-09-28 ruling reads; and whether v0.0.49 is rolled out to both boxes now, ahead of `stable`.
 
+- **2026-09-30 10:40 UTC — the operator ruled: the coordinator does not roll out. It monitors ccrc's own update
+  mechanism and makes sure it works. A read-only live audit (workflow `wf_52680e8a-215`, 12 agents) found that it
+  works as designed.**
+  - **The correction.** The boxes were never "moved there by another session", as the 2026-09-29 23:55 and
+    2026-09-30 01:00 entries say. **Auto moved them.** The fleet-wide intent has been `channel dev, auto=channel`
+    since the PWA set it at 2026-09-29 20:05:13 UTC. Since then each dev release has been installed within one
+    catalogue poll of its publication, fleet box first and the server box about 4 minutes later: v0.0.46 at 20:06,
+    v0.0.47 at 20:41, v0.0.48 at 21:17 and v0.0.49 at 01:23. Each report reads `from: pwa`, because the dispatcher
+    spawns `--from pwa` for auto and taps alike (defect A below). So holding `stable` holds nothing while the boxes
+    follow dev.
+  - **Review 181's R1 window passed unattended and without incident.** The auto move onto v0.0.49 at 01:23 was not
+    the attended first update the ruling assumed. It completed, and v0.0.49 now carries a digest, so the forward
+    window is closed.
+  - **Measured healthy:**
+    - Both live rows are on v0.0.49 at `a742eb6a`, verified, complete and idle, with no request, lease, halt or
+      refusal. They are re-measured about every 70 s.
+    - `/health` answers v0.0.49.
+    - Both projections are fresh.
+    - The watchdog ticks every minute on the server box.
+    - A `stable` resolution below the floor causes no churn.
+    - The superseded server row from the 19:54 rekey is invisible, as designed.
+  - **Exit criteria:** most of the §18 rows observable live are met. The W5 rehearsal's live half (a crash inside
+    the window, one flip and one rollback on each node) is NOT met. It needs live moves, which are the operator's to
+    order.
+  - **Defects found (verified, or read in code):**
+    - **A.** A move's source (auto or request) is kept nowhere durable.
+    - **B.** `cmd_update` never prunes `~/ccrc-backups` (about 12 MB per update; 258 MB on the fleet box and 628 MB
+      on the server box).
+    - **C.** Every older release row offers a one-tap rollback, including tags a verified box will refuse. One tap
+      would halt the fleet until ack, and the dispatcher's rollback check is only "a catalogue row exists".
+    - **D.** doctor's `auth` says the gate is OFF on an armed box, because it reads `ccrc.env` and not
+      `exposure.env`.
+    - **E.** The catalogue's first poll comes 30 min after each boot, so auto lands a release up to 35 min after
+      the merge.
+    - **F.** PWA wording: a converged row shows the resolver's floor sentence; the running release reads "Install";
+      a digestless rollback target is not marked as a download; a finished move leaves two undated lines.
+    - **G.** Minor lines: the sweep's success line prints over zero units; install's tail claims "NO PWA
+      passphrase"; `commitSha` is always null.
+    - **H.** The fleet box's `ccrc.env` names the fleet box as the server, so doctor's cross-check never runs. That
+      is box config.
+  - **Monitoring:** an hourly read-only probe runs from the coordinator's session. It reports only a change or an
+    anomaly.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
