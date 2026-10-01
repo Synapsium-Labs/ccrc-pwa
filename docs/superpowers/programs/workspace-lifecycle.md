@@ -49,11 +49,13 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 - **2026-09-30 — wave 1 re-verified against `c88625aa`, then `5b1c58a8`.** On `c88625aa` the plan replays unchanged
   and its server suites are green. On `5b1c58a8` the worker stall watch (#216) had split the two-line `store.ts`
   import block Task 3 inserts into, so that one Find now anchors on the `placement.js` import line alone; the output
-  on `c88625aa` is byte-identical. With that, the plan replays onto `5b1c58a8`, `readme-reanchor.py` prints the same
-  `shared/api.ts` lines, and the wave's suites are green there: server `released` 20, `released-store` 7,
-  `released-wire` 14, `fleet-released` 7, `measure-workspace-lifecycle` 9, the citation cases; PWA `groupFleet` 50,
-  `archiveReleased` 7, `project-card` 105, `fleet-screen` 97, `tap-targets` 40, `fleet-css` 77, `contrast` 256, and
-  the design audit.
+  on `c88625aa` is byte-identical. The same PR added a 33rd `child: { kind: 'none' }` fixture (`stall-sweep.test.ts`),
+  so Task 1's sweep now touches 32 files, and the plan says so. With that, the plan replays onto `5b1c58a8` in a git
+  checkout (the sweep reads `git grep`), `readme-reanchor.py` prints the same `shared/api.ts` lines, both typechecks
+  are clean, and the wave's suites are green there: server `released` 20, `released-store` 7, `released-wire` 14,
+  `fleet-released` 7, `measure-workspace-lifecycle` 9, `stall-sweep` 42, `single-definition`, the citation cases; PWA
+  `groupFleet`, `archiveReleased`, `project-card`, `fleet-screen`, `tap-targets` and `fleet-css` (376), `contrast`
+  256, and the design audit.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
