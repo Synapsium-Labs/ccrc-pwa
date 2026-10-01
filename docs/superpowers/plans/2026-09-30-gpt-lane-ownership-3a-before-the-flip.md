@@ -36,7 +36,7 @@ Plan 3b (the per-lane live runbook, authorised once per lane) and Plan 4 (the ot
 - §13, uninstall;
 - §15 steps 1-2, ccrc first and the roster last. Steps 3-4 are Plans 3b and 4.
 
-It also reads §19, Plan 2b-2's amendments, above all §19.6, which left the external arm "until Plan 3's cutover retires that arm". Where this plan departs from the spec, the departure is named `⟦D:<slug>⟧` in [Deviations found](#deviations-found). The controller mints its number after review. Task 11 appends `## 20. Amendments (Plan 3a)` to the spec.
+It also reads §19, Plan 2b-2's amendments, above all §19.6, which left the external arm "until Plan 3's cutover retires that arm". Where this plan departs from the spec, the departure carries an allocator-issued number, defined in [Deviations found](#deviations-found). Task 11 appends `## 20. Amendments (Plan 3a)` to the spec.
 
 > **Measurements.** Facts cited as "the 2026-09-30 … census" were taken read-only, while this plan was drafted, on the operator's fleet box and in this tree at `1f9fa22d` (`origin/main`, with Plan 2b-2 merged). The reports are not tracked. Every live value in them is stated here **by shape only** (ruling R13): no id, label, port, path, host, session name or version of the live box appears in this plan. Each fact a task depends on is restated in that task, and the implementer re-measures it before relying on it. The server box was not measured.
 
@@ -48,25 +48,25 @@ The controller rulings R-C1…R-C12 are the questions the skeleton put to the co
 
 | Ruling | What the tree does | Named departure | Departs from |
 |---|---|---|---|
-| R-C1 (R2) | The usage pair is ccrc's, as `ccrc-codex-usage@.{service,timer}`. ccrc never places, enables, disables or removes `ccgpt-usage@` or the flat `ccgpt-usage.{service,timer}` | `⟦D:usage-unit-renamed-past-the-foreign-template⟧` | spec §4.3, §10, §12 and §13, which name `ccgpt-usage@<id>.timer` |
-| Task 6 | The enabled instance set converges to exactly the roster's codex lanes, so a flip-back disables that id's instance | `⟦D:usage-instances-converge-to-the-codex-set⟧` | spec §11, which covers placement only |
-| R6 | The converge degrades rather than enables `ccrc-codex-usage@<id>.timer` while the other repository's `ccgpt-usage@<id>.timer` is enabled for the same id. `_check_codex` WARNs, and the remedy is the operator's own disable. The flat, id-less foreign timer cannot be attributed to a lane, and the row says so | `⟦D:usage-second-writer-degrades⟧` | spec §15.3, where retiring the foreign timer was only the runbook's step order |
-| R2 | On Darwin the usage placement and the usage doctor rows answer a stated not-applicable, with a forced-Darwin test | `⟦D:usage-rows-not-applicable-on-darwin⟧` | spec §12's usage WARN rows |
-| R-C2 (R3) | The probe's token-directory default is removed. A codex-kind lane reads its own `authDir`. An external lane whose registry probe is codex is refused by name and the refresh loop skips it. `_check_models` says so in its own non-WARN sentence | `⟦D:probe-token-dir-has-no-default-on-any-lane⟧` | spec §19.6 and Plan 2b-2's scope, under which `external` lanes keep today's behaviour until the cutover. §9.1, whose default goes outright, is conformed to |
-| R3 | The device flow is prevented inside the process, before any write to `auth.json`, in both the probe and `ccd/ccgpt-usage.py`. The usage service gets `TimeoutStartSec=300` (Task 1; Task 6's `git mv` carries it) | `⟦D:unattended-authenticator-never-starts-a-device-flow⟧` | spec §9, §10 and §19.3, which name neither refusal |
+| R-C1 (R2) | The usage pair is ccrc's, as `ccrc-codex-usage@.{service,timer}`. ccrc never places, enables, disables or removes `ccgpt-usage@` or the flat `ccgpt-usage.{service,timer}` | `D-3717` | spec §4.3, §10, §12 and §13, which name `ccgpt-usage@<id>.timer` |
+| Task 6 | The enabled instance set converges to exactly the roster's codex lanes, so a flip-back disables that id's instance | `D-3718` | spec §11, which covers placement only |
+| R6 | The converge degrades rather than enables `ccrc-codex-usage@<id>.timer` while the other repository's `ccgpt-usage@<id>.timer` is enabled for the same id. `_check_codex` WARNs, and the remedy is the operator's own disable. The flat, id-less foreign timer cannot be attributed to a lane, and the row says so | `D-3719` | spec §15.3, where retiring the foreign timer was only the runbook's step order |
+| R2 | On Darwin the usage placement and the usage doctor rows answer a stated not-applicable, with a forced-Darwin test | `D-3720` | spec §12's usage WARN rows |
+| R-C2 (R3) | The probe's token-directory default is removed. A codex-kind lane reads its own `authDir`. An external lane whose registry probe is codex is refused by name and the refresh loop skips it. `_check_models` says so in its own non-WARN sentence | `D-3706` | spec §19.6 and Plan 2b-2's scope, under which `external` lanes keep today's behaviour until the cutover. §9.1, whose default goes outright, is conformed to |
+| R3 | The device flow is prevented inside the process, before any write to `auth.json`, in both the probe and `ccd/ccgpt-usage.py`. The usage service gets `TimeoutStartSec=300` (Task 1; Task 6's `git mv` carries it) | `D-3707` | spec §9, §10 and §19.3, which name neither refusal |
 | R-C12, reshaped by R3 and F9 | D-3161 closes through `Authenticator().get_account_id()`. Task 1 measured the method in the installed LiteLLM at drafting, and its Step 0b re-measures it read-only, by grepping the installed `Authenticator`'s source file, never by running one. If the method is gone, Task 1 stops and reports, and the controller rules. F9 replaces R3's "stays deferred, recorded by slug", so no fallback is chosen and no slug is pre-named | none: closing a breach D-3161 recorded is conformance to spec §9, so it mints no number | — |
-| R-C3 (R4) | The external `_models_litellm` arm is retired in 3a, before any flip | `⟦D:external-litellm-arm-retired-before-the-flip⟧` | spec §19.6 |
+| R-C3 (R4) | The external `_models_litellm` arm is retired in 3a, before any flip | `D-3708` | spec §19.6 |
 | R-C4 | `_check_codex` may connect to the ports the roster names for a codex lane, each connect bounded by `CCRC_CODEX_PROBE_S` (default 2 s, `ccd/ccrc:10345`) | none: §12's listener rows need it | — |
-| R-C5 | Doctor trusts `ccgpt-runtime check` (the stamp). `--fix` rebuilds, and the rebuild re-probes | `⟦D:runtime-health-trusts-the-stamp⟧` | spec §12, "failing its behaviour probe" |
-| R-C6 | `_codex_lanes` rc 1 (roster unreadable) and rc 2 (no `jq`) are FAIL, never SKIP | `⟦D:codex-population-unreadable-is-fail⟧` | spec §12, which defines only the empty-set SKIP |
-| R-C7 | For a codex lane, a settings-env `ANTHROPIC_BASE_URL` that is absent, or equal to `http://127.0.0.1:<proxyPort>`, is healthy. Present and different is WARN | `⟦D:codex-settings-env-absent-or-equal⟧` | Plan 2b-2 carry-forward 8 |
-| R-C8 | `cmd_doctor` keeps its FAIL-only fixer contract. The missing-timer WARN names `ccrc install` as its remedy, and a tier whose only finding is stale code, also a WARN, names `ccrc update` | `⟦D:missing-timer-remedy-is-ccrc-install⟧` | spec §12 ("`--fix` may … enable a missing usage timer, and restart a verified ccrc-owned active tier", read for a tier that is only stale) |
+| R-C5 | Doctor trusts `ccgpt-runtime check` (the stamp). `--fix` rebuilds, and the rebuild re-probes | `D-3711` | spec §12, "failing its behaviour probe" |
+| R-C6 | `_codex_lanes` rc 1 (roster unreadable) and rc 2 (no `jq`) are FAIL, never SKIP | `D-3710` | spec §12, which defines only the empty-set SKIP |
+| R-C7 | For a codex lane, a settings-env `ANTHROPIC_BASE_URL` that is absent, or equal to `http://127.0.0.1:<proxyPort>`, is healthy. Present and different is WARN | `D-3709` | Plan 2b-2 carry-forward 8 |
+| R-C8 | `cmd_doctor` keeps its FAIL-only fixer contract. The missing-timer WARN names `ccrc install` as its remedy, and a tier whose only finding is stale code, also a WARN, names `ccrc update` | `D-3721` | spec §12 ("`--fix` may … enable a missing usage timer, and restart a verified ccrc-owned active tier", read for a tier that is only stale) |
 | R-C9 | Uninstall runs `disable --now` on every enabled ccrc usage instance | none: spec §13 already says so | — |
 | R-C10 | Plan 3b's route: a targeted `ccgpt-runtime build` and a targeted instance enable, never a full `ccrc install` inside a lane window. 3a ships nothing for it; see [Merge authorisation](#merge-authorisation) | none in 3a | — |
 | R-C11 (R5) | `deploy.sh` stops placing `~/.local/bin/ccrc-models-probe`, in Task 7 with every other `deploy-verify` edit | none: 2b-1 carry-forward 21 | — |
-| R7 | `lane.json`'s staleness against the registry is measured by a check-only `materialise --check true`, which writes nothing and answers `changed`. Without `--check` it writes, as every caller before it expects. Task 4 uses it and Task 8 cures it | `⟦D:materialise-check-is-opt-in⟧` | R7's parenthetical (a bare `materialise`, no `--commit`, as the check) and `deploy/models-op.mjs`' write-always contract |
-| R8 | `--fix` regenerates a launcher only when it is marker-verified, through a new `_fix_wrappers` that runs the shipped `ccrc wrappers` with no flag | `⟦D:launcher-fix-rides-the-wrappers-check⟧` | spec §12, which places it under `_check_codex`'s `--fix` |
-| R9, R10 | The spec amendments are appended as §20. Every live GPT-lane label that the class's own `passes` does not pin joins `topology-clean`'s fleet-account-label class. One live label is byte-equal to a pinned pass, so it stays out and Task 11's hand-grep covers it | `⟦D:a-live-label-the-residue-class-pins-as-a-pass-stays-out⟧` | ruling R10, which adds both labels |
+| R7 | `lane.json`'s staleness against the registry is measured by a check-only `materialise --check true`, which writes nothing and answers `changed`. Without `--check` it writes, as every caller before it expects. Task 4 uses it and Task 8 cures it | `D-3712` | R7's parenthetical (a bare `materialise`, no `--commit`, as the check) and `deploy/models-op.mjs`' write-always contract |
+| R8 | `--fix` regenerates a launcher only when it is marker-verified, through a new `_fix_wrappers` that runs the shipped `ccrc wrappers` with no flag | `D-3730` | spec §12, which places it under `_check_codex`'s `--fix` |
+| R9, R10 | The spec amendments are appended as §20. Every live GPT-lane label that the class's own `passes` does not pin joins `topology-clean`'s fleet-account-label class. One live label is byte-equal to a pinned pass, so it stays out and Task 11's hand-grep covers it | `D-3722` | ruling R10, which adds both labels |
 
 ## Global Constraints
 
@@ -100,7 +100,7 @@ Every task's requirements implicitly include this section. The first two groups 
   - **`server/test/ccrc-doctor.test.ts` is never run whole in one call.** Census-wrapped and alone, it took 424 s and 525 s in two measurements at `1f9fa22d`, against that cap, and this plan adds about a hundred cases to it. So wherever a step runs it with no `-t`, it is three foreground calls, the step's evidence label suffixed `-1`, `-2` and `-3`, with these complementary filters (`<k>`/`<P>`): `1`/`'^ccrc doctor: [a-c]'`, `2`/`'^ccrc doctor: [d-m]'` and `3`/`'^(?!ccrc doctor: [a-m])'`. At `1f9fa22d` they selected 88, 123 and 288 of the 499 cases `vitest list` names. The step's whole-file count is the three parts' sum. A part that runs past about 500 s is split again at another letter, keeping the parts complementary. A mutation row that names doctor cases runs only the part that holds them.
   - `tsc --noEmit` does not read `server/test/`. When a task writes a test file, its typecheck step is `./node_modules/.bin/vitest run test/typecheck-tests.test.ts` (D-3163).
   - Known load flakes (the repository's `CLAUDE.md` list) are re-run in isolation before anyone calls them a real break.
-- **Deviations are slugs.** Each is named `⟦D:<short-slug>⟧` (ruling R12). Never write a D-number, `D-TBD` or a range. A task that finds a new departure reports it with a proposed slug. The controller mints every number after review and substitutes it.
+- **Deviation numbers are issued, never chosen.** This plan's own departures were minted by the allocator on 2026-10-01 and are defined individually in [Deviations found](#deviations-found). A task that finds a new departure during execution reports it with a proposed slug, `⟦D:<short-slug>⟧` (ruling R12), and the controller mints its number and substitutes it. Never write a number nobody issued, a `D-TBD`, or a range.
 - **Commits** land on the workspace's own branch, never a separate feature branch, with the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, the message passed as `git commit -F - <<'EOF' … EOF` (or `--amend -F -` onto a task's WIP commit). **The commit-identity rule:** author and committer are the noreply identity this worktree's git config already carries. No task passes `-c user.*` or copies another commit's author. After every commit, `git log -1 --format='%an <%ae> | %cn <%ce>'` shows that identity only, and any other stops the task before anything is pushed (the pre-push hook refuses identity residue). Task 11 checks the whole branch the same way.
 
 **The live box (carried from 2b-2, widened)**
@@ -320,7 +320,7 @@ Every task's requirements implicitly include this section. The first two groups 
 | `_check_wrappers` expects `ccrc-codex` for a codex lane in all three of its arms. `healthyCodexBox` is at `server/test/ccrc-doctor.test.ts:1208` | **done** (Plan 1; Plan 2b-2 Task 1) |
 | `codexLaneFixture.ts`: `freePort`/`freePorts`, `codexRoster`, `codexAuthDir`, `GPT_LANE_BINS`, `plantCodexBins`, `plantFakeRuntime`, `plantSystemd` with its `systemctlCalls`/`systemdRunCalls` recorders, `spawnListener`, `spawnFakeLitellm`, `registerLaneCleanup` and `killLaneProcesses` | **done** (Plan 2b-2 Tasks 4, 5, 10) |
 | `install-census.test.ts`'s `FOREIGN_LIVE_BOX_UNIT_PREFIX = 'ccgpt-usage@'` (`:1591`) | **done**. It stays, and it still refuses that prefix after the rename |
-| `topology-clean`'s email class, and its fleet-account-label class `ROSTER_RESIDUE` (`:288`, base64) | **done**. The label class does not hold the GPT-lane labels yet. **Task 11 adds each one its own `passes` does not pin** (R10, ⟦D:a-live-label-the-residue-class-pins-as-a-pass-stays-out⟧) |
+| `topology-clean`'s email class, and its fleet-account-label class `ROSTER_RESIDUE` (`:288`, base64) | **done**. The label class does not hold the GPT-lane labels yet. **Task 11 adds each one its own `passes` does not pin** (R10, D-3722) |
 
 Measured **absent** on `1f9fa22d`, and owed here:
 
@@ -406,7 +406,7 @@ Every obligation Plans 2b-1 and 2b-2 handed to "Plan 3", mapped to a task here, 
 | 2b2-8 | the settings-env drift check compares nothing for a codex lane | **Task 3** (R-C7) | |
 | 2b2-9 | `ccrc account auth-start` | **NOT-APPLICABLE** | the verb does not exist (`ACCT_SUBS`, `ccd/ccrc:1535`), and the pane's door already routes a codex lane to `ccrc codex login` (D-3489). There is nothing to route until a design adds the verb |
 | 2b2-10 | the timer-enable degrades never reach `INST_DEGRADED` | **Task 6** | there are nine on main, not eight. Task 6 adds one more enable, so they all degrade honestly together |
-| 2b2-11 | stale `deploy.sh:<N>` citations in `ccd/ccrc-doctor-checks` (seven measured, not six) | **Task 4**, re-aimed by quoted anchor (⟦D:doctor-deploy-citations-by-anchor⟧) | same file as `_check_codex`. Task 7 edits `deploy.sh`, so a new line number would go stale inside this plan |
+| 2b2-11 | stale `deploy.sh:<N>` citations in `ccd/ccrc-doctor-checks` (seven measured, not six) | **Task 4**, re-aimed by quoted anchor (D-3725) | same file as `_check_codex`. Task 7 edits `deploy.sh`, so a new line number would go stale inside this plan |
 | 2b2-12 | the LiteLLM range width (D-3487) | **Plan 3b** | the ruling stands. Its revisit trigger, a release inside `<1.110` failing the probe, is measured by 3b's first live runtime build, which stops for a ruling if it fires |
 
 **Plan 2b-1's carry-forward (items 12-21, plus 22 for completeness)**
@@ -422,8 +422,8 @@ Every obligation Plans 2b-1 and 2b-2 handed to "Plan 3", mapped to a task here, 
 | 2b1-17b | the probe's `authDir` | **Task 1** | |
 | 2b1-17c | a macOS launchd equivalent of the usage timer | **Task 6** (a stated not-applicable with a forced-Darwin test, R2) and **Task 11** (§20 says so) | `_inst_units_darwin` places no timer at all, and macOS is not centrally managed (centralised-update design, decision 17) |
 | 2b1-18 | `models-op.mjs`' tmp names without `O_EXCL`, and its write order | **NOT-APPLICABLE** | a pre-existing idiom shared with `writeRegistry`, not GPT-lane work. `lane.json` holds no secret (`runtime.env` already moved to `mktemp`, D-3529). Its consequence, mutually stale files, is Task 4's FAIL and Task 8's cure |
-| 2b1-19 | `ccrc-uninstall.test.ts`' hand-written absence list omits the `ccd-usage-sweep` pair | **Task 7** | derived from what the fixture planted, which must cover every `_inst_units` destination (⟦D:uninstall-absence-derived-from-what-was-planted⟧) |
-| 2b1-20 | `deploy-verify.test.ts`' hand-typed landed list | **Task 7** | derived from the agent chain's own `_unit_atomic` operands, plus a template anchor (⟦D:deploy-verify-landed-derived-from-the-chain⟧) |
+| 2b1-19 | `ccrc-uninstall.test.ts`' hand-written absence list omits the `ccd-usage-sweep` pair | **Task 7** | derived from what the fixture planted, which must cover every `_inst_units` destination (D-3728) |
+| 2b1-20 | `deploy-verify.test.ts`' hand-typed landed list | **Task 7** | derived from the agent chain's own `_unit_atomic` operands, plus a template anchor (D-3729) |
 | 2b1-21 (the probe half) | `deploy.sh` places `ccrc-models-probe`, which install never does | **Task 7** (R-C11, with the other `deploy-verify` edits, R5). The stale live PATH copy is removed in **Plan 4** | the PATH copy is the one surviving wrong-lane reader, and ccrc never runs it |
 | 2b1-21 (the `ccrc-api` half) | `deploy.sh` places `ccrc-api` | **NOT-APPLICABLE** | not GPT-lane work. The skills call `~/.local/bin/ccrc-api` by path, so the line stays |
 | 2b1-22 | two stale `deploy.sh` citations in doctor-checks | **Task 4** | the same finding as 2b2-11, re-measured at seven |
@@ -437,12 +437,12 @@ Every obligation Plans 2b-1 and 2b-2 handed to "Plan 3", mapped to a task here, 
 | `_check_models` would raise a false WARN for the lane R-C2 stops refreshing (critic gap 1) | **Task 1** (its own non-WARN sentence), pinned by **Task 10** |
 | A second usage writer for one lane (critic gap 6) | **Task 6** (R6) |
 | `lane.json` stale against the registry (critic gap 11) | **Task 4** (R7), cured by **Task 8** |
-| `--fix` regenerating a marker-verified launcher (§12; critic gap 12) | **Task 8** (R8): a new `_fix_wrappers` (⟦D:launcher-fix-rides-the-wrappers-check⟧) |
+| `--fix` regenerating a marker-verified launcher (§12; critic gap 12) | **Task 8** (R8): a new `_fix_wrappers` (D-3730) |
 | `cmd_doctor` runs a fixer only on FAIL, while §12 lists enabling a missing timer, which is a WARN row | **Task 8** (R-C8: the FAIL-only contract stays, and the WARN names `ccrc install`) |
 | The `--force` backup is `cp -p` without `-P` (`ccd/ccrc:4121`) | **Task 9** |
 | Stale probe-line citations | **Task 1** |
 | The usage pair on Darwin (critic gap 10) | **Task 6** (R2) |
-| The fleet-account-label residue class lacks the two GPT-lane labels, and the second lane's ports, auth-directory name and config names have no class (critic gap 16) | **Task 11** (R10): each label that the class's own `passes` does not pin is added base64 and red-first, read from the box's roster at execution time. A label pinned as a pass stays out (⟦D:a-live-label-the-residue-class-pins-as-a-pass-stays-out⟧). The rest, that label included, is a hand-grep whose inputs Task 11 measures read-only on the fleet box at execution time (F1): ids and labels from the box's roster, the second lane's ports from its launcher's two `export` lines only, the auth-directory and config names by `ls` (names only), and session codenames from the `.wrapper` field files (names only). The gitignored reference file is not consulted, and adding its GPT-lane section is Plan 3b Task 1's |
+| The fleet-account-label residue class lacks the two GPT-lane labels, and the second lane's ports, auth-directory name and config names have no class (critic gap 16) | **Task 11** (R10): each label that the class's own `passes` does not pin is added base64 and red-first, read from the box's roster at execution time. A label pinned as a pass stays out (D-3722). The rest, that label included, is a hand-grep whose inputs Task 11 measures read-only on the fleet box at execution time (F1): ids and labels from the box's roster, the second lane's ports from its launcher's two `export` lines only, the auth-directory and config names by `ls` (names only), and session codenames from the `.wrapper` field files (names only). The gitignored reference file is not consulted, and adding its GPT-lane section is Plan 3b Task 1's |
 | Suites run on the live fleet box (critic gap 17) | the census in [Global Constraints](#global-constraints), on every step, and **Task 11**'s gate |
 | Spec lines 333, 497 and 698 are cited by line number (critic gap 9) | **Task 11** (R9) |
 | The other repository's stop verb stops `ccgpt-<id>-{litellm,shim}.service` by name, which are the names ccrc's tiers use (critic gap 7) | **Plan 3b**: never run it for a migrated lane, and roll back with `ccrc codex stop` first |
@@ -618,8 +618,8 @@ Every obligation Plans 2b-1 and 2b-2 handed to "Plan 3", mapped to a task here, 
 - **No added line names a live lane id (R13).** The migrated cases' lines lose the fixture id they carried. The one external-arm seed reads that row's id by position (`LEGACY_EXTERNAL_ID`). New external rows are `ext-a`, and codex lanes are `codex-a` and `codex-b`.
 
 **Deviations (by slug; the controller mints the numbers):**
-- ⟦D:probe-token-dir-has-no-default-on-any-lane⟧: the default goes for every caller, not only codex lanes. A codex registry on a row that is not exec.kind `codex` is refused by name (`external-lane`) on a targeted refresh and skipped as an ok:true row under `--all`, so that lane's catalogue freezes before its flip. This departs from spec §19.6 ("`external` lanes keep today's box-global path … until Plan 3's cutover retires that arm", read for the probe side). It also goes beyond §9.1, which says "refused" and says nothing about the refresh loop's answer.
-- ⟦D:unattended-authenticator-never-starts-a-device-flow⟧: the probe and the publisher override two private LiteLLM names (`_login_device_code`, `_wait_for_access_token`) and refuse `login-required`/`runtime-api-moved`, which couples ccrc to private names inside D-3487's range. The usage unit also gains `TimeoutStartSec=300`. None of §9, §10 or §19.3 names either refusal.
+- D-3706: the default goes for every caller, not only codex lanes. A codex registry on a row that is not exec.kind `codex` is refused by name (`external-lane`) on a targeted refresh and skipped as an ok:true row under `--all`, so that lane's catalogue freezes before its flip. This departs from spec §19.6 ("`external` lanes keep today's box-global path … until Plan 3's cutover retires that arm", read for the probe side). It also goes beyond §9.1, which says "refused" and says nothing about the refresh loop's answer.
+- D-3707: the probe and the publisher override two private LiteLLM names (`_login_device_code`, `_wait_for_access_token`) and refuse `login-required`/`runtime-api-moved`, which couples ccrc to private names inside D-3487's range. The usage unit also gains `TimeoutStartSec=300`. None of §9, §10 or §19.3 names either refusal.
 
 - [ ] **Step 0: record the base, check the R11 census, re-run the locators (read-only).**
 
@@ -2178,14 +2178,14 @@ each, remedy first.
 
 A codex registry on a row that is not exec.kind "codex" is refused by name
 (external-lane) and skipped by `refresh --all` as an ok:true row, so the
-hourly unit stays green ⟦D:probe-token-dir-has-no-default-on-any-lane⟧. The
+hourly unit stays green D-3706. The
 doctor's models check marks such a lane SKIPPED instead of calling it a
 stalled timer.
 
 The probe and the usage publisher refuse LiteLLM's device flow in-process,
 before it can write auth.json, and fail closed on a runtime whose
 Authenticator moved the names the guard overrides. The usage unit gains
-TimeoutStartSec=300 ⟦D:unattended-authenticator-never-starts-a-device-flow⟧.
+TimeoutStartSec=300 D-3707.
 ChatGPT-Account-Id now comes from Authenticator().get_account_id(), so no ccrc
 code opens auth.json: D-3161 closed.
 
@@ -2276,7 +2276,7 @@ git status --short                          # expected: nothing
     - it uses Task 1's `EXT_A_ROW` (`ext-a`) and adds no fixture row of its own;
     - `describe('refresh never renders or stops an external lane\'s LiteLLM (R-C2, R-C3)')` holds the joint case.
   - For Task 11's §20:
-    - under §8 and §19.6: "An `external` lane is never rendered, restarted or stopped by ccrc (Plan 3a Task 2, ⟦D:external-litellm-arm-retired-before-the-flip⟧). `_models_litellm_path` takes an id and answers only `~/.ccrc/codex/<id>/litellm.yaml`. `ccrc models litellm <id>` refuses `external-lane` for a non-codex-kind lane whose registry names the codex probe, and every other non-codex lane keeps the op's own refusal. The box-global config path, the `pgrep` and the bare stop are gone, and an external lane's LiteLLM config is whatever its own launcher last read until that lane's cutover.";
+    - under §8 and §19.6: "An `external` lane is never rendered, restarted or stopped by ccrc (Plan 3a Task 2, D-3708). `_models_litellm_path` takes an id and answers only `~/.ccrc/codex/<id>/litellm.yaml`. `ccrc models litellm <id>` refuses `external-lane` for a non-codex-kind lane whose registry names the codex probe, and every other non-codex lane keeps the op's own refusal. The box-global config path, the `pgrep` and the bare stop are gone, and an external lane's LiteLLM config is whatever its own launcher last read until that lane's cutover.";
     - a same-line pointer on §19.6's last bullet: "(amended: §20, Plan 3a Task 2)".
 
 **Why:**
@@ -2425,7 +2425,7 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
 
   ```ts
   describe('ccrc models litellm', () => {
-    // Plan 3a Task 2 (R-C3, ⟦D:external-litellm-arm-retired-before-the-flip⟧):
+    // Plan 3a Task 2 (R-C3, D-3708):
     // `ccrc models litellm` renders for a codex-kind lane only (the next
     // describe but one). Every other lane is REFUSED, and WHICH refusal is the
     // claim: a lane whose registry names the codex probe is `external-lane` —
@@ -2594,7 +2594,7 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
 
   ```ts
     it('no shipped file spells the box-global LiteLLM config, and nothing ccrc runs stops another repository\'s LiteLLM (R-C3)', () => {
-      // Plan 3a Task 2 (⟦D:external-litellm-arm-retired-before-the-flip⟧). This
+      // Plan 3a Task 2 (D-3708). This
       // pinned ONE holder of `~/.handoff/litellm-config.yaml`: the no-argument
       // arm of `_models_litellm_path`, the external arm's, which shared that file
       // with another repository's launcher. The arm is retired, so the right
@@ -2653,7 +2653,7 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
 
   ```bash
   # Where a codex lane keeps LiteLLM's config, and the template it is rendered
-  # from. ONE ARM (R-C3, ⟦D:external-litellm-arm-retired-before-the-flip⟧): an
+  # from. ONE ARM (R-C3, D-3708): an
   # id, and that CODEX-kind lane's own file, `_codex_litellm_yaml "$1"` (ruling
   # PF-40 — one spelling, the same one `_codex_start_tier`'s `--config` and
   # `_codex_litellm_ensure`'s presence check use). The no-argument arm this
@@ -2724,7 +2724,7 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
   (a) Replace from `# STOP-THEN-WRITE (fix round 1, this task's controller ruling). Restart is` through `_models_litellm`'s closing `}` (:10001-10051) with the block below. The blank line and `` # `ccrc codex start`'s config step (design contract `start`: `` stay as they are:
 
   ```bash
-  # ONE ARM (R-C3, ⟦D:external-litellm-arm-retired-before-the-flip⟧). ccrc
+  # ONE ARM (R-C3, D-3708). ccrc
   # renders a LiteLLM config, and stops or starts the tier that reads it, for an
   # `exec.kind: "codex"` lane only — `_models_litellm_lane` above, whose
   # STOP-THEN-WRITE doctrine (spec §8) is unchanged. The EXTERNAL arm that stood
@@ -3006,7 +3006,7 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
 
 > Resolved by ruling R5 (R-C7):
 > - For a codex lane the rule is **absent or equal**: `settings.json`'s env block may omit `ANTHROPIC_BASE_URL`, or name exactly `http://127.0.0.1:<proxyPort>`.
-> - Present and different is `settings-env-drift`, a WARN. Carry-forward 8's "compare against the loopback URL" becomes this rule (⟦D:codex-settings-env-absent-or-equal⟧).
+> - Present and different is `settings-env-drift`, a WARN. Carry-forward 8's "compare against the loopback URL" becomes this rule (D-3709).
 > - The external rows are judged exactly as today, which is inert on the live shape.
 
 **Files:**
@@ -3035,7 +3035,7 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
     - no finding when the env block is absent, unparseable or has no `ANTHROPIC_BASE_URL` key, or when the key equals the loopback URL;
     - otherwise `settings-env-drift\t<id>\t<suffix>/settings.json sets ANTHROPIC_BASE_URL to <value>, and this codex lane's endpoint is its loopback shim http://127.0.0.1:<port>, which its launcher exports — whichever of the two Claude Code honours, one of them is wrong. No ccrc writer puts that key there: delete it from the env block by hand`.
   - `accountsOnly(home)`, describe-local in `describe('ccrc doctor: accounts')`: `_check_accounts` alone, sourced from the fixture's own `ccd/ccrc-doctor-checks`. Also `codexAccountsBox(prefix)`, describe-local too: `healthy()` plus one codex row on the pure-parse pair and its launcher.
-  - For Task 11's §20: "A codex lane's `settings.json` env block may omit `ANTHROPIC_BASE_URL` or name exactly `http://127.0.0.1:<exec.proxyPort>`; any other value is `settings-env-drift` (WARN), naming both (Plan 3a Task 3, ⟦D:codex-settings-env-absent-or-equal⟧)."
+  - For Task 11's §20: "A codex lane's `settings.json` env block may omit `ANTHROPIC_BASE_URL` or name exactly `http://127.0.0.1:<exec.proxyPort>`; any other value is `settings-env-drift` (WARN), naming both (Plan 3a Task 3, D-3709)."
 
 **Why:**
 
@@ -3243,7 +3243,7 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
   ```js
       } catch { env = null; }
       // A CODEX lane's rule is ABSENT OR EQUAL (R-C7,
-      // ⟦D:codex-settings-env-absent-or-equal⟧). Its launcher exports
+      // D-3709). Its launcher exports
       // ANTHROPIC_BASE_URL itself, and no ccrc writer puts that key in
       // settings.json (`MODEL_ENV_KEYS`, shared/modelenv.mjs), so an env block
       // without it — or no env block at all — is that lane's healthy state.
@@ -3453,20 +3453,20 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
   - `lane.json` against the roster row (`_codex_lane_json_state`) and against the class registry (the new check-only `materialise`, ruling R7 — 2b-1 item 16's "retired haiku still written as probeModel" and "roster-edit staleness");
   - the registry itself through models-op `show`: none, or another probe's, is FAIL (2b-1 item 16); haiku unassigned or retired from the catalogue is WARN (§12's "probe model absent from the current catalogue");
   - the rendered LiteLLM config against the catalogue, through `litellm` without `--commit` (absent, stale, never probed);
-  - lane state left under `~/.ccrc/codex/` for an id that is no longer a codex lane (2b-1 item 16's flip-back case), a WARN ⟦D:codex-leftover-lane-state-warns⟧.
-- **The population, and the two answers that are never a SKIP (ruling R-C6).** `_codex_lanes` rc 1 (the roster cannot be read) and rc 2 (no jq) are FAILs naming `ccrc wrappers` and jq ⟦D:codex-population-unreadable-is-fail⟧. An unreadable roster is not an empty one, and a SKIP there would read "no Codex lane" on a box that has some. An ABSENT roster file is different: it is a positive answer, and `_check_wrappers` already FAILs it, so it SKIPs with its own sentence ⟦D:codex-check-absent-roster-skips⟧. Role `server` SKIPs, as `_check_accounts` reads it (doctor-checks:3082-3087); `CCRC_ROLE` unset reads as not server (spec §12).
+  - lane state left under `~/.ccrc/codex/` for an id that is no longer a codex lane (2b-1 item 16's flip-back case), a WARN D-3713.
+- **The population, and the two answers that are never a SKIP (ruling R-C6).** `_codex_lanes` rc 1 (the roster cannot be read) and rc 2 (no jq) are FAILs naming `ccrc wrappers` and jq D-3710. An unreadable roster is not an empty one, and a SKIP there would read "no Codex lane" on a box that has some. An ABSENT roster file is different: it is a positive answer, and `_check_wrappers` already FAILs it, so it SKIPs with its own sentence D-3723. Role `server` SKIPs, as `_check_accounts` reads it (doctor-checks:3082-3087); `CCRC_ROLE` unset reads as not server (spec §12).
 - **Inert on today's live shape, which is what makes the merge's auto-rollout safe.** The live fleet box's roster has two `external` rows with codex telemetry (one with a class registry) and no `exec.kind: "codex"` row, and no `~/.ccrc/codex/` directory at all (measured 2026-09-30). So `_check_codex` answers exactly one SKIP there, and one SKIP on the server box (`CCRC_ROLE=server`), before it asks anything. Task 10's live-shape rehearsal pins that.
 - **Read-only, the whole way down.** Every registry and catalogue fact comes through models-op's check-only answers:
   - so this task adds no code line naming the registry's file to `ccd/ccrc-doctor-checks` (single-definition.test.ts:1784-1795 pins that exact count, three since Task 1), and nothing here writes, renders, mkdirs, starts or stops anything;
   - the two cases that could catch a writer measure bytes AND mtimes (`treeState`): a re-render of identical bytes still moves an mtime;
-  - `authDir` is asked `-e`/`-d`/`-r`/`-x`, and `auth.json` only `-f`, which needs search permission on the directory and nothing on the file, so a 0000-mode `auth.json` PASSes. An `authDir` with no `auth.json` is a FAIL in `ccrc codex start`'s own refusal words, because start refuses there ⟦D:codex-auth-json-absent-fails⟧.
-- **Why `materialise` needs a check form, and why it is opt-in** ⟦D:materialise-check-is-opt-in⟧. `_codex_lane_json_state` compares lane.json with the ROSTER row only (id, configDir, authDir, ports, units present). A haiku reassigned by hand, or a write interrupted between the TSV and lane.json (2b-1 item 18), leaves a lane.json that the roster agrees with and the registry does not. Ruling R7 measures it with a check-only materialise. The default stays the write, `--check true` is the opt-in:
+  - `authDir` is asked `-e`/`-d`/`-r`/`-x`, and `auth.json` only `-f`, which needs search permission on the directory and nothing on the file, so a 0000-mode `auth.json` PASSes. An `authDir` with no `auth.json` is a FAIL in `ccrc codex start`'s own refusal words, because start refuses there D-3724.
+- **Why `materialise` needs a check form, and why it is opt-in** D-3712. `_codex_lane_json_state` compares lane.json with the ROSTER row only (id, configDir, authDir, ports, units present). A haiku reassigned by hand, or a write interrupted between the TSV and lane.json (2b-1 item 18), leaves a lane.json that the roster agrees with and the registry does not. Ruling R7 measures it with a check-only materialise. The default stays the write, `--check true` is the opt-in:
   - two shipped callers run `materialise` expecting a write (`_codex_lane_json_ensure`, ccd/ccrc:10494, and the refresh loop, :10181), and `models-op.test.ts` makes 13 calls to it without a flag, besides `ccrc-models.test.ts`' cases through the verbs;
   - flipping the default would change every one of them; an opt-in flag changes none;
   - any other value is refused at exit 2, so a typo never falls through to the write.
 
   It renders through one shared list, `materialFiles`, which `materialise` itself now writes from, so "what materialise would write" cannot mean two things.
-- **The runtime row trusts the stamp** (ruling R-C5) ⟦D:runtime-health-trusts-the-stamp⟧. §12 says "failing its behaviour probe". `ccgpt-runtime check` compares the stamp's requirement, probe hash and LiteLLM version and never re-runs the probe, which may take `CCRC_RUNTIME_PROBE_S` (300 s); doctor closes every install and update. `ccgpt-runtime build` re-probes, and every remedy says so. `requirement-moved` is §12's "out of range".
+- **The runtime row trusts the stamp** (ruling R-C5) D-3711. §12 says "failing its behaviour probe". `ccgpt-runtime check` compares the stamp's requirement, probe hash and LiteLLM version and never re-runs the probe, which may take `CCRC_RUNTIME_PROBE_S` (300 s); doctor closes every install and update. `ccgpt-runtime build` re-probes, and every remedy says so. `requirement-moved` is §12's "out of range".
 - **The executables list is one line, pinned to the installer.** `CODEX_LANE_BINS` is `_inst_bins`' GPT-lane gate (ccd/ccrc:13560-13568) in its order. It is declared once at file level, so Task 8's `_fix_codex` restores exactly what this check compares. A test pins that line to `GPT_LANE_BINS`, which `ccrc-install.test.ts` already pins to the gate, so a fifth executable reds before this list can drift.
 - **The table entry shares a line with `models`, deliberately.** Lines below the table are cited by number from other files (`git grep -n "ccrc-doctor-checks:[0-9]" -- ':!docs'`): ccd/ccrc :3878, :5940, :5971, :5978, :7229, :7241, :7675, :8480 and :8851, `deploy/account-op.mjs:221`, and `ccrc-account.test.ts` :545, :575, :597, :744, :2209, :4064, :4252 and :4271. A new line at :206 would move every one of them. `models codex` on one line is still two array entries (`tableNames()` reads them apart). Every other edit above the appended block is same-line, and Step 7 measures it.
 - **`HEALTHY_SKIPS` rises by one.** `healthy()` rosters only the upstream Anthropic account, so `codex` SKIPs on every platform; the darwin term (`scopes`) is unchanged. Measured in a scratch copy of this tree at `1f9fa22d`: with `codex` in the table and the constant NOT raised, exactly eight existing cases red, and nothing else:
@@ -3484,7 +3484,7 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
   - it links the binaries the lane library needs on this file's PATH-contained harness (2b-2 plan :6885-6888, hazard 9): `bash`, `readlink`, `cat`, `cmp`, `ps`, `awk`, `od`, `tr` and this platform's sha256 tool;
   - it copies the shipped skills into the lane's home, because materialise creates that home and `skills` measures every existing rostered home;
   - it needs python3 (`plantFakeRuntime`'s interpreter hands the stamp read to one), so the five callers and every new case are gated `skipIf(PY === null)`.
-- **The seven stale `deploy.sh` citations** ⟦D:doctor-deploy-citations-by-anchor⟧. 2b-2's carry-forward 11 counted six in the `deploy.sh:<N>` shape; measured, there is a seventh, `` `deploy.sh` (:417, :464) `` at :741. Each is re-aimed by a quoted ANCHOR, the code text it names, not by a new line number. This plan's own Task 7 edits `deploy.sh`'s agent arm, so any line number re-aimed here would go stale inside this plan. A pin forbids the line-number shape and proves each anchor still exists in `deploy.sh`.
+- **The seven stale `deploy.sh` citations** D-3725. 2b-2's carry-forward 11 counted six in the `deploy.sh:<N>` shape; measured, there is a seventh, `` `deploy.sh` (:417, :464) `` at :741. Each is re-aimed by a quoted ANCHOR, the code text it names, not by a new line number. This plan's own Task 7 edits `deploy.sh`'s agent arm, so any line number re-aimed here would go stale inside this plan. A pin forbids the line-number shape and proves each anchor still exists in `deploy.sh`.
 - **Out of this task:** the tier rows (Task 5), the usage-timer and usage-row rows (Task 6), `doctor --fix` (Task 8: a fixer runs only on a FAIL, ruling R-C8).
 
 - [ ] **Step 0: Record the base, the locators and the neighbours' counts (read-only)**
@@ -4343,7 +4343,7 @@ function materialFiles(account, registry, catalogue) {
   return files;
 }
 
-/** `materialise --check true` (Plan 3a Task 4, ruling R7, ⟦D:materialise-check-is-opt-in⟧):
+/** `materialise --check true` (Plan 3a Task 4, ruling R7, D-3712):
  *  renders exactly what `materialise` would write whole and compares it with the bytes on
  *  disk, WRITING NOTHING — no tmp, no directory, no settings merge. `ccrc
  *  doctor`'s `_check_codex` asks it whether a lane's `lane.json` has gone
@@ -4444,14 +4444,14 @@ node --check ../deploy/models-op.mjs
 # lanes another repository runs — plus any lane directory left under
 # `_codex_lane_dir` for an id the roster no longer calls codex: a flip back to
 # another launcher keeps that state on purpose, and it is WARNed, never
-# silently skipped (⟦D:codex-leftover-lane-state-warns⟧).
+# silently skipped (D-3713).
 #   - role `server`: SKIP, a server box converges nothing per account
 #     (D-3111). CCRC_ROLE unset or unreadable reads as NOT server, as
 #     `cmd_update` reads it.
 #   - no roster FILE at all: SKIP. ABSENT is a positive answer, and a missing
-#     roster is the `wrappers` check's FAIL (⟦D:codex-check-absent-roster-skips⟧).
+#     roster is the `wrappers` check's FAIL (D-3723).
 #   - `_codex_lanes` rc 1 (the roster cannot be read) or rc 2 (no jq): FAIL,
-#     never SKIP (ruling R-C6, ⟦D:codex-population-unreadable-is-fail⟧).
+#     never SKIP (ruling R-C6, D-3710).
 #     An unreadable roster is not an empty one, and
 #     a SKIP there would read "no Codex lane" on a box that has some — the
 #     overloaded null this codebase bans by name.
@@ -4467,7 +4467,7 @@ node --check ../deploy/models-op.mjs
 # ONLY: nothing under it is ever opened (spec §9).
 #
 # THE RUNTIME ROW TRUSTS THE STAMP (ruling R-C5,
-# ⟦D:runtime-health-trusts-the-stamp⟧). `ccgpt-runtime check` compares the
+# D-3711). `ccgpt-runtime check` compares the
 # current generation's stamp with this build's LiteLLM requirement, its
 # behaviour probe's hash and the installed LiteLLM version; it never re-runs
 # the probe, which may take CCRC_RUNTIME_PROBE_S (300 s), and doctor closes
@@ -4962,7 +4962,7 @@ git diff --name-only "$BASE" HEAD | sort   # after the commit (ruling F3)
   - `codexLaneFixture.ts`: `spawnListener`, `alive`, `portAccepts`, `plantSystemd`, `fakeUnit`, `laneUnits`, `systemdRunCalls`, `systemctlCalls`.
 - Produces:
   - `_dr_cx_tiers` and `_dr_cx_sessions`, called for every lane whose row read. Each lane's PASS words become `<Task 4's words>; tiers: none running (a lane is lazy) | tiers: <tier> running (<via>, pid <n>), …`, and Task 6 appends its usage words after them.
-  - NOT this task's: the other repository's `ccgpt-usage@<id>.timer` enabled for a codex lane (R6). That row is Task 6's. Task 6 reads it from `timers.target.wants/` with the same helpers its converge acts on (⟦D:usage-enablement-is-read-from-the-wants-links⟧), so doctor and the converge cannot disagree.
+  - NOT this task's: the other repository's `ccgpt-usage@<id>.timer` enabled for a codex lane (R6). That row is Task 6's. Task 6 reads it from `timers.target.wants/` with the same helpers its converge acts on (D-3726), so doctor and the converge cannot disagree.
   - The sentences Step 3 spells, which Task 8's fixer cures where a cure is allowed (restart a verified own tier) and names where it is not (a foreign listener, OAuth, ports).
   - `runDoctorBounded(home, ms, extraEnv)`; `startedJson(home, tier)`.
 
@@ -4970,11 +4970,11 @@ git diff --name-only "$BASE" HEAD | sort   # after the commit (ruling F3)
 - **Doctor may connect to a lane's loopback ports, bounded** (ruling R-C4). §12's foreign-listener row cannot be measured otherwise, and doctor already probes loopback (it curls `/health` and runs `openssl s_client`). Every connect is the lane library's own, the one `ccrc codex status` makes, and each is bounded by `CCRC_CODEX_PROBE_S`, so a listener that accepts and never answers costs a bound, not a hang. The test for that uses an IN-PROCESS server on purpose: `runDoctor` blocks this process's event loop, so the kernel completes the connect and nothing ever answers it (codexLaneFixture.ts' own header measured that deadlock). Its mutation, an unbounded `_codex_lane_answer`, hangs until `runDoctorBounded`'s deadline and reds.
 - **Nothing here signals, stops or starts anything.** Every rc 2 is named in `_codex_foreign_what`'s words and left running. The foreign-listener case asserts that the listener is alive and still accepting after doctor. That assertion has no safe red mutation: a foreign listener has no handle this lane proves, and a pattern kill would reach other suites' fixtures on a shared box. The mutation-backed sibling is the unit-unproven case, whose `systemd-run` recorder must stay empty (row T5-M10).
 - **The classes, where §12 is silent:**
-  - a live unit of the tier's name with `MainPID` 0 (`unit-unproven`) is a WARN with the helper's retry wording ⟦D:codex-unit-unproven-warns⟧. This lane's own crash-looping tier reads exactly so inside its `RestartSec`, and a FAIL there would fail every `ccrc update` that lands in that window;
+  - a live unit of the tier's name with `MainPID` 0 (`unit-unproven`) is a WARN with the helper's retry wording D-3714. This lane's own crash-looping tier reads exactly so inside its `RestartSec`, and a FAIL there would fail every `ccrc update` that lands in that window;
   - a 2 that `_codex_tier_is_our_handle` reads as this lane's own process (`listener-other-process`: this lane's tier, alive by its command line, while another process holds its port) is a FAIL in `_codex_foreign_what`'s words alone. That sentence names the pid it proved, so the "ccrc neither adopts nor stops what it cannot identify" tail every other foreign FAIL carries would contradict it;
-  - a 3 (cannot ask) is a WARN, "unmeasured, never read as running or as stopped" ⟦D:codex-unmeasured-tier-warns⟧;
+  - a 3 (cannot ask) is a WARN, "unmeasured, never read as running or as stopped" D-3715;
   - `_codex_tier_stale`'s 2 is its own WARN, never current and never stale (2b-2 Task 4 hazard 6);
-  - a LiteLLM tier down while a LIVE session runs on the lane is a WARN (2b-2 plan :11065-11067: after a start that wrote, the refresh reads "unchanged" and never retries the start) ⟦D:codex-down-gateway-under-live-sessions-warns⟧. "Live" is `_svc_is_active claude-session@<sid>.service`, with its three answers kept apart, as `_check_routing`'s census does.
+  - a LiteLLM tier down while a LIVE session runs on the lane is a WARN (2b-2 plan :11065-11067: after a start that wrote, the refresh reads "unchanged" and never retries the start) D-3716. "Live" is `_svc_is_active claude-session@<sid>.service`, with its three answers kept apart, as `_check_routing`'s census does.
 - **A lane is lazy.** Both tiers down is a PASS. One ours (0 or 4) and the other not running (1) is §12's FAIL, with the idempotent `ccrc codex start` as its remedy.
 - **The second writer is Task 6's, not this task's** (ruling R6). The other repository's `ccgpt-usage@<id>.timer` enabled for a codex lane is one fact with one reader. That reader is Task 6's `_codex_usage_enabled`, which reads the `timers.target.wants/` link the manager itself makes, and which Task 6's converge, uninstall, account removal and doctor row all share. A second, bus-asked copy here would print the same WARN twice on a box whose manager answers, and disagree with the converge on a box whose manager does not.
 - **No new `systemctl` verb.** The tier rows ask the manager only through the lane library's existing questions (`_codex_tier_ours`' unit reads and `_svc_is_active`), and every harness that reaches them already answers them with a recorder. The update and uninstall harnesses reach none of it: they have no codex row, so `codex` SKIPs before it asks.
@@ -5296,19 +5296,19 @@ New:
 # starts anything: a foreign listener is named and left running.
 #   - a 2 whose CX_TIER_WHY is `unit-unproven` is a WARN with that helper's
 #     retry wording, never a FAIL: this lane's own tier reads exactly so
-#     inside its RestartSec window (⟦D:codex-unit-unproven-warns⟧);
+#     inside its RestartSec window (D-3714);
 #   - a 2 that `_codex_tier_is_our_handle` reads as this lane's own process
 #     (`listener-other-process`) is a FAIL in the helper's words alone: that
 #     sentence names the pid it proved, so it never says "cannot identify";
 #   - a 3 is a WARN, unmeasured — never read as running or as stopped
-#     (⟦D:codex-unmeasured-tier-warns⟧);
+#     (D-3715);
 #   - a lane is LAZY, so both tiers down is a PASS; one up and one down is
 #     the FAIL §12 names;
 #   - `_codex_tier_stale` answers 0 stale, 1 current, 2 cannot tell, and a 2
 #     is its own WARN — never current, never stale;
 #   - a LiteLLM tier down under a live session is a WARN (2b-2's hazard: a
 #     tier that died after a start that wrote stays down until the next
-#     start, ⟦D:codex-down-gateway-under-live-sessions-warns⟧).
+#     start, D-3716).
 _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
   local id="$1" tier q word own lq=3 sq=3
   local -a words=()
@@ -5571,7 +5571,7 @@ git diff --name-only "$BASE" HEAD | sort   # after the commit (ruling F3)
   - In `codexLaneFixture.ts`:
     - `plantCodexUsage(home, id, {pair?, enabled?, row?, ageS?, linkAgeS?}) → {unitDir, link, row}`;
     - `plantForeignUsage(home, id | null) → link`.
-  - Hand-offs: Task 7 (uninstall instances, account removal, deploy.sh, and deleting the one-commit `DEPLOY_SH_WITHHOLDS` entry), Task 8 (cites `⟦D:missing-timer-remedy-is-ccrc-install⟧`), Task 10 (the rehearsal consumes the converge and the rows), Task 11 (the spec lines in the table above).
+  - Hand-offs: Task 7 (uninstall instances, account removal, deploy.sh, and deleting the one-commit `DEPLOY_SH_WITHHOLDS` entry), Task 8 (cites `D-3721`), Task 10 (the rehearsal consumes the converge and the rows), Task 11 (the spec lines in the table above).
 
 **Why:**
 
@@ -5588,23 +5588,23 @@ Task 10's rehearsal pins all of this.
 - A lane flipped back to `external` must stop being polled by ccrc on the next install (3b's rollback).
 - An auto-update inside a cutover window runs this step too (R-O6).
 
-So the enabled set is made exactly the roster's codex lanes (`⟦D:usage-instances-converge-to-the-codex-set⟧`). An unreadable roster or a missing jq converges NOTHING, in either direction, because a set nobody read is not an empty set.
+So the enabled set is made exactly the roster's codex lanes (`D-3718`). An unreadable roster or a missing jq converges NOTHING, in either direction, because a set nobody read is not an empty set.
 
 **Why a second writer degrades (R6).**
 - Two publishers would race one `~/.cc-limits/<id>.json`.
 - Two Authenticator refreshes would race one rotating refresh token in the lane's adopted OAuth directory.
 
-ccrc may stop only its own unit. So while the other repository's instance for that id is enabled, ccrc's is withheld, and withdrawn if it was on, and the line names the operator's own `disable` (`⟦D:usage-second-writer-degrades⟧`). The flat `ccgpt-usage.timer` names no lane; its lane is the other repository's own shell default, which ccrc does not spell. It is therefore reported as unattributable and blocks nothing.
+ccrc may stop only its own unit. So while the other repository's instance for that id is enabled, ccrc's is withheld, and withdrawn if it was on, and the line names the operator's own `disable` (`D-3719`). The flat `ccgpt-usage.timer` names no lane; its lane is the other repository's own shell default, which ccrc does not spell. It is therefore reported as unattributable and blocks nothing.
 
-**Why "enabled" is read from the wants links.** `enable` of a timer with `WantedBy=timers.target` makes exactly one link, `timers.target.wants/<unit>`, and `disable` removes it. No systemctl verb lists a template's enabled instances. A per-id `is-enabled` needs the user bus for a question one directory answers, and uninstall must find ccrc's instances on a box whose bus is down (`⟦D:usage-enablement-is-read-from-the-wants-links⟧`). The converge, uninstall, account removal and doctor all read the same helpers. What they cannot see is stated in the helpers' header: a timer started but never enabled, or one enabled under another target.
+**Why "enabled" is read from the wants links.** `enable` of a timer with `WantedBy=timers.target` makes exactly one link, `timers.target.wants/<unit>`, and `disable` removes it. No systemctl verb lists a template's enabled instances. A per-id `is-enabled` needs the user bus for a question one directory answers, and uninstall must find ccrc's instances on a box whose bus is down (`D-3726`). The converge, uninstall, account removal and doctor all read the same helpers. What they cannot see is stated in the helpers' header: a timer started but never enabled, or one enabled under another target.
 
 **Why every timer degrade is now counted.** Until now, nine timer refusals printed their remedy and appended nothing to `INST_DEGRADED`. The closing line then read "every step above converged" over a timer that never armed, which is the defect that line's own comment names. One helper now spells the remedy once and names the degraded step by its unit. The real-spine case derives the expected set from what the run actually asked systemd, so a tenth timer is measured the day it lands.
 
 **Why `TimeoutStartSec=300`, Task 1's value, is kept.** A oneshot has no start timeout by default. While it runs, its timer starts no second instance, so a hung poll would silence that lane's row for good. One poll is a token refresh plus one request that the publisher bounds at 30 s. The device-code flow, the one path that waits for minutes, is refused in-process by Task 1. Task 1 set 300 s, `ccrc-models.service`'s own bound, and this task keeps it. A pin keeps the bound under one timer cycle.
 
-**Why the doctor rows remedy `ccrc install`.** `cmd_doctor` runs a fixer on a FAIL only, one contract for every fixer (D-3113), and a stopped poller is a WARN (R-C8). So the missing-timer WARN names the converge (`⟦D:missing-timer-remedy-is-ccrc-install⟧`), and Task 8 cites that slug.
+**Why the doctor rows remedy `ccrc install`.** `cmd_doctor` runs a fixer on a FAIL only, one contract for every fixer (D-3113), and a stopped poller is a WARN (R-C8). So the missing-timer WARN names the converge (`D-3721`), and Task 8 cites that slug.
 
-**Why macOS answers not-applicable.** `_inst_units_darwin` places no timer at all (decision 17). A WARN would stand on every macOS codex lane for ever, the noise that `_inst_linger_darwin`'s doctrine refuses (`⟦D:usage-rows-not-applicable-on-darwin⟧`). `HEALTHY_SKIPS` does not move: these rows never SKIP the whole check, and a healthy box has no codex lane. Step 9 measures it.
+**Why macOS answers not-applicable.** `_inst_units_darwin` places no timer at all (decision 17). A WARN would stand on every macOS codex lane for ever, the noise that `_inst_linger_darwin`'s doctrine refuses (`D-3720`). `HEALTHY_SKIPS` does not move: these rows never SKIP the whole check, and a healthy box has no codex lane. Step 9 measures it.
 
 **Why the template's removal lands HERE.** `install-census.test.ts`'s "every systemd unit file the install spine places is removed by the uninstall census" reds the moment `_inst_units` places the pair. So the two `rm -f` operands ride this commit. Disabling the instances before that removal is Task 7's, as is deploy.sh's placement. For that one commit the pair is declared in `DEPLOY_SH_WITHHOLDS`, and Task 7 deletes the entry when deploy.sh learns the lines. The withholding describe's direction 2 reds if Task 7 forgets. The plan squash-merges, so `main` never carries this commit alone.
 
@@ -5677,7 +5677,7 @@ What a wrong answer means:
 1b. **`UNIT_FILES`.** Delete the two-line comment that begins `  // NOT the GPT-usage publisher's \`ccgpt-usage@.{service,timer}\`: no role`. Insert these rows directly after `['ccrc-models.timer', 'deploy/systemd/ccrc-models.timer'],`:
 
 ```ts
-  // Plan 3a Task 6: ccrc's OWN usage pair (⟦D:usage-unit-renamed-past-the-foreign-template⟧),
+  // Plan 3a Task 6: ccrc's OWN usage pair (D-3717),
   // ROLE-GATED `!= server` like the pairs above it, Linux only. The template
   // lands on every fleet/both box. Its INSTANCES are armed per codex lane by
   // `_inst_codex_usage`, and this describe's roster has none, so none is.
@@ -5756,7 +5756,7 @@ Change its `read(join(REPO, 'deploy', 'systemd', 'ccgpt-usage@.service'))` to `r
     expect(Number(bound[0]!.slice('TimeoutStartSec='.length)), 'a poll may still be running when the next one is due')
       .toBeLessThan(Number(cycle![1]) * 60);
     // The converge, uninstall, account removal and doctor read ENABLEMENT as
-    // this target's wants link (⟦D:usage-enablement-is-read-from-the-wants-links⟧):
+    // this target's wants link (D-3726):
     // another target and every one of those readers goes blind.
     expect(timer, 'the usage timer is no longer wanted by timers.target').toContain('WantedBy=timers.target');
 ```
@@ -6061,7 +6061,7 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
     // more: `ccgpt-usage@`, another repository's template on a live fleet box
     // (FOREIGN_LIVE_BOX_UNIT_PREFIX, below). Until Plan 3a this repository
     // shipped a pair under that name, so the derivation caught it. The rename
-    // to `ccrc-codex-usage@` (⟦D:usage-unit-renamed-past-the-foreign-template⟧)
+    // to `ccrc-codex-usage@` (D-3717)
     // would have dropped it silently, and a deploy that armed one of ITS
     // instances would arm another tool's publisher.
 ```
@@ -6279,7 +6279,7 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     expect(r.stdout).toMatch(/^pair=missing$/m);
   });
 
-  it('the lane\'s timer not enabled: WARN, remedy ccrc install (⟦D:missing-timer-remedy-is-ccrc-install⟧)', () => {
+  it('the lane\'s timer not enabled: WARN, remedy ccrc install (D-3721)', () => {
     const r = usageRows(usageBox('ccrc-doctor-usage-disabled-', { enabled: false }));
     expect(warns(r.stdout)).toEqual([`WARN codex: codex-a: ${T} is not enabled, so this lane's ~/.cc-limits usage row is never refreshed`]);
     expect(r.stdout).toMatch(/^ {2}remedy: ccrc install — its converge enables one usage timer per codex lane$/m);
@@ -6469,7 +6469,7 @@ ExecStart=%h/.ccrc/runtime/codex/current/bin/python -I %h/.local/bin/ccgpt-usage
 # ccrc's OWN name, never `ccgpt-usage@`: on a live fleet box that template is
 # another repository's, with an instance enabled, and placing ours there would
 # rewrite a running timer's definition on the next update
-# (⟦D:usage-unit-renamed-past-the-foreign-template⟧). `_inst_units` places this
+# (D-3717). `_inst_units` places this
 # pair on fleet/both, Linux only; `_inst_enable`'s converge enables one instance
 # per codex lane. The publisher reads ~/.ccrc/codex/%i/lane.json for everything
 # else, so no path is re-derived here from a naming convention (spec §5.4).
@@ -6483,7 +6483,7 @@ In `deploy/systemd/ccrc-codex-usage@.timer`:
 ```ini
 # `WantedBy=timers.target` is also what `enable` links into
 # `timers.target.wants/`, the one place ccrc reads to know an instance is
-# enabled (⟦D:usage-enablement-is-read-from-the-wants-links⟧).
+# enabled (D-3726).
 ```
 
 6b. **`ccd/ccrc`, the new block.** Insert it directly above `# ── _inst_enable — ask systemd to read them, then prove one stayed up ─────`:
@@ -6496,10 +6496,10 @@ In `deploy/systemd/ccrc-codex-usage@.timer`:
 # enabled, and `_inst_atomic` replaces whatever sits at its destination — a
 # merge placing the pair there would rewrite a running timer's definition on
 # the next auto-update and point its enabled instance at a lane.json that does
-# not exist (⟦D:usage-unit-renamed-past-the-foreign-template⟧).
+# not exist (D-3717).
 #
 # "ENABLED" IS READ FROM THE MANAGER'S OWN LINKS, never asked
-# (⟦D:usage-enablement-is-read-from-the-wants-links⟧). Enabling a timer whose
+# (D-3726). Enabling a timer whose
 # `[Install]` says `WantedBy=timers.target` makes exactly one symlink,
 # `timers.target.wants/<unit>`, and disabling it removes that link. No systemctl
 # verb lists a template's enabled INSTANCES, and a per-id `is-enabled` needs the
@@ -6553,7 +6553,7 @@ _codex_usage_flat_foreign() {
 # ── _inst_codex_usage — one usage timer per codex lane, and no other ──────
 # Plan 3a Task 6. CONVERGES the set of ENABLED `ccrc-codex-usage@<id>.timer`
 # instances to exactly the roster's codex lanes
-# (⟦D:usage-instances-converge-to-the-codex-set⟧):
+# (D-3718):
 #   - WITHDRAW FIRST: an enabled ccrc instance whose id is no longer a codex
 #     lane — a lane flipped back to external, an account removed while this
 #     box had no systemctl — is disabled, so a flip-back converges on the next
@@ -6563,7 +6563,7 @@ _codex_usage_flat_foreign() {
 #   - a codex lane for which ANOTHER repository's `ccgpt-usage@<id>.timer` is
 #     enabled gets no ccrc instance, and one ccrc had enabled is withdrawn: two
 #     publishers would race one `~/.cc-limits/<id>.json`, and two Authenticator
-#     refreshes one rotating refresh token (⟦D:usage-second-writer-degrades⟧).
+#     refreshes one rotating refresh token (D-3719).
 #     ccrc NEVER disables the foreign timer; the line names the operator's own
 #     command. The flat `ccgpt-usage.timer` names no lane, so it is reported as
 #     unattributable and blocks nothing.
@@ -6665,7 +6665,7 @@ _inst_enable_timer() {   # <transcript word> <unit>
 
 ```bash
     # Plan 3a Task 6: the Codex lanes' usage pair, under ccrc's OWN name
-    # (⟦D:usage-unit-renamed-past-the-foreign-template⟧). NEVER `ccgpt-usage@`:
+    # (D-3717). NEVER `ccgpt-usage@`:
     # on a live fleet box that template is another repository's, with an
     # instance ENABLED, and `_inst_atomic` replaces whatever sits at its
     # destination (install-census.test.ts refuses the prefix). Role-gated for
@@ -6743,7 +6743,7 @@ grep -n '_inst_enable_timer [a-z-]* [a-z.-]*\.timer$' ccd/ccrc   # 9 lines, each
 # catalogue, is Task 4's `_dr_cx_lane` row, said once:
 #   - ccrc's usage pair not installed, or a lane's instance not enabled: WARN,
 #     remedy `ccrc install`, the converge that enables it
-#     (⟦D:missing-timer-remedy-is-ccrc-install⟧: `cmd_doctor` runs a fixer on a
+#     (D-3721: `cmd_doctor` runs a fixer on a
 #     FAIL only, D-3113's one contract, and a stopped poller is a WARN);
 #   - another repository's usage timer enabled for this lane: WARN, remedy the
 #     operator's own disable — ccrc never disables another tool's unit, and the
@@ -6751,12 +6751,12 @@ grep -n '_inst_enable_timer [a-z-]* [a-z.-]*\.timer$' ccd/ccrc   # 9 lines, each
 #     one names no lane, so it is reported once, as unattributable;
 #   - the lane's usage row stale, never published, or unreadable: WARN.
 # "Enabled" is ccrc's own reading of the manager's links (`_codex_usage_enabled`
-# in ccrc, ⟦D:usage-enablement-is-read-from-the-wants-links⟧), the one the
+# in ccrc, D-3726), the one the
 # converge acts on. No systemctl call: nothing here needs the user bus.
 # NOT APPLICABLE ON macOS, and said so, never a WARN: ccrc places no launchd job
 # for the poller (decision 17), so a WARN there would stand on every macOS codex
 # lane for ever — the noise `_inst_linger_darwin`'s doctrine refuses
-# (⟦D:usage-rows-not-applicable-on-darwin⟧).
+# (D-3720).
 # The usage row is read only after a regular-file test (a FIFO at that path
 # blocks a read — F2's class, `_check_models`), and nothing here opens an OAuth
 # file.
@@ -7046,21 +7046,21 @@ git commit --amend -F - <<'EOF'
 feat(gpt-lane): ccrc's own usage pair, ccrc-codex-usage@, converged to the codex lanes; every timer degrade counted
 
 The usage pair is renamed from ccgpt-usage@ to ccrc-codex-usage@
-(⟦D:usage-unit-renamed-past-the-foreign-template⟧): on a live fleet box the
+(D-3717): on a live fleet box the
 old name is another repository's template with an instance enabled, and a
 merge auto-rolls. _inst_units places it on fleet/both, Linux only; the
 service keeps Task 1's TimeoutStartSec=300.
 
 _inst_codex_usage, inside _inst_enable, converges the enabled instances to
-exactly the roster's codex lanes (⟦D:usage-instances-converge-to-the-codex-set⟧):
+exactly the roster's codex lanes (D-3718):
 it withdraws a ccrc timer whose lane is no longer codex, enables one per
 codex lane, and withholds ccrc's while another repository's
 ccgpt-usage@<id>.timer is enabled for the same id
-(⟦D:usage-second-writer-degrades⟧). It never touches or names a foreign unit
+(D-3719). It never touches or names a foreign unit
 to the manager; the flat, id-less foreign timer is reported unattributed.
 An unreadable roster, a missing jq or a missing shape contract converges
 nothing. Enablement is read from timers.target.wants
-(⟦D:usage-enablement-is-read-from-the-wants-links⟧). macOS says
+(D-3726). macOS says
 not-applicable and degrades nothing.
 
 _inst_enable_timer: the nine timer refusals that printed a remedy and
@@ -7070,7 +7070,7 @@ unit name, so the closing line can no longer claim a timer that never armed.
 _check_codex's usage rows: pair not installed, instance not enabled, a
 second writer, and a stale / never-published / unreadable row — each WARN
 with its own remedy, recorded through _dr_cx_warn
-(⟦D:missing-timer-remedy-is-ccrc-install⟧, ⟦D:usage-rows-not-applicable-on-darwin⟧).
+(D-3721, D-3720).
 
 _uninst_units removes the template pair (its instances: Task 7), and
 DEPLOY_SH_WITHHOLDS declares the pair for this one commit (Task 7 teaches
@@ -7155,11 +7155,11 @@ Before pushing, check `git log -1 --format='%an <%ae>'` against the repository's
 
 **Why uninstall sweeps the instances, and in a function of its own.** Spec §13 removes "every enabled instance" of the pair (R-C9). An instance is a oneshot poller holding no session state, so D-3167's never-touch reasoning for `claude-session@` does not carry over. Order matters: a template removed under an enabled instance leaves systemd holding a dangling enablement, and the stub now records whether the template was still on disk at each disable. The sweep lives outside `_uninst_units` because `install-census.test.ts`'s disable census reads every `disable --now` operand there as a literal unit name and THROWS on anything else. An instance name is built from an id at run time, so this census reads it nowhere, and the uninstall suite measures it instead.
 
-**Why account removal disables it whatever the kind.** A lane flipped back to `external` can still carry the instance that its codex days enabled. After the removal nothing converges it until the next install, and meanwhile it rewrites the very `~/.cc-limits/<id>.json` that the removal deletes. The helper acts only when ccrc's own link exists, so a live external lane, which never had one, still asks no manager anything. C4 stands, and C14 pins both halves (`⟦D:account-removal-disables-ccrc-usage-for-any-kind⟧`). It never refuses: the roster is already dropped by then, so a failure is an operator step, and the next install converges it anyway.
+**Why account removal disables it whatever the kind.** A lane flipped back to `external` can still carry the instance that its codex days enabled. After the removal nothing converges it until the next install, and meanwhile it rewrites the very `~/.cc-limits/<id>.json` that the removal deletes. The helper acts only when ccrc's own link exists, so a live external lane, which never had one, still asks no manager anything. C4 stands, and C14 pins both halves (`D-3727`). It never refuses: the roster is already dropped by then, so a failure is an operator step, and the next install converges it anyway.
 
 **Why the lists are derived this way.**
-- **Uninstall.** The hand list omitted `ccd-usage-sweep`'s pair, although the fixture planted it and `_uninst_units` removed it: a list with a hole is a green nobody earned (2b-1 item 19). A list derived from `_uninst_units` would drop a unit from both sides at once. So the absence list is WHAT THE FIXTURE PLANTED, read off the unit directory, and a derived check pins that the fixture plants every destination `_inst_units` names (`⟦D:uninstall-absence-derived-from-what-was-planted⟧`).
-- **deploy-verify.** Its `landed` list had missed the pool-sync, models and usage-sweep pairs (2b-1 item 20). It is derived from the chain the case actually runs, not from `_inst_units` (`⟦D:deploy-verify-landed-derived-from-the-chain⟧`). install-census already requires every `_inst_units` unit on one of deploy.sh's lanes, and the agent lane deliberately places units `_inst_units` does not (`zz-no-memoryhigh.conf`, `protect.conf`) and withholds ones it does.
+- **Uninstall.** The hand list omitted `ccd-usage-sweep`'s pair, although the fixture planted it and `_uninst_units` removed it: a list with a hole is a green nobody earned (2b-1 item 19). A list derived from `_uninst_units` would drop a unit from both sides at once. So the absence list is WHAT THE FIXTURE PLANTED, read off the unit directory, and a derived check pins that the fixture plants every destination `_inst_units` names (`D-3728`).
+- **deploy-verify.** Its `landed` list had missed the pool-sync, models and usage-sweep pairs (2b-1 item 20). It is derived from the chain the case actually runs, not from `_inst_units` (`D-3729`). install-census already requires every `_inst_units` unit on one of deploy.sh's lanes, and the agent lane deliberately places units `_inst_units` does not (`zz-no-memoryhigh.conf`, `protect.conf`) and withholds ones it does.
 
 **Why deploy.sh places the pair, and enables none of it.** Spec §11: the fallback deploy carries what `ccrc install` places. install-census's install ⊆ deploy case would otherwise red once Task 6's one-commit withholding is deleted. Its deploy-enable case forbids arming any instance there: an instance is a lane's, armed by `ccrc install`'s converge. A deploy.sh-installed box with a codex lane therefore has the template and no instance, and doctor's "not enabled" WARN names `ccrc install`.
 
@@ -7490,7 +7490,7 @@ Add these three cases after C11, the describe's last case, inside `describe('ccr
     // gains is measured landing the day it is added. The hand list this
     // replaces named sixteen and had missed the pool-sync, models and
     // usage-sweep pairs while every case stayed green. From the chain and not
-    // from `_inst_units` (⟦D:deploy-verify-landed-derived-from-the-chain⟧):
+    // from `_inst_units` (D-3729):
     // install-census.test.ts already holds every `_inst_units` unit to one of
     // deploy.sh's lanes, and this lane places units `_inst_units` does not.
     const unitRoot = /^(?:~|\$HOME)\/\.config\/systemd\/user\//;
@@ -7596,7 +7596,7 @@ _uninst_codex_usage() {
 
 # Account removal's usage half (Plan 3a Task 7): ccrc's own
 # `ccrc-codex-usage@<id>.timer`, disabled if this box has it enabled — WHATEVER
-# the row's kind (⟦D:account-removal-disables-ccrc-usage-for-any-kind⟧). A lane
+# the row's kind (D-3727). A lane
 # flipped back to external can still carry the instance its codex days enabled,
 # and after the removal nothing converges it until the next install, while it
 # rewrites the very ~/.cc-limits row the removal deletes. Found by the manager's
@@ -7853,7 +7853,7 @@ Uninstall disables every enabled ccrc-codex-usage@ instance while its template
 is still on disk, found by the manager's own links and never the roster, then
 removes the pair (spec §13, R-C9); it never names a ccgpt-usage unit. Account
 removal disables ccrc's instance for the removed id whatever the row's kind
-(⟦D:account-removal-disables-ccrc-usage-for-any-kind⟧), reports the link as
+(D-3727), reports the link as
 removed once it measurably went, and turns a refusal into an operator step.
 
 deploy.sh's agent lane places the pair and arms none, and no longer places
@@ -7862,10 +7862,10 @@ Both deploy.sh edits are line-neutral: every cited line reads as before.
 
 The uninstall suite's absence list is what the fixture planted, and the
 fixture must plant every _inst_units destination
-(⟦D:uninstall-absence-derived-from-what-was-planted⟧; 2b-1 item 19, which
+(D-3728; 2b-1 item 19, which
 missed ccd-usage-sweep). deploy-verify's landed list is the chain's own
 _unit_atomic operands, with a template anchor
-(⟦D:deploy-verify-landed-derived-from-the-chain⟧; 2b-1 item 20).
+(D-3729; 2b-1 item 20).
 DEPLOY_SH_WITHHOLDS loses Task 6's one-commit entry.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -7893,9 +7893,9 @@ Before pushing, check `git log -1 --format='%an <%ae>'` against the repository's
 ### Task 8: `doctor --fix` for a codex lane and its launcher; the publisher's absent-file remedy tells the truth
 
 > Resolved by the controller rulings (Task 8):
-> - R-C8 (adopted by R5): the FAIL-only contract stays. `cmd_doctor` runs a fixer only on rc 1, so a WARN never reaches one. The missing-usage-timer WARN names `ccrc install` (`⟦D:missing-timer-remedy-is-ccrc-install⟧`), and this task pins the contract rather than changing it.
+> - R-C8 (adopted by R5): the FAIL-only contract stays. `cmd_doctor` runs a fixer only on rc 1, so a WARN never reaches one. The missing-usage-timer WARN names `ccrc install` (`D-3721`), and this task pins the contract rather than changing it.
 > - R7: lane.json that is stale against the class registry is measured by Task 4's check-only `materialise` and cured here.
-> - R8: `--fix` regenerates a launcher only when ccrc's marker still verifies (`⟦D:launcher-fix-rides-the-wrappers-check⟧`).
+> - R8: `--fix` regenerates a launcher only when ccrc's marker still verifies (`D-3730`).
 > - R11: every suite command runs inside the census wrapper.
 > - R12, R13: slugs only, fixtures only.
 
@@ -7925,7 +7925,7 @@ Before pushing, check `git log -1 --format='%an <%ae>'` against the repository's
       - an absent authDir, with a remedy naming `ccrc codex login <id>`;
       - invalid or colliding ports.
     - `CODEX_LANE_BINS`: Task 4's ONE declaration, in `ccd/ccrc-doctor-checks`, of the four GPT-lane executables `_check_codex` compares, in `_inst_bins`' order. It may be a bash array or a word list; this task reads it as `${CODEX_LANE_BINS[*]}`, and `checksDecl` below reads either shape.
-    - R7's check-only `materialise`, as Task 4 spells it (⟦D:materialise-check-is-opt-in⟧): `node deploy/models-op.mjs materialise --file <roster> --id <id> --check true` writes nothing and answers `{"ok":true,"op":"materialise","id":…,"check":true,"changed":{"lane":<bool>|null,"classes":<bool>,"effort":<bool>}|null}`. Without `--check` it writes, as before, and answers today's `{"ok":true,"op":"materialise","id":…,"wrote":{…}|null}`.
+    - R7's check-only `materialise`, as Task 4 spells it (D-3712): `node deploy/models-op.mjs materialise --file <roster> --id <id> --check true` writes nothing and answers `{"ok":true,"op":"materialise","id":…,"check":true,"changed":{"lane":<bool>|null,"classes":<bool>,"effort":<bool>}|null}`. Without `--check` it writes, as before, and answers today's `{"ok":true,"op":"materialise","id":…,"wrote":{…}|null}`.
     - `healthyCodexBox(prefix)` as Tasks 4-6 leave it (synchronous or not; `await` takes both). It returns a HOME on which `_check_codex` prints no FAIL, with:
       - one lane `codex-a`;
       - the four GPT-lane files at `$HOME/ccrc/ccd` and at `$HOME/.local/bin`;
@@ -7935,7 +7935,7 @@ Before pushing, check `git log -1 --format='%an <%ae>'` against the repository's
       - an authDir;
       - a fake runtime whose `ccgpt-runtime check` passes;
       - no tier running.
-    - The slug `⟦D:runtime-health-trusts-the-stamp⟧`.
+    - The slug `D-3711`.
   - Task 5: `_check_codex`'s tier arm FAILs a listener that answers as something else, and signals nothing.
   - Task 6: the usage-timer WARN row, whose remedy names `ccrc install` and never `doctor --fix`. This task's remedy scan pins that.
   - Plan 2b-2, shipped:
@@ -7951,12 +7951,12 @@ Before pushing, check `git log -1 --format='%an <%ae>'` against the repository's
 
 **Why:**
 - **What a fixer is, measured.** `cmd_doctor` runs `_fix_<name>` only when `--fix` is set, the check returned 1, and the fixer exists (ccd/ccrc:3312). It prints the measured FAIL, then the fixer's `FIX <name>:` lines, then runs the check again. The summary counts the second answer only (:3313-3319). The fixer runs in doctor's OWN shell (`"_fix_$name" || true`), unlike the check, which runs in a subshell. The one precedent is `_fix_skills` (doctor-checks:3018), whose rule spec §12 adopts: re-run the shipped tree's own installer, and let the re-measurement be the verdict.
-- **R-C8 keeps that contract, and this task pins it.** Spec §12 lists "enable a missing usage timer" among `--fix`'s powers, but that row is a WARN, and a WARN never reaches a fixer. So the timer's one enabler stays `ccrc install`'s converge (Task 6), the row's remedy names `ccrc install`, and `_fix_codex` enables and disables nothing (`⟦D:missing-timer-remedy-is-ccrc-install⟧`). Two new guards make the contract a mechanism rather than a comment:
+- **R-C8 keeps that contract, and this task pins it.** Spec §12 lists "enable a missing usage timer" among `--fix`'s powers, but that row is a WARN, and a WARN never reaches a fixer. So the timer's one enabler stays `ccrc install`'s converge (Task 6), the row's remedy names `ccrc install`, and `_fix_codex` enables and disables nothing (`D-3721`). Two new guards make the contract a mechanism rather than a comment:
   - a runner case shows a WARN's fixer never runs and a FAIL's does;
   - a scan of every `_dr_warn`/`_dr_fail` call site shows that a remedy naming `ccrc doctor --fix` belongs to a FAIL whose check has a fixer. A WARN never names it, and a fixer-less FAIL never promises one. (164 call sites today, and exactly one names `--fix`: skills' FAIL.)
 - **What `_fix_codex` cures, row by row against §12:**
   - "restore a ccrc-owned executable from the shipped tree": `_inst_atomic`, the primitive `_inst_bins` places the four with (ccd/ccrc:13562-13566). It is called per file only when the placed copy is missing, not executable, or not `cmp`-identical, so a converged file is not rewritten (pinned on mtime).
-  - "rebuild and re-probe a staged runtime": `ccgpt-runtime build`, only when `ccgpt-runtime check` refuses. That is R-C5's trust-the-stamp rule (`⟦D:runtime-health-trusts-the-stamp⟧`), and a current runtime is never rebuilt.
+  - "rebuild and re-probe a staged runtime": `ccgpt-runtime build`, only when `ccgpt-runtime check` refuses. That is R-C5's trust-the-stamp rule (`D-3711`), and a current runtime is never rebuilt.
   - "re-render lane.json": models-op's `materialise` without `--check`, the ONE writer. It runs when lane.json is stale against the roster (`_codex_lane_json_state`, which compares the roster row only, ccd/ccrc:10463-10480) or against the registry (R7's `materialise --check true`). An answer the fixer cannot read counts as stale, never as current. `_codex_lane_json_ensure` is NOT the cure: it short-circuits on `current` (:10493), and `current` is a roster-only measurement, so it could never cure R7's case.
   - "re-render the LiteLLM config": `_models_litellm_lane_held` (:9882), the codex arm's own body. Its phase-1 compare makes a converged file a no-op. Its identity gate stops and starts only a tier it proves this lane's, and refuses `tier-foreign` or `tier-unmeasured` otherwise, having written nothing. Its precondition is the lane lock, which this fixer holds.
   - "restart a verified ccrc-owned active tier": `_inst_codex_tiers` (:14564), the install step that restarts a tier only when it is this lane's own, running (`_codex_tier_ours` 0) and stale. It runs only when step 1 or 2 replaced code a running tier may hold. The litellm render restarts its own tier itself, and a stale-tier WARN alone never reaches this function.
@@ -7973,7 +7973,7 @@ Before pushing, check `git log -1 --format='%an <%ae>'` against the repository's
   - So "never an unverified launcher" is the verb's table, not a second rule to drift from it, and the fixer never passes `--force` or `--adopt`.
   - It runs as a child because `cmd_wrappers` `_ccrc_die`s on a manifest it will not trust and arms an EXIT trap for its staging directory.
   - Its lines are relayed under `FIX wrappers:`, so its own `summary:` line is never read as doctor's.
-  - It reaches generated launchers as well as Codex ones; that is the same act `ccrc install`'s `_inst_wrappers` performs (`⟦D:launcher-fix-rides-the-wrappers-check⟧`).
+  - It reaches generated launchers as well as Codex ones; that is the same act `ccrc install`'s `_inst_wrappers` performs (`D-3730`).
 - **The publisher's absent-file remedy tells the truth now (2b-1 carry-forward 15).** `ccd/ccgpt-usage.py:255-259` said "run `ccrc doctor --fix` to render it" while no doctor arm rendered lane.json: its own docstrings said so three times, and a fourth said "Doctor renders no `lane.json`". After this task that sentence is true on this tree: Task 4 FAILs an absent lane.json, and `_fix_codex` renders it (proved end to end below). The one case `--fix` cannot render is a lane with no class registry, so the refusal names that act too: `ccrc models <id> init codex`, which renders lane.json itself. The edits are line-neutral (`ccd/ccgpt-usage.py` cites spec §5.4 line 333 twice, and Task 1 edits this file first).
 - **Containment (R11).** This task adds no `systemctl` or `systemd-run` call site. It reaches the user manager only through the lane library, and both harnesses contain that:
   - the isolation harness puts Plan 2b-2's wall first on PATH, and any direct call throws;
@@ -8843,7 +8843,7 @@ cd server
 # measurement — `_check_codex` does not measure one, and a second verdict
 # line for it would count one finding twice (`_check_accounts`'
 # `launcher-absent` note) — so its cure rides this check, for a generated
-# and a Codex account alike (⟦D:launcher-fix-rides-the-wrappers-check⟧,
+# and a Codex account alike (D-3730,
 # Plan 3a Task 8).
 #
 # THE CURE IS THE SHIPPED TREE'S OWN `ccrc wrappers`, WITH NO FLAG
@@ -8886,9 +8886,9 @@ _fix_wrappers() {
 # function's word (`_fix_skills`' rule). Two rows of §12's list
 # therefore live elsewhere: a missing or disabled usage timer is a WARN,
 # which never reaches a fixer, so its remedy names `ccrc install`, whose
-# converge is that unit's one enabler (⟦D:missing-timer-remedy-is-ccrc-install⟧);
+# converge is that unit's one enabler (D-3721);
 # and the launcher is `_check_wrappers`' measurement, so its cure is
-# `_fix_wrappers` (⟦D:launcher-fix-rides-the-wrappers-check⟧).
+# `_fix_wrappers` (D-3730).
 #
 # WHAT IT DOES, each through the shipped tree's own installer step or the
 # lane library's own writer — never a copy of either:
@@ -8898,7 +8898,7 @@ _fix_wrappers() {
 #      primitive `_inst_bins` places it with;
 #   2. a runtime `ccgpt-runtime check` refuses is rebuilt and re-probed by
 #      `ccgpt-runtime build` — the stamp is trusted until then
-#      (⟦D:runtime-health-trusts-the-stamp⟧, Task 4);
+#      (D-3711, Task 4);
 #   3. per lane, under its lane lock: lane.json is re-rendered by its ONE
 #      writer, models-op's `materialise` (no `--check`), when it is stale
 #      against the roster (`_codex_lane_json_state`) or against the class
@@ -9271,10 +9271,10 @@ the library's exits cannot end the doctor run.
 
 _fix_wrappers runs the shipped `ccrc wrappers` with no flag: it
 overwrites only a launcher whose ccrc marker still verifies and refuses
-every other (⟦D:launcher-fix-rides-the-wrappers-check⟧).
+every other (D-3730).
 
 The FAIL-only fixer contract stays, so the usage-timer WARN names
-`ccrc install` (⟦D:missing-timer-remedy-is-ccrc-install⟧). A runner case
+`ccrc install` (D-3721). A runner case
 and a remedy scan pin it. The usage publisher's absent-file refusal now
 names two acts that work on this tree.
 
@@ -9300,8 +9300,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 6. **`_inst_codex_tiers` lines appear under the `install: codex tiers:` prefix** inside a `doctor --fix` transcript. Their wording is the install step's.
 
 **Deviation entries this task cites or owes.** The controller mints each number once, in Deviations found. `missing-timer-remedy-is-ccrc-install` is Task 6's as well, and it gets one entry:
-- `⟦D:missing-timer-remedy-is-ccrc-install⟧`: spec §12 lists "enable a missing usage timer" among `--fix`'s powers. Doctor runs a fixer only on a FAIL, and that row is a WARN, so no fixer enables any unit. The WARN's remedy names `ccrc install`, whose converge is the timer's one enabler. A runner case and a remedy scan pin both halves. (R-C8.)
-- `⟦D:launcher-fix-rides-the-wrappers-check⟧`: spec §12 places "regenerate a marker-verified launcher" under `_check_codex`'s `--fix`. A launcher is `_check_wrappers`' measurement, so its cure is `_fix_wrappers`. That fixer runs the shipped `ccrc wrappers` with no flag, which overwrites only a launcher whose ccrc marker verifies, and it therefore reaches generated launchers as well as Codex ones. (R8.)
+- `D-3721`: spec §12 lists "enable a missing usage timer" among `--fix`'s powers. Doctor runs a fixer only on a FAIL, and that row is a WARN, so no fixer enables any unit. The WARN's remedy names `ccrc install`, whose converge is the timer's one enabler. A runner case and a remedy scan pin both halves. (R-C8.)
+- `D-3730`: spec §12 places "regenerate a marker-verified launcher" under `_check_codex`'s `--fix`. A launcher is `_check_wrappers`' measurement, so its cure is `_fix_wrappers`. That fixer runs the shipped `ccrc wrappers` with no flag, which overwrites only a launcher whose ccrc marker verifies, and it therefore reaches generated launchers as well as Codex ones. (R8.)
 
 ### Task 9: `ccrc wrappers --force` backs up a symlinked launcher as a symlink
 
@@ -9597,7 +9597,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 **Why:**
 - **The merge is the rollout.**
-  - Every merge to `main` becomes a dev prerelease within minutes, and both boxes follow dev automatically (CLAUDE.md, "Deploy = release + rollout"; ⟦D:the-merge-is-itself-an-inert-rollout⟧). The fleet box's live shape therefore meets Tasks 1–9 with no runbook in between.
+  - Every merge to `main` becomes a dev prerelease within minutes, and both boxes follow dev automatically (CLAUDE.md, "Deploy = release + rollout"; D-3705). The fleet box's live shape therefore meets Tasks 1–9 with no runbook in between.
   - That shape, stated by shape only (R13):
     - two `external` rows with codex telemetry, `homeAble` and a palette hue, and no ports, no `authDir` and no secrets file, one of which carries a codex class registry;
     - one lane's launcher is a symlink to another repository's launcher, and the other lane's is a small file that execs it by path;
@@ -9916,7 +9916,7 @@ Append this to `server/test/ccrc-install.test.ts`:
 // ════════════════════════════════════════════════════════════════════════
 // Plan 3a Task 10 — the cutover REHEARSAL (spec §15 steps 1-3, in fixtures).
 // Merging Plan 3a auto-releases and both boxes follow dev
-// (⟦D:the-merge-is-itself-an-inert-rollout⟧), so these cases are the evidence
+// (D-3705), so these cases are the evidence
 // that the rollout is a no-op on the fleet box's live SHAPE (`plantLiveShape`),
 // that a flip made in Plan 3b's order converges, and that a flip back
 // converges. The runbook's two steps that need a real LiteLLM (the refresh and
@@ -10429,7 +10429,7 @@ git log -1 --format='%an <%ae>'   # checked against the repository's identity ru
 - **The spec is the authority the next two plans argue from.** Plans 3b and 4 argue from it, and several of its sentences are false once Tasks 1–10 land.
 - **Every amendment is appended (R9, critic #9).** The tree cites this document by line number: `ccd/ccgpt-usage.py` cites §5.4 line 333, `ccd/ccrc-models-probe:177` cites line ~497, and the Plan 2a plan cites lines 497 and 698. Any line above §20 that moved would silently re-aim one of those citations, so every correction is appended as §20, and the sentence it corrects gets a same-line pointer. Step 2 proves it mechanically.
 - **The residue class learns the GPT-lane labels (R10, critic #16).** `topology-clean`'s fleet-account-label class encodes only the four Anthropic labels and the employer name, so a GPT-lane label would ship green.
-  - One of the two live labels is byte-equal to a token the class's own `passes` list already pins. The class is a case-insensitive substring pattern over every tracked blob, so that token cannot join it (⟦D:a-live-label-the-residue-class-pins-as-a-pass-stays-out⟧).
+  - One of the two live labels is byte-equal to a token the class's own `passes` list already pins. The class is a case-insensitive substring pattern over every tracked blob, so that token cannot join it (D-3722).
   - The hand-grep covers that label, together with the values no class expresses: lane 2's ports, the OAuth directory names, the per-lane config names, and the session codenames. All of them are measured read-only on the box at execution time (ruling F1).
   - **No real value is written to a tracked file in clear or printed, even transiently (F4).** The red-first proof uses a synthetic label in a disposable copy. Real values live only base64-encoded in 0600 scratch files, and every run that carries one is read by counts and exit codes.
 - **The unit and process census gates every suite command (R11, critic #17).** Plan 2b-2's suite leaked a real transient unit and dozens of processes into the live user manager. Recorders are necessary but not sufficient, so the gate observes the real user manager before and after every command.
@@ -10474,27 +10474,27 @@ Plan 3a (`docs/superpowers/plans/2026-09-30-gpt-lane-ownership-3a-before-the-fli
 - **An external lane whose registry probe is codex is never probed**, because it has no `authDir` to supply.
   - `ccrc models refresh --all` skips it with an `ok` row that says why, so the hourly unit does not fail on it.
   - `_check_models` gives it a sentence of its own instead of "the timer is not reaching this lane".
-  - Its catalogue and settings env stay as they were until the lane's flip refreshes them (⟦D:probe-token-dir-has-no-default-on-any-lane⟧).
+  - Its catalogue and settings env stay as they were until the lane's flip refreshes them (D-3706).
 - **No device flow outside `ccrc codex login`.**
   - In both the probe and `ccd/ccgpt-usage.py`, the `Authenticator`'s device-code path is replaced in-process by a `login-required` refusal, which fires before anything writes `auth.json`.
   - So a lane whose token cannot be refreshed answers within the probe's bound and never leaves a cooldown marker behind.
-  - `ccrc-codex-usage@.service` carries `TimeoutStartSec=300` (⟦D:unattended-authenticator-never-starts-a-device-flow⟧).
+  - `ccrc-codex-usage@.service` carries `TimeoutStartSec=300` (D-3707).
 - **The account id (closes D-3161).** The probe takes `ChatGPT-Account-Id` from `Authenticator().get_account_id()`. No ccrc code opens `auth.json`, so §9's closing sentence is now true of the probe. When `auth.json` carries no `account_id`, that call derives one from the token's claims and writes it back: a library write, the same class as its `expires_at` write.
 
 ### 20.2 The external LiteLLM arm is gone (§8, §19.6)
 
 - `_models_litellm <id>` serves codex-kind lanes only. A non-codex lane whose class registry names the codex probe gets the refusal `external-lane`, with a remedy naming §15's flip. Every other non-codex lane keeps `deploy/models-op.mjs`'s own check-only refusal, and two ops that disagree answer `no-answer`.
 - `_models_litellm_path` requires an id. `ccd/ccrc` names neither the other repository's box-global config nor a bare `ccgpt stop`, and `single-definition.test.ts` pins that absence.
-- ccrc no longer renders or stops another repository's LiteLLM, before or after any flip. A lane rolled back to its old launcher reads that repository's config as it stood when this plan rolled out (⟦D:external-litellm-arm-retired-before-the-flip⟧).
+- ccrc no longer renders or stops another repository's LiteLLM, before or after any flip. A lane rolled back to its old launcher reads that repository's config as it stood when this plan rolled out (D-3708).
 
 ### 20.3 `_check_codex` (§12)
 
-- **Placement and skips.** The check sits after `models` in the check table. It SKIPs on role `server` and on an empty codex population: one line, then `return 3`. An absent roster file SKIPs too, because the `wrappers` check already FAILs it (⟦D:codex-check-absent-roster-skips⟧).
-- **An unreadable roster is not an empty population.** `_codex_lanes`' roster-invalid answer and its missing-jq answer are FAILs, naming `ccrc wrappers` and jq (⟦D:codex-population-unreadable-is-fail⟧).
-- **The runtime row trusts the stamp.** It asks `ccgpt-runtime check`, which compares the stamp. Doctor never re-runs the behaviour probe; `--fix`'s rebuild is what re-probes (⟦D:runtime-health-trusts-the-stamp⟧).
+- **Placement and skips.** The check sits after `models` in the check table. It SKIPs on role `server` and on an empty codex population: one line, then `return 3`. An absent roster file SKIPs too, because the `wrappers` check already FAILs it (D-3723).
+- **An unreadable roster is not an empty population.** `_codex_lanes`' roster-invalid answer and its missing-jq answer are FAILs, naming `ccrc wrappers` and jq (D-3710).
+- **The runtime row trusts the stamp.** It asks `ccgpt-runtime check`, which compares the stamp. Doctor never re-runs the behaviour probe; `--fix`'s rebuild is what re-probes (D-3711).
 - **`lane.json` staleness is measured two ways.**
   - Against the roster row, by `_codex_lane_json_state`.
-  - Against the registry and catalogue, by `deploy/models-op.mjs materialise --check true`, which writes nothing and answers `changed`. Without `--check` it writes, as every caller before it expects (⟦D:materialise-check-is-opt-in⟧).
+  - Against the registry and catalogue, by `deploy/models-op.mjs materialise --check true`, which writes nothing and answers `changed`. Without `--check` it writes, as every caller before it expects (D-3712).
 - **Rows beyond the table above**, each its own sentence with its own remedy:
   - lane state left for an id that is no longer codex (a flip back);
   - a non-codex registry on a codex lane (FAIL);
@@ -10502,28 +10502,28 @@ Plan 3a (`docs/superpowers/plans/2026-09-30-gpt-lane-ownership-3a-before-the-fli
   - a stopped `litellm` tier on a lane with live sessions (WARN);
   - a unit whose identity is not yet proven inside `RestartSec`, worded as a retry.
 
-  Tier identity is `_codex_tier_ours`, every connect is bounded by `CCRC_CODEX_PROBE_S`, and anything foreign is worded by `_codex_foreign_what`. Nothing is signalled (⟦D:codex-leftover-lane-state-warns⟧, ⟦D:codex-unit-unproven-warns⟧, ⟦D:codex-unmeasured-tier-warns⟧, ⟦D:codex-down-gateway-under-live-sessions-warns⟧). An `authDir` holding no `auth.json` is a FAIL in `ccrc codex start`'s own words (⟦D:codex-auth-json-absent-fails⟧).
+  Tier identity is `_codex_tier_ours`, every connect is bounded by `CCRC_CODEX_PROBE_S`, and anything foreign is worded by `_codex_foreign_what`. Nothing is signalled (D-3713, D-3714, D-3715, D-3716). An `authDir` holding no `auth.json` is a FAIL in `ccrc codex start`'s own words (D-3724).
 - **Registry facts** are read through `deploy/models-op.mjs`'s check-only ops, never by a second reader of `<id>.classes.json`.
-- **The settings-env drift check.** `deploy/account-op.mjs`'s `effectiveBaseUrl` answers `http://127.0.0.1:<proxyPort>` for a codex lane. The rule is absent-or-equal: no ccrc writer puts `ANTHROPIC_BASE_URL` in a codex home's `settings.json` (the launcher exports it instead), so absent is healthy and present-but-different is the WARN (⟦D:codex-settings-env-absent-or-equal⟧).
+- **The settings-env drift check.** `deploy/account-op.mjs`'s `effectiveBaseUrl` answers `http://127.0.0.1:<proxyPort>` for a codex lane. The rule is absent-or-equal: no ccrc writer puts `ANTHROPIC_BASE_URL` in a codex home's `settings.json` (the launcher exports it instead), so absent is healthy and present-but-different is the WARN (D-3709).
 
 ### 20.4 Usage publication, under ccrc's own name (§4.3, §10, §11, §12, §13, §19.8)
 
 - **The name.** ccrc's pair is `ccrc-codex-usage@.service` / `ccrc-codex-usage@.timer`, in `deploy/systemd/`.
   - `ccgpt-usage@` stays the other repository's name. ccrc never places, enables, disables or removes a unit under it, and `install-census.test.ts` still refuses that prefix.
-  - Wherever a sentence above names `ccgpt-usage@<id>.timer` as ccrc's unit, read `ccrc-codex-usage@<id>.timer` (⟦D:usage-unit-renamed-past-the-foreign-template⟧).
+  - Wherever a sentence above names `ccgpt-usage@<id>.timer` as ccrc's unit, read `ccrc-codex-usage@<id>.timer` (D-3717).
 - **Placement and convergence.**
   - `_inst_units` places the pair on roles `fleet` and `both`, on Linux.
-  - `_inst_enable` converges the enabled instance set to exactly the roster's codex lanes: it enables `ccrc-codex-usage@<id>.timer` for each codex lane and disables any enabled instance whose id is no longer one, so a flip back converges (⟦D:usage-instances-converge-to-the-codex-set⟧).
-- **Beside a foreign instance.** While the other repository's `ccgpt-usage@<id>.timer` is enabled for the same id, the converge withholds ccrc's enable and degrades, and `_check_codex` WARNs with the operator's own disable as the remedy. Two publishers over one `~/.cc-limits/<id>.json` is the race §10 retires. The other repository's flat, id-less timer cannot be attributed to any lane, so no code refuses on it; retiring it is the runbook's act, and doctor names it as unattributable (⟦D:usage-second-writer-degrades⟧). "Enabled" is read from `timers.target.wants/` links, by one set of helpers that the converge, uninstall, account removal and doctor share (⟦D:usage-enablement-is-read-from-the-wants-links⟧).
+  - `_inst_enable` converges the enabled instance set to exactly the roster's codex lanes: it enables `ccrc-codex-usage@<id>.timer` for each codex lane and disables any enabled instance whose id is no longer one, so a flip back converges (D-3718).
+- **Beside a foreign instance.** While the other repository's `ccgpt-usage@<id>.timer` is enabled for the same id, the converge withholds ccrc's enable and degrades, and `_check_codex` WARNs with the operator's own disable as the remedy. Two publishers over one `~/.cc-limits/<id>.json` is the race §10 retires. The other repository's flat, id-less timer cannot be attributed to any lane, so no code refuses on it; retiring it is the runbook's act, and doctor names it as unattributable (D-3719). "Enabled" is read from `timers.target.wants/` links, by one set of helpers that the converge, uninstall, account removal and doctor share (D-3726).
 - **Degraded timer enables are counted.** Every timer enable in `_inst_enable` that degrades now also joins `INST_DEGRADED`, so the closing line never claims convergence over a failed enable (bookkeeping: Plan 2b-2's carry-forward item 10).
-- **Uninstall and account removal.** Uninstall runs `disable --now` on every enabled instance of ccrc's template, then removes the pair, so §13's sentence is now true. Account removal disables ccrc's instance for that id, whatever the row's kind, and keeps its OAuth directory and logs (⟦D:account-removal-disables-ccrc-usage-for-any-kind⟧). §19.8's "the usage unit template pair is not removed" no longer holds.
+- **Uninstall and account removal.** Uninstall runs `disable --now` on every enabled instance of ccrc's template, then removes the pair, so §13's sentence is now true. Account removal disables ccrc's instance for that id, whatever the row's kind, and keeps its OAuth directory and logs (D-3727). §19.8's "the usage unit template pair is not removed" no longer holds.
 
 ### 20.5 `doctor --fix` (§12)
 
 - **What `_fix_codex` does.** It restores ccrc-owned executables from the shipped tree through `_inst_atomic`, the primitive `_inst_bins` places them with. It runs `ccgpt-runtime build` (which re-probes) when `ccgpt-runtime check` refuses. It re-materialises `lane.json`, re-renders the lane's LiteLLM config through the codex arm, and restarts a verified-own stale tier only after it replaced code. Doctor's re-measurement is the verdict.
-- **What `_fix_wrappers` does.** A launcher is the `wrappers` check's measurement, so its cure rides that check. `_fix_wrappers` runs the shipped `ccrc wrappers` with no flag, which overwrites only a launcher whose ccrc marker still verifies, writes an absent one, and refuses every other file. It reaches generated launchers too (⟦D:launcher-fix-rides-the-wrappers-check⟧).
+- **What `_fix_wrappers` does.** A launcher is the `wrappers` check's measurement, so its cure rides that check. `_fix_wrappers` runs the shipped `ccrc wrappers` with no flag, which overwrites only a launcher whose ccrc marker still verifies, writes an absent one, and refuses every other file. It reaches generated launchers too (D-3730).
 - **What it never does:** choose a port, run OAuth, read a credential, signal an unproven process, overwrite an unverified launcher, or delete state.
-- **Fixers run on a FAIL only.** `cmd_doctor` runs a fixer only on a FAIL, for every check, as `_fix_skills` established. A missing or disabled usage timer is a WARN, so `--fix` does not enable it. That row's remedy is `ccrc install`, whose converge enables the timer. A tier running stale code is a WARN too, so `--fix` does not restart it on that alone: its remedy names `ccrc update`, whose install step restarts a proven, stale ccrc tier, or the lane's own `ccrc codex stop` and `start` (⟦D:missing-timer-remedy-is-ccrc-install⟧).
+- **Fixers run on a FAIL only.** `cmd_doctor` runs a fixer only on a FAIL, for every check, as `_fix_skills` established. A missing or disabled usage timer is a WARN, so `--fix` does not enable it. That row's remedy is `ccrc install`, whose converge enables the timer. A tier running stale code is a WARN too, so `--fix` does not restart it on that alone: its remedy names `ccrc update`, whose install step restarts a proven, stale ccrc tier, or the lane's own `ccrc codex stop` and `start` (D-3721).
 - **The publisher's remedy.** The publisher's refusal for an absent `lane.json` names a remedy that works on this tree.
 
 ### 20.6 What converges `lane.json` (§4.2)
@@ -10532,19 +10532,19 @@ Plan 3a (`docs/superpowers/plans/2026-09-30-gpt-lane-ownership-3a-before-the-fli
 
 ### 20.7 The fallback deploy (§11)
 
-- `deploy/deploy.sh`'s agent arm places ccrc's usage pair, and `agent/test/deploy-verify.test.ts` derives its landed list from the agent chain's own `_unit_atomic` operands rather than keeping a hand-typed one (⟦D:deploy-verify-landed-derived-from-the-chain⟧).
+- `deploy/deploy.sh`'s agent arm places ccrc's usage pair, and `agent/test/deploy-verify.test.ts` derives its landed list from the agent chain's own `_unit_atomic` operands rather than keeping a hand-typed one (D-3729).
 - `deploy.sh` no longer places `~/.local/bin/ccrc-models-probe`. ccrc never runs that copy; it runs its own tree's copy through `$CCRC_HERE`. Removing a stale PATH copy from a box is Plan 4's job (bookkeeping: ruling R-C11).
-- `ccrc-uninstall.test.ts`' absence list is what its fixture planted, and the fixture must plant every `_inst_units` destination (⟦D:uninstall-absence-derived-from-what-was-planted⟧).
+- `ccrc-uninstall.test.ts`' absence list is what its fixture planted, and the fixture must plant every `_inst_units` destination (D-3728).
 
 ### 20.8 macOS (§10, §12)
 
-- `_inst_units_darwin` places no timer at all (decision 17: macOS is not centrally managed, and `ccrc-models.timer` has no Darwin arm either). So the usage pair and its converge are Linux-only. On Darwin, `_check_codex`'s usage rows answer a stated not-applicable rather than WARN forever (⟦D:usage-rows-not-applicable-on-darwin⟧).
+- `_inst_units_darwin` places no timer at all (decision 17: macOS is not centrally managed, and `ccrc-models.timer` has no Darwin arm either). So the usage pair and its converge are Linux-only. On Darwin, `_check_codex`'s usage rows answer a stated not-applicable rather than WARN forever (D-3720).
 
 ### 20.9 The cutover's order, as the release lane runs it (§15, §16)
 
 - **The merge is the rollout.** Every merge to `main` becomes a prerelease that both boxes follow automatically, so §15 step 1's "nothing is deployed" and step 2's `ccrc rollout` no longer describe how this work lands.
   - Plan 3a was built to be inert on a roster with no codex row and on the fleet box's live shape. Its rehearsal (`ccrc-install.test.ts`, "Plan 3a Task 10") is the evidence.
-  - As part of the merge, the operator confirmed that the rollout stops ccrc refreshing an external lane's catalogue (§20.1) and stops it rendering or stopping another repository's LiteLLM (§20.2) (⟦D:the-merge-is-itself-an-inert-rollout⟧).
+  - As part of the merge, the operator confirmed that the rollout stops ccrc refreshing an external lane's catalogue (§20.1) and stops it rendering or stopping another repository's LiteLLM (§20.2) (D-3705).
 - **§15 step 3 is Plan 3b**, one authorisation per lane. There, "retire the fixed usage timer" means disabling each of that lane's timers from the other repository, the flat one and any template instance, before ccrc's instance is enabled. The converge refuses the out-of-order case for an instance.
 - **§15 step 4 is Plan 4.**
 
@@ -10574,26 +10574,26 @@ Then make these same-line pointer edits. The line numbers were measured at `1f9f
 | Line | Locate with | Edit (same line, nothing else) |
 |---|---|---|
 | 179 | `grep -n '^converge it\. A minting verb' <spec>` | `converge it (amended: §20.6). A minting verb …` |
-| 196 | `grep -n '^| usage timer |' <spec>` | `` | usage timer | `ccgpt-usage@<id>.timer` (amended: §20.4, ⟦D:usage-unit-renamed-past-the-foreign-template⟧) | `` |
-| 249 | `grep -n '| the per-lane usage instance pair |$' <spec>` | before the final ` |`: ` (amended: §20.4, ⟦D:usage-unit-renamed-past-the-foreign-template⟧)` |
-| 476 | `grep -n '^   not carry\.$' <spec>` | `   not carry. (amended: §20.1, ⟦D:probe-token-dir-has-no-default-on-any-lane⟧)` |
-| 512 | `grep -n 'The pair itself stays unplaced until Plan 3 arms it' <spec>` | append ` (amended: §20.4, ⟦D:usage-unit-renamed-past-the-foreign-template⟧, ⟦D:usage-instances-converge-to-the-codex-set⟧)` |
+| 196 | `grep -n '^| usage timer |' <spec>` | `` | usage timer | `ccgpt-usage@<id>.timer` (amended: §20.4, D-3717) | `` |
+| 249 | `grep -n '| the per-lane usage instance pair |$' <spec>` | before the final ` |`: ` (amended: §20.4, D-3717)` |
+| 476 | `grep -n '^   not carry\.$' <spec>` | `   not carry. (amended: §20.1, D-3706)` |
+| 512 | `grep -n 'The pair itself stays unplaced until Plan 3 arms it' <spec>` | append ` (amended: §20.4, D-3717, D-3718)` |
 | 548 | `grep -n 'until then nothing places it (D-' <spec>` | directly after that parenthesis: ` (amended: §20.4)` |
 | 565 | `grep -n '^\*\*Fallback deploy\.\*\*' <spec>` | `… on its agent arm (amended: §20.7). Two` |
-| 589 | `grep -n '^| no `codex` lane in the roster |' <spec>` | before the final ` |`: ` (amended: §20.3, ⟦D:codex-population-unreadable-is-fail⟧)` |
-| 591 | `grep -n 'failing its behaviour probe | FAIL |' <spec>` | `… failing its behaviour probe (amended: §20.3, ⟦D:runtime-health-trusts-the-stamp⟧) | FAIL |` |
-| 592 | `grep -n 'absent or stale against the catalogue | FAIL |' <spec>` | `… stale against the catalogue (amended: §20.3, ⟦D:materialise-check-is-opt-in⟧) | FAIL |` |
-| 598 | `grep -n '^| `ccgpt-usage@<id>.timer` missing or disabled |' <spec>` | `… missing or disabled (amended: §20.4, ⟦D:usage-rows-not-applicable-on-darwin⟧) | WARN |` |
+| 589 | `grep -n '^| no `codex` lane in the roster |' <spec>` | before the final ` |`: ` (amended: §20.3, D-3710)` |
+| 591 | `grep -n 'failing its behaviour probe | FAIL |' <spec>` | `… failing its behaviour probe (amended: §20.3, D-3711) | FAIL |` |
+| 592 | `grep -n 'absent or stale against the catalogue | FAIL |' <spec>` | `… stale against the catalogue (amended: §20.3, D-3712) | FAIL |` |
+| 598 | `grep -n '^| `ccgpt-usage@<id>.timer` missing or disabled |' <spec>` | `… missing or disabled (amended: §20.4, D-3720) | WARN |` |
 | 600 | `grep -n '^| every lane healthy, no tier running' <spec>` | before the final ` |`: ` (amended: §20.3)` |
 | 604 | `grep -n 'asks about `ccgpt-usage@<id>.timer` per lane' <spec>` | `` … `ccgpt-usage@<id>.timer` (amended: §20.4) per lane, which is `` |
-| 612 | `grep -n '^regenerate a marker-verified launcher, re-render' <spec>` | `regenerate a marker-verified launcher (amended: §20.5, ⟦D:launcher-fix-rides-the-wrappers-check⟧), re-render …` |
-| 613 | `grep -n '^timer, and restart a verified ccrc-owned active tier' <spec>` | `timer, and restart a verified ccrc-owned active tier (amended: §20.5, ⟦D:missing-timer-remedy-is-ccrc-install⟧). It may …`: one same-line pointer, after both WARN-only powers |
+| 612 | `grep -n '^regenerate a marker-verified launcher, re-render' <spec>` | `regenerate a marker-verified launcher (amended: §20.5, D-3730), re-render …` |
+| 613 | `grep -n '^timer, and restart a verified ccrc-owned active tier' <spec>` | `timer, and restart a verified ccrc-owned active tier (amended: §20.5, D-3721). It may …`: one same-line pointer, after both WARN-only powers |
 | 621 | `grep -n 'so there is nothing to remove), marker-verified' <spec>` | `… nothing to remove) (amended: §20.4), marker-verified …` |
-| 674 | `grep -n '`ccrc rollout` as usual\.' <spec>` | `` … `ccrc rollout` as usual (amended: §20.9, ⟦D:the-merge-is-itself-an-inert-rollout⟧). Both … `` |
+| 674 | `grep -n '`ccrc rollout` as usual\.' <spec>` | `` … `ccrc rollout` as usual (amended: §20.9, D-3705). Both … `` |
 | 681 | `grep -n 'Retire the fixed usage timer\. Then the next lane\.' <spec>` | `… Retire the fixed usage timer (amended: §20.9). Then the next lane.` |
-| 703 | `grep -n '^- Deploying or rolling out this migration\.' <spec>` | `- Deploying or rolling out this migration (amended: §20.9, ⟦D:the-merge-is-itself-an-inert-rollout⟧). The operator …` |
-| 730 | `grep -n '| per-lane usage instance pair |$' <spec>` | before the final ` |`: ` (amended: §20.4, ⟦D:usage-unit-renamed-past-the-foreign-template⟧)` |
-| 904 | `grep -n 'until Plan 3.s cutover retires that arm\.$' <spec>` | append ` (amended: §20.2, ⟦D:external-litellm-arm-retired-before-the-flip⟧)` |
+| 703 | `grep -n '^- Deploying or rolling out this migration\.' <spec>` | `- Deploying or rolling out this migration (amended: §20.9, D-3705). The operator …` |
+| 730 | `grep -n '| per-lane usage instance pair |$' <spec>` | before the final ` |`: ` (amended: §20.4, D-3717)` |
+| 904 | `grep -n 'until Plan 3.s cutover retires that arm\.$' <spec>` | append ` (amended: §20.2, D-3708)` |
 | 925 | `grep -n 'Plan 3 arms the pair and owns its removal\.$' <spec>` | append ` (amended: §20.4)` |
 | 947 | `grep -n '(D-3486);$' <spec>` | directly before the final `;`: ` (amended: §20.4)` |
 
@@ -11075,11 +11075,11 @@ git diff "$BASE" HEAD -- ccd deploy shared | grep '^+' | grep -nE '\.local/bin/c
 
 ## Deviations found
 
-Numbers are minted by the controller, after review, from the allocator (R12). The controller substitutes each number for its `⟦D:<slug>⟧` here, in the tasks, and in spec §20. Nobody else writes a D-number, a `D-TBD` or a range. A **contingency** is written as a plain slug and minted only when it fires at execution.
+Each number below was issued by the allocator (`POST /api/ledger/deviations`, through `ccrc-api ledger allocate`) on 2026-10-01, in one block for this plan, and is defined here in the same act. A departure found during execution is reported by slug, and the controller mints its number. Nobody else writes a D-number, a `D-TBD` or a range. A **contingency** is written as a plain slug and minted only when it fires at execution.
 
 Each entry says what departs, from which text, the measurement that forced it, and what it costs if wrong.
 
-- **⟦D:the-merge-is-itself-an-inert-rollout⟧: merging Plan 3a rolls it out to both boxes, so the plan is built to be a no-op there.**
+- **D-3705: merging Plan 3a rolls it out to both boxes, so the plan is built to be a no-op there.**
   - **Departs from:** spec §15 step 1 ("nothing is deployed"), step 2 ("`ccrc rollout` as usual"), and §16 (rollout out of scope).
   - **Measured:** every merge to `main` becomes a dev prerelease that both boxes follow automatically. At drafting, the live fleet box ran `origin/main`'s own release with its install complete.
   - **What it forces:**
@@ -11087,7 +11087,7 @@ Each entry says what departs, from which text, the measurement that forced it, a
     - the renamed usage pair;
     - an operator confirmation, carried by the merge, of R-C2 and R-C3: the two things the rollout changes on the live box.
   - **Cost if wrong:** a non-inert byte reaches the live box within minutes. The way back is `ccrc rollback` to the previous kept version.
-- **⟦D:probe-token-dir-has-no-default-on-any-lane⟧: the probe's default goes for every lane, so an external lane with a codex registry is frozen until its flip.**
+- **D-3706: the probe's default goes for every lane, so an external lane with a codex registry is frozen until its flip.**
   - **Departs from:** spec §19.6 and Plan 2b-2's scope ("external lanes keep today's behaviour byte for byte until Plan 3's cutover"). §9.1 itself says the default goes outright, and the tree now does exactly that.
   - **Measured:**
     - The probe's only caller scrubs `CHATGPT_TOKEN_DIR` and re-supplies it only from `exec.secretsFile` (`ccd/ccrc:9471-9484`).
@@ -11098,7 +11098,7 @@ Each entry says what departs, from which text, the measurement that forced it, a
     - `ccrc models refresh <id>` refuses it.
     - `_check_models` gives it a sentence of its own. Otherwise its bare-presence population (`ccd/ccrc-doctor-checks:5412`) would WARN "the timer is not reaching this lane" about three hours after the rollout, a false cause in every update's closing doctor (critic #1).
   - **Cost if wrong:** that lane's catalogue and settings env are frozen until its flip, so a model retired upstream in the meantime is still offered. The flip's refresh (Plan 3b) cures it.
-- **⟦D:unattended-authenticator-never-starts-a-device-flow⟧: nothing in the hourly path may start a device-code login.**
+- **D-3707: nothing in the hourly path may start a device-code login.**
   - **Departs from:** LiteLLM's `Authenticator` default, which starts a device flow when no token can be refreshed, and from the skeleton's plan to bound it by a timeout. Spec §9.3 says only that login is a ccrc verb.
   - **Measured (critic #2), from the installed library's source:**
     - the device path writes `device_code_requested_at` into the lane's `auth.json` before it polls for up to 15 minutes;
@@ -11107,53 +11107,53 @@ Each entry says what departs, from which text, the measurement that forced it, a
     - the usage oneshot sets no `TimeoutStartSec`.
   - **What the tree does:** the probe and `ccd/ccgpt-usage.py` override the device path in-process to raise `login-required` before any write, and the usage service gains `TimeoutStartSec`. A test pins it with a stub whose device path would write a marker file, and asserts the marker never appears.
   - **Cost if wrong:** a lane whose refresh token has died answers `login-required` every hour rather than prompting. The cure is `ccrc codex login <id>` with the operator present. The guard also couples ccrc to two private LiteLLM names inside D-3487's range. A LiteLLM that renames either makes every probe and poll refuse `runtime-api-moved`, loudly.
-- **⟦D:external-litellm-arm-retired-before-the-flip⟧: ccrc stops rendering and stopping another repository's LiteLLM now, not at cutover.**
+- **D-3708: ccrc stops rendering and stopping another repository's LiteLLM now, not at cutover.**
   - **Departs from:** spec §19.6 ("until Plan 3's cutover retires that arm") and §8.
   - **Measured:**
     - The arm is live: on the day of drafting, the hourly timer rendered the other repository's box-global config.
     - A bare `ccgpt stop` sits on its changed-and-running path (`ccd/ccrc:10030-10031`).
     - Exactly one lane reaches it, and that lane has no sessions and nothing listening.
   - **Cost if wrong:** a lane rolled back to its old launcher reads that config as it stood at the rollout.
-- **⟦D:codex-settings-env-absent-or-equal⟧: for a codex lane, an absent `ANTHROPIC_BASE_URL` in settings is healthy.**
+- **D-3709: for a codex lane, an absent `ANTHROPIC_BASE_URL` in settings is healthy.**
   - **Departs from:** Plan 2b-2's carry-forward item 8, "teach it `http://127.0.0.1:<proxyPort>`", which read as present-and-equal.
   - **Measured:**
     - No ccrc writer puts that key in a codex home's settings (`shared/modelenv.mjs:55-64`).
     - The launcher exports it instead (`ccd/ccrc-codex:177`).
     - Whether a value in settings overrides the exported one is unmeasured.
   - **Cost if wrong:** a hand-added key with the matching value goes unreported. A mismatching one is still reported.
-- **⟦D:codex-population-unreadable-is-fail⟧: `_check_codex` FAILs on a roster it cannot read.**
+- **D-3710: `_check_codex` FAILs on a roster it cannot read.**
   - **Departs from:** spec §12, which defines only the empty-set SKIP, and from the sibling `_check_models`, which SKIPs an unreadable roster and leaves it to `wrappers`.
   - **Why:** `_codex_lanes` answers rc 1 for an unreadable roster and rc 2 for a missing jq. Folding either into SKIP is the overloaded empty this codebase bans, and it would read as "no codex lane" on a box that has some.
   - **Cost if wrong:** one extra FAIL beside `wrappers`' on a box whose roster is broken.
-- **⟦D:runtime-health-trusts-the-stamp⟧: doctor asks `ccgpt-runtime check` and never re-runs the behaviour probe.**
+- **D-3711: doctor asks `ccgpt-runtime check` and never re-runs the behaviour probe.**
   - **Departs from:** §12's row "failing its behaviour probe".
   - **Measured:**
     - `check` compares the stamp and never re-runs the probe (`ccd/ccgpt-runtime:566-574`).
     - The probe can take up to `CCRC_RUNTIME_PROBE_S=300` seconds.
     - Doctor ends every install and update.
   - **Cost if wrong:** a runtime whose behaviour changed under an unchanged stamp passes doctor. The stamp's version re-measure still catches a changed litellm, and `--fix` re-probes.
-- **⟦D:materialise-check-is-opt-in⟧: `materialise` gains a check-only form, `--check true`. Without it, it writes as before.**
+- **D-3712: `materialise` gains a check-only form, `--check true`. Without it, it writes as before.**
   - **Departs from:** ruling R7's parenthetical (a bare `materialise`, no `--commit`, as the check), and `deploy/models-op.mjs`'s own contract, under which it always writes.
   - **Measured (critic #11):** §12 wants `lane.json` "stale against the catalogue" to FAIL, and no instrument measured it. `_codex_lane_json_state` compares only against the roster.
   - **What the tree does:** `materialise --check true` renders what a write would, through the one file list the writer uses (`materialFiles`). It compares that with the bytes on disk and answers `changed` per file, writing nothing. Any other `--check` value is refused at exit 2. The default stays the write, because two shipped callers (`_codex_lane_json_ensure`, the refresh loop) and 13 `models-op.test.ts` calls expect it.
   - **Cost if wrong:** a checking caller that omits the flag writes. `_check_codex` and `_fix_codex` are the two callers that must pass it, and Task 4's mutation row M10 reds a doctor that writes.
-- **⟦D:codex-leftover-lane-state-warns⟧: lane state left for an id that is no longer a codex lane is a WARN, and a subject of the check.**
+- **D-3713: lane state left for an id that is no longer a codex lane is a WARN, and a subject of the check.**
   - **Departs from:** §12's table, which has no such row (2b-1 item 16).
   - **Why:** a flip back keeps that state on purpose (§13), and the empty-population SKIP would hide it.
   - **Cost if wrong:** one WARN until the operator removes the directory by hand. ccrc never deletes it.
-- **⟦D:codex-unit-unproven-warns⟧: a live unit of a tier's name whose MainPID proves nothing is a WARN, in `_codex_foreign_what`'s retry wording.**
+- **D-3714: a live unit of a tier's name whose MainPID proves nothing is a WARN, in `_codex_foreign_what`'s retry wording.**
   - **Departs from:** §12's foreign-listener FAIL.
   - **Why:** this lane's own crash-looping tier reads exactly so inside its `RestartSec`, and a FAIL there would fail every `ccrc update` that lands in that window.
   - **Cost if wrong:** a foreign unit in that state is a WARN, not a FAIL, until its MainPID proves something.
-- **⟦D:codex-unmeasured-tier-warns⟧: a tier `_codex_tier_ours` cannot ask about is a WARN, unmeasured.**
+- **D-3715: a tier `_codex_tier_ours` cannot ask about is a WARN, unmeasured.**
   - **Departs from:** §12, which is silent on it.
   - **Why:** it is never read as running or as stopped. A tier whose staleness cannot be told is likewise its own WARN, never current and never stale.
   - **Cost if wrong:** one WARN, whose remedy is `ccrc codex status <id>`.
-- **⟦D:codex-down-gateway-under-live-sessions-warns⟧: a LiteLLM tier down while a live session runs on the lane is a WARN.**
+- **D-3716: a LiteLLM tier down while a live session runs on the lane is a WARN.**
   - **Departs from:** §12's table.
   - **Why:** this is Plan 2b-2's hazard. A tier that died after a start that wrote stays down until the next start, and every turn those sessions send fails at the gateway.
   - **Cost if wrong:** one WARN, whose remedy is the idempotent `ccrc codex start <id>`.
-- **⟦D:usage-unit-renamed-past-the-foreign-template⟧: ccrc's usage pair is `ccrc-codex-usage@.{service,timer}`.**
+- **D-3717: ccrc's usage pair is `ccrc-codex-usage@.{service,timer}`.**
   - **Departs from:** spec §4.3, §10 and §12, which name `ccgpt-usage@<id>.timer`.
   - **Measured:**
     - The other repository's `ccgpt-usage@.{service,timer}` template is installed on the live box, with one instance enabled.
@@ -11161,23 +11161,23 @@ Each entry says what departs, from which text, the measurement that forced it, a
     - Because the merge auto-rolls, placing ccrc's pair under those names would overwrite a live template the moment Plan 3a merges, and the enabled instance would then run ccrc's publisher against a `lane.json` that does not exist.
     - `install-census.test.ts:1591` already refuses the prefix.
   - **Cost if wrong:** the docs carry two names for one role until Plan 4 retires the other repository's copy.
-- **⟦D:usage-instances-converge-to-the-codex-set⟧: install enables an instance per codex lane and disables the rest.**
+- **D-3718: install enables an instance per codex lane and disables the rest.**
   - **Departs from:** §11, which says `_inst_enable` enables, not converges.
   - **Why:** a flip back must not leave ccrc's publisher running for a lane the other repository serves again, which would put two writers on one limits row.
   - **Cost if wrong:** an instance hand-enabled for a non-codex id is disabled by the next install. The remedy is to make that lane codex.
-- **⟦D:usage-second-writer-degrades⟧: ccrc withholds its enable while the other repository's instance for the same id is enabled.**
+- **D-3719: ccrc withholds its enable while the other repository's instance for the same id is enabled.**
   - **Departs from:** nothing. It is new (ruling R6, critic #6), because otherwise only the runbook's step order would stop two publishers.
   - **Limit:** the flat, id-less foreign timer cannot be attributed to a lane, so no code refuses on it. The runbook disables it.
   - **Cost if wrong:** a lane whose foreign instance is still enabled has no ccrc publisher until the operator disables that instance. The doctor WARN says so.
-- **⟦D:usage-rows-not-applicable-on-darwin⟧: no usage timer on macOS, and no permanent WARN there either.**
+- **D-3720: no usage timer on macOS, and no permanent WARN there either.**
   - **Departs from:** §10, which names no platform, and §12's WARN row read on Darwin (2b-1 item 17c).
   - **Measured:** `_inst_units_darwin` installs no timer at all (`ccd/ccrc:14048-14072`, decision 17).
   - **Cost if wrong:** a macOS codex lane publishes no usage row.
-- **⟦D:missing-timer-remedy-is-ccrc-install⟧: the missing-timer WARN names `ccrc install`, not `--fix`, and `--fix` does not restart a tier that is only stale.**
+- **D-3721: the missing-timer WARN names `ccrc install`, not `--fix`, and `--fix` does not restart a tier that is only stale.**
   - **Departs from:** §12's `--fix` list: "enable a missing usage timer", and "restart a verified ccrc-owned active tier", read for a tier whose only finding is stale code. Both rows are WARNs. `--fix` restarts a tier only after it replaced that tier's code on a FAIL (Task 8), and a stale tier's own remedy names `ccrc update` or the lane's `ccrc codex stop` and `start` (Task 5).
   - **Measured:** `cmd_doctor` runs a fixer only when a check returns 1 (`ccd/ccrc:3312`). R-C8 keeps that one contract for every fixer.
   - **Cost if wrong:** one extra command for the operator.
-- **⟦D:a-live-label-the-residue-class-pins-as-a-pass-stays-out⟧: one of the two live GPT-lane labels cannot join the residue class.**
+- **D-3722: one of the two live GPT-lane labels cannot join the residue class.**
   - **Departs from:** ruling R10 and critic #16, which say to add both labels.
   - **Measured at drafting, by shape:**
     - One label is byte-equal to a token the class's own `passes` already pins.
@@ -11186,35 +11186,35 @@ Each entry says what departs, from which text, the measurement that forced it, a
   - **What the tree does:** only a label that no pass pins joins the class (Task 11 Step 3). The pinned one is covered by Step 4's hand-grep, which measures it from the box roster at execution time (ruling F1) and scans for it as a whole word.
   - **Cost if wrong:** that label can reappear in a tracked line with no ratchet catching it. It is already public by that pin.
 
-- **⟦D:codex-check-absent-roster-skips⟧: an absent roster file SKIPs `codex`.**
+- **D-3723: an absent roster file SKIPs `codex`.**
   - **Departs from:** ruling R-C6's FAIL, read as covering every roster the check cannot read.
   - **Why:** absent is a positive answer, and the `wrappers` check already FAILs a missing roster, so a second FAIL would count one finding twice. R-C6's FAIL stays for a roster that exists and cannot be read, and for a missing jq.
   - **Cost if wrong:** a box with no roster shows one FAIL instead of two.
-- **⟦D:codex-auth-json-absent-fails⟧: an `authDir` holding no `auth.json` is a FAIL.**
+- **D-3724: an `authDir` holding no `auth.json` is a FAIL.**
   - **Departs from:** §12, which names only an `authDir` that is absent or unreadable.
   - **Why:** `ccrc codex start` refuses exactly there, and the FAIL uses its words. The check tests existence only and opens nothing.
   - **Cost if wrong:** none beyond a FAIL whose remedy is `ccrc codex login <id>`.
-- **⟦D:doctor-deploy-citations-by-anchor⟧: `ccd/ccrc-doctor-checks` cites `deploy.sh` by quoted code anchor, never by line.**
+- **D-3725: `ccd/ccrc-doctor-checks` cites `deploy.sh` by quoted code anchor, never by line.**
   - **Departs from:** Plan 2b-2's carry-forward item 11, which re-aims six citations at new line numbers.
   - **Measured:** seven stale citations, not six. Task 7 edits `deploy.sh`, so any line number re-aimed in Task 4 would go stale inside this plan.
   - **Cost if wrong:** a `deploy.sh` edit that drops an anchor reds Task 4's anchor pin, which names the citation to re-aim.
-- **⟦D:usage-enablement-is-read-from-the-wants-links⟧: "enabled" is read from the `timers.target.wants/<unit>` link the manager itself makes.**
+- **D-3726: "enabled" is read from the `timers.target.wants/<unit>` link the manager itself makes.**
   - **Departs from:** the spec, which does not say how enablement is measured.
   - **Why:** no `systemctl` verb lists a template's enabled instances, and uninstall must find ccrc's instances on a box whose user bus is down. The converge, uninstall, account removal and doctor share one reading, so they cannot disagree.
   - **Cost if wrong:** a timer started but never enabled, or enabled under another target, is invisible to all four.
-- **⟦D:account-removal-disables-ccrc-usage-for-any-kind⟧: removing an account disables ccrc's own usage instance for it, whatever the row's kind.**
+- **D-3727: removing an account disables ccrc's own usage instance for it, whatever the row's kind.**
   - **Departs from:** spec §9's per-kind removal, and the skeleton's "removing a codex account disables its instance".
   - **Why:** a lane flipped back to `external` can still carry the instance its codex days enabled, and that instance would go on rewriting the limits row the removal deletes.
   - **Cost if wrong:** none on a live external lane. It has no ccrc link, so the manager is asked nothing.
-- **⟦D:uninstall-absence-derived-from-what-was-planted⟧: the uninstall suite's absence list is what its fixture planted.**
+- **D-3728: the uninstall suite's absence list is what its fixture planted.**
   - **Departs from:** the skeleton, which derives it from `_uninst_units` (2b-1 item 19).
   - **Why:** a list derived from the removal side drops a unit from both sides at once. A derived check requires the fixture to plant every `_inst_units` destination.
   - **Cost if wrong:** a new `_inst_units` destination reds until the fixture plants it, by design.
-- **⟦D:deploy-verify-landed-derived-from-the-chain⟧: `deploy-verify`'s landed list is `AGENT_BUILD_CMD`'s own `_unit_atomic` operands, plus a template anchor.**
+- **D-3729: `deploy-verify`'s landed list is `AGENT_BUILD_CMD`'s own `_unit_atomic` operands, plus a template anchor.**
   - **Departs from:** the skeleton, which derives it from `_inst_units` (2b-1 item 20).
   - **Why:** `install-census.test.ts` already holds every `_inst_units` unit to one of `deploy.sh`'s lanes. The agent lane also places units `_inst_units` does not, and withholds some it does.
   - **Cost if wrong:** a `_unit_atomic` call the reader cannot place throws, by design.
-- **⟦D:launcher-fix-rides-the-wrappers-check⟧: regenerating a marker-verified launcher is `_fix_wrappers`' cure, not `_fix_codex`'s.**
+- **D-3730: regenerating a marker-verified launcher is `_fix_wrappers`' cure, not `_fix_codex`'s.**
   - **Departs from:** spec §12, which places it under `_check_codex`'s `--fix`.
   - **Why:** a launcher is `_check_wrappers`' measurement, and a second verdict line would count one finding twice. `_fix_wrappers` runs the shipped `ccrc wrappers` with no flag. That overwrites only a launcher whose ccrc marker still verifies (keeping a backup), writes an absent one, and refuses every other file.
   - **Cost if wrong:** it reaches generated launchers as well as Codex ones, the same act `ccrc install` performs.
@@ -11392,7 +11392,7 @@ These rulings bind every drafter and reviewer of Plan 3a. The fix round's ruling
 | R4 | The external `_models_litellm` arm is retired in 3a (R-C3). The merge authorisation names R-C2 and R-C3 as operator confirmations. |
 | R5 | R-C4…R-C9 and R-C11 are adopted as their recommendations state. R-C11's file list includes `agent/test/deploy-verify.test.ts`, `usage-sweep-deploy-ship.test.ts` and `install-census.test.ts`' note at :58. The `deploy.sh` probe-line removal rides with the other deploy-verify edits. |
 | R6 | The second writer: the converge degrades rather than enables ccrc's instance while the other repository's instance for the same id is enabled. `_check_codex` WARNs and names the operator's own disable, and ccrc never disables a foreign unit. The flat, id-less foreign timer is said to be unattributable. |
-| R7 | `lane.json` staleness against the registry is measured by a check-only `materialise` that answers `changed`. Task 4 uses it and Task 8 cures it. It is spelled `--check true` (⟦D:materialise-check-is-opt-in⟧). |
+| R7 | `lane.json` staleness against the registry is measured by a check-only `materialise` that answers `changed`. Task 4 uses it and Task 8 cures it. It is spelled `--check true` (D-3712). |
 | R8 | `--fix` regenerates a launcher only when it is marker-verified (Task 8); otherwise the deferral is recorded by slug. |
 | R9 | Spec edits are an appended `## 20. Amendments (Plan 3a)` plus same-line pointers. No line above §20 moves, and Task 11 proves it. |
 | R10 (as amended by F1 and F4) | Task 11 adds every live GPT-lane label that the class's `passes` does not pin to `topology-clean`'s ROSTER_RESIDUE class, base64-encoded, reading the labels from the box roster at execution time; the red-first proof uses a synthetic label in a disposable copy (F4). A hand-grep covers the rest, measured read-only on the fleet box at execution time (F1): the ids and labels from the roster, lane 2's ports from its launcher's two `export` lines, the auth-directory and config names by `ls`, and lane 2's session codenames from `.wrapper` field files, names only. The gitignored reference file is not consulted; its GPT-lane section is Plan 3b Task 1's. The plan spells none of the values, and no step prints one. |
