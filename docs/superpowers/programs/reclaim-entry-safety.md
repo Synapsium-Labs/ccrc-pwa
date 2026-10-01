@@ -15,7 +15,7 @@ direct reclaim argv shapes before automatic reclamation can ship.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | **working, integration held** — run 199 on `still-harbor`; implementation WIP is preserved, but item 4 and its PR wait for `reclaim-row-placement-safety` to merge first; no PR |
+| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open, held) | **working, integration held** — run 199 on `still-harbor`; PR #222 opened at `e91fbca8` before the hold reached the worker; a narrow fix round (caps-refresh fixture, interpreter-ruling attribution) runs now; item 4 is redone after `reclaim-row-placement-safety` merges; no review until then |
 
 **Deviation block: eight numbers, the first of them 3696** (allocated once at run 199 open, 2026-09-30; floor
 now 3704). The finalized plan defines the first as `ccd-imported-functions-hijack-reclaim-reads`. No other issued
@@ -62,6 +62,27 @@ unrendered.
   leaving the real selector red. The answer raced the ask's operator move (`ask-moved`), so this ledger records the
   ruling before any later handoff; the worker must still report all citation debt-map, `**Files:**` and `|`-row
   remeasurements rather than carrying pre-edit counts.
+- **2026-10-01 — wave-done arrived before the hold did; the premature review is withdrawn.** Mail 2909 reported
+  all four items done and PR #222 open at `e91fbca89ed39a414065e97bb0f6d10fc2951f6a`; holds 2871/2889 were
+  delivered only afterwards. The coordinator nonetheless advanced run 199 to `awaiting-review`, settled its four
+  item rows `done`, and opened review run 210 against the strict landing order. Run 210 never dispatched (the
+  rolling daily cap was full) and the operator abandoned it unread; run 199 is back at `working`. Two residues are
+  recorded, not repaired: the item rows are terminal, so the board reads `4/4` while item 4 is still owed after
+  row-placement safety merges; and run 210's open overwrote the programme title, which the next run open restores
+  to `Child reclaim entry safety prerequisite`.
+- **2026-10-01 — the interpreter departure is the operator's ruling: keep the PATH spelling.** Issued number 3698,
+  slug `canonical-python-shebang-strands-on-upgrade`, defined in the worker's plan copy. The installed launcher's
+  shebang names the first `python3` on PATH, spelled as PATH spells it, when it resolves to the interpreter the
+  install probe measured, and the canonical path otherwise. The coordinator's earlier ask answer (canonical) bounced
+  `ask-moved` and never landed, so the worker's "ruled by the coordinator" attribution was unsupported; the operator
+  ruled in the coordinator's session. Every `ccd` start crosses this launcher, so a version-specific canonical path
+  would strand the whole CLI on an interpreter upgrade; the shebang stays a fixed absolute path, never a runtime
+  PATH lookup.
+- **2026-10-01 — fix round before integration.** PR #222's Linux server shard 3/5 fails
+  `server/test/caps-refresh.test.ts` (two cases, `expected [ 'start' ] to deeply equal [ 'start', 'ws-rename' ]`)
+  because its fixture installs only the launcher while the agent's capability cache now keys on the launcher and
+  body pair. The worker repairs that fixture and the interpreter departure's attribution on its own branch, touching no `ccd/ccd`
+  and merging no `main`; the integration hold is unchanged.
 - **Routing escalation.** This is a destructive-path security boundary reached after repeated wave 4 resolver
   rounds exposed the process-level class. The main loop runs Opus at `xhigh`; implementation subagents run Sonnet
   at `high`; workflows are off; compact threshold is 40. The held-out review remains outside that routing and adds
