@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, canonicalPython3 } from './ccdWsHelpers.js';
+import { CCD, canonicalPython3, ghContainedEnv } from './ccdWsHelpers.js';
 
 const REPO = path.resolve(__dirname, '..', '..');
 const PYTHON = canonicalPython3();
@@ -26,7 +26,8 @@ const PYTHON = canonicalPython3();
  *  python3 when it resolves to the very interpreter that answered the probe —
  *  so an upgrade that repoints that path does not strand every ccd start —
  *  otherwise the canonical path. */
-const PATH_PYTHON = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
+const PATH_PYTHON = (process.env['PATH'] ?? '').split(path.delimiter).filter(Boolean).map((d) => path.join(d, 'python3'))
+  .find((p) => { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile(); } catch { return false; } }) ?? '';
 const RENDERED = fs.realpathSync(PATH_PYTHON) === PYTHON ? PATH_PYTHON : PYTHON;
 const DEPLOY = fs.readFileSync(path.join(REPO, 'deploy', 'deploy.sh'), 'utf8');
 
@@ -96,7 +97,8 @@ const LANES: Record<string, (pathPrefix?: string) => Ran> = {
   // guarded by BASH_SOURCE, so sourcing runs nothing else) — its interpreter
   // resolution and its exit mapping included.
   'ccrc install/update': (pathPrefix = '') => ran(spawnSync('bash', ['-c', '. "$1"; _inst_ccd_pair "$2"', 'lane',
-    path.join(REPO, 'ccd', 'ccrc'), tree()], { encoding: 'utf8', cwd: home, env: env(pathPrefix) })),
+    path.join(REPO, 'ccd', 'ccrc'), tree()], { encoding: 'utf8', cwd: home,
+    env: ghContainedEnv(home, env(pathPrefix), { systemd: true, tmux: true }) })),
   // `install_ccd_pair`'s body, with ssh replaced by a stub that runs the remote
   // command on THIS box with HOME = the fixture — the remote side's own
   // `python3`, `~/ccrc` and `$HOME`.
@@ -107,7 +109,7 @@ const LANES: Record<string, (pathPrefix?: string) => Ran> = {
     fs.mkdirSync(stub, { recursive: true });
     fs.writeFileSync(path.join(stub, 'fake-ssh'), '#!/bin/sh\nshift\nexec bash -c "$1"\n', { mode: 0o755 });
     return ran(spawnSync('bash', ['-c', `SSH=(fake-ssh); BOX=box; ${fn[1]}`],
-      { encoding: 'utf8', cwd: home, env: env(`${stub}:${pathPrefix}`) }));
+      { encoding: 'utf8', cwd: home, env: ghContainedEnv(home, env(`${stub}:${pathPrefix}`), { systemd: true, tmux: true }) }));
   },
 };
 

@@ -23,7 +23,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD, installDirectEntry, type DirectEntry } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, installDirectEntry, type DirectEntry } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import {
   CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, evalOf, makeChild, type Child,
@@ -31,6 +31,17 @@ import {
 
 let h: PrHarness;
 let de: DirectEntry;
+
+/** `command -v <cmd>` without a shell: the first executable `<cmd>` on this
+ *  process's PATH, resolved. */
+const which = (cmd: string): string => {
+  for (const d of (process.env['PATH'] ?? '').split(path.delimiter)) {
+    if (!d) continue;
+    const p = path.join(d, cmd);
+    try { fs.accessSync(p, fs.constants.X_OK); if (fs.statSync(p).isFile()) return p; } catch { /* next */ }
+  }
+  throw new Error(`no ${cmd} on PATH`);
+};
 beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-entry-'); });
 afterEach(() => { h.cleanup(); });
 
@@ -118,10 +129,10 @@ const direct = (args: readonly string[], env: Record<string, string> = {},
   const bin = path.join(h.home, '.local', 'bin');
   const r = spawnSync(o.entry ?? de.entry, [...args], {
     cwd: o.cwd ?? h.home, encoding: 'utf8', timeout: 120_000,
-    env: {
+    env: ghContainedEnv(h.home, {
       ...cleanEnv(), HOME: h.home, CCD_RECLAIM_RESIDUE_ROOT: path.join(h.home, 'residue'),
       PATH: o.path ?? `${bin}:${process.env['PATH'] ?? ''}`, ...env,
-    },
+    }, { systemd: true, tmux: true }),
   });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
@@ -132,8 +143,8 @@ const explicitBash = (bashArgs: readonly string[], args: readonly string[], env:
   const bin = path.join(h.home, '.local', 'bin');
   const r = spawnSync('bash', [...bashArgs, CCD, ...args], {
     cwd: h.home, encoding: 'utf8', timeout: 120_000,
-    env: { ...cleanEnv(), HOME: h.home, CCD_RECLAIM_RESIDUE_ROOT: path.join(h.home, 'residue'),
-      PATH: `${bin}:${process.env['PATH'] ?? ''}`, ...env },
+    env: ghContainedEnv(h.home, { ...cleanEnv(), HOME: h.home, CCD_RECLAIM_RESIDUE_ROOT: path.join(h.home, 'residue'),
+      PATH: `${bin}:${process.env['PATH'] ?? ''}`, ...env }, { systemd: true, tmux: true }),
   });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
@@ -378,10 +389,10 @@ describe('startup attacks against the direct entry — the competing child survi
   // A TRUSTED decision-critical executable that happens to be a Bash script:
   // the body is privileged, the CHILD it starts is not. Planted over PATH's
   // `find` in the harness's PATH-first directory, faithful in every call.
-  const REAL_FIND = spawnSync('bash', ['-c', 'command -v find'], { encoding: 'utf8' }).stdout.trim();
+  const REAL_FIND = which('find');
   const plantBashFind = (): void => {
     fs.writeFileSync(path.join(h.home, '.local', 'bin', 'find'),
-      `#!${fs.realpathSync(spawnSync('bash', ['-c', 'printf %s "$BASH"'], { encoding: 'utf8' }).stdout)}\n`
+      `#!${fs.realpathSync(which('bash'))}\n`
       + `PATH=${path.dirname(REAL_FIND)}:/usr/bin:/bin find "$@"\n`, { mode: 0o755 });
   };
   const O5: Record<string, () => Record<string, string>> = {
@@ -482,7 +493,7 @@ describe('the protected grammar — the launcher and the body classify the same 
 });
 
 // ── the launcher itself ─────────────────────────────────────────────────
-const REAL_BASH = fs.realpathSync(spawnSync('bash', ['-c', 'printf %s "$BASH"'], { encoding: 'utf8' }).stdout);
+const REAL_BASH = fs.realpathSync(which('bash'));
 const RECLAIM_ARGV = ['ws-reclaim', '--expect', ANY_TOKEN, '--child-of', '7', '--session', 'x'] as const;
 
 /** A fixture `bash` in its own directory: `kind` decides what it does with
@@ -738,7 +749,8 @@ describe('argv, entry spellings and the installed layout', () => {
     fs.mkdirSync(path.dirname(copy), { recursive: true });
     fs.copyFileSync(de.entry, copy);
     fs.chmodSync(copy, 0o755);
-    const r = spawnSync('bash', ['-c', 'exec 2>&-; exec "$0" caps', copy], { encoding: 'utf8', env: { ...cleanEnv(), HOME: h.home } });
+    const r = spawnSync('bash', ['-c', 'exec 2>&-; exec "$0" caps', copy],
+      { encoding: 'utf8', env: ghContainedEnv(h.home, { ...cleanEnv(), HOME: h.home }, { systemd: true, tmux: true }) });
     expect(r.status, 'a refusal whose message cannot be written').toBe(125);
     expect(fs.existsSync(argvOut())).toBe(false);
   }, 60_000);
@@ -816,7 +828,8 @@ describe('the protected payload starts with no Bash startup state to hand on (D-
 
 describe('explicit Bash — outside the guarantee, and the body still never trusts a claim', () => {
   it('a clean explicit `bash ccd/ccd` with protected argv refuses at entry; a forged marker grants nothing', () => {
-    for (const env of [{}, { CCD_ENTRY_PRIVILEGED: '1', CCD_LAUNCHER: '1', CCD_ENTRY: 'launcher', CCD_HARDENED: '1' }]) {
+    const envs: Array<Record<string, string>> = [{}, { CCD_ENTRY_PRIVILEGED: '1', CCD_LAUNCHER: '1', CCD_ENTRY: 'launcher', CCD_HARDENED: '1' }];
+    for (const env of envs) {
       for (const argv of [RECLAIM_ARGV, ['ws-audit', '--session', 'x', '--reclaim'] as const]) {
         const r = explicitBash([], argv, env);
         refusedBy(r, 'unprivileged');
@@ -915,7 +928,7 @@ describe('every supported production entry crosses the installed launcher', () =
 // could not answer. A failure is unmeasured, never an empty answer, and nothing
 // is removed.
 describe('a decision-critical command that fails is unmeasured, never empty — the child survives', () => {
-  const REAL = (cmd: string): string => spawnSync('bash', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).stdout.trim();
+  const REAL = (cmd: string): string => which(cmd);
   const failing: Record<string, () => string> = {
     'find, on the registry enumeration': () => `#!/bin/sh\ncase "$*" in *.workdir*) echo "find: '$HOME/.cc-sessions': Permission denied" >&2; exit 1 ;; esac\nexec ${REAL('find')} "$@"\n`,
     'git, on the worktree list': () => `#!/bin/sh\ncase "$*" in *"worktree list"*) echo "fatal: unable to read worktrees" >&2; exit 128 ;; esac\nexec ${REAL('git')} "$@"\n`,
