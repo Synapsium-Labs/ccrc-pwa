@@ -2658,8 +2658,8 @@ r3 follows r2 by an hour. The new holds are:
 - 5 min after a restart that cut a turn short;
 - while delegated work still produces hook events (within 30 min, for 4 h at
   most);
-- for the orphaned and failed arms and mail stuck's idle clause, a harness
-  dialog on the session's pane (`dialogPending`), which no mail gets past;
+- for the orphaned and failed arms, a harness dialog on the session's pane
+  (`dialogPending`), which no self-mail gets past (mail stuck still reports);
 - the ones named above.
 
 A coordinator's notices are run-less: they are keyed on the mail's own subject

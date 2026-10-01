@@ -674,10 +674,15 @@ describe('mail-stuck (§5.2): per queued delivery to a run worker or a coordinat
     expect(stallMailStuckVerdicts(stuckInput({}, { worker: workerAt('idle', NOW - 2 * H, { stranded: true }) }), NOW)).toEqual([hold('limit')]);
     expect(stallMailStuckVerdicts(stuckInput({}, { run: runRow({ state: 'unknown' }) }), NOW)).toEqual([hold('run-unnamed')]);
   });
-  it('mail-stuck: the idle clause answers hold 2b too, and the registry gate clause still precedes every hold (E2E-4)', () => {
-    expect(stallMailStuckVerdicts(stuckInput({}, { worker: workerAt('idle', NOW - 2 * H, { dialogPending: true }) }), NOW)).toEqual([hold('dialog')]);
-    expect(stallMailStuckVerdicts(stuckInput({ lastGate: 'registry-unmeasurable', gateSince: NOW - MAIL_STUCK_MS },
-      { worker: workerAt('idle', NOW - 2 * H, { dialogPending: true }) }), NOW), 'the gate clause').toEqual([stuck()]);
+  it('mail-stuck: exempt from hold 2b, it reports whatever the gate (§5.2): stuck mail behind a dialogPending pane still draws its push', () => {
+    const dialog = workerAt('idle', NOW - 2 * H, { dialogPending: true });
+    const c = stuckInput({ toId: COORD }, { role: 'coordinator', sessionId: COORD, worker: dialog, mail: [mailRow(501, M_AT, WORKER, COORD, 'question', null, 'question')] });
+    expect(stallMailStuckVerdicts(c, NOW), 'a coordinator').toEqual([stuck()]);
+    expect(stallMailStuckVerdicts(stuckInput({}, { worker: dialog }), NOW), 'a run worker').toEqual([stuck()]);
+    expect(stallMailStuckVerdicts(stuckInput({ lastGate: 'registry-unmeasurable', gateSince: NOW - MAIL_STUCK_MS }, { worker: dialog }), NOW), 'the gate clause').toEqual([stuck()]);
+    expect(stallFailedVerdict(sessionInput({ role: 'coordinator', sessionId: COORD, worker: dialog,
+      mark: mark({ state: 'failed', event: 'StopFailure', at: NOW - 2 * H, stopAt: NOW - 2 * H, err: 'server_error' }) }), NOW),
+    'the same coordinator\'s failed arm still holds 2b').toEqual(hold('dialog'));
   });
   it('mail-stuck: done, a run worker push is recorded on its run, a coordinator push answers every sweep', () => {
     expect(stallMailStuckVerdicts(stuckInput({}, { notices: [notice('live', 'mail-stuck', 1, 901, NOW - MIN)] }), NOW)).toEqual([NONE]);

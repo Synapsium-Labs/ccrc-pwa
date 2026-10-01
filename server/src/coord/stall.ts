@@ -1370,15 +1370,22 @@ export interface StallSessionInput {
  *  text that outlives the transient it records. */
 const STALL_STUCK_GATE: keyof typeof STALL_GATE_WORD_MAP = 'registry-unmeasurable';
 
-/** Holds 1, 2 and the limit hold only (§4.2's numbers, in §10's order); null = none applies. Before them, a run worker's
- *  run must be one this build can name (§10 step 1): a coordinator's verdict, and any other session's, names no run.
- *  Hold 1 is absent or any input unmeasured. Hold 2 is 2b's `dialogPending`, a harness menu that owns the keyboard, so
- *  a self-mail would sit queued behind it (final fix wave, E2E-4). 2b's other half, live `waiting`, never reaches D, E
- *  or failed: their word checks refuse it. Hold 2a is not applied: the run verdict's 2a is a question behind a
- *  `waiting` word, which those checks refuse too, and the lane reads no hookstate ask for a coordinator or another row
- *  (`STALL_HOOK_ASK_UNREAD`). `now` is the limit hold's auto-continue clock (`session-hold-takes-now` (D-3685)). A marker that is
- *  not ok for a reason other than `unmeasured` is no hold here: D, E and failed read it as `none`. */
+/** D, E and failed's holds: 1, 2 and the limit hold only (§4.2's numbers, in §10's order; `session-arms-are-separate-verdicts`
+ *  (D-3637)); null = none applies. Before them, a run worker's run must be one this build can name (§10 step 1): a
+ *  coordinator's verdict, and any other session's, names no run. Hold 1 is absent or any input unmeasured. Hold 2 is
+ *  2b's `dialogPending`, a harness menu that owns the keyboard, so a self-mail would sit queued behind it. 2b's other
+ *  half, live `waiting`, never reaches D, E or failed: their word checks refuse it. Hold 2a is not applied: the run
+ *  verdict's 2a is a question behind a `waiting` word, which those checks refuse too, and the lane reads no hookstate
+ *  ask for a coordinator or another row (`STALL_HOOK_ASK_UNREAD`). `now` is the limit hold's auto-continue clock
+ *  (`session-hold-takes-now` (D-3685)). A marker that is not ok for a reason other than `unmeasured` is no hold here:
+ *  D, E and failed read it as `none`. */
 export function stallSessionHold(input: StallSessionInput, now: number): StallVerdict | null {
+  return stallSessionHolds(input, now, true);
+}
+
+/** The holds' one body. `holdDialog` is hold 2b: true for D, E and failed (`stallSessionHold`), false for mail-stuck,
+ *  which fires whatever its delivery's gate (spec §5.2), so a mail held behind a harness dialog is still reported. */
+function stallSessionHolds(input: StallSessionInput, now: number, holdDialog: boolean): StallVerdict | null {
   const r = input.run;
   if (input.role === 'worker' && r !== null
     && (!isRunState(r.state) || r.state === 'unknown' || (r.kind !== 'work' && r.kind !== 'review'))) return holdVerdict('run-unnamed');
@@ -1388,7 +1395,7 @@ export function stallSessionHold(input: StallSessionInput, now: number): StallVe
   if (w.unmeasured || lc === null || !isSessionLifecycle(lc) || lc === 'unmeasurable') return holdVerdict('unmeasured');
   if (!w.live.ok || w.live.since === null) return holdVerdict('unmeasured');
   if (!input.mark.ok && input.mark.reason === 'unmeasured') return holdVerdict('unmeasured');
-  if (w.dialogPending) return holdVerdict('dialog');
+  if (holdDialog && w.dialogPending) return holdVerdict('dialog');
   if (stallLimited(w, now)) return holdVerdict('limit');
   return null;
 }
@@ -1595,13 +1602,13 @@ function stallIdleStart(input: StallSessionInput): number | null {
 /** One queued delivery (§5.2). It is judged from plain columns the store SELECTs, never in SQL and never in watch.ts
  *  (`mail-stuck-decided-in-l1` (D-3638); the D-792 pins in mail-sweep.test.ts). The registry-unmeasurable clause is the
  *  delivery's own measurement, and hold 1 (`absent`, `unmeasured`) answers exactly when that gate is the reason. So
- *  the clause is judged before the holds (`stuck-gate-precedes-holds` (D-3686)). The idle clause is judged after them, hold 2b
- *  included (E2E-4). Key: the delivery id. */
+ *  the clause is judged before the holds (`stuck-gate-precedes-holds` (D-3686)). The idle clause is judged after them,
+ *  less hold 2b: a dialog is one of the gates mail-stuck reports past. Key: the delivery id. */
 function stallMailStuckInner(input: StallSessionInput, d: StallDeliveryRow, now: number): StallVerdict {
   if (stallRecordedDone(input, 'mail-stuck', 1, d.id)) return VERDICT_NONE;
   const fire: StallVerdict = { act: 'notify', arm: 'mail-stuck', rung: 1, key: d.id, to: 'operator' };
   if (d.lastGate === STALL_STUCK_GATE && d.gateSince !== null && now - d.gateSince >= MAIL_STUCK_MS) return fire;
-  const held = stallSessionHold(input, now);
+  const held = stallSessionHolds(input, now, false);
   if (held !== null) return held;
   const queuedMail = input.mail.find((m) => m.id === d.mailId);
   if (queuedMail === undefined) return VERDICT_NONE;
