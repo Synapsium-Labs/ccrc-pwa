@@ -18,10 +18,16 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { canonicalPython3 } from './ccdWsHelpers.js';
+import { CCD, canonicalPython3 } from './ccdWsHelpers.js';
 
 const REPO = path.resolve(__dirname, '..', '..');
 const PYTHON = canonicalPython3();
+/** What the publisher renders into the shebang (D-3698): the PATH-selected
+ *  python3 when it resolves to the very interpreter that answered the probe —
+ *  so an upgrade that repoints that path does not strand every ccd start —
+ *  otherwise the canonical path. */
+const PATH_PYTHON = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
+const RENDERED = fs.realpathSync(PATH_PYTHON) === PYTHON ? PATH_PYTHON : PYTHON;
 const DEPLOY = fs.readFileSync(path.join(REPO, 'deploy', 'deploy.sh'), 'utf8');
 
 let home: string;
@@ -62,7 +68,7 @@ const HOOK = [
 function plantTree(o: { template?: (t: string) => string; ccd?: string } = {}): void {
   const dir = path.join(tree(), 'ccd');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'ccd'), fs.readFileSync(path.join(REPO, 'ccd', 'ccd'), 'utf8') + (o.ccd ?? ''), { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, 'ccd'), fs.readFileSync(CCD, 'utf8') + (o.ccd ?? ''), { mode: 0o755 });
   const tpl = fs.readFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), 'utf8');
   fs.writeFileSync(path.join(dir, 'ccd-entry.py'), o.template ? o.template(tpl) : tpl);
   fs.copyFileSync(path.join(REPO, 'ccd', 'ccd-entry-install.py'), path.join(dir, 'ccd-entry-install.py'));
@@ -111,9 +117,9 @@ function assertPair(): void {
   expect(fs.lstatSync(entry()).isFile(), 'the launcher is a regular file, not a link').toBe(true);
   expect(fs.statSync(body()).mode & 0o777).toBe(0o644);
   expect(fs.statSync(entry()).mode & 0o777).toBe(0o755);
-  expect(fs.readFileSync(body()).equals(fs.readFileSync(path.join(tree(), 'ccd', 'ccd'))), 'the body is the tree\'s ccd').toBe(true);
+  expect(fs.readFileSync(body()).equals(fs.readFileSync(path.join(tree(), 'ccd/ccd'))), 'the body is the tree\'s ccd').toBe(true);
   const text = fs.readFileSync(entry(), 'utf8');
-  expect(text.split('\n')[0]).toBe(`#!${PYTHON} -IS`);
+  expect(text.split('\n')[0]).toBe(`#!${RENDERED} -IS`);
   expect(/^BODY_SHA256 = '([0-9a-f]{64})'$/m.exec(text)?.[1], 'the launcher names the published body').toBe(sha(body()));
   // The kernel starts it, and it accepts its body.
   const st = ran(spawnSync(entry(), ['--ccrc-entry-self-test'], { encoding: 'utf8', env: env() }));
@@ -147,7 +153,7 @@ describe('the pair, through both lanes: fresh, converged, and re-run after drift
   it('migration from the old self-contained Bash entry: the legacy file is replaced by the launcher, the body appears', () => {
     plantTree();
     fs.mkdirSync(path.dirname(entry()), { recursive: true });
-    fs.copyFileSync(path.join(REPO, 'ccd', 'ccd'), entry());
+    fs.copyFileSync(CCD, entry());
     fs.chmodSync(entry(), 0o755);
     expect(fs.existsSync(body())).toBe(false);
     const r = helper(['install', tree(), home]);
@@ -279,7 +285,7 @@ describe('the pre-publication kernel self-test, and the order of publication, pr
     expect(r.code, r.stderr).toBe(2);
     expect(r.stdout).toContain('body published');
     expect(r.stderr).toContain('refused after the body moved');
-    expect(fs.readFileSync(body()).equals(fs.readFileSync(path.join(tree(), 'ccd', 'ccd'))), 'the body is the new one').toBe(true);
+    expect(fs.readFileSync(body()).equals(fs.readFileSync(path.join(tree(), 'ccd/ccd'))), 'the body is the new one').toBe(true);
     expect(fs.lstatSync(entry()).isDirectory(), 'the obstruction stands').toBe(true);
     // Both lanes say the same thing about it.
     expect(LANES['ccrc install/update']!().stderr).toMatch(/is a directory/);
@@ -352,6 +358,100 @@ describe('the interpreter must be able to be a shebang — refused before anythi
       expect(r.code, name).toBe(1);
       expect(r.stderr, name).toMatch(msg);
       expect([ident(entry()), ident(body())], `${name}: a file moved`).toEqual(before);
+    }
+  }, 60_000);
+});
+
+describe('the fix pass of the final review: layouts, mode repair, postcondition, the interpreter path', () => {
+  it('a symlinked ~/.local, or ~/.local/bin, gets a pair whose launcher finds its body when started by its installed path (D-3699)', () => {
+    for (const linked of ['.local', '.local/bin']) {
+      fs.rmSync(path.join(home, '.local'), { recursive: true, force: true });
+      const real = path.join(home, `real-${linked.replace('/', '-')}`);
+      fs.rmSync(real, { recursive: true, force: true });
+      fs.mkdirSync(real, { recursive: true });
+      if (linked === '.local') fs.symlinkSync(real, path.join(home, '.local'));
+      else { fs.mkdirSync(path.join(home, '.local'), { recursive: true }); fs.symlinkSync(real, path.join(home, '.local', 'bin')); }
+      plantTree();
+      const r = helper(['install', tree(), home]);
+      expect(r.code, `${linked}: ${r.stderr}`).toBe(0);
+      assertPair();
+    }
+  }, 60_000);
+
+  it('a ~/.local/bin that resolves to ANOTHER .local/bin — where the launcher would look for a different body — is refused before anything moves (D-3699)', () => {
+    const other = path.join(home, 'elsewhere', '.local', 'bin');
+    fs.mkdirSync(other, { recursive: true });
+    fs.mkdirSync(path.join(home, '.local'), { recursive: true });
+    fs.symlinkSync(other, path.join(home, '.local', 'bin'));
+    plantTree();
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stderr).toContain('would look for its body at');
+    expect(fs.existsSync(body()), 'the body was published for a launcher that could not find it').toBe(false);
+    expect(fs.readdirSync(other), 'the launcher was published').toEqual([]);
+  }, 60_000);
+
+  it('a half whose bytes are right and whose MODE is not is repaired in place — same inode, same mtime — and reported', () => {
+    plantTree();
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    for (const [p, want] of [[entry(), 0o755], [body(), 0o644]] as const) {
+      fs.chmodSync(p, 0o600);
+      const before = ident(p);
+      const r = helper(['install', tree(), home]);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain(`${p}: mode repaired to ${want.toString(8)}`);
+      expect(fs.statSync(p).mode & 0o777).toBe(want);
+      expect(ident(p), 'the file was rewritten to repair a mode').toBe(before);
+    }
+    assertPair();
+  }, 60_000);
+
+  it('a rename that does not land the staged bytes is caught at the exact destination: exit 2, named — the postcondition, not a hope', () => {
+    // The publisher's own `install`, run in-process with `os.replace`
+    // replaced by one that renames and then tampers with what landed — the
+    // one way to make a publication land wrong without a race.
+    for (const which of ['body', 'launcher'] as const) {
+      fs.rmSync(path.join(home, '.local'), { recursive: true, force: true });
+      plantTree();
+      const suffix = which === 'body' ? '/libexec/ccrc/ccd' : '/bin/ccd';
+      const driver = [
+        'import importlib.util, os, sys',
+        `spec = importlib.util.spec_from_file_location("cei", ${JSON.stringify(path.join(tree(), 'ccd', 'ccd-entry-install.py'))})`,
+        'm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)',
+        'real = os.replace',
+        'def landed_wrong(src, dst):',
+        '    real(src, dst)',
+        `    if dst.endswith(${JSON.stringify(suffix)}):`,
+        '        open(dst, "ab").write(b"# tampered\\n")',
+        'm.os.replace = landed_wrong',
+        `sys.exit(m.main(["install", ${JSON.stringify(tree())}, ${JSON.stringify(home)}]))`,
+      ].join('\n');
+      const r = ran(spawnSync(PYTHON, ['-IS', '-c', driver], { encoding: 'utf8', cwd: home, env: env() }));
+      expect(r.code, `${which}: ${r.stdout}${r.stderr}`).toBe(2);
+      expect(r.stderr).toContain(`after publishing the ${which},`);
+      expect(r.stderr).toContain('is not the regular file of mode');
+    }
+  }, 60_000);
+
+  it('the shebang names the PATH-selected python3 when it is the very interpreter probed, else the canonical one (D-3698)', () => {
+    // A python3 on PATH that is a LINK to the real interpreter: rendered as the
+    // link, which an upgrade repoints. A python3 on PATH that is a SCRIPT shim:
+    // not the interpreter that answered, so the canonical path is rendered.
+    for (const [shape, plant, want] of [
+      ['a link to the interpreter', (d: string) => fs.symlinkSync(PYTHON, path.join(d, 'python3')), (d: string) => path.join(d, 'python3')],
+      ['a shim script', (d: string) => fs.writeFileSync(path.join(d, 'python3'), `#!/bin/sh\nexec '${PYTHON}' "$@"\n`, { mode: 0o755 }), () => PYTHON],
+    ] as const) {
+      fs.rmSync(path.join(home, '.local'), { recursive: true, force: true });
+      const d = path.join(home, `pydir-${shape.replace(/\s+/g, '-')}`);
+      fs.rmSync(d, { recursive: true, force: true });
+      fs.mkdirSync(d, { recursive: true });
+      plant(d);
+      plantTree();
+      const r = LANES['deploy.sh']!(`${d}:`);
+      expect(r.code, `${shape}: ${r.stderr}`).toBe(0);
+      expect(fs.readFileSync(entry(), 'utf8').split('\n')[0], shape).toBe(`#!${want(d)} -IS`);
+      const st = ran(spawnSync(entry(), ['--ccrc-entry-self-test'], { encoding: 'utf8', env: env() }));
+      expect(st.stdout, `${shape}: ${st.stderr}`).toBe('ccd-entry-self-test 3 1 1 1 1\n');
     }
   }, 60_000);
 });

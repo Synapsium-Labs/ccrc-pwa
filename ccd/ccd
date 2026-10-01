@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=533275bd3dfebc5dcfed53a3f59fc16f1676908c562b9919e68d18634fec8f71
+# ccrc:generated 1 sha256=18da49e4a5be58cdd8b8de6082209cd76ffc2aaa88d8bf99b208e5d9087dca2c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22,7 +22,8 @@ set -uo pipefail
 # runs this (`source ccd/ccd` stays injectable, by design), and an explicit
 # `bash ccd/ccd` gets no guarantee: a hostile `BASH_ENV` already ran by now.
 # The classifier is the launcher's, shape for shape; the dispatcher at the
-# bottom still owns every tail's grammar.
+# bottom still owns every tail's grammar. The launcher also strips Bash startup
+# variables from a protected start's environment (D-3696, D-3700).
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim ]] \
      || { [[ $# -eq 4 || $# -eq 5 ]] && [[ "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --reclaim ]] \
           && [[ $# -eq 4 || "${5-}" == --defer-expired ]]; }; }; then

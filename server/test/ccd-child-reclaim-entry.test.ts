@@ -390,7 +390,7 @@ describe('startup attacks against the direct entry — the competing child survi
     'an exported function': () => HOSTILE['A3 an exported BASH_FUNC_find%% lies before startup']!(),
   };
   for (const [name, hostile] of Object.entries(O5)) {
-    itLinux(`O5 a trusted Bash-wrapper find’s child Bash consumes no inherited ${name}: the competing child survives`, () => {
+    itLinux(`O5 a trusted Bash-wrapper find’s child Bash consumes no inherited ${name}${name === 'ENV' ? ' (property pin — a non-interactive child never reads ENV)' : ''}: the competing child survives`, () => {
       const c = setup();
       plantBashFind();
       plantCompetingRow(c);
@@ -403,7 +403,7 @@ describe('startup attacks against the direct entry — the competing child survi
     }, 180_000);
   }
 
-  itLinux('O3 a hostile CDPATH cannot redirect the protected measurements', () => {
+  itLinux('O3 (property pin — no CDPATH steer is demonstrable on the unfixed tree) a hostile CDPATH cannot redirect the protected measurements', () => {
     const c = setup();
     plantCompetingRow(c);
     const decoy = path.join(h.home, 'decoy');
@@ -416,7 +416,7 @@ describe('startup attacks against the direct entry — the competing child survi
     intact(c);
   }, 180_000);
 
-  itLinux('O4 a hostile ENV cannot steer the protected body', () => {
+  itLinux('O4 (property pin — a non-interactive Bash never reads ENV) a hostile ENV cannot steer the protected body', () => {
     const c = setup();
     plantCompetingRow(c);
     const marks = path.join(h.home, 'env-ran');
@@ -583,6 +583,16 @@ describe('the launcher’s Python startup is isolated (-IS through the kernel)',
   }, 60_000);
 });
 
+describe('the one program both install lanes ask python3 for its own path (ENTRY_PYTHON3_PROGRAM)', () => {
+  it('ccd/ccrc and deploy/deploy.sh spell it byte-for-byte as the test stubs allow it', async () => {
+    const { ENTRY_PYTHON3_PROGRAM } = await import('./platformFixtures.js');
+    const ccrc = fs.readFileSync(path.resolve(__dirname, '../../ccd/ccrc'), 'utf8');
+    const deploy = fs.readFileSync(path.resolve(__dirname, '../../deploy/deploy.sh'), 'utf8');
+    expect(ccrc.split(`python3 -IS -c '${ENTRY_PYTHON3_PROGRAM}'`).length - 1, 'ccd/ccrc (_inst_entry_python)').toBe(1);
+    expect(deploy.split(`python3 -IS -c "${ENTRY_PYTHON3_PROGRAM}"`).length - 1, 'deploy/deploy.sh (install_ccd_pair)').toBe(1);
+  });
+});
+
 describe('the interpreter scan — PATH in order, proved, and the exact candidate reused', () => {
   it('B1 the first eligible PATH bash is probed once and that exact executable runs the payload', () => {
     de = installDirectEntry(h.home, { body: ECHO_BODY });
@@ -704,6 +714,35 @@ describe('argv, entry spellings and the installed layout', () => {
     }
   }, 60_000);
 
+  it('a ~/.local, or a ~/.local/bin, that is itself a symlink still finds its body through the path the kernel was handed (D-3699)', () => {
+    for (const linked of ['.local', '.local/bin']) {
+      const real = path.join(h.home, `real-${linked.replace('/', '-')}`);
+      fs.rmSync(path.join(h.home, '.local'), { recursive: true, force: true });
+      fs.rmSync(real, { recursive: true, force: true });
+      fs.mkdirSync(real, { recursive: true });
+      if (linked === '.local') fs.symlinkSync(real, path.join(h.home, '.local'));
+      else { fs.mkdirSync(path.join(h.home, '.local'), { recursive: true }); fs.symlinkSync(real, path.join(h.home, '.local', 'bin')); }
+      de = installDirectEntry(h.home, { body: ECHO_BODY });
+      expect(fs.realpathSync(de.entry).endsWith('/.local/bin/ccd'), 'the fixture is not the layout under test').toBe(false);
+      fs.rmSync(argvOut(), { force: true });
+      const r = direct(RECLAIM_ARGV, {}, { path: `${process.env['PATH'] ?? ''}` });
+      expect(r.code, `${linked}: ${r.stderr}`).toBe(0);
+      expect(echoed().flags, linked).toContain('p');
+      expect(echoed().argv, linked).toEqual([...RECLAIM_ARGV]);
+    }
+  }, 60_000);
+
+  it('a refusal with stderr CLOSED still exits 125 — the launcher\'s status is its contract, not its message', () => {
+    de = installDirectEntry(h.home, { body: ECHO_BODY });
+    const copy = path.join(h.home, 'elsewhere', 'ccd');
+    fs.mkdirSync(path.dirname(copy), { recursive: true });
+    fs.copyFileSync(de.entry, copy);
+    fs.chmodSync(copy, 0o755);
+    const r = spawnSync('bash', ['-c', 'exec 2>&-; exec "$0" caps', copy], { encoding: 'utf8', env: { ...cleanEnv(), HOME: h.home } });
+    expect(r.status, 'a refusal whose message cannot be written').toBe(125);
+    expect(fs.existsSync(argvOut())).toBe(false);
+  }, 60_000);
+
   it('a copy or a hard link of the launcher outside the installed layout refuses by name rather than guessing a body', () => {
     de = installDirectEntry(h.home, { body: ECHO_BODY });
     const copy = path.join(h.home, 'elsewhere', 'ccd');
@@ -746,9 +785,15 @@ describe('argv, entry spellings and the installed layout', () => {
 
 describe('the protected payload starts with no Bash startup state to hand on (D-3696, as tightened)', () => {
   const ENV_BODY = '#!/usr/bin/env bash\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > "$HOME/argv-out"\nenv > "$HOME/env-out"\n';
+  // The plan's list, GLOBIGNORE, and D-3700's: Bash variables `bash -p` still
+  // honours from the environment (measured, bash 5.2) — POSIXLY_CORRECT turns
+  // on posix mode, BASH_COMPAT a compat level, TMOUT=1 truncates a `read` loop
+  // over a slow pipe to nothing, FUNCNEST aborts the script mid-act.
+  const D3700 = { POSIXLY_CORRECT: '1', BASH_COMPAT: '31', FUNCNEST: '64', TMOUT: '1', BASH_XTRACEFD: '7',
+    EXECIGNORE: '*/find', GLOBSORT: 'nosort', BASH_LOADABLES_PATH: '/nonexistent', SECONDS: '100000' };
   const HOSTILE_ALL = {
     BASH_ENV: '/nonexistent/bash-env', ENV: '/nonexistent/env', SHELLOPTS: 'xtrace', BASHOPTS: 'nocasematch',
-    CDPATH: '/tmp', GLOBIGNORE: '*', 'BASH_FUNC_find%%': '() { :; }', KEEP_ME: 'ordinary',
+    CDPATH: '/tmp', GLOBIGNORE: '*', 'BASH_FUNC_find%%': '() { :; }', KEEP_ME: 'ordinary', ...D3700,
   };
   const envKeys = (): string[] => fs.readFileSync(path.join(h.home, 'env-out'), 'utf8').split('\n')
     .map((l) => l.split('=')[0]!).filter(Boolean);
@@ -757,14 +802,14 @@ describe('the protected payload starts with no Bash startup state to hand on (D-
     de = installDirectEntry(h.home, { body: ENV_BODY });
     expect(direct(RECLAIM_ARGV, HOSTILE_ALL).code).toBe(0);
     const prot = envKeys();
-    for (const k of ['BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'CDPATH', 'GLOBIGNORE']) expect(prot, k).not.toContain(k);
+    for (const k of ['BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'CDPATH', 'GLOBIGNORE', ...Object.keys(D3700)]) expect(prot, k).not.toContain(k);
     expect(prot.filter((k) => k.startsWith('BASH_FUNC_'))).toEqual([]);
     expect(prot, 'an ordinary variable is untouched').toContain('KEEP_ME');
     // `env` itself ran under the inherited SHELLOPTS/BASHOPTS only for the
     // ORDINARY start, where they are the caller's business.
-    expect(direct(['caps'], { ...HOSTILE_ALL, SHELLOPTS: '', BASHOPTS: '', GLOBIGNORE: '' }).code).toBe(0);
+    expect(direct(['caps'], { ...HOSTILE_ALL, SHELLOPTS: '', BASHOPTS: '', GLOBIGNORE: '', BASH_XTRACEFD: '' }).code).toBe(0);
     const ord = envKeys();
-    for (const k of ['BASH_ENV', 'ENV', 'CDPATH', 'KEEP_ME']) expect(ord, k).toContain(k);
+    for (const k of ['BASH_ENV', 'ENV', 'CDPATH', 'KEEP_ME', 'POSIXLY_CORRECT', 'TMOUT', 'FUNCNEST']) expect(ord, k).toContain(k);
     expect(ord.filter((k) => k.startsWith('BASH_FUNC_find'))).toHaveLength(1);
   }, 60_000);
 });

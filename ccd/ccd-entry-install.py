@@ -13,8 +13,10 @@
 #
 # `check` is the preflight a lane runs BEFORE it mutates anything: this
 # interpreter is Python 3, isolated, environment-free, user-site-free and
-# site-free, and its own canonical path can be a shebang (absolute, no
-# whitespace or line break, the whole line within SHEBANG_MAX bytes).
+# site-free, and the path its shebang will name (`shebang_path`: the PATH
+# python3 when it IS this interpreter, else its canonical path — D-3698) can be
+# a shebang (absolute, no whitespace or line break, the whole line within
+# SHEBANG_MAX bytes). It prints that path.
 #
 # `install` re-checks all of that, then: renders the launcher with this
 # interpreter's canonical path and the body's SHA-256 (placeholder census before
@@ -101,8 +103,25 @@ def check_interpreter():
     exe = sys.executable
     if not exe:
         raise Refused('this interpreter cannot name its own executable')
-    canon = os.path.realpath(exe)
-    check_shebang_path(canon)
+    chosen = shebang_path(os.path.realpath(exe))
+    check_shebang_path(chosen)
+    return chosen
+
+
+def shebang_path(canon):
+    """The interpreter path the launcher's shebang names (D-3698): the first
+    `python3` on PATH, spelled as PATH spells it, when it resolves to THIS
+    interpreter — the one that just proved -IS — so an upgrade that repoints
+    that path (Homebrew's Cellar, an Ubuntu release's python3.N) moves the
+    launcher with it rather than stranding every ccd start on a deleted file.
+    A PATH python3 that is anything else (a shim script, another interpreter)
+    is not what was probed, so the canonical path is named instead."""
+    for d in os.environ.get('PATH', '').split(os.pathsep):
+        if not d or not os.path.isabs(d):
+            continue
+        cand = os.path.join(d, 'python3')
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return os.path.normpath(cand) if os.path.realpath(cand) == canon else canon
     return canon
 
 
@@ -211,6 +230,20 @@ def destination_kind(dest):
     raise Refused('%s is neither a regular file nor a link (mode %o)' % (dest, st.st_mode))
 
 
+def launcher_body_for(entry):
+    """The body path ccd-entry.py's `body_path()` derives when started as
+    `entry`: its canonical path when that carries the installed layout, else
+    the path it was started by (a symlinked ~/.local or ~/.local/bin, D-3699);
+    None when neither does."""
+    entry_suffix = '/' + ENTRY_DEST
+    body_suffix = '/' + BODY_DEST
+    given = os.path.abspath(entry)
+    for p in (os.path.realpath(given), given):
+        if p.endswith(entry_suffix):
+            return p[:-len(entry_suffix)] + body_suffix
+    return None
+
+
 def stage(directory, data, mode):
     path = os.path.join(directory, STAGE_PREFIX + str(os.getpid()))
     try:
@@ -307,6 +340,13 @@ def install(tree, home):
     libexec = os.path.dirname(body_dest)
     for d in (bindir, libexec):
         os.makedirs(d, mode=0o755, exist_ok=True)
+    # THE LAUNCHER MUST FIND THIS BODY (D-3699): asked exactly as the launcher
+    # will ask it, started by its installed path — never discovered only once
+    # every ccd start refuses `entry-layout` after a "successful" install.
+    derived = launcher_body_for(entry_dest)
+    if derived is None or os.path.realpath(derived) != os.path.realpath(body_dest):
+        raise Refused('%s resolves to %s, whose launcher would look for its body at %s, not at %s — this'
+                      ' ~/.local layout cannot host the direct entry' % (entry_dest, os.path.realpath(entry_dest), derived, body_dest))
     sweep(bindir, STAGE_RE, False)
     sweep(libexec, STAGE_RE, False)
     sweep(os.path.join(home, '.local'), SELFTEST_RE, True)

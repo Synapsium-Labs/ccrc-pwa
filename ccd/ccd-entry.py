@@ -3,8 +3,9 @@
 #
 # GENERATED ON THE BOX from the tracked template ccd/ccd-entry.py by `ccrc
 # install`/`ccrc update` and by deploy/deploy.sh: the shebang names the box's own
-# canonical python3, probed in isolated mode, and the digest below is the SHA-256
-# of the active Bash body at ~/.local/libexec/ccrc/ccd. Do not edit on the box.
+# python3 — the PATH path when it is the interpreter probed in isolated mode,
+# else its canonical path (D-3698) — and the digest below is the SHA-256 of the
+# active Bash body at ~/.local/libexec/ccrc/ccd. Do not edit on the box.
 #
 # WHY A LAUNCHER AT ALL. Bash startup runs before line 1 of any Bash file: an
 # inherited `BASH_ENV`, an exported `BASH_FUNC_<name>%%` or an inherited
@@ -67,7 +68,16 @@ REFUSED_RC = 125
 # a Bash script) would consume them. `BASH_FUNC_` is matched as a PREFIX, so
 # every exported-function spelling (`name%%`, the older `name()`) goes. An
 # ORDINARY start, probe and payload alike, keeps its original environment.
-STARTUP_VARS = (b'BASH_ENV', b'ENV', b'SHELLOPTS', b'BASHOPTS', b'CDPATH', b'GLOBIGNORE')
+#
+# AND THE VARIABLES `bash -p` STILL HONOURS FROM THE ENVIRONMENT (D-3700,
+# measured on bash 5.2): POSIXLY_CORRECT turns on posix mode, BASH_COMPAT a
+# compat level, TMOUT=1 makes a `while read … < <(slow)` loop read nothing,
+# FUNCNEST aborts the script mid-act, SECONDS rebases the clock, and
+# BASH_XTRACEFD / EXECIGNORE / GLOBSORT / BASH_LOADABLES_PATH are startup or
+# option state of the same kind.
+STARTUP_VARS = (b'BASH_ENV', b'ENV', b'SHELLOPTS', b'BASHOPTS', b'CDPATH', b'GLOBIGNORE',
+                b'POSIXLY_CORRECT', b'BASH_COMPAT', b'TMOUT', b'FUNCNEST', b'SECONDS', b'BASH_XTRACEFD',
+                b'EXECIGNORE', b'GLOBSORT', b'BASH_LOADABLES_PATH')
 FUNC_PREFIX = b'BASH_FUNC_'
 
 # The one argv this file answers itself instead of passing to ccd: the
@@ -86,8 +96,13 @@ PROBE_ORDINARY = _FLOOR + ' && printf "ccd-entry-probe - %s\\n" "$1"'
 
 
 def refuse(cls, detail):
-    sys.stderr.write('ccd: refused (entry-%s): %s\n' % (cls, detail))
-    sys.stderr.flush()
+    # The STATUS is the contract; the message is best-effort. A caller that
+    # closed stderr still gets 125, never a traceback's exit 1.
+    try:
+        sys.stderr.write('ccd: refused (entry-%s): %s\n' % (cls, detail))
+        sys.stderr.flush()
+    except Exception:
+        pass
     os._exit(REFUSED_RC)
 
 
@@ -99,14 +114,19 @@ def is_protected(argv):
 
 
 def body_path():
-    # The launcher's OWN canonical location, never an inherited HOME: absolute,
-    # relative, PATH and symlinked spellings all converge here. A copy or a hard
-    # link anywhere else names no body, so it refuses rather than guessing one.
-    me = os.path.realpath(os.path.abspath(sys.argv[0]))
-    if not me.endswith(ENTRY_SUFFIX):
-        refuse('layout', '%s is not an installed direct entry (…%s), so it names no ccd body to run'
-               % (me, ENTRY_SUFFIX))
-    return me[:-len(ENTRY_SUFFIX)] + BODY_SUFFIX
+    # The launcher's OWN location, never an inherited HOME: its CANONICAL path
+    # first, so absolute, relative, PATH and symlinked spellings converge; then,
+    # when ~/.local or ~/.local/bin is itself a link (the canonical path then
+    # carries no `.local/bin`), the path the kernel was handed (D-3699). A copy
+    # or a hard link anywhere else names no body, so it refuses rather than
+    # guessing one — and whichever path names it, the body still has to match
+    # the digest below.
+    given = os.path.abspath(sys.argv[0])
+    for me in (os.path.realpath(given), given):
+        if me.endswith(ENTRY_SUFFIX):
+            return me[:-len(ENTRY_SUFFIX)] + BODY_SUFFIX
+    refuse('layout', '%s is not an installed direct entry (…%s), so it names no ccd body to run'
+           % (os.path.realpath(given), ENTRY_SUFFIX))
 
 
 def check_body(body):

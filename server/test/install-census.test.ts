@@ -1721,6 +1721,18 @@ describe('ccd\'s pair (D-3696): the body under ~/.local/libexec is placed, remov
     expect(pairHelperFrom(deployPairBody(), '~/ccrc/', 'install_ccd_pair')).toBe(PAIR_HELPER_REL);
   });
 
+  it('the launcher derives its body from the SAME two paths the publisher declares (D-3699: the publisher re-asks the launcher\'s question)', () => {
+    const { entryDest, bodyDest } = pairDecl();
+    const launcher = readFileSync(path.resolve(here, '..', '..', 'ccd', 'ccd-entry.py'), 'utf8');
+    const one = (name: string): string => {
+      const all = [...launcher.matchAll(new RegExp(`^${name} = '([^'\\n]+)'$`, 'gm'))];
+      expect(all, `ccd/ccd-entry.py declares ${name} once`).toHaveLength(1);
+      return all[0]![1]!;
+    };
+    expect(one('ENTRY_SUFFIX')).toBe(`/${entryDest}`);
+    expect(one('BODY_SUFFIX')).toBe(`/${bodyDest}`);
+  });
+
   it('the uninstall census removes the body by name, and its directory only with rmdir — never rm -r', () => {
     const { bodyDest } = pairDecl();
     const body = fnBody('_uninst_tree_bins');

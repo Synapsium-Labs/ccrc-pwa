@@ -13544,10 +13544,11 @@ CCRC_ENTRY_PY=""
 CCRC_ENTRY_WHY=""
 _inst_entry_python() {   # <helper> -> rc 0 with CCRC_ENTRY_PY = the canonical python3 the launcher's shebang names
   # The interpreter is asked for its OWN canonical path (`realpath` of
-  # `sys.executable`, under -IS), so a PATH shim or symlink never ends up in a
-  # shebang — then that exact path re-runs the helper's `check`, which proves
-  # Python 3, all four isolation flags and a shebang-safe path, and must name
-  # the same path back.
+  # `sys.executable`, under -IS), and that exact binary re-runs the helper's
+  # `check`, which proves Python 3 and all four isolation flags and prints the
+  # path the shebang will name — the PATH python3 when it IS that binary, else
+  # the canonical one (D-3698) — after proving it shebang-safe. The canonical
+  # path is what RUNS the helper below; the printed one is what it renders.
   local helper="$1" py out rc=0
   CCRC_ENTRY_PY=""; CCRC_ENTRY_WHY=""
   [ -f "$helper" ] \
@@ -13556,7 +13557,7 @@ _inst_entry_python() {   # <helper> -> rc 0 with CCRC_ENTRY_PY = the canonical p
   [ -n "$py" ] \
     || { CCRC_ENTRY_WHY="python3 is required: ccd's installed direct entry is a standard-library Python launcher (D-3696), and no python3 on PATH runs in isolated mode (-IS)."; return 1; }
   out="$("$py" -IS "$helper" check 2>&1)" || rc=$?
-  if [ "$rc" -ne 0 ] || [ "$out" != "$py" ]; then
+  if [ "$rc" -ne 0 ] || [ -z "$out" ] || [ "${out#/}" = "$out" ]; then
     CCRC_ENTRY_WHY="python3 at $py cannot be ccd's launcher interpreter: ${out:-it answered nothing}."
     return 1
   fi
@@ -13570,7 +13571,7 @@ _inst_ccd_pair() {   # <tree> — render, self-test and publish ccd's launcher/b
   "$CCRC_ENTRY_PY" -IS "$tree/ccd/ccd-entry-install.py" install "$tree" "$HOME" || rc=$?
   case "$rc" in
     0) return 0 ;;
-    2) _ccrc_die "ccd's body at \$HOME/.local/libexec/ccrc/ccd was published and its launcher at \$HOME/.local/bin/ccd was not (the line above says why) — every ccd start on this box refuses by digest until the pair converges: re-run 'ccrc update' (or 'ccrc install')" ;;
+    2) _ccrc_die "ccd's pair was left half-published — the line above names the half that moved and why; until a re-run converges it, ccd starts on this box may refuse: re-run 'ccrc update' (or 'ccrc install')" ;;
     *) _ccrc_die "ccd's direct-entry pair was not installed (the line above says why) — neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd was changed" ;;
   esac
 }
