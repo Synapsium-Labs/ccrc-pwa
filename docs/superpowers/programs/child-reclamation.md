@@ -58,9 +58,10 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     textually below a proven-absent component is a namespace projection, not identity evidence, and makes reclaim
     `unmeasured` regardless of modeled tmux state. This does not change the subject child's own R19 vanished-worktree
     arm. Process cwd observations may strengthen refusal but never authorize deletion.
-  - The repair is the separate one-wave programme `reclaim-row-placement-safety`, with its own run, fresh child,
-    run-open deviation block, finalized plan, PR and official review. It is neither run 199's inherited-Bash entry
-    boundary nor Wave 5 product scope, and neither existing run may absorb it by changing shape.
+  - The repair is the separate one-wave programme `reclaim-row-placement-safety`; run 208 opened after Wave 4
+    released claims 850 and 851, and its sixteen-number block begins at D-3731. Its finalized plan, fresh child, PR
+    and official review remain distinct acts. It is neither run 199's inherited-Bash entry boundary nor Wave 5
+    product scope, and neither existing run may absorb it by changing shape.
   - Landing order is `reclaim-row-placement-safety`, then run 199 `reclaim-entry-safety`, then Wave 4. Run 199 keeps
     its immutable four items and uses its existing merge-current-main item to integrate the first prerequisite.
     Wave 4 stays stopped at local commit `1a02baac7abfbb1a88a1a7a251c7326c11ae9f08`; PR #215 receives no fresh

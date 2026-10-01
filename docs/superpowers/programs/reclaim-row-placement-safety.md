@@ -17,7 +17,7 @@ automatic deletion.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | **planned** — run 208 opened after claims 850 and 851 cleared; sixteen-number block allocated; finalized plan and exact handoff commit next; no child yet |
+| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | **planned** — run 208 opened after claims 850 and 851 cleared; sixteen-number block allocated; the finalized plan and ledger are published together in the immutable coordinator handoff; claims and fresh-child dispatch follow |
 
 **Deviation block: sixteen numbers, the first of them 3731** (allocated exactly once at run 208 open,
 2026-10-01; floor now 3747). The finalized plan defines the first as
@@ -36,7 +36,9 @@ a measured departure is defined in that plan; unused headroom remains unrendered
   the subject child's existing absent-worktree behavior remains unchanged.
 - **2026-10-01 — run 208 opened only after claim release.** Wave 4 released overlapping claims 850 and 851 while
   retaining its non-overlapping claims. The coordinator then opened run 208 and allocated its sixteen-number block
-  once. Final plan publication and child dispatch remain separate, subsequent acts.
+  once. The finalized plan is reviewed and published at one exact coordinator handoff commit before a fresh child is
+  dispatched; the child copies that plan blob with read-only `git show`, verifies its blob ID and bytes, commits it
+  alone as its first branch commit, and never cherry-picks coordinator ancestry.
 - **2026-10-01 — split as a second blocking prerequisite.** Fix Round 3's scoped changes are accepted as addressing
   their assigned findings, but its held-out rereview measured the removed-symlink row-placement failure outside
   that diff. The defect is pre-existing and Important-grade because the same false-safe answer reaches unattended
