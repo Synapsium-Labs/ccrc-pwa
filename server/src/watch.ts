@@ -51,7 +51,7 @@ import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
   stallFailedVerdict, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
-  stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportMail,
+  stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
   stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
   stallVerdict, stallW2ReportMail,
   type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
@@ -1992,8 +1992,14 @@ export class FleetWatcher {
    *   and newer than the first check on it. The bind is read from the store only for a `re stall-check:`
    *   subject. Any other mail wearing that prefix is pushed as ordinary mail, so no box-token holder can use
    *   the prefix to keep a mail off the phone.
-   * - A `report` (the watch's r2 to the coordinator) is pushed under its own title, `⚠ stall › <run
-   *   workspace>`. The lane never pushes r2 itself, so this is its only push.
+   * - A `self-wake` (wave 2: an `orphaned:` or `failed:` notice the watch mails a session about its own turn) is
+   *   recorded, never pushed. The session is the one to act on it, and orphan D's rung 2 pushes the operator from
+   *   the lane itself (`⚠ orphaned`) when that mail sits unacknowledged.
+   * - A `report` (the watch's mail to the coordinator: wave 1's r2, and wave 2's frozen, dead and failed rung) is
+   *   pushed under a title by its kind, read back from its own subject (`stallReportKind`, `stallReportTitle`):
+   *   `⚠ stall`, `⚠ frozen`, `⚠ dead` or `⚠ failed` › <run workspace>. The lane never pushes a report itself, so
+   *   this is its only push. Under `mail-disabled` the verdict holds every coordinator-bound rung, so no report is
+   *   queued and none reaches this push. The lane's operator rungs still push (ruling Q1: no reroute).
    */
   private pushNewMail(projects: Set<string>, sessionProjects: Map<string, string>): void {
     const coord = this.deps.coord;
@@ -2011,12 +2017,12 @@ export class FleetWatcher {
       const stall = stallMailClass(m, bind);
       this.pushOne({
         kind: 'mail', sessionId: m.toId, project,
-        title: stall === 'report' ? `⚠ stall › ${m.workspace ?? m.toId}` : `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
+        title: stall === 'report' ? stallReportTitle(stallReportKind(m.subject), m.workspace ?? m.toId) : `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
         body: m.subject,
         runId: m.runId,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
-        ...(isAskNudgeMail(m) || stall === 'check' || stall === 'reply' ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
