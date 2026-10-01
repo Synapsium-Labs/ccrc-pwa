@@ -852,6 +852,28 @@ function main(argv) {
       out({ ok: true, op: 'init', created: false, ...describe(account, registry, catalogue) });
       return 0;
     }
+    // A CODEX REGISTRY IS CREATED ON A CODEX-KIND LANE ONLY (Plan 3a Task 2,
+    // operator ruling Z3, D-3706). The model probe reads a codex-kind lane's
+    // own `exec.authDir`. Every other row declares none, and an `external`
+    // row's probe keeps the token-directory default until that lane's flip
+    // (ruling Z1): a directory that belongs to one particular lane. So a codex
+    // registry created here would put the hourly refresh one run away from
+    // probing this lane with another lane's OAuth. This branch is the ONE
+    // place a registry is created (`writeRegistry`'s other caller rewrites one
+    // that already exists), so the refusal covers `ccrc models <id> init
+    // codex` and every other caller of this op alike. A registry that ALREADY
+    // exists is untouched: the arm above answers it first, and the mutating
+    // ops below still rewrite it, so a lane that gained one before this build
+    // keeps it and keeps being refreshed. Every other probe kind is created on
+    // any row, as before.
+    if (a.probe === 'codex' && !(isObj(account.exec) && account.exec.kind === 'codex')) {
+      const kind = isObj(account.exec) && typeof account.exec.kind === 'string' ? account.exec.kind : null;
+      return refuse(1, 'codex-registry-needs-codex-lane',
+        `account "${a.id}" is not a codex-kind lane (its exec.kind is ${JSON.stringify(kind)}), and only `
+        + 'a codex-kind lane declares the authDir its probe must read, so a codex class registry here '
+        + 'would be probed through a token directory that is not this lane\'s. Flip the lane to "codex" '
+        + `first (Plan 3b), then re-run 'ccrc models ${a.id} init codex'. Nothing was written.`);
+    }
     const seed = JSON.parse(JSON.stringify(SEEDS[a.probe]));
     if (a['base-url'] !== undefined) seed.baseUrl = a['base-url'];
     try {

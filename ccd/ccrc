@@ -9752,6 +9752,30 @@ _models_litellm_template() { printf '%s' "$CCRC_HERE/../deploy/litellm-config.te
 # process holds a config this run just replaced.
 _models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }
 
+# THE BARE STOP'S PRECONDITION (Plan 3a Task 2, operator ruling Z4,
+# D-3753). The external arm's only stop is
+# another repository's bare `ccgpt stop`, which stops units BY NAME, and a
+# codex-kind lane's own tiers carry those names (`ccgpt-<id>-{litellm,shim}
+# .service`, spec §19.2). With no codex-kind row on the roster, today's shape,
+# that stop can reach only that repository's own units: rc 1, nothing printed,
+# and the arm runs exactly as before. Once ANY row is codex-kind, ccrc cannot
+# tell whose units that stop would name: rc 0, the reason as one clause on
+# stdout, and the arm refuses before it writes. A roster whose codex lanes
+# cannot be told (`_codex_lanes` rc 1 or rc 2) answers rc 0 too, because
+# undecidable is never "no codex lane". Asked of `_codex_lanes`, the lane
+# library's ONE reader of exec.kind.
+_models_litellm_stop_blocked() {   # -> rc 0 and one clause on stdout iff the external arm must not run the bare stop
+  local ids rc=0
+  ids="$(_codex_lanes 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'which roster lanes are codex-kind cannot be read (the lane library answered rc %s)' "$rc"
+    return 0
+  fi
+  [ -n "$ids" ] || return 1
+  printf 'the roster names codex-kind lane(s) %s' "${ids//$'\n'/, }"
+  return 0
+}
+
 # WHICH ARM (D-3482): `exec.kind == "codex"` read off
 # ~/.ccrc/accounts.json by the lane library's ONE reader of that question
 # (`_codex_lanes`) — never accounts.sh's CCRC_CODEX_BACKEND, which is keyed
@@ -10050,7 +10074,9 @@ _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON o
 _models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's final answer, or a refusal
   # A codex-kind lane takes its own arm (`_models_litellm_lane`, above).
   # Everything below is the EXTERNAL arm, unchanged byte for byte
-  # (D-3482): the live lanes are external, and another
+  # (D-3482) but for one guard (Plan 3a Task 2,
+  # D-3753): its bare stop is refused
+  # once any roster row is codex-kind. The live lanes are external, and another
   # repository's LiteLLM reads that arm's file. Plan 3 retires it at cutover.
   if _models_litellm_codex "$1"; then _models_litellm_lane "$1"; return $?; fi
   local file check crc
@@ -10064,6 +10090,14 @@ _models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's 
   fi
   local restarted=false
   if _models_litellm_running; then
+    # NEVER THE BARE STOP ONCE A CODEX-KIND LANE EXISTS (Plan 3a Task 2,
+    # operator ruling Z4, D-3753). Refused
+    # HERE, through this arm's own restart-failed path and before PHASE 2, so
+    # nothing is written and the next run sees the same difference again.
+    local blocked
+    if blocked="$(_models_litellm_stop_blocked)"; then
+      _models_refuse restart-failed 1 "the LiteLLM proxy is running on the PREVIOUS config, and ccrc will not stop it: $blocked, and the only stop this arm has is another repository's bare 'ccgpt stop', which stops units by name, the names a codex lane's own tiers carry. Stop that proxy by hand once you know which lane's units that stop would name, or flip lane $1 to codex (Plan 3b), then re-run this command — until then this box serves the old model list. Nothing was written and nothing was stopped."
+    fi
     if command -v ccgpt >/dev/null 2>&1 && ccgpt stop >/dev/null 2>&1; then
       restarted=true
       echo "$PROG: stopped the running LiteLLM proxy — it was holding the previous rendering; the next gpt session starts it again on the new one." >&2
