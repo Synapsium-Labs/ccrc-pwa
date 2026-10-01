@@ -15,7 +15,7 @@ direct reclaim argv shapes before automatic reclamation can ship.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | **planned** — run 199; fresh child not yet dispatched; no PR |
+| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | **working** — run 199 on `still-harbor`; adversarial plan review tightened protected-environment, kernel-entry and symlink-safe-publication gates before GREEN implementation; no PR |
 
 **Deviation block: eight numbers, the first of them 3696** (allocated once at run 199 open, 2026-09-30; floor
 now 3704). The finalized plan defines the first as `ccd-imported-functions-hijack-reclaim-reads`. No other issued
@@ -28,10 +28,11 @@ unrendered.
   PR #215 and is spent. This repair therefore receives its own run, fresh child, deviation block and PR. It merges
   before #215 may proceed. It is not wave 5 and owns none of wave 5's product scope.
 - **The boundary is selective, not a whole-ccd compatibility claim.** In scope are ordinary direct installed-path
-  invocations of `ws-reclaim` and `ws-audit --reclaim` from the agent, local server, systemd and launchd. The
-  boundary must execute before any Bash body or `BASH_ENV`, select and validate a PATH-resolved Bash >=4.4 on
-  Linux and macOS, enter privileged mode, and have the Bash body remeasure both direct mode and actual privileged
-  state without trusting an inherited marker.
+  invocations of `ws-reclaim` and the exact `ws-audit --session <value> --reclaim [--defer-expired]` token skeleton
+  from the agent, local server, systemd and launchd. The boundary must execute before any Bash body or `BASH_ENV`,
+  strip Bash startup/function/option variables from the protected probe and payload environment, select and validate
+  a PATH-resolved Bash >=4.4 on Linux and macOS, enter privileged mode, and have the Bash body remeasure both direct
+  mode and actual privileged state without trusting an inherited marker.
 - **Source mode remains structurally supported.** Fixture calls that intentionally `source ccd/ccd` do not pass
   through the direct-entry boundary. Explicit `bash ccd/ccd ...` exists in tests and in the wider product, but it
   bypasses this pre-Bash launcher and receives no security guarantee from this prerequisite. Detached swap
@@ -43,6 +44,12 @@ unrendered.
   exact handoff SHA. Dispatch names that full SHA and plan path. The worker uses read-only `git show` to copy that
   exact blob byte-for-byte into its checkout, verifies equality, and commits it as its first branch commit before
   code. It does not cherry-pick coordinator ancestry, and this prerequisite does not wait for a separate docs merge.
+- **2026-10-01 — adversarial plan review tightened, never relaxed, the dispatched boundary.** `bash -p` suppresses
+  startup processing in that Bash but leaves hostile startup variables available to an ordinary child Bash, so the
+  protected probe and payload now share a sanitized environment. The same review made two fail-shut publication
+  claims executable: the staged launcher crosses its kernel shebang before publication, and exact destination
+  entries are inspected without following symlinks and then atomically replaced or refused by type. The audit
+  classifier's claim is narrowed to its exact token skeleton; the body remains the session-id grammar authority.
 - **Routing escalation.** This is a destructive-path security boundary reached after repeated wave 4 resolver
   rounds exposed the process-level class. The main loop runs Opus at `xhigh`; implementation subagents run Sonnet
   at `high`; workflows are off; compact threshold is 40. The held-out review remains outside that routing and adds
@@ -55,9 +62,14 @@ unrendered.
 - Fixture HOMEs only. Never run `ws-reclaim`, `ws-reap`, `ws-rm`, `ws-gc --prune`, `ws-archive`, `ws-restore` or
   any other destructive ccd verb against the live HOME.
 - Protect inherited Bash startup, function and option state across supported installed direct reclaim entry:
-  `BASH_FUNC_*`, `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS` and `CDPATH`. Runtime PATH and the executables it selects
+  `BASH_FUNC_*`, `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS` and `CDPATH` are absent from the protected probe and
+  payload environment, so a trusted child Bash cannot re-consume them. Runtime PATH and the executables it selects
   are trusted prerequisites; privileged Bash does not authenticate them. A failed or unmeasured decision-critical
   command still fails shut.
+- The rendered Python launcher is executable evidence, not only text: install and fallback deploy reject an
+  unencodable or overlong absolute interpreter shebang and execute the staged launcher through the destination
+  kernel before publishing either active file. Runtime body metadata does not follow symlinks, and both publication
+  lanes replace or refuse each wrong destination type without moving a staged file through a symlinked directory.
 - Preserve supported production entry on Linux and macOS. macOS uses a PATH-selected Homebrew Bash because
   `/bin/bash` 3.2 is unsupported. The standing operator ruling makes macOS CI legs non-gating, but portability
   evidence and fixture probes remain required and must be reported honestly.

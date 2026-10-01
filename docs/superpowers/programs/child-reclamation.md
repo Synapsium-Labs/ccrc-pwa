@@ -720,12 +720,13 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 
 **The next act is the separate `reclaim-entry-safety` prerequisite.** Its number-free programme skeleton plus
 this parent update are committed and pushed at `5f90a36d0`; its one-wave run is 199. Eight deviation numbers were
-allocated exactly once at run-open, beginning at 3696. The finalized tracked plan defines the first issued number
-as `ccd-imported-functions-hijack-reclaim-reads`, and its metadata names run 199 and the block. Commit and push the
-plan and these post-allocation ledger updates as one immutable handoff, then dispatch the fresh child with that
-full handoff SHA and plan path. The child copies the blob byte-for-byte with read-only `git show`, verifies equality,
-and commits it first before implementation. Its four declared items, routing, exclusions and review boundary are
-in `docs/superpowers/programs/reclaim-entry-safety.md`.
+allocated exactly once at run-open, beginning at 3696. Immutable handoff `65cec618550d23f8ce14c6d5bde04d75e57d829d`
+defines the first as `ccd-imported-functions-hijack-reclaim-reads`; `still-harbor` copied that plan blob byte-for-byte
+and committed it first. An adversarial plan review then measured three required tightenings before GREEN
+implementation: sanitize the protected probe/payload environment so trusted child Bash cannot re-consume startup
+poison, execute the rendered staged launcher through its destination kernel before publication, and publish both
+artifacts with non-following destination-type checks. The amended tracked plan and prerequisite ledger carry those
+rulings; its four declared items, routing, exclusions and review boundary remain unchanged.
 
 **Wave 4 remains blocked after its Fix Round 3 report.** Run 174 stays `working`; items 817–834 stay pending;
 PR #215 stays open. Once the prerequisite PR merges, `swift-hollow` merges `origin/main` (never rebases), resolves
