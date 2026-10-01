@@ -139,6 +139,18 @@ const tickOf = (pid: number | null = PID, rows: readonly SessionRecord[] = [regR
   panePids: new Map(rows.map((r): [string, number | null] => [r.id, pid])), records: rows,
 });
 
+/** Sweeps at the lane's own cadence: once every STALL_SWEEP_MS from `from` through `to`. A first-seen clock lives only
+ *  across judged sweeps at most 2 × STALL_SWEEP_MS apart (slug `stall-clocks-drop-on-an-unobserved-gap`), so a row that
+ *  waits out DEAD_GRACE_MS or MARKER_UNREADABLE_MS sweeps through it, as production does. */
+const sweepThrough = async (
+  w: FleetWatcher, sessions: readonly FleetSession[], names: readonly string[], tick: StallTick, from: number, to: number,
+): Promise<void> => {
+  for (let t = from; t <= to; t += STALL_SWEEP_MS) {
+    at(t);
+    await w.sweepStalls(sessions, names, tick);
+  }
+};
+
 /** A `FleetIO` that records every `readFileMeasured` path and delegates to `localIO` (`degradedReadIO`'s shape). */
 const countingIO = (sink: string[]): FleetIO => ({
   ...localIO,
@@ -953,10 +965,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     const { coord, w } = await rig();
     const runId = seedRun(coord, { program: 'demo-program' });
     const dead = fleetRow(WORKER, { lifecycle: 'orphan' });
-    at(T0);
-    await w.sweepStalls([dead], ARMED, tickOf());
-    at(T0 + DEAD_GRACE_MS);
-    await w.sweepStalls([dead], ARMED, tickOf());
+    await sweepThrough(w, [dead], ARMED, tickOf(), T0, T0 + DEAD_GRACE_MS);
     expect(stallRows(coord, runId)).toEqual([stallDetail('shadow', 'dead', 1, KEY)]);
     expect(operatorMail(coord)).toEqual([]);
   });
@@ -965,10 +974,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     const { coord, w } = await rig();
     const runId = seedRun(coord, { program: 'demo-program' });
     const dead = fleetRow(WORKER, { lifecycle: 'orphan' });
-    at(T0);
-    await w.sweepStalls([dead], W2, tickOf());
-    at(T0 + DEAD_GRACE_MS - STALL_SWEEP_MS);
-    await w.sweepStalls([dead], W2, tickOf());
+    await sweepThrough(w, [dead], W2, tickOf(), T0, T0 + DEAD_GRACE_MS - STALL_SWEEP_MS);
     expect(operatorMail(coord)).toEqual([]);
     at(T0 + DEAD_GRACE_MS);
     await w.sweepStalls([dead], W2, tickOf());
@@ -983,10 +989,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     const { coord, w } = await rig();
     seedRun(coord, { program: 'demo-program' });
     const gone = tickOf(PID, []);
-    at(T0);
-    await w.sweepStalls([], W2, gone);
-    at(T0 + DEAD_GRACE_MS - STALL_SWEEP_MS);
-    await w.sweepStalls([], W2, gone);
+    await sweepThrough(w, [], W2, gone, T0, T0 + DEAD_GRACE_MS - STALL_SWEEP_MS);
     expect(operatorMail(coord)).toEqual([]);
     at(T0 + DEAD_GRACE_MS);
     await w.sweepStalls([], W2, gone);
@@ -1002,13 +1005,9 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     at(T0);
     await w.sweepStalls([], W2, gone);
     const again = await primedWatcher(h, store(h.home));
-    at(T0 + 5 * 60_000);
-    await again.sweepStalls([], W2, gone);
-    at(T0 + DEAD_GRACE_MS);
-    await again.sweepStalls([], W2, gone);
+    await sweepThrough(again, [], W2, gone, T0 + 5 * 60_000, T0 + DEAD_GRACE_MS);
     expect(operatorMail(coord)).toEqual([]);          // 5 min on the new watcher's clock
-    at(T0 + 5 * 60_000 + DEAD_GRACE_MS);
-    await again.sweepStalls([], W2, gone);
+    await sweepThrough(again, [], W2, gone, T0 + DEAD_GRACE_MS + STALL_SWEEP_MS, T0 + 5 * 60_000 + DEAD_GRACE_MS);
     expect(operatorMail(coord).map((m) => m.toId)).toEqual([COORD]);
   });
 
@@ -1021,11 +1020,9 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     vi.spyOn(coord, 'stallCandidates').mockReturnValueOnce({ ok: true, runs: [] });
     at(T0 + STALL_SWEEP_MS);
     await w.sweepStalls([], W2, gone);                // no candidates: the prune drops T0
-    at(T0 + DEAD_GRACE_MS);
-    await w.sweepStalls([], W2, gone);                // absent again, since now
+    await sweepThrough(w, [], W2, gone, T0 + 2 * STALL_SWEEP_MS, T0 + DEAD_GRACE_MS);   // absent again, since T0 + 2 min
     expect(operatorMail(coord)).toEqual([]);
-    at(T0 + 2 * DEAD_GRACE_MS);
-    await w.sweepStalls([], W2, gone);
+    await sweepThrough(w, [], W2, gone, T0 + DEAD_GRACE_MS + STALL_SWEEP_MS, T0 + 2 * STALL_SWEEP_MS + DEAD_GRACE_MS);
     expect(operatorMail(coord).map((m) => m.toId)).toEqual([COORD]);   // the control: the clock runs from the return
   });
 
@@ -1210,15 +1207,9 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     const sessions = [fleetRow(WORKER), fleetRow(COORD)];
     const markerTags = (): (string | undefined)[] => sent.filter((p) => p.title.startsWith('⚠ marker')).map((p) => p.tag);
     const M0 = IDLE_AT;
-    at(M0);
-    await w.sweepStalls(sessions, W2, both);
-    at(M0 + MARKER_UNREADABLE_MS - STALL_SWEEP_MS);
-    await w.sweepStalls(sessions, W2, both);
+    await sweepThrough(w, sessions, W2, both, M0, M0 + MARKER_UNREADABLE_MS - STALL_SWEEP_MS);
     expect(markerTags()).toEqual([]);
-    at(M0 + MARKER_UNREADABLE_MS);
-    await w.sweepStalls(sessions, W2, both);
-    at(M0 + MARKER_UNREADABLE_MS + STALL_SWEEP_MS);
-    await w.sweepStalls(sessions, W2, both);
+    await sweepThrough(w, sessions, W2, both, M0 + MARKER_UNREADABLE_MS, M0 + MARKER_UNREADABLE_MS + STALL_SWEEP_MS);
     expect(markerTags()).toEqual([`stall-${COORD}-marker-unreadable-1-${M0}`]);
     rmSync(markPath);                                 // healed: the first-seen time is dropped
     const M1 = M0 + MARKER_UNREADABLE_MS + 2 * STALL_SWEEP_MS;
@@ -1226,10 +1217,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     await w.sweepStalls(sessions, W2, both);
     writeFileSync(markPath, '{');                     // unreadable again: a new first-seen time
     const M2 = M1 + STALL_SWEEP_MS;
-    at(M2);
-    await w.sweepStalls(sessions, W2, both);
-    at(M2 + MARKER_UNREADABLE_MS);
-    await w.sweepStalls(sessions, W2, both);
+    await sweepThrough(w, sessions, W2, both, M2, M2 + MARKER_UNREADABLE_MS);
     expect(markerTags()).toEqual([`stall-${COORD}-marker-unreadable-1-${M0}`, `stall-${COORD}-marker-unreadable-1-${M2}`]);
   });
 
@@ -1279,20 +1267,14 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     const markerTags = (): (string | undefined)[] => sent.filter((p) => p.title.startsWith('⚠ marker')).map((p) => p.tag);
     const unmeasured = tickOf(PID, [regRow(WORKER, UUID, { unmeasured: ['uuid'] }), regRow(COORD, COORD_UUID, { unmeasured: ['uuid'] })]);
     const M0 = IDLE_AT;
-    for (const t of [M0, M0 + MARKER_UNREADABLE_MS, M0 + 2 * MARKER_UNREADABLE_MS]) {
-      at(t);
-      await w.sweepStalls(sessions, W2, unmeasured);
-    }
+    await sweepThrough(w, sessions, W2, unmeasured, M0, M0 + 2 * MARKER_UNREADABLE_MS);   // a sweep a minute, 2 h
     expect(markerTags()).toEqual([]);
     // The control: the worker's identity measured and its marker malformed. The clock starts on that READ, and the
     // arm fires an hour later, so the silence above is the identity rule's and not an arm that cannot fire here.
     writeFileSync(path.join(h.home, '.cc-sessions', `${WORKER}.turn.json`), '{');
     const measured = tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID, { unmeasured: ['uuid'] })]);
     const M1 = M0 + 2 * MARKER_UNREADABLE_MS + STALL_SWEEP_MS;
-    at(M1);
-    await w.sweepStalls(sessions, W2, measured);
-    at(M1 + MARKER_UNREADABLE_MS);
-    await w.sweepStalls(sessions, W2, measured);
+    await sweepThrough(w, sessions, W2, measured, M1, M1 + MARKER_UNREADABLE_MS);
     expect(markerTags()).toEqual([`stall-${runId}-marker-unreadable-1-${KEY}`]);
   });
 });
@@ -1381,28 +1363,12 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(failedMail()).toHaveLength(1);
   });
 
-  // Slug `stall-clocks-drop-on-an-unobserved-gap`. A first-seen clock claims "true at every sweep since", so a window in
-  // which the lane observed nothing must restart it. The worker is absent at T0, the lane is blind for one step, and
-  // three hours later the worker is absent again: the dead report waits DEAD_GRACE_MS from the return, never fires
-  // at once with a duration nobody watched. One row per place the lane loses sight of the fleet.
-  type Blind = (c: { coord: CoordStore; w: FleetWatcher; gone: StallTick; registry: { blind: boolean } }) => Promise<void>;
-  const BLIND: [string, Blind][] = [
-    ['stall-watch-disabled', async ({ w, gone }) => { await w.sweepStalls([], ['stall-watch-disabled', ...W2], gone); }],
-    ['an unreadable candidate read', async ({ coord, w, gone }) => {
-      vi.spyOn(coord, 'stallCandidates').mockReturnValueOnce({ ok: false, kind: 'run-unreadable', detail: 'bad row' });
-      await w.sweepStalls([], W2, gone);
-    }],
-    ['a throwing candidate read', async ({ coord, w, gone }) => {
-      vi.spyOn(coord, 'stallCandidates').mockImplementationOnce(() => { throw new Error('SQLITE_BUSY'); });
-      await w.sweepStalls([], W2, gone);
-    }],
-    ['a tick whose registry will not list (the lane never runs)', async ({ w, registry }) => {
-      registry.blind = true;
-      await w.tick();
-      registry.blind = false;
-    }],
-  ];
-  it.each(BLIND)('a window the lane did not observe drops its first-seen clocks: %s', async (_name, blindStep) => {
+  // Slug `stall-clocks-drop-on-an-unobserved-gap`: ONE gap rule. A first-seen clock claims its condition held at every
+  // judged sweep since it was set. When MORE than 2 × STALL_SWEEP_MS passes between two judged sweeps, nobody watched
+  // in between, so the later sweep drops every clock before it judges. A gap of exactly 2 × STALL_SWEEP_MS keeps
+  // them. An early return (disabled, an unreadable or throwing candidate read) is no judged sweep, and a tick that
+  // never reaches the lane is none either; a single such blip between two on-schedule sweeps leaves no gap.
+  const presence = async (): Promise<{ coord: CoordStore; w: FleetWatcher; gone: StallTick; registry: { blind: boolean }; reports: () => MailRow[] }> => {
     const registry = { blind: false };
     const io: FleetIO = {
       ...localIO,
@@ -1411,21 +1377,63 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     const { coord, w } = await rig({ io });
     seedRun(coord, { program: 'demo-program' });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const gone = tickOf(PID, []);
-    const reports = (): MailRow[] => operatorMail(coord).filter((m) => m.toId === COORD);
+    return { coord, w, gone: tickOf(PID, []), registry, reports: () => operatorMail(coord).filter((m) => m.toId === COORD) };
+  };
+  type Window = (c: { coord: CoordStore }) => { names: readonly string[]; restore: () => void };
+  const WINDOWS: [string, Window][] = [
+    ['stall-watch-disabled', () => ({ names: ['stall-watch-disabled', ...W2], restore: () => {} })],
+    ['an unreadable candidate read', ({ coord }) => {
+      const spy = vi.spyOn(coord, 'stallCandidates').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'bad row' });
+      return { names: W2, restore: () => spy.mockRestore() };
+    }],
+    ['a throwing candidate read', ({ coord }) => {
+      const spy = vi.spyOn(coord, 'stallCandidates').mockImplementation(() => { throw new Error('SQLITE_BUSY'); });
+      return { names: W2, restore: () => spy.mockRestore() };
+    }],
+  ];
+  it.each(WINDOWS)('a window longer than two sweeps with no judged sweep drops the clocks (%s): the dead report waits DEAD_GRACE_MS from the first judged sweep after it', async (_name, open) => {
+    const { coord, w, gone, reports } = await presence();
     at(T0);
-    await w.sweepStalls([], W2, gone);                // absent since T0
-    at(T0 + STALL_SWEEP_MS);
-    await blindStep({ coord, w, gone, registry });    // the lane observes nothing
-    const BACK = T0 + 3 * 3_600_000;
-    at(BACK);
-    await w.sweepStalls([], W2, gone);                // absent again: since now, not since T0
-    at(BACK + DEAD_GRACE_MS - STALL_SWEEP_MS);
-    await w.sweepStalls([], W2, gone);
-    expect(reports()).toEqual([]);
+    await w.sweepStalls([], W2, gone);                // judged: absent since T0
+    const window = open({ coord });
+    await sweepThrough(w, [], window.names, gone, T0 + STALL_SWEEP_MS, T0 + 15 * STALL_SWEEP_MS);   // a sweep a minute, none judged
+    window.restore();
+    const BACK = T0 + 16 * STALL_SWEEP_MS;            // the first judged sweep after it: 16 min since the last
+    await sweepThrough(w, [], W2, gone, BACK, BACK + DEAD_GRACE_MS - STALL_SWEEP_MS);
+    expect(reports()).toEqual([]);                    // a kept clock would have fired at BACK, 16 min after T0
     at(BACK + DEAD_GRACE_MS);                         // the control: the arm fires, a full grace after the return
     await w.sweepStalls([], W2, gone);
     expect(reports()).toHaveLength(1);
+  });
+
+  it('ONE unlistable tick between two on-schedule sweeps leaves no gap: the clock survives, and the dead report comes at the original grace', async () => {
+    const { w, gone, registry, reports } = await presence();
+    at(T0);
+    await w.sweepStalls([], W2, gone);                // judged: absent since T0
+    at(T0 + 30_000);
+    registry.blind = true;
+    await w.tick();                                   // the registry will not list: this tick never reaches the lane
+    registry.blind = false;
+    await sweepThrough(w, [], W2, gone, T0 + STALL_SWEEP_MS, T0 + DEAD_GRACE_MS - STALL_SWEEP_MS);
+    expect(reports()).toEqual([]);
+    at(T0 + DEAD_GRACE_MS);
+    await w.sweepStalls([], W2, gone);
+    expect(reports()).toHaveLength(1);
+  });
+
+  // The boundary, in milliseconds: judged sweeps 2 × STALL_SWEEP_MS apart (120 000 ms: one on-schedule sweep missed)
+  // keep the clocks, and 2 × STALL_SWEEP_MS + 1 ms apart drop them. After the gap the lane sweeps every minute, so a
+  // kept clock fires at T0 + DEAD_GRACE_MS and a dropped one at NEXT + DEAD_GRACE_MS.
+  it.each([
+    [2 * STALL_SWEEP_MS, false],
+    [2 * STALL_SWEEP_MS + 1, true],
+  ] as const)('a gap of %d ms between two judged sweeps: drops the clocks = %s', async (gap, drops) => {
+    const { w, gone, reports } = await presence();
+    at(T0);
+    await w.sweepStalls([], W2, gone);                // judged: absent since T0
+    const NEXT = T0 + gap;
+    await sweepThrough(w, [], W2, gone, NEXT, NEXT + DEAD_GRACE_MS);
+    expect(reports().map((m) => m.at)).toEqual([drops ? NEXT + DEAD_GRACE_MS : T0 + DEAD_GRACE_MS]);
   });
 
   // ── Pins: each apply branch, read and filter the lane owns, one row apiece (the mutation-table rule) ─────────────
@@ -1641,12 +1649,9 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     vi.spyOn(coord, 'stallCandidates').mockReturnValueOnce({ ok: true, runs: [] });
     at(IDLE_AT + STALL_SWEEP_MS);
     await w.sweepStalls(sessions, W2, both);           // no runs: it is no coordinator, and its clock is pruned
-    const BACK = IDLE_AT + 2 * MARKER_UNREADABLE_MS;
-    at(BACK);
-    await w.sweepStalls(sessions, W2, both);
-    at(BACK + MARKER_UNREADABLE_MS - STALL_SWEEP_MS);
-    await w.sweepStalls(sessions, W2, both);
-    expect(markerTags()).toEqual([]);
+    const BACK = IDLE_AT + 2 * STALL_SWEEP_MS;
+    await sweepThrough(w, sessions, W2, both, BACK, BACK + MARKER_UNREADABLE_MS - STALL_SWEEP_MS);
+    expect(markerTags()).toEqual([]);                  // a kept clock would have fired at IDLE_AT + MARKER_UNREADABLE_MS
     at(BACK + MARKER_UNREADABLE_MS);                   // the control: the arm fires, keyed on the return
     await w.sweepStalls(sessions, W2, both);
     expect(markerTags()).toEqual([`stall-${COORD}-marker-unreadable-1-${BACK}`]);

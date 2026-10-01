@@ -689,15 +689,18 @@ export class FleetWatcher {
   private lastStallSweep = 0;
   /** True while a `sweepStalls` pass awaits its reads. A second pass started meanwhile returns at once. */
   private stallSweepRunning = false;
-  /** Wave 2's in-memory clocks, keyed by session id, pruned every sweep (`pruneStallMemory`) and dropped whole on a
-   *  window the lane did not observe (`dropStallClocks`). A server restart re-times each one, which the spec accepts
-   *  (slug `absent-worker-is-dead-after-grace`): when a run worker was first seen with no fleet row; when it was
-   *  first seen with an `orphan` or `never-started` lifecycle; when a worker's or coordinator's turn marker was first
-   *  READ `unmeasured` or `malformed` (`stallMarkClock`: an unmeasured identity reads no marker, so it neither starts
-   *  nor keeps that clock). */
+  /** Wave 2's in-memory clocks, keyed by session id, pruned every sweep (`pruneStallMemory`) and dropped whole after a
+   *  gap of more than 2 × STALL_SWEEP_MS between judged sweeps (`dropStallClocks`, `lastStallJudgedAt`). A server
+   *  restart re-times each one, which the spec accepts (slug `absent-worker-is-dead-after-grace`): when a run worker
+   *  was first seen with no fleet row; when it was first seen with an `orphan` or `never-started` lifecycle; when a
+   *  worker's or coordinator's turn marker was first READ `unmeasured` or `malformed` (`stallMarkClock`: an unmeasured
+   *  identity reads no marker, so it neither starts nor keeps that clock). */
   private stallAbsentSince = new Map<string, number>();
   private stallDeadSince = new Map<string, number>();
   private stallMarkUnreadableSince = new Map<string, number>();
+  /** When the lane last judged its candidates, or null before the first judged sweep: the gap rule's anchor (slug
+   *  `stall-clocks-drop-on-an-unobserved-gap`). Stamped only once the candidates read, never on an early return. */
+  private lastStallJudgedAt: number | null = null;
   /** The run-less operator pushes already sent: each push tag (`stallPushRoute`'s) with the session it names, which
    *  the prune keys on. IN MEMORY (slug `run-less-push-latches-are-in-memory`): a restart re-pushes a run-less orphan D
    *  rung 2, mail-stuck or marker-unreadable (re-keyed on the re-timed clock) while it stands. Pushes only, never mail. */
@@ -1481,10 +1484,7 @@ export class FleetWatcher {
         // both notify lanes are watermark-based (`lastMailNotifyId`/
         // `lastRunNotifyId`) and catch up on the next successful tick, and
         // `emitRuns` is byte-equality guarded so it re-emits the moment it
-        // runs again. Delay, never loss. The stall lane is skipped as well, so
-        // its first-seen clocks are dropped: a window it never observed must
-        // not count toward a grace (slug `stall-clocks-drop-on-an-unobserved-gap`).
-        this.dropStallClocks();
+        // runs again. Delay, never loss.
         return;
       }
       const records = registryRead.records;
@@ -2982,8 +2982,8 @@ export class FleetWatcher {
    * In memory, and pruned every sweep (`pruneStallMemory`): when a worker was first seen absent or dead-shaped,
    * when a marker was first seen unreadable, the run-less push latch and the warn-once keys. A server restart
    * re-times the clocks (slug `absent-worker-is-dead-after-grace`) and may repeat a run-less push (slug
-   * `run-less-push-latches-are-in-memory`). A window the lane did not observe drops the clocks (`dropStallClocks`,
-   * slug `stall-clocks-drop-on-an-unobserved-gap`).
+   * `run-less-push-latches-are-in-memory`). More than 2 × STALL_SWEEP_MS between two judged sweeps drops the clocks
+   * (`dropStallClocks`, slug `stall-clocks-drop-on-an-unobserved-gap`).
    *
    * Every mail is durable and deduped: on a run by its observation row (`queueStallNotice`,
    * `recordStallObservation`), run-less by its subject (`hasMailWithSubject`), so a restart re-sends none.
@@ -3002,21 +3002,25 @@ export class FleetWatcher {
       // `mail-disabled` reaches L1 as a fact, and `stallMailDisabledHold` decides what it holds (slug
       // `lane-honours-mail-disabled`). The module-local literal, never rundefs' export: see the import note.
       const arming: StallArming = { ...stallArmingOf(names), mailDisabled: names.includes(MAIL_DISABLED_MARKER) };
-      if (arming.disabled) { this.dropStallClocks(); return; }
+      if (arming.disabled) return;
       const paused = names.includes(COORDINATOR_PAUSE_MARKER);
       let candidates: ReturnType<CoordStore['stallCandidates']>;
       try {
         candidates = store.stallCandidates();
       } catch (err) {
         console.warn(`ccrc-server: stall-watch candidate read failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
-        this.dropStallClocks();
         return;
       }
       if (!candidates.ok) {
         console.warn(`ccrc-server: stall-watch candidates unreadable (${candidates.kind}: ${candidates.detail}) — nothing judged this sweep`);
-        this.dropStallClocks();
         return;
       }
+      // `stall-clocks-drop-on-an-unobserved-gap`: the one gap rule. A first-seen clock claims its condition held at
+      // every judged sweep since it was set. More than 2 × STALL_SWEEP_MS since the last judged sweep means nobody
+      // watched in between (a disabled window, unreadable or throwing candidate reads, ticks that never reached the
+      // lane), so every clock restarts here. The early returns above never stamp it: they are that unobserved time.
+      if (this.lastStallJudgedAt !== null && now - this.lastStallJudgedAt > 2 * STALL_SWEEP_MS) this.dropStallClocks();
+      this.lastStallJudgedAt = now;
       const workers = stallSubjects(candidates.runs);
       const workerIds = new Set(workers.map((x) => x.primary.sessionId));
       const coordinators = stallCoordinatorSubjects(candidates.runs).filter((c) => !workerIds.has(c.sessionId));
@@ -3241,12 +3245,11 @@ export class FleetWatcher {
     return notices;
   }
 
-  /** Drops every first-seen clock (slug `stall-clocks-drop-on-an-unobserved-gap`). A clock claims the condition held at
-   *  every sweep since it was set, so a window in which the lane observed nothing breaks the claim: `stall-watch-
-   *  disabled`, an unreadable or throwing candidate read, and a tick that never reached the lane because the registry
-   *  would not list. Each clock then restarts from the next observed sweep, never firing on a duration nobody watched.
-   *  This is the lane's bookkeeping of its own observations, not a stall rule, so it stays in L4. A pass refused by
-   *  the in-flight flag drops nothing: the pass in flight is observing. */
+  /** Drops every first-seen clock (slug `stall-clocks-drop-on-an-unobserved-gap`), the one clearing method. Its one
+   *  caller is the gap rule in `sweepStalls`: when more than 2 × STALL_SWEEP_MS passed since the last judged sweep,
+   *  each clock restarts from this sweep, never firing on a duration nobody watched. A single unlistable tick or one
+   *  refused pass leaves no such gap, because the next sweep runs on schedule. This is the lane's bookkeeping of its
+   *  own observations, not a stall rule, so it stays in L4. */
   private dropStallClocks(): void {
     this.stallAbsentSince.clear();
     this.stallDeadSince.clear();
