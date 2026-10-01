@@ -2589,11 +2589,11 @@ session, `$REG/<id>.turn.json`, written on the main thread only: an event that
 carries a subagent's `agent_id` never touches it. It reads `working` from a
 turn's first event, `done` at its Stop (with the Stop's background-task count,
 kinds and ids), and `failed` at a `StopFailure` (with the API error's token).
-Every SessionStart but a `clear` records the restart, and its lost lists name
-only what that restart cut short: the background tasks the last `done` turn
-left running. The lane reads the marker, the raw hookstate and the live
-file. That is at most three agent reads per worker per sweep, because the pane
-pid and the registry uuid are the ones the tick already measured. A marker
+Every SessionStart but a `clear` or `compact` records the restart, and its lost
+lists name only what that restart cut short: the background tasks the last
+`done` turn left running. The lane reads the marker, the raw hookstate and the
+live file. That is at most three agent reads per worker per sweep, because the
+pane pid and the registry uuid are the ones the tick already measured. A marker
 older than the live process reads stale and counts for nothing. A fourth stall
 marker, `stall-watch-w2-live`, touched and removed by hand and written by
 nothing in the tree, lets the wave-2 arms send. It does not arm them alone: as
