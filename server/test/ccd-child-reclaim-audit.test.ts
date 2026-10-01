@@ -349,13 +349,15 @@ it('alternate projection diagnostics omit raw workdir and newline payload', () =
   const a = JSON.parse(r.stdout) as Record<string, unknown>;
   const detail = String(a['detail']);
   expect(a['verdict'], detail).toBe('unmeasured');
-  expect(detail, 'the CONTROL: both rows are named, by id').toContain(PROJECTED);
-  expect(detail).toContain(FORGED);
+  // The leaks FIRST, then the controls that the rows are named at all: a collector that printed the value
+  // instead of the id reds here, on the leak itself.
   for (const leak of [raw, `${h.home}/alias`, 'alias/server', 'INJECTED-PAYLOAD', '\n']) {
     expect(detail, `the detail never carries ${JSON.stringify(leak)}`).not.toContain(leak);
   }
   expect(r.stderr).not.toContain('INJECTED-PAYLOAD');
   expect(r.stderr).not.toContain('alias/server');
   expect(r.stderr.split('\n').filter((l) => l.startsWith('ccd:')), 'one ccd line, the audit’s own').toHaveLength(1);
+  expect(detail, 'the CONTROL: both rows are named, by id').toContain(PROJECTED);
+  expect(detail).toContain(FORGED);
   expect(auditState(c)).toEqual(before);
 }, 60_000);
