@@ -682,7 +682,7 @@ export function stallRunMail(rows: readonly StallMailRow[], runIds: readonly num
 /** M7a, `cited-check-derived-in-l1`: the r1 notice that r2's body cites. It is r1's earliest LIVE row on this key
  *  when one exists, else its earliest row: the timing `rungDoneAt` uses. Arming mid-episode leaves a shadow r1
  *  before the live one, and citing the shadow row would tell the coordinator that no check was sent when one was
- *  (D-3572). */
+ *  (`shadow-rung-accounting`). */
 export function stallCitedCheck(input: StallInput, key: number): StallNotice | null {
   const rows = input.notices.filter((n) => n.arm === 'quiet' && n.rung === 1 && n.key === key);
   const earliest = (xs: readonly StallNotice[]): StallNotice | null =>
@@ -847,7 +847,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
     && now - w2.markUnreadableSince >= MARKER_UNREADABLE_MS && rungDoneAt(input, 'marker-unreadable', 1, key) === null) {
     return { act: 'notify', arm: 'marker-unreadable', rung: 1, key, to: 'operator' };
   }
-  // (2b) a worker absent from this tick holds (D-3566), and is the dead arm after DEAD_GRACE_MS (`absent-worker-is-dead-after-grace`)
+  // (2b) a worker absent from this tick holds (`absent-worker-holds`), and is the dead arm after DEAD_GRACE_MS (`absent-worker-is-dead-after-grace`)
   const w = input.worker;
   if (!w.present) {
     return w2 !== undefined && stallDeadDue(input, w2.absentSince, key, now) ? stallW2Notify(input, 'dead', key, 'registry-absent') : holdVerdict('absent');
@@ -901,7 +901,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   const quietStart = view === null ? null : stallMarkQuiet(view, f, p.dispatchedAt);
   if (w2 !== undefined && w2Live && view !== null && view.state !== 'working' && f.ball === 'worker' && quietStart !== null
     && stallHookFresh(w2.hook, now) && now - quietStart < DELEGATE_CAP_MS) return holdVerdict('delegates');
-  // (10) the coordinator's ball: coord-deaf, then the cap, then none (D-3574 coord-ball-below-cap-is-none)
+  // (10) the coordinator's ball: coord-deaf, then the cap, then none (`coord-ball-below-cap-is-none`)
   if (f.ball === 'coordinator') {
     const deaf = w2 === undefined ? null : stallDeafMail(input, w2.deliveries);
     if (deaf !== null && now - deaf.at >= COORD_DEAF_MS && rungDoneAt(input, 'coord-deaf', 1, deaf.id) === null) {
