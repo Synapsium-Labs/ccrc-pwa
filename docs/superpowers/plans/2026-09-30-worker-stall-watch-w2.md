@@ -413,14 +413,17 @@ Added by the orchestrator's rulings on the skeleton and on the drafts:
   plan's Task 15 lane omitted `stallOrphanDVerdict` from the coordinator's verdict list, and the orphan-row loop skips
   every judged id, so a restarted coordinator with lost background tasks drew no orphan wake of any kind.
 - **D-3750** `stall-clocks-drop-on-an-unobserved-gap`: the lane clears its first-seen clocks (absent, dead and
-  marker-unreadable) whenever it loses sight of the fleet: `stall-watch-disabled`, an unreadable candidate read, and a
-  tick whose registry is unlistable. A clock carried across such a gap made a worker absent for a minute read as
-  "absent for 3h" and skipped `DEAD_GRACE_MS`.
+  marker-unreadable) when more than `STALL_CLOCK_GAP_MS` (two and a half sweeps, 150 s) has passed since its last judged
+  sweep: a `stall-watch-disabled` window, unreadable candidates or unlistable ticks alike. One missed sweep keeps the
+  clocks; two drop them. A clock carried across such a gap made a worker absent for a minute read as "absent for 3h"
+  and skipped `DEAD_GRACE_MS`.
 - **D-3751** `run-less-push-latches-are-in-memory`: a coordinator's run-less pushes (rung 2, mail-stuck,
   marker-unreadable) are latched in memory, so a server restart re-pushes while the condition stands. Spec §9.7 names
   only the delayed orphan push's latch as in memory. Accepted for wave 2 (pushes only, never mail); durable keying is
-  deferred. Every stall push's kind and tag now come from one L1 helper, `stallPushRoute`, per spec §11's resolution;
-  the delayed orphan push is tagged `orphaned-<toId>-<restartAt>` for run-bound and run-less sessions alike (§4.2).
+  deferred. A coordinator's marker-unreadable push re-keys after a D-3750 clock drop, and its failed rung-2 push is also
+  in memory. Every stall push's kind and tag now come from one L1 helper, `stallPushRoute`, per spec §11's resolution:
+  the delayed orphan push is tagged `orphaned-<toId>-<restartAt>` for every session (§4.2), and is kind `mail` only for
+  a run-less session (`run` otherwise).
 - **D-3752** `failed-arm-bounded-by-the-mail-horizon`: the failed session verdict answers none once
   `now - stopAt > BACKLOG_HORIZON_MS - FAILED_REPEAT_MS`. The lane reads 24 h of mail, so a repeat failure would
   otherwise be re-classified as a first failure once its prior self-mail left the read, and a retry nudge would be
