@@ -470,6 +470,11 @@ export async function assembleFleet(
    *  start, on callers that do not carry it, and in every older test — the
    *  registry fallback below covers all three. */
   headBranches?: ReadonlyMap<string, string | null>,
+  /** OUT: the pane pid this assembly read for every ALIVE row, keyed by session id (`null` when tmux answered
+   *  none). A row whose pane is not alive gets no entry. Absent on every caller but `watch.ts`'s `tick()`, which
+   *  hands it to the stall lane as `StallTick.panePids`, so the lane never reads a pid a second time (worker stall
+   *  watch wave 2, M6: slug `tick-hands-the-lane-pids-and-records`). */
+  panePids?: Map<string, number | null>,
 ): Promise<FleetSession[]> {
   const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
   // Task 19 fix round 1, item 3: ONE batched read for the whole assembly,
@@ -511,6 +516,7 @@ export async function assembleFleet(
     if (alive) {
       status = 'idle';
       const pid = await tmux.panePid(r.id);
+      panePids?.set(r.id, pid);
       const cfgDir = configDirFor(cfg, r.wrapper);
       if (pid && cfgDir) {
         // D-115: `readLiveStateMeasured`, not `readLiveState`. The folded read
