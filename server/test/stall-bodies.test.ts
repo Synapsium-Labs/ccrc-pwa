@@ -968,6 +968,45 @@ describe('r1: the proof-bound line (planning departure r1-body-names-the-proof-b
   });
 });
 
+// Final fix wave, E2E-2: r1's text states the quiet the ladder that sent it measured. Under the marker rules r1 falls due
+// on the marker clock (`stallMarkQuiet`: the turn end, maxed with the mail and the dispatch), so the subject and line 2
+// print that clock. Wave 1's clock is the live stamp, or the episode key for a busy worker. The case is the review's
+// probe: dispatched at 00:00Z, no mail, the turn ended at 20:00Z over a subagent, and r1 judged at 22:01Z.
+describe('r1: the quiet start is the clock of the ladder that sent it (stallR1QuietFrom)', () => {
+  const MD_DISPATCHED = T('2026-09-28T00:00:00Z');
+  const MD_STOP = T('2026-09-28T20:00:00Z');
+  const MD_NOW = T('2026-09-28T22:01:00Z');
+  const runMd: StallRunRow = { ...run67, dispatchedAt: MD_DISPATCHED };
+  const mdW2 = w2Of({ mark: markOf({ at: MD_STOP, turnAt: MD_STOP - 1_800_000, stopAt: MD_STOP }) });
+  const mdIn = (live: { word: string; since: number }, arming: StallInput['arming']): StallInput =>
+    s4({ mail: [], arming, w2: mdW2, worker: worker({ live: { ok: true, ...live } }) }, runMd);
+  const r1Quiet = (input: StallInput): { subject: string; line2: string | undefined } => {
+    const text = stallCheckMail(input, stallFacts(input), MD_NOW);
+    return { subject: text.subject, line2: text.body.split('\n')[1] };
+  };
+  const R1: StallNotify = { act: 'notify', arm: 'quiet', rung: 1, key: MD_DISPATCHED, to: 'worker' };
+  const MARKER_LINE2 = 'Your main loop has been idle since 2026-09-28T20:00:00Z (2h 1m). Your last mail on this run: none. Newest mail to you on this run: none.';
+
+  it('a busy worker whose turn ended at 20:00Z: the marker ladder sends r1, and the text says 2h 1m, never the 22h since dispatch', () => {
+    const input = mdIn({ word: 'busy', since: T('2026-09-28T20:05:00Z') }, W2_ARMED);
+    expect(stallVerdict(input, MD_NOW), 'the ladder sent r1 on the marker clock').toEqual(R1);
+    expect(r1Quiet(input)).toEqual({ subject: 'stall-check: run 67 — quiet 2h 1m, owed: first report', line2: MARKER_LINE2 });
+  });
+
+  it('an idle worker whose live stamp a respawn restamped at 21:30Z, after the Stop: the text says 2h 1m, never 0h 31m', () => {
+    const input = mdIn({ word: 'idle', since: T('2026-09-28T21:30:00Z') }, W2_ARMED);
+    expect(stallVerdict(input, MD_NOW), 'the ladder sent r1 on the marker clock').toEqual(R1);
+    expect(r1Quiet(input)).toEqual({ subject: 'stall-check: run 67 — quiet 2h 1m, owed: first report', line2: MARKER_LINE2 });
+  });
+
+  it('dark (no stall-watch-w2-live): wave 1’s clock, unchanged — the live stamp for an idle worker', () => {
+    expect(r1Quiet(mdIn({ word: 'idle', since: T('2026-09-28T21:30:00Z') }, escalated))).toEqual({
+      subject: 'stall-check: run 67 — quiet 0h 31m, owed: first report',
+      line2: 'Your main loop has been idle since 2026-09-28T21:30:00Z (0h 31m). Your last mail on this run: none. Newest mail to you on this run: none.',
+    });
+  });
+});
+
 describe('each wave-2 text refuses a notice it does not own', () => {
   const quietR1: StallNotify = { act: 'notify', arm: 'quiet', rung: 1, key: EPISODE, to: 'worker' };
   const quietR2: StallNotify = { act: 'notify', arm: 'quiet', rung: 2, key: EPISODE, to: 'coordinator', coordinatorId: COORD };

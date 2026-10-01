@@ -1045,11 +1045,29 @@ function stallMailRef(m: StallMailRow | null): string {
   return m === null ? 'none' : `#${stallInt(m.id)} ${stallSafe(m.kind)} at ${stallClockSec(m.at)}`;
 }
 
-/** When the worker's live status last turned idle: r1's clock only (r1 is sent when that stamp is two hours old).
+/** When the worker's live status last turned idle: wave 1's r1 clock (r1 is sent when that stamp is two hours old).
  *  The episode key stands in when the facts carry no quiet start. r2 and r3 never read this: r1's own delivery
  *  restamps it (D-3582 r2-r3-span-from-the-episode). */
 function stallQuietFrom(facts: StallFacts): number {
   return facts.quietSince ?? facts.episodeKeyMs;
+}
+
+/** The marker ladder's quiet start, when §10 step 11's marker ladder is the one that decides r1: `stall-watch-w2-live`
+ *  armed, a marker that reads on a present worker, and a view that is not `working` and names a turn end. Null when
+ *  wave 1's ladder decides it. `stallVerdictInner` sends a `working` view to hold `busy` and a view with no `stopAt` to
+ *  wave 1's ladder, so this is exactly the set of r1s the marker clock sent. */
+function stallR1MarkQuiet(input: StallInput, facts: StallFacts): number | null {
+  const w = input.worker;
+  if (input.arming.w2Live !== true || input.w2 === undefined || !input.w2.mark.ok || !w.present) return null;
+  const view = stallMarkView(input.w2.mark, w.live);
+  return view.state === 'working' ? null : stallMarkQuiet(view, facts, input.subject.primary.dispatchedAt ?? 0);
+}
+
+/** r1's quiet start, from the rule the ladder that sent it used (final fix wave, E2E-2): the marker clock under the
+ *  marker rules, else wave 1's. Measured either way, so a busy worker is never told its silence runs from dispatch,
+ *  and a worker whose live stamp a respawn restamped after its Stop is never told it has been quiet for minutes. */
+export function stallR1QuietFrom(input: StallInput, facts: StallFacts): number {
+  return stallR1MarkQuiet(input, facts) ?? stallQuietFrom(facts);
 }
 
 /** D-3582 r2-r3-span-from-the-episode: what r2 and r3 report is the time since the worker's last mail on the run,
@@ -1097,7 +1115,7 @@ const STALL_UNARMED_LINE = 'Escalation is not armed on this fleet yet: no one el
 export function stallCheckMail(input: StallInput, facts: StallFacts, now: number): StallNoticeText {
   const run = input.subject.primary;
   const id = stallInt(run.id);
-  const since = stallQuietFrom(facts);
+  const since = stallR1QuietFrom(input, facts);
   const quiet = stallSpan(now - since);
   const toCoordinator = now + STALL_ESCALATE_MS;
   const toOperator = toCoordinator + STALL_OPERATOR_MS;
@@ -1107,11 +1125,9 @@ export function stallCheckMail(input: StallInput, facts: StallFacts, now: number
   // Planning departure `r1-body-names-the-proof-bound`. With the marker rules armed (`stall-watch-w2-live`) and the
   // marker's view naming a turn end, r2 falls due on proof at the worker's next turn end, and by STALL_BOUND_MS after
   // r1 at the latest (§5.1 (a)–(d)). The body promises that, and names the operator when r2 would be skipped. The
-  // predicate is the marker ladder's own (Task 11): an ok marker whose view has no stopAt runs wave 1's ladder, and
-  // keeps wave 1's line.
-  const w = input.worker;
-  const markView = input.w2 !== undefined && input.w2.mark.ok && w.present ? stallMarkView(input.w2.mark, w.live) : null;
-  const proofBound = input.arming.w2Live === true && markView !== null && markView.stopAt !== null;
+  // predicate is the marker ladder's own (Task 11), shared with the quiet start above (`stallR1MarkQuiet`): an ok marker
+  // whose view has no stopAt runs wave 1's ladder, and keeps wave 1's line.
+  const proofBound = stallR1MarkQuiet(input, facts) !== null;
   const last = stallDelivery('coordinator', input.arming) === 'shadow'
     ? STALL_UNARMED_LINE
     : proofBound
