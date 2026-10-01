@@ -3817,7 +3817,7 @@ export class FleetWatcher {
         // `idle` delivers as before. So does `shell`, an idle main loop over
         // background shell work, unless `$REG/mail-gate-strict` is listed. A
         // null read is `not-idle`, as `!live` was.
-        const turn = mailTurnIdle(live, now, isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS, mode);
+        const turn = mailTurnIdle(live, null, now, isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS, mode);
         // THE GATE TOKEN DOES NOT FORK, deliberately (D-1167). `MailGate`'s own
         // docstring sets the rule — one member per CONDITION, not per `continue`
         // — and `no-pane`/`no-config-dir` were split because an operator acts on
