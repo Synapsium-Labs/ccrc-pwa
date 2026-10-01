@@ -400,6 +400,15 @@ Added by the orchestrator's rulings on the skeleton and on the drafts:
   margins +15%/+16%). Under wave 2's marker, p95 bands measured at load 17-25 gave margins of +3%/+5% and overlapped
   when pooled (a mutated 3.79 against a shipped 3.97). The sibling compact row had already moved to the median for the
   same reason: p95 of n=20 is the second-largest value.
+- **D-3747** `session-wakes-fire-on-shell`: the orphan D self-mail and the failed self-mail fire on live `shell` as well
+  as `idle`. Spec §5.2 says "live `idle`"; a worker idle over a background shell is as wakeable as an idle one, and
+  wave 1's mail gate already delivers on `shell`. Recorded at Task 12's review; the plan's code carried it unnamed.
+- **D-3748** `mail-stuck-idle-accepts-failed`: mail-stuck's idle start accepts a current `failed` marker as well as
+  `done`. Spec §5.2 names "a current marker `done`"; a turn that ended in a StopFailure is equally over. Recorded at
+  Task 12's review.
+- Task 12's review also made the limit predicate one function, `stallLimited`, which wave 1's run verdict now calls.
+  The plan's Task 12 text names it `stallSessionLimited`; the shipped name is the authority. This is a refactor, not a
+  departure from the spec, so it carries no number.
 
 ## File structure
 
