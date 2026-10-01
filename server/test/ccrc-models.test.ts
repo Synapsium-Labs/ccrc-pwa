@@ -2107,10 +2107,10 @@ describe('ccrc models litellm', () => {
   // nothing. Lane B is `ext-a` in the live Codex lanes' shape, lane A
   // `codex-a`. Pure-parse ports: nothing in this describe connects to one.
   describe('once a codex-kind lane exists, the bare stop is never run (Z4)', () => {
-    const flip = (): void => {
+    const flip = (rows: Record<string, unknown>[] = [codexRow('codex-a', 45010, 45011)]): void => {
       const p = join(home, '.ccrc', 'accounts.json');
       const roster = JSON.parse(fs.readFileSync(p, 'utf8')) as { accounts: unknown[] };
-      roster.accounts.push(codexRow('codex-a', 45010, 45011));
+      roster.accounts.push(...rows);
       fs.writeFileSync(p, `${JSON.stringify(roster, null, 2)}\n`);
     };
 
@@ -2144,6 +2144,21 @@ describe('ccrc models litellm', () => {
       expect(calls('ccgpt')).toEqual([]);
       expect(fs.existsSync(configPath())).toBe(false);
       expect(fs.existsSync(`${configPath()}.prev`)).toBe(false);
+    });
+
+    // Plan 3a Task 2, fix round 1: every other case here flips ONE row, so
+    // the helper's join of several ids was pinned by nothing. The sentence
+    // names EVERY codex-kind lane, in roster order, joined by ", ", and the
+    // list ends where the sentence goes on.
+    it('after two flips, the refusal names BOTH codex-kind lanes, in roster order, joined by ", "', () => {
+      flip([codexRow('codex-a', 45010, 45011), codexRow('codex-b', 45020, 45021)]); pgrep(true);
+      const r = run(['models', 'litellm', 'ext-a']);
+      expect(r.code).toBe(1);
+      const b = oneObject(r);
+      expect(b['error']).toBe('restart-failed');
+      expect(String(b['detail'])).toContain('the roster names codex-kind lane(s) codex-a, codex-b, and the only stop');
+      expect(calls('ccgpt')).toEqual([]);
+      expect(fs.existsSync(configPath())).toBe(false);
     });
 
     it('after a flip, with nothing running, the render lands exactly as before: the guard binds the stop alone', () => {

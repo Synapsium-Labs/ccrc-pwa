@@ -10074,10 +10074,10 @@ _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON o
 _models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's final answer, or a refusal
   # A codex-kind lane takes its own arm (`_models_litellm_lane`, above).
   # Everything below is the EXTERNAL arm, unchanged byte for byte
-  # (D-3482) but for one guard (Plan 3a Task 2,
-  # D-3753): its bare stop is refused
-  # once any roster row is codex-kind. The live lanes are external, and another
-  # repository's LiteLLM reads that arm's file. Plan 3 retires it at cutover.
+  # (D-3482) but for one guard (Plan 3a Task 2, D-3753): its bare stop is
+  # refused once any roster row is codex-kind. The live lanes are external, and
+  # another repository's LiteLLM reads that arm's file. Each lane leaves this
+  # arm at its own flip (Plan 3b), and Plan 4's ccrc PR deletes it (ruling Z8).
   if _models_litellm_codex "$1"; then _models_litellm_lane "$1"; return $?; fi
   local file check crc
   file="$(_models_roster_path)"

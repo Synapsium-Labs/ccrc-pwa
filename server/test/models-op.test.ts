@@ -117,6 +117,18 @@ function plantCodex(id: string): void {
   expect(m.code, m.stdout + m.stderr).toBe(0);
 }
 
+/** One `exec.kind: "codex"` row, the one kind on which Z3 still lets `init
+ *  codex` CREATE a registry. A case whose SUBJECT is init's own write
+ *  (`writeRegistry`: its tmp-and-rename, its bytes, its mode) creates on this
+ *  row, or makes a `compatible` create, never through `plantCodex`, which
+ *  writes the file itself and so cannot measure that write (Plan 3a Task 2,
+ *  fix round 1). Pure-parse ports: nothing here connects to one. */
+const CODEX_ROW = {
+  id: 'codex-a', label: 'codex-a', configDirSuffix: '.claude-codex-a',
+  exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir: codexAuthDir('codex-a') },
+  homeAble: false, telemetry: 'codex',
+};
+
 // The ownership whitelist (§5, §11) and a probe's `--endpoints` answer.
 // Module-scope, not local to one `describe`: Fix round 1's Finding 1 made
 // `discovery add` on an openrouter lane REQUIRE `--endpoints` (ruling
@@ -198,8 +210,16 @@ describe('the roster read', () => {
     // content comparison alone stayed green with that write live; mtime
     // moves on every `writeFileSync` regardless of content and is what
     // actually catches it.
+    //
+    // Plan 3a Task 2, fix round 1: `init`'s own CREATE stays on this list.
+    // Since Z3 it cannot create a codex registry on the external row the
+    // mutations below run on, which `plantCodex` therefore provides, so the
+    // create runs on a codex-kind row the roster carries for it.
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
     const before = fs.readFileSync(rosterPath(), 'utf8');
     const mtimeBefore = fs.statSync(rosterPath()).mtimeMs;
+    const created = op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    expect(created.body['created'], created.stderr).toBe(true);
     writeCatalogue('gpt');
     plantCodex(LEGACY_EXTERNAL_ID);
     op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'fable', '--model', 'gpt-6-astra');
@@ -373,15 +393,10 @@ describe('show', () => {
 
 describe('init (§10, §13.1)', () => {
   // Plan 3a Task 2 (operator ruling Z3, D-3706): a codex registry is CREATED
-  // on an `exec.kind: "codex"` row only, so the two creation cases run on one.
-  // Their claims are unchanged, read off the `SEEDED` fixture rather than
-  // retyped; the first also binds the bytes every planted registry carries.
-  const CODEX_ROW = {
-    id: 'codex-a', label: 'codex-a', configDirSuffix: '.claude-codex-a',
-    exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir: codexAuthDir('codex-a') },
-    homeAble: false, telemetry: 'codex',
-  };
-
+  // on an `exec.kind: "codex"` row only, so the two creation cases run on one
+  // (`CODEX_ROW`, module scope). Their claims are unchanged, read off the
+  // `SEEDED` fixture rather than retyped; the first also binds the bytes every
+  // planted registry carries.
   it('seeds today\'s codex registry, byte for byte, on a codex-kind lane', () => {
     seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
     const r = op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
@@ -972,15 +987,23 @@ describe('the ownership whitelist at discovery-add (§5, §11)', () => {
 });
 
 describe('the registry write', () => {
+  // Plan 3a Task 2, fix round 1: this describe's SUBJECT is `writeRegistry`,
+  // init's own write, so each case CREATES through `init` on a row Z3 allows,
+  // a codex-kind row (`CODEX_ROW`) or a `compatible` create, and never plants
+  // the file through `plantCodex`, which would measure the fixture's write.
   it('is atomic — no temp file survives a success', () => {
-    plantCodex(LEGACY_EXTERNAL_ID);
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+    const r = op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    expect(r.body['created'], r.stderr).toBe(true);
     expect(fs.readdirSync(path.join(home, '.ccrc', 'models')).sort())
-      .toEqual(['gpt.classes.json', 'gpt.classes.tsv', 'gpt.effort.json']);
+      .toEqual(['codex-a.classes.json', 'codex-a.classes.tsv', 'codex-a.effort.json']);
   });
 
   it('keeps 2-space indent and a trailing newline', () => {
-    plantCodex(LEGACY_EXTERNAL_ID);
-    const text = fs.readFileSync(regPath('gpt'), 'utf8');
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+    const r = op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    expect(r.body['created'], r.stderr).toBe(true);
+    const text = fs.readFileSync(regPath('codex-a'), 'utf8');
     expect(text.endsWith('}\n')).toBe(true);
     expect(text).toContain('\n  "classes": {');
   });
@@ -999,8 +1022,10 @@ describe('the registry write', () => {
   it('is 0600 — a compatible lane\'s registry names its endpoint', () => {
     const prevUmask = process.umask(0o022);
     try {
-      plantCodex(LEGACY_EXTERNAL_ID);
-      expect(fs.statSync(regPath('gpt')).mode & 0o777).toBe(0o600);
+      const r = op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'compatible',
+        '--base-url', 'https://compatible.example.invalid');
+      expect(r.body['created'], r.stderr).toBe(true);
+      expect(fs.statSync(regPath('router')).mode & 0o777).toBe(0o600);
     } finally {
       process.umask(prevUmask);
     }
@@ -1139,9 +1164,11 @@ describe('materialise', () => {
   //
   // This exercises `deploy/models-op.mjs`'s OWN two tmp sites (the TSV and
   // the effort file) on every round, but NOT `shared/modelenv.mjs`'s
-  // `mergeSettingsEnv` — `op('init', …)` above already materialises the
-  // settings block once, so every later round's six calls compute the SAME
-  // env, `mergeSettingsEnv`'s `!changed && existed` short-circuit returns
+  // `mergeSettingsEnv` — this case's `plantCodex(…)` setup (its own
+  // `materialise` step, since Plan 3a Task 2 no longer runs `init` here)
+  // already materialises the settings block once, so every later round's
+  // six calls compute the SAME env, `mergeSettingsEnv`'s
+  // `!changed && existed` short-circuit returns
   // before it ever reaches its own tmp write, and 120 calls prove nothing
   // about that site. Deleting settings.json before each round removes
   // `existed`, so the short-circuit cannot fire and every round's six calls
@@ -1424,7 +1451,8 @@ describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
     j.env.DISABLE_TELEMETRY = '1';
     fs.writeFileSync(p, JSON.stringify(j, null, 2));
-    // The beforeEach's `init` ran against a written catalogue, so the eighth
+    // The beforeEach's `plantCodex` (its `materialise` step, which Plan 3a
+    // Task 2 put where `init` was) ran against a written catalogue, so the eighth
     // key is live before `rm` runs — this is the case that shows `rm` reaps
     // it too, not just the seven keys that predate the §6.1 amendment. The
     // default model's catalogue context (272000) is capped at 200000 (§6.1,
