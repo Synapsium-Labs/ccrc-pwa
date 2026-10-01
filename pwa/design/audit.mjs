@@ -794,6 +794,11 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the 'refused by N of M nodes' line in the same unfilled release row, retinted to --status-attention-text. Same ground and same reason as .settings-release-date; registered separately because it sets its own colour",
   },
+  // ── wave 8 item F2 (D-3591): the running release row's words ───────────
+  'fleet.css .settings-release-running': {
+    under: ['var(--bg-page)'],
+    why: "the running row's words in place of the Install/Roll back button, inside .settings-release-actions in the same unfilled release row (SettingsScreen.tsx's ReleaseItem). Same ground and same reason as .settings-release-date; registered separately because it sets its own colour",
+  },
   // ── centralised update management W3, Task 9: the node inventory ───────
   'fleet.css .settings-node-current--amber': {
     under: ['var(--bg-page)'],

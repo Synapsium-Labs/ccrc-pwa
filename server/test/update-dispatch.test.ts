@@ -10,16 +10,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DEADLINE_DETAIL, DETACH_CAP, PROVENANCE_DETAIL_PREFIX, ROLLBACK_CAP, UNVERSIONED_DETAIL, UPDATE_DEADLINE_HARD_CAP_FACTOR,
-  autoPermits, deadlineExpired, dispatchRefusalDetail, fleetGate, isHalting, moveRefusal, planDispatch,
-  type DispatchNodeView, type DispatchPlan, type DispatchRow, type FleetGate,
+  autoPermits, deadlineExpired, dispatchRefusalDetail, fleetGate, isHalting, moveFeedRecord, moveRefusal, planDispatch,
+  type DispatchMove, type DispatchNodeView, type DispatchPlan, type DispatchRow, type FleetGate, type LeasedMoveResult,
 } from '../src/update/dispatch.js';
 import type { EligibilityRow } from '../src/update/resolve.js';
 import type { NodeRow } from '../src/coord/store.js';
 import {
-  DISPATCH_REFUSALS, UPDATE_GATE_CAP, UPDATE_STATES, compareDispatchOrder, dispatchRank, isDispatchRefusal,
-  type AutoMode, type DispatchRefusal, type NodeRole, type RequestKind, type UpdateState,
+  DISPATCH_REFUSALS, UPDATE_GATE_CAP, UPDATE_STATES, compareDispatchOrder, dispatchRank, isDispatchRefusal, rollbackTargetRefusal,
+  type AutoMode, type DispatchRefusal, type NodeRole, type ProvenanceState, type RequestKind, type UpdateState,
 } from '../../shared/api.js';
-import { UPDATE_OP } from '../../shared/agent-protocol.js';
+import { UPDATE_OP, UPDATE_OP_DETAIL_MAX } from '../../shared/agent-protocol.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -34,7 +34,7 @@ const fleet = (o: Partial<DispatchRow> = {}): DispatchRow => ({
   nodeId: FLEET_ID, role: 'fleet', label: 'fleet',
   currentVersion: 'v0.0.9', highestVersion: 'v0.0.9', floorRead: 'measured', stampRead: 'ok', caps: W4_CAPS, agentOps: [UPDATE_OP],
   reachable: true, updateState: 'idle', updateTarget: null, updateStartedAt: null, updateDetail: null,
-  reportedUpdatedAt: null, channel: 'stable', desiredTag: null,
+  reportedUpdatedAt: null, channel: 'stable', desiredTag: null, provenance: 'verified',
   requestedTag: null, requestedKind: null, requestedAt: null, ...o,
 });
 /** The server's own row: spawned locally, so `agentOps` is NULL by construction (decision 11). */
@@ -51,6 +51,9 @@ const RELEASES: EligibilityRow[] = [
   rel('v0.0.8', { yanked: true }), rel('v0.0.9'), rel('v0.0.10'), rel('v0.0.11', { channel: 'dev' }),
   rel('v0.0.12', { bundleListed: false }),
 ];
+/** Wave 8 item C: RELEASES with v0.0.8 ALSO unbundled (still yanked, which rollbackTargetRefusal never reads) —
+ *  for the fleet-hold cases, which need an unbundled tag a fleet row can stand a rollback REQUEST against. */
+const RELEASES_V8_NO_BUNDLE: EligibilityRow[] = RELEASES.map((r) => (r.tag === 'v0.0.8' ? { ...r, bundleListed: false } : r));
 const plan = (...nodes: DispatchNodeView[]): DispatchPlan => planDispatch({ nodes, releases: RELEASES });
 const OPEN: FleetGate = { haltedBy: [], leaseHeldBy: null };
 const refusalOf = (v: DispatchNodeView, kind: RequestKind, target: string,
@@ -59,10 +62,10 @@ const refusalOf = (v: DispatchNodeView, kind: RequestKind, target: string,
 const words = (p: DispatchPlan): [string, DispatchRefusal][] => p.refusals.map((r) => [r.nodeId, r.refusal]);
 
 describe('the L0 refusal vocabulary and the dispatch order (design 2026-09-20 §9/§10)', () => {
-  it('DISPATCH_REFUSALS is the eleven words, in order, with no duplicate', () => {
+  it('DISPATCH_REFUSALS is the twelve words, in order, with no duplicate', () => {
     expect([...DISPATCH_REFUSALS]).toEqual([
       'unknown-tag', 'not-newer', 'refused-by-node', 'stamp-unread', 'floor-unread', 'no-detach-cap',
-      'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet',
+      'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet', 'no-bundle',
     ]);
     expect(new Set(DISPATCH_REFUSALS).size).toBe(DISPATCH_REFUSALS.length);
   });
@@ -383,6 +386,122 @@ describe('planDispatch — rollback (decision 8: an explicit request, catalogue-
   });
 });
 
+describe('a rollback the node is known to refuse is refused before any lease (wave 8 item C)', () => {
+  it('(a) a bundleListed:false row, provenance verified -> no-bundle', () => {
+    expect(refusalOf(view(fleet()), 'rollback', 'v0.0.12')).toBe('no-bundle');
+  });
+
+  it('(b) the same, unverified -> null (the control that the word keys on provenance)', () => {
+    expect(refusalOf(view(fleet({ provenance: 'unverified' })), 'rollback', 'v0.0.12')).toBeNull();
+  });
+
+  it('(c) the same, unknown -> null', () => {
+    expect(refusalOf(view(fleet({ provenance: 'unknown' })), 'rollback', 'v0.0.12')).toBeNull();
+  });
+
+  it('(d) bundleListed:true, verified -> null', () => {
+    expect(refusalOf(view(fleet()), 'rollback', 'v0.0.10')).toBeNull();
+  });
+
+  it('(e) no row -> unknown-tag', () => {
+    expect(refusalOf(view(fleet()), 'rollback', 'v0.0.99')).toBe('unknown-tag');
+  });
+
+  it('(f) yanked:true, bundleListed:true, verified -> null (yanked stays permitted)', () => {
+    expect(refusalOf(view(fleet()), 'rollback', 'v0.0.8')).toBeNull();
+  });
+
+  it('(g) an UPDATE to a bundleListed:false row is unchanged from main: unknown-tag (no-bundle is rollback-only)', () => {
+    expect(refusalOf(view(fleet()), 'update', 'v0.0.12')).toBe('unknown-tag');
+  });
+
+  it('(h) rollbackTargetRefusal: the direct table over bundleListed x provenance, and undefined provenance', () => {
+    const bundled = { bundleListed: true };
+    const unbundled = { bundleListed: false };
+    const table: [{ bundleListed: boolean } | undefined, ProvenanceState | undefined, 'unknown-tag' | 'no-bundle' | null][] = [
+      [undefined, 'verified', 'unknown-tag'], [undefined, 'unverified', 'unknown-tag'],
+      [undefined, 'unknown', 'unknown-tag'], [undefined, undefined, 'unknown-tag'],
+      [bundled, 'verified', null], [bundled, 'unverified', null], [bundled, 'unknown', null], [bundled, undefined, null],
+      [unbundled, 'verified', 'no-bundle'], [unbundled, 'unverified', null], [unbundled, 'unknown', null], [unbundled, undefined, null],
+    ];
+    for (const [release, provenance, want] of table) {
+      expect(rollbackTargetRefusal(release, provenance), JSON.stringify({ release, provenance })).toBe(want);
+    }
+  });
+
+  it('(i) dispatchRefusalDetail names the remedy commands and never claims --allow-unsigned on a rollback', () => {
+    const d = dispatchRefusalDetail('no-bundle', view(fleet()), 'v0.0.8');
+    expect(d.startsWith('no-bundle — the catalogue lists no provenance bundle for v0.0.8')).toBe(true);
+    expect(d).toContain('ccrc rollback --to v0.0.8 flips to a kept copy if it keeps one');
+    expect(d).toContain('ccrc update --to v0.0.8 --downgrade --allow-unsigned');
+    expect(d).not.toContain('ccrc rollback --to v0.0.8 --allow-unsigned');
+  });
+
+  it('(k) D-3587\'s ordering: a verified node that has ALREADY refused the same unbundled tag still answers no-bundle, never refused-by-node', () => {
+    expect(refusalOf(view(fleet(), 'off', ['v0.0.12']), 'rollback', 'v0.0.12')).toBe('no-bundle');
+  });
+
+  // (j) the premise pin already exists: `update-dispatch.test.ts:104`'s "a failed row whose detail BEGINS
+  // provenance: does not halt" — cited here, nothing added.
+});
+
+describe('a standing fleet rollback the server refuses holds no server move (wave 8 item C, D-3588)', () => {
+  it('(a) the fleet row\'s refused rollback request holds nothing: the server\'s auto move lands', () => {
+    const p = planDispatch({
+      nodes: [
+        view(fleet({ requestedTag: 'v0.0.8', requestedKind: 'rollback', requestedAt: 1_000, desiredTag: 'v0.0.10' }), 'channel'),
+        view(server({ desiredTag: 'v0.0.10' }), 'stable'),
+      ],
+      releases: RELEASES_V8_NO_BUNDLE,
+    });
+    expect(p.move?.nodeId).toBe(SERVER_ID);
+    expect(words(p)).toEqual([[FLEET_ID, 'no-bundle']]);
+  });
+
+  it('(b) the control: the same fleet request over a BUNDLED row holds the server as waiting-for-fleet, exactly as main does', () => {
+    const p = plan(
+      view(fleet({ requestedTag: 'v0.0.8', requestedKind: 'rollback', requestedAt: 1_000, desiredTag: 'v0.0.10' }), 'channel'),
+      view(server({ desiredTag: 'v0.0.10' }), 'stable'),
+    );
+    expect(p.move).toMatchObject({ nodeId: FLEET_ID, kind: 'rollback', target: 'v0.0.8' });
+    expect(words(p)).toEqual([[SERVER_ID, 'waiting-for-fleet']]);
+  });
+
+  it('(c) the fleet row itself gets a planned no-bundle refusal (non-halting)', () => {
+    const p = planDispatch({
+      nodes: [view(fleet({ requestedTag: 'v0.0.8', requestedKind: 'rollback', requestedAt: 1_000 }))],
+      releases: RELEASES_V8_NO_BUNDLE,
+    });
+    expect(p.move).toBeNull();
+    expect(p.gate.haltedBy).toEqual([]);
+    expect(words(p)).toEqual([[FLEET_ID, 'no-bundle']]);
+  });
+
+  it('(d) the same fleet row with auto OFF, and a server row with a REQUESTED update: the server\'s request moves — isolates fleetAsk', () => {
+    const p = planDispatch({
+      nodes: [
+        view(fleet({ requestedTag: 'v0.0.8', requestedKind: 'rollback', requestedAt: 1_000 }), 'off'),
+        view(server(ask('v0.0.10')), 'off'),
+      ],
+      releases: RELEASES_V8_NO_BUNDLE,
+    });
+    expect(p.move).toMatchObject({ nodeId: SERVER_ID, source: 'request', target: 'v0.0.10' });
+    expect(words(p)).toEqual([[FLEET_ID, 'no-bundle']]);
+  });
+
+  it('(e) a standing rollback request to a tag with NO catalogue row holds nothing either — unknown-tag excludes it from fleetAsk exactly as no-bundle does (D-3588)', () => {
+    const p = planDispatch({
+      nodes: [
+        view(fleet({ requestedTag: 'v0.0.99', requestedKind: 'rollback', requestedAt: 1_000, desiredTag: 'v0.0.10' }), 'channel'),
+        view(server({ desiredTag: 'v0.0.10' }), 'stable'),
+      ],
+      releases: RELEASES_V8_NO_BUNDLE,
+    });
+    expect(p.move?.nodeId).toBe(SERVER_ID);
+    expect(words(p)).toEqual([[FLEET_ID, 'unknown-tag']]);
+  });
+});
+
 describe('planDispatch — capabilities (§18 "every capability refusal is in the dispatcher")', () => {
   it('no detach word: no-detach-cap, for either kind, on the server row too', () => {
     const caps = W4_CAPS.filter((c) => c !== DETACH_CAP);
@@ -428,6 +547,7 @@ describe('planDispatch — capabilities (§18 "every capability refusal is in th
       'no-rollback-cap': refusalOf(view(fleet({ caps: without(ROLLBACK_CAP) })), 'rollback', 'v0.0.8'),
       'no-update-gate': refusalOf(view(fleet({ caps: without(UPDATE_GATE_CAP) })), 'update', 'v0.0.10', 'auto'),
       'agent-predates-update-op': refusalOf(view(fleet({ agentOps: [] })), 'update', 'v0.0.10'),
+      'no-bundle': refusalOf(view(fleet()), 'rollback', 'v0.0.12'),
     };
     for (const [want, got] of Object.entries(reach)) expect(got, want).toBe(want);
   });
@@ -636,6 +756,50 @@ describe('the ring (programme wave 5, D-3383)', () => {
       '../../../shared/api.js', '../../../shared/agent-protocol.js', '../../../shared/semver.js', './resolve.js',
     ]));
     expect(/\brequire\(|import\(/.test(src)).toBe(false);
+  });
+});
+
+describe('moveFeedRecord — the audit row a leased move writes (wave 8 item A, D-3586)', () => {
+  const move = (o: Partial<DispatchMove> = {}): DispatchMove => ({
+    nodeId: FLEET_ID, kind: 'update', target: 'v0.0.10', source: 'request', viaLink: true,
+    detail: 'requested update from v0.0.9 to v0.0.10', ...o,
+  });
+  const accepted: LeasedMoveResult = { result: 'accepted', detail: 'accepted — the node queued a detached run' };
+
+  it('an auto move titles itself auto; a requested one titles itself requested', () => {
+    expect(moveFeedRecord(move({ source: 'auto' }), 'fleet', accepted)?.title).toBe('update fleet: auto update to v0.0.10');
+    expect(moveFeedRecord(move({ source: 'request' }), 'fleet', accepted)?.title).toBe('update fleet: requested update to v0.0.10');
+  });
+
+  it('the unversioned row: the source still comes from move.source, never move.detail (M-A3)', () => {
+    const rec = moveFeedRecord(move({ source: 'auto', detail: UNVERSIONED_DETAIL }), 'fleet', accepted);
+    expect(rec?.title).toBe('update fleet: auto update to v0.0.10');
+    expect(rec?.body).toContain(UNVERSIONED_DETAIL);
+  });
+
+  it('accepted, held, released-failed and release-refused bodies', () => {
+    const m = move();
+    expect(moveFeedRecord(m, 'fleet', accepted)?.body)
+      .toBe(`${m.detail} — lease held: accepted — the node queued a detached run`);
+    expect(moveFeedRecord(m, 'fleet', { result: 'held', detail: 'link failed mid-op (timeout: timeout)' })?.body)
+      .toBe(`${m.detail} — lease held: link failed mid-op (timeout: timeout)`);
+    expect(moveFeedRecord(m, 'fleet', { result: 'released', to: 'failed', detail: 'spawn-failed — boom' })?.body)
+      .toBe(`${m.detail} — released failed: spawn-failed — boom`);
+    expect(moveFeedRecord(m, 'fleet', { result: 'release-refused', to: 'failed', detail: 'spawn-failed — boom', why: 'not-busy' })?.body)
+      .toBe(`${m.detail} — release refused (not-busy) — the answer was: spawn-failed — boom`);
+  });
+
+  it('a released-idle result records nothing (M-A9)', () => {
+    expect(moveFeedRecord(move(), 'fleet', { result: 'released', to: 'idle', detail: 'busy — in flight' })).toBeNull();
+  });
+
+  it('a 500-character detail: the body is bounded and starts with the full head', () => {
+    const long = 'x'.repeat(500);
+    const rec = moveFeedRecord(move(), 'fleet', { result: 'accepted', detail: long });
+    expect(rec).not.toBeNull();
+    expect(rec!.body.length).toBeLessThanOrEqual(UPDATE_OP_DETAIL_MAX);
+    const head = 'requested update from v0.0.9 to v0.0.10 — lease held: ';
+    expect(rec!.body.startsWith(head)).toBe(true);
   });
 });
 

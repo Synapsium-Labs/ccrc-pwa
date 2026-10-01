@@ -235,6 +235,22 @@ describe('the mail feed', () => {
     expect(kind!.textContent, 'no word for coord').toContain('config');
   });
 
+  // Wave 8 item A: the EIGHTH kind, a move the update dispatcher leased — about no session and no run,
+  // recorded and never pushed (D-3586). Same total-map guard as the coord case above.
+  it('renders an update-kind feed record with its own word and glyph', async () => {
+    const store = makeStore();
+    const ev = e({ seq: 10, kind: 'update', sessionId: '', title: 'update fleet: auto update to v0.0.10',
+                   body: 'auto update from v0.0.9 to v0.0.10 — lease held: accepted — the node queued a detached run' });
+    act(() => { store.setState({ feed: [ev] }); });
+    const { container } = render(
+      <MailScreen store={store} loadFeed={vi.fn().mockResolvedValue({ events: [] })} />);
+    expect(await screen.findByText('update fleet: auto update to v0.0.10')).toBeInTheDocument();
+    const kind = container.querySelector('.mail-kind');
+    expect(kind, 'the update row rendered no kind cell at all').not.toBeNull();
+    expect(kind!.querySelector('.mail-kind-glyph')!.textContent, 'no glyph for update').toBe('⇡');
+    expect(kind!.textContent, 'no word for update').toContain('update');
+  });
+
   const BLOCKED_TITLE = '✉ blocked › w1';
   const BLOCKED_BODY = "wave-brief: the recipient's input box has unsent text in it";
 
