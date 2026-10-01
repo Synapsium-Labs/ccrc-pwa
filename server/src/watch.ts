@@ -701,8 +701,9 @@ export class FleetWatcher {
   private stallAbsentSince = new Map<string, number>();
   private stallDeadSince = new Map<string, number>();
   private stallMarkUnreadableSince = new Map<string, number>();
-  /** When the lane last judged its candidates, or null before the first judged sweep: the gap rule's anchor (slug
-   *  `stall-clocks-drop-on-an-unobserved-gap`). Stamped only once the candidates read, never on an early return. */
+  /** When the lane last FINISHED judging its candidates, or null before the first judged sweep: the gap rule's anchor
+   *  (slug `stall-clocks-drop-on-an-unobserved-gap`). Stamped at the end of a sweep whose candidates read, never on an
+   *  early return, so a slow sweep's own duration is never counted as a gap (E2E-6). */
   private lastStallJudgedAt: number | null = null;
   /** The run-less operator pushes already sent: each push tag (`stallPushRoute`'s) with the session it names, which
    *  the prune keys on. IN MEMORY (slug `run-less-push-latches-are-in-memory`): a restart re-pushes a run-less orphan D
@@ -3005,8 +3006,8 @@ export class FleetWatcher {
    * when a marker was first seen unreadable, the run-less push latch and the warn-once keys. A server restart
    * re-times the clocks (slug `absent-worker-is-dead-after-grace`) and may repeat a run-less push, a coordinator's
    * failed rung 2 among them (slug `run-less-push-latches-are-in-memory`; `stallLatch` names which, and why a
-   * marker-unreadable push re-keys after a clock drop). More than STALL_CLOCK_GAP_MS between two judged sweeps
-   * drops the clocks (`dropStallClocks`, slug `stall-clocks-drop-on-an-unobserved-gap`).
+   * marker-unreadable push re-keys after a clock drop). More than STALL_CLOCK_GAP_MS from one judged sweep's end to the
+   * next one's start drops the clocks (`dropStallClocks`, slug `stall-clocks-drop-on-an-unobserved-gap`).
    *
    * Every mail is durable and deduped: on a run by its observation row (`queueStallNotice`,
    * `recordStallObservation`), run-less by its subject (`hasMailWithSubject`), so a restart re-sends none.
@@ -3021,6 +3022,7 @@ export class FleetWatcher {
     if (this.stallSweepRunning) return;
     this.lastStallSweep = now;
     this.stallSweepRunning = true;
+    let judging = false;
     try {
       // `mail-disabled` reaches L1 as a fact, and `stallMailDisabledHold` decides what it holds (slug
       // `lane-honours-mail-disabled`). The module-local literal, never rundefs' export: see the import note.
@@ -3039,11 +3041,12 @@ export class FleetWatcher {
         return;
       }
       // `stall-clocks-drop-on-an-unobserved-gap`: the one gap rule. A first-seen clock claims its condition held at
-      // every judged sweep since it was set. More than STALL_CLOCK_GAP_MS since the last judged sweep means nobody
-      // watched in between (a disabled window, unreadable or throwing candidate reads, ticks that never reached the
-      // lane), so every clock restarts here. The early returns above never stamp it: they are that unobserved time.
+      // every judged sweep since it was set. More than STALL_CLOCK_GAP_MS from the END of the last judged sweep to this
+      // start means nobody watched in between (a disabled window, unreadable or throwing candidate reads, ticks that
+      // never reached the lane), so every clock restarts here. The early returns above never stamp it: they are that
+      // unobserved time. A judged sweep's own duration is observed time (E2E-6), so `finally` stamps its end.
       if (this.lastStallJudgedAt !== null && now - this.lastStallJudgedAt > STALL_CLOCK_GAP_MS) this.dropStallClocks();
-      this.lastStallJudgedAt = now;
+      judging = true;
       const workers = stallSubjects(candidates.runs);
       const workerIds = new Set(workers.map((x) => x.primary.sessionId));
       const coordinators = stallCoordinatorSubjects(candidates.runs).filter((c) => !workerIds.has(c.sessionId));
@@ -3076,6 +3079,8 @@ export class FleetWatcher {
       // `.catch`, and the lane would die every minute with no trace. One line per bad sweep instead.
       console.warn(`ccrc-server: stall-watch sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
     } finally {
+      // A judged sweep is stamped when it ENDS, its error path included, so the next start measures only unobserved time.
+      if (judging) this.lastStallJudgedAt = Date.now();
       this.stallSweepRunning = false;
     }
   }
@@ -3269,7 +3274,7 @@ export class FleetWatcher {
   }
 
   /** Drops every first-seen clock (slug `stall-clocks-drop-on-an-unobserved-gap`), the one clearing method. Its one
-   *  caller is the gap rule in `sweepStalls`: when more than STALL_CLOCK_GAP_MS passed since the last judged sweep,
+   *  caller is the gap rule in `sweepStalls`: when more than STALL_CLOCK_GAP_MS passed since the last judged sweep ended,
    *  each clock restarts from this sweep, never firing on a duration nobody watched. A single unlistable tick, one
    *  refused pass or one missed sweep leaves no such gap. This is the lane's bookkeeping of its own observations, not
    *  a stall rule, so it stays in L4. */
