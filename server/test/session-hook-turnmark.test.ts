@@ -673,6 +673,44 @@ describe('the payload parse needs no regex engine', () => {
     expect(turnMark()).toMatchObject({ state: 'done', event: 'Stop', bg: -1, bgKinds: '', bgIds: '' });
   });
 
+  it('with no regex engine, a StopFailure leaves the hookstate alone and the marker reads failed with an empty err', () => {
+    noRegexJq();
+    run({ hook_event_name: 'UserPromptSubmit' });
+    const before = fs.readFileSync(stateFile());
+    run({ hook_event_name: 'StopFailure', error: 'server_error' });
+    expect(fs.readFileSync(stateFile()), 'a StopFailure never touches the hookstate').toEqual(before);
+    const m = turnMark();
+    expect(m).toMatchObject({ state: 'failed', event: 'StopFailure', err: '', sessionId: 'uuid-1' });
+    expect(m.stopAt).toBe(m.at);
+  });
+
+  /** The regex builtins a jq built without Oniguruma cannot run; `sub(` covers `gsub(`. */
+  const regexCalls = (program: string): string[] => program.match(/(?:test|match|capture|scan|splits|sub)\(/g) ?? [];
+
+  it('STATIC: the payload parse and every branch of the marker program name no regex builtin, run or not', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    /** The text between a unique opener and the first `close` after it. Found by content, never by line number. */
+    const between = (open: string, close: string): string => {
+      expect(src.split(open).length - 1, `the hook carries exactly one ${JSON.stringify(open)}`).toBe(1);
+      const from = src.indexOf(open) + open.length;
+      return src.slice(from, src.indexOf(close, from));
+    };
+    const parse = between('{ read -r event; read -r psid; read -r paid; } < <(jq -r \'', '\' <<<"$payload"');
+    const mark = between('TURN_MARK_PROGRAM=\'\n', '\'\n');
+    // Landmarks, so a renamed variable or a moved quote cannot leave this scanning nothing: each extraction must open
+    // and close on the program's own text.
+    expect(parse.startsWith('def keep(f):'), 'the payload parse program opens on its first definition').toBe(true);
+    expect(parse).toContain('.agent_id');
+    expect(parse.endsWith('else "" end)'), 'and closes on its last term').toBe(true);
+    expect(mark.startsWith('def csv:'), 'the marker program opens on its first definition').toBe(true);
+    for (const kind of ['working', 'done', 'failed', 'restart', 'clear']) expect(mark, kind).toContain(`$kind == "${kind}"`);
+    expect(mark.endsWith('else empty end'), 'and closes on its last branch').toBe(true);
+    // CONTROL: the scan sees a regex builtin when there is one, `gsub` through its `sub(`.
+    expect(regexCalls('. | test("x") | gsub("a"; "b") | capture("c") | scan("d")')).toEqual(['test(', 'sub(', 'capture(', 'scan(']);
+    expect(regexCalls(parse), 'the payload parse runs on every event').toEqual([]);
+    expect(regexCalls(mark), 'a marker branch that no row runs is still bound').toEqual([]);
+  });
+
   it('the cleaning is unchanged: a stripped event name still reaches its arm, and a stripped session id is the marker id', () => {
     run({ hook_event_name: 'Sto-pé ' });
     expect(readState()).toMatchObject({ state: 'done', event: 'Stop' });
