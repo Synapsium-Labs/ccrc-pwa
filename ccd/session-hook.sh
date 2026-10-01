@@ -2767,7 +2767,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 event=$(jq -r '.hook_event_name // empty' <<<"$payload" 2>/dev/null) || exit 0
 [[ -n "$event" ]] || exit 0
 
-state="" ask_json="null" interrupted="false" src="" gcmd=""
+state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail=""
 case "$event" in
   UserPromptSubmit) state="working" ;;
   PostToolUse)
@@ -2907,9 +2907,37 @@ case "$event" in
   Stop)
     state="done"
     [[ $(jq -r '.is_interrupt // false' <<<"$payload" 2>/dev/null) == true ]] && interrupted="true" ;;
+  StopFailure) stopfail=1 ;;
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
   *) exit 0 ;;
 esac
+# THE CAPTURE ARM (worker stall watch §5.1's first task; capture-arm-keyed-on-hookcap,
+# capture-arm-is-permanent, capture-file-carries-a-meta-line). Only a session whose
+# ccd id ends `-hookcap` pays more than this one test. Every registered event that
+# reaches this line (all but SessionStart `compact`, which exits in its arm, and an
+# unknown event) is copied to one 0600 file in a 0700 per-id directory OUTSIDE the
+# registry. Line 1 is a meta line naming this pane's own session id, sanitised; the
+# rest is the payload as sent. It stops at 200 files, prints nothing, and no failure
+# in it reaches the exit status. Raw files never leave the box:
+# deploy/hook-capture-reduce.mjs reduces a directory to key sets, types and
+# validated tokens, and only that is ever committed, because the repo is public.
+# `hcat` is reset on every run, so a later reuse of the stamp (`${hcat:-…}`) can
+# never take it from the environment.
+hcat=""
+if [[ "$id" == *-hookcap ]]; then
+  hcdir="$HOME/.ccrc/hook-capture/$id"
+  ( umask 077; mkdir -p "$hcdir" ) 2>/dev/null
+  hcn=( "$hcdir"/*.cap )
+  if [[ -d "$hcdir" ]] && { [[ ! -e "${hcn[0]}" ]] || (( ${#hcn[@]} < 200 )); }; then
+    hcat=$(_hook_epoch_ms); hcsid="${CLAUDE_CODE_SESSION_ID:-}"; hcsid="${hcsid//[^A-Za-z0-9-]/}"
+    hctmp="$hcdir/.$event.$$.capture.tmp"
+    { ( umask 077; printf '{"envSid":"%s"}\n%s\n' "$hcsid" "$payload" > "$hctmp" ); } 2>/dev/null \
+      && mv -f "$hctmp" "$hcdir/$event-$hcat-$$.cap" 2>/dev/null || rm -f "$hctmp" 2>/dev/null
+  fi
+fi
+# StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm only
+# raised the flag (stopfailure-sets-a-flag), and nothing below may run for it.
+[[ -n "$stopfail" ]] && exit 0
 
 f="$REG/$id.hookstate.json"
 # Prior subagent set survives state transitions; a corrupt file reads as [].
