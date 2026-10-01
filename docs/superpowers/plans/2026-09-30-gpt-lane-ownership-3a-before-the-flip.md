@@ -3,18 +3,20 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Land every code precondition of the GPT-lane cutover, so that Plan 3b's per-lane flip has nothing left to write in this tree. Six things, each one task or more:
-- the model probe reads each codex lane's own `authDir` through that lane's own runtime, and has no token-directory default at all;
-- the external `_models_litellm` arm is retired, so ccrc no longer renders or stops another repository's LiteLLM;
+- for a codex-kind lane, the model probe reads that lane's own `authDir` through that lane's own runtime, with no token-directory default. An `external` lane's probe keeps today's environment and fetch, the default included, until that lane's own flip in Plan 3b (ruling Z1, Z2);
+- the external `_models_litellm` arm keeps its bytes on today's shape. It never runs the other repository's stop once a codex lane exists, and an `external` lane cannot gain a codex class registry (Z3, Z4);
 - `_check_codex` and its `--fix` exist (spec §12);
 - the settings-env drift check sees a codex lane;
 - the usage pair is ccrc's, under its own name, `ccrc-codex-usage@.{service,timer}`, and converges to exactly the roster's codex lanes;
-- the whole cutover is rehearsed in fixtures: today's live shape is inert, a flip converges, and a flip-back converges.
+- the whole cutover is rehearsed in fixtures: today's live shape changes nothing that runs, a flip converges, a flip-back converges, and after one lane's flip a still-external lane's arm never stops a codex tier.
 
-All of it is **inert on a roster with no `codex` row, and on today's live shape** (stated by shape in [Global Constraints](#global-constraints)). Merging this plan auto-releases, and both boxes follow the dev channel on their own, so the merge is itself a rollout. The one live behaviour it changes, deliberately, is that ccrc stops rendering and stopping another repository's LiteLLM (see [Merge authorisation](#merge-authorisation)).
+All of it is **inert on a roster with no `codex` row, and on today's live shape** (stated by shape in [Global Constraints](#global-constraints)). Merging this plan auto-releases, and both boxes follow the dev channel on their own, so the merge is itself a rollout. Under operator ruling Z (2026-10-01) that rollout changes nothing that runs on the live box. It adds two unit files at unused names with no instance, one install transcript line, and a `codex` doctor row that answers SKIP. Beyond that, only verbs an operator runs answer differently, chiefly `ccrc models <id> init codex`, which now refuses to create a codex registry on a row that is not `exec.kind: "codex"`, the live `external` rows included. [Merge authorisation](#merge-authorisation) lists exactly that, with the one difference a failure path can reach.
 
 **Architecture:** No new executable and no new process primitive. Everything lands in seams that already exist:
-- `ccd/ccrc-models-probe` and `_models_run_probe` (`ccd/ccrc`): a codex-kind row exports its own `$HOME/<exec.authDir>` and runs the probe under `ccgpt-runtime python`. Any other row gets neither. The device flow is refused inside the process, before anything is written.
-- `_models_litellm` (`ccd/ccrc`) serves codex-kind lanes only. The hourly refresh names an external lane with a codex registry as skipped and leaves it frozen until that lane's flip.
+- `ccd/ccrc-models-probe` and `_models_run_probe` (`ccd/ccrc`): a codex-kind row exports its own `$HOME/<exec.authDir>` and runs the probe's codex-lane arm under `ccgpt-runtime python`, with no default. That arm refuses the device flow inside the process, before anything is written, and reads `ChatGPT-Account-Id` through `Authenticator().get_account_id()`. Every other row keeps the base's probe environment, and `_fetch_codex` keeps its bytes, the token-directory default included (Z1, Z2).
+- `_models_litellm`'s external arm (`ccd/ccrc`) keeps its box-global path, its `pgrep` and its bare `ccgpt stop`, and the hourly refresh keeps reaching it, until each lane's flip (Z1). Task 2 adds two narrow refusals and nothing else:
+  - while the roster carries any `codex` row, the arm refuses that stop through its existing `restart-failed` path, before any write (Z4);
+  - `deploy/models-op.mjs`' `init` op, the one creator of a class registry, refuses by name (`codex-registry-needs-codex-lane`) to create a codex registry on any row that is not `exec.kind: "codex"`, the live `external` rows included (Z3).
 - `ccd/ccrc-doctor-checks` gains `_check_codex`, the table entry after `models`, `_fix_codex`, and `_fix_wrappers` (the marker-verified launcher's cure). They are composed from Plan 2b-2's read-only lane primitives behind `declare -F`, plus one new check-only `materialise` in `deploy/models-op.mjs`.
 - `deploy/account-op.mjs`'s `effectiveBaseUrl` learns the codex lane's loopback shim.
 - The usage pair moves to `deploy/systemd/ccrc-codex-usage@.{service,timer}`:
@@ -24,27 +26,27 @@ All of it is **inert on a roster with no `codex` row, and on today's live shape*
 - `cmd_wrappers --force` backs up a symlinked launcher as a symlink.
 - The rehearsal (Task 10) runs the live shape, a flip and a flip-back end to end, as new describes in `server/test/ccrc-install.test.ts` and `server/test/ccrc-update.test.ts`, whose module-private harness it needs.
 
-Plan 3b (the per-lane live runbook, authorised once per lane) and Plan 4 (the other repository's deletion and the box cleanup) are separate plans, written later. What they inherit is in [Carry-forward to Plan 3b and Plan 4](#carry-forward-to-plan-3b-and-plan-4).
+Plan 3b (the per-lane live runbook, authorised once per lane) and Plan 4 are separate plans, written later. Plan 4 is the other repository's deletion and the box cleanup, plus a small ccrc PR. Once no external lane has a codex registry, that PR deletes the external arm, the probe default, the external fetch's direct `auth.json` read, and the guards Z3 and Z4 add (Z8). What the two plans inherit is in [Carry-forward to Plan 3b and Plan 4](#carry-forward-to-plan-3b-and-plan-4).
 
-**Tech Stack:** bash (`ccd/ccrc`, `ccd/ccrc-doctor-checks`, `ccd/ccrc-models-probe`, `deploy/deploy.sh`), Python 3 (the probe's embedded program and `ccd/ccgpt-usage.py`), Node ESM (`deploy/account-op.mjs`, `deploy/models-op.mjs`, comment lines in `shared/litellm.mjs`), systemd unit files, and vitest (`server/test`, `agent/test`).
+**Tech Stack:** bash (`ccd/ccrc`, `ccd/ccrc-doctor-checks`, `ccd/ccrc-models-probe`, `deploy/deploy.sh`), Python 3 (the probe's embedded programs and `ccd/ccgpt-usage.py`), Node ESM (`deploy/account-op.mjs`, `deploy/models-op.mjs`), systemd unit files, and vitest (`server/test`, `agent/test`).
 
 **Spec:** `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`. This plan implements:
-- §9, the probe stops guessing and nothing opens an OAuth file;
+- §9, for a codex lane: the probe stops guessing, and nothing this plan adds opens an OAuth file. An external lane's probe is §19.6's, kept until its flip (D-3706);
 - §10, usage publication;
 - §11, placement, role and the fallback deploy;
 - §12, doctor and `doctor --fix`;
 - §13, uninstall;
 - §15 steps 1-2, ccrc first and the roster last. Steps 3-4 are Plans 3b and 4.
 
-It also reads §19, Plan 2b-2's amendments, above all §19.6, which left the external arm "until Plan 3's cutover retires that arm". Where this plan departs from the spec, the departure carries an allocator-issued number, defined in [Deviations found](#deviations-found). Task 11 appends `## 20. Amendments (Plan 3a)` to the spec.
+It also reads §19, Plan 2b-2's amendments, above all §19.6, which left the external arm "until Plan 3's cutover retires that arm". Operator ruling Z (2026-10-01) keeps that sentence as written: each lane leaves the external path at its own flip in Plan 3b, and Plan 4's ccrc PR deletes the path. Where this plan departs from the spec, the departure carries an allocator-issued number, defined in [Deviations found](#deviations-found). Ruling Z's one new departure is D-3753, issued by the allocator on 2026-10-01. Task 11 appends `## 20. Amendments (Plan 3a)` to the spec.
 
-> **Measurements.** Facts cited as "the 2026-09-30 … census" were taken read-only, while this plan was drafted, on the operator's fleet box and in this tree at `1f9fa22d` (`origin/main`, with Plan 2b-2 merged). The reports are not tracked. Every live value in them is stated here **by shape only** (ruling R13): no id, label, port, path, host, session name or version of the live box appears in this plan. Each fact a task depends on is restated in that task, and the implementer re-measures it before relying on it. The server box was not measured.
+> **Measurements.** Facts cited as "the 2026-09-30 … census" were taken read-only, while this plan was drafted, on the operator's fleet box and in this tree at `1f9fa22d` (`origin/main`, with Plan 2b-2 merged). The reports are not tracked. Every live value in them is stated here **by shape only** (ruling R13): no id, label, port, path, host, session name or version of the live box appears in this plan, except one name the base tree already spells: the probe's default token directory (Global Constraints). Each fact a task depends on is restated in that task, and the implementer re-measures it before relying on it. The server box was not measured.
 
 ---
 
 ## Rulings this plan is built on
 
-The controller rulings R-C1…R-C12 are the questions the skeleton put to the controller, adopted as their recommendations say (controller rulings R4, R5) except where a later ruling reshapes them (R3 reshapes R-C12, and the fix-round ruling F9 reshapes R3's fallback). Each departure is a slug. [Deviations found](#deviations-found) defines it, and the tasks cite it.
+The controller rulings R-C1…R-C12 are the questions the skeleton put to the controller, adopted as their recommendations say (controller rulings R4, R5) except where a later ruling reshapes them (R3 reshapes R-C12, and the fix-round ruling F9 reshapes R3's fallback). **Operator ruling Z (2026-10-01) binds over every one of them.** It replaces R-C2 and withdraws R-C3, and with them the parts of R3 and R4 that carried them: R3's refusal, skip and `_check_models` sentence, and R4 whole. Its clauses are cited Z1…Z9. Each departure is an allocator-issued number. [Deviations found](#deviations-found) defines it, and the tasks cite it.
 
 | Ruling | What the tree does | Named departure | Departs from |
 |---|---|---|---|
@@ -52,17 +54,18 @@ The controller rulings R-C1…R-C12 are the questions the skeleton put to the co
 | Task 6 | The enabled instance set converges to exactly the roster's codex lanes, so a flip-back disables that id's instance | `D-3718` | spec §11, which covers placement only |
 | R6 | The converge degrades rather than enables `ccrc-codex-usage@<id>.timer` while the other repository's `ccgpt-usage@<id>.timer` is enabled for the same id. `_check_codex` WARNs, and the remedy is the operator's own disable. The flat, id-less foreign timer cannot be attributed to a lane, and the row says so | `D-3719` | spec §15.3, where retiring the foreign timer was only the runbook's step order |
 | R2 | On Darwin the usage placement and the usage doctor rows answer a stated not-applicable, with a forced-Darwin test | `D-3720` | spec §12's usage WARN rows |
-| R-C2 (R3) | The probe's token-directory default is removed. A codex-kind lane reads its own `authDir`. An external lane whose registry probe is codex is refused by name and the refresh loop skips it. `_check_models` says so in its own non-WARN sentence | `D-3706` | spec §19.6 and Plan 2b-2's scope, under which `external` lanes keep today's behaviour until the cutover. §9.1, whose default goes outright, is conformed to |
-| R3 | The device flow is prevented inside the process, before any write to `auth.json`, in both the probe and `ccd/ccgpt-usage.py`. The usage service gets `TimeoutStartSec=300` (Task 1; Task 6's `git mv` carries it) | `D-3707` | spec §9, §10 and §19.3, which name neither refusal |
-| R-C12, reshaped by R3 and F9 | D-3161 closes through `Authenticator().get_account_id()`. Task 1 measured the method in the installed LiteLLM at drafting, and its Step 0b re-measures it read-only, by grepping the installed `Authenticator`'s source file, never by running one. If the method is gone, Task 1 stops and reports, and the controller rules. F9 replaces R3's "stays deferred, recorded by slug", so no fallback is chosen and no slug is pre-named | none: closing a breach D-3161 recorded is conformance to spec §9, so it mints no number | — |
-| R-C3 (R4) | The external `_models_litellm` arm is retired in 3a, before any flip | `D-3708` | spec §19.6 |
+| R-C2, replaced by operator ruling Z (Z1, Z2, Z3) | A codex-kind lane's probe reads its own `authDir` through its own runtime, with no default (Task 1). An `external` lane keeps today's probe environment and fetch, the default included, and the hourly refresh keeps probing and refreshing it until its flip. In place of R-C2's freeze, the one creator of a class registry refuses by name (`codex-registry-needs-codex-lane`) to create a codex registry on a row that is not `exec.kind: "codex"`: the live `external` rows, the shape Z3 names, and a non-Anthropic `generated` row, which declares no `authDir` either. Its remedy is "flip the lane to `codex` first (Plan 3b)". A registry that already exists is untouched (Task 2). `_check_models` is unchanged | `D-3706`, redefined by Z6 | spec §9.1's "loses its default outright": the default stays for external lanes until their flip, and a codex registry cannot be created on an external lane. §19.6, under which external lanes keep today's behaviour until the cutover, is conformed to |
+| R3, narrowed by Z2 | The device flow is prevented inside the process, before any write to `auth.json`, in the probe's codex-lane arm and in `ccd/ccgpt-usage.py`, which nothing live runs. The probe's external fetch keeps its bytes, so Z2's one-program allowance is not taken. The usage service gets `TimeoutStartSec=300` (Task 1; Task 6's `git mv` carries it) | `D-3707` | spec §9, §10 and §19.3, which name neither refusal |
+| R-C12, reshaped by R3, F9 and Z2 | D-3161 closes on the codex-lane arm, through `Authenticator().get_account_id()`. The external fetch keeps its direct `account_id` read, the base's bytes, until Plan 4's ccrc PR deletes that path (Z8). Task 1 measured the method in the installed LiteLLM at drafting, and its Step 0b re-measures it read-only, by grepping the installed `Authenticator`'s source file, never by running one. If the method is gone, Task 1 stops and reports, and the controller rules. F9 replaces R3's "stays deferred, recorded by slug", so no fallback is chosen and no slug is pre-named | none: closing D-3161 on the path this plan adds is conformance to spec §9, so it mints no number. The external path's read is the breach D-3161 already records | — |
+| R-C3, withdrawn by operator ruling Z (Z1) | The external `_models_litellm` arm is NOT retired before the flip. Its box-global path, its `pgrep` and its bare `ccgpt stop` keep their bytes on today's shape, and the hourly refresh keeps reaching it, until each lane's flip in Plan 3b. Plan 4's ccrc PR deletes it (Z8) | `D-3708`, redefined by Z6 as "withdrawn by operator ruling Z (2026-10-01)" and kept as a recorded decision | none: spec §19.6 stands as written |
+| Z4 | While the roster carries any `codex` row, the external arm refuses its bare `ccgpt stop` through its existing `restart-failed` refusal, with a sentence naming why, before any write. A bare `ccgpt stop` stops units by name, and after a flip those names are ccrc's own tiers (spec §19.2; critic #7). With no codex row, as today, the arm is unchanged (Task 2) | `D-3753`, which the controller mints | spec §8 and §19.6, under which an external lane keeps the bare `ccgpt stop` byte for byte until the cutover |
 | R-C4 | `_check_codex` may connect to the ports the roster names for a codex lane, each connect bounded by `CCRC_CODEX_PROBE_S` (default 2 s, `ccd/ccrc:10345`) | none: §12's listener rows need it | — |
 | R-C5 | Doctor trusts `ccgpt-runtime check` (the stamp). `--fix` rebuilds, and the rebuild re-probes | `D-3711` | spec §12, "failing its behaviour probe" |
 | R-C6 | `_codex_lanes` rc 1 (roster unreadable) and rc 2 (no `jq`) are FAIL, never SKIP | `D-3710` | spec §12, which defines only the empty-set SKIP |
 | R-C7 | For a codex lane, a settings-env `ANTHROPIC_BASE_URL` that is absent, or equal to `http://127.0.0.1:<proxyPort>`, is healthy. Present and different is WARN | `D-3709` | Plan 2b-2 carry-forward 8 |
 | R-C8 | `cmd_doctor` keeps its FAIL-only fixer contract. The missing-timer WARN names `ccrc install` as its remedy, and a tier whose only finding is stale code, also a WARN, names `ccrc update` | `D-3721` | spec §12 ("`--fix` may … enable a missing usage timer, and restart a verified ccrc-owned active tier", read for a tier that is only stale) |
 | R-C9 | Uninstall runs `disable --now` on every enabled ccrc usage instance | none: spec §13 already says so | — |
-| R-C10 | Plan 3b's route: a targeted `ccgpt-runtime build` and a targeted instance enable, never a full `ccrc install` inside a lane window. 3a ships nothing for it; see [Merge authorisation](#merge-authorisation) | none in 3a | — |
+| R-C10 | Plan 3b's route: a targeted `ccgpt-runtime build` and a targeted instance enable, never a full `ccrc install` inside a lane window. 3a ships nothing for it, and the merge confirms nothing about it; see the note in [Merge authorisation](#merge-authorisation) | none in 3a | — |
 | R-C11 (R5) | `deploy.sh` stops placing `~/.local/bin/ccrc-models-probe`, in Task 7 with every other `deploy-verify` edit | none: 2b-1 carry-forward 21 | — |
 | R7 | `lane.json`'s staleness against the registry is measured by a check-only `materialise --check true`, which writes nothing and answers `changed`. Without `--check` it writes, as every caller before it expects. Task 4 uses it and Task 8 cures it | `D-3712` | R7's parenthetical (a bare `materialise`, no `--commit`, as the check) and `deploy/models-op.mjs`' write-always contract |
 | R8 | `--fix` regenerates a launcher only when it is marker-verified, through a new `_fix_wrappers` that runs the shipped `ccrc wrappers` with no flag | `D-3730` | spec §12, which places it under `_check_codex`'s `--fix` |
@@ -76,14 +79,17 @@ Every task's requirements implicitly include this section. The first two groups 
 - **Node floor `>=22.13.0`**, identical across the three engines. Never lower an `engines` field to make a test green.
 - **The repository is PUBLIC (AGPL-3.0).** No tracked byte may carry a real account id, lane name, label, email, host, port, credential, OAuth path, config name, session codename, operator username, version of a live box, or real model id (ruling R13). Nor is a real value printed, even transiently: real labels are handled only base64-encoded, in `0600` scratch files, with test output suppressed and the verdict read from the exit code, and a red-first proof for the residue class uses a synthetic label inside a disposable copy (`git archive HEAD | tar -x -C <tmp>`, plus a `server/node_modules` symlink). Fixture vocabulary:
   - ids `codex-a` and `codex-b` (kind `codex`);
-  - `ext-a` and `ext-b` (kind `external`, `telemetry: "codex"`): the live lanes' shape in unit cases (Tasks 1, 2, 3, 6, 7). The rehearsal (Task 10) instead flips `codex-a` and `codex-b` between the two kinds;
+  - `ext-a` and `ext-b` (kind `external`, `telemetry: "codex"`): the live lanes' shape in unit cases (Tasks 2, 3, 6, 7; Task 1 hands `ext-a` to the probe as an argument only, never as a roster row). The rehearsal (Task 10) instead flips `codex-a` and `codex-b` between the two kinds;
+  - `gen-a` (kind `generated`): the third row Task 2's Z3 refusal is measured on;
   - the tree's existing non-live `router` row;
   - `claude` (upstream) and `claude2` (generated);
   - `authDir` `.local/share/ccrc/codex/<id>`, written only through `codexAuthDir(id)`;
   - token `test-token-not-a-secret`, model ids `gpt-x` and `probe-model`;
   - ports from `freePorts()` for anything that listens, and `45010`/`45011`/`45020`/`45021` only for pure-parse fixtures that open no socket.
 
-  **No fixture id equals a rostered id** (ruling R11). Measured 2026-09-30: none of the fixture ids above is on the live roster. Task 11 re-checks this by comparison, without printing the roster.
+  **No fixture id equals a rostered id** (ruling R11). Measured 2026-09-30: none of the fixture ids above is on the live roster, and on 2026-10-01 again with `gen-a` (a count, 0). Task 11 re-checks this by comparison, without printing the roster.
+
+  **One live path is the tree's own spelling, and public:** the probe's token-directory default, `$HOME/.handoff/chatgpt-auth` (`ccd/ccrc-models-probe:162` at the base, and the spec's §1 table and §9.1). It is the first lane's OAuth directory, but the base already carries it, so Task 11 Step 4's hand-grep drops it as a name the base carries. Task 10's live-shape fixture names it to model that default. Task 1 adds no line that spells it, so its cut can prove mechanically that `_fetch_codex` stays the one holder in the probe.
 - **`ccd/ccd` is not edited at all.** An edit means a re-stamp and a charge on the compaction-card census, and 3a needs neither. `ccd/ccrc` is hand-written and carries no marker (D-3171).
 - **The base.** This plan was measured at `1f9fa22d`. Rebase onto `origin/main` before Task 1. Every line number, count and case count quoted below is an example to RE-DERIVE, never a value to paste. Locate every subject by its name plus a grep at execution time. Post-condition diffs compare against the task's own recorded base, never against `origin/main`. Each task's Step 0 writes that base to a file of its own, and every later block of that task reads it back from that file, never from a variable an earlier call set: Task 1 `$SCRATCH/t1/base`; Tasks 2 and 3 `$SCRATCH/t2-base` and `$SCRATCH/t3-base`; Tasks 4 and 5 `$SCRATCH/base`; Tasks 6 and 7 `$SCRATCH/t6-base` and `$SCRATCH/t7-base`; Tasks 8 and 9 `$EVID/task8-base` and `$EVID/task9-base`; Tasks 10 and 11 `$SCRATCH/t10-base` and `$SCRATCH/t11-base`, the merge-base they name. The sourced `plan3a-env.sh` (below) reads `$SCRATCH/base` into `$BASE`, so Tasks 4 and 5 use `$BASE` as it stands. Every other task sets `BASE="$(cat <its file>)"` in the block that needs it, because the env's `$BASE` may be an earlier task's. A scope or residue check runs after the task's own commit, as `git diff "$BASE" HEAD`, or before it against the worktree or the index (`git diff "$BASE"`, `git diff --cached "$BASE"`), never as a `$BASE..HEAD` diff before the commit exists.
 - **Fixture HOMEs only.** Never run `ccrc`, `ccd`, `ccgpt-runtime`, `ccrc-codex`, `ccrc-models-probe` or either Python file against the live `$HOME`. The harnesses:
@@ -92,7 +98,7 @@ Every task's requirements implicitly include this section. The first two groups 
   - `ccgptHarness.ts`;
   - `codexLaneFixture.ts`.
 - **Never run the destructive `ccd` verbs** (`ws-rm`, `ws-reap`, `ws-gc --prune`, `ws-archive`, `ws-restore`, `ws-reclaim`). Never touch tmux, `~/.cc-sessions`, `~/.cc-limits` or any `claude-session@*` unit.
-- **Single source of truth.** Runtime lists are derived from one declaration, never hand-kept twice (`single-definition.test.ts`). `single-definition.test.ts` also pins an exact count of lines that touch `.classes.json` in `ccd/ccrc-doctor-checks`: two at the base, **three** from Task 1 on. Task 1's `_check_models` reads one registry's `probe` field itself, because models-op's `lanes` op refuses the rosters that check deliberately measures, and Task 1 argues that one addition. `_check_codex` reads registry facts only through `deploy/models-op.mjs` check-only ops, never by naming the file. Any other new reader re-measures the count.
+- **Single source of truth.** Runtime lists are derived from one declaration, never hand-kept twice (`single-definition.test.ts`). `single-definition.test.ts` also pins an exact count of lines that touch `.classes.json` in `ccd/ccrc-doctor-checks` (`server/test/single-definition.test.ts:1795`): two at the base, and still two when this plan ends. The earlier draft's third reader, `_check_models`' own read of a registry's `probe` field for a lane the refresh skipped, went with ruling Z, which leaves `_check_models`' verdicts unchanged. `_check_codex` reads registry facts only through `deploy/models-op.mjs` check-only ops, never by naming the file. Any new reader re-measures the count.
 - **Mutation-table discipline.** Every guard ships with a case that goes RED when the guard is mutated, measured both ways with counts. If a demanded mutation does not red, **report that it does not**. Never manufacture code to force a bind (D-3152). A mutation row backs up every file it edits, one backup per file, and verifies its restore with `git diff --quiet -- <files>`. Anything a mutation makes block (a FIFO, a sleep, a listener) runs under `timeout`, so nothing outlives the census.
 - **Suites.**
   - Run each suite in the FOREGROUND from inside its package, with a timeout of at least 600000 ms, as `./node_modules/.bin/vitest run test/<file>.test.ts`. Never bare `npx vitest`. Every such command is wrapped in the census below.
@@ -100,7 +106,7 @@ Every task's requirements implicitly include this section. The first two groups 
   - **`server/test/ccrc-doctor.test.ts` is never run whole in one call.** Census-wrapped and alone, it took 424 s and 525 s in two measurements at `1f9fa22d`, against that cap, and this plan adds about a hundred cases to it. So wherever a step runs it with no `-t`, it is three foreground calls, the step's evidence label suffixed `-1`, `-2` and `-3`, with these complementary filters (`<k>`/`<P>`): `1`/`'^ccrc doctor: [a-c]'`, `2`/`'^ccrc doctor: [d-m]'` and `3`/`'^(?!ccrc doctor: [a-m])'`. At `1f9fa22d` they selected 88, 123 and 288 of the 499 cases `vitest list` names. The step's whole-file count is the three parts' sum. A part that runs past about 500 s is split again at another letter, keeping the parts complementary. A mutation row that names doctor cases runs only the part that holds them.
   - `tsc --noEmit` does not read `server/test/`. When a task writes a test file, its typecheck step is `./node_modules/.bin/vitest run test/typecheck-tests.test.ts` (D-3163).
   - Known load flakes (the repository's `CLAUDE.md` list) are re-run in isolation before anyone calls them a real break.
-- **Deviation numbers are issued, never chosen.** This plan's own departures were minted by the allocator on 2026-10-01 and are defined individually in [Deviations found](#deviations-found). A task that finds a new departure during execution reports it with a proposed slug, `⟦D:<short-slug>⟧` (ruling R12), and the controller mints its number and substitutes it. Never write a number nobody issued, a `D-TBD`, or a range.
+- **Deviation numbers are issued, never chosen.** This plan's own departures were minted by the allocator on 2026-10-01 and are defined individually in [Deviations found](#deviations-found). Ruling Z's new departure, `D-3753`, is the one slug the plan carries, and the controller mints its number before execution. A task that finds a new departure during execution reports it with a proposed slug, `⟦D:<short-slug>⟧` (ruling R12), and the controller mints its number and substitutes it. Never write a number nobody issued, a `D-TBD`, or a range.
 - **Commits** land on the workspace's own branch, never a separate feature branch, with the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, the message passed as `git commit -F - <<'EOF' … EOF` (or `--amend -F -` onto a task's WIP commit). **The commit-identity rule:** author and committer are the noreply identity this worktree's git config already carries. No task passes `-c user.*` or copies another commit's author. After every commit, `git log -1 --format='%an <%ae> | %cn <%ce>'` shows that identity only, and any other stops the task before anything is pushed (the pre-push hook refuses identity residue). Task 11 checks the whole branch the same way.
 
 **The live box (carried from 2b-2, widened)**
@@ -109,11 +115,12 @@ Every task's requirements implicitly include this section. The first two groups 
   - any per-lane launcher that is not marker-verified;
   - any `~/.config/systemd/user/ccgpt-usage*` file;
   - anything in the other repository's shared `0600` env file or its config directory (spec §15).
-- **Never start, stop, restart, `reset-failed`, enable or disable any `ccgpt-*` unit or any `ccgpt-usage*` timer** on the real user manager, and never bind or probe a live lane's port. ccrc code never does it either (ruling R6). Where a foreign unit blocks convergence, ccrc degrades and names the operator's own act.
+- **Never start, stop, restart, `reset-failed`, enable or disable any `ccgpt-*` unit or any `ccgpt-usage*` timer** on the real user manager, and never bind or probe a live lane's port. No code this plan adds does it either (ruling R6). The one existing path that can, the external arm's bare `ccgpt stop` (`ccd/ccrc:10031`), keeps the base's bytes on today's shape (Z1), and refuses once any `codex` row exists (Z4). Where a foreign unit blocks convergence, ccrc degrades and names the operator's own act.
 - **No repository-wide or destructive git on the live box:** no `git worktree prune`, `gc`, `stash`, branch deletion or `reset`. A test's fixture worktree lives in a disposable clone or under its own `mkTmp`, and is removed by path.
 - **Never read or print a live unit's `Environment=`, or any key-bearing file** (`runtime.env`, `auth.json`, a secrets file, the other repository's env file). Any check on one is count-only.
-- **Nothing in doctor, the probe, the publisher, `--fix` or a test opens an `auth.json`** (spec §9): existence and mode only. A `0000`-mode `auth.json` fixture must still pass every check that concerns it. The probe's own `account_id` read (D-3161) is Task 1's to close, per R3 and F9: if the installed `Authenticator` has lost `get_account_id`, Task 1 stops and reports.
+- **Nothing this plan adds to doctor, the probe, the publisher, `--fix` or a test opens an `auth.json`** (spec §9): existence and mode only. A `0000`-mode `auth.json` fixture must still pass every check that concerns it. The codex-lane arm's `account_id` comes from `get_account_id()`, closing D-3161 there, per R3, F9 and Z2: if the installed `Authenticator` has lost that method, Task 1 stops and reports. The external fetch's own read of `auth.json` for `account_id` is the base's bytes, which Z1 keeps until Plan 4's ccrc PR deletes that path (Z8). A case that drives that path does so only against a fixture `auth.json` under a `mkTmp` HOME.
 - **Every `systemd-run` and `systemctl` a test can reach is a fixture.** A task that adds such a path plants a recorder (`plantSystemd` with `systemctlCalls`/`systemdRunCalls`, or the harness's own) **in the same commit**. This plan adds enable and disable paths in Tasks 6 and 7.
+- **Every `ccgpt` and `pgrep` a test can reach is a stand-in.** Ruling Z keeps the external arm's bare `ccgpt stop`, and on the live box that verb stops the live lanes' tiers by name. The census cannot catch it: it flags a new unit or a vanished enablement link, and a stopped `--collect` transient unit simply leaves the listing. So a case that drives the external arm plants a recording `ccgpt` and `pgrep` in its fixture HOME's `~/.local/bin`, as `server/test/ccrc-models.test.ts` already does per describe (`:1315`, `:1632-1634`), and Task 2 makes that file's `env()` poison both wherever the HOME holds no stand-in, and stop inheriting `CCGPT_CONFIG`, the other repository's override of the arm's box-global path, which the arm still honours. Task 10 drops `CCGPT_CONFIG` too, and proves both names resolve to stand-ins before any run that can reach the arm (`REHEARSAL_ENV`, `assertForeignFront`).
 - **No real litellm in the default suite.** Cases that need it are opt-in, behind `describe.skipIf(!process.env.CCRC_TEST_LITELLM_PY)`. Anything that imports litellm sets `LITELLM_LOCAL_MODEL_COST_MAP=True` and `PYTHONDONTWRITEBYTECODE=1`, and gets a `mkTmp` HOME and a synthetic token directory.
 - **Containment census on every suite command (ruling R11).** 2b-2's suites leaked a real transient unit named for a fixture lane, plus fixture processes, into the live user manager. A recorder is necessary, not sufficient. So every suite command in this plan runs between two snapshots, and a step whose census fails has failed, whatever vitest printed. The census signals nothing: a leak is reported to the controller, and removing a leaked real unit is the operator's act.
 
@@ -249,21 +256,25 @@ Every task's requirements implicitly include this section. The first two groups 
 - New bash carries no un-shimmed GNU spelling (`sha256sum`, bare `timeout`, `stat -c`, `date -d`, `mv -T`, template-less `mktemp`). Inside `ccd/ccrc` and `ccd/ccrc-doctor-checks`, use the `_plat_*` helpers.
 
 **This plan's own**
-- **Inert on today's live shape, stated by shape** (rulings R1, R13). Measured 2026-09-30, the live fleet box's shape is this:
+- **Inert on today's live shape, stated by shape** (rulings R1, R13, Z). Measured 2026-09-30, the live fleet box's shape is this:
   - Its roster has **no `codex` row**. It has two `external` rows with `provider: "openai"` and `telemetry: "codex"`, and neither declares ports or an `authDir`.
   - Call them the first lane and the second lane. The first has a class registry whose probe is codex, plus a catalogue. The second has only an effort file.
   - `~/.ccrc/runtime/codex/` and `~/.ccrc/codex/` are absent.
   - Both lanes' launchers are unmarked and belong to the other repository. One is a symlink to its shared launcher. The other is a small file that execs that launcher by path.
   - The other repository's flat usage timer and one instance of its `ccgpt-usage@` template are enabled. Its unit files carry no ccrc marker.
   - The second lane's two transient tiers run under `ccgpt-<id>-{litellm,shim}.service`, the unit names ccrc's own tiers use (spec §19.2), and that lane carries live sessions. The first lane is idle: no session, and no tier loaded.
-  - The hourly `ccrc-models.timer` refresh renders the other repository's box-global LiteLLM config through the external arm. The file's mtime matched the timer's last run.
+  - The hourly `ccrc-models.timer` refresh renders the other repository's box-global LiteLLM config through the external arm. The file's mtime matched the timer's last run. After the merge it goes on doing exactly that (Z1).
   - A stale `~/.local/bin/ccrc-models-probe` left by an older fallback deploy is on the box, and ccrc never runs it.
 
-  On that shape, every task's change is a no-op except the one [Merge authorisation](#merge-authorisation) names. Task 10 is the proof, run in fixtures.
+  On that shape the merge changes nothing that runs (ruling Z). [Merge authorisation](#merge-authorisation) lists exactly what it adds, and Task 10 is the proof, run in fixtures (Z7).
 - **`ccd/ccgpt-runtime` and `ccd/ccgpt-proxy.py` are byte-identical to the base** (Task 11's cut).
   - `_rt_probe_source` (`ccd/ccgpt-runtime:591-781` at `1f9fa22d`) is hashed into every runtime stamp, so an edit there rebuilds the runtime on every box with a codex lane.
   - The shim's bytes are what `_codex_tier_stale` compares, so an edit there marks every running ccrc tier stale.
-  - `ccd/ccrc-models-probe` is hashed by nothing (`ccd/ccgpt-runtime` names it only in a comment), so Task 1 may edit it freely.
+  - `ccd/ccrc-models-probe` is hashed by nothing (`ccd/ccgpt-runtime` names it only in a comment), so Task 1 may edit it, except for `_fetch_codex` (next item).
+- **The external path keeps the base's bytes, in place** (ruling Z1). Task 11's cut proves each item:
+  - `_fetch_codex` in `ccd/ccrc-models-probe` (`:153-196` at `1f9fa22d`) stays byte-identical, where it is. Task 1's codex-lane arm is a new function beside it, chosen where `_fetch` dispatches its `codex` kind (`:235`). So `git diff "$BASE" -- ccd/ccrc-models-probe` removes no line of `_fetch_codex`, and no added line spells the external default's directory, which that function already carries (R13).
+  - `_models_litellm_path` and `_models_litellm_running` (`ccd/ccrc:9703-9717` at `1f9fa22d`) are unchanged. The external arm's body (`:10020-10051`) keeps every byte except one inserted block: Z4's refusal, inside the arm's `_models_litellm_running` branch, ahead of the `ccgpt stop` it guards. So the refusal is asked only where the base would run that stop.
+  - For a row that is not `exec.kind: "codex"`, `_models_run_probe` hands the probe exactly the environment the base hands it, the `exec.secretsFile` re-supply included (Z7: "same probe env").
 - **ccrc never touches a `ccgpt-usage` unit** (ruling R2). ccrc's pair is `ccrc-codex-usage@.service` and `ccrc-codex-usage@.timer`, with instances `ccrc-codex-usage@<id>.timer`. `install-census.test.ts`'s `FOREIGN_LIVE_BOX_UNIT_PREFIX = 'ccgpt-usage@'` stays and keeps refusing. Placement is `fleet` and `both`, Linux only. On Darwin, placement and the usage doctor rows answer a stated not-applicable: `_inst_units_darwin` places no timer at all, and macOS is not centrally managed (centralised-update design, decision 17).
 - **Doctor mechanics** (spec §12).
   - Checks are sourced under `set -uo pipefail`, without `-e`, and a check's return code equals the worst class it printed.
@@ -273,35 +284,42 @@ Every task's requirements implicitly include this section. The first two groups 
   - `--fix` runs only on a FAIL (R-C8). The verdict is doctor's re-measurement, never the fixer's word. `--fix` never chooses a port, performs OAuth, reads a credential, signals a process it has not proved, overwrites an unverified launcher, or deletes state.
 - **Every timer-enable degrade appends `INST_DEGRADED`** (Task 6), so the closing line never claims convergence over a failed enable.
 - **Spec amendments are appended, never inserted** (ruling R9). The spec is 974 lines at `1f9fa22d`. Task 11 appends `## 20. Amendments (Plan 3a)` after the last line and makes same-line pointer edits only above it: **no line above §20 moves**. The tree cites the spec by line number: `ccd/ccgpt-usage.py` cites §5.4 line 333, `ccd/ccrc-models-probe` cites line ~497, and the Plan 2a plan cites lines 497 and 698. Task 11 proves it with a diff that shows only appended lines and same-line edits.
-- **No rollout by hand, and no auto-update pause for this merge.** The merge rides ccrc's own updater, which is monitored and never replaced by a hand rollout (operator ruling 2026-09-30). This plan edits no roster, and writes, starts, stops, enables or disables nothing of the other repository's.
+- **No rollout by hand, and no auto-update pause for this merge.** The merge rides ccrc's own updater, which is monitored and never replaced by a hand rollout (operator ruling 2026-09-30). This plan edits no roster. Nothing it adds writes, starts, stops, enables or disables anything of the other repository's. What today's external arm already does there, it goes on doing, byte for byte, until each lane's flip (Z1).
 
 ---
 
 ## Merge authorisation
 
-- **The act.** An ordinary review, then one squash-merge of this plan's branch into `main`. This repository's merges need `--admin`. The plan edits no roster, touches no file or unit of the other repository, and carries no hand rollout.
-- **The merge is itself a rollout.** Every merge to `main` becomes a dev prerelease within about a minute (`.github/workflows/release-main.yml`). Both boxes follow the dev channel automatically (ruling R1). Measured 2026-09-30, the fleet box was already on `origin/main`'s tip, with `install: complete`. So within minutes both boxes run `ccrc update` onto this plan, meaning its install spine, its closing doctor and, from then on, the hourly `ccrc-models.timer`. **The operator approves the merge knowing that.**
-- **What that rollout changes on today's live shape, and nothing else:**
-  - The fleet box's user unit directory gains `ccrc-codex-usage@.{service,timer}`, at names nothing else holds. **No instance is enabled**, because no roster row is `codex`. A `server`-role box places neither file.
-  - The hourly refresh stops probing, rendering and stopping for the one external lane that has a codex registry. It names that lane as skipped, exits 0, and `ccrc-models.service` does not fail. The other repository's box-global LiteLLM config stays at its last rendering (R-C3). That lane's ccrc-side catalogue, class table and settings env freeze until its flip refreshes them (R-C2).
-  - Doctor gains `codex`, which answers one SKIP on this shape because there is no codex lane. `_check_models` moves to SKIP: the one lane with a registry on this shape is one the refresh skips by design, and the SKIP names it in its own sentence, never a WARN. Every other check keeps its class, and Task 10 pins that, check by check.
-  - `~/.local/bin/ccgpt-usage.py` gains the device-flow guard. Nothing live runs it: its pair has no instance, and the other repository's timers run their own publisher.
-  - If one of the existing timer enables fails on a box, the closing line now reports a degraded step rather than convergence (Task 6). That sentence is truer, not a new failure.
-  - Nothing else changes. No runtime is built, no tier is started or stopped, and no `systemctl` verb names a `ccgpt-*` unit. No byte at the other repository's paths changes, and `ccrc update` never touched the stale PATH probe copy, which Plan 4 removes.
-- **Operator confirmations this merge carries** (critic gap 22). R-C2 and R-C3 were drafted as controller rulings. Because the merge auto-rolls them onto the live box with no runbook, each is the operator's to confirm:
-  1. **R-C2: the probe refuses, and the refresh skips, an external lane with a codex registry.** On the live box this freezes the idle lane's catalogue until its flip, and Plan 3b refreshes it at the flip. The alternative, keeping the old default for external rows until Plan 4, leaves the wrong-lane class reachable: an `init codex` on the other lane before its flip would probe with the first lane's OAuth. **Recommended: confirm.**
-  2. **R-C3: retire the external `_models_litellm` arm now.** From the merge on, ccrc no longer rewrites the other repository's box-global LiteLLM config, and no longer runs that repository's stop verb every hour. The frozen config is also what a rollback of that lane would read. The cost: a model retired upstream before that lane's flip would not be dropped from the frozen config. Spec §19.6 had placed the retirement at the cutover. **Recommended: confirm.**
-  3. **R-C10's framing, which is Plan 3b's**, confirmed now so that 3b is not written against an unconfirmed premise. Inside a lane window, 3b builds the runtime and enables that lane's usage instance by the targeted route: `ccgpt-runtime build`, then `systemctl --user enable --now ccrc-codex-usage@<id>.timer`. That equals the spine's own converge only once the operator has disabled that lane's foreign usage timer: its `ccgpt-usage@<id>.timer`, or the flat `ccgpt-usage.timer`, whose lane is the other repository's own default. Before that, the next update's converge withdraws an instance that a foreign template instance blocks, and an enable beside the flat timer leaves two writers for the lane, which the id-less flat timer hides from the converge. So the operator's foreign disable precedes both the roster flip and the enable, and only then is the next auto-update a no-op. The operator is asked to confirm that this is not the hand rollout the 2026-09-30 ruling forbids. 3a ships nothing for it.
-- **What this merge does not authorise:** any roster edit; any act on the other repository's units, timers, launchers or configs; the first runtime build; `ccrc codex login`; parking a session; `ccrc account disable|enable`; pausing auto-update. All of these are Plan 3b's, authorised per lane.
-- **After the merge.** The controller measures read-only that each box's update record names the new release, and that the fleet box's closing doctor gives Task 10's live-shape classes. Any difference is reported to the operator. The way back is the updater's own rollback, the PWA's or `ccrc rollback`, at the operator's word, never a hand edit. A rollback to the previous release reverses R-C2 and R-C3: its hourly refresh again probes the lane with a codex registry through the token-directory default, re-renders the other repository's box-global LiteLLM config, and can run that repository's bare stop verb. It also leaves the two `ccrc-codex-usage@` template files placed and inert, because an install places files and never removes one its tree does not name.
+- **The act.** An ordinary review, then one squash-merge of this plan's branch into `main`. This repository's merges need `--admin`. The plan edits no roster, nothing it adds writes, starts, stops, enables or disables a file or unit of the other repository, and it carries no hand rollout.
+- **The merge is itself a rollout.** Every merge to `main` becomes a dev prerelease within about a minute (`.github/workflows/release-main.yml`). Both boxes follow the dev channel automatically (ruling R1). Measured 2026-09-30, the fleet box was already on `origin/main`'s tip, with `install: complete`. So within minutes both boxes run `ccrc update` onto this plan, meaning its install spine, its closing doctor and, from then on, the hourly `ccrc-models.timer`. **The operator approves the merge knowing that.** Under operator ruling Z (2026-10-01) the plan is built so that this rollout changes nothing that runs on today's live shape. So it carries no operator confirmation beyond the merge itself. The two the earlier draft asked for are gone: R-C2 is replaced and R-C3 withdrawn (Z1-Z4, Z6).
+- **What the rollout adds on today's live shape, exactly:**
+  - **Two unit files at unused names, with no instance.** The fleet box's user unit directory gains `ccrc-codex-usage@.service` and `ccrc-codex-usage@.timer`, names nothing else holds (D-3717). No instance is enabled, because no roster row is `codex`: the converge's set is empty, and there is no ccrc instance for it to disable. A `server`-role box places neither file, and neither does a Darwin box (D-3720).
+  - **One new doctor row, a SKIP.** Doctor gains `codex`, which answers exactly one SKIP line: there is no codex lane, and no lane state under `~/.ccrc/codex/`. Every other check, `models` included, keeps its class, and Task 10 pins that check by check (Z7). Doctor's summary line counts one more check and one more skip. Its exit code, and so install's and update's, is unchanged, because a SKIP never counts as a FAIL (`cmd_doctor`, `ccd/ccrc:3348`, `:3412`).
+  - **One new install transcript line.** Every install and update prints `install: codex-usage: none — no codex lane in the roster` (Task 6), beside Plan 2b-2's `install: codex runtime: none — no codex lane in the roster`. No shipped reader parses an `install:` line (measured: no hit under `server/src`, `agent/src`, `shared` or `pwa/src`, and `ccd/ccrc` greps none of its own).
+  - **The hourly refresh does exactly what it did** (Z1). `ccrc-models.service` runs `ccrc models refresh --all` (`deploy/systemd/ccrc-models.service:11`), as before. The external lane with a codex registry is probed through the base's environment and the base's `_fetch_codex`, the token-directory default included. The other repository's box-global LiteLLM config is rendered by the same arm, and the `ccgpt stop` decision is the same. Z4's new refusal sits on that arm's stop path, but it fires only while the roster carries a `codex` row, and this roster carries none. Task 10 pins the probe environment, the render and the stop decision against the base tree.
+  - **Bytes that change where nothing on this shape runs them differently.** `ccd/ccrc-models-probe` gains a codex-lane arm beside `_fetch_codex`, which keeps its bytes. `~/.local/bin/ccgpt-usage.py` gains the device-flow guard and the absent-file remedy, but nothing live runs it: ccrc's pair has no instance, and the other repository's timers run that repository's own publisher (Z2). Doctor, install, account removal and uninstall gain arms that only a codex row, a flip-back or an operator's own verb reaches.
+- **The verbs that answer differently, and only when an operator runs them:**
+  - `ccrc models <id> init codex` that would create a registry on a row that is not `exec.kind: "codex"`, an `external` row included, is refused by name (`codex-registry-needs-codex-lane`), with the remedy "flip the lane to `codex` first (Plan 3b)" (Z3, Task 2). On today's shape that is the second lane, which has none. The first lane's registry exists, so `init codex` there creates nothing and keeps today's `created: false` answer. Nothing automatic creates a registry: the timer runs only `refresh --all`, and the agent's exec whitelist is `['tmux', 'ccd']` (`agent/src/whitelist.ts:192`).
+  - `ccrc doctor --fix` gains `_fix_codex` and `_fix_wrappers` (Task 8). Each runs only on its own check's FAIL, and install's closing doctor runs without `--fix` (`_inst_doctor_tail`, `ccd/ccrc:13292`). `_fix_wrappers` runs `ccrc wrappers` with no flag, which overwrites only a launcher whose ccrc marker verifies and never writes an `external` row's launcher at all (`ccd/ccrc:3815`, `:4195`), so neither live GPT-lane launcher is reachable from it.
+  - `ccrc wrappers --force` backs up a symlinked launcher as a symlink (Task 9).
+- **Z2's allowance is not taken, so the probe behaves the same for an external row on every path.** Z2 lets the device-flow guard cover the external branch too, but only if the probe is one program for both kinds. It is not. The external fetch keeps the base's bytes, so an external lane whose token cannot be refreshed behaves exactly as it does today, device flow included, until its flip moves it onto the guarded arm.
+- **The one failure-path-only difference (Task 6).** If one of the nine existing timer enables fails, install's closing line names a degraded step where today it claims convergence. Nothing changes while every enable succeeds. The exit code is doctor's, unchanged, and no shipped file parses that sentence. Measured: outside `ccd/ccrc`'s own printing lines (`:12144-12150`) and comments, the two phrasings `every step above converged` and `converged with` match only `server/test/ccrc-install.test.ts`'s pins and one unrelated comment (`converged without`, `ccd/ccrc-doctor-checks:4914`).
+- **What this merge does not authorise:** any roster edit; any act on the other repository's units, timers, launchers or configs; a class registry for the second lane; the first runtime build; `ccrc codex login`; parking a session; `ccrc account disable|enable`; pausing auto-update. All of these are Plan 3b's, authorised per lane.
+- **A note for Plan 3b (R-C10), carried and not confirmed here.** Inside a lane window, 3b builds the runtime and enables that lane's usage instance by the targeted route: `ccgpt-runtime build`, then `systemctl --user enable --now ccrc-codex-usage@<id>.timer`. That equals the spine's own converge only once the operator has disabled that lane's foreign usage timer: its `ccgpt-usage@<id>.timer`, or the flat `ccgpt-usage.timer`, whose lane is the other repository's own default. Before that, the next update's converge withdraws an instance that a foreign template instance blocks, and an enable beside the flat timer leaves two writers for the lane, which the id-less flat timer hides from the converge. So the operator's foreign disable precedes both the roster flip and the enable, and only then is the next auto-update a no-op. Whether that route is the hand rollout the 2026-09-30 ruling forbids is Plan 3b's question to put to the operator. 3a ships nothing for it, and this merge decides nothing about it.
+- **What the merge leaves for later (Z8).** At its flip, each lane leaves the external path by its row's kind alone, in Plan 3b: the probe, the LiteLLM arm and the usage converge all key on `exec.kind`. Plan 4's ccrc PR deletes the external arm, the probe default, the external fetch's direct `auth.json` read, and the reason Z3's and Z4's guards exist, once no external lane has a codex registry.
+- **After the merge.** The controller measures read-only that each box's update record names the new release, and that the fleet box's closing doctor gives Task 10's live-shape classes: today's classes, check for check, plus one `codex` SKIP. Any difference is reported to the operator. The way back is the updater's own rollback, the PWA's or `ccrc rollback`, at the operator's word, never a hand edit. A rollback changes nothing that runs either, because the hourly refresh is the same on both sides of the merge. It drops Z3's and Z4's refusals with the rest of the new code. It also leaves the two `ccrc-codex-usage@` template files placed and inert, because an install places files and never removes one its tree does not name.
 
 ## Review Focus
 
-1. **No reader resolves another lane's token directory.** Look for a surviving default; the scrub without a re-supply; an external lane probed through a registry it gained before its flip; `deploy.sh` still placing the PATH probe copy; or `lane.json` carrying a previous id's `authDir`. Also check that nothing opens an `auth.json` (the `0000`-mode fixture passes). Pinned by Tasks 1, 4 and 7.
-2. **The device flow never starts in-process.** No device-code request is made and nothing is written into `auth.json` (the stand-in's marks, in both files); the publisher prints no code; and the usage oneshot is bounded by `TimeoutStartSec`. Pinned by Task 1.
+1. **No codex-kind lane resolves another lane's token directory, and no external lane can gain the registry that would make it probe one.** Look for a default on the codex-lane arm; the scrub without a re-supply; a codex row routed to `_fetch_codex`, or an external row to the codex-lane arm; a writer that creates a codex registry for an `external` row (Z3); `deploy.sh` still placing the PATH probe copy; or `lane.json` carrying a previous id's `authDir`. Also check that nothing this plan adds opens an `auth.json` (the `0000`-mode fixture passes). The external fetch's own read is the base's bytes, kept by Z1. Pinned by Tasks 1, 2, 4 and 7.
+2. **The device flow never starts in the codex-lane arm or the publisher.** No device-code request is made and nothing is written into `auth.json` (the stand-in's marks, in both files); the publisher prints no code; and the usage oneshot is bounded by `TimeoutStartSec`. The external fetch carries no guard, deliberately: Z2's allowance is not taken. Pinned by Task 1.
 3. **One writer per lane's limits row.** The instance converge enables exactly the roster's codex lanes and disables a flipped-back id. It degrades, rather than enabling, while the other repository's instance for the same id is enabled, and `_check_codex`'s WARN names the operator's disable. No path disables, stops or rewrites a foreign unit, and the unattributable flat timer is said to be unattributable. Pinned by Tasks 6 and 7.
-4. **The auto-rollout is inert on today's live shape.** Every doctor check but `models` (Task 1's SKIP) keeps its class before and after, `codex` answers one SKIP, `refresh --all` exits 0 and `ccrc-models.service` does not fail. No byte at a foreign path changes, no `systemctl` verb names a `ccgpt-*` unit, and no runtime is built. Pinned by Task 10, with Task 1's skip and its `_check_models` sentence.
+4. **The auto-rollout changes nothing that runs on today's live shape (ruling Z).** Every doctor check, `models` included, keeps its class before and after, and `codex` answers one SKIP. The external lane's hourly refresh does exactly what the base tree does: the same probe environment, the same render, the same `ccgpt stop` decision. No `systemctl` verb names a `ccgpt-*` unit, and no runtime is built. Look for any byte of `_fetch_codex` or of the external arm's body that moved, other than Z4's inserted refusal. Pinned by Task 10 (Z7) and Task 11's cut.
 5. **Every half state is named, never folded.** `_codex_lanes`' rc 1 and rc 2 are FAIL, not SKIP, and rc equals the worst class. Tier identity is worded only by `_codex_foreign_what`, and a foreign listener survives both doctor and `--fix`. `--fix` acts on FAIL alone and doctor's re-measurement is its verdict. A flip-back converges: the instance is disabled, the lane state left behind is flagged (Task 4's WARN), and a symlinked launcher's backup is still a symlink. Pinned by Tasks 4, 5, 8, 9 and 10.
+6. **The two guards Z adds are narrow, and Z4's fails closed.**
+   - Z4 refuses the external arm's stop while the roster carries any `codex` row, through the existing `restart-failed` path and before any write. It sits inside the arm's running branch, so it is asked only where the base would run that stop. A roster `_codex_lanes` cannot read (rc 1) or cannot ask (rc 2) never reads as "no codex row" there, unlike `_models_litellm_codex`'s dispatch, where the op's own roster refusal follows.
+   - Z3 refuses only the CREATION of a codex registry on a row that is not codex-kind: the live `external` rows, and a non-Anthropic `generated` row, which declares no `authDir` either. A registry that already exists, and every verb that reads or edits it, is untouched, and every other probe kind is still created on any row.
+   - After a flip of lane A, a still-external lane B with a registry has its stop refused, and `init codex` on an external lane refuses. Pinned by Tasks 2 and 10.
 
 ## What earlier plans already shipped — measured 2026-09-30 on `1f9fa22d`, do NOT redo
 
@@ -315,7 +333,7 @@ Every task's requirements implicitly include this section. The first two groups 
 | `ccd/ccgpt-runtime` `build`, `check` and `python`. `LITELLM_REQUIREMENT='litellm[proxy]>=1.101.0,<1.110'` at `:102` (D-3487). `_rt_probe_source` at `:591-781` | **done** (Plan 2b-2 Task 3). 3a edits no byte of it |
 | The lane library in `ccd/ccrc`:<br>- `_codex_lanes` `:10369`, keyed on `exec.kind`;<br>- `_codex_row` `:10394`;<br>- `_codex_lane_json_state` `:10463`, against the roster row only;<br>- `_codex_tier_ours` `:10827`, codes 0-4;<br>- `_codex_tier_stale` `:10965`, codes 0/1/2;<br>- `_codex_foreign_what` `:11203`;<br>- `_codex_cmd_status` `:11663` | **done** (Plan 2b-2 Tasks 4-5). Tasks 4-5 consume these read-only |
 | `ccrc codex start|stop|status|login <id>` (`cmd_codex`, `ccd/ccrc:11821`) | **done** (Plan 2b-2 Tasks 5, 8) |
-| A codex-kind lane's own `~/.ccrc/codex/<id>/litellm.yaml`, with an identity-gated stop, write and start (`_models_litellm_codex` `:9728`, `_models_litellm_lane` `:9773`) | **done** (D-3482). The external arm beside it (`:10020-10051`) is **Task 2's** |
+| A codex-kind lane's own `~/.ccrc/codex/<id>/litellm.yaml`, with an identity-gated stop, write and start (`_models_litellm_codex` `:9728`, `_models_litellm_lane` `:9773`) | **done** (D-3482). The external arm beside it (`:10020-10051`) keeps its bytes on today's shape (Z1). **Task 2** inserts only Z4's refusal ahead of its `ccgpt stop` |
 | `_inst_codex_runtime` (`:14288`, which builds only when at least one codex lane exists), `_inst_codex_tiers` (`:14564`) and `_uninst_codex` (`:21616`), each degrading into `INST_DEGRADED` | **done** (Plan 2b-2 Tasks 10-11) |
 | `_check_wrappers` expects `ccrc-codex` for a codex lane in all three of its arms. `healthyCodexBox` is at `server/test/ccrc-doctor.test.ts:1208` | **done** (Plan 1; Plan 2b-2 Task 1) |
 | `codexLaneFixture.ts`: `freePort`/`freePorts`, `codexRoster`, `codexAuthDir`, `GPT_LANE_BINS`, `plantCodexBins`, `plantFakeRuntime`, `plantSystemd` with its `systemctlCalls`/`systemdRunCalls` recorders, `spawnListener`, `spawnFakeLitellm`, `registerLaneCleanup` and `killLaneProcesses` | **done** (Plan 2b-2 Tasks 4, 5, 10) |
@@ -327,10 +345,10 @@ Measured **absent** on `1f9fa22d`, and owed here:
 | Absent | Task |
 |---|---|
 | `_check_codex` and `_fix_codex`: 0 hits under `ccd server agent shared deploy`. `CCRC_DOCTOR_CHECKS` (`ccd/ccrc-doctor-checks:166-206`) ends with `models` | 4, 5, 6, 8 |
-| The probe's token directory. `ccd/ccrc-models-probe:162` still defaults it to the first live lane's directory. `_models_run_probe` (`ccd/ccrc:9471-9484`) unsets `CHATGPT_TOKEN_DIR` and re-supplies it only from `exec.secretsFile`, which no codex row carries. The interpreter is the `readlink` idiom (`:160-161`), run as `"$venv_py" -` (`:165`) with no `-I` and no cost map. The probe opens `auth.json` for `account_id` (`:170`, D-3161) | 1 |
-| `Authenticator().get_access_token()` in the probe (`:171`) and in the publisher (`ccd/ccgpt-usage.py:583`) can start the device flow, and the usage service sets no `TimeoutStartSec` | 1 |
-| `_check_models` counts any lane with a `<id>.classes.json` (`ccd/ccrc-doctor-checks:5412`), so a lane R-C2 deliberately leaves unrefreshed would WARN | 1 |
-| The external arm of `_models_litellm`:<br>- the box-global path, the no-argument arm of `_models_litellm_path` (`ccd/ccrc:9703-9706`);<br>- `_models_litellm_running`'s `pgrep` (`:9717`);<br>- a bare `ccgpt stop` (`:10031`).<br>The hourly refresh reaches it (`:10194-10196`), and `single-definition.test.ts:1798-1816` pins its path to one line | 2 |
+| The probe's token directory, for a codex-kind row. `ccd/ccrc-models-probe:162` still defaults it to the first live lane's directory. `_models_run_probe` (`ccd/ccrc:9471-9484`) unsets `CHATGPT_TOKEN_DIR` and re-supplies it only from `exec.secretsFile`, which no codex row carries. The interpreter is the `readlink` idiom (`:160-161`), run as `"$venv_py" -` (`:165`) with no `-I` and no cost map. The probe opens `auth.json` for `account_id` (`:170`, D-3161). All of it stays for an external row until its flip (Z1) | 1 |
+| `Authenticator().get_access_token()` in the probe (`:171`) and in the publisher (`ccd/ccgpt-usage.py:583`) can start the device flow, and the usage service sets no `TimeoutStartSec`. Owed for the codex-lane arm and the publisher; the external fetch keeps it (Z2) | 1 |
+| No writer refuses a codex class registry for a row that is not codex-kind, an `external` row included. The one creator is `deploy/models-op.mjs`' `init` op (`:839-875`), reached only through `ccrc models <id> init` (`ccd/ccrc:9542-9569`). It checks the probe kind and an existing registry, never the row's kind | 2 |
+| The external arm of `_models_litellm` runs a bare `ccgpt stop` on its changed-and-running path (`ccd/ccrc:10031`) without asking whether any roster row is `codex`, although that verb stops `ccgpt-<id>-{litellm,shim}.service` by name, the names ccrc's own tiers use (spec §19.2). The hourly refresh reaches it (`:10194-10196`), and `single-definition.test.ts:1798-1816` pins its path to one line, which stays | 2 |
 | `effectiveBaseUrl` (`deploy/account-op.mjs:1026-1035`) answers `null` for codex | 3 |
 | Seven stale `deploy.sh` line citations in `ccd/ccrc-doctor-checks` (`:274`, `:276`, `:741`, `:1152`, `:2168`, `:3737`, `:3740`; 2b-2 counted six) | 4 |
 | `deploy/models-op.mjs`' `materialise` has no check-only mode | 4 |
@@ -346,10 +364,10 @@ Measured **absent** on `1f9fa22d`, and owed here:
 
 | File | Responsibility | Tasks |
 |---|---|---|
-| `ccd/ccrc-models-probe`, `ccd/ccrc` (`_models_run_probe`, the refresh loop's probe gate) | the lane's own `authDir` and runtime; `no-token-dir`, `runtime-absent`, `not-logged-in`, `runtime-api-moved`, `login-required`; the external codex-registry lane refused and skipped | 1 |
+| `ccd/ccrc-models-probe` (a codex-lane arm beside `_fetch_codex`, which keeps its bytes), `ccd/ccrc` (`_models_run_probe`, `_models_probe_codex_env`) | a codex lane's own `authDir` and runtime; `no-token-dir`, `runtime-absent`, `not-logged-in`, `runtime-api-moved`, `login-required`; an external row's probe environment and fetch unchanged | 1 |
 | `ccd/ccgpt-usage.py`, `deploy/systemd/ccgpt-usage@.service` (before its rename) | the in-process device-flow refusal; `TimeoutStartSec` | 1 |
-| `ccd/ccrc-doctor-checks` (`_check_models`, the probe citations) | the frozen lane's own non-WARN sentence | 1 |
-| `ccd/ccrc` (`_models_litellm`, `_models_litellm_path`, `_models_litellm_running`; no line of the refresh loop, whose skip is Task 1's), comment lines in `shared/litellm.mjs`, `deploy/litellm-config.template.yaml` and `deploy/models-op.mjs` | the external arm retired; `external-lane` refusal | 2 |
+| `ccd/ccrc-doctor-checks` (`_check_models`' header comment) | the stale probe and `models-op.mjs` citations re-aimed by name; no verdict changes | 1 |
+| `ccd/ccrc` (`_models_litellm`'s external arm: one inserted refusal ahead of its `ccgpt stop`, and no other byte of the arm's body; no line of the refresh loop), `deploy/models-op.mjs` (`init`, the one creator of a class registry) | Z4's `restart-failed` refusal while any `codex` row exists; Z3's refusal to create a codex registry on a row that is not codex-kind | 2 |
 | `deploy/account-op.mjs` (`effectiveBaseUrl`, `opDoctor`'s comparison) | the codex loopback URL, absent-or-equal | 3 |
 | `ccd/ccrc-doctor-checks` (`CCRC_DOCTOR_CHECKS`, `_check_codex`), `deploy/models-op.mjs` (check-only `materialise`) | the static rows; the seven `deploy.sh` citations re-aimed by anchor | 4 |
 | `ccd/ccrc-doctor-checks` (`_check_codex`'s tier arm) | tier identity, half-up lanes, stale code, a down gateway under live sessions | 5 |
@@ -376,16 +394,16 @@ Measured **absent** on `1f9fa22d`, and owed here:
 ```
 
 The execution order is 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11: one worker, one branch. The graph says which moves are forbidden, not what may run in parallel.
-- **Task 1 comes first.** It is the hard precondition (2b-2 carry-forward 7), and it defines the rule Task 2 consumes: an external lane whose registry probe is codex is never probed. It also lands `_check_models`' frozen-lane sentence **in the same commit as the skip**, so no commit on the branch has a lane that the refresh skips and doctor WARNs about.
-- **Task 2 follows Task 1, and the two ship in one squash.** Task 1's refresh loop answers that lane with a `skipped: "external-lane"` row before the LiteLLM step. Once Task 1 lands, the external render arm has no caller on the hourly path, and Task 2 retires it without touching the loop. Task 2 without Task 1 makes `refresh --all` exit 1 on the live shape (measured).
-- **Task 4 follows Task 1.** It rewrites Task 1's codex-kind `models` case, and relies on two things Task 1 lands: the count of three `.classes.json` lines in `ccd/ccrc-doctor-checks`, and the by-name re-aim of that file's `deploy/models-op.mjs` line citations.
+- **Task 1 comes first.** It is the hard precondition (2b-2 carry-forward 7): no row may flip to `codex` before a probe that reads that lane's own `authDir` has reached both boxes. It changes nothing for an external row (Z1).
+- **Task 2 follows Task 1.** Ruling Z removed what coupled them: the refresh-loop skip Task 2 consumed, and the `refresh --all` exit 1 Task 2 caused when it landed alone. Task 2 now adds two refusals to existing code and changes nothing the hourly refresh does, so neither task needs the other to land green. The order stays because both edit `ccd/ccrc`'s models section and `server/test/ccrc-models.test.ts`, and one order keeps the anchors each task re-derives stable.
+- **Task 4 follows Task 1.** It edits `ccd/ccrc-doctor-checks` after Task 1's by-name re-aim of that file's `deploy/models-op.mjs` line citations. That file's `.classes.json` count is two at the base and stays two through both tasks.
 - **Task 4 precedes Tasks 5, 6 and 8.** `_check_codex` must exist before any usage instance can be enabled (2b-1 carry-forward 12's order). Task 5 extends its tier arm, Task 6 adds its usage rows, and Task 8 fixes the rows Tasks 4-6 print.
 - **Task 6 follows Tasks 1 and 5.** It `git mv`s the service file that Task 1 gives `TimeoutStartSec=300`, and keeps that value. It also wires its usage rows into the per-lane loop Task 5 extends.
 - **Task 7 follows Task 6.** Uninstall, account removal and the fallback deploy carry the renamed pair. `agent/test/deploy-verify.test.ts` is edited once, in Task 7, which also removes the `deploy.sh` probe line (ruling R5).
 - **Task 8 follows Tasks 1, 4, 5 and 6.** It edits `ccd/ccgpt-usage.py` after Task 1, and cures what Tasks 4-6 report.
 - **Tasks 3 and 9 are independent.** They touch `deploy/account-op.mjs` and `cmd_wrappers`, which no other task edits.
-- **Task 10 follows Tasks 1-9.** It rehearses them all, and pins every doctor check's class before and after the live-shape run.
-- **Task 11 runs last.** It holds the spec §20 amendments, the residue class, the cut (`ccd/ccd`, `ccd/ccgpt-runtime` and `ccd/ccgpt-proxy.py` byte-identical to the base), the full gate and the count table.
+- **Task 10 follows Tasks 1-9.** It rehearses them all (Z7). On the live shape it pins every doctor check's class before and after, `models` included, and that the external lane's hourly refresh keeps the base's probe environment, render and `ccgpt stop` decision. After a flip of lane A it pins that a still-external lane B with a registry has its stop refused (Z4), and it pins that `init codex` on an external lane refuses (Z3).
+- **Task 11 runs last.** It holds the spec §20 amendments, the residue class, the cut, the full gate and the count table. The cut proves `ccd/ccd`, `ccd/ccgpt-runtime` and `ccd/ccgpt-proxy.py` byte-identical to the base, and the external path's bytes kept: `_fetch_codex` whole, and the external arm's body but for Z4's one insertion.
 
 ## Where every carried item lands
 
@@ -401,8 +419,8 @@ Every obligation Plans 2b-1 and 2b-2 handed to "Plan 3", mapped to a task here, 
 | 2b2-3 | the live launcher's settings mirror, and whether `alwaysThinkingEnabled` still matters now that the shim owns effort | **Plan 3b** (ruling R-O4, with the `alwaysThinkingEnabled` question added, R14) | no code: both lanes measured in sync, and the choice is the operator's |
 | 2b2-4 | the gateway key in the other repository's unit metadata | **Plan 3b** | it closes when a lane's foreign transient units go. ccrc's own tiers already receive the key only through `EnvironmentFile=` (§19.4's refusal) |
 | 2b2-5 | `_check_codex` | **Tasks 4** (static rows), **5** (tier rows), **6** (usage rows) and **8** (`--fix`) | |
-| 2b2-6 | `_models_litellm`'s external arm | **Task 2** (R-C3, an operator confirmation in [Merge authorisation](#merge-authorisation)) | it is ccrc stopping another repository's LiteLLM every hour, and after Task 1 it would have no token directory anyway |
-| 2b2-7 | the probe's `authDir`, interpreter and cost map | **Task 1** | the hard precondition: no row may flip before it has reached both boxes |
+| 2b2-6 | `_models_litellm`'s external arm | kept byte for byte on today's shape until each lane's flip (Z1; R-C3 withdrawn, D-3708). **Task 2** inserts Z4's refusal ahead of its stop (`D-3753`). Each lane leaves the arm at its flip in **Plan 3b**, and **Plan 4**'s ccrc PR deletes it (Z8) | spec §19.6 stands as written. What could not wait is the stop: after a flip its unit names are ccrc's own tiers, so once any codex row exists the arm never runs it |
+| 2b2-7 | the probe's `authDir`, interpreter and cost map | **Task 1**, for a codex-kind row. An external row keeps today's probe until its flip (Z1) | the hard precondition: no row may flip before it has reached both boxes |
 | 2b2-8 | the settings-env drift check compares nothing for a codex lane | **Task 3** (R-C7) | |
 | 2b2-9 | `ccrc account auth-start` | **NOT-APPLICABLE** | the verb does not exist (`ACCT_SUBS`, `ccd/ccrc:1535`), and the pane's door already routes a codex lane to `ccrc codex login` (D-3489). There is nothing to route until a design adds the verb |
 | 2b2-10 | the timer-enable degrades never reach `INST_DEGRADED` | **Task 6** | there are nine on main, not eight. Task 6 adds one more enable, so they all degrade honestly together |
@@ -424,7 +442,7 @@ Every obligation Plans 2b-1 and 2b-2 handed to "Plan 3", mapped to a task here, 
 | 2b1-18 | `models-op.mjs`' tmp names without `O_EXCL`, and its write order | **NOT-APPLICABLE** | a pre-existing idiom shared with `writeRegistry`, not GPT-lane work. `lane.json` holds no secret (`runtime.env` already moved to `mktemp`, D-3529). Its consequence, mutually stale files, is Task 4's FAIL and Task 8's cure |
 | 2b1-19 | `ccrc-uninstall.test.ts`' hand-written absence list omits the `ccd-usage-sweep` pair | **Task 7** | derived from what the fixture planted, which must cover every `_inst_units` destination (D-3728) |
 | 2b1-20 | `deploy-verify.test.ts`' hand-typed landed list | **Task 7** | derived from the agent chain's own `_unit_atomic` operands, plus a template anchor (D-3729) |
-| 2b1-21 (the probe half) | `deploy.sh` places `ccrc-models-probe`, which install never does | **Task 7** (R-C11, with the other `deploy-verify` edits, R5). The stale live PATH copy is removed in **Plan 4** | the PATH copy is the one surviving wrong-lane reader, and ccrc never runs it |
+| 2b1-21 (the probe half) | `deploy.sh` places `ccrc-models-probe`, which install never does | **Task 7** (R-C11, with the other `deploy-verify` edits, R5). The stale live PATH copy is removed in **Plan 4** | ccrc never runs the PATH copy and nothing refreshes it, so a stale one hands even a codex lane the first lane's directory if an operator runs it by hand. It is no longer the only reader of that default: under ruling Z1 ccrc's own probe keeps it for an external lane until that lane's flip (D-3706) |
 | 2b1-21 (the `ccrc-api` half) | `deploy.sh` places `ccrc-api` | **NOT-APPLICABLE** | not GPT-lane work. The skills call `~/.local/bin/ccrc-api` by path, so the line stays |
 | 2b1-22 | two stale `deploy.sh` citations in doctor-checks | **Task 4** | the same finding as 2b2-11, re-measured at seven |
 
@@ -432,9 +450,11 @@ Every obligation Plans 2b-1 and 2b-2 handed to "Plan 3", mapped to a task here, 
 
 | Item | Placed in |
 |---|---|
-| The device flow can start inside the hourly oneshot. It writes a cooldown marker into `auth.json` and prints a code, and a timeout-based bound leaves the marker behind (critic gap 2) | **Task 1**, for the probe and the publisher: refused in-process before any write. The usage service gets `TimeoutStartSec` |
-| The probe opens `auth.json` for `account_id` (D-3161) | **Task 1**, through `Authenticator().get_account_id()`, which Task 1's Step 0b re-measures read-only by grepping the installed source file. If the method is gone, Task 1 stops and reports, and the controller rules (F9). The closure mints no number |
-| `_check_models` would raise a false WARN for the lane R-C2 stops refreshing (critic gap 1) | **Task 1** (its own non-WARN sentence), pinned by **Task 10** |
+| The device flow can start inside the hourly oneshot. It writes a cooldown marker into `auth.json` and prints a code, and a timeout-based bound leaves the marker behind (critic gap 2) | **Task 1**, for the probe's codex-lane arm and the publisher: refused in-process before any write. The usage service gets `TimeoutStartSec`. The external fetch keeps the base's bytes (Z1, Z2), so its exposure is today's until that lane's flip |
+| The probe opens `auth.json` for `account_id` (D-3161) | **Task 1**, on the codex-lane arm, through `Authenticator().get_account_id()`, which Task 1's Step 0b re-measures read-only by grepping the installed source file. If the method is gone, Task 1 stops and reports, and the controller rules (F9). The closure mints no number. The external fetch keeps its read until **Plan 4**'s ccrc PR deletes that path (Z8) |
+| `_check_models` would raise a false WARN for a lane the refresh stops refreshing (critic gap 1) | **NOT-APPLICABLE** under ruling Z: no lane stops being refreshed, so `_check_models`' verdicts are unchanged. **Task 10** pins its class before and after (Z7) |
+| An `init codex` on an external lane before its flip gives that lane a registry the hourly refresh then probes through the external fetch's default, which is the first lane's OAuth (the wrong-lane hazard R-C2's freeze closed) | **Task 2** (Z3, D-3706): the one creator of a class registry refuses it by name, with the remedy "flip the lane to `codex` first (Plan 3b)". A registry that already exists is untouched. Pinned by **Tasks 2 and 10** |
+| A flip back leaves the codex registry a lane carried as a codex lane, because Z3 refuses only a new one, so a flipped-back lane other than the first is probed hourly through the first lane's directory (Task 7, hazard 4) | **Plan 3b**: lane 2's rollback removes the registry its `init codex` created before the roster goes back ([Carry-forward](#carry-forward-to-plan-3b-and-plan-4)). Lane 1's flip back is safe, because the default is its own directory |
 | A second usage writer for one lane (critic gap 6) | **Task 6** (R6) |
 | `lane.json` stale against the registry (critic gap 11) | **Task 4** (R7), cured by **Task 8** |
 | `--fix` regenerating a marker-verified launcher (§12; critic gap 12) | **Task 8** (R8): a new `_fix_wrappers` (D-3730) |
@@ -445,7 +465,7 @@ Every obligation Plans 2b-1 and 2b-2 handed to "Plan 3", mapped to a task here, 
 | The fleet-account-label residue class lacks the two GPT-lane labels, and the second lane's ports, auth-directory name and config names have no class (critic gap 16) | **Task 11** (R10): each label that the class's own `passes` does not pin is added base64 and red-first, read from the box's roster at execution time. A label pinned as a pass stays out (D-3722). The rest, that label included, is a hand-grep whose inputs Task 11 measures read-only on the fleet box at execution time (F1): ids and labels from the box's roster, the second lane's ports from its launcher's two `export` lines only, the auth-directory and config names by `ls` (names only), and session codenames from the `.wrapper` field files (names only). The gitignored reference file is not consulted, and adding its GPT-lane section is Plan 3b Task 1's |
 | Suites run on the live fleet box (critic gap 17) | the census in [Global Constraints](#global-constraints), on every step, and **Task 11**'s gate |
 | Spec lines 333, 497 and 698 are cited by line number (critic gap 9) | **Task 11** (R9) |
-| The other repository's stop verb stops `ccgpt-<id>-{litellm,shim}.service` by name, which are the names ccrc's tiers use (critic gap 7) | **Plan 3b**: never run it for a migrated lane, and roll back with `ccrc codex stop` first |
+| The other repository's stop verb stops `ccgpt-<id>-{litellm,shim}.service` by name, which are the names ccrc's tiers use (critic gap 7) | **Task 2** for ccrc's own call of it (Z4, `D-3753`): while the roster carries any `codex` row, the external arm refuses rather than run it, pinned by **Task 10**'s flip case. **Plan 3b** for the operator's own hand: never run it for a migrated lane, and roll back with `ccrc codex stop` first |
 | Every other finding for Plans 3b and 4: the first runtime build; the second lane's missing registry; parking its sessions; a per-window auto-update pause; `ccrc account disable` during a window; the server box's roster copy; the reference file's missing GPT-lane section; state backups before a refresh; the other repository's deletion and the box cleanup | [Carry-forward to Plan 3b and Plan 4](#carry-forward-to-plan-3b-and-plan-4) |
 
 **Plan 2b-2's recorded hazards** (its carry-forward's "Hazards the drafts recorded")
@@ -458,57 +478,54 @@ Every obligation Plans 2b-1 and 2b-2 handed to "Plan 3", mapped to a task here, 
 | a refusal from `ccrc-codex` is lost when tmux closes the pane | **Plan 3b**: a headless turn before any real spawn, and the `claude-session@<id>` journal as a stop criterion (the carry-forward's steps 3 and 4) |
 
 
-### Task 1: The model probe reads the lane's own OAuth through the lane's own runtime; the token-directory default is gone
+### Task 1: A codex lane's model probe reads its own OAuth through its own runtime, with no default; every other lane keeps today's probe, byte for byte
+
+> Resolved by operator ruling Z (2026-10-01), which replaces R-C2 and binds over every earlier ruling:
+> - **Z1.** An `external` lane keeps today's probe until its own flip in Plan 3b: the token-directory default, the PATH-derived interpreter, the direct `auth.json` read, and the hourly refresh that probes and renders it. Nothing is frozen, nothing is skipped, and `_check_models` is not given a sentence.
+> - **Z2.** A codex-kind lane gets the new path: its own `authDir`, its own runtime, no default, the device-flow refusal and `get_account_id()`.
+> - **Z3** (no codex registry may be CREATED on an external lane) is **Task 2's**. The one writer that creates a registry is `deploy/models-op.mjs`' `init` op (`grep -n "if (opName === 'init')" deploy/models-op.mjs`; :839 at `1f9fa22d`). Its one caller in the tree is `ccrc models <id> init` (`_models_lane_sub`'s `init)` arm, ccd/ccrc:9564 and :9566). This task edits neither: `deploy/models-op.mjs` is in its NOT-modified list, and every case it adds creates a codex registry only on a codex-kind row.
 
 **Files:**
 - Modify: `ccd/ccrc-models-probe`
-  - `_fetch_codex` (`grep -n '^_fetch_codex() {' ccd/ccrc-models-probe`; measured :153-196 at `1f9fa22d`) is replaced whole. Today the interpreter is the readlink idiom (:160-161), the lane-one default directory is :162, the interpreter runs as `"$venv_py" -` with no `-I` and no cost map (:165), and the program opens `auth.json` for `account_id` (:170, D-3161).
+  - `_fetch_codex` (`grep -n '^_fetch_codex() {' ccd/ccrc-models-probe`; measured :153-196 at `1f9fa22d`) is NOT edited. It stays every external lane's arm, byte for byte (Z1), and Step 17 proves it. It still holds the readlink idiom (:160-161), the lane-one default directory (:162), `"$venv_py" -` with no `-I` and no cost map (:165), and the program's own `auth.json` read for `account_id` (:170, D-3161).
+  - New `_fetch_codex_lane`, with its header comment, directly below `_fetch_codex`'s closing `}` and the blank line after it, above `# C13: the compatible arm's only legitimate http:// case.` (`grep -nF` it; :198).
+  - `_fetch`'s one Codex line, `    codex) _fetch_codex ;;` (`grep -nxF` it; :235), becomes a dispatch on `CCRC_PROBE_LANE_KIND`, with a comment above it.
 - Modify: `ccd/ccgpt-usage.py`
   - The twin guard block goes directly below `from litellm.llms.chatgpt.authenticator import Authenticator  # noqa: E402` (`grep -nF` it; :231).
   - `main()`'s `token = Authenticator().get_access_token()` (`grep -nF` it; :583) is replaced.
 - Modify: `deploy/systemd/ccgpt-usage@.service`: one `TimeoutStartSec=300` line directly above `ExecStart=` (`grep -n '^ExecStart=' deploy/systemd/ccgpt-usage@.service`).
 - Modify: `ccd/ccrc`
-  - `_models_run_probe` (`grep -n '^_models_run_probe() {' ccd/ccrc`; :9471-9484) and its header comment (:9437-9470).
+  - `_models_run_probe` (`grep -n '^_models_run_probe() {' ccd/ccrc`; :9471-9484): one added line in each subshell. Its two `unset` lines and its source line are unchanged. One sentence of its header comment (:9439-9440) changes.
   - New `_models_probe_codex_env`, directly below `_models_run_probe`'s closing `}`, above `MODELS_ENDPOINTS_TMP=""` (`grep -n '^MODELS_ENDPOINTS_TMP=""$' ccd/ccrc`).
-  - New `_models_external_codex_why`, directly above `MODELS_REFRESH_REASON=""` (`grep -n '^MODELS_REFRESH_REASON=""$' ccd/ccrc`; :9664).
-  - `_models_box_sub`'s `refresh` arm, in two places:
-    - the targeted branch, after `|| _models_refuse registry-invalid 1 "$invalid"` (`grep -nF` it; :10145);
-    - the loop, before `elif _models_refresh_one "$id" "$probe" "$baseurl"; then` (`grep -nF` it; :10166).
-- Modify: `ccd/ccrc-doctor-checks`, in `_check_models` (`grep -n '^_check_models() {' ccd/ccrc-doctor-checks`; :5354-5656):
-  - its catalogue reader (`grep -nF 'out="$(CCRC_DOCTOR_MODELS_DIR="$dir" node -e' ccd/ccrc-doctor-checks`; :5460);
-  - its `case` and its verdict composition (:5576-5656);
-  - its header comment. That comment carries the skeleton's two stale citations, `ccd/ccrc-models-probe:397` at :5311 and `:409` at :5324 (the real lines are :405 and :417). It also carries three stale `deploy/models-op.mjs` citations, found while measuring: `:573` at :5301 and :5396, and `:185` at :5406 (`hasRegistry` is now :664, `canCarryRegistry` :199). All five are re-aimed by NAME, so they cannot rot again.
+  - Nothing else. `_models_box_sub`'s `refresh` arm, `_models_refresh_one`, `_models_lane_sub` and every `_models_litellm*` function keep their bytes (Step 17 proves it).
+- Modify, comment lines only: `ccd/ccrc-doctor-checks`, in `_check_models`' header comment and its population loop's comment (`grep -n '^_check_models() {' ccd/ccrc-doctor-checks`; :5354-5656). They carry five stale citations:
+  - the skeleton's two, `ccd/ccrc-models-probe:397` at :5311 and `:409` at :5324. The real lines are :405 and :417, and this task's insert moves both again;
+  - three `deploy/models-op.mjs` citations found while measuring: `:573` at :5301 and :5396, and `:185` at :5406 (`hasRegistry` is now :664, `canCarryRegistry` :199).
+  - All five are re-aimed by NAME, so they cannot rot again. Each is a same-line edit, so no line of the file moves. No code line of `_check_models` changes (Z1).
 - Modify: `server/test/codexLaneFixture.ts`: an appended block (no `describe`). It holds the stand-in Authenticator, the probe's fake runtime interpreter and their readers.
 - Modify: `server/test/models-probe.test.ts`: one new describe, appended.
 - Modify: `server/test/ccgpt-usage.test.ts`: `publisherEnv`'s `PYTHONPATH` (`grep -n '^function publisherEnv' server/test/ccgpt-usage.test.ts`), one module-level stub, the header-block case's bearer pin (`grep -nF "toBe('Bearer stub-token-not-a-secret')" server/test/ccgpt-usage.test.ts`; :718), and two new cases.
 - Modify: `server/test/ccrc-install.test.ts`: the D-3486 unit case (`grep -n "it('ccgpt-usage@.service runs the isolated runtime" server/test/ccrc-install.test.ts`; :4140).
 - Modify: `server/test/ccrc-models.test.ts`:
-  - module helpers: `codexRow`, hoisted from the codex-kind describe (:1916-1920); plus `codexBox`, `EXT_A_ROW`, `LEGACY_EXTERNAL_ID` and `probeDirect`;
-  - the two scrub cases at :1179-1236, rewritten into a new describe;
-  - `describe('ccrc models refresh')`'s beforeEach and nine of its cases, re-aimed;
-  - `describe('ccrc models litellm')`'s beforeEach, one line;
-  - `describe('refresh runs the litellm step for a codex lane (§5)')` (:1816-1868), rewritten.
-- Modify: `server/test/ccrc-doctor.test.ts`:
-  - `writeModelRegistry` (`grep -n '^function writeModelRegistry' server/test/ccrc-doctor.test.ts`; :7864) takes a probe kind;
-  - `stubNodeModelsWeirdStatus`'s docstring (:242-247);
-  - the stale probe citation at :7876, re-aimed by name;
-  - four new cases at the end of `describe('ccrc doctor: models')` (:7894).
-- Modify: `server/test/single-definition.test.ts`: the exact `.classes.json` line count for `ccd/ccrc-doctor-checks` (`grep -nF 'REGISTRY_FILENAME.test(l)).length).toBe(2)' server/test/single-definition.test.ts`; :1795).
-- Modify, CONDITIONAL: `README.md` and `server/test/session-hook.test.ts`, only if Step 17's compaction-card census reds, repaired per S6-R11 in this task's own commit.
-- NOT modified, and gated by Step 19: `ccd/ccgpt-runtime`, `ccd/ccd`, `ccd/ccgpt-proxy.py`, `deploy/deploy.sh`, `deploy/models-op.mjs` and `server/test/fixtures/pystub/**`.
+  - module helpers: `codexRow`, hoisted from the codex-kind describe (:1916-1920), and `codexBox`;
+  - one new describe, directly after `describe('ccrc models <id> discovery')`.
+  - No existing case changes. The two `CHATGPT_TOKEN_DIR` scrub cases (:1179-1236), and every refresh, litellm and external-arm case, run an external row whose probe arm is byte-identical, so they are green before and after. They are Z1's pins now.
+- Modify, one comment: `server/test/ccrc-doctor.test.ts`, `writeModelCatalogue`'s docstring, whose stale probe citation is at :7876, re-aimed by name.
+- Modify, CONDITIONAL: `README.md` and `server/test/session-hook.test.ts`, only if Step 15's compaction-card census reds, repaired per S6-R11 in this task's own commit.
+- NOT modified, and gated by Step 17: `ccd/ccgpt-runtime`, `ccd/ccd`, `ccd/ccgpt-proxy.py`, `deploy/deploy.sh`, `deploy/models-op.mjs` (Task 2's, Z3), `server/test/single-definition.test.ts` and `server/test/fixtures/pystub/**`.
 
 **Interfaces:**
 - Consumes (all shipped on `1f9fa22d`; this task defines none of them again):
   - `_codex_row <id>` (ccd/ccrc:10394).
     - It sets `CX_ID CX_KIND CX_CFG CX_AUTH CX_PROXY CX_LITELLM`, every one EMPTY after a refusal.
     - It answers rc 2 for a malformed id and rc 1 for any other refusal, each with one `ccrc codex: <code>: …` line on stderr, `not-codex` included.
-  - `_models_litellm_codex <id>` (ccd/ccrc:9728), which asks `_codex_lanes` (:10369): 0 iff the roster row is `exec.kind: "codex"`. An unreadable roster reads as "not codex". This is the lane library's one reader of that question.
+  - `_models_litellm_codex <id>` (ccd/ccrc:9728), which asks `_codex_lanes` (:10369): 0 iff the roster row is `exec.kind: "codex"`. An unreadable roster reads as "not codex". This is the lane library's one reader of that question, and it discards the library's stderr.
   - `_codex_runtime_cli` (ccd/ccrc:10290) and `ccgpt-runtime python` (ccd/ccgpt-runtime:576-581).
     - rc 0 plus the RESOLVED `<gen>/bin/python` on stdout;
     - otherwise rc 1 and one stderr word, `absent` or `mutated`.
     - It never runs the interpreter.
-  - `_models_run_probe`'s scrub (ccd/ccrc:9476, :9480). Its two `unset` lines keep every name they unset today.
-  - `_models_refresh_one` (ccd/ccrc:9666-9682), unchanged. `MODELS_REFRESH_REASON` is the probe's first stderr line.
+  - `_models_run_probe`'s scrub (ccd/ccrc:9476, :9480). Its two `unset` lines are unchanged, byte for byte.
+  - `_models_refresh_one` (ccd/ccrc:9666-9682) and `_models_box_sub`'s `refresh` arm, unchanged. `MODELS_REFRESH_REASON` is the probe's first stderr line. The arm asks models-op's `lanes` op before any probe, and that op's strict reader refuses a roster it cannot parse.
   - The probe's stale path: `_mark_stale` and `cut -c1-300` of the fetch's stderr. Each of this task's refusal lines is written REMEDY FIRST, so the cut never loses the remedy.
   - `codexLaneFixture.ts` exports:
     - `plantCodexBins`;
@@ -516,89 +533,77 @@ Every obligation Plans 2b-1 and 2b-2 handed to "Plan 3", mapped to a task here, 
     - `authDirOf`, `plantLaneAuth` and `freePorts`;
     - the module-internal `lines` and `shq`;
     - `pythonOrSkip`, from `ccgptHarness.ts`.
-  - `ccrc-doctor.test.ts`' `healthy`, `healthyCodexBox`, `writeRoster`, `writeModelCatalogue`, `runDoctor`, `lineFor` and `anyVerdictFor`.
+  - `ccrc-models.test.ts`' `box`, `ROSTER` (its `router` row, exec.kind `generated` with a secrets file, and `router2`, exec.kind `external` with none), `run`, `sourced`, `oneObject` and `CODEX_RAW`.
   - The installed LiteLLM's `Authenticator`, measured read-only (Why) and re-measured by Step 0b before anything relies on it.
 - Produces:
-  - **The probe's codex contract.** `ccrc-models-probe <id> codex` reads exactly two inputs, `CHATGPT_TOKEN_DIR` and `CCRC_CODEX_PYTHON`, and has NO default for either.
-    - Each refusal is one stderr line, `ccrc-models-probe: <code>: <remedy> — <why>`, and exits 1. They are checked in this order, the first three before any interpreter runs:
-      - `no-token-dir`;
-      - `runtime-absent`, naming `ccrc install`;
-      - `not-logged-in`, naming `ccrc codex login <id>`: existence of `auth.json` only;
-      - `runtime-api-moved`, naming `ccrc update`;
-      - `login-required`, naming `ccrc codex login <id>`.
-    - It runs `"$CCRC_CODEX_PYTHON" -I -` with every `CHATGPT_*`/`LITELLM_*`/`OPENAI_*` variable removed, then exports `CHATGPT_TOKEN_DIR`, `LITELLM_LOCAL_MODEL_COST_MAP=True`, `CODEX_CLIENT_VERSION`, `CCRC_PROBE_ACCOUNT` and `CCRC_PROBE_PROG`.
-    - `ChatGPT-Account-Id` comes from `Authenticator().get_account_id()`.
-  - **The unattended guard**, ONE text in `ccd/ccrc-models-probe` and `ccd/ccgpt-usage.py`. It sits between `# ── unattended-authenticator guard (Plan 3a Task 1)` and `# ── end unattended-authenticator guard ──` and defines:
+  - **The probe's two Codex arms.** `ccrc-models-probe <id> codex` takes `_fetch_codex_lane` iff `CCRC_PROBE_LANE_KIND` is exactly `codex`, and `_fetch_codex` for every other value, an absent one included.
+    - **`_fetch_codex` is today's arm, byte for byte**: the readlink idiom, the token-directory default, `"$venv_py" -`, the program's own `auth.json` read for `account_id` and no guard. It is every external lane's until that lane's flip (Plan 3b), and Plan 4's ccrc half deletes it with the dispatch line (Z8).
+    - **`_fetch_codex_lane` is the codex lane's contract.** It reads exactly two inputs, `CHATGPT_TOKEN_DIR` and `CCRC_CODEX_PYTHON`, and has NO default for either.
+      - Each refusal is one stderr line, `ccrc-models-probe: <code>: <remedy> — <why>`, and exits 1. They are checked in this order, the first three before any interpreter runs:
+        - `no-token-dir`;
+        - `runtime-absent`, naming `ccrc install`;
+        - `not-logged-in`, naming `ccrc codex login <id>`: existence of `auth.json` only;
+        - `runtime-api-moved`, naming `ccrc update`;
+        - `login-required`, naming `ccrc codex login <id>`.
+      - It runs `"$CCRC_CODEX_PYTHON" -I -` with every `CHATGPT_*`/`LITELLM_*`/`OPENAI_*` variable, `CCRC_CODEX_PYTHON` and `CCRC_PROBE_LANE_KIND` removed, then exports `CHATGPT_TOKEN_DIR`, `LITELLM_LOCAL_MODEL_COST_MAP=True`, `CODEX_CLIENT_VERSION`, `CCRC_PROBE_ACCOUNT` and `CCRC_PROBE_PROG`.
+      - `ChatGPT-Account-Id` comes from `Authenticator().get_account_id()`.
+  - **The unattended guard**, ONE text in `ccd/ccrc-models-probe` (inside `_fetch_codex_lane`'s program, and nowhere else in that file) and `ccd/ccgpt-usage.py`. It sits between `# ── unattended-authenticator guard (Plan 3a Task 1)` and `# ── end unattended-authenticator guard ──` and defines:
     - `LoginRequired`;
     - `RuntimeApiMoved`;
     - `_unattended(authenticator, required=("get_access_token",))`, which returns a subclass whose `_login_device_code` and `_wait_for_access_token` raise `LoginRequired`.
   - **The publisher's refusals**: `ccgpt-usage: login-required: run ccrc codex login <id> — …` and `ccgpt-usage: runtime-api-moved: run ccrc update — …`. Its request is unchanged: it still sends no `ChatGPT-Account-Id`.
   - **The usage unit.** `deploy/systemd/ccgpt-usage@.service` carries `TimeoutStartSec=300`. Task 6's `git mv` to the ccrc-owned name carries the line, and the install pin moves with it.
   - **`ccd/ccrc`:**
-    - `_models_probe_codex_env <id>`. For an exec.kind `codex` row it exports `CHATGPT_TOKEN_DIR=$HOME/<exec.authDir>` and `CCRC_CODEX_PYTHON=<ccgpt-runtime python's answer, or empty>`. For every other row it unsets both. It returns `_codex_row`'s own rc for a codex row that does not validate.
+    - `_models_probe_codex_env <id>`.
+      - For an exec.kind `codex` row it exports `CHATGPT_TOKEN_DIR=$HOME/<exec.authDir>`, `CCRC_PROBE_LANE_KIND=codex` and `CCRC_CODEX_PYTHON=<ccgpt-runtime python's answer, or empty>`. It returns `_codex_row`'s own rc for a codex row that does not validate.
+      - For every other row it unsets `CCRC_CODEX_PYTHON` and `CCRC_PROBE_LANE_KIND`, and nothing else. So that row's `CHATGPT_TOKEN_DIR` is today's: scrubbed, then whatever its secrets file sets.
     - `_models_run_probe <id> <argv…>` calls it inside both subshells, after the scrub and after any secrets file.
-    - `_models_external_codex_why <id>` holds the one sentence for a codex registry on a row that is not exec.kind `codex`. Task 2 may reuse it for its own `external-lane` refusal.
-    - `ccrc models refresh <id>` on such a lane answers `_models_refuse external-lane 1`.
-    - `refresh --all` answers the same lane with the row `{"id":…,"probe":"codex","ok":true,"skipped":"external-lane","reason":…}`, so an all-skipped run exits 0 and `ccrc-models.service` does not fail. Task 2 consumes this skip, and the skeleton's Task 2 test "the hourly refresh skips an external lane…" is carried here (R3).
-  - **`_check_models`:**
-    - the catalogue reader emits a fifth status word, `SKIPPED`;
-    - an all-skipped population is a SKIP whose sentence begins `every lane with a model registry here is one the hourly refresh skips by design`;
-    - a PASS or WARN line appends `; not refreshed by design: <ids> (…)`.
-    - On today's live shape the `models` row is SKIP after the merge, never WARN. Task 10 pins that class.
-  - **single-definition** reads 3 `.classes.json` code lines in `ccd/ccrc-doctor-checks`. Task 4's skeleton note ("stays 2") is stale from this commit on.
+    - Nothing else. There is no `external-lane` refusal and no skipped row: `ccrc models refresh` probes, re-materialises and renders an external lane with a codex registry exactly as it did (Z1).
+  - **`_check_models`:** no code change, so every doctor row keeps its class on today's live shape. Task 10 pins that (Z7).
+  - **single-definition:** unchanged. The `.classes.json` line count in `ccd/ccrc-doctor-checks` stays 2.
   - **`codexLaneFixture.ts` exports:** `AuthStubMode`, `ProbeRuntime`, `ProbeRuntimeCall`, `writeAuthStub(dir, rec)`, `setAuthStubMode(rec, mode)`, `deviceFlowMarks(rec)`, `probeRuntime(home, catalogueFile)`, `probeRuntimeCalls(rec)` and `probeArgv0(rec)`.
-  - **`ccrc-models.test.ts` module helpers:** `codexRow(id, proxyPort, litellmPort, extraExec?)`, `codexBox(ids, extra?)`, `EXT_A_ROW`, `LEGACY_EXTERNAL_ID` and `probeDirect(id, raw)`. Task 2 retires `describe('ccrc models litellm')`, which now seeds through `probeDirect(LEGACY_EXTERNAL_ID, …)`.
-  - **`ccrc-doctor.test.ts`:** `writeModelRegistry(home, id, probe = 'openrouter')`.
+  - **`ccrc-models.test.ts` module helpers:** `codexRow(id, proxyPort, litellmPort, extraExec?)` and `codexBox(ids, extra?)`. No external fixture row: this task needs none.
   - **No census script of its own.** Its suites run through the Global Constraints' `$SCRATCH/census-run.sh`, spelled `census <label> <command…>` from the sourced `plan3a-env.sh`.
   - **What this task leaves to Task 7.** `deploy/deploy.sh:674` (placing `~/.local/bin/ccrc-models-probe`, R-C11, 2b1-21's probe half) is NOT touched here. R5 moves that removal into Task 7, the task that also edits `agent/test/deploy-verify.test.ts`, `usage-sweep-deploy-ship.test.ts` and `install-census.test.ts`' note at :58.
+  - **What this task leaves to Task 2 (Z3, Z4).** Refusing the CREATION of a codex registry on a row that is not exec.kind `codex`, at models-op's `init` op; and the external LiteLLM arm's refusal of the other repository's stop once any codex row exists (`D-3753`). This task's cases are written so that neither reds them: no case gives a non-codex row a registry, so no case reaches the external LiteLLM arm.
 
 **Why:**
 - **The hard precondition (carry-forward 7, 2b1-17b).**
   - The probe defaults `CHATGPT_TOKEN_DIR` to lane one's directory (ccd/ccrc-models-probe:162).
   - Its only caller, `_models_run_probe` (ccd/ccrc:9471-9484), unsets that variable and puts it back only from `exec.secretsFile`.
   - A codex row carries `authDir` and no secrets file, so every codex lane would probe with lane one's OAuth. Spec §9.1: "loses its default outright … a lane that cannot supply one is **refused**".
-  - The interpreter was the python beside whichever `litellm` is on PATH (:160-161), run without `-I` or the cost map. For a codex lane it is the isolated runtime `ccgpt-runtime python` resolves. That closes the probe half D-3484 left open (spec §19.3: "`ccd/ccrc-models-probe`'s import is Plan 3's").
-  - `readlink -f` leaves with it, a GNU-ism the macOS corpus no longer has to excuse.
-- **The caller supplies both inputs, from the row, through the lane library's readers.**
+  - The interpreter was the python beside whichever `litellm` is on PATH (:160-161), run without `-I` or the cost map. For a codex lane it is now the isolated runtime `ccgpt-runtime python` resolves. That closes the probe half D-3484 left open (spec §19.3: "`ccd/ccrc-models-probe`'s import is Plan 3's"), for every lane that runs on that runtime.
+- **Two arms, and the external one keeps its bytes (operator ruling Z1, Z2; D-3706).**
+  - The operator was asked whether R-C2 (refuse and skip an external lane with a codex registry, freezing its catalogue) was the best way, and chose a merge that changes nothing on the live box. No row there is codex-kind, so the probe that runs there after the merge must be the one that ran before it.
+  - So the codex lane's path is a NEW function, and `_fetch_codex` is not edited at all. One line in `_fetch` picks between them. The external program's bytes stay literal, which is Z1, and Plan 4's deletion is one function and one line.
+  - The pick is a positive marker, `CCRC_PROBE_LANE_KIND=codex`, exported only by `_models_probe_codex_env`. It is not "`CCRC_CODEX_PYTHON` is set": an empty interpreter must still take the codex path, where it refuses `runtime-absent`. Set-but-empty against unset would be an overloaded null at a seam.
+  - No stray marker reaches a probe for a non-codex row: `_models_probe_codex_env` unsets it for every other row AFTER the secrets file. On a codex row, an ambient or secrets-file marker is overwritten by the row's own.
+  - Z2 lets the device-flow guard cover the external arm too, but only if the probe were ONE program whose external branch is the codex branch's code. It is two programs. So the external program carries no guard, and the merge has no failure-path difference on it either. What that leaves is hazard 3.
+- **The caller supplies the codex inputs, from the row, through the lane library's readers.**
   - `_models_probe_codex_env` asks `_models_litellm_codex`, the one exec.kind reader, then `_codex_row`, the one row reader, and exports `$HOME/$CX_AUTH`.
   - It runs AFTER the scrub and after any secrets file. So neither an ambient value nor a lane's secrets file can hand a codex lane another directory or another interpreter.
-  - For every other row it unsets both again. So "neither for any other row" holds even when a secrets file sets them.
   - `CCRC_CODEX_PYTHON` is exported EMPTY when no runtime resolves. An inherited value can never stand in for the runtime.
-- **An external lane with a codex registry is refused by name and skipped by the refresh (R-C2).**
-  - Such a row declares no `exec.authDir`, and the probe now has no default. An explicit `refresh <id>` refuses it as `external-lane`.
-  - `--all` answers an ok:true `skipped` row, so the hourly `ccrc-models.service` exits 0 rather than failing every hour over a lane only its flip can cure.
-  - The predicate is `probe == codex` (the `lanes` op's existing field) AND not exec.kind `codex`. That covers a `generated` row carrying a codex registry too, which `canCarryRegistry` admits (deploy/models-op.mjs:199).
-  - models-op is not touched.
-- **What the merge does on today's live shape** (stated by shape; the plan's merge authorisation names R-C2 for the operator, R4).
+  - For every other row it unsets the marker and the interpreter and leaves `CHATGPT_TOKEN_DIR` alone. So the two `unset` lines and the source line keep doing exactly what they did, and the two pre-existing scrub cases still pin that (mutation row 24).
+  - An unreadable roster reads as "not codex" here, as everywhere `_models_litellm_codex` is asked. That cannot send a codex row to the default directory: `refresh` asks models-op's `lanes` op first, and that op's strict reader refuses such a roster before any probe runs.
+- **What the merge does on today's live shape** (stated by shape; Z1).
   - The live fleet box has two external rows with codex telemetry. Exactly one carries a class registry, and no row is codex-kind. No Codex runtime is built there.
-  - After the auto-rollout, that one lane's hourly refresh answers a skipped row and exits 0. The probe no longer runs on that box at all, and the refresh no longer reaches `_models_litellm`'s external arm (Task 2 removes the arm itself).
-  - That lane's catalogue freezes until its flip, and 3b refreshes it then.
+  - After the auto-rollout, that lane's hourly refresh runs the same probe arm in the same environment as before. `_models_probe_codex_env` answers "not codex" and unsets two names that nothing on that box sets. Its catalogue, its re-materialise, its LiteLLM render and its stop decision are what they were. Task 2 keeps the external LiteLLM arm's bytes on this shape (Z4).
   - `ccgpt-usage.py` and `ccgpt-usage@.service` change bytes but run nowhere there. The unit is placed by no installer (D-3172), and the other repository's timer runs its own publisher.
-  - So the only live difference is the doctor row below, and the probe's absence.
-- **`_check_models` gets its own sentence (critic #1, R3).**
-  - Its population is "a lane with a registry file" (:5412), so the frozen lane's catalogue would age past 3 h. Every update's closing doctor would then WARN "the ccrc-models timer is not reaching this lane", a false cause.
-  - The reader now marks such a lane `SKIPPED`, before any catalogue read, so a skipped lane with no catalogue is not "never probed" either. The verdict names it.
-  - On the live shape the row moves to SKIP, and a SKIP never makes `ccrc update` exit 3.
-- **Why the doctor reads the registry itself, not through models-op.**
-  - models-op's `lanes` op refuses a roster its strict validator rejects. Measured: a roster whose rows carry no `label` answers `roster-invalid`.
-  - `_check_models` deliberately measures lanes on any roster its own reader parses; the `wrappers` check owns roster validity. Routing the skip through models-op would turn one malformed row into a models WARN over every lane, which is the whole doctor fixture's rosters.
-  - So the reader reads a registry's `probe` field itself. That is one new code line naming `.classes.json`, a READ, and single-definition's exact count moves 2 → 3, which is the pin's own design ("an exact count forces a human to look at any new touch").
-  - One documented divergence: an INVALID registry naming codex on an external row is skipped here, while `refresh --all` reports it as a failed row (`registryInvalid` is checked first there). That is the same shape as the two `[ -f ]`-versus-`hasRegistry` divergences the check already names.
-  - A registry or roster this reader cannot read skips NOTHING, so that lane keeps the freshness check it had before.
-- **The device flow is prevented in-process (critic #2, R3).**
+  - `_check_models` is not edited, so the `models` row keeps its class, and so does every other row. Task 10 pins both (Z7).
+- **The device flow is prevented in-process (critic #2, R3), on the codex lane's path.**
   - Measured 2026-09-30 read-only, by `grep` and `sed` of a LiteLLM installed on the fleet box outside ccrc, inside D-3487's `>=1.101.0,<1.110`. The ccrc runtime is not built there, and no Authenticator was run. Step 0b re-measures the names below the same way before Step 1.
   - In `litellm/llms/chatgpt/authenticator.py`, `get_access_token` (:55-76) falls through a usable token and a refresh to two steps:
     - `_wait_for_access_token(cooldown)` (:374-386), which polls up to `DEVICE_CODE_COOLDOWN_SECONDS` = 300 s;
     - `_login_device_code` (:153-173). Its `_record_device_code_request` (:370-372) WRITES `device_code_requested_at` into the lane's `auth.json`. It then prints the code to stdout (the probe's `$RAW`) and polls for up to `DEVICE_CODE_TIMEOUT_SECONDS` = 15 min.
   - A deadline cannot undo that write. A poll killed part-way leaves the marker, and the lane's own tier then waits out the cooldown on live requests.
-  - So both names are overridden to raise `LoginRequired` before either can write, in the probe and in the publisher.
+  - So both names are overridden to raise `LoginRequired` before either can write, in the codex lane's probe program and in the publisher.
   - A runtime whose Authenticator lacks either name is refused `runtime-api-moved`: overriding a name the library no longer calls would guard nothing. The runtime's own behaviour probe checks only `get_access_token` (ccd/ccgpt-runtime:676-678), and it is frozen (below). So this fail-closed check is the only one.
   - The usage service also gets `TimeoutStartSec=300` (a oneshot has no start timeout by default). The in-process refusal covers the device flow, and the bound covers everything else a wedged refresh could hold. 300 s is `ccrc-models.service`'s own bound, and it is well under the timer's 15 min interval.
   - `ccrc codex login` is untouched. It IS the device flow, run by a person.
-- **D-3161 closes (critic #21, R3).**
-  - `Authenticator.get_account_id` exists in the measured source (authenticator.py:78-90). LiteLLM's own chatgpt transformations call it for the same header (`llms/chatgpt/chat/transformation.py:58`, `llms/chatgpt/responses/transformation.py:59`). So the probe's request now matches the tier's, and ccrc's own code no longer opens `auth.json` (spec §9, line 497). Step 0b re-measures the method, read-only, before Step 4 relies on it. If it is gone, the task stops there and the controller rules; nothing in this task writes a fallback.
+- **D-3161 closes on the codex lane's path (critic #21, R3).**
+  - `Authenticator.get_account_id` exists in the measured source (authenticator.py:78-90). LiteLLM's own chatgpt transformations call it for the same header (`llms/chatgpt/chat/transformation.py:58`, `llms/chatgpt/responses/transformation.py:59`). So a codex lane's probe request now matches its tier's, and no ccrc code opens a codex lane's `auth.json` (spec §9, line 497). Step 0b re-measures the method, read-only, before Step 4 relies on it. If it is gone, the task stops there and the controller rules; nothing in this task writes a fallback.
   - One measured behavioural difference: when `auth.json` has no `account_id`, `get_account_id` derives it from the token's claims and writes it back (:88-89). That is a LIBRARY write, the same class as its `expires_at` write inside `_is_token_expired`. The probe then sends the header where it used to send none, which the lane's own tier already does.
-  - Task 11 records D-3161 closed, under its own number. The closure mints no new one.
+  - `_fetch_codex` keeps its own `auth.json` read for an external lane (Z1). It goes with that arm in Plan 4's ccrc half (Z8). Task 11 records D-3161 closed on the codex path and retired with the external arm, under its own number. Neither mints a new one.
 - **The hazard: "any edit to the probe's bytes rebuilds every box". Which probe, and what it costs here.** Two files are called "the probe".
   - **The one whose bytes rebuild boxes is NOT this task's file.** It is `ccd/ccgpt-runtime`'s behaviour probe, the `_rt_probe_source` heredoc (:592-780).
     - Its bytes are hashed (`_RT_SHA_PY`, :113, compared at :401 against the stamp's `probeSha256`). A mismatch answers `probe-moved` (:402), `check` fails, and `_inst_codex_runtime` rebuilds (ccd/ccrc:14288-14320).
@@ -606,19 +611,17 @@ Every obligation Plans 2b-1 and 2b-2 handed to "Plan 3", mapped to a task here, 
     - A rebuild is about 650 MB per generation, network pip bounded by `CCRC_RUNTIME_PIP_S` (1200 s) plus the probe's `CCRC_RUNTIME_PROBE_S` (300 s), and about 2 GB at the swap peak (Plan 2b-2's measurement; an example).
     - **Cost today: zero.** No box has a codex lane, so even an edit there would rebuild nothing on this merge.
     - **Cost after 3b's first flip:** every such edit is an unattended rebuild inside an auto-update on the live fleet box.
-    - That is why this task does NOT teach `_rt_probe_source` the three Authenticator names the guard now needs, though the runtime's own probe would be their natural gate. The model probe's own `runtime-api-moved` refusal is the substitute. Step 19 gates `ccd/ccgpt-runtime` byte-identical to the base.
+    - That is why this task does NOT teach `_rt_probe_source` the three Authenticator names the guard now needs, though the runtime's own probe would be their natural gate. The model probe's own `runtime-api-moved` refusal is the substitute. Step 17 gates `ccd/ccgpt-runtime` byte-identical to the base.
   - **`ccd/ccrc-models-probe` is hashed by nothing.** `grep -n ccrc-models-probe ccd/ccgpt-runtime` finds only the comment at :87. Its edit costs one re-placed tree file per box: no rebuild and no tier restart.
   - The same holds for `ccd/ccgpt-usage.py`. `_codex_tier_stale` measures the runtime generation and the shim's bytes, never the publisher's.
-- **The test fallout is this task's, not Task 2's.**
-  - The tree's ccrc-models fixture exercises refresh mechanics on its third ROSTER row, an EXTERNAL row, by running `init codex` on it. That row is now refused or skipped.
-  - So refresh-mechanics cases are re-aimed at a codex-KIND lane (`codex-a`). They are green before and after, and the claim is unchanged.
-  - The external-arm describe Task 2 retires seeds its catalogue with the real probe through its seam, because no refresh can.
-  - The describe that pinned the refresh's external LiteLLM step is rewritten into the skip's own cases, each old case naming its successor.
-  - The doctor fixture's `writeModelRegistry` wrote a codex registry on external rows for EVERY freshness case, which is exactly the class now skipped. Its default becomes `openrouter`, a lane the timer does reach. The skipped class gets its own four cases.
-- **No added line names a live lane id (R13).** The migrated cases' lines lose the fixture id they carried. The one external-arm seed reads that row's id by position (`LEGACY_EXTERNAL_ID`). New external rows are `ext-a`, and codex lanes are `codex-a` and `codex-b`.
+- **The test fallout is small, by design.**
+  - No existing case changes. The tree's ccrc-models fixture runs `init codex` and `refresh` on an external row for its refresh mechanics, and that row's probe arm is byte-identical, so every such case is green before and after. Together with the two `CHATGPT_TOKEN_DIR` scrub cases, they are Z1's pins now.
+  - The new cases run codex-kind lanes only (`codex-a`, `codex-b`), plus the tree's `router` and `router2` rows for the "every other row" half, which `_models_run_probe` reaches with no registry at all.
+  - So Task 2's Z3 guard, which refuses `init codex` on a non-codex row, reds none of this task's cases. The pre-existing cases that create a codex registry on an external row are Task 2's to re-seed.
+- **No added line names a live lane id (R13).** Codex lanes are `codex-a` and `codex-b`. The probe's two Z1 cases pass the probe the fixture id `ext-a`, and read the default directory off the arm's own text rather than spelling it.
 
-**Deviations (by slug; the controller mints the numbers):**
-- D-3706: the default goes for every caller, not only codex lanes. A codex registry on a row that is not exec.kind `codex` is refused by name (`external-lane`) on a targeted refresh and skipped as an ok:true row under `--all`, so that lane's catalogue freezes before its flip. This departs from spec §19.6 ("`external` lanes keep today's box-global path … until Plan 3's cutover retires that arm", read for the probe side). It also goes beyond §9.1, which says "refused" and says nothing about the refresh loop's answer.
+**Deviations (the controller minted the numbers):**
+- D-3706, as redefined by operator ruling Z6: the departure Z1 and Z3 make from spec §9.1's "loses its default outright". The default stays for an external lane's probe until that lane's flip, through a separate arm the probe takes for every caller but a codex lane. And a codex registry cannot be created on an external lane (Z3, Task 2). Spec §19.6 ("`external` lanes keep today's box-global path … until Plan 3's cutover retires that arm") stands as written.
 - D-3707: the probe and the publisher override two private LiteLLM names (`_login_device_code`, `_wait_for_access_token`) and refuse `login-required`/`runtime-api-moved`, which couples ccrc to private names inside D-3487's range. The usage unit also gains `TimeoutStartSec=300`. None of §9, §10 or §19.3 names either refusal.
 
 - [ ] **Step 0: record the base, check the R11 census, re-run the locators (read-only).**
@@ -635,9 +638,9 @@ test -x "$CENSUS" && type census >/dev/null && echo census-ok
   - Shell state does not survive between Bash calls. So every later block in this task begins with the same source line and reads the base back from `$SCRATCH/t1/base`. No block relies on a variable an earlier call set.
   - `census <name> <command…>` is the Global Constraints' shorthand for `"$CENSUS" "$EVID/t1-<name>" <command…>`, defined in `plan3a-env.sh`.
     - Each `census …` line in this task, inline or in a block, is ONE foreground Bash call of its own, with timeout ≥ 600000, spelled `. "<abs scratch>/plan3a-env.sh" && cd "$(git rev-parse --show-toplevel)/server" && census …`. Never two suites in one call.
-    - The census verdict and the command's own exit are separate. A 125 or 126 stops the task. The command's exit is vitest's: 1 is expected at the red runs (Steps 3, 7, 11 and 15, the twin case at Step 5, and Step 18's mutated runs) and stops the task anywhere else.
+    - The census verdict and the command's own exit are separate. A 125 or 126 stops the task. The command's exit is vitest's: 1 is expected at the red runs (Steps 3, 7 and 11, the twin case at Step 5, and Step 16's mutated runs) and stops the task anywhere else.
     - The process census counts THIS shell's temp root. A concurrent session sharing that root can produce a false 126. Attribute every hit by the Global Constraints' rule, and re-run in isolation before reporting one.
-  - Fixture ids must never equal a rostered id: `jq -r '.accounts[].id' "$HOME/.ccrc/accounts.json" | grep -xE 'codex-a|codex-b|ext-a|ext-b'` prints nothing. The tree's pre-existing `ccrc-models.test.ts` ROSTER rows are not this plan's fixture ids and are not checked here. The one this task reads by position (`LEGACY_EXTERNAL_ID`) is reached only through the probe's fixture seam and the external-arm describe, both under `env()`'s `systemctl` and `systemd-run` poisons, and Task 2 retires those cases.
+  - Fixture ids must never equal a rostered id: `jq -r '.accounts[].id' "$HOME/.ccrc/accounts.json" | grep -xE 'codex-a|codex-b|ext-a|ext-b'` prints nothing. The tree's pre-existing `ccrc-models.test.ts` ROSTER rows are not this plan's fixture ids and are not checked here. Of them, this task's new cases name only `router` and `router2`, the tree's non-live rows. `ext-a` is only ever an argument to the probe, never a roster row, in this task.
   - Record the baselines, one call per line (examples measured at `1f9fa22d`: 46, 34, 148 and 24 passed):
 
 ```bash
@@ -898,23 +901,26 @@ export function probeRuntime(home: string, catalogueFile: string): ProbeRuntime 
   Then append this describe:
 
 ```ts
-// ── Plan 3a Task 1: the Codex arm reads only what its caller hands it ──────
-// `ccrc`'s `_models_run_probe` exports CHATGPT_TOKEN_DIR (the row's own
-// exec.authDir) and CCRC_CODEX_PYTHON (the interpreter `ccgpt-runtime python`
-// resolved) for an exec.kind "codex" row, and neither for any other row.
-// These cases hand the probe those two values directly, so what they pin is
-// the PROBE's own contract:
-//   - no default for either input;
+// ── Plan 3a Task 1: a codex lane's Codex arm reads only what its caller hands it
+// `ccrc`'s `_models_run_probe` exports CCRC_PROBE_LANE_KIND=codex,
+// CHATGPT_TOKEN_DIR (the row's own exec.authDir) and CCRC_CODEX_PYTHON (the
+// interpreter `ccgpt-runtime python` resolved) for an exec.kind "codex" row,
+// and neither the marker nor the interpreter for any other row. These cases
+// hand the probe those values directly, so what they pin is the PROBE's own
+// contract:
+//   - on the marker, no default for either input;
 //   - three refusals before any interpreter runs;
 //   - the interpreter run isolated and scrubbed;
 //   - an Authenticator that may refresh a token and may never start a device
-//     sign-in.
+//     sign-in;
+//   - and WITHOUT the marker, today's arm, byte for byte (operator ruling Z1,
+//     D-3706): the last two cases.
 // CONTAINMENT FIRST: every case plants a poisoned `litellm` and a poisoned
 // `python` beside it on the fixture PATH. An old or mutated probe that goes
 // looking for a PATH LiteLLM runs a recorder — never the runner's own LiteLLM,
 // whose real Authenticator would start a real device sign-in against a
 // fixture HOME.
-describe.skipIf(pythonOrSkip() === null)('the Codex arm: no default token directory, the lane\'s own runtime, never a device sign-in (Plan 3a Task 1)', () => {
+describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no default token directory, its own runtime and never a device sign-in; every other caller keeps today\'s arm (Plan 3a Task 1)', () => {
   let pr: ProbeRuntime;
   let py: string;
   const authDir = (): string => path.join(home, '.local', 'share', 'ccrc', 'codex', 'codex-a');
@@ -926,7 +932,7 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: no default token direct
     fs.mkdirSync(bin, { recursive: true });
     fs.writeFileSync(path.join(bin, 'litellm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     fs.writeFileSync(path.join(bin, 'python'),
-      '#!/bin/sh\nprintf \'%s\\n\' "$0" >> "$HOME/python-poison"\nexit 1\n', { mode: 0o755 });
+      '#!/bin/sh\nprintf \'%s %s|%s\\n\' "$0" "$*" "${CHATGPT_TOKEN_DIR:-}" >> "$HOME/python-poison"\nexit 1\n', { mode: 0o755 });
     pr = probeRuntime(home, CODEX_RAW);
     py = path.join(home, 'probe-runtime-python');
     fs.writeFileSync(py, pr.python, { mode: 0o755 });
@@ -935,14 +941,14 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: no default token direct
   });
 
   const codex = (extra: NodeJS.ProcessEnv = {}): Result =>
-    run(['codex-a', 'codex'], { CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py, ...extra });
+    run(['codex-a', 'codex'], { CCRC_PROBE_LANE_KIND: 'codex', CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py, ...extra });
 
   it('handed no CHATGPT_TOKEN_DIR it refuses no-token-dir — there is no default directory — and no interpreter runs', () => {
     const r = codex({ CHATGPT_TOKEN_DIR: '' });
     expect(r.code).toBe(1);
     // A boolean, not `toMatch`: the pre-Plan-3a probe answers from its old default
     // directory, a real lane's path, so a failing `toMatch` would print it.
-    expect(/no-token-dir: run it through 'ccrc models refresh codex-a' on an exec\.kind "codex" lane/.test(r.stderr),
+    expect(/no-token-dir: run it through 'ccrc models refresh codex-a' — this codex-lane fetch/.test(r.stderr),
       'the no-token-dir refusal').toBe(true);
     expect(probeArgv0(pr.rec), 'an interpreter ran with no token directory').toEqual([]);
     expect(poisonRan()).toBe(false);
@@ -1052,52 +1058,94 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: no default token direct
     expect(block(PROBE)).toBe(block(path.join(REPO, 'ccd', 'ccgpt-usage.py')));
   });
 
-  it('the codex arm spells no default token directory and no PATH-derived interpreter', () => {
-    const body = extractFn('_fetch_codex');
-    // Booleans, never `not.toMatch(body)`: a failure prints its subject, and the
-    // pre-Plan-3a arm spells its old default directory, a real lane's path.
+  it('the codex-lane arm spells no default token directory and no PATH-derived interpreter', () => {
+    const body = extractFn('_fetch_codex_lane');
+    // Booleans, never `not.toMatch(body)`: a failure prints its subject.
     expect(/CHATGPT_TOKEN_DIR:-[^}]/.test(body), 'a default token directory').toBe(false);
     expect(body.includes('command -v litellm'), 'a PATH-derived interpreter').toBe(false);
     expect(body.includes('readlink'), 'readlink').toBe(false);
+  });
+
+  // Z1 (operator ruling Z, D-3706): every caller that is not a codex lane
+  // keeps today's arm, byte for byte, until that lane's own flip. Both cases
+  // are GREEN before this task and after it. They bind through mutation rows
+  // 15-17, never through a red-first run.
+  it('without the codex-lane marker the arm is today\'s: the python beside the PATH litellm, run as `-`, on the directory it was handed; a handed CCRC_CODEX_PYTHON never runs', () => {
+    const pathPython = path.join(fs.realpathSync(path.join(home, '.local', 'bin')), 'python');
+    for (const marker of ['', 'external']) {
+      fs.rmSync(path.join(home, 'python-poison'), { force: true });
+      const r = run(['ext-a', 'codex'], { CCRC_PROBE_LANE_KIND: marker, CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py });
+      expect(r.code, `marker "${marker}"`).toBe(1);   // the PATH python is a recorder that exits 1
+      expect(fs.readFileSync(path.join(home, 'python-poison'), 'utf8'), `marker "${marker}"`)
+        .toBe(`${pathPython} -|${authDir()}\n`);
+    }
+    expect(probeArgv0(pr.rec), 'the handed runtime interpreter ran').toEqual([]);
+    expect(curlCalls()).toEqual([]);
+  });
+
+  it('without the codex-lane marker and handed no directory, the arm still falls back to its own default, and nothing runs where that holds no auth.json', () => {
+    // The default is read off the arm's own text and never spelled here: it
+    // is a real lane's directory (ruling R13).
+    const m = /\$\{CHATGPT_TOKEN_DIR:-\$HOME\/([^}]+)\}/.exec(extractFn('_fetch_codex'));
+    expect(m !== null, '_fetch_codex keeps a default token directory').toBe(true);
+    const r = run(['ext-a', 'codex'], { CHATGPT_TOKEN_DIR: '', CCRC_CODEX_PYTHON: py });
+    expect(r.code).toBe(1);
+    // A boolean: a failing `toContain` would print the default directory.
+    expect(r.stderr.includes(`not logged in (${home}/${m![1]})`), 'today\'s sentence, on the default directory').toBe(true);
+    expect(poisonRan(), 'an interpreter ran with no auth.json').toBe(false);
+    expect(probeArgv0(pr.rec)).toEqual([]);
   });
 });
 ```
 
 - [ ] **Step 3: run them red.**
 
-  `census s3-probe ./node_modules/.bin/vitest run test/models-probe.test.ts`. Expected: 11 new FAIL and the 46 existing green (count re-derived at Step 0). The reason each new case fails today:
-  - the first case: the probe uses its default directory, holding no `auth.json`, and says `not logged in`, never `no-token-dir`. The assertion is a boolean, so that directory's path is never printed;
-  - the runtime-absent case: the probe ignores `CCRC_CODEX_PYTHON`, resolves the poisoned `python` beside the planted `litellm`, and `python-poison` exists. That poison is the containment working;
+  `census s3-probe ./node_modules/.bin/vitest run test/models-probe.test.ts`. Expected: 11 new FAIL, and 48 green: the 46 existing (count re-derived at Step 0) and the two Z1 cases. Those two pin today's arm, so they are green before this task by design, and mutation rows 15-17 are what bind them. Measured on a scratch copy at `4ec8926a` (the code of `1f9fa22d`): `Tests 11 failed | 48 passed (59)`. The reason each new case fails today:
+  - the first case: the probe ignores the marker and takes today's arm, which uses its default directory, holding no `auth.json`, and says `not logged in`, never `no-token-dir`. The assertion is a boolean, so that directory's path is never printed;
+  - runtime-absent: today's arm ignores `CCRC_CODEX_PYTHON`, resolves the poisoned `python` beside the planted `litellm`, and `python-poison` exists. That poison is the containment working;
   - not-logged-in: today's sentence has no `not-logged-in:` code;
   - `-I -`, D-3161, no-account-id, device, cooldown and renamed: the fixture interpreter never runs, and the poisoned PATH python runs instead;
   - the twin: neither file carries the markers;
-  - the literal-absence case: `_fetch_codex` still spells the default and `command -v litellm`, reported by the assertions' messages only.
+  - the literal-absence case: `_fetch_codex_lane` does not exist yet, so `extractFn` throws.
 
 - [ ] **Step 4: implement the probe.**
 
-  Replace `_fetch_codex` whole (`grep -n '^_fetch_codex() {' ccd/ccrc-models-probe`, to its closing `}` after the `PY` line) with:
+  `_fetch_codex` is not touched (Z1). Two edits:
+
+  1. In `_fetch`, the one line `    codex) _fetch_codex ;;` (`grep -nxF '    codex) _fetch_codex ;;' ccd/ccrc-models-probe` finds exactly one) becomes:
 
 ```bash
-_fetch_codex() {
-  # WHAT THIS ARM IS HANDED, AND NOTHING ELSE (spec §9.1; Plan 3a Task 1).
-  # `ccrc`'s `_models_run_probe` exports two values for an exec.kind "codex"
-  # roster row and neither for any other:
-  #   CHATGPT_TOKEN_DIR  the row's own exec.authDir, under $HOME;
-  #   CCRC_CODEX_PYTHON  the interpreter `ccgpt-runtime python` resolved (the
-  #                      isolated runtime), empty when none resolves.
-  # There is NO default for either. The directory used to default to one
-  # lane's OAuth, and the interpreter to whatever python sat beside the
-  # `litellm` on PATH. A codex row carries an authDir and no secrets file, so
-  # every codex lane would have probed with that one lane's OAuth, through a
-  # LiteLLM nobody built for it.
-  #
-  # Each missing input is its own one-line refusal, checked before any
-  # interpreter runs, and `auth.json` is tested for EXISTENCE only (spec §9,
-  # line 497). Every refusal names its remedy FIRST, because the stale path
-  # below keeps only the first 300 characters of this arm's stderr.
+    # Plan 3a Task 1 (D-3706): ONE marker picks the Codex arm, and only
+    # `ccrc`'s `_models_run_probe` sets it, for an exec.kind "codex" roster
+    # row. Every other caller gets `_fetch_codex`, byte for byte as it was.
+    codex) if [ "${CCRC_PROBE_LANE_KIND:-}" = codex ]; then _fetch_codex_lane; else _fetch_codex; fi ;;
+```
+
+  2. Directly below `_fetch_codex`'s closing `}` and the blank line after it, above `# C13: the compatible arm's only legitimate http:// case.`, add this, then one blank line:
+
+```bash
+# THE CODEX LANE'S FETCH (spec §9.1; Plan 3a Task 1, D-3706). `_fetch`
+# takes this arm only when `ccrc`'s `_models_run_probe` marked the call
+# CCRC_PROBE_LANE_KIND=codex, which it does for an exec.kind "codex" roster
+# row and for no other. `_fetch_codex` above is every other caller's arm,
+# byte for byte as it was, default directory and all, until that lane's own
+# flip (Plan 3b); Plan 4 deletes it.
+# This arm is handed two values and reads nothing else:
+#   CHATGPT_TOKEN_DIR  the row's own exec.authDir, under $HOME;
+#   CCRC_CODEX_PYTHON  the interpreter `ccgpt-runtime python` resolved (the
+#                      isolated runtime), empty when none resolves.
+# It has NO default for either. A codex row carries an authDir and no
+# secrets file, so a default here would have probed every codex lane with
+# one other lane's OAuth, through a LiteLLM nobody built for it.
+#
+# Each missing input is its own one-line refusal, checked before any
+# interpreter runs, and `auth.json` is tested for EXISTENCE only (spec §9).
+# Every refusal names its remedy FIRST, because the stale path below keeps
+# only the first 300 characters of this arm's stderr.
+_fetch_codex_lane() {
   local token_dir="${CHATGPT_TOKEN_DIR:-}" py="${CCRC_CODEX_PYTHON:-}"
   if [ -z "$token_dir" ]; then
-    echo "$PROG: no-token-dir: run it through 'ccrc models refresh $ACCOUNT' on an exec.kind \"codex\" lane — this fetch was handed no CHATGPT_TOKEN_DIR, and the probe has no default: a lane's OAuth directory is its roster row's exec.authDir, which only a codex row declares (spec §9.1)" >&2
+    echo "$PROG: no-token-dir: run it through 'ccrc models refresh $ACCOUNT' — this codex-lane fetch was handed no CHATGPT_TOKEN_DIR, and it has no default: a codex lane's OAuth directory is its roster row's exec.authDir (spec §9.1)" >&2
     return 1
   fi
   if [ -z "$py" ] || [ ! -x "$py" ]; then
@@ -1118,9 +1166,11 @@ _fetch_codex() {
   #     reason: the authenticator os.path.join()s CHATGPT_AUTH_FILE onto the
   #     token dir, so an ambient absolute value would move the credential it
   #     reads.
+  # The unattended guard inside covers THIS program only. `_fetch_codex`
+  # keeps its own program, unguarded, as it was (Z1).
   (
     for v in ${!CHATGPT_@} ${!LITELLM_@} ${!OPENAI_@}; do unset "$v"; done
-    unset CCRC_CODEX_PYTHON
+    unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
     export CHATGPT_TOKEN_DIR="$token_dir" LITELLM_LOCAL_MODEL_COST_MAP=True \
       CODEX_CLIENT_VERSION="$CODEX_CLIENT_VERSION" CCRC_PROBE_ACCOUNT="$ACCOUNT" CCRC_PROBE_PROG="$PROG"
     exec "$py" -I -
@@ -1183,7 +1233,7 @@ def refuse(code, sentence):
 # ChatGPT-Account-Id comes from `get_account_id()`, the call LiteLLM's own
 # chatgpt transformations make for the same header, so this program never
 # opens auth.json itself (spec §9: existence and mode only). That closes
-# D-3161, the contents read this arm used to make.
+# D-3161 for a codex lane; `_fetch_codex` keeps its read until Plan 4.
 try:
     auth = _unattended(Authenticator, ("get_access_token", "get_account_id"))()
     token = auth.get_access_token()
@@ -1221,7 +1271,7 @@ PY
 
 - [ ] **Step 5: run the probe suite green.**
 
-  `census s5-probe ./node_modules/.bin/vitest run test/models-probe.test.ts`. Expected: all green (57 at `1f9fa22d` + this task; an example). The one exception is the twin case, which stays red until Step 8 puts the guard in `ccgpt-usage.py`. Record it as expected-red here.
+  `census s5-probe ./node_modules/.bin/vitest run test/models-probe.test.ts`. Expected: every case green but the twin, which stays red until Step 8 puts the guard in `ccgpt-usage.py`: 58 passed and 1 failed (Step 0's count plus 13; an example). Record the twin as expected-red here.
 
 - [ ] **Step 6: write the failing publisher tests, and the unit pin.**
 
@@ -1359,10 +1409,10 @@ TimeoutStartSec=300
   Run each in the foreground, one at a time:
   - `census s9-usage ./node_modules/.bin/vitest run test/ccgpt-usage.test.ts`: all green (36; an example).
   - `census s9-install ./node_modules/.bin/vitest run test/ccrc-install.test.ts -t "runs the isolated runtime"`: green.
-  - `census s9-probe ./node_modules/.bin/vitest run test/models-probe.test.ts`: all green, the twin case included.
+  - `census s9-probe ./node_modules/.bin/vitest run test/models-probe.test.ts`: all green, the twin case included (59 measured on a scratch copy; an example).
   - `census s9-harness ./node_modules/.bin/vitest run test/ccgpt-harness.test.ts`: green and unchanged. `pystub` stays one class with one method.
 
-- [ ] **Step 10: write the failing caller tests, and migrate the cases the refusal reaches.**
+- [ ] **Step 10: write the failing caller tests.**
 
   In `server/test/ccrc-models.test.ts`:
 
@@ -1390,53 +1440,20 @@ async function codexBox(ids: readonly string[], extra: readonly Record<string, u
   return box({ ...ROSTER, accounts: [...ROSTER.accounts,
     ...ids.map((id, i) => codexRow(id, ports[2 * i]!, ports[2 * i + 1]!)), ...extra] });
 }
-
-/** Plan 3a Task 1: an EXTERNAL lane in the live Codex lanes' SHAPE (exec.kind
- *  "external", provider openai, telemetry "codex"), under a fixture id. With a codex
- *  registry, it is the lane `refresh` refuses by name and `--all` skips. */
-const EXT_A_ROW = {
-  id: 'ext-a', label: 'ext-a', configDirSuffix: '.claude-ext-a',
-  exec: { kind: 'external', provider: 'openai' }, homeAble: false, telemetry: 'codex',
-} as const;
-
-/** The fixture's own external row that the pre-Plan-3a external-arm cases were
- *  written against. It is read off ROSTER by position, never spelled (ruling R13:
- *  no added line names a live lane id). Plan 3a Task 2 retires the cases that use it. */
-const LEGACY_EXTERNAL_ID = ROSTER.accounts[2]!.id;
-
-/** Plan 3a Task 1: a lane's catalogue, written by the REAL probe through its one
- *  fixture seam, for a lane `ccrc models refresh` no longer probes. That is a codex
- *  registry on a row that is not exec.kind "codex", so no refresh can seed it. */
-function probeDirect(id: string, raw: string): void {
-  const r = spawnSync(BASH, [join(home, 'ccrc', 'ccd', 'ccrc-models-probe'), id, 'codex'],
-    { env: env(home, { CCRC_MODELS_PROBE_FIXTURE: raw }), encoding: 'utf8', input: '' });
-  expect(r.status, r.stderr).toBe(0);
-}
 ```
 
-  3. **The two scrub cases leave `describe('ccrc models <id> discovery')`.** Delete the two `it(`s titled `an ambient CHATGPT_TOKEN_DIR pointing at a poisoned auth.json never reaches a codex lane's fetch` and `a codex lane with a secrets file that sets only ANTHROPIC_AUTH_TOKEN still scrubs an ambient CHATGPT_TOKEN_DIR`, with their comment blocks. Put this comment in their place:
+  3. **The new describe**, directly after `describe('ccrc models <id> discovery')`'s closing `});`. The two `CHATGPT_TOKEN_DIR` scrub cases inside that describe stay where they are, byte for byte: they refresh an external row whose probe arm is unchanged, and they are the Z1 pins of the "every other row" half.
 
 ```ts
-  // Plan 3a Task 1 moved the two CHATGPT_TOKEN_DIR scrub cases that stood here
-  // (an ambient CHATGPT_TOKEN_DIR, and the same through a secrets-file branch).
-  // Both refreshed an EXTERNAL row carrying a codex registry and leaned on the
-  // probe's DEFAULT token directory to refuse first. A refresh now refuses such
-  // a row by name, and the default is gone. Their claim, that no ambient or
-  // secrets-file CHATGPT_TOKEN_DIR reaches a lane's fetch, is carried on
-  // codex-KIND lanes by the describe after this one, in its first case and in
-  // `_models_run_probe hands a codex row…`.
-```
-
-  4. **The new describe**, directly after `describe('ccrc models <id> discovery')`'s closing `});`:
-
-```ts
-// ── Plan 3a Task 1 (spec §9.1): each codex lane's probe reads its OWN OAuth
-// through its OWN runtime. The inputs are exported by `_models_run_probe` for
-// an exec.kind "codex" row, after the scrub and after any secrets file, and
-// for no other row. CONTAINMENT FIRST: every case poisons a PATH `litellm` and
-// the `python` beside it, so no old or mutated probe can reach the runner's
-// own LiteLLM.
-describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN authDir through its OWN runtime; the token directory has no default (Plan 3a Task 1)', () => {
+// ── Plan 3a Task 1 (spec §9.1, D-3706): each codex lane's probe reads its OWN
+// OAuth through its OWN runtime. `_models_run_probe` exports the inputs and the
+// codex-lane marker for an exec.kind "codex" row, after the scrub and after
+// any secrets file. Every other row keeps today's probe environment exactly
+// (operator ruling Z1): the two CHATGPT_TOKEN_DIR scrub cases in the describe
+// above still hold it, unchanged. CONTAINMENT FIRST: every case poisons a PATH
+// `litellm` and the `python` beside it, so no old or mutated probe can reach
+// the runner's own LiteLLM.
+describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN authDir through its OWN runtime, with no default; every other row keeps today\'s probe environment (Plan 3a Task 1)', () => {
   const poisonedDir = (): string => join(home, 'someone-elses-token-dir');
   const poisonRan = (): boolean => fs.existsSync(join(home, 'python-poison'));
   const poisonPathLitellm = (): string => {
@@ -1470,9 +1487,8 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
       expect(run(['models', id, 'init', 'codex']).code).toBe(0);
     }
     const r = run(['models', 'refresh', '--all'], { CHATGPT_TOKEN_DIR: poisonedDir(), CCRC_CODEX_PYTHON: poison });
-    expect(r.code, r.stderr).toBe(0);
-    expect(rowsOf(r).map((x) => [x['id'], x['ok'], x['skipped']])).toEqual([
-      ['codex-a', true, undefined], ['codex-b', true, undefined]]);
+    expect(rowsOf(r).map((x) => [x['id'], x['ok']])).toEqual([['codex-a', true], ['codex-b', true]]);
+    expect(r.code, 'refresh --all').toBe(0);
     const calls = probeRuntimeCalls(pr.rec);
     expect(calls.map((c) => c.env['CHATGPT_TOKEN_DIR']).sort())
       .toEqual([authDirOf(home, 'codex-a'), authDirOf(home, 'codex-b')]);
@@ -1498,7 +1514,9 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
     expect(r.code).toBe(1);
     const [row] = rowsOf(r);
     expect(row).toMatchObject({ id: 'codex-a', probe: 'codex', ok: false });
-    expect(String(row!['reason'])).toMatch(/runtime-absent: run ccrc install/);
+    // Booleans: before this task the reason names the probe's default
+    // directory, a real lane's path, which a failing `toMatch` would print.
+    expect(/runtime-absent: run ccrc install/.test(String(row!['reason'])), 'the runtime-absent refusal').toBe(true);
     expect(poisonRan(), 'an inherited interpreter ran').toBe(false);
   });
 
@@ -1511,156 +1529,51 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
     expect(run(['models', 'codex-a', 'init', 'codex']).code).toBe(0);
     const r = run(['models', 'refresh', 'codex-a']);
     expect(r.code).toBe(1);
-    expect(String(rowsOf(r)[0]!['reason'])).toMatch(/not-logged-in: run ccrc codex login codex-a/);
+    expect(/not-logged-in: run ccrc codex login codex-a/.test(String(rowsOf(r)[0]!['reason'])), 'the not-logged-in refusal').toBe(true);
     expect(probeArgv0(pr.rec)).toEqual([]);
     expect(poisonRan()).toBe(false);
   });
 
-  it('_models_run_probe hands a codex row its own authDir and runtime, and hands every other row neither — whatever the caller or a secrets file carries', async () => {
+  it('_models_run_probe hands a codex row its own authDir, runtime and marker; every other row gets neither marker nor runtime, and today\'s CHATGPT_TOKEN_DIR', async () => {
     home = await codexBox(['codex-a']);
     plantCodexBins(home);
     const rt = plantFakeRuntime(home);
     fs.mkdirSync(join(home, '.secrets'), { recursive: true });
     fs.writeFileSync(join(home, '.secrets', 'router.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n'
-      + `export CHATGPT_TOKEN_DIR=${join(home, 'from-a-secrets-file')}\nexport CCRC_CODEX_PYTHON=${join(home, 'from-a-secrets-file-py')}\n`);
-    const ambient = { CHATGPT_TOKEN_DIR: join(home, 'ambient-dir'), CCRC_CODEX_PYTHON: join(home, 'ambient-py') };
+      + `export CHATGPT_TOKEN_DIR=${join(home, 'from-a-secrets-file')}\nexport CCRC_CODEX_PYTHON=${join(home, 'from-a-secrets-file-py')}\n`
+      + 'export CCRC_PROBE_LANE_KIND=codex\n');
+    // The ambient marker is a value no row would get, so a codex row's own
+    // export is what the first expectation reads, never an inherited one.
+    const ambient = { CHATGPT_TOKEN_DIR: join(home, 'ambient-dir'), CCRC_CODEX_PYTHON: join(home, 'ambient-py'), CCRC_PROBE_LANE_KIND: 'ambient' };
     const seen = (id: string): Record<string, string> => {
       const r = sourced(`_models_run_probe ${id} env`, [], ambient);
       expect(r.code, r.stderr).toBe(0);
       return Object.fromEntries(r.stdout.split('\n')
-        .filter((l) => /^(CHATGPT_TOKEN_DIR|CCRC_CODEX_PYTHON)=/.test(l))
+        .filter((l) => /^(CHATGPT_TOKEN_DIR|CCRC_CODEX_PYTHON|CCRC_PROBE_LANE_KIND)=/.test(l))
         .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
     };
-    expect(seen('codex-a')).toEqual({ CHATGPT_TOKEN_DIR: authDirOf(home, 'codex-a'), CCRC_CODEX_PYTHON: rt.python });
-    expect(seen('router'), 'a row with a secrets file').toEqual({});
+    expect(seen('codex-a')).toEqual({
+      CHATGPT_TOKEN_DIR: authDirOf(home, 'codex-a'), CCRC_CODEX_PYTHON: rt.python, CCRC_PROBE_LANE_KIND: 'codex' });
+    // Z1: what the probe got before this task, and nothing more. The scrub
+    // keeps an ambient CHATGPT_TOKEN_DIR out; a secrets file's value still
+    // reaches the probe; the marker and the interpreter never do.
+    expect(seen('router'), 'a row with a secrets file').toEqual({ CHATGPT_TOKEN_DIR: join(home, 'from-a-secrets-file') });
     expect(seen('router2'), 'a row with none').toEqual({});
   });
 });
 ```
 
-  5. **`describe('ccrc models refresh')` re-aims its codex cases.** Its `beforeEach` becomes async, and its body opens with:
-
-```ts
-    // Plan 3a Task 1: every case below that refreshes a Codex lane refreshes a
-    // codex-KIND one (`codex-a`). `refresh` now refuses, and `--all` skips, a
-    // codex registry on a row that is not exec.kind "codex", which is the shape
-    // these cases were first written on. Every other row is ROSTER's, unchanged.
-    home = await codexBox(['codex-a']);
-```
-
-  It is followed by its two existing `pgrep`/`ccgpt` stub writes, unchanged. In exactly the cases below, every occurrence of `LEGACY_EXTERNAL_ID`'s literal id (quoted, and inside `<id>.json`, `<id>.effort.json` and `<id>.classes.tsv`) becomes `codex-a`. Each case is green before and after this task, and each keeps its claim:
-
-  | Case (title) | Also changes |
-  |---|---|
-  | `refreshes one lane and writes its catalogue` | the expected row's `id` |
-  | `re-materialises the lane it refreshed, so the effort file is freshly rewritten from the new catalogue` | none |
-  | `re-materialises the TSV too, so a RETIRED class is visible to ccd` | none |
-  | `--all probes every lane that HAS a registry, and no others` | the expectation becomes `['router', 'codex-a']` (roster order: `codex-a` is appended) |
-  | `--all exits 1 when any lane failed, and still reports the ones that worked` | none |
-  | `a lane whose re-materialise fails is a FAILED row, and litellm never runs (C7)` | add `expect(fs.existsSync(join(home, '.ccrc', 'codex', 'codex-a', 'litellm.yaml'))).toBe(false);` beside the box-global assertion |
-  | `a single-lane failure exits 1 and leaves the previous catalogue stale, not deleted` | none |
-  | `a lane whose catalogue is corrupt is still refreshed, and repaired (Fix round 1, Finding 2)` | the expected row's `id` |
-  | `never reaches a real pgrep or ccgpt — poisoned, and no restart fires when neither looks running` | add `expect(poisonLog('pgrep')).toEqual([]);` |
-
-  Unchanged, and green because each never reaches the probe:
-  - `refuses a lane with no registry, naming init`;
-  - `takes one lane id or --all and nothing more`;
-  - both registry-invalid cases (an invalid registry answers `probe: null`, and the loop names it before any skip).
-
-  6. **`describe('ccrc models litellm')`'s beforeEach.** Its one `run(['models', 'refresh', …], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });` line becomes `probeDirect(LEGACY_EXTERNAL_ID, CODEX_RAW);`, with the comment `// Plan 3a Task 1: refresh refuses this row now; the probe itself writes its catalogue (Task 2 retires this describe).`
-
-  7. **`describe('refresh runs the litellm step for a codex lane (§5)')` is replaced whole by:**
-
-```ts
-// Plan 3a Task 1 rewrote this describe. It pinned the refresh's EXTERNAL
-// LiteLLM step (box-global config, pgrep, a bare `ccgpt stop`) on an external
-// row carrying a codex registry: the live lanes' shape. A refresh no longer
-// probes such a lane (spec §9.1: its row declares no exec.authDir, and the
-// probe has no default), so it no longer reaches that step either. Each old
-// case names its successor below. A codex-KIND lane's refresh step is the
-// D-3482 describe's ("refresh reaches the same arm…", "refresh: a codex lane
-// whose stop fails…").
-describe('refresh never probes, renders or stops for a lane that is not ccrc\'s — refused by name, skipped by --all (Plan 3a Task 1)', () => {
-  const configPath = (): string => join(home, '.handoff', 'litellm-config.yaml');
-  const FOREIGN = 'FOREIGN-FIXTURE: the other repository\'s LiteLLM config, not ccrc\'s\n';
-  const SKIPPED = { id: 'ext-a', probe: 'codex', ok: true, skipped: 'external-lane' };
-  beforeEach(() => {
-    fs.rmSync(home, { recursive: true, force: true });
-    home = box({ ...ROSTER, accounts: [...ROSTER.accounts, EXT_A_ROW] });
-    for (const name of ['pgrep', 'ccgpt']) {
-      fs.writeFileSync(join(home, '.local', 'bin', name),
-        `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
-        + `echo "a lane refresh must never reach ${name}" >&2\nexit 97\n`, { mode: 0o755 });
-    }
-    expect(run(['models', 'ext-a', 'init', 'codex']).code).toBe(0);
-    fs.mkdirSync(join(home, '.handoff'), { recursive: true });
-    fs.writeFileSync(configPath(), FOREIGN);
-  });
-
-  // Successor of the describe's first two cases (the first refresh renders the
-  // config; the second leaves it alone).
-  it('--all skips it as an ok:true row naming why, twice over: exit 0, nothing probed, the box-global config byte-identical, pgrep and ccgpt never run', () => {
-    for (const pass of [1, 2]) {
-      const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-      expect(r.code, `pass ${pass}: ${r.stderr}`).toBe(0);
-      const b = oneObject(r);
-      expect(b['ok']).toBe(true);
-      const rows = b['refreshed'] as Record<string, unknown>[];
-      expect(rows).toEqual([{ ...SKIPPED, reason: expect.stringContaining('is not an exec.kind "codex" roster row') }]);
-      expect(String(rows[0]!['reason'])).toContain('spec §15.3');
-      expect(String(rows[0]!['reason'])).toContain('ccrc models refresh ext-a');
-    }
-    expect(fs.existsSync(join(home, '.ccrc', 'models', 'ext-a.json')), 'the probe ran for a lane it cannot read OAuth for').toBe(false);
-    expect(fs.readFileSync(configPath(), 'utf8')).toBe(FOREIGN);
-    expect(fs.existsSync(`${configPath()}.prev`)).toBe(false);
-    expect(poisonLog('pgrep')).toEqual([]);
-    expect(poisonLog('ccgpt')).toEqual([]);
-  });
-
-  it('an explicit refresh of it is REFUSED by name — external-lane, exit 1, one object, nothing probed or written', () => {
-    const r = run(['models', 'refresh', 'ext-a'],
-      { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW, CHATGPT_TOKEN_DIR: join(home, 'ambient-token-dir') });
-    expect(r.code).toBe(1);
-    const b = oneObject(r);
-    expect(b['error']).toBe('external-lane');
-    expect(String(b['detail'])).toContain('is not an exec.kind "codex" roster row');
-    expect(String(b['detail'])).toMatch(/Nothing was written\.$/);
-    expect(fs.existsSync(join(home, '.ccrc', 'models', 'ext-a.json'))).toBe(false);
-    expect(fs.readFileSync(configPath(), 'utf8')).toBe(FOREIGN);
-    expect(r.stdout + r.stderr).not.toContain('ambient-token-dir');
-  });
-
-  // The old describe's third case, the same claim, now against a planted foreign file.
-  it('a non-Codex lane\'s refresh never touches the LiteLLM config', () => {
-    run(['models', 'router', 'init', 'openrouter']);
-    const orRaw = join(here, 'fixtures', 'catalogues', 'openrouter-raw-page.json');
-    run(['models', 'refresh', 'router'], { CCRC_MODELS_PROBE_FIXTURE: orRaw });
-    expect(fs.readFileSync(configPath(), 'utf8')).toBe(FOREIGN);
-  });
-
-  // Successor of "a lane whose restart fails is a FAILED row, and the run exits 1".
-  it('a ccgpt that would refuse to stop is never asked: the skipped row stays ok, and the run exits 0', () => {
-    fs.writeFileSync(join(home, '.local', 'bin', 'pgrep'),
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/pgrep-poison"\necho 4242\nexit 0\n`, { mode: 0o755 });
-    fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
-      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-poison"\nexit 1\n', { mode: 0o755 });
-    const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-    expect(r.code, r.stderr).toBe(0);
-    expect(oneObject(r)['refreshed']).toEqual([{ ...SKIPPED, reason: expect.any(String) }]);
-    expect(poisonLog('pgrep')).toEqual([]);
-    expect(poisonLog('ccgpt')).toEqual([]);
-  });
-});
-```
+  No other case in this file changes. At `1f9fa22d` that is 148 cases, so 152 after this step (measured on a scratch copy; an example).
 
 - [ ] **Step 11: run them red.**
 
-  `census s11-models ./node_modules/.bin/vitest run test/ccrc-models.test.ts`.
+  `census s11-models ./node_modules/.bin/vitest run test/ccrc-models.test.ts`. Measured on a scratch copy at `4ec8926a`: `Tests 4 failed | 148 passed (152)`.
   - Expected FAIL, and why each fails today:
-    - the new describe's four cases. Today `_models_run_probe` hands a codex row no directory, so Step 4's probe refuses `no-token-dir`, before any interpreter or `auth.json` test. That is why the first three fail. The fourth fails because today's scrub leaves `CCRC_CODEX_PYTHON` in, and a secrets file's two values reach the probe.
-    - the rewritten describe's skip, refusal and never-asked cases. Today ext-a is probed through the seam, and the external arm renders over the planted file.
-  - Expected GREEN: the rewritten describe's router case (a control); every re-aimed refresh case, because its lane is codex-kind, which today's code already refreshes; the external litellm describe on `probeDirect`.
-  - If a re-aimed case reds here, stop: it was not a re-aim.
+    - two codex lanes: today `_models_run_probe` hands `codex-a` no directory, so the probe falls to its default, which holds no `auth.json`; `codex-b`'s secrets file hands it the poisoned directory, and the poisoned PATH python runs. Both rows read `ok: false`;
+    - runtime-absent and not-logged-in: the probe never sees a codex lane's inputs, so neither code appears in the row's reason (booleans, so the default directory a failing `toMatch` would print stays out of the output);
+    - `_models_run_probe hands a codex row…`: today the scrub leaves `CCRC_CODEX_PYTHON` and the marker as the caller set them, and exports neither the row's directory nor the marker; for `router`, the secrets file's interpreter and marker reach the probe.
+  - Expected GREEN: every pre-existing case, the two scrub cases among them.
+  - If a pre-existing case reds here, stop: this step edits no line it reads.
 
 - [ ] **Step 12: implement the caller.**
 
@@ -1682,33 +1595,36 @@ describe('refresh never probes, renders or stops for a lane that is not ccrc\'s 
 # has a secrets file, that file is sourced in
 ```
 
-  2. Directly below `_models_run_probe`'s closing `}`, above `MODELS_ENDPOINTS_TMP=""`. Never directly above `_models_run_probe() {`: its header comment ends on that line, and a function placed there would part the two.
+  2. Directly below `_models_run_probe`'s closing `}`, above `MODELS_ENDPOINTS_TMP=""`, followed by one blank line. Never directly above `_models_run_probe() {`: its header comment ends on that line, and a function placed there would part the two.
 
 ```bash
-# THE CODEX ARM'S TWO INPUTS (spec §9.1; Plan 3a Task 1). The probe has no
-# default OAuth directory and no interpreter of its own.
-#   - For an exec.kind "codex" row, this exports the row's own
-#     `exec.authDir`, under $HOME, as CHATGPT_TOKEN_DIR, and the interpreter
-#     `ccgpt-runtime python` resolves as CCRC_CODEX_PYTHON. That one is EMPTY
-#     when no runtime resolves, so the probe refuses `runtime-absent` rather
-#     than inheriting a caller's value.
-#   - For every other row it UNSETS both, again, AFTER any secrets file. A
-#     secrets file is the lane's credential for the two ANTHROPIC_AUTH_TOKEN
-#     arms, and it must never hand a lane that is not ccrc's a Codex token
-#     directory.
+# THE CODEX LANE'S PROBE INPUTS (spec §9.1; Plan 3a Task 1, D-3706).
+#   - An exec.kind "codex" row: this exports the row's own `exec.authDir`,
+#     under $HOME, as CHATGPT_TOKEN_DIR; the interpreter `ccgpt-runtime
+#     python` resolves as CCRC_CODEX_PYTHON, EMPTY when none resolves, so the
+#     probe refuses `runtime-absent` rather than inheriting a caller's value;
+#     and CCRC_PROBE_LANE_KIND=codex, the one marker that sends the probe
+#     down its codex-lane fetch, which has no default directory.
+#   - Every other row: it UNSETS CCRC_CODEX_PYTHON and CCRC_PROBE_LANE_KIND
+#     and touches nothing else. That row's CHATGPT_TOKEN_DIR is exactly what
+#     it was before this function existed (scrubbed above, then whatever its
+#     secrets file sets), so an external lane's fetch keeps today's bytes,
+#     default directory included, until its own flip (Plan 3b).
 # Called ONLY inside `_models_run_probe`'s two subshells, after the scrub and
-# the source line, so none of it reaches the verb's own shell. The row is read
-# through the lane library's one reader of `exec.kind` (`_models_litellm_codex`,
-# that is `_codex_lanes`) and its one reader of the row (`_codex_row`). A codex
-# row that does not validate is refused with `_codex_row`'s own rc and
-# sentence, and the probe is never run.
+# the source line: neither a caller nor a secrets file can choose a lane's
+# arm, directory or interpreter, and none of it reaches the verb's own shell.
+# The row is read through the lane library's one reader of `exec.kind`
+# (`_models_litellm_codex`, that is `_codex_lanes`) and its one reader of a
+# row (`_codex_row`). A codex row that does not validate is refused with
+# `_codex_row`'s own rc and sentence, and the probe never runs.
 _models_probe_codex_env() {   # <accountId> -> 0, or _codex_row's rc for a codex row that does not validate
   if ! _models_litellm_codex "$1"; then
-    unset CHATGPT_TOKEN_DIR CCRC_CODEX_PYTHON
+    unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
     return 0
   fi
   _codex_row "$1" || return $?
   export CHATGPT_TOKEN_DIR="$HOME/$CX_AUTH"
+  export CCRC_PROBE_LANE_KIND=codex
   CCRC_CODEX_PYTHON="$("$(_codex_runtime_cli)" python 2>/dev/null)" || CCRC_CODEX_PYTHON=''
   export CCRC_CODEX_PYTHON
   return 0
@@ -1728,339 +1644,70 @@ _models_probe_codex_env() {   # <accountId> -> 0, or _codex_row's rc for a codex
   fi
 ```
 
-  new:
+  new. The two `unset` lines and the source line are unchanged; each subshell gains one line:
 
 ```bash
   if [ -n "$secrets" ]; then
-    ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CHATGPT_TOKEN_DIR CCRC_CODEX_PYTHON
+    ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CHATGPT_TOKEN_DIR
       [ -r "$HOME/$secrets" ] && . "$HOME/$secrets"
       _models_probe_codex_env "$id" || exit $?
       exec "$@" )
   else
-    ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CHATGPT_TOKEN_DIR CCRC_CODEX_PYTHON
+    ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CHATGPT_TOKEN_DIR
       _models_probe_codex_env "$id" || exit $?
       exec "$@" )
   fi
 ```
 
-  4. Directly above `MODELS_REFRESH_REASON=""`:
-
-```bash
-# Plan 3a Task 1 (spec §9.1): why a lane whose registry names the codex probe,
-# but whose roster row is not exec.kind "codex", is neither probed nor
-# rendered. ONE sentence for both of `refresh`'s answers: the targeted
-# refusal and the `--all` row.
-_models_external_codex_why() {   # <accountId>
-  printf '%s' "account \"$1\" carries a codex class registry but is not an exec.kind \"codex\" roster row, so it declares no exec.authDir, and the model probe has no default OAuth directory to read instead (spec §9.1): ccrc does not probe or render it, and its catalogue stays as last fetched. Flip the row to exec.kind \"codex\" with its two ports and its existing authDir (spec §15.3), then run: ccrc models refresh $1. Nothing was written."
-}
-```
-
-  5. In the `refresh` arm's targeted branch, directly after `|| _models_refuse registry-invalid 1 "$invalid"`:
-
-```bash
-        # Plan 3a Task 1: a codex registry on a row that is not exec.kind
-        # "codex" names no exec.authDir, and the probe has no default to fall
-        # back to. So an explicit refresh of one is REFUSED by name, before the
-        # probe could be asked. `--all` skips the same lane with an ok:true
-        # row instead (the loop below), because the hourly unit must not fail
-        # over a lane only its flip can cure.
-        if [ "$(printf '%s' "$wanted" | jq -r '.[0].probe // empty')" = codex ] \
-            && ! _models_litellm_codex "$target"; then
-          _models_refuse external-lane 1 "$(_models_external_codex_why "$target")"
-        fi
-```
-
-  6. In the loop, directly above `elif _models_refresh_one "$id" "$probe" "$baseurl"; then`:
-
-```bash
-        elif [ "$probe" = codex ] && ! _models_litellm_codex "$id"; then
-          # Plan 3a Task 1: the lane the targeted branch above refuses,
-          # skipped here as an ok:true row that says why. The probe and the
-          # LiteLLM step never run for it, and `ok` stays true, so
-          # `ccrc-models.service` does not fail every hour over a lane only
-          # its flip can cure.
-          row="$(jq -cn --arg id "$id" --arg reason "$(_models_external_codex_why "$id")" \
-            '{id:$id, probe:"codex", ok:true, skipped:"external-lane", reason:$reason}')"
-```
-
 - [ ] **Step 13: run it green.**
-  - `census s13-models ./node_modules/.bin/vitest run test/ccrc-models.test.ts`: all green. At `1f9fa22d` that was 148: 2 cases leave, 4 arrive, and the rewritten describe is net 0, so 150 (an example).
+  - `census s13-models ./node_modules/.bin/vitest run test/ccrc-models.test.ts`: all green, 152 (Step 0's count plus 4; measured on a scratch copy).
   - `census s13-probe ./node_modules/.bin/vitest run test/models-probe.test.ts`: green.
 
-- [ ] **Step 14: write the failing doctor tests, and re-measure the count pin.**
+- [ ] **Step 14: re-aim the six stale citations by name (comment lines only).**
 
-  In `server/test/ccrc-doctor.test.ts`:
-
-  1. Replace `writeModelRegistry`'s docstring and signature with:
-
-```ts
-/** `~/.ccrc/models/<id>.classes.json`, an UNSEEDED-shaped registry (every class
- *  null, no `effort` block). The population asks this file only whether it exists.
- *
- *  Since Plan 3a Task 1 its `probe` DEFAULTS to `openrouter`, with an empty
- *  discovery list: a lane `ccrc models refresh --all` does probe. Every freshness
- *  case in this describe is about a lane the timer reaches, and a codex registry
- *  on a row that is not exec.kind "codex" is one the timer never reaches (its own
- *  cases, at the end of this describe). Pass `'codex'` for the `discovery:
- *  'catalogue'` shape that `init codex` seeds. */
-function writeModelRegistry(home: string, id: string, probe: 'openrouter' | 'codex' = 'openrouter'): void {
-  mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
-  writeFileSync(join(home, '.ccrc', 'models', `${id}.classes.json`), JSON.stringify({
-    probe,
-    classes: { haiku: null, sonnet: null, opus: null, fable: null },
-    subagent: 'sonnet',
-    discovery: probe === 'codex' ? 'catalogue' : [],
-  }));
-}
-```
-
-  2. In `writeModelCatalogue`'s docstring, `(\`ccd/ccrc-models-probe:397\`'s \`int(time.time())\`)` becomes `(\`ccd/ccrc-models-probe\`'s \`_normalise\`, \`int(time.time())\`)`.
-  3. In `stubNodeModelsWeirdStatus`'s docstring, `NOCATALOGUE/UNREADABLE/INVALID/OK` becomes `NOCATALOGUE/UNREADABLE/INVALID/OK/SKIPPED`.
-  4. Append inside `describe('ccrc doctor: models', …)`:
-
-```ts
-  // ── Plan 3a Task 1 (critic #1): the lanes the hourly refresh skips BY DESIGN.
-  // A codex registry on a row that is not exec.kind "codex" is refused by
-  // `refresh <id>` and skipped by `refresh --all`: its row names no
-  // exec.authDir, and the probe has no default. Its catalogue ages because
-  // nobody refreshes it, never because the timer stopped, so the silent-timer
-  // WARN would be a false cause after every update's closing doctor.
-  it('an external lane whose registry names the codex probe is SKIPPED by design — never a WARN, however old its catalogue, or with none', () => {
-    for (const withCatalogue of [true, false]) {
-      const home = healthy(`ccrc-doctor-models-extcodex-${withCatalogue ? 'old' : 'none'}-`);
-      writeRoster(home, [{ id: 'ext-a', exec: { kind: 'external', provider: 'openai' }, telemetry: 'codex' }]);
-      writeModelRegistry(home, 'ext-a', 'codex');
-      if (withCatalogue) writeModelCatalogue(home, 'ext-a', { stale: false, fetchedAt: nowS() - 4 * 3600 });
-      const out = runDoctor(home).stdout;
-      const any = anyVerdictFor(out, 'models');
-      expect(any, out).toMatch(/^SKIP models: every lane with a model registry here is one the hourly refresh skips by design/);
-      expect(any).toContain('not refreshed by design: ext-a');
-      expect(any).toContain('spec §15.3');
-      expect(any, 'a skipped lane is never told to refresh').not.toMatch(/ccrc models refresh ext-a/);
-    }
-  });
-
-  it('a codex-KIND lane with a codex registry is still freshness-checked — the skip is the ROW, not the registry alone', () => {
-    const home = healthyCodexBox('ccrc-doctor-models-codexkind-');
-    writeModelRegistry(home, 'codex-a', 'codex');
-    writeModelCatalogue(home, 'codex-a', { stale: false, fetchedAt: nowS() - 4 * 3600 });
-    const line = lineFor(runDoctor(home).stdout, 'models');
-    expect(line).toMatch(/^WARN models: codex-a's catalogue is \d+ min old and not marked stale/);
-    expect(line).not.toContain('not refreshed by design');
-  });
-
-  it('a lane the refresh reaches still PASSes, and the verdict names the lane it skips by design', () => {
-    const home = healthy('ccrc-doctor-models-extcodex-mixed-');
-    writeRoster(home, [{ id: 'router', exec: { kind: 'external' } },
-      { id: 'ext-a', exec: { kind: 'external', provider: 'openai' }, telemetry: 'codex' }]);
-    writeModelRegistry(home, 'router');
-    writeModelCatalogue(home, 'router', { fetchedAt: nowS() - 7 * 60 });
-    writeModelRegistry(home, 'ext-a', 'codex');
-    writeModelCatalogue(home, 'ext-a', { stale: false, fetchedAt: nowS() - 5 * 3600 });
-    expect(lineFor(runDoctor(home).stdout, 'models'))
-      .toMatch(/^PASS models: 1 lane, router catalogue 7 min old; not refreshed by design: ext-a \(/);
-  });
-
-  it.skipIf(process.getuid?.() === 0)(
-    'a registry this check cannot READ is never taken for a skipped lane — its freshness is still checked', () => {
-      const home = healthy('ccrc-doctor-models-extcodex-unreadable-');
-      writeRoster(home, [{ id: 'ext-a', exec: { kind: 'external', provider: 'openai' }, telemetry: 'codex' }]);
-      writeModelRegistry(home, 'ext-a', 'codex');
-      writeModelCatalogue(home, 'ext-a', { stale: false, fetchedAt: nowS() - 4 * 3600 });
-      const reg = join(home, '.ccrc', 'models', 'ext-a.classes.json');
-      chmodSync(reg, 0o000);
-      try {
-        expect(lineFor(runDoctor(home).stdout, 'models'))
-          .toMatch(/^WARN models: ext-a's catalogue is \d+ min old and not marked stale/);
-      } finally {
-        chmodSync(reg, 0o600);
-      }
-    });
-```
-
-  In `server/test/single-definition.test.ts`, the count's comment and value become:
-
-```ts
-    // RE-MEASURED (Plan 3a Task 1): 3. They are the population test
-    // (`[ -f "$dir/$id.classes.json" ]`), the empty-population SKIP message
-    // that names the path in its own text, and the catalogue reader's
-    // `registryProbe`, which READS a registry's `probe` field to tell a lane
-    // the hourly refresh skips by design (a codex registry on a row that is
-    // not exec.kind "codex") from one whose timer stopped. It is a read,
-    // never a write: `writesRegistryDirectly` above still answers [].
-    expect(code.filter((l) => REGISTRY_FILENAME.test(l)).length).toBe(3);
-```
-
-- [ ] **Step 15: run them red.**
-  - `census s15-doctor ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts -t 'ccrc doctor: models'`.
-    - Expected FAIL: the SKIPPED-by-design case (today it WARNs `not marked stale`, and `never probed` for the home with no catalogue) and the mixed case (no skip note).
-    - Expected GREEN before the implementation: the codex-kind case and the unreadable-registry case. Each binds only through its mutation row (Step 18), so record each as green-before-implementation, not as a red that failed to appear.
-    - Every existing models case is GREEN on the `openrouter` default.
-  - `census s15-single ./node_modules/.bin/vitest run test/single-definition.test.ts`. Expected: FAIL on the count, because the file still reads 2.
-
-- [ ] **Step 16: implement `_check_models`, and re-aim its citations by name.**
+  Each edit below replaces text inside one comment line, so no line of either file moves, and no code line changes.
 
   In `ccd/ccrc-doctor-checks`:
-
-  1. **The header comment.**
-     - `(\`deploy/models-op.mjs:573\`) called directly` becomes `(\`deploy/models-op.mjs\`'s \`lanes\` op) called directly`.
-     - `(\`ccd/ccrc-models-probe:397\`, \`int(time.time())\`)` becomes `(\`ccd/ccrc-models-probe\`'s \`_normalise\`, \`int(time.time())\`)`.
+  1. In `_check_models`' header comment:
+     - `(\`deploy/models-op.mjs:573\`) called directly` becomes `(\`deploy/models-op.mjs\`'s \`lanes\` op) called directly`;
+     - `(\`ccd/ccrc-models-probe:397\`, \`int(time.time())\`)` becomes `(\`ccd/ccrc-models-probe\`'s \`_normalise\`, \`int(time.time())\`)`;
      - `\`_mark_stale\` (\`ccd/ccrc-models-probe:409\`)` becomes `\`_mark_stale\` (\`ccd/ccrc-models-probe\`)`.
-     - Add this paragraph directly above `# STRUCTURAL TEMPLATE:`:
+  2. In the population loop's comment, `This bare \`[ -f ]\` is NOT \`hasRegistry\` (\`deploy/models-op.mjs:573\`)` becomes `This bare \`[ -f ]\` is NOT \`hasRegistry\` (\`deploy/models-op.mjs\`'s \`lanes\` op)`, and `the shipped predicate, \`deploy/models-op.mjs:185\`)` becomes `the shipped predicate, \`deploy/models-op.mjs\`'s \`canCarryRegistry\`)`.
 
-```bash
-# THE LANES THE HOURLY REFRESH SKIPS BY DESIGN (Plan 3a Task 1). A registry
-# that names the codex probe on a roster row that is NOT exec.kind "codex" is
-# never probed:
-#   - its row declares no exec.authDir, and the probe has no default (spec §9.1);
-#   - `ccrc models refresh <id>` refuses it (`external-lane`);
-#   - `--all` answers it with an ok:true `skipped` row.
-# Its catalogue therefore ages because nobody refreshes it, and the silent-timer
-# arm below would call that "the timer is not reaching this lane", a false
-# cause, about 3 h after every such box updates. So the catalogue reader marks
-# such a lane SKIPPED, BEFORE its catalogue is read (a skipped lane with no
-# catalogue is not "never probed" either), and the verdict names it:
-#   - a SKIP when every registered lane is one;
-#   - otherwise a note on the PASS or WARN line.
-# The reader reads the registry's `probe` field itself, not through
-# `deploy/models-op.mjs`, whose `lanes` op refuses a roster its strict
-# validator rejects. This check measures lanes on any roster its own reader
-# parses; the `wrappers` check owns roster validity.
-# ONE DIVERGENCE, NAMED: an INVALID registry that names codex is skipped here,
-# while `refresh --all` reports it as a failed row, because it checks
-# `registryInvalid` first. A registry or roster the reader cannot read skips
-# NOTHING, so that lane keeps the freshness check it always had.
-```
+  In `server/test/ccrc-doctor.test.ts`, in `writeModelCatalogue`'s docstring, `(\`ccd/ccrc-models-probe:397\`'s \`int(time.time())\`)` becomes `(\`ccd/ccrc-models-probe\`'s \`_normalise\`, \`int(time.time())\`)`.
 
-  2. **The population loop's comment.** `This bare \`[ -f ]\` is NOT \`hasRegistry\` (\`deploy/models-op.mjs:573\`)` becomes `This bare \`[ -f ]\` is NOT \`hasRegistry\` (\`deploy/models-op.mjs\`'s \`lanes\` op)`, and `the shipped predicate, \`deploy/models-op.mjs:185\`)` becomes `the shipped predicate, \`deploy/models-op.mjs\`'s \`canCarryRegistry\`)`.
-  3. **The catalogue reader.** Old:
+  Then `census s14-doctor-models ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts -t 'ccrc doctor: models'`: green, with exactly Step 0's `s0-doctor-models` count (24 at `1f9fa22d`; measured unchanged on a scratch copy). Step 17 proves the doctor-checks edits are comment lines only.
 
-```bash
-  out="$(CCRC_DOCTOR_MODELS_DIR="$dir" node -e '
-    const fs = require("fs");
-    const path = require("path");
-    const dir = process.env.CCRC_DOCTOR_MODELS_DIR;
-    const US = "\x1f";
-    const ids = fs.readFileSync(0, "utf8").split("\n").filter(Boolean);
-    for (const id of ids) {
-      const p = path.join(dir, id + ".json");
-```
-
-  new. The JS inside is a single-quoted bash string, so it carries NO apostrophe, and none of its comments names the registry file's suffix (the count pin reads comment lines here):
-
-```bash
-  out="$(CCRC_DOCTOR_MODELS_DIR="$dir" CCRC_DOCTOR_MODELS_KINDS="$roster" node -e '
-    const fs = require("fs");
-    const path = require("path");
-    const dir = process.env.CCRC_DOCTOR_MODELS_DIR;
-    const US = "\x1f";
-    const ids = fs.readFileSync(0, "utf8").split("\n").filter(Boolean);
-    // Plan 3a Task 1 -- THE LANES THE HOURLY REFRESH SKIPS BY DESIGN (the
-    // function header says why). Row kinds come from the roster this check
-    // already parsed once. A roster this read cannot parse, or a registry it
-    // cannot read, skips NOTHING, which is the freshness check the lane had.
-    let kinds = null;
-    try {
-      const r = JSON.parse(fs.readFileSync(process.env.CCRC_DOCTOR_MODELS_KINDS, "utf8"));
-      if (r && typeof r === "object" && Array.isArray(r.accounts)) {
-        kinds = new Map();
-        for (const a of r.accounts) {
-          if (a && typeof a === "object" && typeof a.id === "string") {
-            kinds.set(a.id, a.exec && typeof a.exec === "object" && typeof a.exec.kind === "string" ? a.exec.kind : "");
-          }
-        }
-      }
-    } catch (e) { kinds = null; }
-    const registryProbe = (id) => {
-      const reg = path.join(dir, id + ".classes.json");
-      try {
-        if (!fs.statSync(reg).isFile()) return null;
-        const j = JSON.parse(fs.readFileSync(reg, "utf8"));
-        return j && typeof j === "object" && typeof j.probe === "string" ? j.probe : null;
-      } catch (e) { return null; }
-    };
-    for (const id of ids) {
-      if (kinds !== null && kinds.get(id) !== "codex" && registryProbe(id) === "codex") {
-        process.stdout.write(id + US + "SKIPPED" + US + US + US + "\n");
-        continue;
-      }
-      const p = path.join(dir, id + ".json");
-```
-
-  4. `local -a ok=() warn=()` becomes `local -a ok=() warn=() skipped=()`.
-  5. **The case.** Directly above the `*)` arm, add:
-
-```bash
-      SKIPPED)
-        # Plan 3a Task 1: not a freshness verdict at all (the function header).
-        skipped+=("$lid")
-        ;;
-```
-
-     In the `*)` arm's comment, `the reader only ever emits NOCATALOGUE/UNREADABLE/INVALID/OK` becomes `the reader only ever emits NOCATALOGUE/UNREADABLE/INVALID/OK/SKIPPED`.
-  6. **The verdict composition.** Old:
-
-```bash
-  if [ "${#warn[@]}" -gt 0 ]; then
-    _dr_warn models "$(_dr_join "${warn[@]}")" \
-      "systemctl --user status ccrc-models.timer ; ccrc models refresh <id> for one named lane"
-    return 2
-  fi
-```
-
-  new:
-
-```bash
-  local skip_note=""
-  [ "${#skipped[@]}" -eq 0 ] \
-    || skip_note="; not refreshed by design: ${skipped[*]} (a codex class registry on a roster row that is not exec.kind \"codex\" names no exec.authDir, so the probe cannot read the lane's OAuth; its catalogue stays as last fetched until the row is flipped, spec §15.3)"
-  if [ "${#warn[@]}" -gt 0 ]; then
-    _dr_warn models "$(_dr_join "${warn[@]}")$skip_note" \
-      "systemctl --user status ccrc-models.timer ; ccrc models refresh <id> for one named lane"
-    return 2
-  fi
-  if [ "${#ok[@]}" -eq 0 ]; then
-    # Plan 3a Task 1: every registered lane is one the refresh skips by
-    # design. A SKIP, never "PASS models: 0 lanes," (C5).
-    _dr_skip models "every lane with a model registry here is one the hourly refresh skips by design, so there is no catalogue freshness to measure$skip_note"
-    return 3
-  fi
-```
-
-     The closing `_dr_pass` becomes `_dr_pass models "$n $plural, $(_dr_join "${ok[@]}")$skip_note"`.
-
-- [ ] **Step 17: run it green, plus every suite that pins the same files.** Each runs in the foreground, one at a time:
-  - `census s17-doctor-<k> ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts -t <P>`, three calls, the Global Constraints' three parts of the whole file: all green. That includes `HEALTHY_SKIPS` unchanged, because `healthy()` plants no registry, and the table census.
-  - `census s17-single ./node_modules/.bin/vitest run test/single-definition.test.ts`: green. The count reads 3, `writesRegistryDirectly` answers `[]`, and `holdersOf('.ccrc/models')` is unchanged.
-  - `census s17-models ./node_modules/.bin/vitest run test/ccrc-models.test.ts` and `census s17-probe ./node_modules/.bin/vitest run test/models-probe.test.ts`: green.
-  - `census s17-usage ./node_modules/.bin/vitest run test/ccgpt-usage.test.ts` and `census s17-harness ./node_modules/.bin/vitest run test/ccgpt-harness.test.ts`: green.
-  - `census s17-install ./node_modules/.bin/vitest run test/ccrc-install.test.ts -t "runs the isolated runtime"`: green.
-  - `census s17-codex ./node_modules/.bin/vitest run test/ccrc-codex.test.ts`: green. It is `codexLaneFixture.ts`' main consumer, whose block this task only appended to.
-  - `census s17-macos ./node_modules/.bin/vitest run test/macos-platform.test.ts`: green. It covers the GNU-spelling corpus over `ccd/ccrc` and the probe. `readlink -f` LEFT the probe, and nothing added is GNU-only (`${!prefix@}` is bash 3.2).
-  - `census s17-topology ./node_modules/.bin/vitest run test/topology-clean.test.ts`: green.
-  - `census s17-census ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'every line citation is anchored'`: expected green, but measured, not assumed.
-    - The corpus cites three `ccd/ccrc` lines BELOW this task's inserts: `:9663`, `:10990` and `:11635`, all in the graphify spec.
+- [ ] **Step 15: run it green, plus every suite that pins the same files.** Each runs in the foreground, one at a time. The counts are examples, measured on a scratch copy of `4ec8926a` with this task applied:
+  - `census s15-probe ./node_modules/.bin/vitest run test/models-probe.test.ts` (59) and `census s15-models ./node_modules/.bin/vitest run test/ccrc-models.test.ts` (152): green.
+  - `census s15-usage ./node_modules/.bin/vitest run test/ccgpt-usage.test.ts` (36) and `census s15-harness ./node_modules/.bin/vitest run test/ccgpt-harness.test.ts` (24, unchanged): green.
+  - `census s15-install ./node_modules/.bin/vitest run test/ccrc-install.test.ts -t "runs the isolated runtime"`: green.
+  - `census s15-codex ./node_modules/.bin/vitest run test/ccrc-codex.test.ts` (201, unchanged): green. It is `codexLaneFixture.ts`' main consumer, whose block this task only appended to.
+  - `census s15-single ./node_modules/.bin/vitest run test/single-definition.test.ts`: green and unchanged (249). This task edits no line it counts: the `.classes.json` count in `ccd/ccrc-doctor-checks` stays 2, and the litellm-version-spec scan finds nothing new in the guard's prose.
+  - `census s15-macos ./node_modules/.bin/vitest run test/macos-platform.test.ts` (94 passed, 11 skipped): green. It covers the GNU-spelling corpus over `ccd/ccrc` and the probe. `_fetch_codex`'s `readlink -f` is unchanged and already excused, and nothing added is GNU-only (`${!prefix@}` is bash 3.2).
+  - `census s15-topology ./node_modules/.bin/vitest run test/topology-clean.test.ts`: green.
+  - `census s15-census ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'every line citation is anchored'`: expected green, but measured, not assumed (13 passed on the scratch copy).
+    - The corpus cites three `ccd/ccrc` lines BELOW this task's insert: `:9663`, `:10990` and `:11635`, all in the graphify spec. The insert moves them by 36 lines on the scratch copy.
     - The census's `'ccd/ccrc'` key has moved on pure shifts before.
-    - If it reds, repair it per S6-R11 IN THIS TASK'S OWN COMMIT, after the last `ccd/ccrc` edit: README by content first, every other pin re-measured from a dump, no rule widened, and a gate that stops is reported. README.md and `session-hook.test.ts` then join Step 20's file list.
-  - `census s17-types ./node_modules/.bin/vitest run test/typecheck-tests.test.ts`: the only instrument over `server/test/` (D-3163).
+    - If it reds, repair it per S6-R11 IN THIS TASK'S OWN COMMIT, after the last `ccd/ccrc` edit: README by content first, every other pin re-measured from a dump, no rule widened, and a gate that stops is reported. README.md and `session-hook.test.ts` then join Step 18's file list.
+  - `census s15-types ./node_modules/.bin/vitest run test/typecheck-tests.test.ts`: the only instrument over `server/test/` (D-3163).
 
-- [ ] **Step 18: the mutation table. MEASURE every row both ways, and record the red count and the green count.**
+- [ ] **Step 16: the mutation table. MEASURE every row both ways, and record the red count and the green count.**
 
   How each row is run. Every file a row edits gets its own backup, and every restore is proved by git:
-  - **Once, before row 1,** stage the task's work, so the index holds the implemented state that each restore is measured against. Nothing is committed until Step 20.
+  - **Once, before row 1,** stage the task's work, so the index holds the implemented state that each restore is measured against. Nothing is committed until Step 18.
 
 ```bash
 . "<abs scratch>/plan3a-env.sh" && cd "$(git rev-parse --show-toplevel)"
 git add -- ccd/ccrc-models-probe ccd/ccgpt-usage.py ccd/ccrc ccd/ccrc-doctor-checks \
   deploy/systemd/ccgpt-usage@.service \
   server/test/codexLaneFixture.ts server/test/models-probe.test.ts server/test/ccgpt-usage.test.ts \
-  server/test/ccrc-install.test.ts server/test/ccrc-models.test.ts server/test/ccrc-doctor.test.ts \
-  server/test/single-definition.test.ts
-# plus: git add -- README.md server/test/session-hook.test.ts, only if Step 17's repair ran
+  server/test/ccrc-install.test.ts server/test/ccrc-models.test.ts server/test/ccrc-doctor.test.ts
+# plus: git add -- README.md server/test/session-hook.test.ts, only if Step 15's repair ran
 git diff --quiet && echo staged-t1
 ```
 
-  - **Per row:** back up every file it edits, apply the edit, run each named suite as its own `census m<row>-<suite> …` call (Step 0's spelling), restore, then re-run green. Row 10, which edits two files, as the example:
+  - **Per row:** back up every file it edits, apply the edit, run each named suite as its own `census m<row>-<suite> …` call (Step 0's spelling), restore, then re-run green. A row's suite may run with its describe's `-t` filter: `'the Codex arm: a codex lane gets'` (probe), `"each codex lane's probe reads its OWN authDir"` (caller), `'Plan 3a Task 1'` (publisher), `"runs the isolated runtime"` (install), `'CHATGPT_TOKEN_DIR'` (row 24). Row 10, which edits two files, as the example:
 
 ```bash
 . "<abs scratch>/plan3a-env.sh" && cd "$(git rev-parse --show-toplevel)"
@@ -2077,78 +1724,99 @@ for f in "${FILES[@]}"; do cp -p -- "$SCRATCH/t1/mut/$ROW/$f" "$f"; done
 git diff --quiet -- "${FILES[@]}" && echo restored-t1
 ```
 
-  - `restored-t1` is the only proof of a restore. Its absence stops the table: `git diff -- "${FILES[@]}"` shows what is left, and the staged copy is the way back (`git checkout -- <file>`).
+  - `restored-t1` is the only proof of a restore. Its absence stops the table: `git diff --stat -- "${FILES[@]}"` names what is left, and the staged copy is the way back (`git checkout -- <file>`). Never print that diff's lines for rows 15-17: `_fetch_codex` spells a real lane's directory.
+  - **Row 16 never spells that directory.** Its edit is a pattern, applied and checked like this, and its backup and restore are the per-row blocks above with `ROW=16; FILES=(ccd/ccrc-models-probe)`:
+
+```bash
+. "<abs scratch>/plan3a-env.sh" && cd "$(git rev-parse --show-toplevel)"
+python3 - ccd/ccrc-models-probe <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s, n = re.subn(r'token_dir="\$\{CHATGPT_TOKEN_DIR:-\$HOME/[^}]+\}"', 'token_dir="${CHATGPT_TOKEN_DIR:-}"', s)
+open(p, "w").write(s)
+print("row 16 substitutions:", n)   # → 1, inside _fetch_codex; the lane arm's own default-less line does not match
+PY
+```
+
   - The files each row edits:
-    - rows 1-9 and 12: `ccd/ccrc-models-probe`;
+    - rows 1-9, 12 and 15-17: `ccd/ccrc-models-probe`;
     - rows 10 and 11: BOTH `ccd/ccrc-models-probe` and `ccd/ccgpt-usage.py`;
     - row 13: `ccd/ccgpt-usage.py`;
     - row 14: `deploy/systemd/ccgpt-usage@.service`;
-    - rows 15-22, and the equivalent mutant below: `ccd/ccrc`;
-    - rows 23-27: `ccd/ccrc-doctor-checks`;
-    - the migration control below: `server/test/ccrc-models.test.ts`.
+    - rows 18-24: `ccd/ccrc`.
   - After the last row, `git diff --quiet && echo table-restored-t1`: the worktree is the staged state again.
 
-  | # | Guard | Mutation | Goes red |
-  |---|---|---|---|
-  | 1 | no default token directory | set `token_dir` to a SYNTHETIC default, `"${CHATGPT_TOKEN_DIR:-$HOME/.local/share/ccrc/codex/default-lane}"`. Never copy or print the base's own default: it is a real lane's directory | probe: `handed no CHATGPT_TOKEN_DIR…` (the refusal word is `not-logged-in`); `the codex arm spells no default…` |
-  | 2 | no PATH-derived interpreter | insert `[ -n "$py" ] \|\| py="$(dirname "$(readlink -f "$(command -v litellm)" 2>/dev/null)")/python"` above the `runtime-absent` test | probe: `handed no interpreter…` (`python-poison` exists: the containment poison, never a real LiteLLM); `the codex arm spells no default…` |
-  | 3 | runtime-absent before any import | delete the `runtime-absent` block | probe: `handed no interpreter…` (no `runtime-absent:` in stderr) |
-  | 4 | existence only, before the interpreter | delete the `not-logged-in` block | probe: `with no auth.json…` (the stand-in answers: exit 0); caller: `…authDir holds no auth.json…` |
-  | 5 | `-I` | `exec "$py" -` | probe: `runs the handed interpreter as -I -…` (the fixture exits 90), and every case that expects exit 0 |
-  | 6 | the scrub | delete the `for v in ${!CHATGPT_@} …` line | probe: `runs the handed interpreter as -I -…` (env carries `CHATGPT_AUTH_FILE`, `OPENAI_API_KEY`, `LITELLM_LOG`) |
-  | 7 | the cost map | drop `LITELLM_LOCAL_MODEL_COST_MAP=True` from the export | probe: `runs the handed interpreter as -I -…` |
-  | 8 | D-3161 closed | replace `account_id = auth.get_account_id()` with `account_id = json.load(open(os.path.join(os.environ["CHATGPT_TOKEN_DIR"], "auth.json"))).get("account_id", "")` (and `import json`) | probe: `sends ChatGPT-Account-Id from Authenticator().get_account_id()…` (`authOpens` is non-empty and the header is absent) |
-  | 9 | the device flow refused | in the probe, `auth = Authenticator()` for the `_unattended(…)()` line | probe: `…login-required AT ONCE…` (marks `['device-code']`, auth.json rewritten), the cooldown and renamed cases |
-  | 10 | the cooldown refused | delete the `_wait_for_access_token` override from BOTH copies (so the twin stays green) | probe: `another sign-in's cooldown…` (marks `['cooldown-wait']`) |
-  | 11 | fail closed on a moved name | `if missing:` becomes `if False:` in BOTH copies | probe: `…lacks a name the guard overrides…` (marks `['device-code']`); publisher: `…refused runtime-api-moved…` |
-  | 12 | the guard is one text | change `"device-code"` to `"device"` in the probe's copy only | probe: `the unattended guard is ONE text…` |
-  | 13 | the publisher's device flow refused | `token = Authenticator().get_access_token()` | publisher: `…login-required at once…` (marks `['device-code']`; the endpoint sees one request) |
-  | 14 | the poll is bounded | delete the unit's `TimeoutStartSec=300` | install: `…runs the isolated runtime…` |
-  | 15 | each lane its own authDir | in `_models_probe_codex_env`, `_codex_row "$1"` becomes `_codex_row "$(_codex_lanes 2>/dev/null \| head -n1)"` | caller: `two codex lanes…` (both calls carry codex-a's directory; codex-b's header is `acct-codex-a`) |
-  | 16 | the export | delete `export CHATGPT_TOKEN_DIR="$HOME/$CX_AUTH"` | caller: `two codex lanes…` (rows fail `no-token-dir`); `_models_run_probe hands a codex row…` |
-  | 17 | codex inputs after the secrets file | in the secrets branch, move `_models_probe_codex_env "$id" \|\| exit $?` above the source line | caller: `two codex lanes…` (codex-b's probe gets the secrets file's directory and runs its poisoned interpreter) |
-  | 18 | never an inherited interpreter | drop `CCRC_CODEX_PYTHON` from both branches' `unset`, and replace the two `CCRC_CODEX_PYTHON=…`/`export` lines with `py="$("$(_codex_runtime_cli)" python 2>/dev/null)" && export CCRC_CODEX_PYTHON="$py"` | caller: `a codex lane with no runtime…` (`python-poison`: the ambient interpreter ran) |
-  | 19 | neither for any other row | delete the non-codex arm's `unset CHATGPT_TOKEN_DIR CCRC_CODEX_PYTHON` | caller: `_models_run_probe hands a codex row…` (`router` shows the secrets file's two values) |
-  | 20 | the targeted refusal | delete the targeted `external-lane` block | rewritten describe: `an explicit refresh of it is REFUSED…` (exit 0, a skipped row, no `error`) |
-  | 21 | the `--all` skip | delete the loop's skip `elif` | rewritten describe: `--all skips it…twice over` (the catalogue is written, the box-global file is rewritten through the external arm, and the row changes); `a ccgpt that would refuse…` |
-  | 22 | the skip is the ROW's kind | drop `&& ! _models_litellm_codex "$id"` from the loop's skip test | caller: `two codex lanes…` (no probe calls: both rows skipped); the re-aimed `refreshes one lane…` |
-  | 23 | SKIPPED emitted | delete the reader's `SKIPPED` `if` | doctor: `…SKIPPED by design…` (WARN `not marked stale`, and `never probed`) |
-  | 24 | the row's kind, in doctor | drop `kinds.get(id) !== "codex" &&` | doctor: `a codex-KIND lane…` (SKIP, not WARN) |
-  | 25 | SKIP, never "PASS 0 lanes" | delete the ok-empty SKIP block | doctor: `…SKIPPED by design…` (`PASS models: 0 lanes,`) |
-  | 26 | the skip note | drop `$skip_note` from the `_dr_pass` line | doctor: `a lane the refresh reaches still PASSes…` |
-  | 27 | an unreadable registry is not skipped | `registryProbe`'s `catch (e) { return null; }` becomes `catch (e) { return "codex"; }` | doctor: `a registry this check cannot READ…` |
+  "Measured" is the red count on a scratch copy of `4ec8926a` with this task applied, each row run once and restored; every row was green again after its restore. Re-measure each at execution.
+
+  | # | Guard | Mutation | Goes red | Measured |
+  |---|---|---|---|---|
+  | 1 | no default token directory on the codex lane's arm | in `_fetch_codex_lane`, set `token_dir` to a SYNTHETIC default, `"${CHATGPT_TOKEN_DIR:-$HOME/.local/share/ccrc/codex/default-lane}"`. Never copy or print `_fetch_codex`'s own default: it is a real lane's directory | probe: `handed no CHATGPT_TOKEN_DIR…` (the refusal word is `not-logged-in`); `the codex-lane arm spells no default…` | 2 |
+  | 2 | no PATH-derived interpreter | insert `[ -n "$py" ] \|\| py="$(dirname "$(readlink -f "$(command -v litellm)" 2>/dev/null)")/python"` above the `runtime-absent` test | probe: `handed no interpreter…` (`python-poison` exists: the containment poison, never a real LiteLLM); `the codex-lane arm spells no default…` | 2 |
+  | 3 | runtime-absent before any import | the `runtime-absent` block's test → `false` (as if deleted) | probe: `handed no interpreter…` (no `runtime-absent:` in stderr) | 1 |
+  | 4 | existence only, before the interpreter | the `not-logged-in` block's test → `false` | probe: `with no auth.json…` (the stand-in answers: exit 0); caller: `…authDir holds no auth.json…` | 1 + 1 |
+  | 5 | `-I` | `exec "$py" -` | probe: `runs the handed interpreter as -I -…` (the fixture exits 90), and every case that expects exit 0 or reaches the program | 6 |
+  | 6 | the scrub | delete the `for v in ${!CHATGPT_@} …` line | probe: `runs the handed interpreter as -I -…` (env carries `CHATGPT_AUTH_FILE`, `OPENAI_API_KEY`, `LITELLM_LOG`) | 1 |
+  | 7 | the cost map | drop `LITELLM_LOCAL_MODEL_COST_MAP=True` from the export | probe: `runs the handed interpreter as -I -…` | 1 |
+  | 8 | D-3161 closed on the codex path | replace `account_id = auth.get_account_id()` with `import json; account_id = json.load(open(os.path.join(os.environ["CHATGPT_TOKEN_DIR"], "auth.json"))).get("account_id", "")` | probe: `sends ChatGPT-Account-Id from Authenticator().get_account_id()…` (`authOpens` is non-empty) | 1 |
+  | 9 | the device flow refused | in the probe, `auth = Authenticator()` for the `_unattended(…)()` line | probe: `…login-required AT ONCE…` (marks `['device-code']`, auth.json rewritten), the cooldown and renamed cases | 3 |
+  | 10 | the cooldown refused | delete the `_wait_for_access_token` override from BOTH copies (so the twin stays green) | probe: `another sign-in's cooldown…` (marks `['cooldown-wait']`) | 1 |
+  | 11 | fail closed on a moved name | `if missing:` becomes `if False:` in BOTH copies | probe: `…lacks a name the guard overrides…` (marks `['device-code']`); publisher: `…refused runtime-api-moved…` | 1 + 1 |
+  | 12 | the guard is one text | change `"device-code"` to `"device"` in the probe's copy only | probe: `the unattended guard is ONE text…` | 1 |
+  | 13 | the publisher's device flow refused | `token = Authenticator().get_access_token()` | publisher: `…login-required at once…` (marks `['device-code']`; the endpoint sees one request) and `…refused runtime-api-moved…` | 2 |
+  | 14 | the poll is bounded | delete the unit's `TimeoutStartSec=300` | install: `…runs the isolated runtime…` | 1 |
+  | 15 | only the marker picks the codex lane's arm | `_fetch`'s dispatch → `codex) _fetch_codex_lane ;;` | probe: both Z1 cases (`without the codex-lane marker…`: the handed runtime runs; `…falls back to its own default…`: `no-token-dir`) | 2 |
+  | 16 | the external arm keeps its default (Z1) | the row 16 block above: `_fetch_codex`'s default stripped by pattern, never spelled | probe: `…falls back to its own default…` (no default to read off the arm) | 1 |
+  | 17 | only the value `codex` picks it | `[ "${CCRC_PROBE_LANE_KIND:-}" = codex ]` → `[ -n "${CCRC_PROBE_LANE_KIND:-}" ]` | probe: `without the codex-lane marker…` (its `external` pass runs the handed runtime) | 1 |
+  | 18 | each lane its own authDir | in `_models_probe_codex_env`, `_codex_row "$1"` becomes `_codex_row "$(_codex_lanes 2>/dev/null \| head -n1)"` | caller: `two codex lanes…` (both calls carry codex-a's directory; codex-b's header is `acct-codex-a`) | 1 |
+  | 19 | the directory export | delete `export CHATGPT_TOKEN_DIR="$HOME/$CX_AUTH"` | caller: all four (`no-token-dir` where a row or a refusal was expected; `_models_run_probe hands…` lacks the directory) | 4 |
+  | 20 | codex inputs after the secrets file | in the secrets branch, move `_models_probe_codex_env "$id" \|\| exit $?` above the source line | caller: `two codex lanes…` (codex-b's probe gets the secrets file's directory and runs its poisoned interpreter); `_models_run_probe hands…` (`router` shows the secrets file's interpreter and marker) | 2 |
+  | 21 | never an inherited interpreter | replace the `CCRC_CODEX_PYTHON=…`/`export CCRC_CODEX_PYTHON` pair with `py="$("$(_codex_runtime_cli)" python 2>/dev/null)" && export CCRC_CODEX_PYTHON="$py"` | caller: `a codex lane with no runtime…` (`python-poison`: the ambient interpreter ran) | 1 |
+  | 22 | the marker export | delete `export CCRC_PROBE_LANE_KIND=codex` | caller: all four (with no marker, a codex lane takes `_fetch_codex`) | 4 |
+  | 23 | neither marker nor interpreter for any other row | delete the non-codex arm's `unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND` | caller: `_models_run_probe hands…` (`router` shows the secrets file's interpreter and marker; `router2` the ambient ones) | 1 |
+  | 24 | an external row's scrub is today's (Z1) | drop `CHATGPT_TOKEN_DIR` from BOTH `_models_run_probe` `unset` lines | caller: the two pre-existing scrub cases (`an ambient CHATGPT_TOKEN_DIR pointing at a poisoned auth.json…`, `a codex lane with a secrets file that sets only ANTHROPIC_AUTH_TOKEN…`) and `_models_run_probe hands…` | 3 |
 
   Record these explicitly:
-  - **Equivalent mutant, not pinned:** the `unset CHATGPT_TOKEN_DIR` that both `_models_run_probe` branches still carry.
-    - `_models_probe_codex_env` re-exports it for a codex row and re-unsets it for every other row after any secrets file, so deleting it from both stays green by construction. It stays as defence in depth.
-    - The old secrets-branch case that measured it red (Plan 2b-2's round-3 M1) is gone, and its successor is `two codex lanes…`.
-  - **The migration control:** apply Step 12 with Step 10's re-aims reverted. Measure and record how many re-aimed cases red (every one listed in the table should), then restore.
+  - **Equivalent mutant, not pinned:** `_fetch_codex_lane`'s `unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND` inside its subshell. Deleting it stays green (measured: 13 of 13 in the probe describe), because the program reads neither name and the fixture records only `CHATGPT_*`, `LITELLM_*`, `OPENAI_*` and `CODEX_CLIENT_VERSION`. It stays as hygiene: the interpreter gets nothing it was not meant to.
+  - **Row 24 is no longer an equivalent mutant.** The external rows' `CHATGPT_TOKEN_DIR` is still today's, so the scrub still decides it, and the two pre-existing cases still red.
   - **If a demanded mutation stays green, report it.** Never add code to force a red (D-3152).
 
-- [ ] **Step 19: the cut, and the residue check.**
+- [ ] **Step 17: the cut, the external arm's bytes, and the residue check.**
 
 ```bash
 . "<abs scratch>/plan3a-env.sh" && cd "$(git rev-parse --show-toplevel)"
 BASE="$(cat "$SCRATCH/t1/base")"
-# Before the commit, so both checks read the WORKTREE against the base. Step 18
-# staged it and restored it to that state.
-git diff --quiet "$BASE" -- ccd/ccgpt-runtime ccd/ccd ccd/ccgpt-proxy.py deploy/deploy.sh deploy/models-op.mjs server/test/fixtures/pystub \
-  && echo "cut held: no runtime rebuild, no ccd re-stamp, no fallback-deploy edit"
+# Before the commit, so every check reads the WORKTREE against the base. Step 16
+# staged it and restored it to that state. Nothing below prints a diff line:
+# `_fetch_codex` spells a real lane's directory, so it is compared, never shown.
+git diff --quiet "$BASE" -- ccd/ccgpt-runtime ccd/ccd ccd/ccgpt-proxy.py deploy/deploy.sh deploy/models-op.mjs \
+  server/test/single-definition.test.ts server/test/fixtures/pystub \
+  && echo "cut held: no runtime rebuild, no ccd re-stamp, no fallback-deploy or registry-writer edit"
+fx() { sed -n '/^_fetch_codex() {$/,/^PY$/p'; }
+cmp -s <(git show "$BASE:ccd/ccrc-models-probe" | fx) <(fx < ccd/ccrc-models-probe) \
+  && echo "external probe arm byte-identical"
+echo "probe lines removed or changed: $(git diff -U0 "$BASE" -- ccd/ccrc-models-probe | grep -c '^-[^-]')"
+seam() { sed '/^# THE PROBE IS A BOX-LEVEL EXECUTABLE WITH NO LANE CONTEXT: it reads$/,/^MODELS_ENDPOINTS_TMP=""$/d'; }
+cmp -s <(git show "$BASE:ccd/ccrc" | seam) <(seam < ccd/ccrc) \
+  && echo "ccd/ccrc identical outside the probe seam"
+echo "doctor-checks code lines changed: $(git diff -U0 "$BASE" -- ccd/ccrc-doctor-checks | grep '^[-+][^-+]' | grep -vc '^[-+][[:space:]]*#')"
 for v in $(jq -r '.accounts[] | select(.telemetry == "codex") | .id, .label' "$HOME/.ccrc/accounts.json" | sort -u); do
   git diff "$BASE" -U0 | grep '^+' | grep -qF -e "'$v'" -e "\"$v\"" && echo "RESIDUE: an added line names a live lane id or label"
 done
 echo residue-check-done
 ```
 
-  - Expected: `cut held…`, then `residue-check-done` with no `RESIDUE:` line.
-  - The second loop reads the live values off the box's roster at execution time and prints none of them (R10, R13).
+  - Expected, in order: `cut held…`, `external probe arm byte-identical`, `probe lines removed or changed: 1` (the old `codex)` line), `ccd/ccrc identical outside the probe seam`, `doctor-checks code lines changed: 0`, then `residue-check-done` with no `RESIDUE:` line. The four tree checks gave those answers on the scratch copy, compared against the base tree.
+  - `ccd/ccrc identical outside the probe seam` is Z1's proof for the caller side: the region it removes runs from `_models_run_probe`'s header comment to `MODELS_ENDPOINTS_TMP=""`, so the `refresh` arm, `_models_refresh_one`, `_models_lane_sub` and every `_models_litellm*` function are byte-identical.
+  - Any other answer stops the task.
+  - The residue loop reads the live values off the box's roster at execution time and prints none of them (R10, R13).
 
-- [ ] **Step 20: commit.**
+- [ ] **Step 18: commit.**
   - Post-condition, against the recorded base (`$SCRATCH/t1/base`) and never `origin/main`. Before the commit it is the worktree's `git diff --name-only "$BASE"`, and after it `git diff --name-only "$BASE" HEAD`. Each names exactly:
     - `ccd/ccrc-models-probe`, `ccd/ccgpt-usage.py`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`;
     - `deploy/systemd/ccgpt-usage@.service`;
-    - `server/test/codexLaneFixture.ts`, `server/test/models-probe.test.ts`, `server/test/ccgpt-usage.test.ts`, `server/test/ccrc-install.test.ts`, `server/test/ccrc-models.test.ts`, `server/test/ccrc-doctor.test.ts` and `server/test/single-definition.test.ts`;
-    - plus README.md and `server/test/session-hook.test.ts` only when Step 17's repair ran.
+    - `server/test/codexLaneFixture.ts`, `server/test/models-probe.test.ts`, `server/test/ccgpt-usage.test.ts`, `server/test/ccrc-install.test.ts`, `server/test/ccrc-models.test.ts` and `server/test/ccrc-doctor.test.ts`;
+    - plus README.md and `server/test/session-hook.test.ts` only when Step 15's repair ran.
     - Any other name stops the task.
   - `git add` exactly those files, and commit. The author and committer follow the Global Constraints' commit-identity rule.
 
@@ -2159,37 +1827,32 @@ git diff --name-only "$BASE" | sort        # before the commit: the worktree aga
 git add -- ccd/ccrc-models-probe ccd/ccgpt-usage.py ccd/ccrc ccd/ccrc-doctor-checks \
   deploy/systemd/ccgpt-usage@.service \
   server/test/codexLaneFixture.ts server/test/models-probe.test.ts server/test/ccgpt-usage.test.ts \
-  server/test/ccrc-install.test.ts server/test/ccrc-models.test.ts server/test/ccrc-doctor.test.ts \
-  server/test/single-definition.test.ts
-# plus: git add -- README.md server/test/session-hook.test.ts, only if Step 17's repair ran
+  server/test/ccrc-install.test.ts server/test/ccrc-models.test.ts server/test/ccrc-doctor.test.ts
+# plus: git add -- README.md server/test/session-hook.test.ts, only if Step 15's repair ran
 git commit -F - <<'EOF'
-fix(gpt-lane): the model probe reads each lane's own OAuth through its own runtime, and never starts a device sign-in
+fix(gpt-lane): a codex lane's model probe reads its own OAuth through its own runtime; every other lane's probe is unchanged
 
-Plan 3a Task 1 (carry-forward 7, spec §9.1).
+Plan 3a Task 1 (carry-forward 7, spec §9.1, operator ruling Z).
 
-The probe's lane-one default token directory is gone, and so is its PATH-
-derived interpreter. For an exec.kind "codex" row, `_models_run_probe` now
-hands the probe the row's own exec.authDir and the interpreter
-`ccgpt-runtime python` resolves. It does so after the scrub and after any
-secrets file, and for no other row. The probe runs that interpreter under -I,
-scrubbed, with the cost map local. Its refusals are no-token-dir,
-runtime-absent, not-logged-in, runtime-api-moved and login-required, one line
-each, remedy first.
+For an exec.kind "codex" row, `_models_run_probe` now hands the probe the
+row's own exec.authDir, the interpreter `ccgpt-runtime python` resolves and
+the marker CCRC_PROBE_LANE_KIND=codex, after the scrub and after any
+secrets file. The probe's new codex-lane arm has no default for either
+input, runs that interpreter under -I, scrubbed, with the cost map local,
+and refuses no-token-dir, runtime-absent, not-logged-in, runtime-api-moved
+and login-required, one line each, remedy first. Every other row keeps
+`_fetch_codex` byte for byte, its default directory included, until that
+lane's own flip (D-3706).
 
-A codex registry on a row that is not exec.kind "codex" is refused by name
-(external-lane) and skipped by `refresh --all` as an ok:true row, so the
-hourly unit stays green D-3706. The
-doctor's models check marks such a lane SKIPPED instead of calling it a
-stalled timer.
+The codex-lane arm and the usage publisher refuse LiteLLM's device flow
+in-process, before it can write auth.json, and fail closed on a runtime
+whose Authenticator moved the names the guard overrides. The usage unit
+gains TimeoutStartSec=300 (D-3707). On the codex-lane arm,
+ChatGPT-Account-Id comes from Authenticator().get_account_id(), so no ccrc
+code opens a codex lane's auth.json: D-3161 closed there.
 
-The probe and the usage publisher refuse LiteLLM's device flow in-process,
-before it can write auth.json, and fail closed on a runtime whose
-Authenticator moved the names the guard overrides. The usage unit gains
-TimeoutStartSec=300 D-3707.
-ChatGPT-Account-Id now comes from Authenticator().get_account_id(), so no ccrc
-code opens auth.json: D-3161 closed.
-
-ccd/ccgpt-runtime is byte-identical, so no box rebuilds its runtime.
+ccd/ccgpt-runtime is byte-identical, so no box rebuilds its runtime. The
+refresh loop, both LiteLLM arms and doctor's models check are unchanged.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -2200,140 +1863,162 @@ git status --short                          # expected: nothing
 **What Task 1 deliberately does NOT do:**
 - **No edit to `ccd/ccgpt-runtime`** (so no `_rt_probe_source` change and no rebuild anywhere), `ccd/ccd` (no re-stamp) or `ccd/ccgpt-proxy.py`. The runtime's behaviour probe keeps checking `get_access_token` only, and the model probe's `runtime-api-moved` is the gate for the other three names.
 - **No edit to `deploy/deploy.sh`.** Its `:674` placement of `~/.local/bin/ccrc-models-probe` (R-C11, 2b1-21's probe half) is Task 7's, per R5, with `deploy-verify.test.ts`, `usage-sweep-deploy-ship.test.ts` and `install-census.test.ts`' :58 note. ccrc never runs that PATH copy (`$CCRC_HERE`, ccd/ccrc:9487, :9667).
-- **No retirement of `_models_litellm`'s external arm.** `ccrc models litellm <external-id>` still renders and bare-stops when asked explicitly; only the refresh no longer reaches it. That arm, its describe (now seeded by `probeDirect`) and `single-definition`'s one-holder pin are Task 2's.
-- **No `_check_codex`** (Tasks 4-5), no usage-pair placement or rename (Task 6), no change to `deploy/models-op.mjs`, and no edit to `pystub`.
+- **No edit to `_fetch_codex`, the refresh loop, `_models_litellm` or `_check_models`.** An external lane's probe, refresh, re-materialise, LiteLLM render and stop decision are what they were, and so is every doctor row (Z1). The external LiteLLM arm's one new refusal, once a codex row exists, is Task 2's (Z4).
+- **No guard on creating a registry.** Refusing a codex registry on a non-codex row is Task 2's (Z3), at `deploy/models-op.mjs`' `init` op.
+- **No `_check_codex`** (Tasks 4-5), no usage-pair placement or rename (Task 6), and no edit to `pystub`.
 - **No change to `ccrc codex login`,** which IS the device flow, run by a person, or to the publisher's request (still no `ChatGPT-Account-Id`) or its lane.json remedies (Task 8).
 
 **Hazards later tasks must respect:**
 1. **"The probe" names two files.** Only `ccd/ccgpt-runtime`'s `_rt_probe_source` is hashed. Any byte of it, a comment included, rebuilds the runtime on every box with a codex lane at its next auto-update. That is zero boxes until 3b's first flip, and about 650 MB of unattended pip on the live fleet box after it. `ccd/ccrc-models-probe` is hashed by nothing.
-2. **The guard depends on two PRIVATE LiteLLM names.** A litellm inside D-3487's range that renames either makes every probe and every poll refuse `runtime-api-moved`. That is loud and never a hang, but it stales every codex lane's catalogue and usage row at once. Task 4's `_check_codex` is where that surfaces on the box.
-3. **The live LiteLLM TIER is not guarded.** Its own Authenticator, inside the tier process, can still start a device flow on a dead refresh token. That is not ccrc code; carry it to 3b (prove a refresh with the lane's own `ccrc models refresh` before un-parking).
-4. **Every probe refusal is remedy-first,** because `_mark_stale` keeps only 300 characters of the fetch's stderr. A new refusal must keep the order.
+2. **The guard depends on two PRIVATE LiteLLM names.** A litellm inside D-3487's range that renames either makes every codex lane's probe and every poll refuse `runtime-api-moved`. That is loud and never a hang, but it stales every codex lane's catalogue and usage row at once. Task 4's `_check_codex` is where that surfaces on the box.
+3. **Neither the external arm nor the live LiteLLM TIER is guarded.** Until a lane's flip, its hourly refresh runs `_fetch_codex`, whose `get_access_token()` can still start a device flow on a dead refresh token, exactly as it can today (Z1). The tier's own Authenticator can too, and that is not ccrc code. Both leave the external lane at its flip. Carry to 3b: prove a refresh with the lane's own `ccrc models refresh` before un-parking.
+4. **Every codex-lane probe refusal is remedy-first,** because `_mark_stale` keeps only 300 characters of the fetch's stderr. A new refusal must keep the order.
 5. **`_codex_row`'s refusal reaches `ccrc models`' `reason` with its own `ccrc codex:` prefix.** That is deliberate: it is the one sentence for a codex row that does not validate.
-6. **single-definition's `.classes.json` count in `ccd/ccrc-doctor-checks` is 3.** A task that reads a registry from doctor again re-measures it. Reading registry facts through models-op, Task 4's route, adds nothing to it.
-7. **The live external lane's catalogue freezes at the merge.** 3b's flip refreshes it. On today's live shape the `models` row reads SKIP, and Task 10 pins every check's class.
-8. **`writeModelRegistry` now defaults to `openrouter`.** A doctor case that needs a codex registry passes `'codex'`.
-9. **The census compares unit NAMES, not states,** so a live foreign oneshot firing mid-run is not a leak. Its process census counts this shell's temp root only.
+6. **Two Codex arms until Plan 4.** `CCRC_PROBE_LANE_KIND=codex` is the only thing that picks the codex lane's arm, and `_models_probe_codex_env` its only writer. A caller that runs the probe for a codex lane without going through `_models_run_probe` gets `_fetch_codex`, default directory and all. Plan 4's ccrc half deletes `_fetch_codex`, the dispatch line and the two Z1 cases in `models-probe.test.ts` together (Z8).
+7. **A codex registry on a non-codex row is still probed through the default.** That is today's live shape, kept on purpose (Z1). What stops a second such lane from appearing is Task 2's Z3 guard, not anything here.
+8. **The census compares unit NAMES, not states,** so a live foreign oneshot firing mid-run is not a leak. Its process census counts this shell's temp root only.
 
 
-### Task 2: Retire `_models_litellm`'s external arm; an external lane with a codex registry is named and frozen, never rendered or stopped
+### Task 2: The external arm stays byte for byte on today's shape; it never runs the other repository's stop once a codex lane exists; an external lane cannot gain a codex registry
 
-> Resolved by rulings R4 (R-C3) and R3 (R-C2):
-> - The external arm is retired here, in 3a, before any roster row is flipped. It is not retired at cutover.
-> - Task 1 owns the refresh loop's skip of an external lane whose registry names codex, and this task consumes it. This task never touches the loop.
-> - This task's end-to-end case pins the two tasks together. Measured on a scratch copy of `1f9fa22d`: this task landed alone turns `ccrc models refresh --all` into exit 1 on the live shape, which would fail `ccrc-models.service` every hour. So Tasks 1 and 2 ship in one squash, with Task 1 first.
-
-> Resolved by critique #1 and #22:
-> - `refresh --all` over the live shape exits 0, so the oneshot `ccrc-models.service` (whose `ExecStart` is exactly that command) cannot fail. The joint case below pins this.
-> - Merging this task changes what the live fleet box's hourly timer does within minutes, because main auto-releases. The plan's merge authorisation names R-C2 and R-C3 as operator confirmations for that reason.
+> Resolved by operator ruling Z (2026-10-01), which replaces R-C2 and R-C3:
+> - **Z1, Z5.** `_models_litellm`'s external arm keeps its box-global path, its `pgrep` and its bare `ccgpt stop` for an `external` lane until that lane's own flip in Plan 3b. Spec §19.6 stands as written. The retirement this task used to carry is withdrawn, and D-3708 records that decision.
+> - **Z4.** The arm never runs the other repository's stop once any roster row is codex-kind. It refuses through its existing `restart-failed` path, with a sentence naming why, before any write. On today's shape, with no codex row, nothing changes. This is the new departure `D-3753`.
+> - **Z3 lives in this task.** `deploy/models-op.mjs`' `init` arm is the one place a class registry is created, and no other task edits it. So the guard is here: a codex registry is never created on a row that is not codex-kind, and a registry that already exists is untouched. This is D-3706, as ruling Z6 redefines it.
+> - **No dependency on Task 1's code.** Neither guard reads the probe or the refresh loop, and Task 1 changes neither the arm nor the `init` arm. The order 1 → 2 holds only because both tasks edit `server/test/ccrc-models.test.ts`.
 
 **Files:**
-- Modify: `ccd/ccrc`. Every subject is located by name. The lines given were measured at `1f9fa22d` and are examples to re-derive:
-  - `_models_litellm_path` (:9703-9706) and its header comment (:9685-9702) now have one arm, and that arm needs an id. Locate with `grep -n '^_models_litellm_path()' ccd/ccrc`.
-  - `_models_litellm_running` (:9717) and its comment (:9709-9716) are **deleted**. Locate with `grep -n '^_models_litellm_running()' ccd/ccrc`.
-  - `_models_litellm_codex`'s header comment (:9719-9727): one sentence is re-pointed, and the function body is unchanged.
-  - `_models_litellm_lane_held`: two comment lines that compared the codex arm with the external one (:9842-9844 and :9895). No code changes.
-  - The `# STOP-THEN-WRITE (fix round 1, …)` comment (:10001-10013) and `_models_litellm` (:10014-10051) are **replaced**. Locate with `grep -n '^_models_litellm() {' ccd/ccrc`.
-  - `_codex_litellm_ensure`'s header comment: three lines (:10058-10060). Its body is unchanged.
+- Modify `deploy/models-op.mjs`, in the `init` arm (`grep -n "if (opName === 'init') {" deploy/models-op.mjs`; :839 at `4ec8926a`). Add one guard block between the existing-registry branch's closing `}` (:854) and `const seed = JSON.parse(JSON.stringify(SEEDS[a.probe]));` (:855).
+- Modify `ccd/ccrc`:
+  - Add `_models_litellm_stop_blocked`, directly below `_models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }` (`grep -n '^_models_litellm_running()' ccd/ccrc`; :9717).
+  - In `_models_litellm` (`grep -n '^_models_litellm() {' ccd/ccrc`; :10014-10051), change two places: its four-line header comment (:10015-10018), and one guard block as the first statement inside `if _models_litellm_running; then` (:10030).
   - **Not touched:**
-    - the refresh loop's litellm step (:10185-10214) and the `litellm)` sub (:10246-10253);
-    - the usage text (:2046-2050), which is still true of the codex arm;
-    - `_models_litellm_lane` and `_models_litellm_lane_held`'s code.
-- Modify: comments whose destination is the retired path:
-  - `shared/litellm.mjs` (:1-6);
-  - `deploy/litellm-config.template.yaml` (:1-7). This comment is carried verbatim into every rendered config;
-  - `deploy/models-op.mjs` (:801, one line).
-- Modify: `server/test/single-definition.test.ts`. The case `it('the LiteLLM config path is spelled once, in one tool, through one helper')` (:1798-1816) becomes an absence pin.
-- Modify: `server/test/ccrc-models.test.ts`:
-  - `env()` (:160-185) gains two poisons;
-  - the containment-wall describe (:186-195) gains one case;
-  - Task 1's module-level `EXT_A_ROW` is used, and no fixture row is added. Task 1's `LEGACY_EXTERNAL_ID` and `probeDirect` are deleted (Step 1j): their one caller is the `beforeEach` of the describe this task replaces;
-  - the lane-fake header (:233-236) is re-worded;
-  - `describe('ccrc models refresh')` loses its `beforeEach` (:1303-1317) and its poisoned-tools case (:1597-1618);
-  - `describe('ccrc models litellm')` (:1621-1814) and `describe('refresh runs the litellm step for a codex lane (§5)')` (:1816-1868) are replaced whole;
-  - the codex describe's `never takes the EXTERNAL arm` case gets a comment only (:2617-2621).
+    - `_models_litellm_path`, `_models_litellm_running`, and the rest of the external arm;
+    - the codex arm and `_codex_litellm_ensure`;
+    - `_models_lane_sub`'s `init` arm, which already passes the op's refusal through;
+    - the refresh loop and the `litellm)` sub.
+- Modify `server/test/fixtures/modelCases.ts`: add one export, `SEEDED_REGISTRY_BYTES`, directly below `SEEDED`.
+- Modify `server/test/models-op.test.ts`:
+  - its two imports, plus the module helpers `LEGACY_EXTERNAL_ID` and `plantCodex`;
+  - every SETUP `init codex` on a row that is not codex-kind becomes `plantCodex(…)`. At `4ec8926a` that is 26 statements and one `beforeEach` one-liner;
+  - in `describe('init (§10, §13.1)')`, two cases are re-aimed at a codex-kind row, and four are new.
+- Modify `server/test/ccrc-models.test.ts`:
+  - its two imports;
+  - the module helpers `LEGACY_SECRETS_EXTERNAL_ID` and `seedCodex`, plus `EXT_A_ROW` and `LEGACY_EXTERNAL_ID`. Task 1 leaves `codexRow` and `codexBox` at module level and no external fixture row, and Step 1(e) still adds only the names it does not find;
+  - `env()`, two edits for the containment Global Constraint: an inherited `CCGPT_CONFIG` is dropped, and `pgrep` and `ccgpt` get a poison wherever the HOME holds no stand-in of its own;
+  - in `describe('the models harness containment wall')`, one case;
+  - every SETUP `init codex` on a row that is not codex-kind becomes `seedCodex(…)`. At `4ec8926a` that is 22 statements and 3 `expect(…).toBe(0)` lines;
+  - in `describe('ccrc models <id> init')`, one case is re-aimed and two are new;
+  - in `describe('ccrc models litellm')`, one nested describe of six cases.
+- **Not modified:**
+  - `server/test/single-definition.test.ts`. Its one-holder pin of the box-global path stays true, because the arm keeps that path;
+  - `shared/litellm.mjs`, `deploy/litellm-config.template.yaml`, and the op's `litellm` arm.
 
 **Interfaces:**
 - **Consumes:**
-  - Task 1's refresh-loop skip (R3, R-C2). `ccrc models refresh --all` never runs `_models_refresh_one`, the re-materialise or the litellm step for a lane whose registry probe is `codex` and whose roster row is not `exec.kind: "codex"`. That lane's row is never `ok: false`, and the run exits 0 when it is the only lane (critique #1). The named `ccrc models refresh <that id>` refuses by name. This task relies on the behaviour, not on the row's shape.
-  - Plan 2b-2 Task 6, unchanged:
-    - `_models_litellm_codex <id>`: 0 iff the row is codex-kind, read through `_codex_lanes`;
-    - `_models_litellm_lane <id>`: the codex arm, which prints one JSON object;
-    - `_codex_litellm_yaml <id>`;
-    - `_codex_litellm_ensure <id>`.
-  - `deploy/models-op.mjs`' `lanes` op (each row carries `probe`, null without a valid registry) and its `litellm` op without `--commit` (check-only, refuses in its own words). Both are unchanged.
-  - Test helpers in `ccrc-models.test.ts`: `box`, `boxWithStubOp`, `run`, `sourced`, `oneObject`, `poisonLog`, `laneCalls`, `writeCatalogue`, `ROSTER`, `CODEX_RAW`, Task 1's `EXT_A_ROW`, and `MANAGER_STANDIN_MARK` (from `codexLaneFixture.ts`).
-  - `r11 <evidence-label> <command…>`, the Global Constraints' census wrapper (ruling R11). It is defined in `$SCRATCH/plan3a-env.sh`, which every block below that uses it, `$SCRATCH` or `$BASE` sources first (ruling F2).
+  - `_codex_lanes` (`ccd/ccrc:10369`), the lane library's one reader of exec.kind. It answers:
+    - rc 0 with one id per line, or with nothing, which means "none";
+    - rc 1 for a roster it cannot read;
+    - rc 2 when `jq` is missing.
+  - `_models_litellm_running` (:9717) and `_models_refuse` (:2392), unchanged.
+  - In `deploy/models-op.mjs`: `refuse`, `isObj`, the account `findAccount` returned, and the `init` arm's existing-registry branch, all unchanged.
+    - `writeRegistry` has exactly two callers (`grep -n 'writeRegistry(' deploy/models-op.mjs`): this arm's create, and the mutating ops' rewrite of a registry that already exists.
+    - So the create is the one place a registry comes into being.
+  - Test helpers:
+    - in `ccrc-models.test.ts`: `box`, `env`, `run`, `sourced`, `oneObject`, `writeCatalogue`, `registryOf`, `ROSTER` and `CODEX_RAW`, plus `describe('ccrc models litellm')`'s own `pgrep`, `ccgpt`, `calls` and `configPath`;
+    - in `models-op.test.ts`: `seed`, `op`, `rosterPath`, `regPath`, `registryOf`, `settingsOf` and `writeCatalogue`;
+    - `codexAuthDir` (`codexLaneFixture.ts`) and `SEEDED` (`fixtures/modelCases.ts`).
+  - Task 1's module-level `codexRow(id, proxyPort, litellmPort, extraExec?)` in `ccrc-models.test.ts`. Task 1 defines no external fixture row, so Step 1 defines `EXT_A_ROW` and `LEGACY_EXTERNAL_ID`, and adds `codexRow` too only if Task 1 as committed left none.
+  - `env()`'s own `poison` helper and `MANAGER_STANDIN_MARK` (`codexLaneFixture.ts`), unchanged.
+  - `r11 <evidence-label> <command…>`, the census wrapper in `$SCRATCH/plan3a-env.sh`. Every block below that uses it, `$SCRATCH` or `$BASE` sources that file first (ruling F2).
 - **Produces:**
-  - `_models_litellm <id>` prints exactly one JSON object:
-    - for a codex-kind lane, the codex arm's answer, unchanged;
-    - otherwise, a refusal. The refusal is `external-lane` when the `lanes` op says the lane's registry probe is `codex`. Otherwise it is the `litellm` op's own check-only refusal, passed through word for word: `no-such-account`, `anthropic-lane`, `not-a-codex-lane`, a registry or catalogue code, or a roster refusal. A check-only render that succeeds anyway is `no-answer`.
-  - The refusal line on stdout is `{"ok":false,"error":"external-lane","detail":"lane \"<id>\" is an external lane: its launcher and its LiteLLM belong to another program, and ccrc renders, stops and starts a LiteLLM tier only for a lane whose exec block is kind \"codex\". Nothing was written and nothing was stopped. To hand this lane to ccrc, cut it over (spec §15, step 3); then 'ccrc models litellm <id>' renders its own ~/.ccrc/codex/<id>/litellm.yaml."}`, and the same sentence goes to stderr prefixed `ccrc: `.
-  - `_models_litellm_path <id>` answers `$HOME/.ccrc/codex/<id>/litellm.yaml`, unconditionally. With no id it returns 1, prints nothing on stdout, and puts `ccrc: _models_litellm_path needs a lane id — ccrc renders no box-global LiteLLM config` on stderr.
-  - No bash code line in the tree spells `ccgpt stop` or `pgrep -f "litellm`. No file in the models corpus spells `.handoff/litellm-config` or `CCGPT_CONFIG`, and the LiteLLM template contains no `.handoff/`.
-  - In `ccrc-models.test.ts`:
-    - `env()` plants `pgrep` and `ccgpt` poisons on every run;
-    - it uses Task 1's `EXT_A_ROW` (`ext-a`) and adds no fixture row of its own;
-    - `describe('refresh never renders or stops an external lane\'s LiteLLM (R-C2, R-C3)')` holds the joint case.
-  - For Task 11's §20:
-    - under §8 and §19.6: "An `external` lane is never rendered, restarted or stopped by ccrc (Plan 3a Task 2, D-3708). `_models_litellm_path` takes an id and answers only `~/.ccrc/codex/<id>/litellm.yaml`. `ccrc models litellm <id>` refuses `external-lane` for a non-codex-kind lane whose registry names the codex probe, and every other non-codex lane keeps the op's own refusal. The box-global config path, the `pgrep` and the bare stop are gone, and an external lane's LiteLLM config is whatever its own launcher last read until that lane's cutover.";
-    - a same-line pointer on §19.6's last bullet: "(amended: §20, Plan 3a Task 2)".
+  - **The op's refusal.** Take `init --probe codex` on a row that has no registry yet and whose `exec.kind` is not `codex`. It answers exit 1 with `{"ok":false,"error":"codex-registry-needs-codex-lane","detail":"account \"<id>\" is not a codex-kind lane (its exec.kind is \"<kind>\"), and only a codex-kind lane declares the authDir its probe must read, so a codex class registry here would be probed through a token directory that is not this lane's. Flip the lane to \"codex\" first (Plan 3b), then re-run 'ccrc models <id> init codex'. Nothing was written."}`.
+    - Its stderr line is `models-op: <detail> (codex-registry-needs-codex-lane)`, and nothing is written.
+    - `ccrc models <id> init codex` passes it through at exit 1.
+    - Every other case is unchanged. A registry that already exists answers `created: false` and stays byte for byte, and every other probe kind is created on any row.
+  - **`_models_litellm_stop_blocked`** answers one of three ways:
+    - no codex-kind row: rc 1, and it prints nothing;
+    - one or more codex-kind rows: rc 0, printing `the roster names codex-kind lane(s) <id>[, <id>…]`;
+    - `_codex_lanes` cannot answer: rc 0, printing `which roster lanes are codex-kind cannot be read (the lane library answered rc <n>)`.
+  - **The external arm.** When a proxy is running on a changed render and the stop is blocked, it answers `restart-failed` at exit 1, with this detail: `the LiteLLM proxy is running on the PREVIOUS config, and ccrc will not stop it: <clause>, and the only stop this arm has is another repository's bare 'ccgpt stop', which stops units by name, the names a codex lane's own tiers carry. Stop that proxy by hand once you know which lane's units that stop would name, or flip lane <id> to codex (Plan 3b), then re-run this command — until then this box serves the old model list. Nothing was written and nothing was stopped.`
+    - Every other path is today's, byte for byte.
+    - The hourly refresh carries that refusal as an `ok: false` row whose `reason` is the sentence, and exits 1.
+  - **Test fixtures:**
+    - `SEEDED_REGISTRY_BYTES` (`fixtures/modelCases.ts`): `SEEDED` in `writeRegistry`'s bytes;
+    - `plantCodex(id)` (`models-op.test.ts`) and `seedCodex(id)` (`ccrc-models.test.ts`): a codex registry that predates the refusal, planted 0600 and then materialised by the op;
+    - `LEGACY_SECRETS_EXTERNAL_ID` (`ccrc-models.test.ts`): `ROSTER.accounts[5]!.id`.
+  - **The harness's containment** (`ccrc-models.test.ts`' `env()`): no case inherits `CCGPT_CONFIG`; a case that wants it passes it in `extra`. A HOME that holds no `pgrep` or `ccgpt` of its own gets a poison for each, which logs its argv to `$HOME/<name>-poison` and exits 97. A stand-in a case writes before a run is never overwritten by that run's `env()`.
+  - **For Task 10 (ruling Z7):**
+    - the live-shape fixture writes its external lane's codex registry by file (its own `REHEARSAL_REGISTRY`), never through `init codex`, which now refuses there;
+    - its `init codex` case expects `codex-registry-needs-codex-lane`;
+    - its post-flip case expects `restart-failed`, a detail containing `the roster names codex-kind lane(s) <the flipped id>`, and an empty `ccgpt` call log.
+  - **For Task 11's §20**, three texts:
+    - in §20.1: "A codex class registry is created only on an `exec.kind: "codex"` row. `ccrc models <id> init codex` on any other row is refused `codex-registry-needs-codex-lane`, writes nothing, and names the remedy: flip the lane first (Plan 3b). A registry that already exists is untouched (Plan 3a Task 2, D-3706).";
+    - in §20.2: "§19.6 stands. An `external` lane keeps the box-global path, the `pgrep` and the bare `ccgpt stop` until its own flip (D-3708, withdrawn by operator ruling Z). One guard is added. Once any roster row is `exec.kind: "codex"`, or the roster's codex lanes cannot be read, the external arm refuses its bare stop as `restart-failed` and writes nothing. That stop names units by name, and a codex lane's tiers carry those names (§19.2) (Plan 3a Task 2, `D-3753`).";
+    - a same-line pointer on §19.6's last bullet: "(amended: §20.2, `D-3753`)".
 
 **Why:**
 
-*The arm is live, and it acts on another repository's process.*
-- Measured on the live fleet box. Its two roster rows are `external` with Codex telemetry, and one of them has a codex class registry.
-- The hourly `ccrc-models.timer` → `ccrc models refresh --all` → litellm step → the external arm renders the box-global config (`_models_litellm_path` with no argument, :9705) that the other repository's launcher reads. It was rewritten, with its `.prev`, on the day this plan was measured.
-- Whenever a changed render meets a running LiteLLM, the arm runs a bare `ccgpt stop` (:10031): ccrc stopping the other repository's first lane.
-- After Task 1 the arm would have no token directory for that lane anyway (R-C2).
-- Retiring it here costs a frozen OpenClaw config for a lane that has zero sessions and no listener. It also leaves Plan 4 no ccrc code to delete.
+*The live arm stays, and so does its stop, until each lane's flip (Z1).*
+- Measured on the live fleet box: two `external` rows with Codex telemetry, one of them with a codex class registry, and no codex-kind row.
+- The hourly `ccrc-models.timer` reaches the external arm for the lane with the registry. It renders the box-global config that the other repository's launcher reads, and it runs that repository's bare stop when a changed render meets a running proxy.
+- Ruling Z keeps all of that until the lane's flip. Plan 3b's flip moves each lane onto the codex arm automatically, because `_models_litellm_codex` picks the arm from `exec.kind`. Plan 4's ccrc half deletes the arm once no external lane has a codex registry (Z8).
 
-*What the refusal distinguishes, and why it asks the `lanes` op first.*
-- A non-codex-kind lane whose registry names the codex probe is the live shape, and it gets `external-lane`, whose remedy is the cutover.
-- That answer comes from the `lanes` op's `probe`, the tree's reader of a registry's probe kind, **before** any render. So a lane nobody probed gets it too. If the check-only render ran first, such a lane would answer `never-probed`, whose remedy (`ccrc models refresh <id>`) Task 1's skip no longer runs for it.
-- Every other non-codex lane keeps the `litellm` op's own check-only refusal: a ghost id, an anthropic lane, `router2` with no registry, or `router`'s openrouter registry. Folding them into `external-lane` would narrow a distinction the adapter received, which CLAUDE.md names as the highest-yield defect. The cases pin it both ways: rows 2 and 3.
-- The check-only render is aimed at this id's own per-lane path. `--commit` is absent, so the op writes nothing, and the op refuses a bad id before it reads anything (its C6 gate).
-- If that render **succeeds** for a lane the `lanes` op called non-codex, the two ops disagree, which means a half-updated box. That is `no-answer`, never a success nothing rendered.
-- An unreadable roster is refused by the `lanes` op's `readRoster` in its own sentence. Both ops would refuse it identically, so no case can tell which one refused. This task reports that; it does not force a red.
+*Why the stop needs a guard before any flip (Z4, critic #7).*
+- A bare `ccgpt stop` stops units by name. The names are `ccgpt-<id>-{litellm,shim}.service`, the same names ccrc's own tiers run under (spec §19.2).
+  - Before any flip, only the other repository uses those names.
+  - After lane A's flip, lane A's ccrc tiers share them.
+- ccrc cannot tell which lane's units that repository's stop would name. So once any row is codex-kind, the external arm refuses the stop rather than guess. This makes the runbook's order structural.
+- The guard uses the arm's existing refusal, `restart-failed`, before PHASE 2 writes. So the STOP-THEN-WRITE doctrine holds: nothing is written, and the next run sees the same difference and retries. The sentence never tells the operator to run the bare stop, because that is exactly the act being refused.
+- It binds the stop alone:
+  - a changed render with no proxy running still lands, because no stop is owed;
+  - an unchanged render asks nothing;
+  - on a roster with no codex row the arm is today's, byte for byte, because `_codex_lanes` answers rc 0 with nothing.
+- Undecidable is not "none": a roster whose codex lanes cannot be read refuses the stop too.
+  - Through `cmd_models` this branch cannot be reached. `_models_deps` requires `jq`, and PHASE 1's op refuses an unreadable roster first.
+  - So its case reaches the branch by redefining `_codex_lanes` in a sourced shell, and its mutation is row 8.
+- It asks `_codex_lanes`, which is keyed on exec.kind, never on telemetry. Today's live rows carry `telemetry: "codex"` while still external, so a telemetry-keyed guard would block the live stop today (row 9).
 
-*Why `_models_litellm_path` keeps its name and gains a guard.*
-- Its callers (`_models_litellm_lane`, `_models_litellm_lane_held` and the new non-codex path) all pass an id.
-- The no-argument arm was the one line that answered the box-global file.
-- Deleting that arm alone would make a no-argument call answer `~/.ccrc/codex//litellm.yaml`. So a no-argument call is refused rc 1, with nothing on stdout, and the absence pin binds the helper's one arm.
+*Why no registry is created on a lane that is not codex-kind (Z3).*
+- After Z1, an `external` lane's probe keeps the token-directory default until its flip, and that directory belongs to one particular lane. If any other external row gained a codex registry, the next hourly refresh would probe it with that lane's OAuth.
+  - That is the wrong-lane hazard R-C2 closed by freezing. Z3 closes it by making the registry unreachable instead.
+- The guard sits in the op, not in `ccd/ccrc`.
+  - The `init` arm's create is the one place a registry comes into being, so the guard covers the verb and every other caller of the op ("any other writer", Z3).
+  - The mutating ops rewrite a registry that exists, and never change its probe kind. The `probe-declared` refusal belongs to `init`.
+- It sits after the existing-registry branch. So the live lane that already has a codex registry keeps it, answers `created: false`, and keeps being refreshed (row 5).
+- It is keyed on `exec.kind !== "codex"`, the predicate every other 3a gate uses.
+  - On a valid roster, that means `external`, the shape Z3 names and the live one, or a non-Anthropic `generated` row. A `generated` row declares no `authDir` either, so its probe takes the same default.
+  - An Anthropic row is refused `anthropic-lane` before this point.
+  - Row 3 is the narrower, `external`-only reading, which leaves the `generated` row creatable.
+- Every other probe kind is still created on any row, as before (row 2).
+- The refusal names Z3's remedy. A lane gains its codex registry after its flip, when `init codex` succeeds.
 
-*The external arm's pins, measured at `1f9fa22d`, and what happens to each:*
+*The test fallout, and why the migration plants rather than inits.*
+- The two suites built "an external lane with a codex registry", the live shape, by running `init codex` on the tree's external ROSTER rows.
+  - Measured on a scratch copy of `4ec8926a` with the guard alone: 50 reds in `models-op.test.ts` and 39 in `ccrc-models.test.ts`.
+  - Every one of them is a setup that no longer creates its registry.
+- On the live box such a registry predates the guard, so the fixture plants one the same way.
+  - `SEEDED_REGISTRY_BYTES` is `init codex`'s own write. `seeds today's codex registry, byte for byte, on a codex-kind lane` binds the two (measured identical).
+  - The op's own `materialise` then writes what `init` writes after the registry.
+  - The claims are unchanged: each case still measures the arm, the refresh or the op on that shape.
+- Only three cases need a real creation: two in `models-op.test.ts` and one in `ccrc-models.test.ts`. They move to a codex-kind row, and their seed values are read off `SEEDED` rather than retyped.
+- **No added line names a live lane id (R13).** The residue check counts added lines naming a live codex-telemetry id, and the tree's pre-existing ROSTER ids are outside this plan's fixture vocabulary.
+  - So a migrated line names a pre-existing row by position: `LEGACY_EXTERNAL_ID` (`ROSTER.accounts[2]!.id`, in both files) and `LEGACY_SECRETS_EXTERNAL_ID` (`ROSTER.accounts[5]!.id`).
+  - This plan never spells those ids either. Step 1(f)'s script reads them off each file's ROSTER.
+  - New rows are `ext-a`, `ext-b`, `gen-a` and `codex-a`.
 
-| Where (`1f9fa22d`) | Case | What it pins | Disposition |
-|---|---|---|---|
-| `ccrc-models.test.ts:1303-1317` | `describe('ccrc models refresh')`'s `beforeEach` | functional `pgrep`/`ccgpt` stubs for the litellm step | its two stub writes **deleted** (this task), and the `home = await codexBox(['codex-a']);` line Task 1 put first in that `beforeEach` kept: nothing calls either binary any more, and `env()` now poisons both on every run |
-| `:1325` | `refreshes one lane and writes its catalogue` | `litellm: 'rendered'` for an external codex-registry row | **Task 1's**: its skip reds it first. It is re-pointed there, never back to an external row |
-| `:1430` | `a lane whose re-materialise fails is a FAILED row, and litellm never runs (C7)` | box-global file absent, `ccgpt-calls` absent | **Task 1's** lane. This task re-points its `ccgpt-calls` read to `poisonLog('ccgpt')` (Step 1f) |
-| `:1550` | `a lane whose catalogue is corrupt is still refreshed, and repaired (Fix round 1, Finding 2)` | `litellm: 'rendered'` for an external row | **Task 1's** |
-| `:1597-1618` | `never reaches a real pgrep or ccgpt — poisoned, and no restart fires when neither looks running` | `ccgpt`'s poison log empty after refreshing an external row | **deleted** (this task). The containment-wall case pins the poisons, and the joint case pins that refresh reaches neither binary |
-| `:1650` | `renders the config from the lane's catalogue, with no reasoning key` | the external arm's render | **deleted**. The renderer claim lives in `litellm-render.test.ts` (`emits NO reasoning key, for any model`; `emits one entry per VISIBLE model and NO [1m] alias`), and the codex arm's render is the codex describe's `renders to the lane's own litellm.yaml through the REAL library` |
-| `:1675` | `is idempotent — a second run reports changed:false and touches nothing` | the external arm's no-op | **deleted**. Codex equivalent: `an unchanged rendering asks the tier nothing, even when one is running` |
-| `:1683` | `keeps the previous config beside the new one` | `.prev` of the box-global file | **deleted**. Codex equivalent: `a tier holding the previous rendering is STOPPED, then the bytes land, then it is STARTED on them` (asserts `.prev`). Op level: `models-op.test.ts`' `--commit true writes both --out and --out.prev` |
-| `:1690`, `:1695`, `:1703`, `:1717`, `:1730`, `:1743` | the six `pgrep`/`ccgpt stop` restart cases | stop-then-write through `pgrep` and a bare stop | **deleted**: the behaviour is gone. The codex describe carries every codex equivalent (stop-before-write, a failed stop writes nothing, retry, a foreign tier left running) |
-| `:1757` | `refuses a never-probed lane rather than rendering an empty list` | `never-probed` for an external row | **replaced** by `a never-probed external lane gets the same answer, never never-probed` |
-| `:1765` | `refuses a lane whose probe is not codex` | `not-a-codex-lane` for `router` | **kept verbatim**, inside the replacement describe |
-| `:1782` | `the external arm is untouched: pgrep on the box-global path, a bare \`ccgpt stop\`, and the lane library never asked` | the arm, byte for byte | **replaced** by `refuses an external lane whose registry names the codex probe: external-lane, …` |
-| `:1798` | `the external arm still honours CCGPT_CONFIG — …` | the other repository's override | **replaced** by `CCGPT_CONFIG redirects nothing: the same refusal, and neither path is written` |
-| `:1811` | `needs an id` | usage | **kept verbatim** |
-| `:1824`, `:1831`, `:1853` | three cases in `describe('refresh runs the litellm step for a codex lane (§5)')` | refresh through the external arm | **already replaced by Task 1's rewritten describe**, which this task leaves as it is. Codex equivalents: `refresh reaches the same arm: a running tier is restarted and the row reads rendered` and `refresh: a codex lane whose stop fails is a FAILED row that says why, and its config is not written`. The new joint case pins the external side |
-| `:1839` | `a non-Codex lane's refresh never touches the LiteLLM config` | `router` refresh leaves the box-global file absent | **kept**, as Task 1 re-homed it into its rewritten refresh describe. This task adds no second copy |
-| `:2616-2627` | `never takes the EXTERNAL arm, even handed an id that is not a codex lane` | `_codex_litellm_ensure router2` writes nothing outside | **kept**, with its comment re-worded. Plan 2b-2 Task 6's mutation row 20 no longer reds it, because the arm it guarded is gone (hazard 3) |
-| `:2485` | `CCGPT_CONFIG — the other repository's variable — never redirects a lane ccrc owns` | codex arm ignores `CCGPT_CONFIG` | **kept unchanged**. After this task nothing reads the variable, and 2b-2's row 4 still reds it |
-| `:1936-1947`, `:1955` | codex describe `beforeEach` poisons and case A | a codex render reaches neither `pgrep` nor `ccgpt` | **kept unchanged**. `env()`'s poison writes the same log file |
-| `single-definition.test.ts:1798-1816` | `the LiteLLM config path is spelled once, in one tool, through one helper` | exactly one holder, the no-argument line | **rewritten** as an absence pin (Step 1g) |
-| `models-op.test.ts:1323-1350` | `litellm (§6.3) — the two-phase check-then-commit protocol` | the op against a fixture `--out` | **unchanged**. The op takes any destination, and this is not the arm |
-| `ccrc-codex.test.ts:3012` | a foreign LiteLLM whose argv names the box-global config | tier identity refuses a foreign holder | **unchanged**. It is a foreign-process fixture, not the arm |
+*Why the harness now poisons `pgrep` and `ccgpt`, and drops `CCGPT_CONFIG` (the head's containment Global Constraint).*
+- Ruling Z keeps the external arm as live code. Every case that reaches it runs `pgrep -f`, and may run a bare `ccgpt stop`. On the fleet box a real `ccgpt stop` stops a live lane's units by name, and the census cannot see that: a stopped `--collect` transient unit simply leaves the listing.
+- Today only the describes that plant a functional stand-in are contained. A case that reached the arm without one would resolve whatever `pgrep` and `ccgpt` the runner's PATH carries. So `env()` plants a poison for each wherever the HOME holds none.
+- A describe's own stub is written before its run and must survive it, so the poison never overwrites one. Row 17 is that half: always poisoning reds 12 cases.
+- `CCGPT_CONFIG` is the other repository's override of the arm's box-global path, and the arm still honours it. A GPT-lane session can carry a real one, so `env()` no longer inherits it, exactly as it already drops the two lane bounds. A case that wants it passes it in `extra`, as `the external arm still honours CCGPT_CONFIG …` does.
 
-*The live shape after the merge.* After Tasks 1 and 2:
-- the external row with a registry is skipped hourly (Task 1), and a hand `ccrc models litellm <it>` refuses without writing (this task);
-- the other external row has no registry and is skipped as before;
-- nothing ccrc runs touches the box-global file, its `.prev`, or the other repository's LiteLLM process.
+*The live shape after the merge.* Nothing changes:
+- no codex row exists, so `_models_litellm_stop_blocked` answers rc 1, and the arm, its render and its stop run as before;
+- nothing on the box runs `init codex`: neither the timer nor the install spine calls it;
+- the lane with a registry keeps it.
 
-The joint case states this shape with fixture names, and Task 10's rehearsal pins it on the live-shape fixture.
+Task 10 pins all three on the live-shape fixture.
 
 - [ ] **Step 0: Base and census.**
 
@@ -2341,520 +2026,625 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
   . "<abs scratch>/plan3a-env.sh"
   git rev-parse HEAD > "$SCRATCH/t2-base"   # this task's base: Steps 6 and 7 read it back, never a shell variable (F2)
   cd server
-  r11 t2-base ./node_modules/.bin/vitest run test/ccrc-models.test.ts test/single-definition.test.ts
+  r11 t2-base ./node_modules/.bin/vitest run test/ccrc-models.test.ts test/models-op.test.ts
   ```
 
   Expected:
   - both files are green;
   - the last line is `census: clean — no unit or link change, 0 fixture processes left; command exit 0`. A `census: FAIL …` (exit 125 or 126) is attributed by the rule beside the census script before it counts.
 
-  Record `ccrc-models.test.ts`' case count from vitest's summary: 148 at `1f9fa22d` before Task 1, so re-derive it. Task 1 must already be committed. Its skip is proven behaviourally in Step 2, where the joint case must be **green** before this task's implementation.
+  Record both files' case counts from vitest's summary. At `4ec8926a`, before Task 1, they were 148 (`ccrc-models`) and 106 (`models-op`). Re-derive them on top of Task 1, which must already be committed.
 
-- [ ] **Step 1: Write the failing tests.**
+- [ ] **Step 1: Write the failing tests, and migrate the setups the refusal reaches.**
 
-  (a) `server/test/ccrc-models.test.ts`: this task adds no fixture row. Every case below uses Task 1's module-level `EXT_A_ROW` (the live Codex lanes' shape under the fixture id `ext-a`), never a second copy of it.
-
-  (b) In `env()`, two poisons. Old (unique):
+  (a) `server/test/fixtures/modelCases.ts`: directly below `SEEDED`'s closing `};` (its last field line, `  effort: { haiku: 'high', sonnet: 'high', opus: 'max', fable: 'max' },`, is unique in the file), add:
 
   ```ts
-    poison('launchctl', 'ccrc tests must never query this box\'s real launchd');
-    assertManagerStandIns(e, h);
+
+  /** `SEEDED` byte for byte as `init codex` writes it: `writeRegistry`'s 2-space
+   *  JSON and a trailing newline (Plan 3a Task 2). Since operator ruling Z3 the
+   *  op refuses to CREATE a codex registry on a row that is not exec.kind
+   *  "codex", so a case that needs the live Codex lanes' shape (an external row
+   *  whose registry predates that refusal) plants these bytes instead.
+   *  `models-op.test.ts`' `seeds today's codex registry, byte for byte, on a
+   *  codex-kind lane` binds them to the op's own write. */
+  export const SEEDED_REGISTRY_BYTES = `${JSON.stringify(SEEDED, null, 2)}\n`;
   ```
 
-  New:
+  (b) `server/test/models-op.test.ts`, imports. Replace `import { CODEX } from './fixtures/modelCases.js';` (unique) with:
 
   ```ts
-    poison('launchctl', 'ccrc tests must never query this box\'s real launchd');
-    // Plan 3a Task 2 (R-C3): the external arm that ran `pgrep -f` and a bare
-    // `ccgpt stop` is retired, so NO `ccrc models` path may reach either, and a
-    // runner whose PATH carries another repository's live `ccgpt` must never be
-    // one stray call from stopping its LiteLLM. Re-planted on every run, like
-    // the three above, so every case in this file measures the absence.
-    poison('pgrep', 'ccrc tests must never reach a real pgrep');
-    poison('ccgpt', 'ccrc tests must never reach another repository\'s ccgpt');
-    assertManagerStandIns(e, h);
+  import { CODEX, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
+  import { codexAuthDir } from './codexLaneFixture.js';
   ```
 
-  From this commit on, `env()` re-plants both poisons on every `run`. So the `pgrep` and `ccgpt` files that Task 1's describe `refresh never probes, renders or stops…` writes, in its `beforeEach` and in `a ccgpt that would refuse to stop…`, are overwritten before ccrc starts. Both write the same `$HOME/<name>-poison` log, so those cases still measure that neither binary is reached, and they stay as Task 1 left them.
-
-  (c) Append one case to `describe('the models harness containment wall')`, after its only case (it ends with `expect(body.indexOf('assertManagerStandIns(e, h);')).toBeLessThan(body.indexOf('return e;'));` then `  });`):
+  (c) `models-op.test.ts`, module helpers. Directly below the closing `};` of `const writeCatalogue = (id: string, cat: unknown = CODEX): void => {` (unique), add:
 
   ```ts
-    it('resolves pgrep and ccgpt to this HOME\'s poisons on every run, never to a real binary (Plan 3a Task 2)', () => {
-      // `command -v` only — nothing here EXECUTES either name, so a mutation
-      // that deletes a poison line reds this case without ever reaching a
-      // real `ccgpt` a runner's PATH might carry.
-      const e = env(home);
-      for (const name of ['pgrep', 'ccgpt']) {
-        const at = spawnSync('/bin/sh', ['-c', `command -v ${name}`], { env: e, encoding: 'utf8' }).stdout.trim();
-        expect(at, name).toBe(join(home, '.local', 'bin', name));
-        expect(fs.readFileSync(at, 'utf8'), name).toContain(MANAGER_STANDIN_MARK);
+
+  /** This file's third ROSTER row, an EXTERNAL row, read by position rather than
+   *  spelled, so no added line names a roster id outside Plan 3a's fixture
+   *  vocabulary (ruling R13). */
+  const LEGACY_EXTERNAL_ID = ROSTER.accounts[2]!.id;
+
+  /** Plan 3a Task 2 (operator ruling Z3, D-3706): `init codex` no longer CREATES
+   *  a codex registry on a row that is not exec.kind "codex", and this file's
+   *  external rows are the live Codex lanes' kind before their flip. A case
+   *  that needs such a row WITH a codex registry is the live shape, a registry
+   *  that predates the refusal, which the refusal leaves untouched. So it is
+   *  planted in `init codex`'s own bytes (`SEEDED_REGISTRY_BYTES`), 0600 as
+   *  `writeRegistry` writes it, and the op's own `materialise` then writes what
+   *  `init` writes after them. */
+  function plantCodex(id: string): void {
+    fs.mkdirSync(path.join(home, '.ccrc', 'models'), { recursive: true });
+    fs.writeFileSync(regPath(id), SEEDED_REGISTRY_BYTES, { mode: 0o600 });
+    const m = op('materialise', '--file', rosterPath(), '--id', id);
+    expect(m.code, m.stdout + m.stderr).toBe(0);
+  }
+  ```
+
+  (d) `models-op.test.ts`, inside `describe('init (§10, §13.1)', () => {`: its first two `it(`s create a codex registry on `ROSTER.accounts[2]`, an external row. They are `seeds today's … registry for probe codex` and `materialises on success: the env block, the three-column TSV and the effort file`. Replace them, from the first `  it(` of that describe up to (not including) `  it('is idempotent — a second init changes nothing and says so', () => {`, with:
+
+  ```ts
+    // Plan 3a Task 2 (operator ruling Z3, D-3706): a codex registry is CREATED
+    // on an `exec.kind: "codex"` row only, so the two creation cases run on one.
+    // Their claims are unchanged, read off the `SEEDED` fixture rather than
+    // retyped; the first also binds the bytes every planted registry carries.
+    const CODEX_ROW = {
+      id: 'codex-a', label: 'codex-a', configDirSuffix: '.claude-codex-a',
+      exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir: codexAuthDir('codex-a') },
+      homeAble: false, telemetry: 'codex',
+    };
+
+    it('seeds today\'s codex registry, byte for byte, on a codex-kind lane', () => {
+      seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+      const r = op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+      expect(r.code).toBe(0);
+      expect(r.body['created']).toBe(true);
+      expect(registryOf('codex-a')).toEqual(SEEDED);
+      // What `plantCodex` (above) and `ccrc-models.test.ts`' `seedCodex` write
+      // for a lane whose registry predates the refusal: these same bytes.
+      expect(fs.readFileSync(regPath('codex-a'), 'utf8')).toBe(SEEDED_REGISTRY_BYTES);
+    });
+
+    it('materialises on success: the env block, the three-column TSV and the effort file', () => {
+      seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] });
+      op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+      const { haiku, sonnet, opus } = SEEDED.classes;
+      const s = settingsOf('.claude-codex-a');
+      expect(s.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
+      expect(s.env.ANTHROPIC_MODEL).toBe(opus);
+      expect(s.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('sonnet');
+      expect(fs.readFileSync(path.join(home, '.ccrc', 'models', 'codex-a.classes.tsv'), 'utf8'))
+        .toBe(`haiku\t${haiku}\tassigned\nsonnet\t${sonnet}\tassigned\n`
+          + `opus\t${opus}\tassigned\nfable\t\tunassigned\n`);
+      expect(JSON.parse(fs.readFileSync(path.join(home, '.ccrc', 'models', 'codex-a.effort.json'), 'utf8')))
+        .toEqual({ byModel: { [haiku!]: 'high', [sonnet!]: 'high', [opus!]: 'max' } });
+    });
+
+    // Z3's refusal, on every row that is not codex-kind. The live Codex lanes'
+    // shape first (`ext-a`); `ext-b` drops its provider, and `gen-a` is the
+    // other kind a registry can sit on. Together they say the gate is the row's
+    // KIND, never its telemetry or its provider.
+    it.each([
+      ['ext-a', { exec: { kind: 'external', provider: 'openai' }, telemetry: 'codex' }],
+      ['ext-b', { exec: { kind: 'external' }, telemetry: 'codex' }],
+      ['gen-a', { exec: { kind: 'generated' }, telemetry: 'none' }],
+    ])('refuses to CREATE a codex registry on %s, a row that is not exec.kind codex, by name, and writes nothing (Z3)', (id, shape) => {
+      seed({ ...ROSTER, accounts: [...ROSTER.accounts,
+        { id, label: id, configDirSuffix: `.claude-${id}`, homeAble: false, ...shape }] });
+      writeCatalogue(id);
+      const r = op('init', '--file', rosterPath(), '--id', id, '--probe', 'codex');
+      expect(r.code).toBe(1);
+      expect(r.body['error']).toBe('codex-registry-needs-codex-lane');
+      expect(String(r.body['detail'])).toContain('Flip the lane to "codex" first (Plan 3b)');
+      expect(String(r.body['detail'])).toContain('Nothing was written.');
+      expect(r.stderr).toMatch(new RegExp(`^models-op: account "${id}" is not a codex-kind lane`, 'm'));
+      for (const f of [`${id}.classes.json`, `${id}.classes.tsv`, `${id}.effort.json`]) {
+        expect(fs.existsSync(path.join(home, '.ccrc', 'models', f)), f).toBe(false);
+      }
+      expect(fs.existsSync(path.join(home, `.claude-${id}`))).toBe(false);
+    });
+
+    it('every other probe kind is still created on an external row (Z3 refuses codex alone)', () => {
+      const r = op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'compatible',
+        '--base-url', 'https://compatible.example.invalid');
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      expect(r.body['created']).toBe(true);
+      expect(registryOf('router')['probe']).toBe('compatible');
+    });
+
+  ```
+
+  (e) `server/test/ccrc-models.test.ts`:
+  - **Imports.** Replace `import { CODEX } from './fixtures/modelCases.js';` (unique) with `import { CODEX, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';`. When this step defines `codexRow` (below), widen the one `from './codexLaneFixture.js'` import in place with `codexAuthDir`, unless Task 1 already added it.
+  - **`describe('the models harness containment wall', () => {`**: directly below the closing `  });` of its only case (that case ends with `    expect(body.indexOf('assertManagerStandIns(e, h);')).toBeLessThan(body.indexOf('return e;'));`, unique), add the case below. It stays red until Step 4(d) changes `env()`:
+
+  ```ts
+
+    it('drops an inherited CCGPT_CONFIG, and poisons pgrep and ccgpt wherever a case planted no stand-in of its own (Plan 3a Task 2)', () => {
+      // `command -v` and file reads only: nothing here EXECUTES either name, so a
+      // mutation that deletes a poison reds this case without ever reaching a
+      // real `ccgpt` that a runner's PATH might carry.
+      const was = process.env['CCGPT_CONFIG'];
+      process.env['CCGPT_CONFIG'] = join(home, 'a-config-no-case-made.yaml');
+      try {
+        for (const name of ['pgrep', 'ccgpt']) fs.rmSync(join(home, '.local', 'bin', name), { force: true });
+        const e = env(home);
+        expect(e['CCGPT_CONFIG'] === undefined, 'an inherited CCGPT_CONFIG reached a case').toBe(true);
+        expect(env(home, { CCGPT_CONFIG: 'from-extra' })['CCGPT_CONFIG'], 'a case still passes one in extra').toBe('from-extra');
+        for (const name of ['pgrep', 'ccgpt']) {
+          const at = spawnSync('/bin/sh', ['-c', `command -v ${name}`], { env: e, encoding: 'utf8' }).stdout.trim();
+          expect(at, name).toBe(join(home, '.local', 'bin', name));
+          expect(fs.readFileSync(at, 'utf8'), name).toContain(MANAGER_STANDIN_MARK);
+        }
+        // A case's own stand-in, written before a run, survives that run's env().
+        const own = '#!/bin/sh\nexit 0\n';
+        fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'), own, { mode: 0o755 });
+        env(home);
+        expect(fs.readFileSync(join(home, '.local', 'bin', 'ccgpt'), 'utf8'), 'env() overwrote a case\'s own ccgpt').toBe(own);
+      } finally {
+        if (was === undefined) delete process.env['CCGPT_CONFIG']; else process.env['CCGPT_CONFIG'] = was;
       }
     });
   ```
 
-  (d) In the lane-fake header comment, old (unique):
+  - **Module helpers**, directly below `function boxWithStubOp(`'s closing `}`. Task 1 left `codexRow` there, and no external row. `grep -n -E '^const (codexRow|EXT_A_ROW|LEGACY_EXTERNAL_ID) = ' server/test/ccrc-models.test.ts` must find each name at most once: on Task 1 as written, `codexRow` once and the other two not at all. Add only the ones it does not find, exactly as follows.
 
   ```ts
-  // library and its lock), not two binaries on PATH, so the `pgrep`/`ccgpt` PATH stubs this
-  // file uses for the external arm cannot reach it. It is faked the way
+
+  /** One `exec.kind: "codex"` roster row, its authDir the fixture's. */
+  const codexRow = (id: string, proxyPort: number, litellmPort: number,
+    extraExec: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id, label: id, configDirSuffix: `.claude-${id}`,
+    exec: { kind: 'codex', provider: 'openai', proxyPort, litellmPort, authDir: codexAuthDir(id), ...extraExec },
+    homeAble: false, telemetry: 'codex',
+  });
+
+  /** An EXTERNAL lane in the live Codex lanes' SHAPE (exec.kind "external",
+   *  provider openai, telemetry "codex"), under a fixture id. */
+  const EXT_A_ROW = {
+    id: 'ext-a', label: 'ext-a', configDirSuffix: '.claude-ext-a',
+    exec: { kind: 'external', provider: 'openai' }, homeAble: false, telemetry: 'codex',
+  } as const;
+
+  /** ROSTER's external row that the external-arm and refresh cases were
+   *  written against, read by position rather than spelled, so no added line
+   *  names a roster id outside Plan 3a's fixture vocabulary (ruling R13). */
+  const LEGACY_EXTERNAL_ID = ROSTER.accounts[2]!.id;
   ```
 
-  New:
+  Then, always:
 
   ```ts
-  // library and its lock), not two binaries on PATH, so the `pgrep`/`ccgpt` poisons `env()`
-  // plants on every run cannot reach it. It is faked the way
+
+  /** ROSTER's other external row, the one that carries `exec.secretsFile`,
+   *  read by position for the same reason as `LEGACY_EXTERNAL_ID`. */
+  const LEGACY_SECRETS_EXTERNAL_ID = ROSTER.accounts[5]!.id;
+
+  /** Plan 3a Task 2 (operator ruling Z3, D-3706): `ccrc models <id> init codex`
+   *  no longer CREATES a codex registry on a row that is not exec.kind "codex",
+   *  and this file's external rows are the live Codex lanes' kind before their
+   *  flip. A case that needs such a row WITH a codex registry is the live
+   *  shape, a registry that predates the refusal, which the refusal leaves
+   *  untouched. So it is planted in `init codex`'s own bytes
+   *  (`SEEDED_REGISTRY_BYTES`, bound to the op in `models-op.test.ts`), 0600,
+   *  and the box's own `materialise` then writes what `init` writes after them. */
+  function seedCodex(id: string): void {
+    fs.mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
+    fs.writeFileSync(join(home, '.ccrc', 'models', `${id}.classes.json`), SEEDED_REGISTRY_BYTES, { mode: 0o600 });
+    const m = spawnSync(process.execPath, [join(home, 'ccrc', 'deploy', 'models-op.mjs'), 'materialise',
+      '--file', join(home, '.ccrc', 'accounts.json'), '--id', id], { env: env(home), encoding: 'utf8' });
+    expect(m.status, `${m.stdout}${m.stderr}`).toBe(0);
+  }
   ```
 
-  (e) In `describe('ccrc models refresh')`:
-  - delete the two `pgrep`/`ccgpt` stub writes from its `beforeEach`, together with their `// Controller ruling on this task: a successfully-refreshed CODEX lane now …` comment (:1303-1317 at `1f9fa22d`). Keep the `home = await codexBox(['codex-a']);` line Task 1 put first in that `beforeEach`;
-  - delete the case `never reaches a real pgrep or ccgpt — poisoned, and no restart fires when neither looks running` and its `// Controller ruling on this task: the beforeEach's functional stubs prove …` comment (:1597-1618), wherever Task 1 left them.
-
-  Task 1 re-aimed that case at `codex-a` and added a `pgrep` assertion. Its claim is unchanged, so delete it all the same.
-
-  (f) Re-point every surviving `ccgpt-calls` or `pgrep-calls` read in this file (C7's `expect(fs.existsSync(join(home, 'ccgpt-calls')), …).toBe(false)`, in whatever form Task 1 left it) to the same claim over the poison. For example:
+  - **`describe('ccrc models <id> init', () => {`**: its first `it(`, `seeds the … registry and materialises, at exit 0`, creates a codex registry on `ROSTER.accounts[2]`. Replace it, from that describe's first `  it(` up to (not including) `  it('needs a probe kind', () => {`, with:
 
   ```ts
-      expect(poisonLog('ccgpt'), 'the litellm step must never run when materialise failed').toEqual([]);
-  ```
-
-  Afterwards, `grep -n -E "(ccgpt|pgrep)-calls" server/test/ccrc-models.test.ts` answers nothing.
-
-  (g) Replace the whole of `describe('ccrc models litellm', () => {` (:1621 at `1f9fa22d`) through its own column-0 `});`, and nothing after it. Task 1's `// Plan 3a Task 1 rewrote this describe.` block follows it, replacing `describe('refresh runs the litellm step for a codex lane (§5)')`. That block stays exactly as Task 1 left it, and its `--all skips it … twice over` and `a non-Codex lane's refresh never touches the LiteLLM config` cases stay with it. Put the replacement's second describe (`refresh never renders or stops an external lane's LiteLLM`) directly after Task 1's describe, above `// D-3482 (spec §8): for an \`exec.kind: "codex"\` lane ONLY, the`. The replacement:
-
-  ```ts
-  describe('ccrc models litellm', () => {
-    // Plan 3a Task 2 (R-C3, D-3708):
-    // `ccrc models litellm` renders for a codex-kind lane only (the next
-    // describe but one). Every other lane is REFUSED, and WHICH refusal is the
-    // claim: a lane whose registry names the codex probe is `external-lane` —
-    // the live shape — and anything else keeps the op's own word. No case here
-    // may write a byte, reach `pgrep` or `ccgpt` (env() poisons both on every
-    // run), or ask the lane library anything.
-    const foreign = (): string => join(home, '.handoff', 'litellm-config.yaml');
-    const SENTINEL = 'model_list: [] # another repository wrote this\n';
-    const plantForeign = (): void => {
-      fs.mkdirSync(path.dirname(foreign()), { recursive: true });
-      fs.writeFileSync(foreign(), SENTINEL);
-    };
-    /** Nothing a render or a stop could have left, anywhere. */
-    const untouched = (id: string): void => {
-      expect(fs.readFileSync(foreign(), 'utf8')).toBe(SENTINEL);
-      expect(fs.existsSync(`${foreign()}.prev`)).toBe(false);
-      expect(fs.existsSync(join(home, '.ccrc', 'codex', id))).toBe(false);
-      for (const name of ['pgrep', 'ccgpt']) expect(poisonLog(name), name).toEqual([]);
-    };
-
-    beforeEach(() => {
+    // Plan 3a Task 2 (operator ruling Z3, D-3706): the verb CREATES a codex
+    // registry on an `exec.kind: "codex"` row only. Its seeding claim moves to
+    // one; the live Codex lanes' shape (`EXT_A_ROW`) is refused by name with
+    // nothing written, and keeps a registry it already has.
+    it('seeds a codex-kind lane\'s registry and materialises, at exit 0', () => {
       fs.rmSync(home, { recursive: true, force: true });
-      home = box({ ...ROSTER, accounts: [...ROSTER.accounts, EXT_A_ROW] });
-      plantForeign();
+      home = box({ ...ROSTER, accounts: [...ROSTER.accounts, codexRow('codex-a', 45010, 45011)] });
+      const r = run(['models', 'codex-a', 'init', 'codex']);
+      expect(r.code).toBe(0);
+      expect(oneObject(r)['created']).toBe(true);
+      expect((registryOf('codex-a')['classes'] as Record<string, unknown>)['opus']).toBe(SEEDED.classes.opus);
+      expect(registryOf('codex-a')['subagent']).toBe('sonnet');
+      const settings = JSON.parse(fs.readFileSync(join(home, '.claude-codex-a', 'settings.json'), 'utf8'));
+      expect(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
     });
 
-    it('refuses an external lane whose registry names the codex probe: external-lane, nothing written, nothing stopped, the lane library never asked', () => {
+    it('refuses to CREATE a codex registry on an external lane, by name, and writes nothing (Z3)', () => {
+      fs.rmSync(home, { recursive: true, force: true });
+      home = box({ ...ROSTER, accounts: [...ROSTER.accounts, EXT_A_ROW] });
       writeCatalogue('ext-a');
-      expect(run(['models', 'ext-a', 'init', 'codex']).code).toBe(0);
-      const r = sourced('cmd_models litellm ext-a', ['lock', 'ours', 'stop', 'start']);
+      const r = run(['models', 'ext-a', 'init', 'codex']);
       expect(r.code).toBe(1);
       const b = oneObject(r);
-      expect(b['ok']).toBe(false);
-      expect(b['error']).toBe('external-lane');
-      expect(String(b['detail'])).toContain('spec §15, step 3');
-      expect(String(b['detail'])).toContain('~/.ccrc/codex/ext-a/litellm.yaml');
-      expect(r.stderr).toMatch(/^ccrc: lane "ext-a" is an external lane/m);
-      expect(laneCalls()).toEqual([]);
-      untouched('ext-a');
+      expect(b['error']).toBe('codex-registry-needs-codex-lane');
+      expect(String(b['detail'])).toContain('Flip the lane to "codex" first (Plan 3b)');
+      expect(r.stderr).toMatch(/^models-op: account "ext-a" is not a codex-kind lane/m);
+      for (const f of ['ext-a.classes.json', 'ext-a.classes.tsv', 'ext-a.effort.json']) {
+        expect(fs.existsSync(join(home, '.ccrc', 'models', f)), f).toBe(false);
+      }
+      expect(fs.existsSync(join(home, '.claude-ext-a'))).toBe(false);
     });
 
-    it('a never-probed external lane gets the same answer, never never-probed — refresh does not probe it (R-C2)', () => {
-      expect(run(['models', 'ext-a', 'init', 'codex']).code).toBe(0);
-      const r = run(['models', 'litellm', 'ext-a']);
-      expect(r.code).toBe(1);
-      expect(oneObject(r)['error']).toBe('external-lane');
-      untouched('ext-a');
-    });
-
-    it('CCGPT_CONFIG redirects nothing: the same refusal, and neither path is written', () => {
-      writeCatalogue('ext-a');
-      expect(run(['models', 'ext-a', 'init', 'codex']).code).toBe(0);
-      const elsewhere = join(home, 'elsewhere', 'litellm-config.yaml');
-      const r = run(['models', 'litellm', 'ext-a'], { CCGPT_CONFIG: elsewhere });
-      expect(oneObject(r)['error']).toBe('external-lane');
-      expect(fs.existsSync(elsewhere)).toBe(false);
-      untouched('ext-a');
-    });
-
-    it.each([
-      ['ghost', 'no-such-account'],
-      ['claude-a', 'anthropic-lane'],
-      ['router2', 'not-a-codex-lane'],
-    ])('%s is not an external codex lane, and keeps the op\'s own word: %s, nothing written', (id, code) => {
-      // `router2` is external with NO registry: `external-lane` is keyed on the
-      // registry's probe, never on `exec.kind`, so it is the op's refusal.
-      const r = run(['models', 'litellm', id]);
-      expect(r.code).toBe(1);
-      expect(oneObject(r)['error']).toBe(code);
-      untouched(id);
-    });
-
-    it('refuses a lane whose probe is not codex', () => {
-      run(['models', 'router', 'init', 'openrouter']);
-      const r = run(['models', 'litellm', 'router']);
-      expect(r.code).toBe(1);
-      expect(oneObject(r)['error']).toBe('not-a-codex-lane');
-    });
-
-    it('the two ops disagreeing is no-answer, never a success nothing rendered', () => {
-      // A half-updated box: a node half whose `lanes` op names no codex
-      // registry while its `litellm` op would render one. Nothing ccrc can
-      // write follows from that, and `ok: true` would be a render nobody did.
-      const STUB = '#!/usr/bin/env node\n'
-        + 'const op = process.argv[2];\n'
-        + "process.stdout.write(JSON.stringify(op === 'lanes' ? { ok: true, op, lanes: [] }\n"
-        + "  : { ok: true, op, id: 'ext-a', path: '/nonexistent', changed: true }) + '\\n');\n"
-        + 'process.exit(0);\n';
-      fs.rmSync(home, { recursive: true, force: true });
-      home = boxWithStubOp(STUB, { ...ROSTER, accounts: [...ROSTER.accounts, EXT_A_ROW] });
-      const r = run(['models', 'litellm', 'ext-a']);
-      expect(r.code).toBe(1);
-      expect(oneObject(r)['error']).toBe('no-answer');
-    });
-
-    it('the path helper answers only a lane\'s own file; with no id it refuses and prints no path', () => {
-      const r = sourced('_models_litellm_path; echo "rc=$?"; _models_litellm_path codex-z; c=$?; echo; echo "rc=$c"', []);
-      expect(r.stdout.split('\n').filter(Boolean))
-        .toEqual(['rc=1', join(home, '.ccrc', 'codex', 'codex-z', 'litellm.yaml'), 'rc=0']);
-      expect(r.stderr).toMatch(/_models_litellm_path needs a lane id/);
-    });
-
-    it('needs an id', () => {
-      expect(run(['models', 'litellm']).code).toBe(2);
-    });
-  });
-
-  // Plan 3a Tasks 1 and 2 together (R-C2, R-C3): the hourly `ccrc models
-  // refresh --all` is what reached the external arm on a live box. Task 1 stops
-  // it probing an external lane whose registry names codex, and this task left
-  // nothing that could render or stop that lane's LiteLLM anyway. This is the
-  // end-to-end claim the live timer depends on, in the live shape: exit 0 (so
-  // `ccrc-models.service` does not fail), the other repository's file byte for
-  // byte, and neither binary reached.
-  describe('refresh never renders or stops an external lane\'s LiteLLM (R-C2, R-C3)', () => {
-    const foreign = (): string => join(home, '.handoff', 'litellm-config.yaml');
-    const SENTINEL = 'model_list: [] # another repository wrote this\n';
-
-    beforeEach(() => {
+    it('an external lane whose codex registry predates this build keeps it: init answers created:false, byte for byte (Z3)', () => {
       fs.rmSync(home, { recursive: true, force: true });
       home = box({ ...ROSTER, accounts: [...ROSTER.accounts, EXT_A_ROW] });
-    });
-
-    it('--all over the live shape exits 0, leaves the foreign config byte for byte, and reaches neither pgrep nor ccgpt', () => {
-      writeCatalogue('ext-a');
-      expect(run(['models', 'ext-a', 'init', 'codex']).code).toBe(0);
-      const cat = join(home, '.ccrc', 'models', 'ext-a.json');
-      const catBefore = fs.readFileSync(cat, 'utf8');
-      fs.mkdirSync(path.dirname(foreign()), { recursive: true });
-      fs.writeFileSync(foreign(), SENTINEL);
-      const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
-      expect(r.code, r.stdout + r.stderr).toBe(0);
-      const rows = oneObject(r)['refreshed'] as { id: string; litellm?: string }[];
-      expect(rows.filter((x) => x.id === 'ext-a' && x.litellm !== undefined && x.litellm !== 'skipped')).toEqual([]);
-      expect(fs.readFileSync(foreign(), 'utf8')).toBe(SENTINEL);
-      expect(fs.existsSync(`${foreign()}.prev`)).toBe(false);
-      expect(fs.readFileSync(cat, 'utf8'), 'Task 1 (R-C2): the probe never ran for this lane').toBe(catBefore);
-      expect(fs.existsSync(join(home, '.ccrc', 'codex', 'ext-a'))).toBe(false);
-      for (const name of ['pgrep', 'ccgpt']) expect(poisonLog(name), name).toEqual([]);
-    });
-  });
-
-  ```
-
-  (h) In the codex describe's `never takes the EXTERNAL arm, even handed an id that is not a codex lane`, comment only. Old (unique):
-
-  ```ts
-        // `_codex_cmd_start` gates on `_codex_row` first, so this is belt and braces —
-        // but the external arm's failure mode is the live box's box-global
-        // file and a bare `ccgpt stop`, so the braces are measured. R40: the
-        // non-codex id here is `router2`, the tree's existing external row —
-        // never a live lane id.
-  ```
-
-  New:
-
-  ```ts
-        // `_codex_cmd_start` gates on `_codex_row` first, so this is belt and braces.
-        // Plan 3a Task 2 retired the external arm this case was written against
-        // (R-C3); what it measures now is that the ensure writes nothing outside
-        // the lane directory for a non-codex id. R40: the non-codex id here is
-        // `router2`, the tree's existing external row — never a live lane id.
-  ```
-
-  (i) `server/test/single-definition.test.ts`: replace the whole case `it('the LiteLLM config path is spelled once, in one tool, through one helper', …)`, up to (not including) `it('the ownership whitelist is read by exactly one thing in this repo', …)`, with:
-
-  ```ts
-    it('no shipped file spells the box-global LiteLLM config, and nothing ccrc runs stops another repository\'s LiteLLM (R-C3)', () => {
-      // Plan 3a Task 2 (D-3708). This
-      // pinned ONE holder of `~/.handoff/litellm-config.yaml`: the no-argument
-      // arm of `_models_litellm_path`, the external arm's, which shared that file
-      // with another repository's launcher. The arm is retired, so the right
-      // count is ZERO — a literal-absence pin. `spell` is this describe's own
-      // corpus (bash code lines, every `.ts`, every `shared/` and `deploy/`
-      // module); the template is read beside it because `.yaml` is in no corpus
-      // and its comments are carried verbatim into every rendered config.
-      expect(spell('.handoff/litellm-config')).toEqual([]);
-      expect(spell('CCGPT_CONFIG')).toEqual([]);
-      expect(readFileSync(path.join(ccrcRoot, 'deploy', 'litellm-config.template.yaml'), 'utf8'))
-        .not.toContain('.handoff/');
-      // What the arm DID: a bare stop of that launcher, and `pgrep -f` over its
-      // config path. Code lines only (`holdersOf`), so a comment may still say
-      // what was retired and why.
-      expect(holdersOf('ccgpt stop')).toEqual([]);
-      expect(holdersOf('pgrep -f "litellm')).toEqual([]);
-      // The helper survives with ONE arm, and that arm needs an id.
-      const helper = /^_models_litellm_path\(\) \{[^\n]*\n([\s\S]*?)\n\}$/m
-        .exec(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8'));
-      expect(helper, 'ccd/ccrc still defines _models_litellm_path as a block').toBeTruthy();
-      expect(helper![1]!).toContain('_codex_litellm_yaml "$1"');
-      expect(helper![1]!).not.toMatch(/\$# -eq 0/);
+      seedCodex('ext-a');
+      const p = join(home, '.ccrc', 'models', 'ext-a.classes.json');
+      const before = fs.readFileSync(p, 'utf8');
+      const r = run(['models', 'ext-a', 'init', 'codex']);
+      expect(r.code, r.stderr).toBe(0);
+      expect(oneObject(r)['created']).toBe(false);
+      expect(fs.readFileSync(p, 'utf8')).toBe(before);
     });
 
   ```
 
-  (j) Delete Task 1's module-level `LEGACY_EXTERNAL_ID` and `probeDirect`, each with its docstring. Their one caller was the `beforeEach` of the describe that (g) replaces. Afterwards, `grep -n -E 'LEGACY_EXTERNAL_ID|probeDirect' server/test/ccrc-models.test.ts` answers nothing.
+  - **`describe('ccrc models litellm', () => {`**: directly below the closing `  });` of its case `the external arm still honours CCGPT_CONFIG — the other repository's override of that one path` (that case ends with ``expect(calls('pgrep')).toEqual([`-f litellm .*${elsewhere}`]);``, unique), and above `  it('needs an id', () => {`, add:
 
-- [ ] **Step 2: Run it red.** Foreground, timeout at least 600000 ms:
+  ```ts
+
+    // Plan 3a Task 2 (operator ruling Z4, D-3753).
+    // Once ANY roster row is codex-kind (lane A, after its flip), this arm's
+    // bare `ccgpt stop` could stop lane A's own tiers, which carry the unit
+    // names that stop uses. So for a still-external lane B with a registry, the
+    // arm refuses the stop, through its own restart-failed path, and writes
+    // nothing. Lane B is `ext-a` in the live Codex lanes' shape, lane A
+    // `codex-a`. Pure-parse ports: nothing in this describe connects to one.
+    describe('once a codex-kind lane exists, the bare stop is never run (Z4)', () => {
+      const flip = (): void => {
+        const p = join(home, '.ccrc', 'accounts.json');
+        const roster = JSON.parse(fs.readFileSync(p, 'utf8')) as { accounts: unknown[] };
+        roster.accounts.push(codexRow('codex-a', 45010, 45011));
+        fs.writeFileSync(p, `${JSON.stringify(roster, null, 2)}\n`);
+      };
+
+      beforeEach(() => {
+        fs.rmSync(home, { recursive: true, force: true });
+        home = box({ ...ROSTER, accounts: [...ROSTER.accounts, EXT_A_ROW] });
+        pgrep(false); ccgpt();
+        writeCatalogue('ext-a');
+        seedCodex('ext-a');
+      });
+
+      it('on today\'s shape (no codex-kind row) the bare stop still runs, byte for byte (Z1)', () => {
+        pgrep(true);
+        const r = run(['models', 'litellm', 'ext-a']);
+        expect(r.code, r.stderr).toBe(0);
+        expect(oneObject(r)['restarted']).toBe(true);
+        expect(calls('ccgpt')).toEqual(['stop']);
+        expect(fs.existsSync(configPath())).toBe(true);
+      });
+
+      it('after a flip, a running proxy on a changed render is REFUSED restart-failed, naming why: nothing stopped, nothing written', () => {
+        flip(); pgrep(true);
+        const r = run(['models', 'litellm', 'ext-a']);
+        expect(r.code).toBe(1);
+        const b = oneObject(r);
+        expect(b['error']).toBe('restart-failed');
+        expect(String(b['detail'])).toContain('the roster names codex-kind lane(s) codex-a');
+        expect(String(b['detail'])).toContain('Nothing was written and nothing was stopped.');
+        expect(String(b['detail'])).not.toContain("Run 'ccgpt stop' by hand");
+        expect(r.stderr).toMatch(/^ccrc: the LiteLLM proxy is running on the PREVIOUS config, and ccrc will not stop it/m);
+        expect(calls('ccgpt')).toEqual([]);
+        expect(fs.existsSync(configPath())).toBe(false);
+        expect(fs.existsSync(`${configPath()}.prev`)).toBe(false);
+      });
+
+      it('after a flip, with nothing running, the render lands exactly as before: the guard binds the stop alone', () => {
+        flip();
+        const r = run(['models', 'litellm', 'ext-a']);
+        expect(r.code, r.stderr).toBe(0);
+        expect(oneObject(r)['changed']).toBe(true);
+        expect(oneObject(r)['restarted']).toBe(false);
+        expect(fs.existsSync(configPath())).toBe(true);
+        expect(calls('ccgpt')).toEqual([]);
+      });
+
+      it('after a flip, an unchanged render asks nothing, even with a proxy running', () => {
+        expect(run(['models', 'litellm', 'ext-a']).code).toBe(0);
+        flip(); pgrep(true);
+        const r = run(['models', 'litellm', 'ext-a']);
+        expect(r.code, r.stderr).toBe(0);
+        expect(oneObject(r)['changed']).toBe(false);
+        expect(calls('ccgpt')).toEqual([]);
+      });
+
+      it('a roster whose codex lanes cannot be told refuses the stop too: undecidable is never "no codex lane"', () => {
+        pgrep(true);
+        const r = sourced('_codex_lanes() { return 1; }; cmd_models litellm ext-a', []);
+        expect(r.code).toBe(1);
+        const b = oneObject(r);
+        expect(b['error']).toBe('restart-failed');
+        expect(String(b['detail'])).toContain('which roster lanes are codex-kind cannot be read (the lane library answered rc 1)');
+        expect(calls('ccgpt')).toEqual([]);
+        expect(fs.existsSync(configPath())).toBe(false);
+      });
+
+      it('the hourly refresh carries the refusal as a FAILED row, exits 1, and still stops nothing', () => {
+        flip(); pgrep(true);
+        const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+        expect(r.code).toBe(1);
+        const rows = oneObject(r)['refreshed'] as { id: string; ok: boolean; reason?: string }[];
+        const lane = rows.find((x) => x.id === 'ext-a');
+        expect(lane?.ok).toBe(false);
+        expect(String(lane?.reason)).toContain('the roster names codex-kind lane(s) codex-a');
+        expect(calls('ccgpt')).toEqual([]);
+        expect(fs.existsSync(configPath())).toBe(false);
+      });
+    });
+  ```
+
+  (f) **The mechanical migration**, as ONE call, after (a)-(e). Every SETUP statement that runs `init codex` on a row that is not codex-kind becomes a planted registry. The two external ROSTER rows' ids are read off each file's own ROSTER by position, never typed into this plan or the tree (R13), and the script prints only counts:
+
+  ```bash
+  . "<abs scratch>/plan3a-env.sh"
+  node - <<'EOF'
+  // Plan 3a Task 2, Step 1(f): the mechanical migration. Every SETUP `init
+  // codex` on a row that is not codex-kind becomes a planted registry. The ids
+  // of the tree's own external ROSTER rows are read off each file's ROSTER by
+  // position, never typed (R13), and only counts are printed.
+  const fs = require('node:fs');
+  const rosterIds = (src) => {
+    const at = src.indexOf('const ROSTER = {');
+    const block = src.slice(at, src.indexOf('\n};\n', at));
+    return [...block.matchAll(/\{ id: '([a-z][a-z0-9-]*)'/g)].map((m) => m[1]);
+  };
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const migrate = (file, rules) => {
+    let src = fs.readFileSync(file, 'utf8');
+    for (const [re, to, label] of rules) {
+      console.log(`${file}: ${label}: ${(src.match(re) ?? []).length}`);
+      src = src.replace(re, to);
+    }
+    fs.writeFileSync(file, src);
+  };
+  const cm = 'server/test/ccrc-models.test.ts';
+  const [, , ext, , , secrets] = rosterIds(fs.readFileSync(cm, 'utf8'));
+  migrate(cm, [
+    [new RegExp(`^(\\s*)run\\(\\['models', (?:'${esc(ext)}'|LEGACY_EXTERNAL_ID), 'init', 'codex'\\]\\);$`, 'gm'),
+      '$1seedCodex(LEGACY_EXTERNAL_ID);', 'ROSTER[2] statements'],
+    [new RegExp(`^(\\s*)run\\(\\['models', (?:'${esc(secrets)}'|LEGACY_SECRETS_EXTERNAL_ID), 'init', 'codex'\\]\\);$`, 'gm'),
+      '$1seedCodex(LEGACY_SECRETS_EXTERNAL_ID);', 'ROSTER[5] statements'],
+    [/^(\s*)expect\(run\(\['models', 'router2', 'init', 'codex'\]\)\.code\)\.toBe\(0\);$/gm,
+      "$1seedCodex('router2');", 'router2 expects'],
+  ]);
+  const mop = 'server/test/models-op.test.ts';
+  const [, , opExt] = rosterIds(fs.readFileSync(mop, 'utf8'));
+  migrate(mop, [
+    [new RegExp(`^(\\s*)op\\('init', '--file', rosterPath\\(\\), '--id', '${esc(opExt)}', '--probe', 'codex'\\);$`, 'gm'),
+      '$1plantCodex(LEGACY_EXTERNAL_ID);', 'ROSTER[2] statements'],
+    [/^(\s*)op\('init', '--file', rosterPath\(\), '--id', '(router|codex-b)', '--probe', 'codex'\);$/gm,
+      "$1plantCodex('$2');", 'router and codex-b statements'],
+    [new RegExp(`^(  beforeEach\\(\\(\\) => \\{ )op\\('init', '--file', rosterPath\\(\\), '--id', '${esc(opExt)}', '--probe', 'codex'\\);( \\}\\);)$`, 'gm'),
+      '$1plantCodex(LEGACY_EXTERNAL_ID);$2', 'the beforeEach one-liner'],
+  ]);
+  EOF
+  ```
+
+  Measured at `4ec8926a`, before Task 1:
+  - `ccrc-models.test.ts`: 21 `ROSTER[2]` statements, 1 `ROSTER[5]` statement and 3 `router2` expects;
+  - `models-op.test.ts`: 23 `ROSTER[2]` statements, 3 `router` and `codex-b` statements (both external rows there), and 1 `beforeEach` one-liner.
+
+  Task 1's own cases may move these counts, so re-derive them. Then three counts must each answer 0:
+
+  ```bash
+  . "<abs scratch>/plan3a-env.sh"
+  grep -cE "^\s*run\(\['models', '[^']+', 'init', 'codex'\]\);$" server/test/ccrc-models.test.ts
+  grep -E "init', 'codex'\]\)\.code\)\.toBe\(0\);$" server/test/ccrc-models.test.ts | grep -vc "'codex-a'"
+  grep -E "^\s*op\('init', '--file', rosterPath\(\), '--id', '[^']+', '--probe', 'codex'\)" server/test/models-op.test.ts | grep -vc "'codex-a'"
+  ```
+
+  A non-zero count is an `init codex` setup the script did not reach: one Task 1 added, or a spelling it changed. Migrate it by the same rule, by hand. If its row is an external fixture row such as `ext-a`, use `seedCodex('<that id>')` or `plantCodex('<that id>')`. Report it by file and count, never by quoting a line that might carry a ROSTER id.
+
+- [ ] **Step 2: Run it red.** Foreground, one call each, timeout at least 600000 ms:
 
   ```bash
   . "<abs scratch>/plan3a-env.sh"
   cd server
-  r11 t2-red ./node_modules/.bin/vitest run test/ccrc-models.test.ts test/single-definition.test.ts
+  r11 t2-red ./node_modules/.bin/vitest run test/ccrc-models.test.ts test/models-op.test.ts
   ```
 
-  Expected: exactly **6 red**. vitest exits 1, and the census line still reads `census: clean — … command exit 1`: the red is the command's own exit code, and the census verdict is separate (F10). Measured on a scratch copy of `1f9fa22d` with a stand-in for Task 1's skip:
-  - the absence pin: `holdersOf('ccgpt stop')` names `ccd/ccrc`, and `spell('.handoff/litellm-config')` names `ccd/ccrc` and `shared/litellm.mjs`;
-  - `refuses an external lane whose registry names the codex probe…`: rc 0, because the old arm renders into the sentinel file behind the poisoned `pgrep`;
-  - `a never-probed external lane…`: `never-probed` where `external-lane` is expected;
-  - `CCGPT_CONFIG redirects nothing…`: rc 0, with `elsewhere` written;
-  - `the two ops disagreeing is no-answer…`: rc 0, the stub's success passed through;
-  - `the path helper answers only…`: the first line is the box-global path at `rc=0`.
+  Expected: exactly **8 red**. vitest exits 1, and the census line still reads `census: clean — … command exit 1`, because the red is the command's own exit code and the census verdict is separate (F10). Measured on a scratch copy of `4ec8926a`, without Task 1:
+  - `models-op`: the three `refuses to CREATE a codex registry on <id>…` rows (`ext-a`, `ext-b`, `gen-a`), each `expected +0 to be 1`, because today's op creates the registry;
+  - `ccrc-models`, `refuses to CREATE a codex registry on an external lane…`: `expected +0 to be 1`;
+  - `ccrc-models`, three Z4 cases, each `expected +0 to be 1` because today's arm runs the bare stop:
+    - `after a flip, a running proxy on a changed render is REFUSED…`;
+    - `a roster whose codex lanes cannot be told refuses the stop too…`;
+    - `the hourly refresh carries the refusal as a FAILED row…`.
+  - `ccrc-models`, `drops an inherited CCGPT_CONFIG, and poisons pgrep and ccgpt…`: `an inherited CCGPT_CONFIG reached a case: expected false to be true`, because today's `env()` inherits it. Measured: 1 failed in `-t 'the models harness containment wall'` on the same copy, before Step 4(d).
 
   GREEN before the change, by design:
-  - **The joint case** (`--all over the live shape exits 0 …`) is Task 1's skip at work. **If it is red with `expected 1 to be +0` or a row reading `litellm: 'rendered'`, Task 1's skip is missing: stop and report.** Its red is mutation rows 9 and 10.
-  - **The three `it.each` rows, the kept `router` case and `needs an id`** are the op's own refusals, unchanged. Their reds are rows 3, 6 and 8.
-  - **The containment-wall case** is green because Step 1b is in. Its red is rows 7 and 7b.
-  - **Task 1's rewritten refresh describe**, which this task leaves as it is, is green.
+  - **Every migrated case.** The planted registry is exactly the one `init` would have written.
+  - **The re-aimed creation cases**, which now run on a codex-kind row.
+  - **`an external lane whose codex registry predates this build keeps it…`.** An existing registry was always answered `created: false`.
+  - **`every other probe kind is still created on an external row…`.**
+  - **The three Z4 controls:** today's shape, nothing running, and an unchanged render.
 
-  Record the count. Relative to Step 0 it is **−3**: 15 cases removed (the poisoned case and the 14 in the litellm describe) and 12 added (1 containment, 10 in the litellm describe including the two kept verbatim, and the joint case). Task 1's rewritten refresh describe keeps its 4. Re-derive against Step 0's count. `single-definition` is ±0.
+  Their reds are mutation rows 2, 5, 9, 11, 12, 13 and 14, and the migration control. The counts are Step 0's plus 9 (`ccrc-models`: one case replaced by three, six added in the litellm describe, and one containment case) and plus 4 (`models-op`: two re-aimed, and four added).
 
-- [ ] **Step 3: The path helper, the kind predicate's comment, and the two comments in the codex arm (`ccd/ccrc`).**
+- [ ] **Step 3: Z3 — the op creates a codex registry on a codex-kind lane only (`deploy/models-op.mjs`).** Old (unique):
 
-  (a) Replace from `# Where a box keeps LiteLLM's config, and the template it is rendered from.` through the `_models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }` line (:9685-9717; unique) with:
-
-  ```bash
-  # Where a codex lane keeps LiteLLM's config, and the template it is rendered
-  # from. ONE ARM (R-C3, D-3708): an
-  # id, and that CODEX-kind lane's own file, `_codex_litellm_yaml "$1"` (ruling
-  # PF-40 — one spelling, the same one `_codex_start_tier`'s `--config` and
-  # `_codex_litellm_ensure`'s presence check use). The no-argument arm this
-  # helper had answered the box-global file another repository's launcher
-  # reads, for the external arm of `_models_litellm`; both are retired, and a
-  # call with no id is refused rather than answered with any path at all.
-  # UNCONDITIONAL, on purpose: this helper never reads the roster, so no caller
-  # holding an id — a reap after the roster row is gone included — is ever
-  # answered from somebody else's state, and no variable of that repository's
-  # redirects it. Which lanes reach it is `_models_litellm_codex`'s question.
-  _models_litellm_path() {   # <codex accountId> -> that lane's LiteLLM config file; no id: rc 1, nothing on stdout
-    [ -n "${1:-}" ] || { echo "$PROG: _models_litellm_path needs a lane id — ccrc renders no box-global LiteLLM config" >&2; return 1; }
-    printf '%s' "$(_codex_litellm_yaml "$1")"
-  }
-  _models_litellm_template() { printf '%s' "$CCRC_HERE/../deploy/litellm-config.template.yaml"; }
+  ```js
+        out({ ok: true, op: 'init', created: false, ...describe(account, registry, catalogue) });
+        return 0;
+      }
+      const seed = JSON.parse(JSON.stringify(SEEDS[a.probe]));
   ```
 
-  (b) In `_models_litellm_codex`'s header, old (unique):
+  New:
+
+  ```js
+        out({ ok: true, op: 'init', created: false, ...describe(account, registry, catalogue) });
+        return 0;
+      }
+      // A CODEX REGISTRY IS CREATED ON A CODEX-KIND LANE ONLY (Plan 3a Task 2,
+      // operator ruling Z3, D-3706). The model probe reads a codex-kind lane's
+      // own `exec.authDir`. Every other row declares none, and an `external`
+      // row's probe keeps the token-directory default until that lane's flip
+      // (ruling Z1): a directory that belongs to one particular lane. So a codex
+      // registry created here would put the hourly refresh one run away from
+      // probing this lane with another lane's OAuth. This branch is the ONE
+      // place a registry is created (`writeRegistry`'s other caller rewrites one
+      // that already exists), so the refusal covers `ccrc models <id> init
+      // codex` and every other caller of this op alike. A registry that ALREADY
+      // exists is untouched: the arm above answers it first, and the mutating
+      // ops below still rewrite it, so a lane that gained one before this build
+      // keeps it and keeps being refreshed. Every other probe kind is created on
+      // any row, as before.
+      if (a.probe === 'codex' && !(isObj(account.exec) && account.exec.kind === 'codex')) {
+        const kind = isObj(account.exec) && typeof account.exec.kind === 'string' ? account.exec.kind : null;
+        return refuse(1, 'codex-registry-needs-codex-lane',
+          `account "${a.id}" is not a codex-kind lane (its exec.kind is ${JSON.stringify(kind)}), and only `
+          + 'a codex-kind lane declares the authDir its probe must read, so a codex class registry here '
+          + 'would be probed through a token directory that is not this lane\'s. Flip the lane to "codex" '
+          + `first (Plan 3b), then re-run 'ccrc models ${a.id} init codex'. Nothing was written.`);
+      }
+      const seed = JSON.parse(JSON.stringify(SEEDS[a.probe]));
+  ```
+
+- [ ] **Step 4: Z4 — the external arm never runs the bare stop once a codex-kind lane exists (`ccd/ccrc`).**
+
+  (a) Old (unique):
 
   ```bash
-  # on `telemetry` and names today's EXTERNAL live lanes. An unreadable roster
-  # (`_codex_lanes` rc 1, no ids) answers "not codex" here and still cannot
-  # write through the external arm: that arm's PHASE 1 hands the same file to
-  # the op, whose `readRoster` refuses before anything is rendered, in its own
-  # sentence. The library's `ccrc codex: roster-invalid:` line is discarded,
+  _models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }
   ```
 
   New:
 
   ```bash
-  # on `telemetry` and names today's EXTERNAL live lanes. An unreadable roster
-  # (`_codex_lanes` rc 1, no ids) answers "not codex" here, and nothing can be
-  # rendered for it: `_models_litellm`'s non-codex path hands the same file to
-  # the op's `lanes` read, whose `readRoster` refuses first, in its own
-  # sentence. The library's `ccrc codex: roster-invalid:` line is discarded,
-  ```
+  _models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }
 
-  (c) In `_models_litellm_lane_held`'s header, old (unique):
-
-  ```bash
-  # START follows the write because this arm stopped a tier live sessions were
-  # using; the external arm leaves that to the next session because it never
-  # owned its tier. "Started" is the promise `_svc_run_supervised` keeps — the
-  ```
-
-  New:
-
-  ```bash
-  # START follows the write because this arm stopped a tier live sessions were
-  # using; the retired external arm left that to the next session because it
-  # never owned its tier. "Started" is the promise `_svc_run_supervised` keeps — the
-  ```
-
-  In its body, old (unique):
-
-  ```bash
-    # THE TIER — asked only now, when the bytes differ, as the external arm asks.
-  ```
-
-  New:
-
-  ```bash
-    # THE TIER — asked only now, when the bytes differ (a change is what costs a stop).
-  ```
-
-- [ ] **Step 4: Retire the external arm.**
-
-  (a) Replace from `# STOP-THEN-WRITE (fix round 1, this task's controller ruling). Restart is` through `_models_litellm`'s closing `}` (:10001-10051) with the block below. The blank line and `` # `ccrc codex start`'s config step (design contract `start`: `` stay as they are:
-
-  ```bash
-  # ONE ARM (R-C3, D-3708). ccrc
-  # renders a LiteLLM config, and stops or starts the tier that reads it, for an
-  # `exec.kind: "codex"` lane only — `_models_litellm_lane` above, whose
-  # STOP-THEN-WRITE doctrine (spec §8) is unchanged. The EXTERNAL arm that stood
-  # here is RETIRED before any roster row is flipped: it rendered a box-global
-  # file another repository's launcher reads, asked `pgrep -f` over that path,
-  # and stopped that launcher's LiteLLM, and the hourly `ccrc-models.timer`
-  # reached it on a live box — ccrc acting on a process it does not own. An
-  # external lane's LiteLLM config is now whatever its own launcher last read;
-  # it becomes ccrc's to render at its cutover (spec §15, step 3), when its
-  # exec block names kind "codex".
-  #
-  # A NON-CODEX LANE IS REFUSED IN ONE OF TWO WAYS, and they stay two:
-  #   - its class registry names the `codex` probe: `external-lane`, the live
-  #     shape, whose remedy is the cutover. Asked of the `lanes` op (this file's
-  #     reader of a registry's probe kind) BEFORE any render, so a lane nobody
-  #     probed gets this answer too and never `never-probed`, whose remedy the
-  #     refresh loop does not run for such a lane.
-  #   - anything else (no such account, an anthropic lane, no registry or
-  #     another probe, a corrupt registry or catalogue): the op's own refusal,
-  #     word for word, from a CHECK-ONLY render (no `--commit`: nothing is
-  #     written) aimed at this id's own per-lane path, the one destination ccrc
-  #     writes. An unreadable roster is the `lanes` op's own refusal.
-  # A check-only render that SUCCEEDS for a lane the `lanes` op called
-  # non-codex means the two ops disagree (a half-updated box): `no-answer`,
-  # never a success nothing rendered.
-  _models_litellm() {   # <accountId> -> prints exactly one JSON object: the codex arm's answer, or a refusal
-    if _models_litellm_codex "$1"; then _models_litellm_lane "$1"; return $?; fi
-    local file lanes probe rc check crc
-    file="$(_models_roster_path)"
-    lanes="$(_models_answer lanes --file "$file")" || { rc=$?; printf '%s\n' "$lanes"; return "$rc"; }
-    probe="$(printf '%s' "$lanes" | jq -r --arg id "$1" 'first(.lanes[]? | select(.id == $id) | .probe) // empty' 2>/dev/null)"
-    [ "$probe" != codex ] \
-      || _models_refuse external-lane 1 "lane \"$1\" is an external lane: its launcher and its LiteLLM belong to another program, and ccrc renders, stops and starts a LiteLLM tier only for a lane whose exec block is kind \"codex\". Nothing was written and nothing was stopped. To hand this lane to ccrc, cut it over (spec §15, step 3); then 'ccrc models litellm $1' renders its own ~/.ccrc/codex/$1/litellm.yaml."
-    check="$(_models_answer litellm --file "$file" --id "$1" \
-               --template "$(_models_litellm_template)" --out "$(_models_litellm_path "$1")")"; crc=$?
-    [ "$crc" -ne 0 ] \
-      || _models_refuse no-answer 1 "deploy/models-op.mjs's \"lanes\" op says lane \"$1\" has no codex registry, and its \"litellm\" op would render one for it anyway, so this run cannot tell which is true. ccrc and deploy/models-op.mjs ship together and must be one build. Re-run the install (or redeploy), then re-run this. Nothing was written."
-    printf '%s\n' "$check"
-    return "$crc"
+  # THE BARE STOP'S PRECONDITION (Plan 3a Task 2, operator ruling Z4,
+  # D-3753). The external arm's only stop is
+  # another repository's bare `ccgpt stop`, which stops units BY NAME, and a
+  # codex-kind lane's own tiers carry those names (`ccgpt-<id>-{litellm,shim}
+  # .service`, spec §19.2). With no codex-kind row on the roster, today's shape,
+  # that stop can reach only that repository's own units: rc 1, nothing printed,
+  # and the arm runs exactly as before. Once ANY row is codex-kind, ccrc cannot
+  # tell whose units that stop would name: rc 0, the reason as one clause on
+  # stdout, and the arm refuses before it writes. A roster whose codex lanes
+  # cannot be told (`_codex_lanes` rc 1 or rc 2) answers rc 0 too, because
+  # undecidable is never "no codex lane". Asked of `_codex_lanes`, the lane
+  # library's ONE reader of exec.kind.
+  _models_litellm_stop_blocked() {   # -> rc 0 and one clause on stdout iff the external arm must not run the bare stop
+    local ids rc=0
+    ids="$(_codex_lanes 2>/dev/null)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      printf 'which roster lanes are codex-kind cannot be read (the lane library answered rc %s)' "$rc"
+      return 0
+    fi
+    [ -n "$ids" ] || return 1
+    printf 'the roster names codex-kind lane(s) %s' "${ids//$'\n'/, }"
+    return 0
   }
   ```
 
-  (b) In `_codex_litellm_ensure`'s header, old (unique):
+  (b) In `_models_litellm`'s header, old (unique):
 
   ```bash
-  # `_models_litellm`'s dispatch: this caller must never reach the external
-  # arm, whose failure mode is the live box's box-global file and a bare
-  # `ccgpt stop`. And never through `_models_litellm_lane`, which takes the
+    # Everything below is the EXTERNAL arm, unchanged byte for byte
+    # (D-3482): the live lanes are external, and another
+    # repository's LiteLLM reads that arm's file. Plan 3 retires it at cutover.
   ```
 
   New:
 
   ```bash
-  # `_models_litellm`'s dispatch: this caller must never reach its non-codex
-  # path, whose answer for a lane that is not codex-kind is a refusal, never a
-  # render. And never through `_models_litellm_lane`, which takes the
+    # Everything below is the EXTERNAL arm, unchanged byte for byte
+    # (D-3482) but for one guard (Plan 3a Task 2,
+    # D-3753): its bare stop is refused
+    # once any roster row is codex-kind. The live lanes are external, and another
+    # repository's LiteLLM reads that arm's file. Plan 3 retires it at cutover.
   ```
 
-  (c) Three comments whose destination is the retired path. `deploy/litellm-config.template.yaml`, old (unique, lines 1-7):
+  (c) In its body, old (unique):
 
-  ```yaml
-  # LiteLLM proxy config — the GENERATED half is the model list; everything else
-  # here is carried verbatim into ~/.handoff/litellm-config.yaml by
-  # `ccrc models litellm <id>` (spec §6.3).
-  #
-  # DO NOT EDIT THE DEPLOYED COPY. Edit this file and re-run the verb; the
-  # generator overwrites ~/.handoff/litellm-config.yaml and keeps the previous
-  # bytes beside it as .prev.
-  ```
-
-  New:
-
-  ```yaml
-  # LiteLLM proxy config — the GENERATED half is the model list; everything else
-  # here is carried verbatim into a codex lane's ~/.ccrc/codex/<id>/litellm.yaml
-  # by `ccrc models litellm <id>` (spec §6.3, §8).
-  #
-  # DO NOT EDIT THE DEPLOYED COPY. Edit this file and re-run the verb; the
-  # generator overwrites that lane's litellm.yaml and keeps the previous
-  # bytes beside it as .prev.
-  ```
-
-  `shared/litellm.mjs`, old (unique, lines 1-6):
-
-  ```js
-  // shared/litellm.mjs — §6.3's renderer: a Codex catalogue plus the template in
-  // `deploy/` become `~/.handoff/litellm-config.yaml`.
-  //
-  // PURE, and that is why it is a module rather than a block of `ccrc`: the whole
-  // render can be measured without writing into `~/.handoff`, which is a live
-  // directory on the box this suite runs on.
+  ```bash
+    local restarted=false
+    if _models_litellm_running; then
+      if command -v ccgpt >/dev/null 2>&1 && ccgpt stop >/dev/null 2>&1; then
   ```
 
   New:
 
-  ```js
-  // shared/litellm.mjs — §6.3's renderer: a Codex catalogue plus the template in
-  // `deploy/` become a codex lane's `~/.ccrc/codex/<id>/litellm.yaml` (spec §8).
-  //
-  // PURE, and that is why it is a module rather than a block of `ccrc`: the whole
-  // render can be measured without writing into any HOME, and the box this suite
-  // runs on is a live one.
+  ```bash
+    local restarted=false
+    if _models_litellm_running; then
+      # NEVER THE BARE STOP ONCE A CODEX-KIND LANE EXISTS (Plan 3a Task 2,
+      # operator ruling Z4, D-3753). Refused
+      # HERE, through this arm's own restart-failed path and before PHASE 2, so
+      # nothing is written and the next run sees the same difference again.
+      local blocked
+      if blocked="$(_models_litellm_stop_blocked)"; then
+        _models_refuse restart-failed 1 "the LiteLLM proxy is running on the PREVIOUS config, and ccrc will not stop it: $blocked, and the only stop this arm has is another repository's bare 'ccgpt stop', which stops units by name, the names a codex lane's own tiers carry. Stop that proxy by hand once you know which lane's units that stop would name, or flip lane $1 to codex (Plan 3b), then re-run this command — until then this box serves the old model list. Nothing was written and nothing was stopped."
+      fi
+      if command -v ccgpt >/dev/null 2>&1 && ccgpt stop >/dev/null 2>&1; then
   ```
 
-  `deploy/models-op.mjs`, old (unique):
+  Nothing else in the arm moves: the box-global path, the `pgrep`, the bare stop, its own `restart-failed` sentence, and PHASE 2 keep their bytes.
 
-  ```js
-      // `pgrep`/`ccgpt` are box-level concerns kept out of node deliberately, so
+  (d) **The harness's containment (`server/test/ccrc-models.test.ts`' `env()`).** Two edits, both inside that one function. Old (unique):
+
+  ```ts
+    for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete inherited[k];
   ```
 
   New:
 
-  ```js
-      // the lane's tier and its stop are box-level concerns kept out of node, so
+  ```ts
+    // Plan 3a Task 2 (operator ruling Z1): nor is `CCGPT_CONFIG`, the other
+    // repository's override of the external arm's box-global path, which that
+    // arm still honours and a GPT-lane session can carry. Inherited, it would
+    // aim a case's render and its `pgrep -f` at a real config.
+    for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG']) delete inherited[k];
   ```
 
-  The template edit changes the rendered bytes of every codex lane once, so its next refresh reads "changed" and restarts its tier. No box has a codex lane before 3b (measured), so this is the free moment. It is the same argument the global constraint makes for `_rt_probe_source`.
+  Old (unique):
 
-- [ ] **Step 5: Run green, then the neighbours.** Foreground. Each block is ONE Bash call with a 600000 ms timeout, because the five together could pass the tool's 600 s cap (ruling F6):
+  ```ts
+    poison('launchctl', 'ccrc tests must never query this box\'s real launchd');
+    assertManagerStandIns(e, h);
+  ```
+
+  New:
+
+  ```ts
+    poison('launchctl', 'ccrc tests must never query this box\'s real launchd');
+    // Plan 3a Task 2 (operator ruling Z1): the external arm keeps its `pgrep -f`
+    // and its bare `ccgpt stop`, and on the fleet box a real `ccgpt stop` stops
+    // a live lane's units BY NAME, which the census cannot see. So a HOME that
+    // holds no stand-in of its own gets a poison. Only then: the functional
+    // stubs a describe writes before a run must survive that run's env().
+    for (const name of ['pgrep', 'ccgpt']) {
+      if (!fs.existsSync(join(h, '.local', 'bin', name))) poison(name, `ccrc tests must never reach a real ${name}`);
+    }
+    assertManagerStandIns(e, h);
+  ```
+
+  `extra` is still applied after the deletion, so `the external arm still honours CCGPT_CONFIG …` passes its own. `box()` calls `env(h)` once when it builds a HOME, so every HOME starts with both poisons, and a describe's stub overwrites them by its own `writeFileSync`.
+
+- [ ] **Step 5: Run green, then the neighbours.** Foreground. Each block is ONE Bash call with a 600000 ms timeout (ruling F6):
 
   ```bash
   . "<abs scratch>/plan3a-env.sh"
   cd server
-  r11 t2-green ./node_modules/.bin/vitest run test/ccrc-models.test.ts test/single-definition.test.ts
+  r11 t2-green ./node_modules/.bin/vitest run test/ccrc-models.test.ts test/models-op.test.ts
   ```
 
   ```bash
   . "<abs scratch>/plan3a-env.sh"
   cd server
-  r11 t2-neigh1 ./node_modules/.bin/vitest run test/models-op.test.ts test/litellm-render.test.ts test/macos-platform.test.ts test/ccrc-cli.test.ts test/topology-clean.test.ts
+  r11 t2-neigh1 ./node_modules/.bin/vitest run test/single-definition.test.ts test/macos-platform.test.ts test/ccrc-cli.test.ts test/litellm-render.test.ts test/topology-clean.test.ts
   ```
 
   ```bash
@@ -2866,7 +2656,31 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
   ```bash
   . "<abs scratch>/plan3a-env.sh"
   cd server
-  r11 t2-neigh3 ./node_modules/.bin/vitest run test/ccrc-codex.test.ts test/ccgpt-runtime.test.ts
+  r11 t2-neigh3 ./node_modules/.bin/vitest run test/ccgpt-usage.test.ts test/ccrc-codex-launcher.test.ts
+  ```
+
+  ```bash
+  . "<abs scratch>/plan3a-env.sh"
+  cd server
+  r11 t2-neigh4-1 ./node_modules/.bin/vitest run test/ccrc-codex.test.ts -t 'the lane runs, in fixtures'
+  ```
+
+  ```bash
+  . "<abs scratch>/plan3a-env.sh"
+  cd server
+  r11 t2-neigh4-2 ./node_modules/.bin/vitest run test/ccrc-codex.test.ts -t '^(?!.*the lane runs, in fixtures)'
+  ```
+
+  ```bash
+  . "<abs scratch>/plan3a-env.sh"
+  cd server
+  r11 t2-neigh5 ./node_modules/.bin/vitest run test/ccrc-install.test.ts -t 'the codex runtime step on a real spine'
+  ```
+
+  ```bash
+  . "<abs scratch>/plan3a-env.sh"
+  cd server
+  r11 t2-neigh6 ./node_modules/.bin/vitest run test/ccrc-uninstall.test.ts -t '_uninst_codex'
   ```
 
   ```bash
@@ -2875,67 +2689,92 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
   r11 t2-types ./node_modules/.bin/vitest run test/typecheck-tests.test.ts
   ```
 
-  Expected: all green, and each call ends `census: clean …`.
-  - `ccrc-models` has Step 2's count and is all green.
-  - `session-hook` is green. Measured 335/335 on a scratch copy with this task's `ccd/ccrc` applied, which is 26 lines shorter. The compaction-card corpus cites `ccd/ccrc` at one line above this edit and at two below it, and the census did not move. If it reds here, apply S6-R11 in this commit (re-measure and dump; README carries no `ccd/ccrc` anchor). Never widen the rule.
-  - `ccrc-codex` and `ccgpt-runtime`: `ccrc codex start` still renders an absent config through `_codex_litellm_ensure`, and the template edit reaches `plantLaneConfig` and the runtime's `DEPLOYMENT` case through the renderer. Measured green (268 passed, 5 skipped).
-  - `topology-clean` must run in the real tree, because it needs `git ls-files`.
+  Expected: all green, and each call ends `census: clean …`. Measured on a scratch copy of `4ec8926a` with this task applied and without Task 1:
+  - `t2-green`: 157 and 110, Step 2's counts. The 157 was measured on the same copy with Step 4(d) applied: `Tests 267 passed (267)` for the two files together, census clean.
+  - `t2-neigh1`, without `topology-clean`, which needs `git ls-files` and so runs only in the real tree: 394 passed, 11 skipped.
+  - `session-hook`: 335/335. The compaction-card corpus cites `ccd/ccrc`, and this task adds 34 lines to that file, so the census was the risk; it did not move. If it reds here, apply S6-R11 in this commit: re-measure and dump. README carries no `ccd/ccrc` anchor. Never widen the rule.
+  - `t2-neigh3`: 64 passed.
+  - `ccrc-codex`. Every `init codex` there is on a codex-kind row, which the guard leaves alone. Run whole with the guard alone, it took 637 s, past the tool's cap, hence the two parts. 197 passed. 4 were red at `expected -1 to be +0`: a `spawnSync` that its own timeout killed under load, in `lifeBox`'s codex-kind `init`, and none of them names the refusal. So a red there is re-run in isolation before it counts (the known-load-flake rule).
+  - `t2-neigh5`: 6 passed. `t2-neigh6`: 17 passed. Both `init codex` on codex-kind lanes only.
+  - `typecheck-tests`: `server/test/ is clean under a tests-inclusive project` is green.
 
 - [ ] **Step 6: Mutation table.**
-  - First stage this task's six files, so that the index holds the green tree every restore is checked against (ruling F7). Then back up each file a row edits, one copy per file. Nothing is committed here:
+  - First stage this task's five files, so that the index holds the green tree every restore is checked against (ruling F7). Then back up each file a row edits, one copy per file. Nothing is committed here:
 
     ```bash
     . "<abs scratch>/plan3a-env.sh"
-    git add ccd/ccrc deploy/litellm-config.template.yaml deploy/models-op.mjs shared/litellm.mjs \
-      server/test/ccrc-models.test.ts server/test/single-definition.test.ts
+    git add ccd/ccrc deploy/models-op.mjs server/test/fixtures/modelCases.ts \
+      server/test/models-op.test.ts server/test/ccrc-models.test.ts
     mkdir -p "$SCRATCH/t2-mut"
-    for f in ccd/ccrc deploy/litellm-config.template.yaml shared/litellm.mjs server/test/ccrc-models.test.ts; do
+    for f in ccd/ccrc deploy/models-op.mjs server/test/fixtures/modelCases.ts \
+             server/test/models-op.test.ts server/test/ccrc-models.test.ts; do
       cp "$f" "$SCRATCH/t2-mut/$(basename "$f")"
     done
     ```
 
-  - Then, for each row alone, apply the mutation and run this as one call. The filter selects the two `ccrc models litellm` describes (this task's and the codex-kind one), the joint case, the containment wall and the absence pin. It leaves out Task 1's `refresh never probes, renders or stops…` describe, which rows 6, 9 and 10 red too, and which Task 1's own table measures:
+  - Then, for each row alone, apply the mutation and run its command as one call. Rows 1-5, 11 and 14-17 run both files whole. Rows 6-10, 12 and 13 touch only `ccd/ccrc`, which `models-op.test.ts` never runs, so they run the `ccrc-models` describes that reach the arm:
 
     ```bash
     . "<abs scratch>/plan3a-env.sh"
     cd server
-    r11 t2-mut-<row> ./node_modules/.bin/vitest run test/ccrc-models.test.ts test/single-definition.test.ts \
-      -t 'ccrc models litellm|refresh never renders or stops an external|containment wall|box-global LiteLLM'
+    r11 t2-mut-<row> ./node_modules/.bin/vitest run test/ccrc-models.test.ts test/models-op.test.ts   # rows 1-5, 11, 14-17
     ```
-
-  - Record the red count. A red row is vitest's exit 1 under `census: clean — … command exit 1`, because the census verdict is separate (F10). Then restore every file, verify the restore, and re-run the block above green, labelled `t2-mut-<row>-green`:
 
     ```bash
     . "<abs scratch>/plan3a-env.sh"
-    for f in ccd/ccrc deploy/litellm-config.template.yaml shared/litellm.mjs server/test/ccrc-models.test.ts; do
+    cd server
+    r11 t2-mut-<row> ./node_modules/.bin/vitest run test/ccrc-models.test.ts -t 'ccrc models litellm|ccrc models refresh|ccrc models <id> init'   # rows 6-10, 12, 13
+    ```
+
+  - Record the red count. A red row is vitest's exit 1 under `census: clean — … command exit 1`, because the census verdict is separate (F10). Then restore every file, verify the restore, and re-run that row's command green, labelled `t2-mut-<row>-green`:
+
+    ```bash
+    . "<abs scratch>/plan3a-env.sh"
+    for f in ccd/ccrc deploy/models-op.mjs server/test/fixtures/modelCases.ts \
+             server/test/models-op.test.ts server/test/ccrc-models.test.ts; do
       cp "$SCRATCH/t2-mut/$(basename "$f")" "$f"
     done
-    git diff --quiet -- ccd/ccrc deploy/litellm-config.template.yaml shared/litellm.mjs server/test/ccrc-models.test.ts && echo restored
+    git diff --quiet -- ccd/ccrc deploy/models-op.mjs server/test/fixtures/modelCases.ts \
+      server/test/models-op.test.ts server/test/ccrc-models.test.ts && echo restored
     ```
 
     Expected: `restored`.
-  - The counts below were measured on a scratch copy of `1f9fa22d` with a stand-in for Task 1's skip; re-derive them.
-  - If a row does not red, report that. Never add code to force a bind.
+  - The counts below were measured on a scratch copy of `4ec8926a` without Task 1; re-derive them. If a row does not red, report that. Never add code to force a bind.
 
   | # | Guard | Mutation | Goes red (measured) |
   |---|---|---|---|
-  | 1 | the external arm is gone | restore `_models_litellm_path`'s two arms, `_models_litellm_running` and the old `_models_litellm` body from the recorded base (`git show "$(cat "$SCRATCH/t2-base")":ccd/ccrc`, after the sourcing line) | 6: the absence pin, external-lane, never-probed, CCGPT_CONFIG, no-answer, path helper |
-  | 2 | an external codex lane is `external-lane` | the `[ "$probe" != codex ] \|\| _models_refuse external-lane …` statement → `:` | 3: external-lane (answers `no-answer`), never-probed (answers `never-probed`), CCGPT_CONFIG |
-  | 3 | keyed on the registry's probe, never on `exec.kind` | `probe=` → `probe="$(jq -r --arg id "$1" 'first(.accounts[]? \| select(.id == $id) \| .exec.kind) // empty' "$file" \| sed 's/^external$/codex/')"` | 2: the `router2` row (answers `external-lane`), no-answer |
-  | 4 | two ops disagreeing is `no-answer` | the `[ "$crc" -ne 0 ] \|\| _models_refuse no-answer …` statement → `:` | 1: no-answer (rc 0, the stub's success passed through) |
-  | 5 | the path helper needs an id | delete its `[ -n "${1:-}" ] \|\| { …; return 1; }` line | 1: path helper (`~/.ccrc/codex//litellm.yaml` at `rc=0`) |
-  | 6 | a non-codex lane never reaches the codex arm | a first body line `return 0` in `_models_litellm_codex` | 8: external-lane, never-probed, CCGPT_CONFIG, all three `it.each` rows, no-answer, the joint case |
-  | 7 | `env()` poisons `ccgpt` | delete `poison('ccgpt', …)` | 1: the containment-wall case |
-  | 7b | `env()` poisons `pgrep` | delete `poison('pgrep', …)` | 1: the containment-wall case |
-  | 8 | nothing ccrc runs stops the other repository's LiteLLM | add `command -v ccgpt >/dev/null 2>&1 && ccgpt stop >/dev/null 2>&1` as a line inside `_models_litellm`, above its final `printf` | 4: the absence pin, and the three `it.each` rows. The line runs on the op-refusal path, so `untouched` finds `stop` in `ccgpt`'s poison log (re-measured in the fix round) |
-  | 9 | Task 1's skip keeps the hourly run off this path | delete Task 1's skip arm in the refresh loop | 1: the joint case (exit 1; the `ext-a` row is `ok: false`, and its `reason` is the external-lane refusal's sentence, `lane "ext-a" is an external lane: …`, never the code) |
-  | 10 | the two together | rows 1 and 9 at once | 1: the joint case (the row reads `litellm: rendered`, and the foreign file is rewritten) |
-  | 11 | the template names no box-global path | restore the template's old line 2 | 1: the absence pin |
-  | 12 | the renderer's header names no box-global path | restore `shared/litellm.mjs`' old line 2 | 1: the absence pin |
+  | 1 | Z3: a codex registry is created on a codex-kind lane only | delete the `if (a.probe === 'codex' && !(isObj(account.exec) && account.exec.kind === 'codex')) { … }` block (its comment may stay) | 4: the three `refuses to CREATE … on <id>` rows (`models-op`), and `refuses to CREATE … on an external lane` (`ccrc-models`) |
+  | 2 | Z3 refuses the codex probe alone | drop `a.probe === 'codex' && ` from that condition | 35: 20 in `models-op` (every openrouter or compatible create on a row that is not codex-kind, `every other probe kind is still created…` among them) and 15 in `ccrc-models` |
+  | 3 | keyed on "not codex-kind", never on `external` alone | the condition → `a.probe === 'codex' && isObj(account.exec) && account.exec.kind === 'external'` | 1: the `gen-a` row |
+  | 4 | keyed on the kind, never on telemetry | the condition → `a.probe === 'codex' && account.telemetry !== 'codex'` | 3: the `ext-a` and `ext-b` rows, and `refuses to CREATE … on an external lane` |
+  | 5 | a registry that already exists is untouched | move the whole block, comment and all, above `    if (registry !== null) {` | 2: `is idempotent — a second init changes nothing and says so` (`models-op`), and `an external lane whose codex registry predates this build keeps it…` (`ccrc-models`) |
+  | 6 | Z4: never the bare stop once a codex-kind lane exists | delete the `local blocked` … `fi` block in `_models_litellm` (its comment may stay) | 3: `after a flip, a running proxy … REFUSED…`, `a roster whose codex lanes cannot be told…`, `the hourly refresh carries the refusal…` |
+  | 7 | a codex-kind row blocks the stop | in `_models_litellm_stop_blocked`, `[ -n "$ids" ] \|\| return 1` → `return 1` | 2: `after a flip, a running proxy … REFUSED…`, `the hourly refresh carries the refusal…` |
+  | 8 | undecidable blocks the stop | in its `if [ "$rc" -ne 0 ]` branch, `return 0` → `return 1` | 1: `a roster whose codex lanes cannot be told…` |
+  | 9 | asked of exec.kind, never telemetry | `ids="$(_codex_lanes 2>/dev/null)" \|\| rc=$?` → `ids="$(jq -r '.accounts[] \| select(.telemetry == "codex") \| .id' "$(_models_roster_path)" 2>/dev/null)" \|\| rc=$?` | 4: `on today's shape (no codex-kind row) the bare stop still runs…`, `after a flip, a running proxy … REFUSED…`, `a roster whose codex lanes cannot be told…`, `the hourly refresh carries the refusal…` |
+  | 10 | refused BEFORE the stop | move the `local blocked` … `fi` block below the arm's own `if command -v ccgpt …; fi`, still inside `if _models_litellm_running; then` | 3: the same three as row 6, each now finding `stop` in the `ccgpt` call log |
+  | 11 | the planted bytes are `init codex`'s | `` `${JSON.stringify(SEEDED, null, 2)}\n` `` → `` `${JSON.stringify(SEEDED)}\n` `` in `SEEDED_REGISTRY_BYTES` | 2: `seeds today's codex registry, byte for byte, on a codex-kind lane`, and `keeps 2-space indent and a trailing newline` (both `models-op`) |
+  | 12 | the guard binds the stop, never the render | move the `local blocked` … `fi` block, two spaces less indented, to just above `  if _models_litellm_running; then` | 1: `after a flip, with nothing running, the render lands exactly as before…` |
+  | 13 | … nor an unchanged render | move it instead to just below the external arm's PHASE 1 refusal line, `[ "$crc" -eq 0 ] \|\| { printf '%s\n' "$check"; return "$crc"; }` (the one after the box-global `--out`) | 2: `… with nothing running …`, and `after a flip, an unchanged render asks nothing, even with a proxy running` |
+  | 14 | Z3 refuses only a row that is not codex-kind | the condition → `a.probe === 'codex'` | 49: every create on a codex-kind row, 8 in `models-op` (the two re-aimed cases among them) and 41 in `ccrc-models` |
+  | 15 | the harness never inherits `CCGPT_CONFIG` | drop `'CCGPT_CONFIG'` from `env()`'s `for (const k of […]) delete inherited[k];` list | 1: `drops an inherited CCGPT_CONFIG, and poisons pgrep and ccgpt…` |
+  | 16 | the harness poisons `pgrep` and `ccgpt` | delete `env()`'s `for (const name of ['pgrep', 'ccgpt']) { … }` loop, all three lines | 1: the same case (`command -v` resolves past this HOME's `~/.local/bin`) |
+  | 17 | … only where the HOME holds no stand-in | `if (!fs.existsSync(join(h, '.local', 'bin', name))) poison(name,` → `poison(name,` | 12: the same case, and every case whose functional `pgrep`/`ccgpt` stub must survive its run: 6 in `describe('ccrc models litellm')`, 4 in its nested Z4 describe, and `a lane whose restart fails is a FAILED row, and the run exits 1` |
 
-  Two notes:
-  - Rows 9 and 10 mutate **Task 1's** code, because the joint case is a claim about both tasks. Restore Task 1's lines exactly.
-  - Rows 7 and 7b are the only reds of the containment case. It resolves names with `command -v` and never executes one, so neither mutation can reach a real `ccgpt` on a runner's PATH.
+  **The migration control.** Restore the two test files from the task base, keep the implementation, and run them:
+
+  ```bash
+  . "<abs scratch>/plan3a-env.sh"
+  for f in server/test/models-op.test.ts server/test/ccrc-models.test.ts; do
+    git show "$(cat "$SCRATCH/t2-base")":"$f" > "$f"
+  done
+  cd server
+  r11 t2-mut-migration ./node_modules/.bin/vitest run test/ccrc-models.test.ts test/models-op.test.ts
+  ```
+
+  Measured with the guard alone at `4ec8926a`: 89 red, 50 in `models-op` and 39 in `ccrc-models`. Every one is a setup whose registry is no longer created. Then run the restore block above and re-run green. The number is Task 1's base plus the cases it added, so re-derive it. What matters is that it is non-zero and that Step 5's run is green.
+
+  Rows 7, 8 and 9 edit the one helper, and their reds differ on purpose: each case names the clause it expects. Rows 12 and 13 are the only reds of the two render controls.
 
 - [ ] **Step 7: Scope and residue check,** against this task's own base. Each diff compares the recorded base with the working tree, never `"$BASE" HEAD`: until Step 8 commits, HEAD is still the base. The working-tree form means the same before that commit and after it (ruling F3):
 
@@ -2943,10 +2782,12 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
   . "<abs scratch>/plan3a-env.sh"
   BASE="$(cat "$SCRATCH/t2-base")"
   git diff --name-only "$BASE"
-  # → ccd/ccrc, deploy/litellm-config.template.yaml, deploy/models-op.mjs, shared/litellm.mjs,
-  #   server/test/ccrc-models.test.ts, server/test/single-definition.test.ts
-  git diff --quiet "$BASE" -- ccd/ccd ccd/ccgpt-runtime ccd/ccrc-models-probe deploy/systemd && echo untouched
-  # → untouched (no re-stamp, no runtime rebuild, the probe is Task 1's, no unit changes)
+  # → ccd/ccrc, deploy/models-op.mjs, server/test/ccrc-models.test.ts,
+  #   server/test/fixtures/modelCases.ts, server/test/models-op.test.ts
+  git diff --quiet "$BASE" -- ccd/ccd ccd/ccgpt-runtime ccd/ccrc-models-probe deploy/systemd \
+    shared/litellm.mjs deploy/litellm-config.template.yaml server/test/single-definition.test.ts && echo untouched
+  # → untouched (no re-stamp, no runtime rebuild, the probe is Task 1's, no unit changes, and the external
+  #   arm's renderer, template and one-holder pin are exactly as they were: ruling Z1)
   ids="$(jq -r '.accounts[] | select(.telemetry == "codex") | .id' "$HOME/.ccrc/accounts.json")"
   printf '%s\n' "$ids" | grep -c .
   # → 2: the box's two Codex-telemetry rows, read from its roster now, never from this plan, and never printed (F1, F4)
@@ -2963,44 +2804,48 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
 - [ ] **Step 8: Commit.**
 
   ```bash
-  git add ccd/ccrc deploy/litellm-config.template.yaml deploy/models-op.mjs shared/litellm.mjs \
-    server/test/ccrc-models.test.ts server/test/single-definition.test.ts
+  . "<abs scratch>/plan3a-env.sh"
+  git add ccd/ccrc deploy/models-op.mjs server/test/fixtures/modelCases.ts \
+    server/test/models-op.test.ts server/test/ccrc-models.test.ts
   git commit -F - <<'EOF'
-  fix(models): ccrc no longer renders or stops another repository's LiteLLM
+  fix(models): no codex registry on a lane that is not codex-kind, and no bare stop once one is
 
-  `ccrc models litellm` serves exec.kind "codex" lanes only. A lane whose
-  class registry names the codex probe but whose roster row is not
-  codex-kind is refused `external-lane`, with the cutover as its remedy,
-  and nothing is written or stopped; every other non-codex lane keeps the
-  op's own refusal, and two ops that disagree are `no-answer`. The
-  box-global config path, `pgrep -f` over it and the bare `ccgpt stop` are
-  gone, and `_models_litellm_path` needs an id. With the previous commit's
-  refresh skip, the hourly timer can no longer rewrite that file or stop
-  that process on a box whose Codex lanes are still external.
+  `ccrc models <id> init codex` now refuses, by name and writing nothing,
+  to create a codex class registry on a roster row whose exec.kind is not
+  "codex": such a lane declares no authDir, so its probe would read another
+  lane's token directory. A registry that already exists is untouched, and
+  every other probe kind is created as before. The external LiteLLM arm
+  keeps its box-global path, its pgrep and its bare stop, but once any
+  roster row is codex-kind (or the roster's codex lanes cannot be read) it
+  refuses that stop as restart-failed before writing, because the stop
+  names units a codex lane's tiers share. On a roster with no codex row
+  nothing changes. The suites plant the live shape's pre-existing registry
+  in init's own bytes instead of creating it, and the models suite's
+  harness no longer inherits CCGPT_CONFIG and poisons pgrep and ccgpt
+  wherever a case planted no stand-in.
 
   Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
   EOF
+  git log -1 --format='%an <%ae> | %cn <%ce>'   # → the worktree's noreply identity only (the commit-identity rule)
   ```
 
 **What this task deliberately does NOT do** (reject any of these as scope creep):
-- **The refresh loop.** Task 1 owns the skip of an external codex-registry lane (R3). This task edits no line of `_models_box_sub`: the litellm step's `[ "$probe" = "codex" ]` gate and its row vocabulary (`rendered|unchanged|skipped`) stay as they are.
-- **`_check_models`'s sentence for the frozen lane** belongs to Task 1 (R3, critique #1), and `_check_codex` to Tasks 4-5.
-- **Anything of the other repository's.** It writes, moves and deletes no file under `~/.handoff`, no `~/.local/bin/ccgpt*` and no `ccgpt-*` unit. It stops nothing: the frozen config and its `.prev` stay exactly as the last render left them.
-- **`ccrc-models.service`'s comment** ("ccgpt and litellm live only there"). Its bytes are placed by `_unit_atomic`, and any edit would rewrite a live unit on the next update for no behavioural gain. Plan 4 may re-word it.
-- **The usage text and README.** "restarts the proxy only if it is holding the previous rendering" is still true of the one arm that remains.
-- **The codex arm.** `_models_litellm_lane`, `_models_litellm_lane_held`, `_codex_litellm_ensure` and the lane lock are unchanged, except for four comment lines.
+- **Retire the external arm.** Its path, `pgrep` and bare stop stay for an `external` lane until that lane's flip (Z1). D-3708 is withdrawn, and Plan 4's ccrc half deletes the arm (Z8).
+- **Freeze anything.** There is no skipped row, no frozen catalogue, no `_check_models` sentence, and no rollback asymmetry. Ruling Z removed every R-C2 consequence.
+- **The refresh loop, the probe, or `_models_run_probe`.** Those are Task 1's. This task edits no line of `_models_box_sub`.
+- **Delete, rewrite or migrate a registry that exists.** The live lane's registry stays exactly as it is (Z3).
+- **The `show` summary's remedy line** (`ccd/ccrc:9382`, "Run: ccrc models <id> init <codex|openrouter|compatible>"). For an external lane with no registry, its `codex` word now meets the refusal, and that refusal names the remedy. Re-wording the summary is not needed for safety.
+- **Anything of the other repository's.** This task writes, moves and deletes no file under `~/.handoff`, no `~/.local/bin/ccgpt*` and no `ccgpt-*` unit, and it stops nothing.
 - **The spec.** Task 11 appends §20 and makes the same-line pointer edit (R9). This task produces the text.
 
 **Hazards a later task must respect:**
-1. **Tasks 1 and 2 are one rollout.** Measured on a scratch copy, this task without Task 1's skip makes `refresh --all` exit 1 on the live shape: the external row reads `ok: false` with the `external-lane` sentence. Every hourly `ccrc-models.service` run would then fail. Never split them across a merge, and Task 10's rehearsal must pin that exit code.
-2. **Every caller of `_models_litellm_path` must pass an id and check the answer.** With no id it returns 1 and prints nothing. A caller that captured `$(…)` unchecked and then ran the op with `--commit true` would hand it `--out ''`. Today's three callers all pass an id, and the codex arm checks the id's shape first (PF-25).
-3. **Plan 2b-2 Task 6's mutation rows 2, 5 and 20 lose their subject.**
-   - Row 2 is superseded by this task's row 6, and row 5 by its row 1.
-   - Row 20 (`_codex_litellm_ensure` → `_models_litellm "$1"`) no longer reds `never takes the EXTERNAL arm`, because `_models_litellm router2` now refuses without writing.
-   - Task 11's count table records all three as retired, not as green mutations.
-4. **`external-lane` is now a word in two envelopes:** `_acct_refuse`'s account refusal and `_models_refuse`'s models JSON. They are different verbs with one meaning. Neither may be renamed alone.
-5. **A rollback to the OpenClaw launcher (3b) reads a config last rendered before this merge.** A catalogue model retired upstream in between is not in it (skeleton risk). 3b's rollback step must say so.
-6. **The `no-answer` arm assumes the `lanes` and `litellm` ops agree about which registries render.** An op change that teaches `litellm` to render a non-codex registry must teach `lanes`' `probe` the same, or every such lane reads `no-answer`.
+1. **After lane A's flip, a still-external lane B can fail every hourly refresh.** This happens when lane B has a codex registry, a proxy is running on the box-global config, and lane B's render changes. The refresh then fails with `restart-failed` (exit 1, so `ccrc-models.service` fails) until the operator acts. That is loud by design.
+   - Whether it can fire depends on which proxy holds the box-global config when the first flip lands, and the drafting census did not measure that. Flipping the lane with the registry first moves that lane to the codex arm, so the case cannot arise.
+   - Before the first flip, Plan 3b measures `pgrep`'s answer read-only. Its runbook names the case and its remedy.
+2. **`init codex` needs the flip first.** The live lane without a registry gains one only after its row is `exec.kind: "codex"`, so Plan 3b orders the flip before the `init`. A deliberate `ccrc models <id> rm` of the live lane's registry before its flip makes that registry uncreatable until the flip.
+3. **A fixture that needs an external lane with a codex registry plants it by file, never through `init codex`.** In these two suites that is `plantCodex` and `seedCodex`: `SEEDED_REGISTRY_BYTES`, then the op's `materialise`. A later task writes its own registry literal where it needs other bytes or no derived files, as Task 4's `lane: null` case and Task 10's `REHEARSAL_REGISTRY` do. That holds for Tasks 4-10 and every later suite. A change to `SEEDS.codex` reds `seeds today's codex registry, byte for byte` first; update `SEEDED` in the same commit.
+4. **`restart-failed` now has two causes,** a failed stop and a refused one. Only the detail tells them apart, and the refresh row's `reason` carries it. A caller that keys on the code alone cannot tell them apart.
+5. **Plan 2b-2 Task 6's mutation rows 2, 5 and 20 keep their subject,** because the arm is not retired. Task 11's count table records them as before.
 
 ### Task 3: The settings-env drift check compares a codex lane against its loopback shim
 
@@ -3404,7 +3249,7 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
 ### Task 4: `_check_codex`, part 1 — population, executables, runtime, authDir, ports and lane state (no socket)
 
 **Files:**
-- Modify `deploy/models-op.mjs` — a check-only `materialise` (ruling R7). Every edit above the `OPS` table is line-count-neutral, because `server/test/modelenv.test.ts` cites this file at `:298`. Task 1 re-aimed `ccd/ccrc-doctor-checks`' `:185` and `:573` citations by name, and the `git grep` below proves none came back (measured at `1f9fa22d`; re-derive with `git grep -n "models-op\.mjs:[0-9]" -- ':!docs'`).
+- Modify `deploy/models-op.mjs` — a check-only `materialise` (ruling R7). Every edit above the `OPS` table is line-count-neutral, because the tree cites this file by line number: `server/test/modelenv.test.ts` at `:298`, and `ccd/ccrc-doctor-checks`' `_check_models` comments at `:185` and `:573` (both already stale at `1f9fa22d`: :185 is a blank line and :573 is `OPS.init`, neither the code it names). Ruling Z gives `_check_models` no rewrite, so those two may still be there when this task starts. This task's one line-adding edit, inside `OPS.materialise` (:578), sits below all three, and Step 7 proves each cited line unmoved either way (measured at `1f9fa22d`; re-derive with `git grep -n "models-op\.mjs:[0-9]" -- ':!docs'`).
   - The path-helper comment (`grep -n 'names these two directly' deploy/models-op.mjs`, :115-116), rewritten in place (2 lines → 2).
   - `materialise`'s two path locals (`grep -n 'const classes = path.join(modelsDir()' deploy/models-op.mjs`, :341-342) and its file list (`grep -n 'const files = \[\[classes, classesTsv' deploy/models-op.mjs`, :403-406), in place (2 → 2, 4 → 4).
   - `OPS.materialise` (`grep -n "^  materialise: {" deploy/models-op.mjs`, :578) gains the optional `check` key.
@@ -3413,14 +3258,14 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
 - Modify `ccd/ccrc-doctor-checks`:
   - `CCRC_DOCTOR_CHECKS` (`grep -n '^CCRC_DOCTOR_CHECKS=(' ccd/ccrc-doctor-checks`, :166-206): the `  models` line (:205) becomes `  models codex …` ON THE SAME LINE (Why).
   - The seven stale `deploy.sh` citations (`grep -nE 'deploy\.sh.?(:|[[:space:]]*\(:)[0-9]' ccd/ccrc-doctor-checks` → :274, :276, :741, :1152, :2168, :3737, :3740), each rewritten on its own line.
-  - The `_check_codex` block, appended after the file's last line, the end of `_check_models` (:5656 at `1f9fa22d`; Task 1 rewrites `_check_models` first, so re-derive it at Step 0).
+  - The `_check_codex` block, appended after the file's last line, the end of `_check_models` (:5656 at `1f9fa22d`; ruling Z gives `_check_models` no rewrite, but re-derive it at Step 0, because an earlier task may still edit this file).
 - Modify `server/test/codexLaneFixture.ts` — `codexRoster` (`grep -n '^export function codexRoster' server/test/codexLaneFixture.ts`, :98-126) gains `opts.accountsSh`.
 - Modify `server/test/ccrc-doctor.test.ts`:
   - the vitest import (:38) and the `node:fs` import's second names line (:42), same-line;
   - `SHIPPED_SKILLS`, directly above `healthy()` (`grep -n '^/\*\* A box where every check passes' server/test/ccrc-doctor.test.ts`, :1021), and `healthy()`'s skills loop (:1067), same-line;
   - `healthyCodexBox` (`grep -n '^function healthyCodexBox' server/test/ccrc-doctor.test.ts`, :1204-1219), replaced by the Codex fixture block;
   - `HEALTHY_SKIPS` (`grep -n '^const HEALTHY_SKIPS' server/test/ccrc-doctor.test.ts`, :1288) and its docstring;
-  - the six `healthyCodexBox` callers (`grep -n "healthyCodexBox('" server/test/ccrc-doctor.test.ts`): the five `wrappers` cases (:3854-3909) and Task 1's codex-kind `models` case. Task 3's accounts cases build their own `codexAccountsBox` and are not callers;
+  - the five `healthyCodexBox` callers (`grep -n "healthyCodexBox('" server/test/ccrc-doctor.test.ts`), all of them `wrappers` cases (:3854-3909). No earlier task adds one: ruling Z gives `_check_models` no codex-specific sentence, so Task 1 adds no `models` case on this fixture, and Task 3's accounts cases build their own `codexAccountsBox`;
   - two describes appended at the end of the file (:8828 at `1f9fa22d`; Tasks 1 and 3 add cases above it first).
 - Modify `server/test/models-op.test.ts` — five cases inside `describe('lane.json (spec §5.4) — the codex lane manifest'` (:1111), directly before the `});` that closes it (:1312).
 - Neighbours run, not edited: `single-definition`, `pool-name-parity`, `macos-platform`, `ccrc-models`, `modelenv`, `ccrc-codex`, `ccrc-doctor-graphify`, `install-census`, the codex and doctor cases of `ccrc-install`, and `typecheck-tests`.
@@ -3455,9 +3300,9 @@ The joint case states this shape with fixture names, and Task 10's rehearsal pin
   - the rendered LiteLLM config against the catalogue, through `litellm` without `--commit` (absent, stale, never probed);
   - lane state left under `~/.ccrc/codex/` for an id that is no longer a codex lane (2b-1 item 16's flip-back case), a WARN D-3713.
 - **The population, and the two answers that are never a SKIP (ruling R-C6).** `_codex_lanes` rc 1 (the roster cannot be read) and rc 2 (no jq) are FAILs naming `ccrc wrappers` and jq D-3710. An unreadable roster is not an empty one, and a SKIP there would read "no Codex lane" on a box that has some. An ABSENT roster file is different: it is a positive answer, and `_check_wrappers` already FAILs it, so it SKIPs with its own sentence D-3723. Role `server` SKIPs, as `_check_accounts` reads it (doctor-checks:3082-3087); `CCRC_ROLE` unset reads as not server (spec §12).
-- **Inert on today's live shape, which is what makes the merge's auto-rollout safe.** The live fleet box's roster has two `external` rows with codex telemetry (one with a class registry) and no `exec.kind: "codex"` row, and no `~/.ccrc/codex/` directory at all (measured 2026-09-30). So `_check_codex` answers exactly one SKIP there, and one SKIP on the server box (`CCRC_ROLE=server`), before it asks anything. Task 10's live-shape rehearsal pins that.
+- **Inert on today's live shape, which is what makes the merge's auto-rollout safe.** The live fleet box's roster has two `external` rows with codex telemetry (one with a class registry) and no `exec.kind: "codex"` row, and no `~/.ccrc/codex/` directory at all (measured 2026-09-30). So `_check_codex` answers exactly one SKIP there, and one SKIP on the server box (`CCRC_ROLE=server`), before it asks anything. Task 10's live-shape rehearsal pins that. The external lane that carries a class registry is not this check's subject: the population is `exec.kind == "codex"` rows, never a telemetry field or a registry's probe kind. That lane stays `_check_models`' subject alone, and this task does not touch `_check_models`, so its class there is what it was (ruling Z1). The new `codex` SKIP is the one line the live doctor gains; Task 10 pins every existing check's class, `models` included, as identical before and after (ruling Z7).
 - **Read-only, the whole way down.** Every registry and catalogue fact comes through models-op's check-only answers:
-  - so this task adds no code line naming the registry's file to `ccd/ccrc-doctor-checks` (single-definition.test.ts:1784-1795 pins that exact count, three since Task 1), and nothing here writes, renders, mkdirs, starts or stops anything;
+  - so this task adds no code line naming the registry's file to `ccd/ccrc-doctor-checks` (single-definition.test.ts:1784-1795 pins that exact count: two, the base's, because ruling Z gives `_check_models` no registry reader of its own; Step 4 compares it with `$BASE`), and nothing here writes, renders, mkdirs, starts or stops anything;
   - the two cases that could catch a writer measure bytes AND mtimes (`treeState`): a re-render of identical bytes still moves an mtime;
   - `authDir` is asked `-e`/`-d`/`-r`/`-x`, and `auth.json` only `-f`, which needs search permission on the directory and nothing on the file, so a 0000-mode `auth.json` PASSes. An `authDir` with no `auth.json` is a FAIL in `ccrc codex start`'s own refusal words, because start refuses there D-3724.
 - **Why `materialise` needs a check form, and why it is opt-in** D-3712. `_codex_lane_json_state` compares lane.json with the ROSTER row only (id, configDir, authDir, ports, units present). A haiku reassigned by hand, or a write interrupted between the TSV and lane.json (2b-1 item 18), leaves a lane.json that the roster agrees with and the registry does not. Ruling R7 measures it with a check-only materialise. The default stays the write, `--check true` is the opt-in:
@@ -3498,11 +3343,12 @@ git rev-parse HEAD > "$SCRATCH/base"   # this task's base; every later block rea
 grep -n '^CCRC_DOCTOR_CHECKS=(' ccd/ccrc-doctor-checks                         # → 166
 grep -n '^  models$' ccd/ccrc-doctor-checks                                     # → 205, exactly one line
 grep -nE 'deploy\.sh.?(:|[[:space:]]*\(:)[0-9]' ccd/ccrc-doctor-checks | cut -d: -f1 | tr '\n' ' '   # → 274 276 741 1152 2168 3737 3740
-wc -l < ccd/ccrc-doctor-checks                                                  # → the last line, which closes _check_models: 5656 at 1f9fa22d, moved by Task 1 (re-derive)
+wc -l < ccd/ccrc-doctor-checks                                                  # → the last line, which closes _check_models: 5656 at 1f9fa22d (re-derive: ruling Z leaves _check_models unrewritten, but an earlier task may still edit the file)
 grep -c '_check_codex\|_dr_cx_' ccd/ccrc-doctor-checks                          # → 0
 grep -n "^  materialise: {" deploy/models-op.mjs                                # → 578
 grep -c "'check'" deploy/models-op.mjs                                          # → 0
 grep -n '^function healthyCodexBox\|^const HEALTHY_SKIPS' server/test/ccrc-doctor.test.ts   # → 1208, 1288
+grep -c "healthyCodexBox('" server/test/ccrc-doctor.test.ts                    # → 5: the wrappers cases and no other caller, the ones 1d converts
 ```
 
 Then record each neighbour's count, one suite per call (ruling F6), every call a block of this shape:
@@ -3514,13 +3360,13 @@ Then record each neighbour's count, one suite per call (ruling F6), every call a
 
 for `ccrc-doctor` (three calls, as shown; its count is their sum), then `models-op`, `ccrc-codex`, `single-definition`, `pool-name-parity`, `macos-platform`, `ccrc-models`, `modelenv`, `install-census` and `ccrc-doctor-graphify`, each run whole (`test/<suite>.test.ts`, no `-t`) and labelled `t4-0-<suite>`.
 
-Measured at `1f9fa22d` (examples to re-derive, never to paste): `ccrc-doctor` `Tests 499 passed | 4 skipped (503)` there, so `509 passed | 4 skipped (513)` once Task 1's four and Task 3's six doctor cases have landed (derived, not measured), `models-op` `Tests 106 passed (106)`, `ccrc-codex` `Tests 201 passed (201)`. Any locator that finds nothing, or finds two, stops the task.
+Measured at `1f9fa22d` (examples to re-derive, never to paste): `ccrc-doctor` `Tests 499 passed | 4 skipped (503)` there, so `505 passed | 4 skipped (509)` once Task 3's six doctor cases have landed (derived, not measured; ruling Z leaves Task 1 no doctor case, because `_check_models` gains no sentence), `models-op` `Tests 106 passed (106)` there, so `110 passed (110)` once Task 2's four Z3 cases have landed (derived), `ccrc-codex` `Tests 201 passed (201)`. Any locator that finds nothing, or finds two, stops the task.
 
 **The census reads live units too.** While this task was drafted, the live fleet placed a session on one of the other repository's lanes mid-run, and that lane's two transient tiers appeared in the `after` snapshot of a green, contained run. A census `FAIL` (exit 125 or 126) stops the step: attribute every hit by the rule beside the census script, re-run once in isolation, report what is attributable, and never touch the unit or signal the process (Global Constraints).
 
 - [ ] **Step 1: Write the failing tests**
 
-**1a. `server/test/models-op.test.ts`.** Insert these cases directly before the `});` that closes `describe('lane.json (spec §5.4) — the codex lane manifest'` (the first `^});$` after `grep -n "describe('lane.json (spec §5.4)" server/test/models-op.test.ts`; it follows the case `replaces an existing lane.json by rename`). They reuse that describe's `CODEX_LANE`, `CODEX_EXTERNAL`, `laneDir`, `lanePath`, `reclassifyHaiku` and the file's `op`/`seed`/`rosterPath`. The model id `gpt-x-mini` is the describe's own fixture word.
+**1a. `server/test/models-op.test.ts`.** Insert these cases directly before the `});` that closes `describe('lane.json (spec §5.4) — the codex lane manifest'` (the first `^});$` after `grep -n "describe('lane.json (spec §5.4)" server/test/models-op.test.ts`; it follows the case `replaces an existing lane.json by rename`). They reuse that describe's `CODEX_LANE`, `CODEX_EXTERNAL`, `laneDir`, `lanePath`, `reclassifyHaiku` and the file's `op`/`seed`/`rosterPath`/`regPath`. The model id `gpt-x-mini` is the describe's own fixture word.
 
 ```ts
   // ── Plan 3a Task 4: `materialise --check true` (ruling R7) ────────────────
@@ -3583,7 +3429,13 @@ Measured at `1f9fa22d` (examples to re-derive, never to paste): `ccrc-doctor` `T
   });
 
   it('--check true answers lane: null on a lane with no manifest, and changed: null on a lane with no registry', () => {
-    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'codex');
+    // `router` is `external` and carries a codex registry that ALREADY EXISTS,
+    // as the live first lane's does. It is planted by hand, never through
+    // `init codex`, which ruling Z3 refuses on an external row: a registry
+    // that already exists is the one shape Z3 leaves alone.
+    fs.mkdirSync(path.dirname(regPath('router')), { recursive: true });
+    fs.writeFileSync(regPath('router'), `${JSON.stringify({ probe: 'codex',
+      classes: { haiku: null, sonnet: null, opus: null, fable: null }, subagent: 'sonnet', discovery: 'catalogue' }, null, 2)}\n`);
     const r = check('router');
     expect(r.code, JSON.stringify(r.body)).toBe(0);
     expect(laneChanged(r)).toBeNull();
@@ -3855,12 +3707,11 @@ New:
 const HEALTHY_SKIPS = (process.platform === 'darwin' ? 1 : 0) + 4;
 ```
 
-**1d. The six `healthyCodexBox` callers** (`grep -n "healthyCodexBox('" server/test/ccrc-doctor.test.ts`): the five in `describe('ccrc doctor: wrappers'` and Task 1's codex-kind case in `describe('ccrc doctor: models'`. Task 3's accounts cases use their own `codexAccountsBox`. In each, `const home = healthyCodexBox(` becomes `const home = await healthyCodexBox(`, and its `it(` becomes `itCodex(`. The five synchronous ones also become `async`:
+**1d. The five `healthyCodexBox` callers** (`grep -n "healthyCodexBox('" server/test/ccrc-doctor.test.ts`), all in `describe('ccrc doctor: wrappers'`. Task 3's accounts cases use their own `codexAccountsBox`, and ruling Z leaves Task 1 no `models` case on this fixture (Step 0's count of 5 is the check). In each, `const home = healthyCodexBox(` becomes `const home = await healthyCodexBox(`, and its `it(` becomes `itCodex(`. The four synchronous ones also become `async`:
 - `'a correctly installed Codex lane passes the wrappers check and reports its one lane', () => {` → `…, async () => {`
 - `'a Codex launcher execing the upstream account instead of ccrc-codex fails and names both', () => {` → `…, async () => {`
 - `'a Codex launcher execing ccgpt — another repository\'s launcher on the fleet box — fails and names ccrc-codex (D-3478)', () => {` → `…, async () => {`
 - `'an absent Codex launcher fails in the absent bucket with the ccrc-wrappers remedy', () => {` → `…, async () => {`
-- `'a codex-KIND lane with a codex registry is still freshness-checked — the skip is the ROW, not the registry alone', () => {` → `…, async () => {` (Task 1's case)
 - `'the launcher the writer generates for a Codex lane passes — writer and checker name one target'` is already `async`.
 
 Their assertions do not change. Two of them pin `r.code === 0` on the WHOLE doctor run, which is why the fixture had to become a lane every check passes.
@@ -4256,9 +4107,9 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
 "$CENSUS" "$EVID/t4-2-doctor-<k>" ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts -t <P>   # three calls, k = 1, 2, 3 (the Global Constraints' parts); the counts below are their sum
 ```
 
-Expected. They were measured on a scratch copy of `1f9fa22d` WITHOUT Tasks 1 and 3, so the doctor total is re-derived for the execution order, in which those tasks land first: Step 0's own total plus this task's 39 cases.
-- `models-op`: `Tests 4 failed | 107 passed (111)`. The four `--check true` cases red on `unknown key --check` (exit 2). The fifth, the typo case, is green on both sides, because the old op refuses the unknown key with the same exit 2. Its red mutation is row MO3.
-- `ccrc-doctor`: `Tests 47 failed | 501 passed | 4 skipped (552)` (re-derive; the copy without Tasks 1 and 3 measured `47 failed | 491 passed | 4 skipped (542)`):
+Expected. They were measured on a scratch copy of `1f9fa22d` WITHOUT Tasks 1 and 3, so the doctor total is re-derived for the execution order, in which Task 3's six doctor cases land first (Task 1 adds none under ruling Z): Step 0's own total plus this task's 39 cases.
+- `models-op`: `Tests 4 failed | 107 passed (111)` on `1f9fa22d`'s 106, measured without Task 2, i.e. Step 0's own total plus five: `4 failed | 111 passed (115)` once Task 2's four have landed. The four `--check true` cases red on `unknown key --check` (exit 2). The fifth, the typo case, is green on both sides, because the old op refuses the unknown key with the same exit 2. Its red mutation is row MO3.
+- `ccrc-doctor`: `Tests 47 failed | 497 passed | 4 skipped (548)` (re-derive; the copy without Tasks 1 and 3 measured `47 failed | 491 passed | 4 skipped (542)`):
   - all 39 new cases (the citation pin: no line cites by number, and each of the eight anchors; the table, `lane_bins` and every `_check_codex` case, since no codex line is printed);
   - the eight `HEALTHY_SKIPS` pins listed in Why, because the constant is raised and the check is not in the table yet;
   - no other case. In particular the five `wrappers` codex cases stay GREEN: they read the `wrappers` line, and no other check fails their now-converged lane.
@@ -4409,7 +4260,7 @@ New:
 ```bash
 . "<abs scratch>/plan3a-env.sh"; cd "$(git rev-parse --show-toplevel)/server"
 node --check ../deploy/models-op.mjs
-"$CENSUS" "$EVID/t4-3-models-op" ./node_modules/.bin/vitest run test/models-op.test.ts    # → Tests 111 passed (111)
+"$CENSUS" "$EVID/t4-3-models-op" ./node_modules/.bin/vitest run test/models-op.test.ts    # → Tests 115 passed (115) in the execution order: Step 0's own total plus five (re-derive; 111 on `1f9fa22d` without Task 2)
 ```
 
 - [ ] **Step 4: Implement `_check_codex` part 1, its table entry and the seven citations in `ccd/ccrc-doctor-checks`**
@@ -4462,7 +4313,7 @@ node --check ../deploy/models-op.mjs
 # through `deploy/models-op.mjs`'s check-only answers — `show`, `materialise
 # --check true` and `litellm` without `--commit` — so this file never names
 # the class registry's file (single-definition.test.ts pins that count at the
-# lines `_check_models` has, three since Task 1), and no row here writes, renders, mkdirs,
+# lines `_check_models` has), and no row here writes, renders, mkdirs,
 # starts or stops anything. `exec.authDir` is asked for existence and mode
 # ONLY: nothing under it is ever opened (spec §9).
 #
@@ -4798,12 +4649,12 @@ grep -nE 'deploy\.sh.?(:|[[:space:]]*\(:)[0-9]' ccd/ccrc-doctor-checks     # →
 
 ```bash
 . "<abs scratch>/plan3a-env.sh"; cd "$(git rev-parse --show-toplevel)/server"
-"$CENSUS" "$EVID/t4-5-doctor-<k>" ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts -t <P>   # three calls, the Global Constraints' parts; their sum → Tests 548 passed | 4 skipped (552): Step 0's own total plus 39, every case green (re-derive; the copy without Tasks 1 and 3 measured 538 passed | 4 skipped (542))
+"$CENSUS" "$EVID/t4-5-doctor-<k>" ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts -t <P>   # three calls, the Global Constraints' parts; their sum → Tests 544 passed | 4 skipped (548): Step 0's own total plus 39, every case green (re-derive; the copy without Tasks 1 and 3 measured 538 passed | 4 skipped (542))
 ```
 
 ```bash
 . "<abs scratch>/plan3a-env.sh"; cd "$(git rev-parse --show-toplevel)/server"
-"$CENSUS" "$EVID/t4-5-models-op" ./node_modules/.bin/vitest run test/models-op.test.ts     # → Tests 111 passed (111)
+"$CENSUS" "$EVID/t4-5-models-op" ./node_modules/.bin/vitest run test/models-op.test.ts     # → Tests 115 passed (115) in the execution order: Step 0's own total plus five (re-derive; 111 on `1f9fa22d` without Task 2)
 ```
 
 Then one call per suite (ruling F6) for each of `single-definition`, `pool-name-parity`, `macos-platform`, `ccrc-models`, `modelenv`, `ccrc-codex`, `install-census` and `ccrc-doctor-graphify`, each a block of this shape, labelled `t4-5-<suite>`:
@@ -4819,7 +4670,7 @@ Then one call per suite (ruling F6) for each of `single-definition`, `pool-name-
 ```
 
 What each neighbour guards here:
-- `single-definition`: the exact count of registry-file lines in doctor-checks (three since Task 1; :1784-1795), and the models-dir holders list;
+- `single-definition`: the exact count of registry-file lines in doctor-checks (two, the base's count, which ruling Z leaves alone; :1784-1795), and the models-dir holders list;
 - `pool-name-parity`: exactly two `.cc-sessions/<dir>` literals in doctor-checks — this task adds none;
 - `macos-platform`: the GNU-spelling corpus includes doctor-checks — no bare `timeout`, `stat -c` or `sha256sum`;
 - `ccrc-models`: `materialise`'s two write callers, now writing through `materialFiles`;
@@ -5003,7 +4854,7 @@ Then record each neighbour's count, one suite per call (ruling F6), every call a
 "$CENSUS" "$EVID/t5-0-ccrc-doctor-<k>" ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts -t <P>   # the Global Constraints' three parts, k = 1, 2, 3; record each "Tests" line
 ```
 
-for `ccrc-doctor` (three calls, as shown; its count is their sum), then `ccrc-codex`, `ccrc-install`, `pool-name-parity`, `macos-platform` and `single-definition`, each run whole and labelled `t5-0-<suite>`: Step 4 compares every one of them with this line. Measured on the scratch copy, which had Task 4 but not Tasks 1 and 3: `ccrc-doctor` `Tests 538 passed | 4 skipped (542)`, so `548 passed | 4 skipped (552)` in the execution order (derived; re-derive); `ccrc-codex` `Tests 201 passed (201)`.
+for `ccrc-doctor` (three calls, as shown; its count is their sum), then `ccrc-codex`, `ccrc-install`, `pool-name-parity`, `macos-platform` and `single-definition`, each run whole and labelled `t5-0-<suite>`: Step 4 compares every one of them with this line. Measured on the scratch copy, which had Task 4 but not Tasks 1 and 3: `ccrc-doctor` `Tests 538 passed | 4 skipped (542)`, so `544 passed | 4 skipped (548)` in the execution order, where Task 3's six land first and Task 1 adds none (ruling Z) (derived; re-derive); `ccrc-codex` `Tests 201 passed (201)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5230,7 +5081,7 @@ describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stal
 ```
 
 Expected (Task 4's check in place, this task's tests written):
-- `ccrc-doctor`: `Tests 11 failed | 547 passed | 4 skipped (562)` (re-derive: Step 0's total plus ten) — the ten new part-2 cases and the rewritten PASS pin (no tier words yet). Task 4's other cases stay green, the two-lane PASS included (its regex is `.*`-tolerant). These counts are DERIVED, not measured: the scratch copy measured the draft's part-2 cases on Task 4's tree without Tasks 1 and 3, and since then the two second-writer cases moved to Task 6 and the `listener-other-process` case was added.
+- `ccrc-doctor`: `Tests 11 failed | 543 passed | 4 skipped (558)` (re-derive: Step 0's total plus ten) — the ten new part-2 cases and the rewritten PASS pin (no tier words yet). Task 4's other cases stay green, the two-lane PASS included (its regex is `.*`-tolerant). These counts are DERIVED, not measured: the scratch copy measured the draft's part-2 cases on Task 4's tree without Tasks 1 and 3, and since then the two second-writer cases moved to Task 6 and the `listener-other-process` case was added.
 - `ccrc-codex`: unchanged and green; this task adds nothing to it.
 
 - [ ] **Step 3: Implement**
@@ -5409,7 +5260,7 @@ cd "$(git rev-parse --show-toplevel)" && bash -n ccd/ccrc && bash -n ccd/ccrc-do
 
 ```bash
 . "<abs scratch>/plan3a-env.sh"; cd "$(git rev-parse --show-toplevel)/server"
-"$CENSUS" "$EVID/t5-4-doctor-<k>" ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts -t <P>   # three calls, the Global Constraints' parts; their sum → Tests 558 passed | 4 skipped (562): Step 0's own total plus ten, every case green (re-derive)
+"$CENSUS" "$EVID/t5-4-doctor-<k>" ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts -t <P>   # three calls, the Global Constraints' parts; their sum → Tests 554 passed | 4 skipped (558): Step 0's own total plus ten, every case green (re-derive)
 ```
 
 ```bash
@@ -7102,7 +6953,7 @@ Before pushing, check `git log -1 --format='%an <%ae>'` against the repository's
 
 > Rulings applied:
 > - **R-C9 / spec §13.** Uninstall disables every enabled instance of ccrc's template, then removes the pair.
-> - **R-C11, with R5's file list.** `deploy.sh` stops placing `~/.local/bin/ccrc-models-probe`. The edit lives here so that `agent/test/deploy-verify.test.ts` is edited once, together with `usage-sweep-deploy-ship.test.ts`'s note and `install-census.test.ts:58` (critic #8).
+> - **R-C11, with R5's file list.** `deploy.sh` stops placing `~/.local/bin/ccrc-models-probe`. The edit lives here so that `agent/test/deploy-verify.test.ts` is edited once, together with `usage-sweep-deploy-ship.test.ts`'s note and `install-census.test.ts:58` (critic #8). Operator ruling Z leaves R-C11 standing and changes one of its reasons: ccrc's own probe keeps the token-directory default for an `external` lane until that lane's flip (Z1, `D-3706`), so the PATH copy is no longer the one reader with that default (Why).
 > - **2b-1 items 14, 19, 20.**
 > - **R11, R12, R13; F2, F6** as in Task 6, with `$SCRATCH/t7-base` and `$SCRATCH/t7-ev`.
 
@@ -7170,7 +7021,7 @@ Before pushing, check `git log -1 --format='%an <%ae>'` against the repository's
 - Measured on `1f9fa22d`: no line inside `:815-825` is cited outside `docs/`.
 - Step 5 proves the rest by content: every cited line's text is byte-identical before and after.
 
-**Why the probe's PATH copy goes (R-C11).** ccrc runs `$CCRC_HERE/ccrc-models-probe` (`ccd/ccrc:9487`, `:9667`), never the PATH copy, and `ccrc install` never placed one. A stale PATH copy is the one reader left that defaults to lane one's OAuth directory; the live copy is already stale. Removing the stale copy already on a box is Plan 4's. This is no deviation: spec §11 already has the fallback deploy mirror `ccrc install`, which never placed this copy (ruling R-C11).
+**Why the probe's PATH copy goes (R-C11).** ccrc runs `$CCRC_HERE/ccrc-models-probe` (`ccd/ccrc:9487`, `:9667`), never the PATH copy, and `ccrc install` never placed one. `ccrc update` never refreshes a PATH copy, so it goes stale. The live one already is: it predates Task 1, and reads lane one's OAuth directory for every lane, a codex lane included. After Task 1, ccrc's own copy keeps that default for an `external` lane only, until the lane's flip, and gives a codex lane its own `authDir` with no default (`D-3706`, as operator ruling Z redefines it). So the PATH copy is no longer the one reader with that default. It is the one copy that would hand it to a codex lane, if an operator ran it by hand. Removing the stale copy already on a box is Plan 4's. This is no deviation: spec §11 already has the fallback deploy mirror `ccrc install`, which never placed this copy (ruling R-C11).
 
 **Why this is inert on the live box.**
 - Boxes move by `ccrc rollout`/`update`, not by deploy.sh.
@@ -7475,9 +7326,10 @@ Add these three cases after C11, the describe's last case, inside `describe('ccr
 
 ```ts
     // Plan 3a Task 7 (ruling R-C11): NO ~/.local/bin copy of the model probe.
-    // ccrc runs its own tree's copy, which the rsync of `ccd/` lands, and a
-    // stale PATH copy is the last reader defaulting to lane one's OAuth
-    // directory. Code lines only, so the note that replaced the call may say why.
+    // ccrc runs its own tree's copy, which the rsync of `ccd/` lands; `ccrc
+    // update` never refreshes a PATH copy, and a stale one reads lane one's
+    // OAuth directory for a codex lane too. Code lines only, so the note that
+    // replaced the call may say why.
     expect(deploySh.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
       .filter((l) => l.includes('ccrc-models-probe')), 'deploy.sh places a PATH copy of the model probe again').toEqual([]);
 ```
@@ -7658,10 +7510,10 @@ with six lines:
 ```bash
   # NO ~/.local/bin COPY OF THE MODEL-CLASS CATALOGUE PROBE (Plan 3a Task 7,
   # ruling R-C11). ccrc runs its own tree's copy, which the rsync of `ccd/`
-  # above lands at ~/ccrc/ccd/, and a PATH copy only ever went stale — the one
-  # reader left defaulting to lane one's OAuth directory. A copy an earlier
-  # deploy left is removed by hand at the box cleanup (Plan 4). This note is as
-  # long as the lines it replaced, so no line this file's readers cite moves.
+  # above lands at ~/ccrc/ccd/. `ccrc update` never refreshes a PATH copy, and
+  # a stale one reads lane one's OAuth directory for a codex lane too. An old
+  # copy is removed by hand at the box cleanup (Plan 4). This note is as long
+  # as the lines it replaced, so no line this file's readers cite moves.
 ```
 
 (2) `:696-697`. Replace:
@@ -7887,7 +7739,7 @@ Before pushing, check `git log -1 --format='%an <%ae>'` against the repository's
 1. **The deploy.sh length budget is spent.** Any later insert above `:826` moves every citation below it. Task 4's re-aimed `ccrc-doctor-checks` citations are quoted anchors on both lanes, and its 'cites deploy.sh by anchor' describe reds if one leaves. Re-run Step 5e's content census after any deploy.sh edit.
 2. **`_acct_remove` changes the S6-R11 census.** Every later task that inserts into `ccd/ccrc` above `:11635` pays the same census in its own commit.
 3. **An instance is disabled only where ccrc can see its link.** An instance enabled under another target is invisible to uninstall too, as Task 6's helpers' header states.
-4. **3b's rollback order.** `ccrc codex stop <id>`, the roster flip back, then `ccrc install` withdraws ccrc's instance. Re-enable the other repository's timer after that, never before, or the converge degrades (Task 6, hazard 5).
+4. **3b's rollback order.** `ccrc codex stop <id>`, the roster flip back, then `ccrc install` withdraws ccrc's instance. Re-enable the other repository's timer after that, never before, or the converge degrades (Task 6, hazard 5). The flip back also returns the lane to the external path, which operator ruling Z keeps byte for byte. From then on the hourly refresh probes that lane's class registry through the token-directory default, lane one's OAuth directory (Z1, `D-3706`). While any codex row remains, the external arm refuses instead of running the other repository's stop (Z4, `D-3753`). Z3 refuses only a NEW codex registry on an external lane, and the one the lane used as a codex lane survives the flip back. So for any lane but the first, a flip back with that registry in place reopens the wrong-lane probe that Z3 keeps out of a new one. 3b's rollback must say what becomes of that registry before the flip back; this plan ships nothing for it.
 
 
 ### Task 8: `doctor --fix` for a codex lane and its launcher; the publisher's absent-file remedy tells the truth
@@ -9563,16 +9415,19 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
   - `startLane`'s docstring (`grep -n 'the fixture tree carries no models-op.mjs' server/test/ccrc-install.test.ts`). Step 1 makes it false, so it becomes "through the REPOSITORY's ccrc, as every `models` verb in this file runs";
   - the rehearsal block, appended at the end of the file (Step 2).
 - Modify: `server/test/ccrc-update.test.ts`. Widen the `./codexLaneFixture.js` import (`:55-58`) in place, and append one describe at the end of the file (Step 2).
-- Scratch only, never committed: a detached worktree of the plan's base, and the MEASURE block that Step 3 appends to that worktree's copy of `ccrc-install.test.ts`.
+- Scratch only, never committed: a disposable `git archive` copy of the plan's base, and what Step 3 appends to that copy: this task's live-shape block (to `codexLaneFixture.ts`), its five `TREE_FILES` lines (to `installTreeFixture.ts`) and the MEASURE case (to `ccrc-install.test.ts`).
 - **Not** a new `codex-cutover-rehearsal.test.ts`, although the skeleton names that file. The reason is under Why.
 
 **Interfaces:**
 - Consumes:
   - `$CENSUS`, the R11 wrapper named in Global Constraints and invoked as `"$CENSUS" <evidence-dir> <cmd…>`. It prints `census: clean …` or `census: FAIL …`, and exits 125 when a unit or enablement link changed, 126 when a fixture process survived, and otherwise with the command's own code (F10). Its body is written once, in Global Constraints, and never restated. `$SCRATCH`, `$CENSUS` and `$EVID` come from `$SCRATCH/plan3a-env.sh` (Global Constraints), which every bash block below sources first (F2).
-  - Task 1:
-    - `_check_models` gives an `external` lane whose registry probe is `codex` a sentence of its own that is never a WARN. When every registered lane is such a lane, as on the live shape, the class is `SKIP`, held in `FROZEN_EXTERNAL_MODELS_CLASS`.
-    - `ccrc models refresh --all` never probes that lane. Its row is `{ id, probe: "codex", ok: true, skipped: "external-lane", reason: <non-empty> }`, with no `litellm` field, and the run exits 0.
-  - Task 2: `ccd/ccrc` names no `ccgpt stop` and no box-global LiteLLM config, and nothing renders to `~/.handoff/litellm-config.yaml`.
+  - Task 1, under operator ruling Z (Z1, Z2):
+    - an `external` row's probe runs today's path, byte for byte, failure path included, through `_fetch_codex`, which Task 1 does not edit: `_models_run_probe`'s scrub; the token-directory default, still the one code line in `ccd/ccrc-models-probe` that carries `:-$HOME/.handoff/chatgpt-auth}`; the interpreter beside the `litellm` on PATH, run as `<it> -` with no `-I`; and no `LITELLM_*`, `CCRC_CODEX_PYTHON` or `CCRC_PROBE_*` export;
+    - so the hourly refresh probes, materialises and renders for an external lane with a codex registry exactly as the base does, and `_check_models` is unchanged.
+  - Task 2, for ruling Z3 (it owns `deploy/models-op.mjs`' `init` arm, the one creator of a class registry): `ccrc models <id> init codex` on a row that is not `exec.kind: "codex"`, an `external` row included, exits 1 with one JSON refusal, `{ ok: false, error: "codex-registry-needs-codex-lane", detail }` (held in `INIT_EXTERNAL_REFUSAL`), whose detail names the remedy, `Flip the lane to "codex" first (Plan 3b)`. It writes nothing and runs no probe. A registry that already exists is untouched, and `set-subagent` on it still re-materialises (`plantLiveShape` relies on that).
+  - Task 2 (Z1, Z4):
+    - `_models_litellm`'s external arm keeps its bytes on a roster with no codex row: the box-global path (`CCGPT_CONFIG` still honoured), the `pgrep` and the bare `ccgpt stop`;
+    - while the roster carries any `exec.kind: "codex"` row, or while the lane library cannot say which rows are, a stop the arm would owe is refused as `{ ok: false, error: "restart-failed", detail }` at exit 1, before any write. The detail carries `the roster names codex-kind lane(s) <id>[, <id>…]` and never tells the operator to run `ccgpt stop`. With nothing running on the config, the arm renders as today.
   - Task 4:
     - `codex` sits in `CCRC_DOCTOR_CHECKS`, and an empty codex population prints exactly one `SKIP codex:` line.
     - Lane state left behind for an id flipped back to `external` is flagged with Task 4's `lane state is left under <root>/<id>, and '<id>' is not a Codex lane in …` sentence. This task assumes class `WARN`, held in `FLIP_BACK_LEFTOVER_CLASS`.
@@ -9585,14 +9440,17 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
     - Fixture stubs: `ccrcEnv`'s `systemctl` stub creates `~/.config/systemd/user/timers.target.wants/ccrc-codex-usage@<id>.timer` on `enable --now` and removes the link on `disable --now`, as systemd's own `enable` and `disable` do. `updateEnv`'s stub only records and answers `disable --now`, which suffices because the update case rosters no codex lane. The converge reads the links itself and never asks `systemctl`.
   - Task 7: `ccrc uninstall` removes `ccrc-codex-usage@.{service,timer}` and never names `ccgpt-usage`.
   - Plan 2b-2's fixtures:
-    - from `codexLaneFixture.ts`: `codexRoster`, `codexAuthDir`, `authDirOf`, `freeLanes`, `plantSystemd`, `killLaneProcesses`, `registerLaneCleanup`, `laneUnits`, `laneAnswer`, `portAccepts`, `eventually`, `spineRunCalls` and `assertSpineFrontContained`;
-    - from `ccrc-install.test.ts`: `freshBox`, `gitInit`, `treeRoot`, `runInstall`, `ccrcEnv`, `READY`, `REPO_CCRC`, `plantRuntimeTemplate`, `systemctlCalls`, `unitDir`, `dotCcrc`, `read`, `runtimeDir` and `laneDir`;
+    - from `codexLaneFixture.ts`: `codexRoster`, `codexAuthDir`, `authDirOf`, `freeLanes`, `plantSystemd`, `killLaneProcesses`, `registerLaneCleanup`, `trackChild`, `laneUnits`, `laneAnswer`, `portAccepts`, `eventually`, `spineRunCalls` and `assertSpineFrontContained`;
+    - from `ccrc-install.test.ts`: `freshBox`, `gitInit`, `treeRoot`, `runInstall`, `ccrcEnv`, `READY`, `REPO_CCRC`, `plantRuntimeTemplate`, `realPy`, `systemctlCalls`, `unitDir`, `dotCcrc`, `read`, `runtimeDir` and `laneDir`;
     - from `ccrc-update.test.ts`: `freshUpdateBox`, `plantOldBox`, `plantCoordDb`, `packRelease`, `fullTree`, `runUpdate`, `updateEnv`, `BASH`, `REPO` and `itLinux`;
     - `verifyMarker` (`shared/mark.mjs:156`).
 - Produces:
-  - `codexLaneFixture.ts` exports: `REHEARSAL_LANES`, `externalCodexRow(id)`, `REHEARSAL_REGISTRY`, `rehearsalCatalogue(fetchedAt)`, `writeRehearsalCatalogue(home, id, fetchedAt)`, `FOREIGN_PATHS`, `ForeignEntry`, `foreignSnapshot(home, except?)`, `plantLiveShape(home, ccrcModels)`, `doctorClasses(stdout)`, `doctorTable(checksFile)`, `STATE_CHANGING`, `stateCallsNaming(argv, unit)`.
+  - `codexLaneFixture.ts` exports:
+    - the shape: `REHEARSAL_LANES`, `externalCodexRow(id)`, `REHEARSAL_REGISTRY`, `rehearsalCatalogue(fetchedAt)`, `writeRehearsalCatalogue(home, id, fetchedAt)`, `FOREIGN_PATHS`, `ForeignEntry`, `foreignSnapshot(home, except?)` and `plantLiveShape(home, ccrcModels)`;
+    - doctor: `doctorClasses(stdout)`, `doctorTable(checksFile)`, `STATE_CHANGING` and `stateCallsNaming(argv, unit)`;
+    - the hourly refresh and the external arm: `PROBE_ENV_VALUES`, `PROBE_ENV_PRESENCE`, `ForeignProbeCall`, `foreignProbeCalls(home)`, `foreignCcgptCalls(home)`, `unitExecOf(home, unit)`, `assertForeignFront(env, home)`, `spawnForeignProxyStandIn(home)`, `stopForeignProxyStandIn(child)`, `withForeignProxyRunning(home, act)`, `restoreForeignConfig(home)`, `RefreshObservation`, `observeHourlyRefresh(home, harnessEnv, realPython)` and `liveShapeRefreshes(home, harnessEnv, realPython)`.
   - `TREE_FILES` gains `ccd/ccrc-models-probe`, `deploy/models-op.mjs`, `deploy/litellm-config.template.yaml`, `shared/modelenv.mjs` and `shared/litellm.mjs`.
-  - `ccrc-install.test.ts` gains the describe `Plan 3a Task 10 — the cutover rehearsal` with five cases, and the measured literal `BASE_LIVE_SHAPE_CLASSES`.
+  - `ccrc-install.test.ts` gains the describe `Plan 3a Task 10 — the cutover rehearsal` with six cases, and the measured literal `BASE_LIVE_SHAPE`.
   - `ccrc-update.test.ts` gains the describe `Plan 3a Task 10 — ccrc update onto this tree over today's live shape` with one case.
 
 **Why:**
@@ -9603,21 +9461,35 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
     - one lane's launcher is a symlink to another repository's launcher, and the other lane's is a small file that execs it by path;
     - that repository's flat usage timer is enabled, and so is one instance of its usage template;
     - its box-global LiteLLM config is present;
+    - its LiteLLM install is on PATH, and the token directory the probe defaults to is lane 1's OAuth directory;
     - there is no ccrc runtime and no `~/.ccrc/codex/`.
   - `plantLiveShape` builds exactly that, with fixture ids.
-- **What "inert" means, as four measurements:**
-  1. No byte, mode or link target changes at any path another repository owns (`foreignSnapshot`). The key-bearing ones, each lane's `auth.json` and the other repository's env file, are measured by `lstat` alone and never opened (Global Constraints), so a rewrite of the same bytes still shows.
+- **What "inert" means, by operator ruling Z (2026-10-01): the merge changes nothing an external lane does.** Five measurements:
+  1. No byte, mode or link target changes at any path another repository owns (`foreignSnapshot`), except where the base's own hourly refresh writes, and there the tip writes exactly the base's bytes (5, below). The key-bearing paths, each lane's `auth.json` and the other repository's env file, are measured by `lstat` alone and never opened (Global Constraints), so a rewrite of the same bytes still shows.
   2. No state-changing `systemctl` verb and no `systemd-run` names a `ccgpt-*` unit. Reads are allowed, because Task 6's second-writer check (R6) has to read whether the other repository's instance is enabled.
   3. No runtime, no lane state and no ccrc usage instance appear.
-  4. Every doctor check but `models` keeps its class. `models` answers Task 1's SKIP for the lane the refresh no longer reaches, and `codex` answers one SKIP.
-- **"Before" is the base tree, and it is measured, never assumed (critic #1).**
-  - After Tasks 1–2, the hourly refresh no longer reaches the external lane that carries a codex registry. The base's `_check_models` counts that lane by bare file presence (`ccd/ccrc-doctor-checks:5412`), so about three hours after the rollout the base's own sentence would say "the timer is not reaching this lane".
-  - A rehearsal that asserted only `_check_codex`'s SKIP would miss that. So Step 3 measures every check's class on the base tree, and the live case asserts that the tip gives the same map, with `models` at Task 1's SKIP, plus `codex: SKIP`.
-  - At the tip the check runs on a catalogue aged past `_check_models`' three-hour floor, which is the steady state after the merge. At the base it runs on a fresh one, which is the steady state the hourly refresh keeps there.
+  4. Every doctor check keeps its base class, `models` included, and `codex` answers one SKIP (Z7).
+  5. The hourly refresh does exactly what the base's did: the same probe environment, the same rendered bytes, and the same `ccgpt stop` decision, on both arms of that decision (Z1, Z7).
+- **"Before" is the base tree, and it is measured, never assumed (critic #1, Z7).**
+  - Step 3 runs this task's own fixture code on a disposable copy of the base, through the same calls the live case makes: both install passes' closing doctor, the two hourly refreshes (`liveShapeRefreshes`) and the doctor after them. The answer is pasted into `BASE_LIVE_SHAPE`, and the live case asserts that the tip's answer equals it.
+  - Measured at drafting, on a copy of `4ec8926a` (its tree outside `docs/` is `1f9fa22d`'s): 39 checks in each doctor map, two WARNs, no FAIL and `models: PASS`. Both refreshes exited 0, each probed once through `~/.handoff/chatgpt-auth` and rendered the box-global config, and the second ran `ccgpt stop` once. On the same copy, `init codex` on the lane-2 analog created a registry: the hazard ruling Z3 closes.
+- **Two refreshes, because the stop decision has two arms.**
+  - The live box's lane 1 is idle, so its hourly refresh renders and stops nothing. A rehearsal that ran only that would pass a tip whose external arm never stops at all, or one whose Z4 guard fires on today's shape.
+  - So the second refresh runs after the other repository has re-rendered its config, and while its proxy runs on it. There the base runs its bare `ccgpt stop` once, and the tip must too.
 - **The hourly unit is run exactly as the unit runs it.**
   - `ccrc-models.service` is a `Type=oneshot` whose `ExecStart=%h/.local/bin/ccrc models refresh --all` (`deploy/systemd/ccrc-models.service:11`). A oneshot fails exactly when that command exits non-zero, and the refresh loop returns 1 whenever any row failed (`ccd/ccrc:10243`).
-  - The case reads `ExecStart` and `PATH` from the *installed* unit, expands `%h`, and runs that argv through the placed launcher. That is why Step 1 adds `models-op.mjs`, its two imports, the probe and the template to `TREE_FILES`: `models-op.mjs` imports both `.mjs` files at load, so a tree missing either fails every `models` verb with `ERR_MODULE_NOT_FOUND`.
+  - `observeHourlyRefresh` reads `ExecStart` and `PATH` from the *installed* unit, expands `%h`, and runs that argv through the placed launcher. That is why Step 1 adds `models-op.mjs`, its two imports, the probe and the template to `TREE_FILES`: `models-op.mjs` imports both `.mjs` files at load, so a tree missing either fails every `models` verb with `ERR_MODULE_NOT_FOUND`.
   - The unit's `PATH` is prepended to the harness `PATH` rather than used alone. The fixture bin stays first, so containment holds, and `node` still resolves on runners that keep it outside `/usr/bin`.
+  - Two fixture departures, each named in `observeHourlyRefresh`. The install harness's `python3` is a stub that refuses every program but its own, and the live box's `~/.local/bin` holds none, so a directory holding only a link to the real interpreter goes first: the probe's normaliser needs one. And every probe name, `CCRC_MODELS_PROBE_FIXTURE` and `CCGPT_CONFIG` are dropped, because a user unit's environment is the manager's, which carries none of them.
+  - The other repository's interpreter is a RECORDER, planted where the probe's external path looks for it: beside the `litellm` on PATH. So the probe environment is a measurement. It records the values of six non-secret names and only the presence of three credential names, and it never opens a token directory.
+- **Containment, now that the external arm is live code at the tip (Z1).** On the fleet box the arm is dangerous to run for real: the real `ccgpt stop` stops a lane's units by name, and `CCGPT_CONFIG`, which a GPT-lane session can carry, points `_models_litellm_path` at a real config.
+  - So every run that can reach the arm drops `CCGPT_CONFIG` (`REHEARSAL_ENV`), and before it runs, `assertForeignFront` proves that `ccgpt` and `litellm` resolve to this HOME's stand-ins.
+  - The running proxy is a node sleeper whose argv carries the fixture config's path, so `pgrep -f` matches it and no live process. It binds nothing and expires on its own (F8).
+- **Z3, in the live case.** `init codex` on the lane-2 analog, the external lane with no registry, is the wrong-lane hazard itself: on the base it creates a registry, and the next hourly refresh would probe that lane through the default token directory, which is lane 1's. At the tip it refuses by name, writes nothing and runs no probe. Lane 1's existing registry is pinned byte-identical through the whole case.
+- **Z4, end to end.**
+  - After codex-a's flip in Plan 3b's order, codex-b stays external and is given a registry by file: a pre-3a one, since no `init` can make it now.
+  - With the other repository's proxy up on the box-global config, `ccrc models litellm codex-b` owes a stop. The bare `ccgpt stop` names lane 1's units, which are codex-a's own tiers now. So the arm must refuse `restart-failed`, write nothing and run no `ccgpt`, and codex-a's shim must still answer.
+  - With nothing running there is nothing to stop, and the render lands as it does today: Z4 guards the stop, never the render.
 - **Update is its own leg.** `cmd_update` runs the staged tree's `bash <tree>/ccd/ccrc install` (`ccd/ccrc:16183`), so a second install is the update's spine, and the live case runs two. The real update (fetch, verify, backup, the staged spine, the gate) is the one `ccrc-update.test.ts` case. It uses the `fullTree` release the suite already packs, on the box of the "codex steps ride the staged spine" describe (`ccrc-update.test.ts:11569`), at that fixture's role `both`, which takes the same codex and usage arms as `fleet` (R2).
 - **The flip follows Plan 3b's order: launcher aside, roster edit, wrappers, refresh, litellm, enable, start.**
   - The enable is the spine's own converge. R-C10's targeted route equals it by design, and the converge is what the next auto-update would run anyway.
@@ -9629,14 +9501,15 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
   - `ccrc codex stop` runs first, because the other repository's stop stops units by name and those are ccrc's tier names too (critic #7).
   - Then the roster backup goes back byte for byte, ccrc's wrapper is removed only after `verifyMarker` answers `ccrc-unmodified`, and the old launcher comes back by `mv`, so a symlink stays a symlink.
   - Lane state is kept (§13), so doctor must flag the leftover lane state, in Task 4's `lane state is left under …` WARN, and nothing else.
-- **The out-of-order case is R6, end to end.** A flip made while the other repository's instance timer is still enabled must degrade rather than enable, and doctor must name the operator's own disable. After that disable, the next converge enables ccrc's instance. Task 6 owns the unit-level cases; this is 3b's steps c and f run in the wrong order on a real spine.
+  - The roster backup leaves no codex row, so from then on the lane is on today's external path again, and Z4's guard has nothing to see.
+- **The out-of-order case is R6, end to end.** A flip made while the other repository's instance timer is still enabled must degrade rather than enable, and doctor must name the operator's own disable. After that disable, the next converge enables ccrc's instance. Task 6 owns the unit-level cases; this is 3b's steps c and f run in the wrong order on a real spine. Its lane has no registry, and ruling Z3 lets it gain one only after the flip, as the case does.
 - **Why the existing suites, not a new file.**
   - The harness the rehearsal drives is module-private: `ccrcEnv`, `runInstall`, `freshBox`, `gitInit`, `plantRuntimeTemplate`, `systemctlCalls` and `unitDir` in `ccrc-install.test.ts`, and `updateEnv`, `runUpdate`, `fullTree` and `packRelease` in `ccrc-update.test.ts`.
   - A `.test.ts` cannot import another `.test.ts`: doing so registers that suite a second time (`installTreeFixture.ts:1-11`). A new file would need a third copy of several hundred harness lines, which is the drift `installTreeFixture.ts` was created to end.
   - The fixture both suites share goes in `codexLaneFixture.ts`.
 - **Red-first.**
   - The behaviour rehearsed here landed red-first in Tasks 1–9.
-  - This task's own reds are, first, the baseline case, which stays red until Step 3's measurement is pasted in, and second, the mutation table (Step 5), which un-lands each piece and names the case that reds.
+  - This task's own reds are, first, the baseline case, which stays red until Step 3's measurement is pasted in, and second, the mutation table (Step 5), which un-lands each piece, ruling Z's guards included, and names the case that reds.
 - **Containment.**
   - Every suite command runs under `$CENSUS` (R11).
   - Fixture ids are `codex-a` and `codex-b`, and Step 0 checks that neither is a rostered id on this box.
@@ -9655,13 +9528,18 @@ jq -r '.accounts[].id' "$HOME/.ccrc/accounts.json" | grep -cxE 'codex-a|codex-b|
 # What Tasks 2, 4 and 6 put where this task reads them. Stop on any miss:
 ls deploy/systemd/ccrc-codex-usage@.service deploy/systemd/ccrc-codex-usage@.timer
 grep -cE '^  models codex( |$)' ccd/ccrc-doctor-checks   # expected: 1 (Task 4 puts codex on models' own line)
-grep -c 'ccgpt stop' ccd/ccrc                # expected: 0
 grep -n 'INST_DEGRADED+=(' ccd/ccrc          # read it: the usage enable's word is USAGE_DEGRADED below
+# Ruling Z: what Tasks 1 and 2 keep and add. Stop on any miss:
+grep -cF ':-$HOME/.handoff/chatgpt-auth}' ccd/ccrc-models-probe   # expected: 1 (Z1: the external path keeps its default, on one code line; M1 mutates it)
+grep -cF 'ccgpt stop >/dev/null 2>&1' ccd/ccrc                     # expected: 1 (Z1: the external arm keeps its bare stop)
+grep -cF 'if blocked="$(_models_litellm_stop_blocked)"; then' ccd/ccrc   # expected: 1 (Task 2's Z4 guard; M2 and M3 mutate this line)
+grep -cF "if (a.probe === 'codex' && !(isObj(account.exec) && account.exec.kind === 'codex')) {" deploy/models-op.mjs   # expected: 1 (Task 2's Z3 guard; M4 mutates this line)
+grep -c "'codex-registry-needs-codex-lane'" deploy/models-op.mjs   # expected: 1 (Z3's refusal word, held in INIT_EXTERNAL_REFUSAL below)
 ```
 
 - [ ] **Step 1: The live-shape fixture, and the tree the hourly unit runs.**
 
-Append to `server/test/codexLaneFixture.ts`. The block uses only the module's default `fs`/`path` imports and its existing `codexRoster`/`codexAuthDir`, so Step 3 can copy it unchanged onto the base tree:
+Append to `server/test/codexLaneFixture.ts`. The block uses only what the module already imports and exports at the base (its header names them), so Step 3 can copy it unchanged onto the base tree. At drafting it was typechecked with Step 2's block by the server's own `tsc -p test/tsconfig.tests.json`, and run on the base by Step 3's MEASURE case, both in a disposable copy of `4ec8926a`:
 
 ```ts
 // ── Plan 3a Task 10 — the live shape (begin) ─────────────────────────────
@@ -9676,13 +9554,19 @@ Append to `server/test/codexLaneFixture.ts`. The block uses only the module's de
 //   - that repository's launcher, shim and publisher in ~/.local/bin, its flat
 //     usage pair (enabled), its usage template pair with an ENABLED instance
 //     for `codex-b`, its box-global LiteLLM config and its shared env file;
+//   - that repository's LiteLLM install: a `litellm` on PATH whose directory
+//     holds the interpreter the probe's EXTERNAL path runs (here a RECORDER),
+//     and the token directory that path defaults to, which is lane 1's;
 //   - each lane's OAuth directory, 0700, holding an auth.json at 0600.
 // No ccrc runtime and no ~/.ccrc/codex/. `codex-a`/`codex-b` are fixture ids
 // (ruling R11): never a rostered id on any box.
 //
-// Written against this module's DEFAULT `fs`/`path` imports and its existing
-// `codexRoster`/`codexAuthDir` only, so Plan 3a Task 10 Step 3 can append this
-// block unchanged to the BASE tree's copy of this module and measure the base.
+// Written against what this module already imports and exports on the plan's
+// BASE (`fs`, `path`, `spawn`, `spawnSync`, `ChildProcess`, `createHash`,
+// `codexRoster`, `codexAuthDir`, `trackChild`, `assertSpineFrontContained`), so
+// Plan 3a Task 10 Step 3 can append this block unchanged to the BASE tree's
+// copy of this module and measure the base with the same code (ruling Z7:
+// "before" is measured, never assumed).
 // ─────────────────────────────────────────────────────────────────────────
 
 export const REHEARSAL_LANES = ['codex-a', 'codex-b'] as const;
@@ -9724,6 +9608,55 @@ export function writeRehearsalCatalogue(home: string, id: string, fetchedAt: num
 
 const FOREIGN_MARK = '# FOREIGN-FIXTURE-3a: another repository owns this file';
 
+/** The names the probe's interpreter is asked about, one list for the recorder
+ *  below and for `observeHourlyRefresh`'s scrub (single definition). VALUES are
+ *  recorded for the first list, PRESENCE only for the second: a credential's
+ *  value never reaches a file, even a fixture's. */
+export const PROBE_ENV_VALUES = [
+  'CHATGPT_TOKEN_DIR', 'CODEX_CLIENT_VERSION', 'LITELLM_LOCAL_MODEL_COST_MAP',
+  'CCRC_CODEX_PYTHON', 'CCRC_PROBE_ACCOUNT', 'CCRC_PROBE_PROG',
+] as const;
+export const PROBE_ENV_PRESENCE = ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const;
+
+/** The Codex `/models` body, in the endpoint's own shape (the probe's codex
+ *  normaliser: `slug`, `display_name`, `supported_reasoning_levels`). */
+const FOREIGN_MODELS_BODY = JSON.stringify({
+  models: ['gpt-x', 'probe-model'].map((slug) => ({
+    slug, display_name: slug, supported_reasoning_levels: ['low', 'medium', 'high'].map((effort) => ({ effort })),
+  })),
+});
+
+/** The interpreter beside that repository's `litellm`, which the probe's
+ *  external path runs as `<it> -` with its program on stdin. A RECORDER: it
+ *  drains the program, appends one tab-separated line per call to
+ *  `$HOME/foreign-probe-calls` (`argv=…`, then each name's value or presence),
+ *  and answers the `/models` body. It never opens the token directory (spec §9:
+ *  existence and mode only), and it is plain sh, so no python resolves for it. */
+const FOREIGN_PYTHON = [
+  '#!/bin/sh',
+  FOREIGN_MARK,
+  'cat >/dev/null',
+  '{',
+  '  printf \'argv=%s\' "$*"',
+  `  for n in ${PROBE_ENV_VALUES.join(' ')}; do`,
+  '    if printenv "$n" >/dev/null; then printf \'\\t%s=%s\' "$n" "$(printenv "$n")"; else printf \'\\t%s=<unset>\' "$n"; fi',
+  '  done',
+  `  for n in ${PROBE_ENV_PRESENCE.join(' ')}; do`,
+  '    if printenv "$n" >/dev/null; then printf \'\\t%s=<set>\' "$n"; else printf \'\\t%s=<unset>\' "$n"; fi',
+  '  done',
+  '  printf \'\\n\'',
+  '} >> "$HOME/foreign-probe-calls"',
+  `printf '%s\\n' '${FOREIGN_MODELS_BODY}'`,
+  '',
+].join('\n');
+
+/** The box-global LiteLLM config the external arm renders, and the `.prev`
+ *  copy its write keeps beside it (`deploy/models-op.mjs`'s litellm op). */
+const FOREIGN_RENDER = '.handoff/litellm-config.yaml';
+const FOREIGN_RENDER_PREV = `${FOREIGN_RENDER}.prev`;
+/** That repository's LiteLLM install: fixture path, its shape only. */
+const FOREIGN_LITELLM_BIN = '.local/share/foreign-litellm/bin';
+
 /** Every regular file the shape puts at a path another repository owns:
  *  [HOME-relative path, mode, bytes]. The launcher is a RECORDER, so a bare
  *  `ccgpt stop` from ccrc is a measurement (`$HOME/foreign-ccgpt-calls`). */
@@ -9733,6 +9666,9 @@ const FOREIGN_FILES: ReadonlyArray<readonly [string, number, string]> = [
   ['.local/bin/ccgpt-proxy', 0o755, `#!/usr/bin/env python3\n${FOREIGN_MARK}\n`],
   ['.local/bin/ccgpt-usage', 0o755, `#!/bin/sh\n${FOREIGN_MARK}\nexit 0\n`],
   ['.local/bin/codex-b', 0o755, `#!/bin/sh\n${FOREIGN_MARK}\nexec "$HOME/.local/bin/ccgpt" "$@"\n`],
+  [`${FOREIGN_LITELLM_BIN}/litellm`, 0o755,
+    `#!/bin/sh\n${FOREIGN_MARK}\necho "fixture litellm: resolved for its directory, never run" >&2\nexit 97\n`],
+  [`${FOREIGN_LITELLM_BIN}/python`, 0o755, FOREIGN_PYTHON],
   ['.config/systemd/user/ccgpt-usage.service', 0o644,
     `${FOREIGN_MARK}\n[Service]\nType=oneshot\nExecStart=%h/.local/bin/ccgpt-usage\n`],
   ['.config/systemd/user/ccgpt-usage.service.d/path.conf', 0o644,
@@ -9743,26 +9679,31 @@ const FOREIGN_FILES: ReadonlyArray<readonly [string, number, string]> = [
     `${FOREIGN_MARK}\n[Service]\nType=oneshot\nEnvironment=CCGPT_ACCOUNT_ID=%i\nExecStart=%h/.local/bin/ccgpt-usage\n`],
   ['.config/systemd/user/ccgpt-usage@.timer', 0o644,
     `${FOREIGN_MARK}\n[Timer]\nOnUnitActiveSec=20min\n[Install]\nWantedBy=timers.target\n`],
-  ['.handoff/litellm-config.yaml', 0o644, `${FOREIGN_MARK}\nmodel_list: []\n`],
+  [FOREIGN_RENDER, 0o644, `${FOREIGN_MARK}\nmodel_list: []\n`],
   ['.handoff/env', 0o600, 'FIXTURE_NOT_A_KEY=1\n'],
 ];
 
-/** The links: the alias launcher (relative, as `ln -s ccgpt` makes it) and the
- *  two enabled timers (absolute, as `systemctl --user enable` makes them). */
+/** The links: the alias launcher (relative, as `ln -s ccgpt` makes it), the
+ *  `litellm` on PATH, the default token directory (lane 1's), and the two
+ *  enabled timers (absolute, as `systemctl --user enable` makes them). */
 const FOREIGN_LINKS: ReadonlyArray<readonly [string, string, 'relative' | 'home']> = [
   ['.local/bin/codex-a', 'ccgpt', 'relative'],
+  ['.local/bin/litellm', `${FOREIGN_LITELLM_BIN}/litellm`, 'home'],
+  ['.handoff/chatgpt-auth', codexAuthDir('codex-a'), 'home'],
   ['.config/systemd/user/timers.target.wants/ccgpt-usage.timer', '.config/systemd/user/ccgpt-usage.timer', 'home'],
   ['.config/systemd/user/timers.target.wants/ccgpt-usage@codex-b.timer', '.config/systemd/user/ccgpt-usage@.timer', 'home'],
 ];
 
 const OAUTH_BYTES = '{"fixture": "test-token-not-a-secret"}\n';
 
-/** Every path `foreignSnapshot` reads: the files, the links, and each lane's
- *  OAuth directory and file (spec §9.2: ccrc checks them and never writes them). */
+/** Every path `foreignSnapshot` reads: the files, the links, each lane's
+ *  OAuth directory and file (spec §9.2: ccrc checks them and never writes
+ *  them), and the `.prev` an external render leaves (absent until one). */
 export const FOREIGN_PATHS: readonly string[] = [
   ...FOREIGN_FILES.map(([rel]) => rel),
   ...FOREIGN_LINKS.map(([rel]) => rel),
   ...REHEARSAL_LANES.flatMap((id) => [codexAuthDir(id), `${codexAuthDir(id)}/auth.json`]),
+  FOREIGN_RENDER_PREV,
 ];
 
 export type ForeignEntry =
@@ -9802,7 +9743,8 @@ export function foreignSnapshot(home: string, except: readonly string[] = []): R
  *  CALLING suite's contained harness (this module owns none). It is asked
  *  once, for the shipped re-materialise remedy (`ccd/ccrc`'s settingsDrift
  *  line: "re-materialise by running any models mutation"), which writes
- *  `codex-a`'s TSV, effort file and settings env through the real op. */
+ *  `codex-a`'s TSV, effort file and settings env through the real op. That is
+ *  a write to a registry that ALREADY exists, which ruling Z3 leaves alone. */
 export function plantLiveShape(
   home: string,
   ccrcModels: (argv: string[]) => { code: number; stdout: string; stderr: string },
@@ -9878,6 +9820,173 @@ export const STATE_CHANGING =
 
 export const stateCallsNaming = (argv: readonly string[], unit: RegExp): string[] =>
   argv.filter((a) => STATE_CHANGING.test(a) && unit.test(a));
+
+const rehearsalLines = (p: string): string[] =>
+  (fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter((l) => l !== '') : []);
+/** Every `ccgpt` argv the other repository's launcher saw, in order. */
+export const foreignCcgptCalls = (home: string): string[] => rehearsalLines(path.join(home, 'foreign-ccgpt-calls'));
+/** One call of the other repository's LiteLLM interpreter, HOME written `~`. */
+export interface ForeignProbeCall { argv: string; env: Record<string, string> }
+export function foreignProbeCalls(home: string): ForeignProbeCall[] {
+  return rehearsalLines(path.join(home, 'foreign-probe-calls')).map((l) => {
+    const [argv = '', ...pairs] = l.split(home).join('~').split('\t');
+    return {
+      argv: argv.replace(/^argv=/, ''),
+      env: Object.fromEntries(pairs.map((p) => [p.slice(0, p.indexOf('=')), p.slice(p.indexOf('=') + 1)])),
+    };
+  });
+}
+
+/** A unit's own ExecStart argv and PATH, read from the INSTALLED copy, `%h` expanded. */
+export function unitExecOf(home: string, unit: string): { argv: string[]; path: string } {
+  const code = fs.readFileSync(path.join(home, '.config', 'systemd', 'user', unit), 'utf8')
+    .split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'));
+  const exec = code.filter((l) => l.startsWith('ExecStart='));
+  const pathLine = code.filter((l) => l.startsWith('Environment=PATH='));
+  if (exec.length !== 1 || pathLine.length !== 1) {
+    throw new Error(`${unit}: ${exec.length} ExecStart and ${pathLine.length} PATH lines, not one of each`);
+  }
+  const h = (s: string): string => s.split('%h').join(home);
+  return {
+    argv: h(exec[0]!.slice('ExecStart='.length)).split(/\s+/),
+    path: h(pathLine[0]!.slice('Environment=PATH='.length)),
+  };
+}
+
+/** THROWS unless, under `env`, `ccgpt` resolves to this shape's RECORDER and
+ *  `litellm` to its stand-in install, both in `<home>/.local/bin`, and no
+ *  `CCGPT_CONFIG` is set. On the fleet box the real `ccgpt stop` stops a lane's
+ *  units BY NAME, and a `CCGPT_CONFIG` inherited from a GPT-lane session names a
+ *  REAL config (`_models_litellm_path` honours it), so an external-arm run under
+ *  any other env could reach a live lane. It only asks `command -v` and reads a
+ *  file: nothing it resolves is run. */
+export function assertForeignFront(env: NodeJS.ProcessEnv, home: string): void {
+  if (env['CCGPT_CONFIG'] !== undefined) {
+    throw new Error('assertForeignFront: CCGPT_CONFIG is set, so the external arm would render and pgrep a config outside this HOME');
+  }
+  for (const name of ['ccgpt', 'litellm']) {
+    const r = spawnSync('/bin/sh', ['-c', `command -v ${name}`], { env, encoding: 'utf8' });
+    const got = (r.stdout ?? '').trim();
+    const want = path.join(home, '.local', 'bin', name);
+    if (got !== want) {
+      throw new Error(`assertForeignFront: ${name} resolved to ${got === '' ? '(nothing)' : got}, not ${want}`);
+    }
+  }
+  if (!fs.readFileSync(path.join(home, '.local', 'bin', 'ccgpt'), 'utf8').includes(FOREIGN_MARK)) {
+    throw new Error('assertForeignFront: ~/.local/bin/ccgpt is not this shape\'s recorder');
+  }
+}
+
+/** That repository's LiteLLM proxy RUNNING on its box-global config, as
+ *  `_models_litellm_running`'s `pgrep -f "litellm .*<config>"` sees one: a node
+ *  sleeper whose argv carries `litellm --config <config>`. It binds nothing,
+ *  expires on its own (ruling F8), and is tracked, so `killLaneProcesses` ends
+ *  it if a case dies first. Resolves once the child has exec'd. */
+export async function spawnForeignProxyStandIn(home: string): Promise<ChildProcess> {
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)', 'litellm', '--config',
+    path.join(home, FOREIGN_RENDER)], { stdio: 'ignore' });
+  trackChild(home, child);
+  await new Promise<void>((resolve, reject) => { child.once('spawn', () => resolve()); child.once('error', reject); });
+  return child;
+}
+
+/** Ends a stand-in this case started and waits for its exit. */
+export async function stopForeignProxyStandIn(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve) => { child.once('exit', () => resolve()); child.kill('SIGTERM'); });
+}
+
+/** Runs `act` while that repository's proxy runs on its box-global config. */
+export async function withForeignProxyRunning<T>(home: string, act: () => T): Promise<T> {
+  const proxy = await spawnForeignProxyStandIn(home);
+  try { return act(); } finally { await stopForeignProxyStandIn(proxy); }
+}
+
+/** The other repository re-renders its own box-global config (its installer's
+ *  act, which the fixture performs for it), so the next render differs again. */
+export function restoreForeignConfig(home: string): void {
+  const entry = FOREIGN_FILES.find(([rel]) => rel === FOREIGN_RENDER);
+  if (entry === undefined) throw new Error(`restoreForeignConfig: ${FOREIGN_RENDER} is not a planted file`);
+  fs.writeFileSync(path.join(home, entry[0]), entry[2]);
+  fs.chmodSync(path.join(home, entry[0]), entry[1]);
+}
+
+/** What one hourly refresh did, comparable across trees and runs: the unit's
+ *  exit, its rows, each call of the other repository's interpreter, every
+ *  foreign path the run changed (its new entry: a mode and a sha256, never the
+ *  bytes), and the other repository's launcher calls. */
+export interface RefreshObservation {
+  status: number | null;
+  rows: unknown[];
+  probeCalls: ForeignProbeCall[];
+  foreignChanged: Record<string, string>;
+  ccgptCalls: string[];
+}
+
+function entryWord(home: string, e: ForeignEntry | undefined): string {
+  if (e === undefined || e.kind === 'absent') return 'absent';
+  if (e.kind === 'file') return `file ${e.mode.toString(8)} sha256:${createHash('sha256').update(e.bytes).digest('hex')}`;
+  if (e.kind === 'sealed') return `sealed ${e.mode.toString(8)} rewritten`;
+  if (e.kind === 'link') return `link ${e.target.split(home).join('~')}`;
+  return `dir ${e.mode.toString(8)}`;
+}
+
+/** `ccrc-models.service` run exactly as the unit runs it: ITS `ExecStart`,
+ *  through the placed launcher, with ITS `PATH` ahead of the harness's. Two
+ *  departures from the bare unit, each a fixture's and each named:
+ *    - the install harness's `python3` is a stub that refuses every program but
+ *      its own (`ccrcEnv`), and the live box's `~/.local/bin` holds no python3,
+ *      so one directory holding only a link to the real interpreter goes first;
+ *    - every probe name above, `CCRC_MODELS_PROBE_FIXTURE` and `CCGPT_CONFIG`
+ *      are dropped: a user unit's environment is the manager's, which carries
+ *      none of them, so a developer's shell cannot decide the answer. */
+export function observeHourlyRefresh(home: string, harnessEnv: NodeJS.ProcessEnv, realPython: string): RefreshObservation {
+  const before = foreignSnapshot(home);
+  const probes0 = foreignProbeCalls(home).length;
+  const ccgpt0 = foreignCcgptCalls(home).length;
+  const unit = unitExecOf(home, 'ccrc-models.service');
+  const shadow = path.join(home, 'rehearsal-real-python');
+  fs.mkdirSync(shadow, { recursive: true });
+  fs.rmSync(path.join(shadow, 'python3'), { force: true });
+  fs.symlinkSync(realPython, path.join(shadow, 'python3'));
+  const env: NodeJS.ProcessEnv = { ...harnessEnv, PATH: `${shadow}:${unit.path}:${harnessEnv['PATH'] ?? ''}` };
+  for (const n of [...PROBE_ENV_VALUES, ...PROBE_ENV_PRESENCE, 'CCRC_MODELS_PROBE_FIXTURE', 'CCGPT_CONFIG']) delete env[n];
+  assertSpineFrontContained(env, home);
+  assertForeignFront(env, home);
+  const r = spawnSync(unit.argv[0]!, unit.argv.slice(1), { env, encoding: 'utf8', timeout: 240_000 });
+  const after = foreignSnapshot(home);
+  const foreignChanged: Record<string, string> = {};
+  for (const rel of Object.keys(after).sort()) {
+    if (JSON.stringify(after[rel]) !== JSON.stringify(before[rel])) foreignChanged[rel] = entryWord(home, after[rel]);
+  }
+  let rows: unknown[] = [];
+  try {
+    rows = (JSON.parse((r.stdout ?? '').trim().split('\n').pop() ?? '') as { refreshed?: unknown[] }).refreshed ?? [];
+  } catch { rows = [`unparseable stdout: ${(r.stdout ?? '').slice(0, 200)}`]; }
+  return {
+    status: r.status,
+    rows,
+    probeCalls: foreignProbeCalls(home).slice(probes0),
+    foreignChanged,
+    ccgptCalls: foreignCcgptCalls(home).slice(ccgpt0),
+  };
+}
+
+/** The two hourly refreshes Task 10 measures on the base and asserts at the
+ *  tip, as ONE sequence so both trees run the same code (Step 3 copies this
+ *  block):
+ *    1. nothing runs on the box-global config, so a changed render is written
+ *       and nothing is stopped (the live shape: lane 1 is idle);
+ *    2. that repository re-renders its config and its proxy runs on it, so the
+ *       external arm owes its stop, and on the base runs its bare `ccgpt stop`. */
+export async function liveShapeRefreshes(
+  home: string, harnessEnv: NodeJS.ProcessEnv, realPython: string,
+): Promise<RefreshObservation[]> {
+  const first = observeHourlyRefresh(home, harnessEnv, realPython);
+  restoreForeignConfig(home);
+  const second = await withForeignProxyRunning(home, () => observeHourlyRefresh(home, harnessEnv, realPython));
+  return [first, second];
+}
 // ── Plan 3a Task 10 — the live shape (end) ───────────────────────────────
 ```
 
@@ -9908,33 +10017,45 @@ Expected: green, then `census: clean — no unit or link change, 0 fixture proce
 
 - [ ] **Step 2: The rehearsal, red until the base is measured.**
 
-Widen the two imports as the **Files** list says. The `./codexLaneFixture.js` import in `ccrc-install.test.ts` gains `codexAuthDir, authDirOf, eventually, plantLiveShape, foreignSnapshot, externalCodexRow, REHEARSAL_REGISTRY, writeRehearsalCatalogue, doctorClasses, doctorTable, stateCallsNaming`, placed before `type StubRc`. The one in `ccrc-update.test.ts` gains `plantLiveShape, foreignSnapshot, stateCallsNaming`.
+Widen the two imports as the **Files** list says. The `./codexLaneFixture.js` import in `ccrc-install.test.ts` gains `codexAuthDir, authDirOf, eventually, plantLiveShape, foreignSnapshot, externalCodexRow, REHEARSAL_REGISTRY, writeRehearsalCatalogue, doctorClasses, doctorTable, stateCallsNaming, liveShapeRefreshes, foreignCcgptCalls, foreignProbeCalls, assertForeignFront, withForeignProxyRunning, type ForeignEntry, type RefreshObservation`, placed before `type StubRc`. The one in `ccrc-update.test.ts` gains `plantLiveShape, foreignSnapshot, stateCallsNaming`.
 
 Append this to `server/test/ccrc-install.test.ts`:
 
 ```ts
 // ════════════════════════════════════════════════════════════════════════
 // Plan 3a Task 10 — the cutover REHEARSAL (spec §15 steps 1-3, in fixtures).
-// Merging Plan 3a auto-releases and both boxes follow dev
-// (D-3705), so these cases are the evidence
-// that the rollout is a no-op on the fleet box's live SHAPE (`plantLiveShape`),
-// that a flip made in Plan 3b's order converges, and that a flip back
-// converges. The runbook's two steps that need a real LiteLLM (the refresh and
-// the one publisher run) are stood in for by the files each leaves: the
-// default suite has no real LiteLLM (Global Constraints), and Task 1's
-// two-lane case and ccgpt-usage.test.ts own their behaviour.
+// Merging Plan 3a auto-releases and both boxes follow dev (D-3705), and by
+// operator ruling Z (2026-10-01) the merge changes nothing on the live box.
+// So these cases are the evidence that the rollout is a no-op on the fleet
+// box's live SHAPE (`plantLiveShape`): every doctor check keeps its class,
+// `models` included, and the external lane's hourly refresh does exactly what
+// the base's did (Z1, Z7). They also show that an external lane cannot gain a
+// codex registry (Z3), that once a flip makes one lane codex the external arm
+// never runs the other repository's stop (Z4), that a flip made in Plan 3b's
+// order converges, and that a flip back converges. The runbook's two steps
+// that need a real LiteLLM (the refresh of a CODEX lane and the one publisher
+// run) are stood in for by the files each leaves: the default suite has no
+// real LiteLLM (Global Constraints), and Task 1's two-lane case and
+// ccgpt-usage.test.ts own their behaviour.
 // ════════════════════════════════════════════════════════════════════════
 
-/** The live shape's doctor classes on the plan's BASE tree: what the fleet
- *  box's closing doctor answers before this merge reaches it. MEASURED by
- *  Task 10 Step 3 on a detached worktree of the base and pasted here, never
- *  typed; the first case proves it names every check but `codex` and FAILs none. */
-const BASE_LIVE_SHAPE_CLASSES: Readonly<Record<string, string>> = {
-};
-/** Task 1's `_check_models` class for an external lane whose registry probe is
- *  codex once the refresh no longer reaches it (critic #1: never a WARN). Task
- *  1's own case pins the sentence; this is its one consumer here. */
-const FROZEN_EXTERNAL_MODELS_CLASS = 'SKIP';   // every registered lane on the live shape is skipped by design
+/** What the base tree did on the live shape, MEASURED by Task 10 Step 3 on a
+ *  disposable copy of the plan's base and pasted here, never typed: both
+ *  install passes' closing doctor, the two hourly refreshes
+ *  (`liveShapeRefreshes`), and the doctor after them. The first case proves
+ *  it is a measurement of this table that FAILs nothing. */
+interface LiveShapeMeasure {
+  install: Array<{ code: number; classes: Record<string, string> }>;
+  refresh: RefreshObservation[];
+  doctor: { code: number; classes: Record<string, string> };
+}
+const BASE_LIVE_SHAPE: LiveShapeMeasure = { install: [], refresh: [], doctor: { code: -1, classes: {} } };
+/** The base's map for a box that has installed and not yet refreshed: the
+ *  update spine's pass, which the flip case starts from. */
+const baseInstalled = (): Record<string, string> => BASE_LIVE_SHAPE.install[1]?.classes ?? {};
+/** Ruling Z3's refusal code for `init codex` on a row that is not codex-kind,
+ *  as Task 2 lands it in `deploy/models-op.mjs` (Step 0 counts it there). */
+const INIT_EXTERNAL_REFUSAL = 'codex-registry-needs-codex-lane';
 /** Task 4's class for lane state an id left behind when flipped back to
  *  `external` — kept by design (spec §13), so never a FAIL. */
 const FLIP_BACK_LEFTOVER_CLASS = 'WARN';
@@ -9943,12 +10064,23 @@ const USAGE_DEGRADED = 'codex-usage';
 /** 3b step d's name for a launcher moved aside, `cmd_wrappers`' own backup
  *  shape: no id can contain a ".", so doctor never reads it as an account. */
 const ASIDE = '.pre-ccrc-20260930T000000Z';
+/** The extra env of every rehearsal run that can reach `_models_litellm`'s
+ *  external arm, and of the live-shape runs Step 3 mirrors. `CCGPT_CONFIG` is
+ *  the other repository's override of the box-global path, which
+ *  `_models_litellm_path` honours, and a GPT-lane session can carry a real one,
+ *  so it is dropped (an undefined value never reaches the child).
+ *  `assertForeignFront` refuses an env that still has it. */
+const REHEARSAL_ENV: NodeJS.ProcessEnv = { ...READY, CCGPT_CONFIG: undefined };
 const epochS = (): number => Math.floor(Date.now() / 1000);
 const without = <T>(o: Record<string, T>, keys: readonly string[]): Record<string, T> =>
   Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)));
 const argvOf = (home: string): string[] => systemctlCalls(home).map((c) => c.argv);
 const usageEnables = (home: string): string[] =>
   argvOf(home).filter((a) => /^--user enable --now ccrc-codex-usage@/.test(a));
+/** The one JSON object a `ccrc models` verb prints last on stdout, or `{}`. */
+const lastJson = (stdout: string): { ok?: boolean; error?: string; detail?: string; [k: string]: unknown } => {
+  try { return JSON.parse(stdout.trim().split('\n').pop() ?? '') as { ok?: boolean }; } catch { return {}; }
+};
 /** A publisher row in `ccd/ccgpt-usage.py`'s shape: both reset keys present, null included. */
 const usageRow = (): string =>
   `${JSON.stringify({ five: null, seven: 12, ts: epochS(), fiveResetAt: null, sevenResetAt: null })}\n`;
@@ -9956,32 +10088,18 @@ const usageRow = (): string =>
 /** A fresh FLEET box in the live shape. Its tree is stamped (`codexBox`'s
  *  reason: with no stamp `_inst_installed` writes no record), and its agent env
  *  is present so `--role fleet` never prompts. The runtime template is planted
- *  so that a later flip can build; with no codex lane it is never used. */
+ *  so that a later flip can build; with no codex lane it is never used. Step 3's
+ *  MEASURE case builds its box with exactly these calls. */
 function liveBox(prefix: string, opts: { systemd?: boolean } = {}): string {
   const home = freshBox(prefix);
   gitInit(treeRoot(home));
   mkdirSync(join(home, '.ccrc'), { recursive: true });
   writeFileSync(join(home, '.ccrc', 'agent.env'),
     'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
-  plantLiveShape(home, (argv) => runInstall(home, argv, READY, { from: REPO_CCRC }));
+  plantLiveShape(home, (argv) => runInstall(home, argv, REHEARSAL_ENV, { from: REPO_CCRC }));
   plantRuntimeTemplate(home, { verdict: 'pass', version: '1.101.0' });
   if (opts.systemd === true) plantSystemd(home, { userManager: true });
   return home;
-}
-
-/** A unit's own ExecStart argv and PATH, read from the INSTALLED copy, `%h` expanded. */
-function unitExec(home: string, unit: string): { argv: string[]; path: string } {
-  const code = read(unitDir(home, unit)).split('\n').map((l) => l.trim())
-    .filter((l) => l !== '' && !l.startsWith('#'));
-  const exec = code.filter((l) => l.startsWith('ExecStart='));
-  const pathLine = code.filter((l) => l.startsWith('Environment=PATH='));
-  expect(exec, `${unit}: exactly one ExecStart`).toHaveLength(1);
-  expect(pathLine, `${unit}: exactly one PATH line`).toHaveLength(1);
-  const h = (s: string): string => s.split('%h').join(home);
-  return {
-    argv: h(exec[0]!.slice('ExecStart='.length)).split(/\s+/),
-    path: h(pathLine[0]!.slice('Environment=PATH='.length)),
-  };
 }
 
 describeLinux('Plan 3a Task 10 — the cutover rehearsal', () => {
@@ -10004,7 +10122,8 @@ describeLinux('Plan 3a Task 10 — the cutover rehearsal', () => {
     const aside = join(bin, `codex-a${ASIDE}`);
     renameSync(join(bin, 'codex-a'), aside);
     // e. the roster edit, its backup kept: kind codex, provider openai, a port
-    //    pair, and the authDir the lane already uses (adoption by path, §9.2)
+    //    pair, and the authDir the lane already uses (adoption by path, §9.2).
+    //    From here the lane takes the codex path with no other act (ruling Z8).
     const rosterBefore = read(dotCcrc(home, 'accounts.json'));
     codexRoster(home, [lane!], [externalCodexRow('codex-b')]);
     expect(authDirOf(home, 'codex-a')).toBe(join(home, codexAuthDir('codex-a')));
@@ -10032,78 +10151,141 @@ describeLinux('Plan 3a Task 10 — the cutover rehearsal', () => {
     return { lane: lane!, rosterBefore, aside };
   }
 
-  it('the base tree: BASE_LIVE_SHAPE_CLASSES is its measured map, names every check but codex, and FAILs none', () => {
+  it('the base tree: BASE_LIVE_SHAPE is its measured answer — each doctor map names every check but codex and FAILs none, and the two hourly refreshes exercised both arms of the stop decision', () => {
     const table = doctorTable(join(REPO, 'ccd', 'ccrc-doctor-checks'));
     expect(table, 'Task 4 put codex in the table').toContain('codex');
-    expect(Object.keys(BASE_LIVE_SHAPE_CLASSES).sort(),
-      'BASE_LIVE_SHAPE_CLASSES is not Step 3\'s measurement of this table — re-measure it on the plan\'s base')
-      .toEqual(table.filter((n) => n !== 'codex').sort());
-    expect(Object.entries(BASE_LIVE_SHAPE_CLASSES).filter(([, c]) => c.includes('FAIL')),
-      'the base tree FAILs a check on the live shape: the fixture is wrong, not the tree').toEqual([]);
+    const want = table.filter((n) => n !== 'codex').sort();
+    const maps = [...BASE_LIVE_SHAPE.install, BASE_LIVE_SHAPE.doctor];
+    expect(maps.map((m) => m.code), 'BASE_LIVE_SHAPE is not Step 3\'s measurement — re-measure it on the plan\'s base')
+      .toEqual([0, 0, 0]);
+    for (const m of maps) {
+      expect(Object.keys(m.classes).sort(),
+        'BASE_LIVE_SHAPE is not Step 3\'s measurement of this table — re-measure it on the plan\'s base').toEqual(want);
+      expect(Object.entries(m.classes).filter(([, c]) => c.includes('FAIL')),
+        'the base tree FAILs a check on the live shape: the fixture is wrong, not the tree').toEqual([]);
+    }
+    expect(BASE_LIVE_SHAPE.refresh.map((o) => o.status), 'the base\'s hourly unit failed: the fixture is wrong')
+      .toEqual([0, 0]);
+    expect(BASE_LIVE_SHAPE.refresh.map((o) => o.ccgptCalls),
+      'the second refresh did not owe the stop: the stand-in proxy is not what pgrep sees').toEqual([[], ['stop']]);
+    for (const o of BASE_LIVE_SHAPE.refresh) {
+      expect(o.probeCalls.map((c) => c.env['CHATGPT_TOKEN_DIR']),
+        'the base did not probe the external lane through its default token directory').toEqual(['~/.handoff/chatgpt-auth']);
+    }
   });
 
-  it('live shape: install twice, the hourly refresh through its own unit, doctor and uninstall change nothing another repository owns', () => {
+  it('live shape: two installs, both hourly refreshes, doctor and uninstall do exactly what the base did, and init codex on an external lane refuses (rulings Z1, Z3, Z7)', async () => {
     const home = liveBox('ccrc-rehearsal-live-');
     homes.push(home);
-    const s0 = foreignSnapshot(home);
-    const untouched = (stage: string): void => {
+    const models = join(home, '.ccrc', 'models');
+    const registryA = read(join(models, 'codex-a.classes.json'));
+    const stopsAfterRefresh = BASE_LIVE_SHAPE.refresh.flatMap((o) => o.ccgptCalls).length;
+    const contained = (stage: string, want: Record<string, ForeignEntry>, stops: number): void => {
       expect(stateCallsNaming(argvOf(home), /\bccgpt-/),
         `${stage}: a state-changing systemctl verb named a ccgpt- unit`).toEqual([]);
       expect(spineRunCalls(home).filter((l) => l.includes('--unit=ccgpt-')), `${stage}: a ccgpt- unit was started`)
         .toEqual([]);
-      expect(existsSync(join(home, 'foreign-ccgpt-calls')), `${stage}: ccrc ran the other repository's launcher`)
-        .toBe(false);
-      expect(foreignSnapshot(home), `${stage}: a foreign byte, mode or link changed`).toEqual(s0);
+      expect(foreignCcgptCalls(home), `${stage}: ccrc ran the other repository's launcher`).toHaveLength(stops);
+      expect(foreignSnapshot(home), `${stage}: a foreign byte, mode or link changed`).toEqual(want);
+      expect(read(join(models, 'codex-a.classes.json')),
+        `${stage}: the external lane's existing registry was touched (ruling Z3)`).toBe(registryA);
     };
+    const s0 = foreignSnapshot(home);
     // 1-2. install, then again: the second is the update's spine (ccd/ccrc:16183)
-    for (const pass of ['install', 'the update spine'] as const) {
-      const r = runInstall(home, ['install', '--role', 'fleet'], READY);
-      expect(r.code, `${pass}:\n${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(BASE_LIVE_SHAPE.install, 'Step 3 measured two install passes').toHaveLength(2);
+    for (const [pass, base] of BASE_LIVE_SHAPE.install.entries()) {
+      const stage = `install pass ${pass + 1}`;
+      const r = runInstall(home, ['install', '--role', 'fleet'], REHEARSAL_ENV);
+      expect(r.code, `${stage}:\n${r.stdout}\n${r.stderr}`).toBe(0);
       expect(r.stdout).toMatch(/^install: codex runtime: none — no codex lane in the roster$/m);
-      expect(existsSync(runtimeDir(home)), `${pass}: a runtime was built`).toBe(false);
-      expect(existsSync(join(home, '.ccrc', 'codex')), `${pass}: lane state was written`).toBe(false);
-      expect(r.stdout.split('\n').filter((l) => l.startsWith('SKIP codex: ')), `${pass}: _check_codex`).toHaveLength(1);
+      expect(existsSync(runtimeDir(home)), `${stage}: a runtime was built`).toBe(false);
+      expect(existsSync(join(home, '.ccrc', 'codex')), `${stage}: lane state was written`).toBe(false);
+      expect(r.stdout.split('\n').filter((l) => l.startsWith('SKIP codex: ')), `${stage}: _check_codex`).toHaveLength(1);
+      expect(doctorClasses(r.stdout), `${stage}: a check's class moved from the base's (ruling Z7)`)
+        .toEqual({ ...base.classes, codex: 'SKIP' });
       for (const u of ['ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']) {
-        expect(existsSync(unitDir(home, u)), `${pass}: --role fleet did not place ${u}`).toBe(true);
+        expect(existsSync(unitDir(home, u)), `${stage}: --role fleet did not place ${u}`).toBe(true);
       }
-      expect(usageEnables(home), `${pass}: an instance was enabled on a box with no codex lane`).toEqual([]);
-      untouched(pass);
+      expect(usageEnables(home), `${stage}: an instance was enabled on a box with no codex lane`).toEqual([]);
+      contained(stage, s0, 0);
     }
-    // 3. the hourly refresh as the unit runs it, codex-a's catalogue past
-    //    `_check_models`' three-hour floor: the steady state once the refresh
-    //    no longer reaches an external lane (Task 1, ruling R-C2)
-    writeRehearsalCatalogue(home, 'codex-a', epochS() - 4 * 3600);
-    const catalogue = read(join(home, '.ccrc', 'models', 'codex-a.json'));
-    const svc = unitExec(home, 'ccrc-models.service');
-    const harness = ccrcEnv(home);
-    const env = { ...harness, PATH: `${svc.path}:${harness['PATH'] ?? ''}` };
-    assertSpineFrontContained(env, home);
-    const ref = spawnSync(svc.argv[0]!, svc.argv.slice(1), { env, encoding: 'utf8' });
-    expect(ref.status, `ccrc-models.service's ExecStart failed — the unit would fail:\n${ref.stdout}\n${ref.stderr}`)
-      .toBe(0);
-    const body = JSON.parse(ref.stdout.trim().split('\n').pop() ?? '{}') as
-      { ok?: boolean; refreshed?: Array<Record<string, unknown>> };
-    expect(body.ok).toBe(true);
-    expect((body.refreshed ?? []).map((row) => row['id'])).toEqual(['codex-a']);
-    expect(body.refreshed?.[0]).toMatchObject({ id: 'codex-a', probe: 'codex', ok: true, skipped: 'external-lane' });
-    expect(body.refreshed?.[0], 'a skipped lane reached the LiteLLM step').not.toHaveProperty('litellm');
-    expect(String(body.refreshed?.[0]?.['reason'] ?? ''), 'a skipped lane says why').not.toBe('');
-    expect(read(join(home, '.ccrc', 'models', 'codex-a.json')), 'the probe ran for codex-a').toBe(catalogue);
-    untouched('the hourly refresh');
-    // 4. doctor on the aged catalogue: every check keeps its base class, codex is one SKIP
-    const d = runInstall(home, ['doctor'], READY);
-    expect(d.code, d.stdout).toBe(0);
-    expect(doctorClasses(d.stdout))
-      .toEqual({ ...BASE_LIVE_SHAPE_CLASSES, models: FROZEN_EXTERNAL_MODELS_CLASS, codex: 'SKIP' });
-    untouched('doctor');
-    // 5. uninstall
+    // 3. the hourly refresh, twice, exactly as ccrc-models.service runs it: the
+    //    external lane keeps the base's probe env, render and stop decision (Z1)
+    const refresh = await liveShapeRefreshes(home, { ...ccrcEnv(home), ...REHEARSAL_ENV }, realPy());
+    expect(refresh, 'the external lane\'s hourly refresh did not do what the base\'s did (ruling Z1)')
+      .toEqual(BASE_LIVE_SHAPE.refresh);
+    const s1 = foreignSnapshot(home);
+    contained('the hourly refresh', s1, stopsAfterRefresh);
+    // 4. doctor after the refreshes: every check keeps the base's class, models included (Z7)
+    const d = runInstall(home, ['doctor'], REHEARSAL_ENV);
+    expect(d.code, d.stdout).toBe(BASE_LIVE_SHAPE.doctor.code);
+    expect(doctorClasses(d.stdout), 'doctor: a check\'s class moved from the base\'s (ruling Z7)')
+      .toEqual({ ...BASE_LIVE_SHAPE.doctor.classes, codex: 'SKIP' });
+    contained('doctor', s1, stopsAfterRefresh);
+    // 5. ruling Z3: an external lane cannot gain a codex registry. The lane-2
+    //    analog has none, and this is the wrong-lane hazard itself: on the base,
+    //    this init succeeds, and the next hourly refresh probes that lane through
+    //    the default token directory, which is lane 1's.
+    const probes = foreignProbeCalls(home).length;
+    const files = readdirSync(models).sort();
+    const init = runInstall(home, ['models', 'codex-b', 'init', 'codex'], REHEARSAL_ENV, { from: REPO_CCRC });
+    expect(init.code, `init codex on an external lane was not refused:\n${init.stdout}\n${init.stderr}`).not.toBe(0);
+    const refusal = lastJson(init.stdout);
+    expect(refusal, init.stdout).toMatchObject({ ok: false, error: INIT_EXTERNAL_REFUSAL });
+    expect(refusal.detail ?? '', 'the refusal does not give ruling Z3\'s remedy').toMatch(/flip the lane to .?codex.? first/i);
+    expect(readdirSync(models).sort(), 'the refused init wrote a file').toEqual(files);
+    expect(foreignProbeCalls(home), 'the refused init ran the probe').toHaveLength(probes);
+    contained('init codex on an external lane', s1, stopsAfterRefresh);
+    // 6. uninstall
     const un = runInstall(home, ['uninstall']);
     expect(un.code, `${un.stdout}\n${un.stderr}`).toBe(0);
-    untouched('uninstall');
+    contained('uninstall', s1, stopsAfterRefresh);
     for (const u of ['ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']) {
       expect(existsSync(unitDir(home, u)), `uninstall left ${u}`).toBe(false);
     }
-  }, 240_000);
+  }, 300_000);
+
+  it('ruling Z4: once a flip makes codex-a a codex lane, the external arm for a still-external lane with a registry refuses the stop it owes, writes nothing and runs no ccgpt; with nothing to stop it still renders', async () => {
+    const home = liveBox('ccrc-rehearsal-z4-', { systemd: true });
+    homes.push(home);
+    const i0 = runInstall(home, ['install', '--role', 'fleet'], REHEARSAL_ENV);
+    expect(i0.code, `${i0.stdout}\n${i0.stderr}`).toBe(0);
+    const f = await flipCodexA(home);
+    // codex-b stays external and carries a registry made before ruling Z3's
+    // guard existed (no `init codex` can make one now): the files a pre-3a
+    // init and refresh leave. Its render is the box-global config.
+    const models = join(home, '.ccrc', 'models');
+    writeFileSync(join(models, 'codex-b.classes.json'), `${JSON.stringify(REHEARSAL_REGISTRY, null, 2)}\n`);
+    writeRehearsalCatalogue(home, 'codex-b', epochS());
+    const cfg = join(home, '.handoff', 'litellm-config.yaml');
+    const planted = read(cfg);
+    const calls0 = argvOf(home).length;
+    assertForeignFront({ ...ccrcEnv(home), ...REHEARSAL_ENV }, home);
+    // the box-global config differs from the render, and that repository's
+    // proxy runs on it: the stop is owed, and a bare `ccgpt stop` would stop the
+    // lane-1 units by name, which are now codex-a's own tiers
+    const refused = await withForeignProxyRunning(home,
+      () => runInstall(home, ['models', 'litellm', 'codex-b'], REHEARSAL_ENV, { from: REPO_CCRC }));
+    expect(refused.code, `the external arm did not refuse:\n${refused.stdout}\n${refused.stderr}`).toBe(1);
+    const body = lastJson(refused.stdout);
+    expect(body, refused.stdout).toMatchObject({ ok: false, error: 'restart-failed' });
+    expect(body.detail ?? '', 'the refusal does not name the codex lane as its reason').toContain('the roster names codex-kind lane(s) codex-a');
+    expect(body.detail ?? '', 'the refusal sends the operator to the stop it refused').not.toMatch(/run 'ccgpt stop'/i);
+    expect(foreignCcgptCalls(home), 'ccrc ran the other repository\'s stop while a codex lane exists (ruling Z4)')
+      .toEqual([]);
+    expect(read(cfg), 'the refusal wrote the box-global config').toBe(planted);
+    expect(existsSync(`${cfg}.prev`), 'the refusal wrote a .prev').toBe(false);
+    expect(stateCallsNaming(argvOf(home).slice(calls0), /\bccgpt-/), 'the refusal changed a ccgpt- unit').toEqual([]);
+    const ans = await laneAnswer(f.lane.proxyPort);
+    expect(JSON.parse(ans!.body), 'codex-a\'s own shim stopped answering').toEqual({ lane: 'codex-a' });
+    // with nothing running on it there is nothing to stop, and the render lands
+    // as it does today (ruling Z1: Z4 guards the stop, never the render)
+    const rendered = runInstall(home, ['models', 'litellm', 'codex-b'], REHEARSAL_ENV, { from: REPO_CCRC });
+    expect(rendered.code, `${rendered.stdout}\n${rendered.stderr}`).toBe(0);
+    expect(lastJson(rendered.stdout)).toMatchObject({ ok: true, changed: true, restarted: false });
+    expect(read(cfg), 'the render did not land').not.toBe(planted);
+    expect(foreignCcgptCalls(home)).toEqual([]);
+  }, 300_000);
 
   it('the flip, in Plan 3b\'s order: only codex-a\'s ccrc instance is enabled, codex-b and its foreign timer are untouched, and doctor answers PASS for the lane', async () => {
     const home = liveBox('ccrc-rehearsal-flip-', { systemd: true });
@@ -10129,7 +10311,7 @@ describeLinux('Plan 3a Task 10 — the cutover rehearsal', () => {
     const d = runInstall(home, ['doctor'], READY);
     expect(d.code, d.stdout).toBe(0);
     expect(doctorClasses(d.stdout), 'a check other than codex moved at the flip')
-      .toEqual({ ...BASE_LIVE_SHAPE_CLASSES, codex: 'PASS' });
+      .toEqual({ ...baseInstalled(), codex: 'PASS' });
     const codexLines = d.stdout.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) codex: /.test(l)).join('\n');
     expect(codexLines).toMatch(/codex-a/);
     expect(codexLines, 'doctor measured an external lane as a codex lane').not.toMatch(/codex-b/);
@@ -10150,7 +10332,8 @@ describeLinux('Plan 3a Task 10 — the cutover rehearsal', () => {
     expect(stop.code, `${stop.stdout}\n${stop.stderr}`).toBe(0);
     await eventually(async () => !(await portAccepts(f.lane.proxyPort)), 'codex-a\'s shim port to close');
     await eventually(async () => !(await portAccepts(f.lane.litellmPort)), 'codex-a\'s litellm port to close');
-    // 2. the roster backup, byte for byte
+    // 2. the roster backup, byte for byte: from here the lane is on today's
+    //    external path again, and no codex row is left for Z4's guard to see
     writeFileSync(dotCcrc(home, 'accounts.json'), f.rosterBefore);
     // 3. ccrc's wrapper out, marker-verified first, and the old launcher back, still a link
     const wrapper = join(bin, 'codex-a');
@@ -10190,7 +10373,8 @@ describeLinux('Plan 3a Task 10 — the cutover rehearsal', () => {
     // step c (the operator's disable of ccgpt-usage@codex-b.timer) is SKIPPED
     renameSync(join(bin, 'codex-b'), join(bin, `codex-b${ASIDE}`));
     codexRoster(home, [lane!], [externalCodexRow('codex-a')]);
-    // the lane has no registry: 3b's `init codex` and refresh, stood in by the files they leave
+    // the lane has no registry: 3b's `init codex` after the flip (ruling Z3
+    // forces that order) and its refresh, stood in by the files they leave
     writeFileSync(join(home, '.ccrc', 'models', 'codex-b.classes.json'), `${JSON.stringify(REHEARSAL_REGISTRY, null, 2)}\n`);
     writeRehearsalCatalogue(home, 'codex-b', epochS());
     const m = runInstall(home, ['models', 'codex-b', 'set-subagent', 'sonnet'], READY, { from: REPO_CCRC });
@@ -10235,7 +10419,7 @@ describe('Plan 3a Task 10 — ccrc update onto this tree over today\'s live shap
     plantOldBox(home, { version: 'v1.0.0' });
     plantCoordDb(home);
     plantLiveShape(home, (argv) => {
-      const env = updateEnv(home);
+      const env: NodeJS.ProcessEnv = { ...updateEnv(home), CCGPT_CONFIG: undefined };   // REHEARSAL_ENV's reason
       assertSpineFrontContained(env, home);
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), ...argv], { env, encoding: 'utf8' });
       return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
@@ -10267,50 +10451,77 @@ Run the baseline case:
 cd server && "$CENSUS" "$EVID/t10-s2-red" ./node_modules/.bin/vitest run test/ccrc-install.test.ts -t 'the base tree'
 ```
 
-Expected **RED**: 1 failed, `BASE_LIVE_SHAPE_CLASSES is not Step 3's measurement of this table — re-measure it on the plan's base`, then `census: clean — no unit or link change, 0 fixture processes left; command exit 1`. The red is vitest's own exit code; the census verdict is separate (F10).
+Expected **RED**: 1 failed, `BASE_LIVE_SHAPE is not Step 3's measurement — re-measure it on the plan's base`, then `census: clean — no unit or link change, 0 fixture processes left; command exit 1`. The red is vitest's own exit code; the census verdict is separate (F10).
 
 - [ ] **Step 3: Measure the base, and paste the measurement.**
 
+The base is measured in a disposable `git archive` copy, never a worktree: this repository is only read (F5), and this suite runs in such a copy (measured at drafting). The copy gets this task's own fixture block and `TREE_FILES` lines, unchanged, and one MEASURE case that makes `liveBox`'s calls and then the live case's, in its order and with its env.
+
 ```bash
 . "<abs scratch>/plan3a-env.sh"
-cd "$(git rev-parse --show-toplevel)"
-WT="$SCRATCH/t10-base-wt"
-git worktree add --detach "$WT" "$(cat "$SCRATCH/t10-base")"
-ln -s "$PWD/server/node_modules" "$WT/server/node_modules"
+B="$SCRATCH/t10-base-tree"; rm -rf -- "$B"; mkdir -p -- "$B"
+git archive "$(cat "$SCRATCH/t10-base")" | tar -x -C "$B"
+ln -s "$TREE/server/node_modules" "$B/server/node_modules"
 # the Step 1 block, unchanged, onto the base's own module
 awk '/^\/\/ ── Plan 3a Task 10 — the live shape \(begin\)/{p=1} p' server/test/codexLaneFixture.ts \
-  >> "$WT/server/test/codexLaneFixture.ts"
-cat >> "$WT/server/test/ccrc-install.test.ts" <<'EOF'
+  >> "$B/server/test/codexLaneFixture.ts"
+# the Step 1 TREE_FILES lines, unchanged, onto the base's own list
+python3 - server/test/installTreeFixture.ts "$B/server/test/installTreeFixture.ts" <<'PY'
+import pathlib, re, sys
+tip, base = (pathlib.Path(a) for a in sys.argv[1:])
+m = re.search(r"^  // Plan 3a Task 10: the model-registry op.*?^  'shared/litellm\.mjs',\n", tip.read_text(), re.S | re.M)
+assert m, "the tip's installTreeFixture.ts carries no Task 10 block"
+anchor, b = "  'deploy/account-op.mjs',\n", base.read_text()
+assert b.count(anchor) == 1, f"the base's list carries {b.count(anchor)} account-op lines, not 1"
+base.write_text(b.replace(anchor, anchor + m.group(0)))
+PY
+cat >> "$B/server/test/ccrc-install.test.ts" <<'EOF'
 
-// MEASURE ONLY — Plan 3a Task 10 Step 3; appended to a SCRATCH base worktree and never committed.
-import { plantLiveShape as measureLiveShape, doctorClasses as measureClasses } from './codexLaneFixture.js';
-describe('MEASURE the live shape\'s doctor classes on this tree', () => {
-  it('writes them to REHEARSAL_OUT', () => {
+// MEASURE ONLY — Plan 3a Task 10 Step 3; appended to a disposable copy of the BASE and never committed.
+import {
+  plantLiveShape as measureLiveShape, doctorClasses as measureClasses, liveShapeRefreshes as measureRefreshes,
+} from './codexLaneFixture.js';
+describe('MEASURE the live shape on this tree', () => {
+  it('writes it to REHEARSAL_OUT', async () => {
+    // liveBox's calls, then the live case's, in its order and with its env (REHEARSAL_ENV)
+    const env: NodeJS.ProcessEnv = { ...READY, CCGPT_CONFIG: undefined };
     const home = freshBox('ccrc-rehearsal-measure-');
     gitInit(treeRoot(home));
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     writeFileSync(join(home, '.ccrc', 'agent.env'),
       'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
-    measureLiveShape(home, (argv) => runInstall(home, argv, READY, { from: REPO_CCRC }));
-    const r = runInstall(home, ['install', '--role', 'fleet'], READY);
-    writeFileSync(process.env['REHEARSAL_OUT']!, `${JSON.stringify({ code: r.code, classes: measureClasses(r.stdout) })}\n`);
-  }, 120_000);
+    measureLiveShape(home, (argv) => runInstall(home, argv, env, { from: REPO_CCRC }));
+    plantRuntimeTemplate(home, { verdict: 'pass', version: '1.101.0' });
+    const install = [1, 2].map(() => {
+      const r = runInstall(home, ['install', '--role', 'fleet'], env);
+      return { code: r.code, classes: measureClasses(r.stdout) };
+    });
+    const refresh = await measureRefreshes(home, { ...ccrcEnv(home), ...env }, realPy());
+    const d = runInstall(home, ['doctor'], env);
+    writeFileSync(process.env['REHEARSAL_OUT']!,
+      `${JSON.stringify({ install, refresh, doctor: { code: d.code, classes: measureClasses(d.stdout) } })}\n`);
+    await killLaneProcesses(home);
+  }, 240_000);
 });
 EOF
-( cd "$WT/server" && REHEARSAL_OUT="$SCRATCH/t10-base-classes.json" \
-    "$CENSUS" "$EVID/t10-s3-base" ./node_modules/.bin/vitest run test/ccrc-install.test.ts -t 'MEASURE' )
-node -e 'const o = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); console.log("code", o.code);
-  for (const [k, v] of Object.entries(o.classes)) console.log(`  \x27${k}\x27: \x27${v}\x27,`);' "$SCRATCH/t10-base-classes.json"
-git worktree remove --force "$WT"   # by path; never `git worktree prune`, which acts on every worktree of this repository (F5)
+( cd "$B/server" && REHEARSAL_OUT="$SCRATCH/t10-base-live-shape.json" \
+    "$CENSUS" "$EVID/t10-s3-base" ./node_modules/.bin/vitest run test/ccrc-install.test.ts -t 'MEASURE the live shape' )
+grep -cE '"/(tmp|home|mnt|Users|var)/' "$SCRATCH/t10-base-live-shape.json"   # expected: 0 (HOME is written ~)
+node -e 'console.log(JSON.stringify(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")), null, 2))' \
+  "$SCRATCH/t10-base-live-shape.json"
+rm -rf -- "$B"   # by path: a scratch directory, never a git operation (F5)
 ```
 
 Expected:
-- 1 passed, then `census: clean … command exit 0`.
-- `code 0`, followed by one `'<check>': '<CLASS>',` line for every entry in the base's table (39 at `1f9fa22d`; re-derive the count), with no `FAIL` in any of them.
+- 1 passed, then `census: clean … command exit 0`, then `0`.
+- The printed object. Measured at drafting on a copy of `4ec8926a`, whose tree outside `docs/` is `1f9fa22d`'s:
+  - `install`: two entries, each `code: 0` with one `"<check>": "<CLASS>"` pair for every entry in the base's table (39 at `1f9fa22d`; re-derive the count), two `WARN`s, no `FAIL`, and `"models": "PASS"`;
+  - `refresh`: two entries, each `status: 0` with the one row `{ "id": "codex-a", "probe": "codex", "ok": true, "count": 2, "litellm": "rendered" }` and one probe call whose `CHATGPT_TOKEN_DIR` is `~/.handoff/chatgpt-auth` and whose `LITELLM_LOCAL_MODEL_COST_MAP` is `<unset>`. The first changed the box-global config and its `.prev` and ran no `ccgpt`; the second changed the config and ran `ccgpt stop` once;
+  - `doctor`: `code: 0` and the same checks.
 
-If any line shows a FAIL, **stop**: the fixture is wrong, not the tree.
+If any class shows a FAIL, or either refresh exited non-zero, **stop**: the fixture is wrong, not the tree.
 
-Paste the lines into `BASE_LIVE_SHAPE_CLASSES` and re-run the Step 2 command. Expected **GREEN**: 1 passed.
+Paste the printed object as `BASE_LIVE_SHAPE`'s value: it is JSON, which TypeScript reads as an object literal of the declared type. Re-run the Step 2 command. Expected **GREEN**: 1 passed.
 
 - [ ] **Step 4: The whole rehearsal at the tip.**
 
@@ -10326,30 +10537,33 @@ cd server && "$CENSUS" "$EVID/t10-s4-install" ./node_modules/.bin/vitest run tes
 cd server && "$CENSUS" "$EVID/t10-s4-update" ./node_modules/.bin/vitest run test/ccrc-update.test.ts -t 'Plan 3a Task 10'
 ```
 
-Expected: 5 passed in the install suite and 1 passed in the update suite, each followed by `census: clean … command exit 0`.
-- A check other than `codex` whose class moves means one of two things. Either it is a defect in Tasks 1–9, and it is fixed in that task's code, never in the expectation. Or it is a fact the runbook must expect, and it joins the expected map with a one-line reason comment beside it.
+Expected: 6 passed in the install suite and 1 passed in the update suite, each followed by `census: clean … command exit 0`.
+- A check whose class moves from the base's is a defect in Tasks 1–9, because ruling Z7 makes identity the requirement. It is fixed in that task's code, never in the expectation, and reported.
+- A refresh observation that differs from the base's is the same kind of defect: ruling Z1 keeps the external path byte for byte.
 - A FAIL on the `.pre-ccrc-` file would be a finding for Plan 3b's runbook. Report it; never widen the fixture to hide it.
 
 - [ ] **Step 5: The mutation table.**
 
-Each row un-lands one piece of Tasks 1–7 in the working tree. It backs up the one file it edits, replaces the row's **Old** text, which must occur exactly once, with its **New** text, runs only the case that must red, restores the file from its backup, checks the restore with `git diff --quiet` (F7: `ccd/` is committed by Tasks 1–9 and this task never edits it), and runs the case again as its control. Every Old is text Tasks 1–7 land; re-read it in the file and copy it from there, indentation included. If a mutation does not red, **report it**; never manufacture code to force a red (Global Constraints).
+Each row un-lands one piece of Tasks 1–7 in the working tree. It backs up the one file it edits, replaces the row's **Old** text, which must occur exactly once, with its **New** text, runs only the case that must red, restores the file from its backup, checks the restore with `git diff --quiet` (F7: `ccd/` and `deploy/` are committed by Tasks 1–9 and this task never edits them), and runs the case again as its control. Every Old is text Tasks 1–7 land; re-read it in the file and copy it from there, indentation included. Rows M2–M4 quote Task 2's two guard lines as Task 2 writes them, with the file's indentation; Step 0 counted each exactly once. If a mutation does not red, **report it**; never manufacture code to force a red (Global Constraints). A red that lands on an earlier assertion of the same stage still binds the row's guard; record which assertion fired.
 
 | # | Un-lands | File, function | Old → New | Case (`-t`) | Expected red |
 |---|---|---|---|---|---|
-| M1 | Task 1's refresh-loop skip of an external lane whose registry probe is codex, so the lane reaches `_models_refresh_one` (Task 1's row 21) | `ccd/ccrc`, the `refresh` arm's loop (`grep -nF 'elif [ "$probe" = codex ] && ! _models_litellm_codex "$id"; then' ccd/ccrc`) | the arm, from that `elif` line through its `'{id:$id, probe:"codex", ok:true, skipped:"external-lane", reason:$reason}')"` line, comments included → nothing | `live shape` | `ccrc-models.service's ExecStart failed` (the probe refuses `no-token-dir`, the row is `ok:false`, the loop returns 1) |
-| M2 | Task 1's `_check_models` sentence for that lane, so it falls through to the age test (Task 1's row 23) | `ccd/ccrc-doctor-checks`, `_check_models`' catalogue reader | the `if (kinds !== null && kinds.get(id) !== "codex" && registryProbe(id) === "codex") {` block: that line, its two body lines and its `}` → nothing | `live shape` | `doctorClasses` shows `models: 'WARN'` |
-| M3 | Task 6's converge keyed on `exec.kind` | `ccd/ccrc`, `_inst_codex_usage` | the two lines `  local -a codex=() enabled=() withheld=() withdrawn=()` and `  lanes="$(_codex_lanes)" \|\| lrc=$?` → the first unchanged, then `  lanes="$(. "$HOME/.ccrc/accounts.sh" && printf '%s\n' ${CCRC_CODEX_BACKEND[@]+"${CCRC_CODEX_BACKEND[@]}"})" \|\| lrc=$?` (the telemetry-keyed list, which names both external rows). The second line alone also stands in `_inst_codex_runtime` and `_inst_codex_tiers` | `live shape` | `an instance was enabled on a box with no codex lane` |
-| M4 | Task 6's own name for the pair: the converge also places it under the other repository's template names | `ccd/ccrc`, `_inst_units` | the line `    _inst_atomic "$tree/deploy/systemd/ccrc-codex-usage@.timer" "$dir/ccrc-codex-usage@.timer" 644` → that line, then `    _inst_atomic "$tree/deploy/systemd/ccrc-codex-usage@.service" "$dir/ccgpt-usage@.service" 644` and `    _inst_atomic "$tree/deploy/systemd/ccrc-codex-usage@.timer" "$dir/ccgpt-usage@.timer" 644` | `live shape` | `install: a foreign byte, mode or link changed` |
-| M5 | Task 6's disable of an instance whose id is no longer codex | `ccd/ccrc`, `_inst_codex_usage`'s withdraw loop | the two lines `    if systemctl --user disable --now "$u"; then` and `      withdrawn+=("$e")` → `    if :; then` and `      withdrawn+=("$e")`. The first line alone also stands in Task 7's `_uninst_codex_usage` | `the flip back` | `the converge did not disable an instance whose lane is no longer codex` |
-| M6 | Task 6's withheld enable beside the other repository's instance (R6) | `ccd/ccrc`, `_inst_codex_usage`'s enable loop | `    if _codex_usage_enabled "$f"; then` → `    if false; then` | `out of order` | `ccrc enabled a second writer over one limits row` |
-| M7 | `_uninst_units` removes only ccrc's own pair (Task 6, 6e) | `ccd/ccrc`, `_uninst_units`' `rm -f` | `    "$dir/ccrc-codex-usage@.service" "$dir/ccrc-codex-usage@.timer" \` → `    "$dir/ccrc-codex-usage@.service" "$dir/ccrc-codex-usage@.timer" "$dir/ccgpt-usage@.timer" \` | `live shape` | `uninstall: a foreign byte, mode or link changed` |
+| M1 | Z1: the external probe path keeps its token-directory default | `ccd/ccrc-models-probe`, the external path of the codex fetch (`grep -nF ':-$HOME/.handoff/chatgpt-auth}' ccd/ccrc-models-probe` finds its one code line) | `:-$HOME/.handoff/chatgpt-auth}` → `:-}`: the default withdrawn, as the superseded R-C2 had it | `live shape` | `the external lane's hourly refresh did not do what the base's did (ruling Z1)` (the probe answers `not logged in`, the row is `ok:false`, the unit exits 1) |
+| M2 | Z4's scope: the guard fires only while the roster carries a codex row | `ccd/ccrc`, `_models_litellm`'s external arm: Task 2's guard, the first statement inside `if _models_litellm_running; then` | `    if blocked="$(_models_litellm_stop_blocked)"; then` → `    if :; then`, so it fires on every owed stop | `live shape` | `the external lane's hourly refresh did not do what the base's did (ruling Z1)` (the second refresh's row is `ok:false` with Task 2's refusal, and no `stop` is recorded) |
+| M3 | Z4: the external arm never runs the other repository's stop once a codex lane exists | the same line | `    if blocked="$(_models_litellm_stop_blocked)"; then` → `    if false; then` | `ruling Z4` | `the external arm did not refuse` (the arm runs the recorder's `stop`, writes the render and exits 0, so this is the first assertion to fire) |
+| M4 | Z3: an external lane cannot gain a codex registry | `deploy/models-op.mjs`, the `init` arm: Task 2's guard | `    if (a.probe === 'codex' && !(isObj(account.exec) && account.exec.kind === 'codex')) {` → `    if (false) {` | `live shape` | `init codex on an external lane was not refused` |
+| M5 | Task 6's converge keyed on `exec.kind` | `ccd/ccrc`, `_inst_codex_usage` | the two lines `  local -a codex=() enabled=() withheld=() withdrawn=()` and `  lanes="$(_codex_lanes)" \|\| lrc=$?` → the first unchanged, then `  lanes="$(. "$HOME/.ccrc/accounts.sh" && printf '%s\n' ${CCRC_CODEX_BACKEND[@]+"${CCRC_CODEX_BACKEND[@]}"})" \|\| lrc=$?` (the telemetry-keyed list, which names both external rows). The second line alone also stands in `_inst_codex_runtime` and `_inst_codex_tiers` | `live shape` | `install pass 1: an instance was enabled on a box with no codex lane` |
+| M6 | Task 6's own name for the pair: the converge also places it under the other repository's template names | `ccd/ccrc`, `_inst_units` | the line `    _inst_atomic "$tree/deploy/systemd/ccrc-codex-usage@.timer" "$dir/ccrc-codex-usage@.timer" 644` → that line, then `    _inst_atomic "$tree/deploy/systemd/ccrc-codex-usage@.service" "$dir/ccgpt-usage@.service" 644` and `    _inst_atomic "$tree/deploy/systemd/ccrc-codex-usage@.timer" "$dir/ccgpt-usage@.timer" 644` | `live shape` | `install pass 1: a foreign byte, mode or link changed` |
+| M7 | Task 6's disable of an instance whose id is no longer codex | `ccd/ccrc`, `_inst_codex_usage`'s withdraw loop | the two lines `    if systemctl --user disable --now "$u"; then` and `      withdrawn+=("$e")` → `    if :; then` and `      withdrawn+=("$e")`. The first line alone also stands in Task 7's `_uninst_codex_usage` | `the flip back` | `the converge did not disable an instance whose lane is no longer codex` |
+| M8 | Task 6's withheld enable beside the other repository's instance (R6) | `ccd/ccrc`, `_inst_codex_usage`'s enable loop | `    if _codex_usage_enabled "$f"; then` → `    if false; then` | `out of order` | `ccrc enabled a second writer over one limits row` |
+| M9 | `_uninst_units` removes only ccrc's own pair (Task 6, 6e) | `ccd/ccrc`, `_uninst_units`' `rm -f` | `    "$dir/ccrc-codex-usage@.service" "$dir/ccrc-codex-usage@.timer" \` → `    "$dir/ccrc-codex-usage@.service" "$dir/ccrc-codex-usage@.timer" "$dir/ccgpt-usage@.timer" \` | `live shape` | `uninstall: a foreign byte, mode or link changed` |
 
 Each row is two foreground calls (F6). First write the row's Old text to `$SCRATCH/t10-<M>.old` and its New text to `$SCRATCH/t10-<M>.new` (an empty file for a deletion), then the mutated run:
 
 ```bash
 . "<abs scratch>/plan3a-env.sh"
 cd "$(git rev-parse --show-toplevel)"
-M=M1; F=ccd/ccrc; T='live shape'                 # one row at a time, from the table above
+M=M1; F=ccd/ccrc-models-probe; T='live shape'   # one row at a time, from the table above
 cp -- "$F" "$SCRATCH/t10-$M.orig"                # the row's one file, one backup (F7)
 python3 - "$F" "$SCRATCH/t10-$M.old" "$SCRATCH/t10-$M.new" <<'PY'
 import pathlib, sys
@@ -10366,7 +10580,7 @@ Then the restore and the control:
 ```bash
 . "<abs scratch>/plan3a-env.sh"
 cd "$(git rev-parse --show-toplevel)"
-M=M1; F=ccd/ccrc; T='live shape'                 # the same row
+M=M1; F=ccd/ccrc-models-probe; T='live shape'   # the same row
 cp -- "$SCRATCH/t10-$M.orig" "$F" && git diff --quiet -- "$F" && echo restored
 ( cd server && "$CENSUS" "$EVID/t10-$M-control" ./node_modules/.bin/vitest run test/ccrc-install.test.ts -t "$T" )
 ```
@@ -10376,7 +10590,7 @@ Expected for every row:
 - the file is `restored`;
 - the control: 1 passed, then `census: clean … command exit 0`.
 
-At the end, `git diff --quiet -- ccd/ && echo ccd-clean` prints `ccd-clean`.
+At the end, `git diff --quiet -- ccd/ deploy/ && echo tree-clean` prints `tree-clean`.
 
 - [ ] **Step 6: The neighbours, in full.**
 
@@ -10390,7 +10604,7 @@ cd server && "$CENSUS" "$EVID/t10-s6-$f" ./node_modules/.bin/vitest run "test/$f
 
 Expected:
 - All five are green.
-- `ccrc-install.test.ts` gains 5 cases and `ccrc-update.test.ts` gains 1.
+- `ccrc-install.test.ts` gains 6 cases and `ccrc-update.test.ts` gains 1.
 - `install-census`, `single-definition` and `typecheck-tests` have unchanged counts. `TREE_FILES` is still defined once (`single-definition.test.ts:3208`).
 - Every run ends with `census: clean … command exit 0`.
 
@@ -10443,49 +10657,66 @@ git merge-base origin/main HEAD > "$SCRATCH/t11-base"
 BASE="$(cat "$SCRATCH/t11-base")"
 git log --oneline "$BASE"..HEAD                     # Tasks 1–10, each its own commit
 git diff --quiet "$BASE" HEAD -- ccd/ccd ccd/ccgpt-runtime ccd/ccgpt-proxy.py && echo CUT-OK
+git diff --quiet "$BASE" HEAD -- shared/litellm.mjs deploy/litellm-config.template.yaml && echo RENDER-OK
+# Ruling Z1: the external path's bytes. Compared, never printed: `_fetch_codex` spells the probe's default directory.
+fx() { sed -n '/^_fetch_codex() {$/,/^PY$/p'; }
+cmp -s <(git show "$BASE:ccd/ccrc-models-probe" | fx) <(git show HEAD:ccd/ccrc-models-probe | fx) && echo FETCH-OK
+git diff -U0 "$BASE" HEAD -- ccd/ccrc-models-probe | grep -c '^-[^-]'   # expected: 1, `_fetch`'s old `codex)` line (Task 1)
+hx() { sed -n '/^_models_litellm_path() {/,/^}$/p; /^_models_litellm_running() {/p'; }
+cmp -s <(git show "$BASE:ccd/ccrc" | hx) <(git show HEAD:ccd/ccrc | hx) && echo HELPERS-OK
+ax() { sed -n '/^_models_litellm() {/,/^}$/p' | sed -n '/^  local file check crc$/,$p'; }
+diff <(git show "$BASE:ccd/ccrc" | ax) <(git show HEAD:ccd/ccrc | ax) | grep -cE '^[0-9]+(,[0-9]+)?[acd][0-9]+(,[0-9]+)?$'   # expected: 1 hunk
+diff <(git show "$BASE:ccd/ccrc" | ax) <(git show HEAD:ccd/ccrc | ax) | grep -cE '^[0-9]+a[0-9]+(,[0-9]+)?$'   # expected: 1, and it is an insertion
+diff <(git show "$BASE:ccd/ccrc" | ax) <(git show HEAD:ccd/ccrc | ax) | grep -c '^<'   # expected: 0, no line of the arm's body removed or changed
 git grep -nE 'systemctl[^|;]*ccgpt-usage' -- ccd deploy | wc -l   # expected: 2 (R2: ccrc never drives it; the two are operator remedies)
 ```
 
-Expected: `CUT-OK` and `2`. Both checks read Tasks 1–10's commits, which exist by now (F3).
+Expected, in order: `CUT-OK`, `RENDER-OK`, `FETCH-OK`, `1`, `HELPERS-OK`, `1`, `1`, `0`, and `2`. Every check reads Tasks 1–10's commits, which exist by now (F3).
+- The ruling-Z lines prove Z1 over the whole plan, where Task 1's cut proved only its own commit. They say:
+  - `_fetch_codex` is byte-identical, and the probe's one removed line is `_fetch`'s old `codex)` dispatch;
+  - `_models_litellm_path` and `_models_litellm_running` are unchanged, and so are the renderer and the template the external arm renders with;
+  - the external arm's body, from `local file check crc` to its closing `}`, differs from the base by one inserted block, Task 2's Z4 guard, and nothing else.
+  Any other answer stops the step: name the commit.
 - If `CUT-OK` is missing, stop and name the commit. `ccd/ccd` would mean a re-stamp and a census charge, and `ccd/ccgpt-runtime` would rebuild every box that has a codex lane.
 - The `2` are Task 6's two operator remedies for the other repository's flat timer, each telling the operator to run `systemctl --user disable --now ccgpt-usage.timer`: one in `_inst_codex_usage`'s note (`ccd/ccrc`) and one in `_dr_codex_usage_box`'s remedy (`ccd/ccrc-doctor-checks`). Read each. Any other hit stops the step unless it is a refusal or a comment naming the other repository's unit.
 
 - [ ] **Step 1: Append §20 and the same-line pointers.**
 
-Append this verbatim after line 974. By the time this step runs, the controller has substituted every `⟦D:<slug>⟧`. Before appending, replace every `‹…›` in §20.10 with the exact `it(` titles of the cases that hold the row, read from the suites at the tip (`grep -nF "it('" server/test/<file>.test.ts`, then the cases the task's own mutation table names). After the append, `grep -c '‹' docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` prints `0`.
+Append this verbatim after line 974. By the time this step runs, the controller has substituted every `⟦D:<slug>⟧`. Before appending, replace every `‹…›`:
+- in §20.10, every `‹…›` with the exact `it(` titles of the cases that hold the row, read from the suites at the tip (`grep -nF "it('" server/test/<file>.test.ts`, then the cases the task's own mutation table names).
+
+After the append, `grep -c '‹' docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` prints `0`.
 
 ````markdown
 
 ## 20. Amendments (Plan 3a)
 
-Plan 3a (`docs/superpowers/plans/2026-09-30-gpt-lane-ownership-3a-before-the-flip.md`) lands what the tree must do before any roster row is flipped to `codex`, inert on a roster with none. §19's rules hold here: a sentence above that the tree now contradicts carries a same-line pointer, `(amended: §20.N, D-NNNN)`, and the item below says what the tree does. **No line above this section moved:** Plan 3a's close-out proves that every hunk above this heading is a same-line pointer and the rest is this append. Each D-number is defined in that plan's Deviations found. *(Added 2026-09-30.)*
+Plan 3a (`docs/superpowers/plans/2026-09-30-gpt-lane-ownership-3a-before-the-flip.md`) lands what the tree must do before any roster row is flipped to `codex`, inert on a roster with none and on the fleet box's live shape: by operator ruling Z (2026-10-01), its merge changes nothing an external lane does. §19's rules hold here: a sentence above that the tree now contradicts carries a same-line pointer, `(amended: §20.N, D-NNNN)`, and the item below says what the tree does. **No line above this section moved:** Plan 3a's close-out proves that every hunk above this heading is a same-line pointer and the rest is this append. Each D-number is defined in that plan's Deviations found. *(Added 2026-09-30.)*
 
 ### 20.1 The model probe (§9.1)
 
-- **No default, on any lane.** `ccd/ccrc-models-probe`'s token directory has no default. `_models_run_probe`'s scrub keeps every name it unset and also unsets `CCRC_CODEX_PYTHON`. After it, and after any secrets file, `_models_run_probe` exports `CHATGPT_TOKEN_DIR="$HOME/<exec.authDir>"` (read through `_codex_row`) and the lane's runtime interpreter for an `exec.kind: "codex"` row. For any other row it exports neither.
+- **A codex lane's probe has no default.** `_models_run_probe`'s scrub is unchanged. After it, and after any secrets file, `_models_probe_codex_env` exports for an `exec.kind: "codex"` row `CHATGPT_TOKEN_DIR="$HOME/<exec.authDir>"` (read through `_codex_row`), the lane's runtime interpreter as `CCRC_CODEX_PYTHON` (empty when none resolves), and `CCRC_PROBE_LANE_KIND=codex`, the one marker that sends the probe down its codex path, `_fetch_codex_lane`. That path reads exactly the first two and has no default for either. For every other row the function unsets only the marker and the interpreter.
 - **The interpreter.** A codex row's probe runs `ccgpt-runtime python` under `-I`, with `LITELLM_LOCAL_MODEL_COST_MAP=True` and every `CHATGPT_*`, `LITELLM_*` and `OPENAI_*` name scrubbed first. This is the probe half that Plan 2b-2 carried forward.
-- **Refusals**, one line each, with a remedy:
+- **Refusals** on the codex path, one line each, with a remedy:
   - `no-token-dir`;
   - `runtime-absent` (run `ccrc install`);
   - `not-logged-in` (run `ccrc codex login <id>`): the `authDir` holds no `auth.json`, tested for existence only, before any interpreter runs;
   - `runtime-api-moved` (run `ccrc update`): the runtime's `Authenticator` lacks a name the unattended guard overrides;
   - `login-required` (run `ccrc codex login <id>`).
   Nothing opens `auth.json` to decide.
-- **An external lane whose registry probe is codex is never probed**, because it has no `authDir` to supply.
-  - `ccrc models refresh --all` skips it with an `ok` row that says why, so the hourly unit does not fail on it.
-  - `_check_models` gives it a sentence of its own instead of "the timer is not reaching this lane".
-  - Its catalogue and settings env stay as they were until the lane's flip refreshes them (D-3706).
+- **An external lane keeps today's probe path until its flip (D-3706).** For any row that is not codex-kind, the probe runs exactly as before this plan, through `_fetch_codex`: the token-directory default, the interpreter beside the `litellm` on PATH, and no `-I`. So the hourly refresh keeps probing, refreshing and rendering for an external lane that has a codex registry, and `_check_models` is unchanged. The device-flow guard below is the codex path's alone, because the external path is its own function with today's bytes (ruling Z2's one-program allowance is not taken). Plan 3b's flip moves a lane onto the codex path with no other act.
+- **An external lane cannot gain a codex registry (D-3706).** A codex class registry is created only on an `exec.kind: "codex"` row. `ccrc models <id> init codex` on any other row, the `external` rows included, is refused `codex-registry-needs-codex-lane` by `deploy/models-op.mjs`' `init` op, the one creator of a registry, so every caller of the op is covered. It writes nothing and names the remedy: flip the lane to `codex` first (Plan 3b). A registry that already exists is untouched, and every other probe kind is created on any row as before. So on today's shape the default probes only the lane whose directory it is: a lane with no registry is never probed, and none can gain one before its flip. A lane that is flipped back keeps the registry it had as a codex lane, and Plan 3b's rollback says what becomes of it.
 - **No device flow outside `ccrc codex login`.**
-  - In both the probe and `ccd/ccgpt-usage.py`, the `Authenticator`'s device-code path is replaced in-process by a `login-required` refusal, which fires before anything writes `auth.json`.
-  - So a lane whose token cannot be refreshed answers within the probe's bound and never leaves a cooldown marker behind.
+  - On the probe's codex path and in `ccd/ccgpt-usage.py`, the `Authenticator`'s device-code path is replaced in-process by a `login-required` refusal, which fires before anything writes `auth.json`.
+  - So a codex lane whose token cannot be refreshed answers within the probe's bound and never leaves a cooldown marker behind.
   - `ccrc-codex-usage@.service` carries `TimeoutStartSec=300` (D-3707).
-- **The account id (closes D-3161).** The probe takes `ChatGPT-Account-Id` from `Authenticator().get_account_id()`. No ccrc code opens `auth.json`, so §9's closing sentence is now true of the probe. When `auth.json` carries no `account_id`, that call derives one from the token's claims and writes it back: a library write, the same class as its `expires_at` write.
+- **The account id (closes D-3161 for every codex lane).** The probe's codex path takes `ChatGPT-Account-Id` from `Authenticator().get_account_id()` and opens no `auth.json`. When `auth.json` carries no `account_id`, that call derives one from the token's claims and writes it back: a library write, the same class as its `expires_at` write. The external path's direct `auth.json` read stays, byte for byte, until the final plan deletes that path, so §9's closing sentence is true of every codex lane and not yet of the external path.
 
-### 20.2 The external LiteLLM arm is gone (§8, §19.6)
+### 20.2 The external LiteLLM arm, until each lane's flip (§8, §19.6)
 
-- `_models_litellm <id>` serves codex-kind lanes only. A non-codex lane whose class registry names the codex probe gets the refusal `external-lane`, with a remedy naming §15's flip. Every other non-codex lane keeps `deploy/models-op.mjs`'s own check-only refusal, and two ops that disagree answer `no-answer`.
-- `_models_litellm_path` requires an id. `ccd/ccrc` names neither the other repository's box-global config nor a bare `ccgpt stop`, and `single-definition.test.ts` pins that absence.
-- ccrc no longer renders or stops another repository's LiteLLM, before or after any flip. A lane rolled back to its old launcher reads that repository's config as it stood when this plan rolled out (D-3708).
+- **It keeps its bytes on a roster with no codex row.** `_models_litellm`'s external arm still renders the other repository's box-global config, still asks the `pgrep`, and still runs the bare `ccgpt stop` when a changed render meets a running proxy. §19.6 stands as written: Plan 3a does not retire the arm before the flip (D-3708 records the retirement ruling Z withdrew).
+- **It never runs the other repository's stop once a codex lane exists (D-3753).** A bare `ccgpt stop` stops units by name, and after a flip those names are ccrc's own tiers. So while the roster carries any `exec.kind: "codex"` row, or while the lane library cannot say which rows are, a stop the external arm would owe is refused through its existing `restart-failed` path, before any write, with a sentence that names why and never sends the operator to `ccgpt stop`. On a roster with no codex row this changes nothing, and with nothing to stop the arm still renders as before.
+- **A lane leaves the arm at its own flip,** when `_models_litellm_codex` starts answering yes for it. The final plan's ccrc half deletes the arm and this guard together, once no external lane has a codex registry (§20.9).
 
 ### 20.3 `_check_codex` (§12)
 
@@ -10543,20 +10774,25 @@ Plan 3a (`docs/superpowers/plans/2026-09-30-gpt-lane-ownership-3a-before-the-fli
 ### 20.9 The cutover's order, as the release lane runs it (§15, §16)
 
 - **The merge is the rollout.** Every merge to `main` becomes a prerelease that both boxes follow automatically, so §15 step 1's "nothing is deployed" and step 2's `ccrc rollout` no longer describe how this work lands.
-  - Plan 3a was built to be inert on a roster with no codex row and on the fleet box's live shape. Its rehearsal (`ccrc-install.test.ts`, "Plan 3a Task 10") is the evidence.
-  - As part of the merge, the operator confirmed that the rollout stops ccrc refreshing an external lane's catalogue (§20.1) and stops it rendering or stopping another repository's LiteLLM (§20.2) (D-3705).
-- **§15 step 3 is Plan 3b**, one authorisation per lane. There, "retire the fixed usage timer" means disabling each of that lane's timers from the other repository, the flat one and any template instance, before ccrc's instance is enabled. The converge refuses the out-of-order case for an instance.
-- **§15 step 4 is Plan 4.**
+  - By operator ruling Z (2026-10-01), Plan 3a's merge changes nothing an external lane does. On the fleet box's live shape it places ccrc's inert usage pair and adds doctor's `codex` row, which answers one SKIP. Every other check keeps its class, `models` included, and the external lane's hourly refresh probes, renders and stops exactly as before (D-3705).
+  - Its rehearsal (`ccrc-install.test.ts`, "Plan 3a Task 10") is the evidence: it measures the base on the same fixture and asserts that the tip's answer equals it.
+- **§15 step 3 is Plan 3b**, one authorisation per lane.
+  - Each lane leaves the external path at its own flip, with no other act: from the roster edit on, its probe takes the codex path and its LiteLLM step the lane's own arm.
+  - There, "retire the fixed usage timer" means disabling each of that lane's timers from the other repository, the flat one and any template instance, before ccrc's instance is enabled. The converge refuses the out-of-order case for an instance.
+  - A lane with no registry gains one only after its flip (§20.1).
+- **§15 step 4 is Plan 4**, and its ccrc half is now code and docs: once no external lane has a codex registry, it deletes `_models_litellm`'s external arm, the probe's token-directory default, the external probe path's direct `auth.json` read, and the two guards §20.1 and §20.2 add.
 
 ### 20.10 Who holds each mutation-table row Plan 3a added (§18)
 
 | Guard | Task | Held by (the case title, read from the suite at execution) |
 |---|---|---|
 | a codex lane's probe gets its own `authDir` and runtime, never another lane's | 1 | `ccrc-models.test.ts`: ‹the two-lane case› |
-| no token-directory default; the three refusals | 1 | `models-probe.test.ts`: ‹cases› |
-| the device flow never writes `auth.json` (probe and publisher) | 1 | `models-probe.test.ts`, `ccgpt-usage.test.ts`: ‹the marker cases› |
-| an external codex-probe lane is skipped and the refresh exits 0; `_check_models`' own sentence | 1, 10 | `ccrc-models.test.ts`, `ccrc-doctor.test.ts`: ‹cases›; `ccrc-install.test.ts`: "live shape: …" |
-| no `ccgpt stop` and no box-global config in `ccd/ccrc` | 2 | `single-definition.test.ts`: ‹the absence pin› |
+| no token-directory default on the codex path; its refusals | 1 | `models-probe.test.ts`: ‹cases› |
+| the device flow never writes `auth.json` (the probe's codex path and the publisher) | 1 | `models-probe.test.ts`, `ccgpt-usage.test.ts`: ‹the marker cases› |
+| an external lane keeps today's probe path and hourly refresh, and every doctor check keeps its class, `models` included | 1, 10 | `ccrc-models.test.ts`: ‹cases›; `ccrc-install.test.ts`: "the base tree: …", "live shape: …" |
+| a codex registry is created on a codex-kind row only | 2, 10 | `models-op.test.ts`, `ccrc-models.test.ts`: ‹cases›; `ccrc-install.test.ts`: "live shape: …" |
+| the external arm keeps its bytes on a roster with no codex row, and refuses the stop it owes once one exists | 2, 10 | `ccrc-models.test.ts`: ‹cases›; `ccrc-install.test.ts`: "live shape: …", "ruling Z4: …" |
+| a models case reaches no real `pgrep` or `ccgpt`, and inherits no `CCGPT_CONFIG` | 2 | `ccrc-models.test.ts`: ‹the containment-wall case› |
 | settings env absent or equal for a codex lane | 3 | `ccrc-doctor.test.ts`: ‹accounts cases› |
 | `_check_codex`: SKIPs, FAILs, rc equals the worst class | 4 | `ccrc-doctor.test.ts`: ‹cases› |
 | tier identity, a half-up lane, stale code, a down gateway under live sessions | 5 | `ccrc-doctor.test.ts`: ‹cases› |
@@ -10576,6 +10812,7 @@ Then make these same-line pointer edits. The line numbers were measured at `1f9f
 | 179 | `grep -n '^converge it\. A minting verb' <spec>` | `converge it (amended: §20.6). A minting verb …` |
 | 196 | `grep -n '^| usage timer |' <spec>` | `` | usage timer | `ccgpt-usage@<id>.timer` (amended: §20.4, D-3717) | `` |
 | 249 | `grep -n '| the per-lane usage instance pair |$' <spec>` | before the final ` |`: ` (amended: §20.4, D-3717)` |
+| 450 | `grep -n 'An .external. lane keeps the bare .ccgpt stop., byte for byte' <spec>` | directly after `until Plan 3's cutover`: ` (amended: §20.2, D-3753)` |
 | 476 | `grep -n '^   not carry\.$' <spec>` | `   not carry. (amended: §20.1, D-3706)` |
 | 512 | `grep -n 'The pair itself stays unplaced until Plan 3 arms it' <spec>` | append ` (amended: §20.4, D-3717, D-3718)` |
 | 548 | `grep -n 'until then nothing places it (D-' <spec>` | directly after that parenthesis: ` (amended: §20.4)` |
@@ -10593,7 +10830,7 @@ Then make these same-line pointer edits. The line numbers were measured at `1f9f
 | 681 | `grep -n 'Retire the fixed usage timer\. Then the next lane\.' <spec>` | `… Retire the fixed usage timer (amended: §20.9). Then the next lane.` |
 | 703 | `grep -n '^- Deploying or rolling out this migration\.' <spec>` | `- Deploying or rolling out this migration (amended: §20.9, D-3705). The operator …` |
 | 730 | `grep -n '| per-lane usage instance pair |$' <spec>` | before the final ` |`: ` (amended: §20.4, D-3717)` |
-| 904 | `grep -n 'until Plan 3.s cutover retires that arm\.$' <spec>` | append ` (amended: §20.2, D-3708)` |
+| 904 | `grep -n 'until Plan 3.s cutover retires that arm\.$' <spec>` | append ` (amended: §20.2, D-3753)` |
 | 925 | `grep -n 'Plan 3 arms the pair and owns its removal\.$' <spec>` | append ` (amended: §20.4)` |
 | 947 | `grep -n '(D-3486);$' <spec>` | directly before the final `;`: ` (amended: §20.4)` |
 
@@ -10932,14 +11169,14 @@ Expected: green, with the same count as the base's run, then `census: clean … 
 
 | Suite | Base (merge-base) | Tip | Tasks | Why it moved |
 |---|---|---|---|---|
-| `ccrc-models.test.ts` | ‹measure› | ‹measure› | 1, 2 | the two-lane probe describe (`:1168-1236` rewritten); the external-arm cases (`:1621-1815`) become refusals and skips |
+| `ccrc-models.test.ts` | ‹measure› | ‹measure› | 1, 2 | Task 1: one new describe of four cases; the two `CHATGPT_TOKEN_DIR` scrub cases (`:1179-1236`) stay. Task 2: the `init` describe's seeding case re-aimed and two Z3 cases added, one nested Z4 describe of six, and one containment-wall case; its `init codex` setups on external rows become planted registries, which moves no count. The external-arm cases (`:1621-1815`) stay |
 | `models-probe.test.ts` | ‹measure› | ‹measure› | 1 | the no-default, runtime and device-flow cases |
 | `ccgpt-usage.test.ts` | ‹measure› | ‹measure› | 1, 8 | the device-flow marker case; the absent-file remedy pin (`:463`) moved |
 | `ccrc-doctor.test.ts` | ‹measure› | ‹measure› | 1, 3, 4, 5, 6, 8 | the citation (`:7876`), accounts, `_check_codex`, usage rows, `--fix`; `HEALTHY_SKIPS` (`:1288`) +1 |
-| `single-definition.test.ts` | ‹measure› | ‹measure› | 1, 2 | Task 1: the `.classes.json` count 2 → 3 (no case added). Task 2: the exact-one-holder pin (`:1798-1816`) becomes an absence pin |
+| `single-definition.test.ts` | ‹measure› | ‹measure› | none (run only) | 0 expected: under ruling Z, `_check_models` gains no registry reader (the `.classes.json` count stays 2), and the box-global path keeps its one holder (`:1798-1816`). A moved count names its task |
 | `ccrc-account.test.ts` | ‹measure› | ‹measure› | 7 (Task 3 runs it unchanged) | account removal disables the instance; the provider mirror (`:356-386`) unchanged |
-| `models-op.test.ts` | ‹measure› | ‹measure› | 4 | check-only `materialise` |
-| `ccrc-install.test.ts` | ‹measure› | ‹measure› | 1, 6, 10 | Task 1: the D-3486 unit pin gains `TimeoutStartSec`; the usage-pair argv census rewritten (`:3999-4154`); +5 rehearsal cases |
+| `models-op.test.ts` | ‹measure› | ‹measure› | 2, 4 | Task 2: two creation cases re-aimed at a codex-kind row, and four Z3 cases; its `init codex` setups on external rows become `plantCodex`, which moves no count. Task 4: check-only `materialise` |
+| `ccrc-install.test.ts` | ‹measure› | ‹measure› | 1, 6, 10 | Task 1: the D-3486 unit pin gains `TimeoutStartSec`; the usage-pair argv census rewritten (`:3999-4154`); +6 rehearsal cases |
 | `ccrc-install-graphify.test.ts` | ‹measure› | ‹measure› | 6 | 0 expected: a containment `disable)` arm in its `systemctl` stub only |
 | `install-census.test.ts` | ‹measure› | ‹measure› | 6, 7 | Task 6: the own-name pin, and the renamed pair in the release carriage. Task 7: the `:58` note, `DEPLOY_SH_WITHHOLDS` and the STATED SCOPE bullet |
 | `ccrc-update.test.ts` | ‹measure› | ‹measure› | 6, 10 | the converge under update; +1 rehearsal case |
@@ -10952,7 +11189,7 @@ Expected: green, with the same count as the base's run, then `census: clean … 
 | `agent/test/deploy-verify.test.ts` | ‹measure› | ‹measure› | 7 (R5) | the probe absence pin; the landed list derived from the agent chain's own `_unit_atomic` operands, plus a template anchor |
 | `session-hook.test.ts -t "compaction card"` | ‹measure› | ‹measure› | — | 0 expected (Step 5) |
 
-**Retired, not green:** Plan 2b-2 Task 6's mutation rows 2, 5 and 20 lose their subject with Task 2's retirement of the external arm (Task 2, hazard 3). They are recorded here as retired, never as green mutations.
+**None retired:** under ruling Z the external arm stays, so Plan 2b-2 Task 6's mutation rows 2, 5 and 20 keep their subject and stay where Plan 2b-2 left them.
 
 - [ ] **Step 7: Execution-time departures.** Any departure a task found during execution is reported by slug. The controller mints its number and substitutes it; nobody else writes a D-number, a `D-TBD`, or a range (R12).
 
@@ -10984,7 +11221,7 @@ git log -1 --format='%an <%ae>'   # checked against the repository's identity ru
 
 ```bash
 . "<abs scratch>/plan3a-env.sh"
-jq -r '.accounts[].id' "$HOME/.ccrc/accounts.json" | grep -cxE 'codex-a|codex-b|ext-a|ext-b'   # expected: 0
+jq -r '.accounts[].id' "$HOME/.ccrc/accounts.json" | grep -cxE 'codex-a|codex-b|ext-a|ext-b|gen-a'   # expected: 0
 find "$SCRATCH" "${TMPDIR:-/tmp}"/plan3a* -maxdepth 4 -path "$SCRATCH/census-controls" -prune -o \
   \( -name new-units.txt -o -name leaks.txt \) -size +0c -print 2>/dev/null > "$SCRATCH/t11-gate-hits"
 fx='(^|[-@:])codex-[ab]([-.]|$)|ccrc-codex-usage@'   # the Global Constraints' fixture-name pattern
@@ -11059,16 +11296,15 @@ git diff --quiet "$BASE" HEAD -- ccd/ccd ccd/ccgpt-runtime ccd/ccgpt-proxy.py &&
 git diff "$BASE" HEAD -- ccd deploy shared | grep '^+' | grep -nE '\.local/bin/ccgpt|ccgpt-usage[@.]'
 ```
 
-  Expected: `CUT-OK`. The hits may be only refusals and comments naming the other repository's files, and Task 6's two flat-timer remedies (Step 0). Read every hit.
+  Expected: `CUT-OK`, and Step 0's ruling-Z lines, re-run here after any merge of `main`, answer as they did there. The hits may be only refusals and comments naming the other repository's files, and Task 6's two flat-timer remedies (Step 0). Read every hit.
   - **R9 and R10 at the tip.** Re-run Steps 2 and 4 after any merge of `main`, against the re-recorded base.
   - **Identity:** `git log --format='%an <%ae> | %cn <%ce>' origin/main..HEAD | sort -u` shows the noreply identity only.
   - **The unit and process census gate** (Step 9) is green over every evidence directory above.
   - **Push and open the PR.** The body:
     - links the plan and the spec by **GitHub blob URL**, with the PR's Files view as the interim link, never a docserver URL;
     - states that **merging is a rollout**: `main` auto-releases, both boxes follow dev, and Task 10's rehearsal is the evidence that the rollout is inert on the live shape;
-    - names the two changes the rollout makes on the live box as **operator confirmations the merge carries** (R4):
-      - **R-C2:** an external lane whose registry probe is codex stops being refreshed until its flip;
-      - **R-C3:** ccrc stops rendering and stopping another repository's LiteLLM;
+    - states, per **operator ruling Z (2026-10-01)**, that the merge changes nothing an external lane does: every doctor check keeps its class, `models` included, `codex` answers one SKIP, and the external lane's hourly refresh probes, renders and stops exactly as before. So the merge carries no operator confirmation of a live change, because it makes none;
+    - notes R-C10's framing as Plan 3b's, not this merge's;
     - states that no roster is edited and no file or unit of another repository is touched;
     - asks for a **squash-merge**, which this repository merges with `--admin`;
     - ends with the Claude Code footer.
@@ -11083,21 +11319,20 @@ Each entry says what departs, from which text, the measurement that forced it, a
   - **Departs from:** spec §15 step 1 ("nothing is deployed"), step 2 ("`ccrc rollout` as usual"), and §16 (rollout out of scope).
   - **Measured:** every merge to `main` becomes a dev prerelease that both boxes follow automatically. At drafting, the live fleet box ran `origin/main`'s own release with its install complete.
   - **What it forces:**
-    - Task 10's rehearsal;
+    - Task 10's rehearsal, which measures the base on the same fixture and asserts that the tip's answer equals it;
     - the renamed usage pair;
-    - an operator confirmation, carried by the merge, of R-C2 and R-C3: the two things the rollout changes on the live box.
+    - by operator ruling Z (2026-10-01), a merge that changes nothing an external lane does: the external path keeps its bytes until each lane's flip (D-3706, D-3753), so the merge carries no operator confirmation of a live change.
   - **Cost if wrong:** a non-inert byte reaches the live box within minutes. The way back is `ccrc rollback` to the previous kept version.
-- **D-3706: the probe's default goes for every lane, so an external lane with a codex registry is frozen until its flip.**
-  - **Departs from:** spec §19.6 and Plan 2b-2's scope ("external lanes keep today's behaviour byte for byte until Plan 3's cutover"). §9.1 itself says the default goes outright, and the tree now does exactly that.
+- **D-3706: the probe's default stays for an `external` lane until its flip, and an `external` lane cannot gain a codex registry** (redefined by operator ruling Z, 2026-10-01, Z1 and Z3; this number first named the opposite, the default withdrawn for every lane).
+  - **Departs from:** spec §9.1, "loses its default outright … a lane that cannot supply one is **refused**". A codex-kind lane conforms: its probe takes its own `authDir` and has no default. An `external` lane does not, by ruling: it keeps today's path, which spec §19.6 and Plan 2b-2's scope already promised ("external lanes keep today's behaviour byte for byte until Plan 3's cutover").
   - **Measured:**
-    - The probe's only caller scrubs `CHATGPT_TOKEN_DIR` and re-supplies it only from `exec.secretsFile` (`ccd/ccrc:9471-9484`).
-    - The live external rows carry neither a secrets file nor an `authDir`.
-    - One of them has a codex registry and is refreshed hourly today.
+    - The probe's only caller scrubs `CHATGPT_TOKEN_DIR` and re-supplies it only from `exec.secretsFile` (`ccd/ccrc:9471-9484`), and the live external rows carry neither a secrets file nor an `authDir`. So for them the default is the only token directory there is.
+    - The default is lane 1's own OAuth directory, and lane 1 is the one live row with a codex registry, refreshed hourly today. So today the default probes the right lane.
+    - The hazard is a registry made on the other lane before its flip. On the base, `init codex` there succeeds (measured on a disposable copy, Task 10), and the next hourly refresh would probe that lane with lane 1's OAuth.
   - **What the tree does:**
-    - `refresh --all` skips that lane with an `ok` row, so `ccrc-models.service` does not fail.
-    - `ccrc models refresh <id>` refuses it.
-    - `_check_models` gives it a sentence of its own. Otherwise its bare-presence population (`ccd/ccrc-doctor-checks:5412`) would WARN "the timer is not reaching this lane" about three hours after the rollout, a false cause in every update's closing doctor (critic #1).
-  - **Cost if wrong:** that lane's catalogue and settings env are frozen until its flip, so a model retired upstream in the meantime is still offered. The flip's refresh (Plan 3b) cures it.
+    - the external path keeps its bytes, default included, so the hourly refresh, `_check_models` and the external arm do exactly what they did (Task 10 pins it against the measured base);
+    - `deploy/models-op.mjs`' `init` op, the one creator of a class registry, behind `ccrc models <id> init codex` and every other caller, refuses by name (`codex-registry-needs-codex-lane`) to create a codex registry on a row that is not `exec.kind: "codex"`, with the remedy "flip the lane to `codex` first (Plan 3b)" (Task 2). That covers the live `external` rows, the shape Z3 names, and a non-Anthropic `generated` row, which declares no `authDir` either and whose probe would take the same default. A registry that already exists is untouched.
+  - **Cost if wrong:** a registry on an external lane that the guard never saw is probed through lane 1's directory until that lane's flip: a hand-written file, say, or the one a lane other than lane 1 keeps when it is flipped back (Task 7, hazard 4; Plan 3b's rollback removes it). The final plan's ccrc half deletes the default and the guard together, once no external lane has a codex registry.
 - **D-3707: nothing in the hourly path may start a device-code login.**
   - **Departs from:** LiteLLM's `Authenticator` default, which starts a device flow when no token can be refreshed, and from the skeleton's plan to bound it by a timeout. Spec §9.3 says only that login is a ccrc verb.
   - **Measured (critic #2), from the installed library's source:**
@@ -11105,15 +11340,13 @@ Each entry says what departs, from which text, the measurement that forced it, a
     - it prints the code to stdout;
     - after that, every other `Authenticator` user waits up to 5 minutes;
     - the usage oneshot sets no `TimeoutStartSec`.
-  - **What the tree does:** the probe and `ccd/ccgpt-usage.py` override the device path in-process to raise `login-required` before any write, and the usage service gains `TimeoutStartSec`. A test pins it with a stub whose device path would write a marker file, and asserts the marker never appears.
-  - **Cost if wrong:** a lane whose refresh token has died answers `login-required` every hour rather than prompting. The cure is `ccrc codex login <id>` with the operator present. The guard also couples ccrc to two private LiteLLM names inside D-3487's range. A LiteLLM that renames either makes every probe and poll refuse `runtime-api-moved`, loudly.
-- **D-3708: ccrc stops rendering and stopping another repository's LiteLLM now, not at cutover.**
-  - **Departs from:** spec §19.6 ("until Plan 3's cutover retires that arm") and §8.
-  - **Measured:**
-    - The arm is live: on the day of drafting, the hourly timer rendered the other repository's box-global config.
-    - A bare `ccgpt stop` sits on its changed-and-running path (`ccd/ccrc:10030-10031`).
-    - Exactly one lane reaches it, and that lane has no sessions and nothing listening.
-  - **Cost if wrong:** a lane rolled back to its old launcher reads that config as it stood at the rollout.
+  - **What the tree does:** the probe's codex path and `ccd/ccgpt-usage.py` override the device path in-process to raise `login-required` before any write, and the usage service gains `TimeoutStartSec`. A test pins it with a stub whose device path would write a marker file, and asserts the marker never appears. The probe's external path, `_fetch_codex`, keeps every byte, failure path included: ruling Z2's one-program allowance is not taken (Task 1), so an external lane's hourly probe can still start a device flow on a dead token, exactly as it can today, until its flip (Task 1, hazard 3).
+  - **Cost if wrong:** a codex lane whose refresh token has died answers `login-required` every hour rather than prompting. The cure is `ccrc codex login <id>` with the operator present. The guard also couples ccrc to two private LiteLLM names inside D-3487's range. A LiteLLM that renames either makes every probe and poll refuse `runtime-api-moved`, loudly.
+- **D-3708: withdrawn by operator ruling Z (2026-10-01).** Kept as a recorded decision.
+  - **What it was:** ccrc would stop rendering and stopping another repository's LiteLLM at Plan 3a's merge, retiring `_models_litellm`'s external arm before any flip (the superseded R-C3).
+  - **What ruling Z decided instead:** the external arm is NOT retired before the flip. It keeps its bytes on today's shape, and spec §19.6 stands as written ("until Plan 3's cutover retires that arm"). Each lane leaves the arm at its own flip, and the final plan's ccrc half deletes it once no external lane has a codex registry. The one change ruling Z makes to the arm is D-3753.
+  - **Measured, and still true:** the arm is live. On the day of drafting the hourly timer rendered the other repository's box-global config, a bare `ccgpt stop` sits on its changed-and-running path (`ccd/ccrc:10030-10031`), and exactly one lane reaches it, a lane with no sessions and nothing listening.
+  - **Cost:** none: the tree keeps what it had. Spec §20.2 names this number only to record the withdrawal.
 - **D-3709: for a codex lane, an absent `ANTHROPIC_BASE_URL` in settings is healthy.**
   - **Departs from:** Plan 2b-2's carry-forward item 8, "teach it `http://127.0.0.1:<proxyPort>`", which read as present-and-equal.
   - **Measured:**
@@ -11218,9 +11451,14 @@ Each entry says what departs, from which text, the measurement that forced it, a
   - **Departs from:** spec §12, which places it under `_check_codex`'s `--fix`.
   - **Why:** a launcher is `_check_wrappers`' measurement, and a second verdict line would count one finding twice. `_fix_wrappers` runs the shipped `ccrc wrappers` with no flag. That overwrites only a launcher whose ccrc marker still verifies (keeping a backup), writes an absent one, and refuses every other file.
   - **Cost if wrong:** it reaches generated launchers as well as Codex ones, the same act `ccrc install` performs.
+- **D-3753: the external arm refuses its bare `ccgpt stop` while the roster carries any codex row** (operator ruling Z4, 2026-10-01; the controller mints its number).
+  - **Departs from:** spec §19.6 and §8, under which an `external` lane keeps "the bare `ccgpt stop`, byte for byte, until Plan 3's cutover".
+  - **Measured:** the bare `ccgpt stop` is the other repository's lane-1 default, and it stops `ccgpt-<lane>-{shim,litellm}.service` by name (critic #7). Those are exactly the names ccrc's own tiers use (spec §19.2). So after lane 1's flip, a bare stop from the external arm, reached through any still-external lane with a codex registry, would stop ccrc's own lane-1 tiers. Until now only the runbook's order stood between the two.
+  - **What the tree does:** inside the external arm's owed-stop branch, while the roster carries any `exec.kind: "codex"` row, or while the lane library cannot say which rows are (`_codex_lanes` rc 1 or rc 2), the arm refuses through its existing `restart-failed` path, before any write, with a sentence that names the codex lane as the reason and never sends the operator to `ccgpt stop`. On today's shape, with no codex row, nothing changes, and a render with nothing to stop still lands. Task 10's live and Z4 cases pin both.
+  - **Cost if wrong:** after a flip, an external lane with a registry whose render changed while a proxy runs on the box-global config keeps the old rendering, refused every hour, until that lane's own flip or until the proxy stops. Each refusal is a failed row, so `ccrc models refresh --all` exits 1 and `ccrc-models.service` fails hourly in that window (Task 2, hazard 1). It never takes down a ccrc tier.
 
 **Contingencies, minted only when they fire:**
-- D-3161's closure is not a contingency: Task 1 measured `Authenticator().get_account_id()` present at drafting, and closing a breach D-3161 recorded is conformance to spec §9, so it mints nothing. If Task 1's Step 0b, a read-only grep of the installed source, finds the method gone, Task 1 stops and reports before its Step 1; the controller rules then, and no slug is pre-named for it (F9).
+- D-3161's closure, on the probe's codex path (its external path keeps its read until the final plan deletes that path, ruling Z8), is not a contingency: Task 1 measured `Authenticator().get_account_id()` present at drafting, and closing a breach D-3161 recorded is conformance to spec §9, so it mints nothing. If Task 1's Step 0b, a read-only grep of the installed source, finds the method gone, Task 1 stops and reports before its Step 1; the controller rules then, and no slug is pre-named for it (F9).
 
 **Considered and not minted:**
 
@@ -11249,8 +11487,15 @@ Per R1, these are two separate plans, written later. Nothing here is done in Pla
 - **OAuth directories:** both are 0700, each with an `auth.json` at 0600 (measured by stat only).
 
 **Plan 3b: the per-lane live cutover (a runbook; no PR)**
+
+Each lane leaves the external path automatically at its own flip (ruling Z8). From the roster edit on, `_models_run_probe` gives that lane its own `authDir` and runtime, and `_models_litellm` takes the lane's own arm. Nothing in ccrc is switched by hand, and a lane still external keeps today's probe, refresh and render.
+
+Plan 3a's two ruling-Z guards bind 3b's order:
+- **The lane with a registry flips first (Z4; Plan 3a Task 2, hazard 1).** After any flip, the external arm refuses its bare stop for a still-external lane that has a registry. If that lane's render changes while a proxy runs on the box-global config, every hourly refresh fails (`restart-failed`, `ccrc models refresh --all` exit 1, `ccrc-models.service` failed) until the lane flips. R-O1's order, lane 1 first, leaves no external lane with a registry after the first flip, so the case cannot arise. Still, before the first flip, measure read-only which process `pgrep -f` matches on the box-global config. If the order ever changes, the runbook names that failure and its remedy, the lane's own flip.
+- **A flip back keeps the lane's registry (Z3 refuses only a new one; Plan 3a Task 7, hazard 4).** From then on that lane's hourly probe takes the external path's default, lane 1's directory. That is right for lane 1 and the wrong lane for lane 2, so lane 2's rollback removes the registry its `init codex` created (step 5).
+
 1. **Preconditions and a fresh read-only census.**
-   - A release containing Plan 3a runs on both boxes, `ccrc update --check` reports converged, and `ccrc doctor` shows `SKIP codex` with no new FAIL.
+   - A release containing Plan 3a runs on both boxes, `ccrc update --check` reports converged, and `ccrc doctor` gives every check the class it had before the merge, with `codex` a SKIP (ruling Z7).
    - Port holders, unit and timer lists, both `authDir` modes, launcher shapes and sessions per lane all match the census.
    - `node` resolves on a session pane's PATH.
    - At least 2 GB of disk is free.
@@ -11285,11 +11530,11 @@ Per R1, these are two separate plans, written later. Nothing here is done in Pla
    - **Obligations:**
      - **critic #3:** before step 7, back up the lane's `settings.json` with its mode preserved, and `~/.ccrc/models/<lane>.{json,classes.json,classes.tsv,effort.json}`, and restore them on rollback;
      - **critic #5:** the account disable and enable, handling the `last-enabled-home` refusal;
-     - **critic #7:** the other repository's stop stops `ccgpt-<lane>-{shim,litellm}.service` by name, which are exactly ccrc's tier names. So it is never run for a migrated lane, and the rollback order is `ccrc codex stop` first, then the launcher back. This replaces the old, refuted "Restart=always is unmeasured" risk;
+     - **critic #7:** the other repository's stop stops `ccgpt-<lane>-{shim,litellm}.service` by name, which are exactly ccrc's tier names. So it is never run for a migrated lane, and the rollback order is `ccrc codex stop` first, then the launcher back. This replaces the old, refuted "Restart=always is unmeasured" risk. Plan 3a's external arm refuses its own bare stop while any codex row exists (D-3753), so ccrc's hourly refresh can never be the one that runs it;
      - **critic #4:** auto-update is paused for this lane's window only (R-O6) and resumed after verification.
-   - **Rollback, per step reached:** `ccrc codex stop`; disable ccrc's instance; restore the roster backup and the settings/models backups; remove ccrc's marker-verified wrapper; `mv` the launcher back; the operator re-enables the flat timer. Lane state is kept. Plan 3a Task 10's flip back rehearses this exact order. The restored launcher reads the other repository's LiteLLM config as Plan 3a's rollout froze it, so it reflects no catalogue change made upstream since then (Plan 3a Task 2, hazard 5).
+   - **Rollback, per step reached:** `ccrc codex stop`; disable ccrc's instance; restore the roster backup and the settings/models backups; remove ccrc's marker-verified wrapper; `mv` the launcher back; the operator re-enables the flat timer. Lane state is kept. Plan 3a Task 10's flip back rehearses this exact order. The restored launcher reads the other repository's box-global config. Nothing rendered it while lane 1 was codex, so it holds the rendering from before the flip; once the roster backup makes lane 1 external again, the next hourly refresh renders it as before (ruling Z1).
    - **The login:** a `login-required` at the refresh stops the plan for `ccrc codex login <lane>` with the operator present (Plan 3a's bounded refusal).
-   - **Obligation (Plan 3a Task 1, hazard 3):** the lane's own LiteLLM tier runs LiteLLM's `Authenticator` inside the tier process, where 3a's guard cannot reach, and it can still start a device flow on a dead refresh token. Prove a refresh with `ccrc models refresh <lane>` before the lane takes a session, so a dead token stops the window instead.
+   - **Obligation (Plan 3a Task 1, hazard 3):** the lane's own LiteLLM tier runs LiteLLM's `Authenticator` inside the tier process, where 3a's guard cannot reach, and it can still start a device flow on a dead refresh token. Prove a refresh with `ccrc models refresh <lane>` before the lane takes a session, so a dead token stops the window instead. Until the flip, the same holds for lane 1's hourly probe: it runs the external path, `_fetch_codex`, which carries no device-flow guard (ruling Z2, Plan 3a Task 1 hazard 3), exactly as before Plan 3a. Its credential file was last written days before the census, so the census reads the catalogue's age and the `auth.json` mtime (stat only) before the window opens.
 4. **Lane 1 soak gate.**
    - One real session runs on the lane.
    - At least one hourly `ccrc-models.timer` run takes the codex arm.
@@ -11304,17 +11549,18 @@ Per R1, these are two separate plans, written later. Nothing here is done in Pla
 5. **Lane 2: park, cut over, un-park.**
    - **Park both sessions (R-O2).** A surviving Claude Code process carries the other repository's gateway key, and a respawn while the launcher is aside fails five times and marks the unit failed.
    - Stop the other repository's lane-2 tiers, wait longer than `RestartSec`, and re-check that the ports are free and the units are gone.
+   - **Obligation (ruling Z4's reason):** by then lane 1 is codex, and a bare `ccgpt stop` names lane 1's units, which are ccrc's own tiers. Measure, read-only, which units lane 2's own stop names before running it, and never run a bare `ccgpt stop`.
    - The operator disables that repository's template instance.
    - Move the launcher aside, then flip the roster.
    - **Obligation (critic #3):** before `ccrc wrappers` and `init codex`, back up lane 2's `settings.json` with its mode preserved, and whichever of `~/.ccrc/models/<lane>.{json,classes.json,classes.tsv,effort.json}` exist. The rollback restores them.
-   - Run `ccrc wrappers`, then `ccrc models <lane> init codex`. Diff the settings env block **and** the effort file before and after (critic #3), because model ids stay out of tracked text.
+   - Run `ccrc wrappers`, then `ccrc models <lane> init codex`, which ruling Z3 refuses until the roster flip, so this order is structural. Diff the settings env block **and** the effort file before and after (critic #3), because model ids stay out of tracked text.
    - Refresh with lane 2's own `authDir`, then `litellm`, the targeted enable and `start`. A `unit-foreign` or `port-foreign` refusal is a stop, never an override.
    - Verify as for lane 1, plus a count-only check that no key-bearing transient unit remains.
    - Un-park.
    - **Obligations (critic #20):**
      - if any session cannot be parked (a refused swap, a failed swap, or no destination with headroom), the window does not open;
      - on un-park, a session whose first turn fails is swapped back out and the lane rolls back.
-   - **Rollback:** as for lane 1, plus restarting the other repository's lane 2 through its restored launcher and re-enabling its instance timer.
+   - **Rollback:** as for lane 1, plus restarting the other repository's lane 2 through its restored launcher and re-enabling its instance timer. Before the roster backup goes back, remove the class registry lane 2's `init codex` created (`ccrc models <lane> rm`), then restore the models backups, which held only lane 2's effort file. Ruling Z3 leaves an existing registry alone, and a lane-2 registry left on an external row is probed hourly through lane 1's directory (Plan 3a Task 7, hazard 4).
 6. **Close-out.**
    - Apply R-O4's settings-mirror ruling.
    - Mirror the server box's roster only if R-O5 says to. **Obligations (critic #14):**
@@ -11328,7 +11574,7 @@ Per R1, these are two separate plans, written later. Nothing here is done in Pla
 
    Plan 3b's own ledger mints these when they fire: `runtime-built-before-the-roster-flip`, `lane-without-a-registry-inits-after-the-flip` and `both-foreign-usage-timers-retired-per-lane`.
 
-**Operator rulings, with recommendations (R-O1…R-O9), plus R-C10's confirmation**
+**Operator rulings, with recommendations (R-O1…R-O9), plus R-C10's framing**
 - **R-O1, which lane goes first:** lane 1, then a soak, then lane 2. Lane 1 has no sessions, its units are not loaded, and it already has a registry.
 - **R-O2, parking lane 2's two sessions:** swap each through ccd's own swap to a non-codex account at an idle point between the coordinator's waves, and swap back after verification. Add critic #20's stop conditions.
 - **R-O3, lane 1's port pair (which sits in a band other test mocks use):** keep it. `_codex_tier_ours` makes a squatter loud, and choosing ports is the operator's alone.
@@ -11338,7 +11584,7 @@ Per R1, these are two separate plans, written later. Nothing here is done in Pla
 - **R-O7, the live launcher's bytes, which match no commit:** keep a box-local, dot-named 0600 snapshot until Plan 4's cleanup is verified.
 - **R-O8, OpenClawHetzner's box-swap runbook and the GLM notes:** trim the runbook in place, and move the GLM install notes into `infra/handoff/README.md`.
 - **R-O9, the soak before Plan 4:** at least one full weekly usage window on both lanes.
-- **R-C10, confirmed by the operator (critic #22):** use the targeted `ccgpt-runtime build` plus the one `enable --now` of ccrc's instance, not a full install. It equals the spine's own converge only once the operator has disabled that lane's foreign usage timer (its `ccgpt-usage@<id>.timer`, or the flat `ccgpt-usage.timer`), so that disable precedes both the roster flip and the enable, as steps 3 and 5 order it. Only then is the next update a no-op. The operator confirms it because it resembles the hand rollout that the 2026-09-30 ruling forbids.
+- **R-C10's framing, a note carried from Plan 3a's merge authorisation (critic #22):** use the targeted `ccgpt-runtime build` plus the one `enable --now` of ccrc's instance, not a full install. It equals the spine's own converge only once the operator has disabled that lane's foreign usage timer (its `ccgpt-usage@<id>.timer`, or the flat `ccgpt-usage.timer`), so that disable precedes both the roster flip and the enable, as steps 3 and 5 order it. Only then is the next update a no-op. Plan 3b puts it to the operator for confirmation, because it resembles the hand rollout that the 2026-09-30 ruling forbids.
 
 **Authorisation shapes**
 - **Plan 3b**
@@ -11359,7 +11605,7 @@ Per R1, these are two separate plans, written later. Nothing here is done in Pla
   - It rests on the operator's standing authorisation of the eventual removal (spec §2.11), plus an explicit go after the soak.
   - Tasks 1–3 are one OpenClawHetzner PR, reviewed there.
   - Task 4 is a separate, irreversible live act, authorised on its own.
-  - Task 5 is an ordinary ccrc docs PR.
+  - Task 5 is a small ccrc PR, code plus docs (ruling Z8).
 
 **Plan 4: retirement (the point of no return)**
 1. **OpenClawHetzner:** move claude-glm's install notes out of the runbook being deleted, to where R-O8 says. A grep proves the notes are at their new home before the old file goes.
@@ -11378,18 +11624,21 @@ Per R1, these are two separate plans, written later. Nothing here is done in Pla
    - **Stop before any `rm`** if any process's argv names one of those files or the other repository's LiteLLM venv, or if any `ccgpt-usage*` timer is enabled.
    - **Afterwards:** `ccrc doctor` is clean, both lanes still serve a turn, and `~/.handoff/env` and both `authDir`s are byte-untouched (stat mtime and size only).
    - The other repository's LiteLLM venv is left alone unless a ruling says otherwise.
-5. **ccrc docs PR:** the spec records that the cutover and the deletion are done, citing the other repository's deletion commit and Plan 3b's deviations. `deviation-refs`, `dtbd` and `topology-clean` stay green, and no docserver URL or real value appears.
+5. **ccrc PR, code plus docs (ruling Z8):** a small PR, opened once no external lane has a codex registry, measured read-only on the fleet box first: no `external` row has a `<id>.classes.json`.
+   - It deletes `_models_litellm`'s external arm (the box-global path, `_models_litellm_running`'s `pgrep`, the bare `ccgpt stop`) with Plan 3a Task 2's `_models_litellm_stop_blocked`, and the probe's `_fetch_codex`, which carries the token-directory default and the direct `auth.json` read, so D-3161 closes everywhere. `_fetch`'s dispatch line goes with it, and so does the `CCRC_PROBE_LANE_KIND` marker `_models_probe_codex_env` exports for it.
+   - Ruling Z3's registry guard and Z4's stop guard lose their reason to exist and go with them, each with its pins: `models-probe.test.ts`' two Z1 cases, the Z4 describe, Task 10's live-shape refresh pins, and the planted external registries (`plantCodex`, `seedCodex`, `SEEDED_REGISTRY_BYTES`) wherever a case dies with the arm.
+   - The spec records that the cutover and the deletion are done, citing the other repository's deletion commit and Plan 3b's deviations. `deviation-refs`, `dtbd` and `topology-clean` stay green, and no docserver URL or real value appears.
 
 ## Appendix: the controller rulings this plan cites (R1–R15)
 
-These rulings bind every drafter and reviewer of Plan 3a. The fix round's rulings F1–F10 amend them and win where the two disagree; R3 below carries F9, and R10 and R11 carry F1, F4 and F10. `R-C1`…`R-C12` are the skeleton's questions, anchored in [Rulings this plan is built on](#rulings-this-plan-is-built-on). `R-O1`…`R-O9` are the operator's, in [Carry-forward to Plan 3b and Plan 4](#carry-forward-to-plan-3b-and-plan-4).
+These rulings bind every drafter and reviewer of Plan 3a. The fix round's rulings F1–F10 amend them and win where the two disagree; R3 below carries F9, and R10 and R11 carry F1, F4 and F10. Operator ruling Z (2026-10-01) binds over all of them: it replaces R-C2 and R-C3, and with them R3's external-lane half and R4 (its own row is the last). `R-C1`…`R-C12` are the skeleton's questions, anchored in [Rulings this plan is built on](#rulings-this-plan-is-built-on). `R-O1`…`R-O9` are the operator's, in [Carry-forward to Plan 3b and Plan 4](#carry-forward-to-plan-3b-and-plan-4).
 
 | Ruling | What it binds |
 |---|---|
 | R1 | Scope: Plan 3a only. That is the code that must land before any roster row is flipped, inert on today's live shape. Merging auto-releases, and both boxes follow dev. Plans 3b and 4 are separate and written later. This plan ends with their carry-forward, stating the live shape in fixture terms only. |
 | R2 | The usage pair is ccrc's, as `ccrc-codex-usage@.{service,timer}`, placed on fleet and both, Linux only. `ccgpt-usage@` stays the other repository's: ccrc never places, enables, disables or removes it. On Darwin, placement and the doctor rows answer a stated not-applicable, with a forced-Darwin test. |
-| R3 (as amended by F9) | The probe has no token-directory default, and a codex lane reads its own `authDir`. An external lane with a codex registry is refused by name and skipped by the refresh, and `_check_models` gives it its own non-WARN sentence; Task 10 pins every check's class. The device flow is prevented in-process before any `auth.json` write, in both the probe and the publisher, tested by a stub whose marker must never appear. The usage service gets `TimeoutStartSec`. D-3161 closes through `Authenticator().get_account_id()`, which Task 1's Step 0b re-measures read-only; if the method is gone, Task 1 stops and reports and the controller rules. No slug is pre-named, and the closure mints no number. |
-| R4 | The external `_models_litellm` arm is retired in 3a (R-C3). The merge authorisation names R-C2 and R-C3 as operator confirmations. |
+| R3 (as amended by F9, and by ruling Z for external lanes) | A codex lane's probe has no token-directory default and reads its own `authDir` through its own runtime. An external lane keeps today's probe path, default included, until its flip (Z1), and cannot gain a codex registry (Z3); Task 10 pins every check's class, `models` included, and the external lane's hourly refresh against the measured base. The device flow is prevented in-process before any `auth.json` write, on the probe's codex path and in the publisher, tested by a stub whose marker must never appear. The usage service gets `TimeoutStartSec`. D-3161 closes on the codex path through `Authenticator().get_account_id()`, which Task 1's Step 0b re-measures read-only; if the method is gone, Task 1 stops and reports and the controller rules. No slug is pre-named, and the closure mints no number. |
+| R4 (replaced by ruling Z) | The external `_models_litellm` arm is NOT retired in 3a. It keeps its bytes on today's shape and refuses its stop once a codex row exists (Z1, Z4). The merge authorisation carries no operator confirmation; only R-C10's 3b framing remains, as a note. |
 | R5 | R-C4…R-C9 and R-C11 are adopted as their recommendations state. R-C11's file list includes `agent/test/deploy-verify.test.ts`, `usage-sweep-deploy-ship.test.ts` and `install-census.test.ts`' note at :58. The `deploy.sh` probe-line removal rides with the other deploy-verify edits. |
 | R6 | The second writer: the converge degrades rather than enables ccrc's instance while the other repository's instance for the same id is enabled. `_check_codex` WARNs and names the operator's own disable, and ccrc never disables a foreign unit. The flat, id-less foreign timer is said to be unattributable. |
 | R7 | `lane.json` staleness against the registry is measured by a check-only `materialise` that answers `changed`. Task 4 uses it and Task 8 cures it. It is spelled `--check true` (D-3712). |
@@ -11401,5 +11650,6 @@ These rulings bind every drafter and reviewer of Plan 3a. The fix round's ruling
 | R13 | Public repository: no real account id, label, port, host, email, operator path or live model id appears in any added line. Live facts are stated by shape. |
 | R14 | Item placement covers 2b1-12, under Task 6 and the 3b carry-forward. The `alwaysThinkingEnabled` question goes to the 3b carry-forward. |
 | R15 | Style: Plan 2b-2's format; code written against the actual current functions; red-first tests; a mutation for every new guard; foreground suites through `./node_modules/.bin/vitest run`. |
+| Z (operator, 2026-10-01) | Binds over every row above. Plan 3a's merge changes nothing on the live box. Z1: external lanes keep today's behaviour byte for byte until their flip in Plan 3b. Z2: codex-kind lanes get the new probe path. Z3: an external lane cannot gain a codex registry. Z4: the external arm never runs the other repository's stop once a codex lane exists. Z5: task numbering stays. Z6: D-3706 and D-3708 are redefined, and Z4 is a new departure. Z7: Task 10 pins every check's class and the external lane's hourly refresh against the measured base. Z8: the carry-forward. Z9: spec §20 describes Z1–Z4. |
 
 
