@@ -1756,12 +1756,12 @@ function stallFailedReportMail(input: StallSessionInput, err: string, because: '
   if (run === null) throw new RangeError('stallSessionMail: a failed report names its run, and this session is on none');
   const e = stallSafe(err);
   // "Told" only when a first failure's rung 1 went out live. A shadow row records the failure
-  // and sent nothing (it stands while the self-mail is unarmed), so the report names when that failure was recorded.
+  // and sent nothing (it stands while the self-mail is unarmed), so the report names when that first failure happened and that it was recorded only in shadow.
   const priors = stallPriorFailedNotices(input, stopAt);
   const first = priors.reduce<StallNotice | null>((f, n) => (f === null || n.key < f.key ? n : f), null);
   const toldLine = priors.some((n) => n.mode === 'live')
     ? 'It was told to retry once after the first.'
-    : first === null ? 'It was not told to retry.' : `A first failure was recorded at ${stallUtcSec(first.key)} in shadow, so it was not told to retry.`;
+    : first === null ? 'It was not told to retry.' : `A first failure at ${stallUtcSec(first.key)} was recorded only in shadow, so it was not told to retry.`;
   return {
     subject: stallW2ReportSubject(run, 'failed', `${e} ${because === 'repeat' ? 'twice' : 'request error'} at ${stallUtc(stopAt)}`),
     body: [

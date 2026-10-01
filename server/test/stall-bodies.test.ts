@@ -699,7 +699,7 @@ describe('wave 2 reports to the coordinator: failed, frozen and dead', () => {
     ({ mode, arm: 'failed', rung: 1, key: T('2026-09-29T09:30:00Z'), at: T('2026-09-29T09:41:00Z') });
   it('failed rung 2, a repeat after a first failure recorded only in shadow: the worker was not told to retry', () => {
     const line2 = (notices: StallNotice[]): string | undefined => stallSessionMail(sessionOf({ notices }), F2_REPEAT, FAIL_NOW).body.split('\n')[1];
-    expect(line2([priorF1('shadow')])).toBe('Worker demo-worker (workspace demo-ws): its turn ended on an API error (server_error) at 2026-09-29T10:00:00Z, its second retryable failure within 2h 0m. A first failure was recorded at 2026-09-29T09:30:00Z in shadow, so it was not told to retry.');
+    expect(line2([priorF1('shadow')])).toBe('Worker demo-worker (workspace demo-ws): its turn ended on an API error (server_error) at 2026-09-29T10:00:00Z, its second retryable failure within 2h 0m. A first failure at 2026-09-29T09:30:00Z was recorded only in shadow, so it was not told to retry.');
     expect(line2([priorF1('shadow'), priorF1('live')]), 'a live row beside the shadow one: it was told').toContain('It was told to retry once after the first.');
     expect(line2([]), 'no first failure on the record').toBe('Worker demo-worker (workspace demo-ws): its turn ended on an API error (server_error) at 2026-09-29T10:00:00Z, its second retryable failure within 2h 0m. It was not told to retry.');
   });
