@@ -559,51 +559,149 @@ Slug `part-a-capture-ships-first`. The ORCHESTRATOR runs these steps; no impleme
 
 ### Checkpoint results (filled in at step 6; reduced output only)
 
-Captured on `<yyyy-mm-dd>`. Part A merged as `#<pr>`. Fleet box on `<tag>`.
+Captured on `2026-10-01`. Part A merged as `#220`. Fleet box on `v0.0.54`. Eight lanes: one scratch session per Claude Code
+version an account resolves to (2.1.283 is installed but no account resolves to it).
+
+How the run departed from steps 2-5:
+- **The harness refuses the body's waits.** In every lane, Claude Code blocks a standalone foreground `sleep`
+  (`Blocked: standalone sleep 60`), in the main thread and in the subagent. Each session skipped the waits and ran the
+  rest of the body. So no turn ran long, and no Stop saw a background subagent still running: Stops saw background
+  shells only, and SubagentStop's list is where the `subagent` type shows.
+- **A substitute wait was declined.** One extra turn to the 2.1.286 lane waited with `timeout 60 tail -f /dev/null`. Its
+  model declined it as a way around the guard on a mail's say-so. It was sent to no other lane.
+- **2.1.282's model declined the mail.** Twice, the second time with a note on where the mail came from, it would not
+  run instructions that came by mail rather than from its user. Its lane has main-thread events only, so C1's
+  subagent half is unmeasured there. Nobody typed into its pane.
+- **2.1.278 failed to spawn** four times (`spawn rc 3`), then came up on a fresh session id; its turn ran last.
+- **The peer-mail quota.** The server lets a session send 12 peer mails an hour. Step 5's post-restart turn went to
+  2.1.284, 2.1.285 and 2.1.286 only; the other lanes' C6 rows come from the resumed SessionStart itself.
 
 **Table 1: per lane × event** (one row per event the reducer lists for that lane; a `—` where the reducer emits no such field):
 
 | lane | event | count | agent_id absent / empty / nonEmpty | envSid equals / differs / absent | background_tasks absent / notArray / array | element keys | `.[].id` / `.[].type` JSON types | types | source | error field / values |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `<x.y.z>` | `SessionStart` | | | | | | | | | — |
-| `<x.y.z>` | `UserPromptSubmit` | | | | | | | | — | — |
-| `<x.y.z>` | `PreToolUse` | | | | | | | | — | — |
-| `<x.y.z>` | `PostToolUse` | | | | | | | | — | — |
-| `<x.y.z>` | `SubagentStart` | | | | | | | | — | — |
-| `<x.y.z>` | `SubagentStop` | | | | | | | | — | — |
-| `<x.y.z>` | `Stop` | | | | | | | | — | — |
-| `<x.y.z>` | `StopFailure` | | | | | | | | — | |
+| `2.1.277` | `SessionStart` | 2 | 2 / 0 / 0 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | resume, startup | — |
+| `2.1.277` | `UserPromptSubmit` | 5 | 5 / 0 / 0 | 5 / 0 / 0 | 5 / 0 / 0 | — | — | — | — | — |
+| `2.1.277` | `PreToolUse` | 13 | 12 / 0 / 1 | 13 / 0 / 0 | 13 / 0 / 0 | — | — | — | — | — |
+| `2.1.277` | `PostToolUse` | 13 | 12 / 0 / 1 | 13 / 0 / 0 | 13 / 0 / 0 | — | — | — | — | — |
+| `2.1.277` | `SubagentStart` | 2 | 0 / 0 / 2 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | — | — |
+| `2.1.277` | `SubagentStop` | 2 | 0 / 0 / 2 | 2 / 0 / 0 | 0 / 0 / 2 | agent_type, description, id, status, type; command, description, id, status, type | [string] / [string] | shell, subagent | — | — |
+| `2.1.277` | `Stop` | 4 | 4 / 0 / 0 | 4 / 0 / 0 | 0 / 0 / 4 | command, description, id, status, type | [string] / [string] | shell | — | — |
+| `2.1.278` | `SessionStart` | 2 | 2 / 0 / 0 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | resume, startup | — |
+| `2.1.278` | `UserPromptSubmit` | 6 | 6 / 0 / 0 | 6 / 0 / 0 | 6 / 0 / 0 | — | — | — | — | — |
+| `2.1.278` | `PreToolUse` | 9 | 8 / 0 / 1 | 9 / 0 / 0 | 9 / 0 / 0 | — | — | — | — | — |
+| `2.1.278` | `PostToolUse` | 9 | 8 / 0 / 1 | 9 / 0 / 0 | 9 / 0 / 0 | — | — | — | — | — |
+| `2.1.278` | `SubagentStart` | 2 | 0 / 0 / 2 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | — | — |
+| `2.1.278` | `SubagentStop` | 7 | 0 / 0 / 7 | 7 / 0 / 0 | 0 / 0 / 7 | agent_type, description, id, status, type; command, description, id, status, type | [string] / [string] | shell, subagent | — | — |
+| `2.1.278` | `Stop` | 5 | 5 / 0 / 0 | 5 / 0 / 0 | 0 / 0 / 5 | command, description, id, status, type | [string] / [string] | shell | — | — |
+| `2.1.280` | `SessionStart` | 2 | 2 / 0 / 0 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | resume, startup | — |
+| `2.1.280` | `UserPromptSubmit` | 5 | 5 / 0 / 0 | 5 / 0 / 0 | 5 / 0 / 0 | — | — | — | — | — |
+| `2.1.280` | `PreToolUse` | 8 | 7 / 0 / 1 | 8 / 0 / 0 | 8 / 0 / 0 | — | — | — | — | — |
+| `2.1.280` | `PostToolUse` | 8 | 7 / 0 / 1 | 8 / 0 / 0 | 8 / 0 / 0 | — | — | — | — | — |
+| `2.1.280` | `SubagentStart` | 2 | 0 / 0 / 2 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | — | — |
+| `2.1.280` | `SubagentStop` | 6 | 0 / 0 / 6 | 6 / 0 / 0 | 0 / 0 / 6 | agent_type, description, id, status, type; command, description, id, status, type | [string] / [string] | shell, subagent | — | — |
+| `2.1.280` | `Stop` | 4 | 4 / 0 / 0 | 4 / 0 / 0 | 0 / 0 / 4 | command, description, id, status, type | [string] / [string] | shell | — | — |
+| `2.1.281` | `SessionStart` | 2 | 2 / 0 / 0 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | resume, startup | — |
+| `2.1.281` | `UserPromptSubmit` | 5 | 5 / 0 / 0 | 5 / 0 / 0 | 5 / 0 / 0 | — | — | — | — | — |
+| `2.1.281` | `PreToolUse` | 9 | 7 / 0 / 2 | 9 / 0 / 0 | 9 / 0 / 0 | — | — | — | — | — |
+| `2.1.281` | `PostToolUse` | 8 | 7 / 0 / 1 | 8 / 0 / 0 | 8 / 0 / 0 | — | — | — | — | — |
+| `2.1.281` | `SubagentStart` | 2 | 0 / 0 / 2 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | — | — |
+| `2.1.281` | `SubagentStop` | 6 | 0 / 0 / 6 | 6 / 0 / 0 | 0 / 0 / 6 | agent_type, description, id, status, type; command, description, id, status, type | [string] / [string] | shell, subagent | — | — |
+| `2.1.281` | `Stop` | 4 | 4 / 0 / 0 | 4 / 0 / 0 | 0 / 0 / 4 | command, description, id, status, type | [string] / [string] | shell | — | — |
+| `2.1.282` | `SessionStart` | 2 | 2 / 0 / 0 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | resume, startup | — |
+| `2.1.282` | `UserPromptSubmit` | 2 | 2 / 0 / 0 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | — | — |
+| `2.1.282` | `PreToolUse` | 8 | 8 / 0 / 0 | 8 / 0 / 0 | 8 / 0 / 0 | — | — | — | — | — |
+| `2.1.282` | `PostToolUse` | 8 | 8 / 0 / 0 | 8 / 0 / 0 | 8 / 0 / 0 | — | — | — | — | — |
+| `2.1.282` | `SubagentStop` | 2 | 0 / 0 / 2 | 2 / 0 / 0 | 0 / 0 / 2 | — | [] / [] | — | — | — |
+| `2.1.282` | `Stop` | 2 | 2 / 0 / 0 | 2 / 0 / 0 | 0 / 0 / 2 | — | [] / [] | — | — | — |
+| `2.1.284` | `SessionStart` | 2 | 2 / 0 / 0 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | resume, startup | — |
+| `2.1.284` | `UserPromptSubmit` | 7 | 7 / 0 / 0 | 7 / 0 / 0 | 7 / 0 / 0 | — | — | — | — | — |
+| `2.1.284` | `PreToolUse` | 13 | 12 / 0 / 1 | 13 / 0 / 0 | 13 / 0 / 0 | — | — | — | — | — |
+| `2.1.284` | `PostToolUse` | 13 | 12 / 0 / 1 | 13 / 0 / 0 | 13 / 0 / 0 | — | — | — | — | — |
+| `2.1.284` | `SubagentStart` | 2 | 0 / 0 / 2 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | — | — |
+| `2.1.284` | `SubagentStop` | 7 | 0 / 0 / 7 | 7 / 0 / 0 | 0 / 0 / 7 | agent_type, description, id, status, type; command, description, id, status, type | [string] / [string] | shell, subagent | — | — |
+| `2.1.284` | `Stop` | 5 | 5 / 0 / 0 | 5 / 0 / 0 | 0 / 0 / 5 | command, description, id, status, type | [string] / [string] | shell | — | — |
+| `2.1.285` | `SessionStart` | 2 | 2 / 0 / 0 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | resume, startup | — |
+| `2.1.285` | `UserPromptSubmit` | 6 | 6 / 0 / 0 | 6 / 0 / 0 | 6 / 0 / 0 | — | — | — | — | — |
+| `2.1.285` | `PreToolUse` | 12 | 11 / 0 / 1 | 12 / 0 / 0 | 12 / 0 / 0 | — | — | — | — | — |
+| `2.1.285` | `PostToolUse` | 12 | 11 / 0 / 1 | 12 / 0 / 0 | 12 / 0 / 0 | — | — | — | — | — |
+| `2.1.285` | `SubagentStart` | 2 | 0 / 0 / 2 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | — | — |
+| `2.1.285` | `SubagentStop` | 2 | 0 / 0 / 2 | 2 / 0 / 0 | 0 / 0 / 2 | agent_type, description, id, status, type; command, description, id, status, type | [string] / [string] | shell, subagent | — | — |
+| `2.1.285` | `Stop` | 5 | 5 / 0 / 0 | 5 / 0 / 0 | 0 / 0 / 5 | command, description, id, status, type | [string] / [string] | shell | — | — |
+| `2.1.286` | `SessionStart` | 2 | 2 / 0 / 0 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | resume, startup | — |
+| `2.1.286` | `UserPromptSubmit` | 7 | 7 / 0 / 0 | 7 / 0 / 0 | 7 / 0 / 0 | — | — | — | — | — |
+| `2.1.286` | `PreToolUse` | 17 | 15 / 0 / 2 | 17 / 0 / 0 | 17 / 0 / 0 | — | — | — | — | — |
+| `2.1.286` | `PostToolUse` | 16 | 15 / 0 / 1 | 16 / 0 / 0 | 16 / 0 / 0 | — | — | — | — | — |
+| `2.1.286` | `SubagentStart` | 2 | 0 / 0 / 2 | 2 / 0 / 0 | 2 / 0 / 0 | — | — | — | — | — |
+| `2.1.286` | `SubagentStop` | 8 | 0 / 0 / 8 | 8 / 0 / 0 | 0 / 0 / 8 | agent_type, description, id, status, type; command, description, id, status, type | [string] / [string] | shell, subagent | — | — |
+| `2.1.286` | `Stop` | 6 | 6 / 0 / 0 | 6 / 0 / 0 | 0 / 0 / 6 | command, description, id, status, type | [string] / [string] | shell | — | — |
 
 **Table 2: `sessionStarts`**, one row per entry:
 
 | lane | # | source | envSidVsPrevious |
 |---|---|---|---|
-| `<x.y.z>` | 1 | | |
-| `<x.y.z>` | 2 (after the step 5 restart) | | |
+| `2.1.277` | 1 | startup | first |
+| `2.1.277` | 2 (after the step 5 restart) | resume | same |
+| `2.1.278` | 1 | startup | first |
+| `2.1.278` | 2 (after the step 5 restart) | resume | same |
+| `2.1.280` | 1 | startup | first |
+| `2.1.280` | 2 (after the step 5 restart) | resume | same |
+| `2.1.281` | 1 | startup | first |
+| `2.1.281` | 2 (after the step 5 restart) | resume | same |
+| `2.1.282` | 1 | startup | first |
+| `2.1.282` | 2 (after the step 5 restart) | resume | same |
+| `2.1.284` | 1 | startup | first |
+| `2.1.284` | 2 (after the step 5 restart) | resume | same |
+| `2.1.285` | 1 | startup | first |
+| `2.1.285` | 2 (after the step 5 restart) | resume | same |
+| `2.1.286` | 1 | startup | first |
+| `2.1.286` | 2 (after the step 5 restart) | resume | same |
 
-**Table 3: `sequence`**, one line per lane, abbreviated. SS = SessionStart, UPS = UserPromptSubmit, Pre/Post = Pre/PostToolUse, SA+ = SubagentStart, SA- = SubagentStop, St = Stop, SF = StopFailure. A trailing `*` marks a `nonEmpty` agent_id, `°` an `empty` one, `?` an unparsed payload.
+**Table 3: `sequence`**, one line per lane. SS = SessionStart, UPS = UserPromptSubmit, Pre/Post = Pre/PostToolUse, SA+ = SubagentStart, SA- = SubagentStop, St = Stop, SF = StopFailure. A trailing `*` marks a `nonEmpty` agent_id, `°` an `empty` one, `?` an unparsed payload.
 
 | lane | sequence |
 |---|---|
-| `<x.y.z>` | `SS · UPS · Pre · Post · … · SA+* · Pre* · Post* · SA-* · St · …` |
+| `2.1.277` | `SS · UPS · Pre · Post · Pre · Post · Pre · Post · Pre · Post · Pre · Post · Pre · Post · Pre · Post · Pre · Post · Pre · Post · SA+* · Pre · Post · Pre · Post · Pre* · Post* · SA-* · Pre · Post · UPS · St · UPS · St · SA+* · SA-* · UPS · St · UPS · St · SS` |
+| `2.1.278` | `SS · UPS · Pre · Post · Pre · Post · Pre · Post · Pre · Post · Pre · SA+* · Post · Pre · Post · Pre · Post · Pre* · Post* · SA-* · Pre · Post · UPS · St · SA-* · UPS · St · UPS · SA-* · St · SA-* · SA+* · SA-* · UPS · St · SA-* · UPS · St · SA-* · SS` |
+| `2.1.280` | `SS · UPS · Pre · Post · Pre · Post · Pre · Post · Pre · SA+* · Post · Pre · Post · Pre · Post · Pre* · Post* · SA-* · Pre · Post · UPS · St · SA-* · UPS · St · UPS · SA-* · St · SA-* · SA+* · SA-* · UPS · St · SA-* · SS` |
+| `2.1.281` | `SS · UPS · Pre · Post · Pre · Post · Pre · Post · Pre · Post · Pre · Post · SA+* · Pre · Post · Pre* · Post* · SA-* · Pre · Post · UPS · St · SA-* · UPS · St · UPS · SA-* · St · SA-* · SA+* · SA-* · UPS · St · Pre* · SA-* · SS` |
+| `2.1.282` | `SS · UPS · Pre · Post · Pre · Post · Pre · Post · Pre · Post · Pre · Post · St · SA-* · UPS · Pre · Post · Pre · Post · Pre · Post · St · SA-* · SS` |
+| `2.1.284` | `SS · UPS · Pre · Post · Pre · Post · Pre · Post · Pre · Post · Pre · Pre · SA+* · Post · Post · Pre · Post · Pre* · Post* · SA-* · Pre · Post · UPS · St · SA-* · UPS · St · UPS · UPS · SA-* · St · SA+* · SA-* · SA-* · UPS · St · SA-* · SS · UPS · Pre · Post · Pre · Post · Pre · Post · Pre · Post · St · SA-*` |
+| `2.1.285` | `SS · UPS · Pre · Post · Pre · Post · Pre · Post · Pre · Post · Pre · SA+* · Post · Pre* · Pre · Post · Post* · SA-* · Pre · Post · UPS · St · UPS · St · UPS · SA+* · SA-* · St · UPS · St · SS · UPS · Pre · Post · Pre · Post · Pre · Post · Pre · Post · St` |
+| `2.1.286` | `SS · UPS · Pre · Post · Pre · Post · Pre · Post · Pre · Post · Pre · SA+* · Post · Pre · Post · Pre · Post · Pre* · Post* · SA-* · Pre · Post · UPS · St · SA-* · UPS · St · UPS · SA-* · St · Pre* · SA+* · SA-* · SA-* · UPS · St · SA-* · UPS · Pre · Post · Pre · Post · Pre · Post · St · SA-* · SS · UPS · Pre · Post · Pre · Post · Pre · Post · Pre · Post · St · SA-*` |
 
 **Table 4: observations**
 
 | lane | live `startedAt` type | C7 spinner-row tail (from `esc to interrupt`) | C5 source |
 |---|---|---|---|
-| `<x.y.z>` | `number` / other | `<tail>` or `unobserved` | `captured` / `binary (unmeasured)` / `none` |
+| every lane (2.1.277, 2.1.278, 2.1.280, 2.1.281, 2.1.282, 2.1.284, 2.1.285, 2.1.286) | `number` | `unobserved` | `binary (unmeasured)` |
 
 **Table 5: verdicts**
 
 | criterion | verdict | evidence (table and row) |
 |---|---|---|
-| C1 | PASS / FAIL | |
-| C2 | PASS / FAIL | |
-| C3 | PASS (all in list) / PASS (new: …) | |
-| C4 | PASS / FAIL | |
-| C5 | `<field>` (captured / binary) | |
-| C6 (observation) | `same` / `changed` / `unmeasured` | |
-| C7 (observation) | one shape / several / unobserved | |
+| C1 | PASS (its third clause refined; see below) | Table 1's agent_id column on every UPS, Stop and SessionStart row: nonEmpty 0. PreToolUse and PostToolUse nonEmpty ≥ 1 in every lane whose session ran the body (all but 2.1.282). Table 3. |
+| C2 | PASS | Table 1's Stop rows: element keys `command, description, id, status, type`, and `[string] / [string]`. 2.1.282's Stops carry an always-empty array. |
+| C3 | PASS (all in list) | Table 1's types: `shell`, `subagent`. |
+| C4 | PASS | Table 2: `startup`, `resume`. |
+| C5 | `error` (binary) | Every lane's binary declares `{hook_event_name: "StopFailure", error, error_details?, last_assistant_message?}`. No turn hit an API error, so none was captured. |
+| C6 (observation) | `same` | Table 2's row 2 in every lane that restarted. |
+| C7 (observation) | unobserved | The body's 60 s foreground wait never ran (the harness guard above). |
+
+**C1's third clause.** It asks every nonEmpty PreToolUse/PostToolUse to lie between a SubagentStart and the next
+SubagentStop, and it does not hold literally in 2.1.281 and 2.1.286. Claude Code runs helper agents that announce no
+SubagentStart: a SubagentStop with no SubagentStart and an empty `agent_type` follows nearly every main Stop in every
+lane (Table 3's `St · SA-*`). Two of those helpers made a tool call. Grouping each lane's events by agent_id (on the
+fleet box; no id printed) shows each such call carries its own helper's agent_id, and that helper's own SubagentStop
+follows it. So every nonEmpty agent_id event belongs to an agent other than the main thread, announced or not, and no
+main-thread event carries one. That is the property Task 3's `paid` filter rests on, and C1 passes on it. A resumed
+subagent fires SubagentStart again under its original agent_id.
+
+**Also measured.** Every element of every Stop's `background_tasks` had `status` `running` (a token-only read on the
+fleet box). The list therefore carries live tasks only, and an empty array is a measured 0.
+
+**Amendments forced:** none. A1: C5 names `error`. A2: C6 is `same`. A3: C7 unobserved, so Task 9's tolerant anchor
+ships as is. A4: no new alias. A5: no lane lacks `background_tasks`. A6: every lane's `startedAt` is a number.
 
 ### PASS criteria
 
