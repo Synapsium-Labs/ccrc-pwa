@@ -326,8 +326,10 @@ def install(tree, home):
     moved = []
     try:
         staged_body = None if body_same else stage(libexec, body_data, BODY_MODE)
-        staged_entry = stage(bindir, entry_data, ENTRY_MODE)
-        self_test(home, staged_entry, staged_body or body_dest)
+        staged_entry = None if entry_same else stage(bindir, entry_data, ENTRY_MODE)
+        # The pair the self-test runs is the pair that will be live: each half
+        # either its staged replacement or the converged file already there.
+        self_test(home, staged_entry or entry_dest, staged_body or body_dest)
         if staged_body is not None:
             kind = destination_kind(body_dest)
             os.replace(staged_body, body_dest)
@@ -335,12 +337,13 @@ def install(tree, home):
             moved.append('body')
             postcondition(body_dest, body_data, BODY_MODE, 'body')
             say('body published at %s (replaced: %s)' % (body_dest, kind))
-        kind = destination_kind(entry_dest)
-        os.replace(staged_entry, entry_dest)
-        staged_entry = None
-        moved.append('launcher')
-        postcondition(entry_dest, entry_data, ENTRY_MODE, 'launcher')
-        say('launcher published at %s for %s (replaced: %s)' % (entry_dest, python, kind))
+        if staged_entry is not None:
+            kind = destination_kind(entry_dest)
+            os.replace(staged_entry, entry_dest)
+            staged_entry = None
+            moved.append('launcher')
+            postcondition(entry_dest, entry_data, ENTRY_MODE, 'launcher')
+            say('launcher published at %s for %s (replaced: %s)' % (entry_dest, python, kind))
         return 0
     except (OSError, Refused) as e:
         if not moved:
