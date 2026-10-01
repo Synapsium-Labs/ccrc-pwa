@@ -604,12 +604,12 @@ describe('the turn marker across a restart (§5.1, SessionStart)', () => {
   });
 });
 
-// Final fix wave, OPS-2: the payload parse runs on EVERY event, so it calls no regex builtin. jq's regex engine
+// The payload parse runs on EVERY event, so it calls no regex builtin. jq's regex engine
 // (Oniguruma) is an optional build dependency: a jq built without it fails every `test`/`gsub`, and the parse used to
 // gsub, so such a box wrote no hookstate and no marker for any event. The Stop and StopFailure arms keep their regexes:
 // they feed the marker's bg/kinds/ids and err alone, so on such a box a Stop writes bg -1 (unmeasured) and a
 // StopFailure an empty err (failed-unknown), and the hookstate write is untouched.
-describe('the payload parse needs no regex engine (OPS-2)', () => {
+describe('the payload parse needs no regex engine', () => {
   /** A jq that refuses any program naming a regex builtin, as one built without Oniguruma does, and runs the real
    *  jq for everything else. `*sub\(*` covers `gsub(` too. */
   const noRegexJq = (): void => {

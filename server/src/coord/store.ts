@@ -3863,7 +3863,7 @@ export class CoordStore {
    * bounds the rows LOADED, not the scan: `mail` has no index but its key, and adding one is a migration. The
    * same holds for the two `mail_deliveries` scans, statement 1's delivered-to subquery and statement 2's (that
    * table's one index is `mail_deliveries_due`): each candidate's read grows with the whole mail history, on the
-   * synchronous handle (OPS-4). An empty `runIds` drops the run clause rather than binding an empty list.
+   * synchronous handle, until a migration indexes them. An empty `runIds` drops the run clause rather than binding an empty list.
    *
    * The read is a SUPERSET of the run's mail. The lane therefore narrows the run verdict's `StallInput.mail`
    * through L1's `stallRunMail` (`run-mail-filtered-in-l1` (D-3650)), and only the session verdicts see the whole read.

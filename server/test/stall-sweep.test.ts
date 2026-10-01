@@ -1099,7 +1099,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     expect(orphanReads()).toEqual([`${PID}.json`, `${ORPHAN}.turn.json`]);
   });
 
-  // Final fix wave, OPS-3: orphan D answers none without an idle live word, and a row with no live pane has none, so
+  // A read-budget skip: orphan D answers none without an idle live word, and a row with no live pane has none, so
   // the orphan pass spends no agent read on it (most registry rows are long-dead sessions).
   it('a registry row with no live pane costs NO read: no pid entry, or tmux answering none; a live pane reads its marker', async () => {
     const reads: string[] = [];
@@ -1478,10 +1478,10 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(reports().map((m) => m.at)).toEqual([drops ? NEXT + DEAD_GRACE_MS : onCadence(NEXT, T0 + DEAD_GRACE_MS)]);
   });
 
-  // Final fix wave, E2E-6: the gap counts only UNOBSERVED time. A judged sweep is stamped at its END, so a sweep whose
+  // `stall-clocks-drop-on-an-unobserved-gap` (D-3750): the gap counts only UNOBSERVED time. A judged sweep is stamped at its END, so a sweep whose
   // own reads run longer than STALL_CLOCK_GAP_MS (a degraded agent link, each read near its timeout) is observed time,
   // and the next sweep, starting one tick after it ends, keeps the clocks.
-  it('sweeps that each run longer than STALL_CLOCK_GAP_MS keep the clocks: the dead report comes at the first sweep DEAD_GRACE_MS on (E2E-6)', async () => {
+  it('sweeps that each run longer than STALL_CLOCK_GAP_MS keep the clocks: the dead report comes at the first sweep DEAD_GRACE_MS on (stall-clocks-drop-on-an-unobserved-gap (D-3750))', async () => {
     const READ_MS = 100_000;                          // each agent read takes 100 s; an absent worker's sweep reads twice
     const slow = { on: false };
     const io: FleetIO = {
@@ -1506,7 +1506,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(starts.at(-1), 'the first sweep that started DEAD_GRACE_MS after the first one').toBe(starts.find((s) => s >= T0 + DEAD_GRACE_MS));
   });
 
-  it('a judged sweep that throws past its candidate read is still stamped when it ends: the next sweep 120 s on keeps the clocks (E2E-6)', async () => {
+  it('a judged sweep that throws past its candidate read is still stamped when it ends: the next sweep 120 s on keeps the clocks (stall-clocks-drop-on-an-unobserved-gap (D-3750))', async () => {
     const { w, gone, reports } = await presence();
     at(T0);
     await w.sweepStalls([], W2, gone);                // judged: absent since T0

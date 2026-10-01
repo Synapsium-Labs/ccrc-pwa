@@ -693,7 +693,7 @@ describe('wave 2 self-mails: stallSessionMail', () => {
 });
 
 describe('wave 2 reports to the coordinator: failed, frozen and dead', () => {
-  // Final fix wave, TRI-6: "It was told" holds only when the first failure's rung 1 went out LIVE. A shadow row records
+  // "It was told" holds only when the first failure's rung 1 went out LIVE. A shadow row records
   // the failure and sent nothing, so the report says that instead.
   const priorF1 = (mode: StallNotice['mode']): StallNotice =>
     ({ mode, arm: 'failed', rung: 1, key: T('2026-09-29T09:30:00Z'), at: T('2026-09-29T09:41:00Z') });
@@ -979,7 +979,7 @@ describe('r1: the proof-bound line (planning departure r1-body-names-the-proof-b
   });
 });
 
-// Final fix wave, E2E-2: r1's text states the quiet the ladder that sent it measured. Under the marker rules r1 falls due
+// `r1-body-names-the-proof-bound` (D-3667): r1's text states the quiet the ladder that sent it measured. Under the marker rules r1 falls due
 // on the marker clock (`stallMarkQuiet`: the turn end, maxed with the mail and the dispatch), so the subject and line 2
 // print that clock. Wave 1's clock is the live stamp, or the episode key for a busy worker. The case is the review's
 // probe: dispatched at 00:00Z, no mail, the turn ended at 20:00Z over a subagent, and r1 judged at 22:01Z.

@@ -171,7 +171,7 @@ describe('stallSessionHold: holds 1, 2 and the limit hold only (§10)', () => {
       'an auto-continue hold exactly AUTO_CONTINUE_RECENT_MS old').toBeNull();
     expect(stallSessionHold(sessionInput({ worker: workerAt('idle', NOW - 3 * H, { limits: null }) }), NOW), 'null limits').toBeNull();
   });
-  // Final fix wave, E2E-4: spec §4.2's hold 2b, a dialog with no ask behind it. dialogPending is the half the session arms
+  // `session-arms-are-separate-verdicts` (D-3637): spec §4.2's hold 2b, a dialog with no ask behind it. dialogPending is the half the session arms
   // can meet: live `waiting`, its other half, never reaches D, E or failed (their word checks refuse it).
   it('hold 2b: dialogPending holds on an idle or shell word, for every role, after hold 1 and before the limit hold', () => {
     for (const word of ['idle', 'shell']) {
@@ -294,7 +294,7 @@ describe('orphan D (§5.2): any session, a restart that cut background tasks sho
     expect(stallOrphanDCandidate({ ...m, stopAt: null }), 'a restart with no stop recorded').toBe(true);
     expect(stallOrphanDCandidate({ ...m, restartAt: NOW - 25 * H, stopAt: NOW - 26 * H }), 'the horizon is the verdict, not the candidate').toBe(true);
   });
-  it('D: a dialogPending pane on an idle or shell word holds 2b, for any row (E2E-4)', () => {
+  it('D: a dialogPending pane on an idle or shell word holds 2b, for any row (session-arms-are-separate-verdicts (D-3637))', () => {
     for (const word of ['idle', 'shell']) {
       expect(stallOrphanDVerdict(dInput(R, {}, { worker: workerAt(word, R + MIN, { dialogPending: true }) }), NOW), word).toEqual(hold('dialog'));
       expect(stallOrphanDVerdict(dInput(R, {}, { role: 'coordinator', sessionId: COORD, worker: workerAt(word, R + MIN, { dialogPending: true }) }), NOW), `${word}, a coordinator`).toEqual(hold('dialog'));
@@ -442,7 +442,7 @@ describe('orphan E (§5.2): run workers and coordinators, a wake-bearing task th
     const subject = stallOrphanESubject(okMark(c.mark));
     expect(stallOrphanEVerdict({ ...c, mail: [mailRow(602, NOW - 5 * MIN, WATCH, COORD, subject)] }, NOW)).toEqual(NONE);
   });
-  it('E: a dialogPending pane on an idle word holds 2b, for a run worker and a coordinator (E2E-4)', () => {
+  it('E: a dialogPending pane on an idle word holds 2b, for a run worker and a coordinator (session-arms-are-separate-verdicts (D-3637))', () => {
     expect(stallOrphanEVerdict(eInput({}, { worker: workerAt('idle', S + 2_000, { dialogPending: true }) }), NOW)).toEqual(hold('dialog'));
     expect(stallOrphanEVerdict(eInput({}, { role: 'coordinator', sessionId: COORD, worker: workerAt('idle', S + 2_000, { dialogPending: true }) }), NOW)).toEqual(hold('dialog'));
   });
@@ -501,7 +501,7 @@ describe('failed (§5.2): run workers and coordinators, a turn that ended on an 
     ];
     for (const [name, input] of cases) expect(stallFailedVerdict(input, NOW), name).toEqual(NONE);
   });
-  it('failed: a dialogPending pane on an idle or shell word holds 2b, rung 1 and rung 2 alike (E2E-4)', () => {
+  it('failed: a dialogPending pane on an idle or shell word holds 2b, rung 1 and rung 2 alike (session-arms-are-separate-verdicts (D-3637))', () => {
     for (const word of ['idle', 'shell']) {
       const w = workerAt(word, S + 1_000, { dialogPending: true });
       expect(stallFailedVerdict(fInput({}, { worker: w }), NOW), `${word}, retry class`).toEqual(hold('dialog'));
@@ -744,11 +744,11 @@ describe('marker-unreadable for a coordinator (coordinator-marker-unreadable (D-
   });
 });
 
-// Final fix wave, E2E-4 (spec §10: "The D, E and failed arms … apply holds 1, 2 and the limit hold only"). One worker,
+// `session-arms-are-separate-verdicts` (D-3637) (spec §10: "The D, E and failed arms … apply holds 1, 2 and the limit hold only"). One worker,
 // one set of facts: a harness menu (dialogPending) on an idle pane, three hours quiet, after a retry-class StopFailure
 // that left a wake-bearing task. The session verdicts hold 2b, because a self-mail would sit queued behind the menu; the
 // run verdict, judging the same facts, answers its own 2b cap, the operator push that says to clear the menu.
-describe('hold 2b: the session verdicts hold where the run verdict caps (E2E-4)', () => {
+describe('hold 2b: the session verdicts hold where the run verdict caps (session-arms-are-separate-verdicts (D-3637))', () => {
   const IDLE = NOW - 3 * H;
   const w = workerAt('idle', IDLE, { dialogPending: true });
   const failedMark = mark({ state: 'failed', event: 'StopFailure', at: IDLE - MIN, turnAt: IDLE - 20 * MIN, stopAt: IDLE - MIN, err: 'server_error', bg: 1, bgKinds: ['subagent'], bgIds: ['b1'] });

@@ -703,7 +703,7 @@ export class FleetWatcher {
   private stallMarkUnreadableSince = new Map<string, number>();
   /** When the lane last FINISHED judging its candidates, or null before the first judged sweep: the gap rule's anchor
    *  (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)). Stamped at the end of a sweep whose candidates read, never on an
-   *  early return, so a slow sweep's own duration is never counted as a gap (E2E-6). */
+   *  early return, so a slow sweep's own duration is never counted as a gap. */
   private lastStallJudgedAt: number | null = null;
   /** The run-less operator pushes already sent: each push tag (`stallPushRoute`'s) with the session it names, which
    *  the prune keys on. IN MEMORY (slug `run-less-push-latches-are-in-memory` (D-3751)): a restart re-pushes a run-less orphan D
@@ -3044,7 +3044,7 @@ export class FleetWatcher {
       // every judged sweep since it was set. More than STALL_CLOCK_GAP_MS from the END of the last judged sweep to this
       // start means nobody watched in between (a disabled window, unreadable or throwing candidate reads, ticks that
       // never reached the lane), so every clock restarts here. The early returns above never stamp it: they are that
-      // unobserved time. A judged sweep's own duration is observed time (E2E-6), so `finally` stamps its end.
+      // unobserved time. A judged sweep's own duration is observed time, so `finally` stamps its end.
       if (this.lastStallJudgedAt !== null && now - this.lastStallJudgedAt > STALL_CLOCK_GAP_MS) this.dropStallClocks();
       judging = true;
       const workers = stallSubjects(candidates.runs);
@@ -3180,14 +3180,14 @@ export class FleetWatcher {
    *  conjunct. `stallOrphanDVerdict` asks the same predicate again with the live facts, and re-judges the marker
    *  against the live process's start. A row whose identity is unmeasured reads nothing: these rows are not
    *  candidates for `marker-unreadable` (slug `coordinator-marker-unreadable` (D-3654)). Nor does a row with no live pane,
-   *  which orphan D can never wake (OPS-3). */
+   *  which orphan D can never wake: a read-budget skip. */
   private async judgeStallOrphan(
     store: CoordStore, r: SessionRecord, sessions: readonly FleetSession[], tick: StallTick,
     arming: StallArming, paused: boolean, now: number,
   ): Promise<void> {
     const ident = measuredIdentity(r);
     if (ident === null) return;
-    // Read budget (final fix wave, OPS-3), like the line above: orphan D answers none without an idle live word, and a
+    // A read-budget skip, like the line above: orphan D answers none without an idle live word, and a
     // row with no live pane has none (`stallLiveRead` folds a missing entry and a null pid alike to `no-pane`). Most
     // registry rows are long-dead sessions, so they cost no agent read.
     if (!tick.panePids.get(r.id)) return;

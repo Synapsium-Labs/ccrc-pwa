@@ -1064,7 +1064,7 @@ function stallR1MarkQuiet(input: StallInput, facts: StallFacts): number | null {
   return view.state === 'working' ? null : stallMarkQuiet(view, facts, input.subject.primary.dispatchedAt ?? 0);
 }
 
-/** r1's quiet start, from the rule the ladder that sent it used (final fix wave, E2E-2): the marker clock under the
+/** r1's quiet start, from the rule the ladder that sent it used (`r1-body-names-the-proof-bound` (D-3667)): the marker clock under the
  *  marker rules, else wave 1's. Measured either way, so a busy worker is never told its silence runs from dispatch,
  *  and a worker whose live stamp a respawn restamped after its Stop is never told it has been quiet for minutes. */
 export function stallR1QuietFrom(input: StallInput, facts: StallFacts): number {
@@ -1133,7 +1133,7 @@ export function stallCheckMail(input: StallInput, facts: StallFacts, now: number
     ? STALL_UNARMED_LINE
     : proofBound
       // §4.2: the operator hears STALL_OPERATOR_MS after the coordinator (r3 at r2 + 1 h), so a coordinator line says
-      // so; a direct line already names the operator (final fix wave, E2E-5).
+      // so; a direct line already names the operator (`r1-body-names-the-proof-bound` (D-3667)).
       ? `No mail from you on run ${id}: the ${direct ? 'operator' : 'coordinator'} is told when your next turn ends without one, and by ${stallDeadline(now + STALL_BOUND_MS)} at the latest${direct ? '' : `; the operator ${STALL_OPERATOR_MS / 3_600_000} h after that`}.`
       : direct
         ? `No mail from you on run ${id} by ${stallDeadline(toCoordinator)}: the operator is told.`
@@ -1755,7 +1755,7 @@ function stallFailedReportMail(input: StallSessionInput, err: string, because: '
   const run = input.run;
   if (run === null) throw new RangeError('stallSessionMail: a failed report names its run, and this session is on none');
   const e = stallSafe(err);
-  // Final fix wave, TRI-6: "told" only when a first failure's rung 1 went out live. A shadow row records the failure
+  // "Told" only when a first failure's rung 1 went out live. A shadow row records the failure
   // and sent nothing (it stands while the self-mail is unarmed), so the report names when that failure was recorded.
   const priors = stallPriorFailedNotices(input, stopAt);
   const first = priors.reduce<StallNotice | null>((f, n) => (f === null || n.key < f.key ? n : f), null);
