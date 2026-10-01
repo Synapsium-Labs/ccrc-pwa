@@ -5835,11 +5835,17 @@ _check_codex() {
   fi
   # The loaded-guard `_check_update-sync` carries: every function below is
   # ccrc's own, and a table sourced by something else must say so, not die.
+  # The usage rows' readers (Plan 3a Task 6) are checked HERE, before anything
+  # is recorded, so a missing one can never discard a finding `_dr_cx_bins` or
+  # `_dr_cx_runtime` already recorded; `_dr_codex_usage_box` keeps its own
+  # guard for a caller that sources this table without ccrc.
   local fn
   for fn in _box_env_value _codex_lanes _codex_row _codex_lane_json_state _codex_lane_dir \
             _codex_litellm_yaml _codex_runtime_cli _models_node _models_roster_path _models_litellm_template \
             _codex_tier_ours _codex_tier_stale _codex_foreign_what _codex_tier_is_our_handle \
-            _svc_is_active _svc_status_hint; do
+            _svc_is_active _svc_status_hint \
+            _codex_usage_enabled _codex_usage_timer _codex_usage_foreign _codex_usage_wants _codex_usage_flat_foreign \
+            _plat_mtime; do
     if ! declare -F "$fn" >/dev/null 2>&1 || [ -z "${BOX_TREE_DIR:-}" ] || [ -z "${CODEX_TIERS:-}" ]; then
       _dr_fail codex "ccrc's own Codex lane library is not loaded ($fn, BOX_TREE_DIR or CODEX_TIERS is missing), so no lane on this box was measured" \
         "this is a bug in ccrc, not a fact about your box — _check_codex calls the _codex_* library declared in ccrc itself, and this check table was sourced by something that is not ccrc"

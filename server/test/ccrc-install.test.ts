@@ -7281,10 +7281,13 @@ describe('ccrc install: the codex tier restart step, measured in isolation (_ins
  *  `enable --now` and `disable --now` as a manager does, by planting and
  *  removing the timer's `timers.target.wants` link, so the converge's own
  *  reads see its own acts. A unit listed in `refuse` is refused. `enabled`,
- *  `foreign` and `flatForeign` plant links before the step runs. */
+ *  `foreign` and `flatForeign` plant links before the step runs. `shape:
+ *  false` (fix round 1) sources no `ccrc-wrapper-shape` and points
+ *  `CCRC_HERE` at an empty directory, so `_codex_shape` cannot load the
+ *  contract: the box whose tree lost the file. */
 function runUsageStep(c: {
   lanes?: string[]; lanesRc?: number; role?: 'both' | 'fleet' | 'server'; os?: 'linux' | 'darwin';
-  enabled?: string[]; foreign?: string[]; flatForeign?: boolean; refuse?: string[];
+  enabled?: string[]; foreign?: string[]; flatForeign?: boolean; refuse?: string[]; shape?: boolean;
 }): StepRun & { links: string[] } {
   const home = mkTmp('ccrc-codex-usage-step-');
   const units = join(home, '.config', 'systemd', 'user');
@@ -7295,6 +7298,8 @@ function runUsageStep(c: {
   for (const id of c.foreign ?? []) link(`ccgpt-usage@${id}.timer`, 'ccgpt-usage@.timer');
   if (c.flatForeign === true) link('ccgpt-usage.timer', 'ccgpt-usage.timer');
   writeFileSync(join(home, 'refuse'), (c.refuse ?? []).map((u) => `${u}\n`).join(''));
+  const noShape = join(home, 'no-shape-contract');
+  mkdirSync(noShape);
   const r = runStepHarness(home, [
     'set -uo pipefail',
     'PROG=ccrc',
@@ -7302,7 +7307,7 @@ function runUsageStep(c: {
     `CCD_OS=${c.os ?? 'linux'}`,
     'BOX_UNIT_DIR="$HOME/.config/systemd/user"',
     'INST_DEGRADED=()',
-    `. '${join(REPO, 'ccd', 'ccrc-wrapper-shape')}'`,
+    c.shape === false ? `CCRC_HERE='${noShape}'` : `. '${join(REPO, 'ccd', 'ccrc-wrapper-shape')}'`,
     lanesFn(c.lanes ?? ['codex-a'], c.lanesRc ?? 0),
     'systemctl() {',
     '  printf \'systemctl %s\\n\' "$*" >> "$HOME/calls"',
@@ -7377,8 +7382,34 @@ describe('ccrc install: the codex usage converge, measured in isolation (_inst_c
     expect(r.links, 'the foreign link was touched, or ccrc\'s was left beside it')
       .toEqual(['ccgpt-usage@codex-a.timer', T('codex-b')]);
     expect(r.degraded).toEqual(['codex-usage']);
-    expect(r.stdout).toMatch(/^install: codex-usage: NOT ENABLED for codex-a — another repository's ccgpt-usage@codex-a\.timer is enabled on this box, and two publishers would race this lane's ~\/\.cc-limits row\. ccrc never disables another tool's unit: once this lane's cutover retires it, run: systemctl --user disable --now ccgpt-usage@codex-a\.timer — then re-run: ccrc install$/m);
-    expect(r.stdout).toMatch(/^install: codex-usage: enabled for codex-b; withheld from codex-a; withdrawn from no lane$/m);
+    // Fix round 1: the transcript names the withdrawal it made, in the
+    // lane's own line and in the summary.
+    expect(r.stdout).toMatch(/^install: codex-usage: NOT ENABLED for codex-a — another repository's ccgpt-usage@codex-a\.timer is enabled on this box, and two publishers would race this lane's ~\/\.cc-limits row\. ccrc's own ccrc-codex-usage@codex-a\.timer was enabled, and this run disabled it\. ccrc never disables another tool's unit: once this lane's cutover retires it, run: systemctl --user disable --now ccgpt-usage@codex-a\.timer — then re-run: ccrc install$/m);
+    expect(r.stdout).toMatch(/^install: codex-usage: enabled for codex-b; withheld from codex-a; withdrawn from codex-a$/m);
+  });
+
+  it('two lanes withheld, one of them withdrawn: each line says what this run did to that lane, and codex-usage is ONE degraded step (fix round 1)', () => {
+    const r = runUsageStep({ lanes: ['codex-a', 'codex-b'], enabled: ['codex-a'], foreign: ['codex-a', 'codex-b'] });
+    expect(ctl(r)).toEqual([DIS('codex-a')]);
+    expect(r.links).toEqual(['ccgpt-usage@codex-a.timer', 'ccgpt-usage@codex-b.timer']);
+    expect(r.degraded, 'codex-usage was counted once per withheld lane, not once per step').toEqual(['codex-usage']);
+    const lines = r.stdout.split('\n');
+    expect(lines.find((l) => l.startsWith('install: codex-usage: NOT ENABLED for codex-a ')))
+      .toContain("ccrc's own ccrc-codex-usage@codex-a.timer was enabled, and this run disabled it.");
+    expect(lines.find((l) => l.startsWith('install: codex-usage: NOT ENABLED for codex-b ')), 'a withdrawal was claimed for a lane whose timer was never on')
+      .toMatch(/~\/\.cc-limits row\. ccrc never disables another tool's unit: /);
+    expect(r.stdout).toMatch(/^install: codex-usage: enabled for no lane; withheld from codex-a codex-b; withdrawn from codex-a$/m);
+  });
+
+  it('a withdrawal refused on the foreign arm: the lane\'s line says both publishers are armed, a NOT CONVERGED line names what is still on, and codex-usage is ONE step (fix round 1)', () => {
+    const r = runUsageStep({ lanes: ['codex-a'], enabled: ['codex-a', 'ext-a'], foreign: ['codex-a'],
+      refuse: [T('codex-a'), T('ext-a')] });
+    expect(ctl(r)).toEqual([DIS('ext-a'), DIS('codex-a')]);
+    expect(r.links).toEqual(['ccgpt-usage@codex-a.timer', T('codex-a'), T('ext-a')]);
+    expect(r.degraded).toEqual(['codex-usage']);
+    expect(r.stdout).toMatch(/^install: codex-usage: NOT ENABLED for codex-a — .* ccrc's own ccrc-codex-usage@codex-a\.timer is enabled too, and this run could not disable it, so both publishers are armed\. ccrc never disables another tool's unit: /m);
+    expect(r.stdout).toMatch(/^install: codex-usage: enabled for no lane; withheld from codex-a; withdrawn from no lane$/m);
+    expect(r.stdout).toMatch(/^install: codex-usage: NOT CONVERGED — ccrc's own usage timer is still enabled for ext-a codex-a, which this run had to withdraw and systemd would not disable/m);
   });
 
   it('another repository\'s FLAT timer names no lane: said once, unattributed, and it blocks nothing', () => {
@@ -7426,6 +7457,29 @@ describe('ccrc install: the codex usage converge, measured in isolation (_inst_c
     expect(r.degraded).toEqual(['codex-usage']);
     expect(r.stderr).toMatch(/^install: codex-usage: could not disable ccrc-codex-usage@ext-a\.timer — account ext-a is no longer a codex lane, so its timer must not poll; run: systemctl --user disable --now ccrc-codex-usage@ext-a\.timer$/m);
     expect(r.links).toEqual([T('ext-a')]);
+    // Fix round 1: `none` is the line the live-shape cases read as "this step
+    // did nothing"; over a ccrc timer still enabled it would be false.
+    expect(r.stdout, 'a refused withdrawal was reported as `none`').toBe(
+      'install: codex-usage: NOT CONVERGED — ccrc\'s own usage timer is still enabled for ext-a, which this run had to withdraw and systemd would not disable (the could-not-disable line above names each, with its command). This install continues. Run those commands, then re-run: ccrc install\n');
+  });
+
+  it('no shape contract: NOT CONVERGED, degraded, and nothing enabled or withdrawn — an unread id set is not an empty one (fix round 1)', () => {
+    const r = runUsageStep({ shape: false, lanes: ['codex-a'], enabled: ['ext-a'] });
+    expect(ctl(r)).toEqual([]);
+    expect(r.links).toEqual([T('ext-a')]);
+    expect(r.degraded).toEqual(['codex-usage']);
+    expect(r.stdout).toBe('install: codex-usage: NOT CONVERGED — the wrapper shape contract could not be read (the ccrc codex: line above says so), so ccrc\'s own usage timers cannot be told from anything else, and none was enabled or disabled. This install continues. Re-run: ccrc install\n');
+    expect(r.stderr).toMatch(/^ccrc codex: install-incomplete: /m);
+  });
+
+  it('a wants link whose instance is not an account id is not ccrc\'s: never disabled, never named to the manager, and the step says none (fix round 1)', () => {
+    // The grammar filter is an ownership boundary on the path that issues
+    // `disable --now`, and Task 7's uninstall reuses the same reader.
+    const r = runUsageStep({ lanes: [], enabled: ['EXT-A'] });
+    expect(ctl(r)).toEqual([]);
+    expect(r.links).toEqual(['ccrc-codex-usage@EXT-A.timer']);
+    expect(r.stdout).toBe('install: codex-usage: none — no codex lane in the roster\n');
+    expect(r.degraded).toEqual([]);
   });
 
   it('forced Darwin: one not-applicable line naming the lanes, the manager never asked, and NOT a degraded step (R2)', () => {

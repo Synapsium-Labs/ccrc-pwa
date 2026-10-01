@@ -9804,6 +9804,18 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: .*\/\.cc-limits\/codex-a\.json is not a regular file, so this lane's usage row cannot be read$/)]);
   }, 40_000);
 
+  it('a `date` that cannot answer +%s: WARN, the row\'s age unmeasured — never read as fresh (fix round 1)', () => {
+    const home = usageBox('ccrc-doctor-usage-nodate-');
+    // `usageBox` linked the REAL date into stub-bin: remove that link first,
+    // so the stub below is a new file and never a write through the link.
+    unstub(home, 'date');
+    stub(home, 'date', 'exit 1');
+    const r = usageRows(home);
+    expect(warns(r.stdout), r.stdout).toEqual(["WARN codex: codex-a: this box's `date` cannot answer +%s, so the age of this lane's usage row cannot be measured"]);
+    expect(r.stdout).toMatch(/^ {2}remedy: install a working GNU\/BSD date — every age-based check in this file needs it$/m);
+    expect(r.stdout).toMatch(/^rc=0,2$/m);
+  });
+
   it('a row with no numeric ts: WARN, its age unmeasured', () => {
     const home = usageBox('ccrc-doctor-usage-nots-', { row: false });
     mkdirSync(join(home, '.cc-limits'), { recursive: true });
@@ -9841,6 +9853,21 @@ describe('ccrc doctor: codex — the usage rows, on any host (Plan 3a Task 6)', 
     const r = spawnSync(BASH, ['-c', `set -uo pipefail\n. ${shq(CHECKS_SRC)}\n_dr_codex_usage_box; echo "rc=$?"`],
       { env: doctorEnv(home), encoding: 'utf8' });
     expect(r.stdout).toMatch(/^FAIL codex: ccrc's own usage-timer reader is not loaded/m);
+    expect(r.stdout).toMatch(/^rc=1$/m);
+  });
+
+  // Fix round 1: every usage reader `_check_codex` calls is in its loaded
+  // guard, which runs BEFORE `_dr_cx_bins` and `_dr_cx_runtime` record
+  // anything. Before, a missing reader reached `_dr_codex_usage_box`'s own
+  // guard after those had recorded, and its `return 1` threw their findings
+  // away. This box has no lane executables and no runtime, so a check that got
+  // past the guard would record FAILs: one FAIL line, the guard's, is the
+  // proof that nothing recorded was lost.
+  it.each(['_codex_usage_enabled', '_codex_usage_timer', '_codex_usage_foreign', '_codex_usage_wants',
+    '_codex_usage_flat_foreign', '_plat_mtime'])('%s not loaded: _check_codex FAILs in its loaded guard, before any finding is recorded (fix round 1)', (fn) => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-guard-'), false, `unset -f ${fn}\n_check_codex; echo "rc=$?"`);
+    expect(r.stdout.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) codex: /.test(l)), r.stdout).toEqual([
+      `FAIL codex: ccrc's own Codex lane library is not loaded (${fn}, BOX_TREE_DIR or CODEX_TIERS is missing), so no lane on this box was measured`]);
     expect(r.stdout).toMatch(/^rc=1$/m);
   });
 

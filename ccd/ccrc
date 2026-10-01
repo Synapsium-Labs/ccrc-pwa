@@ -14510,13 +14510,20 @@ _codex_usage_flat_foreign() {
 # published here, and that is NOT a degraded step (`_inst_linger_darwin`'s
 # doctrine: a property of the platform, not an event in this run). A
 # server-role box converges nothing per account (D-3111) and has no pair.
+# THE TRANSCRIPT CLAIMS ONLY WHAT THIS RUN DID (fix round 1): a withdrawal is
+# named wherever it happened, the foreign arm's included; a ccrc timer this run
+# had to withdraw and could not is its own NOT CONVERGED line, and then `none`
+# is never printed over it; and `codex-usage` is ONE degraded step however many
+# lanes it withheld or withdrawals it failed, `_inst_codex_tiers`' rule. A
+# refused ENABLE is the exception, and is named by its unit
+# (`_inst_enable_timer`).
 # POSITION: inside `_inst_enable`, after the daemon-reload that read the
 # template `_inst_units` placed, and after `_inst_codex_runtime` made the
 # runtime current that the publisher's ExecStart names.
 _inst_codex_usage() {
   [ "$INST_ROLE" = server ] && return 0
-  local lanes have id e u f keep before lrc=0 hrc=0
-  local -a codex=() enabled=() withheld=() withdrawn=()
+  local lanes have id e u f keep before took lrc=0 hrc=0
+  local -a codex=() enabled=() withheld=() withdrawn=() stuck=()
   lanes="$(_codex_lanes)" || lrc=$?
   if [ "$CCD_OS" = darwin ]; then
     { [ "$lrc" -eq 0 ] && [ -n "$lanes" ]; } || return 0
@@ -14549,19 +14556,25 @@ _inst_codex_usage() {
       withdrawn+=("$e")
     else
       echo "install: codex-usage: could not disable $u — account $e is no longer a codex lane, so its timer must not poll; run: systemctl --user disable --now $u" >&2
-      INST_DEGRADED+=(codex-usage)
+      stuck+=("$e")
     fi
   done
   for id in ${codex[@]+"${codex[@]}"}; do
     u="$(_codex_usage_timer "$id")"; f="$(_codex_usage_foreign "$id")"
     if _codex_usage_enabled "$f"; then
       withheld+=("$id")
+      took=''
       if _codex_usage_enabled "$u"; then
-        systemctl --user disable --now "$u" \
-          || echo "install: codex-usage: could not disable $u — run: systemctl --user disable --now $u" >&2
+        if systemctl --user disable --now "$u"; then
+          withdrawn+=("$id")
+          took=" ccrc's own $u was enabled, and this run disabled it."
+        else
+          echo "install: codex-usage: could not disable $u — run: systemctl --user disable --now $u" >&2
+          stuck+=("$id")
+          took=" ccrc's own $u is enabled too, and this run could not disable it, so both publishers are armed."
+        fi
       fi
-      echo "install: codex-usage: NOT ENABLED for $id — another repository's $f is enabled on this box, and two publishers would race this lane's ~/.cc-limits row. ccrc never disables another tool's unit: once this lane's cutover retires it, run: systemctl --user disable --now $f — then re-run: ccrc install"
-      INST_DEGRADED+=(codex-usage)
+      echo "install: codex-usage: NOT ENABLED for $id — another repository's $f is enabled on this box, and two publishers would race this lane's ~/.cc-limits row.$took ccrc never disables another tool's unit: once this lane's cutover retires it, run: systemctl --user disable --now $f — then re-run: ccrc install"
       continue
     fi
     before="${#INST_DEGRADED[@]}"
@@ -14571,11 +14584,20 @@ _inst_codex_usage() {
   if [ "${#codex[@]}" -gt 0 ] && _codex_usage_flat_foreign; then
     echo "install: codex-usage: note — another repository's ccgpt-usage.timer is enabled on this box. It names no lane, so ccrc cannot tell which lane's ~/.cc-limits row it writes; if it is one of ${codex[*]}, two publishers race that row. ccrc leaves it alone; once no lane on this box relies on it, run: systemctl --user disable --now ccgpt-usage.timer"
   fi
-  if [ "${#codex[@]}" -eq 0 ] && [ "${#withdrawn[@]}" -eq 0 ]; then
+  # ONE degraded step for a withheld lane or a withdrawal systemd refused,
+  # however many of either (`_inst_codex_tiers`' `[ "$failed" -eq 0 ] ||`).
+  { [ "${#withheld[@]}" -eq 0 ] && [ "${#stuck[@]}" -eq 0 ]; } || INST_DEGRADED+=(codex-usage)
+  # `none` ONLY when this run did nothing and left nothing of ccrc's enabled.
+  if [ "${#codex[@]}" -eq 0 ] && [ "${#withdrawn[@]}" -eq 0 ] && [ "${#stuck[@]}" -eq 0 ]; then
     echo "install: codex-usage: none — no codex lane in the roster"
     return 0
   fi
-  echo "install: codex-usage: enabled for ${enabled[*]:-no lane}; withheld from ${withheld[*]:-no lane}; withdrawn from ${withdrawn[*]:-no lane}"
+  if [ "${#codex[@]}" -gt 0 ] || [ "${#withdrawn[@]}" -gt 0 ]; then
+    echo "install: codex-usage: enabled for ${enabled[*]:-no lane}; withheld from ${withheld[*]:-no lane}; withdrawn from ${withdrawn[*]:-no lane}"
+  fi
+  if [ "${#stuck[@]}" -gt 0 ]; then
+    echo "install: codex-usage: NOT CONVERGED — ccrc's own usage timer is still enabled for ${stuck[*]}, which this run had to withdraw and systemd would not disable (the could-not-disable line above names each, with its command). This install continues. Run those commands, then re-run: ccrc install"
+  fi
 }
 
 # ── _inst_enable_timer — enable one timer, or DEGRADE and count it ────────
