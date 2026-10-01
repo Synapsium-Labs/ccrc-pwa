@@ -325,10 +325,12 @@ export function insertSystemMailTx(
 }
 
 /** What `queueStallNotice` did. `why` is `StallObservation`'s own refusal,
- *  derived rather than respelled: the notice declines exactly when its
- *  observation row does. */
+ *  derived rather than respelled: a run notice declines exactly when its
+ *  observation row does, and a run-less one answers `duplicate` when its
+ *  subject was already sent. `eventId` is the observation row's id, and null
+ *  for a run-less notice, which writes none. */
 export type StallNoticeQueued =
-  | { queued: true; mailId: number; deliveryId: number; eventId: number }
+  | { queued: true; mailId: number; deliveryId: number; eventId: number | null }
   | { queued: false; why: Extract<StallObservation, { recorded: false }>['why'] };
 
 /**
@@ -343,14 +345,32 @@ export type StallNoticeQueued =
  * NOT `queueSystemMail`'s dedupe. That one sees only OUTSTANDING mail, so an
  * acked stall-check would not stop a second one, and a restart would re-send
  * every rung. The observation row is durable, and the lane's ladder reads its
- * rung times back from it. The run-less notice is wave 2's.
+ * rung times back from it.
+ *
+ * `run === null` is the RUN-LESS notice (stall watch wave 2, `run-less-stall-notice`):
+ * a session verdict about a coordinator, or about a registry row with no run
+ * (an `orphaned:` or `failed:` self-wake, or its failed rung 2), has no
+ * `run_events` row to dedupe on. Its durable dedupe is
+ * `hasMailWithSubject('operator', null, toId, subject)`, over EVERY delivery
+ * state, read INSIDE the same transaction as the insert, so the check and the
+ * write cannot be split. It holds because the subject names the episode to the
+ * day and the minute (`self-mail-subjects-carry-the-date`) and `mail` is never
+ * pruned. It writes no observation row: `eventId` is null, and `detail` and
+ * `at` are unused. `tx` is not re-entrant, so no caller may hold one around
+ * either arm.
  */
 export function queueStallNotice(
   coord: CoordStore,
-  run: Pick<RunRow, 'id' | 'program' | 'wave' | 'waveOf'>,
+  run: Pick<RunRow, 'id' | 'program' | 'wave' | 'waveOf'> | null,
   n: { detail: string; at: number; toId: string; kind: MailKind; subject: string; body: string },
 ): StallNoticeQueued {
   return tx(coord.db, (): StallNoticeQueued => {
+    if (run === null) {
+      if (coord.hasMailWithSubject('operator', null, n.toId, n.subject)) return { queued: false, why: 'duplicate' };
+      const q = insertSystemMailTx(coord, null, { fromId: 'operator', toId: n.toId, runId: null,
+        kind: n.kind, subject: n.subject, body: n.body });
+      return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: null };
+    }
     const seen = coord.insertStallObservation(run.id, n.detail, n.at);
     if (!seen.recorded) return { queued: false, why: seen.why };
     const q = insertSystemMailTx(coord, run, { fromId: 'operator', toId: n.toId, runId: run.id,
