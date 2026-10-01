@@ -608,31 +608,57 @@ describe('the turn marker across a restart (§5.1, SessionStart)', () => {
 // (Oniguruma) is an optional build dependency: a jq built without it fails every `test`/`gsub`, and the parse used to
 // gsub, so such a box wrote no hookstate and no marker for any event. The Stop and StopFailure arms keep their regexes:
 // they feed the marker's bg/kinds/ids and err alone, so on such a box a Stop writes bg -1 (unmeasured) and a
-// StopFailure an empty err (failed-unknown), and the hookstate write is untouched.
+// StopFailure an empty err (failed-unknown), and the hookstate write is untouched. That holds for the Stop arm because
+// its program is all-or-nothing: a jq without Oniguruma does not refuse a program up front, it fails at the first
+// regex call at RUNTIME, so a program that printed the count first would leave bg N beside empty kinds and ids. The
+// arm emits its three lines only together, and the stand-in below fails the way the real jq does, at runtime.
 describe('the payload parse needs no regex engine', () => {
-  /** A jq that refuses any program naming a regex builtin, as one built without Oniguruma does, and runs the real
-   *  jq for everything else. `*sub\(*` covers `gsub(` too. */
+  /** A jq stand-in for one built without Oniguruma. It RUNS the real jq, with the program prefixed by definitions
+   *  that shadow every regex builtin with one that raises, so the program executes up to its first regex call and
+   *  then fails with status 5, exactly as the real failure looks (an up-front refusal would hide a program that
+   *  prints before it fails). The program is the first non-option argument; `--arg`, `--argjson` and the other
+   *  two-value options carry a name and a value that are not it. */
   const noRegexJq = (): void => {
     const real = execFileSync('bash', ['-c', 'command -v jq'], { encoding: 'utf8' }).trim();
+    const raise = 'error("jq was compiled without ONIGURUMA regex library")';
+    const defs = [
+      'test(a)', 'test(a; b)', 'match(a)', 'match(a; b)', 'capture(a)', 'capture(a; b)', 'scan(a)', 'scan(a; b)',
+      'splits(a)', 'splits(a; b)', 'split(a; b)', 'sub(a; b)', 'sub(a; b; c)', 'gsub(a; b)', 'gsub(a; b; c)',
+    ].map((d) => `def ${d}: ${raise}; `).join('');
     fs.writeFileSync(path.join(home, 'bin', 'jq'), [
       '#!/bin/bash',
-      'for a in "$@"; do',
-      '  case "$a" in',
-      '    *test\\(*|*match\\(*|*capture\\(*|*scan\\(*|*splits\\(*|*sub\\(*)',
-      '      echo "jq: error: jq was compiled without ONIGURUMA regex library" >&2; exit 5 ;;',
-      '  esac',
+      `defs='${defs}'`,
+      'args=(); seen=0',
+      'while (($#)); do',
+      '  a="$1"; shift',
+      '  if ((seen == 0)); then',
+      '    case "$a" in',
+      '      --arg|--argjson|--slurpfile|--rawfile) args+=("$a" "$1" "$2"); shift 2; continue ;;',
+      '      -*) args+=("$a"); continue ;;',
+      '      *) args+=("$defs$a"); seen=1; continue ;;',
+      '    esac',
+      '  fi',
+      '  args+=("$a")',
       'done',
-      `exec '${real}' "$@"`,
+      `exec '${real}' "\${args[@]}"`,
       '',
     ].join('\n'), { mode: 0o755 });
   };
 
-  it('CONTROL: the stand-in refuses a regex program and runs a plain one', () => {
+  it('CONTROL: the stand-in fails a regex program at runtime, runs a plain one, and prints what a program emitted before its regex call', () => {
     noRegexJq();
     const jq = (prog: string) => spawnSync('jq', ['-n', prog], { encoding: 'utf8', env: hookEnv({}) });
     expect(jq('"a" | test("a")').status).toBe(5);
     expect(jq('"a" | gsub("a"; "b")').status).toBe(5);
     expect(jq('"a" | explode | implode').stdout.trim()).toBe('"a"');
+    // Runtime fidelity: the first value is printed, THEN the regex call fails. An up-front refusal prints nothing.
+    const partial = jq('1, ("a" | test("a"))');
+    expect(partial.stdout.trim()).toBe('1');
+    expect(partial.status).not.toBe(0);
+    // The program is found after an option and the two-value options: the hook's marker writer passes `--arg`s.
+    const withArgs = spawnSync('jq', ['-cn', '--arg', 'x', 'a', '--argjson', 'n', '1', '$x | test("a")'],
+      { encoding: 'utf8', env: hookEnv({}) });
+    expect(withArgs.status).toBe(5);
   });
 
   it('with no regex engine, every main event still writes the hookstate and the marker; a Stop degrades to bg -1', () => {
