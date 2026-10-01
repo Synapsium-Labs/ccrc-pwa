@@ -956,6 +956,20 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **The scoped review** runs under the bar committed at 21:20, with class 1 as clarified at 22:50. It adds one lens
     on the live sweep. After it, #219 merges.
 
+- **2026-10-01 01:50 UTC — review 203 closed; #219 merges under the committed bar.**
+  - **The review** (37 agents, four lenses including the live-sweep lens, 0 refuted) found no behaviour finding.
+    Items 1–9 were done as ruled at every lens, and the round's "does not touch" list was respected.
+  - **The live-sweep lens, on fixtures:**
+    - neither new fork fires on a healthy box: an empty listing, a server role, `--from pwa`, or a `--from watchdog`
+      flip;
+    - the (a) refusal leaves the exit code, `update.json` and `_bak_gc` identical to the KillMode refusal, on both
+      callers;
+    - the one Linux restart call is reached only after the per-unit loop.
+  - **Five coverage/prose findings,** none meeting the bar, go to residue R11.
+  - **Ruled:** one `ccrc-update` describe group's `afterAll` cleanup hook timed out under load 33 with no failed test.
+    That is load. The worker's run of the same file in four groups had none, and every Linux CI leg is green at
+    `2555b082`. No quiet-box re-run.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
@@ -1021,6 +1035,14 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   - `_ver_verdicts`' error-rc path is untested.
   - FX-B M9 cannot red.
   - The launcher-stay line still says "unstamped".
+- **R11 (wave 8, review 203).**
+  - **F1.** The (b) case's title says "two DEGRADED lines"; one of them is a warning.
+  - **F2.** `_check_auth`'s guard-pin title and comment name the wrong mechanism: it is `|| unmeasured=1` that keeps a
+    stale ARMED out. The pin itself discriminates.
+  - **F3.** P18's comment says "all three in the removal set"; the plain file never enters it.
+  - **F4.** D-3596's "the same way" for a directory: an unreadable regular file is not skipped silently.
+  - **F5.** `_upd_sweep`'s header says a refusal's stderr "names the resolved value and the drop-in". That is false
+    for the listing refusal.
 - **R10 (wave 8, review 196; `rulings-run182-fix1.md`).**
   - **R10a (F3).** doctor's reader trims only a trailing CR. systemd discards surrounding whitespace, so `CCRC_AUTH=on `
     arms the gate while doctor PASSes it as OFF. The test pins the opposite premise. It is reachable only by a hand
