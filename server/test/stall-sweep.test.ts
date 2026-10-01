@@ -23,7 +23,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import {
   BACKLOG_HORIZON_MS, DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
-  ORPHAN_PUSH_MS, STALL_FAILED_PREFIX, stallFailedSubject,
+  FROZEN_NO_EVENT_MS, ORPHAN_PUSH_MS, STALL_FAILED_PREFIX, stallFailedSubject,
   STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
   parseStallDetail, stallDetail,
 } from '../src/coord/stall.js';
@@ -895,7 +895,7 @@ describe('sweepStalls: wiring', () => {
     writeFileSync(path.join(h.home, '.cc-sessions', 'stall-watch-live'), '');
     at(R1_AT);
     await w.tick();
-    await vi.waitFor(() => expect(operatorMail(coord)).toHaveLength(1));
+    await vi.waitFor(() => expect(operatorMail(coord)).toHaveLength(1), { timeout: 10_000 });   // load-safe; green returns at once
     expect(operatorMail(coord)[0]).toMatchObject({ toId: WORKER, runId });
   });
 
@@ -1426,5 +1426,302 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     at(BACK + DEAD_GRACE_MS);                         // the control: the arm fires, a full grace after the return
     await w.sweepStalls([], W2, gone);
     expect(reports()).toHaveLength(1);
+  });
+
+  // ── Pins: each apply branch, read and filter the lane owns, one row apiece (the mutation-table rule) ─────────────
+
+  const ORPHAN2 = 'demo-idle-cove';
+  const ORPHAN2_UUID = 'f'.repeat(36);
+  /** A run-less mail queued (never delivered) to `toId` at `at`; the clock is left at `at`. */
+  const queuedTo = (coord: CoordStore, toId: string, at0: number): number => {
+    at(at0);
+    const m = coord.insertMail({ fromId: 'demo-boss', fromUuid: 'u', toId, runId: null, kind: 'finding', subject: 'hi', body: 'b', artifacts: [] });
+    return coord.queueDelivery(m.id, toId, 'envelope').id;
+  };
+  const stuckTags = (sent: readonly PushPayload[]): (string | undefined)[] =>
+    sent.filter((p) => p.tag?.includes('-mail-stuck-')).map((p) => p.tag);
+
+  it('dark, a run-less orphan D is a shadow: nothing sent, and one run-less shadow line however many sweeps', async () => {
+    // The production path while stall-watch-w2-live is untouched: a run-less notice records no row, so the lane's
+    // warn-once is all that keeps it to one line.
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, ORPHAN, ORPHAN_UUID);
+    seedCaseD(h.home, ORPHAN, ORPHAN_UUID);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const t = tickOf(PID, [regRow(ORPHAN, ORPHAN_UUID)]);
+    at(D_AT);
+    await w.sweepStalls([fleetRow(ORPHAN)], ARMED, t);
+    at(D_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], ARMED, t);
+    expect(operatorMail(coord)).toEqual([]);
+    expect(lines(warn, `ccrc-server: stall-watch shadow orphan-d r1 ${ORPHAN} (run-less)`)).toBe(1);
+  });
+
+  it('dark, a coordinator\'s mail-stuck is a shadow: no push, and one run-less shadow line', async () => {
+    const { h, coord, w, sent } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    seedRun(coord, { program: 'demo-program' });
+    queuedTo(coord, COORD, INBOUND_AT);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const both = tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]);
+    at(IDLE_AT + MAIL_STUCK_MS);
+    await w.sweepStalls([fleetRow(WORKER), fleetRow(COORD)], ARMED, both);
+    at(IDLE_AT + MAIL_STUCK_MS + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER), fleetRow(COORD)], ARMED, both);
+    expect(stuckTags(sent)).toEqual([]);
+    expect(lines(warn, `ccrc-server: stall-watch shadow mail-stuck r1 ${COORD} (run-less)`)).toBe(1);
+  });
+
+  it('a worker\'s request-class failure is a stall: … failed: report to its COORDINATOR, never mail to itself', async () => {
+    const { h, coord, w } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedLiveState(h.home, { startedAt: STARTED_AT });
+    seedTurnMark(h.home, WORKER, { state: 'failed', event: 'StopFailure', err: 'invalid_request' });
+    at(IDLE_AT + FAILED_IDLE_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    const mail = operatorMail(coord);
+    expect(mail.map((m) => m.toId)).toEqual([COORD]);
+    expect(mail[0]!.subject.startsWith(`${STALL_REPORT_PREFIX} run ${runId} — failed:`)).toBe(true);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'failed', 2, IDLE_AT)]);
+  });
+
+  it('a coordinator\'s retry-class failure wakes it with one run-less failed: self-mail', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedLiveState(h.home, { startedAt: STARTED_AT });
+    seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, state: 'failed', event: 'StopFailure', err: 'server_error' });
+    const both = tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]);
+    at(IDLE_AT + FAILED_IDLE_MS);
+    await w.sweepStalls([fleetRow(WORKER), fleetRow(COORD)], W2, both);
+    const mail = operatorMail(coord).filter((m) => m.subject.startsWith(STALL_FAILED_PREFIX));
+    expect(mail).toHaveLength(1);
+    expect(mail[0]).toMatchObject({ toId: COORD, runId: null, kind: 'status' });
+    expect(stallRows(coord, runId)).toEqual([]);
+  });
+
+  it('a run-bound session push records its row first: a stale notice read re-fires mail-stuck, and the refused row keeps it to one push', async () => {
+    const { coord, w, sent } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    queuedTo(coord, WORKER, INBOUND_AT);
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], [...W2, 'mail-disabled'], tickOf());
+    expect(stuckTags(sent)).toHaveLength(1);
+    vi.spyOn(coord, 'runEvents').mockReturnValueOnce(coord.runEvents(runId).filter((e) => !String(e.detail).includes('mail-stuck')));
+    at(R1_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], [...W2, 'mail-disabled'], tickOf());
+    expect(stuckTags(sent)).toHaveLength(1);
+  });
+
+  // Frozen (§5.1, step 8): a turn in flight under a busy word with no main hook event for FROZEN_NO_EVENT_MS. The
+  // lane hands L1 the RAW hookstate (`stallHookFactOf`), identity and event carried, and L1 judges both.
+  const TURN_AT = IDLE_AT;
+  const FROZEN: [string, Record<string, unknown>, number, boolean][] = [
+    ['a current, non-plumbing hook event an hour old: frozen', { event: 'PreToolUse', updatedAt: TURN_AT + 60_000 }, TURN_AT + 60_000 + FROZEN_NO_EVENT_MS, true],
+    ['a plumbing event five minutes ago does not refresh the clock: frozen from the turn start', { event: 'SessionStart', updatedAt: TURN_AT + FROZEN_NO_EVENT_MS - 300_000 }, TURN_AT + FROZEN_NO_EVENT_MS, true],
+    ['another process\'s hookstate is no evidence: not frozen', { event: 'PreToolUse', updatedAt: TURN_AT + 60_000, sessionId: '2'.repeat(36) }, TURN_AT + 60_000 + FROZEN_NO_EVENT_MS, false],
+  ];
+  it.each(FROZEN)('frozen, from the raw hookstate: %s', async (_name, hook, checkAt, frozen) => {
+    const { h, coord, w } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedLiveState(h.home, { status: 'busy', statusUpdatedAt: TURN_AT, startedAt: STARTED_AT });
+    seedTurnMark(h.home, WORKER, { state: 'working', event: 'UserPromptSubmit', at: TURN_AT, turnAt: TURN_AT, stopAt: TURN_AT - 600_000 });
+    seedHookState(h.home, WORKER, { state: 'working', ...hook });
+    at(checkAt - STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER, { status: 'busy' })], W2, tickOf());
+    expect(operatorMail(coord)).toEqual([]);
+    at(checkAt);
+    await w.sweepStalls([fleetRow(WORKER, { status: 'busy' })], W2, tickOf());
+    const reports = operatorMail(coord).filter((m) => m.subject.startsWith(`${STALL_REPORT_PREFIX} run ${runId} — frozen:`));
+    expect(reports.map((m) => m.toId)).toEqual(frozen ? [COORD] : []);
+  });
+
+  it('the marker is judged against the live process: one older than the live start reads stale, so r1 keeps wave 1\'s promise', async () => {
+    const r1Body = async (startedAt: number): Promise<string> => {
+      const { h, coord, w } = await rig();
+      seedRun(coord, { program: 'demo-program' });
+      seedLiveState(h.home, { startedAt });
+      seedTurnMark(h.home, WORKER);                   // done at IDLE_AT, stop at IDLE_AT
+      at(R1_AT);
+      await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+      const check = operatorMail(coord).find((m) => m.subject.startsWith(STALL_CHECK_PREFIX));
+      if (check === undefined) throw new Error('no r1');
+      return mailBody(coord, check.id);
+    };
+    expect(await r1Body(STARTED_AT)).toContain('when your next turn ends');          // the control: a current marker
+    expect(await r1Body(IDLE_AT + 1_000)).not.toContain('when your next turn ends'); // older than the live process
+  });
+
+  it('a malformed hookstate is no ask: a waiting pane with a version-skewed question file is 2b, one dialog-cap push at 2 h', async () => {
+    // The lane successor of the deleted unaged door's "a malformed ask is no-state" row (rulings Q3).
+    const { h, coord, w, sent } = await rig();
+    seedLiveState(h.home, { status: 'waiting' });
+    seedHookState(h.home, WORKER, { v: 2, updatedAt: IDLE_AT - 5_000, ask: { questions: [{ question: 'Which lane?', options: [{ label: 'a' }] }] } });
+    const runId = seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
+    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${KEY}`]);
+  });
+
+  it('hold 2a\'s identity cut, its other half: a question file with no registry row behind it is no ask, so the dialog-cap push goes out', async () => {
+    // The unregistered half of the deleted unaged door's identity row (rulings Q3). The worker has a fleet row and a
+    // pid, but the tick carries no registry record for it, so the raw read reports `unregistered`.
+    const { h, coord, w, sent } = await rig();
+    seedLiveState(h.home, { status: 'waiting' });
+    seedHookState(h.home, WORKER, { updatedAt: IDLE_AT - 5_000, ask: { questions: [{ question: 'Which lane?', options: [{ label: 'a' }] }] } });
+    const runId = seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, { panePids: new Map([[WORKER, PID]]), records: [] });
+    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${KEY}`]);
+  });
+
+  it('a run worker that also claims a run is judged once, as a worker: one mail-stuck push per delivery, never a second run-less one', async () => {
+    const { coord, w, sent } = await rig();
+    seedRun(coord, { program: 'demo-program' });
+    // A child run the worker coordinates (nested programmes): the worker is a claimant as well.
+    at(DISPATCHED_AT);
+    const child = coord.openRun({ program: 'prog-child', title: 'prog-child', project: 'demo', wave: 1, waveOf: 1, claimedBy: WORKER });
+    if (!('id' in child)) throw new Error(`openRun refused: ${JSON.stringify(child)}`);
+    coord.markDispatched(child.id, OTHER_WORKER, `${OTHER_WORKER}-ws`, `ws/${OTHER_WORKER}`, false, DISPATCHED_AT);
+    expect(coord.advance(child.id, 'dispatched', 'coordinator').ok).toBe(true);
+    queuedTo(coord, WORKER, INBOUND_AT);
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], [...W2, 'mail-disabled'], tickOf());
+    expect(stuckTags(sent)).toHaveLength(1);
+  });
+
+  it('a coordinator whose store read throws warns once and does not stop the registry rows after it', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    seedRegistry(h.home, ORPHAN, ORPHAN_UUID);
+    seedRun(coord, { program: 'demo-program' });
+    seedCaseD(h.home, ORPHAN, ORPHAN_UUID);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const real = coord.stallMailFor.bind(coord);
+    vi.spyOn(coord, 'stallMailFor').mockImplementation((id, runIds, sinceAt) => {
+      if (id === COORD) throw new Error('boom');
+      return real(id, runIds, sinceAt);
+    });
+    at(D_AT);
+    await w.sweepStalls([fleetRow(WORKER), fleetRow(COORD), fleetRow(ORPHAN)], W2,
+      tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID), regRow(ORPHAN, ORPHAN_UUID)]));
+    expect(lines(warn, `ccrc-server: stall-watch coordinator ${COORD} failed (boom)`)).toBe(1);
+    expect(orphanedTo(coord, ORPHAN)).toHaveLength(1);
+  });
+
+  it('a registry row whose store read throws warns once and does not stop the next row', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, ORPHAN, ORPHAN_UUID);
+    seedRegistry(h.home, ORPHAN2, ORPHAN2_UUID);
+    seedCaseD(h.home, ORPHAN, ORPHAN_UUID);
+    seedCaseD(h.home, ORPHAN2, ORPHAN2_UUID);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const real = coord.stallMailFor.bind(coord);
+    vi.spyOn(coord, 'stallMailFor').mockImplementation((id, runIds, sinceAt) => {
+      if (id === ORPHAN) throw new Error('boom');
+      return real(id, runIds, sinceAt);
+    });
+    at(D_AT);
+    await w.sweepStalls([fleetRow(ORPHAN), fleetRow(ORPHAN2)], W2,
+      tickOf(PID, [regRow(ORPHAN, ORPHAN_UUID), regRow(ORPHAN2, ORPHAN2_UUID)]));
+    expect(lines(warn, `ccrc-server: stall-watch session ${ORPHAN} failed (boom)`)).toBe(1);
+    expect(orphanedTo(coord, ORPHAN2)).toHaveLength(1);
+  });
+
+  it('the marker clock is pruned with the coordinator: off the candidates for one sweep, its return waits a full MARKER_UNREADABLE_MS', async () => {
+    const { h, coord, w, sent } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    seedRun(coord, { program: 'demo-program' });
+    writeFileSync(path.join(h.home, '.cc-sessions', `${COORD}.turn.json`), '{');   // malformed
+    const both = tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]);
+    const sessions = [fleetRow(WORKER), fleetRow(COORD)];
+    const markerTags = (): (string | undefined)[] => sent.filter((p) => p.title.startsWith('⚠ marker')).map((p) => p.tag);
+    at(IDLE_AT);
+    await w.sweepStalls(sessions, W2, both);           // first seen unreadable
+    vi.spyOn(coord, 'stallCandidates').mockReturnValueOnce({ ok: true, runs: [] });
+    at(IDLE_AT + STALL_SWEEP_MS);
+    await w.sweepStalls(sessions, W2, both);           // no runs: it is no coordinator, and its clock is pruned
+    const BACK = IDLE_AT + 2 * MARKER_UNREADABLE_MS;
+    at(BACK);
+    await w.sweepStalls(sessions, W2, both);
+    at(BACK + MARKER_UNREADABLE_MS - STALL_SWEEP_MS);
+    await w.sweepStalls(sessions, W2, both);
+    expect(markerTags()).toEqual([]);
+    at(BACK + MARKER_UNREADABLE_MS);                   // the control: the arm fires, keyed on the return
+    await w.sweepStalls(sessions, W2, both);
+    expect(markerTags()).toEqual([`stall-${COORD}-marker-unreadable-1-${BACK}`]);
+  });
+
+  it('the run-less push latch lives while its row is in the registry: a row that leaves and comes back may push once more', async () => {
+    // The latch is bounded memory, never a durable record (slug `run-less-push-latches-are-in-memory`).
+    const { h, w, sent } = await rig();
+    seedRegistry(h.home, ORPHAN, ORPHAN_UUID);
+    seedCaseD(h.home, ORPHAN, ORPHAN_UUID);
+    const t = tickOf(PID, [regRow(ORPHAN, ORPHAN_UUID)]);
+    const PUSH_AT = D_AT + ORPHAN_PUSH_MS;
+    at(D_AT);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, t);
+    at(PUSH_AT);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, t);
+    at(PUSH_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, t);
+    expect(sent).toHaveLength(1);                       // latched
+    at(PUSH_AT + 2 * STALL_SWEEP_MS);
+    await w.sweepStalls([], W2, tickOf(PID, []));       // the row is gone: its latch entry is pruned
+    at(PUSH_AT + 3 * STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, t);
+    expect(sent.map((p) => p.tag)).toEqual([`orphaned-${ORPHAN}-${RESTART_AT}`, `orphaned-${ORPHAN}-${RESTART_AT}`]);
+  });
+
+  it('the warn-once keys live while their row is in the registry: a row that leaves and comes back warns once more', async () => {
+    const { h, w } = await rig();
+    seedRegistry(h.home, ORPHAN, ORPHAN_UUID);
+    seedCaseD(h.home, ORPHAN, ORPHAN_UUID);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const t = tickOf(PID, [regRow(ORPHAN, ORPHAN_UUID)]);
+    const line = `ccrc-server: stall-watch shadow orphan-d r1 ${ORPHAN} (run-less)`;
+    at(D_AT);
+    await w.sweepStalls([fleetRow(ORPHAN)], ARMED, t);
+    at(D_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], ARMED, t);
+    expect(lines(warn, line)).toBe(1);
+    at(D_AT + 2 * STALL_SWEEP_MS);
+    await w.sweepStalls([], ARMED, tickOf(PID, []));    // the row is gone: its warn-once key is pruned
+    at(D_AT + 3 * STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], ARMED, t);
+    expect(lines(warn, line)).toBe(2);
+  });
+
+  it('the mail read is bounded below: a delivery queued 25 h before r1 and never delivered draws no mail-stuck (worker or coordinator)', async () => {
+    // `stall-mail-read-time-bounded`: the lane reads back BACKLOG_HORIZON_MS, so this delivery is out of every read.
+    const { h, coord, w, sent } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    const runId = seedRun(coord, { program: 'demo-program' });
+    queuedTo(coord, WORKER, R1_AT - 25 * 3_600_000);
+    queuedTo(coord, COORD, R1_AT - 25 * 3_600_000);
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER), fleetRow(COORD)], W2, tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]));
+    expect(stuckTags(sent)).toEqual([]);
+    expect(stallRows(coord, runId).filter((d) => d.includes('mail-stuck'))).toEqual([]);
+    expect(operatorMail(coord).filter((m) => m.subject.startsWith(STALL_CHECK_PREFIX))).toHaveLength(1);   // the control: the sweep judged
+  });
+
+  it('every mail read starts BACKLOG_HORIZON_MS back, at all three call sites (worker, coordinator, registry row)', async () => {
+    // A registry row's read can show no effect of its lower bound (its self-mail always follows the restart the
+    // verdict bounds), so this row reads the argument each site hands the store.
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    seedRegistry(h.home, ORPHAN, ORPHAN_UUID);
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedCaseD(h.home, ORPHAN, ORPHAN_UUID);
+    const spy = vi.spyOn(coord, 'stallMailFor');
+    at(D_AT);
+    await w.sweepStalls([fleetRow(WORKER), fleetRow(COORD), fleetRow(ORPHAN)], W2,
+      tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID), regRow(ORPHAN, ORPHAN_UUID)]));
+    expect(spy.mock.calls).toEqual([
+      [WORKER, [runId], D_AT - BACKLOG_HORIZON_MS],
+      [COORD, [], D_AT - BACKLOG_HORIZON_MS],
+      [ORPHAN, [], D_AT - BACKLOG_HORIZON_MS],
+    ]);
   });
 });
