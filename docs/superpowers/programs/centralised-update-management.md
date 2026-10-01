@@ -904,6 +904,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         only because the dir it pruned was smaller than the new one.
       - The server box printed the zero sweep line again.
       - STATUS: fleet and server v0.0.55, newest v0.0.55, backups fleet 122M/server 446M, no anomalies.
+    - **2026-10-01 13:18 UTC — auto moved both boxes onto v0.0.57, skipping v0.0.56 by design.**
+      - v0.0.56 was published at 12:24:08 and v0.0.57 at 12:25:13.
+      - The fleet box ran 12:41:46–12:48:04, and the server box 12:48:29–12:48:50.
+      - One auto-source feed row per box. Each box holds 10 timestamped backups and five versions.
+      - STATUS: fleet and server v0.0.57, newest v0.0.57, backups fleet 122M/server 450M, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
