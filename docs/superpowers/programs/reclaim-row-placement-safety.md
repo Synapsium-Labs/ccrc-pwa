@@ -17,7 +17,7 @@ automatic deletion.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **working, fix round 2** — review run 213 closed `done` on `81a2158e` with five minor findings and one wording ruling; fix-round mail 3036 sent 2026-10-01; a final review reads the next wave-done |
+| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **awaiting-review** — fix round 2 answered review 213 at `4d0070ba` (fingerprint accepted 2026-10-01); final review run 214 dispatched to `ccrc-pwa-warm-harbor` |
 
 **Deviation block: sixteen numbers, the first of them 3731** (allocated exactly once at run 208 open,
 2026-10-01; floor now 3747). The finalized plan defines the first as
@@ -134,6 +134,12 @@ a measured departure is defined in that plan; unused headroom remains unrendered
     entry once its session has ended. Fix round 2 restores that wording, says never to create a directory in a
     link's place, and pins the instruction positively. Shipping guidance that a reviewer measured as unsafe to
     follow was not accepted in exchange for an earlier merge.
+- **2026-10-01 — fix round 2 accepted for its final review.** Mail 3041 claimed `4d0070ba3b9ad469d97532c4d1b3d0c58cb7cec1`
+  (two commits over `81a2158e`, `origin/main` unchanged). Re-measured: remote, worker and PR #226 heads equal it, the
+  tree is clean, the diff stays inside claim 871, `ccd/ccd` passes the marker check and `bash -n`, and its only
+  non-comment change is the `unres` remedy string, which now says to restore a link to its original target and
+  never to create a directory in a link's place. No new issued number is rendered. Review run 214 reads it with the
+  same panel and SAFETY lens.
 
 ## Carried constraints
 
