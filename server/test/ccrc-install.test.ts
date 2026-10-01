@@ -5288,6 +5288,82 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(existsSync(join(home, '.ccrc', 'auth.scrypt'))).toBe(false);
   });
 
+  // ── wave 8 item G, D-3598: the gate line follows the FILE too ────────────
+  // A fresh install cannot say "no passphrase" honestly on a box that already
+  // has one — a re-run over an already-passworded, already-exposed box lands
+  // here too. The file is resolved through `_box_auth_path`, the flag through
+  // `_box_unit_env`. With a passphrase file, an exposure file that cannot be
+  // read prints "not measured"; otherwise a measured CCRC_AUTH=on, from
+  // either file with the later one winning, names the file that decides, and
+  // so does the OFF remedy — it names ccrc.env by default, or the exposure
+  // file when that is the one that would arm it. With no passphrase file, a
+  // measured CCRC_AUTH=on names the file that decides too; every other case —
+  // including an exposure file that sets CCRC_AUTH to anything but on, or one
+  // that cannot be read — prints main's else-arm line unchanged, naming
+  // ccrc.env.
+  const gateLine = (out: string): string => out.split('\n').find((l) => l.startsWith('install: gate: ')) ?? '';
+
+  it('G2b: a passphrase file at the default path with the flag OFF — "a PWA passphrase file is at", and the OFF remedy names ccrc.env', () => {
+    const home = freshBox('ccrc-install-gate-file-off-');
+    preexisting(home, 'auth.scrypt', 'fixture-not-a-real-secret\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toContain('a PWA passphrase file is at');
+    expect(line).toContain(join(home, '.ccrc', 'auth.scrypt'));
+    expect(line).toContain('the gate is OFF');
+    expect(line).toContain(join(home, '.ccrc', 'ccrc.env'));
+    expect(line).not.toContain('NO PWA passphrase');
+  });
+
+  it('G2c: an absolute CCRC_AUTH_SECRET_PATH, with the file present there and absent at the default — the present arm, naming the redirected path', () => {
+    const home = freshBox('ccrc-install-gate-redirect-');
+    const elsewhere = join(home, 'secrets', 'gate.scrypt');
+    mkdirSync(join(home, 'secrets'), { recursive: true });
+    writeFileSync(elsewhere, 'fixture-not-a-real-secret\n');
+    preexisting(home, 'ccrc.env', `CCRC_AUTH_SECRET_PATH=${elsewhere}\n`);
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toContain('a PWA passphrase file is at');
+    expect(line).toContain(elsewhere);
+    expect(line).not.toContain(join(home, '.ccrc', 'auth.scrypt'));
+  });
+
+  it('G2d: a RELATIVE CCRC_AUTH_SECRET_PATH — install cannot say whether this box has a passphrase', () => {
+    const home = freshBox('ccrc-install-gate-relative-');
+    preexisting(home, 'ccrc.env', 'CCRC_AUTH_SECRET_PATH=secrets/gate.scrypt\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toMatch(/RELATIVE \(secrets\/gate\.scrypt\)/);
+    expect(line).toContain('make it absolute');
+    expect(line).toContain("ccrc doctor's auth check");
+  });
+
+  it('G2e: a passphrase present and the exposure file CCRC_AUTH=on — names the file that decided it, and never says "armed"', () => {
+    const home = freshBox('ccrc-install-gate-exp-on-');
+    preexisting(home, 'auth.scrypt', 'fixture-not-a-real-secret\n');
+    preexisting(home, 'exposure.env', 'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH=on\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    // Anchored at the START — the OFF branch's own remedy text ALSO contains
+    // the substring "CCRC_AUTH=on in <exposure file>" (its arming words), so
+    // an unanchored `.toContain` cannot tell the ARMED line from the OFF
+    // line's own next-steps text.
+    expect(line, r.stdout).toMatch(
+      new RegExp(`^install: gate: CCRC_AUTH=on in ${join(home, '.ccrc', 'exposure.env').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, and a PWA passphrase file is at `));
+    expect(line).not.toContain('the gate is OFF');
+    expect(line).not.toContain('armed');
+  });
+
+  it('G2f: no passphrase file and the exposure file CCRC_AUTH=on — failing SHUT, no "To arm the gate"', () => {
+    const home = freshBox('ccrc-install-gate-exp-shut-');
+    preexisting(home, 'exposure.env', 'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH=on\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toContain('the gate is failing SHUT');
+    expect(line).toContain(`CCRC_AUTH=on in ${join(home, '.ccrc', 'exposure.env')}`);
+    expect(line).not.toContain('To arm the gate');
+  });
+
   it('reads the PWA address back out of the env file it installed', () => {
     // ONE SOURCE OF TRUTH, and the case that makes it matter: an operator whose
     // `ccrc.env` says something other than the default. That file is

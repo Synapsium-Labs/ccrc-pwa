@@ -196,8 +196,10 @@ describe('resolveAndProject — every live node resolved and stored; the server 
     expect([...resolveInputFor(f.store, f.store.node(FLEET_ID)!).refusedByThisNode]).toEqual(['v0.0.11']);
     await resolveAndProject(f.deps, Date.now());
     expect(f.store.node(SERVER_LABEL)!.desiredTag).toBe('v0.0.11');
+    // Wave 8 item F1 (D-3590): current === newest === floor here (FLEET_ID runs v0.0.10, its own floor, and
+    // v0.0.11 is refused by this node — its own newest eligible is v0.0.10) — the atNewest sentence, on `stable`.
     expect(f.store.node(FLEET_ID)).toMatchObject({
-      desiredTag: null, resolveDetail: RESOLVE_DETAIL.notNewerThanFloor('v0.0.10', 'v0.0.10'),
+      desiredTag: null, resolveDetail: RESOLVE_DETAIL.atNewest('v0.0.10', 'stable'),
     });
   });
 

@@ -76,6 +76,7 @@ import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { runDispatch, type DispatchRunResult } from './update/converge.js';
+import type { MoveFeedRecord } from './update/dispatch.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
@@ -1068,7 +1069,18 @@ export class FleetWatcher {
       fleet: sendUpdateOp !== undefined && fleetState !== undefined ? { state: fleetState, send: sendUpdateOp } : null,
       runLocal: updateRunner ?? null,
       onAccepted: () => this.triggerInventory(),
+      recordMove: (r) => { this.recordMoveFeed(r); },
     }, Date.now());
+  }
+
+  /** Wave 8 item A: a move's audit row, through pushOne's own record path (the ring, its flush, and the durable feed
+   *  archive behind its guarded `recordFeedEvent`). Never a push (`recordOnly`), never gated on presence
+   *  (`recordAlways`); about no session and no run. It decides nothing. */
+  private recordMoveFeed(r: MoveFeedRecord): void {
+    this.pushOne({
+      kind: 'update', sessionId: '', project: '', title: r.title, body: r.body, runId: null,
+      recordAlways: true, recordOnly: true,
+    }, this.activeProjects);
   }
 
   /** C3 (final fix wave): D-3211 says a node-id collision "is named", but the
