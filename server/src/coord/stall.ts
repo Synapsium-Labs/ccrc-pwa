@@ -1131,7 +1131,9 @@ export function stallCheckMail(input: StallInput, facts: StallFacts, now: number
   const last = stallDelivery('coordinator', input.arming) === 'shadow'
     ? STALL_UNARMED_LINE
     : proofBound
-      ? `No mail from you on run ${id}: the ${direct ? 'operator' : 'coordinator'} is told when your next turn ends without one, and by ${stallDeadline(now + STALL_BOUND_MS)} at the latest.`
+      // §4.2: the operator hears STALL_OPERATOR_MS after the coordinator (r3 at r2 + 1 h), so a coordinator line says
+      // so; a direct line already names the operator (final fix wave, E2E-5).
+      ? `No mail from you on run ${id}: the ${direct ? 'operator' : 'coordinator'} is told when your next turn ends without one, and by ${stallDeadline(now + STALL_BOUND_MS)} at the latest${direct ? '' : `; the operator ${STALL_OPERATOR_MS / 3_600_000} h after that`}.`
       : direct
         ? `No mail from you on run ${id} by ${stallDeadline(toCoordinator)}: the operator is told.`
         : `No mail from you on run ${id} by ${stallDeadline(toCoordinator)}: the coordinator is told. By ${stallDeadline(toOperator)}: the operator.`;

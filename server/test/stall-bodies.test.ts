@@ -940,11 +940,11 @@ describe('wave 2 operator pushes: stallPushText (run verdict) and stallSessionPu
 
 describe('r1: the proof-bound line (planning departure r1-body-names-the-proof-bound)', () => {
   const lastLine = (input: StallInput): string | undefined => stallCheckMail(input, stallFacts(input), R1_AT).body.split('\n').at(-1);
-  it('marker rules armed, the marker reading, escalation armed: the coordinator is told at the next turn end, and by r1 + 3 h', () => {
+  it('marker rules armed, the marker reading, escalation armed: the coordinator is told at the next turn end, and by r1 + 3 h; the operator 1 h after that (§4.2)', () => {
     expect(lastLine(s4({ arming: W2_ARMED, w2: w2Of() })))
-      .toBe('No mail from you on run 67: the coordinator is told when your next turn ends without one, and by 02:57Z at the latest.');
+      .toBe('No mail from you on run 67: the coordinator is told when your next turn ends without one, and by 02:57Z at the latest; the operator 1 h after that.');
   });
-  it('paused, or with no claimant, it names the operator', () => {
+  it('paused, or with no claimant, it names the operator, and adds no later rung (the operator is the one told)', () => {
     const operatorLine = 'No mail from you on run 67: the operator is told when your next turn ends without one, and by 02:57Z at the latest.';
     expect(lastLine(s4({ arming: W2_ARMED, w2: w2Of(), coordinationPaused: true }))).toBe(operatorLine);
     expect(lastLine(s4({ arming: W2_ARMED, w2: w2Of() }, { ...run67, claimedBy: null }))).toBe(operatorLine);
@@ -1318,7 +1318,7 @@ describe('wave 2 texts: every remaining branch and sanitising call site has a ro
       // that stamp, `stallVerdict` sends r1 on the marker clock, and the body must promise what that ladder does.
       const interrupted = s4({ arming: W2_ARMED, w2: w2Of({ mark: markOf({ state: 'working', event: 'PostToolUse', at: T('2026-09-28T20:00:00Z'), turnAt: T('2026-09-28T20:00:00Z'), stopAt: null, bg: -1, bgKinds: [], bgIds: [] }) }) });
       expect(stallVerdict(interrupted, R1_AT)).toEqual({ act: 'notify', arm: 'quiet', rung: 1, key: EPISODE, to: 'worker' });
-      expect(lastOf(interrupted)).toBe('No mail from you on run 67: the coordinator is told when your next turn ends without one, and by 02:57Z at the latest.');
+      expect(lastOf(interrupted)).toBe('No mail from you on run 67: the coordinator is told when your next turn ends without one, and by 02:57Z at the latest; the operator 1 h after that.');
     });
   });
 });
