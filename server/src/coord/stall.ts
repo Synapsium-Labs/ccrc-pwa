@@ -1522,12 +1522,19 @@ export function stallOrphanEVerdict(input: StallSessionInput, now: number): Stal
   return stallMailDisabledHold(stallOrphanEInner(input, now), input.arming);
 }
 
+/** A run worker's `failed` rung-1 notices keyed inside `[stopAt - FAILED_REPEAT_MS, stopAt)`, live or shadow: the
+ *  failures before this one in the repeat window. The verdict counts them, and the repeat report reads their modes. */
+function stallPriorFailedNotices(input: StallSessionInput, stopAt: number): StallNotice[] {
+  const from = stopAt - FAILED_REPEAT_MS;
+  return input.notices.filter((n) => n.arm === 'failed' && n.rung === 1 && n.key >= from && n.key < stopAt);
+}
+
 /** Was there a failure BEFORE this one inside `[stopAt - FAILED_REPEAT_MS, stopAt)`? For a run worker: a `failed`
  *  rung-1 notice keyed in that window, live or shadow (either one records that the failure happened). For a run-less
  *  session: a `failed:` self-mail from the watch, sent in that window under another subject. */
 function stallPriorFailure(input: StallSessionInput, stopAt: number, subject: string): boolean {
   const from = stopAt - FAILED_REPEAT_MS;
-  if (stallRunBound(input)) return input.notices.some((n) => n.arm === 'failed' && n.rung === 1 && n.key >= from && n.key < stopAt);
+  if (stallRunBound(input)) return stallPriorFailedNotices(input, stopAt).length > 0;
   return input.mail.some((m) => m.fromId === STALL_SENDER && m.toId === input.sessionId && m.subject.startsWith(STALL_FAILED_PREFIX)
     && m.subject !== subject && m.at >= from && m.at < stopAt);
 }
@@ -1740,12 +1747,19 @@ function stallFailedReportMail(input: StallSessionInput, err: string, because: '
   const run = input.run;
   if (run === null) throw new RangeError('stallSessionMail: a failed report names its run, and this session is on none');
   const e = stallSafe(err);
+  // Final fix wave, TRI-6: "told" only when a first failure's rung 1 went out live. A shadow row records the failure
+  // and sent nothing (it stands while the self-mail is unarmed), so the report names when that failure was recorded.
+  const priors = stallPriorFailedNotices(input, stopAt);
+  const first = priors.reduce<StallNotice | null>((f, n) => (f === null || n.key < f.key ? n : f), null);
+  const toldLine = priors.some((n) => n.mode === 'live')
+    ? 'It was told to retry once after the first.'
+    : first === null ? 'It was not told to retry.' : `A first failure was recorded at ${stallUtcSec(first.key)} in shadow, so it was not told to retry.`;
   return {
     subject: stallW2ReportSubject(run, 'failed', `${e} ${because === 'repeat' ? 'twice' : 'request error'} at ${stallUtc(stopAt)}`),
     body: [
       stallReportHead(run),
       because === 'repeat'
-        ? `${stallWorkerRef(run)}: its turn ended on an API error (${e}) at ${stallUtcSec(stopAt)}, its second retryable failure within ${stallSpan(FAILED_REPEAT_MS)}. It was told to retry once after the first.`
+        ? `${stallWorkerRef(run)}: its turn ended on an API error (${e}) at ${stallUtcSec(stopAt)}, its second retryable failure within ${stallSpan(FAILED_REPEAT_MS)}. ${toldLine}`
         : `${stallWorkerRef(run)}: its turn ended on an API error (${e}) at ${stallUtcSec(stopAt)}. A retry fails the same way, so it was not told to retry.`,
       `Ack this and act once: mail the worker what to do instead, or mail it a subject beginning "${STALL_WAIT_PREFIX}" naming what it waits for.`,
     ].join('\n'),
