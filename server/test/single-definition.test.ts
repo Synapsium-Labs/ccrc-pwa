@@ -2281,7 +2281,7 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // split. So the expected shape here is a NAMED LIST rather than one file —
     // and any new holder still fails.
     //
-    // Two of the four are not marker literals at all: `'mail-disabled'` is also
+    // Two of the five are refusal codes, not marker literals: `'mail-disabled'` is also
     // a `RunRefuseCode` member, so `shared/api.ts` (the vocabulary) and
     // `coord/dispatch.ts` (the refusal that uses it) spell the same characters
     // for a different reason. Listing them here is the honest shape — a scan
@@ -2289,7 +2289,7 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'mail-disabled'")).map(rel).sort();
     expect(holders).toEqual([
       'server/src/coord/dispatch.ts',   // the refusal CODE
-      'server/src/coord/rundefs.ts',    // the marker literal (definition)
+      'server/src/coord/rundefs.ts', 'server/src/coord/stall.ts', // the marker literal (definition); stall.ts: the hold named for the marker it honours
       'server/src/watch.ts',            // the marker literal (module-local, on purpose)
       'shared/api.ts',                  // the refusal-code vocabulary
     ]);
@@ -4120,4 +4120,35 @@ describe('worker stall watch: the wave-done subject is spelled once (spec §4.2 
   it.each(LITERALS)("'%s' is spelled on a code line in %s alone", (lit, home) => {
     expect(ALL.filter((f) => spelling(lit).test(stallCode(f))).map(rel).sort(), `a second '${lit}'`).toEqual([home]);
   });
+});
+
+// WORKER STALL WATCH, WAVE 2 (design 2026-09-29 §5.2). APPENDED after the last describe, for the reason the wave-1
+// blocks above state: `session-hook.test.ts`'s citation audit cites this file by line. The two self-wake prefixes
+// join the spelled-once set: a second quoted copy is a second classifier (`stallMailClass`'s `self-wake`) in waiting.
+// The needle is quote-anchored at both ends, as ONE_HOME's is, so the update lane's `failed: deadline` prose and a
+// backticked docstring mention are not copies. KNOWN WIDTH: a copy in backticks, or at the head of a longer
+// literal, is not seen.
+describe('the stall watch spells its wave-2 self-wake prefixes once (design 2026-09-29 §5.2)', () => {
+  const quotedW2 = (needle: string): RegExp => {
+    const escaped = needle.replace(/[.*+?^$()|[\]\\{}]/g, (c) => `\\${c}`);
+    return new RegExp(`(['"])${escaped}\\1`);
+  };
+  const ONE_HOME_W2: ReadonlyArray<readonly [string, string]> = [
+    ['orphaned:', 'server/src/coord/stall.ts'],
+    ['failed:', 'server/src/coord/stall.ts'],
+  ];
+
+  it('CONTROL: the needle finds a bare quoted prefix in either quote, never a longer literal or a backticked mention', () => {
+    expect(quotedW2('failed:').test(`x = 'failed:'`)).toBe(true);
+    expect(quotedW2('failed:').test(`x = "failed:"`)).toBe(true);
+    expect(quotedW2('failed:').test(`detail: 'failed: deadline'`)).toBe(false);
+    expect(quotedW2('orphaned:').test('a docstring naming `orphaned:`')).toBe(false);
+  });
+
+  for (const [needle, home] of ONE_HOME_W2) {
+    it(`'${needle}' is a quoted literal in exactly one source file, ${home}`, () => {
+      const holders = ALL.filter((f) => quotedW2(needle).test(readFileSync(f, 'utf8'))).map(rel);
+      expect(holders).toEqual([home]);
+    });
+  }
 });

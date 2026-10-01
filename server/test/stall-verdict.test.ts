@@ -14,6 +14,8 @@ import type {
   StallNotice, StallR3Cause, StallRunRow, StallSubject, StallVerdict, StallWorker,
 } from '../src/coord/stall.js';
 import { REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT } from '../../shared/api.js';
+import { STALL_FAILED_PREFIX, STALL_ORPHANED_PREFIX } from '../src/coord/stall.js';
+import type { StallW2Facts } from '../src/coord/stall.js';
 
 const H = 3_600_000;
 const MIN = 60_000;
@@ -748,5 +750,34 @@ describe('the verdict kebab words are declared for the coord kebab scan', () => 
     });
   it('and still rejects a typo', () => {
     expect(isStallKebab('coordinator-deaad')).toBe(false);
+  });
+});
+
+// ── Wave 2's vocabulary in the facts (plan Task 10) ──────────────────────────────────────────────────────────
+describe('wave 2 vocabulary: a self-wake notice is the watch’s own, never mail on the run', () => {
+  const selfWake = (subject: string): StallMailRow => mailRow(3000, NOW - H, 'operator', WORKER, 'status', subject);
+  it.each([
+    `${STALL_ORPHANED_PREFIX} your background subagent ended at 2026-09-29T10:50Z without waking you`,
+    `${STALL_FAILED_PREFIX} your turn ended on an API error (server_error) at 2026-09-29T10:50Z`,
+  ])('%s moves neither the quiet clock, the inbound mail nor the episode key', (subject) => {
+    const input = stallInput({ mail: [selfWake(subject)] });
+    expect(stallFacts(input)).toEqual(stallFacts(stallInput()));
+    expect(stallVerdict(input, NOW)).toEqual(r1(RUN67_DISPATCHED));
+  });
+  it('CONTROL: the same subject from a coordinator is inbound mail, and it restarts the quiet clock', () => {
+    const input = stallInput({ mail: [mailRow(3000, NOW - H, COORD, WORKER, 'status', `${STALL_FAILED_PREFIX} x`)] });
+    expect(stallFacts(input).inboundLast?.id).toBe(3000);
+    expect(stallVerdict(input, NOW)).toEqual(NONE);
+  });
+  it('w2-facts-separate-object: a w2 fact set changes nothing wave 1 derives', () => {
+    const w2: StallW2Facts = {
+      mark: { ok: false, reason: 'absent' }, hook: { ok: false, reason: 'absent' }, deliveries: [],
+      absentSince: null, deadSince: null, markUnreadableSince: null,
+    };
+    expect(stallFacts({ ...stallInput(), w2 })).toEqual(stallFacts(stallInput()));
+  });
+  it('a run-less mail row is a StallMailRow (runId null)', () => {
+    const row: StallMailRow = { ...mailRow(3001, NOW - H, PEER, WORKER), runId: null };
+    expect(row.runId).toBeNull();
   });
 });

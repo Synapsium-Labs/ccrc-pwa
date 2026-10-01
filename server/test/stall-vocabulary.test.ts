@@ -19,6 +19,15 @@ import {
   RESTART_GRACE_MS, TURN_MARK_STATES, turnMarkGraceUntil, turnMarkStale,
   type StallArming, type StallBind, type StallRunRow,
 } from '../src/coord/stall.js';
+import {
+  STALL_ORPHANED_PREFIX, STALL_FAILED_PREFIX, STOP_FAILURE_ERRORS, STALL_WAKE_KINDS, STALL_RESUMING_KINDS, STALL_PLUMBING_EVENTS,
+  STALL_BOUND_MS, DELEGATE_WINDOW_MS, DELEGATE_CAP_MS, FROZEN_NO_EVENT_MS, DEAD_GRACE_MS, COORD_DEAF_MS, MAIL_STUCK_MS,
+  ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS, FAILED_IDLE_MS, FAILED_REPEAT_MS, CHECK_UNDELIVERED_MS, BACKLOG_HORIZON_MS,
+  ORPHAN_PUSH_MS, MARKER_UNREADABLE_MS,
+  rungRecipient, stallFailedSubject, stallFrozenSince, stallNotifyDelivery, stallOrphanDSubject, stallOrphanESubject,
+  stallDeadShaped, stallMarkUnreadable, stallReportKind, stallReportTitle, stopFailureClass,
+  type HookRawFact, type StallArm, type StallRecipient, type TurnMarkRead,
+} from '../src/coord/stall.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const T0 = 1_790_000_000_000;
@@ -50,32 +59,40 @@ describe('REVIEW_DONE_SUBJECT', () => {
 });
 
 describe('the arms, holds and markers are derived from their Records', () => {
-  it('wave 1 has four arms', () => {
-    expect(STALL_ARMS).toEqual(['quiet', 'limit-cap', 'dialog-cap', 'coord-ball']);
-  });
-  it('wave 1 has nine holds', () => {
-    expect(STALL_HOLDS).toEqual([
-      'run-unnamed', 'absent', 'unmeasured', 'lifecycle', 'ask', 'dialog', 'limit', 'busy', 'coordinator-unmeasurable',
+  it('waves 1 and 2 have twelve arms, wave 1 first', () => {
+    expect(STALL_ARMS).toEqual([
+      'quiet', 'limit-cap', 'dialog-cap', 'coord-ball',
+      'orphan-d', 'orphan-e', 'failed', 'frozen', 'dead', 'coord-deaf', 'mail-stuck', 'marker-unreadable',
     ]);
   });
-  it('the lane reads three markers', () => {
-    expect(STALL_MARKERS).toEqual(['stall-watch-disabled', 'stall-watch-live', 'stall-watch-escalate']);
+  it('waves 1 and 2 have fifteen holds, wave 1 first', () => {
+    expect(STALL_HOLDS).toEqual([
+      'run-unnamed', 'absent', 'unmeasured', 'lifecycle', 'ask', 'dialog', 'limit', 'busy', 'coordinator-unmeasurable',
+      'restart-grace', 'delegates', 'lifecycle-stopped', 'mail-disabled', 'failed-account', 'failed-unknown',
+    ]);
+  });
+  it('the lane reads four markers', () => {
+    expect(STALL_MARKERS).toEqual(['stall-watch-disabled', 'stall-watch-live', 'stall-watch-escalate', 'stall-watch-w2-live']);
   });
 });
 
 describe('stallArmingOf reads one registry listing', () => {
   it('arms nothing when no marker is listed', () => {
     expect(stallArmingOf(['demo-worker.uuid', 'mail-disabled', 'coordinator-paused']))
-      .toEqual({ disabled: false, live: false, escalate: false });
+      .toEqual({ disabled: false, live: false, escalate: false, w2Live: false });
   });
   it('reads each marker on its own', () => {
-    expect(stallArmingOf(['stall-watch-disabled'])).toEqual({ disabled: true, live: false, escalate: false });
-    expect(stallArmingOf(['stall-watch-live'])).toEqual({ disabled: false, live: true, escalate: false });
-    expect(stallArmingOf(['stall-watch-escalate'])).toEqual({ disabled: false, live: false, escalate: true });
+    expect(stallArmingOf(['stall-watch-disabled'])).toEqual({ disabled: true, live: false, escalate: false, w2Live: false });
+    expect(stallArmingOf(['stall-watch-live'])).toEqual({ disabled: false, live: true, escalate: false, w2Live: false });
+    expect(stallArmingOf(['stall-watch-escalate'])).toEqual({ disabled: false, live: false, escalate: true, w2Live: false });
   });
   it('matches a whole file name, never a prefix or a suffix', () => {
     expect(stallArmingOf(['stall-watch-live.bak', 'stall-watch', 'x-stall-watch-escalate']))
-      .toEqual({ disabled: false, live: false, escalate: false });
+      .toEqual({ disabled: false, live: false, escalate: false, w2Live: false });
+  });
+  it('reads the wave-2 marker on its own, and never sets mailDisabled (the lane does, from watch.ts\'s own marker)', () => {
+    expect(stallArmingOf(['stall-watch-w2-live'])).toEqual({ disabled: false, live: false, escalate: false, w2Live: true });
+    expect(stallArmingOf(['stall-watch-w2-live.bak', 'stall-watch-w2'])).toEqual({ disabled: false, live: false, escalate: false, w2Live: false });
   });
 });
 
@@ -117,7 +134,7 @@ describe('stallDetail and parseStallDetail', () => {
 
   it.each([
     null, '', 'arm:work:opus', 'route:x', 'stall', 'stall:quiet:1', `stall:quiet:1:${T0}:x`,
-    `stalls:quiet:1:${T0}`, `STALL:quiet:1:${T0}`, `stall:orphan-d:1:${T0}`, `stall:__proto__:1:${T0}`,
+    `stalls:quiet:1:${T0}`, `STALL:quiet:1:${T0}`, `stall:orphan-f:1:${T0}`, `stall:__proto__:1:${T0}`,
     `stall:quiet:0:${T0}`, `stall:quiet:4:${T0}`, 'stall:quiet:1:01', 'stall:quiet:1:1.5', 'stall:quiet:1:-1',
     'stall:quiet:1:99999999999999999999', 'stall:quiet:1:', `stall-shadow:quiet:x:${T0}`,
   ])('ignores %j: not a stall detail', (detail) => {
@@ -204,8 +221,8 @@ describe('isStallKebab: every kebab word the watch spells, derived, never a hand
       expect(isStallKebab(w), w).toBe(true);
     }
   });
-  it('refuses a typo, another vocabulary’s word, a wave-2 word and the empty string', () => {
-    for (const w of ['limit-capp', 'stall-watch', 'review-done', 'wave-done-rejected', 'orphan-d', '']) {
+  it('refuses a typo, another vocabulary’s word, a word no wave spells and the empty string', () => {
+    for (const w of ['limit-capp', 'stall-watch', 'review-done', 'wave-done-rejected', 'stall-clause', '']) {
       expect(isStallKebab(w), w).toBe(false);
     }
   });
@@ -324,5 +341,243 @@ describe('the turn marker port: its state words, staleness and restart grace (wo
       ['no restart', { restartAt: null, turnAt: R - 10, stopAt: R - 100 }, null],
     ];
     for (const [name, m, until] of rows) expect(turnMarkGraceUntil(m), name).toBe(until);
+  });
+});
+
+// ── Wave 2's vocabulary (plan Task 10; design 2026-09-29 §5.1, §5.2, §10) ─────────────────────────────────────
+const W2_H = 3_600_000;
+const W2_MIN = 60_000;
+const WAVE2_ARMS: readonly StallArm[] = ['orphan-d', 'orphan-e', 'failed', 'frozen', 'dead', 'coord-deaf', 'mail-stuck', 'marker-unreadable'];
+
+describe('wave 2: stallNotifyDelivery (planning departure w2-arms-ship-dark)', () => {
+  const FULL: StallArming = { disabled: false, live: true, escalate: true };
+  it('STALL_ARM_WAVE is total: fully armed without w2Live, exactly the eight wave-2 arms stay shadow', () => {
+    expect(STALL_ARMS.filter((arm) => stallNotifyDelivery(arm, 'operator', FULL) === 'shadow')).toEqual(WAVE2_ARMS);
+    expect(STALL_ARMS.filter((arm) => stallNotifyDelivery(arm, 'operator', { ...FULL, w2Live: true }) === 'shadow')).toEqual([]);
+  });
+  it.each([
+    ['quiet', 'worker', { disabled: false, live: true, escalate: false }, 'send'],
+    ['quiet', 'worker', { disabled: false, live: false, escalate: false, w2Live: true }, 'shadow'],
+    ['coord-ball', 'operator', { disabled: false, live: true, escalate: true, w2Live: false }, 'send'],
+    ['orphan-e', 'worker', { disabled: false, live: true, escalate: false }, 'shadow'],
+    ['orphan-e', 'worker', { disabled: false, live: true, escalate: false, w2Live: false }, 'shadow'],
+    ['orphan-e', 'worker', { disabled: false, live: true, escalate: false, w2Live: true }, 'send'],
+    ['orphan-e', 'worker', { disabled: false, live: false, escalate: true, w2Live: true }, 'shadow'],
+    ['failed', 'coordinator', { disabled: false, live: true, escalate: false, w2Live: true }, 'shadow'],
+    ['failed', 'coordinator', { disabled: false, live: true, escalate: true, w2Live: true }, 'send'],
+    ['dead', 'coordinator', { disabled: false, live: true, escalate: true }, 'shadow'],
+    ['mail-stuck', 'operator', { disabled: false, live: true, escalate: true, w2Live: true }, 'send'],
+    ['marker-unreadable', 'operator', { disabled: false, live: false, escalate: true, w2Live: true }, 'shadow'],
+  ] as const)('%s to the %s under %o → %s', (arm, to, arming, want) => {
+    expect(stallNotifyDelivery(arm, to, arming)).toBe(want);
+  });
+  it('mailDisabled changes no delivery: the mail-disabled hold is the verdict filter (Task 11), never a delivery word', () => {
+    expect(stallNotifyDelivery('quiet', 'worker', { disabled: false, live: true, escalate: true, w2Live: true, mailDisabled: true })).toBe('send');
+  });
+});
+
+describe('wave 2: rungRecipient is one total per-arm table (planning departure rung-recipient-per-arm)', () => {
+  const TABLE: Record<StallArm, readonly StallRecipient[]> = {
+    quiet: ['worker', 'coordinator', 'operator'],
+    'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator'],
+    'orphan-d': ['worker', 'operator'], 'orphan-e': ['worker'], failed: ['worker', 'coordinator'],
+    frozen: ['coordinator'], dead: ['coordinator'],
+    'coord-deaf': ['operator'], 'mail-stuck': ['operator'], 'marker-unreadable': ['operator'],
+  };
+  it.each(STALL_ARMS)('%s: each rung it has goes to its recipient, and a rung it lacks throws', (arm) => {
+    for (const rung of [1, 2, 3] as const) {
+      const want = TABLE[arm][rung - 1];
+      if (want === undefined) expect(() => rungRecipient(arm, rung), `${arm} rung ${rung}`).toThrow(RangeError);
+      else expect(rungRecipient(arm, rung), `${arm} rung ${rung}`).toBe(want);
+    }
+  });
+});
+
+describe('wave 2: STOP_FAILURE_ERRORS classifies the thirteen StopFailure tokens (§5.2)', () => {
+  it('is the spec’s three groups, and nothing else', () => {
+    expect(STOP_FAILURE_ERRORS).toEqual({
+      server_error: 'retry', overloaded: 'retry', max_output_tokens: 'retry', unknown: 'retry',
+      rate_limit: 'account', billing_error: 'account', authentication_failed: 'account', oauth_org_not_allowed: 'account',
+      account_on_hold: 'account', verification_required: 'account', cloud_credential_error: 'account',
+      invalid_request: 'request', model_not_found: 'request',
+    });
+  });
+  // `?? {}`: `it.each` evaluates its table while the file is COLLECTED. Before Step 13 the import reads `undefined`, and
+  // `Object.entries(undefined)` would throw at collection, so the whole file would run no row (measured by the trial run).
+  // With it, the table is empty until Step 13 and the row above carries the red; after Step 13 it is never taken.
+  it.each(Object.entries(STOP_FAILURE_ERRORS ?? {}))('stopFailureClass(%j) → %s', (err, cls) => {
+    expect(stopFailureClass(err)).toBe(cls);
+  });
+  it.each(['', 'new_error', 'Server_Error', 'server_error ', 'toString', '__proto__', 'constructor'])(
+    'stopFailureClass(%j) is null: a token this build cannot classify is never guessed', (err) => {
+      expect(stopFailureClass(err)).toBeNull();
+    });
+  it('a null err is null', () => {
+    expect(stopFailureClass(null)).toBeNull();
+  });
+});
+
+describe('wave 2: the self-wake class', () => {
+  const mail = (fromId: string, subject: string, runId: number | null = 67) => ({ fromId, runId, subject, mailId: 2600 });
+  it('the spec spells both prefixes, and no watch prefix begins another', () => {
+    expect(STALL_ORPHANED_PREFIX).toBe('orphaned:');
+    expect(STALL_FAILED_PREFIX).toBe('failed:');
+    for (const p of [STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX, STALL_WAIT_PREFIX]) {
+      expect(STALL_ORPHANED_PREFIX.startsWith(p) || p.startsWith(STALL_ORPHANED_PREFIX), p).toBe(false);
+      expect(STALL_FAILED_PREFIX.startsWith(p) || p.startsWith(STALL_FAILED_PREFIX), p).toBe(false);
+    }
+  });
+  it('an orphaned: or failed: subject from the operator role is self-wake, on a run or run-less', () => {
+    expect(stallMailClass(mail('operator', `${STALL_ORPHANED_PREFIX} 1 background task(s) (workflow) did not survive the 2026-09-28T16:20Z restart`))).toBe('self-wake');
+    expect(stallMailClass(mail('operator', `${STALL_FAILED_PREFIX} your turn ended on an API error (server_error) at 2026-09-29T10:00Z`))).toBe('self-wake');
+    expect(stallMailClass(mail('operator', `${STALL_FAILED_PREFIX} x`, null))).toBe('self-wake');
+  });
+  it('the same subjects from a session are ordinary mail', () => {
+    expect(stallMailClass(mail('demo-worker', `${STALL_ORPHANED_PREFIX} x`))).toBeNull();
+    expect(stallMailClass(mail('demo-coordinator', `${STALL_FAILED_PREFIX} x`))).toBeNull();
+  });
+  it('check and report are tested first: a report naming a failure stays a report', () => {
+    expect(stallMailClass(mail('operator', `${STALL_REPORT_PREFIX} run 67 — failed: server_error twice at 2026-09-29T10:00Z`))).toBe('report');
+    expect(stallMailClass(mail('operator', `${STALL_CHECK_PREFIX} run 67`))).toBe('check');
+  });
+});
+
+describe('wave 2: the self-wake subjects carry the date (planning departure self-mail-subjects-carry-the-date)', () => {
+  const RESTART = Date.parse('2026-09-28T16:20:29Z');
+  const STOP = Date.parse('2026-09-28T21:52:51Z');
+  it('orphan D: the count, the kinds joined, and the restart to the minute', () => {
+    expect(stallOrphanDSubject({ lostBg: 1, lostKinds: ['workflow'], restartAt: RESTART }))
+      .toBe('orphaned: 1 background task(s) (workflow) did not survive the 2026-09-28T16:20Z restart');
+    expect(stallOrphanDSubject({ lostBg: 3, lostKinds: ['shell', 'subagent'], restartAt: RESTART }))
+      .toBe('orphaned: 3 background task(s) (shell, subagent) did not survive the 2026-09-28T16:20Z restart');
+    expect(stallOrphanDSubject({ lostBg: 2, lostKinds: [], restartAt: RESTART }))
+      .toBe('orphaned: 2 background task(s) (kinds unrecorded) did not survive the 2026-09-28T16:20Z restart');
+  });
+  it('orphan E: the first wake-bearing kind in the marker’s order', () => {
+    expect(stallOrphanESubject({ bgKinds: ['subagent'], stopAt: STOP }))
+      .toBe('orphaned: your background subagent ended at 2026-09-28T21:52Z without waking you');
+    expect(stallOrphanESubject({ bgKinds: ['monitor', 'shell', 'subagent'], stopAt: STOP }))
+      .toBe('orphaned: your background shell ended at 2026-09-28T21:52Z without waking you');
+    expect(stallOrphanESubject({ bgKinds: ['monitor'], stopAt: STOP }))
+      .toBe('orphaned: your background task ended at 2026-09-28T21:52Z without waking you');
+  });
+  it('failed: the error token and the turn end to the minute', () => {
+    expect(stallFailedSubject('server_error', Date.parse('2026-09-29T10:00:00Z')))
+      .toBe('failed: your turn ended on an API error (server_error) at 2026-09-29T10:00Z');
+  });
+  it('two episodes a day apart at the same minute have different subjects (the run-less dedupe reads every mail row)', () => {
+    const DAY = 24 * W2_H;
+    expect(stallOrphanESubject({ bgKinds: ['subagent'], stopAt: STOP }))
+      .not.toBe(stallOrphanESubject({ bgKinds: ['subagent'], stopAt: STOP + DAY - 20_000 }));
+    expect(stallFailedSubject('server_error', STOP)).not.toBe(stallFailedSubject('server_error', STOP + DAY + 5_000));
+    expect(stallOrphanDSubject({ lostBg: 1, lostKinds: ['workflow'], restartAt: RESTART }))
+      .not.toBe(stallOrphanDSubject({ lostBg: 1, lostKinds: ['workflow'], restartAt: RESTART + DAY }));
+  });
+  it('a hostile or unmeasured field prints as (unprintable), never raw', () => {
+    const d = stallOrphanDSubject({ lostBg: 1.5, lostKinds: ['work flow', 'shell'], restartAt: Number.NaN });
+    expect(d).toBe('orphaned: (unprintable) background task(s) ((unprintable), shell) did not survive the (unprintable) restart');
+    expect(d).not.toContain('work flow');
+    expect(stallFailedSubject('x y', STOP)).toBe('failed: your turn ended on an API error ((unprintable)) at 2026-09-28T21:52Z');
+    expect(stallOrphanESubject({ bgKinds: ['subagent'], stopAt: null }))
+      .toBe('orphaned: your background subagent ended at (unprintable) without waking you');
+  });
+});
+
+describe('wave 2: stallReportKind reads a report subject back; stallReportTitle titles it (Contract note 8)', () => {
+  it.each([
+    [`${STALL_REPORT_PREFIX} run 67 — worker silent 3h 39m, stall-check #2531 unanswered`, 'stall'],
+    [`${STALL_REPORT_PREFIX} run 67 — frozen: no hook event for 1h 1m`, 'frozen'],
+    [`${STALL_REPORT_PREFIX} run 67 — dead: orphan for 0h 12m`, 'dead'],
+    [`${STALL_REPORT_PREFIX} run 67 — failed: server_error twice at 2026-09-29T10:00Z`, 'failed'],
+    [`${STALL_REPORT_PREFIX} run (unprintable) — dead: registry row absent for 0h 12m`, 'dead'],
+    [`${STALL_REPORT_PREFIX} run 67 — deadlock suspected`, 'stall'],
+    [`${STALL_REPORT_PREFIX} run 67 frozen: no dash`, 'stall'],
+    ['an ordinary subject — frozen: x', 'stall'],
+  ] as const)('%j → %s', (subject, kind) => {
+    expect(stallReportKind(subject)).toBe(kind);
+  });
+  it('titles each kind, printing the workspace only when it matches the id pattern', () => {
+    expect(stallReportTitle('stall', 'demo-ws')).toBe('⚠ stall › demo-ws');
+    expect(stallReportTitle('frozen', 'demo-ws')).toBe('⚠ frozen › demo-ws');
+    expect(stallReportTitle('dead', 'demo-ws')).toBe('⚠ dead › demo-ws');
+    expect(stallReportTitle('failed', 'demo-ws')).toBe('⚠ failed › demo-ws');
+    expect(stallReportTitle('dead', 'bad ws')).toBe('⚠ dead › (unprintable)');
+  });
+});
+
+describe('wave 2: the constants carry §10’s values', () => {
+  it('each value, in milliseconds', () => {
+    expect({
+      STALL_BOUND_MS, DELEGATE_WINDOW_MS, DELEGATE_CAP_MS, FROZEN_NO_EVENT_MS, DEAD_GRACE_MS, COORD_DEAF_MS, MAIL_STUCK_MS,
+      ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS, FAILED_IDLE_MS, FAILED_REPEAT_MS, CHECK_UNDELIVERED_MS, BACKLOG_HORIZON_MS,
+      ORPHAN_PUSH_MS, MARKER_UNREADABLE_MS,
+    }).toEqual({
+      STALL_BOUND_MS: 3 * W2_H, DELEGATE_WINDOW_MS: 30 * W2_MIN, DELEGATE_CAP_MS: 4 * W2_H, FROZEN_NO_EVENT_MS: 60 * W2_MIN,
+      DEAD_GRACE_MS: 10 * W2_MIN, COORD_DEAF_MS: W2_H, MAIL_STUCK_MS: 72 * W2_MIN /* 1.2 h */, ORPHAN_D_IDLE_MS: 15 * W2_MIN,
+      ORPHAN_E_IDLE_MS: 10 * W2_MIN, FAILED_IDLE_MS: 10 * W2_MIN, FAILED_REPEAT_MS: 2 * W2_H, CHECK_UNDELIVERED_MS: 2 * W2_H,
+      BACKLOG_HORIZON_MS: 24 * W2_H, ORPHAN_PUSH_MS: 30 * W2_MIN, MARKER_UNREADABLE_MS: W2_H,
+    });
+  });
+});
+
+describe('wave 2: the kind and event sets, and the frozen clock', () => {
+  it('the kinds a background end can wake with, those that resume a session on their own, and the plumbing events', () => {
+    expect(STALL_WAKE_KINDS).toEqual(['subagent', 'workflow', 'shell']);
+    expect(STALL_RESUMING_KINDS).toEqual(['subagent', 'workflow']);
+    expect(STALL_PLUMBING_EVENTS).toEqual(['SessionStart', 'PreCompact', 'PostCompact']);
+  });
+  const TURN = 1_790_000_000_000;
+  const mark = (over: Partial<Extract<TurnMarkRead, { ok: true }>> = {}): TurnMarkRead => ({
+    ok: true, sessionId: 'uuid-1', state: 'working', event: 'PostToolUse', at: TURN + 5 * W2_MIN, turnAt: TURN, stopAt: null,
+    bg: -1, bgKinds: [], bgIds: [], err: null, restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], graceUntil: null, ...over,
+  });
+  const hook = (over: Partial<Extract<HookRawFact, { ok: true }>> = {}): HookRawFact => ({
+    ok: true, updatedAt: TURN + 20 * W2_MIN, event: 'PostToolUse', sessionId: 'uuid-1', identity: 'current', ...over,
+  });
+  it.each([
+    ['a current hook on a tool event: the later of the turn start and the hook', mark(), hook(), TURN + 20 * W2_MIN],
+    ['a current hook older than the turn start: the turn start', mark(), hook({ updatedAt: TURN - W2_MIN }), TURN],
+    ['a null turnAt: the marker’s at', mark({ turnAt: null }), hook({ updatedAt: TURN }), TURN + 5 * W2_MIN],
+    ['a SessionStart never refreshes the clock', mark(), hook({ event: 'SessionStart' }), TURN],
+    ['PreCompact is plumbing', mark(), hook({ event: 'PreCompact' }), TURN],
+    ['PostCompact is plumbing', mark(), hook({ event: 'PostCompact' }), TURN],
+    ['a null event is not plumbing (the spec names three events)', mark(), hook({ event: null }), TURN + 20 * W2_MIN],
+    ['a foreign hook: unmeasurable', mark(), hook({ identity: 'foreign' }), null],
+    ['an unregistered hook: unmeasurable', mark(), hook({ identity: 'unregistered' }), null],
+    ["a hook whose sessionId is '': not current (Contract note 9)", mark(), hook({ sessionId: '' }), null],
+    ['a hook that does not read: unmeasurable', mark(), { ok: false, reason: 'malformed' } as HookRawFact, null],
+    ['a marker that does not read: unmeasurable', { ok: false, reason: 'unmeasured' } as TurnMarkRead, hook(), null],
+  ] as const)('%s', (_why, m, h, want) => {
+    expect(stallFrozenSince(m, h)).toBe(want);
+  });
+});
+
+describe('wave 2: every new kebab word is declared through isStallKebab', () => {
+  it.each([
+    'orphan-d', 'orphan-e', 'coord-deaf', 'mail-stuck', 'marker-unreadable', 'restart-grace', 'lifecycle-stopped',
+    'mail-disabled', 'failed-account', 'failed-unknown', 'stall-watch-w2-live', 'self-wake', 'registry-unmeasurable',
+  ])('isStallKebab(%j)', (w) => {
+    expect(isStallKebab(w)).toBe(true);
+  });
+});
+
+describe('wave 2: the marker-unreadable reasons and the dead-shaped lifecycles live in L1 once (the L1 ruling)', () => {
+  it.each([
+    ['unmeasured', true], ['malformed', true], ['absent', false], ['foreign', false], ['stale', false],
+  ] as const)('stallMarkUnreadable: a marker that failed as %j → %s', (reason, want) => {
+    expect(stallMarkUnreadable({ ok: false, reason })).toBe(want);
+  });
+  it('stallMarkUnreadable: a marker that reads is never unreadable', () => {
+    expect(stallMarkUnreadable({
+      ok: true, sessionId: 'uuid-1', state: 'working', event: 'PostToolUse', at: 1, turnAt: null, stopAt: null, bg: -1,
+      bgKinds: [], bgIds: [], err: null, restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], graceUntil: null,
+    })).toBe(false);
+  });
+  it.each([
+    ['orphan', true], ['never-started', true],
+    ['running', false], ['unsupervised', false], ['unclaimed', false], ['stopped', false], ['restarting', false],
+    ['unmeasurable', false], [null, false], ['', false], ['Orphan', false],
+  ] as const)('stallDeadShaped(%j) → %s: only an orphan or never-started pane is dead-shaped; a deliberate stop never is', (lifecycle, want) => {
+    expect(stallDeadShaped(lifecycle)).toBe(want);
   });
 });

@@ -1,4 +1,5 @@
 import { REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
+import type { MailGate } from '../../../shared/api.js';
 /**
  * The worker stall watch's pure half (design 2026-09-29 §4.2, wave 1). L1: clock-free, fs-free, fastify-free and
  * store-free. `stall-vocabulary.test.ts` pins that, and the coord-ring scan in `single-definition.test.ts` forbids
@@ -28,6 +29,13 @@ export const STALL_REPLY_WAITING_PREFIX = 're stall-check: waiting';
 export const STALL_REPORT_PREFIX = 'stall:';
 /** A coordinator's hand-back. Sent to the worker, it gives the coordinator the ball and closes the episode. */
 export const STALL_WAIT_PREFIX = 'wait:';
+/** §5.2's orphan notices (D and E), from the operator role to the session itself. Class `self-wake`: recorded, never
+ *  pushed, never mail on the run. */
+export const STALL_ORPHANED_PREFIX = 'orphaned:';
+/** §5.2's failed notice, from the operator role to the session itself. Class `self-wake`. */
+export const STALL_FAILED_PREFIX = 'failed:';
+/** The reply that says the worker is still working: r1's body names it, and I2's back-off (Task 17) counts it. */
+const STALL_REPLY_WORKING_PREFIX = `${STALL_REPLY_PREFIX} working`;
 /** The observation-detail heads: `stall:<arm>:<rung>:<key>` when sent, `stall-shadow:<arm>:<rung>:<key>` in shadow.
  *  They live in `run_events.detail`, never in a mail subject. `stallDetail` writes them, `parseStallDetail` reads
  *  them back, and nothing else spells them. */
@@ -38,18 +46,34 @@ const STALL_SENDER = 'operator';
 
 // ── arms, holds, markers ─────────────────────────────────────────────────────────────────────────────────────
 
-/** Wave 1's arms (§4.2). Wave 2 adds its own keys here, each with the code that fires it. */
+/** The watch's arms: wave 1's (§4.2) and wave 2's (§5.2). Each key is added with the code that fires it, and
+ *  `STALL_ARM_WAVE` says which wave's arming it answers to. */
 const STALL_ARM_MAP = {
   quiet: 'the ladder: the worker holds the ball and has been idle past the quiet threshold (r1 worker, r2 coordinator, r3 operator)',
   'limit-cap': 'the usage-limit hold past its cap: one operator push per episode',
   'dialog-cap': 'a dialog with no question behind it, past the quiet threshold: one operator push per episode',
   'coord-ball': 'the coordinator has held the ball past its cap with no mail on the run: one operator push per episode',
+  'orphan-d': 'a restart killed background tasks the session ran at its last turn end, and it sat idle past ORPHAN_D_IDLE_MS (any session): a mail to it, then an operator push',
+  'orphan-e': 'the session ended its turn over a wake-bearing background task and sat idle past ORPHAN_E_IDLE_MS with no turn: a mail to it',
+  failed: 'the turn ended on a StopFailure and the session sat idle past FAILED_IDLE_MS: by its STOP_FAILURE_ERRORS class, a mail to it or to the coordinator',
+  frozen: 'the marker reads working under a busy word and no hook event arrived for FROZEN_NO_EVENT_MS: the coordinator, or the operator',
+  dead: 'the worker read orphan or never-started, or was absent from the registry, for DEAD_GRACE_MS: the coordinator, or the operator',
+  'coord-deaf': 'the worker passed the ball to its coordinator and that mail sat unacked for COORD_DEAF_MS: one operator push',
+  'mail-stuck': 'a delivery to the session stayed queued MAIL_STUCK_MS after its main loop went idle, or behind a registry gate: one operator push per delivery',
+  'marker-unreadable': 'the turn marker read unmeasured or malformed for MARKER_UNREADABLE_MS: one operator push per episode',
 } as const;
 export type StallArm = keyof typeof STALL_ARM_MAP;
 export const STALL_ARMS = Object.keys(STALL_ARM_MAP) as StallArm[];
 function isStallArm(v: string): v is StallArm {
   return Object.prototype.hasOwnProperty.call(STALL_ARM_MAP, v);
 }
+/** Which wave's arming each arm answers to. A wave-2 arm needs `stall-watch-w2-live` besides its recipient's markers
+ *  (`stallNotifyDelivery`; planning departure `w2-arms-ship-dark`). Total over the arms, so a new arm is a compile
+ *  error until it is placed. */
+const STALL_ARM_WAVE: Record<StallArm, 1 | 2> = {
+  quiet: 1, 'limit-cap': 1, 'dialog-cap': 1, 'coord-ball': 1,
+  'orphan-d': 2, 'orphan-e': 2, failed: 2, frozen: 2, dead: 2, 'coord-deaf': 2, 'mail-stuck': 2, 'marker-unreadable': 2,
+};
 
 /** Why a verdict holds (§4.2 holds 1 to 4, in §10's order). A hold defers a rung and never cancels it. */
 const STALL_HOLD_MAP = {
@@ -62,6 +86,12 @@ const STALL_HOLD_MAP = {
   limit: 'a usage limit, a strand, a blocked swap or a recent auto-continue hold, below its cap',
   busy: 'the worker reads busy, which wave 1 cannot tell apart from a turn in flight',
   'coordinator-unmeasurable': 'r2 is due and the coordinator could not be measured',
+  'restart-grace': 'a restart cut a turn short less than RESTART_GRACE_MS ago, and the redrive owns it (§5.1)',
+  delegates: 'the main loop is quiet while current subagent hook events arrive, inside DELEGATE_WINDOW_MS and below DELEGATE_CAP_MS (the quiet arm only)',
+  'lifecycle-stopped': 'the worker was stopped deliberately and its stop record says so: never the dead arm (§11 item 10)',
+  'mail-disabled': 'a rung would send mail while the operator has mail switched off: held, never rerouted',
+  'failed-account': 'the turn ended on an account-class StopFailure: the limit, swap and authdead machinery owns it',
+  'failed-unknown': 'the turn ended on a StopFailure token this build cannot classify: never guessed into a self-wake',
 } as const;
 export type StallHold = keyof typeof STALL_HOLD_MAP;
 export const STALL_HOLDS = Object.keys(STALL_HOLD_MAP) as StallHold[];
@@ -72,6 +102,7 @@ const STALL_MARKER_MAP = {
   'stall-watch-disabled': 'the lane returns: nothing is recorded or sent',
   'stall-watch-live': 'notices to the stalled session itself are sent (r1); absent, every arm is shadow',
   'stall-watch-escalate': 'with the live marker, coordinator notices and operator pushes are sent',
+  'stall-watch-w2-live': 'the wave-2 arms may send under the other two markers; absent, every wave-2 arm records shadow only',
 } as const;
 export type StallMarker = keyof typeof STALL_MARKER_MAP;
 export const STALL_MARKERS = Object.keys(STALL_MARKER_MAP) as StallMarker[];
@@ -86,12 +117,15 @@ export type StallWriteMiss = (typeof STALL_WRITE_MISSES)[number];
 
 // ── arming and delivery ──────────────────────────────────────────────────────────────────────────────────────
 
-export interface StallArming { readonly disabled: boolean; readonly live: boolean; readonly escalate: boolean }
+/** `w2Live` and `mailDisabled` are optional, so wave 1's literals stay valid; absent reads as false
+ *  (`w2-arming-optional`). `stallArmingOf` always sets `w2Live`. The lane sets `mailDisabled` from `watch.ts`'s own
+ *  module-local marker constant, and the verdict filter (Task 11) reads it. */
+export interface StallArming { readonly disabled: boolean; readonly live: boolean; readonly escalate: boolean; readonly w2Live?: boolean; readonly mailDisabled?: boolean }
 
 /** One registry listing (the one `tick()` already took) gives the arming. A marker is a whole file name. */
 export function stallArmingOf(names: readonly string[]): StallArming {
   const has = (m: StallMarker): boolean => names.includes(m);
-  return { disabled: has('stall-watch-disabled'), live: has('stall-watch-live'), escalate: has('stall-watch-escalate') };
+  return { disabled: has('stall-watch-disabled'), live: has('stall-watch-live'), escalate: has('stall-watch-escalate'), w2Live: has('stall-watch-w2-live') };
 }
 
 export type StallRecipient = 'worker' | 'coordinator' | 'operator';
@@ -101,6 +135,13 @@ export type StallRecipient = 'worker' | 'coordinator' | 'operator';
 export function stallDelivery(to: StallRecipient, arming: StallArming): 'send' | 'shadow' {
   if (to === 'worker') return arming.live ? 'send' : 'shadow';
   return arming.live && arming.escalate ? 'send' : 'shadow';
+}
+
+/** A rung's delivery: a wave-2 arm is shadow until `stall-watch-w2-live` is touched, whatever its recipient's markers
+ *  say (planning departure `w2-arms-ship-dark`); otherwise `stallDelivery`. `mailDisabled` is not a delivery: it is
+ *  the verdict filter's hold. */
+export function stallNotifyDelivery(arm: StallArm, to: StallRecipient, arming: StallArming): 'send' | 'shadow' {
+  return STALL_ARM_WAVE[arm] === 2 && arming.w2Live !== true ? 'shadow' : stallDelivery(to, arming);
 }
 
 // ── observation details ──────────────────────────────────────────────────────────────────────────────────────
@@ -139,8 +180,12 @@ export function parseStallDetail(detail: string | null): Omit<StallNotice, 'at'>
 export interface StallRunRow { readonly id: number; readonly kind: string; readonly state: string; readonly sessionId: string;
   readonly claimedBy: string | null; readonly dispatchedAt: number | null; readonly program: string; readonly wave: number;
   readonly waveOf: number | null; readonly project: string; readonly workspace: string | null }
-export interface StallMailRow { readonly id: number; readonly at: number; readonly runId: number; readonly fromId: string;
+/** `runId` is null for run-less mail: a session notice, or a peer's mail that wave 2's per-session read carries. */
+export interface StallMailRow { readonly id: number; readonly at: number; readonly runId: number | null; readonly fromId: string;
   readonly toId: string; readonly kind: string; readonly subject: string }
+/** One delivery row as the watch reads it (§5.2 mail-stuck and coord-deaf). The gate columns are selected as plain
+ *  columns and judged here, in L1, never filtered on by the store (D-792's pins); the sticky error text is never read. */
+export interface StallDeliveryRow { readonly id: number; readonly mailId: number; readonly toId: string; readonly state: string; readonly deliveredAt: number | null; readonly ackedAt: number | null; readonly lastGate: string | null; readonly gateSince: number | null }
 
 // ── grouping ─────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -178,7 +223,14 @@ export function stallSubjects(rows: readonly StallRunRow[]): StallSubject[] {
 
 // ── the push classifier ──────────────────────────────────────────────────────────────────────────────────────
 
-export type StallMailClass = 'check' | 'reply' | 'report';
+/** The watch's own mail classes, one total Record, so `isStallKebab` derives `self-wake` from it (§4.2, §5.2). */
+const STALL_MAIL_CLASS_MAP = {
+  check: 'r1: a stall-check subject from the operator role (recorded on the phone, never pushed)',
+  reply: 'a bound reply to a stall check, from the run worker (recorded, never pushed)',
+  report: 'a stall-report subject from the operator role: r2, and the frozen, dead and failed reports (pushed)',
+  'self-wake': 'an orphaned or failed notice from the operator role to the session itself (recorded, never pushed)',
+} as const;
+export type StallMailClass = keyof typeof STALL_MAIL_CLASS_MAP;
 export interface StallBind { readonly runSessionId: string | null; readonly runId: number | null; readonly firstCheckId: number | null }
 
 /** A reply is BOUND when all of these hold: it is from the run's own worker; it is on that run; and it came after the
@@ -198,6 +250,8 @@ export function stallMailClass(
 ): StallMailClass | null {
   if (m.fromId === STALL_SENDER && m.subject.startsWith(STALL_CHECK_PREFIX)) return 'check';
   if (m.fromId === STALL_SENDER && m.subject.startsWith(STALL_REPORT_PREFIX)) return 'report';
+  // 'self-wake' is tested after check and report, so a report naming a failure stays a report.
+  if (m.fromId === STALL_SENDER && (m.subject.startsWith(STALL_ORPHANED_PREFIX) || m.subject.startsWith(STALL_FAILED_PREFIX))) return 'self-wake';
   if (bind !== undefined && m.subject.startsWith(STALL_REPLY_PREFIX) && stallReplyBound(m, bind)) return 'reply';
   return null;
 }
@@ -207,6 +261,11 @@ export function stallMailClass(
 /** Every kebab word this file spells, and every one the store's stall reads spell with it, each taken from its own
  *  Record or tuple. A later task that spells a new kebab word in `server/src/coord` for the watch adds its tuple
  *  HERE. */
+/** The one mail-gate word the watch reads (§5.2 mail-stuck: a delivery whose last gate stays this word). Typed against
+ *  L0's `MailGate` through a type-only import, so a renamed gate is a compile error here. */
+const STALL_GATE_WORD_MAP: Record<Extract<MailGate, 'registry-unmeasurable'>, string> = {
+  'registry-unmeasurable': 'the registry could not be listed at the gate; mail-stuck times it from its gate stamp',
+};
 const STALL_KEBABS: ReadonlySet<string> = new Set<string>([
   ...STALL_ARMS,
   ...STALL_HOLDS,
@@ -214,6 +273,8 @@ const STALL_KEBABS: ReadonlySet<string> = new Set<string>([
   ...STALL_READ_FAILURES,
   ...STALL_WRITE_MISSES,
   STALL_DETAIL_SHADOW,
+  ...Object.keys(STALL_MAIL_CLASS_MAP),
+  ...Object.keys(STALL_GATE_WORD_MAP),
 ]);
 
 /** True for every kebab token the watch spells in `server/src/coord`. It is derived, never a hand list. */
@@ -247,6 +308,115 @@ export const COORD_BALL_CAP_MS = 30 * 3_600_000;
  *  question, however old it is (planning departure D-3565 ask-hold-correlates-the-dialog). */
 export const ASK_DIALOG_SLACK_MS = 60_000;
 
+// ── wave 2's constants (design 2026-09-29 §10), each with its basis ─────────────────────────────────────────
+/** §5.1 (d), §11 decision 7: with a marker that reads, r2 falls due this long after r1 at the latest. *Chosen*: it
+ *  bounds every episode at r1 + 4 h. */
+export const STALL_BOUND_MS = 3 * 3_600_000;
+/** The `delegates` hold's window. The longest foreground call measured was 28.3 min. */
+export const DELEGATE_WINDOW_MS = 30 * 60_000;
+/** The `delegates` hold's cap on main silence. At 4 h, subagent activity covered 1 of 101 gaps. */
+export const DELEGATE_CAP_MS = 4 * 3_600_000;
+/** The frozen arm: more than twice the longest legitimate call (28.3 min). */
+export const FROZEN_NO_EVENT_MS = 60 * 60_000;
+/** The dead arm's grace. A respawn was measured at 9 s; this is 5 × `SUPERVISED_FRESH_MS`. */
+export const DEAD_GRACE_MS = 10 * 60_000;
+/** coord-deaf. Acks precede replies, and 85% of 792 coordinator replies came within 1 h. */
+export const COORD_DEAF_MS = 3_600_000;
+/** mail-stuck: 1.2 h, the p90 of mail-to-first-read over 1,206 worker mails. Written in minutes, so it is exact. */
+export const MAIL_STUCK_MS = 72 * 60_000;
+/** orphan (D). 13 of 21 orphaned restarts self-healed within 2.4 min; the earliest human pick-up was 37 min. */
+export const ORPHAN_D_IDLE_MS = 15 * 60_000;
+/** orphan (E). *Chosen*. */
+export const ORPHAN_E_IDLE_MS = 10 * 60_000;
+/** failed. *Chosen*. */
+export const FAILED_IDLE_MS = 10 * 60_000;
+/** failed: a second retry-class StopFailure inside this window goes to the coordinator. *Chosen*. */
+export const FAILED_REPEAT_MS = 2 * 3_600_000;
+/** §5.1 (c): a stall check still undelivered this long after it was queued is proof for r2. *Chosen*. */
+export const CHECK_UNDELIVERED_MS = 2 * 3_600_000;
+/** The first enable must not wake long-abandoned sessions: orphan (D) and the per-session mail read look back this
+ *  far. *Chosen*. */
+export const BACKLOG_HORIZON_MS = 24 * 3_600_000;
+/** orphan (D) rung 2: its notice unacked this long after delivery, or undelivered this long after queueing. *Chosen*. */
+export const ORPHAN_PUSH_MS = 30 * 60_000;
+/** marker-unreadable: the marker read `unmeasured` or `malformed` this long on a candidate. *Chosen*. */
+export const MARKER_UNREADABLE_MS = 3_600_000;
+
+// ── StopFailure's error tokens (§5.2) ────────────────────────────────────────────────────────────────────────
+/** 2.1.277–2.1.284's own StopFailure matcher list, identical in every installed lane, in §5.2's three classes.
+ *  `retry`: a self-mail, then the coordinator on a repeat. `account`: a hold, because the limit, swap and authdead
+ *  machinery owns it. `request`: the coordinator, because a retry fails the same way. It is one total Record, and
+ *  the classifier reads it through `hasOwnProperty`, so an inherited name is never a token. */
+const STOP_FAILURE_ERROR_MAP = {
+  server_error: 'retry', overloaded: 'retry', max_output_tokens: 'retry', unknown: 'retry',
+  rate_limit: 'account', billing_error: 'account', authentication_failed: 'account', oauth_org_not_allowed: 'account',
+  account_on_hold: 'account', verification_required: 'account', cloud_credential_error: 'account',
+  invalid_request: 'request', model_not_found: 'request',
+} as const;
+export type StopFailureError = keyof typeof STOP_FAILURE_ERROR_MAP;
+export type StopFailureClass = 'retry' | 'account' | 'request';
+export const STOP_FAILURE_ERRORS: Readonly<Record<StopFailureError, StopFailureClass>> = STOP_FAILURE_ERROR_MAP;
+/** null for a token this build cannot classify (never guessed): the failed arm holds `failed-unknown`. */
+export function stopFailureClass(err: string | null): StopFailureClass | null {
+  if (err === null || !Object.prototype.hasOwnProperty.call(STOP_FAILURE_ERROR_MAP, err)) return null;
+  return STOP_FAILURE_ERROR_MAP[err as StopFailureError];
+}
+
+// ── the kind and event sets, each spelled once ───────────────────────────────────────────────────────────────
+/** Each background kind a turn end can wake with, and whether it resumes the session on its own (§5.1 proof (a))
+ *  or only could have woken it (§5.2 E; a shell, clause 16). One total Record with unquoted keys: a bracketed list
+ *  of two of these words reads as a copy of L0's `ROUTE_WRITABLE_FIELDS` to single-definition's route-field scan. */
+const STALL_BG_KIND_MAP = { subagent: 'resumes', workflow: 'resumes', shell: 'wakes' } as const;
+/** §5.2 orphan (E): the kinds whose end could have woken the session. A shell counts here: E detects a task that
+ *  could have woken it and did not. */
+export const STALL_WAKE_KINDS: readonly string[] = Object.keys(STALL_BG_KIND_MAP);
+/** §5.1 proof (a): the kinds that resume the session on their own when they end. A shell does not (clause 16). */
+export const STALL_RESUMING_KINDS: readonly string[] = STALL_WAKE_KINDS.filter((k) => STALL_BG_KIND_MAP[k as keyof typeof STALL_BG_KIND_MAP] === 'resumes');
+/** §5.1 "the one bounded exception": hook events that are plumbing. They never refresh the frozen clock or the
+ *  `delegates` hold. */
+export const STALL_PLUMBING_EVENTS: readonly string[] = ['SessionStart', 'PreCompact', 'PostCompact'];
+
+// ── the report classifier (Contract note 8) ──────────────────────────────────────────────────────────────────
+/** Every report is a `stall:` subject from the operator role. A wave-2 report names its kind right after the run,
+ *  `stall: run <id> — <kind>: …`; the wave-1 r2 names none and reads `stall`. */
+const STALL_REPORT_KINDS = ['stall', 'frozen', 'dead', 'failed'] as const;
+export type StallReportKind = (typeof STALL_REPORT_KINDS)[number];
+export function stallReportKind(subject: string): StallReportKind {
+  if (!subject.startsWith(STALL_REPORT_PREFIX)) return 'stall';
+  const dash = subject.indexOf(' — ');
+  if (dash < 0) return 'stall';
+  const head = subject.slice(dash + 3);
+  for (const k of STALL_REPORT_KINDS) if (k !== 'stall' && head.startsWith(k + ':')) return k;
+  return 'stall';
+}
+/** A report's phone title, `⚠ <kind> › <workspace>`. The workspace is printed only when it matches the id pattern. */
+export function stallReportTitle(kind: StallReportKind, ws: string): string {
+  return `⚠ ${kind} › ${stallSafe(ws)}`;
+}
+
+// ── the self-wake subjects (planning departure self-mail-subjects-carry-the-date) ───────────────────────────
+// Each subject carries the date and minute, not the spec's bare time: the run-less dedupe searches every mail row
+// ever sent, and a bare time would make a later day's episode at the same minute read as a duplicate. Defined here,
+// before the verdicts, because the session verdicts (Task 12) find a notice already sent by its exact subject.
+
+/** Kinds, sanitised and joined, or `kinds unrecorded`. */
+function stallKinds(values: readonly string[]): string {
+  return values.length === 0 ? 'kinds unrecorded' : values.map(stallSafe).join(', ');
+}
+/** orphan (D): the count and kinds the restart killed, and the restart's minute. */
+export function stallOrphanDSubject(m: Pick<TurnMark, 'lostBg' | 'lostKinds' | 'restartAt'>): string {
+  return `${STALL_ORPHANED_PREFIX} ${stallInt(m.lostBg)} background task(s) (${stallKinds(m.lostKinds)}) did not survive the ${stallUtc(m.restartAt ?? Number.NaN)} restart`;
+}
+/** orphan (E): the first wake-bearing kind in the marker's order, and the turn end's minute. */
+export function stallOrphanESubject(m: Pick<TurnMark, 'bgKinds' | 'stopAt'>): string {
+  const kind = m.bgKinds.find((k) => STALL_WAKE_KINDS.includes(k)) ?? 'task';
+  return `${STALL_ORPHANED_PREFIX} your background ${stallSafe(kind)} ended at ${stallUtc(m.stopAt ?? Number.NaN)} without waking you`;
+}
+/** failed: the error token and the turn end's minute. */
+export function stallFailedSubject(err: string, stopAt: number): string {
+  return `${STALL_FAILED_PREFIX} your turn ended on an API error (${stallSafe(err)}) at ${stallUtc(stopAt)}`;
+}
+
 /** The worker's RAW live word. The lane reads it itself (tmux pane pid, config dir, then the measured
  *  live-state read), never `FleetSession.status`, which is a collapse. Every `ok: false` reason is hold 1. */
 export type LiveWordRead =
@@ -260,8 +430,35 @@ const LIVE_WORD_UNREAD_MAP: Record<Extract<LiveWordRead, { ok: false }>['reason'
   unmeasured: 'the live file could not be read',
 };
 
-/** The hookstate ask, read identity-gated but NOT aged (the lane's unaged hookstate read). */
-export type HookAskFact = { readonly kind: 'ask'; readonly at: number } | { readonly kind: 'none' } | { readonly kind: 'unmeasured' };
+/** The hookstate ask, read identity-gated but NOT aged (the lane's unaged hookstate read). `approval` is a
+ *  PermissionRequest approval envelope. L1 decides what it holds (M7b, `approval-is-a-hook-ask-fact`): it is never 2a. */
+export type HookAskFact = { readonly kind: 'ask'; readonly at: number } | { readonly kind: 'approval'; readonly at: number } | { readonly kind: 'none' } | { readonly kind: 'unmeasured' };
+/** The raw hookstate (§5.1 "the one bounded exception"): no identity cut and no age cut. The `delegates` hold and the
+ *  frozen clock read it. A `sessionId` of `''` is never current (Contract note 9). */
+export type HookRawFact = { readonly ok: true; readonly updatedAt: number; readonly event: string | null; readonly sessionId: string; readonly identity: 'current' | 'foreign' | 'unregistered' } | { readonly ok: false; readonly reason: 'absent' | 'unmeasured' | 'malformed' };
+/** The frozen arm's clock. It is the later of the turn's start and the newest current, non-plumbing hook event, or the
+ *  turn's start alone when that event is plumbing. It is null (unmeasurable, never elapsed time) when the marker or
+ *  the hook does not read, or when the hook is not the current session's. A null event is not plumbing: the spec
+ *  names three events. */
+export function stallFrozenSince(mark: TurnMarkRead, hook: HookRawFact): number | null {
+  if (!mark.ok || !hook.ok || hook.identity !== 'current' || hook.sessionId === '') return null;
+  const turnStart = mark.turnAt ?? mark.at;
+  if (hook.event !== null && STALL_PLUMBING_EVENTS.includes(hook.event)) return turnStart;
+  return Math.max(turnStart, hook.updatedAt);
+}
+/** The marker-unreadable condition, in L1 once (the L1 ruling): the marker was read and could not be measured or
+ *  parsed. `absent`, `foreign` and `stale` are not it: each has its own meaning to the verdicts. The verdict's step
+ *  (2a) (Task 11), `stallSessionMarkerInner` (Task 12) and the lane's `markUnreadableSince` clock (Task 15) call this
+ *  and never spell the two reasons again. */
+export function stallMarkUnreadable(m: TurnMarkRead): boolean {
+  return !m.ok && (m.reason === 'unmeasured' || m.reason === 'malformed');
+}
+/** The dead arm's lifecycles, in L1 once (the L1 ruling): an orphan or a never-started pane. A deliberate `stopped`
+ *  worker is never dead-shaped (§11 item 10; it holds `lifecycle-stopped`). The verdict's step (3) (Task 11) and the
+ *  lane's `deadSince` clock (Task 15) call this and never spell the two words again. */
+export function stallDeadShaped(lifecycle: string | null): lifecycle is 'orphan' | 'never-started' {
+  return lifecycle === 'orphan' || lifecycle === 'never-started';
+}
 /** The worker's newest asks row. */
 export type AskRowFact = { readonly kind: 'row'; readonly state: string; readonly at: number } | { readonly kind: 'none' } | { readonly kind: 'unmeasured' };
 export type StallWorker =
@@ -281,7 +478,11 @@ export interface StallInput {
   readonly arming: StallArming;
   readonly coordinationPaused: boolean;         // $REG/coordinator-paused in the tick's listing
   readonly coordinator: CoordinatorState | null; // null = not measured this pass
+  readonly w2?: StallW2Facts;                   // wave 2's facts; absent = the lane read none, and wave 1's verdict stands
 }
+/** Wave 2's facts about the subject's worker (`w2-facts-separate-object`): `StallFacts` is unchanged. `absentSince`,
+ *  `deadSince` and `markUnreadableSince` are the lane's in-memory first-seen times. They restart with the server. */
+export interface StallW2Facts { readonly mark: TurnMarkRead; readonly hook: HookRawFact; readonly deliveries: readonly StallDeliveryRow[]; readonly absentSince: number | null; readonly deadSince: number | null; readonly markUnreadableSince: number | null }
 export type StallR3Cause = 'still-silent' | 'coordinator-dead' | 'no-coordinator' | 'coordination-paused';
 /** Total over the r3 causes, for `isStallKebab`. */
 const STALL_R3_CAUSE_MAP: Record<StallR3Cause, string> = {
@@ -336,11 +537,12 @@ function newestMail(rows: readonly StallMailRow[], pick: (m: StallMailRow) => bo
   return best;
 }
 
-/** The watch's own notices (a stall-check to the worker, a stall report to the coordinator) are not mail
- *  on the run. Counting them would restart the clock the notice reports. A reply is the worker's mail. */
+/** The watch's own notices are not mail on the run: a stall-check to the worker, a stall report to the coordinator,
+ *  and an orphaned or failed notice to the session itself. Counting them would restart the clock the notice
+ *  reports. A reply is the worker's mail. */
 function isWatchNotice(m: StallMailRow): boolean {
   const c = stallMailClass({ fromId: m.fromId, runId: m.runId, subject: m.subject, mailId: m.id });
-  return c === 'check' || c === 'report';
+  return c === 'check' || c === 'report' || c === 'self-wake';
 }
 
 function isIdleWord(word: string): boolean {
@@ -403,10 +605,24 @@ function rungDueAt(rungAt: number, liveSince: number, gap: number): number {
   return liveSince > rungAt + gap ? liveSince + gap : rungAt + gap;
 }
 
-function rungRecipient(arm: StallArm, rung: 1 | 2 | 3): StallRecipient {
-  if (arm !== 'quiet') return 'operator';
-  if (rung === 1) return 'worker';
-  return rung === 2 ? 'coordinator' : 'operator';
+/** Who hears each rung of each arm (planning departure `rung-recipient-per-arm`). The table is total over the arms,
+ *  and a rung an arm does not have is absent from its row. Some rungs go to the operator instead: frozen or dead with
+ *  no claimant or under a pause, and failed rung 2 likewise. Such a rung is armed exactly as its coordinator form
+ *  (`stallDelivery` treats the two alike), so the shadow accounting reads the same answer either way. */
+const STALL_RUNG_RECIPIENTS: Record<StallArm, readonly StallRecipient[]> = {
+  quiet: ['worker', 'coordinator', 'operator'],
+  'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator'],
+  'coord-deaf': ['operator'], 'mail-stuck': ['operator'], 'marker-unreadable': ['operator'],
+  'orphan-d': ['worker', 'operator'],
+  'orphan-e': ['worker'],
+  failed: ['worker', 'coordinator'],
+  frozen: ['coordinator'], dead: ['coordinator'],
+};
+
+export function rungRecipient(arm: StallArm, rung: 1 | 2 | 3): StallRecipient {
+  const to = STALL_RUNG_RECIPIENTS[arm][rung - 1];
+  if (to === undefined) throw new RangeError(`rungRecipient: ${arm} has no rung ${rung}`);
+  return to;
 }
 
 /** Planning departure D-3572 shadow-rung-accounting. A rung is DONE when a live row exists for it, or when a
@@ -418,7 +634,7 @@ function rungRecipient(arm: StallArm, rung: 1 | 2 | 3): StallRecipient {
 function rungDoneAt(input: StallInput, arm: StallArm, rung: 1 | 2 | 3, key: number): number | null {
   const rows = input.notices.filter((n) => n.arm === arm && n.rung === rung && n.key === key);
   const liveRow = rows.some((n) => n.mode === 'live');
-  const shadowStands = rows.some((n) => n.mode === 'shadow') && stallDelivery(rungRecipient(arm, rung), input.arming) === 'shadow';
+  const shadowStands = rows.some((n) => n.mode === 'shadow') && stallNotifyDelivery(arm, rungRecipient(arm, rung), input.arming) === 'shadow';
   if (!liveRow && !shadowStands) return null;
   const live = rows.filter((n) => n.mode === 'live');
   const timed = live.length > 0 ? live : rows;
@@ -630,7 +846,7 @@ export function stallCheckMail(input: StallInput, facts: StallFacts, now: number
       `Your main loop has been idle since ${stallUtcSec(since)} (${quiet}). Your last mail on this run: ${stallMailRef(facts.workerLast)}. Newest mail to you on this run: ${stallMailRef(facts.inboundLast)}.`,
       STALL_WAKE_LINE,
       `Before anything else, send ONE mail on run ${id} to toId 'coordinator', kind status:`,
-      `still working — subject beginning "${STALL_REPLY_PREFIX} working", what you are doing and when you report next;`,
+      `still working — subject beginning "${STALL_REPLY_WORKING_PREFIX}", what you are doing and when you report next;`,
       `waiting on the coordinator — subject beginning "${STALL_REPLY_WAITING_PREFIX}", what you wait for (this hands the run to the coordinator and stops these checks);`,
       "blocked on a decision — ask it with AskUserQuestion (your skill's question clause); these checks hold while it is open.",
       last,
