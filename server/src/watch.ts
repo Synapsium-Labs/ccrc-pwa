@@ -689,11 +689,12 @@ export class FleetWatcher {
   private lastStallSweep = 0;
   /** True while a `sweepStalls` pass awaits its reads. A second pass started meanwhile returns at once. */
   private stallSweepRunning = false;
-  /** Wave 2's in-memory clocks, keyed by session id and pruned every sweep (`pruneStallMemory`). A server restart
-   *  re-times each one, which the spec accepts (slug `absent-worker-is-dead-after-grace`): when a run worker was
-   *  first seen with no fleet row; when it was first seen with an `orphan` or `never-started` lifecycle; when a
-   *  worker's or coordinator's turn marker was first READ `unmeasured` or `malformed` (`stallMarkClock`: an
-   *  unmeasured identity reads no marker, so it neither starts nor keeps that clock). */
+  /** Wave 2's in-memory clocks, keyed by session id, pruned every sweep (`pruneStallMemory`) and dropped whole on a
+   *  window the lane did not observe (`dropStallClocks`). A server restart re-times each one, which the spec accepts
+   *  (slug `absent-worker-is-dead-after-grace`): when a run worker was first seen with no fleet row; when it was
+   *  first seen with an `orphan` or `never-started` lifecycle; when a worker's or coordinator's turn marker was first
+   *  READ `unmeasured` or `malformed` (`stallMarkClock`: an unmeasured identity reads no marker, so it neither starts
+   *  nor keeps that clock). */
   private stallAbsentSince = new Map<string, number>();
   private stallDeadSince = new Map<string, number>();
   private stallMarkUnreadableSince = new Map<string, number>();
@@ -1479,7 +1480,10 @@ export class FleetWatcher {
         // both notify lanes are watermark-based (`lastMailNotifyId`/
         // `lastRunNotifyId`) and catch up on the next successful tick, and
         // `emitRuns` is byte-equality guarded so it re-emits the moment it
-        // runs again. Delay, never loss.
+        // runs again. Delay, never loss. The stall lane is skipped as well, so
+        // its first-seen clocks are dropped: a window it never observed must
+        // not count toward a grace (slug `stall-clocks-drop-on-an-unobserved-gap`).
+        this.dropStallClocks();
         return;
       }
       const records = registryRead.records;
@@ -2976,7 +2980,8 @@ export class FleetWatcher {
    *
    * In memory, and pruned every sweep (`pruneStallMemory`): when a worker was first seen absent or dead-shaped,
    * when a marker was first seen unreadable, the run-less push latch and the warn-once keys. A server restart
-   * re-times the clocks (slug `absent-worker-is-dead-after-grace`) and may repeat one run-less push.
+   * re-times the clocks (slug `absent-worker-is-dead-after-grace`) and may repeat one run-less push. A window the
+   * lane did not observe drops the clocks (`dropStallClocks`, slug `stall-clocks-drop-on-an-unobserved-gap`).
    *
    * Every mail is durable and deduped: on a run by its observation row (`queueStallNotice`,
    * `recordStallObservation`), run-less by its subject (`hasMailWithSubject`), so a restart re-sends none.
@@ -2995,17 +3000,19 @@ export class FleetWatcher {
       // `mail-disabled` reaches L1 as a fact, and `stallMailDisabledHold` decides what it holds (slug
       // `lane-honours-mail-disabled`). The module-local literal, never rundefs' export: see the import note.
       const arming: StallArming = { ...stallArmingOf(names), mailDisabled: names.includes(MAIL_DISABLED_MARKER) };
-      if (arming.disabled) return;
+      if (arming.disabled) { this.dropStallClocks(); return; }
       const paused = names.includes(COORDINATOR_PAUSE_MARKER);
       let candidates: ReturnType<CoordStore['stallCandidates']>;
       try {
         candidates = store.stallCandidates();
       } catch (err) {
         console.warn(`ccrc-server: stall-watch candidate read failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
+        this.dropStallClocks();
         return;
       }
       if (!candidates.ok) {
         console.warn(`ccrc-server: stall-watch candidates unreadable (${candidates.kind}: ${candidates.detail}) — nothing judged this sweep`);
+        this.dropStallClocks();
         return;
       }
       const workers = stallSubjects(candidates.runs);
@@ -3230,6 +3237,18 @@ export class FleetWatcher {
       if (parsed !== null) notices.push({ ...parsed, at: e.at });
     }
     return notices;
+  }
+
+  /** Drops every first-seen clock (slug `stall-clocks-drop-on-an-unobserved-gap`). A clock claims the condition held at
+   *  every sweep since it was set, so a window in which the lane observed nothing breaks the claim: `stall-watch-
+   *  disabled`, an unreadable or throwing candidate read, and a tick that never reached the lane because the registry
+   *  would not list. Each clock then restarts from the next observed sweep, never firing on a duration nobody watched.
+   *  This is the lane's bookkeeping of its own observations, not a stall rule, so it stays in L4. A pass refused by
+   *  the in-flight flag drops nothing: the pass in flight is observing. */
+  private dropStallClocks(): void {
+    this.stallAbsentSince.clear();
+    this.stallDeadSince.clear();
+    this.stallMarkUnreadableSince.clear();
   }
 
   /** Keeps a first-seen time while `holds`, and drops it the first sweep it does not. */

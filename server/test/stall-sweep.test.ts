@@ -1329,4 +1329,51 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(mail[0]).toMatchObject({ toId: COORD, runId: null, kind: 'status', at: D_AT });
     expect(stallRows(coord, runId)).toEqual([]);      // run-less: never on the run it claims
   });
+
+  // Slug `stall-clocks-drop-on-an-unobserved-gap`. A first-seen clock claims "true at every sweep since", so a window in
+  // which the lane observed nothing must restart it. The worker is absent at T0, the lane is blind for one step, and
+  // three hours later the worker is absent again: the dead report waits DEAD_GRACE_MS from the return, never fires
+  // at once with a duration nobody watched. One row per place the lane loses sight of the fleet.
+  type Blind = (c: { coord: CoordStore; w: FleetWatcher; gone: StallTick; registry: { blind: boolean } }) => Promise<void>;
+  const BLIND: [string, Blind][] = [
+    ['stall-watch-disabled', async ({ w, gone }) => { await w.sweepStalls([], ['stall-watch-disabled', ...W2], gone); }],
+    ['an unreadable candidate read', async ({ coord, w, gone }) => {
+      vi.spyOn(coord, 'stallCandidates').mockReturnValueOnce({ ok: false, kind: 'run-unreadable', detail: 'bad row' });
+      await w.sweepStalls([], W2, gone);
+    }],
+    ['a throwing candidate read', async ({ coord, w, gone }) => {
+      vi.spyOn(coord, 'stallCandidates').mockImplementationOnce(() => { throw new Error('SQLITE_BUSY'); });
+      await w.sweepStalls([], W2, gone);
+    }],
+    ['a tick whose registry will not list (the lane never runs)', async ({ w, registry }) => {
+      registry.blind = true;
+      await w.tick();
+      registry.blind = false;
+    }],
+  ];
+  it.each(BLIND)('a window the lane did not observe drops its first-seen clocks: %s', async (_name, blindStep) => {
+    const registry = { blind: false };
+    const io: FleetIO = {
+      ...localIO,
+      readdir: async (p, t, sig) => (registry.blind && p.endsWith('.cc-sessions') ? null : localIO.readdir(p, t, sig)),
+    };
+    const { coord, w } = await rig({ io });
+    seedRun(coord, { program: 'demo-program' });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const gone = tickOf(PID, []);
+    const reports = (): MailRow[] => operatorMail(coord).filter((m) => m.toId === COORD);
+    at(T0);
+    await w.sweepStalls([], W2, gone);                // absent since T0
+    at(T0 + STALL_SWEEP_MS);
+    await blindStep({ coord, w, gone, registry });    // the lane observes nothing
+    const BACK = T0 + 3 * 3_600_000;
+    at(BACK);
+    await w.sweepStalls([], W2, gone);                // absent again: since now, not since T0
+    at(BACK + DEAD_GRACE_MS - STALL_SWEEP_MS);
+    await w.sweepStalls([], W2, gone);
+    expect(reports()).toEqual([]);
+    at(BACK + DEAD_GRACE_MS);                         // the control: the arm fires, a full grace after the return
+    await w.sweepStalls([], W2, gone);
+    expect(reports()).toHaveLength(1);
+  });
 });
