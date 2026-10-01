@@ -1,0 +1,222 @@
+#!@CCRC_PYTHON3@ -IS
+# ccd — the INSTALLED DIRECT ENTRY (reclaim-entry-safety, D-3696, D-3697).
+#
+# GENERATED ON THE BOX from the tracked template ccd/ccd-entry.py by `ccrc
+# install`/`ccrc update` and by deploy/deploy.sh: the shebang names the box's own
+# canonical python3, probed in isolated mode, and the digest below is the SHA-256
+# of the active Bash body at ~/.local/libexec/ccrc/ccd. Do not edit on the box.
+#
+# WHY A LAUNCHER AT ALL. Bash startup runs before line 1 of any Bash file: an
+# inherited `BASH_ENV`, an exported `BASH_FUNC_<name>%%` or an inherited
+# `SHELLOPTS`/`BASHOPTS` is consumed before ccd can guard anything, and an
+# imported `find` that answers "no rows" turned R31's honest
+# `containment-unproven` into `reclaimable` — a live child another registry row
+# names, removed (D-3696). So the destructive argv shapes are decided HERE,
+# before Bash exists, and started under `bash -p`: privileged mode reads no
+# `BASH_ENV`/`ENV`, imports no function and ignores inherited
+# `SHELLOPTS`/`BASHOPTS`/`CDPATH`/`GLOBIGNORE`. It is a startup boundary, not a
+# privilege change, and not a sandbox.
+#
+# WHAT IS PROTECTED, EXACTLY (the body re-classifies the same shapes, and a test
+# runs one table against both):
+#   ws-reclaim <any tail>                       — the body's parser owns the tail
+#   ws-audit --session <id> --reclaim [--defer-expired]   — syntactic, exact
+# Every other argv is ORDINARY: the same Bash >= 4.4 scan, no `-p`, and the
+# inherited environment untouched — an ordinary verb keeps what it always had.
+#
+# TRUST BOUNDARY. Runtime PATH and every executable it selects — this Python,
+# the Bash below, and every external command ccd runs — are TRUSTED
+# PREREQUISITES. Nothing here authenticates them: a PATH that leads to a lying
+# `bash` or `find` is outside what this file claims to defeat. The digest is
+# not authentication either: it detects a half-published or mismatched
+# launcher/body pair; a same-user writer that replaces both files is not
+# stopped by it, and the window between hashing the body and Bash opening it
+# is not closed.
+#
+# STANDARD LIBRARY ONLY, and the shebang's `-IS` is load-bearing: isolated mode
+# ignores every PYTHON* variable, user site-packages and the current directory,
+# and `-S` imports no `site` (so no `sitecustomize` either). No bytecode is
+# written: this file runs as `__main__`, which is never cached.
+import sys
+
+sys.dont_write_bytecode = True
+
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+import os  # noqa: E402
+import select  # noqa: E402
+import stat  # noqa: E402
+import subprocess  # noqa: E402
+import time  # noqa: E402
+
+BODY_SHA256 = '@CCRC_CCD_SHA256@'
+
+ENTRY_SUFFIX = '/.local/bin/ccd'
+BODY_SUFFIX = '/.local/libexec/ccrc/ccd'
+
+# The launcher's own refusal: one stable class word per condition, on stderr as
+# `ccd: refused (entry-<class>): …`, and this exit status. Nothing ran.
+REFUSED_RC = 125
+
+# What Bash startup consumes from the environment. Removed from a PROTECTED
+# payload's environment (and from every probe's): `bash -p` ignores them for
+# itself, but measured on bash 5.2 it still EXPORTS them — an imported-function
+# string, `BASH_ENV`, `CDPATH` — to every child it starts, and a plain child
+# `bash` that inherits `SHELLOPTS=privileged` reports `p` in `$-` while still
+# importing exported functions (D-3697).
+STARTUP_VARS = (b'BASH_ENV', b'ENV', b'SHELLOPTS', b'BASHOPTS', b'CDPATH', b'GLOBIGNORE')
+FUNC_PREFIX = b'BASH_FUNC_'
+
+PROBE_TIMEOUT_S = 10.0
+PROBE_MAX_BYTES = 256
+
+# BUILTINS ONLY: `[[`, `((` and `printf`. A probe that ran an external command
+# would be asking PATH a second question. Each prints its record only when the
+# property holds, so a candidate that cannot satisfy it prints nothing.
+_FLOOR = '(( BASH_VERSINFO[0] > 4 || ( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4 ) ))'
+PROBE_PRIVILEGED = '[[ $- == *p* ]] && ' + _FLOOR + ' && printf "ccd-entry-probe p %s\\n" "$1"'
+PROBE_ORDINARY = _FLOOR + ' && printf "ccd-entry-probe - %s\\n" "$1"'
+
+
+def refuse(cls, detail):
+    sys.stderr.write('ccd: refused (entry-%s): %s\n' % (cls, detail))
+    sys.stderr.flush()
+    os._exit(REFUSED_RC)
+
+
+def is_protected(argv):
+    if argv[:1] == ['ws-reclaim']:
+        return True
+    return (len(argv) in (4, 5) and argv[0] == 'ws-audit' and argv[1] == '--session'
+            and argv[3] == '--reclaim' and (len(argv) == 4 or argv[4] == '--defer-expired'))
+
+
+def body_path():
+    # The launcher's OWN canonical location, never an inherited HOME: absolute,
+    # relative, PATH and symlinked spellings all converge here. A copy or a hard
+    # link anywhere else names no body, so it refuses rather than guessing one.
+    me = os.path.realpath(os.path.abspath(sys.argv[0]))
+    if not me.endswith(ENTRY_SUFFIX):
+        refuse('layout', '%s is not an installed direct entry (…%s), so it names no ccd body to run'
+               % (me, ENTRY_SUFFIX))
+    return me[:-len(ENTRY_SUFFIX)] + BODY_SUFFIX
+
+
+def check_body(body):
+    if len(BODY_SHA256) != 64 or any(c not in '0123456789abcdef' for c in BODY_SHA256):
+        refuse('unrendered', 'this launcher carries no rendered body digest — it is the template, not an install')
+    try:
+        st = os.lstat(body)
+    except FileNotFoundError:
+        refuse('body-absent', 'the ccd body %s is absent — re-run ccrc update (or ccrc install)' % body)
+    except OSError as e:
+        refuse('body-unreadable', 'the ccd body %s could not be examined: %s' % (body, e.strerror))
+    if not stat.S_ISREG(st.st_mode):
+        refuse('body-type', 'the ccd body %s is not a regular file (a link, a directory or a device is never run)'
+               % body)
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NONBLOCK', 0)
+    digest = hashlib.sha256()
+    try:
+        fd = os.open(body, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                refuse('body-type', 'the ccd body %s is not a regular file' % body)
+            while True:
+                chunk = os.read(fd, 1 << 16)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        finally:
+            os.close(fd)
+    except OSError as e:
+        refuse('body-unreadable', 'the ccd body %s could not be read: %s' % (body, e.strerror))
+    if not hmac.compare_digest(digest.hexdigest(), BODY_SHA256):
+        refuse('body-digest', 'the ccd body %s is not the one this launcher was rendered for — an install or'
+               ' update is incomplete; re-run ccrc update (or ccrc install)' % body)
+
+
+def startup_free_env():
+    return {k: v for k, v in os.environb.items() if k not in STARTUP_VARS and not k.startswith(FUNC_PREFIX)}
+
+
+def probe(bash, privileged, env):
+    nonce = os.urandom(16).hex()
+    argv = [bash] + (['-p'] if privileged else []) + ['-c', PROBE_PRIVILEGED if privileged else PROBE_ORDINARY,
+                                                      'ccd-entry-probe', nonce]
+    want = ('ccd-entry-probe %s %s\n' % ('p' if privileged else '-', nonce)).encode()
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, env=env, close_fds=True)
+    except OSError:
+        return False
+    out = b''
+    ok = True
+    deadline = time.monotonic() + PROBE_TIMEOUT_S
+    fd = proc.stdout.fileno()
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            ok = False
+            break
+        ready, _, _ = select.select([fd], [], [], left)
+        if not ready:
+            ok = False
+            break
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            break
+        out += chunk
+        if len(out) > PROBE_MAX_BYTES:
+            ok = False
+            break
+    if not ok:
+        proc.kill()
+    try:
+        rc = proc.wait(timeout=PROBE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        rc = proc.wait()
+    proc.stdout.close()
+    return ok and rc == 0 and out == want
+
+
+def select_bash(privileged, env):
+    # PATH IN ORDER, every distinct canonical `<dir>/bash`, the first one whose
+    # PROBE proves the property — and that exact path is the one exec'd. Never
+    # the first `bash` by name: a macOS job PATH puts /bin/bash 3.2 ahead of a
+    # Homebrew 5.x.
+    seen = set()
+    for comp in os.environ.get('PATH', '').split(os.pathsep):
+        if not comp or not os.path.isabs(comp):
+            continue
+        cand = os.path.realpath(os.path.join(comp, 'bash'))
+        if cand in seen:
+            continue
+        seen.add(cand)
+        if not (os.path.isfile(cand) and os.access(cand, os.X_OK)):
+            continue
+        if probe(cand, privileged, env):
+            return cand
+    return None
+
+
+def main():
+    argv = sys.argv[1:]
+    body = body_path()
+    check_body(body)
+    protected = is_protected(argv)
+    clean = startup_free_env()
+    bash = select_bash(protected, clean)
+    if bash is None:
+        refuse('no-bash', 'no bash on PATH proved Bash >= 4.4%s — ccd was not started'
+               % (' in privileged mode (-p)' if protected else ''))
+    if protected:
+        os.execve(bash, [bash, '-p', '--', body] + argv, clean)
+    os.execve(bash, [bash, '--', body] + argv, os.environb)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except OSError as e:
+        refuse('exec', 'ccd could not be started: %s' % e)

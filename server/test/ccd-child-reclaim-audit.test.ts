@@ -23,10 +23,13 @@ afterEach(() => { h.cleanup(); });
 const AUDIT_STUBS = `${CHILD_STUBS} _session_verdict() { echo gone; }; ${GH_STUB}`;
 const audit = (flags = ''): Record<string, unknown> =>
   JSON.parse(h.sh(`${AUDIT_STUBS} cmd_ws_audit --session ${CHILD_ID} ${flags}`)) as Record<string, unknown>;
-/** The dispatcher, not the function: the agent invokes `ccd <verb> …`. */
+/** The dispatcher, not the function: the agent invokes `ccd <verb> …`.
+ *  `bash -p`: `ws-reclaim` and a valid `ws-audit … --reclaim` are refused at
+ *  the body's entry unless Bash runs privileged (D-3696) — the state the
+ *  installed launcher starts them in; this explicit invocation states it. */
 const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
   try {
-    return { code: 0, stderr: '', stdout: execFileSync('bash', [CCD, ...args], { encoding: 'utf8', cwd: h.home,
+    return { code: 0, stderr: '', stdout: execFileSync('bash', ['-p', CCD, ...args], { encoding: 'utf8', cwd: h.home,
       env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) }).trim() };
   } catch (e) {
     const err = e as { status?: number; stdout?: string; stderr?: string };
