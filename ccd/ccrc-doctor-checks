@@ -5712,9 +5712,11 @@ _check_codex() {
   # ccrc's own, and a table sourced by something else must say so, not die.
   local fn
   for fn in _box_env_value _codex_lanes _codex_row _codex_lane_json_state _codex_lane_dir \
-            _codex_litellm_yaml _codex_runtime_cli _models_node _models_roster_path _models_litellm_template; do
-    if ! declare -F "$fn" >/dev/null 2>&1 || [ -z "${BOX_TREE_DIR:-}" ]; then
-      _dr_fail codex "ccrc's own Codex lane library is not loaded ($fn, or BOX_TREE_DIR, is missing), so no lane on this box was measured" \
+            _codex_litellm_yaml _codex_runtime_cli _models_node _models_roster_path _models_litellm_template \
+            _codex_tier_ours _codex_tier_stale _codex_foreign_what _codex_tier_is_our_handle \
+            _svc_is_active _svc_status_hint; do
+    if ! declare -F "$fn" >/dev/null 2>&1 || [ -z "${BOX_TREE_DIR:-}" ] || [ -z "${CODEX_TIERS:-}" ]; then
+      _dr_fail codex "ccrc's own Codex lane library is not loaded ($fn, BOX_TREE_DIR or CODEX_TIERS is missing), so no lane on this box was measured" \
         "this is a bug in ccrc, not a fact about your box — _check_codex calls the _codex_* library declared in ccrc itself, and this check table was sourced by something that is not ccrc"
       return 1
     fi
@@ -5753,7 +5755,8 @@ _check_codex() {
 
   local -a DRX_CLASS=() DRX_WHAT=() DRX_FIX=() DRX_OK=() bad=()
   local -A owner=()
-  local DRX_RUNTIME='' DRX_LANE_WORDS='' models=1 p
+  local DRX_RUNTIME='' DRX_LANE_WORDS='' DRX_TIER_WORDS='' models=1 p
+  local DRX_LIVE=0 DRX_UNASKED=0 DRX_UNASKED_SID=''
   if [ "${#lanes[@]}" -gt 0 ]; then
     _dr_cx_bins
     _dr_cx_runtime
@@ -5790,7 +5793,8 @@ _check_codex() {
     for id in "${lanes[@]}"; do
       _dr_cx_member "$id" ${bad[@]+"${bad[@]}"} && continue
       _dr_cx_lane "$id" "$models" "$roster"
-      DRX_OK+=("$id ($DRX_LANE_WORDS)")
+      _dr_cx_tiers "$id"
+      DRX_OK+=("$id ($DRX_LANE_WORDS; $DRX_TIER_WORDS)")
     done
   fi
   for n in ${left[@]+"${left[@]}"}; do
@@ -6010,5 +6014,120 @@ _dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> �
       _dr_cx_fail "whether $id's LiteLLM config is current could not be measured ('ccrc models' printed no answer)" \
         "ccrc and deploy/models-op.mjs ship together and must be one build: run 'ccrc update', then re-run doctor" ;;
   esac
+  return 0
+}
+
+# ── _check_codex, part 2: the tier rows (spec §12; Plan 3a Task 5) ────────
+# THE QUESTION IS THE LIBRARY'S. `_codex_tier_ours` (ccd/ccrc) answers each
+# tier — 0 ours running, 1 not running, 2 foreign (CX_TIER_WHY), 3 cannot ask,
+# 4 ours starting — through the SAME probes `ccrc codex status` asks:
+# `_codex_port_listening` and `_codex_lane_answer`, each a loopback connect
+# under `_plat_timeout "$(_codex_probe_secs)"` (CCRC_CODEX_PROBE_S, default
+# 2 s). So a listener that accepts and never answers costs this check its
+# bound, never a hang (ruling R-C4: doctor MAY connect to a lane's loopback
+# ports, bounded). Every 2 is worded by `_codex_foreign_what`, the one helper
+# every rc-2 consumer names through, and NOTHING here signals, stops or
+# starts anything: a foreign listener is named and left running.
+#   - a 2 whose CX_TIER_WHY is `unit-unproven` is a WARN with that helper's
+#     retry wording, never a FAIL: this lane's own tier reads exactly so
+#     inside its RestartSec window (D-3714);
+#   - a 2 that `_codex_tier_is_our_handle` reads as this lane's own process
+#     (`listener-other-process`) is a FAIL in the helper's words alone: that
+#     sentence names the pid it proved, so it never says "cannot identify";
+#   - a 3 is a WARN, unmeasured — never read as running or as stopped
+#     (D-3715);
+#   - a lane is LAZY, so both tiers down is a PASS; one up and one down is
+#     the FAIL §12 names;
+#   - `_codex_tier_stale` answers 0 stale, 1 current, 2 cannot tell, and a 2
+#     is its own WARN — never current, never stale;
+#   - a LiteLLM tier down under a live session is a WARN (2b-2's hazard: a
+#     tier that died after a start that wrote stays down until the next
+#     start, D-3716).
+_dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
+  local id="$1" tier q word own lq=3 sq=3
+  local -a words=()
+  for tier in $CODEX_TIERS; do
+    CX_LISTEN_WHY=''
+    _codex_tier_ours "$id" "$tier" 2>/dev/null; q=$?
+    case "$q" in
+      0|4)
+        word="$tier running"; [ "$q" -eq 4 ] && word="$tier starting"
+        # CX_TIER_* read NOW: the next question overwrites them.
+        words+=("$word${CX_TIER_VIA:+ ($CX_TIER_VIA${CX_TIER_PID:+, pid $CX_TIER_PID})}")
+        _codex_tier_stale "$id" "$tier"
+        case $? in
+          1) ;;
+          0) _dr_cx_warn "$id's $tier tier is running code older than the installed bytes: it started from another runtime generation, or another placed shim, than a start would use now" \
+               "restart it onto the installed bytes: 'ccrc update' restarts a running, proven, stale ccrc tier; by hand, 'ccrc codex stop $id' then 'ccrc codex start $id'" ;;
+          *) _dr_cx_warn "$id's $tier tier is running, and whether it runs the installed bytes cannot be told (no current runtime generation, or the tier's code file cannot be hashed) — unmeasured, not current" \
+               "make the runtime current (the runtime finding, if any, names how), then re-run doctor" ;;
+        esac ;;
+      1) words+=("$tier not running") ;;
+      2)
+        # Asked FIRST, directly after `_codex_tier_ours`, as its contract says.
+        own=1; _codex_tier_is_our_handle "$q" && own=0
+        words+=("$tier foreign")
+        _codex_foreign_what "$id" "$tier"
+        if [ "${CX_TIER_WHY:-}" = unit-unproven ]; then
+          _dr_cx_warn "$id: $CX_FOREIGN_WHAT" "$CX_FOREIGN_FIX"
+        elif [ "$own" -eq 0 ]; then
+          _dr_cx_fail "$id: $CX_FOREIGN_WHAT" "$CX_FOREIGN_FIX"
+        else
+          _dr_cx_fail "$id: $CX_FOREIGN_WHAT — ccrc neither adopts nor stops what it cannot identify" "$CX_FOREIGN_FIX"
+        fi ;;
+      *)
+        words+=("$tier unmeasured")
+        _dr_cx_warn "$id's $tier tier could not be measured${CX_LISTEN_WHY:+ ($CX_LISTEN_WHY)} — unmeasured, never read as running or as stopped" \
+          "run: ccrc codex status $id — it asks the same question and says what it could see" ;;
+    esac
+    if [ "$tier" = litellm ]; then lq="$q"; else sq="$q"; fi
+  done
+  case "$lq:$sq" in
+    [04]:1)
+      _dr_cx_fail "$id is half up: its LiteLLM tier is running and its shim is not, so every request a session sends this lane fails before it reaches LiteLLM" \
+        "start the tier that is down: ccrc codex start $id (idempotent: it starts only what is not running)" ;;
+    1:[04])
+      _dr_cx_fail "$id is half up: its shim is running and its LiteLLM tier is not, so every request the shim forwards fails" \
+        "start the tier that is down: ccrc codex start $id (idempotent: it starts only what is not running)" ;;
+  esac
+  if [ "$lq" = 1 ]; then
+    _dr_cx_sessions "$id"
+    if [ "$DRX_LIVE" -gt 0 ]; then
+      _dr_cx_warn "$id's LiteLLM tier is not running while $DRX_LIVE live session(s) run on this lane, so every turn they send fails at the gateway — a tier that died after its start stays down until the next start" \
+        "start it: ccrc codex start $id (every session launch runs the same start)"
+    elif [ "$DRX_UNASKED" -gt 0 ]; then
+      _dr_cx_warn "$id's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked ($DRX_UNASKED unanswered) — unmeasured, not idle" \
+        "ask by hand${DRX_UNASKED_SID:+ ($(_svc_status_hint "claude-session@$DRX_UNASKED_SID.service"))}; if one is live, start the lane: ccrc codex start $id"
+    fi
+  fi
+  if [ "$lq:$sq" = 1:1 ]; then
+    DRX_TIER_WORDS="tiers: none running (a lane is lazy)"
+  else
+    DRX_TIER_WORDS="tiers: $(_dr_cx_join ', ' "${words[@]}")"
+  fi
+}
+
+# The lane's LIVE sessions: `~/.cc-sessions/<sid>.wrapper` names the account a
+# session runs on (ccd's registry field, read here as a file and never
+# written), and `_svc_is_active claude-session@<sid>.service` whether it runs
+# — three answers, as `_check_routing`'s census has: live, measured not-live,
+# and NOT ASKED (the manager printed no word), which is never folded into
+# not-live. `[ -f ]` first, so a FIFO planted at a `.wrapper` path is never
+# opened (D-2380's class).
+_dr_cx_sessions() {   # <id> — sets DRX_LIVE, DRX_UNASKED, DRX_UNASKED_SID
+  local id="$1" reg="$HOME/.cc-sessions" wf w sid
+  DRX_LIVE=0; DRX_UNASKED=0; DRX_UNASKED_SID=''
+  [ -d "$reg" ] || return 0
+  if [ ! -r "$reg" ] || [ ! -x "$reg" ]; then DRX_UNASKED=1; return 0; fi
+  for wf in "$reg"/*.wrapper; do
+    [ -f "$wf" ] || continue
+    w=''; { IFS= read -r w < "$wf"; } 2>/dev/null
+    [ "$w" = "$id" ] || continue
+    sid="${wf##*/}"; sid="${sid%.wrapper}"
+    case "$(_svc_is_active "claude-session@$sid.service")" in
+      active|activating|reloading|refreshing|deactivating) DRX_LIVE=$((DRX_LIVE + 1)) ;;
+      '') DRX_UNASKED=$((DRX_UNASKED + 1)); [ -n "$DRX_UNASKED_SID" ] || DRX_UNASKED_SID="$sid" ;;
+    esac
+  done
   return 0
 }

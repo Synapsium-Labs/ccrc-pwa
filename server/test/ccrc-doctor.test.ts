@@ -997,13 +997,13 @@ const DOCTOR_DEADLINE_BIN: string | null = (() => {
 
 /** `ccrc doctor`, bounded by the process GROUP. A hang becomes a readable
  *  failure — never a hung suite. */
-function runDoctorBounded(home: string, ms = 10000): Result {
+function runDoctorBounded(home: string, ms = 10000, extraEnv: NodeJS.ProcessEnv = {}): Result {
   if (DOCTOR_DEADLINE_BIN === null) {
     throw new Error('runDoctorBounded: no usable `timeout`/`gtimeout` — cannot bound this call safely');
   }
   const r = spawnSync(DOCTOR_DEADLINE_BIN,
     ['-k', '1', String(ms / 1000), BASH, ccrcIn(home), 'doctor'],
-    { env: doctorEnv(home), encoding: 'utf8' });
+    { env: { ...doctorEnv(home), ...extraEnv }, encoding: 'utf8' });
   if (r.status === 124) {
     throw new Error(
       `runDoctorBounded did not return within ${ms}ms — either a catalogue guard regressed `
@@ -1212,10 +1212,12 @@ function healthy(prefix: string): string {
 // citations into this file that are accurate today — `:66` and `:70`, from
 // ccrc-install.test.ts and pool-name-parity.test.ts — must not move.
 import {
-  authDirOf, codexRoster, freeLanes, GPT_LANE_BINS, killLaneProcesses, plantFakeRuntime, plantLaneAuth,
-  type LanePorts,
+  alive, authDirOf, codexRoster, fakeUnit, freeLanes, GPT_LANE_BINS, killLaneProcesses, laneUnits, plantFakeRuntime,
+  plantLaneAuth, plantSystemd, portAccepts, spawnListener, systemdRunCalls,
+  type LanePorts, type Listener, type ListenerAnswer,
 } from './codexLaneFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
+import { createServer, type Socket } from 'node:net';
 
 /** python3, or null. `plantFakeRuntime`'s interpreter hands `ccgpt-runtime
  *  check`'s stamp read and probe hash to a real python3, so without one every
@@ -1309,6 +1311,16 @@ function renderLane(home: string, id: string): void {
   op('litellm', '--file', roster, '--id', id,
     '--template', join(home, 'ccrc', 'deploy', 'litellm-config.template.yaml'),
     '--out', join(home, '.ccrc', 'codex', id, 'litellm.yaml'), '--commit', 'true');
+}
+
+/** `_codex_started_json <tier>` as the lane library computes it NOW in this
+ *  fixture HOME — the one spelling of the record a start writes (ccd/ccrc) —
+ *  under the same contained PATH doctor runs with (Plan 3a Task 5). */
+function startedJson(home: string, tier: 'litellm' | 'shim'): string {
+  const r = spawnSync(BASH, ['-c', `. ${shq(ccrcIn(home))}; _codex_started_json ${tier}`],
+    { env: doctorEnv(home), encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`_codex_started_json ${tier}: ${r.stderr}`);
+  return (r.stdout ?? '').trim();
 }
 
 /** A lane's two ports, read back from the roster `healthyCodexBox` wrote. */
@@ -9164,9 +9176,12 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     const home = await healthyCodexBox('ccrc-doctor-codex-pass-');
     const { proxyPort, litellmPort } = lanePorts(home, 'codex-a');
     const r = runDoctor(home);
+    // Plan 3a Task 5 widened each lane's words with its tiers (a lane is
+    // lazy: none running is healthy).
     expect(codexVerdicts(r.stdout), r.stdout).toEqual([
       `PASS codex: 1 Codex lane(s): codex-a (ports ${proxyPort}/${litellmPort}, signed in, lane.json current, `
-      + `LiteLLM config current); runtime ${currentGen(home)} litellm=1.101.0; the four GPT-lane executables match the shipped tree`,
+      + `LiteLLM config current; tiers: none running (a lane is lazy)); runtime ${currentGen(home)} litellm=1.101.0; `
+      + 'the four GPT-lane executables match the shipped tree',
     ]);
     noRunnerBugLine(r.stdout, 'codex');
     expect(r.code, r.stdout).toBe(0);
@@ -9456,5 +9471,157 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     expect(lines[w + 1]).toMatch(/^ {2}remedy: \S/);
     noRunnerBugLine(r.stdout, 'codex');
     expect(r.code).toBe(1);
+  });
+});
+
+// ── Plan 3a Task 5: `_check_codex`, part 2 — the tier rows (spec §12) ─────
+// Listeners are PYTHON children (`spawnListener`), because `runDoctor` blocks
+// this process's event loop: an in-process server can never ANSWER — which is
+// exactly what the bounded-probe case below wants, and nothing else does.
+describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stale code and a down gateway (Plan 3a Task 5, spec §12)', () => {
+  const at = (home: string, tier: 'shim' | 'litellm', answer: ListenerAnswer, lane = 'codex-a', argv: readonly string[] = []): Promise<Listener> => {
+    const { proxyPort, litellmPort } = lanePorts(home, 'codex-a');
+    return spawnListener(home, { answer, lane, port: tier === 'shim' ? proxyPort : litellmPort, argv });
+  };
+  it('a listener on the shim port answering as ANOTHER lane FAILs in _codex_foreign_what\'s words, and is left running', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-other-lane-');
+    const port = lanePorts(home, 'codex-a').proxyPort;
+    const l = await at(home, 'shim', 'json', 'codex-b');
+    const r = runDoctor(home);
+    const re = new RegExp(`^FAIL codex: codex-a: port ${port} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: it answers as another lane — ccrc neither adopts nor stops what it cannot identify$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe(`  remedy: Stop whatever holds port ${port}, or give codex-a other ports in ~/.ccrc/accounts.json.`);
+    noRunnerBugLine(r.stdout, 'codex');
+    // Named, and left running: nothing in doctor signals anything.
+    expect(alive(l.pid)).toBe(true);
+    expect(await portAccepts(port)).toBe(true);
+  });
+
+  it('a listener answering with NO id — the other repository\'s shim shape, or anything on the LiteLLM port — FAILs as unidentified', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-no-id-');
+    const { proxyPort, litellmPort } = lanePorts(home, 'codex-a');
+    await at(home, 'shim', 'text');
+    await at(home, 'litellm', '404');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-a: port ${proxyPort} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: its identity check failed`, 'm'));
+    expect(r.stdout).toMatch(new RegExp(`^FAIL codex: codex-a: port ${litellmPort} \\(codex-a's litellm tier\\) is held by a listener that is not this lane's: its identity check failed`, 'm'));
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // `listener-other-process` is the one foreign 2 that IS this lane's own
+  // process (`_codex_tier_is_our_handle`): its sentence names the pid it
+  // proved, so it never carries the "cannot identify" tail. LiteLLM's
+  // identity is /proc on Linux, as in the half-up case below.
+  itLinux('this lane\'s own LiteLLM while another process holds its port FAILs in _codex_foreign_what\'s words alone — never "cannot identify"', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-other-proc-');
+    const port = lanePorts(home, 'codex-a').litellmPort;
+    const yaml = join(home, '.ccrc', 'codex', 'codex-a', 'litellm.yaml');
+    // This lane's LiteLLM by its command line, on a kernel-chosen port…
+    const mine = await spawnListener(home, { answer: '404', argv: ['--config', yaml] });
+    writeFileSync(join(home, '.ccrc', 'codex', 'codex-a', 'litellm.pid'), `${mine.pid}\n`);
+    // …while another process holds litellmPort.
+    await at(home, 'litellm', '404');
+    const r = runDoctor(home);
+    const re = new RegExp(`^FAIL codex: codex-a: port ${port} \\(codex-a's litellm tier\\) is held by a process that is not this lane's LiteLLM: pid ${mine.pid} is this lane's by its command line, and another process holds the port's listening socket$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(r.stdout).not.toMatch(/cannot identify/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('one tier running and the other not is FAIL — the shim up, LiteLLM down', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-half-shim-');
+    await at(home, 'shim', 'json');
+    const r = runDoctor(home);
+    const re = /^FAIL codex: codex-a is half up: its shim is running and its LiteLLM tier is not, /m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: start the tier that is down: ccrc codex start codex-a (idempotent: it starts only what is not running)');
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // LiteLLM's identity is a PID that ITSELF holds the port (`_codex_pid_listens`):
+  // /proc on Linux. The Darwin arm (lsof) is ccrc-codex.test.ts' to measure.
+  itLinux('one tier running and the other not is FAIL — LiteLLM up (its nohup pidfile proves it), the shim down', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-half-litellm-');
+    const yaml = join(home, '.ccrc', 'codex', 'codex-a', 'litellm.yaml');
+    const l = await at(home, 'litellm', '404', 'codex-a', ['--config', yaml]);
+    writeFileSync(join(home, '.ccrc', 'codex', 'codex-a', 'litellm.pid'), `${l.pid}\n`);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^FAIL codex: codex-a is half up: its LiteLLM tier is running and its shim is not, /m);
+    expect(lineFor(r.stdout, 'codex')).not.toMatch(/^PASS/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  itLinux('a live unit of the shim\'s name whose MainPID is 0 — a restart window — WARNs with the retry wording, never as foreign, and doctor starts nothing', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-unproven-');
+    plantSystemd(home, { userManager: true });
+    const unit = laneUnits(home, 'codex-a').shim;
+    fakeUnit(home, unit, { state: 'active', pid: 0 });
+    const r = runDoctor(home);
+    const re = new RegExp(`^WARN codex: codex-a: the unit ${unit.replace(/[.@]/g, '\\$&')} is active, but its identity as codex-a's shim tier is unproven: `, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toMatch(/^ {2}remedy: Re-run in a few seconds: this lane's own tier reads this way between two of its restarts/);
+    expect(codexVerdicts(r.stdout).filter((l) => l.startsWith('FAIL codex: '))).toEqual([]);
+    expect(systemdRunCalls(home)).toEqual([]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a running shim started from other bytes WARNs "older than the installed bytes"; the current record does not', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-stale-');
+    await at(home, 'shim', 'json');
+    const rec = join(home, '.ccrc', 'codex', 'codex-a', 'shim.started');
+    const now = startedJson(home, 'shim');
+    writeFileSync(rec, `${now}\n`);
+    expect(runDoctor(home).stdout).not.toMatch(/^WARN codex: codex-a's shim tier is running code older/m);
+    writeFileSync(rec, `${JSON.stringify({ ...JSON.parse(now) as Record<string, string>, code: '0'.repeat(64) })}\n`);
+    const r = runDoctor(home);
+    const re = /^WARN codex: codex-a's shim tier is running code older than the installed bytes: /m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toMatch(/'ccrc update' restarts a running, proven, stale ccrc tier/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a running shim whose bytes cannot be told right now WARNs "unmeasured, not current" — never current, never stale', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-stale-unknown-');
+    await at(home, 'shim', 'json');
+    rmSync(join(home, '.ccrc', 'runtime'), { recursive: true, force: true });
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).toMatch(/^WARN codex: codex-a's shim tier is running, and whether it runs the installed bytes cannot be told .* — unmeasured, not current$/m);
+    expect(r.stdout).not.toMatch(/^WARN codex: codex-a's shim tier is running code older/m);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a LiteLLM tier down under a LIVE session on the lane WARNs; a session on another lane, or a stopped one, does not', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-live-');
+    const reg = join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    writeFileSync(join(reg, 'proj-a.wrapper'), 'claude\n');
+    writeFileSync(join(home, 'fixture-unit-claude-session@proj-a.service'), 'active\n');
+    writeFileSync(join(reg, 'proj-b.wrapper'), 'codex-a\n');
+    expect(runDoctor(home).stdout).not.toMatch(/live session/);
+    writeFileSync(join(home, 'fixture-unit-claude-session@proj-b.service'), 'active\n');
+    const r = runDoctor(home);
+    const re = /^WARN codex: codex-a's LiteLLM tier is not running while 1 live session\(s\) run on this lane, /m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: start it: ccrc codex start codex-a (every session launch runs the same start)');
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('a listener that accepts and never answers costs the check its probe bound — never a hang', async () => {
+    // IN-PROCESS, on purpose (the header above): while doctor runs, this
+    // process's event loop is blocked, so the kernel completes the connect
+    // and nothing ever reads or answers it — a wedged listener, exactly.
+    const home = await healthyCodexBox('ccrc-doctor-codex-hung-');
+    const port = lanePorts(home, 'codex-a').proxyPort;
+    const socks = new Set<Socket>();
+    const srv = createServer((s) => { socks.add(s); });
+    await new Promise<void>((res, rej) => { srv.once('error', rej); srv.listen(port, '127.0.0.1', () => res()); });
+    try {
+      const r = runDoctorBounded(home, 60_000, { CCRC_CODEX_PROBE_S: '1' });
+      expect(r.stdout, r.stdout).toMatch(new RegExp(`^FAIL codex: codex-a: port ${port} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: its identity check failed`, 'm'));
+      noRunnerBugLine(r.stdout, 'codex');
+    } finally {
+      for (const s of socks) s.destroy();
+      await new Promise<void>((res) => { srv.close(() => res()); });
+    }
   });
 });
