@@ -4152,3 +4152,55 @@ describe('the stall watch spells its wave-2 self-wake prefixes once (design 2026
     });
   }
 });
+
+describe('worker stall watch wave 2: the three new operator-switch markers have no writer in the tree (spec §5)', () => {
+  // Wave 1's describe above, for the three markers wave 2 adds. It is appended, never merged into that one, because
+  // this file is cited by line. SUBSTRING CAVEAT: both halves match with `includes`, and `mail-gate-busy` is a
+  // substring of `mail-gate-busy-shadow`, so the `mail-gate-busy` row counts every holder of EITHER spelling: a
+  // superset. That is sound only while both are spelled in `turnidle.ts` alone (planning departure
+  // `gate-markers-spelled-in-turnidle-only`), and the CONTROL row states the superset so nobody reads the row as more.
+  // `stall-watch-live` is not a substring of `stall-watch-w2-live`, so wave 1's row is untouched by this one.
+  const MARKERS: [string, string][] = [
+    ['stall-watch-w2-live', 'server/src/coord/stall.ts'],
+    ['mail-gate-busy-shadow', 'server/src/turnidle.ts'],
+    ['mail-gate-busy', 'server/src/turnidle.ts'],
+  ];
+
+  it('CONTROL: the match is a substring — a line spelling mail-gate-busy-shadow also holds mail-gate-busy, never the reverse', () => {
+    expect(stallCodeText("export const MAIL_GATE_BUSY_SHADOW_MARKER = 'mail-gate-busy-shadow';").includes('mail-gate-busy')).toBe(true);
+    expect(stallCodeText("export const MAIL_GATE_BUSY_MARKER = 'mail-gate-busy';").includes('mail-gate-busy-shadow')).toBe(false);
+    expect('stall-watch-w2-live'.includes('stall-watch-live')).toBe(false);
+  });
+
+  it.each(MARKERS)('%s: no shell line names it, and its one TS holder is its definer (%s)', (name, definer) => {
+    expect(holdersOf(name), `${name}: a line of shell names it — a writer, or a reader this design never had`).toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(name)).map(rel).sort(),
+      `${name}: spelled on a code line outside ${definer}`).toEqual([definer]);
+    expect(stallCode(path.join(ccrcRoot, definer)), `${definer} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+});
+
+describe('worker stall watch wave 2: the self-wake prefixes are spelled once (spec §5.2)', () => {
+  // `STALL_ORPHANED_PREFIX` and `STALL_FAILED_PREFIX`: `stallMailClass` reads an `operator` mail whose subject starts
+  // with either as `self-wake` (recorded, never pushed), so a second literal is a second rule. The anchor is the
+  // wave-done describe's, restated because that one's helpers are scoped to its own describe. QUOTE-ANCHORED, and at
+  // the open for a template; code lines only. KNOWN WIDTH: a literal assembled from pieces is not seen.
+  const LITERALS: [string, string][] = [
+    ['orphaned:', 'server/src/coord/stall.ts'],
+    ['failed:', 'server/src/coord/stall.ts'],
+  ];
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const spelling = (lit: string): RegExp => new RegExp(`'${esc(lit)}'|"${esc(lit)}"|\`${esc(lit)}`);
+
+  it('CONTROL: the anchor sees a constant and a template head, and not a longer neighbour', () => {
+    expect(spelling('failed:').test("export const STALL_FAILED_PREFIX = 'failed:';")).toBe(true);
+    expect(spelling('orphaned:').test('const s = `orphaned: ${n} background task(s)`;')).toBe(true);
+    expect(spelling('failed:').test("const d = 'failed: provenance:';")).toBe(false);
+    expect(spelling('failed:').test("const t = 'not failed:';")).toBe(false);
+  });
+
+  it.each(LITERALS)("'%s' is spelled on a code line in %s alone", (lit, home) => {
+    expect(ALL.filter((f) => spelling(lit).test(stallCode(f))).map(rel).sort(), `a second '${lit}'`).toEqual([home]);
+  });
+});

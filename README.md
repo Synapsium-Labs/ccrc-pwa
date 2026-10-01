@@ -2407,7 +2407,26 @@ last rows show `esc to interrupt` (`turn-running`: held for
 `MAIL_TURN_HOLD_MS`, 60 s, and never counted as an attempt) — a best-effort
 tripwire, blind on a `--remote-control` pane and below `READER_MIN_COLS`.
 `touch $REG/mail-gate-strict` on the fleet host restores the idle-only gate;
-`rm` it to go back.
+`rm` it to go back. The stall watch's turn marker (below) can sharpen the
+gate, but only behind two more markers, touched and removed by hand and
+written by nothing in the tree. Under the default (and under
+`mail-gate-strict`) the gate never reads the marker, so the marker changes no
+delivery: every answer above holds whatever the hook wrote. Under either busy
+marker, a `shell` pane whose current marker reads `working`, stamped no
+earlier than the live file, holds (`not-idle`): a turn is running there after
+all. And `busy` opens to delivery once a current marker reads `done` or
+`failed` and has been quiet since its Stop for the recipient's quiet time, and
+never within 5 min of a restart that cut a turn short.
+`mail-gate-busy-shadow` delivers nothing new: it logs `ccrc-server: mail-gate
+busy-shadow would deliver …` once per delivery it would have let through.
+`mail-gate-busy` delivers there, and asks `sendPrompt` to refuse a pane that
+still shows its spinner (`turn-running`). Under `mail-gate-busy`, a marker that
+could not be read or parsed holds a `busy` delivery with its own gate,
+`turn-mark-unreadable`, which the PWA's mail strip names. Precedence:
+`mail-gate-strict`, then `mail-gate-busy`, then `mail-gate-busy-shadow`, then
+the default. Runbook: touch `mail-gate-busy-shadow` and read 48 h of its
+lines, each checked against its session's transcript; then touch
+`mail-gate-busy` and `rm` the shadow marker. `rm mail-gate-busy` goes back.
 
 `/api/mail` (and its ack route), the gated run routes (`POST /api/runs`,
 `/:id/dispatch`, `/:id/close`, `/:id/advance`, `/:id/items`, `/:id/route`) — but **not** the
@@ -2545,14 +2564,114 @@ guarantee that no box-token holder can keep a mail off the phone covers the
 bound to a check); nothing limits who may mail the worker and so hold off the
 ladder. Each `re stall-check: working` reply is worker mail, so it opens a new
 episode: a worker in a long legitimate wait draws a check about every 2 h, and
-each one costs a worker turn and a coordinator turn. Shadow cannot show that
-cost, because in shadow no check is sent and no reply comes back; once
-`stall-watch-live` is touched, the armed r1 rate per worker per day is the
-number to watch. Runbook: whenever `mail-disabled` is touched, touch
-`stall-watch-disabled` too. Otherwise the lane keeps queuing checks and reports
-that nothing delivers, and a coordinator's answer left undelivered still hands
-the worker the ball (the ball passes when a mail is queued), so the worker is
-checked for mail it never received.
+each one costs a worker turn and a coordinator turn. With
+`stall-watch-w2-live` and a current turn marker (below), the threshold backs
+off instead: each consecutive check answered only by `working` replies doubles
+it, to 4 h and then 8 h at most, and any other mail from the worker resets it.
+Shadow cannot show that cost, because in shadow no check is sent and no reply
+comes back; once `stall-watch-live` is touched, the armed r1 rate per worker
+per day is the number to watch. While `mail-disabled` stands, the lane holds
+every rung that would send MAIL (hold `mail-disabled`): no check, no report
+and no self-mail is queued. So the quiet ladder is silent while `mail-disabled`
+stands: r1 never goes out, and nothing follows it. The lane's pushes (the caps
+and wave 2's operator pushes) still fire, and shadow rows still count. When
+`mail-disabled` is removed, the held rungs go out on the next sweep. Runbook:
+to silence the lane's pushes as well, touch `stall-watch-disabled` beside
+`mail-disabled`.
+
+**The stall watch, wave 2.** The session hook also keeps a turn marker per
+session, `$REG/<id>.turn.json`, written on the main thread only: an event that
+carries a subagent's `agent_id` never touches it. It reads `working` from a
+turn's first event, `done` at its Stop (with the Stop's background-task count,
+kinds and ids), and `failed` at a `StopFailure` (with the API error's token). A
+SessionStart that follows a restart which cut work short records the restart
+and what was lost. The lane reads the marker, the raw hookstate and the live
+file. That is at most three agent reads per worker per sweep, because the pane
+pid and the registry uuid are the ones the tick already measured. A marker
+older than the live process reads stale and counts for nothing. A fourth stall
+marker, `stall-watch-w2-live`, touched and removed by hand and written by
+nothing in the tree, arms every wave-2 arm. Without it, each arm records only a
+`stall-shadow:` row (for a session on no run, one `ccrc-server: stall-watch
+shadow` line), and the ladder above stays wave 1's, with one cost: an arm that
+fires in shadow takes that sweep while it records its row. Three arms can so
+defer a wave-1 rung by one sweep, once per the arm's own key: marker
+unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
+`⚠ waiting` cap) and frozen (ahead of that cap too). The arms:
+- **dead**: a worker whose lifecycle reads `orphan` or `never-started`, or whose
+  registry row is gone, for 10 min. It draws a `stall: … dead:` mail to its
+  coordinator, or a push when coordination is paused or no one claims the run.
+  A deliberate stop (`stopped`) holds.
+- **frozen**: the marker reads `working`, the live word `busy`, and there has
+  been no hook event for 60 min. A `stall: … frozen:` mail, sent the same way.
+- **coordinator deaf**: the worker's `question`, `wave-done` or `review-done` to
+  its coordinator is unacked for 1 h. One `⚠ coordinator deaf` push.
+- **mail stuck**: a delivery still queued 1.2 h after its recipient went idle
+  (a live word of `idle` or `shell`, or a current marker reading `done` or
+  `failed`), or refused `registry-unmeasurable` for 1.2 h. One `⚠ mail stuck`
+  push per delivery.
+- **marker unreadable**: a worker's or coordinator's marker that could not be
+  read or parsed for 1 h. One `⚠ marker` push.
+- **orphaned**, on any registry row, a run coordinator's included, not only run
+  workers: a restart that lost background tasks, with the session `idle` or
+  `shell` for 15 min and the restart within 24 h. One `orphaned:` mail to the
+  session itself, then a `⚠ orphaned` push if that mail is still unacked 30 min
+  later.
+- **orphaned**, on run workers and coordinators: a background subagent,
+  workflow or shell that ended without waking the session, now idle 10 min. One
+  `orphaned:` mail to it.
+- **failed**: a turn that ended on an API error at least 10 min ago, the pane
+  reading `idle` or `shell`, and no more than about 22 h ago (the 24 h mail
+  read less the 2 h repeat window), so a repeat is never re-read as a first
+  failure.
+  - A retry-class error (`server_error`, `overloaded`, `max_output_tokens`,
+    `unknown`) draws a `failed:` mail to the session, and a second within 2 h
+    goes to the coordinator.
+  - A request-class error (`invalid_request`, `model_not_found`) goes to the
+    coordinator at once.
+  - An account-class error holds, because the limit and swap machinery owns it.
+  - A token this build does not know holds with one `ccrc-server: stall-watch
+    unknown StopFailure` line. It is never guessed into a self-wake.
+
+The `orphaned:` and `failed:` mails are class `self-wake`: recorded, never
+pushed, and they move neither the quiet clock nor the episode. With a current
+marker, r2 no longer waits a flat hour. It follows at the first of:
+- the worker's next turn ends after the check was delivered, with no background
+  agent running and no mail from it;
+- two of its background tasks end without waking it;
+- the check sits undelivered for 2 h;
+- 3 h after r1, which the check's own body now names.
+
+r3 follows r2 by an hour. The new holds are:
+- 5 min after a restart that cut a turn short;
+- while delegated work still produces hook events (within 30 min, for 4 h at
+  most);
+- the ones named above.
+
+A coordinator's notices are run-less: they are keyed on the mail's own subject
+and on in-memory latches, never on the run it claims, so they can never stand
+in for its worker's. Three things live in memory only, so a server restart
+re-times or repeats them:
+- the 10 min before a worker counts as dead;
+- the hour before a marker counts as unreadable;
+- the run-less operator pushes' latch: `⚠ orphaned` from any session but a run
+  worker, and a coordinator's `⚠ mail stuck`, `⚠ marker` and `⚠ failed`. A
+  restart may push each once more. The tag collapses the two on the phone for
+  every one but `⚠ marker`, whose key is its first-seen time, which a restart
+  re-times.
+
+The two clocks above also restart when more than two and a half sweeps (150 s)
+pass with no judged sweep: a `stall-watch-disabled` window, unreadable
+candidates or an unlistable tick. So a duration nobody watched is never counted.
+One missed sweep keeps them.
+
+The lane reads a session's non-run mail from the last 24 h only. So a delivery
+queued more than 24 h ago is outside mail-stuck's read: it was reported inside
+that window, and after a server restart it is not reported again. Runbook:
+hand-classify 48 h of wave-2 `stall-shadow:` rows and `stall-watch shadow`
+lines before touching `stall-watch-w2-live`; `rm` it to go back to wave 1's
+ladder.
+`ccrc uninstall` leaves `stall-watch-w2-live`, `mail-gate-busy` and
+`mail-gate-busy-shadow` in place, as it leaves every other operator switch.
 
 **The honest boundary.** The coordinator acts through this server's HTTP
 API — one recorded chokepoint for every irreversible act (dispatch, close,
