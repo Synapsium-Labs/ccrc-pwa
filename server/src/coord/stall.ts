@@ -1864,6 +1864,16 @@ export function stallSessionPushText(input: StallSessionInput, n: StallNotify, n
   return stallW2SessionPush(stallSessionWho(input), n, now);
 }
 
+/** Every stall push's notify kind and collapse tag, for the run verdict and the session verdicts alike (spec §4.2
+ *  "Push shape", §11 "The push classifier's home and kind"), so the lane spells neither. The delayed orphan push
+ *  (orphan D rung 2) is `mail`, tagged `orphaned-<toId>-<restartAt>` for EVERY session, a run worker's included.
+ *  Every other push is `run`, tagged `stall-<runId>-<arm>-<rung>-<key>`, or `stall-<toId>-…` for a run-less session.
+ *  The tag is also the lane's run-less push latch key. */
+export function stallPushRoute(n: Pick<StallNotify, 'arm' | 'rung' | 'key'>, toId: string, runId: number | null): { readonly kind: 'run' | 'mail'; readonly tag: string } {
+  if (n.arm === 'orphan-d' && n.rung === 2) return { kind: 'mail', tag: `orphaned-${toId}-${n.key}` };
+  return { kind: 'run', tag: `stall-${runId ?? toId}-${n.arm}-${n.rung}-${n.key}` };
+}
+
 /** coord-deaf's body: the ball-passing mail, its newest delivery, and that it is unacked. */
 function stallDeafBody(input: StallInput, label: string, worker: string, mailId: number, now: number): string {
   const m = input.mail.find((x) => x.id === mailId) ?? null;

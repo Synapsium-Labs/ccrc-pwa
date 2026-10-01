@@ -24,7 +24,7 @@ import {
   STALL_BOUND_MS, DELEGATE_WINDOW_MS, DELEGATE_CAP_MS, FROZEN_NO_EVENT_MS, DEAD_GRACE_MS, COORD_DEAF_MS, MAIL_STUCK_MS,
   ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS, FAILED_IDLE_MS, FAILED_REPEAT_MS, CHECK_UNDELIVERED_MS, BACKLOG_HORIZON_MS,
   ORPHAN_PUSH_MS, MARKER_UNREADABLE_MS,
-  rungRecipient, stallFailedSubject, stallFrozenSince, stallNotifyDelivery, stallOrphanDSubject, stallOrphanESubject,
+  rungRecipient, stallFailedSubject, stallFrozenSince, stallNotifyDelivery, stallOrphanDSubject, stallOrphanESubject, stallPushRoute,
   stallDeadShaped, stallMarkUnreadable, stallReportKind, stallReportTitle, stopFailureClass,
   type HookRawFact, type StallArm, type StallRecipient, type TurnMarkRead,
 } from '../src/coord/stall.js';
@@ -579,5 +579,32 @@ describe('wave 2: the marker-unreadable reasons and the dead-shaped lifecycles l
     ['unmeasurable', false], [null, false], ['', false], ['Orphan', false],
   ] as const)('stallDeadShaped(%j) → %s: only an orphan or never-started pane is dead-shaped; a deliberate stop never is', (lifecycle, want) => {
     expect(stallDeadShaped(lifecycle)).toBe(want);
+  });
+});
+
+describe('wave 2: stallPushRoute names every stall push\'s kind and collapse tag (spec §4.2 "Push shape", §11)', () => {
+  // L1 owns both, so watch.ts spells no tag shape and no kind rule (the controller's A5 ruling): `applyStall` and
+  // `applyStallSession` each ask this one function.
+  it('the delayed orphan push (orphan D rung 2) is `mail`, tagged orphaned-<toId>-<restartAt>, run-bound or run-less alike', () => {
+    expect(stallPushRoute({ arm: 'orphan-d', rung: 2, key: T0 }, 'demo-idle-basin', null))
+      .toEqual({ kind: 'mail', tag: `orphaned-demo-idle-basin-${T0}` });
+    expect(stallPushRoute({ arm: 'orphan-d', rung: 2, key: T0 }, 'demo-quiet-mesa', 31))
+      .toEqual({ kind: 'mail', tag: `orphaned-demo-quiet-mesa-${T0}` });
+  });
+
+  it('every other rung is `run`, tagged stall-<runId>-<arm>-<rung>-<key> on a run, stall-<toId>-… off one', () => {
+    let rows = 0;
+    for (const arm of STALL_ARMS) {
+      for (const rung of [1, 2, 3] as const) {
+        if (arm === 'orphan-d' && rung === 2) continue;
+        try { rungRecipient(arm, rung); } catch { continue; }   // a rung this arm does not have
+        expect(stallPushRoute({ arm, rung, key: T0 }, 'demo-coordinator', 31), `${arm} r${rung}`)
+          .toEqual({ kind: 'run', tag: `stall-31-${arm}-${rung}-${T0}` });
+        expect(stallPushRoute({ arm, rung, key: T0 }, 'demo-coordinator', null), `${arm} r${rung}, run-less`)
+          .toEqual({ kind: 'run', tag: `stall-demo-coordinator-${arm}-${rung}-${T0}` });
+        rows += 1;
+      }
+    }
+    expect(rows).toBeGreaterThanOrEqual(STALL_ARMS.length);   // the control: every arm's rung 1 was walked
   });
 });

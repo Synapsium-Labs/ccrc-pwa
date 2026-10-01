@@ -51,7 +51,7 @@ import {
   BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
   stallFailedVerdict, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
-  stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushText, stallReportMail,
+  stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportMail,
   stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
   stallVerdict, stallW2ReportMail,
   type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
@@ -698,9 +698,10 @@ export class FleetWatcher {
   private stallAbsentSince = new Map<string, number>();
   private stallDeadSince = new Map<string, number>();
   private stallMarkUnreadableSince = new Map<string, number>();
-  /** The run-less operator pushes already sent, keyed by their push tag (`orphaned-<id>-<restartAt>`,
-   *  `stall-<id>-<arm>-<rung>-<key>`). In memory, so a restart inside a window may push once more (spec §5.2). */
-  private stallLatch = new Set<string>();
+  /** The run-less operator pushes already sent: each push tag (`stallPushRoute`'s) with the session it names, which
+   *  the prune keys on. IN MEMORY (slug `run-less-push-latches-are-in-memory`): a restart re-pushes a run-less orphan D
+   *  rung 2, mail-stuck or marker-unreadable (re-keyed on the re-timed clock) while it stands. Pushes only, never mail. */
+  private stallLatch = new Map<string, string>();
   /** Warn-once keys, `<sessionId>|<what>`: a run-less shadow rung, `failed-unknown`, and the defensive r2-with-no-r1
    *  line (`applyStall`; no real input reaches it today). */
   private stallWarned = new Set<string>();
@@ -2980,8 +2981,9 @@ export class FleetWatcher {
    *
    * In memory, and pruned every sweep (`pruneStallMemory`): when a worker was first seen absent or dead-shaped,
    * when a marker was first seen unreadable, the run-less push latch and the warn-once keys. A server restart
-   * re-times the clocks (slug `absent-worker-is-dead-after-grace`) and may repeat one run-less push. A window the
-   * lane did not observe drops the clocks (`dropStallClocks`, slug `stall-clocks-drop-on-an-unobserved-gap`).
+   * re-times the clocks (slug `absent-worker-is-dead-after-grace`) and may repeat a run-less push (slug
+   * `run-less-push-latches-are-in-memory`). A window the lane did not observe drops the clocks (`dropStallClocks`,
+   * slug `stall-clocks-drop-on-an-unobserved-gap`).
    *
    * Every mail is durable and deduped: on a run by its observation row (`queueStallNotice`,
    * `recordStallObservation`), run-less by its subject (`hasMailWithSubject`), so a restart re-sends none.
@@ -3275,16 +3277,11 @@ export class FleetWatcher {
 
   /** The in-memory state's prune, every sweep. The absent and dead clocks live while their session is a run worker,
    *  the marker's first-seen time while it is a worker or a coordinator, and the latch and warn-once keys while
-   *  their session is in the registry. A latch key names its session as a prefix (`stall-<id>-…`, `orphaned-<id>-…`),
-   *  so an id that is a prefix of another keeps the other's keys a little longer; that costs a stale entry, never a
-   *  repeated push. */
+   *  their session is in the registry. A latch entry carries its session id, so the prune never parses a tag. */
   private pruneStallMemory(workers: ReadonlySet<string>, judged: ReadonlySet<string>, known: ReadonlySet<string>): void {
     for (const m of [this.stallAbsentSince, this.stallDeadSince]) for (const id of [...m.keys()]) if (!workers.has(id)) m.delete(id);
     for (const id of [...this.stallMarkUnreadableSince.keys()]) if (!judged.has(id)) this.stallMarkUnreadableSince.delete(id);
-    const ids = [...known];
-    for (const key of [...this.stallLatch]) {
-      if (!ids.some((id) => key.startsWith(`stall-${id}-`) || key.startsWith(`orphaned-${id}-`))) this.stallLatch.delete(key);
-    }
+    for (const [tag, id] of [...this.stallLatch]) if (!known.has(id)) this.stallLatch.delete(tag);
     for (const key of [...this.stallWarned]) if (!known.has(key.slice(0, key.indexOf('|')))) this.stallWarned.delete(key);
   }
 
@@ -3339,9 +3336,10 @@ export class FleetWatcher {
     const obs = store.recordStallObservation(primary.id, detail, now);
     if (!obs.recorded) return;
     const text = stallPushText(input, facts, n, now);
+    const route = stallPushRoute(n, worker, primary.id);
     this.pushOne({
-      kind: 'run', sessionId: worker, project: primary.project, title: text.title, body: text.body,
-      runId: primary.id, tag: `stall-${primary.id}-${n.arm}-${n.rung}-${n.key}`, recordAlways: true,
+      kind: route.kind, sessionId: worker, project: primary.project, title: text.title, body: text.body,
+      runId: primary.id, tag: route.tag, recordAlways: true,
     }, this.activeProjects);
   }
 
@@ -3352,7 +3350,8 @@ export class FleetWatcher {
    *  - To the session itself or to its coordinator: one `queueStallNotice`, on the worker's run, or run-less and
    *    deduped by its subject.
    *  - To the operator: a worker records the row first and pushes only when it is new; a run-less session latches in
-   *    memory (`stallLatch`), its push tag the key (`orphaned-<id>-<restartAt>` for orphan D, spec §5.2). */
+   *    memory (`stallLatch`, slug `run-less-push-latches-are-in-memory`). L1's `stallPushRoute` names the push's kind
+   *    and tag, which is also the latch key. */
   private applyStallSession(store: CoordStore, si: StallSessionInput, project: string, v: StallVerdict, now: number): void {
     const id = si.sessionId;
     if (v.act === 'hold' && v.why === 'failed-unknown') {
@@ -3383,23 +3382,23 @@ export class FleetWatcher {
       queueStallNotice(store, run, { detail, at: now, toId: v.coordinatorId, kind: 'status', subject: text.subject, body: text.body });
       return;
     }
+    const route = stallPushRoute(v, id, run === null ? null : run.id);
     if (run !== null) {
       const obs = store.recordStallObservation(run.id, detail, now);
       if (!obs.recorded) return;
       const text = stallSessionPushText(si, v, now);
       this.pushOne({
-        kind: 'run', sessionId: id, project, title: text.title, body: text.body,
-        runId: run.id, tag: `stall-${run.id}-${v.arm}-${v.rung}-${v.key}`, recordAlways: true,
+        kind: route.kind, sessionId: id, project, title: text.title, body: text.body,
+        runId: run.id, tag: route.tag, recordAlways: true,
       }, this.activeProjects);
       return;
     }
-    const tag = v.arm === 'orphan-d' ? `orphaned-${id}-${v.key}` : `stall-${id}-${v.arm}-${v.rung}-${v.key}`;
-    if (this.stallLatch.has(tag)) return;
-    this.stallLatch.add(tag);
+    if (this.stallLatch.has(route.tag)) return;
+    this.stallLatch.set(route.tag, id);
     const text = stallSessionPushText(si, v, now);
     this.pushOne({
-      kind: v.arm === 'orphan-d' ? 'mail' : 'run', sessionId: id, project, title: text.title, body: text.body,
-      tag, recordAlways: true,
+      kind: route.kind, sessionId: id, project, title: text.title, body: text.body,
+      tag: route.tag, recordAlways: true,
     }, this.activeProjects);
   }
 

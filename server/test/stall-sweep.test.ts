@@ -1330,6 +1330,30 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(stallRows(coord, runId)).toEqual([]);      // run-less: never on the run it claims
   });
 
+  it('a run worker draws its own orphan D: one orphaned: self-mail on its run, and the delayed push is tagged orphaned-<worker>-<restartAt>', async () => {
+    // Spec §5.2 "any session", and §4.2: the delayed orphan push's tag is orphaned-<toId>-<restartAt> for every
+    // session, a run worker's included (`stallPushRoute`).
+    const { h, coord, w, sent } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedCaseD(h.home, WORKER, UUID);
+    at(D_AT);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    const mail = orphanedTo(coord, WORKER);
+    expect(mail).toHaveLength(1);
+    expect(mail[0]).toMatchObject({ runId, kind: 'status', at: D_AT });
+    at(D_AT + ORPHAN_PUSH_MS - STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    expect(sent).toEqual([]);
+    at(D_AT + ORPHAN_PUSH_MS);                        // the self-mail still undelivered ORPHAN_PUSH_MS on
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    at(D_AT + ORPHAN_PUSH_MS + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    expect(sent.map((p) => p.tag)).toEqual([`orphaned-${WORKER}-${RESTART_AT}`]);
+    expect(stallRows(coord, runId)).toEqual([
+      stallDetail('live', 'orphan-d', 1, RESTART_AT), stallDetail('live', 'orphan-d', 2, RESTART_AT),
+    ]);
+  });
+
   // Slug `stall-clocks-drop-on-an-unobserved-gap`. A first-seen clock claims "true at every sweep since", so a window in
   // which the lane observed nothing must restart it. The worker is absent at T0, the lane is blind for one step, and
   // three hours later the worker is absent again: the dead report waits DEAD_GRACE_MS from the return, never fires
