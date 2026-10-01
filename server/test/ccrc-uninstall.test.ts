@@ -700,6 +700,36 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(existsSync(join(home, '.tmux.conf'))).toBe(true);
   });
 
+  it('ccd\'s BODY goes with its launcher, and ~/.local/libexec/ccrc only when that leaves it empty (D-3696)', () => {
+    // The pair: `_inst_bins` publishes the launcher at ~/.local/bin/ccd and the
+    // body at ~/.local/libexec/ccrc/ccd, so an uninstall that removed only the
+    // launcher would strand a 1.7 MB Bash body nothing can start.
+    const body = (home: string): string => join(home, '.local', 'libexec', 'ccrc', 'ccd');
+    const plantBody = (home: string): void => {
+      mkdirSync(join(home, '.local', 'libexec', 'ccrc'), { recursive: true });
+      writeFileSync(body(home), '#!/usr/bin/env bash\n# fixture ccd body\n', { mode: 0o644 });
+    };
+    const empty = mkTmp('ccrc-uninst-body-');
+    plantInstalledBox(empty);
+    plantBody(empty);
+    writeFileSync(join(empty, '.local', 'libexec', 'operator-tool'), '#!/bin/sh\n', { mode: 0o755 });
+    const r = runVerb(empty, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(empty, '.local', 'bin', 'ccd')), 'the launcher survived').toBe(false);
+    expect(existsSync(body(empty)), 'the body survived').toBe(false);
+    expect(existsSync(join(empty, '.local', 'libexec', 'ccrc')), 'an emptied ccrc libexec directory survived').toBe(false);
+    expect(existsSync(join(empty, '.local', 'libexec', 'operator-tool')), 'unrelated libexec content was removed').toBe(true);
+    expect(r.stdout).toMatch(/and ccd's body from \$HOME\/\.local\/libexec\/ccrc; /);
+    // Something of the operator's beside the body keeps the directory.
+    const kept = mkTmp('ccrc-uninst-body-kept-');
+    plantInstalledBox(kept);
+    plantBody(kept);
+    writeFileSync(join(kept, '.local', 'libexec', 'ccrc', 'notes.txt'), 'mine\n');
+    expect(runVerb(kept, 'uninstall').code).toBe(0);
+    expect(existsSync(body(kept)), 'the body survived').toBe(false);
+    expect(readFileSync(join(kept, '.local', 'libexec', 'ccrc', 'notes.txt'), 'utf8'), 'an operator file beside the body was removed').toBe('mine\n');
+  });
+
   it('a STAMPED ccd-account-auth is still the bin arm\'s subject, never counted as a wrapper', () => {
     // `_inst_atomic` does not stamp, so a real box's copy is unmarked and the
     // wrapper arm keeps it silently whether or not `_uninst_wrappers`' case

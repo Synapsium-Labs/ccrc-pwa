@@ -1706,13 +1706,16 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     // moved". So the death is moved one step later, to `_inst_bins` — the
     // step right after `_inst_tree`, reached only once the migration has
     // already linked `~/ccrc` — with the harness's recording `mv` refusing
-    // the one destination `_inst_atomic` renames onto: `~/.local/bin/ccd`.
+    // one destination `_inst_atomic` renames onto: `~/.local/bin/ccd-account-auth`,
+    // placed on every role and both arms. (It named `~/.local/bin/ccd` until
+    // D-3696: ccd's pair is published by its own helper's `os.replace`, which
+    // no `mv` stub sees — so the lever moved to the next `_inst_atomic`.)
     const home = freshUpdateBox('ccrc-update-died-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantCoordDb(home);
     writeFileSync(join(home, '.ccrc', 'installed'), 'oldsha0000000000000000000000000000000000\n');
     packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
-    writeFileSync(join(home, 'fixture-mv-fail'), '/.local/bin/ccd\n');
+    writeFileSync(join(home, 'fixture-mv-fail'), '/.local/bin/ccd-account-auth\n');
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
     expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — /m);
@@ -1789,6 +1792,10 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     const home = freshUpdateBox('ccrc-update-ordering-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantCoordDb(home);
+    // A box already on ccd's pair (D-3696): its body is the other half the
+    // backup must hold before anything is installed.
+    mkdirSync(join(home, '.local', 'libexec', 'ccrc'), { recursive: true });
+    writeFileSync(join(home, '.local', 'libexec', 'ccrc', 'ccd'), '#!/usr/bin/env bash\n# the OLD ccd body\n', { mode: 0o644 });
     packRelease(home, stubTree(home, { version: 'v2.0.0', installExit: 1 }), { tag: 'v2.0.0' });
     const r = runUpdate(home);
     expect(r.code).toBe(1);
@@ -1798,9 +1805,11 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     // uncertain bytes) …
     const snap = readFileSync(join(backup, 'coord.db'));
     expect(snap.subarray(0, 15).toString('utf8')).toBe('SQLite format 3');
-    // … the old ccd, byte for byte …
+    // … the old ccd, byte for byte — both halves of its pair …
     expect(readFileSync(join(backup, 'ccd'), 'utf8'))
       .toBe(readFileSync(join(home, '.local', 'bin', 'ccd'), 'utf8'));
+    expect(readFileSync(join(backup, 'ccd-body'), 'utf8'))
+      .toBe(readFileSync(join(home, '.local', 'libexec', 'ccrc', 'ccd'), 'utf8'));
     // … the job files this box actually has, and the dists. The NAMES are
     // per-platform (systemd units vs launchd plists) and so is the set:
     // launchd has no template unit, because there is nothing to instantiate —
@@ -8811,8 +8820,8 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
     expect(fileText(join(v1, '.ccrc-stamp.json')), 'the kept stamp was rewritten').toBe(keptStamp);
     expect(fileText(join(v1, '.ccrc-installed')), 'the kept record was rewritten').toBe(keptRec);
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toContain(CCD_SENTINEL);
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
     // A return is not a new baseline, and the floor never lowers.
     expect(fileText(join(home, '.ccrc', 'previous'))).toBe(`v1.0.0\n${V1_SHA}\n`);
     expect(fileText(join(home, '.ccrc', 'floor'))).toBe('v2.0.0\n');
@@ -8947,7 +8956,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(treeDigest(join(v1, 'server', 'dist'))).toEqual(distBefore);
     expect(fileText(join(v1, 'server', 'node_modules', '.fixture-dep'))).toBe('installed\n');
     expect(existsSync(join(v1, '.ccrc-installed')), 'the running version stopped claiming completeness').toBe(true);
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toContain(CCD_SENTINEL);
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
   }, 60_000);
 
   it('arm 1 with ~/ccrc already ON the previous version restores it IN PLACE — unit pin, the arm called directly on a FULL box: its kept stamp, its own spine, the gate once more, no download, no npm ci in the running version, that version byte-unchanged (D-3445; the end-to-end case above reaches it through cmd_update; an `_inst_tree`-marked death never gets here, D-3457)', () => {
@@ -9000,7 +9009,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(treeDigest(join(v1, 'server', 'dist'))).toEqual(distBefore);
     expect(fileText(join(v1, 'server', 'node_modules', '.fixture-dep'))).toBe('installed\n');
     expect(existsSync(join(v1, '.ccrc-installed')), 'the running version stopped claiming completeness').toBe(true);
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toContain(CCD_SENTINEL);
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
   }, 60_000);
 
   it('arm 1 whose kept spine COMPLETED under a failing doctor still reverts, and the report and the line say the doctor exited N — as arm 2\'s rc-3 arm does (F9; the flip stubbed to VER_SPINE_RC=3, the arm called directly)', () => {
@@ -9549,7 +9558,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     const up = runUpdate(home);
     expect(up.code, `the move onto v2.0.0 must complete — stderr: ${up.stderr}\nstdout: ${up.stdout}`).toBe(0);
     expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v2.0.0'));
-    expect(fileText(join(home, '.local', 'bin', 'ccd')), 'v2.0.0 carries the kept sentinel — the control is broken').not.toContain(CCD_SENTINEL);
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd')), 'v2.0.0 carries the kept sentinel — the control is broken').not.toContain(CCD_SENTINEL);
     for (const f of ['curl-argv', 'update-json-writes', 'systemctl-calls']) rmSync(join(home, f), { force: true });
     writeFileSync(join(home, 'fixture-release-http'), '404\n');
     withSweep(home);
@@ -9558,8 +9567,8 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(r.stdout).toContain('rollback: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — no release-host question and no download');
     expect(localUrls(home)).toEqual([]);
     expect(linkOf(home)).toBe(v1);
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toContain(CCD_SENTINEL);
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd'))).toContain(CCD_SENTINEL);
     expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(keptStamp);
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
     expect(fileText(join(v1, '.ccrc-stamp.json')), 'the kept stamp was rewritten').toBe(keptStamp);
@@ -11364,7 +11373,7 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(keptStamp);
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
     expect(fileText(join(home, '.ccrc', 'previous')).split('\n')[0]).toBe('v1.0.0');
-    expect(fileText(join(home, '.local', 'bin', 'ccd')), "v1.0.0's own spine re-placed its ccd").toContain(CCD_SENTINEL);
+    expect(fileText(join(home, '.local', 'libexec', 'ccrc', 'ccd')), "v1.0.0's own spine re-placed its ccd body").toContain(CCD_SENTINEL);
   }, 120_000);
 
   it('the arm-1-then-arm-3 shape, produced by a REAL failed update (arm 1 flips back and its gate fails, ~/ccrc points at the new version again, arm 2 refuses, arm 3 restores no stamp), then a bare rollback typed by hand (`--from cli`): it flips back to the kept previous version', () => {

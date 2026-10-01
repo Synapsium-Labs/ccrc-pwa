@@ -79,7 +79,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ghContainedEnv, renderCcdEntry } from './ccdWsHelpers.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm } from './platformFixtures.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
 import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest } from './installTreeFixture.js';
@@ -1921,9 +1921,12 @@ describe('ccrc install: the executables and files it installs', () => {
     // launcher execs must be one version, and installing out of `~/ccrc` is
     // what makes that true by construction rather than by both happening to
     // come from the same run.
+    // D-3696: what reaches PATH is now the LAUNCHER rendered from the placed
+    // tree's template, and the byte copy is the BODY at libexec — the pair is
+    // asserted whole below the original case.
     const { home } = installed;
-    const bin = join(home, '.local', 'bin', 'ccd');
-    expect(existsSync(bin), 'ccd never reached $HOME/.local/bin').toBe(true);
+    const bin = join(home, '.local', 'libexec', 'ccrc', 'ccd');
+    expect(existsSync(bin), 'ccd\'s body never reached $HOME/.local/libexec/ccrc').toBe(true);
     // `'ccd/ccd'` as ONE segment, deliberately. `single-definition.test.ts`'s
     // extraction guard treats two adjacent quoted `ccd` arguments as a second
     // path to the REPOSITORY's ccd script (which must be reached only through
@@ -1932,7 +1935,15 @@ describe('ccrc install: the executables and files it installs', () => {
     // add this file to the guard's exclusion list and blind it to a real second
     // spelling arriving here later.
     expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd/ccd')));
-    expect(mode(bin)).toBe(0o755);
+    expect(mode(bin)).toBe(0o644);
+    // The launcher: the placed template rendered for the canonical python3 its
+    // own shebang names and the body's digest — nothing else, byte for byte.
+    const entry = join(home, '.local', 'bin', 'ccd');
+    const python = /^#!(\S+) -IS\n/.exec(read(entry))?.[1];
+    expect(python, 'the launcher does not open with an absolute isolated-python shebang').toMatch(/^\//);
+    expect(read(entry)).toBe(renderCcdEntry(read(placed(home, 'ccd/ccd-entry.py')), python!,
+      createHash('sha256').update(readFileSync(bin)).digest('hex')));
+    expect(mode(entry)).toBe(0o755);
   });
 
   itLinux('ccd-cap-scopes lands beside it — the OOM guardrail is an executable too', () => {
@@ -2194,13 +2205,15 @@ describe('ccrc install: the executables and files it installs', () => {
     // measures.
     const home = freshBox('ccrc-install-mode-repair-');
     expect(runInstall(home).code).toBe(0);
-    const bin = join(home, '.local', 'bin', 'ccd');
-    chmodSync(bin, 0o600);
-    const was = mtime(bin);
-    const r = runInstall(home);
-    expect(r.code, r.stderr).toBe(0);
-    expect(mode(bin), 'a mode nobody repaired').toBe(0o755);
-    expect(mtime(bin), 'the file was rewritten to fix a mode').toBe(was);
+    // Both halves of ccd's pair (D-3696), each at its own mode.
+    for (const [bin, want] of [[join(home, '.local', 'bin', 'ccd'), 0o755], [join(home, '.local', 'libexec', 'ccrc', 'ccd'), 0o644]] as const) {
+      chmodSync(bin, 0o600);
+      const was = mtime(bin);
+      const r = runInstall(home);
+      expect(r.code, r.stderr).toBe(0);
+      expect(mode(bin), 'a mode nobody repaired').toBe(want);
+      expect(mtime(bin), 'the file was rewritten to fix a mode').toBe(was);
+    }
   });
 
   it('keeps a personal ~/.tmux.conf aside before replacing it', () => {

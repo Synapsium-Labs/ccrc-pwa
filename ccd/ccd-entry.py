@@ -19,8 +19,9 @@
 #
 # WHAT IS PROTECTED, EXACTLY (the body re-classifies the same shapes, and a test
 # runs one table against both):
-#   ws-reclaim <any tail>                       — the body's parser owns the tail
-#   ws-audit --session <id> --reclaim [--defer-expired]   — syntactic, exact
+#   ws-reclaim <any tail>                         — the body's parser owns the tail
+#   ws-audit --session <value> --reclaim [--defer-expired] — the token skeleton;
+#     <value> is any string here, and the body still validates it as a session id
 # Every other argv is ORDINARY: the same Bash >= 4.4 scan, no `-p`, and the
 # inherited environment untouched — an ordinary verb keeps what it always had.
 #
@@ -68,6 +69,10 @@ REFUSED_RC = 125
 # ORDINARY start, probe and payload alike, keeps its original environment.
 STARTUP_VARS = (b'BASH_ENV', b'ENV', b'SHELLOPTS', b'BASHOPTS', b'CDPATH', b'GLOBIGNORE')
 FUNC_PREFIX = b'BASH_FUNC_'
+
+# The one argv this file answers itself instead of passing to ccd: the
+# installer's pre-publication self-test. No ccd verb is spelled like it.
+SELFTEST_ARGV = '--ccrc-entry-self-test'
 
 PROBE_TIMEOUT_S = 10.0
 PROBE_MAX_BYTES = 256
@@ -206,6 +211,14 @@ def main():
     argv = sys.argv[1:]
     body = body_path()
     check_body(body)
+    if argv == [SELFTEST_ARGV]:
+        # THE INSTALLER'S PRE-PUBLICATION KERNEL SELF-TEST (ccd-entry-install.py):
+        # the layout derived and the body's digest matched above; report the
+        # flags this kernel's reading of the shebang produced, and start nothing.
+        f = sys.flags
+        sys.stdout.write('ccd-entry-self-test %d %d %d %d %d\n'
+                         % (sys.version_info[0], f.isolated, f.ignore_environment, f.no_user_site, f.no_site))
+        return
     protected = is_protected(argv)
     env = startup_free_env() if protected else os.environb
     bash = select_bash(protected, env)
