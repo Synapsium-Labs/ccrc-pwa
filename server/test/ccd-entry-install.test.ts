@@ -439,14 +439,19 @@ describe('the fix pass of the final review: layouts, mode repair, postcondition,
     // A python3 on PATH that is a LINK to the real interpreter: rendered as the
     // link, which an upgrade repoints. A python3 on PATH that is a SCRIPT shim:
     // not the interpreter that answered, so the canonical path is rendered.
+    //
+    // The link's directory is its OWN short temp root, not a directory under
+    // `home`: the link's absolute path IS the rendered shebang, and on macOS
+    // `os.tmpdir()` resolves to a ~56-byte `/private/var/folders/…/T`, so a
+    // link under `home` made the line 128 bytes and the publisher refused it,
+    // as it must (the 127-byte refusal is pinned by its own row above). Under
+    // a short root the line is about 80 bytes there; `mkTmp` removes it.
     for (const [shape, plant, want] of [
       ['a link to the interpreter', (d: string) => fs.symlinkSync(PYTHON, path.join(d, 'python3')), (d: string) => path.join(d, 'python3')],
       ['a shim script', (d: string) => fs.writeFileSync(path.join(d, 'python3'), `#!/bin/sh\nexec '${PYTHON}' "$@"\n`, { mode: 0o755 }), () => PYTHON],
     ] as const) {
       fs.rmSync(path.join(home, '.local'), { recursive: true, force: true });
-      const d = path.join(home, `pydir-${shape.replace(/\s+/g, '-')}`);
-      fs.rmSync(d, { recursive: true, force: true });
-      fs.mkdirSync(d, { recursive: true });
+      const d = mkTmp('py-');
       plant(d);
       plantTree();
       const r = LANES['deploy.sh']!(`${d}:`);
