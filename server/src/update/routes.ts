@@ -325,9 +325,10 @@ function routeWord(r: DispatchRefusal): MoveRouteWord {
 }
 
 /** The same, for `{all: true}`'s skip list: under `NO_HALT` an update move is never `halted`, never asked for
- *  the rollback cap, and never auto's `no-update-gate`. */
+ *  the rollback cap, never auto's `no-update-gate`, and — wave 8 item C — never `no-bundle`: `{all: true}` asks for
+ *  update moves only, and that word is rollback-only. */
 function skipWord(r: DispatchRefusal): MoveSkipWhy {
-  if (r === 'halted' || r === 'no-update-gate' || r === 'no-rollback-cap' || r === 'waiting-for-fleet') {
+  if (r === 'halted' || r === 'no-update-gate' || r === 'no-rollback-cap' || r === 'waiting-for-fleet' || r === 'no-bundle') {
     throw new Error(`update: moveRefusal answered ${r} for an unhalted update request — the dispatcher's contract changed`);
   }
   return r;
@@ -350,6 +351,7 @@ const SKIP_SENTENCE: Record<DispatchRefusal, SkipSentence> = {
   'no-detach-cap': (v) => `${v.row.label}'s ccrc-caps had no ${DETACH_CAP}`,
   'no-update-gate': (v) => `${v.row.label}'s ccrc-caps had no ${UPDATE_GATE_CAP}`,
   'no-rollback-cap': (v) => `${v.row.label}'s ccrc-caps had no ${ROLLBACK_CAP}`,
+  'no-bundle': (v, t) => `the catalogue listed no provenance bundle for ${t} and ${v.row.label}'s install was verified`,
   'agent-predates-update-op': (v) => `${v.row.label}'s agent did not advertise the ${UPDATE_OP} op`,
   halted: (v, t) => `a failed or reverted node was halting every move, so ${v.row.label} was not asked for ${t}`,
   'waiting-for-fleet': (v, t) => `a fleet node was holding a request, so ${v.row.label} was not asked for ${t}`,

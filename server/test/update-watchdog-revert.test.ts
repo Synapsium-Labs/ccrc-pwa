@@ -359,6 +359,7 @@ function server(home: string, o: { fleet?: boolean } = {}): Server {
     store, role: 'server', ccrcDir: join(home, '.ccrc'), localIo: io, deadlineMs: DEADLINE, fleet: null,
     runLocal: spawnFromRunner(async (_cmd, args) => { spawnedArgvs.push(args); return { code: 0, stdout: '', stderr: '' }; }, home),
     onAccepted: () => undefined,
+    recordMove: null,
   };
   return { store, deps, ioReads, spawnedArgvs };
 }

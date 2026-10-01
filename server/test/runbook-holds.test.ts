@@ -432,6 +432,15 @@ describe('step 12 (the release round-trip) quotes what the release verbs actuall
     expect(step12Section()).toContain(line);
   });
 
+  // Wave 8 item G: the sweep's OTHER close line — a box with no live sessions
+  // does not run the line above (nothing was restarted, so nothing was
+  // "verified … before any restart"), and the runbook now quotes the real one.
+  it('the zero-supervisors sweep close line is quoted verbatim — it is a constant in _upd_sweep', () => {
+    const line = 'update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart (KillMode=process verified before the restart; panes untouched)';
+    expect(ccrcSrc).toContain(`echo "${line}"`);
+    expect(step12Section()).toContain(line);
+  });
+
   it("the from→to report line matches _upd_report's template and its versioned-desc shape", () => {
     // The template and the shape a VERSIONED stamp renders as ("vX.Y.Z (sha)")
     // — both source facts; the runbook line substitutes the two tags and marks

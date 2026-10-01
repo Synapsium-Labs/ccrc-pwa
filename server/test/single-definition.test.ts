@@ -3950,7 +3950,7 @@ describe('the update op — its refusal words and its launcher are declared once
 // ── Programme wave 5 (design 2026-09-20 §9/§10): the dispatcher's words and order ──
 // APPENDED after the file's last line: `session-hook.test.ts`'s citation audit
 // cites this file by line, so nothing above may move (R13). No import is
-// added either — the eleven words are stated here as a LITERAL, on purpose (the
+// added either — the twelve words are stated here as a LITERAL, on purpose (the
 // opposite of W2's `SQL_VOCABS`, which imports its arrays): `update-dispatch.test.ts` holds L0's array equal to
 // this same list, and the fingerprint below must find shared/api.ts's array,
 // so a word added on one side alone reds one of the two.
@@ -3964,7 +3964,7 @@ describe('the update op — its refusal words and its launcher are declared once
 describe('the dispatcher refusal words and the dispatch order are declared once, in L0 (programme wave 5)', () => {
   const WORDS = [
     'unknown-tag', 'not-newer', 'refused-by-node', 'stamp-unread', 'floor-unread', 'no-detach-cap',
-    'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet',
+    'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet', 'no-bundle',
   ];
   const alt = `(?:${WORDS.map((w) => w.replace(/-/g, '\\-')).join('|')})`;
   const item = `\\s*['"]${alt}['"]\\s*`;

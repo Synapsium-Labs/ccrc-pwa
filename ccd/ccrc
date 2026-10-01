@@ -1628,6 +1628,9 @@ fi
 # `_upd_report` prints restore commands OUT of it, and two spellings is how
 # the printed command comes to name a directory nothing wrote.
 BOX_BACKUP_ROOT="$HOME/ccrc-backups"
+# The ONE shape of a timestamped backup directory's name: `_upd_backup`'s `date +%Y%m%d-%H%M%S`. A GLOB, expanded
+# unquoted by `_bak_list` alone (deploy.sh's `prune_backups` keeps its own box-side copy of the same glob).
+BAK_TS_PAT='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
 
 # ── WHERE A BOX KEEPS THE VERSIONS IT INSTALLED (W6 Task 2, spec §11) ─────
 # `~/ccrc-versions/<name>/` holds one placed tree per release this box
@@ -1839,6 +1842,8 @@ UPD_TREE=""
 UPD_VERSION=""
 UPD_STAGED_SHA=""    # _upd_fetch: the extracted tree's OWN sha (review fix round 1 I3) — arm 3 compares it to old_sha to tell a same-tag REBUILD (mixed) from a same-tag REPEAT (not mixed)
 UPD_BACKUP_DIR=""
+BAK_DIRS=()        # `_bak_list`'s out-param: the timestamped backup dirs, oldest first
+UPD_BAK_FLOOR=""   # the second this run first held ~/.ccrc/update.lock (`_upd_lock`); `_bak_gc` keeps every dir named at or after it
 UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
 UPD_URL_DIR_SAFE=""    # _upd_resolve: same, through _upd_redact — every "fetching …"/WARN line prints THIS, never UPD_URL_DIR, so a credentialed CCRC_RELEASE_BASE_URL never reaches stdout (review 155 C17, fix round 1 item 11); the real curl calls still read UPD_URL_DIR
 UPD_TARNAME=""    # _upd_resolve: the tarball SHA256SUMS names
@@ -2111,6 +2116,12 @@ already running).
             back and, with a server, for /health to answer the new version:
             a failed gate exits 4; a doctor FAIL with the gate passed exits
             3; --no-gate skips it.
+            After a passed gate and a finished sweep, ~/ccrc-backups is
+            pruned to the newest CCRC_BACKUP_KEEP (default 10) timestamped
+            backups, never this run's own. CCRC_BACKUP_KEEP is read from the
+            process environment only: a console-driven move runs under the
+            user manager's environment, which carries none unless it was set
+            there, so the default 10 applies.
             With no --to the target is the control plane's projection
             (~/.ccrc/update-intent): its desired, or for one run
             [--channel stable|dev]'s desired-stable/desired-dev; a box no
@@ -2125,8 +2136,9 @@ already running).
             under update's lock: verify, back up, re-install below the
             floor if need be (the floor itself is never lowered), the
             health gate, then the supervisor sweep behind its KillMode
-            preflight. A rollback whose gate fails is NOT restored — its
-            target was the known-good build. [--detach] (Linux) returns at
+            preflight, and a flip prunes the same way after its sweep. A
+            rollback whose gate fails is NOT restored — its target was the
+            known-good build. [--detach] (Linux) returns at
             once and runs it as a transient systemd --user unit;
             [--from <who>] names the caller (${UPD_FROM_WORDS[*]}).
             A version kept under ~/ccrc-versions is rolled back to by a
@@ -2748,6 +2760,48 @@ _box_env_value() {
   esac
   printf '%s' "$v"
   [ "$found" -eq 1 ]
+}
+
+# Out-params, at file scope — `_box_unit_env`'s own comment argues why
+# presence must be told from empty, the same reason `_box_env_value`'s own
+# header gives for its return code.
+BUE_VAL=""     # _box_unit_env: the value ccrc.service receives for the key ("" when neither file names it)
+BUE_SRC=""     # the file whose line decided ("" when neither readable file names the key)
+BUE_NAMED=0    # 1 iff either READABLE file named the key at all (presence, not a non-empty value)
+BUE_ENV=""     # ccrc.env's state: ok | unreadable | absent
+BUE_EXP=""     # the exposure file's state: absent | readable | unreadable
+
+# ── _box_unit_env — ONE KEY AS ccrc.service RECEIVES IT (wave 8 item D) ────
+# The unit carries two EnvironmentFile lines, ccrc.env then $CCRC_EXPOSURE_FILE, and the later wins by PRESENCE: a
+# bare `KEY=` in the exposure file overrides ccrc.env's value, exactly as systemd's second EnvironmentFile does
+# (`_box_env_value`'s rc tells that apart). THE one copy of that precedence: `_check_auth`, `_check_update-exposure`
+# and install's gate line read through it. It never reads this shell's environment. It narrows nothing: an
+# exposure file that is THERE AND UNREADABLE answers rc 2 (UNMEASURED — what the service manager receives from it
+# was not measured), never absent;
+# BUE_VAL/BUE_SRC then carry what ccrc.env alone says, for a caller that must word that. rc 0 measured.
+_box_unit_env() {   # <KEY>
+  local key="$1" v rc
+  BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0; BUE_ENV=absent; BUE_EXP=absent
+  if [ -e "$BOX_ENV_FILE" ]; then
+    if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+      BUE_ENV=ok
+      v="$(_box_env_value "$BOX_ENV_FILE" "$key")"; rc=$?
+      if [ "$rc" -eq 0 ]; then BUE_VAL="$v"; BUE_SRC="$BOX_ENV_FILE"; BUE_NAMED=1; fi
+    else
+      BUE_ENV=unreadable
+    fi
+  fi
+  if [ -n "${CCRC_EXPOSURE_FILE:-}" ] && [ -e "$CCRC_EXPOSURE_FILE" ]; then
+    if [ -f "$CCRC_EXPOSURE_FILE" ] && [ -r "$CCRC_EXPOSURE_FILE" ]; then
+      BUE_EXP=readable
+      v="$(_box_env_value "$CCRC_EXPOSURE_FILE" "$key")"; rc=$?
+      if [ "$rc" -eq 0 ]; then BUE_VAL="$v"; BUE_SRC="$CCRC_EXPOSURE_FILE"; BUE_NAMED=1; fi
+    else
+      BUE_EXP=unreadable
+      return 2
+    fi
+  fi
+  return 0
 }
 
 # ── _box_auth_path — WHICH FILE IS THIS BOX'S PASSPHRASE SECRET (D-143) ───
@@ -12188,8 +12242,8 @@ cmd_install() {
   # PROMPTED for cannot be read at all — `install.sh` is documented as
   # `curl … | bash`, where stdin is the script itself, so a `read` here would
   # consume the installer's own text (`cmd_passwd`'s tty refusal is the same
-  # hazard from the other side). So the box lands with the gate DARK, which is
-  # the shipped default (`CCRC_AUTH` off), and doctor's `auth` check WARNs
+  # hazard from the other side). So a fresh box lands with the gate DARK, which
+  # is the shipped default (`CCRC_AUTH` off), and doctor's `auth` check WARNs
   # about exactly that four lines below this one.
   #
   # THE THREE VARIABLES ARE NAMED TOGETHER because setting `CCRC_AUTH` alone
@@ -12198,7 +12252,46 @@ cmd_install() {
   # about a wrong one at boot (behind `tailscale serve` it never learns the
   # hostname it is reached under). An operator who arms the flag from this line
   # alone would find that out one tap at a time.
-  echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, then: $(_svc_restart_hint ccrc.service)"
+  #
+  # THIS LINE NOW FOLLOWS THE FILE (wave 8 item G, D-3598), where a fresh
+  # install cannot: a re-run of `ccrc install` over an already-passworded,
+  # already-exposed box lands here too, and a bare "no passphrase" line would
+  # be a lie on that box. So the passphrase file is resolved through
+  # `_box_auth_path` (a relative override is undecidable, exactly as doctor's
+  # `auth` check refuses it) and the flag through `_box_unit_env`. With a
+  # passphrase file, an exposure file that cannot be read prints "not
+  # measured"; otherwise a measured CCRC_AUTH=on, from either file with the
+  # later one winning, names the file that decides, and so does the OFF
+  # remedy — it names ccrc.env by default, or the exposure file when that is
+  # the one that would arm it (`gate_how`'s `$BUE_SRC` switch). With no
+  # passphrase file, a measured CCRC_AUTH=on names the file that decides too;
+  # every other case — including an exposure file that sets CCRC_AUTH to
+  # anything but on, or one that cannot be read — prints main's else-arm line
+  # unchanged, naming ccrc.env. The fresh-box line (no file, flag off) is
+  # byte-identical to what this line always said.
+  local gsec grc urc=0
+  gsec="$(_box_auth_path)"; grc=$?
+  if [ "$grc" -eq 3 ]; then
+    echo "install: gate: CCRC_AUTH_SECRET_PATH in $BOX_ENV_FILE is RELATIVE ($gsec), so install cannot say whether this box has a PWA passphrase — make it absolute (or remove the line); ccrc doctor's auth check says the rest"
+  elif [ -e "$gsec" ]; then
+    _box_unit_env CCRC_AUTH || urc=$?
+    if [ "$urc" -ne 0 ]; then
+      echo "install: gate: a PWA passphrase file is at $gsec, and $CCRC_EXPOSURE_FILE is there and cannot be read, so whether CCRC_AUTH is on was not measured — ccrc doctor's auth check says what to do"
+    elif [ "$BUE_VAL" = on ]; then
+      echo "install: gate: CCRC_AUTH=on in $BUE_SRC, and a PWA passphrase file is at $gsec (arming also needs CCRC_RP_ID and CCRC_ORIGIN beside the flag; ccrc doctor's auth check measures whether the file is usable)"
+    else
+      local gate_how="set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE (or run ccrc expose)"
+      [ "$BUE_SRC" != "$CCRC_EXPOSURE_FILE" ] || gate_how="set CCRC_AUTH=on in $CCRC_EXPOSURE_FILE, which overrides $BOX_ENV_FILE (ccrc expose writes it with CCRC_RP_ID and CCRC_ORIGIN)"
+      echo "install: gate: a PWA passphrase file is at $gsec, but the gate is OFF. To arm it: $gate_how, then: $(_svc_restart_hint ccrc.service)"
+    fi
+  else
+    _box_unit_env CCRC_AUTH || urc=$?
+    if [ "$urc" -eq 0 ] && [ "$BUE_VAL" = on ]; then
+      echo "install: gate: CCRC_AUTH=on in $BUE_SRC and this box has NO PWA passphrase — the gate is failing SHUT: every route answers 401 until: ccrc passwd"
+    else
+      echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, then: $(_svc_restart_hint ccrc.service)"
+    fi
+  fi
   _inst_doctor_tail
 }
 
@@ -16444,6 +16537,7 @@ cmd_update() {
   # the directory, because its doctor tail found this run's lock held
   # (D-3431). --no-gate measured nothing, so it keeps
   # it too — arm 2's restore child included, which always passes --no-gate.
+  local gate_passed=0
   if [ "$no_gate" -eq 1 ]; then
     _ver_layout
     [ "$VER_LAYOUT" = migrated ] \
@@ -16451,6 +16545,7 @@ cmd_update() {
   else
     _inst_migrate_finish update "the health gate passed"
     _ver_gc update auto || :   # W6 Task 5: under this run's lock, after the gate passed; a skipped prune never fails the update
+    gate_passed=1
   fi
 
   if [ "$UPD_FROM" = restore ]; then
@@ -16472,6 +16567,11 @@ cmd_update() {
   # coord.db restore recipe) that cannot clobber anyone's report, so
   # skipping it would only drop information this run's own caller is owed.
   _upd_report "$old_desc" "$old_version"
+  # Wave 8 item B: reached only past the sweep, so the exit that follows is 0 or 3; the report still reads
+  # `restarting`, so the console dispatches nothing here while the prune holds the lock (seconds on a first prune
+  # of a large backlog). The restore child is excluded by `gate_passed` already; the UPD_FROM test is a belt with
+  # no pin claimed (its inherited-lock early return leaves UPD_BAK_FLOOR empty, which would only WARN).
+  if [ "$gate_passed" -eq 1 ] && [ "$UPD_FROM" != restore ]; then _bak_gc update || :; fi
   # Everything from HERE is a WRITE, after the lock was released above (or,
   # on the `--from restore` branch, never taken from this run at all) — a
   # second `ccrc update` may already hold ~/.ccrc/update.json for its own
@@ -16951,6 +17051,7 @@ cmd_rollback() {
         # passed, the box IS on <to>, and the exit is 3. The terminal `done`
         # report is written either way, as `cmd_update` writes it for 3.
         local doctor_rc="$VER_SPINE_RC"
+        _bak_gc rollback || :
         if _upd_report_is_mine; then
           if [ "$doctor_rc" -ne 0 ]; then
             _upd_phase done "doctor exited $doctor_rc - the box moved; its health is ccrc doctor's"
@@ -17884,6 +17985,10 @@ _upd_lock() {
     fi
     _ccrc_die "update: cannot lock ~/.ccrc/update.lock (flock rc $frc) — this is not another update holding it; nothing on this box was changed"
   fi
+  # Wave 8 item B: the second this run first held the lock. `_bak_gc` never prunes a backup named at or after it:
+  # this run's own, its spine installers', and anything a writer on this box's clock started since. Set once per
+  # process (cmd_rollback's earlier lock wins over cmd_update's in-process re-entry, which returns above). D-3593.
+  [ -n "$UPD_BAK_FLOOR" ] || UPD_BAK_FLOOR="$(date +%Y%m%d-%H%M%S)"
   return 0
 }
 
@@ -20164,7 +20269,14 @@ _upd_sweep() {
       _ccrc_job_stayed_up "$u" \
         || _ccrc_die "$u was restarted and did not stay up ($CCRC_STAYED_DETAIL) — read: $(_svc_status_hint "$u"). The pre-update backup is complete at $UPD_BACKUP_DIR"
     done
-    echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (AbandonProcessGroup verified in every job file; ${#kicked[@]} restarted and re-measured still up)"
+    # Wave 8 item G: a claim of "every … now runs the ccd this update
+    # installed" is false on a box with nothing loaded — there was nothing to
+    # verify. `kicked` is the set `_svc_try_restart` actually touched.
+    if [ "${#kicked[@]}" -eq 0 ]; then
+      echo "update: sweep: no loaded claude-session@ supervisor on this box, so nothing was restarted (AbandonProcessGroup is checked per job file when there is one)"
+    else
+      echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (AbandonProcessGroup verified in every job file; ${#kicked[@]} restarted and re-measured still up)"
+    fi
     return 0
   fi
   # The bus contingency `_inst_enable` carries, for the same reason: without
@@ -20172,8 +20284,29 @@ _upd_sweep() {
   # for a reason that has nothing to do with this box.
   : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
   : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
-  local u km
-  for u in $(systemctl --user list-units "claude-session@*" --plain --no-legend | awk '{print $1}') \
+  local u km listing lu _ll la _lr lrc=0
+  local -a before=() after=() failed=()
+  listing="$(systemctl --user list-units "claude-session@*" --plain --no-legend)" || lrc=$?
+  # fix round 1 item 1 (D-3599): the plan's Task 5 code dropped this rc with
+  # `|| :` and built `before` from this listing alone, so a transient failure
+  # here (an unread listing) left `before` empty and the zero line below
+  # claimed no supervisor was active even while every one of them was — an
+  # unmeasured pre-sweep listing is now a failed preflight: the sweep refuses
+  # and restarts nothing, exactly as the KillMode preflight below already
+  # does, rather than claim a clean sweep it never measured.
+  if [ "$lrc" -ne 0 ]; then
+    echo "update: sweep REFUSED — systemctl --user list-units \"claude-session@*\" --plain --no-legend failed (rc $lrc), so the supervisors to be checked could not be listed." >&2
+    echo "update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted. Once systemctl --user list-units 'claude-session@*' answers, confirm KillMode=process on each unit, then restart them."
+    return 0
+  fi
+  # Wave 8 item G: the supervisors the restart below can touch are the ones
+  # ACTIVE before it runs — read from THIS listing's ACTIVE column (`--plain
+  # --no-legend`: UNIT LOAD ACTIVE SUB DESCRIPTION), so no systemctl call is
+  # added, and the argv order below is unchanged.
+  while read -r lu _ll la _lr; do
+    [ "$la" = active ] && before+=("$lu")
+  done <<< "$listing"
+  for u in $(printf '%s\n' "$listing" | awk '{print $1}') \
            claude-session@ccrc-update-preflight.service; do
     km="$(systemctl --user show -p KillMode "$u" 2>/dev/null)" || km=""
     if [ "$km" != "KillMode=process" ]; then
@@ -20182,6 +20315,11 @@ _upd_sweep() {
       return 0
     fi
   done
+  # fix round 1 item 7 (review 196 F8): the argv-order pin is
+  # `ccrc-update.test.ts`'s "with KillMode=process resolving per unit, the
+  # sweep runs: preflight, try-restart, the failed warn query, the active
+  # verify query — in that argv order" case — cited by title, since its line
+  # range moves.
   systemctl --user try-restart "claude-session@*" \
     || _ccrc_die "systemctl --user try-restart claude-session@* failed — the supervisors' state is now mixed; read: systemctl --user list-units 'claude-session@*'"
   # try-restart is a no-op on a failed unit (its own man page), so a
@@ -20189,6 +20327,7 @@ _upd_sweep() {
   # update's doing, must not fail it, must not be silent either.
   for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk '{print $1}'); do
     echo "update: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2
+    failed+=("$u")
   done
   # Each restarted supervisor is held to the same standard as the services the
   # staged install just verified — verify-service.sh out of the NEW tree,
@@ -20196,12 +20335,42 @@ _upd_sweep() {
   # here and NOT above: handing verify-service.sh a unit try-restart never
   # touched is deploy.sh's final-review finding 6.
   local verify="$BOX_TREE_DIR/deploy/verify-service.sh"
-  for u in $(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend | awk '{print $1}'); do
+  local after_listing arc=0
+  after_listing="$(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend)" || arc=$?
+  # fix round 1 item 1 (D-3599): the same unmeasured-listing hazard, on the
+  # verify side — an unmeasured verify listing verifies nothing, so when
+  # something WAS restarted (`before` non-empty) the per-unit "not active
+  # after it" warnings and the success line below must not fire over a set
+  # nobody actually re-listed. When `before` was measured empty, nothing that
+  # was running was restarted, so this fork is skipped and the zero line
+  # below prints exactly as it does today.
+  if [ "$arc" -ne 0 ] && [ "${#before[@]}" -gt 0 ]; then
+    echo "update: warning: the post-restart set could not be listed (systemctl --user list-units \"claude-session@*\" --state=active --plain --no-legend failed, rc $arc) — no supervisor was verified." >&2
+    echo "update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep."
+    return 0
+  fi
+  for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do
     if [ -f "$verify" ]; then
       bash "$verify" "$u" \
         || _ccrc_die "$u was restarted and did not stay up — read: systemctl --user status $u. The pre-update backup is complete at $UPD_BACKUP_DIR"
     fi
+    after+=("$u")
   done
+  # Wave 8 item G: a claim that "every … now runs the ccd this update
+  # installed" is false for a unit that WAS active before try-restart and is
+  # neither active nor failed after it — this sweep did not verify it, and
+  # the operator needs to know which one. Keyed on the PRE-restart set,
+  # `before`, never `after` (a unit this box never had cannot be a miss).
+  local b a seen
+  for b in ${before[@]+"${before[@]}"}; do
+    seen=0
+    for a in ${after[@]+"${after[@]}"} ${failed[@]+"${failed[@]}"}; do [ "$a" = "$b" ] && { seen=1; break; }; done
+    [ "$seen" -eq 1 ] || echo "update: warning: $b was active before try-restart and is not active after it — this sweep did not verify it. On the box: systemctl --user status $b" >&2
+  done
+  if [ "${#before[@]}" -eq 0 ]; then
+    echo "update: sweep: no claude-session@ supervisor was active when the sweep began, so try-restart had nothing running to restart (KillMode=process verified before the restart; panes untouched)"
+    return 0
+  fi
   echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (KillMode=process verified per unit before any restart; panes untouched)"
 }
 
@@ -20774,10 +20943,12 @@ cmd_rollout() {
 # ── cmd_backup — update's step 2 standalone (stage 4, Task 8; spec §7) ────
 # The SAME set to the SAME directory shape, because it is the same function:
 # `_upd_backup`, called with this verb's own line prefix. What this verb adds
-# is the pruning `cmd_update` deliberately does not do: an operator running
-# `ccrc backup` on a schedule is the caller deploy.sh's `prune_backups`
-# exists for, and a backup directory that only ever grows is that function's
-# own measured failure case (18MB/13 dirs before it existed).
+# is a prune on EVERY run: `cmd_update` and `cmd_rollback` prune too, but
+# only after a run that completed with its gate passed (`_bak_gc`, wave 8
+# item B) — an operator running `ccrc backup` on a schedule is the caller
+# deploy.sh's `prune_backups` exists for, and a backup directory that only
+# ever grows is that function's own measured failure case (18MB/13 dirs
+# before it existed).
 cmd_backup() {
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -20814,6 +20985,22 @@ _keep_why() {   # <knob> <value>
   printf "%s='%s' is not a whole number from 0 to 9999" "$1" "${val//[![:print:]]/?}"
 }
 
+# ── _bak_list — the timestamped backup dirs, oldest first (wave 8 item B) ──
+# One listing for both pruners. Lexical glob order IS chronological for this fixed-width shape (a DST fall-back on
+# a local-time box is the stated exception). nullglob is saved and restored exactly as `_bak_prune` always did;
+# hand-made siblings never match.
+_bak_list() {
+  BAK_DIRS=()
+  local had_nullglob=0 d
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  for d in "$BOX_BACKUP_ROOT"/$BAK_TS_PAT; do   # $BAK_TS_PAT unquoted: it is the glob
+    [ -d "$d" ] && BAK_DIRS+=("$d")
+  done
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+  return 0
+}
+
 # Keep the newest ${CCRC_BACKUP_KEEP:-10} TIMESTAMPED backups —
 # `deploy.sh`'s `prune_backups` glob exactly (`[0-9]{8}-[0-9]{6}`, the shape
 # `_upd_backup`'s `date +%Y%m%d-%H%M%S` writes), because the directory also
@@ -20825,20 +21012,76 @@ _bak_prune() {
   local keep="${CCRC_BACKUP_KEEP:-10}"
   _keep_ok "$keep" || _ccrc_die "$(_keep_why CCRC_BACKUP_KEEP "$keep") — nothing was pruned"
   keep=$((10#$keep))   # `0002` is two: the loop below is ARITHMETIC, where a leading 0 is octal (or an error)
-  local -a dirs=()
-  local had_nullglob=0 d
-  shopt -q nullglob && had_nullglob=1
-  shopt -s nullglob
-  for d in "$BOX_BACKUP_ROOT"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]; do
-    [ -d "$d" ] && dirs+=("$d")
-  done
-  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
-  local n=${#dirs[@]} i
+  _bak_list
+  local n=${#BAK_DIRS[@]} i
   for ((i = 0; i < n - keep; i++)); do
-    rm -rf -- "${dirs[$i]}" \
-      || _ccrc_die "could not prune ${dirs[$i]} — the newer backups above it are all intact"
-    echo "backup: pruned ${dirs[$i]} (keeping the newest $keep timestamped backups; hand-made siblings are never touched)"
+    rm -rf -- "${BAK_DIRS[$i]}" \
+      || _ccrc_die "could not prune ${BAK_DIRS[$i]} — the newer backups above it are all intact"
+    echo "backup: pruned ${BAK_DIRS[$i]} (keeping the newest $keep timestamped backups; hand-made siblings are never touched)"
   done
+}
+
+# ── _bak_gc — update's and rollback's own prune of ~/ccrc-backups (wave 8 item B) ──
+# Reached ONLY after a run that COMPLETED with its gate passed and its sweep finished (exit 0 or 3 follows):
+# cmd_update after `_upd_report` when `gate_passed` and not a restore child, and cmd_rollback's flip arm after its
+# sweep. A failed gate (exit 4, restored), --no-gate, every --from restore child, a sweep that died, and a refused
+# rollback never get here. It NEVER DIES and never writes update.json: a `_ccrc_die` here would turn a completed
+# update into a `failed` report. rc 0 done or nothing to do; rc 1 skipped or a removal failed; every caller writes
+# `|| :`. It keeps the newest $CCRC_BACKUP_KEEP timestamped dirs of any origin (the ONE bounded validator,
+# `_keep_ok`, D-3423; counted as `ccrc backup` and deploy.sh count them; read from the process env only), and four
+# more that can only LEAVE the removal set: this run's own backup by its exact path; every dir named at or after
+# this run's lock second (UPD_BAK_FLOOR) — both D-3593; and, among the dirs neither of those protects, the newest tree backup (D-3594; a
+# `server-dist` or `agent-dist` entry: another run's, a deploy's, or the previous update's) and the newest coord.db
+# snapshot (D-3595). The lock was released before the sweep (design §10), so it is RE-TAKEN (D-3592) without dying: any other holder
+# means nothing is pruned.
+_bak_gc() {   # <lead word: update|rollback>
+  local lead="$1" keep="${CCRC_BACKUP_KEEP:-10}"
+  if ! _keep_ok "$keep"; then
+    echo "$lead: backups: WARN: $(_keep_why CCRC_BACKUP_KEEP "$keep") — nothing pruned"
+    return 1
+  fi
+  keep=$((10#$keep))
+  if ! [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+    echo "$lead: backups: WARN: this run's lock time was not recorded, so nothing can say which backups are its own — nothing pruned"
+    return 1
+  fi
+  local took=0 lrc=0
+  [ -n "$UPD_LOCK_FD" ] || took=1
+  _ver_lock_try || lrc=$?
+  case "$lrc" in
+    0) ;;
+    1) echo "$lead: backups: skipped — another ccrc run holds ~/.ccrc/update.lock; nothing was pruned"; return 1 ;;
+    2) echo "$lead: backups: WARN: flock is not on PATH, so ~/.ccrc/update.lock cannot be taken — nothing pruned"; return 1 ;;
+    *) echo "$lead: backups: WARN: ~/.ccrc/update.lock could not be measured — nothing pruned"; return 1 ;;
+  esac
+  _bak_list
+  local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name shown snap="" tree="" rc=0
+  # The two extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own):
+  # the protected ones are kept anyway, so picking one of them would protect nothing.
+  for ((i = n - 1; i >= 0; i--)); do
+    d="${BAK_DIRS[$i]}"; name="${d##*/}"
+    [ "$d" = "$UPD_BACKUP_DIR" ] && continue
+    [ "$((10#${name//-/}))" -ge "$floor" ] && continue
+    if [ -z "$snap" ] && [ -f "$d/coord.db" ]; then snap="$d"; fi
+    if [ -z "$tree" ] && { [ -e "$d/server-dist" ] || [ -e "$d/agent-dist" ]; }; then tree="$d"; fi
+    [ -n "$snap" ] && [ -n "$tree" ] && break
+  done
+  for ((i = 0; i < n - keep; i++)); do
+    d="${BAK_DIRS[$i]}"; name="${d##*/}"
+    [ "$d" = "$UPD_BACKUP_DIR" ] && continue   # D-3593
+    [ "$((10#${name//-/}))" -ge "$floor" ] && continue   # D-3593
+    [ "$d" = "$snap" ] && continue
+    [ "$d" = "$tree" ] && continue
+    shown="$d"; case "$d" in "$HOME"/*) shown="\$HOME${d#"$HOME"}" ;; esac
+    if rm -rf -- "$d" 2>/dev/null; then
+      echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups, every one named at or after this run took its lock, this run's own, the newest earlier tree backup and the newest earlier coord.db snapshot; hand-made siblings are never touched)"
+    else
+      echo "$lead: backups: WARN: could not prune $shown — every newer backup is intact"
+      rc=1
+    fi
+  done
+  if [ "$took" -eq 1 ]; then _upd_unlock; fi
+  return "$rc"
 }
 
 # ── ccrc versions, and the GC that never removes a needed version ─────────
