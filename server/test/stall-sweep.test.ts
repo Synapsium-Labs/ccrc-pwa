@@ -22,7 +22,8 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import {
-  DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS, ORPHAN_PUSH_MS,
+  BACKLOG_HORIZON_MS, DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
+  ORPHAN_PUSH_MS, STALL_FAILED_PREFIX, stallFailedSubject,
   STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
   parseStallDetail, stallDetail,
 } from '../src/coord/stall.js';
@@ -1352,6 +1353,32 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(stallRows(coord, runId)).toEqual([
       stallDetail('live', 'orphan-d', 1, RESTART_AT), stallDetail('live', 'orphan-d', 2, RESTART_AT),
     ]);
+  });
+
+  it('a coordinator\'s repeated failure stays a repeat after its prior failed: mail leaves the 24 h read (failed-arm-bounded-by-the-mail-horizon)', async () => {
+    // A prior failed: self-mail at S2 - 1 h, a server_error at S2. The repeat goes to the operator and never wakes the
+    // session. A day later the prior mail is out of the lane's read, and the arm must not re-read the standing failure
+    // as a first one and type a retry nudge into the pane.
+    const { h, coord, w, sent } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    seedRun(coord, { program: 'demo-program' });
+    const S2 = IDLE_AT;
+    const PRIOR_AT = S2 - 3_600_000;
+    at(PRIOR_AT);
+    coord.insertMail({ fromId: 'operator', fromUuid: 'operator', toId: COORD, runId: null, kind: 'status',
+      subject: stallFailedSubject('overloaded', PRIOR_AT - 600_000), body: 'b', artifacts: [] });
+    seedLiveState(h.home, { startedAt: STARTED_AT });
+    seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, state: 'failed', event: 'StopFailure', err: 'server_error', at: S2, stopAt: S2 });
+    const both = tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]);
+    const sessions = [fleetRow(WORKER), fleetRow(COORD)];
+    const failedMail = (): MailRow[] => operatorMail(coord).filter((m) => m.toId === COORD && m.subject.startsWith(STALL_FAILED_PREFIX));
+    at(S2 + FAILED_IDLE_MS);
+    await w.sweepStalls(sessions, W2, both);
+    expect(sent.map((p) => p.tag)).toContain(`stall-${COORD}-failed-2-${S2}`);
+    expect(failedMail()).toHaveLength(1);             // the prior one only: a repeat sends no self-wake
+    at(PRIOR_AT + BACKLOG_HORIZON_MS + 60_000);       // the prior mail has left the read
+    await w.sweepStalls(sessions, W2, both);
+    expect(failedMail()).toHaveLength(1);
   });
 
   // Slug `stall-clocks-drop-on-an-unobserved-gap`. A first-seen clock claims "true at every sweep since", so a window in

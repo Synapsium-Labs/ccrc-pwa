@@ -536,6 +536,15 @@ describe('failed (§5.2): run workers and coordinators, a turn that ended on an 
       .toEqual(f2o('request', 'invalid_request'));
     expect(stallFailedVerdict(fInput({}, { arming: DARK_MAIL_OFF }), NOW), 'shadow').toEqual(f1());
   });
+  it('failed: bounded by the mail horizon, none once its stop is older than BACKLOG_HORIZON_MS - FAILED_REPEAT_MS', () => {
+    // Slug `failed-arm-bounded-by-the-mail-horizon`: a run-less repeat is told from a first failure by a prior failed:
+    // self-mail, which leaves the lane's 24 h mail read FAILED_REPEAT_MS after its own stop at the latest. Past this
+    // bound the classification would outlive its evidence, so the arm answers none, as orphan D bounds itself.
+    const edge = NOW - (BACKLOG_HORIZON_MS - FAILED_REPEAT_MS);
+    expect(stallFailedVerdict(fInput({ at: edge, stopAt: edge }), NOW), 'at the bound').toEqual(f1('server_error', edge));
+    expect(stallFailedVerdict(fInput({ at: edge - 1, stopAt: edge - 1 }), NOW), 'one ms past it').toEqual(NONE);
+    expect(stallFailedVerdict(fInput({ at: edge - 1, stopAt: edge - 1, err: 'invalid_request' }), NOW), 'rung 2 too').toEqual(NONE);
+  });
   it('failed: a failure with no stop recorded is none, never keyed on null', () => {
     expect(stallFailedVerdict(fInput({ stopAt: null }), NOW)).toEqual(NONE);
   });

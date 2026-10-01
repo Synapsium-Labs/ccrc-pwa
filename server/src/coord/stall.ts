@@ -1476,7 +1476,8 @@ function stallPriorFailure(input: StallSessionInput, stopAt: number, subject: st
 }
 
 /** Failed (§5.2), for run workers and coordinators: the marker reads `failed`, FAILED_IDLE_MS have passed since the
- *  failure, and the pane reads idle or shell. Key: `stopAt`. Per `STOP_FAILURE_ERRORS` class:
+ *  failure (and no more than BACKLOG_HORIZON_MS - FAILED_REPEAT_MS), and the pane reads idle or shell. Key: `stopAt`.
+ *  Per `STOP_FAILURE_ERRORS` class:
  *  - an unclassifiable token holds `failed-unknown` (the lane warns once, and it is never guessed);
  *  - `account` holds `failed-account`;
  *  - `retry` mails the session itself, or goes to rung 2 `repeat` after a prior failure in the window;
@@ -1489,6 +1490,10 @@ function stallFailedInner(input: StallSessionInput, now: number): StallVerdict {
   if (held !== null) return held;
   const m = stallCurrentMark(input);
   if (m === null || m.state !== 'failed' || m.stopAt === null || now - m.stopAt < FAILED_IDLE_MS) return VERDICT_NONE;
+  // `failed-arm-bounded-by-the-mail-horizon`: a run-less repeat is told from a first failure by a prior failed:
+  // self-mail at most FAILED_REPEAT_MS before this stop, and the lane's mail read keeps BACKLOG_HORIZON_MS. Past this
+  // bound that evidence may be gone, so the arm answers none rather than re-read a repeat as a first failure.
+  if (now - m.stopAt > BACKLOG_HORIZON_MS - FAILED_REPEAT_MS) return VERDICT_NONE;
   const live = stallSessionLive(input);
   if (live === null || !isIdleWord(live.word)) return VERDICT_NONE;
   const key = m.stopAt;
