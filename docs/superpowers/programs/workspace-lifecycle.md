@@ -46,6 +46,16 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   numbers are stated on a `df4fe069` base). Typechecks clean; PWA 3041; server six shards green apart from the two known
   reds. The fleet box's root disk sat below `ccd`'s 10G `ws-add` floor while measuring, which reds every `ws-add` test
   on the unedited base too: run the suites with `CCD_DISK_FLOOR_GB=1` when that happens. Wave 2 is unblocked.
+- **2026-09-30 — wave 1 re-verified against `c88625aa`, then `5b1c58a8`.** On `c88625aa` the plan replays unchanged
+  and its server suites are green. On `5b1c58a8` the worker stall watch (#216) had split the two-line `store.ts`
+  import block Task 3 inserts into, so that one Find now anchors on the `placement.js` import line alone; the output
+  on `c88625aa` is byte-identical. The same PR added a 33rd `child: { kind: 'none' }` fixture (`stall-sweep.test.ts`),
+  so Task 1's sweep now touches 32 files, and the plan says so. With that, the plan replays onto `5b1c58a8` in a git
+  checkout (the sweep reads `git grep`), `readme-reanchor.py` prints the same `shared/api.ts` lines, both typechecks
+  are clean, and the wave's suites are green there: server `released` 20, `released-store` 7, `released-wire` 14,
+  `fleet-released` 7, `measure-workspace-lifecycle` 9, `stall-sweep` 42, `single-definition`, the citation cases; PWA
+  `groupFleet`, `archiveReleased`, `project-card`, `fleet-screen`, `tap-targets` and `fleet-css` (376), `contrast`
+  256, and the design audit.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
