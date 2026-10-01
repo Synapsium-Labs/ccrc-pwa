@@ -703,7 +703,9 @@ export class FleetWatcher {
   private lastStallJudgedAt: number | null = null;
   /** The run-less operator pushes already sent: each push tag (`stallPushRoute`'s) with the session it names, which
    *  the prune keys on. IN MEMORY (slug `run-less-push-latches-are-in-memory`): a restart re-pushes a run-less orphan D
-   *  rung 2, mail-stuck or marker-unreadable (re-keyed on the re-timed clock) while it stands. Pushes only, never mail. */
+   *  rung 2, a mail-stuck, a marker-unreadable or a coordinator's failed rung 2 to the operator while it stands. A
+   *  coordinator's marker-unreadable push is keyed on its first-seen time, which a restart or a clock drop (an
+   *  unobserved gap, `dropStallClocks`) re-times, so one push can go out on each side of it. Pushes only, never mail. */
   private stallLatch = new Map<string, string>();
   /** Warn-once keys, `<sessionId>|<what>`: a run-less shadow rung, `failed-unknown`, and the defensive r2-with-no-r1
    *  line (`applyStall`; no real input reaches it today). */
@@ -2981,9 +2983,10 @@ export class FleetWatcher {
    *
    * In memory, and pruned every sweep (`pruneStallMemory`): when a worker was first seen absent or dead-shaped,
    * when a marker was first seen unreadable, the run-less push latch and the warn-once keys. A server restart
-   * re-times the clocks (slug `absent-worker-is-dead-after-grace`) and may repeat a run-less push (slug
-   * `run-less-push-latches-are-in-memory`). More than 2 × STALL_SWEEP_MS between two judged sweeps drops the clocks
-   * (`dropStallClocks`, slug `stall-clocks-drop-on-an-unobserved-gap`).
+   * re-times the clocks (slug `absent-worker-is-dead-after-grace`) and may repeat a run-less push, a coordinator's
+   * failed rung 2 among them (slug `run-less-push-latches-are-in-memory`; `stallLatch` names which, and why a
+   * marker-unreadable push re-keys after a clock drop). More than 2 × STALL_SWEEP_MS between two judged sweeps
+   * drops the clocks (`dropStallClocks`, slug `stall-clocks-drop-on-an-unobserved-gap`).
    *
    * Every mail is durable and deduped: on a run by its observation row (`queueStallNotice`,
    * `recordStallObservation`), run-less by its subject (`hasMailWithSubject`), so a restart re-sends none.
@@ -3353,8 +3356,9 @@ export class FleetWatcher {
    *  - To the session itself or to its coordinator: one `queueStallNotice`, on the worker's run, or run-less and
    *    deduped by its subject.
    *  - To the operator: a worker records the row first and pushes only when it is new; a run-less session latches in
-   *    memory (`stallLatch`, slug `run-less-push-latches-are-in-memory`). L1's `stallPushRoute` names the push's kind
-   *    and tag, which is also the latch key. */
+   *    memory (`stallLatch`, slug `run-less-push-latches-are-in-memory`), so a restart re-pushes it, a coordinator's
+   *    failed rung 2 included, and a marker-unreadable push re-keys on each side of a clock drop. L1's
+   *    `stallPushRoute` names the push's kind and tag, which is also the latch key. */
   private applyStallSession(store: CoordStore, si: StallSessionInput, project: string, v: StallVerdict, now: number): void {
     const id = si.sessionId;
     if (v.act === 'hold' && v.why === 'failed-unknown') {
