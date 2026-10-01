@@ -15,12 +15,15 @@ import { fileURLToPath } from 'node:url';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import type { Deps } from '../src/server.js';
-import { FleetWatcher, STALL_SWEEP_MS } from '../src/watch.js';
+import { FleetWatcher, STALL_SWEEP_MS, type StallTick } from '../src/watch.js';
+import type { SessionRecord } from '../src/registry.js';
+import { localIO, type FleetIO } from '../src/io.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { COORDINATOR_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import {
-  STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_QUIET_MS, STALL_REPORT_PREFIX,
+  DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS, ORPHAN_PUSH_MS,
+  STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
   parseStallDetail, stallDetail,
 } from '../src/coord/stall.js';
 import type { PushPayload } from '../src/push.js';
@@ -53,6 +56,15 @@ const PRIME_AT = DISPATCHED_AT - 7_200_000;
 
 const LIVE: readonly string[] = ['stall-watch-live'];
 const ARMED: readonly string[] = ['stall-watch-live', 'stall-watch-escalate'];
+/** Wave 2's arms armed too: live, escalate and `stall-watch-w2-live`, or live and w2 alone. */
+const W2: readonly string[] = [...ARMED, 'stall-watch-w2-live'];
+const W2_LIVE: readonly string[] = [...LIVE, 'stall-watch-w2-live'];
+/** The live process's start (`startedAt`), before every marker these cases seed, so no marker reads stale. */
+const STARTED_AT = DISPATCHED_AT - 60_000;
+/** A registry row that is no run's worker or coordinator: orphan D's subject. */
+const ORPHAN = 'demo-idle-basin';
+const ORPHAN_UUID = 'e'.repeat(36);
+const RESTART_AT = Date.parse('2026-09-28T22:30:00Z');
 
 const at = (ms: number): void => { vi.setSystemTime(ms); };
 
@@ -85,6 +97,15 @@ const seedHookState = (home: string, id: string, over: Record<string, unknown>):
   }));
 };
 
+/** `$REG/<id>.turn.json` in the shape `readTurnMarkMeasured` accepts: all fifteen keys, in the writer's order. By
+ *  default a `done` Stop at the S4 idle time with no background task. */
+const seedTurnMark = (home: string, id: string, over: Record<string, unknown> = {}): void => {
+  writeFileSync(path.join(home, '.cc-sessions', `${id}.turn.json`), JSON.stringify({
+    v: 1, sessionId: UUID, state: 'done', event: 'Stop', at: IDLE_AT, turnAt: IDLE_AT - 600_000, stopAt: IDLE_AT,
+    bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '', ...over,
+  }));
+};
+
 /** A COMPLETE fleet row (fleet-health.test.ts's `session()` shape), alive and running. */
 const fleetRow = (id: string, over: Partial<FleetSession> = {}): FleetSession => ({
   id, wrapper: 'claude', home: '/home/rc', project: 'demo', workdir: '/w/demo',
@@ -98,6 +119,30 @@ const fleetRow = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
 });
 
 const store = (home: string): CoordStore => new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+
+/** A complete registry row (`hold-gate.test.ts`'s literal), measured unless `over` says otherwise. */
+const regRow = (id: string, uuid: string = UUID, over: Partial<SessionRecord> = {}): SessionRecord => ({
+  id, wrapper: 'claude', project: 'demo', workdir: '/w/demo', uuid,
+  started: true, home: null, pool: null, lastswap: null,
+  workspace: `${id}-ws`, branch: null, branchEvidence: 'absent', base: null,
+  prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
+  substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, stranded: null, spawn: null, lifecycleUnmeasured: [],
+  unmeasured: [], route: null, child: { kind: 'none' },
+  ...over,
+});
+
+/** What `tick()` hands the lane (`StallTick`), built from this file's own fixtures: the scripted tmux pid for every
+ *  row, and the seeded registry uuid. `null` models tmux answering none. The wiring describe runs the production
+ *  path, where `tick()` builds the same two from `assembleFleet` and its registry read. */
+const tickOf = (pid: number | null = PID, rows: readonly SessionRecord[] = [regRow(WORKER)]): StallTick => ({
+  panePids: new Map(rows.map((r): [string, number | null] => [r.id, pid])), records: rows,
+});
+
+/** A `FleetIO` that records every `readFileMeasured` path and delegates to `localIO` (`degradedReadIO`'s shape). */
+const countingIO = (sink: string[]): FleetIO => ({
+  ...localIO,
+  readFileMeasured: async (p, t, s) => { sink.push(p); return localIO.readFileMeasured(p, t, s); },
+});
 
 /** `panes` is the scripted `list-panes` answer, mutable so a case can take the pane pid away and give it back. */
 interface Harness { home: string; calls: string[][]; run: Runner; panes: { code: number; stdout: string } }
@@ -209,10 +254,10 @@ describe('sweepStalls: gating', () => {
     seedLiveState(h.home);
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(operatorMail(coord)).toEqual([]);
     await w.tick();                         // priming: the tick's own dispatch returns unprimed
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(operatorMail(coord).map((m) => m.runId)).toEqual([runId]);
   });
 
@@ -220,51 +265,54 @@ describe('sweepStalls: gating', () => {
     const { coord, w } = await rig();
     seedRun(coord, { program: 'demo-program' });
     at(R1_AT - STALL_SWEEP_MS / 2);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);    // quiet 2h less 30 s: none, but the clock is stamped
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());    // quiet 2h less 30 s: none, but the clock is stamped
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);    // due, but 30 s after the last sweep
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());    // due, but 30 s after the last sweep
     expect(operatorMail(coord)).toEqual([]);
     at(R1_AT + STALL_SWEEP_MS / 2);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(operatorMail(coord)).toHaveLength(1);
   });
 
   it('holds one sweep in flight: a sweep started while one awaits its reads does nothing', async () => {
-    const { h, coord, w } = await rig();
+    const reads: string[] = [];
+    const { coord, w } = await rig({ io: countingIO(reads) });
     seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    h.calls.length = 0;
-    const first = w.sweepStalls([fleetRow(WORKER)], LIVE);
+    reads.length = 0;
+    const first = w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     at(R1_AT + STALL_SWEEP_MS);                       // the clock alone would let the second through
-    const second = w.sweepStalls([fleetRow(WORKER)], LIVE);
+    const second = w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     await Promise.all([first, second]);
-    expect(listPanes(h)).toBe(1);
+    expect(reads.filter((p) => p.endsWith(`${WORKER}.turn.json`))).toHaveLength(1);
     expect(operatorMail(coord)).toHaveLength(1);
   });
 
   it('stall-watch-disabled: the lane returns before reading anything; nothing is recorded or sent', async () => {
-    const { h, coord, w } = await rig();
+    const reads: string[] = [];
+    const { coord, w } = await rig({ io: countingIO(reads) });
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    h.calls.length = 0;
-    await w.sweepStalls([fleetRow(WORKER)], ['stall-watch-disabled', ...ARMED]);
-    expect(listPanes(h)).toBe(0);
+    reads.length = 0;
+    await w.sweepStalls([fleetRow(WORKER)], ['stall-watch-disabled', ...ARMED], tickOf());
+    expect(reads).toEqual([]);
     expect(operatorMail(coord)).toEqual([]);
     expect(stallRows(coord, runId)).toEqual([]);
   });
 
   it('does nothing, and warns nothing, without a coordination store', async () => {
     const h = harness();
-    const w = new FleetWatcher({ ...testDeps(h.home, h.run) }, new Bus(), 2000, path.join(h.home, 'state-cache.json'));
+    const reads: string[] = [];
+    const w = new FleetWatcher({ ...testDeps(h.home, h.run), io: countingIO(reads) }, new Bus(), 2000, path.join(h.home, 'state-cache.json'));
     await w.tick();
     seedRegistry(h.home, WORKER);
     seedLiveState(h.home);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     at(R1_AT);
-    h.calls.length = 0;
-    await expect(w.sweepStalls([fleetRow(WORKER)], LIVE)).resolves.toBeUndefined();
+    reads.length = 0;
+    await expect(w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf())).resolves.toBeUndefined();
     expect(lines(warn, 'stall-watch')).toBe(0);
-    expect(listPanes(h)).toBe(0);
+    expect(reads).toEqual([]);
   });
 
   it('a throw outside the per-subject catch (the arming read) resolves, warns ONCE, and frees the in-flight flag', async () => {
@@ -275,12 +323,12 @@ describe('sweepStalls: gating', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const bad = Object.assign([] as string[], { includes: (): boolean => { throw new Error('names unreadable'); } });
     at(R1_AT);
-    await expect(w.sweepStalls([fleetRow(WORKER)], bad)).resolves.toBeUndefined();
+    await expect(w.sweepStalls([fleetRow(WORKER)], bad, tickOf())).resolves.toBeUndefined();
     expect(lines(warn, 'ccrc-server: stall-watch sweep failed (names unreadable) — one bad sweep must not kill the poll')).toBe(1);
     expect(lines(warn, 'stall-watch')).toBe(1);
     expect(operatorMail(coord)).toEqual([]);
     at(R1_AT + STALL_SWEEP_MS);                       // the `finally` still ran: the next sweep is not held in flight
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(operatorMail(coord)).toHaveLength(1);
   });
 });
@@ -291,13 +339,13 @@ describe('sweepStalls: shadow and live (S4)', () => {
     const runId = seedRun(coord, { program: 'demo-program' });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], []);
+    await w.sweepStalls([fleetRow(WORKER)], [], tickOf());
     expect(stallRows(coord, runId)).toEqual([stallDetail('shadow', 'quiet', 1, KEY)]);
     expect(lines(warn, `ccrc-server: stall-watch shadow quiet r1 run ${runId} ${WORKER}`)).toBe(1);
     expect(operatorMail(coord)).toEqual([]);
     expect(sent).toEqual([]);
     at(R1_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], []);
+    await w.sweepStalls([fleetRow(WORKER)], [], tickOf());
     expect(lines(warn, 'stall-watch shadow')).toBe(1);
     expect(stallRows(coord, runId)).toHaveLength(1);
   });
@@ -306,10 +354,10 @@ describe('sweepStalls: shadow and live (S4)', () => {
     const { coord, w, sent } = await rig();
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT - STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(operatorMail(coord)).toEqual([]);          // one minute short of 2 h
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     const mail = operatorMail(coord);
     expect(mail).toHaveLength(1);
     expect(mail[0]).toMatchObject({ toId: WORKER, runId, kind: 'status', at: R1_AT });
@@ -324,10 +372,10 @@ describe('sweepStalls: shadow and live (S4)', () => {
     const runId = seedRun(coord, { program: 'demo-program' });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], []);
+    await w.sweepStalls([fleetRow(WORKER)], [], tickOf());
     vi.spyOn(coord, 'runEvents').mockReturnValueOnce([]);   // the verdict sees no r1 row and fires r1 again
     at(R1_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], []);
+    await w.sweepStalls([fleetRow(WORKER)], [], tickOf());
     expect(lines(warn, 'stall-watch shadow')).toBe(1);
     expect(stallRows(coord, runId)).toHaveLength(1);
   });
@@ -338,22 +386,22 @@ describe('sweepStalls: shadow and live (S4)', () => {
     const runId = seedRun(coord, { program: 'demo-program' });
     const checks = (): MailRow[] => operatorMail(coord).filter((m) => m.subject.startsWith(STALL_CHECK_PREFIX));
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], []);      // shadow: a stall-shadow r1 row, no mail
+    await w.sweepStalls([fleetRow(WORKER)], [], tickOf());      // shadow: a stall-shadow r1 row, no mail
     expect(checks()).toEqual([]);
     const LIVE_R1 = R1_AT + STALL_SWEEP_MS;
     at(LIVE_R1);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);    // stall-watch-live touched: the pending r1 goes out once
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());    // stall-watch-live touched: the pending r1 goes out once
     expect(checks()).toHaveLength(1);
     expect(checks()[0]).toMatchObject({ toId: WORKER, runId, at: LIVE_R1 });
     at(LIVE_R1 + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(checks()).toHaveLength(1);
     const r1Rows = [stallDetail('shadow', 'quiet', 1, KEY), stallDetail('live', 'quiet', 1, KEY)];
     at(LIVE_R1 + STALL_ESCALATE_MS - STALL_SWEEP_MS); // an hour after the SHADOW r1: r2 is not due
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(stallRows(coord, runId)).toEqual(r1Rows);
     at(LIVE_R1 + STALL_ESCALATE_MS);                  // an hour after the LIVE r1: r2, shadow without escalate
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(stallRows(coord, runId)).toEqual([...r1Rows, stallDetail('shadow', 'quiet', 2, KEY)]);
     expect(operatorMail(coord)).toHaveLength(1);
   });
@@ -366,15 +414,20 @@ describe('sweepStalls: escalation', () => {
     const runId = seedRun(coord, { program: 'demo-program' });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     at(R2_AT);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     at(R3_AT);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
+    const check = operatorMail(coord)[0]!;
+    const checkDelivery = (coord.db.prepare('SELECT id FROM mail_deliveries WHERE mailId = ?').get(check.id) as unknown as { id: number }).id;
     expect(stallRows(coord, runId)).toEqual([
       stallDetail('live', 'quiet', 1, KEY),
       stallDetail('shadow', 'quiet', 2, KEY),
       stallDetail('shadow', 'quiet', 3, KEY),
+      // Wave 2, dark: the check has sat queued 2 h (at least MAIL_STUCK_MS) since the worker went idle, so
+      // mail-stuck records its shadow row. Without stall-watch-w2-live it sends nothing.
+      stallDetail('shadow', 'mail-stuck', 1, checkDelivery),
     ]);
     expect(lines(warn, `ccrc-server: stall-watch shadow quiet r2 run ${runId} ${WORKER}`)).toBe(1);
     expect(lines(warn, `ccrc-server: stall-watch shadow quiet r3 run ${runId} ${WORKER}`)).toBe(1);
@@ -387,13 +440,13 @@ describe('sweepStalls: escalation', () => {
     seedRegistry(h.home, COORD, COORD_UUID);
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     at(R2_AT - STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(operatorMail(coord)).toHaveLength(1);      // r2 not due yet
     h.calls.length = 0;
     at(R2_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(hasSessionFor(h, COORD)).toBe(true);       // the coordinator was measured, on demand
     const r2 = operatorMail(coord)[1]!;
     expect(r2).toMatchObject({ toId: COORD, runId, kind: 'status', at: R2_AT });
@@ -407,9 +460,9 @@ describe('sweepStalls: escalation', () => {
     const { coord, w, sent } = await rig();           // COORD has no registry row: measureClaimant says dead
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     at(R2_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({
       title: `⚠ stalled › ${WORKER}-ws`, sessionId: WORKER, tag: `stall-${runId}-quiet-3-${KEY}`,
@@ -418,7 +471,7 @@ describe('sweepStalls: escalation', () => {
     expect(operatorMail(coord).map((m) => m.toId)).toEqual([WORKER]);   // no r2 mail
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY), stallDetail('live', 'quiet', 3, KEY)]);
     at(R2_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(sent).toHaveLength(1);
   });
 
@@ -428,10 +481,10 @@ describe('sweepStalls: escalation', () => {
     const runId = seedRun(coord, { program: 'demo-program' });
     const names = [...ARMED, COORDINATOR_PAUSE_MARKER];
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], names);
+    await w.sweepStalls([fleetRow(WORKER)], names, tickOf());
     h.calls.length = 0;
     at(R2_AT);
-    await w.sweepStalls([fleetRow(WORKER)], names);
+    await w.sweepStalls([fleetRow(WORKER)], names, tickOf());
     expect(hasSessionFor(h, COORD)).toBe(false);
     expect(operatorMail(coord).map((m) => m.toId)).toEqual([WORKER]);
     expect(sent).toHaveLength(1);
@@ -445,18 +498,18 @@ describe('sweepStalls: escalation', () => {
     seedRegistry(h.home, COORD, COORD_UUID);
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], []);      // shadow r1
+    await w.sweepStalls([fleetRow(WORKER)], [], tickOf());      // shadow r1
     const LIVE_R1 = R1_AT + STALL_SWEEP_MS;
     at(LIVE_R1);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);   // both markers touched at once: the live r1 goes out
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());   // both markers touched at once: the live r1 goes out
     const check = operatorMail(coord);
     expect(check).toHaveLength(1);
     expect(check[0]).toMatchObject({ toId: WORKER, runId, at: LIVE_R1 });
     at(LIVE_R1 + STALL_ESCALATE_MS - STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(operatorMail(coord)).toHaveLength(1);      // the hour the live r1's body promised the worker
     at(LIVE_R1 + STALL_ESCALATE_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     const r2 = operatorMail(coord)[1]!;
     expect(r2).toMatchObject({ toId: COORD, runId, at: LIVE_R1 + STALL_ESCALATE_MS });
     expect(r2.subject.startsWith(STALL_REPORT_PREFIX)).toBe(true);
@@ -470,32 +523,32 @@ describe('sweepStalls: escalation', () => {
     seedRegistry(h.home, COORD, COORD_UUID);
     seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     const check = operatorMail(coord)[0]!;
     const d = coord.db.prepare('SELECT id FROM mail_deliveries WHERE mailId = ?').get(check.id) as unknown as { id: number };
     coord.markDelivered(d.id, R1_AT + 5_000);
     coord.markAcked(d.id, R1_AT + 60_000);
     at(R2_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     const r2 = operatorMail(coord)[1]!;
     expect(mailBody(coord, r2.id))
       .toContain(`Stall check #${check.id} was queued at 23:56:31Z, delivered at 23:56:36Z, acked at 23:57:31Z.`);
   });
 
   it('r2 tells a stall check with NO delivery row from one never delivered: the lane hands null, never a row of nulls', async () => {
-    // Departure D-3585 r2-keeps-a-missing-delivery-row: `deliveryTimesFor` answers null for a mail with no delivery row,
+    // Departure D-3585 r2-keeps-a-missing-delivery-row: `stallNewestDelivery` answers null for a mail with no delivery row,
     // and `stallReportMail` has a sentence for exactly that. Folding the null into {deliveredAt:null, ackedAt:null}
     // would narrow it to "not delivered, not acked", a claim about a row that does not exist.
     const { h, coord, w } = await rig();
     seedRegistry(h.home, COORD, COORD_UUID);
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     const check = operatorMail(coord)[0]!;
     coord.db.prepare('DELETE FROM mail_deliveries WHERE mailId = ?').run(check.id);
     expect(deliveriesOf(coord, check.id)).toEqual([]);   // the control: the check's one delivery row is gone
     at(R2_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     const r2 = operatorMail(coord)[1]!;
     expect(r2).toMatchObject({ toId: COORD, runId, at: R2_AT });
     const body = mailBody(coord, r2.id);
@@ -511,17 +564,17 @@ describe('sweepStalls: durability', () => {
     seedRegistry(h.home, COORD, COORD_UUID);          // alive: r2 goes to it once due
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(operatorMail(coord)).toHaveLength(1);
     const again = await primedWatcher(h, store(h.home));
     at(R1_AT + STALL_SWEEP_MS);
-    await again.sweepStalls([fleetRow(WORKER)], ARMED);
+    await again.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(operatorMail(coord)).toHaveLength(1);
     at(R2_AT - STALL_SWEEP_MS);
-    await again.sweepStalls([fleetRow(WORKER)], ARMED);
+    await again.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(operatorMail(coord)).toHaveLength(1);      // r2 is timed from the stored r1 row, not from the restart
     at(R2_AT);
-    await again.sweepStalls([fleetRow(WORKER)], ARMED);
+    await again.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     const mail = operatorMail(coord);
     expect(mail).toHaveLength(2);
     expect(mail[1]).toMatchObject({ toId: COORD, runId, at: R2_AT });
@@ -532,14 +585,14 @@ describe('sweepStalls: durability', () => {
     const { h, coord, w, sent } = await rig();
     seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     at(R2_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(sent).toHaveLength(1);
     const spy2 = pushSpy();
     const again = await primedWatcher(h, store(h.home), { push: spy2.push as never });
     at(R2_AT + STALL_SWEEP_MS);
-    await again.sweepStalls([fleetRow(WORKER)], ARMED);
+    await again.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(spy2.sent).toEqual([]);
   });
 
@@ -547,14 +600,14 @@ describe('sweepStalls: durability', () => {
     const { coord, w, sent } = await rig();
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     at(R2_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(sent).toHaveLength(1);
     const r3 = stallDetail('live', 'quiet', 3, KEY);
     vi.spyOn(coord, 'runEvents').mockReturnValueOnce(coord.runEvents(runId).filter((e) => e.detail !== r3));
     at(R2_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);   // re-measures the dead coordinator, re-fires r3
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());   // re-measures the dead coordinator, re-fires r3
     expect(sent).toHaveLength(1);
   });
 
@@ -571,7 +624,7 @@ describe('sweepStalls: durability', () => {
       return real(id);
     });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER), fleetRow(OTHER_WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER), fleetRow(OTHER_WORKER)], LIVE, tickOf(PID, [regRow(WORKER), regRow(OTHER_WORKER)]));
     expect(operatorMail(coord)).toHaveLength(1);      // the second subject still got its r1
     expect(warn.mock.calls.some((c) => /^ccrc-server: stall-watch run \d+ \(demo-[a-z-]+\) failed \(boom\)/.test(String(c[0])))).toBe(true);
   });
@@ -582,11 +635,11 @@ describe('sweepStalls: durability', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const cands = vi.spyOn(coord, 'stallCandidates').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'bad row' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(lines(warn, 'ccrc-server: stall-watch candidates unreadable (run-unreadable: bad row)')).toBe(1);
     cands.mockImplementation(() => { throw new Error('SQLITE_BUSY'); });
     at(R1_AT + STALL_SWEEP_MS);
-    await expect(w.sweepStalls([fleetRow(WORKER)], LIVE)).resolves.toBeUndefined();
+    await expect(w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf())).resolves.toBeUndefined();
     expect(lines(warn, 'ccrc-server: stall-watch candidate read failed (SQLITE_BUSY)')).toBe(1);
     expect(operatorMail(coord)).toEqual([]);
   });
@@ -595,9 +648,9 @@ describe('sweepStalls: durability', () => {
     const { coord, w } = await rig();
     const runId = seedRun(coord, { program: 'demo-program' });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(coord, 'mailOnRuns').mockReturnValue({ ok: false, kind: 'mail-unreadable', detail: 'bad row' });
+    vi.spyOn(coord, 'stallMailFor').mockReturnValue({ ok: false, kind: 'mail-unreadable', detail: 'bad row' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(lines(warn, `ccrc-server: stall-watch run ${runId} mail unreadable (mail-unreadable: bad row)`)).toBe(1);
     expect(operatorMail(coord)).toEqual([]);
   });
@@ -609,7 +662,7 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     seedLiveState(h.home, { status: 'shell' });
     seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER, { status: 'busy' })], LIVE);
+    await w.sweepStalls([fleetRow(WORKER, { status: 'busy' })], LIVE, tickOf());
     expect(operatorMail(coord)).toHaveLength(1);
   });
 
@@ -618,7 +671,7 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     seedLiveState(h.home, { status: 'waiting' });
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${KEY}` });
     expect(operatorMail(coord)).toEqual([]);          // neither worker nor coordinator can land on waiting
@@ -630,7 +683,7 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     seedHookState(h.home, WORKER, { updatedAt: IDLE_AT - 5_000, ask: { questions: [{ question: 'Which lane?', options: [{ label: 'a' }, { label: 'b' }] }] } });
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);                                        // 2 h after the ask: four times HOOKSTATE_FRESH_MS
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(sent).toEqual([]);
     expect(stallRows(coord, runId)).toEqual([]);
   });
@@ -644,7 +697,7 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     seedHookState(h.home, WORKER, { updatedAt: IDLE_AT - 5_000, event: 'PermissionRequest', ask: { approval: { tool: 'Bash', summary: 'ls' } } });
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${KEY}` });
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
@@ -658,7 +711,7 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     const d = coord.queueDelivery(m.id, WORKER, 'envelope');
     coord.backOff(d.id, 'auto-continue-armed', R1_AT - 9 * 60_000 + MAIL_ARMED_HOLD_MS, false);
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(operatorMail(coord)).toEqual([]);
   });
 
@@ -670,7 +723,7 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     // nextAttemptAt is 7 min ago. The hold's START is 12 min ago, outside AUTO_CONTINUE_RECENT_MS.
     coord.backOff(d.id, 'auto-continue-armed', R1_AT - 12 * 60_000 + MAIL_ARMED_HOLD_MS, false);
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(operatorMail(coord)).toHaveLength(1);
   });
 
@@ -680,7 +733,7 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     const runA = seedRun(coord, { program: 'prog-a', dispatchedAt: DISPATCHED_AT - 3_600_000, inbound: null });
     const runB = seedRun(coord, { program: 'prog-b', workerMail: null });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(operatorMail(coord).map((m) => m.runId)).toEqual([runB]);
     // KEY, not B's dispatchedAt: the worker's mail on run A is its last mail on the subject.
     expect(stallRows(coord, runB)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
@@ -691,15 +744,15 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     const { coord, w } = await rig();
     const runId = seedRun(coord, { program: 'demo-program', workerMail: { at: WORKER_MAIL_AT, subject: WAVE_DONE_SUBJECT }, inbound: null });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(operatorMail(coord)).toEqual([]);          // the coordinator's ball, below its 30 h cap
     coord.insertMail({ fromId: 'coordinator', fromUuid: 'coordinator', toId: WORKER, runId,
       kind: 'status', subject: 'wave-done-rejected', body: 'b', artifacts: [] });
     at(R1_AT + STALL_QUIET_MS - STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(operatorMail(coord)).toEqual([]);          // quiet runs from the rejection
     at(R1_AT + STALL_QUIET_MS);
-    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
   });
 });
@@ -716,21 +769,17 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     expect(sent).toEqual([]);
   };
 
-  it('no pane pid (tmux answers non-zero, then empty): held and nothing written; the pane back, r1 goes out', async () => {
-    const { h, coord, w, sent } = await rig();
+  it('no pane pid (the tick measured null, then no entry at all): held and nothing written; a pid, r1 goes out', async () => {
+    const { coord, w, sent } = await rig();
     const runId = seedRun(coord, { program: 'demo-program' });
-    h.panes.code = 1;
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf(null));
     nothingWritten(coord, runId, sent);
-    h.panes.code = 0;
-    h.panes.stdout = '';
     at(R1_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, { panePids: new Map(), records: [regRow(WORKER)] });
     nothingWritten(coord, runId, sent);
-    h.panes.stdout = `${PID}\n`;
     at(R1_AT + 2 * STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
   });
 
@@ -739,11 +788,11 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     const runId = seedRun(coord, { program: 'demo-program' });
     rmSync(path.join(h.home, '.claude', 'sessions', `${PID}.json`));
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     nothingWritten(coord, runId, sent);
     seedLiveState(h.home);
     at(R1_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
   });
 
@@ -753,24 +802,22 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     writeFileSync(path.join(h.home, '.cc-sessions', `${WORKER}.wrapper`), 'demo-unrostered');
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER, { wrapper: 'demo-unrostered' })], ARMED);
+    await w.sweepStalls([fleetRow(WORKER, { wrapper: 'demo-unrostered' })], ARMED, tickOf());
     nothingWritten(coord, runId, sent);
     at(R1_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
   });
 
-  it('waiting, and the registry .uuid unreadable: held and nothing written; readable, the dialog-cap push goes out', async () => {
-    let broken = true;
-    const { h, coord, w, sent } = await rig({ io: degradedReadIO((p) => broken && p.endsWith(`${WORKER}.uuid`)) });
+  it('waiting, and the tick\'s registry row carries an unmeasured uuid: held and nothing written; measured, the dialog-cap push goes out', async () => {
+    const { h, coord, w, sent } = await rig();
     seedLiveState(h.home, { status: 'waiting' });
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);                                        // 2 h of quiet: the dialog-cap is due
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
-    nothingWritten(coord, runId, sent);
-    broken = false;
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf(PID, [regRow(WORKER, UUID, { unmeasured: ['uuid'] })]));
+    nothingWritten(coord, runId, sent);               // the hookstate ask reads `unmeasured`, never "no ask"
     at(R1_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
     expect(sent).toHaveLength(1);
   });
@@ -781,11 +828,11 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     seedLiveState(h.home, { status: 'waiting' });
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     nothingWritten(coord, runId, sent);
     broken = false;
     at(R1_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
     expect(sent).toHaveLength(1);
   });
@@ -796,10 +843,10 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     const runId = seedRun(coord, { program: 'demo-program' });
     vi.spyOn(coord, 'currentAskFor').mockReturnValueOnce({ ok: false, kind: 'ask-unreadable', detail: 'x' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     nothingWritten(coord, runId, sent);
     at(R1_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
     expect(sent).toHaveLength(1);
   });
@@ -809,10 +856,10 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     const runId = seedRun(coord, { program: 'demo-program' });
     vi.spyOn(coord, 'autoContinueHeldUntil').mockReturnValueOnce({ ok: false, kind: 'delivery-unreadable', detail: 'x' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     nothingWritten(coord, runId, sent);
     at(R1_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
   });
 
@@ -820,10 +867,10 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     const { coord, w, sent } = await rig();
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER, { unmeasured: ['uuid'] })], ARMED);
+    await w.sweepStalls([fleetRow(WORKER, { unmeasured: ['uuid'] })], ARMED, tickOf());
     nothingWritten(coord, runId, sent);
     at(R1_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
   });
 
@@ -831,10 +878,10 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     const { coord, w, sent } = await rig();
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
-    await w.sweepStalls([fleetRow(WORKER, { statusUnmeasured: true })], ARMED);
+    await w.sweepStalls([fleetRow(WORKER, { statusUnmeasured: true })], ARMED, tickOf());
     nothingWritten(coord, runId, sent);
     at(R1_AT + STALL_SWEEP_MS);
-    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
   });
 });
@@ -854,12 +901,384 @@ describe('sweepStalls: wiring', () => {
   it('rides tick(): dispatched right after the claim lanes, before primed is set, with no timer of its own', () => {
     const src = readFileSync(path.join(here, '../src/watch.ts'), 'utf8');
     const claims = src.indexOf('this.lapseClaims(sessions);');
-    const lane = src.indexOf('void this.sweepStalls(sessions, registryRead.names).catch(');
+    const lane = src.indexOf('void this.sweepStalls(sessions, registryRead.names, { panePids, records }).catch(');
+    expect(src).toContain('this.usage, this.currentHeadBranches(), panePids);');   // the pids are assembleFleet's own
     const primed = src.indexOf('this.primed = true;');
     expect(claims).toBeGreaterThan(-1);
     expect(lane).toBeGreaterThan(claims);
     expect(primed).toBeGreaterThan(lane);
     expect(src.match(/setInterval\(/g)).toHaveLength(1);
     expect(src).toContain('export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;');
+  });
+});
+
+describe('sweepStalls: wave 2 (spec §5)', () => {
+  const T0 = IDLE_AT + 1_800_000;                     // any time well inside the worker's first 2 h of quiet
+
+  it('M6: three agent reads per worker, and no pane-pid read — the pid and the uuid are the tick\'s', async () => {
+    const reads: string[] = [];
+    const { h, coord, w } = await rig({ io: countingIO(reads) });
+    seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    h.calls.length = 0;
+    reads.length = 0;
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
+    const mine = reads.filter((p) => p.includes(`${WORKER}.`) || p.endsWith(`/${PID}.json`)).map((p) => path.basename(p)).sort();
+    expect(mine).toEqual([`${PID}.json`, `${WORKER}.hookstate.json`, `${WORKER}.turn.json`]);
+    expect(listPanes(h)).toBe(0);
+    expect(operatorMail(coord)).toHaveLength(1);      // the control: those three reads were enough to judge r1
+  });
+
+  it('F4: the run verdict reads run mail only — the worker\'s run-less and off-run mail leave its key and rung as wave 1 had them', async () => {
+    const rowsAtR1 = async (withPeer: boolean): Promise<string[]> => {
+      const { coord, w } = await rig();
+      const runId = seedRun(coord, { program: 'demo-program' });
+      if (withPeer) {
+        const other = seedRun(coord, { program: 'prog-other', worker: OTHER_WORKER, workerMail: null, inbound: null });
+        at(WORKER_MAIL_AT + 600_000);                 // newer than the worker's last run mail: it would move the key
+        coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'demo-peer', runId: null, kind: 'question', subject: 'peer q', body: 'b', artifacts: [] });
+        coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: OTHER_WORKER, runId: other, kind: 'finding', subject: 'off-run', body: 'b', artifacts: [] });
+        coord.insertMail({ fromId: 'demo-peer', fromUuid: 'u', toId: WORKER, runId: null, kind: 'answer', subject: 'peer a', body: 'b', artifacts: [] });
+      }
+      at(R1_AT);
+      await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
+      return stallRows(coord, runId);
+    };
+    expect(await rowsAtR1(false)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);   // the control
+    expect(await rowsAtR1(true)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
+  });
+
+  it('dark (no stall-watch-w2-live): a worker whose lifecycle reads orphan for DEAD_GRACE_MS draws a shadow dead row, and no mail', async () => {
+    const { coord, w } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    const dead = fleetRow(WORKER, { lifecycle: 'orphan' });
+    at(T0);
+    await w.sweepStalls([dead], ARMED, tickOf());
+    at(T0 + DEAD_GRACE_MS);
+    await w.sweepStalls([dead], ARMED, tickOf());
+    expect(stallRows(coord, runId)).toEqual([stallDetail('shadow', 'dead', 1, KEY)]);
+    expect(operatorMail(coord)).toEqual([]);
+  });
+
+  it('stall-watch-w2-live: that worker draws a stall: … dead: mail to its coordinator at DEAD_GRACE_MS, not before', async () => {
+    const { coord, w } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    const dead = fleetRow(WORKER, { lifecycle: 'orphan' });
+    at(T0);
+    await w.sweepStalls([dead], W2, tickOf());
+    at(T0 + DEAD_GRACE_MS - STALL_SWEEP_MS);
+    await w.sweepStalls([dead], W2, tickOf());
+    expect(operatorMail(coord)).toEqual([]);
+    at(T0 + DEAD_GRACE_MS);
+    await w.sweepStalls([dead], W2, tickOf());
+    const mail = operatorMail(coord);
+    expect(mail).toHaveLength(1);
+    expect(mail[0]).toMatchObject({ toId: COORD, runId, kind: 'status', at: T0 + DEAD_GRACE_MS });
+    expect(mail[0]!.subject.startsWith(`${STALL_REPORT_PREFIX} run ${runId} — dead:`)).toBe(true);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dead', 1, KEY)]);
+  });
+
+  it('a worker missing from the tick (its registry row gone) for DEAD_GRACE_MS draws the dead report, naming the absent row', async () => {
+    const { coord, w } = await rig();
+    seedRun(coord, { program: 'demo-program' });
+    const gone = tickOf(PID, []);
+    at(T0);
+    await w.sweepStalls([], W2, gone);
+    at(T0 + DEAD_GRACE_MS - STALL_SWEEP_MS);
+    await w.sweepStalls([], W2, gone);
+    expect(operatorMail(coord)).toEqual([]);
+    at(T0 + DEAD_GRACE_MS);
+    await w.sweepStalls([], W2, gone);
+    const mail = operatorMail(coord);
+    expect(mail.map((m) => m.toId)).toEqual([COORD]);
+    expect(mail[0]!.subject).toContain('registry row absent');
+  });
+
+  it('the absent clock is in memory: a new watcher (a server restart) starts DEAD_GRACE_MS again', async () => {
+    const { h, coord, w } = await rig();
+    seedRun(coord, { program: 'demo-program' });
+    const gone = tickOf(PID, []);
+    at(T0);
+    await w.sweepStalls([], W2, gone);
+    const again = await primedWatcher(h, store(h.home));
+    at(T0 + 5 * 60_000);
+    await again.sweepStalls([], W2, gone);
+    at(T0 + DEAD_GRACE_MS);
+    await again.sweepStalls([], W2, gone);
+    expect(operatorMail(coord)).toEqual([]);          // 5 min on the new watcher's clock
+    at(T0 + 5 * 60_000 + DEAD_GRACE_MS);
+    await again.sweepStalls([], W2, gone);
+    expect(operatorMail(coord).map((m) => m.toId)).toEqual([COORD]);
+  });
+
+  it('the since-maps are pruned: a worker that leaves the candidates and comes back absent starts DEAD_GRACE_MS again', async () => {
+    const { coord, w } = await rig();
+    seedRun(coord, { program: 'demo-program' });
+    const gone = tickOf(PID, []);
+    at(T0);
+    await w.sweepStalls([], W2, gone);                // absent since T0
+    vi.spyOn(coord, 'stallCandidates').mockReturnValueOnce({ ok: true, runs: [] });
+    at(T0 + STALL_SWEEP_MS);
+    await w.sweepStalls([], W2, gone);                // no candidates: the prune drops T0
+    at(T0 + DEAD_GRACE_MS);
+    await w.sweepStalls([], W2, gone);                // absent again, since now
+    expect(operatorMail(coord)).toEqual([]);
+    at(T0 + 2 * DEAD_GRACE_MS);
+    await w.sweepStalls([], W2, gone);
+    expect(operatorMail(coord).map((m) => m.toId)).toEqual([COORD]);   // the control: the clock runs from the return
+  });
+
+  // Orphan D on a registry row that is no run's worker or coordinator: a restart that lost two background tasks,
+  // the live main loop idle since a minute after it.
+  const seedOrphan = (home: string, over: Record<string, unknown> = {}): void => {
+    seedRegistry(home, ORPHAN, ORPHAN_UUID);
+    seedLiveState(home, { statusUpdatedAt: RESTART_AT + 60_000, startedAt: RESTART_AT - 5_000 });
+    seedTurnMark(home, ORPHAN, {
+      sessionId: ORPHAN_UUID, event: 'SessionStart', at: RESTART_AT, turnAt: RESTART_AT - 900_000,
+      stopAt: RESTART_AT - 600_000, restartAt: RESTART_AT, lostBg: 2, lostKinds: 'shell,subagent', lostIds: 'bsh1,bag2', ...over,
+    });
+  };
+  const orphanTick = (): StallTick => tickOf(PID, [regRow(ORPHAN, ORPHAN_UUID)]);
+  const D_AT = RESTART_AT + 60_000 + ORPHAN_D_IDLE_MS;
+
+  it('orphan D, run-less: one orphaned: self-mail at ORPHAN_D_IDLE_MS, never a second (another sweep, or a new watcher)', async () => {
+    const { h, coord, w } = await rig();
+    seedOrphan(h.home);
+    at(D_AT - STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
+    expect(operatorMail(coord)).toEqual([]);          // a minute short of 15 min idle since the restart
+    at(D_AT);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
+    const mail = operatorMail(coord);
+    expect(mail).toHaveLength(1);
+    expect(mail[0]).toMatchObject({ toId: ORPHAN, runId: null, kind: 'status', at: D_AT });
+    expect(mail[0]!.subject.startsWith(STALL_ORPHANED_PREFIX)).toBe(true);
+    at(D_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
+    const again = await primedWatcher(h, store(h.home));
+    at(D_AT + 2 * STALL_SWEEP_MS);
+    await again.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
+    expect(operatorMail(coord)).toHaveLength(1);      // deduped by its subject, which a restart does not forget
+  });
+
+  it('orphan D: ⚠ orphaned once, when the self-mail is still undelivered ORPHAN_PUSH_MS on; a new watcher may push once more (the latch is in memory)', async () => {
+    const { h, w, sent } = await rig();
+    seedOrphan(h.home);
+    at(D_AT);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
+    at(D_AT + ORPHAN_PUSH_MS - STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
+    expect(sent).toEqual([]);
+    at(D_AT + ORPHAN_PUSH_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.title.startsWith('⚠ orphaned')).toBe(true);
+    expect(sent[0]).toMatchObject({ sessionId: ORPHAN, tag: `orphaned-${ORPHAN}-${RESTART_AT}` });
+    at(D_AT + ORPHAN_PUSH_MS + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
+    expect(sent).toHaveLength(1);
+    const spy2 = pushSpy();
+    const again = await primedWatcher(h, store(h.home), { push: spy2.push as never });
+    at(D_AT + ORPHAN_PUSH_MS + 2 * STALL_SWEEP_MS);
+    await again.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
+    expect(spy2.sent).toHaveLength(1);                 // documented (spec §5.2): the tag collapses the two on the phone
+  });
+
+  it('a registry row whose marker lost nothing costs ONE read; one that lost tasks costs two (the live file too)', async () => {
+    const reads: string[] = [];
+    const { h, w } = await rig({ io: countingIO(reads) });
+    seedOrphan(h.home, { lostBg: 0, lostKinds: '', lostIds: '' });
+    const orphanReads = (): string[] =>
+      reads.filter((p) => p.includes(ORPHAN) || p.endsWith(`/${PID}.json`)).map((p) => path.basename(p)).sort();
+    at(D_AT);
+    reads.length = 0;
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
+    expect(orphanReads()).toEqual([`${ORPHAN}.turn.json`]);
+    seedOrphan(h.home);                               // the control: lostBg 2
+    at(D_AT + STALL_SWEEP_MS);
+    reads.length = 0;
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
+    expect(orphanReads()).toEqual([`${PID}.json`, `${ORPHAN}.turn.json`]);
+  });
+
+  it('orphan E on a run worker: one orphaned: self-mail on its run, with a run_events row', async () => {
+    const { h, coord, w } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedLiveState(h.home, { startedAt: STARTED_AT });
+    seedTurnMark(h.home, WORKER, { bg: 1, bgKinds: 'subagent', bgIds: 'b989ocn62' });
+    at(IDLE_AT + ORPHAN_E_IDLE_MS - STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2_LIVE, tickOf());
+    expect(operatorMail(coord)).toEqual([]);
+    at(IDLE_AT + ORPHAN_E_IDLE_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2_LIVE, tickOf());
+    const mail = operatorMail(coord);
+    expect(mail).toHaveLength(1);
+    expect(mail[0]).toMatchObject({ toId: WORKER, runId, kind: 'status' });
+    expect(mail[0]!.subject.startsWith(STALL_ORPHANED_PREFIX)).toBe(true);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'orphan-e', 1, IDLE_AT)]);
+  });
+
+  it('(b)-contamination: a coordinator\'s orphan E is run-less — a mail to it, and no row on the run it claims', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedLiveState(h.home, { startedAt: STARTED_AT });
+    seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, bg: 1, bgKinds: 'workflow', bgIds: 'wf1' });
+    at(IDLE_AT + ORPHAN_E_IDLE_MS);
+    await w.sweepStalls([fleetRow(WORKER), fleetRow(COORD)], W2_LIVE, tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]));
+    const mail = operatorMail(coord);
+    expect(mail).toHaveLength(1);
+    expect(mail[0]).toMatchObject({ toId: COORD, runId: null, kind: 'status' });
+    expect(mail[0]!.subject.startsWith(STALL_ORPHANED_PREFIX)).toBe(true);
+    // A worker's proof (b) counts the orphan-e rows on ITS run; a coordinator's must never land there.
+    expect(stallRows(coord, runId)).toEqual([]);
+  });
+
+  it('mail-disabled: every mail rung that would send holds; mail-stuck still pushes', async () => {
+    const { coord, w, sent } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    // Queued at 21:19:17Z and never delivered: 2 h past the worker's idle start at r1's time.
+    const m = coord.insertMail({ fromId: 'demo-boss', fromUuid: 'u', toId: WORKER, runId: null, kind: 'finding', subject: 'hi', body: 'b', artifacts: [] });
+    const d = coord.queueDelivery(m.id, WORKER, 'envelope');
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], [...W2, 'mail-disabled'], tickOf());
+    expect(operatorMail(coord)).toEqual([]);          // r1 would send: held `mail-disabled`
+    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-mail-stuck-1-${d.id}`]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'mail-stuck', 1, d.id)]);
+  });
+
+  it('mail-disabled: a cap still pushes', async () => {
+    const { h, coord, w, sent } = await rig();
+    seedLiveState(h.home, { status: 'waiting' });
+    const runId = seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], [...ARMED, 'mail-disabled'], tickOf());
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ tag: `stall-${runId}-dialog-cap-1-${KEY}` });
+  });
+
+  it('mail-disabled: a rung that is shadow anyway still records its shadow row', async () => {
+    const { coord, w } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ['mail-disabled'], tickOf());
+    expect(stallRows(coord, runId)).toEqual([stallDetail('shadow', 'quiet', 1, KEY)]);
+    expect(operatorMail(coord)).toEqual([]);
+  });
+
+  it('a turn that failed on a token this build cannot classify holds, and warns ONCE (never guessed into a self-wake)', async () => {
+    const { h, coord, w } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedLiveState(h.home, { startedAt: STARTED_AT });
+    seedTurnMark(h.home, WORKER, { state: 'failed', event: 'StopFailure', err: 'new_error' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(IDLE_AT + FAILED_IDLE_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    at(IDLE_AT + FAILED_IDLE_MS + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    expect(lines(warn, `ccrc-server: stall-watch unknown StopFailure new_error on ${WORKER}`)).toBe(1);
+    expect(operatorMail(coord)).toEqual([]);
+    expect(stallRows(coord, runId)).toEqual([]);
+  });
+
+  it('hold 2a keeps the identity cut on the RAW read: a question from another process is no ask, so the waiting pane is 2b — one dialog-cap push at 2 h', async () => {
+    // The pin the deleted unaged hookstate door's "keeps the identity gate" row carried, moved to the lane that now
+    // makes the cut (`stallHookAskOf`): the raw read REPORTS `foreign`, and only a `current` file's ask holds 2a. The control is
+    // "a hookstate ask OLDER than HOOKSTATE_FRESH_MS still holds (2a)" above: the same file under this session's
+    // own sessionId holds, and nothing is sent.
+    const { h, coord, w, sent } = await rig();
+    seedLiveState(h.home, { status: 'waiting' });
+    seedHookState(h.home, WORKER, {
+      sessionId: '2'.repeat(36), updatedAt: IDLE_AT - 5_000,
+      ask: { questions: [{ question: 'Which lane?', options: [{ label: 'a' }, { label: 'b' }] }] },
+    });
+    const runId = seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${KEY}` });
+  });
+
+  it('a coordinator whose turn marker stays unreadable MARKER_UNREADABLE_MS draws ⚠ marker once per first-seen time', async () => {
+    const { h, coord, w, sent } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    seedRun(coord, { program: 'demo-program' });
+    const markPath = path.join(h.home, '.cc-sessions', `${COORD}.turn.json`);
+    writeFileSync(markPath, '{');                     // malformed
+    const both = tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]);
+    const sessions = [fleetRow(WORKER), fleetRow(COORD)];
+    const markerTags = (): (string | undefined)[] => sent.filter((p) => p.title.startsWith('⚠ marker')).map((p) => p.tag);
+    const M0 = IDLE_AT;
+    at(M0);
+    await w.sweepStalls(sessions, W2, both);
+    at(M0 + MARKER_UNREADABLE_MS - STALL_SWEEP_MS);
+    await w.sweepStalls(sessions, W2, both);
+    expect(markerTags()).toEqual([]);
+    at(M0 + MARKER_UNREADABLE_MS);
+    await w.sweepStalls(sessions, W2, both);
+    at(M0 + MARKER_UNREADABLE_MS + STALL_SWEEP_MS);
+    await w.sweepStalls(sessions, W2, both);
+    expect(markerTags()).toEqual([`stall-${COORD}-marker-unreadable-1-${M0}`]);
+    rmSync(markPath);                                 // healed: the first-seen time is dropped
+    const M1 = M0 + MARKER_UNREADABLE_MS + 2 * STALL_SWEEP_MS;
+    at(M1);
+    await w.sweepStalls(sessions, W2, both);
+    writeFileSync(markPath, '{');                     // unreadable again: a new first-seen time
+    const M2 = M1 + STALL_SWEEP_MS;
+    at(M2);
+    await w.sweepStalls(sessions, W2, both);
+    at(M2 + MARKER_UNREADABLE_MS);
+    await w.sweepStalls(sessions, W2, both);
+    expect(markerTags()).toEqual([`stall-${COORD}-marker-unreadable-1-${M0}`, `stall-${COORD}-marker-unreadable-1-${M2}`]);
+  });
+
+  it('a coordinator\'s mail-stuck is run-less: one push per delivery, held by the in-memory latch, and no row on the run it claims', async () => {
+    // Off a run, L1 cannot see a push it already sent (`stallRecordedDone` answers false), so it answers notify on
+    // every sweep once MAIL_STUCK_MS has passed. The lane's `stallLatch` is what keeps it to one push.
+    const { h, coord, w, sent } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    const runId = seedRun(coord, { program: 'demo-program' });
+    // To the coordinator ROLE, delivered to the claimant, queued at 21:19:17Z and never delivered.
+    const m = coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId: null, kind: 'question', subject: 'q', body: 'b', artifacts: [] });
+    const d = coord.queueDelivery(m.id, COORD, 'envelope');
+    const both = tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]);
+    const sessions = [fleetRow(WORKER), fleetRow(COORD)];
+    const stuckTags = (): (string | undefined)[] => sent.filter((p) => p.tag?.includes('-mail-stuck-')).map((p) => p.tag);
+    at(IDLE_AT + MAIL_STUCK_MS - STALL_SWEEP_MS);    // idle since 21:56:31Z, a minute short of MAIL_STUCK_MS
+    await w.sweepStalls(sessions, W2, both);
+    expect(stuckTags()).toEqual([]);
+    at(IDLE_AT + MAIL_STUCK_MS);
+    await w.sweepStalls(sessions, W2, both);
+    at(IDLE_AT + MAIL_STUCK_MS + STALL_SWEEP_MS);
+    await w.sweepStalls(sessions, W2, both);
+    expect(stuckTags()).toEqual([`stall-${COORD}-mail-stuck-1-${d.id}`]);
+    expect(stallRows(coord, runId)).toEqual([]);
+  });
+
+  it('an identity the tick cannot measure reads no marker, so 2 h of it starts no marker-unreadable clock (worker or coordinator)', async () => {
+    // The clock counts only a marker READ that answered `unmeasured` or `malformed`. An unmeasured registry uuid
+    // reads neither the marker nor the hookstate; the `unmeasured` the lane then carries is its own, not the file's.
+    const { h, coord, w, sent } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    const runId = seedRun(coord, { program: 'demo-program' });
+    const sessions = [fleetRow(WORKER), fleetRow(COORD)];
+    const markerTags = (): (string | undefined)[] => sent.filter((p) => p.title.startsWith('⚠ marker')).map((p) => p.tag);
+    const unmeasured = tickOf(PID, [regRow(WORKER, UUID, { unmeasured: ['uuid'] }), regRow(COORD, COORD_UUID, { unmeasured: ['uuid'] })]);
+    const M0 = IDLE_AT;
+    for (const t of [M0, M0 + MARKER_UNREADABLE_MS, M0 + 2 * MARKER_UNREADABLE_MS]) {
+      at(t);
+      await w.sweepStalls(sessions, W2, unmeasured);
+    }
+    expect(markerTags()).toEqual([]);
+    // The control: the worker's identity measured and its marker malformed. The clock starts on that READ, and the
+    // arm fires an hour later, so the silence above is the identity rule's and not an arm that cannot fire here.
+    writeFileSync(path.join(h.home, '.cc-sessions', `${WORKER}.turn.json`), '{');
+    const measured = tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID, { unmeasured: ['uuid'] })]);
+    const M1 = M0 + 2 * MARKER_UNREADABLE_MS + STALL_SWEEP_MS;
+    at(M1);
+    await w.sweepStalls(sessions, W2, measured);
+    at(M1 + MARKER_UNREADABLE_MS);
+    await w.sweepStalls(sessions, W2, measured);
+    expect(markerTags()).toEqual([`stall-${runId}-marker-unreadable-1-${KEY}`]);
   });
 });

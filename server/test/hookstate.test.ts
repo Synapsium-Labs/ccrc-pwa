@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { localIO } from '../src/io.js';
-import { readHookState, readHookStateMeasured, readHookStateRawMeasured, readHookStateUnaged, HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
+import { readHookState, readHookStateMeasured, readHookStateRawMeasured, HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 
@@ -460,9 +460,11 @@ describe('graphGateDenials', () => {
 });
 
 // The stall watch's hold 2a (spec 2026-09-29 §4.2, planning departure D-3565 `ask-hold-correlates-the-dialog`): the lane
-// correlates a hookstate ask with the live `waiting` word by TIME, so it needs the ask after
-// HOOKSTATE_FRESH_MS has aged it out. Every other gate must still run.
-describe('readHookStateUnaged — identity-gated, never aged', () => {
+// correlates a hookstate ask with the live `waiting` word by TIME, so it needs the ask after HOOKSTATE_FRESH_MS has
+// aged it out. Wave 2's lane takes it from the RAW read, and these rows moved here from the unaged door it replaced
+// (rulings Q3: a deleted door, its pins kept). The raw read keeps every parse gate and REPORTS the identity; the lane
+// makes the cut (only a `current` file's ask holds 2a), pinned in stall-sweep.test.ts ("hold 2a keeps the identity cut").
+describe('readHookStateRawMeasured — the read hold 2a takes: never aged, identity reported', () => {
   // The hook's question envelope, the shape both AskUserQuestion arms of ccd/session-hook.sh write
   // (shared/api.ts's HookAsk). The old {approval:{tool:'AskUserQuestion'}} shape is the bug that hook no
   // longer writes.
@@ -475,39 +477,39 @@ describe('readHookStateUnaged — identity-gated, never aged', () => {
     seed(reg, ID, base({ state: 'waiting', updatedAt: old, ask: question }));
     // The control: the aged read drops this very file.
     expect(await readHookStateMeasured(localIO, reg, ID, UUID, now)).toEqual({ ok: false, reason: 'no-state' });
-    const out = await readHookStateUnaged(localIO, reg, ID, UUID);
-    expect(out.ok).toBe(true);
+    const out = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+    expect(out).toMatchObject({ ok: true, identity: 'current' });
     if (!out.ok) return;
     expect(out.state.updatedAt).toBe(old);
     expect(out.state.ask).toEqual(question);
   });
 
-  it('keeps the identity gate: another process\'s file, or no registry uuid at all, is no-state', async () => {
+  it('reports the identity the old gate cut on: another process\'s file is foreign, no registry uuid is unregistered', async () => {
     const reg = mkTmp('ccrc-hookstate-');
     seed(reg, ID, base({ state: 'waiting', ask: question }));
-    expect(await readHookStateUnaged(localIO, reg, ID, '2'.repeat(36))).toEqual({ ok: false, reason: 'no-state' });
-    expect(await readHookStateUnaged(localIO, reg, ID, null)).toEqual({ ok: false, reason: 'no-state' });
-    expect((await readHookStateUnaged(localIO, reg, ID, UUID)).ok).toBe(true);   // the control
+    expect(await readHookStateRawMeasured(localIO, reg, ID, '2'.repeat(36))).toMatchObject({ ok: true, identity: 'foreign' });
+    expect(await readHookStateRawMeasured(localIO, reg, ID, null)).toMatchObject({ ok: true, identity: 'unregistered' });
+    expect(await readHookStateRawMeasured(localIO, reg, ID, UUID)).toMatchObject({ ok: true, identity: 'current' });   // the control
   });
 
-  it('keeps the unmeasured arm: a file this box could not read is unmeasured, never no-state', async () => {
+  it('keeps the unmeasured arm: a file this box could not read is unmeasured, never absent', async () => {
     const reg = mkTmp('ccrc-hookstate-');
     seed(reg, ID, base({ state: 'waiting', ask: question }));
     const io = degradedReadIO((p) => p.endsWith(`${ID}.hookstate.json`));
-    expect(await readHookStateUnaged(io, reg, ID, UUID)).toEqual({ ok: false, reason: 'unmeasured' });
+    expect(await readHookStateRawMeasured(io, reg, ID, UUID)).toEqual({ ok: false, reason: 'unmeasured' });
   });
 
-  it('keeps every parse rejection: a malformed ask is no-state, never a partial read', async () => {
+  it('keeps every parse rejection: a malformed ask is malformed, never a partial read', async () => {
     const reg = mkTmp('ccrc-hookstate-');
     seed(reg, ID, base({ state: 'waiting', ask: { approval: { tool: 7 } } }));
-    expect(await readHookStateUnaged(localIO, reg, ID, UUID)).toEqual({ ok: false, reason: 'no-state' });
+    expect(await readHookStateRawMeasured(localIO, reg, ID, UUID)).toEqual({ ok: false, reason: 'malformed' });
   });
 
   it('shares the parse: hookstate.ts holds ONE JSON.parse and ONE age comparison, comments blanked', () => {
     const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../src/hookstate.ts'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\/\/[^\n]*/g, '');
-    expect(src).toContain('export async function readHookStateUnaged(');
+    expect(src).toContain('export async function readHookStateRawMeasured(');
     expect(src.match(/JSON\.parse\(/g)).toHaveLength(1);
     expect(src.match(/>\s*HOOKSTATE_FRESH_MS/g)).toHaveLength(1);
   });
@@ -516,7 +518,7 @@ describe('readHookStateUnaged — identity-gated, never aged', () => {
 // ── The raw read (worker stall watch wave 2, spec 2026-09-29 §5.1; slug `raw-read-replaces-the-private-parse`) ──
 // The stall watch's frozen and delegates arms need the hook's `updatedAt`, its `event` and WHOSE file it is,
 // from a file the aged read has already dropped. `readHookStateRawMeasured` is now this module's one parse, and
-// the two gated doors fold over it. The parity table at the end holds them to every answer they gave before.
+// the aged door folds over it (the unaged door went with the wave-2 lane). The parity table holds it to its answers.
 describe('readHookStateRawMeasured — the one parse, identity reported and never cut', () => {
   it('reports identity instead of cutting on it: current, foreign and unregistered', async () => {
     const reg = mkTmp('ccrc-hookstate-');
@@ -575,28 +577,28 @@ describe('readHookStateRawMeasured — the one parse, identity reported and neve
     expect(out.ok && out.state.updatedAt).toBe(old);
   });
 
-  // The parity fixtures, one table read by BOTH parity rows below. The gated-doors row calls only the two doors
-  // that exist before the fold, so Step 2 runs it GREEN at HEAD: that run MEASURES its `aged` and `unaged`
-  // columns against the pre-fold code, and Step 5 re-runs it against the fold. The raw row needs the new export.
+  // The parity fixtures, one table read by BOTH parity rows below. The gated-door row calls only the aged door,
+  // which existed before the fold, so its `aged` column was MEASURED against the pre-fold code and re-run against
+  // the fold (the unaged door and its column went with the wave-2 lane). The raw row needs the new export.
   type ParityRow = {
     body: unknown; uuid: string | null; degraded?: true;
     raw: 'current' | 'foreign' | 'unregistered' | 'absent' | 'unmeasured' | 'malformed';
-    aged: 'ok' | 'no-state' | 'unmeasured'; unaged: 'ok' | 'no-state' | 'unmeasured';
+    aged: 'ok' | 'no-state' | 'unmeasured';
   };
   const parityRows = (): Record<string, ParityRow> => {
     const noUpdatedAt = base();
     delete noUpdatedAt['updatedAt'];
-    const bad = (body: unknown): ParityRow => ({ body, uuid: UUID, raw: 'malformed', aged: 'no-state', unaged: 'no-state' });
+    const bad = (body: unknown): ParityRow => ({ body, uuid: UUID, raw: 'malformed', aged: 'no-state' });
     return {
-      'fresh and matching': { body: base(), uuid: UUID, raw: 'current', aged: 'ok', unaged: 'ok' },
-      'absent': { body: undefined, uuid: UUID, raw: 'absent', aged: 'no-state', unaged: 'no-state' },
-      'unreadable': { body: base(), uuid: UUID, degraded: true, raw: 'unmeasured', aged: 'unmeasured', unaged: 'unmeasured' },
+      'fresh and matching': { body: base(), uuid: UUID, raw: 'current', aged: 'ok' },
+      'absent': { body: undefined, uuid: UUID, raw: 'absent', aged: 'no-state' },
+      'unreadable': { body: base(), uuid: UUID, degraded: true, raw: 'unmeasured', aged: 'unmeasured' },
       'stale by 31 minutes': {
-        body: base({ updatedAt: NOW - HOOKSTATE_FRESH_MS - 60_000 }), uuid: UUID, raw: 'current', aged: 'no-state', unaged: 'ok' },
+        body: base({ updatedAt: NOW - HOOKSTATE_FRESH_MS - 60_000 }), uuid: UUID, raw: 'current', aged: 'no-state' },
       'exactly at the freshness boundary': {
-        body: base({ updatedAt: NOW - HOOKSTATE_FRESH_MS }), uuid: UUID, raw: 'current', aged: 'ok', unaged: 'ok' },
-      'a previous process': { body: base({ sessionId: '2'.repeat(36) }), uuid: UUID, raw: 'foreign', aged: 'no-state', unaged: 'no-state' },
-      'no registry uuid, empty sessionId': { body: base({ sessionId: '' }), uuid: null, raw: 'unregistered', aged: 'no-state', unaged: 'no-state' },
+        body: base({ updatedAt: NOW - HOOKSTATE_FRESH_MS }), uuid: UUID, raw: 'current', aged: 'ok' },
+      'a previous process': { body: base({ sessionId: '2'.repeat(36) }), uuid: UUID, raw: 'foreign', aged: 'no-state' },
+      'no registry uuid, empty sessionId': { body: base({ sessionId: '' }), uuid: null, raw: 'unregistered', aged: 'no-state' },
       'version skew': bad(base({ v: 2 })),
       'an unknown state word': bad(base({ state: 'blocked' })),
       'truncated JSON': bad('{"v":1,"state":"working"'),
@@ -618,12 +620,11 @@ describe('readHookStateRawMeasured — the one parse, identity reported and neve
     return { reg, io: row.degraded ? degradedReadIO((p) => p.endsWith(`${ID}.hookstate.json`)) : localIO };
   };
 
-  it('FOLD PARITY (the gated doors): every fixture reads through both gated doors exactly as it did before the fold', async () => {
+  it('FOLD PARITY (the gated door): every fixture reads through the gated door exactly as it did before the fold', async () => {
     const word = (r: { ok: boolean; reason?: string }): string => (r.ok ? 'ok' : String(r.reason));
     for (const [name, row] of Object.entries(parityRows())) {
       const { reg, io } = seedParity(row);
       expect(word(await readHookStateMeasured(io, reg, ID, row.uuid, NOW)), `${name}: aged`).toBe(row.aged);
-      expect(word(await readHookStateUnaged(io, reg, ID, row.uuid)), `${name}: unaged`).toBe(row.unaged);
     }
   });
 

@@ -232,26 +232,6 @@ export async function readHookStateMeasured(
 }
 
 /**
- * `readHookStateMeasured` without its AGE gate, and nothing else. The identity gate, the size cap,
- * every parse rejection and the `unmeasured` arm are the SAME code (`foldHookStateRead` over `readHookStateRawMeasured`, below). This is a
- * second door onto one parse, never a copy of it: `io.ts`'s own rule, that two hand-kept ladders over the
- * same gates drift.
- *
- * Its one reader is the stall watch's hold 2a (`watch.ts`'s `sweepStalls`, spec 2026-09-29 §4.2). The hook
- * writes only on events, so a legit question outlives `HOOKSTATE_FRESH_MS` (the census's longest ran 6.6 h).
- * The lane therefore correlates `updatedAt` with the live status time instead of trusting age. The caller
- * decides what an old ask means, not this reader. Every other reader wants the aged answer and keeps it.
- */
-export async function readHookStateUnaged(
-  io: FleetIO,
-  registryDir: string,
-  id: string,
-  currentUuid: string | null,
-): Promise<HookStateRead> {
-  return foldHookStateRead(await readHookStateRawMeasured(io, registryDir, id, currentUuid), null);
-}
-
-/**
  * `~/.cc-sessions/<id>.hookstate.json`, parsed and NOT gated (worker stall watch wave 2, spec 2026-09-29 §5.1;
  * slug `raw-read-replaces-the-private-parse`). Every parse gate runs here. The identity and age cuts do not:
  * the file's identity is REPORTED instead, and the age is left to the caller. The stall watch's frozen and
@@ -278,9 +258,9 @@ export type HookStateRawRead =
  *  this reader DID look at, and one constant stops a later edit quietly promoting one of them to `unmeasured`. */
 const MALFORMED: HookStateRawRead = { ok: false, reason: 'malformed' };
 
-/** THE ONE PARSE in this module. `readHookStateMeasured` and `readHookStateUnaged` are folds over it
- *  (`foldHookStateRead`, below), never copies: `io.ts`'s own rule, that two hand-kept ladders over the same
- *  gates drift. */
+/** THE ONE PARSE in this module. `readHookStateMeasured` is a fold over it (`foldHookStateRead`, below), never a
+ *  copy: `io.ts`'s own rule, that two hand-kept ladders over the same gates drift. The stall watch reads it whole:
+ *  hold 2a correlates an ask by time, so it needs one the age cut drops, and it makes its own identity cut. */
 export async function readHookStateRawMeasured(io: FleetIO, registryDir: string, id: string, currentUuid: string | null): Promise<HookStateRawRead> {
   // `readFileMeasured`, not `readFile`: this seam is the ONLY place the
   // absent-vs-unreadable line still exists as evidence (`io.ts`'s
@@ -311,7 +291,7 @@ export async function readHookStateRawMeasured(io: FleetIO, registryDir: string,
 
   // A non-string `sessionId` names nobody, so it is a parse failure and never
   // an identity. The aged read folded it to `no-state` beside a mismatch, and
-  // `malformed` folds to that same answer (the gated-doors FOLD PARITY row pins it).
+  // `malformed` folds to that same answer (the gated-door FOLD PARITY row pins it).
   const sessionId = raw['sessionId'];
   if (typeof sessionId !== 'string') return MALFORMED;
 
@@ -349,13 +329,13 @@ export async function readHookStateRawMeasured(io: FleetIO, registryDir: string,
   }
 }
 
-/** The two gated doors' ONE decision over the raw read. `now === null` skips ONLY the age cut (the unaged door);
- *  the identity cut, and the fold of `absent`/`malformed` into `no-state`, run for both. `unmeasured` stays
- *  `unmeasured` (D-115). Module-private: a caller chooses a door, never the flag. */
-function foldHookStateRead(raw: HookStateRawRead, now: number | null): HookStateRead {
+/** The aged door's ONE decision over the raw read (`readHookStateMeasured`): the identity cut, the age cut, and the
+ *  fold of `absent`/`malformed` into `no-state`. `unmeasured` stays `unmeasured` (D-115). The unaged door that once
+ *  shared it is gone (worker stall watch wave 2): the lane reads the raw read and makes its own cut. */
+function foldHookStateRead(raw: HookStateRawRead, now: number): HookStateRead {
   if (!raw.ok) return raw.reason === 'unmeasured' ? { ok: false, reason: 'unmeasured' } : NO_STATE;
   if (raw.identity !== 'current') return NO_STATE;
-  if (now !== null && now - raw.state.updatedAt > HOOKSTATE_FRESH_MS) return NO_STATE;
+  if (now - raw.state.updatedAt > HOOKSTATE_FRESH_MS) return NO_STATE;
   return { ok: true, state: raw.state };
 }
 

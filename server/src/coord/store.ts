@@ -3836,39 +3836,6 @@ export class CoordStore {
   }
 
   /**
-   * Every mail row on the stall subject's runs, oldest id first, in ONE read
-   * (stall watch wave 1). The lane's L1 derives the worker's last mail, the
-   * newest inbound mail, the coordinator's `wait:`, the ball and the episode key
-   * from it. The mail table has no index but its key, so this is one scan per
-   * subject rather than one per derived fact.
-   *
-   * An empty id list answers `{ok:true, mail:[]}` with no query at all. `id` and
-   * `at` are CAST and proven (D-2545), all-or-failure, so an unrepresentable row
-   * answers in words rather than throwing out of the lane. `runId` is read raw,
-   * because every selected row's value EQUALS one of the ids bound here, which the
-   * caller took from `stallCandidates`' proven rows. `kind` is the raw column: the
-   * verdict compares it with words, and an unnamed kind matches none of them.
-   */
-  mailOnRuns(runIds: readonly number[]): { ok: true; mail: StallMailRow[] } | { ok: false; kind: Extract<StallReadFailure, 'mail-unreadable'>; detail: string } {
-    if (runIds.length === 0) return { ok: true, mail: [] };
-    const rows = this.db.prepare(
-      'SELECT CAST(id AS TEXT) AS idText, CAST(at AS TEXT) AS atText, runId, fromId, toId, kind, subject ' +
-      `FROM mail WHERE runId IN (${placeholders(runIds.length)}) ORDER BY id`,
-    ).all(...runIds) as unknown as
-      { idText: string; atText: string; runId: number; fromId: string; toId: string; kind: string; subject: string }[];
-    const mail: StallMailRow[] = [];
-    for (const r of rows) {
-      const id = persistedInt(r.idText, 'mail id');
-      if (!id.ok) return { ok: false, kind: 'mail-unreadable', detail: id.detail };
-      const at = persistedInt(r.atText, 'mail at');
-      if (!at.ok) return { ok: false, kind: 'mail-unreadable', detail: at.detail };
-      mail.push({ id: id.value, at: at.value, runId: r.runId, fromId: r.fromId, toId: r.toId, kind: r.kind,
-        subject: r.subject });
-    }
-    return { ok: true, mail };
-  }
-
-  /**
    * The LOWEST id of a mail on `runId` from `fromId` to `toId` (the mail's own
    * addressee column) whose subject begins with `prefix`, or null. Stall watch
    * wave 1: `pushNewMail`'s reply bind reads the first stall-check to a worker,
@@ -3963,17 +3930,6 @@ export class CoordStore {
         ackedAt: ackedAt.value, lastGate: d.lastGate, gateSince: gateSince.value });
     }
     return { ok: true, mail, deliveries };
-  }
-
-  /** The delivered and acked times on a mail's NEWEST delivery row, or null when
-   *  the mail has no delivery (stall watch wave 1: r2's body reports when r1 was
-   *  delivered and acked). Newest by delivery id, because a re-queue gives one
-   *  mail a second delivery (`requeueAbandonedMail`), and the live one is newest. */
-  deliveryTimesFor(mailId: number): { deliveredAt: number | null; ackedAt: number | null } | null {
-    const row = this.db.prepare(
-      'SELECT deliveredAt, ackedAt FROM mail_deliveries WHERE mailId = ? ORDER BY id DESC LIMIT 1',
-    ).get(mailId) as { deliveredAt: number | null; ackedAt: number | null } | undefined;
-    return row === undefined ? null : { deliveredAt: row.deliveredAt, ackedAt: row.ackedAt };
   }
 
   /**

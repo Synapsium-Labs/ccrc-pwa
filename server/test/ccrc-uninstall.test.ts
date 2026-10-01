@@ -601,10 +601,10 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     writeFileSync(join(home, '.cc-sessions', 'alpha.uuid'), 'fixture-uuid\n');
     writeFileSync(join(home, '.cc-sessions', 'coordinator-paused'), 'operator switch\n');
     writeFileSync(join(home, '.cc-sessions', 'mail-disabled'), 'operator switch\n');
-    // The worker stall watch's four switches (spec §9.14): written by nothing in
+    // The worker stall watch's seven switches (spec §9.14, §5): written by nothing in
     // the tree, touched and removed by hand — so uninstall leaves them as it
     // leaves `coordinator-paused` and `mail-disabled`.
-    for (const m of ['mail-gate-strict', 'stall-watch-disabled', 'stall-watch-live', 'stall-watch-escalate']) {
+    for (const m of ['mail-gate-strict', 'stall-watch-disabled', 'stall-watch-live', 'stall-watch-escalate', 'stall-watch-w2-live', 'mail-gate-busy', 'mail-gate-busy-shadow']) {
       writeFileSync(join(home, '.cc-sessions', m), 'operator switch\n');
     }
     const r = runVerb(home, 'uninstall', ['--force']);
@@ -616,7 +616,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} survived`).toBe(false);
     }
     for (const f of ['alpha.uuid', 'coordinator-paused', 'mail-disabled',
-      'mail-gate-strict', 'stall-watch-disabled', 'stall-watch-live', 'stall-watch-escalate']) {
+      'mail-gate-strict', 'stall-watch-disabled', 'stall-watch-live', 'stall-watch-escalate', 'stall-watch-w2-live', 'mail-gate-busy', 'mail-gate-busy-shadow']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} was removed`).toBe(true);
     }
   });
