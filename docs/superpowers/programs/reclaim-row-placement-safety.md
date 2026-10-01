@@ -17,7 +17,7 @@ automatic deletion.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **awaiting-review** — fix round 1 answered review 212 at `81a2158e` (fingerprint accepted 2026-10-01); held-out review run 213 dispatched to `ccrc-pwa-brisk-prairie` |
+| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **working, fix round 2** — review run 213 closed `done` on `81a2158e` with five minor findings and one wording ruling; fix-round mail 3036 sent 2026-10-01; a final review reads the next wave-done |
 
 **Deviation block: sixteen numbers, the first of them 3731** (allocated exactly once at run 208 open,
 2026-10-01; floor now 3747). The finalized plan defines the first as
@@ -119,6 +119,21 @@ a measured departure is defined in that plan; unused headroom remains unrendered
   The worker re-ran the full mutation table on the final bytes, every row red at an assertion, and did not re-run
   the whole server suite because production changed only in comments and one diagnostic string; CI is the arbiter.
   The server accepted the fingerprint; review run 213 reads it with the same panel and SAFETY lens.
+- **2026-10-01 — review run 213's verdict and the second fix round.** `ccrc-pwa-brisk-prairie` read `81a2158e` with
+  the literal panel (34 agents, none dead or empty): correctness 4 findings, 3 confirmed; spec 2, 1 confirmed;
+  reproduce 2, 1 confirmed; the SAFETY lens 2, both refuted 3-0. No lens is unverified and no finding unexamined.
+  SAFETY (a)-(g) hold, each measured; every review-212 finding is resolved, documented or carried as ruled; the fix
+  round introduced no defect. The five confirmed findings are minor and predate the fix round: an arm now reached
+  only by a contrived input (kept and commented as defence in depth, not deleted), two stale comments, a ladder
+  placement snapshot that compares paths where the plan asks for bytes, and an overstatement in the row-12
+  departure's text. All five are fixed in fix round 2.
+  - **Remedy wording, coordinator ruling.** The SAFETY lens measured that following the new `unres` remedy ("restore
+    its path to what it ran through") with a `mkdir` where a removed alias stood makes the child reclaimable while a
+    session may sit inside it. Its refuters killed the finding as the ruled re-point class, but the wording had
+    drifted from the operator's F3 ruling, which named restoring the link to its original target or removing the
+    entry once its session has ended. Fix round 2 restores that wording, says never to create a directory in a
+    link's place, and pins the instruction positively. Shipping guidance that a reviewer measured as unsafe to
+    follow was not accepted in exchange for an earlier merge.
 
 ## Carried constraints
 
