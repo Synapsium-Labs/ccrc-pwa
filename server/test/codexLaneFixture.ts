@@ -1704,9 +1704,20 @@ export function laneUnits(home: string, id: string): { litellm: string; shim: st
 // makes that same auth.json write, and returns AT ONCE, so a guard that fails
 // reds on the mark instead of hanging a suite. Its mode is `<rec>/mode`,
 // default `token`, read at import.
+//
+// Two more modes, from fix round 1 of Plan 3a Task 1:
+//   - `refresh-fails` is litellm's dead-refresh-token path: it LOGS a warning
+//     carrying the token endpoint's answer through the `LiteLLM` logger, whose
+//     handler here is a plain StreamHandler that bound sys.stderr at import
+//     (an older litellm `_logging`'s shape, which contextlib.redirect_stderr
+//     cannot reach), then falls through to the device flow;
+//   - `no-get-account-id` is a litellm whose Authenticator has no
+//     get_account_id.
+// Every get_access_token call is recorded in `<rec>/asked` (`authAsks`).
 // ════════════════════════════════════════════════════════════════════════
 
-export type AuthStubMode = 'token' | 'no-account-id' | 'device' | 'cooldown' | 'renamed';
+export type AuthStubMode =
+  'token' | 'no-account-id' | 'device' | 'cooldown' | 'renamed' | 'refresh-fails' | 'no-get-account-id';
 
 export interface ProbeRuntimeCall {
   env: Record<string, string>;
@@ -1727,7 +1738,7 @@ const authStubSource = (rec: string): string => [
   '# A stand-in for litellm.llms.chatgpt.authenticator (codexLaneFixture.ts,',
   '# Plan 3a Task 1). NOT litellm: it models the one control flow the',
   '# unattended guard exists for, and nothing else.',
-  'import json, os, time',
+  'import json, logging, os, sys, time',
   `_REC = ${JSON.stringify(rec)}`,
   'try:',
   '    with open(os.path.join(_REC, "mode")) as _f:',
@@ -1735,6 +1746,9 @@ const authStubSource = (rec: string): string => [
   'except OSError:',
   '    MODE = "token"',
   'TOKEN = "test-token-not-a-secret"',
+  '# litellm\'s own logger name, with a handler that binds sys.stderr NOW, at import.',
+  '_LOG = logging.getLogger("LiteLLM")',
+  '_LOG.addHandler(logging.StreamHandler(sys.stderr))',
   '',
   '',
   'class Authenticator:',
@@ -1744,8 +1758,14 @@ const authStubSource = (rec: string): string => [
   '',
   '    def get_access_token(self):',
   '        # litellm 1.101.0 order: a usable token, a refresh, the cooldown wait, the device flow.',
-  '        if MODE in ("token", "no-account-id"):',
+  '        with open(os.path.join(_REC, "asked"), "a") as f:',
+  '            f.write("get_access_token\\n")',
+  '        if MODE in ("token", "no-account-id", "no-get-account-id"):',
   '            return TOKEN',
+  '        if MODE == "refresh-fails":',
+  '            # litellm logs the refresh failure, the endpoint\'s answer in it, and falls through.',
+  '            _LOG.warning("ChatGPT refresh token failed, re-login required: %s",',
+  '                         "Refresh response missing fields: {\'detail\': \'stand-in-token-endpoint-body\'}")',
   '        if MODE == "cooldown":',
   '            token = self._wait_for_access_token(300.0)',
   '            if token:',
@@ -1779,6 +1799,8 @@ const authStubSource = (rec: string): string => [
   '    # overrides the old name guards nothing.',
   '    Authenticator._login_device_code_v2 = Authenticator._login_device_code',
   '    del Authenticator._login_device_code',
+  'if MODE == "no-get-account-id":',
+  '    del Authenticator.get_account_id',
 ].join('\n') + '\n';
 
 /** The stand-in package under `dir`, reading its mode from `<rec>/mode`. */
@@ -1796,6 +1818,8 @@ export function setAuthStubMode(rec: string, mode: AuthStubMode): void {
   writeFileSync(path.join(rec, 'mode'), `${mode}\n`);
 }
 
+/** Every get_access_token call the stand-in answered. Empty: no token was asked. */
+export const authAsks = (rec: string): string[] => lines(path.join(rec, 'asked'));
 /** Each device-side step the stand-in took, in order. Empty is the guard holding. */
 export const deviceFlowMarks = (rec: string): string[] => lines(path.join(rec, 'device-flow'));
 /** The `$0` of every run of the probe-runtime interpreter. Empty: it never ran. */

@@ -26,7 +26,7 @@ import { ghContainedEnv } from './ccdWsHelpers.js';
 import { parseCatalogue } from '../../shared/models.js';
 import { pythonOrSkip } from './ccgptHarness.js';
 import {
-  codexAuthDir, deviceFlowMarks, probeArgv0, probeRuntime, probeRuntimeCalls, setAuthStubMode, type ProbeRuntime,
+  authAsks, codexAuthDir, deviceFlowMarks, probeArgv0, probeRuntime, probeRuntimeCalls, setAuthStubMode, type ProbeRuntime,
 } from './codexLaneFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -815,6 +815,37 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
     expect(r.stderr).toMatch(/runtime-api-moved: run ccrc update — this runtime's Authenticator has no _login_device_code/);
     expect(deviceFlowMarks(pr.rec)).toEqual([]);
     expect(authStat()).toEqual(before);
+  });
+
+  // Fix round 1: on a token it can neither use nor refresh, litellm LOGS its
+  // own warning, the token endpoint's answer in it, before the guard refuses.
+  // `_mark_stale` keeps the first 300 characters of the fetch's stderr, so
+  // anything ahead of the refusal pushes its remedy out of the reason. The
+  // stand-in's handler bound sys.stderr at import, so redirecting stderr
+  // alone would not stop it.
+  it('a dead refresh token is login-required FIRST on stderr: litellm\'s own warning, and the token endpoint\'s answer in it, never reach the stale reason', () => {
+    setAuthStubMode(pr.rec, 'refresh-fails');
+    const r = codex();
+    expect(r.code).toBe(1);
+    expect(r.stderr.startsWith('ccrc-models-probe: the codex catalogue fetch for "codex-a" failed: '
+      + 'ccrc-models-probe: login-required: run ccrc codex login codex-a — '), r.stderr).toBe(true);
+    expect(r.stderr.includes('ChatGPT refresh token failed'), 'litellm\'s own warning').toBe(false);
+    expect(r.stderr.includes('stand-in-token-endpoint-body'), 'the token endpoint\'s answer').toBe(false);
+    // The control: the stand-in did take its logging path.
+    expect(authAsks(pr.rec)).toEqual(['get_access_token']);
+    expect(deviceFlowMarks(pr.rec)).toEqual([]);
+  });
+
+  // Fix round 1: the guard's `required` names are checked too. The probe needs
+  // get_account_id for its header, so a runtime without it is refused before
+  // the Authenticator is even made.
+  it('a runtime whose Authenticator has no get_account_id is refused runtime-api-moved, before any token is asked', () => {
+    setAuthStubMode(pr.rec, 'no-get-account-id');
+    const r = codex();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/runtime-api-moved: run ccrc update — this runtime's Authenticator has no get_account_id/);
+    expect(authAsks(pr.rec), 'a token was asked').toEqual([]);
+    expect(probeRuntimeCalls(pr.rec)[0]!.requests).toEqual([]);
   });
 
   it('the unattended guard is ONE text, in the probe and in the usage publisher', () => {

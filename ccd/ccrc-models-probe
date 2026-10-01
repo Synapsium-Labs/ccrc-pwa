@@ -268,6 +268,10 @@ ACCOUNT = os.environ["CCRC_PROBE_ACCOUNT"]
 # whose Authenticator lacks a name this guard overrides, or one its caller
 # needs, is refused too: overriding a name the library no longer calls guards
 # nothing.
+import contextlib  # noqa: E402
+import logging  # noqa: E402
+
+
 class LoginRequired(Exception):
     """The lane holds no token LiteLLM can use or refresh: only a person can sign it in."""
 
@@ -290,6 +294,28 @@ def _unattended(authenticator, required=("get_access_token",)):
             raise LoginRequired("device-code-cooldown")
 
     return Unattended
+
+
+# The guarded calls also run with logging switched off (fix round 1). On a
+# token it can neither use nor refresh, litellm LOGS a warning before the
+# guard refuses ("ChatGPT refresh token failed, re-login required: ..."),
+# with the token endpoint's error in it, and on a malformed answer that
+# answer's whole body ("Refresh response missing fields: {data}"). It would
+# land on stderr AHEAD of the caller's refusal, and the model probe keeps only
+# the first 300 characters of its stderr. Read from litellm's source, never
+# run: the warning goes through the `LiteLLM` logger. 1.101.0's handler
+# re-reads sys.stderr on every record, but an older `_logging`'s plain
+# StreamHandler bound sys.stderr when it was made, at import, out of
+# contextlib.redirect_stderr's reach. `logging.disable` stops every record
+# before any handler sees it, whatever stream that handler holds.
+@contextlib.contextmanager
+def _silenced():
+    previous = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        logging.disable(previous)
 # ── end unattended-authenticator guard ──
 
 
@@ -305,10 +331,13 @@ def refuse(code, sentence):
 # chatgpt transformations make for the same header, so this program never
 # opens auth.json itself (spec §9: existence and mode only). That closes
 # D-3161 for a codex lane; `_fetch_codex` keeps its read until Plan 4.
+# Both calls run `_silenced()`, so no line of litellm's own goes ahead of
+# this program's refusal, or carries the token endpoint's answer into it.
 try:
-    auth = _unattended(Authenticator, ("get_access_token", "get_account_id"))()
-    token = auth.get_access_token()
-    account_id = auth.get_account_id()
+    with _silenced():
+        auth = _unattended(Authenticator, ("get_access_token", "get_account_id"))()
+        token = auth.get_access_token()
+        account_id = auth.get_account_id()
 except RuntimeApiMoved as missing:
     refuse("runtime-api-moved",
            f"run ccrc update — this runtime's Authenticator has no {missing}, so the fetch for "

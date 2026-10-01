@@ -246,6 +246,10 @@ from litellm.llms.chatgpt.authenticator import Authenticator  # noqa: E402
 # whose Authenticator lacks a name this guard overrides, or one its caller
 # needs, is refused too: overriding a name the library no longer calls guards
 # nothing.
+import contextlib  # noqa: E402
+import logging  # noqa: E402
+
+
 class LoginRequired(Exception):
     """The lane holds no token LiteLLM can use or refresh: only a person can sign it in."""
 
@@ -268,6 +272,28 @@ def _unattended(authenticator, required=("get_access_token",)):
             raise LoginRequired("device-code-cooldown")
 
     return Unattended
+
+
+# The guarded calls also run with logging switched off (fix round 1). On a
+# token it can neither use nor refresh, litellm LOGS a warning before the
+# guard refuses ("ChatGPT refresh token failed, re-login required: ..."),
+# with the token endpoint's error in it, and on a malformed answer that
+# answer's whole body ("Refresh response missing fields: {data}"). It would
+# land on stderr AHEAD of the caller's refusal, and the model probe keeps only
+# the first 300 characters of its stderr. Read from litellm's source, never
+# run: the warning goes through the `LiteLLM` logger. 1.101.0's handler
+# re-reads sys.stderr on every record, but an older `_logging`'s plain
+# StreamHandler bound sys.stderr when it was made, at import, out of
+# contextlib.redirect_stderr's reach. `logging.disable` stops every record
+# before any handler sees it, whatever stream that handler holds.
+@contextlib.contextmanager
+def _silenced():
+    previous = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        logging.disable(previous)
 # ── end unattended-authenticator guard ──
 
 
@@ -620,9 +646,12 @@ def main() -> None:
     # never starts a device sign-in here: the unattended guard above refuses
     # one before it can write auth.json (Plan 3a Task 1). Stubbed in every
     # test (codexLaneFixture.ts's writeAuthStub) with a fixed non-secret
-    # string. This file never sees, stores or logs a real credential.
+    # string. This file never sees, stores or logs a real credential. The
+    # call runs `_silenced()` (fix round 1), so litellm's own warning, and the
+    # token endpoint's answer in it, never go ahead of this poll's refusal.
     try:
-        token = _unattended(Authenticator)().get_access_token()
+        with _silenced():
+            token = _unattended(Authenticator)().get_access_token()
     except RuntimeApiMoved as missing:
         sys.exit(f"ccgpt-usage: runtime-api-moved: run ccrc update — this runtime's Authenticator has no "
                  f"{missing}, so this poll cannot run without risking an interactive sign-in; nothing was published")

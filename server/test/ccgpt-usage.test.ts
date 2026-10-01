@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { pythonOrSkip, runPy, runPyAsync, ccgptFile, PYSTUB_DIR } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
-import { codexAuthDir, deviceFlowMarks, setAuthStubMode, writeAuthStub } from './codexLaneFixture.js';
+import { authAsks, codexAuthDir, deviceFlowMarks, setAuthStubMode, writeAuthStub } from './codexLaneFixture.js';
 
 // Probed once at module scope — same shape as ccgpt-harness.test.ts and
 // ccgpt-proxy.test.ts (task-10-rulings.md (commit af7cc0bc) §5): a missing interpreter must be
@@ -1078,6 +1078,36 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       expect(deviceFlowMarks(stub), 'the device flow started').toEqual([]);
       expect(authStat(), 'auth.json was written').toEqual(before);
       expect(r.stdout + r.stderr).not.toMatch(/Enter code/);
+      expect(existsSync(limitsPath(home, id))).toBe(false);
+      expect(requests.length).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  // Fix round 1: on a dead refresh token litellm LOGS its own warning, the
+  // token endpoint's answer in it, before the guard refuses. The publisher's
+  // refusal must still be the first thing on its stderr (the journal line an
+  // operator reads), and the endpoint's answer must never reach it. The
+  // stand-in's handler bound sys.stderr at import.
+  it('Plan 3a Task 1 fix round 1: a dead refresh token is login-required FIRST on stderr — litellm\'s warning and the token endpoint\'s answer never reach it', async () => {
+    const home = mkTmp('ccgpt-usage-refresh-');
+    const id = mintId();
+    plantLane(home, id);
+    const stub = join(home, 'auth-stub');
+    writeAuthStub(stub, stub);
+    setAuthStubMode(stub, 'refresh-fails');
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url, { PYTHONPATH: stub }) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr.startsWith(`ccgpt-usage: login-required: run ccrc codex login ${id} — `), r.stderr).toBe(true);
+      expect(r.stderr).not.toContain('ChatGPT refresh token failed');
+      expect(r.stderr).not.toContain('stand-in-token-endpoint-body');
+      // The control: the stand-in did take its logging path.
+      expect(authAsks(stub)).toEqual(['get_access_token']);
+      expect(deviceFlowMarks(stub)).toEqual([]);
       expect(existsSync(limitsPath(home, id))).toBe(false);
       expect(requests.length).toBe(0);
     } finally {

@@ -22,7 +22,7 @@ import { CODEX } from './fixtures/modelCases.js';
 import { randomBytes } from 'node:crypto';
 import {
   assertManagerStandIns, authDirOf, codexAuthDir, freePort, freePorts, MANAGER_STANDIN_MARK, plantCodexBins,
-  plantFakeRuntime, plantLaneAuth, probeArgv0, probeRuntime, probeRuntimeCalls,
+  plantFakeRuntime, plantLaneAuth, probeArgv0, probeRuntime, probeRuntimeCalls, authAsks, setAuthStubMode,
 } from './codexLaneFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
 
@@ -1387,6 +1387,54 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
     // reaches the probe; the marker and the interpreter never do.
     expect(seen('router'), 'a row with a secrets file').toEqual({ CHATGPT_TOKEN_DIR: join(home, 'from-a-secrets-file') });
     expect(seen('router2'), 'a row with none').toEqual({});
+  });
+
+  // Fix round 1: a codex row `_codex_row` refuses is refused HERE, with that
+  // reader's own rc and sentence, and the probe never runs. Without the
+  // `|| return $?`, CX_AUTH is empty and the probe is handed `$HOME/`.
+  it('a codex row that does not validate is refused with _codex_row\'s own rc and sentence, and its probe is never handed a directory', async () => {
+    const [p, l] = await freePorts(2);
+    fs.rmSync(home, { recursive: true, force: true });
+    // An absolute exec.authDir: `_codex_row` refuses it (`shared/roster.ts`'s parseAuthDir, rule for rule).
+    home = box({ ...ROSTER, accounts: [...ROSTER.accounts,
+      codexRow('codex-a', p!, l!, { authDir: `/${codexAuthDir('codex-a')}` })] });
+    const r = sourced('_models_run_probe codex-a env', []);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc codex: roster-invalid: account 'codex-a''s codex row does not validate \(exec\.authDir\)/m);
+    expect(r.stdout.split('\n').filter((x) => /^(CHATGPT_TOKEN_DIR|CCRC_PROBE_LANE_KIND|CCRC_CODEX_PYTHON)=/.test(x)),
+      'the probe ran with codex inputs').toEqual([]);
+  });
+
+  // Fix round 1: on a dead refresh token, litellm LOGS its own warning (the
+  // token endpoint's answer in it) before the guard refuses. The refresh row's
+  // reason and the stale catalogue's lastError both keep the remedy, and carry
+  // none of that text.
+  it('a dead refresh token reaches the refresh row and the stale catalogue as login-required, remedy intact, with none of litellm\'s own log text', async () => {
+    home = await codexBox(['codex-a']);
+    poisonPathLitellm();
+    plantCodexBins(home);
+    const pr = probeRuntime(home, CODEX_RAW);
+    plantFakeRuntime(home, { python: pr.python });
+    plantLaneAuth(home, 'codex-a');
+    expect(run(['models', 'codex-a', 'init', 'codex']).code).toBe(0);
+    writeCatalogue('codex-a');                 // a previous catalogue, so the stale path records lastError
+    setAuthStubMode(pr.rec, 'refresh-fails');
+    const r = run(['models', 'refresh', 'codex-a']);
+    expect(r.code).toBe(1);
+    const reason = String(rowsOf(r)[0]!['reason']);
+    const cat = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', 'codex-a.json'), 'utf8')) as
+      { stale?: unknown; lastError?: unknown };
+    expect(cat.stale).toBe(true);
+    const lastError = String(cat.lastError);
+    expect(reason).toContain('login-required: run ccrc codex login codex-a');
+    expect(lastError).toContain('login-required: run ccrc codex login codex-a');
+    for (const text of ['ChatGPT refresh token failed', 'stand-in-token-endpoint-body']) {
+      expect(reason.includes(text), `the refresh row carries "${text}"`).toBe(false);
+      expect(lastError.includes(text), `the stale catalogue carries "${text}"`).toBe(false);
+      expect((r.stdout + r.stderr).includes(text), `the verb's output carries "${text}"`).toBe(false);
+    }
+    // The control: the stand-in did take its logging path.
+    expect(authAsks(pr.rec)).toEqual(['get_access_token']);
   });
 });
 
