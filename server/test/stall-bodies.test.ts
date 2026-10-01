@@ -999,6 +999,14 @@ describe('r1: the quiet start is the clock of the ladder that sent it (stallR1Qu
     expect(r1Quiet(input)).toEqual({ subject: 'stall-check: run 67 — quiet 2h 1m, owed: first report', line2: MARKER_LINE2 });
   });
 
+  it('a view that reads working is not the marker ladder’s (it holds busy there): wave 1’s clock and wave 1’s last line', () => {
+    const working = w2Of({ mark: markOf({ state: 'working', event: 'PostToolUse', at: T('2026-09-28T21:40:00Z'), turnAt: T('2026-09-28T21:40:00Z'), stopAt: MD_STOP }) });
+    const input = s4({ mail: [], arming: W2_ARMED, w2: working, worker: worker({ live: { ok: true, word: 'idle', since: T('2026-09-28T21:30:00Z') } }) }, runMd);
+    const text = stallCheckMail(input, stallFacts(input), MD_NOW);
+    expect(text.subject).toBe('stall-check: run 67 — quiet 0h 31m, owed: first report');
+    expect(text.body.split('\n').at(-1)).toBe('No mail from you on run 67 by 23:01Z: the coordinator is told. By 00:01Z: the operator.');
+  });
+
   it('dark (no stall-watch-w2-live): wave 1’s clock, unchanged — the live stamp for an idle worker', () => {
     expect(r1Quiet(mdIn({ word: 'idle', since: T('2026-09-28T21:30:00Z') }, escalated))).toEqual({
       subject: 'stall-check: run 67 — quiet 0h 31m, owed: first report',
