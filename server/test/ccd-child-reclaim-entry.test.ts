@@ -252,14 +252,17 @@ describe('controls — the clean direct entry answers as ccd always has', () => 
     expect(honest, 'the same call without the poison names the row').toBe(`rc=0 shared=[${OTHER}]`);
   }, 60_000);
 
-  it('C4 an ORDINARY direct verb keeps its inherited environment: BASH_ENV runs once, for the payload', () => {
+  it('C4 an ORDINARY direct verb keeps its inherited environment: its probe and its payload each run BASH_ENV', () => {
+    // Sanitization is protected-entry-only (the plan as tightened): an
+    // ordinary start's probe and payload both see the caller's environment.
     plantModels();
     de = installDirectEntry(h.home);
     const marks = path.join(h.home, 'bash-env-ran');
-    const r = direct(['caps'], { BASH_ENV: bashEnvFile(`printf 'ran\\n' >> "${marks}"`) });
+    const r = direct(['caps'], { BASH_ENV: bashEnvFile(`printf '%s\\n' "$0" >> "${marks}"`) });
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout.split('\n')).toContain('ws-reclaim');
-    expect(fs.readFileSync(marks, 'utf8'), 'BASH_ENV ran exactly once — the payload’s, never a probe’s').toBe('ran\n');
+    expect(fs.readFileSync(marks, 'utf8').split('\n').filter(Boolean), 'the ordinary probe, then the payload')
+      .toEqual(['ccd-entry-probe', de.body]);
   }, 60_000);
 });
 
@@ -372,6 +375,34 @@ describe('startup attacks against the direct entry — the competing child survi
     expect(doc['verdict']).toBe('containment-unproven');
   }, 180_000);
 
+  // A TRUSTED decision-critical executable that happens to be a Bash script:
+  // the body is privileged, the CHILD it starts is not. Planted over PATH's
+  // `find` in the harness's PATH-first directory, faithful in every call.
+  const REAL_FIND = spawnSync('bash', ['-c', 'command -v find'], { encoding: 'utf8' }).stdout.trim();
+  const plantBashFind = (): void => {
+    fs.writeFileSync(path.join(h.home, '.local', 'bin', 'find'),
+      `#!${fs.realpathSync(spawnSync('bash', ['-c', 'printf %s "$BASH"'], { encoding: 'utf8' }).stdout)}\n`
+      + `PATH=${path.dirname(REAL_FIND)}:/usr/bin:/bin find "$@"\n`, { mode: 0o755 });
+  };
+  const O5: Record<string, () => Record<string, string>> = {
+    'BASH_ENV': () => ({ BASH_ENV: bashEnvFile('case " $* " in *.workdir*) exit 0 ;; esac') }),
+    'ENV': () => ({ ENV: bashEnvFile('case " $* " in *.workdir*) exit 0 ;; esac'), SHELLOPTS: 'posix' }),
+    'an exported function': () => HOSTILE['A3 an exported BASH_FUNC_find%% lies before startup']!(),
+  };
+  for (const [name, hostile] of Object.entries(O5)) {
+    itLinux(`O5 a trusted Bash-wrapper find’s child Bash consumes no inherited ${name}: the competing child survives`, () => {
+      const c = setup();
+      plantBashFind();
+      plantCompetingRow(c);
+      const env = hostile();
+      const { doc } = audit(env);
+      const r = reclaim(evalOf(h, { pre: `${LYING_FIND};` }).token || ANY_TOKEN, env);
+      intact(c);
+      expect(docOf(r)['reclaimed'], `${r.stdout}${r.stderr}`).toBeUndefined();
+      expect(doc['verdict']).toBe('containment-unproven');
+    }, 180_000);
+  }
+
   itLinux('O3 a hostile CDPATH cannot redirect the protected measurements', () => {
     const c = setup();
     plantCompetingRow(c);
@@ -419,7 +450,8 @@ const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean]> = [
   ['valid audit --reclaim --defer-expired', ['ws-audit', '--session', 'x', '--reclaim', '--defer-expired'], true],
   ['plain audit', ['ws-audit', '--session', 'x'], false],
   ['audit, --defer-expired alone', ['ws-audit', '--session', 'x', '--defer-expired'], false],
-  ['audit, missing session id', ['ws-audit', '--session', '--reclaim'], false],
+  ['valid audit skeleton with a session value the body will reject', ['ws-audit', '--session', '../../etc/passwd', '--reclaim'], true],
+  ['audit, missing session-value position', ['ws-audit', '--session', '--reclaim'], false],
   ['audit, --reclaim out of order', ['ws-audit', '--reclaim', '--session', 'x'], false],
   ['audit, --defer-expired before --reclaim', ['ws-audit', '--session', 'x', '--defer-expired', '--reclaim'], false],
   ['audit, a later duplicate --reclaim', ['ws-audit', '--session', 'x', '--reclaim', '--reclaim'], false],
@@ -708,7 +740,7 @@ describe('argv, entry spellings and the installed layout', () => {
   }, 60_000);
 });
 
-describe('the protected payload starts with no Bash startup state to hand on (D-3697)', () => {
+describe('the protected payload starts with no Bash startup state to hand on (D-3696, as tightened)', () => {
   const ENV_BODY = '#!/usr/bin/env bash\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > "$HOME/argv-out"\nenv > "$HOME/env-out"\n';
   const HOSTILE_ALL = {
     BASH_ENV: '/nonexistent/bash-env', ENV: '/nonexistent/env', SHELLOPTS: 'xtrace', BASHOPTS: 'nocasematch',

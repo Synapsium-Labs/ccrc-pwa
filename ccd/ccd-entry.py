@@ -1,5 +1,5 @@
 #!@CCRC_PYTHON3@ -IS
-# ccd — the INSTALLED DIRECT ENTRY (reclaim-entry-safety, D-3696, D-3697).
+# ccd — the INSTALLED DIRECT ENTRY (reclaim-entry-safety, D-3696).
 #
 # GENERATED ON THE BOX from the tracked template ccd/ccd-entry.py by `ccrc
 # install`/`ccrc update` and by deploy/deploy.sh: the shebang names the box's own
@@ -58,12 +58,14 @@ BODY_SUFFIX = '/.local/libexec/ccrc/ccd'
 # `ccd: refused (entry-<class>): …`, and this exit status. Nothing ran.
 REFUSED_RC = 125
 
-# What Bash startup consumes from the environment. Removed from a PROTECTED
-# payload's environment (and from every probe's): `bash -p` ignores them for
-# itself, but measured on bash 5.2 it still EXPORTS them — an imported-function
-# string, `BASH_ENV`, `CDPATH` — to every child it starts, and a plain child
-# `bash` that inherits `SHELLOPTS=privileged` reports `p` in `$-` while still
-# importing exported functions (D-3697).
+# What Bash startup consumes from the environment, removed from the ONE
+# environment a PROTECTED start uses for both its probe and its payload (D-3696,
+# as tightened): `bash -p` ignores these for itself, but measured on bash 5.2 it
+# still EXPORTS them — an imported-function string, `BASH_ENV`, `CDPATH` — to
+# every child it starts, and an ordinary child Bash (a trusted PATH tool that is
+# a Bash script) would consume them. `BASH_FUNC_` is matched as a PREFIX, so
+# every exported-function spelling (`name%%`, the older `name()`) goes. An
+# ORDINARY start, probe and payload alike, keeps its original environment.
 STARTUP_VARS = (b'BASH_ENV', b'ENV', b'SHELLOPTS', b'BASHOPTS', b'CDPATH', b'GLOBIGNORE')
 FUNC_PREFIX = b'BASH_FUNC_'
 
@@ -205,14 +207,12 @@ def main():
     body = body_path()
     check_body(body)
     protected = is_protected(argv)
-    clean = startup_free_env()
-    bash = select_bash(protected, clean)
+    env = startup_free_env() if protected else os.environb
+    bash = select_bash(protected, env)
     if bash is None:
         refuse('no-bash', 'no bash on PATH proved Bash >= 4.4%s — ccd was not started'
                % (' in privileged mode (-p)' if protected else ''))
-    if protected:
-        os.execve(bash, [bash, '-p', '--', body] + argv, clean)
-    os.execve(bash, [bash, '--', body] + argv, os.environb)
+    os.execve(bash, [bash] + (['-p'] if protected else []) + ['--', body] + argv, env)
 
 
 if __name__ == '__main__':
