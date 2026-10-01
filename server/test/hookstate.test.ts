@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { localIO } from '../src/io.js';
-import { readHookState, readHookStateMeasured, readHookStateUnaged, HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
+import { readHookState, readHookStateMeasured, readHookStateRawMeasured, readHookStateUnaged, HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 
@@ -510,5 +510,128 @@ describe('readHookStateUnaged — identity-gated, never aged', () => {
     expect(src).toContain('export async function readHookStateUnaged(');
     expect(src.match(/JSON\.parse\(/g)).toHaveLength(1);
     expect(src.match(/>\s*HOOKSTATE_FRESH_MS/g)).toHaveLength(1);
+  });
+});
+
+// ── The raw read (worker stall watch wave 2, spec 2026-09-29 §5.1; slug `raw-read-replaces-the-private-parse`) ──
+// The stall watch's frozen and delegates arms need the hook's `updatedAt`, its `event` and WHOSE file it is,
+// from a file the aged read has already dropped. `readHookStateRawMeasured` is now this module's one parse, and
+// the two gated doors fold over it. The parity table at the end holds them to every answer they gave before.
+describe('readHookStateRawMeasured — the one parse, identity reported and never cut', () => {
+  it('reports identity instead of cutting on it: current, foreign and unregistered', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ state: 'done', event: 'Stop' }));
+    const cur = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+    expect(cur).toMatchObject({ ok: true, sessionId: UUID, identity: 'current' });
+    expect(cur.ok && cur.state).toMatchObject({ state: 'done', event: 'Stop', updatedAt: NOW });
+    expect(await readHookStateRawMeasured(localIO, reg, ID, '2'.repeat(36)))
+      .toMatchObject({ ok: true, sessionId: UUID, identity: 'foreign' });
+    expect(await readHookStateRawMeasured(localIO, reg, ID, null))
+      .toMatchObject({ ok: true, sessionId: UUID, identity: 'unregistered' });
+  });
+
+  it('keeps the aged read\'s own identity rule: an empty registry uuid against an empty sessionId is current', async () => {
+    // Today `'' === ''` passes the gate, so the raw read says `current` and the fold keeps the answer.
+    // `empty-uuid-is-foreign` is the TURN MARKER's rule, not this file's.
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ sessionId: '' }));
+    expect(await readHookStateRawMeasured(localIO, reg, ID, ''))
+      .toMatchObject({ ok: true, sessionId: '', identity: 'current' });
+    expect((await readHookStateMeasured(localIO, reg, ID, '', NOW)).ok, 'the fold keeps today\'s answer').toBe(true);
+  });
+
+  it('a non-string sessionId is malformed — never an identity, whatever the registry says', async () => {
+    for (const bad of [7, null, { id: UUID }]) {
+      const reg = mkTmp('ccrc-hookstate-');
+      seed(reg, ID, base({ sessionId: bad }));
+      expect(await readHookStateRawMeasured(localIO, reg, ID, UUID), `sessionId: ${JSON.stringify(bad)}`)
+        .toEqual({ ok: false, reason: 'malformed' });
+      expect(await readHookStateRawMeasured(localIO, reg, ID, null), `sessionId: ${JSON.stringify(bad)}, no uuid`)
+        .toEqual({ ok: false, reason: 'malformed' });
+    }
+  });
+
+  it('over the 64 KiB cap is malformed, and never reaches the parse', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, 'x'.repeat(70_000));   // not even JSON: the length gate runs first
+    expect(await readHookStateRawMeasured(localIO, reg, ID, UUID)).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('tells absent from unmeasured: a proven ENOENT is absent, a failed read is unmeasured', async () => {
+    const empty = mkTmp('ccrc-hookstate-');
+    expect(await readHookStateRawMeasured(localIO, empty, ID, UUID)).toEqual({ ok: false, reason: 'absent' });
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base());
+    const io = degradedReadIO((p) => p.endsWith(`${ID}.hookstate.json`));
+    expect(await readHookStateRawMeasured(io, reg, ID, UUID)).toEqual({ ok: false, reason: 'unmeasured' });
+  });
+
+  it('has no age cut: a two-day-old file is ok, and still says when it was written', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    const old = Date.now() - 2 * 24 * 60 * 60_000;
+    seed(reg, ID, base({ state: 'working', updatedAt: old }));
+    const out = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+    expect(out).toMatchObject({ ok: true, identity: 'current' });
+    expect(out.ok && out.state.updatedAt).toBe(old);
+  });
+
+  // The parity fixtures, one table read by BOTH parity rows below. The gated-doors row calls only the two doors
+  // that exist before the fold, so Step 2 runs it GREEN at HEAD: that run MEASURES its `aged` and `unaged`
+  // columns against the pre-fold code, and Step 5 re-runs it against the fold. The raw row needs the new export.
+  type ParityRow = {
+    body: unknown; uuid: string | null; degraded?: true;
+    raw: 'current' | 'foreign' | 'unregistered' | 'absent' | 'unmeasured' | 'malformed';
+    aged: 'ok' | 'no-state' | 'unmeasured'; unaged: 'ok' | 'no-state' | 'unmeasured';
+  };
+  const parityRows = (): Record<string, ParityRow> => {
+    const noUpdatedAt = base();
+    delete noUpdatedAt['updatedAt'];
+    const bad = (body: unknown): ParityRow => ({ body, uuid: UUID, raw: 'malformed', aged: 'no-state', unaged: 'no-state' });
+    return {
+      'fresh and matching': { body: base(), uuid: UUID, raw: 'current', aged: 'ok', unaged: 'ok' },
+      'absent': { body: undefined, uuid: UUID, raw: 'absent', aged: 'no-state', unaged: 'no-state' },
+      'unreadable': { body: base(), uuid: UUID, degraded: true, raw: 'unmeasured', aged: 'unmeasured', unaged: 'unmeasured' },
+      'stale by 31 minutes': {
+        body: base({ updatedAt: NOW - HOOKSTATE_FRESH_MS - 60_000 }), uuid: UUID, raw: 'current', aged: 'no-state', unaged: 'ok' },
+      'exactly at the freshness boundary': {
+        body: base({ updatedAt: NOW - HOOKSTATE_FRESH_MS }), uuid: UUID, raw: 'current', aged: 'ok', unaged: 'ok' },
+      'a previous process': { body: base({ sessionId: '2'.repeat(36) }), uuid: UUID, raw: 'foreign', aged: 'no-state', unaged: 'no-state' },
+      'no registry uuid, empty sessionId': { body: base({ sessionId: '' }), uuid: null, raw: 'unregistered', aged: 'no-state', unaged: 'no-state' },
+      'version skew': bad(base({ v: 2 })),
+      'an unknown state word': bad(base({ state: 'blocked' })),
+      'truncated JSON': bad('{"v":1,"state":"working"'),
+      'a bare string': bad('"just a string"'),
+      'oversize': bad('x'.repeat(70_000)),
+      'updatedAt missing': bad(noUpdatedAt),
+      'updatedAt non-number': bad(base({ updatedAt: 'yesterday' })),
+      'event non-string': bad(base({ event: 7 })),
+      'interrupted non-boolean': bad(base({ interrupted: 'yes' })),
+      'a malformed ask': bad(base({ state: 'waiting', ask: { nonsense: true } })),
+      'a malformed subagents entry': bad(base({ subagents: [{ name: 'reviewer' }] })),
+      'a negative graphQueries': bad(base({ graphQueries: -1 })),
+      'a non-string sessionId': bad(base({ sessionId: 7 })),
+    };
+  };
+  const seedParity = (row: ParityRow): { reg: string; io: typeof localIO } => {
+    const reg = mkTmp('ccrc-hookstate-');
+    if (row.body !== undefined) seed(reg, ID, row.body);
+    return { reg, io: row.degraded ? degradedReadIO((p) => p.endsWith(`${ID}.hookstate.json`)) : localIO };
+  };
+
+  it('FOLD PARITY (the gated doors): every fixture reads through both gated doors exactly as it did before the fold', async () => {
+    const word = (r: { ok: boolean; reason?: string }): string => (r.ok ? 'ok' : String(r.reason));
+    for (const [name, row] of Object.entries(parityRows())) {
+      const { reg, io } = seedParity(row);
+      expect(word(await readHookStateMeasured(io, reg, ID, row.uuid, NOW)), `${name}: aged`).toBe(row.aged);
+      expect(word(await readHookStateUnaged(io, reg, ID, row.uuid)), `${name}: unaged`).toBe(row.unaged);
+    }
+  });
+
+  it('FOLD PARITY (the raw read): every fixture reads through the raw door as the identity or reason it names', async () => {
+    for (const [name, row] of Object.entries(parityRows())) {
+      const { reg, io } = seedParity(row);
+      const raw = await readHookStateRawMeasured(io, reg, ID, row.uuid);
+      expect(raw.ok ? raw.identity : raw.reason, `${name}: raw`).toBe(row.raw);
+    }
   });
 });
