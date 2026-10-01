@@ -2,7 +2,7 @@
 
 Plan: `docs/superpowers/plans/2026-09-30-reclaim-entry-safety.md` (the worker commits the coordinator's exact plan artifact beside the fix)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-mesa`   Workspace: a fresh child
-A one-wave safety prerequisite to `child-reclamation` (CCR-15), whose wave 4 cannot proceed until this programme merges.
+A one-wave safety prerequisite to `child-reclamation` (CCR-15), sequenced after `reclaim-row-placement-safety`; wave 4 cannot proceed until both programmes merge.
 
 **What this program is.** Child-reclamation wave 4's adversarial resolver rounds measured a process-wide
 precondition that its call-site repair cannot establish: direct reclaim can inherit Bash functions and startup
@@ -15,7 +15,7 @@ direct reclaim argv shapes before automatic reclamation can ship.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | **working** — run 199 on `still-harbor`; adversarial plan review tightened protected-environment, kernel-entry and symlink-safe-publication gates before GREEN implementation; no PR |
+| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | **working, integration held** — run 199 on `still-harbor`; implementation WIP is preserved, but item 4 and its PR wait for `reclaim-row-placement-safety` to merge first; no PR |
 
 **Deviation block: eight numbers, the first of them 3696** (allocated once at run 199 open, 2026-09-30; floor
 now 3704). The finalized plan defines the first as `ccd-imported-functions-hijack-reclaim-reads`. No other issued
@@ -50,6 +50,18 @@ unrendered.
   claims executable: the staged launcher crosses its kernel shebang before publication, and exact destination
   entries are inspected without following symlinks and then atomically replaced or refused by type. The audit
   classifier's claim is narrowed to its exact token skeleton; the body remains the session-id grammar authority.
+- **2026-10-01 — row-placement safety now lands first.** Wave 4's held-out Fix Round 3 rereview found a separate
+  pre-existing failure: a competing registry row whose workdir survives only as an absent-suffix namespace projection
+  can falsely prove non-containment. That resolver-evidence repair owns `ccd/ccd` in its own child and PR. Run 199
+  preserves its present WIP and immutable four-item ledger, but does not finalize item 4, push a handoff or open its
+  PR until `reclaim-row-placement-safety` merges. It then merges current `origin/main` without rebasing, integrates
+  that prerequisite through item 4, re-stamps `ccd/ccd`, and reruns every affected gate before handoff.
+- **2026-10-01 — FACT TWO remains a stop gate, not a census to weaken.** Run 199 measured its 29-line direct-entry
+  guard making `ccd/ccd:13020` pass only on the short token `ccd`; adding one guard line restores FACT TWO while
+  preserving the guard's behavior. The coordinator selected that line-positive repair over trimming two lines or
+  leaving the real selector red. The answer raced the ask's operator move (`ask-moved`), so this ledger records the
+  ruling before any later handoff; the worker must still report all citation debt-map, `**Files:**` and `|`-row
+  remeasurements rather than carrying pre-edit counts.
 - **Routing escalation.** This is a destructive-path security boundary reached after repeated wave 4 resolver
   rounds exposed the process-level class. The main loop runs Opus at `xhigh`; implementation subagents run Sonnet
   at `high`; workflows are off; compact threshold is 40. The held-out review remains outside that routing and adds
