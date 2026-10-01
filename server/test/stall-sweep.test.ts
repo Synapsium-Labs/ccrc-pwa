@@ -140,7 +140,7 @@ const tickOf = (pid: number | null = PID, rows: readonly SessionRecord[] = [regR
 });
 
 /** Sweeps at the lane's own cadence: once every STALL_SWEEP_MS from `from` through `to`. A first-seen clock lives only
- *  across judged sweeps at most 2 × STALL_SWEEP_MS apart (slug `stall-clocks-drop-on-an-unobserved-gap`), so a row that
+ *  across judged sweeps at most STALL_CLOCK_GAP_MS (150 s) apart (slug `stall-clocks-drop-on-an-unobserved-gap`), so a row that
  *  waits out DEAD_GRACE_MS or MARKER_UNREADABLE_MS sweeps through it, as production does. */
 const sweepThrough = async (
   w: FleetWatcher, sessions: readonly FleetSession[], names: readonly string[], tick: StallTick, from: number, to: number,
@@ -1364,10 +1364,10 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
   });
 
   // Slug `stall-clocks-drop-on-an-unobserved-gap`: ONE gap rule. A first-seen clock claims its condition held at every
-  // judged sweep since it was set. When MORE than 2 × STALL_SWEEP_MS passes between two judged sweeps, nobody watched
-  // in between, so the later sweep drops every clock before it judges. A gap of exactly 2 × STALL_SWEEP_MS keeps
-  // them. An early return (disabled, an unreadable or throwing candidate read) is no judged sweep, and a tick that
-  // never reaches the lane is none either; a single such blip between two on-schedule sweeps leaves no gap.
+  // judged sweep since it was set. When MORE than STALL_CLOCK_GAP_MS (150 s) passes between two judged sweeps, nobody
+  // watched in between, so the later sweep drops every clock before it judges. One missed sweep (judged sweeps about
+  // 120 s apart) keeps them; two (about 180 s) drop them. An early return (disabled, an unreadable or throwing candidate
+  // read) is no judged sweep, and a tick that never reaches the lane is none either.
   const presence = async (): Promise<{ coord: CoordStore; w: FleetWatcher; gone: StallTick; registry: { blind: boolean }; reports: () => MailRow[] }> => {
     const registry = { blind: false };
     const io: FleetIO = {
@@ -1421,19 +1421,40 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(reports()).toHaveLength(1);
   });
 
-  // The boundary, in milliseconds: judged sweeps 2 × STALL_SWEEP_MS apart (120 000 ms: one on-schedule sweep missed)
-  // keep the clocks, and 2 × STALL_SWEEP_MS + 1 ms apart drop them. After the gap the lane sweeps every minute, so a
-  // kept clock fires at T0 + DEAD_GRACE_MS and a dropped one at NEXT + DEAD_GRACE_MS.
+  /** The first sweep at or after `target` on the lane's 60 s cadence from `start`: when a KEPT clock's dead report goes
+   *  out. A dropped clock's goes out at `start + DEAD_GRACE_MS`, on the same cadence and later. */
+  const onCadence = (start: number, target: number): number => start + Math.ceil((target - start) / STALL_SWEEP_MS) * STALL_SWEEP_MS;
+
+  // The boundary, in milliseconds: judged sweeps 150 000 ms apart keep the clocks, and 150 001 ms apart drop them.
   it.each([
-    [2 * STALL_SWEEP_MS, false],
-    [2 * STALL_SWEEP_MS + 1, true],
+    [150_000, false],
+    [150_001, true],
   ] as const)('a gap of %d ms between two judged sweeps: drops the clocks = %s', async (gap, drops) => {
     const { w, gone, reports } = await presence();
     at(T0);
     await w.sweepStalls([], W2, gone);                // judged: absent since T0
     const NEXT = T0 + gap;
     await sweepThrough(w, [], W2, gone, NEXT, NEXT + DEAD_GRACE_MS);
-    expect(reports().map((m) => m.at)).toEqual([drops ? NEXT + DEAD_GRACE_MS : T0 + DEAD_GRACE_MS]);
+    expect(reports().map((m) => m.at)).toEqual([drops ? NEXT + DEAD_GRACE_MS : onCadence(NEXT, T0 + DEAD_GRACE_MS)]);
+  });
+
+  // Missed sweeps at the real cadence. The lane stamps on the first 2 s tick at or past 60 s, so judged sweeps run up to
+  // 62 s apart: one disabled sweep between two judged ones leaves a gap of up to 124 s, and two leave up to 186 s.
+  it.each([
+    ['ONE missed sweep (a gap of 124 s): the clocks survive, and the dead report comes at the original grace', 1, false],
+    ['TWO missed sweeps (a gap of 186 s): the clocks drop, and the dead report waits a full grace from the return', 2, true],
+  ] as const)('%s', async (_name, missed, drops) => {
+    const { w, gone, reports } = await presence();
+    const STEP = STALL_SWEEP_MS + 2_000;               // one tick late, every time
+    at(T0);
+    await w.sweepStalls([], W2, gone);                // judged: absent since T0
+    for (let k = 1; k <= missed; k += 1) {
+      at(T0 + k * STEP);
+      await w.sweepStalls([], ['stall-watch-disabled', ...W2], gone);   // a sweep the lane did not judge
+    }
+    const NEXT = T0 + (missed + 1) * STEP;
+    await sweepThrough(w, [], W2, gone, NEXT, NEXT + DEAD_GRACE_MS);
+    expect(reports().map((m) => m.at)).toEqual([drops ? NEXT + DEAD_GRACE_MS : onCadence(NEXT, T0 + DEAD_GRACE_MS)]);
   });
 
   // ── Pins: each apply branch, read and filter the lane owns, one row apiece (the mutation-table rule) ─────────────
