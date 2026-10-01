@@ -17,7 +17,7 @@ automatic deletion.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **awaiting-review** — fix round 2 answered review 213 at `4d0070ba` (fingerprint accepted 2026-10-01); final review run 214 dispatched to `ccrc-pwa-warm-harbor` |
+| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **working, fix round 3** — review run 214 closed `done` on `4d0070ba` with nine minor findings; fix-round mail 3050 sent 2026-10-02 restores R31 for a leaf-link subject and four small items; the next review decides acceptance under the recorded convergence rule |
 
 **Deviation block: sixteen numbers, the first of them 3731** (allocated exactly once at run 208 open,
 2026-10-01; floor now 3747). The finalized plan defines the first as
@@ -140,6 +140,26 @@ a measured departure is defined in that plan; unused headroom remains unrendered
   non-comment change is the `unres` remedy string, which now says to restore a link to its original target and
   never to create a directory in a link's place. No new issued number is rendered. Review run 214 reads it with the
   same panel and SAFETY lens.
+- **2026-10-02 — review run 214's verdict, the third fix round and a convergence rule.** `ccrc-pwa-warm-harbor` read
+  `4d0070ba` with the literal panel (46 agents, none errored). The first reproduce lens returned an empty list with no
+  record; the reviewer counted it unverified and re-ran it, and the re-run reproduced all 30 commit claims. Counts:
+  correctness 4 confirmed; spec 6, 3 confirmed and 3 refuted; reproduce 0; SAFETY 4, 2 confirmed and 2 refuted. No
+  lens is unverified and no finding unexamined. SAFETY (a)-(g) hold, each measured; the `unres` remedy is safe to
+  follow literally in every case it names, and the parenthetical forbidding a directory in a link's place is
+  load-bearing. Fix round 2 introduced nothing, and every finding of reviews 212 and 213 is resolved, documented or
+  carried. Nine minor findings predate fix round 2. Rulings:
+  - **Fix now.** The resolver port made a subject whose workdir leaf is a link answer retryable `unmeasured` instead
+    of contract R31's terminal `containment-unproven` whenever any other row exists, with a remedy ("remove what
+    stands at it") whose literal following deletes the branch and de-registers a standing tree. Restoring R31 is
+    conformance, not a new decision. Also fixed: one stale placement comment, the plan's mutation count, a comment
+    that the plan-mandated `_ws_reclaim_resolvable` has no shipped caller yet, and a numbered record of the unknown
+    liveness subcases' `--defer-expired` isolation route.
+  - **Carried to child-reclamation wave 4's integration round:** the positive remedy pin binds the shared string,
+    not the printed text; three row-level ladder cases no longer tell their resolver guards apart (resolver-level
+    cases still pin them); and two pre-existing `//` remedy wordings still name a re-point.
+  - **Convergence rule.** Each review so far found new minor first-round findings. The next review accepts the wave
+    when SAFETY (a)-(h) hold, no confirmed critical or important finding stands, and fix round 3 introduces nothing;
+    a newly found minor that predates fix round 3 is carried to wave 4 rather than opening another round.
 
 ## Carried constraints
 

@@ -732,6 +732,11 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
     attention list;
   - ccd journaling the failures the mirror never sees: audit-time `unmeasured`, `probe-unmeasured`, pre-lock dies,
     `flock-unavailable` and `lock-unopenable`.
+- **Wave 4's integration round inherits, from the row-placement reviews (2026-10-02):** a remedy pin that binds
+  `_ws_reclaim_workdir_shared`'s shared string rather than the text the audit, verb and tail print; three row-level
+  ladder cases (`demo-alias-up`, the newline spelling, the logical-entry spelling) that no longer tell their resolver
+  guards apart since every non-`complete` row gives one answer; and the two pre-existing `//` remedy wordings that
+  still name a re-point, which ride with the path-identity follow-up's wording.
 - **Wave 5 inherits, from the row-placement review (2026-10-01):** recovery for gone-directory alternate rows. An
   alternate row whose path is gone holds every other child at `unmeasured`, and two vanished or interrupted children
   hold each other; the recovery must prove the gone path was ccd's own worktree without consulting process state.
