@@ -409,6 +409,22 @@ Added by the orchestrator's rulings on the skeleton and on the drafts:
 - Task 12's review also made the limit predicate one function, `stallLimited`, which wave 1's run verdict now calls.
   The plan's Task 12 text names it `stallSessionLimited`; the shipped name is the authority. This is a refactor, not a
   departure from the spec, so it carries no number.
+- **D-3749** `coordinators-draw-orphan-d`: a run coordinator draws orphan D, run-less (spec §5.2: "any session"). The
+  plan's Task 15 lane omitted `stallOrphanDVerdict` from the coordinator's verdict list, and the orphan-row loop skips
+  every judged id, so a restarted coordinator with lost background tasks drew no orphan wake of any kind.
+- **D-3750** `stall-clocks-drop-on-an-unobserved-gap`: the lane clears its first-seen clocks (absent, dead and
+  marker-unreadable) whenever it loses sight of the fleet: `stall-watch-disabled`, an unreadable candidate read, and a
+  tick whose registry is unlistable. A clock carried across such a gap made a worker absent for a minute read as
+  "absent for 3h" and skipped `DEAD_GRACE_MS`.
+- **D-3751** `run-less-push-latches-are-in-memory`: a coordinator's run-less pushes (rung 2, mail-stuck,
+  marker-unreadable) are latched in memory, so a server restart re-pushes while the condition stands. Spec §9.7 names
+  only the delayed orphan push's latch as in memory. Accepted for wave 2 (pushes only, never mail); durable keying is
+  deferred. Every stall push's kind and tag now come from one L1 helper, `stallPushRoute`, per spec §11's resolution;
+  the delayed orphan push is tagged `orphaned-<toId>-<restartAt>` for run-bound and run-less sessions alike (§4.2).
+- **D-3752** `failed-arm-bounded-by-the-mail-horizon`: the failed session verdict answers none once
+  `now - stopAt > BACKLOG_HORIZON_MS - FAILED_REPEAT_MS`. The lane reads 24 h of mail, so a repeat failure would
+  otherwise be re-classified as a first failure once its prior self-mail left the read, and a retry nudge would be
+  typed into a pane about a day late.
 
 ## File structure
 
