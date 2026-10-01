@@ -781,3 +781,545 @@ describe('wave 2 vocabulary: a self-wake notice is the watch’s own, never mail
     expect(row.runId).toBeNull();
   });
 });
+
+// ── wave 2 (spec 2026-09-29 §5.1, §5.2, §10): the run verdict after the turn marker ─────────────────────────────
+// Every row builds on the wave-1 factories above. The `w2(...)` builder adds the facts wave 2 reads as a separate
+// object (`w2-facts-separate-object`), so no wave-1 row changes. `W2_LIVE` arms the wave-2 rules; `ARMED` (the
+// default) is the dark: wave-2 facts present, `stall-watch-w2-live` absent.
+import {
+  stallMarkView, stallMailDisabledHold, stallRunMail, stallCitedCheck, stallNotifyDelivery,
+  STALL_BOUND_MS, DELEGATE_WINDOW_MS, DELEGATE_CAP_MS, FROZEN_NO_EVENT_MS, DEAD_GRACE_MS, COORD_DEAF_MS,
+  CHECK_UNDELIVERED_MS, MARKER_UNREADABLE_MS,
+} from '../src/coord/stall.js';
+import type { HookRawFact, StallDeliveryRow, StallW2Cause, TurnMarkRead } from '../src/coord/stall.js';
+
+const W2_LIVE: StallArming = { disabled: false, live: true, escalate: true, w2Live: true };
+const UUID = 'uuid-1';
+type OkMark = Extract<TurnMarkRead, { ok: true }>;
+
+/** A current `done` marker: the worker's last Stop 3 h before NOW, a 10-minute turn, nothing in the background. */
+function markOf(over: Partial<OkMark> = {}): TurnMarkRead {
+  const stopAt = NOW - 3 * H;
+  return {
+    ok: true, sessionId: UUID, state: 'done', event: 'Stop', at: stopAt, turnAt: stopAt - 10 * MIN, stopAt,
+    bg: 0, bgKinds: [], bgIds: [], err: null, restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], graceUntil: null,
+    ...over,
+  };
+}
+const UNREADABLE: TurnMarkRead = { ok: false, reason: 'unmeasured' };
+const MALFORMED: TurnMarkRead = { ok: false, reason: 'malformed' };
+
+/** A raw hook fact that is this session's (identity current), stamped `updatedAt` by `event`. */
+function hookAt(updatedAt: number, event: string | null = 'PostToolUse', over: Partial<Extract<HookRawFact, { ok: true }>> = {}): HookRawFact {
+  return { ok: true, updatedAt, event, sessionId: UUID, identity: 'current', ...over };
+}
+const HOOK_ABSENT: HookRawFact = { ok: false, reason: 'absent' };
+
+function w2(over: Partial<StallW2Facts> = {}): StallW2Facts {
+  return { mark: markOf(), hook: HOOK_ABSENT, deliveries: [], absentSince: null, deadSince: null, markUnreadableSince: null, ...over };
+}
+function w2Input(over: Over = {}, facts: Partial<StallW2Facts> = {}): StallInput {
+  return { ...stallInput(over), w2: w2(facts) };
+}
+function delivery(id: number, mailId: number, toId: string, over: Partial<StallDeliveryRow> = {}): StallDeliveryRow {
+  return { id, mailId, toId, state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null, ...over };
+}
+const vw = (over: Over = {}, facts: Partial<StallW2Facts> = {}, at = NOW): StallVerdict => stallVerdict(w2Input(over, facts), at);
+
+const dead = (key: number, because: StallW2Cause, coordinatorId: string | null = COORD): StallVerdict => coordinatorId === null
+  ? { act: 'notify', arm: 'dead', rung: 1, key, to: 'operator', because }
+  : { act: 'notify', arm: 'dead', rung: 1, key, to: 'coordinator', coordinatorId, because };
+const frozenV = (key: number, coordinatorId: string | null = COORD): StallVerdict => coordinatorId === null
+  ? { act: 'notify', arm: 'frozen', rung: 1, key, to: 'operator', because: 'no-hook-event' }
+  : { act: 'notify', arm: 'frozen', rung: 1, key, to: 'coordinator', coordinatorId, because: 'no-hook-event' };
+const w2Push = (arm: 'coord-deaf' | 'mail-stuck' | 'marker-unreadable', key: number): StallVerdict =>
+  ({ act: 'notify', arm, rung: 1, key, to: 'operator' });
+
+/** A frozen-shaped worker: a turn begun 2 h ago (turnAt, the frozen key) under a busy word. */
+const FROZEN_OVER: Partial<OkMark> = { state: 'working', event: 'PostToolUse', at: NOW - 2 * H, turnAt: NOW - 2 * H, stopAt: NOW - 5 * H };
+const FROZEN = markOf(FROZEN_OVER);
+const fv = (hook: HookRawFact, over: Over = {}, facts: Partial<StallW2Facts> = {}, at = NOW): StallVerdict =>
+  vw({ arming: W2_LIVE, worker: workerAt({ live: liveWord('busy', NOW - 2 * H) }), ...over }, { mark: FROZEN, hook, ...facts }, at);
+
+/** The worker's question to the coordinator role, 61 min old, delivered to the claimant a minute later. */
+const Q_AT = NOW - 61 * MIN;
+const Q = mailRow(4001, Q_AT, WORKER, 'coordinator', 'question', 'which base?');
+const QD = delivery(9101, 4001, COORD, { state: 'delivered', deliveredAt: Q_AT + MIN });
+
+describe('wave 2: the §10 order after the turn marker, first match wins', () => {
+  it('the base wave-2 input fires r1, under the w2 marker and in the dark', () => {
+    expect(vw({ arming: W2_LIVE })).toEqual(r1(RUN67_DISPATCHED));
+    expect(vw()).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it.each([UNREADABLE, MALFORMED])('2a: a marker reading $reason for MARKER_UNREADABLE_MS pushes marker-unreadable ahead of an absent worker', (mark) => {
+    const facts: Partial<StallW2Facts> = { mark, markUnreadableSince: NOW - MARKER_UNREADABLE_MS, absentSince: NOW - 2 * H };
+    const gone: Over = { worker: { present: false }, arming: W2_LIVE };
+    expect(vw(gone, facts)).toEqual(w2Push('marker-unreadable', RUN67_DISPATCHED));
+    expect(vw(gone, { ...facts, markUnreadableSince: NOW - MARKER_UNREADABLE_MS + 1 })).toEqual(dead(RUN67_DISPATCHED, 'registry-absent'));
+  });
+
+  it.each(['absent', 'foreign', 'stale'] as const)('2a: a marker reading %s never pushes marker-unreadable', (reason) => {
+    expect(vw({ arming: W2_LIVE }, { mark: { ok: false, reason }, markUnreadableSince: NOW - 5 * H })).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it('2a: marker-unreadable is pushed once per episode, and again on the next one', () => {
+    const done = [notice('live', 'marker-unreadable', 1, RUN67_DISPATCHED, NOW - 10 * MIN)];
+    const facts = (mark: TurnMarkRead): Partial<StallW2Facts> => ({ mark, markUnreadableSince: NOW - 2 * H });
+    expect(vw({ arming: W2_LIVE, notices: done }, facts(MALFORMED))).toEqual(r1(RUN67_DISPATCHED));
+    expect(vw({ arming: W2_LIVE, notices: done }, facts(UNREADABLE))).toEqual(hold('unmeasured'));
+    const own = mailRow(4100, NOW - 50 * MIN, WORKER, COORD, 'status', 'Task 3 pushed');
+    expect(vw({ arming: W2_LIVE, notices: done, mail: [own] }, facts(MALFORMED))).toEqual(w2Push('marker-unreadable', own.at));
+  });
+
+  it('2b: an absent worker holds absent below DEAD_GRACE_MS and is the dead arm at it, once', () => {
+    const gone: Over = { worker: { present: false }, arming: W2_LIVE };
+    expect(vw(gone, { absentSince: NOW - DEAD_GRACE_MS + 1 })).toEqual(hold('absent'));
+    expect(vw(gone, { absentSince: NOW - DEAD_GRACE_MS })).toEqual(dead(RUN67_DISPATCHED, 'registry-absent'));
+    expect(vw(gone, { absentSince: null })).toEqual(hold('absent'));
+    expect(vw({ ...gone, notices: [notice('live', 'dead', 1, RUN67_DISPATCHED, NOW - 5 * MIN)] }, { absentSince: NOW - H })).toEqual(hold('absent'));
+    expect(stallVerdict(stallInput(gone), NOW)).toEqual(hold('absent'));
+  });
+
+  it('2b: the dead notice goes to the operator when coordination is paused or the run has no claimant', () => {
+    const gone: Over = { worker: { present: false }, arming: W2_LIVE };
+    expect(vw({ ...gone, coordinationPaused: true }, { absentSince: NOW - H })).toEqual(dead(RUN67_DISPATCHED, 'registry-absent', null));
+    expect(vw({ ...gone, primary: { claimedBy: null } }, { absentSince: NOW - H })).toEqual(dead(RUN67_DISPATCHED, 'registry-absent', null));
+  });
+
+  it('2c before 3: an unmeasured fleet row holds unmeasured even on an orphan past the grace', () => {
+    expect(vw({ arming: W2_LIVE, worker: workerAt({ unmeasured: true, lifecycle: 'orphan' }) }, { deadSince: NOW - H })).toEqual(hold('unmeasured'));
+  });
+
+  it('3: stopped holds lifecycle-stopped with the wave-2 facts, lifecycle without, and never feeds the dead arm', () => {
+    const stopped = workerAt({ lifecycle: 'stopped', live: { ok: false, reason: 'no-pane' } });
+    expect(vw({ arming: W2_LIVE, worker: stopped }, { deadSince: NOW - 5 * H })).toEqual(hold('lifecycle-stopped'));
+    expect(vw({ worker: stopped }, { deadSince: NOW - 5 * H })).toEqual(hold('lifecycle-stopped'));
+    expect(stallVerdict(stallInput({ arming: W2_LIVE, worker: stopped }), NOW)).toEqual(hold('lifecycle'));
+  });
+
+  it.each(['orphan', 'never-started'] as const)('3: lifecycle %s holds lifecycle below DEAD_GRACE_MS and is the dead arm at it, once', (lifecycle) => {
+    const worker = workerAt({ lifecycle });
+    expect(vw({ arming: W2_LIVE, worker }, { deadSince: NOW - DEAD_GRACE_MS + 1 })).toEqual(hold('lifecycle'));
+    expect(vw({ arming: W2_LIVE, worker }, { deadSince: NOW - DEAD_GRACE_MS })).toEqual(dead(RUN67_DISPATCHED, lifecycle));
+    expect(vw({ arming: W2_LIVE, worker, notices: [notice('live', 'dead', 1, RUN67_DISPATCHED, NOW - MIN)] }, { deadSince: NOW - H })).toEqual(hold('lifecycle'));
+  });
+
+  it('3 before 4: a dead-shaped lifecycle with no pane or a null stamp is the dead path', () => {
+    const noPane = workerAt({ lifecycle: 'orphan', live: { ok: false, reason: 'no-pane' } });
+    const noStamp = workerAt({ lifecycle: 'never-started', live: liveWord('idle', null) });
+    expect(vw({ arming: W2_LIVE, worker: noPane }, { deadSince: NOW - 11 * MIN })).toEqual(dead(RUN67_DISPATCHED, 'orphan'));
+    expect(vw({ arming: W2_LIVE, worker: noStamp }, { deadSince: NOW - 11 * MIN })).toEqual(dead(RUN67_DISPATCHED, 'never-started'));
+    // Without the wave-2 facts the same worker now holds `lifecycle` where wave 1 held `unmeasured`: a hold either way.
+    expect(stallVerdict(stallInput({ worker: noPane }), NOW)).toEqual(hold('lifecycle'));
+  });
+
+  it('4: under the w2 marker an unmeasured turn marker holds unmeasured, and a malformed one takes wave 1', () => {
+    expect(vw({ arming: W2_LIVE }, { mark: UNREADABLE })).toEqual(hold('unmeasured'));
+    expect(vw({ arming: W2_LIVE }, { mark: MALFORMED })).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it('6 before 7: a limit-locked worker inside a restart grace holds limit', () => {
+    expect(vw({ arming: W2_LIVE, worker: workerAt({ limits: { five: 100, seven: 10 } }) }, { mark: markOf({ graceUntil: NOW + MIN }) }))
+      .toEqual(hold('limit'));
+  });
+
+  it('7: restart-grace holds until graceUntil, under the w2 marker only', () => {
+    const graceMark = (graceUntil: number): TurnMarkRead => markOf({
+      event: 'SessionStart', at: NOW - 4 * MIN, restartAt: NOW - 4 * MIN, turnAt: NOW - 3 * H + 5 * MIN, graceUntil,
+    });
+    expect(vw({ arming: W2_LIVE }, { mark: graceMark(NOW + 1) })).toEqual(hold('restart-grace'));
+    expect(vw({ arming: W2_LIVE }, { mark: graceMark(NOW) })).toEqual(r1(RUN67_DISPATCHED));
+    expect(vw({}, { mark: graceMark(NOW + 1) })).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it('7 before 8: a frozen-shaped worker inside a restart grace holds restart-grace', () => {
+    expect(fv(hookAt(NOW - 2 * H), {}, { mark: markOf({ ...FROZEN_OVER, graceUntil: NOW + MIN }) })).toEqual(hold('restart-grace'));
+  });
+});
+
+describe('wave 2: frozen (§5.2, §10 step 8)', () => {
+  it('8: FROZEN_NO_EVENT_MS with no main hook event fires to the claimant, keyed on turnAt; a fresher event holds busy', () => {
+    expect(fv(hookAt(NOW - 59 * MIN))).toEqual(hold('busy'));
+    expect(fv(hookAt(NOW - FROZEN_NO_EVENT_MS + 1))).toEqual(hold('busy'));
+    expect(fv(hookAt(NOW - FROZEN_NO_EVENT_MS))).toEqual(frozenV(NOW - 2 * H));
+    expect(fv(hookAt(NOW - 61 * MIN))).toEqual(frozenV(NOW - 2 * H));
+    expect(fv(hookAt(NOW - 5 * H))).toEqual(frozenV(NOW - 2 * H));
+    expect(fv(hookAt(NOW - MIN, null))).toEqual(hold('busy'));
+  });
+
+  it.each(['SessionStart', 'PreCompact', 'PostCompact'])('8: a %s hook event is plumbing and never refreshes the frozen clock', (event) => {
+    expect(fv(hookAt(NOW - MIN, event))).toEqual(frozenV(NOW - 2 * H));
+  });
+
+  it.each([
+    { label: 'a foreign hook', hook: hookAt(NOW - 5 * H, 'PostToolUse', { identity: 'foreign' }) },
+    { label: 'an unregistered hook', hook: hookAt(NOW - 5 * H, 'PostToolUse', { identity: 'unregistered' }) },
+    { label: 'a hook with an empty session id', hook: hookAt(NOW - 5 * H, 'PostToolUse', { sessionId: '' }) },
+    { label: 'an unmeasured hook', hook: { ok: false, reason: 'unmeasured' } as HookRawFact },
+    { label: 'an absent hook', hook: HOOK_ABSENT },
+  ])('8: $label makes the frozen clock unmeasurable: hold busy, never frozen', ({ hook }) => {
+    expect(fv(hook)).toEqual(hold('busy'));
+  });
+
+  it('8: paused, or with no claimant, frozen goes to the operator', () => {
+    expect(fv(hookAt(NOW - 61 * MIN), { coordinationPaused: true })).toEqual(frozenV(NOW - 2 * H, null));
+    expect(fv(hookAt(NOW - 61 * MIN), { primary: { claimedBy: null } })).toEqual(frozenV(NOW - 2 * H, null));
+  });
+
+  it('8: frozen fires once per turn, and again on the next turn', () => {
+    const done = [notice('live', 'frozen', 1, NOW - 2 * H, NOW - 50 * MIN)];
+    expect(fv(hookAt(NOW - 61 * MIN), { notices: done })).toEqual(hold('busy'));
+    const nextTurn = markOf({ ...FROZEN_OVER, at: NOW - 90 * MIN, turnAt: NOW - 90 * MIN });
+    expect(fv(hookAt(NOW - 61 * MIN), { notices: done }, { mark: nextTurn })).toEqual(frozenV(NOW - 90 * MIN));
+  });
+});
+
+describe('wave 2: delegates (§5.1, §10 step 9)', () => {
+  const dv = (hook: HookRawFact, over: Over = {}, facts: Partial<StallW2Facts> = {}): StallVerdict =>
+    vw({ arming: W2_LIVE, ...over }, { hook, ...facts });
+
+  it('9: a current main hook event inside DELEGATE_WINDOW_MS holds delegates; at the window it does not', () => {
+    expect(dv(hookAt(NOW - 29 * MIN))).toEqual(hold('delegates'));
+    expect(dv(hookAt(NOW - DELEGATE_WINDOW_MS + 1))).toEqual(hold('delegates'));
+    expect(dv(hookAt(NOW - DELEGATE_WINDOW_MS))).toEqual(r1(RUN67_DISPATCHED));
+    expect(dv(hookAt(NOW - 31 * MIN))).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it('9: delegates is capped at DELEGATE_CAP_MS of main silence', () => {
+    const quietFrom = (t0: number): Partial<StallW2Facts> => ({ mark: markOf({ at: t0, stopAt: t0, turnAt: t0 - 10 * MIN }) });
+    const idleFrom = (t0: number): Over => ({ worker: workerAt({ live: liveWord('idle', t0) }) });
+    expect(dv(hookAt(NOW - MIN), idleFrom(NOW - DELEGATE_CAP_MS + 1), quietFrom(NOW - DELEGATE_CAP_MS + 1))).toEqual(hold('delegates'));
+    expect(dv(hookAt(NOW - MIN), idleFrom(NOW - DELEGATE_CAP_MS), quietFrom(NOW - DELEGATE_CAP_MS))).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it('9: a plumbing event, a foreign hook, the dark and an empty session id never hold delegates', () => {
+    expect(dv(hookAt(NOW - MIN, 'SessionStart'))).toEqual(r1(RUN67_DISPATCHED));
+    expect(dv(hookAt(NOW - MIN, 'PostToolUse', { identity: 'foreign' }))).toEqual(r1(RUN67_DISPATCHED));
+    expect(vw({}, { hook: hookAt(NOW - MIN) })).toEqual(r1(RUN67_DISPATCHED));
+    expect(dv(hookAt(NOW - MIN, 'PostToolUse', { sessionId: '' }))).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it('9: delegates holds the quiet arm only: under the coordinator ball the verdict is the ball verdict', () => {
+    const question = mailRow(4001, NOW - 4 * H, WORKER, 'coordinator', 'question', 'which base?');
+    expect(dv(hookAt(NOW - MIN), { mail: [question] })).toEqual(NONE);
+  });
+});
+
+describe('wave 2: coord-deaf (§5.2, §10 step 10)', () => {
+  const cv = (mail: StallMailRow[], deliveries: StallDeliveryRow[], over: Over = {}, at = NOW): StallVerdict =>
+    vw({ arming: W2_LIVE, mail, ...over }, { deliveries }, at);
+
+  it('10: a question to the coordinator unacked COORD_DEAF_MS pushes coord-deaf once, keyed on the mail', () => {
+    expect(cv([Q], [QD])).toEqual(w2Push('coord-deaf', 4001));
+    expect(cv([Q], [QD], {}, Q_AT + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));
+    expect(cv([Q], [QD], {}, Q_AT + COORD_DEAF_MS - 1)).toEqual(NONE);
+    expect(cv([{ ...Q, at: NOW - 59 * MIN }], [QD])).toEqual(NONE);
+    expect(cv([Q], [QD], { notices: [notice('live', 'coord-deaf', 1, 4001, NOW - MIN)] })).toEqual(NONE);
+  });
+
+  it('10: an acked question is not deaf', () => {
+    expect(cv([Q], [{ ...QD, state: 'acked', ackedAt: Q_AT + 2 * MIN }])).toEqual(NONE);
+  });
+
+  it('10: a ball-passing mail with NO delivery row is not deaf: nothing measured it unacked, and the coord-ball cap still fires', () => {
+    expect(cv([Q], [])).toEqual(NONE);
+    const done = mailRow(4002, Q_AT, WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT);
+    expect(cv([done], [])).toEqual(NONE);
+    expect(cv([Q], [{ ...QD, mailId: 4999 }])).toEqual(NONE);
+    const old = mailRow(4001, NOW - COORD_BALL_CAP_MS, WORKER, 'coordinator', 'question', 'which base?');
+    expect(cv([old], [])).toEqual(capOf('coord-ball', old.at));
+    // CONTROL: the same question with its delivery row is deaf
+    expect(cv([Q], [QD])).toEqual(w2Push('coord-deaf', 4001));
+  });
+
+  it('10: a wave-done or review-done status is deaf too; a question to a peer is not the coordinator one', () => {
+    for (const subject of [WAVE_DONE_SUBJECT, REVIEW_DONE_SUBJECT]) {
+      const done = mailRow(4002, Q_AT, WORKER, 'coordinator', 'status', subject);
+      expect(cv([done], [{ ...QD, mailId: 4002 }]), subject).toEqual(w2Push('coord-deaf', 4002));
+    }
+    const toPeer = mailRow(4003, Q_AT, WORKER, PEER, 'question', 'which base?');
+    expect(cv([toPeer], [{ ...QD, mailId: 4003, toId: PEER }])).toEqual(NONE);
+  });
+
+  it('10: coord-deaf comes before the coord-ball cap, and the cap still fires once after it', () => {
+    const old = mailRow(4001, NOW - COORD_BALL_CAP_MS, WORKER, 'coordinator', 'question', 'which base?');
+    const oldD = delivery(9101, 4001, COORD, { state: 'delivered', deliveredAt: old.at + MIN });
+    expect(cv([old], [oldD])).toEqual(w2Push('coord-deaf', 4001));
+    expect(cv([old], [oldD], { notices: [notice('live', 'coord-deaf', 1, 4001, old.at + COORD_DEAF_MS)] })).toEqual(capOf('coord-ball', old.at));
+  });
+});
+
+describe('wave 2: the worker ball on the marker clock (§5.1, §10 step 11)', () => {
+  it('11: quiet runs from stopAt: a restamped live stamp does not restart it', () => {
+    const restamped = workerAt({ live: liveWord('idle', NOW - 30 * MIN) });
+    expect(vw({ arming: W2_LIVE, worker: restamped })).toEqual(r1(RUN67_DISPATCHED));
+    expect(vw({ worker: restamped })).toEqual(NONE);
+  });
+
+  it('11: busy workers are judged: a busy word over a done marker fires r1', () => {
+    expect(vw({ arming: W2_LIVE, worker: workerAt({ live: liveWord('busy', NOW - 3 * H) }) })).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it('11: a working marker at least as new as the live stamp holds busy; an older one reads as a turn interrupted at the stamp', () => {
+    const working = (at: number, stopAt: number | null = null): Partial<StallW2Facts> =>
+      ({ mark: markOf({ state: 'working', event: 'UserPromptSubmit', at, turnAt: at, stopAt }) });
+    expect(vw({ arming: W2_LIVE }, working(NOW - 3 * H))).toEqual(hold('busy'));
+    expect(vw({ arming: W2_LIVE }, working(NOW - 3 * H, NOW - 4 * H))).toEqual(hold('busy'));
+    expect(vw({ arming: W2_LIVE }, working(NOW - 3 * H - 1))).toEqual(r1(RUN67_DISPATCHED));
+    expect(vw({ arming: W2_LIVE, worker: workerAt({ live: liveWord('shell', NOW - H) }) }, working(NOW - 3 * H))).toEqual(NONE);
+  });
+
+  it('11: a word other than idle, shell or busy holds unmeasured', () => {
+    expect(vw({ arming: W2_LIVE, worker: workerAt({ live: liveWord('thinking', NOW - 3 * H) }) })).toEqual(hold('unmeasured'));
+  });
+
+  it('11: a done marker with no stopAt takes wave 1 ladder', () => {
+    const noStop: Partial<StallW2Facts> = { mark: markOf({ stopAt: null, event: 'SessionStart' }) };
+    expect(vw({ arming: W2_LIVE, worker: workerAt({ live: liveWord('busy', NOW - 3 * H) }) }, noStop)).toEqual(hold('busy'));
+    expect(vw({ arming: W2_LIVE, worker: workerAt({ live: liveWord('idle', NOW - 30 * MIN) }) }, noStop)).toEqual(NONE);
+  });
+});
+
+describe('wave 2: escalation on proof (§5.1 (a) to (d)), and r3 an hour after r2', () => {
+  // r1 went out live at R1 as stall check #5001; the worker's next Stop came 5 min later, and it has been idle since.
+  const R1 = NOW - 30 * MIN;
+  const CHECK = mailRow(5001, R1, 'operator', WORKER, 'status', `${STALL_CHECK_PREFIX} run 67 — quiet 2h 0m, owed: first report`);
+  const R1_ROW = notice('live', 'quiet', 1, RUN67_DISPATCHED, R1);
+  const DELIVERED = delivery(9001, 5001, WORKER, { state: 'delivered', deliveredAt: R1 + MIN });
+  const UNDELIVERED = delivery(9001, 5001, WORKER);
+  const AFTER: Partial<OkMark> = { at: R1 + 5 * MIN, stopAt: R1 + 5 * MIN, turnAt: R1 + 2 * MIN, bg: 1, bgKinds: ['shell'], bgIds: ['b989ocn62'] };
+  const pv = (facts: Partial<StallW2Facts>, at = NOW, over: Over = {}): StallVerdict => stallVerdict(w2Input({
+    arming: W2_LIVE, coordinator: 'alive', mail: [CHECK], notices: [R1_ROW],
+    worker: workerAt({ live: liveWord('idle', R1 + 5 * MIN) }), ...over,
+  }, facts), at);
+
+  it('(a): the first Stop after a delivered check with a measured bg and no wake-bearing kind escalates at once', () => {
+    expect(pv({ mark: markOf(AFTER), deliveries: [DELIVERED] })).toEqual(r2(RUN67_DISPATCHED));
+  });
+
+  it.each([
+    { label: 'bg unmeasured', mark: { ...AFTER, bg: -1, bgKinds: [], bgIds: [] }, deliveries: [DELIVERED] },
+    { label: 'a subagent at the Stop', mark: { ...AFTER, bg: 2, bgKinds: ['shell', 'subagent'] }, deliveries: [DELIVERED] },
+    { label: 'a workflow at the Stop', mark: { ...AFTER, bgKinds: ['workflow'] }, deliveries: [DELIVERED] },
+    { label: 'a Stop at the delivery, not after it', mark: { ...AFTER, at: R1 + MIN, stopAt: R1 + MIN }, deliveries: [DELIVERED] },
+    { label: 'a StopFailure, not a Stop', mark: { ...AFTER, state: 'failed', err: 'server_error' }, deliveries: [DELIVERED] },
+    { label: 'a check never delivered', mark: AFTER, deliveries: [UNDELIVERED] },
+  ] as Array<{ label: string; mark: Partial<OkMark>; deliveries: StallDeliveryRow[] }>)('(a) does not fire: $label', ({ mark, deliveries }) => {
+    expect(pv({ mark: markOf(mark), deliveries })).toEqual(NONE);
+  });
+
+  it('(a) does not fire: a check from an earlier episode', () => {
+    const oldCheck = mailRow(4990, RUN67_DISPATCHED - MIN, 'operator', WORKER, 'status', `${STALL_CHECK_PREFIX} run 67 — quiet 2h 0m, owed: first report`);
+    expect(pv({ mark: markOf(AFTER), deliveries: [{ ...DELIVERED, mailId: 4990 }] }, NOW, { mail: [oldCheck] })).toEqual(NONE);
+  });
+
+  it('(c) does not fire: a check from an earlier episode', () => {
+    const oldCheck = mailRow(4990, RUN67_DISPATCHED - MIN, 'operator', WORKER, 'status', `${STALL_CHECK_PREFIX} run 67 — quiet 2h 0m, owed: first report`);
+    expect(pv({ mark: markOf(AFTER), deliveries: [{ ...UNDELIVERED, mailId: 4990 }] }, R1 + CHECK_UNDELIVERED_MS, { mail: [oldCheck] })).toEqual(NONE);
+  });
+
+  it('the proofs never see a worker mail after the check: it opens a new episode, and r1 is not done on the new key', () => {
+    const after = mailRow(4200, R1 + 10 * MIN, WORKER, COORD, 'status', 'Task 3 pushed');
+    // proof (a) holds on the old key (a delivered check, then a Stop with only a shell), yet the new key has no r1
+    expect(pv({ mark: markOf(AFTER), deliveries: [DELIVERED] }, NOW, { mail: [CHECK, after] })).toEqual(NONE);
+    // CONTROL: without the worker's mail the same facts escalate
+    expect(pv({ mark: markOf(AFTER), deliveries: [DELIVERED] }, NOW, { mail: [CHECK] })).toEqual(r2(RUN67_DISPATCHED));
+  });
+
+  it('(b): two orphan-e keys inside the episode escalate; one, a repeated key or keys outside it do not', () => {
+    const e = (key: number, mode: StallMode = 'live'): StallNotice => notice(mode, 'orphan-e', 1, key, key + 10 * MIN);
+    const noA: Partial<StallW2Facts> = { mark: markOf({ ...AFTER, bg: -1, bgKinds: [], bgIds: [] }), deliveries: [DELIVERED] };
+    expect(pv(noA, NOW, { notices: [R1_ROW, e(R1 + 2 * MIN), e(R1 + 20 * MIN)] })).toEqual(r2(RUN67_DISPATCHED));
+    expect(pv(noA, NOW, { notices: [R1_ROW, e(R1 + 2 * MIN, 'shadow'), e(R1 + 20 * MIN, 'shadow')] })).toEqual(r2(RUN67_DISPATCHED));
+    expect(pv(noA, NOW, { notices: [R1_ROW, e(R1 + 2 * MIN)] })).toEqual(NONE);
+    expect(pv(noA, NOW, { notices: [R1_ROW, e(R1 + 2 * MIN), e(R1 + 2 * MIN, 'shadow')] })).toEqual(NONE);
+    expect(pv(noA, NOW, { notices: [R1_ROW, e(RUN67_DISPATCHED), e(RUN67_DISPATCHED - MIN)] })).toEqual(NONE);
+  });
+
+  it('(c): a check still undelivered CHECK_UNDELIVERED_MS after it was queued escalates', () => {
+    const c: Partial<StallW2Facts> = { mark: markOf(AFTER), deliveries: [UNDELIVERED] };
+    expect(pv(c, R1 + CHECK_UNDELIVERED_MS - 1)).toEqual(NONE);
+    expect(pv(c, R1 + CHECK_UNDELIVERED_MS)).toEqual(r2(RUN67_DISPATCHED));
+    expect(pv({ mark: markOf(AFTER), deliveries: [] }, R1 + CHECK_UNDELIVERED_MS)).toEqual(NONE);
+    expect(pv({ mark: markOf({ ...AFTER, bgKinds: ['subagent'] }), deliveries: [DELIVERED] }, R1 + CHECK_UNDELIVERED_MS)).toEqual(NONE);
+  });
+
+  it('(d): STALL_BOUND_MS after r1 escalates whatever the Stops showed', () => {
+    const noProof: Partial<StallW2Facts> = { mark: markOf({ ...AFTER, bgKinds: ['subagent'] }), deliveries: [DELIVERED] };
+    expect(pv(noProof, R1 + STALL_BOUND_MS - 1)).toEqual(NONE);
+    expect(pv(noProof, R1 + STALL_BOUND_MS)).toEqual(r2(RUN67_DISPATCHED));
+  });
+
+  it('r3 follows r2 by STALL_OPERATOR_MS and is never re-timed by a later live stamp', () => {
+    const R2_ROW = notice('live', 'quiet', 2, RUN67_DISPATCHED, R1 + 20 * MIN);
+    const facts: Partial<StallW2Facts> = { mark: markOf(AFTER), deliveries: [DELIVERED] };
+    expect(pv(facts, R1 + 20 * MIN + STALL_OPERATOR_MS - 1, { notices: [R1_ROW, R2_ROW] })).toEqual(NONE);
+    expect(pv(facts, R1 + 20 * MIN + STALL_OPERATOR_MS, { notices: [R1_ROW, R2_ROW] })).toEqual(r3(RUN67_DISPATCHED, 'still-silent'));
+    // wave 1's `rungDueAt` would move r3 to R1 + 150 min here: the stamp turned idle again past r2's hour
+    expect(pv(facts, R1 + 100 * MIN, { notices: [R1_ROW, R2_ROW], worker: workerAt({ live: liveWord('idle', R1 + 90 * MIN) }) }))
+      .toEqual(r3(RUN67_DISPATCHED, 'still-silent'));
+  });
+
+  it('with no proof the marker ladder waits, where wave 1 escalates at r1 + 1 h: no marker, or the dark', () => {
+    const waiting: Partial<StallW2Facts> = { mark: markOf(AFTER), deliveries: [] };
+    expect(pv({ mark: { ok: false, reason: 'absent' }, deliveries: [] }, R1 + H)).toEqual(r2(RUN67_DISPATCHED));
+    expect(pv(waiting, R1 + H)).toEqual(NONE);
+    expect(pv(waiting, R1 + H, { arming: ARMED })).toEqual(r2(RUN67_DISPATCHED));
+  });
+
+  it('a due r2 still measures the claimant, and a paused coordination still goes to r3', () => {
+    const proven: Partial<StallW2Facts> = { mark: markOf(AFTER), deliveries: [DELIVERED] };
+    expect(pv(proven, NOW, { coordinator: null })).toEqual({ act: 'measure-coordinator', coordinatorId: COORD });
+    expect(pv(proven, NOW, { coordinationPaused: true })).toEqual(r3(RUN67_DISPATCHED, 'coordination-paused'));
+  });
+});
+
+describe('wave 2: the dark keeps wave 1 (F3, dark-mode-keeps-wave-1-verdict)', () => {
+  it('dark: a busy worker with a done marker holds busy', () => {
+    expect(vw({ worker: workerAt({ live: liveWord('busy', NOW - 3 * H) }) })).toEqual(hold('busy'));
+  });
+
+  it('dark: an unmeasured marker, idle past 2 h, gives wave 1 r1 at once, or one sweep after a marker-unreadable shadow', () => {
+    expect(vw({}, { mark: UNREADABLE })).toEqual(r1(RUN67_DISPATCHED));
+    expect(vw({}, { mark: UNREADABLE, markUnreadableSince: NOW - 2 * H })).toEqual(w2Push('marker-unreadable', RUN67_DISPATCHED));
+    expect(stallNotifyDelivery('marker-unreadable', 'operator', ARMED)).toBe('shadow');
+    const shadowed = [notice('shadow', 'marker-unreadable', 1, RUN67_DISPATCHED, NOW - MIN)];
+    expect(vw({ notices: shadowed }, { mark: UNREADABLE, markUnreadableSince: NOW - 2 * H })).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it('dark: frozen, dead and coord-deaf answer notify, stallNotifyDelivery makes each shadow, and a standing shadow row is done', () => {
+    const fz = fv(hookAt(NOW - 61 * MIN), { arming: ARMED });
+    const dd = vw({ worker: { present: false } }, { absentSince: NOW - H });
+    const deaf = vw({ mail: [Q] }, { deliveries: [QD] });
+    expect(fz).toEqual(frozenV(NOW - 2 * H));
+    expect(dd).toEqual(dead(RUN67_DISPATCHED, 'registry-absent'));
+    expect(deaf).toEqual(w2Push('coord-deaf', 4001));
+    for (const v of [fz, dd, deaf]) {
+      if (v.act !== 'notify') throw new Error(`expected a notify, got ${v.act}`);
+      expect(stallNotifyDelivery(v.arm, v.to, ARMED), v.arm).toBe('shadow');
+    }
+    expect(vw({ worker: { present: false }, notices: [notice('shadow', 'dead', 1, RUN67_DISPATCHED, NOW - MIN)] }, { absentSince: NOW - H }))
+      .toEqual(hold('absent'));
+  });
+});
+
+describe('wave 2: mail-disabled holds every mail rung that would send (lane-honours-mail-disabled)', () => {
+  const MD: StallArming = { ...ARMED, mailDisabled: true };
+  const MD_SHADOW: StallArming = { ...SHADOW, mailDisabled: true };
+  const MD_LIVE_ONLY: StallArming = { ...LIVE_ONLY, mailDisabled: true };
+  const MD_W2: StallArming = { ...W2_LIVE, mailDisabled: true };
+  const R1_LIVE = [notice('live', 'quiet', 1, RUN67_DISPATCHED, NOW - 2 * H)];
+
+  it('md: r1 that would send holds mail-disabled', () => {
+    expect(stallVerdict(stallInput({ arming: MD }), NOW)).toEqual(hold('mail-disabled'));
+  });
+
+  it('md: r1 in shadow stands, so the lane still records its shadow row', () => {
+    expect(stallVerdict(stallInput({ arming: MD_SHADOW }), NOW)).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it('md: with r1 done live, measure-coordinator and r2 hold; with escalation unarmed they stand', () => {
+    expect(stallVerdict(stallInput({ arming: MD, notices: R1_LIVE }), NOW)).toEqual(hold('mail-disabled'));
+    expect(stallVerdict(stallInput({ arming: MD, notices: R1_LIVE, coordinator: 'alive' }), NOW)).toEqual(hold('mail-disabled'));
+    expect(stallVerdict(stallInput({ arming: MD_LIVE_ONLY, notices: R1_LIVE }), NOW)).toEqual({ act: 'measure-coordinator', coordinatorId: COORD });
+  });
+
+  it('md: with r1 done and coordination paused, r3 still pushes to the operator', () => {
+    expect(stallVerdict(stallInput({ arming: MD, notices: R1_LIVE, coordinationPaused: true }), NOW)).toEqual(r3(RUN67_DISPATCHED, 'coordination-paused'));
+  });
+
+  it('md: the caps still push', () => {
+    expect(stallVerdict(stallInput({ arming: MD, worker: workerAt({ live: liveWord('waiting', NOW - 3 * H) }) }), NOW))
+      .toEqual(capOf('dialog-cap', RUN67_DISPATCHED));
+  });
+
+  it('md: a wave-2 dead notice to the claimant holds; to the operator it pushes; in the dark it stands', () => {
+    const gone: Over = { worker: { present: false } };
+    expect(vw({ ...gone, arming: MD_W2 }, { absentSince: NOW - H })).toEqual(hold('mail-disabled'));
+    expect(vw({ ...gone, arming: MD_W2, coordinationPaused: true }, { absentSince: NOW - H })).toEqual(dead(RUN67_DISPATCHED, 'registry-absent', null));
+    expect(vw({ ...gone, arming: MD }, { absentSince: NOW - H })).toEqual(dead(RUN67_DISPATCHED, 'registry-absent'));
+  });
+
+  it('md: the filter passes everything when mail-disabled is off, and never touches a hold or none', () => {
+    expect(stallMailDisabledHold(r1(RUN67_DISPATCHED), ARMED)).toEqual(r1(RUN67_DISPATCHED));
+    expect(stallMailDisabledHold(r1(RUN67_DISPATCHED), { ...ARMED, mailDisabled: false })).toEqual(r1(RUN67_DISPATCHED));
+    expect(stallMailDisabledHold(hold('busy'), MD)).toEqual(hold('busy'));
+    expect(stallMailDisabledHold(NONE, MD)).toEqual(NONE);
+  });
+});
+
+describe('stallRunMail (F4, run-mail-filtered-in-l1)', () => {
+  const onRun = mailRow(4100, NOW - 4 * H, WORKER, COORD, 'status', 'Task 2 pushed');
+  const offRun = mailRow(4101, NOW - 20 * MIN, WORKER, COORD, 'status', 'run 68 pushed', 68);
+  const runLess: StallMailRow = { ...mailRow(4102, NOW - 10 * MIN, WORKER, PEER, 'status', 'peer note'), runId: null };
+
+  it('keeps only the rows on the subject runs: an off-run row and a run-less row are dropped', () => {
+    expect(stallRunMail([onRun, offRun, runLess], [67])).toEqual([onRun]);
+    expect(stallRunMail([onRun, offRun, runLess], [67, 68])).toEqual([onRun, offRun]);
+    expect(stallRunMail([onRun, offRun, runLess], [])).toEqual([]);
+  });
+
+  it('F4 parity: the filtered read gives the facts and the verdict of the run-scoped mail; the whole read would move the key', () => {
+    const whole = [onRun, offRun, runLess];
+    const scoped = stallInput({ mail: stallRunMail(whole, [67]) });
+    const waveOne = stallInput({ mail: [onRun] });
+    expect(stallFacts(scoped)).toEqual(stallFacts(waveOne));
+    expect(stallVerdict(scoped, NOW)).toEqual(stallVerdict(waveOne, NOW));
+    expect(stallVerdict(waveOne, NOW)).toEqual(r1(onRun.at));
+    expect(stallFacts(stallInput({ mail: whole })).episodeKeyMs).toBe(runLess.at);
+  });
+});
+
+describe('stallCitedCheck (M7a, cited-check-derived-in-l1)', () => {
+  it('stallCitedCheck cites the earliest live r1 row, else the earliest r1 row, on this key only', () => {
+    const K = RUN67_DISPATCHED;
+    const cite = (notices: StallNotice[]): StallNotice | null => stallCitedCheck(stallInput({ notices }), K);
+    const s0 = notice('shadow', 'quiet', 1, K, NOW - 4 * H);
+    const s1 = notice('shadow', 'quiet', 1, K, NOW - 3 * H);
+    const l0 = notice('live', 'quiet', 1, K, NOW - 150 * MIN);
+    const l1 = notice('live', 'quiet', 1, K, NOW - 2 * H);
+    expect(cite([])).toBeNull();
+    expect(cite([s1])).toEqual(s1);
+    expect(cite([s1, l1])).toEqual(l1);
+    expect(cite([l1, l0])).toEqual(l0);
+    expect(cite([s1, s0])).toEqual(s0);
+    expect(cite([notice('live', 'quiet', 1, K + 1, NOW), notice('live', 'quiet', 2, K, NOW), notice('live', 'dialog-cap', 1, K, NOW)])).toBeNull();
+  });
+});
+
+describe('stallMarkView (§5.1, an interrupted turn)', () => {
+  const viewOf = (over: Partial<OkMark>, live: LiveWordRead) => {
+    const m = markOf(over);
+    if (!m.ok) throw new Error('markOf builds an ok mark');
+    return stallMarkView(m, live);
+  };
+  it('reads a working marker older than an idle or shell stamp as a turn interrupted at that stamp; anything else as written', () => {
+    const W: Partial<OkMark> = { state: 'working', at: NOW - H, turnAt: NOW - H, stopAt: NOW - 2 * H };
+    const asWritten = { state: 'working', stopAt: NOW - 2 * H, interrupted: false };
+    expect(viewOf(W, liveWord('idle', NOW - H + 1))).toEqual({ state: 'done', stopAt: NOW - H + 1, interrupted: true });
+    expect(viewOf(W, liveWord('shell', NOW - 30 * MIN))).toEqual({ state: 'done', stopAt: NOW - 30 * MIN, interrupted: true });
+    expect(viewOf(W, liveWord('idle', NOW - H))).toEqual(asWritten);
+    expect(viewOf(W, liveWord('busy', NOW - 30 * MIN))).toEqual(asWritten);
+    expect(viewOf(W, liveWord('idle', null))).toEqual(asWritten);
+    expect(viewOf(W, { ok: false, reason: 'no-state' })).toEqual(asWritten);
+    expect(viewOf({ state: 'failed', err: 'server_error' }, liveWord('idle', NOW))).toEqual({ state: 'failed', stopAt: NOW - 3 * H, interrupted: false });
+  });
+});
+
+// The self-wake facts row is Task 10's (`a self-wake notice is the watch’s own, never mail on the run`); it is not
+// repeated here.
+describe('wave 2: the approval envelope and the cause words', () => {
+  it('a PermissionRequest approval is a dialog with no question behind it: hold 2b, capped once', () => {
+    const A = t('2026-09-20T08:00:00Z');
+    const primary: Partial<StallRunRow> = { dispatchedAt: A - 5 * H };
+    const worker = workerAt({ live: liveWord('waiting', A), hookAsk: { kind: 'approval', at: A } });
+    expect(stallVerdict(stallInput({ primary, worker }), A + H)).toEqual(hold('dialog'));
+    expect(stallVerdict(stallInput({ primary, worker }), A + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', A - 5 * H));
+  });
+
+  it('the wave-2 causes are declared for the coord kebab scan', () => {
+    const causes: StallW2Cause[] = ['registry-absent', 'orphan', 'never-started', 'no-hook-event'];
+    for (const w of causes) expect(isStallKebab(w), w).toBe(true);
+  });
+});

@@ -491,11 +491,27 @@ const STALL_R3_CAUSE_MAP: Record<StallR3Cause, string> = {
   'no-coordinator': 'r2 skipped: the run has no claimant, and no door is named',
   'coordination-paused': 'r2 skipped: coordination is paused; the pause route lifts it',
 };
+/** Why wave 2's frozen or dead arm fired (§5.2). Total, for `isStallKebab`. */
+export type StallW2Cause = 'registry-absent' | 'orphan' | 'never-started' | 'no-hook-event';
+const STALL_W2_CAUSE_MAP: Record<StallW2Cause, string> = {
+  'registry-absent': 'dead: the worker has been missing from the tick for DEAD_GRACE_MS (absent-worker-is-dead-after-grace)',
+  orphan: 'dead: the lifecycle has read orphan for DEAD_GRACE_MS',
+  'never-started': 'dead: the lifecycle has read never-started for DEAD_GRACE_MS',
+  'no-hook-event': 'frozen: a turn in flight under a busy word with no main hook event for FROZEN_NO_EVENT_MS',
+};
 export type StallNotify =
   | { readonly act: 'notify'; readonly arm: 'quiet'; readonly rung: 1; readonly key: number; readonly to: 'worker' }
   | { readonly act: 'notify'; readonly arm: 'quiet'; readonly rung: 2; readonly key: number; readonly to: 'coordinator'; readonly coordinatorId: string }
   | { readonly act: 'notify'; readonly arm: 'quiet'; readonly rung: 3; readonly key: number; readonly to: 'operator'; readonly because: StallR3Cause }
-  | { readonly act: 'notify'; readonly arm: 'limit-cap' | 'dialog-cap' | 'coord-ball'; readonly rung: 1; readonly key: number; readonly to: 'operator' };
+  | { readonly act: 'notify'; readonly arm: 'limit-cap' | 'dialog-cap' | 'coord-ball'; readonly rung: 1; readonly key: number; readonly to: 'operator' }
+  | { readonly act: 'notify'; readonly arm: 'frozen' | 'dead'; readonly rung: 1; readonly key: number; readonly to: 'coordinator'; readonly coordinatorId: string; readonly because: StallW2Cause }
+  | { readonly act: 'notify'; readonly arm: 'frozen' | 'dead'; readonly rung: 1; readonly key: number; readonly to: 'operator'; readonly because: StallW2Cause }
+  | { readonly act: 'notify'; readonly arm: 'coord-deaf' | 'mail-stuck' | 'marker-unreadable'; readonly rung: 1; readonly key: number; readonly to: 'operator' }
+  | { readonly act: 'notify'; readonly arm: 'orphan-d' | 'orphan-e'; readonly rung: 1; readonly key: number; readonly to: 'worker' }
+  | { readonly act: 'notify'; readonly arm: 'orphan-d'; readonly rung: 2; readonly key: number; readonly to: 'operator' }
+  | { readonly act: 'notify'; readonly arm: 'failed'; readonly rung: 1; readonly key: number; readonly to: 'worker'; readonly err: string }
+  | { readonly act: 'notify'; readonly arm: 'failed'; readonly rung: 2; readonly key: number; readonly to: 'coordinator'; readonly coordinatorId: string; readonly err: string; readonly because: 'repeat' | 'request' }
+  | { readonly act: 'notify'; readonly arm: 'failed'; readonly rung: 2; readonly key: number; readonly to: 'operator'; readonly err: string; readonly because: 'repeat' | 'request' };
 export type StallVerdict =
   | { readonly act: 'none' }
   | { readonly act: 'hold'; readonly why: StallHold }
@@ -508,9 +524,10 @@ const STALL_ACT_MAP: Record<StallVerdict['act'], string> = {
   'measure-coordinator': 'r2 is due: the lane measures the claimant and asks again',
   notify: 'a rung or a cap fires',
 };
-/** This block's kebab words, derived from its three total Records, never a hand list. */
+/** This block's kebab words, derived from its total Records, never a hand list. */
 const STALL_VERDICT_KEBABS: ReadonlySet<string> = new Set([
   ...Object.keys(LIVE_WORD_UNREAD_MAP), ...Object.keys(STALL_R3_CAUSE_MAP), ...Object.keys(STALL_ACT_MAP),
+  ...Object.keys(STALL_W2_CAUSE_MAP),
 ]);
 
 /** Exported for tests and for the bodies (Task 6): the derived facts the verdict used. */
@@ -641,63 +658,269 @@ function rungDoneAt(input: StallInput, arm: StallArm, rung: 1 | 2 | 3, key: numb
   return timed.reduce((earliest, n) => Math.min(earliest, n.at), Number.POSITIVE_INFINITY);
 }
 
-export function stallVerdict(input: StallInput, now: number): StallVerdict {
+// ── wave 2: the run verdict's own helpers (design 2026-09-29 §5.1, §5.2, §10) ────────────────────────────────────
+// `STALL_PLUMBING_EVENTS`, `STALL_RESUMING_KINDS` and `stallFrozenSince` are Task 10's exports, declared above; this
+// block uses them and declares none of them.
+
+/** A turn marker as the run verdict reads it (§5.1, "An interrupted turn"). Stop does not fire on an interrupt, so
+ *  every Esc leaves the marker `working`. A `working` marker older than the live stamp, under live `idle` or
+ *  `shell`, therefore reads as `done` at that stamp. Anything else reads as it was written. */
+export function stallMarkView(mark: TurnMark, live: LiveWordRead): { readonly state: TurnMarkState; readonly stopAt: number | null; readonly interrupted: boolean } {
+  if (mark.state === 'working' && live.ok && isIdleWord(live.word) && live.since !== null && mark.at < live.since) {
+    return { state: 'done', stopAt: live.since, interrupted: true };
+  }
+  return { state: mark.state, stopAt: mark.stopAt, interrupted: false };
+}
+
+/** `run-mail-filtered-in-l1` (F4): `StallInput.mail` is exactly wave 1's set, the rows on the subject's runs. The
+ *  lane's one mail read is wider, because the session arms and the deliveries need the rest, so the lane passes that
+ *  read through here. A run-less row is on no run. */
+export function stallRunMail(rows: readonly StallMailRow[], runIds: readonly number[]): StallMailRow[] {
+  return rows.filter((m) => m.runId !== null && runIds.includes(m.runId));
+}
+
+/** M7a, `cited-check-derived-in-l1`: the r1 notice that r2's body cites. It is r1's earliest LIVE row on this key
+ *  when one exists, else its earliest row: the timing `rungDoneAt` uses. Arming mid-episode leaves a shadow r1
+ *  before the live one, and citing the shadow row would tell the coordinator that no check was sent when one was
+ *  (D-3572). */
+export function stallCitedCheck(input: StallInput, key: number): StallNotice | null {
+  const rows = input.notices.filter((n) => n.arm === 'quiet' && n.rung === 1 && n.key === key);
+  const earliest = (xs: readonly StallNotice[]): StallNotice | null =>
+    xs.reduce<StallNotice | null>((e, n) => (e === null || n.at < e.at ? n : e), null);
+  return earliest(rows.filter((n) => n.mode === 'live')) ?? earliest(rows);
+}
+
+/** `lane-honours-mail-disabled` and `mail-disabled-holds-only-sends`. While `$REG/mail-disabled` stands, two things
+ *  become hold `mail-disabled`: a rung that would SEND mail (to the worker or the coordinator), and r2's
+ *  `measure-coordinator`. Operator pushes pass through, and so do shadow rungs (the lane still records their rows),
+ *  holds and none. */
+export function stallMailDisabledHold(v: StallVerdict, arming: StallArming): StallVerdict {
+  if (arming.mailDisabled !== true) return v;
+  if (v.act === 'measure-coordinator') return stallNotifyDelivery('quiet', 'coordinator', arming) === 'send' ? holdVerdict('mail-disabled') : v;
+  if (v.act !== 'notify') return v;
+  if (v.to === 'operator') return v;
+  return stallNotifyDelivery(v.arm, v.to, arming) === 'send' ? holdVerdict('mail-disabled') : v;
+}
+
+/** The dead arm is due once its first-seen time is DEAD_GRACE_MS old and no row records it on this episode. */
+function stallDeadDue(input: StallInput, since: number | null, key: number, now: number): boolean {
+  return since !== null && now - since >= DEAD_GRACE_MS && rungDoneAt(input, 'dead', 1, key) === null;
+}
+
+/** Frozen and dead mail the run's claimant directly, or push to the operator when there is none or coordination is
+ *  paused. */
+function stallW2Notify(input: StallInput, arm: 'frozen' | 'dead', key: number, because: StallW2Cause): StallVerdict {
+  const claimant = input.subject.primary.claimedBy;
+  if (input.coordinationPaused || claimant === null) return { act: 'notify', arm, rung: 1, key, to: 'operator', because };
+  return { act: 'notify', arm, rung: 1, key, to: 'coordinator', coordinatorId: claimant, because };
+}
+
+function stallPlumbing(event: string | null): boolean {
+  return event !== null && STALL_PLUMBING_EVENTS.includes(event);
+}
+
+/** A raw hook fact that `delegates` may read: identity `current`, and a non-empty session id. A `''` session id is
+ *  never current (Contract note 9). The frozen clock applies the same rule inside Task 10's `stallFrozenSince`. */
+function stallHookCurrent(hook: HookRawFact): hook is Extract<HookRawFact, { ok: true }> {
+  return hook.ok && hook.identity === 'current' && hook.sessionId !== '';
+}
+
+/** `delegates` (§5.1): a current, non-plumbing hook event inside DELEGATE_WINDOW_MS, which is subagent activity. */
+function stallHookFresh(hook: HookRawFact, now: number): boolean {
+  return stallHookCurrent(hook) && !stallPlumbing(hook.event) && now - hook.updatedAt < DELEGATE_WINDOW_MS;
+}
+
+/** The marker's quiet start (§5.1, "Quiet with the marker"): `stopAt`, maxed with the worker's last mail, the
+ *  newest non-watch mail to it, and `dispatchedAt`. Null when the view has no `stopAt`. */
+function stallMarkQuiet(view: { readonly stopAt: number | null }, f: StallFacts, dispatchedAt: number): number | null {
+  return view.stopAt === null ? null : Math.max(view.stopAt, f.workerLast?.at ?? 0, f.inboundLast?.at ?? 0, dispatchedAt);
+}
+
+/** A mail's newest delivery row, or null when it has none. Exported and owned here (`newest-delivery-rule-lives-in-l1`):
+ *  Task 12's session verdicts and Task 15's lane reuse it and never redeclare it. */
+export function stallNewestDelivery(rows: readonly StallDeliveryRow[], mailId: number): StallDeliveryRow | null {
+  let best: StallDeliveryRow | null = null;
+  for (const d of rows) if (d.mailId === mailId && (best === null || d.id > best.id)) best = d;
+  return best;
+}
+
+/** coord-deaf's mail (§5.2). It is the worker's newest ball-passing mail to a coordinator id: a question, or a status
+ *  whose subject EQUALS wave-done or review-done. It counts only while its newest delivery row is unacked. A mail
+ *  with NO delivery row is not deaf: nothing measured it unacked, so coord-deaf does not fire on it, and the
+ *  coord-ball cap still does. */
+function stallDeafMail(input: StallInput, deliveries: readonly StallDeliveryRow[]): StallMailRow | null {
+  const worker = input.subject.primary.sessionId;
+  const coordinatorIds = stallCoordinatorIds(input.subject.runs);
+  const passed = newestMail(input.mail, (m) => m.fromId === worker && coordinatorIds.has(m.toId)
+    && (m.kind === 'question' || (m.kind === 'status' && (m.subject === WAVE_DONE_SUBJECT || m.subject === REVIEW_DONE_SUBJECT))));
+  if (passed === null) return null;
+  const d = stallNewestDelivery(deliveries, passed.id);
+  return d !== null && d.ackedAt === null ? passed : null;
+}
+
+/** r2 is due: the shipped decision on the coordinator's state (§4.2), which both ladders share. */
+function stallR2Due(input: StallInput, key: number): StallVerdict {
   const p = input.subject.primary;
-  // (1) a run this build cannot name
-  if (!isRunState(p.state) || p.state === 'unknown') return holdVerdict('run-unnamed');
-  if (p.kind !== 'work' && p.kind !== 'review') return holdVerdict('run-unnamed');
-  // (2) a worker absent from this tick (planning departure D-3566 absent-worker-holds), then any unmeasured input
-  const w = input.worker;
-  if (!w.present) return holdVerdict('absent');
-  const live = w.live;
-  const lc = w.lifecycle;
-  if (w.unmeasured) return holdVerdict('unmeasured');
-  if (!live.ok) return holdVerdict('unmeasured');
-  if (lc === null || !isSessionLifecycle(lc) || lc === 'unmeasurable') return holdVerdict('unmeasured');
-  if (p.dispatchedAt === null) return holdVerdict('unmeasured');
-  if (live.since === null) return holdVerdict('unmeasured'); // D-3580 any-null-stamp-holds: whatever the word
-  const dialogShaped = live.word === 'waiting' || w.dialogPending;
-  if (dialogShaped && (w.hookAsk.kind === 'unmeasured' || w.askRow.kind === 'unmeasured')) return holdVerdict('unmeasured');
-  // (3) lifecycle: restarting and the dead words hold; unsupervised and unclaimed are judged as running
-  if (lc === 'restarting' || lifecycleIsDead(lc)) return holdVerdict('lifecycle');
-  const f = stallFacts(input);
-  const key = f.episodeKeyMs;
-  const capQuiet = now - capQuietSince(input, f, live.since);
-  // (4) hold 2a (a question, uncapped), then 2b (a dialog with no ask, capped once per episode)
-  const hookAskCorrelated = w.hookAsk.kind === 'ask' && live.since !== null && w.hookAsk.at >= live.since - ASK_DIALOG_SLACK_MS;
-  const askRowOpen = w.askRow.kind === 'row' && (w.askRow.state === 'held' || w.askRow.state === 'answering');
-  if (live.word === 'waiting' && (hookAskCorrelated || askRowOpen)) return holdVerdict('ask');
-  if (dialogShaped) return capQuiet >= STALL_QUIET_MS && rungDoneAt(input, 'dialog-cap', 1, key) === null ? capVerdict('dialog-cap', key) : holdVerdict('dialog');
-  // (5) the limit hold, capped once per episode; a null limits or a null window is neither at the ceiling nor unmeasured
-  const lim = w.limits;
-  const atCeiling = lim !== null && ((lim.five !== null && lim.five >= 100) || (lim.seven !== null && lim.seven >= 100));
-  const autoContinueRecent = w.autoContinueHeldAt !== null && w.autoContinueHeldAt > now - AUTO_CONTINUE_RECENT_MS;
-  if (atCeiling || w.stranded || w.swapBlocked || autoContinueRecent) {
-    return capQuiet >= LIMIT_HOLD_CAP_MS && rungDoneAt(input, 'limit-cap', 1, key) === null ? capVerdict('limit-cap', key) : holdVerdict('limit');
-  }
-  // (6) the coordinator's ball: none below its cap (planning departure D-3574 coord-ball-below-cap-is-none)
-  if (f.ball === 'coordinator') {
-    const ballAge = f.lastExchangeAt === null ? 0 : now - f.lastExchangeAt;
-    return ballAge >= COORD_BALL_CAP_MS && rungDoneAt(input, 'coord-ball', 1, key) === null ? capVerdict('coord-ball', key) : VERDICT_NONE;
-  }
-  // (7) the worker's ball. The quiet clock (the live stamp, and any mail) gates r1 only. A later rung falls due
-  // an hour after the previous one on the RAW live stamp (`rungDueAt`), so it re-times only when a busy read
-  // pushed the word's turn to idle past that hour.
-  if (live.word === 'busy') return holdVerdict('busy');
-  if (!isIdleWord(live.word) || f.quietSince === null) return holdVerdict('unmeasured');
-  const since = f.quietSince;
-  const r1At = rungDoneAt(input, 'quiet', 1, key);
-  if (r1At === null) return now - since >= STALL_QUIET_MS ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;
-  if (rungDoneAt(input, 'quiet', 3, key) !== null) return VERDICT_NONE;
-  const r2At = rungDoneAt(input, 'quiet', 2, key);
-  if (r2At !== null) return now >= rungDueAt(r2At, live.since, STALL_OPERATOR_MS) ? r3Verdict(key, 'still-silent') : VERDICT_NONE;
-  if (now < rungDueAt(r1At, live.since, STALL_ESCALATE_MS)) return VERDICT_NONE;
   if (input.coordinationPaused) return r3Verdict(key, 'coordination-paused');
   if (p.claimedBy === null) return r3Verdict(key, 'no-coordinator');
   if (input.coordinator === null) return { act: 'measure-coordinator', coordinatorId: p.claimedBy };
   if (input.coordinator === 'alive') return { act: 'notify', arm: 'quiet', rung: 2, key, to: 'coordinator', coordinatorId: p.claimedBy };
   if (input.coordinator === 'unmeasurable') return holdVerdict('coordinator-unmeasurable');
   return r3Verdict(key, 'coordinator-dead');
+}
+
+/** §10 step 11 without the w2 marker, or without a current turn marker: wave 1's ladder, unchanged. The quiet clock
+ *  (the live stamp, and any mail) gates r1 only. A later rung falls due an hour after the previous one on the RAW
+ *  live stamp (`rungDueAt`), so it re-times only when a busy read pushed the word's turn to idle past that hour. */
+function stallWaveOneLadder(input: StallInput, f: StallFacts, word: string, liveSince: number, key: number, now: number): StallVerdict {
+  if (word === 'busy') return holdVerdict('busy');
+  if (!isIdleWord(word) || f.quietSince === null) return holdVerdict('unmeasured');
+  const since = f.quietSince;
+  const r1At = rungDoneAt(input, 'quiet', 1, key);
+  if (r1At === null) return now - since >= STALL_QUIET_MS ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;
+  if (rungDoneAt(input, 'quiet', 3, key) !== null) return VERDICT_NONE;
+  const r2At = rungDoneAt(input, 'quiet', 2, key);
+  if (r2At !== null) return now >= rungDueAt(r2At, liveSince, STALL_OPERATOR_MS) ? r3Verdict(key, 'still-silent') : VERDICT_NONE;
+  if (now < rungDueAt(r1At, liveSince, STALL_ESCALATE_MS)) return VERDICT_NONE;
+  return stallR2Due(input, key);
+}
+
+/** Escalation on proof (§5.1): with a current marker, r2 falls due at the first of (a) to (d). The check is this
+ *  episode's own: the newest stall check to the worker, queued inside the episode. A worker mail after the check
+ *  opens a new episode (the key moves), so "no worker mail since the check" is the key's rule and is not a term here.
+ *  The marker keeps only the newest Stop (`proof-a-reads-the-newest-stop`), and a StopFailure is not a Stop. */
+function stallProofDue(input: StallInput, mark: TurnMark, deliveries: readonly StallDeliveryRow[], key: number, r1At: number, now: number): boolean {
+  // (d) the bound: r2 at the latest STALL_BOUND_MS after r1, whatever the Stops showed
+  if (now >= r1At + STALL_BOUND_MS) return true;
+  const last = stallLastCheck(input);
+  const check = last !== null && last.at >= key ? last : null;
+  const d = check === null ? null : stallNewestDelivery(deliveries, check.id);
+  // (a) the Stop after a delivered check carries a measured bg and nothing that could still wake the worker
+  if (d !== null && d.deliveredAt !== null && mark.state === 'done' && mark.stopAt !== null && mark.stopAt > d.deliveredAt
+    && mark.bg >= 0 && !mark.bgKinds.some((k) => STALL_RESUMING_KINDS.includes(k))) return true;
+  // (b) two orphan-e rows inside the episode: the worker re-armed and ended again without mail
+  if (new Set(input.notices.filter((n) => n.arm === 'orphan-e' && n.key > key).map((n) => n.key)).size >= 2) return true;
+  // (c) the check is still undelivered CHECK_UNDELIVERED_MS after it was queued
+  return check !== null && d !== null && d.deliveredAt === null && now - check.at >= CHECK_UNDELIVERED_MS;
+}
+
+/** §10's evaluation order after wave 2, wrapped by the mail-disabled filter (`lane-honours-mail-disabled`). */
+export function stallVerdict(input: StallInput, now: number): StallVerdict {
+  return stallMailDisabledHold(stallVerdictInner(input, now), input.arming);
+}
+
+/** §10 after wave 2. The first match wins:
+ *  (1) a run this build cannot name;
+ *  (2) the marker-unreadable push, then a worker absent from the tick (the dead arm after DEAD_GRACE_MS), then an
+ *      unmeasured fleet row, lifecycle or dispatch;
+ *  (3) lifecycle: a deliberate stop holds; an orphan or never-started pane is the dead arm after DEAD_GRACE_MS;
+ *  (4) the live read, and under the w2 marker an unmeasured turn marker;
+ *  (5) hold 2a, then 2b;
+ *  (6) the limit hold;
+ *  (7) restart grace;
+ *  (8) frozen;
+ *  (9) delegates;
+ *  (10) the coordinator's ball: coord-deaf, the cap, or none;
+ *  (11) the worker's ball: under the w2 marker, on the marker clock and escalating on proof; otherwise wave 1's
+ *      ladder.
+ *  Without `stall-watch-w2-live`, every LIVE outcome is wave 1's (`dark-mode-keeps-wave-1-verdict`). A wave-2 arm
+ *  still answers `notify`, `stallNotifyDelivery` makes it shadow, and its standing shadow row marks it done.
+ *  Exception (i): a shadow arm takes its sweep, so THREE arms can defer a wave-1 send by one sweep, once per the
+ *  arm's own key: `marker-unreadable` (ahead of r1), `coord-deaf` (ahead of the coord-ball cap) and `frozen` (step 8,
+ *  ahead of the coord-ball cap, for a busy worker with a `working` marker). The lane guarantees that `input.mail` is
+ *  run-scoped (`stallRunMail`, F4). */
+function stallVerdictInner(input: StallInput, now: number): StallVerdict {
+  const p = input.subject.primary;
+  // (1) a run this build cannot name
+  if (!isRunState(p.state) || p.state === 'unknown') return holdVerdict('run-unnamed');
+  if (p.kind !== 'work' && p.kind !== 'review') return holdVerdict('run-unnamed');
+  const w2 = input.w2;
+  const w2Live = input.arming.w2Live === true;
+  const mark = w2?.mark;
+  const okMark = mark !== undefined && mark.ok ? mark : null;
+  const markReason = mark !== undefined && !mark.ok ? mark.reason : null;
+  const f = stallFacts(input);
+  const key = f.episodeKeyMs;
+  // (2a) the marker-unreadable push: spec-exact, ahead of every unmeasured input, once per episode. The reasons that
+  // count live once, in Task 10's `stallMarkUnreadable` (the L1 ruling).
+  if (w2 !== undefined && stallMarkUnreadable(w2.mark) && w2.markUnreadableSince !== null
+    && now - w2.markUnreadableSince >= MARKER_UNREADABLE_MS && rungDoneAt(input, 'marker-unreadable', 1, key) === null) {
+    return { act: 'notify', arm: 'marker-unreadable', rung: 1, key, to: 'operator' };
+  }
+  // (2b) a worker absent from this tick holds (D-3566), and is the dead arm after DEAD_GRACE_MS (`absent-worker-is-dead-after-grace`)
+  const w = input.worker;
+  if (!w.present) {
+    return w2 !== undefined && stallDeadDue(input, w2.absentSince, key, now) ? stallW2Notify(input, 'dead', key, 'registry-absent') : holdVerdict('absent');
+  }
+  const live = w.live;
+  const lc = w.lifecycle;
+  // (2c) an unmeasured fleet row, lifecycle or dispatch
+  if (w.unmeasured) return holdVerdict('unmeasured');
+  if (lc === null || !isSessionLifecycle(lc) || lc === 'unmeasurable') return holdVerdict('unmeasured');
+  if (p.dispatchedAt === null) return holdVerdict('unmeasured');
+  // (3) lifecycle, ahead of the live read: a dead pane has no live stamp (`dead-lifecycle-precedes-live-stamp`)
+  if (lc === 'stopped') return holdVerdict(w2 !== undefined ? 'lifecycle-stopped' : 'lifecycle'); // `deliberate-stop-excluded`
+  if (stallDeadShaped(lc)) {
+    // The dead-shaped set lives once, in Task 10's `stallDeadShaped` (the L1 ruling). It answers a boolean, so the
+    // cause word is named here from the lifecycle it accepted; this line decides nothing about which lifecycles count.
+    const because: StallW2Cause = lc; // stallDeadShaped is a type predicate: lc is 'orphan' | 'never-started' here
+    return w2 !== undefined && stallDeadDue(input, w2.deadSince, key, now) ? stallW2Notify(input, 'dead', key, because) : holdVerdict('lifecycle');
+  }
+  if (lc === 'restarting' || lifecycleIsDead(lc)) return holdVerdict('lifecycle');
+  // (4) the live read. The marker's `unmeasured` holds only under the w2 marker: the dark keeps wave 1 (F3).
+  if (!live.ok) return holdVerdict('unmeasured');
+  if (w2Live && markReason === 'unmeasured') return holdVerdict('unmeasured');
+  if (live.since === null) return holdVerdict('unmeasured'); // D-3580 any-null-stamp-holds: whatever the word
+  const dialogShaped = live.word === 'waiting' || w.dialogPending;
+  if (dialogShaped && (w.hookAsk.kind === 'unmeasured' || w.askRow.kind === 'unmeasured')) return holdVerdict('unmeasured');
+  const capQuiet = now - capQuietSince(input, f, live.since);
+  // (5) hold 2a (a question, uncapped), then 2b (a dialog with no ask, capped once per episode). An `approval` is 2b.
+  const hookAskCorrelated = w.hookAsk.kind === 'ask' && live.since !== null && w.hookAsk.at >= live.since - ASK_DIALOG_SLACK_MS;
+  const askRowOpen = w.askRow.kind === 'row' && (w.askRow.state === 'held' || w.askRow.state === 'answering');
+  if (live.word === 'waiting' && (hookAskCorrelated || askRowOpen)) return holdVerdict('ask');
+  if (dialogShaped) return capQuiet >= STALL_QUIET_MS && rungDoneAt(input, 'dialog-cap', 1, key) === null ? capVerdict('dialog-cap', key) : holdVerdict('dialog');
+  // (6) the limit hold, capped once per episode; a null limits or a null window is neither at the ceiling nor unmeasured
+  const lim = w.limits;
+  const atCeiling = lim !== null && ((lim.five !== null && lim.five >= 100) || (lim.seven !== null && lim.seven >= 100));
+  const autoContinueRecent = w.autoContinueHeldAt !== null && w.autoContinueHeldAt > now - AUTO_CONTINUE_RECENT_MS;
+  if (atCeiling || w.stranded || w.swapBlocked || autoContinueRecent) {
+    return capQuiet >= LIMIT_HOLD_CAP_MS && rungDoneAt(input, 'limit-cap', 1, key) === null ? capVerdict('limit-cap', key) : holdVerdict('limit');
+  }
+  // (7) restart grace: a restart cut a turn short, and ccd's redrive re-prompts it
+  if (w2Live && okMark !== null && okMark.graceUntil !== null && now < okMark.graceUntil) return holdVerdict('restart-grace');
+  const view = okMark === null ? null : stallMarkView(okMark, live);
+  // (8) frozen: a turn in flight under a busy word with no main hook event for FROZEN_NO_EVENT_MS, once per turn
+  if (w2 !== undefined && okMark !== null && view !== null && view.state === 'working' && live.word === 'busy') {
+    const turnKey = okMark.turnAt ?? okMark.at;
+    const frozenSince = stallFrozenSince(okMark, w2.hook);
+    if (frozenSince !== null && now - frozenSince >= FROZEN_NO_EVENT_MS && rungDoneAt(input, 'frozen', 1, turnKey) === null) {
+      return stallW2Notify(input, 'frozen', turnKey, 'no-hook-event');
+    }
+  }
+  // (9) delegates: subagent activity holds the quiet arm (the worker's ball only), capped at DELEGATE_CAP_MS of main silence
+  const quietStart = view === null ? null : stallMarkQuiet(view, f, p.dispatchedAt);
+  if (w2 !== undefined && w2Live && view !== null && view.state !== 'working' && f.ball === 'worker' && quietStart !== null
+    && stallHookFresh(w2.hook, now) && now - quietStart < DELEGATE_CAP_MS) return holdVerdict('delegates');
+  // (10) the coordinator's ball: coord-deaf, then the cap, then none (D-3574 coord-ball-below-cap-is-none)
+  if (f.ball === 'coordinator') {
+    const deaf = w2 === undefined ? null : stallDeafMail(input, w2.deliveries);
+    if (deaf !== null && now - deaf.at >= COORD_DEAF_MS && rungDoneAt(input, 'coord-deaf', 1, deaf.id) === null) {
+      return { act: 'notify', arm: 'coord-deaf', rung: 1, key: deaf.id, to: 'operator' };
+    }
+    const ballAge = f.lastExchangeAt === null ? 0 : now - f.lastExchangeAt;
+    return ballAge >= COORD_BALL_CAP_MS && rungDoneAt(input, 'coord-ball', 1, key) === null ? capVerdict('coord-ball', key) : VERDICT_NONE;
+  }
+  // (11) the worker's ball. Without the w2 marker, or without a current marker: wave 1's ladder, unchanged.
+  if (!w2Live || w2 === undefined || okMark === null || view === null) return stallWaveOneLadder(input, f, live.word, live.since, key, now);
+  if (view.state === 'working') return holdVerdict('busy');
+  if (live.word !== 'busy' && !isIdleWord(live.word)) return holdVerdict('unmeasured');
+  if (quietStart === null) return stallWaveOneLadder(input, f, live.word, live.since, key, now);
+  const r1At = rungDoneAt(input, 'quiet', 1, key);
+  if (r1At === null) return now - quietStart >= STALL_QUIET_MS ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;
+  if (rungDoneAt(input, 'quiet', 3, key) !== null) return VERDICT_NONE;
+  const r2At = rungDoneAt(input, 'quiet', 2, key);
+  if (r2At !== null) return now >= r2At + STALL_OPERATOR_MS ? r3Verdict(key, 'still-silent') : VERDICT_NONE;
+  return stallProofDue(input, okMark, w2.deliveries, key, r1At, now) ? stallR2Due(input, key) : VERDICT_NONE;
 }
 
 // ── the notice texts (§4.2 "Mail bodies" and "Push shape") ───────────────────────────────────────────────────
@@ -970,6 +1193,15 @@ export function stallPushText(input: StallInput, facts: StallFacts, n: StallNoti
         title: `⚠ limit › ${ws}`,
         body: `${label}: worker ${worker} has been held by a usage limit past the ${stallSpan(LIMIT_HOLD_CAP_MS)} cap; this quiet episode opened ${stallUtc(n.key)} (${stallSpan(now - n.key)}). Measured: ${stallLimitFacts(input.worker)}.`,
       };
+    case 'frozen':
+    case 'dead':
+    case 'failed':
+    case 'coord-deaf':
+    case 'mail-stuck':
+    case 'marker-unreadable':
+    case 'orphan-d':
+      // Wave 2's operator pushes, minimal until their wording lands: the arm, the rung and the run, nothing else.
+      return { title: `⚠ ${n.arm} › ${ws}`, body: `${label}: the stall watch raised ${n.arm} (rung ${n.rung}, key ${stallInt(n.key)}) for worker ${worker}.` };
     case 'coord-ball': {
       // Minor (texts): worded from the facts. The ball reaches the coordinator by the worker's question, a done
       // claim or a declared wait, and by the coordinator's own `wait:`, so the worker is never said to have
