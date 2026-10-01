@@ -302,6 +302,17 @@ delete on. Retrying such a child would never succeed, and it would write a feed 
 directory that *exists* but that git does not record as this project's worktree is the opposite case: ccd
 cannot tell what it would be deleting, so it refuses with `no-worktree-record`, terminally.
 
+**Another row's projection is not a placement** (D-3731). The vanished-worktree arm reads the child's *own*
+missing path, already proven absent. Rung 9's comparison with another registry row reads someone else's, and
+the two are not the same question. Take a row whose spelling resolves only below a proven-absent component, such
+as `<alias>/server` after `<alias>` was removed. It names where that spelling would lead now, not where that
+session is: a process that entered through the alias keeps its physical cwd inside the child, and nothing on the
+box can reconstruct that cwd from a name that no longer exists. So another row is placed only on a `complete`
+resolution, every component of its spelling walked and entered. A projected one makes the reclaim `unmeasured`,
+retryable and with no new refusal word, at the audit, at the locked recomputation and at the tail's final
+ownership check alike. A row literally at, below or through the child's path keeps its terminal
+`containment-unproven`, because literal containment needs no resolution to be proven.
+
 Rungs 8 and 9 are the two places this design **refuses rather than proceeds**, and they are a deliberate
 reading of the operator's ruling rather than a softening of it. The ruling authorises overriding
 `dirty-tree` and `sensitive-ignored` — conditions where the work is *seen* and can therefore be pinned. It
@@ -465,6 +476,12 @@ safety rung: rungs 5 and 6 measure presence, not containment, and the pin phase 
 operation heads. Unbounded would be worse than absent: the PWA's terminal
 drawer opens a real `tmux attach`, so a phone that locks with the drawer open would wedge a child forever,
 and the only exit would be a human detaching from a sub-workspace — rule 4 inverted by its own safeguard.
+
+**Presence never authorises deletion.** `--defer-expired` changes the fingerprint and skips the presence
+rungs. It never skips the ownership comparison with other rows (§5.5, D-3731). The converse holds too: no
+liveness reading makes a projected row placeable, whether its session is up, gone, or tmux cannot be asked. A
+session reported gone may still have processes whose cwd is inside the child, and a live one exposes nothing
+that ccd could check against a removed alias. Presence defers; only a complete resolution places.
 
 ### 5.8 The kill-switch
 

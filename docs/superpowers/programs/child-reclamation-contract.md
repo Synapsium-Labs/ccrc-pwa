@@ -414,6 +414,9 @@ leave a wave undispatchable pending a ruling below.
   every arm (spec §5.6); only the worktree removal is skipped. A child whose directory EXISTS but git has no
   worktree record answers the existing TERMINAL token `no-worktree-record` (reused, its existing sentence is
   true of a child), which joins the vocabulary and `CHILD_RECLAIM_TOKEN_KIND` as `terminal`.
+  R31's complete-only placement rule (run 208, D-3731) is asked of OTHER registry rows, never of this child's
+  own proven-absent worktree: the vanished child still pins its branch and stashes, records `worktree: absent`,
+  and enters this tail.
 - **R20 — repeated failures back off.** The sweep keeps `consecutiveFailures` per child; after a `failed`
   outcome the next attempt waits `min(ceiling, passInterval × 2^k)`. A child whose failures have lasted past the
   ceiling is listed on the attention list with the failure's sentence (the attention derivation reads the
@@ -511,6 +514,24 @@ leave a wave undispatchable pending a ruling below.
   Measured on git 2.43.0: with the child's directory replaced by a link to a dirty sibling worktree, the planned
   WIP commit lands on the sibling's branch. With the child's worktree record gone, `git worktree remove --force`
   deletes the sibling outright.
+
+  **Another row is placed only by a complete resolution** (run 208, D-3731, 2026-10-01). A row proves it lies
+  outside the child only through a `complete` current resolution: every component of its spelling walked and
+  entered. An `absent-suffix` answer, where the rest is re-attached as text below a proven-absent component, is
+  namespace presentation, not identity evidence. A session that entered `<alias>/server` while the alias led into
+  the child keeps that cwd once the alias is removed. Measured before this rule: the audit minted a token, and the
+  verb removed the live tree.
+  - Such a row makes the reclaim `unmeasured` (retryable, no token, no terminal journal row) at the audit, at the
+    verb's locked recomputation, and at `_ws_reclaim_owned` on the fresh and the resumed tail. So do a row that
+    cannot be resolved at all and an empty or unknown basis.
+  - A row literally at, below or through the child's path stays terminal `containment-unproven`, whatever its
+    basis.
+  - `--defer-expired` skips rungs 5 and 6 only. It never bypasses this ownership comparison.
+  - Diagnostics name such rows by id only, never by their `.workdir`.
+  - Process state never grants deletion consent. A pane's cwd, or a modelled session that is up, gone or
+    unaskable, is not an input.
+  - The cost, stated rather than discovered: a row whose directory no longer exists holds every child's reclaim
+    at `unmeasured` until that row is purged or its path is restored.
 - **R32 — a held child is reclaimed when its programme retires; `not-finished` names its cause** (wave 3's
   wave-done, open item 1, 2026-09-25). R30 has a non-final close HOLD a child whose spent evidence is undated,
   unmeasurable or a merge-commit `.prnumber`, while the bind refuses that same child `workspace-spent`. No later
