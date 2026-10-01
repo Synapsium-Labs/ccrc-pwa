@@ -1675,6 +1675,60 @@ export function laneUnits(home: string, id: string): { litellm: string; shim: st
   return { litellm, shim };
 }
 
+// ── Plan 3a Task 6: a codex lane's usage pair, as `ccrc install` leaves it ─
+
+/** The usage pair as a converged Linux box has it:
+ *  - ccrc's template pair, COPIED from `deploy/systemd/` into the unit directory;
+ *  - the lane's instance ENABLED, through the `timers.target.wants` link that
+ *    `systemctl enable` makes, which is what the converge and doctor read;
+ *  - a usage row `ageS` seconds old, in the publisher's own shape
+ *    (`fiveResetAt`/`sevenResetAt` present, null included).
+ *  `pair: false` plants no template, `enabled: false` no link and `row: false`
+ *  no row. `linkAgeS` backdates the link's OWN mtime, which is the moment the
+ *  timer was enabled. */
+export function plantCodexUsage(home: string, id: string, o: {
+  pair?: boolean; enabled?: boolean; row?: boolean; ageS?: number; linkAgeS?: number;
+} = {}): { unitDir: string; link: string; row: string } {
+  if (!/^[a-z][a-z0-9-]{0,31}$/.test(id)) throw new Error(`plantCodexUsage: unsafe id ${JSON.stringify(id)}`);
+  const unitDir = join(home, '.config', 'systemd', 'user');
+  const wants = join(unitDir, 'timers.target.wants');
+  fs.mkdirSync(wants, { recursive: true });
+  if (o.pair !== false) {
+    for (const f of ['ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']) {
+      fs.copyFileSync(join(REPO, 'deploy', 'systemd', f), join(unitDir, f));
+    }
+  }
+  const link = join(wants, `ccrc-codex-usage@${id}.timer`);
+  if (o.enabled !== false) {
+    fs.symlinkSync(join(unitDir, 'ccrc-codex-usage@.timer'), link);
+    if (o.linkAgeS !== undefined) {
+      const t = Date.now() / 1000 - o.linkAgeS;
+      fs.lutimesSync(link, t, t);
+    }
+  }
+  const row = join(home, '.cc-limits', `${id}.json`);
+  if (o.row !== false) {
+    fs.mkdirSync(path.dirname(row), { recursive: true });
+    fs.writeFileSync(row, JSON.stringify({
+      five: null, seven: 12, ts: Math.floor(Date.now() / 1000) - (o.ageS ?? 60), fiveResetAt: null, sevenResetAt: null,
+    }));
+  }
+  return { unitDir, link, row };
+}
+
+/** ANOTHER repository's usage timer, ENABLED: its wants link, and nothing
+ *  else. ccrc never reads the foreign unit file, so none is planted, and the
+ *  link's target is deliberately absent. `id` null plants the flat, id-less
+ *  `ccgpt-usage.timer`. */
+export function plantForeignUsage(home: string, id: string | null): string {
+  const unitDir = join(home, '.config', 'systemd', 'user');
+  const wants = join(unitDir, 'timers.target.wants');
+  fs.mkdirSync(wants, { recursive: true });
+  const link = join(wants, id === null ? 'ccgpt-usage.timer' : `ccgpt-usage@${id}.timer`);
+  fs.symlinkSync(join(unitDir, id === null ? 'ccgpt-usage.timer' : 'ccgpt-usage@.timer'), link);
+  return link;
+}
+
 // A loopback listener that is NOT a lane is Task 4's `spawnListener` — one
 // definition, never a second here. `{ answer: 'text', lane: <id>, port: <the lane's shim
 // port> }` is the OTHER repository's shim (`text/plain`, the bare id,

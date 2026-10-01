@@ -1477,7 +1477,12 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
   // deploy.sh to place one, telling them to remove it from this list).
   const DEPLOY_SH_WITHHOLDS = {
     bins: ['ccd-update-sync'],
-    units: ['ccd-update-sync.service', 'ccd-update-sync.timer', 'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer'],
+    units: ['ccd-update-sync.service', 'ccd-update-sync.timer', 'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer',
+      // Plan 3a: Task 6 places ccrc's usage pair ONE COMMIT before Task 7
+      // teaches deploy.sh's agent lane the same two lines. Withheld for exactly
+      // that commit. Task 7 deletes this entry, and direction 2 below reds if
+      // it does not.
+      'ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer'],
   } as const;
 
   it('every binary _inst_bins places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.bins)', () => {
@@ -1549,22 +1554,25 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
     // lane (Plan 3). `ccrc install`'s `_inst_enable` arms neither. The families
     // are DERIVED from the templates the two installers place and the
     // repository ships, not typed, so this binds `claude-session@` and
-    // `ccgpt-usage@` alike, and any template added later.
+    // `ccrc-codex-usage@` alike, and any template added later — plus one family named below.
     const enabled = deployEnabled();
     expect(enabled.size,
       'the `systemctl … enable` extractor over deploy.sh found too few units — it has gone stale, unless deploy.sh really stopped enabling most of them')
       .toBeGreaterThan(ENABLE_FLOOR);
     // ...and every template unit file this repository SHIPS, placed or not
-    // (`git ls-files`, by basename): `ccgpt-usage@` ships in `deploy/systemd/`
-    // and no installer places it (F-1), because a live fleet box holds another
-    // repository's template at that name, and a deploy that armed one of its
-    // instances would arm THAT one.
+    // (`git ls-files`, by basename). PLUS ONE family no file here names any
+    // more: `ccgpt-usage@`, another repository's template on a live fleet box
+    // (FOREIGN_LIVE_BOX_UNIT_PREFIX, below). Until Plan 3a this repository
+    // shipped a pair under that name, so the derivation caught it. The rename
+    // to `ccrc-codex-usage@` (D-3717)
+    // would have dropped it silently, and a deploy that armed one of ITS
+    // instances would arm another tool's publisher.
     const shipped = [...trackedFiles()].map((f) => path.posix.basename(f)).filter(isTemplate);
     const templates = [...placedUnits(), ...deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS), ...shipped].filter(isTemplate);
     expect(templates.length,
       'neither installer places a template unit and the repository ships none, so the instance half of this case would check nothing — an extractor has gone stale')
       .toBeGreaterThan(0);
-    const families = [...new Set(templates.map((t) => t.slice(0, t.indexOf('@') + 1)))];
+    const families = [...new Set([...templates.map((t) => t.slice(0, t.indexOf('@') + 1)), FOREIGN_LIVE_BOX_UNIT_PREFIX])];
 
     expect([...enabled].filter((u) => isTemplate(u) || families.some((f) => u.startsWith(f))).sort(),
       `these \`systemctl … enable\` operands in ${DEPLOY_WHERE} are a template unit (\`name@.suffix\`) or an `
@@ -1617,6 +1625,15 @@ describe('neither installer ever writes a name another repository owns on the li
         + 'silently. Rename the destination.')
         .toEqual([]);
     }
+  });
+
+  it('ccrc\'s usage pair is placed under its OWN name, and nothing else of a usage family is (Plan 3a Task 6)', () => {
+    // The rename is what keeps the guard above green. A usage template placed
+    // under any other spelling, or a second one, is a decision to record here.
+    const usage = [...placedUnits()].filter((u) => isTemplate(u) && /usage@/.test(u)).sort();
+    expect(usage, 'the usage template _inst_units places is not ccrc\'s own pair')
+      .toEqual(['ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']);
+    expect(usage.filter((u) => u.startsWith(FOREIGN_LIVE_BOX_UNIT_PREFIX))).toEqual([]);
   });
 });
 
@@ -1782,6 +1799,13 @@ describe('every file `ccrc install` copies out of the tree rides the release tar
     for (const src of gated) {
       expect(sources, `${src} is placed behind _inst_bins' GPT-lane gate and the source census does not read it`)
         .toContain(src);
+    }
+    // Plan 3a Task 6: every TEMPLATE `_inst_units` places is copied out of a
+    // source this census read, so the tarball carries it. Derived from the
+    // placement, never typed: ccrc's usage pair today.
+    for (const t of [...placedUnits()].filter(isTemplate)) {
+      expect([...sources].some((s) => path.posix.basename(s) === t),
+        `${t} is placed by _inst_units and no tree source the release census read is that file`).toBe(true);
     }
   });
 });

@@ -148,7 +148,7 @@ def _required_env(name: str) -> str:
     `docs/superpowers/plans/2026-09-21-gpt-lane-ownership-2a-request-path.md`'s
     Task 10): an unnamed lane is
     an error, not lane one, because a template unit
-    (`ccgpt-usage@<id>.timer`) always names its instance, and a publisher
+    (`ccrc-codex-usage@<id>.timer`) always names its instance, and a publisher
     that guesses a lane when it is not told one can silently publish the
     wrong lane's row under an empty-string or missing id.
     """

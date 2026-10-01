@@ -516,6 +516,27 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     '      IFS= read -r bad < "$HOME/fixture-enable-fail"',
     '      [ "$3" = "$bad" ] && { echo "Failed to enable unit $3: fixture" >&2; exit 1; }',
     '    fi',
+    // Plan 3a Task 6: EVERY timer refused at once, except the one whose
+    // refusal is fatal, so one install measures every degrading enable.
+    '    if [ -f "$HOME/fixture-enable-fail-timers" ] && [ "$3" != ccd-cap-scopes.timer ]; then',
+    '      case "$3" in *.timer) echo "Failed to enable unit $3: fixture" >&2; exit 1 ;; esac',
+    '    fi',
+    // Plan 3a Task 6: an instance of ccrc's usage template is enabled the way
+    // systemd enables one, by its `timers.target.wants` link, so the doctor at
+    // the end of the SAME install reads what this step did (`enable-linger`'s
+    // causal chain, below). Only these instances: nothing reads another
+    // timer's link.
+    '    case "$3" in ccrc-codex-usage@*.timer)',
+    '      mkdir -p "$HOME/.config/systemd/user/timers.target.wants"',
+    '      ln -sfn "$HOME/.config/systemd/user/ccrc-codex-usage@.timer" "$HOME/.config/systemd/user/timers.target.wants/$3" ;;',
+    '    esac',
+    '    exit 0 ;;',
+    // Plan 3a Task 6: `_inst_codex_usage` withdraws a ccrc usage timer whose
+    // lane is no longer a codex lane. Recorded, answered, never a real one;
+    // the wants link goes as a manager's `disable` removes it.
+    '  disable)',
+    '    [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
+    '    rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$3"',
     '    exit 0 ;;',
     // `restart` is the line `_inst_enable` gained in fix round 1 — deploy's
     // own (deploy.sh:808-810), and the one that makes a re-run replace the
@@ -3996,8 +4017,12 @@ const UNIT_FILES: Array<[string, string]> = [
   // that is supposed to run them hourly.
   ['ccrc-models.service', 'deploy/systemd/ccrc-models.service'],
   ['ccrc-models.timer', 'deploy/systemd/ccrc-models.timer'],
-  // NOT the GPT-usage publisher's `ccgpt-usage@.{service,timer}`: no role
-  // places that pair (the dedicated case below says why, and pins it).
+  // Plan 3a Task 6: ccrc's OWN usage pair (D-3717),
+  // ROLE-GATED `!= server` like the pairs above it, Linux only. The template
+  // lands on every fleet/both box. Its INSTANCES are armed per codex lane by
+  // `_inst_codex_usage`, and this describe's roster has none, so none is.
+  ['ccrc-codex-usage@.service', 'deploy/systemd/ccrc-codex-usage@.service'],
+  ['ccrc-codex-usage@.timer', 'deploy/systemd/ccrc-codex-usage@.timer'],
   // The temp-dir reaper: ROLE-GATED on the same terms — a server box runs no
   // Claude Code sessions, so it has no /tmp/claude-<uid> to reap.
   ['ccd-tmp-sweep.service', 'deploy/systemd/ccd-tmp-sweep.service'],
@@ -4074,31 +4099,33 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     }
   });
 
-  itLinux('places NO ccgpt-usage@ unit file on any role — the pair ships in the tree and waits for Plan 3\'s cutover', () => {
-    // Final review F-1 (SEC-1 = FID-1). On a live fleet box
-    // `~/.config/systemd/user/ccgpt-usage@.service` and `@.timer` ALREADY
-    // EXIST, owned by another repository, with an instance enabled. Placing
-    // ours at those two names replaces a running timer's definition, so it
-    // is the cutover, and Plan 3 owns that (spec §15 step 3). This case pins
-    // `both` (the shared install above) and `fleet` (the role a Codex lane
-    // runs under); the `--role server` describe pins the third role. The
-    // files still SHIP: `_inst_tree` lands them in the placed tree.
-    const home = freshBox('ccrc-install-ccgpt-usage-fleet-');
-    // `--role fleet` reads the agent's URL and token from a tty when
-    // `~/.ccrc/agent.env` is absent; a box that already carries one (every
-    // re-install) skips that prompt.
+  itLinux('places ccrc\'s OWN usage pair on both and fleet, and still writes no ccgpt-usage@ name on any role (Plan 3a Task 6)', () => {
+    // 2b-1 item 13, rewritten deliberately. Until Plan 3a no role placed a
+    // usage pair at all (D-3172): its only name was another repository's live
+    // template on the fleet box (final review F-1). The pair now ships as
+    // `ccrc-codex-usage@` and lands on both and fleet. The foreign name is
+    // still never written, and with no codex lane rostered no instance is
+    // enabled, which is the live box's shape once this merges. The
+    // `--role server` describe pins the third role.
+    const home = freshBox('ccrc-install-codex-usage-fleet-');
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     writeFileSync(join(home, '.ccrc', 'agent.env'),
       'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
     const r = runInstall(home, ['install', '--role', 'fleet']);
     expect(r.code, r.stderr).toBe(0);
-    for (const [role, h] of [['both', units.home], ['fleet', home]] as const) {
-      for (const u of ['ccgpt-usage@.service', 'ccgpt-usage@.timer']) {
-        expect(existsSync(unitDir(h, u)), `--role ${role} placed ${u}`).toBe(false);
-        expect(existsSync(placed(h, 'deploy', 'systemd', u)), `--role ${role}: ${u} did not ship in the placed tree`)
-          .toBe(true);
+    for (const [role, h, out] of [['both', units.home, units.r.stdout], ['fleet', home, r.stdout]] as const) {
+      for (const u of ['ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']) {
+        expect(readFileSync(unitDir(h, u)), `--role ${role}: ${u} is not the placed tree's copy`)
+          .toEqual(readFileSync(placed(h, 'deploy', 'systemd', u)));
       }
-      expect(systemctlCalls(h).map((c) => c.argv).join('\n'), `--role ${role}`).not.toContain('ccgpt-usage');
+      expect(readdirSync(unitDir(h)).filter((n) => n.startsWith('ccgpt-usage')),
+        `--role ${role} wrote a name another repository owns on the live fleet box`).toEqual([]);
+      expect(existsSync(placed(h, 'deploy', 'systemd', 'ccgpt-usage@.service')),
+        'the old template name still ships in the placed tree').toBe(false);
+      const argv = systemctlCalls(h).map((c) => c.argv).join('\n');
+      expect(argv, `--role ${role}: a systemctl verb named another repository's unit`).not.toContain('ccgpt-usage');
+      expect(argv, `--role ${role}: an instance was armed on a roster with no codex lane`).not.toContain('ccrc-codex-usage@');
+      expect(out).toMatch(/^install: codex-usage: none — no codex lane in the roster$/m);
     }
   });
 
@@ -4130,14 +4157,22 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     const inst = runInstall(home, ['install', '--role', 'fleet']);
     expect(inst.code, inst.stderr).toBe(0);
     untouched('after install --role fleet');
+    // Plan 3a Task 6: ccrc's OWN pair lands BESIDE the foreign one, under its
+    // own name, and (below) leaves with uninstall while the foreign one stays.
+    for (const u of ['ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']) {
+      expect(existsSync(unitDir(home, u)), `install --role fleet did not place ccrc's own ${u} beside the foreign pair`).toBe(true);
+    }
     const un = runInstall(home, ['uninstall']);
     expect(un.code, `stderr: ${un.stderr}\nstdout: ${un.stdout}`).toBe(0);
     untouched('after uninstall');
+    for (const u of ['ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer']) {
+      expect(existsSync(unitDir(home, u)), `uninstall left ccrc's own ${u}`).toBe(false);
+    }
     expect(systemctlCalls(home).map((c) => c.argv).join('\n'), 'a systemctl verb named the foreign unit')
       .not.toContain('ccgpt-usage');
   });
 
-  it('ccgpt-usage@.service runs the isolated runtime\'s interpreter under -I, with the cost map local (D-3486)', () => {
+  it('ccrc-codex-usage@.service runs the isolated runtime\'s interpreter under -I, with the cost map local and a start bound (D-3486, Plan 3a Task 6)', () => {
     // D-3164, the half Plan 2b-2 owns: the publisher's shebang is `env
     // python3`, and on the operator's fleet box that python imports a
     // third-party litellm fork from user site-packages — a SILENT wrong
@@ -4145,9 +4180,9 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     // this case holds it there in two halves: the TEXT (one ExecStart, `-I`,
     // the cost map local, no PATH line) and the AGREEMENT — the interpreter the
     // unit names, resolved, is the one `ccgpt-runtime python` answers on a box
-    // that has a runtime. The pair is still placed by no installer (D-3172, the
-    // two cases above); this pins what Plan 3 will arm.
-    const unit = read(join(REPO, 'deploy', 'systemd', 'ccgpt-usage@.service'));
+    // that has a runtime. Plan 3a places the pair under ccrc's own name and arms
+    // one instance per codex lane (the cases above and the converge describe).
+    const unit = read(join(REPO, 'deploy', 'systemd', 'ccrc-codex-usage@.service'));
     const code = unit.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'));
     const execs = code.filter((l) => l.startsWith('ExecStart='));
     expect(execs, 'the unit must carry exactly one ExecStart').toHaveLength(1);
@@ -4162,6 +4197,21 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       .toEqual(['TimeoutStartSec=300']);
     expect(code.filter((l) => /^Environment=["']?PATH=/.test(l)), 'a PATH line cannot choose the interpreter (D-3164)')
       .toEqual([]);
+    // A oneshot has no start timeout by default, and its timer starts no
+    // second instance while one runs: a poll that hung would silence the
+    // lane's usage row for good. Bounded, and inside one timer cycle. Its
+    // count is Task 1's one exact pin above.
+    const bound = code.filter((l) => /^TimeoutStartSec=\d+$/.test(l));
+    const timer = read(join(REPO, 'deploy', 'systemd', 'ccrc-codex-usage@.timer'))
+      .split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'));
+    const cycle = timer.map((l) => /^OnUnitActiveSec=(\d+)min$/.exec(l)).find((m) => m !== null);
+    expect(cycle, 'the usage timer\'s OnUnitActiveSec is not spelled in minutes — this pin has gone stale').toBeDefined();
+    expect(Number(bound[0]!.slice('TimeoutStartSec='.length)), 'a poll may still be running when the next one is due')
+      .toBeLessThan(Number(cycle![1]) * 60);
+    // The converge, uninstall, account removal and doctor read ENABLEMENT as
+    // this target's wants link (D-3726):
+    // another target and every one of those readers goes blind.
+    expect(timer, 'the usage timer is no longer wanted by timers.target').toContain('WantedBy=timers.target');
 
     // The agreement half, in a fixture HOME only. The runtime is planted by
     // `codexLaneFixture.ts`' `plantFakeRuntime`, the one planter of the
@@ -4333,6 +4383,8 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(r.code, r.stderr).toBe(0);
     expect(r.stderr).toMatch(
       /^install: update-watchdog: could not enable ccrc-update-watchdog\.timer — run: systemctl --user enable --now ccrc-update-watchdog\.timer$/m);
+    expect(r.stdout, 'the closing line claims a convergence the watchdog timer never had')
+      .toMatch(/^install: done — converged with \d+ degraded steps? \([^)]*\bccrc-update-watchdog\.timer\b[^)]*\)$/m);
     expect(systemctlCalls(home).map((c) => c.argv)).toContain('--user restart ccrc.service');
   });
 
@@ -5809,13 +5861,14 @@ describe('ccrc install --role: the refusals and the default', () => {
     // graphify Task 10 (O3/O6b): the sweep pair is role-gated OUT on server —
     // it runs no per-tree AST sweep — while every unit this verb shipped
     // before this task still lands unchanged. C5: the models pair joins the
-    // same gate — a server box has no lanes to refresh. The ccgpt-usage@
-    // pair is placed on NO role (F-1), and its absence is asserted here too,
-    // for the third role.
+    // same gate — a server box has no lanes to refresh. Another repository's
+    // ccgpt-usage@ name is written on NO role (F-1), and ccrc's own usage pair
+    // is `!= server` (Plan 3a): both absences are asserted here, for the third
+    // role.
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
         || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
-        || dest.startsWith('ccd-tmp-sweep.')) continue;
+        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -5828,6 +5881,8 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(unitDir(home, 'ccrc-models.timer'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccgpt-usage@.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccgpt-usage@.timer'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccrc-codex-usage@.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccrc-codex-usage@.timer'))).toBe(false);
     // The temp-dir reaper: a server box runs no sessions, so no temp dir to reap.
     expect(existsSync(unitDir(home, 'ccd-tmp-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-tmp-sweep.timer'))).toBe(false);
@@ -5850,6 +5905,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-telemetry-keepalive');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-models');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccgpt-usage');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-codex-usage');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-tmp-sweep');
     // W4a Task 9: the watchdog is the SERVER's — its pair landed through the
     // UNIT_FILES loop above (not skipped there), and its timer is enabled.
@@ -7216,6 +7272,176 @@ describe('ccrc install: the codex tier restart step, measured in isolation (_ins
   });
 });
 
+/** `_inst_codex_usage` alone (Plan 3a Task 6). The converge, its six
+ *  `_codex_usage_*` reads, `_codex_shape`, `_codex_say` and
+ *  `_inst_enable_timer` come REAL out of ccd/ccrc; `_codex_lanes` is stubbed
+ *  by `lanesFn`. `systemctl` is a bash FUNCTION: it shadows the isolation
+ *  wall's binary, so every call the step makes lands in `$HOME/calls`, and a
+ *  call made any other way still reaches the wall. It answers
+ *  `enable --now` and `disable --now` as a manager does, by planting and
+ *  removing the timer's `timers.target.wants` link, so the converge's own
+ *  reads see its own acts. A unit listed in `refuse` is refused. `enabled`,
+ *  `foreign` and `flatForeign` plant links before the step runs. */
+function runUsageStep(c: {
+  lanes?: string[]; lanesRc?: number; role?: 'both' | 'fleet' | 'server'; os?: 'linux' | 'darwin';
+  enabled?: string[]; foreign?: string[]; flatForeign?: boolean; refuse?: string[];
+}): StepRun & { links: string[] } {
+  const home = mkTmp('ccrc-codex-usage-step-');
+  const units = join(home, '.config', 'systemd', 'user');
+  const wants = join(units, 'timers.target.wants');
+  mkdirSync(wants, { recursive: true });
+  const link = (name: string, template: string): void => symlinkSync(join(units, template), join(wants, name));
+  for (const id of c.enabled ?? []) link(`ccrc-codex-usage@${id}.timer`, 'ccrc-codex-usage@.timer');
+  for (const id of c.foreign ?? []) link(`ccgpt-usage@${id}.timer`, 'ccgpt-usage@.timer');
+  if (c.flatForeign === true) link('ccgpt-usage.timer', 'ccgpt-usage.timer');
+  writeFileSync(join(home, 'refuse'), (c.refuse ?? []).map((u) => `${u}\n`).join(''));
+  const r = runStepHarness(home, [
+    'set -uo pipefail',
+    'PROG=ccrc',
+    `INST_ROLE=${c.role ?? 'both'}`,
+    `CCD_OS=${c.os ?? 'linux'}`,
+    'BOX_UNIT_DIR="$HOME/.config/systemd/user"',
+    'INST_DEGRADED=()',
+    `. '${join(REPO, 'ccd', 'ccrc-wrapper-shape')}'`,
+    lanesFn(c.lanes ?? ['codex-a'], c.lanesRc ?? 0),
+    'systemctl() {',
+    '  printf \'systemctl %s\\n\' "$*" >> "$HOME/calls"',
+    '  { [ "${1:-}" = --user ] && [ "${3:-}" = --now ] && [ -n "${4:-}" ]; } || { echo "fixture systemctl: unexpected argv: $*" >&2; return 90; }',
+    '  if grep -qxF -- "$4" "$HOME/refuse"; then echo "Failed to $2 unit $4: fixture" >&2; return 1; fi',
+    '  case "$2" in',
+    '    enable) ln -sfn "$HOME/.config/systemd/user/${4%%@*}@.timer" "$HOME/.config/systemd/user/timers.target.wants/$4"; return 0 ;;',
+    '    disable) rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$4"; return 0 ;;',
+    '  esac',
+    '  echo "fixture systemctl: unexpected argv: $*" >&2; return 90',
+    '}',
+    ...['_codex_say', '_codex_shape', '_codex_usage_timer', '_codex_usage_foreign', '_codex_usage_wants',
+      '_codex_usage_enabled', '_codex_usage_enabled_ids', '_codex_usage_flat_foreign', '_inst_enable_timer',
+      '_inst_codex_usage'].map((f) => ccrcFunction(f)),
+    '_inst_codex_usage; rc=$?',
+    DEGRADED_OUT,
+    'exit "$rc"',
+  ].join('\n'));
+  return { ...r, links: readdirSync(wants).sort() };
+}
+
+describe('ccrc install: the codex usage converge, measured in isolation (_inst_codex_usage, Plan 3a Task 6)', () => {
+  const T = (id: string): string => `ccrc-codex-usage@${id}.timer`;
+  const EN = (id: string): string => `systemctl --user enable --now ${T(id)}`;
+  const DIS = (id: string): string => `systemctl --user disable --now ${T(id)}`;
+  const ctl = (r: StepRun): string[] => r.calls.filter((l) => l.startsWith('systemctl '));
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  it('a server-role box: silent, and the manager is never asked', () => {
+    const r = runUsageStep({ role: 'server', lanes: ['codex-a'], enabled: ['ext-a'] });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(ctl(r)).toEqual([]);
+    expect(r.links).toEqual([T('ext-a')]);
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('no codex lane and no ccrc timer enabled: one line, and the manager is never asked', () => {
+    const r = runUsageStep({ lanes: [] });
+    expect(r.stdout).toBe('install: codex-usage: none — no codex lane in the roster\n');
+    expect(ctl(r)).toEqual([]);
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('one timer per codex lane, in roster order, and none for any other id', () => {
+    const r = runUsageStep({ lanes: ['codex-a', 'codex-b'] });
+    expect(ctl(r)).toEqual([EN('codex-a'), EN('codex-b')]);
+    expect(r.links).toEqual([T('codex-a'), T('codex-b')]);
+    expect(r.degraded).toEqual([]);
+    expect(r.stdout).toBe('install: codex-usage: enabled for codex-a codex-b; withheld from no lane; withdrawn from no lane\n');
+  });
+
+  it('a ccrc timer whose id is no longer a codex lane is DISABLED first — a flip-back converges on the next install', () => {
+    const r = runUsageStep({ lanes: ['codex-a'], enabled: ['codex-a', 'ext-a'] });
+    expect(ctl(r)).toEqual([DIS('ext-a'), EN('codex-a')]);
+    expect(r.links).toEqual([T('codex-a')]);
+    expect(r.degraded).toEqual([]);
+    expect(r.stdout).toMatch(/; withdrawn from ext-a$/m);
+  });
+
+  it('the last codex lane gone: its timer is withdrawn, nothing is enabled, and the line says so', () => {
+    const r = runUsageStep({ lanes: [], enabled: ['codex-a'] });
+    expect(ctl(r)).toEqual([DIS('codex-a')]);
+    expect(r.links).toEqual([]);
+    expect(r.stdout).toBe('install: codex-usage: enabled for no lane; withheld from no lane; withdrawn from codex-a\n');
+  });
+
+  it('ANOTHER repository\'s timer enabled for a codex lane: ccrc\'s is withheld and withdrawn, the step degrades, and the foreign unit is never named to the manager (R6)', () => {
+    const r = runUsageStep({ lanes: ['codex-a', 'codex-b'], enabled: ['codex-a'], foreign: ['codex-a'] });
+    expect(ctl(r)).toEqual([DIS('codex-a'), EN('codex-b')]);
+    expect(ctl(r).join('\n'), 'the converge asked the manager about another repository\'s unit').not.toContain('ccgpt-usage');
+    expect(r.links, 'the foreign link was touched, or ccrc\'s was left beside it')
+      .toEqual(['ccgpt-usage@codex-a.timer', T('codex-b')]);
+    expect(r.degraded).toEqual(['codex-usage']);
+    expect(r.stdout).toMatch(/^install: codex-usage: NOT ENABLED for codex-a — another repository's ccgpt-usage@codex-a\.timer is enabled on this box, and two publishers would race this lane's ~\/\.cc-limits row\. ccrc never disables another tool's unit: once this lane's cutover retires it, run: systemctl --user disable --now ccgpt-usage@codex-a\.timer — then re-run: ccrc install$/m);
+    expect(r.stdout).toMatch(/^install: codex-usage: enabled for codex-b; withheld from codex-a; withdrawn from no lane$/m);
+  });
+
+  it('another repository\'s FLAT timer names no lane: said once, unattributed, and it blocks nothing', () => {
+    const r = runUsageStep({ lanes: ['codex-a'], flatForeign: true });
+    expect(ctl(r)).toEqual([EN('codex-a')]);
+    expect(r.degraded).toEqual([]);
+    expect(r.stdout).toMatch(/^install: codex-usage: note — another repository's ccgpt-usage\.timer is enabled on this box\. It names no lane, so ccrc cannot tell which lane's ~\/\.cc-limits row it writes; if it is one of codex-a, two publishers race that row\. ccrc leaves it alone; once no lane on this box relies on it, run: systemctl --user disable --now ccgpt-usage\.timer$/m);
+    expect(r.links).toContain('ccgpt-usage.timer');
+  });
+
+  it('on a box with no codex lane the foreign timers are not the converge\'s business at all — the live fleet box\'s shape after this merge', () => {
+    const r = runUsageStep({ lanes: [], foreign: ['ext-b'], flatForeign: true });
+    expect(r.stdout).toBe('install: codex-usage: none — no codex lane in the roster\n');
+    expect(ctl(r)).toEqual([]);
+    expect(r.links).toEqual(['ccgpt-usage.timer', 'ccgpt-usage@ext-b.timer']);
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('an unreadable roster is never "no codex lane": NOT CONVERGED, degraded, and a ccrc timer already on is NOT withdrawn', () => {
+    const r = runUsageStep({ lanesRc: 1, enabled: ['codex-a'] });
+    expect(ctl(r)).toEqual([]);
+    expect(r.links).toEqual([T('codex-a')]);
+    expect(r.degraded).toEqual(['codex-usage']);
+    expect(r.stdout).toMatch(/^install: codex-usage: NOT CONVERGED — \$HOME\/\.ccrc\/accounts\.json could not be read as a roster/m);
+  });
+
+  it('no jq (rc 2): the same refusal to act, in its own sentence', () => {
+    const r = runUsageStep({ lanesRc: 2, enabled: ['codex-a'] });
+    expect(ctl(r)).toEqual([]);
+    expect(r.links).toEqual([T('codex-a')]);
+    expect(r.degraded).toEqual(['codex-usage']);
+    expect(r.stdout).toMatch(/^install: codex-usage: NOT CONVERGED — jq is not on PATH/m);
+  });
+
+  it('an enable systemd refuses: the helper\'s line on stderr, and the degraded step is that unit', () => {
+    const r = runUsageStep({ lanes: ['codex-a', 'codex-b'], refuse: [T('codex-b')] });
+    expect(ctl(r)).toEqual([EN('codex-a'), EN('codex-b')]);
+    expect(r.degraded).toEqual([T('codex-b')]);
+    expect(r.stderr).toMatch(new RegExp(`^install: codex-usage: could not enable ${esc(T('codex-b'))} — run: systemctl --user enable --now ${esc(T('codex-b'))}$`, 'm'));
+    expect(r.stdout).toMatch(/^install: codex-usage: enabled for codex-a; withheld from no lane; withdrawn from no lane$/m);
+  });
+
+  it('a withdrawal systemd refuses: its own line, degraded, and the timer is still there to name', () => {
+    const r = runUsageStep({ lanes: [], enabled: ['ext-a'], refuse: [T('ext-a')] });
+    expect(r.degraded).toEqual(['codex-usage']);
+    expect(r.stderr).toMatch(/^install: codex-usage: could not disable ccrc-codex-usage@ext-a\.timer — account ext-a is no longer a codex lane, so its timer must not poll; run: systemctl --user disable --now ccrc-codex-usage@ext-a\.timer$/m);
+    expect(r.links).toEqual([T('ext-a')]);
+  });
+
+  it('forced Darwin: one not-applicable line naming the lanes, the manager never asked, and NOT a degraded step (R2)', () => {
+    const r = runUsageStep({ os: 'darwin', lanes: ['codex-a', 'codex-b'], enabled: ['ext-a'] });
+    expect(r.stdout).toBe('install: codex-usage: not applicable on macOS — ccrc places no launchd job for a codex lane\'s usage poller (decision 17: macOS is not centrally managed), so this box publishes no ~/.cc-limits row for: codex-a, codex-b\n');
+    expect(ctl(r)).toEqual([]);
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('forced Darwin with no codex lane: silent', () => {
+    const r = runUsageStep({ os: 'darwin', lanes: [] });
+    expect(r.stdout).toBe('');
+    expect(ctl(r)).toEqual([]);
+  });
+});
+
 describe('ccrc install: the codex runtime step on a real spine (Plan 2b-2 Task 10)', () => {
   it('the runtime template answers pip itself behind interpreter flags, and never hands pip to the box\'s real python (final review F4)', () => {
     // No spine: the template's own venv python, run directly. `--version` is
@@ -7476,4 +7702,78 @@ describeLinux('ccrc install: the codex tier restart step on a real spine (Plan 2
     expect(r.code).toBe(doctorCode(home));
     expect(await laneAnswer(lane.proxyPort)).toBeNull();
   }, 180_000);
+});
+
+describeLinux('ccrc install: the codex usage converge on a real spine (Plan 3a Task 6)', () => {
+  it('one usage timer per codex lane and none for an external lane; a re-run arms the same one again and nothing else', async () => {
+    const lanes = await freeLanes(['codex-a']);
+    const home = codexBox('ccrc-codex-usage-spine-', lanes);
+    // `ext-a`: the live lanes' shape (exec.kind external, telemetry codex), a fixture id.
+    codexRoster(home, lanes, [{ id: 'ext-a', label: 'ext-a', configDirSuffix: '.claude-ext-a',
+      exec: { kind: 'external', provider: 'openai' }, homeAble: false, telemetry: 'codex' }]);
+    const usage = (): string[] => systemctlCalls(home).map((c) => c.argv).filter((a) => a.includes('usage@'));
+    const r = runInstall(home);
+    expect(existsSync(dotCcrc(home, 'installed')), `${r.stdout}\n${r.stderr}`).toBe(true);
+    expect(usage()).toEqual(['--user enable --now ccrc-codex-usage@codex-a.timer']);
+    expect(lstatSync(unitDir(home, 'timers.target.wants', 'ccrc-codex-usage@codex-a.timer')).isSymbolicLink()).toBe(true);
+    expect(r.stdout).toMatch(/^install: codex-usage: enabled for codex-a; withheld from no lane; withdrawn from no lane$/m);
+    expect(r.code).toBe(doctorCode(home));
+    runInstall(home);
+    expect(usage(), 'a re-run did more than re-arm the same timer').toEqual([
+      '--user enable --now ccrc-codex-usage@codex-a.timer', '--user enable --now ccrc-codex-usage@codex-a.timer']);
+  }, 60_000);
+});
+
+describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step (Plan 3a Task 6; 2b-2 carry-forward 10)', () => {
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  /** The names the closing line gives, split on the `,` cmd_install joins with. */
+  const degradedNamed = (stdout: string): string[] => {
+    const m = /^install: done — converged with \d+ degraded steps? \(([^)]*)\)$/m.exec(stdout);
+    return m === null ? [] : m[1]!.split(',').map((s) => s.trim()).filter(Boolean);
+  };
+
+  it('every timer enable systemd refuses is NAMED in the closing line — derived from what the run asked, nine across both and fleet', () => {
+    // Until Plan 3a nine refusals printed a remedy and appended nothing, so
+    // the closing line said "every step above converged" over a timer that
+    // never armed. The expected set is what THIS run asked systemd to enable,
+    // never a list typed here, so a tenth timer is measured the day it lands.
+    const seen = new Set<string>();
+    for (const role of ['both', 'fleet'] as const) {
+      const home = freshBox(`ccrc-install-timer-degrades-${role}-`);
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'agent.env'),
+        'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+      writeFileSync(join(home, 'fixture-enable-fail-timers'), '');
+      const r = runInstall(home, ['install', '--role', role]);
+      expect(r.code, `--role ${role}: a refused timer failed the install\n${r.stderr}`).toBe(0);
+      const asked = [...new Set(systemctlCalls(home)
+        .map((c) => /^--user enable --now (\S+\.timer)$/.exec(c.argv)?.[1])
+        .filter((u): u is string => u !== undefined && u !== 'ccd-cap-scopes.timer'))].sort();
+      expect(asked.length, `--role ${role}: the run asked for too few timer enables — this harness has gone stale`)
+        .toBeGreaterThanOrEqual(7);
+      expect(degradedNamed(r.stdout).filter((n) => n.endsWith('.timer')).sort(),
+        `--role ${role}: the closing line does not name every timer systemd refused`).toEqual(asked);
+      for (const u of asked) {
+        expect(r.stderr, `--role ${role}: ${u}'s refusal carries no remedy line`)
+          .toMatch(new RegExp(`^install: [a-z-]+: could not enable ${esc(u)} — run: systemctl --user enable --now ${esc(u)}$`, 'm'));
+        seen.add(u);
+      }
+    }
+    expect(seen.size, 'both roles together reach fewer degrading timer enables than the nine measured on main at 1f9fa22d')
+      .toBeGreaterThanOrEqual(9);
+  }, 60_000);
+
+  it('every timer `_inst_enable` arms after ccd-cap-scopes goes through `_inst_enable_timer`, which counts its refusal', () => {
+    const body = ccrcFunction('_inst_enable');
+    const via = [...body.matchAll(/^ {2}\[ "\$INST_ROLE" !?= [a-z]+ \] \|\| _inst_enable_timer [a-z-]+ \S+\.timer$/gm)];
+    expect(via.length, 'fewer helper-routed timer enables than the nine on main — the reader has gone stale, or a timer left the helper')
+      .toBeGreaterThanOrEqual(9);
+    const code = body.split('\n').filter((l) => !/^\s*#/.test(l));
+    expect(code.filter((l) => /could not enable/.test(l)),
+      'a timer in _inst_enable still degrades through its own echo, outside the helper that counts it').toEqual([]);
+    expect(code.filter((l) => /systemctl --user enable --now [A-Za-z0-9@._-]+\.timer/.test(l)),
+      'a literal timer enable in _inst_enable bypasses _inst_enable_timer').toEqual([]);
+    expect(ccrcFunction('_inst_enable_timer'), 'the helper no longer counts the step it degrades')
+      .toMatch(/^ {2}INST_DEGRADED\+=\("\$2"\)$/m);
+  });
 });

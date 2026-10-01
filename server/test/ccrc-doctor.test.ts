@@ -1213,7 +1213,7 @@ function healthy(prefix: string): string {
 // ccrc-install.test.ts and pool-name-parity.test.ts — must not move.
 import {
   authDirOf, codexRoster, fakeUnit, freeLanes, GPT_LANE_BINS, killLaneProcesses, laneUnits, plantFakeRuntime,
-  plantLaneAuth, plantSystemd, portAccepts, spawnListener, systemdRunCalls,
+  plantCodexUsage, plantForeignUsage, plantLaneAuth, plantSystemd, portAccepts, spawnListener, systemdRunCalls,
   type LanePorts, type Listener, type ListenerAnswer,
 } from './codexLaneFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
@@ -1367,6 +1367,7 @@ async function healthyCodexBox(prefix: string, ids: readonly string[] = ['codex-
     plantLaneAuth(home, id);
     writeLaneModels(home, id);
     renderLane(home, id);
+    plantCodexUsage(home, id);
     // materialise wrote `<cfgDir>/settings.json`, so the home now EXISTS, and
     // `skills` measures every existing rostered home: it carries the shipped
     // skills, as `ccrc install` leaves it.
@@ -9178,11 +9179,15 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     const r = runDoctor(home);
     // Plan 3a Task 5 widened each lane's words with its tiers (a lane is
     // lazy: none running is healthy).
-    expect(codexVerdicts(r.stdout), r.stdout).toEqual([
-      `PASS codex: 1 Codex lane(s): codex-a (ports ${proxyPort}/${litellmPort}, signed in, lane.json current, `
-      + `LiteLLM config current; tiers: none running (a lane is lazy)); runtime ${currentGen(home)} litellm=1.101.0; `
-      + 'the four GPT-lane executables match the shipped tree',
-    ]);
+    // Plan 3a Task 6: each lane's words end with its usage rows. On Linux they
+    // are the timer enabled and the row's age, which moves, so this is a
+    // pattern; on macOS they are the two stated not-applicables.
+    const rx = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const usage = IS_DARWIN ? rx('; usage timer not applicable on macOS') : '; ccrc-codex-usage@codex-a\\.timer enabled; usage row \\d+s old';
+    const box = IS_DARWIN ? rx('; usage publishing not applicable on macOS — ccrc places no launchd job for it (decision 17)') : '';
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(new RegExp(
+      `^${rx(`PASS codex: 1 Codex lane(s): codex-a (ports ${proxyPort}/${litellmPort}, signed in, lane.json current, LiteLLM config current; tiers: none running (a lane is lazy)`)}`
+      + `${usage}${rx(`); runtime ${currentGen(home)} litellm=1.101.0; the four GPT-lane executables match the shipped tree`)}${box}$`))]);
     noRunnerBugLine(r.stdout, 'codex');
     expect(r.code, r.stdout).toBe(0);
   });
@@ -9669,4 +9674,180 @@ describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stal
       await new Promise<void>((res) => { srv.close(() => res()); });
     }
   }, 90_000);   // above runDoctorBounded's own 60 s deadline, so that deadline is what reds
+});
+
+// ── Plan 3a Task 6: `_check_codex`'s usage rows, measured in isolation ────
+/** ccd/ccrc and this check file SOURCED into one shell. ccrc's dispatch is
+ *  guarded by `BASH_SOURCE[0] == $0`, so sourcing runs nothing. The shell
+ *  runs under this file's contained PATH, in a fixture HOME. `darwin` sets
+ *  OSTYPE, from which ccrc recomputes CCD_OS at source time. A recording
+ *  `systemctl` stub is planted, so a row that asked the manager anything is
+ *  caught: these rows read the manager's own links and must never ask it. */
+function usageRows(home: string, darwin = false, script?: string): Result & { asked: string[] } {
+  stub(home, 'systemctl', 'printf \'%s\\n\' "$*" >> "$HOME/usage-rows-systemctl"; exit 97');
+  // The rows RECORD through `_check_codex`'s `_dr_cx_warn` (Task 4). A bare
+  // shell gives them the three arrays, and `_dr_cx_report` prints what they recorded.
+  const body = script ?? [
+    'DRX_CLASS=(); DRX_WHAT=(); DRX_FIX=()',
+    '_dr_codex_usage_box; b=$?',
+    '_dr_codex_usage codex-a; l=$?',
+    'printf "rc=%s,%s\\npair=%s\\nbox-note=%s\\nnote=%s\\n" "$b" "$l" "${DR_CODEX_USAGE_PAIR:-}" "$DR_CODEX_USAGE_BOX_NOTE" "$DR_CODEX_USAGE_NOTE"',
+    '_dr_cx_report "usage rows measured"; :',
+  ].join('\n');
+  // BOUNDED BY THE PROCESS GROUP (Plan 3a ruling F8), as `runDoctorBounded`
+  // above is: `spawnSync`'s own `timeout` signals only `bash`, and a `jq`
+  // blocked on a FIFO inside a `$(…)` (Step 8's W6 mutation) would outlive the
+  // run. GNU `timeout -k` signals the whole group, so no reader survives the
+  // census. With no usable deadline binary only the FIFO case can block, and
+  // that case is skipped.
+  const src = `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\n${body}`;
+  const env = { ...doctorEnv(home), ...(darwin ? { OSTYPE: 'darwin23' } : {}) };
+  const r = DOCTOR_DEADLINE_BIN === null
+    ? spawnSync(BASH, ['-c', src], { env, encoding: 'utf8', timeout: 20_000 })
+    : spawnSync(DOCTOR_DEADLINE_BIN, ['-k', '1', '20', BASH, '-c', src], { env, encoding: 'utf8' });
+  const f = join(home, 'usage-rows-systemctl');
+  return {
+    code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '',
+    asked: existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean) : [],
+  };
+}
+
+/** A fixture HOME in the shape these rows read:
+ *  - the codex lane rostered, with pure-parse ports (nothing here opens a socket);
+ *  - the usage pair as `ccrc install` leaves it.
+ *  Each case breaks exactly one thing. */
+function usageBox(prefix: string, o: Parameters<typeof plantCodexUsage>[2] = {}): string {
+  const home = mkTmp(prefix);
+  containedPath(home);
+  stubNode(home, 'v22.20.0');
+  for (const b of ['jq', 'date', 'stat']) linkReal(home, b);
+  codexRoster(home, [{ id: 'codex-a', proxyPort: 45010, litellmPort: 45011 }]);
+  plantCodexUsage(home, 'codex-a', o);
+  return home;
+}
+
+// LINUX ONLY: on a macOS host bash's own OSTYPE is darwin*, so ccrc computes
+// CCD_OS=darwin at source time and every row below would answer
+// not-applicable. The forced-Darwin, unloaded and threshold cases need no
+// host, and sit in the describe after this one.
+describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Plan 3a Task 6)', () => {
+  const T = 'ccrc-codex-usage@codex-a.timer';
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const warns = (out: string): string[] => out.split('\n').filter((l) => l.startsWith('WARN codex: '));
+
+  it('placed, enabled and fresh: no WARN, a note naming what was measured, and the manager never asked', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-healthy-'));
+    expect(r.code, r.stderr).toBe(0);
+    expect(warns(r.stdout), r.stdout).toEqual([]);
+    expect(r.stdout).toMatch(/^rc=0,0$/m);
+    expect(r.stdout).toMatch(new RegExp(`^note=${esc(T)} enabled; usage row \\d+s old$`, 'm'));
+    expect(r.asked, 'a usage row asked the user manager').toEqual([]);
+  });
+
+  it('the pair not installed: ONE box-level WARN naming ccrc install, and no per-lane "not enabled" echo of it', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-nopair-', { pair: false, enabled: false }));
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: ccrc's usage unit pair is not installed \(ccrc-codex-usage@\.service ccrc-codex-usage@\.timer absent from .*\), so no codex lane on this box publishes its ~\/\.cc-limits row$/)]);
+    expect(r.stdout).toMatch(/^ {2}remedy: ccrc install — it places the pair and enables one usage timer per codex lane$/m);
+    expect(r.stdout).toMatch(/^rc=2,0$/m);
+    expect(r.stdout).toMatch(/^pair=missing$/m);
+  });
+
+  it('the lane\'s timer not enabled: WARN, remedy ccrc install (D-3721)', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-disabled-', { enabled: false }));
+    expect(warns(r.stdout)).toEqual([`WARN codex: codex-a: ${T} is not enabled, so this lane's ~/.cc-limits usage row is never refreshed`]);
+    expect(r.stdout).toMatch(/^ {2}remedy: ccrc install — its converge enables one usage timer per codex lane$/m);
+    expect(r.stdout).toMatch(/^rc=0,2$/m);
+  });
+
+  it('ANOTHER repository\'s timer enabled for the same lane: one WARN naming it, remedy the operator\'s own disable, and a stale row is not judged — ccrc is not its writer (R6)', () => {
+    const home = usageBox('ccrc-doctor-usage-second-writer-', { ageS: 99_999 });
+    plantForeignUsage(home, 'codex-a');
+    const r = usageRows(home);
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: another repository's ccgpt-usage@codex-a\.timer is enabled, so two publishers would race this lane's ~\/\.cc-limits row and two token refreshes its OAuth directory — ccrc withholds its own ccrc-codex-usage@codex-a\.timer while it stands$/)]);
+    expect(r.stdout).toMatch(/^ {2}remedy: once this lane's cutover no longer needs it, disable it yourself: systemctl --user disable --now ccgpt-usage@codex-a\.timer, then run: ccrc install — ccrc never disables another tool's unit$/m);
+    expect(r.asked).toEqual([]);
+  });
+
+  it('another repository\'s FLAT timer: a box-level WARN that it cannot be attributed, never a lane\'s', () => {
+    const home = usageBox('ccrc-doctor-usage-flat-');
+    plantForeignUsage(home, null);
+    const r = usageRows(home);
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: another repository's ccgpt-usage\.timer is enabled on this box; it names no lane, so ccrc cannot tell whether it is a second publisher of a codex lane's ~\/\.cc-limits row$/)]);
+    expect(r.stdout).toMatch(/^rc=2,0$/m);
+  });
+
+  it('a row older than three polls: WARN naming its age and the publisher\'s log', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-stale-', { ageS: 2701 }));
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: its usage row was last written 45 min ago — more than three of ccrc-codex-usage@codex-a\.timer's polls$/)]);
+    expect(r.stdout).toMatch(/^ {2}remedy: read what the publisher says: journalctl --user -u ccrc-codex-usage@codex-a\.service -n 50$/m);
+  });
+
+  it('no row yet, the timer enabled moments ago: no WARN, and the note says why', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-norow-fresh-', { row: false }));
+    expect(warns(r.stdout)).toEqual([]);
+    expect(r.stdout).toMatch(/^note=.*no usage row yet \(enabled \d+s ago; the first poll runs five minutes after enable\)/m);
+  });
+
+  it('no row, and the timer enabled longer than three polls ago: WARN — this lane has never published', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-norow-old-', { row: false, linkAgeS: 2701 }));
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: ccrc-codex-usage@codex-a\.timer has been enabled for longer than 45 min and this lane has never published a usage row \(.*\/\.cc-limits\/codex-a\.json\)$/)]);
+  });
+
+  // Under W6's mutation the row's `jq` blocks on this FIFO, and `usageRows`'
+  // process-group bound ends it, exit 124, with no reader left behind (F8).
+  it.skipIf(DOCTOR_DEADLINE_BIN === null)('a FIFO at the row\'s path is a WARN, never a hang', () => {
+    const home = usageBox('ccrc-doctor-usage-fifo-', { row: false });
+    mkdirSync(join(home, '.cc-limits'), { recursive: true });
+    expect(spawnSync('mkfifo', [join(home, '.cc-limits', 'codex-a.json')]).status).toBe(0);
+    const r = usageRows(home);
+    expect(r.code, 'the rows blocked on a FIFO (exit 124: ended at the 20 s process-group bound)').toBe(0);
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: .*\/\.cc-limits\/codex-a\.json is not a regular file, so this lane's usage row cannot be read$/)]);
+  }, 40_000);
+
+  it('a row with no numeric ts: WARN, its age unmeasured', () => {
+    const home = usageBox('ccrc-doctor-usage-nots-', { row: false });
+    mkdirSync(join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(join(home, '.cc-limits', 'codex-a.json'), '{"five":null,"seven":12}');
+    const r = usageRows(home);
+    expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: .*codex-a\.json carries no numeric ts, so its age cannot be measured$/)]);
+  });
+
+  itCodex('wired into _check_codex on a doctor-clean codex box: a second writer turns its PASS into a WARN on the check\'s own name', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-usage-e2e-');   // Task 4's fixture, extended by Step 3b
+    expect(lineFor(runDoctor(home).stdout, 'codex'), 'the doctor-clean codex box no longer PASSes codex')
+      .toMatch(/^PASS codex: .*ccrc-codex-usage@codex-a\.timer enabled/);
+    plantForeignUsage(home, 'codex-a');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN codex: codex-a: another repository's ccgpt-usage@codex-a\.timer is enabled/m);
+    expect(r.stdout).not.toMatch(/^PASS codex: /m);
+  });
+});
+
+// The rows that need no host: forced Darwin (OSTYPE is set, so ccrc computes
+// CCD_OS=darwin on any host), the unloaded reader, and the threshold pin.
+describe('ccrc doctor: codex — the usage rows, on any host (Plan 3a Task 6)', () => {
+  const warns = (out: string): string[] => out.split('\n').filter((l) => l.startsWith('WARN codex: '));
+
+  it('forced Darwin: every row not applicable — no WARN with nothing planted, and the notes say why (R2)', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-darwin-', { pair: false, enabled: false, row: false }), true);
+    expect(warns(r.stdout), r.stdout).toEqual([]);
+    expect(r.stdout).toMatch(/^rc=0,0$/m);
+    expect(r.stdout).toMatch(/^box-note=usage publishing not applicable on macOS — ccrc places no launchd job for it \(decision 17\)$/m);
+    expect(r.stdout).toMatch(/^note=usage timer not applicable on macOS$/m);
+  });
+
+  it('sourced without ccrc, the rows FAIL naming the bug, rather than reading a function that does not exist', () => {
+    const home = usageBox('ccrc-doctor-usage-unloaded-');
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail\n. ${shq(CHECKS_SRC)}\n_dr_codex_usage_box; echo "rc=$?"`],
+      { env: doctorEnv(home), encoding: 'utf8' });
+    expect(r.stdout).toMatch(/^FAIL codex: ccrc's own usage-timer reader is not loaded/m);
+    expect(r.stdout).toMatch(/^rc=1$/m);
+  });
+
+  it('the staleness threshold covers three of the shipped timer\'s cycles', () => {
+    const r = spawnSync(BASH, ['-c', `. ${shq(CHECKS_SRC)}; printf '%s' "$_DR_CODEX_USAGE_STALE_S"`], { encoding: 'utf8' });
+    const m = /^OnUnitActiveSec=(\d+)min$/m.exec(readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-codex-usage@.timer'), 'utf8'));
+    expect(m, 'the usage timer\'s cadence is not spelled in minutes — this pin has gone stale').not.toBeNull();
+    expect(Number(r.stdout), 'a row one missed poll old would read as stale').toBeGreaterThanOrEqual(3 * Number(m![1]) * 60);
+  });
 });

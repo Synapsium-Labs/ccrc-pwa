@@ -397,6 +397,9 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     'case "$1" in',
     '  daemon-reload) exit 0 ;;',
     '  enable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
+    // Plan 3a Task 6: the usage converge (`_inst_enable`) may withdraw a ccrc
+    // usage timer; recorded and answered here, never a real manager.
+    '  disable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
     '  restart) [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
     '  try-restart) [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     // Task 2 (§18 "the lock closes before the sweep": "a lingering stub

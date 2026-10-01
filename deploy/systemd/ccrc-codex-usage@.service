@@ -1,0 +1,37 @@
+[Unit]
+Description=ccrc Codex-lane usage window publisher for %i
+[Service]
+Type=oneshot
+Environment=CCGPT_ACCOUNT_ID=%i
+# D-3486, closing D-3164's half that Plan 2b-2 owns: the isolated
+# runtime's own interpreter, never `env python3`. On the operator's fleet box
+# `python3` imports a third-party litellm fork from user site-packages, so the
+# shebang's interpreter fails SILENTLY there, and on a box without one it
+# fails with ImportError. `ccgpt-runtime` owns ~/.ccrc/runtime/codex/, and
+# `current` is the generation it last probed. Through `current`, not the
+# resolved generation the long-running tiers use: a oneshot resolves the link
+# afresh on every poll, and the builder's prune keeps current plus one previous
+# generation, so a poll that overlaps a swap keeps its files. `-I`, so no
+# PYTHONPATH, PYTHONHOME or user site puts another litellm in front of the
+# runtime's. Never a PATH line: %h/.local/bin holds no python.
+# The cost map stays local (D-3484): without it, `import litellm`
+# fetches a mutable remote JSON, with retries, on every poll.
+Environment=LITELLM_LOCAL_MODEL_COST_MAP=True
+# A oneshot has NO start timeout by default (systemd.service(5), TimeoutStartSec=:
+# "except when Type=oneshot is used, in which case the timeout is disabled"),
+# and while this unit runs its timer starts no second instance — so a poll that
+# hung would silence this lane's usage row for good. One poll is a token
+# refresh plus one request the publisher bounds at 30 s; the device-code flow,
+# the one path that waits for minutes, is refused in-process before it writes
+# anything (Plan 3a Task 1). Task 1's 300 s, `ccrc-models.service`'s own
+# bound, is that with room, and inside one timer cycle; on expiry systemd
+# stops this cgroup and the next tick polls.
+TimeoutStartSec=300
+ExecStart=%h/.ccrc/runtime/codex/current/bin/python -I %h/.local/bin/ccgpt-usage.py
+# ccrc's OWN name, never `ccgpt-usage@`: on a live fleet box that template is
+# another repository's, with an instance enabled, and placing ours there would
+# rewrite a running timer's definition on the next update
+# (D-3717). `_inst_units` places this
+# pair on fleet/both, Linux only; `_inst_enable`'s converge enables one instance
+# per codex lane. The publisher reads ~/.ccrc/codex/%i/lane.json for everything
+# else, so no path is re-derived here from a naming convention (spec §5.4).

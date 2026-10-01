@@ -5655,6 +5655,131 @@ _check_models() {
   _dr_pass models "$n $plural, $(_dr_join "${ok[@]}")"
 }
 
+# ── `_check_codex`'s usage rows (Plan 3a Task 6; spec §12; rulings R2, R6) ──
+# THREE findings, each its own sentence with its own remedy. Each is RECORDED
+# through `_check_codex`'s `_dr_cx_warn` (Task 4) and printed by its
+# `_dr_cx_report`, never here. They are two of §12's three usage rows, plus
+# the second writer R6 adds. §12's third, a probe model absent from the
+# catalogue, is Task 4's `_dr_cx_lane` row, said once:
+#   - ccrc's usage pair not installed, or a lane's instance not enabled: WARN,
+#     remedy `ccrc install`, the converge that enables it
+#     (D-3721: `cmd_doctor` runs a fixer on a
+#     FAIL only, D-3113's one contract, and a stopped poller is a WARN);
+#   - another repository's usage timer enabled for this lane: WARN, remedy the
+#     operator's own disable — ccrc never disables another tool's unit, and the
+#     converge withholds ccrc's own instance while it stands. The FLAT, id-less
+#     one names no lane, so it is reported once, as unattributable;
+#   - the lane's usage row stale, never published, or unreadable: WARN.
+# "Enabled" is ccrc's own reading of the manager's links (`_codex_usage_enabled`
+# in ccrc, D-3726), the one the
+# converge acts on. No systemctl call: nothing here needs the user bus.
+# NOT APPLICABLE ON macOS, and said so, never a WARN: ccrc places no launchd job
+# for the poller (decision 17), so a WARN there would stand on every macOS codex
+# lane for ever — the noise `_inst_linger_darwin`'s doctrine refuses
+# (D-3720).
+# The usage row is read only after a regular-file test (a FIFO at that path
+# blocks a read — F2's class, `_check_models`), and nothing here opens an OAuth
+# file.
+# THREE of the timer's 15-minute cycles: one missed poll is not a finding.
+# `ccrc-doctor.test.ts` ties this to the shipped timer's `OnUnitActiveSec=`.
+_DR_CODEX_USAGE_STALE_S=2700
+
+_dr_codex_usage_box() {   # -> WARN findings, recorded; rc 2 if any, else 0; sets DR_CODEX_USAGE_PAIR and DR_CODEX_USAGE_BOX_NOTE
+  local u rc=0
+  local -a missing=()
+  DR_CODEX_USAGE_PAIR=present; DR_CODEX_USAGE_BOX_NOTE=''
+  if ! declare -F _codex_usage_enabled >/dev/null 2>&1; then
+    _dr_fail codex "ccrc's own usage-timer reader is not loaded, so no codex lane's usage timer was measured" \
+      "this is a bug in ccrc, not a fact about your box — _check_codex calls _codex_usage_enabled, declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    DR_CODEX_USAGE_BOX_NOTE="usage publishing not applicable on macOS — ccrc places no launchd job for it (decision 17)"
+    return 0
+  fi
+  for u in ccrc-codex-usage@.service ccrc-codex-usage@.timer; do
+    [ -f "$CCRC_UNIT_DIR/$u" ] || missing+=("$u")
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    DR_CODEX_USAGE_PAIR=missing
+    _dr_cx_warn "ccrc's usage unit pair is not installed (${missing[*]} absent from $CCRC_UNIT_DIR), so no codex lane on this box publishes its ~/.cc-limits row" \
+      "ccrc install — it places the pair and enables one usage timer per codex lane"
+    rc=2
+  fi
+  if _codex_usage_flat_foreign; then
+    _dr_cx_warn "another repository's ccgpt-usage.timer is enabled on this box; it names no lane, so ccrc cannot tell whether it is a second publisher of a codex lane's ~/.cc-limits row" \
+      "if it publishes for a codex lane, disable it yourself: systemctl --user disable --now ccgpt-usage.timer — ccrc never disables another tool's unit"
+    rc=2
+  fi
+  return "$rc"
+}
+
+_dr_codex_usage() {   # <id> -> WARN findings for this lane, recorded; rc 2 if any, else 0; sets DR_CODEX_USAGE_NOTE
+  local id="$1" rc=0 t f row now en ts age
+  local -a note=()
+  DR_CODEX_USAGE_NOTE=''
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    DR_CODEX_USAGE_NOTE="usage timer not applicable on macOS"
+    return 0
+  fi
+  t="$(_codex_usage_timer "$id")"; f="$(_codex_usage_foreign "$id")"
+  # (1) WHO publishes this lane's row.
+  if _codex_usage_enabled "$f"; then
+    _dr_cx_warn "$id: another repository's $f is enabled, so two publishers would race this lane's ~/.cc-limits row and two token refreshes its OAuth directory — ccrc withholds its own $t while it stands" \
+      "once this lane's cutover no longer needs it, disable it yourself: systemctl --user disable --now $f, then run: ccrc install — ccrc never disables another tool's unit"
+    rc=2
+  elif _codex_usage_enabled "$t"; then
+    note+=("$t enabled")
+  elif [ "${DR_CODEX_USAGE_PAIR:-present}" = present ]; then
+    _dr_cx_warn "$id: $t is not enabled, so this lane's ~/.cc-limits usage row is never refreshed" \
+      "ccrc install — its converge enables one usage timer per codex lane"
+    rc=2
+  fi
+  # (2) THE ROW, judged only when ccrc's timer is its writer.
+  if _codex_usage_enabled "$t" && ! _codex_usage_enabled "$f"; then
+    row="$HOME/.cc-limits/$id.json"
+    if ! now="$(date +%s 2>/dev/null)" || ! [[ "$now" =~ ^[0-9]+$ ]]; then
+      _dr_cx_warn "$id: this box's \`date\` cannot answer +%s, so the age of this lane's usage row cannot be measured" \
+        "install a working GNU/BSD date — every age-based check in this file needs it"
+      rc=2
+    elif [ ! -e "$row" ] && [ ! -L "$row" ]; then
+      en="$(_plat_mtime "$(_codex_usage_wants)/$t" 2>/dev/null)" || en=''
+      if [[ "$en" =~ ^[0-9]+$ ]] && [ $((now - en)) -le "$_DR_CODEX_USAGE_STALE_S" ]; then
+        note+=("no usage row yet (enabled $((now - en))s ago; the first poll runs five minutes after enable)")
+      else
+        _dr_cx_warn "$id: $t has been enabled for longer than $((_DR_CODEX_USAGE_STALE_S / 60)) min and this lane has never published a usage row ($row)" \
+          "read what the publisher says: $(_dr_log_hint "ccrc-codex-usage@$id.service")"
+        rc=2
+      fi
+    elif [ ! -f "$row" ]; then
+      _dr_cx_warn "$id: $row is not a regular file, so this lane's usage row cannot be read" \
+        "move it aside; the next poll writes a regular file there"
+      rc=2
+    else
+      ts="$(jq -r 'if type == "object" and (.ts | type) == "number" then (.ts | floor | tostring) else empty end' "$row" 2>/dev/null)" || ts=''
+      if ! [[ "$ts" =~ ^[0-9]+$ ]]; then
+        _dr_cx_warn "$id: $row carries no numeric ts, so its age cannot be measured" \
+          "move it aside; the next poll rewrites it — and read what the publisher says: $(_dr_log_hint "ccrc-codex-usage@$id.service")"
+        rc=2
+      else
+        age=$((now - ts))
+        if [ "$age" -gt "$_DR_CODEX_USAGE_STALE_S" ]; then
+          _dr_cx_warn "$id: its usage row was last written $((age / 60)) min ago — more than three of $t's polls" \
+            "read what the publisher says: $(_dr_log_hint "ccrc-codex-usage@$id.service")"
+          rc=2
+        else
+          note+=("usage row ${age}s old")
+        fi
+      fi
+    fi
+  fi
+  # (3) THE PROBE MODEL is not measured here. Task 4's `_dr_cx_lane` owns
+  # both of its rows (haiku unassigned, haiku retired from the catalogue)
+  # through models-op's `show`, and a second copy would print each twice.
+  DR_CODEX_USAGE_NOTE="$(_dr_join ${note[@]+"${note[@]}"})"
+  return "$rc"
+}
+
 # ── codex: the ccrc-owned Codex lanes on this box, measured end to end ────
 # Spec §12 (Plan 3a Tasks 4 and 5). ONE check, every Codex lane, and every
 # finding on its OWN line with its OWN remedy — FAIL lines first, then WARN
@@ -5757,9 +5882,13 @@ _check_codex() {
   local -A owner=()
   local DRX_RUNTIME='' DRX_LANE_WORDS='' DRX_TIER_WORDS='' models=1 p
   local DRX_LIVE=0 DRX_UNASKED=0 DRX_UNASKED_SID=''
+  local DR_CODEX_USAGE_PAIR=present DR_CODEX_USAGE_BOX_NOTE='' DR_CODEX_USAGE_NOTE=''
   if [ "${#lanes[@]}" -gt 0 ]; then
     _dr_cx_bins
     _dr_cx_runtime
+    # Plan 3a Task 6: the box-level usage rows, once. A reader that is not
+    # loaded is its own FAIL, already printed: stop there.
+    _dr_codex_usage_box; [ "$?" -ne 1 ] || return 1
     if ! command -v node >/dev/null 2>&1; then
       models=0
       _dr_cx_fail "node is not on PATH, so no Codex lane's class registry, lane.json or LiteLLM config could be measured against its catalogue" \
@@ -5794,14 +5923,15 @@ _check_codex() {
       _dr_cx_member "$id" ${bad[@]+"${bad[@]}"} && continue
       _dr_cx_lane "$id" "$models" "$roster"
       _dr_cx_tiers "$id"
-      DRX_OK+=("$id ($DRX_LANE_WORDS; $DRX_TIER_WORDS)")
+      _dr_codex_usage "$id"
+      DRX_OK+=("$id ($DRX_LANE_WORDS; $DRX_TIER_WORDS${DR_CODEX_USAGE_NOTE:+; $DR_CODEX_USAGE_NOTE})")
     done
   fi
   for n in ${left[@]+"${left[@]}"}; do
     _dr_cx_warn "lane state is left under $root/$n, and '$n' is not a Codex lane in \$HOME/.ccrc/accounts.json — a flip back to another launcher keeps it on purpose, and nothing of ccrc's reads it while '$n' is not a Codex lane" \
       "if the flip back is final and ccrc runs nothing for '$n' any more (its tiers were stopped with 'ccrc codex stop $n' before the flip), remove $root/$n by hand; ccrc never deletes a lane's state on a flip"
   done
-  _dr_cx_report "${#lanes[@]} Codex lane(s): $(_dr_cx_join ', ' ${DRX_OK[@]+"${DRX_OK[@]}"}); runtime ${DRX_RUNTIME:-unmeasured}; the four GPT-lane executables match the shipped tree"
+  _dr_cx_report "${#lanes[@]} Codex lane(s): $(_dr_cx_join ', ' ${DRX_OK[@]+"${DRX_OK[@]}"}); runtime ${DRX_RUNTIME:-unmeasured}; the four GPT-lane executables match the shipped tree${DR_CODEX_USAGE_BOX_NOTE:+; $DR_CODEX_USAGE_BOX_NOTE}"
 }
 
 # `_check_codex`'s findings, recorded into the caller's DRX_CLASS/DRX_WHAT/
