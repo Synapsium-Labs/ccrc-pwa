@@ -4202,20 +4202,20 @@ export class FleetWatcher {
           ? await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, d.toId, identity.uuid, live)
           : null;
         const turn = mailTurnIdle(live, mark, now, isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS, mode);
-        // THE GATE TOKEN DOES NOT FORK, deliberately (D-1167). `MailGate`'s own
+        // THE QUIET THRESHOLD DOES NOT FORK `not-quiet`, deliberately (D-1167). `MailGate`'s own
         // docstring sets the rule — one member per CONDITION, not per `continue`
         // — and `no-pane`/`no-config-dir` were split because an operator acts on
-        // them differently. Here the condition is the same one ("this session has
-        // not been quiet long enough") and so is the act (wait). The union is
+        // them differently. A coordinator's longer quiet time is the same condition ("this session
+        // has not been quiet long enough") and the same act (wait). The union is
         // also explicitly NOT a scheduling input: it exists so a human can tell
         // waiting from wedged, and both thresholds are waiting. A
         // `coord-not-quiet` member would cost a union entry, a total-map entry in
         // `shared/api.ts` and a phrase in `MailStrip.tsx` to record a distinction
-        // nobody acts on.
+        // nobody acts on. Three tokens follow: `turn-mark-unreadable`, then `not-idle` or `not-quiet`.
         //
-        // Both tokens are spelled as LITERALS in a ternary on purpose. The D-792
-        // structure scan (`mail-sweep.test.ts`) counts a gate only where its name
-        // is written at the call, so `gated(d, turn.gate)` would leave both with
+        // Every token is spelled as a LITERAL at its call on purpose (`not-idle` and `not-quiet` in
+        // one ternary). The D-792 structure scan (`mail-sweep.test.ts`) counts a gate only where its
+        // name is written at the call, so `gated(d, turn.gate)` would leave them with
         // no call site it can see.
         if (!turn.deliver) {
           // A THIRD token, and a different condition: the turn marker could not

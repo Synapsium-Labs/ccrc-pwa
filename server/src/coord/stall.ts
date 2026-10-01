@@ -243,6 +243,7 @@ function stallReplyBound(m: { readonly fromId: string; readonly runId: number | 
 }
 
 /** 'check': a stall-check subject from the operator role. 'report': a stall-report subject from the operator role.
+ *  'self-wake': an orphaned or failed subject from the operator role (wave 2's notices to the session itself).
  *  'reply': a reply subject that is bound (above). Anything else: null, which means ordinary mail. */
 export function stallMailClass(
   m: { readonly fromId: string; readonly runId: number | null; readonly subject: string; readonly mailId: number },
@@ -258,14 +259,14 @@ export function stallMailClass(
 
 // ── the kebab guard (mail-routes.test.ts, twelfth union) ─────────────────────────────────────────────────────
 
-/** Every kebab word this file spells, and every one the store's stall reads spell with it, each taken from its own
- *  Record or tuple. A later task that spells a new kebab word in `server/src/coord` for the watch adds its tuple
- *  HERE. */
 /** The one mail-gate word the watch reads (§5.2 mail-stuck: a delivery whose last gate stays this word). Typed against
  *  L0's `MailGate` through a type-only import, so a renamed gate is a compile error here. */
 const STALL_GATE_WORD_MAP: Record<Extract<MailGate, 'registry-unmeasurable'>, string> = {
   'registry-unmeasurable': 'the registry could not be listed at the gate; mail-stuck times it from its gate stamp',
 };
+/** Every kebab word this file spells, and every one the store's stall reads spell with it, each taken from its own
+ *  Record or tuple. A later task that spells a new kebab word in `server/src/coord` for the watch adds its tuple
+ *  HERE. */
 const STALL_KEBABS: ReadonlySet<string> = new Set<string>([
   ...STALL_ARMS,
   ...STALL_HOLDS,

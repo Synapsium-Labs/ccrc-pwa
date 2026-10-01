@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8e1136164d4cae89f4fe8992fde5609700077944b53bacc4c7272cf6ff2e1861
+# ccrc:generated 1 sha256=3d7c7b8c1cca36036f4ec6970183725ce36f0e654c499366acd72b7169039073
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5090,7 +5090,7 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   #
   # UNRECOGNISED -> busy. `idle` is an ALLOWLIST; every other value is busy.
   # Claude Code writes at least `idle`, `busy` (a model turn is in flight) and
-  # `shell` (a Bash tool command is running) — server/src/livestate.ts:14-30 is
+  # `shell` (a background shell is running) — server/src/livestate.ts:31-61 is
   # this repo's own record of that vocabulary, and of what matching `busy` and
   # calling the rest idle cost when the server side did it. Here the price is
   # steeper than a wrong badge: `ws-reap` gates `git worktree remove` on this

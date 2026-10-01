@@ -254,8 +254,8 @@ export type HookStateRawRead =
   | { ok: true; state: HookState; sessionId: string; identity: 'current' | 'foreign' | 'unregistered' }
   | { ok: false; reason: 'absent' | 'unmeasured' | 'malformed' };
 
-/** The raw read's one parse-failure answer, spelled once for `NO_STATE`'s reason: each rejection below is a file
- *  this reader DID look at, and one constant stops a later edit quietly promoting one of them to `unmeasured`. */
+/** The raw read's one parse-failure answer, spelled once: each rejection below is a file this reader DID look at (the
+ *  aged fold then answers `NO_STATE`), and one constant stops a later edit quietly promoting one to `unmeasured`. */
 const MALFORMED: HookStateRawRead = { ok: false, reason: 'malformed' };
 
 /** THE ONE PARSE in this module. `readHookStateMeasured` is a fold over it (`foldHookStateRead`, below), never a

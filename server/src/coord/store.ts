@@ -3860,8 +3860,10 @@ export class CoordStore {
    * session inside the horizon: sent by it, addressed to it by the row's own `toId`, or delivered to it (a mail
    * to the coordinator ROLE carries the role in `toId`, and the session only on its delivery row). The horizon
    * is `at >= sinceAt` (`stall-mail-read-time-bounded`), and the lane passes `now - BACKLOG_HORIZON_MS`. It
-   * bounds the rows LOADED, not the scan: `mail` has no index but its key, and adding one is a migration. An
-   * empty `runIds` drops the run clause rather than binding an empty list.
+   * bounds the rows LOADED, not the scan: `mail` has no index but its key, and adding one is a migration. The
+   * same holds for the two `mail_deliveries` scans, statement 1's delivered-to subquery and statement 2's (that
+   * table's one index is `mail_deliveries_due`): each candidate's read grows with the whole mail history, on the
+   * synchronous handle (OPS-4). An empty `runIds` drops the run clause rather than binding an empty list.
    *
    * The read is a SUPERSET of the run's mail. The lane therefore narrows the run verdict's `StallInput.mail`
    * through L1's `stallRunMail` (`run-mail-filtered-in-l1`), and only the session verdicts see the whole read.

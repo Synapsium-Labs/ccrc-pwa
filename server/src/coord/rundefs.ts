@@ -301,9 +301,9 @@ export function insertSystemMailTx(
   // inserted three lines up and nothing else can see it. THROWN rather than
   // ignored because both callers run this under `tx`, which rolls back on
   // throw and rethrows. If the impossible happens, the whole mail is withdrawn
-  // (and, under `queueStallNotice`, the observation row with it) rather than
-  // accepted with the placeholder envelope, which carries no `ack:` line and
-  // so names no delivery id for any recipient to ack against.
+  // (and, under `queueStallNotice`, a run notice's observation row with it: a
+  // run-less notice writes none) rather than accepted with the placeholder
+  // envelope, which carries no `ack:` line and so names no delivery id to ack.
   //
   // The throw ESCAPES to every caller, deliberately. Two functions call this
   // one. The first is `queueSystemMail`, and through it that function's six
@@ -312,7 +312,7 @@ export function insertSystemMailTx(
   // `dispatchRun`, `kickoff.ts`'s `queueProgramKickoff`, `routes.ts`'s
   // `POST /api/runs/:id/advance` handler, and `watch.ts`'s `FleetWatcher.hold`
   // (the ask pre-emption lane's parent nudge). The second is `queueStallNotice`
-  // below, the stall watch's run notices. Both callers' false arms already mean
+  // below, the stall watch's notices, on a run or run-less. Both callers' false arms already mean
   // "declined", a different and true statement a failure must not borrow.
   //
   // THAT LIST NAMES ITS CALLERS, and carries no line numbers, deliberately.

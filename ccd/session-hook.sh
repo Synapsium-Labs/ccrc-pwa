@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# session-hook.sh — Claude Code hook → ~/.cc-sessions/<id>.hookstate.json
+# session-hook.sh — Claude Code hook → ~/.cc-sessions/<id>.hookstate.json, the main thread's turn marker <id>.turn.json beside it, and, for a session whose id ends -hookcap, one capture file per event under ~/.ccrc/hook-capture/<id>/
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
