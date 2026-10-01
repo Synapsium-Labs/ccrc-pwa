@@ -14,10 +14,10 @@ import {
   stallOrphanDSubject, stallOrphanESubject, stallFailedSubject,
   ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS, FAILED_IDLE_MS, FAILED_REPEAT_MS, MAIL_STUCK_MS, BACKLOG_HORIZON_MS,
   ORPHAN_PUSH_MS, MARKER_UNREADABLE_MS, AUTO_CONTINUE_RECENT_MS, STALL_ORPHANED_PREFIX, STALL_FAILED_PREFIX,
-  STOP_FAILURE_ERRORS,
+  STOP_FAILURE_ERRORS, stallVerdict,
 } from '../src/coord/stall.js';
 import type {
-  StallArm, StallArming, StallDeliveryRow, StallHold, StallMailRow, StallMode, StallNotice, StallRunRow,
+  StallArm, StallArming, StallDeliveryRow, StallHold, StallInput, StallMailRow, StallMode, StallNotice, StallRunRow,
   StallSessionInput, StallSessionRole, StallVerdict, StallWorker, TurnMark, TurnMarkRead,
 } from '../src/coord/stall.js';
 
@@ -110,18 +110,18 @@ describe('stallSessionHold: holds 1, 2 and the limit hold only (§10)', () => {
   it('hold: null for a measured, unlimited session', () => {
     expect(stallSessionHold(sessionInput(), NOW)).toBeNull();
   });
-  it('hold: hold 1 belongs to a run worker alone', () => {
+  it('hold: the run-unnamed hold (§10 step 1) belongs to a run worker alone', () => {
     expect(stallSessionHold(sessionInput({ run: runRow({ state: 'unknown' }) }), NOW)).toEqual(hold('run-unnamed'));
     expect(stallSessionHold(sessionInput({ run: runRow({ state: 'no-such-state' }) }), NOW)).toEqual(hold('run-unnamed'));
     expect(stallSessionHold(sessionInput({ run: runRow({ kind: 'chore' }) }), NOW)).toEqual(hold('run-unnamed'));
     expect(stallSessionHold(sessionInput({ role: 'coordinator', sessionId: COORD }), NOW)).toBeNull();
     expect(stallSessionHold(sessionInput({ role: 'other' }), NOW)).toBeNull();
   });
-  it('hold: hold 1 comes before hold 2, and hold 2 before the limit hold', () => {
+  it('hold: run-unnamed comes before hold 1, and hold 1 before the limit hold', () => {
     expect(stallSessionHold(sessionInput({ run: runRow({ state: 'unknown' }), worker: { present: false } }), NOW)).toEqual(hold('run-unnamed'));
     expect(stallSessionHold(sessionInput({ worker: workerAt('idle', null, { stranded: true }) }), NOW)).toEqual(hold('unmeasured'));
   });
-  it('hold: hold 1 names a run worker alone, whatever run another role carries, and a worker with no run is not held by it', () => {
+  it('hold: run-unnamed names a run worker alone, whatever run another role carries, and a worker with no run is not held by it', () => {
     const unnamed = runRow({ state: 'unknown' });
     expect(stallSessionHold(sessionInput({ role: 'coordinator', sessionId: COORD, run: unnamed }), NOW), 'a coordinator carrying a run').toBeNull();
     expect(stallSessionHold(sessionInput({ role: 'other', run: unnamed }), NOW), 'an other row carrying a run').toBeNull();
@@ -137,7 +137,7 @@ describe('stallSessionHold: holds 1, 2 and the limit hold only (§10)', () => {
   it('hold: an unmeasured marker answers before the limit hold', () => {
     expect(stallSessionHold(sessionInput({ mark: { ok: false, reason: 'unmeasured' }, worker: workerAt('idle', NOW - 3 * H, { stranded: true }) }), NOW)).toEqual(hold('unmeasured'));
   });
-  it('hold: hold 2 answers absent, and unmeasured for every unmeasured input', () => {
+  it('hold: hold 1 answers absent, and unmeasured for every unmeasured input', () => {
     expect(stallSessionHold(sessionInput({ worker: { present: false } }), NOW)).toEqual(hold('absent'));
     const unmeasured: [string, Over][] = [
       ['FleetSession.unmeasured', { worker: workerAt('idle', NOW - 3 * H, { unmeasured: true }) }],
@@ -170,6 +170,17 @@ describe('stallSessionHold: holds 1, 2 and the limit hold only (§10)', () => {
     expect(stallSessionHold(sessionInput({ worker: workerAt('idle', NOW - 3 * H, { autoContinueHeldAt: NOW - AUTO_CONTINUE_RECENT_MS }) }), NOW),
       'an auto-continue hold exactly AUTO_CONTINUE_RECENT_MS old').toBeNull();
     expect(stallSessionHold(sessionInput({ worker: workerAt('idle', NOW - 3 * H, { limits: null }) }), NOW), 'null limits').toBeNull();
+  });
+  // Final fix wave, E2E-4: spec §4.2's hold 2b, a dialog with no ask behind it. dialogPending is the half the session arms
+  // can meet: live `waiting`, its other half, never reaches D, E or failed (their word checks refuse it).
+  it('hold 2b: dialogPending holds on an idle or shell word, for every role, after hold 1 and before the limit hold', () => {
+    for (const word of ['idle', 'shell']) {
+      expect(stallSessionHold(sessionInput({ worker: workerAt(word, NOW - 3 * H, { dialogPending: true }) }), NOW), word).toEqual(hold('dialog'));
+    }
+    expect(stallSessionHold(sessionInput({ role: 'coordinator', sessionId: COORD, worker: workerAt('idle', NOW - 3 * H, { dialogPending: true }) }), NOW), 'a coordinator').toEqual(hold('dialog'));
+    expect(stallSessionHold(sessionInput({ role: 'other', worker: workerAt('idle', NOW - 3 * H, { dialogPending: true }) }), NOW), 'an other row').toEqual(hold('dialog'));
+    expect(stallSessionHold(sessionInput({ worker: workerAt('idle', null, { dialogPending: true }) }), NOW), 'hold 1 first').toEqual(hold('unmeasured'));
+    expect(stallSessionHold(sessionInput({ worker: workerAt('idle', NOW - 3 * H, { dialogPending: true, stranded: true }) }), NOW), 'before the limit hold').toEqual(hold('dialog'));
   });
 });
 
@@ -282,6 +293,12 @@ describe('orphan D (§5.2): any session, a restart that cut background tasks sho
     for (const [name, over] of negated) expect(stallOrphanDCandidate({ ...m, ...over }), name).toBe(false);
     expect(stallOrphanDCandidate({ ...m, stopAt: null }), 'a restart with no stop recorded').toBe(true);
     expect(stallOrphanDCandidate({ ...m, restartAt: NOW - 25 * H, stopAt: NOW - 26 * H }), 'the horizon is the verdict, not the candidate').toBe(true);
+  });
+  it('D: a dialogPending pane on an idle or shell word holds 2b, for any row (E2E-4)', () => {
+    for (const word of ['idle', 'shell']) {
+      expect(stallOrphanDVerdict(dInput(R, {}, { worker: workerAt(word, R + MIN, { dialogPending: true }) }), NOW), word).toEqual(hold('dialog'));
+      expect(stallOrphanDVerdict(dInput(R, {}, { role: 'coordinator', sessionId: COORD, worker: workerAt(word, R + MIN, { dialogPending: true }) }), NOW), `${word}, a coordinator`).toEqual(hold('dialog'));
+    }
   });
   it('D: fires from exactly ORPHAN_D_IDLE_MS, and on shell', () => {
     expect(stallOrphanDVerdict(dInput(R, {}, { worker: workerAt('idle', NOW - ORPHAN_D_IDLE_MS) }), NOW)).toEqual(d1());
@@ -425,6 +442,10 @@ describe('orphan E (§5.2): run workers and coordinators, a wake-bearing task th
     const subject = stallOrphanESubject(okMark(c.mark));
     expect(stallOrphanEVerdict({ ...c, mail: [mailRow(602, NOW - 5 * MIN, WATCH, COORD, subject)] }, NOW)).toEqual(NONE);
   });
+  it('E: a dialogPending pane on an idle word holds 2b, for a run worker and a coordinator (E2E-4)', () => {
+    expect(stallOrphanEVerdict(eInput({}, { worker: workerAt('idle', S + 2_000, { dialogPending: true }) }), NOW)).toEqual(hold('dialog'));
+    expect(stallOrphanEVerdict(eInput({}, { role: 'coordinator', sessionId: COORD, worker: workerAt('idle', S + 2_000, { dialogPending: true }) }), NOW)).toEqual(hold('dialog'));
+  });
   it('E: the live word may have begun exactly at the stop', () => {
     expect(stallOrphanEVerdict(eInput({}, { worker: workerAt('idle', S) }), NOW)).toEqual(e1());
   });
@@ -479,6 +500,14 @@ describe('failed (§5.2): run workers and coordinators, a turn that ended on an 
       ['a waiting pane', fInput({}, { worker: workerAt('waiting', S + 1_000) })],
     ];
     for (const [name, input] of cases) expect(stallFailedVerdict(input, NOW), name).toEqual(NONE);
+  });
+  it('failed: a dialogPending pane on an idle or shell word holds 2b, rung 1 and rung 2 alike (E2E-4)', () => {
+    for (const word of ['idle', 'shell']) {
+      const w = workerAt(word, S + 1_000, { dialogPending: true });
+      expect(stallFailedVerdict(fInput({}, { worker: w }), NOW), `${word}, retry class`).toEqual(hold('dialog'));
+      expect(stallFailedVerdict(fInput({ err: 'invalid_request' }, { worker: w }), NOW), `${word}, request class`).toEqual(hold('dialog'));
+      expect(stallFailedVerdict(fInput({}, { role: 'coordinator', sessionId: COORD, worker: w }), NOW), `${word}, a coordinator`).toEqual(hold('dialog'));
+    }
   });
   it('failed: fires from exactly FAILED_IDLE_MS, and on shell', () => {
     const edge = NOW - FAILED_IDLE_MS;
@@ -645,6 +674,11 @@ describe('mail-stuck (§5.2): per queued delivery to a run worker or a coordinat
     expect(stallMailStuckVerdicts(stuckInput({}, { worker: workerAt('idle', NOW - 2 * H, { stranded: true }) }), NOW)).toEqual([hold('limit')]);
     expect(stallMailStuckVerdicts(stuckInput({}, { run: runRow({ state: 'unknown' }) }), NOW)).toEqual([hold('run-unnamed')]);
   });
+  it('mail-stuck: the idle clause answers hold 2b too, and the registry gate clause still precedes every hold (E2E-4)', () => {
+    expect(stallMailStuckVerdicts(stuckInput({}, { worker: workerAt('idle', NOW - 2 * H, { dialogPending: true }) }), NOW)).toEqual([hold('dialog')]);
+    expect(stallMailStuckVerdicts(stuckInput({ lastGate: 'registry-unmeasurable', gateSince: NOW - MAIL_STUCK_MS },
+      { worker: workerAt('idle', NOW - 2 * H, { dialogPending: true }) }), NOW), 'the gate clause').toEqual([stuck()]);
+  });
   it('mail-stuck: done, a run worker push is recorded on its run, a coordinator push answers every sweep', () => {
     expect(stallMailStuckVerdicts(stuckInput({}, { notices: [notice('live', 'mail-stuck', 1, 901, NOW - MIN)] }), NOW)).toEqual([NONE]);
     const c = stuckInput({ toId: COORD }, { role: 'coordinator', sessionId: COORD, mail: [mailRow(501, M_AT, WORKER, COORD, 'question', null, 'question')] });
@@ -702,5 +736,32 @@ describe('marker-unreadable for a coordinator (coordinator-marker-unreadable)', 
   });
   it('marker: mail-disabled leaves the operator push standing', () => {
     expect(stallSessionMarkerVerdict(mkInput({ arming: W2_MAIL_OFF }), NOW)).toEqual(mu());
+  });
+});
+
+// Final fix wave, E2E-4 (spec §10: "The D, E and failed arms … apply holds 1, 2 and the limit hold only"). One worker,
+// one set of facts: a harness menu (dialogPending) on an idle pane, three hours quiet, after a retry-class StopFailure
+// that left a wake-bearing task. The session verdicts hold 2b, because a self-mail would sit queued behind the menu; the
+// run verdict, judging the same facts, answers its own 2b cap, the operator push that says to clear the menu.
+describe('hold 2b: the session verdicts hold where the run verdict caps (E2E-4)', () => {
+  const IDLE = NOW - 3 * H;
+  const w = workerAt('idle', IDLE, { dialogPending: true });
+  const failedMark = mark({ state: 'failed', event: 'StopFailure', at: IDLE - MIN, turnAt: IDLE - 20 * MIN, stopAt: IDLE - MIN, err: 'server_error', bg: 1, bgKinds: ['subagent'], bgIds: ['b1'] });
+  const doneMark = mark({ at: IDLE - MIN, turnAt: IDLE - 20 * MIN, stopAt: IDLE - MIN, bg: 1, bgKinds: ['subagent'], bgIds: ['b1'] });
+  const run = runRow();
+  const runInput: StallInput = {
+    subject: { primary: run, runs: [run] }, worker: w, mail: [], notices: [], arming: W2, coordinationPaused: false,
+    coordinator: null,
+  };
+
+  it('the run verdict answers dialog-cap for the dialogPending worker', () => {
+    expect(stallVerdict(runInput, NOW)).toMatchObject({ act: 'notify', arm: 'dialog-cap', rung: 1, to: 'operator' });
+  });
+  it('failed and orphan E hold 2b on the same worker; each fires without the dialog (the control)', () => {
+    expect(stallFailedVerdict(sessionInput({ worker: w, mark: failedMark }), NOW)).toEqual(hold('dialog'));
+    expect(stallOrphanEVerdict(sessionInput({ worker: w, mark: doneMark }), NOW)).toEqual(hold('dialog'));
+    const clear = workerAt('idle', IDLE);
+    expect(stallFailedVerdict(sessionInput({ worker: clear, mark: failedMark }), NOW)).toMatchObject({ act: 'notify', arm: 'failed', rung: 1 });
+    expect(stallOrphanEVerdict(sessionInput({ worker: clear, mark: doneMark }), NOW)).toMatchObject({ act: 'notify', arm: 'orphan-e', rung: 1 });
   });
 });
