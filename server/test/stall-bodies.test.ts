@@ -1092,6 +1092,8 @@ describe('wave 2 texts: every remaining branch and sanitising call site has a ro
       const op: StallNotify = { act: 'notify', arm: 'frozen', rung: 1, key: FROZEN_TURN, to: 'operator', because: 'no-hook-event' };
       expect(stallPushText(input, stallFacts(input), op, FROZEN_NOW).body)
         .toBe(`${LABEL67}: worker demo-worker reads busy with its turn open since 2026-09-29T08:00Z, and no hook event has arrived for an unmeasured time.`);
+      const bare = s4({ worker: busy, arming: W2_ARMED });
+      expect(stallW2ReportMail(bare, stallFacts(bare), FZ, FROZEN_NOW).subject).toBe('stall: run 67 — frozen: no hook event for an unmeasured time');
     });
 
     it('stallSessionMail refuses the two operator rungs of a session arm: they are pushes', () => {
@@ -1120,6 +1122,12 @@ describe('wave 2 texts: every remaining branch and sanitising call site has a ro
       const { body } = stallSessionPushText(coordSession(), failedOp('x y'), FAIL_NOW);
       expect(body).toContain('on an API error ((unprintable)) at');
       expect(body).not.toContain('x y');
+    });
+
+    it('refuses the mail rungs of the arms it has a text for: orphan D to the session, failed to the session, failed to the coordinator', () => {
+      expect(() => stallSessionPushText(caseD(), D1, D1_AT)).toThrow(RangeError);
+      expect(() => stallSessionPushText(sessionOf(), F1, FAIL_NOW)).toThrow(RangeError);
+      expect(() => stallSessionPushText(sessionOf(), F2_REPEAT, FAIL_NOW)).toThrow(RangeError);
     });
 
     it('orphaned: a restart whose marker no longer reads is named by its key, and the notice is not in the read', () => {
@@ -1175,6 +1183,10 @@ describe('wave 2 texts: every remaining branch and sanitising call site has a ro
         expect(body).toContain('(mail #2620 (unprintable) from demo-worker, queued at');
         expect(body).not.toContain('x y');
       });
+      it('a mail id that is not an integer prints (unprintable) when the mail is not in the read either', () => {
+        expect(push(coordSession({ deliveries: [deliveryOf(902, 2 ** 60, COORD)] }), 902))
+          .toBe('coordinator demo-coordinator: delivery #902 (mail #(unprintable)) is still undelivered.');
+      });
       it('a delivery key or a mail id that is not an integer prints (unprintable)', () => {
         expect(push(coordSession({ deliveries: [] }), Number.NaN)).toBe('coordinator demo-coordinator: delivery #(unprintable) is still undelivered.');
         const id = 2 ** 60;
@@ -1189,6 +1201,10 @@ describe('wave 2 texts: every remaining branch and sanitising call site has a ro
         expect(body({ mark: { ok: false, reason: 'malformed' }, markUnreadableSince: null }))
           .toBe('coordinator demo-coordinator: its turn marker has read malformed since 2026-09-29T07:00Z (1h 1m). The busy gate and the wave-2 arms fall back to wave 1 for it until the marker reads again.');
       });
+      it('the session’s own first-seen time wins over the notice’s key when the two differ', () => {
+        expect(body({ mark: { ok: false, reason: 'malformed' }, markUnreadableSince: MS_AT }, MS_AT + 60_000))
+          .toContain('has read malformed since 2026-09-29T07:00Z (1h 1m).');
+      });
       it('a marker that reads is named unreadable, never by a reason it does not have', () => {
         expect(body({ mark: markOf(), markUnreadableSince: MS_AT })).toContain('its turn marker has read unreadable since 2026-09-29T07:00Z');
       });
@@ -1201,6 +1217,16 @@ describe('wave 2 texts: every remaining branch and sanitising call site has a ro
   });
 
   describe('the operator pushes of a run verdict', () => {
+    it('orphaned, from the run verdict’s facts: the marker, the run’s mail and the worker’s delivery all reach the text', () => {
+      const w2 = w2Of({ mark: caseDWith({}), deliveries: [deliveryOf(950, 2700, WORKER, { state: 'delivered', deliveredAt: T('2026-09-28T16:36:30Z') })] });
+      const subject = stallSessionMail(sessionOf({ mark: caseDWith({}) }), D1, D1_AT).subject;
+      const input = s4({ mail: [mail(2700, D1_AT, 'operator', WORKER, 'status', subject)], arming: W2_ARMED, w2 });
+      expect(stallPushText(input, stallFacts(input), D2, D2_NOW)).toEqual({
+        title: '⚠ orphaned › demo-ws',
+        body: `${LABEL67}: worker demo-worker: 1 background task(s) (workflow) did not survive the 2026-09-28T16:20Z restart. Its orphan notice #2700, queued at 2026-09-28T16:36Z (0h 30m ago), was delivered at 16:36Z and is not acked.`,
+      });
+    });
+
     it('the title names the workspace, or the session when the run has none, and a hostile workspace is replaced', () => {
       const n = stuck(901);
       const input = (primary: StallRunRow): StallInput => s4({ arming: W2_ARMED, w2: w2Of() }, primary);
