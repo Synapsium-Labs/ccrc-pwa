@@ -499,9 +499,13 @@ const fakeBash = (name: string, kind: Shape): string => {
   const strip = 'n=$#; i=0; while [ $i -lt $n ]; do a=$1; shift; i=$((i+1)); [ "$a" = -p ] || set -- "$@" "$a"; done';
   const body: Record<Shape, string> = {
     good: `exec '${REAL_BASH}' "$@"`,
-    // What a Bash 3.2/4.2/4.3 does with the probe — its floor test fails, so
-    // it prints nothing — and an exit that marks it if it is ever handed the payload.
-    old: `${isProbe}\n[ -n "$probe" ] && exit 1\nexit 97`,
+    // A Bash 3.2 as far as the LAUNCHER'S OWN probe can tell: the probe text
+    // it is handed runs on the real bash with every BASH_VERSINFO read
+    // rewritten to 3.2, so it is the launcher's floor test that fails it — and
+    // an exit that marks it if it is ever handed the payload.
+    old: `${isProbe}\nif [ -n "$probe" ]; then exec '${REAL_BASH}' -c 'args=("$@"); for i in "\${!args[@]}"; do`
+      + ` if [[ \${args[i]} == -c ]]; then j=$((i+1)); a=\${args[j]}; a=\${a//"BASH_VERSINFO[0]"/3}; a=\${a//"BASH_VERSINFO[1]"/2};`
+      + ` args[j]=$a; fi; done; exec '${REAL_BASH}' "\${args[@]}"' old-bash "$@"; fi\nexit 97`,
     'strip-payload': `${isProbe}\n[ -n "$probe" ] && exec '${REAL_BASH}' "$@"\n${strip}\nexec '${REAL_BASH}' "$@"`,
     'strip-all': `${strip}\nexec '${REAL_BASH}' "$@"`,
     malformed: `${last}\nprintf 'ccd-entry-probe p %sX\\n' "$last"`,
