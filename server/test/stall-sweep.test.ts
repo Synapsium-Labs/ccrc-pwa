@@ -1099,6 +1099,27 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     expect(orphanReads()).toEqual([`${PID}.json`, `${ORPHAN}.turn.json`]);
   });
 
+  // Final fix wave, OPS-3: orphan D answers none without an idle live word, and a row with no live pane has none, so
+  // the orphan pass spends no agent read on it (most registry rows are long-dead sessions).
+  it('a registry row with no live pane costs NO read: no pid entry, or tmux answering none; a live pane reads its marker', async () => {
+    const reads: string[] = [];
+    const { h, w } = await rig({ io: countingIO(reads) });
+    seedOrphan(h.home);
+    const orphanReads = (): string[] =>
+      reads.filter((p) => p.includes(ORPHAN) || p.endsWith(`/${PID}.json`)).map((p) => path.basename(p)).sort();
+    const rows = [regRow(ORPHAN, ORPHAN_UUID)];
+    at(D_AT);
+    reads.length = 0;
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, { panePids: new Map(), records: rows });
+    expect(orphanReads(), 'no pid entry: a pane that was not alive').toEqual([]);
+    at(D_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, tickOf(null, rows));
+    expect(orphanReads(), 'a null pid: tmux answered none').toEqual([]);
+    at(D_AT + 2 * STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, tickOf(PID, rows));
+    expect(orphanReads(), 'the control: a live pane').toEqual([`${PID}.json`, `${ORPHAN}.turn.json`]);
+  });
+
   it('orphan E on a run worker: one orphaned: self-mail on its run, with a run_events row', async () => {
     const { h, coord, w } = await rig();
     const runId = seedRun(coord, { program: 'demo-program' });

@@ -3179,13 +3179,18 @@ export class FleetWatcher {
    *  (`stallOrphanDCandidate`, the mark alone), spent here on the read budget; this method asks it and spells no
    *  conjunct. `stallOrphanDVerdict` asks the same predicate again with the live facts, and re-judges the marker
    *  against the live process's start. A row whose identity is unmeasured reads nothing: these rows are not
-   *  candidates for `marker-unreadable` (slug `coordinator-marker-unreadable`). */
+   *  candidates for `marker-unreadable` (slug `coordinator-marker-unreadable`). Nor does a row with no live pane,
+   *  which orphan D can never wake (OPS-3). */
   private async judgeStallOrphan(
     store: CoordStore, r: SessionRecord, sessions: readonly FleetSession[], tick: StallTick,
     arming: StallArming, paused: boolean, now: number,
   ): Promise<void> {
     const ident = measuredIdentity(r);
     if (ident === null) return;
+    // Read budget (final fix wave, OPS-3), like the line above: orphan D answers none without an idle live word, and a
+    // row with no live pane has none (`stallLiveRead` folds a missing entry and a null pid alike to `no-pane`). Most
+    // registry rows are long-dead sessions, so they cost no agent read.
+    if (!tick.panePids.get(r.id)) return;
     const mark = await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, ident.uuid, null);
     if (!mark.ok || !stallOrphanDCandidate(mark)) return;
     const s = sessions.find((x) => x.id === r.id);
