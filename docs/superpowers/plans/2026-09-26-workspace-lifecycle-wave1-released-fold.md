@@ -766,7 +766,6 @@ Find:
 
 ```ts
 import type { CoordPlacementStamp } from './placement.js';
-import type { LedgerLog } from './ledgerlog.js';
 ```
 
 Replace with:
@@ -774,7 +773,6 @@ Replace with:
 ```ts
 import type { CoordPlacementStamp } from './placement.js';
 import type { LastRun } from './released.js';
-import type { LedgerLog } from './ledgerlog.js';
 ```
 
 Find:
