@@ -43,6 +43,29 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-01 — Fix Round 3 is scoped-clean, but a second safety prerequisite now blocks both later branches.**
+  - The official read-only rereview of `1fd35e76d..1a02baac7` accepts the round's N-1, N-2, m-1 and m-2 repairs and
+    finds no new Critical or Important defect in that diff. Two minors remain for Wave 4's eventual integration:
+    `_ws_reclaim_workdir_shared` overstates which `..` spellings are re-walked, and the imported-`printf` hostility
+    control hard-codes `quiet-basin` rather than deriving or asserting the fixture child's basename.
+  - The same rereview measured a pre-existing Important-grade R31 failure outside the fix diff. A competing row can
+    enter a child through an ancestor symlink, retain that physical cwd after the symlink is removed, and then be
+    placed by `_ws_reclaim_resolve` only through textual suffix projection below the proven-absent component. The
+    current consumer treats that projection as ordinary identity evidence; evaluation mints a token and final
+    ownership remeasurement can repeat the false-safe answer before removing the live tree.
+  - **Binding invariant:** during destructive cross-row ownership comparison, an alternate registry row proves
+    non-containment only when its complete current spelling resolves through existing directories. A path rebuilt
+    textually below a proven-absent component is a namespace projection, not identity evidence, and makes reclaim
+    `unmeasured` regardless of modeled tmux state. This does not change the subject child's own R19 vanished-worktree
+    arm. Process cwd observations may strengthen refusal but never authorize deletion.
+  - The repair is the separate one-wave programme `reclaim-row-placement-safety`, with its own run, fresh child,
+    run-open deviation block, finalized plan, PR and official review. It is neither run 199's inherited-Bash entry
+    boundary nor Wave 5 product scope, and neither existing run may absorb it by changing shape.
+  - Landing order is `reclaim-row-placement-safety`, then run 199 `reclaim-entry-safety`, then Wave 4. Run 199 keeps
+    its immutable four items and uses its existing merge-current-main item to integrate the first prerequisite.
+    Wave 4 stays stopped at local commit `1a02baac7abfbb1a88a1a7a251c7326c11ae9f08`; PR #215 receives no fresh
+    handoff until both prerequisite PRs merge and `swift-hollow` merges current main, regenerates and re-stamps ccd,
+    repairs the two remaining minors, reruns the required gates and produces a new exact fingerprint.
 - **2026-09-30 — wave 4 post-handoff safety rounds remain open; no fresh handoff accepted.**
   - The original wave-done and its fingerprint are superseded. Run 174 remains `working`; items 817–834 remain pending;
     no official review run is open and PR #215 is not merge-eligible from coordinator evidence.
@@ -718,17 +741,19 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 
 ## Next-wave brief
 
-**The next act is the separate `reclaim-entry-safety` prerequisite.** Its number-free programme skeleton plus
-this parent update are committed and pushed at `5f90a36d0`; its one-wave run is 199. Eight deviation numbers were
-allocated exactly once at run-open, beginning at 3696. Immutable handoff `65cec618550d23f8ce14c6d5bde04d75e57d829d`
-defines the first as `ccd-imported-functions-hijack-reclaim-reads`; `still-harbor` copied that plan blob byte-for-byte
-and committed it first. An adversarial plan review then measured three required tightenings before GREEN
-implementation: sanitize the protected probe/payload environment so trusted child Bash cannot re-consume startup
-poison, execute the rendered staged launcher through its destination kernel before publication, and publish both
-artifacts with non-following destination-type checks. The amended tracked plan and prerequisite ledger carry those
-rulings; its four declared items, routing, exclusions and review boundary remain unchanged.
+**The next act is the separate `reclaim-row-placement-safety` prerequisite.** Its number-free programme skeleton
+records the proof-qualified alternate-row invariant and the strict landing order; it has no run, allocation, child
+or plan until Wave 4 releases the overlapping `ccd/ccd` and hardening-test claims. At run-open it receives one fresh
+deviation block, and the finalized plan defines the removed-symlink placement departure in the same act. A fresh
+child then implements one PR and receives its own exact held-out review.
 
-**Wave 4 remains blocked after its Fix Round 3 report.** Run 174 stays `working`; items 817–834 stay pending;
-PR #215 stays open. Once the prerequisite PR merges, `swift-hollow` merges `origin/main` (never rebases), resolves
-`ccd/ccd` through regeneration and re-stamping, reruns the required gates, and submits a fresh exact handoff. Only a
-server-accepted fingerprint at that fresh tip can advance Wave 4 to its official held-out review.
+**Run 199 remains unchanged but waits behind that PR.** `reclaim-entry-safety` keeps its four declared items, eight-
+number block beginning at 3696, D-3696 definition, amended exact plan, routing and exclusions. `still-harbor`
+preserves its WIP and does not finalize item 4 or open/merge its PR until instructed. After the row-placement PR
+merges, its already-declared merge-current-main item integrates that prerequisite before the entry-safety gates.
+
+**Wave 4 remains blocked after its Fix Round 3 report.** Run 174 stays `working`; items 817–834 stay pending; local
+commit `1a02baac7abfbb1a88a1a7a251c7326c11ae9f08` is preserved and PR #215 stays open. Only after both prerequisite
+PRs merge does `swift-hollow` merge `origin/main` (never rebases), repair the two remaining minors, regenerate and
+re-stamp `ccd/ccd`, rerun the required gates, and submit a fresh exact handoff. Only a server-accepted fingerprint
+at that fresh tip can advance Wave 4 to its official held-out review.
