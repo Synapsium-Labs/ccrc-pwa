@@ -17,14 +17,26 @@ automatic deletion.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | planned — no run, deviation allocation or child until the conflicting Wave 4 claims are released |
+| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | **planned** — run 208 opened after claims 850 and 851 cleared; sixteen-number block allocated; finalized plan and exact handoff commit next; no child yet |
 
-**Deviation block: unallocated.** The coordinator allocates it exactly once when this run opens, after this
-number-free skeleton and the parent-ledger ruling are committed and pushed. The finalized plan defines the
-measured departure in the same act. No issued number is rendered until it has a definition.
+**Deviation block: sixteen numbers, the first of them 3731** (allocated exactly once at run 208 open,
+2026-10-01; floor now 3747). The finalized plan defines the first as
+`alternate-row-absent-suffix-is-not-placement-proof`. No other issued number is rendered as a `D-` token unless
+a measured departure is defined in that plan; unused headroom remains unrendered.
 
 ## Decisions & deviations
 
+- **D-3731 — `alternate-row-absent-suffix-is-not-placement-proof`.** The inherited resolver contract reports both
+  a complete current resolution and a textual suffix reconstructed below a proven-absent component as rc 0 plus one
+  path string. That was sufficient for non-destructive path presentation and for the target child's deliberate R19
+  vanished-worktree arm, but it is not sufficient evidence for destructive comparison against another registry row:
+  the removed spelling may still name a process-retained physical cwd. This wave adds a proof basis and requires the
+  alternate-row consumer to accept only `complete`; `absent-suffix`, `unmeasured`, empty and unknown bases make the
+  ownership result unmeasured. This is a measured strengthening of R31 rather than a global missing-path refusal, so
+  the subject child's existing absent-worktree behavior remains unchanged.
+- **2026-10-01 — run 208 opened only after claim release.** Wave 4 released overlapping claims 850 and 851 while
+  retaining its non-overlapping claims. The coordinator then opened run 208 and allocated its sixteen-number block
+  once. Final plan publication and child dispatch remain separate, subsequent acts.
 - **2026-10-01 — split as a second blocking prerequisite.** Fix Round 3's scoped changes are accepted as addressing
   their assigned findings, but its held-out rereview measured the removed-symlink row-placement failure outside
   that diff. The defect is pre-existing and Important-grade because the same false-safe answer reaches unattended
