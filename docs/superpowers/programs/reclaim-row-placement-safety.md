@@ -17,7 +17,7 @@ automatic deletion.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | **planned** — run 208 opened after claims 850 and 851 cleared; sixteen-number block allocated; the finalized plan and ledger are published together in the immutable coordinator handoff; claims and fresh-child dispatch follow |
+| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | **dispatched** — run 208 to fresh child `ccrc-pwa-quiet-basin` at 2026-10-01 12:23 UTC from handoff `2e84cbb0a`, under claim 870 (claim 864 lapsed at its 8 h hard cap while the rolling daily cap stood at 24/24 from 03:16 UTC); four items, route opus/xhigh, subagents sonnet, workflow off, compact 40 |
 
 **Deviation block: sixteen numbers, the first of them 3731** (allocated exactly once at run 208 open,
 2026-10-01; floor now 3747). The finalized plan defines the first as
