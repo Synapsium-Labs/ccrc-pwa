@@ -180,8 +180,9 @@ The wire field is named for what it carries: `released` is already a member of `
   `QuickConfirm` and `SessionScreen.tsx`'s `stopSession` are removed. The header's "Stop" keycap is a different
   control: it interrupts the current turn (`api.interrupt`), and it stays.
 - "Stop only" survives in exactly one place: the actions sheet offers it after an archive REFUSAL the operator
-  cannot fix from the phone (worktree gone, status unreadable, manifest not buildable), so no live session is ever
-  left without a way to put it down.
+  cannot fix from the phone (worktree gone, status unreadable, manifest not buildable, a coordination store the
+  server cannot read, a programme it cannot end, or a fleet box whose `ccd` has no `ws-archive`), so no live
+  session is ever left without a way to put it down.
 - `ccd stop` and `POST /api/sessions/:id/stop` are unchanged.
 - The confirm reads by case:
   - An idle workspace: "Archive this workspace? It goes offline and folds into Archived. Restore brings it back."
@@ -199,7 +200,9 @@ The wire field is named for what it carries: `released` is already a member of `
   both kinds of row; the gate is never keyed on `archivedAt` or `workspace` alone. For a workspace, Restore calls
   `POST /api/sessions/:id/restore` (`ws-restore`). For a main checkout it calls `POST /api/sessions/:id/ensure`:
   `cmd_ensure` clears the stop stamp on the attempt, and the row's own registry fields (wrapper, `rc`, project)
-  decide the respawn, exactly as Revive does today.
+  decide the respawn, exactly as Revive does today. A merged-and-archived workspace (the `cleanup` bucket) stays
+  in the live list its chip counts and offers Restore too, as it does today; the session header's menu offers
+  Restore in Archive's place on the same rows.
 
 **The server's one door.** `POST /api/sessions/:id/archive` (`server.ts`) takes
 `{ force?, interrupt?, programme?: 'end' }`. EVERY check that can refuse runs before ANY act that cannot be
@@ -209,8 +212,16 @@ undone.
    - The id is safe and known.
    - The row is read.
    - Busy is read from the same live state the fleet frame uses: `status`/`hookState`, re-read on the request, for
-     both kinds of row. Without `interrupt:true`, a busy row refuses `409 session-busy`.
-   - For a workspace, the worktree is present and `ws-archive`'s verb is supported.
+     both kinds of row. Without `interrupt:true`, a busy row refuses `409 session-busy`. Busy is one L0 predicate,
+     `archiveInterrupts`: a live `busy`, or a bucket of `working` or `attention` (a question waiting is a turn in
+     progress). A live `busy` counts even where the hook says the turn finished, since `ws-archive` refuses on it.
+     A main checkout's stop refuses nothing, so its busy is read fail-closed, by `_ws_status`'s own rule: no pane is
+     idle; a live pane is idle only when its live file reads `idle` and the predicate is false; tmux `unknown`, an
+     unread pane pid or an unread live file is busy. Without `interrupt:true` it is re-read at the stop, so a turn
+     begun during the claim reads or the programme end refuses `409 session-busy`, naming any runs already ended.
+   - For a workspace, the worktree is not PROVEN gone, and `ws-archive`'s verb is supported. The server box can
+     read a worktree only in local mode: in remote mode the fleet agent's read roots exclude `~/worktrees`, so an
+     unmeasured worktree is left to `ws-archive`'s own refusal, which precedes its act.
    - The `run-open` check on the session as a WORKER runs as today, with its `force` bypass.
    - The `claimedBy` check: if the session is the claimant of any non-terminal run, the door refuses
      `409 coordinator-has-open-runs` with those runs unless `programme:'end'`.
@@ -218,23 +229,28 @@ undone.
 2. **Then act, in this order.**
    - (a) With `programme:'end'`, each run is abandoned through `closeRun`'s abandon arm (`intent:'abandon'`,
      `causedBy:'operator'`), on the coordination serialiser, with CCR-15 wave 3's `childReclaim` port wired exactly
-     as the abandon route wires it. If any abandon refuses (for example a run in `closing`, which the abandon arm
-     cannot move), the door stops. It answers `409 programme-partly-ended` with which runs closed and which did
-     not, and it stops or archives nothing.
+     as the abandon route wires it. Before the first abandon, every run is asked what that arm would refuse from
+     its row alone (for example a run in `closing`, which the abandon arm cannot move); such a run stops the door
+     with nothing ended. If an abandon still refuses at the act, or fails, the door stops there. Either way it
+     answers `409 programme-partly-ended` with which runs closed and which did not, and it stops or archives
+     nothing.
    - (b) With `interrupt:true`, or for a main checkout, it runs the stop argv `/stop` already builds:
      `CCD_ARGV.stopId(id, surface)` or `stopPair`, with `--surface` only where ccd's capability allows it.
    - (c) For a workspace, it runs `ws-archive`. A `session-busy` from ccd (a race after the live read) maps to
      `409 session-busy`.
 3. **Partial outcome.** If (b) succeeded and (c) refused, the door answers `200 { archived: false, stopped: true,
    refusal }`. The row is then a stopped, unarchived workspace. It stays visible at the top level with its reason
-   and offers Archive again, and "Stop only" is moot. Nothing is hidden, nothing is lost.
+   and offers Archive again, and "Stop only" is moot. Nothing is hidden, nothing is lost. Any refusal or failure
+   that follows (a) carries the runs (a) ended, as `ended`, and the sheet says so before the refusal.
 4. **Main checkout.** A main checkout is never passed to `ws-archive`, and nothing writes `.archived` for one. So
    every reap and expiry path is structurally away from it, and `ws-expire` rung 1 refuses `not-a-workspace` as
    well.
 
 **Refusal codes** (`session-busy`, `coordinator-has-open-runs`, `programme-partly-ended`, and the existing
-`run-open`, which is a bare literal written twice today) are declared once, in an L0 `ARCHIVE_REFUSALS` const.
-Server and PWA read that const, and a test pins it.
+`run-open`, a bare literal written twice in `server.ts` and once in the PWA today) are declared once, in an L0
+`ARCHIVE_REFUSALS` const. So are the three refusals "Stop only" answers, `worktree-gone`, `status-unknown` and
+`manifest-unbuildable`: `ws-archive`'s own, read off its `die` lines, and the server's only where it proves the
+worktree absent. Server and PWA read that const, and a test pins it.
 
 **The census.** With `programme:'end'`, the archive route becomes a coordination write, session-gated with no box
 token, like the abandon door (D-282). It is added to the box-token census the way CLAUDE.md records the kickoff
@@ -422,8 +438,9 @@ agent frame in remote mode.
 
 ## 6. What this changes outside itself
 
-- **Wire.** Stage 1 adds `FleetSession.releasedFrom` and `ReleasedFrom`. Stage 2 adds `ARCHIVE_REFUSALS` and three
-  refusal codes. There is no `FLEET_PROTO` bump.
+- **Wire.** Stage 1 adds `FleetSession.releasedFrom` and `ReleasedFrom`. Stage 2 adds `ARCHIVE_REFUSALS` with six
+  new codes (the door's three and the three `ws-archive` refusals "Stop only" answers), the archive body's
+  `interrupt` and `programme`, and its answer's `archived`, `stopped` and `ended`. There is no `FLEET_PROTO` bump.
 - **CCR-15 texts this spec amends.** Each is amended when this spec's wave lands, after the CCR-15 wave that wrote
   it has merged:
   1. `reclaim-paused` "and nothing else" becomes the cleanup switch (§5.3).
@@ -459,8 +476,10 @@ agent frame in remote mode.
 - **An older server's row reads as released.** The single accessor turns `undefined` into `null` (§5.1).
 - **Archiving a coordinator ends a programme the operator meant to pause.** Only with an explicit
   `programme:'end'`. There is no keep, and pausing is the pause switch (§5.2).
-- **Ending a programme succeeds, then the archive refuses.** Every refusable check runs first. A partly ended
-  programme stops the door before any stop or archive (§5.2).
+- **Ending a programme succeeds, then the archive refuses.** Every refusable check the server can measure runs
+  first, and a partly ended programme stops the door before any stop or archive. What only `ccd` measures can still
+  refuse after the end; that answer names the runs it ended, and the sheet offers "Stop only" where it applies
+  (§5.2).
 - **A busy archive loses a turn.** Only after the busy confirm, which alone sends `interrupt:true`.
 - **The stop succeeds and the archive refuses.** The row stays visible, stopped, with its reason and Archive again
   (§5.2).
