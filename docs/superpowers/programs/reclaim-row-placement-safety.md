@@ -17,7 +17,7 @@ automatic deletion.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **awaiting-review** — run 208 on `ccrc-pwa-quiet-basin` (dispatched 2026-10-01 12:23 UTC from handoff `2e84cbb0a`, claim 870) reported wave-done at `dd4e2a86`; the server accepted that fingerprint and all four items settled; held-out review run 212 dispatched to `ccrc-pwa-soft-canyon` |
+| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **working, fix round 1** — run 208 on `ccrc-pwa-quiet-basin` reported wave-done at `dd4e2a86` (fingerprint accepted, four items settled); held-out review run 212 closed `done` on that tip with 12 confirmed findings; fix-round mail 3023 sent 2026-10-01; a fresh review run follows its next wave-done |
 
 **Deviation block: sixteen numbers, the first of them 3731** (allocated exactly once at run 208 open,
 2026-10-01; floor now 3747). The finalized plan defines the first as
@@ -89,6 +89,29 @@ a measured departure is defined in that plan; unused headroom remains unrendered
   panel is a Workflow), and writes its report under `~/.cc-clips/<reviewer id>/`. The worker's note that a wave-3
   plan's citation of the contract's R28 lines shifted by three lines is outside claim 870 and is carried to Wave 4's
   integration round rather than edited here.
+- **2026-10-01 — review run 212's verdict and the rulings on it.** `ccrc-pwa-soft-canyon` read `dd4e2a86` with the
+  literal panel (one Workflow, 52 agents, none errored or empty): correctness 3 findings, 3 confirmed; spec 4, 3
+  confirmed and 1 refuted; reproduce 1, refuted; the Opus `xhigh` SAFETY lens 8, 6 confirmed and 2 refuted. No lens
+  is unverified and no finding unexamined; the report merges them into F1-F10. SAFETY: no path removes a live child
+  through the removed-alias class; questions (a)-(g) hold; (h), the stated cost, fails as written. All 18 mutation
+  rows and the row-12 substitute red at an assertion when re-run by the reviewer. Rulings:
+  - **F1, operator:** any gone-directory alternate row (a stale row, a second vanished child, a child whose reclaim
+    stopped after its `worktree` phase) holds every other child at `unmeasured`, a vanished subject included, and two
+    such children hold each other. Accepted as the cost of the binding invariant, pinned by tests, and documented by
+    qualifying R19's sentence, the plan's "preserve R19 exactly" and the cost bullet. Evidence that a gone row named
+    ccd's own former worktree, so it stops holding others, is carried to wave 5 of `child-reclamation`.
+  - **F2, coordinator:** no retry exists on `main`; the only request trigger is `close`. The spec already makes the
+    sweep (child-reclamation wave 4) the retrier of every retryable refusal, so this cost stands until it ships, and
+    the contract's cost bullet now says so.
+  - **F3 and F4, operator:** both pre-existing on `main`. A re-pointed alias and a bind-mount spelling resolve
+    `complete` and outside even when a session sits inside the child (`~/worktrees` is a bind mount on the fleet
+    box; no live row uses such a spelling today). This PR documents the caveat, stops the `unres` remedy inviting a
+    re-point, and renames the verb control that called a re-point a recovery. A device/inode identity follow-up
+    programme is opened after wave 5; F8, the pre-existing window before the tail's `git worktree remove`, joins it.
+  - **F10, coordinator:** the per-row `rok=0` reset is load-bearing and unpinned (a hoisting mutant keeps 351 tests
+    green while a probe answers `reclaimable`). Fixed now, red first, with a mutation row.
+  - **F5, F6, F7, F9, coordinator:** prose and comment corrections, and mutation row 13 made exact; fixed now.
+  - Each measured departure from the plan's text in the round takes the next issued number, in order from 3733.
 
 ## Carried constraints
 

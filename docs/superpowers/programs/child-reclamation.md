@@ -43,6 +43,19 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-01 — the row-placement prerequisite is in its first fix round; its review adds two carries here.**
+  Run 208 (`reclaim-row-placement-safety`) opened PR #226 at `dd4e2a86`, and held-out review run 212 found no path
+  that removes a live child through the removed-alias class. Its rulings (that programme's ledger) reach this one:
+  - The binding invariant's accepted cost holds every other child, a vanished one included, while any alternate
+    row's directory is gone, and two vanished or interrupted children hold each other (operator ruling: accept, pin,
+    fix later). Wave 5 inherits the recovery: evidence that a gone row named ccd's own former worktree, read from
+    git's worktree record or the reclaim journal and never from process state, so that row stops holding others.
+    Until wave 4's sweep ships, a held child is not retried after its one close-time attempt.
+  - Two pre-existing aliasing classes still resolve `complete` and outside: a re-pointed (not removed) alias and a
+    bind-mount spelling (operator ruling: document in #226, follow up). A path-identity follow-up programme opens
+    after wave 5, carrying device/inode ancestry and the tail's unre-asked window before `git worktree remove`.
+  - #226 edits the contract, shifting a wave-3 plan's citation of R28 by three lines; wave 4's integration round
+    re-anchors it, because that plan lies outside run 208's claim.
 - **2026-10-01 — Fix Round 3 is scoped-clean, but a second safety prerequisite now blocks both later branches.**
   - The official read-only rereview of `1fd35e76d..1a02baac7` accepts the round's N-1, N-2, m-1 and m-2 repairs and
     finds no new Critical or Important defect in that diff. Two minors remain for Wave 4's eventual integration:
@@ -719,6 +732,12 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
     attention list;
   - ccd journaling the failures the mirror never sees: audit-time `unmeasured`, `probe-unmeasured`, pre-lock dies,
     `flock-unavailable` and `lock-unopenable`.
+- **Wave 5 inherits, from the row-placement review (2026-10-01):** recovery for gone-directory alternate rows. An
+  alternate row whose path is gone holds every other child at `unmeasured`, and two vanished or interrupted children
+  hold each other; the recovery must prove the gone path was ccd's own worktree without consulting process state.
+- **After wave 5, a path-identity follow-up programme:** a re-pointed alias and a bind-mount spelling resolve
+  `complete` and outside although a session may sit inside the child; device/inode ancestry is the measured
+  direction, and the window between `_ws_reclaim_owned` and the tail's `git worktree remove` rides with it.
 - **Wave 5 inherits, from wave 3's first live reclaim:** dot-lock files (`.reap-<id>.lock`,
   `.<id>.compactions.lock`, `.prstate-<id>.lock`) outlive a reclaim. The R25 collector's "no `$REG` entry of any
   suffix" condition must not read a lock as a live row, or the reclaim's tail must remove them.
