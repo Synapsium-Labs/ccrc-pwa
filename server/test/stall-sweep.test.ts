@@ -1295,3 +1295,38 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     expect(markerTags()).toEqual([`stall-${runId}-marker-unreadable-1-${KEY}`]);
   });
 });
+
+describe('sweepStalls: wave 2, the session arms on every subject kind and the lane\'s own bookkeeping', () => {
+  const T0 = IDLE_AT + 1_800_000;                     // well inside the worker's first 2 h of quiet
+  const D_AT = RESTART_AT + 60_000 + ORPHAN_D_IDLE_MS;
+  /** Case D's marker on `id`: a restart that lost two background tasks, the live main loop idle since a minute
+   *  after it (the same live file serves every pane here: one PID). */
+  const seedCaseD = (home: string, id: string, sessionId: string): void => {
+    seedLiveState(home, { statusUpdatedAt: RESTART_AT + 60_000, startedAt: RESTART_AT - 5_000 });
+    seedTurnMark(home, id, {
+      sessionId, event: 'SessionStart', at: RESTART_AT, turnAt: RESTART_AT - 900_000,
+      stopAt: RESTART_AT - 600_000, restartAt: RESTART_AT, lostBg: 2, lostKinds: 'workflow,subagent', lostIds: 'wf1,bag2',
+    });
+  };
+  const orphanedTo = (coord: CoordStore, id: string): MailRow[] =>
+    operatorMail(coord).filter((m) => m.toId === id && m.subject.startsWith(STALL_ORPHANED_PREFIX));
+
+  it('a coordinator draws orphan D, run-less: one orphaned: self-mail with no run, and no row on the run it claims', async () => {
+    // Spec §5.2: orphan (D) is for ANY session (slug `coordinators-draw-orphan-d`). A coordinator restarted with a
+    // Workflow in flight is Case D's own shape, and orphan E cannot see it: the restart is after the Stop.
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedCaseD(h.home, COORD, COORD_UUID);
+    const both = tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]);
+    const sessions = [fleetRow(WORKER), fleetRow(COORD)];
+    at(D_AT);
+    await w.sweepStalls(sessions, W2, both);
+    at(D_AT + STALL_SWEEP_MS);
+    await w.sweepStalls(sessions, W2, both);
+    const mail = orphanedTo(coord, COORD);
+    expect(mail).toHaveLength(1);
+    expect(mail[0]).toMatchObject({ toId: COORD, runId: null, kind: 'status', at: D_AT });
+    expect(stallRows(coord, runId)).toEqual([]);      // run-less: never on the run it claims
+  });
+});

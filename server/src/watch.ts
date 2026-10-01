@@ -2960,8 +2960,9 @@ export class FleetWatcher {
    * must not starve the next):
    * - a run WORKER (`stallSubjects`): the run verdict, then its session verdicts (orphan E, failed, each mail
    *   stuck, orphan D), every notice recorded on its primary run;
-   * - a run COORDINATOR (`stallCoordinatorSubjects`, minus the workers): orphan E, failed, each mail stuck and its
-   *   marker, all RUN-LESS (slug `coordinator-notices-are-run-less`), so none can stand in a worker's proof (b);
+   * - a run COORDINATOR (`stallCoordinatorSubjects`, minus the workers): orphan E, failed, each mail stuck, its
+   *   marker and orphan D (slug `coordinators-draw-orphan-d`), all RUN-LESS (slug `coordinator-notices-are-run-less`),
+   *   so none can stand in a worker's proof (b);
    * - every other registry row: orphan D only, and only once its marker records a restart that lost tasks.
    *
    * Reads (slug `three-reads-per-candidate`): at most three agent reads per worker — the live file, the turn
@@ -3099,9 +3100,11 @@ export class FleetWatcher {
 
   /** One run coordinator, judged RUN-LESS (slug `coordinator-notices-are-run-less`): its notices are keyed on
    *  their mail subjects and on in-memory latches, never on a claimed run's `run_events`, where its orphan E rows
-   *  would count toward that run's worker's proof (b). Reads: the live file and the marker. No session verdict
-   *  takes a hookstate ask, so none is read, and `unmeasured` says so. Its mail read carries no run ids: its
-   *  claimed runs' mail is its worker's subject, not its own. */
+   *  would count toward that run's worker's proof (b). Its verdicts, in the spec's order: orphan E, failed, each mail
+   *  stuck, its marker, and orphan D last as for a worker (spec §5.2 "any session"; slug `coordinators-draw-orphan-d`).
+   *  The registry-row loop skips every judged id, so this is the only place a coordinator's orphan D is asked.
+   *  Reads: the live file and the marker. No session verdict takes a hookstate ask, so none is read, and
+   *  `unmeasured` says so. Its mail read carries no run ids: its claimed runs' mail is its worker's subject. */
   private async judgeStallCoordinator(
     store: CoordStore, c: { readonly sessionId: string; readonly runs: readonly StallRunRow[] },
     sessions: readonly FleetSession[], tick: StallTick, arming: StallArming, paused: boolean, now: number,
@@ -3124,7 +3127,7 @@ export class FleetWatcher {
       mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: paused,
     };
     const project = s?.project ?? c.runs[0]?.project ?? '';
-    for (const sv of [stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now)]) {
+    for (const sv of [stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, project, sv, now);
     }
   }
