@@ -13,7 +13,8 @@ import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, verbSupported, sweepDec } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, repoCellFor, type CcdPrFailure } from './prstate.js';
 import { readLiveState, readLiveStateMeasured } from './livestate.js';
-import { mailTurnIdle, mailTurnModeOf } from './turnidle.js';
+import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark } from './turnidle.js';
+import { readTurnMarkMeasured } from './turnmark.js';
 import { readHookState, readHookStateUnaged, type HookState } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { sendPrompt } from './inject/send.js';
@@ -790,6 +791,13 @@ export class FleetWatcher {
    *  was making it, and there is nothing left to guard once the process is
    *  gone. */
   private mailInFlight = new Set<string>();
+  /** Delivery ids whose `mail-gate-busy-shadow` "would deliver" line has been
+   *  logged (worker stall watch §5.1). Before `mail-gate-busy` is armed, the
+   *  operator checks each line against the session's transcript for 48 h, so
+   *  there is one line per delivery, not one per sweep. `sweepMail` prunes it
+   *  at its head to the deliveries still outstanding. IN MEMORY BY DESIGN, as
+   *  `mailCooldown` is: a restart logs a still-held delivery once more. */
+  private busyShadowLogged = new Set<number>();
   /** `emitRuns`'s own byte-equality guard, the same idiom as `lastJson`
    *  above, over `RunSummary[]` instead of `FleetSession[]`. `null` (not
    *  `'[]'`) so the very first tick with a real `coord` always emits at
@@ -3421,6 +3429,10 @@ export class FleetWatcher {
 
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
+    // The busy-shadow log's memory keeps only deliveries still outstanding.
+    // It is pruned BEFORE the empty-queue return, so an idle box empties it.
+    const outstandingIds = new Set([...unacked, ...dueBefore].map((r) => r.id));
+    for (const loggedId of this.busyShadowLogged) if (!outstandingIds.has(loggedId)) this.busyShadowLogged.delete(loggedId);
     if (unacked.length === 0 && dueBefore.length === 0) return;
     // Fix — blocking review findings 1/5: `readRegistry`'s OLD signature
     // collapses a whole-fleet `io.readdir` failure to `[]` — the SAME shape
@@ -3813,11 +3825,27 @@ export class FleetWatcher {
         const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
         if (!cfgDir) { gated(d, 'no-config-dir'); continue; }
         const live = await readLiveState(this.deps.io, cfgDir, pid);
-        // ONE decision for both gates (worker stall watch §4.1, `turnidle.ts`).
+        // ONE decision for both gates (worker stall watch §4.1, §5.1, `turnidle.ts`).
         // `idle` delivers as before. So does `shell`, an idle main loop over
         // background shell work, unless `$REG/mail-gate-strict` is listed. A
         // null read is `not-idle`, as `!live` was.
-        const turn = mailTurnIdle(live, null, now, isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS, mode);
+        //
+        // The turn marker (§5.1) is read here, once per due row that passed
+        // every gate above, and ONLY under the hand-armed `busy-shadow` and
+        // `busy` (shell-mode-ignores-the-marker). Which modes those are is
+        // `mailTurnReadsMark`'s decision (L1), the same rule `mailTurnIdle`
+        // uses to consult `mark`; this line asks it. Wave 2 ships dark: under the
+        // default `shell`, and under `strict`, no agent read is added and
+        // `mailTurnIdle` answers as wave 1 did, whatever the marker says. It is
+        // never read without a live file either: that row is `not-idle`
+        // already, and the reader needs the live `startedAt` to call a marker
+        // stale. `identity` is non-null here, because the registry rung above
+        // `continue`s on null. An `absent`, `foreign` or `stale` read takes
+        // wave 1's path inside `mailTurnIdle`.
+        const mark = mailTurnReadsMark(mode) && live !== null
+          ? await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, d.toId, identity.uuid, live)
+          : null;
+        const turn = mailTurnIdle(live, mark, now, isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS, mode);
         // THE GATE TOKEN DOES NOT FORK, deliberately (D-1167). `MailGate`'s own
         // docstring sets the rule — one member per CONDITION, not per `continue`
         // — and `no-pane`/`no-config-dir` were split because an operator acts on
@@ -3833,7 +3861,20 @@ export class FleetWatcher {
         // structure scan (`mail-sweep.test.ts`) counts a gate only where its name
         // is written at the call, so `gated(d, turn.gate)` would leave both with
         // no call site it can see.
-        if (!turn.deliver) { const notIdle = turn.gate === 'not-idle'; gated(d, notIdle ? 'not-idle' : 'not-quiet'); continue; }
+        if (!turn.deliver) {
+          // A THIRD token, and a different condition: the turn marker could not
+          // be read under `mail-gate-busy`. That is a fleet fault, not a busy
+          // session, so it gets its OWN literal call site. A nested ternary is
+          // invisible to the D-792 scan (`mail-sweep.test.ts`).
+          if (turn.gate === 'turn-mark-unreadable') { gated(d, 'turn-mark-unreadable'); continue; }
+          // `mail-gate-busy-shadow`: the row WOULD deliver on `busy`. It is held,
+          // and it is said once per delivery, for the operator's 48 h check.
+          if ('wouldDeliver' in turn && !this.busyShadowLogged.has(d.id)) {
+            this.busyShadowLogged.add(d.id);
+            console.warn(`ccrc-server: mail-gate busy-shadow would deliver delivery ${d.id} to ${d.toId} (quiet since ${new Date(turn.since).toISOString()})`);
+          }
+          const notIdle = turn.gate === 'not-idle'; gated(d, notIdle ? 'not-idle' : 'not-quiet'); continue;
+        }
 
         // `seen` is added only HERE, once every gate above has passed and the
         // send is actually about to be attempted — it means "one message per

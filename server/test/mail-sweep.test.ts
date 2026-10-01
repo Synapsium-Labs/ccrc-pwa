@@ -29,7 +29,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
 import { MAIL_GATES } from '../../shared/api.js';
 import { okRun } from './coordReadHelpers.js';
-import { MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
+import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER } from '../src/turnidle.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -2821,5 +2821,318 @@ describe('sweepMail: shell is an idle main loop (worker stall watch §4.1)', () 
     await w.sweepMail();
     expect(literalSends(h.calls)).toEqual([NUDGE]);
     expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+});
+
+// ── Worker stall watch §5.1 (wave 2): the gate reads the turn marker ─────────
+//
+// `$REG/<id>.turn.json` is the hook's main-thread turn marker. The gate reads
+// it ONLY under the hand-armed modes `busy-shadow` and `busy`
+// (`shell-mode-ignores-the-marker`), the modes for which `turnidle.ts`'s
+// `mailTurnReadsMark` is true; `sweepMail` asks that rule and never spells
+// the set. Under the default `shell`, and under `strict`, it is never read,
+// and wave 1's verdicts hold whatever it says. The two counting-io rows below
+// bind the READ at `sweepMail`'s call site; `turnidle.test.ts` binds the rule.
+// - Under the busy modes, a live `shell` with a `working` marker at least as
+//   new as `statusUpdatedAt` refuses `not-idle`.
+// - Under the busy modes, `busy` with a current `done` marker delivers
+//   once quiet has run from `stopAt` (`mail-gate-busy`), or logs "would
+//   deliver" once per delivery (`mail-gate-busy-shadow`).
+// - An unreadable marker under `busy` records `turn-mark-unreadable`.
+// - The pane guard rides every delivery whose live word was not `idle`.
+describe('sweepMail: the turn marker and the busy modes (worker stall watch §5.1)', () => {
+  const STARTED = NOW - 3_600_000;              // the live process started an hour ago
+  const STOP = NOW - MAIL_QUIET_MS - 1_000;     // the marker's Stop: one quiet window and a second ago
+  const TURN_SHOWN = '✻ Cogitating… (12s · esc to interrupt)\n❯ \n';
+  const TURN_WITH_HINT = '✻ Working… (3s · esc to interrupt · ctrl+t to show todos)\n❯ \n';
+  /** The hook's marker line: all 15 keys in the writer's order, current, `done`. */
+  const seedTurnMark = (home: string, over: Record<string, unknown> = {}): void => {
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const body = {
+      v: 1, sessionId: UUID, state: 'done', event: 'Stop', at: STOP, turnAt: NOW - 600_000, stopAt: STOP,
+      bg: 1, bgKinds: 'subagent', bgIds: 'task-1', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '',
+      ...over,
+    };
+    writeFileSync(path.join(reg, `${ID}.turn.json`), JSON.stringify(body));
+  };
+  /** The recipient, gate-ready but for its live word, with a live file that
+   *  carries `startedAt` (the reader calls a marker stale against it), plus a
+   *  resolvable sender. */
+  const seedAll = (h: Harness, live: Record<string, unknown> = {}): void => {
+    seedRegistry(h.home, ID); seedHookState(h.home, ID);
+    seedLiveState(h.home, { startedAt: STARTED, ...live });
+    seedRegistry(h.home, FROM_ID, FROM_UUID);
+  };
+  const arm = (h: Harness, marker: string): void => {
+    writeFileSync(path.join(h.home, '.cc-sessions', marker), '');
+  };
+  const shadowWarns = (warn: { mock: { calls: unknown[][] } }): string[] =>
+    warn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith('ccrc-server: mail-gate busy-shadow'));
+  const wouldDeliver = (id: number): string =>
+    `ccrc-server: mail-gate busy-shadow would deliver delivery ${id} to ${ID} (quiet since ${new Date(STOP).toISOString()})`;
+  /** The lane's private once-only memory. A rename makes this `undefined`, and
+   *  `.has` then throws, so the rows that read it fail loudly, never vacuously. */
+  const logged = (w: FleetWatcher): Set<number> =>
+    (w as unknown as { busyShadowLogged: Set<number> }).busyShadowLogged;
+  /** Records every `.turn.json` read and delegates the read itself. */
+  const turnReadsIO = (): { io: FleetIO; reads: string[] } => {
+    const reads: string[] = [];
+    const io: FleetIO = { ...localIO, readFileMeasured: async (p, t, s) => {
+      if (p.endsWith('.turn.json')) reads.push(p);
+      return localIO.readFileMeasured(p, t, s);
+    } };
+    return { io, reads };
+  };
+
+  it('mail-gate-busy: a busy worker with a current done marker gets its mail once quiet has run from stopAt', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    // The live word was restamped a second ago. Quiet must come from the marker's stopAt, not from it.
+    seedAll(h, { status: 'busy', statusUpdatedAt: NOW - 1_000 });
+    seedTurnMark(h.home);
+    arm(h, MAIL_GATE_BUSY_MARKER);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
+  it('mail-gate-busy: a Stop five seconds ago is not-quiet, however old the live stamp', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedAll(h, { status: 'busy', statusUpdatedAt: NOW - MAIL_QUIET_MS - 1_000 });
+    seedTurnMark(h.home, { at: NOW - 5_000, stopAt: NOW - 5_000 });
+    arm(h, MAIL_GATE_BUSY_MARKER);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).lastGate).toBe('not-quiet');
+  });
+
+  it('mail-gate-busy: the pane guard rides a busy delivery — a spinner row, with or without a hint, holds it turn-running', async () => {
+    for (const pane of [TURN_SHOWN, TURN_WITH_HINT]) {
+      const h = harness({ panes: [pane, emptyBox, echoedBox(NUDGE), emptyBox] });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord);
+      seedAll(h, { status: 'busy', statusUpdatedAt: NOW - 1_000 });
+      seedTurnMark(h.home);
+      arm(h, MAIL_GATE_BUSY_MARKER);
+      const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+      await w.sweepMail();
+      expect(literalSends(h.calls), pane).toEqual([]);
+      expect(keyPresses(h.calls), pane).toEqual([]);
+      const row = deliveryRow(coord, id);
+      expect(row.lastError, pane).toBe('turn-running');
+      expect(row.state, pane).toBe('queued');
+      expect(row.attempts, pane).toBe(0);
+      expect(row.nextAttemptAt, pane).toBe(Date.now() + MAIL_TURN_HOLD_MS);
+    }
+  });
+
+  it('mail-gate-busy: a marker older than the live process is stale, and busy stays not-idle', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    // The process started 30 s ago. The marker's Stop (61 s ago) is an earlier process's.
+    seedAll(h, { status: 'busy', statusUpdatedAt: NOW - 1_000, startedAt: NOW - 30_000 });
+    seedTurnMark(h.home);
+    arm(h, MAIL_GATE_BUSY_MARKER);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).lastGate).toBe('not-idle');
+  });
+
+  it('mail-gate-busy: an unmeasured or a malformed marker records turn-mark-unreadable, never not-idle', async () => {
+    const cases: [string, (h: Harness) => Partial<Deps>][] = [
+      ['unmeasured', (h) => { seedTurnMark(h.home); return { io: unreadableField(ID, 'turn.json') }; }],
+      ['malformed', (h) => {
+        writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.turn.json`), '{"v":1,');
+        return {};
+      }],
+    ];
+    for (const [name, plant] of cases) {
+      const h = harness({ panes: HAPPY_PANES });
+      const coord = store(h.home);
+      const over = plant(h);
+      const { w } = await primedWatcher(h, coord, over);
+      seedAll(h, { status: 'busy', statusUpdatedAt: NOW - 1_000 });
+      arm(h, MAIL_GATE_BUSY_MARKER);
+      const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+      await w.sweepMail();
+      expect(literalSends(h.calls), name).toEqual([]);
+      const row = deliveryRow(coord, id);
+      expect(row.lastGate, name).toBe('turn-mark-unreadable');
+      expect(row.attempts, name).toBe(0);
+      expect(row.state, name).toBe('queued');
+    }
+  });
+
+  it('mail-gate-busy-shadow: the same unmeasured marker is plain not-idle', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord, { io: unreadableField(ID, 'turn.json') });
+    seedAll(h, { status: 'busy', statusUpdatedAt: NOW - 1_000 });
+    seedTurnMark(h.home);
+    arm(h, MAIL_GATE_BUSY_SHADOW_MARKER);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([]);
+    expect(deliveryRow(coord, id).lastGate).toBe('not-idle');
+  });
+
+  it('mail-gate-busy-shadow: would deliver, delivers nothing, records not-idle, and says so once per delivery', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedAll(h, { status: 'busy', statusUpdatedAt: NOW - 1_000 });
+    seedTurnMark(h.home);
+    arm(h, MAIL_GATE_BUSY_SHADOW_MARKER);
+    const a = queueTestDelivery(coord, ID, ENVELOPE);
+    const b = queueTestDelivery(coord, ID, 'a second queued message');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await w.sweepMail();
+      advance(PAST_SWEEP_MS);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([]);
+      for (const d of [a, b]) {
+        const row = deliveryRow(coord, d.id);
+        expect(row.lastGate).toBe('not-idle');
+        expect(row.gateCount, 'both sweeps reached the gate').toBe(2);
+        expect(row.state).toBe('queued');
+        expect(row.attempts).toBe(0);
+      }
+      expect(shadowWarns(warn), 'one line per delivery, not one per sweep').toEqual([wouldDeliver(a.id), wouldDeliver(b.id)]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('mail-gate-busy-shadow: the once-only memory forgets a delivery that left the outstanding set', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedAll(h, { status: 'busy', statusUpdatedAt: NOW - 1_000 });
+    seedTurnMark(h.home);
+    arm(h, MAIL_GATE_BUSY_SHADOW_MARKER);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await w.sweepMail();
+      expect(logged(w).has(id), 'premise: the delivery was logged').toBe(true);
+      expect(coord.markAcked(id, Date.now())).toEqual({ ok: true, state: 'acked' });
+      // Nothing is outstanding now, so this sweep takes the empty-queue return. The prune precedes it.
+      advance(PAST_SWEEP_MS);
+      await w.sweepMail();
+      expect(logged(w).has(id)).toBe(false);
+      expect(logged(w).size).toBe(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('busy modes: a live shell with a working marker at least as new as statusUpdatedAt refuses not-idle; an older one does not', async () => {
+    const S = NOW - MAIL_QUIET_MS - 1_000;
+    for (const marker of [MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_BUSY_MARKER]) {
+      for (const [at, delivers] of [[S, false], [S - 1, true]] as const) {
+        const h = harness({ panes: HAPPY_PANES });
+        const coord = store(h.home);
+        const { w } = await primedWatcher(h, coord);
+        seedAll(h, { status: 'shell', statusUpdatedAt: S });
+        seedTurnMark(h.home, { state: 'working', event: 'PostToolUse', at, turnAt: at, stopAt: null,
+          bg: -1, bgKinds: '', bgIds: '' });
+        arm(h, marker);
+        const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+        await w.sweepMail();
+        const label = `${marker} at ${at - S}`;
+        if (delivers) {
+          expect(literalSends(h.calls), label).toEqual([NUDGE]);
+          expect(deliveryRow(coord, id).state, label).toBe('delivered');
+        } else {
+          expect(literalSends(h.calls), label).toEqual([]);
+          expect(deliveryRow(coord, id).lastGate, label).toBe('not-idle');
+        }
+      }
+    }
+  });
+
+  it('shell-mode-ignores-the-marker: the default mode reads no marker, so a current working marker leaves a live shell deliverable (a counting io, with its control)', async () => {
+    const S = NOW - MAIL_QUIET_MS - 1_000;
+    // The marker is `working` AT the live stamp, the one a busy mode refuses (the row above). The control arms
+    // `mail-gate-busy-shadow` on the same fixture: it reads the file once and refuses, so the default arm's zero
+    // is the mode's doing, and its delivery is wave 1's verdict on a marker that WOULD change it if read.
+    for (const [marker, readCount, delivers] of [[null, 0, true], [MAIL_GATE_BUSY_SHADOW_MARKER, 1, false]] as const) {
+      const { io, reads } = turnReadsIO();
+      const h = harness({ panes: HAPPY_PANES });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord, { io });
+      seedAll(h, { status: 'shell', statusUpdatedAt: S });
+      seedTurnMark(h.home, { state: 'working', event: 'PostToolUse', at: S, turnAt: S, stopAt: null,
+        bg: -1, bgKinds: '', bgIds: '' });
+      if (marker !== null) arm(h, marker);
+      const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+      await w.sweepMail();
+      const label = marker ?? 'default (shell)';
+      expect(reads, label).toHaveLength(readCount);
+      if (delivers) {
+        expect(literalSends(h.calls), label).toEqual([NUDGE]);
+        expect(deliveryRow(coord, id).state, label).toBe('delivered');
+      } else {
+        expect(literalSends(h.calls), label).toEqual([]);
+        expect(deliveryRow(coord, id).lastGate, label).toBe('not-idle');
+      }
+    }
+  });
+
+  it('mail-gate-strict reads no marker at all, even beside a touched busy marker (a counting io, with its control)', async () => {
+    for (const strictOn of [true, false]) {
+      const { io, reads } = turnReadsIO();
+      const h = harness({ panes: HAPPY_PANES });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord, { io });
+      seedAll(h);
+      seedTurnMark(h.home);
+      arm(h, MAIL_GATE_BUSY_SHADOW_MARKER);
+      if (strictOn) arm(h, MAIL_GATE_STRICT_MARKER);
+      const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+      await w.sweepMail();
+      expect(deliveryRow(coord, id).state, `strict ${strictOn}`).toBe('delivered');
+      // The control: the same fixture under `mail-gate-busy-shadow` alone reads the file once, so a zero here is
+      // strict's doing (strict > busy-shadow). The default mode's zero is the row above's.
+      expect(reads, `strict ${strictOn}`).toHaveLength(strictOn ? 0 : 1);
+    }
+  });
+
+  it("an absent marker keeps wave 1's answers under mail-gate-busy", async () => {
+    for (const word of ['busy', 'shell', 'idle']) {
+      const h = harness({ panes: HAPPY_PANES });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord);
+      seedAll(h, { status: word });
+      arm(h, MAIL_GATE_BUSY_MARKER);
+      const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+      await w.sweepMail();
+      if (word === 'busy') {
+        expect(literalSends(h.calls), word).toEqual([]);
+        expect(deliveryRow(coord, id).lastGate, word).toBe('not-idle');
+      } else {
+        expect(literalSends(h.calls), word).toEqual([NUDGE]);
+        expect(deliveryRow(coord, id).state, word).toBe('delivered');
+      }
+    }
   });
 });

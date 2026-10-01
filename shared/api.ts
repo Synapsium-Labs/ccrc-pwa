@@ -5496,7 +5496,7 @@ export type MailGate =
   | 'registry-absent' | 'registry-unmeasurable'
   | 'tmux-gone' | 'session-dead' | 'tmux-unknown'
   | 'pending-ask' | 'no-pane' | 'no-config-dir'
-  | 'not-idle' | 'not-quiet';
+  | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable';
 
 /** Total, so a refusal path added to `sweepMail` without a member here is a
  *  TS2739 rather than a silent hole — the `RUN_REFUSE_CODE_MAP` shape, and the
@@ -5506,7 +5506,7 @@ const MAIL_GATE_MAP: Record<MailGate, true> = {
   'registry-absent': true, 'registry-unmeasurable': true,
   'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
-  'not-idle': true, 'not-quiet': true,
+  'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true,
 };
 export const MAIL_GATES: readonly MailGate[] = Object.keys(MAIL_GATE_MAP) as MailGate[];
 
