@@ -9,7 +9,7 @@
 // to an absolute fixture path. Nothing here touches a real ccd or the real HOME.
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RunningAgent } from '../src/server.js';
@@ -50,7 +50,11 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
     const pub = spawnSync(python, ['-IS', path.join(tree, 'ccd', 'ccd-entry-install.py'), 'install', tree, fixture.home],
       { encoding: 'utf8' });
     expect(pub.status, pub.stderr).toBe(0);
-    expect(readFileSync(path.join(fixture.home, '.local', 'bin', 'ccd'), 'utf8').split('\n')[0]).toBe(`#!${python} -IS`);
+    // D-3698: the shebang names the PATH python3 when it IS the probed binary,
+    // else the canonical path — either way an absolute path to that binary.
+    const shebang = /^#!(\/\S+) -IS$/.exec(readFileSync(path.join(fixture.home, '.local', 'bin', 'ccd'), 'utf8').split('\n')[0]!)?.[1];
+    expect(shebang, 'an absolute isolated-python shebang').toBeTruthy();
+    expect(realpathSync(shebang!), 'the shebang names the very interpreter that was probed').toBe(python);
 
     agent = await boot(fixture);
     client = new TestClient(agent.port);
