@@ -1070,11 +1070,21 @@ export function stallCheckMail(input: StallInput, facts: StallFacts, now: number
   const direct = input.coordinationPaused || run.claimedBy === null;
   // D-3581 r1-body-states-its-arming: while escalation is unarmed r2 and r3 are recorded in shadow and nobody is
   // told, so the body says so and still asks for the mail. Only an armed fleet gets the spec's promise.
+  // Planning departure `r1-body-names-the-proof-bound`. With the marker rules armed (`stall-watch-w2-live`) and the
+  // marker's view naming a turn end, r2 falls due on proof at the worker's next turn end, and by STALL_BOUND_MS after
+  // r1 at the latest (§5.1 (a)–(d)). The body promises that, and names the operator when r2 would be skipped. The
+  // predicate is the marker ladder's own (Task 11): an ok marker whose view has no stopAt runs wave 1's ladder, and
+  // keeps wave 1's line.
+  const w = input.worker;
+  const markView = input.w2 !== undefined && input.w2.mark.ok && w.present ? stallMarkView(input.w2.mark, w.live) : null;
+  const proofBound = input.arming.w2Live === true && markView !== null && markView.stopAt !== null;
   const last = stallDelivery('coordinator', input.arming) === 'shadow'
     ? STALL_UNARMED_LINE
-    : direct
-      ? `No mail from you on run ${id} by ${stallDeadline(toCoordinator)}: the operator is told.`
-      : `No mail from you on run ${id} by ${stallDeadline(toCoordinator)}: the coordinator is told. By ${stallDeadline(toOperator)}: the operator.`;
+    : proofBound
+      ? `No mail from you on run ${id}: the ${direct ? 'operator' : 'coordinator'} is told when your next turn ends without one, and by ${stallDeadline(now + STALL_BOUND_MS)} at the latest.`
+      : direct
+        ? `No mail from you on run ${id} by ${stallDeadline(toCoordinator)}: the operator is told.`
+        : `No mail from you on run ${id} by ${stallDeadline(toCoordinator)}: the coordinator is told. By ${stallDeadline(toOperator)}: the operator.`;
   return {
     subject: `${STALL_CHECK_PREFIX} run ${id} — quiet ${quiet}, owed: ${stallOwed(facts)}`,
     body: [
@@ -1159,8 +1169,8 @@ function stallR3Cause(because: StallR3Cause, input: StallInput, coordinator: str
   switch (because) {
     case 'still-silent': return stallStillSilent(input);
     case 'coordinator-dead': return `Its coordinator ${coordinator} measures dead, so no report went to it. Reclaim the run: POST /api/runs/${stallInt(input.subject.primary.id)}/reclaim.`;
-    case 'no-coordinator': return 'The run has no coordinator, so no report went to one.';
-    case 'coordination-paused': return 'Coordination is paused, so no report went to the coordinator. Lift the pause with POST /api/coord/pause.';
+    case 'no-coordinator': return STALL_NO_COORDINATOR_LINE;
+    case 'coordination-paused': return STALL_PAUSED_LINE;
   }
 }
 
@@ -1181,7 +1191,7 @@ function stallPercent(v: number | null): string {
   return Number.isFinite(v) ? `${Math.round(v)}%` : STALL_UNPRINTABLE;
 }
 
-/** The operator pushes: r3 and the three caps. `<ws>` is the run's workspace, or its session when it has none. */
+/** The operator pushes: r3, the three caps, and every wave-2 arm that reaches the operator. `<ws>` is the run's workspace, or its session when it has none. */
 export function stallPushText(input: StallInput, facts: StallFacts, n: StallNotify, now: number): { readonly title: string; readonly body: string } {
   if (n.to !== 'operator') throw new RangeError(`stallPushText: rung ${n.rung} of ${n.arm} goes to the ${n.to} as mail, never as a push`);
   const run = input.subject.primary;
@@ -1206,15 +1216,6 @@ export function stallPushText(input: StallInput, facts: StallFacts, n: StallNoti
         title: `⚠ limit › ${ws}`,
         body: `${label}: worker ${worker} has been held by a usage limit past the ${stallSpan(LIMIT_HOLD_CAP_MS)} cap; this quiet episode opened ${stallUtc(n.key)} (${stallSpan(now - n.key)}). Measured: ${stallLimitFacts(input.worker)}.`,
       };
-    case 'frozen':
-    case 'dead':
-    case 'failed':
-    case 'coord-deaf':
-    case 'mail-stuck':
-    case 'marker-unreadable':
-    case 'orphan-d':
-      // Wave 2's operator pushes, minimal until their wording lands: the arm, the rung and the run, nothing else.
-      return { title: `⚠ ${n.arm} › ${ws}`, body: `${label}: the stall watch raised ${n.arm} (rung ${n.rung}, key ${stallInt(n.key)}) for worker ${worker}.` };
     case 'coord-ball': {
       // Minor (texts): worded from the facts. The ball reaches the coordinator by the worker's question, a done
       // claim or a declared wait, and by the coordinator's own `wait:`, so the worker is never said to have
@@ -1226,6 +1227,23 @@ export function stallPushText(input: StallInput, facts: StallFacts, n: StallNoti
         body: `${label}: the run is waiting on its coordinator${claimant} (worker ${worker}); no mail on the run since ${stallUtc(last)} (${stallSpan(now - last)}).`,
       };
     }
+    case 'frozen':
+      return {
+        title: `⚠ frozen › ${ws}`,
+        body: stallSentences(`${label}: worker ${worker} reads busy with its turn open since ${stallUtc(n.key)}, and no hook event has arrived for ${stallSpanOrUnmeasured(stallW2FrozenSince(input), now)}.`, stallRunWho(input).unreported),
+      };
+    case 'dead':
+      return {
+        title: `⚠ dead › ${ws}`,
+        body: stallSentences(`${label}: worker ${worker}: ${stallDeadSentence(n.because)} for ${stallSpanOrUnmeasured(stallDeadSince(input, n.because), now)}.`, stallRunWho(input).unreported),
+      };
+    case 'coord-deaf':
+      return { title: `⚠ coordinator deaf › ${ws}`, body: stallDeafBody(input, label, worker, n.key, now) };
+    case 'orphan-d':
+    case 'failed':
+    case 'mail-stuck':
+    case 'marker-unreadable':
+      return stallW2SessionPush(stallRunWho(input), n, now);
   }
 }
 
@@ -1547,4 +1565,310 @@ function stallSessionMarkerInner(input: StallSessionInput, now: number): StallVe
 
 export function stallSessionMarkerVerdict(input: StallSessionInput, now: number): StallVerdict {
   return stallMailDisabledHold(stallSessionMarkerInner(input, now), input.arming);
+}
+
+// ── wave 2's notice texts (§5.2; plan Task 13) ───────────────────────────────────────────────────────────────
+// Wave 1's text rules hold here. A text carries sanitised ids, integers, kinds and server-formatted UTC only. It never
+// carries a subject, a transcript, or a task's name, description or command. The marker's reader already validated
+// its kinds and ids; they are sanitised again at each call site, so a reader defect cannot carry a hostile string
+// into a pane.
+
+/** Why no coordinator was told, for a push that reached the operator instead. `stallR3Cause` says the same two. */
+const STALL_PAUSED_LINE = 'Coordination is paused, so no report went to the coordinator. Lift the pause with POST /api/coord/pause.';
+const STALL_NO_COORDINATOR_LINE = 'The run has no coordinator, so no report went to one.';
+/** The self-mail heads' words, taken from their prefixes, so no second quoted copy exists. */
+const STALL_ORPHANED_WORD = STALL_ORPHANED_PREFIX.slice(0, -1);
+const STALL_FAILED_WORD = STALL_FAILED_PREFIX.slice(0, -1);
+
+type OkTurnMark = Extract<TurnMarkRead, { readonly ok: true }>;
+
+/** Non-empty sentences, joined by one space. */
+function stallSentences(...parts: readonly string[]): string {
+  return parts.filter((p) => p !== '').join(' ');
+}
+
+/** `Their ids: a, b.` over sanitised ids, or `No task ids were recorded.` */
+function stallTaskIds(ids: readonly string[]): string {
+  return ids.length === 0 ? 'No task ids were recorded.' : `Their ids: ${ids.map(stallSafe).join(', ')}.`;
+}
+
+/** A span, or `an unmeasured time`, which is never a guess. */
+function stallSpanOrUnmeasured(since: number | null, now: number): string {
+  return since === null ? 'an unmeasured time' : stallSpan(now - since);
+}
+
+/** Line 1 of a self-mail: who it is from, and the session, with its run when it has one. */
+function stallSelfHead(word: string, input: StallSessionInput): string {
+  const run = input.run === null ? '' : `, ${stallRunLabel(input.run)}`;
+  return `${word} from the ccrc stall watch (server), session ${stallSafe(input.sessionId)}${run}.`;
+}
+
+/** The marker a self-mail reports from. The verdict fired on a marker that reads, so one that does not is a caller
+ *  defect: it is refused, loudly. */
+function stallReadMark(input: StallSessionInput, what: string): OkTurnMark {
+  if (!input.mark.ok) throw new RangeError(`stallSessionMail: ${what} is written from a marker that reads, and this one reads ${input.mark.reason}`);
+  return input.mark;
+}
+
+/** orphan (D), to the session (Case D). */
+function stallOrphanDMail(input: StallSessionInput): StallNoticeText {
+  const m = stallReadMark(input, 'an orphan notice (D)');
+  const stop = m.stopAt === null ? 'none recorded' : stallUtcSec(m.stopAt);
+  return {
+    subject: stallOrphanDSubject(m),
+    body: [
+      stallSelfHead(STALL_ORPHANED_WORD, input),
+      `Your session restarted at ${stallUtcSec(m.restartAt ?? Number.NaN)}. At your last turn end before it (${stop}), ${stallInt(m.lostBg)} background task(s) were running (${stallKinds(m.lostKinds)}). They ran inside the process that restart replaced, and none of them survived it.`,
+      stallTaskIds(m.lostIds),
+      'Report what was lost to whoever you owe a report. Resume a workflow only when that is cheap: never relaunch an expensive or long-running workflow by default.',
+    ].join('\n'),
+  };
+}
+
+/** orphan (E), to the session (S4). */
+function stallOrphanEMail(input: StallSessionInput, now: number): StallNoticeText {
+  const m = stallReadMark(input, 'an orphan notice (E)');
+  const w = input.worker;
+  const since = w.present && w.live.ok ? w.live.since : null;
+  const idle = since === null ? '' : `: your main loop has been idle since ${stallUtcSec(since)} (${stallSpan(now - since)})`;
+  return {
+    subject: stallOrphanESubject(m),
+    body: [
+      stallSelfHead(STALL_ORPHANED_WORD, input),
+      `Your turn ended at ${stallUtcSec(m.stopAt ?? Number.NaN)} with ${stallInt(m.bg)} background task(s) running (${stallKinds(m.bgKinds)}), and no turn has run since${idle}.`,
+      stallTaskIds(m.bgIds),
+      "A task that ends reports to whoever started it, and a notice that reaches no running loop wakes nobody. Check each task's result now, and report what it found to whoever you owe a report.",
+    ].join('\n'),
+  };
+}
+
+/** failed rung 1 (retry class), to the session. */
+function stallFailedMail(input: StallSessionInput, err: string, stopAt: number): StallNoticeText {
+  const next = input.role === 'worker'
+    ? "If it fails again, mail the coordinator (toId 'coordinator', kind status) what failed and when, rather than retrying again."
+    : 'If it fails again, report what failed and when to whoever you owe a report, rather than retrying again.';
+  return {
+    subject: stallFailedSubject(err, stopAt),
+    body: [
+      stallSelfHead(STALL_FAILED_WORD, input),
+      `Your turn ended at ${stallUtcSec(stopAt)} on an API error (${stallSafe(err)}), a kind a retry can clear, and your main loop has been idle since.`,
+      `Retry the step that failed, once. ${next}`,
+    ].join('\n'),
+  };
+}
+
+/** `stall: run <id> — <kind>: <rest>`: the form `stallReportKind` reads back. */
+function stallW2ReportSubject(run: StallRunRow, kind: Exclude<StallReportKind, 'stall'>, rest: string): string {
+  return `${STALL_REPORT_PREFIX} run ${stallInt(run.id)} — ${kind}: ${rest}`;
+}
+
+/** A report's first line (wave 1's r2 opens the same way). */
+function stallReportHead(run: StallRunRow): string {
+  return `stall from the ccrc stall watch (server), ${stallRunLabel(run)}, state ${stallSafe(run.state)}.`;
+}
+
+/** `Worker <id> (workspace <ws>)`. */
+function stallWorkerRef(run: StallRunRow): string {
+  return `Worker ${stallSafe(run.sessionId)} (workspace ${run.workspace === null ? 'none' : stallSafe(run.workspace)})`;
+}
+
+/** failed rung 2, to the coordinator: a report. */
+function stallFailedReportMail(input: StallSessionInput, err: string, because: 'repeat' | 'request', stopAt: number): StallNoticeText {
+  const run = input.run;
+  if (run === null) throw new RangeError('stallSessionMail: a failed report names its run, and this session is on none');
+  const e = stallSafe(err);
+  return {
+    subject: stallW2ReportSubject(run, 'failed', `${e} ${because === 'repeat' ? 'twice' : 'request error'} at ${stallUtc(stopAt)}`),
+    body: [
+      stallReportHead(run),
+      because === 'repeat'
+        ? `${stallWorkerRef(run)}: its turn ended on an API error (${e}) at ${stallUtcSec(stopAt)}, its second retryable failure within ${stallSpan(FAILED_REPEAT_MS)}. It was told to retry once after the first.`
+        : `${stallWorkerRef(run)}: its turn ended on an API error (${e}) at ${stallUtcSec(stopAt)}. A retry fails the same way, so it was not told to retry.`,
+      `Ack this and act once: mail the worker what to do instead, or mail it a subject beginning "${STALL_WAIT_PREFIX}" naming what it waits for.`,
+    ].join('\n'),
+  };
+}
+
+export function stallSessionMail(input: StallSessionInput, n: StallNotify, now: number): StallNoticeText {
+  if (n.to === 'worker') {
+    if (n.arm === 'orphan-d') return stallOrphanDMail(input);
+    if (n.arm === 'orphan-e') return stallOrphanEMail(input, now);
+    if (n.arm === 'failed') return stallFailedMail(input, n.err, n.key);
+  }
+  if (n.arm === 'failed' && n.to === 'coordinator') return stallFailedReportMail(input, n.err, n.because, n.key);
+  throw new RangeError(`stallSessionMail: ${n.arm} rung ${n.rung} to the ${n.to} is not a session notice`);
+}
+
+/** The frozen clock of a run subject, or null without wave-2 facts. */
+function stallW2FrozenSince(input: StallInput): number | null {
+  return input.w2 === undefined ? null : stallFrozenSince(input.w2.mark, input.w2.hook);
+}
+
+/** When a dead-shaped worker was first seen so: the lane's in-memory first-seen times. */
+function stallDeadSince(input: StallInput, because: StallW2Cause): number | null {
+  if (input.w2 === undefined) return null;
+  return because === 'registry-absent' ? input.w2.absentSince : input.w2.deadSince;
+}
+
+/** The cause as a report subject names it. */
+function stallDeadWords(because: StallW2Cause): string {
+  switch (because) {
+    case 'registry-absent': return 'registry row absent';
+    case 'orphan': return 'orphan';
+    case 'never-started': return 'never-started';
+    case 'no-hook-event': return 'no hook event';
+  }
+}
+
+/** The cause as a sentence, followed by `for <span>`. */
+function stallDeadSentence(because: StallW2Cause): string {
+  switch (because) {
+    case 'registry-absent': return 'its registry row has been absent';
+    case 'orphan': return 'its session has read orphan';
+    case 'never-started': return 'its session has read never-started';
+    case 'no-hook-event': return 'no hook event has arrived';
+  }
+}
+
+export function stallW2ReportMail(input: StallInput, facts: StallFacts, n: StallNotify, now: number): StallNoticeText {
+  if (n.arm !== 'frozen' && n.arm !== 'dead') throw new RangeError(`stallW2ReportMail: ${n.arm} is not a frozen or dead report`);
+  if (n.to !== 'coordinator') throw new RangeError(`stallW2ReportMail: ${n.arm} to the ${n.to} is a push, never a report`);
+  const run = input.subject.primary;
+  if (n.arm === 'frozen') {
+    const span = stallSpanOrUnmeasured(stallW2FrozenSince(input), now);
+    return {
+      subject: stallW2ReportSubject(run, 'frozen', `no hook event for ${span}`),
+      body: [
+        stallReportHead(run),
+        `${stallWorkerRef(run)} reads busy with its turn open since ${stallUtcSec(n.key)}, and no hook event has arrived for ${span}.`,
+        'A tool call or a process it waits on may be hung, and mail cannot land while the turn stays open. Ack this, look at the worker on its pane, and act once: interrupt the hung call there, or re-dispatch the worker if it measures dead. A stall mail never licenses re-dispatching a live worker.',
+      ].join('\n'),
+    };
+  }
+  const span = stallSpanOrUnmeasured(stallDeadSince(input, n.because), now);
+  return {
+    subject: stallW2ReportSubject(run, 'dead', `${stallDeadWords(n.because)} for ${span}`),
+    body: [
+      stallReportHead(run),
+      `${stallWorkerRef(run)}: ${stallDeadSentence(n.because)} for ${span}. No mail from the worker ${stallSilence(run, facts, now, stallUtcSec)}.`,
+      'Ack this, re-measure the worker, and act once: re-dispatch it, or reclaim the run. The watch itself closes, reclaims and re-dispatches nothing.',
+    ].join('\n'),
+  };
+}
+
+/** What a wave-2 push says about who and where: built from a run subject (`stallRunWho`) or from a session
+ *  (`stallSessionWho`), so both push functions share one text per arm. */
+interface StallPushWho {
+  readonly ws: string;                  // the title's id, sanitised
+  readonly lead: string;                // `<run label>: worker <id>`, `coordinator <id>` or `session <id>`, sanitised
+  readonly sessionId: string;           // raw, for matching mail rows only
+  readonly mark: TurnMarkRead | null;
+  readonly mail: readonly StallMailRow[];
+  readonly deliveries: readonly StallDeliveryRow[];
+  readonly markUnreadableSince: number | null;
+  readonly unreported: string;          // why no coordinator was told; '' when one was
+}
+
+function stallUnreported(role: StallSessionRole, paused: boolean, claimedBy: string | null): string {
+  if (role === 'coordinator') return 'It is a coordinator, so no coordinator was told.';
+  if (role === 'other') return 'It is on no run, so no coordinator was told.';
+  if (paused) return STALL_PAUSED_LINE;
+  return claimedBy === null ? STALL_NO_COORDINATOR_LINE : '';
+}
+
+function stallRunWho(input: StallInput): StallPushWho {
+  const run = input.subject.primary;
+  return {
+    ws: stallSafe(run.workspace ?? run.sessionId),
+    lead: `${stallRunLabel(run)}: worker ${stallSafe(run.sessionId)}`,
+    sessionId: run.sessionId,
+    mark: input.w2?.mark ?? null,
+    mail: input.mail,
+    deliveries: input.w2?.deliveries ?? [],
+    markUnreadableSince: input.w2?.markUnreadableSince ?? null,
+    unreported: stallUnreported('worker', input.coordinationPaused, run.claimedBy),
+  };
+}
+
+function stallSessionWho(input: StallSessionInput): StallPushWho {
+  const sid = stallSafe(input.sessionId);
+  const who = input.role === 'other' ? `session ${sid}` : `${input.role} ${sid}`;
+  return {
+    ws: stallSafe(input.run?.workspace ?? input.sessionId),
+    lead: input.run === null ? who : `${stallRunLabel(input.run)}: ${who}`,
+    sessionId: input.sessionId,
+    mark: input.mark,
+    mail: input.mail,
+    deliveries: input.deliveries,
+    markUnreadableSince: input.markUnreadableSince,
+    unreported: stallUnreported(input.role, input.coordinationPaused, input.run?.claimedBy ?? null),
+  };
+}
+
+/** The state of an orphan notice, as rung 2 reports it. */
+function stallOrphanNoticeState(notice: StallMailRow | null, deliveries: readonly StallDeliveryRow[], now: number): string {
+  if (notice === null) return 'Its orphan notice is not in this read.';
+  const d = stallNewestDelivery(deliveries, notice.id);
+  const state = d === null ? 'has no delivery row'
+    : d.ackedAt !== null ? `was acked at ${stallClockMin(d.ackedAt)}`
+      : d.deliveredAt === null ? 'is not delivered' : `was delivered at ${stallClockMin(d.deliveredAt)} and is not acked`;
+  return `Its orphan notice #${stallInt(notice.id)}, queued at ${stallUtc(notice.at)} (${stallSpan(now - notice.at)} ago), ${state}.`;
+}
+
+/** The operator push of a session arm. A run arm is refused: `stallPushText` owns it. */
+function stallW2SessionPush(who: StallPushWho, n: StallNotify, now: number): { readonly title: string; readonly body: string } {
+  switch (n.arm) {
+    case 'orphan-d': {
+      const m = who.mark !== null && who.mark.ok ? who.mark : null;
+      const what = m === null
+        ? `a restart at ${stallUtc(n.key)} orphaned its background tasks`
+        : `${stallInt(m.lostBg)} background task(s) (${stallKinds(m.lostKinds)}) did not survive the ${stallUtc(n.key)} restart`;
+      const notice = m === null ? null
+        : newestMail(who.mail, (x) => x.fromId === STALL_SENDER && x.toId === who.sessionId && x.subject === stallOrphanDSubject(m));
+      return { title: `⚠ orphaned › ${who.ws}`, body: `${who.lead}: ${what}. ${stallOrphanNoticeState(notice, who.deliveries, now)}` };
+    }
+    case 'failed': {
+      const why = n.rung === 2 && n.because === 'repeat'
+        ? `its second retryable failure within ${stallSpan(FAILED_REPEAT_MS)}`
+        : 'a retry fails the same way, so it was not told to retry';
+      return {
+        title: `⚠ failed › ${who.ws}`,
+        body: stallSentences(`${who.lead}: its turn ended on an API error (${stallSafe(n.err)}) at ${stallUtc(n.key)}; ${why}.`, who.unreported),
+      };
+    }
+    case 'mail-stuck': {
+      const d = who.deliveries.find((x) => x.id === n.key) ?? null;
+      const m = d === null ? null : who.mail.find((x) => x.id === d.mailId) ?? null;
+      const ref = d === null ? '' : m === null
+        ? ` (mail #${stallInt(d.mailId)})`
+        : ` (mail #${stallInt(m.id)} ${stallSafe(m.kind)} from ${stallSafe(m.fromId)}, queued at ${stallUtc(m.at)}, ${stallSpan(now - m.at)} ago)`;
+      const gate = d === null || d.lastGate === null ? ''
+        : ` Its last gate: ${stallSafe(d.lastGate)}${d.gateSince === null ? '' : ` since ${stallUtc(d.gateSince)}`}.`;
+      return { title: `⚠ mail stuck › ${who.ws}`, body: `${who.lead}: delivery #${stallInt(n.key)}${ref} is still undelivered.${gate}` };
+    }
+    case 'marker-unreadable': {
+      const reason = who.mark !== null && !who.mark.ok ? stallSafe(who.mark.reason) : 'unreadable';
+      const since = who.markUnreadableSince ?? n.key;
+      return {
+        title: `⚠ marker › ${who.ws}`,
+        body: `${who.lead}: its turn marker has read ${reason} since ${stallUtc(since)} (${stallSpan(now - since)}). The busy gate and the wave-2 arms fall back to wave 1 for it until the marker reads again.`,
+      };
+    }
+    default:
+      throw new RangeError(`stall push: ${n.arm} is a run arm, and stallPushText owns its text`);
+  }
+}
+
+export function stallSessionPushText(input: StallSessionInput, n: StallNotify, now: number): { readonly title: string; readonly body: string } {
+  if (n.to !== 'operator') throw new RangeError(`stallSessionPushText: rung ${n.rung} of ${n.arm} goes to the ${n.to} as mail, never as a push`);
+  return stallW2SessionPush(stallSessionWho(input), n, now);
+}
+
+/** coord-deaf's body: the ball-passing mail, its newest delivery, and that it is unacked. */
+function stallDeafBody(input: StallInput, label: string, worker: string, mailId: number, now: number): string {
+  const m = input.mail.find((x) => x.id === mailId) ?? null;
+  if (m === null) return `${label}: mail #${stallInt(mailId)} from worker ${worker} to its coordinator is not acked.`;
+  const d = stallNewestDelivery(input.w2?.deliveries ?? [], m.id);
+  const state = d === null ? 'has no delivery row' : d.deliveredAt === null ? 'is not delivered' : `was delivered at ${stallClockMin(d.deliveredAt)}`;
+  return `${label}: mail #${stallInt(m.id)} ${stallSafe(m.kind)} from worker ${worker} to ${stallSafe(m.toId)}, queued at ${stallUtc(m.at)} (${stallSpan(now - m.at)} ago), ${state} and is not acked. The run waits on that coordinator: look at it on its pane.`;
 }
