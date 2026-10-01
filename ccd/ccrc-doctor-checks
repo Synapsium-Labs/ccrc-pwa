@@ -6057,7 +6057,10 @@ _dr_cx_tiers() {   # <id> — sets DRX_TIER_WORDS
         _codex_tier_stale "$id" "$tier"
         case $? in
           1) ;;
-          0) _dr_cx_warn "$id's $tier tier is running code older than the installed bytes: it started from another runtime generation, or another placed shim, than a start would use now" \
+          # `_codex_tier_stale`'s 0 is "the record differs from what a start
+          # would write now", and an absent, unreadable or unparseable record
+          # differs too, so the sentence names every cause it cannot tell apart.
+          0) _dr_cx_warn "$id's $tier tier is running, and is not proven to run the installed bytes: its start record ($(_codex_lane_dir "$id")/$tier.started) is absent, unreadable or unparseable, or it names another runtime generation, or another placed shim, than a start would use now" \
                "restart it onto the installed bytes: 'ccrc update' restarts a running, proven, stale ccrc tier; by hand, 'ccrc codex stop $id' then 'ccrc codex start $id'" ;;
           *) _dr_cx_warn "$id's $tier tier is running, and whether it runs the installed bytes cannot be told (no current runtime generation, or the tier's code file cannot be hashed) — unmeasured, not current" \
                "make the runtime current (the runtime finding, if any, names how), then re-run doctor" ;;

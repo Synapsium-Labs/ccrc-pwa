@@ -1212,7 +1212,7 @@ function healthy(prefix: string): string {
 // citations into this file that are accurate today — `:66` and `:70`, from
 // ccrc-install.test.ts and pool-name-parity.test.ts — must not move.
 import {
-  alive, authDirOf, codexRoster, fakeUnit, freeLanes, GPT_LANE_BINS, killLaneProcesses, laneUnits, plantFakeRuntime,
+  authDirOf, codexRoster, fakeUnit, freeLanes, GPT_LANE_BINS, killLaneProcesses, laneUnits, plantFakeRuntime,
   plantLaneAuth, plantSystemd, portAccepts, spawnListener, systemdRunCalls,
   type LanePorts, type Listener, type ListenerAnswer,
 } from './codexLaneFixture.js';
@@ -9486,14 +9486,15 @@ describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stal
   it('a listener on the shim port answering as ANOTHER lane FAILs in _codex_foreign_what\'s words, and is left running', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-other-lane-');
     const port = lanePorts(home, 'codex-a').proxyPort;
-    const l = await at(home, 'shim', 'json', 'codex-b');
+    await at(home, 'shim', 'json', 'codex-b');
     const r = runDoctor(home);
     const re = new RegExp(`^FAIL codex: codex-a: port ${port} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: it answers as another lane — ccrc neither adopts nor stops what it cannot identify$`, 'm');
     expect(r.stdout, r.stdout).toMatch(re);
     expect(remedyAfter(r.stdout, re)).toBe(`  remedy: Stop whatever holds port ${port}, or give codex-a other ports in ~/.ccrc/accounts.json.`);
     noRunnerBugLine(r.stdout, 'codex');
-    // Named, and left running: nothing in doctor signals anything.
-    expect(alive(l.pid)).toBe(true);
+    // Named, and left running: nothing in doctor signals anything. The PORT is
+    // the pin, never `alive()`: a killed child of this process stays a zombie
+    // that `kill -0` reads as alive, while its port refuses once it dies.
     expect(await portAccepts(port)).toBe(true);
   });
 
@@ -9535,6 +9536,9 @@ describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stal
     const re = /^FAIL codex: codex-a is half up: its shim is running and its LiteLLM tier is not, /m;
     expect(r.stdout, r.stdout).toMatch(re);
     expect(remedyAfter(r.stdout, re)).toBe('  remedy: start the tier that is down: ccrc codex start codex-a (idempotent: it starts only what is not running)');
+    // No start record was ever written here: an ABSENT record is one of the
+    // causes the stale sentence names, never "it started from other bytes".
+    expect(r.stdout).toMatch(/^WARN codex: codex-a's shim tier is running, and is not proven to run the installed bytes: its start record \(.*\/shim\.started\) is absent, unreadable or unparseable, /m);
     noRunnerBugLine(r.stdout, 'codex');
   });
 
@@ -9548,6 +9552,28 @@ describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stal
     const r = runDoctor(home);
     expect(r.stdout, r.stdout).toMatch(/^FAIL codex: codex-a is half up: its LiteLLM tier is running and its shim is not, /m);
     expect(lineFor(r.stdout, 'codex')).not.toMatch(/^PASS/);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  // A 3 (cannot ask) is its own WARN, never read as running or as stopped
+  // (D-3715). The half-up case's LiteLLM, proven by its pidfile and command
+  // line and listening on its port, while `readlink` reads none of
+  // /proc/<pid>/fd: `_codex_pid_listens` cannot tell whether that pid holds
+  // the port. Read as running it would be half up; read as stopped, idle.
+  itLinux('a tier whose identity cannot be measured WARNs "unmeasured" — never half up, never read as running or as stopped', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-unmeasured-');
+    const yaml = join(home, '.ccrc', 'codex', 'codex-a', 'litellm.yaml');
+    const l = await at(home, 'litellm', '404', 'codex-a', ['--config', yaml]);
+    writeFileSync(join(home, '.ccrc', 'codex', 'codex-a', 'litellm.pid'), `${l.pid}\n`);
+    // `readlink` refuses every /proc/<pid>/fd/<n> and is the real one otherwise.
+    // The link is REMOVED first: writing through it would rewrite the real binary.
+    rmSync(join(stubBin(home), 'readlink'), { force: true });
+    stub(home, 'readlink', `case "$1" in /proc/*/fd/*) exit 1 ;; esac\nexec ${shq(realPath('readlink'))} "$@"`);
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).not.toMatch(/^FAIL codex: codex-a is half up/m);
+    const re = new RegExp(`^WARN codex: codex-a's litellm tier could not be measured \\(readlink read none of /proc/${l.pid}/fd's entries\\) — unmeasured, never read as running or as stopped$`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: run: ccrc codex status codex-a — it asks the same question and says what it could see');
     noRunnerBugLine(r.stdout, 'codex');
   });
 
@@ -9565,20 +9591,21 @@ describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stal
     noRunnerBugLine(r.stdout, 'codex');
   });
 
-  it('a running shim started from other bytes WARNs "older than the installed bytes"; the current record does not', async () => {
+  it('a running shim whose start record is not current WARNs "not proven to run the installed bytes", naming the record; the current record does not', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-stale-');
     await at(home, 'shim', 'json');
     const rec = join(home, '.ccrc', 'codex', 'codex-a', 'shim.started');
     const now = startedJson(home, 'shim');
     writeFileSync(rec, `${now}\n`);
-    expect(runDoctor(home).stdout).not.toMatch(/^WARN codex: codex-a's shim tier is running code older/m);
+    expect(runDoctor(home).stdout).not.toMatch(/^WARN codex: codex-a's shim tier is running, and is not proven to run the installed bytes/m);
     writeFileSync(rec, `${JSON.stringify({ ...JSON.parse(now) as Record<string, string>, code: '0'.repeat(64) })}\n`);
     const r = runDoctor(home);
-    const re = /^WARN codex: codex-a's shim tier is running code older than the installed bytes: /m;
+    const recRe = rec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`^WARN codex: codex-a's shim tier is running, and is not proven to run the installed bytes: its start record \\(${recRe}\\) is absent, unreadable or unparseable, or it names another runtime generation, or another placed shim, than a start would use now$`, 'm');
     expect(r.stdout, r.stdout).toMatch(re);
     expect(remedyAfter(r.stdout, re)).toMatch(/'ccrc update' restarts a running, proven, stale ccrc tier/);
     noRunnerBugLine(r.stdout, 'codex');
-  });
+  }, 90_000);   // two doctor runs: a bounded but load-slow box is not a red
 
   it('a running shim whose bytes cannot be told right now WARNs "unmeasured, not current" — never current, never stale', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-stale-unknown-');
@@ -9586,7 +9613,7 @@ describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stal
     rmSync(join(home, '.ccrc', 'runtime'), { recursive: true, force: true });
     const r = runDoctor(home);
     expect(r.stdout, r.stdout).toMatch(/^WARN codex: codex-a's shim tier is running, and whether it runs the installed bytes cannot be told .* — unmeasured, not current$/m);
-    expect(r.stdout).not.toMatch(/^WARN codex: codex-a's shim tier is running code older/m);
+    expect(r.stdout).not.toMatch(/^WARN codex: codex-a's shim tier is running, and is not proven to run the installed bytes/m);
     noRunnerBugLine(r.stdout, 'codex');
   });
 
@@ -9603,6 +9630,24 @@ describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stal
     const re = /^WARN codex: codex-a's LiteLLM tier is not running while 1 live session\(s\) run on this lane, /m;
     expect(r.stdout, r.stdout).toMatch(re);
     expect(remedyAfter(r.stdout, re)).toBe('  remedy: start it: ccrc codex start codex-a (every session launch runs the same start)');
+    noRunnerBugLine(r.stdout, 'codex');
+  }, 90_000);   // two doctor runs: a bounded but load-slow box is not a red
+
+  // The THIRD answer, kept apart (`_check_routing`'s census): a manager that
+  // prints no word for a lane session's unit was NOT ASKED, which is never
+  // read as stopped (idle) nor as live. The doctor's systemctl stub echoes
+  // the fixture file's first line, so a lone newline is exactly that answer.
+  itLinux('a LiteLLM tier down while the manager gives no word for a lane session WARNs "unmeasured, not idle" — never idle, never live', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-unasked-');
+    const reg = join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    writeFileSync(join(reg, 'proj-b.wrapper'), 'codex-a\n');
+    writeFileSync(join(home, 'fixture-unit-claude-session@proj-b.service'), '\n');
+    const r = runDoctor(home);
+    expect(r.stdout, r.stdout).not.toMatch(/live session\(s\) run on this lane/);
+    const re = /^WARN codex: codex-a's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked \(1 unanswered\) — unmeasured, not idle$/m;
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toBe('  remedy: ask by hand (systemctl --user status claude-session@proj-b.service); if one is live, start the lane: ccrc codex start codex-a');
     noRunnerBugLine(r.stdout, 'codex');
   });
 
@@ -9623,5 +9668,5 @@ describeCodex('ccrc doctor: codex, part 2 — tier identity, half-up lanes, stal
       for (const s of socks) s.destroy();
       await new Promise<void>((res) => { srv.close(() => res()); });
     }
-  });
+  }, 90_000);   // above runDoctorBounded's own 60 s deadline, so that deadline is what reds
 });
