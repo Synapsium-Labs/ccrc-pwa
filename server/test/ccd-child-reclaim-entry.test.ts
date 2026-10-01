@@ -786,3 +786,106 @@ describe('explicit Bash — outside the guarantee, and the body still never trus
     expect(r.stderr).toContain('usage: ccd ws-reclaim');
   }, 60_000);
 });
+
+// ── every supported production entry crosses the launcher (Task 5) ─────────
+/** An echo body writing to an ABSOLUTE fixture path — never `$HOME`, because
+ *  the server's own runner hands the child this test process's environment. */
+const outBody = (out: string): string =>
+  `#!/usr/bin/env bash\n{ printf "%s\\0" "$-"; printf "%s\\0" "\${BASH_VERSINFO[0]}.\${BASH_VERSINFO[1]}" "$BASH"; printf "%s\\0" "$@"; } > ${JSON.stringify(out)}\n`;
+const readOut = (out: string): { flags: string; version: string; bash: string; argv: string[] } => {
+  const parts = fs.readFileSync(out, 'utf8').split('\0');
+  parts.pop();
+  return { flags: parts[0] ?? '', version: parts[1] ?? '', bash: parts[2] ?? '', argv: parts.slice(3) };
+};
+
+describe('every supported production entry crosses the installed launcher', () => {
+  const AUDIT_ARGV = ['ws-audit', '--session', 'demo-x', '--reclaim'];
+
+  it('the server’s own local runner (realRunner, cfg.ccdBin = ~/.local/bin/ccd): protected argv starts privileged, ordinary does not', async () => {
+    const out = path.join(h.home, 'runner-out');
+    de = installDirectEntry(h.home, { body: outBody(out) });
+    const { realRunner } = await import('../src/exec.js');
+    for (const [argv, privileged] of [[RECLAIM_ARGV, true], [AUDIT_ARGV, true], [['caps'], false]] as const) {
+      fs.rmSync(out, { force: true });
+      const r = await realRunner(de.entry, [...argv]);
+      expect(r.code, r.stderr).toBe(0);
+      expect(readOut(out).flags.includes('p'), argv.join(' ')).toBe(privileged);
+      expect(readOut(out).argv).toEqual([...argv]);
+    }
+  }, 60_000);
+
+  it('the systemd unit’s ExecStart (`%h/.local/bin/ccd supervise %i`) execs the launcher — an ordinary start', () => {
+    const out = path.join(h.home, 'unit-out');
+    de = installDirectEntry(h.home, { body: outBody(out) });
+    const unit = fs.readFileSync(path.resolve(__dirname, '../../ccd/claude-session@.service'), 'utf8');
+    const exec = /^ExecStart=(.+)$/m.exec(unit)?.[1];
+    expect(exec, 'the unit has no ExecStart').toBe('%h/.local/bin/ccd supervise %i');
+    const [file, ...args] = exec!.replaceAll('%h', h.home).replaceAll('%i', 'demo-x').split(' ');
+    const r = spawnSync(file!, args, { encoding: 'utf8', env: { ...cleanEnv(), HOME: h.home } });
+    expect(r.status, r.stderr).toBe(0);
+    expect(file).toBe(de.entry);
+    expect(readOut(out)).toMatchObject({ argv: ['supervise', 'demo-x'] });
+    expect(readOut(out).flags).not.toContain('p');
+  }, 60_000);
+
+  it('the launchd job’s ProgramArguments (ccd/ccd’s plist) exec the launcher — an ordinary start', () => {
+    const out = path.join(h.home, 'plist-out');
+    de = installDirectEntry(h.home, { body: outBody(out) });
+    const src = fs.readFileSync(CCD, 'utf8');
+    const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(src)?.[1] ?? '';
+    const argv = [...block.matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1]!.replace('${HOME}', h.home).replace('${id}', 'demo-x'));
+    expect(argv[0], 'the job does not exec the installed entry').toBe(de.entry);
+    const r = spawnSync(argv[0]!, argv.slice(1), { encoding: 'utf8', env: { ...cleanEnv(), HOME: h.home } });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readOut(out).argv).toEqual(['supervise', 'demo-x']);
+    expect(readOut(out).flags).not.toContain('p');
+  }, 60_000);
+
+  it.runIf(process.platform === 'darwin')('DARWIN: a launchd-shaped PATH with /bin/bash 3.2 first — the later Homebrew bash is proved, chosen and the one that runs', () => {
+    const out = path.join(h.home, 'darwin-out');
+    de = installDirectEntry(h.home, { body: outBody(out) });
+    const system = spawnSync('/bin/bash', ['-c', 'printf %s "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"'], { encoding: 'utf8' }).stdout;
+    expect(system, 'this runner\'s /bin/bash is not the 3.2 a launchd PATH puts first — the row measures nothing').toBe('3.2');
+    expect(REAL_BASH, 'no Bash >= 4.4 outside /bin on this runner').not.toBe('/bin/bash');
+    const PATH = `/usr/bin:/bin:/usr/sbin:/sbin:${path.dirname(REAL_BASH)}`;
+    for (const [argv, privileged] of [[RECLAIM_ARGV, true], [['caps'], false]] as const) {
+      fs.rmSync(out, { force: true });
+      const r = direct(argv, {}, { path: PATH });
+      expect(r.code, r.stderr).toBe(0);
+      const got = readOut(out);
+      expect(fs.realpathSync(got.bash), 'the candidate that ran is not the eligible later one').toBe(REAL_BASH);
+      expect(Number(got.version.split('.')[0]) * 100 + Number(got.version.split('.')[1]), got.version).toBeGreaterThanOrEqual(404);
+      expect(got.flags.includes('p')).toBe(privileged);
+    }
+  }, 60_000);
+});
+
+// ── fail-shut external commands (Task 5) ──────────────────────────────────
+// TRUST-BOUNDARY CONTROLS, labelled as such: these PATH executables are
+// faithful to the box except that they FAIL — a decision-critical command that
+// could not answer. A failure is unmeasured, never an empty answer, and nothing
+// is removed.
+describe('a decision-critical command that fails is unmeasured, never empty — the child survives', () => {
+  const REAL = (cmd: string): string => spawnSync('bash', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).stdout.trim();
+  const failing: Record<string, () => string> = {
+    'find, on the registry enumeration': () => `#!/bin/sh\ncase "$*" in *.workdir*) echo "find: '$HOME/.cc-sessions': Permission denied" >&2; exit 1 ;; esac\nexec ${REAL('find')} "$@"\n`,
+    'git, on the worktree list': () => `#!/bin/sh\ncase "$*" in *"worktree list"*) echo "fatal: unable to read worktrees" >&2; exit 128 ;; esac\nexec ${REAL('git')} "$@"\n`,
+  };
+  for (const [name, stub] of Object.entries(failing)) {
+    itLinux(`${name}: the direct audit answers unmeasured with no token, and the direct reclaim fails and removes nothing`, () => {
+      const c = setup();
+      const { doc: clean } = audit();
+      expect(clean['verdict']).toBe('reclaimable');
+      const cmd = name.split(',')[0]!;
+      fs.writeFileSync(path.join(h.home, '.local', 'bin', cmd), stub(), { mode: 0o755 });
+      const { r, doc } = audit();
+      expect(r.code, `${r.stdout}${r.stderr}`).toBe(1);
+      expect(doc['verdict']).toBe('unmeasured');
+      expect(doc['token']).toBeUndefined();
+      const v = reclaim(String(clean['token']));
+      intact(c, []);
+      expect(v.code, `${v.stdout}${v.stderr}`).toBe(1);
+      expect(docOf(v)['failed'], `${v.stdout}`).toBe('probe-unmeasured');
+    }, 180_000);
+  }
+});
