@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=4fd8a247c35adc99c6b7cb614f403cb62a53d1297754bea1d8b878523929d0f6
+# ccrc:generated 1 sha256=8e1136164d4cae89f4fe8992fde5609700077944b53bacc4c7272cf6ff2e1861
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3856,18 +3856,18 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41 — by addition, NOT a fresh census of
+  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 41: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # The 42: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `carriednote`, `child`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `reaping`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
-  # `swapnarrownote`, `tdate`, `tickstuck`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
+  # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
   # of one word in one file, disclosed rather than renamed. That is a WIDER
   # set than `_reg_set`/`_reg_get`: the inventory
@@ -4000,7 +4000,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     meas.archivedReason "$(_reg_get "$1" archivedreason)" \
     meas.held           "$(_reg_get "$1" hold)"
   # ─────────────────────────────────────────────────────────────────────────
-  local id="$1" f suffix
+  local id="$1" f suffix hf
   for f in "$REG/$id".*; do
     # `[[ -e "$f" ]]` for the unmatched-glob case: this file does not set
     # `nullglob`, so a glob with no matches stays the literal string
@@ -4023,18 +4023,18 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     # conditions. The four callers branch on the value, not on the boolean.
     rm -f "$f" || _reg_purge_unremoved "$f"
   done
-  # `hookstate.json` (session-hook.sh's `$REG/$id.hookstate.json`, the
-  # session-status file the Claude Code hooks write on every tool call) is an
-  # ordinary field with no ordering invariant of its own — it belongs here,
-  # with the fields above, not in the archived/reaping tail below. But its
-  # OWN name holds a dot, so the loop's `[[ "$suffix" == *.* ]]` skip (the
-  # nested-id guard the long note above measures) reads
-  # `$REG/$id.hookstate.json` as a two-dot stranger and leaves it standing
-  # rather than unlinking it — the same shape as `$id.x-y.uuid`, just
-  # produced by a field name instead of a project directory name. Removed
-  # explicitly here rather than exempted from the loop's filter, so the
-  # nested-id guard stays a single, simple rule.
-  rm -f "$REG/$id.hookstate.json" || _reg_purge_unremoved "$REG/$id.hookstate.json"
+  # `hookstate.json` and `turn.json` (session-hook.sh's `$REG/$id.hookstate.json`,
+  # the session-status file the Claude Code hooks write on every tool call, and
+  # `$REG/$id.turn.json`, the stall watch's turn marker) are ordinary fields with
+  # no ordering invariant of their own — they belong here, with the fields above,
+  # not in the archived/reaping tail below. But each OWN name holds a dot, so the
+  # loop's `[[ "$suffix" == *.* ]]` skip (the nested-id guard the long note above
+  # measures) reads each as a two-dot stranger and leaves it standing rather than
+  # unlinking it — the same shape as `$id.x-y.uuid`, just produced by a field name
+  # instead of a project directory name. Removed explicitly here, through `hf` and
+  # never the glob loop's own variable (a second unlink through that one is a second
+  # canonical write on the compaction card's allow-list), so the guard stays one rule.
+  for hf in "$REG/$id.hookstate.json" "$REG/$id.turn.json"; do rm -f "$hf" || _reg_purge_unremoved "$hf"; done
   _usage_purge "$id"   # its three sidecar removals are tracked too — see its own header
   rm -f "$REG/$id.reaping" || _reg_purge_unremoved "$REG/$id.reaping"
   # CONDITIONAL, so the invariant is a mechanism rather than a hope: an `rm`
@@ -6360,13 +6360,13 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
 #
 # THAT SKIP IS THE LOOP'S RULE ONLY, not a general immunity — `_reg_purge`
-# also removes one named two-dot file EXPLICITLY, after the loop:
-# `rm -f "$REG/$id.hookstate.json"`, un-skipped on purpose (see the note in
-# `_reg_purge` beside that line). "Has a dot in the suffix" is sufficient
+# also removes two named two-dot files EXPLICITLY, after the loop:
+# `$REG/$id.hookstate.json` and `$REG/$id.turn.json`, un-skipped on purpose (see
+# the note in `_reg_purge` beside that line). "Has a dot in the suffix" is sufficient
 # for these two tmp families specifically, because nothing in `_reg_purge`
 # names them outside the loop, but it is not a general rule. No dot-prefixed
-# artifact under `$REG` is ever named `<id>.hookstate.json` for an aliasing
-# id, so no alias follows from this explicit line either.
+# artifact under `$REG` is ever named `<id>.hookstate.json` or `<id>.turn.json`
+# for an aliasing id, so no alias follows from these explicit names either.
 #
 # Enforced at CREATION ONLY — `cmd_ws_add` and `cmd_start`, the two sites
 # that mint a NEW registry row for a project — never at `cmd_pr_state`,

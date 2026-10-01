@@ -2609,3 +2609,38 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     expect(h.sh(`_ws_slug_free demo quiet-basin; echo "free=$?"`)).toContain('free=1');
   }, 30_000);
 });
+
+// ── The stall watch's turn marker goes with its row (worker stall watch wave 2, spec 2026-09-29 §5.1) ─────
+// `session-hook.sh` writes `$REG/<id>.turn.json` beside `<id>.hookstate.json`. Both names carry a SECOND dot,
+// so the purge loop's `*.*` skip (the nested-id guard) passes over them, and `_reg_purge` names both
+// explicitly after the loop (slug `purge-loop-uses-fresh-variable`: through `hf`, never the glob loop's `f`).
+describe('_reg_purge takes the turn marker with the row (stall watch wave 2)', () => {
+  it('removes <id>.turn.json beside <id>.hookstate.json, and leaves a neighbour\'s marker standing', () => {
+    const id = seed();
+    const REGD = path.join(h.home, '.cc-sessions');
+    const mine = [`${id}.turn.json`, `${id}.hookstate.json`];
+    // Two neighbours. A LONGER id sharing this one as a prefix has no dot after the id, so neither the glob nor
+    // an explicit name can reach it. A NESTED id's marker IS a glob match, and the `*.*` skip must keep it.
+    const neighbours = [`${id}x.turn.json`, `${id}.x-y.turn.json`];
+    for (const n of [...mine, ...neighbours]) fs.writeFileSync(path.join(REGD, n), '{"v":1}\n');
+    const out = h.sh(`_reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(out, 'nothing was refused').toContain('rc=0');
+    expect(out, 'and the out-parameter stays empty').toContain('unremoved=[]');
+    for (const n of mine) expect(fs.existsSync(path.join(REGD, n)), `${n} goes with the row`).toBe(false);
+    for (const n of neighbours) expect(fs.existsSync(path.join(REGD, n)), `${n} is another row's`).toBe(true);
+  });
+
+  it('a directory at <id>.turn.json is its own condition: status 3, and the path is named in REG_PURGE_UNREMOVED', () => {
+    const id = seed();
+    const REGD = path.join(h.home, '.cc-sessions');
+    const dir = path.join(REGD, `${id}.turn.json`);
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(REGD, `${id}.hookstate.json`), '{"v":1}\n');
+    const out = h.sh(`_reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(out, 'an unlink that failed after the emit is status 3').toContain('rc=3');
+    expect(out, 'and the refused path is named, alone').toContain(`unremoved=[${dir}]`);
+    expect(fs.existsSync(path.join(REGD, `${id}.hookstate.json`)), 'its sibling in the same loop still went')
+      .toBe(false);
+    expect(h.reg(id, 'uuid'), 'and so did the rest of the row').toBeNull();
+  });
+});
