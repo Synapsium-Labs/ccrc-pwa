@@ -604,6 +604,59 @@ describe('the turn marker across a restart (§5.1, SessionStart)', () => {
   });
 });
 
+// Final fix wave, OPS-2: the payload parse runs on EVERY event, so it calls no regex builtin. jq's regex engine
+// (Oniguruma) is an optional build dependency: a jq built without it fails every `test`/`gsub`, and the parse used to
+// gsub, so such a box wrote no hookstate and no marker for any event. The Stop and StopFailure arms keep their regexes:
+// they feed the marker's bg/kinds/ids and err alone, so on such a box a Stop writes bg -1 (unmeasured) and a
+// StopFailure an empty err (failed-unknown), and the hookstate write is untouched.
+describe('the payload parse needs no regex engine (OPS-2)', () => {
+  /** A jq that refuses any program naming a regex builtin, as one built without Oniguruma does, and runs the real
+   *  jq for everything else. `*sub\(*` covers `gsub(` too. */
+  const noRegexJq = (): void => {
+    const real = execFileSync('bash', ['-c', 'command -v jq'], { encoding: 'utf8' }).trim();
+    fs.writeFileSync(path.join(home, 'bin', 'jq'), [
+      '#!/bin/bash',
+      'for a in "$@"; do',
+      '  case "$a" in',
+      '    *test\\(*|*match\\(*|*capture\\(*|*scan\\(*|*splits\\(*|*sub\\(*)',
+      '      echo "jq: error: jq was compiled without ONIGURUMA regex library" >&2; exit 5 ;;',
+      '  esac',
+      'done',
+      `exec '${real}' "$@"`,
+      '',
+    ].join('\n'), { mode: 0o755 });
+  };
+
+  it('CONTROL: the stand-in refuses a regex program and runs a plain one', () => {
+    noRegexJq();
+    const jq = (prog: string) => spawnSync('jq', ['-n', prog], { encoding: 'utf8', env: hookEnv({}) });
+    expect(jq('"a" | test("a")').status).toBe(5);
+    expect(jq('"a" | gsub("a"; "b")').status).toBe(5);
+    expect(jq('"a" | explode | implode').stdout.trim()).toBe('"a"');
+  });
+
+  it('with no regex engine, every main event still writes the hookstate and the marker; a Stop degrades to bg -1', () => {
+    noRegexJq();
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(readState()).toMatchObject({ state: 'working', event: 'UserPromptSubmit' });
+    expect(turnMark()).toMatchObject({ state: 'working', event: 'UserPromptSubmit', sessionId: 'uuid-1' });
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'true' } });
+    expect(readState()).toMatchObject({ state: 'working', event: 'PostToolUse' });
+    run({ hook_event_name: 'Stop', background_tasks: [{ id: 'b1', type: 'shell' }] });
+    expect(readState()).toMatchObject({ state: 'done', event: 'Stop' });
+    expect(turnMark()).toMatchObject({ state: 'done', event: 'Stop', bg: -1, bgKinds: '', bgIds: '' });
+  });
+
+  it('the cleaning is unchanged: a stripped event name still reaches its arm, and a stripped session id is the marker id', () => {
+    run({ hook_event_name: 'Sto-pé ' });
+    expect(readState()).toMatchObject({ state: 'done', event: 'Stop' });
+    expect(turnMark()).toMatchObject({ state: 'done', event: 'Stop' });
+    fs.rmSync(turnFile());
+    run({ hook_event_name: 'UserPromptSubmit', session_id: 'sess_9-é;x 7' }, { CLAUDE_CODE_SESSION_ID: '' });
+    expect(turnMark().sessionId).toBe('sess_9-x7');
+  });
+});
+
 // The writer and the reader agree (F2). The hook fits the kinds list whole-alias-first under 200 bytes, and
 // `readTurnMarkMeasured` refuses anything else as malformed. So a line this hook wrote must read back `ok`, with
 // every kind a whole alias it was sent.

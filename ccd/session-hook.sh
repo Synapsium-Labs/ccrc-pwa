@@ -2764,7 +2764,7 @@ id="${tname#cc-}"
 [[ -d "$REG" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-{ read -r event; read -r psid; read -r paid; } < <(jq -r '(.hook_event_name // "" | tostring | gsub("[^A-Za-z]"; "")), (.session_id // "" | tostring | gsub("[^A-Za-z0-9_-]"; "")), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end)' <<<"$payload" 2>/dev/null) || exit 0
+{ read -r event; read -r psid; read -r paid; } < <(jq -r 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); (.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(alpha or (. >= 48 and . <= 57) or . == 95 or . == 45)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end)' <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma must not skip the write (OPS-2)
 [[ -n "$event" ]] || exit 0
 
 state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" bgk="" bgi="" err="" hts="" msid=""
@@ -2906,9 +2906,9 @@ case "$event" in
     state="done" ;;
   Stop)
     state="done"
-    # `is_interrupt` is no longer read: no installed lane's Stop carries it (spec §5.1). `interrupted` stays false
-    # here; the Subagent branch below still carries an older file's value forward. The fork it paid measures
-    # `background_tasks` instead: bg -1 unless it is an ARRAY (bg-kinds-only-from-an-array), each alias cleaned alone.
+    # `is_interrupt` is not read: no installed lane's Stop carries it (spec §5.1); `interrupted` stays false here (the
+    # Subagent branch carries an older value). This fork measures `background_tasks`: bg -1 unless it is an ARRAY (bg-kinds-only-from-an-array), each alias cleaned alone.
+    # Its regexes (and StopFailure's) feed the marker alone: a jq built without Oniguruma leaves bg -1 / err "", never the hookstate (OPS-2).
     { read -r bg; read -r bgk; read -r bgi; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | (if $a == null then -1 else ($a|length) end), ([$a[]? | objects | .type | strings | ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}\\z"))] | .[0:8] | join(","))' <<<"$payload" 2>/dev/null) ;;
   StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
