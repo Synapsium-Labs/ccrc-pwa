@@ -895,6 +895,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - C and F are PWA-side and need a session, so they are not measured here.
       - STATUS: fleet and server v0.0.54, newest v0.0.54, intent `*` dev/auto=channel, backups fleet 121M/server 400M,
         no anomalies.
+    - **2026-10-01 11:18 UTC — auto moved both boxes onto v0.0.55** (`a0860d1f`, a docs merge). This was the second
+      move on wave 8's script:
+      - The release was published at 10:20:12. The fleet box ran 10:34:02–10:39:58, and the server box
+        10:40:46–10:41:07.
+      - One auto-source feed row per box (10:34:01 and 10:40:45).
+      - Each box pruned one dir, its oldest, and holds 10 timestamped backups. The server box's total rose to 446M
+        only because the dir it pruned was smaller than the new one.
+      - The server box printed the zero sweep line again.
+      - STATUS: fleet and server v0.0.55, newest v0.0.55, backups fleet 122M/server 446M, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
