@@ -21,8 +21,10 @@ import { ghContainedEnv } from './ccdWsHelpers.js';
 import { CODEX } from './fixtures/modelCases.js';
 import { randomBytes } from 'node:crypto';
 import {
-  assertManagerStandIns, freePort, MANAGER_STANDIN_MARK, plantCodexBins, plantFakeRuntime,
+  assertManagerStandIns, authDirOf, codexAuthDir, freePort, freePorts, MANAGER_STANDIN_MARK, plantCodexBins,
+  plantFakeRuntime, plantLaneAuth, probeArgv0, probeRuntime, probeRuntimeCalls,
 } from './codexLaneFixture.js';
+import { pythonOrSkip } from './ccgptHarness.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -116,6 +118,26 @@ function boxWithStubOp(stubSource: string, roster: unknown = ROSTER): string {
   fs.writeFileSync(join(h, '.ccrc', 'accounts.json'), `${JSON.stringify(roster, null, 2)}\n`);
   env(h);
   return h;
+}
+
+/** One `exec.kind: "codex"` roster row, its authDir the fixture's. Hoisted out of
+ *  the codex-kind litellm describe by Plan 3a Task 1; that describe still uses it.
+ *  `extraExec` adds exec fields (`secretsFile`, which a codex row may carry). */
+const codexRow = (id: string, proxyPort: number, litellmPort: number,
+  extraExec: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id, label: id, configDirSuffix: `.claude-${id}`,
+  exec: { kind: 'codex', provider: 'openai', proxyPort, litellmPort, authDir: codexAuthDir(id), ...extraExec },
+  homeAble: false, telemetry: 'codex',
+});
+
+/** Plan 3a Task 1: `box()` with one codex row per id appended, each on two DISTINCT
+ *  kernel-chosen ports (never a constant: the real lane library probes them), then
+ *  `extra`. It replaces the box the file-level `beforeEach` made. */
+async function codexBox(ids: readonly string[], extra: readonly Record<string, unknown>[] = []): Promise<string> {
+  const ports = await freePorts(ids.length * 2);
+  fs.rmSync(home, { recursive: true, force: true });
+  return box({ ...ROSTER, accounts: [...ROSTER.accounts,
+    ...ids.map((id, i) => codexRow(id, ports[2 * i]!, ports[2 * i + 1]!)), ...extra] });
 }
 
 /** Prints nothing and exits 0 — the pre-existing emptiness case. */
@@ -1251,6 +1273,123 @@ describe('ccrc models <id> discovery', () => {
   });
 });
 
+// ── Plan 3a Task 1 (spec §9.1, D-3706): each codex lane's probe reads its OWN
+// OAuth through its OWN runtime. `_models_run_probe` exports the inputs and the
+// codex-lane marker for an exec.kind "codex" row, after the scrub and after
+// any secrets file. Every other row keeps today's probe environment exactly
+// (operator ruling Z1): the two CHATGPT_TOKEN_DIR scrub cases in the describe
+// above still hold it, unchanged. CONTAINMENT FIRST: every case poisons a PATH
+// `litellm` and the `python` beside it, so no old or mutated probe can reach
+// the runner's own LiteLLM.
+describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN authDir through its OWN runtime, with no default; every other row keeps today\'s probe environment (Plan 3a Task 1)', () => {
+  const poisonedDir = (): string => join(home, 'someone-elses-token-dir');
+  const poisonRan = (): boolean => fs.existsSync(join(home, 'python-poison'));
+  const poisonPathLitellm = (): string => {
+    const bin = join(home, '.local', 'bin');
+    fs.writeFileSync(join(bin, 'litellm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const p = join(bin, 'python');
+    fs.writeFileSync(p, '#!/bin/sh\nprintf \'%s\\n\' "$0" >> "$HOME/python-poison"\nexit 1\n', { mode: 0o755 });
+    return p;
+  };
+  const rowsOf = (r: Result): Record<string, unknown>[] => oneObject(r)['refreshed'] as Record<string, unknown>[];
+
+  it('two codex lanes: each probe is handed its own authDir and the resolved runtime — never the other lane\'s, an ambient one, or a secrets file\'s', async () => {
+    const [pa, la, pb, lb] = await freePorts(4);
+    fs.rmSync(home, { recursive: true, force: true });
+    home = box({ ...ROSTER, accounts: [...ROSTER.accounts,
+      codexRow('codex-a', pa!, la!), codexRow('codex-b', pb!, lb!, { secretsFile: '.secrets/codex-b.env' })] });
+    const poison = poisonPathLitellm();
+    fs.mkdirSync(poisonedDir(), { recursive: true });
+    fs.writeFileSync(join(poisonedDir(), 'auth.json'), JSON.stringify({ account_id: 'leaked-account-id' }));
+    // codex-b's secrets file (legal on a codex row) tries to hand its probe
+    // another directory and another interpreter. The codex inputs are exported
+    // AFTER it is sourced, so neither may win.
+    fs.mkdirSync(join(home, '.secrets'), { recursive: true });
+    fs.writeFileSync(join(home, '.secrets', 'codex-b.env'),
+      `export CHATGPT_TOKEN_DIR=${poisonedDir()}\nexport CCRC_CODEX_PYTHON=${poison}\n`);
+    plantCodexBins(home);
+    const pr = probeRuntime(home, CODEX_RAW);
+    const rt = plantFakeRuntime(home, { python: pr.python });
+    for (const id of ['codex-a', 'codex-b']) {
+      plantLaneAuth(home, id);
+      expect(run(['models', id, 'init', 'codex']).code).toBe(0);
+    }
+    const r = run(['models', 'refresh', '--all'], { CHATGPT_TOKEN_DIR: poisonedDir(), CCRC_CODEX_PYTHON: poison });
+    expect(rowsOf(r).map((x) => [x['id'], x['ok']])).toEqual([['codex-a', true], ['codex-b', true]]);
+    expect(r.code, 'refresh --all').toBe(0);
+    const calls = probeRuntimeCalls(pr.rec);
+    expect(calls.map((c) => c.env['CHATGPT_TOKEN_DIR']).sort())
+      .toEqual([authDirOf(home, 'codex-a'), authDirOf(home, 'codex-b')]);
+    expect(calls.map((c) => c.requests[0]?.headers['chatgpt-account-id']).sort())
+      .toEqual(['acct-codex-a', 'acct-codex-b']);
+    expect(probeArgv0(pr.rec)).toEqual([rt.python, rt.python]);
+    for (const id of ['codex-a', 'codex-b']) {
+      const cat = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', `${id}.json`), 'utf8')) as { models: unknown[] };
+      expect(cat.models, id).toHaveLength(9);
+    }
+    expect(poisonRan(), 'an interpreter the runtime did not resolve ran').toBe(false);
+    expect(r.stdout + r.stderr).not.toContain(poisonedDir());
+    expect(r.stdout + r.stderr).not.toContain('leaked-account-id');
+  });
+
+  it('a codex lane with no runtime refuses runtime-absent, naming ccrc install — an ambient interpreter and the PATH litellm never run', async () => {
+    home = await codexBox(['codex-a']);
+    const poison = poisonPathLitellm();
+    plantCodexBins(home);                      // ccgpt-runtime is placed; no generation is built
+    plantLaneAuth(home, 'codex-a');
+    expect(run(['models', 'codex-a', 'init', 'codex']).code).toBe(0);
+    const r = run(['models', 'refresh', 'codex-a'], { CCRC_CODEX_PYTHON: poison });
+    expect(r.code).toBe(1);
+    const [row] = rowsOf(r);
+    expect(row).toMatchObject({ id: 'codex-a', probe: 'codex', ok: false });
+    // Booleans: before this task the reason names the probe's default
+    // directory, a real lane's path, which a failing `toMatch` would print.
+    expect(/runtime-absent: run ccrc install/.test(String(row!['reason'])), 'the runtime-absent refusal').toBe(true);
+    expect(poisonRan(), 'an inherited interpreter ran').toBe(false);
+  });
+
+  it('a codex lane whose authDir holds no auth.json is not-logged-in, naming ccrc codex login, and no interpreter runs', async () => {
+    home = await codexBox(['codex-a']);
+    poisonPathLitellm();
+    plantCodexBins(home);
+    const pr = probeRuntime(home, CODEX_RAW);
+    plantFakeRuntime(home, { python: pr.python });
+    expect(run(['models', 'codex-a', 'init', 'codex']).code).toBe(0);
+    const r = run(['models', 'refresh', 'codex-a']);
+    expect(r.code).toBe(1);
+    expect(/not-logged-in: run ccrc codex login codex-a/.test(String(rowsOf(r)[0]!['reason'])), 'the not-logged-in refusal').toBe(true);
+    expect(probeArgv0(pr.rec)).toEqual([]);
+    expect(poisonRan()).toBe(false);
+  });
+
+  it('_models_run_probe hands a codex row its own authDir, runtime and marker; every other row gets neither marker nor runtime, and today\'s CHATGPT_TOKEN_DIR', async () => {
+    home = await codexBox(['codex-a']);
+    plantCodexBins(home);
+    const rt = plantFakeRuntime(home);
+    fs.mkdirSync(join(home, '.secrets'), { recursive: true });
+    fs.writeFileSync(join(home, '.secrets', 'router.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n'
+      + `export CHATGPT_TOKEN_DIR=${join(home, 'from-a-secrets-file')}\nexport CCRC_CODEX_PYTHON=${join(home, 'from-a-secrets-file-py')}\n`
+      + 'export CCRC_PROBE_LANE_KIND=codex\n');
+    // The ambient marker is a value no row would get, so a codex row's own
+    // export is what the first expectation reads, never an inherited one.
+    const ambient = { CHATGPT_TOKEN_DIR: join(home, 'ambient-dir'), CCRC_CODEX_PYTHON: join(home, 'ambient-py'), CCRC_PROBE_LANE_KIND: 'ambient' };
+    const seen = (id: string): Record<string, string> => {
+      const r = sourced(`_models_run_probe ${id} env`, [], ambient);
+      expect(r.code, r.stderr).toBe(0);
+      return Object.fromEntries(r.stdout.split('\n')
+        .filter((l) => /^(CHATGPT_TOKEN_DIR|CCRC_CODEX_PYTHON|CCRC_PROBE_LANE_KIND)=/.test(l))
+        .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+    };
+    expect(seen('codex-a')).toEqual({
+      CHATGPT_TOKEN_DIR: authDirOf(home, 'codex-a'), CCRC_CODEX_PYTHON: rt.python, CCRC_PROBE_LANE_KIND: 'codex' });
+    // Z1: what the probe got before this task, and nothing more. The scrub
+    // keeps an ambient CHATGPT_TOKEN_DIR out; a secrets file's value still
+    // reaches the probe; the marker and the interpreter never do.
+    expect(seen('router'), 'a row with a secrets file').toEqual({ CHATGPT_TOKEN_DIR: join(home, 'from-a-secrets-file') });
+    expect(seen('router2'), 'a row with none').toEqual({});
+  });
+});
+
 describe('ccrc models <id> rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
   beforeEach(() => {
     writeCatalogue('gpt');
@@ -1914,11 +2053,6 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
   const lanePath = (id: string): string => join(laneDir(id), 'litellm.yaml');
   const boxGlobal = (): string => join(home, '.handoff', 'litellm-config.yaml');
   const OLD = 'model_list: []\n';
-  const codexRow = (id: string, proxyPort: number, litellmPort: number): Record<string, unknown> => ({
-    id, label: id, configDirSuffix: `.claude-${id}`,
-    exec: { kind: 'codex', provider: 'openai', proxyPort, litellmPort, authDir: `.local/share/ccrc/codex/${id}` },
-    homeAble: false, telemetry: 'codex',
-  });
   /** Dynamic and DISTINCT (global constraint: never a hard-coded port). No
    *  case binds one — every tier is faked or idle — but the roster refuses a
    *  shared port, and `freePort()` can hand the same one out twice. */

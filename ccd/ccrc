@@ -9436,8 +9436,10 @@ _models_class_ok() {   # <class>
 #
 # THE PROBE IS A BOX-LEVEL EXECUTABLE WITH NO LANE CONTEXT: it reads
 # ANTHROPIC_AUTH_TOKEN out of its own environment, and only THIS helper knows
-# which lane is asking. The roster row for `<accountId>` is read for exactly
-# one fact, `exec.secretsFile`, and — when it has one — that file is sourced in
+# which lane is asking. The roster row for `<accountId>` is read for two
+# facts: `exec.secretsFile` and, through the lane library's readers, whether
+# it is an exec.kind "codex" row (`_models_probe_codex_env`, below). When it
+# has a secrets file, that file is sourced in
 # a SUBSHELL that runs the probe and nothing else, never the verb's own shell,
 # which must never carry the lane's key past this one call. The line is
 # `shared/wrapper.mjs`'s generated wrapper's own, verbatim:
@@ -9475,11 +9477,45 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
   if [ -n "$secrets" ]; then
     ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CHATGPT_TOKEN_DIR
       [ -r "$HOME/$secrets" ] && . "$HOME/$secrets"
+      _models_probe_codex_env "$id" || exit $?
       exec "$@" )
   else
     ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CHATGPT_TOKEN_DIR
+      _models_probe_codex_env "$id" || exit $?
       exec "$@" )
   fi
+}
+
+# THE CODEX LANE'S PROBE INPUTS (spec §9.1; Plan 3a Task 1, D-3706).
+#   - An exec.kind "codex" row: this exports the row's own `exec.authDir`,
+#     under $HOME, as CHATGPT_TOKEN_DIR; the interpreter `ccgpt-runtime
+#     python` resolves as CCRC_CODEX_PYTHON, EMPTY when none resolves, so the
+#     probe refuses `runtime-absent` rather than inheriting a caller's value;
+#     and CCRC_PROBE_LANE_KIND=codex, the one marker that sends the probe
+#     down its codex-lane fetch, which has no default directory.
+#   - Every other row: it UNSETS CCRC_CODEX_PYTHON and CCRC_PROBE_LANE_KIND
+#     and touches nothing else. That row's CHATGPT_TOKEN_DIR is exactly what
+#     it was before this function existed (scrubbed above, then whatever its
+#     secrets file sets), so an external lane's fetch keeps today's bytes,
+#     default directory included, until its own flip (Plan 3b).
+# Called ONLY inside `_models_run_probe`'s two subshells, after the scrub and
+# the source line: neither a caller nor a secrets file can choose a lane's
+# arm, directory or interpreter, and none of it reaches the verb's own shell.
+# The row is read through the lane library's one reader of `exec.kind`
+# (`_models_litellm_codex`, that is `_codex_lanes`) and its one reader of a
+# row (`_codex_row`). A codex row that does not validate is refused with
+# `_codex_row`'s own rc and sentence, and the probe never runs.
+_models_probe_codex_env() {   # <accountId> -> 0, or _codex_row's rc for a codex row that does not validate
+  if ! _models_litellm_codex "$1"; then
+    unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
+    return 0
+  fi
+  _codex_row "$1" || return $?
+  export CHATGPT_TOKEN_DIR="$HOME/$CX_AUTH"
+  export CCRC_PROBE_LANE_KIND=codex
+  CCRC_CODEX_PYTHON="$("$(_codex_runtime_cli)" python 2>/dev/null)" || CCRC_CODEX_PYTHON=''
+  export CCRC_CODEX_PYTHON
+  return 0
 }
 
 MODELS_ENDPOINTS_TMP=""

@@ -1676,3 +1676,209 @@ export function laneUnits(home: string, id: string): { litellm: string; shim: st
 // definition, never a second here. `{ answer: 'text', lane: <id>, port: <the lane's shim
 // port> }` is the OTHER repository's shim (`text/plain`, the bare id,
 // m-tiers §1), a tracked child that `killLaneProcesses` ends.
+
+// ════════════════════════════════════════════════════════════════════════
+// Plan 3a Task 1 — the MODEL PROBE's runtime interpreter, and a stand-in
+// Authenticator.
+//
+// `ccd/ccrc-models-probe`'s codex arm runs `<runtime python> -I -` with its
+// program on stdin, importing `litellm.llms.chatgpt.authenticator`. The
+// interpreter below is what a fake generation carries for it: plant it with
+// `plantFakeRuntime(home, { python })`, or hand its path to the probe as
+// CCRC_CODEX_PYTHON.
+//   - Any argv but exactly `-I -` exits 90, so a probe that dropped `-I` reds.
+//   - It runs THIS box's python3 on the program with the stand-in on
+//     sys.path. `-I` ignores PYTHONPATH, so a wrapper program inserts it.
+//   - An audit hook denies every socket connect and name lookup.
+//   - The probe's one `urllib.request.urlopen` is answered from a recorded
+//     catalogue file.
+//   - Per run it records one JSON line: the CHATGPT_/LITELLM_/OPENAI_
+//     environment plus CODEX_CLIENT_VERSION, every request's url and headers,
+//     and every open() of a file named auth.json.
+//
+// The stand-in (`writeAuthStub`) follows litellm 1.101.0's get_access_token,
+// read from that version's source: a usable token, a refresh, the cooldown
+// wait (`_wait_for_access_token`), then the device flow (`_login_device_code`,
+// which WRITES device_code_requested_at into auth.json before it prints a code
+// and polls). Each device-side step here records a mark in `<rec>/device-flow`,
+// makes that same auth.json write, and returns AT ONCE, so a guard that fails
+// reds on the mark instead of hanging a suite. Its mode is `<rec>/mode`,
+// default `token`, read at import.
+// ════════════════════════════════════════════════════════════════════════
+
+export type AuthStubMode = 'token' | 'no-account-id' | 'device' | 'cooldown' | 'renamed';
+
+export interface ProbeRuntimeCall {
+  env: Record<string, string>;
+  requests: { url: string; headers: Record<string, string> }[];
+  authOpens: string[];
+}
+
+export interface ProbeRuntime {
+  /** The interpreter BODY: `plantFakeRuntime`'s `python` option, or a file to hand the probe. */
+  python: string;
+  /** Where each run is recorded, and where the stand-in reads its mode. */
+  rec: string;
+  /** The stand-in `litellm` package root. */
+  stub: string;
+}
+
+const authStubSource = (rec: string): string => [
+  '# A stand-in for litellm.llms.chatgpt.authenticator (codexLaneFixture.ts,',
+  '# Plan 3a Task 1). NOT litellm: it models the one control flow the',
+  '# unattended guard exists for, and nothing else.',
+  'import json, os, time',
+  `_REC = ${JSON.stringify(rec)}`,
+  'try:',
+  '    with open(os.path.join(_REC, "mode")) as _f:',
+  '        MODE = _f.read().strip() or "token"',
+  'except OSError:',
+  '    MODE = "token"',
+  'TOKEN = "test-token-not-a-secret"',
+  '',
+  '',
+  'class Authenticator:',
+  '    def __init__(self):',
+  '        self.token_dir = os.getenv("CHATGPT_TOKEN_DIR", os.path.expanduser("~/.config/litellm/chatgpt"))',
+  '        self.auth_file = os.path.join(self.token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json"))',
+  '',
+  '    def get_access_token(self):',
+  '        # litellm 1.101.0 order: a usable token, a refresh, the cooldown wait, the device flow.',
+  '        if MODE in ("token", "no-account-id"):',
+  '            return TOKEN',
+  '        if MODE == "cooldown":',
+  '            token = self._wait_for_access_token(300.0)',
+  '            if token:',
+  '                return token',
+  '        login = self._login_device_code_v2 if MODE == "renamed" else self._login_device_code',
+  '        return login()["access_token"]',
+  '',
+  '    def get_account_id(self):',
+  '        if MODE == "no-account-id":',
+  '            return None',
+  '        return "acct-" + os.path.basename(self.token_dir)',
+  '',
+  '    def _login_device_code(self):',
+  '        self._device_step("device-code")',
+  '        print("Sign in with ChatGPT using device code:\\n2) Enter code: WXYZ-4321", flush=True)',
+  '        return {"access_token": "device-token-not-a-secret"}',
+  '',
+  '    def _wait_for_access_token(self, timeout_seconds):',
+  '        self._device_step("cooldown-wait")',
+  '        return None',
+  '',
+  '    def _device_step(self, what):',
+  '        with open(os.path.join(_REC, "device-flow"), "a") as f:',
+  '            f.write(what + "\\n")',
+  '        with open(self.auth_file, "w") as f:',
+  '            json.dump({"device_code_requested_at": time.time()}, f)',
+  '',
+  '',
+  'if MODE == "renamed":',
+  '    # A litellm whose device flow moved to another name: a guard that only',
+  '    # overrides the old name guards nothing.',
+  '    Authenticator._login_device_code_v2 = Authenticator._login_device_code',
+  '    del Authenticator._login_device_code',
+].join('\n') + '\n';
+
+/** The stand-in package under `dir`, reading its mode from `<rec>/mode`. */
+export function writeAuthStub(dir: string, rec: string): void {
+  const pkg = path.join(dir, 'litellm', 'llms', 'chatgpt');
+  mkdirSync(pkg, { recursive: true });
+  mkdirSync(rec, { recursive: true });
+  writeFileSync(path.join(dir, 'litellm', '__init__.py'), '# codexLaneFixture.ts stand-in (Plan 3a Task 1): NOT litellm\n');
+  writeFileSync(path.join(dir, 'litellm', 'llms', '__init__.py'), '');
+  writeFileSync(path.join(pkg, '__init__.py'), '');
+  writeFileSync(path.join(pkg, 'authenticator.py'), authStubSource(rec));
+}
+
+export function setAuthStubMode(rec: string, mode: AuthStubMode): void {
+  writeFileSync(path.join(rec, 'mode'), `${mode}\n`);
+}
+
+/** Each device-side step the stand-in took, in order. Empty is the guard holding. */
+export const deviceFlowMarks = (rec: string): string[] => lines(path.join(rec, 'device-flow'));
+/** The `$0` of every run of the probe-runtime interpreter. Empty: it never ran. */
+export const probeArgv0 = (rec: string): string[] => lines(path.join(rec, 'argv0'));
+export const probeRuntimeCalls = (rec: string): ProbeRuntimeCall[] =>
+  lines(path.join(rec, 'calls.jsonl')).map((l) => JSON.parse(l) as ProbeRuntimeCall);
+
+const PROBE_RUNTIME_WRAPPER = [
+  'import atexit, json, os, sys, urllib.request',
+  'sys.dont_write_bytecode = True',
+  'stub, rec, answer = sys.argv[1], sys.argv[2], sys.argv[3]',
+  'sys.argv = ["-"]',
+  'sys.path.insert(0, stub)',
+  'call = {"env": {k: v for k, v in os.environ.items()',
+  '                if k.startswith(("CHATGPT_", "LITELLM_", "OPENAI_")) or k == "CODEX_CLIENT_VERSION"},',
+  '        "requests": [], "authOpens": []}',
+  'recording = [True]',
+  '',
+  '',
+  'def _audit(event, args):',
+  '    if not recording[0]:',
+  '        return',
+  '    if event in ("socket.connect", "socket.getaddrinfo"):',
+  '        raise PermissionError("fixture probe runtime: no network under test")',
+  '    if event == "open" and args and isinstance(args[0], str) and os.path.basename(args[0]) == "auth.json":',
+  '        call["authOpens"].append(args[0])',
+  '',
+  '',
+  'sys.addaudithook(_audit)',
+  '',
+  '',
+  'def _dump():',
+  '    recording[0] = False',
+  '    with open(os.path.join(rec, "calls.jsonl"), "a") as f:',
+  '        f.write(json.dumps(call) + "\\n")',
+  '',
+  '',
+  'atexit.register(_dump)',
+  '',
+  '',
+  'class _Answer:',
+  '    def __init__(self, data):',
+  '        self._data = data',
+  '',
+  '    def read(self):',
+  '        return self._data',
+  '',
+  '',
+  'def _urlopen(req, timeout=None):',
+  '    call["requests"].append({"url": req.full_url,',
+  '                             "headers": {k.lower(): v for k, v in req.header_items()}})',
+  '    recording[0] = False',
+  '    try:',
+  '        with open(answer, "rb") as f:',
+  '            return _Answer(f.read())',
+  '    finally:',
+  '        recording[0] = True',
+  '',
+  '',
+  'urllib.request.urlopen = _urlopen',
+  'exec(compile(sys.stdin.read(), "<stdin>", "exec"), {"__name__": "__main__"})',
+].join('\n');
+
+/** The model probe's fake runtime interpreter, recording under `<home>/probe-rec`,
+ *  its stand-in Authenticator under `<home>/probe-stub`, answering the one
+ *  catalogue request from `catalogueFile`. Throws on a box with no python3:
+ *  guard the describe with `pythonOrSkip()`. */
+export function probeRuntime(home: string, catalogueFile: string): ProbeRuntime {
+  const py = pythonOrSkip();
+  if (py === null) throw new Error('probeRuntime: no python3 on this box — guard the case with pythonOrSkip()');
+  if (!fs.existsSync(catalogueFile)) throw new Error(`probeRuntime: ${catalogueFile} does not exist`);
+  const rec = path.join(home, 'probe-rec');
+  const stub = path.join(home, 'probe-stub');
+  writeAuthStub(stub, rec);
+  const python = [
+    '#!/bin/sh',
+    "# The model probe's fake runtime interpreter (codexLaneFixture.ts, Plan 3a Task 1). NOT a runtime.",
+    'if [ "$#" -ne 2 ] || [ "$1" != -I ] || [ "$2" != - ]; then',
+    '  echo "fixture probe runtime: unexpected argv: $*" >&2',
+    '  exit 90',
+    'fi',
+    `printf '%s\\n' "$0" >> ${shq(path.join(rec, 'argv0'))}`,
+    `exec ${shq(py)} -I -c ${shq(PROBE_RUNTIME_WRAPPER)} ${shq(stub)} ${shq(rec)} ${shq(catalogueFile)}`,
+  ].join('\n') + '\n';
+  return { python, rec, stub };
+}

@@ -7873,7 +7873,7 @@ function writeModelRegistry(home: string, id: string): void {
 
 /** `~/.ccrc/models/<id>.json` — the CATALOGUE, the only file `fetchedAt`,
  *  `stale` and `lastError` live in. `fetchedAt` defaults to now, in UNIX
- *  SECONDS (`ccd/ccrc-models-probe:397`'s `int(time.time())`) — never the
+ *  SECONDS (`ccd/ccrc-models-probe`'s `_normalise`, `int(time.time())`) — never the
  *  millisecond stamps the server side uses elsewhere. */
 function writeModelCatalogue(home: string, id: string, o: {
   fetchedAt?: number; stale?: boolean; lastError?: string;

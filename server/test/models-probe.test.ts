@@ -24,6 +24,10 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { parseCatalogue } from '../../shared/models.js';
+import { pythonOrSkip } from './ccgptHarness.js';
+import {
+  codexAuthDir, deviceFlowMarks, probeArgv0, probeRuntime, probeRuntimeCalls, setAuthStubMode, type ProbeRuntime,
+} from './codexLaneFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -662,5 +666,207 @@ describe('--endpoints: the ownership-whitelist question (§5, §8)', () => {
     expect(r.stderr).toMatch(/the endpoints question needs the lane's key: set ANTHROPIC_AUTH_TOKEN/);
     expect(fs.existsSync(path.join(home, 'e.json'))).toBe(false);
     expect(curlCalls()).toEqual([]);
+  });
+});
+
+// ── Plan 3a Task 1: a codex lane's Codex arm reads only what its caller hands it
+// `ccrc`'s `_models_run_probe` exports CCRC_PROBE_LANE_KIND=codex,
+// CHATGPT_TOKEN_DIR (the row's own exec.authDir) and CCRC_CODEX_PYTHON (the
+// interpreter `ccgpt-runtime python` resolved) for an exec.kind "codex" row,
+// and neither the marker nor the interpreter for any other row. These cases
+// hand the probe those values directly, so what they pin is the PROBE's own
+// contract:
+//   - on the marker, no default for either input;
+//   - three refusals before any interpreter runs;
+//   - the interpreter run isolated and scrubbed;
+//   - an Authenticator that may refresh a token and may never start a device
+//     sign-in;
+//   - and WITHOUT the marker, today's arm, byte for byte (operator ruling Z1,
+//     D-3706): the last two cases.
+// CONTAINMENT FIRST: every case plants a poisoned `litellm` and a poisoned
+// `python` beside it on the fixture PATH. An old or mutated probe that goes
+// looking for a PATH LiteLLM runs a recorder — never the runner's own LiteLLM,
+// whose real Authenticator would start a real device sign-in against a
+// fixture HOME.
+describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no default token directory, its own runtime and never a device sign-in; every other caller keeps today\'s arm (Plan 3a Task 1)', () => {
+  let pr: ProbeRuntime;
+  let py: string;
+  const authDir = (): string => path.join(home, codexAuthDir('codex-a'));
+  // auth.json is compared by lstat (size, mtime, inode) before and after, and
+  // its bytes are never read (no test opens an OAuth file). The stand-in's
+  // device step rewrites it with a longer body, so a write changes the size.
+  const authStat = (): { size: number; mtimeMs: number; ino: number } => {
+    const s = fs.lstatSync(path.join(authDir(), 'auth.json'));
+    return { size: s.size, mtimeMs: s.mtimeMs, ino: s.ino };
+  };
+  const poisonRan = (): boolean => fs.existsSync(path.join(home, 'python-poison'));
+
+  beforeEach(() => {
+    const bin = path.join(home, '.local', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'litellm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, 'python'),
+      '#!/bin/sh\nprintf \'%s %s|%s\\n\' "$0" "$*" "${CHATGPT_TOKEN_DIR:-}" >> "$HOME/python-poison"\nexit 1\n', { mode: 0o755 });
+    pr = probeRuntime(home, CODEX_RAW);
+    py = path.join(home, 'probe-runtime-python');
+    fs.writeFileSync(py, pr.python, { mode: 0o755 });
+    fs.mkdirSync(authDir(), { recursive: true });
+    fs.writeFileSync(path.join(authDir(), 'auth.json'), '{}');
+  });
+
+  const codex = (extra: NodeJS.ProcessEnv = {}): Result =>
+    run(['codex-a', 'codex'], { CCRC_PROBE_LANE_KIND: 'codex', CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py, ...extra });
+
+  it('handed no CHATGPT_TOKEN_DIR it refuses no-token-dir — there is no default directory — and no interpreter runs', () => {
+    const r = codex({ CHATGPT_TOKEN_DIR: '' });
+    expect(r.code).toBe(1);
+    // A boolean, not `toMatch`: the pre-Plan-3a probe answers from its old default
+    // directory, a real lane's path, so a failing `toMatch` would print it.
+    expect(/no-token-dir: run it through 'ccrc models refresh codex-a' — this codex-lane fetch/.test(r.stderr),
+      'the no-token-dir refusal').toBe(true);
+    expect(probeArgv0(pr.rec), 'an interpreter ran with no token directory').toEqual([]);
+    expect(poisonRan()).toBe(false);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'codex-a.json'))).toBe(false);
+    expect(curlCalls()).toEqual([]);
+  });
+
+  it('handed no interpreter it refuses runtime-absent, naming ccrc install — and never falls back to the python beside a litellm on PATH', () => {
+    for (const handed of ['', path.join(home, 'no-such-python')]) {
+      const r = codex({ CCRC_CODEX_PYTHON: handed });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/runtime-absent: run ccrc install \(it builds the Codex runtime\), then ccrc models refresh codex-a/);
+    }
+    expect(poisonRan(), 'the PATH litellm\'s python ran').toBe(false);
+    expect(probeArgv0(pr.rec)).toEqual([]);
+  });
+
+  it('with no auth.json in the handed directory it refuses not-logged-in, naming ccrc codex login — existence only, before any interpreter runs', () => {
+    fs.rmSync(path.join(authDir(), 'auth.json'));
+    const r = codex();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/not-logged-in: run ccrc codex login codex-a/);
+    expect(probeArgv0(pr.rec)).toEqual([]);
+  });
+
+  it('runs the handed interpreter as `-I -`, every ambient CHATGPT_/LITELLM_/OPENAI_ variable gone, the cost map local, reading the handed directory', () => {
+    const r = codex({
+      CHATGPT_AUTH_FILE: path.join(home, 'ambient', 'elsewhere.json'),
+      OPENAI_API_KEY: 'ambient-not-a-secret',
+      LITELLM_LOG: 'DEBUG',
+    });
+    expect(r.code, r.stderr).toBe(0);
+    expect(probeArgv0(pr.rec)).toEqual([py]);
+    const calls = probeRuntimeCalls(pr.rec);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.env).toEqual({
+      CHATGPT_TOKEN_DIR: authDir(),
+      LITELLM_LOCAL_MODEL_COST_MAP: 'True',
+      CODEX_CLIENT_VERSION: expect.stringMatching(/^\d+\.\d+\.\d+$/),
+    });
+    expect((catalogueAt('codex-a') as { models: unknown[] }).models).toHaveLength(9);
+    expect(poisonRan()).toBe(false);
+    expect(curlCalls()).toEqual([]);
+  });
+
+  it('sends ChatGPT-Account-Id from Authenticator().get_account_id(), and its own program never opens auth.json (D-3161 closed)', () => {
+    expect(codex().code).toBe(0);
+    const [call] = probeRuntimeCalls(pr.rec);
+    expect(call!.requests).toHaveLength(1);
+    expect(call!.requests[0]!.url).toMatch(/^https:\/\/chatgpt\.com\/backend-api\/codex\/models\?client_version=/);
+    expect(call!.requests[0]!.headers['authorization']).toBe('Bearer test-token-not-a-secret');
+    expect(call!.requests[0]!.headers['chatgpt-account-id']).toBe('acct-codex-a');
+    expect(call!.authOpens, 'the probe program opened auth.json itself').toEqual([]);
+  });
+
+  it('an Authenticator that knows no account id sends no ChatGPT-Account-Id at all', () => {
+    setAuthStubMode(pr.rec, 'no-account-id');
+    expect(codex().code).toBe(0);
+    expect(probeRuntimeCalls(pr.rec)[0]!.requests[0]!.headers).not.toHaveProperty('chatgpt-account-id');
+  });
+
+  it('a token the runtime can neither use nor refresh is login-required AT ONCE: the device flow never starts, and auth.json is never written', () => {
+    setAuthStubMode(pr.rec, 'device');
+    const before = authStat();
+    const r = codex();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/login-required: run ccrc codex login codex-a/);
+    expect(deviceFlowMarks(pr.rec), 'the device flow started').toEqual([]);
+    expect(authStat(), 'auth.json was written').toEqual(before);
+    // No `Enter code` check here: the program's stdout is the probe's $RAW, never
+    // the caller's. The marks and auth.json's bytes are what bind.
+    expect(probeRuntimeCalls(pr.rec)[0]!.requests).toEqual([]);
+  });
+
+  it('another sign-in\'s cooldown is login-required too: the probe never waits on it', () => {
+    setAuthStubMode(pr.rec, 'cooldown');
+    const before = authStat();
+    const r = codex();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/login-required: run ccrc codex login codex-a/);
+    expect(deviceFlowMarks(pr.rec)).toEqual([]);
+    expect(authStat()).toEqual(before);
+  });
+
+  it('a runtime whose Authenticator lacks a name the guard overrides is refused runtime-api-moved, before any token is asked', () => {
+    setAuthStubMode(pr.rec, 'renamed');
+    const before = authStat();
+    const r = codex();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/runtime-api-moved: run ccrc update — this runtime's Authenticator has no _login_device_code/);
+    expect(deviceFlowMarks(pr.rec)).toEqual([]);
+    expect(authStat()).toEqual(before);
+  });
+
+  it('the unattended guard is ONE text, in the probe and in the usage publisher', () => {
+    const START = '# ── unattended-authenticator guard (Plan 3a Task 1)';
+    const END = '# ── end unattended-authenticator guard ──';
+    const block = (file: string): string => {
+      const src = fs.readFileSync(file, 'utf8');
+      const a = src.indexOf(START);
+      expect(a, `${file} carries the guard`).toBeGreaterThan(-1);
+      expect(src.indexOf(START, a + 1), `${file} carries it once`).toBe(-1);
+      const b = src.indexOf(END, a);
+      expect(b, `${file} closes it`).toBeGreaterThan(a);
+      return src.slice(a, b + END.length);
+    };
+    expect(block(PROBE)).toBe(block(path.join(REPO, 'ccd', 'ccgpt-usage.py')));
+  });
+
+  it('the codex-lane arm spells no default token directory and no PATH-derived interpreter', () => {
+    const body = extractFn('_fetch_codex_lane');
+    // Booleans, never `not.toMatch(body)`: a failure prints its subject.
+    expect(/CHATGPT_TOKEN_DIR:-[^}]/.test(body), 'a default token directory').toBe(false);
+    expect(body.includes('command -v litellm'), 'a PATH-derived interpreter').toBe(false);
+    expect(body.includes('readlink'), 'readlink').toBe(false);
+  });
+
+  // Z1 (operator ruling Z, D-3706): every caller that is not a codex lane
+  // keeps today's arm, byte for byte, until that lane's own flip. Both cases
+  // are GREEN before this task and after it. They bind through mutation rows
+  // 15-17, never through a red-first run.
+  it('without the codex-lane marker the arm is today\'s: the python beside the PATH litellm, run as `-`, on the directory it was handed; a handed CCRC_CODEX_PYTHON never runs', () => {
+    const pathPython = path.join(fs.realpathSync(path.join(home, '.local', 'bin')), 'python');
+    for (const marker of ['', 'external']) {
+      fs.rmSync(path.join(home, 'python-poison'), { force: true });
+      const r = run(['ext-a', 'codex'], { CCRC_PROBE_LANE_KIND: marker, CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py });
+      expect(r.code, `marker "${marker}"`).toBe(1);   // the PATH python is a recorder that exits 1
+      expect(fs.readFileSync(path.join(home, 'python-poison'), 'utf8'), `marker "${marker}"`)
+        .toBe(`${pathPython} -|${authDir()}\n`);
+    }
+    expect(probeArgv0(pr.rec), 'the handed runtime interpreter ran').toEqual([]);
+    expect(curlCalls()).toEqual([]);
+  });
+
+  it('without the codex-lane marker and handed no directory, the arm still falls back to its own default, and nothing runs where that holds no auth.json', () => {
+    // The default is read off the arm's own text and never spelled here: it
+    // is a real lane's directory (ruling R13).
+    const m = /\$\{CHATGPT_TOKEN_DIR:-\$HOME\/([^}]+)\}/.exec(extractFn('_fetch_codex'));
+    expect(m !== null, '_fetch_codex keeps a default token directory').toBe(true);
+    const r = run(['ext-a', 'codex'], { CHATGPT_TOKEN_DIR: '', CCRC_CODEX_PYTHON: py });
+    expect(r.code).toBe(1);
+    // A boolean: a failing `toContain` would print the default directory.
+    expect(r.stderr.includes(`not logged in (${home}/${m![1]})`), 'today\'s sentence, on the default directory').toBe(true);
+    expect(poisonRan(), 'an interpreter ran with no auth.json').toBe(false);
+    expect(probeArgv0(pr.rec)).toEqual([]);
   });
 });

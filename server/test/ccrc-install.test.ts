@@ -4155,6 +4155,11 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(code, 'the cost map is not local — every poll would fetch a mutable remote JSON (D-3484)')
       .toContain('Environment=LITELLM_LOCAL_MODEL_COST_MAP=True');
     expect(code).toContain('Environment=CCGPT_ACCOUNT_ID=%i');
+    // Plan 3a Task 1: a oneshot has NO start timeout by default. The
+    // publisher refuses a device sign-in in-process; this bounds everything
+    // else a wedged refresh could hold. Task 6's rename carries the line.
+    expect(code.filter((l) => l.startsWith('TimeoutStartSec=')), 'the usage poll must be bounded')
+      .toEqual(['TimeoutStartSec=300']);
     expect(code.filter((l) => /^Environment=["']?PATH=/.test(l)), 'a PATH line cannot choose the interpreter (D-3164)')
       .toEqual([]);
 

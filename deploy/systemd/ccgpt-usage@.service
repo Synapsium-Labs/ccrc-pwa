@@ -17,6 +17,11 @@ Environment=CCGPT_ACCOUNT_ID=%i
 # The cost map stays local (D-3484): without it, `import litellm`
 # fetches a mutable remote JSON, with retries, on every poll.
 Environment=LITELLM_LOCAL_MODEL_COST_MAP=True
+# Plan 3a Task 1: a oneshot has no start timeout by default, so a wedged
+# token refresh held the poll forever. The publisher refuses a device sign-in
+# in-process (its unattended guard); this bounds the rest. 300 s is
+# ccrc-models.service's own bound, well under this timer's 15 min interval.
+TimeoutStartSec=300
 ExecStart=%h/.ccrc/runtime/codex/current/bin/python -I %h/.local/bin/ccgpt-usage.py
 # This pair is still placed by NO installer (D-3172): on a live fleet box both
 # names hold another repository's units with an instance enabled, so placing

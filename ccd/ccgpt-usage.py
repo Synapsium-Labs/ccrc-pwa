@@ -231,6 +231,46 @@ LANE_MANIFEST_PATH = os.path.join(os.path.expanduser("~"), ".ccrc", "codex", ACC
 from litellm.llms.chatgpt.authenticator import Authenticator  # noqa: E402
 
 
+# ── unattended-authenticator guard (Plan 3a Task 1): one text, in ccd/ccrc-models-probe and ccd/ccgpt-usage.py ──
+# A caller nobody watches must never start LiteLLM's device sign-in. What
+# litellm 1.101.0 does (the floor of the runtime's requirement, read from its
+# source): get_access_token falls through a usable token and a refresh to two
+# steps:
+#   - _wait_for_access_token, which polls up to 300 s on another sign-in's
+#     cooldown;
+#   - _login_device_code, which WRITES device_code_requested_at into the
+#     lane's auth.json, prints a code nobody reads, and polls up to 15 minutes.
+# A deadline cannot undo that write. A poll killed part-way leaves the marker,
+# and the lane's own LiteLLM tier then waits out the cooldown on live requests.
+# So both are refused here, in-process, before either can write. A runtime
+# whose Authenticator lacks a name this guard overrides, or one its caller
+# needs, is refused too: overriding a name the library no longer calls guards
+# nothing.
+class LoginRequired(Exception):
+    """The lane holds no token LiteLLM can use or refresh: only a person can sign it in."""
+
+
+class RuntimeApiMoved(Exception):
+    """This runtime's Authenticator lacks a name the guard depends on."""
+
+
+def _unattended(authenticator, required=("get_access_token",)):
+    missing = [name for name in (*required, "_login_device_code", "_wait_for_access_token")
+               if not callable(getattr(authenticator, name, None))]
+    if missing:
+        raise RuntimeApiMoved(", ".join(missing))
+
+    class Unattended(authenticator):
+        def _login_device_code(self, *args, **kwargs):
+            raise LoginRequired("device-code")
+
+        def _wait_for_access_token(self, *args, **kwargs):
+            raise LoginRequired("device-code-cooldown")
+
+    return Unattended
+# ── end unattended-authenticator guard ──
+
+
 def _read_lane() -> dict:
     """Read and parse `~/.ccrc/codex/<id>/lane.json` once — the single read
     both `_probe_model` and `_token_dir` work from (task-10-fix-rulings.md
@@ -576,11 +616,20 @@ def main() -> None:
     # let an ambient CHATGPT_TOKEN_DIR silently win over what was just
     # computed and checked above.
     os.environ["CHATGPT_TOKEN_DIR"] = token_dir
-    # Authenticator refreshes the access token if it has expired. Stubbed in
-    # every test in this wave (server/test/fixtures/pystub, Task 1) to
-    # return a fixed non-secret string — this file never sees, stores or
-    # logs a real credential either way.
-    token = Authenticator().get_access_token()
+    # Authenticator refreshes the access token if it has expired, and it
+    # never starts a device sign-in here: the unattended guard above refuses
+    # one before it can write auth.json (Plan 3a Task 1). Stubbed in every
+    # test (codexLaneFixture.ts's writeAuthStub) with a fixed non-secret
+    # string. This file never sees, stores or logs a real credential.
+    try:
+        token = _unattended(Authenticator)().get_access_token()
+    except RuntimeApiMoved as missing:
+        sys.exit(f"ccgpt-usage: runtime-api-moved: run ccrc update — this runtime's Authenticator has no "
+                 f"{missing}, so this poll cannot run without risking an interactive sign-in; nothing was published")
+    except LoginRequired:
+        sys.exit(f"ccgpt-usage: login-required: run ccrc codex login {ACCOUNT_ID} — lane {ACCOUNT_ID} holds no "
+                 "token the Codex runtime can use or refresh, and this unattended poll never starts a device "
+                 "sign-in; nothing was published")
     headers = _fetch_headers(model, token)
     out = _build_row(headers)
     _publish(out)
