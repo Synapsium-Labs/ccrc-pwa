@@ -648,7 +648,7 @@ export function rungRecipient(arm: StallArm, rung: 1 | 2 | 3): StallRecipient {
  *  earliest row: a rung re-sent live is timed from the notice its recipient actually got, so the next
  *  rung waits the hour the r1 body promises (spec §4.2, "r2 at r1 + 1 h … r3 at r2 + 1 h"), and a rung
  *  standing in shadow is timed from its shadow row. Not done: null. */
-function rungDoneAt(input: StallInput, arm: StallArm, rung: 1 | 2 | 3, key: number): number | null {
+function rungDoneAt(input: Pick<StallInput, 'notices' | 'arming'>, arm: StallArm, rung: 1 | 2 | 3, key: number): number | null {
   const rows = input.notices.filter((n) => n.arm === arm && n.rung === rung && n.key === key);
   const liveRow = rows.some((n) => n.mode === 'live');
   const shadowStands = rows.some((n) => n.mode === 'shadow') && stallNotifyDelivery(arm, rungRecipient(arm, rung), input.arming) === 'shadow';
@@ -1258,4 +1258,295 @@ export function turnMarkStale(m: Pick<TurnMark, 'at' | 'restartAt'>, startedAt: 
 export function turnMarkGraceUntil(m: Pick<TurnMark, 'restartAt' | 'turnAt' | 'stopAt'>): number | null {
   if (m.restartAt === null || m.turnAt === null) return null;
   return m.turnAt > (m.stopAt ?? Number.NEGATIVE_INFINITY) ? m.restartAt + RESTART_GRACE_MS : null;
+}
+
+// ===========================================================================
+// Task 12 (wave 2): the session-scoped verdicts (spec §5.2; §10: "The D, E and failed arms are separate pure
+// verdicts over the marker and apply holds 1, 2 and the limit hold only; mail-stuck is evaluated per delivery").
+// Each is judged beside `stallVerdict`, never inside it. A run worker's notices are its run's `run_events`. A
+// coordinator's, and any other session's, are run-less (`coordinator-notices-are-run-less`). A run-less rung to
+// the session itself is therefore done by the watch's own mail, found by its exact subject. A run-less rung to the
+// operator is latched in memory by the lane, which L1 cannot see. Every exported verdict passes through
+// `stallMailDisabledHold` (`lane-honours-mail-disabled`, `mail-disabled-holds-only-sends`).
+// ===========================================================================
+
+export type StallSessionRole = 'worker' | 'coordinator' | 'other';
+export interface StallSessionInput {
+  readonly sessionId: string;
+  readonly role: StallSessionRole;
+  readonly run: StallRunRow | null;          // worker: its subject's primary; coordinator/other: null (run-less notices)
+  readonly worker: StallWorker;
+  readonly mark: TurnMarkRead;
+  readonly liveStartedAt: number | null;     // L1 re-judges staleness with turnMarkStale
+  readonly markUnreadableSince: number | null;
+  readonly mail: readonly StallMailRow[];    // stallMailFor's whole (time-bounded) rows
+  readonly deliveries: readonly StallDeliveryRow[];
+  readonly notices: readonly StallNotice[];  // worker: runEvents(run.id); else []
+  readonly arming: StallArming;
+  readonly coordinationPaused: boolean;
+}
+
+/** The one gate word mail-stuck reads. It is typed against Task 10's Record, so a rename there is a compile error
+ *  here, and `isStallKebab` declares it through that Record. §5.2: `lastError` is never read, because it is sticky
+ *  text that outlives the transient it records. */
+const STALL_STUCK_GATE: keyof typeof STALL_GATE_WORD_MAP = 'registry-unmeasurable';
+
+/** Wave 1's limit-hold condition (the verdict's step (5)), for a session: a window at its ceiling, a strand, a
+ *  blocked swap, or an auto-continue hold begun within AUTO_CONTINUE_RECENT_MS. A null `limits` or a null window is
+ *  neither at the ceiling nor unmeasured. */
+function stallSessionLimited(w: Extract<StallWorker, { present: true }>, now: number): boolean {
+  const lim = w.limits;
+  const atCeiling = lim !== null && ((lim.five !== null && lim.five >= 100) || (lim.seven !== null && lim.seven >= 100));
+  const autoContinueRecent = w.autoContinueHeldAt !== null && w.autoContinueHeldAt > now - AUTO_CONTINUE_RECENT_MS;
+  return atCeiling || w.stranded || w.swapBlocked || autoContinueRecent;
+}
+
+/** Holds 1, 2 and the limit hold only; null = none applies. Hold 1 belongs to a run worker alone: a coordinator's
+ *  verdict, and any other session's, names no run. `now` is the limit hold's auto-continue clock
+ *  (`session-hold-takes-now`). A marker that is not ok for a reason other than `unmeasured` is no hold here: D, E and
+ *  failed read it as `none`. */
+export function stallSessionHold(input: StallSessionInput, now: number): StallVerdict | null {
+  const r = input.run;
+  if (input.role === 'worker' && r !== null
+    && (!isRunState(r.state) || r.state === 'unknown' || (r.kind !== 'work' && r.kind !== 'review'))) return holdVerdict('run-unnamed');
+  const w = input.worker;
+  if (!w.present) return holdVerdict('absent');
+  const lc = w.lifecycle;
+  if (w.unmeasured || lc === null || !isSessionLifecycle(lc) || lc === 'unmeasurable') return holdVerdict('unmeasured');
+  if (!w.live.ok || w.live.since === null) return holdVerdict('unmeasured');
+  if (!input.mark.ok && input.mark.reason === 'unmeasured') return holdVerdict('unmeasured');
+  if (stallSessionLimited(w, now)) return holdVerdict('limit');
+  return null;
+}
+
+/** The measured live word and its stamp, or null when any part of it is unmeasured. */
+function stallSessionLive(input: StallSessionInput): { readonly word: string; readonly since: number } | null {
+  const w = input.worker;
+  if (!w.present || !w.live.ok || w.live.since === null) return null;
+  return { word: w.live.word, since: w.live.since };
+}
+
+/** The marker when it is CURRENT: read ok, and not older than the live process. A null `liveStartedAt` reads it
+ *  stale (`stale-when-live-has-no-startedat`). */
+function stallCurrentMark(input: StallSessionInput): TurnMark | null {
+  const m = input.mark;
+  if (!m.ok || input.liveStartedAt === null || turnMarkStale(m, input.liveStartedAt)) return null;
+  return m;
+}
+
+/** A run worker's rungs are recorded on its run's notices; every other session's are run-less. */
+function stallRunBound(input: StallSessionInput): boolean {
+  return input.role === 'worker' && input.run !== null;
+}
+
+/** The watch's newest self-mail to this session with exactly this subject, on any run or none. */
+function stallSelfMail(input: StallSessionInput, subject: string): StallMailRow | null {
+  return newestMail(input.mail, (m) => m.fromId === STALL_SENDER && m.toId === input.sessionId && m.subject === subject);
+}
+
+/** Is a rung-1 self-mail done? For a run worker: `rungDoneAt` over its run's notices, with shadow accounting. For a
+ *  run-less session: its mail row, found by the exact subject that the store's run-less dedupe
+ *  (`hasMailWithSubject`) keys on. A run-less shadow rung records nothing, so it is never done here, and the lane
+ *  warns once per key instead. */
+function stallSelfRungDone(input: StallSessionInput, arm: StallArm, key: number, subject: string): boolean {
+  if (stallRunBound(input)) return rungDoneAt(input, arm, 1, key) !== null;
+  return stallSelfMail(input, subject) !== null;
+}
+
+/** Is a coordinator- or operator-bound rung done? Only a run worker's is recorded. A run-less session's operator
+ *  push is latched in memory by the lane (`stall-<sessionId>-<arm>-<rung>-<key>`, or `orphaned-<toId>-<restartAt>`
+ *  for D), so L1 answers false and the lane holds it to one push. */
+function stallRecordedDone(input: StallSessionInput, arm: StallArm, rung: 1 | 2 | 3, key: number): boolean {
+  return stallRunBound(input) && rungDoneAt(input, arm, rung, key) !== null;
+}
+
+/** The exact subject of a session self-mail (§5.2), for the arm that sends it. The wording is Task 10's three
+ *  builders', never re-spelled here: the lane queues their output through Task 13's texts, the store's run-less dedupe
+ *  keys on it, and these verdicts find the sent mail by it. The failed arm passes the `err` and `key` (`stopAt`) its
+ *  verdict carries, the same two values Task 13's `stallFailedMail` hands the same builder. */
+function stallSelfSubjectOf(arm: 'orphan-d' | 'orphan-e' | 'failed', m: TurnMark): string {
+  if (arm === 'orphan-d') return stallOrphanDSubject(m);
+  if (arm === 'orphan-e') return stallOrphanESubject(m);
+  return stallFailedSubject(m.err ?? '', m.stopAt ?? Number.NaN);
+}
+
+/** The coordinator candidates (Contract note 2). They are the distinct non-null claimants of the rows that
+ *  `stallCandidates()` returned, whose predicate is already the INACTIVE one, so no store read is added. A blank
+ *  claimant names no session. Pure and order-stable: runs come out in id order, and subjects in the order of their
+ *  first run id. */
+export function stallCoordinatorSubjects(rows: readonly StallRunRow[]): { readonly sessionId: string; readonly runs: readonly StallRunRow[] }[] {
+  const byClaimant = new Map<string, StallRunRow[]>();
+  for (const r of rows) {
+    if (r.claimedBy === null || r.claimedBy === '') continue;
+    const group = byClaimant.get(r.claimedBy);
+    if (group === undefined) byClaimant.set(r.claimedBy, [r]);
+    else group.push(r);
+  }
+  return [...byClaimant.entries()]
+    .map(([sessionId, group]) => ({ sessionId, runs: [...group].sort((a, b) => a.id - b.id) }))
+    .sort((a, b) => a.runs[0]!.id - b.runs[0]!.id);
+}
+
+/** Orphan D's pre-conditions on the marker ALONE (§5.2, "Candidates are the registry rows whose marker reads done
+ *  with lostBg > 0"): the newest record is a done turn, a restart came after its Stop (or with no Stop recorded), and
+ *  that restart lost background tasks. Exported so the lane's read-budget pre-filter (Task 15) asks this predicate
+ *  instead of spelling its conjuncts, because L4 does not decide; `stallOrphanDInner` asks it too, so the two cannot
+ *  drift. The backlog horizon, the staleness judgement and the idle clock need `now` and the live facts, so they stay
+ *  in the verdict. */
+export function stallOrphanDCandidate(mark: TurnMark): boolean {
+  return mark.state === 'done' && mark.lostBg > 0 && mark.restartAt !== null && mark.restartAt > (mark.stopAt ?? Number.NEGATIVE_INFINITY);
+}
+
+/** Orphan D (§5.2), any session: a restart cut background tasks short, nothing has run since, and the pane has
+ *  been idle ORPHAN_D_IDLE_MS. The episode began within BACKLOG_HORIZON_MS, so a first enable never wakes a
+ *  long-abandoned session. Rung 1 mails the session itself. Rung 2 pushes the operator when that mail is still
+ *  unacked ORPHAN_PUSH_MS after delivery, or still undelivered that long after queueing. Key: `restartAt`. */
+function stallOrphanDInner(input: StallSessionInput, now: number): StallVerdict {
+  const held = stallSessionHold(input, now);
+  if (held !== null) return held;
+  const m = stallCurrentMark(input);
+  // `m.restartAt === null` narrows the type only: the candidate already refuses it (deleting it is a tsc error).
+  if (m === null || !stallOrphanDCandidate(m) || m.restartAt === null || now - m.restartAt > BACKLOG_HORIZON_MS) return VERDICT_NONE;
+  const live = stallSessionLive(input);
+  if (live === null || !isIdleWord(live.word) || now - live.since < ORPHAN_D_IDLE_MS) return VERDICT_NONE;
+  const key = m.restartAt;
+  const subject = stallSelfSubjectOf('orphan-d', m);
+  if (!stallSelfRungDone(input, 'orphan-d', key, subject)) return { act: 'notify', arm: 'orphan-d', rung: 1, key, to: 'worker' };
+  if (stallRecordedDone(input, 'orphan-d', 2, key)) return VERDICT_NONE;
+  const sentMail = stallSelfMail(input, subject);
+  if (sentMail === null) return VERDICT_NONE;
+  // Task 11's `stallNewestDelivery` reads every recipient's rows; rung 2 reads this session's delivery only.
+  const d = stallNewestDelivery(input.deliveries.filter((x) => x.toId === input.sessionId), sentMail.id);
+  if (d === null || d.ackedAt !== null) return VERDICT_NONE;
+  return now - (d.deliveredAt ?? sentMail.at) >= ORPHAN_PUSH_MS ? { act: 'notify', arm: 'orphan-d', rung: 2, key, to: 'operator' } : VERDICT_NONE;
+}
+
+export function stallOrphanDVerdict(input: StallSessionInput, now: number): StallVerdict {
+  return stallMailDisabledHold(stallOrphanDInner(input, now), input.arming);
+}
+
+/** Orphan E (§5.2), for run workers and coordinators: the newest Stop left a wake-bearing kind running, nothing has
+ *  been written since (`at === stopAt`, with no restart after it), and the pane has read exactly `idle` since that
+ *  Stop for ORPHAN_E_IDLE_MS. `shell` is not idle here: a background shell may still be running. Rung 1 mails the
+ *  session itself. Key: `stopAt`. */
+function stallOrphanEInner(input: StallSessionInput, now: number): StallVerdict {
+  if (input.role === 'other') return VERDICT_NONE;
+  const held = stallSessionHold(input, now);
+  if (held !== null) return held;
+  const m = stallCurrentMark(input);
+  if (m === null || m.state !== 'done' || m.stopAt === null) return VERDICT_NONE;
+  if ((m.restartAt ?? Number.NEGATIVE_INFINITY) >= m.stopAt || m.at !== m.stopAt) return VERDICT_NONE;
+  if (!m.bgKinds.some((k) => STALL_WAKE_KINDS.includes(k))) return VERDICT_NONE;
+  const live = stallSessionLive(input);
+  if (live === null || live.word !== 'idle' || live.since < m.stopAt || now - live.since < ORPHAN_E_IDLE_MS) return VERDICT_NONE;
+  const key = m.stopAt;
+  return stallSelfRungDone(input, 'orphan-e', key, stallSelfSubjectOf('orphan-e', m))
+    ? VERDICT_NONE
+    : { act: 'notify', arm: 'orphan-e', rung: 1, key, to: 'worker' };
+}
+
+export function stallOrphanEVerdict(input: StallSessionInput, now: number): StallVerdict {
+  return stallMailDisabledHold(stallOrphanEInner(input, now), input.arming);
+}
+
+/** Was there a failure BEFORE this one inside `[stopAt - FAILED_REPEAT_MS, stopAt)`? For a run worker: a `failed`
+ *  rung-1 notice keyed in that window, live or shadow (either one records that the failure happened). For a run-less
+ *  session: a `failed:` self-mail from the watch, sent in that window under another subject. */
+function stallPriorFailure(input: StallSessionInput, stopAt: number, subject: string): boolean {
+  const from = stopAt - FAILED_REPEAT_MS;
+  if (stallRunBound(input)) return input.notices.some((n) => n.arm === 'failed' && n.rung === 1 && n.key >= from && n.key < stopAt);
+  return input.mail.some((m) => m.fromId === STALL_SENDER && m.toId === input.sessionId && m.subject.startsWith(STALL_FAILED_PREFIX)
+    && m.subject !== subject && m.at >= from && m.at < stopAt);
+}
+
+/** Failed (§5.2), for run workers and coordinators: the marker reads `failed`, FAILED_IDLE_MS have passed since the
+ *  failure, and the pane reads idle or shell. Key: `stopAt`. Per `STOP_FAILURE_ERRORS` class:
+ *  - an unclassifiable token holds `failed-unknown` (the lane warns once, and it is never guessed);
+ *  - `account` holds `failed-account`;
+ *  - `retry` mails the session itself, or goes to rung 2 `repeat` after a prior failure in the window;
+ *  - `request` goes to rung 2 `request`.
+ *  Rung 2 goes to a run worker's claimant, or to the operator when there is none, when coordination is paused, or
+ *  for a coordinator. */
+function stallFailedInner(input: StallSessionInput, now: number): StallVerdict {
+  if (input.role === 'other') return VERDICT_NONE;
+  const held = stallSessionHold(input, now);
+  if (held !== null) return held;
+  const m = stallCurrentMark(input);
+  if (m === null || m.state !== 'failed' || m.stopAt === null || now - m.stopAt < FAILED_IDLE_MS) return VERDICT_NONE;
+  const live = stallSessionLive(input);
+  if (live === null || !isIdleWord(live.word)) return VERDICT_NONE;
+  const key = m.stopAt;
+  const cls = stopFailureClass(m.err);
+  if (cls === null) return holdVerdict('failed-unknown');
+  if (cls === 'account') return holdVerdict('failed-account');
+  const err = m.err ?? '';
+  const subject = stallSelfSubjectOf('failed', m);
+  if (cls === 'retry' && !stallPriorFailure(input, m.stopAt, subject)) {
+    return stallSelfRungDone(input, 'failed', key, subject) ? VERDICT_NONE : { act: 'notify', arm: 'failed', rung: 1, key, to: 'worker', err };
+  }
+  if (stallRecordedDone(input, 'failed', 2, key)) return VERDICT_NONE;
+  const because = cls === 'retry' ? 'repeat' : 'request';
+  const r = input.run;
+  if (stallRunBound(input) && r !== null && r.claimedBy !== null && !input.coordinationPaused) {
+    return { act: 'notify', arm: 'failed', rung: 2, key, to: 'coordinator', coordinatorId: r.claimedBy, err, because };
+  }
+  return { act: 'notify', arm: 'failed', rung: 2, key, to: 'operator', err, because };
+}
+
+export function stallFailedVerdict(input: StallSessionInput, now: number): StallVerdict {
+  return stallMailDisabledHold(stallFailedInner(input, now), input.arming);
+}
+
+/** When the recipient's main loop went idle: the live stamp under idle or shell, else the CURRENT marker's stop when
+ *  it reads done or failed, else null (§5.2). */
+function stallIdleStart(input: StallSessionInput): number | null {
+  const live = stallSessionLive(input);
+  if (live !== null && isIdleWord(live.word)) return live.since;
+  const m = stallCurrentMark(input);
+  return m !== null && (m.state === 'done' || m.state === 'failed') ? m.stopAt : null;
+}
+
+/** One queued delivery (§5.2). It is judged from plain columns the store SELECTs, never in SQL and never in watch.ts
+ *  (`mail-stuck-decided-in-l1`; the D-792 pins in mail-sweep.test.ts). The registry-unmeasurable clause is the
+ *  delivery's own measurement, and hold 2 answers exactly when that gate is the reason. So the clause is judged
+ *  before the holds (`stuck-gate-precedes-holds`). The idle clause is judged after them. Key: the delivery id. */
+function stallMailStuckInner(input: StallSessionInput, d: StallDeliveryRow, now: number): StallVerdict {
+  if (stallRecordedDone(input, 'mail-stuck', 1, d.id)) return VERDICT_NONE;
+  const fire: StallVerdict = { act: 'notify', arm: 'mail-stuck', rung: 1, key: d.id, to: 'operator' };
+  if (d.lastGate === STALL_STUCK_GATE && d.gateSince !== null && now - d.gateSince >= MAIL_STUCK_MS) return fire;
+  const held = stallSessionHold(input, now);
+  if (held !== null) return held;
+  const queuedMail = input.mail.find((m) => m.id === d.mailId);
+  if (queuedMail === undefined) return VERDICT_NONE;
+  const idleStart = stallIdleStart(input);
+  return idleStart !== null && now - Math.max(idleStart, queuedMail.at) >= MAIL_STUCK_MS ? fire : VERDICT_NONE;
+}
+
+/** For run workers and coordinators: one verdict per `queued` delivery addressed to the session, in id order. */
+export function stallMailStuckVerdicts(input: StallSessionInput, now: number): StallVerdict[] {
+  if (input.role === 'other') return [];
+  return input.deliveries
+    .filter((d) => d.toId === input.sessionId && d.state === 'queued')
+    .sort((a, b) => a.id - b.id)
+    .map((d) => stallMailDisabledHold(stallMailStuckInner(input, d, now), input.arming));
+}
+
+/** A coordinator's marker-unreadable (§5.1 "on a candidate"; `coordinator-marker-unreadable`). The marker has been
+ *  unreadable since the lane first saw it so, for MARKER_UNREADABLE_MS. Which reads count is Task 10's
+ *  `stallMarkUnreadable`, never re-spelled here. Holds 1 and 2 do NOT apply, because the unreadable mark is the fact
+ *  reported. The limit hold does, when the session is present. The push goes to the operator. Key: the in-memory
+ *  first-seen time, which a server restart re-times. A run worker gets this arm through the run verdict (step 2a),
+ *  and a registry row is no candidate until its marker reads. */
+function stallSessionMarkerInner(input: StallSessionInput, now: number): StallVerdict {
+  if (input.role !== 'coordinator') return VERDICT_NONE;
+  if (!stallMarkUnreadable(input.mark)) return VERDICT_NONE;
+  const since = input.markUnreadableSince;
+  if (since === null || now - since < MARKER_UNREADABLE_MS) return VERDICT_NONE;
+  const w = input.worker;
+  if (w.present && stallSessionLimited(w, now)) return holdVerdict('limit');
+  return { act: 'notify', arm: 'marker-unreadable', rung: 1, key: since, to: 'operator' };
+}
+
+export function stallSessionMarkerVerdict(input: StallSessionInput, now: number): StallVerdict {
+  return stallMailDisabledHold(stallSessionMarkerInner(input, now), input.arming);
 }
