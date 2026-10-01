@@ -7,6 +7,7 @@
 // every expected subject is computed by Task 10's builders (`stallOrphanDSubject`, `stallOrphanESubject`,
 // `stallFailedSubject`), which own the wording.
 import { describe, it, expect } from 'vitest';
+import { RUN_STATES } from '../../shared/api.js';
 import {
   stallSessionHold, stallOrphanDVerdict, stallOrphanEVerdict, stallFailedVerdict, stallMailStuckVerdicts,
   stallSessionMarkerVerdict, stallCoordinatorSubjects, stallOrphanDCandidate, stallMailClass,
@@ -129,6 +130,9 @@ describe('stallSessionHold: holds 1, 2 and the limit hold only (§10)', () => {
   it('hold: a review run is a named run, and so is every state this build can name', () => {
     expect(stallSessionHold(sessionInput({ run: runRow({ kind: 'review' }) }), NOW)).toBeNull();
     expect(stallSessionHold(sessionInput({ run: runRow({ kind: 'work' }) }), NOW)).toBeNull();
+    for (const state of RUN_STATES.filter((x) => x !== 'unknown')) {
+      expect(stallSessionHold(sessionInput({ run: runRow({ state }) }), NOW), state).toBeNull();
+    }
   });
   it('hold: an unmeasured marker answers before the limit hold', () => {
     expect(stallSessionHold(sessionInput({ mark: { ok: false, reason: 'unmeasured' }, worker: workerAt('idle', NOW - 3 * H, { stranded: true }) }), NOW)).toEqual(hold('unmeasured'));

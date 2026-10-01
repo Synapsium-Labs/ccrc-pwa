@@ -807,6 +807,17 @@ function stallProofDue(input: StallInput, mark: TurnMark, deliveries: readonly S
   return check !== null && d !== null && d.deliveredAt === null && now - check.at >= CHECK_UNDELIVERED_MS;
 }
 
+/** The limit-hold condition (§10 step (6)), the ONE definition: `stallVerdictInner` and the session verdicts
+ *  (`stallSessionHold`, `stallSessionMarkerInner`) both call it, so the run verdict and the session verdicts cannot
+ *  disagree on what a limited worker is. A window at its ceiling, a strand, a blocked swap, or an auto-continue hold
+ *  begun within AUTO_CONTINUE_RECENT_MS. A null `limits` or a null window is neither at the ceiling nor unmeasured. */
+function stallLimited(w: Extract<StallWorker, { present: true }>, now: number): boolean {
+  const lim = w.limits;
+  const atCeiling = lim !== null && ((lim.five !== null && lim.five >= 100) || (lim.seven !== null && lim.seven >= 100));
+  const autoContinueRecent = w.autoContinueHeldAt !== null && w.autoContinueHeldAt > now - AUTO_CONTINUE_RECENT_MS;
+  return atCeiling || w.stranded || w.swapBlocked || autoContinueRecent;
+}
+
 /** §10's evaluation order after wave 2, wrapped by the mail-disabled filter (`lane-honours-mail-disabled`). */
 export function stallVerdict(input: StallInput, now: number): StallVerdict {
   return stallMailDisabledHold(stallVerdictInner(input, now), input.arming);
@@ -883,11 +894,8 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   const askRowOpen = w.askRow.kind === 'row' && (w.askRow.state === 'held' || w.askRow.state === 'answering');
   if (live.word === 'waiting' && (hookAskCorrelated || askRowOpen)) return holdVerdict('ask');
   if (dialogShaped) return capQuiet >= STALL_QUIET_MS && rungDoneAt(input, 'dialog-cap', 1, key) === null ? capVerdict('dialog-cap', key) : holdVerdict('dialog');
-  // (6) the limit hold, capped once per episode; a null limits or a null window is neither at the ceiling nor unmeasured
-  const lim = w.limits;
-  const atCeiling = lim !== null && ((lim.five !== null && lim.five >= 100) || (lim.seven !== null && lim.seven >= 100));
-  const autoContinueRecent = w.autoContinueHeldAt !== null && w.autoContinueHeldAt > now - AUTO_CONTINUE_RECENT_MS;
-  if (atCeiling || w.stranded || w.swapBlocked || autoContinueRecent) {
+  // (6) the limit hold, capped once per episode (`stallLimited`, shared with the session verdicts)
+  if (stallLimited(w, now)) {
     return capQuiet >= LIMIT_HOLD_CAP_MS && rungDoneAt(input, 'limit-cap', 1, key) === null ? capVerdict('limit-cap', key) : holdVerdict('limit');
   }
   // (7) restart grace: a restart cut a turn short, and ccd's redrive re-prompts it
@@ -1291,16 +1299,6 @@ export interface StallSessionInput {
  *  text that outlives the transient it records. */
 const STALL_STUCK_GATE: keyof typeof STALL_GATE_WORD_MAP = 'registry-unmeasurable';
 
-/** Wave 1's limit-hold condition (the verdict's step (5)), for a session: a window at its ceiling, a strand, a
- *  blocked swap, or an auto-continue hold begun within AUTO_CONTINUE_RECENT_MS. A null `limits` or a null window is
- *  neither at the ceiling nor unmeasured. */
-function stallSessionLimited(w: Extract<StallWorker, { present: true }>, now: number): boolean {
-  const lim = w.limits;
-  const atCeiling = lim !== null && ((lim.five !== null && lim.five >= 100) || (lim.seven !== null && lim.seven >= 100));
-  const autoContinueRecent = w.autoContinueHeldAt !== null && w.autoContinueHeldAt > now - AUTO_CONTINUE_RECENT_MS;
-  return atCeiling || w.stranded || w.swapBlocked || autoContinueRecent;
-}
-
 /** Holds 1, 2 and the limit hold only; null = none applies. Hold 1 belongs to a run worker alone: a coordinator's
  *  verdict, and any other session's, names no run. `now` is the limit hold's auto-continue clock
  *  (`session-hold-takes-now`). A marker that is not ok for a reason other than `unmeasured` is no hold here: D, E and
@@ -1315,7 +1313,7 @@ export function stallSessionHold(input: StallSessionInput, now: number): StallVe
   if (w.unmeasured || lc === null || !isSessionLifecycle(lc) || lc === 'unmeasurable') return holdVerdict('unmeasured');
   if (!w.live.ok || w.live.since === null) return holdVerdict('unmeasured');
   if (!input.mark.ok && input.mark.reason === 'unmeasured') return holdVerdict('unmeasured');
-  if (stallSessionLimited(w, now)) return holdVerdict('limit');
+  if (stallLimited(w, now)) return holdVerdict('limit');
   return null;
 }
 
@@ -1543,7 +1541,7 @@ function stallSessionMarkerInner(input: StallSessionInput, now: number): StallVe
   const since = input.markUnreadableSince;
   if (since === null || now - since < MARKER_UNREADABLE_MS) return VERDICT_NONE;
   const w = input.worker;
-  if (w.present && stallSessionLimited(w, now)) return holdVerdict('limit');
+  if (w.present && stallLimited(w, now)) return holdVerdict('limit');
   return { act: 'notify', arm: 'marker-unreadable', rung: 1, key: since, to: 'operator' };
 }
 
