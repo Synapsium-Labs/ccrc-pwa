@@ -682,7 +682,7 @@ export function stallRunMail(rows: readonly StallMailRow[], runIds: readonly num
 /** M7a, `cited-check-derived-in-l1`: the r1 notice that r2's body cites. It is r1's earliest LIVE row on this key
  *  when one exists, else its earliest row: the timing `rungDoneAt` uses. Arming mid-episode leaves a shadow r1
  *  before the live one, and citing the shadow row would tell the coordinator that no check was sent when one was
- *  (`shadow-rung-accounting`). */
+ *  (`shadow-rung-accounting`, D-3572). */
 export function stallCitedCheck(input: StallInput, key: number): StallNotice | null {
   const rows = input.notices.filter((n) => n.arm === 'quiet' && n.rung === 1 && n.key === key);
   const earliest = (xs: readonly StallNotice[]): StallNotice | null =>
@@ -793,9 +793,12 @@ function stallProofDue(input: StallInput, mark: TurnMark, deliveries: readonly S
   // (d) the bound: r2 at the latest STALL_BOUND_MS after r1, whatever the Stops showed
   if (now >= r1At + STALL_BOUND_MS) return true;
   const last = stallLastCheck(input);
+  // `proofs-read-checks-in-the-episode`: (a) and (c) read only a check queued inside this episode, never an earlier one.
   const check = last !== null && last.at >= key ? last : null;
   const d = check === null ? null : stallNewestDelivery(deliveries, check.id);
-  // (a) the Stop after a delivered check carries a measured bg and nothing that could still wake the worker
+  // (a) the Stop after a delivered check carries a measured bg and nothing that could still wake the worker. The Stop
+  // must be a `done` mark (`proof-a-requires-a-done-mark`: a StopFailure is not a Stop). The spec's "no worker mail since
+  // the check" term is not here (`proof-a-drops-the-unreachable-term`: that mail moves the key, so proofs are never reached).
   if (d !== null && d.deliveredAt !== null && mark.state === 'done' && mark.stopAt !== null && mark.stopAt > d.deliveredAt
     && mark.bg >= 0 && !mark.bgKinds.some((k) => STALL_RESUMING_KINDS.includes(k))) return true;
   // (b) two orphan-e rows inside the episode: the worker re-armed and ended again without mail
@@ -826,9 +829,10 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
  *  Without `stall-watch-w2-live`, every LIVE outcome is wave 1's (`dark-mode-keeps-wave-1-verdict`). A wave-2 arm
  *  still answers `notify`, `stallNotifyDelivery` makes it shadow, and its standing shadow row marks it done.
  *  Exception (i): a shadow arm takes its sweep, so THREE arms can defer a wave-1 send by one sweep, once per the
- *  arm's own key: `marker-unreadable` (ahead of r1), `coord-deaf` (ahead of the coord-ball cap) and `frozen` (step 8,
- *  ahead of the coord-ball cap, for a busy worker with a `working` marker). The lane guarantees that `input.mail` is
- *  run-scoped (`stallRunMail`, F4). */
+ *  arm's own key: `marker-unreadable` (step 2a: it precedes EVERY wave-1 outcome, so it can defer r1, measure-coordinator,
+ *  r2, r3 and the caps alike), `coord-deaf` (ahead of the coord-ball cap) and `frozen` (step 8, ahead of the coord-ball
+ *  cap, for a busy worker with a `working` marker). The lane guarantees that `input.mail` is run-scoped (`stallRunMail`,
+ *  F4). */
 function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   const p = input.subject.primary;
   // (1) a run this build cannot name
@@ -847,7 +851,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
     && now - w2.markUnreadableSince >= MARKER_UNREADABLE_MS && rungDoneAt(input, 'marker-unreadable', 1, key) === null) {
     return { act: 'notify', arm: 'marker-unreadable', rung: 1, key, to: 'operator' };
   }
-  // (2b) a worker absent from this tick holds (`absent-worker-holds`), and is the dead arm after DEAD_GRACE_MS (`absent-worker-is-dead-after-grace`)
+  // (2b) a worker absent from this tick holds (`absent-worker-holds`, D-3566), and is the dead arm after DEAD_GRACE_MS (`absent-worker-is-dead-after-grace`)
   const w = input.worker;
   if (!w.present) {
     return w2 !== undefined && stallDeadDue(input, w2.absentSince, key, now) ? stallW2Notify(input, 'dead', key, 'registry-absent') : holdVerdict('absent');
@@ -897,11 +901,12 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
       return stallW2Notify(input, 'frozen', turnKey, 'no-hook-event');
     }
   }
-  // (9) delegates: subagent activity holds the quiet arm (the worker's ball only), capped at DELEGATE_CAP_MS of main silence
+  // (9) delegates: subagent activity holds the quiet arm, capped at DELEGATE_CAP_MS of main silence. It needs the worker's
+  // ball (`delegates-requires-the-workers-ball`), or it would also silence coord-deaf and the coord-ball cap.
   const quietStart = view === null ? null : stallMarkQuiet(view, f, p.dispatchedAt);
   if (w2 !== undefined && w2Live && view !== null && view.state !== 'working' && f.ball === 'worker' && quietStart !== null
     && stallHookFresh(w2.hook, now) && now - quietStart < DELEGATE_CAP_MS) return holdVerdict('delegates');
-  // (10) the coordinator's ball: coord-deaf, then the cap, then none (`coord-ball-below-cap-is-none`)
+  // (10) the coordinator's ball: coord-deaf, then the cap, then none (`coord-ball-below-cap-is-none`, D-3574)
   if (f.ball === 'coordinator') {
     const deaf = w2 === undefined ? null : stallDeafMail(input, w2.deliveries);
     if (deaf !== null && now - deaf.at >= COORD_DEAF_MS && rungDoneAt(input, 'coord-deaf', 1, deaf.id) === null) {

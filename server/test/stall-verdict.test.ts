@@ -1323,3 +1323,108 @@ describe('wave 2: the approval envelope and the cause words', () => {
     for (const w of causes) expect(isStallKebab(w), w).toBe(true);
   });
 });
+
+// ── fix round 1 (the Task 11 review): guard terms the first round left without a red row ─────────────────────────
+// Each row below goes red under ONE named mutation of `stall.ts` and is green unmutated (the report lists each).
+import { stallNewestDelivery } from '../src/coord/stall.js';
+
+describe('wave 2: the marker quiet clock holds on each of its terms (§5.1, "Quiet with the marker")', () => {
+  // The base worker has been idle since NOW - 3 h and its marker's Stop is 3 h old, so r1 is due at NOW. Each row puts
+  // ONE other term 30 min old: that term alone holds the clock, r1 is not due, and the verdict is `none`. Each CONTROL
+  // moves the same term back to 3 h, where it holds nothing and r1 fires.
+  it('(a) the newest mail TO the worker holds the clock', () => {
+    const reply = mailRow(4300, NOW - 30 * MIN, COORD, WORKER, 'status', 'Task 3 is yours');
+    expect(vw({ arming: W2_LIVE, mail: [reply] })).toEqual(NONE);
+    expect(vw({ arming: W2_LIVE, mail: [{ ...reply, at: NOW - 3 * H }] })).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it('(b) the worker\'s own last mail holds the clock', () => {
+    const own = mailRow(4301, NOW - 30 * MIN, WORKER, COORD, 'status', 'Task 3 pushed');
+    expect(vw({ arming: W2_LIVE, mail: [own] })).toEqual(NONE);
+    expect(vw({ arming: W2_LIVE, mail: [{ ...own, at: NOW - 3 * H }] })).toEqual(r1(NOW - 3 * H));
+  });
+
+  it('(c) the run\'s dispatchedAt holds the clock', () => {
+    expect(vw({ arming: W2_LIVE, primary: { dispatchedAt: NOW - 30 * MIN } })).toEqual(NONE);
+    expect(vw({ arming: W2_LIVE, primary: { dispatchedAt: NOW - 3 * H } })).toEqual(r1(NOW - 3 * H));
+  });
+});
+
+describe('wave 2: frozen needs a BUSY word, and delegates a non-working marker (§10 steps 8 and 9)', () => {
+  // A turn begun 2 h ago, at least as new as a 3 h live stamp (so the marker reads `working` as written), and a hook
+  // event 61 min old: the frozen clock has run out, so ONLY the word term keeps this worker from `frozen`.
+  const staleWorking = { mark: markOf(FROZEN_OVER), hook: hookAt(NOW - 61 * MIN) };
+  const under = (word: string, arming: StallArming): Over => ({ arming, worker: workerAt({ live: liveWord(word, NOW - 3 * H) }) });
+
+  it.each(['idle', 'shell'])('8: a working marker as new as the %s live stamp, with a stale current hook, is not frozen: hold busy', (word) => {
+    expect(vw(under(word, W2_LIVE), staleWorking)).toEqual(hold('busy'));
+    expect(vw(under(word, W2_LIVE), { ...staleWorking, hook: hookAt(NOW - 5 * H) })).toEqual(hold('busy'));
+  });
+
+  it('8: in the dark the same facts give wave 1\'s verdict, and frozen answers nothing', () => {
+    const waveOne = stallVerdict(stallInput(under('idle', ARMED)), NOW);
+    expect(waveOne).toEqual(r1(RUN67_DISPATCHED));
+    expect(vw(under('idle', ARMED), staleWorking)).toEqual(waveOne);
+    // CONTROL: the same marker and hook under a busy word is frozen
+    expect(vw(under('busy', W2_LIVE), staleWorking)).toEqual(frozenV(NOW - 2 * H));
+  });
+
+  it('8: a turn marker with no turnAt keys frozen on its own `at`', () => {
+    const noTurnAt = { mark: markOf({ ...FROZEN_OVER, turnAt: null }) };
+    expect(fv(hookAt(NOW - 61 * MIN), {}, noTurnAt)).toEqual(frozenV(NOW - 2 * H));
+    const done = [notice('live', 'frozen', 1, NOW - 2 * H, NOW - 50 * MIN)];
+    expect(fv(hookAt(NOW - 61 * MIN), { notices: done }, noTurnAt)).toEqual(hold('busy'));
+  });
+
+  it('9: a working marker never holds delegates, even with a fresh hook inside the cap: it holds busy', () => {
+    const working = markOf({ state: 'working', event: 'UserPromptSubmit', at: NOW - 2 * H, turnAt: NOW - 2 * H, stopAt: NOW - 3 * H });
+    expect(vw({ arming: W2_LIVE }, { mark: working, hook: hookAt(NOW - 5 * MIN) })).toEqual(hold('busy'));
+    // CONTROL: the same hook over a done marker holds delegates
+    expect(vw({ arming: W2_LIVE }, { mark: markOf(), hook: hookAt(NOW - 5 * MIN) })).toEqual(hold('delegates'));
+  });
+});
+
+describe('wave 2: coord-deaf reads the worker\'s own ball-passing mail, by its newest delivery row', () => {
+  const cv = (mail: StallMailRow[], deliveries: StallDeliveryRow[]): StallVerdict => vw({ arming: W2_LIVE, mail }, { deliveries });
+  const ago = (ms: number): number => NOW - ms;
+
+  it('another session\'s unacked question to the coordinator is not the worker\'s: not coord-deaf', () => {
+    // The ball is with the coordinator by its own `wait:`, so the only question to it that stands unacked is a peer's.
+    const wait = mailRow(4390, ago(2 * H), COORD, WORKER, 'status', `${STALL_WAIT_PREFIX} the review`);
+    const peerQ = mailRow(4401, Q_AT, PEER, 'coordinator', 'question', 'which base?');
+    const peerD = delivery(9201, 4401, COORD, { state: 'delivered', deliveredAt: Q_AT + MIN });
+    expect(cv([wait, peerQ], [peerD])).toEqual(NONE);
+    // ... and a peer's newer question does not displace the worker's own, acked one
+    const own = mailRow(4400, ago(3 * H), WORKER, 'coordinator', 'question', 'which base?');
+    const ownD = delivery(9202, 4400, COORD, { state: 'acked', deliveredAt: ago(3 * H) + MIN, ackedAt: ago(3 * H) + 2 * MIN });
+    expect(cv([own, peerQ], [ownD, peerD])).toEqual(NONE);
+    // CONTROL: the worker's own question, unacked, is deaf
+    expect(cv([own], [{ ...ownD, state: 'delivered', ackedAt: null }])).toEqual(w2Push('coord-deaf', 4400));
+  });
+
+  const older = (over: Partial<StallDeliveryRow>): StallDeliveryRow => delivery(9101, 4001, COORD, { deliveredAt: Q_AT + MIN, ...over });
+  const newer = (over: Partial<StallDeliveryRow>): StallDeliveryRow => delivery(9102, 4001, COORD, { deliveredAt: Q_AT + 3 * MIN, ...over });
+
+  it('the newest delivery row judges the mail, in either row order: older unacked, newer acked is not deaf', () => {
+    const rows = [older({ state: 'delivered' }), newer({ state: 'acked', ackedAt: Q_AT + 4 * MIN })];
+    expect(cv([Q], rows)).toEqual(NONE);
+    expect(cv([Q], [...rows].reverse())).toEqual(NONE);
+  });
+
+  it('the newest delivery row judges the mail, in either row order: older acked, newer unacked past the limit is deaf', () => {
+    const rows = [older({ state: 'acked', ackedAt: Q_AT + 2 * MIN }), newer({ state: 'delivered' })];
+    expect(cv([Q], rows)).toEqual(w2Push('coord-deaf', 4001));
+    expect(cv([Q], [...rows].reverse())).toEqual(w2Push('coord-deaf', 4001));
+  });
+});
+
+describe('stallNewestDelivery', () => {
+  it('answers the delivery row with the greatest id for the mail, in any row order, and null for a mail with none', () => {
+    const rows = [delivery(9101, 4001, COORD), delivery(9103, 4002, COORD), delivery(9102, 4001, COORD)];
+    expect(stallNewestDelivery(rows, 4001)?.id).toBe(9102);
+    expect(stallNewestDelivery([...rows].reverse(), 4001)?.id).toBe(9102);
+    expect(stallNewestDelivery(rows, 4002)?.id).toBe(9103);
+    expect(stallNewestDelivery(rows, 4999)).toBeNull();
+    expect(stallNewestDelivery([], 4001)).toBeNull();
+  });
+});
