@@ -309,9 +309,18 @@ as `<alias>/server` after `<alias>` was removed. It names where that spelling wo
 session is: a process that entered through the alias keeps its physical cwd inside the child, and nothing on the
 box can reconstruct that cwd from a name that no longer exists. So another row is placed only on a `complete`
 resolution, every component of its spelling walked and entered. A projected one makes the reclaim `unmeasured`,
-retryable and with no new refusal word, at the audit, at the locked recomputation and at the tail's final
-ownership check alike. A row literally at, below or through the child's path keeps its terminal
-`containment-unproven`, because literal containment needs no resolution to be proven.
+retryable and with no new refusal word, at the audit and at the locked recomputation. The tail's final ownership
+check asks the same question. A refusal there fails the reclaim as `worktree-remove-failed`: it is journalled, and
+the tree, the branch and the breadcrumb are kept (D-3736). A row literally at, below or through the child's path
+keeps its terminal `containment-unproven`, because literal containment needs no resolution to be proven.
+
+Two limits follow, and both are stated so neither is discovered later:
+- **The hold reaches a vanished child.** The vanished-worktree arm itself is unchanged. But an ambiguous row holds
+  a vanished child as it holds a present one, and two vanished children hold each other. The hold lasts until a
+  row is purged or its path restored, and then a later attempt has to run (D-3734).
+- **A `complete` resolution places the spelling as it reads now, not the session.** An alias re-pointed after a
+  session entered through it resolves complete and outside, and so does a spelling through a bind mount. Both are
+  pre-existing and left to a follow-up (D-3735).
 
 Rungs 8 and 9 are the two places this design **refuses rather than proceeds**, and they are a deliberate
 reading of the operator's ruling rather than a softening of it. The ruling authorises overriding
@@ -481,7 +490,8 @@ and the only exit would be a human detaching from a sub-workspace — rule 4 inv
 rungs. It never skips the ownership comparison with other rows (§5.5, D-3731). The converse holds too: no
 liveness reading makes a projected row placeable, whether its session is up, gone, or tmux cannot be asked. A
 session reported gone may still have processes whose cwd is inside the child, and a live one exposes nothing
-that ccd could check against a removed alias. Presence defers; only a complete resolution places.
+that ccd could check against a removed alias. Presence defers. Only a complete resolution places a row, and even
+that places its spelling, not its session (D-3735).
 
 ### 5.8 The kill-switch
 
