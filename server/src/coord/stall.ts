@@ -606,6 +606,40 @@ export function stallFacts(input: StallInput): StallFacts {
   return { ball, episodeKeyMs, quietSince, workerLast, inboundLast, lastExchangeAt };
 }
 
+/** I2, the working-reply back-off (planning departure `working-reply-backs-off`): the cap on the exponent, so r1's
+ *  threshold is 2 h, then 4 h, then 8 h from the second answered check on. CHOSEN, not measured: the operator has
+ *  not ruled on I2, and 8 h keeps a worker that only ever says "still working" inside one working day between
+ *  checks. */
+export const STALL_WORKING_BACKOFF_CAP = 2;
+
+/**
+ * I2: how long the marker branch (step 11, under `stall-watch-w2-live` with a readable marker) lets the worker go
+ * quiet before r1. The wait backs off per check the worker answered ONLY with `re stall-check: working`. Such a
+ * worker is not silent, and a 2 h check on every episode would teach it to ignore them.
+ *
+ * The streak walks the worker's own mail newest first (the watch's notices are not its mail), and stops at the first
+ * subject that is not a working reply. So any other mail from the worker resets it, a `waiting` reply included, while
+ * mail TO the worker neither counts nor resets. For each working reply in that run, its check is the newest
+ * stall-check to this worker with a lower id. The streak counts the DISTINCT checks found
+ * (`working-streak-counts-checks`): two replies to one check are one episode, and a reply with no check before it
+ * answers nothing.
+ *
+ * Wave 1's ladder never calls this. Without the marker rules r1 stays at `STALL_QUIET_MS`, so dark means dark.
+ */
+export function stallBackoff(input: StallInput): { readonly streak: number; readonly quietMs: number } {
+  const workerId = input.subject.primary.sessionId;
+  const own = input.mail.filter((m) => m.fromId === workerId && !isWatchNotice(m)).sort((a, b) => b.id - a.id);
+  const checks = new Set<number>();
+  for (const m of own) {
+    if (!m.subject.startsWith(STALL_REPLY_WORKING_PREFIX)) break;
+    const check = newestMail(input.mail, (c) => c.id < m.id && c.toId === workerId
+      && stallMailClass({ fromId: c.fromId, runId: c.runId, subject: c.subject, mailId: c.id }) === 'check');
+    if (check !== null) checks.add(check.id);
+  }
+  const streak = checks.size;
+  return { streak, quietMs: STALL_QUIET_MS * 2 ** Math.min(streak, STALL_WORKING_BACKOFF_CAP) };
+}
+
 /** The dialog and limit caps' clock: the same mail terms, from the live stamp whatever the word. The caller
  *  passes a MEASURED stamp: a null one is hold `unmeasured` before this is reached, never a 0. */
 function capQuietSince(input: StallInput, f: StallFacts, liveSince: number): number {
@@ -929,7 +963,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   if (live.word !== 'busy' && !isIdleWord(live.word)) return holdVerdict('unmeasured');
   if (quietStart === null) return stallWaveOneLadder(input, f, live.word, live.since, key, now);
   const r1At = rungDoneAt(input, 'quiet', 1, key);
-  if (r1At === null) return now - quietStart >= STALL_QUIET_MS ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;
+  if (r1At === null) return now - quietStart >= stallBackoff(input).quietMs ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;
   if (rungDoneAt(input, 'quiet', 3, key) !== null) return VERDICT_NONE;
   const r2At = rungDoneAt(input, 'quiet', 2, key);
   if (r2At !== null) return now >= r2At + STALL_OPERATOR_MS ? r3Verdict(key, 'still-silent') : VERDICT_NONE;
