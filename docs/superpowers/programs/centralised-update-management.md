@@ -876,6 +876,25 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - **Wave 8's prune, its fail-closed sweep and A's feed row first run live on the NEXT release.** The move onto
         v0.0.53 was dispatched by v0.0.52's server, so it wrote no source row.
       - STATUS: fleet and server v0.0.53, newest v0.0.53, intent `*` dev/auto=channel.
+    - **2026-10-01 08:34 UTC — auto moved both boxes onto v0.0.54** (`cca1b6d7`, #stall wave 2 Part A). This was the
+      FIRST move to run wave 8's own update script and server; every item observable from the boxes held live:
+      - The release was published at 08:03:35. The fleet box ran 08:25:18–08:32:34, and the server box 08:32:46–08:33:08.
+        Both reports read `done`, and `/health` answers v0.0.54.
+      - **A:** the server's feed holds one `update` row per move, each naming its source: "update fleet: auto
+        update to v0.0.54 … lease held: accepted — the node queued a detached run" at 08:25:18, and the same for
+        the server at 08:32:46.
+      - **B, the first live prune:**
+        - The fleet box removed its 33 oldest timestamped backups and kept the newest 10, plus both hand-named
+          siblings. That took 295M to 121M.
+        - The server box removed its 10 oldest and kept the newest 10, plus all six siblings: the other timestamp
+          spelling, the `pre-*` dirs (one with its hand-made coord.db) and two plain files. That took 762M to 400M.
+      - **G:** the server box's sweep now prints the zero line over its zero supervisors.
+      - **The fail-closed sweep (wave 8 fix round 1, number 3599)** did not fire on either healthy box. The fleet box printed the every-live
+        line.
+      - **D** still reads the armed gate.
+      - C and F are PWA-side and need a session, so they are not measured here.
+      - STATUS: fleet and server v0.0.54, newest v0.0.54, intent `*` dev/auto=channel, backups fleet 121M/server 400M,
+        no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
