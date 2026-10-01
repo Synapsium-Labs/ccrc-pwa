@@ -316,8 +316,10 @@ keeps its terminal `containment-unproven`, because literal containment needs no 
 
 Two limits follow, and both are stated so neither is discovered later:
 - **The hold reaches a vanished child.** The vanished-worktree arm itself is unchanged. But an ambiguous row holds
-  a vanished child as it holds a present one, and two vanished children hold each other. The hold lasts until a
-  row is purged or its path restored, and then a later attempt has to run (D-3734).
+  a vanished child as it holds a present one, and two vanished children hold each other. The hold ends safely
+  only once the row is purged after its session has ended, or a link on its path is restored to its original
+  target, and then a later attempt has to run (D-3734). A directory created where a link stood ends it unsafely,
+  because that re-points the spelling (D-3735).
 - **A `complete` resolution places the spelling as it reads now, not the session.** An alias re-pointed after a
   session entered through it resolves complete and outside, and so does a spelling through a bind mount. Both are
   pre-existing and left to a follow-up (D-3735).

@@ -540,9 +540,11 @@ leave a wave undispatchable pending a ruling below.
     unaskable, is not an input.
   - The cost, stated rather than discovered (D-3734): a row whose directory no longer exists holds every child's
     reclaim at `unmeasured`. That includes a present child, a vanished one under R19, and two vanished children,
-    which hold each other. The hold lasts until that row is purged or its path is restored to what it ran
-    through, AND a later attempt runs. The only retry is wave 4's sweep (spec §5.5: retryable refusals are re-tried
-    by the sweep). Until it ships, a held child keeps its tree after its one close-time attempt.
+    which hold each other. The hold ends safely only once that row is purged after its session has ended, or a
+    link on its path is restored to its original target, AND a later attempt runs. Never create a directory in a
+    link's place: that re-points the spelling by replacement (D-3735), and the verb then removes a tree a session
+    may still hold (review 213, measured). The only retry is wave 4's sweep (spec §5.5: retryable refusals are
+    re-tried by the sweep). Until it ships, a held child keeps its tree after its one close-time attempt.
 - **R32 — a held child is reclaimed when its programme retires; `not-finished` names its cause** (wave 3's
   wave-done, open item 1, 2026-09-25). R30 has a non-final close HOLD a child whose spent evidence is undated,
   unmeasurable or a merge-commit `.prnumber`, while the bind refuses that same child `workspace-spent`. No later
