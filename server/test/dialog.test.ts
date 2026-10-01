@@ -971,3 +971,31 @@ describe('turnRunning', () => {
     }
   });
 });
+
+// Worker stall watch wave 2 (M3, `busy-re-anchored`): BUSY_RE matches a ROW
+// shaped like Claude Code's spinner row, not the phrase anywhere. The tail is
+// TOLERANT until the capture checkpoint (C7) measures it per lane: `)`, a
+// ` ·` hint segment, or the end of the row. The prompt row (`❯`), a tool
+// continuation (`⎿`) and a quote (`>`) never count. `turnRunning` and
+// `paneState` share the one regex, so every row asks both.
+describe('BUSY_RE: the tolerant spinner-row anchor (worker stall watch §5.1, M3)', () => {
+  it.each([
+    ["the spinner row closing on ')'", '✻ Thinking… (12s · esc to interrupt)\n❯ \n'],
+    ['a spinner row with a hint after the phrase', '✻ Working… (3s · esc to interrupt · ctrl+t to show todos)\n❯ \n'],
+    ['the phrase ending its row (the bracket wrapped off)', 'esc to interrupt\n❯ \n'],
+    ['trailing blanks after the bracket', '✳ Cerebrating… (12s · ↑ 1.2k tokens · esc to interrupt)   \n❯ \n'],
+  ])('%s is a running turn', (_name, pane) => {
+    expect(turnRunning(pane)).toBe(true);
+    expect(paneState(pane)).toBe('busy');
+  });
+  it.each([
+    ['the phrase mid-row in a transcript line', '⏺ The spinner shows esc to interrupt while a turn runs.\n❯ \n'],
+    ['the prompt row ending with the phrase', 'some output\n❯ esc to interrupt\n'],
+    ['the prompt row closing on a bracket', '❯ (esc to interrupt)\n'],
+    ['a tool continuation row', '  ⎿  (12s · esc to interrupt)\n❯ \n'],
+    ['a quoted spinner row', '> ✻ Thinking… (12s · esc to interrupt)\n❯ \n'],
+  ])('%s is not a running turn', (_name, pane) => {
+    expect(turnRunning(pane)).toBe(false);
+    expect(paneState(pane)).not.toBe('busy');
+  });
+});
