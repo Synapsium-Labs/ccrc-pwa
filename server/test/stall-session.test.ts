@@ -120,6 +120,19 @@ describe('stallSessionHold: holds 1, 2 and the limit hold only (§10)', () => {
     expect(stallSessionHold(sessionInput({ run: runRow({ state: 'unknown' }), worker: { present: false } }), NOW)).toEqual(hold('run-unnamed'));
     expect(stallSessionHold(sessionInput({ worker: workerAt('idle', null, { stranded: true }) }), NOW)).toEqual(hold('unmeasured'));
   });
+  it('hold: hold 1 names a run worker alone, whatever run another role carries, and a worker with no run is not held by it', () => {
+    const unnamed = runRow({ state: 'unknown' });
+    expect(stallSessionHold(sessionInput({ role: 'coordinator', sessionId: COORD, run: unnamed }), NOW), 'a coordinator carrying a run').toBeNull();
+    expect(stallSessionHold(sessionInput({ role: 'other', run: unnamed }), NOW), 'an other row carrying a run').toBeNull();
+    expect(stallSessionHold(sessionInput({ run: null }), NOW), 'a worker with no run').toBeNull();
+  });
+  it('hold: a review run is a named run, and so is every state this build can name', () => {
+    expect(stallSessionHold(sessionInput({ run: runRow({ kind: 'review' }) }), NOW)).toBeNull();
+    expect(stallSessionHold(sessionInput({ run: runRow({ kind: 'work' }) }), NOW)).toBeNull();
+  });
+  it('hold: an unmeasured marker answers before the limit hold', () => {
+    expect(stallSessionHold(sessionInput({ mark: { ok: false, reason: 'unmeasured' }, worker: workerAt('idle', NOW - 3 * H, { stranded: true }) }), NOW)).toEqual(hold('unmeasured'));
+  });
   it('hold: hold 2 answers absent, and unmeasured for every unmeasured input', () => {
     expect(stallSessionHold(sessionInput({ worker: { present: false } }), NOW)).toEqual(hold('absent'));
     const unmeasured: [string, Over][] = [
@@ -170,6 +183,15 @@ describe('stallCoordinatorSubjects: the claimants of the candidate runs (Contrac
   });
   it('coordinators: order-stable under any input order', () => {
     expect(stallCoordinatorSubjects([blank, c, unclaimed, b, a])).toEqual(stallCoordinatorSubjects([a, b, c, unclaimed, blank]));
+  });
+  it('coordinators: subjects are ordered by their FIRST run id, not their last', () => {
+    const x1 = runRow({ id: 80, sessionId: 'demo-x1', claimedBy: 'demo-first' });
+    const y = runRow({ id: 81, sessionId: 'demo-y', claimedBy: 'demo-second' });
+    const x2 = runRow({ id: 82, sessionId: 'demo-x2', claimedBy: 'demo-first' });
+    expect(stallCoordinatorSubjects([y, x2, x1])).toEqual([
+      { sessionId: 'demo-first', runs: [x1, x2] },
+      { sessionId: 'demo-second', runs: [y] },
+    ]);
   });
   it('coordinators: no runs, no subjects', () => {
     expect(stallCoordinatorSubjects([])).toEqual([]);
@@ -249,6 +271,7 @@ describe('orphan D (§5.2): any session, a restart that cut background tasks sho
       ['a failed mark', { state: 'failed', err: 'server_error' }],
       ['nothing lost', { lostBg: 0, lostKinds: [], lostIds: [] }],
       ['no restart', { restartAt: null }],
+      ['no restart and no stop', { restartAt: null, stopAt: null }],
       ['a restart at the stop', { stopAt: R }],
       ['a restart before the stop', { stopAt: R + MIN }],
     ];
@@ -296,6 +319,19 @@ describe('orphan D (§5.2): any session, a restart that cut background tasks sho
     const w = dInput(R, {}, { role: 'worker', run: runRow(), notices: [notice('shadow', 'orphan-d', 1, R, NOW - 90 * MIN)] });
     expect(stallOrphanDVerdict({ ...w, arming: DARK }, NOW)).toEqual(NONE);
     expect(stallOrphanDVerdict(w, NOW)).toEqual(d1());
+  });
+  it('D: the role decides what is recorded on a run, not the run alone', () => {
+    const live1 = [notice('live', 'orphan-d', 1, R, NOW - 90 * MIN)];
+    const coordWithRun = dInput(R, {}, { role: 'coordinator', sessionId: COORD, run: runRow(), notices: live1 });
+    expect(stallOrphanDVerdict(coordWithRun, NOW), 'a coordinator carrying a run reads mail, not the run notices').toEqual(d1());
+    const workerNoRun = dInput(R, {}, { role: 'worker', run: null, notices: live1 });
+    expect(stallOrphanDVerdict(workerNoRun, NOW), 'a worker with no run reads mail, not notices').toEqual(d1());
+    expect(stallOrphanDVerdict({ ...workerNoRun, ...sent(workerNoRun, null) }, NOW), 'and its mail makes the rung done').toEqual(NONE);
+  });
+  it('D: a run-less rung 2 is never recorded, whatever notices the input carries', () => {
+    const base = dInput(R);
+    const input = { ...base, ...sent(base, { deliveredAt: NOW - ORPHAN_PUSH_MS - MIN }), notices: [notice('live', 'orphan-d', 2, R, NOW - MIN)] };
+    expect(stallOrphanDVerdict(input, NOW)).toEqual(d2());
   });
   it('D: rung 2 timings, unacked ORPHAN_PUSH_MS after delivery or undelivered that long after queueing', () => {
     const base = dInput(R);
@@ -384,6 +420,15 @@ describe('orphan E (§5.2): run workers and coordinators, a wake-bearing task th
     const c = eInput({}, { role: 'coordinator', sessionId: COORD });
     const subject = stallOrphanESubject(okMark(c.mark));
     expect(stallOrphanEVerdict({ ...c, mail: [mailRow(602, NOW - 5 * MIN, WATCH, COORD, subject)] }, NOW)).toEqual(NONE);
+  });
+  it('E: the live word may have begun exactly at the stop', () => {
+    expect(stallOrphanEVerdict(eInput({}, { worker: workerAt('idle', S) }), NOW)).toEqual(e1());
+  });
+  it('E: the shared holds', () => {
+    expect(stallOrphanEVerdict(eInput({}, { worker: { present: false } }), NOW)).toEqual(hold('absent'));
+    expect(stallOrphanEVerdict(eInput({}, { worker: workerAt('idle', S + 2_000, { stranded: true }) }), NOW)).toEqual(hold('limit'));
+    expect(stallOrphanEVerdict(eInput({}, { run: runRow({ state: 'unknown' }) }), NOW)).toEqual(hold('run-unnamed'));
+    expect(stallOrphanEVerdict(eInput({}, { mark: { ok: false, reason: 'unmeasured' } }), NOW)).toEqual(hold('unmeasured'));
   });
   it('E: a stale mark is none', () => {
     expect(stallOrphanEVerdict(eInput({}, { liveStartedAt: NOW - MIN }), NOW)).toEqual(NONE);
@@ -487,6 +532,28 @@ describe('failed (§5.2): run workers and coordinators, a turn that ended on an 
       .toEqual(f2o('request', 'invalid_request'));
     expect(stallFailedVerdict(fInput({}, { arming: DARK_MAIL_OFF }), NOW), 'shadow').toEqual(f1());
   });
+  it('failed: a failure with no stop recorded is none, never keyed on null', () => {
+    expect(stallFailedVerdict(fInput({ stopAt: null }), NOW)).toEqual(NONE);
+  });
+  it('failed: a coordinator carrying a run still sends rung 2 to the operator', () => {
+    expect(stallFailedVerdict(fInput({ err: 'invalid_request' }, { role: 'coordinator', sessionId: COORD, run: runRow() }), NOW)).toEqual(f2o('request', 'invalid_request'));
+  });
+  it('failed: only a failed rung-1 notice is a prior failure', () => {
+    const other = (arm: StallArm, rung: 1 | 2 | 3): StallNotice => notice('live', arm, rung, S - H, S - H + 15 * MIN);
+    expect(stallFailedVerdict(fInput({}, { notices: [other('orphan-d', 1)] }), NOW), 'an orphan-d rung 1').toEqual(f1());
+    expect(stallFailedVerdict(fInput({}, { notices: [other('failed', 2)] }), NOW), 'a failed rung 2').toEqual(f1());
+  });
+  it('failed: a run-less prior failure is the watch mail to THIS session, outside this failure subject, inside the window', () => {
+    const c = fInput({}, { role: 'coordinator', sessionId: COORD });
+    const priorSubject = stallFailedSubject('overloaded', S - H - 15 * MIN);
+    const ownSubject = stallFailedSubject('server_error', S);
+    const withMail = (at: number, subject: string, toId = COORD): StallSessionInput => ({ ...c, mail: [mailRow(603, at, WATCH, toId, subject)] });
+    expect(stallFailedVerdict(withMail(S - H, priorSubject, WORKER), NOW), 'to another session').toEqual(f1());
+    expect(stallFailedVerdict(withMail(S - H, ownSubject), NOW), 'this failure own subject, however early').toEqual(NONE);
+    expect(stallFailedVerdict(withMail(S - FAILED_REPEAT_MS, priorSubject), NOW), 'exactly at the window start').toEqual(f2o('repeat', 'server_error'));
+    expect(stallFailedVerdict(withMail(S, priorSubject), NOW), 'exactly at the stop').toEqual(f1());
+    expect(stallFailedVerdict(withMail(S + 5 * MIN, priorSubject), NOW), 'after the stop').toEqual(f1());
+  });
   it('failed: the shared holds and a stale mark', () => {
     expect(stallFailedVerdict(fInput({}, { worker: { present: false } }), NOW)).toEqual(hold('absent'));
     expect(stallFailedVerdict(fInput({}, { worker: workerAt('idle', S + 1_000, { stranded: true }) }), NOW)).toEqual(hold('limit'));
@@ -570,6 +637,13 @@ describe('mail-stuck (§5.2): per queued delivery to a run worker or a coordinat
     const c = stuckInput({ toId: COORD }, { role: 'coordinator', sessionId: COORD, mail: [mailRow(501, M_AT, WORKER, COORD, 'question', null, 'question')] });
     expect(stallMailStuckVerdicts(c, NOW)).toEqual([stuck()]);
     expect(stallMailStuckVerdicts(c, NOW + 10 * MIN)).toEqual([stuck()]);
+  });
+  it('mail-stuck: a coordinator push is never recorded, whatever notices the input carries', () => {
+    const c = stuckInput({ toId: COORD }, {
+      role: 'coordinator', sessionId: COORD, mail: [mailRow(501, M_AT, WORKER, COORD, 'question', null, 'question')],
+      notices: [notice('live', 'mail-stuck', 1, 901, NOW - MIN)],
+    });
+    expect(stallMailStuckVerdicts(c, NOW)).toEqual([stuck()]);
   });
   it('mail-stuck: any other session is not a candidate', () => {
     expect(stallMailStuckVerdicts(stuckInput({}, { role: 'other' }), NOW)).toEqual([]);
