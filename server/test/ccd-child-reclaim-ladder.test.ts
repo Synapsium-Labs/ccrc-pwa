@@ -10,9 +10,9 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, WS_ADD } from './ccdWsHelpers.js';
 import {
-  CHILD_BRANCH, CHILD_ID, CHILD_STUBS, TMUX_FAULTS, atticReach, childReclaimVerb, evalOf, makeChild, plantTmux,
+  CHILD_BRANCH, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, atticReach, childReclaimVerb, evalOf, makeChild, plantTmux,
   wideDigitLocale, type Child, type LadderAnswer,
 } from './childReclaimFixture.js';
 
@@ -1978,3 +1978,122 @@ it('vanished subject remains reclaimable under R19', () => {
   expect(r.verdict, r.detail).toBe('reclaimable');
   expect(r.token).toMatch(/^[0-9a-f]{64}$/);
 }, 60_000);
+
+// THE PER-ROW RESET (D-3733). `_ws_reclaim_workdir_shared` clears `wr`, `rok` and `basis` for every row it reads.
+// Without that reset a projected row listed AFTER a complete one inherits the complete row's `rok=1` and is
+// compared physically — D-3731 re-opened by directory order alone (review 212, its X2b). The listing's order is
+// the directory's (hashed on ext4, creation order on tmpfs), so pairs of names are planted in alternating creation
+// orders until `find` has listed the complete row first AND the projected row first. The order is READ for every
+// placement, and both are asserted seen: an order never exercised is not one pinned.
+const PROJECTED_WHY = 'name a workdir that cannot be resolved completely';
+const plainRow = (id: string, workdir: string): void => {
+  fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.uuid`), `u-${id}`);
+  fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.workdir`), workdir);
+};
+const dropPlainRow = (id: string): void => {
+  for (const f of ['uuid', 'workdir']) fs.rmSync(path.join(h.home, '.cc-sessions', `${id}.${f}`), { force: true });
+};
+/** `_ws_reclaim_eval`'s answer for any child id — `evalOf` asks `CHILD_ID` alone. */
+const evalAs = (id: string): LadderAnswer => {
+  const out = h.sh(`${CHILD_STUBS} _ws_reclaim_eval ${id} 0 '' >/dev/null;`
+    + ` printf '%s\\x1f%s\\x1f%s' "$REAP_VERDICT" "$REAP_TOKEN" "$REAP_DETAIL"`);
+  const [verdict = '', token = '', detail = ''] = out.split('\x1f');
+  return { verdict, token, detail };
+};
+
+it('a complete row listed before a projected row lends it no placement proof', () => {
+  const c = makeChild(h);
+  fs.mkdirSync(path.join(c.wt, 'server'));
+  const complete = path.join(h.home, 'outside', 'server');
+  fs.mkdirSync(complete, { recursive: true });
+  // Entered while `alias` led into the child; `alias` is gone, so the spelling projects outside it.
+  const projected = `${h.home}/alias/server`;
+  expect(basisOf(complete), 'the CONTROL: the complete row resolves completely').toMatch(/^0\x1f.*\x1fcomplete$/);
+  expect(basisOf(projected), 'the CONTROL: the projected row reads outside the child, as text')
+    .toBe(`0\x1f${fs.realpathSync(h.home)}/alias/server\x1fabsent-suffix`);
+  plainRow('demo-solo', complete);
+  expect(evalOf(h).verdict, 'the CONTROL: the complete row alone holds nothing').toBe('reclaimable');
+  dropPlainRow('demo-solo');
+  const seen = new Set<string>();
+  for (let i = 0; i < 64 && seen.size < 2; i += 1) {
+    const done = `demo-c${i}-whole`;
+    const proj = `demo-p${i}-proj`;
+    if (i % 2 === 0) { plainRow(done, complete); plainRow(proj, projected); }
+    else { plainRow(proj, projected); plainRow(done, complete); }
+    const listed = h.sh(`find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*'`).split('\n');
+    const iDone = listed.indexOf(path.join(h.home, '.cc-sessions', `${done}.workdir`));
+    const iProj = listed.indexOf(path.join(h.home, '.cc-sessions', `${proj}.workdir`));
+    expect(iDone >= 0 && iProj >= 0, listed.join('\n')).toBe(true);
+    const order = iDone < iProj ? 'complete-first' : 'projected-first';
+    seen.add(order);
+    const r = evalOf(h);
+    expect(r.verdict, `${done}/${proj}, ${order}: ${r.detail}`).toBe('unmeasured');
+    expect(r.detail).toContain(`registry row(s) ${proj} ${PROJECTED_WHY}`);
+    expect(r.detail, 'the complete row is placed, never named').not.toContain(done);
+    expect(r.token).toBe('');
+    dropPlainRow(done); dropPlainRow(proj);
+  }
+  expect([...seen].sort(), 'both listing orders were exercised').toEqual(['complete-first', 'projected-first']);
+  expect(fs.existsSync(path.join(c.wt, 'server')), 'the child’s tree stands').toBe(true);
+}, 180_000);
+
+// THE HOLD IS D-3731'S COST, PINNED (review 212, F1; D-3734). A row whose directory is gone resolves only as a
+// projection, so it holds EVERY child's reclaim at `unmeasured` — a present child, a vanished one, and two vanished
+// children each other. R19's own arm is unchanged: each vanished child alone still reclaims. Recovery is not here.
+it('ambiguous row hold: a present child beside an unrelated gone-directory row is unmeasured', () => {
+  const c = makeChild(h);
+  const retired = path.join(h.home, 'projects', 'retired', 'x');
+  fs.mkdirSync(retired, { recursive: true });
+  plainRow('demo-stale', retired);
+  expect(evalOf(h).verdict, 'the CONTROL: while its directory stands the row is placed outside').toBe('reclaimable');
+  fs.rmSync(path.join(h.home, 'projects', 'retired'), { recursive: true, force: true });
+  const r = evalOf(h);
+  expect(r.verdict, r.detail).toBe('unmeasured');
+  expect(r.detail).toContain(`registry row(s) demo-stale ${PROJECTED_WHY}`);
+  expect(r.detail, 'the remedy restores or purges (review 212, F3)')
+    .toContain('restore its path to what it ran through, or purge the row once its session has ended');
+  expect(r.detail, 'and never invites re-pointing').not.toContain('re-point');
+  expect(r.detail, 'by id only').not.toContain(retired);
+  expect(r.token).toBe('');
+  expect(fs.existsSync(c.wt)).toBe(true);
+}, 60_000);
+
+it('ambiguous row hold: a vanished subject beside a vanished sibling row is unmeasured', () => {
+  const c = makeChild(h);
+  const sibling = path.join(h.home, 'worktrees', 'demo', 'sibling');
+  fs.mkdirSync(sibling, { recursive: true });
+  plainRow('demo-sibling', sibling);
+  fs.rmSync(c.wt, { recursive: true, force: true });
+  const alone = evalOf(h);
+  expect(alone.verdict, `the CONTROL: R19 — the vanished subject reclaims while the sibling stands — ${alone.detail}`)
+    .toBe('reclaimable');
+  fs.rmSync(sibling, { recursive: true, force: true });
+  const r = evalOf(h);
+  expect(r.verdict, r.detail).toBe('unmeasured');
+  expect(r.detail).toContain(`registry row(s) demo-sibling ${PROJECTED_WHY}`);
+  expect(r.detail, 'by id only').not.toContain(sibling);
+  expect(r.token).toBe('');
+}, 60_000);
+
+it('ambiguous row hold: two vanished children hold each other', () => {
+  const c = makeChild(h);
+  h.sh(`${WS_ADD} CCD_WS_SLUG=still-harbor cmd_ws_add --child ${CHILD_RUN} demo`);
+  const other = 'demo-still-harbor';
+  const otherWt = path.join(h.home, 'worktrees', 'demo', 'still-harbor');
+  expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${other}.child`)), 'the CONTROL: a second marked child').toBe(true);
+  fs.rmSync(c.wt, { recursive: true, force: true });
+  const first = evalOf(h);
+  expect(first.verdict, `the CONTROL: R19 — one vanished child reclaims while the other stands — ${first.detail}`)
+    .toBe('reclaimable');
+  fs.rmSync(otherWt, { recursive: true, force: true });
+  const mine = evalOf(h);
+  expect(mine.verdict, mine.detail).toBe('unmeasured');
+  expect(mine.detail).toContain(`registry row(s) ${other} ${PROJECTED_WHY}`);
+  expect(mine.token).toBe('');
+  const theirs = evalAs(other);
+  expect(theirs.verdict, theirs.detail).toBe('unmeasured');
+  expect(theirs.detail).toContain(`registry row(s) ${CHILD_ID} ${PROJECTED_WHY}`);
+  expect(theirs.token).toBe('');
+  expect(mine.detail, 'the other row by id only').not.toContain(otherWt);
+  expect(theirs.detail, 'the other row by id only').not.toContain(c.wt);
+}, 120_000);

@@ -2981,8 +2981,9 @@ interface AliasRow {
   raw: string;
   pointAt(target: 'child' | 'outside'): void;
   removeAlias(): void;
-  /** Re-point the alias at a COMPLETE directory outside the child. */
-  repairAlias(): void;
+  /** Re-point the alias at a COMPLETE directory outside the child — the pre-existing re-point class, never a
+   *  recovery (review 212, F3). */
+  repointAlias(): void;
   writeRow(): void;
   dropRow(): void;
   /** Everything a refusal must leave standing: the child's tree and branch history, the alternate row's bytes,
@@ -3010,7 +3011,7 @@ const aliasRow = (hh: PrHarness, c: Child): AliasRow => {
       fs.symlinkSync(target === 'child' ? c.wt : outside, alias);
     },
     removeAlias: () => { fs.unlinkSync(alias); },
-    repairAlias: () => { self.pointAt('outside'); },
+    repointAlias: () => { self.pointAt('outside'); },
     writeRow: () => {
       fs.writeFileSync(rowFile('uuid'), `u-${ALT}`);
       fs.writeFileSync(rowFile('workdir'), self.raw);
@@ -3303,7 +3304,13 @@ it('vanished subject remains reclaimable under R19', () => {
   expect(h.reg('demo-outside', 'workdir'), 'the outside row stands').toBe(path.join(h.home, 'outside', 'server'));
 }, 90_000);
 
-it('repairing the alias restores complete outside placement', () => {
+it('a re-pointed alias resolves complete outside and reclaims: the pre-existing re-point class, not a recovery', () => {
+  // WHAT THIS PINS IS A KNOWN HOLE, NOT A REMEDY (review 212, F3; D-3735). A session that entered `<alias>/server`
+  // while the alias led into the child keeps that cwd when the alias is re-pointed outside; the spelling then
+  // resolves `complete` and outside, so the reclaim removes the tree under it — its WIP pin commits `live.txt` to
+  // the attic first. `complete` places the spelling as it reads now, not the session. Pre-existing (the base
+  // behaves the same), left to a follow-up programme; a fix there turns this case red on purpose. The recovery is
+  // the next case: purging the row.
   const c = makeChild(h);
   const a = aliasRow(h, c);
   a.pointAt('child');
@@ -3312,13 +3319,13 @@ it('repairing the alias restores complete outside placement', () => {
   const ambiguous = evalOf(h);
   expect(ambiguous.verdict, ambiguous.detail).toBe('unmeasured');
   expect(ambiguous.token).toBe('');
-  a.repairAlias();
-  const repaired = evalOf(h);
-  expect(repaired.verdict, repaired.detail).toBe('reclaimable');
-  const v = childReclaimVerb(h, repaired.token);
+  a.repointAlias();
+  const repointed = evalOf(h);
+  expect(repointed.verdict, repointed.detail).toBe('reclaimable');
+  const v = childReclaimVerb(h, repointed.token);
   expect(v.code, v.stdout + v.stderr).toBe(0);
   expect(fs.existsSync(c.wt), 'the child was reclaimed').toBe(false);
-  expect(h.reg(ALT, 'workdir'), 'the repaired row stands').toBe(a.raw);
+  expect(h.reg(ALT, 'workdir'), 'the re-pointed row stands').toBe(a.raw);
 }, 90_000);
 
 it('removing the ambiguous alternate row restores ordinary behavior', () => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8f494dadef5e9c2dd977a957e4cb7e1d999f291e05cadd5e9239f046a68a9b71
+# ccrc:generated 1 sha256=ba16b8cca16781e044340d0644d2da26189e38891e9ede9ea00812fae405f178
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24310,7 +24310,9 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   #                                 `.workdir` would not read, a row's `.workdir` is not absolute,
   #                                 opens with `//`, cannot be resolved (a directory
   #                                 or link on it cannot be entered or followed, a `..` in it cannot be
-  #                                 placed, or it holds a control character), or resolves
+  #                                 placed, or it holds a control character), resolves only with
+  #                                 a basis other than `complete` (the rest re-attached as text below
+  #                                 a missing component, D-3731), or resolves
   #                                 to a path opening with `//`, or the child's own
   #                                 workdir resolves to one or cannot be resolved (the row cannot be
   #                                 placed) — every case after
@@ -24464,7 +24466,13 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # or gone or unaskable, never makes a projection evidence. The CHILD's own
   # `mine` is not held to it: its vanished worktree is R19's arm, decided by
   # `_ws_reclaim_absent` above this helper, and a row literally at or below it
-  # is refused by the literal arms whatever its basis.
+  # is refused by the literal arms whatever its basis. R19's arm is unchanged,
+  # but an ambiguous OTHER row holds a vanished child too — and two vanished
+  # children hold each other — until that row is purged or its path restored
+  # and a later attempt runs: the stated cost. And `complete` places the
+  # SPELLING as it reads now, not the session: an alias re-pointed after the
+  # session entered through it, or a bind-mount spelling, also resolves
+  # complete and outside (pre-existing; left to a follow-up).
   local id="$1" wd="$2" mine='' minewhy='' names n o w wr rok basis rc lit unread='' unplaced='' unmine='' unres=''
   _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
@@ -24508,7 +24516,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   [[ -z "$unplaced" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unplaced name no plain absolute workdir, or one that resolves to a path opening with //, so ccd cannot place them against this child — stop and restart each (ccd start <id> stores a plain absolute workdir), re-point a link whose target opens with //, or purge its row"
   [[ -z "$unres" ]] \
-    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered or followed, or no longer exists, so its spelling no longer says where that session lives; a '..' in it follows a directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place them against this child — make it searchable, restore what its path ran through, or stop and purge the row"
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered or followed, or no longer exists, so its spelling no longer says where that session lives; a '..' in it follows a directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place them against this child — make it searchable, restore its path to what it ran through, or purge the row once its session has ended"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2
   return 0
 }
