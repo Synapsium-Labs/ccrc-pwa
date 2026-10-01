@@ -3204,7 +3204,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   // ── wave 8 item D (decision D): the flag as ccrc.service actually gets it ─
   // The unit carries TWO EnvironmentFile lines, ccrc.env then the
   // exposure file, and the later one wins by PRESENCE — `_box_unit_env`,
-  // shared with `_check_update-exposure` and install's gate line.
+  // shared with `_check_update-exposure` and install's gate line. D4–D6
+  // below are D-3596's unreadable-exposure-file cases.
 
   it('D1: the exposure file OVERRIDES ccrc.env — CCRC_AUTH=off there does not disarm a box `ccrc expose` armed (the live defect this wave fixes)', () => {
     const home = healthy('ccrc-doctor-auth-exposure-wins-');
@@ -3351,9 +3352,12 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   // stays present — a dropped `_box_unit_env` term is the only thing that can
   // red this pin. `BUE_VAL=on` is preset AFTER sourcing ccrc (a shell
   // assignment, never an env entry — `ccd/ccrc:2768` resets it at file scope
-  // on load), so a guard that skips the missing function reads a stale ARMED
-  // instead of failing shut.
-  it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, not a stale ARMED PASS', () => {
+  // on load) in case some path through the ungoverned body reads it, but in
+  // THIS harness (`PATH` pointing nowhere) it never gets the chance: without
+  // the guard term, `_check_auth`'s body FAILs elsewhere first — the node
+  // check, ahead of anything that reads the flag — so it is the SPECIFIC
+  // regex below, not a stale-ARMED read, that makes this pin red.
+  it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, just not on this check’s own text', () => {
     const nowhere = join(REPO, 'no-such-home-for-check-auth-bue');
     const r = spawnSync(BASH, ['-c',
       `set -uo pipefail; . ${shq(CCRC_SRC)}; . ${shq(CHECKS_SRC)}; unset -f _box_unit_env; BUE_VAL=on; _check_auth`],
