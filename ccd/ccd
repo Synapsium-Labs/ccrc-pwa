@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=dc981af4cf7f3b1cd433e71127a85ceb84a6d2486c948954d67496fbc11860a3
+# ccrc:generated 1 sha256=8f494dadef5e9c2dd977a957e4cb7e1d999f291e05cadd5e9239f046a68a9b71
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24447,7 +24447,25 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # THROUGH, so the order only chooses which why names a row, and can never
   # turn a refusal into a pass. A literal row's resolved arms are asked only
   # when both it and the child resolved; its literal arms refuse it anyway.
-  local id="$1" wd="$2" mine='' minewhy='' names n o w wr rok rc lit unread='' unplaced='' unmine='' unres=''
+  #
+  # NOR ONE PLACED ONLY BY PROJECTION (D-3731, R31). Another row's resolution
+  # authorises a physical comparison only when its basis is `complete`: every
+  # component of its current spelling walked and entered. An `absent-suffix`
+  # answer — the rest re-attached as text below a proven-absent component —
+  # is how the namespace reads now, not where that session is: a pane that
+  # entered `<alias>/server` while `<alias>` led into this child still holds
+  # that cwd once the alias is removed, and the projection read as outside, so
+  # the audit minted a token and the verb removed the live tree (measured).
+  # Such a row, an empty or unknown basis, and a failed resolution are all
+  # collected as one that cannot be placed — retryable, by id only — and the
+  # same proof is asked at every seam that reaches this helper: the audit's
+  # evaluation, the verb's locked recomputation, and `_ws_reclaim_owned` on the
+  # fresh and the resumed tail. Liveness is no input here: a modelled pane, up
+  # or gone or unaskable, never makes a projection evidence. The CHILD's own
+  # `mine` is not held to it: its vanished worktree is R19's arm, decided by
+  # `_ws_reclaim_absent` above this helper, and a row literally at or below it
+  # is refused by the literal arms whatever its basis.
+  local id="$1" wd="$2" mine='' minewhy='' names n o w wr rok basis rc lit unread='' unplaced='' unmine='' unres=''
   _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
     || { _WS_SHARED_WHY="could not list $REG"; return 2; }
@@ -24466,8 +24484,10 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     (( rc == 1 )) && continue   # gone between the listing and the read
     (( rc == 0 )) || { unread+="${unread:+, }$n"; continue; }
     [[ "$w" == /* && "$w" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
-    wr=''; rok=0
-    _ws_reclaim_resolve "$w" && { wr="$_WS_RESOLVED"; [[ -n "$mine" ]] && rok=1; }
+    wr=''; rok=0; basis=''
+    _ws_reclaim_resolve "$w" && wr="$_WS_RESOLVED"
+    basis="$_WS_RESOLVE_BASIS"; [[ "$basis" == complete && -n "$mine" ]] && rok=1
+    [[ -n "$wr" ]] || rok=0
     lit=0; [[ "$w" == "$wd" || "$w" == "${wd%/}/"* ]] && lit=1
     (( lit )) || [[ "$wr" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
     (( lit )) || [[ -z "$minewhy" ]] || { unmine+="${unmine:+, }$o"; continue; }
@@ -24488,19 +24508,35 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   [[ -z "$unplaced" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unplaced name no plain absolute workdir, or one that resolves to a path opening with //, so ccd cannot place them against this child — stop and restart each (ccd start <id> stores a plain absolute workdir), re-point a link whose target opens with //, or purge its row"
   [[ -z "$unres" ]] \
-    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved (a directory or link on its path cannot be entered or followed; a '..' in it follows a directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place them against this child — make it searchable, or stop and purge the row"
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered or followed, or no longer exists, so its spelling no longer says where that session lives; a '..' in it follows a directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place them against this child — make it searchable, restore what its path ran through, or stop and purge the row"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2
   return 0
 }
 
 _WS_RESOLVED=''
+_WS_RESOLVE_BASIS='unmeasured'
 _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd` of path would land,
   #                           canonically: the physical path (`builtin pwd -P`) of its longest prefix
   #                           that is a directory (its own walk, fork-free), entered LOGICALLY, then
   #                           the rest as written, one `/` between components — the rest's first
   #                           component PROVEN absent (`_ws_reclaim_absent`), and a path whose entered
   #                           prefix holds `..` re-walked from where that entry lands; rc 1,
-  #                           _WS_RESOLVED='', otherwise
+  #                           _WS_RESOLVED='', otherwise. _WS_RESOLVE_BASIS says how the answer was
+  #                           formed: `complete` when the whole current spelling was walked and entered
+  #                           (no rest), `absent-suffix` when a rest was re-attached as text below a
+  #                           proven-absent component, `unmeasured` on every rc 1. A re-walk's own
+  #                           basis is the answer's; no caller relabels it.
+  # HOW THE ANSWER WAS FORMED IS PART OF THE ANSWER (D-3731, R31). Both rc-0
+  # shapes are one path string, and for presenting a path, or for the child's
+  # own vanished worktree (R19), that is enough. It is not enough to say where
+  # ANOTHER row's session is: a pane that entered `<alias>/server` while the
+  # alias stood keeps that physical cwd when the alias is removed, and the
+  # spelling then re-attaches `alias/server` as text below a proven-absent
+  # `alias` — a projection of the namespace as it is now, not evidence of
+  # where that process lives. So the basis rides beside the path, set at each
+  # return and reset at entry, so a failed call never inherits the call
+  # before it, and `_ws_reclaim_workdir_shared` places another row only on
+  # `complete`.
   # WHERE A ROW'S SESSION LIVES, AND WHETHER THAT CAN BE SAID AT ALL — ONE
   # OPERATION, so the two can never disagree (spec §5.5, rung 9).
   # `_ws_reclaim_workdir_shared` places every row, and the child itself, by
@@ -24561,6 +24597,7 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
   # re-attachment is not where the session lives.
   local p="$1" head="$1" rest real c out=''
   _WS_RESOLVED=''
+  _WS_RESOLVE_BASIS='unmeasured'
   [[ "$p" != *[[:cntrl:]]* && "$p" != *$'\n'* ]] || return 1
   while [[ ! -d "$head" && "$head" != / && "$head" != . && -n "$head" ]]; do
     case "$head" in
@@ -24576,7 +24613,7 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
   # `.` is the walk's own stand-in for a relative path's cwd, not a prefix of it.
   if [[ "$head" == . && "$p" != . && "$p" != ./* ]]; then rest="$p"; else rest="${p#"$head"}"; fi
   while [[ "$rest" == /* ]]; do rest="${rest#/}"; done
-  if [[ -z "$rest" ]]; then _WS_RESOLVED="$real"; return 0; fi
+  if [[ -z "$rest" ]]; then _WS_RESOLVED="$real"; _WS_RESOLVE_BASIS='complete'; return 0; fi
   case "/$rest/" in */../*) return 1 ;; esac
   case "/$head/" in */../*) _ws_reclaim_resolve "${real%/}/$rest"; return ;; esac
   _ws_reclaim_absent "${head%/}/${rest%%/*}" || return 1
@@ -24586,6 +24623,7 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
     [[ -z "$c" ]] || out+="/$c"
   done
   _WS_RESOLVED="${real%/}$out"
+  _WS_RESOLVE_BASIS='absent-suffix'
   return 0
 }
 

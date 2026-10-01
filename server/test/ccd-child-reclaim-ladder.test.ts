@@ -731,6 +731,9 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
     makeChild(h);
     expect(evalOf(h).verdict, 'one row').toBe('reclaimable');
     fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-elsewhere.uuid'), 'u-2');
+    // An EXISTING directory: a row whose spelling resolves only below a missing component is a projection,
+    // and is unmeasured (D-3731) — `resolution basis` and `removed ancestor alias` below pin that side.
+    fs.mkdirSync(path.join(h.home, 'worktrees', 'demo', 'quiet-basin-2'));
     fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-elsewhere.workdir'),
       path.join(h.home, 'worktrees', 'demo', 'quiet-basin-2'));
     const r = evalOf(h);
@@ -1545,9 +1548,10 @@ describe('the logical resolver places every row and the child by one call (spec 
     fs.mkdirSync(path.join(h.home, 'elsewhere', 'gone'));
     fs.symlinkSync(path.join(h.home, 'elsewhere', 'sub'), path.join(h.home, 'lnk'));
   };
-  const UNRESOLVED = 'name a workdir that cannot be resolved (a directory or link on its path cannot be entered or followed;'
-    + ' a \'..\' in it follows a directory that no longer exists, or cannot otherwise be placed; or it holds a control character),'
-    + ' so ccd cannot place them against this child';
+  const UNRESOLVED = 'name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered'
+    + ' or followed, or no longer exists, so its spelling no longer says where that session lives; a \'..\' in it follows a'
+    + ' directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place'
+    + ' them against this child';
 
   it('an existing path through a symlinked ancestor resolves to its physical path', () => {
     const c = makeChild(h);
@@ -1780,3 +1784,197 @@ describe('the logical resolver places every row and the child by one call (spec 
     dropRowOf('demo-nested');
   }, 60_000);
 });
+
+// THE RESOLVER SAYS HOW IT FORMED ITS ANSWER (D-3731, R31). `complete`: every
+// component of the current spelling was walked and entered. `absent-suffix`:
+// the rest below a PROVEN-absent component was re-attached as text — namespace
+// presentation, not evidence of where a session's cwd remains. `unmeasured`:
+// no answer. An alternate row is placed only on `complete`; the child's own
+// vanished worktree keeps R19.
+const PLACEMENT_ALT = 'demo-alias-live';
+const altRowFile = (field: string): string => path.join(h.home, '.cc-sessions', `${PLACEMENT_ALT}.${field}`);
+const writeAltRow = (workdir: string): void => {
+  fs.writeFileSync(altRowFile('uuid'), `u-${PLACEMENT_ALT}`);
+  fs.writeFileSync(altRowFile('workdir'), workdir);
+};
+/** `<rc>\x1f<_WS_RESOLVED>\x1f<_WS_RESOLVE_BASIS>` for one call. */
+const basisOf = (p: string): string =>
+  h.sh(`_ws_reclaim_resolve "${p}"; printf '%s\\x1f%s\\x1f%s' "$?" "$_WS_RESOLVED" "$_WS_RESOLVE_BASIS"`);
+/** The child's tree, its branch, and the alternate row's bytes — what a refusal leaves standing. */
+const placementState = (c: Child): Record<string, unknown> => ({
+  wt: fs.existsSync(c.wt) ? h.git(c.wt, 'status', '--porcelain=v1', '--untracked-files=all') : 'gone',
+  tip: h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`),
+  row: [altRowFile('uuid'), altRowFile('workdir')].map((f) => fs.readFileSync(f).toString('base64')),
+});
+
+describe('resolution basis — how the resolver formed its answer (D-3731)', () => {
+  it('resolution basis: a complete existing path is complete', () => {
+    const c = makeChild(h);
+    fs.symlinkSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtlink'));
+    const child = fs.realpathSync(c.wt);
+    expect(basisOf(c.wt)).toBe(`0\x1f${child}\x1fcomplete`);
+    expect(basisOf(`${h.home}/wtlink/demo/quiet-basin/`)).toBe(`0\x1f${child}\x1fcomplete`);
+  }, 60_000);
+
+  it('resolution basis: proven missing suffix is absent-suffix', () => {
+    const c = makeChild(h);
+    const child = fs.realpathSync(c.wt);
+    expect(basisOf(`${c.wt}/gone/a//b/`)).toBe(`0\x1f${child}/gone/a/b\x1fabsent-suffix`);
+    expect(basisOf(`${h.home}/deleted/long/ago`)).toBe(`0\x1f${fs.realpathSync(h.home)}/deleted/long/ago\x1fabsent-suffix`);
+  }, 60_000);
+
+  it('resolution basis: a recursive logical-dotdot resolution keeps its own basis', () => {
+    const c = makeChild(h);
+    fs.mkdirSync(path.join(h.home, 'elsewhere', 'sub'), { recursive: true });
+    fs.symlinkSync(path.join(h.home, 'elsewhere', 'sub'), path.join(h.home, 'lnk'));
+    const home = fs.realpathSync(h.home);
+    expect(basisOf(`${h.home}/lnk/../${path.relative(h.home, c.wt)}`), 're-walked from the entry, every component stands')
+      .toBe(`0\x1f${fs.realpathSync(c.wt)}\x1fcomplete`);
+    expect(basisOf(`${h.home}/lnk/../alias/server`), 're-walked from the entry, `alias` is proven absent there')
+      .toBe(`0\x1f${home}/alias/server\x1fabsent-suffix`);
+  }, 60_000);
+
+  it('resolution basis: unreadable non-directory and failed absence stay unmeasured', () => {
+    const c = makeChild(h);
+    const server = path.join(c.wt, 'server');
+    fs.mkdirSync(path.join(server, 'inner'), { recursive: true });
+    const locked = path.join(h.home, 'locked');
+    fs.mkdirSync(locked);
+    fs.symlinkSync(server, path.join(locked, 'l'));
+    fs.symlinkSync(path.join(locked, 'l'), path.join(h.home, 'a'));
+    const spellings: Array<[string, string]> = [
+      ['a regular file on the path', path.join(c.wt, 'f1.txt', 'x')],
+      ['a component no stat can look at (longer than NAME_MAX)', `${h.home}/${'n'.repeat(300)}/x`],
+      ['an unresolved `..` below a missing directory', `${h.home}/gone/../${path.relative(h.home, c.wt)}`],
+      ['a link across an unsearchable directory', path.join(h.home, 'a')],
+      ['a path below an unsearchable directory', path.join(server, 'inner', 'x')],
+    ];
+    fs.chmodSync(locked, 0o600);
+    fs.chmodSync(server, 0o600);
+    let out: string[];
+    try { out = spellings.map(([, p]) => basisOf(p)); } finally { fs.chmodSync(locked, 0o755); fs.chmodSync(server, 0o755); }
+    spellings.forEach(([why], i) => expect(out[i], why).toBe('1\x1f\x1funmeasured'));
+    for (const snippet of [`"${c.wt}"$'\\n'"/x"`, `"${c.wt}/a"$'\\x01'"b"`]) {
+      expect(h.sh(`_ws_reclaim_resolve ${snippet}; printf '%s\\x1f%s\\x1f%s' "$?" "$_WS_RESOLVED" "$_WS_RESOLVE_BASIS"`),
+        `a control character: ${snippet}`).toBe('1\x1f\x1funmeasured');
+    }
+  }, 60_000);
+
+  it('resolution basis: a failed call retains nothing of the call before it', () => {
+    const c = makeChild(h);
+    const out = h.sh(`_ws_reclaim_resolve "${c.wt}/gone"; _ws_reclaim_resolve "${c.wt}/f1.txt/x";`
+      + ` printf '%s\\x1f%s\\x1f%s' "$?" "$_WS_RESOLVED" "$_WS_RESOLVE_BASIS"`);
+    expect(out, 'the absent-suffix answer before it is gone').toBe('1\x1f\x1funmeasured');
+    const after = h.sh(`_ws_reclaim_resolve "${c.wt}"; _ws_reclaim_resolve "${h.home}/gone/../x";`
+      + ` printf '%s\\x1f%s\\x1f%s' "$?" "$_WS_RESOLVED" "$_WS_RESOLVE_BASIS"`);
+    expect(after, 'and so is a complete one').toBe('1\x1f\x1funmeasured');
+  }, 60_000);
+
+  it('removed ancestor alias is unmeasured', () => {
+    const c = makeChild(h);
+    fs.mkdirSync(path.join(c.wt, 'server'));
+    fs.writeFileSync(path.join(c.wt, 'server', 'live.txt'), 'another session’s uncommitted work\n');
+    const alias = path.join(h.home, 'alias');
+    fs.symlinkSync(c.wt, alias);
+    const raw = `${alias}/server`;
+    writeAltRow(raw);
+    const standing = evalOf(h);
+    expect(standing.verdict, `the CONTROL: while the alias stands the row is rooted inside — ${standing.detail}`)
+      .toBe('containment-unproven');
+    expect(standing.detail).toContain(`registry row(s) ${PLACEMENT_ALT} rooted inside`);
+    fs.unlinkSync(alias);
+    const before = placementState(c);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+    expect(r.detail).toContain(`registry row(s) ${PLACEMENT_ALT} `);
+    expect(r.detail, 'the row’s spelling is never printed').not.toContain(raw);
+    expect(r.detail).not.toContain('alias/server');
+    expect(placementState(c), 'the tree, the branch and the row stand, byte for byte').toEqual(before);
+    expect(basisOf(raw), 'the same spelling is now only a projection')
+      .toBe(`0\x1f${fs.realpathSync(h.home)}/alias/server\x1fabsent-suffix`);
+    fs.symlinkSync(c.wt, alias);
+    expect(basisOf(raw), 'the CONTROL: with the alias standing it resolves completely, inside the child')
+      .toBe(`0\x1f${fs.realpathSync(c.wt)}/server\x1fcomplete`);
+  }, 60_000);
+
+  it('removed ancestor alias through real dotdot is unmeasured', () => {
+    const c = makeChild(h);
+    fs.mkdirSync(path.join(c.wt, 'server'));
+    fs.mkdirSync(path.join(h.home, 'elsewhere', 'sub'), { recursive: true });
+    fs.symlinkSync(path.join(h.home, 'elsewhere', 'sub'), path.join(h.home, 'lnk'));
+    const alias = path.join(h.home, 'alias');
+    fs.symlinkSync(c.wt, alias);
+    // `lnk` is entered before the `..` decides the logical parent: logically `$HOME`, where `alias` stands;
+    // the kernel's walk names `elsewhere/alias`, where nothing does.
+    const raw = `${h.home}/lnk/../alias/server`;
+    expect(fs.existsSync(path.join(h.home, 'elsewhere', 'alias')), 'the CONTROL: nothing at the kernel’s spelling').toBe(false);
+    expect(h.sh(`cd -- "${raw}" && pwd -P`), 'the CONTROL: a pane entering the row lands in the child')
+      .toBe(`${fs.realpathSync(c.wt)}/server`);
+    writeAltRow(raw);
+    const standing = evalOf(h);
+    expect(standing.verdict, `the CONTROL: placed where the logical entry lands — ${standing.detail}`).toBe('containment-unproven');
+    fs.unlinkSync(alias);
+    const before = placementState(c);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+    expect(r.detail).toContain(`registry row(s) ${PLACEMENT_ALT} `);
+    expect(r.detail).not.toContain(raw);
+    expect(placementState(c)).toEqual(before);
+    expect(basisOf(raw), 'the re-walk from the entry projects below the proven-absent alias')
+      .toBe(`0\x1f${fs.realpathSync(h.home)}/alias/server\x1fabsent-suffix`);
+    fs.symlinkSync(c.wt, alias);
+    expect(basisOf(raw), 'the CONTROL: complete, where the logical entry lands').toBe(`0\x1f${fs.realpathSync(c.wt)}/server\x1fcomplete`);
+  }, 60_000);
+});
+
+// THE CONTROLS the complete-only rule must leave as they were (mutation table rows 13, 15, 16). Top level, so
+// an anchored selector reaches each by its exact title.
+it('complete existing inside alternate row is containment-unproven', () => {
+  const c = makeChild(h);
+  fs.mkdirSync(path.join(c.wt, 'server'));
+  fs.symlinkSync(c.wt, path.join(h.home, 'alias'));
+  const raw = `${h.home}/alias/server`;
+  writeAltRow(raw);
+  expect(raw.startsWith(`${c.wt}/`), 'the CONTROL: no literal prefix of the child').toBe(false);
+  expect(basisOf(raw)).toBe(`0\x1f${fs.realpathSync(c.wt)}/server\x1fcomplete`);
+  const r = evalOf(h);
+  expect(r.verdict, r.detail).toBe('containment-unproven');
+  expect(r.detail).toContain(`registry row(s) ${PLACEMENT_ALT} rooted inside`);
+  expect(r.token).toBe('');
+}, 60_000);
+
+it('literal containment outranks incomplete physical basis', () => {
+  const c = makeChild(h);
+  const cases: Array<[string, string, string]> = [
+    ['nested, below a missing directory', `${c.wt}/gone/x`, 'rooted inside'],
+    ['spelled through, with a `..` below a missing directory', `${c.wt}/gone/../x`, `spell their workdir through ${c.wt}`],
+  ];
+  for (const [label, spelled, says] of cases) {
+    writeAltRow(spelled);
+    expect(basisOf(spelled).endsWith('\x1fcomplete'), `the CONTROL (${label}): the physical basis is incomplete`).toBe(false);
+    const r = evalOf(h);
+    expect(r.verdict, `${label}: ${r.detail}`).toBe('containment-unproven');
+    expect(r.detail).toContain(says);
+  }
+  fs.rmSync(c.wt, { recursive: true, force: true });
+  writeAltRow(c.wt);
+  expect(basisOf(c.wt), 'the CONTROL: the gone child’s own path is only a projection').toMatch(/\x1fabsent-suffix$/);
+  const same = evalOf(h);
+  expect(same.verdict, `the same path, the child gone: ${same.detail}`).toBe('containment-unproven');
+  expect(same.detail).toContain(`is also named by registry row(s) ${PLACEMENT_ALT}`);
+}, 60_000);
+
+it('vanished subject remains reclaimable under R19', () => {
+  // The subject's OWN gone worktree is a projection too — and it is not an alternate row: R19 reclaims it. A
+  // complete row outside stands beside it, so the subject's resolution is actually compared against.
+  const c = makeChild(h);
+  fs.mkdirSync(path.join(h.home, 'outside', 'server'), { recursive: true });
+  writeAltRow(path.join(h.home, 'outside', 'server'));
+  fs.rmSync(c.wt, { recursive: true, force: true });
+  expect(basisOf(c.wt), 'the CONTROL: the subject resolves as a projection').toMatch(/^0\x1f.*\x1fabsent-suffix$/);
+  const r = evalOf(h);
+  expect(r.verdict, r.detail).toBe('reclaimable');
+  expect(r.token).toMatch(/^[0-9a-f]{64}$/);
+}, 60_000);
