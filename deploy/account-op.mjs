@@ -1022,8 +1022,23 @@ const DOCTOR_FINDINGS = ['credential-declared-absent', 'settings-env-drift'];
  *  Code's own endpoint", and there is then nothing in `settings.json` for this
  *  check to compare against — which is why the upstream account on a healthy
  *  box produces no env-block measurement at all rather than a finding about a
- *  file that does not exist. */
+ *  file that does not exist.
+ *
+ *  A CODEX lane is the exception, and it is keyed on `exec.kind` alone (Plan 3a
+ *  Task 3, R-C7): its endpoint is its own loopback shim,
+ *  `http://127.0.0.1:<exec.proxyPort>` — the URL its launcher exports
+ *  (`ccd/ccrc-codex`'s ANTHROPIC_BASE_URL line; `ccrc-codex-launcher.test.ts`
+ *  pins that side) — never a provider default: `openai`'s is null, which is
+ *  why this check used to compare nothing for such a lane. A codex row whose
+ *  proxyPort is not a whole number in the launcher's 1..65535 answers `null`:
+ *  this check is not the roster's judge (the wrappers check is), so it
+ *  measures nothing for that row rather than naming an endpoint no launcher
+ *  could build. */
 function effectiveBaseUrl(exec) {
+  if (exec.kind === 'codex') {
+    const port = exec.proxyPort;
+    return Number.isInteger(port) && port >= 1 && port <= 65535 ? `http://127.0.0.1:${port}` : null;
+  }
   if (typeof exec.baseUrl === 'string' && exec.baseUrl !== '') return exec.baseUrl;
   // §4.1's absence-permitting rule, the same one `lane` reads: an account that
   // names no provider is anthropic, except external or codex. Provider-less
@@ -1087,16 +1102,30 @@ function opDoctor(a) {
       const parsed = JSON.parse(readFileSync(settings, 'utf8'));
       env = (parsed !== null && typeof parsed === 'object') ? (parsed.env ?? null) : null;
     } catch { env = null; }
+    // A CODEX lane's rule is ABSENT OR EQUAL (R-C7,
+    // D-3709). Its launcher exports
+    // ANTHROPIC_BASE_URL itself, and no ccrc writer puts that key in
+    // settings.json (`MODEL_ENV_KEYS`, shared/modelenv.mjs), so an env block
+    // without it — or no env block at all — is that lane's healthy state.
+    // Only a key naming ANOTHER endpoint is drift; which of the two Claude
+    // Code honours is unmeasured, so the finding says both and judges neither.
+    const codex = e.kind === 'codex';
     if (env === null || typeof env !== 'object') {
+      if (codex) continue;
       lines.push([DOCTOR_FINDINGS[1], acct.id,
         `${acct.configDirSuffix}/settings.json carries no env block, so the lane uses Claude Code's `
         + `default endpoint rather than ${wants}`].join('\t'));
       continue;
     }
+    if (codex && !Object.hasOwn(env, 'ANTHROPIC_BASE_URL')) continue;
     const has = typeof env.ANTHROPIC_BASE_URL === 'string' ? env.ANTHROPIC_BASE_URL : null;
     if (has !== wants) {
-      lines.push([DOCTOR_FINDINGS[1], acct.id,
-        `the roster says ${wants} and ${acct.configDirSuffix}/settings.json says ${has ?? 'nothing'}`]
+      lines.push([DOCTOR_FINDINGS[1], acct.id, codex
+        ? `${acct.configDirSuffix}/settings.json sets ANTHROPIC_BASE_URL to ${has ?? 'a non-string value'}, `
+          + `and this codex lane's endpoint is its loopback shim ${wants}, which its launcher exports — `
+          + 'whichever of the two Claude Code honours, one of them is wrong. No ccrc writer puts that key '
+          + 'there: delete it from the env block by hand'
+        : `the roster says ${wants} and ${acct.configDirSuffix}/settings.json says ${has ?? 'nothing'}`]
         .join('\t'));
     }
   }

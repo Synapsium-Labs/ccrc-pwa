@@ -8437,6 +8437,109 @@ describe('ccrc doctor: accounts', () => {
     expect(line).toContain('1 declared credential file');
   });
 
+  // ── a codex lane (Plan 3a Task 3, R-C7) ─────────────────────────────────
+  // `_check_accounts` ALONE, out of the fixture box's own tree: every case
+  // below has a codex row in its roster, and a whole `ccrc doctor` would run
+  // every other check against that row — including the codex check a later
+  // task of this plan adds, which connects to a lane's ports. This check
+  // opens no socket, so its cases run it on its own; 45010/45011/45020 are
+  // the pure-parse port vocabulary of `codexAccountsBox`, below. Never Task
+  // 4's `healthyCodexBox`, which becomes an async lane on FREE ports.
+  // Sourced from the fixture's own `ccd/`, so `CCRC_HERE` is the fixture
+  // tree and `account-op.mjs` is the copy `installCcrc` planted.
+  const accountsOnly = (home: string): Result => {
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(home, 'ccrc', 'ccd', 'ccrc-doctor-checks'))}; _check_accounts`],
+      { env: doctorEnv(home), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const CODEX_DIR = '.claude-codex-a';
+  /** A healthy box plus one codex lane on the pure-parse pair and its
+   *  launcher: the base tree's `healthyCodexBox` shape, kept here so Task 4's
+   *  rewrite of that fixture (async, free ports) cannot move these cases. */
+  const codexAccountsBox = (prefix: string): string => {
+    const home = healthy(prefix);
+    writeRoster(home, [{
+      id: 'codex-a', configDirSuffix: CODEX_DIR,
+      exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir: '.local/share/ccrc/codex/codex-a' },
+      telemetry: 'codex',
+    }]);
+    writeWrapper(home, 'codex-a', { cfgDir: CODEX_DIR, target: 'ccrc-codex' });
+    return home;
+  };
+
+  it('a codex lane whose env block has no ANTHROPIC_BASE_URL passes, and is counted — its launcher exports the endpoint', () => {
+    const home = codexAccountsBox('ccrc-doctor-accounts-codex-absent-');
+    writeSettingsEnv(home, CODEX_DIR, { ANTHROPIC_MODEL: 'gpt-x' });
+    const r = accountsOnly(home);
+    const line = lineFor(r.stdout, 'accounts');
+    expect(line, r.stdout).toMatch(/^PASS accounts: /);
+    expect(line).toContain('1 provider env block');
+    expect(r.code).toBe(0);
+  });
+
+  it('a codex lane whose settings.json has no env block at all passes too', () => {
+    const home = codexAccountsBox('ccrc-doctor-accounts-codex-noblock-');
+    mkdirSync(join(home, CODEX_DIR), { recursive: true });
+    writeFileSync(join(home, CODEX_DIR, 'settings.json'), '{}\n');
+    const r = accountsOnly(home);
+    expect(lineFor(r.stdout, 'accounts'), r.stdout).toMatch(/^PASS accounts: /);
+    expect(r.code).toBe(0);
+  });
+
+  it('a codex lane whose env names its own loopback shim passes', () => {
+    const home = codexAccountsBox('ccrc-doctor-accounts-codex-equal-');
+    writeSettingsEnv(home, CODEX_DIR, { ANTHROPIC_BASE_URL: 'http://127.0.0.1:45010' });
+    const r = accountsOnly(home);
+    const line = lineFor(r.stdout, 'accounts');
+    expect(line, r.stdout).toMatch(/^PASS accounts: /);
+    expect(line).toContain('1 provider env block');
+  });
+
+  it('a codex lane whose env names any other endpoint WARNS settings-env-drift, naming both and the hand remedy', () => {
+    const home = codexAccountsBox('ccrc-doctor-accounts-codex-drift-');
+    writeSettingsEnv(home, CODEX_DIR, { ANTHROPIC_BASE_URL: 'http://127.0.0.1:45020' });
+    const r = accountsOnly(home);
+    expect(r.code).toBe(2);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN accounts: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('settings-env-drift: codex-a');
+    expect(lines[i]).toContain('http://127.0.0.1:45020');
+    expect(lines[i]).toContain('loopback shim http://127.0.0.1:45010');
+    expect(lines[i]).toContain('delete it from the env block by hand');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+  });
+
+  it('a codex row with no usable proxyPort is not this check\'s to judge: no finding, and no endpoint invented', () => {
+    const home = healthy('ccrc-doctor-accounts-codex-noport-');
+    writeRoster(home, [{
+      id: 'codex-a', configDirSuffix: CODEX_DIR,
+      exec: { kind: 'codex', provider: 'openai', litellmPort: 45011, authDir: '.local/share/ccrc/codex/codex-a' },
+      telemetry: 'codex',
+    }]);
+    writeSettingsEnv(home, CODEX_DIR, { ANTHROPIC_BASE_URL: 'http://127.0.0.1:45020' });
+    const r = accountsOnly(home);
+    expect(lineFor(r.stdout, 'accounts'), r.stdout).toMatch(/^PASS accounts: /);
+    expect(r.stdout).not.toContain('undefined');
+  });
+
+  it('an external row in the live Codex lanes\' shape is judged exactly as before: the arm keys on exec.kind, never provider or telemetry', () => {
+    // `ext-a` is a fixture id in the live shape (external, provider openai,
+    // telemetry codex) — plus a hand-edited proxyPort the parser would refuse
+    // on this kind, so an arm keyed on anything but `exec.kind` WOULD build a
+    // loopback URL here and this case would see it.
+    const home = healthy('ccrc-doctor-accounts-codex-external-');
+    writeRoster(home, [{
+      id: 'ext-a', configDirSuffix: '.claude-ext-a',
+      exec: { kind: 'external', provider: 'openai', proxyPort: 45010 }, telemetry: 'codex',
+    }]);
+    writeSettingsEnv(home, '.claude-ext-a', { ANTHROPIC_BASE_URL: 'http://127.0.0.1:45020' });
+    const r = accountsOnly(home);
+    expect(lineFor(r.stdout, 'accounts'), r.stdout).toMatch(/^PASS accounts: /);
+    expect(lineFor(r.stdout, 'accounts')).toContain('0 provider env block');
+  });
+
   it('spells the vocabulary that shared/providers.ts defines, and no other code', () => {
     // The three codes are ONE definition — `ACCOUNT_FINDINGS` in
     // `shared/providers.ts` — and `deploy/account-op.mjs` is a bare-node module
