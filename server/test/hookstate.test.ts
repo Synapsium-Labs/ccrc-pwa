@@ -515,7 +515,7 @@ describe('readHookStateRawMeasured — the read hold 2a takes: never aged, ident
   });
 });
 
-// ── The raw read (worker stall watch wave 2, spec 2026-09-29 §5.1; slug `raw-read-replaces-the-private-parse`) ──
+// ── The raw read (worker stall watch wave 2, spec 2026-09-29 §5.1; slug `raw-read-replaces-the-private-parse` (D-3620)) ──
 // The stall watch's frozen and delegates arms need the hook's `updatedAt`, its `event` and WHOSE file it is,
 // from a file the aged read has already dropped. `readHookStateRawMeasured` is now this module's one parse, and
 // the aged door folds over it (the unaged door went with the wave-2 lane). The parity table holds it to its answers.
@@ -534,7 +534,7 @@ describe('readHookStateRawMeasured — the one parse, identity reported and neve
 
   it('keeps the aged read\'s own identity rule: an empty registry uuid against an empty sessionId is current', async () => {
     // Today `'' === ''` passes the gate, so the raw read says `current` and the fold keeps the answer.
-    // `empty-uuid-is-foreign` is the TURN MARKER's rule, not this file's.
+    // `empty-uuid-is-foreign` (D-3619) is the TURN MARKER's rule, not this file's.
     const reg = mkTmp('ccrc-hookstate-');
     seed(reg, ID, base({ sessionId: '' }));
     expect(await readHookStateRawMeasured(localIO, reg, ID, ''))

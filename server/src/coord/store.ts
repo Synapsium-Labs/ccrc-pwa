@@ -3852,21 +3852,21 @@ export class CoordStore {
   }
 
   /**
-   * One read per stall candidate (stall watch wave 2, `one-mail-read-per-candidate`): every mail the lane's
+   * One read per stall candidate (stall watch wave 2, `one-mail-read-per-candidate` (D-3641)): every mail the lane's
    * verdicts judge, and the delivery rows of exactly those mails, in two statements.
    *
    * Statement 1: the mail rows, oldest id first. A row is selected when it is on one of `runIds` (the run
    * verdict's history, UNBOUNDED, because the ladder keys on the run's whole exchange), or when it touches the
    * session inside the horizon: sent by it, addressed to it by the row's own `toId`, or delivered to it (a mail
    * to the coordinator ROLE carries the role in `toId`, and the session only on its delivery row). The horizon
-   * is `at >= sinceAt` (`stall-mail-read-time-bounded`), and the lane passes `now - BACKLOG_HORIZON_MS`. It
+   * is `at >= sinceAt` (`stall-mail-read-time-bounded` (D-3651)), and the lane passes `now - BACKLOG_HORIZON_MS`. It
    * bounds the rows LOADED, not the scan: `mail` has no index but its key, and adding one is a migration. The
    * same holds for the two `mail_deliveries` scans, statement 1's delivered-to subquery and statement 2's (that
    * table's one index is `mail_deliveries_due`): each candidate's read grows with the whole mail history, on the
    * synchronous handle (OPS-4). An empty `runIds` drops the run clause rather than binding an empty list.
    *
    * The read is a SUPERSET of the run's mail. The lane therefore narrows the run verdict's `StallInput.mail`
-   * through L1's `stallRunMail` (`run-mail-filtered-in-l1`), and only the session verdicts see the whole read.
+   * through L1's `stallRunMail` (`run-mail-filtered-in-l1` (D-3650)), and only the session verdicts see the whole read.
    *
    * Statement 2: those mails' delivery rows, oldest delivery id first. A re-queued mail has two, and the newest
    * is the live one. Its predicate is statement 1's own, as a subquery, bound with the same values, so it binds
@@ -3874,7 +3874,7 @@ export class CoordStore {
    * synchronous handle with no await between them, so they see the same mail. The gate columns are SELECTED as
    * plain values and never filter, order or group (D-792: a diagnostic is not a scheduling input). L1 decides
    * mail-stuck from them, and `watch.ts` passes the rows through whole without naming a field
-   * (`delivery-and-deaf-facts-ride-the-mail-read`).
+   * (`delivery-and-deaf-facts-ride-the-mail-read` (D-3648)).
    *
    * Every integer is CAST and proven (D-2545), `runId` included: an off-run row's `runId` equals none of the
    * bound ids, so it cannot be read raw the way wave 1's run-only read did. SQL NULL is decided here, at the call
@@ -4186,12 +4186,12 @@ export class CoordStore {
   /** Whether ANY mail with this exact (fromId, runId, toId, subject) was ever
    *  queued — in EVERY delivery state, which is the whole difference from
    *  `hasOutstandingMail` above. Two readers. `queueStallNotice`'s run-less arm
-   *  (stall watch wave 2, `run-less-stall-notice`): a session notice has no
+   *  (stall watch wave 2, `run-less-stall-notice` (D-3640)): a session notice has no
    *  `run_events` row to dedupe on, so this is its durable "already sent", and
    *  its subject names the episode to the day and minute
-   *  (`self-mail-subjects-carry-the-date`). And `sweepLanding`'s durable
+   *  (`self-mail-subjects-carry-the-date` (D-3668)). And `sweepLanding`'s durable
    *  "already told" read (landing-order wave 2, which finds this method here
-   *  and adds no second copy: `has-mail-with-subject-lands-here-first`): its
+   *  and adds no second copy: `has-mail-with-subject-lands-here-first` (D-3639)): its
    *  latch is in memory, `queueSystemMail`'s dedupe sees outstanding rows only,
    *  and a PR that stays dequeued through a fix round would otherwise be mailed
    *  again after every server restart once its first notice was acked. `mail`

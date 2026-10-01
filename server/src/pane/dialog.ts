@@ -4,7 +4,7 @@ import { promptBoxShowing } from './statusline.js';
 
 /**
  * Claude Code's spinner row, matched as a ROW (worker stall watch wave 2, M3,
- * `busy-re-anchored`). The phrase must end the row, or be followed by `)` or
+ * `busy-re-anchored` (D-3626)). The phrase must end the row, or be followed by `)` or
  * by a ` ·` hint segment, on a row that is not the prompt (`❯`), a tool
  * continuation (`⎿`) or a quote (`>`). The unanchored phrase refused a `shell`
  * or `busy` mail delivery with `turn-running` whenever a transcript line, a

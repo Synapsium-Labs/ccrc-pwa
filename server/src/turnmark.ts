@@ -18,12 +18,12 @@ import {
  *   state word, or any of the fifteen fields missing or out of its bound. The hook clips and fits every value before
  *   it writes (kinds fitted whole-alias-first under 200 bytes, at most 8 ids, `err` cleaned to `[a-z_]`), so these
  *   bounds are the writer's own, and anything else is refused, never trimmed. Every epoch must be an integer in
- *   [0, 8.64e15] (marker-epochs-bounded), so no consumer's `toISOString` can throw on one.
+ *   [0, 8.64e15] (marker-epochs-bounded (D-3662)), so no consumer's `toISOString` can throw on one.
  * - `foreign`: the line names another Claude Code session than the registry row's uuid. A null OR EMPTY uuid is an
- *   unregistered row and reads `foreign` too (empty-uuid-is-foreign): `registry.ts` initialises `uuid` to the empty
+ *   unregistered row and reads `foreign` too (empty-uuid-is-foreign (D-3619)): `registry.ts` initialises `uuid` to the empty
  *   string, and an empty `sessionId` must never match it.
  * - `stale`: older than the live process. `at`, and `restartAt` when set, both before the live file's `startedAt`
- *   (`turnMarkStale`), or a live file with no numeric `startedAt` at all (stale-when-live-has-no-startedat). A caller
+ *   (`turnMarkStale`), or a live file with no numeric `startedAt` at all (stale-when-live-has-no-startedat (D-3655)). A caller
  *   with no live read passes `live === null` and judges staleness itself, in L1, with the same helper.
  * There is no freshness window: the marker changes only on main events, so a days-old `done` is still true.
  *

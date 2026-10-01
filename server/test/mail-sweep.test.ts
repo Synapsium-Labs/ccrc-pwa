@@ -2828,7 +2828,7 @@ describe('sweepMail: shell is an idle main loop (worker stall watch §4.1)', () 
 //
 // `$REG/<id>.turn.json` is the hook's main-thread turn marker. The gate reads
 // it ONLY under the hand-armed modes `busy-shadow` and `busy`
-// (`shell-mode-ignores-the-marker`), the modes for which `turnidle.ts`'s
+// (`shell-mode-ignores-the-marker` (D-3674)), the modes for which `turnidle.ts`'s
 // `mailTurnReadsMark` is true; `sweepMail` asks that rule and never spells
 // the set. Under the default `shell`, and under `strict`, it is never read,
 // and wave 1's verdicts hold whatever it says. The two counting-io rows below
@@ -3067,7 +3067,7 @@ describe('sweepMail: the turn marker and the busy modes (worker stall watch §5.
     }
   });
 
-  it('shell-mode-ignores-the-marker: the default mode reads no marker, so a current working marker leaves a live shell deliverable (a counting io, with its control)', async () => {
+  it('shell-mode-ignores-the-marker (D-3674): the default mode reads no marker, so a current working marker leaves a live shell deliverable (a counting io, with its control)', async () => {
     const S = NOW - MAIL_QUIET_MS - 1_000;
     // The marker is `working` AT the live stamp, the one a busy mode refuses (the row above). The control arms
     // `mail-gate-busy-shadow` on the same fixture: it reads the file once and refuses, so the default arm's zero

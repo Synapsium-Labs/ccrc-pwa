@@ -5,7 +5,7 @@
  * structural shapes of its own (`TurnLive`, `TurnMarkFact`), so `watch.ts` hands it `readLiveState`'s answer and
  * `readTurnMarkMeasured`'s, and this file never names `LiveState` or `TurnMarkRead`. Those live beside `FleetIO` and
  * in `coord/stall.ts`; `turnidle.test.ts` pins that `TurnMarkRead` stays assignable to `TurnMarkFact`
- * (turnidle-declares-its-mark-shape). It has no clock either: `now` is an argument. `turnidle.test.ts` pins both.
+ * (turnidle-declares-its-mark-shape (D-3621)). It has no clock either: `now` is an argument. `turnidle.test.ts` pins both.
  *
  * WAVE 1: `shell`. Claude Code writes `shell` only from an IDLE main loop: it is `idle` relabelled while a
  * `local_bash` task still runs, such as a background shell or a shell Monitor. A running turn never reads `shell`
@@ -19,31 +19,31 @@
  * steps: `mail-gate-busy-shadow` (decide, deliver nothing, let `watch.ts` log what it would have delivered), then
  * `mail-gate-busy` (deliver). The 09-28 coordinator rulings would have landed at 14:34 and 14:51.
  *
- * THE MODE. strict > busy > busy-shadow > shell (busy-gate-precedence): `mail-gate-strict` restores the pre-wave-1
+ * THE MODE. strict > busy > busy-shadow > shell (busy-gate-precedence (D-3606)): `mail-gate-strict` restores the pre-wave-1
  * rule whatever else is touched. The three marker names are spelled ONLY in this file
- * (gate-markers-spelled-in-turnidle-only): the no-writer pin matches by substring, and one busy marker's name is a
+ * (gate-markers-spelled-in-turnidle-only (D-3607)): the no-writer pin matches by substring, and one busy marker's name is a
  * prefix of the other's.
  *
  * THE RULES. The first match wins:
  * - no live read (`null`) gives `not-idle`: an unreadable answer is never idle;
  * - `idle` goes to the quiet rule on `statusUpdatedAt`, under every mode. It does not read the marker;
  * - `shell` delivers only under a mode on the POSITIVE list `shell`, `busy-shadow`, `busy`
- *   (shell-allowed-by-positive-list), never "not strict", so a mode added later is refused until someone places it.
- *   Under the default `shell` mode the marker is NOT consulted at all (shell-mode-ignores-the-marker): wave 2 ships
+ *   (shell-allowed-by-positive-list (D-3622)), never "not strict", so a mode added later is refused until someone places it.
+ *   Under the default `shell` mode the marker is NOT consulted at all (shell-mode-ignores-the-marker (D-3674)): wave 2 ships
  *   dark, so wave 1's answer holds exactly, whatever the hook wrote. Only under `busy-shadow` and `busy` does a
  *   `working` marker at least as new as `statusUpdatedAt` give `not-idle`, because that turn is running
- *   (working-marker-refuses-shell-as-not-idle). An OLDER `working` marker is an interrupted turn (Stop does not
+ *   (working-marker-refuses-shell-as-not-idle (D-3623)). An OLDER `working` marker is an interrupted turn (Stop does not
  *   fire on Esc) and is read as done at `statusUpdatedAt`: the quiet rule runs as with no marker;
  * - `busy` is read only under `busy` and `busy-shadow`, and delivers only on a current `done` or `failed` marker:
  *   - no marker read, or one read `unmeasured` or `malformed`, is a fleet fault. Under `busy` it is
- *     `turn-mark-unreadable` (turn-mark-unreadable-gate), so it never hides behind `not-idle`. Under `busy-shadow`,
+ *     `turn-mark-unreadable` (turn-mark-unreadable-gate (D-3625)), so it never hides behind `not-idle`. Under `busy-shadow`,
  *     which delivers nothing, it is `not-idle`;
  *   - `absent` (an older fleet build), `foreign` and `stale` take the wave-1 answer, `not-idle`. So does `working`;
  *   - inside a restart's grace (`graceUntil`: a restart cut a turn short and ccd redrives it) it is `not-idle`;
  *   - then the quiet rule runs on `stopAt`, never on `statusUpdatedAt`, which does not move at a turn end under
  *     `busy`. Under `busy` a missing or too-recent `stopAt` is `not-quiet`, and a quiet one delivers `via: 'busy'`.
  *     Under `busy-shadow` both are `not-idle`, and a quiet one also carries `wouldDeliver` and `since`, so that
- *     `watch.ts` can log the line (busy-shadow-verdict-arm): this module cannot log;
+ *     `watch.ts` can log the line (busy-shadow-verdict-arm (D-3624)): this module cannot log;
  * - every other word (`waiting`, `''`, anything unknown) gives `not-idle`. The match is exact. `waiting` stays refused
  *   under every mode (D-76), because a dialog owns the keyboard.
  * The quiet rule: a null moment, or one younger than `quietMs`, gives `not-quiet`. Otherwise the mail is delivered,
@@ -83,7 +83,7 @@ export function mailTurnModeOf(listing: readonly string[]): MailTurnMode {
 }
 
 /** Whether `mailTurnIdle` consults `mark` under this mode: only `busy-shadow` and `busy`
- *  (shell-mode-ignores-the-marker). A positive list, so a mode added later reads no marker until someone places it.
+ *  (shell-mode-ignores-the-marker (D-3674)). A positive list, so a mode added later reads no marker until someone places it.
  *  `sweepMail` reads the marker iff this is true, so the read and the decision are one rule, decided here in L1 and
  *  never spelled again in `watch.ts`. */
 export function mailTurnReadsMark(mode: MailTurnMode): boolean {
@@ -111,7 +111,7 @@ function quietRule(moment: number | null, now: number, quietMs: number, via: 'id
 
 /** `mark === null`: not read, which the caller does under `strict` and `shell`: it reads the marker only when
  *  `mailTurnReadsMark(mode)` is true (`busy-shadow` and `busy`), and when it is false this function never consults
- *  `mark` at all (shell-mode-ignores-the-marker). Both sites below ask that one rule. */
+ *  `mark` at all (shell-mode-ignores-the-marker (D-3674)). Both sites below ask that one rule. */
 export function mailTurnIdle(live: TurnLive | null, mark: TurnMarkFact | null, now: number, quietMs: number, mode: MailTurnMode): MailTurnVerdict {
   if (live === null) return { deliver: false, gate: 'not-idle' };
   if (live.status === 'idle') return quietRule(live.statusUpdatedAt, now, quietMs, 'idle');

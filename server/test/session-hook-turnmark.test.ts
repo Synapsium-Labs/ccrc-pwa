@@ -79,7 +79,7 @@ describe('StopFailure (worker stall watch §5.1)', () => {
   });
 });
 
-describe('the capture arm (§5.1 first task; capture-arm-keyed-on-hookcap)', () => {
+describe('the capture arm (§5.1 first task; capture-arm-keyed-on-hookcap (D-3612))', () => {
   const REDUCER = path.resolve(__dirname, '../../deploy/hook-capture-reduce.mjs');
   const capRoot = (): string => path.join(home, '.ccrc', 'hook-capture');
 
@@ -230,7 +230,7 @@ describe('the turn marker (§5.1)', () => {
     expect(Object.keys(JSON.parse(raw))).toEqual(TURN_KEYS);
   });
 
-  it('the marker and the hookstate share ONE stamp per hook run (one-stamp-per-hook-run)', () => {
+  it('the marker and the hookstate share ONE stamp per hook run (one-stamp-per-hook-run (D-3616))', () => {
     run({ hook_event_name: 'UserPromptSubmit' });
     expect(readState().updatedAt).toBe(turnMark().at);
   });
@@ -247,7 +247,7 @@ describe('the turn marker (§5.1)', () => {
     expect(fs.statSync(turnFile()).mtimeMs).toBe(mtime);
   });
 
-  it('a prompt after an interrupted turn (marker still working) opens a new turn: turnAt moves (a-prompt-always-opens-a-turn)', () => {
+  it('a prompt after an interrupted turn (marker still working) opens a new turn: turnAt moves (a-prompt-always-opens-a-turn (D-3675))', () => {
     // An Esc interrupt ends a turn with no Stop, so the line still reads working under THIS session id.
     plantTurn(JSON.stringify({ v: 1, sessionId: 'uuid-1', state: 'working', event: 'PostToolUse', at: 5, turnAt: 5,
       stopAt: null, bg: 2, bgKinds: 'shell', bgIds: 'b1', err: null, restartAt: null, lostBg: 0, lostKinds: '',
@@ -308,7 +308,7 @@ describe('the turn marker (§5.1)', () => {
     expect(turnMark()).toMatchObject({ bg: 2, bgKinds: 'monitor,shell', bgIds: 'b2' });
   });
 
-  it('40 aliases fit WHOLE under 200 bytes: no half alias, no trailing comma (alias-list-fits-whole-aliases)', () => {
+  it('40 aliases fit WHOLE under 200 bytes: no half alias, no trailing comma (alias-list-fits-whole-aliases (D-3658))', () => {
     const L = 'abcdefghijklmnopqrstuvwxyz';
     // Letters only: the writer deletes every character outside [a-z_-], so digits would collide.
     const aliases = Array.from({ length: 40 }, (_, i) => `kind${L.charAt(Math.floor(i / 26))}${L.charAt(i % 26)}zz`);
@@ -382,7 +382,7 @@ describe('the turn marker (§5.1)', () => {
     expect(JSON.parse(done).state).toBe('done');
   });
 
-  it('the env session id wins; an empty env falls back to the payload id, cleaned (marker-identity-from-env)', () => {
+  it('the env session id wins; an empty env falls back to the payload id, cleaned (marker-identity-from-env (D-3614))', () => {
     run({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-9' });
     expect(turnMark().sessionId, 'the env id wins').toBe('uuid-1');
     fs.rmSync(turnFile());
@@ -393,7 +393,7 @@ describe('the turn marker (§5.1)', () => {
     expect(turnMark().sessionId, 'the payload id is cleaned to [A-Za-z0-9_-]').toBe('sess9x');
   });
 
-  it('a hook_event_name carrying a newline is cleaned to letters and falls to the default arm (event-name-sanitised-in-parse)', () => {
+  it('a hook_event_name carrying a newline is cleaned to letters and falls to the default arm (event-name-sanitised-in-parse (D-3661))', () => {
     const r = runFull({ hook_event_name: 'Stop\nX' });
     expect(r.stdout).toBe('');
     expect(fs.existsSync(turnFile()), 'no marker').toBe(false);
@@ -488,7 +488,7 @@ describe('the turn marker across a restart (§5.1, SessionStart)', () => {
     expect(m.at).toBeGreaterThanOrEqual(done.at);
   });
 
-  it('a SECOND resume keeps lostBg AND lostKinds/lostIds (lost-kinds-accumulate)', () => {
+  it('a SECOND resume keeps lostBg AND lostKinds/lostIds (lost-kinds-accumulate (D-3660))', () => {
     stopWith(THREE);
     run({ hook_event_name: 'SessionStart', source: 'resume' });
     run({ hook_event_name: 'SessionStart', source: 'resume' });

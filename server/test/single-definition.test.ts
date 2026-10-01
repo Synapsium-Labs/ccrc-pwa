@@ -4158,7 +4158,7 @@ describe('worker stall watch wave 2: the three new operator-switch markers have 
   // this file is cited by line. SUBSTRING CAVEAT: both halves match with `includes`, and `mail-gate-busy` is a
   // substring of `mail-gate-busy-shadow`, so the `mail-gate-busy` row counts every holder of EITHER spelling: a
   // superset. That is sound only while both are spelled in `turnidle.ts` alone (planning departure
-  // `gate-markers-spelled-in-turnidle-only`), and the CONTROL row states the superset so nobody reads the row as more.
+  // `gate-markers-spelled-in-turnidle-only` (D-3607)), and the CONTROL row states the superset so nobody reads the row as more.
   // `stall-watch-live` is not a substring of `stall-watch-w2-live`, so wave 1's row is untouched by this one.
   const MARKERS: [string, string][] = [
     ['stall-watch-w2-live', 'server/src/coord/stall.ts'],

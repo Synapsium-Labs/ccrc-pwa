@@ -895,7 +895,7 @@ describe('wave 2 operator pushes: stallPushText (run verdict) and stallSessionPu
     });
   });
 
-  it('marker (session): a coordinator candidate (coordinator-marker-unreadable)', () => {
+  it('marker (session): a coordinator candidate (coordinator-marker-unreadable (D-3654))', () => {
     const input = sessionOf({ sessionId: COORD, role: 'coordinator', run: null, mark: { ok: false, reason: 'malformed' }, markUnreadableSince: GATE_AT });
     const n: StallNotify = { act: 'notify', arm: 'marker-unreadable', rung: 1, key: GATE_AT, to: 'operator' };
     expect(stallSessionPushText(input, n, T('2026-09-29T08:01:00Z'))).toEqual({
@@ -949,7 +949,7 @@ describe('wave 2 operator pushes: stallPushText (run verdict) and stallSessionPu
   });
 });
 
-describe('r1: the proof-bound line (planning departure r1-body-names-the-proof-bound)', () => {
+describe('r1: the proof-bound line (planning departure r1-body-names-the-proof-bound (D-3667))', () => {
   const lastLine = (input: StallInput): string | undefined => stallCheckMail(input, stallFacts(input), R1_AT).body.split('\n').at(-1);
   it('marker rules armed, the marker reading, escalation armed: the coordinator is told at the next turn end, and by r1 + 3 h; the operator 1 h after that (§4.2)', () => {
     expect(lastLine(s4({ arming: W2_ARMED, w2: w2Of() })))

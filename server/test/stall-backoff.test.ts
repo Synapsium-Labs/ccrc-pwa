@@ -1,5 +1,5 @@
-// Worker stall watch, wave 2, Task 17: I2, the working-reply back-off (planning departures `working-reply-backs-off`
-// and `working-streak-counts-checks`). ISOLATED and DROPPABLE: this file, one contiguous block of
+// Worker stall watch, wave 2, Task 17: I2, the working-reply back-off (planning departures `working-reply-backs-off` (D-3644)
+// and `working-streak-counts-checks` (D-3672)). ISOLATED and DROPPABLE: this file, one contiguous block of
 // `server/src/coord/stall.ts` and one token on the marker branch's r1 line are the whole of it, so reverting its one
 // commit removes it. Pure: every clock is an argument, and no fixture HOME is touched.
 import { describe, it, expect } from 'vitest';

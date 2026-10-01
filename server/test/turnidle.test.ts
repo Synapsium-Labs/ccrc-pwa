@@ -31,7 +31,7 @@ const SHELL_MODES: readonly MailTurnMode[] = ['shell', 'busy-shadow', 'busy'];
 const BUSY_MODES: readonly MailTurnMode[] = ['busy-shadow', 'busy'];
 
 // The marker as the gate reads it. `null` is "not read", which the caller does under strict and shell: sweepMail
-// reads the marker only under busy-shadow and busy (shell-mode-ignores-the-marker).
+// reads the marker only under busy-shadow and busy (shell-mode-ignores-the-marker (D-3674)).
 const ABSENT: TurnMarkFact = { ok: false, reason: 'absent' };
 const unread = (reason: 'absent' | 'unmeasured' | 'malformed' | 'foreign' | 'stale'): TurnMarkFact => ({ ok: false, reason });
 const working = (at: number): TurnMarkFact => ({ ok: true, state: 'working', at, stopAt: null, graceUntil: null });
@@ -42,7 +42,7 @@ const done = (stopAt: number | null, graceUntil: number | null = null): TurnMark
  *  the busy modes. */
 const markFor = (mode: MailTurnMode): TurnMarkFact | null => (mode === 'strict' || mode === 'shell' ? null : ABSENT);
 
-// turnidle-declares-its-mark-shape: what `readTurnMarkMeasured` answers must stay assignable to the shape this pure
+// turnidle-declares-its-mark-shape (D-3621): what `readTurnMarkMeasured` answers must stay assignable to the shape this pure
 // module declares for itself. `tsc -p test/tsconfig.tests.json` checks this line; vitest never does.
 const _f: TurnMarkFact = null as unknown as TurnMarkRead;
 
@@ -186,7 +186,7 @@ describe('mailTurnIdle: the turn marker under a live shell (§5.1, an interrupte
     }
   });
 
-  it('shell-mode-ignores-the-marker: under shell a current working marker still delivers via shell, and strict stays not-idle, whatever the marker says', () => {
+  it('shell-mode-ignores-the-marker (D-3674): under shell a current working marker still delivers via shell, and strict stays not-idle, whatever the marker says', () => {
     const marks: (TurnMarkFact | null)[] = [
       null, ABSENT, unread('unmeasured'), unread('malformed'), unread('foreign'), unread('stale'),
       working(T + 1), working(T), working(T - 1), done(T + 30_000), done(null, T + HOUR), ended('failed', T),

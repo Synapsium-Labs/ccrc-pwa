@@ -140,7 +140,7 @@ const tickOf = (pid: number | null = PID, rows: readonly SessionRecord[] = [regR
 });
 
 /** Sweeps at the lane's own cadence: once every STALL_SWEEP_MS from `from` through `to`. A first-seen clock lives only
- *  across judged sweeps at most STALL_CLOCK_GAP_MS (150 s) apart (slug `stall-clocks-drop-on-an-unobserved-gap`), so a row that
+ *  across judged sweeps at most STALL_CLOCK_GAP_MS (150 s) apart (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)), so a row that
  *  waits out DEAD_GRACE_MS or MARKER_UNREADABLE_MS sweeps through it, as production does. */
 const sweepThrough = async (
   w: FleetWatcher, sessions: readonly FleetSession[], names: readonly string[], tick: StallTick, from: number, to: number,
@@ -1316,7 +1316,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     operatorMail(coord).filter((m) => m.toId === id && m.subject.startsWith(STALL_ORPHANED_PREFIX));
 
   it('a coordinator draws orphan D, run-less: one orphaned: self-mail with no run, and no row on the run it claims', async () => {
-    // Spec §5.2: orphan (D) is for ANY session (slug `coordinators-draw-orphan-d`). A coordinator restarted with a
+    // Spec §5.2: orphan (D) is for ANY session (slug `coordinators-draw-orphan-d` (D-3749)). A coordinator restarted with a
     // Workflow in flight is Case D's own shape, and orphan E cannot see it: the restart is after the Stop.
     const { h, coord, w } = await rig();
     seedRegistry(h.home, COORD, COORD_UUID);
@@ -1358,7 +1358,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     ]);
   });
 
-  it('a coordinator\'s repeated failure stays a repeat after its prior failed: mail leaves the 24 h read (failed-arm-bounded-by-the-mail-horizon)', async () => {
+  it('a coordinator\'s repeated failure stays a repeat after its prior failed: mail leaves the 24 h read (failed-arm-bounded-by-the-mail-horizon (D-3752))', async () => {
     // A prior failed: self-mail at S2 - 1 h, a server_error at S2. The repeat goes to the operator and never wakes the
     // session. A day later the prior mail is out of the lane's read, and the arm must not re-read the standing failure
     // as a first one and type a retry nudge into the pane.
@@ -1384,7 +1384,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(failedMail()).toHaveLength(1);
   });
 
-  // Slug `stall-clocks-drop-on-an-unobserved-gap`: ONE gap rule. A first-seen clock claims its condition held at every
+  // Slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750): ONE gap rule. A first-seen clock claims its condition held at every
   // judged sweep since it was set. When MORE than STALL_CLOCK_GAP_MS (150 s) passes between two judged sweeps, nobody
   // watched in between, so the later sweep drops every clock before it judges. One missed sweep (judged sweeps about
   // 120 s apart) keeps them; two (about 180 s) drop them. An early return (disabled, an unreadable or throwing candidate
@@ -1742,7 +1742,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
   });
 
   it('the run-less push latch lives while its row is in the registry: a row that leaves and comes back may push once more', async () => {
-    // The latch is bounded memory, never a durable record (slug `run-less-push-latches-are-in-memory`).
+    // The latch is bounded memory, never a durable record (slug `run-less-push-latches-are-in-memory` (D-3751)).
     const { h, w, sent } = await rig();
     seedRegistry(h.home, ORPHAN, ORPHAN_UUID);
     seedCaseD(h.home, ORPHAN, ORPHAN_UUID);
@@ -1782,7 +1782,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
   });
 
   it('the mail read is bounded below: a delivery queued 25 h before r1 and never delivered draws no mail-stuck (worker or coordinator)', async () => {
-    // `stall-mail-read-time-bounded`: the lane reads back BACKLOG_HORIZON_MS, so this delivery is out of every read.
+    // `stall-mail-read-time-bounded` (D-3651): the lane reads back BACKLOG_HORIZON_MS, so this delivery is out of every read.
     const { h, coord, w, sent } = await rig();
     seedRegistry(h.home, COORD, COORD_UUID);
     const runId = seedRun(coord, { program: 'demo-program' });

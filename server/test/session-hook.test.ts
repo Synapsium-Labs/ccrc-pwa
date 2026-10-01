@@ -604,7 +604,7 @@ describe('the fleet gate and failure polarity', () => {
   // Re-measured p95/p95 on a loaded box (load 17-25), two sets: shipped 2.61-3.77
   // and 2.86-3.97, ERE 3.79-5.39 and 4.33-5.94. Set 1 separates by 0.02, set 2 by
   // 0.36, pooled they overlap (3.79 < 3.97): p95 of n=20 is the second-largest
-  // sample, an outlier's statistic. ratio-row-reads-the-median: median/median,
+  // sample, an outlier's statistic. ratio-row-reads-the-median (D-3704): median/median,
   // 15+15 alternating, shipped 3.19-3.64 (mean 3.46), ERE 4.88-5.73 (mean 5.19),
   // R=4.2 (+15%/+16%).
   //
@@ -656,7 +656,7 @@ describe('the fleet gate and failure polarity', () => {
       const s = [...xs].sort((a, b) => a - b);
       return (s[Math.floor((s.length - 1) / 2)]! + s[Math.floor(s.length / 2)]!) / 2;
     };
-    const ratio = median(mainTimes) / median(cheapTimes);   // ratio-row-reads-the-median (above)
+    const ratio = median(mainTimes) / median(cheapTimes);   // ratio-row-reads-the-median (D-3704) (above)
     expect(ratio).toBeLessThan(4.2);
   });
 });

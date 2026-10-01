@@ -349,7 +349,7 @@ const W2_H = 3_600_000;
 const W2_MIN = 60_000;
 const WAVE2_ARMS: readonly StallArm[] = ['orphan-d', 'orphan-e', 'failed', 'frozen', 'dead', 'coord-deaf', 'mail-stuck', 'marker-unreadable'];
 
-describe('wave 2: stallNotifyDelivery (planning departure w2-arms-ship-dark)', () => {
+describe('wave 2: stallNotifyDelivery (planning departure w2-arms-ship-dark (D-3605))', () => {
   const FULL: StallArming = { disabled: false, live: true, escalate: true };
   it('STALL_ARM_WAVE is total: fully armed without w2Live, exactly the eight wave-2 arms stay shadow', () => {
     expect(STALL_ARMS.filter((arm) => stallNotifyDelivery(arm, 'operator', FULL) === 'shadow')).toEqual(WAVE2_ARMS);
@@ -376,7 +376,7 @@ describe('wave 2: stallNotifyDelivery (planning departure w2-arms-ship-dark)', (
   });
 });
 
-describe('wave 2: rungRecipient is one total per-arm table (planning departure rung-recipient-per-arm)', () => {
+describe('wave 2: rungRecipient is one total per-arm table (planning departure rung-recipient-per-arm (D-3632))', () => {
   const TABLE: Record<StallArm, readonly StallRecipient[]> = {
     quiet: ['worker', 'coordinator', 'operator'],
     'limit-cap': ['operator'], 'dialog-cap': ['operator'], 'coord-ball': ['operator'],
@@ -442,7 +442,7 @@ describe('wave 2: the self-wake class', () => {
   });
 });
 
-describe('wave 2: the self-wake subjects carry the date (planning departure self-mail-subjects-carry-the-date)', () => {
+describe('wave 2: the self-wake subjects carry the date (planning departure self-mail-subjects-carry-the-date (D-3668))', () => {
   const RESTART = Date.parse('2026-09-28T16:20:29Z');
   const STOP = Date.parse('2026-09-28T21:52:51Z');
   it('orphan D: the count, the kinds joined, and the restart to the minute', () => {

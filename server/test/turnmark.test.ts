@@ -145,7 +145,7 @@ describe('readTurnMarkMeasured: all fifteen fields, present, typed and bounded',
     }
   });
 
-  it('every epoch is an integer in [0, 8.64e15] (marker-epochs-bounded): stopAt -1e300, at 1.5 and at 9e15 are malformed', async () => {
+  it('every epoch is an integer in [0, 8.64e15] (marker-epochs-bounded (D-3662)): stopAt -1e300, at 1.5 and at 9e15 are malformed', async () => {
     expect(await read(seed({ stopAt: -1e300 }))).toEqual(MALFORMED);
     expect(await read(seed({ at: 1.5 }))).toEqual(MALFORMED);
     expect(await read(seed({ at: 9e15 }))).toEqual(MALFORMED);
@@ -163,7 +163,7 @@ describe('readTurnMarkMeasured: all fifteen fields, present, typed and bounded',
   });
 });
 
-describe('readTurnMarkMeasured: identity (empty-uuid-is-foreign)', () => {
+describe('readTurnMarkMeasured: identity (empty-uuid-is-foreign (D-3619))', () => {
   it('a sessionId equal to the registry uuid reads', async () => {
     expect((await read(seed())).ok).toBe(true);
   });
@@ -204,7 +204,7 @@ describe('readTurnMarkMeasured: staleness against the live process (turnMarkStal
     expect((await read(seed({ at: T }), UUID, { startedAt: T })).ok).toBe(true);
   });
 
-  it('a live file with no numeric startedAt reads the marker stale (stale-when-live-has-no-startedat)', async () => {
+  it('a live file with no numeric startedAt reads the marker stale (stale-when-live-has-no-startedat (D-3655))', async () => {
     expect(await read(seed(), UUID, { startedAt: null })).toEqual(STALE);
   });
 

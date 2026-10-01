@@ -473,7 +473,7 @@ export async function assembleFleet(
   /** OUT: the pane pid this assembly read for every ALIVE row, keyed by session id (`null` when tmux answered
    *  none). A row whose pane is not alive gets no entry. Absent on every caller but `watch.ts`'s `tick()`, which
    *  hands it to the stall lane as `StallTick.panePids`, so the lane never reads a pid a second time (worker stall
-   *  watch wave 2, M6: slug `tick-hands-the-lane-pids-and-records`). */
+   *  watch wave 2, M6: slug `tick-hands-the-lane-pids-and-records` (D-3649)). */
   panePids?: Map<string, number | null>,
 ): Promise<FleetSession[]> {
   const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);

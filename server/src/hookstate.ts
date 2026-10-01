@@ -233,7 +233,7 @@ export async function readHookStateMeasured(
 
 /**
  * `~/.cc-sessions/<id>.hookstate.json`, parsed and NOT gated (worker stall watch wave 2, spec 2026-09-29 §5.1;
- * slug `raw-read-replaces-the-private-parse`). Every parse gate runs here. The identity and age cuts do not:
+ * slug `raw-read-replaces-the-private-parse` (D-3620)). Every parse gate runs here. The identity and age cuts do not:
  * the file's identity is REPORTED instead, and the age is left to the caller. The stall watch's frozen and
  * delegates arms need `updatedAt` and `event` from a file the aged read has already dropped, and need to know
  * whose file it is.
@@ -247,7 +247,7 @@ export async function readHookStateMeasured(
  *
  * `identity` keeps the aged read's own gate exactly: `unregistered` when the registry names no uuid
  * (`currentUuid === null`), `current` when `sessionId === currentUuid` (including the `'' === ''` case that
- * read has always passed), and `foreign` otherwise. `empty-uuid-is-foreign` is the turn marker's rule, not
+ * read has always passed), and `foreign` otherwise. `empty-uuid-is-foreign` (D-3619) is the turn marker's rule, not
  * this file's.
  */
 export type HookStateRawRead =

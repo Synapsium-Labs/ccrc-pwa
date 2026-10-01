@@ -2613,7 +2613,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
 // ── The stall watch's turn marker goes with its row (worker stall watch wave 2, spec 2026-09-29 §5.1) ─────
 // `session-hook.sh` writes `$REG/<id>.turn.json` beside `<id>.hookstate.json`. Both names carry a SECOND dot,
 // so the purge loop's `*.*` skip (the nested-id guard) passes over them, and `_reg_purge` names both
-// explicitly after the loop (slug `purge-loop-uses-fresh-variable`: through `hf`, never the glob loop's `f`).
+// explicitly after the loop (slug `purge-loop-uses-fresh-variable` (D-3618): through `hf`, never the glob loop's `f`).
 describe('_reg_purge takes the turn marker with the row (stall watch wave 2)', () => {
   it('removes <id>.turn.json beside <id>.hookstate.json, and leaves a neighbour\'s marker standing', () => {
     const id = seed();

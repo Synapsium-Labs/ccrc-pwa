@@ -68,7 +68,7 @@ function isStallArm(v: string): v is StallArm {
   return Object.prototype.hasOwnProperty.call(STALL_ARM_MAP, v);
 }
 /** Which wave's arming each arm answers to. A wave-2 arm needs `stall-watch-w2-live` besides its recipient's markers
- *  (`stallNotifyDelivery`; planning departure `w2-arms-ship-dark`). Total over the arms, so a new arm is a compile
+ *  (`stallNotifyDelivery`; planning departure `w2-arms-ship-dark` (D-3605)). Total over the arms, so a new arm is a compile
  *  error until it is placed. */
 const STALL_ARM_WAVE: Record<StallArm, 1 | 2> = {
   quiet: 1, 'limit-cap': 1, 'dialog-cap': 1, 'coord-ball': 1,
@@ -118,7 +118,7 @@ export type StallWriteMiss = (typeof STALL_WRITE_MISSES)[number];
 // ── arming and delivery ──────────────────────────────────────────────────────────────────────────────────────
 
 /** `w2Live` and `mailDisabled` are optional, so wave 1's literals stay valid; absent reads as false
- *  (`w2-arming-optional`). `stallArmingOf` always sets `w2Live`. The lane sets `mailDisabled` from `watch.ts`'s own
+ *  (`w2-arming-optional` (D-3628)). `stallArmingOf` always sets `w2Live`. The lane sets `mailDisabled` from `watch.ts`'s own
  *  module-local marker constant, and the verdict filter (Task 11) reads it. */
 export interface StallArming { readonly disabled: boolean; readonly live: boolean; readonly escalate: boolean; readonly w2Live?: boolean; readonly mailDisabled?: boolean }
 
@@ -138,7 +138,7 @@ export function stallDelivery(to: StallRecipient, arming: StallArming): 'send' |
 }
 
 /** A rung's delivery: a wave-2 arm is shadow until `stall-watch-w2-live` is touched, whatever its recipient's markers
- *  say (planning departure `w2-arms-ship-dark`); otherwise `stallDelivery`. `mailDisabled` is not a delivery: it is
+ *  say (planning departure `w2-arms-ship-dark` (D-3605)); otherwise `stallDelivery`. `mailDisabled` is not a delivery: it is
  *  the verdict filter's hold. */
 export function stallNotifyDelivery(arm: StallArm, to: StallRecipient, arming: StallArming): 'send' | 'shadow' {
   return STALL_ARM_WAVE[arm] === 2 && arming.w2Live !== true ? 'shadow' : stallDelivery(to, arming);
@@ -395,7 +395,7 @@ export function stallReportTitle(kind: StallReportKind, ws: string): string {
   return `⚠ ${kind} › ${stallSafe(ws)}`;
 }
 
-// ── the self-wake subjects (planning departure self-mail-subjects-carry-the-date) ───────────────────────────
+// ── the self-wake subjects (planning departure self-mail-subjects-carry-the-date (D-3668)) ───────────────────────────
 // Each subject carries the date and minute, not the spec's bare time: the run-less dedupe searches every mail row
 // ever sent, and a bare time would make a later day's episode at the same minute read as a duplicate. Defined here,
 // before the verdicts, because the session verdicts (Task 12) find a notice already sent by its exact subject.
@@ -432,7 +432,7 @@ const LIVE_WORD_UNREAD_MAP: Record<Extract<LiveWordRead, { ok: false }>['reason'
 };
 
 /** The hookstate ask, read identity-gated but NOT aged (the lane's unaged hookstate read). `approval` is a
- *  PermissionRequest approval envelope. L1 decides what it holds (M7b, `approval-is-a-hook-ask-fact`): it is never 2a. */
+ *  PermissionRequest approval envelope. L1 decides what it holds (M7b, `approval-is-a-hook-ask-fact` (D-3635)): it is never 2a. */
 export type HookAskFact = { readonly kind: 'ask'; readonly at: number } | { readonly kind: 'approval'; readonly at: number } | { readonly kind: 'none' } | { readonly kind: 'unmeasured' };
 /** The raw hookstate (§5.1 "the one bounded exception"): no identity cut and no age cut. The `delegates` hold and the
  *  frozen clock read it. A `sessionId` of `''` is never current (Contract note 9). */
@@ -481,7 +481,7 @@ export interface StallInput {
   readonly coordinator: CoordinatorState | null; // null = not measured this pass
   readonly w2?: StallW2Facts;                   // wave 2's facts; absent = the lane read none, and wave 1's verdict stands
 }
-/** Wave 2's facts about the subject's worker (`w2-facts-separate-object`): `StallFacts` is unchanged. `absentSince`,
+/** Wave 2's facts about the subject's worker (`w2-facts-separate-object` (D-3629)): `StallFacts` is unchanged. `absentSince`,
  *  `deadSince` and `markUnreadableSince` are the lane's in-memory first-seen times. They restart with the server. */
 export interface StallW2Facts { readonly mark: TurnMarkRead; readonly hook: HookRawFact; readonly deliveries: readonly StallDeliveryRow[]; readonly absentSince: number | null; readonly deadSince: number | null; readonly markUnreadableSince: number | null }
 export type StallR3Cause = 'still-silent' | 'coordinator-dead' | 'no-coordinator' | 'coordination-paused';
@@ -495,7 +495,7 @@ const STALL_R3_CAUSE_MAP: Record<StallR3Cause, string> = {
 /** Why wave 2's frozen or dead arm fired (§5.2). Total, for `isStallKebab`. */
 export type StallW2Cause = 'registry-absent' | 'orphan' | 'never-started' | 'no-hook-event';
 const STALL_W2_CAUSE_MAP: Record<StallW2Cause, string> = {
-  'registry-absent': 'dead: the worker has been missing from the tick for DEAD_GRACE_MS (absent-worker-is-dead-after-grace)',
+  'registry-absent': 'dead: the worker has been missing from the tick for DEAD_GRACE_MS (absent-worker-is-dead-after-grace (D-3631))',
   orphan: 'dead: the lifecycle has read orphan for DEAD_GRACE_MS',
   'never-started': 'dead: the lifecycle has read never-started for DEAD_GRACE_MS',
   'no-hook-event': 'frozen: a turn in flight under a busy word with no main hook event for FROZEN_NO_EVENT_MS',
@@ -607,7 +607,7 @@ export function stallFacts(input: StallInput): StallFacts {
   return { ball, episodeKeyMs, quietSince, workerLast, inboundLast, lastExchangeAt };
 }
 
-/** I2, the working-reply back-off (planning departure `working-reply-backs-off`): the cap on the exponent, so r1's
+/** I2, the working-reply back-off (planning departure `working-reply-backs-off` (D-3644)): the cap on the exponent, so r1's
  *  threshold is 2 h, then 4 h, then 8 h from the second answered check on. CHOSEN, not measured: the operator has
  *  not ruled on I2, and 8 h keeps a worker that only ever says "still working" inside one working day between
  *  checks. */
@@ -622,7 +622,7 @@ export const STALL_WORKING_BACKOFF_CAP = 2;
  * subject that is not a working reply. So any other mail from the worker resets it, a `waiting` reply included, while
  * mail TO the worker neither counts nor resets. For each working reply in that run, its check is the newest
  * stall-check to this worker with a lower id. The streak counts the DISTINCT checks found
- * (`working-streak-counts-checks`): two replies to one check are one episode, and a reply with no check before it
+ * (`working-streak-counts-checks` (D-3672)): two replies to one check are one episode, and a reply with no check before it
  * answers nothing.
  *
  * Wave 1's ladder never calls this. Without the marker rules r1 stays at `STALL_QUIET_MS`, so dark means dark.
@@ -657,7 +657,7 @@ function rungDueAt(rungAt: number, liveSince: number, gap: number): number {
   return liveSince > rungAt + gap ? liveSince + gap : rungAt + gap;
 }
 
-/** Who hears each rung of each arm (planning departure `rung-recipient-per-arm`). The table is total over the arms,
+/** Who hears each rung of each arm (planning departure `rung-recipient-per-arm` (D-3632)). The table is total over the arms,
  *  and a rung an arm does not have is absent from its row. Some rungs go to the operator instead: frozen or dead with
  *  no claimant or under a pause, and failed rung 2 likewise. Such a rung is armed exactly as its coordinator form
  *  (`stallDelivery` treats the two alike), so the shadow accounting reads the same answer either way. */
@@ -707,14 +707,14 @@ export function stallMarkView(mark: TurnMark, live: LiveWordRead): { readonly st
   return { state: mark.state, stopAt: mark.stopAt, interrupted: false };
 }
 
-/** `run-mail-filtered-in-l1` (F4): `StallInput.mail` is exactly wave 1's set, the rows on the subject's runs. The
+/** `run-mail-filtered-in-l1` (D-3650) (F4): `StallInput.mail` is exactly wave 1's set, the rows on the subject's runs. The
  *  lane's one mail read is wider, because the session arms and the deliveries need the rest, so the lane passes that
  *  read through here. A run-less row is on no run. */
 export function stallRunMail(rows: readonly StallMailRow[], runIds: readonly number[]): StallMailRow[] {
   return rows.filter((m) => m.runId !== null && runIds.includes(m.runId));
 }
 
-/** M7a, `cited-check-derived-in-l1`: the r1 notice that r2's body cites. It is r1's earliest LIVE row on this key
+/** M7a, `cited-check-derived-in-l1` (D-3634): the r1 notice that r2's body cites. It is r1's earliest LIVE row on this key
  *  when one exists, else its earliest row: the timing `rungDoneAt` uses. Arming mid-episode leaves a shadow r1
  *  before the live one, and citing the shadow row would tell the coordinator that no check was sent when one was
  *  (`shadow-rung-accounting`, D-3572). */
@@ -725,7 +725,7 @@ export function stallCitedCheck(input: StallInput, key: number): StallNotice | n
   return earliest(rows.filter((n) => n.mode === 'live')) ?? earliest(rows);
 }
 
-/** `lane-honours-mail-disabled` and `mail-disabled-holds-only-sends`. While `$REG/mail-disabled` stands, two things
+/** `lane-honours-mail-disabled` (D-3636) and `mail-disabled-holds-only-sends` (D-3646). While `$REG/mail-disabled` stands, two things
  *  become hold `mail-disabled`: a rung that would SEND mail (to the worker or the coordinator), and r2's
  *  `measure-coordinator`. Operator pushes pass through, and so do shadow rungs (the lane still records their rows),
  *  holds and none. */
@@ -771,7 +771,7 @@ function stallMarkQuiet(view: { readonly stopAt: number | null }, f: StallFacts,
   return view.stopAt === null ? null : Math.max(view.stopAt, f.workerLast?.at ?? 0, f.inboundLast?.at ?? 0, dispatchedAt);
 }
 
-/** A mail's newest delivery row, or null when it has none. Exported and owned here (`newest-delivery-rule-lives-in-l1`):
+/** A mail's newest delivery row, or null when it has none. Exported and owned here (`newest-delivery-rule-lives-in-l1` (D-3689)):
  *  Task 12's session verdicts and Task 15's lane reuse it and never redeclare it. */
 export function stallNewestDelivery(rows: readonly StallDeliveryRow[], mailId: number): StallDeliveryRow | null {
   let best: StallDeliveryRow | null = null;
@@ -823,17 +823,17 @@ function stallWaveOneLadder(input: StallInput, f: StallFacts, word: string, live
 /** Escalation on proof (§5.1): with a current marker, r2 falls due at the first of (a) to (d). The check is this
  *  episode's own: the newest stall check to the worker, queued inside the episode. A worker mail after the check
  *  opens a new episode (the key moves), so "no worker mail since the check" is the key's rule and is not a term here.
- *  The marker keeps only the newest Stop (`proof-a-reads-the-newest-stop`), and a StopFailure is not a Stop. */
+ *  The marker keeps only the newest Stop (`proof-a-reads-the-newest-stop` (D-3663)), and a StopFailure is not a Stop. */
 function stallProofDue(input: StallInput, mark: TurnMark, deliveries: readonly StallDeliveryRow[], key: number, r1At: number, now: number): boolean {
   // (d) the bound: r2 at the latest STALL_BOUND_MS after r1, whatever the Stops showed
   if (now >= r1At + STALL_BOUND_MS) return true;
   const last = stallLastCheck(input);
-  // `proofs-read-checks-in-the-episode`: (a) and (c) read only a check queued inside this episode, never an earlier one.
+  // `proofs-read-checks-in-the-episode` (D-3682): (a) and (c) read only a check queued inside this episode, never an earlier one.
   const check = last !== null && last.at >= key ? last : null;
   const d = check === null ? null : stallNewestDelivery(deliveries, check.id);
   // (a) the Stop after a delivered check carries a measured bg and nothing that could still wake the worker. The Stop
-  // must be a `done` mark (`proof-a-requires-a-done-mark`: a StopFailure is not a Stop). The spec's "no worker mail since
-  // the check" term is not here (`proof-a-drops-the-unreachable-term`: that mail moves the key, so proofs are never reached).
+  // must be a `done` mark (`proof-a-requires-a-done-mark` (D-3681): a StopFailure is not a Stop). The spec's "no worker mail since
+  // the check" term is not here (`proof-a-drops-the-unreachable-term` (D-3683): that mail moves the key, so proofs are never reached).
   if (d !== null && d.deliveredAt !== null && mark.state === 'done' && mark.stopAt !== null && mark.stopAt > d.deliveredAt
     && mark.bg >= 0 && !mark.bgKinds.some((k) => STALL_RESUMING_KINDS.includes(k))) return true;
   // (b) two orphan-e rows inside the episode: the worker re-armed and ended again without mail
@@ -853,7 +853,7 @@ function stallLimited(w: Extract<StallWorker, { present: true }>, now: number): 
   return atCeiling || w.stranded || w.swapBlocked || autoContinueRecent;
 }
 
-/** §10's evaluation order after wave 2, wrapped by the mail-disabled filter (`lane-honours-mail-disabled`). */
+/** §10's evaluation order after wave 2, wrapped by the mail-disabled filter (`lane-honours-mail-disabled` (D-3636)). */
 export function stallVerdict(input: StallInput, now: number): StallVerdict {
   return stallMailDisabledHold(stallVerdictInner(input, now), input.arming);
 }
@@ -872,7 +872,7 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
  *  (10) the coordinator's ball: coord-deaf, the cap, or none;
  *  (11) the worker's ball: under the w2 marker, on the marker clock and escalating on proof; otherwise wave 1's
  *      ladder.
- *  Without `stall-watch-w2-live`, every LIVE outcome is wave 1's (`dark-mode-keeps-wave-1-verdict`). A wave-2 arm
+ *  Without `stall-watch-w2-live`, every LIVE outcome is wave 1's (`dark-mode-keeps-wave-1-verdict` (D-3645)). A wave-2 arm
  *  still answers `notify`, `stallNotifyDelivery` makes it shadow, and its standing shadow row marks it done.
  *  Exception (i): a shadow arm takes its sweep, so THREE arms can defer a wave-1 send by one sweep, once per the
  *  arm's own key: `marker-unreadable` (step 2a: it precedes EVERY wave-1 outcome, so it can defer r1, measure-coordinator,
@@ -897,7 +897,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
     && now - w2.markUnreadableSince >= MARKER_UNREADABLE_MS && rungDoneAt(input, 'marker-unreadable', 1, key) === null) {
     return { act: 'notify', arm: 'marker-unreadable', rung: 1, key, to: 'operator' };
   }
-  // (2b) a worker absent from this tick holds (`absent-worker-holds`, D-3566), and is the dead arm after DEAD_GRACE_MS (`absent-worker-is-dead-after-grace`)
+  // (2b) a worker absent from this tick holds (`absent-worker-holds`, D-3566), and is the dead arm after DEAD_GRACE_MS (`absent-worker-is-dead-after-grace` (D-3631))
   const w = input.worker;
   if (!w.present) {
     return w2 !== undefined && stallDeadDue(input, w2.absentSince, key, now) ? stallW2Notify(input, 'dead', key, 'registry-absent') : holdVerdict('absent');
@@ -908,8 +908,8 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   if (w.unmeasured) return holdVerdict('unmeasured');
   if (lc === null || !isSessionLifecycle(lc) || lc === 'unmeasurable') return holdVerdict('unmeasured');
   if (p.dispatchedAt === null) return holdVerdict('unmeasured');
-  // (3) lifecycle, ahead of the live read: a dead pane has no live stamp (`dead-lifecycle-precedes-live-stamp`)
-  if (lc === 'stopped') return holdVerdict(w2 !== undefined ? 'lifecycle-stopped' : 'lifecycle'); // `deliberate-stop-excluded`
+  // (3) lifecycle, ahead of the live read: a dead pane has no live stamp (`dead-lifecycle-precedes-live-stamp` (D-3630))
+  if (lc === 'stopped') return holdVerdict(w2 !== undefined ? 'lifecycle-stopped' : 'lifecycle'); // `deliberate-stop-excluded` (D-3610)
   if (stallDeadShaped(lc)) {
     // The dead-shaped set lives once, in Task 10's `stallDeadShaped` (the L1 ruling). It answers a boolean, so the
     // cause word is named here from the lifecycle it accepted; this line decides nothing about which lifecycles count.
@@ -945,7 +945,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
     }
   }
   // (9) delegates: subagent activity holds the quiet arm, capped at DELEGATE_CAP_MS of main silence. It needs the worker's
-  // ball (`delegates-requires-the-workers-ball`), or it would also silence coord-deaf and the coord-ball cap.
+  // ball (`delegates-requires-the-workers-ball` (D-3684)), or it would also silence coord-deaf and the coord-ball cap.
   const quietStart = view === null ? null : stallMarkQuiet(view, f, p.dispatchedAt);
   if (w2 !== undefined && w2Live && view !== null && view.state !== 'working' && f.ball === 'worker' && quietStart !== null
     && stallHookFresh(w2.hook, now) && now - quietStart < DELEGATE_CAP_MS) return holdVerdict('delegates');
@@ -1123,7 +1123,7 @@ export function stallCheckMail(input: StallInput, facts: StallFacts, now: number
   const direct = input.coordinationPaused || run.claimedBy === null;
   // D-3581 r1-body-states-its-arming: while escalation is unarmed r2 and r3 are recorded in shadow and nobody is
   // told, so the body says so and still asks for the mail. Only an armed fleet gets the spec's promise.
-  // Planning departure `r1-body-names-the-proof-bound`. With the marker rules armed (`stall-watch-w2-live`) and the
+  // Planning departure `r1-body-names-the-proof-bound` (D-3667). With the marker rules armed (`stall-watch-w2-live`) and the
   // marker's view naming a turn end, r2 falls due on proof at the worker's next turn end, and by STALL_BOUND_MS after
   // r1 at the latest (§5.1 (a)–(d)). The body promises that, and names the operator when r2 would be skipped. The
   // predicate is the marker ladder's own (Task 11), shared with the quiet start above (`stallR1MarkQuiet`): an ok marker
@@ -1333,7 +1333,7 @@ export function turnMarkStale(m: Pick<TurnMark, 'at' | 'restartAt'>, startedAt: 
 }
 /** `restartAt + RESTART_GRACE_MS` iff `restartAt !== null && turnAt !== null && turnAt > (stopAt ?? -Infinity)`, else
  *  null: the restart found a turn newer than the last Stop, so it cut that turn short. No marker field records this;
- *  it is derived from the two stamps (restart-grace-derived-from-turn-and-stop). */
+ *  it is derived from the two stamps (restart-grace-derived-from-turn-and-stop (D-3652)). */
 export function turnMarkGraceUntil(m: Pick<TurnMark, 'restartAt' | 'turnAt' | 'stopAt'>): number | null {
   if (m.restartAt === null || m.turnAt === null) return null;
   return m.turnAt > (m.stopAt ?? Number.NEGATIVE_INFINITY) ? m.restartAt + RESTART_GRACE_MS : null;
@@ -1343,10 +1343,10 @@ export function turnMarkGraceUntil(m: Pick<TurnMark, 'restartAt' | 'turnAt' | 's
 // Task 12 (wave 2): the session-scoped verdicts (spec §5.2; §10: "The D, E and failed arms are separate pure
 // verdicts over the marker and apply holds 1, 2 and the limit hold only; mail-stuck is evaluated per delivery").
 // Each is judged beside `stallVerdict`, never inside it. A run worker's notices are its run's `run_events`. A
-// coordinator's, and any other session's, are run-less (`coordinator-notices-are-run-less`). A run-less rung to
+// coordinator's, and any other session's, are run-less (`coordinator-notices-are-run-less` (D-3653)). A run-less rung to
 // the session itself is therefore done by the watch's own mail, found by its exact subject. A run-less rung to the
 // operator is latched in memory by the lane, which L1 cannot see. Every exported verdict passes through
-// `stallMailDisabledHold` (`lane-honours-mail-disabled`, `mail-disabled-holds-only-sends`).
+// `stallMailDisabledHold` (`lane-honours-mail-disabled` (D-3636), `mail-disabled-holds-only-sends` (D-3646)).
 // ===========================================================================
 
 export type StallSessionRole = 'worker' | 'coordinator' | 'other';
@@ -1376,7 +1376,7 @@ const STALL_STUCK_GATE: keyof typeof STALL_GATE_WORD_MAP = 'registry-unmeasurabl
  *  a self-mail would sit queued behind it (final fix wave, E2E-4). 2b's other half, live `waiting`, never reaches D, E
  *  or failed: their word checks refuse it. Hold 2a is not applied: the run verdict's 2a is a question behind a
  *  `waiting` word, which those checks refuse too, and the lane reads no hookstate ask for a coordinator or another row
- *  (`STALL_HOOK_ASK_UNREAD`). `now` is the limit hold's auto-continue clock (`session-hold-takes-now`). A marker that is
+ *  (`STALL_HOOK_ASK_UNREAD`). `now` is the limit hold's auto-continue clock (`session-hold-takes-now` (D-3685)). A marker that is
  *  not ok for a reason other than `unmeasured` is no hold here: D, E and failed read it as `none`. */
 export function stallSessionHold(input: StallSessionInput, now: number): StallVerdict | null {
   const r = input.run;
@@ -1401,7 +1401,7 @@ function stallSessionLive(input: StallSessionInput): { readonly word: string; re
 }
 
 /** The marker when it is CURRENT: read ok, and not older than the live process. A null `liveStartedAt` reads it
- *  stale (`stale-when-live-has-no-startedat`). */
+ *  stale (`stale-when-live-has-no-startedat` (D-3655)). */
 function stallCurrentMark(input: StallSessionInput): TurnMark | null {
   const m = input.mark;
   if (!m.ok || input.liveStartedAt === null || turnMarkStale(m, input.liveStartedAt)) return null;
@@ -1555,7 +1555,7 @@ function stallFailedInner(input: StallSessionInput, now: number): StallVerdict {
   if (held !== null) return held;
   const m = stallCurrentMark(input);
   if (m === null || m.state !== 'failed' || m.stopAt === null || now - m.stopAt < FAILED_IDLE_MS) return VERDICT_NONE;
-  // `failed-arm-bounded-by-the-mail-horizon`: a run-less repeat is told from a first failure by a prior failed:
+  // `failed-arm-bounded-by-the-mail-horizon` (D-3752): a run-less repeat is told from a first failure by a prior failed:
   // self-mail at most FAILED_REPEAT_MS before this stop, and the lane's mail read keeps BACKLOG_HORIZON_MS. Past this
   // bound that evidence may be gone, so the arm answers none rather than re-read a repeat as a first failure.
   if (now - m.stopAt > BACKLOG_HORIZON_MS - FAILED_REPEAT_MS) return VERDICT_NONE;
@@ -1593,9 +1593,9 @@ function stallIdleStart(input: StallSessionInput): number | null {
 }
 
 /** One queued delivery (§5.2). It is judged from plain columns the store SELECTs, never in SQL and never in watch.ts
- *  (`mail-stuck-decided-in-l1`; the D-792 pins in mail-sweep.test.ts). The registry-unmeasurable clause is the
+ *  (`mail-stuck-decided-in-l1` (D-3638); the D-792 pins in mail-sweep.test.ts). The registry-unmeasurable clause is the
  *  delivery's own measurement, and hold 1 (`absent`, `unmeasured`) answers exactly when that gate is the reason. So
- *  the clause is judged before the holds (`stuck-gate-precedes-holds`). The idle clause is judged after them, hold 2b
+ *  the clause is judged before the holds (`stuck-gate-precedes-holds` (D-3686)). The idle clause is judged after them, hold 2b
  *  included (E2E-4). Key: the delivery id. */
 function stallMailStuckInner(input: StallSessionInput, d: StallDeliveryRow, now: number): StallVerdict {
   if (stallRecordedDone(input, 'mail-stuck', 1, d.id)) return VERDICT_NONE;
@@ -1618,7 +1618,7 @@ export function stallMailStuckVerdicts(input: StallSessionInput, now: number): S
     .map((d) => stallMailDisabledHold(stallMailStuckInner(input, d, now), input.arming));
 }
 
-/** A coordinator's marker-unreadable (§5.1 "on a candidate"; `coordinator-marker-unreadable`). The marker has been
+/** A coordinator's marker-unreadable (§5.1 "on a candidate"; `coordinator-marker-unreadable` (D-3654)). The marker has been
  *  unreadable since the lane first saw it so, for MARKER_UNREADABLE_MS. Which reads count is Task 10's
  *  `stallMarkUnreadable`, never re-spelled here. Holds 1 and 2 do NOT apply, because the unreadable mark is the fact
  *  reported. The limit hold does, when the session is present. The push goes to the operator. Key: the in-memory

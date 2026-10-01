@@ -347,14 +347,14 @@ export type StallNoticeQueued =
  * every rung. The observation row is durable, and the lane's ladder reads its
  * rung times back from it.
  *
- * `run === null` is the RUN-LESS notice (stall watch wave 2, `run-less-stall-notice`):
+ * `run === null` is the RUN-LESS notice (stall watch wave 2, `run-less-stall-notice` (D-3640)):
  * a session verdict about a coordinator, or about a registry row with no run
  * (an `orphaned:` or `failed:` self-wake, or its failed rung 2), has no
  * `run_events` row to dedupe on. Its durable dedupe is
  * `hasMailWithSubject('operator', null, toId, subject)`, over EVERY delivery
  * state, read INSIDE the same transaction as the insert, so the check and the
  * write cannot be split. It holds because the subject names the episode to the
- * day and the minute (`self-mail-subjects-carry-the-date`) and `mail` is never
+ * day and the minute (`self-mail-subjects-carry-the-date` (D-3668)) and `mail` is never
  * pruned. It writes no observation row: `eventId` is null, and `detail` and
  * `at` are unused. `tx` is not re-entrant, so no caller may hold one around
  * either arm.

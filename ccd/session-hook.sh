@@ -2907,15 +2907,15 @@ case "$event" in
   Stop)
     state="done"
     # `is_interrupt` is not read: no installed lane's Stop carries it (spec §5.1); `interrupted` stays false here (the
-    # Subagent branch carries an older value). This fork measures `background_tasks`: bg -1 unless it is an ARRAY (bg-kinds-only-from-an-array), each alias cleaned alone.
+    # Subagent branch carries an older value). This fork measures `background_tasks`: bg -1 unless it is an ARRAY (bg-kinds-only-from-an-array (D-3659)), each alias cleaned alone.
     # Its regexes (and StopFailure's) feed the marker alone: a jq built without Oniguruma leaves bg -1 / err "", never the hookstate (OPS-2).
     { read -r bg; read -r bgk; read -r bgi; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | (if $a == null then -1 else ($a|length) end), ([$a[]? | objects | .type | strings | ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}\\z"))] | .[0:8] | join(","))' <<<"$payload" 2>/dev/null) ;;
   StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
   *) exit 0 ;;
 esac
-# THE CAPTURE ARM (worker stall watch §5.1's first task; capture-arm-keyed-on-hookcap,
-# capture-arm-is-permanent, capture-file-carries-a-meta-line). Only a session whose
+# THE CAPTURE ARM (worker stall watch §5.1's first task; capture-arm-keyed-on-hookcap (D-3612),
+# capture-arm-is-permanent (D-3613), capture-file-carries-a-meta-line (D-3669)). Only a session whose
 # ccd id ends `-hookcap` pays more than this one test. Every registered event that
 # reaches this line (all but SessionStart `compact`, which exits in its arm, and an
 # unknown event) is copied to one 0600 file in a 0700 per-id directory OUTSIDE the
@@ -2942,7 +2942,7 @@ fi
 # THE TURN MARKER (worker stall watch, spec §5.1): `$REG/<id>.turn.json`, one JSON
 # line that the stall lane and the mail gate read. It is written HERE, below the
 # case, because README anchors this file at :2900 and nothing new may land above
-# that line (marker-logic-in-the-tail).
+# that line (marker-logic-in-the-tail (D-3615)).
 #
 # WHO WRITES: main-thread events only. `paid` is the payload parse's flag for a
 # non-empty `agent_id`. It is set by that one read and never re-declared, so a
@@ -2952,24 +2952,24 @@ fi
 #
 # WHICH SESSION: the env id first, the same source hookstate's `sessionId` uses, so
 # the two files agree. The payload's cleaned `session_id` is used only when the env
-# is empty (marker-identity-from-env).
+# is empty (marker-identity-from-env (D-3614)).
 #
 # WHAT IT COSTS: a main TOOL event (PreToolUse, PostToolUse) while this session is
 # already `working` is a builtin `read`, no fork. A UserPromptSubmit always writes:
 # a new prompt is a new turn, even over a `working` line an Esc interrupt left
-# behind (a-prompt-always-opens-a-turn; spec §5.1 exempts only later TOOL events).
+# behind (a-prompt-always-opens-a-turn (D-3675); spec §5.1 exempts only later TOOL events).
 # A write is one jq and one `mv`, and its stamp is the one this
-# hook run's hookstate write reuses (one-stamp-per-hook-run). A temp left by a
+# hook run's hookstate write reuses (one-stamp-per-hook-run (D-3616)). A temp left by a
 # killed write is dotted and holds no slug. Like the hookstate's own temp, it is
-# never swept (marker-tmp-parity-with-hookstate).
+# never swept (marker-tmp-parity-with-hookstate (D-3617)).
 #
 # ONE PROGRAM, SINGLE-QUOTED: no shell variable expands inside it, and every value
 # enters by --arg/--argjson. A previous line is carried only when it parses, is
 # `v:1` and names THIS session id; a foreign or unreadable line reads as absent.
 # `fitk` keeps WHOLE aliases inside 200 bytes: a byte cut after the join can leave
 # half an alias or a trailing comma, which the reader refuses
-# (alias-list-fits-whole-aliases). `fiti` keeps at most 8 ids.
-# restart: a same-session done moves bg* into lost* (a union, lost-kinds-accumulate); clear: a fresh line.
+# (alias-list-fits-whole-aliases (D-3658)). `fiti` keeps at most 8 ids.
+# restart: a same-session done moves bg* into lost* (a union, lost-kinds-accumulate (D-3660)); clear: a fresh line.
 TURN_MARK_PROGRAM='
 def csv: split(",") | map(select(length > 0));
 def fitk: reduce .[] as $k (""; if (length + (if length > 0 then 1 else 0 end) + ($k|length)) <= 200 then (if length > 0 then . + "," + $k else $k end) else . end);
@@ -3009,7 +3009,7 @@ msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
 if [[ -z "$paid" && -e "$REG/$id.generation" ]]; then
   tmkind=""
   case "$event" in
-    UserPromptSubmit) tmkind=working ;;   # a new prompt is a new turn, even over a working line (a-prompt-always-opens-a-turn)
+    UserPromptSubmit) tmkind=working ;;   # a new prompt is a new turn, even over a working line (a-prompt-always-opens-a-turn (D-3675))
     PreToolUse|PostToolUse)
       tmline=""; { IFS= read -r tmline < "$REG/$id.turn.json"; } 2>/dev/null
       [[ "$tmline" == *'"state":"working"'* && "$tmline" == *"\"sessionId\":\"$msid\""* ]] || tmkind=working ;;
@@ -3020,7 +3020,7 @@ if [[ -z "$paid" && -e "$REG/$id.generation" ]]; then
   if [[ -n "$tmkind" ]]; then hts="${hcat:-$(_hook_epoch_ms)}"; _hook_turn_mark "$tmkind" || true; fi
 fi
 # StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm raised
-# the flag and read `err` for the marker above (stopfailure-sets-a-flag), and nothing
+# the flag and read `err` for the marker above (stopfailure-sets-a-flag (D-3611)), and nothing
 # below may run for it.
 [[ -n "$stopfail" ]] && exit 0
 

@@ -769,7 +769,7 @@ describe('wave 2 vocabulary: a self-wake notice is the watch’s own, never mail
     expect(stallFacts(input).inboundLast?.id).toBe(3000);
     expect(stallVerdict(input, NOW)).toEqual(NONE);
   });
-  it('w2-facts-separate-object: a w2 fact set changes nothing wave 1 derives', () => {
+  it('w2-facts-separate-object (D-3629): a w2 fact set changes nothing wave 1 derives', () => {
     const w2: StallW2Facts = {
       mark: { ok: false, reason: 'absent' }, hook: { ok: false, reason: 'absent' }, deliveries: [],
       absentSince: null, deadSince: null, markUnreadableSince: null,
@@ -784,7 +784,7 @@ describe('wave 2 vocabulary: a self-wake notice is the watch’s own, never mail
 
 // ── wave 2 (spec 2026-09-29 §5.1, §5.2, §10): the run verdict after the turn marker ─────────────────────────────
 // Every row builds on the wave-1 factories above. The `w2(...)` builder adds the facts wave 2 reads as a separate
-// object (`w2-facts-separate-object`), so no wave-1 row changes. `W2_LIVE` arms the wave-2 rules; `ARMED` (the
+// object (`w2-facts-separate-object` (D-3629)), so no wave-1 row changes. `W2_LIVE` arms the wave-2 rules; `ARMED` (the
 // default) is the dark: wave-2 facts present, `stall-watch-w2-live` absent.
 import {
   stallMarkView, stallMailDisabledHold, stallRunMail, stallCitedCheck, stallNotifyDelivery,
@@ -1175,7 +1175,7 @@ describe('wave 2: escalation on proof (§5.1 (a) to (d)), and r3 an hour after r
   });
 });
 
-describe('wave 2: the dark keeps wave 1 (F3, dark-mode-keeps-wave-1-verdict)', () => {
+describe('wave 2: the dark keeps wave 1 (F3, dark-mode-keeps-wave-1-verdict (D-3645))', () => {
   it('dark: a busy worker with a done marker holds busy', () => {
     expect(vw({ worker: workerAt({ live: liveWord('busy', NOW - 3 * H) }) })).toEqual(hold('busy'));
   });
@@ -1204,7 +1204,7 @@ describe('wave 2: the dark keeps wave 1 (F3, dark-mode-keeps-wave-1-verdict)', (
   });
 });
 
-describe('wave 2: mail-disabled holds every mail rung that would send (lane-honours-mail-disabled)', () => {
+describe('wave 2: mail-disabled holds every mail rung that would send (lane-honours-mail-disabled (D-3636))', () => {
   const MD: StallArming = { ...ARMED, mailDisabled: true };
   const MD_SHADOW: StallArming = { ...SHADOW, mailDisabled: true };
   const MD_LIVE_ONLY: StallArming = { ...LIVE_ONLY, mailDisabled: true };
@@ -1249,7 +1249,7 @@ describe('wave 2: mail-disabled holds every mail rung that would send (lane-hono
   });
 });
 
-describe('stallRunMail (F4, run-mail-filtered-in-l1)', () => {
+describe('stallRunMail (F4, run-mail-filtered-in-l1 (D-3650))', () => {
   const onRun = mailRow(4100, NOW - 4 * H, WORKER, COORD, 'status', 'Task 2 pushed');
   const offRun = mailRow(4101, NOW - 20 * MIN, WORKER, COORD, 'status', 'run 68 pushed', 68);
   const runLess: StallMailRow = { ...mailRow(4102, NOW - 10 * MIN, WORKER, PEER, 'status', 'peer note'), runId: null };
@@ -1271,7 +1271,7 @@ describe('stallRunMail (F4, run-mail-filtered-in-l1)', () => {
   });
 });
 
-describe('stallCitedCheck (M7a, cited-check-derived-in-l1)', () => {
+describe('stallCitedCheck (M7a, cited-check-derived-in-l1 (D-3634))', () => {
   it('stallCitedCheck cites the earliest live r1 row, else the earliest r1 row, on this key only', () => {
     const K = RUN67_DISPATCHED;
     const cite = (notices: StallNotice[]): StallNotice | null => stallCitedCheck(stallInput({ notices }), K);

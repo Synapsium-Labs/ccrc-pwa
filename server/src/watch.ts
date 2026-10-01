@@ -140,12 +140,12 @@ const CLAIM_SWEEP_MS = 60_000;
  *  constant's reason: a 2 h threshold does not need the 2 s tick. EXPORTED for its suite, as `LC_SWEEP_MS`
  *  and `READINESS_SWEEP_MS` are. */
 export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;
-/** The gap rule's threshold (slug `stall-clocks-drop-on-an-unobserved-gap`): between one missed sweep (~120 s, clocks survive) and two (~180 s, clocks drop). */
+/** The gap rule's threshold (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)): between one missed sweep (~120 s, clocks survive) and two (~180 s, clocks drop). */
 const STALL_CLOCK_GAP_MS = STALL_SWEEP_MS * 5 / 2;
 
 /**
  * What `tick()` already measured, handed to the stall lane so it reads neither again (worker stall watch wave 2, M6;
- * slug `tick-hands-the-lane-pids-and-records`). `panePids` holds the pane pid `assembleFleet` read for every alive
+ * slug `tick-hands-the-lane-pids-and-records` (D-3649)). `panePids` holds the pane pid `assembleFleet` read for every alive
  * row: `null` when tmux answered none, and no entry for a pane that was not alive. `records` holds the registry rows
  * this tick read. REQUIRED: the lane has no pid or uuid read of its own, so production and the tests run one path.
  */
@@ -169,7 +169,7 @@ const STALL_RAW_UNMEASURED: HookStateRawRead = { ok: false, reason: 'unmeasured'
  *  (`readHookStateRawMeasured`). A foreign or unregistered file carries no ask of this session's. `absent` and
  *  `malformed` read as no ask, as wave 1's identity-gated read answered them, and `unmeasured` stays unmeasured. A
  *  PermissionRequest `{approval}` envelope is carried as `approval` (M7b): L1 decides it is hold 2b, never 2a.
- *  Named departure `hook-ask-projection-in-l4`: this projection, the identity cut included, stays in L4 as wave 1's
+ *  Named departure `hook-ask-projection-in-l4` (D-3691): this projection, the identity cut included, stays in L4 as wave 1's
  *  shipped `stallHookAsk` kept it. It is not moved to `coord/stall.ts` in this wave. */
 function stallHookAskOf(raw: HookStateRawRead): HookAskFact {
   if (!raw.ok) return raw.reason === 'unmeasured' ? { kind: 'unmeasured' } : { kind: 'none' };
@@ -694,7 +694,7 @@ export class FleetWatcher {
   private stallSweepRunning = false;
   /** Wave 2's in-memory clocks, keyed by session id, pruned every sweep (`pruneStallMemory`) and dropped whole after a
    *  gap of more than STALL_CLOCK_GAP_MS between judged sweeps (`dropStallClocks`, `lastStallJudgedAt`). A server
-   *  restart re-times each one, which the spec accepts (slug `absent-worker-is-dead-after-grace`): when a run worker
+   *  restart re-times each one, which the spec accepts (slug `absent-worker-is-dead-after-grace` (D-3631)): when a run worker
    *  was first seen with no fleet row; when it was first seen with an `orphan` or `never-started` lifecycle; when a
    *  worker's or coordinator's turn marker was first READ `unmeasured` or `malformed` (`stallMarkClock`: an unmeasured
    *  identity reads no marker, so it neither starts nor keeps that clock). */
@@ -702,11 +702,11 @@ export class FleetWatcher {
   private stallDeadSince = new Map<string, number>();
   private stallMarkUnreadableSince = new Map<string, number>();
   /** When the lane last FINISHED judging its candidates, or null before the first judged sweep: the gap rule's anchor
-   *  (slug `stall-clocks-drop-on-an-unobserved-gap`). Stamped at the end of a sweep whose candidates read, never on an
+   *  (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)). Stamped at the end of a sweep whose candidates read, never on an
    *  early return, so a slow sweep's own duration is never counted as a gap (E2E-6). */
   private lastStallJudgedAt: number | null = null;
   /** The run-less operator pushes already sent: each push tag (`stallPushRoute`'s) with the session it names, which
-   *  the prune keys on. IN MEMORY (slug `run-less-push-latches-are-in-memory`): a restart re-pushes a run-less orphan D
+   *  the prune keys on. IN MEMORY (slug `run-less-push-latches-are-in-memory` (D-3751)): a restart re-pushes a run-less orphan D
    *  rung 2, a mail-stuck, a marker-unreadable or a coordinator's failed rung 2 to the operator while it stands. A
    *  coordinator's marker-unreadable push is keyed on its first-seen time, which a restart or a clock drop (an
    *  unobserved gap, `dropStallClocks`) re-times, so one push can go out on each side of it. Pushes only, never mail. */
@@ -2989,25 +2989,25 @@ export class FleetWatcher {
    * - a run WORKER (`stallSubjects`): the run verdict, then its session verdicts (orphan E, failed, each mail
    *   stuck, orphan D), every notice recorded on its primary run;
    * - a run COORDINATOR (`stallCoordinatorSubjects`, minus the workers): orphan E, failed, each mail stuck, its
-   *   marker and orphan D (slug `coordinators-draw-orphan-d`), all RUN-LESS (slug `coordinator-notices-are-run-less`),
+   *   marker and orphan D (slug `coordinators-draw-orphan-d` (D-3749)), all RUN-LESS (slug `coordinator-notices-are-run-less` (D-3653)),
    *   so none can stand in a worker's proof (b);
    * - every other registry row: orphan D only, and only once its marker records a restart that lost tasks.
    *
-   * Reads (slug `three-reads-per-candidate`): at most three agent reads per worker — the live file, the turn
+   * Reads (slug `three-reads-per-candidate` (D-3642)): at most three agent reads per worker — the live file, the turn
    * marker and the raw hookstate — and two per coordinator. The pane pid and the registry uuid are the tick's
-   * (`StallTick`, REQUIRED: slug `tick-hands-the-lane-pids-and-records`). It reads the RAW live word, never
+   * (`StallTick`, REQUIRED: slug `tick-hands-the-lane-pids-and-records` (D-3649)). It reads the RAW live word, never
    * `FleetSession.status`, which folds `shell` and `waiting` into `busy`. It reads the hookstate RAW and unaged
    * (`readHookStateRawMeasured`): hold 2a correlates its ask with the dialog by time, and a legit question
-   * outlives `HOOKSTATE_FRESH_MS`. One mail read per subject (`stallMailFor`, slug `one-mail-read-per-candidate`):
+   * outlives `HOOKSTATE_FRESH_MS`. One mail read per subject (`stallMailFor`, slug `one-mail-read-per-candidate` (D-3641)):
    * the run verdict meets it through `stallRunMail`, run mail only as wave 1 read it (slug
-   * `run-mail-filtered-in-l1`); the session verdicts meet it whole.
+   * `run-mail-filtered-in-l1` (D-3650)); the session verdicts meet it whole.
    *
    * In memory, and pruned every sweep (`pruneStallMemory`): when a worker was first seen absent or dead-shaped,
    * when a marker was first seen unreadable, the run-less push latch and the warn-once keys. A server restart
-   * re-times the clocks (slug `absent-worker-is-dead-after-grace`) and may repeat a run-less push, a coordinator's
-   * failed rung 2 among them (slug `run-less-push-latches-are-in-memory`; `stallLatch` names which, and why a
+   * re-times the clocks (slug `absent-worker-is-dead-after-grace` (D-3631)) and may repeat a run-less push, a coordinator's
+   * failed rung 2 among them (slug `run-less-push-latches-are-in-memory` (D-3751); `stallLatch` names which, and why a
    * marker-unreadable push re-keys after a clock drop). More than STALL_CLOCK_GAP_MS from one judged sweep's end to the
-   * next one's start drops the clocks (`dropStallClocks`, slug `stall-clocks-drop-on-an-unobserved-gap`).
+   * next one's start drops the clocks (`dropStallClocks`, slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)).
    *
    * Every mail is durable and deduped: on a run by its observation row (`queueStallNotice`,
    * `recordStallObservation`), run-less by its subject (`hasMailWithSubject`), so a restart re-sends none.
@@ -3025,7 +3025,7 @@ export class FleetWatcher {
     let judging = false;
     try {
       // `mail-disabled` reaches L1 as a fact, and `stallMailDisabledHold` decides what it holds (slug
-      // `lane-honours-mail-disabled`). The module-local literal, never rundefs' export: see the import note.
+      // `lane-honours-mail-disabled` (D-3636)). The module-local literal, never rundefs' export: see the import note.
       const arming: StallArming = { ...stallArmingOf(names), mailDisabled: names.includes(MAIL_DISABLED_MARKER) };
       if (arming.disabled) return;
       const paused = names.includes(COORDINATOR_PAUSE_MARKER);
@@ -3040,7 +3040,7 @@ export class FleetWatcher {
         console.warn(`ccrc-server: stall-watch candidates unreadable (${candidates.kind}: ${candidates.detail}) — nothing judged this sweep`);
         return;
       }
-      // `stall-clocks-drop-on-an-unobserved-gap`: the one gap rule. A first-seen clock claims its condition held at
+      // `stall-clocks-drop-on-an-unobserved-gap` (D-3750): the one gap rule. A first-seen clock claims its condition held at
       // every judged sweep since it was set. More than STALL_CLOCK_GAP_MS from the END of the last judged sweep to this
       // start means nobody watched in between (a disabled window, unreadable or throwing candidate reads, ticks that
       // never reached the lane), so every clock restarts here. The early returns above never stamp it: they are that
@@ -3139,10 +3139,10 @@ export class FleetWatcher {
     }
   }
 
-  /** One run coordinator, judged RUN-LESS (slug `coordinator-notices-are-run-less`): its notices are keyed on
+  /** One run coordinator, judged RUN-LESS (slug `coordinator-notices-are-run-less` (D-3653)): its notices are keyed on
    *  their mail subjects and on in-memory latches, never on a claimed run's `run_events`, where its orphan E rows
    *  would count toward that run's worker's proof (b). Its verdicts, in the spec's order: orphan E, failed, each mail
-   *  stuck, its marker, and orphan D last as for a worker (spec §5.2 "any session"; slug `coordinators-draw-orphan-d`).
+   *  stuck, its marker, and orphan D last as for a worker (spec §5.2 "any session"; slug `coordinators-draw-orphan-d` (D-3749)).
    *  The registry-row loop skips every judged id, so this is the only place a coordinator's orphan D is asked.
    *  Reads: the live file and the marker. No session verdict takes a hookstate ask, so none is read, and
    *  `unmeasured` says so. Its mail read carries no run ids: its claimed runs' mail is its worker's subject. */
@@ -3179,7 +3179,7 @@ export class FleetWatcher {
    *  (`stallOrphanDCandidate`, the mark alone), spent here on the read budget; this method asks it and spells no
    *  conjunct. `stallOrphanDVerdict` asks the same predicate again with the live facts, and re-judges the marker
    *  against the live process's start. A row whose identity is unmeasured reads nothing: these rows are not
-   *  candidates for `marker-unreadable` (slug `coordinator-marker-unreadable`). Nor does a row with no live pane,
+   *  candidates for `marker-unreadable` (slug `coordinator-marker-unreadable` (D-3654)). Nor does a row with no live pane,
    *  which orphan D can never wake (OPS-3). */
   private async judgeStallOrphan(
     store: CoordStore, r: SessionRecord, sessions: readonly FleetSession[], tick: StallTick,
@@ -3278,7 +3278,7 @@ export class FleetWatcher {
     return notices;
   }
 
-  /** Drops every first-seen clock (slug `stall-clocks-drop-on-an-unobserved-gap`), the one clearing method. Its one
+  /** Drops every first-seen clock (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)), the one clearing method. Its one
    *  caller is the gap rule in `sweepStalls`: when more than STALL_CLOCK_GAP_MS passed since the last judged sweep ended,
    *  each clock restarts from this sweep, never firing on a duration nobody watched. A single unlistable tick, one
    *  refused pass or one missed sweep leaves no such gap. This is the lane's bookkeeping of its own observations, not
@@ -3386,7 +3386,7 @@ export class FleetWatcher {
    *  - To the session itself or to its coordinator: one `queueStallNotice`, on the worker's run, or run-less and
    *    deduped by its subject.
    *  - To the operator: a worker records the row first and pushes only when it is new; a run-less session latches in
-   *    memory (`stallLatch`, slug `run-less-push-latches-are-in-memory`), so a restart re-pushes it, a coordinator's
+   *    memory (`stallLatch`, slug `run-less-push-latches-are-in-memory` (D-3751)), so a restart re-pushes it, a coordinator's
    *    failed rung 2 included, and a marker-unreadable push re-keys on each side of a clock drop. L1's
    *    `stallPushRoute` names the push's kind and tag, which is also the latch key. */
   private applyStallSession(store: CoordStore, si: StallSessionInput, project: string, v: StallVerdict, now: number): void {
@@ -4188,7 +4188,7 @@ export class FleetWatcher {
         //
         // The turn marker (§5.1) is read here, once per due row that passed
         // every gate above, and ONLY under the hand-armed `busy-shadow` and
-        // `busy` (shell-mode-ignores-the-marker). Which modes those are is
+        // `busy` (shell-mode-ignores-the-marker (D-3674)). Which modes those are is
         // `mailTurnReadsMark`'s decision (L1), the same rule `mailTurnIdle`
         // uses to consult `mark`; this line asks it. Wave 2 ships dark: under the
         // default `shell`, and under `strict`, no agent read is added and

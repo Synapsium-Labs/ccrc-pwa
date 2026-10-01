@@ -972,7 +972,7 @@ describe('turnRunning', () => {
   });
 });
 
-// Worker stall watch wave 2 (M3, `busy-re-anchored`): BUSY_RE matches a ROW
+// Worker stall watch wave 2 (M3, `busy-re-anchored` (D-3626)): BUSY_RE matches a ROW
 // shaped like Claude Code's spinner row, not the phrase anywhere. The tail is
 // TOLERANT until the capture checkpoint (C7) measures it per lane: `)`, a
 // ` ·` hint segment, or the end of the row. The prompt row (`❯`), a tool

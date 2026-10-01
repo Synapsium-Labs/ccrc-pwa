@@ -566,7 +566,7 @@ describe('failed (§5.2): run workers and coordinators, a turn that ended on an 
     expect(stallFailedVerdict(fInput({}, { arming: DARK_MAIL_OFF }), NOW), 'shadow').toEqual(f1());
   });
   it('failed: bounded by the mail horizon, none once its stop is older than BACKLOG_HORIZON_MS - FAILED_REPEAT_MS', () => {
-    // Slug `failed-arm-bounded-by-the-mail-horizon`: a run-less repeat is told from a first failure by a prior failed:
+    // Slug `failed-arm-bounded-by-the-mail-horizon` (D-3752): a run-less repeat is told from a first failure by a prior failed:
     // self-mail, which leaves the lane's 24 h mail read FAILED_REPEAT_MS after its own stop at the latest. Past this
     // bound the classification would outlive its evidence, so the arm answers none, as orphan D bounds itself.
     const edge = NOW - (BACKLOG_HORIZON_MS - FAILED_REPEAT_MS);
@@ -700,7 +700,7 @@ describe('mail-stuck (§5.2): per queued delivery to a run worker or a coordinat
   });
 });
 
-describe('marker-unreadable for a coordinator (coordinator-marker-unreadable)', () => {
+describe('marker-unreadable for a coordinator (coordinator-marker-unreadable (D-3654))', () => {
   const SINCE = NOW - MARKER_UNREADABLE_MS - MIN;
   function mkInput(over: Over = {}): StallSessionInput {
     return sessionInput({ role: 'coordinator', sessionId: COORD, mark: { ok: false, reason: 'malformed' }, markUnreadableSince: SINCE, ...over });
