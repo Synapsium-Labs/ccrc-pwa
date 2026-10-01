@@ -585,11 +585,12 @@ describe('wave 2: the marker-unreadable reasons and the dead-shaped lifecycles l
 describe('wave 2: stallPushRoute names every stall push\'s kind and collapse tag (spec §4.2 "Push shape", §11)', () => {
   // L1 owns both, so watch.ts spells no tag shape and no kind rule (the controller's A5 ruling): `applyStall` and
   // `applyStallSession` each ask this one function.
-  it('the delayed orphan push (orphan D rung 2) is `mail`, tagged orphaned-<toId>-<restartAt>, run-bound or run-less alike', () => {
+  it('the delayed orphan push (orphan D rung 2) is tagged orphaned-<toId>-<restartAt> for every session; its kind is `mail` only off a run', () => {
+    // Spec §4.2 and §11: `run`, with `mail` only for a run-less orphan. The tag is every session's.
     expect(stallPushRoute({ arm: 'orphan-d', rung: 2, key: T0 }, 'demo-idle-basin', null))
       .toEqual({ kind: 'mail', tag: `orphaned-demo-idle-basin-${T0}` });
     expect(stallPushRoute({ arm: 'orphan-d', rung: 2, key: T0 }, 'demo-quiet-mesa', 31))
-      .toEqual({ kind: 'mail', tag: `orphaned-demo-quiet-mesa-${T0}` });
+      .toEqual({ kind: 'run', tag: `orphaned-demo-quiet-mesa-${T0}` });
   });
 
   it('every other rung is `run`, tagged stall-<runId>-<arm>-<rung>-<key> on a run, stall-<toId>-… off one', () => {

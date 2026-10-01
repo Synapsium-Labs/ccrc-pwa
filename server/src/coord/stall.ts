@@ -1870,12 +1870,13 @@ export function stallSessionPushText(input: StallSessionInput, n: StallNotify, n
 }
 
 /** Every stall push's notify kind and collapse tag, for the run verdict and the session verdicts alike (spec §4.2
- *  "Push shape", §11 "The push classifier's home and kind"), so the lane spells neither. The delayed orphan push
- *  (orphan D rung 2) is `mail`, tagged `orphaned-<toId>-<restartAt>` for EVERY session, a run worker's included.
- *  Every other push is `run`, tagged `stall-<runId>-<arm>-<rung>-<key>`, or `stall-<toId>-…` for a run-less session.
- *  The tag is also the lane's run-less push latch key. */
+ *  "Push shape", §11 "The push classifier's home and kind"), so the lane spells neither. The kind is `run`, and
+ *  `mail` only for a run-less orphan: the delayed orphan push (orphan D rung 2) of a session on no run. That push is
+ *  tagged `orphaned-<toId>-<restartAt>` for EVERY session, a run worker's included. Every other push is tagged
+ *  `stall-<runId>-<arm>-<rung>-<key>`, or `stall-<toId>-…` for a run-less session. The tag is also the lane's
+ *  run-less push latch key. */
 export function stallPushRoute(n: Pick<StallNotify, 'arm' | 'rung' | 'key'>, toId: string, runId: number | null): { readonly kind: 'run' | 'mail'; readonly tag: string } {
-  if (n.arm === 'orphan-d' && n.rung === 2) return { kind: 'mail', tag: `orphaned-${toId}-${n.key}` };
+  if (n.arm === 'orphan-d' && n.rung === 2) return { kind: runId === null ? 'mail' : 'run', tag: `orphaned-${toId}-${n.key}` };
   return { kind: 'run', tag: `stall-${runId ?? toId}-${n.arm}-${n.rung}-${n.key}` };
 }
 
