@@ -1255,6 +1255,19 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     expect(stallRows(coord, runId)).toEqual([]);
   });
 
+  it('an identity the tick cannot measure reads neither the marker nor the hookstate: the live file is the one read', async () => {
+    // A marker or a hookstate cannot be compared with an identity nobody measured, so neither file is opened. M6's
+    // row above is the control: the same worker, measured, costs exactly the live file, the marker and the hookstate.
+    const reads: string[] = [];
+    const { coord, w } = await rig({ io: countingIO(reads) });
+    seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    reads.length = 0;
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf(PID, [regRow(WORKER, UUID, { unmeasured: ['uuid'] })]));
+    const mine = reads.filter((p) => p.includes(`${WORKER}.`) || p.endsWith(`/${PID}.json`)).map((p) => path.basename(p));
+    expect(mine).toEqual([`${PID}.json`]);
+  });
+
   it('an identity the tick cannot measure reads no marker, so 2 h of it starts no marker-unreadable clock (worker or coordinator)', async () => {
     // The clock counts only a marker READ that answered `unmeasured` or `malformed`. An unmeasured registry uuid
     // reads neither the marker nor the hookstate; the `unmeasured` the lane then carries is its own, not the file's.
