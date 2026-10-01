@@ -17,7 +17,7 @@ automatic deletion.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | — | **dispatched** — run 208 to fresh child `ccrc-pwa-quiet-basin` at 2026-10-01 12:23 UTC from handoff `2e84cbb0a`, under claim 870 (claim 864 lapsed at its 8 h hard cap while the rolling daily cap stood at 24/24 from 03:16 UTC); four items, route opus/xhigh, subagents sonnet, workflow off, compact 40 |
+| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **awaiting-review** — run 208 on `ccrc-pwa-quiet-basin` (dispatched 2026-10-01 12:23 UTC from handoff `2e84cbb0a`, claim 870) reported wave-done at `dd4e2a86`; the server accepted that fingerprint and all four items settled; held-out review run 212 dispatched to `ccrc-pwa-soft-canyon` |
 
 **Deviation block: sixteen numbers, the first of them 3731** (allocated exactly once at run 208 open,
 2026-10-01; floor now 3747). The finalized plan defines the first as
@@ -72,6 +72,23 @@ a measured departure is defined in that plan; unused headroom remains unrendered
   standard held-out panel plus an Opus `xhigh` destructive SAFETY lens.
 - **Rollout is automatic-updater-only.** After merge, observe the release and ccrc's own convergence read-only.
   No session manually rolls out this programme.
+- **2026-10-01 — wave-done accepted for review.** Mail 3008 claimed branch tip and handoff
+  `dd4e2a8616fe87041064c8b7db56f7380a1e03f0`, PR #226 open. Re-measured before submission: remote and worker tips
+  equal it, the worker tree is clean, PR #226's head equals it, `origin/main` `e0a52953d` is its ancestor, the
+  first child commit's plan equals the handoff blob, `ccd/ccd` passes the generated-marker check and `bash -n`, and
+  only issued numbers 3731 and 3732 are rendered. Number 3732 defines a substitute for mutation row 12, whose exact
+  edit crashes under `set -u` before any pin on current main; the review judges whether the substitute is equally
+  strong. The server accepted the fingerprint (`awaiting-review`) and items 956-959 settled `done`.
+- **2026-10-01 — the suite signal was environmental; routing unchanged.** The worker reported `suite: red`,
+  `failure: unclear`: every first-run red was load-timing (green in isolation) or tmp-sweep's FAILS CLOSED case,
+  which is red on `main` on this box. That is not evidence about the wave's work, so no rung was applied; the wave
+  has no successor whose routing it could inform. Root disk was at 97-99% and `/tmp` held other projects' leaked
+  fixtures.
+- **2026-10-01 — held-out review is run 212.** It reads one measured tip in `ccrc-pwa-soft-canyon`'s own worktree
+  with the standard panel plus the Opus `xhigh` destructive SAFETY lens, route opus/xhigh with workflows ON (the
+  panel is a Workflow), and writes its report under `~/.cc-clips/<reviewer id>/`. The worker's note that a wave-3
+  plan's citation of the contract's R28 lines shifted by three lines is outside claim 870 and is carried to Wave 4's
+  integration round rather than edited here.
 
 ## Carried constraints
 
