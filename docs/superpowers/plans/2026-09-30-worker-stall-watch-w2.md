@@ -228,7 +228,9 @@ From the planning decisions:
   `mailDisabled` in the arming. L1 holds every mail rung that would send with hold `mail-disabled`, and push-only rungs
   still push.
 - **D-3637** `session-arms-are-separate-verdicts`: Orphan D, orphan E, failed and mail-stuck are pure verdicts beside
-  `stallVerdict`, not steps inside it. They apply holds 1 and 2 and the limit hold only.
+  `stallVerdict`, not steps inside it. Orphan D, orphan E and failed apply holds 1 and 2 (2b: a `dialogPending` pane)
+  and the limit hold only. Mail-stuck takes the same holds except 2b: spec §5.2 fires it "whatever its gate" (amended
+  at the final review; the plan's code had read "holds 1, 2" as §10 steps and applied no dialog hold to any of them).
 - **D-3638** `mail-stuck-decided-in-l1`: mail-stuck is decided in L1 from rows the store SELECTs with `lastGate` and
   `gateSince` as plain columns. `watch.ts` never names those identifiers and passes the rows through whole, so the pins
   on gate-column naming in `mail-sweep.test.ts` stand.
@@ -414,7 +416,7 @@ Added by the orchestrator's rulings on the skeleton and on the drafts:
   every judged id, so a restarted coordinator with lost background tasks drew no orphan wake of any kind.
 - **D-3750** `stall-clocks-drop-on-an-unobserved-gap`: the lane clears its first-seen clocks (absent, dead and
   marker-unreadable) when more than `STALL_CLOCK_GAP_MS` (two and a half sweeps, 150 s) has passed since its last judged
-  sweep: a `stall-watch-disabled` window, unreadable candidates or unlistable ticks alike. One missed sweep keeps the
+  sweep ended (so a slow sweep is not a gap): a `stall-watch-disabled` window, unreadable candidates or unlistable ticks alike. One missed sweep keeps the
   clocks; two drop them. A clock carried across such a gap made a worker absent for a minute read as "absent for 3h"
   and skipped `DEAD_GRACE_MS`.
 - **D-3751** `run-less-push-latches-are-in-memory`: a coordinator's run-less pushes (rung 2, mail-stuck,
@@ -428,6 +430,18 @@ Added by the orchestrator's rulings on the skeleton and on the drafts:
   `now - stopAt > BACKLOG_HORIZON_MS - FAILED_REPEAT_MS`. The lane reads 24 h of mail, so a repeat failure would
   otherwise be re-classified as a first failure once its prior self-mail left the read, and a retry nudge would be
   typed into a pane about a day late.
+- **D-3754** `frozen-keyed-per-turn`: the frozen arm's key is the marker's `turnAt` (once per turn), not the spec
+  §4.2 `episodeKeyMs`, so a worker that freezes in two turns of one episode draws two reports. Recorded at the final
+  review; the plan's Task 11 code carried it unnamed.
+- **D-3755** `coord-deaf-keyed-per-mail`: the coord-deaf arm's key is the unanswered ball-passing mail's id, not
+  `episodeKeyMs`, so two unacked ball-passing mails in one episode draw two pushes. Recorded at the final review.
+- **D-3756** `failed-repeat-counts-rung-one-notices`: the failed arm's repeat window counts prior rung-1 notices only.
+  A rung-2 notice carries no error class, so counting it would also count request-class priors; a chain of retry-class
+  failures about 1.5 h apart therefore alternates self-mail and coordinator report. Recorded at the final review.
+- **D-3757** `w2-planned-changes-ship-live`: three planned changes take effect with no marker touched, beside D-3645's
+  two named exceptions: M3's anchored `BUSY_RE` (the pane guard on every `shell` delivery now matches a spinner row
+  only, tolerant until C7 measures the tail), report push titles through `stallSafe`, and self-wake mail recorded
+  rather than pushed. None gains or loses a send by marker logic. Recorded at the final review.
 
 ## File structure
 
