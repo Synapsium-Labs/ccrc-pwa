@@ -17,7 +17,7 @@ automatic deletion.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **working, fix round 1** — run 208 on `ccrc-pwa-quiet-basin` reported wave-done at `dd4e2a86` (fingerprint accepted, four items settled); held-out review run 212 closed `done` on that tip with 12 confirmed findings; fix-round mail 3023 sent 2026-10-01; a fresh review run follows its next wave-done |
+| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **awaiting-review** — fix round 1 answered review 212 at `81a2158e` (fingerprint accepted 2026-10-01); held-out review run 213 dispatched to `ccrc-pwa-brisk-prairie` |
 
 **Deviation block: sixteen numbers, the first of them 3731** (allocated exactly once at run 208 open,
 2026-10-01; floor now 3747). The finalized plan defines the first as
@@ -112,6 +112,13 @@ a measured departure is defined in that plan; unused headroom remains unrendered
     green while a probe answers `reclaimable`). Fixed now, red first, with a mutation row.
   - **F5, F6, F7, F9, coordinator:** prose and comment corrections, and mutation row 13 made exact; fixed now.
   - Each measured departure from the plan's text in the round takes the next issued number, in order from 3733.
+- **2026-10-01 — fix round 1 accepted for its second review.** Mail 3027 claimed `81a2158eae2f8370ca1e9e4b82e4b0adf75cb735`
+  (two commits over `dd4e2a86`, `origin/main` unchanged). Re-measured: remote, worker and PR #226 heads equal it, the
+  worker tree is clean, the diff stays inside the worker's claim 871, `ccd/ccd` passes the marker check and
+  `bash -n`, and issued numbers 3731 through 3737 are each defined once in the plan with none rendered beyond them.
+  The worker re-ran the full mutation table on the final bytes, every row red at an assertion, and did not re-run
+  the whole server suite because production changed only in comments and one diagnostic string; CI is the arbiter.
+  The server accepted the fingerprint; review run 213 reads it with the same panel and SAFETY lens.
 
 ## Carried constraints
 
