@@ -8405,7 +8405,7 @@ _acct_remove() {
     esac
   fi
 
-  for f in "$CCRC_LIMITS_DIR/$id.json" "$_SVC_REG/$id-disabled" "$_SVC_REG/$id.hookstate.json"; do
+  for f in "$CCRC_LIMITS_DIR/$id.json" "$_SVC_REG/$id-disabled" "$_SVC_REG/$id.hookstate.json" "$_SVC_REG/$id.turn.json"; do
     { [ -e "$f" ] || [ -L "$f" ]; } || continue
     { [ ! -d "$f" ] || [ -L "$f" ]; } \
       || _acct_refuse 1 artifact-conflict "$f is a directory, not the ccrc-managed file its name denotes, so it was kept. The roster and projection no longer name $id; other removal effects remain. Move that directory aside or remove it by hand."

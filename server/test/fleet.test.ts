@@ -1649,3 +1649,31 @@ describe('hookAskSummary', () => {
     expect(hookAskSummary(hs)).toHaveLength(80);
   });
 });
+
+describe('assembleFleet hands back the pane pids it read (worker stall watch wave 2, M6)', () => {
+  // `tick()` passes this map on to the stall lane as `StallTick.panePids`, so the lane never reads a pid a second
+  // time. One harness: an alive row and a dead one, `fleet.test.ts`'s first case's shape.
+  const pidsFor = async (listPanes: { code: number; stdout: string }): Promise<Map<string, number | null>> => {
+    const home = mkTmp('ccrc-fleet-pids-');
+    seedRoster(home);
+    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    seedSession(home, 'claude-dead-proj', 'claude');
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: listPanes.code, stdout: listPanes.stdout, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const pids = new Map<string, number | null>();
+    await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, pids);
+    return pids;
+  };
+
+  it('fills the map with the pid of every ALIVE row, and gives a row whose pane is not alive no entry', async () => {
+    expect([...await pidsFor({ code: 0, stdout: '40613\n' })]).toEqual([['claude-a-MekWarLive', 40613]]);
+  });
+
+  it('records null for an alive row whose pid tmux did not answer, never dropping the row', async () => {
+    expect([...await pidsFor({ code: 1, stdout: '' })]).toEqual([['claude-a-MekWarLive', null]]);
+  });
+});

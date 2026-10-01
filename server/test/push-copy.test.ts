@@ -24,7 +24,7 @@ import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/updateintentlog.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import type { FleetState } from '../src/fleetstate.js';
-import { STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX } from '../src/coord/stall.js';
+import { STALL_CHECK_PREFIX, STALL_FAILED_PREFIX, STALL_ORPHANED_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX, stallFailedSubject, stallOrphanESubject } from '../src/coord/stall.js';
 
 /** Item 3, fix round 1 (F3/F4): a remote-mode fleetState double — a minimal `FleetState`, same shape as
  *  `update-inventory.test.ts`'s own local factory (that file's is not exported; L0/L1 boundaries keep this
@@ -1629,5 +1629,57 @@ describe('the stall watch on the phone — pushNewMail\'s stall classes', () => 
     await w.tick();
     expect(sent).toHaveLength(1);
     expect(sent[0]!.title).toBe('✉ status › cc-a-ws');
+  });
+
+  // Wave 2 (spec 2026-09-29 §5.2): the watch's self-wakes are its own notices, so the phone records them and
+  // never buzzes. Its reports are titled by the kind their subject names. Every watch subject below is the watch's
+  // own: a self-wake comes from Task 10's builders, and a report tail is Task 13's golden form (`stallW2ReportMail`'s
+  // `stall: run <id> — <kind>: <rest>`, whose builder is private), so a fixture can never drift from what ships.
+  const W2_STOP = Date.parse('2026-09-29T10:00:00Z');
+  const W2_ORPHANED_E = stallOrphanESubject({ bgKinds: ['subagent'], stopAt: W2_STOP });
+  const W2_FAILED = stallFailedSubject('server_error', W2_STOP);
+
+  it('an orphaned: self-wake from operator to the run\'s worker is recorded, never pushed', async () => {
+    const { sent, log, w, mail } = await stallRig();
+    mail('operator', 'cc-a', 'cc-a', W2_ORPHANED_E);
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(1);
+  });
+
+  it('a failed: self-wake from operator to a RUN-LESS session (a coordinator) is recorded, never pushed', async () => {
+    const { sent, log, w } = await stallRig();
+    const m = w.coord!.insertMail({ fromId: 'operator', fromUuid: 'operator', toId: 'cc-b', runId: null, kind: 'status',
+      subject: W2_FAILED, body: 'b', artifacts: [] });
+    w.coord!.queueDelivery(m.id, 'cc-b', 'envelope');
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(1);
+  });
+
+  it.each([
+    [STALL_ORPHANED_PREFIX, W2_ORPHANED_E],
+    [STALL_FAILED_PREFIX, W2_FAILED],
+  ] as const)('a %s subject from a session (not operator) is pushed as ordinary mail', async (prefix, subject) => {
+    const { sent, w, mail } = await stallRig();
+    expect(subject.startsWith(prefix)).toBe(true);
+    mail('cc-b', 'cc-a', 'cc-a', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title: '✉ status › cc-a-ws', body: subject });
+  });
+
+  it.each([
+    ['stall', 'worker silent 3h 0m, stall-check unanswered', '⚠ stall › cc-a-ws'],
+    ['frozen', 'frozen: no hook event for 1h 1m', '⚠ frozen › cc-a-ws'],
+    ['dead', 'dead: orphan for 0h 12m', '⚠ dead › cc-a-ws'],
+    ['failed', 'failed: server_error twice at 2026-09-29T10:00Z', '⚠ failed › cc-a-ws'],
+  ] as const)('a %s report to the coordinator is pushed under its own title', async (_kind, tail, title) => {
+    const { sent, w, mail, run } = await stallRig();
+    const subject = `${STALL_REPORT_PREFIX} run ${run.id} — ${tail}`;
+    const id = mail('operator', 'cc-b', 'cc-b', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title, body: subject, tag: `mail-cc-b-${id}` });
   });
 });

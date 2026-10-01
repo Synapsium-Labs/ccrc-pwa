@@ -1875,3 +1875,31 @@ describe('refuseIfTurnRunning (worker stall watch §4.1)', () => {
     expect(sendKeysCalls(calls).length).toBeGreaterThan(0);
   });
 });
+
+// Worker stall watch wave 2 (M3): the pane guard reads the ANCHORED spinner
+// row. A hint after the phrase still refuses. The phrase mid-row, or on the
+// prompt row, is not a running turn, so the guard no longer holds on it.
+describe('refuseIfTurnRunning reads the anchored spinner row (worker stall watch §5.1, M3)', () => {
+  it('a spinner row with a hint after the phrase still refuses turn-running, before any keystroke', async () => {
+    const pane = '✻ Working… (3s · esc to interrupt · ctrl+t to show todos)\n❯ \n';
+    const { tmux, calls } = fakeTmux([pane]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { refuseIfTurnRunning: true });
+    expect(res).toEqual({ ok: false, error: 'turn-running', pane });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('the phrase mid-row in the window is typed over, not refused', async () => {
+    const pane = '⏺ The spinner shows esc to interrupt while a turn runs.\n❯ \n';
+    const { tmux, calls } = fakeTmux([pane, '❯ hi\n', '❯ \n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { refuseIfTurnRunning: true });
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls).length).toBeGreaterThan(0);
+  });
+
+  it('the prompt row ending with the phrase is a draft, not a running turn', async () => {
+    const { tmux, calls } = fakeTmux(['some output\n❯ esc to interrupt\n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { refuseIfTurnRunning: true });
+    expect(res).toMatchObject({ ok: false, error: 'draft-present' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+});

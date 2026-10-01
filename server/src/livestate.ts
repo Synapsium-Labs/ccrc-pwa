@@ -10,6 +10,10 @@ export interface LiveState {
    *  before this field existed was chosen, so absent must NOT read as derived. */
   nameSource: string | null;
   status: string; statusUpdatedAt: number | null; version: string | null;
+  /** When this Claude Code process started, epoch ms: the live file's numeric `startedAt` (measured present on
+   *  2.1.284). Null when absent (an older build), not a number, or not finite. The turn marker's reader judges a
+   *  marker written before it as `stale` (`turnmark.ts`, worker stall watch wave 2, §5.1). */
+  startedAt: number | null;
   /** WHY a `status: 'waiting'` session is blocked, in Claude Code's own words
    *  — `'sandbox request'`, `'input needed'`, `'dialog open'`, or whatever the
    *  top dialog names itself (D-76; the bundle's own `aTw`). Null for every
@@ -179,6 +183,7 @@ export async function readLiveStateMeasured(io: FleetIO, configDir: string, pid:
         // what corrects the answer when the hook has something fresher to say.
         status: String(raw.status ?? ''),
         statusUpdatedAt: typeof raw.statusUpdatedAt === 'number' ? raw.statusUpdatedAt : null,
+        startedAt: typeof raw.startedAt === 'number' && Number.isFinite(raw.startedAt) ? raw.startedAt : null,
         version: typeof raw.version === 'string' ? raw.version : null,
         waitingFor: typeof raw.waitingFor === 'string' ? raw.waitingFor : null,
       },
