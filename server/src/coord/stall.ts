@@ -767,3 +767,42 @@ export function stallPushText(input: StallInput, facts: StallFacts, n: StallNoti
     }
   }
 }
+
+// ── the turn marker port (wave 2, §5.1) ──────────────────────────────────────────────────────────────────────
+// `$REG/<id>.turn.json`, the session hook's record of the MAIN thread's turn. The shape is an L2 port declared here,
+// by its consumers (this lane's verdicts, and the mail gate through its own structural copy in `turnidle.ts`), and
+// answered by `readTurnMarkMeasured` (`server/src/turnmark.ts`, L3), which imports the two judgements below rather
+// than deriving its own.
+
+/** The marker's state words, enumerated once. `turnmark.ts` refuses any other word as malformed. */
+export const TURN_MARK_STATES = ['working', 'done', 'failed'] as const;
+export type TurnMarkState = (typeof TURN_MARK_STATES)[number];
+/** `$REG/<id>.turn.json`, validated (§5.1). The comma-joined fields arrive split. */
+export interface TurnMark {
+  readonly sessionId: string; readonly state: TurnMarkState; readonly event: string; readonly at: number;
+  readonly turnAt: number | null; readonly stopAt: number | null;
+  /** −1: the Stop's payload had no array `background_tasks` (unmeasured, never 0). */
+  readonly bg: number; readonly bgKinds: readonly string[]; readonly bgIds: readonly string[];
+  readonly err: string | null; readonly restartAt: number | null;
+  readonly lostBg: number; readonly lostKinds: readonly string[]; readonly lostIds: readonly string[];
+  /** `restartAt + RESTART_GRACE_MS` when that restart cut a turn short (`turnMarkGraceUntil`), else null. */
+  readonly graceUntil: number | null;
+}
+/** Why a read has no mark. Each is a different act for a consumer (§5.1, and `turnmark.ts`'s docstring). */
+export type TurnMarkUnread = 'absent' | 'unmeasured' | 'malformed' | 'foreign' | 'stale';
+export type TurnMarkRead = ({ readonly ok: true } & TurnMark) | { readonly ok: false; readonly reason: TurnMarkUnread };
+/** *Chosen* (spec §10): a restart that cut a turn short is redriven by ccd, so the stall lane and the `busy` gate
+ *  hold this long after `restartAt` rather than read the redrive's gap as a finished turn. */
+export const RESTART_GRACE_MS = 5 * 60_000;
+/** Older than the live process: `at` AND (`restartAt` null or older) both before `startedAt`. A restart at or after
+ *  the process start rescues an older `at`: that SessionStart was this very process's. */
+export function turnMarkStale(m: Pick<TurnMark, 'at' | 'restartAt'>, startedAt: number): boolean {
+  return m.at < startedAt && (m.restartAt === null || m.restartAt < startedAt);
+}
+/** `restartAt + RESTART_GRACE_MS` iff `restartAt !== null && turnAt !== null && turnAt > (stopAt ?? -Infinity)`, else
+ *  null: the restart found a turn newer than the last Stop, so it cut that turn short. No marker field records this;
+ *  it is derived from the two stamps (restart-grace-derived-from-turn-and-stop). */
+export function turnMarkGraceUntil(m: Pick<TurnMark, 'restartAt' | 'turnAt' | 'stopAt'>): number | null {
+  if (m.restartAt === null || m.turnAt === null) return null;
+  return m.turnAt > (m.stopAt ?? Number.NEGATIVE_INFINITY) ? m.restartAt + RESTART_GRACE_MS : null;
+}

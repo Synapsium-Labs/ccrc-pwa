@@ -12,6 +12,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { readTurnMarkMeasured } from '../src/turnmark.js';
+import { localIO } from '../src/io.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 
@@ -599,5 +601,43 @@ describe('the turn marker across a restart (§5.1, SessionStart)', () => {
     expect(m).toEqual({ ...failed, state: 'done', event: 'SessionStart', at: m.at, restartAt: m.at, bg: 0, bgKinds: '',
       bgIds: '', lostBg: 0, lostKinds: '', lostIds: '' });
     expect(m.err).toBe('server_error');
+  });
+});
+
+// The writer and the reader agree (F2). The hook fits the kinds list whole-alias-first under 200 bytes, and
+// `readTurnMarkMeasured` refuses anything else as malformed. So a line this hook wrote must read back `ok`, with
+// every kind a whole alias it was sent.
+describe('the turn marker round trip: a hook-written line reads back ok (§5.1)', () => {
+  const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
+  /** Forty distinct aliases `aa<tail>`…`bn<tail>`, already in the hook's cleaned alphabet and in sorted order. */
+  const aliases = (tail: string): string[] =>
+    Array.from({ length: 40 }, (_, i) => `${LETTERS[Math.floor(i / 26)]}${LETTERS[i % 26]}${tail}`);
+  const stopWith = (types: readonly string[]): void => {
+    run({ hook_event_name: 'Stop', background_tasks: types.map((type, i) => ({ id: `t${i}`, type })) });
+  };
+  const readBack = () =>
+    readTurnMarkMeasured(localIO, path.join(home, '.cc-sessions'), 'demo-quiet-basin', 'uuid-1', { startedAt: 0 });
+
+  it('forty 8-byte aliases: the fit keeps the first 22 whole (197 bytes), and the reader takes the line', async () => {
+    const sent = aliases('-alias');
+    stopWith(sent);
+    const r = await readBack();
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    if (!r.ok) return;
+    expect(r.state).toBe('done');
+    expect(r.bg).toBe(40);
+    expect(r.bgKinds).toEqual([...sent].sort().slice(0, 22));
+    expect(r.bgKinds.join(',')).toHaveLength(197);
+    expect(r.bgIds).toEqual(['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7']);
+  });
+
+  it('forty 7-byte aliases: a byte cut at 200 would end on a comma; the fit keeps 25 whole (199 bytes), read ok', async () => {
+    const sent = aliases('-kind');
+    stopWith(sent);
+    const r = await readBack();
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    if (!r.ok) return;
+    expect(r.bgKinds).toEqual([...sent].sort().slice(0, 25));
+    expect(r.bgKinds.join(',')).toHaveLength(199);
   });
 });

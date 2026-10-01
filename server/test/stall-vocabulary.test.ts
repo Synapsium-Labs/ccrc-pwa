@@ -16,6 +16,7 @@ import {
   STALL_ARMS, STALL_CHECK_PREFIX, STALL_HOLDS, STALL_MARKERS, STALL_READ_FAILURES, STALL_REPLY_PREFIX,
   STALL_REPLY_WAITING_PREFIX, STALL_REPORT_PREFIX, STALL_WAIT_PREFIX, STALL_WRITE_MISSES,
   isStallKebab, parseStallDetail, stallArmingOf, stallDelivery, stallDetail, stallMailClass, stallSubjects,
+  RESTART_GRACE_MS, TURN_MARK_STATES, turnMarkGraceUntil, turnMarkStale,
   type StallArming, type StallBind, type StallRunRow,
 } from '../src/coord/stall.js';
 
@@ -286,5 +287,42 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     for (const spec of valueImportSpecifiers(c)) {
       expect(spec, `stall.ts takes a value import from ${spec}`).toBe('../../../shared/api.js');
     }
+  });
+});
+
+// Worker stall watch, wave 2 (spec §5.1): the turn marker port's two judgements. `turnmark.ts` (L3) and the stall
+// lane (L1) both judge by these, so each is a table here.
+describe('the turn marker port: its state words, staleness and restart grace (worker stall watch wave 2, §5.1)', () => {
+  it('names the three state words and the five-minute restart grace', () => {
+    expect([...TURN_MARK_STATES]).toEqual(['working', 'done', 'failed']);
+    expect(RESTART_GRACE_MS).toBe(5 * 60_000);
+  });
+
+  it('turnMarkStale: older than the process only when at AND restartAt (if any) are both before startedAt', () => {
+    const S = T0;
+    const rows: [string, { at: number; restartAt: number | null }, boolean][] = [
+      ['at before, never restarted', { at: S - 1, restartAt: null }, true],
+      ['at before, restarted before too', { at: S - 2, restartAt: S - 1 }, true],
+      ['at before, restarted AT the process start (rescued)', { at: S - 1, restartAt: S }, false],
+      ['at before, restarted after (rescued)', { at: S - 1, restartAt: S + 1 }, false],
+      ['at the process start exactly (older means strictly before)', { at: S, restartAt: null }, false],
+      ['at after, never restarted', { at: S + 1, restartAt: null }, false],
+      ['at after, restarted before', { at: S + 1, restartAt: S - 1 }, false],
+    ];
+    for (const [name, m, stale] of rows) expect(turnMarkStale(m, S), name).toBe(stale);
+  });
+
+  it('turnMarkGraceUntil: restartAt + RESTART_GRACE_MS only when the restart found a turn newer than the last Stop', () => {
+    const R = T0;
+    const rows: [string, { restartAt: number | null; turnAt: number | null; stopAt: number | null }, number | null][] = [
+      ['a turn after the last Stop: cut short', { restartAt: R, turnAt: R - 10, stopAt: R - 100 }, R + RESTART_GRACE_MS],
+      ['a turn and never a Stop: cut short', { restartAt: R, turnAt: R - 10, stopAt: null }, R + RESTART_GRACE_MS],
+      ['a Stop after the last turn: a clean restart', { restartAt: R, turnAt: R - 100, stopAt: R - 10 }, null],
+      ['turn and Stop at the same instant: not newer, so clean', { restartAt: R, turnAt: R - 10, stopAt: R - 10 }, null],
+      ['no turn ever, a Stop', { restartAt: R, turnAt: null, stopAt: R - 10 }, null],
+      ['no turn and no Stop', { restartAt: R, turnAt: null, stopAt: null }, null],
+      ['no restart', { restartAt: null, turnAt: R - 10, stopAt: R - 100 }, null],
+    ];
+    for (const [name, m, until] of rows) expect(turnMarkGraceUntil(m), name).toBe(until);
   });
 });
