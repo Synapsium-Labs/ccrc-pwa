@@ -112,8 +112,8 @@ const HOME = process.env['HOME'] ?? '';
 const modelsDir = () => path.join(HOME, '.ccrc', 'models');
 const cataloguePath = (id) => path.join(modelsDir(), `${id}.json`);
 const registryPath = (id) => path.join(modelsDir(), `${id}.classes.json`);
-// `rm` names these two directly — `materialise` builds the same two paths off
-// an `account`, which an ORPHAN id has none of.
+// `rm` and `materialise` both name these two by id (`materialFiles`): an ORPHAN
+// id has no `account` to build a path off, so neither builds one off it.
 const classesTsvPath = (id) => path.join(modelsDir(), `${id}.classes.tsv`);
 const effortPath = (id) => path.join(modelsDir(), `${id}.effort.json`);
 /** Spec §4.3's "lane manifest" row, and §5.4's first line. */
@@ -338,8 +338,8 @@ const HAIKU_UNASSIGNED_REMEDY = (id) =>
 function materialise(account, registry, catalogue) {
   if (registry === null) return { wrote: null };
   const settings = path.join(HOME, account.configDirSuffix, 'settings.json');
-  const classes = path.join(modelsDir(), `${account.id}.classes.tsv`);
-  const effort = path.join(modelsDir(), `${account.id}.effort.json`);
+  const classes = classesTsvPath(account.id);
+  const effort = effortPath(account.id);
   const manifest = laneManifest(account, registry);
   const lane = manifest === null ? null : laneJsonPath(account.id);
   let block = null;
@@ -400,10 +400,10 @@ function materialise(account, registry, catalogue) {
     // half-written one is a live wrong answer rather than a transient.
     // `lane.json` is 2-space JSON with a trailing newline — the hand-readable
     // shape `writeRegistry` gives the registry — and 0600 like its siblings.
-    const files = [[classes, classesTsv(registry, catalogue)],
-      [effort, `${JSON.stringify(effortFile(registry, catalogue))}\n`]];
-    if (lane !== null) files.push([lane, `${JSON.stringify(manifest, null, 2)}\n`]);
-    for (const [p, text] of files) {
+    // ONE list of what is rendered whole, shared with `materialiseCheck`
+    // (Plan 3a Task 4), so "what materialise writes" cannot mean two things.
+    const files = materialFiles(account, registry, catalogue);
+    for (const [, p, text] of files) {
       const tmp = `${p}.${process.pid}.tmp`;
       tmps.push(tmp);
       writeFileSync(tmp, text, { mode: 0o600 });
@@ -575,7 +575,10 @@ const OPS = {
   'set-subagent': { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'] },
   'set-effort': { keys: ['file', 'id', 'class', 'level'], required: ['file', 'id', 'class', 'level'] },
   discovery: { keys: ['file', 'id', 'action', 'model', 'endpoints'], required: ['file', 'id', 'action'] },
-  materialise: { keys: ['file', 'id'], required: ['file', 'id'] },
+  // `check` is OPTIONAL (Plan 3a Task 4): `--check true` is the check-only
+  // form, which writes nothing and answers `changed`; omitted, the op writes,
+  // as every caller before it expects. Any other value is refused.
+  materialise: { keys: ['file', 'id', 'check'], required: ['file', 'id'] },
   rm: { keys: ['file', 'id'], required: ['file', 'id'] },
   // `commit` is OPTIONAL and defaults to check-only (fix round 1): omitted or
   // any value other than the literal string "true" renders and reports
@@ -583,6 +586,59 @@ const OPS = {
   // `litellm` arm's own comment for why the write is a second, explicit call.
   litellm: { keys: ['file', 'id', 'template', 'out', 'commit'], required: ['file', 'id', 'template', 'out'] },
 };
+
+/** The files `materialise` renders WHOLE, as `[key, path, text]` in write
+ *  order: the TSV, the effort file and — on a codex-kind lane only — spec
+ *  §5.4's `lane.json`. ONE list for the writer (`materialise`) and the checker
+ *  (`materialiseCheck`, Plan 3a Task 4), so "what materialise would write"
+ *  cannot mean two things. `settings.json` is not here: it is MERGED into a
+ *  file the operator owns, never rendered whole, and `show`'s `settingsDrift`
+ *  is its measurement. Throws what `classesTsv` and `effortFile` throw; both
+ *  callers catch it. */
+function materialFiles(account, registry, catalogue) {
+  const manifest = laneManifest(account, registry);
+  const files = [
+    ['classes', classesTsvPath(account.id), classesTsv(registry, catalogue)],
+    ['effort', effortPath(account.id), `${JSON.stringify(effortFile(registry, catalogue))}\n`],
+  ];
+  if (manifest !== null) files.push(['lane', laneJsonPath(account.id), `${JSON.stringify(manifest, null, 2)}\n`]);
+  return files;
+}
+
+/** `materialise --check true` (Plan 3a Task 4, ruling R7, D-3712):
+ *  renders exactly what `materialise` would write whole and compares it with the bytes on
+ *  disk, WRITING NOTHING — no tmp, no directory, no settings merge. `ccrc
+ *  doctor`'s `_check_codex` asks it whether a lane's `lane.json` has gone
+ *  stale against the class registry (a haiku reassigned by hand, a write
+ *  interrupted between two files), which the roster-only compare in
+ *  `ccd/ccrc`'s `_codex_lane_json_state` cannot see. `changed` maps each of
+ *  `materialFiles`' keys to true when the file is absent or its bytes differ;
+ *  `lane` is null on a lane that is not `exec.kind: "codex"`, the writer's own
+ *  "legitimately not written". `changed` is null when there is no registry:
+ *  nothing would be rendered at all. A file that EXISTS and cannot be read is
+ *  a refusal, never "changed": the two remedies differ. */
+function materialiseCheck(account, registry, catalogue) {
+  if (registry === null) return { changed: null };
+  let files;
+  try {
+    files = materialFiles(account, registry, catalogue);
+  } catch (e) {
+    if (e instanceof ModelEnvInvalid) return { err: ['settings-unwritable', e.message] };
+    return { err: ['materialise-failed', `${e.message}`] };
+  }
+  const changed = { lane: null };
+  for (const [key, p, text] of files) {
+    let onDisk;
+    try {
+      onDisk = readFileSync(p, 'utf8');
+    } catch (e) {
+      if (e.code === 'ENOENT') { changed[key] = true; continue; }
+      return { err: ['materialise-unreadable', `${p} exists and could not be read: ${e.message}. Nothing was written.`] };
+    }
+    changed[key] = onDisk !== text;
+  }
+  return { changed };
+}
 
 /** `--key value` pairs, refused rather than ignored, with a strict `i += 2`
  *  walk: a value that itself starts with `--` is refused, because accepting it
@@ -828,6 +884,19 @@ function main(argv) {
   }
 
   if (opName === 'materialise') {
+    // Plan 3a Task 4: `--check true` answers what a write WOULD change and
+    // writes nothing. Any other value is refused before anything is written,
+    // because a typo must never fall through to the write.
+    if (a.check !== undefined) {
+      if (a.check !== 'true') {
+        return refuse(2, 'bad-argv',
+          `--check takes only the value "true" (got ${JSON.stringify(a.check)}); leave it out to write.`);
+      }
+      const chk = materialiseCheck(account, registry, catalogue);
+      if (chk.err !== undefined) return refuse(1, chk.err[0], chk.err[1]);
+      out({ ok: true, op: 'materialise', id: a.id, check: true, changed: chk.changed });
+      return 0;
+    }
     const mat = materialise(account, registry, catalogue);
     if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
     out({ ok: true, op: 'materialise', id: a.id, wrote: mat.wrote });

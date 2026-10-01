@@ -1399,6 +1399,94 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
       expect(r.code, JSON.stringify(r.body)).toBe(0);
       expect(laneOf()['probeModel']).toBe('gpt-x-mini');
     });
+
+  // ── Plan 3a Task 4: `materialise --check true` (ruling R7) ────────────────
+  // `ccrc doctor`'s `_check_codex` asks this whether lane.json has gone stale
+  // against the REGISTRY, which `_codex_lane_json_state`'s roster-only compare
+  // cannot see. Every case proves the check WROTE NOTHING, by bytes AND by
+  // mtime (a rewrite of identical bytes still moves the mtime), because a
+  // check that cured what it measured would turn doctor into a writer.
+  const stateOf = (): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const d of [path.join(home, '.ccrc', 'codex'), laneDir(), path.join(home, '.ccrc', 'models')]) {
+      if (!fs.existsSync(d)) continue;
+      out[`${d}/`] = String(fs.statSync(d).mtimeMs);
+      for (const n of fs.readdirSync(d)) {
+        const p = path.join(d, n);
+        if (fs.statSync(p).isFile()) out[p] = `${fs.statSync(p).mtimeMs}:${fs.readFileSync(p, 'utf8')}`;
+      }
+    }
+    return out;
+  };
+  const check = (id = 'codex-a', value = 'true'): Result =>
+    op('materialise', '--file', rosterPath(), '--id', id, '--check', value);
+  const laneChanged = (r: Result): unknown => (r.body['changed'] as Record<string, unknown>)['lane'];
+
+  it('--check true on a converged codex lane: every file unchanged, and nothing written', () => {
+    expect(op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex').code).toBe(0);
+    const before = stateOf();
+    const r = check();
+    expect(r.code, JSON.stringify(r.body)).toBe(0);
+    expect(r.body).toEqual({ ok: true, op: 'materialise', id: 'codex-a', check: true,
+      changed: { lane: false, classes: false, effort: false } });
+    expect(stateOf()).toEqual(before);
+  });
+
+  it('--check true after the registry moves on disk: lane.json is changed, and still holds the OLD bytes', () => {
+    op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    const old = fs.readFileSync(lanePath(), 'utf8');
+    reclassifyHaiku('gpt-x-mini');
+    const before = stateOf();
+    const r = check();
+    expect(r.code, JSON.stringify(r.body)).toBe(0);
+    expect(laneChanged(r)).toBe(true);
+    expect(stateOf()).toEqual(before);
+    expect(fs.readFileSync(lanePath(), 'utf8')).toBe(old);
+    // Control: the WRITE form cures it, and the check then answers unchanged.
+    expect(op('materialise', '--file', rosterPath(), '--id', 'codex-a').code).toBe(0);
+    expect(laneChanged(check())).toBe(false);
+  });
+
+  it('--check true after a roster port edit is changed; with the lane directory gone it is changed and the directory is NOT recreated', () => {
+    op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts,
+      { ...CODEX_LANE, exec: { ...CODEX_LANE.exec, proxyPort: 45020 } }, CODEX_EXTERNAL] });
+    expect(laneChanged(check())).toBe(true);
+    fs.rmSync(path.join(home, '.ccrc', 'codex'), { recursive: true, force: true });
+    const r = check();
+    expect(r.code, JSON.stringify(r.body)).toBe(0);
+    expect(laneChanged(r)).toBe(true);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'codex'))).toBe(false);
+  });
+
+  it('--check true answers lane: null on a lane with no manifest, and changed: null on a lane with no registry', () => {
+    // `router` is `external` and carries a codex registry that ALREADY EXISTS,
+    // as the live first lane's does. It is planted by hand, never through
+    // `init codex`, which ruling Z3 refuses on an external row: a registry
+    // that already exists is the one shape Z3 leaves alone.
+    fs.mkdirSync(path.dirname(regPath('router')), { recursive: true });
+    fs.writeFileSync(regPath('router'), `${JSON.stringify({ probe: 'codex',
+      classes: { haiku: null, sonnet: null, opus: null, fable: null }, subagent: 'sonnet', discovery: 'catalogue' }, null, 2)}\n`);
+    const r = check('router');
+    expect(r.code, JSON.stringify(r.body)).toBe(0);
+    expect(laneChanged(r)).toBeNull();
+    const none = check('codex-a');
+    expect(none.code, JSON.stringify(none.body)).toBe(0);
+    expect(none.body['changed']).toBeNull();
+    expect(fs.existsSync(path.join(home, '.ccrc', 'codex'))).toBe(false);
+  });
+
+  it('--check with any value but "true" is refused at exit 2 and writes nothing — a typo never falls through to the write', () => {
+    op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    reclassifyHaiku('gpt-x-mini');
+    const before = stateOf();
+    for (const v of ['yes', 'TRUE', '1']) {
+      const r = check('codex-a', v);
+      expect(r.code, v).toBe(2);
+      expect(r.body['error'], v).toBe('bad-argv');
+    }
+    expect(stateOf()).toEqual(before);
+  });
 });
 
 // minor: the check-only/`--commit true` two-phase protocol (Task 10 fix

@@ -202,7 +202,7 @@ CCRC_DOCTOR_CHECKS=(
   fleet
   memory
   routing
-  models
+  models codex   # two entries on one line: every line below is cited by number elsewhere
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -271,9 +271,9 @@ _dr_need_bin() {
 # ── node: the floor is READ, never re-typed ───────────────────────────────
 # WHICH package.json IS CANONICAL DEPENDS ON THE BOX, and that is why this
 # looks in two places rather than one:
-#   - a fleet host has `~/ccrc/{agent,shared,deploy,ccd}` (deploy.sh:343), so
+#   - a fleet host has `~/ccrc/{agent,shared,deploy,ccd}` (deploy.sh's agent-arm rsync, `agent shared deploy ccd "$BOX":ccrc/`), so
 #     the shipped declaration there is `~/ccrc/agent/package.json`;
-#   - a server host has `~/ccrc/{server,shared,deploy,ccd}` (deploy.sh:613), so
+#   - a server host has `~/ccrc/{server,shared,deploy,ccd}` (deploy.sh's server-arm rsync, `server shared deploy ccd "$BOX":ccrc/`), so
 #     it is `~/ccrc/server/package.json`. `ccd` is in BOTH lanes as of Task 8 —
 #     the server box gets the directory so `ccrc` and its three siblings have a
 #     home there, and it installs nothing else out of it (no ccd binary, no
@@ -738,7 +738,7 @@ _check_path() {
 # this asks about the units whose FILE is present and skips a box that has none
 # rather than demanding units a dev checkout was never meant to have. A server
 # box has `ccrc.service`, a fleet host has `ccrc-agent.service` and the
-# cap-scopes timer, and `deploy.sh` (:417, :464) is what puts each there.
+# cap-scopes timer, and `deploy.sh` puts each there (`_unit_atomic ~/ccrc/deploy/ccrc.service`, `_unit_atomic ~/ccrc/deploy/ccrc-agent.service`, `_unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer`).
 #
 # ── TWO CLASSES, BECAUSE THEY ARE TWO DIFFERENT MORNINGS ─────────────────
 # A stopped `ccrc.service`/`ccrc-agent.service` is a FAIL: the box is configured
@@ -1149,7 +1149,7 @@ _check_config() {
     # THE FLEET HOST HAS NO ccrc.env AND IS NOT MISSING ONE. It carries
     # `~/.ccrc/agent.env` (which configures the agent) and has no reason to know
     # where the server is — `_check_fleet` states exactly this, and SKIPS for it.
-    # `ccrc` ships to that box too (deploy.sh:401), so until this branch existed
+    # `ccrc` ships to that box too (deploy.sh's agent-arm rsync, `agent shared deploy ccd "$BOX":ccrc/`), so until this branch existed
     # every doctor run there printed "the server's defaults apply" about a server
     # that does not run there, and told the operator to run `ccrc install` — the
     # single-box SERVER-role installer. Wrong sentence and wrong instruction, on
@@ -2165,7 +2165,7 @@ _check_name() {
 # Spec §5's "disk headroom (including the backup dir)". THREE things this
 # project writes land on one filesystem and all three fail unhelpfully when it
 # is full: a ccd workspace is a full clone per session, every deploy leaves
-# another `~/ccrc-backups/<ts>/` (deploy.sh:33-34), and `~/.ccrc/coord.db` is a
+# another `~/ccrc-backups/<ts>/` (each deploy.sh arm's `mkdir -p ~/ccrc-backups/$TS`), and `~/.ccrc/coord.db` is a
 # WAL database that `server/src/coord/db.ts:144-145` says outright has NO backup
 # to fall back on — a truncated write there is not recoverable from that
 # directory.
@@ -3734,10 +3734,10 @@ _check_pool-sync() {
     # also short-circuits to a bare `chmod` when the bytes already match
     # (`cmp -s`), so an idempotent re-run of an unchanged unit does NOT reset
     # this mtime either — it only moves on a real (re)install. That `cmp -s`
-    # short-circuit is `ccd/ccrc`'s own, though: `deploy/deploy.sh:785`'s
+    # short-circuit is `ccd/ccrc`'s own, though: deploy.sh's agent-arm (`AGENT_BUILD_CMD='_unit_atomic() {`)
     # `_unit_atomic` — CLAUDE.md's AGENT-FIRST rule makes it the COMMON path
     # for this unit, not `ccd/ccrc`'s — carries no `cmp -s` at all and
-    # re-copies `ccd-pool-sync.timer` unconditionally (`deploy/deploy.sh:798`)
+    # re-copies `ccd-pool-sync.timer` unconditionally (its `_unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.timer` line)
     # on every `deploy.sh agent <host>`, so on that path this mtime resets on
     # every deploy, not only a real (re)install.
     #
@@ -5653,4 +5653,362 @@ _check_models() {
   local n="${#ok[@]}" plural=lane
   [ "$n" -eq 1 ] || plural=lanes
   _dr_pass models "$n $plural, $(_dr_join "${ok[@]}")"
+}
+
+# ── codex: the ccrc-owned Codex lanes on this box, measured end to end ────
+# Spec §12 (Plan 3a Tasks 4 and 5). ONE check, every Codex lane, and every
+# finding on its OWN line with its OWN remedy — FAIL lines first, then WARN
+# lines, the return code the worst of them ("ONE CHECK MAY ANSWER IN TWO
+# CLASSES", this file's header) — because a lane with no authDir and a lane
+# with a stale shim are two operator actions, never one bucket.
+#
+# THE POPULATION is the roster's `exec.kind == "codex"` rows, read by the lane
+# library's ONE reader of that question (`_codex_lanes`, ccd/ccrc) — never
+# accounts.sh's telemetry-keyed CCRC_CODEX_BACKEND, which names the EXTERNAL
+# lanes another repository runs — plus any lane directory left under
+# `_codex_lane_dir` for an id the roster no longer calls codex: a flip back to
+# another launcher keeps that state on purpose, and it is WARNed, never
+# silently skipped (D-3713).
+#   - role `server`: SKIP, a server box converges nothing per account
+#     (D-3111). CCRC_ROLE unset or unreadable reads as NOT server, as
+#     `cmd_update` reads it.
+#   - no roster FILE at all: SKIP. ABSENT is a positive answer, and a missing
+#     roster is the `wrappers` check's FAIL (D-3723).
+#   - `_codex_lanes` rc 1 (the roster cannot be read) or rc 2 (no jq): FAIL,
+#     never SKIP (ruling R-C6, D-3710).
+#     An unreadable roster is not an empty one, and
+#     a SKIP there would read "no Codex lane" on a box that has some — the
+#     overloaded null this codebase bans by name.
+#   - no Codex lane and no left lane state: SKIP, never a PASS naming no lane
+#     (a scan over an empty set passes everything: `_check_models`' C5).
+#
+# READ-ONLY, THE WHOLE WAY DOWN. Registry and catalogue facts come ONLY
+# through `deploy/models-op.mjs`'s check-only answers — `show`, `materialise
+# --check true` and `litellm` without `--commit` — so this file never names
+# the class registry's file (single-definition.test.ts pins that count at the
+# lines `_check_models` has), and no row here writes, renders, mkdirs,
+# starts or stops anything. `exec.authDir` is asked for existence and mode
+# ONLY: nothing under it is ever opened (spec §9).
+#
+# THE RUNTIME ROW TRUSTS THE STAMP (ruling R-C5,
+# D-3711). `ccgpt-runtime check` compares the
+# current generation's stamp with this build's LiteLLM requirement, its
+# behaviour probe's hash and the installed LiteLLM version; it never re-runs
+# the probe, which may take CCRC_RUNTIME_PROBE_S (300 s), and doctor closes
+# every install and update. `ccgpt-runtime build` is what re-probes.
+_check_codex() {
+  local role=""
+  # `${BOX_ENV_FILE:-}`, `-f` before `-r`: `_check_accounts`' own reading.
+  # The `declare -F` is this read's OWN guard: it runs before the loaded-guard
+  # below, so a table sourced without ccrc reaches that guard's FAIL rather
+  # than dying here on a function that is not there.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && declare -F _box_env_value >/dev/null 2>&1 \
+    && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$role" = server ]; then
+    _dr_skip codex "this box records CCRC_ROLE=server, so it runs no Codex lane — a server box converges nothing per account"
+    return 3
+  fi
+  # The loaded-guard `_check_update-sync` carries: every function below is
+  # ccrc's own, and a table sourced by something else must say so, not die.
+  local fn
+  for fn in _box_env_value _codex_lanes _codex_row _codex_lane_json_state _codex_lane_dir \
+            _codex_litellm_yaml _codex_runtime_cli _models_node _models_roster_path _models_litellm_template; do
+    if ! declare -F "$fn" >/dev/null 2>&1 || [ -z "${BOX_TREE_DIR:-}" ]; then
+      _dr_fail codex "ccrc's own Codex lane library is not loaded ($fn, or BOX_TREE_DIR, is missing), so no lane on this box was measured" \
+        "this is a bug in ccrc, not a fact about your box — _check_codex calls the _codex_* library declared in ccrc itself, and this check table was sourced by something that is not ccrc"
+      return 1
+    fi
+  done
+  local roster root out rc=0 id d n
+  roster="$(_models_roster_path)"
+  root="$(_codex_lane_dir '')"; root="${root%/}"
+  local -a lanes=() left=()
+  if [ -e "$roster" ] || [ -L "$roster" ]; then
+    out="$(_codex_lanes 2>/dev/null)"; rc=$?
+    case "$rc" in
+      0) [ -z "$out" ] || mapfile -t lanes <<< "$out" ;;
+      2)
+        _dr_fail codex "jq is not on PATH, so which roster accounts are Codex lanes cannot be told — a box that has some would read as having none" \
+          "install jq (the 'jq' check above names what is missing), then re-run doctor"
+        return 1 ;;
+      *)
+        _dr_fail codex "\$HOME/.ccrc/accounts.json could not be read as a roster, so its Codex lanes are unknown — an unreadable roster is not an empty one" \
+          "run: ccrc wrappers — it prints the roster validator's own sentence; fix what it names, then re-run doctor"
+        return 1 ;;
+    esac
+  fi
+  for d in "$root"/*/; do
+    [ -d "$d" ] || continue
+    n="${d%/}"; n="${n##*/}"
+    _dr_cx_member "$n" ${lanes[@]+"${lanes[@]}"} || left+=("$n")
+  done
+  if [ "${#lanes[@]}" -eq 0 ] && [ "${#left[@]}" -eq 0 ]; then
+    if [ -e "$roster" ] || [ -L "$roster" ]; then
+      _dr_skip codex "no account in \$HOME/.ccrc/accounts.json is exec.kind \"codex\", and no lane state is left under $root, so there is no Codex lane to measure"
+    else
+      _dr_skip codex "no account roster at \$HOME/.ccrc/accounts.json and no lane state under $root, so this box has no Codex lane — the 'wrappers' check above owns a missing roster"
+    fi
+    return 3
+  fi
+
+  local -a DRX_CLASS=() DRX_WHAT=() DRX_FIX=() DRX_OK=() bad=()
+  local -A owner=()
+  local DRX_RUNTIME='' DRX_LANE_WORDS='' models=1 p
+  if [ "${#lanes[@]}" -gt 0 ]; then
+    _dr_cx_bins
+    _dr_cx_runtime
+    if ! command -v node >/dev/null 2>&1; then
+      models=0
+      _dr_cx_fail "node is not on PATH, so no Codex lane's class registry, lane.json or LiteLLM config could be measured against its catalogue" \
+        "install Node (the 'node' check above names what is missing), then re-run doctor"
+    fi
+    # EVERY ROW FIRST, then every lane. A hand-edited row, or two lanes on one
+    # port, makes the whole roster one `deploy/models-op.mjs` refuses to read,
+    # so no lane's model state can be measured until it is fixed — known
+    # before any lane is asked, and said once, on the row's own line.
+    for id in "${lanes[@]}"; do
+      if ! _codex_row "$id" 2>/dev/null; then
+        out="$(_codex_row "$id" 2>&1 >/dev/null)"; out="${out#"${PROG:-ccrc} codex: "}"
+        _dr_cx_fail "$id's codex row cannot be used ($out), and until it is fixed no Codex lane's model state can be read — the roster does not validate" \
+          "fix the row in \$HOME/.ccrc/accounts.json by hand ('ccrc wrappers' prints the roster validator's own sentence for it); ccrc never chooses a lane's ports or paths for you"
+        bad+=("$id"); models=0; continue
+      fi
+      # Belt and braces behind `parseRoster`'s own refusal (spec §12): both
+      # ports of every lane share ONE map, `shared/roster.ts`'s rule, because
+      # a shim port that is another lane's LiteLLM port is as wrong as two
+      # shim ports.
+      for p in "$CX_PROXY" "$CX_LITELLM"; do
+        if [ -n "${owner[$p]:-}" ] && [ "${owner[$p]}" != "$id" ]; then
+          _dr_cx_fail "${owner[$p]} and $id both use port $p, so one lane's requests would reach the other lane's OAuth — and until it is fixed no Codex lane's model state can be read (the roster does not validate)" \
+            "give each Codex lane its own two ports in \$HOME/.ccrc/accounts.json by hand; ccrc never chooses a port"
+          bad+=("$id" "${owner[$p]}"); models=0
+        else
+          owner[$p]="$id"
+        fi
+      done
+    done
+    for id in "${lanes[@]}"; do
+      _dr_cx_member "$id" ${bad[@]+"${bad[@]}"} && continue
+      _dr_cx_lane "$id" "$models" "$roster"
+      DRX_OK+=("$id ($DRX_LANE_WORDS)")
+    done
+  fi
+  for n in ${left[@]+"${left[@]}"}; do
+    _dr_cx_warn "lane state is left under $root/$n, and '$n' is not a Codex lane in \$HOME/.ccrc/accounts.json — a flip back to another launcher keeps it on purpose, and nothing of ccrc's reads it while '$n' is not a Codex lane" \
+      "if the flip back is final and ccrc runs nothing for '$n' any more (its tiers were stopped with 'ccrc codex stop $n' before the flip), remove $root/$n by hand; ccrc never deletes a lane's state on a flip"
+  done
+  _dr_cx_report "${#lanes[@]} Codex lane(s): $(_dr_cx_join ', ' ${DRX_OK[@]+"${DRX_OK[@]}"}); runtime ${DRX_RUNTIME:-unmeasured}; the four GPT-lane executables match the shipped tree"
+}
+
+# `_check_codex`'s findings, recorded into the caller's DRX_CLASS/DRX_WHAT/
+# DRX_FIX (bash's dynamic scope: they are `local` to `_check_codex`) and
+# printed by `_dr_cx_report`, so each is one sentence plus its own remedy.
+_dr_cx_find()   { DRX_CLASS+=("$1"); DRX_WHAT+=("$2"); DRX_FIX+=("$3"); }
+_dr_cx_fail()   { _dr_cx_find FAIL "$1" "$2"; }
+_dr_cx_warn()   { _dr_cx_find WARN "$1" "$2"; }
+_dr_cx_member() { local x="$1" y; shift; for y in "$@"; do [ "$y" = "$x" ] && return 0; done; return 1; }
+_dr_cx_join()   { local sep="$1" out="" x; shift; for x in "$@"; do out+="${out:+$sep}$x"; done; printf '%s' "$out"; }
+
+# Every FAIL line, then every WARN line, each with its own remedy; the return
+# code is the worst class printed (cmd_doctor cross-checks the two, and a
+# disagreement is its own FAIL). PASS only when nothing was found at all.
+_dr_cx_report() {   # <PASS detail>
+  local i worst=0
+  if [ "${#DRX_CLASS[@]}" -eq 0 ]; then
+    _dr_pass codex "$1"
+    return 0
+  fi
+  for i in "${!DRX_CLASS[@]}"; do
+    [ "${DRX_CLASS[$i]}" = FAIL ] || continue
+    _dr_fail codex "${DRX_WHAT[$i]}" "${DRX_FIX[$i]}"; worst=1
+  done
+  for i in "${!DRX_CLASS[@]}"; do
+    [ "${DRX_CLASS[$i]}" = WARN ] || continue
+    _dr_warn codex "${DRX_WHAT[$i]}" "${DRX_FIX[$i]}"; [ "$worst" -eq 1 ] || worst=2
+  done
+  return "$worst"
+}
+
+# The four GPT-lane executables against the SHIPPED TREE, byte for byte —
+# `_check_skills`' rule (the tree the stamp names, `$BOX_TREE_DIR/ccd`), with
+# `cmp` where that check uses `diff`. `CODEX_LANE_BINS` is `_inst_bins`'
+# GPT-lane gate, in its order, declared ONCE at file level so `_fix_codex`
+# (Task 8) restores exactly what this compares. ccrc-doctor.test.ts pins this
+# one line to `GPT_LANE_BINS`, which ccrc-install.test.ts pins to the gate
+# itself, so a fifth executable or a rename reds there before this list can drift.
+CODEX_LANE_BINS=(ccgpt-proxy.py ccgpt-usage.py ccgpt-runtime ccrc-codex)
+_dr_cx_bins() {
+  local tree="$BOX_TREE_DIR/ccd" bin="$HOME/.local/bin" name
+  local -a notree=() missing=() drift=()
+  if ! command -v cmp >/dev/null 2>&1; then
+    _dr_cx_warn "cmp is not on PATH, so the GPT-lane executables in \$HOME/.local/bin could not be compared with the shipped tree — unmeasured, not current" \
+      "install diffutils (it ships cmp), then re-run doctor"
+    return 0
+  fi
+  for name in "${CODEX_LANE_BINS[@]}"; do
+    if [ ! -f "$tree/$name" ]; then notree+=("$name"); continue; fi
+    if [ ! -f "$bin/$name" ] || [ ! -x "$bin/$name" ]; then missing+=("$name"); continue; fi
+    cmp -s "$tree/$name" "$bin/$name" || drift+=("$name")
+  done
+  [ "${#notree[@]}" -eq 0 ] || _dr_cx_fail "the shipped tree ($tree) has no $(_dr_cx_join ', ' "${notree[@]}"), so nothing on this box says what the GPT-lane executables should be" \
+    "run 'ccrc update' (or 'ccrc install' from a checkout) to place the shipped tree"
+  [ "${#missing[@]}" -eq 0 ] || _dr_cx_fail "$(_dr_cx_join ', ' "${missing[@]}") missing from \$HOME/.local/bin, or not executable — every Codex lane needs all four" \
+    "run 'ccrc update' (or 'ccrc install' from a checkout): it places them from the shipped tree on every role but server"
+  [ "${#drift[@]}" -eq 0 ] || _dr_cx_fail "$(_dr_cx_join ', ' "${drift[@]}") in \$HOME/.local/bin differ from the shipped tree's copies in $tree, so a lane would run bytes this build did not ship" \
+    "run 'ccrc update' (or 'ccrc install' from a checkout): it re-places them from the shipped tree"
+  return 0
+}
+
+# The isolated runtime, by `ccgpt-runtime check` — one word per failure, each
+# its own sentence and remedy. A `ccgpt-runtime` that is not there is the
+# executables row's finding, said there once.
+_dr_cx_runtime() {
+  local cli ans rc
+  cli="$(_codex_runtime_cli)"
+  [ -x "$cli" ] || return 0
+  ans="$("$cli" check 2>&1)"; rc=$?
+  case "$rc:$ans" in
+    "0:ccgpt-runtime: current "*) DRX_RUNTIME="${ans#ccgpt-runtime: current }" ;;
+    "1:ccgpt-runtime: absent")
+      _dr_cx_fail "no isolated LiteLLM runtime is current on this box (ccgpt-runtime check: absent), so no Codex lane can start its tiers" \
+        "build it: ccgpt-runtime build (ccrc install and ccrc update run the same build)" ;;
+    "1:ccgpt-runtime: requirement-moved")
+      _dr_cx_fail "the current runtime generation was built for another LiteLLM requirement than this ccrc declares (ccgpt-runtime check: requirement-moved), so it is out of the range this build was probed against" \
+        "rebuild it: ccgpt-runtime build — it builds, probes and swaps in a generation for the declared range, and the old one stays current until the new one passes" ;;
+    "1:ccgpt-runtime: probe-moved")
+      _dr_cx_fail "the current runtime generation passed an older behaviour probe than the one this ccrc ships (ccgpt-runtime check: probe-moved), so what it was proven to do is not what this build checks" \
+        "rebuild it: ccgpt-runtime build — it re-runs the shipped probe against a fresh generation" ;;
+    "1:ccgpt-runtime: mutated")
+      _dr_cx_fail "the current runtime generation no longer matches its stamp (ccgpt-runtime check: mutated): its interpreter, its stamp or its installed LiteLLM changed after the build" \
+        "rebuild it: ccgpt-runtime build — a mutated generation is never repaired in place" ;;
+    *)
+      _dr_cx_fail "ccgpt-runtime check answered something this doctor does not know (exit $rc: $(_dr_first_line "$ans")), so the runtime's state is unmeasured" \
+        "ccrc and ccgpt-runtime ship together and must be one build: run 'ccrc update', then re-run doctor" ;;
+  esac
+  return 0
+}
+
+# One lane's static rows. Its row already read in `_check_codex`'s row pass;
+# it is read again HERE so this shell's CX_* are this lane's.
+_dr_cx_lane() {   # <id> <models: 1 = its model state is measurable> <roster> — sets DRX_LANE_WORDS
+  local id="$1" models="$2" roster="$3" auth st ans lc yaml
+  local -a f=()
+  DRX_LANE_WORDS=''
+  _codex_row "$id" 2>/dev/null || return 0
+  DRX_LANE_WORDS="ports $CX_PROXY/$CX_LITELLM"
+  # authDir: EXISTENCE AND MODE ONLY (spec §9, §12). `[ -f ]` needs search
+  # permission on the directory and nothing on the file, so a 0000 auth.json
+  # passes: its contents are never this check's business.
+  auth="$HOME/$CX_AUTH"
+  if [ ! -e "$auth" ] && [ ! -L "$auth" ]; then
+    _dr_cx_fail "$id's authDir ~/$CX_AUTH does not exist, so the lane has nothing to sign in to" \
+      "sign the lane in: ccrc codex login $id (the runtime's own login creates it, owner-only) — ccrc never performs OAuth for you"
+  elif [ ! -d "$auth" ] || [ ! -r "$auth" ] || [ ! -x "$auth" ]; then
+    _dr_cx_fail "$id's authDir ~/$CX_AUTH is not a directory this user can list and search, so whether the lane is signed in cannot be told" \
+      "make it a directory you own and can search (chmod u+rx ~/$CX_AUTH); ccrc never reads what is inside it"
+  elif [ ! -f "$auth/auth.json" ]; then
+    _dr_cx_fail "$id has no OAuth login: ~/$CX_AUTH holds no auth.json (existence is all ccrc checks; it never reads one), so 'ccrc codex start $id' refuses" \
+      "sign the lane in: ccrc codex login $id"
+  else
+    DRX_LANE_WORDS+=", signed in"
+  fi
+  # lane.json against the ROSTER row: id, configDir, authDir, both ports, unit names present.
+  st="$(_codex_lane_json_state "$id" 2>/dev/null)" || st=''
+  case "$st" in
+    current) ;;
+    absent)
+      _dr_cx_fail "$id has no lane.json ($(_codex_lane_dir "$id")/lane.json), which the launcher, the shim and the usage publisher all read" \
+        "render it: ccrc codex start $id renders lane.json from the roster before it starts the lane (every session launch runs the same start)" ;;
+    stale)
+      _dr_cx_fail "$id's lane.json disagrees with its roster row (its id, configDir, authDir, a port or its unit names), so the shim and the usage publisher read the lane's old shape" \
+        "re-render it: ccrc codex start $id renders lane.json from the roster before it starts the lane" ;;
+    *)
+      _dr_cx_fail "whether $id's lane.json matches its roster row could not be measured" \
+        "run: ccrc codex status $id — it reads the same file and says what it could see" ;;
+  esac
+  if [ "$models" -ne 1 ]; then DRX_LANE_WORDS+=", model state unread"; return 0; fi
+  # The lane's model state, ONLY through models-op's `show`.
+  ans="$(_models_node show --file "$roster" --id "$id" 2>/dev/null)"
+  mapfile -t f < <(printf '%s' "$ans" | jq -r '
+      if .ok != true then error("refused") else . end
+      | (.registry | if type == "object" then . else null end) as $r
+      | (if $r == null then null else $r.classes.haiku end) as $h
+      | (if $r == null then "none" else ($r.probe // "" | tostring) end),
+        ($h // "" | tostring),
+        (if $r == null then "" else ($r.subagent // "" | tostring) end),
+        (if ($h | type) == "string" and ((.derived.retired // []) | any(. == $h)) then "retired" else "live" end),
+        (.renderRefusal // "" | tostring | gsub("[\n\t]"; " ")),
+        "END"' 2>/dev/null)
+  if [ "${#f[@]}" -ne 6 ] || [ "${f[5]}" != END ]; then
+    if printf '%s' "$ans" | jq -e '.ok == false' >/dev/null 2>&1; then
+      _dr_cx_fail "$id: 'ccrc models' refused to read the lane's model state — $(printf '%s' "$ans" | jq -r '"\(.error // "?"): \(.detail // "" | gsub("[\n\t]"; " "))"' 2>/dev/null)" \
+        "fix what that sentence names, then re-run doctor"
+    else
+      _dr_cx_fail "$id: 'ccrc models' printed no answer about the lane (deploy/models-op.mjs), so its class registry and catalogue are unmeasured" \
+        "ccrc and deploy/models-op.mjs ship together and must be one build: run 'ccrc update', then re-run doctor"
+    fi
+    return 0
+  fi
+  local probe="${f[0]}" haiku="${f[1]}" sub="${f[2]}" ret="${f[3]}" refusal="${f[4]}"
+  if [ "$probe" = none ]; then
+    _dr_cx_fail "$id is a Codex lane with no class registry, so nothing says which model any class routes to, and its probe model and LiteLLM config have nothing to be rendered from" \
+      "create it: ccrc models $id init codex, then ccrc models refresh $id"
+    return 0
+  fi
+  if [ "$probe" != codex ]; then
+    _dr_cx_fail "$id is a Codex lane whose class registry declares probe \"$probe\": that is another provider's catalogue, and a LiteLLM config rendered from it would name models the ChatGPT backend has never heard of" \
+      "remove that registry deliberately (ccrc models $id rm) and create the lane's own: ccrc models $id init codex — ccrc never changes a registry's probe kind for you"
+    return 0
+  fi
+  [ -z "$refusal" ] || _dr_cx_fail "$id's model files cannot be rendered: $refusal" \
+    "fix the class that sentence names (ccrc models $id show prints the registry), then re-run doctor"
+  if [ -z "$haiku" ]; then
+    _dr_cx_warn "$id routes haiku to nothing, so its lane.json carries no probe model and its usage publisher refuses to publish" \
+      "assign one: ccrc models $id set-class haiku <modelId>"
+  elif [ "$ret" = retired ]; then
+    _dr_cx_warn "$id's usage probe model, $haiku (its haiku class), is absent from the lane's current catalogue, so the usage publisher probes a model the backend no longer lists" \
+      "reassign it: ccrc models $id set-class haiku <modelId> (ccrc models $id show lists the catalogue)"
+  fi
+  # lane.json against the REGISTRY (ruling R7): the check-only materialise.
+  # Asked only over a lane.json the roster row agrees with — a stale or absent
+  # one is already its own FAIL above, with its own remedy.
+  if [ "$st" = current ]; then
+    lc="$(_models_node materialise --file "$roster" --id "$id" --check true 2>/dev/null \
+          | jq -r 'if .ok == true and .check == true then (.changed.lane | tostring) else "error:\(.error // "no answer")" end' 2>/dev/null)"
+    case "$lc" in
+      false) DRX_LANE_WORDS+=", lane.json current" ;;
+      true)
+        _dr_cx_fail "$id's lane.json is stale against its class registry: the registry has moved (its haiku class, which is the lane's probe model, or another field lane.json carries) since the file was written" \
+          "re-render it: ccrc models $id set-subagent ${sub:-sonnet} (any models mutation re-renders the lane's files, lane.json among them)" ;;
+      *)
+        _dr_cx_fail "whether $id's lane.json matches its class registry could not be measured ('ccrc models' answered ${lc:-nothing})" \
+          "ccrc and deploy/models-op.mjs ship together and must be one build: run 'ccrc update', then re-run doctor" ;;
+    esac
+  fi
+  # The rendered LiteLLM config against the CATALOGUE: models-op's `litellm`
+  # without `--commit` is check-only — it answers `changed` and writes nothing.
+  yaml="$(_codex_litellm_yaml "$id")"
+  lc="$(_models_node litellm --file "$roster" --id "$id" --template "$(_models_litellm_template)" --out "$yaml" 2>/dev/null \
+        | jq -r 'if .ok == true then "changed:\(.changed)" else "refused:\(.error // ""):\(.detail // "" | gsub("[\n\t]"; " "))" end' 2>/dev/null)"
+  case "$lc" in
+    changed:false) DRX_LANE_WORDS+=", LiteLLM config current" ;;
+    changed:true)
+      if [ -e "$yaml" ] || [ -L "$yaml" ]; then
+        _dr_cx_fail "$id's LiteLLM config ($yaml) is stale against the lane's catalogue: a render now would write different bytes, so the lane's LiteLLM routes a model list the catalogue has moved past" \
+          "re-render it: ccrc models litellm $id (it stops the lane's own LiteLLM tier around the write when that tier is running, and starts it again)"
+      else
+        _dr_cx_fail "$id has no rendered LiteLLM config ($yaml), so the lane's LiteLLM tier has nothing to start on" \
+          "render it: ccrc models litellm $id (ccrc codex start $id renders it too when it is absent)"
+      fi ;;
+    refused:never-probed:*)
+      _dr_cx_fail "$id has never been probed, so there is no catalogue for its LiteLLM config to be rendered from" \
+        "probe it: ccrc models refresh $id" ;;
+    refused:*)
+      _dr_cx_fail "$id: 'ccrc models' refused to render the lane's LiteLLM config — ${lc#refused:}" \
+        "fix what that sentence names, then re-run doctor" ;;
+    *)
+      _dr_cx_fail "whether $id's LiteLLM config is current could not be measured ('ccrc models' printed no answer)" \
+        "ccrc and deploy/models-op.mjs ship together and must be one build: run 'ccrc update', then re-run doctor" ;;
+  esac
+  return 0
 }

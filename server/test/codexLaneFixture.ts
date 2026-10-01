@@ -94,11 +94,14 @@ export interface CodexLaneRow {
  *  before either file is written; `parseRoster` (inside `seedAccountsSh`)
  *  runs before `accounts.sh` is written. So a fixture either production
  *  reader would refuse throws here instead of testing nothing. Returns the
- *  roster object. */
+ *  roster object. `accountsSh: false` (Plan 3a Task 4) writes the JSON alone:
+ *  `ccrc-doctor.test.ts`' healthy box has no `accounts.sh`, and one would
+ *  give `graphify`'s skills/excludes arms a subject that fixture never set up. */
 export function codexRoster(
   home: string,
   lanes: readonly CodexLaneRow[],
   extra: readonly Record<string, unknown>[] = [],
+  opts: { accountsSh?: boolean } = {},
 ): { version: 1; accounts: Record<string, unknown>[] } {
   const roster = {
     version: 1 as const,
@@ -121,7 +124,7 @@ export function codexRoster(
   rosterFromJson(roster);
   fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
   fs.writeFileSync(path.join(home, '.ccrc', 'accounts.json'), `${JSON.stringify(roster, null, 2)}\n`);
-  seedAccountsSh(home, roster);
+  if (opts.accountsSh !== false) seedAccountsSh(home, roster);
   return roster;
 }
 
