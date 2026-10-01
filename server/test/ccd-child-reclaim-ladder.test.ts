@@ -848,10 +848,12 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
   }, 60_000);
 
   it('the vanished arm: a row spelled THROUGH the gone child (`<child>/..`) refuses as spelled through — or, reached through a linked ancestor, as unresolvable — never "rooted inside"', () => {
-    // With the child's tree gone, `_ws_realpath` resolves only the prefix that
-    // still exists and re-attaches the rest as written, so `<child>/..`
-    // resolves to `<child>/..` itself — below the child as a string, and not
-    // one plain path. Strings, not `path.join`, which would normalise it.
+    // The compare reads `_ws_reclaim_resolve`, which FAILS `<child>/..` once
+    // the child's tree is gone — a `..` below a missing component cannot be
+    // placed — so the first two spellings are never placed by resolution:
+    // each is refused by the LITERAL through arm, below the child as a string
+    // and not one plain path (review 213, F3). Strings, not `path.join`, which
+    // would normalise them.
     // The third spelling reaches the child through a symlinked ANCESTOR, so it
     // is not literally below the child and is asked whether it resolves at
     // all — and it does not: a `..` below a missing component (`quiet-basin/..`,
@@ -1800,8 +1802,29 @@ const writeAltRow = (workdir: string): void => {
 /** `<rc>\x1f<_WS_RESOLVED>\x1f<_WS_RESOLVE_BASIS>` for one call. */
 const basisOf = (p: string): string =>
   h.sh(`_ws_reclaim_resolve "${p}"; printf '%s\\x1f%s\\x1f%s' "$?" "$_WS_RESOLVED" "$_WS_RESOLVE_BASIS"`);
-/** The child's tree, its branch, and the alternate row's bytes — what a refusal leaves standing. */
+/** Every entry under `dir` but `.git` — path, type, mode, and a file's bytes or a link's target — or `gone`. The
+ *  verb suite's `treeOf`, which this mirrors, compares bytes too (plan Task 2 Step 2; review 213, F4). */
+const treeBytes = (dir: string): string[] | 'gone' => {
+  if (!fs.existsSync(dir)) return 'gone';
+  const out: string[] = [];
+  const walk = (d: string): void => {
+    for (const n of fs.readdirSync(d).sort()) {
+      if (n === '.git') continue;
+      const p = path.join(d, n);
+      const st = fs.lstatSync(p);
+      const rel = path.relative(dir, p);
+      if (st.isDirectory()) { out.push(`d ${st.mode.toString(8)} ${rel}`); walk(p); }
+      else if (st.isSymbolicLink()) out.push(`l ${rel} -> ${fs.readlinkSync(p)}`);
+      else out.push(`f ${st.mode.toString(8)} ${rel} ${fs.readFileSync(p).toString('base64')}`);
+    }
+  };
+  walk(dir);
+  return out;
+};
+/** The child's tree byte for byte, its git status, its branch, and the alternate row's bytes — what a refusal
+ *  leaves standing. */
 const placementState = (c: Child): Record<string, unknown> => ({
+  tree: treeBytes(c.wt),
   wt: fs.existsSync(c.wt) ? h.git(c.wt, 'status', '--porcelain=v1', '--untracked-files=all') : 'gone',
   tip: h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`),
   row: [altRowFile('uuid'), altRowFile('workdir')].map((f) => fs.readFileSync(f).toString('base64')),
@@ -1884,6 +1907,8 @@ describe('resolution basis — how the resolver formed its answer (D-3731)', () 
     expect(standing.detail).toContain(`registry row(s) ${PLACEMENT_ALT} rooted inside`);
     fs.unlinkSync(alias);
     const before = placementState(c);
+    expect(JSON.stringify(before['tree']), 'the CONTROL: the snapshot carries the other session’s bytes')
+      .toContain(fs.readFileSync(path.join(c.wt, 'server', 'live.txt')).toString('base64'));
     const r = evalOf(h);
     expect(r.verdict, r.detail).toBe('unmeasured');
     expect(r.token).toBe('');
@@ -2050,9 +2075,14 @@ it('ambiguous row hold: a present child beside an unrelated gone-directory row i
   const r = evalOf(h);
   expect(r.verdict, r.detail).toBe('unmeasured');
   expect(r.detail).toContain(`registry row(s) demo-stale ${PROJECTED_WHY}`);
-  expect(r.detail, 'the remedy restores or purges (review 212, F3)')
-    .toContain('restore its path to what it ran through, or purge the row once its session has ended');
+  // The remedy is the operator's F3 ruling, as review 213 (r3, r4) asked it be worded: restore the LINK to its
+  // original target, or purge the row once its session has ended — and never create a directory where a link
+  // stood, which re-points the spelling by replacement (D-3735) and let the verb remove the tree (measured).
+  expect(r.detail, 'the remedy: searchable, the link restored, or the row purged (review 212 F3, review 213 r3)')
+    .toContain('make it searchable if a directory on its path cannot be searched, restore a link on its path to its'
+      + ' original target (never create a directory in a link\'s place), or purge the row once its session has ended');
   expect(r.detail, 'and never invites re-pointing').not.toContain('re-point');
+  expect(r.detail, 'nor restoring "its path", which reads as a mkdir').not.toContain('restore its path');
   expect(r.detail, 'by id only').not.toContain(retired);
   expect(r.token).toBe('');
   expect(fs.existsSync(c.wt)).toBe(true);
