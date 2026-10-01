@@ -2402,10 +2402,15 @@ also `shell` — Claude Code relabels an IDLE main loop `shell` while a
 background shell or Monitor it started still runs, so a worker that ended its
 turn to wait on one gets its mail within a minute, where it used to be held
 for as long as that shell lived. `busy`, `waiting` and any word it does not
-know are held, as before. A `shell` delivery also refuses while the pane's
-last rows show `esc to interrupt` (`turn-running`: held for
-`MAIL_TURN_HOLD_MS`, 60 s, and never counted as an attempt) — a best-effort
-tripwire, blind on a `--remote-control` pane and below `READER_MIN_COLS`.
+know are held, as before. A `shell` delivery also refuses while one of the
+pane's last rows is Claude Code's spinner row (`turn-running`: held for
+`MAIL_TURN_HOLD_MS`, 60 s, and never counted as an attempt): `esc to interrupt`
+ending the row or followed by `)` or ` ·`, on a row that is not a prompt (`❯`),
+continuation (`⎿`) or quote (`>`) row, so a transcript line that merely quotes
+the phrase no longer refuses. This guard is live whatever the stall markers
+say, and the tail shape is tolerant until the wave-2 checkpoint C7 measures
+it. It is a best-effort tripwire, blind on a `--remote-control` pane and below
+`READER_MIN_COLS`.
 `touch $REG/mail-gate-strict` on the fleet host restores the idle-only gate;
 `rm` it to go back. The stall watch's turn marker (below) can sharpen the
 gate, but only behind two more markers, touched and removed by hand and
@@ -2583,14 +2588,19 @@ to silence the lane's pushes as well, touch `stall-watch-disabled` beside
 session, `$REG/<id>.turn.json`, written on the main thread only: an event that
 carries a subagent's `agent_id` never touches it. It reads `working` from a
 turn's first event, `done` at its Stop (with the Stop's background-task count,
-kinds and ids), and `failed` at a `StopFailure` (with the API error's token). A
-SessionStart that follows a restart which cut work short records the restart
-and what was lost. The lane reads the marker, the raw hookstate and the live
+kinds and ids), and `failed` at a `StopFailure` (with the API error's token).
+Every SessionStart but a `clear` records the restart, and its lost lists name
+only what that restart cut short: the background tasks the last `done` turn
+left running. The lane reads the marker, the raw hookstate and the live
 file. That is at most three agent reads per worker per sweep, because the pane
 pid and the registry uuid are the ones the tick already measured. A marker
 older than the live process reads stale and counts for nothing. A fourth stall
 marker, `stall-watch-w2-live`, touched and removed by hand and written by
-nothing in the tree, arms every wave-2 arm. Without it, each arm records only a
+nothing in the tree, lets the wave-2 arms send. It does not arm them alone: as
+in wave 1, a notice to the session itself also needs `stall-watch-live`, and a
+mail to a coordinator or a push to the operator needs `stall-watch-escalate`
+as well; without those, an arm still records only shadow. Without
+`stall-watch-w2-live`, each arm records only a
 `stall-shadow:` row (for a session on no run, one `ccrc-server: stall-watch
 shadow` line), and the ladder above stays wave 1's, with one cost: an arm that
 fires in shadow takes that sweep while it records its row. Three arms can so
@@ -2628,6 +2638,9 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
     goes to the coordinator.
   - A request-class error (`invalid_request`, `model_not_found`) goes to the
     coordinator at once.
+  - Those two reach the operator as a `⚠ failed` push instead when the failing
+    session is itself a coordinator, the run has no claimant, or coordination
+    is paused.
   - An account-class error holds, because the limit and swap machinery owns it.
   - A token this build does not know holds with one `ccrc-server: stall-watch
     unknown StopFailure` line. It is never guessed into a self-wake.
@@ -2645,6 +2658,8 @@ r3 follows r2 by an hour. The new holds are:
 - 5 min after a restart that cut a turn short;
 - while delegated work still produces hook events (within 30 min, for 4 h at
   most);
+- for the orphaned and failed arms and mail stuck's idle clause, a harness
+  dialog on the session's pane (`dialogPending`), which no mail gets past;
 - the ones named above.
 
 A coordinator's notices are run-less: they are keyed on the mail's own subject
@@ -2662,9 +2677,12 @@ re-times or repeats them:
 The two clocks above also restart when more than two and a half sweeps (150 s)
 pass with no judged sweep: a `stall-watch-disabled` window, unreadable
 candidates or an unlistable tick. So a duration nobody watched is never counted.
-One missed sweep keeps them.
+One missed sweep keeps them, and so does a slow sweep: the gap runs from one
+judged sweep's end to the next one's start.
 
-The lane reads a session's non-run mail from the last 24 h only. So a delivery
+The lane reads a session's mail from the last 24 h only, except a run worker's
+mail on its own runs, which it reads whatever its age (a coordinator's read
+names no run). So a delivery to a coordinator, or a worker's non-run delivery,
 queued more than 24 h ago is outside mail-stuck's read: it was reported inside
 that window, and after a server restart it is not reported again. Runbook:
 hand-classify 48 h of wave-2 `stall-shadow:` rows and `stall-watch shadow`
@@ -3728,7 +3746,9 @@ Known real-format subtleties already encoded:
   `mailTurnIdle` (`server/src/turnidle.ts`) takes the raw word, delivers on
   `idle` and on `shell` (an idle main loop over a background shell), and holds
   `waiting`, `busy` and any word it does not know. On a `shell` delivery its
-  `turnRunning` pane guard reads `esc to interrupt` anyway — a tripwire that is
+  `turnRunning` pane guard looks for the spinner row anyway — `esc to interrupt`
+  ending a row or followed by `)` or ` ·`, never on a prompt, continuation or
+  quote row, tolerant of the tail until C7 measures it — a tripwire that is
   blind on exactly the RC panes the bullet above names. After an
   upgrade, re-grep the bundle for `status:"` and check that no fifth word has
   appeared: a new one costs nothing to read as `busy`, but a new *rest*-like
