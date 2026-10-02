@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1d7be068b2a2d830c2b740e7bfa6b10ca555738ecb4a59cba627297fe5639d91
+# ccrc:generated 1 sha256=c7be71af101e0f48170f8af06c5441565cf56f18af863342589708f6e8723cc1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22193,15 +22193,30 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1)
 #     stayed stranded for good.) `(merged +N ~R !D, deferred K)`; and
 #     `(kept: budget)` only when the FIRST action is priced over the budget on
 #     its own — nothing touched, the destination exactly as it was.
+#     The drain has TWO NAMED COSTS, both measured at zero on the box when this
+#     was written: an action priced over the budget on its own heads its queue
+#     and holds everything behind it for good (the largest on the box was
+#     64 MiB, an eighth of the budget); and a compare that can place nothing (a
+#     same-size file that is not a newer record, a log whose destination is
+#     longer) is priced again on EVERY visit, so enough of them ahead of a
+#     placement could hold it back. The stage-1 instrument's `deferred_carries`
+#     and `deferred_actions` make either visible if it ever appears.
 # A walk that could not run at all — no `flock`, no python3, a destination that
 # is not a real directory, the walker's own failure — is `(kept: error)`, with
 # the cause on stderr: a third word, because "someone else is carrying" and
 # "this box cannot carry" want different remedies (never one overloaded word).
 #
 # The slot is NEVER unlinked (`.rotate.lock`'s rule: unlinking a held lock file
-# is how two processes come to hold "the lock" on two inodes), and it is held
-# only for the existing-destination branch — a FIRST carry to an account is
-# today's `cp -al`/`cp -a` path, unchanged, and takes no slot.
+# is how two processes come to hold "the lock" on two inodes). It is taken at
+# the carry's FIRST existing destination and held to the end of the loop, not
+# only through the merge walk, so a carry whose sidecars are ALL first carries
+# (today's `cp -al`/`cp -a` path, unchanged) takes no slot, but a first carry
+# that sorts AFTER a merge in the same call runs inside the slot already held.
+# That is a NAMED COST, kept: its `cp -al` -> `cp -a` fallback (an EXDEV on
+# every carry on this fleet, and not covered by CARRY_MERGE_BUDGET) can copy
+# for as long as it takes, and every other carry on the box that reaches an
+# existing destination meanwhile logs `(kept: busy)` and is left for its next
+# visit — the same bounded, never-waiting answer, only for longer.
 CARRY_MERGE_BUDGET=536870912    # bytes one sidecar's merge walk may read + copy per visit (512 MiB); what does not fit is deferred
 
 _carry_slot_take() {   # -> 0 and the CALLER's local CARRY_SLOT_FD set | 1 contended | 2 no mechanism (no flock, the lock file, any other flock failure)
@@ -22252,7 +22267,10 @@ _swap_carry_merge_walk() {   # src dst budget -> stdout rows; rc 0 merged (K def
   # counted (K), never started, so no deferred action leaves a partial file.
   # The next visit finds every placed file equal (a link is the same inode; a
   # copy keeps size and mtime_ns) and prices only what is left plus what is
-  # new, so a backlog drains, most valuable bytes first. Measured on the box's
+  # new, so a backlog drains, most valuable bytes first — with the fill's two
+  # named costs (the header above states them): an action over the budget on
+  # its own holds its queue for good, and a compare that places nothing is
+  # priced again on every visit. Measured on the box's
   # 673 real return-visit pairs at 512 MiB: 630 place everything at once, 43
   # defer some, and with no new bytes those 43 drain in 2 visits (27) or 3
   # (16); the largest single action priced 64 MiB. Not even the first action
@@ -22516,7 +22534,8 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
     if [[ -e "$dst" || -L "$dst" ]]; then
       # The slot is taken once, at the first existing destination, and held
       # for the rest of this carry; its answer is remembered, so a busy slot
-      # is not retried per sidecar.
+      # is not retried per sidecar. A first carry later in this loop therefore
+      # copies INSIDE the slot (the header's named cost).
       if [[ -z "$slot" ]]; then
         _carry_slot_take; slot_rc=$?; slot=taken
       fi
