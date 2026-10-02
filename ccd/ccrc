@@ -2010,8 +2010,8 @@ already running).
   version   print the build this box is running, from ~/.ccrc/build.json
   doctor    check this box's prerequisites — one PASS/WARN/FAIL line per
             check, each non-pass followed by its remedy; exit 1 if any failed.
-            --fix cures the checks that know how (skills: the shipped tree's
-            installers into every rostered home) and measures them again
+            --fix cures the checks that know how (skills, wrappers, codex —
+            each by the shipped tree's own installer) and measures them again
   status    print what this box IS: its build stamp, its services, how many
             ccd sessions it holds, and — when it knows where its server is —
             whether the two boxes agree. Read-only; always exit 0

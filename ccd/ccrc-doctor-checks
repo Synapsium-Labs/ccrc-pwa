@@ -2888,6 +2888,44 @@ _check_wrappers() {
   _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external, $n_codex Codex)"
 }
 
+# ── _fix_wrappers — the cure `ccrc doctor --fix` runs for `wrappers` ──────
+# Spec §12 lets `--fix` "regenerate a marker-verified launcher" and forbids
+# it to "overwrite an unverified launcher". A launcher is THIS check's
+# measurement — `_check_codex` does not measure one, and a second verdict
+# line for it would count one finding twice (`_check_accounts`'
+# `launcher-absent` note) — so its cure rides this check, for a generated
+# and a Codex account alike (D-3730,
+# Plan 3a Task 8).
+#
+# THE CURE IS THE SHIPPED TREE'S OWN `ccrc wrappers`, WITH NO FLAG
+# (`_fix_skills`' rule: re-run the shipped installer, never a copy of it).
+# With no flag that verb overwrites exactly one class of file — a launcher
+# carrying ccrc's marker whose hash still verifies (`ccrc-unmodified`), and
+# it backs that one up first — writes where nothing is, and REFUSES every
+# other file with its own remedy: a marked file edited since, a foreign
+# file (equivalent or not), one it cannot read, one over 1 MiB, an id
+# another launcher execs. So "never an unverified launcher" is the verb's
+# own table, not a second rule here, and this fixer never passes `--force`
+# or `--adopt`: those are the operator's.
+#
+# A CHILD PROCESS, never `cmd_wrappers` called in this shell: that verb
+# `_ccrc_die`s on a manifest it will not trust and arms an EXIT trap for its
+# staging directory, and cmd_doctor calls a fixer in ITS OWN shell. Its
+# output is relayed line by line under this fixer's prefix, so its own
+# `summary:` line can never be read as doctor's.
+_fix_wrappers() {
+  local ccrc="$BOX_TREE_DIR/ccd/ccrc" said rc=0 l
+  if [ ! -f "$ccrc" ]; then
+    echo "FIX wrappers: refused — the shipped tree has no \$HOME/ccrc/ccd/ccrc, so its 'ccrc wrappers' cannot be run; run 'ccrc update' (or 'ccrc install' from a checkout)"
+    return 1
+  fi
+  said="$("${BASH:-bash}" "$ccrc" wrappers 2>&1)" || rc=$?
+  while IFS= read -r l; do
+    [ -z "$l" ] || printf 'FIX wrappers: %s\n' "$l"
+  done <<< "$said"
+  echo "FIX wrappers: ran the shipped tree's 'ccrc wrappers' with no flag (exit $rc) — it overwrites only a launcher whose ccrc marker still verifies, writes only where nothing is, and refuses every other file; the re-measurement below is the verdict"
+}
+
 # ── skills — every rostered home carries the SHIPPED skills ────────────────
 # Release/rollout design §6. Compares each home's installed
 # ccrc-coordinator/worker/reviewer against the TREE (`$BOX_TREE_DIR/ccd/
@@ -5938,6 +5976,179 @@ _check_codex() {
       "if the flip back is final and ccrc runs nothing for '$n' any more (its tiers were stopped with 'ccrc codex stop $n' before the flip), remove $root/$n by hand; ccrc never deletes a lane's state on a flip"
   done
   _dr_cx_report "${#lanes[@]} Codex lane(s): $(_dr_cx_join ', ' ${DRX_OK[@]+"${DRX_OK[@]}"}); runtime ${DRX_RUNTIME:-unmeasured}; the four GPT-lane executables match the shipped tree${DR_CODEX_USAGE_BOX_NOTE:+; $DR_CODEX_USAGE_BOX_NOTE}"
+}
+
+# ── _fix_codex — the cure `ccrc doctor --fix` runs for `codex` ────────────
+# Spec §12's `--fix` list, as Plan 3a Task 8 lands it. cmd_doctor calls a
+# fixer ONLY when its check FAILED (its `"$rc" -eq 1` guard) and then
+# measures AGAIN; the verdict is that second measurement, never this
+# function's word (`_fix_skills`' rule). Two rows of §12's list
+# therefore live elsewhere: a missing or disabled usage timer is a WARN,
+# which never reaches a fixer, so its remedy names `ccrc install`, whose
+# converge is that unit's one enabler (D-3721);
+# and the launcher is `_check_wrappers`' measurement, so its cure is
+# `_fix_wrappers` (D-3730).
+#
+# WHAT IT DOES, each through the shipped tree's own installer step or the
+# lane library's own writer — never a copy of either:
+#   1. a GPT-lane executable (`CODEX_LANE_BINS`, the list `_check_codex`
+#      compares) that is missing, not executable, or not byte-identical to
+#      $BOX_TREE_DIR/ccd/<name> is placed again by `_inst_atomic`, the
+#      primitive `_inst_bins` places it with;
+#   2. a runtime `ccgpt-runtime check` refuses is rebuilt and re-probed by
+#      `ccgpt-runtime build` — the stamp is trusted until then
+#      (D-3711, Task 4);
+#   3. per lane, under its lane lock: lane.json is re-rendered by its ONE
+#      writer, models-op's `materialise` (no `--check`), when it is stale
+#      against the roster (`_codex_lane_json_state`) or against the class
+#      registry (`materialise --check true`, R7); and litellm.yaml is
+#      re-rendered through the codex arm's own body,
+#      `_models_litellm_lane_held`, whose compare makes a converged file a
+#      no-op and whose gate stops and starts only a tier it proves this
+#      lane's (the identity gate every stop path shares);
+#   4. only when step 1 or 2 replaced code a running tier may hold:
+#      `_inst_codex_tiers`, the install step that restarts a tier only when
+#      it is this lane's own, running, and stale.
+# WHAT IT NEVER DOES: edit the roster or choose a port (a row that does not
+# validate is named and left); run OAuth (`ccrc codex login <id>` is the
+# remedy the check prints); open anything under an authDir; signal a process
+# it cannot prove is a lane's (every stop is behind `_codex_tier_ours`,
+# inside steps 3 and 4); enable or disable any unit; overwrite a launcher;
+# delete anything.
+#
+# THE WHOLE CURE RUNS IN A SUBSHELL. cmd_doctor runs each CHECK in a
+# subshell but calls the FIXER in its own shell, and the library this calls
+# can end the shell it runs in: `_ccrc_die` and `_models_refuse` exit, and an
+# unbound variable is fatal under `set -u`. Called bare, any of those would
+# end the doctor run before the re-measurement it exists for. Each lane's
+# work is a nested subshell as well, so its lane lock is released as that
+# lane ends — through `_codex_unlock`, the lock's only release, or by the
+# subshell's own exit if the lane's work dies first — and no descriptor
+# reaches the next lane or the re-measurement.
+_fix_codex() {
+  (
+    local role="" lanes lrc=0 n src dst rt id replaced=0
+    local -a ids=() missing=()
+    for n in _codex_lanes _codex_row _codex_lane_json_state _codex_lock _codex_unlock \
+             _codex_runtime_cli _models_node _models_roster_path _models_litellm_lane_held \
+             _inst_atomic _inst_codex_tiers _box_env_value; do
+      declare -F "$n" >/dev/null 2>&1 || missing+=("$n")
+    done
+    declare -p CODEX_LANE_BINS >/dev/null 2>&1 || missing+=(CODEX_LANE_BINS)
+    if [ "${#missing[@]}" -gt 0 ]; then
+      echo "FIX codex: refused — ccrc's own $(_dr_join "${missing[@]}") is not loaded, so nothing was cured; this is a bug in ccrc, not a fact about your box (the check table was sourced by something that is not ccrc)"
+      exit 1
+    fi
+    # -f BEFORE -r, as `_check_skills` reads it. `_check_codex`
+    # SKIPs a server box, so cmd_doctor never calls this there; the refusal
+    # is for any other caller, because `_inst_bins` places no GPT-lane
+    # executable on a server box and step 1 must not either.
+    [ -f "${BOX_ENV_FILE:-}" ] && [ -r "$BOX_ENV_FILE" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+    if [ "$role" = server ]; then
+      echo "FIX codex: refused — this box records CCRC_ROLE=server, which converges nothing per account, so nothing was cured"
+      exit 1
+    fi
+    # An unreadable roster (rc 1) and a missing jq (rc 2) are not "no codex
+    # lane": each is the check's own FAIL, and nothing here can cure either.
+    lanes="$(_codex_lanes)" || lrc=$?
+    if [ "$lrc" -ne 0 ]; then
+      echo "FIX codex: refused — which roster lanes are codex lanes could not be read (the ccrc codex: line above says why), so nothing was cured"
+      exit 1
+    fi
+    [ -z "$lanes" ] || mapfile -t ids <<<"$lanes"
+    if [ "${#ids[@]}" -eq 0 ]; then
+      echo "FIX codex: nothing to cure — no codex lane in the roster"
+      exit 0
+    fi
+
+    # 1. The executables, from the shipped tree, by the installer's own primitive.
+    for n in ${CODEX_LANE_BINS[*]}; do
+      src="$BOX_TREE_DIR/ccd/$n"; dst="$HOME/.local/bin/$n"
+      if [ ! -f "$src" ]; then
+        echo "FIX codex: $n: not restored — the shipped tree has no \$HOME/ccrc/ccd/$n; run 'ccrc update' (or 'ccrc install' from a checkout) to place it"
+        continue
+      fi
+      if cmp -s "$src" "$dst" 2>/dev/null && [ -x "$dst" ]; then continue; fi
+      if ( mkdir -p "${dst%/*}" && _inst_atomic "$src" "$dst" 755 ); then
+        echo "FIX codex: restored \$HOME/.local/bin/$n from the shipped tree"
+        replaced=1
+      else
+        echo "FIX codex: $n: not restored — the install step refused (its line above says why)"
+      fi
+    done
+
+    # 2. The runtime: rebuilt only when its own check refuses.
+    rt="$(_codex_runtime_cli)"
+    if [ ! -x "$rt" ]; then
+      echo "FIX codex: runtime: not rebuilt — \$HOME/.local/bin/ccgpt-runtime is not on this box (the lines above say why)"
+    elif ! "$rt" check >/dev/null 2>&1; then
+      echo "FIX codex: runtime: rebuilding with 'ccgpt-runtime build' — pip may take minutes"
+      if "$rt" build >/dev/null && "$rt" check >/dev/null 2>&1; then
+        echo "FIX codex: runtime: rebuilt, probed and current"
+        replaced=1
+      else
+        echo "FIX codex: runtime: NOT rebuilt — 'ccgpt-runtime build' did not leave a current runtime (its reason is the ccgpt-runtime line on stderr), so the previous one, if any, stays current"
+      fi
+    fi
+
+    # 3. Each lane's files, under its lane lock.
+    for id in "${ids[@]}"; do
+      [ -n "$id" ] || continue
+      (
+        local st chk ans rc err detail body roster
+        roster="$(_models_roster_path)"
+        if ! _codex_row "$id" >/dev/null; then
+          echo "FIX codex: $id: nothing cured — its roster row does not validate (the ccrc codex: line above says why), and --fix never edits the roster or chooses a port"
+          exit 0
+        fi
+        if ! _codex_lock "$id"; then
+          echo "FIX codex: $id: nothing cured — its lane lock could not be taken (the line above says why); re-run 'ccrc doctor --fix' once it is free"
+          exit 0
+        fi
+        st="$(_codex_lane_json_state "$id")" || st=unmeasured
+        chk="$(_models_node materialise --file "$roster" --id "$id" --check true 2>/dev/null)" || chk=""
+        if [ "$st" != current ] \
+           || ! printf '%s' "$chk" | jq -e '.ok == true and .check == true and .changed.lane == false' >/dev/null 2>&1; then
+          ans="$(_models_node materialise --file "$roster" --id "$id" 2>/dev/null)"; rc=$?
+          if [ "$rc" -eq 0 ] && printf '%s' "$ans" | jq -e '.ok == true and (.wrote.lane | type) == "string"' >/dev/null 2>&1; then
+            echo "FIX codex: $id: lane.json re-rendered from the roster and this lane's class registry"
+          elif [ "$rc" -eq 0 ] && printf '%s' "$ans" | jq -e '.ok == true and .wrote == null' >/dev/null 2>&1; then
+            echo "FIX codex: $id: lane.json NOT rendered — this lane has no class registry, and lane.json is rendered from it; run: ccrc models $id init codex"
+          else
+            err="$(printf '%s' "$ans" | jq -r '.error // empty' 2>/dev/null)"
+            detail="$(printf '%s' "$ans" | jq -r '.detail // empty' 2>/dev/null)"
+            echo "FIX codex: $id: lane.json NOT rendered — deploy/models-op.mjs answered ${err:-exit $rc}${detail:+: $detail}"
+          fi
+        fi
+        # Its own subshell: the codex arm's body ends a refusal with
+        # `_models_refuse`, which exits. The lock this lane holds is its
+        # precondition, and a subshell inherits it.
+        body="$( _models_litellm_lane_held "$id" 2>/dev/null )"; rc=$?
+        body="${body##*$'\n'}"
+        if [ "$rc" -ne 0 ]; then
+          err="$(printf '%s' "$body" | jq -r '.error // empty' 2>/dev/null)"
+          detail="$(printf '%s' "$body" | jq -r '.detail // empty' 2>/dev/null)"
+          echo "FIX codex: $id: litellm.yaml NOT rendered — ${err:-the render exited $rc}${detail:+: $detail}"
+        elif printf '%s' "$body" | jq -e '.changed == true and .restarted == true' >/dev/null 2>&1; then
+          echo "FIX codex: $id: litellm.yaml re-rendered, and this lane's own LiteLLM tier restarted onto it"
+        elif printf '%s' "$body" | jq -e '.changed == true' >/dev/null 2>&1; then
+          echo "FIX codex: $id: litellm.yaml re-rendered"
+        fi
+        _codex_unlock
+      )
+    done
+
+    # 4. The tiers — only when this run replaced code a running tier may hold.
+    if [ "$replaced" -eq 1 ]; then
+      if ( INST_ROLE="${role:-both}"; INST_DEGRADED=(); _inst_codex_tiers; [ "${#INST_DEGRADED[@]}" -eq 0 ] ); then
+        echo "FIX codex: tiers: re-ran the install step that restarts a running tier only when it is this lane's own and runs code this fix replaced (its lines above)"
+      else
+        echo "FIX codex: tiers: re-ran the install step that restarts a verified-own stale tier, and it could not restart every one (its lines above say which)"
+      fi
+    fi
+    echo "FIX codex: done for ${#ids[@]} codex lane(s) — no port, roster row, OAuth, credential, unidentified listener or unit enablement was touched; the re-measurement below is the verdict"
+    exit 0
+  )
 }
 
 # `_check_codex`'s findings, recorded into the caller's DRX_CLASS/DRX_WHAT/

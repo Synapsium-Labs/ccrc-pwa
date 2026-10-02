@@ -22,11 +22,11 @@ round 1 (task-10-fix-rulings.md I-2), which is when the third was noticed:
      (`_probe_model` below), never hard-coded — a model frozen into a
      publisher is a second model policy. `lane.json`'s writer is
      `deploy/models-op.mjs`'s materialiser (Plan 2b-1 Task 6), which every
-     `ccrc models <id>` mutation runs; doctor has no `lane.json` arm. So this
-     file reads the manifest if present, and REFUSES if it is absent or
-     unusable, each refusal naming a remedy — the absent-file refusal's
-     remedy is Plan 3's to settle (it still names `ccrc doctor --fix`, spec
-     §12's planned `--fix` arm). Nothing here invents a default model.
+     `ccrc models <id>` mutation runs, and which `ccrc doctor --fix` runs
+     where doctor FAILs a lane's lane.json (Plan 3a Task 8). So this file
+     reads the manifest if present, and REFUSES if it is absent or unusable,
+     each refusal naming a remedy that works on this tree. Nothing here
+     invents a default model.
   2. `CCGPT_ACCOUNT_ID`'s fallback to "the first lane" (the reference
      script's `${CCGPT_ACCOUNT_ID:-gpt}`) is REMOVED. An unnamed lane is an
      error, not lane one (task-10-brief.md) — see `_required_env`.
@@ -305,15 +305,15 @@ def _read_lane() -> dict:
     away — read once, here, instead).
 
     `lane.json` is written by `deploy/models-op.mjs`'s materialiser, which
-    every `ccrc models <id>` mutation runs (Plan 2b-1 Task 6); doctor has no
-    `lane.json` arm, whatever the design spec's `--fix` table plans. The
-    behaviour for the file itself: read it if present and well-formed, and
-    REFUSE if it is absent or not valid JSON. The absent-file refusal still
-    names `ccrc doctor --fix` (task-10-rulings.md (commit 4893935a) §4) —
-    which remedy it should name is deferred to Plan 3, together with the
-    doctor arm it points at. Per-field validation (a present-but-wrong-shape
-    `probeModel`/`authDir`) happens at each field's own reader below, and
-    each names a remedy that works today.
+    every `ccrc models <id>` mutation runs (Plan 2b-1 Task 6), and which
+    `ccrc doctor --fix` runs where doctor FAILs a lane's lane.json (Plan 3a
+    Task 8). The behaviour for the file itself: read it if present and
+    well-formed, and REFUSE if it is absent or not valid JSON. The absent
+    refusal names both acts that render it — `ccrc doctor --fix`, and, for a
+    lane with no class registry yet, `ccrc models <id> init codex` (settling
+    task-10-rulings.md (commit 4893935a) §4's deferral). Per-field validation
+    (a present-but-wrong-shape `probeModel`/`authDir`) happens at each
+    field's own reader below, and each names a remedy that works today.
     """
     try:
         with open(LANE_MANIFEST_PATH, "r") as f:
@@ -321,7 +321,7 @@ def _read_lane() -> dict:
     except OSError:
         sys.exit(
             f"ccgpt-usage: refusing to publish — {LANE_MANIFEST_PATH} does not exist; "
-            "run `ccrc doctor --fix` to render it"
+            f"run `ccrc doctor --fix` (no class registry yet: `ccrc models {ACCOUNT_ID} init codex`)"
         )
     try:
         lane = json.loads(raw)
@@ -343,7 +343,7 @@ def _probe_model(lane: dict) -> str:
     `ccrc doctor --fix` (Plan 2b-1 Task 6 fix round 1, T2): the manifest's
     writer (`deploy/models-op.mjs`'s `laneManifest`) takes `probeModel` from
     the lane's haiku class and OMITS it when that class is unassigned, so any
-    re-render (`ccrc models`' own; doctor has no lane.json arm yet) reproduces it, and
+    re-render (`ccrc models`' own, or `ccrc doctor --fix`'s) reproduces it, and
     assigning haiku is the one act that cures it (that verb re-renders
     lane.json as it goes). The ABSENT-file refusal in `_read_lane` keeps its
     own remedy.
@@ -382,7 +382,7 @@ def _token_dir(lane: dict) -> str:
     materialiser copies `authDir` from the roster's `exec.authDir` on every
     mutation, so any one of them re-renders a manifest that lost it — and a
     roster whose codex row has no `exec.authDir` is refused by that same verb,
-    naming the field. Doctor renders no `lane.json`.
+    naming the field. `ccrc doctor --fix` re-renders it too (Plan 3a Task 8).
     """
     auth_dir = lane.get("authDir")
     if not isinstance(auth_dir, str) or not auth_dir:

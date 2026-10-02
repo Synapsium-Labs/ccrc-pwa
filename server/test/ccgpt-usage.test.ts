@@ -451,7 +451,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     }
   });
 
-  it('task-10: refuses when lane.json is absent, naming the remedy', async () => {
+  it('task-10, settled by Plan 3a Task 8: refuses when lane.json is absent, naming the two acts that render it', async () => {
     // Deliberately no plantLane() call. A reachable endpoint IS running
     // (never contacted) so the refusal can only be explained by lane.json,
     // not by a coincidental network failure. Uses `runPyAsync`, not the
@@ -469,8 +469,10 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
       expect(r.timedOut).toBe(false);
       expect(r.status).not.toBe(0);
-      expect(r.stderr).toMatch(/lane\.json/);
-      expect(r.stderr).toMatch(/ccrc doctor --fix/);
+      expect(r.stderr).toMatch(/lane\.json does not exist; run `ccrc doctor --fix` \(no class registry yet: /);
+      // A lane with no class registry has nothing `--fix` can render from:
+      // the act that renders its lane.json then is `init`, named with THIS id.
+      expect(r.stderr).toContain(`(no class registry yet: \`ccrc models ${id} init codex\`)`);
       expect(existsSync(limitsPath(home, id))).toBe(false);
       expect(requests.length).toBe(0); // task-10 M-7 (task-10-fix-rulings.md, commit 4893935a): never contacted, measured
     } finally {
@@ -795,7 +797,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
   // The writer's OTHER output, through the same two real programs: haiku
   // unassigned, so lane.json carries no `probeModel` at all (the writer omits
   // it rather than choosing a fallback). The refusal must name the act that
-  // cures it. `ccrc doctor --fix` did not — no doctor arm renders lane.json,
+  // cures it. `ccrc doctor --fix` does not — its lane.json arm re-renders,
   // and a re-render would read the same null — so this pins the remedy the
   // publisher now names, and that the old one is gone. A mutation that let the
   // publisher proceed would reach a mock that answers, so `runPyAsync` keeps
@@ -821,13 +823,13 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
   });
 
   // Final review F-7: the authDir refusal named `ccrc doctor --fix`, which
-  // renders no lane.json. It now names a `ccrc models` mutation, and this case
+  // then rendered no lane.json. It now names a `ccrc models` mutation, and this case
   // proves that remedy WORKS rather than pinning its text alone: the real
   // materialiser writes the manifest, `authDir` is then stripped from it (a
   // hand edit, or a writer that predates the field), the publisher refuses,
   // one mutation through the real writer re-renders it, and the publisher then
-  // publishes. The ABSENT-file refusal and its `doctor --fix` pin above are
-  // deliberately untouched (deferred to Plan 3).
+  // publishes. The ABSENT-file refusal's remedy above is Plan 3a Task 8's:
+  // `ccrc doctor --fix`, whose lane.json arm renders a missing manifest.
   it('final review F-7: a lane.json with no authDir is refused naming a models mutation, and that mutation cures it', async () => {
     const home = mkTmp('ccgpt-usage-no-authdir-');
     const id = mintId();
