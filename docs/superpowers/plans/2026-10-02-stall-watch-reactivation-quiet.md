@@ -1141,7 +1141,7 @@ for name, path, old, new in M:
 Both numbers were issued at run-open by the coordinator (`POST /api/ledger/deviations`). Code comments cite each by slug
 and number.
 
-- **D-3788** `quiet-restarts-on-reactivation` — the wave-1 and marker quiet clocks and the episode key restart when a
+- **D-3788** — `quiet-restarts-on-reactivation`: the wave-1 and marker quiet clocks and the episode key restart when a
   run re-enters an active state. Spec §4.2 defines `quiet = now − max(statusUpdatedAt, the worker's last mail, the
   newest non-watch mail to it, dispatchedAt)` and `episodeKeyMs = max(the worker's newest mail, the coordinator's newest
   wait:, dispatchedAt)`, says the key "changes only when the worker mails or the coordinator sends `wait:`" and "keys
@@ -1157,14 +1157,14 @@ and number.
   cost of not doing it: two of the shadow review's five false r1s (runs 187 and 199), each firing seconds after the
   advance and racing the fix-round brief with a false "quiet ~8 h 49 m / ~6 h 11 m, owed: next report". Read from the
   primary run only, as `dispatchedAt` is; an unprovable time holds `unmeasured` (§10 step 2c) rather than reading as 0.
-- **D-3789** `coord-ball-restarts-on-reactivation` — the coordinator-ball cap's 30 h runs from the later of the last mail on
+- **D-3789** — `coord-ball-restarts-on-reactivation`: the coordinator-ball cap's 30 h runs from the later of the last mail on
   the run and the run's re-activation. Spec §4.2 (§11 decision 9) measures it from "no mail on the run from either side"
   alone. Argument: the common send-back leaves the worker's wave-done as the newest mail, so the ball stays the
   coordinator's through `awaiting-review` and after the advance; a run that waited 30 h for review would draw
   "⚠ waiting … no mail on the run since …" within one sweep of the coordinator's own advance, which is false: the
   coordinator just acted. The push text keeps naming the last mail, which stays true. Kept apart from the slug above
   because it changes an operator-ruled cap, not the worker's quiet.
-- **D-3795** `caps-dedupe-pinned` — recorded at wave-done (run 221). The final review of the wave found that moving
+- **D-3795** — `caps-dedupe-pinned`: recorded at wave-done (run 221). The final review of the wave found that moving
   either cap's `rungDoneAt(..., capKeyMs)` argument back to the moved episode key passed every test, so the fix
   round added two E4-shaped cases (with controls) that fail if it moves, plus a docstring naming the rowless run
   `CoordStore.reconstruct()` rebuilds. Tests and a docstring only; no behaviour change.

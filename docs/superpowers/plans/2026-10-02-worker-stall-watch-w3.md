@@ -139,18 +139,18 @@ them:
 Issued by the coordinator at run-open, one per slug; a departure found during execution is named by slug in the
 wave-done mail.
 
-- **D-3791** `coordinator-stall-row-widened` (Task 1) — spec §6.1's new row "pins that the quoted `stall:` and `wait:` equal
+- **D-3791** — `coordinator-stall-row-widened` (Task 1): spec §6.1's new row "pins that the quoted `stall:` and `wait:` equal
   the constants exported from `stall.ts`". This plan's appended describe pins those two, and two more facts the clause
   states:
   - Its sender `operator` equals `stall.ts`'s module-private `STALL_SENDER`, read from source because it is not
     exported. No `server/src` edit.
   - The section it defers to, ‘When something is wrong’, is still a `## ` heading of the coordinator SKILL.md.
-- **D-3792** `stop-clause-property-rows` (Task 2) — spec §6.2's pin impact is the verbatim array and the count word. This plan
+- **D-3792** — `stop-clause-property-rows` (Task 2): spec §6.2's pin impact is the verbatim array and the count word. This plan
   adds two rows that hold S3 and S4 through a later rewording:
   - The wake list names no shell, Bash or Monitor, in any letter case, and `stall.ts`'s kind map agrees that a shell can wake a session but
     never resumes it.
   - The interim-completion sentence stays.
-- **D-3790** `snapshot-citations-left` (Tasks 1–2) — §6.1 says "the citation sweep re-proves each" shifted SKILL.md citation
+- **D-3790** — `snapshot-citations-left` (Tasks 1–2): §6.1 says "the citation sweep re-proves each" shifted SKILL.md citation
   "in the same commit". Measured at `61b280fb`, every citation of a shifted line lives in a dated
   `docs/superpowers/{plans,specs,programs}` document. Each already pointed at text that has since moved:
   - coordinator: 13 citations;
@@ -160,7 +160,7 @@ wave-done mail.
   tracked, the two counts stay 13 and 1.
   The sweep re-proves this by measurement and repairs nothing, because rewriting a dated snapshot falsifies its record.
   A LIVE hit at execution is repaired, and is not covered by this departure.
-- **D-3793** `continuity-amendment-states-the-arm` (Task 3, ruling R5) — spec §6.3 prescribes "… and nothing types at spawn.
+- **D-3793** — `continuity-amendment-states-the-arm` (Task 3, ruling R5): spec §6.3 prescribes "… and nothing types at spawn.
   If the restart orphaned in-flight work (the marker's `lostBg`), the server's stall watch mails the session itself
   once, 15 minutes after the restart." That misdescribes the spec's own orphan-D arm as it shipped in wave 2
   (`stallOrphanDInner` in `server/src/coord/stall.ts`):

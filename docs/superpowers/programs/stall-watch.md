@@ -91,6 +91,14 @@ independent reader, then cross-checked by another. The cross-check upheld every 
   wave 5: a run rebuilt by `CoordStore.reconstruct()` reads its first send-back as no re-activation (fails safe);
   the coordinator-ball push text omits the coordinator's own advance; README's coordinator-ball sentence needs its
   qualifier.
+- **R10 (coordinator, 2026-10-02): this programme's ledger entries are visible to the collision guard.** Wave 5's
+  planner found that `server/src/coord/ledger.ts`'s `DEFINITION` regex (the cross-tree collision scan) and
+  `deviation-refs.test.ts`'s `ENTRY` regex accept different shapes, and the shape waves 1 and 2 used
+  (`- **D-N** \`slug\`: …`) matched neither: all 128 of their definitions were invisible to both scans. Every
+  definition in this programme's five plans now reads `- **D-N** — \`slug\` …`, edited in place (no line moves),
+  and both scans see all of them; `deviation-refs` found no collision. **Side finding for the ledger tooling's
+  owner** (not fixed here): the two regexes should be one, and a definition line that matches neither should fail a
+  test rather than vanish.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
