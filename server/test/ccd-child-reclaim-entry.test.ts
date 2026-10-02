@@ -861,11 +861,16 @@ describe('the protected payload starts with no Bash startup state to hand on (D-
   }, 60_000);
 });
 
-describe('the one change an ordinary start inherits from the launcher: PEP 538 locale coercion (D-3701)', () => {
+describe('what an ordinary start inherits from the launcher\'s own Python startup: PEP 538 locale coercion, and on Darwin one more key (D-3701)', () => {
   // Isolated-mode Python coerces a C or POSIX LC_CTYPE to a UTF-8 locale at its
   // own startup and writes LC_CTYPE into its environment, which the launcher
   // hands on. Measured against the SAME body started by a direct `bash` with the
   // SAME environment, so Bash's own additions (SHLVL, PWD, `_`) cancel out.
+  // On Darwin the macOS Python's runtime also adds `__CF_USER_TEXT_ENCODING` for
+  // every caller, a UTF-8 one included (measured on the macOS CI runner by
+  // review 217, W1, as `0x1F5:0x0:0x0`). D-3701 names it, and `delta` tolerates
+  // exactly that key, only when it was ADDED, and only on Darwin.
+  const DARWIN_ADDED = '__CF_USER_TEXT_ENCODING';
   const ENV0_BODY = '#!/usr/bin/env bash\nenv -0 > "$HOME/env-out"\n';
   const PEP538_TARGETS = ['C.UTF-8', 'C.utf8', 'UTF-8'];
   const envOut = (): Map<string, string> => new Map(fs.readFileSync(path.join(h.home, 'env-out'), 'utf8').split('\0')
@@ -884,16 +889,17 @@ describe('the one change an ordinary start inherits from the launcher: PEP 538 l
     const d: Record<string, string | null> = {};
     for (const [k, v] of launched) if (direct0.get(k) !== v) d[k] = v;
     for (const k of direct0.keys()) if (!launched.has(k)) d[k] = null;
+    if (process.platform === 'darwin' && !direct0.has(DARWIN_ADDED) && d[DARWIN_ADDED] != null) delete d[DARWIN_ADDED];
     return d;
   };
 
-  it('a C-locale ordinary start gains exactly LC_CTYPE, set to a PEP 538 UTF-8 target — and nothing else changes', () => {
+  it('a C-locale ordinary start gains exactly LC_CTYPE, set to a PEP 538 UTF-8 target — and, beyond Darwin\'s one key, nothing else changes', () => {
     const d = delta('C');
     expect(Object.keys(d), JSON.stringify(d)).toEqual(['LC_CTYPE']);
     expect(PEP538_TARGETS, `LC_CTYPE=${d['LC_CTYPE']}`).toContain(d['LC_CTYPE']);
   }, 60_000);
 
-  it('CONTROL: a caller already in a UTF-8 locale gains nothing — the launcher hands its environment on unchanged', () => {
+  it('CONTROL: a caller already in a UTF-8 locale gains nothing but Darwin\'s one key — the launcher hands its environment on unchanged', () => {
     expect(delta('C.UTF-8')).toEqual({});
   }, 60_000);
 });

@@ -24,9 +24,12 @@
 #   ws-audit --session <value> --reclaim [--defer-expired] — the token skeleton;
 #     <value> is any string here, and the body still validates it as a session id
 # Every other argv is ORDINARY: the same Bash >= 4.4 scan, no `-p`, and the
-# payload started with the inherited environment untouched — an ordinary verb
-# keeps what it always had. Only the scan's PROBE runs startup-free (D-3702), so
-# a caller's printing `BASH_ENV` cannot stop ccd starting at all.
+# payload started with the environment this Python inherited, changed only by
+# what Python's own startup adds before this file runs (D-3701): `LC_CTYPE` for
+# a caller in the C or POSIX locale (PEP 538), and on Darwin
+# `__CF_USER_TEXT_ENCODING` for every caller. Only the scan's PROBE runs
+# startup-free (D-3702), so a caller's printing `BASH_ENV` cannot stop ccd
+# starting at all.
 #
 # TRUST BOUNDARY. Runtime PATH and every executable it selects — this Python,
 # the Bash below, and every external command ccd runs — are TRUSTED
@@ -69,10 +72,11 @@ REFUSED_RC = 125
 # every child it starts, and an ordinary child Bash (a trusted PATH tool that is
 # a Bash script) would consume them. `BASH_FUNC_` is matched as a PREFIX, so
 # every exported-function spelling (`name%%`, the older `name()`) goes. An
-# ORDINARY start's payload keeps its original environment; its probe runs
-# without these too (D-3702), because the probe's answer is one exact printed
-# record, and a `BASH_ENV` that prints or an exported `printf` would otherwise
-# refuse every ordinary verb as `entry-no-bash` — a cause it does not name.
+# ORDINARY start's payload keeps its original environment, apart from D-3701's
+# additions by Python's startup; its probe runs without these too (D-3702),
+# because the probe's answer is one exact printed record, and a `BASH_ENV` that
+# prints or an exported `printf` would otherwise refuse every ordinary verb as
+# `entry-no-bash` — a cause it does not name.
 #
 # AND THE VARIABLES `bash -p` STILL HONOURS FROM THE ENVIRONMENT (D-3700,
 # measured on bash 5.2): POSIXLY_CORRECT turns on posix mode, BASH_COMPAT a
@@ -249,7 +253,8 @@ def main():
     protected = is_protected(argv)
     # `os.environb` already carries Python's PEP 538 locale coercion: under a C
     # or POSIX LC_CTYPE, isolated-mode Python sets LC_CTYPE to a UTF-8 locale
-    # before this file runs, so every start below inherits it (D-3701).
+    # before this file runs, so every start below inherits it; on Darwin it
+    # also carries `__CF_USER_TEXT_ENCODING`, added for every caller (D-3701).
     clean = startup_free_env()
     env = clean if protected else os.environb
     bash = select_bash(protected, clean)
