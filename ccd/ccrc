@@ -22444,10 +22444,12 @@ cmd_restamp() {
   [ $# -eq 1 ] || { echo "usage: $PROG restamp <file>" >&2; exit 2; }
   local f="$1" mark="$CCRC_HERE/../shared/mark.mjs" verdict dir real d
   { [ -f "$f" ] && [ ! -L "$f" ]; } || _ccrc_die "restamp: $f is not a regular file"
-  dir="$(cd "$(dirname -- "$f")" && pwd -P)" || _ccrc_die "restamp: $f could not be resolved"
+  # CDPATH= : `cd` consults an exported CDPATH for a relative operand, so the
+  # directory resolved here could be a decoy while the write lands on $f itself.
+  dir="$(CDPATH= cd -- "$(dirname -- "$f")" && pwd -P)" || _ccrc_die "restamp: $f could not be resolved"
   real="$dir/${f##*/}"
   for d in "$HOME/.local/bin" "$HOME/.ccrc"; do
-    [ -d "$d" ] && d="$(cd "$d" && pwd -P)"
+    [ -d "$d" ] && d="$(CDPATH= cd -- "$d" && pwd -P)"
     case "$real" in
       "$d"/*) _ccrc_die "restamp: $f is a generator's output; regenerate it with its generator (ccrc wrappers, ccrc install), never restamp it" ;;
     esac

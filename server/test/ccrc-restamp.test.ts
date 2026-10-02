@@ -126,4 +126,25 @@ describe('ccrc restamp <file>', () => {
     expect(r.code).toBe(1);
     expect(readFileSync(f, 'utf8')).toBe(staleStamped());
   });
+
+  it("refuses a generator's output named by a RELATIVE path even when CDPATH would resolve it elsewhere", () => {
+    // `cd` consults an exported CDPATH for a relative operand and PRINTS the
+    // directory it found, so a scope check built on `cd "$(dirname "$f")"` could
+    // be resolved to a decoy while the write lands on the real file.
+    const home = mkTmp('ccrc-restamp-home-');
+    const real = join(home, '.ccrc', 'sub', 'f');
+    mkdirSync(path.dirname(real), { recursive: true });
+    writeFileSync(real, staleStamped());
+    const decoyRoot = mkTmp('ccrc-restamp-cdpath-');
+    mkdirSync(join(decoyRoot, 'sub'), { recursive: true });
+    writeFileSync(join(decoyRoot, 'sub', 'f'), staleStamped());
+    const r = spawnSync('bash', [CCRC, 'restamp', 'sub/f'], {
+      cwd: join(home, '.ccrc'),
+      env: ghContainedEnv(home, { ...process.env, HOME: home, CDPATH: decoyRoot }),
+      encoding: 'utf8',
+    });
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stderr).toContain("is a generator's output");
+    expect(readFileSync(real, 'utf8'), 'the file under ~/.ccrc was rewritten').toBe(staleStamped());
+  });
 });
