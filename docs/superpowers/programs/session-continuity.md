@@ -98,6 +98,18 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   numbers, issued at run-open and written bare here until a plan on the same ref defines them: 3768 through 3777.
   The brief adds two rules that post-date the plan: the wave stops at the PR (the coordinator merges; the
   fleet moves by ccrc's own update mechanism, operator ruling 2026-09-30), and main is measured fresh.
+- **2026-10-02 — Task 1's STOP row ruled a false positive (run 219).** The write-model probe printed one
+  `journal: born at its last write (STOP)` row out of 151 finished-here runs. That row was the window's only killed
+  run (13 s). Its journal has two rows, written on one inode, and was born 67 ms before its last write. A
+  temp-and-rename journal is born at its last write, and a two-row journal cannot pass the probe's three-line
+  criterion whatever the write model. Everything that can decide the question agrees with the plan:
+  - the other 150 journals are append-in-place;
+  - that run's agent log grew on one inode;
+  - the live sample grew on one inode;
+  - linkmode shows no crossover.
+
+  Ruled: the plan's verdict stands and Task 2 proceeds. The worker records this as a departure from its own block.
+  The probe's criterion is not changed in this wave.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
