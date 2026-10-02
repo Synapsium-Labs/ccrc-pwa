@@ -1457,4 +1457,13 @@ describe('the Released (n) fold (workspace lifecycle spec §5.1)', () => {
     expect(screen.getByRole('button', { name: /released \(1\)/i })).toHaveAttribute('aria-expanded', 'true');
     expect(container.querySelectorAll('.proj-released-body .sess-line')).toHaveLength(1);
   });
+
+  it('a COLLAPSED card still marks the selection when the selected row sits only in Released', () => {
+    // Before the fold a released row lived in `group.sessions`, so the folded header carried the mark; the row now
+    // lives in `group.released`, and the mark must follow it.
+    const g = grp({ released: [released('demo-amber-delta', 'alpha', 200)] });
+    const { container } = render(
+      <ProjectCard collapsed selectedId="demo-amber-delta" group={g} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card')).toHaveAttribute('data-holds-selection');
+  });
 });

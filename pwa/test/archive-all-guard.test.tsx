@@ -5,7 +5,7 @@
 // sheet unmounts before a second click lands. So this file stubs QuickConfirm with a confirm that fires `onConfirm`
 // twice in ONE synchronous handler — the phone's double tap, collapsed to its essence. It is a separate file because
 // `vi.mock` is hoisted file-wide and must not touch the real-sheet cases in fleet-screen.test.tsx.
-// Delete the guard (`if (archivingAllRef.current.has(project)) return;`) and this goes red: two loops, four archives.
+// Delete the guard (`if (archivingAllRef.current.has(project)) return;`) and this goes red: the first assertion to fail is the duplicate summary toast (`findByText` sees two "Archived 2, skipped 0, refused 0." toasts).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession, UpdatesView } from '../../shared/api';

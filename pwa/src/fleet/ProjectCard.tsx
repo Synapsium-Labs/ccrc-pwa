@@ -374,8 +374,10 @@ export function ProjectCard({
   // touches the perimeter — but a fold can hide it exactly as it can hide a
   // pending dialog, so the header carries it (as the slab, at chip scale)
   // while folded. This is the only place the card itself reads selectedId.
+  // A Released row is out of `group.sessions` (it sits in its own fold), so the fold's rows count too.
   const holdsSelection =
-    collapsed && selectedId !== null && group.sessions.some((s) => s.id === selectedId);
+    collapsed && selectedId !== null &&
+    (group.sessions.some((s) => s.id === selectedId) || group.released.some((s) => s.id === selectedId));
 
   // Task 4. The tree's SHAPE is decided once, away from here (`nestFleet`, five
   // rules, one unit suite); this component maps over the answer and draws a
