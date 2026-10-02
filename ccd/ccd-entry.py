@@ -78,8 +78,10 @@ REFUSED_RC = 125
 # measured on bash 5.2): POSIXLY_CORRECT turns on posix mode, BASH_COMPAT a
 # compat level, TMOUT=1 makes a `while read … < <(slow)` loop read nothing,
 # FUNCNEST aborts the script mid-act, SECONDS rebases the clock, and
-# BASH_XTRACEFD / EXECIGNORE / GLOBSORT / BASH_LOADABLES_PATH are startup or
-# option state of the same kind.
+# BASH_XTRACEFD redirects the trace. Four more go AS A PRECAUTION, not against a
+# measured effect: bash 5.2 applies neither an inherited GLOBIGNORE nor an
+# inherited EXECIGNORE (it still exports both to every child), GLOBSORT is a
+# Bash 5.3 variable, and BASH_LOADABLES_PATH is read only by `enable -f`.
 STARTUP_VARS = (b'BASH_ENV', b'ENV', b'SHELLOPTS', b'BASHOPTS', b'CDPATH', b'GLOBIGNORE',
                 b'POSIXLY_CORRECT', b'BASH_COMPAT', b'TMOUT', b'FUNCNEST', b'SECONDS', b'BASH_XTRACEFD',
                 b'EXECIGNORE', b'GLOBSORT', b'BASH_LOADABLES_PATH')
