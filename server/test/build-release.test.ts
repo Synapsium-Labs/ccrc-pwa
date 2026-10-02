@@ -77,6 +77,13 @@ const FIXTURE_FILES: Record<string, string> = {
   'install.sh': '#!/usr/bin/env bash\necho fixture install.sh\n',
   'ccd/ccrc': '#!/usr/bin/env bash\necho fixture ccrc\n',
   'ccd/ccrc-doctor-checks': '# fixture doctor checks\n',
+  // The installed `ccd` is TWO release inputs: the Bash body (`ccd/ccd`, placed
+  // at `~/.local/libexec/ccrc/ccd`) and the launcher TEMPLATE (`ccd/ccd-entry.py`,
+  // rendered into `~/.local/bin/ccd` on the box). The script archives all of
+  // `ccd/`, so neither is named in its pathspec — which is exactly why each is an
+  // explicit expected member below rather than something that merely rides along.
+  'ccd/ccd': '#!/usr/bin/env bash\necho fixture ccd body\n',
+  'ccd/ccd-entry.py': '#!/usr/bin/env python3\n# fixture launcher template\n',
   'shared/api.ts': '// fixture shared/api.ts\n',
   'shared/package.json': '{ "type": "module" }\n',
   'deploy/ccrc.service': '[Unit]\nDescription=fixture ccrc.service\n',
@@ -101,7 +108,7 @@ function fixtureRepo(home: string, opts: { tag?: string; files?: Record<string, 
   for (const [rel, body] of Object.entries({ ...FIXTURE_FILES, ...(opts.files ?? {}) })) {
     const dest = join(root, rel);
     mkdirSync(path.dirname(dest), { recursive: true });
-    writeFileSync(dest, body, { mode: rel.endsWith('.sh') || rel === 'ccd/ccrc' ? 0o755 : 0o644 });
+    writeFileSync(dest, body, { mode: rel.endsWith('.sh') || rel === 'ccd/ccrc' || rel === 'ccd/ccd' ? 0o755 : 0o644 });
   }
   copyFileSync(SCRIPT, join(root, 'deploy', 'build-release.sh'));
   chmodSync(join(root, 'deploy', 'build-release.sh'), 0o755);
@@ -206,6 +213,7 @@ const EXPECTED_ENTRIES = [
   'pwa/package.json', 'pwa/package-lock.json',
   'shared/api.ts', 'shared/package.json',
   'ccd/ccrc', 'ccd/ccrc-doctor-checks',
+  'ccd/ccd', 'ccd/ccd-entry.py',
   'deploy/ccrc.service', 'deploy/verify-service.sh',
   'install.sh',
   'MANIFEST',
@@ -328,9 +336,11 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     // lacks makes `ccrc update`'s post-extract verify fail on every box.
     const onDisk = walkFiles(dest).filter((f) => f !== 'MANIFEST').sort();
     expect([...entries.keys()].sort()).toEqual(onDisk);
-    // Spot-verify TWO digests independently (node's own crypto, not
-    // sha256sum, so the tool cannot vouch for itself)…
-    for (const spot of ['install.sh', 'ccd/ccrc']) {
+    // Spot-verify FOUR digests independently (node's own crypto, not
+    // sha256sum, so the tool cannot vouch for itself) — the original two, plus
+    // BOTH halves of the installed `ccd`: the body and the launcher template,
+    // each of which a box cannot run without…
+    for (const spot of ['install.sh', 'ccd/ccrc', 'ccd/ccd', 'ccd/ccd-entry.py']) {
       expect(entries.get(spot), `${spot}'s digest is wrong in the MANIFEST`)
         .toBe(sha256(join(dest, spot)));
     }
@@ -338,6 +348,43 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     // update verb will do after extraction.
     const r = spawnSync(SHA256SUM, ['-c', 'MANIFEST'], { cwd: dest, encoding: 'utf8' });
     expect(r.status, r.stdout + r.stderr).toBe(0);
+  });
+
+  // The fixture's `ccd/` members are stubs, so the test above proves the SCRIPT
+  // ships whatever `ccd/` holds. This one feeds it this checkout's REAL bytes for
+  // the two release inputs of the installed `ccd` and asks the artifact for them
+  // back: both present, both MANIFEST-covered, and both byte-identical to the
+  // source — the template included, since a release that shipped the body alone
+  // would install a `ccd` whose launcher no box can render.
+  it('ships the real ccd body, launcher template and pair installer byte-for-byte, MANIFEST-covered (the installed ccd is a pair)', () => {
+    const real = (rel: string): string => {
+      expect(existsSync(join(REPO, rel)), `${rel} is not in this checkout`).toBe(true);
+      return readFileSync(join(REPO, rel), 'utf8');
+    };
+    // The third member is the program that renders and publishes the pair on
+    // the box (`ccrc install`/`update` and `deploy.sh` both run it from the
+    // tree), so a release without it installs nothing at all.
+    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py'] as const;
+    const home = mkTmp('build-release-ccd-pair-');
+    const root = fixtureRepo(home, {
+      tag: 'v1.2.3', files: Object.fromEntries(pair.map((rel) => [rel, real(rel)])),
+    });
+    const out = join(home, 'out');
+    expect(runRelease(root, home, ['--out', out]).code).toBe(0);
+    const tarball = join(out, 'ccrc-v1.2.3.tar.gz');
+    const listing = tarListing(tarball);
+    const dest = join(home, 'extracted-pair');
+    extract(tarball, dest);
+    const manifest = readFileSync(join(dest, 'MANIFEST'), 'utf8');
+    for (const rel of pair) {
+      expect(listing, `the tarball is missing ${rel}`).toContain(rel);
+      const line = manifest.split('\n').find((l) => l.endsWith(` ${rel}`) || l.endsWith(`*${rel}`));
+      expect(line, `the MANIFEST does not name ${rel}`).toBeTruthy();
+      // Three-way agreement: the digest the MANIFEST states, the bytes the
+      // tarball carries, and the source file in this checkout.
+      expect(line!.slice(0, 64), `${rel}: MANIFEST digest vs the extracted bytes`).toBe(sha256(join(dest, rel)));
+      expect(sha256(join(dest, rel)), `${rel}: shipped bytes vs this checkout's`).toBe(sha256(join(REPO, rel)));
+    }
   });
 
   // ── Stage 4, Task 6: the artifact carries its own identity ──────────────
