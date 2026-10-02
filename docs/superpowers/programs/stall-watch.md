@@ -17,7 +17,7 @@ file in the fleet registry. No marker has a writer in the tree.
 |---|---|---|---|---|
 | 1 | `shell` delivery; the run-worker quiet lane (r1 worker check, r2 coordinator report, r3 operator push), shadow until armed | server | #216 | **merged** `1f9fa22d7`, live v0.0.52 (shadow) |
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
-| 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | — | planned |
+| 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | — | **dispatched** 2026-10-02 as run 221 (a fresh child) |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | planned; clause text awaits one operator ruling (below) |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors | server | — | planned |
 
@@ -103,4 +103,6 @@ independent reader, then cross-checked by another. The cross-check upheld every 
 
 ## Next-wave brief
 
-Wave 3: `docs/superpowers/plans/2026-10-02-stall-watch-reactivation-quiet.md`, all tasks. A fresh child of `ccrc-pwa`.
+Wave 4: `docs/superpowers/plans/2026-10-02-worker-stall-watch-w3.md`, all tasks, on a fresh child of `ccrc-pwa`, read by
+its commit sha. Its coordinator clause text is settled against the operator's R2 before dispatch. Wave 5's plan
+(follow-ups) is being written.
