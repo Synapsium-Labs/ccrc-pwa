@@ -448,11 +448,23 @@ describe('the budget is a priority fill: the most valuable actions first, the re
 });
 
 describe('bounded: a busy slot falls back to (kept), and nothing waits', () => {
-  it('a busy slot falls back to (kept: busy) and touches nothing', () => {
+  it('a busy slot falls back to (kept: busy) at once, touches nothing, and never waits', () => {
+    // A carry that WAITED on the slot would deadlock against the lock this
+    // same snippet holds, and `h.sh` has no timeout, so the suite would hang
+    // instead of failing. The bound is local to this case: the carry runs in
+    // a background subshell, is polled for ~10 s, and is killed if it is still
+    // there, which turns the hang into the `HUNG` assertion below. It does not
+    // inherit fd 7 (`7>&-`): it is "another carry", and a killed carry that
+    // held the slot's descriptor would leave a `flock` waiting on itself.
     put(SRC('tool-results/new.txt'), 'NEW\n');
     fs.mkdirSync(DST(), { recursive: true });
-    const out = carry(HOLD_SLOT);
+    const out = h.sh(`${HOLD_SLOT}
+      ( _swap_carry_sidecars "$HOME/.claude" "$HOME/.claude-d" ${UUID} >/dev/null 2>&1 ) 7>&- & pid=$!
+      for ((i = 0; i < 100; i++)); do kill -0 $pid 2>/dev/null || break; sleep 0.1; done
+      if kill -0 $pid 2>/dev/null; then echo HUNG; kill -9 $pid 2>/dev/null; fi
+      wait $pid 2>/dev/null; echo "[rc=$?]"`);
     expect(out).not.toContain('HOLD-FAILED');
+    expect(out, 'the carry WAITED on a contended slot').not.toContain('HUNG');
     expect(verdict()).toBe('(kept: busy)');
     expect(fs.existsSync(DST('tool-results/new.txt'))).toBe(false);
   });
