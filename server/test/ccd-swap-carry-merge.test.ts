@@ -549,6 +549,43 @@ describe('a walk that cannot finish is (kept: error), and the carry still answer
     expect(verdict()).toBe('(kept: error)');
   });
 
+  // `mapfile -t rows <<< "$wout"` is the one place the carry reads the walker's
+  // rows back. bash spills a here-string of 64 KiB or more to a temp file, and
+  // when that cannot be created `mapfile` never runs and `rows` is left as it
+  // was. These two cases stand in for that with a `mapfile` that leaves `rows`
+  // alone. Named cost: the temp's own failure is not exercised — bash falls
+  // back from an unusable TMPDIR to /tmp, /var/tmp, /usr/tmp, so only a
+  // failure AFTER its writability check (a full disk, a quota, no free
+  // descriptor) reaches it, and none of those can be made in a fixture without
+  // starving the carry's own pipes and slot descriptor.
+  const MAPFILE_ROWS_FAILS = (after: number): string =>
+    `_mf=0; mapfile() { if [[ "$2" == rows ]] && (( ++_mf > ${after} )); then return 1; fi; builtin mapfile "$@"; };`;
+
+  it('rows that were never read back (an empty array) are (kept: error), and the carry still answers rc 0', () => {
+    // Under ccd's `set -u` the old last-row read of an empty array killed the
+    // shell after the unit was stopped and before it was restarted.
+    put(SRC('tool-results/new.txt'), 'NEW\n');
+    fs.mkdirSync(DST(), { recursive: true });
+    const out = carry(MAPFILE_ROWS_FAILS(0));
+    expect(out, 'the carry did not answer').toContain('[rc=0]');
+    expect(verdict()).toBe('(kept: error)');
+  });
+
+  it('rows left over from the previous sidecar are not read as this one\'s verdict', () => {
+    // The second sidecar's read-back fails; the first one's `merged` row must
+    // not be logged for it.
+    const OTHER = '-w-other-project';
+    put(SRC('tool-results/a.txt'), 'A\n');
+    fs.mkdirSync(DST(), { recursive: true });
+    const b = path.join(h.home, '.claude', 'projects', OTHER, UUID, 'tool-results', 'b.txt');
+    put(b, 'B\n');
+    fs.mkdirSync(path.join(h.home, '.claude-d', 'projects', OTHER, UUID), { recursive: true });
+    const out = carry(MAPFILE_ROWS_FAILS(1));
+    expect(out).toContain('[rc=0]');
+    const rows = swapLog().split('\n').filter((l) => l.includes(` sidecar ${UUID} -> `)).map((l) => l.replace(/^.* \(/, '('));
+    expect(rows, swapLog()).toEqual(['(merged +1 ~0 !0)', '(kept: error)']);
+  });
+
   it('a walker that exits 0 but prints no readable summary row is (kept: error)', () => {
     put(SRC('tool-results/new.txt'), 'NEW\n');
     fs.mkdirSync(DST(), { recursive: true });
