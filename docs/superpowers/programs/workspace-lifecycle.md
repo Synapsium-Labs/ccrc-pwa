@@ -18,7 +18,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | re-review 231 ruled 2026-10-02: fix round 3 (wording + one pin) |
+| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | fix round 3 done 2026-10-02; in re-review (run 234) |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | — | planned; approved 2026-10-01 (#223) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
@@ -164,6 +164,11 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     archived-only card, and correct the three sentences. Option (b), keying on `releasedFromOf`, is not taken,
     because it would move an unfolded, visible row relative to RANK.
   - **Numbering:** no new number.
+- **2026-10-02 — fix round 3 done, in re-review.**
+  - **Fixes:** four commits (tip `add311d4`). The rename to `unfoldedDead`, the reworded texts, and the stranded-row
+    pin (P38, red under the panel's remedy). P31, P36 and P37 are re-anchored on the 54-case file.
+  - **CI:** the required Linux legs are green on the first attempt.
+  - **Re-review:** review run 234 went out with the held-out panel over `dc4be181..add311d4`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
