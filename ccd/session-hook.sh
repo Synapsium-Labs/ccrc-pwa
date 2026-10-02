@@ -3226,6 +3226,65 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
   fi
 fi
 
+# ── THE LANDING-ORDER ADVISORY (landing-order spec 2026-09-23 §5.1) ─────────
+# A Bash call that merges, pulls or rebases `main` into the current branch —
+# or asks GitHub to do the same from its side (the Update branch button's
+# `gh pr` verb, its REST route or its GraphQL mutation) — gets
+# `additionalContext` naming the three triggers worker clause 16 licenses an
+# absorption on, and the probe that measures the first. ADVICE, NEVER A
+# DECISION: 27% of the fleet's sync episodes (spec §1, item 8) came from
+# sessions that load no ccrc skill, and this text is the only thing those
+# sessions see; the call proceeds either way.
+#
+# OUTSIDE THE GRAPH ARM ON PURPOSE. That arm runs only when the hookstate
+# parsed, the session has not queried the graph, and the gate's kill-switch is
+# absent — three conditions that have nothing to do with a sync of main. So
+# this block reads none of them, and a test pins that it advises with the gate
+# switched off and the hookstate unreadable.
+#
+# ONE LINE PER EVENT, still (`pre_json`, printed once at the end of the file):
+# a deny or a nudge the graph arm already built wins, and this block says
+# nothing. They cannot meet on one call in practice — the gate reads a search
+# at the HEAD of the line, and a sync is `git`, not a search.
+#
+# ORDER IS BUDGET, as in the arms above: the tool name is already in hand, the
+# glob tests over the raw payload cost no fork, and only a payload carrying
+# `main` or `origin` AND a sync verb, or GitHub's branch-update spelling, pays
+# the one jq that reads the command. The regexes are matched against the
+# COMMAND, never the payload, so a `Write` of a file that merely mentions a
+# merge stays silent.
+#
+# THE SHAPE: `git` IN COMMAND POSITION — at the start of the command or after
+# a separator (`;`, `&`, `|`, `(`, `{`, a newline), past any `VAR=value`
+# prefixes — then any global options (`-C <dir>`, `-c <k=v>`, `--no-pager`,
+# `--x=y`), one of the three verbs, any arguments, then `main`, `origin/main`,
+# `origin main`, `origin/HEAD` or `origin HEAD` (the slash forms may be quoted)
+# as a whole word. Command position is what keeps a MENTION silent: a commit
+# message, an `echo`, or a PR comment that quotes a sync puts a quote or a
+# word before `git`, never a separator. The verb needs whitespace after it, so
+# `git merge-tree` (the probe itself) and `git merge-base` never match. A
+# command that merges main by another spelling (`FETCH_HEAD`, `git merge
+# origin`, a local ref of another name) is not advised — this is advice, and a
+# miss costs one ritual sync, which is the status quo.
+LANDING_SYNC_RE='(^|[;&|({'$'\n''])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*git([[:space:]]+(-[Cc][[:space:]]+[^[:space:]]+|--[a-z-]+(=[^[:space:]]+)?))*[[:space:]]+(merge|pull|rebase)([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(origin/main|origin[[:space:]]+main|origin/HEAD|origin[[:space:]]+HEAD|main|"(origin/main|origin/HEAD|main)"|'\''(origin/main|origin/HEAD|main)'\'')([[:space:];&|)]|$)'
+LANDING_UB_RE='gh[[:space:]]+pr[[:space:]]+update-branch|/update-branch([^A-Za-z0-9_-]|$)|updatePullRequestBranch'
+if [[ "$event" == PreToolUse && -z "$pre_json" && "${tool:-}" == Bash ]] \
+   && [[ ( ( "$payload" == *main* || "$payload" == *origin* ) \
+           && ( "$payload" == *merge* || "$payload" == *pull* || "$payload" == *rebase* ) ) \
+         || "$payload" == *update-branch* || "$payload" == *updatePullRequestBranch* ]]; then
+  lcmd=$(jq -r '.tool_input.command // "" | tostring' \
+    <<<"$payload" 2>/dev/null) || lcmd=""
+  if [[ -n "$lcmd" ]] && { [[ "$lcmd" =~ $LANDING_SYNC_RE ]] || [[ "$lcmd" =~ $LANDING_UB_RE ]]; }; then
+    lreason='ccrc landing advisory: this command brings main into the current branch. Absorb main only on one of three triggers:'
+    lreason+=' (1) the branch conflicts — probe with `git fetch origin && git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD`: exit 1 with a tree id on the first line is a conflict, exit 0 is clean, and any other answer is unmeasured and licenses nothing;'
+    lreason+=' (2) a required check on the PR is red while main passes the same tests: re-run its failing test files on a clean checkout of `origin/HEAD` in scratch, and a red there too is a red main also shows (report it once as main-red and leave main alone);'
+    lreason+=" (3) the coordinator's fix-round mail names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository."
+    lreason+=' Otherwise leave main alone: a clean branch lands as it is, and every needless sync restarts CI.'
+    lreason+=' When you do absorb: `git merge` only — never a rebase, a force-push or the Update branch of GitHub (its button, `gh pr` verb or API) — and on a conflict in a `# ccrc:generated` stamp line, take either side of that line only, resolve the rest of the file as source, then run `~/.local/bin/ccrc restamp <file>`.'
+    pre_json=$(_hook_nudge_json "$lreason") || pre_json=""
+  fi
+fi
+
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
   now=$(_hook_epoch_ms)
