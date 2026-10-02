@@ -11200,6 +11200,13 @@ Expected: green, with the same count as the base's run, then `census: clean … 
 
 **None retired:** under ruling Z the external arm stays, so Plan 2b-2 Task 6's mutation rows 2, 5 and 20 keep their subject and stay where Plan 2b-2 left them.
 
+**Final fix wave, MF-2: the lane-file type test (`readRegular`, `deploy/models-op.mjs`).** Measured red-first on the merged tree: before the fix, all five new `models-op.test.ts` cases and the new `ccrc-doctor.test.ts` case were red by deadline (each `models-op` child ended at its 10 s `spawnSync` bound with `signal` `SIGTERM`; the doctor run ended at `runDoctorBounded`'s 60 s process-group bound). Each mutation row backed up the file it edits and verified its restore with `git diff --quiet`, and every run was bounded.
+
+| Row | Mutation (`deploy/models-op.mjs`) | Reds | Stays green |
+|---|---|---|---|
+| MF-2 (i) | drop `readRegular`'s `isFile()` throw | all five MF-2 `models-op.test.ts` cases (5 of 5, each by deadline) and the doctor FIFO case (by deadline) | nothing else was run |
+| MF-2 (ii) | revert only `readCatalogue`'s call site to `readFileSync(…, 'utf8')` | "show with a FIFO catalogue answers catalogue-unreadable" alone (1 of 5) | the other four MF-2 cases |
+
 - [ ] **Step 7: Execution-time departures.** Any departure a task found during execution is reported by slug. The controller mints its number and substitutes it; nobody else writes a D-number, a `D-TBD`, or a range (R12).
 
 ```bash

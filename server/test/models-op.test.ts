@@ -1643,3 +1643,94 @@ describe('the account-id guard applies to every op, not just rm (C6)', () => {
     expect(r.body['error']).toBe('bad-account-id');
   });
 });
+
+// ── Plan 3a final fix wave (MF-2): a FIFO at a lane file is never a block ───
+// F2, D-2380's class, in this op's own readers. `readFileSync` opens BY NAME
+// with no regard for TYPE: a FIFO with no writer, at a path one of these
+// readers names, blocks INSIDE the open, so no `catch` ever runs. `ccrc
+// doctor`'s `_check_codex` (`_dr_cx_lane`) and `--fix`'s `_fix_codex` call
+// this op with no deadline of their own, so one planted FIFO used to hang the
+// whole operator-facing doctor. Each reader now type-tests first
+// (`readRegular`), and a non-regular file gets that read's EXISTING
+// unreadable answer. Every spawn is bounded (`timeout`, ruling F8): pre-fix,
+// the child blocks, is ended at the bound, and `signal` reds the case rather
+// than the suite. The bound signals the DIRECT child, which is the process
+// that blocks: this op spawns nothing.
+describe('a FIFO at a lane file\'s path is that read\'s unreadable answer, never a block (MF-2, F2)', () => {
+  const BOUND_MS = 10_000;
+  const settingsPath = (): string => path.join(home, CODEX_ROW.configDirSuffix, 'settings.json');
+  const fifo = (p: string): void => {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.rmSync(p, { force: true });
+    expect(spawnSync('mkfifo', [p]).status, `mkfifo ${p}`).toBe(0);
+  };
+  /** `op`, bounded. A child ended at the bound has printed nothing, so the
+   *  signal is asserted BEFORE the body is parsed. */
+  const bounded = (...args: string[]): Result => {
+    const r = spawnSync(process.execPath, [OP, ...args],
+      { env: { ...process.env, HOME: home }, encoding: 'utf8', timeout: BOUND_MS });
+    expect(r.signal, `models-op ${args[0]} did not exit by itself: it blocked on the FIFO and was ended at the ${BOUND_MS / 1000} s bound`).toBeNull();
+    const stdout = r.stdout ?? '';
+    return { code: r.status ?? -1, body: JSON.parse(stdout.split('\n')[0]!), stderr: r.stderr ?? '', stdout };
+  };
+  const init = (): void => {
+    const r = op('init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+  };
+
+  beforeEach(() => { seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_ROW] }); });
+
+  it('show with a FIFO catalogue answers catalogue-unreadable', () => {
+    init();
+    fifo(path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.json`));
+    const r = bounded('show', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.body['error']).toBe('catalogue-unreadable');
+    expect(r.body['detail']).toMatch(/not a regular file/);
+  }, 20_000);
+
+  it('show with a FIFO registry answers registry-unreadable', () => {
+    fifo(regPath(CODEX_ROW.id));
+    const r = bounded('show', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.body['error']).toBe('registry-unreadable');
+    expect(r.body['detail']).toMatch(/not a regular file/);
+  }, 20_000);
+
+  it('show with a FIFO settings.json keeps today\'s answer for an unreadable one: every key missing', () => {
+    init();
+    fs.rmSync(settingsPath());
+    // The control: the ABSENT file's answer, which the catch-all already gives.
+    const absent = op('show', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(absent.code, absent.stdout).toBe(0);
+    expect((absent.body['settingsDrift'] as string[]).length).toBeGreaterThan(0);
+    fifo(settingsPath());
+    const r = bounded('show', '--file', rosterPath(), '--id', CODEX_ROW.id);
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.body['settingsDrift']).toEqual(absent.body['settingsDrift']);
+  }, 20_000);
+
+  it('materialise --check true with a FIFO <id>.classes.tsv answers materialise-unreadable, and writes nothing', () => {
+    init();
+    const tsv = path.join(home, '.ccrc', 'models', `${CODEX_ROW.id}.classes.tsv`);
+    fifo(tsv);
+    const r = bounded('materialise', '--file', rosterPath(), '--id', CODEX_ROW.id, '--check', 'true');
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.body['error']).toBe('materialise-unreadable');
+    expect(r.body['detail']).toMatch(/exists and could not be read: not a regular file\. Nothing was written\.$/);
+    expect(fs.statSync(tsv).isFIFO(), 'the check replaced the FIFO it measured').toBe(true);
+  }, 20_000);
+
+  it('litellm without --commit, with a FIFO --out, reads no previous rendering: changed:true, and writes nothing', () => {
+    init();
+    writeCatalogue(CODEX_ROW.id);
+    const out = path.join(home, '.handoff', 'litellm-config.yaml');
+    fifo(out);
+    const r = bounded('litellm', '--file', rosterPath(), '--id', CODEX_ROW.id,
+      '--template', path.join(REPO, 'deploy', 'litellm-config.template.yaml'), '--out', out);
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.body['changed']).toBe(true);
+    expect(fs.statSync(out).isFIFO(), 'the check-only call wrote at --out').toBe(true);
+    expect(fs.existsSync(`${out}.prev`)).toBe(false);
+  }, 20_000);
+});

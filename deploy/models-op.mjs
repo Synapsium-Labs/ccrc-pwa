@@ -54,7 +54,7 @@
 // Bare `node` — no build step, no `tsx`, no compiled `dist/` — which is why
 // every import below is a `.mjs`.
 
-import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import {
@@ -152,6 +152,22 @@ function refuseRegistry(e, id) {
   return refuse(1, 'registry-invalid', `${e.message}${remedy}`, e.field);
 }
 
+/** A LANE FILE's read, type-tested first (Plan 3a final fix wave, F2 —
+ *  D-2380's class). `readFileSync` opens BY NAME with no regard for TYPE: a
+ *  FIFO with no writer at one of these paths blocks INSIDE the open, so no
+ *  `catch` below ever runs, and `ccrc doctor`'s `_check_codex` and `--fix`'s
+ *  `_fix_codex`, which call this op with no deadline, hang whole. So the
+ *  type is asked first, as `_check_models` asks it. `statSync` FOLLOWS links,
+ *  as bash `-f` does, so a symlink to a real file still reads as before, and
+ *  an absent path or a dangling link still throws ENOENT exactly as the bare
+ *  read did. Anything that is not a regular file throws `ENOTREG`, which each
+ *  caller's existing non-ENOENT arm answers: that read's own unreadable
+ *  answer, never a block. */
+function readRegular(p) {
+  if (!statSync(p).isFile()) throw Object.assign(new Error('not a regular file'), { code: 'ENOTREG' });
+  return readFileSync(p, 'utf8');
+}
+
 /** THE ONE ROSTER READ, and it is READ-ONLY. Absent and unreadable are two
  *  codes: the remedies differ. */
 function readRoster(file) {
@@ -206,7 +222,7 @@ const canCarryRegistry = (account) =>
 function readCatalogue(id) {
   let raw;
   try {
-    raw = readFileSync(cataloguePath(id), 'utf8');
+    raw = readRegular(cataloguePath(id));
   } catch (e) {
     if (e.code === 'ENOENT') return { catalogue: null };
     return { err: ['catalogue-unreadable', `${cataloguePath(id)} could not be read: ${e.message}.`] };
@@ -227,7 +243,7 @@ function readCatalogue(id) {
 function readRegistry(id, catalogue) {
   let raw;
   try {
-    raw = readFileSync(registryPath(id), 'utf8');
+    raw = readRegular(registryPath(id));
   } catch (e) {
     if (e.code === 'ENOENT') return { registry: null };
     return { err: ['registry-unreadable', `${registryPath(id)} could not be read: ${e.message}.`] };
@@ -454,7 +470,7 @@ function settingsDrift(account, registry, catalogue) {
   }
   let env = {};
   try {
-    const j = JSON.parse(readFileSync(path.join(HOME, account.configDirSuffix, 'settings.json'), 'utf8'));
+    const j = JSON.parse(readRegular(path.join(HOME, account.configDirSuffix, 'settings.json')));
     if (isObj(j) && isObj(j.env)) env = j.env;
   } catch {
     // An absent settings file means every key is missing, which the filter
@@ -630,7 +646,7 @@ function materialiseCheck(account, registry, catalogue) {
   for (const [key, p, text] of files) {
     let onDisk;
     try {
-      onDisk = readFileSync(p, 'utf8');
+      onDisk = readRegular(p);
     } catch (e) {
       if (e.code === 'ENOENT') { changed[key] = true; continue; }
       return { err: ['materialise-unreadable', `${p} exists and could not be read: ${e.message}. Nothing was written.`] };
@@ -845,7 +861,7 @@ function main(argv) {
       return refuse(1, 'template-unreadable', `${a.template} could not be read: ${e.message}`);
     }
     let previous = null;
-    try { previous = readFileSync(a.out, 'utf8'); } catch { previous = null; }
+    try { previous = readRegular(a.out); } catch { previous = null; }
     const changed = previous !== text;
     if (!changed) {
       out({ ok: true, op: 'litellm', id: a.id, path: a.out, changed: false });

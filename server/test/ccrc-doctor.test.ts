@@ -9606,6 +9606,24 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     expect(runDoctor(home).stdout).toMatch(/^FAIL codex: codex-a is a Codex lane whose class registry declares probe "openrouter": /m);
   });
 
+  // Plan 3a final fix wave, MF-2 (F2, D-2380's class): `_dr_cx_lane` reads the
+  // lane's model state through models-op's `show`, which opened the catalogue
+  // BY NAME. A FIFO there blocked inside that read, and `cmd_doctor` wraps no
+  // deadline, so the whole doctor hung. Models-op now type-tests every lane
+  // file first, so the FIFO is the read's own `catalogue-unreadable` refusal.
+  // Bounded by the process group (`runDoctorBounded`, ruling F8), so a
+  // regression is a readable red and no blocked `node` outlives the run.
+  it.skipIf(DOCTOR_DEADLINE_BIN === null)(
+    'a FIFO at the lane\'s catalogue is a prompt FAIL naming catalogue-unreadable — never a hang', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-catalogue-fifo-');
+      const cat = join(home, '.ccrc', 'models', 'codex-a.json');
+      rmSync(cat);
+      execFileSync('mkfifo', [cat]);
+      const r = runDoctorBounded(home, 60_000);
+      expect(r.stdout, r.stdout).toMatch(/^FAIL codex: codex-a: 'ccrc models' refused to read the lane's model state — catalogue-unreadable: .*not a regular file/m);
+      noRunnerBugLine(r.stdout, 'codex');
+    }, 90_000);   // above runDoctorBounded's own 60 s deadline, so that deadline is what reds
+
   it('WARNs a lane that routes haiku to nothing, and one whose probe model left the catalogue', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-haiku-', ['codex-a', 'codex-b']);
     writeLaneModels(home, 'codex-a', { classes: { haiku: null, sonnet: 'gpt-x', opus: null, fable: null } });
