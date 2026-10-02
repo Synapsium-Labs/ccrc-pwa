@@ -2892,7 +2892,7 @@ Measured on the prototype (`rc=1` on every row; the owning task in brackets; a c
 | P19–P21 | [7] the disabled state, the collapse guard, the title heading | 1 failed \| 104 passed (105) each |
 | P22 | [7] the toggle's ground unregistered | 6 failed \| 250 passed (256) |
 | P23, P24 | [7] the toggle's tap floor; its class | 1 failed \| 39 passed (40) each |
-| P25 | [8] the double-tap ref guard — NOT RUN: GREEN under jsdom by construction (Pre-flight finding 12 (d)) | — |
+| P25 | [8] the double-tap ref guard — GREEN under jsdom through the real sheet (Pre-flight finding 12 (d)); pinned since D-3783 by `pwa/test/archive-all-guard.test.tsx`'s double-firing stub | 1 failed (1) |
 | P26, P27 | [8] the in-flight ref never released; the in-flight state never released | 1 \| 95 (96); 2 \| 94 (96) |
 | P28 | [8] rows chosen by `s.project` instead of the card they render on | 1 failed \| 95 passed (96) |
 | P29 | [8] the refusal toast loses its action (and its reasons vanish in 4.2 s) | 1 failed \| 95 passed (96) |
