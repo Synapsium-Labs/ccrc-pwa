@@ -490,6 +490,15 @@ describe('the Released sub-fold (workspace lifecycle spec §5.1)', () => {
     expect(g.map((x) => x.project)).toEqual(['beta', 'alpha']);
   });
 
+  it('a released-only card still ranks above an archived-only card', () => {
+    // Both cards' only rows are folded; the released one was the more urgent before the fold and must stay so.
+    const g = groupFleet([
+      s({ id: 'a', project: 'alpha', status: 'dead', bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'r', project: 'beta', bucket: 'done', releasedFrom: rel(1, 100) }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['beta', 'alpha']);
+  });
+
   it('released rows count toward unseen, and toward neither busy nor pin while a live row exists', () => {
     const g = groupFleet([
       s({ id: 'live', home: 'claude2', bucket: 'idle' }),

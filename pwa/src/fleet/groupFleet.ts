@@ -177,10 +177,17 @@ export function groupFleet(
   sessions: FleetSession[], projects: readonly string[], acks: Acks = {},
 ): FleetGroup[] {
   const byProject = new Map<string, FleetSession[]>();
-  // Released rows LAST (workspace lifecycle §5.1): a card's place comes from its first member, and a folded row must
-  // not lift its card above one whose top visible row is more urgent. Stable, so both halves keep the fleet order.
+  // Folded rows LAST (workspace lifecycle §5.1): a card's place comes from its first member, and a folded row must
+  // not lift its card above one whose top visible row is more urgent. Released rows still rank above archived ones,
+  // as they did before the fold, so the order is live, then released, then archived. Stable, so every part keeps the
+  // fleet order.
   const sorted = sortFleet(sessions);
-  for (const s of [...sorted.filter((m) => !inReleasedFold(m)), ...sorted.filter(inReleasedFold)]) {
+  const archivedRow = (m: FleetSession): boolean => m.bucket === 'archived';
+  for (const s of [
+    ...sorted.filter((m) => !inReleasedFold(m) && !archivedRow(m)),
+    ...sorted.filter(inReleasedFold),
+    ...sorted.filter(archivedRow),
+  ]) {
     const card = boardHome(s);
     const list = byProject.get(card);
     if (list) list.push(s);
