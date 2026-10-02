@@ -34,10 +34,13 @@
 # nothing.
 #
 # EXIT STATUS: 0 the pair is in place (published or already converged); 1
-# refused, and neither active file moved (a refusal raised before the self-test
-# passed also changed nothing); 2 the body moved and the launcher did not — the
-# mismatched pair now refuses every start by digest, and a re-run converges. No
-# rollback is attempted across the two directories.
+# refused, and no active file moved — neither half was replaced. That is all
+# exit 1 proves: by the self-test, `~/.local/bin` and `~/.local/libexec/ccrc`
+# may already have been created and this installer's own leftovers swept, and
+# a refusal after it can follow the body's in-place mode repair; 2 the body
+# moved and the launcher did not — the mismatched pair now refuses every start
+# by digest, and a re-run converges. No rollback is attempted across the two
+# directories.
 #
 # STANDARD LIBRARY ONLY. Nothing here trusts the environment: `-I` already
 # ignores every PYTHON* variable, and the paths it writes come from argv.

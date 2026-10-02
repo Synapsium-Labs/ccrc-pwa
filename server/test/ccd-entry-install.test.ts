@@ -392,6 +392,10 @@ describe('the fix pass of the final review: layouts, mode repair, postcondition,
     expect(r.stderr).toContain('would look for its body at');
     expect(fs.existsSync(body()), 'the body was published for a launcher that could not find it').toBe(false);
     expect(fs.readdirSync(other), 'the launcher was published').toEqual([]);
+    // The refusal comes before anything is CREATED, not only before anything
+    // moves (review 217, F3): `makedirs` runs after every layout and
+    // destination refusal.
+    expect(fs.existsSync(path.dirname(body())), 'the refused layout created ~/.local/libexec/ccrc').toBe(false);
   }, 60_000);
 
   it('a half whose bytes are right and whose MODE is not is repaired in place — same inode, same mtime — and reported', () => {
@@ -543,6 +547,11 @@ describe('a refused run changes nothing, and nothing is called converged without
     expect(shebang, 'the shim the lexical fold names').not.toBe(path.join(t, 'bin', 'python3'));
   }, 60_000);
 
+  // PLATFORM-ONLY: the input cannot exist on macOS. APFS refuses to create a
+  // directory whose name is not valid UTF-8 (EILSEQ), so no Darwin interpreter
+  // path can carry the byte this row plants, and there is no Darwin arm to
+  // contrast. The refusal it pins (`check_shebang_path`'s encodability test)
+  // is the same code on both platforms; only the fixture is Linux-only.
   itLinux('F12 an interpreter path no shebang can encode is refused by check and by install, with the old pair untouched (Linux: APFS refuses a non-UTF-8 name)', () => {
     plantTree();
     expect(helper(['install', tree(), home]).code).toBe(0);
