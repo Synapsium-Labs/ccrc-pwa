@@ -18,7 +18,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | re-review 229 ruled 2026-10-02: fix round 2 (residue of round 1) |
+| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | fix round 2 done 2026-10-02; in re-review (run 231) |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | — | planned; approved 2026-10-01 (#223) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
@@ -145,6 +145,12 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - Give the disabled toggle `cursor: default`. The reviewer judged the shipped look no worse than a no-op, and
       a pointer cursor offers a tap that does nothing.
   - **Numbering:** each fix extends the departure it completes (3785, 3786, 3787), so no new number is minted.
+- **2026-10-02 — fix round 2 done, in re-review.** The fresh wave-done (tip `dc4be181`) passed the server's
+  re-measurement. Four commits address A1 through A6, each extending its departure, with no new number.
+  - New rows P35, P36 and P37 red, and P30 and P31 are re-anchored, none of them SKIPPED.
+  - The whole PWA suite passed, 3145 tests.
+  - CI's required Linux legs were green on the first attempt.
+  - Review run 231 went out with the held-out panel over `56ad0992..dc4be181`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
