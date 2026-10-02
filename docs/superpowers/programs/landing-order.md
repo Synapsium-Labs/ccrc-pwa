@@ -3,7 +3,7 @@
 Spec: `docs/superpowers/specs/2026-09-23-landing-order-and-main-churn-design.md`
 Plans: `docs/superpowers/plans/2026-09-2?-landing-order-wave<N>-*.md` — each written once the waves it depends on
 have landed what it reads
-Home project: `ccrc-pwa`   Coordinator: assigned at the first run-open   Workspace: **a fresh one per wave**
+Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-quiet-river` (assigned by the operator 2026-10-02)   Workspace: **a fresh one per wave**
 Ticket: `CCR-19` (Linear; mirrored as GitHub issue #198) — the coordinator is created from it
 Companion programme: `docs/superpowers/programs/session-continuity.md`
 
@@ -76,6 +76,10 @@ carries it (spec §5.1, amended 2026-09-24).
   (§4–§6, §9) is amended to match. Wave 1's usage-line edits now anchor on the `|expose|version|` fragment, because
   the verb list grew again (#202's `versions`); re-measured on `cf24e4be`: `ccrc-restamp` 7|1 then 8/8, `ccrc-cli`
   1|34 then 35/35.
+- **2026-10-02 — the coordinator assigned.** The operator made session `ccrc-pwa-quiet-river` — the planning session
+  that wrote this programme's plans — the coordinator of landing-order, session-continuity and workspace-lifecycle
+  together. Each wave is its own run under that session id; a fresh coordinator resumes only under the same id
+  (the coordinator skill's `references/resume.md`). Wave 1 dispatches now; wave 2 after wave 1 merges (the 2026-09-29 ruling).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

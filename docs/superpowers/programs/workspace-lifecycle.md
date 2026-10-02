@@ -3,7 +3,8 @@
 Spec: `docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md`
 Plans: `docs/superpowers/plans/2026-09-2?-workspace-lifecycle-wave<N>-*.md` — each written once the waves it depends on
 have landed what it reads
-Home project: `ccrc-pwa`   Coordinator: assigned at the first run-open   Workspace: **a fresh one per wave**
+Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-quiet-river` (assigned by the operator 2026-10-02)   Workspace: **a fresh one per wave**
+Ticket: `CCR-17` (Linear; mirrored as GitHub issue #196) — the coordinator is created from it
 Companion programme: `docs/superpowers/programs/child-reclamation.md` (CCR-15) — waves 2–4 here build on its waves 3–4
 
 **What this program is.** Released workers littered the fleet board: 29 of 56 registry rows on 2026-09-24 were
@@ -65,6 +66,10 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   both plans replay onto `e0a52953` in a git checkout, both typechecks are clean, and wave 2's server (26 files, 1628
   tests) and PWA (14 files, 641) suites are green. Wave 2's Task 12 skips its `CLAUDE.md` edit there, as its Step 3
   says: `main` already re-measured the README claim (`~3800`). The plan's two open questions stay open.
+- **2026-10-02 — the coordinator assigned.** The operator made session `ccrc-pwa-quiet-river` — the planning session
+  that wrote this programme's plans — the coordinator of landing-order, session-continuity and workspace-lifecycle
+  together. Each wave is its own run under that session id; a fresh coordinator resumes only under the same id
+  (the coordinator skill's `references/resume.md`). Wave 1 dispatches now; wave 2 after wave 1 merges.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 

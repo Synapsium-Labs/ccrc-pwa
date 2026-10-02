@@ -3,7 +3,7 @@
 Spec: `docs/superpowers/specs/2026-09-23-session-continuity-design.md`
 Plans: `docs/superpowers/plans/2026-09-2?-session-continuity-wave<N>-*.md` — each written once the waves it depends on
 have measured what it needs (the table's "depends on" column)
-Home project: `ccrc-pwa`   Coordinator: assigned at the first run-open   Workspace: **a fresh one per wave**
+Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-quiet-river` (assigned by the operator 2026-10-02)   Workspace: **a fresh one per wave**
 Ticket: `CCR-18` (Linear; mirrored as GitHub issue #197) — the coordinator is created from it
 Companion programme: `docs/superpowers/programs/landing-order.md`
 
@@ -84,6 +84,14 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   §11 item 6's four `noroom_…` rows ship in its instrument (CCR-20). The spec records rule 1 as shipped and amends
   rules 2–3 to the plan (rev 6). Before the docs PR the plan was replayed onto `main` `5b1c58a8`: every edit applies
   and its suites are green there.
+- **2026-10-02 — the coordinator assigned.** The operator made session `ccrc-pwa-quiet-river` — the planning session
+  that wrote this programme's plans — the coordinator of landing-order, session-continuity and workspace-lifecycle
+  together. Each wave is its own run under that session id; a fresh coordinator resumes only under the same id
+  (the coordinator skill's `references/resume.md`).
+  **Wave 1 dispatches now; wave 2 waits until wave 1 has landed.** Both edit `ccd/ccd`, and the coordinator does
+  not dispatch two of its own workers onto overlapping files (coordinator clause 10) — the ledger's "may be worked
+  in parallel" stays true of the plans, which merge either way, but this coordinator serialises them; it also
+  keeps one fewer suite-running worker on the memory-bound fleet box.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
