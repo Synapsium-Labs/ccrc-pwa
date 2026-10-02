@@ -751,6 +751,12 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   and the reclaim's launchd disable reach it, so a `USER` carrying shell syntax executes inside a protected start.
   It is on `main` already and Darwin-only. Validate the login name before the expansion, or avoid `eval`, before the
   sweep runs unattended on any macOS box.
+- **Wave 4 also inherits, from entry-safety review run 217 (2026-10-02):** classify the launcher's protected tokens
+  case-insensitively (`ccd/ccd-entry.py`'s `is_protected`), because an inherited `nocasematch` widens the body's
+  dispatcher and audit parse while the launcher compares exactly, so a case-variant protected verb starts ordinary
+  and rests on the best-effort body guard. Protecting a superset is harmless. Separately, `node shared/mark.mjs
+  --check` is a hollow stamp gate (no CLI; exits 0 for any file) cited by several plans; give it a real CLI or
+  retire the citation, with `ownership.test.ts` as the gate meanwhile.
 - **Wave 5 inherits, from the row-placement review (2026-10-01):** recovery for gone-directory alternate rows. An
   alternate row whose path is gone holds every other child at `unmeasured`, and two vanished or interrupted children
   hold each other; the recovery must prove the gone path was ccd's own worktree without consulting process state.

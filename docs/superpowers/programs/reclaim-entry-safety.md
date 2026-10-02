@@ -15,7 +15,7 @@ direct reclaim argv shapes before automatic reclamation can ship.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open) | **awaiting-review** — fix round answered review 216 at `46194d6b` (fingerprint accepted 2026-10-02); review run 217 dispatched to `ccrc-pwa-quiet-summit`, deciding acceptance under the convergence rule |
+| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open) | **working, fix round 2** — review run 217 closed `done` on `46194d6b`; its fix-round-introduced important finding (a test title that reds the required `test (server)` check) requires this round; mail 3141 sent 2026-10-02 |
 
 **Deviation block: eight numbers, the first of them 3696** (allocated once at run 199 open, 2026-09-30; floor
 now 3704). The finalized plan defines the first as `ccd-imported-functions-hijack-reclaim-reads`. No other issued
@@ -141,6 +141,29 @@ unrendered.
   - **Convergence rule** (as row-placement's): review run 217 accepts the wave when its SAFETY lens holds, no
     confirmed critical or important finding stands, and the fix round introduces no defect; a newly found minor that
     predates the round is carried to child-reclamation wave 4 rather than opening another round.
+- **2026-10-02 — review run 217's verdict and fix round 2.** `ccrc-pwa-quiet-summit` read `46194d6b` (40 agents, none
+  errored or empty; every lens returned a `checked` record): correctness 2 raised, 2 confirmed; spec 3, 3; reproduce
+  4, 4; SAFETY 3, 3; none refuted; seven distinct findings plus one whole-branch finding. SAFETY: for every exact
+  protected spelling through the installed launcher, no inherited state or entry path deletes a live child. Every
+  review-216 item is resolved or carried. Under the convergence rule, the fix round introduced an important defect,
+  so a second round is required:
+  - **Introduced by fix round 1, fixed now:** the new unencodable-shebang row's platform-naming title trips the D-2765
+    guard and turns the required `test (server)` check red on PR #222; the installer's exit-status prose and the PR
+    body overclaim that a pre-self-test refusal changed nothing (directories are created first); the "creates" half
+    of refusal-first ordering has no red mutation; and on Darwin every launcher start gains `__CF_USER_TEXT_ENCODING`,
+    which the locale departure and its pin do not name.
+  - **Predating, ruled:** the launcher header gains the locale departure's qualifier. Plan line 112 misstates
+    `ws-audit --session --reclaim`, a well-formed plain audit of a session named `--reclaim` that is never protected
+    and never reaches reclaim; it is corrected under the block's last number, 3703.
+  - **Case-variant argv, coordinator ruling.** Under an inherited `nocasematch` plus an imported `exit`, a case-variant
+    protected verb starts ordinary at the launcher, and the SAFETY lens measured a fixture deletion through the real
+    launcher. No caller emits a case variant: the server builds exact skeletons and the agent execs without a shell.
+    The premise "the launcher path is unaffected" therefore holds for exact spellings; the prose is corrected now,
+    and classifying protected tokens case-insensitively in the launcher is carried to child-reclamation wave 4.
+  - **The stamp gate is hollow (repo-wide).** `node shared/mark.mjs --check` has no CLI behind it and exits 0 for any
+    file, so every "passes the marker check" in these ledgers through 2026-10-02 measured nothing. Re-measured with
+    `verifyMarker`: `main` (with #226) and `46194d6b` both answer `ccrc-unmodified`. The gate is now
+    `ownership.test.ts` / `verifyMarker`; the hollow command is carried for an owner.
 - **Routing escalation.** This is a destructive-path security boundary reached after repeated wave 4 resolver
   rounds exposed the process-level class. The main loop runs Opus at `xhigh`; implementation subagents run Sonnet
   at `high`; workflows are off; compact threshold is 40. The held-out review remains outside that routing and adds
