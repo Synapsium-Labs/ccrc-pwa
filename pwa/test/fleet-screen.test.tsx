@@ -2797,7 +2797,7 @@ describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', ()
   it('opens on its own key, confirms once, archives each non-child row with its id alone, and reports in one toast', async () => {
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
     const archive = vi.spyOn(api, 'archive')
-      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(null)
       .mockRejectedValueOnce(new Error('busy: a turn is in progress'));
     const store = makeStore();
     render(<><FleetScreen store={store} /><ToastHost /></>);
@@ -2829,7 +2829,7 @@ describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', ()
   it('archives a PLACED row from the card it renders on', async () => {
     // The in-flight guard itself is pinned by archive-all-guard.test.tsx: here the real sheet unmounts after the first click.
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
-    const archive = vi.spyOn(api, 'archive').mockResolvedValue(undefined);
+    const archive = vi.spyOn(api, 'archive').mockResolvedValue(null);
     const store = makeStore();
     render(<><FleetScreen store={store} /><ToastHost /></>);
     seed(store, {
@@ -2861,6 +2861,7 @@ describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', ()
           session({ id: 'a-two', project: 'alpha', workspace: 'two', bucket: 'working', releasedFrom: rel(200) }),
         ] });
       }
+      return null;
     });
     render(<><FleetScreen store={store} /><ToastHost /></>);
     seed(store, {

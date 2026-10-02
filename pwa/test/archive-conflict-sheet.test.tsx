@@ -97,7 +97,7 @@ describe('ArchiveConflictSheet', () => {
   });
 
   it('Archive anyway posts {force:true}', async () => {
-    const archive = vi.fn(async () => {});
+    const archive = vi.fn(async () => null);
     const onDone = vi.fn();
     const onClose = vi.fn();
     render(<ArchiveConflictSheet sessionId="demo-x" runs={RUNS} onClose={onClose} onDone={onDone}

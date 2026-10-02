@@ -4,6 +4,7 @@
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
+import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -199,8 +200,26 @@ export const HOLD_EMPTY_REASON_TEXT = 'empty reason — say which program holds 
  * server states, and a message that merely happens to equal a code should not
  * be rewritten into a sentence about the host.
  */
+/**
+ * The archive door's refusals in words (workspace lifecycle spec §5.2) — one sentence per `ARCHIVE_REFUSALS` code,
+ * keyed by the L0 const, never by a second spelling of a code. A `Record` over `ArchiveRefusal`, so a code added there
+ * without a sentence here is a compile error. `API_ERROR_TEXT` spreads it, so every surface that toasts an archive
+ * refusal through `apiErrorText` (the PR sheet, "Archive all") says the same thing the archive sheet does. None of
+ * these codes is one `uploadErrorText`, `kickoffErrorText` or `sendErrorText` owns (`api.test.ts` asserts it).
+ */
+export const ARCHIVE_REFUSAL_TEXT: Readonly<Record<ArchiveRefusal, string>> = {
+  [ARCHIVE_REFUSALS.runOpen]: 'A run still claims this workspace.',
+  [ARCHIVE_REFUSALS.sessionBusy]: 'It is working — archiving now would lose the turn in progress.',
+  [ARCHIVE_REFUSALS.coordinatorHasOpenRuns]: 'It coordinates open runs.',
+  [ARCHIVE_REFUSALS.programmePartlyEnded]: 'The programme was only partly ended. Nothing was stopped or archived.',
+  [ARCHIVE_REFUSALS.worktreeGone]: 'Its worktree is gone, so it cannot be described for the archive record.',
+  [ARCHIVE_REFUSALS.statusUnknown]: 'Its status cannot be read, so it will not be archived on a guess.',
+  [ARCHIVE_REFUSALS.manifestUnbuildable]: 'It cannot be described truthfully for the archive record. Nothing was touched.',
+};
+
 const API_ERROR_TEXT: Record<string, string> = {
   unsupported: UNSUPPORTED_VERB_TEXT,
+  ...ARCHIVE_REFUSAL_TEXT,
   // Two of the kickoff route's four codes (program-leverage wave 4). Without
   // these the operator reads a bare slug at the one moment the sheet has stopped
   // being able to retry for them — and a box with no `coord.db` is an ordinary,
@@ -297,6 +316,16 @@ const KICKOFF_ERROR_TEXT: Record<string, string> = {
 };
 
 export const kickoffErrorText = (text: string): string => KICKOFF_ERROR_TEXT[text] ?? text;
+
+/** The archive door's PARTIAL outcome, or `null` when the answer says nothing of one (workspace lifecycle §5.2): the
+ *  door stopped the session and `ws-archive` then refused, so the row stays at the top level, stopped, with Archive
+ *  offered again. THE ONE READER of `archived:false`. Absence permits: an older server's `{ok:true}` (no `archived`),
+ *  or an answer this client could not read (`null`), is a completed archive, exactly what the door used to mean. */
+export function archivePartial(a: ArchiveAnswer | null): { refusal: ArchiveRefusal | null; detail: string | null } | null {
+  if (a === null || typeof a !== 'object' || a.archived !== false) return null;
+  const refusal = isArchiveRefusal(a.refusal) ? a.refusal : null;
+  return { refusal, detail: typeof a.detail === 'string' && a.detail.trim() !== '' ? a.detail.trim() : null };
+}
 
 /**
  * The body of `POST /api/updates/intent` — W2's `INTENT_BODY_KEYS`, and nothing
@@ -462,18 +491,24 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
   const getJson = async <T>(path: string): Promise<T> =>
     (await request(path)).json() as Promise<T>;
 
+  const postInit = (body?: unknown): RequestInit =>
+    body === undefined
+      ? { method: 'POST' }
+      : {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        };
+
   const post = async (path: string, body?: unknown): Promise<void> => {
-    await request(
-      path,
-      body === undefined
-        ? { method: 'POST' }
-        : {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(body),
-          },
-    );
+    await request(path, postInit(body));
   };
+
+  /** `post`'s request, byte for byte, with its 2xx answer READ — for a door whose success carries a second outcome
+   *  (the archive door's `archived:false`, workspace lifecycle §5.2). An answer that cannot be read resolves to
+   *  `unreadable`, `postJsonOr`'s reasoning below: the exchange completed and answered 2xx. */
+  const postRead = async <T>(path: string, unreadable: T, body?: unknown): Promise<T> =>
+    (await (await request(path, postInit(body))).json().catch(() => unreadable)) as T;
 
   /** The init a JSON-answering POST sends, spelled ONCE for the two helpers
    *  below. `accept: application/json` on both arms, and no `content-type` at
@@ -764,9 +799,20 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  has always taken (no `content-type`, no body). The force flag is not a
      *  checkbox anywhere in the UI: it is a SECOND tap, made after the
      *  operator has read the `409 run-open` refusal, because the refusal is
-     *  the whole information. See `ArchiveConflictSheet`. */
-    archive: (id: string, opts?: { force?: boolean }) =>
-      post(`${sid(id)}/archive`, opts?.force === true ? { force: true } : undefined),
+     *  the whole information. See `ArchiveConflictSheet`.
+     *
+     *  Workspace lifecycle §5.2 adds the two other consents on the same rule — each a second tap after the refusal it
+     *  answers, each sent only when it is given: `interrupt` (after `session-busy`) and `programme: 'end'` (after
+     *  `coordinator-has-open-runs`). Resolves to the door's answer (`archivePartial` reads it), or `null` when a 2xx
+     *  carried nothing readable — an older server's `{ok:true}` with no `archived` reads as archived. */
+    archive: (id: string, opts?: { force?: boolean; interrupt?: boolean; programme?: 'end' }) => {
+      const body: ArchiveBody = {
+        ...(opts?.force === true ? { force: true as const } : {}),
+        ...(opts?.interrupt === true ? { interrupt: true as const } : {}),
+        ...(opts?.programme === 'end' ? { programme: 'end' as const } : {}),
+      };
+      return postRead<ArchiveAnswer | null>(`${sid(id)}/archive`, null, Object.keys(body).length > 0 ? body : undefined);
+    },
     restore: (id: string) => post(`${sid(id)}/restore`),
     /** `POST /forget` — registry-only removal of a dead non-workspace session.
      *  Every gate (not a workspace, not held, not alive) is ccd's, re-proven
