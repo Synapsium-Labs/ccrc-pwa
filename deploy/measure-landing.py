@@ -549,7 +549,19 @@ def _api(*args):
     if tuple(args[:2]) not in API_READS:
         raise SystemExit(f'measure-landing: refused a ccrc-api verb that is not a list read: {" ".join(args[:2])!r}')
     r = subprocess.run([os.path.expanduser('~/.local/bin/ccrc-api'), *args], capture_output=True, text=True, timeout=60)
-    return json.loads(r.stdout)
+    # The client exits 0 on EVERY HTTP answer (a 4xx/5xx `{"ok":false}` body too)
+    # and exits 3 on a transport failure while still printing `{"ok":false}`: an
+    # answer is data only when it exited 0 AND says ok:true. Anything else read
+    # as data would be an empty list — a coordinator counted with n 0.
+    try:
+        body = json.loads(r.stdout)
+    except ValueError:
+        body = None
+    if r.returncode != 0 or not isinstance(body, dict) or body.get('ok') is not True:
+        why = body.get('error') if isinstance(body, dict) else None
+        raise SystemExit(f'measure-landing: ccrc-api answered no data for {" ".join(args[:2])!r}: '
+                         f'{why or r.stderr.strip()[:200] or "exit " + str(r.returncode)}')
+    return body
 
 
 def nudge_turns(session_id):

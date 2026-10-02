@@ -155,6 +155,25 @@ describe('measure-landing: an input it could not read is never a number', () => 
     expect(calls(h.home, 'api-calls')!.filter((c) => c.startsWith('mail list'))
       .every((c) => c.endsWith('--limit 500')), 'a mail read asked for the default page').toBe(true);
   });
+  it('mail-latency: a refused or failed ccrc-api read is an error, never an empty page', () => {
+    // The client exits 0 on EVERY HTTP answer, a 4xx body included, and exits 3
+    // on a transport failure while still printing {"ok":false}. Read as data,
+    // either would be `mail: []` — a coordinator counted with n 0, unmatched 0.
+    const arms = (denied: string) => [
+      '  *"runs list"*) echo \'{"ok":true,"runs":[{"claimedBy":"coord-a"},{"claimedBy":"coord-b"}]}\' ;;',
+      `  *"--to coord-a"*) ${denied} ;;`,
+      '  *"--to coord-b"*) echo \'{"ok":true,"mail":[]}\' ;;',
+    ];
+    const refused = stubHome([], arms('echo \'{"ok":false,"error":"unauthorized"}\''));
+    const r = tool(refused, ['mail-latency']);
+    expect(r.status, 'a refused read (exit 0, ok:false) was read as an empty page').not.toBe(0);
+    expect(r.stderr).toContain('ccrc-api answered no data');
+    expect(r.stderr).toContain('unauthorized');
+    const down = stubHome([], arms('echo \'{"ok":false,"error":"transport"}\'; exit 3'));
+    const t = tool(down, ['mail-latency']);
+    expect(t.status, 'a transport failure (exit 3) was read as an empty page').not.toBe(0);
+    expect(t.stderr).toContain('ccrc-api answered no data');
+  });
 });
 
 describe('measure-landing: the decisions every baseline is derived from', () => {
