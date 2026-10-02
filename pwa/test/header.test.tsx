@@ -81,7 +81,8 @@ const props = (over: Partial<SessionHeaderProps> = {}): SessionHeaderProps => ({
   onChangeModel: vi.fn(),
   onChangeEffort: vi.fn(),
   onMoveAccount: vi.fn(),
-  onStopSession: vi.fn(),
+  onArchive: vi.fn(),
+  onRestore: vi.fn(),
   onOpenHistory: vi.fn(),
   onReapWorkspace: vi.fn(),
   roster: TEST_ROSTER,
@@ -549,24 +550,35 @@ describe('the substrate gate — stop and restart refuse a session nobody can se
   // (`substrateFault`), the chip's own `tmux unreachable — <reason>` string in
   // `title`, and the click proven inert — the keycap idiom at the top of this
   // file, aimed at the two controls this screen owns.
-  it('disables the Stop menu item under a fault, naming it', async () => {
+  // Workspace lifecycle §5.2: the menu's "Stop session" became "Archive" — stop and archive are one feature. The
+  // `esc` keycap (interrupt) is a different control and is pinned unchanged at the top of this file.
+  it('disables the Archive menu item under a fault, naming it', async () => {
     const p = renderHeader({ session: fleetSession({ substrate: { at: 1, text: 'x' } }) });
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    const stop = await screen.findByRole('button', { name: /Stop session/ });
-    expect(stop).toBeDisabled();
-    expect(stop.getAttribute('title')).toContain('x');
-    expect(stop.getAttribute('title')).toMatch(/tmux unreachable/);
-    fireEvent.click(stop);
-    expect(p.onStopSession).not.toHaveBeenCalled();
+    const archive = await screen.findByRole('button', { name: 'Archive' });
+    expect(archive).toBeDisabled();
+    expect(archive.getAttribute('title')).toContain('x');
+    expect(archive.getAttribute('title')).toMatch(/tmux unreachable/);
+    fireEvent.click(archive);
+    expect(p.onArchive).not.toHaveBeenCalled();
   });
 
-  it('a null substrate leaves the Stop menu item live', async () => {
+  it('a null substrate leaves the Archive menu item live, and the menu has no Stop session left', async () => {
     const p = renderHeader();
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    const stop = await screen.findByRole('button', { name: /Stop session/ });
-    expect(stop).toBeEnabled();
-    fireEvent.click(stop);
-    expect(p.onStopSession).toHaveBeenCalledOnce();
+    const archive = await screen.findByRole('button', { name: 'Archive' });
+    expect(archive).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /Stop session/ })).toBeNull();
+    fireEvent.click(archive);
+    expect(p.onArchive).toHaveBeenCalledOnce();
+  });
+
+  it('a session already put away offers Restore in Archive\'s place', async () => {
+    const p = renderHeader({ session: fleetSession({ status: 'dead', bucket: 'archived', archivedAt: 1785300000 }) });
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore' }));
+    expect(screen.queryByRole('button', { name: 'Archive' })).toBeNull();
+    expect(p.onRestore).toHaveBeenCalledOnce();
   });
 
   it("the dead banner's Restart is disabled and never posts /ensure", () => {
@@ -587,12 +599,12 @@ describe('the substrate gate — stop and restart refuse a session nobody can se
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it('a fault landing while the stop confirm is already open still blocks the stop', async () => {
+  it('a fault landing while the archive sheet is already open still blocks the archive', async () => {
     // The menu item's `disabled` cannot cover this: the fleet frame updates
-    // LIVE under an open confirm, and QuickConfirm owns its own button — so
-    // the confirm path carries a handler guard, and the refusal is named on
-    // the toast rather than swallowed.
-    const spy = vi.spyOn(api, 'stop').mockResolvedValue(undefined);
+    // LIVE under an open sheet, and the sheet owns its own button — so the
+    // send re-reads the fault at the moment of firing, and the refusal is
+    // named rather than swallowed.
+    const spy = vi.spyOn(api, 'archive').mockResolvedValue(null);
     const store = createSessionStore('claude:OpenClawHetzner', {
       makeSocket: fakeSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
@@ -608,15 +620,16 @@ describe('the substrate gate — stop and restart refuse a session nobody can se
       </>,
     );
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    fireEvent.click(await screen.findByRole('button', { name: /Stop session/ }));
-    // The confirm is on screen; NOW the snapshot flags the substrate.
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive' }));
+    // The sheet is on screen; NOW the snapshot flags the substrate.
     act(() => {
       fleet.setState({ sessions: [fleetSession({ substrate: { at: 1, text: 'x' } })] });
     });
-    // QuickConfirm's own confirm button — by wrapper class, since the menu's
+    // The sheet's own confirm button — by wrapper class, since the menu's
     // same-named opener may still be unmounting behind it (the actions-sheet
     // suite's Release idiom).
-    fireEvent.click(document.querySelector('.qc-actions .btn-primary')!);
+    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-primary')).not.toBeNull());
+    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-primary')!);
     expect(spy).not.toHaveBeenCalled();
     expect(await screen.findByText(/tmux unreachable — x/)).toBeInTheDocument();
   });

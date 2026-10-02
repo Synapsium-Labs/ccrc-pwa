@@ -3,7 +3,7 @@
 // status meta (breathing dot + mono word; busy ticks a live elapsed clock),
 // the account chip, and raised keycaps — `>_` opens the terminal drawer,
 // `⋯` opens the lifecycle overflow menu (change model / move account /
-// stop), and `esc` interrupts (DIRECTION: "a keycap, not an icon"), enabled
+// archive), and `esc` interrupts (DIRECTION: "a keycap, not an icon"), enabled
 // only while the session is busy. Confirm-free: pressing esc just sends it.
 // The esc cap is touch-only: where a physical keyboard exists ((pointer:
 // fine)) it hides and the real Escape key takes over instead, guarded so it
@@ -21,6 +21,7 @@ import { useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '../lib/useNow';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { TypedLabel } from '../fleet/TypedLabel';
+import { isPutAway } from '../fleet/ArchiveSheet';
 import { PrKeycap } from './PrKeycap';
 import { PrSheet } from './PrSheet';
 import './chat.css';
@@ -48,8 +49,11 @@ export interface SessionHeaderProps {
   queuedField?: RouteField | null;
   /** Overflow menu: "Move to another account" — opens the SwapSheet. */
   onMoveAccount: () => void;
-  /** Overflow menu: "Stop session" — opens the stop QuickConfirm. */
-  onStopSession: () => void;
+  /** Overflow menu: "Archive" — opens the one archive sheet (workspace lifecycle §5.2). It replaced "Stop session":
+   *  stop and archive are one user feature, and the `esc` keycap below (interrupt) is a different control. */
+  onArchive: () => void;
+  /** Overflow menu: "Restore" — in place of Archive on a session already put away (`isPutAway`). */
+  onRestore: () => void;
   /** Overflow menu: "History" — opens the lifecycle journal tab. */
   onOpenHistory: () => void;
   /** `PrSheet`'s merged phase "Clean up…" hands off here — Task 17 mounts
@@ -100,7 +104,8 @@ export function SessionHeader({
   onChangeModel,
   onChangeEffort,
   onMoveAccount,
-  onStopSession,
+  onArchive,
+  onRestore,
   onOpenHistory,
   onReapWorkspace,
   fallback,
@@ -111,7 +116,7 @@ export function SessionHeader({
   const [menuOpen, setMenuOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
   // Menu taps close the sheet first so the follow-up surface (swap sheet,
-  // stop confirm, arriving model dialog) never fights it for the bottom edge.
+  // archive sheet, arriving model dialog) never fights it for the bottom edge.
   const menuAct = (fn: () => void): void => {
     setMenuOpen(false);
     fn();
@@ -393,15 +398,24 @@ export function SessionHeader({
                 an ungated door here was a swap reachable with no gate anywhere. */}
             <span className="menu-label">Move to another account</span>
           </button>
-          <button
-            type="button"
-            className="menu-item menu-item--danger"
-            disabled={fault !== null}
-            title={faultTitle}
-            onClick={() => menuAct(onStopSession)}
-          >
-            <span className="menu-label">Stop session</span>
-          </button>
+          {/* Archive for every session, Restore for one already put away (workspace lifecycle §5.2) — never both.
+              Archive is gated like Move above: it ends the pane. It needs the row to choose its words, so a deep
+              link that has not seen its first frame yet offers it disabled. */}
+          {session !== null && isPutAway(session) ? (
+            <button type="button" className="menu-item" onClick={() => menuAct(onRestore)}>
+              <span className="menu-label">Restore</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="menu-item menu-item--danger"
+              disabled={fault !== null || session === null}
+              title={faultTitle}
+              onClick={() => menuAct(onArchive)}
+            >
+              <span className="menu-label">Archive</span>
+            </button>
+          )}
         </div>
       </Sheet>
 
