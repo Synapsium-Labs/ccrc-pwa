@@ -673,6 +673,26 @@ describe('POST /api/updates/rollback (spec §12)', () => {
     }
   });
 
+  it('409 no-bundle for a rollback to a tag the catalogue lists no provenance bundle for on a verified node (wave 8 item C, D-3587)', async () => {
+    const calls: [string, string[]][] = [];
+    const runner: Runner = (cmd, args) => { calls.push([cmd, [...args]]); return Promise.resolve({ code: 0, stdout: '', stderr: '' }); };
+    const f = await open({ runner });
+    catalogue(f.coord);
+    expect(f.coord.applyReleaseListing(
+      [{ tag: 'v0.0.8', channel: 'stable', publishedAt: 1_100, commitSha: null,
+        tarballUrl: 'https://example.invalid/ccrc-v0.0.8.tar.gz', bundleListed: false, notes: null, draft: false }],
+      4_000, 'single',
+    ).ok).toBe(true);
+    plant(f.coord, fleetNode({ provenance: 'verified' }));
+    const r = await post(f.app, '/api/updates/rollback', { nodeId: FLEET_ID, to: 'v0.0.8' });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(r.json()).toMatchObject({ ok: false, error: 'no-bundle' });
+    expect((r.json() as { detail?: string }).detail).toMatch(/^no-bundle — /);
+    expect(f.coord.node(FLEET_ID)!.requestedTag).toBeNull();
+    expect(f.coord.node(FLEET_ID)!.updateState).toBe('idle');
+    expect(calls).toEqual([]);
+  });
+
   it('409 halted and 409 busy, exactly as apply answers them', async () => {
     const halted = await open();
     catalogue(halted.coord);
@@ -726,6 +746,15 @@ describe("the route and the dispatcher agree — one predicate, two callers (§1
       plant(c, fleetNode());
       plant(c, fleetNode({ nodeId: OTHER_ID, label: 'other' }));
       verdict(c, OTHER_ID, 'spawn-failed — update: fixture refusal');
+    } },
+    // Wave 8 item C (D-3587): a rollback to a tag the catalogue lists no provenance bundle for, on a verified node.
+    { name: 'no-bundle', kind: 'rollback', target: 'v0.0.8', setup: (c) => {
+      expect(c.applyReleaseListing(
+        [{ tag: 'v0.0.8', channel: 'stable', publishedAt: 1_100, commitSha: null,
+          tarballUrl: 'https://example.invalid/ccrc-v0.0.8.tar.gz', bundleListed: false, notes: null, draft: false }],
+        4_000, 'single',
+      ).ok).toBe(true);
+      plant(c, fleetNode());
     } },
   ];
 

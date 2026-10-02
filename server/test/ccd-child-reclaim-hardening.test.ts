@@ -794,12 +794,16 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     }
   }, 60_000);
 
-  // The sentence names every cause `_ws_reclaim_resolvable` answers 1 for, one clause each, and one remedy true of all.
+  // The sentence names every cause `_ws_reclaim_resolvable` answers 1 for, one clause each, and one remedy true of all
+  // — and, since a row is placed only on a `complete` resolution, a row placed only by projection too (its path no
+  // longer exists), so its first clause and its remedy say so.
   const DOTDOT_CLAUSE = 'a \'..\' in it follows a directory that no longer exists, or cannot otherwise be placed';
   const CNTRL_CLAUSE = 'or it holds a control character';
-  const UNRESOLVED = 'name a workdir that cannot be resolved (a directory or link on its path cannot be entered or followed;'
+  const UNRESOLVED = 'name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered'
+    + ' or followed, or no longer exists, so its spelling no longer says where that session lives;'
     + ` ${DOTDOT_CLAUSE}; ${CNTRL_CLAUSE}), so ccd cannot place them against this child`;
-  const UNRESOLVED_REMEDY = 'make it searchable, or stop and purge the row';
+  const UNRESOLVED_REMEDY = 'make it searchable if a directory on its path cannot be searched, restore a link on its path to its'
+    + ' original target (never create a directory in a link\'s place), or purge the row once its session has ended';
 
   it('an absolute OTHER row that cannot be resolved — a link to the child, into a directory that cannot be entered — is unplaced, and `<child>/server` stands', () => {
     const { wt } = makeChild(h);
@@ -895,11 +899,20 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     expect(r.detail).toContain(`against this child — ${UNRESOLVED_REMEDY}`);
   }, 60_000);
 
-  it('the CONTROL: a row whose directory was simply deleted still resolves — it places, and a stale row outside never strands the child', () => {
+  it('a row whose directory was simply deleted still resolves, but only by projection — it is never placed, so it holds the child: unmeasured, never a token', () => {
+    // A row is placed only on a `complete` resolution: below a proven-absent
+    // component the rest is re-attached as text, which is how the namespace
+    // reads now, not where that session is. So a stale row outside holds every
+    // child until it is purged — the stated cost of that rule.
     makeChild(h);
-    otherRowOf('demo-gone', path.join(h.home, 'deleted', 'long', 'ago'));
+    const row = path.join(h.home, 'deleted', 'long', 'ago');
+    expect(h.sh(`_ws_reclaim_resolve "${row}"; printf '%s\\x1f%s' "$?" "$_WS_RESOLVE_BASIS"`), 'the CONTROL: it resolves, by projection')
+      .toBe('0\x1fabsent-suffix');
+    otherRowOf('demo-gone', row);
     const r = evalOf(h);
-    expect(r.verdict, r.detail).toBe('reclaimable');
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+    expect(r.detail).toContain(`registry row(s) demo-gone ${UNRESOLVED}`);
   }, 60_000);
 
   // A `..` IN THE UNRESOLVED SUFFIX. An older `ccd start` stored a workdir as
@@ -1021,7 +1034,7 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');
   }, 90_000);
 
-  it('only a `..` COMPONENT of the unresolved suffix refuses: `..x`, `.`, and a `..` in the entered prefix reach the ordinary absence answer — and those rows place outside the child', () => {
+  it('only a `..` COMPONENT of the unresolved suffix refuses: `..x`, `.`, and a `..` in the entered prefix reach the ordinary absence answer — and those rows, placed only by projection, hold the child', () => {
     const c = makeChild(h);
     const rel = path.relative(h.home, c.wt);
     const resolvable = (p: string): string => h.sh(`_ws_reclaim_resolvable "${p}"; printf '%s' "$?"`);
@@ -1030,10 +1043,16 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     }
     const controls = [`${h.home}/gone/..x/${rel}`, `${h.home}/gone/./${rel}`, `${h.home}/worktrees/../gone/${rel}`];
     for (const p of controls) expect(resolvable(p), `${p} is resolvable: \`gone\` is proven absent`).toBe('0');
+    for (const p of controls) {
+      expect(h.sh(`_ws_reclaim_resolve "${p}"; printf '%s' "$_WS_RESOLVE_BASIS"`), `${p}: a projection`).toBe('absent-suffix');
+    }
+    // A row is placed only on a `complete` resolution, so each is unmeasured — never a token — rather than outside.
     controls.forEach((p, i) => {
       otherRowOf(`demo-ctl${i}`, p);
       const r = evalOf(h);
-      expect(r.verdict, `${p}: ${r.detail}`).toBe('reclaimable');
+      expect(r.verdict, `${p}: ${r.detail}`).toBe('unmeasured');
+      expect(r.token).toBe('');
+      expect(r.detail).toContain(`registry row(s) demo-ctl${i} ${UNRESOLVED}`);
       dropRowOf(`demo-ctl${i}`);
     });
   }, 60_000);
@@ -1422,7 +1441,9 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
       expect(r.verdict, r.detail).toBe('unmeasured');
       expect(r.detail).toContain(`registry row(s) demo-else cannot be placed against this child: ${CHILD_ID}'s own workdir cannot be resolved`);
       expect(r.detail, 'the why names THIS cause').toContain('something on its path is not a directory');
-      expect(r.detail).toContain('remove what stands at it');
+      expect(r.detail, 'the remedy never removes what stands at the child')
+        .toContain('never remove or replace what stands at this child\'s own workdir to clear this');
+      expect(r.detail, 'never the remedy that reclaims').not.toContain('remove what stands at it');
     } finally { fs.rmSync(c.wt, { force: true }); fs.renameSync(`${c.wt}.moved`, c.wt); }
   }, 60_000);
 
@@ -1482,7 +1503,7 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     }
   }, 60_000);
 
-  it('the CONTROL: a `<link>/../<existing>/…` spelling whose logical walk SUCCEEDS still resolves, and places as it always did', () => {
+  it('the CONTROL: a `<link>/../<existing>/…` spelling whose logical walk SUCCEEDS still resolves, and places as it always did once its whole path stands', () => {
     const c = makeChild(h);
     const rel = path.relative(h.home, c.wt);
     plantLinkedPrefix();
@@ -1497,11 +1518,19 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     expect(r.verdict, r.detail).toBe('containment-unproven');
     expect(r.detail).toContain('is also named by registry row(s) demo-at');
     dropRowOf('demo-at');
-    // Outside the child: resolved logically to `$HOME/elsewhere/x`, which places nowhere.
+    // Outside the child: resolved logically to `$HOME/elsewhere/x`. While `x` is
+    // missing that is a projection, placed nowhere — the row holds the child;
+    // once `x` stands the resolution is complete, and it places outside.
     const outside = `${h.home}/lnk/../elsewhere/x`;
     expect(resolvable(outside)).toBe('0');
     expect(h.sh(`_ws_realpath "${outside}"`)).toBe(`${home}/elsewhere/x`);
     otherRowOf('demo-out', outside);
+    const projected = evalOf(h);
+    expect(projected.verdict, projected.detail).toBe('unmeasured');
+    expect(projected.detail).toContain('registry row(s) demo-out name a workdir that cannot be resolved completely');
+    fs.mkdirSync(path.join(h.home, 'elsewhere', 'x'));
+    expect(h.sh(`_ws_reclaim_resolve "${outside}"; printf '%s\\x1f%s' "$_WS_RESOLVE_BASIS" "$_WS_RESOLVED"`))
+      .toBe(`complete\x1f${home}/elsewhere/x`);
     const o = evalOf(h);
     expect(o.verdict, o.detail).toBe('reclaimable');
   }, 60_000);

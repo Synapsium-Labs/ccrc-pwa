@@ -551,8 +551,9 @@ describe('_ws_ignored_digest', () => {
 
 describe('_ws_status', () => {
   it('reads ONLY "idle" as idle — shell, compacting and anything new are busy', () => {
-    // server/src/livestate.ts:14-30 is this repo's own record of the wrapper's
-    // vocabulary (`idle`, `busy`, and `shell` = a Bash tool command is running)
+    // `liveSessionStatus`'s docstring (server/src/livestate.ts) is this repo's
+    // own record of the wrapper's vocabulary (`idle`, `busy`, `waiting`, and
+    // `shell` = an idle main loop relabelled while a background shell runs)
     // and of what matching `busy` and calling the rest idle cost when the
     // server side did it. An allowlist is the only polarity that survives a
     // vocabulary that grows.

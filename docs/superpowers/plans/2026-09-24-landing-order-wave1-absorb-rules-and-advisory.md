@@ -1579,19 +1579,19 @@ describe('ccrc restamp <file>', () => {
 });
 ```
 
-In `server/test/ccrc-cli.test.ts`, in `it('the usage line names every verb this CLI will have'`, replace the usage-line assertion (as #181 left it at `023fe94d`, with `rollback`, `channel` and `watchdog` in)
+In `server/test/ccrc-cli.test.ts`, in `it('the usage line names every verb this CLI will have'`, the usage-line assertion (`expect(r.stdout).toMatch(/usage: ccrc \{doctor…\}/);`, whose verb list grows like the usage line's) gains `restamp` the same way: replace the fragment
 
-```ts
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollback\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\|watchdog\}/);
+```
+\|expose\|version\|
 ```
 
 with
 
-```ts
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollback\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|restamp\|version\|watchdog\}/);
+```
+\|expose\|restamp\|version\|
 ```
 
-and directly after `    expect(r.stdout).toMatch(/^ {2}expose {4}give this box a public name/m);` add:
+(once in the file, measured at `023fe94d` and at `cf24e4be`), and directly after `    expect(r.stdout).toMatch(/^ {2}expose {4}give this box a public name/m);` add:
 
 ```ts
     // `restamp` joined it in landing-order wave 1 (spec 2026-09-23 §5.1) — the
@@ -1608,19 +1608,19 @@ Expected: FAIL — `ccrc-restamp` `7 failed | 1 passed (8)`: every case that rea
 
 - [ ] **Step 3: The usage text**
 
-In `ccd/ccrc`'s `usage()` (the verb line ≈1657 at `023fe94d`, ≈1473 at `c62e22b9` — #181 added `rollback`, `channel` and `watchdog` to it, and their paragraphs to the text below it), replace the verb line
+In `ccd/ccrc`'s `usage()`, the verb line (`usage: $PROG {…}`, ≈1657 at `023fe94d`) gains `restamp` before `version`. Its verb list grows as other programmes add verbs — #181 added `rollback`, `channel` and `watchdog`, update-management wave 6 (#202) `versions` — so edit the fragment, not the whole line: replace
 
 ```
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollback|channel|rollout|uninstall|backup|logs|passwd|expose|version|watchdog}
+|expose|version|
 ```
 
 with
 
 ```
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollback|channel|rollout|uninstall|backup|logs|passwd|expose|restamp|version|watchdog}
+|expose|restamp|version|
 ```
 
-and directly after the line `            is reported SET/NOT SET, never printed)` (the end of `expose`'s paragraph, ≈1839 at `023fe94d`, ≈1595 at `c62e22b9`; still the last verb paragraph, directly above `  -h, --help`) insert — the heredoc is UNQUOTED, so the text carries no backtick and no `$`:
+(it occurs once in `ccd/ccrc`, measured at `023fe94d` and at `cf24e4be`), and directly after the line `            is reported SET/NOT SET, never printed)` (the end of `expose`'s paragraph, ≈1839 at `023fe94d`, ≈1595 at `c62e22b9`; still the last verb paragraph, directly above `  -h, --help`) insert — the heredoc is UNQUOTED, so the text carries no backtick and no `$`:
 
 ```
   restamp   re-stamp one file ccrc generated (a "ccrc:generated" marker, as

@@ -213,6 +213,23 @@ install_atomic() {   # <local src> <HOME-relative dest> <mode>
   "${SSH[@]}" "$BOX" "chmod $mode $dest.incoming-$TS && mv -f $dest.incoming-$TS $dest && rm -f $dest.incoming-*"
 }
 
+# THE DIRECT-ENTRY PAIR (D-3696): the Bash body at ~/.local/libexec/ccrc/ccd and
+# the Python launcher at ~/.local/bin/ccd, rendered, self-tested through the
+# kernel and published ON THE BOX by the shipped tree's
+# ccd/ccd-entry-install.py — the one program `ccrc install`/`ccrc update` run
+# too — under the BOX's own canonical python3 in isolated mode, so no path from
+# this machine's interpreter is ever rendered into a fleet box's shebang. Body
+# first, launcher last, each by one rename; a destination that is a directory
+# or a link to one refuses, and nothing is scp'd over either active inode (the
+# hazard `install_atomic` above exists for). It reads the RSYNCED ~/ccrc/ccd,
+# so it must run after that rsync, and before the agent restart for
+# `install_atomic`'s own reason. Exit 1: nothing moved. Exit 2: the body moved
+# and the launcher did not — every ccd start on the box refuses by digest until
+# a re-run converges the pair. Either aborts this deploy (set -e).
+install_ccd_pair() {
+  "${SSH[@]}" "$BOX" 'py="$(python3 -IS -c "import os,sys;sys.stdout.write(os.path.realpath(sys.executable))")" && [ -n "$py" ] && "$py" -IS ~/ccrc/ccd/ccd-entry-install.py install ~/ccrc "$HOME"'
+}
+
 # ~/ccrc-backups grows without bound otherwise (18MB/13 dirs measured on the
 # server box before this existed), and it sits OUTSIDE the only disk guard,
 # which watches WORKTREES_ROOT alone. Timestamped dirs only: the directory
@@ -565,6 +582,7 @@ if [ "$TARGET" = "agent" ]; then
   "${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS ~/.local/bin ~/.cc-sessions \
     && { [ ! -d ~/ccrc/agent/dist ] || cp -a ~/ccrc/agent/dist ~/ccrc-backups/$TS/agent-dist; } \
     && { [ ! -f ~/.local/bin/ccd ] || cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd; } \
+    && { [ ! -f ~/.local/libexec/ccrc/ccd ] || cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
     && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } \
@@ -624,8 +642,9 @@ if [ "$TARGET" = "agent" ]; then
   # yesterday's ccd pins yesterday's verb set until someone restarts it again.
   # notify.sh is the ccd swap hook and lives outside the rsync tree.
   # All executables go through install_atomic — see its comment for why a
-  # plain scp over these exact files is a live correctness bug.
-  install_atomic ccd/ccd .local/bin/ccd 755
+  # plain scp over these exact files is a live correctness bug — save ccd
+  # itself, which is a PAIR rendered on the box (the pair helper's header, above).
+  install_ccd_pair
   # The coordination client, beside ccd because the fleet host is where sessions
   # run and a session-side client on the server box is a copy nobody invokes. A
   # plain install_atomic and NOT a shim: it sources nothing, so one file is the
@@ -824,14 +843,18 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # names, owned by another repository and with an instance enabled, so placing
   # ours is the cutover, which is Plan 3's. The files ship in the tree only.
   #
-  # The two executables, on this agent lane only: `ccd/ccrc`'s `_inst_bins`
-  # places them on every role but server. The rsync above already lands them at
-  # ~/ccrc/ccd/; without these two lines a fallback deploy never put them on
-  # PATH. After the build and before the stamp, so a failed copy aborts the
-  # lane before this box's build record can claim it. Only the two that exist
-  # in the tree today: `ccgpt` and `ccgpt-runtime` join in Plan 2b-2, IN THE
-  # SAME COMMIT that writes them, because this helper on a missing source
-  # aborts the lane mid-chain, and every commit on `main` must deploy.
+  # The GPT lane's four executables, on this agent lane only: `ccd/ccrc`'s
+  # `_inst_bins` places them on every role but server. The rsync above already
+  # lands them at ~/ccrc/ccd/; without these lines a fallback deploy never put
+  # them on PATH. After the build and before the stamp, so a failed copy aborts
+  # the lane before this box's build record can claim it. Each joined this lane
+  # NO EARLIER than the commit that wrote its source, because this helper on a
+  # missing source aborts the lane mid-chain; the runtime builder and the
+  # launcher joined in the commit that placed them in `_inst_bins`.
+  # Dependencies first and the launcher last, as `_inst_bins` orders them. The
+  # launcher is `ccrc-codex`, never `ccgpt`: on a live fleet box
+  # `.local/bin/ccgpt` is another repository's launcher, and this helper
+  # replaces whatever sits at its destination (D-3478).
   #
   # `server/test/install-census.test.ts` reds when a binary or unit file
   # `ccrc install` places is placed by NEITHER lane of this file (it reads the
@@ -840,6 +863,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # when a source either helper here copies is not tracked in the repository.
   install_atomic ccd/ccgpt-proxy.py .local/bin/ccgpt-proxy.py 755
   install_atomic ccd/ccgpt-usage.py .local/bin/ccgpt-usage.py 755
+  install_atomic ccd/ccgpt-runtime .local/bin/ccgpt-runtime 755
+  install_atomic ccd/ccrc-codex .local/bin/ccrc-codex 755
   # STAMP HERE — after the build that can fail, before the restart that makes
   # it live (I1, final review). Stamping earlier (this chain's shape until
   # now) let a failed remote `npm ci && npm run build` — a registry hiccup,

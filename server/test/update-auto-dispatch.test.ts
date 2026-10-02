@@ -10,7 +10,7 @@
 // reads the live `$HOME`: every box is a `mkTmp` fixture, the fleet link is a
 // recording `SendUpdateOp`, and the server-role spawn a recording `Runner`
 // behind `spawnFromRunner` (the double for `localUpdateSpawnFor`) — the same two-template capability `index.ts` binds.
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { FLEET_SCOPE, UPDATE_GATE_CAP, type RequestKind } from '../../shared/api.js';
@@ -24,6 +24,8 @@ import type { Runner } from '../src/exec.js';
 import type { FleetState } from '../src/fleetstate.js';
 import { localIO } from '../src/io.js';
 import { Bus } from '../src/bus.js';
+import { NotifyLog } from '../src/notifylog.js';
+import type { PushPayload } from '../src/push.js';
 import { buildServer, type Deps } from '../src/server.js';
 import { FleetWatcher } from '../src/watch.js';
 import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
@@ -118,6 +120,7 @@ const deps = (b: Box): ConvergeDeps => ({
   },
   runLocal: spawnFromRunner(recorder(b.spawned), b.home),
   onAccepted: () => { b.accepted += 1; },
+  recordMove: null,
 });
 
 const measure = (b: Box, m: NodeMeasurement): void => {
@@ -385,5 +388,64 @@ describe('the advisory route and the enforcing dispatcher, one box (FleetWatcher
       await app.close();
       coord.db.close();
     }
+  });
+});
+
+describe('the move audit row through FleetWatcher.dispatchNow (wave 8 item A, D-3586)', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  /** A real coord.db, a real NotifyLog, and a recording `push` — never a mock of `dispatchOnce` itself: this
+   *  is the wiring `recordMove: (r) => { this.recordMoveFeed(r); }` runs through in production. */
+  const wired = (home: string): { base: Deps; coord: CoordStore; log: UpdateIntentLog; sent: PushPayload[] } => {
+    const base = testDeps(home);
+    const coord = new CoordStore(openCoordDb(base.cfg.coordDbPath));
+    expect(coord.applyReleaseListing(LISTING, NOW - 30_000, 'complete').ok).toBe(true);
+    const log = new UpdateIntentLog(defaultUpdateIntentLogPath(base.cfg.ccrcDir));
+    const sent: PushPayload[] = [];
+    return { base, coord, log, sent };
+  };
+
+  it('an accepted auto move leaves exactly one update feed row and never pushes', async () => {
+    const home = mkTmp('ccrc-update-auto-feed-');
+    const { base, coord, log, sent } = wired(home);
+    const updateRunner = spawnFromRunner(recorder([]), home);
+    const notifyLog = new NotifyLog(path.join(base.cfg.ccrcDir, 'notify-log.json'));
+    await notifyLog.load();
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const deps: Deps = { ...base, coord, updateIntentLog: log, updateRunner, notifyLog, push: push as never };
+    const w = new FleetWatcher(deps, new Bus(), 60_000, path.join(base.cfg.ccrcDir, 'state-cache.json'));
+    expect(coord.upsertNodeMeasurement(serverNode({ role: base.cfg.role, caps: GATED })).ok).toBe(true);
+    expect(coord.setIntent(SERVER_ID, { channel: 'stable', auto: 'channel' }, log, NOW).ok).toBe(true);
+    await resolveAndProject({ store: coord, role: base.cfg.role, ccrcDir: base.cfg.ccrcDir }, NOW);
+    const r = await w.dispatchNow();
+    if (!r.ran) throw new Error(`dispatchNow did not run: ${r.why}`);
+    expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
+    const feed = coord.feedEvents(10);
+    expect(feed).toHaveLength(1);
+    expect(feed[0]).toMatchObject({ kind: 'update', sessionId: '', runId: null });
+    expect(feed[0]!.title).toContain('auto');
+    expect(sent).toEqual([]);
+    coord.db.close();
+  });
+
+  it('a recordFeedEvent that throws still lets the run return its result; pushOne\'s own guard warns once', async () => {
+    const home = mkTmp('ccrc-update-auto-feed-throw-');
+    const { base, coord, log } = wired(home);
+    const updateRunner = spawnFromRunner(recorder([]), home);
+    const notifyLog = new NotifyLog(path.join(base.cfg.ccrcDir, 'notify-log.json'));
+    await notifyLog.load();
+    const deps: Deps = { ...base, coord, updateIntentLog: log, updateRunner, notifyLog };
+    const w = new FleetWatcher(deps, new Bus(), 60_000, path.join(base.cfg.ccrcDir, 'state-cache.json'));
+    expect(coord.upsertNodeMeasurement(serverNode({ role: base.cfg.role, caps: GATED })).ok).toBe(true);
+    expect(coord.setIntent(SERVER_ID, { channel: 'stable', auto: 'channel' }, log, NOW).ok).toBe(true);
+    await resolveAndProject({ store: coord, role: base.cfg.role, ccrcDir: base.cfg.ccrcDir }, NOW);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(coord, 'recordFeedEvent').mockImplementation(() => { throw new Error('boom'); });
+    const r = await w.dispatchNow();
+    if (!r.ran) throw new Error(`dispatchNow did not run: ${r.why}`);
+    expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toContain('recordFeedEvent failed');
+    coord.db.close();
   });
 });

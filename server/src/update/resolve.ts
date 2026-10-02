@@ -62,12 +62,19 @@ const PINNED_WHY_TEXT: Record<PinnedIneligibleWhy, string> = {
 /** Derived from the record, never hand-kept (the PR_REASONS idiom). */
 export const PINNED_INELIGIBLE_WHYS = Object.keys(PINNED_WHY_TEXT) as readonly PinnedIneligibleWhy[];
 
-/** Every resolveDetail sentence, in one place. The first four are §9's text verbatim. */
+/** Every resolveDetail sentence, in one place. The first four are §9's text verbatim; `atNewest` is wave 8's
+ *  (item F1). */
 export const RESOLVE_DETAIL = {
   pinnedAtOrBelowFloor: (pin: string, floor: string): string =>
     `pinned ${pin} is at or below this node's floor ${floor} — pin a newer tag, or use rollback`,
   notNewerThanFloor: (newest: string, floor: string): string =>
     `newest eligible ${newest} is not newer than this node's floor ${floor} — a yank or demotion cannot move a node down; a newer release will`,
+  // Wave 8 item F1: the converged node, as measured facts. Not the phrase "up to date": §9 forbids it for a NULL
+  // desiredTag, and this function cannot see whether the catalogue has answered since start — so it names the
+  // channel and the catalogue "as last read", and the PWA qualifies it while lastOkAt is null or the node is
+  // unreachable. No "nothing newer" clause: a newer release this node refused, or one on another channel, may exist.
+  atNewest: (current: string, channel: UpdateChannel): string =>
+    `runs ${current}, the newest eligible release on ${channel} in the catalogue as last read`,
   rolledBack: (current: string, floor: string): string =>
     `this node was rolled back to ${current} and its floor is ${floor} — auto stays off this tag until a release above ${floor} exists (decision 8)`,
   noFloor: (): string => 'no floor and no measured version — nothing to compare against',
@@ -185,6 +192,12 @@ function resolveOnChannel(channel: UpdateChannel, pin: string | null, input: Res
   // Nothing above the floor. Which sentence is decided by whether the node runs BELOW its own floor: a
   // rolled-back node is told why auto leaves it alone; a node at its floor is told a yank cannot move it.
   const current = isReleaseTag(input.currentVersion) ? input.currentVersion : null;
+  // Wave 8 item F1 (D-3590): the node already runs the newest eligible release, at its own floor — `floor ===
+  // current` is load-bearing: a node rolled back onto the newest after a yank has floor > current and must
+  // still read rolledBack, never atNewest.
+  if (current !== null && current === newest && floor === current) {
+    return { desiredTag: null, resolveDetail: RESOLVE_DETAIL.atNewest(current, channel) };
+  }
   if (current !== null && isNewerTag(floor, current)) {
     return { desiredTag: null, resolveDetail: RESOLVE_DETAIL.rolledBack(current, floor) };
   }

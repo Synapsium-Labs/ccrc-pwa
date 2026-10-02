@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ceb34e9738aabffccd7ebd732e002284d45059c348185fce4950420fea2b7287
+# ccrc:generated 1 sha256=e44ce1c833d7ecfc7ff7cb89498e9356e3e2fde6aa3b02f8c423d2ed3843afde
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -7,6 +7,36 @@
 # a row stamped `rc=off` (`ws-add --no-rc` — a dispatched worker, task #37) spawns
 # plain even on an `on` box.
 set -uo pipefail
+
+# ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
+# A direct `ws-reclaim`, or a direct `ws-audit --session <id> --reclaim
+# [--defer-expired]`, must be running under Bash >= 4.4 in PRIVILEGED mode with
+# no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
+# rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
+# word; no environment marker is read. `$-` alone is not enough — a plain bash
+# importing `SHELLOPTS=privileged` reports `p` and still imports exported
+# functions (measured, bash 5.2) — so an imported function refuses too: ccd has
+# defined none at this line. Nothing here consults PATH, but the guard is
+# BEST-EFFORT wherever no launcher `-p` start stands behind it, since `printf`,
+# `exit` and `declare` can each be shadowed by a startup-defined function: an
+# explicit `bash ccd/ccd` (a hostile `BASH_ENV` already ran), and a case-variant
+# protected verb under an inherited `nocasematch`, which the launcher compares
+# exactly and starts ORDINARY. The guarantee is the launcher's `-p` start of an
+# exact spelling (D-3696, D-3700). SOURCE MODE never runs this; the classifier
+# is the launcher's, shape for shape, and the dispatcher still owns every tail.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim ]] \
+     || { [[ $# -eq 4 || $# -eq 5 ]] && [[ "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --reclaim ]] \
+          && [[ $# -eq 4 || "${5-}" == --defer-expired ]]; }; }; then
+  if ! (( BASH_VERSINFO[0] > 4 || ( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4 ) )) || [[ $- != *p* ]]; then
+    printf 'ccd: refused (entry-unprivileged): %s reaches ccd only through its installed direct entry, under Bash >= 4.4 in privileged mode (-p); this is Bash %s with flags %s — nothing was run\n' \
+      "$1" "${BASH_VERSION-unknown}" "$-" >&2
+    exit 125
+  fi
+  if [[ -n "$(declare -F)" ]]; then
+    printf 'ccd: refused (entry-imported-functions): %s started with shell functions already defined, which only Bash startup can have imported — nothing was run\n' "$1" >&2
+    exit 125
+  fi
+fi
 
 # ── THE PLATFORM LAYER — one file, two userlands ────────────────────────
 # ccd was written against GNU/Linux and says so out loud: `_reg_set`'s header
@@ -1031,6 +1061,161 @@ _svc_run_detached() {   # <cmd> [args...]
   # went on to do, and this probe is the same promise, kept the same way.
   command -v "$1" >/dev/null 2>&1 || return 1
   nohup "$@" >/dev/null 2>&1 &
+  return 0
+}
+
+# `_svc_have_user_manager` — can this box start a TRANSIENT USER SERVICE now?
+#
+# NEW LOGIC, NOT INHERITED (D-3483). `_svc_run_detached` above
+# never asks: its Linux arm runs `systemd-run --user` and hands back whatever
+# that answers, with no fallback. `_have_systemctl` is PATH presence only —
+# "can this box supervise a session at all" — and says yes on a box that has
+# systemctl installed and no user bus to reach: a container, a user with no
+# lingering and no login, a context with no `XDG_RUNTIME_DIR`. So two
+# conjuncts, both required: `systemd-run` on PATH, AND a user manager that
+# answers `show-environment` over the bus. The second is the one that tells
+# those boxes apart.
+#
+# THE CALLER EXPORTS THE BUS DEFAULTS FIRST. Nothing between these sentinels
+# sets `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`: ccd defaults both at
+# source time, below the block, and ccrc does it per function (`_inst_enable`'s
+# idiom). Asked without them from a non-interactive context, this answers "no
+# manager" on a box that has one, and the caller is handed the nohup arm.
+#
+# DARWIN ALWAYS ANSWERS 1. launchd has no transient service short of a plist
+# written, bootstrapped and reaped per start — the trade `_svc_run_detached`
+# declines for the same reason — so the nohup arm below IS the Darwin arm.
+#
+# ITS OWN FUNCTION so a harness can stub it by name, which is also why
+# `_have_systemctl` is one.
+_svc_have_user_manager() {   # -> 0 iff a transient user service can be started now
+  if [ "$CCD_OS" = darwin ]; then return 1; fi
+  command -v systemd-run >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1
+}
+
+# `_svc_run_supervised` — start a LONG-LIVED process as one named transient
+# user service (a slice, a restart policy, a log), or, where
+# `_svc_have_user_manager` finds no manager, as a `nohup` child writing the
+# same log. A sibling of `_svc_run_detached`, not an extension of it: that one
+# fires a two-second job and takes none of those four things, and its argv is
+# pinned as it stands (spec §7.1).
+#
+# SECRETS NEVER RIDE ARGV. A `--setenv=NAME=value` becomes the unit's
+# `Environment=` property, which `systemctl --user show` prints to anyone who
+# asks — measured 2026-09-23 on a live lane run by another launcher, whose
+# gateway key sat in both tier units' `Environment=`. So a NAME whose LAST
+# `_`-segment ENDS WITH KEY, TOKEN, SECRET, PASSWORD or PASSWD, in any case,
+# is REFUSED, 64, and its value travels in <envfile>: systemd records only
+# that file's PATH (`EnvironmentFiles=`), and the nohup arm sources it inside
+# the child. The rule reads the TAIL, so `CHATGPT_TOKEN_DIR` — LiteLLM's own
+# name, which says where a credential lives — passes, and so does a secret
+# word that is not last (`SECRET_KEY_BASE`, `…_TOKEN_FILE`). None of the five
+# words contains `_`, so "the last segment ends with W" is the same test as
+# "the NAME ends with W", which is how the `case` below spells it. A refusal
+# names the NAME and never a value — not even for an argument it could not
+# parse, which may be a value passed by mistake.
+# The grammar is ENUMERATED bracket lists, never `[A-Z]`. A range is ASCII
+# only while `globasciiranges` is on — bash 5's default, not the 4.4 floor's;
+# with it off, en_US.UTF-8 lets `[!A-Za-z0-9_]` pass `É` (measured). A list can't.
+#
+# 64 IS A SHAPE, 1 IS A STATE. Shape: fewer than three leading arguments, an
+# empty unit, a log or envfile that is not absolute (systemd takes neither
+# relative, so neither arm does), a pair that is not NAME=value, no `--`, or
+# nothing after it. State: an envfile that is not a readable file, a log that
+# cannot be opened for append, a command the nohup arm cannot find. Every
+# state is PROBED BEFORE ANYTHING STARTS, because neither arm can report it
+# afterwards: a backgrounded child answers 0 whatever happens next, and
+# `systemd-run` reports that the UNIT WAS CREATED, not that its process could
+# start — the promise `_svc_run_detached`'s probe keeps, kept the same way.
+#
+# ONE CONTRACT, TWO ARMS. A unit's environment is the MANAGER's plus its
+# pairs plus its file, never the caller's, so the nohup child starts from
+# `env -i` as well: HOME, PATH, LANG when the caller has one, then the pairs,
+# and nothing else the caller exported — an `ANTHROPIC_*`, `CHATGPT_*` or
+# `CLAUDE_*` from a session pane cannot reach a tier. The file is sourced by
+# a `sh` INSIDE that clean environment, after the pairs, because systemd
+# documents `EnvironmentFile=` overriding `Environment=`. Listing its lines
+# as `env` arguments instead would put the key in that process's argv, which
+# `ps` shows to every user on the box. The child runs in `$HOME`, as
+# `--working-directory` does, and its stdin is `/dev/null` explicitly,
+# because a block sourced into an interactive shell has job control on,
+# where an async job keeps the terminal. The envfile is read by two parsers —
+# systemd's and the shell's — so its lines must be plain `NAME=value` with
+# nothing to quote, which is the one shape its writer produces. What the
+# nohup arm cannot give is the restart policy or a cgroup of its own: the
+# child stays in the CALLER's, so a caller that forgot the bus defaults above
+# loses the process with the pane that started it (spec §7.2).
+#
+# THE ANSWER IS ONE LINE ON STDOUT: `systemd <unit>`, or `nohup <pid>` where
+# <pid> is the COMMAND's own — the child is a subshell that `exec`s `env`,
+# which execs the `sh` that sources the file, which `exec`s `nohup`, which
+# execs the command — so a later identity check reads the right
+# `ps -o args=`. The redirect sits on that subshell, so a caller's `$(…)`
+# returns at once instead of waiting on a pipe the child inherited.
+_svc_run_supervised() {   # <unit> <log> <envfile|-> [NAME=value ...] -- <cmd> [args...]
+  local use='_svc_run_supervised: usage: <unit> <log> <envfile|-> [NAME=value ...] -- <cmd> [args...]'
+  if [ "$#" -lt 3 ]; then printf '%s — fewer than three arguments\n' "$use" >&2; return 64; fi
+  local unit="$1" log="$2" envfile="$3" kv name n=3
+  local -a pairs=()
+  shift 3
+  if [ -z "$unit" ]; then printf '%s — the unit name is empty\n' "$use" >&2; return 64; fi
+  case "$log" in
+    /*) ;;
+    *) printf '%s — the log must be an absolute path\n' "$use" >&2; return 64 ;;
+  esac
+  case "$envfile" in
+    -|/*) ;;
+    *) printf '%s — the envfile must be - or an absolute path\n' "$use" >&2; return 64 ;;
+  esac
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do
+    kv="$1"; shift; n=$((n + 1))
+    case "$kv" in *=*) name="${kv%%=*}" ;; *) name="" ;; esac
+    case "$name" in
+      ''|[0123456789]*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]*)
+        printf '%s — argument %s is not NAME=value (not echoed: it may be a value)\n' "$use" "$n" >&2
+        return 64 ;;
+    esac
+    case "$name" in
+      *[Kk][Ee][Yy]|*[Tt][Oo][Kk][Ee][Nn]|*[Ss][Ee][Cc][Rr][Ee][Tt]|*[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|*[Pp][Aa][Ss][Ss][Ww][Dd])
+        printf '_svc_run_supervised: %s: refused %s — a secret travels in the envfile, never in argv or unit metadata\n' \
+          "$unit" "$name" >&2
+        return 64 ;;
+    esac
+    pairs+=("$kv")
+  done
+  if [ "$#" -eq 0 ]; then printf '%s — no -- before the command\n' "$use" >&2; return 64; fi
+  shift
+  if [ "$#" -eq 0 ]; then printf '%s — nothing to run after --\n' "$use" >&2; return 64; fi
+  if [ "$envfile" != - ] && ! { [ -f "$envfile" ] && [ -r "$envfile" ]; }; then
+    printf '_svc_run_supervised: %s: envfile %s is not a readable file — nothing was started\n' "$unit" "$envfile" >&2
+    return 1
+  fi
+  if ! { : >>"$log"; } 2>/dev/null; then
+    printf '_svc_run_supervised: %s: log %s cannot be opened for append — nothing was started\n' "$unit" "$log" >&2
+    return 1
+  fi
+  if _svc_have_user_manager; then
+    local -a sr=(--user --collect --quiet "--unit=$unit" --slice=app.slice "--working-directory=$HOME"
+      -p Restart=always -p RestartSec=3 -p StartLimitIntervalSec=300 -p StartLimitBurst=20
+      -p "StandardOutput=append:$log" -p "StandardError=append:$log")
+    [ "$envfile" = - ] || sr+=(-p "EnvironmentFile=$envfile")
+    for kv in ${pairs[@]+"${pairs[@]}"}; do sr+=("--setenv=$kv"); done
+    systemctl --user reset-failed "$unit" >/dev/null 2>&1
+    systemd-run "${sr[@]}" -- "$@" || return $?
+    printf 'systemd %s\n' "$unit"
+    return 0
+  fi
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf '_svc_run_supervised: %s: %s is not a command here — nothing was started\n' "$unit" "$1" >&2
+    return 1
+  fi
+  (
+    cd -- "$HOME" || exit 1
+    exec env -i HOME="$HOME" PATH="$PATH" ${LANG:+LANG="$LANG"} ${pairs[@]+"${pairs[@]}"} \
+      sh -c 'if [ "$1" != - ]; then set -a; . "$1" || exit 1; set +a; fi; shift; exec nohup "$@"' \
+      sh "$envfile" "$@"
+  ) </dev/null >>"$log" 2>&1 &
+  printf 'nohup %s\n' "$!"
   return 0
 }
 # ── END PLATFORM LAYER — the byte-identical region ends HERE ────────────
@@ -3701,18 +3886,18 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41 — by addition, NOT a fresh census of
+  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 41: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # The 42: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `carriednote`, `child`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `reaping`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
-  # `swapnarrownote`, `tdate`, `tickstuck`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
+  # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
   # of one word in one file, disclosed rather than renamed. That is a WIDER
   # set than `_reg_set`/`_reg_get`: the inventory
@@ -3845,7 +4030,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     meas.archivedReason "$(_reg_get "$1" archivedreason)" \
     meas.held           "$(_reg_get "$1" hold)"
   # ─────────────────────────────────────────────────────────────────────────
-  local id="$1" f suffix
+  local id="$1" f suffix hf
   for f in "$REG/$id".*; do
     # `[[ -e "$f" ]]` for the unmatched-glob case: this file does not set
     # `nullglob`, so a glob with no matches stays the literal string
@@ -3868,18 +4053,18 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     # conditions. The four callers branch on the value, not on the boolean.
     rm -f "$f" || _reg_purge_unremoved "$f"
   done
-  # `hookstate.json` (session-hook.sh's `$REG/$id.hookstate.json`, the
-  # session-status file the Claude Code hooks write on every tool call) is an
-  # ordinary field with no ordering invariant of its own — it belongs here,
-  # with the fields above, not in the archived/reaping tail below. But its
-  # OWN name holds a dot, so the loop's `[[ "$suffix" == *.* ]]` skip (the
-  # nested-id guard the long note above measures) reads
-  # `$REG/$id.hookstate.json` as a two-dot stranger and leaves it standing
-  # rather than unlinking it — the same shape as `$id.x-y.uuid`, just
-  # produced by a field name instead of a project directory name. Removed
-  # explicitly here rather than exempted from the loop's filter, so the
-  # nested-id guard stays a single, simple rule.
-  rm -f "$REG/$id.hookstate.json" || _reg_purge_unremoved "$REG/$id.hookstate.json"
+  # `hookstate.json` and `turn.json` (session-hook.sh's `$REG/$id.hookstate.json`,
+  # the session-status file the Claude Code hooks write on every tool call, and
+  # `$REG/$id.turn.json`, the stall watch's turn marker) are ordinary fields with
+  # no ordering invariant of their own — they belong here, with the fields above,
+  # not in the archived/reaping tail below. But each OWN name holds a dot, so the
+  # loop's `[[ "$suffix" == *.* ]]` skip (the nested-id guard the long note above
+  # measures) reads each as a two-dot stranger and leaves it standing rather than
+  # unlinking it — the same shape as `$id.x-y.uuid`, just produced by a field name
+  # instead of a project directory name. Removed explicitly here, through `hf` and
+  # never the glob loop's own variable (a second unlink through that one is a second
+  # canonical write on the compaction card's allow-list), so the guard stays one rule.
+  for hf in "$REG/$id.hookstate.json" "$REG/$id.turn.json"; do rm -f "$hf" || _reg_purge_unremoved "$hf"; done
   _usage_purge "$id"   # its three sidecar removals are tracked too — see its own header
   rm -f "$REG/$id.reaping" || _reg_purge_unremoved "$REG/$id.reaping"
   # CONDITIONAL, so the invariant is a mechanism rather than a hope: an `rm`
@@ -4935,7 +5120,7 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   #
   # UNRECOGNISED -> busy. `idle` is an ALLOWLIST; every other value is busy.
   # Claude Code writes at least `idle`, `busy` (a model turn is in flight) and
-  # `shell` (a Bash tool command is running) — server/src/livestate.ts:14-30 is
+  # `shell` (a background shell is running) — server/src/livestate.ts:31-61 is
   # this repo's own record of that vocabulary, and of what matching `busy` and
   # calling the rest idle cost when the server side did it. Here the price is
   # steeper than a wrong badge: `ws-reap` gates `git worktree remove` on this
@@ -6205,13 +6390,13 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
 #
 # THAT SKIP IS THE LOOP'S RULE ONLY, not a general immunity — `_reg_purge`
-# also removes one named two-dot file EXPLICITLY, after the loop:
-# `rm -f "$REG/$id.hookstate.json"`, un-skipped on purpose (see the note in
-# `_reg_purge` beside that line). "Has a dot in the suffix" is sufficient
+# also removes two named two-dot files EXPLICITLY, after the loop:
+# `$REG/$id.hookstate.json` and `$REG/$id.turn.json`, un-skipped on purpose (see
+# the note in `_reg_purge` beside that line). "Has a dot in the suffix" is sufficient
 # for these two tmp families specifically, because nothing in `_reg_purge`
 # names them outside the loop, but it is not a general rule. No dot-prefixed
-# artifact under `$REG` is ever named `<id>.hookstate.json` for an aliasing
-# id, so no alias follows from this explicit line either.
+# artifact under `$REG` is ever named `<id>.hookstate.json` or `<id>.turn.json`
+# for an aliasing id, so no alias follows from these explicit names either.
 #
 # Enforced at CREATION ONLY — `cmd_ws_add` and `cmd_start`, the two sites
 # that mint a NEW registry row for a project — never at `cmd_pr_state`,
@@ -24297,7 +24482,9 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   #                                 `.workdir` would not read, a row's `.workdir` is not absolute,
   #                                 opens with `//`, lies under `/proc`, cannot be resolved (a directory
   #                                 or link on it cannot be entered or followed, a `..` in it cannot be
-  #                                 placed, or it holds a control character), or resolves
+  #                                 placed, or it holds a control character), resolves only with
+  #                                 a basis other than `complete` (the rest re-attached as text below
+  #                                 a missing component, D-3731), or resolves
   #                                 to a path opening with `//`, or the child's own
   #                                 workdir resolves to one or cannot be resolved (the row cannot be
   #                                 placed) — every case after
@@ -24324,9 +24511,12 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # removes are the child's own, and have no row. Inside means at a path
   # COMPONENT boundary — `<child>/x` is inside, `<child>x` is a sibling — asked
   # literally and resolved, as the equality is — each only when that spelling
-  # is ONE PLAIN path, because the resolved spelling re-attaches whatever lies
-  # below the last existing directory as written, and once the child's tree is
-  # gone `<child>/..` is below it as a string yet resolves nowhere. Here the literal arm is NOT
+  # is ONE PLAIN path: a literal `<child>/..` is below the child as a string
+  # yet names no path inside it, so it is THROUGH, never NESTED. The resolved
+  # spelling compared here is always a `complete` `pwd -P` answer — an
+  # `absent-suffix` one, which re-attaches the rest as written, is collected
+  # before any comparison (D-3731) — so on the resolved arm the plain-path
+  # condition is defence in depth (review 213, F2). Here the literal arm is NOT
   # implied by the resolved one: a row spelled through a link INSIDE the
   # child resolves outside it, yet the path it names goes with the child. A row
   # ABOVE the child is not refused: the child lies inside that session's
@@ -24434,7 +24624,34 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # THROUGH, so the order only chooses which why names a row, and can never
   # turn a refusal into a pass. A literal row's resolved arms are asked only
   # when both it and the child resolved; its literal arms refuse it anyway.
-  local id="$1" wd="$2" mine='' minewhy='' names n o w wr rok rc lit unread='' unplaced='' unmine='' unproc='' unres=''
+  #
+  # NOR ONE PLACED ONLY BY PROJECTION (D-3731, R31). Another row's resolution
+  # authorises a physical comparison only when its basis is `complete`: every
+  # component of its current spelling walked and entered. An `absent-suffix`
+  # answer — the rest re-attached as text below a proven-absent component —
+  # is how the namespace reads now, not where that session is: a pane that
+  # entered `<alias>/server` while `<alias>` led into this child still holds
+  # that cwd once the alias is removed, and the projection read as outside, so
+  # the audit minted a token and the verb removed the live tree (measured).
+  # Such a row, an empty or unknown basis, and a failed resolution are all
+  # collected as one that cannot be placed — retryable, by id only — and the
+  # same proof is asked at every seam that reaches this helper: the audit's
+  # evaluation, the verb's locked recomputation, and `_ws_reclaim_owned` on the
+  # fresh and the resumed tail. Liveness is no input here: a modelled pane, up
+  # or gone or unaskable, never makes a projection evidence. The CHILD's own
+  # `mine` is not held to it: its vanished worktree is R19's arm, decided by
+  # the eval's vanished fork (`_ws_reclaim_absent`), which the eval asks right
+  # AFTER this helper (review 214, F8), and a row literally at or below it
+  # is refused by the literal arms whatever its basis. R19's arm is unchanged,
+  # but an ambiguous OTHER row holds a vanished child too — and two vanished
+  # children hold each other — until that row is purged or a link on its path
+  # is restored to its original target, and a later attempt runs: the stated
+  # cost. A directory created where a link stood ends the hold unsafely: it
+  # re-points the spelling by replacement. And `complete` places the
+  # SPELLING as it reads now, not the session: an alias re-pointed after the
+  # session entered through it, or a bind-mount spelling, also resolves
+  # complete and outside (pre-existing; left to a follow-up).
+  local id="$1" wd="$2" mine='' minewhy='' names n o w wr rok basis rc lit unread='' unplaced='' unmine='' unproc='' unres=''
   _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
     || { _WS_SHARED_WHY="could not list $REG"; return 2; }
@@ -24443,7 +24660,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     [[ "$mine" != //[!/]* ]] \
       || minewhy="resolves to a path opening with //, so ccd cannot compare another row with it — re-point the link whose target opens with //"
   else
-    minewhy="cannot be resolved (a directory or link on its path cannot be entered or followed, something on its path is not a directory, or it holds a control character), so ccd cannot compare another row with it — make it searchable, or remove what stands at it"
+    minewhy="cannot be resolved (a directory or link on its path cannot be entered or followed, something on its path is not a directory, or it holds a control character), so ccd cannot compare another row with it — make it searchable if a directory on its path cannot be searched; never remove or replace what stands at this child's own workdir to clear this"
   fi
   while IFS= read -r n; do
     [[ -n "$n" ]] || continue
@@ -24458,12 +24675,24 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     # spelling does (`cmd_start` refuses one), so it is unplaced exactly as a
     # relative row is — collected, and decided after the loop.
     [[ ! "$w" =~ ^/+proc(/|$) ]] || { unproc+="${unproc:+, }$o"; continue; }
-    wr=''; rok=0
-    _ws_reclaim_resolve "$w" && { wr="$_WS_RESOLVED"; [[ -n "$mine" ]] && rok=1; }
+    wr=''; rok=0; basis=''
+    _ws_reclaim_resolve "$w" && wr="$_WS_RESOLVED"
+    basis="$_WS_RESOLVE_BASIS"; [[ "$basis" == complete && -n "$mine" ]] && rok=1
+    [[ -n "$wr" ]] || rok=0
     lit=0; [[ "$w" == "$wd" || "$w" == "${wd%/}/"* ]] && lit=1
     (( lit )) || [[ "$wr" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
     (( lit )) || [[ -z "$minewhy" ]] || { unmine+="${unmine:+, }$o"; continue; }
     (( lit )) || (( rok )) || { unres+="${unres:+, }$o"; continue; }
+    # The THROUGH arm's RESOLVED disjunct (the last `elif`'s second half) is
+    # defence in depth that no realistic row reaches since D-3731 (review 213,
+    # F1): every `wr` compared here is a `complete` `pwd -P` answer, plain
+    # unless it opens with `//`, and a non-literal `//` row is unplaced above.
+    # What used to reach it was a row spelled through a linked ancestor into a
+    # GONE child, `<wtlink>/<project>/<child>/..`, whose `..` the old
+    # resolution re-attached as text below the missing child; the ported
+    # resolver now fails that spelling (rc 1, unresolvable, `unmeasured`). One
+    # contrived input still reaches it — a child whose own workdir resolves
+    # to `/`, beside a row spelled `//` — so it stays, pinned by no case.
     if [[ "$w" == "$wd" ]] || { (( rok )) && [[ "$wr" == "$mine" ]]; }; then
       _WS_SHARED_ROWS+="${_WS_SHARED_ROWS:+, }$o"
     elif { (( rok )) && [[ "$wr" == "${mine%/}/"* ]] && _ws_reclaim_plain_path "$wr"; } \
@@ -24482,19 +24711,35 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   [[ -z "$unproc" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unproc name a workdir under /proc, which names whatever the reading process's own cwd or descriptors are, so ccd cannot place them against this child — stop each and start it again from a plain path, or purge its row"
   [[ -z "$unres" ]] \
-    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved (a directory or link on its path cannot be entered or followed; a '..' in it follows a directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place them against this child — make it searchable, or stop and purge the row"
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered or followed, or no longer exists, so its spelling no longer says where that session lives; a '..' in it follows a directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place them against this child — make it searchable if a directory on its path cannot be searched, restore a link on its path to its original target (never create a directory in a link's place), or purge the row once its session has ended"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2
   return 0
 }
 
 _WS_RESOLVED=''
+_WS_RESOLVE_BASIS='unmeasured'
 _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd` of path would land,
   #                           canonically: the physical path (`builtin pwd -P`) of its longest prefix
   #                           that is a directory (its own walk, fork-free), entered LOGICALLY, then
   #                           the rest as written, one `/` between components — the rest's first
   #                           component PROVEN absent (`_ws_reclaim_absent`), and a path whose entered
   #                           prefix holds `..` re-walked from where that entry lands; rc 1,
-  #                           _WS_RESOLVED='', otherwise
+  #                           _WS_RESOLVED='', otherwise. _WS_RESOLVE_BASIS says how the answer was
+  #                           formed: `complete` when the whole current spelling was walked and entered
+  #                           (no rest), `absent-suffix` when a rest was re-attached as text below a
+  #                           proven-absent component, `unmeasured` on every rc 1. A re-walk's own
+  #                           basis is the answer's; no caller relabels it.
+  # HOW THE ANSWER WAS FORMED IS PART OF THE ANSWER (D-3731, R31). Both rc-0
+  # shapes are one path string, and for presenting a path, or for the child's
+  # own vanished worktree (R19), that is enough. It is not enough to say where
+  # ANOTHER row's session is: a pane that entered `<alias>/server` while the
+  # alias stood keeps that physical cwd when the alias is removed, and the
+  # spelling then re-attaches `alias/server` as text below a proven-absent
+  # `alias` — a projection of the namespace as it is now, not evidence of
+  # where that process lives. So the basis rides beside the path, set at each
+  # return and reset at entry, so a failed call never inherits the call
+  # before it, and `_ws_reclaim_workdir_shared` places another row only on
+  # `complete`.
   # WHERE A ROW'S SESSION LIVES, AND WHETHER THAT CAN BE SAID AT ALL — ONE
   # OPERATION, so the two can never disagree (spec §5.5, rung 9).
   # `_ws_reclaim_workdir_shared` places every row, and the child itself, by
@@ -24555,6 +24800,7 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
   # re-attachment is not where the session lives.
   local p="$1" head="$1" rest real c out=''
   _WS_RESOLVED=''
+  _WS_RESOLVE_BASIS='unmeasured'
   [[ "$p" != *[[:cntrl:]]* && "$p" != *$'\n'* ]] || return 1
   while [[ ! -d "$head" && "$head" != / && "$head" != . && -n "$head" ]]; do
     case "$head" in
@@ -24570,7 +24816,7 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
   # `.` is the walk's own stand-in for a relative path's cwd, not a prefix of it.
   if [[ "$head" == . && "$p" != . && "$p" != ./* ]]; then rest="$p"; else rest="${p#"$head"}"; fi
   while [[ "$rest" == /* ]]; do rest="${rest#/}"; done
-  if [[ -z "$rest" ]]; then _WS_RESOLVED="$real"; return 0; fi
+  if [[ -z "$rest" ]]; then _WS_RESOLVED="$real"; _WS_RESOLVE_BASIS='complete'; return 0; fi
   case "/$rest/" in */../*) return 1 ;; esac
   case "/$head/" in */../*) _ws_reclaim_resolve "${real%/}/$rest"; return ;; esac
   _ws_reclaim_absent "${head%/}/${rest%%/*}" || return 1
@@ -24580,11 +24826,16 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
     [[ -z "$c" ]] || out+="/$c"
   done
   _WS_RESOLVED="${real%/}$out"
+  _WS_RESOLVE_BASIS='absent-suffix'
   return 0
 }
 
 _ws_reclaim_resolvable() {   # path -> 0 when `_ws_reclaim_resolve` resolves it, 1 otherwise — its
   #                              verdict alone, its answer unread
+  # NO SHIPPED CALLER YET (review 214, F6). Ported because the plan mandates it
+  # (Task 1 Step 4.3), from the immutable source it was extracted with; only
+  # the ladder suite calls it today, and it can never disagree with the
+  # resolver's own rc, which is all it returns.
   _ws_reclaim_resolve "$1"
 }
 
@@ -24877,6 +25128,18 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
       *) _ws_reclaim_unmeasured "whether $(_tmux "$id") is up could not be asked — tmux answered: ${PROBE_DETAIL:-nothing}"; return 1 ;;
     esac
   fi
+  # THE LEAF IS NEVER FOLLOWED (spec §5.5). A workdir that is itself a link
+  # reaches a tree ccd cannot prove is this child's: the pin would commit that
+  # tree's work and the tail would remove it. `-L` on the LEAF, no trailing
+  # slash, so a symlinked ANCESTOR (projects on a mounted volume) stays legal;
+  # a dangling link refuses here too, so it never reaches the vanished fork.
+  # Asked BEFORE any other row is placed (contract R31; review 214, F1;
+  # D-3738): placing rows resolves this workdir, and one that cannot be
+  # resolved collects every other row as one that cannot be placed — a
+  # retryable `unmeasured` that a fleet, which always has another row, would
+  # give a terminal leaf link instead of this refusal.
+  [[ ! -L "$workdir" ]] \
+    || { _reap_refuse containment-unproven "$workdir is a symbolic link — ccd never follows a link to a tree it would pin or delete, so it cannot prove the tree at that path is $id's own"; return 1; }
   # NO OTHER REGISTRY ROW NAMES THIS WORKDIR, OR IS ROOTED INSIDE IT (spec
   # §5.5, rung 9 asked of the path) — `_ws_reclaim_workdir_shared` says why.
   # Asked BEFORE the vanished fork, so it guards both arms: the absent arm
@@ -24904,13 +25167,6 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
     _ws_reclaim_eval_absent "$id" "$workdir" "$main" "$regbranch"
     return $?
   fi
-  # THE LEAF IS NEVER FOLLOWED (spec §5.5). A workdir that is itself a link
-  # reaches a tree ccd cannot prove is this child's: the pin would commit that
-  # tree's work and the tail would remove it. `-L` on the LEAF, no trailing
-  # slash, so a symlinked ANCESTOR (projects on a mounted volume) stays legal;
-  # a dangling link skipped the fork above and refuses here too.
-  [[ ! -L "$workdir" ]] \
-    || { _reap_refuse containment-unproven "$workdir is a symbolic link — ccd never follows a link to a tree it would pin or delete, so it cannot prove the tree at that path is $id's own"; return 1; }
   [[ -d "$workdir" ]] \
     || { _ws_reclaim_unmeasured "something that is not a directory stands at $workdir — neither a tree to pin nor a worktree that is gone"; return 1; }
   # THE TREE MUST BE ONE OF $main's WORKTREES — settled BEFORE any probe reads

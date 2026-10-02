@@ -44,16 +44,20 @@ export const TREE_FILES = [
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
-  // Plan 2b-1 Task 1: the two GPT-lane executables that ship today (Plan
-  // 2a), copied from the repository. `_inst_bins` places both, so a tree
-  // missing either makes a placement assertion fail for a fixture reason
-  // rather than a real one. `ccgpt` and `ccgpt-runtime` are NOT here, and
-  // not stubbed either: they are not in the repository until Plan 2b-2, so
-  // nothing may place them (D-3165), and a stub would hide a placement that
-  // dies on a real tree — the class `install-census.test.ts`'s tracked-source
-  // case now reds on.
+  // The GPT lane's four common executables, COPIED from the repository: the
+  // two `.py` files (Plan 2a, placed since Plan 2b-1), and the runtime builder
+  // and launcher. Plan 2b-2 wrote each of those two unplaced, then added both
+  // here in the commit that made `_inst_bins` place them: an entry joins this
+  // list NO EARLIER than the commit that writes its source. `_inst_bins`
+  // places all four, so a tree missing any one fails an install for a fixture
+  // reason rather than a real one. NEVER stubbed: a stub once hid a placement
+  // that dies on a real tree (D-3165), the class `install-census.test.ts`'s
+  // tracked-source case reds on. The launcher is `ccrc-codex`, not `ccgpt`
+  // (D-3478).
   'ccd/ccgpt-proxy.py',
   'ccd/ccgpt-usage.py',
+  'ccd/ccgpt-runtime',
+  'ccd/ccrc-codex',
   // The generators, reached as `$CCRC_HERE/../deploy/<name>.mjs` — the same
   // "one directory up from this script" resolution `cmd_wrappers` uses, true
   // in a checkout and at `~/ccrc/deploy` on a deployed box.
@@ -112,6 +116,12 @@ export const TREE_FILES = [
   // wrong file, all of which a real payload catches and a 12-byte one does
   // not.
   'ccd/ccd',
+  // ccd's direct-entry PAIR (D-3696): the launcher TEMPLATE `_inst_bins`
+  // renders onto PATH and the program that renders, self-tests and publishes
+  // the pair. COPIED, never stubbed — an install test must render the real
+  // template through the real publisher.
+  'ccd/ccd-entry.py',
+  'ccd/ccd-entry-install.py',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the

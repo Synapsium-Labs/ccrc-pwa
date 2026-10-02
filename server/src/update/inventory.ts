@@ -29,7 +29,8 @@
 // sweep's own clock.
 import path from 'node:path';
 import {
-  BUSY_UPDATE_STATES, IN_FLIGHT_UPDATE_PHASES, PROVENANCE_DETAIL_PREFIX, UNIX_SECONDS_MAX, isReleaseTag, isUpdatePhase, validCapWords,
+  BUSY_UPDATE_STATES, IN_FLIGHT_UPDATE_PHASES, PROVENANCE_DETAIL_PREFIX, UNIX_SECONDS_MAX, isReleaseTag, isUpdatePhase,
+  settledDoneDetail, validCapWords,
   type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type SettledUpdateState, type StampRead,
   type TagFileRead,
 } from '../../../shared/api.js';
@@ -420,7 +421,7 @@ function leaseActionFor(row: NodeRow | null, m: NodeMeasurement, r: NodeReport):
       // lease stays pending until a later sweep reads the stamp fine.
       if (m.stampRead !== 'ok') return { kind: 'none', why: 'stamp-unmeasured' };
       return r.target !== null && m.currentVersion === r.target
-        ? { kind: 'settle', detail: `done: ${r.target}` }
+        ? { kind: 'settle', detail: settledDoneDetail(r.target) }
         : { kind: 'release', to: 'failed', detail: 'stamp-mismatch' };
     case 'failed':
     case 'reverted':

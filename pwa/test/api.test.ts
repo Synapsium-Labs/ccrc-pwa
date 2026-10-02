@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ApiError, apiErrorText, clipUrl, createApi, kickoffErrorText, moveSkipText, sendErrorText, submitErrorText, updateErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
+import { ApiError, apiErrorText, clipUrl, createApi, kickoffErrorText, moveSkipText, noBundleRollbackText, sendErrorText, submitErrorText, updateErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
 import { FLEET_SCOPE, type AckAnswer, type CatalogueState, type IntentWriteAnswer, type MoveRequestAnswer, type NodeWire, type UpdateIntentWire, type UpdateRouteError } from '../../shared/api';
 
 const jsonResponse = (status: number, body: unknown): Response =>
@@ -778,7 +778,7 @@ describe('apiErrorText and the code translators that compose with it', () => {
 
   it('does not shadow any code the SEND translator owns either', () => {
     for (const code of ['dialog-open', 'enter-ignored', 'verify-failed',
-      'draft-clear-failed', 'not-alive', 'auto-continue-armed']) {
+      'draft-clear-failed', 'not-alive', 'auto-continue-armed', 'turn-running']) {
       expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(code);
       expect(sendErrorText(apiErrorText(asError(409, { ok: false, error: code }))), code)
         .not.toBe(code);
@@ -1245,6 +1245,10 @@ describe('updateErrorText — the update routes\' refusals, read code-first (W3 
     'floor-unread': 'That node’s floor has not been measured yet, so nothing can say whether the release is above it — nothing was requested.',
     'no-detach-cap': 'That node’s ccrc predates the one-tap — update it once from its own shell — or it is macOS, which cannot be moved from here.',
     'no-rollback-cap': 'That node cannot roll back on request yet — update it once from its own shell.',
+    // Wave 8 item C: the sentence is `noBundleRollbackText(null)`, not a hand-typed copy — the same text
+    // `UPDATE_ERROR_TEXT['no-bundle']` is (lib/api.ts), so a divergence between the two spellings would show
+    // up as this describe's OWN sentence disagreeing with the composed one, never as a silent pass.
+    'no-bundle': noBundleRollbackText(null),
     'agent-predates-update-op': 'That node’s agent predates the update op — update the node once by hand, then it can be moved from here.',
     halted: 'An update failed or was reverted — acknowledge that node before moving any other.',
     'no-previous': 'That node records no previous release to roll back to — pick a tag from the release list.',
@@ -1253,10 +1257,17 @@ describe('updateErrorText — the update routes\' refusals, read code-first (W3 
 
   it('has its sentence for every UpdateRouteError but unauthenticated', () => {
     const entries = Object.entries(SENTENCES);
-    expect(entries, 'guards the guard — an empty census passes everything').toHaveLength(23);
+    expect(entries, 'guards the guard — an empty census passes everything').toHaveLength(24);
     for (const [code, sentence] of entries) {
       expect(updateErrorText(asError(409, { ok: false, error: code })), code).toBe(sentence);
     }
+  });
+
+  it('no-bundle names no tag and no HTML (wave 8 item C)', () => {
+    const text = updateErrorText(asError(409, { ok: false, error: 'no-bundle' }));
+    expect(text).toBe(noBundleRollbackText(null));
+    expect(text).toContain('that release');
+    expect(text).not.toContain('<');
   });
 
   it('not-configured on an update route is the update sentence, not the kickoff one', () => {
@@ -1281,11 +1292,11 @@ describe('updateErrorText — the update routes\' refusals, read code-first (W3 
   });
 
   it('the five existing translators pass every update-only code through unchanged', () => {
-    // The twenty-one words no other table owns. `not-configured` and `bad-request`
-    // are excluded because they HAVE other owners — which is exactly why the
+    // The twenty-two words no other table owns (wave 8 item C added `no-bundle`). `not-configured` and
+    // `bad-request` are excluded because they HAVE other owners — which is exactly why the
     // update table is read first rather than composed after apiErrorText.
     const updateOnly = Object.keys(SENTENCES).filter((c) => c !== 'not-configured' && c !== 'bad-request');
-    expect(updateOnly, 'guards the guard').toHaveLength(21);
+    expect(updateOnly, 'guards the guard').toHaveLength(22);
     for (const code of updateOnly) {
       expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(code);
       expect(sendErrorText(code), code).toBe(code);

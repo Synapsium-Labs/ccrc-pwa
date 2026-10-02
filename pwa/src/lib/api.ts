@@ -49,6 +49,11 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   // cancels it) — only the mail lane's `holdIfAutoContinueArmed` opt-in ever
   // produces this code (dialog.ts's `autoContinueArmed`, send.ts's own doc).
   'auto-continue-armed': 'Claude is waiting out a usage limit and will continue by itself — sending now would cancel that.',
+  // Worker stall watch §4.1: the recipient's pane shows a turn running ("esc to
+  // interrupt"). Only the mail lane's `refuseIfTurnRunning` opt-in ever produces
+  // this code (dialog.ts's `turnRunning`, send.ts's own doc); it holds the nudge
+  // for a minute and counts no attempt.
+  'turn-running': 'Claude is in the middle of a turn — the message waits until it finishes.',
 };
 
 /**
@@ -308,6 +313,16 @@ export interface UpdateIntentRequest {
   notify?: NotifyMode;
 }
 
+/** Wave 8 item C: the no-bundle refusal's words, with the tag when the caller knows it (a release or node row) and
+ *  without a literal placeholder when it does not (a 409 answered to a sheet or a toast). ONE spelling:
+ *  UPDATE_ERROR_TEXT['no-bundle'] is this with `null`. */
+export function noBundleRollbackText(tag: string | null): string {
+  const how = tag === null
+    ? 'On the node itself, ccrc rollback --to with that tag flips to a kept copy if the node keeps one; otherwise ccrc update --to with that tag, plus --downgrade --allow-unsigned, installs it.'
+    : `On the node itself, ccrc rollback --to ${tag} flips to a kept copy if the node keeps one; otherwise ccrc update --to ${tag} --downgrade --allow-unsigned installs it.`;
+  return `The catalogue lists no provenance bundle for ${tag ?? 'that release'} and the node’s install is verified, so it is not sent from here: a verified node refuses to download a release without --allow-unsigned, which a one-tap never passes. ${how} Tap Refresh if a bundle was published since the last poll, or pick a newer release.`;
+}
+
 /**
  * The update routes' refusals (W2 Task 13's route table), the sixth code table
  * in this file (after SEND, SUBMIT, UPLOAD, API and KICKOFF) — and the first
@@ -360,6 +375,7 @@ const UPDATE_ERROR_TEXT: Record<Exclude<UpdateRouteError, 'unauthenticated'> | '
   // assumes a Linux box behind an old ccrc.
   'no-detach-cap': 'That node’s ccrc predates the one-tap — update it once from its own shell — or it is macOS, which cannot be moved from here.',
   'no-rollback-cap': 'That node cannot roll back on request yet — update it once from its own shell.',
+  'no-bundle': noBundleRollbackText(null),
   'agent-predates-update-op': 'That node’s agent predates the update op — update the node once by hand, then it can be moved from here.',
   halted: 'An update failed or was reverted — acknowledge that node before moving any other.',
   'no-previous': 'That node records no previous release to roll back to — pick a tag from the release list.',

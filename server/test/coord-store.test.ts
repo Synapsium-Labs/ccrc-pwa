@@ -2798,6 +2798,17 @@ describe('CoordStore: the coord feed kind', () => {
       { seq: 1, at: 10, kind: 'coord', sessionId: '', title: 'caps', body: 'workers 3 to 5', runId: null },
     ]);
   });
+
+  // Wave 8 item A: the same absence-half defect `isNotifyKind` guards against, for the eighth member
+  // `NOTIFY_KINDS` gained (M-A7) — a row would otherwise come back 'unknown' rather than 'update'.
+  it('round-trips an update feed event through the durable table', () => {
+    const s = store();
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 10, kind: 'update', sessionId: '',
+      title: 'update fleet: auto update to v0.0.10', body: 'lease held', runId: null });
+    expect(s.feedEvents(10)).toEqual([
+      { seq: 1, at: 10, kind: 'update', sessionId: '', title: 'update fleet: auto update to v0.0.10', body: 'lease held', runId: null },
+    ]);
+  });
 });
 
 describe('the durable feed carries the run it is about', () => {
