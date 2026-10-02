@@ -18,7 +18,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | fix round done 2026-10-02; in re-review (run 229) |
+| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | re-review 229 ruled 2026-10-02: fix round 2 (residue of round 1) |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | — | planned; approved 2026-10-01 (#223) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
@@ -127,6 +127,24 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Open for that review: whether F2 reads clearly.** F2 chose a disabled toggle with no `:disabled` style, so a
     sighted operator sees an unchanged toggle that ignores the tap. The review judges that against the ruling's
     "whichever reads more clearly to the operator".
+- **2026-10-02 — re-review 229 ruled: fix round 2.**
+  - **The panel:** 30 agents, 7 confirmed, 2 refuted, none unexamined.
+  - **Measured:** all four round-1 rulings hold where they act, and the pins red at the worker's counts. The whole
+    PWA suite passed, 3143 of 3143.
+  - **Two important findings:**
+    - F2's control cannot tell `disabled={selectionInReleased}` from `disabled={releasedShown}`. The latter would
+      lock an operator-opened fold open.
+    - F5's new concatenation also lifts UNRELEASED dead rows above archived ones. Nobody asked for that or ledgered
+      it.
+  - **Ruled:**
+    - Restore sortFleet's order for unreleased dead rows. F5 lifts released rows only.
+    - Pin the operator-opened toggle, the released-dead lift, and both orders.
+    - Drop the overclaiming second tap.
+    - Re-anchor the stale mutation rows P30 and P31.
+    - Correct two stale comments.
+    - Give the disabled toggle `cursor: default`. The reviewer judged the shipped look no worse than a no-op, and
+      a pointer cursor offers a tap that does nothing.
+  - **Numbering:** each fix extends the departure it completes (3785, 3786, 3787), so no new number is minted.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
