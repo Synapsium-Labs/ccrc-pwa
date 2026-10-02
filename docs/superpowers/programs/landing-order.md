@@ -17,7 +17,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | — | dispatched 2026-10-02 (run 218) |
+| 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | wave-done verified 2026-10-02; in review (run 228) |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | — | re-planned 2026-09-29; dispatch after wave 1 merges |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | — | — | to plan |
@@ -95,6 +95,37 @@ carries it (spec §5.1, amended 2026-09-24).
   - **The peer's second finding.** The plan moves three of the five `fourteen` occurrences in
     `coordinator-skill.test.ts`. The two it leaves (about `:146` and `:181`) are comments, which no test reads, so
     they cannot red. Ruled: update both in clause 15's commit, as a departure from run 218's block.
+- **2026-10-02 — wave 1 done, in review.** Run 218's wave-done (PR #231, tip `1f688879`) passed the server's
+  re-measurement. The run is at `awaiting-review` and its seven items are settled.
+  - **Departures.** The worker used 3758 through 3764 from its block, each defined in the plan on the branch. 3765
+    through 3767 went unused.
+  - **Merge state.** The branch has not merged main `cf9e4cc8`. Its merge-tree probe there is clean.
+  - **Skipped step.** Task 7 Step 6 (rollout) was skipped by standing rule. The deploy is owed after the merge,
+    through ccrc's own update mechanism, fleet box first.
+  - **Signals:** `suite: red`, `failure: shallow`. The branch's own red was modelenv-single-writer: Task 2's restamp
+    spelled `writeFileSync` inside `ccd/ccrc`. The task-scoped suite lists the plan wrote never ran that repo-wide
+    guard, and the worker's first full run caught it (fixed as 3764).
+  - **Routing: not escalated.** The miss is the plan's suite lists, not the worker's effort. An effort rung would
+    not have run a guard nobody listed. The remedy is in the briefs: every later wave's brief names the repo-wide
+    guards (the `single-definition` scans, `modelenv-single-writer`, `box-token-census`, `routing-references`) in
+    each task's suite run.
+  - **Review.** Review run 228 went to `ccrc-pwa-still-hollow`: the held-out panel, each lens given the plan's
+    matching review item.
+- **2026-10-02 — six items the worker raised for ruling.**
+  1. Clause 16's triggers 1–2 are not bounded to "before wave-done", and clause 9 forbids a push after it. Spec §12
+     names this, and stage 4's clause-9 exception closes it. Carried to stage 4.
+  2. No coordinator step and no worker bullet describes a report-less fix round from `merging` (a land-sync, an
+     ejection). Carried to stage 5, which owns ejection.
+  3. The `update-branch` absence set leaves out `ccd/ccrc-*` helpers, `ccgpt-*` and `install-*.sh`. None spells the
+     word today, so widening the set costs nothing and keeps it true as helpers are added. Ruled: widen it in
+     wave 2.
+  4. `main-red` over a window after #183 reads push runs that ran no test legs, because a merge to `main` runs no
+     tests since the CI-selection design. Ruled: stage 2's re-measure counts trusted full runs only (daily, manual
+     full, stable gate) and reports a window with none as unmeasured, never as green. Named cost: a one-day
+     resolution on main's red intervals.
+  5. Brief against plan on who assigns departure numbers: the brief governs, because it post-dates the plan and
+     carries the issued block. The worker followed it.
+  6. Commit trailers that name the authoring subagent's model are honest attribution and stay.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -109,6 +140,12 @@ carries it (spec §5.1, amended 2026-09-24).
   session-continuity wave 8 appends its clauses after this programme's wave 1.
 - **The hook is a contract, not an access boundary.** Identity on the fleet is attribution; the fleet's single
   GitHub login holds the admin role (R9).
+- **From wave 1's rulings (2026-10-02).**
+  - Wave 2 widens the `update-branch` absence set to `ccd/ccrc-*`, `ccgpt-*` and `install-*.sh`.
+  - Stage 2's `main-red` counts trusted full runs only, and a window with none is unmeasured.
+  - Stage 4 bounds clause 16's triggers 1–2 at wave-done through clause 9's exception.
+  - Stage 5 writes the report-less fix round from `merging`.
+  - Every brief names the repo-wide guards in each task's suite run.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
