@@ -19,7 +19,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | wave-done verified 2026-10-02; in review (run 227) |
+| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | review 227 ruled 2026-10-02: fix round (pins, comments, set -u) |
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | — | planned — re-planned 2026-09-30 |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin | **AGENT-FIRST** (ccd) | — | — | to plan |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
@@ -125,6 +125,32 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - **Review:** review run 227 went to `ccrc-pwa-keen-prairie` on Opus · high with workflows on. It runs the held-out
     panel, plus the plan's own merge-safety lens on Opus · xhigh, because this wave replaces files inside live
     account roots.
+- **2026-10-02 — review 227 ruled: one fix round.**
+  - **The panel.** Four lenses, the plan's merge-safety lens on Opus · xhigh included, with 52 agents, none
+    unverified and nothing unexamined: 14 confirmed and 2 refuted. Ten plan mutation rows re-ran red as stated. The
+    citation census is stated=base=tree, and the spec §1.2 baseline reproduced read-only. CI's required checks are
+    green.
+  - **Two important findings.** Two guards that are correct but pinned by nothing:
+    - the same-size, older-record arm of "replace only when strictly newer" (the wave's one irreversible act);
+    - "slot taken once".
+
+    Each stayed green under its mutation.
+  - **Twelve minor findings:**
+    - stale mutation counts;
+    - two `(kept: error)` causes without a test;
+    - the `!D` row's longer-copy choice;
+    - two unpinned dry-pass prices;
+    - "nothing waits" pinned only by a hang;
+    - two comments that overstate (the slot's scope, the drain);
+    - an avoidable compare;
+    - a `set -u` exit through `mapfile`;
+    - the UTF-8 reconfigure line;
+    - the instrument's two TZ conversions.
+
+  **Ruled: everything is fixed in this wave except F10.** The repo's rule is that a guard ships with a test that
+  reds, and this wave replaces files inside live account roots. Its six departures take the block's unused 3772
+  through 3777, one per group. F10 (a same-size record that is not newer is still compared) is carried forward,
+  because deciding it in the dry pass would move F1's effective guard.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -149,6 +175,9 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   (swap-log stamps are local time), `all_copies` and `deployed`; the CLI is `--stage N` (repeatable), `--home`,
   `--swap-log`, `--since`, `--until`, `--deployed`, `--all-copies`, `--json`. A wave that finds the file already
   there keeps its header, helpers and parser and adds only its own stage block and registry entry.
+- **A later carry wave owes F10 (review 227).** A same-size record whose source is not newer is still queued as a
+  tier-0 compare costing twice its size, ahead of every journal, although its outcome is fixed. Decide it from
+  `lstat` in the dry pass, and move F1's pin to that decision in the same commit.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; never print secret contents.
 
