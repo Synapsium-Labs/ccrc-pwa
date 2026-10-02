@@ -258,7 +258,8 @@ describe('a return visit merges instead of skipping', () => {
     expect(swapLog()).toContain(`sidecar ${UUID} diverged ${DST('subagents/agent-a1.jsonl')} longer ${s}`);
   });
 
-  it('a non-UTF-8 file name does not fail the report after the merge ran', () => {
+  // APFS refuses a non-UTF-8 name (EILSEQ), so the fixture cannot be planted on darwin.
+  it.skipIf(process.platform === 'darwin')('a non-UTF-8 file name does not fail the report after the merge ran', () => {
     // Only a `diverged` row prints a path. Python's stdout is strict under a
     // UTF-8 locale and a name that is not UTF-8 would raise AFTER every file
     // was placed, so the carry would log `(kept: error)` for a walk that
@@ -569,6 +570,16 @@ describe('a walk that cannot finish is (kept: error), and the carry still answer
     const out = carry(MAPFILE_ROWS_FAILS(0));
     expect(out, 'the carry did not answer').toContain('[rc=0]');
     expect(verdict()).toBe('(kept: error)');
+  });
+
+  it('the budget arm reads its row behind the same guard: rc 3 with no rows read back is (kept: budget), and the carry answers rc 0', () => {
+    // The `wrc == 3` arm quotes the walker's first row in its message; an
+    // unguarded `rows[0]` of an empty array died under `set -u` too.
+    put(SRC('tool-results/new.txt'), 'NEW\n');
+    fs.mkdirSync(DST(), { recursive: true });
+    const out = carry(`${MAPFILE_ROWS_FAILS(0)} _swap_carry_merge_walk() { echo "budget 99"; return 3; };`);
+    expect(out, 'the carry did not answer').toContain('[rc=0]');
+    expect(verdict()).toBe('(kept: budget)');
   });
 
   it('rows left over from the previous sidecar are not read as this one\'s verdict', () => {

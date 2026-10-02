@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c7be71af101e0f48170f8af06c5441565cf56f18af863342589708f6e8723cc1
+# ccrc:generated 1 sha256=cf1e68f152428b13ae1d7c4dd32525ab3a1c1894d0d9d856dc309777c298e492
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22522,7 +22522,7 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
   # C-collated sort: no destination is ever contested, so ordering changes only
   # the order of the swap.log lines a human reads, which is kept reproducible.
   local srccfg="$1" dstcfg="$2" uuid="$3" src pdir dst mode rc
-  local slot="" slot_rc=0 wout wrc line n r dv k dfr CARRY_SLOT_FD=""
+  local slot="" slot_rc=0 wout wrc line n r dv k dfr bud CARRY_SLOT_FD=""
   local -a sidecars=() rows=()
   mapfile -t sidecars < <(_sidecar_matches "$srccfg" "$uuid" | LC_ALL=C sort)
   (( ${#sidecars[@]} )) || return 0
@@ -22557,7 +22557,8 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
       # its restart, and a stale one would give this sidecar the last one's verdict.
       rows=(); mapfile -t rows <<< "$wout"
       if (( wrc == 3 )); then
-        echo "ccd: sidecar at $dst not merged — its first action alone would exceed CARRY_MERGE_BUDGET (${rows[0]#budget } bytes); left alone" >&2
+        bud="${rows[0]-}"; bud="${bud#budget }"   # an unset row (an empty array) reads as empty, never as an unbound variable
+        echo "ccd: sidecar at $dst not merged — its first action alone would exceed CARRY_MERGE_BUDGET ($bud bytes); left alone" >&2
         echo "$(date '+%F %T') sidecar $uuid -> $dst (kept: budget)" >> "$REG/swap.log"
         continue
       fi
