@@ -201,6 +201,9 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Claim wait:** CLAUDE.md and README.md, which Tasks 6 and 12 edit, are held by stall-watch wave 4's claim 897
     (run 226). The peer protocol forbids editing a contested path, so the worker holds those tasks. Calm-harbor has
     been asked (mail 3245) to extend the second-lander rule agreed for run 238.
+  - **Agreed (mail 3246):** both PRs land, and whichever lands second merges main and keeps both sides. Because
+    Task 12 inserts a README subsection, the second lander also re-runs the README citation rows, which must stay
+    green. The worker has been told.
   - **Parked, accepted:** an Important finding. On a store-read failure the archive door's 409 body drops
     `measured()`'s detail, which is base behaviour (D-2545). It is named in the PR as a follow-up.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
