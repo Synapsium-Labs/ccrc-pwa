@@ -1,0 +1,204 @@
+/**
+ * The worker merge deny (landing-order wave 2, spec §5.2, ruling R5): the
+ * session hook's PreToolUse arm DENIES `gh pr merge` in a session whose hold
+ * names a programme wave, and in any workspace that carries the child marker
+ * (`$REG/<id>.child`, which only a dispatch writes) — a child whose run has
+ * let it go keeps its pane until the reclaim, and it is still a worker. Every
+ * other session's merge passes: the coordinator's `gh pr merge <n>
+ * --match-head-commit <sha>` is how it enqueues. A deny never replaces the
+ * graph gate's, which has already counted the denial it prints (D-1689).
+ *
+ * Runs `ccd/session-hook.sh` for real in a fixture HOME, the way
+ * `session-hook.test.ts` does: a stub `tmux` answers the session name, stdin
+ * carries the payload, stdout is the one PreToolUse envelope (or nothing).
+ */
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { mkTmp } from './tmpHelpers.js';
+
+const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
+const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
+const ID = 'demo-quiet-basin';
+const WAVE_HOLD = 'program:landing-order wave:2/5 run:17';
+
+let home: string;
+beforeEach(() => {
+  home = mkTmp('ccrc-mergedeny-');
+  fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.generation`), GENERATION);
+  const bin = path.join(home, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\necho "cc-${ID}"\n`, { mode: 0o755 });
+});
+afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
+
+const hold = (text: string): void => { fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.hold`), text); };
+/** The child marker, as `cmd_ws_add --child 17` writes it. */
+const marker = (): void => { fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.child`), '17'); };
+
+/** One PreToolUse Bash call through the real hook. Exit 0 and a silent stderr
+ *  are the hook's standing contract, asserted on every call. */
+const bash = (command: string): { deny: string | null; stdout: string } => {
+  const r = spawnSync('bash', [HOOK], {
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: home }),
+    encoding: 'utf8',
+    env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
+  });
+  expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+  expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
+  const line = r.stdout.trim();
+  if (line === '') return { deny: null, stdout: '' };
+  const j = JSON.parse(line) as { hookSpecificOutput: { permissionDecision?: string; permissionDecisionReason?: string } };
+  return {
+    deny: j.hookSpecificOutput.permissionDecision === 'deny' ? String(j.hookSpecificOutput.permissionDecisionReason) : null,
+    stdout: line,
+  };
+};
+
+describe('the worker merge deny', () => {
+  it('refuses a worker\'s merge, naming the hold and who lands instead', () => {
+    hold(WAVE_HOLD);
+    const r = bash('gh pr merge 42');
+    expect(r.deny, 'a wave session\'s gh pr merge went through').not.toBeNull();
+    expect(r.deny).toContain(WAVE_HOLD);
+    expect(r.deny).toContain('the coordinator merges, workers never do');
+  });
+
+  it('lets a coordinator\'s enqueue through — a session with no wave hold and no child marker is never asked', () => {
+    expect(bash('gh pr merge 42 --match-head-commit ' + 'a'.repeat(40)).deny).toBeNull();
+    expect(bash('gh pr merge 42').deny).toBeNull();
+  });
+
+  it('refuses a released child — the marker outlives the hold, in the window before the reclaim', () => {
+    marker();
+    const r = bash('gh pr merge 42');
+    expect(r.deny, 'a child whose run let it go merged').not.toBeNull();
+    expect(r.deny).toContain('child');
+    expect(r.deny).toContain('the coordinator merges, workers never do');
+  });
+
+  it('a child marker that cannot be read is still a child — it is the marker\'s existence that counts', () => {
+    fs.mkdirSync(path.join(home, '.cc-sessions', `${ID}.child`));
+    expect(bash('gh pr merge 42').deny).not.toBeNull();
+  });
+
+  it('refuses a close-claimed hold too — `wave:N` with no run is still a wave', () => {
+    hold('program:landing-order wave:3/5');
+    expect(bash('gh pr merge 42').deny).not.toBeNull();
+  });
+
+  it('lets a hold that names no programme wave through, and an unreadable or oversized one', () => {
+    hold('operator: debugging the lockfile');
+    expect(bash('gh pr merge 42').deny, 'a hand hold is not a worker wave').toBeNull();
+    // 152 characters whose FIRST 128 — all `_ct_read` returns — still match
+    // the wave grammar: only the bound tells this hold was cut.
+    hold(`program:${'x'.repeat(100)} wave:1/2 run:${'1'.repeat(30)}`);
+    expect(bash('gh pr merge 42').deny, 'an oversized hold is unspeakable, never a wave').toBeNull();
+    fs.rmSync(path.join(home, '.cc-sessions', `${ID}.hold`));
+    fs.mkdirSync(path.join(home, '.cc-sessions', `${ID}.hold`));
+    expect(bash('gh pr merge 42').deny, 'an unreadable hold is not a worker wave').toBeNull();
+  });
+
+  it('refuses every spelling it can parse at a command head', () => {
+    hold(WAVE_HOLD);
+    for (const c of [
+      'gh pr merge 42 --squash', 'gh pr merge --auto 42', 'cd /tmp && gh pr merge 42',
+      `gh pr merge 42 --match-head-commit ${'a'.repeat(40)}`,
+      'GH_TOKEN=x gh pr merge 42', 'env gh pr merge 42', 'command gh pr merge 42',
+      '/usr/bin/gh pr merge 42', 'gh -R owner/repo pr merge 42', 'echo ok; gh pr merge 42',
+      'x=$(gh pr merge 42)', 'echo ok\ngh pr merge 42',
+      // The heads an agent writes for "wait for checks, then merge": reserved
+      // words, grouping, and the wrappers a command can sit behind.
+      'if gh pr checks 42 --watch; then gh pr merge 42; fi', 'for n in 42; do gh pr merge $n; done',
+      'while true; do gh pr merge 42; done', '{ gh pr merge 42; }', '! gh pr merge 42',
+      'time gh pr merge 42', 'timeout 60 gh pr merge 42', 'nohup gh pr merge 42',
+      'env GH_TOKEN=x gh pr merge 42', 'gh pr --repo o/r merge 42',
+      // A "…" span that holds a `$(` runs it, so it is never stripped; and a
+      // quote INSIDE a "…" span does not open a '…' one.
+      'x="$(gh pr merge 42)"', 'echo "it\'s" && gh pr merge 42',
+      // A `#` comment and a backslash-escaped quote open no '…' span: bash
+      // reads neither as a quote, so neither may hide the merge after it.
+      '# don\'t merge before CI is green\ngh pr merge 42\necho \'done\'',
+      "echo it\\'s time; gh pr merge 42; echo 'ok'",
+    ]) {
+      expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
+    }
+  });
+
+  it('a deny supersedes a sync advisory on the same call — one line, and it is the deny', () => {
+    // Landing-order wave 1's PreToolUse advisory answers a sync of `main` with
+    // `additionalContext`; a merge in the SAME command is still refused, and the
+    // hook still prints exactly one envelope.
+    hold(WAVE_HOLD);
+    const r = bash('git merge origin/main && gh pr merge 42');
+    expect(r.stdout.split('\n')).toHaveLength(1);
+    expect(r.deny, 'the advisory won and the merge went through').not.toBeNull();
+  });
+
+  it('never replaces the graph gate\'s counted deny — a search that is also a merge keeps the gate\'s reason', () => {
+    // The gate has already COUNTED the denial it prints (D-1689); a merge deny
+    // written over it would spend the session's bound on a denial it never saw.
+    hold(WAVE_HOLD);
+    const tree = path.join(home, 'tree');
+    fs.mkdirSync(tree, { recursive: true });
+    const git = (...a: string[]): string => spawnSync('git',
+      ['-C', tree, '-c', 'user.email=f@example.invalid', '-c', 'user.name=fixture', ...a], { encoding: 'utf8' }).stdout.trim();
+    git('init', '-q');
+    fs.writeFileSync(path.join(tree, 'c.txt'), '0\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'c');
+    fs.mkdirSync(path.join(tree, 'graphify-out'));
+    fs.writeFileSync(path.join(tree, 'graphify-out', 'graph.json'),
+      `{\n  "hyperedges": [],\n  "built_at_commit": "${git('rev-parse', 'HEAD')}"\n}\n`);
+    fs.writeFileSync(path.join(tree, 'graphify-out', '.graphify_engine'), '0.9.9\n');
+    const r = spawnSync('bash', [HOOK], {
+      input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash',
+        tool_input: { command: 'rg assembleFleet src && gh pr merge 42' }, cwd: tree }),
+      encoding: 'utf8',
+      env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
+    });
+    expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
+    expect(r.stdout.trim(), 'the gate did not fire — this case went blind').not.toBe('');
+    const reason = String(JSON.parse(r.stdout.trim()).hookSpecificOutput.permissionDecisionReason);
+    expect(reason, 'the merge deny replaced the graph gate\'s counted deny').toContain('Denial 1 of 3');
+  });
+
+  it('answers a 36 KB adversarial command in bounded time — the head match restarts at every separator', () => {
+    // A token class that can cross a separator, or a blank class that includes
+    // the newline, makes every `;a=` / `\na=` start walk to the end of the
+    // payload: 5 to 9 s measured on the first draft of the head regex. The tail
+    // carries `merge`, so the prefilter lets the match run; none is a merge.
+    for (const sep of [';', '\n']) {
+      for (const unit of ['a=', 'gh ', 'timeout 1 ']) {
+        const u = `${sep}${unit}`;
+        const t0 = Date.now();
+        const r = bash(u.repeat(Math.ceil(36000 / u.length)) + '\n# merge origin');
+        const ms = Date.now() - t0;
+        expect(r.deny, `a non-merge was denied: ${JSON.stringify(u)}`).toBeNull();
+        expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(3000);
+      }
+    }
+  });
+
+  it('leaves every other gh and every mention of the words alone', () => {
+    hold(WAVE_HOLD);
+    for (const c of [
+      'gh pr view 42', 'gh pr list --search merge', 'gh pr merged 42',
+      "grep -rn 'gh pr merge' docs", 'echo "gh pr merge 42"', 'ghx pr merge 42',
+      'echo run gh pr merge later', 'echo hi # gh pr merge 42 after the CI run',
+      // What a wave on THIS feature writes about it: commit messages and PR
+      // bodies that quote the command, in Markdown code spans and in prose.
+      'git commit -m "docs (gh pr merge 42 enqueues)"',
+      'git commit -m "fix; gh pr merge is the coordinator\'s"',
+      'git commit -m "the coordinator lands with `gh pr merge <n>`, never --admin"',
+      "git commit -m \"$(cat <<'MSG'\nfeat(hook): deny `gh pr merge --admin` in every session\nMSG\n)\"",
+      "gh pr create --title t --body 'landing is `gh pr merge <n>` with no --admin'",
+    ]) {
+      expect(bash(c).deny, `denied: ${c}`).toBeNull();
+    }
+  });
+});

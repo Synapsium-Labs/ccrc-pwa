@@ -836,7 +836,7 @@ _hook_hold_card() {
     return 0
   fi
   (( ${#h} <= CCRC_HOLD_MAX )) || return 0
-  [[ "$h" =~ ^program:[A-Za-z0-9._-]+' 'wave:[0-9]+(/[0-9]+)?(' 'run:[0-9]+)?$ ]] || return 0
+  [[ "$h" =~ $CCRC_HOLD_WAVE_RE ]] || return 0
   # AN ARCHIVE DOES NOT CLEAR A HOLD. `cmd_ws_archive` does no registry rm, and
   # `close.ts`'s failed+archive arm releases nothing, so the bytes outlive the
   # workspace. Live on this box today.
@@ -2660,8 +2660,8 @@ COMPACT_SHAPE_PRED='(type=="object" and (.chars|type)=="number" and (.fences|typ
 # false (fix wave, I7). There are three spellings, because an ERE cannot
 # interpolate a bracket-class variable the way `case` can: this constant, the
 # session-id gate `[[ "$id" =~ ^[A-Za-z0-9._-]+$ ]]` near the bottom of this
-# file, and the hold's shape gate `^program:[A-Za-z0-9._-]+ wave:...` in
-# `_hook_hold_card`. And `single-definition.test.ts`'s four `ROOTS` are the
+# file, and the hold's shape gate `CCRC_HOLD_WAVE_RE` (`^program:[A-Za-z0-9._-]+
+# wave:...`). And `single-definition.test.ts`'s four `ROOTS` are the
 # TypeScript packages, so they do not cover `ccd/` — BUT A SECOND BASH CORPUS
 # DOES: `bashRoots` is `[<repo>/ccd, <repo>/deploy]`, `BASH` is every bash file
 # under them plus `install.sh`, `holdersOf` filters that corpus on non-comment
@@ -2680,19 +2680,19 @@ CCRC_ID_MAX=128
 CCRC_FRESH_S=120
 # The hold's own bound. `POST /api/sessions/:id/hold` validates only that the
 # reason is a non-blank string and `ccd` only blankness, while `--actor` on the
-# same verb IS capped at 512 — so this is the first bound the value meets.
-# A hold that fails it is UNSPEAKABLE and the subject is silent.
-#
-# 127, NOT 256, AND THE OFF-BY-ONE IS THE WHOLE POINT (D-1896). `_ct_read` reads at most
+# same verb IS capped at 512 — so this is the first bound the value meets. A
+# hold that fails it is UNSPEAKABLE and the subject is silent. 127, NOT 256,
+# AND THE OFF-BY-ONE IS THE WHOLE POINT (D-1896): `_ct_read` reads at most
 # `CCRC_ID_MAX` (128) characters, so a value that comes back 128 long MAY have
-# been truncated and there is no way to tell from here. Refusing at 127 means
-# every value this function ever quotes was captured WHOLE. A 256 bound would
-# be unreachable — dead, and worse than absent, because a 400-character hold
-# would arrive truncated to 128, could lose its ` run:<id>` suffix in the cut,
-# and would then render as CASE B ("It names NO run") for a hold that names one.
-# Quoting a truncated hold as if it were the whole hold is exactly the lying
-# card this design exists to prevent, so the bound refuses instead.
+# been truncated, and refusing at 127 means every value quoted was captured
+# WHOLE. A 256 bound would let a 400-character hold arrive cut to 128, lose its
+# ` run:<id>` suffix and render as CASE B ("It names NO run") for a hold that
+# names one — the lying card this design exists to prevent.
 CCRC_HOLD_MAX=127
+# THE SHAPE of a hold that names a programme wave, spelled ONCE: the card's
+# gate (`_hook_hold_card`) and the worker merge deny (landing-order wave 2);
+# `run-routes.test.ts` holds every hold the server can write inside it.
+CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'
 # The workdir's own two bounds (C1), argued at the gate that uses them in
 # `_hook_hold_card`. The class is DERIVED from `CCRC_PROJ_CLASS` with the `/`
 # PREPENDED, never appended: appended, the `-` this file's class ends with would
@@ -3341,6 +3341,100 @@ if [[ "$event" == PreToolUse && -z "$pre_json" && "${tool:-}" == Bash ]] \
     lreason+=' Otherwise leave main alone: a clean branch lands as it is, and every needless sync restarts CI.'
     lreason+=' When you do absorb: `git merge` only — never a rebase, a force-push or the Update branch of GitHub (its button, `gh pr` verb or API) — and on a conflict in a `# ccrc:generated` stamp line, take either side of that line only, resolve the rest of the file as source, then run `~/.local/bin/ccrc restamp <file>`.'
     pre_json=$(_hook_nudge_json "$lreason") || pre_json=""
+  fi
+fi
+
+# ── THE WORKER MERGE DENY (landing-order wave 2, spec §5.2) ─────────────
+# "The coordinator merges, workers never do" (R5) was prose while every merge
+# here needed the admin bypass. Once the operator sets the ruleset's approval
+# count to 0, any session holding the fleet's one login could land with a
+# plain `gh pr merge`. So a session whose hold names a programme wave — a
+# dispatched worker's or reviewer's, the only sessions a dispatch holds — and
+# any workspace that carries the CHILD MARKER (`$REG/<id>.child`, written by
+# `ws-add --child` for a dispatch and by nothing else) is DENIED `gh pr merge`
+# in every spelling this file can parse at a COMMAND HEAD:
+# after a line start or `;` `&` `|` `(` or `$(`; past `VAR=value` prefixes,
+# the reserved words and grouping a head can follow (`if` `then` `do` `else`
+# `elif` `while` `until` `{` `!`), the wrappers `time` `env` `command` `exec`
+# `nohup` `sudo` and `timeout <n>` (in any order, `env`'s assignments too); a
+# path to the binary; and gh's own flags before `pr` or between `pr` and
+# `merge` (`-R owner/repo`). `--auto`, `--squash`, `--admin` and every other
+# merge flag are the same act from a worker and are denied with it.
+#
+# QUOTED TEXT IS REMOVED BEFORE MATCHING, in the same jq that reads the
+# command, leftmost first as bash reads it: a backslash escape, every '…'
+# span, every "…" span that holds no `$(`, and a `#` comment that starts a
+# word — so a commit message, a PR body, a grep pattern or a comment that
+# MENTIONS `gh pr merge` passes, and neither an apostrophe in a comment nor
+# an escaped quote opens a span that swallows a live merge after it. A "…"
+# span that holds a `$(` is kept, because that substitution runs.
+# WHAT PASSES UNPARSED, said rather than hidden: `bash -c "…"`, a quoted
+# command word (`"gh" pr merge`), legacy backticks, `xargs`, an unlisted
+# wrapper (`nice`, `stdbuf`), a named wrapper's own flags (`sudo -E`,
+# `command -p`; only `timeout`'s one argument is parsed), a `$'…'` string
+# holding `\'`, and a `#` comment straight after a `)`. What is DENIED
+# though it is not a merge: a heredoc BODY line that begins `gh pr merge`
+# (heredocs are not stripped) — write such text through a quoted string
+# instead. The hook is a contract the fleet honours, not an access boundary
+# (spec §4), and identity on this box is attribution. A session with neither
+# — a coordinator's own, the operator's — is never asked, so the
+# coordinator's `gh pr merge <n> --match-head-commit <sha>` enqueues. A
+# coordinator whose workspace DOES carry one is refused like a worker: a
+# self-claimed run's hold (`POST /api/runs` admits a claimant that is its own
+# session), or a reclaim heir that was the programme's own worker (hold and
+# marker both). The hook cannot tell it from a worker; the lifecycle
+# reference sends that coordinator to the operator's shell.
+# The strip's jq uses lookaround gsub, so a jq built without Oniguruma yields an empty mcmd and the deny FAILS OPEN (#224 keeps the hookstate parse regex-free for exactly that reason).
+#
+# WHY THE MARKER TOO. A close releases the hold (`ws-release`), and a child's
+# reclaim runs AFTER the close answers, on its own queue, and defers while the
+# pane is attached, the tree is busy or reclaim is paused: between the two a
+# released child still has its pane and its login, and no hold. The marker is
+# written at birth and purged only with the registry row, at the END of the
+# reclaim, so it covers that window. Its EXISTENCE decides — a marker this
+# hook cannot read is still a marker — and its contents are never read.
+# Only a dispatch mints a child; a coordinator carries one only as that
+# reclaim heir (above).
+# Denying `--admin` to EVERY session, and a `gh api` merge — the pulls merge
+# endpoint, or a GraphQL merge mutation (`mergePullRequest`,
+# `enqueuePullRequest`, `enablePullRequestAutoMerge`) — is wave 2b's, after
+# the operator's queue ruleset and proof run (spec §5.2 step 4); until then
+# each passes this deny, measured.
+#
+# ORDER IS BUDGET, this arm's rule: the tool name is already read, the
+# substring prefilter costs no fork, and only a Bash payload carrying `merge`
+# pays the one jq for its command. The hold is read through `_ct_read` and
+# judged by `CCRC_HOLD_WAVE_RE` under `CCRC_HOLD_MAX` — the card's own reader,
+# shape and bound — so an absent, unreadable, empty, oversized or non-wave hold
+# is not a worker wave, exactly as the card declines to call it one; such a
+# session is then asked only whether it is a marked child.
+#
+# A DENY SUPERSEDES ADVICE: `pre_json` may already hold an `additionalContext`
+# for this same call (the Read nudge, or a sync advisory); the merge deny
+# replaces it. It never replaces the graph gate's DENY, which has already
+# counted the denial it prints (D-1689) — that call is refused either way.
+# COMPLEXITY: the match restarts at every separator, so no token class may cross one and
+# the blanks inside a head are space and tab only, never a newline: a class that could walks
+# to the end of the line for each start (5 to 9 s on a 36 KB `;a=;a=…` or newline x `a=`
+# command, which `session-hook-sync-advisory.test.ts`'s env-var shape pins; now ~10 ms).
+GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+[^[:space:];&|()]+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:];&|()]*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-[^[:space:];&|()]+([ \t]+[^-[:space:];&|()][^[:space:];&|()]*)?)*[ \t]+pr([ \t]+-[^[:space:];&|()]+([ \t]+[^-[:space:];&|()][^[:space:];&|()]*)?)*[ \t]+merge([[:space:]]|$)'
+if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
+      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  mcmd=$(jq -r --arg q "'" 'if .tool_name == "Bash" then ((.tool_input.command // "")
+      | gsub("\\\\.|" + $q + "[^" + $q + "]*" + $q + "|\"(?:[^\"\\\\$]|\\\\.|\\$(?!\\())*\"|(?<![^\\s;&|(])#[^\\n]*"; "")) else "" end' \
+    <<<"$payload" 2>/dev/null) || mcmd=""
+  if [[ -n "$mcmd" && "$mcmd" =~ $GH_MERGE_RE ]]; then
+    mwhy=""
+    if _ct_read "$REG/$id.hold" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then
+      mwhy="this workspace's hold reads \`$CT_V\` — a programme wave's session"
+    elif [[ -e "$REG/$id.child" ]]; then
+      mwhy="this workspace carries the child marker — a dispatched child, whose run has let it go"
+    fi
+    if [[ -n "$mwhy" ]]; then
+      mreason="ccrc: $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
+      mreason+=" Report wave-done to your coordinator; it lands the PR."
+      pre_json=$(_hook_deny_json "$mreason") || pre_json=""
+    fi
   fi
 fi
 
