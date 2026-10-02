@@ -162,7 +162,7 @@ independent reader, then cross-checked by another. The cross-check upheld every 
     programme takes no number for it.
   - **The worker's three minors wait.** They are `lostBg` without an antecedent, `stallClause()` with no -1 guard,
     and the S3 comment. They are ruled with the review.
-- **R17 (coordinator, 2026-10-02 22:52): wave 4 is accepted.** Review run 239 read tip `571268cdc` and closed done
+- **R17 (coordinator, 2026-10-02 22:51): wave 4 is accepted.** Review run 239 read tip `571268cdc` and closed done
   (report kept in the coordinator notes). It found four Minor findings and no blocker:
   - every suite green;
   - mutation rows C1–C15 and W1–W21 red as planned;
