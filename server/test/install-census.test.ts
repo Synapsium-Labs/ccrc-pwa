@@ -55,9 +55,10 @@
 // the box's `~/ccrc` tree, was never PLACED, and the fallback deploy exited 0
 // — the four GPT-lane names, until Plan 2b-1 Task 7. The last describe below
 // compares ONE WAY, install ⊆ deploy, and that is a decision, not an
-// oversight: `deploy.sh` also places `ccrc-api` and `ccrc-models-probe`, which
-// `ccrc install` places nowhere — a PRE-EXISTING divergence between the two
-// installers, known and outside this guard, which the reverse would red on.
+// oversight: `deploy.sh` also places `ccrc-api` (and placed `ccrc-models-probe`
+// until Plan 3a, ruling R-C11), which `ccrc install` places nowhere — a
+// PRE-EXISTING divergence between the two installers, known and outside this
+// guard, which the reverse would red on.
 //
 // THE RULE IS NO SILENT DROPS. Every word this file reads that lands in a census
 // directory either resolves to a name or FAILS THE SUITE, naming the word and the
@@ -177,9 +178,12 @@
 //     and so is the literal target `_uninst_tree_bins` checks the graphify link
 //     against before removing it.
 //   - The disable census reads literal `systemctl --user … disable --now` calls
-//     only. `ccd/ccrc`'s `_svc_disable_now` helper and a separate stop-then-
-//     disable are not read, and a system-manager `systemctl disable` (no
-//     `--user`) is not a user-unit disable, so it does not count.
+//     only. `ccd/ccrc`'s `_svc_disable_now` helper, a separate stop-then-
+//     disable, and `_uninst_codex_usage`'s per-INSTANCE disable of ccrc's
+//     usage template (an instance name is built from an id at run time;
+//     `ccrc-uninstall.test.ts` measures it) are not read, and a
+//     system-manager `systemctl disable` (no `--user`) is not a user-unit
+//     disable, so it does not count.
 //   - Paths are normalised (`/./` and repeated `/` collapse, on both sides, so
 //     `$bin/./x` is `x`), but `~/…` and a destination whose variable is bound
 //     to the empty string are not read as names.
@@ -1477,12 +1481,7 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
   // deploy.sh to place one, telling them to remove it from this list).
   const DEPLOY_SH_WITHHOLDS = {
     bins: ['ccd-update-sync'],
-    units: ['ccd-update-sync.service', 'ccd-update-sync.timer', 'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer',
-      // Plan 3a: Task 6 places ccrc's usage pair ONE COMMIT before Task 7
-      // teaches deploy.sh's agent lane the same two lines. Withheld for exactly
-      // that commit. Task 7 deletes this entry, and direction 2 below reds if
-      // it does not.
-      'ccrc-codex-usage@.service', 'ccrc-codex-usage@.timer'],
+    units: ['ccd-update-sync.service', 'ccd-update-sync.timer', 'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer'],
   } as const;
 
   it('every binary _inst_bins places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.bins)', () => {

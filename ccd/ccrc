@@ -8351,6 +8351,7 @@ _acct_remove() {
     esac
   fi
 
+  _acct_remove_usage "$id"; [ -z "$ACCT_USAGE_REMOVED" ] || removed+=("$ACCT_USAGE_REMOVED"); [ -z "$ACCT_USAGE_STEP" ] || operator_steps+=("$ACCT_USAGE_STEP")
   for f in "$CCRC_LIMITS_DIR/$id.json" "$_SVC_REG/$id-disabled" "$_SVC_REG/$id.hookstate.json"; do
     { [ -e "$f" ] || [ -L "$f" ]; } || continue
     { [ ! -d "$f" ] || [ -L "$f" ]; } \
@@ -21682,6 +21683,62 @@ cmd_uninstall() {
   fi
 }
 
+# ── ccrc's usage INSTANCES, on the way out (Plan 3a Task 7; spec §13) ─────
+# Every ENABLED instance of ccrc's own usage template, stopped and disabled
+# while its template is still on disk — `_uninst_units` calls this BEFORE its
+# `rm -f`, because a template removed under an enabled instance leaves systemd
+# holding a dangling enablement (ruling R-C9). Found through the manager's own
+# links (`_codex_usage_enabled_ids`), NEVER the roster: an uninstall must reach
+# an instance whose lane the roster no longer names, and must work over a
+# roster it cannot read. It never names another repository's `ccgpt-usage`
+# unit, template or instance — those are not ccrc's (R2). ITS OWN FUNCTION,
+# not a loop inside `_uninst_units`: install-census.test.ts reads every
+# `disable --now` operand there as a literal unit name, and an instance name is
+# built from an id at run time. A refusal is reported and the uninstall
+# continues, as every `disable --now` in `_uninst_units` is.
+_uninst_codex_usage() {
+  local ids id u n=0 failed=0
+  if ! ids="$(_codex_usage_enabled_ids)"; then
+    echo "uninstall: units: ccrc's enabled codex usage timers could not be listed (the ccrc codex: line above says why), so none was disabled — the template is removed below; finish by hand: list \$HOME/.config/systemd/user/timers.target.wants/ccrc-codex-usage@*.timer, and run systemctl --user disable --now on each" >&2
+    return 0
+  fi
+  for id in $ids; do
+    u="$(_codex_usage_timer "$id")"
+    if systemctl --user disable --now "$u"; then
+      n=$((n + 1))
+    else
+      failed=$((failed + 1))
+      echo "uninstall: units: disable --now $u failed (continuing — the template is removed below; read: systemctl --user status $u)" >&2
+    fi
+  done
+  [ $((n + failed)) -eq 0 ] || echo "uninstall: units: $n codex usage timer(s) stopped and disabled"
+}
+
+# Account removal's usage half (Plan 3a Task 7): ccrc's own
+# `ccrc-codex-usage@<id>.timer`, disabled if this box has it enabled — WHATEVER
+# the row's kind (D-3727). A lane
+# flipped back to external can still carry the instance its codex days enabled,
+# and after the removal nothing converges it until the next install, while it
+# rewrites the very ~/.cc-limits row the removal deletes. Found by the manager's
+# own link, never the roster. Another repository's `ccgpt-usage@<id>.timer` is
+# never touched or named in a systemctl call. Sets ACCT_USAGE_REMOVED (the link,
+# once the disable MEASURABLY took it) or ACCT_USAGE_STEP (the operator step
+# when it did not). It never refuses: by the time it runs the roster no longer
+# names the id, and a oneshot poller holds no state the next install cannot
+# converge. Every byte the manager says goes to stderr: `_acct_remove`'s
+# stdout is one JSON object.
+_acct_remove_usage() {   # <id>
+  ACCT_USAGE_REMOVED=''; ACCT_USAGE_STEP=''
+  local u; u="$(_codex_usage_timer "$1")"
+  _codex_usage_enabled "$u" || return 0
+  _codex_bus_defaults
+  if systemctl --user disable --now "$u" >&2 && ! _codex_usage_enabled "$u"; then
+    ACCT_USAGE_REMOVED="$(_codex_usage_wants)/$u"
+    return 0
+  fi
+  ACCT_USAGE_STEP="ccrc's usage timer $u is still enabled for the removed account $1, so it may go on rewriting \$HOME/.cc-limits/$1.json. Run: systemctl --user disable --now $u"
+}
+
 # Stop, disable, delete — in that order, because a unit file removed under a
 # still-enabled unit leaves systemd holding a dangling enablement symlink.
 # `disable --now` per unit that is actually installed here; a failure is
@@ -21745,11 +21802,15 @@ _uninst_units() {
       systemctl --user disable --now "$u" \
         || echo "uninstall: units: disable --now $u failed (continuing — the unit file is removed below; read: systemctl --user status $u)" >&2
     done
+    # Plan 3a Task 7: every ENABLED instance of ccrc's usage template, while
+    # the template is still on disk (spec §13; ruling R-C9). Its own function:
+    # `_uninst_codex_usage`'s header says why.
+    _uninst_codex_usage
   else
     echo "uninstall: units: systemctl is not on PATH — the unit files are removed but nothing was stopped or disabled"
   fi
   # ccrc's OWN usage pair, `ccrc-codex-usage@.{service,timer}`, goes with the
-  # rest (Plan 3a). NEVER `ccgpt-usage@.{service,timer}` or an instance of it:
+  # rest, its enabled instances disabled above first (Plan 3a). NEVER `ccgpt-usage@.{service,timer}` or an instance of it:
   # on a live fleet box those names hold another repository's enabled units,
   # and an uninstall removes only what ccrc placed.
   rm -f -- "$dir/${BOX_UNIT_NAMES[0]}" "$dir/${BOX_UNIT_NAMES[1]}" \

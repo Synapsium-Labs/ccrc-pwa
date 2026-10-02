@@ -94,9 +94,9 @@ describe('the usage-accounting sweep ships on the agent lane (Task 7 fix round 1
     // agent lane" is not a name the file uses — it is the block that installs
     // ccd-telemetry-keepalive. Deliberately NOT adjacent to ccd-graph-sweep:
     // graph-noise-ship.test.ts pins the sweep and its noise list as
-    // neighbours with three code lines of slack, already fully spent by
-    // ccrc-models-probe, so this sibling (like ccd-account-auth) is placed
-    // below the noise list instead.
+    // neighbours with three code lines of slack, which ccrc-models-probe
+    // spent until Plan 3a stopped placing it (ruling R-C11); this sibling
+    // (like ccd-account-auth) stays below the noise list all the same.
     const lines = code();
     const keepalive = lines.findIndex((l) => l.startsWith('install_atomic ccd/ccd-telemetry-keepalive '));
     const runner = lines.findIndex((l) => l.startsWith('install_atomic ccd/ccd-usage-sweep '));
