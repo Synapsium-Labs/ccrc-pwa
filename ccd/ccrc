@@ -4117,8 +4117,17 @@ cmd_wrappers() {
       # declared. (It is the same "." that drops the `ccd.bak-<date>` and
       # `claude2.bak-<date>` files a real box accumulates — see
       # `ccd/ccrc-wrapper-shape:63-67`.)
-      # `cp -p` so the backup keeps the mode and timestamps of what it replaced.
-      cp -p -- "$WRAPPER_BIN_DIR/$id" "$WRAPPER_BIN_DIR/$backup" \
+      # `cp -p` so the backup keeps the mode and timestamps of what it replaced,
+      # and `-P` so it keeps WHAT it replaced (Plan 3a Task 9): the rename below
+      # REPLACES a symlink at this path rather than writing through it, so the
+      # thing moved out of the way is the LINK, and its backup must be the link
+      # too. Without `-P`, cp follows it and saves the bytes behind it: a `mv`
+      # of that backup would then put a frozen second copy of somebody else's
+      # launcher where the link to it was. A live fleet box has a launcher of
+      # exactly that shape (a symlink to another tool's launcher). `-P` changes
+      # nothing for a regular file, and both userlands take it: GNU cp, and BSD
+      # cp, whose `-P` without `-R` copies the link itself.
+      cp -P -p -- "$WRAPPER_BIN_DIR/$id" "$WRAPPER_BIN_DIR/$backup" \
         || _ccrc_die "could not back up $WRAPPER_BIN_DIR/$id to $WRAPPER_BIN_DIR/$backup, so nothing was overwritten"
     fi
 
