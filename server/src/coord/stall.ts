@@ -996,7 +996,8 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
     if (deaf !== null && now - deaf.at >= COORD_DEAF_MS && rungDoneAt(input, 'coord-deaf', 1, deaf.id) === null) {
       return { act: 'notify', arm: 'coord-deaf', rung: 1, key: deaf.id, to: 'operator' };
     }
-    const ballAge = f.lastExchangeAt === null ? 0 : now - f.lastExchangeAt;
+    // `coord-ball-restarts-on-reactivation` (D-3789): the coordinator's 30 h runs from its own send-back too.
+    const ballAge = f.lastExchangeAt === null ? 0 : now - Math.max(f.lastExchangeAt, stallReactivatedAt(input));
     return ballAge >= COORD_BALL_CAP_MS && rungDoneAt(input, 'coord-ball', 1, key) === null ? capVerdict('coord-ball', key) : VERDICT_NONE;
   }
   // (11) the worker's ball. Without the w2 marker, or without a current marker: wave 1's ladder, unchanged.

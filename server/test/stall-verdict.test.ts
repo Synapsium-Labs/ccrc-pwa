@@ -1644,3 +1644,33 @@ describe('quiet-restarts-on-reactivation: the first dispatch changes nothing', (
     expect(stallFacts(input)).toEqual(stallFacts(stallInput()));
   });
 });
+
+// ── coord-ball-restarts-on-reactivation (D-3789): the coordinator's 30 h runs from its own send-back ─────────────────
+describe('coord-ball-restarts-on-reactivation: the coordinator\'s 30 h runs from the send-back too', () => {
+  // The common send-back shape: the worker's wave-done is the newest mail, so the ball stays the coordinator's while
+  // the run sits at awaiting-review and after the advance, until the brief lands.
+  const DONE = t('2026-10-01T04:01:25.850Z');           // E5's wave-done #2909
+  const REACT = DONE + 31 * H;                          // chosen: past COORD_BALL_CAP_MS at awaiting-review
+  const ballInput = (activation: StallActivation): StallInput => stallInput({
+    primary: { id: 199, dispatchedAt: t('2026-09-30T23:55:37.757Z') },
+    worker: workerAt({ live: liveWord('idle', DONE + 2 * MIN) }),
+    mail: [mailRow(2909, DONE, WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT, 199)], activation,
+  });
+
+  it('CONTROL: with no re-activation term the advance draws the coord-ball push within a sweep', () => {
+    expect(stallVerdict(ballInput({ kind: 'none' }), REACT + 4_000)).toEqual(capOf('coord-ball', DONE));
+  });
+
+  it('with it: none after the advance, and one push 30 h after it, keyed on it', () => {
+    expect(stallVerdict(ballInput(reactivated(REACT)), REACT + 4_000)).toEqual(NONE);
+    expect(stallVerdict(ballInput(reactivated(REACT)), REACT + COORD_BALL_CAP_MS - 1)).toEqual(NONE);
+    expect(stallVerdict(ballInput(reactivated(REACT)), REACT + COORD_BALL_CAP_MS)).toEqual(capOf('coord-ball', REACT));
+  });
+
+  it('a coordinator mail after the advance still restarts it as before', () => {
+    const resume = mailRow(2971, REACT + H, COORD, WORKER, 'status', `${STALL_WAIT_PREFIX} the rebase`, 199);
+    const input = { ...ballInput(reactivated(REACT)), mail: [mailRow(2909, DONE, WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT, 199), resume] };
+    expect(stallVerdict(input, REACT + COORD_BALL_CAP_MS)).toEqual(NONE);
+    expect(stallVerdict(input, resume.at + COORD_BALL_CAP_MS)).toEqual(capOf('coord-ball', resume.at));
+  });
+});

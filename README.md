@@ -2567,9 +2567,9 @@ mail to the worker on the run that is not the watch's own, so a session that
 mails the worker there at least every 2 h keeps r1 from ever falling due. Time
 the run spends outside the active states is never charged to the worker: when
 the coordinator moves it back into one (a send-back from `awaiting-review` to
-`working`, say), the quiet clock and the episode start again from that move;
-the dialog and limit caps keep their clocks, which measure the pane and the
-account, not the worker. The
+`working`, say), the quiet clock, the episode and the coordinator's 30 h start
+again from that move; the dialog and limit caps keep their clocks, which measure
+the pane and the account, not the worker. The
 guarantee that no box-token holder can keep a mail off the phone covers the
 `re stall-check:` prefix only (a reply is kept off the phone only when it is
 bound to a check); nothing limits who may mail the worker and so hold off the
