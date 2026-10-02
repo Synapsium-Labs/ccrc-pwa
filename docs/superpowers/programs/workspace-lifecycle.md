@@ -252,6 +252,10 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     slot under the split with the stall-watch coordinator (mail 3276). The brief asks the panel to hold the door's
     irreversible acts, the rings, the four-part order, the three fault gates and the census. It also asks it to
     compare boot.test.ts at the tip with main.
+  - **Slots agreed with the stall-watch coordinator** (mail 3277, reply 3278), for the window's next age-outs:
+    - this session's three programmes take 00:09:10, 02:42:08 and 11:53:20;
+    - stall-watch takes 10:11:41 and 11:53:42.
+    Whoever won't use a slot mails the other before it ages out.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
