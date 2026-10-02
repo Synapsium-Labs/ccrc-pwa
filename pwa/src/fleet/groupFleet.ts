@@ -1,4 +1,4 @@
-import { boardHome, type FleetSession } from '../../../shared/api';
+import { boardHome, releasedFromOf, type FleetSession, type ReleasedFrom } from '../../../shared/api';
 import { isUnseen, type Acks } from '../lib/seen';
 import { sortFleet } from './sortFleet';
 
@@ -40,7 +40,8 @@ export interface FleetGroup {
    *  them now. */
   busy: number;
   /** How many LIVE members this device has not yet acknowledged — `isUnseen`
-   *  (pwa/src/lib/seen.ts) run over `sessions`.
+   *  (pwa/src/lib/seen.ts) run over `sessions` AND `released` (a released row is
+   *  live; folding it must not quiet its count).
    *
    *  NOTHING RENDERS THIS YET. It is part of the group shape so a per-project
    *  badge has a count to read, and it is pinned by groupFleet.test.ts, but
@@ -100,12 +101,62 @@ export interface FleetGroup {
    *  is the disk fact — which is why it no longer says the bare word
    *  "Archived". */
   archived: FleetSession[];
+  /** Members in the `Released (N)` fold (workspace lifecycle spec §5.1) — `inReleasedFold` below, newest close
+   *  first. The transition zone: a programme is done with them, and they wait here to be archived. Like
+   *  `archived`, folded and never dropped; unlike `archived`, they still count toward `unseen`, since a
+   *  released row is live. They take no part in `attention`, `busy` or `stranded` — by construction, which is
+   *  the fold's own rule — nor in the card's ORDER. They take part in `pin` only on a card with no live row,
+   *  where the pin falls back to every member, exactly as it does on a card whose members are all archived. */
+  released: FleetSession[];
   /** Where this project's OWN workspaces render when it is not here — one
    *  entry per destination card, live rows only, most first. Spec §6: "an
    *  emptied card says where its work went", as PLAIN TEXT, never a link — a
    *  tappable route would be the second access path R2 excludes. Empty on a
    *  card that has lost nothing. */
   elsewhere: readonly { project: string; count: number }[];
+}
+
+/**
+ * Whether a row belongs in its card's `Released (N)` fold (workspace lifecycle spec §5.1): the server says it was
+ * released, and nothing about it needs a person. Attention, a turn in progress and a strand are never folded —
+ * a fold "can never hide the one thing this screen exists to surface" (the `attention` field above) — so such a
+ * row stays at the top level, released or not, and folds on the first frame where none of them holds. The
+ * strand is read as `(s.stranded ?? null) !== null`, the `stranded` count's own spelling, dead or alive: a
+ * marker the row still carries is the operator's to see. `archived` is excluded here too, though `releasedFrom`
+ * already is null for an archived row: the two folds must never share a row.
+ */
+export function inReleasedFold(s: FleetSession): boolean {
+  return releasedFromOf(s) !== null && s.bucket !== 'archived' && s.bucket !== 'attention'
+    && s.bucket !== 'working' && (s.stranded ?? null) === null;
+}
+
+/** One programme's rows inside the `Released (N)` fold. `title` is the programme's title when the server knew it,
+ *  else `null` and the card shows the slug alone. */
+export interface ReleasedProgramme {
+  program: string;
+  title: string | null;
+  sessions: FleetSession[];
+}
+
+const closedAtOf = (s: FleetSession): number => (releasedFromOf(s) as ReleasedFrom).closedAt;
+
+/** The fold's contents grouped by programme (spec §5.1): groups and the rows within them run newest `closedAt`
+ *  first, a group ranked by its newest row; ties fall back to the slug, then the session id, so the order is
+ *  total. Rows `releasedFromOf` answers null for are not this function's: it takes `FleetGroup.released`. */
+export function releasedByProgramme(released: readonly FleetSession[]): ReleasedProgramme[] {
+  const by = new Map<string, ReleasedProgramme>();
+  const sorted = [...released].filter((s) => releasedFromOf(s) !== null)
+    .sort((a, b) => closedAtOf(b) - closedAtOf(a) || a.id.localeCompare(b.id));
+  for (const s of sorted) {
+    const r = releasedFromOf(s) as ReleasedFrom;
+    const g = by.get(r.program);
+    if (g) {
+      g.sessions.push(s);
+      if (g.title === null && r.programTitle !== null) g.title = r.programTitle;
+    } else by.set(r.program, { program: r.program, title: r.programTitle, sessions: [s] });
+  }
+  return [...by.values()].sort((a, b) =>
+    closedAtOf(b.sessions[0]!) - closedAtOf(a.sessions[0]!) || a.program.localeCompare(b.program));
 }
 
 /**
@@ -126,7 +177,10 @@ export function groupFleet(
   sessions: FleetSession[], projects: readonly string[], acks: Acks = {},
 ): FleetGroup[] {
   const byProject = new Map<string, FleetSession[]>();
-  for (const s of sortFleet(sessions)) {
+  // Released rows LAST (workspace lifecycle §5.1): a card's place comes from its first member, and a folded row must
+  // not lift its card above one whose top visible row is more urgent. Stable, so both halves keep the fleet order.
+  const sorted = sortFleet(sessions);
+  for (const s of [...sorted.filter((m) => !inReleasedFold(m)), ...sorted.filter(inReleasedFold)]) {
     const card = boardHome(s);
     const list = byProject.get(card);
     if (list) list.push(s);
@@ -144,10 +198,13 @@ export function groupFleet(
   for (const [project, members] of byProject) {
     // See the `archived` field's doc: the split is on the BUCKET, so a
     // `cleanup` member stays in the live list its own chip counts it in.
-    const live = members.filter((m) => m.bucket !== 'archived');
+    const live = members.filter((m) => m.bucket !== 'archived' && !inReleasedFold(m));
     const archived = members.filter((m) => m.bucket === 'archived');
-    // `live` can be empty (every workspace of a project archived), so the pin
-    // falls back to the whole membership; and the whole membership can be
+    // Workspace lifecycle §5.1: newest close first, the fold's own order.
+    const released = members.filter(inReleasedFold)
+      .sort((a, b) => closedAtOf(b) - closedAtOf(a) || a.id.localeCompare(b.id));
+    // `live` can be empty (every workspace of a project archived or released),
+    // so the pin falls back to the whole membership; and the whole membership can be
     // empty (a durable card), which is the union's third state — never an
     // indexed read of an empty array.
     const forPin = live.length > 0 ? live : members;
@@ -169,9 +226,11 @@ export function groupFleet(
       project,
       sessions: live,
       archived,
+      released,
       attention: live.some((m) => m.bucket === 'attention'),
       busy: live.filter((m) => m.bucket === 'working').length,
-      unseen: live.filter((m) => isUnseen(m, acks)).length,
+      // A released row is live, so it still counts (spec §5.1) — folding it must not quiet its badge.
+      unseen: [...live, ...released].filter((m) => isUnseen(m, acks)).length,
       pin,
       // `(m.stranded ?? null) !== null`, never a truthiness test and never a
       // read of `m.stranded.at` — see this field's own docstring for the two
