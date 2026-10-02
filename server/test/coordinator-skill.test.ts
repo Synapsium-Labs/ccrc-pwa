@@ -22,6 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderEnvelope, type EnvelopeInput } from '../src/coord/envelope.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+import { dequeuedSubject, mergedSubject } from '../src/coord/rundefs.js';
 import type { DoneClaim } from '../src/coord/fingerprint.js';
 import {
   ASK_REFUSE_CODES, MAIL_BODY_MAX_BYTES, MAIL_REJECT_CODES, RUN_REFUSE_CODES,
@@ -120,7 +121,7 @@ const CONTRACT = [
   "The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.",
   // Landing-order wave 1 (spec 2026-09-23 §5.1). Written with no apostrophe at
   // all, so neither the straight nor the curly spelling can drift.
-  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR.',
+  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`.',
 ];
 
 describe('the coordinator skill: its contract', () => {
@@ -292,6 +293,70 @@ describe('the coordinator skill: its contract', () => {
     expect(licensed, 'clause 15 no longer names update-branch to forbid it').toBe(1);
     expect(hits, `update-branch appears ${hits}× in the coordinator corpus; only clause 15 may name it`)
       .toBe(licensed);
+  });
+
+  it('binds the exact SHA in every `gh pr merge` it spells — and the native-queue spelling carries no --squash and no --admin (landing-order wave 2)', () => {
+    // DERIVED: every backtick code span in the whole corpus that runs
+    // `gh pr merge`. #178 put `--match-head-commit <handoffCommit>` into the
+    // coordinator's merge "for exactly this reason" — the exact-SHA merge proof
+    // — and a spelling that drops it merges whatever head the PR has by then.
+    // `--disable-auto` DISARMS an armed auto-merge: it merges nothing, so it
+    // binds no SHA. Only that exact spelling is exempt — a disarm span that
+    // carries any other flag is held to the binding like every merge.
+    const DISARM = /^gh pr merge <(?:n|pr)> --disable-auto$/;
+    const spans = [...allSkillText.matchAll(/`([^`\n]*\bgh pr merge\b[^`\n]*)`/g)].map((m) => m[1]!)
+      .filter((s) => !DISARM.test(s));
+    expect(spans.length, 'fewer gh pr merge spellings than the three this corpus carries (clause 15, the queue landing, #178\'s squash merge) — a landing spelling was dropped, or this pin went blind').toBeGreaterThanOrEqual(3);
+    for (const s of spans) {
+      expect(s, `\`${s}\` merges without binding the exact SHA`).toContain('--match-head-commit <handoffCommit>');
+    }
+    expect(spans).toContain('gh pr merge <n> --match-head-commit <handoffCommit>');
+    expect(spans).toContain('gh pr merge <pr> --match-head-commit <handoffCommit>');
+  });
+
+  it('lands before it closes on a native-queue project — the last wave too — enqueues only a green PR and proves the entry, and names the landing notices by the server\'s own subjects (landing-order wave 2)', () => {
+    const wl = refs('wave-lifecycle.md');
+    const at = wl.indexOf('**Landing on a native-queue project**');
+    expect(at, 'wave-lifecycle.md lost its native-queue landing paragraph').toBeGreaterThanOrEqual(0);
+    const para = flat(wl.slice(at, wl.indexOf('**Same project:**', at)));
+    expect(para).toContain('the producer LANDS BEFORE IT CLOSES');
+    expect(para).toContain('advance the producer\'s run to `merging`');
+    expect(para).toContain('`merging → working`');
+    // The subjects the server sends (Task 3), derived from the ONE builder of
+    // each — the skill may not name a mail the server never sends.
+    const merged = mergedSubject(7).replace('#7', '#<pr>');
+    const dequeued = dequeuedSubject(7, '<time>').replace('#7', '#<pr>');
+    expect(para, `the paragraph no longer names ${merged}`).toContain('`' + merged + '`');
+    expect(para, `the paragraph no longer names ${dequeued}`).toContain('`' + dequeued + '`');
+    // Whether the project requires the queue is MEASURED at each landing: it
+    // changes when the operator turns the queue on or rolls it back.
+    expect(para).toContain('.type == "merge_queue"');
+    // gh 2.45 ARMS auto-merge, rather than queueing, a PR whose required
+    // checks have not passed, and prints the same line either way — so the
+    // enqueue waits on them, the entry is read back, and an armed request is
+    // disarmed, before any fix round too.
+    expect(para).toContain('`gh pr checks <pr> --required` exits 0');
+    expect(para).toContain('never by ending your turn: no mail comes when checks finish');
+    expect(para).toContain('answers a non-null `mergeQueueEntry`');
+    expect(para).toContain('`gh pr merge <pr> --disable-auto`');
+    // A dequeue's why is the QUEUE's own run; the PR's checks can read green.
+    expect(para).toContain('`gh run list --event merge_group');
+    // A coordinator the hook refuses — a self-claimed run, a reclaim heir —
+    // has the operator enqueue, and never closes to shed its hold.
+    expect(para).toContain('ask the operator to enqueue, or disarm');
+    // SKILL.md step 6 points at it BEFORE its succession arms, where a
+    // coordinator deciding when to close reads.
+    const start = skill.indexOf('6. **Rule on the report**');
+    expect(flat(skill.slice(start, skill.indexOf('**Same project:**', start))))
+      .toContain('the producer LANDS before it closes');
+    // …and so does the LAST wave, whose close is step 7's and §6's: no wave
+    // N+1 is open there, so a close-first retires the programme outright.
+    const seven = skill.indexOf('7. **Final merge:**');
+    expect(flat(skill.slice(seven, skill.indexOf('\n## ', seven))))
+      .toContain("the last wave's producer LANDS before this close");
+    const six = wl.indexOf('## 6 — Final merge');
+    expect(flat(wl.slice(six, wl.indexOf('\n## ', six + 1))))
+      .toContain("the last wave's producer lands BEFORE this close");
   });
 
   it('tells the session how to learn its own id the ONE way that is actually its own', () => {
