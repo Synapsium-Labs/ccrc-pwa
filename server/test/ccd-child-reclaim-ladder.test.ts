@@ -1781,6 +1781,10 @@ describe('the logical resolver places every row and the child by one call (spec 
     expect(out.token).toBe('');
     expect(out.verdict, out.detail).toBe('unmeasured');
     expect(out.detail).toContain(`registry row(s) demo-else cannot be placed against this child: ${CHILD_ID}'s own workdir cannot be resolved`);
+    expect(out.detail, 'the remedy for an unsearchable ancestor (review 214, F1)')
+      .toContain('make it searchable if a directory on its path cannot be searched');
+    expect(out.detail, 'and it never invites removing what stands at the child’s own workdir')
+      .not.toContain('remove what stands at it');
     expect(nested.verdict, `a literal row outranks it — ${nested.detail}`).toBe('containment-unproven');
     expect(nested.detail).toContain('registry row(s) demo-nested rooted inside');
     dropRowOf('demo-nested');
@@ -2127,3 +2131,35 @@ it('ambiguous row hold: two vanished children hold each other', () => {
   expect(mine.detail, 'the other row by id only').not.toContain(otherWt);
   expect(theirs.detail, 'the other row by id only').not.toContain(c.wt);
 }, 120_000);
+
+// A LEAF LINK IS TERMINAL WHATEVER OTHER ROWS EXIST (contract R31; review 214, F1; D-3738). The resolver port made
+// the child's own unresolvable workdir collect every non-literal row as one that cannot be placed — retryable
+// `unmeasured` — before the eval's leaf rung was asked, and a fleet always has another row. Its old remedy,
+// "remove what stands at it", then led to a reclaim that deleted the branch and de-registered the tree behind the
+// link (the review's probe P8). The leaf rung is now asked before any other row is placed.
+it('a child whose workdir leaf is a link refuses containment-unproven whatever other rows exist', () => {
+  const c = makeChild(h);
+  const vault = path.join(h.home, 'vault');
+  fs.mkdirSync(vault);
+  fs.renameSync(c.wt, path.join(vault, 'quiet-basin'));
+  fs.symlinkSync(path.join(vault, 'quiet-basin'), c.wt);
+  const leafLink = (r: LadderAnswer, label: string): void => {
+    expect(r.verdict, `${label}: ${r.detail}`).toBe('containment-unproven');
+    expect(r.detail).toContain(`${c.wt} is a symbolic link`);
+    expect(r.detail, 'never the remedy that reclaims').not.toContain('remove what stands at it');
+    expect(r.token).toBe('');
+  };
+  leafLink(evalOf(h), 'the CONTROL: no other row');
+  fs.mkdirSync(path.join(h.home, 'outside', 'server'), { recursive: true });
+  plainRow('demo-outside', path.join(h.home, 'outside', 'server'));
+  leafLink(evalOf(h), 'the CONTROL: a resolvable leaf link beside a complete outside row');
+  // P8: the link's target behind a directory with no search bit, so the child's own workdir cannot be resolved.
+  fs.chmodSync(vault, 0o000);
+  let p8: LadderAnswer;
+  try { p8 = evalOf(h); } finally { fs.chmodSync(vault, 0o755); }
+  leafLink(p8, 'an unresolvable leaf link beside a complete outside row');
+  // A resolvable leaf link beside a row placed only by projection.
+  plainRow('demo-proj', `${h.home}/alias/server`);
+  leafLink(evalOf(h), 'a resolvable leaf link beside a projected row');
+  expect(fs.readdirSync(path.join(vault, 'quiet-basin')), 'the tree behind the link stands').toContain('f1.txt');
+}, 90_000);

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=388360c0613e0156ab5a87021d8fc11ae7a658b2b091eb956a2bc3708f690289
+# ccrc:generated 1 sha256=c9de9f70826812ca0e65ce9182db5d0888d0b6f5f0b67ad554c3d47c9e203cea
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24468,7 +24468,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # fresh and the resumed tail. Liveness is no input here: a modelled pane, up
   # or gone or unaskable, never makes a projection evidence. The CHILD's own
   # `mine` is not held to it: its vanished worktree is R19's arm, decided by
-  # `_ws_reclaim_absent` above this helper, and a row literally at or below it
+  # the eval's vanished fork (`_ws_reclaim_absent`), which the eval asks right
+  # AFTER this helper (review 214, F8), and a row literally at or below it
   # is refused by the literal arms whatever its basis. R19's arm is unchanged,
   # but an ambiguous OTHER row holds a vanished child too — and two vanished
   # children hold each other — until that row is purged or a link on its path
@@ -24487,7 +24488,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     [[ "$mine" != //[!/]* ]] \
       || minewhy="resolves to a path opening with //, so ccd cannot compare another row with it — re-point the link whose target opens with //"
   else
-    minewhy="cannot be resolved (a directory or link on its path cannot be entered or followed, something on its path is not a directory, or it holds a control character), so ccd cannot compare another row with it — make it searchable, or remove what stands at it"
+    minewhy="cannot be resolved (a directory or link on its path cannot be entered or followed, something on its path is not a directory, or it holds a control character), so ccd cannot compare another row with it — make it searchable if a directory on its path cannot be searched; never remove or replace what stands at this child's own workdir to clear this"
   fi
   while IFS= read -r n; do
     [[ -n "$n" ]] || continue
@@ -24652,6 +24653,10 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
 
 _ws_reclaim_resolvable() {   # path -> 0 when `_ws_reclaim_resolve` resolves it, 1 otherwise — its
   #                              verdict alone, its answer unread
+  # NO SHIPPED CALLER YET (review 214, F6). Ported because the plan mandates it
+  # (Task 1 Step 4.3), from the immutable source it was extracted with; only
+  # the ladder suite calls it today, and it can never disagree with the
+  # resolver's own rc, which is all it returns.
   _ws_reclaim_resolve "$1"
 }
 
@@ -24882,6 +24887,18 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
       *) _ws_reclaim_unmeasured "whether $(_tmux "$id") is up could not be asked — tmux answered: ${PROBE_DETAIL:-nothing}"; return 1 ;;
     esac
   fi
+  # THE LEAF IS NEVER FOLLOWED (spec §5.5). A workdir that is itself a link
+  # reaches a tree ccd cannot prove is this child's: the pin would commit that
+  # tree's work and the tail would remove it. `-L` on the LEAF, no trailing
+  # slash, so a symlinked ANCESTOR (projects on a mounted volume) stays legal;
+  # a dangling link refuses here too, so it never reaches the vanished fork.
+  # Asked BEFORE any other row is placed (contract R31; review 214, F1;
+  # D-3738): placing rows resolves this workdir, and one that cannot be
+  # resolved collects every other row as one that cannot be placed — a
+  # retryable `unmeasured` that a fleet, which always has another row, would
+  # give a terminal leaf link instead of this refusal.
+  [[ ! -L "$workdir" ]] \
+    || { _reap_refuse containment-unproven "$workdir is a symbolic link — ccd never follows a link to a tree it would pin or delete, so it cannot prove the tree at that path is $id's own"; return 1; }
   # NO OTHER REGISTRY ROW NAMES THIS WORKDIR, OR IS ROOTED INSIDE IT (spec
   # §5.5, rung 9 asked of the path) — `_ws_reclaim_workdir_shared` says why.
   # Asked BEFORE the vanished fork, so it guards both arms: the absent arm
@@ -24909,13 +24926,6 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
     _ws_reclaim_eval_absent "$id" "$workdir" "$main" "$regbranch"
     return $?
   fi
-  # THE LEAF IS NEVER FOLLOWED (spec §5.5). A workdir that is itself a link
-  # reaches a tree ccd cannot prove is this child's: the pin would commit that
-  # tree's work and the tail would remove it. `-L` on the LEAF, no trailing
-  # slash, so a symlinked ANCESTOR (projects on a mounted volume) stays legal;
-  # a dangling link skipped the fork above and refuses here too.
-  [[ ! -L "$workdir" ]] \
-    || { _reap_refuse containment-unproven "$workdir is a symbolic link — ccd never follows a link to a tree it would pin or delete, so it cannot prove the tree at that path is $id's own"; return 1; }
   [[ -d "$workdir" ]] \
     || { _ws_reclaim_unmeasured "something that is not a directory stands at $workdir — neither a tree to pin nor a worktree that is gone"; return 1; }
   # THE TREE MUST BE ONE OF $main's WORKTREES — settled BEFORE any probe reads
