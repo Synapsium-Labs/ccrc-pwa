@@ -4204,3 +4204,23 @@ describe('worker stall watch wave 2: the self-wake prefixes are spelled once (sp
     expect(ALL.filter((f) => spelling(lit).test(stallCode(f))).map(rel).sort(), `a second '${lit}'`).toEqual([home]);
   });
 });
+
+describe('one releasedFromOf (workspace lifecycle wave 1)', () => {
+  // `FleetSession.releasedFrom` has ONE reader, `releasedFromOf` in `shared/api.ts`. The live `fleet` frame is
+  // CAST, not revived, so a raw property read anywhere else meets `undefined` from a server older than the field,
+  // where the accessor answers `null` — the two-readers drift this suite exists to forbid. Comment LINES are
+  // blanked first (the field is NAMED in prose across the tree), line by line — `blankComments`' shape above. A
+  // block-comment regex is NOT safe here: a `/*` inside a string or a `//` line (`server.ts`'s `.cc-limits/*.json`)
+  // opens a "comment" that swallows hundreds of lines of real code, the `/ws/fleet` handler among them (measured).
+  const code = (f: string): string => readFileSync(f, 'utf8')
+    .split('\n').map((l) => (/^\s*(\*|\/\*|\/\/)/.test(l) ? '' : l)).join('\n');
+  const READ = /\.releasedFrom\b/;
+
+  it('is read as a property in exactly one file, and that file is shared/api.ts', () => {
+    expect(ALL.filter((f) => READ.test(code(f))).map(rel)).toEqual(['shared/api.ts']);
+  });
+
+  it('the scan sees the one read it licenses (a blanker that ate code would pass the pin above vacuously)', () => {
+    expect(code(path.join(ccrcRoot, 'shared', 'api.ts'))).toMatch(/return s\.releasedFrom \?\? null;/);
+  });
+});

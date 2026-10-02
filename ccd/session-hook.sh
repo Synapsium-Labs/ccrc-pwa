@@ -70,7 +70,7 @@ _hook_timeout() {
 # another event would not be noise; it would be an answer to a question nobody
 # asked. So this emitter is called from inside the SessionStart arm and nowhere
 # else; `_hook_deny_json` (the gate, D-1613) and `_hook_nudge_json` (the Read
-# nudge, D-1745) are BUILDERS called only inside a `$( )` from the PreToolUse
+# nudge, D-1745, and the landing advisory) are BUILDERS called only inside a `$( )` from the PreToolUse
 # arm, and whichever one the arm chose is printed from ONE site at the end of
 # the file, after the hookstate rename lands (D-1689) — at most one line per
 # event, never both. Every failure path in any of them prints NOTHING; this
@@ -3226,6 +3226,124 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
   fi
 fi
 
+# ── THE LANDING-ORDER ADVISORY (landing-order spec 2026-09-23 §5.1) ─────────
+# A Bash call that merges, pulls or rebases `main` into the current branch —
+# or asks GitHub to do the same from its side (the Update branch button's
+# `gh pr` verb, its REST route or its GraphQL mutation) — gets
+# `additionalContext` naming the three triggers worker clause 16 licenses an
+# absorption on, and the probe that measures the first. ADVICE, NEVER A
+# DECISION: 27% of the fleet's sync episodes (spec §1, item 8) came from
+# sessions that load no ccrc skill, and this text is the only thing those
+# sessions see; the call proceeds either way.
+#
+# OUTSIDE THE GRAPH ARM ON PURPOSE. That arm runs only when the hookstate
+# parsed, the session has not queried the graph, and the gate's kill-switch is
+# absent — three conditions that have nothing to do with a sync of main. So
+# this block reads none of them, and a test pins that it advises with the gate
+# switched off and the hookstate unreadable.
+#
+# ONE LINE PER EVENT, still (`pre_json`, printed once at the end of the file):
+# a deny or a nudge the graph arm already built wins, and this block says
+# nothing. They CAN meet on one call: the gate reads a search at the HEAD of
+# the line, so a compound `grep -rn x .; git merge origin/main` is a gated
+# search AND a sync. That is what the `-z "$pre_json"` conjunct is for, and a
+# test pins it: without it the advice would overwrite the deny after the arm
+# had already charged the session a denial for it.
+#
+# ORDER IS BUDGET, as in the arms above: the tool name is already in hand, the
+# glob tests over the raw payload cost no fork, and only a payload carrying
+# `main` or `origin` AND a sync verb, or GitHub's branch-update spelling, pays
+# the one jq that reads the command. The regexes are matched against the
+# COMMAND, never the payload, so a `Write` of a file that merely mentions a
+# merge stays silent.
+#
+# THE SHAPE: `git` IN COMMAND POSITION — at the start of the command or after
+# a separator (`;`, `&`, `|`, `(`, `{`, a newline), past any `VAR=value`
+# prefixes — then any global options (`-C <dir>`, `-c <k=v>`, `--no-pager`,
+# `--x=y`), one of the three verbs, any arguments, then `main`, `origin/main`,
+# `origin main`, `origin/HEAD` or `origin HEAD` (the slash forms may be quoted)
+# as a whole word. Command position is what keeps a MENTION silent: a commit
+# message, an `echo`, or a PR comment that quotes a sync puts a quote or a
+# word before `git` — unless the quoted text itself holds a separator, which
+# the regex cannot tell from a real one (the first limit below). The verb needs
+# whitespace after it, so `git merge-tree` (the probe itself) and `git
+# merge-base` never match.
+#
+# WHITESPACE INSIDE THE SHAPE IS `[[:blank:]]`, never `[[:space:]]`: a newline
+# separates commands, so it may begin one but never continue one. With the
+# wider class the arguments of one line ran on into the next, which advised on
+# `git pull` then `git push origin main` on the next line, and made a run of
+# newline-separated `git merge a` lines quadratic (3.5 s on 36 KB measured).
+#
+# EVERY TOKEN CLASS STOPS AT EVERY SEPARATOR: `[^[:space:];&|({]`, in the
+# arguments, the `-C` directory, the `--x=value` and the env-var value alike.
+# A separator opens a new start position, so a token that could run on across
+# one lets every start walk to the end of the line: quadratic again, for `(` and
+# `{` in the arguments (4.5 s on 39 KB measured), and for every separator in an
+# option or env-var value with no whitespace in it (5.7 s). The cost is a token
+# that holds a `(` or a `{` ends the walk, so those syncs are not advised (the
+# misses below). The timing pin runs every separator through every class.
+#
+# KNOWN MISSES AND LIMITS, each a deliberate trade for a hot path that forks
+# nothing. This is advice: a miss costs one ritual sync, which is the status
+# quo, and a false advice costs one sentence. The examples below were measured
+# against this regex; they are examples, not an exhaustive list.
+#   - It ADVISES on text it cannot read as text. A regex cannot see quoting or
+#     comments, so a separator INSIDE quoted text begins a "command": `echo
+#     "(git merge origin/main)"`, `git commit -m "docs: say when to sync; git
+#     merge origin/main only on a conflict"`, `gh pr comment 5 --body "fixed
+#     (git rebase origin/main was wrong)"`; so does a multi-line quoted string
+#     or heredoc whose own line begins with a sync command. A word inside `-m`
+#     matches as the target (`git merge -m "merge main into x" feature/x`), and
+#     so does a word in a trailing comment (`git merge --abort  # was
+#     origin/main`).
+#   - It ADVISES on updating a main checkout itself, which is no sync of a
+#     branch: `git checkout main && git pull origin main`, `git -C ~/proj pull
+#     --ff-only origin main`. Coordinators and operators do this routinely, and
+#     each is told it "brings main into the current branch".
+#   - It MISSES `git` behind a word: `if git merge origin/main; then`, `! git
+#     merge origin/main`, `time git ...`, `env VAR=x git ...`, `timeout 600 git
+#     pull origin main`, `for b in a; do git ...; done`, `sudo -u x git ...`,
+#     `command git ...`, a backtick substitution (`$(git ...)` advises: its `(`
+#     is a separator). Only a separator or a `VAR=value` prefix puts `git` in
+#     command position.
+#   - It MISSES a token it cannot walk: a quoted global-option value with a
+#     space (`git -C "/w/my demo" merge origin/main`, `git -c user.name="A B"
+#     merge ...`); any token holding a `(` or a `{` (`git -C "$(pwd)" merge
+#     origin/main`, `git merge -m "x (y)" origin/main`, a brace expansion);
+#     a redirection glued to the target (`git merge origin/main>/tmp/log`, the
+#     terminator class has no `>` or `<`).
+#   - It MISSES a ref spelled another way: a revision suffix (`origin/main~1`,
+#     `origin/main^0`), a full ref name (`refs/remotes/origin/main`), a refspec
+#     (`git pull origin main:main`), `FETCH_HEAD`, `git merge origin` (the
+#     remote's HEAD by default), or any local ref of another name.
+#   - It MISSES a sync split by a backslash line continuation (`git merge \`
+#     then `origin/main` on the next line).
+#
+# THE GITHUB BRANCH-UPDATE DETECTOR HAS NO COMMAND-POSITION RULE. The
+# MENTION-silence above belongs to the sync regex alone: a commit message or a
+# comment that merely quotes GitHub's branch-update verb, route or mutation
+# does advise. That is tolerated because the advice is advice only, and the
+# phrase is rare outside the call itself.
+LANDING_SYNC_RE='(^|[;&|({'$'\n''])[[:blank:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:];&|({]*[[:blank:]]+)*git([[:blank:]]+(-[Cc][[:blank:]]+[^[:space:];&|({]+|--[a-z-]+(=[^[:space:];&|({]+)?))*[[:blank:]]+(merge|pull|rebase)([[:blank:]]+[^[:space:];&|({]+)*[[:blank:]]+(origin/main|origin[[:blank:]]+main|origin/HEAD|origin[[:blank:]]+HEAD|main|"(origin/main|origin/HEAD|main)"|'\''(origin/main|origin/HEAD|main)'\'')([[:space:];&|)]|$)'
+LANDING_UB_RE='gh[[:space:]]+pr[[:space:]]+update-branch|/update-branch([^A-Za-z0-9_-]|$)|updatePullRequestBranch'
+if [[ "$event" == PreToolUse && -z "$pre_json" && "${tool:-}" == Bash ]] \
+   && [[ ( ( "$payload" == *main* || "$payload" == *origin* ) \
+           && ( "$payload" == *merge* || "$payload" == *pull* || "$payload" == *rebase* ) ) \
+         || "$payload" == *update-branch* || "$payload" == *updatePullRequestBranch* ]]; then
+  lcmd=$(jq -r '.tool_input.command // "" | tostring' \
+    <<<"$payload" 2>/dev/null) || lcmd=""
+  if [[ -n "$lcmd" ]] && { [[ "$lcmd" =~ $LANDING_SYNC_RE ]] || [[ "$lcmd" =~ $LANDING_UB_RE ]]; }; then
+    lreason='ccrc landing advisory: this command brings main into the current branch. Absorb main only on one of three triggers:'
+    lreason+=' (1) the branch conflicts — probe with `git fetch origin && git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD`: exit 1 with a tree id on the first line is a conflict, exit 0 is clean, and any other answer is unmeasured and licenses nothing;'
+    lreason+=' (2) a required check on the PR is red while main passes the same tests: re-run its failing test files on a clean checkout of `origin/HEAD` in scratch, and a red there too is a red main also shows (report it once as main-red and leave main alone);'
+    lreason+=" (3) the coordinator's fix-round mail names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository."
+    lreason+=' Otherwise leave main alone: a clean branch lands as it is, and every needless sync restarts CI.'
+    lreason+=' When you do absorb: `git merge` only — never a rebase, a force-push or the Update branch of GitHub (its button, `gh pr` verb or API) — and on a conflict in a `# ccrc:generated` stamp line, take either side of that line only, resolve the rest of the file as source, then run `~/.local/bin/ccrc restamp <file>`.'
+    pre_json=$(_hook_nudge_json "$lreason") || pre_json=""
+  fi
+fi
+
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
   now=$(_hook_epoch_ms)
@@ -3274,7 +3392,7 @@ tmp="$REG/.$id.$$.hookstate.tmp"
 { printf '%s\n' "$out" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; exit 0; }
 mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
 # The one PreToolUse envelope this file ever prints — a deny (R5) or a nudge
-# (R6) — and only now: the count a deny names is on disk, so the next event
+# (R6, or the landing advisory) — and only now: the count a deny names is on disk, so the next event
 # will see it (D-1689). The nudge counts nothing, but it shares this site so
 # that neither branch can ever print from inside the arm.
 [ -z "$pre_json" ] || printf '%s\n' "$pre_json"

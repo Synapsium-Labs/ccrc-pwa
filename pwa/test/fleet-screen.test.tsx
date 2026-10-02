@@ -90,7 +90,7 @@ const session = (over: Partial<FleetSession> = {}): FleetSession => ({
   limits: { five: 10, seven: 40 },
   dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' },
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
   version: '2.1.0',
   ...over,
 });
@@ -2787,6 +2787,94 @@ describe('a malformed /api/updates element does not blank the fleet screen (F11)
     expect(document.querySelector('.build-line')?.textContent).toContain('server v0.0.7');
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
+  });
+});
+
+describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', () => {
+  const rel = (closedAt: number, child = false) =>
+    ({ runId: closedAt, program: 'lifecycle', programTitle: null, claimedBy: 'coord', closedAt, child });
+
+  it('opens on its own key, confirms once, archives each non-child row with its id alone, and reports in one toast', async () => {
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
+    const archive = vi.spyOn(api, 'archive')
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('busy: a turn is in progress'));
+    const store = makeStore();
+    render(<><FleetScreen store={store} /><ToastHost /></>);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a-one', project: 'alpha', workspace: 'one', bucket: 'idle', releasedFrom: rel(300) }),
+        session({ id: 'a-two', project: 'alpha', workspace: 'two', bucket: 'idle', releasedFrom: rel(200) }),
+        session({ id: 'a-kid', project: 'alpha', workspace: 'kid', bucket: 'idle', releasedFrom: rel(100, true) }),
+      ],
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /released \(3\)/i }));
+    expect(window.localStorage.getItem('ccrc.fleet-folded.v1')).toContain('alpha::released');
+    fireEvent.click(screen.getByRole('button', { name: 'Archive all 2 released workspaces in alpha' }));
+    expect(archive).not.toHaveBeenCalled();                       // the confirm comes first
+    expect(await screen.findByText(/2 of them still have a live pane, which is stopped/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive 2' }));
+    await waitFor(() => expect(archive).toHaveBeenCalledTimes(2));
+    expect(archive.mock.calls).toEqual([['a-one'], ['a-two']]);
+    // The child was handed to the loop and skipped by it, so "skipped" agrees with the card's own note.
+    expect(await screen.findByText('Archived 1, skipped 1, refused 1: a-two — busy: a turn is in progress')).toBeInTheDocument();
+    // A refusal's toast carries an action, which keeps it up until it is read.
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
+    // And the button comes back: the in-flight mark is cleared when the loop ends. (No frame arrived, so the store
+    // still holds both rows the loop sent.)
+    expect(await screen.findByRole('button', { name: 'Archive all 2 released workspaces in alpha' })).toBeEnabled();
+  });
+
+  it('archives a PLACED row from the card it renders on', async () => {
+    // The in-flight guard itself is pinned by archive-all-guard.test.tsx: here the real sheet unmounts after the first click.
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
+    const archive = vi.spyOn(api, 'archive').mockResolvedValue(undefined);
+    const store = makeStore();
+    render(<><FleetScreen store={store} /><ToastHost /></>);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        // Rendered on `alpha`'s card, though its own project is `beta`.
+        session({ id: 'b-one', project: 'beta', boardProject: 'alpha', workspace: 'one', bucket: 'idle', releasedFrom: rel(300) }),
+      ],
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /released \(1\)/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Archive all 1 released workspace in alpha' }));
+    const go = await screen.findByRole('button', { name: 'Archive 1' });
+    fireEvent.click(go);
+    expect(await screen.findByText('Archived 1, skipped 0, refused 0.')).toBeInTheDocument();
+    expect(archive.mock.calls).toEqual([['b-one']]);
+    // A SECOND loop on the same card runs: the in-flight guard is released when the first one ends.
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive all 1 released workspace in alpha' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive 1' }));
+    await waitFor(() => expect(archive.mock.calls).toEqual([['b-one'], ['b-one']]));
+  });
+
+  it('re-reads each row from the NEWEST frame: a row that starts a turn mid-loop is skipped, not archived', async () => {
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
+    const store = makeStore();
+    const archive = vi.spyOn(api, 'archive').mockImplementation(async (id: string) => {
+      // The first archive lands while `a-two` starts working: the next read must see the new frame.
+      if (id === 'a-one') {
+        seed(store, { sessions: [
+          session({ id: 'a-two', project: 'alpha', workspace: 'two', bucket: 'working', releasedFrom: rel(200) }),
+        ] });
+      }
+    });
+    render(<><FleetScreen store={store} /><ToastHost /></>);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'a-one', project: 'alpha', workspace: 'one', bucket: 'idle', releasedFrom: rel(300) }),
+        session({ id: 'a-two', project: 'alpha', workspace: 'two', bucket: 'idle', releasedFrom: rel(200) }),
+      ],
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /released \(2\)/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Archive all 2 released workspaces in alpha' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive 2' }));
+    expect(await screen.findByText('Archived 1, skipped 1, refused 0.')).toBeInTheDocument();
+    expect(archive.mock.calls).toEqual([['a-one']]);
   });
 });
 

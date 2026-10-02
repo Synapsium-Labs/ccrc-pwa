@@ -7,6 +7,7 @@ import { decideAllocation } from './ledger.js';
 // policy — the house port pattern. This read exists to feed that policy and
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
+import type { LastRun } from './released.js';
 // Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
@@ -725,6 +726,12 @@ export type StallObservation =
 
 export type CoordPlacementStampsResult =
   | { ok: true; stamps: CoordPlacementStamp[] }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
+
+/** `lastRunBySession`'s answer (workspace lifecycle spec §5.1): each asked session's newest run as `sessionId`,
+ *  the asked sessions a non-terminal run names as `sessionId`, and every `claimedBy` of a non-terminal run. */
+export type LastRunsResult =
+  | { ok: true; last: LastRun[]; openWorkers: string[]; openClaimants: string[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
 export type AskReadResult =
@@ -3001,6 +3008,48 @@ export class CoordStore {
       'SELECT DISTINCT claimedBy FROM runs ' +
       `WHERE claimedBy IS NOT NULL AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
+  }
+
+  /**
+   * The run facts `FleetSession.releasedFrom` is decided from (workspace lifecycle spec §5.1), for the sessions
+   * one fleet assembly describes — ONE call per assembly, never one per row, beside `coordPlacementStamps`.
+   * That read cannot answer this: it filters to `coordProject IS NOT NULL` and carries no state.
+   * `openRunsForSession` is per-session and reserved for destructive decision points.
+   *
+   * Three statements, one synchronous call: nothing else writes `coord.db` between them. The claimant set is
+   * `openCoordinatorIds`' own read, reused rather than respelled.
+   *
+   * `id` rides CAST to TEXT and proven, ALL-OR-FAILURE (D-2545's rule, `openRunsForSession`'s): a partial list
+   * is how a session's newest run could silently read as an older, terminal one. `closedAt` is proven PER ROW
+   * instead: an unreadable close time makes that one session's `LastRun.closedAt` null, which `releasedFrom`
+   * reads as doubt, and costs no other row its answer.
+   */
+  lastRunBySession(sessionIds: readonly string[]): LastRunsResult {
+    if (sessionIds.length === 0) return { ok: true, last: [], openWorkers: [], openClaimants: [] };
+    const ph = placeholders(sessionIds.length);
+    const rows = this.db.prepare(
+      'SELECT CAST(r.id AS TEXT) AS idText, r.sessionId, r.state, r.program, p.title AS programTitle, ' +
+      'r.claimedBy, CAST(r.closedAt AS TEXT) AS closedAtText FROM runs r ' +
+      'LEFT JOIN programs p ON p.slug = r.program ' +
+      `WHERE r.id IN (SELECT MAX(id) FROM runs WHERE sessionId IN (${ph}) GROUP BY sessionId) ORDER BY r.id`,
+    ).all(...sessionIds) as unknown as {
+      idText: string; sessionId: string; state: string; program: string; programTitle: string | null;
+      claimedBy: string | null; closedAtText: string | null;
+    }[];
+    const last: LastRun[] = [];
+    for (const r of rows) {
+      const id = persistedInt(r.idText, 'run id');
+      if (!id.ok) return { ok: false, kind: 'run-unreadable', detail: id.detail };
+      const closed = r.closedAtText === null ? null : persistedInt(r.closedAtText, 'closedAt');
+      last.push({
+        sessionId: r.sessionId, runId: id.value, state: r.state, program: r.program,
+        programTitle: r.programTitle, claimedBy: r.claimedBy, closedAt: closed !== null && closed.ok ? closed.value : null,
+      });
+    }
+    const openWorkers = (this.db.prepare(
+      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
+    ).all(...sessionIds) as { sessionId: string }[]).map((r) => r.sessionId);
+    return { ok: true, last, openWorkers, openClaimants: this.openCoordinatorIds() };
   }
 
   /** `detail` joins the SELECT (fix, found in Task 9 review — D-47): `advance`
