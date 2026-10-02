@@ -16,7 +16,7 @@
 // tappable path would promise a fetch this surface does not have.
 import { useState, type ReactNode } from 'react';
 import type { TaskNotification } from '../../../shared/api';
-import './chat.css';
+import './task-card.css';
 
 /** `completed` and `failed` are the two the harness writes today, and an
  *  unknown word is shown AS WRITTEN rather than bucketed: a status this code

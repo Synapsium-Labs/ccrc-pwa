@@ -198,17 +198,73 @@ export function blockBody(src, open) {
 export const customProps = (body) =>
   Object.fromEntries([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
 
-/** Both theme palettes, parsed. The light theme is an OVERRIDE block, not a
- *  full palette: the wells, the syntax palette and every --syn-* value are
- *  declared once in :root and deliberately never re-declared. Spreading dark
- *  under light is what makes `[data-theme='light']` resolve the way a browser
- *  resolves it. */
+/** Every `[data-theme='…']` palette declared in tokens.css, DISCOVERED.
+ *
+ *  Not a list. A hand-kept roster of palettes-to-measure is the same drift
+ *  class as a hand-kept roster of stylesheets or of colours, and it fails the
+ *  same way: a palette nobody added to the list is a palette nothing measures,
+ *  while the gate prints ALL PASS. That is precisely how src/styles/base.css
+ *  went unaudited (verify2-css P3), and a palette is a worse thing to miss —
+ *  a theme is an OVERRIDE block, so one that forgets a token silently inherits
+ *  :root's value for it, which is how a dark-tuned translucent tint ends up
+ *  composited over a light surface.
+ *
+ *  THE SELECTOR IS MATCHED WHOLE. A substring search for `[data-theme='light']`
+ *  also matches `[data-theme='solarized-light']`, which would read one
+ *  palette's body as another's.
+ *
+ *  EVERY matching block is collected, not just the first, and they merge in
+ *  SOURCE ORDER — the cascade's own rule. With two themes nobody had written a
+ *  second block for the same name; at eleven, a palette plus a later override
+ *  of two of its tokens is an ordinary thing to write, and taking only the
+ *  first block would silently drop the override. A COMPOUND selector
+ *  (`[data-theme='x'][data-acct='y']`) deliberately does not match: it is not a
+ *  palette, it is a rebinding, and `:root`'s own [data-acct] rules already
+ *  carry those. */
+const themeNames = (tokens) => {
+  const found = [];
+  for (const m of tokens.matchAll(/\[data-theme=['"]([a-z0-9-]+)['"]\]\s*\{/gi)) {
+    const name = String(m[1]).toLowerCase();
+    if (!found.includes(name)) found.push(name);
+  }
+  return found;
+};
+
+/** The merged body of every block whose selector is EXACTLY this theme. */
+const themeBody = (tokens, name) => {
+  const open = new RegExp(`\\[data-theme=['"]${rx(name)}['"]\\]\\s*\\{`, 'gi');
+  let merged = {};
+  for (const m of tokens.matchAll(open)) {
+    const body = balancedAt(tokens, m.index);
+    if (body === null) throw new Error(`unbalanced braces after [data-theme='${name}']`);
+    merged = { ...merged, ...customProps(body) };
+  }
+  return merged;
+};
+
+/** The palettes, parsed. A theme is an OVERRIDE block, not a full palette:
+ *  the wells, the syntax palette and every --syn-* value are declared once in
+ *  :root and deliberately never re-declared. Spreading :root under each theme
+ *  is what makes `[data-theme='…']` resolve the way a browser resolves it.
+ *
+ *  `DARK` and `LIGHT` stay named on the result because they are the two the
+ *  token-pair contract and dozens of registry comments speak of by name;
+ *  `all` is the full set every measurement actually loops over. */
 export function loadThemes(root = PWA_ROOT) {
   // tokens.css lives in @ccrc/ui — it is the design system's, not the app's.
   const tokens = readCss(root, '../ui/src/styles/tokens.css');
   const DARK = customProps(blockBody(tokens, ':root'));
-  const LIGHT = { ...DARK, ...customProps(blockBody(tokens, "[data-theme='light']")) };
-  return { DARK, LIGHT };
+  const names = themeNames(tokens);
+  if (!names.includes('light')) throw new Error('tokens.css declares no light theme');
+  const byName = Object.fromEntries(names.map((n) => [n, { ...DARK, ...themeBody(tokens, n) }]));
+  const label = (n) => n.toUpperCase().padEnd(5).slice(0, Math.max(5, n.length));
+  return {
+    DARK,
+    LIGHT: byName['light'],
+    byName,
+    /** `[label, palette]` for every palette the app can render, :root first. */
+    all: [['DARK ', DARK], ...names.map((n) => [label(n), byName[n]])],
+  };
 }
 
 // ── WCAG 2.1 maths ──────────────────────────────────────────────────────────
@@ -494,7 +550,7 @@ export function variantSuffix(sel, base) {
  *  `floor` defaults to the 4.5 body-text floor. */
 export const GROUNDS = {
   // The EXIT pill's tint is 12% alpha and rides a tool/message card.
-  'chat.css .exit-badge': { under: ['var(--bg-surface)'], why: 'card ground; the same pair the gate calls "EXIT-badge pill". Measured on all five plausible grounds: it clears on surface (4.81) and sheet (4.81) but reads 4.44 on page and 4.14 on raised, so this choice IS load-bearing — .toolcard (chat.css) and .tool-ask both set background: var(--bg-surface)' },
+  'tool-card.css .exit-badge': { under: ['var(--bg-surface)'], why: 'card ground; the same pair the gate calls "EXIT-badge pill". Measured on all five plausible grounds: it clears on surface (4.81) and sheet (4.81) but reads 4.44 on page and 4.14 on raised, so this choice IS load-bearing — .toolcard (tool-card.css) and .tool-ask both set background: var(--bg-surface)' },
   // Markdown tables and the terminal keycaps use an ink-tinted transparent
   // wash over whatever they sit on.
   'chat.css .msg-assist thead th': { under: ['var(--bg-page)'], why: 'assistant messages have no fill of their own' },
@@ -504,7 +560,7 @@ export const GROUNDS = {
   'chat.css .pending-actions button': { under: ['var(--bg-page)'], why: 'ghost button in the message column; chat.css:16 paints the screen --bg-page. Clears on every plausible ground' },
   'chat.css .code-block-copy': { under: ['var(--well-bar-bg)'], why: 'the copy affordance sits in the code block BAR (.code-block-bar, background --well-bar-bg — 5% ink over the well), not on the bare well: MessageBubble.tsx renders it inside that div. The entry used to say --bg-well, which flattered every ratio here by ~0.3; the bar is the pixels behind it. Load-bearing either way — it reads 1.10-1.29 on page / surface / raised / sheet' },
   'chat.css .compaction-head': { under: ['var(--bg-page)'], why: 'a full-width divider in the message column. Clears on every plausible ground' },
-  'chat.css .task-card-toggle': { under: ['var(--bg-surface)'], why: 'the disclosure is rendered INSIDE .task-card (TaskCard.tsx), which paints background: var(--bg-surface) — the same ground .mail-card gives its own contents' },
+  'task-card.css .task-card-toggle': { under: ['var(--bg-surface)'], why: 'the disclosure is rendered INSIDE .task-card (TaskCard.tsx), which paints background: var(--bg-surface) — the same ground .mail-card gives its own contents' },
 };
 
 /** Rules exempt from the contrast audit, each with the reason. WCAG 1.4.3
@@ -522,13 +578,28 @@ export const SELF_GROUNDED_EXEMPT = {
   // above are exempt for; this one only became visible when variants that
   // override `color` DIRECTLY started being measured (final2-gates F1), and it
   // is exempt for the same clause, not a new judgement.
-  'chat.css .attach-strip': "the ground is the user's own image, so no ratio is computable; the rule IS the mitigation (a scrim gradient under --ink-on-well)",
+  'attach-tray.css .attach-strip': "the ground is the user's own image, so no ratio is computable; the rule IS the mitigation (a scrim gradient under --ink-on-well)",
 };
 
 /** Rules that set a colour and inherit their ground from the DOM. The GROUND
  *  is hand-written (a parser cannot recover it); the COLOUR is read from the
  *  stylesheet, so retinting the rule re-measures it. */
 export const INHERITED_GROUNDS = {
+  // ── the theme picker (SettingsScreen.tsx, Appearance) ───────────────────
+  // `.settings-theme-name` is the palette's name in the picker row. It sets an
+  // ink and paints no ground of its own, and it has TWO grounds rather than
+  // one: an unselected row inherits the settings screen's page, and the
+  // selected row paints `--accent-tint` (fleet.css `.settings-theme[data-active]`).
+  // Both are registered because the row moves between them on every tap —
+  // grounding it on the page alone would leave the one state a user is looking
+  // at when they change themes unmeasured, which is the state that matters.
+  // `--ink-primary` on `--accent-tint` is already a gated token pair in every
+  // palette (contrast-check.mjs's contract), so this adds a use site, not a
+  // new combination.
+  'fleet.css .settings-theme-name': {
+    under: ['var(--bg-page)', 'var(--accent-tint)'],
+    why: 'the theme row\'s label: unselected it inherits the settings page, selected its row paints --accent-tint',
+  },
   // ── the task card and the compaction card (PR #89) ──────────────────────
   // Seven rules that set a colour and paint no ground. Their hosts DO paint
   // one — `.task-card` and `.compaction` both set `background: var(--bg-surface)`
@@ -546,27 +617,27 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'the raw body of a compaction card. `.compaction` (chat.css:1207) paints background: var(--bg-surface) and `.compaction-body` adds only padding and a top border, so the card fill is what is behind this text. Its selector names no painted ancestor',
   },
-  'chat.css .task-card-glyph': {
+  'task-card.css .task-card-glyph': {
     under: ['var(--bg-surface)'],
     why: 'the task card\'s leading glyph, rendered inside .task-card (TaskCard.tsx), which paints background: var(--bg-surface). Same ground and same reason as the .task-card-toggle entry already in GROUNDS; its selector names no painted ancestor',
   },
-  'chat.css .task-card-status': {
+  'task-card.css .task-card-status': {
     under: ['var(--bg-surface)'],
     why: 'the status chip in .task-card-head. It draws a border and no fill, so the card\'s --bg-surface is behind it; its selector names no painted ancestor',
   },
-  'chat.css .task-card-status--ok': {
+  'task-card.css .task-card-status--ok': {
     under: ['var(--bg-surface)'],
     why: 'the ok variant retints the chip to --status-busy-text over the same card ground. A grouped or variant selector still names no painted ancestor, so it needs its own registration',
   },
-  'chat.css .task-card-status--bad': {
+  'task-card.css .task-card-status--bad': {
     under: ['var(--bg-surface)'],
     why: 'the bad variant retints the chip to --status-dead-text over the same card ground. Registered separately from the base chip for the same reason the .proj-card-pool attention states are',
   },
-  'chat.css .task-card-field dt': {
+  'task-card.css .task-card-field dt': {
     under: ['var(--bg-surface)'],
     why: 'the field label in .task-card-fields. `.task-card-field` sets display and gap only, so the ground is still the card\'s --bg-surface; naming .task-card-field in the selector does not help, because the descendant route requires a SELF-GROUNDED host and that rule paints nothing',
   },
-  'chat.css .task-card-field dd': {
+  'task-card.css .task-card-field dd': {
     under: ['var(--bg-surface)'],
     why: 'the field value, same host and same ground as its dt. It scrolls within a max-height but paints no fill of its own',
   },
@@ -626,27 +697,27 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the raw body of a `system` compaction card is rendered as `<pre class=\"compaction-body compaction-raw\">` INSIDE the card (MessageBubble.tsx:285), and .compaction-body paints nothing — the ground is .compaction's own `background: var(--bg-surface)` (chat.css:1223), the same ground .compaction-head is registered against in GROUNDS. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
-  'chat.css .task-card-glyph': {
+  'task-card.css .task-card-glyph': {
     under: ['var(--bg-surface)'],
-    why: "the clock glyph sits in .task-card-head inside <article class=\"task-card\"> (TaskCard.tsx:39-40), which paints `background: var(--bg-surface)` (chat.css:1286) — the same ground .task-card-toggle is registered against. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+    why: "the clock glyph sits in .task-card-head inside <article class=\"task-card\"> (TaskCard.tsx:39-40), which paints `background: var(--bg-surface)` (task-card.css) — the same ground .task-card-toggle is registered against. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
-  'chat.css .task-card-status': {
+  'task-card.css .task-card-status': {
     under: ['var(--bg-surface)'],
-    why: "the status chip is the last cell of .task-card-head inside <article class=\"task-card\"> (TaskCard.tsx:46); its own `border` is the whole fill it has, so the pixels behind its ink are the card's `background: var(--bg-surface)` (chat.css:1286)",
+    why: "the status chip is the last cell of .task-card-head inside <article class=\"task-card\"> (TaskCard.tsx:46); its own `border` is the whole fill it has, so the pixels behind its ink are the card's `background: var(--bg-surface)` (task-card.css)",
   },
-  'chat.css .task-card-status--ok': {
+  'task-card.css .task-card-status--ok': {
     under: ['var(--bg-surface)'],
     why: "the done tone of that same chip (TaskCard.tsx:29, applied beside .task-card-status), on the same task-card ground (chat.css:1286). It overrides `color` DIRECTLY, so it is measured in its own right rather than inheriting the base chip's measurement",
   },
-  'chat.css .task-card-status--bad': {
+  'task-card.css .task-card-status--bad': {
     under: ['var(--bg-surface)'],
     why: "the failed tone of that same chip (TaskCard.tsx:30), on the same task-card ground (chat.css:1286). It overrides `color` DIRECTLY, so it is measured in its own right rather than inheriting the base chip's measurement",
   },
-  'chat.css .task-card-field dt': {
+  'task-card.css .task-card-field dt': {
     under: ['var(--bg-surface)'],
-    why: "the field NAME of a task card's definition list: <dt> inside .task-card-field inside .task-card-fields inside <article class=\"task-card\"> (TaskCard.tsx:63-67). Neither list level paints anything, so the ground is the card's `background: var(--bg-surface)` (chat.css:1286)",
+    why: "the field NAME of a task card's definition list: <dt> inside .task-card-field inside .task-card-fields inside <article class=\"task-card\"> (TaskCard.tsx:63-67). Neither list level paints anything, so the ground is the card's `background: var(--bg-surface)` (task-card.css)",
   },
-  'chat.css .task-card-field dd': {
+  'task-card.css .task-card-field dd': {
     under: ['var(--bg-surface)'],
     why: "the field VALUE beside that name (TaskCard.tsx:68), on the same task-card ground (chat.css:1286). It scrolls inside its own box but paints no background of its own, so the card is still what is behind the ink",
   },
@@ -746,15 +817,15 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: "routing slice 6, whole-branch review M1: the model picker's 'serving <class> (share ceiling)' note, rendered in the same .opt row as .opt-inert above and therefore on the same .sheet-panel ground. Registered for the same reason and by the same argument: its selector names no painted ancestor, so the auditor cannot recover the ground from CSS alone, but a reader of PickSheet.tsx can — leaving it in the uncovered census would call a knowable ground unmeasurable.",
   },
-  'fleet.css .build-line': {
+  'build-line.css .build-line': {
     under: ['var(--bg-surface)'],
     why: "release/rollout Task 7, corrected fix round 1 (F15): the foot-of-screen build stamp is rendered as the last child of FleetScreen's own <main class=\"fleet\"> (FleetScreen.tsx), and .fleet (fleet.css:10) sets only sizing/padding — no background of its own. But FleetScreen is always mounted inside app.tsx's <aside className=\"shell-nav\">, and at the desktop breakpoint (min-width: 900px) .shell-nav DOES paint one, --bg-surface (styles/shell.css:131-155) — an ancestor the old claim ('no ancestor … paints a background') denied existed. Registered against that ground because it is the one an ancestor actually paints; at the mobile breakpoint .shell-nav sets no background of its own and falls through to the app shell's --bg-page instead, separately re-measured safe (6.23:1 dark / 5.25:1 light for --ink-tertiary on it — corrected fix round 2, review of d5aefc4a item 8: this entry previously misquoted --status-attention-text's 10.89/5.45 pair here instead of --ink-tertiary's own, both clearing the 4.5 floor) rather than registered, since the auditor takes one ground per rule.",
   },
-  'fleet.css .build-line-side--warn': {
+  'build-line.css .build-line-side--warn': {
     under: ['var(--bg-surface)'],
     why: "the amber variant of the same build-line span (unversioned/dirty/unknown side), on the same real ground as the base rule above — corrected the same way, fix round 1 (F15). Registered separately because it overrides `color` directly, the same reason .task-card-status--ok/--bad are registered beside their base chip rather than assumed to inherit its measurement.",
   },
-  'fleet.css .build-line-next': {
+  'build-line.css .build-line-next': {
     under: ['var(--bg-surface)'],
     why: "centralised-update W3 Task 12, corrected fix round 1 (F15): BuildLine's ' → vX' affix, a span inside a .build-line-side span inside .build-line, the last child of FleetScreen's own <main class=\"fleet\">, itself always inside app.tsx's <aside className=\"shell-nav\">. The old claim — 'no ancestor between it and the app shell paints a background' — was false on desktop: .shell-nav paints --bg-surface there (styles/shell.css:131-155), the same corrected ground as the two build-line rules above. Re-measured 10.09:1 dark / 5.92:1 light for --status-attention-text on it, both clearing the 4.5 floor. Mobile's .shell-nav sets no background and falls through to --bg-page instead (also safe, 10.89:1 dark / 5.45:1 light), not registered for the same one-ground-per-rule reason the base rule's entry gives.",
   },
@@ -834,13 +905,13 @@ export const OPACITY_REGISTRY = {
   'chat.css .pending-actions .pending-send-it:disabled 0.6': {
     noText: 'WCAG 1.4.3 exempts inactive controls; the button is only disabled for the moment its own Enter is in flight',
   },
-  "chat.css .attach-chip[data-state='uploading'] .attach-thumb 0.55": {
+  "attach-tray.css .attach-chip[data-state='uploading'] .attach-thumb 0.55": {
     noText: 'an <img> upload preview; the uploading state is also carried by the ::before ring',
   },
-  'chat.css .tool-dot--run 0.8': {
+  'tool-card.css .tool-dot--run 0.8': {
     pairs: [['running tool dot on a card', 'var(--status-busy)', ['var(--bg-surface)'], 3]],
   },
-  'chat.css .task-mark--running 0.85': {
+  'task-strip.css .task-mark--running 0.85': {
     pairs: [['the breathing task mark on a card', 'var(--status-busy-text)', ['var(--bg-surface)'], 4.5]],
   },
   'chat.css .term-overlay--connecting .term-overlay-word 0.8': {
@@ -882,13 +953,13 @@ export const KEYFRAME_TROUGHS = {
   'theme.css dot-breathe 0.55': 'status lamps (.dot--busy, .dot--attention). Reduced motion: animation none, opacity 0.85 — registered and measured above',
   'theme.css skel-shimmer 1': 'a background-position shimmer; the stops set no opacity below 1',
   'theme.css toast-in 0': 'a one-shot entrance from opacity 0; the resting state is opacity 1',
-  'chat.css task-breathe 0.55': 'the running task mark (.task-mark--running). Reduced motion: animation none, opacity 0.85 — registered and measured above',
+  'task-strip.css task-breathe 0.55': 'the running task mark (.task-mark--running). Reduced motion: animation none, opacity 0.85 — registered and measured above',
   'chat.css jump-in 0': 'a one-shot entrance for the jump-to-latest button; the resting state is opacity 1',
   'chat.css caret-blink 0': 'the terminal caret, a step-end blink between 1 and 0. A caret is a cursor, not content',
   'chat.css working-glyph 0.35': 'the working indicator glyph (.msg-working-glyph). Reduced motion: animation none, opacity 1',
   'chat.css working-dot 0.25': 'the three working dots (.msg-working-dots i), 4px decorative pips beside a full-strength label. Reduced motion: animation none, opacity inherits 1',
-  'chat.css tool-breathe 0.55': 'the running tool dot (.tool-dot--run) and the terminal "attaching" word. Reduced motion: animation none, opacity 0.8 for both — registered and measured above',
-  'chat.css attach-spin 1': 'a rotation; the stops set no opacity',
+  'chat.css tool-breathe 0.55': 'the running tool dot (.tool-dot--run, @ccrc/ui tool-card.css — the keyframe stayed here because its other consumer did) and the terminal "attaching" word. Reduced motion: animation none, opacity 0.8 for both — registered and measured above',
+  'attach-spin.css attach-spin 1': 'a rotation; the stops set no opacity',
 };
 
 /** Every @keyframes block, with the lowest opacity any of its stops sets. */
@@ -935,8 +1006,10 @@ export function opacityNumber(raw) {
  * the gate and the suite.
  */
 export function audit(root = PWA_ROOT) {
-  const { DARK, LIGHT } = loadThemes(root);
-  const THEMES = [['DARK ', DARK], ['LIGHT', LIGHT]];
+  const { DARK, LIGHT, byName, all } = loadThemes(root);
+  // EVERY palette, not the two that have names in prose. A theme that is not
+  // in this loop is a theme nothing measures.
+  const THEMES = all;
   const sheets = stylesheets(root);
   const rules = sheets.flatMap((rel) => rulesOf(root, rel));
 
@@ -1311,7 +1384,7 @@ export function audit(root = PWA_ROOT) {
 
   return {
     sheets,
-    themes: { DARK, LIGHT },
+    themes: { DARK, LIGHT, byName },
     measured,
     problems,
     stale,

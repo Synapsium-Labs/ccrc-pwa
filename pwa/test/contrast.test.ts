@@ -123,19 +123,6 @@ function runGate(dir: string = ROOT): { status: number | null; stdout: string } 
 // D-2689 freezes identities from this green audit run. A blind spot may disappear,
 // but an added identity must be measured or explicitly registered before it ships.
 const GRANDFATHERED_UNCOVERED = new Set([
-  'primitives.css .dot--busy',
-  'primitives.css .dot--attention',
-  'primitives.css .dot--idle',
-  'primitives.css .dot--dead',
-  'primitives.css .dot--done',
-  'primitives.css .dot--cleanup',
-  'primitives.css .limit-row',
-  'primitives.css .sheet-panel--full .sheet-eyebrow',
-  'primitives.css .sheet-eyebrow',
-  'primitives.css .sheet-title',
-  'primitives.css .qc-consequence',
-  'primitives.css .toast--error::before',
-  'primitives.css .toast-action',
   'fleet.css .wordmark',
   'fleet.css .wordmark::before',
   'fleet.css .fleet-count',
@@ -278,19 +265,19 @@ const GRANDFATHERED_UNCOVERED = new Set([
   'chat.css .menu-item',
   'chat.css .menu-hint',
   'chat.css .menu-item--danger .menu-label',
-  'chat.css .task-head',
-  'chat.css .task-mark',
-  'chat.css .task-mark--running',
-  'chat.css .task-chevron',
-  'chat.css .task-summary',
-  'chat.css .task-line',
-  'chat.css .task-glyph',
-  'chat.css .task-row--in_progress .task-glyph',
-  'chat.css .task-row--completed .task-subject',
-  'chat.css .task-row--completed .task-glyph',
-  'chat.css .task-detail',
-  'chat.css .task-fold',
-  'chat.css .task-fold:active',
+  'task-strip.css .task-head',
+  'task-strip.css .task-mark',
+  'task-strip.css .task-mark--running',
+  'task-strip.css .task-chevron',
+  'task-strip.css .task-summary',
+  'task-strip.css .task-line',
+  'task-strip.css .task-glyph',
+  'task-strip.css .task-row--in_progress .task-glyph',
+  'task-strip.css .task-row--completed .task-subject',
+  'task-strip.css .task-row--completed .task-glyph',
+  'task-strip.css .task-detail',
+  'task-strip.css .task-fold',
+  'task-strip.css .task-fold:active',
   'chat.css .ts-divider',
   'chat.css .sys-divider--restart',
   'chat.css .sys-divider--stalled',
@@ -328,17 +315,17 @@ const GRANDFATHERED_UNCOVERED = new Set([
   'chat.css .compaction-head:hover .compaction-hint',
   'chat.css .msg-working',
   'chat.css .msg-working-glyph',
-  'chat.css .tool-name',
-  'chat.css .tool-sum',
-  'chat.css .tool-dur',
-  'chat.css .tool-chev',
-  'chat.css .tool-eyebrow',
-  'chat.css .tool-meta',
-  'chat.css .tool-cut',
-  'chat.css .tool-ask-q',
-  'chat.css .tool-ask-outlabel',
-  'chat.css .ask-state.ask-live',
-  'chat.css .ask-state.ask-unanswered',
+  'tool-card.css .tool-name',
+  'tool-card.css .tool-sum',
+  'tool-card.css .tool-dur',
+  'tool-card.css .tool-chev',
+  'tool-card.css .tool-eyebrow',
+  'tool-card.css .tool-meta',
+  'tool-card.css .tool-cut',
+  'tool-card.css .tool-ask-q',
+  'tool-card.css .tool-ask-outlabel',
+  'tool-card.css .ask-state.ask-live',
+  'tool-card.css .ask-state.ask-unanswered',
   'chat.css .prompt-glyph',
   'chat.css .composer-input',
   // The vendored preflight's own placeholder default (@ccrc/ui's reset.css),
@@ -352,23 +339,23 @@ const GRANDFATHERED_UNCOVERED = new Set([
   // below and measured where it actually renders.
   'reset.css ::placeholder',
   'chat.css .composer-input::placeholder',
-  'chat.css .attach-btn',
-  'chat.css .attach-btn:disabled',
-  'chat.css .attach-btn[aria-busy=\'true\']',
+  'attach-button.css .attach-btn',
+  'attach-button.css .attach-btn:disabled',
+  'attach-button.css .attach-btn[aria-busy=\'true\']',
   'chat.css .composer[data-disabled=\'true\'] .prompt-glyph',
   'chat.css .composer[data-disabled=\'true\'] .composer-input::placeholder',
   'chat.css .draft-copy',
   'chat.css .draft-cancel',
   'chat.css .draft-cancel:active',
-  'chat.css .opt',
-  'chat.css .opt:disabled:not([aria-busy=\'true\']), .opt[aria-disabled=\'true\']',
-  'chat.css .opt:disabled:not([aria-busy=\'true\']) .opt-glyph, .opt:disabled:not([aria-busy=\'true\']) .opt-idx, .opt:disabled:not([aria-busy=\'true\']) .opt-enter, .opt[aria-disabled=\'true\'] .opt-glyph, .opt[aria-disabled=\'true\'] .opt-idx, .opt[aria-disabled=\'true\'] .opt-enter',
-  'chat.css .opt-glyph',
-  'chat.css .opt-idx',
-  'chat.css .opt-desc',
+  'option-row.css .opt',
+  'option-row.css .opt:disabled:not([aria-busy=\'true\']), .opt[aria-disabled=\'true\']',
+  'option-row.css .opt:disabled:not([aria-busy=\'true\']) .opt-glyph, .opt:disabled:not([aria-busy=\'true\']) .opt-idx, .opt:disabled:not([aria-busy=\'true\']) .opt-enter, .opt[aria-disabled=\'true\'] .opt-glyph, .opt[aria-disabled=\'true\'] .opt-idx, .opt[aria-disabled=\'true\'] .opt-enter',
+  'option-row.css .opt-glyph',
+  'option-row.css .opt-idx',
+  'option-row.css .opt-desc',
   'chat.css .opt-preview-toggle',
   'chat.css .dlg-body',
-  'chat.css .opt-enter',
+  'option-row.css .opt-enter',
   'chat.css .opt-wait',
   'chat.css .sheet-foot',
   'chat.css .dlg-details-toggle',
@@ -402,6 +389,21 @@ const GRANDFATHERED_UNCOVERED = new Set([
   'shell.css .shell-placeholder-copy',
 ]);
 const report = audit(ROOT);
+
+/** How many palettes the auditor measured.
+ *
+ *  DERIVED, never typed. Sixteen assertions in this file said `toHaveLength(2)`
+ *  meaning "measured in every theme", which was the same sentence as "measured
+ *  in dark and light" right up until the moment it wasn't. Adding ten palettes
+ *  turned all sixteen red while the thing they check — that a rule is grounded
+ *  in EVERY palette rather than slipping into the uncovered census — had not
+ *  changed at all. A count that tracks the palettes says what was meant. */
+// NO FALLBACK. A `byName === undefined ? 2 : …` default here would silently
+// drop sixteen assertions from "every palette" back to "two" the moment the
+// auditor's shape changed — which is the exact failure this constant was
+// introduced to fix, re-armed as a convenience. Reading through throws if the
+// shape goes, and throwing is the correct outcome.
+const THEME_COUNT = Object.keys(report.themes.byName).length + 1; // + :root, which has no block
 const { DARK, LIGHT } = loadThemes(ROOT);
 const THEMES: readonly (readonly [string, Record<string, string>])[] = [
   ['DARK ', DARK],
@@ -653,7 +655,7 @@ describe('the gate fails a mutated tree', () => {
     // the label is --fs-2xs (11px) uppercase mono, so it is body text.
     const rows = report.measured.filter((m) =>
       m.label.includes('chat.css .code-block-copy [as .code-block-copy:hover, .code-block-copy[data-copied]]'));
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(THEME_COUNT);
     for (const r of rows) {
       expect(r.floor).toBe(4.5);
       expect(r.detail).toContain('var(--accent-on-well)');
@@ -804,8 +806,8 @@ describe('the gate fails a mutated tree', () => {
   it('a KEYFRAME_TROUGHS entry left behind by a renamed animation is a FAILURE', () => {
     // The stale direction for OPACITY_REGISTRY was pinned; the stale direction
     // for KEYFRAME_TROUGHS was not, so `keyframes: []` passed the whole suite.
-    const o = expectFail('src/session/chat.css', (s) => s.replace('@keyframes attach-spin {', '@keyframes attach-spin-2 {'));
-    expect(o).toMatch(/stale keyframes registry entry: chat\.css attach-spin 1/);
+    const o = expectFail('src/session/chat.css', (s) => s.replace('@keyframes tool-breathe {', '@keyframes tool-breathe-2 {'));
+    expect(o).toMatch(/stale keyframes registry entry: chat\.css tool-breathe 0\.55/);
   });
 
   // The same sweep, run over EVERY failure branch in audit.mjs rather than the
@@ -852,7 +854,7 @@ describe('the gate fails a mutated tree', () => {
     // gate tree carries its own copy of the auditor, which is the point.
     const o = expectFail('design/audit.mjs', (s) =>
       s.replace("[['running tool dot on a card', 'var(--status-busy)'", "[['running tool dot on a card', 'var(--no-such-token)'"));
-    expect(o).toMatch(/chat\.css \.tool-dot--run 0\.8 — running tool dot on a card: unknown custom property/);
+    expect(o).toMatch(/tool-card\.css \.tool-dot--run 0\.8 — running tool dot on a card: unknown custom property/);
   });
 
   it('a GROUNDS entry whose rule stopped being self-grounded is a FAILURE', () => {
@@ -1131,15 +1133,38 @@ describe('every stylesheet under src/ is audited', () => {
     // walked only this package would measure the app against a palette it
     // could not see — the same "fresh unbound copy" failure, reached by moving
     // a directory instead of pasting a table.
-    expect(report.sheets).toEqual([
-      '../ui/src/styles/reset.css',
-      '../ui/src/styles/theme.css',
-      '../ui/src/styles/tokens.css',
+    //
+    // THE TWO HALVES ARE PINNED DIFFERENTLY, ON PURPOSE.
+    //
+    // The APP's stylesheets are a CLOSED set — four files, and a fifth is an
+    // architectural event worth a test edit. They stay an exact literal.
+    //
+    // @ccrc/ui's are OPEN: the design system gains a stylesheet every time it
+    // gains a component, because each component's CSS is colocated with it.
+    // Appending a filename here per component would convert a discovered set
+    // back into a hand-kept list — the exact drift class the comment above
+    // describes, arrived at one well-meant edit at a time. So this half is
+    // RE-DERIVED from an independent walk of ui/src: a walk that disagrees
+    // with the auditor's own discovery still reds, and a stylesheet the
+    // auditor somehow skipped is still caught, but a NEW component costs no
+    // edit here.
+    const uiCss = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? uiCss(path.join(dir, e.name))
+          : e.name.endsWith('.css')
+            ? [path.relative(ROOT, path.join(dir, e.name)).split(path.sep).join('/')]
+            : [],
+      );
+    const APP_SHEETS = [
       'src/fleet/fleet.css',
       'src/session/chat.css',
       'src/styles/base.css',
       'src/styles/shell.css',
-    ]);
+    ];
+    const expected = [...uiCss(path.join(ROOT, '..', 'ui', 'src')), ...APP_SHEETS].sort();
+    expect(expected.length).toBeGreaterThan(APP_SHEETS.length); // the walk found ui at all
+    expect(report.sheets).toEqual(expected);
   });
 
   it.each(stylesheets(ROOT))('parses rules out of %s', (rel) => {
@@ -1191,6 +1216,26 @@ describe('every stylesheet under src/ is audited', () => {
       expect(report.uncovered.length).toBeLessThanOrEqual(GRANDFATHERED_UNCOVERED.size);
     });
 
+    it('grandfathers nothing that is no longer uncovered', () => {
+      // THE REGISTRY HAD NO STALE CHECK, AND IT DRIFTED.
+      //
+      // The two assertions above are subset-only and budget-only: a key that
+      // stops matching any rule is caught by NEITHER, it just sits there
+      // raising the allowance. Measured when the composite migration started:
+      // THIRTEEN entries named `primitives.css`, a stylesheet retired two
+      // waves earlier and absent from the tree — so the budget was thirteen
+      // wider than the census it was meant to bound, and thirteen genuinely
+      // new blind spots could have entered under it without a word.
+      //
+      // Every other registry in this gate already reds on a stale entry
+      // (audit.mjs:1075 is the archetype). This one was the exception, which
+      // is exactly why it was the one that rotted. Moving a rule between
+      // stylesheets rewrites its key, so a migration mints these in bulk —
+      // which is what makes this the guard that had to ship WITH that work.
+      const stale = [...GRANDFATHERED_UNCOVERED].filter((key) => !report.uncovered.includes(key));
+      expect(stale).toEqual([]);
+    });
+
     it('contains no rule whose ground the selector itself gives away', () => {
       const recoverable = report.uncovered.filter((k) => {
         const rule = rules.find((r) => ruleKey(r) === k);
@@ -1231,7 +1276,7 @@ describe('every stylesheet under src/ is audited', () => {
     // which flattered every ratio here.
     for (const sel of ['.code-block-copy', '.code-block-lang']) {
       const rows = report.measured.filter((m) => m.label.endsWith(`chat.css ${sel}`));
-      expect(rows.map((m) => m.label), sel).toHaveLength(2);
+      expect(rows.map((m) => m.label), sel).toHaveLength(THEME_COUNT);
       for (const r of rows) expect(r.ratio, r.label).toBeGreaterThanOrEqual(4.5);
     }
     expect(GROUNDS['chat.css .code-block-copy']?.under).toEqual(['var(--well-bar-bg)']);
@@ -1339,6 +1384,12 @@ describe('every hand-typed copy of a tokens.css colour is bound to it', () => {
     const dark = (DARK['--bg-page'] as string).toUpperCase();
     const light = (LIGHT['--bg-page'] as string).toUpperCase();
     const meta = [...html.matchAll(/<meta name="theme-color"([^>]*)>/g)].map((m) => m[1]);
+    // TWO <meta> tags, not two themes — this count is the markup's, and it
+    // does not move when a palette is added. index.html carries only the two
+    // Phosphor backgrounds on purpose (see the pre-paint comment there): a
+    // pinned third-party palette shows one frame of Phosphor's ground rather
+    // than eleven more bound literals in a file that paints before any
+    // stylesheet has loaded.
     expect(meta).toHaveLength(2);
     expect(hexes(meta[0] as string)).toEqual([dark]);
     expect((meta[1] as string).includes('prefers-color-scheme: light')).toBe(true);
@@ -1412,7 +1463,7 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
     const rows = report.measured.filter(
       (m) => m.label.includes('.msg-assist .callout [as') && m.label.includes(`'${v}'`),
     );
-    expect(rows.map((m) => m.label)).toHaveLength(2);
+    expect(rows.map((m) => m.label)).toHaveLength(THEME_COUNT);
     for (const row of rows) expect(row.ok, `${row.label} ${row.ratio.toFixed(2)}`).toBe(true);
   });
 
@@ -1420,7 +1471,7 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
     const rows = report.measured.filter(
       (m) => m.label.includes('.msg-assist .callout::before [as') && m.label.includes(`'${v}'`),
     );
-    expect(rows.map((m) => m.label)).toHaveLength(2);
+    expect(rows.map((m) => m.label)).toHaveLength(THEME_COUNT);
     for (const row of rows) expect(row.ok, `${row.label} ${row.ratio.toFixed(2)}`).toBe(true);
   });
 
@@ -1566,7 +1617,7 @@ describe('every static opacity is registered and composited', () => {
         "    knownBelowFloor: 'the escape hatch this round claims to have deleted',",
       ));
     const r = runGate(dir);
-    expect(r.stdout).toMatch(/OPACITY_REGISTRY chat\.css \.tool-dot--run 0\.8 is \{knownBelowFloor\}/);
+    expect(r.stdout).toMatch(/OPACITY_REGISTRY tool-card\.css \.tool-dot--run 0\.8 is \{knownBelowFloor\}/);
     expect(r.stdout).toMatch(/^FAIL/m);
     expect(r.status).not.toBe(0);
   });
@@ -1625,7 +1676,7 @@ describe('the three well-trap rules the blocker was found in', () => {
     ['chat.css', '.msg-attach-gone'],
   ])('%s %s is measured against the well it paints itself on', (file, selector) => {
     const rows = report.measured.filter((m) => m.label.endsWith(`${file} ${selector}`));
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail).toContain('var(--bg-well)');
       expect(row.ratio).toBeGreaterThanOrEqual(4.5);
@@ -1651,7 +1702,7 @@ describe('the pool chip and stranded count are measured, not left in the blind s
   ])('%s is grounded on the project card', (key, ink) => {
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
     const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);
+    expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain(ink);
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
@@ -1667,7 +1718,7 @@ describe('the account-pool picker colours are measured, not left in the blind sp
     ['fleet.css .pool-note', 'var(--ink-tertiary)'],
   ])('%s is grounded on the sheet it sits in', (key, ink) => {
     const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);
+    expect(rows, key).toHaveLength(THEME_COUNT);
     expect(report.uncovered, key).not.toContain(key);
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-sheet)']);
     for (const row of rows) {
@@ -1686,7 +1737,7 @@ describe('the account-pool picker colours are measured, not left in the blind sp
     expect(selectedRow).toBeDefined();
     expect(INHERITED_GROUNDS[key]?.under).toEqual([bgOf(selectedRow?.body ?? '')]);
     const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);
+    expect(rows, key).toHaveLength(THEME_COUNT);
     expect(report.uncovered, key).not.toContain(key);
     for (const row of rows) {
       expect(row.detail, row.label).toContain('var(--ink-tertiary)');
@@ -1713,7 +1764,7 @@ describe('the Task 9 fleet-head, sheet, and account-chip colours are measured, n
     ["fleet.css .acct-pool-chip[data-pool='stale']", 'var(--status-attention-text)', 'var(--bg-surface)'],
   ])('%s is grounded, not grandfathered', (key, ink, ground) => {
     const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);
+    expect(rows, key).toHaveLength(THEME_COUNT);
     expect(report.uncovered, key).not.toContain(key);
     expect(GRANDFATHERED_UNCOVERED, key).not.toContain(key);
     expect(INHERITED_GROUNDS[key]?.under).toEqual([ground]);
@@ -1730,7 +1781,7 @@ describe('the pool session cells are measured, not left in the blind spot', () =
     const key = `fleet.css ${selector}`;
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
     const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);
+    expect(rows, key).toHaveLength(THEME_COUNT);
     expect(report.uncovered, key).not.toContain(key);
     for (const row of rows) {
       expect(row.detail, row.label).toContain('var(--status-attention-text)');
@@ -1755,7 +1806,7 @@ describe('the spawn chip is measured, not left in the blind spot', () => {
     // INHERITED_GROUNDS entry is what makes it MEASURED.
     expect(INHERITED_GROUNDS['fleet.css .sess-spawn']?.under).toEqual(['var(--bg-surface)']);
     const rows = report.measured.filter((m) => m.label.endsWith('fleet.css .sess-spawn'));
-    expect(rows).toHaveLength(2);           // dark and light
+    expect(rows).toHaveLength(THEME_COUNT);
     for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
   });
 
@@ -1769,7 +1820,7 @@ describe('the spawn chip is measured, not left in the blind spot', () => {
     const key = "fleet.css .sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised'], .sess-spawn[data-spawn='narrow-widened']";
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
     const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(THEME_COUNT);
     for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
   });
 });
@@ -1797,7 +1848,7 @@ describe("the program-ready badge is measured, not left in the blind spot", () =
     // spells out.
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-sheet)']);
     const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);                    // dark and light
+    expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain(ink);
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
@@ -1820,7 +1871,7 @@ describe("the sign-in block's ink is measured, not asserted in a comment", () =>
     // fix, as the spawn chip above.
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
     const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);                    // dark and light
+    expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain(ink);
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
@@ -1861,7 +1912,9 @@ describe('the resume door is measured, not left in the blind spot', () => {
     // and would have read 6 after. The negative lookahead keeps `:active` (the
     // row this pin exists to catch) and drops the neighbour.
     const rows = report.measured.filter((m) => /\.run-row \.run-resume(?![\w-])/.test(m.label));
-    expect(rows).toHaveLength(4);            // base + :active, dark and light
+    // base + :active, in EVERY palette — two rules, not two themes, is the
+    // part of this count that is this rule's own.
+    expect(rows).toHaveLength(2 * THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain('on var(--bg-surface)');
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
@@ -1899,7 +1952,7 @@ describe('the /settings shell and its door are measured, not left in the blind s
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-page)']);
     expect(report.uncovered).not.toContain(key);
     const rows = report.measured.filter((m) => m.label.endsWith(key));
-    expect(rows, key).toHaveLength(2);                    // dark and light
+    expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain(`${inkOf(key)} on var(--bg-page)`);
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
@@ -1928,9 +1981,13 @@ describe('the /settings shell and its door are measured, not left in the blind s
 // the app shell's --bg-page instead, so this checks THAT ground clears AA
 // too, off the rule's own declared ink (a retint re-measures both).
 describe('.build-line/.build-line-side--warn/.build-line-next also clear AA on the mobile ground they fall through to', () => {
-  const fleetRules = rulesOf(ROOT, 'src/fleet/fleet.css');
+  // The rules moved to @ccrc/ui with their component; the GROUNDS keys moved
+  // with them, and so must this scrape — a rule key is `<sheet> <selector>`,
+  // so a component migration rewrites it. `rulesOf` walks into the
+  // `@layer components` wrapper, so the three rules parse out unchanged.
+  const buildLineRules = rulesOf(ROOT, '../ui/src/components/build-line.css');
   const inkOf = (key: string): string => {
-    const rule = fleetRules.find((r) => ruleKey(r) === key);
+    const rule = buildLineRules.find((r) => ruleKey(r) === key);
     expect(rule, key).toBeDefined();
     const ink = declOf((rule as { body: string }).body, 'color');
     expect(ink, key).not.toBeNull();
@@ -1938,9 +1995,9 @@ describe('.build-line/.build-line-side--warn/.build-line-next also clear AA on t
   };
 
   it.each([
-    ['fleet.css .build-line'],
-    ['fleet.css .build-line-side--warn'],
-    ['fleet.css .build-line-next'],
+    ['build-line.css .build-line'],
+    ['build-line.css .build-line-side--warn'],
+    ['build-line.css .build-line-next'],
   ])('%s also clears AA on the mobile ground (--bg-page)', (key) => {
     // Measured: --ink-tertiary 6.23 dark / 5.25 light (.build-line);
     // --status-attention-text 10.89 dark / 5.45 light (the other two).

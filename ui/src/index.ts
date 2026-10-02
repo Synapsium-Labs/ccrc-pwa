@@ -14,6 +14,7 @@ export { StatusDot, dotVariants, type StatusDotProps } from './primitives/status
 export { LimitBar, limitBand, fillVariants, TRACK as LIMIT_TRACK, type LimitBand, type LimitBarProps } from './primitives/limit-bar';
 export { Skeleton, type SkeletonProps } from './primitives/skeleton';
 export { Sheet, type SheetProps } from './primitives/sheet';
+export { OptionRow, type OptionRowProps } from './primitives/option-row';
 export { QuickConfirm, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,
@@ -22,4 +23,43 @@ export {
   type ToastKind,
   type ToastAction,
 } from './primitives/toast';
+
+// — composites —
+// Built FROM the primitives above, and the line between the two groups is not
+// size: a primitive has no opinion about what it is showing, a composite does.
+// `TypedLabel` knows that a label which CHANGED is the event worth marking.
+export { TypedLabel, TYPE_MS } from './components/typed-label';
+export { AttachButton, type AttachButtonProps } from './components/attach-button';
+export { AttachTray, type AttachTrayProps, type StagedImage } from './components/attach-tray';
+export { MailCard, runLabel } from './components/mail-card';
+export { TaskCard } from './components/task-card';
+export { MailStrip, summarizeMail, heldGate } from './components/mail-strip';
+export {
+  ToolCard,
+  askState,
+  ASK_WORD,
+  ASK_GLYPH,
+  type AskState,
+  type ToolUseEvent,
+  type ToolResultEvent,
+} from './components/tool-card';
+export { TaskStrip, orderTasks, summarize } from './components/task-strip';
+// `BuildLine` knows that a box whose version it cannot vouch for is the thing
+// to say loudly; it reads a `NodeWire[]` and nothing else.
+export { BuildLine } from './components/build-line';
+
+// — themes —
+// The palettes themselves live in styles/tokens.css and are DISCOVERED by the
+// gates; this exports only the labels and the stamping helpers.
+export {
+  THEMES, THEME_STORAGE_KEY, PHOSPHOR, SYSTEM, resolveTheme, applyTheme, type ThemeChoice,
+} from './styles/themes';
+
 export { cn } from './lib/cn';
+// Pure utilities the composites above brought with them. `useNow` is the one
+// shared re-render tick for live readouts, and `elapsedWords` the one spelling
+// of "how long has this been going on" — both had app consumers before the
+// migration and keep them, because a second copy of either is the drift
+// `single-definition.test.ts` exists to stop.
+export { useNow } from './lib/use-now';
+export { elapsedWords } from './lib/elapsed';

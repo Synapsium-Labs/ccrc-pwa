@@ -6,7 +6,7 @@ import type { MailGate, MailSummary } from '../../shared/api';
 import {
   MAIL_GATES, MAIL_GATE_HELD_MS, MAIL_GATE_HELD_COUNT, MAIL_GATE_FRESH_MS,
 } from '../../shared/api';
-import { MailStrip, summarizeMail, heldGate } from '../src/session/MailStrip';
+import { MailStrip, summarizeMail, heldGate } from '@ccrc/ui';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { applySessionMsg, createSessionStore } from '../src/stores/session';
 import type { SessionSnapshot } from '../src/stores/session';

@@ -16,8 +16,11 @@
   "types": "./dist/ui/src/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "build-storybook": "storybook build",
     "storybook": "storybook dev -p 6006",
-    "build-storybook": "storybook build"
+    "test": "tsc --noEmit",
+    "themes": "node design/make-themes.mjs --write",
+    "themes:check": "node design/make-themes.mjs --check"
   },
   "peerDependencies": {
     "react": "^19.0.0",
@@ -26,6 +29,7 @@
   "dependencies": {
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "framer-motion": "^12.0.0",
     "tailwind-merge": "^3.3.1",
     "vaul": "^1.1.2"
   },

@@ -16,17 +16,16 @@ import type { AuthStatus, AutoMode, CatalogueErrorReason, CatalogueState, NodeWi
 import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, SETTLED_UPDATE_STATES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode, isReleaseTag, isStampRead, isUpdateChannel } from '../../../shared/api';
 import { LOOPBACK_HOSTS } from '../../../shared/base-url';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
-import { Button, Skeleton, toast } from '@ccrc/ui';
+import { Button, elapsedWords, PHOSPHOR, Skeleton, SYSTEM, THEMES, type ThemeChoice, toast, useNow } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { isManagedNode, planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
 import { isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
 import { ApiError, api, updateErrorText } from '../lib/api';
 import { readAuthStatus } from '../lib/auth';
-import { elapsedWords } from '../lib/elapsed';
 import { pushSupported } from '../lib/push';
+import { setTheme, storedTheme } from '../lib/theme';
 import { navigate } from '../lib/router';
-import { useNow } from '../lib/useNow';
 import '../fleet/fleet.css';
 
 // ── The Updates section (spec §13; programme wave 3 Task 7) ──────────────────
@@ -463,6 +462,103 @@ function NodeList({ nodes, releases, now, onAcked, onMove }: {
   );
 }
 
+// ── Appearance ───────────────────────────────────────────────────────────────
+// THE PICKER ENUMERATES NOTHING. `THEMES` comes from @ccrc/ui, which is bound
+// to the `[data-theme]` blocks in tokens.css by `theme-catalogue.test.ts` in
+// both directions — so a palette cannot ship without a row here, and a row
+// here cannot name a palette that does not exist.
+//
+// Applying is IMMEDIATE and there is no Save: the control's effect is the
+// preview, and a theme you cannot see until you confirm it is a theme you
+// chose blind. `setTheme` both stamps the document and remembers the choice.
+//
+// Each row carries its own swatches, and they are not decoration — they are
+// the palette itself, drawn by stamping `data-theme` on the swatch element so
+// the very tokens the row names resolve inside it. A row that lies about its
+// colours is impossible: there is no second copy of them to drift.
+function ThemeRow({ choice, current, onPick }: {
+  choice: ThemeChoice;
+  current: string;
+  onPick: (id: string) => void;
+}): ReactNode {
+  const active = current === choice.id;
+  return (
+    <label className="settings-option settings-theme" data-active={active}>
+      <input
+        type="radio"
+        name="settings-theme"
+        value={choice.id}
+        checked={active}
+        onChange={() => onPick(choice.id)}
+      />
+      <span className="settings-theme-body">
+        <span className="settings-theme-name">{choice.label}</span>
+        <span className="settings-note">{choice.note}</span>
+      </span>
+      {/* `data-theme` on the swatch itself: tokens.css's blocks are plain
+          attribute selectors, so they resolve on ANY element, not just the
+          root. The preview is therefore the real palette rather than a
+          hand-copied approximation of it. `phosphor` carries no block — it is
+          :root — so it deliberately stamps nothing and inherits the default. */}
+      <span
+        className="settings-theme-swatch"
+        aria-hidden="true"
+        {...(choice.id === PHOSPHOR ? {} : { 'data-theme': choice.id })}
+      >
+        <i style={{ background: 'var(--bg-surface)' }} />
+        <i style={{ background: 'var(--ink-primary)' }} />
+        <i style={{ background: 'var(--accent)' }} />
+        <i style={{ background: 'var(--status-attention)' }} />
+        <i style={{ background: 'var(--status-dead)' }} />
+      </span>
+    </label>
+  );
+}
+
+/** Exported for its test. The rest of this screen mounts a `/api/updates`
+ *  poll, and a test of a radio group should not need a control plane. */
+export function AppearanceSection(): ReactNode {
+  const titleId = useId();
+  // Seeded from storage rather than defaulted, so the control opens showing
+  // what is actually applied — including on a reload into a pinned palette.
+  const [current, setCurrent] = useState(() => storedTheme());
+  const pick = (id: string): void => { setTheme(id); setCurrent(id); };
+
+  const dark = THEMES.filter((t) => t.mode === 'dark');
+  const light = THEMES.filter((t) => t.mode === 'light');
+
+  return (
+    <section className="settings-section" aria-labelledby={titleId}>
+      <h2 id={titleId} className="settings-section-title">Appearance</h2>
+      <fieldset className="settings-fieldset">
+        <legend className="settings-legend">Theme</legend>
+        <label className="settings-option settings-theme" data-active={current === SYSTEM}>
+          <input
+            type="radio"
+            name="settings-theme"
+            value={SYSTEM}
+            checked={current === SYSTEM}
+            onChange={() => pick(SYSTEM)}
+          />
+          <span className="settings-theme-body">
+            <span className="settings-theme-name">Follow system</span>
+            <span className="settings-note">
+              Phosphor &amp; Ink after dark, Phosphor Daylight otherwise.
+            </span>
+          </span>
+        </label>
+        {/* Grouped by how the palette reads, because that is the first thing
+            anyone is choosing between — and the ask was light AND dark, not a
+            dark list with one light apology. */}
+        <p className="settings-legend settings-theme-group">Dark</p>
+        {dark.map((t) => <ThemeRow key={t.id} choice={t} current={current} onPick={pick} />)}
+        <p className="settings-legend settings-theme-group">Light</p>
+        {light.map((t) => <ThemeRow key={t.id} choice={t} current={current} onPick={pick} />)}
+      </fieldset>
+    </section>
+  );
+}
+
 // ── Notifications (spec §13 item 2, §12's unarmed banner; programme wave 3 Task 10) ──
 // Two things live here, and one thing deliberately does not:
 //   * The PHONE-PUSH toggle is the literal <NotificationBell/> — the same
@@ -601,6 +697,7 @@ export function SettingsScreen(): ReactNode {
         <h1 className="settings-title">Settings</h1>
       </header>
       <UnarmedExposureBanner />
+      <AppearanceSection />
       <UpdatesSection poll={poll} now={now} />
       <NotificationsSection view={poll.view} reload={poll.reload} />
     </div>

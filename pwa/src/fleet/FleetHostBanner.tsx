@@ -30,9 +30,7 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetHealth, NodeWire } from '../../../shared/api';
 import { api, apiErrorText } from '../lib/api';
-import { Button, QuickConfirm, toast } from '@ccrc/ui';
-import { useNow } from '../lib/useNow';
-import { elapsedWords } from '../lib/elapsed';
+import { Button, elapsedWords, QuickConfirm, toast, useNow } from '@ccrc/ui';
 import { useFleetHealth } from './useFleetHealth';
 import { remoteSides, statedOf } from '../../../shared/update-summary';
 import './fleet.css';
@@ -41,7 +39,7 @@ const POLL_MS = 15_000;
 
 /** "5m ago" / "2h 10m ago" / "moments ago" — elapsed time since `downSince`.
  *  The span comes from `elapsedWords`; the preposition is this banner's own,
- *  which is the whole reason the split is where it is (lib/elapsed.ts). */
+ *  which is the whole reason the split is where it is (@ccrc/ui lib/elapsed.ts). */
 const elapsedSince = (downSince: number, nowMs: number): string =>
   `${elapsedWords(nowMs - downSince)} ago`;
 

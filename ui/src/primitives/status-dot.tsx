@@ -14,7 +14,8 @@ export /* `motion-reduce:opacity-85` is 0.85, NOT 0.8, and the value is measured
  * on a card. At 0.85 the four grounds these dots use read 7.57/3.10 (attention
  * on a card), 8.20/3.68 (attention on a lamp well), 7.22/3.45 and 7.82/3.30
  * (busy on each) — the tightest is 3.10. Same value as the reduced-motion pin
- * on `.task-mark--running` (chat.css).
+ * on `.task-mark--running` (components/task-strip.css, which travelled there with
+ * TaskStrip in the composite-migration wave).
  *
  * This note moved here from `styles/legacy.css`'s reduced-motion block when
  * that block retired (wave 2). The utility is invisible to `design/audit.mjs`,

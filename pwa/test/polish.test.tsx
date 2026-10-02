@@ -7,7 +7,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
 import { initTheme, type ThemeMedia } from '../src/lib/theme';
 import { navigate } from '../src/lib/router';
-import { AttachButton } from '../src/session/AttachButton';
+import { AttachButton } from '@ccrc/ui';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';

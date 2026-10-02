@@ -107,7 +107,7 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, HookAsk, HookAskQuestion } from '../../../shared/api';
-import { Button, Sheet, toast } from '@ccrc/ui';
+import { Button, OptionRow, Sheet, toast } from '@ccrc/ui';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
@@ -380,31 +380,21 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
             // new question opens its own previews instead of inheriting the
             // last one's folded state. The id is stable across arrow moves.
             <Fragment key={`${shown.id}:${o.index}`}>
-              <button
-                type="button"
-                className={selected ? 'opt opt--selected' : 'opt'}
+              <OptionRow
+                selected={selected}
+                glyph={selected ? '❯' : ''}
+                index={o.index}
+                label={label}
+                sublabel={description}
                 disabled={answering !== null}
-                aria-busy={waiting || undefined}
+                busy={waiting}
                 onClick={() => void answer(o.index)}
-              >
-                <span className="opt-glyph" aria-hidden="true">
-                  {selected ? '❯' : ''}
-                </span>
-                <span className="opt-idx" aria-hidden="true">
-                  {o.index}
-                </span>
-                <span className="opt-body">
-                  <span className="opt-label">{label}</span>
-                  {description && <span className="opt-desc">{description}</span>}
-                </span>
-                {waiting ? (
-                  <span className="opt-wait">answering…</span>
-                ) : selected ? (
-                  <span className="opt-enter" aria-hidden="true">
-                    ↵
-                  </span>
-                ) : null}
-              </button>
+                // The optimistic "answering…" is this package's marker, not the
+                // row's: it is a fact about a keystroke in flight to a pane.
+                // It takes the slot the ↵ would have had, never both.
+                marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
+                enter={!waiting && selected ? '↵' : undefined}
+              />
               {rich?.preview && (
                 <OptionPreview text={rich.preview} defaultOpen={selected} />
               )}
@@ -754,23 +744,16 @@ function EnvelopeSheet({
             const idx = oi + 1;
             const waiting = answering === idx;
             return (
-              <button
+              <OptionRow
                 key={oi}
-                type="button"
-                className="opt"
+                index={idx}
+                label={o.label}
+                sublabel={o.description}
                 disabled={!canAnswer || answering !== null}
-                aria-busy={waiting || undefined}
+                busy={waiting}
                 onClick={() => onSelectOption(idx)}
-              >
-                <span className="opt-idx" aria-hidden="true">
-                  {idx}
-                </span>
-                <span className="opt-body">
-                  <span className="opt-label">{o.label}</span>
-                  {o.description && <span className="opt-desc">{o.description}</span>}
-                </span>
-                {waiting && <span className="opt-wait">answering…</span>}
-              </button>
+                marker={waiting ? <span className="opt-wait">answering…</span> : undefined}
+              />
             );
           })}
         </div>
@@ -779,7 +762,8 @@ function EnvelopeSheet({
           // Read-only: see the comment above `first` for why only the first
           // question ever sends. Plain divs, not buttons — nothing here
           // should read as tappable to a screen reader either. I3: a muted
-          // colour alone (`.opt[aria-disabled='true']` in chat.css) was easy
+          // colour alone (`.opt[aria-disabled='true']`, in @ccrc/ui's
+          // option-row.css since the row was extracted) was easy
           // to miss at a glance — the heading below and `.ask-envelope-more`'s
           // separator rule say in words what the colour only implies.
           <div className="ask-envelope-more">
@@ -790,15 +774,16 @@ function EnvelopeSheet({
                 <p className="dlg-copy">{q.question}</p>
                 <div className="opts">
                   {q.options.map((o, oi) => (
-                    <div key={oi} className="opt" aria-disabled="true">
-                      <span className="opt-idx" aria-hidden="true">
-                        {oi + 1}
-                      </span>
-                      <span className="opt-body">
-                        <span className="opt-label">{o.label}</span>
-                        {o.description && <span className="opt-desc">{o.description}</span>}
-                      </span>
-                    </div>
+                    // No onClick, so OptionRow renders a plain <div
+                    // aria-disabled> rather than a button — the same shape
+                    // this site hand-wrote, now chosen in one place.
+                    <OptionRow
+                      key={oi}
+                      index={oi + 1}
+                      label={o.label}
+                      sublabel={o.description}
+                      disabled
+                    />
                   ))}
                 </div>
               </Fragment>

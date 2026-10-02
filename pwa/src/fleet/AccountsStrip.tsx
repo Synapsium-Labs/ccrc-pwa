@@ -24,7 +24,7 @@ import type { AccountUsage, RosterWire } from '../../../shared/api';
 import { accountLabel, accountColorVar } from '../lib/accounts';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
-import { useNow } from '../lib/useNow';
+import { useNow } from '@ccrc/ui';
 import { AccountMeterRow } from './AccountMeterRow';
 import './fleet.css';
 

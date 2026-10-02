@@ -45,7 +45,17 @@ const SRC = path.join(import.meta.dirname, '..', 'src');
  *      sheets that roll their own still want the same hooks for tests and for
  *      scoped rules.
  *    - `pr-dot`, `tool-dot--run`, `chat-skel`: chat.css's own vocabulary, which
- *      only looks like the primitive's. Word-bounded matching keeps them out. */
+ *      only looks like the primitive's. Word-bounded matching keeps them out.
+ *    - `opts`, `opt-wait`, `opt-inert`, `opt-degraded`, `opt-preview*`: the
+ *      app's, and the distinction is the sharpest one on this list because
+ *      they share a prefix with eight entries that ARE owned. `OptionRow`
+ *      renders the ROW; what a row MEANS on this fleet — a routing field
+ *      inert on the session's lane, a class serving one rung down a share
+ *      ceiling, a keystroke in flight — is ccrc's, and arrives through the
+ *      row's `marker`/`children` slots wearing these names. `opt-wait` is
+ *      not even always on a row: the approval sheet's Allow/Deny buttons
+ *      wear it too. Word-bounded matching is what keeps `opts` from reading
+ *      as `opt`. */
 const OWNED = [
   'btn-primary', 'btn-ghost',                                    // Button / buttonVariants
   'dot', 'dot--busy', 'dot--attention', 'dot--idle',             // StatusDot / dotVariants
@@ -55,6 +65,8 @@ const OWNED = [
   'skel',                                                        // Skeleton
   'sheet-panel', 'sheet-panel--full', 'sheet-scrim', 'sheet-grabber', // Sheet
   'toast', 'toast--error', 'toast-action',                       // ToastHost / toast()
+  'opt', 'opt--selected', 'opt-glyph', 'opt-idx',                // OptionRow
+  'opt-body', 'opt-label', 'opt-desc', 'opt-enter',
 ];
 
 /** Every `className="..."` / `className={'...'}` string literal in a file. */
@@ -114,6 +126,14 @@ describe('the design-system boundary', () => {
     expect(ownedClassLiterals('<span className="limit-fill limit-fill--crit" />'))
       .toEqual(['limit-fill', 'limit-fill--crit']);
     expect(ownedClassLiterals('<div className="sheet-panel" />')).toEqual(['sheet-panel']);
+    expect(ownedClassLiterals('<button className="opt opt--selected" />'))
+      .toEqual(['opt', 'opt--selected']);
+    expect(ownedClassLiterals('<span className="opt-glyph" />')).toEqual(['opt-glyph']);
+    expect(ownedClassLiterals('<span className="opt-idx" />')).toEqual(['opt-idx']);
+    expect(ownedClassLiterals('<span className="opt-body" />')).toEqual(['opt-body']);
+    expect(ownedClassLiterals('<span className="opt-label" />')).toEqual(['opt-label']);
+    expect(ownedClassLiterals('<span className="opt-desc" />')).toEqual(['opt-desc']);
+    expect(ownedClassLiterals('<span className="opt-enter" />')).toEqual(['opt-enter']);
   });
 
   it('leaves the sanctioned shapes alone', () => {
@@ -125,6 +145,12 @@ describe('the design-system boundary', () => {
     expect(ownedClassLiterals('<span className="pr-dot" />')).toEqual([]);
     expect(ownedClassLiterals('<span className="tool-dot--run" />')).toEqual([]);
     expect(ownedClassLiterals('<div className="chat-skel" />')).toEqual([]);
+    // the option row's container and the three ccrc markers it carries
+    expect(ownedClassLiterals('<div className="opts" />')).toEqual([]);
+    expect(ownedClassLiterals('<span className="opt-wait">answering</span>')).toEqual([]);
+    expect(ownedClassLiterals('<span className="opt-inert" />')).toEqual([]);
+    expect(ownedClassLiterals('<span className="opt-degraded" />')).toEqual([]);
+    expect(ownedClassLiterals('<pre className="well opt-preview" />')).toEqual([]);
   });
 
   it('does not fire on the variant call, which is the sanctioned route', () => {

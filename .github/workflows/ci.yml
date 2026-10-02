@@ -439,6 +439,29 @@ jobs:
         working-directory: ${{ matrix.package }}
         run: ./node_modules/.bin/tsc --noEmit
 
+      # @ccrc/ui rides the pwa leg rather than taking a matrix value of its
+      # own: `test (agent)` and `test (pwa)` are required BY NAME, so the axis
+      # and its values are pinned, and a third value would mint a check name
+      # nothing is configured to require. The pwa suite already typechecks ui's
+      # SOURCE transitively (it imports it), so what is added here is what that
+      # misses — ui's own tsconfig, which also covers .storybook and the
+      # stories, and the proof that the generated palettes still match their
+      # seeds. Both are cheap; neither has a runner of its own.
+      - name: Install @ccrc/ui
+        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        working-directory: ui
+        run: npm ci
+
+      - name: Typecheck @ccrc/ui (incl. .storybook and stories)
+        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        working-directory: ui
+        run: ./node_modules/.bin/tsc --noEmit
+
+      - name: Generated palettes match their seeds
+        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        working-directory: ui
+        run: npm run themes:check
+
   # The Darwin arms' standing mechanism (the macOS port's review, finding 3):
   # every `describe.skipIf(!IS_DARWIN)` block and `itDarwin` case in the
   # server suite skips on every ubuntu leg above, so without this job the

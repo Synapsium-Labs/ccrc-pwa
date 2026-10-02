@@ -17,7 +17,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ClaimSummary } from '../../../shared/api';
 import { api } from '../lib/api';
-import { useNow } from '../lib/useNow';
+import { useNow } from '@ccrc/ui';
 import './fleet.css';
 
 export const CLAIMS_POLL_MS = 30_000;

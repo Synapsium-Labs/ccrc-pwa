@@ -30,9 +30,32 @@
       }
     </style>
     <script>
+      // Pre-paint theme stamp. A STORED choice wins; with none, follow the OS
+      // between the two Phosphor palettes — which is what this did before
+      // themes became selectable.
+      //
+      // Deliberately NOT validated against the theme catalogue: that list
+      // lives in the bundle, which has not loaded yet, and duplicating it here
+      // is the second copy `single-definition` forbids. An unknown value
+      // stamps an attribute no block answers, every token falls through to
+      // :root, and `initTheme` corrects it the moment the bundle runs — one
+      // frame, no wrong-palette persistence. The ONE thing this must not do is
+      // throw: storage is unreadable in a private window, and an exception
+      // here is a blank app.
+      //
+      // The <style> above only knows the two Phosphor backgrounds, so a pinned
+      // third-party palette shows one frame of Phosphor's ground before its
+      // own stylesheet lands. Accepted: the alternative is eleven more bound
+      // literals in this file for a single frame.
       try {
-        if (matchMedia('(prefers-color-scheme: light)').matches)
-          document.documentElement.setAttribute('data-theme', 'light');
+        var t = null;
+        try { t = localStorage.getItem('ccrc-theme'); } catch {}
+        if (t === null || t === '' || t === 'system') {
+          if (matchMedia('(prefers-color-scheme: light)').matches)
+            document.documentElement.setAttribute('data-theme', 'light');
+        } else if (t !== 'phosphor') {
+          document.documentElement.setAttribute('data-theme', t);
+        }
       } catch {}
     </script>
     <meta name="mobile-web-app-capable" content="yes" />

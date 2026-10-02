@@ -11,12 +11,9 @@ import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent, MailEnvelope, TaskNotification } from '../../../shared/api';
 import { parseFetchedMailEnvelope, parseMailEnvelope, parseTaskNotification } from '../../../shared/api';
 import { api, ApiError, apiErrorText, clipUrl, submitErrorText } from '../lib/api';
-import { toast } from '@ccrc/ui';
+import { MailCard, TaskCard, ToolCard, toast, type ToolResultEvent, type ToolUseEvent } from '@ccrc/ui';
 import type { PendingAttachment, PendingSend } from '../stores/session';
-import { MailCard } from './MailCard';
-import { TaskCard } from './TaskCard';
 import { MessageBubble, timeOf, type MessageEvent } from './MessageBubble';
-import { ToolCard, type ToolResultEvent, type ToolUseEvent } from './ToolCard';
 import './chat.css';
 
 const DIVIDER_GAP_MS = 10 * 60_000; // a new mono timestamp after 10 quiet minutes

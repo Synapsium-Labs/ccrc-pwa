@@ -5,7 +5,8 @@
 // drag-and-drop so all three doors hand the whole batch to `add()` at once.
 import { useRef } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
-import './chat.css';
+import './attach-spin.css';
+import './attach-button.css';
 
 export interface AttachButtonProps {
   /** Every file the user picked, handed over in one batch — never call this

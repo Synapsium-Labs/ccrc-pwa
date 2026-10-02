@@ -11,10 +11,19 @@
 // failure tokens rather than a chip that says a choice was made.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import type { ChatEvent } from '../../../shared/api';
-import { useNow } from '../lib/useNow';
-import './chat.css';
+// NOT framer-motion's `useReducedMotion`, although it is right there in the
+// same import a line up. A consumer's test cannot mock a module INSIDE this
+// package — @ccrc/ui is an inlined external dep in pwa's vitest config, so a
+// `vi.mock('framer-motion')` reaches the test file and nothing else (measured).
+// This hook reads `matchMedia`, a GLOBAL, which a consumer's test steers with
+// `vi.stubGlobal`. See use-reduced-motion.ts's own header for the full
+// argument. `motion` and `AnimatePresence` stay where they are: neither is a
+// behaviour a test needs to flip.
+import { usePrefersReducedMotion } from '../lib/use-reduced-motion';
+import { useNow } from '../lib/use-now';
+import './tool-card.css';
 
 export type ToolUseEvent = Extract<ChatEvent, { kind: 'tool_use' }>;
 export type ToolResultEvent = Extract<ChatEvent, { kind: 'tool_result' }>;
@@ -136,7 +145,7 @@ function TruncationCue({ bytes }: { bytes?: number }): ReactNode {
  *  which is the token for "this is what was chosen". */
 function AskOutcome({ result }: { result: ToolResultEvent }): ReactNode {
   const [expanded, setExpanded] = useState(false);
-  const reduced = useReducedMotion() ?? false;
+  const reduced = usePrefersReducedMotion();
   return (
     <div className="tool-ask-out">
       <button
@@ -321,7 +330,7 @@ function GenericToolCard({
   result?: ToolResultEvent;
 }): ReactNode {
   const [expanded, setExpanded] = useState(false);
-  const reduced = useReducedMotion() ?? false;
+  const reduced = usePrefersReducedMotion();
   const running = result === undefined;
   const now = useNow(1_000, running);
 

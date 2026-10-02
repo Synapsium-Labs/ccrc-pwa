@@ -7,10 +7,8 @@
 // keeps its Retry/Discard).
 import { useEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
-import { Button, Sheet } from '@ccrc/ui';
+import { AttachButton, AttachTray, Button, Sheet } from '@ccrc/ui';
 import type { PendingAttachment, PendingSend } from '../stores/session';
-import { AttachButton } from './AttachButton';
-import { AttachTray } from './AttachTray';
 import { clipboardImages, useStagedImages } from './useAttachImage';
 import { api } from '../lib/api';
 import { useMediaQuery } from '../lib/useMediaQuery';

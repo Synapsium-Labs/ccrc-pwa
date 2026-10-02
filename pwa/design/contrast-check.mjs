@@ -25,7 +25,25 @@
 import { audit, contrast, resolveColor } from './audit.mjs';
 
 const report = audit();
-const { DARK, LIGHT } = report.themes;
+const { DARK, LIGHT, byName } = report.themes;
+
+/** EVERY palette, for the token-pair half too.
+ *
+ *  This half used to run for DARK and LIGHT alone while the stylesheet half
+ *  already looped every palette — so the gate's own headline count grew with
+ *  each new theme and looked like coverage. It was not. The token pairs are
+ *  the DEFENSIVE floors: combinations the design system promises to hold
+ *  wherever they are used, including where no rule uses them yet. Skipping
+ *  them for ten palettes meant skipping exactly the checks that have no
+ *  stylesheet to catch them.
+ *
+ *  Measured when this was fixed: three light palettes had shipped
+ *  `--status-busy`, `--status-attention` and `--status-dead` as #000000 —
+ *  pure black status dots, hue gone, the two-cue rule broken — and the gate
+ *  printed ALL PASS, because no rule pairs a raw dot token against the well,
+ *  only this contract does. */
+const ALL_PALETTES = [['DARK ', DARK], ...Object.entries(byName)
+  .map(([n, t]) => [n.toUpperCase(), t])];
 
 /** A token pair is named by its tokens.css custom property; the hex is looked
  *  up per theme, so there is no second copy of the palette to keep in sync. */
@@ -205,7 +223,7 @@ const pairs = (T, name) => [
 let fail = 0, n = 0;
 
 console.log(`# token pairs — the design system's standing contract`);
-for (const [label, fg, bg, min] of [...pairs(palette(DARK), 'DARK '), ...pairs(palette(LIGHT), 'LIGHT')]) {
+for (const [label, fg, bg, min] of ALL_PALETTES.flatMap(([n, t]) => pairs(palette(t), n))) {
   const r = contrast(fg, bg);
   const ok = r >= min;
   if (!ok) fail++;

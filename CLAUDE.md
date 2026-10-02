@@ -75,9 +75,18 @@ real values: `deploy/reference-fleet.md` (gitignored).
   the coordinator skill honors, not an OS wall**. Don't assume server-side checks stop a session acting directly.
 
 ## Build / test / deploy
-**No root `package.json`, no root runner.** Four packages, each `"type":"module"`, run cd'd in:
-`server/` `agent/` `pwa/` `shared/` (`shared/` is not a real package — its bare `"type":"module"` marker is
+**No root `package.json`, no root runner.** FIVE packages, each `"type":"module"`, run cd'd in:
+`server/` `agent/` `pwa/` `ui/` `shared/` (`shared/` is not a real package — its bare `"type":"module"` marker is
 load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server dies on startup).
+**`ui/` is `@ccrc/ui`, the design system**, consumed by `pwa` as SOURCE (`exports['.']` points at `src/index.ts`),
+so pwa's own `tsc --noEmit` typechecks it transitively and pwa's suite is where its tests live — `ui/` has no
+vitest and `npm test` there is `tsc --noEmit` over its own tsconfig (which adds `.storybook` and the stories).
+It rides the `test (pwa)` CI leg rather than taking a matrix value, because `test (agent)`/`test (pwa)` are
+required BY NAME. Its `npm run build` emits `dist/` for ONE reader, the /design-sync converter — nothing in
+pwa resolves it. Its palettes are GENERATED: `npm run themes` writes the `[data-theme]` blocks in
+`src/styles/tokens.css` from the seeds in `design/make-themes.mjs`, and `npm run themes:check` (CI, and
+`pwa/test/theme-catalogue.test.ts`) fails if the committed block is not what those seeds produce — so a
+generated value is never hand-edited, and the contrast gate rules on the result either way.
 
     cd server && npm ci && npm run test    # vitest run — hermetic
     cd agent  && npm ci && npm run test

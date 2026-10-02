@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountUsage, AuthStatus, PasskeyListResponse, ProjectedHome, RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
-import { Button, Skeleton, toast } from '@ccrc/ui';
+import { Button, toast, Skeleton, useNow } from '@ccrc/ui';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
 import { formatAge } from '../fleet/formatReset';
@@ -25,7 +25,6 @@ import { api, apiErrorText } from '../lib/api';
 import { authPostureChanged, raiseAuthLost, readAuthStatus } from '../lib/auth';
 import { PasskeyCeremonyError, enrollPasskey, passkeyEnrollSupported } from '../lib/passkey';
 import { navigate } from '../lib/router';
-import { useNow } from '../lib/useNow';
 import { useFleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 

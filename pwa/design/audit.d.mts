@@ -12,8 +12,15 @@ export type RGBA = [number, number, number, number];
 export type Theme = Record<string, string>;
 
 export interface Themes {
+  /** `:root` — the default palette. */
   DARK: Theme;
+  /** `[data-theme='light']`, named because the token-pair contract and dozens
+   *  of registry comments speak of it by name. */
   LIGHT: Theme;
+  /** EVERY palette discovered in tokens.css, keyed by its `data-theme` value
+   *  — the set every measurement actually loops over. `DARK`/`LIGHT` above are
+   *  conveniences onto the same data, not a different source. */
+  byName: Record<string, Theme>;
 }
 
 export interface Rule {

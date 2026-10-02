@@ -33,7 +33,7 @@
 // answering anything.
 import type { ReactNode } from 'react';
 import type { MailEnvelope } from '../../../shared/api';
-import './chat.css';
+import './mail-card.css';
 
 /** `run 5 · build4 wave 4/4`, with each clause independently optional —
  *  mirroring `renderEnvelope`'s own three conditionals. Returns null when

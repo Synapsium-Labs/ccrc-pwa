@@ -31,7 +31,7 @@ import { RunsScreen } from '../src/screens/RunsScreen';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
-import { MailStrip } from '../src/session/MailStrip';
+import { MailStrip } from '@ccrc/ui';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
 import { ReapSheet } from '../src/session/ReapSheet';
@@ -44,6 +44,9 @@ const readUi = (...seg: string[]): string =>
 const fleetCss = read('fleet', 'fleet.css');
 const chatCss = read('session', 'chat.css');
 const tokensCss = readUi('styles', 'tokens.css');
+/** The mail strip is the design system's now, and its stylesheet travelled
+ *  with it — the tap floor is asserted where the rule actually lives. */
+const mailStripCss = readUi('components', 'mail-strip.css');
 
 // Fix round 3, verifier P5. These three stylesheets belong to the ui-css lane
 // and are being edited in parallel with this file, so the scrape must survive
@@ -265,7 +268,7 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.mail-badge'), ruleIn(fleetCss, '.mail-back'),
       ruleIn(fleetCss, '.fleet-runs-row'), ruleIn(fleetCss, '.runs-back'),
       ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),
-      ruleIn(chatCss, '.mail-strip .mail-strip-head'),
+      ruleIn(mailStripCss, '.mail-strip .mail-strip-head'),
       ruleIn(fleetCss, '.coord-banner'), ruleIn(fleetCss, '.coord-toggle'),
       ruleIn(fleetCss, '.run-row .run-abandon'),
       ruleIn(fleetCss, '.program-start-door'), ruleIn(fleetCss, '.program-start-go'),
@@ -416,7 +419,7 @@ describe('.coord-toggle — the pause banner’s own toggle', () => {
 
 describe('.mail-strip-head — the session mail strip’s door to its rows', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(chatCss, '.mail-strip .mail-strip-head'), 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(mailStripCss, '.mail-strip .mail-strip-head'), 'min-height')).toBe('var(--tap-min)');
   });
   it('is the class the rendered head control actually carries', () => {
     render(<MailStrip mail={[mailItem()]} />);

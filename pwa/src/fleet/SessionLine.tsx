@@ -26,14 +26,11 @@ import {
   type FleetSession, type ProjectPoolWire, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
 import { accountColorVar, accountLabel, accountPool } from '../lib/accounts';
-import { StatusDot } from '@ccrc/ui';
-import { elapsedWords } from '../lib/elapsed';
-import { useNow } from '../lib/useNow';
+import { elapsedWords, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
 import { sessionLabel } from './sessionLabel';
 import { spawnChip } from './spawnWords';
-import { TypedLabel } from './TypedLabel';
 import './fleet.css';
 
 /** Routing policy calls a window critical above this. */

@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { api, ApiError } from '../src/lib/api';
-import { AttachButton } from '../src/session/AttachButton';
+import { AttachButton } from '@ccrc/ui';
 import { downscaleImage } from '../src/session/useAttachImage';
 import { Composer } from '../src/session/Composer';
 

@@ -1,0 +1,168 @@
+/* `@layer components` — NOT unlayered; see typed-label.css for the full
+   argument and ../styles/theme.css for the layer declaration. */
+@layer components {
+  /* ------------------------------------------------------------------ *
+   *  Task strip — the TUI's plan widget, pinned under the header.       *
+   *  Collapsed: one live line. Open: the rows, completed folded last.   *
+   * ------------------------------------------------------------------ */
+  /* Sits directly above the composer, as in the terminal. Because it now eats
+     into the conversation rather than the header, it is capped: a plan with many
+     OPEN tasks scrolls inside itself instead of pushing the chat off screen.
+     (The completed pile stays folded, so this bites rarely.) */
+  .task-strip {
+    flex: none;
+    margin: 0 var(--sp-4) var(--sp-2);
+    border: 1px solid var(--edge-subtle);
+    border-radius: var(--r-md);
+    background: var(--bg-surface);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    max-height: min(40vh, 320px);
+  }
+  .task-strip--open {
+    border-color: var(--edge-strong);
+  }
+
+  .task-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    width: 100%;
+    min-height: var(--sp-8);
+    padding: var(--sp-2) var(--sp-3);
+    background: none;
+    border: 0;
+    text-align: left;
+    color: var(--ink-primary);
+    cursor: pointer;
+  }
+  .task-head:active {
+    background: var(--bg-raised);
+  }
+
+  /* The spinner's asterisk. It only breathes while something is actually
+     running — glow means life, here as everywhere. */
+  .task-mark {
+    flex: none;
+    font: var(--weight-regular) var(--fs-sm) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+  }
+  .task-mark--running {
+    color: var(--status-busy-text);
+    animation: task-breathe var(--breathe-period) var(--curve-breathe) infinite alternate;
+  }
+  @keyframes task-breathe {
+    from { opacity: 0.55; }
+    to   { opacity: 1; }
+  }
+
+  .task-headline {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: var(--weight-medium) var(--fs-sm) / var(--lh-tight) var(--family-ui);
+  }
+  .task-count {
+    flex: none;
+    font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-secondary);
+    background: var(--bg-raised);
+    border-radius: var(--r-full);
+    padding: var(--sp-1) 9px;
+  }
+  .task-chevron {
+    flex: none;
+    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+  }
+
+  .task-summary {
+    padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-4));
+    font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-tertiary);
+  }
+
+  .task-rows {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 var(--sp-2);
+    border-top: 1px solid var(--edge-subtle);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    min-height: 0;
+  }
+  .task-line {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2);
+    width: 100%;
+    padding: var(--sp-2) var(--sp-3);
+    background: none;
+    border: 0;
+    text-align: left;
+    color: var(--ink-primary);
+    font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
+    cursor: pointer;
+  }
+  .task-line:disabled {
+    cursor: default;
+  }
+  .task-line:active:not(:disabled) {
+    background: var(--bg-raised);
+  }
+  .task-glyph {
+    flex: none;
+    width: 1em;
+    font: var(--weight-regular) var(--fs-sm) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+  }
+  .task-subject {
+    min-width: 0;
+  }
+
+  /* Running rows carry the accent and the weight; done rows are struck receipts.
+     Never element opacity — that would push ink below AA. */
+  .task-row--in_progress .task-glyph {
+    color: var(--status-busy-text);
+  }
+  .task-row--in_progress .task-subject {
+    font-weight: var(--weight-semibold);
+  }
+  .task-row--completed .task-subject {
+    color: var(--ink-tertiary);
+    text-decoration: line-through;
+  }
+  .task-row--completed .task-glyph {
+    color: var(--ink-disabled);
+  }
+
+  .task-detail {
+    padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + 1em + var(--sp-2));
+    font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
+    color: var(--ink-secondary);
+  }
+
+  .task-fold {
+    padding: var(--sp-2) var(--sp-3);
+    background: none;
+    border: 0;
+    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+    cursor: pointer;
+  }
+  .task-fold:active {
+    color: var(--ink-secondary);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .task-mark--running {
+      animation: none;
+      opacity: 0.85;
+    }
+  }
+}

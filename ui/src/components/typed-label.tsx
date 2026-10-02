@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useReducedMotion } from 'framer-motion';
+import { usePrefersReducedMotion } from '../lib/use-reduced-motion';
+import './typed-label.css';
 
 /** Per-character delay. EXPORTED so the test advances the clock by a multiple
  *  of it rather than re-guessing a literal that a tuning change would silently
@@ -29,8 +30,9 @@ export const TYPE_MS = 28;
  * would owe `contrast.test.ts`'s `KEYFRAME_TROUGHS` a registered opacity trough
  * — for a mark on screen for at most `text.length * TYPE_MS` ms. Its own
  * rendering is still a deliberate rule, not an inherited accident:
- * `.typed-caret` (`fleet.css` — it moved there when legacy.css retired in
- * wave 2; it was never a primitive, and fleet is its only consumer).
+ * `.typed-caret` (`typed-label.css`, beside this file — it travelled here with
+ * the component, having previously lived in fleet.css on the since-retired
+ * reasoning that fleet was its only consumer).
  *
  * ACCESSIBLE NAME: `aria-label` on the root carries the FULL target text from
  * the first frame; `shown` and the caret are `aria-hidden` underneath it. The
@@ -43,7 +45,7 @@ export const TYPE_MS = 28;
  * had typed in so far, rather than the name it was actually being renamed to.
  */
 export function TypedLabel({ text, className }: { text: string; className?: string }): ReactNode {
-  const reduced = useReducedMotion() ?? false;
+  const reduced = usePrefersReducedMotion();
   const [shown, setShown] = useState(text);
   const prev = useRef(text);
 

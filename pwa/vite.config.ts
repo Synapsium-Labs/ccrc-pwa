@@ -24,12 +24,23 @@ export default defineConfig({
   //
   // react-dom is listed BEFORE react because vite matches alias keys by prefix
   // in insertion order, and 'react-dom' starts with 'react'.
+  //
+  // EVERY REACT-CALLING PACKAGE ui DEPENDS ON BELONGS IN ALL THREE LISTS
+  // (dedupe, alias, and `test.server.deps.inline` below). framer-motion joined
+  // when the composites migrated: `ToolCard` renders `motion`/`AnimatePresence`,
+  // so it reaches react through framer-motion's copy exactly as the sheet
+  // reaches it through vaul's. (NOT because of reduced motion — ui has its own
+  // `usePrefersReducedMotion` precisely so that branch needs no framer import.)
+  // Adding a ui dependency without adding it here fails only under test, and
+  // fails as "Invalid hook call" — which reads like a bug in the component
+  // rather than a second React.
   resolve: {
-    dedupe: ['react', 'react-dom', 'vaul'],
+    dedupe: ['react', 'react-dom', 'vaul', 'framer-motion'],
     alias: {
       'react-dom': fileURLToPath(new URL('./node_modules/react-dom', import.meta.url)),
       react: fileURLToPath(new URL('./node_modules/react', import.meta.url)),
       vaul: fileURLToPath(new URL('./node_modules/vaul', import.meta.url)),
+      'framer-motion': fileURLToPath(new URL('./node_modules/framer-motion', import.meta.url)),
     },
   },
   plugins: [
@@ -121,6 +132,6 @@ export default defineConfig({
     // instance. Inlining routes both through vite's pipeline, where the alias
     // above applies. The app BUILD never needed this — it bundles everything,
     // so the alias already held there.
-    server: { deps: { inline: [/node_modules\/(vaul|@radix-ui)\//, '@ccrc/ui'] } },
+    server: { deps: { inline: [/node_modules\/(vaul|@radix-ui|framer-motion)\//, '@ccrc/ui'] } },
   },
 });

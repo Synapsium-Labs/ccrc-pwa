@@ -12,7 +12,7 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { TaskItem } from '../../../shared/api';
-import './chat.css';
+import './task-strip.css';
 
 const RANK: Record<TaskItem['status'], number> = { in_progress: 0, pending: 1, completed: 2 };
 

@@ -5,12 +5,11 @@
 // the NewSessionSheet.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import { Button, Skeleton, toast } from '@ccrc/ui';
+import { BuildLine, Button, Skeleton, toast, useNow } from '@ccrc/ui';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
-import { BuildLine } from '../fleet/BuildLine';
 import { useFleetHealth } from '../fleet/useFleetHealth';
 import { UpdateBanner } from '../fleet/UpdateBanner';
 import { useUpdatesView } from '../fleet/useUpdatesView';
@@ -24,7 +23,6 @@ import { ProjectCard, poolOfPlacement, type ProjectPlacementRead } from '../flee
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BUCKET_ORDER } from '../fleet/sortFleet';
 import { anyDispatchPending, isRunClosed, runCard, runHomeProject } from '../fleet/runWords';
-import { useNow } from '../lib/useNow';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
 import { api, apiErrorText } from '../lib/api';

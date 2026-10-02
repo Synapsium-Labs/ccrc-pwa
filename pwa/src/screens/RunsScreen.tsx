@@ -46,7 +46,7 @@ import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
-import { useNow } from '../lib/useNow';
+import { useNow } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 

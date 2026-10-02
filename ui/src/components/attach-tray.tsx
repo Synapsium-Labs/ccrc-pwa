@@ -2,8 +2,28 @@
 // surface for attaching: the old success toast is gone, because it landed on top
 // of the very input it told you to type into.
 import type { ReactNode } from 'react';
-import type { StagedImage } from './useAttachImage';
-import './chat.css';
+import './attach-spin.css';
+import './attach-tray.css';
+
+/** One image on its way into a message, in whichever of the three states the
+ *  composer's upload pipeline has it. The SHAPE lives here, with the only
+ *  thing that renders it, rather than with the hook that fills it: the tray is
+ *  the design system's and the hook is the app's, and the hook already depends
+ *  on this package. `state` is the chip's whole vocabulary — `failed` is the
+ *  one that grows a control (retry), which is why it is a word and not a
+ *  boolean beside `path`. */
+export interface StagedImage {
+  key: string;
+  file: File;
+  previewUrl: string;
+  state: 'uploading' | 'staged' | 'failed';
+  path?: string;
+  width?: number;
+  height?: number;
+  /** Why the upload failed. The chip's `title` is the only place this survives
+   *  once the toast that also carried it has gone. */
+  error?: string;
+}
 
 export interface AttachTrayProps {
   images: StagedImage[];

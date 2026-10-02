@@ -25,9 +25,9 @@ import {
   MAIL_MAX_ATTEMPTS, MAIL_GATE_HELD_MS, MAIL_GATE_HELD_COUNT, MAIL_GATE_FRESH_MS,
   TERMINAL_DELIVERY_STATES,
 } from '../../../shared/api';
-import { useNow } from '../lib/useNow';
+import { useNow } from '../lib/use-now';
 import { elapsedWords } from '../lib/elapsed';
-import './chat.css';
+import './mail-strip.css';
 
 const PLURAL: Record<MailSummary['kind'], [string, string]> = {
   finding: ['finding', 'findings'], question: ['question', 'questions'],

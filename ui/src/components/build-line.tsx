@@ -2,8 +2,8 @@ import type { ReactNode } from 'react';
 import type { FleetHealth, NodeWire } from '../../../shared/api';
 import type { BuildInfo } from '../../../shared/buildinfo';
 import { remoteSides, statedOf } from '../../../shared/update-summary';
-import { pendingTag } from './useUpdatesView';
-import './fleet.css';
+import { pendingTag } from '../../../shared/update-arrow';
+import './build-line.css';
 
 /** "v0.0.7" / "unversioned (bd2bf57a)" / "—", plus " dirty"; amber unless
  *  the side is a clean, versioned release stamp. `next` is the tag the

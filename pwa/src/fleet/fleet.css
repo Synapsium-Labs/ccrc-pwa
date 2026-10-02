@@ -333,20 +333,6 @@
   font-size: var(--fs-xs);
 }
 
-/* BuildLine — the foot-of-screen one-liner (release/rollout design §6).
- * Quiet by default; a side that is unversioned, dirty or unknown borrows
- * the warn banner's attention-text token so a deploy.sh box LOOKS
- * second-class without a banner that fires when nothing is wrong. */
-.build-line {
-  padding: 6px 16px;
-  font-size: 12px;
-  color: var(--ink-tertiary);
-  text-align: center;
-}
-.build-line-side--warn {
-  color: var(--status-attention-text);
-}
-
 /* ------------------------------------------------------------------ *
  *  Substrate banner — one fault, one banner (spec §4): every RUNNING  *
  *  row reports a substrate fault, so it is said once up here and the  *
@@ -3266,13 +3252,6 @@ button.proj-card-pool::before {
   width: auto;
   padding: 0 var(--sp-3);
 }
-/* BuildLine's affix (centralised-update design 2026-09-20 §13): " → v0.0.9"
- * after a side whose node the inventory says should move up (`pendingTag`).
- * Amber like the warn side — something to do, not a fault — and a rule of its
- * own, so the contrast audit measures it (audit.mjs INHERITED_GROUNDS). */
-.build-line-next {
-  color: var(--status-attention-text);
-}
 
 /* — centralised update management, programme wave 5 Task 8: the move sheet —
    The ONE confirm sheet every move control opens (UpdateMoveSheet.tsx): the
@@ -3312,16 +3291,59 @@ button.proj-card-pool::before {
 }
 
 /* ------------------------------------------------------------------ *
- *  Typing caret (TypedLabel.tsx) — a plain glyph, never a blinking    *
- *  stylesheet rule: an animated one would owe KEYFRAME_TROUGHS a      *
- *  registered opacity trough for a mark on screen for at most a few   *
- *  hundred ms (see the component's own comment for why). This rule    *
- *  exists so the glyph's rendering is a decision recorded once,       *
- *  rather than an accident of whichever mount point's ancestor it     *
- *  happens to inherit from — it paints in the ambient ink and         *
- *  (`user-select: none`) never joins a copy of the label text.        *
+ *  Appearance — the theme picker (SettingsScreen.tsx).                *
+ *                                                                     *
+ *  THE SWATCHES CARRY `data-theme` THEMSELVES, so the five chips in   *
+ *  each row resolve that palette's own tokens rather than a copy of   *
+ *  them. Nothing here names a colour: every value below is a token,   *
+ *  and inside a stamped swatch the token resolves to the palette      *
+ *  being previewed. That is why there is no list of hexes to drift.   *
  * ------------------------------------------------------------------ */
-.typed-caret {
-  color: currentColor;
-  user-select: none;
+.settings-theme {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--tap-min);
+  padding: var(--sp-2) var(--sp-2);
+  border-radius: var(--r-md);
+}
+/* The selected row takes the accent WASH, not the accent itself: this is a
+   list where exactly one row is chosen, and a full-accent fill would make the
+   chosen row shout louder than the control it sits in. --accent-tint is
+   already gated against --ink-primary in every theme. */
+.settings-theme[data-active='true'] {
+  background: var(--accent-tint);
+}
+.settings-theme-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.settings-theme-name {
+  font-family: var(--family-ui);
+  font-size: var(--fs-base);
+  color: var(--ink-primary);
+}
+/* A group heading inside the fieldset — not a second <legend>, which would be
+   invalid, and not a token the screen reader reads as a control. */
+.settings-theme-group {
+  margin-top: var(--sp-3);
+}
+.settings-theme-swatch {
+  display: flex;
+  flex: none;
+  gap: 0;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  /* The hairline keeps a light palette's white surface chip from dissolving
+     into a light THEME's own background. Decorative — no contrast claim, the
+     same exemption every other hairline in this file takes. */
+  border: 1px solid var(--edge-strong);
+}
+.settings-theme-swatch i {
+  display: block;
+  width: 14px;
+  height: 22px;
 }
