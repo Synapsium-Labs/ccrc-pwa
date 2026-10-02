@@ -18,7 +18,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 1 | `shell` delivery; the run-worker quiet lane (r1 worker check, r2 coordinator report, r3 operator push), shadow until armed | server | #216 | **merged** `1f9fa22d7`, live v0.0.52 (shadow) |
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 (merges after #227) | **review clean** — run 221 accepted, review run 224 clean (4 Minor, ruled R11); PR awaits the operator's merge |
-| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; **awaiting review**: #232 at `571268cdc`. Clauses 16/17 per R14 and R15; the wave-done (20:16) was re-measured and accepted. Review run 239 was refused `cap-daily` at 20:18 (R16), then dispatched at 22:39 in the agreed slot |
+| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; **awaiting review**: #232 at `571268cdc`. Clauses 16/17 per R14 and R15; the wave-done (20:16) was re-measured and accepted. **accepted, merging**. Review run 239 (dispatched 22:39 after a `cap-daily` wait, R16) found 4 Minor and no blocker (R17). The run waits at `merging` for the operator's squash-merge of #232 |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | planned and reviewed; dispatches after #227 and #228 merge |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
@@ -162,6 +162,42 @@ independent reader, then cross-checked by another. The cross-check upheld every 
     programme takes no number for it.
   - **The worker's three minors wait.** They are `lostBg` without an antecedent, `stallClause()` with no -1 guard,
     and the S3 comment. They are ruled with the review.
+- **R17 (coordinator, 2026-10-02 22:52): wave 4 is accepted.** Review run 239 read tip `571268cdc` and closed done
+  (report kept in the coordinator notes). It found four Minor findings and no blocker:
+  - every suite green;
+  - mutation rows C1–C15 and W1–W21 red as planned;
+  - the contract text byte-equal to the plan;
+  - landing-order's clauses byte-identical to `main`.
+
+  Rulings:
+  - **F1, the ball after `wait:`.** Coordinator clause 16 says a `wait:` holds the ball "until your next mail". The
+    server's ball rule, which spec :299-300 chose, hands the ball back at the worker's next ordinary `status` mail.
+    Worker clause 17 prompts exactly that mail. The cost is bounded:
+    - one extra r1 stall-check per such `wait:`;
+    - the worker answers it with `re stall-check: waiting`, which returns the ball (R12);
+    - escalation stays unarmed;
+    - today it is shadow only.
+
+    The clause text is operator-approved (§11 decision 13), so the fix joins **R2's pending amendment**. The
+    operator is asked to approve one amendment that both widens the clause and states the ball truthfully, e.g.
+    "until your next mail or the worker's next ordinary mail". It is not a server change: the spec chose that rule.
+  - **F2.** The S4 row pins the sentence, not the property. This conforms to the plan (D-3792). A `resume` scan of
+    the wake list is parked for the next wave that edits `worker-skill.test.ts`.
+  - **F3.** Merge commit `7e806d87` is a second red commit. It is accepted as history and takes no number. R15
+    offered the smallest-commit route, so Task 1–2 sites did not exist at merge time, and "renumber in the merge
+    commit" covered only the sites that existed. The operator squash-merges #232, so `main` carries no red commit.
+  - **F4.** The stall spec still says "clause 16" at :526, :605 and :947. These are left as a dated snapshot (R6,
+    D-3790's reasoning; spec :30 says §6's numbers are the next free ones). The mapping as shipped: spec "clause
+    15" is coordinator 16, and spec "clause 16" is worker 17.
+  - **The worker's three minors are parked.**
+    - `lostBg` without an antecedent is the plan's verbatim text.
+    - `stallClause()` has no -1 guard. It is a test helper that cannot fire.
+    - The S3 comment's wording is cosmetic.
+
+  **Run 226 waits at `merging`, not closed.** Three other waves touch the same files: #228, landing-order wave 2
+  (run 238) and workspace-lifecycle wave 2 (run 236). A conflict before the merge then has a live worker, through
+  `merging → working` and a `fix-round` (worker clause 16's third trigger). After a merge proof the run closes
+  `final:true`, with wave 5's run opened first.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
