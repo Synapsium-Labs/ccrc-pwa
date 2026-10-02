@@ -17,7 +17,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | — | planned |
+| 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | — | dispatched 2026-10-02 (run 218) |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | — | re-planned 2026-09-29; dispatch after wave 1 merges |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | — | — | to plan |
@@ -80,6 +80,12 @@ carries it (spec §5.1, amended 2026-09-24).
   that wrote this programme's plans — the coordinator of landing-order, session-continuity and workspace-lifecycle
   together. Each wave is its own run under that session id; a fresh coordinator resumes only under the same id
   (the coordinator skill's `references/resume.md`). Wave 1 dispatches now; wave 2 after wave 1 merges (the 2026-09-29 ruling).
+- **2026-10-02 — wave 1 dispatched as run 218** to a fresh workspace (`ccrc-pwa-swift-prairie`, branch `ws/swift-prairie`),
+  executing by subagent-driven development on the matrix's "worker executing a spec'd plan" row (Opus · high,
+  Sonnet · high implementers, an Opus · high reviewer per task, workflow off, compact 40). Its deviation
+  numbers, issued at run-open and written bare here until a plan on the same ref defines them: 3758 through 3767.
+  The brief adds two rules that post-date the plan: the wave stops at the PR (the coordinator merges; the
+  fleet moves by ccrc's own update mechanism, operator ruling 2026-09-30), and main is measured fresh.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

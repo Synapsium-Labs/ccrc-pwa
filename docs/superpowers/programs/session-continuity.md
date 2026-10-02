@@ -19,7 +19,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | — | planned |
+| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | — | dispatched 2026-10-02 (run 219) |
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | — | planned — re-planned 2026-09-30 |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin | **AGENT-FIRST** (ccd) | — | — | to plan |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
@@ -92,6 +92,12 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   not dispatch two of its own workers onto overlapping files (coordinator clause 10) — the ledger's "may be worked
   in parallel" stays true of the plans, which merge either way, but this coordinator serialises them; it also
   keeps one fewer suite-running worker on the memory-bound fleet box.
+- **2026-10-02 — wave 1 dispatched as run 219** to a fresh workspace (`ccrc-pwa-swift-ridge`, branch `ws/swift-ridge`),
+  executing by subagent-driven development on the matrix's "worker executing a spec'd plan" row (Opus · high,
+  Sonnet · high implementers, an Opus · high reviewer per task, workflow off, compact 40). Its deviation
+  numbers, issued at run-open and written bare here until a plan on the same ref defines them: 3768 through 3777.
+  The brief adds two rules that post-date the plan: the wave stops at the PR (the coordinator merges; the
+  fleet moves by ccrc's own update mechanism, operator ruling 2026-09-30), and main is measured fresh.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

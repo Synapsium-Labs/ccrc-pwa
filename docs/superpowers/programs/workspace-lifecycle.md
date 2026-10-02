@@ -18,7 +18,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | — | planned |
+| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | — | dispatched 2026-10-02 (run 220) |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | — | planned; approved 2026-10-01 (#223) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
@@ -70,6 +70,12 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   that wrote this programme's plans — the coordinator of landing-order, session-continuity and workspace-lifecycle
   together. Each wave is its own run under that session id; a fresh coordinator resumes only under the same id
   (the coordinator skill's `references/resume.md`). Wave 1 dispatches now; wave 2 after wave 1 merges.
+- **2026-10-02 — wave 1 dispatched as run 220** to a fresh workspace (`ccrc-pwa-calm-prairie`, branch `ws/calm-prairie`),
+  executing by subagent-driven development on the matrix's "worker executing a spec'd plan" row (Opus · high,
+  Sonnet · high implementers, an Opus · high reviewer per task, workflow off, compact 40). Its deviation
+  numbers, issued at run-open and written bare here until a plan on the same ref defines them: 3778 through 3787.
+  The brief adds two rules that post-date the plan: the wave stops at the PR (the coordinator merges; the
+  fleet moves by ccrc's own update mechanism, operator ruling 2026-09-30), and main is measured fresh.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
