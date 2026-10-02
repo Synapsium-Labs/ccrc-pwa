@@ -15,7 +15,7 @@ direct reclaim argv shapes before automatic reclamation can ship.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open) | **working, integrating** — run 199 on `still-harbor`; fix rounds left PR #222 at `a806a558` with Linux CI green; `reclaim-row-placement-safety` merged as `0db98707` and integration mail 3067 (2026-10-02) lifted the hold: merge current main, re-stamp, repair citations, rerun the gates, then a fresh fingerprint and held-out review |
+| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open) | **awaiting-review** — integration round done at `b9791151` (merges `main` at `0db98707`); fingerprint accepted 2026-10-02; held-out review run 216 dispatched to `ccrc-pwa-bright-summit` |
 
 **Deviation block: eight numbers, the first of them 3696** (allocated once at run 199 open, 2026-09-30; floor
 now 3704). The finalized plan defines the first as `ccd-imported-functions-hijack-reclaim-reads`. No other issued
@@ -90,6 +90,20 @@ unrendered.
   shifts, reruns the entry, reclaim, install and whole-server gates, and proves a protected direct `ws-reclaim`
   still reaches the row-placement code through the launcher. Departures take the block's remaining numbers from
   3701. The next review run opens under the canonical title `Child reclaim entry safety prerequisite`.
+- **2026-10-02 — integration accepted for review.** Mail 3070 claimed `b9791151ac6c979f65896fe3dd67bba33202a00b`: merge
+  commit `65c503593` over `origin/main` `0db98707` (never rebased; the one conflict was `ccd/ccd`'s marker line) and
+  one test commit proving a protected direct entry reaches the row-placement proof (a complete outside row does not
+  block, a removed alias answers `unmeasured` at the direct audit and the direct verb, and a mutation that accepts
+  `absent-suffix` reds both and deletes the child's tree in the verb case). Re-measured: remote, worktree and PR #222
+  heads equal it, the tree is clean, `origin/main` is its ancestor, `ccd/ccd` passes the marker check and `bash -n`,
+  the four row-placement functions are byte-identical to `main`'s, issued numbers 3696-3700 alone are rendered, and
+  the worker holds claim 872. Its whole-suite run's one red is tmp-sweep's FAILS CLOSED case, red on `main` too. The
+  server accepted the fingerprint; the four item rows were already settled, so the board's 4/4 is now also true.
+  - **Routing.** The worker reported `failure: shallow` for its own misses across the fix rounds. The routing door
+    answered `ceiling` (the next effort rung needs a second shallow failure on this session), so routing is unchanged.
+  - **Review run 216** opened under the canonical title, restoring the programme title run 210 had overwritten. Its
+    first dispatch was refused `oversize` (brief plus prefix over 8192 bytes) with nothing touched; the resent brief
+    cites the ledger's carried constraints instead of repeating them.
 - **Routing escalation.** This is a destructive-path security boundary reached after repeated wave 4 resolver
   rounds exposed the process-level class. The main loop runs Opus at `xhigh`; implementation subagents run Sonnet
   at `high`; workflows are off; compact threshold is 40. The held-out review remains outside that routing and adds
