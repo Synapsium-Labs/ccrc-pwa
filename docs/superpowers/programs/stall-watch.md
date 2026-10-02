@@ -18,7 +18,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 1 | `shell` delivery; the run-worker quiet lane (r1 worker check, r2 coordinator report, r3 operator push), shadow until armed | server | #216 | **merged** `1f9fa22d7`, live v0.0.52 (shadow) |
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 (merges after #227) | **review clean** — run 221 accepted, review run 224 clean (4 Minor, ruled R11); PR awaits the operator's merge |
-| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226 (a fresh child); the spec-approved clause text (R12) |
+| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; Task 3 done, Tasks 1–2 wait for landing-order wave 1 to merge (R14) |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | planned and reviewed; dispatches after #227 and #228 merge |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
@@ -117,6 +117,15 @@ independent reader, then cross-checked by another. The cross-check upheld every 
   precision and collapsed its fixture (now 32-bit safe, with explicit horizon-edge mails); two find texts crossing a
   line wrap, the slot-dependent spellings for a migration slot other than 15, one mutation row's description, and
   this ledger's block count.
+- **R14 (coordinator, 2026-10-02): wave 4 yields the skill files to landing-order wave 1.** Landing-order's wave 1
+  (run 218, coordinator `ccrc-pwa-quiet-river`) was dispatched at 10:33, before wave 4, and holds claim 882 on the six
+  files wave 4's Tasks 1–2 edit; its plan also takes coordinator 15 and worker 16. Wave 4's worker did Task 3
+  (uncontested) and asked; ruling: it never edits a contested path, commits Task 3, waits (on a `wait:` mail, so the
+  stall watch reads the ball as the coordinator's) for landing-order's PR to MERGE, then merges `main` and renumbers
+  to the next free numbers (16 and 17) through its plan's renumber step. Landing-order's coordinator was told, with
+  the count-word gap our planner found in its plan. **This session's defect:** coordinator clause 10 says to read
+  `GET /api/claims` before a dispatch; the last check was at 10:31, five hours before wave 4's dispatch, and missed
+  run 218's claim. Every later dispatch in this programme re-reads the claims first.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
