@@ -54,13 +54,18 @@ def P(s):
 
 
 # ── the one door to GitHub ──────────────────────────────────────────────────
-GH_PATH = re.compile(r'^(user|repos/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(/[A-Za-z0-9._/-]*)?)(\?[A-Za-z0-9._=&%:+-]*)?$')
+# The leading lookahead refuses a `..` SEGMENT anywhere in the path (not a name that
+# merely contains dots): the character class admits `.` and `/`, so without it
+# `repos/a/b/../../../graphql` is a plain REST read by the grammar and `graphql` by the server.
+GH_PATH = re.compile(r'^(?![^?]*(?:^|/)\.\.(?:/|\?|$))'
+                     r'(user|repos/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(/[A-Za-z0-9._/-]*)?)(\?[A-Za-z0-9._=&%:+-]*)?$')
 
 
 def _gh(path):
     """GET one GitHub REST path and return its JSON. GET is not a default here, it
     is the only method this file can express: the argv is fixed, and a path that
-    carries anything but a REST path and a query string is refused before gh runs."""
+    carries anything but a REST path (no `..` segment) and a query string is refused
+    before gh runs."""
     if not GH_PATH.match(path):
         raise SystemExit(f'measure-landing: refused a GitHub path that is not a plain REST read: {path!r}')
     for attempt in range(4):   # a 5xx is GitHub's, and it passes; anything else is an answer
@@ -103,9 +108,17 @@ class Cache:
 
 
 # ── pure decisions (tested directly by measure-landing.test.ts) ──────────────
+def _attempt_order(c):
+    """Sort key of one check-run attempt: completed ones by completion time, and
+    one with no completed_at (queued or in progress) after every completed one —
+    it is the newest attempt, and a newer attempt is the verdict."""
+    return (c.get('completed_at') is None, c.get('completed_at') or '')
+
+
 def required_state(checks, required):
     """One commit's REQUIRED verdict from its check-runs, each context judged by
-    its LATEST attempt (a re-run that went green supersedes the red it re-ran):
+    its LATEST attempt (a re-run that went green supersedes the red it re-ran;
+    an attempt still in progress, with no completed_at, is the latest of all):
     'green' when every required context's latest attempt succeeded, 'red' when
     any one's failed or timed out, otherwise 'unmeasured' (missing, cancelled,
     still running). A cancelled leg is not a red: a runner cap cancels, it does
@@ -117,7 +130,7 @@ def required_state(checks, required):
     latest = {}
     for c in checks:
         n = c.get('name')
-        if n in required and (n not in latest or (c.get('completed_at') or '') >= (latest[n].get('completed_at') or '')):
+        if n in required and (n not in latest or _attempt_order(c) >= _attempt_order(latest[n])):
             latest[n] = c
     if any(c.get('conclusion') in RED for c in latest.values()):
         return 'red'
@@ -542,6 +555,7 @@ def cmd_episodes(projects, win):
 
 NUDGE = 'ccrc-mail: you have new mail.'
 MAIL_PAGE = 500   # the server's own clamp (`clampMailLimit`): no read can ask for more
+CLOSED_RUNS_CAP = 500   # `runs list --closed 1` answers every active run and only the newest 500 closed ones
 
 
 # verb -> the key its SUCCESS body carries a list under. `runs list` answers
@@ -607,31 +621,52 @@ def cmd_mail_latency(win):
     MAIL_PAGE at most. A page that came back FULL may have dropped exactly the
     window's oldest mail, so that coordinator is reported `truncated` and counted
     in neither `minutes` nor `unmatched` — never as data. A page with room to
-    spare is the recipient's whole history. A run with no claimant is skipped."""
+    spare is the recipient's whole history.
+
+    THE RUNS READ IS CAPPED TOO: `runs list --closed 1` answers every ACTIVE run
+    and only the newest CLOSED_RUNS_CAP closed ones, so a closed count at the cap
+    is `runsTruncated` — coordinators of older runs may be missing, and the
+    coordinator count is not the whole history.
+
+    EVERY INPUT LEFT OUT IS COUNTED BY NAME, never dropped silently: a run with no
+    claimant is `runsWithoutClaimant`, and a window mail whose delivery is neither
+    `delivered` nor `acked` (queued, rejected, or a state this file does not know)
+    is `undelivered` — in neither `minutes` nor `unmatched`, which count only mail
+    a coordinator was handed (a mail outside the window is not an input of it)."""
     lo = datetime.fromisoformat(win[0]).replace(tzinfo=timezone.utc).timestamp() * 1000
     hi = (datetime.fromisoformat(win[1]).replace(tzinfo=timezone.utc) + timedelta(days=1)).timestamp() * 1000
-    coords = sorted({r['claimedBy'] for flag in ([], ['--closed', '1'])
-                     for r in _api('runs', 'list', *flag)['runs'] if r.get('claimedBy')})
-    lat, unmatched, truncated, per = [], 0, 0, {}
+    open_rows, closed_read = [_api('runs', 'list', *flag)['runs'] for flag in ([], ['--closed', '1'])]
+    open_ids = {r.get('id') for r in open_rows}
+    closed_rows = [r for r in closed_read if r.get('id') not in open_ids]   # the closed read also carries every active run
+    runs_truncated = len(closed_rows) >= CLOSED_RUNS_CAP
+    all_runs = open_rows + closed_rows
+    coords = sorted({r['claimedBy'] for r in all_runs if r.get('claimedBy')})
+    no_claimant = sum(1 for r in all_runs if not r.get('claimedBy'))
+    lat, unmatched, truncated, undelivered, per = [], 0, 0, 0, {}
     for c in coords:
         rows = _api('mail', 'list', '--to', c, '--all', '1', '--limit', str(MAIL_PAGE)).get('mail', [])
         if len(rows) >= MAIL_PAGE:
             truncated += 1; per[c] = {'truncated': True, 'rows': len(rows)}
             continue
         turns = nudge_turns(c)
-        mine, miss = [], 0
+        mine, miss, undel = [], 0, 0
         for m in rows:
-            if not (lo <= m['at'] < hi) or m['state'] not in ('delivered', 'acked'):
+            if not (lo <= m['at'] < hi):
+                continue
+            if m['state'] not in ('delivered', 'acked'):
+                undel += 1
                 continue
             t = next((x for x in turns if x >= m['at']), None)
             if t is None:
                 miss += 1
             else:
                 mine.append((t - m['at']) / 60000)
-        lat += mine; unmatched += miss
-        per[c] = dict(summary([round(x, 1) for x in mine]), unmatched=miss, transcriptTurns=len(turns))
+        lat += mine; unmatched += miss; undelivered += undel
+        per[c] = dict(summary([round(x, 1) for x in mine]), unmatched=miss, undelivered=undel, transcriptTurns=len(turns))
     return {'window': win, 'coordinators': len(coords), 'minutes': summary([round(x, 1) for x in lat]),
-            'unmatched': unmatched, 'truncatedCoordinators': truncated, 'perCoordinator': per}
+            'unmatched': unmatched, 'undelivered': undelivered, 'truncatedCoordinators': truncated,
+            'closedRuns': len(closed_rows), 'runsTruncated': runs_truncated,
+            'runsWithoutClaimant': no_claimant, 'perCoordinator': per}
 
 
 # ── the command line ────────────────────────────────────────────────────────
@@ -672,7 +707,8 @@ def main(argv):
     elif sub == 'green-to-merge':
         rep = cmd_green_to_merge(repo, req(), win, cache)
     elif sub == 'inversions':
-        rep = cmd_inversions(repo, req(), win, cache, fleet_logins(args))
+        logins = fleet_logins(args)   # BEFORE req(): the refusal precedes every GET and every cache write
+        rep = cmd_inversions(repo, req(), win, cache, logins)
     elif sub == 'episodes':
         rep = cmd_episodes(args.get('project', []), win)
     elif sub == 'mail-latency':

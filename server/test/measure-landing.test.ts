@@ -14,7 +14,7 @@
 // directory walk of `deploy/` would read it — the ccgpt harness's precedent).
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -84,6 +84,23 @@ describe('measure-landing: it reads GitHub and never writes it', () => {
     expect(calls(h.home, 'gh-calls'), 'gh ran for a refused path').toBeNull();
   });
 
+  it('refuses a path with a `..` segment: the grammar is no way round the graphql refusal', () => {
+    // Each of these matched the character-class grammar and, resolved by the
+    // server, names `graphql` (or another endpoint) the plain-REST pin refuses.
+    const h = stubHome();
+    for (const bad of ['repos/a/b/../../../graphql', 'repos/../../graphql?query=%7Bviewer%7D', 'repos/a/b/..', 'repos/../b/x']) {
+      const r = inModule(h, `m._gh(${JSON.stringify(bad)})`);
+      expect(r.status, `${bad} was not refused`).not.toBe(0);
+      expect(r.stderr).toContain('refused a GitHub path');
+    }
+    // A name that merely CONTAINS dots is a name, not a traversal.
+    for (const ok of ['repos/a/b.c', 'repos/a/b/contents/x..y', 'repos/a/b/commits/v1..v2', 'repos/a/b/actions/runs?created=2026-09-08..2026-09-22']) {
+      const r = inModule(h, `assert m.GH_PATH.match(${JSON.stringify(ok)}), ${JSON.stringify(ok)}`);
+      expect(r.status, `${ok} was refused: ${r.stderr}`).toBe(0);
+    }
+    expect(calls(h.home, 'gh-calls'), 'gh ran for a refused path').toBeNull();
+  });
+
   it('asks GitHub only GETs, measured through a recording stub', () => {
     const h = stubHome([
       '  *rules/branches/main*) echo \'[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test (server)"}]}}]\' ;;',
@@ -136,6 +153,18 @@ describe('measure-landing: an input it could not read is never a number', () => 
     expect(calls(h.home, 'gh-calls'), 'gh ran before the fleet was named').toBeNull();
   });
 
+  it('inversions: refuses a run with no --fleet-login before it reads anything, a cache write included', () => {
+    // `cmd_inversions(repo, req(), …, fleet_logins(args))` evaluated `req()` first:
+    // two GETs and a cache file before the refusal the docstring promises.
+    const h = stubHome();
+    const r = tool(h, ['inversions', 'o/r']);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('--fleet-login L1,L2 is required');
+    expect(calls(h.home, 'gh-calls'), 'gh ran before the fleet was named').toBeNull();
+    const cache = join(h.home, 'out', 'cache');
+    expect(existsSync(cache) ? readdirSync(cache) : [], 'a cache file was written before the fleet was named').toEqual([]);
+  });
+
   it('mail-latency: a full newest-first page is truncation, never data; a run with no claimant is skipped', () => {
     const at = Date.parse('2026-09-10T12:00:00Z');
     const row = (i: number) => ({ at: at + i, state: 'delivered' });
@@ -155,6 +184,48 @@ describe('measure-landing: an input it could not read is never a number', () => 
     expect(calls(h.home, 'api-calls')!.filter((c) => c.startsWith('mail list'))
       .every((c) => c.endsWith('--limit 500')), 'a mail read asked for the default page').toBe(true);
   });
+  it('mail-latency: a closed-runs read at its cap is truncation, named in the output, never the whole history', () => {
+    // `runs list --closed 1` answers every ACTIVE run plus only the newest 500
+    // closed ones (`runs()`'s asymmetric clamp). Rows of an active run are not
+    // closed ones: 3 active + 499 closed is under the cap, 3 active + 500 is not.
+    const closedRows = (n: number) => Array.from({ length: n }, (_, i) => ({ id: 1000 + i, claimedBy: 'coord-c', state: 'merged' }));
+    const active = [{ id: 1, claimedBy: 'coord-c', state: 'working' }, { id: 2, claimedBy: 'coord-c', state: 'dispatched' },
+      { id: 3, claimedBy: 'coord-c', state: 'unknown' }];
+    const arms = (n: number) => [
+      `  *"runs list --closed 1"*) echo '${JSON.stringify({ runs: [...active, ...closedRows(n)] })}' ;;`,
+      `  *"runs list"*) echo '${JSON.stringify({ runs: active })}' ;;`,
+      '  *"--to coord-c"*) echo \'{"ok":true,"mail":[]}\' ;;',
+    ];
+    const at = tool(stubHome([], arms(500)), ['mail-latency']);
+    expect(at.status, at.stderr).toBe(0);
+    expect(JSON.parse(at.stdout).runsTruncated, 'a closed-runs read at its cap was read as the whole history').toBe(true);
+    const under = tool(stubHome([], arms(499)), ['mail-latency']);
+    expect(under.status, under.stderr).toBe(0);
+    expect(JSON.parse(under.stdout).runsTruncated, 'active runs were counted against the closed cap').toBe(false);
+    expect(JSON.parse(under.stdout).closedRuns).toBe(499);
+  });
+
+  it('mail-latency: every input left out is counted by name — an undelivered mail, a run with no claimant', () => {
+    const at = Date.parse('2026-09-10T12:00:00Z');
+    const mail = [
+      { at, state: 'delivered' }, { at: at + 1, state: 'queued' }, { at: at + 2, state: 'rejected' },
+      { at: at + 3, state: 'some-future-state' },
+      { at: Date.parse('2026-01-01T00:00:00Z'), state: 'queued' },   // outside the window: not an input of it
+    ];
+    const h = stubHome([], [
+      '  *"runs list"*) echo \'{"runs":[{"id":1,"claimedBy":null},{"id":2,"claimedBy":null},{"id":3,"claimedBy":"coord-u"}]}\' ;;',
+      `  *"--to coord-u"*) echo '${JSON.stringify({ ok: true, mail })}' ;;`,
+    ]);
+    const r = tool(h, ['mail-latency']);
+    expect(r.status, r.stderr).toBe(0);
+    const d = JSON.parse(r.stdout);
+    expect(d.undelivered, 'a window mail that was never delivered or acked was left out silently').toBe(3);
+    expect(d.runsWithoutClaimant, 'a run with no claimant was dropped without a count').toBe(2);
+    expect(d.unmatched, 'an undelivered mail was counted as unmatched').toBe(1);
+    const per = JSON.parse(readFileSync(join(h.home, 'out', 'mail-latency-2026-09-08-2026-09-22.json'), 'utf8')).perCoordinator['coord-u'];
+    expect(per.undelivered).toBe(3);
+  });
+
   it('mail-latency: a refused or failed ccrc-api read is an error, never an empty page', () => {
     // The client exits 0 on EVERY HTTP answer, a 4xx body included, and exits 3
     // on a transport failure while still printing {"ok":false}. Read as data,
@@ -196,6 +267,15 @@ describe('measure-landing: the decisions every baseline is derived from', () => 
     expect(py('m.required_state(a, ["build","test"])', [C('build', 'success'), C('test', 'failure'),
       C('mac', 'failure'), C('test', 'success', '2026-09-10T01:00:00Z')]), 'the re-run is the verdict').toBe('green');
     expect(py('m.required_state(a, [])', [C('x', 'failure')]), 'no required context is not a verdict').toBe('unmeasured');
+  });
+
+  it('required_state: an in-progress LATEST attempt is unmeasured, never decided by an earlier one', () => {
+    const running = (name: string) => ({ name, conclusion: null, completed_at: null });
+    expect(py('m.required_state(a, ["test"])', [C('test', 'failure'), running('test')]), 'failure then running').toBe('unmeasured');
+    expect(py('m.required_state(a, ["test"])', [running('test'), C('test', 'failure')]), 'the order of the list is not the order of the attempts').toBe('unmeasured');
+    expect(py('m.required_state(a, ["test"])', [C('test', 'success'), running('test')]), 'success then running').toBe('unmeasured');
+    expect(py('m.required_state(a, ["build","test"])', [C('build', 'failure'), C('test', 'success'), running('test')]),
+      "another context's red still decides").toBe('red');
   });
 
   it('red_intervals: opens on red, closes only on green, and an open one ends at the window', () => {
