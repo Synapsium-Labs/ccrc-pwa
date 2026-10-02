@@ -145,6 +145,26 @@ describe('a return visit merges instead of skipping', () => {
     expect(verdict()).toBe('(merged +0 ~1 !0)');
   });
 
+  it('keeps a record the destination holds at the SAME size when the source is older — byte-identical, same inode', () => {
+    // The only same-size record case elsewhere has a NEWER source. An older
+    // source of the same size reaches the placement loop's own age test, which
+    // nothing else drives: without it the older bytes replace the newer ones.
+    put(SRC('workflows/wf_1.json'), '{"s":"old!"}', T0 - 60);
+    const d = put(DST('workflows/wf_1.json'), '{"s":"new!"}', T0);
+    const before = [read(d), ino(d), fs.statSync(d).mtimeMs];
+    carry();
+    expect([read(d), ino(d), fs.statSync(d).mtimeMs], 'an OLDER same-size record replaced the destination').toEqual(before);
+    expect(verdict()).toBe('(merged +0 ~0 !0)');
+  });
+
+  it('keeps a record whose source has the destination\'s exact mtime_ns but another size — "strictly newer" is strict', () => {
+    put(SRC('workflows/wf_1.json'), '{"state":"completed"}', T0);
+    const d = put(DST('workflows/wf_1.json'), '{"s":"r"}', T0);
+    carry();
+    expect(read(d), 'an EQUAL-age source replaced the destination').toBe('{"s":"r"}');
+    expect(verdict()).toBe('(merged +0 ~0 !0)');
+  });
+
   it('decides equality on size AND mtime, never on size alone — an equal-size file with other bytes is read and counted', () => {
     // The quick check (equal size and equal mtime_ns -> equal) is the ONLY
     // shortcut. Widened to size alone, this diverged tool result would pass
@@ -236,6 +256,27 @@ describe('a return visit merges instead of skipping', () => {
     expect(fs.statSync(DST('subagents/agent-a1.jsonl')).isDirectory()).toBe(true);
     expect(read(DST('subagents/agent-a1.jsonl/inner.txt'))).toBe('KEEP\n');
     expect(swapLog()).toContain(`sidecar ${UUID} diverged ${DST('subagents/agent-a1.jsonl')} longer ${s}`);
+  });
+
+  it('a non-UTF-8 file name does not fail the report after the merge ran', () => {
+    // Only a `diverged` row prints a path. Python's stdout is strict under a
+    // UTF-8 locale and a name that is not UTF-8 would raise AFTER every file
+    // was placed, so the carry would log `(kept: error)` for a walk that
+    // merged. The strict handler is set here so the case does not depend on
+    // the box's locale.
+    const dir = (cfg: string): Buffer => Buffer.from(path.join(h.home, cfg, 'projects', PDIR, UUID, 'tool-results') + '/');
+    const bad = Buffer.from([0x62, 0xff, 0x2e, 0x74, 0x78, 0x74]);   // b<0xFF>.txt
+    fs.mkdirSync(dir('.claude'), { recursive: true });
+    fs.mkdirSync(dir('.claude-d'), { recursive: true });
+    fs.writeFileSync(Buffer.concat([dir('.claude'), bad]), 'SOURCE SIDE\n');
+    fs.writeFileSync(Buffer.concat([dir('.claude-d'), bad]), 'ALREADY THERE\n');
+    put(SRC('tool-results/new.txt'), 'NEW\n');
+    h.sh(`_swap_carry_sidecars "$HOME/.claude" "$HOME/.claude-d" ${UUID} 2>&1`, { PYTHONIOENCODING: 'utf-8:strict' });
+    expect(verdict()).toBe('(merged +1 ~0 !1)');
+    expect(read(DST('tool-results/new.txt'))).toBe('NEW\n');
+    // os.walk hands the undecodable byte back as a lone surrogate (U+DCFF),
+    // which backslashreplace spells out.
+    expect(swapLog()).toContain('tool-results/b\\udcff.txt');
   });
 
   it('links an absent file when it can (same filesystem)', () => {
@@ -371,6 +412,30 @@ describe('the budget is a priority fill: the most valuable actions first, the re
     expect(verdict()).toBe('(merged +1 ~0 !0, deferred 2)');
   });
 
+  it('prices a journal extend at its compare PLUS the copy of the whole source, to the byte', () => {
+    // Compare the shorter side twice (2 x 2), then copy the 6-byte source: 10.
+    // The copy term unpriced, 9 bytes would fit it and 10 are the true cost.
+    put(SRC('subagents/workflows/wf_1/journal.jsonl'), 'A\nB\nC\n', T0 + 60);
+    const d = put(DST('subagents/workflows/wf_1/journal.jsonl'), 'A\n');
+    carry('CARRY_MERGE_BUDGET=9;');
+    expect(read(d), 'an extend priced under its true cost was placed').toBe('A\n');
+    carry('CARRY_MERGE_BUDGET=10;');
+    expect(read(d)).toBe('A\nB\nC\n');
+    expect(verdicts()).toEqual(['(kept: budget)', '(merged +0 ~1 !0)']);
+  });
+
+  it('prices a different-size record replace at the bytes it copies, to the byte', () => {
+    // No compare is read (the sizes already differ), so the whole price is the
+    // 21-byte copy; unpriced, a 20-byte budget would take it.
+    put(SRC('workflows/wf_1.json'), '{"state":"completed"}', T0 + 60);
+    const d = put(DST('workflows/wf_1.json'), '{"s":"r"}');
+    carry('CARRY_MERGE_BUDGET=20;');
+    expect(read(d), 'a record replace priced under its true cost was placed').toBe('{"s":"r"}');
+    carry('CARRY_MERGE_BUDGET=21;');
+    expect(read(d)).toBe('{"state":"completed"}');
+    expect(verdicts()).toEqual(['(kept: budget)', '(merged +0 ~1 !0)']);
+  });
+
   it('prices the copy a same-size record replace makes, not only its compare', () => {
     // 12 bytes each side: the compare reads 24, the newer record is then
     // copied — 12 more. Priced at 36 on its own, it cannot fit a budget of 24.
@@ -408,6 +473,25 @@ describe('bounded: a busy slot falls back to (kept), and nothing waits', () => {
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.carry.lock'))).toBe(true);
   });
 
+  it('takes the slot once for a carry with two existing destinations — the second sidecar neither contends with the first nor logs (kept: busy)', () => {
+    // `_sidecar_matches` answers one sidecar per project dir. A second
+    // `flock -n` on a NEW open file description conflicts with the lock this
+    // same shell already holds (flock(2) treats two open()s as two holders),
+    // so a carry that re-took the slot per sidecar would contend with itself.
+    const OTHER = '-w-other-project';
+    const at = (cfg: string, rel: string): string => path.join(h.home, cfg, 'projects', OTHER, UUID, rel);
+    put(SRC('tool-results/a.txt'), 'A\n');
+    fs.mkdirSync(DST(), { recursive: true });
+    put(at('.claude', 'tool-results/b.txt'), 'B\n');
+    fs.mkdirSync(at('.claude-d', ''), { recursive: true });
+    carry();
+    const rows = swapLog().split('\n').filter((l) => l.includes(` sidecar ${UUID} -> `)).map((l) => l.replace(/^.* sidecar \S+ -> /, ''));
+    expect(rows, swapLog()).toEqual([`${at('.claude-d', '').replace(/\/$/, '')} (merged +1 ~0 !0)`, `${DST()} (merged +1 ~0 !0)`]);
+    expect(swapLog()).not.toContain('(kept');
+    expect(read(at('.claude-d', 'tool-results/b.txt'))).toBe('B\n');
+    expect(read(DST('tool-results/a.txt'))).toBe('A\n');
+  });
+
   it('a destination that is a symlink is not walked into: (kept: error)', () => {
     put(SRC('tool-results/r.txt'), 'R\n');
     const elsewhere = path.join(h.home, 'elsewhere');
@@ -435,6 +519,57 @@ describe('bounded: a busy slot falls back to (kept), and nothing waits', () => {
     put(SRC('tool-results/new.txt'), 'NEW\n');
     fs.mkdirSync(DST(), { recursive: true });
     carry('flock() { echo "flock: No locks available" >&2; return 71; };');
+    expect(verdict()).toBe('(kept: error)');
+    expect(fs.existsSync(DST('tool-results/new.txt'))).toBe(false);
+  });
+});
+
+describe('a walk that cannot finish is (kept: error), and the carry still answers rc 0', () => {
+  // Spec §5.1 names five causes. The symlinked destination, the unopenable
+  // lock and a non-conflict flock exit are pinned above; these are the other
+  // two. The walker is replaced by a function in the snippet's own shell (the
+  // flock case's idiom), so the bash arm is what is measured.
+  it('a walker that exits with a failure code is (kept: error), though it printed a summary row', () => {
+    put(SRC('tool-results/new.txt'), 'NEW\n');
+    fs.mkdirSync(DST(), { recursive: true });
+    const out = carry('_swap_carry_merge_walk() { echo "merged 1 0 0 0"; return 1; };');
+    expect(out).toContain('[rc=0]');
+    expect(verdict()).toBe('(kept: error)');
+  });
+
+  it('a walker that exits 0 but prints no readable summary row is (kept: error)', () => {
+    put(SRC('tool-results/new.txt'), 'NEW\n');
+    fs.mkdirSync(DST(), { recursive: true });
+    for (const body of ['echo "merged oops"', 'echo "diverged a longer b"', ':']) {
+      carry(`_swap_carry_merge_walk() { ${body}; return 0; };`);
+    }
+    expect(verdicts()).toEqual(['(kept: error)', '(kept: error)', '(kept: error)']);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a real walk that dies part way leaves every file it placed whole and is (kept: error)', () => {
+    // `a.txt` is the newer action and is placed first; `b.txt`'s compare then
+    // cannot open the unreadable source, and the walk ends in a traceback.
+    put(SRC('tool-results/a.txt'), 'A\n', T0 + 100);
+    const b = put(SRC('tool-results/b.txt'), 'SRC\n', T0 + 50);
+    put(DST('tool-results/b.txt'), 'DST\n', T0);
+    fs.chmodSync(b, 0o000);
+    try {
+      carry();
+    } finally {
+      fs.chmodSync(b, 0o644);
+    }
+    expect(verdict()).toBe('(kept: error)');
+    expect(read(DST('tool-results/a.txt'))).toBe('A\n');
+    expect(read(DST('tool-results/b.txt'))).toBe('DST\n');
+  });
+
+  it('no python3 is (kept: error), and nothing is placed', () => {
+    // `command -v python3` is shadowed by a function in the snippet's shell, so
+    // the clause is read as ccd reads it without touching PATH. Named cost: a
+    // real absence of the binary is not exercised, only the clause's reading.
+    put(SRC('tool-results/new.txt'), 'NEW\n');
+    fs.mkdirSync(DST(), { recursive: true });
+    carry('command() { if [[ "$1" == -v && "$2" == python3 ]]; then return 1; fi; builtin command "$@"; };');
     expect(verdict()).toBe('(kept: error)');
     expect(fs.existsSync(DST('tool-results/new.txt'))).toBe(false);
   });

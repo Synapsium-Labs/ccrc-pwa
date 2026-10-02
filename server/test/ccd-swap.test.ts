@@ -165,13 +165,22 @@ describe('cmd_swap carries the sidecars', () => {
     // this case pins that the real verb reaches the merge.
     const mdir = seed('claude');
     plant('.claude', mdir, 'HISTORY\n');
+    // Two differing files, one longer on each side: spec §5.1 has every `!D` row
+    // name the LONGER copy (stage 3's manifest reads it), so the row must follow
+    // the sizes, not be a constant.
     sidecar('.claude', mdir, 'tool-results/r.json', 'SOURCE\n');
     sidecar('.claude-d', mdir, 'tool-results/r.json', 'ALREADY THERE\n');
+    const LONG_SRC = sidecar('.claude', mdir, 'tool-results/s.json', 'A LONGER SOURCE\n');
+    sidecar('.claude-d', mdir, 'tool-results/s.json', 'KEPT\n');
     runSwap();
-    expect(fs.readFileSync(dstAt(mdir, path.join(UUID, 'tool-results/r.json')), 'utf8'))
-      .toBe('ALREADY THERE\n');
-    expect(swapLog()).toContain('(merged +0 ~0 !1)');
+    const dstR = dstAt(mdir, path.join(UUID, 'tool-results/r.json'));
+    const dstS = dstAt(mdir, path.join(UUID, 'tool-results/s.json'));
+    expect(fs.readFileSync(dstR, 'utf8')).toBe('ALREADY THERE\n');
+    expect(fs.readFileSync(dstS, 'utf8')).toBe('KEPT\n');
+    expect(swapLog()).toContain('(merged +0 ~0 !2)');
     expect(swapLog()).not.toContain('(kept');
+    expect(swapLog()).toContain(`sidecar ${UUID} diverged ${dstR} longer ${dstR}`);
+    expect(swapLog()).toContain(`sidecar ${UUID} diverged ${dstS} longer ${LONG_SRC}`);
   });
 
   it('falls back to a full copy without nesting when cp -al leaves a partial destination behind', () => {
