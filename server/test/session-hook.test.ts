@@ -8135,8 +8135,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // this branch merged onto it). Neither frozen corpus document changed, checked, and README's own entry is
     // empty at the tip, so nothing was re-pointed and no rule changed. What moved is this branch's insertions
     // under frozen anchors: the direct-entry guard, +30 lines at `ccd/ccd:11-40` (27169 -> 27199), and the pair
-    // publisher in `deploy/deploy.sh`, +19 (1257 -> 1276: `install_ccd_pair` at `:216-232`, the body's backup at
-    // `:585`, the call at `:646`); `ccd/ccrc`'s +79 lines moved nothing here. The guard's length is the
+    // publisher in `deploy/deploy.sh`, +19 (1257 -> 1276: `install_ccd_pair` at `:216-231`, the body's backup at
+    // `:585`, the call at `:647`); `ccd/ccrc`'s +79 lines moved nothing here. The guard's length is the
     // coordinator's ruling: at +29 lines FACT TWO redded (`spec:100 :13020` anchored by the short token `ccd`
     // alone), at +30 it holds.
     // Entered: `plan:3236 ccd/ccd:19`, `plan:3240 ccd/ccd:12032-12034`, `spec:1250 ccd/ccd:19`, `spec:91
@@ -8736,8 +8736,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // this branch merged onto it). Neither frozen corpus document changed, checked, and README's own entry is
     // empty at the tip, so nothing was re-pointed and no rule changed. What moved is this branch's insertions
     // under frozen anchors: the direct-entry guard, +30 lines at `ccd/ccd:11-40` (27169 -> 27199), and the pair
-    // publisher in `deploy/deploy.sh`, +19 (1257 -> 1276: `install_ccd_pair` at `:216-232`, the body's backup at
-    // `:585`, the call at `:646`); `ccd/ccrc`'s +79 lines moved nothing here. The guard's length is the
+    // publisher in `deploy/deploy.sh`, +19 (1257 -> 1276: `install_ccd_pair` at `:216-231`, the body's backup at
+    // `:585`, the call at `:647`); `ccd/ccrc`'s +79 lines moved nothing here. The guard's length is the
     // coordinator's ruling: at +29 lines FACT TWO redded (`spec:100 :13020` anchored by the short token `ccd`
     // alone), at +30 it holds.
     // **Files:** 19 -> 18. Left: `ccd/ccd:3940-3951` (`plan:2747`), a coincidental pass on the shift, not a
@@ -9187,8 +9187,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // this branch merged onto it). Neither frozen corpus document changed, checked, and README's own entry is
     // empty at the tip, so nothing was re-pointed and no rule changed. What moved is this branch's insertions
     // under frozen anchors: the direct-entry guard, +30 lines at `ccd/ccd:11-40` (27169 -> 27199), and the pair
-    // publisher in `deploy/deploy.sh`, +19 (1257 -> 1276: `install_ccd_pair` at `:216-232`, the body's backup at
-    // `:585`, the call at `:646`); `ccd/ccrc`'s +79 lines moved nothing here. The guard's length is the
+    // publisher in `deploy/deploy.sh`, +19 (1257 -> 1276: `install_ccd_pair` at `:216-231`, the body's backup at
+    // `:585`, the call at `:647`); `ccd/ccrc`'s +79 lines moved nothing here. The guard's length is the
     // coordinator's ruling: at +29 lines FACT TWO redded (`spec:100 :13020` anchored by the short token `ccd`
     // alone), at +30 it holds.
     // `|` rows: 59 -> 52. Entered: `ccd/ccd:13673`, `ccd/ccd:2793`, `ccd/ccd:5828-5830`. Left:
@@ -9392,54 +9392,105 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // ccd/ccd:12032-12034` x2, `spec:2209 ccd/ccd:4046` and `spec:2220 ccd/ccd:2874` x2 enter and `spec:2125
     // ccd/ccd:13673`, `spec:2220 ccd/ccd:3050` x2 leave on M's lines. 40, FROM THE SAME RUN as the row-pass set
     // above. Measured by diffing the dumped failure sets of the three trees, never retyped. No D-number.
-    // RE-MEASURED at reclaim-entry-safety (run 199, D-3696), S6-R11 (base `5b1c58a8` = origin/main, the tip =
-    // this branch merged onto it). Neither frozen corpus document changed, checked, and README's own entry is
-    // empty at the tip, so nothing was re-pointed and no rule changed. What moved is this branch's insertions
-    // under frozen anchors: the direct-entry guard, +30 lines at `ccd/ccd:11-40` (27169 -> 27199), and the pair
-    // publisher in `deploy/deploy.sh`, +19 (1257 -> 1276: `install_ccd_pair` at `:216-232`, the body's backup at
-    // `:585`, the call at `:646`); `ccd/ccrc`'s +79 lines moved nothing here. The guard's length is the
-    // coordinator's ruling: at +29 lines FACT TWO redded (`spec:100 :13020` anchored by the short token `ccd`
-    // alone), at +30 it holds.
-    // Twin: 40 -> 35. Entered: `spec:2125 ccd/ccd:13673`. Left: `spec:2124 ccd/ccd:3037-3089`, `spec:2124
-    // ccd/ccd:3038`, `spec:2220 ccd/ccd:3070` x3, `spec:2222 ccd/ccd:5385-5388`. Measured by diffing the dumped
-    // failure sets of the two trees, never retyped. No D-number.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
-      'spec:308 server/test/single-definition.test.ts:1274',
-      'spec:308 server/test/single-definition.test.ts:1319-1320',
-      'spec:2123 ccd/ccd:13573-13575',
-      'spec:2125 ccd/ccd:5797',
-      'spec:2125 ccd/ccd:7568',
-      'spec:2125 ccd/ccd:11025',
-      'spec:2125 ccd/ccd:13561',
-      'spec:2125 ccd/ccd:13567',
-      'spec:2125 ccd/ccd:13673',
-      'spec:2125 ccd/ccd:13560-13562',
-      'spec:2125 ccd/ccd:19109',
-      'spec:2125 ccd/ccd:19098',
-      'spec:2125 ccd/ccd:19120',
-      'spec:2125 ccd/ccd:19131',
-      'spec:2204 ccd/ccd:12032-12034',
-      'spec:2204 ccd/ccd:12032-12034',
-      'spec:2209 ccd/ccd:13809',
-      'spec:2209 ccd/ccd:13812',
-      'spec:2209 ccd/ccd:6425',
-      'spec:2209 ccd/ccd:1223',
-      'spec:2209 ccd/ccd:6547',
-      'spec:2209 ccd/ccd:3390-3402',
-      'spec:2209 ccd/ccd:3401',
-      'spec:2209 ccd/ccd:4029',
-      'spec:2209 ccd/ccd:4046',
-      'spec:2209 ccd/ccd:3038',
-      'spec:2209 ccd/ccd:2972-2973',
-      'spec:2209 ccd/ccd:8609',
-      'spec:2209 ccd/ccd:8654',
-      'spec:2209 ccd/ccd:8673',
-      'spec:2210 ccd/ccd:13573-13575',
-      'spec:2220 ccd/ccd:2874',
-      'spec:2220 ccd/ccd:2874',
-      'spec:2220 ccd/session-hook.sh:993',
-      'spec:2222 ccd/ccd:5725',
+      // RE-MEASURED at the tree this ships in (fix round 4). The citation
+      // RE-POINT LEFT THIS WAVE — both corpus documents are byte-identical to
+      // `origin/main`, so no anchor of this branch's ships. What moved these
+      // numbers instead is this branch's own `ccd/ccd` growth (+418 lines by
+      // the D-2989 guards and their arguments), which shifts every anchor
+      // below it — main's anchors going stale on this branch, not the other
+      // way round. Whatever the instrument printed is what ships.
+      // RE-DERIVED on the merge with `f06abdce` (round 7), from the same run as
+      // the set above — the two are one measurement and must not be taken from
+      // different trees.
+      // RE-DERIVED on the fourth merge (`ad3d2fbc`), 38 -> 34, from the SAME run
+      // as the row-pass set above — the two are one measurement and must not be
+      // taken from different trees. Every move mirrors one there: `:3038` and
+      // `:19120` enter, `:3390-3402`, `:2874` x2, `:3050` x2 and `:5385-5388`
+      // leave. `:2793` and `:12594-12659` entered the row set and are absent here
+      // because no other pass reaches them, which is what this list measures.
+      // RE-DERIVED AGAIN at board-placement wave 2's gate, 34 -> 36, FROM THE
+      // SAME RUN as the row-pass set above — the two are one measurement. Both
+      // new entries MIRROR the two that entered there, and they appear here
+      // because the paragraph audit reaches the same sites: the spec's `:308`
+      // paragraph cites `server/test/single-definition.test.ts:1274` and
+      // `:1319-1320` in prose as well as in a `|` row, so this pass adds no
+      // reach for them. Same single cause as there — Task 1's +23 lines at
+      // `:378` of that file — and the same reason nothing is re-pointed: the
+      // spec is byte-identical to `origin/main` at this tree. Nothing else
+      // moves, because this wave touches neither `ccd/ccd` nor
+      // `ccd/session-hook.sh`.
+      // RE-MEASURED at the autoswitcher/compaction wave (D-3097…D-3109), 38 -> 37,
+      // FROM THE SAME RUN as the row-pass set above — the two are one measurement
+      // and must not be taken from different trees. Every move MIRRORS one there:
+      // `spec:2125 ccd/ccd:13560-13562`, `spec:2210 ccd/ccd:13573-13575` and
+      // `spec:2220 ccd/ccd:3050` x2 enter; `spec:2220 ccd/ccd:2874` x2 and
+      // `spec:2220 ccd/ccd:3070` x3 leave. The row set's other two movers
+      // (`:2433-2439`, `:5353-5362`) are absent here because no other pass reaches
+      // those sites, which is exactly what this list measures. One cause for all of
+      // them — this wave's `ccd/ccd` growth — and nothing is re-pointed: both
+      // corpus documents are byte-identical to `origin/main` at this tree. S6-R11
+      // covers the re-measurement, so no D-number.
+      // RE-MEASURED at child-reclamation wave 1 (Task 3), 36 -> 35, FROM THE
+      // SAME RUN as the row-pass set above, and every move mirrors one there:
+      // `spec:2125 ccd/ccd:13567` enters; `spec:2123` and `spec:2210`
+      // `ccd/ccd:13573-13575` leave. One cause — Task 3's eight lines above
+      // them — and nothing re-pointed. S6-R11 covers it, so no D-number.
+      // RE-MEASURED (Plan 2b-2 Task 2), 35 -> 39, FROM THE SAME RUN as the
+      // row-pass set above. Every move MIRRORS one there: `spec:2123
+      // ccd/ccd:13573-13575`, `spec:2210 ccd/ccd:13573-13575`, `spec:2124
+      // ccd/ccd:3037-3089` and `spec:2220 ccd/ccd:3070` x3 enter; `spec:2209
+      // ccd/ccd:4046` and `spec:2209 ccd/ccd:8609` leave. The row set's other
+      // movers are absent here because no other pass reaches those sites.
+      // Same one cause, the platform helpers' +155 lines in `ccd/ccd`, and
+      // nothing is re-pointed. S6-R11, so no D-number.
+      // RE-MEASURED at reclaim-entry-safety (run 199, D-3696), S6-R11 (base `5b1c58a8` = origin/main, the tip =
+      // this branch merged onto it). Neither frozen corpus document changed, checked, and README's own entry is
+      // empty at the tip, so nothing was re-pointed and no rule changed. What moved is this branch's insertions
+      // under frozen anchors: the direct-entry guard, +30 lines at `ccd/ccd:11-40` (27169 -> 27199), and the pair
+      // publisher in `deploy/deploy.sh`, +19 (1257 -> 1276: `install_ccd_pair` at `:216-231`, the body's backup at
+      // `:585`, the call at `:647`); `ccd/ccrc`'s +79 lines moved nothing here. The guard's length is the
+      // coordinator's ruling: at +29 lines FACT TWO redded (`spec:100 :13020` anchored by the short token `ccd`
+      // alone), at +30 it holds.
+      // Twin: 40 -> 35. Entered: `spec:2125 ccd/ccd:13673`. Left: `spec:2124 ccd/ccd:3037-3089`, `spec:2124
+      // ccd/ccd:3038`, `spec:2220 ccd/ccd:3070` x3, `spec:2222 ccd/ccd:5385-5388`. Measured by diffing the dumped
+      // failure sets of the two trees, never retyped. No D-number.
+        'spec:308 server/test/single-definition.test.ts:1274',
+        'spec:308 server/test/single-definition.test.ts:1319-1320',
+        'spec:2123 ccd/ccd:13573-13575',
+        'spec:2125 ccd/ccd:5797',
+        'spec:2125 ccd/ccd:7568',
+        'spec:2125 ccd/ccd:11025',
+        'spec:2125 ccd/ccd:13561',
+        'spec:2125 ccd/ccd:13567',
+        'spec:2125 ccd/ccd:13673',
+        'spec:2125 ccd/ccd:13560-13562',
+        'spec:2125 ccd/ccd:19109',
+        'spec:2125 ccd/ccd:19098',
+        'spec:2125 ccd/ccd:19120',
+        'spec:2125 ccd/ccd:19131',
+        'spec:2204 ccd/ccd:12032-12034',
+        'spec:2204 ccd/ccd:12032-12034',
+        'spec:2209 ccd/ccd:13809',
+        'spec:2209 ccd/ccd:13812',
+        'spec:2209 ccd/ccd:6425',
+        'spec:2209 ccd/ccd:1223',
+        'spec:2209 ccd/ccd:6547',
+        'spec:2209 ccd/ccd:3390-3402',
+        'spec:2209 ccd/ccd:3401',
+        'spec:2209 ccd/ccd:4029',
+        'spec:2209 ccd/ccd:4046',
+        'spec:2209 ccd/ccd:3038',
+        'spec:2209 ccd/ccd:2972-2973',
+        'spec:2209 ccd/ccd:8609',
+        'spec:2209 ccd/ccd:8654',
+        'spec:2209 ccd/ccd:8673',
+        'spec:2210 ccd/ccd:13573-13575',
+        'spec:2220 ccd/ccd:2874',
+        'spec:2220 ccd/ccd:2874',
+        'spec:2220 ccd/session-hook.sh:993',
+        'spec:2222 ccd/ccd:5725',
       ]);
   });
 
