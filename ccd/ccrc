@@ -12159,6 +12159,16 @@ cmd_install() {
     || _ccrc_die "systemctl is required by 'ccrc install' — every ccrc service and every ccd session is a systemd --user unit, and this box has no systemctl on PATH. Install/enable systemd, or do not run a fleet on this box. Nothing on this box was written or changed."
   fi
 
+  # THE DIRECT ENTRY'S INTERPRETER (D-3696), proved BEFORE anything moves.
+  # `~/.local/bin/ccd` is a standard-library Python launcher whose shebang names
+  # this box's canonical python3 in isolated mode; a python3 that is missing,
+  # is not Python 3, does not honour -IS, or lives at a path no shebang can
+  # carry would publish a launcher no kernel can start — so it refuses here,
+  # with the old pair untouched. The same check runs again inside `_inst_bins`,
+  # against the PLACED tree's helper, right before the pair is published.
+  _inst_entry_python "$CCRC_HERE/ccd-entry-install.py" \
+    || _ccrc_die "$CCRC_ENTRY_WHY Nothing on this box was written or changed."
+
   INST_DEGRADED=()
   # W6 Task 3: a crashed one-time migration (~/ccrc.migrating standing, no
   # ~/ccrc) is completed FIRST (design §11) — before the spine, so before
@@ -13603,6 +13613,62 @@ exec "$CCRC_SHIPPED" "$@"
 CCRC_SHIM
 }
 
+# ── _inst_entry_python / _inst_ccd_pair — ccd's direct-entry PAIR (D-3696) ──
+# `~/.local/bin/ccd` is no longer a copy of `ccd/ccd`. It is the launcher
+# rendered from `ccd/ccd-entry.py` — standard-library Python with an absolute
+# isolated-python3 shebang and the SHA-256 of the active Bash body at
+# `~/.local/libexec/ccrc/ccd` — which starts a direct `ws-reclaim`, or a direct
+# `ws-audit --session <value> --reclaim [--defer-expired]`, under a proved
+# Bash >= 4.4 in privileged mode, before Bash startup can consume an inherited
+# function, BASH_ENV or option state.
+#
+# BOTH HALVES ARE PUBLISHED BY ONE PROGRAM, `ccd/ccd-entry-install.py`, the
+# same one deploy/deploy.sh runs on a fleet box: it renders under this box's
+# own canonical python3 (-IS), runs the STAGED launcher through the kernel in a
+# throwaway copy of the final layout before either active file moves, and then
+# publishes the body FIRST and the launcher LAST, one rename each, refusing a
+# destination that is a directory or a link to one and re-measuring each
+# destination afterwards. A half already carrying the exact bytes and mode is
+# left alone, so a converged box rewrites nothing. Its exit 2 is the one partial
+# state — the body moved, the launcher did not — in which the old launcher
+# refuses the new body by digest until a re-run converges; nothing is rolled
+# back across the two directories.
+CCRC_ENTRY_PY=""
+CCRC_ENTRY_WHY=""
+_inst_entry_python() {   # <helper> -> rc 0 with CCRC_ENTRY_PY = the canonical python3 the launcher's shebang names
+  # The interpreter is asked for its OWN canonical path (`realpath` of
+  # `sys.executable`, under -IS), and that exact binary re-runs the helper's
+  # `check`, which proves Python 3 and all four isolation flags and prints the
+  # path the shebang will name — the PATH python3 when it IS that binary, else
+  # the canonical one (D-3698) — after proving it shebang-safe. The canonical
+  # path is what RUNS the helper below; the printed one is what it renders.
+  local helper="$1" py out rc=0
+  CCRC_ENTRY_PY=""; CCRC_ENTRY_WHY=""
+  [ -f "$helper" ] \
+    || { CCRC_ENTRY_WHY="the shipped tree has no $helper — is this a complete ccrc tree? (re-run after: bash install.sh)"; return 1; }
+  py="$(python3 -IS -c 'import os,sys;sys.stdout.write(os.path.realpath(sys.executable))' 2>/dev/null)" || py=""
+  [ -n "$py" ] \
+    || { CCRC_ENTRY_WHY="python3 is required: ccd's installed direct entry is a standard-library Python launcher (D-3696), and no python3 on PATH runs in isolated mode (-IS)."; return 1; }
+  out="$("$py" -IS "$helper" check 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$out" ] || [ "${out#/}" = "$out" ]; then
+    CCRC_ENTRY_WHY="python3 at $py cannot be ccd's launcher interpreter: ${out:-it answered nothing}."
+    return 1
+  fi
+  CCRC_ENTRY_PY="$py"
+}
+
+_inst_ccd_pair() {   # <tree> — render, self-test and publish ccd's launcher/body pair from <tree>
+  local tree="$1" rc=0
+  _inst_entry_python "$tree/ccd/ccd-entry-install.py" \
+    || _ccrc_die "$CCRC_ENTRY_WHY Neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd was changed."
+  "$CCRC_ENTRY_PY" -IS "$tree/ccd/ccd-entry-install.py" install "$tree" "$HOME" || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    2) _ccrc_die "ccd's pair was left half-published — the line above names the half that moved and why; until a re-run converges it, ccd starts on this box may refuse: re-run 'ccrc update' (or 'ccrc install')" ;;
+    *) _ccrc_die "ccd's direct-entry pair was not installed (the line above says why) — neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd moved" ;;
+  esac
+}
+
 _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launcher
   # AFTER `_inst_tree`, always. The launcher execs `~/ccrc/ccd/ccrc` and refuses
   # by name when that file is absent, so installing it first would put a
@@ -13618,7 +13684,10 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   # gives as the reason the launcher exists.
   local bin="$HOME/.local/bin" tree="$BOX_TREE_DIR" gen
   mkdir -p "$bin" || _ccrc_die "cannot create $bin"
-  _inst_atomic "$tree/ccd/ccd" "$bin/ccd" 755
+  # ccd ITSELF IS A PAIR (D-3696), never one `_inst_atomic`: the Bash body at
+  # ~/.local/libexec/ccrc/ccd and the launcher rendered onto PATH, published by
+  # the placed tree's own helper — `_inst_ccd_pair`'s header.
+  _inst_ccd_pair "$tree"
   # `ccd-account-auth` is the account-connection helper `ccd account-pane`
   # execs, and it goes on BOTH arms — unlike the two below, which are gated on
   # cgroups and on a systemd timer respectively. macOS is a supported box for
@@ -19212,7 +19281,7 @@ _upd_backup() {
       || _ccrc_die "the coord.db snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
   fi
   _upd_backup_set
-  local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, dists, ccd, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
+  local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, dists, ccd and its body, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
 }
 
 # ── _upd_backup_set — the ONE list of what a backup copies ────────────────
@@ -19223,6 +19292,10 @@ _upd_backup_set() {
   _upd_backup_copy "$BOX_TREE_DIR/server/dist"     server-dist
   _upd_backup_copy "$BOX_TREE_DIR/server/dist-pwa" dist-pwa
   _upd_backup_copy "$BOX_TREE_DIR/agent/dist"      agent-dist
+  # ccd is a PAIR (D-3696): its body first, then the launcher, so arm 3 of
+  # `_upd_restore` — which walks these rows in order — puts the body back
+  # before the launcher that names its digest.
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/ccd" ccd-body
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
   _upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs
@@ -22281,7 +22354,13 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccgpt-proxy.py" "$HOME/.local/bin/ccgpt-usage.py" \
     "$HOME/.local/bin/ccgpt-runtime" "$HOME/.local/bin/ccrc-codex" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  # ccd's BODY (D-3696), the other half of the pair the launcher above named,
+  # and its directory only if that leaves it empty — anything else an operator
+  # keeps under ~/.local/libexec is not ccrc's to remove.
+  rm -f -- "$HOME/.local/libexec/ccrc/ccd" \
+    || _ccrc_die "removing ccd's body from \$HOME/.local/libexec/ccrc failed"
+  rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an
