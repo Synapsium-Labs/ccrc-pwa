@@ -18,7 +18,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | review 225 ruled 2026-10-02: fix round (four minor fixes) |
+| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | fix round done 2026-10-02; in re-review (run 229) |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | — | planned; approved 2026-10-01 (#223) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
@@ -115,6 +115,18 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     spelling only.
   - **Deferred to stage 3's plan.** F4, the RETURN_ACTS / ENDS_THE_ARCHIVE binding, and R1's residual. They are
     listed under Carried constraints.
+- **2026-10-02 — wave 1's fix round done, in re-review.** The fresh wave-done (tip `56ad0992`) passed the server's
+  re-measurement.
+  - **Fixes:** F1, F2, F3 and F5, as 3784 through 3787. That uses the whole block, each number defined in the commit
+    it records.
+  - **Main merged:** `cf9e4cc8`, with no hand resolution (no `--cc` hunk).
+  - **CI:** every required Linux leg is green. One server shard needed a re-run, red in two of #222's files that this
+    wave does not touch (`update-inventory` "inside the same second" and a `ccrc-update` hook timeout).
+  - **Re-review:** review run 229 went to `ccrc-pwa-keen-summit`. The held-out panel reads the fix range
+    `79812043..dd34f2a3`.
+  - **Open for that review: whether F2 reads clearly.** F2 chose a disabled toggle with no `:disabled` style, so a
+    sighted operator sees an unchanged toggle that ignores the tap. The review judges that against the ruling's
+    "whichever reads more clearly to the operator".
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
