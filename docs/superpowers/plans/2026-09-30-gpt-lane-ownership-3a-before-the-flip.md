@@ -3088,14 +3088,14 @@ Task 10 pins all three on the live-shape fixture.
         lines.push([DOCTOR_FINDINGS[1], acct.id,
   ```
 
-  New:
+  New (its comment as amended by Task 11's close-out, `3bd31cca4`: a comment here that spells the model-env export's name reds `modelenv-single-writer`, because this file already writes `settings.json`):
 
   ```js
       } catch { env = null; }
       // A CODEX lane's rule is ABSENT OR EQUAL (R-C7,
       // D-3709). Its launcher exports
       // ANTHROPIC_BASE_URL itself, and no ccrc writer puts that key in
-      // settings.json (`MODEL_ENV_KEYS`, shared/modelenv.mjs), so an env block
+      // settings.json (the model-env keys shared/modelenv.mjs owns), so an env block
       // without it — or no env block at all — is that lane's healthy state.
       // Only a key naming ANOTHER endpoint is drift; which of the two Claude
       // Code honours is unmeasured, so the finding says both and judges neither.
@@ -11415,8 +11415,8 @@ Each entry says what departs, from which text, the measurement that forced it, a
   - **Departs from:** §10, which names no platform, and §12's WARN row read on Darwin (2b-1 item 17c).
   - **Measured:** `_inst_units_darwin` installs no timer at all (`ccd/ccrc:14048-14072`, decision 17).
   - **Cost if wrong:** a macOS codex lane publishes no usage row.
-- **D-3721: the missing-timer WARN names `ccrc install`, not `--fix`, and `--fix` restarts no tier on a stale finding alone: it asks for a restart only after a `cmp`-measured byte replacement of `ccgpt-proxy.py` or `ccgpt-runtime`, or a runtime rebuild, and that restart, `_inst_codex_tiers`, the same step `ccrc update` runs, also restarts any other stale ccrc-owned tier on any lane (the ruled residue).**
-  - **Departs from:** §12's `--fix` list: "enable a missing usage timer", and "restart a verified ccrc-owned active tier", read for a tier whose only finding is stale code. Both rows are WARNs. On a FAIL, `--fix` asks for a tier restart only after it replaced the bytes (measured by `cmp`) of the shim (`ccgpt-proxy.py`) or the runtime CLI (`ccgpt-runtime`), or rebuilt the runtime (Task 8); a mode-only fix, `ccgpt-usage.py`, `ccrc-codex` or an unmeasured compare never asks. It then runs `_inst_codex_tiers`, the install step `ccrc update` runs, which restarts every running ccrc-owned tier that measures stale, on any lane, not only the tiers whose code this fix replaced (ruled residue, Task 8 fix round 1). A stale tier's own remedy names `ccrc update` or the lane's `ccrc codex stop` and `start` (Task 5).
+- **D-3721: the missing-timer WARN names `ccrc install`, not `--fix`, and `--fix` restarts no tier on a stale finding alone: beyond the codex arm's own restart of a lane's proven running LiteLLM tier under a changed render, it asks for a tier restart only after it places `ccgpt-proxy.py` or `ccgpt-runtime` again where `cmp` did not find the shipped bytes, or rebuilds the runtime, and that restart, `_inst_codex_tiers`, the same step `ccrc update` runs, also restarts any other stale ccrc-owned tier on any lane (the ruled residue).**
+  - **Departs from:** §12's `--fix` list: "enable a missing usage timer", and "restart a verified ccrc-owned active tier", read for a tier whose only finding is stale code. Both rows are WARNs. On a FAIL, `--fix` asks for a tier restart only after it replaced the bytes (measured by `cmp`) of the shim (`ccgpt-proxy.py`) or the runtime CLI (`ccgpt-runtime`), or rebuilt the runtime (Task 8). A `cmp` that ran but could not read the installed file (exit 2) counts as a byte difference, so that placement asks too; a mode-only fix, `ccgpt-usage.py`, `ccrc-codex`, and a placement with no `cmp` on PATH (the one unmeasured compare) never ask. Separately, `_fix_codex`'s step 3 re-renders `litellm.yaml` through the codex arm on every `--fix`, and the arm stops and restarts the lane's own proven running LiteLLM tier when that render changed: its stop-before-write, never a restart for staleness. It then runs `_inst_codex_tiers`, the install step `ccrc update` runs, which restarts every running ccrc-owned tier that measures stale, on any lane, not only the tiers whose code this fix replaced (ruled residue, Task 8 fix round 1). A stale tier's own remedy names `ccrc update` or the lane's `ccrc codex stop` and `start` (Task 5).
   - **Measured:** `cmd_doctor` runs a fixer only when a check returns 1 (`ccd/ccrc:3312`). R-C8 keeps that one contract for every fixer.
   - **Cost if wrong:** one extra command for the operator.
 - **D-3722: one of the two live GPT-lane labels cannot join the residue class.**
