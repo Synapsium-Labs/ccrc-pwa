@@ -161,6 +161,16 @@ independent reader, then cross-checked by another. The cross-check upheld every 
   (measured on `main`; the two its plan missed were added at our mail), so wave 4 moves every count word it finds,
   and continuity's planned worker clause waits on CI "with the Monitor tool", while this programme's worker clause says
   a Monitor is never a wake to end a turn on. They fit only if continuity's wait happens inside the turn.
+- **Landing-order wave 2 (run 238, dispatched 2026-10-02) overlaps wave 4.** Run 238's Task 5 touches three files:
+  - `ccd/coordinator-skill/SKILL.md`: it appends a sentence to coordinator clause 15, adding no clause and moving no
+    count word;
+  - `coordinator-skill.test.ts`: it edits `CONTRACT[14]`;
+  - `references/wave-lifecycle.md`.
+
+  Wave 4's clause 16 and `CONTRACT[15]` sit next to those edits. Both coordinators agreed (mails 3240 and 3241) that
+  whichever lands second keeps both sides: clause 15 keeps the appended sentence, ours stays 16, and the count words
+  follow `main`. The worker absorbs only on its own probe. If wave 4's PR is already open and idle when run 238 lands,
+  this session measures the conflict and sends the fix-round.
 - Wave 2's parked minors live in the coordinator's review notes, not in a tracked file; wave 5's plan carries the
   curated set it fixes, written out in full.
 
