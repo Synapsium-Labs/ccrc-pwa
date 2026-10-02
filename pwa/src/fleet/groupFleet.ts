@@ -1,4 +1,5 @@
 import { boardHome, releasedFromOf, type FleetSession, type ReleasedFrom } from '../../../shared/api';
+import { archivedFoldSince, inArchivedFold } from '../../../shared/api';
 import { isUnseen, type Acks } from '../lib/seen';
 import { sortFleet } from './sortFleet';
 
@@ -78,7 +79,10 @@ export interface FleetGroup {
    *  more: an archived session is stopped, so a marker it still carries
    *  describes a rescue that no longer has anything to rescue. */
   stranded: number;
-  /** Members in the `archived` BUCKET — folded out of the live list, never
+  /** Members in the `Archived (N)` fold — `inArchivedFold` (workspace lifecycle
+   *  spec §5.2): the `archived` BUCKET, plus a STOPPED main checkout, which
+   *  archiving now puts away too (it is never deleted). Newest first, on
+   *  `archivedFoldSince`. Folded out of the live list, never
    *  dropped. `/s/<id>` still resolves and the transcript still renders, so a
    *  card that omitted them entirely would leave the workspace reachable only
    *  by a URL nobody has. They take no part in `attention`, `busy`, `unseen`
@@ -99,7 +103,13 @@ export interface FleetGroup {
    *  The fleet footer (`FleetScreen`'s route into `/archive`) is a THIRD,
    *  deliberately wider set — everything with an `archivedAt`, because that
    *  is the disk fact — which is why it no longer says the bare word
-   *  "Archived". */
+   *  "Archived".
+   *
+   *  The stopped main checkout is the one member a DIFFERENT chip counts: its
+   *  bucket is still `dead` (M10 — a lifecycle moves no bucket), so the Dead
+   *  chip counts a row this fold holds. Stated, not changed (spec §5.2); and
+   *  the footer stays a WORKSPACE list, since a main checkout has no
+   *  `archivedAt`. */
   archived: FleetSession[];
   /** Members in the `Released (N)` fold (workspace lifecycle spec §5.1) — `inReleasedFold` below, newest close
    *  first. The transition zone: a programme is done with them, and they wait here to be archived. Like
@@ -183,23 +193,25 @@ export function groupFleet(
 ): FleetGroup[] {
   const byProject = new Map<string, FleetSession[]>();
   // Folded rows after the live ones (workspace lifecycle §5.1): a card's place comes from its first member, and a
-  // folded row must not lift its card above a live row other than an unfolded `dead` one. "Unfolded `dead`" is dead
+  // folded row must not lift its card above a live row other than a `dead` one not in the Released fold. "Dead, not in the Released fold" is dead
   // and not in the Released fold (`inReleasedFold`): a released dead row that carries a strand marker is one too.
   // Four parts, each stable in the fleet order:
-  // (1) rows that are neither folded, archived nor unfolded `dead`; (2) folded (released) rows, which rank above
+  // (1) rows that are neither folded, archived nor dead-not-in-the-Released-fold; (2) folded (released) rows, which rank above
   // archived ones as idle, done and cleanup rows did before the fold — and a folded DEAD row too, which `sortFleet`
-  // alone ranks below archived; (3) archived rows; (4) unfolded `dead` rows, which keep `sortFleet`'s RANK (archived
+  // alone ranks below archived; (3) archived rows; (4) dead-not-in-the-Released-fold rows (a stopped main checkout too, though the Archived fold holds it: the order keys on the BUCKET), which keep `sortFleet`'s RANK (archived
   // 5 above dead 6): only a FOLDED row is lifted past archived, so a card holding only an unfolded dead row (an
   // unreleased one, or a released one whose strand marker keeps it out of the fold) still ranks below one holding
   // only an archived row, as it did before the fold.
   const sorted = sortFleet(sessions);
   const archivedRow = (m: FleetSession): boolean => m.bucket === 'archived';
-  const unfoldedDead = (m: FleetSession): boolean => m.bucket === 'dead' && !inReleasedFold(m);
+  // "Dead and not in the RELEASED fold" — the BUCKET's `dead`, which a stopped main checkout now in the ARCHIVED
+  // fold still is: the order keys on the bucket (wave 1's ruling), so such a row keeps dead's rank here.
+  const deadNotInReleasedFold = (m: FleetSession): boolean => m.bucket === 'dead' && !inReleasedFold(m);
   for (const s of [
-    ...sorted.filter((m) => !inReleasedFold(m) && !archivedRow(m) && !unfoldedDead(m)),
+    ...sorted.filter((m) => !inReleasedFold(m) && !archivedRow(m) && !deadNotInReleasedFold(m)),
     ...sorted.filter(inReleasedFold),
     ...sorted.filter(archivedRow),
-    ...sorted.filter(unfoldedDead),
+    ...sorted.filter(deadNotInReleasedFold),
   ]) {
     const card = boardHome(s);
     const list = byProject.get(card);
@@ -216,10 +228,12 @@ export function groupFleet(
 
   const groups: FleetGroup[] = [];
   for (const [project, members] of byProject) {
-    // See the `archived` field's doc: the split is on the BUCKET, so a
+    // See the `archived` field's doc: the split is `inArchivedFold`, which reads a WORKSPACE's bucket, so a
     // `cleanup` member stays in the live list its own chip counts it in.
-    const live = members.filter((m) => m.bucket !== 'archived' && !inReleasedFold(m));
-    const archived = members.filter((m) => m.bucket === 'archived');
+    const live = members.filter((m) => !inArchivedFold(m) && !inReleasedFold(m));
+    // Workspace lifecycle §5.2: newest first — a workspace by its archive time, a main checkout by its stop.
+    const archived = members.filter(inArchivedFold)
+      .sort((a, b) => (archivedFoldSince(b) ?? 0) - (archivedFoldSince(a) ?? 0) || a.id.localeCompare(b.id));
     // Workspace lifecycle §5.1: newest close first, the fold's own order.
     const released = members.filter(inReleasedFold)
       .sort((a, b) => closedAtOf(b) - closedAtOf(a) || a.id.localeCompare(b.id));
@@ -235,7 +249,7 @@ export function groupFleet(
       : { state: 'mixed' };
     const away = new Map<string, number>();
     for (const s of sessions) {
-      if (s.project !== project || s.bucket === 'archived') continue;
+      if (s.project !== project || inArchivedFold(s)) continue;
       const dest = boardHome(s);
       if (dest === project) continue;
       away.set(dest, (away.get(dest) ?? 0) + 1);
