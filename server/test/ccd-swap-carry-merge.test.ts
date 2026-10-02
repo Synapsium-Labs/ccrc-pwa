@@ -553,12 +553,14 @@ describe('a walk that cannot finish is (kept: error), and the carry still answer
   // `mapfile -t rows <<< "$wout"` is the one place the carry reads the walker's
   // rows back. bash spills a here-string of 64 KiB or more to a temp file, and
   // when that cannot be created `mapfile` never runs and `rows` is left as it
-  // was. These two cases stand in for that with a `mapfile` that leaves `rows`
-  // alone. Named cost: the temp's own failure is not exercised — bash falls
-  // back from an unusable TMPDIR to /tmp, /var/tmp, /usr/tmp, so only a
-  // failure AFTER its writability check (a full disk, a quota, no free
-  // descriptor) reaches it, and none of those can be made in a fixture without
-  // starving the carry's own pipes and slot descriptor.
+  // was. Two kinds of case pin the guards that follow it:
+  //   - three cases stand in for that with a `mapfile` that leaves `rows`
+  //     alone (`MAPFILE_ROWS_FAILS`): the empty array, the rc-3 arm, and the
+  //     stale-rows case, which is the one that drives the `rows=()` clear;
+  //   - two cases reach the REAL cause: `ulimit -f 16` in the snippet's own
+  //     shell makes the here-string's temp (over 64 KiB of rows) fail with "No
+  //     space left on device", while `$(...)` and the slot's `exec` keep
+  //     working. Every file those cases place stays far under the 16 KiB cap.
   const MAPFILE_ROWS_FAILS = (after: number): string =>
     `_mf=0; mapfile() { if [[ "$2" == rows ]] && (( ++_mf > ${after} )); then return 1; fi; builtin mapfile "$@"; };`;
 
@@ -595,6 +597,37 @@ describe('a walk that cannot finish is (kept: error), and the carry still answer
     expect(out).toContain('[rc=0]');
     const rows = swapLog().split('\n').filter((l) => l.includes(` sidecar ${UUID} -> `)).map((l) => l.replace(/^.* \(/, '('));
     expect(rows, swapLog()).toEqual(['(merged +1 ~0 !0)', '(kept: error)']);
+  });
+
+  // The real cause. 16 blocks of 1024 bytes: the merge-verdict case's rows run
+  // to well over 64 KiB (400 diverged paths of ~100 bytes each, twice), so the
+  // here-string is spilled to a temp file the cap refuses.
+  const REAL_HERESTRING_FAILS = 'ulimit -f 16;';
+
+  it('the real here-string temp failure (rows over 64 KiB, the temp refused) is (kept: error), the merge still whole, and the carry answers rc 0', () => {
+    const pad = 'x'.repeat(40);
+    for (let i = 0; i < 400; i++) {
+      put(SRC(`tool-results/r${i}-${pad}.txt`), 'AAAA\n', T0 + 60);
+      put(DST(`tool-results/r${i}-${pad}.txt`), 'BBBB\n', T0);
+    }
+    put(SRC('tool-results/zz-new.txt'), 'NEW\n');
+    const out = carry(REAL_HERESTRING_FAILS);
+    expect(out, 'the carry did not answer').toContain('[rc=0]');
+    expect(out, 'the cause is the here-string temp').toContain('cannot create temp file for here-document');
+    expect(verdict()).toBe('(kept: error)');
+    expect(read(DST('tool-results/zz-new.txt')), 'what the walk placed is whole').toBe('NEW\n');
+  });
+
+  it('the budget arm behind rows over 64 KiB, the temp refused, is (kept: budget), and the carry answers rc 0', () => {
+    // The real walk prints only a short `budget N` on rc 3, so the rows cannot
+    // outgrow the here-string on their own: the walker is shadowed by one that
+    // answers rc 3 with more than 64 KiB of output.
+    put(SRC('tool-results/new.txt'), 'NEW\n');
+    fs.mkdirSync(DST(), { recursive: true });
+    const out = carry(`${REAL_HERESTRING_FAILS} _swap_carry_merge_walk() { printf "%070000d\\n" 0; echo "budget 99"; return 3; };`);
+    expect(out, 'the carry did not answer').toContain('[rc=0]');
+    expect(out, 'the cause is the here-string temp').toContain('cannot create temp file for here-document');
+    expect(verdict()).toBe('(kept: budget)');
   });
 
   it('a walker that exits 0 but prints no readable summary row is (kept: error)', () => {

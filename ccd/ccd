@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=cf1e68f152428b13ae1d7c4dd32525ab3a1c1894d0d9d856dc309777c298e492
+# ccrc:generated 1 sha256=9b10a3e2c15f887f8b69bd2205231193c389cfae0eac446d5483070e8a74a8ac
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22199,8 +22199,17 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1)
 #     64 MiB, an eighth of the budget); and a compare that can place nothing (a
 #     same-size file that is not a newer record, a log whose destination is
 #     longer) is priced again on EVERY visit, so enough of them ahead of a
-#     placement could hold it back. The stage-1 instrument's `deferred_carries`
-#     and `deferred_actions` make either visible if it ever appears.
+#     placement could hold it back. "Zero" for the second rests on the census's
+#     two assumptions: a shorter destination log IS a prefix of its source, and
+#     a same-size newer record differs from its destination. The two cases that
+#     break them place nothing too and are priced again on every visit: a newer
+#     record whose bytes are equal (3x its size, tier 0), and a longer source
+#     log whose shorter destination is not a prefix (2x the destination plus
+#     the source, then counted !D). The same-size compare is left as it is (a
+#     carried finding), so both remain. The stage-1 instrument makes either
+#     cost visible if it ever appears: the first as `kept: budget` (steady
+#     state is the walker's rc 3, logged `(kept: budget)`, which it counts
+#     apart), the second as `deferred_carries` and `deferred_actions`.
 # A walk that could not run at all — no `flock`, no python3, a destination that
 # is not a real directory, the walker's own failure — is `(kept: error)`, with
 # the cause on stderr: a third word, because "someone else is carrying" and
