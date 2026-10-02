@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { CCD, canonicalPython3, ghContainedEnv } from './ccdWsHelpers.js';
+import { itLinux } from './platformFixtures.js';
 
 const REPO = path.resolve(__dirname, '..', '..');
 const PYTHON = canonicalPython3();
@@ -461,4 +462,109 @@ describe('the fix pass of the final review: layouts, mode repair, postcondition,
       expect(st.stdout, `${shape}: ${st.stderr}`).toBe('ccd-entry-self-test 3 1 1 1 1\n');
     }
   }, 60_000);
+});
+
+// ── review 216: refusals change nothing, a converged pair is self-tested, and
+// the shebang names only what was compared ─────────────────────────────────
+describe('a refused run changes nothing, and nothing is called converged without its kernel self-test (review 216 F4, F11, F12)', () => {
+  const modeOf = (p: string): number => fs.statSync(p).mode & 0o777;
+  const snap = (p: string): string => `${ident(p)}:${modeOf(p).toString(8)}:${sha(p)}`;
+
+  it('F4 a destination refusal leaves a mode-drifted half exactly as it was — mode, bytes and inode — and the ccrc lane claims only what it proves', () => {
+    plantTree();
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    fs.chmodSync(entry(), 0o600);
+    const before = snap(entry());
+    fs.rmSync(body());
+    fs.mkdirSync(body());
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toContain('is a directory');
+    expect(snap(entry()), 'a refused run repaired a live file’s mode').toBe(before);
+    expect(r.stdout).not.toContain('mode repaired');
+    const l = LANES['ccrc install/update']!();
+    expect(l.code).not.toBe(0);
+    expect(snap(entry()), 'the ccrc lane changed it').toBe(before);
+    expect(l.stderr).toContain('neither $HOME/.local/bin/ccd nor $HOME/.local/libexec/ccrc/ccd moved');
+    expect(l.stderr, 'exit 1 proves nothing moved — not that nothing changed').not.toMatch(/libexec\/ccrc\/ccd was changed/);
+    assertNoLeftovers();
+  }, 60_000);
+
+  it('F4 a failing kernel self-test leaves a mode-drifted half exactly as it was', () => {
+    plantTree();
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    fs.chmodSync(body(), 0o600);
+    const before = [snap(body()), snap(entry())];
+    plantTree({ template: (t) => t.replace("        sys.stdout.write('ccd-entry-self-test %d %d %d %d %d\\n'",
+      "        sys.stdout.write('ccd-entry-self-test-BROKEN %d %d %d %d %d\\n'") });
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toContain('kernel self-test');
+    expect([snap(body()), snap(entry())], 'a run whose self-test failed changed a live file').toEqual(before);
+    assertNoLeftovers();
+  }, 60_000);
+
+  it('F4 a converged pair is reported converged only after the kernel self-test ran on it', () => {
+    plantTree({ template: withHook });
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    fs.writeFileSync(path.join(home, 'hook-record'), '');
+    fs.rmSync(path.join(home, 'selftest-saw'), { force: true });
+    const before = [snap(entry()), snap(body())];
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('converged');
+    expect(fs.existsSync(path.join(home, 'selftest-saw')), 'converged without running the self-test').toBe(true);
+    expect(fs.readFileSync(path.join(home, 'selftest-saw'), 'utf8')).toBe(`${sha(entry())} ${sha(body())}\n`);
+    expect([snap(entry()), snap(body())], 'a converged run rewrote nothing').toEqual(before);
+    assertNoLeftovers();
+  }, 60_000);
+
+  it('F11 a PATH entry whose `..` follows a link: the shebang names a spelling that resolves to the probed interpreter, never the lexically folded one', () => {
+    // <T>/lnk -> <T>/real/sub, so <T>/lnk/../bin/python3 is <T>/real/bin/python3,
+    // a link to the probed interpreter; folding `lnk/..` away lexically names
+    // <T>/bin/python3 instead — an unprobed shim.
+    const t = mkTmp('py-');
+    fs.mkdirSync(path.join(t, 'real', 'sub'), { recursive: true });
+    fs.mkdirSync(path.join(t, 'real', 'bin'));
+    fs.symlinkSync(PYTHON, path.join(t, 'real', 'bin', 'python3'));
+    fs.symlinkSync(path.join(t, 'real', 'sub'), path.join(t, 'lnk'));
+    fs.mkdirSync(path.join(t, 'bin'));
+    fs.writeFileSync(path.join(t, 'bin', 'python3'), `#!/bin/sh\nexec '${PYTHON}' "$@"\n`, { mode: 0o755 });
+    const entryDir = `${t}/lnk/../bin`;
+    // `realpathSync.native` (realpath(3)) resolves `..` AFTER the link, as the kernel and Python's
+    // os.path.realpath do; the JS `realpathSync` folds it lexically first.
+    expect(fs.realpathSync.native(`${entryDir}/python3`), 'the CONTROL: the PATH entry resolves to the probed interpreter').toBe(PYTHON);
+    plantTree();
+    const r = LANES['deploy.sh']!(`${entryDir}:`);
+    expect(r.code, r.stderr).toBe(0);
+    const shebang = /^#!(\S+) -IS$/.exec(fs.readFileSync(entry(), 'utf8').split('\n')[0]!)?.[1];
+    expect(shebang).toBeTruthy();
+    expect(fs.realpathSync.native(shebang!), `the shebang ${shebang} names a different file from the one probed`).toBe(PYTHON);
+    expect(shebang, 'the shim the lexical fold names').not.toBe(path.join(t, 'bin', 'python3'));
+  }, 60_000);
+
+  itLinux('F12 an interpreter path no shebang can encode is refused by check and by install, with the old pair untouched (Linux: APFS refuses a non-UTF-8 name)', () => {
+    plantTree();
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    const before = [ident(entry()), ident(body())];
+    plantTree({ ccd: '\n# v2\n' });
+    // A directory whose name is not UTF-8, reached through a plain-named link,
+    // so the venv's interpreter resolves to a path Python can only hold with
+    // surrogateescape.
+    const raw = Buffer.concat([Buffer.from(path.join(home, 'py')), Buffer.from([0xff])]);
+    fs.mkdirSync(raw);
+    fs.symlinkSync(raw, path.join(home, 'pylink'));
+    const venv = path.join(home, 'pylink', 'v');
+    const mk = spawnSync(PYTHON, ['-m', 'venv', '--copies', '--without-pip', venv], { encoding: 'utf8' });
+    expect(mk.status, mk.stderr).toBe(0);
+    const vpy = path.join(venv, 'bin', 'python3');
+    const c = helper(['check'], vpy);
+    expect(c.code, `check: ${c.stdout}${c.stderr}`).toBe(1);
+    expect(c.stderr).toMatch(/cannot be encoded into a shebang/);
+    const r = helper(['install', tree(), home], vpy);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/cannot be encoded into a shebang/);
+    expect([ident(entry()), ident(body())], 'a file moved').toEqual(before);
+    assertNoLeftovers();
+  }, 120_000);
 });

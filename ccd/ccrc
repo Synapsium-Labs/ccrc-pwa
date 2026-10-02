@@ -13665,7 +13665,7 @@ _inst_ccd_pair() {   # <tree> — render, self-test and publish ccd's launcher/b
   case "$rc" in
     0) return 0 ;;
     2) _ccrc_die "ccd's pair was left half-published — the line above names the half that moved and why; until a re-run converges it, ccd starts on this box may refuse: re-run 'ccrc update' (or 'ccrc install')" ;;
-    *) _ccrc_die "ccd's direct-entry pair was not installed (the line above says why) — neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd was changed" ;;
+    *) _ccrc_die "ccd's direct-entry pair was not installed (the line above says why) — neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd moved" ;;
   esac
 }
 

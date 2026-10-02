@@ -18,21 +18,26 @@
 # a shebang (absolute, no whitespace or line break, the whole line within
 # SHEBANG_MAX bytes). It prints that path.
 #
-# `install` re-checks all of that, then: renders the launcher with this
-# interpreter's canonical path and the body's SHA-256 (placeholder census before
-# and after, compiled in memory, no bytecode written); stages each changed half
-# as a sibling temporary of its destination; runs the STAGED launcher through
-# the kernel in a throwaway copy of the final layout and requires its isolated
-# flags record — before either active file moves; then publishes the body FIRST
-# and the launcher LAST, each by one rename whose destination entry is inspected
+# `install` re-checks all of that, then: renders the launcher with that same
+# shebang path — the PATH python3's spelling when it resolves to this
+# interpreter, else the canonical path (D-3698) — and the body's SHA-256
+# (placeholder census before and after, compiled in memory, no bytecode
+# written); asks every refusal a destination or the layout can raise BEFORE it
+# creates, repairs or stages anything; stages each changed half as a sibling
+# temporary of its destination; runs the launcher-to-be through the kernel in a
+# throwaway copy of the final layout and requires its isolated flags record —
+# on every run, a converged one included; and only then repairs a half whose
+# bytes are right and whose mode is not, and publishes the body FIRST and the
+# launcher LAST, each by one rename whose destination entry is inspected
 # without following it beforehand and re-measured afterwards. A half already
 # carrying the exact bytes and mode is left alone, so a converged box rewrites
 # nothing.
 #
 # EXIT STATUS: 0 the pair is in place (published or already converged); 1
-# refused, and neither active file moved; 2 the body moved and the launcher did
-# not — the mismatched pair now refuses every start by digest, and a re-run
-# converges. No rollback is attempted across the two directories.
+# refused, and neither active file moved (a refusal raised before the self-test
+# passed also changed nothing); 2 the body moved and the launcher did not — the
+# mismatched pair now refuses every start by digest, and a re-run converges. No
+# rollback is attempted across the two directories.
 #
 # STANDARD LIBRARY ONLY. Nothing here trusts the environment: `-I` already
 # ignores every PYTHON* variable, and the paths it writes come from argv.
@@ -121,7 +126,14 @@ def shebang_path(canon):
             continue
         cand = os.path.join(d, 'python3')
         if os.path.isfile(cand) and os.access(cand, os.X_OK):
-            return os.path.normpath(cand) if os.path.realpath(cand) == canon else canon
+            if os.path.realpath(cand) != canon:
+                return canon
+            # Render the spelling that was COMPARED. `normpath` only tidies it,
+            # and only when the tidy form still resolves to this interpreter:
+            # it folds `<link>/..` lexically, which can name a different file
+            # (review 216, F11).
+            tidy = os.path.normpath(cand)
+            return tidy if os.path.realpath(tidy) == canon else cand
     return canon
 
 
@@ -177,8 +189,8 @@ def read_regular(path):
 
 def converged(dest, data, mode):
     """'same' when dest is already a regular file of these bytes and this mode;
-    'mode' when only its mode differs — repaired IN PLACE through a
-    non-following descriptor, never by rewriting the file; 'differ' otherwise."""
+    'mode' when only its mode differs; 'differ' otherwise. It only READS: a
+    mode is repaired by `repair_mode`, after every refusal and the self-test."""
     try:
         st = os.lstat(dest)
     except FileNotFoundError:
@@ -190,17 +202,20 @@ def converged(dest, data, mode):
             return 'differ'
     except (OSError, Refused):
         return 'differ'
-    if stat.S_IMODE(st.st_mode) == mode:
-        return 'same'
+    return 'same' if stat.S_IMODE(st.st_mode) == mode else 'mode'
+
+
+def repair_mode(dest, mode):
+    """A half whose bytes are the shipped ones and whose mode is not: repaired
+    IN PLACE through a non-following descriptor, never by rewriting the file."""
     fd = os.open(dest, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NONBLOCK', 0))
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return 'differ'
+            raise Refused('%s stopped being a regular file before its mode could be repaired' % dest)
         os.fchmod(fd, mode)
     finally:
         os.close(fd)
     say('%s: mode repaired to %o (its bytes were already the shipped ones)' % (dest, mode))
-    return 'same'
 
 
 def destination_kind(dest):
@@ -272,11 +287,15 @@ def postcondition(dest, data, mode, label):
         raise Refused('after publishing the %s, %s is not the regular file of mode %o just staged' % (label, dest, mode))
 
 
-def self_test(home, launcher_src, body_src):
-    """The staged launcher, executed by the KERNEL through its shebang, from a
+def self_test(home, launcher_src, body_src, live=()):
+    """The launcher-to-be, executed by the KERNEL through its shebang, from a
     throwaway copy of the final layout (<tmp>/.local/bin/ccd beside
     <tmp>/.local/libexec/ccrc/ccd): it must derive that body, match its
-    digest, and print its isolated-flags record — without starting Bash."""
+    digest, and print its isolated-flags record — without starting Bash. A
+    staged half is hard-linked (the very file that will be renamed); a LIVE
+    half (`live` names it) is copied at the mode it will have once repaired,
+    so the test never touches a live file and never fails on a mode the run
+    is about to fix."""
     local = os.path.join(home, '.local')
     tmp = tempfile.mkdtemp(prefix=SELFTEST_PREFIX, dir=local)
     try:
@@ -286,6 +305,8 @@ def self_test(home, launcher_src, body_src):
         os.makedirs(os.path.dirname(body))
         for src, dst, mode in ((launcher_src, entry, ENTRY_MODE), (body_src, body, BODY_MODE)):
             try:
+                if src in live:
+                    raise OSError('a live half is copied, never linked')
                 os.link(src, dst)
             except OSError:
                 shutil.copyfile(src, dst)
@@ -338,38 +359,43 @@ def install(tree, home):
     body_dest = os.path.join(home, *BODY_DEST.split('/'))
     bindir = os.path.dirname(entry_dest)
     libexec = os.path.dirname(body_dest)
-    for d in (bindir, libexec):
-        os.makedirs(d, mode=0o755, exist_ok=True)
-    # THE LAUNCHER MUST FIND THIS BODY (D-3699): asked exactly as the launcher
-    # will ask it, started by its installed path — never discovered only once
-    # every ccd start refuses `entry-layout` after a "successful" install.
+    # EVERY REFUSAL FIRST, before anything is created, repaired, staged or
+    # moved (review 216, F4). THE LAUNCHER MUST FIND THIS BODY (D-3699): asked
+    # exactly as the launcher will ask it, started by its installed path —
+    # never discovered only once every ccd start refuses `entry-layout` after a
+    # "successful" install. Then what stands at each destination: a directory,
+    # or a link to one.
     derived = launcher_body_for(entry_dest)
     if derived is None or os.path.realpath(derived) != os.path.realpath(body_dest):
         raise Refused('%s resolves to %s, whose launcher would look for its body at %s, not at %s — this'
                       ' ~/.local layout cannot host the direct entry' % (entry_dest, os.path.realpath(entry_dest), derived, body_dest))
+    for dest in (body_dest, entry_dest):
+        destination_kind(dest)
+    for d in (bindir, libexec):
+        os.makedirs(d, mode=0o755, exist_ok=True)
     sweep(bindir, STAGE_RE, False)
     sweep(libexec, STAGE_RE, False)
     sweep(os.path.join(home, '.local'), SELFTEST_RE, True)
 
-    body_same = converged(body_dest, body_data, BODY_MODE) == 'same'
-    entry_same = converged(entry_dest, entry_data, ENTRY_MODE) == 'same'
-    if body_same and entry_same:
-        say('converged — the launcher and the body already carry these bytes')
-        return 0
-    # Every refusal a destination can raise is raised HERE, before anything is
-    # staged or moved: a directory, or a link to one, at either path.
-    for dest, same in ((body_dest, body_same), (entry_dest, entry_same)):
-        if not same:
-            destination_kind(dest)
+    body_state = converged(body_dest, body_data, BODY_MODE)
+    entry_state = converged(entry_dest, entry_data, ENTRY_MODE)
 
     staged_body = staged_entry = None
     moved = []
     try:
-        staged_body = None if body_same else stage(libexec, body_data, BODY_MODE)
-        staged_entry = None if entry_same else stage(bindir, entry_data, ENTRY_MODE)
+        staged_body = stage(libexec, body_data, BODY_MODE) if body_state == 'differ' else None
+        staged_entry = stage(bindir, entry_data, ENTRY_MODE) if entry_state == 'differ' else None
         # The pair the self-test runs is the pair that will be live: each half
-        # either its staged replacement or the converged file already there.
-        self_test(home, staged_entry or entry_dest, staged_body or body_dest)
+        # either its staged replacement or the file already there, at the mode
+        # it will have. On EVERY run — a converged pair is not "in place" until
+        # the kernel has started its launcher (review 216, F4).
+        self_test(home, staged_entry or entry_dest, staged_body or body_dest,
+                  live=tuple(d for d, s in ((entry_dest, staged_entry), (body_dest, staged_body)) if s is None))
+        if staged_body is None and staged_entry is None and body_state == entry_state == 'same':
+            say('converged — the launcher and the body already carry these bytes')
+            return 0
+        if body_state == 'mode':
+            repair_mode(body_dest, BODY_MODE)
         if staged_body is not None:
             kind = destination_kind(body_dest)
             os.replace(staged_body, body_dest)
@@ -377,6 +403,8 @@ def install(tree, home):
             moved.append('body')
             postcondition(body_dest, body_data, BODY_MODE, 'body')
             say('body published at %s (replaced: %s)' % (body_dest, kind))
+        if entry_state == 'mode':
+            repair_mode(entry_dest, ENTRY_MODE)
         if staged_entry is not None:
             kind = destination_kind(entry_dest)
             os.replace(staged_entry, entry_dest)
