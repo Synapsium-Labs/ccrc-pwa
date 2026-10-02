@@ -3264,8 +3264,10 @@ fi
 # `origin main`, `origin/HEAD` or `origin HEAD` (the slash forms may be quoted)
 # as a whole word. Command position is what keeps a MENTION silent: a commit
 # message, an `echo`, or a PR comment that quotes a sync puts a quote or a
-# word before `git`, never a separator. The verb needs whitespace after it, so
-# `git merge-tree` (the probe itself) and `git merge-base` never match.
+# word before `git` — unless the quoted text itself holds a separator, which
+# the regex cannot tell from a real one (the first limit below). The verb needs
+# whitespace after it, so `git merge-tree` (the probe itself) and `git
+# merge-base` never match.
 #
 # WHITESPACE INSIDE THE SHAPE IS `[[:blank:]]`, never `[[:space:]]`: a newline
 # separates commands, so it may begin one but never continue one. With the
@@ -3273,21 +3275,57 @@ fi
 # `git pull` then `git push origin main` on the next line, and made a run of
 # newline-separated `git merge a` lines quadratic (3.5 s on 36 KB measured).
 #
+# EVERY TOKEN CLASS STOPS AT EVERY SEPARATOR: `[^[:space:];&|({]`, in the
+# arguments, the `-C` directory, the `--x=value` and the env-var value alike.
+# A separator opens a new start position, so a token that could run on across
+# one lets every start walk to the end of the line: quadratic again, for `(` and
+# `{` in the arguments (4.5 s on 39 KB measured), and for every separator in an
+# option or env-var value with no whitespace in it (5.7 s). The cost is a token
+# that holds a `(` or a `{` ends the walk, so those syncs are not advised (the
+# misses below). The timing pin runs every separator through every class.
+#
 # KNOWN MISSES AND LIMITS, each a deliberate trade for a hot path that forks
-# nothing: a command that merges main by another spelling (`FETCH_HEAD`, `git
-# merge origin`, a local ref of another name) is not advised, nor is a sync
-# split by a backslash line continuation (`git merge \` then `origin/main` on
-# the next line) — this is advice, and a miss costs one ritual sync, which is
-# the status quo. A regex cannot see quoting, so the opposite error exists too:
-# a multi-line quoted string or heredoc whose own line begins with a sync
-# command advises, though nothing runs it.
+# nothing. This is advice: a miss costs one ritual sync, which is the status
+# quo, and a false advice costs one sentence. The examples below were measured
+# against this regex; they are examples, not an exhaustive list.
+#   - It ADVISES on text it cannot read as text. A regex cannot see quoting or
+#     comments, so a separator INSIDE quoted text begins a "command": `echo
+#     "(git merge origin/main)"`, `git commit -m "docs: say when to sync; git
+#     merge origin/main only on a conflict"`, `gh pr comment 5 --body "fixed
+#     (git rebase origin/main was wrong)"`; so does a multi-line quoted string
+#     or heredoc whose own line begins with a sync command. A word inside `-m`
+#     matches as the target (`git merge -m "merge main into x" feature/x`), and
+#     so does a word in a trailing comment (`git merge --abort  # was
+#     origin/main`).
+#   - It ADVISES on updating a main checkout itself, which is no sync of a
+#     branch: `git checkout main && git pull origin main`, `git -C ~/proj pull
+#     --ff-only origin main`. Coordinators and operators do this routinely, and
+#     each is told it "brings main into the current branch".
+#   - It MISSES `git` behind a word: `if git merge origin/main; then`, `! git
+#     merge origin/main`, `time git ...`, `env VAR=x git ...`, `timeout 600 git
+#     pull origin main`, `for b in a; do git ...; done`, `sudo -u x git ...`,
+#     `command git ...`, a backtick substitution (`$(git ...)` advises: its `(`
+#     is a separator). Only a separator or a `VAR=value` prefix puts `git` in
+#     command position.
+#   - It MISSES a token it cannot walk: a quoted global-option value with a
+#     space (`git -C "/w/my demo" merge origin/main`, `git -c user.name="A B"
+#     merge ...`); any token holding a `(` or a `{` (`git -C "$(pwd)" merge
+#     origin/main`, `git merge -m "x (y)" origin/main`, a brace expansion);
+#     a redirection glued to the target (`git merge origin/main>/tmp/log`, the
+#     terminator class has no `>` or `<`).
+#   - It MISSES a ref spelled another way: a revision suffix (`origin/main~1`,
+#     `origin/main^0`), a full ref name (`refs/remotes/origin/main`), a refspec
+#     (`git pull origin main:main`), `FETCH_HEAD`, `git merge origin` (the
+#     remote's HEAD by default), or any local ref of another name.
+#   - It MISSES a sync split by a backslash line continuation (`git merge \`
+#     then `origin/main` on the next line).
 #
 # THE GITHUB BRANCH-UPDATE DETECTOR HAS NO COMMAND-POSITION RULE. The
 # MENTION-silence above belongs to the sync regex alone: a commit message or a
 # comment that merely quotes GitHub's branch-update verb, route or mutation
 # does advise. That is tolerated because the advice is advice only, and the
 # phrase is rare outside the call itself.
-LANDING_SYNC_RE='(^|[;&|({'$'\n''])[[:blank:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:blank:]]+)*git([[:blank:]]+(-[Cc][[:blank:]]+[^[:space:]]+|--[a-z-]+(=[^[:space:]]+)?))*[[:blank:]]+(merge|pull|rebase)([[:blank:]]+[^[:space:];&|]+)*[[:blank:]]+(origin/main|origin[[:blank:]]+main|origin/HEAD|origin[[:blank:]]+HEAD|main|"(origin/main|origin/HEAD|main)"|'\''(origin/main|origin/HEAD|main)'\'')([[:space:];&|)]|$)'
+LANDING_SYNC_RE='(^|[;&|({'$'\n''])[[:blank:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:];&|({]*[[:blank:]]+)*git([[:blank:]]+(-[Cc][[:blank:]]+[^[:space:];&|({]+|--[a-z-]+(=[^[:space:];&|({]+)?))*[[:blank:]]+(merge|pull|rebase)([[:blank:]]+[^[:space:];&|({]+)*[[:blank:]]+(origin/main|origin[[:blank:]]+main|origin/HEAD|origin[[:blank:]]+HEAD|main|"(origin/main|origin/HEAD|main)"|'\''(origin/main|origin/HEAD|main)'\'')([[:space:];&|)]|$)'
 LANDING_UB_RE='gh[[:space:]]+pr[[:space:]]+update-branch|/update-branch([^A-Za-z0-9_-]|$)|updatePullRequestBranch'
 if [[ "$event" == PreToolUse && -z "$pre_json" && "${tool:-}" == Bash ]] \
    && [[ ( ( "$payload" == *main* || "$payload" == *origin* ) \

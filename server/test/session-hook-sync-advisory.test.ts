@@ -71,6 +71,10 @@ const SYNCS = [
   'GIT_EDITOR=true git merge origin/main',
   'git status\ngit merge origin/main',
   'git pull origin HEAD',
+  // `(` and `{` are separators, and real syncs: the token classes stop AT them
+  // (the timing pin's reason) but a sync opened by one still advises.
+  '(cd /w/demo && git merge origin/main)',
+  '{ git merge origin/main; }',
   `gh api graphql -f query='mutation { updatePullRequestBranch(input: {pullRequestId: "X"}) { clientMutationId } }'`,
 ];
 const NOT_SYNCS = [
@@ -157,10 +161,31 @@ describe('session-hook: the landing-order advisory on a sync of main', () => {
 
   // The hot path. A newline-separated run of `git merge a` lines gave the
   // arguments group a quadratic walk (3.5 s on 36 KB measured) while the same
-  // text with `;` separators took 18 ms. The bound is generous on purpose: it
-  // names a complexity class, not a speed, and a loaded box must not flake it.
-  it('answers a 36 KB newline-separated adversarial command inside a generous bound', () => {
-    const command = 'git merge a\n'.repeat(3000) + '# origin';
+  // text with `;` separators took 18 ms. The first fix covered the newline
+  // only: `(` and `{` are in the leading separator class too, and the argument
+  // token class did not exclude them, so every `(` or `{` opened a new start
+  // position that walked to the end of the line (4.5 s on 39 KB measured). The
+  // option and env-value token classes had the same walk for EVERY separator,
+  // on a payload with no whitespace in it. So the pin runs every separator
+  // through every class that takes an unbounded token, and a new separator or
+  // class that is not on the list is the next hole. The bound is generous on
+  // purpose: it names a complexity class, not a speed, and a loaded box must
+  // not flake it. The tail carries `merge` and `origin` so the prefilter lets
+  // the regex run; none of the payloads syncs main.
+  const SEPARATORS: Array<[string, string]> = [
+    ['newline', '\n'], ['semicolon', ';'], ['ampersand', '&'], ['pipe', '|'],
+    ['open paren', '('], ['open brace', '{'],
+  ];
+  const SHAPES: Array<[string, (sep: string) => string]> = [
+    ['arguments', (sep) => `${sep}git merge a `],
+    ['option value', (sep) => `${sep}git --a=`],
+    ['-C directory', (sep) => `${sep}git -C `],
+    ['env-var value', (sep) => `${sep}a=`],
+  ];
+  const ADVERSARIAL = SEPARATORS.flatMap(([sepName, sep]) =>
+    SHAPES.map(([shapeName, unit]): [string, string] =>
+      [`${sepName} x ${shapeName}`, unit(sep).repeat(Math.ceil(36000 / unit(sep).length)) + '\n# merge origin']));
+  it.each(ADVERSARIAL)('answers a 36 KB adversarial command (%s) inside a generous bound', (_name, command) => {
     expect(command.length).toBeGreaterThan(36000);
     const t0 = Date.now();
     const r = hook(bash(command));
