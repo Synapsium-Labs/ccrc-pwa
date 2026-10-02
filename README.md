@@ -2545,8 +2545,9 @@ rung falls due defers it, and that rung's hour then runs again from the live
 file's next stamp; a restamp inside the hour (the worker's own turn after a
 notice) does not re-time it, and neither does mail — worker mail opens a new
 episode instead. r2 and r3 measure the silence from the episode's start: the
-worker's own last mail on the run, a later coordinator `wait:`, or dispatch,
-none of which the watch's own notices can move. A paused coordinator, a dead
+worker's own last mail on the run, a later coordinator `wait:`, dispatch, or
+the run's latest return to an active state, none of which the watch's own
+notices can move. A paused coordinator, a dead
 one or none at all skips r2, and r3 says which. It holds — sends nothing — on
 anything it could not measure (a live file with no timestamp included), a dead or restarting
 worker, an open question, a harness dialog (one `⚠ stalled … (dialog)` push
@@ -2563,7 +2564,12 @@ by nothing in the tree: `stall-watch-disabled` stops the lane; with no
 sends the notices addressed to the worker; `stall-watch-escalate` sends the
 coordinator mails and the operator pushes too. The quiet clock restarts on ANY
 mail to the worker on the run that is not the watch's own, so a session that
-mails the worker there at least every 2 h keeps r1 from ever falling due. The
+mails the worker there at least every 2 h keeps r1 from ever falling due. Time
+the run spends outside the active states is never charged to the worker: when
+the coordinator moves it back into one (a send-back from `awaiting-review` to
+`working`, say), the quiet clock, the episode and the coordinator's 30 h start
+again from that move; the dialog and limit caps keep their clocks, which measure
+the pane and the account, not the worker. The
 guarantee that no box-token holder can keep a mail off the phone covers the
 `re stall-check:` prefix only (a reply is kept off the phone only when it is
 bound to a check); nothing limits who may mail the worker and so hold off the

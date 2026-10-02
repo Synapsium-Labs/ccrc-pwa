@@ -53,7 +53,7 @@ import {
   stallFailedVerdict, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
   stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
   stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
-  stallVerdict, stallW2ReportMail,
+  stallReactivation, stallVerdict, stallW2ReportMail,
   type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
   type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
   type StallVerdict, type StallWorker, type TurnMarkRead,
@@ -3110,11 +3110,14 @@ export class FleetWatcher {
       console.warn(`ccrc-server: stall-watch run ${primary.id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
       return;
     }
-    const notices = this.stallNoticesOf(store, primary.id);
+    // ONE run_events read gives the notices and the re-activation (`quiet-restarts-on-reactivation` (D-3788)): a throw
+    // here is what it was before, this subject's warn and no verdict.
+    const events = store.runEvents(primary.id);
+    const notices = this.stallNoticesOf(events);
     const markUnreadableSince = this.stallMarkUnreadableSince.get(id) ?? null;
     let input: StallInput = {
       subject, worker, mail: stallRunMail(read.mail, runIds), notices, arming, coordinationPaused: paused,
-      coordinator: null,
+      coordinator: null, activation: stallReactivation(events),
       w2: {
         mark, hook: stallHookFactOf(raw), deliveries: read.deliveries,
         absentSince: this.stallAbsentSince.get(id) ?? null, deadSince: this.stallDeadSince.get(id) ?? null,
@@ -3268,10 +3271,10 @@ export class FleetWatcher {
     };
   }
 
-  /** The stall rows on one run, parsed. A detail this build cannot name is skipped (`parseStallDetail`). */
-  private stallNoticesOf(store: CoordStore, runId: number): StallNotice[] {
+  /** The stall rows among one run's events, parsed. A detail this build cannot name is skipped (`parseStallDetail`). */
+  private stallNoticesOf(events: ReturnType<CoordStore['runEvents']>): StallNotice[] {
     const notices: StallNotice[] = [];
-    for (const e of store.runEvents(runId)) {
+    for (const e of events) {
       const parsed = parseStallDetail(e.detail);
       if (parsed !== null) notices.push({ ...parsed, at: e.at });
     }
