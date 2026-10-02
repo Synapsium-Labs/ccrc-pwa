@@ -412,7 +412,9 @@ export function SessionActionsSheet({
             </button>
           )}
           {putAway && (
-            <button type="button" className="btn-ghost" disabled={archBusy}
+            <button type="button" className="btn-ghost"
+                    disabled={archBusy || (fault !== null && session.workspace === null)}
+                    title={session.workspace === null ? faultTitle : undefined}
                     onClick={() => void restoreNow()}>
               {archBusy ? 'Restoring…' : 'Restore'}
             </button>

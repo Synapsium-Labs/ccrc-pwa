@@ -574,6 +574,18 @@ describe('the substrate gate — destructive affordances refuse a session nobody
     expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/ensure'))).toBe(false);
   });
 
+  it('Restore on a faulted stopped main checkout is disabled and never posts /ensure', () => {
+    render(<SessionActionsSheet
+      session={faulted({ id: 'claude-demo', workspace: null, status: 'dead', bucket: 'dead',
+        stoppedBy: { at: 1785300000_000, surface: 'pwa' } })} {...sheetProps} />);
+    const btn = screen.getByRole('button', { name: 'Restore' });
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toContain('x');
+    expect(btn.getAttribute('title')).toMatch(/tmux unreachable/);
+    fireEvent.click(btn);
+    expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/ensure'))).toBe(false);
+  });
+
   it('Swap account is disabled and the swap sheet never opens', () => {
     render(<SessionActionsSheet session={faulted()} {...sheetProps} />);
     const btn = screen.getByRole('button', { name: /swap account/i });
