@@ -282,6 +282,10 @@ import { ARCHIVE_REFUSALS } from '../../shared/api.js';
 In `server/test/single-definition.test.ts`, find:
 
 ````ts
+    expect(spelling('stall:').test('const d = `stall:${arm}`;')).toBe(true);
+  });
+
+  it.each(LITERALS)("'%s' is spelled on a code line in %s alone", (lit, home) => {
     expect(ALL.filter((f) => spelling(lit).test(stallCode(f))).map(rel).sort(), `a second '${lit}'`).toEqual([home]);
   });
 });
@@ -290,6 +294,10 @@ In `server/test/single-definition.test.ts`, find:
 Replace with:
 
 ````ts
+    expect(spelling('stall:').test('const d = `stall:${arm}`;')).toBe(true);
+  });
+
+  it.each(LITERALS)("'%s' is spelled on a code line in %s alone", (lit, home) => {
     expect(ALL.filter((f) => spelling(lit).test(stallCode(f))).map(rel).sort(), `a second '${lit}'`).toEqual([home]);
   });
 });
