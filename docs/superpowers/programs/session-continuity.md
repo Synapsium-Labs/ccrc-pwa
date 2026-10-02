@@ -19,7 +19,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | re-review 230 ruled 2026-10-02: fix round 2 (one pin, six text truths) |
+| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | fix round 2 done 2026-10-02; in re-review (run 233) |
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | — | planned — re-planned 2026-09-30 |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin | **AGENT-FIRST** (ccd) | — | — | to plan |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
@@ -178,6 +178,12 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     - D-3774's denominator is stale;
     - row 50 says "every case" where the measured count is 30 of 41.
   - **Numbering:** each fix extends its departure, so no new number.
+- **2026-10-02 — fix round 2 done, in re-review.**
+  - **Fixes:** one commit (tip `d1ca968e`). The real-cause `ulimit -f` cases die under `set -u` against the
+    pre-F11 code and pass at the tip; the new rows are 64 and 65.
+  - **Rows re-run:** rows 1 through 65 were re-run on the 43-case file and the moved counts restated.
+  - **Citations:** the citation census reads stated=base=tree.
+  - **Re-review:** review run 233 went out with the held-out panel over `322298e5..d1ca968e`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
