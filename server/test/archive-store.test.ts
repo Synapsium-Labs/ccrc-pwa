@@ -46,7 +46,7 @@ describe('CoordStore.openRunsClaimedBy', () => {
   it('counts a row in a state this build cannot name as open — the terminal set is the only exclusion', () => {
     const s = store();
     const r = open(s, 'lifecycle', 1);
-    s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run('unknown', r);
+    s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run('reconciling', r);
     expect(s.openRunsClaimedBy('demo-coordinator')).toMatchObject({ ok: true, siblings: [{ id: r }] });
   });
 
