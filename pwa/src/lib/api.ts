@@ -185,22 +185,6 @@ export const COORD_UNSUPPORTED_TEXT = 'the fleet host needs the newer ccd';
 export const HOLD_EMPTY_REASON_TEXT = 'empty reason — say which program holds this';
 
 /**
- * Failures the LIFECYCLE routes name by CODE rather than by ccd's stderr. Same
- * reason as `SEND_ERROR_TEXT` and `UPLOAD_ERROR_TEXT` above: left raw these
- * reach a toast as a bare slug.
- *
- * svc's round-4 residual. `/archive` and `/restore` grew a `verbSupported` gate
- * that answers `501 { error: 'unsupported' }` — a 501 has no `stderr`, so
- * `apiErrorText` fell through to `err.message`, which `ApiError`'s constructor
- * sets from `body.error`, and `PrSheet`'s toast read "Archiving failed —
- * unsupported". That is a slug where the reader needs the one thing that tells
- * them the tap will never work until the box is updated.
- *
- * Deliberately keyed on `body.error`, not on the message: the code is what the
- * server states, and a message that merely happens to equal a code should not
- * be rewritten into a sentence about the host.
- */
-/**
  * The archive door's refusals in words (workspace lifecycle spec §5.2) — one sentence per `ARCHIVE_REFUSALS` code,
  * keyed by the L0 const, never by a second spelling of a code. A `Record` over `ArchiveRefusal`, so a code added there
  * without a sentence here is a compile error. `API_ERROR_TEXT` spreads it, so every surface that toasts an archive
@@ -217,6 +201,22 @@ export const ARCHIVE_REFUSAL_TEXT: Readonly<Record<ArchiveRefusal, string>> = {
   [ARCHIVE_REFUSALS.manifestUnbuildable]: 'It cannot be described truthfully for the archive record. Nothing was touched.',
 };
 
+/**
+ * Failures the LIFECYCLE routes name by CODE rather than by ccd's stderr. Same
+ * reason as `SEND_ERROR_TEXT` and `UPLOAD_ERROR_TEXT` above: left raw these
+ * reach a toast as a bare slug.
+ *
+ * svc's round-4 residual. `/archive` and `/restore` grew a `verbSupported` gate
+ * that answers `501 { error: 'unsupported' }` — a 501 has no `stderr`, so
+ * `apiErrorText` fell through to `err.message`, which `ApiError`'s constructor
+ * sets from `body.error`, and `PrSheet`'s toast read "Archiving failed —
+ * unsupported". That is a slug where the reader needs the one thing that tells
+ * them the tap will never work until the box is updated.
+ *
+ * Deliberately keyed on `body.error`, not on the message: the code is what the
+ * server states, and a message that merely happens to equal a code should not
+ * be rewritten into a sentence about the host.
+ */
 const API_ERROR_TEXT: Record<string, string> = {
   unsupported: UNSUPPORTED_VERB_TEXT,
   ...ARCHIVE_REFUSAL_TEXT,

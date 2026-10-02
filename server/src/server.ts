@@ -3223,8 +3223,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const flags = archiveFlags(req.body);
     if (flags === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    // The row itself, `/stop`'s ladder: an unlistable registry proves nothing about THIS id (503, never 404), and an
-    // unmeasured identity is refused rather than guessed at — the stop argv recomputes a tmux name from these fields.
+    // The row itself, `/stop`'s ladder. An unlistable registry has already answered 404 `unknown-session` through
+    // `knownId` above, exactly as before this wave; the `unlistable` arm below can only answer if the registry goes
+    // unreadable between the two reads (503). The identity fields are a separate arm: an unmeasured one is refused
+    // rather than guessed at — the stop argv recomputes a tmux name from them.
     const read = await readSessionRecord(deps.io, deps.cfg, id);
     if (!read.found) {
       return reply.code(read.reason === 'unlistable' ? 503 : 404)

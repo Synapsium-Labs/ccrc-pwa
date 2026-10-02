@@ -219,7 +219,7 @@ export function SessionHeader({
     bucket === 'attention' ? 'attention' : working ? 'busy' : bucket === 'dead' ? 'dead' : 'idle';
 
   // The substrate gate (spec §4): under a standing fault the console cannot
-  // SEE this session, so Stop — an offer to act on a pane nobody can measure
+  // SEE this session, so Archive (and a main checkout's Restore) — an offer to act on a pane nobody can measure
   // — refuses, disabled with the reason on `title` (the PrSheet idiom; the
   // string is SessionLine's chip's own `tmux unreachable — <reason>`, never a
   // second copy). Read through `substrateFault`: the live frame is cast, not

@@ -97,8 +97,8 @@ export interface FleetGroup {
    *  on the screen, while the fold above the footer read `Archived (2)`. Its
    *  own facts — `merged`, `#157`, the reclaimable size — were unreachable
    *  without expanding a fold that disclaims them. Splitting on the bucket
-   *  makes this list exactly the `Archived` chip's members and leaves
-   *  `cleanup` in `sessions`, where its chip's count and its rows agree.
+   *  makes this list the `Archived` chip's members — plus any stopped main
+   *  checkout, below — and leaves `cleanup` in `sessions`, where its chip's count and its rows agree.
    *
    *  The fleet footer (`FleetScreen`'s route into `/archive`) is a THIRD,
    *  deliberately wider set — everything with an `archivedAt`, because that
@@ -116,11 +116,11 @@ export interface FleetGroup {
    *  `archived`, folded and never dropped; unlike `archived`, they still count toward `unseen`, since a
    *  released row is live. They take no part in `attention`, `busy` or `stranded` — by construction, which is
    *  the fold's own rule. They DO take part in the card's ORDER (`groupFleet`'s four-part
-   *  concatenation): after every live row except an UNFOLDED `dead` one (dead and not in this fold), before archived
-   *  rows, and before unfolded `dead` rows — so a released-only card ranks above an archived-only one, and above a
-   *  card holding only an unfolded dead row, but never above a card with any other live row. A released dead row
-   *  that carries a strand marker is not in this fold, so it is an unfolded `dead` row and keeps `sortFleet`'s RANK
-   *  place below archived. They take part in `pin` only on a card with no live row,
+   *  concatenation): after every live row except a `dead` one not in this fold, before archived
+   *  rows, and before `dead` rows not in this fold — so a released-only card ranks above an archived-only one, and
+   *  above a card holding only a dead row not in this fold, but never above a card with any other live row. A released
+   *  dead row that carries a strand marker is not in this fold, so it is a `dead` row not in this fold and keeps
+   *  `sortFleet`'s RANK place below archived. They take part in `pin` only on a card with no live row,
    *  where the pin falls back to every member, exactly as it does on a card whose members are all archived. */
   released: FleetSession[];
   /** Where this project's OWN workspaces render when it is not here — one
@@ -193,15 +193,17 @@ export function groupFleet(
 ): FleetGroup[] {
   const byProject = new Map<string, FleetSession[]>();
   // Folded rows after the live ones (workspace lifecycle §5.1): a card's place comes from its first member, and a
-  // folded row must not lift its card above a live row other than a `dead` one not in the Released fold. "Dead, not in the Released fold" is dead
-  // and not in the Released fold (`inReleasedFold`): a released dead row that carries a strand marker is one too.
+  // folded row must not lift its card above a live row other than a `dead` one not in the Released fold. "Dead, not
+  // in the Released fold" is dead and not in the Released fold (`inReleasedFold`): a released dead row that carries a
+  // strand marker is one too.
   // Four parts, each stable in the fleet order:
-  // (1) rows that are neither folded, archived nor dead-not-in-the-Released-fold; (2) folded (released) rows, which rank above
-  // archived ones as idle, done and cleanup rows did before the fold — and a folded DEAD row too, which `sortFleet`
-  // alone ranks below archived; (3) archived rows; (4) dead-not-in-the-Released-fold rows (a stopped main checkout too, though the Archived fold holds it: the order keys on the BUCKET), which keep `sortFleet`'s RANK (archived
-  // 5 above dead 6): only a FOLDED row is lifted past archived, so a card holding only an unfolded dead row (an
-  // unreleased one, or a released one whose strand marker keeps it out of the fold) still ranks below one holding
-  // only an archived row, as it did before the fold.
+  // (1) rows that are neither folded, archived nor dead-not-in-the-Released-fold; (2) folded (released) rows, which
+  // rank above archived ones as idle, done and cleanup rows did before the fold — and a released DEAD row in the fold
+  // too, which `sortFleet` alone ranks below archived; (3) archived rows; (4) dead-not-in-the-Released-fold rows (a
+  // stopped main checkout too, though the Archived fold holds it: the order keys on the BUCKET), which keep
+  // `sortFleet`'s RANK (archived 5 above dead 6): only a row in the Released fold is lifted past archived, so a card
+  // holding only a dead row not in that fold (an unreleased one, or a released one whose strand marker keeps it out
+  // of the fold) still ranks below one holding only an archived row, as it did before the fold.
   const sorted = sortFleet(sessions);
   const archivedRow = (m: FleetSession): boolean => m.bucket === 'archived';
   // "Dead and not in the RELEASED fold" — the BUCKET's `dead`, which a stopped main checkout now in the ARCHIVED

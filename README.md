@@ -2156,8 +2156,10 @@ the worktree itself — refuses inside `ws-archive`, before it touches anything,
 programme the door already ended; the answer then names those runs (`ended`). A stop followed by a refused archive
 answers `200 {archived:false, stopped:true, refusal}`, and the row stays visible with Archive offered again. After a
 refusal the phone cannot fix (the worktree is gone, the status unreadable, the manifest unbuildable, the coordination
-store unreadable) the actions sheet offers **Stop only**. Restore is `ws-restore` for a workspace and `ensure` for a
-main checkout. `Archived (N)` holds archived workspaces and stopped main checkouts
+store unreadable, a programme only partly ended, a box whose ccd has no `ws-archive`) the actions sheet offers **Stop
+only**, disabled while tmux cannot be reached. Restore, in the actions sheet and the session header's menu, is
+`ws-restore` for a workspace (a merged-and-archived one included) and `ensure` for a main checkout, so a substrate
+fault disables a main checkout's. `Archived (N)` holds archived workspaces and stopped main checkouts
 (`inArchivedFold`), newest first; the Dead chip still counts a stopped main checkout, and the footer's archive list is
 still workspaces only. `ccd stop` and `POST /api/sessions/:id/stop` are unchanged. The refusal codes are
 `ARCHIVE_REFUSALS`, declared once in `shared/api.ts`.

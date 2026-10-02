@@ -1,10 +1,10 @@
 // The archive-conflict sheet — what `409 run-open` looks like to a human.
 //
-// WITHOUT THIS FILE the operator sees the toast "Archiving failed —
-// run-open": `apiErrorText` is stderr-first, then `API_ERROR_TEXT` (one key,
-// `unsupported`), then `err.message`, which `ApiError`'s constructor sets
-// from `body.error` — and a 409 has no stderr. A bare slug in a toast is the
-// precise defect `API_ERROR_TEXT`'s own docstring was written to close.
+// WITHOUT THIS SHEET the operator sees a toast: `apiErrorText` is stderr-first, then `API_ERROR_TEXT` (which spreads
+// `ARCHIVE_REFUSAL_TEXT`, so `run-open` is a sentence now, not a bare slug), and a 409 has no stderr. The sentence
+// is "A run still claims this workspace." — and a toast names no run and offers no way forward. This sheet names the
+// run and keeps "Archive anyway" under the operator's own hand. Its one door today is `PrSheet`; the actions sheet's
+// archive goes through `ArchiveSheet`, which shares this file's validator, `isArchiveConflictRun`.
 //
 // On `Sheet`, modelled line-for-line on `AbandonSheet` — the one 409 idiom in
 // this codebase that dispatches on status, reads a SECOND body field so the
