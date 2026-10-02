@@ -469,28 +469,34 @@ const echoed = (): { flags: string; argv: string[] } => {
 };
 
 /** The GRAMMAR TABLE, run against both classifiers. `true` = protected. */
-const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean]> = [
-  ['ws-reclaim alone', ['ws-reclaim'], true],
-  ['ws-reclaim with the full tail', ['ws-reclaim', '--expect', ANY_TOKEN, '--child-of', '7', '--session', 'x'], true],
-  ['ws-reclaim with a malformed tail (the body’s parser owns that)', ['ws-reclaim', '--nonsense'], true],
-  ['valid audit --reclaim', ['ws-audit', '--session', 'x', '--reclaim'], true],
-  ['valid audit --reclaim --defer-expired', ['ws-audit', '--session', 'x', '--reclaim', '--defer-expired'], true],
-  ['plain audit', ['ws-audit', '--session', 'x'], false],
-  ['audit, --defer-expired alone', ['ws-audit', '--session', 'x', '--defer-expired'], false],
-  ['valid audit skeleton with a session value the body will reject', ['ws-audit', '--session', '../../etc/passwd', '--reclaim'], true],
-  ['audit, missing session-value position', ['ws-audit', '--session', '--reclaim'], false],
-  ['audit, --reclaim out of order', ['ws-audit', '--reclaim', '--session', 'x'], false],
-  ['audit, --defer-expired before --reclaim', ['ws-audit', '--session', 'x', '--defer-expired', '--reclaim'], false],
-  ['audit, a later duplicate --reclaim', ['ws-audit', '--session', 'x', '--reclaim', '--reclaim'], false],
-  ['audit, an extra token', ['ws-audit', '--session', 'x', '--reclaim', 'extra'], false],
-  ['audit, an extra token after --defer-expired', ['ws-audit', '--session', 'x', '--reclaim', '--defer-expired', 'extra'], false],
-  ['caps', ['caps'], false],
-  ['a verb merely CONTAINING ws-reclaim later', ['caps', 'ws-reclaim'], false],
-  ['ws-reclaimx (prefix only)', ['ws-reclaimx'], false],
+// The fourth column is where a MALFORMED audit shape must die: ordinary at
+// both entries, and still refused by `cmd_ws_audit`'s own parse (plan:112) —
+// so a dispatcher that wrongly accepted one cannot leave this table green.
+const USAGE = /^ccd: usage: ccd ws-audit --session <id> \[--reclaim \[--defer-expired\]\]$/m;
+const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean, RegExp | null]> = [
+  ['ws-reclaim alone', ['ws-reclaim'], true, null],
+  ['ws-reclaim with the full tail', ['ws-reclaim', '--expect', ANY_TOKEN, '--child-of', '7', '--session', 'x'], true, null],
+  ['ws-reclaim with a malformed tail (the body’s parser owns that)', ['ws-reclaim', '--nonsense'], true, null],
+  ['valid audit --reclaim', ['ws-audit', '--session', 'x', '--reclaim'], true, null],
+  ['valid audit --reclaim --defer-expired', ['ws-audit', '--session', 'x', '--reclaim', '--defer-expired'], true, null],
+  ['plain audit', ['ws-audit', '--session', 'x'], false, null],
+  ['audit, --defer-expired alone', ['ws-audit', '--session', 'x', '--defer-expired'], false, USAGE],
+  ['valid audit skeleton with a session value the body will reject', ['ws-audit', '--session', '../../etc/passwd', '--reclaim'], true, null],
+  // Not malformed for the BODY: `--reclaim` lands in the id position and is a well-formed
+  // session id (`^[A-Za-z0-9._-]+$`), so this is a read-only plain audit of a session of that name.
+  ['audit, missing session-value position', ['ws-audit', '--session', '--reclaim'], false, null],
+  ['audit, --reclaim out of order', ['ws-audit', '--reclaim', '--session', 'x'], false, USAGE],
+  ['audit, --defer-expired before --reclaim', ['ws-audit', '--session', 'x', '--defer-expired', '--reclaim'], false, USAGE],
+  ['audit, a later duplicate --reclaim', ['ws-audit', '--session', 'x', '--reclaim', '--reclaim'], false, USAGE],
+  ['audit, an extra token', ['ws-audit', '--session', 'x', '--reclaim', 'extra'], false, USAGE],
+  ['audit, an extra token after --defer-expired', ['ws-audit', '--session', 'x', '--reclaim', '--defer-expired', 'extra'], false, USAGE],
+  ['caps', ['caps'], false, null],
+  ['a verb merely CONTAINING ws-reclaim later', ['caps', 'ws-reclaim'], false, null],
+  ['ws-reclaimx (prefix only)', ['ws-reclaimx'], false, null],
 ];
 
 describe('the protected grammar — the launcher and the body classify the same argv the same way', () => {
-  for (const [name, argv, protectedShape] of GRAMMAR) {
+  for (const [name, argv, protectedShape, dies] of GRAMMAR) {
     it(`${name} → ${protectedShape ? 'protected' : 'ordinary'}`, () => {
       // The launcher: what the echo body was started with.
       de = installDirectEntry(h.home, { body: ECHO_BODY });
@@ -504,6 +510,17 @@ describe('the protected grammar — the launcher and the body classify the same 
       const b = explicitBash([], argv);
       const refusedAtEntry = b.code === 125 && /refused \(entry-/.test(b.stderr);
       expect(refusedAtEntry, `body: rc ${b.code} ${b.stderr.slice(0, 300)}`).toBe(protectedShape);
+      if (dies) {
+        // A malformed audit reaches `cmd_ws_audit` and dies THERE — through
+        // the explicit Bash above, and through the launcher with the real body.
+        expect(b.code, `explicit bash: ${b.stderr.slice(0, 300)}`).toBe(1);
+        expect(b.stderr).toMatch(dies);
+        de = installDirectEntry(h.home);
+        const l = direct(argv);
+        expect(l.code, `launcher: ${l.stderr.slice(0, 300)}`).toBe(1);
+        expect(l.stderr).toMatch(dies);
+        expect(l.stderr).not.toContain('refused (entry-');
+      }
     }, 60_000);
   }
 });
@@ -707,7 +724,8 @@ describe('argv, entry spellings and the installed layout', () => {
   it('undecodable Unix bytes in argv round-trip exactly', () => {
     de = installDirectEntry(h.home, { body: ECHO_BODY });
     const r = spawnSync('/bin/sh', ['-c', 'exec "$0" ws-reclaim "$(printf "\\377\\376")" "a$(printf "\\200")b" "$(printf "\\303\\251")"', de.entry],
-      { cwd: h.home, env: { ...cleanEnv(), HOME: h.home, PATH: `${harnessBin()}:${process.env['PATH'] ?? ''}` } });
+      { cwd: h.home, env: ghContainedEnv(h.home, { ...cleanEnv(), HOME: h.home, PATH: `${harnessBin()}:${process.env['PATH'] ?? ''}` },
+        { systemd: true, tmux: true }) });
     expect(r.status, String(r.stderr)).toBe(0);
     const raw = fs.readFileSync(argvOut());
     const parts: Buffer[] = [];
@@ -727,7 +745,8 @@ describe('argv, entry spellings and the installed layout', () => {
       ['relative', () => direct(RECLAIM_ARGV, {}, { entry: './.local/bin/ccd' })],
       ['PATH', () => {
         const r = spawnSync('/bin/sh', ['-c', 'exec ccd "$@"', 'sh', ...RECLAIM_ARGV], { cwd: h.home, encoding: 'utf8',
-          env: { ...cleanEnv(), HOME: h.home, PATH: `${harnessBin()}:${process.env['PATH'] ?? ''}` } });
+          env: ghContainedEnv(h.home, { ...cleanEnv(), HOME: h.home, PATH: `${harnessBin()}:${process.env['PATH'] ?? ''}` },
+            { systemd: true, tmux: true }) });
         return { code: r.status ?? -1, stdout: r.stdout, stderr: r.stderr };
       }],
       ['symlink', () => direct(RECLAIM_ARGV, {}, { entry: link })],
@@ -922,7 +941,12 @@ describe('every supported production entry crosses the installed launcher', () =
     const { realRunner } = await import('../src/exec.js');
     for (const [argv, privileged] of [[RECLAIM_ARGV, true], [AUDIT_ARGV, true], [['caps'], false]] as const) {
       fs.rmSync(out, { force: true });
-      const r = await realRunner(de.entry, [...argv]);
+      // realRunner takes no environment — it inherits this process's — so the
+      // call runs with a contained one swapped in, and the real one restored.
+      const saved = process.env;
+      process.env = ghContainedEnv(h.home, { ...cleanEnv(), HOME: h.home }, { systemd: true, tmux: true });
+      let r: Awaited<ReturnType<typeof realRunner>>;
+      try { r = await realRunner(de.entry, [...argv]); } finally { process.env = saved; }
       expect(r.code, r.stderr).toBe(0);
       expect(readOut(out).flags.includes('p'), argv.join(' ')).toBe(privileged);
       expect(readOut(out).argv).toEqual([...argv]);
@@ -936,7 +960,8 @@ describe('every supported production entry crosses the installed launcher', () =
     const exec = /^ExecStart=(.+)$/m.exec(unit)?.[1];
     expect(exec, 'the unit has no ExecStart').toBe('%h/.local/bin/ccd supervise %i');
     const [file, ...args] = exec!.replaceAll('%h', h.home).replaceAll('%i', 'demo-x').split(' ');
-    const r = spawnSync(file!, args, { encoding: 'utf8', env: { ...cleanEnv(), HOME: h.home } });
+    const r = spawnSync(file!, args, { encoding: 'utf8',
+      env: ghContainedEnv(h.home, { ...cleanEnv(), HOME: h.home }, { systemd: true, tmux: true }) });
     expect(r.status, r.stderr).toBe(0);
     expect(file).toBe(de.entry);
     expect(readOut(out)).toMatchObject({ argv: ['supervise', 'demo-x'] });
@@ -950,7 +975,8 @@ describe('every supported production entry crosses the installed launcher', () =
     const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(src)?.[1] ?? '';
     const argv = [...block.matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1]!.replace('${HOME}', h.home).replace('${id}', 'demo-x'));
     expect(argv[0], 'the job does not exec the installed entry').toBe(de.entry);
-    const r = spawnSync(argv[0]!, argv.slice(1), { encoding: 'utf8', env: { ...cleanEnv(), HOME: h.home } });
+    const r = spawnSync(argv[0]!, argv.slice(1), { encoding: 'utf8',
+      env: ghContainedEnv(h.home, { ...cleanEnv(), HOME: h.home }, { systemd: true, tmux: true }) });
     expect(r.status, r.stderr).toBe(0);
     expect(readOut(out).argv).toEqual(['supervise', 'demo-x']);
     expect(readOut(out).flags).not.toContain('p');

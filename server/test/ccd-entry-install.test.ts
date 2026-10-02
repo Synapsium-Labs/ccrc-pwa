@@ -125,7 +125,7 @@ function assertPair(): void {
   expect(text.split('\n')[0]).toBe(`#!${RENDERED} -IS`);
   expect(/^BODY_SHA256 = '([0-9a-f]{64})'$/m.exec(text)?.[1], 'the launcher names the published body').toBe(sha(body()));
   // The kernel starts it, and it accepts its body.
-  const st = ran(spawnSync(entry(), ['--ccrc-entry-self-test'], { encoding: 'utf8', env: env() }));
+  const st = ran(spawnSync(entry(), ['--ccrc-entry-self-test'], { encoding: 'utf8', env: ghContainedEnv(home, env(), { systemd: true, tmux: true }) }));
   expect(st.stdout, st.stderr).toBe('ccd-entry-self-test 3 1 1 1 1\n');
 }
 function assertNoLeftovers(): void {
@@ -198,7 +198,7 @@ describe('the pair, through both lanes: fresh, converged, and re-run after drift
       ['changed out of band', () => fs.appendFileSync(body(), '\n# edited on the box\n'), 'body-digest'],
     ] as const) {
       spoil();
-      const st = ran(spawnSync(entry(), ['--ccrc-entry-self-test'], { encoding: 'utf8', env: env() }));
+      const st = ran(spawnSync(entry(), ['--ccrc-entry-self-test'], { encoding: 'utf8', env: ghContainedEnv(home, env(), { systemd: true, tmux: true }) }));
       expect(st.code, name).toBe(125);
       expect(st.stderr, name).toContain(`ccd: refused (entry-${cls}):`);
       const launcherBefore = ident(entry());
@@ -458,7 +458,7 @@ describe('the fix pass of the final review: layouts, mode repair, postcondition,
       const r = LANES['deploy.sh']!(`${d}:`);
       expect(r.code, `${shape}: ${r.stderr}`).toBe(0);
       expect(fs.readFileSync(entry(), 'utf8').split('\n')[0], shape).toBe(`#!${want(d)} -IS`);
-      const st = ran(spawnSync(entry(), ['--ccrc-entry-self-test'], { encoding: 'utf8', env: env() }));
+      const st = ran(spawnSync(entry(), ['--ccrc-entry-self-test'], { encoding: 'utf8', env: ghContainedEnv(home, env(), { systemd: true, tmux: true }) }));
       expect(st.stdout, `${shape}: ${st.stderr}`).toBe('ccd-entry-self-test 3 1 1 1 1\n');
     }
   }, 60_000);
