@@ -3244,8 +3244,11 @@ fi
 #
 # ONE LINE PER EVENT, still (`pre_json`, printed once at the end of the file):
 # a deny or a nudge the graph arm already built wins, and this block says
-# nothing. They cannot meet on one call in practice — the gate reads a search
-# at the HEAD of the line, and a sync is `git`, not a search.
+# nothing. They CAN meet on one call: the gate reads a search at the HEAD of
+# the line, so a compound `grep -rn x .; git merge origin/main` is a gated
+# search AND a sync. That is what the `-z "$pre_json"` conjunct is for, and a
+# test pins it: without it the advice would overwrite the deny after the arm
+# had already charged the session a denial for it.
 #
 # ORDER IS BUDGET, as in the arms above: the tool name is already in hand, the
 # glob tests over the raw payload cost no fork, and only a payload carrying
@@ -3262,11 +3265,29 @@ fi
 # as a whole word. Command position is what keeps a MENTION silent: a commit
 # message, an `echo`, or a PR comment that quotes a sync puts a quote or a
 # word before `git`, never a separator. The verb needs whitespace after it, so
-# `git merge-tree` (the probe itself) and `git merge-base` never match. A
-# command that merges main by another spelling (`FETCH_HEAD`, `git merge
-# origin`, a local ref of another name) is not advised — this is advice, and a
-# miss costs one ritual sync, which is the status quo.
-LANDING_SYNC_RE='(^|[;&|({'$'\n''])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*git([[:space:]]+(-[Cc][[:space:]]+[^[:space:]]+|--[a-z-]+(=[^[:space:]]+)?))*[[:space:]]+(merge|pull|rebase)([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(origin/main|origin[[:space:]]+main|origin/HEAD|origin[[:space:]]+HEAD|main|"(origin/main|origin/HEAD|main)"|'\''(origin/main|origin/HEAD|main)'\'')([[:space:];&|)]|$)'
+# `git merge-tree` (the probe itself) and `git merge-base` never match.
+#
+# WHITESPACE INSIDE THE SHAPE IS `[[:blank:]]`, never `[[:space:]]`: a newline
+# separates commands, so it may begin one but never continue one. With the
+# wider class the arguments of one line ran on into the next, which advised on
+# `git pull` then `git push origin main` on the next line, and made a run of
+# newline-separated `git merge a` lines quadratic (3.5 s on 36 KB measured).
+#
+# KNOWN MISSES AND LIMITS, each a deliberate trade for a hot path that forks
+# nothing: a command that merges main by another spelling (`FETCH_HEAD`, `git
+# merge origin`, a local ref of another name) is not advised, nor is a sync
+# split by a backslash line continuation (`git merge \` then `origin/main` on
+# the next line) — this is advice, and a miss costs one ritual sync, which is
+# the status quo. A regex cannot see quoting, so the opposite error exists too:
+# a multi-line quoted string or heredoc whose own line begins with a sync
+# command advises, though nothing runs it.
+#
+# THE GITHUB BRANCH-UPDATE DETECTOR HAS NO COMMAND-POSITION RULE. The
+# MENTION-silence above belongs to the sync regex alone: a commit message or a
+# comment that merely quotes GitHub's branch-update verb, route or mutation
+# does advise. That is tolerated because the advice is advice only, and the
+# phrase is rare outside the call itself.
+LANDING_SYNC_RE='(^|[;&|({'$'\n''])[[:blank:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:blank:]]+)*git([[:blank:]]+(-[Cc][[:blank:]]+[^[:space:]]+|--[a-z-]+(=[^[:space:]]+)?))*[[:blank:]]+(merge|pull|rebase)([[:blank:]]+[^[:space:];&|]+)*[[:blank:]]+(origin/main|origin[[:blank:]]+main|origin/HEAD|origin[[:blank:]]+HEAD|main|"(origin/main|origin/HEAD|main)"|'\''(origin/main|origin/HEAD|main)'\'')([[:space:];&|)]|$)'
 LANDING_UB_RE='gh[[:space:]]+pr[[:space:]]+update-branch|/update-branch([^A-Za-z0-9_-]|$)|updatePullRequestBranch'
 if [[ "$event" == PreToolUse && -z "$pre_json" && "${tool:-}" == Bash ]] \
    && [[ ( ( "$payload" == *main* || "$payload" == *origin* ) \

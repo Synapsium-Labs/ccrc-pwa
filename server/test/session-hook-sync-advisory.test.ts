@@ -12,7 +12,7 @@
 // `:7043-7056` — every line added above that moves an anchor. The harness below
 // is the same one it uses (fixture HOME, stub tmux on PATH, payload on stdin).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
@@ -89,6 +89,13 @@ const NOT_SYNCS = [
   "echo 'run git rebase origin/main first'",
   'gh pr comment 5 --body "please git merge origin/main and re-run"',
   'git pull origin feature/x',
+  // A newline is a separator BEFORE `git` and plain text nowhere else: the
+  // arguments of one line never run on into the next. Each advised before the
+  // regex stopped treating a newline as argument whitespace.
+  'git rebase -i HEAD~3\ngit push origin HEAD',
+  'git pull\ngit push origin main',
+  'git merge --no-edit feature/x\ngit push origin main',
+  'git merge feature/x\ngit log origin main',
 ];
 
 describe('session-hook: the landing-order advisory on a sync of main', () => {
@@ -146,5 +153,48 @@ describe('session-hook: the landing-order advisory on a sync of main', () => {
     fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.hookstate.json'), '{not json');
     const env = oneLine(hook(bash('git pull origin main')).stdout);
     expect(env.hookSpecificOutput.additionalContext).toContain('three triggers');
+  });
+
+  // The hot path. A newline-separated run of `git merge a` lines gave the
+  // arguments group a quadratic walk (3.5 s on 36 KB measured) while the same
+  // text with `;` separators took 18 ms. The bound is generous on purpose: it
+  // names a complexity class, not a speed, and a loaded box must not flake it.
+  it('answers a 36 KB newline-separated adversarial command inside a generous bound', () => {
+    const command = 'git merge a\n'.repeat(3000) + '# origin';
+    expect(command.length).toBeGreaterThan(36000);
+    const t0 = Date.now();
+    const r = hook(bash(command));
+    const ms = Date.now() - t0;
+    expect(r.stdout, 'no line of it merges main').toBe('');
+    expect(ms, `the whole hook took ${ms} ms`).toBeLessThan(1500);
+  });
+
+  // PRECEDENCE. One envelope per event, and a graph-arm deny wins: a compound
+  // call that is a search at its HEAD (the gate's question) and a sync later
+  // on one line meets BOTH arms. Without the `-z "$pre_json"` conjunct the
+  // advisory would overwrite the deny after the arm had already charged the
+  // session a denial, so the session would see advice and lose the deny.
+  it('prints the graph arm deny, not the advisory, when one call meets both', () => {
+    const tree = path.join(home, 'tree');
+    fs.mkdirSync(tree, { recursive: true });
+    const git = (...a: string[]): string => execFileSync('git', ['-C', tree, '-c', 'user.email=f@example.invalid',
+      '-c', 'user.name=fixture', ...a], { encoding: 'utf8' }).trim();
+    git('init', '-q');
+    fs.writeFileSync(path.join(tree, 'c0.txt'), '0\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'c0');
+    const out = path.join(tree, 'graphify-out');
+    fs.mkdirSync(out, { recursive: true });
+    fs.writeFileSync(path.join(out, 'graph.json'),
+      `{\n  "hyperedges": [],\n  "built_at_commit": "${git('rev-parse', 'HEAD')}"\n}\n`);
+    fs.writeFileSync(path.join(out, 'GRAPH_REPORT.md'), '# Graph Report - demo\n\n## Summary\n- 4242 nodes · 1 edges · 1 communities\n');
+    const payload = { hook_event_name: 'PreToolUse', tool_name: 'Bash',
+      tool_input: { command: 'grep -rn foo .; git merge origin/main' }, cwd: tree };
+    const j = oneLine(hook(payload).stdout);
+    expect(JSON.stringify(j), 'the advisory overwrote the graph arm deny').not.toContain('landing advisory');
+    expect(j.hookSpecificOutput.permissionDecision, 'the graph arm did not deny: the fixture is wrong').toBe('deny');
+    expect(j.hookSpecificOutput.permissionDecisionReason).toContain('graphify gate:');
+    const state = JSON.parse(fs.readFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.hookstate.json'), 'utf8'));
+    expect(state.graphGateDenials, 'the denial that was charged is the one that was said').toBe(1);
   });
 });
