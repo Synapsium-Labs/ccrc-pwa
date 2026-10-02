@@ -233,6 +233,16 @@ carries it (spec §5.1, amended 2026-09-24).
   - the hook carries `THE LANDING-ORDER ADVISORY` once;
   - `ccrc restamp --help` prints `usage: ccrc restamp <file>`;
   - doctor shows 0 FAIL lines.
+- **2026-10-02 21:33 — run 238 gets six more numbers, 3871 to 3876** (mail 3267 asked; answer 3270). The plan's
+  Deviations found lists ten slugs. With the residue's one departure and the brief's per-task adaptations, ten
+  numbers do not cover the wave. The assignment:
+  - 3856: the residue;
+  - 3857 to 3865: the first nine slugs, in plan order;
+  - 3871: held-coordinator-operator-enqueues;
+  - 3872: Task 2's skipped README re-pointer and the moved census;
+  - 3873: Task 3's adaptations (the ninth kind, the one read, the rundefs move);
+  - 3874: Task 4's Oniguruma line;
+  - 3875 and 3876: spares, each named in the wave-done.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
