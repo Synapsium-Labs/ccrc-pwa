@@ -18,7 +18,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | — | dispatched 2026-10-02 (run 220) |
+| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | wave-done verified 2026-10-02; in review (run 225) |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | — | planned; approved 2026-10-01 (#223) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
@@ -76,6 +76,23 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   numbers, issued at run-open and written bare here until a plan on the same ref defines them: 3778 through 3787.
   The brief adds two rules that post-date the plan: the wave stops at the PR (the coordinator merges; the
   fleet moves by ccrc's own update mechanism, operator ruling 2026-09-30), and main is measured fresh.
+- **2026-10-02 — wave 1 done, in review.** Run 220's wave-done (PR #229, tip `79812043`) passed the server's
+  re-measurement. The run is at `awaiting-review` and its ten items are settled.
+  - **Departures.** The worker used six of its issued numbers: 3778 through 3783. Each is defined in the plan on
+    the branch. 3784 through 3787 went unused.
+  - **Signals.** `suite: red`, `failure: unclear`. The first full local run timed out at load average 40–95: every
+    PWA failure was a timeout, and two server cases passed when run alone. No assertion on this wave's code failed,
+    and CI's required Linux checks are green.
+  - **Routing.** Not escalated. The red measures the box, not the worker's effort, and clause 13 revises routing
+    only on evidence about the work.
+  - **Review.** Review run 225 went to `ccrc-pwa-swift-river` on Opus · high with workflows on, so it can run the
+    held-out panel. Its first dispatch answered a bare 502: the `subagent` route field takes only haiku or sonnet,
+    and the panel's Opus lenses ride the Workflow call's own `model:`. Re-dispatched with `sonnet`. No workspace was
+    spawned in between.
+  - **Deferred, ruled at review.** The final whole-branch review deferred binding the instrument's `RETURN_ACTS` and
+    `ENDS_THE_ARCHIVE` to ccd's `_LC_ACTS`; reclaim, gc, rename and rehome are in neither list. That must be fixed
+    before wave 3 reads its archive→return delay. Whether it blocks this wave is the review's to report and mine to
+    rule.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
