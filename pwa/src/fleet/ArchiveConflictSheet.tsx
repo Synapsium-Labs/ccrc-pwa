@@ -25,9 +25,9 @@
 // mean it".
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ARCHIVE_REFUSALS } from '../../../shared/api';
+import { ARCHIVE_REFUSALS, isArchiveRefusal } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
-import { ApiError, UNSUPPORTED_VERB_TEXT, api } from '../lib/api';
+import { ARCHIVE_REFUSAL_TEXT, ApiError, UNSUPPORTED_VERB_TEXT, api } from '../lib/api';
 import './fleet.css';
 
 /** One run named by a `409 run-open` body. DEGRADE, NEVER INVENT: if `runs`
@@ -110,6 +110,9 @@ export function runOpenRuns(err: unknown): readonly ArchiveConflictRun[] | null 
 function archiveErrorText(err: unknown): string {
   if (!(err instanceof ApiError)) return 'the archive was refused, for a reason this build does not recognise';
   if (err.status === 404) return 'that session is gone — the fleet will catch up';
+  // Workspace lifecycle §5.2: the door's typed refusals, in the words every archive surface uses.
+  const code = typeof err.body === 'object' && err.body !== null ? (err.body as { error?: unknown }).error : undefined;
+  if (err.status === 409 && isArchiveRefusal(code)) return ARCHIVE_REFUSAL_TEXT[code];
   if (err.status === 501) return UNSUPPORTED_VERB_TEXT;
   if (err.status === 502) {
     const stderr = typeof err.body === 'object' && err.body !== null
@@ -119,8 +122,20 @@ function archiveErrorText(err: unknown): string {
   return 'the archive was refused, for a reason this build does not recognise';
 }
 
-const runPhrase = (r: ArchiveConflictRun): string =>
+export const runPhrase = (r: ArchiveConflictRun): string =>
   `run ${r.id} — ${r.program} wave ${r.wave}${r.waveOf === null ? '' : `/${r.waveOf}`}`;
+
+/** The claimed workspace's two sentences, ONE spelling for the two sheets that say them: this one, behind the PR
+ *  sheet's door, and `ArchiveSheet`'s `run-open` case (workspace lifecycle §5.2). `null` runs degrade, never invent. */
+export const claimedSentence = (named: readonly ArchiveConflictRun[] | null): string =>
+  named === null
+    ? 'A run is still open on this workspace'
+    : named.length === 1
+      ? `${runPhrase(named[0]!)} is still open on this workspace.`
+      : `${named.map(runPhrase).join('; ')} are still open on this workspace.`;
+
+export const CLAIMED_CONSEQUENCE =
+  'Archiving stops the session and puts the worktree away. Nothing is deleted, but the run loses the workspace it is working in.';
 
 export function ArchiveConflictSheet({
   sessionId, runs, onClose, onDone,
@@ -170,17 +185,8 @@ export function ArchiveConflictSheet({
   return (
     <Sheet open onClose={onClose} title="This workspace is claimed">
       <div className="archive-conflict-sheet">
-        <p className="qc-consequence">
-          {named === null
-            ? 'A run is still open on this workspace'
-            : named.length === 1
-              ? `${runPhrase(named[0]!)} is still open on this workspace.`
-              : `${named.map(runPhrase).join('; ')} are still open on this workspace.`}
-        </p>
-        <p className="qc-consequence">
-          Archiving stops the session and puts the worktree away. Nothing is deleted, but the
-          run loses the workspace it is working in.
-        </p>
+        <p className="qc-consequence">{claimedSentence(named)}</p>
+        <p className="qc-consequence">{CLAIMED_CONSEQUENCE}</p>
         <div className="qc-actions">
           <button type="button" className="btn-primary" disabled={busy} onClick={force}>
             {busy ? 'Archiving…' : 'Archive anyway'}

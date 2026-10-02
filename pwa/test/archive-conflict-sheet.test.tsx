@@ -117,6 +117,14 @@ describe('ArchiveConflictSheet', () => {
     expect(onClose).not.toHaveBeenCalled();     // still open, refusal rendered INSIDE
   });
 
+  it('renders the archive door\'s typed refusals in words — a forced archive of a busy workspace (workspace lifecycle §5.2)', async () => {
+    const archive = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'session-busy' }));
+    render(<ArchiveConflictSheet sessionId="demo-x" runs={RUNS} onClose={() => {}} archive={archive} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive anyway' }));
+    await waitFor(() =>
+      expect(screen.getByText('It is working — archiving now would lose the turn in progress.')).toBeTruthy());
+  });
+
   it('renders a 501 as the host-skew sentence, not a slug', async () => {
     const archive = vi.fn().mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
     render(<ArchiveConflictSheet sessionId="demo-x" runs={RUNS} onClose={() => {}} archive={archive} />);
