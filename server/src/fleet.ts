@@ -788,6 +788,7 @@ export async function assembleFleet(
       // three-way reading of `$REG/<id>.child` (`SessionRecord.child`). A
       // display value on this wire — the bind gate re-reads the registry.
       child: r.child,
+      releasedFrom: null,   // workspace lifecycle §5.1 — Task 4 computes it; null renders the row as today
       bucket: 'idle', bucketSince: null,   // replaced immediately below
     };
     // Computed FROM the assembled session, never from a second copy of the

@@ -490,6 +490,10 @@ export interface FleetSession {
    * `none`. No `FLEET_PROTO` bump.
    */
   readonly child: ChildMark;
+
+  /** Where this workspace was RELEASED from, or `null` — `ReleasedFrom`, at the end of this file, carries the
+   *  contract; `releasedFromOf` there is the field's one reader. */
+  readonly releasedFrom: ReleasedFrom | null;
 }
 
 /**
@@ -3039,6 +3043,7 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       boardProject: optStr(o, 'boardProject'),
       route: reviveRoute(o, 'route'),
       child: reviveChildMark(o, 'child'),
+      releasedFrom: reviveReleasedFrom(o, 'releasedFrom'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
@@ -8734,6 +8739,64 @@ export function isTagFileRead(v: unknown): v is TagFileRead {
  *  settings screen, which disables its auto-install control before a tap (D-3297), read
  *  one word. `server/src/update/resolve.ts` re-exports it, so W2's importers keep their path. */
 export const UPDATE_GATE_CAP = 'update-gate';
+
+/**
+ * `FleetSession.releasedFrom` — the run a WORKSPACE was released from (workspace lifecycle spec §5.1), which is
+ * what puts its row in its card's `Released (N)` fold. The server writes it once, in `assembleFleet`'s row
+ * literal, from the pure `releasedFrom` decision (`server/src/coord/released.ts`); nothing else computes it.
+ *
+ * Non-null only when the row is a workspace, carries no hold, is not archived, its NEWEST run as `sessionId` is
+ * terminal, no non-terminal run names it as `sessionId`, and no non-terminal run names it as `claimedBy` (a former
+ * worker that now coordinates is not released).
+ *
+ * `null` collapses THREE conditions, deliberately: not released; this server did not decide (an older peer, or a
+ * snapshot from a build predating the field); and this server could not decide (its `coord.db` read failed this
+ * tick, or the newest run carried no readable close time). A reader does the identical thing with all three —
+ * the row renders where it always did — and none may branch on which it was: that distinction is not on the
+ * wire. `boardProject` makes the same trade for the same reason.
+ *
+ * The wire word is not "released": `released` already names an `AskState` and a `ClaimState` with other
+ * meanings, so the word appears only as the fold's label.
+ *
+ *   - `runId`, `program`, `claimedBy`, `closedAt` — the newest run's own columns; `closedAt` is epoch MS.
+ *   - `programTitle` — `programs.title`, `null` only if the programme row could not be joined.
+ *   - `child` — the registry's CCR-15 child reading (`FleetSession.child`) is `child` or `unreadable`. An
+ *     unreadable marker reads as a child, the direction that defers: "Archive all" skips children, which leave
+ *     through CCR-15's own reclamation.
+ *
+ * ADDITIVE; `FLEET_PROTO` is not bumped. The LIVE `fleet` frame is CAST, not revived (`pwa/src/stores/fleet.ts`'s
+ * `asFleetMsg`), so a row from an older server has no key at all — read it ONLY through `releasedFromOf`.
+ */
+export interface ReleasedFrom {
+  readonly runId: number;
+  readonly program: string;
+  readonly programTitle: string | null;
+  readonly claimedBy: string | null;
+  readonly closedAt: number;
+  readonly child: boolean;
+}
+
+/** THE ONE READER of `FleetSession.releasedFrom`. `undefined` (a live frame from a server predating the field)
+ *  reads exactly as `null`. */
+export function releasedFromOf(s: FleetSession): ReleasedFrom | null {
+  return s.releasedFrom ?? null;
+}
+
+/** `FleetSession.releasedFrom`'s persistence contract: absent or null → `null`. A present value this build cannot
+ *  read ALSO revives as `null`, rather than rejecting the whole session the way `child` does — here the
+ *  degrade is the safe direction, since `null` leaves the row at the top level of its card, where it rendered
+ *  before this field existed. */
+function reviveReleasedFrom(o: RawObj, k: string): ReleasedFrom | null {
+  const v = o[k];
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const r = v as RawObj;
+  const { runId, program, programTitle, claimedBy, closedAt, child } = r;
+  if (!isPositiveDecimalSafeInteger(runId) || typeof program !== 'string') return null;
+  if (programTitle !== null && typeof programTitle !== 'string') return null;
+  if (claimedBy !== null && typeof claimedBy !== 'string') return null;
+  if (!isPositiveDecimalSafeInteger(closedAt) || typeof child !== 'boolean') return null;
+  return { runId, program, programTitle, claimedBy, closedAt, child };
+}
 
 /** What a `~/.ccrc/update.json` text says about a run IN FLIGHT (design
  *  2026-09-20 §10). Two callers ask it: the agent's `update` op, before it spawns
