@@ -19,7 +19,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
-| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | — | dispatched 2026-10-02 (run 236) |
+| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | awaiting review (run 236 at `3b07b2bc`; review run 240, dispatch at the 00:09:10 slot) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
@@ -229,6 +229,29 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
     Spec §9's kill-rule band is empty, so the measured archive→return delay does not hold stage 3. That measurement
     is the one wave 3 waited on.
+- **2026-10-02 21:39 — wave 2 done: PR #233 at `3b07b2bc`** (wave-done 3274).
+  - **Re-measured:** the branch tip is the claimed sha, the PR is open and mergeable, and CI is running.
+  - **Advanced:** `working`, then `awaiting-review`, both ok. All 13 items are settled done.
+  - **The worker's signals:** `suite: red`, `failure: unclear`. Its first full run had three reds, none from this
+    wave:
+    - two boot.test.ts boot-time cases at 3.6 s against a 3.0 s limit under load, 4 of 4 green in isolation;
+    - tmp-sweep's FAILS CLOSED, which is red on main too.
+  - **Routing:** the "worker executing a spec'd plan" row stands for wave 3. The signal names no fault of this
+    wave's.
+  - **Mutation table:** 96 of 98 plan rows are red, with S42 green by construction and its control S42c red. P23
+    was adapted to P23a. The worker's own rows X1–X6b are red.
+  - **Deviations:** fifteen, each defined once: 3836–3845, plus 3866–3870.
+  - **Task 12** took Step 3's skip arm: README is 3852 lines against CLAUDE.md's "~3800", so CLAUDE.md's size
+    claim is untouched.
+  - **Follow-ups named in the PR body:**
+    - the 409 detail, already carried;
+    - the base's 404 for an unlistable registry, where only the comment was corrected;
+    - Released/Archived fold-disjointness hardening;
+    - `idleForStop`'s placement in L4.
+  - **Review run 240** is open. The 24-hour window is full until 00:09:10 (2026-10-03), which is this programme's
+    slot under the split with the stall-watch coordinator (mail 3276). The brief asks the panel to hold the door's
+    irreversible acts, the rings, the four-part order, the three fault gates and the census. It also asks it to
+    compare boot.test.ts at the tip with main.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
