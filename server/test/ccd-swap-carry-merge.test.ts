@@ -17,6 +17,7 @@
  * fallback — the swap.log line is the verdict every case reads.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -206,6 +207,35 @@ describe('a return visit merges instead of skipping', () => {
     expect(fs.readdirSync(outside), 'a file landed outside the account root').toEqual([]);
     expect(verdict()).toBe('(merged +0 ~0 !1)');
     expect(swapLog()).toContain(`sidecar ${UUID} diverged ${DST('tool-results/r.txt')} longer ${SRC('tool-results/r.txt')}`);
+  });
+
+  it('a non-regular source entry (a symlink, a fifo) is never followed and never copied', () => {
+    // A symlink would be linked or copied THROUGH to its target (outside the
+    // tree), and a fifo would block the copy: only a regular file is walked.
+    put(SRC('tool-results/r.txt'), 'R\n');
+    const secret = path.join(h.home, 'outside.txt');
+    fs.writeFileSync(secret, 'SECRET\n');
+    fs.symlinkSync(secret, SRC('tool-results/link.txt'));
+    execFileSync('mkfifo', [SRC('tool-results/pipe')]);
+    fs.mkdirSync(DST(), { recursive: true });
+    carry();
+    expect(verdict()).toBe('(merged +1 ~0 !0)');
+    expect(read(DST('tool-results/r.txt'))).toBe('R\n');
+    expect(fs.existsSync(DST('tool-results/pipe')), 'the fifo was carried').toBe(false);
+    expect(fs.existsSync(DST('tool-results/link.txt')), 'the symlink was followed').toBe(false);
+    expect(() => fs.lstatSync(DST('tool-results/link.txt')), 'the symlink itself was carried').toThrow();
+  });
+
+  it('a destination entry of another type where the source has a file is kept and counted (!D)', () => {
+    // A `*.jsonl` whose destination is a DIRECTORY must reach the type guard,
+    // not the log arm (which would open the directory and fail the walk).
+    const s = put(SRC('subagents/agent-a1.jsonl'), 'A\n');
+    put(DST('subagents/agent-a1.jsonl/inner.txt'), 'KEEP\n');
+    carry();
+    expect(verdict()).toBe('(merged +0 ~0 !1)');
+    expect(fs.statSync(DST('subagents/agent-a1.jsonl')).isDirectory()).toBe(true);
+    expect(read(DST('subagents/agent-a1.jsonl/inner.txt'))).toBe('KEEP\n');
+    expect(swapLog()).toContain(`sidecar ${UUID} diverged ${DST('subagents/agent-a1.jsonl')} longer ${s}`);
   });
 
   it('links an absent file when it can (same filesystem)', () => {
