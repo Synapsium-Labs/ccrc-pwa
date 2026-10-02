@@ -18,7 +18,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 1 | `shell` delivery; the run-worker quiet lane (r1 worker check, r2 coordinator report, r3 operator push), shadow until armed | server | #216 | **merged** `1f9fa22d7`, live v0.0.52 (shadow) |
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 (merges after #227) | **review clean** — run 221 accepted, review run 224 clean (4 Minor, ruled R11); PR awaits the operator's merge |
-| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; Task 3 done, Tasks 1–2 wait for landing-order wave 1 to merge (R14) |
+| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; Task 3 done; landing-order wave 1 merged at 19:46 (#231), so Tasks 1–2 resumed at clauses 16/17 (R14, R15) |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | planned and reviewed; dispatches after #227 and #228 merge |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
@@ -126,6 +126,22 @@ independent reader, then cross-checked by another. The cross-check upheld every 
   the count-word gap our planner found in its plan. **This session's defect:** coordinator clause 10 says to read
   `GET /api/claims` before a dispatch; the last check was at 10:31, five hours before wave 4's dispatch, and missed
   run 218's claim. Every later dispatch in this programme re-reads the claims first.
+- **R15 (coordinator, 2026-10-02 19:51): wave 4 resumes. Its absorb comes from the worker's own probe, not from this
+  session.** Landing-order wave 1 merged at 19:46 (#231, `10f32755`). Its coordinator said so by mail. By 19:49, run 218
+  was closed and claim 882 released, measured by a fresh read of `GET /api/claims`. The merge put two absorb rules on
+  `main`: coordinator clause 15, under which a coordinator asks for an absorb only on a conflict it has measured, a
+  land-sync or an ejection; and worker clause 16, under which a worker absorbs only on its own measured conflict, a red
+  check that `main` passes, or a coordinator's `fix-round`. The homes still carry the older skills, installed at
+  v0.0.60, but this programme follows the rules `main` carries. `ws/still-cove` (Task 3 only) merged clean against
+  `origin/main` (`merge-tree` rc 0), so R14's step "then merges `main`" and Task 1 Step 1's
+  `main > HEAD → git merge origin/main` branch are superseded. The worker:
+  - commits the smallest edit at the insertion point;
+  - absorbs on the conflict its own probe then measures;
+  - renumbers in that merge commit, through the plan's "If this PR is overtaken" section: coordinator 16, worker 17,
+    count words `sixteen`/`seventeen`, and the `stall.ts` comment row;
+  - measures every mutation row after the merge.
+
+  `main`'s two new clauses contain no Monitor wait.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
@@ -141,7 +157,8 @@ independent reader, then cross-checked by another. The cross-check upheld every 
   so an edit to it is restamped with `shared/mark.mjs`.
 - No marker gains a writer in the tree; `single-definition.test.ts` pins the six.
 - **For whichever skills wave lands second** (landing-order wave 1, continuity's clause wave, or this programme's wave
-  4): landing-order wave 1's plan moves three of the five count words in `coordinator-skill.test.ts` (it misses two),
+  4): landing-order wave 1 landed first (#231) and moved all five count words in `coordinator-skill.test.ts`
+  (measured on `main`; the two its plan missed were added at our mail), so wave 4 moves every count word it finds,
   and continuity's planned worker clause waits on CI "with the Monitor tool", while this programme's worker clause says
   a Monitor is never a wake to end a turn on. They fit only if continuity's wait happens inside the turn.
 - Wave 2's parked minors live in the coordinator's review notes, not in a tracked file; wave 5's plan carries the
