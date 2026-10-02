@@ -15,7 +15,7 @@ direct reclaim argv shapes before automatic reclamation can ship.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open, held) | **working, integration held** — run 199 on `still-harbor`; PR #222 opened at `e91fbca8` before the hold reached the worker; a narrow fix round (caps-refresh fixture, interpreter-ruling attribution) runs now; item 4 is redone after `reclaim-row-placement-safety` merges; no review until then |
+| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open) | **working, integrating** — run 199 on `still-harbor`; fix rounds left PR #222 at `a806a558` with Linux CI green; `reclaim-row-placement-safety` merged as `0db98707` and integration mail 3067 (2026-10-02) lifted the hold: merge current main, re-stamp, repair citations, rerun the gates, then a fresh fingerprint and held-out review |
 
 **Deviation block: eight numbers, the first of them 3696** (allocated once at run 199 open, 2026-09-30; floor
 now 3704). The finalized plan defines the first as `ccd-imported-functions-hijack-reclaim-reads`. No other issued
@@ -83,6 +83,13 @@ unrendered.
   because its fixture installs only the launcher while the agent's capability cache now keys on the launcher and
   body pair. The worker repairs that fixture and the interpreter departure's attribution on its own branch, touching no `ccd/ccd`
   and merging no `main`; the integration hold is unchanged.
+- **2026-10-02 — the hold is lifted; item 4 is redone.** The two-file fix round landed at `aba90d40` and a test-only
+  macOS fixture repair at `a806a558`; Linux CI is green there. With `reclaim-row-placement-safety` merged as
+  `0db98707`, the worker merges current `origin/main` (one `ccd/ccd` conflict in a dry merge), keeps both the
+  direct-entry guard and the row-placement code byte-for-byte, re-stamps, re-measures every citation its guard
+  shifts, reruns the entry, reclaim, install and whole-server gates, and proves a protected direct `ws-reclaim`
+  still reaches the row-placement code through the launcher. Departures take the block's remaining numbers from
+  3701. The next review run opens under the canonical title `Child reclaim entry safety prerequisite`.
 - **Routing escalation.** This is a destructive-path security boundary reached after repeated wave 4 resolver
   rounds exposed the process-level class. The main loop runs Opus at `xhigh`; implementation subagents run Sonnet
   at `high`; workflows are off; compact threshold is 40. The held-out review remains outside that routing and adds

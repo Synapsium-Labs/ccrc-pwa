@@ -17,7 +17,7 @@ automatic deletion.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **awaiting-review** — fix round 3 answered review 214 at `1e533785` (fingerprint accepted 2026-10-02); review run 215 dispatched to `ccrc-pwa-amber-cove` and decides acceptance under the convergence rule |
+| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (merged `0db98707`) | **done** — accepted on review run 215 at `1e533785`; squash-merged 2026-10-02 01:43 UTC; run 208 closed `done` with `final:true`, its child released and queued for reclaim; release v0.0.58 published 01:44 UTC, rollout by the automatic updater only |
 
 **Deviation block: sixteen numbers, the first of them 3731** (allocated exactly once at run 208 open,
 2026-10-01; floor now 3747). The finalized plan defines the first as
@@ -166,6 +166,25 @@ a measured departure is defined in that plan; unused headroom remains unrendered
   change moves the existing leaf-link refusal ahead of other-row placement in `_ws_reclaim_eval` and rewords the
   child's own rc-1 remedy so it never invites removing what stands at the child's workdir. Issued numbers 3738 and
   3739 are newly rendered; 3740 onward stay unrendered. Review run 215 reads it.
+- **2026-10-02 — accepted, merged and closed.** `ccrc-pwa-amber-cove` read `1e533785` (panel 16 agents, plus a
+  reproduce re-run after an empty first result: 32 of 33 claims reproduced, the 33rd not checkable and its finding
+  refuted 3-0). Counts: correctness 1 confirmed; spec 1 confirmed and 1 refuted; reproduce 1 refuted; SAFETY 1
+  confirmed. SAFETY (a)-(h) all hold, measured with the 20 tabled rows, nine extra mutants and 21 fixture probes on
+  tip and prior bytes: no path removes a live child, R31's leaf refusal is terminal again ahead of row placement, R19
+  is unchanged, and the moved rung puts one refusal ahead of others and never turns a refusal into a pass. Rulings:
+  - **The fix round's own finding** is a test gap, not a behavior: no assertion binds the new rc-1 remedy's
+    prohibition clause, so rewording it ships green. Read literally, the convergence rule's "introduces nothing" would
+    open a fourth round; the coordinator ruled it the remedy-pin class already carried from review 214 (a pin that
+    binds less than it claims), because SAFETY (h) measured every printed remedy safe to follow and the code's one
+    behavioral change is pinned by mutation row 20. It is carried to child-reclamation wave 4 with that class.
+  - **Two findings predate the round** and are carried to wave 4: the resolver refuses a `..` in the rest before
+    re-walking a prefix that holds one (fail-closed: such a row lands in retryable `unres` with a false detail rather
+    than terminal SHARED), and three plan selectors still name the retired `repairing the alias` control.
+  - Run 208 advanced to `merging` on the reviewed fingerprint; PR #226 was squash-merged with `--admin` (the ruleset's
+    approval cannot be given) and `--match-head-commit 1e533785`, as `0db987074dc7c14e30b661649810d6191596b3e6`;
+    Linux CI was green and the macOS legs red, advisory by standing ruling. The `final:true` close answered `done`,
+    `released:true`, `childReclaim:"queued"`. The release workflow published prerelease v0.0.58 from that merge at
+    01:44 UTC; convergence is the automatic updater's and is observed read-only.
 
 ## Carried constraints
 

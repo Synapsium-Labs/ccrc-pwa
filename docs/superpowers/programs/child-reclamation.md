@@ -43,6 +43,10 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-02 — the row-placement prerequisite has merged.** PR #226 landed as `0db98707` after review runs 212-215
+  (release v0.0.58). The landing order moves on: run 199 (`reclaim-entry-safety`) now merges current `main` without
+  rebasing, integrates that prerequisite through its fourth item and returns a fresh fingerprint for its own held-out
+  review; wave 4 stays stopped until PR #222 also merges.
 - **2026-10-01 — the row-placement prerequisite is in its first fix round; its review adds two carries here.**
   Run 208 (`reclaim-row-placement-safety`) opened PR #226 at `dd4e2a86`, and held-out review run 212 found no path
   that removes a live child through the removed-alias class. Its rulings (that programme's ledger) reach this one:
@@ -737,6 +741,11 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   ladder cases (`demo-alias-up`, the newline spelling, the logical-entry spelling) that no longer tell their resolver
   guards apart since every non-`complete` row gives one answer; and the two pre-existing `//` remedy wordings that
   still name a re-point, which ride with the path-identity follow-up's wording.
+- **Wave 4's integration round also inherits, from review run 215 (2026-10-02):** the child's own rc-1 remedy
+  clause "never remove or replace what stands at this child's own workdir" is bound by no assertion (the remedy-pin
+  class above); `_ws_reclaim_resolve` refuses a `..` in the rest before re-walking a prefix that holds one, so a row
+  that logically is the child lands in retryable `unres` with a detail that is false for it; and three row-placement
+  plan selectors still name the retired `repairing the alias` control.
 - **Wave 5 inherits, from the row-placement review (2026-10-01):** recovery for gone-directory alternate rows. An
   alternate row whose path is gone holds every other child at `unmeasured`, and two vanished or interrupted children
   hold each other; the recovery must prove the gone path was ccd's own worktree without consulting process state.
