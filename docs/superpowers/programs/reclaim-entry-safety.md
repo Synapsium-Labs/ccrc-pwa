@@ -15,7 +15,7 @@ direct reclaim argv shapes before automatic reclamation can ship.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open) | **working, fix round** — review run 216 closed `done` on `b9791151` with 13 confirmed findings; fix-round mail 3125 sent 2026-10-02; a fresh review follows its next wave-done |
+| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open) | **awaiting-review** — fix round answered review 216 at `46194d6b` (fingerprint accepted 2026-10-02); review run 217 dispatched to `ccrc-pwa-quiet-summit`, deciding acceptance under the convergence rule |
 
 **Deviation block: eight numbers, the first of them 3696** (allocated once at run 199 open, 2026-09-30; floor
 now 3704). The finalized plan defines the first as `ccd-imported-functions-hijack-reclaim-reads`. No other issued
@@ -128,6 +128,19 @@ unrendered.
   - **The pre-existing Darwin `eval` of `USER`, operator:** fixed in child-reclamation wave 4, before the sweep runs
     unattended on any macOS box.
   - Departures take the block's last three numbers, 3701 first; a fourth stops for a ruling.
+- **2026-10-02 — fix round accepted for review; routing kept by hand; a convergence rule.** Mail 3132 claimed
+  `46194d6b69a0949b64932c0b3ad3bec816c21307`, five commits over `b9791151` (`origin/main` unchanged). Re-measured:
+  remote, worktree and PR #222 heads equal it, the tree is clean, all eight changed paths lie inside claims 873 and
+  874, `ccd/ccd` passes the marker check and `bash -n`, the row-placement functions remain byte-identical to `main`'s,
+  and issued numbers 3701 and 3702 are newly rendered while 3703 stays unrendered. The server accepted the fingerprint.
+  - **Routing.** The worker reported `failure: shallow` a second time. The routing door again answered `ceiling`
+    with "this is the first": a refused rung records no event, so on a session already at `xhigh` the same-kind count
+    never reaches two and `max` is unreachable through the kind ladder. Decided by hand: effort stays `xhigh`, because
+    the misses were caught by the held-out panel, which is the designed gate, and the rule below bounds further work.
+    The door's behavior is an observation for the routing design, not changed here.
+  - **Convergence rule** (as row-placement's): review run 217 accepts the wave when its SAFETY lens holds, no
+    confirmed critical or important finding stands, and the fix round introduces no defect; a newly found minor that
+    predates the round is carried to child-reclamation wave 4 rather than opening another round.
 - **Routing escalation.** This is a destructive-path security boundary reached after repeated wave 4 resolver
   rounds exposed the process-level class. The main loop runs Opus at `xhigh`; implementation subagents run Sonnet
   at `high`; workflows are off; compact threshold is 40. The held-out review remains outside that routing and adds
