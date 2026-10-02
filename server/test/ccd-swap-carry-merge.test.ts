@@ -194,6 +194,20 @@ describe('a return visit merges instead of skipping', () => {
     expect(verdict()).toBe('(merged +1 ~0 !0)');
   });
 
+  it('a destination SUBdirectory that is a symlink is not walked through: kept and counted (!D), nothing lands outside', () => {
+    // The root `-L` check sees a link AT `<uuid>/`, not one below it: lstat and
+    // isdir follow a link on every component but the last, so only the walk's own guard stops it.
+    put(SRC('tool-results/r.txt'), 'R\n');
+    fs.mkdirSync(DST(), { recursive: true });
+    const outside = path.join(h.home, 'outside');
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, DST('tool-results'));
+    carry();
+    expect(fs.readdirSync(outside), 'a file landed outside the account root').toEqual([]);
+    expect(verdict()).toBe('(merged +0 ~0 !1)');
+    expect(swapLog()).toContain(`sidecar ${UUID} diverged ${DST('tool-results/r.txt')} longer ${SRC('tool-results/r.txt')}`);
+  });
+
   it('links an absent file when it can (same filesystem)', () => {
     const s = put(SRC('tool-results/r.txt'), 'R\n');
     fs.mkdirSync(DST(), { recursive: true });
