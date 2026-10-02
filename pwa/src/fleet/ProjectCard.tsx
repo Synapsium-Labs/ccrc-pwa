@@ -501,8 +501,10 @@ export function ProjectCard({
   const releasedArchivable = group.released.filter(archivableReleased).length;
   const releasedChildren = group.released.length - releasedArchivable;
   // A release is not the operator's own act (an archive is), so the row being READ must not vanish into a closed
-  // fold when its run closes: the fold shows itself while it holds the selection.
-  const releasedShown = releasedOpen || (selectedId !== null && group.released.some((s) => s.id === selectedId));
+  // fold when its run closes. While the fold holds the selection it does two things: it shows itself, and its toggle
+  // is disabled — a tap could not collapse it, only silently invert the stored `<project>::released` key.
+  const selectionInReleased = selectedId !== null && group.released.some((s) => s.id === selectedId);
+  const releasedShown = releasedOpen || selectionInReleased;
   const repoOf = (s: FleetSession): string | null => {
     if (s.project === group.project) return null;
     const own = repoLabel(repoFor(s.project));
@@ -666,6 +668,7 @@ export function ProjectCard({
             type="button"
             className="proj-released-toggle"
             aria-expanded={releasedShown}
+            disabled={selectionInReleased}
             onClick={() => onToggle?.(`${group.project}::released`)}
           >
             <span className="proj-card-chevron" aria-hidden="true">{releasedShown ? '▾' : '▸'}</span>

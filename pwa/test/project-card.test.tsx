@@ -1458,6 +1458,23 @@ describe('the Released (n) fold (workspace lifecycle spec §5.1)', () => {
     expect(container.querySelectorAll('.proj-released-body .sess-line')).toHaveLength(1);
   });
 
+  it('the toggle is disabled while the selected row holds the fold open, and live otherwise', () => {
+    // Forced open by the selection, a tap could not collapse the fold — it would only invert the stored key.
+    const g = grp({ released: [released('demo-amber-delta', 'alpha', 200)] });
+    const onToggle = vi.fn();
+    const { rerender } = render(<ProjectCard group={g} onOpen={() => {}} onToggle={onToggle} onActions={() => {}} selectedId="demo-amber-delta" />);
+    const held = screen.getByRole('button', { name: /released \(1\)/i });
+    expect(held).toBeDisabled();
+    fireEvent.click(held);
+    expect(onToggle).not.toHaveBeenCalled();
+    // The control: a selection elsewhere leaves the toggle live.
+    rerender(<ProjectCard group={g} onOpen={() => {}} onToggle={onToggle} onActions={() => {}} selectedId="demo-elsewhere" />);
+    const free = screen.getByRole('button', { name: /released \(1\)/i });
+    expect(free).toBeEnabled();
+    fireEvent.click(free);
+    expect(onToggle).toHaveBeenCalledWith('demo::released');
+  });
+
   it('a COLLAPSED card still marks the selection when the selected row sits only in Released', () => {
     // Before the fold a released row lived in `group.sessions`, so the folded header carried the mark; the row now
     // lives in `group.released`, and the mark must follow it.
