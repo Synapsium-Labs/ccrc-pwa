@@ -203,6 +203,27 @@ carries it (spec §5.1, amended 2026-09-24).
     `.github/` files have not.
   - The re-measure runs as a workflow, one Opus · high agent per task on an isolated worktree at `10f32755`. Dispatch
     waits on its answer.
+- **2026-10-02 — wave 2's Tasks 2–5 re-measured on `10f32755`; dispatch waits on the daily cap.**
+  - **Task 2** applies. Skip the README re-pointer (since #217 README has no `ccd/ccd:N` anchor); the census now
+    reads 147/197.
+  - **Task 3** applies with adaptations, none a design change:
+    - `queue` is the ninth notify kind (#219 added `update`);
+    - `hasMailWithSubject` already shipped in #224 (D-3639), so add only `hasFeedEvent`;
+    - three comment and import re-anchors for the stall watch;
+    - mutation K1 rewritten.
+  - **Task 4** applies. The deny block is at 3347 by content, after the advisory. The deny's `jq` strip fails open
+    without Oniguruma, and the block will say so.
+  - **Task 5** applies as written.
+  - **Overlaps:**
+    - Continuity wave 2's `ccd/ccd` edits are measured disjoint from Task 2's, and only the line-2 stamp is
+      shared, so the second lander merges and re-stamps.
+    - Stall-watch wave 4 (run 226) claims the skill files Task 5 edits, and its coordinator has been told (mail
+      3240).
+  - **Deploy:** SERVER-FIRST. ccrc's updater moves the fleet node first, so the order is raised with the operator at
+    merge.
+  - **Dispatch** was refused `cap-daily` (24 of 24 in the fleet's rolling window). A background retry re-measures
+    the window and dispatches at the next age-out (21:27:39 UTC). Raising `maxSessionsPerDay` is the operator's
+    door.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
