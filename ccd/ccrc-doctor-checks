@@ -5994,7 +5994,10 @@ _check_codex() {
 #   1. a GPT-lane executable (`CODEX_LANE_BINS`, the list `_check_codex`
 #      compares) that is missing, not executable, or not byte-identical to
 #      $BOX_TREE_DIR/ccd/<name> is placed again by `_inst_atomic`, the
-#      primitive `_inst_bins` places it with;
+#      primitive `_inst_bins` places it with. With no `cmp` on PATH nothing
+#      can say whether a present file's bytes differ (`_dr_cx_bins`' own
+#      reading), so only a missing or non-executable file is placed, and
+#      every other is named "not compared";
 #   2. a runtime `ccgpt-runtime check` refuses is rebuilt and re-probed by
 #      `ccgpt-runtime build` — the stamp is trusted until then
 #      (D-3711, Task 4);
@@ -6006,9 +6009,18 @@ _check_codex() {
 #      `_models_litellm_lane_held`, whose compare makes a converged file a
 #      no-op and whose gate stops and starts only a tier it proves this
 #      lane's (the identity gate every stop path shares);
-#   4. only when step 1 or 2 replaced code a running tier may hold:
-#      `_inst_codex_tiers`, the install step that restarts a tier only when
-#      it is this lane's own, running, and stale.
+#   4. only when step 1 replaced the BYTES (measured by `cmp`, never a
+#      mode-only fix or a compare that could not run) of one of the two
+#      files a running tier's identity is computed from — the shim
+#      (`_codex_shim_file`) or the runtime CLI (`_codex_runtime_cli`), per
+#      `_codex_started_json` — or step 2 rebuilt the runtime:
+#      `_inst_codex_tiers`, the install step `ccrc install` and `ccrc update`
+#      run. ccgpt-usage.py and ccrc-codex are code no tier runs, so they
+#      never ask it. That step restarts a tier only when it is ccrc's own,
+#      running and measures stale, and it asks EVERY codex lane: so once it
+#      runs, a ccrc-owned tier on any lane that measures stale for any other
+#      reason is restarted too — exactly what `ccrc update` would do (the
+#      residue D-3721's entry names; ruled, not cured).
 # WHAT IT NEVER DOES: edit the roster or choose a port (a row that does not
 # validate is named and left); run OAuth (`ccrc codex login <id>` is the
 # remedy the check prints); open anything under an authDir; signal a process
@@ -6027,10 +6039,10 @@ _check_codex() {
 # reaches the next lane or the re-measurement.
 _fix_codex() {
   (
-    local role="" lanes lrc=0 n src dst rt id replaced=0
+    local role="" lanes lrc=0 n src dst rt id replaced=0 cmp_ok=1 bytes
     local -a ids=() missing=()
     for n in _codex_lanes _codex_row _codex_lane_json_state _codex_lock _codex_unlock \
-             _codex_runtime_cli _models_node _models_roster_path _models_litellm_lane_held \
+             _codex_shim_file _codex_runtime_cli _models_node _models_roster_path _models_litellm_lane_held \
              _inst_atomic _inst_codex_tiers _box_env_value; do
       declare -F "$n" >/dev/null 2>&1 || missing+=("$n")
     done
@@ -6062,16 +6074,45 @@ _fix_codex() {
     fi
 
     # 1. The executables, from the shipped tree, by the installer's own primitive.
+    # `bytes` is what `cmp` measured BEFORE the placement: 1 the bytes differ
+    # (or the file is absent or unreadable), 0 the same bytes with the wrong
+    # mode (`_inst_atomic` then only chmods), `unmeasured` with no `cmp`.
+    # Only a measured 1 on a file a tier runs asks step 4 (`replaced`).
+    command -v cmp >/dev/null 2>&1 || cmp_ok=0
     for n in ${CODEX_LANE_BINS[*]}; do
       src="$BOX_TREE_DIR/ccd/$n"; dst="$HOME/.local/bin/$n"
       if [ ! -f "$src" ]; then
         echo "FIX codex: $n: not restored — the shipped tree has no \$HOME/ccrc/ccd/$n; run 'ccrc update' (or 'ccrc install' from a checkout) to place it"
         continue
       fi
-      if cmp -s "$src" "$dst" 2>/dev/null && [ -x "$dst" ]; then continue; fi
+      if [ "$cmp_ok" -eq 1 ]; then
+        if cmp -s "$src" "$dst" 2>/dev/null; then
+          [ -x "$dst" ] && continue
+          bytes=0
+        else
+          bytes=1
+        fi
+      elif [ -f "$dst" ] && [ -x "$dst" ]; then
+        echo "FIX codex: $n: not compared — cmp is not on PATH, so \$HOME/.local/bin/$n was left as it is; install diffutils (it ships cmp), then re-run 'ccrc doctor --fix'"
+        continue
+      else
+        bytes=unmeasured
+      fi
       if ( mkdir -p "${dst%/*}" && _inst_atomic "$src" "$dst" 755 ); then
-        echo "FIX codex: restored \$HOME/.local/bin/$n from the shipped tree"
-        replaced=1
+        case "$bytes" in
+          1)
+            echo "FIX codex: restored \$HOME/.local/bin/$n from the shipped tree"
+            # The two files a running tier's identity is computed from
+            # (`_codex_started_json`): the shim a shim tier runs, and the
+            # runtime CLI that names every tier's generation.
+            if [ "$dst" = "$(_codex_shim_file)" ] || [ "$dst" = "$(_codex_runtime_cli)" ]; then
+              replaced=1
+            fi ;;
+          0)
+            echo "FIX codex: made \$HOME/.local/bin/$n executable (0755) — its bytes already were the shipped tree's" ;;
+          *)
+            echo "FIX codex: placed \$HOME/.local/bin/$n from the shipped tree — it was missing or not executable, and with no cmp on PATH whether its bytes changed was not measured, so no tier is restarted for it" ;;
+        esac
       else
         echo "FIX codex: $n: not restored — the install step refused (its line above says why)"
       fi
@@ -6138,12 +6179,13 @@ _fix_codex() {
       )
     done
 
-    # 4. The tiers — only when this run replaced code a running tier may hold.
+    # 4. The tiers — only when this run replaced the bytes of the shim or the
+    # runtime CLI, or rebuilt the runtime (step 1's `replaced`, step 2's).
     if [ "$replaced" -eq 1 ]; then
       if ( INST_ROLE="${role:-both}"; INST_DEGRADED=(); _inst_codex_tiers; [ "${#INST_DEGRADED[@]}" -eq 0 ] ); then
-        echo "FIX codex: tiers: re-ran the install step that restarts a running tier only when it is this lane's own and runs code this fix replaced (its lines above)"
+        echo "FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, which restarts every running ccrc-owned tier that measures stale, on any lane (its lines above)"
       else
-        echo "FIX codex: tiers: re-ran the install step that restarts a verified-own stale tier, and it could not restart every one (its lines above say which)"
+        echo "FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, and that step could not restart every stale tier (its lines above say which)"
       fi
     fi
     echo "FIX codex: done for ${#ids[@]} codex lane(s) — no port, roster row, OAuth, credential, unidentified listener or unit enablement was touched; the re-measurement below is the verdict"

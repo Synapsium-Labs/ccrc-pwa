@@ -9970,12 +9970,13 @@ interface FixCodexCase {
   lockRefuse?: string[];
   /** `_codex_lane_json_state` per id; default `current` */
   laneState?: Record<string, 'current' | 'stale' | 'absent'>;
-  /** the check-only materialise per id: its `changed`, or `refused`; default false */
-  registryChanged?: Record<string, boolean | 'refused'>;
+  /** the check-only materialise per id: its `changed`, `refused`, or models-op's
+   *  `roster-invalid` refusal of a roster two lanes share a port in; default false */
+  registryChanged?: Record<string, boolean | 'refused' | 'roster-invalid'>;
   /** the committing materialise per id; default `wrote` */
-  commit?: Record<string, 'wrote' | 'no-registry' | 'refused'>;
+  commit?: Record<string, 'wrote' | 'no-registry' | 'refused' | 'roster-invalid'>;
   /** `_models_litellm_lane_held` per id; default `same` (changed:false) */
-  litellm?: Record<string, 'same' | 'rendered' | 'restarted' | 'foreign'>;
+  litellm?: Record<string, 'same' | 'rendered' | 'restarted' | 'foreign' | 'roster-invalid'>;
   /** `ccgpt-runtime check` before a build, `build`, and `check` after one; default 0 */
   runtime?: { check?: number; build?: number; afterBuild?: number };
   /** each placed executable against the fixture's shipped tree; default `same` */
@@ -9989,10 +9990,27 @@ interface FixCodexCase {
   binReadOnly?: boolean;
   /** stamp every placed executable with {@link AGED} before the run */
   ageBins?: boolean;
+  /** run under a PATH with NO `cmp`: the isolation wall, then a fixture
+   *  directory of only the tools the harness itself needs */
+  noCmp?: boolean;
+  /** plant each lane's lane.json, litellm.yaml and settings.json as
+   *  {@link laneFileText}, so a case can prove nothing rewrote them */
+  laneFiles?: boolean;
 }
 
 /** A past instant a converged executable must still carry after a run. */
 const AGED = new Date('2026-01-02T03:04:05Z');
+
+/** The rendered files `laneFiles` plants for one lane, by path under HOME. */
+const laneFileText = (id: string): Record<string, string> => ({
+  [join('.ccrc', 'codex', id, 'lane.json')]: `{"fixture":"${id}'s lane.json, as planted"}\n`,
+  [join('.ccrc', 'codex', id, 'litellm.yaml')]: `# ${id}'s litellm.yaml, as planted\n`,
+  [join(`.claude-${id}`, 'settings.json')]: `{"env":{"fixture":"${id}'s env block, as planted"}}\n`,
+});
+
+/** models-op's refusal of a roster in which two codex lanes share a port
+ *  (`shared/roster-json.mjs`' own sentence; a pure-parse port, no socket). */
+const SHARED_PORT_REFUSAL = '{"ok":false,"error":"roster-invalid","detail":"fixture: accounts \\"codex-a\\" and \\"codex-b\\" both use port 45011."}';
 
 const FIX_TRIPWIRES = ['_codex_login', '_codex_stop_tier', '_codex_start_tier', '_codex_stop_lane',
   '_codex_cmd_start', '_codex_cmd_stop', '_codex_lane_json_ensure', '_codex_runtime_env_ensure', 'cmd_wrappers'];
@@ -10044,6 +10062,14 @@ function runFixCodex(c: FixCodexCase = {}): {
   mkdirSync(join(home, '.ccrc'), { recursive: true });
   writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"fixture":"a roster --fix must never write"}\n');
   if (c.role !== undefined) writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_ROLE=${c.role}\n`);
+  if (c.laneFiles === true) {
+    for (const id of lanes) {
+      for (const [rel, text] of Object.entries(laneFileText(id))) {
+        mkdirSync(path.dirname(join(home, rel)), { recursive: true });
+        writeFileSync(join(home, rel), text);
+      }
+    }
+  }
   // A second lane's credential, 0000: nothing may open it, so a read would fail loudly.
   const cred = join(home, codexAuthDir('codex-b'));
   mkdirSync(cred, { recursive: true });
@@ -10074,6 +10100,8 @@ function runFixCodex(c: FixCodexCase = {}): {
       '}',
     ].join('\n'),
     _codex_runtime_cli: '_codex_runtime_cli() { printf \'%s\' "$HOME/.local/bin/ccgpt-runtime"; }',
+    // The lane library's own one-liner: which placed file a shim tier runs.
+    _codex_shim_file: ccrcLine(/^_codex_shim_file\(\) .*$/m, '_codex_shim_file'),
     _models_roster_path: '_models_roster_path() { printf \'%s\' "$HOME/.ccrc/accounts.json"; }',
     _models_node: [
       '_models_node() {',
@@ -10085,7 +10113,9 @@ function runFixCodex(c: FixCodexCase = {}): {
       ...arms(Object.fromEntries(Object.entries(c.registryChanged ?? {}).map(([k, v]) => [k, String(v)])),
         (id, v) => (v === 'refused'
           ? `      ${id}) echo '{"ok":false,"error":"no-answer","detail":"fixture"}'; return 1 ;;`
-          : `      ${id}) ${MAT(id, `,"check":true,"changed":{"lane":${v},"classes":false,"effort":false}`)}; return 0 ;;`)),
+          : v === 'roster-invalid'
+            ? `      ${id}) echo '${SHARED_PORT_REFUSAL}'; return 1 ;;`
+            : `      ${id}) ${MAT(id, `,"check":true,"changed":{"lane":${v},"classes":false,"effort":false}`)}; return 0 ;;`)),
       '    esac',
       '    echo "{\\"ok\\":true,\\"op\\":\\"materialise\\",\\"id\\":\\"$id\\",\\"check\\":true,\\"changed\\":{\\"lane\\":false,\\"classes\\":false,\\"effort\\":false}}"; return 0',
       '  fi',
@@ -10094,7 +10124,9 @@ function runFixCodex(c: FixCodexCase = {}): {
         ? `    ${id}) ${MAT(id, ',"wrote":null')}; return 0 ;;`
         : v === 'refused'
           ? `    ${id}) echo '{"ok":false,"error":"settings-unwritable","detail":"fixture: the env block cannot be rendered"}'; return 1 ;;`
-          : `    ${id}) ${MAT(id, `,"wrote":{"lane":"lane.json of ${id}"}`)}; return 0 ;;`)),
+          : v === 'roster-invalid'
+            ? `    ${id}) echo '${SHARED_PORT_REFUSAL}'; return 1 ;;`
+            : `    ${id}) ${MAT(id, `,"wrote":{"lane":"lane.json of ${id}"}`)}; return 0 ;;`)),
       '  esac',
       '  echo "{\\"ok\\":true,\\"op\\":\\"materialise\\",\\"id\\":\\"$id\\",\\"wrote\\":{\\"lane\\":\\"lane.json of $id\\"}}"',
       '}',
@@ -10109,6 +10141,8 @@ function runFixCodex(c: FixCodexCase = {}): {
           case 'restarted': return `    ${id}) echo '{"ok":true,"op":"litellm","id":"${id}","changed":true,"restarted":true}'; return 0 ;;`;
           // `_models_refuse`'s own shape: one JSON object, then EXIT.
           case 'foreign': return `    ${id}) echo '{"ok":false,"error":"tier-foreign","detail":"lane ${id}\\u0027s LiteLLM tier is not provably this lane\\u0027s — fixture"}'; exit 1 ;;`;
+          // The codex arm's phase 1 hands models-op's own refusal back, rc 1.
+          case 'roster-invalid': return `    ${id}) echo '${SHARED_PORT_REFUSAL}'; return 1 ;;`;
           default: return '';
         }
       }),
@@ -10145,7 +10179,15 @@ function runFixCodex(c: FixCodexCase = {}): {
   ].join('\n');
   if (c.binReadOnly === true) chmodSync(bin, 0o555);
   const wall = isolationManagerStubs(home);
-  const env = { PATH: `${wall}:${process.env['PATH'] ?? ''}`, HOME: home, LC_ALL: 'C' };
+  let rest = process.env['PATH'] ?? '';
+  if (c.noCmp === true) {
+    // No system directory at all, so `cmp` cannot resolve: only what the
+    // harness and `_inst_atomic` run besides it.
+    rest = join(home, 'nocmp-bin');
+    mkdirSync(rest, { recursive: true });
+    for (const t of ['cp', 'chmod', 'mv', 'rm', 'mkdir', 'jq', 'cat']) symlinkSync(realPath(t), join(rest, t));
+  }
+  const env = { PATH: `${wall}:${rest}`, HOME: home, LC_ALL: 'C' };
   assertIsolationWallFirst(env, home);
   const p = spawnSync(BASH, ['-c', harness], { env, encoding: 'utf8' });
   if (c.binReadOnly === true) chmodSync(bin, 0o755);
@@ -10169,7 +10211,8 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
   const commit = (home: string, id: string): string => `_models_node materialise --file ${home}/.ccrc/accounts.json --id ${id}`;
   const check = (home: string, id: string): string => `${commit(home, id)} --check true`;
   const held = (id: string): string => `_models_litellm_lane_held ${id} lock=${id}`;
-  const TIERS_LINE = 'FIX codex: tiers: re-ran the install step that restarts a running tier only when it is this lane\'s own and runs code this fix replaced (its lines above)';
+  const TIERS_LINE = "FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, which restarts every running ccrc-owned tier that measures stale, on any lane (its lines above)";
+  const tiersAsked = (r: { calls: string[] }): string[] => r.calls.filter((l) => l.startsWith('_inst_codex_tiers'));
 
   it('a converged lane: every measurement is asked, and nothing is placed, rebuilt, rendered or restarted', () => {
     const r = runFixCodex();
@@ -10209,14 +10252,13 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
     expect(none.fix).toEqual(['FIX codex: nothing to cure — no codex lane in the roster']);
   });
 
-  it('a drifted, a missing and a mode-only executable are placed again from the shipped tree at 0755, and only then are the tiers asked', () => {
+  it('a drifted, a missing and a mode-only executable are placed again from the shipped tree at 0755, each said as what was done', () => {
     const r = runFixCodex({ role: 'fleet', bins: { 'ccgpt-proxy.py': 'mode', 'ccgpt-usage.py': 'drift', 'ccrc-codex': 'missing' } });
     expect(r.code, r.stderr).toBe(0);
     expect(r.fix).toEqual([
-      'FIX codex: restored $HOME/.local/bin/ccgpt-proxy.py from the shipped tree',
+      "FIX codex: made $HOME/.local/bin/ccgpt-proxy.py executable (0755) — its bytes already were the shipped tree's",
       'FIX codex: restored $HOME/.local/bin/ccgpt-usage.py from the shipped tree',
       'FIX codex: restored $HOME/.local/bin/ccrc-codex from the shipped tree',
-      TIERS_LINE,
       DONE(1),
     ]);
     for (const n of GPT_LANE_BINS) {
@@ -10224,9 +10266,48 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
       expect(readFileSync(placed).equals(readFileSync(join(r.home, 'ccrc', 'ccd', n))), `${n} is not the shipped bytes`).toBe(true);
       expect(statSync(placed).mode & 0o777, n).toBe(0o755);
     }
-    // The tiers are asked LAST, once, with the box's own role.
-    expect(r.calls[r.calls.length - 1]).toBe('_inst_codex_tiers role=fleet');
-    expect(r.calls.filter((l) => l.startsWith('_inst_codex_tiers'))).toHaveLength(1);
+    // None of these is a byte change to code a tier runs (fix round 1, D-3721).
+    expect(tiersAsked(r)).toEqual([]);
+  });
+
+  it('a drifted ccgpt-usage.py is placed again, and no tier is asked: no tier runs it (D-3721)', () => {
+    const r = runFixCodex({ bins: { 'ccgpt-usage.py': 'drift' } });
+    expect(r.fix).toEqual(['FIX codex: restored $HOME/.local/bin/ccgpt-usage.py from the shipped tree', DONE(1)]);
+    expect(tiersAsked(r)).toEqual([]);
+  });
+
+  it('a mode-only ccgpt-proxy.py is made executable, and no tier is asked: the bytes a shim tier runs did not change (D-3721)', () => {
+    const r = runFixCodex({ bins: { 'ccgpt-proxy.py': 'mode' } });
+    expect(r.fix).toEqual(["FIX codex: made $HOME/.local/bin/ccgpt-proxy.py executable (0755) — its bytes already were the shipped tree's", DONE(1)]);
+    expect(statSync(join(r.home, '.local', 'bin', 'ccgpt-proxy.py')).mode & 0o777).toBe(0o755);
+    expect(tiersAsked(r)).toEqual([]);
+  });
+
+  it('a byte-drifted shim or runtime CLI is placed again, and only then are the tiers asked: once, last, with the box\'s own role', () => {
+    for (const n of ['ccgpt-proxy.py', 'ccgpt-runtime'] as const) {
+      const r = runFixCodex({ role: 'fleet', bins: { [n]: 'drift' } });
+      expect(r.fix, n).toEqual([`FIX codex: restored $HOME/.local/bin/${n} from the shipped tree`, TIERS_LINE, DONE(1)]);
+      expect(r.calls[r.calls.length - 1], n).toBe('_inst_codex_tiers role=fleet');
+      expect(tiersAsked(r), n).toHaveLength(1);
+    }
+  });
+
+  it('with no cmp on PATH, only a missing or non-executable file is placed, every other is named "not compared", and no tier is asked', () => {
+    const r = runFixCodex({ noCmp: true, bins: { 'ccgpt-proxy.py': 'missing', 'ccgpt-usage.py': 'drift', 'ccrc-codex': 'mode' } });
+    expect(r.code, r.stderr).toBe(0);
+    const notCompared = (n: string): string =>
+      `FIX codex: ${n}: not compared — cmp is not on PATH, so $HOME/.local/bin/${n} was left as it is; install diffutils (it ships cmp), then re-run 'ccrc doctor --fix'`;
+    const placed = (n: string): string =>
+      `FIX codex: placed $HOME/.local/bin/${n} from the shipped tree — it was missing or not executable, and with no cmp on PATH whether its bytes changed was not measured, so no tier is restarted for it`;
+    expect(r.fix).toEqual([placed('ccgpt-proxy.py'), notCompared('ccgpt-usage.py'), notCompared('ccgpt-runtime'), placed('ccrc-codex'), DONE(1)]);
+    // The drifted file is NOT claimed restored: it is still exactly its bytes.
+    expect(readFileSync(join(r.home, '.local', 'bin', 'ccgpt-usage.py'), 'utf8')).toBe('#!/bin/sh\n# drifted ccgpt-usage.py\n');
+    for (const n of ['ccgpt-proxy.py', 'ccrc-codex']) {
+      expect(readFileSync(join(r.home, '.local', 'bin', n)).equals(readFileSync(join(r.home, 'ccrc', 'ccd', n))), n).toBe(true);
+      expect(statSync(join(r.home, '.local', 'bin', n)).mode & 0o777, n).toBe(0o755);
+    }
+    // The shim was placed, but nothing measured a byte change: no restart.
+    expect(tiersAsked(r)).toEqual([]);
   });
 
   it('a converged executable is never rewritten — measured on mtime, not on the message', () => {
@@ -10265,6 +10346,18 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
       DONE(1),
     ]);
     expect(r.calls[r.calls.length - 1]).toBe('_inst_codex_tiers role=both');
+  });
+
+  it('a runtime that is not on this box is said, and no build is attempted', () => {
+    const r = runFixCodex({ treeLacks: ['ccgpt-runtime'], bins: { 'ccgpt-runtime': 'missing' } });
+    expect(r.fix).toEqual([
+      "FIX codex: ccgpt-runtime: not restored — the shipped tree has no $HOME/ccrc/ccd/ccgpt-runtime; run 'ccrc update' (or 'ccrc install' from a checkout) to place it",
+      'FIX codex: runtime: not rebuilt — $HOME/.local/bin/ccgpt-runtime is not on this box (the lines above say why)',
+      DONE(1),
+    ]);
+    expect(r.fix.some((l) => /rebuilding/.test(l))).toBe(false);
+    expect(r.calls.some((l) => l.startsWith('ccgpt-runtime '))).toBe(false);
+    expect(tiersAsked(r)).toEqual([]);
   });
 
   it('a build that fails, or leaves no current runtime, is said — and no tier is restarted over it', () => {
@@ -10347,8 +10440,30 @@ describe('ccrc doctor --fix: codex, measured in isolation (_fix_codex, Plan 3a T
   });
 
   it('a tier restart that cannot finish is said', () => {
-    const r = runFixCodex({ bins: { 'ccgpt-usage.py': 'drift' }, tiersDegraded: true });
-    expect(r.fix).toContain('FIX codex: tiers: re-ran the install step that restarts a verified-own stale tier, and it could not restart every one (its lines above say which)');
+    const r = runFixCodex({ bins: { 'ccgpt-proxy.py': 'drift' }, tiersDegraded: true });
+    expect(r.fix).toContain("FIX codex: tiers: this fix replaced code a running tier runs (the shim or the runtime), so it re-ran the install step 'ccrc update' runs, and that step could not restart every stale tier (its lines above say which)");
+  });
+
+  it('a roster two lanes share a port in is refused by both writers: each lane is named NOT rendered with models-op\'s own code, and nothing is written', () => {
+    const both = { 'codex-a': 'roster-invalid', 'codex-b': 'roster-invalid' } as const;
+    const r = runFixCodex({ lanes: ['codex-a', 'codex-b'], laneFiles: true, registryChanged: both, commit: both, litellm: both });
+    expect(r.code, r.stderr).toBe(0);
+    const why = 'fixture: accounts "codex-a" and "codex-b" both use port 45011.';
+    expect(r.fix).toEqual([
+      `FIX codex: codex-a: lane.json NOT rendered — deploy/models-op.mjs answered roster-invalid: ${why}`,
+      `FIX codex: codex-a: litellm.yaml NOT rendered — roster-invalid: ${why}`,
+      `FIX codex: codex-b: lane.json NOT rendered — deploy/models-op.mjs answered roster-invalid: ${why}`,
+      `FIX codex: codex-b: litellm.yaml NOT rendered — roster-invalid: ${why}`,
+      DONE(2),
+    ]);
+    for (const id of ['codex-a', 'codex-b']) {
+      for (const [rel, text] of Object.entries(laneFileText(id))) {
+        expect(readFileSync(join(r.home, rel), 'utf8'), rel).toBe(text);
+      }
+      // …and nothing new beside them: no tmp, no .prev, no second render.
+      expect(readdirSync(join(r.home, '.ccrc', 'codex', id)).sort(), id).toEqual(['lane.json', 'litellm.yaml']);
+    }
+    expect(readFileSync(join(r.home, '.ccrc', 'accounts.json'), 'utf8')).toBe('{"fixture":"a roster --fix must never write"}\n');
   });
 
   it('never OAuth, never a credential, never a unit: every arm at once touches none of them', () => {
@@ -10401,6 +10516,23 @@ describe('ccrc doctor --fix: wrappers — a launcher is regenerated only when cc
   };
   const backups = (home: string, id: string): string[] =>
     readdirSync(join(home, '.local', 'bin')).filter((n) => n.startsWith(`${id}.pre-ccrc-`));
+
+  it('a shipped tree with no ccd/ccrc is refused by _fix_wrappers, which then runs nothing (measured in isolation)', () => {
+    const home = mkTmp('ccrc-doctor-fix-wrappers-notree-');
+    mkdirSync(join(home, 'ccrc', 'ccd'), { recursive: true });
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    const wall = isolationManagerStubs(home);
+    const env = { PATH: `${wall}:${process.env['PATH'] ?? ''}`, HOME: home, LC_ALL: 'C' };
+    assertIsolationWallFirst(env, home);
+    const r = spawnSync(BASH, ['-c', ['set -uo pipefail', 'BOX_TREE_DIR="$HOME/ccrc"', checksFunction('_fix_wrappers'),
+      '_fix_wrappers; echo "rc=$?"'].join('\n')], { env, encoding: 'utf8' });
+    expect(strayManagerCalls(home)).toEqual([]);
+    expect((r.stdout ?? '').split('\n').filter(Boolean)).toEqual([
+      "FIX wrappers: refused — the shipped tree has no $HOME/ccrc/ccd/ccrc, so its 'ccrc wrappers' cannot be run; run 'ccrc update' (or 'ccrc install' from a checkout)",
+      'rc=1',
+    ]);
+    expect(readdirSync(join(home, '.local', 'bin'))).toEqual([]);
+  });
 
   it('an absent launcher is written by --fix, and the re-measurement is a PASS', () => {
     const home = launcherBox('ccrc-doctor-fix-wrappers-absent-');
@@ -10582,7 +10714,9 @@ describeCodex('ccrc doctor --fix: codex, on a real doctor run (Plan 3a Task 8)',
       const r = runDoctor(home, ['doctor', '--fix']);
       noBuild(r.stdout);
       expect(r.stdout).toMatch(/^FIX codex: codex-a: lane\.json re-rendered from the roster and this lane's class registry$/m);
-      expect(afterFix(r.stdout)).toMatch(/^FAIL codex: /m);
+      // Task 5's own sentence for a listener on codex-a's shim port that
+      // answers with no lane id: the FAIL that stands is THAT one.
+      expect(afterFix(r.stdout)).toMatch(new RegExp(`^FAIL codex: codex-a: port ${ports!.proxyPort} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: its identity check failed`, 'm'));
       // Its port still accepting is the survival pin, never `alive()`: a
       // killed child of this process stays a zombie, alive to `kill -0`,
       // until the event loop reaps it (Task 5's ruling, codexLaneFixture.ts).
