@@ -39,6 +39,19 @@
    and the build emitted a theme with zero utilities and no error. This file
    therefore pulls tokens.css in ITSELF, and is the single entry point. */
 
+/* THE ORDER IS ONE-WAY, AND THAT IS THE DESIGN.
+   Every ui component stylesheet declares `@layer components`, while the app's
+   own sheets (fleet.css, chat.css, shell.css) are imported UNLAYERED — and
+   unlayered beats every layer regardless of specificity. So the precedence
+   runs: utilities (a call site's className) > app sheets > ui components.
+   Both directions are deliberate. A call site can always override a component
+   through `className`, which is what tailwind-merge assumes. And the app can
+   always scope over a primitive (`.block-screen .btn-primary`,
+   `.update-banner-actions .btn-ghost`, chat.css's retained `.opt-inert`),
+   which several rules rely on. The consequence to know: a ui rule can NEVER
+   win against an app rule. If the design system ever needs to override the
+   app, that is not a specificity bug to fix — it is this ordering, and the
+   app rule is the one that should move. */
 @layer theme, base, components, utilities;
 
 @import 'tailwindcss/theme.css' layer(theme);

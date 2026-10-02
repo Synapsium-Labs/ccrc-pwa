@@ -118,3 +118,26 @@ session's bucket, calls the API, or touches the store belongs in `pwa/src`.
 `StatusDot` is the edge case that proves the line — it type-imports
 `SessionBucket` from `shared/` so its `DOT` record stays exhaustive, but it
 takes that bucket as a prop and fetches nothing.
+
+## Known boundary debt
+
+`@ccrc/ui` is **this product's** design system, not a generic library, so a type
+import from `shared/` is fine and always was — `status-dot.tsx` type-imports
+`SessionBucket`, and `tsconfig.build.json`'s `rootDir: ".."` exists for it.
+
+Two components went further in the composite migration and import **values**:
+
+- `components/build-line.tsx` — `remoteSides`, `statedOf`, `pendingTag`
+- `components/mail-strip.tsx` — `MAIL_GATE_HELD_COUNT`, `MAIL_GATE_HELD_MS`
+
+The ring rule is not violated: `shared/` is L0 and imports nothing, so there is
+no cycle, and `pendingTag` was moved DOWN into L0 rather than reached up for.
+The PACKAGE boundary is. A value import gives `@ccrc/ui` a runtime dependency on
+ccrc's domain vocabulary — `BuildLine` is now a design-system component that
+knows what a release tag is — and because `rootDir` is the repo, `npm run build`
+emits `dist/shared/*.js` beside `dist/ui/`, so the /design-sync converter pulls
+update-management logic in alongside the button.
+
+Recorded rather than fixed, deliberately: it is cheap to reverse now (both
+belong in `pwa/src/fleet/`, built FROM ui primitives) and expensive once more
+components follow the precedent. Do not treat these two as licence.
