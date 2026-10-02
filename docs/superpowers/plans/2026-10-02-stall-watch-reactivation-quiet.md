@@ -1164,6 +1164,10 @@ and number.
   "⚠ waiting … no mail on the run since …" within one sweep of the coordinator's own advance, which is false: the
   coordinator just acted. The push text keeps naming the last mail, which stays true. Kept apart from the slug above
   because it changes an operator-ruled cap, not the worker's quiet.
+- **D-3795** `caps-dedupe-pinned` — recorded at wave-done (run 221). The final review of the wave found that moving
+  either cap's `rungDoneAt(..., capKeyMs)` argument back to the moved episode key passed every test, so the fix
+  round added two E4-shaped cases (with controls) that fail if it moves, plus a docstring naming the rowless run
+  `CoordStore.reconstruct()` rebuilds. Tests and a docstring only; no behaviour change.
 
 ## Self-review (record)
 

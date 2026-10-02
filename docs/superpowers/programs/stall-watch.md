@@ -17,7 +17,7 @@ file in the fleet registry. No marker has a writer in the tree.
 |---|---|---|---|---|
 | 1 | `shell` delivery; the run-worker quiet lane (r1 worker check, r2 coordinator report, r3 operator push), shadow until armed | server | #216 | **merged** `1f9fa22d7`, live v0.0.52 (shadow) |
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
-| 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | — | **dispatched** 2026-10-02 as run 221 (a fresh child) |
+| 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 (merges after #227) | **awaiting review** — run 221's wave-done re-measured and accepted 2026-10-02; review run 224 dispatched |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | planned; clause text awaits one operator ruling (below) |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors | server | — | planned |
 
@@ -82,9 +82,20 @@ independent reader, then cross-checked by another. The cross-check upheld every 
   rows for the two filter terms; a newer sibling's send-back resetting an older run's episode is an accepted residual.
   Wave 4: two Important (the clause text is settled against R2 before dispatch; the wake-list pin is case-insensitive)
   and seven Minor, all accepted.
+- **R8 (coordinator, 2026-10-02): the spec's optional `RunHealth.stallNoticedAt` and run warning (§10 "Optional") are
+  not taken.** Wave 5's planner sized it at about half a day across eight files, moving four README-cited anchors; the
+  escalation's operator push already reports a stall. A later wave can take it if the operator asks.
+- **R9 (coordinator, 2026-10-02): wave 3's wave-done.** Two slugs reported: `caps-dedupe-pinned` gets D-3795 (two
+  added cap-dedupe rows and a docstring), recorded in wave 3's plan; `deviation-refs-waits-on-227` is a merge-order
+  note, not a departure (#228's code cites the numbers #227's plan defines), so it gets none. Three follow-ups go to
+  wave 5: a run rebuilt by `CoordStore.reconstruct()` reads its first send-back as no re-activation (fails safe);
+  the coordinator-ball push text omits the coordinator's own advance; README's coordinator-ball sentence needs its
+  qualifier.
+- **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
+  review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
-  floor now 3808). Six are assigned: wave 3's plan defines two and wave 4's plan four, one per departure slug. The
-  other fourteen are headroom for departures a wave reports. A worker never calls the allocator (worker clause 11): it
+  floor now 3808). Eight are assigned: wave 3's plan defines three, wave 4's four and wave 5's one, one per departure slug.
+  The other twelve are headroom for departures a wave reports. A worker never calls the allocator (worker clause 11): it
   names a departure in its wave-done mail, and the coordinator assigns a number from the block.
 
 ## Carried constraints (reviewers get these)
