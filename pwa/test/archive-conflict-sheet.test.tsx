@@ -49,6 +49,12 @@ describe('runOpenRuns — the ONE reader of the run-open body', () => {
     expect(runOpenRuns(err)).toEqual(RUNS);
   });
 
+  it('drops a member whose `program` is not a string — the shared validator measures all four fields', () => {
+    const err = new ApiError(409, { ok: false, error: 'run-open',
+      runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }, { id: 7, program: 5, wave: 1, waveOf: null }] });
+    expect(runOpenRuns(err)).toEqual(RUNS);
+  });
+
   // `waveOf` was the ONE field of four this parser ASSERTED and did not
   // MEASURE, inside a function whose entire job is validating an untrusted
   // body: `ArchiveConflictRun` declares `waveOf: number | null`, so a member

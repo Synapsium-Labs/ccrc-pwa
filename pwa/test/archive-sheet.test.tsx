@@ -111,6 +111,20 @@ describe('the server re-reads, and its refusal turns the sheet', () => {
     await waitFor(() => expect(archive).toHaveBeenLastCalledWith('demo-amber', { interrupt: true, programme: 'end' }));
   });
 
+  // `runsOf` reads every run-bearing member of a refusal body through `isArchiveConflictRun`, the one validator
+  // `runOpenRuns` shares. Dropping that filter here, or its `program` check there, lets a member this build cannot read
+  // reach `runPhrase` — "undefined" on screen, or a throw on a `null`.
+  it('a malformed member of `runs` is dropped by the shared validator — only the readable run is named', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'coordinator-has-open-runs',
+      runs: [RUN7, { id: 9, program: 5, wave: 1, waveOf: null }, null] })) as unknown as Archive;
+    mount(s({ status: 'busy', bucket: 'working' }), { archive });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive anyway' }));
+    expect(await screen.findByText('It has 1 open run. End its programme too?')).toBeInTheDocument();
+    expect(screen.getByText('run 7 — lifecycle wave 1/3.')).toBeInTheDocument();
+    expect(screen.queryByText(/run 9/)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/undefined|null/);
+  });
+
   it('claimed by a run (`run-open`): the claimed words, and "Archive anyway" sends `force`', async () => {
     const archive = vi.fn()
       .mockRejectedValueOnce(refusal({ error: 'run-open', runs: [RUN7] }))
