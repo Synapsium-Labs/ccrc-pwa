@@ -312,6 +312,12 @@ describe('the coordinator skill: its contract', () => {
     }
     expect(spans).toContain('gh pr merge <n> --match-head-commit <handoffCommit>');
     expect(spans).toContain('gh pr merge <pr> --match-head-commit <handoffCommit>');
+    // The title's other half. `--admin` is never a landing spelling; `--squash`
+    // belongs to #178's non-queue spelling ONLY, so the native-queue spellings
+    // (every other span) carry neither.
+    expect(spans.filter((s) => s.includes('--admin')), 'a gh pr merge spelling carries --admin').toEqual([]);
+    expect(spans.filter((s) => s.includes('--squash')), 'a native-queue gh pr merge spelling carries --squash')
+      .toEqual(['gh pr merge <pr> --squash --match-head-commit <handoffCommit>']);
   });
 
   it('lands before it closes on a native-queue project — the last wave too — enqueues only a green PR and proves the entry, and names the landing notices by the server\'s own subjects (landing-order wave 2)', () => {

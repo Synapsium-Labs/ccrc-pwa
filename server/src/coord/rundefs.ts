@@ -307,7 +307,7 @@ export function insertSystemMailTx(
   //
   // The throw ESCAPES to every caller, deliberately. Two functions call this
   // one. The first is `queueSystemMail`, and through it that function's seven
-  // call sites in five files: `close.ts`'s `closeRun` and its module-private
+  // callers in five files: `close.ts`'s `closeRun` and its module-private
   // `closeReviewRun` (the review close's own rejection), `dispatch.ts`'s
   // `dispatchRun`, `kickoff.ts`'s `queueProgramKickoff`, `routes.ts`'s
   // `POST /api/runs/:id/advance` handler, and `watch.ts`'s `FleetWatcher.hold`

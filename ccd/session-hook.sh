@@ -3373,8 +3373,8 @@ fi
 # wrapper (`nice`, `stdbuf`), a named wrapper's own flags (`sudo -E`,
 # `command -p`; only `timeout`'s one argument is parsed), a `$'…'` string
 # holding `\'`, a `#` comment straight after a `)`, a backslash-newline
-# continuation (`gh pr \<newline> merge`), and a `$(…)` that holds a `;` `&`
-# `|` or `(` inside a `VAR=` or flag value. What is DENIED
+# continuation (`gh pr \<newline> merge`), and a `$(…)` that holds a newline,
+# a `;` `&` `|` or `(` inside a `VAR=` or flag value. What is DENIED
 # though it is not a merge: a heredoc BODY line that begins `gh pr merge`
 # (heredocs are not stripped) — write such text through a quoted string
 # instead. The hook is a contract the fleet honours, not an access boundary
@@ -3425,7 +3425,10 @@ fi
 # value, a `timeout` argument or a flag may still hold ONE `$(…)` (blanks
 # allowed, no `;` `&` `|` and no nesting past `$((…))`): `X=$(date) gh pr
 # merge` runs, and a class that stopped at `(` would let it through. The
-# body stops at the first `)`, so the alternative adds no walk.
+# body stops at the first `)`: linear against the separator-restart inputs the
+# plan's regex was quadratic on. Separator-free chains still grow superlinearly
+# (closed `$(…)`: 79, 369 and 1418 ms at 50, 100 and 200 KB; and the space/tab
+# family the plan's regex already had).
 GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+pr([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+merge([[:space:]]|$)'
 if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
