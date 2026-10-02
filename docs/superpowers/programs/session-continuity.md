@@ -19,8 +19,8 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | fix round 2 done 2026-10-02; in re-review (run 233) |
-| 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | — | planned — re-planned 2026-09-30 |
+| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | merged 2026-10-02 (`a934a59b`); run 219 closed; deploy AGENT-FIRST by the update mechanism |
+| 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | — | dispatched 2026-10-02 (run 237) |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin | **AGENT-FIRST** (ccd) | — | — | to plan |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
 | 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
@@ -184,6 +184,29 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - **Rows re-run:** rows 1 through 65 were re-run on the 43-case file and the moved counts restated.
   - **Citations:** the citation census reads stated=base=tree.
   - **Re-review:** review run 233 went out with the held-out panel over `322298e5..d1ca968e`.
+- **2026-10-02 — wave 1 accepted and merged.**
+  - **Review 233** read fix round 2 and found two minor text inaccuracies, neither needing a ruling:
+    - a test comment sizes paths at "~100 bytes" where they are ~165 bytes or more;
+    - D-3774's list of moved rows leaves its scope unstated.
+
+    Every ruling held on behaviour. The `ulimit -f` cases reach the real here-string failure at
+    `ccd/ccd:22567`. The walker is byte-identical, and no non-comment `ccd/ccd` line changed. Accepted, with both
+    texts carried into wave 2's first commit rather than paying another round trip.
+  - **Totals:** three review runs (227, 230, 233) and two fix rounds. All ten numbers used, 3768 through 3777.
+  - **Merge:** #230 shared no file with #229 (merged a minute earlier), and the merge-tree was clean. Squash-merged
+    at the verified tip `d1ca968e` as `a934a59b`. Wave 2's run (237) was opened first. Run 219 closed `done`,
+    released, and its child was queued for reclaim.
+  - **Deploy:** AGENT-FIRST, through ccrc's own update mechanism.
+  - **Owed after convergence:** the plan's Task 4 Steps 6–7 measurement (`measure-continuity.py --stage 1` past
+    `--deployed`).
+- **2026-10-02 — wave 2 dispatched as run 237** to a fresh workspace, on the "worker executing a spec'd plan" row (Opus
+  · high, Sonnet · high implementers, an Opus · high reviewer per task, workflow off, compact 40). Its deviation
+  numbers, written bare: 3846 through 3855.
+  - **Anchors:** replayed in order against `a934a59b`, 28 of 30 match. The two that don't are the `_reg_purge`
+    inventory: the stall watch's `turn` took 42, so `rescuewait` makes 43.
+  - **Serialised (clause 10):** Task 3's README edits wait for landing-order #231 (run 218 claims README).
+  - **Instrument:** `measure-continuity.py` takes the extend arm.
+  - **Open questions:** the plan's four stay the operator's, built at the plan's defaults.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
