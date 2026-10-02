@@ -227,6 +227,12 @@ carries it (spec §5.1, amended 2026-09-24).
 - **2026-10-02 21:28 — wave 2 dispatched as run 238** to a fresh workspace (`ccrc-pwa-plain-prairie`), in the
   21:27:39 slot. The slot split was agreed with the stall-watch coordinator: its review 239 takes 22:34:18, and this
   session takes nothing before 00:09:10 without mailing it. Routing: the "worker executing a spec'd plan" row.
+- **2026-10-02 21:30 — wave 1 deployed.** Both boxes run v0.0.63 (`10f32755`, #231's own merge), applied from the
+  console 19:52–20:00. Task 7 Step 6's read-only proofs on the fleet box:
+  - `PASS skills: 17/17 homes carry the shipped ccrc-coordinator, ccrc-worker and ccrc-reviewer`;
+  - the hook carries `THE LANDING-ORDER ADVISORY` once;
+  - `ccrc restamp --help` prints `usage: ccrc restamp <file>`;
+  - doctor shows 0 FAIL lines.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

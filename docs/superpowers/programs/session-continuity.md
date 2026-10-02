@@ -207,6 +207,12 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - **Serialised (clause 10):** Task 3's README edits wait for landing-order #231 (run 218 claims README).
   - **Instrument:** `measure-continuity.py` takes the extend arm.
   - **Open questions:** the plan's four stay the operator's, built at the plan's defaults.
+- **2026-10-02 21:30 — wave 1 deployed.** Both boxes run v0.0.63 (`10f32755`, which carries #230), applied from the
+  console 19:52–20:00.
+  - **Proof:** the fleet box's installed `ccd` body (`~/ccrc-versions/v0.0.63/ccd/ccd`; since #222
+    `~/.local/bin/ccd` is a launcher) carries `_swap_carry_merge_walk() {` once.
+  - **Owed:** Task 4 Step 7's §9 measurement, one week after the deploy (about 2026-10-09), read-only, on the fleet
+    box.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

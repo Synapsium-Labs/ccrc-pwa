@@ -211,6 +211,24 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     green. The worker has been told.
   - **Parked, accepted:** an Important finding. On a store-read failure the archive door's 409 body drops
     `measured()`'s detail, which is base behaviour (D-2545). It is named in the PR as a follow-up.
+- **2026-10-02 21:30 — wave 1 deployed and measured on the server box.**
+  - **Deploy:** both boxes run v0.0.63 (`10f32755`, which carries #229), applied from the console 19:52–20:00. Each
+    `ccrc update --check` reads current.
+  - **The instrument** (`deploy/measure-workspace-lifecycle.py`, read-only, from the installed tree, as the server's
+    user), against a 142-row snapshot 12 s old:
+    - `released_computed` 14, `released_needs_person` 0;
+    - **`released_top_level` 0** (baseline 29 of 56 on 2026-09-24; target 0);
+    - **`released_wire_only` 0** (target 0).
+
+    Wave 1's purpose holds on the live board.
+  - **Archive rows**, for wave 3:
+    - `archived_over_7d_unheld` 50 and `archived_over_7d_held` 0;
+    - `archive_returns` 16 over a 41.4-day journal horizon, the longest 43,326 s (about 12 h);
+    - `archive_returns_over_6d` 0 and `archive_returns_over_7d` 0;
+    - `archive_acts_per_day` 129 over 14 days.
+
+    Spec §9's kill-rule band is empty, so the measured archive→return delay does not hold stage 3. That measurement
+    is the one wave 3 waited on.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
