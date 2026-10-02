@@ -18,7 +18,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | wave-done verified 2026-10-02; in review (run 225) |
+| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | review 225 ruled 2026-10-02: fix round (four minor fixes) |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | — | planned; approved 2026-10-01 (#223) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
@@ -93,6 +93,28 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     `ENDS_THE_ARCHIVE` to ccd's `_LC_ACTS`; reclaim, gc, rename and rehome are in neither list. That must be fixed
     before wave 3 reads its archive→return delay. Whether it blocks this wave is the review's to report and mine to
     rule.
+- **2026-10-02 — review 225 ruled: one fix round.** The held-out panel ran clean: three lenses verified, 30 agents,
+  7 findings confirmed, 2 refuted, none unexamined. The reviewer then measured one of the confirmed findings false
+  (R1). Six findings remained:
+  - spec lens: 1 (F1);
+  - correctness lens: 5 (F2–F6);
+  - reproduce lens: none, after 36 tool calls.
+
+  Twelve mutation rows were re-measured, all red, P25 and S38 included. The suites reproduced: server 602 passed, PWA
+  3141 passed, the census 7 passed. Rulings:
+  - **Fix now.**
+    - F1: name the final commit's `holdsSelection` widening as a departure. It is right and pinned.
+    - F2: the Released toggle must not flip its stored key while the selection forces the fold open.
+    - F3: retitle the fleet-screen double-tap case, which cannot red for the guard.
+    - F5: released rows must not rank their card below an all-archived card.
+
+    Each takes one of the block's unused numbers, 3784 through 3787, and the worker merges main (cf9e4cc8, no shared
+    files).
+  - **Accepted, F6.** `single-definition`'s one-reader scan for `releasedFrom` matches dotted access only. A
+    destructured or bracketed read would pass it. Named cost: the single-reader rule is pinned against the common
+    spelling only.
+  - **Deferred to stage 3's plan.** F4, the RETURN_ACTS / ENDS_THE_ARCHIVE binding, and R1's residual. They are
+    listed under Carried constraints.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -106,6 +128,13 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   vocabulary and is never named in the skills (spec §5.3).
 - **Landing-order** keys landing entries to runs, and stage 4 can fail a run with `causedBy:'sweep'`; that programme's
   stage 5 must treat it as an operator abandon (spec §6).
+- **Stage 3's plan carries three instrument items** from wave 1's review (run 225). These are owed before wave 3
+  reads its archive→return delay:
+  1. Bind `deploy/measure-workspace-lifecycle.py`'s `RETURN_ACTS` and `ENDS_THE_ARCHIVE` to ccd's `_LC_ACTS` by a
+     test. At the least, `expire` joins `ENDS_THE_ARCHIVE`.
+  2. Widen its `closedAt` doubt from NULL-only to the server's rule: a non-positive or non-integer close time is
+     doubt too. Do it without dropping mutation row S38's anchor.
+  3. Make the read-only pin structural by comparing the `-wal` file as well.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`, `~/.cc-limits`
   or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec whitelist; never print
   secret contents.
