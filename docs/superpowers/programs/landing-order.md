@@ -252,7 +252,7 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Deviations:** 3856 (the residue, in the wave-1 plan), 3857–3865 and 3871 (the ten slugs), 3872–3874 (the
     adaptations), and 3875, the spare used: the plan's deny regex was quadratic on separator-restart inputs, and
     the shipped one is linear there. 3876 is unused.
-  - **The deploy order (D-3864), for the operator at merge.** The plan's SERVER-FIRST cannot happen: ccrc's
+  - **The deploy order (3864), for the operator at merge.** The plan's SERVER-FIRST cannot happen: ccrc's
     updater moves the fleet node first, and nobody moves boxes by hand (ruling 2026-09-30). The worker argues the
     fleet-first window is harmless:
     - the old server's 20 s bound may kill a slow sweep, which retries next tick and writes nothing;
