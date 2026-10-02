@@ -2401,9 +2401,10 @@ export function observeHourlyRefresh(home: string, harnessEnv: NodeJS.ProcessEnv
  *  tip, as ONE sequence so both trees run the same code (Step 3 copies this
  *  block):
  *    1. nothing runs on the box-global config, so a changed render is written
- *       and nothing is stopped (the live shape: lane 1 is idle);
+ *       and nothing is stopped (the live shape at drafting, lane 1 idle);
  *    2. that repository re-renders its config and its proxy runs on it, so the
- *       external arm owes its stop, and on the base runs its bare `ccgpt stop`. */
+ *       external arm owes its stop, and on the base runs its bare `ccgpt stop`
+ *       (the live shape since 2026-09-30, lane 1's tiers measured running). */
 export async function liveShapeRefreshes(
   home: string, harnessEnv: NodeJS.ProcessEnv, realPython: string,
 ): Promise<RefreshObservation[]> {

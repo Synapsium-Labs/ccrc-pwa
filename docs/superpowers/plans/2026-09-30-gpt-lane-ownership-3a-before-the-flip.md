@@ -264,7 +264,7 @@ Every task's requirements implicitly include this section. The first two groups 
   - `~/.ccrc/runtime/codex/` and `~/.ccrc/codex/` are absent.
   - Both lanes' launchers are unmarked and belong to the other repository. One is a symlink to its shared launcher. The other is a small file that execs that launcher by path.
   - The other repository's flat usage timer and one instance of its `ccgpt-usage@` template are enabled. Its unit files carry no ccrc marker.
-  - The second lane's two transient tiers run under `ccgpt-<id>-{litellm,shim}.service`, the unit names ccrc's own tiers use (spec §19.2), and that lane carries live sessions. The first lane is idle: no session, and no tier loaded.
+  - The second lane's two transient tiers run under `ccgpt-<id>-{litellm,shim}.service`, the unit names ccrc's own tiers use (spec §19.2), and that lane carries live sessions. At drafting the first lane was idle: no session, and no tier loaded. **Re-measured 2026-09-30, after drafting:** the first lane's two tiers run too, under the same unit-name shape, so the external arm's bare `ccgpt stop` is armed on the live box today, on its changed-and-running path. Z1 keeps that decision byte for byte, so the merge stays neutral ([Merge authorisation](#merge-authorisation)).
   - The hourly `ccrc-models.timer` refresh renders the other repository's box-global LiteLLM config through the external arm. The file's mtime matched the timer's last run. After the merge it goes on doing exactly that (Z1).
   - A stale `~/.local/bin/ccrc-models-probe` left by an older fallback deploy is on the box, and ccrc never runs it.
 
@@ -299,6 +299,7 @@ Every task's requirements implicitly include this section. The first two groups 
   - **One new doctor row, a SKIP.** Doctor gains `codex`, which answers exactly one SKIP line: there is no codex lane, and no lane state under `~/.ccrc/codex/`. Every other check, `models` included, keeps its class, and Task 10 pins that check by check (Z7). Doctor's summary line counts one more check and one more skip. Its exit code, and so install's and update's, is unchanged, because a SKIP never counts as a FAIL (`cmd_doctor`, `ccd/ccrc:3348`, `:3412`).
   - **One new install transcript line.** Every install and update prints `install: codex-usage: none — no codex lane in the roster` (Task 6), beside Plan 2b-2's `install: codex runtime: none — no codex lane in the roster`. No shipped reader parses an `install:` line (measured: no hit under `server/src`, `agent/src`, `shared` or `pwa/src`, and `ccd/ccrc` greps none of its own).
   - **The hourly refresh does exactly what it did** (Z1). `ccrc-models.service` runs `ccrc models refresh --all` (`deploy/systemd/ccrc-models.service:11`), as before. The external lane with a codex registry is probed through the base's environment and the base's `_fetch_codex`, the token-directory default included. The other repository's box-global LiteLLM config is rendered by the same arm, and the `ccgpt stop` decision is the same. Z4's new refusal sits on that arm's stop path, but it fires only while the roster carries a `codex` row, and this roster carries none. Task 10 pins the probe environment, the render and the stop decision against the base tree.
+  - **Re-measured 2026-09-30, after drafting: lane 1's tiers run.** So on the live box today the external arm's bare `ccgpt stop` is armed: a changed render while the proxy runs on the box-global config reaches it. The merge still changes nothing there. The base runs that same stop on that same render, Z1 keeps the decision byte for byte, and Z4's refusal cannot fire with no `codex` row. Task 10's second refresh pins exactly that arm against the base.
   - **Bytes that change where nothing on this shape runs them differently.** `ccd/ccrc-models-probe` gains a codex-lane arm beside `_fetch_codex`, which keeps its bytes. `~/.local/bin/ccgpt-usage.py` gains the device-flow guard and the absent-file remedy, but nothing live runs it: ccrc's pair has no instance, and the other repository's timers run that repository's own publisher (Z2). Doctor, install, account removal and uninstall gain arms that only a codex row, a flip-back or an operator's own verb reaches.
 - **The verbs that answer differently, and only when an operator runs them:**
   - `ccrc models <id> init codex` that would create a registry on a row that is not `exec.kind: "codex"`, an `external` row included, is refused by name (`codex-registry-needs-codex-lane`), with the remedy "flip the lane to `codex` first (Plan 3b)" (Z3, Task 2). On today's shape that is the second lane, which has none. The first lane's registry exists, so `init codex` there creates nothing and keeps today's `created: false` answer. Nothing automatic creates a registry: the timer runs only `refresh --all`, and the agent's exec whitelist is `['tmux', 'ccd']` (`agent/src/whitelist.ts:192`).
@@ -9479,7 +9480,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
   - Step 3 runs this task's own fixture code on a disposable copy of the base, through the same calls the live case makes: both install passes' closing doctor, the two hourly refreshes (`liveShapeRefreshes`) and the doctor after them. The answer is pasted into `BASE_LIVE_SHAPE`, and the live case asserts that the tip's answer equals it.
   - Measured at drafting, on a copy of `4ec8926a` (its tree outside `docs/` is `1f9fa22d`'s): 39 checks in each doctor map, two WARNs, no FAIL and `models: PASS`. Both refreshes exited 0, each probed once through `~/.handoff/chatgpt-auth` and rendered the box-global config, and the second ran `ccgpt stop` once. On the same copy, `init codex` on the lane-2 analog created a registry: the hazard ruling Z3 closes.
 - **Two refreshes, because the stop decision has two arms.**
-  - The live box's lane 1 is idle, so its hourly refresh renders and stops nothing. A rehearsal that ran only that would pass a tip whose external arm never stops at all, or one whose Z4 guard fires on today's shape.
+  - At drafting the live box's lane 1 was idle, so its hourly refresh rendered and stopped nothing. Since 2026-09-30 lane 1's tiers are measured running, so a changed render on today's live box takes the second arm below, the one that runs the bare stop. A rehearsal that ran only the first arm would pass a tip whose external arm never stops at all, or one whose Z4 guard fires on today's shape.
   - So the second refresh runs after the other repository has re-rendered its config, and while its proxy runs on it. There the base runs its bare `ccgpt stop` once, and the tip must too.
 - **The hourly unit is run exactly as the unit runs it.**
   - `ccrc-models.service` is a `Type=oneshot` whose `ExecStart=%h/.local/bin/ccrc models refresh --all` (`deploy/systemd/ccrc-models.service:11`). A oneshot fails exactly when that command exits non-zero, and the refresh loop returns 1 whenever any row failed (`ccd/ccrc:10243`).
@@ -9981,9 +9982,10 @@ export function observeHourlyRefresh(home: string, harnessEnv: NodeJS.ProcessEnv
  *  tip, as ONE sequence so both trees run the same code (Step 3 copies this
  *  block):
  *    1. nothing runs on the box-global config, so a changed render is written
- *       and nothing is stopped (the live shape: lane 1 is idle);
+ *       and nothing is stopped (the live shape at drafting, lane 1 idle);
  *    2. that repository re-renders its config and its proxy runs on it, so the
- *       external arm owes its stop, and on the base runs its bare `ccgpt stop`. */
+ *       external arm owes its stop, and on the base runs its bare `ccgpt stop`
+ *       (the live shape since 2026-09-30, lane 1's tiers measured running). */
 export async function liveShapeRefreshes(
   home: string, harnessEnv: NodeJS.ProcessEnv, realPython: string,
 ): Promise<RefreshObservation[]> {
@@ -11369,7 +11371,8 @@ Each entry says what departs, from which text, the measurement that forced it, a
 - **D-3708: withdrawn by operator ruling Z (2026-10-01).** Kept as a recorded decision.
   - **What it was:** ccrc would stop rendering and stopping another repository's LiteLLM at Plan 3a's merge, retiring `_models_litellm`'s external arm before any flip (the superseded R-C3).
   - **What ruling Z decided instead:** the external arm is NOT retired before the flip. It keeps its bytes on today's shape, and spec §19.6 stands as written ("until Plan 3's cutover retires that arm"). Each lane leaves the arm at its own flip, and the final plan's ccrc half deletes it once no external lane has a codex registry. The one change ruling Z makes to the arm is D-3753.
-  - **Measured, and still true:** the arm is live. On the day of drafting the hourly timer rendered the other repository's box-global config, a bare `ccgpt stop` sits on its changed-and-running path (`ccd/ccrc:10030-10031`), and exactly one lane reaches it, a lane with no sessions and nothing listening.
+  - **Measured at drafting:** the arm is live. On the day of drafting the hourly timer rendered the other repository's box-global config, a bare `ccgpt stop` sits on its changed-and-running path (`ccd/ccrc:10030-10031` at `1f9fa22d`), and exactly one lane reaches it, then a lane with no sessions and nothing listening.
+  - **Re-measured 2026-09-30, after drafting:** that lane's tiers run, so the bare stop on that path is armed on the live box today. The withdrawal stands: Z1 keeps that decision byte for byte, so the merge stays neutral.
   - **Cost:** none: the tree keeps what it had. Spec §20.2 names this number only to record the withdrawal.
 - **D-3709: for a codex lane, an absent `ANTHROPIC_BASE_URL` in settings is healthy.**
   - **Departs from:** Plan 2b-2's carry-forward item 8, "teach it `http://127.0.0.1:<proxyPort>`", which read as present-and-equal.
@@ -11497,13 +11500,14 @@ These are bookkeeping or conformance to the spec as written, with no departure:
 ## Carry-forward to Plan 3b and Plan 4
 
 Per R1, these are two separate plans, written later. Nothing here is done in Plan 3a. Everything is stated in fixture or shape terms:
-- "lane 1" is the empty lane (the rehearsal's `codex-a`) and "lane 2" is the busy one (`codex-b`);
+- "lane 1" is the lane that was empty at drafting (the rehearsal's `codex-a`) and "lane 2" is the busy one (`codex-b`);
 - real values are never written here. Plan 3a Task 11 Step 4 measures the few it needs read-only on the box at execution time and never consults the gitignored reference file (ruling F1); that file gains its GPT-lane section in Plan 3b Task 1.
 
 **The measured live shape at drafting (shape only)**
 - **Roster:** two `external` rows, provider `openai`, telemetry `codex`, with no ports, no `authDir` and no secrets file. Lane 1 carries a codex class registry and a catalogue; lane 2 carries an effort file only.
 - **Launchers:** lane 1's is a symlink to the other repository's launcher, and lane 2's is a small file that execs it by path. Neither carries a ccrc marker.
 - **Lane 1:** no sessions, its tier units are not loaded, and nothing listens on its ports. Its credential file was last written days before the census, so its refresh token may be dead.
+  - **Re-measured 2026-09-30, after drafting:** lane 1's two tiers are running, under the same `ccgpt-<id>-{litellm,shim}.service` shape as lane 2's, so the external arm's bare `ccgpt stop` is armed on the live box today. Its sessions were not re-counted. Plan 3b step 1's census re-measures both, and its stop condition catches any other difference.
 - **Lane 2:** two supervised sessions, one of them an active coordinator, running on the other repository's transient tiers. Those units' metadata carries the gateway key.
 - **Usage:** the other repository's flat timer (lane 1) and one instance of its template (lane 2) are both enabled. No ccrc usage unit exists anywhere.
 - **Runtime:** there is no ccrc runtime and no `~/.ccrc/codex/`. The first build is about 650 MB, and the box has already hit ENOSPC once.
@@ -11516,6 +11520,7 @@ Each lane leaves the external path automatically at its own flip (ruling Z8). Fr
 
 Plan 3a's two ruling-Z guards bind 3b's order:
 - **The lane with a registry flips first (Z4; Plan 3a Task 2, hazard 1).** After any flip, the external arm refuses its bare stop for a still-external lane that has a registry. If that lane's render changes while a proxy runs on the box-global config, every hourly refresh fails (`restart-failed`, `ccrc models refresh --all` exit 1, `ccrc-models.service` failed) until the lane flips. R-O1's order, lane 1 first, leaves no external lane with a registry after the first flip, so the case cannot arise. Still, before the first flip, measure read-only which process `pgrep -f` matches on the box-global config. If the order ever changes, the runbook names that failure and its remedy, the lane's own flip.
+  - **Since 2026-09-30 this is live, not hypothetical.** Lane 1's tiers run, so from Plan 3b's first codex flip on, while lane 1 is still external and its proxy is up, Z4 refuses lane 1's hourly restarts: each changed render is a `restart-failed` row and a failed `ccrc-models.service`. So the flips must be ordered, lane 1 first, or that proxy stopped by the operator before any other lane flips.
 - **A flip back keeps the lane's registry (Z3 refuses only a new one; Plan 3a Task 7, hazard 4).** From then on that lane's hourly probe takes the external path's default, lane 1's directory. That is right for lane 1 and the wrong lane for lane 2, so lane 2's rollback removes the registry its `init codex` created (step 5).
 
 1. **Preconditions and a fresh read-only census.**
@@ -11599,7 +11604,7 @@ Plan 3a's two ruling-Z guards bind 3b's order:
    Plan 3b's own ledger mints these when they fire: `runtime-built-before-the-roster-flip`, `lane-without-a-registry-inits-after-the-flip` and `both-foreign-usage-timers-retired-per-lane`.
 
 **Operator rulings, with recommendations (R-O1…R-O9), plus R-C10's framing**
-- **R-O1, which lane goes first:** lane 1, then a soak, then lane 2. Lane 1 has no sessions, its units are not loaded, and it already has a registry.
+- **R-O1, which lane goes first:** lane 1, then a soak, then lane 2, **conditional on Plan 3b step 1's lane-1 session count**. At drafting lane 1 had no sessions and no loaded units, and it already has a registry; since 2026-09-30 its tiers are measured running. If step 1 counts no session on lane 1, the recommendation stands as written. If it counts any, lane 1's window parks them first, as R-O2 parks lane 2's, or the order goes back to the operator. Either way lane 1 flips first for Z4's reason: it is the lane with a registry.
 - **R-O2, parking lane 2's two sessions:** swap each through ccd's own swap to a non-codex account at an idle point between the coordinator's waves, and swap back after verification. Add critic #20's stop conditions.
 - **R-O3, lane 1's port pair (which sits in a band other test mocks use):** keep it. `_codex_tier_ours` makes a squatter loud, and choosing ports is the operator's alone.
 - **R-O4, who keeps a codex home's `settings.json` in step after cutover:** freeze it at cutover. `plugins` is a link and persists, and hooks and the statusline are converged by `install-session-hooks.sh`. Also answer, per R14 and critic #23, whether `alwaysThinkingEnabled` still matters now that the shim owns effort. Recommendation: leave the key as written (it persists, and no ccrc writer owns it), and measure in Plan 3b Task 1 whether the shim's effort mapping makes it moot.
