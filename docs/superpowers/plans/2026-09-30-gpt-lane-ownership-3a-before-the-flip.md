@@ -11174,25 +11174,29 @@ Expected: green, with the same count as the base's run, then `census: clean … 
 
 | Suite | Base (merge-base) | Tip | Tasks | Why it moved |
 |---|---|---|---|---|
-| `ccrc-models.test.ts` | ‹measure› | ‹measure› | 1, 2 | Task 1: one new describe of four cases; the two `CHATGPT_TOKEN_DIR` scrub cases (`:1179-1236`) stay. Task 2: the `init` describe's seeding case re-aimed and two Z3 cases added, one nested Z4 describe of six, and one containment-wall case; its `init codex` setups on external rows become planted registries, which moves no count. The external-arm cases (`:1621-1815`) stay |
-| `models-probe.test.ts` | ‹measure› | ‹measure› | 1 | the no-default, runtime and device-flow cases |
-| `ccgpt-usage.test.ts` | ‹measure› | ‹measure› | 1, 8 | the device-flow marker case; the absent-file remedy pin (`:463`) moved |
-| `ccrc-doctor.test.ts` | ‹measure› | ‹measure› | 1, 3, 4, 5, 6, 8 | the citation (`:7876`), accounts, `_check_codex`, usage rows, `--fix`; `HEALTHY_SKIPS` (`:1288`) +1 |
-| `single-definition.test.ts` | ‹measure› | ‹measure› | none (run only) | 0 expected: under ruling Z, `_check_models` gains no registry reader (the `.classes.json` count stays 2), and the box-global path keeps its one holder (`:1798-1816`). A moved count names its task |
-| `ccrc-account.test.ts` | ‹measure› | ‹measure› | 7 (Task 3 runs it unchanged) | account removal disables the instance; the provider mirror (`:356-386`) unchanged |
-| `models-op.test.ts` | ‹measure› | ‹measure› | 2, 4 | Task 2: two creation cases re-aimed at a codex-kind row, and four Z3 cases; its `init codex` setups on external rows become `plantCodex`, which moves no count. Task 4: check-only `materialise` |
-| `ccrc-install.test.ts` | ‹measure› | ‹measure› | 1, 6, 10 | Task 1: the D-3486 unit pin gains `TimeoutStartSec`; the usage-pair argv census rewritten (`:3999-4154`); +6 rehearsal cases |
-| `ccrc-install-graphify.test.ts` | ‹measure› | ‹measure› | 6 | 0 expected: a containment `disable)` arm in its `systemctl` stub only |
-| `install-census.test.ts` | ‹measure› | ‹measure› | 6, 7 | Task 6: the own-name pin, and the renamed pair in the release carriage. Task 7: the `:58` note, `DEPLOY_SH_WITHHOLDS` and the STATED SCOPE bullet |
-| `ccrc-update.test.ts` | ‹measure› | ‹measure› | 6, 10 | the converge under update; +1 rehearsal case |
-| `ccrc-uninstall.test.ts` | ‹measure› | ‹measure› | 7 | the instance sweep; the derived absence list |
-| `ccrc-wrappers.test.ts` | ‹measure› | ‹measure› | 9 | the symlink backup |
-| `usage-sweep-deploy-ship.test.ts` | ‹measure› | ‹measure› | 7 (R5) | `deploy.sh`'s probe line gone |
-| `graph-noise-ship.test.ts` | ‹measure› | ‹measure› | 7 (R5), run only | 0 expected: the sweep-to-list distance goes 3 → 2, inside its budget of 3 |
-| `topology-clean.test.ts` | ‹measure› | ‹measure› | 11 | 0: `catches` is derived from the list |
-| `macos-platform.test.ts` | ‹measure› | ‹measure› | 6 | only if the forced-Darwin arms landed here |
-| `agent/test/deploy-verify.test.ts` | ‹measure› | ‹measure› | 7 (R5) | the probe absence pin; the landed list derived from the agent chain's own `_unit_atomic` operands, plus a template anchor |
-| `session-hook.test.ts -t "compaction card"` | ‹measure› | ‹measure› | — | 0 expected (Step 5) |
+| `ccrc-models.test.ts` | 148 | 164 | 1, 2 | +16. Task 1: one new describe of six cases (four, plus its fix round's dead-refresh-token and invalid-row cases); the two `CHATGPT_TOKEN_DIR` scrub cases (`:1179-1236`) stay. Task 2: the `init` describe's seeding case re-aimed and two Z3 cases added, one nested Z4 describe of seven (six, plus its fix round's two-lane join case), and one containment-wall case; its `init codex` setups on external rows become planted registries, which moves no count. The external-arm cases (`:1621-1815`) stay |
+| `models-probe.test.ts` | 46 | 61 | 1 | +15: the no-default, runtime and device-flow cases (13, plus the fix round's dead-refresh-token and no-`get_account_id` cases) |
+| `ccgpt-usage.test.ts` | 34 | 37 | 1, 8 | +3: the device-flow marker case, the renamed-API case and the fix round's dead-refresh-token case (Task 1); the absent-file remedy pin (`:463`) moved and re-titled, which moves no count (Task 8) |
+| `ccrc-doctor.test.ts` | 499 | 617 | 1, 3, 4, 5, 6, 8 | +118: accounts +6 (Task 3); the deploy.sh anchor describe 9 and `_check_codex` part 1 30 (Task 4); part 2 12 (Task 5); the usage rows 12 in isolation and 9 on any host (Task 6); `--fix` 25 in isolation, 6 on a real run, 3 for the fixer contract and 6 for wrappers (Task 8). The citation (`:7876`) and `HEALTHY_SKIPS` (`:1288`) +1 move no count |
+| `single-definition.test.ts` | 249 | 249 | none (run only) | 0, as expected: under ruling Z, `_check_models` gains no registry reader (the `.classes.json` count stays 2), and the box-global path keeps its one holder (`:1798-1816`) |
+| `ccrc-account.test.ts` | 327 | 331 | 7 (Task 3 runs it unchanged) | +4: C12–C14, account removal disables the instance, and C15, which binds the re-read guard (kept by controller ruling as conformance; it mints nothing); the provider mirror (`:356-386`) unchanged |
+| `models-op.test.ts` | 106 | 115 | 2, 4 | +9. Task 2: two creation cases re-aimed at a codex-kind row, and four Z3 cases (an `it.each` of three rows plus "every other probe kind"); its `init codex` setups on external rows become `plantCodex`, which moves no count. Task 4: five check-only `materialise` cases |
+| `ccrc-install.test.ts` | 246 | 273 | 1, 6, 10 | +27: the usage converge 18 in isolation, 1 on a real spine and 2 for the counted timer degrade (Task 6); +6 rehearsal cases (Task 10). Task 1's D-3486 unit pin gains `TimeoutStartSec` and the usage-pair argv census is rewritten (`:3999-4154`), which moves no count |
+| `ccrc-install-graphify.test.ts` | 57 | 57 | 6 | 0, as expected: a containment `disable)` arm in its `systemctl` stub only |
+| `install-census.test.ts` | 17 | 18 | 6, 7 | +1: Task 6's own-name pin. Task 6's renamed pair in the release carriage, and Task 7's `:58` note, `DEPLOY_SH_WITHHOLDS` and STATED SCOPE bullet, move no count |
+| `ccrc-update.test.ts` | 440 | 441 | 6, 10 | +1: the rehearsal case (Task 10); the converge under update moves no count |
+| `ccrc-uninstall.test.ts` | 77 | 78 | 7 | +1: the instance sweep; the derived absence list re-titles an existing case |
+| `ccrc-wrappers.test.ts` | 60 | 62 | 9 | +2: the symlink backup and its regular-file control |
+| `usage-sweep-deploy-ship.test.ts` | 10 | 10 | 7 (R5) | 0: `deploy.sh`'s probe line gone, an assertion inside an existing case |
+| `graph-noise-ship.test.ts` | 4 | 4 | 7 (R5), run only | 0, as expected: the sweep-to-list distance goes 3 → 2, inside its budget of 3 |
+| `topology-clean.test.ts` | 55 | 55 | 11 | 0: `catches` is derived from the list |
+| `macos-platform.test.ts` | 94 | 94 | 6 | 0: the forced-Darwin arms landed in `ccrc-install.test.ts` and `ccrc-doctor.test.ts`, not here |
+| `agent/test/deploy-verify.test.ts` | 45 | 45 | 7 (R5) | 0: the probe absence pin, and the landed list derived from the agent chain's own `_unit_atomic` operands plus a template anchor, are assertions inside two existing cases |
+| `session-hook.test.ts -t "compaction card"` | 175 | 175 | — | 0, as expected (Step 5; the tip's census-wrapped run: 175 passed) |
+
+**How the counts were measured (Task 11).** Each count is the number of cases `vitest list --json` names for that file on this box, run census-wrapped, one call per suite. The base column was measured in a detached worktree at the merge-base `1f9fa22d`, removed by path afterwards; the tip column in this tree. `vitest list` leaves out a case its `skipIf` skips on the measuring box, so a count here is that box's runnable cases, the same instrument on both sides. No count fell.
+
+**Task 10's mutation row of record for M2 is M2b.** M2 as written (`if :; then`) reds the Z1 assertion through an unset `$blocked`. M2b (`if blocked="$(_models_litellm_stop_blocked)" || :; then`) reds the same assertion by exactly the predicted mechanism: the second refresh's row is `ok:false` with Task 2's refusal, the status is 1, and no `stop` is recorded.
 
 **None retired:** under ruling Z the external arm stays, so Plan 2b-2 Task 6's mutation rows 2, 5 and 20 keep their subject and stay where Plan 2b-2 left them.
 
@@ -11411,7 +11415,7 @@ Each entry says what departs, from which text, the measurement that forced it, a
   - **Departs from:** §10, which names no platform, and §12's WARN row read on Darwin (2b-1 item 17c).
   - **Measured:** `_inst_units_darwin` installs no timer at all (`ccd/ccrc:14048-14072`, decision 17).
   - **Cost if wrong:** a macOS codex lane publishes no usage row.
-- **D-3721: the missing-timer WARN names `ccrc install`, not `--fix`, and `--fix` does not restart a tier that is only stale.**
+- **D-3721: the missing-timer WARN names `ccrc install`, not `--fix`, and `--fix` restarts no tier on a stale finding alone: it asks for a restart only after a `cmp`-measured byte replacement of `ccgpt-proxy.py` or `ccgpt-runtime`, or a runtime rebuild, and that restart, `_inst_codex_tiers`, the same step `ccrc update` runs, also restarts any other stale ccrc-owned tier on any lane (the ruled residue).**
   - **Departs from:** §12's `--fix` list: "enable a missing usage timer", and "restart a verified ccrc-owned active tier", read for a tier whose only finding is stale code. Both rows are WARNs. On a FAIL, `--fix` asks for a tier restart only after it replaced the bytes (measured by `cmp`) of the shim (`ccgpt-proxy.py`) or the runtime CLI (`ccgpt-runtime`), or rebuilt the runtime (Task 8); a mode-only fix, `ccgpt-usage.py`, `ccrc-codex` or an unmeasured compare never asks. It then runs `_inst_codex_tiers`, the install step `ccrc update` runs, which restarts every running ccrc-owned tier that measures stale, on any lane, not only the tiers whose code this fix replaced (ruled residue, Task 8 fix round 1). A stale tier's own remedy names `ccrc update` or the lane's `ccrc codex stop` and `start` (Task 5).
   - **Measured:** `cmd_doctor` runs a fixer only when a check returns 1 (`ccd/ccrc:3312`). R-C8 keeps that one contract for every fixer.
   - **Cost if wrong:** one extra command for the operator.
