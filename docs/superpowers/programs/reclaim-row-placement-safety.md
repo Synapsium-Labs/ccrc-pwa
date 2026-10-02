@@ -185,6 +185,13 @@ a measured departure is defined in that plan; unused headroom remains unrendered
     Linux CI was green and the macOS legs red, advisory by standing ruling. The `final:true` close answered `done`,
     `released:true`, `childReclaim:"queued"`. The release workflow published prerelease v0.0.58 from that merge at
     01:44 UTC; convergence is the automatic updater's and is observed read-only.
+- **2026-10-02 — converged by the automatic updater.** Measured read-only at 02:27 UTC: the fleet box's
+  `ccrc version` reads v0.0.58 at `0db98707`, install complete, and `ccrc update --check` answers `current`;
+  `ccrc rollout --to v0.0.58 --check` reports fleet and server both `v0.0.58 (0db98707) [current]`. No box was moved
+  by hand. The worker child `quiet-basin` was reclaimed on the close at 01:43:55 UTC with nothing uncommitted left.
+  The four reviewer children of runs 212-215 keep their rows and worktrees, released and unheld: by contract R16 a
+  review child is reclaimed by the sweep once its reviewed run is terminal, and the sweep ships in child-reclamation
+  wave 4, so they wait for it rather than for a human.
 
 ## Carried constraints
 
