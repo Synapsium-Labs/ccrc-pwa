@@ -18,7 +18,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 1 | `shell` delivery; the run-worker quiet lane (r1 worker check, r2 coordinator report, r3 operator push), shadow until armed | server | #216 | **merged** `1f9fa22d7`, live v0.0.52 (shadow) |
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 (merges after #227) | **review clean** — run 221 accepted, review run 224 clean (4 Minor, ruled R11); PR awaits the operator's merge |
-| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; Task 3 done; landing-order wave 1 merged at 19:46 (#231), so Tasks 1–2 resumed at clauses 16/17 (R14, R15) |
+| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; **awaiting review**: #232 at `571268cdc`. Clauses 16/17 per R14 and R15; the wave-done (20:16) was re-measured and accepted. Review run 239 was refused `cap-daily` and waits for a slot (R16) |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | planned and reviewed; dispatches after #227 and #228 merge |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
@@ -142,6 +142,22 @@ independent reader, then cross-checked by another. The cross-check upheld every 
   - measures every mutation row after the merge.
 
   `main`'s two new clauses contain no Monitor wait.
+- **R16 (coordinator, 2026-10-02 20:19): wave 4's wave-done is accepted for review, and its finding goes to the
+  continuity programme.**
+  - **The claim matched.** Mail 3249 claimed tip `571268cdc` on PR #232. The branch tip and the PR head both read
+    `571268cdc`, and the branch's merge base with `main` is `10f32755`.
+  - **The server accepted it.** It moved run 226 to `awaiting-review`, and the three items are settled done.
+  - **The worker's "suite: red" is load.** Its full-suite shard 1 reds in `boot.test`'s 8 s `/health` budget, and the
+    worker reproduced that on a clean `main` at load ~25. Every listed file was green. CI's selection is the arbiter.
+  - **The review is waiting for a slot.** Review run 239 is open, with its brief kept in the coordinator notes. Its
+    dispatch was refused `cap-daily`: 24 of 24 dispatches in the rolling 24 h, fleet-wide. Landing-order's run 238
+    waits on the same cap. This session proposed a split: 238 takes the 21:27:39 slot (run 213 ages out), and 239
+    takes 22:34:18 (run 214). Raising `maxSessionsPerDay` is the operator's door.
+  - **The worker's finding is routed.** `monitor-wait-conflict-continuity-stage5` says continuity's planned stage-5
+    worker clause (a Monitor wait) contradicts worker clause 17. It went to continuity's coordinator (mail 3252); this
+    programme takes no number for it.
+  - **The worker's three minors wait.** They are `lostBg` without an antecedent, `stallClause()` with no -1 guard,
+    and the S3 comment. They are ruled with the review.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
