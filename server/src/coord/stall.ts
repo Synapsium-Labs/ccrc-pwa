@@ -488,7 +488,8 @@ export type StallActivation =
  *  `Date.now()` calls, so counting the dispatch's own row would move a never-mailed episode's key off `dispatchedAt`.
  *  An observation row (`fromState === toState`) is never an entry. A `fromState` this build cannot name, into an
  *  active state, IS one: the clock restarts once, which defers r1 by at most `STALL_QUIET_MS`, where refusing it
- *  would hold the run until its next transition. */
+ *  would hold the run until its next transition. A run rebuilt by `CoordStore.reconstruct()` has no events, so its first
+ *  send-back is its only entry and reads `none`: it keeps today's clock, never an invented restart. */
 export function stallReactivation(events: readonly StallEventRow[]): StallActivation {
   const active: readonly string[] = ACTIVE_RUN_STATES;
   const entries = events.filter((e) => active.includes(e.toState) && !active.includes(e.fromState));

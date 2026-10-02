@@ -1582,6 +1582,23 @@ describe('E4 (run 187): a send-back after 8 h 53 m at awaiting-review starts the
     expect(stallVerdict(limited(reactivated(late)), late + 4_000)).toEqual(stallVerdict(limited({ kind: 'none' }), late + 4_000));
   });
 
+  it('the dialog cap stays once per episode across a send-back: a push recorded before the advance holds it', () => {
+    // (D-3788) The caps dedupe on `capKeyMs`, the pre-advance key; keying the dedupe on the episode key would re-push.
+    const menu = e4({ worker: workerAt({ live: liveWord('waiting', E4.stop) }) });
+    const pushed = [notice('live', 'dialog-cap', 1, E4.w2811, E4.react - 60_000)];
+    expect(stallVerdict(menu, E4.fire)).toEqual(capOf('dialog-cap', E4.w2811));   // CONTROL: no push recorded
+    expect(stallVerdict({ ...menu, notices: pushed }, E4.fire)).toEqual(hold('dialog'));
+  });
+
+  it('the limit cap stays once per episode across a send-back: a push recorded before the advance holds it', () => {
+    // (D-3788) Same pin for the limit cap's dedupe argument.
+    const late = E4.stop + 13 * H;
+    const limited = e4({ worker: workerAt({ live: liveWord('idle', E4.stop), limits: { five: 100, seven: 40 } }), activation: reactivated(late) });
+    const pushed = [notice('live', 'limit-cap', 1, E4.w2811, late - 60_000)];
+    expect(stallVerdict(limited, late + 4_000)).toEqual(capOf('limit-cap', E4.w2811));   // CONTROL: no push recorded
+    expect(stallVerdict({ ...limited, notices: pushed }, late + 4_000)).toEqual(hold('limit'));
+  });
+
   it('the ladder and the caps key apart: the episode key moves to the advance, the caps\' key stays on #2811', () => {
     const f = stallFacts(e4());
     expect({ episodeKeyMs: f.episodeKeyMs, capKeyMs: f.capKeyMs }).toEqual({ episodeKeyMs: E4.react, capKeyMs: E4.w2811 });
