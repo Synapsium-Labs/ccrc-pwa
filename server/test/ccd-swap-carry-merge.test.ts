@@ -600,7 +600,7 @@ describe('a walk that cannot finish is (kept: error), and the carry still answer
   });
 
   // The real cause. 16 blocks of 1024 bytes: the merge-verdict case's rows run
-  // to well over 64 KiB (400 diverged paths of ~100 bytes each, twice), so the
+  // to well over 64 KiB (400 diverged paths of ~165 bytes or more each, twice), so the
   // here-string is spilled to a temp file the cap refuses.
   const REAL_HERESTRING_FAILS = 'ulimit -f 16;';
 

@@ -4043,6 +4043,13 @@ what this plan builds.
   wait is recorded once on entry and once on exit in `$REG/<id>.rescuewait` and `swap.log`, never under the word
   `hold`. A stalled session, a `seven_day` or non-Anthropic block, or a row without a kept reset swaps as today;
   `~/.cc-limits` is not a fallback. Implemented by this plan's Tasks 1–2.
+- **D-3846** — Wave 1's text residue from review 233 (`d1ca968e`), accepted by the coordinator at #230's merge and
+  carried here as this wave's first commit; no behaviour moves. F1: `server/test/ccd-swap-carry-merge.test.ts`'s comment
+  on the real here-string case sized each diverged path at "~100 bytes"; a path is the fixture HOME plus a 133-byte
+  suffix, about 165 bytes or more, so the comment now says "~165 bytes or more" (its conclusion, "well over 64 KiB",
+  stands). F2: wave 1's plan, entry 3774, listed rows 1, 6, 7, 15 and 17 as the ones the two real-cause cases moved,
+  leaving out rows 50, 58 and 63, which the same entry records moving; the sentence now scopes its list to rows 1-45
+  and names 50, 58 and 63 for rows 46-65.
 
 ---
 
