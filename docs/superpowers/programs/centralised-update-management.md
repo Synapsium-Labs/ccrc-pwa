@@ -1024,6 +1024,23 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     That is load. The worker's run of the same file in four groups had none, and every Linux CI leg is green at
     `2555b082`. No quiet-box re-run.
 
+- **2026-10-02 11:25 UTC — the operator approved wave 9 and split the macOS reds by owner.**
+  - **The measurement.** main's latest daily full run (`0db98707`, run 36960555979) has 56 failing macOS
+    cases in 8 files. The earlier count of 9 was taken at `a742eb6a`, before the GPT lane's #217 merged.
+    - **14 are this programme's:** `ccrc-update` (4: the killed-flip `--detach` control, `_upd_redact`'s
+      `jq` escaping, `_upd_phase` and `BASHPID` under bash 3.2, the long-HOME floor), `update-spawn` (2, the
+      grandchild pipes), `ccrc-install` (5: two versioned-tree cases, and three missing-dependency cases whose
+      harness has no `systemd-run` on Darwin), and `ccd-tmux-anchor` (1, D-3525's dotted id).
+    - **42 are the GPT lane's:** `ccrc-codex` (36), `ccrc-account` (4), `ccgpt-runtime` (1) and
+      `ccd-account-auth` (1). Their causes: the fake LiteLLM stand-in never listens on macOS, the port probe
+      answers 1, and `/bin/true` does not exist there.
+  - **The operator's rulings:**
+    - wave 9 fixes this programme's 14, plus the residue worth shipping;
+    - the GPT lane's 42 are reported to that programme;
+    - `stable` waits for both.
+  - **Scoping:** three Opus scouts (workflow `wf_cfc47ce3-16a`) re-measure the 14 and residue R2–R11 at
+    `6ca3d163`, before scope is chosen.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
