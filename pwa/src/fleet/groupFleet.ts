@@ -105,7 +105,9 @@ export interface FleetGroup {
    *  first. The transition zone: a programme is done with them, and they wait here to be archived. Like
    *  `archived`, folded and never dropped; unlike `archived`, they still count toward `unseen`, since a
    *  released row is live. They take no part in `attention`, `busy` or `stranded` — by construction, which is
-   *  the fold's own rule — nor in the card's ORDER. They take part in `pin` only on a card with no live row,
+   *  the fold's own rule. They DO take part in the card's ORDER, after its live rows and before its archived ones
+   *  (`groupFleet`'s concatenation), so a released-only card ranks above an archived-only one but a folded row
+   *  never lifts its card above a visible row. They take part in `pin` only on a card with no live row,
    *  where the pin falls back to every member, exactly as it does on a card whose members are all archived. */
   released: FleetSession[];
   /** Where this project's OWN workspaces render when it is not here — one
@@ -178,16 +180,20 @@ export function groupFleet(
 ): FleetGroup[] {
   const byProject = new Map<string, FleetSession[]>();
   // Folded rows LAST (workspace lifecycle §5.1): a card's place comes from its first member, and a folded row must
-  // not lift its card above one whose top visible row is more urgent. Released rows rank above archived ones — as
-  // idle, done and cleanup rows did before the fold, and a released DEAD row too, which `sortFleet` alone ranks below
-  // archived — so the order is live, then released, then archived. Stable, so every part keeps the
-  // fleet order.
+  // not lift its card above one whose top visible row is more urgent. Four parts, each stable in the fleet order:
+  // (1) rows that are neither folded, archived nor unreleased `dead`; (2) released rows, which rank above archived
+  // ones as idle, done and cleanup rows did before the fold — and a released DEAD row too, which `sortFleet` alone
+  // ranks below archived; (3) archived rows; (4) unreleased `dead` rows, which keep `sortFleet`'s RANK (archived 5
+  // above dead 6): only a RELEASED row is lifted past archived, so a card holding only an unreleased dead row still
+  // ranks below one holding only an archived row, as it did before the fold.
   const sorted = sortFleet(sessions);
   const archivedRow = (m: FleetSession): boolean => m.bucket === 'archived';
+  const unreleasedDead = (m: FleetSession): boolean => m.bucket === 'dead' && !inReleasedFold(m);
   for (const s of [
-    ...sorted.filter((m) => !inReleasedFold(m) && !archivedRow(m)),
+    ...sorted.filter((m) => !inReleasedFold(m) && !archivedRow(m) && !unreleasedDead(m)),
     ...sorted.filter(inReleasedFold),
     ...sorted.filter(archivedRow),
+    ...sorted.filter(unreleasedDead),
   ]) {
     const card = boardHome(s);
     const list = byProject.get(card);

@@ -499,6 +499,25 @@ describe('the Released sub-fold (workspace lifecycle spec §5.1)', () => {
     expect(g.map((x) => x.project)).toEqual(['beta', 'alpha']);
   });
 
+  it('a released DEAD-only card ranks above an archived-only card, though sortFleet alone ranks dead below archived', () => {
+    // Only a RELEASED dead row is lifted past archived (the fold's own rule); `sortFleet` puts dead (6) below archived (5).
+    const g = groupFleet([
+      s({ id: 'a', project: 'B', status: 'dead', bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'd', project: 'A', status: 'dead', bucket: 'dead', releasedFrom: rel(1, 100) }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['A', 'B']);
+    expect(g[0]!.released.map((m) => m.id)).toEqual(['d']);
+  });
+
+  it('an UNRELEASED dead row keeps its rank below archived: the lift is for released rows only', () => {
+    // Neither card holds a released row, so the fold must not reorder them: archived (5) outranks dead (6) in sortFleet.
+    const g = groupFleet([
+      s({ id: 'd', project: 'dead-card', status: 'dead', bucket: 'dead' }),
+      s({ id: 'a', project: 'arch-card', status: 'dead', bucket: 'archived', archivedAt: 5 }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['arch-card', 'dead-card']);
+  });
+
   it('released rows count toward unseen, and toward neither busy nor pin while a live row exists', () => {
     const g = groupFleet([
       s({ id: 'live', home: 'claude2', bucket: 'idle' }),
