@@ -17,8 +17,8 @@ file in the fleet registry. No marker has a writer in the tree.
 |---|---|---|---|---|
 | 1 | `shell` delivery; the run-worker quiet lane (r1 worker check, r2 coordinator report, r3 operator push), shadow until armed | server | #216 | **merged** `1f9fa22d7`, live v0.0.52 (shadow) |
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
-| 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 (merges after #227) | **awaiting review** — run 221's wave-done re-measured and accepted 2026-10-02; review run 224 dispatched |
-| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | planned; clause text awaits one operator ruling (below) |
+| 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 (merges after #227) | **review clean** — run 221 accepted, review run 224 clean (4 Minor, ruled R11); PR awaits the operator's merge |
+| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | opening; ships the spec-approved clause text (R12) |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors | server | — | planned |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
@@ -99,6 +99,17 @@ independent reader, then cross-checked by another. The cross-check upheld every 
   and both scans see all of them; `deviation-refs` found no collision. **Side finding for the ledger tooling's
   owner** (not fixed here): the two regexes should be one, and a definition line that matches neither should fail a
   test rather than vanish.
+- **R11 (coordinator, 2026-10-02): wave 3's review (run 224) is clean.** Four Minor findings: F1, a run rebuilt by
+  `CoordStore.reconstruct()` has no dispatch row, so its first send-back still charges the review wait and README's
+  sentence overstates it — accepted for wave 3, fixed by wave 5's Task 9 (D-3796, re-activation keyed on the edge into
+  `dispatched`); F2, a stale docstring (`stallSilence`, "the same clock the caps use") — wave 5; F3, three text sites
+  that read the moved clocks with no pins of their own (r2's subject span, the coordinator-ball push span,
+  `stallCitedCheck`) — the push span is wave 5's Task 9, the other two get pins in wave 5; F4, the expected
+  `deviation-refs` red until #227 merges. No send-back.
+- **R12 (coordinator, 2026-10-02): wave 4 dispatches with the spec-approved clause text (§11 decision 13).** R2's
+  widening, if the operator approves it, lands later as a one-sentence amendment to clause 15 and its pin. With r1
+  armed, a parked worker answers a stall-check with `re stall-check: waiting`, which hands the ball to the coordinator,
+  so the widening matters most for escalation, which stays unarmed until a live review.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
@@ -122,6 +133,7 @@ independent reader, then cross-checked by another. The cross-check upheld every 
 
 ## Next-wave brief
 
-Wave 4: `docs/superpowers/plans/2026-10-02-worker-stall-watch-w3.md`, all tasks, on a fresh child of `ccrc-pwa`, read by
-its commit sha. Its coordinator clause text is settled against the operator's R2 before dispatch. Wave 5's plan
-(follow-ups) is being written.
+Wave 4: `docs/superpowers/plans/2026-10-02-worker-stall-watch-w3.md`, all tasks, on a fresh child of `ccrc-pwa`, read
+by its commit sha; the spec-approved clause text (R12). Wave 5: `docs/superpowers/plans/2026-10-02-stall-watch-w5-follow-ups.md`
+once its plan review is ruled, dispatched only after #227 and #228 are proven merged (it builds on wave 3's code); it
+carries R11's F2 and F3 pins.
