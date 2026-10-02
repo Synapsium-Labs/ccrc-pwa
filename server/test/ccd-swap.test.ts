@@ -143,10 +143,10 @@ describe('cmd_swap carries the sidecars', () => {
 
   it('carries the sidecar as a hardlink tree, and says so', () => {
     // 188MB per sidecar: the difference between a swap that takes a moment and
-    // one that takes minutes and fills the disk. The contents are write-once
-    // artifacts, so sharing inodes between the two accounts is safe — and the
-    // log line is the evidence, if a future defect ever implicates a shared
-    // checkpoint.
+    // one that takes minutes and fills the disk. Not write-once (measured: the
+    // journals are appended in place), but every name is this one session's
+    // own record, so a shared inode is harmless — and the log line is the
+    // evidence, if a future defect ever implicates a shared file.
     const mdir = seed('claude');
     plant('.claude', mdir, 'HISTORY\n');
     const src = sidecar('.claude', mdir, 'tool-results/r.json', 'RESULT\n');
@@ -156,9 +156,13 @@ describe('cmd_swap carries the sidecars', () => {
     expect(swapLog()).toContain('(link)');
   });
 
-  it('leaves an existing destination sidecar alone — a tree is not replaced in one step', () => {
-    // Deliberately the OPPOSITE of §2.2's unlink-first rule for the
-    // transcript, which is one file replaceable in one step.
+  it('merges into an existing destination sidecar — never replaced in one step, a differing file kept and counted', () => {
+    // Still the OPPOSITE of §2.2's unlink-first rule for the transcript: a
+    // tree is never replaced in one step. What changed (session continuity
+    // §5.1, C8) is that it is no longer SKIPPED: the swap walks it file by
+    // file, and a written-once tool result whose bytes differ is kept and
+    // counted diverged. The rule table lives in `ccd-swap-carry-merge.test.ts`;
+    // this case pins that the real verb reaches the merge.
     const mdir = seed('claude');
     plant('.claude', mdir, 'HISTORY\n');
     sidecar('.claude', mdir, 'tool-results/r.json', 'SOURCE\n');
@@ -166,7 +170,8 @@ describe('cmd_swap carries the sidecars', () => {
     runSwap();
     expect(fs.readFileSync(dstAt(mdir, path.join(UUID, 'tool-results/r.json')), 'utf8'))
       .toBe('ALREADY THERE\n');
-    expect(swapLog()).toContain('(kept)');
+    expect(swapLog()).toContain('(merged +0 ~0 !1)');
+    expect(swapLog()).not.toContain('(kept');
   });
 
   it('falls back to a full copy without nesting when cp -al leaves a partial destination behind', () => {

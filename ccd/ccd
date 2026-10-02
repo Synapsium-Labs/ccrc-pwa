@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c9de9f70826812ca0e65ce9182db5d0888d0b6f5f0b67ad554c3d47c9e203cea
+# ccrc:generated 1 sha256=6dcf961a4c6fd547b44ba5f11d22ff64293bb437360a7f2f967ca26470f8e51c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6332,14 +6332,14 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # lock" on two different inodes — reopening the double compare-and-set this
 # branch's lock migration closed.
 #
-# NOT reachable this way, and this set IS the boundary — ELEVEN dot-prefixed
-# artifacts live under `$REG`; the five above are reachable, these six are
+# NOT reachable this way, and this set IS the boundary — TWELVE dot-prefixed
+# artifacts live under `$REG`; the five above are reachable, these seven are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The six:
+# a paragraph that disagrees with it. The seven: `$REG/.carry.lock` (no id is the dash-free `.carry`);
 # `$REG/.lifecycle/` (the lifecycle journal — a dotted DIRECTORY for
 # exactly this reason; see the LC-BEGIN block, and note that its generations,
 # `errors` and `.rotate.lock` are counted WITH it, as `.reaped/`'s tombstones
@@ -22129,63 +22129,353 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1)
   return 0
 }
 
-_swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar as a hardlink tree. Always rc 0.
+# ── THE CARRY MERGES (session continuity, spec §5.1) ─────────────────────────
+# A return visit — a session carried back onto an account it once left — finds
+# its sidecar directory already at the destination. Until this build that was
+# `(kept)`: the whole tree skipped, so every subagent transcript, workflow
+# journal and tool result written since the session last left stayed behind on
+# the source (774 of 1,310 carries, spec §1.2; and eight "journal not on disk"
+# resume refusals, every one after only `(kept)` carries). The existing-
+# destination branch now WALKS the source tree file by file and decides on
+# content and size — `_swap_carry_merge_walk`, below — and nothing is deleted.
+#
+# BOUNDED, BECAUSE THE WALK READS WHERE `(kept)` READ NOTHING. Two bounds,
+# neither of which waits — the unit is already stopped, so a carry that queued
+# would be a session held down:
+#   - a BOX-WIDE NON-BLOCKING SLOT, `$REG/.carry.lock`, taken inside the carry
+#     itself, so every path that carries is covered — the tick's rescue and
+#     auto-home, a manual or PWA swap, `swap-self` — not only `_dispatch_swap`'s
+#     (the box-wide lock park-and-wake R4 designed for `_dispatch_swap` had not
+#     shipped when this was written, measured, so this slot is the carry's
+#     own). A supervisor revival carries nothing (it never changes account),
+#     so it never reaches here. Contended: `(kept: busy)`.
+#   - a BYTE BUDGET, CARRY_MERGE_BUDGET, spent as a PRIORITY FILL. A dry pass
+#     over `lstat` alone prices every action BEFORE the first byte moves (the
+#     bytes it would read to compare, plus the bytes it would copy), orders
+#     them by what a resume needs — the rewritten records, then the runs'
+#     journals, then every other log, then the rest, newest first within each
+#     — and places them whole, in that order, until the next one would overrun
+#     the budget. That one and every one after it is DEFERRED: counted, never
+#     started, priced again on the next visit, which finds the placed ones
+#     equal — so a backlog bigger than one budget drains over repeat visits.
+#     (An all-or-nothing budget moved nothing on an over-budget walk, so the
+#     next visit priced the same backlog plus the new bytes and the pair
+#     stayed stranded for good.) `(merged +N ~R !D, deferred K)`; and
+#     `(kept: budget)` only when the FIRST action is priced over the budget on
+#     its own — nothing touched, the destination exactly as it was.
+# A walk that could not run at all — no `flock`, no python3, a destination that
+# is not a real directory, the walker's own failure — is `(kept: error)`, with
+# the cause on stderr: a third word, because "someone else is carrying" and
+# "this box cannot carry" want different remedies (never one overloaded word).
+#
+# The slot is NEVER unlinked (`.rotate.lock`'s rule: unlinking a held lock file
+# is how two processes come to hold "the lock" on two inodes), and it is held
+# only for the existing-destination branch — a FIRST carry to an account is
+# today's `cp -al`/`cp -a` path, unchanged, and takes no slot.
+CARRY_MERGE_BUDGET=536870912    # bytes one sidecar's merge walk may read + copy per visit (512 MiB); what does not fit is deferred
+
+_carry_slot_take() {   # -> 0 and the CALLER's local CARRY_SLOT_FD set | 1 contended | 2 no mechanism (no flock, the lock file, any other flock failure)
+  command -v flock >/dev/null 2>&1 || return 2
+  local fd frc=0
+  { exec {fd}>>"$REG/.carry.lock"; } 2>/dev/null || return 2
+  # `flock -n` exits 1 ONLY on a conflict; a lock it cannot take at all (EBADF, ENOLCK) exits a sysexits code.
+  flock -n "$fd" 2>/dev/null || frc=$?
+  if (( frc != 0 )); then { exec {fd}>&-; } 2>/dev/null; (( frc == 1 )) && return 1; return 2; fi
+  CARRY_SLOT_FD=$fd
+}
+
+_swap_carry_merge_walk() {   # src dst budget -> stdout rows; rc 0 merged (K deferred) | 3 the first action alone over budget (nothing touched) | other: failed
+  # THE WALK, one python3 process rather than a fork per file: the measured
+  # sidecar census at planning ran to 6,142 files in one directory (p99 3,497),
+  # and a `stat`+`cmp` pair per file would hold the unit down for that long.
+  # The program arrives on fd 3 (`_pr_py`'s idiom), so stdin stays free.
+  #
+  # THE TABLE (spec §5.1), per REGULAR file of the source; directories are
+  # created as needed, and anything else in the source (a symlink, a fifo) is
+  # never followed and never copied:
+  #   absent at destination             -> hardlink, else copy       +N
+  #   the same inode (a linked carry)   -> nothing: equal by identity
+  #   equal size and equal mtime_ns     -> nothing (the quick check below)
+  #   equal size, bytes compared equal  -> nothing
+  #   *.jsonl, destination a strict prefix of a longer source -> replace  ~R
+  #   *.jsonl, source a prefix of a longer destination -> keep (it is further along)
+  #   *.jsonl, neither a prefix of the other -> keep destination         !D
+  #   a rewritten record — workflows/<runId>.json, any agent-*.meta.json,
+  #     workflows/scripts/* — source newer (mtime_ns)   -> replace         ~R
+  #   the same record, source not newer                 -> keep
+  #   any other file whose bytes differ (a tool result is written once)  !D
+  #   a destination entry of another type where the source has a file    !D
+  # Every !D prints `diverged <kept path> longer <longer copy's path>` for
+  # stage 3's manifest to name; the summary row is `merged <N> <R> <D> <K>`.
+  #
+  # THE FILL. Every row above that costs bytes (an absent file, a compare, a
+  # replace) is an ACTION, priced by the dry pass from `lstat` alone; a verdict
+  # `lstat` decides by itself (equal, or another type in the way) costs nothing
+  # and is taken on every visit. The actions are placed in RESUME ORDER —
+  #   1. the rewritten records a resume reads: workflows/<runId>.json,
+  #      workflows/scripts/*, agent-*.meta.json;
+  #   2. the append-only logs: every journal.jsonl, then agent-*.jsonl and
+  #      every other *.jsonl;
+  #   3. everything else (tool results and the rest);
+  # newest source mtime first within each — each one WHOLE, until the next
+  # would overrun the budget. That one and every one after it is deferred:
+  # counted (K), never started, so no deferred action leaves a partial file.
+  # The next visit finds every placed file equal (a link is the same inode; a
+  # copy keeps size and mtime_ns) and prices only what is left plus what is
+  # new, so a backlog drains, most valuable bytes first. Measured on the box's
+  # 673 real return-visit pairs at 512 MiB: 630 place everything at once, 43
+  # defer some, and with no new bytes those 43 drain in 2 visits (27) or 3
+  # (16); the largest single action priced 64 MiB. Not even the first action
+  # fits (it is priced over the budget on its own): `budget <its cost>`, rc 3.
+  #
+  # IDENTITY DECIDES ONLY "EQUAL", NEVER "DIFFERENT": a same-inode pair is the
+  # same bytes by definition, and every other pair is decided on size and
+  # content. THE QUICK CHECK (equal size AND equal nanosecond mtime -> equal,
+  # no bytes read) is rsync's default and this plan's measured choice: every
+  # carry since the bind-mount move is a `cp -a`, which preserves mtime_ns, so
+  # a file untouched since its last carry passes it; measured on the box's 673
+  # real return-visit pairs, it cuts the walk's p90 cost from 764 MiB to 208 MiB
+  # — about the bytes that are actually new. Its named cost: two different
+  # files of identical size AND identical nanosecond mtime read as equal.
+  #
+  # REPLACE IS TEMP-AND-RENAME in the destination's own directory, never a
+  # write through the destination's inode: a destination name may share its
+  # inode with another name (a linked carry), which a write-through would
+  # rewrite too. A temp left by a killed walk is named `.ccd-carry-*` and
+  # skipped on every later walk, as source and as destination.
+  python3 /dev/fd/3 "$@" 3<<'PY'
+import os, stat, sys, shutil, tempfile
+
+src, dst, budget = sys.argv[1], sys.argv[2], int(sys.argv[3])
+sys.stdout.reconfigure(errors='backslashreplace')   # a non-UTF-8 file name must not fail the report after the merge ran
+TMP = '.ccd-carry-'
+CHUNK = 1 << 20
+
+def is_log(rel):
+    return rel.endswith('.jsonl')
+
+def is_record(rel):
+    parts = rel.split('/')
+    if parts[0] == 'workflows' and len(parts) == 2 and parts[1].endswith('.json'):
+        return True
+    if len(parts) >= 3 and parts[0] == 'workflows' and parts[1] == 'scripts':
+        return True
+    return parts[-1].startswith('agent-') and parts[-1].endswith('.meta.json')
+
+def tier(rel):
+    """Resume value, highest first: 0 a rewritten record, 1 a run's journal, 2 any other log, 3 the rest."""
+    if is_record(rel):
+        return 0
+    if rel.split('/')[-1] == 'journal.jsonl':
+        return 1
+    if is_log(rel):
+        return 2
+    return 3
+
+def prefix_equal(a, b, n):
+    """True iff the first n bytes of a and b are identical."""
+    with open(a, 'rb') as fa, open(b, 'rb') as fb:
+        left = n
+        while left > 0:
+            k = min(CHUNK, left)
+            x, y = fa.read(k), fb.read(k)
+            if x != y or len(x) < k:
+                return False
+            left -= k
+    return True
+
+def files(root):
+    out = []
+    for dp, dns, fns in os.walk(root, followlinks=False):
+        dns[:] = sorted(d for d in dns if not d.startswith(TMP))
+        for f in sorted(fns):
+            if f.startswith(TMP):
+                continue
+            full = os.path.join(dp, f)
+            if stat.S_ISREG(os.lstat(full).st_mode):
+                out.append(os.path.relpath(full, root))
+    return out
+
+def dst_blocked(rel):
+    """An ancestor of dst/rel that exists and is not a real directory."""
+    parts = rel.split('/')[:-1]
+    cur = dst
+    for p in parts:
+        cur = os.path.join(cur, p)
+        try:
+            st = os.lstat(cur)
+        except FileNotFoundError:
+            return False
+        if not stat.S_ISDIR(st.st_mode):
+            return True
+    return False
+
+# THE DRY PASS: lstat alone, nothing read, nothing moved. `todo` holds every
+# action that costs bytes, priced; `diverged` every !D lstat decides alone.
+todo, diverged = [], []
+
+def queue(cost, kind, rel, s, d):
+    todo.append(((tier(rel), -s.st_mtime_ns, rel), cost, kind, rel, s, d))
+
+for rel in files(src):
+    sp, dp = os.path.join(src, rel), os.path.join(dst, rel)
+    s = os.lstat(sp)
+    if dst_blocked(rel):
+        diverged.append((dp, sp)); continue
+    try:
+        d = os.lstat(dp)
+    except FileNotFoundError:
+        queue(s.st_size, 'absent', rel, s, None); continue
+    if not stat.S_ISREG(d.st_mode):
+        diverged.append((dp, sp)); continue
+    if (d.st_dev, d.st_ino) == (s.st_dev, s.st_ino):
+        continue
+    if d.st_size == s.st_size:
+        if d.st_mtime_ns == s.st_mtime_ns:
+            continue
+        # both read to compare; a newer record is then copied as well, and priced here
+        cost = 2 * s.st_size + (s.st_size if is_record(rel) and s.st_mtime_ns > d.st_mtime_ns else 0)
+        queue(cost, 'same-size', rel, s, d); continue
+    if is_log(rel):
+        cost = 2 * min(s.st_size, d.st_size) + (s.st_size if d.st_size < s.st_size else 0)
+        queue(cost, 'log', rel, s, d); continue
+    if is_record(rel):
+        if s.st_mtime_ns > d.st_mtime_ns:
+            queue(s.st_size, 'replace', rel, s, d)
+        continue
+    diverged.append((dp, sp if s.st_size > d.st_size else dp))
+
+# THE FILL: resume order (tier, then the newest source first), each action
+# placed WHOLE until the next would overrun the budget; it and every one after
+# it are deferred, never started. Not even the first fits: nothing is touched.
+todo.sort(key=lambda a: a[0])
+spent, go = 0, []
+for a in todo:
+    if spent + a[1] > budget:
+        break
+    spent += a[1]
+    go.append(a)
+if todo and not go:
+    print(f'budget {todo[0][1]}')
+    sys.exit(3)
+deferred = len(todo) - len(go)
+
+def mkparents(rel):
+    parts = rel.split('/')[:-1]
+    cur_s, cur_d = src, dst
+    for p in parts:
+        cur_s, cur_d = os.path.join(cur_s, p), os.path.join(cur_d, p)
+        if not os.path.isdir(cur_d):
+            os.mkdir(cur_d)
+            shutil.copystat(cur_s, cur_d)
+
+def replace(rel):
+    target = os.path.join(dst, rel)
+    fd, tmp = tempfile.mkstemp(prefix=TMP, dir=os.path.dirname(target))
+    os.close(fd)
+    try:
+        shutil.copy2(os.path.join(src, rel), tmp)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+added = replaced = 0
+for key, cost, kind, rel, s, d in go:
+    sp, dp = os.path.join(src, rel), os.path.join(dst, rel)
+    if kind == 'absent':
+        mkparents(rel)
+        try:
+            os.link(sp, dp)
+        except OSError:
+            fd, tmp = tempfile.mkstemp(prefix=TMP, dir=os.path.dirname(dp))
+            os.close(fd)
+            try:
+                shutil.copy2(sp, tmp)
+                os.replace(tmp, dp)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        added += 1
+    elif kind == 'replace':
+        replace(rel); replaced += 1
+    elif kind == 'same-size':
+        if prefix_equal(sp, dp, s.st_size):
+            continue
+        if is_record(rel) and s.st_mtime_ns > d.st_mtime_ns:
+            replace(rel); replaced += 1
+        elif is_record(rel):
+            continue
+        else:
+            diverged.append((dp, sp))
+    elif kind == 'log':
+        if d.st_size < s.st_size:
+            if prefix_equal(sp, dp, d.st_size):
+                replace(rel); replaced += 1
+            else:
+                diverged.append((dp, sp))
+        elif not prefix_equal(sp, dp, s.st_size):
+            diverged.append((dp, dp))
+
+for kept, longer in diverged:
+    print(f'diverged {kept} longer {longer}')
+print(f'merged {added} {replaced} {len(diverged)} {deferred}')
+PY
+}
+
+_swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first carry as a hardlink tree, a return visit as a merge. Always rc 0.
   # <projects dir>/<uuid>/ holds subagents, tool-results and workflows, and was
   # copied by NOTHING before this build: 188MB of the incident session's state,
   # left behind on the account it was swapped off. Globbed in its own right
   # because sidecars exist in project dirs with no .jsonl for the same uuid, and
   # each lands at the mirror of its OWN source dir.
   #
-  # `cp -al` — a hardlink tree, the one place a source inode is shared across
-  # accounts, and the asymmetry with §2.2 is deliberate: the transcript is
-  # appended to, a sidecar's contents are write-once artifacts read after they
-  # are written. `cp -a` without `-l` is the fallback the moment linking fails
-  # (a cross-device destination), so the degradation is a slow correct copy
-  # rather than nothing — and it is the whole remedy if the write-once property
-  # is ever disproved: delete one flag, pay the bytes, change nothing else. The
-  # mode is logged so the evidence exists if a future defect implicates a shared
-  # checkpoint.
+  # A FIRST CARRY (no destination yet) is `cp -al` — a hardlink tree — with
+  # `cp -a` as the fallback the moment linking fails. NOT WRITE-ONCE, measured
+  # (session continuity, Task 1): an `agent-*.jsonl` and a run's `journal.jsonl`
+  # are APPENDED IN PLACE (same inode, growing; `workflows/<runId>.json` is
+  # written whole at the run's end), so a linked tree would share those appends
+  # between the two accounts. That is harmless — both names are this session's own
+  # record, and a later merge reads a shared inode as equal — and on this fleet
+  # it no longer happens at all: every account root is its own bind mount, and
+  # link(2) across two mounts answers EXDEV even on one filesystem (measured),
+  # so every carry since the move logs `(copy)`. The mode is logged so the
+  # evidence exists if a future defect implicates a shared file.
   #
-  # An existing destination sidecar is LEFT ALONE rather than merged — the
-  # opposite of the transcript's unlink-first rule, because a tree can be
-  # half-merged where a single file is replaced in one step. `_sidecar_matches`
-  # strips the source's trailing slash; the anti-nesting guard is that `$dst`
-  # (the `<uuid>` directory itself, not just its parent) must not already
-  # exist before a copy attempt runs — measured: `cp -al src/<uuid> dst/<uuid>`
-  # (and `cp -a`, identically) onto an ALREADY-EXISTING destination nests the
-  # tree inside itself regardless of either path's trailing slash. `mkdir -p`
-  # below only creates the PARENT (`$dstcfg/projects/$pdir`), never `$dst`
-  # itself, so the FIRST attempt (`cp -al`) always starts clean.
+  # AN EXISTING DESTINATION IS MERGED, NOT LEFT ALONE (C8, reversing this
+  # branch's old rule): `_swap_carry_merge_walk` above, under the carry slot and
+  # CARRY_MERGE_BUDGET, logging `(merged +N ~R !D)`, `(merged +N ~R !D,
+  # deferred K)` when K actions did not fit this visit's budget, or
+  # `(kept: busy|budget|error)`. A destination a failed first carry left
+  # partial is repaired by the same walk — it simply finds the missing files
+  # absent — so `(kept)` is no longer permanent.
   #
-  # The SECOND attempt does not start clean on its own, and this is the
-  # subtle half of the guard: `cp -al` builds the destination directory
-  # skeleton before it fails on the first unlinkable file — measured on this
-  # box, a cross-device `$dst` gets every subdirectory created and every file
-  # missing, `cp` exits nonzero, and `$dst` now EXISTS where a moment ago it
-  # did not. Falling back to `cp -a "$src" "$dst"` against that survivor nests
-  # the whole tree one level down (`$dst/$uuid/…`) exactly as the top-of-loop
-  # case does, leaving the real path full of empty directories — and because
-  # `$dst` now exists, EVERY later swap onto this account hits the top-of-loop
-  # guard and logs `(kept)`, permanently, never repairing it. The fallback
-  # therefore clears any partial `$dst` immediately before it copies.
+  # THE FIRST-CARRY PATH IS UNCHANGED, and so is its anti-nesting guard:
+  # `_sidecar_matches` strips the source's trailing slash, and `$dst` (the
+  # `<uuid>` directory itself) must not exist before `cp -al` runs — measured:
+  # `cp -al src/<uuid> dst/<uuid>` (and `cp -a`) onto an ALREADY-EXISTING
+  # destination nests the tree inside itself. `mkdir -p` below only creates the
+  # PARENT, never `$dst`. The merge never runs `cp` on a directory at all.
   #
-  # Success is read from `cp`'s own exit status, not `[[ -d "$dst" ]]`: a
-  # same-device partial failure (one unreadable member, ENOSPC, EMLINK) can
-  # leave `$dst` populated as a directory before `cp -al` reports failure, so
-  # a directory-existence check would read a half-linked tree as a clean
-  # success — and log `(link)` for a tree that is only partly shared. Clearing
-  # `$dst` before the fallback and always doing a full `cp -a` on ANY first-
-  # attempt failure means the logged mode never overstates what is shared:
-  # `(link)` only when the whole tree is hardlinks to `$src`, `(copy)`
-  # whenever any part of it needed a real copy.
+  # The fallback does not start clean on its own: `cp -al` builds the
+  # destination skeleton before it fails on the first unlinkable file (measured:
+  # a cross-device `$dst` gets every subdirectory and no file), and `cp -a` onto
+  # that survivor would nest. So the fallback clears any partial `$dst` first.
+  # Success is read from `cp`'s own exit status, not `[[ -d "$dst" ]]`, so the
+  # logged mode never overstates what is shared: `(link)` only when the whole
+  # tree is hardlinks, `(copy)` whenever any part needed a real copy.
   #
-  # C-collated sort: no destination is ever contested (each sidecar's `pdir`
-  # comes from a distinct source project directory), so ordering never changes
-  # WHAT is carried — only the order of the swap.log lines a human reads
-  # afterward. Sorted anyway so that order is reproducible rather than a
-  # function of glob/readdir order, which is locale- and filesystem-dependent.
+  # C-collated sort: no destination is ever contested, so ordering changes only
+  # the order of the swap.log lines a human reads, which is kept reproducible.
   local srccfg="$1" dstcfg="$2" uuid="$3" src pdir dst mode rc
-  local -a sidecars=()
+  local slot="" slot_rc=0 wout wrc line n r dv k dfr CARRY_SLOT_FD=""
+  local -a sidecars=() rows=()
   mapfile -t sidecars < <(_sidecar_matches "$srccfg" "$uuid" | LC_ALL=C sort)
   (( ${#sidecars[@]} )) || return 0
   for src in "${sidecars[@]}"; do
@@ -22193,9 +22483,45 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar as a har
     # dir starts with `-`, and GNU basename would read it as options.
     pdir="${src%/*}"; pdir="${pdir##*/}"
     dst="$dstcfg/projects/$pdir/$uuid"
-    if [[ -e "$dst" ]]; then
-      echo "ccd: sidecar already present at $dst — left alone (not merged)" >&2
-      echo "$(date '+%F %T') sidecar $uuid -> $dst (kept)" >> "$REG/swap.log"
+    if [[ -e "$dst" || -L "$dst" ]]; then
+      # The slot is taken once, at the first existing destination, and held
+      # for the rest of this carry; its answer is remembered, so a busy slot
+      # is not retried per sidecar.
+      if [[ -z "$slot" ]]; then
+        _carry_slot_take; slot_rc=$?; slot=taken
+      fi
+      if (( slot_rc == 1 )); then
+        echo "ccd: sidecar present at $dst — another carry holds the merge slot; left alone" >&2
+        echo "$(date '+%F %T') sidecar $uuid -> $dst (kept: busy)" >> "$REG/swap.log"
+        continue
+      fi
+      if (( slot_rc != 0 )) || [[ -L "$dst" || ! -d "$dst" ]] || ! command -v python3 >/dev/null 2>&1; then
+        echo "ccd: warn: sidecar present at $dst but it cannot be merged (flock, the lock file, python3, or a destination that is not a real directory) — left alone" >&2
+        echo "$(date '+%F %T') sidecar $uuid -> $dst (kept: error)" >> "$REG/swap.log"
+        continue
+      fi
+      wout=$(_swap_carry_merge_walk "$src" "$dst" "$CARRY_MERGE_BUDGET"); wrc=$?
+      mapfile -t rows <<< "$wout"
+      if (( wrc == 3 )); then
+        echo "ccd: sidecar at $dst not merged — its first action alone would exceed CARRY_MERGE_BUDGET (${rows[0]#budget } bytes); left alone" >&2
+        echo "$(date '+%F %T') sidecar $uuid -> $dst (kept: budget)" >> "$REG/swap.log"
+        continue
+      fi
+      line="${rows[${#rows[@]}-1]}"
+      if (( wrc != 0 )) || [[ ! "$line" =~ ^merged\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)$ ]]; then
+        echo "ccd: warn: the merge walk into $dst failed (rc $wrc); every file it placed is whole, the rest stays on the source" >&2
+        echo "$(date '+%F %T') sidecar $uuid -> $dst (kept: error)" >> "$REG/swap.log"
+        continue
+      fi
+      n="${BASH_REMATCH[1]}"; r="${BASH_REMATCH[2]}"; dv="${BASH_REMATCH[3]}"; k="${BASH_REMATCH[4]}"
+      for line in "${rows[@]}"; do
+        [[ "$line" == diverged\ * ]] || continue
+        echo "$(date '+%F %T') sidecar $uuid diverged ${line#diverged }" >> "$REG/swap.log"
+      done
+      # K > 0: the budget ran out part way. What was placed is whole; the K
+      # actions left wait on the source for the next visit, which prices them first.
+      if (( k > 0 )); then dfr=", deferred $k"; else dfr=""; fi
+      echo "$(date '+%F %T') sidecar $uuid -> $dst (merged +$n ~$r !$dv$dfr)" >> "$REG/swap.log"
       continue
     fi
     mkdir -p "$dstcfg/projects/$pdir"
@@ -22213,12 +22539,15 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar as a har
       echo "$(date '+%F %T') sidecar $uuid -> $dst ($mode)" >> "$REG/swap.log"
     else
       echo "ccd: warn: could not carry sidecar $src -> $dst" >&2
-      # Do not leave a half-built $dst behind on total failure either: the
-      # top-of-loop existence check would read it as "already carried" and
-      # this sidecar would never be retried by a later swap.
+      # Do not leave a half-built $dst behind on total failure either: a later
+      # swap would find it and merge into a tree this carry abandoned — which
+      # the merge now repairs, but a clean absence re-runs the fast path.
       [[ -e "$dst" ]] && rm -rf "$dst" 2>/dev/null
     fi
   done
+  # The slot is released here, on the loop's one way out, so the restart that
+  # follows the carry never inherits it.
+  if [[ -n "$CARRY_SLOT_FD" ]]; then { exec {CARRY_SLOT_FD}>&-; } 2>/dev/null; fi
   return 0
 }
 
