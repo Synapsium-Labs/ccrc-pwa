@@ -951,3 +951,84 @@ describe('a decision-critical command that fails is unmeasured, never empty — 
     }, 180_000);
   }
 });
+
+// ── the alternate-row placement proof, reached through the launcher ───────
+// reclaim-row-placement-safety (#226, D-3731) counts an alternate registry row
+// as placed only on a COMPLETE resolution. A row spelled through an ancestor
+// alias that has since been removed resolves only as text projected below the
+// absent component, and every destructive seam answers it unmeasured. These
+// rows prove a protected DIRECT entry reaches that proof: the audit and the
+// verb's locked recomputation, each run by the kernel through the installed
+// launcher with a clean environment, never sourced.
+describe('a protected direct entry reaches the alternate-row placement proof (#226, D-3731)', () => {
+  const ALT = 'demo-alias';
+  /** `<child>/server` holds another session's work from the start, so a token
+   *  minted afterwards already fingerprints it; `$HOME/alias` is the lever, and
+   *  the alternate row keeps the spelling `$HOME/alias/server`. */
+  const plantAliasRow = (c: Child, target: 'child' | 'outside'): { raw: string; removeAlias(): void } => {
+    fs.mkdirSync(path.join(c.wt, 'server'), { recursive: true });
+    fs.writeFileSync(path.join(c.wt, 'server', 'live.txt'), 'another session’s uncommitted work\n');
+    const outside = path.join(h.home, 'outside');
+    fs.mkdirSync(path.join(outside, 'server'), { recursive: true });
+    const alias = path.join(h.home, 'alias');
+    fs.symlinkSync(target === 'child' ? c.wt : outside, alias);
+    const raw = `${alias}/server`;
+    fs.writeFileSync(reg(ALT, 'uuid'), `u-${ALT}`);
+    fs.writeFileSync(reg(ALT, 'workdir'), raw);
+    return { raw, removeAlias: () => { fs.unlinkSync(alias); } };
+  };
+
+  itLinux('P0 CONTROL: an alias row resolving completely outside the child is non-blocking — the direct audit mints a token', () => {
+    const c = setup();
+    plantAliasRow(c, 'outside');
+    const { r, doc } = audit();
+    expect(r.code, r.stderr).toBe(0);
+    expect(doc['verdict'], `${doc['detail']}`).toBe('reclaimable');
+    expect(String(doc['token'])).toMatch(/^[0-9a-f]{64}$/);
+  }, 180_000);
+
+  /** The token the direct audit mints BEFORE the alternate row exists — it
+   *  already fingerprints `<child>/server` — then the alias row, rooted inside
+   *  the child through the standing alias, then the alias removed. */
+  const removedAlias = (c: Child): { tok: string; raw: string } => {
+    fs.mkdirSync(path.join(c.wt, 'server'), { recursive: true });
+    fs.writeFileSync(path.join(c.wt, 'server', 'live.txt'), 'another session’s uncommitted work\n');
+    const { doc: clean } = audit();
+    expect(clean['verdict'], 'the CONTROL: before the alternate row exists the child is reclaimable').toBe('reclaimable');
+    const tok = String(clean['token']);
+    expect(tok).toMatch(/^[0-9a-f]{64}$/);
+    const a = plantAliasRow(c, 'child');
+    const { doc: standing } = audit();
+    expect(standing['verdict'], `the CONTROL: through the standing alias the row is rooted inside — ${standing['detail']}`)
+      .toBe('containment-unproven');
+    a.removeAlias();
+    return { tok, raw: a.raw };
+  };
+
+  itLinux('P1 the audit seam: once the alias is removed, the direct audit answers unmeasured and mints no token', () => {
+    const c = setup();
+    removedAlias(c);
+    const { r, doc } = audit();
+    expect(doc['verdict'], `${r.stdout}${r.stderr}`).toBe('unmeasured');
+    expect(doc['token'], 'no token for an unplaceable alternate row').toBeUndefined();
+    intact(c, []);
+  }, 240_000);
+
+  itLinux('P2 the verb seam: a direct ws-reclaim of the older token fails probe-unmeasured at its locked recomputation — nothing moves', () => {
+    const c = setup();
+    const { tok, raw } = removedAlias(c);
+    const rowBytes = fs.readFileSync(reg(ALT, 'workdir'));
+    const v = reclaim(tok);
+    // What is on disk FIRST: a reclaim that went ahead shows here.
+    intact(c, []);
+    expect(fs.readFileSync(path.join(c.wt, 'server', 'live.txt'), 'utf8'), 'the other session’s work stands')
+      .toBe('another session’s uncommitted work\n');
+    expect(fs.readFileSync(reg(ALT, 'workdir')).equals(rowBytes), 'the alternate row stands, byte for byte').toBe(true);
+    expect(v.code, v.stdout + v.stderr).toBe(1);
+    const o = docOf(v);
+    expect(o['refused'], 'a retry, never a terminal refusal').toBeUndefined();
+    expect(o['failed'], v.stdout).toBe('probe-unmeasured');
+    expect(String(o['detail'])).toContain(`registry row(s) ${ALT} `);
+    expect(`${String(o['detail'])}${v.stderr}`, 'the row is named by its id; its spelling is never printed').not.toContain(raw);
+  }, 240_000);
+});
