@@ -909,6 +909,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - The fleet box ran 12:41:46–12:48:04, and the server box 12:48:29–12:48:50.
       - One auto-source feed row per box. Each box holds 10 timestamped backups and five versions.
       - STATUS: fleet and server v0.0.57, newest v0.0.57, backups fleet 122M/server 450M, no anomalies.
+    - **2026-10-02 02:18 UTC — auto moved both boxes onto v0.0.58** (`0db98707`, a reclaim fix):
+      - The release was published at 01:44:28, which is 8 min to the fleet box's start: the catalogue poll fell
+        early this time.
+      - The fleet box ran 01:52:51–01:59:15, and the server box 01:59:45–02:00:07.
+      - One auto-source feed row per box. Each box holds 10 timestamped backups.
+      - STATUS: fleet and server v0.0.58, newest v0.0.58, backups fleet 123M/server 454M, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
