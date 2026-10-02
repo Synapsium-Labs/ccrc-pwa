@@ -18,7 +18,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
-| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | — | dispatched 2026-10-02 21:28 (run 238) |
+| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | awaiting review (run 238 at `a89d3dc7`; review run 241, dispatch at the 02:42:08 slot) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | — | — | to plan |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
@@ -243,6 +243,26 @@ carries it (spec §5.1, amended 2026-09-24).
   - 3873: Task 3's adaptations (the ninth kind, the one read, the rundefs move);
   - 3874: Task 4's Oniguruma line;
   - 3875 and 3876: spares, each named in the wave-done.
+- **2026-10-02 23:57 — wave 2 done: PR #234 at `a89d3dc7`** (wave-done 3291; report
+  `~/.cc-clips/ccrc-pwa-plain-prairie/wave-done-238-a89d3dc7.md`).
+  - **Re-measured:** the branch tip is the claimed sha, and the PR is open and mergeable. Advanced to `working`, then
+    `awaiting-review`, both ok. All 7 items are settled done.
+  - **The worker's signals:** `suite: red`, `failure: unclear`. The first full run's only red is tmp-sweep's FAILS
+    CLOSED, which is red on main too: server 21335 passed, agent 422, PWA 3147. Routing stands.
+  - **Deviations:** 3856 (the residue, in the wave-1 plan), 3857–3865 and 3871 (the ten slugs), 3872–3874 (the
+    adaptations), and 3875, the spare used: the plan's deny regex was quadratic on separator-restart inputs, and
+    the shipped one is linear there. 3876 is unused.
+  - **The deploy order (D-3864), for the operator at merge.** The plan's SERVER-FIRST cannot happen: ccrc's
+    updater moves the fleet node first, and nobody moves boxes by hand (ruling 2026-09-30). The worker argues the
+    fleet-first window is harmless:
+    - the old server's 20 s bound may kill a slow sweep, which retries next tick and writes nothing;
+    - the deny is live at once;
+    - no repository requires the queue before Task 7.
+    Task 7 now requires both boxes on the tag first. Review 241 is asked to verify the argument.
+  - **#233 and #234** were measured merging cleanly with each other. #232 (clause 16) will conflict on an adjacent
+    line, and the second lander keeps both sides.
+  - **Review run 241** is open. Its brief holds the merge deny as a security boundary. It dispatches at 02:42:08,
+    this session's slot under the split with stall-watch.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
