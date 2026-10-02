@@ -1370,3 +1370,91 @@ describe('the repo label appears only where the card stops implying it (spec §6
     expect(screen.getByRole('button', { name: /still-river.*o\/custom-tools/ })).toBeInTheDocument();
   });
 });
+
+describe('the Released (n) fold (workspace lifecycle spec §5.1)', () => {
+  const released = (id: string, program: string, closedAt: number, over: Partial<FleetSession> = {}, child = false): FleetSession =>
+    sess({
+      id, workspace: id.slice(5), bucket: 'done',
+      releasedFrom: { runId: closedAt, program, programTitle: program === 'alpha' ? 'Alpha programme' : null, claimedBy: 'coord', closedAt, child },
+      ...over,
+    });
+  const archivedRow = sess({ id: 'demo-old-bay', workspace: 'old-bay', status: 'dead', bucket: 'archived', archivedAt: 1_785_300_000 });
+
+  it('renders nothing when nothing is released', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.proj-released')).toBeNull();
+  });
+
+  it('is collapsed by default, and sits directly ABOVE the Archived fold', () => {
+    const g = grp({ released: [released('demo-amber-delta', 'alpha', 200)], archived: [archivedRow] });
+    const { container } = render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
+    const toggle = screen.getByRole('button', { name: /released \(1\)/i });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(container.querySelectorAll('.proj-released-body .sess-line')).toHaveLength(0);
+    const folds = [...container.querySelectorAll('.proj-released, .proj-archived')].map((e) => e.className);
+    expect(folds).toEqual(['proj-released', 'proj-archived']);
+  });
+
+  it('hides along with the rest of the card when the card is collapsed', () => {
+    render(<ProjectCard collapsed group={grp({ released: [released('demo-amber-delta', 'alpha', 200)] })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByRole('button', { name: /released/i })).not.toBeInTheDocument();
+  });
+
+  it('toggles under its own composite key, and expands to rows grouped by programme that still open', () => {
+    const onOpen = vi.fn();
+    const onToggle = vi.fn();
+    const g = grp({ released: [
+      released('demo-amber-delta', 'alpha', 200),
+      released('demo-still-cove', 'beta', 300),
+      released('demo-quiet-bay', 'alpha', 100),
+    ] });
+    const { container, rerender } = render(<ProjectCard group={g} onOpen={onOpen} onToggle={onToggle} onActions={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /released \(3\)/i }));
+    expect(onToggle).toHaveBeenCalledWith('demo::released');
+    rerender(<ProjectCard group={g} onOpen={onOpen} onToggle={onToggle} onActions={() => {}} releasedOpen />);
+    const headings = [...container.querySelectorAll('.proj-released-heading')].map((e) => e.textContent);
+    expect(headings).toEqual(['beta', 'alpha · Alpha programme']);
+    const rows = [...container.querySelectorAll('.proj-released-body .sess-line')].map((e) => e.textContent ?? '');
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toContain('amber-delta');
+    expect(rows[2]).toContain('quiet-bay');
+    fireEvent.click(screen.getByText('amber-delta'));
+    expect(onOpen).toHaveBeenCalledWith('demo-amber-delta');
+  });
+
+  it('"Archive all" counts only the rows it would send, and names the children it skips', () => {
+    const onArchiveReleased = vi.fn();
+    const g = grp({ released: [
+      released('demo-amber-delta', 'alpha', 200),
+      released('demo-kid-one', 'alpha', 150, {}, true),
+    ] });
+    render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} releasedOpen onArchiveReleased={onArchiveReleased} />);
+    const button = screen.getByRole('button', { name: 'Archive all 1 released workspace in demo' });
+    expect(button).toHaveTextContent('Archive all (1)');
+    fireEvent.click(button);
+    expect(onArchiveReleased).toHaveBeenCalledWith('demo');
+    expect(screen.getByText('Archive all skips 1 child workspace.')).toBeInTheDocument();
+  });
+
+  it('no button without a handler, none when every row is a child, and a disabled one while the loop runs', () => {
+    const one = grp({ released: [released('demo-amber-delta', 'alpha', 200)] });
+    const { rerender } = render(<ProjectCard group={one} onOpen={() => {}} onActions={() => {}} releasedOpen />);
+    expect(screen.queryByRole('button', { name: /archive all/i })).not.toBeInTheDocument();
+    rerender(<ProjectCard group={grp({ released: [released('demo-kid-one', 'alpha', 150, {}, true)] })}
+      onOpen={() => {}} onActions={() => {}} releasedOpen onArchiveReleased={() => {}} />);
+    expect(screen.queryByRole('button', { name: /archive all/i })).not.toBeInTheDocument();
+    rerender(<ProjectCard group={one} onOpen={() => {}} onActions={() => {}} releasedOpen onArchiveReleased={() => {}} archivingReleased />);
+    const running = screen.getByRole('button', { name: 'Archiving released workspaces in demo' });
+    expect(running).toBeDisabled();
+    expect(running).toHaveTextContent('Archiving…');
+  });
+
+  it('shows itself while it holds the selected row — a release is not the operator\u2019s act, so the row being read must not vanish', () => {
+    const g = grp({ released: [released('demo-amber-delta', 'alpha', 200)] });
+    const { container, rerender } = render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelectorAll('.proj-released-body .sess-line')).toHaveLength(0);
+    rerender(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} selectedId="demo-amber-delta" />);
+    expect(screen.getByRole('button', { name: /released \(1\)/i })).toHaveAttribute('aria-expanded', 'true');
+    expect(container.querySelectorAll('.proj-released-body .sess-line')).toHaveLength(1);
+  });
+});

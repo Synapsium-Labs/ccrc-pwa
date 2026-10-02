@@ -21,7 +21,8 @@ import { poolLabelList } from '../lib/pools';
 import { navigate } from '../lib/router';
 import { coordPresence, type CoordPresence } from './coordWords';
 import { formatElapsed } from './formatReset';
-import type { FleetGroup, FleetPin } from './groupFleet';
+import { releasedByProgramme, type FleetGroup, type FleetPin } from './groupFleet';
+import { archivableReleased } from './archiveReleased';
 import { nestFleet, type FleetRow } from './nestFleet';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, crossingNote, dispatchWindow, runForSession, waveLabel } from './runWords';
 import { SessionLine } from './SessionLine';
@@ -181,6 +182,9 @@ export function ProjectCard({
   onToggle,
   onActions,
   archivedOpen = false,
+  releasedOpen = false,
+  onArchiveReleased,
+  archivingReleased = false,
   roster = [],
   pools = null,
   onPool,
@@ -230,6 +234,14 @@ export function ProjectCard({
    *  must start closed — under the composite `<project>::archived` key,
    *  presence means EXPANDED. */
   archivedOpen?: boolean;
+  /** Whether the `Released (n)` sub-fold is expanded — `archivedOpen`'s inversion, under the composite
+   *  `<project>::released` key (workspace lifecycle spec §5.1). */
+  releasedOpen?: boolean;
+  /** "Archive all" in the Released fold. The card only asks: `FleetScreen` confirms, then runs the plain-archive
+   *  loop (`archiveReleased.ts`). Without it the fold renders with no button. */
+  onArchiveReleased?: (project: string) => void;
+  /** That loop is running for this card — the button is disabled rather than queued twice. */
+  archivingReleased?: boolean;
   /** The account roster (`stores/fleet.ts`'s `roster`, read by `FleetScreen`
    *  and threaded down) — defaults to `[]` so a card rendered before the
    *  first poll lands degrades to the same raw-name/neutral-ink fallback
@@ -483,6 +495,12 @@ export function ProjectCard({
   // it is kept: a label spun out of an unmeasured read would be a claim, and
   // waiting on a timeout would make the name depend on when it is asked.
   const cardRepo = repoLabel(repoFor(group.project));
+  // "Archive all" sends only folded rows that are not children (`archiveReleased.ts`); the rest are named.
+  const releasedArchivable = group.released.filter(archivableReleased).length;
+  const releasedChildren = group.released.length - releasedArchivable;
+  // A release is not the operator's own act (an archive is), so the row being READ must not vanish into a closed
+  // fold when its run closes: the fold shows itself while it holds the selection.
+  const releasedShown = releasedOpen || (selectedId !== null && group.released.some((s) => s.id === selectedId));
   const repoOf = (s: FleetSession): string | null => {
     if (s.project === group.project) return null;
     const own = repoLabel(repoFor(s.project));
@@ -633,6 +651,55 @@ export function ProjectCard({
                   {`${e.count} ${e.count === 1 ? 'workspace' : 'workspaces'} under ${e.project}`}
                 </span>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!collapsed && group.released.length > 0 && (
+        /* Workspace lifecycle spec §5.1: the transition zone. A programme is done with these rows; they wait
+           here to be archived. Folded, never hidden, and above `Archived (N)`, which is where they go next. */
+        <div className="proj-released">
+          <button
+            type="button"
+            className="proj-released-toggle"
+            aria-expanded={releasedShown}
+            onClick={() => onToggle?.(`${group.project}::released`)}
+          >
+            <span className="proj-card-chevron" aria-hidden="true">{releasedShown ? '▾' : '▸'}</span>
+            Released ({group.released.length})
+          </button>
+          {releasedShown && (
+            <div className="proj-released-body">
+              {releasedByProgramme(group.released).map((p) => (
+                <div key={p.program} className="proj-released-programme">
+                  <div className="proj-released-heading">
+                    {p.title !== null && p.title !== p.program ? `${p.program} · ${p.title}` : p.program}
+                  </div>
+                  {p.sessions.map((s) => (
+                    <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} projectPool={poolOf(s)} onOpenRun={openRunFor(s)} repo={repoOf(s)} />
+                  ))}
+                </div>
+              ))}
+              {onArchiveReleased !== undefined && releasedArchivable > 0 && (
+                <button
+                  type="button"
+                  className="btn-ghost proj-released-archive"
+                  disabled={archivingReleased}
+                  // Every card carries this button, so its accessible name says WHICH card's rows it archives.
+                  aria-label={archivingReleased
+                    ? `Archiving released workspaces in ${group.project}`
+                    : `Archive all ${releasedArchivable} released ${releasedArchivable === 1 ? 'workspace' : 'workspaces'} in ${group.project}`}
+                  onClick={() => onArchiveReleased(group.project)}
+                >
+                  {archivingReleased ? 'Archiving…' : `Archive all (${releasedArchivable})`}
+                </button>
+              )}
+              {releasedChildren > 0 && (
+                <span className="proj-released-note">
+                  {`Archive all skips ${releasedChildren} child ${releasedChildren === 1 ? 'workspace' : 'workspaces'}.`}
+                </span>
+              )}
             </div>
           )}
         </div>
