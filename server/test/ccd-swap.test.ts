@@ -143,10 +143,10 @@ describe('cmd_swap carries the sidecars', () => {
 
   it('carries the sidecar as a hardlink tree, and says so', () => {
     // 188MB per sidecar: the difference between a swap that takes a moment and
-    // one that takes minutes and fills the disk. The contents are write-once
-    // artifacts, so sharing inodes between the two accounts is safe — and the
-    // log line is the evidence, if a future defect ever implicates a shared
-    // checkpoint.
+    // one that takes minutes and fills the disk. Not write-once (measured: the
+    // journals are appended in place), but every name is this one session's
+    // own record, so a shared inode is harmless — and the log line is the
+    // evidence, if a future defect ever implicates a shared file.
     const mdir = seed('claude');
     plant('.claude', mdir, 'HISTORY\n');
     const src = sidecar('.claude', mdir, 'tool-results/r.json', 'RESULT\n');
@@ -156,17 +156,31 @@ describe('cmd_swap carries the sidecars', () => {
     expect(swapLog()).toContain('(link)');
   });
 
-  it('leaves an existing destination sidecar alone — a tree is not replaced in one step', () => {
-    // Deliberately the OPPOSITE of §2.2's unlink-first rule for the
-    // transcript, which is one file replaceable in one step.
+  it('merges into an existing destination sidecar — never replaced in one step, a differing file kept and counted', () => {
+    // Still the OPPOSITE of §2.2's unlink-first rule for the transcript: a
+    // tree is never replaced in one step. What changed (session continuity
+    // §5.1, C8) is that it is no longer SKIPPED: the swap walks it file by
+    // file, and a written-once tool result whose bytes differ is kept and
+    // counted diverged. The rule table lives in `ccd-swap-carry-merge.test.ts`;
+    // this case pins that the real verb reaches the merge.
     const mdir = seed('claude');
     plant('.claude', mdir, 'HISTORY\n');
+    // Two differing files, one longer on each side: spec §5.1 has every `!D` row
+    // name the LONGER copy (stage 3's manifest reads it), so the row must follow
+    // the sizes, not be a constant.
     sidecar('.claude', mdir, 'tool-results/r.json', 'SOURCE\n');
     sidecar('.claude-d', mdir, 'tool-results/r.json', 'ALREADY THERE\n');
+    const LONG_SRC = sidecar('.claude', mdir, 'tool-results/s.json', 'A LONGER SOURCE\n');
+    sidecar('.claude-d', mdir, 'tool-results/s.json', 'KEPT\n');
     runSwap();
-    expect(fs.readFileSync(dstAt(mdir, path.join(UUID, 'tool-results/r.json')), 'utf8'))
-      .toBe('ALREADY THERE\n');
-    expect(swapLog()).toContain('(kept)');
+    const dstR = dstAt(mdir, path.join(UUID, 'tool-results/r.json'));
+    const dstS = dstAt(mdir, path.join(UUID, 'tool-results/s.json'));
+    expect(fs.readFileSync(dstR, 'utf8')).toBe('ALREADY THERE\n');
+    expect(fs.readFileSync(dstS, 'utf8')).toBe('KEPT\n');
+    expect(swapLog()).toContain('(merged +0 ~0 !2)');
+    expect(swapLog()).not.toContain('(kept');
+    expect(swapLog()).toContain(`sidecar ${UUID} diverged ${dstR} longer ${dstR}`);
+    expect(swapLog()).toContain(`sidecar ${UUID} diverged ${dstS} longer ${LONG_SRC}`);
   });
 
   it('falls back to a full copy without nesting when cp -al leaves a partial destination behind', () => {
