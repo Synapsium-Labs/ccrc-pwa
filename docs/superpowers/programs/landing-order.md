@@ -17,7 +17,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | wave-done verified 2026-10-02; in review (run 228) |
+| 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | review 228 ruled 2026-10-02: fix round (instrument, hook hot path, limits text) |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | — | re-planned 2026-09-29; dispatch after wave 1 merges |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | — | — | to plan |
@@ -126,6 +126,31 @@ carries it (spec §5.1, amended 2026-09-24).
   5. Brief against plan on who assigns departure numbers: the brief governs, because it post-dates the plan and
      carries the issued block. The worker followed it.
   6. Commit trailers that name the authoring subagent's model are honest attribution and stay.
+- **2026-10-02 — review 228 ruled: one fix round.**
+  - **The panel:** three lenses, 63 agents, none unverified. 16 findings were confirmed, 4 refuted, and none left
+    unexamined.
+  - **The reviewer's checks:** 13 mutation rows re-ran red, the brief's suites were green, and 16 further repo-wide
+    guards were green.
+  - **CI:** the required Linux legs are green.
+  - **The two important findings, both in the instrument:**
+    - `inversions` reads GitHub before it refuses a missing `--fleet-login`;
+    - `cmd_main_red`'s docstring claims to reproduce the archived 111.2 h, which the plan's own measurement says it
+      does not.
+  - **Ruled, fixed now:**
+    - both important findings;
+    - the hook's quadratic walk on `(` and `{` (it runs on every PreToolUse event, and D-3761 closed only the
+      newline shape);
+    - the instrument's cheap correctness gaps: the runs-list cap, uncounted inputs, a running re-run, `..` in a path;
+    - restamp's failure message;
+    - the I14 row text.
+
+    The hook's false positives and misses are made true in its known-limits text, not changed in the regex. The fix
+    round takes 3765 through 3767, one per group.
+  - **Accepted:**
+    - restamp's refusal is path-scoped, and a hard link defeats it; the operator is not an adversary, and the header
+      will say so;
+    - D-3761's restatement landed two commits after its definition; the tip is consistent and main squashes.
+  - **Carried:** the report-less fix round, to stage 5.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -146,6 +171,13 @@ carries it (spec §5.1, amended 2026-09-24).
   - Stage 4 bounds clause 16's triggers 1–2 at wave-done through clause 9's exception.
   - Stage 5 writes the report-less fix round from `merging`.
   - Every brief names the repo-wide guards in each task's suite run.
+  - **The sync advisory's spelling refinements (review 228 F4–F7).** A later landing wave owes:
+    - silence for a main checkout updating itself, which is routine for coordinators;
+    - a word in command position before `git`;
+    - redirections glued to the target;
+    - `~N`/`^N`, `refs/remotes/origin/main`, `main:main`.
+
+    Each needs a pinned case and a timing check.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
