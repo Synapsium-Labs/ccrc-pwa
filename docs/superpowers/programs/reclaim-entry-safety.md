@@ -15,7 +15,7 @@ direct reclaim argv shapes before automatic reclamation can ship.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open) | **awaiting-review** — integration round done at `b9791151` (merges `main` at `0db98707`); fingerprint accepted 2026-10-02; held-out review run 216 dispatched to `ccrc-pwa-bright-summit` |
+| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open) | **working, fix round** — review run 216 closed `done` on `b9791151` with 13 confirmed findings; fix-round mail 3125 sent 2026-10-02; a fresh review follows its next wave-done |
 
 **Deviation block: eight numbers, the first of them 3696** (allocated once at run 199 open, 2026-09-30; floor
 now 3704). The finalized plan defines the first as `ccd-imported-functions-hijack-reclaim-reads`. No other issued
@@ -104,6 +104,30 @@ unrendered.
   - **Review run 216** opened under the canonical title, restoring the programme title run 210 had overwritten. Its
     first dispatch was refused `oversize` (brief plus prefix over 8192 bytes) with nothing touched; the resent brief
     cites the ledger's carried constraints instead of repeating them.
+- **2026-10-02 — review run 216's verdict and the rulings on it.** `ccrc-pwa-bright-summit` read `b9791151` with the
+  literal panel plus the SAFETY lens (73 agents, none failed or empty; every lens returned a `checked` record):
+  correctness 5 raised, 4 confirmed; spec 4, all confirmed; reproduce 4, all confirmed; SAFETY 10, 3 confirmed and
+  7 refuted. Fifteen confirmations reduce to 13 distinct findings. SAFETY: through the installed launcher's protected
+  path no surviving finding shows a way to delete a live child; the classifier, Bash selection, publication, the
+  row-placement hand-off (byte-for-byte), mutations and the agent cache hold. 23 of 24 mutation rows red; the
+  unencodable-shebang guard's row stays green, a carried-constraint miss. The Darwin Bash-selection row passed on the
+  real macOS runner, but the protected attack matrix is Linux-only. Rulings:
+  - **Locale coercion, operator:** accepted as a defined departure with its measured scope. A caller whose LC_CTYPE
+    resolves to C or POSIX gains `LC_CTYPE=C.UTF-8` in every launched start; the fleet box's agent and systemd user
+    manager run `LANG=en_US.UTF-8`, so no production start changes. Pinned, not undone.
+  - **The body guard's overclaim, coordinator:** `printf`, `exit` and `declare` in the body guard can be shadowed by
+    a startup-defined function off the launcher path, which the plan already leaves outside the guarantee. The
+    comment and the imported-function departure are corrected to say so; no hardening.
+  - **GLOBIGNORE, coordinator:** no ruling on it exists anywhere; its stripping is recorded by measurement inside the
+    stripped-variable departure instead of being cited as a ruling.
+  - **Fixed in the round:** the missing mutation pin; ordinary probes run startup-free so a printing `BASH_ENV` no
+    longer blocks ordinary verbs; the pair publisher refuses before repairing any mode and never converges without
+    its self-test; the shebang renders the path it compared; malformed audit shapes are pinned to die in
+    `cmd_ws_audit`; census anchors, a deleted history block, unwrapped launcher spawns, two overbroad sentences, a
+    stale header and the stale PR body.
+  - **The pre-existing Darwin `eval` of `USER`, operator:** fixed in child-reclamation wave 4, before the sweep runs
+    unattended on any macOS box.
+  - Departures take the block's last three numbers, 3701 first; a fourth stops for a ruling.
 - **Routing escalation.** This is a destructive-path security boundary reached after repeated wave 4 resolver
   rounds exposed the process-level class. The main loop runs Opus at `xhigh`; implementation subagents run Sonnet
   at `high`; workflows are off; compact threshold is 40. The held-out review remains outside that routing and adds

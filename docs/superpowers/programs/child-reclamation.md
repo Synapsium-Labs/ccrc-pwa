@@ -746,6 +746,11 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   class above); `_ws_reclaim_resolve` refuses a `..` in the rest before re-walking a prefix that holds one, so a row
   that logically is the child lands in retryable `unres` with a detail that is false for it; and three row-placement
   plan selectors still name the retired `repairing the alias` control.
+- **Wave 4 fixes, by operator ruling (2026-10-02, from entry-safety review run 216):** `_svc_real_home` builds the
+  home path with `eval printf '%s' "~$u"` from `USER` or `LOGNAME`, and on Darwin both the audit's unit-state read
+  and the reclaim's launchd disable reach it, so a `USER` carrying shell syntax executes inside a protected start.
+  It is on `main` already and Darwin-only. Validate the login name before the expansion, or avoid `eval`, before the
+  sweep runs unattended on any macOS box.
 - **Wave 5 inherits, from the row-placement review (2026-10-01):** recovery for gone-directory alternate rows. An
   alternate row whose path is gone holds every other child at `unmeasured`, and two vanished or interrupted children
   hold each other; the recovery must prove the gone path was ccd's own worktree without consulting process state.
