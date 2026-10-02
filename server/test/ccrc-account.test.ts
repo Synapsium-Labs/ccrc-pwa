@@ -5322,7 +5322,7 @@ describe('ccrc account remove', () => {
     writeFileSync(join(home, '.cc-limits', 'alt-max.json'), '{"five":0,"seven":0,"ts":1}');
     mkdirSync(join(home, '.cc-sessions'), { recursive: true });
     writeFileSync(offMarker(home, 'alt-max'), '');
-    writeFileSync(join(home, '.cc-sessions', 'alt-max.hookstate.json'), '{}');
+    writeFileSync(join(home, '.cc-sessions', 'alt-max.hookstate.json'), '{}'); writeFileSync(join(home, '.cc-sessions', 'alt-max.turn.json'), '{}');
     const cfg = join(home, '.claude-alt-max');
     for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify']) {
       mkdirSync(join(cfg, 'skills', skill), { recursive: true });
@@ -5353,7 +5353,7 @@ describe('ccrc account remove', () => {
       join(home, '.cc-secrets', 'alt-max-oauth.env'),
       join(home, '.cc-limits', 'alt-max.json'),
       offMarker(home, 'alt-max'),
-      join(home, '.cc-sessions', 'alt-max.hookstate.json'),
+      join(home, '.cc-sessions', 'alt-max.hookstate.json'), join(home, '.cc-sessions', 'alt-max.turn.json'),
     ]) expect(existsSync(f), f).toBe(false);
 
     const cfg = join(home, '.claude-alt-max');
