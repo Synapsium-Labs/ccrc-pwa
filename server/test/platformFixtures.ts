@@ -42,13 +42,24 @@ export const DARWIN_PYTHON3_PROGRAMS = [
   'import os',
 ] as const;
 
-/** The stubs' `-c` arm: one sh line, empty when `real` (a resolved
- *  python3) is empty — a box with no python3 runs every Linux case, whose
- *  flip is `mv -fT` and whose preflight asks for no python3. */
+/** The one `python3 -IS -c` program the install path runs on EVERY platform
+ *  (D-3696): the interpreter names its own canonical path, which
+ *  `_inst_entry_python` (`ccd/ccrc`) and `install_ccd_pair` (`deploy/deploy.sh`)
+ *  render into ccd's launcher shebang. Every later call goes to THAT path
+ *  directly, never through a PATH stub. Spelled byte-for-byte as both files
+ *  spell it; `ccd-child-reclaim-entry.test.ts` pins the agreement. */
+export const ENTRY_PYTHON3_PROGRAM = 'import os,sys;sys.stdout.write(os.path.realpath(sys.executable))';
+
+/** The stubs' `-c` arm: sh lines, empty when `real` (a resolved python3) is
+ *  empty. The Darwin programs pass through on `-c`; the entry program on
+ *  `-IS -c`, exactly — so the interpreter it reports is the real one. */
 export function python3ProgramArm(real: string): string[] {
   if (real === '') return [];
   const pats = DARWIN_PYTHON3_PROGRAMS.map((prog) => `'${prog}'`).join('|');
-  return [`if [ "$1" = "-c" ]; then case "$2" in ${pats}) exec '${real}' "$@" ;; esac; fi`];
+  return [
+    `if [ "$1" = "-c" ]; then case "$2" in ${pats}) exec '${real}' "$@" ;; esac; fi`,
+    `if [ "$1" = "-IS" ] && [ "$2" = "-c" ] && [ "$3" = '${ENTRY_PYTHON3_PROGRAM}' ] && [ "$#" = 3 ]; then exec '${real}' "$@"; fi`,
+  ];
 }
 
 /** The service manager binary a fixture must stub on this platform. */

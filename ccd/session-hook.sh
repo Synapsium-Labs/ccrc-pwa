@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# session-hook.sh — Claude Code hook → ~/.cc-sessions/<id>.hookstate.json
+# session-hook.sh — Claude Code hook → ~/.cc-sessions/<id>.hookstate.json, the main thread's turn marker <id>.turn.json beside it, and, for a session whose id ends -hookcap, one capture file per event under ~/.ccrc/hook-capture/<id>/
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
@@ -70,7 +70,7 @@ _hook_timeout() {
 # another event would not be noise; it would be an answer to a question nobody
 # asked. So this emitter is called from inside the SessionStart arm and nowhere
 # else; `_hook_deny_json` (the gate, D-1613) and `_hook_nudge_json` (the Read
-# nudge, D-1745) are BUILDERS called only inside a `$( )` from the PreToolUse
+# nudge, D-1745, and the landing advisory) are BUILDERS called only inside a `$( )` from the PreToolUse
 # arm, and whichever one the arm chose is printed from ONE site at the end of
 # the file, after the hookstate rename lands (D-1689) — at most one line per
 # event, never both. Every failure path in any of them prints NOTHING; this
@@ -2764,10 +2764,10 @@ id="${tname#cc-}"
 [[ -d "$REG" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-event=$(jq -r '.hook_event_name // empty' <<<"$payload" 2>/dev/null) || exit 0
+{ read -r event; read -r psid; read -r paid; } < <(jq -r 'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122); (.hook_event_name // "" | tostring | keep(alpha)), (.session_id // "" | tostring | keep(alpha or (. >= 48 and . <= 57) or . == 95 or . == 45)), (if ((.agent_id // "") | tostring | length) > 0 then "1" else "" end)' <<<"$payload" 2>/dev/null) || exit 0   # no regex builtin: every event runs it, and a jq built without Oniguruma (an optional build dependency) must not skip the write
 [[ -n "$event" ]] || exit 0
 
-state="" ask_json="null" interrupted="false" src="" gcmd=""
+state="" ask_json="null" interrupted="false" src="" gcmd="" stopfail="" bg="-1" bgk="" bgi="" err="" hts="" msid=""
 case "$event" in
   UserPromptSubmit) state="working" ;;
   PostToolUse)
@@ -2906,10 +2906,123 @@ case "$event" in
     state="done" ;;
   Stop)
     state="done"
-    [[ $(jq -r '.is_interrupt // false' <<<"$payload" 2>/dev/null) == true ]] && interrupted="true" ;;
+    # `is_interrupt` is not read: no installed lane's Stop carries it (spec §5.1); `interrupted` stays false here (the
+    # Subagent branch carries an older value). This fork measures `background_tasks`: bg -1 unless it is an ARRAY (bg-kinds-only-from-an-array (D-3659)), each alias cleaned alone.
+    # Its regexes (and StopFailure's) feed the marker alone, and the program emits its three lines only together: a jq built without Oniguruma leaves bg -1 / err "", never a count without its kinds, and never the hookstate (the payload parse above is regex-free).
+    { read -r bg; read -r bgk; read -r bgi; } < <(jq -r '(if (.background_tasks|type) == "array" then .background_tasks else null end) as $a | [(if $a == null then -1 else ($a|length) end), ([$a[]? | objects | .type | strings | ascii_downcase | gsub(" "; "-") | gsub("[^a-z_-]"; "") | select(length > 0)] | join(",")), ([$a[]? | objects | .id | strings | select(test("^[A-Za-z0-9_-]{1,64}\\z"))] | .[0:8] | join(","))] | .[]' <<<"$payload" 2>/dev/null) ;;
+  StopFailure) stopfail=1; err=$(jq -r '(.error // "") | tostring | gsub("[^a-z_]"; "") | .[0:64]' <<<"$payload" 2>/dev/null) ;;
   SubagentStart|SubagentStop) state="" ;;   # subagent-set update only
   *) exit 0 ;;
 esac
+# THE CAPTURE ARM (worker stall watch §5.1's first task; capture-arm-keyed-on-hookcap (D-3612),
+# capture-arm-is-permanent (D-3613), capture-file-carries-a-meta-line (D-3669)). Only a session whose
+# ccd id ends `-hookcap` pays more than this one test. Every registered event that
+# reaches this line (all but SessionStart `compact`, which exits in its arm, and an
+# unknown event) is copied to one 0600 file in a 0700 per-id directory OUTSIDE the
+# registry. Line 1 is a meta line naming this pane's own session id, sanitised; the
+# rest is the payload as sent. It stops at 200 files, prints nothing, and no failure
+# in it reaches the exit status. Raw files never leave the box:
+# deploy/hook-capture-reduce.mjs reduces a directory to key sets, types and
+# validated tokens, and only that is ever committed, because the repo is public.
+# `hcat` is reset on every run, so a later reuse of the stamp (`${hcat:-…}`) can
+# never take it from the environment.
+hcat=""
+if [[ "$id" == *-hookcap ]]; then
+  hcdir="$HOME/.ccrc/hook-capture/$id"
+  ( umask 077; mkdir -p "$hcdir" ) 2>/dev/null
+  hcn=( "$hcdir"/*.cap )
+  if [[ -d "$hcdir" ]] && { [[ ! -e "${hcn[0]}" ]] || (( ${#hcn[@]} < 200 )); }; then
+    hcat=$(_hook_epoch_ms); hcsid="${CLAUDE_CODE_SESSION_ID:-}"; hcsid="${hcsid//[^A-Za-z0-9-]/}"
+    hctmp="$hcdir/.$event.$$.capture.tmp"
+    { ( umask 077; printf '{"envSid":"%s"}\n%s\n' "$hcsid" "$payload" > "$hctmp" ); } 2>/dev/null \
+      && mv -f "$hctmp" "$hcdir/$event-$hcat-$$.cap" 2>/dev/null || rm -f "$hctmp" 2>/dev/null
+  fi
+fi
+
+# THE TURN MARKER (worker stall watch, spec §5.1): `$REG/<id>.turn.json`, one JSON
+# line that the stall lane and the mail gate read. It is written HERE, below the
+# case, because README anchors this file at :2900 and nothing new may land above
+# that line (marker-logic-in-the-tail (D-3615)).
+#
+# WHO WRITES: main-thread events only. `paid` is the payload parse's flag for a
+# non-empty `agent_id`. It is set by that one read and never re-declared, so a
+# subagent's event reaches here with it set and touches nothing. And only on a row
+# ccd created: a plain `-e` on `.generation`, no fork (`_hook_generation_ok` forks
+# `link`+`rm` and belongs to the compaction arms).
+#
+# WHICH SESSION: the env id first, the same source hookstate's `sessionId` uses, so
+# the two files agree. The payload's cleaned `session_id` is used only when the env
+# is empty (marker-identity-from-env (D-3614)).
+#
+# WHAT IT COSTS: a main TOOL event (PreToolUse, PostToolUse) while this session is
+# already `working` is a builtin `read`, no fork. A UserPromptSubmit always writes:
+# a new prompt is a new turn, even over a `working` line an Esc interrupt left
+# behind (a-prompt-always-opens-a-turn (D-3675); spec §5.1 exempts only later TOOL events).
+# A write is one jq and one `mv`, and its stamp is the one this
+# hook run's hookstate write reuses (one-stamp-per-hook-run (D-3616)). A temp left by a
+# killed write is dotted and holds no slug. Like the hookstate's own temp, it is
+# never swept (marker-tmp-parity-with-hookstate (D-3617)).
+#
+# ONE PROGRAM, SINGLE-QUOTED: no shell variable expands inside it, and every value
+# enters by --arg/--argjson. A previous line is carried only when it parses, is
+# `v:1` and names THIS session id; a foreign or unreadable line reads as absent.
+# `fitk` keeps WHOLE aliases inside 200 bytes: a byte cut after the join can leave
+# half an alias or a trailing comma, which the reader refuses
+# (alias-list-fits-whole-aliases (D-3658)). `fiti` keeps at most 8 ids.
+# restart: a same-session done moves bg* into lost* (a union, lost-kinds-accumulate (D-3660)); clear: a fresh line.
+TURN_MARK_PROGRAM='
+def csv: split(",") | map(select(length > 0));
+def fitk: reduce .[] as $k (""; if (length + (if length > 0 then 1 else 0 end) + ($k|length)) <= 200 then (if length > 0 then . + "," + $k else $k end) else . end);
+def fiti: .[0:8] | join(",");
+($prev | try fromjson catch null) as $raw
+| (if ($raw | type) == "object" and $raw.v == 1 then $raw else null end) as $p
+| ($p != null and $p.sessionId == $sid) as $same
+| {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at,
+   turnAt: (if $same then $p.turnAt else null end),
+   stopAt: (if $same then $p.stopAt else null end),
+   bg: (if $same then ($p.bg // -1) else -1 end),
+   bgKinds: (if $same then ($p.bgKinds // "") else "" end),
+   bgIds: (if $same then ($p.bgIds // "") else "" end),
+   err: (if $same then $p.err else null end),
+   restartAt: (if $same then $p.restartAt else null end),
+   lostBg: (if $same then ($p.lostBg // 0) else 0 end),
+   lostKinds: (if $same then ($p.lostKinds // "") else "" end),
+   lostIds: (if $same then ($p.lostIds // "") else "" end)} as $b
+| if $kind == "working" then $b + {state: "working", turnAt: $at, lostBg: 0, lostKinds: "", lostIds: ""}
+  elif $kind == "done" then $b + {stopAt: $at, bg: $bg, bgKinds: ($bgk | csv | unique | fitk), bgIds: ($bgi | csv | fiti)}
+  elif $kind == "failed" then $b + {state: "failed", stopAt: $at, err: $err}
+  elif $kind == "restart" then $b
+    + (if $same and $p.state == "done" then {lostBg: (($p.lostBg // 0) + ([($p.bg // -1), 0] | max)), lostKinds: ((($p.lostKinds // "") + "," + ($p.bgKinds // "")) | csv | unique | fitk), lostIds: ((($p.lostIds // "") + "," + ($p.bgIds // "")) | csv | fiti)} else {} end)
+    + {restartAt: $at, bg: 0, bgKinds: "", bgIds: ""}
+  elif $kind == "clear" then {v: 1, sessionId: $sid, state: "done", event: $ev, at: $at, turnAt: null, stopAt: null, bg: -1, bgKinds: "", bgIds: "", err: null, restartAt: null, lostBg: 0, lostKinds: "", lostIds: ""}
+  else empty end'
+_hook_turn_mark() {   # <kind: working|done|failed|restart|clear> -> 0 written; 1 not written (never fatal)
+  local kind="$1" mf="$REG/$id.turn.json" prev="" out
+  [[ "$bg" =~ ^-?[0-9]+$ ]] || bg=-1
+  { IFS= read -r prev < "$mf"; } 2>/dev/null   # braces: a missing file's redirection error stays silent (D-1691)
+  out=$(jq -cn --arg prev "$prev" --arg kind "$kind" --arg sid "$msid" --arg ev "$event" --argjson at "$hts" \
+    --argjson bg "$bg" --arg bgk "$bgk" --arg bgi "$bgi" --arg err "$err" "$TURN_MARK_PROGRAM" 2>/dev/null) || return 1
+  [[ -n "$out" ]] || return 1
+  _hook_write_atomic "$mf" "turn-$hts" "$out"
+}
+msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
+if [[ -z "$paid" && -e "$REG/$id.generation" ]]; then
+  tmkind=""
+  case "$event" in
+    UserPromptSubmit) tmkind=working ;;   # a new prompt is a new turn, even over a working line (a-prompt-always-opens-a-turn (D-3675))
+    PreToolUse|PostToolUse)
+      tmline=""; { IFS= read -r tmline < "$REG/$id.turn.json"; } 2>/dev/null
+      [[ "$tmline" == *'"state":"working"'* && "$tmline" == *"\"sessionId\":\"$msid\""* ]] || tmkind=working ;;
+    Stop) tmkind=done ;;
+    StopFailure) tmkind=failed ;;
+    SessionStart) [[ "$src" == clear ]] && tmkind=clear || tmkind=restart ;;   # compact exited in its arm (D-306); absent or unknown is a restart (D-1248)
+  esac
+  if [[ -n "$tmkind" ]]; then hts="${hcat:-$(_hook_epoch_ms)}"; _hook_turn_mark "$tmkind" || true; fi
+fi
+# StopFailure (§5.1) leaves hookstate.json alone and prints nothing: its arm raised
+# the flag and read `err` for the marker above (stopfailure-sets-a-flag (D-3611)), and nothing
+# below may run for it.
+[[ -n "$stopfail" ]] && exit 0
 
 f="$REG/$id.hookstate.json"
 # Prior subagent set survives state transitions; a corrupt file reads as [].
@@ -3113,6 +3226,124 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
   fi
 fi
 
+# ── THE LANDING-ORDER ADVISORY (landing-order spec 2026-09-23 §5.1) ─────────
+# A Bash call that merges, pulls or rebases `main` into the current branch —
+# or asks GitHub to do the same from its side (the Update branch button's
+# `gh pr` verb, its REST route or its GraphQL mutation) — gets
+# `additionalContext` naming the three triggers worker clause 16 licenses an
+# absorption on, and the probe that measures the first. ADVICE, NEVER A
+# DECISION: 27% of the fleet's sync episodes (spec §1, item 8) came from
+# sessions that load no ccrc skill, and this text is the only thing those
+# sessions see; the call proceeds either way.
+#
+# OUTSIDE THE GRAPH ARM ON PURPOSE. That arm runs only when the hookstate
+# parsed, the session has not queried the graph, and the gate's kill-switch is
+# absent — three conditions that have nothing to do with a sync of main. So
+# this block reads none of them, and a test pins that it advises with the gate
+# switched off and the hookstate unreadable.
+#
+# ONE LINE PER EVENT, still (`pre_json`, printed once at the end of the file):
+# a deny or a nudge the graph arm already built wins, and this block says
+# nothing. They CAN meet on one call: the gate reads a search at the HEAD of
+# the line, so a compound `grep -rn x .; git merge origin/main` is a gated
+# search AND a sync. That is what the `-z "$pre_json"` conjunct is for, and a
+# test pins it: without it the advice would overwrite the deny after the arm
+# had already charged the session a denial for it.
+#
+# ORDER IS BUDGET, as in the arms above: the tool name is already in hand, the
+# glob tests over the raw payload cost no fork, and only a payload carrying
+# `main` or `origin` AND a sync verb, or GitHub's branch-update spelling, pays
+# the one jq that reads the command. The regexes are matched against the
+# COMMAND, never the payload, so a `Write` of a file that merely mentions a
+# merge stays silent.
+#
+# THE SHAPE: `git` IN COMMAND POSITION — at the start of the command or after
+# a separator (`;`, `&`, `|`, `(`, `{`, a newline), past any `VAR=value`
+# prefixes — then any global options (`-C <dir>`, `-c <k=v>`, `--no-pager`,
+# `--x=y`), one of the three verbs, any arguments, then `main`, `origin/main`,
+# `origin main`, `origin/HEAD` or `origin HEAD` (the slash forms may be quoted)
+# as a whole word. Command position is what keeps a MENTION silent: a commit
+# message, an `echo`, or a PR comment that quotes a sync puts a quote or a
+# word before `git` — unless the quoted text itself holds a separator, which
+# the regex cannot tell from a real one (the first limit below). The verb needs
+# whitespace after it, so `git merge-tree` (the probe itself) and `git
+# merge-base` never match.
+#
+# WHITESPACE INSIDE THE SHAPE IS `[[:blank:]]`, never `[[:space:]]`: a newline
+# separates commands, so it may begin one but never continue one. With the
+# wider class the arguments of one line ran on into the next, which advised on
+# `git pull` then `git push origin main` on the next line, and made a run of
+# newline-separated `git merge a` lines quadratic (3.5 s on 36 KB measured).
+#
+# EVERY TOKEN CLASS STOPS AT EVERY SEPARATOR: `[^[:space:];&|({]`, in the
+# arguments, the `-C` directory, the `--x=value` and the env-var value alike.
+# A separator opens a new start position, so a token that could run on across
+# one lets every start walk to the end of the line: quadratic again, for `(` and
+# `{` in the arguments (4.5 s on 39 KB measured), and for every separator in an
+# option or env-var value with no whitespace in it (5.7 s). The cost is a token
+# that holds a `(` or a `{` ends the walk, so those syncs are not advised (the
+# misses below). The timing pin runs every separator through every class.
+#
+# KNOWN MISSES AND LIMITS, each a deliberate trade for a hot path that forks
+# nothing. This is advice: a miss costs one ritual sync, which is the status
+# quo, and a false advice costs one sentence. The examples below were measured
+# against this regex; they are examples, not an exhaustive list.
+#   - It ADVISES on text it cannot read as text. A regex cannot see quoting or
+#     comments, so a separator INSIDE quoted text begins a "command": `echo
+#     "(git merge origin/main)"`, `git commit -m "docs: say when to sync; git
+#     merge origin/main only on a conflict"`, `gh pr comment 5 --body "fixed
+#     (git rebase origin/main was wrong)"`; so does a multi-line quoted string
+#     or heredoc whose own line begins with a sync command. A word inside `-m`
+#     matches as the target (`git merge -m "merge main into x" feature/x`), and
+#     so does a word in a trailing comment (`git merge --abort  # was
+#     origin/main`).
+#   - It ADVISES on updating a main checkout itself, which is no sync of a
+#     branch: `git checkout main && git pull origin main`, `git -C ~/proj pull
+#     --ff-only origin main`. Coordinators and operators do this routinely, and
+#     each is told it "brings main into the current branch".
+#   - It MISSES `git` behind a word: `if git merge origin/main; then`, `! git
+#     merge origin/main`, `time git ...`, `env VAR=x git ...`, `timeout 600 git
+#     pull origin main`, `for b in a; do git ...; done`, `sudo -u x git ...`,
+#     `command git ...`, a backtick substitution (`$(git ...)` advises: its `(`
+#     is a separator). Only a separator or a `VAR=value` prefix puts `git` in
+#     command position.
+#   - It MISSES a token it cannot walk: a quoted global-option value with a
+#     space (`git -C "/w/my demo" merge origin/main`, `git -c user.name="A B"
+#     merge ...`); any token holding a `(` or a `{` (`git -C "$(pwd)" merge
+#     origin/main`, `git merge -m "x (y)" origin/main`, a brace expansion);
+#     a redirection glued to the target (`git merge origin/main>/tmp/log`, the
+#     terminator class has no `>` or `<`).
+#   - It MISSES a ref spelled another way: a revision suffix (`origin/main~1`,
+#     `origin/main^0`), a full ref name (`refs/remotes/origin/main`), a refspec
+#     (`git pull origin main:main`), `FETCH_HEAD`, `git merge origin` (the
+#     remote's HEAD by default), or any local ref of another name.
+#   - It MISSES a sync split by a backslash line continuation (`git merge \`
+#     then `origin/main` on the next line).
+#
+# THE GITHUB BRANCH-UPDATE DETECTOR HAS NO COMMAND-POSITION RULE. The
+# MENTION-silence above belongs to the sync regex alone: a commit message or a
+# comment that merely quotes GitHub's branch-update verb, route or mutation
+# does advise. That is tolerated because the advice is advice only, and the
+# phrase is rare outside the call itself.
+LANDING_SYNC_RE='(^|[;&|({'$'\n''])[[:blank:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:];&|({]*[[:blank:]]+)*git([[:blank:]]+(-[Cc][[:blank:]]+[^[:space:];&|({]+|--[a-z-]+(=[^[:space:];&|({]+)?))*[[:blank:]]+(merge|pull|rebase)([[:blank:]]+[^[:space:];&|({]+)*[[:blank:]]+(origin/main|origin[[:blank:]]+main|origin/HEAD|origin[[:blank:]]+HEAD|main|"(origin/main|origin/HEAD|main)"|'\''(origin/main|origin/HEAD|main)'\'')([[:space:];&|)]|$)'
+LANDING_UB_RE='gh[[:space:]]+pr[[:space:]]+update-branch|/update-branch([^A-Za-z0-9_-]|$)|updatePullRequestBranch'
+if [[ "$event" == PreToolUse && -z "$pre_json" && "${tool:-}" == Bash ]] \
+   && [[ ( ( "$payload" == *main* || "$payload" == *origin* ) \
+           && ( "$payload" == *merge* || "$payload" == *pull* || "$payload" == *rebase* ) ) \
+         || "$payload" == *update-branch* || "$payload" == *updatePullRequestBranch* ]]; then
+  lcmd=$(jq -r '.tool_input.command // "" | tostring' \
+    <<<"$payload" 2>/dev/null) || lcmd=""
+  if [[ -n "$lcmd" ]] && { [[ "$lcmd" =~ $LANDING_SYNC_RE ]] || [[ "$lcmd" =~ $LANDING_UB_RE ]]; }; then
+    lreason='ccrc landing advisory: this command brings main into the current branch. Absorb main only on one of three triggers:'
+    lreason+=' (1) the branch conflicts — probe with `git fetch origin && git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD`: exit 1 with a tree id on the first line is a conflict, exit 0 is clean, and any other answer is unmeasured and licenses nothing;'
+    lreason+=' (2) a required check on the PR is red while main passes the same tests: re-run its failing test files on a clean checkout of `origin/HEAD` in scratch, and a red there too is a red main also shows (report it once as main-red and leave main alone);'
+    lreason+=" (3) the coordinator's fix-round mail names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository."
+    lreason+=' Otherwise leave main alone: a clean branch lands as it is, and every needless sync restarts CI.'
+    lreason+=' When you do absorb: `git merge` only — never a rebase, a force-push or the Update branch of GitHub (its button, `gh pr` verb or API) — and on a conflict in a `# ccrc:generated` stamp line, take either side of that line only, resolve the rest of the file as source, then run `~/.local/bin/ccrc restamp <file>`.'
+    pre_json=$(_hook_nudge_json "$lreason") || pre_json=""
+  fi
+fi
+
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
   now=$(_hook_epoch_ms)
@@ -3137,7 +3368,7 @@ fi
 out=$(jq -cn \
   --argjson v 1 --arg state "$state" --arg event "$event" \
   --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
-  --argjson updatedAt "$(_hook_epoch_ms)" --argjson interrupted "$interrupted" \
+  --argjson updatedAt "${hts:-$(_hook_epoch_ms)}" --argjson interrupted "$interrupted" \
   --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
   --argjson graphGateDenials "$gd" \
   --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
@@ -3161,7 +3392,7 @@ tmp="$REG/.$id.$$.hookstate.tmp"
 { printf '%s\n' "$out" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; exit 0; }
 mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
 # The one PreToolUse envelope this file ever prints — a deny (R5) or a nudge
-# (R6) — and only now: the count a deny names is on disk, so the next event
+# (R6, or the landing advisory) — and only now: the count a deny names is on disk, so the next event
 # will see it (D-1689). The nudge counts nothing, but it shares this site so
 # that neither branch can ever print from inside the arm.
 [ -z "$pre_json" ] || printf '%s\n' "$pre_json"

@@ -127,6 +127,12 @@ export const TREE_FILES = [
   // wrong file, all of which a real payload catches and a 12-byte one does
   // not.
   'ccd/ccd',
+  // ccd's direct-entry PAIR (D-3696): the launcher TEMPLATE `_inst_bins`
+  // renders onto PATH and the program that renders, self-tests and publishes
+  // the pair. COPIED, never stubbed — an install test must render the real
+  // template through the real publisher.
+  'ccd/ccd-entry.py',
+  'ccd/ccd-entry-install.py',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the

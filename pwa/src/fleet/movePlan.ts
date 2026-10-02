@@ -31,8 +31,8 @@
 //
 // TAG ORDER IS SEMVER: isNewerTag, always behind isReleaseTag (it throws
 // RangeError on a non-tag) — v0.0.10 is newer than v0.0.9.
-import { compareDispatchOrder, isReleaseTag } from '../../../shared/api';
-import type { ApplyUpdateBody, NodeWire, RollbackUpdateBody, UpdatesView } from '../../../shared/api';
+import { compareDispatchOrder, isReleaseTag, rollbackTargetRefusal } from '../../../shared/api';
+import type { ApplyUpdateBody, NodeWire, ReleaseWire, RollbackUpdateBody, UpdatesView } from '../../../shared/api';
 import { isNewerTag } from '../../../shared/semver';
 import { nodeVersion } from './useUpdatesView';
 
@@ -79,6 +79,21 @@ function runsNewer(n: NodeWire, tag: string): boolean {
   return v !== null && isNewerTag(v, tag);
 }
 
+/** Wave 8 item C: one node a fleet rollback would name that the server refuses before any spawn, and why. */
+export interface RollbackBlocker { label: string; word: 'unknown-tag' | 'no-bundle' }
+/** The managed nodes a fleet rollback to `to` names (planMove's own set: isManagedNode and runsNewer), in dispatch
+ *  order, whose rollback the L0 predicate refuses — never a copy of it. ANY one blocks the row: D-3390's per-node
+ *  sequence would move the nodes before it and stop at the refused one, splitting the fleet. */
+export function rollbackBlockers(nodes: readonly NodeWire[], release: ReleaseWire | undefined, to: string): RollbackBlocker[] {
+  if (!isReleaseTag(to)) return [];
+  const out: RollbackBlocker[] = [];
+  for (const n of nodes.filter((x) => isManagedNode(x) && runsNewer(x, to)).sort(compareDispatchOrder)) {
+    const word = rollbackTargetRefusal(release, n.provenance);
+    if (word !== null) out.push({ label: n.label, word });
+  }
+  return out;
+}
+
 export function planMove(view: UpdatesView, intent: MoveIntent): PlannedMove {
   const all: readonly NodeWire[] = Array.isArray(view.nodes) ? view.nodes : [];
   let picked: NodeWire[];
@@ -101,6 +116,15 @@ export function moveTarget(intent: MoveIntent): string {
 
 export function moveHeadline(intent: MoveIntent): string {
   return intent.direction === 'update' ? `Update ${intent.tag}` : `Roll back to ${intent.to}`;
+}
+
+/** Wave 8 item F3: how a rollback happens, said on every rollback sheet with a node in it. True on every
+ *  cmd_rollback path: an intact kept copy flips; otherwise a re-install downloads the tag. Either can be refused
+ *  (by the server before any spawn — a 409 shown in this sheet or a notice — or by the node, on its row) or can fail
+ *  (a gate that fails is not restored, `_upd_rollback_no_restore`; a kept spine that does not complete). It makes no
+ *  per-node claim: the kept state is not inventoried. */
+export function rollbackHowText(to: string): string {
+  return `A rollback flips each node to its kept copy of ${to} when that copy is intact; otherwise the node downloads ${to} and re-installs it. Either way it can be refused or can fail, and the reason is shown: here or in a notice when the server refuses the move, and on the node's row when the node does.`;
 }
 
 /** What a node runs, in the words the inventory row keeps apart (wave 3's currentText): a tag, an unversioned

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { insertSystemMailTx, queueStallNotice, queueSystemMail } from '../src/coord/rundefs.js';
-import { STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX, stallDetail } from '../src/coord/stall.js';
+import { STALL_CHECK_PREFIX, STALL_ORPHANED_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX, stallDetail, stallRunMail } from '../src/coord/stall.js';
 import { WAVE_DONE_SUBJECT, type MailKind, type RunState } from '../../shared/api.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -151,8 +151,8 @@ describe('stallCandidates: the active runs that name a worker, all-or-failure (�
   });
 });
 
-describe('mailOnRuns: every mail row on the subject\'s runs, one read, in id order', () => {
-  it('reads two overlapping runs\' mail interleaved by id, whatever order the ids come in, and nothing from another run or no run', () => {
+describe('stallMailFor: the pins wave 1\'s mailOnRuns and deliveryTimesFor carried, moved here (rulings Q3)', () => {
+  it('reads two overlapping runs\' mail interleaved by id, whatever order the ids come in; stallRunMail narrows it to exactly those runs\' rows', () => {
     const s = store();
     const older = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
     const newer = seedRun(s, { sessionId: 'demo-worker', wave: 8, reach: 'dispatched', at: DISPATCHED_AT + OVERLAP_MS });
@@ -163,29 +163,37 @@ describe('mailOnRuns: every mail row on the subject\'s runs, one read, in id ord
     const b = mailAt(s, { fromId: 'coordinator', toId: 'demo-worker', runId: older, kind: 'status',
       subject: 'wave-done-rejected', at: S4_STATUS_AT - 1_800_000 });
     mailAt(s, { fromId: 'demo-other', toId: 'coordinator', runId: other, kind: 'status', subject: 'progress', at: S4_STATUS_AT });
-    mailAt(s, { fromId: 'demo-worker', toId: 'demo-peer', runId: null, kind: 'question', subject: 'peer q', at: S4_STATUS_AT });
+    const peer = mailAt(s, { fromId: 'demo-worker', toId: 'demo-peer', runId: null, kind: 'question', subject: 'peer q', at: S4_STATUS_AT });
     const c = mailAt(s, { fromId: 'demo-worker', toId: 'coordinator', runId: newer, kind: 'status',
       subject: 'progress', at: S4_STATUS_AT });
     const d = mailAt(s, { fromId: 'demo-coordinator', toId: 'demo-worker', runId: newer, kind: 'answer',
       subject: 'go on', at: S4_ANSWER_AT });
 
-    expect(s.mailOnRuns([newer, older])).toEqual({ ok: true, mail: [
+    const read = s.stallMailFor('demo-worker', [newer, older], S4_STATUS_AT - 86_400_000);
+    if (!read.ok) throw new Error(read.detail);
+    // The whole read: the session's own run-less mail is in it, another worker's run is not.
+    expect(read.mail.map((m) => m.id)).toEqual([a, b, peer, c, d]);
+    // Wave 1's exact rows, through the L1 filter the lane applies to the run verdict (F4).
+    expect(stallRunMail(read.mail, [newer, older])).toEqual([
       { id: a, at: S4_STATUS_AT - 3_600_000, runId: older, fromId: 'demo-worker', toId: 'coordinator', kind: 'status', subject: WAVE_DONE_SUBJECT },
       { id: b, at: S4_STATUS_AT - 1_800_000, runId: older, fromId: 'coordinator', toId: 'demo-worker', kind: 'status', subject: 'wave-done-rejected' },
       { id: c, at: S4_STATUS_AT, runId: newer, fromId: 'demo-worker', toId: 'coordinator', kind: 'status', subject: 'progress' },
       { id: d, at: S4_ANSWER_AT, runId: newer, fromId: 'demo-coordinator', toId: 'demo-worker', kind: 'answer', subject: 'go on' },
-    ] });
+    ]);
   });
 
-  it('an empty id list answers {ok:true, mail:[]} and prepares no statement at all', () => {
+  it('an empty id list never emits IN (), and still answers the session\'s own mail', () => {
     const s = store();
     const spy = vi.spyOn(s.db, 'prepare');
     try {
-      expect(s.mailOnRuns([])).toEqual({ ok: true, mail: [] });
-      expect(spy).not.toHaveBeenCalled();
+      expect(s.stallMailFor('demo-worker', [], 0)).toEqual({ ok: true, mail: [], deliveries: [] });
+      expect(spy.mock.calls.map((c) => String(c[0])).filter((sql) => /IN\s*\(\s*\)/.test(sql))).toEqual([]);
     } finally {
       spy.mockRestore();
     }
+    const own = mailAt(s, { fromId: 'demo-worker', toId: 'demo-peer', runId: null, kind: 'question', subject: 'peer q', at: S4_STATUS_AT });
+    const read = s.stallMailFor('demo-worker', [], S4_STATUS_AT);
+    expect(read.ok && read.mail.map((m) => m.id)).toEqual([own]);
   });
 
   it('refuses the whole read on one unrepresentable mail time, naming the column and no value (D-2545)', () => {
@@ -194,7 +202,31 @@ describe('mailOnRuns: every mail row on the subject\'s runs, one read, in id ord
     mailAt(s, { fromId: 'demo-worker', toId: 'coordinator', runId: run, kind: 'status', subject: 'progress', at: S4_STATUS_AT });
     const bad = mailAt(s, { fromId: 'demo-worker', toId: 'coordinator', runId: run, kind: 'status', subject: 'progress', at: S4_STATUS_AT });
     s.db.prepare('UPDATE mail SET at = ? WHERE id = ?').run(UNSAFE, bad);
-    expect(s.mailOnRuns([run])).toEqual({ ok: false, kind: 'mail-unreadable', detail: 'mail at is not a positive safe integer' });
+    expect(s.stallMailFor('demo-worker', [run], 0)).toEqual({ ok: false, kind: 'mail-unreadable', detail: 'mail at is not a positive safe integer' });
+  });
+
+  it('carries every delivery row of each mail it returns, with its delivered and acked times; a mail with none has no row', () => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    const m = mailAt(s, { fromId: 'operator', toId: 'demo-worker', runId: run, kind: 'status',
+      subject: `${STALL_CHECK_PREFIX} run ${run}`, at: S4_R1_AT });
+    const rows = () => {
+      const r = s.stallMailFor('demo-worker', [run], S4_R1_AT);
+      if (!r.ok) throw new Error(r.detail);
+      return [...r.deliveries].sort((x, y) => x.id - y.id);
+    };
+    expect(rows()).toEqual([]);
+    const first = s.queueDelivery(m, 'demo-worker', '');
+    expect(rows()).toMatchObject([{ id: first.id, mailId: m, toId: 'demo-worker', deliveredAt: null, ackedAt: null }]);
+    s.markDelivered(first.id, S4_R1_AT + 5_000);
+    s.markAcked(first.id, S4_R1_AT + 60_000);
+    expect(rows()).toMatchObject([{ id: first.id, deliveredAt: S4_R1_AT + 5_000, ackedAt: S4_R1_AT + 60_000 }]);
+    // A second delivery of one mail (the re-queue shape): both rows come back, and the lane cites the newest.
+    const heir = s.queueDelivery(m, 'demo-heir', '');
+    expect(rows()).toMatchObject([
+      { id: first.id, ackedAt: S4_R1_AT + 60_000 },
+      { id: heir.id, mailId: m, toId: 'demo-heir', deliveredAt: null, ackedAt: null },
+    ]);
   });
 });
 
@@ -226,24 +258,6 @@ describe('firstMailIdWithPrefix: the reply bind\'s first stall-check (§4.2 Push
     expect(s.firstMailIdWithPrefix(run, 'operator', 'demo-worker', STALL_CHECK_PREFIX)).toBeNull();
     expect(s.firstMailIdWithPrefix(run, 'operator', 'demo-worker', 'stall_check:')).toBeNull();
     expect(s.firstMailIdWithPrefix(run, 'operator', 'demo-worker', 'stall%')).toBeNull();
-  });
-});
-
-describe('deliveryTimesFor: r2 reports when r1 was delivered and acked', () => {
-  it('reads the NEWEST delivery row of a mail, and null for a mail with none', () => {
-    const s = store();
-    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
-    const m = mailAt(s, { fromId: 'operator', toId: 'demo-worker', runId: run, kind: 'status',
-      subject: `${STALL_CHECK_PREFIX} run ${run}`, at: S4_R1_AT });
-    expect(s.deliveryTimesFor(m)).toBeNull();
-    const first = s.queueDelivery(m, 'demo-worker', '');
-    expect(s.deliveryTimesFor(m)).toEqual({ deliveredAt: null, ackedAt: null });
-    s.markDelivered(first.id, S4_R1_AT + 5_000);
-    s.markAcked(first.id, S4_R1_AT + 60_000);
-    expect(s.deliveryTimesFor(m)).toEqual({ deliveredAt: S4_R1_AT + 5_000, ackedAt: S4_R1_AT + 60_000 });
-    // A second delivery of one mail (the re-queue shape): the newest is the live one.
-    s.queueDelivery(m, 'demo-heir', '');
-    expect(s.deliveryTimesFor(m)).toEqual({ deliveredAt: null, ackedAt: null });
   });
 });
 
@@ -514,5 +528,253 @@ describe('queueStallNotice: the observation row and the mail, in ONE transaction
       .toEqual({ fromId: 'operator', toId: 'demo-coordinator' });
     expect(stallRows(s, run.id).map((r) => r.detail)).toEqual([
       stallDetail('live', 'quiet', 1, S4_STATUS_AT), stallDetail('live', 'quiet', 2, S4_STATUS_AT)]);
+  });
+});
+
+// ── stall watch wave 2, Task 14: the store half of the session arms ─────────────────────────────────────────
+// `hasMailWithSubject` (the run-less notice's durable dedupe), `stallMailFor` (one mail read per candidate,
+// with those mails' delivery rows) and `queueStallNotice(null)`. Fixture coord.db only.
+
+const W2_HOUR = 3_600_000;
+/** The horizon the lane hands `stallMailFor` for the non-run half of its read: `now - BACKLOG_HORIZON_MS` at r1. */
+const W2_SINCE_AT = S4_R1_AT - 24 * W2_HOUR;
+/** An orphan-D self-wake subject in Task 13's form: it names the restart to the day and minute (`stallUtc`). */
+const W2_ORPHANED_SUBJECT = `${STALL_ORPHANED_PREFIX} 2 background task(s) (subagent, shell) did not survive the 2026-09-28T21:00Z restart`;
+
+describe('hasMailWithSubject: any mail with this exact key was ever queued, in EVERY delivery state (wave 2)', () => {
+  /** The self-wake above, from the operator role to one session. */
+  const put = (s: CoordStore, runId: number | null, toId = 'demo-worker'): number =>
+    mailAt(s, { fromId: 'operator', toId, runId, kind: 'status', subject: W2_ORPHANED_SUBJECT, at: S4_R1_AT });
+
+  it('answers true for a mail with NO delivery row: it reads `mail` alone, never a join', () => {
+    const s = store();
+    expect(s.hasMailWithSubject('operator', null, 'demo-worker', W2_ORPHANED_SUBJECT)).toBe(false);
+    put(s, null);
+    expect(count(s, 'mail_deliveries')).toBe(0);
+    expect(s.hasMailWithSubject('operator', null, 'demo-worker', W2_ORPHANED_SUBJECT)).toBe(true);
+  });
+
+  it.each(['queued', 'delivered', 'acked', 'rejected', 'unknown'] as const)(
+    'answers true with its delivery %s, where the outstanding read answers only for queued and delivered',
+    (state) => {
+      const s = store();
+      const d = s.queueDelivery(put(s, null), 'demo-worker', '');
+      if (state === 'delivered' || state === 'acked') s.markDelivered(d.id, S4_R1_AT + 5_000);
+      if (state === 'acked') s.markAcked(d.id, S4_R1_AT + 60_000);
+      if (state === 'rejected') s.rejectDelivery(d.id, 'undeliverable', 'recipient not in registry');
+      // The vocabulary's own degrade member, written raw: the state column is free text (schema.ts).
+      if (state === 'unknown') s.db.prepare('UPDATE mail_deliveries SET state = ? WHERE id = ?').run('unknown', d.id);
+      expect(s.db.prepare('SELECT state FROM mail_deliveries WHERE id = ?').get(d.id)).toEqual({ state });
+      expect(s.hasMailWithSubject('operator', null, 'demo-worker', W2_ORPHANED_SUBJECT)).toBe(true);
+      // The control: the outstanding read forgets a finished mail, which is why the run-less dedupe cannot use it.
+      expect(s.hasOutstandingMail('operator', null, 'demo-worker', W2_ORPHANED_SUBJECT))
+        .toBe(state === 'queued' || state === 'delivered');
+    });
+
+  it('is null-safe on runId both ways: a run-less key never matches a run mail, and a run key never a run-less one', () => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    put(s, run);
+    expect(s.hasMailWithSubject('operator', run, 'demo-worker', W2_ORPHANED_SUBJECT)).toBe(true);
+    expect(s.hasMailWithSubject('operator', null, 'demo-worker', W2_ORPHANED_SUBJECT)).toBe(false);
+    put(s, null, 'demo-other');
+    expect(s.hasMailWithSubject('operator', null, 'demo-other', W2_ORPHANED_SUBJECT)).toBe(true);
+    expect(s.hasMailWithSubject('operator', run, 'demo-other', W2_ORPHANED_SUBJECT)).toBe(false);
+  });
+
+  it('keys on the exact sender, the mail row\'s OWN toId and the exact subject', () => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    // Addressed to the coordinator role and delivered to the session behind it: the row's toId is the role.
+    s.queueDelivery(put(s, run, 'coordinator'), 'demo-coordinator', '');
+    expect(s.hasMailWithSubject('operator', run, 'coordinator', W2_ORPHANED_SUBJECT)).toBe(true);
+    expect(s.hasMailWithSubject('operator', run, 'demo-coordinator', W2_ORPHANED_SUBJECT)).toBe(false);
+    expect(s.hasMailWithSubject('coordinator', run, 'coordinator', W2_ORPHANED_SUBJECT)).toBe(false);
+    expect(s.hasMailWithSubject('operator', run, 'coordinator', W2_ORPHANED_SUBJECT.slice(0, -1))).toBe(false);
+    expect(s.hasMailWithSubject('operator', run, 'coordinator', `${W2_ORPHANED_SUBJECT} `)).toBe(false);
+  });
+});
+
+describe('stallMailFor: one mail read per candidate, and those mails\' delivery rows (wave 2, M5)', () => {
+  it('reads the run\'s whole history, and the session\'s own traffic inside the horizon, in id order', () => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    const other = seedRun(s, { sessionId: 'demo-other', wave: 6, reach: 'working', at: DISPATCHED_AT });
+    // IN: on the run and older than the horizon. The run clause is unbounded: the ladder keys on its whole exchange.
+    const onRunOld = mailAt(s, { fromId: 'demo-worker', toId: 'coordinator', runId: run, kind: 'status',
+      subject: WAVE_DONE_SUBJECT, at: W2_SINCE_AT - W2_HOUR });
+    // OUT: off the run, from the session, one millisecond older than the horizon.
+    mailAt(s, { fromId: 'demo-worker', toId: 'demo-peer', runId: null, kind: 'question', subject: 'old peer q',
+      at: W2_SINCE_AT - 1 });
+    // IN: off the run, from the session, exactly AT the horizon (`at >= sinceAt`).
+    const peerAtHorizon = mailAt(s, { fromId: 'demo-worker', toId: 'demo-peer', runId: null, kind: 'question',
+      subject: 'peer q', at: W2_SINCE_AT });
+    // IN: a run-less self-wake TO the session.
+    const selfWake = mailAt(s, { fromId: 'operator', toId: 'demo-worker', runId: null, kind: 'status',
+      subject: W2_ORPHANED_SUBJECT, at: S4_STATUS_AT });
+    // OUT: another run's mail between two other sessions.
+    mailAt(s, { fromId: 'demo-other', toId: 'coordinator', runId: other, kind: 'status', subject: 'progress', at: S4_STATUS_AT });
+    // IN: another run's mail FROM the session, inside the horizon. It is off this subject's runs, so the lane's
+    // `stallRunMail` keeps it out of the run verdict and only the session verdicts see it.
+    const offRun = mailAt(s, { fromId: 'demo-worker', toId: 'demo-other', runId: other, kind: 'answer',
+      subject: 'peer answer', at: S4_ANSWER_AT });
+    // IN through its DELIVERY: addressed to the coordinator role, delivered to the session.
+    const toRole = mailAt(s, { fromId: 'demo-other', toId: 'coordinator', runId: null, kind: 'question',
+      subject: 'to the role', at: S4_ANSWER_AT });
+    const toRoleDelivery = s.queueDelivery(toRole, 'demo-worker', '');
+    // OUT: addressed to the role and delivered to someone else.
+    s.queueDelivery(mailAt(s, { fromId: 'demo-other', toId: 'coordinator', runId: null, kind: 'question',
+      subject: 'to the role, not us', at: S4_ANSWER_AT }), 'demo-heir', '');
+    // OUT: delivered to the session but older than the horizon. The bound covers all three session clauses.
+    s.queueDelivery(mailAt(s, { fromId: 'demo-other', toId: 'coordinator', runId: null, kind: 'question',
+      subject: 'to the role, long ago', at: W2_SINCE_AT - 1 }), 'demo-worker', '');
+    const selfWakeDelivery = s.queueDelivery(selfWake, 'demo-worker', '');
+
+    expect(s.stallMailFor('demo-worker', [run], W2_SINCE_AT)).toEqual({ ok: true, mail: [
+      { id: onRunOld, at: W2_SINCE_AT - W2_HOUR, runId: run, fromId: 'demo-worker', toId: 'coordinator', kind: 'status', subject: WAVE_DONE_SUBJECT },
+      { id: peerAtHorizon, at: W2_SINCE_AT, runId: null, fromId: 'demo-worker', toId: 'demo-peer', kind: 'question', subject: 'peer q' },
+      { id: selfWake, at: S4_STATUS_AT, runId: null, fromId: 'operator', toId: 'demo-worker', kind: 'status', subject: W2_ORPHANED_SUBJECT },
+      { id: offRun, at: S4_ANSWER_AT, runId: other, fromId: 'demo-worker', toId: 'demo-other', kind: 'answer', subject: 'peer answer' },
+      { id: toRole, at: S4_ANSWER_AT, runId: null, fromId: 'demo-other', toId: 'coordinator', kind: 'question', subject: 'to the role' },
+    ], deliveries: [
+      { id: toRoleDelivery.id, mailId: toRole, toId: 'demo-worker', state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null },
+      { id: selfWakeDelivery.id, mailId: selfWake, toId: 'demo-worker', state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null },
+    ] });
+  });
+
+  it('hands EVERY delivery row of a selected mail, oldest first, the gate columns as plain values', () => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    const check = mailAt(s, { fromId: 'operator', toId: 'demo-worker', runId: run, kind: 'status',
+      subject: `${STALL_CHECK_PREFIX} run ${run} — quiet 2h 0m, owed: first report`, at: S4_R1_AT });
+    const first = s.queueDelivery(check, 'demo-worker', '');
+    s.markDelivered(first.id, S4_R1_AT + 5_000);
+    s.markAcked(first.id, S4_R1_AT + 60_000);
+    // A second delivery of one mail (the re-queue shape), held at the gate. The lane takes the newest as the live
+    // one (L1's `stallNewestDelivery`), the rule wave 1's per-mail delivery read applied.
+    const second = s.queueDelivery(check, 'demo-heir', '');
+    s.noteGate(second.id, 'registry-unmeasurable', S4_R1_AT + 120_000, false, null);
+    const read = s.stallMailFor('demo-worker', [run], W2_SINCE_AT);
+    expect(read.ok && read.deliveries).toEqual([
+      { id: first.id, mailId: check, toId: 'demo-worker', state: 'acked', deliveredAt: S4_R1_AT + 5_000,
+        ackedAt: S4_R1_AT + 60_000, lastGate: null, gateSince: null },
+      { id: second.id, mailId: check, toId: 'demo-heir', state: 'queued', deliveredAt: null, ackedAt: null,
+        lastGate: 'registry-unmeasurable', gateSince: S4_R1_AT + 120_000 },
+    ]);
+  });
+
+  it('with no runs, reads the session\'s own traffic only, and never binds an empty IN ()', () => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    mailAt(s, { fromId: 'demo-worker', toId: 'coordinator', runId: run, kind: 'status', subject: 'progress',
+      at: W2_SINCE_AT - W2_HOUR });
+    const recent = mailAt(s, { fromId: 'demo-worker', toId: 'coordinator', runId: run, kind: 'status', subject: 'progress',
+      at: S4_STATUS_AT });
+    const spy = vi.spyOn(s.db, 'prepare');
+    try {
+      const read = s.stallMailFor('demo-worker', [], W2_SINCE_AT);
+      expect(read.ok && read.mail.map((m) => m.id)).toEqual([recent]);
+      const sql = spy.mock.calls.map((c) => String(c[0]));
+      expect(sql).toHaveLength(2);
+      expect(sql.filter((q) => /IN \(\s*\)/.test(q))).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('answers {ok:true, mail:[], deliveries:[]} for a session with no mail, and prepares no delivery statement', () => {
+    const s = store();
+    const spy = vi.spyOn(s.db, 'prepare');
+    try {
+      expect(s.stallMailFor('demo-worker', [], W2_SINCE_AT)).toEqual({ ok: true, mail: [], deliveries: [] });
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['mail at', 'mail at is not a positive safe integer'],
+    ['mail runId', 'mail runId is not a positive safe integer'],
+    ['delivery deliveredAt', 'delivery deliveredAt is not a positive safe integer'],
+    ['delivery gateSince', 'delivery gateSince is not a positive safe integer'],
+  ] as const)('refuses the WHOLE read on one unrepresentable %s, naming the column and no value (D-2545)', (column, detail) => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    mailAt(s, { fromId: 'demo-worker', toId: 'coordinator', runId: run, kind: 'status', subject: 'progress', at: S4_STATUS_AT });
+    const bad = mailAt(s, { fromId: 'operator', toId: 'demo-worker', runId: null, kind: 'status',
+      subject: W2_ORPHANED_SUBJECT, at: S4_STATUS_AT });
+    const d = s.queueDelivery(bad, 'demo-worker', '');
+    if (column === 'mail at') s.db.prepare('UPDATE mail SET at = ? WHERE id = ?').run(UNSAFE, bad);
+    if (column === 'mail runId') {
+      // A run id this process cannot represent has no runs row to reference, so the fixture lifts the FK first.
+      s.db.exec('PRAGMA foreign_keys = OFF');
+      s.db.prepare('UPDATE mail SET runId = ? WHERE id = ?').run(UNSAFE, bad);
+    }
+    if (column === 'delivery deliveredAt') s.db.prepare('UPDATE mail_deliveries SET deliveredAt = ? WHERE id = ?').run(UNSAFE, d.id);
+    if (column === 'delivery gateSince') s.db.prepare('UPDATE mail_deliveries SET gateSince = ? WHERE id = ?').run(UNSAFE, d.id);
+    expect(s.stallMailFor('demo-worker', [run], W2_SINCE_AT)).toEqual({ ok: false, kind: 'mail-unreadable', detail });
+    expect(detail).not.toMatch(/[0-9]/);
+  });
+});
+
+describe('queueStallNotice(null): the run-less notice, deduped on its subject inside its one transaction (wave 2)', () => {
+  /** An orphan-D self-wake as the lane hands it. The run-less arm uses neither `detail` nor `at`. */
+  const notice = (subject: string = W2_ORPHANED_SUBJECT, toId = 'demo-worker') => ({
+    detail: stallDetail('live', 'orphan-d', 1, Date.parse('2026-09-28T21:00:00Z')), at: S4_R1_AT, toId,
+    kind: 'status' as const, subject, body: 'orphaned background work notice from the ccrc stall watch (server)',
+  });
+  const stallEvents = (s: CoordStore): number =>
+    (s.db.prepare("SELECT count(*) AS c FROM run_events WHERE detail LIKE 'stall%'").get() as { c: number }).c;
+
+  it('queues an operator mail with no run and no run line, answers eventId null, and writes no run_events row', () => {
+    const s = store();
+    seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });   // a run it must not touch
+    const q = queueStallNotice(s, null, notice());
+    if (!q.queued) throw new Error(`not queued: ${q.why}`);
+    expect(q.eventId).toBeNull();
+    expect(s.db.prepare('SELECT fromId, toId, runId, kind, subject FROM mail WHERE id = ?').get(q.mailId)).toEqual({
+      fromId: 'operator', toId: 'demo-worker', runId: null, kind: 'status', subject: W2_ORPHANED_SUBJECT });
+    expect(envelopeOf(s, q.deliveryId)).toContain('from: operator');
+    expect(envelopeOf(s, q.deliveryId)).not.toContain('run:');
+    expect(stallEvents(s)).toBe(0);
+  });
+
+  it('refuses the same subject to the same session as a duplicate even after the first was ACKED', () => {
+    const s = store();
+    const q = queueStallNotice(s, null, notice());
+    if (!q.queued) throw new Error(`not queued: ${q.why}`);
+    s.markDelivered(q.deliveryId, S4_R1_AT + 5_000);
+    s.markAcked(q.deliveryId, S4_R1_AT + 60_000);
+    expect(queueStallNotice(s, null, { ...notice(), at: S4_R1_AT + 120_000 })).toEqual({ queued: false, why: 'duplicate' });
+    expect(count(s, 'mail')).toBe(1);
+    expect(count(s, 'mail_deliveries')).toBe(1);
+  });
+
+  it('another episode\'s subject, or the same subject to another session, is its own notice', () => {
+    const s = store();
+    expect(queueStallNotice(s, null, notice()).queued).toBe(true);
+    const nextDay = W2_ORPHANED_SUBJECT.replace('2026-09-28T21:00Z', '2026-09-29T21:00Z');
+    expect(nextDay).not.toBe(W2_ORPHANED_SUBJECT);
+    expect(queueStallNotice(s, null, notice(nextDay)).queued).toBe(true);
+    expect(queueStallNotice(s, null, notice(W2_ORPHANED_SUBJECT, 'demo-coordinator')).queued).toBe(true);
+    expect(count(s, 'mail')).toBe(3);
+  });
+
+  it('dedupes INSIDE its one transaction: nested in a caller\'s tx, even a duplicate throws', () => {
+    const s = store();
+    expect(queueStallNotice(s, null, notice()).queued).toBe(true);
+    // A dedupe read before BEGIN would answer `duplicate` here without opening anything. Inside, BEGIN refuses first.
+    expect(() => tx(s.db, () => queueStallNotice(s, null, notice()))).toThrow(/transaction/i);
+    expect(count(s, 'mail')).toBe(1);
+  });
+
+  it('rolls the mail back when the envelope cannot be stamped, so a failed send leaves nothing to dedupe on', () => {
+    const s = store();
+    s.setDeliveryEnvelope = () => ({ ok: false as const, why: 'absent' as const });
+    expect(() => queueStallNotice(s, null, notice())).toThrow(/unstampable: absent/);
+    expect(count(s, 'mail')).toBe(0);
+    expect(count(s, 'mail_deliveries')).toBe(0);
+    expect(s.hasMailWithSubject('operator', null, 'demo-worker', W2_ORPHANED_SUBJECT)).toBe(false);
   });
 });

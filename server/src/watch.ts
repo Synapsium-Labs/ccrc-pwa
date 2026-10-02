@@ -1,7 +1,7 @@
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
-import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
+import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
@@ -13,8 +13,9 @@ import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, verbSupported, sweepDec } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, repoCellFor, type CcdPrFailure } from './prstate.js';
 import { readLiveState, readLiveStateMeasured } from './livestate.js';
-import { mailTurnIdle, mailTurnModeOf } from './turnidle.js';
-import { readHookState, readHookStateUnaged, type HookState } from './hookstate.js';
+import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark } from './turnidle.js';
+import { readTurnMarkMeasured } from './turnmark.js';
+import { readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { sendPrompt } from './inject/send.js';
 import { askActions, askKey } from './askkey.js';
@@ -47,10 +48,15 @@ import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 import { measureClaimant } from './coord/reclaim.js';
 import {
-  STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf, stallCheckMail, stallDelivery, stallDetail,
-  stallFacts, stallLastCheck, stallMailClass, stallPushText, stallReportMail, stallSubjects, stallVerdict,
-  type AskRowFact, type HookAskFact, type LiveWordRead, type StallArming, type StallInput, type StallNotice,
-  type StallNotify, type StallSubject, type StallWorker,
+  BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
+  stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
+  stallFailedVerdict, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
+  stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
+  stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
+  stallVerdict, stallW2ReportMail,
+  type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
+  type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
+  type StallVerdict, type StallWorker, type TurnMarkRead,
 } from './coord/stall.js';
 // `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
 // evidence string alike — the sweep below only feeds it files and applies
@@ -70,6 +76,7 @@ import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { runDispatch, type DispatchRunResult } from './update/converge.js';
+import type { MoveFeedRecord } from './update/dispatch.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
@@ -133,6 +140,50 @@ const CLAIM_SWEEP_MS = 60_000;
  *  constant's reason: a 2 h threshold does not need the 2 s tick. EXPORTED for its suite, as `LC_SWEEP_MS`
  *  and `READINESS_SWEEP_MS` are. */
 export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;
+/** The gap rule's threshold (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)): between one missed sweep (~120 s, clocks survive) and two (~180 s, clocks drop). */
+const STALL_CLOCK_GAP_MS = STALL_SWEEP_MS * 5 / 2;
+
+/**
+ * What `tick()` already measured, handed to the stall lane so it reads neither again (worker stall watch wave 2, M6;
+ * slug `tick-hands-the-lane-pids-and-records` (D-3649)). `panePids` holds the pane pid `assembleFleet` read for every alive
+ * row: `null` when tmux answered none, and no entry for a pane that was not alive. `records` holds the registry rows
+ * this tick read. REQUIRED: the lane has no pid or uuid read of its own, so production and the tests run one path.
+ */
+export interface StallTick {
+  readonly panePids: ReadonlyMap<string, number | null>;
+  readonly records: readonly SessionRecord[];
+}
+
+/** The registry uuid the stall lane reads a marker and a hookstate against, off the tick's rows: `uuid: null` for no
+ *  row (unregistered), and `ok:false` for a row whose identity the tick could not measure. */
+type StallUuid = { readonly ok: true; readonly uuid: string | null } | { readonly ok: false };
+/** One live-file read: the raw word the verdict reads, and the live process's start the marker is judged by. */
+interface StallLive { readonly live: LiveWordRead; readonly startedAt: number | null }
+/** A session whose hookstate this lane does not read (a coordinator, a registry row): no session verdict takes an
+ *  ask, and `unmeasured` says it was not read, never "no ask". */
+const STALL_HOOK_ASK_UNREAD: HookAskFact = { kind: 'unmeasured' };
+/** An identity the tick could not measure: the hookstate cannot be compared with it, so it is not read. */
+const STALL_RAW_UNMEASURED: HookStateRawRead = { ok: false, reason: 'unmeasured' };
+
+/** The hookstate ask the run verdict's holds 2a and 2b read, projected from the ONE raw read
+ *  (`readHookStateRawMeasured`). A foreign or unregistered file carries no ask of this session's. `absent` and
+ *  `malformed` read as no ask, as wave 1's identity-gated read answered them, and `unmeasured` stays unmeasured. A
+ *  PermissionRequest `{approval}` envelope is carried as `approval` (M7b): L1 decides it is hold 2b, never 2a.
+ *  Named departure `hook-ask-projection-in-l4` (D-3691): this projection, the identity cut included, stays in L4 as wave 1's
+ *  shipped `stallHookAsk` kept it. It is not moved to `coord/stall.ts` in this wave. */
+function stallHookAskOf(raw: HookStateRawRead): HookAskFact {
+  if (!raw.ok) return raw.reason === 'unmeasured' ? { kind: 'unmeasured' } : { kind: 'none' };
+  if (raw.identity !== 'current' || raw.state.ask === null) return { kind: 'none' };
+  return 'questions' in raw.state.ask ? { kind: 'ask', at: raw.state.updatedAt } : { kind: 'approval', at: raw.state.updatedAt };
+}
+
+/** The raw hookstate as the frozen and delegates steps read it (`HookRawFact`): the identity and the event are
+ *  carried, and L1 judges them. */
+function stallHookFactOf(raw: HookStateRawRead): HookRawFact {
+  return raw.ok
+    ? { ok: true, updatedAt: raw.state.updatedAt, event: raw.state.event, sessionId: raw.sessionId, identity: raw.identity }
+    : { ok: false, reason: raw.reason };
+}
 
 /** D13's two ledger lanes. The floor scan reads every plan and spec of every
  *  registry-named project, so it runs HOURLY; reconcile reads only the plans
@@ -641,6 +692,28 @@ export class FleetWatcher {
   private lastStallSweep = 0;
   /** True while a `sweepStalls` pass awaits its reads. A second pass started meanwhile returns at once. */
   private stallSweepRunning = false;
+  /** Wave 2's in-memory clocks, keyed by session id, pruned every sweep (`pruneStallMemory`) and dropped whole after a
+   *  gap of more than STALL_CLOCK_GAP_MS between judged sweeps (`dropStallClocks`, `lastStallJudgedAt`). A server
+   *  restart re-times each one, which the spec accepts (slug `absent-worker-is-dead-after-grace` (D-3631)): when a run worker
+   *  was first seen with no fleet row; when it was first seen with an `orphan` or `never-started` lifecycle; when a
+   *  worker's or coordinator's turn marker was first READ `unmeasured` or `malformed` (`stallMarkClock`: an unmeasured
+   *  identity reads no marker, so it neither starts nor keeps that clock). */
+  private stallAbsentSince = new Map<string, number>();
+  private stallDeadSince = new Map<string, number>();
+  private stallMarkUnreadableSince = new Map<string, number>();
+  /** When the lane last FINISHED judging its candidates, or null before the first judged sweep: the gap rule's anchor
+   *  (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)). Stamped at the end of a sweep whose candidates read, never on an
+   *  early return, so a slow sweep's own duration is never counted as a gap. */
+  private lastStallJudgedAt: number | null = null;
+  /** The run-less operator pushes already sent: each push tag (`stallPushRoute`'s) with the session it names, which
+   *  the prune keys on. IN MEMORY (slug `run-less-push-latches-are-in-memory` (D-3751)): a restart re-pushes a run-less orphan D
+   *  rung 2, a mail-stuck, a marker-unreadable or a coordinator's failed rung 2 to the operator while it stands. A
+   *  coordinator's marker-unreadable push is keyed on its first-seen time, which a restart or a clock drop (an
+   *  unobserved gap, `dropStallClocks`) re-times, so one push can go out on each side of it. Pushes only, never mail. */
+  private stallLatch = new Map<string, string>();
+  /** Warn-once keys, `<sessionId>|<what>`: a run-less shadow rung, `failed-unknown`, and the defensive r2-with-no-r1
+   *  line (`applyStall`; no real input reaches it today). */
+  private stallWarned = new Set<string>();
   /** The ledger lanes' clocks (build 9 wave 7, D13). */
   private lastLedgerFloor = 0;
   private lastLedgerReconcile = 0;
@@ -790,6 +863,13 @@ export class FleetWatcher {
    *  was making it, and there is nothing left to guard once the process is
    *  gone. */
   private mailInFlight = new Set<string>();
+  /** Delivery ids whose `mail-gate-busy-shadow` "would deliver" line has been
+   *  logged (worker stall watch §5.1). Before `mail-gate-busy` is armed, the
+   *  operator checks each line against the session's transcript for 48 h, so
+   *  there is one line per delivery, not one per sweep. `sweepMail` prunes it
+   *  at its head to the deliveries still outstanding. IN MEMORY BY DESIGN, as
+   *  `mailCooldown` is: a restart logs a still-held delivery once more. */
+  private busyShadowLogged = new Set<number>();
   /** `emitRuns`'s own byte-equality guard, the same idiom as `lastJson`
    *  above, over `RunSummary[]` instead of `FleetSession[]`. `null` (not
    *  `'[]'`) so the very first tick with a real `coord` always emits at
@@ -990,7 +1070,18 @@ export class FleetWatcher {
       fleet: sendUpdateOp !== undefined && fleetState !== undefined ? { state: fleetState, send: sendUpdateOp } : null,
       runLocal: updateRunner ?? null,
       onAccepted: () => this.triggerInventory(),
+      recordMove: (r) => { this.recordMoveFeed(r); },
     }, Date.now());
+  }
+
+  /** Wave 8 item A: a move's audit row, through pushOne's own record path (the ring, its flush, and the durable feed
+   *  archive behind its guarded `recordFeedEvent`). Never a push (`recordOnly`), never gated on presence
+   *  (`recordAlways`); about no session and no run. It decides nothing. */
+  private recordMoveFeed(r: MoveFeedRecord): void {
+    this.pushOne({
+      kind: 'update', sessionId: '', project: '', title: r.title, body: r.body, runId: null,
+      recordAlways: true, recordOnly: true,
+    }, this.activeProjects);
   }
 
   /** C3 (final fix wave): D-3211 says a node-id collision "is named", but the
@@ -1507,7 +1598,8 @@ export class FleetWatcher {
         ]);
         clearTimeout(timer);
       }
-      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches());
+      const panePids = new Map<string, number | null>();
+      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids);
       // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
       // carries the SAME evidence `measuredIdentity(records[i]) === null`
       // would, one hop from `records[i]` in `sessions[i]` — so this reads it
@@ -1616,11 +1708,12 @@ export class FleetWatcher {
       } catch (err) {
         console.warn(`ccrc-server: claim sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
       }
-      // The stall watch (spec 2026-09-29 §4.2) runs after the claim lanes, on THIS tick's `sessions` and on
-      // its registry listing (the listing carries the markers). It is never awaited: its reads are async, so it
-      // cannot sit in the claim pair's synchronous try-block. It gates itself on `primed`, which is set below,
-      // so the priming tick never judges.
-      void this.sweepStalls(sessions, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
+      // The stall watch (spec 2026-09-29 §4.2, §5) runs after the claim lanes, on THIS tick's `sessions`, its
+      // registry listing (the listing carries the markers) and what this tick already measured: the pane pids
+      // `assembleFleet` read and the registry rows (`StallTick`), so the lane reads neither again. It is never
+      // awaited: its reads are async, so it cannot sit in the claim pair's synchronous try-block. It gates itself
+      // on `primed`, which is set below, so the priming tick never judges.
+      void this.sweepStalls(sessions, registryRead.names, { panePids, records }).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepDivergences`: each is a
       // handful of io reads per PROJECT, on an hourly / 15-minute clock.
       void this.sweepLedgerFloor(records).catch(() => { /* one bad sweep must not kill the poll */ });
@@ -1912,8 +2005,14 @@ export class FleetWatcher {
    *   and newer than the first check on it. The bind is read from the store only for a `re stall-check:`
    *   subject. Any other mail wearing that prefix is pushed as ordinary mail, so no box-token holder can use
    *   the prefix to keep a mail off the phone.
-   * - A `report` (the watch's r2 to the coordinator) is pushed under its own title, `⚠ stall › <run
-   *   workspace>`. The lane never pushes r2 itself, so this is its only push.
+   * - A `self-wake` (wave 2: an `orphaned:` or `failed:` notice the watch mails a session about its own turn) is
+   *   recorded, never pushed. The session is the one to act on it, and orphan D's rung 2 pushes the operator from
+   *   the lane itself (`⚠ orphaned`) when that mail sits unacknowledged.
+   * - A `report` (the watch's mail to the coordinator: wave 1's r2, and wave 2's frozen, dead and failed rung) is
+   *   pushed under a title by its kind, read back from its own subject (`stallReportKind`, `stallReportTitle`):
+   *   `⚠ stall`, `⚠ frozen`, `⚠ dead` or `⚠ failed` › <run workspace>. The lane never pushes a report itself, so
+   *   this is its only push. Under `mail-disabled` the verdict holds every coordinator-bound rung, so no report is
+   *   queued and none reaches this push. The lane's operator rungs still push (ruling Q1: no reroute).
    */
   private pushNewMail(projects: Set<string>, sessionProjects: Map<string, string>): void {
     const coord = this.deps.coord;
@@ -1931,12 +2030,12 @@ export class FleetWatcher {
       const stall = stallMailClass(m, bind);
       this.pushOne({
         kind: 'mail', sessionId: m.toId, project,
-        title: stall === 'report' ? `⚠ stall › ${m.workspace ?? m.toId}` : `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
+        title: stall === 'report' ? stallReportTitle(stallReportKind(m.subject), m.workspace ?? m.toId) : `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
         body: m.subject,
         runId: m.runId,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
-        ...(isAskNudgeMail(m) || stall === 'check' || stall === 'reply' ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -2877,27 +2976,44 @@ export class FleetWatcher {
   }
 
   /**
-   * The stall watch's lane (spec 2026-09-29 §4.2, wave 1). `stallVerdict` (L1, `coord/stall.ts`) decides
-   * everything. This method READS the inputs and APPLIES the answer, as `renewClaims` applies `claimExpiry`'s.
-   * `tick()` dispatches it after the claim lanes and never awaits it. It has its own clock (`STALL_SWEEP_MS`)
-   * and its own in-flight flag, and it returns with no store.
+   * The stall watch's lane (spec 2026-09-29 §4.2 wave 1, §5 wave 2). The pure `coord/stall.ts` decides
+   * everything; this method READS the inputs and APPLIES the answers, as `renewClaims` applies `claimExpiry`'s.
+   * `tick()` dispatches it after the claim lanes and never awaits it. It has its own clock (`STALL_SWEEP_MS`) and
+   * its own in-flight flag, and it returns with no store.
    *
-   * The clock is COMPARED before the in-flight flag and STAMPED after it, so a pass refused by the flag does
-   * not use up the next minute.
+   * The clock is COMPARED before the in-flight flag and STAMPED after it, so a pass refused by the flag does not
+   * use up the next minute.
    *
-   * It reads the raw live word and never `FleetSession.status`. `liveSessionStatus` folds `shell` and `waiting`
-   * into `busy`, and a pane with no live file paints `idle` with a null time.
+   * Three kinds of subject, each in its own try/catch (`node:sqlite` throws synchronously, and one bad subject
+   * must not starve the next):
+   * - a run WORKER (`stallSubjects`): the run verdict, then its session verdicts (orphan E, failed, each mail
+   *   stuck, orphan D), every notice recorded on its primary run;
+   * - a run COORDINATOR (`stallCoordinatorSubjects`, minus the workers): orphan E, failed, each mail stuck, its
+   *   marker and orphan D (slug `coordinators-draw-orphan-d` (D-3749)), all RUN-LESS (slug `coordinator-notices-are-run-less` (D-3653)),
+   *   so none can stand in a worker's proof (b);
+   * - every other registry row: orphan D only, and only once its marker records a restart that lost tasks.
    *
-   * It reads the hookstate ask UNAGED (`readHookStateUnaged`), because hold 2a correlates it with the dialog
-   * by time, and a legit question outlives `HOOKSTATE_FRESH_MS`.
+   * Reads (slug `three-reads-per-candidate` (D-3642)): at most three agent reads per worker — the live file, the turn
+   * marker and the raw hookstate — and two per coordinator. The pane pid and the registry uuid are the tick's
+   * (`StallTick`, REQUIRED: slug `tick-hands-the-lane-pids-and-records` (D-3649)). It reads the RAW live word, never
+   * `FleetSession.status`, which folds `shell` and `waiting` into `busy`. It reads the hookstate RAW and unaged
+   * (`readHookStateRawMeasured`): hold 2a correlates its ask with the dialog by time, and a legit question
+   * outlives `HOOKSTATE_FRESH_MS`. One mail read per subject (`stallMailFor`, slug `one-mail-read-per-candidate` (D-3641)):
+   * the run verdict meets it through `stallRunMail`, run mail only as wave 1 read it (slug
+   * `run-mail-filtered-in-l1` (D-3650)); the session verdicts meet it whole.
    *
-   * Each mutation is durable and deduped by its observation row (`queueStallNotice`,
-   * `recordStallObservation`), so a restart re-sends nothing.
+   * In memory, and pruned every sweep (`pruneStallMemory`): when a worker was first seen absent or dead-shaped,
+   * when a marker was first seen unreadable, the run-less push latch and the warn-once keys. A server restart
+   * re-times the clocks (slug `absent-worker-is-dead-after-grace` (D-3631)) and may repeat a run-less push, a coordinator's
+   * failed rung 2 among them (slug `run-less-push-latches-are-in-memory` (D-3751); `stallLatch` names which, and why a
+   * marker-unreadable push re-keys after a clock drop). More than STALL_CLOCK_GAP_MS from one judged sweep's end to the
+   * next one's start drops the clocks (`dropStallClocks`, slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)).
    *
-   * Each subject runs in its own try/catch: `node:sqlite` throws synchronously, and one bad subject must not
-   * starve the next. PUBLIC for `stall-sweep.test.ts`.
+   * Every mail is durable and deduped: on a run by its observation row (`queueStallNotice`,
+   * `recordStallObservation`), run-less by its subject (`hasMailWithSubject`), so a restart re-sends none.
+   * PUBLIC for `stall-sweep.test.ts`.
    */
-  async sweepStalls(sessions: readonly FleetSession[], names: readonly string[]): Promise<void> {
+  async sweepStalls(sessions: readonly FleetSession[], names: readonly string[], tick: StallTick): Promise<void> {
     if (!this.primed) return;
     const store = this.deps.coord;
     if (!store) return;
@@ -2906,8 +3022,11 @@ export class FleetWatcher {
     if (this.stallSweepRunning) return;
     this.lastStallSweep = now;
     this.stallSweepRunning = true;
+    let judging = false;
     try {
-      const arming = stallArmingOf(names);
+      // `mail-disabled` reaches L1 as a fact, and `stallMailDisabledHold` decides what it holds (slug
+      // `lane-honours-mail-disabled` (D-3636)). The module-local literal, never rundefs' export: see the import note.
+      const arming: StallArming = { ...stallArmingOf(names), mailDisabled: names.includes(MAIL_DISABLED_MARKER) };
       if (arming.disabled) return;
       const paused = names.includes(COORDINATOR_PAUSE_MARKER);
       let candidates: ReturnType<CoordStore['stallCandidates']>;
@@ -2921,41 +3040,86 @@ export class FleetWatcher {
         console.warn(`ccrc-server: stall-watch candidates unreadable (${candidates.kind}: ${candidates.detail}) — nothing judged this sweep`);
         return;
       }
-      for (const subject of stallSubjects(candidates.runs)) {
+      // `stall-clocks-drop-on-an-unobserved-gap` (D-3750): the one gap rule. A first-seen clock claims its condition held at
+      // every judged sweep since it was set. More than STALL_CLOCK_GAP_MS from the END of the last judged sweep to this
+      // start means nobody watched in between (a disabled window, unreadable or throwing candidate reads, ticks that
+      // never reached the lane), so every clock restarts here. The early returns above never stamp it: they are that
+      // unobserved time. A judged sweep's own duration is observed time, so `finally` stamps its end.
+      if (this.lastStallJudgedAt !== null && now - this.lastStallJudgedAt > STALL_CLOCK_GAP_MS) this.dropStallClocks();
+      judging = true;
+      const workers = stallSubjects(candidates.runs);
+      const workerIds = new Set(workers.map((x) => x.primary.sessionId));
+      const coordinators = stallCoordinatorSubjects(candidates.runs).filter((c) => !workerIds.has(c.sessionId));
+      const judged = new Set([...workerIds, ...coordinators.map((c) => c.sessionId)]);
+      this.pruneStallMemory(workerIds, judged, new Set([...judged, ...tick.records.map((r) => r.id)]));
+      for (const subject of workers) {
         try {
-          await this.judgeStall(store, subject, sessions, arming, paused, now);
+          await this.judgeStall(store, subject, sessions, tick, arming, paused, now);
         } catch (err) {
           console.warn(`ccrc-server: stall-watch run ${subject.primary.id} (${subject.primary.sessionId}) failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
         }
       }
+      for (const c of coordinators) {
+        try {
+          await this.judgeStallCoordinator(store, c, sessions, tick, arming, paused, now);
+        } catch (err) {
+          console.warn(`ccrc-server: stall-watch coordinator ${c.sessionId} failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
+        }
+      }
+      for (const r of tick.records) {
+        if (judged.has(r.id)) continue;
+        try {
+          await this.judgeStallOrphan(store, r, sessions, tick, arming, paused, now);
+        } catch (err) {
+          console.warn(`ccrc-server: stall-watch session ${r.id} failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
+        }
+      }
     } catch (err) {
-      // A throw outside the per-subject catch (`stallArmingOf`, `stallSubjects`) would reach the tick's silent
+      // A throw outside the per-subject catches (`stallArmingOf`, `stallSubjects`) would reach the tick's silent
       // `.catch`, and the lane would die every minute with no trace. One line per bad sweep instead.
       console.warn(`ccrc-server: stall-watch sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
     } finally {
+      // A judged sweep is stamped when it ENDS, its error path included, so the next start measures only unobserved time.
+      if (judging) this.lastStallJudgedAt = Date.now();
       this.stallSweepRunning = false;
     }
   }
 
-  /** One subject of `sweepStalls`: read, decide, apply. Its throws are the caller's to catch. */
+  /** One run worker: read, decide, apply — the run verdict first, then its session verdicts in the spec's order
+   *  (orphan E, failed, each mail stuck, orphan D). Its throws are the caller's to catch. */
   private async judgeStall(
-    store: CoordStore, subject: StallSubject, sessions: readonly FleetSession[],
+    store: CoordStore, subject: StallSubject, sessions: readonly FleetSession[], tick: StallTick,
     arming: StallArming, paused: boolean, now: number,
   ): Promise<void> {
     const primary = subject.primary;
-    const worker = await this.stallWorkerFor(store, sessions.find((s) => s.id === primary.sessionId));
-    const mail = store.mailOnRuns(subject.runs.map((r) => r.id));
-    if (!mail.ok) {
-      console.warn(`ccrc-server: stall-watch run ${primary.id} mail unreadable (${mail.kind}: ${mail.detail}) — held this sweep`);
+    const id = primary.sessionId;
+    const s = sessions.find((x) => x.id === id);
+    this.stallSince(this.stallAbsentSince, id, s === undefined, now);
+    this.stallSince(this.stallDeadSince, id, s !== undefined && stallDeadShaped(s.lifecycle), now);
+    const ident = this.stallUuid(tick, id);
+    const lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
+    const mark = await this.stallMarkRead(id, ident, lr);
+    this.stallMarkClock(id, ident, mark, now);
+    const raw = ident.ok
+      ? await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid)
+      : STALL_RAW_UNMEASURED;
+    const worker = this.stallWorkerFor(store, s, lr, stallHookAskOf(raw));
+    const runIds = subject.runs.map((r) => r.id);
+    const read = store.stallMailFor(id, runIds, now - BACKLOG_HORIZON_MS);
+    if (!read.ok) {
+      console.warn(`ccrc-server: stall-watch run ${primary.id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
       return;
     }
-    const notices: StallNotice[] = [];
-    for (const e of store.runEvents(primary.id)) {
-      const parsed = parseStallDetail(e.detail);
-      if (parsed !== null) notices.push({ ...parsed, at: e.at });
-    }
+    const notices = this.stallNoticesOf(store, primary.id);
+    const markUnreadableSince = this.stallMarkUnreadableSince.get(id) ?? null;
     let input: StallInput = {
-      subject, worker, mail: mail.mail, notices, arming, coordinationPaused: paused, coordinator: null,
+      subject, worker, mail: stallRunMail(read.mail, runIds), notices, arming, coordinationPaused: paused,
+      coordinator: null,
+      w2: {
+        mark, hook: stallHookFactOf(raw), deliveries: read.deliveries,
+        absentSince: this.stallAbsentSince.get(id) ?? null, deadSince: this.stallDeadSince.get(id) ?? null,
+        markUnreadableSince,
+      },
     };
     let v = stallVerdict(input, now);
     if (v.act === 'measure-coordinator') {
@@ -2965,17 +3129,124 @@ export class FleetWatcher {
       input = { ...input, coordinator: measured.state };
       v = stallVerdict(input, now);
     }
-    if (v.act !== 'notify') return;
-    this.applyStall(store, input, v, now);
+    if (v.act === 'notify') this.applyStall(store, input, v, now);
+    const si: StallSessionInput = {
+      sessionId: id, role: 'worker', run: primary, worker, mark, liveStartedAt: lr?.startedAt ?? null,
+      markUnreadableSince, mail: read.mail, deliveries: read.deliveries, notices, arming, coordinationPaused: paused,
+    };
+    for (const sv of [stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallOrphanDVerdict(si, now)]) {
+      this.applyStallSession(store, si, primary.project, sv, now);
+    }
   }
 
-  /** The worker's facts. They come from this tick's fleet row, except the raw live word and the unaged
-   *  hookstate ask, which this lane reads itself (see `sweepStalls`). A failed auto-continue read has no slot
-   *  of its own: it is a failed store read, hold 1, so it raises `unmeasured`. */
-  private async stallWorkerFor(store: CoordStore, s: FleetSession | undefined): Promise<StallWorker> {
-    if (s === undefined) return { present: false };
-    const live = await this.stallLiveWord(s);
-    const hookAsk = await this.stallHookAsk(s.id);
+  /** One run coordinator, judged RUN-LESS (slug `coordinator-notices-are-run-less` (D-3653)): its notices are keyed on
+   *  their mail subjects and on in-memory latches, never on a claimed run's `run_events`, where its orphan E rows
+   *  would count toward that run's worker's proof (b). Its verdicts, in the spec's order: orphan E, failed, each mail
+   *  stuck, its marker, and orphan D last as for a worker (spec §5.2 "any session"; slug `coordinators-draw-orphan-d` (D-3749)).
+   *  The registry-row loop skips every judged id, so this is the only place a coordinator's orphan D is asked.
+   *  Reads: the live file and the marker. No session verdict takes a hookstate ask, so none is read, and
+   *  `unmeasured` says so. Its mail read carries no run ids: its claimed runs' mail is its worker's subject. */
+  private async judgeStallCoordinator(
+    store: CoordStore, c: { readonly sessionId: string; readonly runs: readonly StallRunRow[] },
+    sessions: readonly FleetSession[], tick: StallTick, arming: StallArming, paused: boolean, now: number,
+  ): Promise<void> {
+    const id = c.sessionId;
+    const s = sessions.find((x) => x.id === id);
+    const ident = this.stallUuid(tick, id);
+    const lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
+    const mark = await this.stallMarkRead(id, ident, lr);
+    this.stallMarkClock(id, ident, mark, now);
+    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD);
+    const read = store.stallMailFor(id, [], now - BACKLOG_HORIZON_MS);
+    if (!read.ok) {
+      console.warn(`ccrc-server: stall-watch coordinator ${id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
+      return;
+    }
+    const si: StallSessionInput = {
+      sessionId: id, role: 'coordinator', run: null, worker, mark, liveStartedAt: lr?.startedAt ?? null,
+      markUnreadableSince: this.stallMarkUnreadableSince.get(id) ?? null,
+      mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: paused,
+    };
+    const project = s?.project ?? c.runs[0]?.project ?? '';
+    for (const sv of [stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
+      this.applyStallSession(store, si, project, sv, now);
+    }
+  }
+
+  /** A registry row that is no run's worker or coordinator: orphan D only (spec §5.2, "Candidates are the registry
+   *  rows whose marker reads done with lostBg > 0"). ONE read, the marker judged with no live file, and the live
+   *  file only for a marker that records a restart which lost background tasks. That gate is L1's
+   *  (`stallOrphanDCandidate`, the mark alone), spent here on the read budget; this method asks it and spells no
+   *  conjunct. `stallOrphanDVerdict` asks the same predicate again with the live facts, and re-judges the marker
+   *  against the live process's start. A row whose identity is unmeasured reads nothing: these rows are not
+   *  candidates for `marker-unreadable` (slug `coordinator-marker-unreadable` (D-3654)). Nor does a row with no live pane,
+   *  which orphan D can never wake: a read-budget skip. */
+  private async judgeStallOrphan(
+    store: CoordStore, r: SessionRecord, sessions: readonly FleetSession[], tick: StallTick,
+    arming: StallArming, paused: boolean, now: number,
+  ): Promise<void> {
+    const ident = measuredIdentity(r);
+    if (ident === null) return;
+    // A read-budget skip, like the line above: orphan D answers none without an idle live word, and a
+    // row with no live pane has none (`stallLiveRead` folds a missing entry and a null pid alike to `no-pane`). Most
+    // registry rows are long-dead sessions, so they cost no agent read.
+    if (!tick.panePids.get(r.id)) return;
+    const mark = await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, ident.uuid, null);
+    if (!mark.ok || !stallOrphanDCandidate(mark)) return;
+    const s = sessions.find((x) => x.id === r.id);
+    const lr = s === undefined ? null : await this.stallLiveRead(r.id, s.wrapper, tick);
+    const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD);
+    const read = store.stallMailFor(r.id, [], now - BACKLOG_HORIZON_MS);
+    if (!read.ok) {
+      console.warn(`ccrc-server: stall-watch session ${r.id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
+      return;
+    }
+    const si: StallSessionInput = {
+      sessionId: r.id, role: 'other', run: null, worker, mark, liveStartedAt: lr?.startedAt ?? null,
+      markUnreadableSince: null, mail: read.mail, deliveries: read.deliveries, notices: [], arming,
+      coordinationPaused: paused,
+    };
+    this.applyStallSession(store, si, s?.project ?? r.project, stallOrphanDVerdict(si, now), now);
+  }
+
+  /** The registry uuid this sweep reads a marker and a hookstate against, off the tick's own rows. No row: `null`
+   *  (unregistered). A row whose identity the tick could not measure: `ok:false`, never folded into
+   *  "unregistered" (an adapter may not narrow a distinction it received). */
+  private stallUuid(tick: StallTick, id: string): StallUuid {
+    const rec = tick.records.find((r) => r.id === id);
+    if (rec === undefined) return { ok: true, uuid: null };
+    const ident = measuredIdentity(rec);
+    return ident === null ? { ok: false } : { ok: true, uuid: ident.uuid };
+  }
+
+  /** Read 1: the raw live word and the live process's start. The pid is the one `assembleFleet` read this tick; no
+   *  entry (a pane that was not alive) and a null (tmux answered none) are both `no-pane`, as wave 1's own
+   *  `panePid` folded them. An unrostered wrapper and the read's `no-state` and `unmeasured` are each a named hold. */
+  private async stallLiveRead(id: string, wrapper: string, tick: StallTick): Promise<StallLive> {
+    const pid = tick.panePids.get(id) ?? null;
+    if (!pid) return { live: { ok: false, reason: 'no-pane' }, startedAt: null };
+    const cfgDir = configDirFor(this.deps.cfg, wrapper);
+    if (!cfgDir) return { live: { ok: false, reason: 'no-config-dir' }, startedAt: null };
+    const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
+    return read.ok
+      ? { live: { ok: true, word: read.state.status, since: read.state.statusUpdatedAt }, startedAt: read.state.startedAt }
+      : { live: { ok: false, reason: read.reason }, startedAt: null };
+  }
+
+  /** Read 2: the turn marker. Judged for staleness against the live process when the live file was read; with no
+   *  live read, L1 re-judges it from `liveStartedAt`. An unmeasured identity cannot be compared, so it answers
+   *  `unmeasured` without reading, and `stallMarkClock` does not count that answer. */
+  private async stallMarkRead(id: string, ident: StallUuid, lr: StallLive | null): Promise<TurnMarkRead> {
+    if (!ident.ok) return { ok: false, reason: 'unmeasured' };
+    return readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, id, ident.uuid,
+      lr !== null && lr.live.ok ? { startedAt: lr.startedAt } : null);
+  }
+
+  /** The session's facts. They come from this tick's fleet row, the live read and the hookstate ask; the two store
+   *  reads are synchronous. A failed auto-continue read has no slot of its own: it is a failed store read, hold 1,
+   *  so it raises `unmeasured`. */
+  private stallWorkerFor(store: CoordStore, s: FleetSession | undefined, lr: StallLive | null, hookAsk: HookAskFact): StallWorker {
+    if (s === undefined || lr === null) return { present: false };
     const ask = store.currentAskFor(s.id);
     const askRow: AskRowFact = !ask.ok ? { kind: 'unmeasured' }
       : ask.ask === null ? { kind: 'none' } : { kind: 'row', state: ask.ask.state, at: ask.ask.at };
@@ -2988,7 +3259,7 @@ export class FleetWatcher {
       dialogPending: s.dialogPending,
       stranded: s.stranded !== null,
       swapBlocked: s.swapBlocked !== null,
-      live,
+      live: lr.live,
       hookAsk,
       askRow,
       // `backOff` stores no time of its own, so the START of the hold is `nextAttemptAt − MAIL_ARMED_HOLD_MS`.
@@ -2997,43 +3268,70 @@ export class FleetWatcher {
     };
   }
 
-  /** The raw live word. A null pid (which folds a gone pane and a tmux that did not answer), an unrostered
-   *  wrapper, and the read's `no-state` and `unmeasured` are each a named hold (hold 1). */
-  private async stallLiveWord(s: FleetSession): Promise<LiveWordRead> {
-    const pid = await this.deps.tmux.panePid(s.id);
-    if (!pid) return { ok: false, reason: 'no-pane' };
-    const cfgDir = configDirFor(this.deps.cfg, s.wrapper);
-    if (!cfgDir) return { ok: false, reason: 'no-config-dir' };
-    const read = await readLiveStateMeasured(this.deps.io, cfgDir, pid);
-    return read.ok
-      ? { ok: true, word: read.state.status, since: read.state.statusUpdatedAt }
-      : { ok: false, reason: read.reason };
+  /** The stall rows on one run, parsed. A detail this build cannot name is skipped (`parseStallDetail`). */
+  private stallNoticesOf(store: CoordStore, runId: number): StallNotice[] {
+    const notices: StallNotice[] = [];
+    for (const e of store.runEvents(runId)) {
+      const parsed = parseStallDetail(e.detail);
+      if (parsed !== null) notices.push({ ...parsed, at: e.at });
+    }
+    return notices;
   }
 
-  /** The hookstate ask, identity-gated but unaged. `FleetSession` carries no uuid, so the registry's `.uuid`
-   *  is read measured:
-   *  - absent → no uuid, which the reader answers `no-state`;
-   *  - unreadable → `unmeasured`, never folded into "no ask".
-   *  Only a QUESTION (`{questions}`) is an ask. A PermissionRequest `{approval}` envelope is a dialog with no
-   *  question behind it: hold 2b, spec §4.2 (a background subagent's permission prompt raises `waiting` too),
-   *  capped by the dialog-cap. `askkey.ts` and `watch.ts`'s ask lane split the two the same way. */
-  private async stallHookAsk(id: string): Promise<HookAskFact> {
-    const uuid = await fieldMeasured(this.deps.io, this.deps.cfg.registryDir, id, 'uuid');
-    if (!uuid.ok && uuid.reason !== 'absent') return { kind: 'unmeasured' };
-    const hs = await readHookStateUnaged(this.deps.io, this.deps.cfg.registryDir, id, uuid.ok ? uuid.content : null);
-    if (!hs.ok) return hs.reason === 'unmeasured' ? { kind: 'unmeasured' } : { kind: 'none' };
-    return hs.state.ask !== null && 'questions' in hs.state.ask ? { kind: 'ask', at: hs.state.updatedAt } : { kind: 'none' };
+  /** Drops every first-seen clock (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)), the one clearing method. Its one
+   *  caller is the gap rule in `sweepStalls`: when more than STALL_CLOCK_GAP_MS passed since the last judged sweep ended,
+   *  each clock restarts from this sweep, never firing on a duration nobody watched. A single unlistable tick, one
+   *  refused pass or one missed sweep leaves no such gap. This is the lane's bookkeeping of its own observations, not
+   *  a stall rule, so it stays in L4. */
+  private dropStallClocks(): void {
+    this.stallAbsentSince.clear();
+    this.stallDeadSince.clear();
+    this.stallMarkUnreadableSince.clear();
   }
 
-  /** Applies a notify, and decides nothing. `stallDelivery` picks shadow or send from the markers.
+  /** Keeps a first-seen time while `holds`, and drops it the first sweep it does not. */
+  private stallSince(map: Map<string, number>, id: string, holds: boolean, now: number): void {
+    if (!holds) { map.delete(id); return; }
+    if (!map.has(id)) map.set(id, now);
+  }
+
+  /** The marker-unreadable first-seen clock. It counts only a marker READ that answered `unmeasured` or `malformed`.
+   *  A session whose registry uuid the tick could not measure reads no marker (its `unmeasured` is `stallMarkRead`'s
+   *  own answer, not the file's), so it neither starts the clock nor keeps one: a first-seen time from an earlier
+   *  read is dropped, never left to fire off a sweep that read nothing. */
+  private stallMarkClock(id: string, ident: StallUuid, mark: TurnMarkRead, now: number): void {
+    this.stallSince(this.stallMarkUnreadableSince, id, ident.ok && stallMarkUnreadable(mark), now);
+  }
+
+  /** One warn per key (`<sessionId>|<what>`) for as long as the session stays in the registry. */
+  private stallWarnOnce(sessionId: string, what: string, line: string): void {
+    const key = `${sessionId}|${what}`;
+    if (this.stallWarned.has(key)) return;
+    this.stallWarned.add(key);
+    console.warn(line);
+  }
+
+  /** The in-memory state's prune, every sweep. The absent and dead clocks live while their session is a run worker,
+   *  the marker's first-seen time while it is a worker or a coordinator, and the latch and warn-once keys while
+   *  their session is in the registry. A latch entry carries its session id, so the prune never parses a tag. */
+  private pruneStallMemory(workers: ReadonlySet<string>, judged: ReadonlySet<string>, known: ReadonlySet<string>): void {
+    for (const m of [this.stallAbsentSince, this.stallDeadSince]) for (const id of [...m.keys()]) if (!workers.has(id)) m.delete(id);
+    for (const id of [...this.stallMarkUnreadableSince.keys()]) if (!judged.has(id)) this.stallMarkUnreadableSince.delete(id);
+    for (const [tag, id] of [...this.stallLatch]) if (!known.has(id)) this.stallLatch.delete(tag);
+    for (const key of [...this.stallWarned]) if (!known.has(key.slice(0, key.indexOf('|')))) this.stallWarned.delete(key);
+  }
+
+  /** Applies a run verdict's notify, and decides nothing. `stallNotifyDelivery` picks shadow or send from the markers
+   *  (a wave-2 arm is shadow without `stall-watch-w2-live`).
    *  - Shadow: record a `stall-shadow:` row and warn once.
-   *  - Send to the worker or the coordinator: one `queueStallNotice` transaction (the row, then the mail).
+   *  - Send to the worker (r1) or the coordinator (r2, or a frozen or dead report): one `queueStallNotice`
+   *    transaction (the row, then the mail).
    *  - Send to the operator: record the row first, then push, and only when the row is new.
    *  A refused write (`duplicate`, or `run-gone`: absent or no longer active, D-3584) sends and warns nothing. */
   private applyStall(store: CoordStore, input: StallInput, n: StallNotify, now: number): void {
     const primary = input.subject.primary;
     const worker = primary.sessionId;
-    if (stallDelivery(n.to, input.arming) === 'shadow') {
+    if (stallNotifyDelivery(n.arm, n.to, input.arming) === 'shadow') {
       const obs = store.recordStallObservation(primary.id, stallDetail('shadow', n.arm, n.rung, n.key), now);
       if (obs.recorded) console.warn(`ccrc-server: stall-watch shadow ${n.arm} r${n.rung} run ${primary.id} ${worker}`);
       return;
@@ -3046,22 +3344,27 @@ export class FleetWatcher {
       return;
     }
     if (n.to === 'coordinator') {
-      // r2's body cites r1: its earliest LIVE row when one exists, else its earliest row. Arming mid-episode
-      // leaves a shadow r1 before the live one, and citing the shadow row would tell the coordinator that no
-      // check was sent when one was (D-3572 `shadow-rung-accounting`). Its mail is `stallLastCheck`'s, the one
-      // `stallReportMail` cites, which is null when r1 only ever ran in shadow. A check with no delivery row
-      // hands null too, never a row of nulls: the body tells "no delivery row" from "not delivered".
-      const r1Rows = input.notices
-        .filter((x) => x.arm === 'quiet' && x.rung === 1 && x.key === n.key)
-        .sort((a, b) => a.at - b.at);
-      const r1 = r1Rows.find((x) => x.mode === 'live') ?? r1Rows[0];
-      if (r1 === undefined) {
-        console.warn(`ccrc-server: stall-watch run ${primary.id} r2 fell due with no r1 row — not sent`);
+      if (n.arm !== 'quiet') {
+        const report = stallW2ReportMail(input, facts, n, now);
+        queueStallNotice(store, primary, { detail, at: now, toId: n.coordinatorId, kind: 'status', subject: report.subject, body: report.body });
+        return;
+      }
+      // r2's body cites r1: `stallCitedCheck` (L1, M7a) picks its earliest LIVE row when one exists, else its
+      // earliest row, because arming mid-episode leaves a shadow r1 before the live one (D-3572
+      // `shadow-rung-accounting`). Its mail is `stallLastCheck`'s, with that mail's NEWEST delivery row from the one
+      // mail read; a check with no delivery row hands null, never a row of nulls (D-3585). The null branch below is
+      // DEFENSIVE and unreachable from real inputs today: the verdict and the citation read the same notice rows, so
+      // an r2 that falls due always has an r1 to cite. It stays so that a later drift between the two warns once
+      // instead of sending an r2 that cites nothing.
+      const r1 = stallCitedCheck(input, n.key);
+      if (r1 === null) {
+        this.stallWarnOnce(worker, `no-r1-${primary.id}-${n.key}`, `ccrc-server: stall-watch run ${primary.id} r2 fell due with no r1 row — not sent`);
         return;
       }
       const r1Mail = stallLastCheck(input);
-      const r1Times = r1Mail === null ? null : store.deliveryTimesFor(r1Mail.id);
-      const r1Delivery = r1Mail === null || r1Times === null ? null : { queuedAt: r1Mail.at, ...r1Times };
+      const r1Row = r1Mail === null ? null : stallNewestDelivery(input.w2?.deliveries ?? [], r1Mail.id);
+      const r1Delivery = r1Mail === null || r1Row === null ? null
+        : { queuedAt: r1Mail.at, deliveredAt: r1Row.deliveredAt, ackedAt: r1Row.ackedAt };
       const text = stallReportMail(input, facts, r1, r1Delivery, now);
       queueStallNotice(store, primary, { detail, at: now, toId: n.coordinatorId, kind: 'status', subject: text.subject, body: text.body });
       return;
@@ -3069,9 +3372,70 @@ export class FleetWatcher {
     const obs = store.recordStallObservation(primary.id, detail, now);
     if (!obs.recorded) return;
     const text = stallPushText(input, facts, n, now);
+    const route = stallPushRoute(n, worker, primary.id);
     this.pushOne({
-      kind: 'run', sessionId: worker, project: primary.project, title: text.title, body: text.body,
-      runId: primary.id, tag: `stall-${primary.id}-${n.arm}-${n.rung}-${n.key}`, recordAlways: true,
+      kind: route.kind, sessionId: worker, project: primary.project, title: text.title, body: text.body,
+      runId: primary.id, tag: route.tag, recordAlways: true,
+    }, this.activeProjects);
+  }
+
+  /** Applies one session verdict (orphan D and E, failed, mail stuck, a coordinator's marker), and decides nothing.
+   *  - A hold applies nothing, except `failed-unknown`, which warns once (spec §5.2: never guessed into a
+   *    self-wake).
+   *  - Shadow: a worker records a `stall-shadow:` row on its run; a run-less session warns once.
+   *  - To the session itself or to its coordinator: one `queueStallNotice`, on the worker's run, or run-less and
+   *    deduped by its subject.
+   *  - To the operator: a worker records the row first and pushes only when it is new; a run-less session latches in
+   *    memory (`stallLatch`, slug `run-less-push-latches-are-in-memory` (D-3751)), so a restart re-pushes it, a coordinator's
+   *    failed rung 2 included, and a marker-unreadable push re-keys on each side of a clock drop. L1's
+   *    `stallPushRoute` names the push's kind and tag, which is also the latch key. */
+  private applyStallSession(store: CoordStore, si: StallSessionInput, project: string, v: StallVerdict, now: number): void {
+    const id = si.sessionId;
+    if (v.act === 'hold' && v.why === 'failed-unknown') {
+      const stopAt = si.mark.ok ? si.mark.stopAt : null;
+      const err = si.mark.ok ? si.mark.err : null;
+      this.stallWarnOnce(id, `failed-unknown-${stopAt}`, `ccrc-server: stall-watch unknown StopFailure ${err} on ${id} — held, never guessed into a self-wake`);
+      return;
+    }
+    if (v.act !== 'notify') return;
+    const run = si.run;
+    if (stallNotifyDelivery(v.arm, v.to, si.arming) === 'shadow') {
+      if (run === null) {
+        this.stallWarnOnce(id, `shadow-${v.arm}-${v.rung}-${v.key}`, `ccrc-server: stall-watch shadow ${v.arm} r${v.rung} ${id} (run-less)`);
+        return;
+      }
+      const obs = store.recordStallObservation(run.id, stallDetail('shadow', v.arm, v.rung, v.key), now);
+      if (obs.recorded) console.warn(`ccrc-server: stall-watch shadow ${v.arm} r${v.rung} run ${run.id} ${id}`);
+      return;
+    }
+    const detail = stallDetail('live', v.arm, v.rung, v.key);
+    if (v.to === 'worker') {
+      const text = stallSessionMail(si, v, now);
+      queueStallNotice(store, run, { detail, at: now, toId: id, kind: 'status', subject: text.subject, body: text.body });
+      return;
+    }
+    if (v.to === 'coordinator') {
+      const text = stallSessionMail(si, v, now);
+      queueStallNotice(store, run, { detail, at: now, toId: v.coordinatorId, kind: 'status', subject: text.subject, body: text.body });
+      return;
+    }
+    const route = stallPushRoute(v, id, run === null ? null : run.id);
+    if (run !== null) {
+      const obs = store.recordStallObservation(run.id, detail, now);
+      if (!obs.recorded) return;
+      const text = stallSessionPushText(si, v, now);
+      this.pushOne({
+        kind: route.kind, sessionId: id, project, title: text.title, body: text.body,
+        runId: run.id, tag: route.tag, recordAlways: true,
+      }, this.activeProjects);
+      return;
+    }
+    if (this.stallLatch.has(route.tag)) return;
+    this.stallLatch.set(route.tag, id);
+    const text = stallSessionPushText(si, v, now);
+    this.pushOne({
+      kind: route.kind, sessionId: id, project, title: text.title, body: text.body,
+      tag: route.tag, recordAlways: true,
     }, this.activeProjects);
   }
 
@@ -3421,6 +3785,10 @@ export class FleetWatcher {
 
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
+    // The busy-shadow log's memory keeps only deliveries still outstanding.
+    // It is pruned BEFORE the empty-queue return, so an idle box empties it.
+    const outstandingIds = new Set([...unacked, ...dueBefore].map((r) => r.id));
+    for (const loggedId of this.busyShadowLogged) if (!outstandingIds.has(loggedId)) this.busyShadowLogged.delete(loggedId);
     if (unacked.length === 0 && dueBefore.length === 0) return;
     // Fix — blocking review findings 1/5: `readRegistry`'s OLD signature
     // collapses a whole-fleet `io.readdir` failure to `[]` — the SAME shape
@@ -3813,27 +4181,56 @@ export class FleetWatcher {
         const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
         if (!cfgDir) { gated(d, 'no-config-dir'); continue; }
         const live = await readLiveState(this.deps.io, cfgDir, pid);
-        // ONE decision for both gates (worker stall watch §4.1, `turnidle.ts`).
+        // ONE decision for both gates (worker stall watch §4.1, §5.1, `turnidle.ts`).
         // `idle` delivers as before. So does `shell`, an idle main loop over
         // background shell work, unless `$REG/mail-gate-strict` is listed. A
         // null read is `not-idle`, as `!live` was.
-        const turn = mailTurnIdle(live, now, isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS, mode);
-        // THE GATE TOKEN DOES NOT FORK, deliberately (D-1167). `MailGate`'s own
+        //
+        // The turn marker (§5.1) is read here, once per due row that passed
+        // every gate above, and ONLY under the hand-armed `busy-shadow` and
+        // `busy` (shell-mode-ignores-the-marker (D-3674)). Which modes those are is
+        // `mailTurnReadsMark`'s decision (L1), the same rule `mailTurnIdle`
+        // uses to consult `mark`; this line asks it. Wave 2 ships dark: under the
+        // default `shell`, and under `strict`, no agent read is added and
+        // `mailTurnIdle` answers as wave 1 did, whatever the marker says. It is
+        // never read without a live file either: that row is `not-idle`
+        // already, and the reader needs the live `startedAt` to call a marker
+        // stale. `identity` is non-null here, because the registry rung above
+        // `continue`s on null. An `absent`, `foreign` or `stale` read takes
+        // wave 1's path inside `mailTurnIdle`.
+        const mark = mailTurnReadsMark(mode) && live !== null
+          ? await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, d.toId, identity.uuid, live)
+          : null;
+        const turn = mailTurnIdle(live, mark, now, isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS, mode);
+        // THE QUIET THRESHOLD DOES NOT FORK `not-quiet`, deliberately (D-1167). `MailGate`'s own
         // docstring sets the rule — one member per CONDITION, not per `continue`
         // — and `no-pane`/`no-config-dir` were split because an operator acts on
-        // them differently. Here the condition is the same one ("this session has
-        // not been quiet long enough") and so is the act (wait). The union is
+        // them differently. A coordinator's longer quiet time is the same condition ("this session
+        // has not been quiet long enough") and the same act (wait). The union is
         // also explicitly NOT a scheduling input: it exists so a human can tell
         // waiting from wedged, and both thresholds are waiting. A
         // `coord-not-quiet` member would cost a union entry, a total-map entry in
         // `shared/api.ts` and a phrase in `MailStrip.tsx` to record a distinction
-        // nobody acts on.
+        // nobody acts on. Three tokens follow: `turn-mark-unreadable`, then `not-idle` or `not-quiet`.
         //
-        // Both tokens are spelled as LITERALS in a ternary on purpose. The D-792
-        // structure scan (`mail-sweep.test.ts`) counts a gate only where its name
-        // is written at the call, so `gated(d, turn.gate)` would leave both with
+        // Every token is spelled as a LITERAL at its call on purpose (`not-idle` and `not-quiet` in
+        // one ternary). The D-792 structure scan (`mail-sweep.test.ts`) counts a gate only where its
+        // name is written at the call, so `gated(d, turn.gate)` would leave them with
         // no call site it can see.
-        if (!turn.deliver) { const notIdle = turn.gate === 'not-idle'; gated(d, notIdle ? 'not-idle' : 'not-quiet'); continue; }
+        if (!turn.deliver) {
+          // A THIRD token, and a different condition: the turn marker could not
+          // be read under `mail-gate-busy`. That is a fleet fault, not a busy
+          // session, so it gets its OWN literal call site. A nested ternary is
+          // invisible to the D-792 scan (`mail-sweep.test.ts`).
+          if (turn.gate === 'turn-mark-unreadable') { gated(d, 'turn-mark-unreadable'); continue; }
+          // `mail-gate-busy-shadow`: the row WOULD deliver on `busy`. It is held,
+          // and it is said once per delivery, for the operator's 48 h check.
+          if ('wouldDeliver' in turn && !this.busyShadowLogged.has(d.id)) {
+            this.busyShadowLogged.add(d.id);
+            console.warn(`ccrc-server: mail-gate busy-shadow would deliver delivery ${d.id} to ${d.toId} (quiet since ${new Date(turn.since).toISOString()})`);
+          }
+          const notIdle = turn.gate === 'not-idle'; gated(d, notIdle ? 'not-idle' : 'not-quiet'); continue;
+        }
 
         // `seen` is added only HERE, once every gate above has passed and the
         // send is actually about to be attempted — it means "one message per

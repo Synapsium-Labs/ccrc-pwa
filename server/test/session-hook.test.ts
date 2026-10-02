@@ -481,11 +481,11 @@ describe('event → state mapping', () => {
     run({ hook_event_name: 'SessionStart' });
     expect(readState().state).toBe('done');
   });
-  it('Stop is done and clears ask; interrupted survives when the payload says so', () => {
+  it('Stop is done and clears ask; a Stop carrying is_interrupt writes no interrupted key', () => {
     run({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: { questions: [] } });
     run({ hook_event_name: 'Stop', is_interrupt: true });
     const s = readState();
-    expect(s).toMatchObject({ state: 'done', ask: null, interrupted: true });
+    expect(s).toMatchObject({ state: 'done', ask: null }); expect(s).not.toHaveProperty('interrupted');
   });
   it('PostCompact: auto is working, manual is done', () => {
     run({ hook_event_name: 'PostCompact', trigger: 'auto' });
@@ -581,32 +581,32 @@ describe('the fleet gate and failure polarity', () => {
     expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
   }, 30000);
   // R1 FIX (D-1898): an absolute ms budget was tried first and rejected — see the
-  // measurement below for why. This asserts a RATIO of SessionStart's p95 to
-  // PostToolUse's p95, both measured IN THE SAME RUN (interleaved, same
+  // measurement below for why. This asserts a RATIO of SessionStart's median to
+  // PostToolUse's median, both measured IN THE SAME RUN (interleaved, same
   // process, same few seconds of box load), because box load inflates every
   // arm together: a slow moment makes the cheap arm slow too, so the ratio
   // between them stays put while either arm's raw ms does not.
   //
-  // WHY NOT AN ABSOLUTE MS NUMBER (measured on `openclaw`, the fleet box,
-  // under real concurrent-session load, load average ~2.1-4.3 across the
-  // runs below): 15 isolated runs of the shipped `case` gates measured a
-  // SessionStart p95 range of 136.9-164.5 ms across two 15-run samples
-  // (means 149.1 ms and 153.1 ms) against the 150 ms budget this test
-  // originally inherited from the file's PostToolUse test below — a near
-  // coin flip (8/15 passed in the first sample). The ERE mutation (see
-  // below) measured 203.9-227.2 ms, non-overlapping with the shipped range,
-  // but the ~39 ms gap between the shipped worst case and the mutated best
-  // case is too narrow to host ANY absolute threshold with the ~15% margin
-  // asked for on BOTH sides at once: every candidate T from 170-195 ms gave
-  // one side under 15% (T=180 -> 8.6%/13.3%; T=185 -> 11.1%/10.2%; the
-  // symmetric midpoint T=182 -> 9.6%/12.0%). An absolute ms number is the
-  // wrong shape for an arm timed on a box whose own load varies run to run.
+  // WHY NOT AN ABSOLUTE MS NUMBER (measured on `openclaw`, the fleet box, under
+  // concurrent-session load ~2.1-4.3): two 15-run samples of the shipped `case`
+  // gates gave a SessionStart p95 of 136.9-164.5 ms (means 149.1 and 153.1)
+  // against the 150 ms budget inherited from the PostToolUse test below, a near
+  // coin flip (8/15 passed in the first). The ERE mutation measured 203.9-227.2
+  // ms, non-overlapping, but a ~39 ms gap hosts no absolute threshold with the
+  // ~15% margin asked on BOTH sides (T=180 -> 8.6%/13.3%; T=185 -> 11.1%/10.2%;
+  // T=182 -> 9.6%/12.0%). An absolute ms number is the wrong shape for an arm
+  // timed on a box whose own load varies run to run.
   //
-  // THE RATIO, measured the same way (15 isolated runs each, same box, same
-  // interleaved-in-one-run method): shipped `case` gates gave ratios of
-  // 3.03-3.47 (mean 3.30, n=15); the ERE mutation gave ratios of 4.48-5.61
-  // (mean 4.87, n=15) — non-overlapping, 15/15 under and 15/15 over R=4 with
-  // ~13% margin on the shipped side and ~12% margin on the mutated side of R.
+  // THE RATIO, same method (15 isolated runs each, interleaved in one run). D-1898,
+  // p95/p95: shipped `case` gates 3.03-3.47 (mean 3.30), ERE mutation 4.48-5.61
+  // (mean 4.87). Wave 2's turn marker, remedy (a): the cheap arm carries agent_id,
+  // so it never writes the marker and SessionStart pays its jq+mv in both bands.
+  // Re-measured p95/p95 on a loaded box (load 17-25), two sets: shipped 2.61-3.77
+  // and 2.86-3.97, ERE 3.79-5.39 and 4.33-5.94. Set 1 separates by 0.02, set 2 by
+  // 0.36, pooled they overlap (3.79 < 3.97): p95 of n=20 is the second-largest
+  // sample, an outlier's statistic. ratio-row-reads-the-median (D-3704): median/median,
+  // 15+15 alternating, shipped 3.19-3.64 (mean 3.46), ERE 4.88-5.73 (mean 5.19),
+  // R=4.2 (+15%/+16%).
   //
   // WHAT THIS GUARD CANNOT SEE — its masking window, recorded here rather than
   // in a gitignored measurement file, because this repo's convention is that a
@@ -616,14 +616,14 @@ describe('the fleet gate and failure polarity', () => {
   // denominator, and it is not frozen: it forks jq on a prefilter hit and reads
   // the hookstate back. If that arm slows down on its own, the ratio falls
   // while the SessionStart arm is exactly as slow as it was. Against the
-  // measured mutated band, a compound regression of >=12% in the cheap arm
-  // (4.48/4 = 1.12) pulls the mutation's BEST case back under R=4, and ~13%
-  // would put a typical mutated run there — so a >=10-13% cheap-arm regression
-  // is enough to mask the very mutation this test exists to catch, silently and
-  // with the suite green. The absolute p95 budget in the test above is what
-  // still binds the cheap arm; if that budget is ever raised, this ratio's
+  // measured median bands, a compound regression of >=16% in the cheap arm
+  // (4.88/4.2 = 1.16) pulls the mutation's BEST case back under R=4.2, and ~24%
+  // (5.19/4.2 = 1.24) pulls a MEAN mutated run there, so a cheap-arm regression
+  // of that size is enough to mask the very mutation this test exists to catch,
+  // silently and with the suite green. The absolute p95 budget in the test above
+  // is what still binds the cheap arm; if that budget is ever raised, this ratio's
   // masking window widens with it, and the two must be re-argued together.
-  it('SessionStart costs no more than 4x the cheap PostToolUse arm, on a 200-row registry', () => {
+  it('SessionStart costs no more than 4.2x the cheap PostToolUse arm, on a 200-row registry', () => {
     const reg = path.join(home, '.cc-sessions');
     const now = Math.floor(Date.now() / 1000);
     for (let i = 0; i < 200; i++) {
@@ -646,18 +646,18 @@ describe('the fleet gate and failure polarity', () => {
     const mainTimes: number[] = [];
     for (let i = 0; i < 20; i++) {
       const t0 = process.hrtime.bigint();
-      run({ hook_event_name: 'PostToolUse', tool_name: 'Bash' });
+      run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a-1' });
       cheapTimes.push(Number(process.hrtime.bigint() - t0) / 1e6);
       const t1 = process.hrtime.bigint();
       run({ hook_event_name: 'SessionStart', cwd: tree, source: 'startup' });
       mainTimes.push(Number(process.hrtime.bigint() - t1) / 1e6);
     }
-    const p95 = (xs: number[]): number => {
+    const median = (xs: number[]): number => {
       const s = [...xs].sort((a, b) => a - b);
-      return s[Math.floor(s.length * 0.95) - 1]!;
+      return (s[Math.floor((s.length - 1) / 2)]! + s[Math.floor(s.length / 2)]!) / 2;
     };
-    const ratio = p95(mainTimes) / p95(cheapTimes);
-    expect(ratio).toBeLessThan(4);
+    const ratio = median(mainTimes) / median(cheapTimes);   // ratio-row-reads-the-median (D-3704) (above)
+    expect(ratio).toBeLessThan(4.2);
   });
 });
 
@@ -8131,6 +8131,20 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // (`ccd/ccd` 147 -> 148). `spec:1347`/`plan:3236` trade `:1303-1304`/`:1304` for `:1298` on C's import line
     // (8 -> 8). Against C (196): nothing moved. Headline 196. Measured by diffing the dumped failure sets of the
     // three trees, never retyped. No D-number.
+    // RE-MEASURED at reclaim-entry-safety (run 199, D-3696), S6-R11 (base `5b1c58a8` = origin/main, the tip =
+    // this branch merged onto it). Neither frozen corpus document changed, checked, and README's own entry is
+    // empty at the tip, so nothing was re-pointed and no rule changed. What moved is this branch's insertions
+    // under frozen anchors: the direct-entry guard, +30 lines at `ccd/ccd:11-40` (27169 -> 27199), and the pair
+    // publisher in `deploy/deploy.sh`, +19 (1257 -> 1276: `install_ccd_pair` at `:216-231`, the body's backup at
+    // `:585`, the call at `:647`); `ccd/ccrc`'s +79 lines moved nothing here. The guard's length is the
+    // coordinator's ruling: at +29 lines FACT TWO redded (`spec:100 :13020` anchored by the short token `ccd`
+    // alone), at +30 it holds.
+    // Entered: `plan:3236 ccd/ccd:19`, `plan:3240 ccd/ccd:12032-12034`, `spec:1250 ccd/ccd:19`, `spec:91
+    // deploy/deploy.sh:570`, `spec:91 deploy/deploy.sh:648`. Left: `plan:2747 ccd/ccd:3940-3951`, `plan:3184
+    // ccd/ccd:4006-4035`, `plan:3240 ccd/ccd:3050-3070`, `spec:2230 ccd/ccd:4006-4035` — each a coincidental pass
+    // on the shift, not a repaired anchor; Task 11 still owns the debt. `ccd/ccd` 148 -> 147, `deploy/deploy.sh`
+    // 2 -> 4, no other key moves. Headline 196 -> 197. Measured by diffing the dumped failure sets of the two
+    // trees, never retyped. No D-number.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
       // RE-DERIVED on the FOURTH merge with main (`ad3d2fbc`, #136), 145 -> 144,
       // and DOWN is the direction that needs an argument rather than a shrug.
@@ -8255,7 +8269,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // RE-MEASURED against the tree, never adjusted to keep a number green;
       // no rule changed, so no D-number (S6-R11).
       // 148 at the composition onto `0ffa07f3` (M 147, C 149): the note above the map names the movers.
-      'ccd/ccd': 148,
+      'ccd/ccd': 147,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8265,7 +8279,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   "the only survivor" among its `- Modify:` bullets — below its referent.
       //   Frozen, like the rest of that paragraph; the two spec anchors into the
       //   same file were re-pointed by content (`:639`→`:648`, `:561`→`:570`).
-      'deploy/deploy.sh': 2,
+      'deploy/deploy.sh': 4,
       // `ccd/ccrc` 5 -> 4, RE-MEASURED on the centralised-update-management
       // branch (Tasks 9-13, part B): `ccd/ccrc` grew 12,559 -> 12,851 lines
       // (+292, `wc -l`) and NEITHER corpus document changed (spec and plan
@@ -8546,7 +8560,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // (`ccd/ccd`); the note above the map names every mover and its one cause.
     // -> 196 at the composition onto `a742eb6a` (S6-R11): N's 195 + 1 (`ccd/ccd`, C's platform helpers), equal to
     // C's 196, because N's one mover (`ccd/ccrc:5217`) already fails in C; the note above the map names them.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(196);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(197);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8718,6 +8732,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // C's +179). In the composed tree `:5217` still fails (it holds a `done`), so the set is both sides' 19, with
     // that entry once. The dump of the composed tree equals N's and C's, in the instrument's order. Measured,
     // never retyped. No D-number.
+    // RE-MEASURED at reclaim-entry-safety (run 199, D-3696), S6-R11 (base `5b1c58a8` = origin/main, the tip =
+    // this branch merged onto it). Neither frozen corpus document changed, checked, and README's own entry is
+    // empty at the tip, so nothing was re-pointed and no rule changed. What moved is this branch's insertions
+    // under frozen anchors: the direct-entry guard, +30 lines at `ccd/ccd:11-40` (27169 -> 27199), and the pair
+    // publisher in `deploy/deploy.sh`, +19 (1257 -> 1276: `install_ccd_pair` at `:216-231`, the body's backup at
+    // `:585`, the call at `:647`); `ccd/ccrc`'s +79 lines moved nothing here. The guard's length is the
+    // coordinator's ruling: at +29 lines FACT TWO redded (`spec:100 :13020` anchored by the short token `ccd`
+    // alone), at +30 it holds.
+    // **Files:** 19 -> 18. Left: `ccd/ccd:3940-3951` (`plan:2747`), a coincidental pass on the shift, not a
+    // repaired anchor. Nothing entered. Measured by diffing the dumped failure sets of the two trees, never
+    // retyped. No D-number.
     expect(set, 'a **Files:** reference stopped naming what its clause quotes — re-measure (D-2849)')
       .toEqual([
         // RE-MEASURED at the tree this ships in (fix round 4). The citation
@@ -8741,7 +8766,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:4045',
         'ccd/ccd:4029',
         'ccd/ccd:4047',
-        'ccd/ccd:3940-3951',
         'ccd/ccd:5828-5830',
         'ccd/ccd:1330-1333',
         'ccd/session-hook.sh:1098',
@@ -9159,6 +9183,18 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `:4642-4653` enter and `:13673`, `:2793`, `:3050` x2, `:5819-5823`, `:5828-5830` leave on M's lines. 59, in
     // the instrument's order. Measured by diffing the dumped failure sets of the three trees, never retyped.
     // No D-number.
+    // RE-MEASURED at reclaim-entry-safety (run 199, D-3696), S6-R11 (base `5b1c58a8` = origin/main, the tip =
+    // this branch merged onto it). Neither frozen corpus document changed, checked, and README's own entry is
+    // empty at the tip, so nothing was re-pointed and no rule changed. What moved is this branch's insertions
+    // under frozen anchors: the direct-entry guard, +30 lines at `ccd/ccd:11-40` (27169 -> 27199), and the pair
+    // publisher in `deploy/deploy.sh`, +19 (1257 -> 1276: `install_ccd_pair` at `:216-231`, the body's backup at
+    // `:585`, the call at `:647`); `ccd/ccrc`'s +79 lines moved nothing here. The guard's length is the
+    // coordinator's ruling: at +29 lines FACT TWO redded (`spec:100 :13020` anchored by the short token `ccd`
+    // alone), at +30 it holds.
+    // `|` rows: 59 -> 52. Entered: `ccd/ccd:13673`, `ccd/ccd:2793`, `ccd/ccd:5828-5830`. Left:
+    // `ccd/ccd:11665-11670`, `ccd/ccd:11669`, `ccd/ccd:13650-13652`, `ccd/ccd:2433-2439`, `ccd/ccd:3037-3089`,
+    // `ccd/ccd:3038`, `ccd/ccd:3070` x3, `ccd/ccd:5385-5388`. Measured by diffing the dumped failure sets of the
+    // two trees, never retyped. No D-number.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
         // RE-DERIVED on the merge with `f06abdce` (round 7). Both sides of that
@@ -9249,16 +9285,13 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'server/test/single-definition.test.ts:1319-1320',
         'server/test/ccd-ws-reap.test.ts:344',
         'ccd/ccd:13573-13575',
-        'ccd/ccd:3038',
-        'ccd/ccd:3037-3089',
         'ccd/ccd:5797',
         'ccd/ccd:7568',
         'ccd/ccd:11025',
-        'ccd/ccd:11665-11670',
-        'ccd/ccd:11669',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
         'ccd/ccd:13567',
+        'ccd/ccd:13673',
         'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
         'ccd/ccd:19098',
@@ -9266,7 +9299,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:19131',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
-        'ccd/ccd:13650-13652',
         'ccd/ccd:12032-12034',
         'ccd/ccd:5810-5811',
         'ccd/ccd:12032-12034',
@@ -9294,15 +9326,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:2874',
         'ccd/ccd:2874',
         'ccd/session-hook.sh:993',
-        'ccd/ccd:3070',
-        'ccd/ccd:3070',
         'ccd/ccd:2455',
-        'ccd/ccd:2433-2439',
-        'ccd/ccd:3070',
+        'ccd/ccd:2793',
         'ccd/session-hook.sh:802',
         'ccd/ccd:5725',
-        'ccd/ccd:5385-5388',
         'ccd/ccd:4642-4653',
+        'ccd/ccd:5828-5830',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -9416,16 +9445,26 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // movers are absent here because no other pass reaches those sites.
       // Same one cause, the platform helpers' +155 lines in `ccd/ccd`, and
       // nothing is re-pointed. S6-R11, so no D-number.
+      // RE-MEASURED at reclaim-entry-safety (run 199, D-3696), S6-R11 (base `5b1c58a8` = origin/main, the tip =
+      // this branch merged onto it). Neither frozen corpus document changed, checked, and README's own entry is
+      // empty at the tip, so nothing was re-pointed and no rule changed. What moved is this branch's insertions
+      // under frozen anchors: the direct-entry guard, +30 lines at `ccd/ccd:11-40` (27169 -> 27199), and the pair
+      // publisher in `deploy/deploy.sh`, +19 (1257 -> 1276: `install_ccd_pair` at `:216-231`, the body's backup at
+      // `:585`, the call at `:647`); `ccd/ccrc`'s +79 lines moved nothing here. The guard's length is the
+      // coordinator's ruling: at +29 lines FACT TWO redded (`spec:100 :13020` anchored by the short token `ccd`
+      // alone), at +30 it holds.
+      // Twin: 40 -> 35. Entered: `spec:2125 ccd/ccd:13673`. Left: `spec:2124 ccd/ccd:3037-3089`, `spec:2124
+      // ccd/ccd:3038`, `spec:2220 ccd/ccd:3070` x3, `spec:2222 ccd/ccd:5385-5388`. Measured by diffing the dumped
+      // failure sets of the two trees, never retyped. No D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
-        'spec:2124 ccd/ccd:3038',
-        'spec:2124 ccd/ccd:3037-3089',
         'spec:2125 ccd/ccd:5797',
         'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13561',
         'spec:2125 ccd/ccd:13567',
+        'spec:2125 ccd/ccd:13673',
         'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
         'spec:2125 ccd/ccd:19098',
@@ -9451,11 +9490,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',
-        'spec:2220 ccd/ccd:3070',
-        'spec:2220 ccd/ccd:3070',
-        'spec:2220 ccd/ccd:3070',
         'spec:2222 ccd/ccd:5725',
-        'spec:2222 ccd/ccd:5385-5388',
       ]);
   });
 

@@ -490,6 +490,10 @@ export interface FleetSession {
    * `none`. No `FLEET_PROTO` bump.
    */
   readonly child: ChildMark;
+
+  /** Where this workspace was RELEASED from, or `null` — `ReleasedFrom`, at the end of this file, carries the
+   *  contract; `releasedFromOf` there is the field's one reader. */
+  readonly releasedFrom: ReleasedFrom | null;
 }
 
 /**
@@ -3039,6 +3043,7 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       boardProject: optStr(o, 'boardProject'),
       route: reviveRoute(o, 'route'),
       child: reviveChildMark(o, 'child'),
+      releasedFrom: reviveReleasedFrom(o, 'releasedFrom'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
@@ -4014,14 +4019,14 @@ export interface NotifyEvent {
    *  switches on three members, so a fourth arrived typed as one of the three
    *  it is not.
    *
-   *  `coord` is a change to the COORDINATION CONFIG itself — a cap raised or
-   *  lowered — and it is a seventh member rather than a reuse of `run` because
-   *  there is no run: `recordRunEvent` writes `fromState === toState` and
-   *  `pushNewRuns` skips exactly those rows, so an attribution row would land
-   *  in `run_events` and be seen by nobody (D-1163). Additive: an older client
-   *  degrades it to `unknown` through `reviveNotifyEvent`, which is the
-   *  degradation this union was given `unknown` for. */
-  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'unknown';
+   *  `coord` is a change to the COORDINATION CONFIG itself — a cap raised or lowered — and it
+   *  is a seventh member rather than a reuse of `run` because there is no run: `recordRunEvent`
+   *  writes `fromState === toState` and `pushNewRuns` skips exactly those rows, so an
+   *  attribution row would land in `run_events` and be seen by nobody (D-1163). Additive: an
+   *  older client degrades it to `unknown` through `reviveNotifyEvent`, which is the
+   *  degradation this union was given `unknown` for. `update` is a move the update dispatcher
+   *  leased (wave 8 item A) — about no session and no run, recorded and never pushed. */
+  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'unknown';
   sessionId: string; title: string; body: string;
   /**
    * WHICH RUN this notification is about, or `null` when it is about none.
@@ -4060,7 +4065,7 @@ export interface CatchUp { epoch: string; seq: number; resync: boolean; events: 
 /** The recognised `NotifyEvent.kind` tokens. Kept private; the door in is
  *  `isNotifyKind` below, the same split `PR_PHASES`/`isPrPhase` use and for
  *  the identical reason (that function's own docstring has the argument). */
-const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'unknown'];
+const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'unknown'];
 
 /**
  * Use THIS, never `NOTIFY_KINDS.includes(x as NotifyEvent['kind'])` — the
@@ -5496,7 +5501,7 @@ export type MailGate =
   | 'registry-absent' | 'registry-unmeasurable'
   | 'tmux-gone' | 'session-dead' | 'tmux-unknown'
   | 'pending-ask' | 'no-pane' | 'no-config-dir'
-  | 'not-idle' | 'not-quiet';
+  | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable';
 
 /** Total, so a refusal path added to `sweepMail` without a member here is a
  *  TS2739 rather than a silent hole — the `RUN_REFUSE_CODE_MAP` shape, and the
@@ -5506,7 +5511,7 @@ const MAIL_GATE_MAP: Record<MailGate, true> = {
   'registry-absent': true, 'registry-unmeasurable': true,
   'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
-  'not-idle': true, 'not-quiet': true,
+  'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true,
 };
 export const MAIL_GATES: readonly MailGate[] = Object.keys(MAIL_GATE_MAP) as MailGate[];
 
@@ -8735,6 +8740,64 @@ export function isTagFileRead(v: unknown): v is TagFileRead {
  *  one word. `server/src/update/resolve.ts` re-exports it, so W2's importers keep their path. */
 export const UPDATE_GATE_CAP = 'update-gate';
 
+/**
+ * `FleetSession.releasedFrom` — the run a WORKSPACE was released from (workspace lifecycle spec §5.1), which is
+ * what puts its row in its card's `Released (N)` fold. The server writes it once, in `assembleFleet`'s row
+ * literal, from the pure `releasedFrom` decision (`server/src/coord/released.ts`); nothing else computes it.
+ *
+ * Non-null only when the row is a workspace, carries no hold, is not archived, its NEWEST run as `sessionId` is
+ * terminal, no non-terminal run names it as `sessionId`, and no non-terminal run names it as `claimedBy` (a former
+ * worker that now coordinates is not released).
+ *
+ * `null` collapses THREE conditions, deliberately: not released; this server did not decide (an older peer, or a
+ * snapshot from a build predating the field); and this server could not decide (its `coord.db` read failed this
+ * tick, or the newest run carried no readable close time). A reader does the identical thing with all three —
+ * the row renders where it always did — and none may branch on which it was: that distinction is not on the
+ * wire. `boardProject` makes the same trade for the same reason.
+ *
+ * The wire word is not "released": `released` already names an `AskState` and a `ClaimState` with other
+ * meanings, so the word appears only as the fold's label.
+ *
+ *   - `runId`, `program`, `claimedBy`, `closedAt` — the newest run's own columns; `closedAt` is epoch MS.
+ *   - `programTitle` — `programs.title`, `null` only if the programme row could not be joined.
+ *   - `child` — the registry's CCR-15 child reading (`FleetSession.child`) is `child` or `unreadable`. An
+ *     unreadable marker reads as a child, the direction that defers: "Archive all" skips children, which leave
+ *     through CCR-15's own reclamation.
+ *
+ * ADDITIVE; `FLEET_PROTO` is not bumped. The LIVE `fleet` frame is CAST, not revived (`pwa/src/stores/fleet.ts`'s
+ * `asFleetMsg`), so a row from an older server has no key at all — read it ONLY through `releasedFromOf`.
+ */
+export interface ReleasedFrom {
+  readonly runId: number;
+  readonly program: string;
+  readonly programTitle: string | null;
+  readonly claimedBy: string | null;
+  readonly closedAt: number;
+  readonly child: boolean;
+}
+
+/** THE ONE READER of `FleetSession.releasedFrom`. `undefined` (a live frame from a server predating the field)
+ *  reads exactly as `null`. */
+export function releasedFromOf(s: FleetSession): ReleasedFrom | null {
+  return s.releasedFrom ?? null;
+}
+
+/** `FleetSession.releasedFrom`'s persistence contract: absent or null → `null`. A present value this build cannot
+ *  read ALSO revives as `null`, rather than rejecting the whole session the way `child` does — here the
+ *  degrade is the safe direction, since `null` leaves the row at the top level of its card, where it rendered
+ *  before this field existed. */
+function reviveReleasedFrom(o: RawObj, k: string): ReleasedFrom | null {
+  const v = o[k];
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const r = v as RawObj;
+  const { runId, program, programTitle, claimedBy, closedAt, child } = r;
+  if (!isPositiveDecimalSafeInteger(runId) || typeof program !== 'string') return null;
+  if (programTitle !== null && typeof programTitle !== 'string') return null;
+  if (claimedBy !== null && typeof claimedBy !== 'string') return null;
+  if (!isPositiveDecimalSafeInteger(closedAt) || typeof child !== 'boolean') return null;
+  return { runId, program, programTitle, claimedBy, closedAt, child };
+}
+
 /** What a `~/.ccrc/update.json` text says about a run IN FLIGHT (design
  *  2026-09-20 §10). Two callers ask it: the agent's `update` op, before it spawns
  *  (D-3371), and the server-role local spawn
@@ -8787,7 +8850,7 @@ export function inFlightReport(text: string): InFlightReport | null {
  *  auto) and `waiting-for-fleet` (the order, not a refusal of this node) as a single-node `409`. */
 export const DISPATCH_REFUSALS = [
   'unknown-tag', 'not-newer', 'refused-by-node', 'stamp-unread', 'floor-unread', 'no-detach-cap',
-  'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet',
+  'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet', 'no-bundle',
 ] as const;
 export type DispatchRefusal = (typeof DISPATCH_REFUSALS)[number];
 /** Use THIS, never `DISPATCH_REFUSALS.includes(x as DispatchRefusal)` — `isRunState`'s rule. */
@@ -8837,7 +8900,7 @@ export interface RollbackUpdateBody { nodeId: string; to?: string }
  *  its own busy lease or its own halt, every non-fleet row is skipped `waiting-for-fleet` rather than requested —
  *  a fleet-first move the operator's tap could not reach must not let the server move ahead of it, and a
  *  server-role row's own halt does not trigger this (only a fleet-role row's own busy/halted does). */
-export type MoveSkipWhy = Exclude<DispatchRefusal, 'no-update-gate' | 'no-rollback-cap'> | 'no-desired' | 'busy';
+export type MoveSkipWhy = Exclude<DispatchRefusal, 'no-update-gate' | 'no-rollback-cap' | 'no-bundle'> | 'no-desired' | 'busy';
 export interface MoveSkip { nodeId: string; why: MoveSkipWhy }
 /** §12's `202 {requested}`, plus `skipped`. `requested` is in dispatch order (`compareDispatchOrder`); a single-node
  *  move answers `requested: [nodeId]` and `skipped: []`. A request, not a dispatch: the row shows it as
@@ -8849,6 +8912,31 @@ export interface MoveRequestAnswer { ok: true; requested: string[]; skipped: Mov
  *  (update/dispatch.ts) reads it in JS, the store's `haltingRowSql` in SQL (D-3412), and `sweepPlanFor` decides
  *  the refusal by it. */
 export const PROVENANCE_DETAIL_PREFIX = 'provenance:';
+
+/** Wave 8 item C: a ROLLBACK the node is known to refuse, decidable from the inventory alone, or null. THE one
+ *  spelling: the dispatcher's `moveRefusal` and `planDispatch`'s fleet holds (server/src/update/dispatch.ts) and the
+ *  PWA's release and node rows (pwa/src/fleet/movePlan.ts, pwa/src/screens/SettingsScreen.tsx) all call it.
+ *  `unknown-tag`: no catalogue row, the inventory's one proxy for `cmd_rollback`'s "not a published release" (404).
+ *  `no-bundle`: the catalogue lists no provenance bundle for the tag and the node's install is VERIFIED, so its ccrc
+ *  refuses to DOWNLOAD the tag without --allow-unsigned, which the one-tap never passes. A kept copy of the tag would
+ *  flip with no such question, but the inventory has no kept fact, so this refuses anyway (conservative; the no-bundle
+ *  sentences name `ccrc rollback --to <tag>` on that box, D-3589). Everything else is undecidable here and stays
+ *  permitted: an `unverified` node passes --allow-unsigned itself, an `unknown` one reads only its own marker, a
+ *  yanked release may be a kept copy. `provenance` is required on NodeWire since W6; `undefined` (a pre-W6 server)
+ *  reads as not verified. */
+export function rollbackTargetRefusal(
+  release: { bundleListed: boolean } | undefined, provenance: ProvenanceState | undefined,
+): 'unknown-tag' | 'no-bundle' | null {
+  if (release === undefined) return 'unknown-tag';
+  return release.bundleListed !== true && provenance === 'verified' ? 'no-bundle' : null;
+}
+
+/** Wave 8 item F4: the words a lease settles with when its node reports `done` of the tag and runs it. Spelled
+ *  ONCE: the inventory sweep writes them (server/src/update/inventory.ts) and the PWA recognises them to show a
+ *  finished move as one line (pwa/src/screens/SettingsScreen.tsx). */
+export function settledDoneDetail(tag: string): string {
+  return `done: ${tag}`;
+}
 
 /** Design 2026-09-14: the subject a reviewer's done-claim mail carries (`kind: 'status'`). It is the review run's
  *  sibling of `WAVE_DONE_SUBJECT`, and it is compared by EQUALITY, never as a prefix: `close.ts`'s review rejection

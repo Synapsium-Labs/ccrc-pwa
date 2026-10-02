@@ -669,10 +669,10 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     writeFileSync(join(home, '.cc-sessions', 'alpha.uuid'), 'fixture-uuid\n');
     writeFileSync(join(home, '.cc-sessions', 'coordinator-paused'), 'operator switch\n');
     writeFileSync(join(home, '.cc-sessions', 'mail-disabled'), 'operator switch\n');
-    // The worker stall watch's four switches (spec §9.14): written by nothing in
+    // The worker stall watch's seven switches (spec §9.14, §5): written by nothing in
     // the tree, touched and removed by hand — so uninstall leaves them as it
     // leaves `coordinator-paused` and `mail-disabled`.
-    for (const m of ['mail-gate-strict', 'stall-watch-disabled', 'stall-watch-live', 'stall-watch-escalate']) {
+    for (const m of ['mail-gate-strict', 'stall-watch-disabled', 'stall-watch-live', 'stall-watch-escalate', 'stall-watch-w2-live', 'mail-gate-busy', 'mail-gate-busy-shadow']) {
       writeFileSync(join(home, '.cc-sessions', m), 'operator switch\n');
     }
     const r = runVerb(home, 'uninstall', ['--force']);
@@ -684,7 +684,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} survived`).toBe(false);
     }
     for (const f of ['alpha.uuid', 'coordinator-paused', 'mail-disabled',
-      'mail-gate-strict', 'stall-watch-disabled', 'stall-watch-live', 'stall-watch-escalate']) {
+      'mail-gate-strict', 'stall-watch-disabled', 'stall-watch-live', 'stall-watch-escalate', 'stall-watch-w2-live', 'mail-gate-busy', 'mail-gate-busy-shadow']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} was removed`).toBe(true);
     }
   });
@@ -766,6 +766,36 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);
     expect(existsSync(join(home, 'ccrc-backups', '20250101-000000', 'ccd'))).toBe(true);
     expect(existsSync(join(home, '.tmux.conf'))).toBe(true);
+  });
+
+  it('ccd\'s BODY goes with its launcher, and ~/.local/libexec/ccrc only when that leaves it empty (D-3696)', () => {
+    // The pair: `_inst_bins` publishes the launcher at ~/.local/bin/ccd and the
+    // body at ~/.local/libexec/ccrc/ccd, so an uninstall that removed only the
+    // launcher would strand a 1.7 MB Bash body nothing can start.
+    const body = (home: string): string => join(home, '.local', 'libexec', 'ccrc', 'ccd');
+    const plantBody = (home: string): void => {
+      mkdirSync(join(home, '.local', 'libexec', 'ccrc'), { recursive: true });
+      writeFileSync(body(home), '#!/usr/bin/env bash\n# fixture ccd body\n', { mode: 0o644 });
+    };
+    const empty = mkTmp('ccrc-uninst-body-');
+    plantInstalledBox(empty);
+    plantBody(empty);
+    writeFileSync(join(empty, '.local', 'libexec', 'operator-tool'), '#!/bin/sh\n', { mode: 0o755 });
+    const r = runVerb(empty, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(empty, '.local', 'bin', 'ccd')), 'the launcher survived').toBe(false);
+    expect(existsSync(body(empty)), 'the body survived').toBe(false);
+    expect(existsSync(join(empty, '.local', 'libexec', 'ccrc')), 'an emptied ccrc libexec directory survived').toBe(false);
+    expect(existsSync(join(empty, '.local', 'libexec', 'operator-tool')), 'unrelated libexec content was removed').toBe(true);
+    expect(r.stdout).toMatch(/and ccd's body from \$HOME\/\.local\/libexec\/ccrc; /);
+    // Something of the operator's beside the body keeps the directory.
+    const kept = mkTmp('ccrc-uninst-body-kept-');
+    plantInstalledBox(kept);
+    plantBody(kept);
+    writeFileSync(join(kept, '.local', 'libexec', 'ccrc', 'notes.txt'), 'mine\n');
+    expect(runVerb(kept, 'uninstall').code).toBe(0);
+    expect(existsSync(body(kept)), 'the body survived').toBe(false);
+    expect(readFileSync(join(kept, '.local', 'libexec', 'ccrc', 'notes.txt'), 'utf8'), 'an operator file beside the body was removed').toBe('mine\n');
   });
 
   it('a STAMPED ccd-account-auth is still the bin arm\'s subject, never counted as a wrapper', () => {

@@ -21,6 +21,7 @@ import type { AskRow, CoordStore } from './coord/store.js';
 // placement.ts too: it is the same pure decision, and holding half of it here
 // in L3 is what let the two halves disagree about what the hop is keyed on.
 import { boardPlacement, foldCoordPlacements, type StampLookup } from './coord/placement.js';
+import { foldLastRuns, releasedFrom, type ReleasedLookup } from './coord/released.js';
 // F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
 // windows. It lives in `askwindow.ts` because `watch.ts` (their first
 // reader) imports this module, so the constants could not stay there.
@@ -242,6 +243,32 @@ function readCoordPlacements(coord: CoordStore | undefined, sessionCount: number
     return { ok: true, stampOf: foldCoordPlacements(read.stamps) };
   } catch (err) {
     console.warn(`ccrc-server: coordPlacementStamps failed while computing board placement — ${err instanceof Error ? err.message : String(err)} — boardProject reads null this tick`);
+    return { ok: false };
+  }
+}
+
+/** What `readReleased` hands back: the port when the store answered, or `ok: false` when the READ failed —
+ *  `CoordPlacementsRead`'s shape and reason (D-2875): a failed read must not look like "nothing released". */
+type ReleasedRead = { ok: true; lookup: ReleasedLookup } | { ok: false };
+
+/**
+ * `FleetSession.releasedFrom`'s batched, guarded read (workspace lifecycle spec §5.1) — ONE `lastRunBySession`
+ * call per assembly, beside `readCoordPlacements` and under the same failure contract: `coord` absent (a dark
+ * box, every older test) or an empty registry reads nothing and answers "no runs" for every row; a refusal or a
+ * synchronous `node:sqlite` throw is caught, never thrown out of `assembleFleet`, and answers `{ ok: false }`,
+ * which makes every row's `releasedFrom` null this tick — doubt leaves every row where it was.
+ */
+function readReleased(coord: CoordStore | undefined, sessionIds: readonly string[]): ReleasedRead {
+  if (!coord || sessionIds.length === 0) return { ok: true, lookup: foldLastRuns([], [], []) };
+  try {
+    const read = coord.lastRunBySession(sessionIds);
+    if (!read.ok) {
+      console.warn(`ccrc-server: lastRunBySession refused while computing released rows — ${read.detail} — releasedFrom reads null this tick`);
+      return { ok: false };
+    }
+    return { ok: true, lookup: foldLastRuns(read.last, read.openWorkers, read.openClaimants) };
+  } catch (err) {
+    console.warn(`ccrc-server: lastRunBySession failed while computing released rows — ${err instanceof Error ? err.message : String(err)} — releasedFrom reads null this tick`);
     return { ok: false };
   }
 }
@@ -470,6 +497,11 @@ export async function assembleFleet(
    *  start, on callers that do not carry it, and in every older test — the
    *  registry fallback below covers all three. */
   headBranches?: ReadonlyMap<string, string | null>,
+  /** OUT: the pane pid this assembly read for every ALIVE row, keyed by session id (`null` when tmux answered
+   *  none). A row whose pane is not alive gets no entry. Absent on every caller but `watch.ts`'s `tick()`, which
+   *  hands it to the stall lane as `StallTick.panePids`, so the lane never reads a pid a second time (worker stall
+   *  watch wave 2, M6: slug `tick-hands-the-lane-pids-and-records` (D-3649)). */
+  panePids?: Map<string, number | null>,
 ): Promise<FleetSession[]> {
   const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
   // Task 19 fix round 1, item 3: ONE batched read for the whole assembly,
@@ -482,6 +514,8 @@ export async function assembleFleet(
   // `readCoordPlacements`'s own docstring for why this is batched rather than
   // a per-row query.
   const placements = readCoordPlacements(coord, recs.length);
+  // Workspace lifecycle §5.1: ONE run read for the whole assembly, like the placement read above.
+  const released = readReleased(coord, recs.map((r) => r.id));
   const nowMs = now * 1000;
   return Promise.all(recs.map(async (r): Promise<FleetSession> => {
     // D-309: `hasSession` here deliberately collapses `unknown` into `alive
@@ -511,6 +545,7 @@ export async function assembleFleet(
     if (alive) {
       status = 'idle';
       const pid = await tmux.panePid(r.id);
+      panePids?.set(r.id, pid);
       const cfgDir = configDirFor(cfg, r.wrapper);
       if (pid && cfgDir) {
         // D-115: `readLiveStateMeasured`, not `readLiveState`. The folded read
@@ -782,6 +817,13 @@ export async function assembleFleet(
       // three-way reading of `$REG/<id>.child` (`SessionRecord.child`). A
       // display value on this wire — the bind gate re-reads the registry.
       child: r.child,
+      // Workspace lifecycle §5.1. `child` here is the registry's reading, `unreadable` counted as a child.
+      releasedFrom: released.ok
+        ? releasedFrom({
+          ...released.lookup(r.id), workspace: r.workspace, held: r.held !== null,
+          archived: r.archivedAt !== null, child: r.child.kind !== 'none',
+        })
+        : null,
       bucket: 'idle', bucketSince: null,   // replaced immediately below
     };
     // Computed FROM the assembled session, never from a second copy of the

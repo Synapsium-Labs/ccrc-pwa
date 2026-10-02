@@ -2281,7 +2281,7 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     // split. So the expected shape here is a NAMED LIST rather than one file —
     // and any new holder still fails.
     //
-    // Two of the four are not marker literals at all: `'mail-disabled'` is also
+    // Two of the five are refusal codes, not marker literals: `'mail-disabled'` is also
     // a `RunRefuseCode` member, so `shared/api.ts` (the vocabulary) and
     // `coord/dispatch.ts` (the refusal that uses it) spell the same characters
     // for a different reason. Listing them here is the honest shape — a scan
@@ -2289,7 +2289,7 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes("'mail-disabled'")).map(rel).sort();
     expect(holders).toEqual([
       'server/src/coord/dispatch.ts',   // the refusal CODE
-      'server/src/coord/rundefs.ts',    // the marker literal (definition)
+      'server/src/coord/rundefs.ts', 'server/src/coord/stall.ts', // the marker literal (definition); stall.ts: the hold named for the marker it honours
       'server/src/watch.ts',            // the marker literal (module-local, on purpose)
       'shared/api.ts',                  // the refusal-code vocabulary
     ]);
@@ -3950,7 +3950,7 @@ describe('the update op — its refusal words and its launcher are declared once
 // ── Programme wave 5 (design 2026-09-20 §9/§10): the dispatcher's words and order ──
 // APPENDED after the file's last line: `session-hook.test.ts`'s citation audit
 // cites this file by line, so nothing above may move (R13). No import is
-// added either — the eleven words are stated here as a LITERAL, on purpose (the
+// added either — the twelve words are stated here as a LITERAL, on purpose (the
 // opposite of W2's `SQL_VOCABS`, which imports its arrays): `update-dispatch.test.ts` holds L0's array equal to
 // this same list, and the fingerprint below must find shared/api.ts's array,
 // so a word added on one side alone reds one of the two.
@@ -3964,7 +3964,7 @@ describe('the update op — its refusal words and its launcher are declared once
 describe('the dispatcher refusal words and the dispatch order are declared once, in L0 (programme wave 5)', () => {
   const WORDS = [
     'unknown-tag', 'not-newer', 'refused-by-node', 'stamp-unread', 'floor-unread', 'no-detach-cap',
-    'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet',
+    'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet', 'no-bundle',
   ];
   const alt = `(?:${WORDS.map((w) => w.replace(/-/g, '\\-')).join('|')})`;
   const item = `\\s*['"]${alt}['"]\\s*`;
@@ -4119,5 +4119,108 @@ describe('worker stall watch: the wave-done subject is spelled once (spec §4.2 
 
   it.each(LITERALS)("'%s' is spelled on a code line in %s alone", (lit, home) => {
     expect(ALL.filter((f) => spelling(lit).test(stallCode(f))).map(rel).sort(), `a second '${lit}'`).toEqual([home]);
+  });
+});
+
+// WORKER STALL WATCH, WAVE 2 (design 2026-09-29 §5.2). APPENDED after the last describe, for the reason the wave-1
+// blocks above state: `session-hook.test.ts`'s citation audit cites this file by line. The two self-wake prefixes
+// join the spelled-once set: a second quoted copy is a second classifier (`stallMailClass`'s `self-wake`) in waiting.
+// The needle is quote-anchored at both ends, as ONE_HOME's is, so the update lane's `failed: deadline` prose and a
+// backticked docstring mention are not copies. KNOWN WIDTH: a copy in backticks, or at the head of a longer
+// literal, is not seen.
+describe('the stall watch spells its wave-2 self-wake prefixes once (design 2026-09-29 §5.2)', () => {
+  const quotedW2 = (needle: string): RegExp => {
+    const escaped = needle.replace(/[.*+?^$()|[\]\\{}]/g, (c) => `\\${c}`);
+    return new RegExp(`(['"])${escaped}\\1`);
+  };
+  const ONE_HOME_W2: ReadonlyArray<readonly [string, string]> = [
+    ['orphaned:', 'server/src/coord/stall.ts'],
+    ['failed:', 'server/src/coord/stall.ts'],
+  ];
+
+  it('CONTROL: the needle finds a bare quoted prefix in either quote, never a longer literal or a backticked mention', () => {
+    expect(quotedW2('failed:').test(`x = 'failed:'`)).toBe(true);
+    expect(quotedW2('failed:').test(`x = "failed:"`)).toBe(true);
+    expect(quotedW2('failed:').test(`detail: 'failed: deadline'`)).toBe(false);
+    expect(quotedW2('orphaned:').test('a docstring naming `orphaned:`')).toBe(false);
+  });
+
+  for (const [needle, home] of ONE_HOME_W2) {
+    it(`'${needle}' is a quoted literal in exactly one source file, ${home}`, () => {
+      const holders = ALL.filter((f) => quotedW2(needle).test(readFileSync(f, 'utf8'))).map(rel);
+      expect(holders).toEqual([home]);
+    });
+  }
+});
+
+describe('worker stall watch wave 2: the three new operator-switch markers have no writer in the tree (spec §5)', () => {
+  // Wave 1's describe above, for the three markers wave 2 adds. It is appended, never merged into that one, because
+  // this file is cited by line. SUBSTRING CAVEAT: both halves match with `includes`, and `mail-gate-busy` is a
+  // substring of `mail-gate-busy-shadow`, so the `mail-gate-busy` row counts every holder of EITHER spelling: a
+  // superset. That is sound only while both are spelled in `turnidle.ts` alone (planning departure
+  // `gate-markers-spelled-in-turnidle-only` (D-3607)), and the CONTROL row states the superset so nobody reads the row as more.
+  // `stall-watch-live` is not a substring of `stall-watch-w2-live`, so wave 1's row is untouched by this one.
+  const MARKERS: [string, string][] = [
+    ['stall-watch-w2-live', 'server/src/coord/stall.ts'],
+    ['mail-gate-busy-shadow', 'server/src/turnidle.ts'],
+    ['mail-gate-busy', 'server/src/turnidle.ts'],
+  ];
+
+  it('CONTROL: the match is a substring — a line spelling mail-gate-busy-shadow also holds mail-gate-busy, never the reverse', () => {
+    expect(stallCodeText("export const MAIL_GATE_BUSY_SHADOW_MARKER = 'mail-gate-busy-shadow';").includes('mail-gate-busy')).toBe(true);
+    expect(stallCodeText("export const MAIL_GATE_BUSY_MARKER = 'mail-gate-busy';").includes('mail-gate-busy-shadow')).toBe(false);
+    expect('stall-watch-w2-live'.includes('stall-watch-live')).toBe(false);
+  });
+
+  it.each(MARKERS)('%s: no shell line names it, and its one TS holder is its definer (%s)', (name, definer) => {
+    expect(holdersOf(name), `${name}: a line of shell names it — a writer, or a reader this design never had`).toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(name)).map(rel).sort(),
+      `${name}: spelled on a code line outside ${definer}`).toEqual([definer]);
+    expect(stallCode(path.join(ccrcRoot, definer)), `${definer} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+});
+
+describe('worker stall watch wave 2: the self-wake prefixes are spelled once (spec §5.2)', () => {
+  // `STALL_ORPHANED_PREFIX` and `STALL_FAILED_PREFIX`: `stallMailClass` reads an `operator` mail whose subject starts
+  // with either as `self-wake` (recorded, never pushed), so a second literal is a second rule. The anchor is the
+  // wave-done describe's, restated because that one's helpers are scoped to its own describe. QUOTE-ANCHORED, and at
+  // the open for a template; code lines only. KNOWN WIDTH: a literal assembled from pieces is not seen.
+  const LITERALS: [string, string][] = [
+    ['orphaned:', 'server/src/coord/stall.ts'],
+    ['failed:', 'server/src/coord/stall.ts'],
+  ];
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const spelling = (lit: string): RegExp => new RegExp(`'${esc(lit)}'|"${esc(lit)}"|\`${esc(lit)}`);
+
+  it('CONTROL: the anchor sees a constant and a template head, and not a longer neighbour', () => {
+    expect(spelling('failed:').test("export const STALL_FAILED_PREFIX = 'failed:';")).toBe(true);
+    expect(spelling('orphaned:').test('const s = `orphaned: ${n} background task(s)`;')).toBe(true);
+    expect(spelling('failed:').test("const d = 'failed: provenance:';")).toBe(false);
+    expect(spelling('failed:').test("const t = 'not failed:';")).toBe(false);
+  });
+
+  it.each(LITERALS)("'%s' is spelled on a code line in %s alone", (lit, home) => {
+    expect(ALL.filter((f) => spelling(lit).test(stallCode(f))).map(rel).sort(), `a second '${lit}'`).toEqual([home]);
+  });
+});
+
+describe('one releasedFromOf (workspace lifecycle wave 1)', () => {
+  // `FleetSession.releasedFrom` has ONE reader, `releasedFromOf` in `shared/api.ts`. The live `fleet` frame is
+  // CAST, not revived, so a raw property read anywhere else meets `undefined` from a server older than the field,
+  // where the accessor answers `null` — the two-readers drift this suite exists to forbid. Comment LINES are
+  // blanked first (the field is NAMED in prose across the tree), line by line — `blankComments`' shape above. A
+  // block-comment regex is NOT safe here: a `/*` inside a string or a `//` line (`server.ts`'s `.cc-limits/*.json`)
+  // opens a "comment" that swallows hundreds of lines of real code, the `/ws/fleet` handler among them (measured).
+  const code = (f: string): string => readFileSync(f, 'utf8')
+    .split('\n').map((l) => (/^\s*(\*|\/\*|\/\/)/.test(l) ? '' : l)).join('\n');
+  const READ = /\.releasedFrom\b/;
+
+  it('is read as a property in exactly one file, and that file is shared/api.ts', () => {
+    expect(ALL.filter((f) => READ.test(code(f))).map(rel)).toEqual(['shared/api.ts']);
+  });
+
+  it('the scan sees the one read it licenses (a blanker that ate code would pass the pin above vacuously)', () => {
+    expect(code(path.join(ccrcRoot, 'shared', 'api.ts'))).toMatch(/return s\.releasedFrom \?\? null;/);
   });
 });

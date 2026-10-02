@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { groupFleet } from '../src/fleet/groupFleet';
-import type { FleetSession } from '../../shared/api';
+import { groupFleet, releasedByProgramme } from '../src/fleet/groupFleet';
+import type { FleetSession, ReleasedFrom } from '../../shared/api';
 
 const s = (over: Partial<FleetSession>): FleetSession => ({
   id: 'x', wrapper: 'claude2', home: 'claude2', project: 'p', workdir: '/p',
@@ -11,7 +11,7 @@ const s = (over: Partial<FleetSession>): FleetSession => ({
   ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
 });
 
 describe('groupFleet', () => {
@@ -430,5 +430,146 @@ describe('the grouping key is boardHome (spec §6, Task 4)', () => {
     const own = g.find((x) => x.project === 'custom-tools')!;
     expect(own.elsewhere).toEqual([{ project: 'intake', count: 2 }, { project: 'data', count: 1 }]);
     expect(g.find((x) => x.project === 'intake')!.elsewhere).toEqual([]);
+  });
+});
+
+describe('the Released sub-fold (workspace lifecycle spec §5.1)', () => {
+  const rel = (runId: number, closedAt: number, program = 'lifecycle', over: Partial<ReleasedFrom> = {}): ReleasedFrom =>
+    ({ runId, program, programTitle: 'Workspace lifecycle', claimedBy: 'coord', closedAt, child: false, ...over });
+
+  it('folds a released row out of the live list, into `released`, never dropping it', () => {
+    const g = groupFleet([
+      s({ id: 'live' }),
+      s({ id: 'done', workspace: 'w', releasedFrom: rel(1, 100) }),
+    ], [])[0]!;
+    expect(g.sessions.map((m) => m.id)).toEqual(['live']);
+    expect(g.released.map((m) => m.id)).toEqual(['done']);
+  });
+
+  // A DEAD stranded row stays too: the `stranded` count skips it, but a marker the row still carries is the
+  // operator's to see, and folding it would hide it a second time.
+  it.each([
+    ['an attention', { bucket: 'attention' }],
+    ['a working', { bucket: 'working' }],
+    ['a live stranded', { stranded: { at: 1, reason: 'no lane' } }],
+    ['a dead stranded', { status: 'dead', bucket: 'dead', stranded: { at: 1, reason: 'no lane' } }],
+  ] as const)('never folds %s row — the fold cannot hide what needs a person', (_label, over) => {
+    const g = groupFleet([s({ id: 'r', releasedFrom: rel(1, 100), ...(over as Partial<FleetSession>) })], [])[0]!;
+    expect(g.released).toEqual([]);
+    expect(g.sessions.map((m) => m.id)).toEqual(['r']);
+  });
+
+  it('folds an idle, a done and a dead released row alike', () => {
+    const g = groupFleet([
+      s({ id: 'a', bucket: 'idle', releasedFrom: rel(1, 100) }),
+      s({ id: 'b', bucket: 'done', releasedFrom: rel(2, 200) }),
+      s({ id: 'c', status: 'dead', bucket: 'dead', releasedFrom: rel(3, 300) }),
+    ], [])[0]!;
+    expect(g.released.map((m) => m.id)).toEqual(['c', 'b', 'a']);   // newest close first
+    expect(g.sessions).toEqual([]);
+  });
+
+  it('an archived row stays in `archived`, never in both folds', () => {
+    const g = groupFleet([s({ id: 'x', bucket: 'archived', archivedAt: 5, releasedFrom: rel(1, 100) })], [])[0]!;
+    expect(g.archived.map((m) => m.id)).toEqual(['x']);
+    expect(g.released).toEqual([]);
+  });
+
+  it('a row from a server older than the field (no key at all) stays live', () => {
+    const { releasedFrom: _absent, ...old } = s({ id: 'old' });
+    const g = groupFleet([old as FleetSession], [])[0]!;
+    expect(g.sessions.map((m) => m.id)).toEqual(['old']);
+    expect(g.released).toEqual([]);
+  });
+
+  it('a folded row never lifts its card: cards order by their first VISIBLE row', () => {
+    const g = groupFleet([
+      s({ id: 'r', project: 'alpha', bucket: 'done', releasedFrom: rel(1, 100) }),   // done outranks working
+      s({ id: 'w', project: 'beta', bucket: 'working' }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['beta', 'alpha']);
+  });
+
+  it('a released-only card still ranks above an archived-only card', () => {
+    // Both cards' only rows are folded; the released one was the more urgent before the fold and must stay so.
+    const g = groupFleet([
+      s({ id: 'a', project: 'alpha', status: 'dead', bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'r', project: 'beta', bucket: 'done', releasedFrom: rel(1, 100) }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['beta', 'alpha']);
+  });
+
+  it('a released DEAD-only card ranks above an archived-only card, though sortFleet alone ranks dead below archived', () => {
+    // Only a RELEASED dead row is lifted past archived (the fold's own rule); `sortFleet` puts dead (6) below archived (5).
+    const g = groupFleet([
+      s({ id: 'a', project: 'B', status: 'dead', bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'd', project: 'A', status: 'dead', bucket: 'dead', releasedFrom: rel(1, 100) }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['A', 'B']);
+    expect(g[0]!.released.map((m) => m.id)).toEqual(['d']);
+  });
+
+  it('a STRANDED released dead row is not in the fold, so its card keeps RANK\'s place below an archived-only card', () => {
+    // The strand marker keeps the row out of the fold (`inReleasedFold`), so it is an unfolded dead row: visible in
+    // `sessions`, and in part 4 of the order below archived (5 above dead 6), whatever `releasedFrom` says.
+    const g = groupFleet([
+      s({ id: 'd', project: 'A', status: 'dead', bucket: 'dead', stranded: { at: 1, reason: 'no lane' }, releasedFrom: rel(1, 100) }),
+      s({ id: 'a', project: 'B', status: 'dead', bucket: 'archived', archivedAt: 5 }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['B', 'A']);
+    expect(g[1]!.released).toEqual([]);
+    expect(g[1]!.sessions.map((m) => m.id)).toEqual(['d']);
+  });
+
+  it('an UNRELEASED dead row keeps its rank below archived: the lift is for released rows only', () => {
+    // Neither card holds a released row, so the fold must not reorder them: archived (5) outranks dead (6) in sortFleet.
+    const g = groupFleet([
+      s({ id: 'd', project: 'dead-card', status: 'dead', bucket: 'dead' }),
+      s({ id: 'a', project: 'arch-card', status: 'dead', bucket: 'archived', archivedAt: 5 }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['arch-card', 'dead-card']);
+  });
+
+  it('released rows count toward unseen, and toward neither busy nor pin while a live row exists', () => {
+    const g = groupFleet([
+      s({ id: 'live', home: 'claude2', bucket: 'idle' }),
+      s({ id: 'r', home: 'claude-b', bucket: 'done', bucketSince: 50, releasedFrom: rel(1, 100) }),
+    ], [])[0]!;
+    expect(g.unseen).toBe(1);                                           // the `done` released row
+    expect(g.busy).toBe(0);
+    expect(g.pin).toEqual({ state: 'shared', home: 'claude2' });
+  });
+});
+
+describe('releasedByProgramme', () => {
+  const rel = (runId: number, closedAt: number, program: string, programTitle: string | null = null): ReleasedFrom =>
+    ({ runId, program, programTitle, claimedBy: 'coord', closedAt, child: false });
+
+  it('groups by programme; groups and rows run newest close first', () => {
+    const out = releasedByProgramme([
+      s({ id: 'a1', releasedFrom: rel(1, 100, 'alpha', 'Alpha') }),
+      s({ id: 'b1', releasedFrom: rel(2, 300, 'beta') }),
+      s({ id: 'a2', releasedFrom: rel(3, 200, 'alpha', 'Alpha') }),
+    ]);
+    expect(out.map((g) => [g.program, g.title, g.sessions.map((m) => m.id)])).toEqual([
+      ['beta', null, ['b1']],
+      ['alpha', 'Alpha', ['a2', 'a1']],
+    ]);
+  });
+
+  it('takes a title from any row of the programme that knew it', () => {
+    const out = releasedByProgramme([
+      s({ id: 'a1', releasedFrom: rel(1, 200, 'alpha', null) }),
+      s({ id: 'a2', releasedFrom: rel(2, 100, 'alpha', 'Alpha') }),
+    ]);
+    expect(out[0]!.title).toBe('Alpha');
+  });
+
+  it('breaks a close-time tie by session id, so the order is total', () => {
+    const out = releasedByProgramme([
+      s({ id: 'zz', releasedFrom: rel(1, 100, 'alpha') }),
+      s({ id: 'aa', releasedFrom: rel(2, 100, 'alpha') }),
+    ]);
+    expect(out[0]!.sessions.map((m) => m.id)).toEqual(['aa', 'zz']);
   });
 });

@@ -3002,6 +3002,23 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   };
   const authLine = (out: string): string => lineFor(out, 'auth') ?? '';
 
+  // Wave 8 item D (decision D) correction: `healthy()`'s exposure file carries
+  // CCRC_AUTH=on (`writeExposureEnv`, :769-790) — under the fix, `_check_auth`
+  // reads the flag through `_box_unit_env`, which honours that file, so every
+  // case below that expected the gate OFF while building on `healthy()` alone
+  // was passing at main only on the live defect: the exposure file's
+  // CCRC_AUTH=on did not arm the gate. `unexposedBox` is `unexposed()`'s own
+  // recipe (the update-exposure describe below, :7145) copied here so a
+  // "gate OFF" case is built on a box that really is unexposed.
+  const unexposedBox = (prefix: string, env = 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n'): string => {
+    const home = healthy(prefix);
+    rmSync(join(home, '.ccrc', 'exposure.env'), { force: true });
+    rmSync(join(home, '.ccrc', 'Caddyfile'), { force: true });
+    rmSync(sysCaddyfile(home), { force: true });
+    writeCcrcEnv(home, env);
+    return home;
+  };
+
   it('PASSES a box with no passphrase and the gate off — a fresh install ends GREEN', () => {
     // ── OPERATOR RULING (Task 9 review), amending the plan's own text ─────
     // This shipped as a WARN, faithfully to the plan. The operator overruled
@@ -3011,7 +3028,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // warnings that matter. The state is a fact about a box configured the way
     // the project ships it (`rc`'s rule), and the arming instructions ride the
     // DETAIL as next-steps text instead of a remedy.
-    const home = healthy('ccrc-doctor-auth-none-');
+    const home = unexposedBox('ccrc-doctor-auth-none-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
     const r = runDoctor(home);
     expect(authLine(r.stdout)).toMatch(/^PASS auth: no passphrase file at .*\/\.ccrc\/auth\.scrypt/);
@@ -3031,7 +3048,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // it at boot, because behind `tailscale serve` it never learns the
     // hostname it is reached under. An operator who arms the flag from this
     // line alone would find out one tap at a time.
-    const home = healthy('ccrc-doctor-auth-rpid-');
+    const home = unexposedBox('ccrc-doctor-auth-rpid-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
     const line = authLine(runDoctor(home).stdout);
     expect(line).toContain('CCRC_AUTH=on');
@@ -3070,7 +3087,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // legitimate state (`rc`'s rule — a doctor that WARNed here would be
     // asserting a preference). The detail is what stops the line reading as
     // "we are protected".
-    const home = healthy('ccrc-doctor-auth-unarmed-ok-');
+    const home = unexposedBox('ccrc-doctor-auth-unarmed-ok-');
     const r = runDoctor(home);
     expect(authLine(r.stdout)).toMatch(/^PASS auth: .*holds a usable passphrase/);
     expect(authLine(r.stdout)).toMatch(/the gate is OFF \(CCRC_AUTH is not "on"/);
@@ -3078,13 +3095,13 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     expect(r.code).toBe(0);
   });
 
-  it('reads the flag from ccrc.env and NOT from the shell it was run in', () => {
-    // The server's environment comes from `ccrc.service`'s `EnvironmentFile=`,
-    // i.e. from `~/.ccrc/ccrc.env`. An exported `CCRC_AUTH` in the operator's
-    // own shell arms nothing, and a check that believed it would report a box
-    // that does not exist — here, a FAIL about a fail-shut gate on a box whose
-    // gate is off.
-    const home = healthy('ccrc-doctor-auth-env-shell-');
+  it('reads the flag from the unit\'s env files and NOT from the shell it was run in', () => {
+    // The server's environment comes from `ccrc.service`'s `EnvironmentFile=`
+    // lines, i.e. from `~/.ccrc/ccrc.env` then the exposure file. An exported
+    // `CCRC_AUTH` in the operator's own shell arms nothing, and a check that
+    // believed it would report a box that does not exist — here, a FAIL about
+    // a fail-shut gate on a box whose gate is off.
+    const home = unexposedBox('ccrc-doctor-auth-env-shell-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
     const r = runDoctor(home, ['doctor'], { CCRC_AUTH: 'on' });
     expect(authLine(r.stdout)).toMatch(/^PASS auth: no passphrase file/);
@@ -3095,7 +3112,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // `config.ts:331` is `env.CCRC_AUTH === 'on'` and nothing else. A check
     // laxer OR stricter than the reader it describes reports a box nobody is
     // running — `_check_config` pins the same rule for CCRC_FLEET.
-    const home = healthy('ccrc-doctor-auth-flagcase-');
+    const home = unexposedBox('ccrc-doctor-auth-flagcase-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
     for (const v of ['ON', 'true', 'yes', 'on ', '"on"x']) {
       armGate(home, v);
@@ -3175,7 +3192,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   it('FAILS on the same file with the gate OFF too — a boot refusal waiting to happen', () => {
     // Same class, different tense, and the tense is in the detail: the box
     // works today, and the one command that arms it takes the server down.
-    const home = healthy('ccrc-doctor-auth-garbled-off-');
+    const home = unexposedBox('ccrc-doctor-auth-garbled-off-');
     writeAuthSecret(home, 'not a secret line at all\n');
     const r = runDoctor(home);
     expect(authLine(r.stdout)).toMatch(/^FAIL auth: /);
@@ -3346,12 +3363,178 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // The other side of that branch, exactly as `config` draws it: "no
     // ccrc.service" alone is also a box that has installed nothing, and a dev
     // checkout DOES run a server.
-    const home = healthy('ccrc-doctor-auth-nounits-');
+    const home = unexposedBox('ccrc-doctor-auth-nounits-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
     rmSync(unitDirOf(home), { recursive: true, force: true });
     const r = runDoctor(home);
     expect(authLine(r.stdout)).toMatch(/^PASS auth: no passphrase file/);
     expect(r.stdout).not.toMatch(/^SKIP auth: /m);
+  });
+
+  // ── wave 8 item D (decision D): the flag as ccrc.service actually gets it ─
+  // The unit carries TWO EnvironmentFile lines, ccrc.env then the
+  // exposure file, and the later one wins by PRESENCE — `_box_unit_env`,
+  // shared with `_check_update-exposure` and install's gate line. D4–D6
+  // below are D-3596's unreadable-exposure-file cases.
+
+  it('D1: the exposure file OVERRIDES ccrc.env — CCRC_AUTH=off there does not disarm a box `ccrc expose` armed (the live defect this wave fixes)', () => {
+    const home = healthy('ccrc-doctor-auth-exposure-wins-');
+    writeCcrcEnv(home, `${readFileSync(join(home, '.ccrc', 'ccrc.env'), 'utf8')}CCRC_AUTH=off\n`);
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toMatch(/^PASS auth: CCRC_AUTH=on/);
+    expect(authLine(r.stdout)).toContain(join(home, '.ccrc', 'exposure.env'));
+    expect(authLine(r.stdout)).toMatch(/logins are gated/);
+    expect(r.code).toBe(0);
+  });
+
+  it('D2: a present-but-empty CCRC_AUTH= in the exposure file wins over ccrc.env=on — gate OFF, and the arming words name the file that decides it', () => {
+    const home = unexposedBox('ccrc-doctor-auth-bare-exp-',
+      'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_AUTH=on\n');
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    writeFileSync(join(home, '.ccrc', 'exposure.env'), '# fixture — a hand-edited bare line\nCCRC_AUTH=\n');
+    const r = runDoctor(home);
+    const exp = join(home, '.ccrc', 'exposure.env');
+    expect(authLine(r.stdout)).toMatch(/^PASS auth: /);
+    expect(authLine(r.stdout)).toMatch(/the gate is OFF/);
+    expect(authLine(r.stdout)).toContain(exp);
+    expect(authLine(r.stdout)).toContain(`set CCRC_AUTH=on in ${exp}, which overrides`);
+    expect(remedyFor(r.stdout, 'auth')).toBe('');
+  });
+
+  it('D3: an unexposed box with CCRC_AUTH=on in ccrc.env and no passphrase — the fail-shut FAIL, unaffected by item D', () => {
+    const home = unexposedBox('ccrc-doctor-auth-d3-',
+      'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_AUTH=on\n');
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    const r = runDoctor(home);
+    expect(authLine(r.stdout)).toBe(
+      `FAIL auth: CCRC_AUTH=on in ${join(home, '.ccrc', 'ccrc.env')} and there is NO passphrase file at `
+      + `${join(home, '.ccrc', 'auth.scrypt')} — the gate is armed and failing SHUT: every route answers `
+      + '401 and no login can succeed');
+    expect(r.code).toBe(1);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    // Controller fix round 1: "one WARN auth, rc 2" is a COUNT, not just a
+    // shape — a mutation that fired the block twice (once per flag-dependent
+    // arm it guards) would still match `/^WARN auth: /` on the FIRST line
+    // `lineFor` returns. `rc 2` itself is `_dr_warn`'s own return, pinned
+    // generically elsewhere (the header's own "`_dr_warn` exists and returns
+    // rc 2" measurement); the class this check answers with is WARN, and
+    // that class is observable only through the verdict word on the line —
+    // there is no separate "rc 2" annotation doctor prints per check.
+    'D4: an exposure file that is there and cannot be read is UNMEASURED — one WARN, naming the file, with a usable passphrase', () => {
+      const home = healthy('ccrc-doctor-auth-exp-unread-');
+      chmodSync(join(home, '.ccrc', 'exposure.env'), 0o000);
+      const r = runDoctor(home);
+      const warnLines = r.stdout.split('\n').filter((l) => l.startsWith('WARN auth: '));
+      expect(warnLines.length, r.stdout).toBe(1);
+      expect(warnLines[0]).toContain(join(home, '.ccrc', 'exposure.env'));
+      expect(warnLines[0]).toMatch(/was not measured/);
+      expect(authLine(r.stdout)).toMatch(/^WARN auth: /);
+      // Fix round 1 item 3 / review 196 F4: the verdict no longer claims which
+      // file would have won — what the service manager does with an
+      // unreadable exposure file was not measured, on either platform.
+      expect(warnLines[0]).not.toContain('would win');
+      expect(warnLines[0]).not.toContain('would have won');
+      // …and the remedy no longer states the macOS-stops-the-job premise that
+      // was wrong; it still points the operator at the file itself.
+      expect(remedyFor(r.stdout, 'auth')).not.toContain('stops the server job');
+      expect(remedyFor(r.stdout, 'auth')).toContain('ls -ld');
+    });
+
+  it.skipIf(process.getuid?.() === 0)(
+    // Controller fix round 1: item D's rc-3 unmeasured block is UNPINNED by
+    // D4/D5/D6 alone — all three keep an auth.scrypt, so deleting the rc-3
+    // block (as opposed to the rc-0 one D4 already pins) never reds any of
+    // them. This is the rc-3 twin: no passphrase file EITHER, same unreadable
+    // exposure file — the false verdict item D exists to stop is exactly
+    // "PASS auth: … the gate is OFF …" on a box whose real armed state
+    // nothing here measured. Root reads through a chmod 000, so this case
+    // cannot run as uid 0 — skipped there, not weakened.
+    'D4b: the SAME unreadable exposure file with NO passphrase file either is still UNMEASURED — one WARN, never the false "gate is OFF" PASS', () => {
+      const home = healthy('ccrc-doctor-auth-exp-unread-nofile-');
+      chmodSync(join(home, '.ccrc', 'exposure.env'), 0o000);
+      rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+      const r = runDoctor(home);
+      const warnLines = r.stdout.split('\n').filter((l) => l.startsWith('WARN auth: '));
+      expect(warnLines.length, r.stdout).toBe(1);
+      expect(warnLines[0]).toContain(join(home, '.ccrc', 'exposure.env'));
+      expect(warnLines[0]).toMatch(/was not measured/);
+      expect(r.stdout).not.toMatch(/^PASS auth: /m);
+    });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'D5: the same unreadable exposure file with a GARBLED auth.scrypt is still a FAIL (rc 4 is flag-independent) — no WARN auth: line', () => {
+      const home = healthy('ccrc-doctor-auth-exp-unread-garbled-');
+      chmodSync(join(home, '.ccrc', 'exposure.env'), 0o000);
+      writeAuthSecret(home, 'not a secret line at all\n');
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^FAIL auth: /);
+      // rc 4's third tense (unmeasured=1): the armed-vs-unarmed wording
+      // never applies here — neither ccrc.env nor the exposure file's
+      // CCRC_AUTH is knowable, so the sentence hedges on the condition
+      // itself rather than asserting either state.
+      expect(authLine(r.stdout)).toContain('if CCRC_AUTH is on (');
+      expect(r.stdout).not.toMatch(/^WARN auth: /m);
+      // Fix round 1 item 3 / review 196 F4: the hedge no longer names the
+      // exposure file as the one "which decides it" — which file would win
+      // was never measured either.
+      expect(authLine(r.stdout)).not.toContain('which decides it');
+    });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'D6: the same unreadable exposure file with the helper MISSING is still the helper FAIL — no WARN auth: line', () => {
+      const home = healthy('ccrc-doctor-auth-exp-unread-nohelper-');
+      chmodSync(join(home, '.ccrc', 'exposure.env'), 0o000);
+      rmSync(join(home, 'ccrc', 'deploy', 'gen-auth-hash.mjs'), { force: true });
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^FAIL auth: the passphrase helper is missing/);
+      expect(r.stdout).not.toMatch(/^WARN auth: /m);
+    });
+
+  it('D7: an unexposed box whose ccrc.env says CCRC_AUTH=off stays OFF even with CCRC_AUTH=on exported in doctor\'s own shell', () => {
+    const home = unexposedBox('ccrc-doctor-auth-d7-',
+      'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_AUTH=off\n');
+    const r = runDoctor(home, ['doctor'], { CCRC_AUTH: 'on' });
+    expect(authLine(r.stdout)).toMatch(/gate is OFF/);
+    expect(authLine(r.stdout)).not.toMatch(/^FAIL auth: /);
+  });
+
+  // D8's model: `ccrc-doctor.test.ts`'s own update-sync case above
+  // ("says so, rather than guessing, when ccrc's own update-intent reader is
+  // not loaded") sources the check table WITHOUT ccrc's constants. This case
+  // sources ccrc TOO (so `_box_unit_env`, `_box_auth_path` and
+  // `_box_sessions_path` ARE declared), but strips the one thing the new
+  // preflight also requires: `CCRC_EXPOSURE_FILE`.
+  it('D8: sourced with ccrc\'s own functions loaded but no CCRC_EXPOSURE_FILE — "the config reader is not loaded" FAIL', () => {
+    const nowhere = join(REPO, 'no-such-home-for-check-auth');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(CCRC_SRC)}; . ${shq(CHECKS_SRC)}; unset CCRC_EXPOSURE_FILE; _check_auth`],
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
+    expect(r.stdout).toMatch(/^FAIL auth: ccrc's own config reader is not loaded/m);
+    expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
+    expect(r.status).toBe(1);
+  });
+
+  // Fix round 1 item 4 / review 196 F5: `_check_auth`'s guard tests
+  // `_box_unit_env` too (`:1282`). Unlike D8, this sources BOTH files intact
+  // and removes only the FUNCTION, so every constant the guard also checks
+  // stays present — a dropped `_box_unit_env` term is the only thing that can
+  // red this pin. `BUE_VAL=on` is preset AFTER sourcing ccrc (a shell
+  // assignment, never an env entry — `ccd/ccrc:2768` resets it at file scope
+  // on load) in case some path through the ungoverned body reads it, but in
+  // THIS harness (`PATH` pointing nowhere) it never gets the chance: without
+  // the guard term, `_check_auth`'s body FAILs elsewhere first — the node
+  // check, ahead of anything that reads the flag — so it is the SPECIFIC
+  // regex below, not a stale-ARMED read, that makes this pin red.
+  it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, just not on this check’s own text', () => {
+    const nowhere = join(REPO, 'no-such-home-for-check-auth-bue');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(CCRC_SRC)}; . ${shq(CHECKS_SRC)}; unset -f _box_unit_env; BUE_VAL=on; _check_auth`],
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
+    expect(r.stdout).toMatch(/^FAIL auth: ccrc's own config reader is not loaded/m);
+    expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
+    expect(r.status).toBe(1);
   });
 });
 
@@ -7505,7 +7688,7 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     expect(line(r.stdout)).toMatch(/^FAIL update-exposure: /);
   });
 
-  it('an exposure.env that is there and cannot be read WARNs as unmeasured — its value would have won', () => {
+  it('an exposure.env that is there and cannot be read WARNs as unmeasured', () => {
     const home = unexposed('ccrc-doctor-upx-exp-dir-');
     mkdirSync(join(home, '.ccrc', 'exposure.env'));
     const r = runDoctor(home);
@@ -7566,6 +7749,25 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
       expect(writerArms, `${arm}: the real writer stopped arming`).toBe(true);
       expect(fixtureArms, `${arm}: writeExposureEnv drifted from _exp_env_write`).toBe(writerArms);
     }
+  });
+
+  // Fix round 1 item 4 / review 196 F5: `_check_update-exposure` now calls
+  // `_box_unit_env` (armed/reachable), but its not-loaded guard tested only
+  // `_box_env_value`. The guard now names `_box_unit_env` too. This sources
+  // BOTH files intact and removes only the FUNCTION (never `unset
+  // CCRC_EXPOSURE_FILE`, which the guard tests first and would mask the
+  // mutation), with `BUE_VAL=on` preset AFTER sourcing ccrc as a shell
+  // assignment (an env entry is reset at ccrc's own file scope, `:2768`) — a
+  // guard missing this term reads that stale value as ARMED instead of
+  // failing shut.
+  it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, not a stale ARMED PASS', () => {
+    const nowhere = join(REPO, 'no-such-home-for-check-update-exposure-bue');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(CCRC_SRC)}; . ${shq(CHECKS_SRC)}; unset -f _box_unit_env; BUE_VAL=on; _check_update-exposure`],
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
+    expect(r.stdout).toMatch(/^FAIL update-exposure: ccrc's own config and exposure constants are not loaded/m);
+    expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
+    expect(r.status).toBe(1);
   });
 });
 

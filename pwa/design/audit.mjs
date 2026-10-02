@@ -707,6 +707,14 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the emptied card's own sentence about where its work went (spec §6, board-placement wave 2), same ground and register as .proj-abroad-line above — both sit directly on .proj-card-body's ground. Its selector names no ancestor, so no route could ground it",
   },
+  'fleet.css .proj-released-toggle': {
+    under: ['var(--bg-surface)'],
+    why: "the Released (N) fold's toggle (workspace lifecycle spec §5.1), a sibling of .proj-card-body inside the card, on the card's own ground, with the Archived fold toggle's ink. It sets no background of its own and its selector names no ancestor, so no route could ground it",
+  },
+  'fleet.css .proj-released-heading, .proj-released-note': {
+    under: ['var(--bg-surface)'],
+    why: "the Released fold's programme headings and its children note, inside .proj-released-body on the same card ground as the toggle above, same register. A grouped selector names no painted ancestor, so it needs its own registration",
+  },
   'fleet.css .mail-chip': {
     under: ['var(--bg-page)'],
     why: "the OFF state of the programme filter chip (F4, cross-repo wave 2). `.mail-screen` sets no background of its own, so its real ground is body's --bg-page (styles/base.css). Its selector names no ancestor, so no route could ground it",
@@ -793,6 +801,11 @@ export const INHERITED_GROUNDS = {
   'fleet.css .settings-release-refused': {
     under: ['var(--bg-page)'],
     why: "the 'refused by N of M nodes' line in the same unfilled release row, retinted to --status-attention-text. Same ground and same reason as .settings-release-date; registered separately because it sets its own colour",
+  },
+  // ── wave 8 item F2 (D-3591): the running release row's words ───────────
+  'fleet.css .settings-release-running': {
+    under: ['var(--bg-page)'],
+    why: "the running row's words in place of the Install/Roll back button, inside .settings-release-actions in the same unfilled release row (SettingsScreen.tsx's ReleaseItem). Same ground and same reason as .settings-release-date; registered separately because it sets its own colour",
   },
   // ── centralised update management W3, Task 9: the node inventory ───────
   'fleet.css .settings-node-current--amber': {

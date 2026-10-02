@@ -414,6 +414,11 @@ leave a wave undispatchable pending a ruling below.
   every arm (spec §5.6); only the worktree removal is skipped. A child whose directory EXISTS but git has no
   worktree record answers the existing TERMINAL token `no-worktree-record` (reused, its existing sentence is
   true of a child), which joins the vocabulary and `CHILD_RECLAIM_TOKEN_KIND` as `terminal`.
+  R31's complete-only placement rule (run 208, D-3731) is asked of OTHER registry rows, never of this child's
+  own proven-absent worktree, so R19's own arm is unchanged: with every other row placed, the vanished child
+  still pins its branch and stashes, records `worktree: absent`, and enters this tail. An ambiguous OTHER row
+  holds a vanished child just as it holds a present one, and two vanished children hold each other (D-3734; the
+  cost is stated under R31).
 - **R20 — repeated failures back off.** The sweep keeps `consecutiveFailures` per child; after a `failed`
   outcome the next attempt waits `min(ceiling, passInterval × 2^k)`. A child whose failures have lasted past the
   ceiling is listed on the attention list with the failure's sentence (the attention derivation reads the
@@ -511,6 +516,35 @@ leave a wave undispatchable pending a ruling below.
   Measured on git 2.43.0: with the child's directory replaced by a link to a dirty sibling worktree, the planned
   WIP commit lands on the sibling's branch. With the child's worktree record gone, `git worktree remove --force`
   deletes the sibling outright.
+
+  **Another row is placed only by a complete resolution** (run 208, D-3731, 2026-10-01). A row proves it lies
+  outside the child only through a `complete` current resolution: every component of its spelling walked and
+  entered. An `absent-suffix` answer, where the rest is re-attached as text below a proven-absent component, is
+  namespace presentation, not identity evidence. A session that entered `<alias>/server` while the alias led into
+  the child keeps that cwd once the alias is removed. Measured before this rule: the audit minted a token, and the
+  verb removed the live tree.
+  - `complete` is necessary, not sufficient (D-3735). It places the spelling as it reads now, not the session. An
+    alias re-pointed after a session entered through it also resolves complete and outside, and so does a
+    spelling through a bind mount (`pwd -P` never collapses one). Both are pre-existing, unchanged by this rule,
+    and left to a follow-up programme.
+  - Such a row makes the reclaim `unmeasured` (retryable, no token, no terminal journal row) at the audit and at
+    the verb's locked recomputation. At the tail, `_ws_reclaim_owned` asks the same question on the fresh and the
+    resumed arm. There a refusal fails the reclaim through `_ws_reclaim_fail` as `worktree-remove-failed`, which
+    writes a journal row and keeps the tree, the branch and the breadcrumb (D-3736). A row that cannot be resolved
+    at all, and an empty or unknown basis, answer the same way.
+  - A row literally at, below or through the child's path stays terminal `containment-unproven`, whatever its
+    basis.
+  - `--defer-expired` skips rungs 5 and 6 only. It never bypasses this ownership comparison.
+  - Diagnostics name such rows by id only, never by their `.workdir`.
+  - Process state never grants deletion consent. A pane's cwd, or a modelled session that is up, gone or
+    unaskable, is not an input.
+  - The cost, stated rather than discovered (D-3734): a row whose directory no longer exists holds every child's
+    reclaim at `unmeasured`. That includes a present child, a vanished one under R19, and two vanished children,
+    which hold each other. The hold ends safely only once that row is purged after its session has ended, or a
+    link on its path is restored to its original target, AND a later attempt runs. Never create a directory in a
+    link's place: that re-points the spelling by replacement (D-3735), and the verb then removes a tree a session
+    may still hold (review 213, measured). The only retry is wave 4's sweep (spec §5.5: retryable refusals are
+    re-tried by the sweep). Until it ships, a held child keeps its tree after its one close-time attempt.
 - **R32 — a held child is reclaimed when its programme retires; `not-finished` names its cause** (wave 3's
   wave-done, open item 1, 2026-09-25). R30 has a non-final close HOLD a child whose spent evidence is undated,
   unmeasurable or a merge-commit `.prnumber`, while the bind refuses that same child `workspace-spent`. No later

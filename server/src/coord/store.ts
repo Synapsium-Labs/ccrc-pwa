@@ -7,10 +7,11 @@ import { decideAllocation } from './ledger.js';
 // policy — the house port pattern. This read exists to feed that policy and
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
+import type { LastRun } from './released.js';
 // Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
-import type { StallMailRow, StallReadFailure, StallRunRow, StallWriteMiss } from './stall.js';
+import type { StallDeliveryRow, StallMailRow, StallReadFailure, StallRunRow, StallWriteMiss } from './stall.js';
 // Type-only: ties `AUTO_CONTINUE_ARMED_LAST_ERROR` below to the send adapter's
 // own refusal word, so a rename there is a compile error here, not a silent miss.
 import type { SendResult } from '../inject/send.js';
@@ -725,6 +726,12 @@ export type StallObservation =
 
 export type CoordPlacementStampsResult =
   | { ok: true; stamps: CoordPlacementStamp[] }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
+
+/** `lastRunBySession`'s answer (workspace lifecycle spec §5.1): each asked session's newest run as `sessionId`,
+ *  the asked sessions a non-terminal run names as `sessionId`, and every `claimedBy` of a non-terminal run. */
+export type LastRunsResult =
+  | { ok: true; last: LastRun[]; openWorkers: string[]; openClaimants: string[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
 export type AskReadResult =
@@ -3003,6 +3010,48 @@ export class CoordStore {
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
   }
 
+  /**
+   * The run facts `FleetSession.releasedFrom` is decided from (workspace lifecycle spec §5.1), for the sessions
+   * one fleet assembly describes — ONE call per assembly, never one per row, beside `coordPlacementStamps`.
+   * That read cannot answer this: it filters to `coordProject IS NOT NULL` and carries no state.
+   * `openRunsForSession` is per-session and reserved for destructive decision points.
+   *
+   * Three statements, one synchronous call: nothing else writes `coord.db` between them. The claimant set is
+   * `openCoordinatorIds`' own read, reused rather than respelled.
+   *
+   * `id` rides CAST to TEXT and proven, ALL-OR-FAILURE (D-2545's rule, `openRunsForSession`'s): a partial list
+   * is how a session's newest run could silently read as an older, terminal one. `closedAt` is proven PER ROW
+   * instead: an unreadable close time makes that one session's `LastRun.closedAt` null, which `releasedFrom`
+   * reads as doubt, and costs no other row its answer.
+   */
+  lastRunBySession(sessionIds: readonly string[]): LastRunsResult {
+    if (sessionIds.length === 0) return { ok: true, last: [], openWorkers: [], openClaimants: [] };
+    const ph = placeholders(sessionIds.length);
+    const rows = this.db.prepare(
+      'SELECT CAST(r.id AS TEXT) AS idText, r.sessionId, r.state, r.program, p.title AS programTitle, ' +
+      'r.claimedBy, CAST(r.closedAt AS TEXT) AS closedAtText FROM runs r ' +
+      'LEFT JOIN programs p ON p.slug = r.program ' +
+      `WHERE r.id IN (SELECT MAX(id) FROM runs WHERE sessionId IN (${ph}) GROUP BY sessionId) ORDER BY r.id`,
+    ).all(...sessionIds) as unknown as {
+      idText: string; sessionId: string; state: string; program: string; programTitle: string | null;
+      claimedBy: string | null; closedAtText: string | null;
+    }[];
+    const last: LastRun[] = [];
+    for (const r of rows) {
+      const id = persistedInt(r.idText, 'run id');
+      if (!id.ok) return { ok: false, kind: 'run-unreadable', detail: id.detail };
+      const closed = r.closedAtText === null ? null : persistedInt(r.closedAtText, 'closedAt');
+      last.push({
+        sessionId: r.sessionId, runId: id.value, state: r.state, program: r.program,
+        programTitle: r.programTitle, claimedBy: r.claimedBy, closedAt: closed !== null && closed.ok ? closed.value : null,
+      });
+    }
+    const openWorkers = (this.db.prepare(
+      `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
+    ).all(...sessionIds) as { sessionId: string }[]).map((r) => r.sessionId);
+    return { ok: true, last, openWorkers, openClaimants: this.openCoordinatorIds() };
+  }
+
   /** `detail` joins the SELECT (fix, found in Task 9 review — D-47): `advance`
    *  has always taken a `detail` parameter, but until the dispatch route's
    *  refused-`/clear` fix started passing one, nothing in this file ever
@@ -3836,39 +3885,6 @@ export class CoordStore {
   }
 
   /**
-   * Every mail row on the stall subject's runs, oldest id first, in ONE read
-   * (stall watch wave 1). The lane's L1 derives the worker's last mail, the
-   * newest inbound mail, the coordinator's `wait:`, the ball and the episode key
-   * from it. The mail table has no index but its key, so this is one scan per
-   * subject rather than one per derived fact.
-   *
-   * An empty id list answers `{ok:true, mail:[]}` with no query at all. `id` and
-   * `at` are CAST and proven (D-2545), all-or-failure, so an unrepresentable row
-   * answers in words rather than throwing out of the lane. `runId` is read raw,
-   * because every selected row's value EQUALS one of the ids bound here, which the
-   * caller took from `stallCandidates`' proven rows. `kind` is the raw column: the
-   * verdict compares it with words, and an unnamed kind matches none of them.
-   */
-  mailOnRuns(runIds: readonly number[]): { ok: true; mail: StallMailRow[] } | { ok: false; kind: Extract<StallReadFailure, 'mail-unreadable'>; detail: string } {
-    if (runIds.length === 0) return { ok: true, mail: [] };
-    const rows = this.db.prepare(
-      'SELECT CAST(id AS TEXT) AS idText, CAST(at AS TEXT) AS atText, runId, fromId, toId, kind, subject ' +
-      `FROM mail WHERE runId IN (${placeholders(runIds.length)}) ORDER BY id`,
-    ).all(...runIds) as unknown as
-      { idText: string; atText: string; runId: number; fromId: string; toId: string; kind: string; subject: string }[];
-    const mail: StallMailRow[] = [];
-    for (const r of rows) {
-      const id = persistedInt(r.idText, 'mail id');
-      if (!id.ok) return { ok: false, kind: 'mail-unreadable', detail: id.detail };
-      const at = persistedInt(r.atText, 'mail at');
-      if (!at.ok) return { ok: false, kind: 'mail-unreadable', detail: at.detail };
-      mail.push({ id: id.value, at: at.value, runId: r.runId, fromId: r.fromId, toId: r.toId, kind: r.kind,
-        subject: r.subject });
-    }
-    return { ok: true, mail };
-  }
-
-  /**
    * The LOWEST id of a mail on `runId` from `fromId` to `toId` (the mail's own
    * addressee column) whose subject begins with `prefix`, or null. Stall watch
    * wave 1: `pushNewMail`'s reply bind reads the first stall-check to a worker,
@@ -3884,15 +3900,87 @@ export class CoordStore {
     return row?.id ?? null;
   }
 
-  /** The delivered and acked times on a mail's NEWEST delivery row, or null when
-   *  the mail has no delivery (stall watch wave 1: r2's body reports when r1 was
-   *  delivered and acked). Newest by delivery id, because a re-queue gives one
-   *  mail a second delivery (`requeueAbandonedMail`), and the live one is newest. */
-  deliveryTimesFor(mailId: number): { deliveredAt: number | null; ackedAt: number | null } | null {
-    const row = this.db.prepare(
-      'SELECT deliveredAt, ackedAt FROM mail_deliveries WHERE mailId = ? ORDER BY id DESC LIMIT 1',
-    ).get(mailId) as { deliveredAt: number | null; ackedAt: number | null } | undefined;
-    return row === undefined ? null : { deliveredAt: row.deliveredAt, ackedAt: row.ackedAt };
+  /**
+   * One read per stall candidate (stall watch wave 2, `one-mail-read-per-candidate` (D-3641)): every mail the lane's
+   * verdicts judge, and the delivery rows of exactly those mails, in two statements.
+   *
+   * Statement 1: the mail rows, oldest id first. A row is selected when it is on one of `runIds` (the run
+   * verdict's history, UNBOUNDED, because the ladder keys on the run's whole exchange), or when it touches the
+   * session inside the horizon: sent by it, addressed to it by the row's own `toId`, or delivered to it (a mail
+   * to the coordinator ROLE carries the role in `toId`, and the session only on its delivery row). The horizon
+   * is `at >= sinceAt` (`stall-mail-read-time-bounded` (D-3651)), and the lane passes `now - BACKLOG_HORIZON_MS`. It
+   * bounds the rows LOADED, not the scan: `mail` has no index but its key, and adding one is a migration. The
+   * same holds for the two `mail_deliveries` scans, statement 1's delivered-to subquery and statement 2's (that
+   * table's one index is `mail_deliveries_due`): each candidate's read grows with the whole mail history, on the
+   * synchronous handle, until a migration indexes them. An empty `runIds` drops the run clause rather than binding an empty list.
+   *
+   * The read is a SUPERSET of the run's mail. The lane therefore narrows the run verdict's `StallInput.mail`
+   * through L1's `stallRunMail` (`run-mail-filtered-in-l1` (D-3650)), and only the session verdicts see the whole read.
+   *
+   * Statement 2: those mails' delivery rows, oldest delivery id first. A re-queued mail has two, and the newest
+   * is the live one. Its predicate is statement 1's own, as a subquery, bound with the same values, so it binds
+   * a handful of values however long the run's history is. The two statements run back to back on this one
+   * synchronous handle with no await between them, so they see the same mail. The gate columns are SELECTED as
+   * plain values and never filter, order or group (D-792: a diagnostic is not a scheduling input). L1 decides
+   * mail-stuck from them, and `watch.ts` passes the rows through whole without naming a field
+   * (`delivery-and-deaf-facts-ride-the-mail-read` (D-3648)).
+   *
+   * Every integer is CAST and proven (D-2545), `runId` included: an off-run row's `runId` equals none of the
+   * bound ids, so it cannot be read raw the way wave 1's run-only read did. SQL NULL is decided here, at the call
+   * site, never inside `persistedInt`. ALL-OR-FAILURE: one unrepresentable value refuses the whole read, and
+   * the detail names the column and no value. `kind`, `state` and `lastGate` are the raw columns: L1 compares
+   * them with words, and an unnamed token matches none.
+   */
+  stallMailFor(sessionId: string, runIds: readonly number[], sinceAt: number): { ok: true; mail: StallMailRow[]; deliveries: StallDeliveryRow[] } | { ok: false; kind: Extract<StallReadFailure, 'mail-unreadable'>; detail: string } {
+    const onRuns = runIds.length === 0 ? '' : `runId IN (${placeholders(runIds.length)}) OR `;
+    const where = `${onRuns}((fromId = ? OR toId = ? OR id IN (SELECT mailId FROM mail_deliveries WHERE toId = ?)) AND at >= ?)`;
+    const binds = [...runIds, sessionId, sessionId, sessionId, sinceAt];
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, CAST(at AS TEXT) AS atText, CAST(runId AS TEXT) AS runIdText, ' +
+      `fromId, toId, kind, subject FROM mail WHERE ${where} ORDER BY id`,
+    ).all(...binds) as unknown as
+      { idText: string; atText: string; runIdText: string | null; fromId: string; toId: string; kind: string; subject: string }[];
+    const mail: StallMailRow[] = [];
+    for (const r of rows) {
+      const id = persistedInt(r.idText, 'mail id');
+      if (!id.ok) return { ok: false, kind: 'mail-unreadable', detail: id.detail };
+      const at = persistedInt(r.atText, 'mail at');
+      if (!at.ok) return { ok: false, kind: 'mail-unreadable', detail: at.detail };
+      let runId: number | null = null;
+      if (r.runIdText !== null) {
+        const onRun = persistedInt(r.runIdText, 'mail runId');
+        if (!onRun.ok) return { ok: false, kind: 'mail-unreadable', detail: onRun.detail };
+        runId = onRun.value;
+      }
+      mail.push({ id: id.value, at: at.value, runId, fromId: r.fromId, toId: r.toId, kind: r.kind, subject: r.subject });
+    }
+    if (mail.length === 0) return { ok: true, mail, deliveries: [] };
+    const drows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, CAST(mailId AS TEXT) AS mailIdText, toId, state, ' +
+      'CAST(deliveredAt AS TEXT) AS deliveredAtText, CAST(ackedAt AS TEXT) AS ackedAtText, lastGate, ' +
+      'CAST(gateSince AS TEXT) AS gateSinceText ' +
+      `FROM mail_deliveries WHERE mailId IN (SELECT id FROM mail WHERE ${where}) ORDER BY id`,
+    ).all(...binds) as unknown as
+      { idText: string; mailIdText: string; toId: string; state: string; deliveredAtText: string | null;
+        ackedAtText: string | null; lastGate: string | null; gateSinceText: string | null }[];
+    const nullable = (text: string | null, column: string): { ok: true; value: number | null } | { ok: false; detail: string } =>
+      text === null ? { ok: true, value: null } : persistedInt(text, column);
+    const deliveries: StallDeliveryRow[] = [];
+    for (const d of drows) {
+      const id = persistedInt(d.idText, 'delivery id');
+      if (!id.ok) return { ok: false, kind: 'mail-unreadable', detail: id.detail };
+      const mailId = persistedInt(d.mailIdText, 'delivery mailId');
+      if (!mailId.ok) return { ok: false, kind: 'mail-unreadable', detail: mailId.detail };
+      const deliveredAt = nullable(d.deliveredAtText, 'delivery deliveredAt');
+      if (!deliveredAt.ok) return { ok: false, kind: 'mail-unreadable', detail: deliveredAt.detail };
+      const ackedAt = nullable(d.ackedAtText, 'delivery ackedAt');
+      if (!ackedAt.ok) return { ok: false, kind: 'mail-unreadable', detail: ackedAt.detail };
+      const gateSince = nullable(d.gateSinceText, 'delivery gateSince');
+      if (!gateSince.ok) return { ok: false, kind: 'mail-unreadable', detail: gateSince.detail };
+      deliveries.push({ id: id.value, mailId: mailId.value, toId: d.toId, state: d.state, deliveredAt: deliveredAt.value,
+        ackedAt: ackedAt.value, lastGate: d.lastGate, gateSince: gateSince.value });
+    }
+    return { ok: true, mail, deliveries };
   }
 
   /**
@@ -4140,6 +4228,34 @@ export class CoordStore {
       'SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
       'WHERE m.fromId = ? AND m.runId IS ? AND d.toId = ? AND m.subject = ? ' +
       `AND d.state IN ${OUTSTANDING_STATES_SQL} LIMIT 1`,
+    ).get(fromId, runId, toId, subject);
+    return row !== undefined;
+  }
+
+  /** Whether ANY mail with this exact (fromId, runId, toId, subject) was ever
+   *  queued — in EVERY delivery state, which is the whole difference from
+   *  `hasOutstandingMail` above. Two readers. `queueStallNotice`'s run-less arm
+   *  (stall watch wave 2, `run-less-stall-notice` (D-3640)): a session notice has no
+   *  `run_events` row to dedupe on, so this is its durable "already sent", and
+   *  its subject names the episode to the day and minute
+   *  (`self-mail-subjects-carry-the-date` (D-3668)). And `sweepLanding`'s durable
+   *  "already told" read (landing-order wave 2, which finds this method here
+   *  and adds no second copy: `has-mail-with-subject-lands-here-first` (D-3639)): its
+   *  latch is in memory, `queueSystemMail`'s dedupe sees outstanding rows only,
+   *  and a PR that stays dequeued through a fix round would otherwise be mailed
+   *  again after every server restart once its first notice was acked. `mail`
+   *  is never pruned, so this answer does not decay. `toId` is the mail row's
+   *  own, which for system mail is the resolved session id `queueSystemMail`
+   *  was handed. It reads `mail` alone and names no delivery table, so the
+   *  delivery-writer census does not see it. It answers a bare `boolean`, not
+   *  a result union, deliberately: landing-order wave 2's plan inserts this
+   *  exact method, and byte-identity with it wins over the rule that a new
+   *  store member answers a union. There is no third condition to carry
+   *  either: a failed read throws to its caller, and never folds into
+   *  `false`. */
+  hasMailWithSubject(fromId: string, runId: number | null, toId: string, subject: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS x FROM mail WHERE fromId = ? AND runId IS ? AND toId = ? AND subject = ? LIMIT 1',
     ).get(fromId, runId, toId, subject);
     return row !== undefined;
   }

@@ -242,3 +242,42 @@ describe('readLiveStateMeasured — the distinction readLiveState folds', () => 
     expect(await readLiveState(io, degraded.configDir, degraded.pid)).toBeNull();
   });
 });
+
+// Worker stall watch, wave 2 (spec §5.1): the live file's `startedAt`. It is the process start that the turn marker's
+// reader judges a marker older than as `stale`. Measured present, numeric, in epoch ms on 2.1.284 (sample below).
+describe('readLiveStateMeasured: startedAt, the process start the turn marker is judged against (stall watch wave 2, §5.1)', () => {
+  const startedAtOf = async (configDir: string, pid: number): Promise<number | null> => {
+    const r = await readLiveStateMeasured(localIO, configDir, pid);
+    if (!r.ok) throw new Error(`expected an ok read, got ${JSON.stringify(r)}`);
+    return r.state.startedAt;
+  };
+
+  it('a numeric startedAt is carried as measured (the 2.1.284 sample)', async () => {
+    const { configDir, pid } = seedLive({ ...base, startedAt: 1790624162602 });
+    expect(await startedAtOf(configDir, pid)).toBe(1790624162602);
+  });
+
+  it('an absent startedAt is null (a build that never wrote it), never 0', async () => {
+    const { configDir, pid } = seedLive(base);
+    expect(await startedAtOf(configDir, pid)).toBeNull();
+  });
+
+  it('a string startedAt is null: the live file writes a number, and a string is not one', async () => {
+    const { configDir, pid } = seedLive({ ...base, startedAt: '1790624162602' });
+    expect(await startedAtOf(configDir, pid)).toBeNull();
+  });
+
+  it('NaN and the other non-finite numbers are null: JSON carries NaN as null, and an overflowing literal parses to Infinity', async () => {
+    const nan = seedLive({ ...base, startedAt: NaN });
+    expect(await startedAtOf(nan.configDir, nan.pid)).toBeNull();
+    const configDir = path.join(mkTmp('ccrc-live-'), '.claude');
+    mkdirSync(path.join(configDir, 'sessions'), { recursive: true });
+    writeFileSync(path.join(configDir, 'sessions', '4242.json'), JSON.stringify(base).replace(/\}$/, ',"startedAt":1e400}'));
+    expect(await startedAtOf(configDir, 4242)).toBeNull();
+  });
+
+  it('the folded read carries it too', async () => {
+    const { configDir, pid } = seedLive({ ...base, startedAt: 1790624162602 });
+    expect((await readLiveState(localIO, configDir, pid))?.startedAt).toBe(1790624162602);
+  });
+});

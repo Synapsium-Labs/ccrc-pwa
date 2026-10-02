@@ -3,7 +3,8 @@
 **Status:** design approved in the brainstorm by the operator 2026-09-23 (rulings in §3); rev 2 after a six-lens
 adversarial review (all surviving findings applied) and a rev-3 verification pass; rev 4 records the operator's
 rulings on the written spec (C9–C11, C13, C14; §11 items 1–5 ruled 2026-09-23, item 6 found at plan time and ruled 2026-09-24) and the measurements behind
-them; rev 5 reconciles it with its first wave plans, 2026-09-24 ·
+them; rev 5 reconciles it with its first wave plans, 2026-09-24; rev 6 records rule 1 (C12) as shipped on the pane's
+own process start (D-3526) and rules 2–3 as re-planned on its reader, 2026-09-30 ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-landing-order-and-main-churn-design.md`. Its stage 5 needs this spec's stage 1; this
@@ -192,7 +193,7 @@ auto-home at 04:17 UTC the next day.
 | C9 | No backfill of the historical backlog unless a programme needs one (operator, 2026-09-23, on the written spec). | §11 item 1. |
 | C10 | Re-seed the route records seeded under the pre-#169 default: yes, one-off (operator, 2026-09-23, on the written spec). | §11 item 2: executed by hand the same day; no code. |
 | C11 | AMENDS C3 (operator, 2026-09-23, on §11 item 4's measurements): beside the variable and the scope boundary, a sweep stops dead ccd pane scopes that have done nothing for six hours and serve nothing; everything else is reported. | Stage 6. Slug: `inert-scope-sweep`. |
-| C12 | AMENDS D-3100's argument that a re-rendered banner "cannot reach a relocation" because the rescue arm sits below `SWAP_COOLDOWN`: the cooldown expires, and 32 of 248 rescues came from a banner the session carried in (§1.2 mechanism 6). A banner older than the session's landing is not a block, which also gives up the pane rung's immediacy for a pane positive that the transcript dates as carried in (§8). | Stage 4 rule 1. Slug `carried-in-banner-is-not-a-block`, D-3497. |
+| C12 | AMENDS D-3100's argument that a re-rendered banner "cannot reach a relocation" because the rescue arm sits below `SWAP_COOLDOWN`: the cooldown expires, and 32 of 248 rescues came from a banner the session carried in (§1.2 mechanism 6). A banner older than the session's landing is not a block, which also gives up the pane rung's immediacy for a pane positive that the transcript dates as carried in (§8). Shipped as D-3526 (#207): "the landing" is the pane's own process start with a swap after the row, and a landing whose Claude Code never came up is still moved. | Stage 4 rule 1. Slug `carried-in-banner-is-not-a-block`, D-3497; shipped by D-3526. |
 | C13 | The rescue-wait bound is 10 minutes (operator, 2026-09-23). | Stage 4 rule 2; §11 item 3. |
 | C14 | The slice ceiling is answered by measuring `OOMPolicy=continue` for pane scopes in the stage-2 spike, never by an aggregate `MemoryHigh` (operator, 2026-09-23). | Stage 2 step 7; §11 item 5. |
 
@@ -366,39 +367,55 @@ not resume, and stage 3 removes most of that risk. Measured (§1.2): a swap reac
 1.6 minutes, and rescues fire a median 129 minutes before the reset, so a wait never saves wall clock; what it saves
 is the move, the carry and a round trip.
 
-1. **A carried-in banner is not a block.** `cmd_swap`, the one verb that moves a session between accounts, stamps
-   `$REG/<id>.landed` (epoch, wrapper) after the carry and the wrapper flip, before `_svc_start` starts the unit;
-   absent means never swapped, and every row is current. `lastswap` cannot serve: it is stamped at dispatch, up to
-   `SWAP_JITTER` (120 s) before the swap runs, and deleted on a refused swap. A rate-limit row older than the
-   landing is not evidence of a block, from the transcript or the pane: a pane-arm positive is dated by the
-   transcript, and one whose newest rate-limit row is older than the landing is not a block; with no rate-limit row
-   at all, the pane's verdict stands as today. A transcript it cannot read (`_transcript_limit_banner` rc 2), or
-   whose path does not resolve, is unread, never "no row": it cannot date a pane positive, and the pane's verdict
-   stands. The transcript arm's cache (`$REG/<id>.tscan`) records unread as `2`, distinct from a read with no row
-   (`0`). The dating read is uncached. A suppressed positive is logged once per landing (`carried-in <id>: …` in the
-   swap log), floored by `$REG/<id>.carriednote`. An auth failure, which the pane arm also matches, keeps today's
-   path and never reads a reset (C12).
+1. **A carried-in banner is not a block** — shipped as D-3526 (#207) on D-3522's carrier rather than a new
+   `$REG/<id>.landed`. A rate-limit row the reader proves older than the pane's own process (tmux
+   `session_created`, `_pane_born`; ccd creates a fresh tmux session per spawn) is carried in only when
+   `$REG/<id>.lastswap` is strictly later than the row, so a same-account restart keeps its own account's block;
+   and a landing whose Claude Code never came up (`$REG/<id>.spawn` rc 4 at or after its birth) is still moved,
+   on purpose. It holds on the transcript and pane rungs alike: a pane positive is dated by the transcript's newest
+   real row, so once the process has written a real row nothing is suppressed. The dated read is cached in
+   `$REG/<id>.tdate` on the pane's birth and the transcript's path, mtime and size, so a grown file is read again.
+   Anything it cannot measure — the birth, the row's timestamp, the transcript, a torn `lastswap` — keeps the
+   positive. A suppressed positive is logged once per process (`carried-in <id>: …` in the swap log), floored by
+   `$REG/<id>.carriednote`. An auth failure, which the pane arm also matches, keeps today's path and never reads a
+   reset (C12). The transcript arm's cache (`$REG/<id>.tscan`) keeps its two answers.
 2. **Wait near the current account's own reset; otherwise swap at once.** On a rate-limit verdict ccd keeps the
-   `resetsAt` and `rateLimitType` that `_transcript_limit_banner` already prints, from the banner row that
-   postdates the landing. It waits — leaves Claude Code's armed auto-continue alone and types nothing — when the
-   type is `five_hour`, the reset is within `RESCUE_WAIT_BOUND` (600 s, a knob; 0 turns the wait off), the backend
-   is Anthropic's (`_is_anthropic_backend`), and Claude Code's auto-continue is armed on the pane
-   (`_pane_auto_continue_armed`). A stalled session near its reset, a `seven_day` block, a block on any
-   non-Anthropic backend (the Codex lane among them), or no postdating row carrying both values swaps as today;
-   `~/.cc-limits` is not a fallback, because it cannot say which window blocked. It also waits when no placeable
-   target has room (today's `stranded`). A wait is recorded once on entry and once on exit, in
+   `resetsAt`, `rateLimitType` and own epoch of the row the dated read (`_transcript_limit_banner`'s `dated` mode,
+   cached with its answer in `$REG/<id>.tdate`) answered rc 0 on — a rate-limit row this pane's process wrote. A
+   pane tmux cannot place, lost auth on either surface (the pane's auth text, or a 401 newer than the rate-limit
+   row, whoever wrote it) and a carried-in row keep none, even where D-3526 keeps the row a block. It waits —
+   leaves Claude Code's armed auto-continue alone and types nothing — when the
+   type is `five_hour`, the reset is within `RESCUE_WAIT_BOUND` (600 s, a knob; 0 turns this near wait off — a wait
+   of another kind still ends in place at its reset), the backend is Anthropic's (`_is_anthropic_backend`), and
+   Claude Code's auto-continue is armed on the pane — its own footer, outside the prompt box and on its
+   `·`-separated line, never a draft in the box or a line of prose that says the words, because a false "armed"
+   parks a stalled session. A stalled session near its reset, a `seven_day` block, a block on any
+   non-Anthropic backend (the Codex lane among them), or no dated row carrying a kept reset and its window swaps
+   as today; `~/.cc-limits` is not a fallback, because it cannot say which window blocked. It also waits when no
+   placeable target has room (today's `stranded`, every line it logs unchanged; recorded when its block is dated).
+   A wait of any kind opens only on such a dated row. A wait is recorded once on entry and once on exit, in
    `$REG/<id>.rescuewait` and the swap log, never under the word `hold`, which is the workspace-reap hold. It ends:
    - at the reset, when Claude Code's own timer or the stale-phase Enter (D-2360) continues the turn;
    - `RESCUE_WAIT_GRACE` (120 s, its own constant, not `STALE_PRESS_COOLDOWN`) after the reset, by what the pane
-     shows at that tick. Only an ARMED auto-continue ends a wait in place: Claude Code re-sends the turn itself, and
-     ccd never swaps away from an account that has just reset. A STALLED session is rescued as today, because
+     shows at that tick. Only an ARMED auto-continue ends a wait in place, and only a wait that was open before
+     the grace ran out (one first taken after it never saw the account turn, and is rescued as today): Claude Code
+     re-sends the turn itself, and ccd never swaps away from an account that has just reset. That hold in place
+     lasts until `RESCUE_CHAIN_WAIT` (30 minutes, rule 3's knob — the longest a session is held on its account)
+     past the reset: an armed footer that far past it, with the 429 still the newest row, says Claude Code is not
+     continuing, so the tick is rescued as today — a swap to a target with room, or the strand — with no second
+     wait held in place on that reset. The no-room wait itself has no such bound. A STALLED session is rescued as today, because
      nothing on its own account will re-send the turn (the redrive fallback types only on an unsubmitted resume
      pair): its near or chain wait closes and the tick swaps it to a target with room, skipping the accounts it
      just left blocked, with no second chain wait on the same reset; its no-room wait stays open;
-   - for the no-room wait, in a swap when a target gains room.
+   - for the no-room wait, in a swap when a target gains room — for a stalled pane, inside the grace after its
+     reset too.
 
    No wait of any kind keys on a rate-limit row written at or after its own `resetsAt`: such a row is stale on
-   arrival, and a wait keyed on it would never end. A stalled session whose own account is the only one with room
+   arrival, and a wait keyed on it would never end. Its reset is kept nowhere — not in the verdict, `.rescuewait`
+   or the rescue line's `reset=` — so rule 3's skip list and §9's no-room count never read a reset that did not
+   turn the account. A no-room wait already open on a reset that such a row, written at or after it, proves did not
+   turn the account (the armed retry at the reset met the same `resetsAt`) ends `stale`: the strand stands, as
+   today, and §9's count leaves it out. A stalled session whose own account is the only one with room
    idles until another target gains room, as it does today (§11 item 6).
 
    A longer bound for a session with delegated work in flight is not specified: no paused run has been seen under
@@ -406,30 +423,44 @@ is the move, the carry and a round trip.
 3. **Spread and do not bounce.** Target choice skips an account the session just left blocked — the source account
    of any of this session's auto-rescues within `RESCUE_CHAIN_WINDOW` (3600 s), until that rescue's logged reset
    passes — and prefers a target that has not received any session's rescue within `RESCUE_SPREAD_WINDOW` (600 s)
-   when another placeable target exists. The history is read from the swap log's tail (`RESCUE_LOG_TAIL_BYTES`,
-   1 MiB), whose `auto-rescue` line carries the dated row as appended `reset=`, `type=` and `row=` tokens. A session
-   already rescued three times in the last hour is not rescued a fourth time at once: it takes a **chain wait**
-   on its current account for at most 30 minutes (a knob), recorded in `.rescuewait` with `kind=chain`, then swaps
-   to a target with room that is not the account it just left blocked. A chain wait ends early at its account's
+   when another placeable target exists — never the session's own recovered home, which the affinity path would
+   only return it to, and never at the price of a class degrade or of a tick that cannot decide: a spread that
+   leaves only lanes nobody measured falls back to the just-left-only choice. The history is read from the swap
+   log's tail (`RESCUE_LOG_TAIL_BYTES`, 1 MiB) only when a decision needs it, never on the ticks a strand waits
+   through; its `auto-rescue` line carries the dated row as appended `reset=` (a reset the row predates), `type=`
+   and `row=` tokens (`row=` alone for a carried row D-3526 keeps a block). A session already rescued three times
+   in the last hour, on an Anthropic lane and a dated block, is not rescued a fourth time at once: it takes a
+   **chain wait** on its current account for at most 30 minutes (a knob), recorded in `.rescuewait` with
+   `kind=chain` — never opened on a five-hour reset whose grace has already passed, and held only on the account
+   it was taken on — then swaps to a target with room that is not the account it just left blocked. A chain wait ends early at its account's
    reset under rule 2's first two end conditions and never swaps away from an account that has just reset; at 30
    minutes with no target that has room it becomes the no-room wait. Both waits sit inside, not instead of,
    `SWAP_COOLDOWN` and `SWAPBLOCK_COOLDOWN`.
 
 Tests under `makeCcdHarness` with fixture homes, every fixture past `SWAP_COOLDOWN`, each red when its guard is
-removed: a transcript banner row older than `.landed` produces no rescue; a pane positive whose newest rate-limit
-row predates `.landed` produces no rescue; no `.landed` with an old row rescues; an unreadable or unresolvable
-transcript under a pane positive rescues; a `five_hour` row whose reset is 300 s out, with auto-continue armed,
+removed. Rule 1's tests shipped with D-3526 (`ccd-limit-banner.test.ts`). Rules 2–3: a verdict keeps a rate-limit row's
+reset, window and epoch only from a dated read of a row this pane's process wrote, on the transcript rung's cached
+tick too; a pane tmux cannot place, lost auth on either surface (`[rate-limit row, a turn, a 401]`, whoever wrote the
+401; an auth-failure pane) and a carried-in row keep none and take no wait of any kind; a row written after its own
+`resetsAt` keeps no reset and opens no wait of any kind; a `five_hour` row whose reset is 300 s out, with auto-continue armed,
 produces no dispatch, and deleting the bound check makes it dispatch; the same row on a stalled session
 dispatches; the same row on a non-Anthropic backend dispatches; a `seven_day` row 300 s out dispatches; a bound of
 0 dispatches; an armed pane after the reset with no new row ends the wait in place and nothing dispatches, and
-with a new row a dispatch follows; a stalled no-room wait across its own reset is rescued once a target has room; a
+with a new row a dispatch follows; a stalled no-room wait across its own reset, or inside its grace, is rescued
+once a target has room; a human's draft or an assistant line saying "continuing shortly" is not an armed
+auto-continue, while Claude Code's footer below the prompt box is; a wait first taken after its reset's grace never
+ends in place, and no chain wait opens on such a reset; an armed pane held in place after its reset turned is
+rescued `RESCUE_CHAIN_WAIT` past that reset, while a stalled one is rescued at once; a no-room wait whose reset a
+newer row proves stale ends `stale` and is not counted; spread never passes over a recovered home and never turns a
+rescue with a target into an undecidable one; an open chain wait on another account holds nothing; a
 stalled chain wait whose account reset closes and the tick rescues, with no second chain wait; a row written after
 its own `resetsAt` opens no wait; an auth-failure pane with
 an old rate-limit row carrying a near reset dispatches; a target set with no room gives no dispatch and a stranded
 record; a target just left blocked is skipped; a fourth rescue within the hour takes the chain wait; a chain wait
-whose account resets inside it does not swap on an armed pane. The two caching pins in `ccd-limit-banner.test.ts` that cached an
-absent or unreadable transcript as a negative verdict now expect unread (`2`). `.landed`, `.rescuewait` and
-`.carriednote` join the per-session registry field list and purge with the row; `.rescuewait` is read by ccd's own
+whose account resets inside it does not swap on an armed pane. The transcript arm's `tscan` cache keeps its two
+answers; `.tdate` carries the dated row beside its answer, and a record in the shape before is re-read, never
+parsed. `.rescuewait` joins the per-session registry field list and purges with the row, as D-3526's `.carriednote`
+and `.tdate` already do; `.rescuewait` is read by ccd's own
 entry/exit dedupe and by doctor, whose reader ships with stage 6's first part and its doctor checks; §9's
 instrument reads the swap log.
 
@@ -555,7 +586,7 @@ a swap; an operator `/model opus` survives an auto-home.
 
 | Area | Change |
 |---|---|
-| `ccd/ccd` | carry merge and its `diverged` lines; the carry and scan slot and budgets; graceful stop; keystroke journal `.typed`; manifest writer and scan; composed prompt; `.landed` stamp in `cmd_swap`, `.carriednote` and the carried-in-banner check; rescue wait near reset, spread, no-bounce, the `auto-rescue` line's `reset=`/`type=`/`row=` tokens; in-flight refusal and its refusal word; `--cut-delegated`; the pressure-reap variable in the spawn environment; scope stop on pane end; route write from `/model`/`/effort`; re-stamp and citation-corpus procedure |
+| `ccd/ccd` | carry merge and its `diverged` lines; the carry and scan slot and budgets; graceful stop; keystroke journal `.typed`; manifest writer and scan; composed prompt; the carried-in-banner check (shipped, D-3526: `_limit_dated` on the pane's process start, `.carriednote`, `.tdate`); the dated row the waits read (`dated` mode, carried in `.tdate`); rescue wait near reset, spread, no-bounce, the `auto-rescue` line's `reset=`/`type=`/`row=` tokens; in-flight refusal and its refusal word; `--cut-delegated`; the pressure-reap variable in the spawn environment; scope stop on pane end; route write from `/model`/`/effort`; re-stamp and citation-corpus procedure |
 | `ccd/ccd-scope-sweep` (new) | per-scope verdict record `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`; inert stop (C11); report. `ccd/ccd-cap-scopes` is unchanged |
 | `deploy/systemd/ccd-scope-sweep.{service,timer}`, `deploy/deploy.sh`, `ccd/ccrc` install spine, `agent/test/deploy-verify.test.ts` | the unit and timer, their install and uninstall, and the pins that enumerate each ccd timer |
 | `ccd/ccrc-doctor-checks` | reads the sweep's verdict record and `$REG/<id>.rescuewait`; lists dead scopes and long-lived pane processes; records operator stops |
@@ -564,7 +595,7 @@ a swap; an operator `/model opus` survives an auto-home.
 | `server/src/server.ts` (swap route), `server/src/ccdargv.ts` | `--cut-delegated` mint site and body field; the refusal's own 409 |
 | `agent/src`, `server/src` (`watch.ts`, `fleet.ts`, `coord/routes.ts` signals), `shared/api.ts` | the `delegations` field, readers per mode, run signals |
 | `pwa/src` | session-card chip; swap-sheet on-demand counts and override |
-| `server/test` (limit-banner harness; `ccd-limit-banner.test.ts`) | process-group kill on timeout; the two caching pins expect unread (`2`) |
+| `server/test` (limit-banner harness; `ccd-limit-banner.test.ts`) | process-group kill on timeout; `dated` mode, and the row `.tdate` carries (the `tscan` cache keeps its two answers) |
 | `deploy/measure-continuity.py` (new, read-only) | the instruments of §9 |
 
 ## 8. Failure modes named
@@ -578,12 +609,15 @@ a swap; an operator `/model opus` survives an auto-home.
   equality is never decided on size alone, pinned.
 - **The model ignores the manifest:** counts reach the operator and the coordinator anyway; §9 retires prompt text
   that measures no change.
-- **A carried-in banner rescues a session that is not blocked:** the `.landed` stamp dates the banner.
+- **A carried-in banner rescues a session that is not blocked:** the pane's own process start, with a swap after
+  the row, dates the banner (D-3526); a landing whose Claude Code never came up is still moved, on purpose.
 - **A real block on the target reads as carried-in** while the transcript lags the pane (the kind of lag D-2443 stands down for):
-  the dating read is uncached and the next tick asks again; §9 counts pane positives rule 1 suppressed that became
+  the dated read is cached only on the process and the file, so the row the target writes is read on the tick it
+  lands; §9 counts pane positives rule 1 suppressed that became
   a rescue within five minutes.
 - **A near-reset wait lasts longer than the reset promised:** it ends `RESCUE_WAIT_GRACE` after the reset, in
-  place only on an armed pane, otherwise in a swap; a row stale on arrival opens no wait.
+  place only on an armed pane, otherwise in a swap; the hold in place lasts at most `RESCUE_CHAIN_WAIT` past the
+  reset, then the session is rescued as today; a row stale on arrival opens no wait.
 - **A stalled session idles on a reset account:** a stalled session's waits end in a swap, never in place; the one
   case left is a stalled session whose own account is the only one with room, left as today and counted by §9
   (§11 item 6).
@@ -607,7 +641,7 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 | 1 | `(kept)` carries by reason (`busy`, `budget`, `error`, bare); journal-missing resume refusals | 774 of 1,310, all by existence; 8 | only `busy`/`budget`, under 2%, reported with and without the pairs stranded before stage 1's deploy; 0 |
 | 2 | spike outcome | — | decides stage 3 |
 | 3 | rescues with live work that resumed the exact run; finished agents re-run by relaunches; manifest writes ending `unmeasured`; stalled vs not-stalled restarts with a non-empty manifest | 11 of 30; up to 3.6M tokens; —; — | over two thirds; near 0; under 5%; reported |
-| 4 | sessions with 4 or more auto-rescues in an hour; chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner; near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min; no-room waits a stalled session outlived its own reset in, with the seconds past it (§11 item 6) | at least 1 (archive max 4); —; 4 of 5 manual swaps with live work; 32 of 248; —; —; — | 0; 0; 0; 0; reported; reported; reported |
+| 4 | sessions with 4 or more auto-rescues in an hour; chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner (since D-3526, only a landing whose Claude Code never came up); near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min; no-room waits a stalled session outlived its own reset in, with the seconds past it (§11 item 6) | at least 1 (archive max 4); —; 4 of 5 manual swaps with live work; 32 of 248; —; —; — | 0; 0; 0; reported; reported; reported; reported |
 | 5 | holed or unmeasured wave-dones accepted without a note | not measured | 0 |
 | 6 | pressure kills of background shells; dead ccd scopes that pass the inert test yet survive a day; OOM stops of pane scopes whose session was idle 30 minutes or more with a live background shell, and all pane-scope OOM stops | 186 since 2026-09-04 (9 since 09-18); 5 of 12 on 2026-09-23; B, measured the week before the variable ships, and 16 in 2026-09-16..23 | 0; 0; at most B + 2 a week, reported |
 | 7 | restarts that revert an operator's `/model` | this session's case | 0 |
