@@ -350,8 +350,12 @@ keeps today's constant.
 
 **Not-stalled restarts.** Claude Code submits the resume prompt only when the resumed tail is an interrupted turn.
 A session that had ended its turn to wait lands idle; it gets the manifest in its session-start context at its next
-turn, the counts reach the phone (stage 5), and nothing types. §9 counts stalled and not-stalled restarts with a
-non-empty manifest separately.
+turn, the counts reach the phone (stage 5), and nothing types at spawn. If the restart orphaned in-flight work (the
+marker's `lostBg`) and no turn has run since, the server's stall watch mails the session itself once, after its live
+status has read idle (or `shell`, idle over a background shell) unchanged for 15 minutes, within 24 hours of the
+restart; that mail needs `stall-watch-live` and `stall-watch-w2-live` both armed. If it is still unacked 30 minutes
+after its delivery (or still undelivered 30 minutes after it was queued), the operator is pushed once, which also
+needs `stall-watch-escalate`. §9 counts stalled and not-stalled restarts with a non-empty manifest separately.
 
 **Deferred, not relaunched into the wall.** The manifest keeps a resume-attempt count per run; a run whose resumed
 agents die on the limit again becomes `deferred-until-reset <resetsAt>`, and the prompt says: resume once; if agents
