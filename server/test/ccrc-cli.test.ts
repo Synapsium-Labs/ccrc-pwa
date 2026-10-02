@@ -207,7 +207,7 @@ describe('ccrc: dispatch and usage', () => {
     // split as every verb above: `server/test/ccrc-codex.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\|watchdog\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|restamp\|version\|watchdog\}/);
     expect(r.stdout).toMatch(/^ {2}codex {5}run a Codex lane's two tiers/m);
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
@@ -220,6 +220,10 @@ describe('ccrc: dispatch and usage', () => {
     expect(r.stdout).toMatch(/^ {2}backup {4}/m);
     expect(r.stdout).toMatch(/^ {2}logs {6}/m);
     expect(r.stdout).toMatch(/^ {2}expose {4}give this box a public name/m);
+    // `restamp` joined it in landing-order wave 1 (spec 2026-09-23 §5.1) — the
+    // regenerator worker clause 16 names for a `ccrc:generated` stamp.
+    // `server/test/ccrc-restamp.test.ts` owns what it does.
+    expect(r.stdout).toMatch(/^ {2}restamp {3}re-stamp one file ccrc generated/m);
     expect(r.stdout).toMatch(/^ {2}watchdog {2}\(server\/both, Linux; run by ccrc-update-watchdog\.timer/m);
     // …and its `ip` arm (stage 5, S10) is discoverable from the same
     // paragraph: no domain at all, caddy's internal CA, passphrase-only.
