@@ -167,22 +167,37 @@ describe('the worker merge deny', () => {
     expect(reason, 'the merge deny replaced the graph gate\'s counted deny').toContain('Denial 1 of 3');
   });
 
-  it('answers a 36 KB adversarial command in bounded time — the head match restarts at every separator', () => {
+  it('refuses a head whose VAR= or flag value runs a substitution — a `$(…)` is part of the word', () => {
+    // The head match keeps every token class off `;&|()` so that it stays linear;
+    // a value that holds a `$(…)` is the one place a `(` is still part of the
+    // word, and `GH_TOKEN=$(<tok) gh pr merge` is how a worker would borrow a token.
+    hold(WAVE_HOLD);
+    for (const c of [
+      'GH_TOKEN=$(<tok) gh pr merge 42', 'X=$(date) gh pr merge 42', 'gh --repo=$(cat r) pr merge 42',
+      'env GH_TOKEN=$(cat) gh pr merge 42', 'X="$(date)" gh pr merge 42', 'X=$((1+2)) gh pr merge 42',
+      'gh -R $(cat r) pr merge 42', 'timeout $(echo 5) gh pr merge 42',
+    ]) {
+      expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
+    }
+  });
+
+  it('answers a 100 KB adversarial command in bounded time — the head match restarts at every separator', () => {
     // A token class that can cross a separator, or a blank class that includes
-    // the newline, makes every `;a=` / `\na=` start walk to the end of the
-    // payload: 5 to 9 s measured on the first draft of the head regex. The tail
-    // carries `merge`, so the prefilter lets the match run; none is a merge.
+    // the newline, makes every `;a=` / `\na=` / `;gh -R ` start walk to the end
+    // of the payload: 5 to 9 s at 36 KB, and 1.6 s at 36 KB for the gh-flag
+    // classes alone (so 100 KB, where a walk costs ~12 s and the fix ~0.2 s). The
+    // tail carries `merge`, so the prefilter lets the match run; none is a merge.
     for (const sep of [';', '\n']) {
-      for (const unit of ['a=', 'gh ', 'timeout 1 ']) {
+      for (const unit of ['a=', 'gh ', 'gh -R ', 'timeout 1 ']) {
         const u = `${sep}${unit}`;
         const t0 = Date.now();
-        const r = bash(u.repeat(Math.ceil(36000 / u.length)) + '\n# merge origin');
+        const r = bash(u.repeat(Math.ceil(100000 / u.length)) + '\n# merge origin');
         const ms = Date.now() - t0;
         expect(r.deny, `a non-merge was denied: ${JSON.stringify(u)}`).toBeNull();
         expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(3000);
       }
     }
-  });
+  }, 60000);
 
   it('leaves every other gh and every mention of the words alone', () => {
     hold(WAVE_HOLD);

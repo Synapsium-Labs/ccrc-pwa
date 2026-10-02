@@ -3372,7 +3372,9 @@ fi
 # command word (`"gh" pr merge`), legacy backticks, `xargs`, an unlisted
 # wrapper (`nice`, `stdbuf`), a named wrapper's own flags (`sudo -E`,
 # `command -p`; only `timeout`'s one argument is parsed), a `$'…'` string
-# holding `\'`, and a `#` comment straight after a `)`. What is DENIED
+# holding `\'`, a `#` comment straight after a `)`, a backslash-newline
+# continuation (`gh pr \<newline> merge`), and a `$(…)` that holds a `;` `&`
+# `|` or `(` inside a `VAR=` or flag value. What is DENIED
 # though it is not a merge: a heredoc BODY line that begins `gh pr merge`
 # (heredocs are not stripped) — write such text through a quoted string
 # instead. The hook is a contract the fleet honours, not an access boundary
@@ -3384,7 +3386,9 @@ fi
 # session), or a reclaim heir that was the programme's own worker (hold and
 # marker both). The hook cannot tell it from a worker; the lifecycle
 # reference sends that coordinator to the operator's shell.
-# The strip's jq uses lookaround gsub, so a jq built without Oniguruma yields an empty mcmd and the deny FAILS OPEN (#224 keeps the hookstate parse regex-free for exactly that reason).
+# The strip's jq uses lookaround gsub, so a jq built without Oniguruma yields
+# an empty mcmd and the deny FAILS OPEN (#224 keeps the hookstate parse
+# regex-free for exactly that reason).
 #
 # WHY THE MARKER TOO. A close releases the hold (`ws-release`), and a child's
 # reclaim runs AFTER the close answers, on its own queue, and defers while the
@@ -3413,11 +3417,16 @@ fi
 # for this same call (the Read nudge, or a sync advisory); the merge deny
 # replaces it. It never replaces the graph gate's DENY, which has already
 # counted the denial it prints (D-1689) — that call is refused either way.
-# COMPLEXITY: the match restarts at every separator, so no token class may cross one and
-# the blanks inside a head are space and tab only, never a newline: a class that could walks
-# to the end of the line for each start (5 to 9 s on a 36 KB `;a=;a=…` or newline x `a=`
-# command, which `session-hook-sync-advisory.test.ts`'s env-var shape pins; now ~10 ms).
-GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+[^[:space:];&|()]+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:];&|()]*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-[^[:space:];&|()]+([ \t]+[^-[:space:];&|()][^[:space:];&|()]*)?)*[ \t]+pr([ \t]+-[^[:space:];&|()]+([ \t]+[^-[:space:];&|()][^[:space:];&|()]*)?)*[ \t]+merge([[:space:]]|$)'
+# COMPLEXITY: the match restarts at every separator, so no token class may
+# cross one, and the blanks inside a head are space and tab only, never a
+# newline: a class that could walks to the end of the line for each start (5
+# to 9 s on a 36 KB `;a=;a=…` or newline x `a=` command, which
+# `session-hook-sync-advisory.test.ts`'s env-var shape pins; now ~10 ms). A
+# value, a `timeout` argument or a flag may still hold ONE `$(…)` (blanks
+# allowed, no `;` `&` `|` and no nesting past `$((…))`): `X=$(date) gh pr
+# merge` runs, and a class that stopped at `(` would let it through. The
+# body stops at the first `)`, so the alternative adds no walk.
+GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+pr([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+merge([[:space:]]|$)'
 if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
   mcmd=$(jq -r --arg q "'" 'if .tool_name == "Bash" then ((.tool_input.command // "")
