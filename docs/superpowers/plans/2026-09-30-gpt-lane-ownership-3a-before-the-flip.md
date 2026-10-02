@@ -11207,6 +11207,14 @@ Expected: green, with the same count as the base's run, then `census: clean … 
 | MF-2 (i) | drop `readRegular`'s `isFile()` throw | all five MF-2 `models-op.test.ts` cases (5 of 5, each by deadline) and the doctor FIFO case (by deadline) | nothing else was run |
 | MF-2 (ii) | revert only `readCatalogue`'s call site to `readFileSync(…, 'utf8')` | "show with a FIFO catalogue answers catalogue-unreadable" alone (1 of 5) | the other four MF-2 cases |
 
+**Final fix wave, MF-3: `assertForeignFront`'s refusals (`server/test/codexLaneFixture.ts`).** The guard existed and only its green path ran; the five cases (a control and one per refusal) run nothing but `/bin/sh -c 'command -v …'`, with `exit 97` decoys outside the HOME that are never run. No product byte changes, so this is inert under ruling Z. Each row was measured red, its restore verified with `git diff --quiet`.
+
+| Row | Mutation (`assertForeignFront`) | Reds | Stays green |
+|---|---|---|---|
+| MF-3 (1) | delete the `CCGPT_CONFIG is set` throw | "refuses an env that still carries CCGPT_CONFIG, …" (1 of 5) | the control and the other three refusals |
+| MF-3 (2) | make the `got !== want` comparison always false | the `ccgpt` and the `litellm` resolution cases (2 of 5) | the control, `CCGPT_CONFIG` and the recorder case |
+| MF-3 (3) | delete the `FOREIGN_MARK` check | "refuses a <home>/.local/bin/ccgpt that is not this shape's recorder" (1 of 5) | the control and the other three refusals |
+
 - [ ] **Step 7: Execution-time departures.** Any departure a task found during execution is reported by slug. The controller mints its number and substitutes it; nobody else writes a D-number, a `D-TBD`, or a range (R12).
 
 ```bash

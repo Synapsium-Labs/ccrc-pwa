@@ -91,7 +91,7 @@ import {
   recordingStub, lockStub, freeLanes, portAccepts, laneAnswer, plantLaneAuth, plantLaneConfig, fakeLitellmSource,
   laneUnits, registerLaneCleanup, GPT_LANE_BINS, codexAuthDir, authDirOf, eventually, plantLiveShape,
   foreignSnapshot, externalCodexRow, REHEARSAL_REGISTRY, writeRehearsalCatalogue, doctorClasses, doctorTable,
-  stateCallsNaming, liveShapeRefreshes, foreignCcgptCalls, foreignProbeCalls, assertForeignFront,
+  stateCallsNaming, liveShapeRefreshes, foreignCcgptCalls, foreignProbeCalls, assertForeignFront, FOREIGN_MARK,
   withForeignProxyRunning, type ForeignEntry, type RefreshObservation, type StubRc, type LanePorts,
 } from './codexLaneFixture.js';
 
@@ -8511,4 +8511,59 @@ describeLinux('Plan 3a Task 10 — the cutover rehearsal', () => {
     expect(usageEnables(home)).toEqual(['--user enable --now ccrc-codex-usage@codex-b.timer']);
     expect(again.stdout, 'the second-writer finding outlived the operator\'s disable').not.toMatch(/ccgpt-usage@codex-b\.timer/);
   }, 240_000);
+});
+
+// Plan 3a final fix wave, MF-3: `assertForeignFront` is the wall every
+// rehearsal run that can reach the external arm stands behind (a bare `ccgpt
+// stop` on the fleet box stops a live lane's tiers by name), and until now
+// only its green path ran. One case per refusal, plus the green control.
+// Nothing here runs ccrc or anything a name resolves to: the guard asks
+// `/bin/sh -c 'command -v …'` and reads one file. The decoys sit OUTSIDE the
+// HOME, on PATH after `<home>/.local/bin`, so a missing name resolves to a
+// file that is not this shape's; each is `exit 97` and is never run.
+describe('Plan 3a final fix wave — assertForeignFront refuses every front it was written to refuse (MF-3)', () => {
+  /** The two names the guard asks about, planted as the live shape plants
+   *  them: the recorder `ccgpt`, carrying FOREIGN_MARK, and `litellm` as a
+   *  link to a stand-in install inside the HOME. */
+  function front(): { home: string; decoy: string; env: NodeJS.ProcessEnv } {
+    const home = mkTmp('ccrc-front-');
+    const decoy = mkTmp('ccrc-front-decoy-');
+    const bin = join(home, '.local', 'bin');
+    const lit = join(home, '.local', 'share', 'foreign-litellm', 'bin');
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(lit, { recursive: true });
+    writeFileSync(join(bin, 'ccgpt'), `#!/bin/sh\n${FOREIGN_MARK}\nexit 0\n`, { mode: 0o755 });
+    writeFileSync(join(lit, 'litellm'), `#!/bin/sh\n${FOREIGN_MARK}\nexit 97\n`, { mode: 0o755 });
+    symlinkSync(join(lit, 'litellm'), join(bin, 'litellm'));
+    for (const n of ['ccgpt', 'litellm']) writeFileSync(join(decoy, n), '#!/bin/sh\nexit 97\n', { mode: 0o755 });
+    return { home, decoy, env: { PATH: `${bin}:${decoy}:/usr/bin:/bin`, HOME: home } };
+  }
+
+  it('control: the live shape\'s front, with no CCGPT_CONFIG, passes', () => {
+    const { home, env } = front();
+    expect(() => assertForeignFront(env, home)).not.toThrow();
+  });
+
+  it('refuses an env that still carries CCGPT_CONFIG, whatever the names resolve to', () => {
+    const { home, env } = front();
+    expect(() => assertForeignFront({ ...env, CCGPT_CONFIG: join(home, 'x.yaml') }, home)).toThrow(/CCGPT_CONFIG is set/);
+  });
+
+  it('refuses a ccgpt that resolves outside <home>/.local/bin, naming where it resolved', () => {
+    const { home, env } = front();
+    rmSync(join(home, '.local', 'bin', 'ccgpt'));
+    expect(() => assertForeignFront(env, home)).toThrow(/ccgpt resolved to .*decoy/);
+  });
+
+  it('refuses a <home>/.local/bin/ccgpt that is not this shape\'s recorder', () => {
+    const { home, env } = front();
+    writeFileSync(join(home, '.local', 'bin', 'ccgpt'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    expect(() => assertForeignFront(env, home)).toThrow(/not this shape's recorder/);
+  });
+
+  it('refuses a litellm that resolves outside <home>/.local/bin, naming where it resolved', () => {
+    const { home, env } = front();
+    rmSync(join(home, '.local', 'bin', 'litellm'));
+    expect(() => assertForeignFront(env, home)).toThrow(/litellm resolved to .*decoy/);
+  });
 });

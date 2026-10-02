@@ -2028,7 +2028,10 @@ export function writeRehearsalCatalogue(home: string, id: string, fetchedAt: num
   fs.writeFileSync(path.join(dir, `${id}.json`), `${JSON.stringify(rehearsalCatalogue(fetchedAt))}\n`);
 }
 
-const FOREIGN_MARK = '# FOREIGN-FIXTURE-3a: another repository owns this file';
+/** The line every file the live shape puts at another repository's path
+ *  carries. Exported for `assertForeignFront`'s own refusal cases (Plan 3a
+ *  final fix wave, MF-3), which plant its two names without running ccrc. */
+export const FOREIGN_MARK = '# FOREIGN-FIXTURE-3a: another repository owns this file';
 
 /** The names the probe's interpreter is asked about, one list for the recorder
  *  below and for `observeHourlyRefresh`'s scrub (single definition). VALUES are
