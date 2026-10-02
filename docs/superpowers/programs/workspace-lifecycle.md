@@ -201,6 +201,8 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - 3868 and 3869: a stopped main checkout's Restore, in the actions sheet and in the header, sends the same
       `/ensure` that Restart sends, so it takes the same substrate-fault gate. A workspace's `ws-restore` stays
       ungated.
+    - 3870: the Archive sheet's "Stop only", now the PWA's only stop control, takes the substrate-fault gate and the
+      fire-time re-check that the header's Stop session had. Substrate §4 lists stop as destructive under an outage.
   - **Claim wait:** CLAUDE.md and README.md, which Tasks 6 and 12 edit, are held by stall-watch wave 4's claim 897
     (run 226). The peer protocol forbids editing a contested path, so the worker holds those tasks. Calm-harbor has
     been asked (mail 3245) to extend the second-lander rule agreed for run 238.
