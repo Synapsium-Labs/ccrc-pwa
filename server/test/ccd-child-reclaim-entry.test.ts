@@ -263,18 +263,34 @@ describe('controls — the clean direct entry answers as ccd always has', () => 
     expect(honest, 'the same call without the poison names the row').toBe(`rc=0 shared=[${OTHER}]`);
   }, 60_000);
 
-  it('C4 an ORDINARY direct verb keeps its inherited environment: its probe and its payload each run BASH_ENV', () => {
-    // Sanitization is protected-entry-only (the plan as tightened): an
-    // ordinary start's probe and payload both see the caller's environment.
+  it('C4 an ORDINARY direct verb keeps its inherited environment: its payload runs BASH_ENV, its startup-free probe does not (D-3702)', () => {
+    // The ordinary PAYLOAD sees the caller's environment untouched; only the
+    // Bash-floor PROBE runs without Bash startup state, so what the caller's
+    // BASH_ENV does can no longer decide whether ccd starts at all.
     plantModels();
     de = installDirectEntry(h.home);
     const marks = path.join(h.home, 'bash-env-ran');
     const r = direct(['caps'], { BASH_ENV: bashEnvFile(`printf '%s\\n' "$0" >> "${marks}"`) });
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout.split('\n')).toContain('ws-reclaim');
-    expect(fs.readFileSync(marks, 'utf8').split('\n').filter(Boolean), 'the ordinary probe, then the payload')
-      .toEqual(['ccd-entry-probe', de.body]);
+    expect(fs.readFileSync(marks, 'utf8').split('\n').filter(Boolean), 'the payload alone')
+      .toEqual([de.body]);
   }, 60_000);
+
+  for (const [name, env] of [
+    ['a BASH_ENV that prints to stdout', () => ({ BASH_ENV: bashEnvFile("printf 'noise from BASH_ENV\\n'") })],
+    ['an exported printf', () => ({ 'BASH_FUNC_printf%%': '() { builtin printf "x%s" "$@"; }' })],
+  ] as const) {
+    it(`C5 ${name} no longer refuses an ordinary verb as entry-no-bash: the probe is startup-free, the payload keeps it (D-3702)`, () => {
+      de = installDirectEntry(h.home, { body: '#!/usr/bin/env bash\n{ declare -F printf; echo started; } > "$HOME/ordinary-out"\n' });
+      const r = direct(['caps'], env());
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).not.toContain('refused (entry-');
+      const out = fs.readFileSync(path.join(h.home, 'ordinary-out'), 'utf8');
+      expect(out, 'the payload started').toContain('started');
+      if (name === 'an exported printf') expect(out, 'and kept the inherited function — ordinary entry is not sanitized').toContain('printf');
+    }, 60_000);
+  }
 });
 
 // ── startup attacks ─────────────────────────────────────────────────────
@@ -823,6 +839,43 @@ describe('the protected payload starts with no Bash startup state to hand on (D-
     const ord = envKeys();
     for (const k of ['BASH_ENV', 'ENV', 'CDPATH', 'KEEP_ME', 'POSIXLY_CORRECT', 'TMOUT', 'FUNCNEST']) expect(ord, k).toContain(k);
     expect(ord.filter((k) => k.startsWith('BASH_FUNC_find'))).toHaveLength(1);
+  }, 60_000);
+});
+
+describe('the one change an ordinary start inherits from the launcher: PEP 538 locale coercion (D-3701)', () => {
+  // Isolated-mode Python coerces a C or POSIX LC_CTYPE to a UTF-8 locale at its
+  // own startup and writes LC_CTYPE into its environment, which the launcher
+  // hands on. Measured against the SAME body started by a direct `bash` with the
+  // SAME environment, so Bash's own additions (SHLVL, PWD, `_`) cancel out.
+  const ENV0_BODY = '#!/usr/bin/env bash\nenv -0 > "$HOME/env-out"\n';
+  const PEP538_TARGETS = ['C.UTF-8', 'C.utf8', 'UTF-8'];
+  const envOut = (): Map<string, string> => new Map(fs.readFileSync(path.join(h.home, 'env-out'), 'utf8').split('\0')
+    .filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)] as [string, string]));
+  const delta = (lang: string): Record<string, string | null> => {
+    de = installDirectEntry(h.home, { body: ENV0_BODY });
+    const bin = path.join(h.home, '.local', 'bin');
+    const env = ghContainedEnv(h.home, { HOME: h.home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, LANG: lang },
+      { systemd: true, tmux: true });
+    const viaLauncher = spawnSync(de.entry, ['caps'], { cwd: h.home, encoding: 'utf8', env });
+    expect(viaLauncher.status, viaLauncher.stderr).toBe(0);
+    const launched = envOut();
+    const viaBash = spawnSync(REAL_BASH, ['--', de.body, 'caps'], { cwd: h.home, encoding: 'utf8', env });
+    expect(viaBash.status, viaBash.stderr).toBe(0);
+    const direct0 = envOut();
+    const d: Record<string, string | null> = {};
+    for (const [k, v] of launched) if (direct0.get(k) !== v) d[k] = v;
+    for (const k of direct0.keys()) if (!launched.has(k)) d[k] = null;
+    return d;
+  };
+
+  it('a C-locale ordinary start gains exactly LC_CTYPE, set to a PEP 538 UTF-8 target — and nothing else changes', () => {
+    const d = delta('C');
+    expect(Object.keys(d), JSON.stringify(d)).toEqual(['LC_CTYPE']);
+    expect(PEP538_TARGETS, `LC_CTYPE=${d['LC_CTYPE']}`).toContain(d['LC_CTYPE']);
+  }, 60_000);
+
+  it('CONTROL: a caller already in a UTF-8 locale gains nothing — the launcher hands its environment on unchanged', () => {
+    expect(delta('C.UTF-8')).toEqual({});
   }, 60_000);
 });
 
