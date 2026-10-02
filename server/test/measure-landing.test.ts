@@ -142,7 +142,7 @@ describe('measure-landing: an input it could not read is never a number', () => 
     const full = JSON.stringify({ ok: true, mail: Array.from({ length: 500 }, (_, i) => row(i)) });
     const one = JSON.stringify({ ok: true, mail: [row(0)] });
     const h = stubHome([], [
-      '  *"runs list"*) echo \'{"ok":true,"runs":[{"claimedBy":null},{"claimedBy":"coord-full"},{"claimedBy":"coord-one"}]}\' ;;',
+      '  *"runs list"*) echo \'{"runs":[{"claimedBy":null},{"claimedBy":"coord-full"},{"claimedBy":"coord-one"}]}\' ;;',
       `  *"--to coord-full"*) echo '${full}' ;;`,
       `  *"--to coord-one"*) echo '${one}' ;;`,
     ]);
@@ -160,7 +160,7 @@ describe('measure-landing: an input it could not read is never a number', () => 
     // on a transport failure while still printing {"ok":false}. Read as data,
     // either would be `mail: []` — a coordinator counted with n 0, unmatched 0.
     const arms = (denied: string) => [
-      '  *"runs list"*) echo \'{"ok":true,"runs":[{"claimedBy":"coord-a"},{"claimedBy":"coord-b"}]}\' ;;',
+      '  *"runs list"*) echo \'{"runs":[{"claimedBy":"coord-a"},{"claimedBy":"coord-b"}]}\' ;;',
       `  *"--to coord-a"*) ${denied} ;;`,
       '  *"--to coord-b"*) echo \'{"ok":true,"mail":[]}\' ;;',
     ];
@@ -173,6 +173,14 @@ describe('measure-landing: an input it could not read is never a number', () => 
     const t = tool(down, ['mail-latency']);
     expect(t.status, 'a transport failure (exit 3) was read as an empty page').not.toBe(0);
     expect(t.stderr).toContain('ccrc-api answered no data');
+    // A body of some other shape (no ok, no list under the verb's key — a
+    // framework's own 500) and a refused `runs list` are refused the same way.
+    const odd = tool(stubHome([], arms('echo \'{"statusCode":500,"error":"Internal Server Error"}\'')), ['mail-latency']);
+    expect(odd.status, 'a body with no mail list was read as an empty page').not.toBe(0);
+    expect(odd.stderr).toContain('ccrc-api answered no data');
+    const noRuns = tool(stubHome([], ['  *"runs list"*) echo \'{"ok":false,"error":"unauthorized"}\' ;;']), ['mail-latency']);
+    expect(noRuns.status, 'a refused runs list was read as no coordinators').not.toBe(0);
+    expect(noRuns.stderr).toContain('ccrc-api answered no data for \'runs list\'');
   });
 });
 

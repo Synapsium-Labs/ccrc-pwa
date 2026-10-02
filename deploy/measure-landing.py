@@ -539,7 +539,9 @@ NUDGE = 'ccrc-mail: you have new mail.'
 MAIL_PAGE = 500   # the server's own clamp (`clampMailLimit`): no read can ask for more
 
 
-API_READS = (('runs', 'list'), ('mail', 'list'))
+# verb -> the key its SUCCESS body carries a list under. `runs list` answers
+# `{"runs":[...]}` with no `ok` field at all; `mail list` answers `{"ok":true,"mail":[...]}`.
+API_READS = {('runs', 'list'): 'runs', ('mail', 'list'): 'mail'}
 
 
 def _api(*args):
@@ -550,14 +552,18 @@ def _api(*args):
         raise SystemExit(f'measure-landing: refused a ccrc-api verb that is not a list read: {" ".join(args[:2])!r}')
     r = subprocess.run([os.path.expanduser('~/.local/bin/ccrc-api'), *args], capture_output=True, text=True, timeout=60)
     # The client exits 0 on EVERY HTTP answer (a 4xx/5xx `{"ok":false}` body too)
-    # and exits 3 on a transport failure while still printing `{"ok":false}`: an
-    # answer is data only when it exited 0 AND says ok:true. Anything else read
-    # as data would be an empty list — a coordinator counted with n 0.
+    # and exits 3 on a transport failure while still printing `{"ok":false}`. An
+    # answer is data only when it exited 0, parsed to an object, did not say
+    # ok:false (every error body does; a success body may carry no `ok` at all)
+    # and carries its list under the verb's own key — so a refused read, or a
+    # body of some other shape, is never read as an empty list (a coordinator
+    # counted with n 0).
     try:
         body = json.loads(r.stdout)
     except ValueError:
         body = None
-    if r.returncode != 0 or not isinstance(body, dict) or body.get('ok') is not True:
+    key = API_READS[tuple(args[:2])]
+    if r.returncode != 0 or not isinstance(body, dict) or body.get('ok') is False or not isinstance(body.get(key), list):
         why = body.get('error') if isinstance(body, dict) else None
         raise SystemExit(f'measure-landing: ccrc-api answered no data for {" ".join(args[:2])!r}: '
                          f'{why or r.stderr.strip()[:200] or "exit " + str(r.returncode)}')
