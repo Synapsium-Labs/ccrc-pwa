@@ -2840,7 +2840,7 @@ Write the rows below to `<SCRATCH>/rows.json`, then from the worktree root run t
 python3 <SCRATCH>/mutate.py <SCRATCH>/rows.json S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20
 python3 <SCRATCH>/mutate.py <SCRATCH>/rows.json S21 S22 S23 S24 S25 S26 S27 S28 S29 S30 S31 S32 S33 S34 S35 S36 S37 S38
 python3 <SCRATCH>/mutate.py <SCRATCH>/rows.json P1 P2 P3 P4 P5 P6 P7 P8 P9 P10 P11 P12 P13 P14 P15 P16 P17
-python3 <SCRATCH>/mutate.py <SCRATCH>/rows.json P18 P19 P20 P21 P22 P23 P24 P26 P27 P28 P29 P30 P31 P32 P33 P34
+python3 <SCRATCH>/mutate.py <SCRATCH>/rows.json P18 P19 P20 P21 P22 P23 P24 P26 P27 P28 P29 P30 P31 P32 P33 P34 P35
 ```
 
 Every row must print a non-zero `rc` and a `failed` count; `all restored` must end each batch; `git status --short` must show nothing afterwards. A row that prints `SKIPPED` means its `old` text is not in your tree exactly once: find out why before going on (your transcription differs from the plan's, or `main` moved). A row that stays GREEN is a guard nothing pins: stop and report it with the row id.
@@ -2896,11 +2896,12 @@ Measured on the prototype (`rc=1` on every row; the owning task in brackets; a c
 | P26, P27 | [8] the in-flight ref never released; the in-flight state never released | 1 \| 95 (96); 2 \| 94 (96) |
 | P28 | [8] rows chosen by `s.project` instead of the card they render on | 1 failed \| 95 passed (96) |
 | P29 | [8] the refusal toast loses its action (and its reasons vanish in 4.2 s) | 1 failed \| 95 passed (96) |
-| P30 | [7] the selected row no longer opens the fold | 1 failed \| 104 passed (105) |
+| P30 | [7] the selected row no longer opens the fold | 1 failed \| 106 passed (107) |
 | P31 | [5] folded rows order their card again | 1 failed \| 49 passed (50) |
 | P32 | [8] the confirm's live-pane count | 1 failed \| 95 passed (96) |
 | P33 | [8] the loop handed only archivable ids (so "skipped" never counts children) | 1 failed \| 95 passed (96) |
 | P34 | [7] no `Archiving…` while the loop runs | 1 failed \| 104 passed (105) |
+| P35 | [7] the toggle's `disabled` follows the fold being shown, not the selection holding it (review 229 A1) | 1 failed \| 106 passed (107) |
 
 The rows (`<SCRATCH>/rows.json`):
 
@@ -3545,7 +3546,7 @@ The rows (`<SCRATCH>/rows.json`):
   "id": "P30",
   "pkg": "pwa",
   "file": "pwa/src/fleet/ProjectCard.tsx",
-  "old": "  const releasedShown = releasedOpen || (selectedId !== null && group.released.some((s) => s.id === selectedId));",
+  "old": "  const releasedShown = releasedOpen || selectionInReleased;",
   "new": "  const releasedShown = releasedOpen;",
   "tests": [
    "test/project-card.test.tsx"
@@ -3587,6 +3588,16 @@ The rows (`<SCRATCH>/rows.json`):
   "file": "pwa/src/fleet/ProjectCard.tsx",
   "old": "                  {archivingReleased ? 'Archiving…' : `Archive all (${releasedArchivable})`}",
   "new": "                  {`Archive all (${releasedArchivable})`}",
+  "tests": [
+   "test/project-card.test.tsx"
+  ]
+ },
+ {
+  "id": "P35",
+  "pkg": "pwa",
+  "file": "pwa/src/fleet/ProjectCard.tsx",
+  "old": "            disabled={selectionInReleased}",
+  "new": "            disabled={releasedShown}",
   "tests": [
    "test/project-card.test.tsx"
   ]
@@ -3640,6 +3651,6 @@ None at planning. Numbers are minted per wave, at run-open, by the coordinator; 
 - **D-3782** (Task 8 Steps 1–4, run 220) — three adaptations, no behaviour changed. (a) Counts: `fleet-screen.test.tsx` + `tap-targets.test.tsx` measure `4 failed | 133 passed (137)` red and `137 passed (137)` green, not `…132 passed (136)` / `136 passed (136)` — one more pre-existing case on `6ca3d163`; the four red cases are the plan's. (b) Step 1 says "At the end of `pwa/test/fleet-screen.test.tsx`", but its Find block (`warn.mockRestore(); }); });`) matches once MID-file, before the "centralised-update programme wave 5" describe that landed after the plan was measured; the Find was followed, so the new describe sits there (older plans cite this file by line, but the audited citation cases stay `7 passed | 328 skipped (335)` after it, so the corpus `session-hook.test.ts` audits did not move). (c) Step 3's import of `inReleasedFold` from `../fleet/groupFleet` was merged into the existing `groupFleet` import line rather than added as a second import from the same module.
 - **D-3783** (Task 8, Pre-flight finding 12 (d) and Task 10 row P25, run 220) — the double-tap in-flight ref guard was accepted at planning as unpinned ("no test reaches it — under jsdom the sheet unmounts before a second click lands"); the task review raised it as a guard with no red-on-deletion test, against this repository's mutation-table rule, and the worker ruled to pin it. `pwa/test/archive-all-guard.test.tsx` mocks `QuickConfirm` (file-wide, hence its own file) with a stub whose one handler calls `onConfirm()` twice: with the guard line deleted it reds `1 failed (1)` (two loops, two summary toasts); restored, `138 passed (138)` across it, `fleet-screen` and `tap-targets`. The existing double-tap case is unchanged; `FleetScreen.tsx`'s comment now names the new file. Row P25 is therefore pinned, no longer NOT RUN.
 - **D-3784** (final whole-branch review, run 220; ruled in review 225's F1) — no task of this plan touches `ProjectCard`'s `holdsSelection`, but this wave moved a released row out of `group.sessions`, so a COLLAPSED card stopped marking that it holds the selection when the selected row was released — a regression the wave itself introduced. Commit `798120433` widens `holdsSelection` to `group.sessions` and `group.released` (never `group.archived`, whose identical gap predates this wave), pinned by `project-card.test.tsx:1461` at `eb632e605` — `:1478` once D-3785's case was inserted above it — (`a COLLAPSED card still marks the selection when the selected row sits only in Released`): red `1 failed | 105 passed (106)` before the fix, and review 225's mutation H1 (reverted to `group.sessions` only) measured the same `1 failed | 105 passed (106)`. The change stays.
-- **D-3785** (review 225's F2) — D-3784's sibling in the same card: while the selected row sits in `group.released`, `ProjectCard` forces the Released fold open (`releasedShown`), yet its toggle still called `onToggle('<project>::released')`, so a tap on an `aria-expanded="true"` toggle did nothing visible and silently inverted the stored key. Ruled: the toggle takes `disabled` while the selection lives in the fold, so a screen reader announces it unavailable and a tap cannot invert the stored key (no `:disabled` rule is added, so a sighted operator sees the same toggle; its cursor still reads as a pointer); otherwise unchanged. The predicate is one named const, `selectionInReleased`, read by both `releasedShown` and the toggle, and no CSS rule is added. Pinned by `project-card.test.tsx` (`the toggle is disabled while the selected row holds the fold open, and live otherwise`, whose control asserts the toggle is enabled and calls `onToggle` with a selection elsewhere): red `1 failed | 106 passed (107)` with the `disabled` wiring removed, green `107 passed (107)`.
+- **D-3785** (review 225's F2) — D-3784's sibling in the same card: while the selected row sits in `group.released`, `ProjectCard` forces the Released fold open (`releasedShown`), yet its toggle still called `onToggle('<project>::released')`, so a tap on an `aria-expanded="true"` toggle did nothing visible and silently inverted the stored key. Ruled: the toggle takes `disabled` while the selection lives in the fold, so a screen reader announces it unavailable and a tap cannot invert the stored key (a sighted operator sees the same toggle, ink and all); otherwise unchanged. The predicate is one named const, `selectionInReleased`, read by both `releasedShown` and the toggle. Review 229 completed it in three ways. The one CSS rule is `.proj-released-toggle:disabled { cursor: default; }`, nothing else, so the pointer no longer offers a tap that does nothing (the contrast, fleet-css and tap-targets suites needed no registration). The comment at `ProjectCard.tsx`'s `holdsSelection` that called it "the only place the card itself reads selectedId" is made true: `selectionInReleased` and `releasedShown` read it too, so it now names the card's own mark as the one read of that kind (comment only). And the control gains a third render, `releasedOpen` true with the selection elsewhere, asserting the toggle is enabled and a click reaches `onToggle` once. Pinned by `project-card.test.tsx` (`the toggle is disabled while the selected row holds the fold open, and live otherwise`, whose control asserts the toggle is enabled and calls `onToggle` with a selection elsewhere, and, in its third render, with the fold operator-opened): red `1 failed | 106 passed (107)` with the `disabled` wiring removed, green `107 passed (107)`; the third render alone reds `1 failed | 106 passed (107)` under `disabled={releasedShown}`, a mutation the first two renders left green, which Task 10 now carries as row P35. Row P30 is re-anchored to `releasedShown = releasedOpen || selectionInReleased`, as `ProjectCard.tsx` now reads.
 - **D-3786** (review 225's F3) — D-3783 pinned the double-tap in-flight guard in `archive-all-guard.test.tsx`, but the case in `fleet-screen.test.tsx` that carried the double-tap in its title could not red for it: under jsdom the real sheet unmounts after the first click, so the second click never reaches the guard (`FleetScreen.tsx` says as much). Title and comment only, no assertion dropped: the case is retitled `archives a PLACED row from the card it renders on; a second tap after the sheet closes starts no second loop`, which is what its `archive.mock.calls` assertion does pin, and a one-line comment points at `archive-all-guard.test.tsx` for the in-flight guard (review 225 measured deleting it as `1 failed (1)` there). No red measured, by ruling: nothing but a name changed; `fleet-screen.test.tsx` green at `97 passed (97)`.
 - **D-3787** (review 225's F5) — Task 5's `groupFleet` reorder put folded Released rows after EVERY other row, archived ones included, so a card holding only archived rows now outranked a card holding only released rows — the opposite of the order before the fold, and against the reorder's own stated reason. Ruled: the concatenation is three parts, live rows (neither in the released fold nor `bucket === 'archived'`), then `inReleasedFold` rows, then archived rows, each stable in the fleet order, and the comment now says that a folded row must not lift its card above a visible one while released rows still rank above archived ones. Pinned by `groupFleet.test.ts` (`a released-only card still ranks above an archived-only card`); the existing `a folded row never lifts its card` case stays green: red `1 failed | 50 passed (51)` with the two-part concatenation restored, green `51 passed (51)`.

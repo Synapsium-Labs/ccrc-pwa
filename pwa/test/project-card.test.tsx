@@ -1473,6 +1473,16 @@ describe('the Released (n) fold (workspace lifecycle spec §5.1)', () => {
     expect(free).toBeEnabled();
     fireEvent.click(free);
     expect(onToggle).toHaveBeenCalledWith('demo::released');
+    // And a fold the operator opened (`releasedOpen`) with the selection elsewhere: shown, yet its toggle is live,
+    // so the operator can close what they opened. Only the selection disables it, never the fold being shown.
+    onToggle.mockClear();
+    rerender(<ProjectCard group={g} onOpen={() => {}} onToggle={onToggle} onActions={() => {}} releasedOpen selectedId="demo-elsewhere" />);
+    const opened = screen.getByRole('button', { name: /released \(1\)/i });
+    expect(opened).toHaveAttribute('aria-expanded', 'true');
+    expect(opened).toBeEnabled();
+    fireEvent.click(opened);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onToggle).toHaveBeenCalledWith('demo::released');
   });
 
   it('a COLLAPSED card still marks the selection when the selected row sits only in Released', () => {

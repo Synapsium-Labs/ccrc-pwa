@@ -373,7 +373,8 @@ export function ProjectCard({
   // Selection is a fact about the reader, not about the project, so it never
   // touches the perimeter — but a fold can hide it exactly as it can hide a
   // pending dialog, so the header carries it (as the slab, at chip scale)
-  // while folded. This is the only place the card itself reads selectedId.
+  // while folded. This is the card's only read of selectedId that decides the CARD's own mark; the Released fold
+  // reads it too (`selectionInReleased`, `releasedShown`, below), and each row compares it to mark itself selected.
   // A Released row is out of `group.sessions` (it sits in its own fold), so the fold's rows count too.
   const holdsSelection =
     collapsed && selectedId !== null &&
