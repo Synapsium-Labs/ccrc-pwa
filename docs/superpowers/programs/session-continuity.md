@@ -234,6 +234,14 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
 - **A later carry wave owes F10 (review 227).** A same-size record whose source is not newer is still queued as a
   tier-0 compare costing twice its size, ahead of every journal, although its outcome is fixed. Decide it from
   `lstat` in the dry pass, and move F1's pin to that decision in the same commit.
+- **Stage 5's worker clause must agree with the stall watch's worker clause 17** (peer finding
+  `monitor-wait-conflict-continuity-stage5`, from stall-watch wave 4 via its coordinator, 2026-10-02).
+  - **The conflict.** Spec §5.5 (about `:486`) and §5.6 item 1 (about `:506`) have workers wait on CI or a deploy
+    with the Monitor tool. Clause 17 (#232, in review) says a turn ends only on a wake you can name, and "a
+    background shell or Monitor is never that wake".
+  - **Before stage 5 is planned,** reword the spec so a Monitor (or a Monitor over a Bash loop) keeps a watcher
+    alive INSIDE a turn and is never an end-of-turn wake.
+  - **Not now:** the spec is under the stall watch's claim 891, and stage 5 is unplanned.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; never print secret contents.
 
