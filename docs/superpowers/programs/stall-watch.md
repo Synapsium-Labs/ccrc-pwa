@@ -171,6 +171,10 @@ independent reader, then cross-checked by another. The cross-check upheld every 
   whichever lands second keeps both sides: clause 15 keeps the appended sentence, ours stays 16, and the count words
   follow `main`. The worker absorbs only on its own probe. If wave 4's PR is already open and idle when run 238 lands,
   this session measures the conflict and sends the fix-round.
+- **Workspace-lifecycle wave 2 (run 236) shares claim 897's CLAUDE.md and README** under the same rule (mails 3245 and
+  3246). Its two hunks are one box-token sentence and a short archive subsection; wave 4's are count words only.
+  README is cited by line number, so whichever PR lands second re-runs the seven citation rows in
+  `session-hook.test.ts` after merging main.
 - Wave 2's parked minors live in the coordinator's review notes, not in a tracked file; wave 5's plan carries the
   curated set it fixes, written out in full.
 
