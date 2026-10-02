@@ -19,7 +19,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | fix round done 2026-10-02; in re-review (run 230) |
+| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | re-review 230 ruled 2026-10-02: fix round 2 (one pin, six text truths) |
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | — | planned — re-planned 2026-09-30 |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin | **AGENT-FIRST** (ccd) | — | — | to plan |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
@@ -163,6 +163,21 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     - under the blocking-flock mutation, measure-continuity's real-carry case still hangs.
   - **Re-review:** review run 230 went to `ccrc-pwa-amber-basin`. It runs the held-out panel plus the merge-safety lens
     on Opus · xhigh, because the round edits the carry block.
+- **2026-10-02 — re-review 230 ruled: fix round 2.**
+  - **The panel:** four lenses, the merge-safety lens included, none unverified and nothing unexamined.
+  - **Measured:** every ruling holds on behaviour. F11 is rc 0 on every path, F10 is byte-identical, and twelve rows
+    re-measured to their cells.
+  - **One important finding.** D-3776 said the real here-string temp failure cannot be made in a fixture. That is
+    false: `ulimit -f 16` makes it cheaply. So the ruling's "pin it if a fixture can" condition is met, and
+    real-cause cases join the shadow pins.
+  - **Six minor findings, all text:**
+    - the header points the first fill cost at `deferred_*` instead of `kept: budget`;
+    - "measured at zero" drops the census's two assumptions;
+    - a test comment says two cases where there are three;
+    - row 17's message is stale;
+    - D-3774's denominator is stale;
+    - row 50 says "every case" where the measured count is 30 of 41.
+  - **Numbering:** each fix extends its departure, so no new number.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
