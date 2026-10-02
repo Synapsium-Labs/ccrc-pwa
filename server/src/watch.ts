@@ -11,7 +11,9 @@ import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, verbSupported, sweepDec } from './ccdargv.js';
-import { isFullLine, parsePrLines, phaseFor, repoCellFor, type CcdPrFailure } from './prstate.js';
+import {
+  isFullLine, parsePrLines, phaseFor, queueFor, repoCellFor, type CcdPrFailure, type PrQueueRead,
+} from './prstate.js';
 import { readLiveState, readLiveStateMeasured } from './livestate.js';
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
@@ -41,7 +43,8 @@ import { JournalMirror } from './coord/mirror.js';
 // a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
 // literals exist. `single-definition.test.ts` pins both halves of that split.
 import {
-  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, askNudgeSubject, isAskNudgeMail, queueStallNotice, queueSystemMail,
+  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, askNudgeSubject, dequeuedSubject, isAskNudgeMail, mergedSubject,
+  queueStallNotice, queueSystemMail, survivorOf,
 } from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
@@ -575,6 +578,23 @@ export class FleetWatcher {
    * persisting it would buy nothing back for that price.
    */
   private mergedNotified = new Set<string>();
+  /** The merge-queue word each session's last full pr-state line carried
+   *  (`queueFor`), kept beside `prStates` and written by the same arm of
+   *  `sweepPr`. Read by `sweepLanding` and nothing else. */
+  private prQueues = new Map<string, PrQueueRead>();
+  /** `sweepLanding`'s in-memory latch, per (workspace, PR, notice, removal
+   *  time) — the `mergedNotified` shape plus the notice and the removal's own
+   *  timestamp, because a PR can be dequeued, re-enqueued and dequeued AGAIN,
+   *  and each removal is a new fact the coordinator has to hear. Written only
+   *  AFTER the notice landed, after a durable read proved an earlier process
+   *  sent it, or once the lane has decided there is nobody to tell — never
+   *  before a read: a latch set ahead of a failed read or a thrown mail would
+   *  make that removal a landing that silently stops. It is NOT what stops a
+   *  restart re-announcing (a PR can sit dequeued through a whole fix round,
+   *  and every rollout restarts this process); that is `sweepLanding`'s
+   *  DURABLE read. This set spares a latched notice the coord.db reads on
+   *  every later sweep. */
+  private landingNotified = new Set<string>();
   /** Last-seen model/effort/ultracode/branch per live session (from the pane). */
   private statuslines = new Map<string, Statusline>();
   /** The branch each worktree's own HEAD names, keyed by the CCD ID measured
@@ -4550,6 +4570,7 @@ export class FleetWatcher {
             continue;
           }
           this.prStates.set(line.id, phaseFor(line));
+          this.prQueues.set(line.id, queueFor(line));
           // RETAINED, not derived: `line.repo` is `_gh_repo_slug` of this
           // project's main checkout, already measured by this same sweep and
           // until now dropped here — `phaseFor` returns a `PrState`, which has
@@ -4567,6 +4588,7 @@ export class FleetWatcher {
         }
       }
       this.sweepMerged(records);
+      this.sweepLanding(records);
     } finally {
       // Only the CURRENT sweep may clear the stamp. An abandoned sweep that
       // finally returns half an hour later must not unlatch the one that
@@ -4754,6 +4776,144 @@ export class FleetWatcher {
             ? 'a run may still be open — the run rows could not be read'
             : null;
       this.announceMerged(key, r, pr.number, reason);
+    }
+  }
+
+  /**
+   * The landing lane (landing-order wave 2, spec §5.2): the coordinator's two
+   * notices about a PR it is landing through the merge queue. It ANNOUNCES; it
+   * never enqueues, merges, re-runs or re-enqueues anything (R5).
+   *
+   *  - DEQUEUED (`queueFor` reads `dequeued`). GitHub does NOT re-enqueue a PR
+   *    its queue removed, so a removal nobody hears about is a landing that
+   *    silently stops. Once per (workspace, PR, removal): a `status` mail
+   *    (`dequeuedSubject`) to the coordinator of the open run that names the
+   *    workspace — who re-enqueues or sends a fix round — and a `queue` FEED
+   *    record, always (`recordAlways`: a removal is a fact about the
+   *    programme whether or not anyone is watching this pane). With no open
+   *    run there is nobody to tell without guessing (`resolveCoordinator(null)`
+   *    answers whichever programme is the single active one, `tellSender`'s
+   *    reason), so the record is the whole notice. A NEW kind rather than
+   *    `merged` or `mail`: a dequeue is the one PR outcome that is not a
+   *    merge; `MailScreen`'s two total maps name it, and an older client
+   *    degrades it to `unknown` through `reviveNotifyEvent`.
+   *  - MERGED (the phase `sweepPr` derived reads `merged`) while that run
+   *    waits at `merging`: a `status` mail (`mergedSubject`) to its
+   *    coordinator, once per (workspace, PR). `merging` is the coordinator's
+   *    own declaration that it is landing this PR; on a native-queue project
+   *    it enqueued and ended its turn (clause 15; `wave-lifecycle.md` §5), and
+   *    this mail is what wakes it to prove the merge and close the run — it
+   *    never polls (clause 7). The run's state is all this reads, not whether
+   *    the project has a queue: a synchronous merge elsewhere that a sweep
+   *    reads before the close is mailed too, and the skill says to prove and
+   *    close as usual. No feed record: `sweepMerged` writes the `merged` one.
+   *    A merged PR whose run is elsewhere — a hand merge, a close that came
+   *    first — asked for nothing, and the first sweep that reads the merge
+   *    decides so.
+   *
+   * WHY THE OPEN RUN IS THE KEY. Under "One PR per child" a producer that
+   * closed before its PR landed would be reclaimed (child-reclamation wave 3:
+   * registry row, worktree and pane gone), and a reclaimed workspace has no
+   * pr-state line to carry a queue word — nor a worker to take a fix round.
+   * On a native-queue project the coordinator therefore lands BEFORE it
+   * closes (clause 15): the run waits at `merging` holding the child, so the
+   * row, the line and the worker all outlive the queue. The run is the one
+   * `survivorOf` picks — the close's and dispatch's own rule.
+   *
+   * ONCE ACROSS RESTARTS TOO. Before telling, the lane asks coord.db whether
+   * this notice was ALREADY told: a mail through `hasMailWithSubject` — every
+   * delivery state, because `queueSystemMail`'s own dedupe sees OUTSTANDING
+   * rows only and an acked notice would otherwise be mailed again after every
+   * rollout — and the feed-only dequeue through `hasFeedEvent` on the exact
+   * body, which carries the removal time. A hit latches and says nothing.
+   *
+   * THREE OUTCOMES, KEPT APART. Run rows that cannot be read are NOT "no open
+   * run" (the overloaded null `sweepMerged` also refuses): the lane defers,
+   * says nothing and latches nothing, and the next sweep re-reads. A mail
+   * that throws (`node:sqlite`, synchronously) is caught with nothing recorded
+   * and nothing latched, so the next sweep tries again — the mail is queued
+   * BEFORE the feed record for exactly that reason, so a retry leaves one
+   * record. Only a notice that landed, one a durable read found, or a
+   * decision that there is nobody to tell, is latched.
+   *
+   * `unmeasured` and `absent` NEVER announce a dequeue, and neither do
+   * `queued`, `landed` or `none`: the lane fires on the one word that asks
+   * for an act. A PR the coordinator's enqueue only ARMED reads `none` too
+   * (gh 2.45 arms auto-merge, rather than queueing, a PR whose required
+   * checks have not passed, and prints the same line either way): the lane
+   * cannot tell that from "not enqueued yet", so the coordinator reads the
+   * queue entry back before it ends its turn (`wave-lifecycle.md` §5).
+   */
+  private sweepLanding(records: SessionRecord[]): void {
+    const coord = this.deps.coord;
+    if (coord === undefined) return;
+    for (const r of records) {
+      if (measuredIdentity(r) === null) continue;
+      if (r.workspace === null || r.archivedAt !== null) continue;
+      const pr = this.prStates.get(r.id);
+      const q = this.prQueues.get(r.id);
+      const number = pr?.number ?? null;
+      const dequeued = q?.state === 'dequeued';
+      if (number === null || (!dequeued && pr?.phase !== 'merged')) continue;
+      const at = dequeued ? q.at : null;
+      const key = `${r.id}#${number}:${dequeued ? 'dequeued' : 'merged'}@${at ?? ''}`;
+      if (this.landingNotified.has(key)) continue;
+      // ONE BAD ROW MAY NOT COST THE REST OF THE SWEEP: `node:sqlite` throws
+      // synchronously, and this runs inside the void-dispatched `sweepPr`.
+      try {
+        const sib = coord.openRunsForSession(r.id);
+        if (!sib.ok) {
+          console.warn(`ccrc-server: landing notice for ${r.id} deferred (run rows unreadable: ${sib.detail})`);
+          continue;
+        }
+        const run = survivorOf(sib.siblings);
+        const coordinator = run === null ? null : coord.resolveCoordinator(run.id);
+        if (!dequeued) {
+          // A MERGE: told only to a coordinator whose run waits at `merging`.
+          if (run === null || coordinator === null) { this.landingNotified.add(key); continue; }
+          const read = coord.run(run.id);
+          if (!read.ok) {
+            console.warn(`ccrc-server: landing notice for ${r.id} deferred (run rows unreadable: ${read.detail})`);
+            continue;
+          }
+          if (read.run?.state === 'merging') {
+            const subject = mergedSubject(number);
+            if (!coord.hasMailWithSubject('operator', run.id, coordinator, subject)) {
+              queueSystemMail(coord, run, {
+                fromId: 'operator', toId: coordinator, runId: run.id, kind: 'status',
+                subject, body: renderMergedBrief(r.id, number),
+              });
+            }
+          }
+          this.landingNotified.add(key);
+          continue;
+        }
+        const subject = dequeuedSubject(number, at);
+        const body = `PR #${number} left the merge queue without landing`
+          + (at === null ? '' : ` (removed ${at})`) + '; GitHub does not re-enqueue it. '
+          + (coordinator === null ? 'No open run names a coordinator to tell.' : `Mailed coordinator ${coordinator}.`);
+        const told = run !== null && coordinator !== null
+          ? coord.hasMailWithSubject('operator', run.id, coordinator, subject)
+          : coord.hasFeedEvent('queue', r.id, body);
+        if (!told) {
+          if (run !== null && coordinator !== null) {
+            queueSystemMail(coord, run, {
+              fromId: 'operator', toId: coordinator, runId: run.id, kind: 'status',
+              subject, body: renderDequeueBrief(r.id, number),
+            });
+          }
+          this.pushOne({
+            kind: 'queue', sessionId: r.id, project: r.project,
+            title: `⤺ dequeued › ${r.workspace}`, body,
+            runId: run?.id ?? null,
+            tag: `queue-${key}`,
+            recordAlways: true,
+          }, this.activeProjects);
+        }
+        this.landingNotified.add(key);
+      } catch (err) {
+        console.warn(`ccrc-server: landing notice for ${r.id} failed (${err instanceof Error ? err.message : String(err)})`);
+      }
     }
   }
 
@@ -5389,6 +5549,39 @@ export class FleetWatcher {
     });
     return { until: now + ASK_GRACE_MS, askId, ev, answeringSince: null };
   }
+}
+
+/** The dequeue notice's body. Every value in it is this server's own — a PR
+ *  number, a registry-validated session id — and nothing GitHub wrote (the
+ *  removal's reason is never carried): this text lands in a model's context.
+ *  The re-enqueue spelling is clause 15's, exact-SHA binding and all. The why
+ *  is the QUEUE's own CI run: a queue failure is the `merge_group` run on the
+ *  queue branch's commit, which the PR head's checks never include, so they
+ *  can read green while the queue reads red. A fix round disarms first: an
+ *  armed auto-merge would queue whatever head the round pushes. */
+export function renderDequeueBrief(sessionId: string, pr: number): string {
+  return `PR #${pr} (workspace \`${sessionId}\`) was removed from this repository's merge queue without landing. ` +
+    `GitHub does not re-enqueue a PR after a failed group.\n` +
+    `Read why from the QUEUE's own CI run, not the PR's checks — they ran on a different commit and can read green: ` +
+    `\`gh run list --event merge_group --limit 20 --json databaseId,headBranch,conclusion\` finds it by its ` +
+    `\`headBranch\` (\`gh-readonly-queue/<base>/pr-${pr}-…\`), \`gh run view <id> --log-failed\` says why, and ` +
+    `\`gh pr view ${pr} --json mergeStateStatus\` answers a conflict.\n` +
+    `Then either re-enqueue it — \`gh pr merge ${pr} --match-head-commit <handoffCommit>\`, the run's verified ` +
+    `handoffCommit, never \`--admin\` (clause 15) — or disarm any armed auto-merge ` +
+    `(\`gh pr merge ${pr} --disable-auto\`) and send the owning worker a fix round on the ` +
+    `\`merging → working\` edge.\n\n` +
+    `Run the ccrc-coordinator skill.`;
+}
+
+/** The merged notice's body — the same provenance rule as the dequeue's. It
+ *  asks for the merge PROOF before the close, because a merged PR is not yet
+ *  proof that the exact head the review read is the one that landed. */
+export function renderMergedBrief(sessionId: string, pr: number): string {
+  return `PR #${pr} (workspace \`${sessionId}\`) merged while its run waited at \`merging\`.\n` +
+    `Prove it from your own shell — \`gh pr view ${pr} --json state,headRefOid\` answers MERGED with ` +
+    `\`headRefOid\` equal to the run's verified handoffCommit — then close the run as ` +
+    `references/wave-lifecycle.md §5 closes a producer.\n\n` +
+    `Run the ccrc-coordinator skill.`;
 }
 
 /**

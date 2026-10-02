@@ -4820,6 +4820,18 @@ export class CoordStore {
     }));
   }
 
+  /** Whether the feed archive holds a record of this kind, about this session,
+   *  with exactly this body — `sweepLanding`'s durable "already told" read for
+   *  a removal no open run names (landing-order wave 2), whose body carries the
+   *  removal time. Bounded by `FEED_RETENTION` like every feed read: a record
+   *  pruned out of the archive reads as never recorded, and is announced again. */
+  hasFeedEvent(kind: string, sessionId: string, body: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS x FROM feed_events WHERE kind = ? AND sessionId = ? AND body = ? LIMIT 1',
+    ).get(kind, sessionId, body);
+    return row !== undefined;
+  }
+
   /**
    * `GET /api/feed?program=<slug>`'s reader — the events of one programme,
    * oldest-first and clamped exactly as `feedEvents` clamps its own, through

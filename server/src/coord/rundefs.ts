@@ -193,7 +193,7 @@ export const survivorOf = (s: readonly OpenSibling[]): OpenSibling | null => s[s
 const SYSTEM_MAIL_SENDER_MAP = {
   coordinator: "the program's own coordinator session, speaking as the role",
   operator: 'the operator — either through a PWA-surface route or raised by the ' +
-    'watcher on their behalf (the ask nudge, the stall watch); never a session speaking for itself',
+    'watcher on their behalf (the ask nudge, the stall watch, the landing notices); never a session speaking for itself',
 } as const;
 
 export type SystemMailSender = keyof typeof SYSTEM_MAIL_SENDER_MAP;
@@ -306,12 +306,14 @@ export function insertSystemMailTx(
   // envelope, which carries no `ack:` line and so names no delivery id to ack.
   //
   // The throw ESCAPES to every caller, deliberately. Two functions call this
-  // one. The first is `queueSystemMail`, and through it that function's six
+  // one. The first is `queueSystemMail`, and through it that function's seven
   // call sites in five files: `close.ts`'s `closeRun` and its module-private
   // `closeReviewRun` (the review close's own rejection), `dispatch.ts`'s
   // `dispatchRun`, `kickoff.ts`'s `queueProgramKickoff`, `routes.ts`'s
   // `POST /api/runs/:id/advance` handler, and `watch.ts`'s `FleetWatcher.hold`
-  // (the ask pre-emption lane's parent nudge). The second is `queueStallNotice`
+  // (the ask pre-emption lane's parent nudge) and `FleetWatcher.sweepLanding`
+  // (the merge queue's two landing notices, landing-order wave 2, which
+  // catches the throw per row). The second is `queueStallNotice`
   // below, the stall watch's notices, on a run or run-less. Both callers' false arms already mean
   // "declined", a different and true statement a failure must not borrow.
   //
@@ -378,6 +380,18 @@ export function queueStallNotice(
     return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: seen.eventId };
   });
 }
+
+/** The landing lane's two notice subjects (landing-order wave 2), each spelled
+ *  ONCE: `watch.ts`'s `sweepLanding` queues them and asks `hasMailWithSubject`
+ *  about them, and the coordinator skill tells its reader to expect them
+ *  (`references/wave-lifecycle.md` §5) — `coordinator-skill.test.ts` holds the
+ *  skill's spelling to these. A dequeue is unique per REMOVAL — the PR and the
+ *  removal's own time (`queueAt`, shape-gated by `queueFor`) — so a second
+ *  removal of the same PR is a new notice, and a reading with no well-shaped
+ *  time falls back to the PR alone; a merge happens once per PR. */
+export const dequeuedSubject = (pr: number, at: string | null): string =>
+  at === null ? `dequeued:#${pr}` : `dequeued:#${pr}@${at}`;
+export const mergedSubject = (pr: number): string => `merged:#${pr}`;
 
 /** The ask pre-emption lane's own nudge-mail subject prefix — the ONE source
  *  `askNudgeSubject` (the queue side) and `isAskNudgeMail` (the reader side)
