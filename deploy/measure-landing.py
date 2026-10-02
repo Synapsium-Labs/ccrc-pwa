@@ -642,7 +642,11 @@ def cmd_mail_latency(win):
     a coordinator was handed (a mail outside the window is not an input of it)."""
     lo = datetime.fromisoformat(win[0]).replace(tzinfo=timezone.utc).timestamp() * 1000
     hi = (datetime.fromisoformat(win[1]).replace(tzinfo=timezone.utc) + timedelta(days=1)).timestamp() * 1000
-    open_rows, closed_read = [_api('runs', 'list', *flag)['runs'] for flag in ([], ['--closed', '1'])]
+    # CLOSED read first, OPEN read second: a run that closes between the two reads is
+    # then in the closed read and absent from the open one, so it counts as closed —
+    # any skew OVERcounts toward `runsTruncated` (conservative). The other order would
+    # drop it from the closed count and could read 500 - k as under the cap.
+    closed_read, open_rows = [_api('runs', 'list', *flag)['runs'] for flag in (['--closed', '1'], [])]
     open_ids = {r.get('id') for r in open_rows}
     closed_rows = [r for r in closed_read if r.get('id') not in open_ids]   # the closed read also carries every active run
     runs_truncated = len(closed_rows) >= CLOSED_RUNS_CAP

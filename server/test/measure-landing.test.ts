@@ -155,14 +155,18 @@ describe('measure-landing: an input it could not read is never a number', () => 
 
   it('inversions: refuses a run with no --fleet-login before it reads anything, a cache write included', () => {
     // `cmd_inversions(repo, req(), …, fleet_logins(args))` evaluated `req()` first:
-    // two GETs and a cache file before the refusal the docstring promises.
-    const h = stubHome();
+    // two GETs and a cache file before the refusal the docstring promises. The stub
+    // must answer a REAL required context: with its default `{}` answers the read is
+    // an empty set that the empty-set refusal rejects before anything is cached, so
+    // the cache stays empty under either evaluation order and pins nothing.
+    const h = stubHome(['  *required_status_checks*) echo \'{"contexts":["build-pwa"]}\' ;;']);
     const r = tool(h, ['inversions', 'o/r']);
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain('--fleet-login L1,L2 is required');
-    expect(calls(h.home, 'gh-calls'), 'gh ran before the fleet was named').toBeNull();
+    // Soft, so a failure of the first does not hide the second: each is a pin of its own.
+    expect.soft(calls(h.home, 'gh-calls'), 'gh ran before the fleet was named').toBeNull();
     const cache = join(h.home, 'out', 'cache');
-    expect(existsSync(cache) ? readdirSync(cache) : [], 'a cache file was written before the fleet was named').toEqual([]);
+    expect.soft(existsSync(cache) ? readdirSync(cache) : [], 'a cache file was written before the fleet was named').toEqual([]);
   });
 
   it('mail-latency: a full newest-first page is truncation, never data; a run with no claimant is skipped', () => {
