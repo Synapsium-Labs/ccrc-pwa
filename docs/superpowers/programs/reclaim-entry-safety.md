@@ -203,6 +203,17 @@ unrendered.
     run 199 closed `done` with `final:true` and `prPhase` `merged`, answering `childReclaim: queued`, and
     `still-harbor` is gone from `ccd ls` minutes later. `release-main.yml` published prerelease v0.0.60 at 15:00;
     both boxes follow `dev` on their own.
+- **2026-10-02 15:47 — v0.0.60 converged on both boxes, by the updater alone.** Measured read-only:
+  - `ccrc version` reads v0.0.60, `cf9e4cc8`, with `install: complete`.
+  - `ccrc update --check` reads `state=current`.
+  - `ccrc rollout --to v0.0.60 --check` reads fleet and server both `[current]`.
+
+  The pair is live on the fleet box, both files written at 15:12:
+  - `~/.local/bin/ccd` is the launcher (`#!/usr/bin/python3 -IS`, mode 0755).
+  - `~/.local/libexec/ccrc/ccd` is the body (mode 0644); its stamp line equals `cf9e4cc8`'s.
+  - `ccd caps` still lists `ws-reclaim` and `reclaim-v1`.
+
+  No session rolled out by hand. This programme's one wave is done.
 - **Routing escalation.** This is a destructive-path security boundary reached after repeated wave 4 resolver
   rounds exposed the process-level class. The main loop runs Opus at `xhigh`; implementation subagents run Sonnet
   at `high`; workflows are off; compact threshold is 40. The held-out review remains outside that routing and adds
