@@ -18,8 +18,8 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | fix round 3 done 2026-10-02; in re-review (run 234) |
-| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | — | planned; approved 2026-10-01 (#223) |
+| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
+| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | — | dispatched 2026-10-02 (run 236) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
@@ -169,6 +169,29 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     pin (P38, red under the panel's remedy). P31, P36 and P37 are re-anchored on the 54-case file.
   - **CI:** the required Linux legs are green on the first attempt.
   - **Re-review:** review run 234 went out with the held-out panel over `dc4be181..add311d4`.
+- **2026-10-02 — wave 1 accepted and merged.**
+  - **Review 234** read fix round 3 and found one optional finding: P3 and P4 red one more case than Task 10's table
+    records. The table states its counts as at-least prototype figures, so nothing in it is false. Accepted as is.
+  - **Totals:** four review runs (225, 229, 231, 234) and three fix rounds. All ten issued numbers are used, 3778
+    through 3787.
+  - **Merge:** PR #229 squash-merged at the verified tip `add311d4`, as `a7b9831c`, with `--admin` and
+    `--match-head-commit`. Wave 2's run (236) was opened before run 220 closed. Run 220 closed `done`, released,
+    and its child was queued for reclaim.
+  - **Deploy:** server + PWA, measure-only, through ccrc's own update mechanism.
+  - **Owed:** the instrument run on the server box (Task 9's), `released_top_level` and `released_wire_only`
+    recorded here.
+- **2026-10-02 — wave 2 dispatched as run 236** to a fresh workspace, on the matrix's "worker executing a spec'd plan"
+  row (Opus · high, Sonnet · high implementers, an Opus · high reviewer per task, workflow off, compact 40). Its
+  deviation numbers, issued at run-open and written bare: 3836 through 3845.
+  - **Anchors:** before dispatch, all 99 of the plan's find blocks were scanned against `a7b9831c`. 95 match once.
+    The other 4 are written by Task 1, or are CLAUDE.md's size claim, which main already re-measured (Task 12's skip
+    arm).
+  - **Wave 1's shipped order:** the brief carries the four-part card order. A stopped main checkout keeps dead's
+    rank in part 4, and `unfoldedDead`'s text must say "not in the Released fold".
+  - **Serialised overlap (clause 10).** Task 12 edits README and CLAUDE.md, which run 218 (#231, in final review)
+    claims, so Task 12 waits for #231's merge.
+  - **Repo-wide guards:** they run in every task, per the landing-order ruling.
+  - **Open questions:** the plan's three stay the operator's, built as the plan says.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -195,18 +218,22 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 ## Next-wave brief
 
-Wave 1 is planned; once the docs PR carrying the spec, this ledger and the plan has merged, dispatch it on a fresh
-workspace with the plan path and this file. After it deploys, run the instrument on the server box from the
-installed tree — `python3 deploy/measure-workspace-lifecycle.py` — and record `released_top_level` (target 0,
-baseline 29 of 56 on 2026-09-24), `released_wire_only` (target 0) and the archive→return rows here: the last is what
-wave 3 waits on.
+Wave 1 is merged (#229, `a7b9831c`). After its deploy converges, run the instrument on the server box from the
+installed tree, `python3 deploy/measure-workspace-lifecycle.py`. Record here:
+- `released_top_level`: target 0, baseline 29 of 56 on 2026-09-24;
+- `released_wire_only`: target 0;
+- the archive→return rows, which wave 3 waits on.
 
-Wave 2 is planned (`docs/superpowers/plans/2026-10-01-workspace-lifecycle-wave2-one-archive.md`, 12 tasks). It was
-prototyped on `main` `5b1c58a8` with wave 1 applied, reviewed by three lenses (spec fidelity and irreversible-act
-safety, tests and mutations, executability and merges), fixed, and verified; it replays onto `cca1b6d7` with wave 1
-applied, with both typechecks and its suites green. The spec carries its nine amendments (§5.2's busy rule, the door's
-remote-mode worktree check, the Stop-only cases, the refusal codes' count). The operator approved it by merging #223
-(2026-10-01); it dispatches once wave 1 has merged; it lands one at a time with wave 1 (shared `groupFleet.ts` and `shared/api.ts`), and either
-order with child-reclamation wave 4 (#215), whose hunks it does not overlap. Two questions are the operator's (the
-plan's open questions): whether the PR sheet's "Archive now" opens the new archive sheet in a follow-up, and whether
-the remote-mode worktree check stays deferred to `ccd` for good.
+Wave 2 is dispatched (run 236, `docs/superpowers/plans/2026-10-01-workspace-lifecycle-wave2-one-archive.md`,
+13 tasks).
+- **Task 12** waits for landing-order #231 to merge. The worker mails when Tasks 1–11 are done; mail it back when
+  #231 lands.
+- **Its review** is the held-out panel. Hold it to the four-part order and to the door's irreversible-act safety:
+  the programme end, and the stop before a refused archive.
+- **The operator's questions** (the plan's three):
+  1. Whether the PR sheet's "Archive now" opens ArchiveSheet in a follow-up.
+  2. Whether the remote-mode worktree check stays deferred to `ccd` for good.
+  3. Whether the L5 confirm's "Its workers will be cleaned up" stands until wave 3.
+
+Wave 3 (`ws-expire`, AGENT-FIRST) is to plan. It needs child-reclamation waves 3–4 merged and deployed, and the
+archive→return delay measured. Its plan carries the three instrument items listed under Carried constraints.
