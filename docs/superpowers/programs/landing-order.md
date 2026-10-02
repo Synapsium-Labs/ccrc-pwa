@@ -17,7 +17,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | re-review 232 ruled 2026-10-02: fix round 2 (one pin, four text truths) |
+| 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | fix round 2 done 2026-10-02; in re-review (run 235) |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | — | re-planned 2026-09-29; dispatch after wave 1 merges |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | — | — | to plan |
@@ -174,6 +174,14 @@ carries it (spec §5.1, amended 2026-09-24).
     - restate H1, H2, H9, H14 and R4.
 
     Each extends D-3765 or D-3767, so no new number.
+- **2026-10-02 — fix round 2 done, in re-review.**
+  - **Fixes:** three commits (tip `e63e90e7`).
+    - The closed-first read order is pinned (I25).
+    - `undelivered` is named truly, with a rejected-at-close row in the counts case (I26).
+    - Step 8 prints the new counts.
+    - Each table header carries one snapshot.
+  - **Rows:** I1–I26, R1–R10 and H1–H16 are all red, none SKIPPED.
+  - **Re-review:** review run 235 went out with the held-out panel over `db45cafc..e63e90e7`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
