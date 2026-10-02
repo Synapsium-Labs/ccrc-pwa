@@ -267,7 +267,12 @@ def jobs(repo, run_id, cache):
 def cmd_main_red(repo, required, win, cache):
     """Ports g15_main_red.py, narrowed to what spec §10 asks: red-main from the
     REQUIRED contexts only, with its PR-failure overlap — and the whole-check
-    reading beside it, so the archived 111.2 h / 50-of-92 can be reproduced."""
+    reading beside it, so the archived 111.2 h / 50-of-92 can be reproduced.
+
+    A window that reaches past main's CI test-selection change (#183,
+    2026-09-23) reads push check-runs that ran no test legs, so a stage-2
+    re-measure must read only full runs or refuse such a window; the frozen
+    baseline window (2026-09-08..2026-09-22) predates it and is unaffected."""
     end = win[1] + 'T23:59:59Z'
     main = [r for r in runs(repo, 'push', win, cache, branch='main') if r.get('head_branch') == 'main']
     first_push = {}

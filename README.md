@@ -2771,10 +2771,10 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   because neither the census nor `manifest.json` carries one (D-1246); the freshness pair are git ref
   reads. **Stdout is this card on `SessionStart` — with the compaction card appended
   to it on the `compact` source alone (R8, below) — the search gate's deny on a gated `PreToolUse`
-  (R5, below) and the Read nudge's `additionalContext` on a nudged one (R6, below) — at most one of
-  those two per event, and empty on every other event**, because a stdout JSON on `PreToolUse` is
+  (R5, below), the Read nudge's `additionalContext` on a nudged one (R6, below) or the landing advisory's on a sync of main — at most one of
+  those per event (a deny or nudge wins), and empty on every other event**, because a stdout JSON on `PreToolUse` is
   read as this hook having something to say about the call, and it says nothing there unless it
-  does. All three are pinned in both directions by `server/test/session-hook.test.ts`.
+  does. The card, the deny and the nudge are pinned in both directions by `server/test/session-hook.test.ts`, the advisory by `server/test/session-hook-sync-advisory.test.ts`.
 - **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries sixteen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16), pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,

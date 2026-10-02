@@ -146,7 +146,7 @@ describe('the coordinator skill: its contract', () => {
   // "pinned verbatim" exists to prevent. `worker-skill.test.ts` already
   // carries this guard; this ports it, with two adaptations the worker's
   // version does not need. First, the coordinator states its count in prose as
-  // "These fourteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
+  // "These fifteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
   // worker skill says, so the in-file harvest is widened to accept all three.
   // Second, README.md's own mention line-wraps the count word onto the line
   // after "clauses" (measured — CLAUDE.md's does not), so the cross-file
@@ -181,7 +181,7 @@ describe('the coordinator skill: its contract', () => {
   it('spells that same count, as one derived word, everywhere prose states it', () => {
     expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
       .toBeTruthy();
-    // SKILL.md states it once in its own words ("These fourteen sentences").
+    // SKILL.md states it once in its own words ("These fifteen sentences").
     // HARVESTED, never matched literally, so a revert to "ten" fails with the
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause

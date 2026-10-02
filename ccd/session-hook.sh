@@ -70,7 +70,7 @@ _hook_timeout() {
 # another event would not be noise; it would be an answer to a question nobody
 # asked. So this emitter is called from inside the SessionStart arm and nowhere
 # else; `_hook_deny_json` (the gate, D-1613) and `_hook_nudge_json` (the Read
-# nudge, D-1745) are BUILDERS called only inside a `$( )` from the PreToolUse
+# nudge, D-1745, and the landing advisory) are BUILDERS called only inside a `$( )` from the PreToolUse
 # arm, and whichever one the arm chose is printed from ONE site at the end of
 # the file, after the hookstate rename lands (D-1689) — at most one line per
 # event, never both. Every failure path in any of them prints NOTHING; this
@@ -3354,7 +3354,7 @@ tmp="$REG/.$id.$$.hookstate.tmp"
 { printf '%s\n' "$out" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; exit 0; }
 mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
 # The one PreToolUse envelope this file ever prints — a deny (R5) or a nudge
-# (R6) — and only now: the count a deny names is on disk, so the next event
+# (R6, or the landing advisory) — and only now: the count a deny names is on disk, so the next event
 # will see it (D-1689). The nudge counts nothing, but it shares this site so
 # that neither branch can ever print from inside the arm.
 [ -z "$pre_json" ] || printf '%s\n' "$pre_json"
