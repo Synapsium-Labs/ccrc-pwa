@@ -22465,7 +22465,7 @@ const v = verifyMarker(text);
 if (v !== "ccrc-edited") { console.log(v); process.exit(0); }
 await writeFile(filePath, markGenerated(text));
 console.log("restamped");
-' "$mark" "$f" 2>/dev/null)" || _ccrc_die "restamp: $f could not be read or written"
+' "$mark" "$f" 2>/dev/null)" || _ccrc_die "restamp: $f could not be read or written; it may be partly written — restore it from git (git checkout -- $f), re-apply your edit, restamp again"
   case "$verdict" in
     restamped)       echo "restamp: $f: restamped" ;;
     ccrc-unmodified) echo "restamp: $f: already current" ;;

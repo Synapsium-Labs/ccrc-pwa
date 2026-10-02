@@ -280,7 +280,14 @@ def jobs(repo, run_id, cache):
 def cmd_main_red(repo, required, win, cache):
     """Ports g15_main_red.py, narrowed to what spec §10 asks: red-main from the
     REQUIRED contexts only, with its PR-failure overlap — and the whole-check
-    reading beside it, so the archived 111.2 h / 50-of-92 can be reproduced.
+    reading beside it. The whole-check reading does NOT reproduce the archived
+    111.2 h / 9 intervals / 50-of-92: the archive read the one `ci` workflow's
+    conclusion, and this reads EVERY check-run on the push (red when any failed or
+    timed out, green when all succeeded, were skipped or neutral), so on the
+    frozen window it measures 10 intervals, 120.7 h and 53 of 91 failed PR runs
+    inside them. The figures differ by construction, as `cmd_inversions`'
+    departure from g5 does: every baseline is this tool's, and the archived one
+    is history.
 
     A window that reaches past main's CI test-selection change (#183,
     2026-09-23) reads push check-runs that ran no test legs, so a stage-2

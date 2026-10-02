@@ -844,7 +844,19 @@ def jobs(repo, run_id, cache):
 def cmd_main_red(repo, required, win, cache):
     """Ports g15_main_red.py, narrowed to what spec §10 asks: red-main from the
     REQUIRED contexts only, with its PR-failure overlap — and the whole-check
-    reading beside it, so the archived 111.2 h / 50-of-92 can be reproduced."""
+    reading beside it. The whole-check reading does NOT reproduce the archived
+    111.2 h / 9 intervals / 50-of-92: the archive read the one `ci` workflow's
+    conclusion, and this reads EVERY check-run on the push (red when any failed or
+    timed out, green when all succeeded, were skipped or neutral), so on the
+    frozen window it measures 10 intervals, 120.7 h and 53 of 91 failed PR runs
+    inside them. The figures differ by construction, as `cmd_inversions`'
+    departure from g5 does: every baseline is this tool's, and the archived one
+    is history.
+
+    A window that reaches past main's CI test-selection change (#183,
+    2026-09-23) reads push check-runs that ran no test legs, so a stage-2
+    re-measure must read only full runs or refuse such a window; the frozen
+    baseline window (2026-09-08..2026-09-22) predates it and is unaffected."""
     end = win[1] + 'T23:59:59Z'
     main = [r for r in runs(repo, 'push', win, cache, branch='main') if r.get('head_branch') == 'main']
     first_push = {}
@@ -1268,7 +1280,7 @@ Expected: PASS — `measure-landing` 15/15, and no `deploy/__pycache__/` left be
 | I11 | `    if not got:` (in `fleet_logins`) → `    if False:` | "absorptions: refuses a run with no --fleet-login before it reads anything" — `expected +0 not to be +0`; and "inversions: …" (2 failed) |
 | I12 | `        if len(rows) >= MAIL_PAGE:` → `        if False:` | "mail-latency: a full newest-first page is truncation, never data; …" — `a full page was read as the whole history: expected +0 to be 1` |
 | I13 | drop ` if r.get('claimedBy')` from the coordinator set (`coords = sorted({r['claimedBy'] for r in all_runs …})`) | the same case and the counts-by-name case (2 failed) — `TypeError: '<' not supported between instances of 'str' and 'NoneType'` |
-| I14 | `    if tuple(args[:2]) not in API_READS:` → `    if False:` | "reaches ccrc-api from one door, for its two list verbs only…" — `_api('runs', 'close', '7') was not refused: expected +0 not to be +0` |
+| I14 | `    if tuple(args[:2]) not in API_READS:` → `    if False:` | "reaches ccrc-api from one door, for its two list verbs only…" — on the STDERR assertion (since the verb-keyed `API_READS[…]` lookup, the unguarded call ends in a `KeyError` before the client runs): `expected 'Traceback (most recent call last):\n …' to contain 'refused a ccrc-api verb that is not a…'`; `1 failed \| 20 passed (21)` (it read `_api('runs', 'close', '7') was not refused: expected +0 not to be +0` before the key lookup) |
 | I15 | `'--all', '1', '--limit', str(MAIL_PAGE))` → `'--all', '1')` | "mail-latency: …" — `a mail read asked for the default page: expected false to be true` |
 | I16 | `_api`'s checked body → `    return json.loads(r.stdout)` | "mail-latency: a refused or failed ccrc-api read is an error, never an empty page" — `a refused read (exit 0, ok:false) was read as an empty page: expected +0 not to be +0` |
 | I17 | `body.get('ok') is False or not isinstance(body.get(key), list)` → `body.get('ok') is not True` | the refused-read case and the three mail-latency cases that read the real `runs list` shape (4 failed) — `ccrc-api answered no data for 'runs list': exit 0` |
@@ -1584,7 +1596,12 @@ describe('ccrc restamp <file>', () => {
     expect(readFileSync(f, 'utf8'), 'a usage error writes nothing').toBe(staleStamped());
   });
 
-  it('reports a file it cannot write, exit 1, and leaves it as it was', () => {
+  it('reports a file it cannot OPEN for writing, exit 1; the message says a later failure may leave it partly written', () => {
+    // This pins an OPEN-time failure only (mode 0444, EACCES), where nothing was
+    // truncated and the file is as it was. The write is in place (truncate, then
+    // write — a temp file and rename would be a second writer the model-env scan
+    // forbids in ccd/ccrc), so a failure AFTER the truncate (ENOSPC) can leave it
+    // partly written: no test can arm that portably, so the message says so.
     if (process.getuid?.() === 0) return;   // root writes through 0444
     const dir = mkTmp('ccrc-restamp-');
     const f = join(dir, 'ccd');
@@ -1592,7 +1609,9 @@ describe('ccrc restamp <file>', () => {
     chmodSync(f, 0o444);
     const r = run([f]);
     expect(r.code).toBe(1);
-    expect(readFileSync(f, 'utf8')).toBe(staleStamped());
+    expect(readFileSync(f, 'utf8'), 'an open-time failure leaves the file as it was').toBe(staleStamped());
+    expect(r.stderr, 'the exit-1 message must not promise the file is untouched').toContain('may be partly written');
+    expect(r.stderr).toContain(`git checkout -- ${f}`);
   });
 });
 ```
@@ -1706,7 +1725,7 @@ const v = verifyMarker(text);
 if (v !== "ccrc-edited") { console.log(v); process.exit(0); }
 await writeFile(filePath, markGenerated(text));
 console.log("restamped");
-' "$mark" "$f" 2>/dev/null)" || _ccrc_die "restamp: $f could not be read or written"
+' "$mark" "$f" 2>/dev/null)" || _ccrc_die "restamp: $f could not be read or written; it may be partly written — restore it from git (git checkout -- $f), re-apply your edit, restamp again"
   case "$verdict" in
     restamped)       echo "restamp: $f: restamped" ;;
     ccrc-unmodified) echo "restamp: $f: already current" ;;
@@ -1756,8 +1775,10 @@ Expected: first run PASS (`ccrc-restamp` 8/8, `ccrc-cli` 35/35, `ownership` 14/1
 | R6 | the description's first line `re-stamp one file ccrc generated` → `stamps a generated file` | same `ccrc-cli` case, on `/^ {2}restamp {3}re-stamp one file ccrc generated/m` |
 | R7 | `  for d in "$HOME/.local/bin" "$HOME/.ccrc"; do` → `  for d in; do` (the scope check gone) | "refuses a generator's own output…" — `.local/bin/acct-demo was restamped: expected +0 to be 1` |
 | R8 | the same line → `  for d in "$HOME/.local/bin"; do` (`~/.ccrc` dropped) | same case — `.ccrc/accounts.sh was restamped: expected +0 to be 1` |
+| R9 | `  dir="$(CDPATH= cd -- …` → `  dir="$(cd -- …` (the `CDPATH=` clearing dropped) | "refuses a generator's output named by a RELATIVE path even when CDPATH would resolve it elsewhere" — `1 failed \| 8 passed (9)` |
+| R10 | drop `; it may be partly written — restore it from git (git checkout -- $f), re-apply your edit, restamp again` from the exit-1 message | "reports a file it cannot OPEN for writing…" — `the exit-1 message must not promise the file is untouched: expected … to contain 'may be partly written'`; `1 failed \| 8 passed (9)` |
 
-Rows — ONE array, R1–R8, in `$SCRATCH/mut-task2.json`:
+Rows — ONE array, R1–R10, in `$SCRATCH/mut-task2.json`:
 
 ```json
 [
@@ -1768,7 +1789,9 @@ Rows — ONE array, R1–R8, in `$SCRATCH/mut-task2.json`:
  {"id": "R5", "file": "ccd/ccrc", "old": "|passwd|expose|restamp|version|watchdog}", "new": "|passwd|expose|version|watchdog}", "tests": ["test/ccrc-cli.test.ts"]},
  {"id": "R6", "file": "ccd/ccrc", "old": "  restamp   re-stamp one file ccrc generated (a \"ccrc:generated\" marker, as\n", "new": "  restamp   stamps a generated file (a \"ccrc:generated\" marker, as\n", "tests": ["test/ccrc-cli.test.ts"]},
  {"id": "R7", "file": "ccd/ccrc", "old": "  for d in \"$HOME/.local/bin\" \"$HOME/.ccrc\"; do\n", "new": "  for d in; do\n", "tests": ["test/ccrc-restamp.test.ts"]},
- {"id": "R8", "file": "ccd/ccrc", "old": "  for d in \"$HOME/.local/bin\" \"$HOME/.ccrc\"; do\n", "new": "  for d in \"$HOME/.local/bin\"; do\n", "tests": ["test/ccrc-restamp.test.ts"]}
+ {"id": "R8", "file": "ccd/ccrc", "old": "  for d in \"$HOME/.local/bin\" \"$HOME/.ccrc\"; do\n", "new": "  for d in \"$HOME/.local/bin\"; do\n", "tests": ["test/ccrc-restamp.test.ts"]},
+ {"id": "R9", "file": "ccd/ccrc", "old": "  dir=\"$(CDPATH= cd -- \"$(dirname -- \"$f\")\" && pwd -P)\"", "new": "  dir=\"$(cd -- \"$(dirname -- \"$f\")\" && pwd -P)\"", "tests": ["test/ccrc-restamp.test.ts"]},
+ {"id": "R10", "file": "ccd/ccrc", "old": "|| _ccrc_die \"restamp: $f could not be read or written; it may be partly written — restore it from git (git checkout -- $f), re-apply your edit, restamp again\"", "new": "|| _ccrc_die \"restamp: $f could not be read or written\"", "tests": ["test/ccrc-restamp.test.ts"]}
 ]
 ```
 
@@ -2723,6 +2746,7 @@ The pre-flight findings above are not deviations: they were measured before this
 - **D-3763 — `final-review-doc-repairs`.** The hook's PreToolUse outputs were documented as "a deny or a nudge, at most one" (README's stdout paragraph, `ccd/session-hook.sh`'s envelope header and its single print site), which the landing advisory made a third possible output through the same nudge builder, still at most one line per event with a deny or nudge winning; each is repaired by content, in place, with no line added, so no cited anchor moved. `server/test/coordinator-skill.test.ts`'s two comments that quoted SKILL.md as "These fourteen sentences" now say fifteen, as SKILL.md does since clause 15. The `cmd_main_red` docstring in `deploy/measure-landing.py` now says that a window past main's CI test-selection change reads push check-runs that ran no test legs, so a stage-2 re-measure must read only full runs or refuse such a window, and that the frozen baseline window is unaffected.
 - **D-3764 — `restamp-trips-the-model-env-single-writer-scan`.** `server/test/modelenv-single-writer.test.ts` decides "writes the model-env block" by a text scan (the file spells a model-env variable, spells `writeFileSync|renameSync|mergeSettingsEnv(`, and spells `settings.json`), and `ccd/ccrc` already spelled the variables and `settings.json`, so Task 2's `cmd_restamp` node snippet, which called `writeFileSync`, supplied the third ingredient and reds the case "is shared/modelenv.mjs, and nothing else in the tree" on this branch while it passed on main (first full suite run). Restamp is not a model-env writer and the guard is not edited; the snippet is an ES module that already awaits at top level, so it now imports `writeFile` from `node:fs/promises` beside `readFileSync` (on the same line, so no line moves) and ends `await writeFile(filePath, markGenerated(text));`. `writeFile` on an existing path truncates in place, so the inode and mode are the `writeFileSync` call's, and the already-current path still returns before the write; `ccrc-restamp` stays 9/9 and R1–R9 all re-red unchanged.
 - **D-3765 — `measure-landing-refusals-and-counts`.** Run 228's review of the instrument found five places where its own statements outran it, each now mended and pinned red-first. (F1) `inversions` evaluated `req()` before `fleet_logins(args)`, so a run without `--fleet-login` made two GETs and wrote a cache file before the refusal `fleet_logins`' docstring promises; `main` now evaluates `fleet_logins` first, and a new case pins `inversions` as `absorptions` is pinned (a recording `gh` records no call and `out/cache` holds no file). (F10) `mail-latency` never reported its `runs list --closed 1` read as capped, though the server answers every active run and only the newest 500 closed ones; it now reports `closedRuns` and `runsTruncated` (true at `CLOSED_RUNS_CAP`, counting only the rows the open read does not carry), beside the mail page's `truncatedCoordinators`. (F11) it dropped, uncounted, a window mail whose delivery is neither delivered nor acked and a run with no claimant, though the docstring said otherwise; it now reports `undelivered` (total and per coordinator) and `runsWithoutClaimant`, and the docstring says what each count is and is not (existing expectations unchanged: `unmatched` still counts only mail a coordinator was handed). (F12) `required_state` sorted an attempt with no `completed_at` first, so `[failure, running]` read red; `_attempt_order` now sorts an in-progress attempt after every completed one, so the latest attempt decides and `[failure, running]` is unmeasured, the re-run-supersedes and cancel cases staying green. (F13) `GH_PATH` admitted `..` segments, so `repos/a/b/../../../graphql` and `repos/../../graphql?query=%7Bviewer%7D` passed the grammar and named `graphql` to the server; a leading lookahead now refuses any `..` segment (a name that merely contains dots, and a `created=a..b` query range, still pass). Five new cases in `measure-landing.test.ts` (one per finding, F11 and F10 each their own): red-first `5 failed | 16 passed (21)`, then green 21/21 (the file went from 16 cases to 21); mutation rows I18 to I24 are added to Task 1's table and JSON, I8, I11 and I13 are restated against the new text, and I16 and I17 (which D-3758 recorded only in prose) are given their rows, so the table now reads I1 to I24 and every row reds with none skipped. No `gh`, `git` or `_api` call site was added (the static pins read the same sites). The plan's Task 1 code block carries the pre-fix text and this entry records the change, as D-3758's does.
+- **D-3767 — `text-made-true`.** Run 228's review found three statements that were false and are now true, with no behaviour changed. (F2) `cmd_main_red`'s docstring (and the plan's Task 1 code block, which carries the same text and now also the docstring's window note) said the whole-check reading was there "so the archived 111.2 h / 50-of-92 can be reproduced"; it does not reproduce it, because the archive read the single `ci` workflow's conclusion and this reads every check-run on the push, so the frozen window measures 10 intervals, 120.7 h and 53 of 91 (Pre-flight 6), and the docstring now says so, as `cmd_inversions` states its departure from g5. (F9) the restamp write is in place, truncate then write, so a failure AFTER the truncate (ENOSPC) can leave the file partly written, while the case "reports a file it cannot write … and leaves it as it was" and the exit-1 message implied it cannot; the case is retitled to what it covers (an open-time EACCES, where the file is as it was) and now asserts the message, and the message in `ccd/ccrc`'s `cmd_restamp` says the file may be partly written and to restore it from git (`git checkout -- <file>`), re-apply the edit and restamp again, edited in place on the same line (no line added, the write mechanics untouched: a temp file and rename would be a second writer for `modelenv-single-writer`; `ccd/ccrc` still never spells the write calls it scans for); red-first `1 failed | 8 passed (9)` on the new message assertion, then 9/9, and the plan's Task 2 code block carries the retitled case and the message; Task 2's table gains row R10 for the message (red `1 failed | 8 passed (9)`) and R9, which the CDPATH entry had left in prose only, and every R1 to R10 re-ran red with none skipped. (F14) row I14's expected red in Task 1's table read `expected +0 not to be +0`, which is what it measured before D-3758 keyed `_api` on `API_READS`; deleting the verb guard now ends in a `KeyError` and reds on the stderr assertion, so the row states that and the real count after the fix round's five new cases, `1 failed | 20 passed (21)`.
 
 ---
 

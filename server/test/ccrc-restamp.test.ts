@@ -116,7 +116,12 @@ describe('ccrc restamp <file>', () => {
     expect(readFileSync(f, 'utf8'), 'a usage error writes nothing').toBe(staleStamped());
   });
 
-  it('reports a file it cannot write, exit 1, and leaves it as it was', () => {
+  it('reports a file it cannot OPEN for writing, exit 1; the message says a later failure may leave it partly written', () => {
+    // This pins an OPEN-time failure only (mode 0444, EACCES), where nothing was
+    // truncated and the file is as it was. The write is in place (truncate, then
+    // write — a temp file and rename would be a second writer the model-env scan
+    // forbids in ccd/ccrc), so a failure AFTER the truncate (ENOSPC) can leave it
+    // partly written: no test can arm that portably, so the message says so.
     if (process.getuid?.() === 0) return;   // root writes through 0444
     const dir = mkTmp('ccrc-restamp-');
     const f = join(dir, 'ccd');
@@ -124,7 +129,9 @@ describe('ccrc restamp <file>', () => {
     chmodSync(f, 0o444);
     const r = run([f]);
     expect(r.code).toBe(1);
-    expect(readFileSync(f, 'utf8')).toBe(staleStamped());
+    expect(readFileSync(f, 'utf8'), 'an open-time failure leaves the file as it was').toBe(staleStamped());
+    expect(r.stderr, 'the exit-1 message must not promise the file is untouched').toContain('may be partly written');
+    expect(r.stderr).toContain(`git checkout -- ${f}`);
   });
 
   it("refuses a generator's output named by a RELATIVE path even when CDPATH would resolve it elsewhere", () => {
