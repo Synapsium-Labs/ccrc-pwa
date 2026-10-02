@@ -4050,6 +4050,17 @@ what this plan builds.
   stands). F2: wave 1's plan, entry 3774, listed rows 1, 6, 7, 15 and 17 as the ones the two real-cause cases moved,
   leaving out rows 50, 58 and 63, which the same entry records moving; the sentence now scopes its list to rows 1-45
   and names 50, 58 and 63 for rows 46-65.
+- **D-3847** — Task 1 Step 6's `_reg_purge` inventory, measured on `main` `a934a59b` (the coordinator replayed the
+  plan's 30 anchors there; these two were the only misses) and again after `10f32755`: the stall watch's `turn` field
+  took 42 after this plan was measured, so the count sentence reads "…`tdate` 41, the stall watch's `turn` 42,
+  continuity's `rescuewait` 43 — by addition…" and the list's head "The 43:", where the plan wrote 42 for both; the
+  third inventory edit (`rescuewait` in the `reaping, …` line) applied as written. The same `turn` addition spent the
+  14 characters of headroom Pre-flight finding 7 counted in `ccd-auto-swap-pool.test.ts`'s fixed 2400-character
+  window, so with `rescuewait` added `` `strandnotify` `` began at character 2401 and "names the three per-id fields
+  this build adds" went red. The window now ends at the inventory list's own last field (`` `wrapper`. Note that
+  `pool` here ``), asserted found after the claim, so no byte count can be outgrown again; measured red when
+  `` `strandnotify` `` is deleted from the list (`1 failed | 42 passed (43)`). The `_reg_get` census needed no
+  adaptation: `reg-get-census.py` measured `176/147 -> 179/150`, the plan's pair.
 
 ---
 
