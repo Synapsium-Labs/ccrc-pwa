@@ -1,0 +1,217 @@
+// `deploy/measure-landing.py` — the landing-order programme's instrument
+// (spec 2026-09-23 §10). It runs by hand on the fleet box, where the host `gh`
+// carries a repo-WRITE token, so the property that matters most is the one it
+// states first: it READS. Two halves pin that, and neither trusts the other:
+// the static half reads the file's own argv literals; the behavioural half runs
+// a subcommand against a recording `gh` stub and reads what was actually asked.
+// The same two halves hold its second door, `~/.local/bin/ccrc-api`, whose
+// table also carries POST rows: only `runs list` and `mail list` may pass.
+// The rest pins the pure decisions every baseline number is derived from, each
+// by a case that goes red when its rule is bent (the plan's mutation table).
+//
+// Every python3 spawn carries PYTHONDONTWRITEBYTECODE: loading the tool as a
+// module would otherwise leave `deploy/__pycache__/` behind (gitignored, but a
+// directory walk of `deploy/` would read it — the ccgpt harness's precedent).
+import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path, { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { mkTmp } from './tmpHelpers.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const TOOL = path.resolve(here, '..', '..', 'deploy', 'measure-landing.py');
+const src = readFileSync(TOOL, 'utf8');
+const PYENV = { ...process.env, PYTHONDONTWRITEBYTECODE: '1' };
+const LOAD = [
+  'import importlib.util, json, sys',
+  `s = importlib.util.spec_from_file_location("ml", ${JSON.stringify(TOOL)})`,
+  'm = importlib.util.module_from_spec(s); s.loader.exec_module(m)',
+];
+
+/** Evaluate one Python expression against the imported module `m`, with `a`
+ *  bound to the JSON argument, and return its JSON value. The module is
+ *  loaded by path (its name has a hyphen) and its `main` never runs. */
+const py = (expr: string, a: unknown = null): any => {
+  const code = [...LOAD, 'a = json.loads(sys.stdin.read())', `print(json.dumps(${expr}))`].join('\n');
+  const r = spawnSync('python3', ['-c', code], { input: JSON.stringify(a), encoding: 'utf8', env: PYENV });
+  expect(r.status, r.stderr).toBe(0);
+  return JSON.parse(r.stdout);
+};
+
+/** A fixture HOME whose PATH starts with a recording `gh` (the given case arms)
+ *  and whose `~/.local/bin/ccrc-api` records too. Nothing real is reachable. */
+const stubHome = (ghCases: string[] = [], apiCases: string[] = []): { home: string; env: NodeJS.ProcessEnv } => {
+  const home = mkTmp('ccrc-measure-landing-');
+  const bin = join(home, 'bin');
+  const local = join(home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(local, { recursive: true });
+  writeFileSync(join(bin, 'gh'), ['#!/bin/sh', 'printf \'%s\\n\' "$*" >> "$HOME/gh-calls"',
+    'case "$*" in', ...ghCases, '  *) echo \'{}\' ;;', 'esac'].join('\n') + '\n', { mode: 0o755 });
+  writeFileSync(join(local, 'ccrc-api'), ['#!/bin/sh', 'printf \'%s\\n\' "$*" >> "$HOME/api-calls"',
+    'case "$*" in', ...apiCases, '  *) echo \'{}\' ;;', 'esac'].join('\n') + '\n', { mode: 0o755 });
+  return { home, env: { ...PYENV, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}` } };
+};
+const calls = (home: string, file: string): string[] | null =>
+  existsSync(join(home, file)) ? readFileSync(join(home, file), 'utf8').trim().split('\n') : null;
+const tool = (h: { home: string; env: NodeJS.ProcessEnv }, args: string[]) =>
+  spawnSync('python3', [TOOL, ...args, '--out', join(h.home, 'out')], { encoding: 'utf8', cwd: h.home, env: h.env });
+const inModule = (h: { home: string; env: NodeJS.ProcessEnv }, stmt: string) =>
+  spawnSync('python3', ['-c', [...LOAD, stmt].join('\n')], { encoding: 'utf8', env: h.env });
+
+describe('measure-landing: it reads GitHub and never writes it', () => {
+  it('runs gh from exactly one argv, and that argv is a GET', () => {
+    const argv = [...src.matchAll(/subprocess\.run\(\[\s*'gh'[^\]]*\]/g)].map((m) => m[0]);
+    expect(argv, 'gh is run from more or fewer than one place').toHaveLength(1);
+    expect(argv[0]).toBe("subprocess.run(['gh', 'api', '-X', 'GET', path]");
+    expect(src, 'a second method is spelled somewhere').not.toMatch(/'(POST|PUT|PATCH|DELETE)'|--method|--field|'-f'|'-F'/);
+  });
+
+  it('runs git for object reads only — cat-file and show', () => {
+    const verbs = [...src.matchAll(/\['git', '-C', clone, '([a-z-]+)'/g)].map((m) => m[1]);
+    expect(new Set(verbs)).toEqual(new Set(['cat-file', 'show']));
+    expect(src.match(/subprocess\.run\(\['git'/g) ?? [], 'git is run outside the -C clone form').toHaveLength(verbs.length);
+  });
+
+  it('refuses a path that is not a plain REST read, before gh runs', () => {
+    const h = stubHome();
+    for (const bad of ['-X POST repos/o/r/pulls/1/merge', 'repos/o/r/pulls/1 --method PUT', 'graphql', '/repos/o/r']) {
+      const r = inModule(h, `m._gh(${JSON.stringify(bad)})`);
+      expect(r.status, `${bad} was not refused`).not.toBe(0);
+      expect(r.stderr).toContain('refused a GitHub path');
+    }
+    expect(calls(h.home, 'gh-calls'), 'gh ran for a refused path').toBeNull();
+  });
+
+  it('asks GitHub only GETs, measured through a recording stub', () => {
+    const h = stubHome([
+      '  *rules/branches/main*) echo \'[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test (server)"}]}}]\' ;;',
+      '  *required_status_checks*) echo \'{"contexts":["build-pwa"]}\' ;;',
+    ]);
+    const r = tool(h, ['required', 'o/r']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).required).toEqual(['build-pwa', 'test (server)']);
+    expect(calls(h.home, 'gh-calls')).toEqual([
+      'api -X GET repos/o/r/rules/branches/main',
+      'api -X GET repos/o/r/branches/main/protection/required_status_checks',
+    ]);
+  });
+
+  it('reaches ccrc-api from one door, for its two list verbs only (static and behavioural)', () => {
+    // The client's table carries POST rows (runs close, mail send, ledger
+    // allocate); a hand-run instrument that reached one would write the
+    // coordination store. Every `_api(` call site names a list verb, and the
+    // door itself refuses anything else before the client runs.
+    const sites = [...src.matchAll(/_api\('([a-z]+)', '([a-z-]+)'/g)].map((m) => `${m[1]} ${m[2]}`);
+    expect(new Set(sites)).toEqual(new Set(['runs list', 'mail list']));
+    expect(src.match(/_api\(/g)!.length - 1, 'an _api call site names its verb some other way').toBe(sites.length);
+    const h = stubHome();
+    for (const bad of ["'runs', 'close', '7'", "'mail', 'send', '--json', '-'", "'ledger', 'allocate'"]) {
+      const r = inModule(h, `m._api(${bad})`);
+      expect(r.status, `_api(${bad}) was not refused`).not.toBe(0);
+      expect(r.stderr).toContain('refused a ccrc-api verb that is not a list read');
+    }
+    expect(calls(h.home, 'api-calls'), 'ccrc-api ran for a refused verb').toBeNull();
+  });
+});
+
+describe('measure-landing: an input it could not read is never a number', () => {
+  it('required: refuses a repository whose required contexts read as nothing, and caches nothing', () => {
+    // Both endpoints answer, and neither names a context (or both fail): an
+    // empty set would make every later verdict green, and a cached one would
+    // make it so on every re-run.
+    const h = stubHome(['  *rules/branches/main*) echo \'[]\' ;;']);
+    const r = tool(h, ['required', 'o/r']);
+    expect(r.status, 'an empty required set was accepted').not.toBe(0);
+    expect(r.stderr).toContain('no required status context could be read');
+    expect(existsSync(join(h.home, 'out', 'cache', 'required-o_r.json')), 'the empty read was cached').toBe(false);
+  });
+
+  it('absorptions: refuses a run with no --fleet-login before it reads anything', () => {
+    const h = stubHome();
+    const r = tool(h, ['absorptions', 'o/r']);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('--fleet-login L1,L2 is required');
+    expect(calls(h.home, 'gh-calls'), 'gh ran before the fleet was named').toBeNull();
+  });
+
+  it('mail-latency: a full newest-first page is truncation, never data; a run with no claimant is skipped', () => {
+    const at = Date.parse('2026-09-10T12:00:00Z');
+    const row = (i: number) => ({ at: at + i, state: 'delivered' });
+    const full = JSON.stringify({ ok: true, mail: Array.from({ length: 500 }, (_, i) => row(i)) });
+    const one = JSON.stringify({ ok: true, mail: [row(0)] });
+    const h = stubHome([], [
+      '  *"runs list"*) echo \'{"ok":true,"runs":[{"claimedBy":null},{"claimedBy":"coord-full"},{"claimedBy":"coord-one"}]}\' ;;',
+      `  *"--to coord-full"*) echo '${full}' ;;`,
+      `  *"--to coord-one"*) echo '${one}' ;;`,
+    ]);
+    const r = tool(h, ['mail-latency']);
+    expect(r.status, r.stderr).toBe(0);
+    const d = JSON.parse(r.stdout);
+    expect(d.coordinators, 'a null claimant was counted as a coordinator').toBe(2);
+    expect(d.truncatedCoordinators, 'a full page was read as the whole history').toBe(1);
+    expect(d.unmatched, "the truncated coordinator's mail was counted").toBe(1);
+    expect(calls(h.home, 'api-calls')!.filter((c) => c.startsWith('mail list'))
+      .every((c) => c.endsWith('--limit 500')), 'a mail read asked for the default page').toBe(true);
+  });
+});
+
+describe('measure-landing: the decisions every baseline is derived from', () => {
+  const C = (name: string, conclusion: string | null, completed_at = '2026-09-10T00:00:00Z') =>
+    ({ name, conclusion, completed_at });
+
+  it('required_state: green, red, and the unmeasured middle — a cancel is not a red, a re-run supersedes', () => {
+    expect(py('m.required_state(a, ["build","test"])', [C('build', 'success'), C('test', 'success')])).toBe('green');
+    expect(py('m.required_state(a, ["build","test"])', [C('build', 'success'), C('test', 'failure')])).toBe('red');
+    expect(py('m.required_state(a, ["build","test"])', [C('build', 'success'), C('test', 'cancelled')])).toBe('unmeasured');
+    expect(py('m.required_state(a, ["build","test"])', [C('build', 'success')])).toBe('unmeasured');
+    expect(py('m.required_state(a, ["build","test"])', [C('build', 'success'), C('test', 'failure'),
+      C('mac', 'failure'), C('test', 'success', '2026-09-10T01:00:00Z')]), 'the re-run is the verdict').toBe('green');
+    expect(py('m.required_state(a, [])', [C('x', 'failure')]), 'no required context is not a verdict').toBe('unmeasured');
+  });
+
+  it('red_intervals: opens on red, closes only on green, and an open one ends at the window', () => {
+    expect(py('m.red_intervals([tuple(x) for x in a], "END")', [
+      ['t1', 'red'], ['t2', 'unmeasured'], ['t3', 'red'], ['t4', 'green'], ['t5', 'green'], ['t6', 'red'],
+    ])).toEqual([['t1', 't4'], ['t6', 'END']]);
+  });
+
+  it("merge_of_main: a merge of the PR's own branch is not one; update-branch and a local merge are told apart", () => {
+    const commit = (msg: string, p2: string, committer = 'dev', login: string | null = 'dev') => ({
+      parents: [{ sha: 'p1' }, { sha: p2 }],
+      commit: { message: msg, committer: { name: committer }, author: { name: 'dev' } },
+      committer: login ? { login } : null, author: { login: 'dev' },
+    });
+    const own = ['p1', 'own2'];
+    expect(py('m.merge_of_main(a[0], set(a[1]))', [commit("Merge remote-tracking branch 'origin/main' into ws/x", 'main9'), own])).toBe('local');
+    expect(py('m.merge_of_main(a[0], set(a[1]))', [commit("Merge branch 'main' into ws/x", 'main9', 'GitHub', 'web-flow'), own])).toBe('update-branch');
+    expect(py('m.merge_of_main(a[0], set(a[1]))', [commit("Merge remote-tracking branch 'origin/main' into ws/x", 'own2'), own]),
+      'the second parent is the PR\'s own commit').toBeNull();
+    expect(py('m.merge_of_main(a[0], set(a[1]))', [commit("Merge branch 'feature/y' into ws/x", 'other'), own])).toBeNull();
+  });
+
+  it('repeat_share: every merge past a PR\'s first is a repeat', () => {
+    expect(py('m.repeat_share(a)', [1, 1, 2, 3, 3, 3])).toEqual([6, 3, 3]);
+  });
+
+  it('fleet_logins: the fleet is a set, from the list the operator names', () => {
+    expect(py('sorted(m.fleet_logins({"fleet-login": a}))', 'fleet-a,fleet-b')).toEqual(['fleet-a', 'fleet-b']);
+  });
+
+  it('sync_kind: the transcript classifier, including the probe and the aborts it must not count', () => {
+    const k = (cmd: string): unknown => py('m.sync_kind(a)', cmd);
+    expect(k('git merge origin/main')).toBe('merge');
+    expect(k('git pull --rebase origin main')).toBe('pull');
+    expect(k('git merge --no-commit --no-ff origin/main')).toBe('probe');
+    expect(k('gh pr update-branch 12')).toBe('update-branch');
+    expect(k('git merge --abort')).toBeNull();
+    expect(k('git merge-tree --write-tree HEAD origin/main')).toBeNull();
+  });
+
+  it('episode_class: conflict first, then ritual only when nothing was edited and no agent ran', () => {
+    expect(py('m.episode_class(a)', { conflict: true, edits: 0, agents: 0 })).toBe('conflict');
+    expect(py('m.episode_class(a)', { conflict: false, edits: 0, agents: 0 })).toBe('ritual');
+    expect(py('m.episode_class(a)', { conflict: false, edits: 2, agents: 0 })).toBe('mixed');
+  });
+});
