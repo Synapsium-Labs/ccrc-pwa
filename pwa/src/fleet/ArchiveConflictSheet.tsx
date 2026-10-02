@@ -25,6 +25,7 @@
 // mean it".
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { ARCHIVE_REFUSALS } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { ApiError, UNSUPPORTED_VERB_TEXT, api } from '../lib/api';
 import './fleet.css';
@@ -82,7 +83,7 @@ export function runOpenRuns(err: unknown): readonly ArchiveConflictRun[] | null 
   if (!(err instanceof ApiError) || err.status !== 409) return null;
   const body = err.body;
   if (typeof body !== 'object' || body === null) return null;
-  if ((body as { error?: unknown }).error !== 'run-open') return null;
+  if ((body as { error?: unknown }).error !== ARCHIVE_REFUSALS.runOpen) return null;
   const raw = (body as { runs?: unknown }).runs;
   if (!Array.isArray(raw)) return [];
   // ALL FOUR fields are measured, `waveOf` included. It used to be the one

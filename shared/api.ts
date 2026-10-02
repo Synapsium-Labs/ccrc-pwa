@@ -8945,3 +8945,101 @@ export function settledDoneDetail(tag: string): string {
  *  (`stall-vocabulary.test.ts` pins the two together). It is appended at the end of this file, not beside
  *  `WAVE_DONE_SUBJECT`, because an insertion there would move README's citation anchors into this file. */
 export const REVIEW_DONE_SUBJECT = 'review-done';
+
+/**
+ * The archive door's refusal codes (workspace lifecycle spec §5.2): every `error` word `POST
+ * /api/sessions/:id/archive` refuses with, declared ONCE. The server sends them and the PWA branches on them and says
+ * each in words; neither spells one as a bare literal (`single-definition.test.ts`). Appended at the end of this file,
+ * like `REVIEW_DONE_SUBJECT` above, so no line README or a contract cites moves.
+ *
+ *   - `runOpen` — a non-terminal run names this session as its WORKER. `{force:true}` proceeds; the 409 names the runs.
+ *   - `sessionBusy` — a turn is in progress: read live on the request (`archiveInterrupts`), or answered by ccd after
+ *     that read (a race). `{interrupt:true}` stops the session first, and the turn is lost.
+ *   - `coordinatorHasOpenRuns` — this session is the CLAIMANT of a non-terminal run. `{programme:'end'}` ends the
+ *     programme first; the 409 names the runs, or carries `runs: []` when the store could not be read (fail-shut).
+ *   - `programmePartlyEnded` — `{programme:'end'}` could not end every run. Nothing was stopped or archived.
+ *   - `worktreeGone`, `statusUnknown`, `manifestUnbuildable` — the three refusals the operator cannot fix from the
+ *     phone (`ARCHIVE_STOP_ONLY`), each ccd's own `cmd_ws_archive` refusal, which it answers before it touches
+ *     anything. `worktreeGone` is also the server's, where its box can PROVE the worktree absent (local mode: the
+ *     fleet agent's read roots do not include the worktrees, so in remote mode only ccd can tell).
+ *
+ * A refusal or failure that arrives AFTER `{programme:'end'}` closed runs carries them as `ended` beside its `error`
+ * (`archiveOutcome`, `server/src/coord/archiveDoor.ts`): what only ccd measures is measured after the end.
+ */
+export const ARCHIVE_REFUSALS = {
+  runOpen: 'run-open',
+  sessionBusy: 'session-busy',
+  coordinatorHasOpenRuns: 'coordinator-has-open-runs',
+  programmePartlyEnded: 'programme-partly-ended',
+  worktreeGone: 'worktree-gone',
+  statusUnknown: 'status-unknown',
+  manifestUnbuildable: 'manifest-unbuildable',
+} as const;
+export type ArchiveRefusal = (typeof ARCHIVE_REFUSALS)[keyof typeof ARCHIVE_REFUSALS];
+
+/** Every archive refusal code, DERIVED from `ARCHIVE_REFUSALS` — never a second list. */
+export const ARCHIVE_REFUSAL_CODES: readonly ArchiveRefusal[] = Object.values(ARCHIVE_REFUSALS);
+
+export function isArchiveRefusal(v: unknown): v is ArchiveRefusal {
+  return typeof v === 'string' && (ARCHIVE_REFUSAL_CODES as readonly string[]).includes(v);
+}
+
+/** The refusals after which the session actions sheet offers "Stop only" (spec §5.2): the ones the operator cannot
+ *  fix from the phone, so a live session is never left without a way to put it down. Exactly these three. */
+export const ARCHIVE_STOP_ONLY: readonly ArchiveRefusal[] = [
+  ARCHIVE_REFUSALS.worktreeGone, ARCHIVE_REFUSALS.statusUnknown, ARCHIVE_REFUSALS.manifestUnbuildable,
+];
+
+/** `POST /api/sessions/:id/archive`'s body (spec §5.2). Each consent is a SECOND tap, sent only after the operator read
+ *  the refusal it answers: `force` answers `run-open`, `interrupt` answers `session-busy` and `programme: 'end'`
+ *  answers `coordinator-has-open-runs`. Absent means not given. The PWA builds it (`api.archive`) and the server reads
+ *  it by these keys (`archiveFlags`), so a renamed consent is a compile error on both sides. */
+export interface ArchiveBody {
+  readonly force?: true;
+  readonly interrupt?: true;
+  readonly programme?: 'end';
+}
+
+/** The door's 2xx answer. `archived: true` — the session is put away: a workspace archived, a main checkout stopped
+ *  (it folds into Archived and is never deleted). `archived: false` arises only when the door STOPPED the session
+ *  and `ws-archive` then refused (`refusal`, or `null` for a refusal this build has no word for, with ccd's text in
+ *  `detail`): the row stays at the top level, stopped, with Archive offered again. `ended` lists the runs a
+ *  `{programme:'end'}` closed, `[]` when none was asked or none was open. */
+export interface ArchiveAnswer {
+  readonly ok: true;
+  readonly archived: boolean;
+  readonly stopped: boolean;
+  readonly ended: readonly { readonly id: number; readonly program: string; readonly wave: number; readonly waveOf: number | null }[];
+  readonly refusal?: ArchiveRefusal | null;
+  readonly detail?: string;
+}
+
+/**
+ * Whether ARCHIVING this row costs a turn in progress — spec §5.2's "busy (either kind)". ONE predicate: the door
+ * reads it off a row it assembles on the request (`assembleFleet` over that one registry row, the fleet frame's own
+ * derivation), and the PWA reads it off the row it holds to choose the confirm's words. `status` is Claude Code's own
+ * live word (`waiting` already collapsed into `busy`, an unreadable live file painted `busy`, D-115); `working` and
+ * `attention` are the bucket ladder's reading of the hook beside it. A dead row is none of these.
+ */
+export function archiveInterrupts(s: Pick<FleetSession, 'status' | 'bucket'>): boolean {
+  return s.status === 'busy' || s.bucket === 'working' || s.bucket === 'attention';
+}
+
+/**
+ * Whether a row belongs in its card's `Archived (N)` fold (workspace lifecycle spec §5.2) — the ONE predicate the
+ * board's split and the actions sheet's Restore gate both read; neither keys on `archivedAt` or `workspace` alone.
+ * An archived workspace (the `archived` BUCKET: archived and dead, never `cleanup`), or a STOPPED main checkout (no
+ * workspace, no pane, and a stop stamp). A main checkout started again leaves the fold, because `cmd_start` and
+ * `cmd_ensure` remove the stop stamp on the attempt; a stopped workspace that is not archived stays at the top level,
+ * where Archive is offered again. `stoppedBy` is read `?? null`: the live frame is cast, not revived.
+ */
+export function inArchivedFold(s: Pick<FleetSession, 'bucket' | 'workspace' | 'status' | 'stoppedBy'>): boolean {
+  return s.bucket === 'archived' || (s.workspace === null && s.status === 'dead' && (s.stoppedBy ?? null) !== null);
+}
+
+/** When a row entered the Archived fold, the fold's sort key (newest first): `bucketSince` for an archived workspace
+ *  (its archive time), the stop stamp's time for a stopped main checkout. `null` when neither is known. */
+export function archivedFoldSince(s: Pick<FleetSession, 'bucket' | 'bucketSince' | 'stoppedBy'>): number | null {
+  if (s.bucket === 'archived') return s.bucketSince;
+  return (s.stoppedBy ?? null)?.at ?? null;
+}

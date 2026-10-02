@@ -82,6 +82,7 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS } from '../../shared/api.js';
 
 /**
  * A client frame off the per-session socket, or null if it isn't one.
@@ -3184,10 +3185,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       //
       // `?.` still means "coordination switched off archives exactly as before".
       if (read !== undefined && !read.ok) {
-        return reply.code(409).send({ ok: false, error: 'run-open', runs: [] });
+        return reply.code(409).send({ ok: false, error: ARCHIVE_REFUSALS.runOpen, runs: [] });
       }
       const runs = read?.siblings ?? [];
-      if (runs.length > 0) return reply.code(409).send({ ok: false, error: 'run-open', runs });
+      if (runs.length > 0) return reply.code(409).send({ ok: false, error: ARCHIVE_REFUSALS.runOpen, runs });
     }
     const argv = CCD_ARGV.wsArchive(id, pwaDec(req));
     // `ws-archive` is the SAME verb generation as `ws-audit` and `ws-reap` —
