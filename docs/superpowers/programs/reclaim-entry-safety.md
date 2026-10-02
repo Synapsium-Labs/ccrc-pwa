@@ -15,7 +15,7 @@ direct reclaim argv shapes before automatic reclamation can ship.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open) | **working, fix round 2** — review run 217 closed `done` on `46194d6b`; its fix-round-introduced important finding (a test title that reds the required `test (server)` check) requires this round; mail 3141 sent 2026-10-02 |
+| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open) | **awaiting-review** — fix round 2 done at `a217af78` (wave-done 3161, re-measured); convergence review run 222 dispatched to `ccrc-pwa-calm-cove` 2026-10-02 |
 
 **Deviation block: eight numbers, the first of them 3696** (allocated once at run 199 open, 2026-09-30; floor
 now 3704). The finalized plan defines the first as `ccd-imported-functions-hijack-reclaim-reads`. No other issued
@@ -164,6 +164,20 @@ unrendered.
     file, so every "passes the marker check" in these ledgers through 2026-10-02 measured nothing. Re-measured with
     `verifyMarker`: `main` (with #226) and `46194d6b` both answer `ccrc-unmodified`. The gate is now
     `ownership.test.ts` / `verifyMarker`; the hollow command is carried for an owner.
+- **2026-10-02 14:18 — fix round 2 re-measured; convergence review run 222 dispatched.** Wave-done 3161 claimed
+  `a217af78`. Re-measured: PR #222's head is that sha, open and not draft; `origin/main` `6ca3d163` is an ancestor
+  (merged, not rebased); `verifyMarker` answers `ccrc-unmodified` with one marker line, and an edited control
+  answers `ccrc-edited`; `bash -n` passes on `ccd/ccd`, `ccd/ccrc` and `deploy/deploy.sh`, each checked alone; both
+  Python files parse, with ASTs identical to `46194d6b`'s; `ccd/ccd` differs from `46194d6b` only on comment lines
+  and from `main` only on the stamp line and the guard block, so #226's code is main's byte for byte; the deviation
+  numbers new against `main` are exactly the issued block, 3696, 3697, 3698, 3699, 3700, 3701, 3702 and 3703, the last
+  now defined; the edited paths lie inside claims 873 and 881;
+  required Linux CI on the tip is green (run 37014939506; macOS advisory). The worker's mail says `suite: red`: three
+  `ccrc-update` cases timed out at load average 100 with no failed assertion and passed together at load 49, in a
+  round that changed no executed code. It also reports `failure: shallow` a third time; the route door has twice
+  answered `ceiling` and the run already sits at the top class, so no route call was made. Run 199 advanced to
+  `awaiting-review`. Review run 222 opened under the canonical title and dispatched with the standard panel, the
+  SAFETY lens and the convergence rule, with `ownership.test.ts` named as the stamp gate.
 - **Routing escalation.** This is a destructive-path security boundary reached after repeated wave 4 resolver
   rounds exposed the process-level class. The main loop runs Opus at `xhigh`; implementation subagents run Sonnet
   at `high`; workflows are off; compact threshold is 40. The held-out review remains outside that routing and adds
