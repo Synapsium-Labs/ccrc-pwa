@@ -509,6 +509,18 @@ describe('the Released sub-fold (workspace lifecycle spec §5.1)', () => {
     expect(g[0]!.released.map((m) => m.id)).toEqual(['d']);
   });
 
+  it('a STRANDED released dead row is not in the fold, so its card keeps RANK\'s place below an archived-only card', () => {
+    // The strand marker keeps the row out of the fold (`inReleasedFold`), so it is an unfolded dead row: visible in
+    // `sessions`, and in part 4 of the order below archived (5 above dead 6), whatever `releasedFrom` says.
+    const g = groupFleet([
+      s({ id: 'd', project: 'A', status: 'dead', bucket: 'dead', stranded: { at: 1, reason: 'no lane' }, releasedFrom: rel(1, 100) }),
+      s({ id: 'a', project: 'B', status: 'dead', bucket: 'archived', archivedAt: 5 }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['B', 'A']);
+    expect(g[1]!.released).toEqual([]);
+    expect(g[1]!.sessions.map((m) => m.id)).toEqual(['d']);
+  });
+
   it('an UNRELEASED dead row keeps its rank below archived: the lift is for released rows only', () => {
     // Neither card holds a released row, so the fold must not reorder them: archived (5) outranks dead (6) in sortFleet.
     const g = groupFleet([
