@@ -18,7 +18,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | fix round 2 done 2026-10-02; in re-review (run 231) |
+| 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | re-review 231 ruled 2026-10-02: fix round 3 (wording + one pin) |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | — | planned; approved 2026-10-01 (#223) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
@@ -151,6 +151,19 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - The whole PWA suite passed, 3145 tests.
   - CI's required Linux legs were green on the first attempt.
   - Review run 231 went out with the held-out panel over `56ad0992..dc4be181`.
+- **2026-10-02 — re-review 231 ruled: fix round 3.**
+  - **The panel:** 21 agents, 4 confirmed, 2 refuted.
+  - **Measured:** A1 through A6 hold, and P30, P31 and P35–P37 reproduce exactly. The four-part order moves only
+    rows in the Released fold relative to sortFleet's RANK, measured with a three-card probe.
+  - **What is left:**
+    - "unreleased dead" in four texts means "dead and not in the fold", which is false for a released row with a
+      strand marker;
+    - that row's order is unpinned;
+    - three D-3786/D-3787 sentences are inexact.
+  - **Ruled, option (a):** keep the code, rename and reword to "unfolded", pin the stranded row below an
+    archived-only card, and correct the three sentences. Option (b), keying on `releasedFromOf`, is not taken,
+    because it would move an unfolded, visible row relative to RANK.
+  - **Numbering:** no new number.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
