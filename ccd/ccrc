@@ -22456,14 +22456,14 @@ cmd_restamp() {
   done
   [ -f "$mark" ] || _ccrc_die "restamp: the marker module is missing ($mark)"
   verdict="$(node --no-warnings --input-type=module -e '
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs"; import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 const [markPath, filePath] = process.argv.slice(1);
 const { markGenerated, verifyMarker } = await import(pathToFileURL(markPath).href);
 const text = readFileSync(filePath, "utf8");
 const v = verifyMarker(text);
 if (v !== "ccrc-edited") { console.log(v); process.exit(0); }
-writeFileSync(filePath, markGenerated(text));
+await writeFile(filePath, markGenerated(text));
 console.log("restamped");
 ' "$mark" "$f" 2>/dev/null)" || _ccrc_die "restamp: $f could not be read or written"
   case "$verdict" in
