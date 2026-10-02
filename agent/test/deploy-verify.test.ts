@@ -36,7 +36,7 @@
 // that as a second net.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bodyDigest, markGenerated } from '../../shared/mark.mjs';
@@ -512,8 +512,13 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // second copy means two lanes install the same artifact and the one bash
     // runs is the LAST, which no reader of a `toContain` would know.
     const codeLines = deploySh.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+    // ccd ITSELF is the exception (D-3696): a launcher/body PAIR rendered and
+    // published ON THE BOX by `install_ccd_pair`, never scp'd at all — so the
+    // call it replaced must be gone, and the pair call present exactly once.
+    expect(codeLines.filter((l) => l.includes('install_atomic ccd/ccd .local/bin/ccd')),
+      'ccd is scp\'d again — the pair publisher was bypassed').toEqual([]);
+    expect(codeLines.filter((l) => l === 'install_ccd_pair'), 'the pair publisher is not called exactly once').toHaveLength(1);
     for (const call of [
-      'install_atomic ccd/ccd .local/bin/ccd',
       'install_atomic deploy/notify.sh .cc-sessions/notify.sh',
       'install_atomic ccd/compact-card.mjs .cc-sessions/compact-card.mjs',
       'install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh',
@@ -1551,6 +1556,74 @@ describe('the verification is actually wired into the deploy, and can observe a 
       .toBeLessThan(serverRestartAt);
   });
 
+  it('ccd lands as a PAIR rendered on the box: body then launcher, the box\'s own isolated python3, digest agreement, no leftovers (D-3696)', () => {
+    // The body of `install_ccd_pair`, run with `ssh` replaced by a stub that
+    // executes the remote command in a fixture HOME — the real helper, the
+    // real template, the real body, against a box that is this test's own.
+    const fn = /install_ccd_pair\(\) \{([\s\S]*?)\n\}/.exec(deploySh);
+    expect(fn, 'deploy.sh has no install_ccd_pair() helper').toBeTruthy();
+    const body = fn![1]!;
+    expect(body, 'the pair is rendered by the shipped tree\'s helper, on the box').toContain('~/ccrc/ccd/ccd-entry-install.py install ~/ccrc');
+    expect(body, 'the box\'s own python3, isolated').toContain('python3 -IS');
+    expect(body, 'no scp: neither active inode is overwritten in place').not.toContain('SCP');
+    // BOTH halves are backed up before the rsync --delete and the publication.
+    const rsyncAt = deploySh.indexOf('agent shared deploy ccd "$BOX":ccrc/');
+    for (const backup of ['cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd;', 'cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body;']) {
+      expect(deploySh.indexOf(backup), `not backed up: ${backup}`).toBeGreaterThan(-1);
+      expect(deploySh.indexOf(backup), `backed up only after the rsync: ${backup}`).toBeLessThan(rsyncAt);
+    }
+    const repoCcd = path.resolve(deployDir, '..', 'ccd');
+    const run = (home: string): ReturnType<typeof spawnSync> => {
+      const stub = path.join(home, 'stubbin');
+      mkdirSync(stub, { recursive: true });
+      writeFileSync(path.join(stub, 'fake-ssh'), '#!/bin/sh\nshift\nexec bash -c "$1"\n', { mode: 0o755 });
+      return spawnSync('bash', ['-c', `SSH=(fake-ssh); BOX=box; ${body}`], {
+        encoding: 'utf8', cwd: home,
+        env: { ...process.env, HOME: home, PATH: `${stub}${path.delimiter}${process.env.PATH ?? ''}` },
+      });
+    };
+    const box = (): string => {
+      const home = mkTmp('ccrc-agent-ccdpair-');
+      mkdirSync(path.join(home, 'ccrc', 'ccd'), { recursive: true });
+      for (const f of ['ccd', 'ccd-entry.py', 'ccd-entry-install.py']) cpSync(path.join(repoCcd, f), path.join(home, 'ccrc', 'ccd', f));
+      return home;
+    };
+
+    const home = box();
+    try {
+      const r = run(home);
+      expect(r.status, String(r.stderr)).toBe(0);
+      const out = String(r.stdout);
+      expect(out.indexOf('body published'), 'the body is published').toBeGreaterThan(-1);
+      expect(out.indexOf('body published'), 'body FIRST, launcher LAST').toBeLessThan(out.indexOf('launcher published'));
+      const entry = path.join(home, '.local', 'bin', 'ccd');
+      const bodyPath = path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
+      const shebang = readFileSync(entry, 'utf8').split('\n')[0]!;
+      expect(shebang, 'an absolute isolated-python shebang').toMatch(/^#!\/\S+ -IS$/);
+      expect([entry, bodyPath].map((p) => (statSync(p).mode & 0o777).toString(8)), 'launcher 0755, body 0644').toEqual(['755', '644']);
+      expect(readFileSync(bodyPath).equals(readFileSync(path.join(repoCcd, 'ccd'))), 'the body is the tree\'s ccd').toBe(true);
+      const digest = /^BODY_SHA256 = '([0-9a-f]{64})'$/m.exec(readFileSync(entry, 'utf8'))?.[1];
+      const want = spawnSync('python3', ['-IS', '-c', `import hashlib;print(hashlib.sha256(open(${JSON.stringify(bodyPath)},'rb').read()).hexdigest())`],
+        { encoding: 'utf8' }).stdout.trim();
+      expect(digest, 'the launcher names the published body\'s digest').toBe(want);
+      const left = spawnSync('find', [path.join(home, '.local'), '-name', '.ccd*', '-o', '-name', '*.incoming-*', '-o', '-name', '__pycache__'],
+        { encoding: 'utf8' }).stdout.trim();
+      expect(left, 'staging, self-test or incoming leftovers').toBe('');
+      expect(String(run(home).stdout), 'a second deploy of the same tree rewrites nothing').toContain('converged');
+      // A destination that is a directory refuses BEFORE anything moves: the
+      // launcher's path a directory, the body untouched (still the old bytes).
+      writeFileSync(path.join(home, 'ccrc', 'ccd', 'ccd'), `${readFileSync(path.join(repoCcd, 'ccd'), 'utf8')}\n# changed\n`);
+      rmSync(entry);
+      mkdirSync(entry);
+      const refused = run(home);
+      expect(refused.status, 'a directory at the launcher\'s path aborts the deploy').not.toBe(0);
+      expect(String(refused.stderr)).toContain('is a directory');
+      expect(readFileSync(bodyPath).equals(readFileSync(path.join(repoCcd, 'ccd'))), 'nothing moved').toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   it('~/.ccrc/accounts.sh lands BEFORE ccd — every ccd invocation in the gap would die', () => {
     // Stage 2a, Task 10. `ccd` no longer carries the account roster: it
     // SOURCES `~/.ccrc/accounts.sh` and `|| die`s when that file is absent
@@ -1569,7 +1642,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     const agentBranch = deploySh.slice(
       deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
     const shIdx = agentBranch.indexOf('install_atomic "$ACCOUNTS_SH" .ccrc/accounts.sh 644');
-    const ccdIdx = agentBranch.indexOf('install_atomic ccd/ccd .local/bin/ccd 755');
+    const ccdIdx = agentBranch.indexOf('\n  install_ccd_pair\n');
     expect(shIdx, 'deploy.sh never installs ~/.ccrc/accounts.sh').toBeGreaterThan(-1);
     expect(ccdIdx, 'the agent branch no longer installs ccd').toBeGreaterThan(-1);
     expect(shIdx, 'accounts.sh must be installed before ccd').toBeLessThan(ccdIdx);
@@ -1675,7 +1748,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
 
     const seedIdx = agentBranch.indexOf(seed!);
     const shIdx = agentBranch.indexOf('install_atomic "$ACCOUNTS_SH" .ccrc/accounts.sh 644');
-    const ccdIdx = agentBranch.indexOf('install_atomic ccd/ccd .local/bin/ccd 755');
+    const ccdIdx = agentBranch.indexOf('\n  install_ccd_pair\n');
     expect(shIdx, 'deploy.sh never installs ~/.ccrc/accounts.sh').toBeGreaterThan(-1);
     expect(ccdIdx, 'the agent branch no longer installs ccd').toBeGreaterThan(-1);
     expect(seedIdx, 'the flag must be seeded before the accounts.sh install — and so before every install below it')

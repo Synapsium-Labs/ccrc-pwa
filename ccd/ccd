@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c9de9f70826812ca0e65ce9182db5d0888d0b6f5f0b67ad554c3d47c9e203cea
+# ccrc:generated 1 sha256=f903cfcf18096a8a7ffe0b6d6c8d629e534d9c542a52e89eb1190f125d0baa61
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -7,6 +7,36 @@
 # a row stamped `rc=off` (`ws-add --no-rc` — a dispatched worker, task #37) spawns
 # plain even on an `on` box.
 set -uo pipefail
+
+# ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
+# A direct `ws-reclaim`, or a direct `ws-audit --session <id> --reclaim
+# [--defer-expired]`, must be running under Bash >= 4.4 in PRIVILEGED mode with
+# no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
+# rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
+# word; no environment marker is read. `$-` alone is not enough — a plain bash
+# importing `SHELLOPTS=privileged` reports `p` and still imports exported
+# functions (measured, bash 5.2) — so an imported function refuses too: ccd has
+# defined none at this line. Nothing here consults PATH, but the guard is
+# BEST-EFFORT wherever no launcher `-p` start stands behind it, since `printf`,
+# `exit` and `declare` can each be shadowed by a startup-defined function: an
+# explicit `bash ccd/ccd` (a hostile `BASH_ENV` already ran), and a case-variant
+# protected verb under an inherited `nocasematch`, which the launcher compares
+# exactly and starts ORDINARY. The guarantee is the launcher's `-p` start of an
+# exact spelling (D-3696, D-3700). SOURCE MODE never runs this; the classifier
+# is the launcher's, shape for shape, and the dispatcher still owns every tail.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim ]] \
+     || { [[ $# -eq 4 || $# -eq 5 ]] && [[ "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --reclaim ]] \
+          && [[ $# -eq 4 || "${5-}" == --defer-expired ]]; }; }; then
+  if ! (( BASH_VERSINFO[0] > 4 || ( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4 ) )) || [[ $- != *p* ]]; then
+    printf 'ccd: refused (entry-unprivileged): %s reaches ccd only through its installed direct entry, under Bash >= 4.4 in privileged mode (-p); this is Bash %s with flags %s — nothing was run\n' \
+      "$1" "${BASH_VERSION-unknown}" "$-" >&2
+    exit 125
+  fi
+  if [[ -n "$(declare -F)" ]]; then
+    printf 'ccd: refused (entry-imported-functions): %s started with shell functions already defined, which only Bash startup can have imported — nothing was run\n' "$1" >&2
+    exit 125
+  fi
+fi
 
 # ── THE PLATFORM LAYER — one file, two userlands ────────────────────────
 # ccd was written against GNU/Linux and says so out loud: `_reg_set`'s header

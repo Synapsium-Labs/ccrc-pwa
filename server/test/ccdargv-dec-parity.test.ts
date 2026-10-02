@@ -209,7 +209,10 @@ const runCcd = (args: readonly string[]): { code: number; out: string } => {
       { systemd: true, tmux: true }),
   };
   try {
-    const stdout = execFileSync('bash', [CCD, ...args], { ...opts, stdio: ['ignore', 'pipe', 'pipe'] });
+    // `bash -p` (D-3696): `ws-reclaim` is refused at the body's entry unless
+    // Bash runs privileged, the state the installed launcher starts it in. The
+    // other verbs are indifferent to it here — this runner stubs only on PATH.
+    const stdout = execFileSync('bash', ['-p', CCD, ...args], { ...opts, stdio: ['ignore', 'pipe', 'pipe'] });
     return { code: 0, out: String(stdout).trim() };
   } catch (e) {
     const err = e as { status?: number; stdout?: string; stderr?: string };
