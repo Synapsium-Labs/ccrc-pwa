@@ -19,7 +19,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | — | dispatched 2026-10-02 (run 219) |
+| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | wave-done verified 2026-10-02; in review (run 227) |
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | — | planned — re-planned 2026-09-30 |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin | **AGENT-FIRST** (ccd) | — | — | to plan |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
@@ -110,6 +110,21 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
 
   Ruled: the plan's verdict stands and Task 2 proceeds. The worker records this as a departure from its own block.
   The probe's criterion is not changed in this wave.
+- **2026-10-02 — wave 1 done, in review.** Run 219's wave-done (PR #230, tip `48c9156e`) passed the server's
+  re-measurement. The run is at `awaiting-review` and its four items are settled.
+  - The worker merged main `cf9e4cc8` (#222). The only conflict was `ccd/ccd`'s stamp, which it re-stamped. The
+    citation census after the merge reads stated=base=tree, with nothing entering or leaving.
+  - Departures: the worker used 3768 through 3771 from its block, each defined in the plan on the branch. 3772
+    through 3777 went unused.
+  - Task 1's baseline reproduced spec §1.2 exactly.
+  - Task 4 Steps 6–7 (rollout and the week-after measurement) were skipped by standing rule. They are owed after
+    the merge, through ccrc's own update mechanism.
+  - **Signals:** `suite: red`, `failure: unclear`. The reds are boot.test's timing ceiling at load 64 (this wave
+    changes no `server/src`), the known tmp-sweep red, two cases that pass when run alone, and PWA timeouts.
+    **Routing is not escalated:** the red measures the box.
+  - **Review:** review run 227 went to `ccrc-pwa-keen-prairie` on Opus · high with workflows on. It runs the held-out
+    panel, plus the plan's own merge-safety lens on Opus · xhigh, because this wave replaces files inside live
+    account roots.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
