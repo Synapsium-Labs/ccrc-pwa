@@ -19,7 +19,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | review 227 ruled 2026-10-02: fix round (pins, comments, set -u) |
+| 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | fix round done 2026-10-02; in re-review (run 230) |
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | — | planned — re-planned 2026-09-30 |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin | **AGENT-FIRST** (ccd) | — | — | to plan |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
@@ -151,6 +151,18 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   reds, and this wave replaces files inside live account roots. Its six departures take the block's unused 3772
   through 3777, one per group. F10 (a same-size record that is not newer is still compared) is carried forward,
   because deciding it in the dry pass would move F1's effective guard.
+- **2026-10-02 — wave 1's fix round done, in re-review.** The fresh wave-done (tip `322298e5`) passed the server's
+  re-measurement.
+  - **Fixes:** seven commits, numbered 3772 through 3777, which uses up the block.
+    - Eighteen new mutation rows (46–63), each green before its case and red after.
+    - F11's `set -u` exit is closed in shipped code.
+    - The stale counts are restated on the final files.
+  - **F10:** untouched, as ruled.
+  - **Named costs the departures record:**
+    - the python3 and `mapfile` pins work by shadowing, not by a real missing binary;
+    - under the blocking-flock mutation, measure-continuity's real-carry case still hangs.
+  - **Re-review:** review run 230 went to `ccrc-pwa-amber-basin`. It runs the held-out panel plus the merge-safety lens
+    on Opus · xhigh, because the round edits the carry block.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
