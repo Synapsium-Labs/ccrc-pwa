@@ -14,8 +14,9 @@
 // missed the other broke 34 tests in the file nobody touched. This module
 // makes that a structural impossibility rather than a discipline.
 import {
-  copyFileSync, cpSync, mkdirSync, statSync, chmodSync, writeFileSync,
+  copyFileSync, cpSync, mkdirSync, statSync, chmodSync, writeFileSync, symlinkSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -43,16 +44,20 @@ export const TREE_FILES = [
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
-  // Plan 2b-1 Task 1: the two GPT-lane executables that ship today (Plan
-  // 2a), copied from the repository. `_inst_bins` places both, so a tree
-  // missing either makes a placement assertion fail for a fixture reason
-  // rather than a real one. `ccgpt` and `ccgpt-runtime` are NOT here, and
-  // not stubbed either: they are not in the repository until Plan 2b-2, so
-  // nothing may place them (D-3165), and a stub would hide a placement that
-  // dies on a real tree — the class `install-census.test.ts`'s tracked-source
-  // case now reds on.
+  // The GPT lane's four common executables, COPIED from the repository: the
+  // two `.py` files (Plan 2a, placed since Plan 2b-1), and the runtime builder
+  // and launcher. Plan 2b-2 wrote each of those two unplaced, then added both
+  // here in the commit that made `_inst_bins` place them: an entry joins this
+  // list NO EARLIER than the commit that writes its source. `_inst_bins`
+  // places all four, so a tree missing any one fails an install for a fixture
+  // reason rather than a real one. NEVER stubbed: a stub once hid a placement
+  // that dies on a real tree (D-3165), the class `install-census.test.ts`'s
+  // tracked-source case reds on. The launcher is `ccrc-codex`, not `ccgpt`
+  // (D-3478).
   'ccd/ccgpt-proxy.py',
   'ccd/ccgpt-usage.py',
+  'ccd/ccgpt-runtime',
+  'ccd/ccrc-codex',
   // The generators, reached as `$CCRC_HERE/../deploy/<name>.mjs` — the same
   // "one directory up from this script" resolution `cmd_wrappers` uses, true
   // in a checkout and at `~/ccrc/deploy` on a deployed box.
@@ -242,5 +247,60 @@ export function installFixtureTree(home: string, sub = 'checkout'): string {
     mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(dest, body);
   }
+  return root;
+}
+
+/** Record `root`'s digest the way the SHIPPED code does (D-3465): source the
+ *  checkout's `ccd/ccrc` (its dispatch is guarded by `BASH_SOURCE[0] == $0`, so
+ *  sourcing runs nothing) in a fixture-HOME shell and call its own
+ *  `_ver_digest_write` — never a second implementation of the recipe in TS.
+ *  A test that changes a kept version's tree AFTER planting it calls this
+ *  again, so the change is part of what "kept" describes; a test that wants a
+ *  write-through leaves it out. Throws when the shipped helper refuses. */
+export function keepDigest(root: string, home: string): void {
+  const r = spawnSync('bash', ['-c', '. "$1"; _ver_digest_write "$2" || { echo "$VER_WHY" >&2; exit 1; }',
+    'keep-digest', join(REPO, 'ccd', 'ccrc'), root],
+  { env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' }, encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`keepDigest(${root}) failed: ${r.stderr}`);
+}
+
+/** A W6 box's version directory (W6 Task 2): the fixture tree placed at
+ *  `<home>/ccrc-versions/<name>`, the shape `_inst_tree` leaves behind.
+ *
+ *  `complete` (default true) writes the two files a version keeps at its root
+ *  once an install completed from it — `.ccrc-stamp.json`, a stamp
+ *  `_box_build_fields` accepts (`sha` default forty `a`s, `ref` main, a fixed
+ *  `builtAt`, `dirty: false`, and `version` only when given), and
+ *  `.ccrc-installed`, one line naming that sha. Without them the version is
+ *  incomplete, which is what a placement that died leaves.
+ *
+ *  `digest` (default true, and only when `complete`) also records the tree's
+ *  digest through the shipped helper (`keepDigest`) — a version "kept" before
+ *  digests existed is `digest: false`. It is written AFTER the tree is
+ *  planted and BEFORE `link`, so a caller that edits the tree afterwards must
+ *  call `keepDigest` again.
+ *
+ *  `link` (default true) points `<home>/ccrc` at it with an ABSOLUTE target,
+ *  the value `_plat_ln_swap` writes and `_ver_layout` reads back.
+ *
+ *  Returns the version root. The one helper later W6 tasks plant a
+ *  versioned box with. */
+export function installVersionedTree(
+  home: string, name: string,
+  opts: { link?: boolean; complete?: boolean; digest?: boolean; stamp?: { sha: string; version?: string } } = {},
+): string {
+  const root = installFixtureTree(home, join('ccrc-versions', name));
+  if (opts.complete ?? true) {
+    const sha = opts.stamp?.sha ?? 'a'.repeat(40);
+    const version = opts.stamp?.version;
+    const stamp = {
+      sha, ref: 'main', builtAt: '2026-09-23T00:00:00Z', dirty: false,
+      ...(version === undefined ? {} : { version }),
+    };
+    writeFileSync(join(root, '.ccrc-stamp.json'), `${JSON.stringify(stamp)}\n`);
+    if (opts.digest ?? true) keepDigest(root, home);
+    writeFileSync(join(root, '.ccrc-installed'), `${sha}\n`);
+  }
+  if (opts.link ?? true) symlinkSync(root, join(home, 'ccrc'));
   return root;
 }

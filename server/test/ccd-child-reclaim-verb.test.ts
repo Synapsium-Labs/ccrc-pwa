@@ -31,7 +31,7 @@ const tombOf = (): Record<string, unknown> =>
 const atticShas = (c: Child): string[] =>
   h.git(c.main, 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/${CHILD_ID}/`)
     .split('\n').filter(Boolean).map((r) => r.split('/').pop()!);
-const KILL = `tmux kill-session -t =cc-${CHILD_ID}`;
+const KILL = `tmux kill-session -t =cc-${CHILD_ID}:`;   // the exact target (D-3525)
 const unsupervised = (): string[] => h.calls().filter((l) => l.startsWith('unsupervise'));
 
 /** Everything a refusal must leave standing. */
@@ -675,7 +675,7 @@ describe('tmux presence is read through `_session_probe`, ANCHORED — at rung 5
   // asked" stops the verb before anything is deleted: at rung 5 as the
   // `probe-unmeasured` failure, and in the tail — where `KillMode=process`
   // means stopping the unit never stopped the pane — as `unit-still-active`.
-  const PROBE = `tmux has-session -t =cc-${CHILD_ID}`;
+  const PROBE = `tmux has-session -t =cc-${CHILD_ID}:`;
   /** Everything a stopped tail must leave standing: the tree, the branch, the
    *  row, and the breadcrumb for the retry. Read off disk FIRST. */
   const tailStopped = (c: Child): void => {
@@ -2177,7 +2177,7 @@ describe('the tail never deletes, and the pin never writes, what is not provably
     // No session to find, in tmux's words: rung 5 and the tail's re-measure
     // read an rc 1 with no message as "could not be asked", which stops them.
     const pre = `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; [[ "$1" == kill-session ]] && : > "${lock}";`
-      + ` echo "can't find session: =cc-${CHILD_ID}" >&2; return 1; };`;
+      + ` echo "can't find session: cc-${CHILD_ID}" >&2; return 1; };`;
     fs.writeFileSync(path.join(c.wt, 'wip.txt'), 'w\n');
     const r = childReclaimVerb(h, evalOf(h).token, { pre });
     expect(r.code, r.stdout + r.stderr).toBe(0);
@@ -2962,3 +2962,384 @@ describe('a hidden-flag edit is kept, or dropped and RECORDED — never deleted 
     expect(out.secretsDropped).toBe(1);
   }, 120_000);
 });
+
+// AN ALTERNATE ROW RESOLVED ONLY BY AN ABSENT-SUFFIX PROJECTION (R31, D-3731).
+// Another session entered `<child>/server` through an ancestor alias
+// (`$HOME/alias -> <child>`), and its row keeps that spelling. Once the alias
+// is removed the spelling resolves only as text projected below a
+// proven-absent `alias` — namespace presentation, not evidence of where that
+// session's cwd remains (its process can still hold `<child>/server`). Every
+// destructive seam answers it UNMEASURED and leaves every byte where it was;
+// liveness is fixture state only, never an input to placement. These cases sit
+// at the top level so their exact titles anchor the mutation table's
+// selectors.
+const ALT = 'demo-alias-live';
+const HEX64 = /^[0-9a-f]{64}$/;
+
+interface AliasRow {
+  /** The alternate row's raw `.workdir` spelling, `$HOME/alias/server`. */
+  raw: string;
+  pointAt(target: 'child' | 'outside'): void;
+  removeAlias(): void;
+  /** Re-point the alias at a COMPLETE directory outside the child — the pre-existing re-point class, never a
+   *  recovery (review 212, F3). */
+  repointAlias(): void;
+  writeRow(): void;
+  dropRow(): void;
+  /** Everything a refusal must leave standing: the child's tree and branch history, the alternate row's bytes,
+   *  the modelled tmux files, the unit and pane ACTIONS (the read-only probes excluded), the tombstone,
+   *  breadcrumb and attic, and the reclaim journal. */
+  snapshot(): Record<string, unknown>;
+}
+
+/** A TEST-LOCAL builder, not a production helper. Plants `<child>/server` holding another session's work at
+ *  once — so a token minted afterwards already fingerprints it — and `$HOME/outside/server`; the alias and the
+ *  row are the levers. */
+const aliasRow = (hh: PrHarness, c: Child): AliasRow => {
+  const server = path.join(c.wt, 'server');
+  fs.mkdirSync(server, { recursive: true });
+  fs.writeFileSync(path.join(server, 'live.txt'), 'another session’s uncommitted work\n');
+  const outside = path.join(hh.home, 'outside');
+  fs.mkdirSync(path.join(outside, 'server'), { recursive: true });
+  const alias = path.join(hh.home, 'alias');
+  const rowFile = (field: string): string => path.join(hh.home, '.cc-sessions', `${ALT}.${field}`);
+  const bytes = (p: string): string | null => (fs.existsSync(p) ? fs.readFileSync(p).toString('base64') : null);
+  const self: AliasRow = {
+    raw: `${alias}/server`,
+    pointAt: (target) => {
+      if (fs.existsSync(alias) || fs.lstatSync(alias, { throwIfNoEntry: false })) fs.unlinkSync(alias);
+      fs.symlinkSync(target === 'child' ? c.wt : outside, alias);
+    },
+    removeAlias: () => { fs.unlinkSync(alias); },
+    repointAlias: () => { self.pointAt('outside'); },
+    writeRow: () => {
+      fs.writeFileSync(rowFile('uuid'), `u-${ALT}`);
+      fs.writeFileSync(rowFile('workdir'), self.raw);
+    },
+    dropRow: () => { fs.rmSync(rowFile('uuid'), { force: true }); fs.rmSync(rowFile('workdir'), { force: true }); },
+    snapshot: () => ({
+      tree: treeOf(c.wt),
+      branch: hh.run(`git -C "${c.main}" log --format='%H %s' refs/heads/${CHILD_BRANCH} --`).stdout,
+      row: { uuid: bytes(rowFile('uuid')), workdir: bytes(rowFile('workdir')) },
+      tmux: fs.readdirSync(hh.home).filter((n) => n.startsWith('tmux-')).sort()
+        .map((n) => `${n}=${fs.readFileSync(path.join(hh.home, n), 'utf8')}`),
+      actions: hh.calls().filter((l) => !/^tmux (has-session|list-clients|list-panes) /.test(l)),
+      tomb: fs.existsSync(path.join(hh.home, '.cc-sessions', '.reaped', `${CHILD_ID}.json`)),
+      breadcrumb: hh.reg(CHILD_ID, 'reaping'),
+      attic: hh.run(`git -C "${c.main}" for-each-ref --format='%(refname)' refs/ccrc/attic/`).stdout,
+      journal: eventsOf(hh.home, 'reclaim'),
+    }),
+  };
+  return self;
+};
+
+/** The verb's locked recomputation refused: exit 1, `probe-unmeasured` — never `state-changed`, never a
+ *  terminal refusal — naming the alternate row by id, never by its spelling. Soft, so a case running several
+ *  harnesses reports each one. */
+const lockedUnmeasured = (v: { code: number; stdout: string; stderr: string }, raw: string): void => {
+  expect.soft(v.code, v.stdout + v.stderr).toBe(1);
+  const o = JSON.parse(v.stdout || '{}') as { failed?: string; refused?: string; detail?: string };
+  expect.soft(o.refused, 'a retry, never a terminal refusal').toBeUndefined();
+  expect.soft(o.failed).toBe('probe-unmeasured');
+  expect.soft(o.detail).toContain(`registry row(s) ${ALT} `);
+  expect.soft(`${o.detail}${v.stderr}`, 'the row is named by its id; its spelling is never printed').not.toContain(raw);
+};
+
+it('locked recomputation rejects an old token after alias removal', () => {
+  const c = makeChild(h);
+  const a = aliasRow(h, c);
+  const tok = evalOf(h).token;
+  expect(tok, 'the CONTROL: the audit minted a token before the alternate row existed').toMatch(HEX64);
+  a.pointAt('child');
+  a.writeRow();
+  const standing = evalOf(h);
+  expect(standing.verdict, `the CONTROL: through the standing alias the row is rooted inside — ${standing.detail}`)
+    .toBe('containment-unproven');
+  a.removeAlias();
+  const before = a.snapshot();
+  expect(before['tomb'] || before['breadcrumb'] !== null || before['attic'] !== '', 'the CONTROL: nothing started').toBe(false);
+  const v = childReclaimVerb(h, tok);
+  // What is on disk FIRST: a reclaim that went ahead shows here.
+  expect(a.snapshot(), 'no WIP, attic, tombstone or breadcrumb; no unsupervise or kill; the tree, branch and row stand')
+    .toEqual(before);
+  lockedUnmeasured(v, a.raw);
+  expect(v.stdout).not.toContain('state-changed');
+}, 90_000);
+
+it('fresh final ownership remeasures alternate projection', () => {
+  const c = makeChild(h);
+  const a = aliasRow(h, c);
+  a.pointAt('outside');
+  a.writeRow();
+  const tok = evalOf(h).token;
+  expect(tok, 'the CONTROL: a complete row outside the child is non-blocking, so the ladder passes').toMatch(HEX64);
+  // The tail's first act (`_ws_unsupervise`, recorded) is the seam: after the locked ladder accepted the
+  // complete row and the pin ran, before `_ws_reclaim_owned`. There the alias is removed, so the same row is
+  // now only a projection, and final ownership is the only re-proof left.
+  const preHookMarker = path.join(h.home, 'pre-hook-ran');
+  const pre = '_ws_unsupervise() { echo "unsupervise $*" >> "$HOME/ccd-calls";'
+    + ` : > "${preHookMarker}"; rm -f -- "$HOME/alias"; };`;
+  const before = a.snapshot();
+  const v = childReclaimVerb(h, tok, { pre });
+  expect(fs.existsSync(preHookMarker)).toBe(true); // MUTATION_FRESH_PREHOOK
+  expect(fs.existsSync(path.join(h.home, 'alias')), 'the CONTROL: the alias was removed at the seam').toBe(false);
+  // What is on disk FIRST.
+  const after = a.snapshot();
+  expect(after['tree'], `final ownership removed the tree — ${v.stdout}`).toEqual(before['tree']);
+  expect(after['branch'], 'the child’s branch and its history stand').toEqual(before['branch']);
+  expect(after['row'], 'the competing row stands, byte for byte').toEqual(before['row']);
+  const tomb = tombOf();
+  const attic = atticShas(c);
+  expect(attic, 'the pins the tombstone names remain').toContain(String(tomb['tip']));
+  if (tomb['wip'] !== null) expect(attic).toContain(String(tomb['wip']));
+  expect(v.code, v.stdout + v.stderr).toBe(1);
+  const o = JSON.parse(v.stdout) as { failed: string; detail: string };
+  expect(o.failed).toBe('worktree-remove-failed');
+  expect(o.detail).toContain(`registry row(s) ${ALT} `);
+  expect(o.detail + v.stderr, 'the row is named by its id; its spelling is never printed').not.toContain(a.raw);
+  failedPairAgrees(v);
+  expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb the fresh arm wrote stays').toBe('reclaim:children');
+}, 90_000);
+
+it('resumed final ownership remeasures alternate projection', () => {
+  const c = makeChild(h);
+  const a = aliasRow(h, c);
+  interrupted(c, 'worktree');
+  expect(h.reg(CHILD_ID, 'reaping')).toBe('reclaim:worktree'); // MUTATION_RESUMED_PHASE
+  const tok = resumeToken('worktree');
+  expect(tok, 'the CONTROL: the resume token was minted before the row').toMatch(HEX64);
+  a.pointAt('child');
+  a.writeRow();
+  a.removeAlias();
+  const before = a.snapshot();
+  const v = childReclaimVerb(h, tok);
+  // What is on disk FIRST: this arm has no fresh ladder in front of it, so `_ws_reclaim_owned` is its only
+  // cross-row re-proof.
+  const after = a.snapshot();
+  expect(after['tree'], `the resumed tail removed the tree — ${v.stdout}`).toEqual(before['tree']);
+  expect(after['branch'], 'the child’s branch stands — no later phase ran').toEqual(before['branch']);
+  expect(after['row'], 'the competing row stands, byte for byte').toEqual(before['row']);
+  expect(after['attic'], 'the pins stand').toEqual(before['attic']);
+  expect(h.reg(CHILD_ID, 'uuid'), 'the child’s own row stands — no later phase ran').not.toBeNull();
+  expect(v.code, v.stdout + v.stderr).toBe(1);
+  const o = JSON.parse(v.stdout) as { failed: string; detail: string };
+  expect(o.failed).toBe('worktree-remove-failed');
+  expect(o.detail).toContain(`registry row(s) ${ALT} `);
+  expect(o.detail + v.stderr).not.toContain(a.raw);
+  failedPairAgrees(v);
+  expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');
+}, 90_000);
+
+it('defer-expired does not bypass ambiguous alternate ownership', () => {
+  const c = makeChild(h);
+  const a = aliasRow(h, c);
+  const deferred = evalOf(h, { defer: 1 }).token;
+  expect(deferred, 'the CONTROL: a deferred token, minted before the row appeared').toMatch(HEX64);
+  a.pointAt('child');
+  a.writeRow();
+  a.removeAlias();
+  // The deferred evaluation answers the ambiguous row as every other does.
+  const answer = evalOf(h, { defer: 1 });
+  expect(answer.verdict, answer.detail).toBe('unmeasured');
+  expect(answer.token).toBe('');
+  expect(answer.detail).toContain(`registry row(s) ${ALT} `);
+  // And the deferred token is rejected by the locked recomputation: the flag changes the fingerprint only.
+  const before = a.snapshot();
+  const v = childReclaimVerb(h, deferred, { extra: '--defer-expired' });
+  expect(a.snapshot(), 'nothing reached the pin or the removal').toEqual(before);
+  lockedUnmeasured(v, a.raw);
+}, 90_000);
+
+/** One liveness state of the alternate session, modelled as FIXTURE state only — production placement is
+ *  handed no liveness. The token is minted before the row exists; the row, its alias removed, is identical in
+ *  every state. */
+const livenessCase = (hh: PrHarness, plant: () => void, defer: 0 | 1): {
+  a: AliasRow; tok: string; answer: ReturnType<typeof evalOf>;
+} => {
+  const c = makeChild(hh);
+  const a = aliasRow(hh, c);
+  const tok = evalOf(hh, { defer }).token;
+  expect(tok, 'the CONTROL: the token was minted before the alternate row existed').toMatch(HEX64);
+  a.pointAt('child');
+  a.writeRow();
+  a.removeAlias();
+  plant();
+  return { a, tok, answer: evalOf(hh, { defer }) };
+};
+/** After the verb: the same preserved state, the same unmeasured placement answer at the same seam. */
+const livenessSettles = (hh: PrHarness, a: AliasRow, tok: string, answer: ReturnType<typeof evalOf>, defer: 0 | 1): void => {
+  const before = a.snapshot();
+  const v = childReclaimVerb(hh, tok, defer ? { extra: '--defer-expired' } : {});
+  expect.soft(a.snapshot(), 'the tree, branch, competing row, tmux model and unit/pane actions stand').toEqual(before);
+  lockedUnmeasured(v, a.raw);
+  expect.soft(answer.token).toBe('');
+  expect.soft(answer.detail, 'the placement seam answered, not rung 5').toContain(`registry row(s) ${ALT} `);
+};
+
+it('liveness independent: live alternate projection refuses', () => {
+  const { a, tok, answer } = livenessCase(h, () => plantTmux(h, { sessions: [`cc-${ALT}`] }), 0);
+  expect(answer.verdict).toBe('unmeasured') // MUTATION_LIVE_AUTHORITY
+  livenessSettles(h, a, tok, answer, 0);
+  expect(tmuxSessions(h), 'the alternate session is still up').toContain(`cc-${ALT}`);
+}, 90_000);
+
+it('liveness independent: gone alternate projection refuses', () => {
+  const { a, tok, answer } = livenessCase(h, () => plantTmux(h, { sessions: ['cc-unrelated'] }), 0);
+  expect(answer.verdict).toBe('unmeasured') // MUTATION_GONE_AUTHORITY
+  livenessSettles(h, a, tok, answer, 0);
+  expect(tmuxSessions(h), 'the CONTROL: no session of the alternate row was modelled').not.toContain(`cc-${ALT}`);
+}, 90_000);
+
+it('liveness independent: unknown alternate projection refuses', () => {
+  // tmux cannot be asked AT ALL here — every call fails — so the child's own rung 5 would answer first and the
+  // case would measure rung 5, not placement. `--defer-expired` skips rungs 5 and 6 and nothing else, so the
+  // alternate row's placement is the rung that answers. One harness per subcase, so each reports on its own.
+  const subs: PrHarness[] = [];
+  const fresh = (): PrHarness => { const hh = makePrHarness('ccrc-child-reclaim-unknown-'); subs.push(hh); return hh; };
+  try {
+    {
+      const hh = fresh();
+      const { a, tok, answer } = livenessCase(hh, () => plantTmux(hh, { fault: TMUX_FAULTS['permission denied'] }), 1);
+      expect(answer.verdict).toBe('unmeasured') // MUTATION_UNKNOWN_AUTHORITY
+      livenessSettles(hh, a, tok, answer, 1);
+    }
+    {
+      const hh = fresh();
+      const { a, tok, answer } = livenessCase(hh, () => plantTmux(hh, { fault: TMUX_FAULTS['no server running'] }), 1);
+      expect(answer.verdict).toBe('unmeasured') // MUTATION_UNKNOWN_AUTHORITY
+      livenessSettles(hh, a, tok, answer, 1);
+    }
+    {
+      const hh = fresh();
+      const { a, tok, answer } = livenessCase(hh, () => plantTmux(hh, { fault: TMUX_FAULTS['no socket'] }), 1);
+      expect(answer.verdict).toBe('unmeasured') // MUTATION_UNKNOWN_AUTHORITY
+      livenessSettles(hh, a, tok, answer, 1);
+    }
+  } finally { for (const hh of subs) hh.cleanup(); }
+}, 240_000);
+
+it('complete existing outside alternate row is non-blocking', () => {
+  const c = makeChild(h);
+  const a = aliasRow(h, c);
+  a.pointAt('outside');
+  a.writeRow();
+  const answer = evalOf(h);
+  expect(answer.verdict, answer.detail).toBe('reclaimable');
+  const v = childReclaimVerb(h, answer.token);
+  expect(v.code, v.stdout + v.stderr).toBe(0);
+  expect((JSON.parse(v.stdout) as { reclaimed: string }).reclaimed).toBe(CHILD_ID);
+  expect(fs.existsSync(c.wt), 'the child was reclaimed').toBe(false);
+  expect(h.reg(ALT, 'workdir'), 'the outside row stands').toBe(a.raw);
+  expect(fs.existsSync(path.join(h.home, 'outside', 'server')), 'and so does the tree it names').toBe(true);
+}, 90_000);
+
+it('complete existing inside alternate row is containment-unproven', () => {
+  const c = makeChild(h);
+  const a = aliasRow(h, c);
+  const tok = evalOf(h).token;
+  expect(tok).toMatch(HEX64);
+  a.pointAt('child');
+  a.writeRow();
+  const answer = evalOf(h);
+  expect(answer.verdict, answer.detail).toBe('containment-unproven');
+  expect(answer.detail).toContain(`registry row(s) ${ALT} rooted inside`);
+  // The terminal refusal is journaled, as every refusal is; everything else stands.
+  const sansJournal = (o: Record<string, unknown>): Record<string, unknown> => { const r = { ...o }; delete r['journal']; return r; };
+  const before = sansJournal(a.snapshot());
+  const v = childReclaimVerb(h, tok);
+  expect(sansJournal(a.snapshot()), 'nothing was pinned or removed').toEqual(before);
+  expect(refusedWith(v)).toBe('containment-unproven');
+}, 90_000);
+
+it('literal containment outranks incomplete physical basis', () => {
+  // A row LITERALLY at or below the child is terminal whatever its resolution says: one below a missing
+  // directory (a projection), one spelled through it with a `..` that cannot be placed, and — once the child's
+  // tree is gone — one naming the child's own path, itself now only a projection.
+  const c = makeChild(h);
+  const tok = evalOf(h).token;
+  expect(tok).toMatch(HEX64);
+  const other = (id: string, workdir: string): void => {
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.uuid`), `u-${id}`);
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.workdir`), workdir);
+  };
+  const drop = (id: string): void => {
+    for (const f of ['uuid', 'workdir']) fs.rmSync(path.join(h.home, '.cc-sessions', `${id}.${f}`), { force: true });
+  };
+  other('demo-lit-nested', `${c.wt}/gone/x`);
+  const nested = evalOf(h);
+  expect(nested.verdict, nested.detail).toBe('containment-unproven');
+  expect(nested.detail).toContain('registry row(s) demo-lit-nested rooted inside');
+  const before = treeOf(c.wt);
+  expect(refusedWith(childReclaimVerb(h, tok)), 'the verb refuses it terminally too').toBe('containment-unproven');
+  expect(treeOf(c.wt)).toEqual(before);
+  drop('demo-lit-nested');
+  other('demo-lit-through', `${c.wt}/gone/../x`);
+  const through = evalOf(h);
+  expect(through.verdict, through.detail).toBe('containment-unproven');
+  expect(through.detail).toContain(`registry row(s) demo-lit-through spell their workdir through ${c.wt}`);
+  drop('demo-lit-through');
+  fs.rmSync(c.wt, { recursive: true, force: true });
+  other('demo-lit-same', c.wt);
+  const same = evalOf(h);
+  expect(same.verdict, same.detail).toBe('containment-unproven');
+  expect(same.detail).toContain(`is also named by registry row(s) demo-lit-same`);
+}, 90_000);
+
+it('vanished subject remains reclaimable under R19', () => {
+  // The subject's OWN missing worktree is not an alternate row: R19 reclaims it from its branch on. A complete
+  // row outside it stands beside it, so the subject's own resolution is asked and compared.
+  const c = makeChild(h);
+  fs.mkdirSync(path.join(h.home, 'outside', 'server'), { recursive: true });
+  fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-outside.uuid'), 'u-demo-outside');
+  fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-outside.workdir'), path.join(h.home, 'outside', 'server'));
+  fs.rmSync(c.wt, { recursive: true, force: true });
+  const answer = evalOf(h);
+  expect(answer.verdict, answer.detail).toBe('reclaimable');
+  const v = childReclaimVerb(h, answer.token);
+  expect(v.code, v.stdout + v.stderr).toBe(0);
+  expect((JSON.parse(v.stdout) as { reclaimed: string }).reclaimed).toBe(CHILD_ID);
+  expect(tombOf()['worktree'], 'the existing absent-worktree path').toBe('absent');
+  expect(atticShas(c), 'the branch tip is pinned').toContain(c.tip);
+  expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch went').toBe('');
+  expect(h.reg('demo-outside', 'workdir'), 'the outside row stands').toBe(path.join(h.home, 'outside', 'server'));
+}, 90_000);
+
+it('a re-pointed alias resolves complete outside and reclaims: the pre-existing re-point class, not a recovery', () => {
+  // WHAT THIS PINS IS A KNOWN HOLE, NOT A REMEDY (review 212, F3; D-3735). A session that entered `<alias>/server`
+  // while the alias led into the child keeps that cwd when the alias is re-pointed outside; the spelling then
+  // resolves `complete` and outside, so the reclaim removes the tree under it — its WIP pin commits `live.txt` to
+  // the attic first. `complete` places the spelling as it reads now, not the session. Pre-existing (the base
+  // behaves the same), left to a follow-up programme; a fix there turns this case red on purpose. The recovery is
+  // the next case: purging the row.
+  const c = makeChild(h);
+  const a = aliasRow(h, c);
+  a.pointAt('child');
+  a.writeRow();
+  a.removeAlias();
+  const ambiguous = evalOf(h);
+  expect(ambiguous.verdict, ambiguous.detail).toBe('unmeasured');
+  expect(ambiguous.token).toBe('');
+  a.repointAlias();
+  const repointed = evalOf(h);
+  expect(repointed.verdict, repointed.detail).toBe('reclaimable');
+  const v = childReclaimVerb(h, repointed.token);
+  expect(v.code, v.stdout + v.stderr).toBe(0);
+  expect(fs.existsSync(c.wt), 'the child was reclaimed').toBe(false);
+  expect(h.reg(ALT, 'workdir'), 'the re-pointed row stands').toBe(a.raw);
+}, 90_000);
+
+it('removing the ambiguous alternate row restores ordinary behavior', () => {
+  const c = makeChild(h);
+  const a = aliasRow(h, c);
+  a.pointAt('child');
+  a.writeRow();
+  a.removeAlias();
+  const ambiguous = evalOf(h);
+  expect(ambiguous.verdict, ambiguous.detail).toBe('unmeasured');
+  a.dropRow();
+  const ordinary = evalOf(h);
+  expect(ordinary.verdict, ordinary.detail).toBe('reclaimable');
+  const v = childReclaimVerb(h, ordinary.token);
+  expect(v.code, v.stdout + v.stderr).toBe(0);
+  expect(fs.existsSync(c.wt), 'the child was reclaimed').toBe(false);
+}, 90_000);

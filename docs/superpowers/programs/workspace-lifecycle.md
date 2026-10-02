@@ -18,7 +18,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | — | planned |
-| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | — | to plan |
+| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | — | planned; approved 2026-10-01 (#223) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
@@ -40,6 +40,31 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   programme, created by the operator from its ticket; each wave goes to a fresh worker workspace running
   subagent-driven development, a review run reads the worker's branch, and the coordinator rules and merges. The
   plans reach a worker only from `main`.
+- **2026-09-28 (evening) — wave 1 re-verified against `023fe94d`.** Child-reclamation wave 3 (#187) and
+  update-management wave 4 (#181) merged. The plan replays unchanged: every Find occurs once, the fixture sweep still
+  touches 31 files, and `readme-reanchor.py` now prints `shared/api.ts:7641-7643, :7683, :7691, :7704` (the plan's own
+  numbers are stated on a `df4fe069` base). Typechecks clean; PWA 3041; server six shards green apart from the two known
+  reds. The fleet box's root disk sat below `ccd`'s 10G `ws-add` floor while measuring, which reds every `ws-add` test
+  on the unedited base too: run the suites with `CCD_DISK_FLOOR_GB=1` when that happens. Wave 2 is unblocked.
+- **2026-09-30 — wave 1 re-verified against `c88625aa`, then `5b1c58a8`.** On `c88625aa` the plan replays unchanged
+  and its server suites are green. On `5b1c58a8` the worker stall watch (#216) had split the two-line `store.ts`
+  import block Task 3 inserts into, so that one Find now anchors on the `placement.js` import line alone; the output
+  on `c88625aa` is byte-identical. The same PR added a 33rd `child: { kind: 'none' }` fixture (`stall-sweep.test.ts`),
+  so Task 1's sweep now touches 32 files, and the plan says so. With that, the plan replays onto `5b1c58a8` in a git
+  checkout (the sweep reads `git grep`), `readme-reanchor.py` prints the same `shared/api.ts` lines, both typechecks
+  are clean, and the wave's suites are green there: server `released` 20, `released-store` 7, `released-wire` 14,
+  `fleet-released` 7, `measure-workspace-lifecycle` 9, `stall-sweep` 42, `single-definition`, the citation cases; PWA
+  `groupFleet`, `archiveReleased`, `project-card`, `fleet-screen`, `tap-targets` and `fleet-css` (376), `contrast`
+  256, and the design audit.
+- **2026-10-01 — wave 2 planned and approved; both plans re-checked on `e0a52953`.** Wave 2's plan (#223) was
+  prototyped on `main` `5b1c58a8` with wave 1 applied and reviewed through three lenses; the operator approved it
+  by merging #223. The same day the worker stall watch's wave 2 Part B (#224) landed: it grew
+  `single-definition.test.ts` with a second describe whose closing lines match the one wave 2's Task 1 inserts after,
+  so that Find now carries the line above it (the output on `5b1c58a8` is byte-identical), and it added a second
+  `child: { kind: 'none' }` literal to `stall-sweep.test.ts`, so wave 1's sweep is 32 files and 33 lines. With those,
+  both plans replay onto `e0a52953` in a git checkout, both typechecks are clean, and wave 2's server (26 files, 1628
+  tests) and PWA (14 files, 641) suites are green. Wave 2's Task 12 skips its `CLAUDE.md` edit there, as its Step 3
+  says: `main` already re-measured the README claim (`~3800`). The plan's two open questions stay open.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -63,4 +88,14 @@ Wave 1 is planned; once the docs PR carrying the spec, this ledger and the plan 
 workspace with the plan path and this file. After it deploys, run the instrument on the server box from the
 installed tree — `python3 deploy/measure-workspace-lifecycle.py` — and record `released_top_level` (target 0,
 baseline 29 of 56 on 2026-09-24), `released_wire_only` (target 0) and the archive→return rows here: the last is what
-wave 3 waits on. Wave 2 is planned once CCR-15 wave 3 has merged.
+wave 3 waits on.
+
+Wave 2 is planned (`docs/superpowers/plans/2026-10-01-workspace-lifecycle-wave2-one-archive.md`, 12 tasks). It was
+prototyped on `main` `5b1c58a8` with wave 1 applied, reviewed by three lenses (spec fidelity and irreversible-act
+safety, tests and mutations, executability and merges), fixed, and verified; it replays onto `cca1b6d7` with wave 1
+applied, with both typechecks and its suites green. The spec carries its nine amendments (§5.2's busy rule, the door's
+remote-mode worktree check, the Stop-only cases, the refusal codes' count). The operator approved it by merging #223
+(2026-10-01); it dispatches once wave 1 has merged; it lands one at a time with wave 1 (shared `groupFleet.ts` and `shared/api.ts`), and either
+order with child-reclamation wave 4 (#215), whose hunks it does not overlap. Two questions are the operator's (the
+plan's open questions): whether the PR sheet's "Archive now" opens the new archive sheet in a follow-up, and whether
+the remote-mode worktree check stays deferred to `ccd` for good.

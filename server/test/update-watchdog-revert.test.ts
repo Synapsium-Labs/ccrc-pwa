@@ -13,7 +13,10 @@
 // against the shapes the verb is expected to use, so a call outside them reds instead of reaching a unit manager or the
 // network. The staged spine is W4's STUB flavour (a recorder), so nothing is installed. `~/ccrc/ccd`, which `plantRealBox`
 // links to the checkout for the launcher cases, is REMOVED (the link only) so a verb that writes under `~/ccrc` can never
-// write through it into this tree. No secret is read or printed.
+// write through it into this tree. No secret is read or printed. `watchdogBox` also plants poisoned, recording `tmux` and
+// `gh` first on PATH (residue R6): two controls prove they resolve first and that `expectContained`'s lines can red, and a
+// mutation that removes either plant is run ONLY against those two controls, by `-t` — never a real-sequence case, whose
+// contained PATH would then resolve the real `/usr/bin/tmux` or the real `gh` if a merged `ccd/ccrc` ever called either.
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -267,6 +270,11 @@ function watchdogBox(prefix: string, o: { gateFails?: true } = {}): WatchdogBox 
     'echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"',
     'echo "/dev/fixture0    104857600  20971520 42991616      21% /"',
   ].join('\n') + '\n');
+  // Poisoned, recording — residue R6: nothing in this fixture may reach the real tmux (the live fleet server) or
+  // the real gh (a repo-WRITE token). Two controls below prove they resolve first and that `expectContained`'s
+  // lines can red.
+  plant(join(home, 'bin', 'tmux'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/tmux-argv"\nexit 97\n');
+  plant(join(home, 'bin', 'gh'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/gh-argv"\nexit 97\n');
   // The box: an old tree, the build stamp of X, the completed-install record, the floor, and `previous` = P.
   mkdirSync(join(home, 'ccrc', 'server', 'dist'), { recursive: true });
   writeFileSync(join(home, 'ccrc', 'server', 'OLD-MARKER'), 'the previous tree\n');
@@ -306,7 +314,8 @@ function expectContained(home: string): void {
   expect(existsSync(join(home, 'systemd-run-argv')), 'a rollback reached systemd-run (poisoned, recording)').toBe(false);
   expect(existsSync(join(home, 'systemctl-unexpected')), 'an unmodelled systemctl call').toBe(false);
   expect(existsSync(join(home, 'curl-unexpected')), 'an unmodelled curl call').toBe(false);
-  expect(existsSync(join(home, 'tmux-argv'))).toBe(false);
+  expect(existsSync(join(home, 'tmux-argv')), 'a rollback reached tmux (poisoned, recording)').toBe(false);
+  expect(existsSync(join(home, 'gh-argv')), 'a rollback reached gh (poisoned, recording)').toBe(false);
 }
 
 // ── the server side, over a real CoordStore ────────────────────────────────────────────────────────────────────────
@@ -350,6 +359,7 @@ function server(home: string, o: { fleet?: boolean } = {}): Server {
     store, role: 'server', ccrcDir: join(home, '.ccrc'), localIo: io, deadlineMs: DEADLINE, fleet: null,
     runLocal: spawnFromRunner(async (_cmd, args) => { spawnedArgvs.push(args); return { code: 0, stdout: '', stderr: '' }; }, home),
     onAccepted: () => undefined,
+    recordMove: null,
   };
   return { store, deps, ioReads, spawnedArgvs };
 }
@@ -466,6 +476,7 @@ describe('the watchdog\'s REAL revert sequence, then the server\'s deadline (F6,
     const box = watchdogBox('update-watchdog-revert-old-');
     const r = runWatchdogRollback(box);
     expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expectContained(box.home);
     const s = server(box.home);
     // The lease begins AFTER the revert's last report: that report is an earlier run's.
     const t0 = Date.now() + 5_000;
@@ -479,6 +490,7 @@ describe('the watchdog\'s REAL revert sequence, then the server\'s deadline (F6,
     const box = watchdogBox('update-watchdog-revert-cli-');
     const r = runWatchdogRollback(box);
     expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expectContained(box.home);
     const file = join(box.home, '.ccrc', 'update.json');
     const doc = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
     expect(doc['from']).toBe('watchdog');
@@ -494,6 +506,7 @@ describe('the watchdog\'s REAL revert sequence, then the server\'s deadline (F6,
     const box = watchdogBox('update-watchdog-revert-fleet-');
     const r = runWatchdogRollback(box);
     expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expectContained(box.home);
     const s = server(box.home, { fleet: true });
     // The fleet row holds the lease, taken well before the box's real revert report.
     const t = Date.now();
@@ -517,5 +530,31 @@ describe('the watchdog\'s REAL revert sequence, then the server\'s deadline (F6,
     const late = ran(await runDispatch(s.deps, pastDeadline()));
     expect(late.expired).toEqual([SERVER_ID]);
     expect(s.ioReads).toEqual([join(box.home, '.ccrc', 'update.json')]);
+  });
+
+  // Controls for the poisoned, recording tmux/gh above (residue R6): they resolve the recorders with `command -v`
+  // (which executes neither binary) and run each recorder only by its ABSOLUTE planted path, never through PATH —
+  // so no mutation here can make either control run a real binary.
+  itLinux('the watchdog box resolves tmux and gh to its own poisoned recorders first (the containment lines above can red)', () => {
+    const box = watchdogBox('update-watchdog-revert-tmuxgh-resolve-');
+    const r = spawnSync('/bin/sh', ['-c', 'command -v tmux; command -v gh'], { env: box.env, encoding: 'utf8' });
+    expect(r.stdout).toBe(`${join(box.home, 'bin', 'tmux')}\n${join(box.home, 'bin', 'gh')}\n`);
+  });
+
+  itLinux('a call that reaches a recorder is what expectContained reds on', () => {
+    const box = watchdogBox('update-watchdog-revert-tmuxgh-reach-');
+    // gh first, ALONE: at this point only `gh-argv` exists, so a throw here can only be `expectContained`'s OWN
+    // gh-argv line — nothing else in the function could be catching it (tmux-argv does not exist yet).
+    spawnSync(join(box.home, 'bin', 'gh'), ['probe'], { env: box.env });
+    expect(existsSync(join(box.home, 'gh-argv'))).toBe(true);
+    expect(existsSync(join(box.home, 'tmux-argv'))).toBe(false);
+    expect(() => expectContained(box.home)).toThrow(/gh \(poisoned, recording\)/);
+    // Now tmux too — both argv files exist. The tmux-argv line runs BEFORE the gh-argv line in `expectContained`,
+    // so with both present it throws FIRST, on tmux's own message — a generic `/poisoned, recording/` match here
+    // would pass even with the tmux-argv line deleted (gh's message still matches it), so the regex names tmux
+    // specifically to pin that line's own guard, not just "the function throws".
+    spawnSync(join(box.home, 'bin', 'tmux'), ['probe'], { env: box.env });
+    expect(existsSync(join(box.home, 'tmux-argv'))).toBe(true);
+    expect(() => expectContained(box.home)).toThrow(/tmux \(poisoned, recording\)/);
   });
 });

@@ -45,6 +45,16 @@ TOKEN_FILE="$HOME/.cc-secrets/ccrc-mail.token"
 TIMEOUT="${CCRC_POOL_SYNC_TIMEOUT:-20}"
 say() { printf 'ccd-pool-sync: %s\n' "$1" >&2; }
 
+# W6 Task 8A (review 167's F7, the same defect in this sibling): `TIMEOUT` goes
+# to curl's `--max-time`, which reads `0` as NO LIMIT. Validated exactly as
+# ccd/ccd-update-sync validates its own knob and ccd/ccrc's
+# `_upd_validate_timeout` validates the `CCRC_RELEASE_*` ones: a whole number
+# from 1 to 3600, else a WARN naming the variable and a fall back to 20.
+if [[ ! "$TIMEOUT" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$TIMEOUT" -gt 3600 ]; then
+  say "WARN: CCRC_POOL_SYNC_TIMEOUT='${TIMEOUT//[![:print:]]/?}' is not a whole number of seconds from 1 to 3600 — using 20"
+  TIMEOUT=20
+fi
+
 command -v curl >/dev/null 2>&1 || { say "curl is not on PATH — nothing was synced"; exit 1; }
 command -v python3 >/dev/null 2>&1 || { say "python3 is not on PATH — nothing was synced"; exit 1; }
 
@@ -78,10 +88,30 @@ url="${url%/}"
 tok=$(grep -vE '^[[:space:]]*(#|$)' "$TOKEN_FILE" | head -n1 | tr -d '[:space:]')
 [[ -n "$tok" ]] || { say "the box token file has no value line"; exit 1; }
 
-# Body and status in ONE capture, so there is no response file on disk.
+# THE BODY GOES TO A FILE, NEVER A BASH VARIABLE (W6 Task 8A: W4's worker's
+# carry, "ccd-pool-sync's unbounded read"; ccd-update-sync's D-3280, copied).
+# This used to be `-o -` captured through `$( )` with no size bound at all: a
+# control plane (or anything answering in its place) that streams for the whole
+# `--max-time` grew this script's memory by however many bytes it sent. Now
+# curl writes straight to `$body_tmp` under `--max-filesize`, and the validator
+# below reads at most RAW_CAP + 1 bytes of it however large the file is — so
+# the bound holds on a curl older than 8.4.0 too, where `--max-filesize` is not
+# enforced for a body of unknown length and only `--max-time` bounds DISK.
+# RAW_CAP is 1 MiB: 16x the 65536-byte cap on the RENDERED document, which
+# already refuses a response with more accounts than a node can hold, and
+# generous for the JSON's own overhead around each row.
+# `$REG`, `body_tmp` and `tmp` land HERE, before the request; both temp files
+# are removed on every exit by the trap (a SIGTERM between curl's write and
+# the rename used to leave the `$$`-named copy behind for good — nothing else
+# sweeps it), and each failure arm below still removes `$tmp` itself.
+mkdir -p -- "$REG" || { say "could not create $REG"; exit 1; }
+body_tmp="$REG/.pool-epoch.$$.body.tmp"
+tmp="$REG/.pool-epoch.$$.tmp"
+trap 'rm -f -- "$body_tmp" "$tmp"' EXIT
+rm -f -- "$body_tmp" "$tmp"
 # `-K -` reads the header from stdin: never argv, never environ.
-out="$(printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" \
-  | curl -sS -K - -o - -w '\n%{http_code}' \
+status="$(printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" \
+  | curl -sS -K - -o "$body_tmp" -w '%{http_code}' --max-filesize 1048576 \
     --max-time "$TIMEOUT" "$url/api/pools/epoch" 2>/dev/null)"; rc=$?
 tok=""
 if [ "$rc" -ne 0 ]; then
@@ -97,12 +127,11 @@ if [ "$rc" -ne 0 ]; then
     6)  say "unmeasured — curl exited 6 (could not resolve host in $url)" ;;
     7)  say "unmeasured — curl exited 7 (could not connect)" ;;
     28) say "unmeasured — curl exited 28 (timed out after ${TIMEOUT}s)" ;;
+    63) say "unmeasured — curl exited 63 (response exceeded the 1048576-byte cap)" ;;
     *)  say "unmeasured — curl exited $rc" ;;
   esac
   exit 1
 fi
-status="${out##*$'\n'}"
-body="${out%$'\n'*}"
 [ "$status" = 200 ] || { say "unmeasured — HTTP $status"; exit 1; }
 
 # THE RENDER IS PYTHON'S, THE VALIDATION IS TOO. A shell-side JSON read here
@@ -149,7 +178,7 @@ body="${out%$'\n'*}"
 # going to be one copy, and the writer re-deriving its own reader's grammar
 # and checking the text it is about to install against it is the same
 # "measure, don't echo" discipline the rest of this system already uses.
-rendered=$(printf '%s' "$body" | LC_ALL=C.UTF-8 python3 -c '
+rendered=$(LC_ALL=C.UTF-8 python3 -c '
 import json, re, sys
 ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
@@ -188,8 +217,18 @@ def trunc_repr(v, cap=200):
     r = repr(v)
     return r if len(r) <= cap else r[:cap] + "...(truncated, %d bytes total)" % len(r)
 
+RAW_CAP = 1048576   # mirrored by the bash side'"'"'s `--max-filesize 1048576` -- keep both literals identical
+
 try:
-    d = json.load(sys.stdin)
+    # Never more than the cap plus one byte, whatever the size of the file
+    # on disk and whichever curl wrote it (the bash side'"'"'s header says why).
+    # That bound on the READ is pinned by nothing: the suite pins that a body
+    # over RAW_CAP is refused, and a read of the whole file would refuse it
+    # just the same. Only the refusal is measured, not the memory.
+    raw = sys.stdin.buffer.read(RAW_CAP + 1)
+    if len(raw) > RAW_CAP:
+        raise ValueError("response body is over the %d-byte cap" % RAW_CAP)
+    d = json.loads(raw)
     e = whole_num("epoch", d["epoch"])
     i = whole_num("issuedAt", d["issuedAt"])
     l = whole_num("leaseUntil", d["leaseUntil"])
@@ -364,12 +403,11 @@ except Exception as ex:
     # off a timer, so a diagnostic nobody can read is worth as little as no
     # diagnostic at all.
     sys.stderr.write(str(ex) + "\n"); sys.exit(1)
-') || { say "unmeasured — the control plane answered a document this reader does not recognise"; exit 1; }
+' < "$body_tmp") || { say "unmeasured — the control plane answered a document this reader does not recognise"; exit 1; }
 
-mkdir -p -- "$REG" || { say "could not create $REG"; exit 1; }
-# Tmp then rename. A SIGKILL between the two leaks one dot-leading tmp, the
-# disclosed price `_reg_set` also discloses, and every reader skips
-# dot-leading entries. `2>/dev/null` BEFORE `>` so the OPEN's own failure is
+# Tmp then rename. A SIGKILL between the two leaks one dot-leading tmp (a
+# SIGTERM or Ctrl-C is caught by the EXIT trap above), the disclosed price
+# `_reg_set` also discloses, and every reader skips dot-leading entries. `2>/dev/null` BEFORE `>` so the OPEN's own failure is
 # caught too, not just printf's runtime write errors. `'%s\n'`, not `'%s'`:
 # `$( )` above already stripped `$rendered`'s own trailing newline, and
 # writing it back with `%s` alone would install a document one newline short
@@ -377,7 +415,6 @@ mkdir -p -- "$REG" || { say "could not create $REG"; exit 1; }
 # still parseable, but not byte-identical to what a hand-built fixture or a
 # byte-count check expects, so the newline is put back explicitly rather than
 # left to chance.
-tmp="$REG/.pool-epoch.$$.tmp"
 printf '%s\n' "$rendered" 2>/dev/null > "$tmp" \
   || { rm -f -- "$tmp"; say "could not stage the projection — it is UNCHANGED"; exit 1; }
 if [ ! -L "$REG/pool-epoch" ] && [ -d "$REG/pool-epoch" ]; then

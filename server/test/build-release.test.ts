@@ -281,6 +281,33 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     expect(r.stdout).toContain('ccrc-v1.2.3.tar.gz: OK');
   });
 
+  // W6 Task 8A (review 173's F4a): `ccd/ccrc`'s `_upd_resolve` bounds the
+  // SHA256SUMS fetch with `--max-filesize CCRC_RELEASE_SUMS_MAX_FILESIZE`, a
+  // size DERIVED from this builder's output shape and, until now, tied to it by
+  // prose alone. Pinned here against the REAL builder: the file is exactly one
+  // `sha256sum` line — 64 hex, two spaces, the tarball's name, one newline —
+  // so it is 64 + 2 + name + 1 bytes, and the longest name a tag can give
+  // (three-digit components) is 24 bytes: 91 in all. The shipped default has
+  // to admit that, and has to stay within two orders of magnitude of it, or
+  // it stops being a bound. A builder that gained a second line, a `>>`, or a
+  // longer name reds this instead of a release host's next SHA256SUMS.
+  it('SHA256SUMS is one sha256sum line, at most 91 bytes for any tag, and inside the size bound ccrc update ships (F4a)', () => {
+    const script = readFileSync(SCRIPT, 'utf8');
+    expect(script.match(/>>?\s*SHA256SUMS/g), 'the builder must write SHA256SUMS exactly once, by a single `>`').toEqual(['> SHA256SUMS']);
+    const home = mkTmp('build-release-sums-shape-');
+    const root = fixtureRepo(home, { tag: 'v999.999.999' });
+    const out = join(home, 'out');
+    expect(runRelease(root, home, ['--out', out]).code).toBe(0);
+    const sums = readFileSync(join(out, 'SHA256SUMS'), 'utf8');
+    expect(sums).toMatch(/^[0-9a-f]{64} {2}ccrc-v999\.999\.999\.tar\.gz\n$/);
+    expect(Buffer.byteLength(sums), 'the worst-case tag: 64 + 2 + 24 + 1').toBe(91);
+    const shipped = /^: "\$\{CCRC_RELEASE_SUMS_MAX_FILESIZE:=(\d+)\}"$/m.exec(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'));
+    expect(shipped, 'ccd/ccrc has no CCRC_RELEASE_SUMS_MAX_FILESIZE default').not.toBeNull();
+    const bound = Number(shipped![1]);
+    expect(bound, 'the default refuses a real SHA256SUMS').toBeGreaterThanOrEqual(91);
+    expect(bound, 'the default is no bound at all against a ~100-byte file').toBeLessThanOrEqual(91 * 100);
+  });
+
   it('the MANIFEST names every file in the tarball, with digests that verify', () => {
     const home = mkTmp('build-release-manifest-');
     const root = fixtureRepo(home, { tag: 'v1.2.3' });

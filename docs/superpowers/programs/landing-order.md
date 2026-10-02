@@ -18,7 +18,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | — | planned |
-| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | — | planned; **Tasks 1, 3–5 and Task 7's precondition re-plan owed** |
+| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | — | re-planned 2026-09-29; dispatch after wave 1 merges |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | — | — | to plan |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
@@ -58,6 +58,24 @@ carries it (spec §5.1, amended 2026-09-24).
   red-main from runs that ran the required legs, or refuses a window crossing `814fc53d`. Wave 2: #183 landed first and
   reshaped `ci.yml`, so Task 1 and Task 7's precondition join Tasks 3–5 in the re-plan. **Ruled by the operator:** a
   merge-queue run runs the selected tests, like a PR.
+- **2026-09-28 (evening) — wave 1 re-measured again against `023fe94d`.** Child-reclamation wave 3 (#187) and
+  update-management wave 4 (#181) merged after `c62e22b9`. #181 rewrote `ccrc`'s usage line (`rollback`, `channel`,
+  `watchdog`), so Task 2's usage edit, its `ccrc-cli` regex and mutation row R5 are restated on the new line and
+  re-measured (`ccrc-restamp` 7|1 then 8/8, `ccrc-cli` 1|34 then 35/35). Wave 3 now lands first, so its skill `it`
+  blocks are part of the base and Task 3 inserts below them with no conflict; everything else moved only in numbers.
+  With #187 merged, wave 2's Tasks 3–5 re-plan is unblocked.
+- **2026-09-29 — wave 2 re-planned; four operator rulings.** Re-planned prototype-first on `main` `6da36f0b` with wave 1
+  applied, three independent opus reviews (21 findings, one blocker: gh 2.45 ARMS auto-merge rather than queueing a PR
+  whose required checks have not passed, with the same success line), one fix round and an independent verification.
+  The landing lane keys on the open run, a `merged:#<n>` mail wakes a coordinator waiting at `merging`, the merge deny
+  also reads the child marker, the producer lands before its close (the last wave too), every landing binds
+  `--match-head-commit`, and the coordinator enqueues only once the required checks pass and reads the queue entry
+  back. **Ruled by the operator:** an independent wave N+1 still dispatches only after wave N closes; the `merged:`
+  mail is in; the 2026-09-24 25 s `pr-state` ruling stands (a close's worst case is now about 50 s); and if the proof
+  run's enqueue is refused because `allow_auto_merge` is off, stop rule 4 halts and the operator decides. The spec
+  (§4–§6, §9) is amended to match. Wave 1's usage-line edits now anchor on the `|expose|version|` fragment, because
+  the verb list grew again (#202's `versions`); re-measured on `cf24e4be`: `ccrc-restamp` 7|1 then 8/8, `ccrc-cli`
+  1|34 then 35/35.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -80,7 +98,7 @@ carries it (spec §5.1, amended 2026-09-24).
 
 Waves 1 and 2 are planned and reviewed; once the docs PR has merged, dispatch wave 1 on a fresh workspace with its
 plan path and this file. Wave 2 needs wave 1's clause 15 to append its native-queue sentence to, and is dispatched
-only after its Tasks 1, 3–5 and Task 7's precondition are re-planned — Task 1 against CI test selection (#183), the
-rest against child-reclamation wave 3 (the plan's status block). After wave 2
+once wave 1 has merged; its dispatching coordinator re-measures Tasks 2–5 on the `main` it cuts the workspace from
+(the plan's status block). After wave 2
 merges, the operator applies the ruleset and approval change and runs the proof (spec §5.2 steps 2–3); wave 2b is
 planned and dispatched only on that proof's result.

@@ -3,7 +3,9 @@
 **Status:** design approved in the brainstorm by the operator 2026-09-23 (rulings in §3); rev 2 after a six-lens
 adversarial review (61 findings survived, all applied) and a rev-3 verification pass; the operator's ruling on the
 written spec's two open decisions recorded 2026-09-23 (R9, R10); reconciled with its first wave plans 2026-09-24,
-and with `main` `b501698a` the same day (step 6 is CCR-15's; stage 2's wave is re-planned, §9) ·
+and with `main` `b501698a` the same day (step 6 is CCR-15's; stage 2's wave is re-planned, §9); stage 2 amended
+2026-09-29, when its wave was re-planned on `main` `6da36f0b` and three reviews of that plan were applied (§4, §5.2,
+§6, §9, §11, §12; the operator's four rulings of that day are §11's) ·
 **Date:** 2026-09-23 · **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-session-continuity-design.md`. Two dependencies run between the specs (§9): the
 continuity spec's stage 1 must land before this spec's stage 5, and the continuity spec's stage 5 appends its
@@ -123,7 +125,7 @@ is none.
 
 | Actor | May | May not, and what holds it |
 |---|---|---|
-| **Worker** (a run's session in a child workspace) | commit and push its own branch; absorb main under clause 16's triggers; re-gate; report wave-done | merge (**the PreToolUse hook denies `gh pr merge` in a session whose hold names a programme wave**, a reviewer's included, stage 2); rebase, force-push, `update-branch`, settings writes (clause 16, prose; `update-branch` absent from executable source, pinned) |
+| **Worker** (a run's session in a child workspace) | commit and push its own branch; absorb main under clause 16's triggers; re-gate; report wave-done | merge (**the PreToolUse hook denies `gh pr merge` in a session whose hold names a programme wave, or whose workspace carries the child marker**, a reviewer's included, stage 2); rebase, force-push, `update-branch`, settings writes (clause 16, prose; `update-branch` absent from executable source, pinned) |
 | **Coordinator** | declare order; run the composition; enqueue or merge at the pinned head; send fix rounds; pause the line | use the admin bypass (**the hook denies `gh pr merge --admin` in every fleet session**, stage 2); `update-branch`; settings writes (clause 15) |
 | **ccd** | the read-only probe on a timer; compose a candidate; delete its own candidate refs; lineage | move a worker's branch; merge; push or delete anything outside `refs/heads/ccrc/land/*` (pinned) |
 | **Server** | hold the line; mail "next to land"; re-measure what ccd wrote; refuse bad transitions | run git or `gh` (`EXEC_COMMANDS` stays `['tmux','ccd']`); take a run to `working` on its own; choose a successor |
@@ -131,6 +133,11 @@ is none.
 
 The PWA cannot reach a merge: `gh` stays unwhitelisted, no ccd verb merges, and the session-gated landing routes
 can pause or remove, never choose a successor (stage 5).
+
+The hook cannot tell a coordinator from a worker by anything but the workspace: a coordinator whose own workspace
+carries a programme-wave hold or the child marker — a self-claimed run's hold, or a reclaim heir that was the
+programme's own worker — is refused `gh pr merge` like a worker, and has the operator enqueue from their own shell
+(stage 2). (Added 2026-09-29.)
 
 ## 5. The design, in stages
 
@@ -198,11 +205,15 @@ and the class of act that opened the livelock window.
 ### 5.2 Stage 2 — GitHub's native merge queue on this repository
 
 **Repository code.**
-- `.github/workflows/ci.yml` gains `merge_group:` beside `pull_request:`; the non-required macOS legs get
-  `if: github.event_name != 'merge_group'`; a `concurrency` group with `cancel-in-progress` for `pull_request`,
-  so a superseded head stops occupying runners. Every other event gets a run-unique group (`github.run_id`), and
-  a `merge_group` run keeps one whatever else reshapes the workflow (§9): GitHub keeps one pending run per group
-  and cancels the older one even without `cancel-in-progress`, so a shared group would drop a queue entry's checks.
+- `.github/workflows/ci.yml` gains `merge_group:` beside `pull_request:`, and a queue run runs what a pull request
+  runs (operator ruling 2026-09-28): the selected server tests and every other required leg, the plain-bash
+  pipeline check included, asked against `merge_group.base_sha` — `merge_group` joins the `pull_request` arm of
+  `.github/ci/select.mjs` and `verdict.mjs`, and the mode table gains its row. The non-required macOS legs and
+  `full-suite` skip a queue run (a selection fallback runs `full`, and `full-suite` would read the skipped macOS leg
+  as red). The `pull_request` arm that cancels a superseded head is CI selection's (#183); a `merge_group` run gets
+  a run-unique group of its own (`queue-<run id>`), never the shared push-to-main `refresh` group: GitHub keeps one
+  pending run per group and cancels the older one even without `cancel-in-progress`, so a shared group would drop a
+  queue entry's checks. No full run per merge (2026-09-23). (Amended 2026-09-29, on #183's shape.)
 - `ccd pr-state` gains one GraphQL query per repository per sweep (`pullRequest.mergeQueueEntry` and the last
   queue act of either kind, `ADDED_TO_MERGE_QUEUE_EVENT` or `REMOVED_FROM_MERGE_QUEUE_EVENT`, in `timelineItems`:
   a removal alone cannot tell a merged PR the queue landed after a re-enqueue from one merged by hand after a
@@ -210,22 +221,47 @@ and the class of act that opened the livelock window.
   the query measured 0.72–1.39 s), answering `queued | dequeued | landed | none | unmeasured` in an additive
   `queue` field; the pr-state header's gh-call budget is updated to say so. The server's outer bound on
   `pr-state` (`CCD_VERB_TIMEOUT_MS`) rises from 20 s to 25 s, so the three calls' timeouts (8 + 5 + 4 s) stay
-  within the 70% of it that `pr-timeout-budget.test.ts` allows across the two languages.
+  within the 70% of it that `pr-timeout-budget.test.ts` allows across the two languages. The map is keyed by the
+  verb, so `--session` rises with `--project` (ruled 2026-09-24); child reclamation's close gate reads it up to
+  twice inside `coordMutex`, so a close's worst case is about 50 s against its 30 s client timeout — accepted by
+  the operator 2026-09-29 (§11), and every comment that stated the old bound says 25 s.
 - A dequeue (GitHub does not re-enqueue after a failed group) becomes a feed event of a new `NotifyEvent` kind,
   `queue` (added in place in `shared/api.ts`, line-neutral; the PWA's total `KIND_WORD` and `KIND_GLYPH` records
   name it), and, when an open run names the PR's workspace, a `status` mail to that run's coordinator, sent as
-  `operator`: raised by the watcher on the operator's behalf, the ask nudge's precedent. The coordinator
-  re-enqueues or sends a fix round. A dequeued PR that no open run names gets the feed event and no mail.
+  `operator`: raised by the watcher on the operator's behalf, the ask nudge's precedent. The coordinator reads why
+  from the queue's own `merge_group` run — the PR head's checks never include it and can read green — then
+  re-enqueues or, disarming any armed auto-merge first, sends a fix round. A dequeued PR that no open run names
+  gets the feed event and no mail. A PR that reads merged while the open run naming its workspace waits at
+  `merging` is a `status` mail `merged:#<n>` to that run's coordinator, once — the wake-up for an asynchronous
+  queue merge, since the coordinator never polls (included in stage 2 by the operator, 2026-09-29, §11). It reads
+  the run's state, not whether the project has a queue, so a synchronous merge a sweep reads before the close is
+  mailed too, and answered by the ordinary proof and close. The recipient is the open run the close itself would
+  keep (`survivorOf`). Both notices need that run to be open, so on a native-queue project the producer lands
+  before it closes (clause 15). A PR whose enqueue only ARMED auto-merge (below) reads `none` and gets no notice:
+  the coordinator's read-back of the queue entry catches it. (Amended 2026-09-29.)
 - **The merge gate becomes a mechanism.** Setting the approval count to zero means any session holding the
   fleet's login could land with a plain `gh pr merge`. So `session-hook.sh`'s PreToolUse arm DENIES `gh pr merge`
   in any session whose hold names a programme wave, a worker's or a reviewer's (`CCRC_HOLD_WAVE_RE`, the hook's
-  one spelling of that grammar), and denies `--admin` in every fleet session, together with a
-  `gh api` call to the pulls merge endpoint, the other spelling that reaches the same merge. Mutation rows: a
-  worker's merge is refused; a coordinator's plain enqueue passes; any session's `--admin` is refused; a session's
-  `gh api` merge call is refused; each red when its arm is deleted. The operator's own shell, outside Claude Code,
-  is unaffected. The hook is a contract the fleet honours, not an access boundary.
-- Coordinator clause 15 says: on a native-queue project, landing is `gh pr merge <n>` with no `--admin`, which
-  enqueues.
+  one spelling of that grammar), or whose workspace carries the child marker `$REG/<id>.child` (a close releases the
+  hold before the reclaim takes the pane; the marker is purged only with the registry row), and denies `--admin` in
+  every fleet session, together with a `gh api` call that reaches the same merge — the pulls merge endpoint, or a
+  GraphQL merge mutation (`mergePullRequest`, `enqueuePullRequest`, `enablePullRequestAutoMerge`), each measured
+  passing the wave-hold deny. Mutation rows: a worker's merge is refused, and so is a released child's; a
+  coordinator's exact-SHA enqueue passes; any session's `--admin` is refused; a session's `gh api` merge call is
+  refused; each red when its arm is deleted. The operator's own shell, outside Claude Code, is unaffected. The hook
+  is a contract the fleet honours, not an access boundary. A coordinator whose own workspace carries the hold or
+  the marker (§4) is refused like a worker; it never closes to shed the hold — a final close of a child reclaims
+  its own pane — and has the operator enqueue. (Amended 2026-09-29.)
+- Coordinator clause 15 says: on a native-queue project, landing is `gh pr merge <n> --match-head-commit
+  <handoffCommit>` — #178's exact-SHA binding, with no `--squash` (the queue's method applies) and no `--admin` —
+  which enqueues, and the producer's run closes only once the PR reads MERGED at `handoffCommit`; until then it
+  waits at `merging`, holding the child (`wave-lifecycle.md` §5, "Landing on a native-queue project"). The last
+  wave's producer lands before its close too. That reference also says what makes the command an enqueue: gh
+  reaches a required queue through its auto-merge mutation, and ARMS auto-merge, rather than queueing, a PR whose
+  required checks have not passed, printing the same success line — so the coordinator measures that the project
+  requires the queue (its `main` branch rules carry `merge_queue`) before each landing, enqueues only once
+  `gh pr checks <n> --required` passes, reads the queue entry back, and disarms (`--disable-auto`) a request that
+  only armed, and before any fix round from `merging`. (Amended 2026-09-29.)
 
 **Operator configuration** (settings, not ccrc code): a ruleset requiring the merge queue on `main` — squash,
 group size 1, build concurrency 1 — and `required_approving_review_count` 1 → 0 in the existing main ruleset.
@@ -233,7 +269,9 @@ Break-glass (R9): the repository-admin role is the ruleset's only bypass actor; 
 role, the main ruleset's second bypass actor today. The fleet's single login holds the admin role, so the bypass is
 reachable from any session; the hook denies the spellings it can parse, which makes the
 bypass the operator's by convention, not by credential. The operator uses it from their own shell or GitHub's UI.
-A hand merge out of order is recorded as an inversion.
+A hand merge out of order is recorded as an inversion. gh reaches a required queue through the auto-merge
+mutation and the repository has `allow_auto_merge: false` today; if the proof run's enqueue is refused for that,
+the proof halts and the operator decides then — clause 15 forbids a coordinator to write it (§11, 2026-09-29).
 
 **Rollout order inside stage 2**, because each step needs the one before it:
 1. `ci.yml` gains `merge_group` (repository code, merged the ordinary way);
@@ -243,7 +281,10 @@ A hand merge out of order is recorded as an inversion.
    event and one prerelease per merge; if a group lands several commits in one push, keep group size and
    concurrency at 1 or make release-main tag every commit in the pushed range; confirm `is_ours` still binds
    after a queue merge; measure whether GitHub records a removal event on a successful queue merge (if it does,
-   a queue-merged PR reads `none`, not `landed`);
+   a queue-merged PR reads `none`, not `landed`); measure that gh's enqueue binds `--match-head-commit` (a
+   deliberately wrong sha is refused and nothing is queued); measure the armed path — an enqueue whose required
+   checks have not passed arms auto-merge and queues nothing — and whether an armed request survives a push by the
+   fleet's login (amended 2026-09-29);
 4. only then does the hook's deny on `--admin` go live. Until approvals are 0, every merge here still needs
    `--admin`, so the deny shipping first would stop every fleet merge on this repository.
 
@@ -396,11 +437,11 @@ of the "main went red after two PRs landed 28 minutes apart" class.
 
 | Area | Change |
 |---|---|
-| `ccd/worker-skill/SKILL.md`, `ccd/coordinator-skill/SKILL.md`, `references/wave-lifecycle.md` | clauses 16 / 15, land-sync and ejection vocabulary; pins in `worker-skill.test.ts`, `coordinator-skill.test.ts`; clause-count words in `README.md` and `CLAUDE.md` |
-| `ccd/session-hook.sh` | PreToolUse advisory on main syncs and `update-branch`; deny on `gh pr merge` for programme-wave sessions (`CCRC_HOLD_WAVE_RE`), and on `--admin` and `gh api` merge calls for all sessions |
+| `ccd/worker-skill/SKILL.md`, `ccd/coordinator-skill/SKILL.md`, `references/wave-lifecycle.md` | clauses 16 / 15, land-sync and ejection vocabulary; the native-queue landing (clause 15's sentence, `wave-lifecycle.md` §5's paragraph and §6, SKILL.md steps 6 and 7); pins in `worker-skill.test.ts`, `coordinator-skill.test.ts`; clause-count words in `README.md` and `CLAUDE.md` |
+| `ccd/session-hook.sh` | PreToolUse advisory on main syncs and `update-branch`; deny on `gh pr merge` for programme-wave sessions (`CCRC_HOLD_WAVE_RE`) and any workspace carrying the child marker, and on `--admin` and `gh api` merge calls (REST and GraphQL) for all sessions |
 | `ccd/ccd` | `pr-state` GraphQL queue query and the `--project --pr` form; `land-candidate` with `--drop`; lineage hooks; re-stamp and the citation-corpus procedure |
-| `server/src/remote/runner.ts`, `server/test/pr-timeout-budget.test.ts` | `pr-state`'s outer bound 20 s → 25 s; the budget sums three timeouts |
-| `server/src/prstate.ts`, `server/src/watch.ts`, `server/src/coord/rundefs.ts`, `shared/api.ts`, `pwa/src/screens/MailScreen.tsx` | the one reader of `queue`; the dequeue feed event and mail; the `operator` sender's gloss; `NotifyEvent` kind `queue` |
+| `server/src/remote/runner.ts`, `server/src/coord/{childSpent,routes,close}.ts`, `server/test/pr-timeout-budget.test.ts` | `pr-state`'s outer bound 20 s → 25 s; the budget sums three timeouts; the four comments that stated 20 s (two in `childSpent.ts`, `routes.ts`'s rule-3 gate, `childGateAtClose`'s) say 25 s |
+| `server/src/prstate.ts`, `server/src/watch.ts`, `server/src/coord/rundefs.ts`, `server/src/coord/store.ts`, `shared/api.ts`, `pwa/src/screens/MailScreen.tsx` | the one reader of `queue`; the landing lane: the dequeue feed event and mail, and the merged notice, with two durable "already told" reads (`hasMailWithSubject`, `hasFeedEvent`); the `operator` sender's gloss; `NotifyEvent` kind `queue` |
 | `deploy/measure-landing.py` (new, read-only) | §10's instrument |
 | `ccd/ccd-land-probe`, `deploy/systemd/ccd-land-probe.{service,timer}` | the radar and the `$REG/landing/<p>/enabled` marker; install spine, uninstall, doctor |
 | `ccd/ccrc` | `ccrc restamp` |
@@ -409,8 +450,10 @@ of the "main went red after two PRs landed 28 minutes apart" class.
 | `server/test/coord-pause-route.test.ts`, `box-token-census.test.ts`, `landing-subtractive.test.ts` (new) | the new doors in both directions |
 | `agent/src/whitelist.ts`, `server/src/ccdargv.ts` | no grant for `land-candidate`; the `pr-state --project --pr` form rides the existing prefix grant with its own `CcdArgv` brand |
 | `pwa/src` | predicted-conflict chip; the line on the project card; pause and withdraw |
-| `.github/workflows/ci.yml` | `merge_group`, macOS skip, concurrency |
+| `.github/workflows/ci.yml`, `.github/ci/select.mjs`, `.github/ci/verdict.mjs` | `merge_group`: its mode row and the pull-request arm (a queue run runs the selected tests), the pipeline check on a queue run, the macOS and `full-suite` skip, a run-unique concurrency arm |
 | `CLAUDE.md` | coord.db invariant (central landing state), box-token bullet, ccd-verb rule wording |
+
+(Stage 2's rows amended 2026-09-29, when its wave was re-planned on `main` `6da36f0b`.)
 
 ## 7. Invariants kept, and two amended
 
@@ -441,19 +484,26 @@ headlines in the last 40 merged PRs). Stage 1's `ccrc restamp` is its first deli
 ## 9. Sequencing
 
 - Stage 1 first; stage 2 builds on stage 1's coordinator clause 15, so it lands with or after stage 1.
-  Stage 2's wave is re-planned against CCR-15 before it is dispatched: CCR-15's "One PR per child" (#178) closes a
-  PR-bearing producer's run before its PR merges, and its wave 3 then reclaims that workspace. Stage 2's dequeue
-  lane, its landing spelling (which must keep #178's `--match-head-commit`) and its merge deny each assumed the
-  producer's run stays open until its PR lands (the wave-2 plan's status block, 2026-09-24).
+  Stage 2's wave was re-planned against CCR-15 (2026-09-29): CCR-15's "One PR per child" (#178) closes a
+  PR-bearing producer's run before its PR merges, and its wave 3 reclaims that workspace on the close. On a
+  native-queue project the producer therefore lands BEFORE it closes (clause 15), the last wave's included: its run
+  waits at `merging`, holding the child, so the dequeue lane and the merge deny have the run, the row and the hold
+  they read; the deny also keys on the child marker for the window after any close; every landing spelling keeps
+  `--match-head-commit`. An independent wave N+1 still dispatches only after the producer closes, so on a
+  native-queue project it waits about one queue CI run (operator ruling 2026-09-29, §11).
 - Stage 3 next; stage 4 needs stage 3's lineage.
 - Stage 5 needs stages 3 and 4 and **the continuity spec's stage 1** (the sidecar carry merge): a coordinator
   parked on a limit cannot land until rescued, and after a rescue it must find its journals on the new account.
 - The continuity spec's stage 5 appends its skill clauses after this spec's stage 1 (clause numbers are assigned
   at merge; the pins derive nothing, so the later PR renumbers).
 - Rollout inside each stage follows AGENT-FIRST: ccd and the skills reach every home through `ccrc update` before
-  the server and PWA read what they write.
-- CI test selection reshapes `ci.yml` and puts pushes to `main` in one shared refresh group. Whichever programme
-  lands second merges the other's shape and keeps every `merge_group` run in a run-unique group (§5.2).
+  the server and PWA read what they write. Stage 2 is the exception, SERVER-FIRST (`ccrc rollout --server-first`):
+  its server arm is a reader-widening — a new server reads an older ccd's lines as `absent` and stays silent, and
+  an old server would kill a slower three-call sweep at 20 s — and the skill's `merged:` wake-up needs the server
+  that sends it (amended 2026-09-29).
+- CI test selection landed first (#183) and put pushes to `main` in one shared refresh group; stage 2 merged into its
+  shape, keeps every `merge_group` run in a run-unique group, and runs the selected tests on a queue run like a
+  pull request (operator ruling 2026-09-28) (§5.2). (Amended 2026-09-29.)
 
 ## 10. Measurement, targets and the kill rule
 
@@ -494,6 +544,18 @@ Decided on the written spec, 2026-09-23:
 2. **Strict-protection removal** — R10: on intake-platform and data-internal, after a week of coordinator landings
    with composition tests there.
 
+Decided on stage 2's re-planned wave, 2026-09-29 (each as the re-plan proposed):
+
+3. **An independent wave N+1 waits for the producer's close.** §5's order stands: on a native-queue project the
+   producer waits at `merging` until its PR lands, and wave N+1 dispatches only after that close, dependent or not.
+   The queue's latency is accepted rather than a further lifecycle change.
+4. **The `merged:#<n>` wake-up ships with stage 2**, sent only to a run waiting at `merging` (§5.2); landing
+   wake-ups are not left to stage 5's PR-keyed reader.
+5. **25 s stands for both `pr-state` modes** (the 2026-09-24 ruling), with the close's worst case of about 50 s
+   against its 30 s client timeout that child reclamation's close gate brings (§5.2).
+6. **An enqueue refused because auto-merge is disabled halts the proof run** (stop rule 4), and the operator
+   decides then; no stage-2 task changes `allow_auto_merge`.
+
 ## 12. Failure modes named
 
 - A composition tested green at base B lands after main moved to B′: the native queue re-tests; on a plain merge
@@ -504,6 +566,11 @@ Decided on the written spec, 2026-09-23:
 - The coordinator is on a limit when "next to land" arrives: the mail waits; the continuity spec makes the
   rescued coordinator able to act.
 - A hand merge out of order: recorded as an inversion, never refused.
+- An enqueue that only ARMED auto-merge (the PR's required checks had not passed): nothing is queued and no
+  notice comes; the coordinator's read-back of the queue entry catches it, and it disarms before any fix round,
+  because an armed request would queue whatever head the branch carries once green (stage 2; added 2026-09-29).
+- A coordinator the merge deny refuses (a self-claimed run, a reclaim heir): it has the operator enqueue; closing to
+  shed the hold would reclaim its own pane (stage 2; added 2026-09-29).
 - A session hand-edits `$REG` or the box token is used by a worker to reorder: recorded with `setBy` and a feed
   event; identity is attribution, and this spec does not claim otherwise.
 

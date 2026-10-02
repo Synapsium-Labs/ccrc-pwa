@@ -15,6 +15,38 @@
 // lists: `gen-wrappers.test.ts`'s D-93 case compares `_inst_bins`' placements
 // against `TOOLCHAIN_EXECUTABLES`. It is the first over the UNINSTALL censuses.
 //
+// AND THE ID-SHAPED NAMES (spec §5 Pin 4). A name `_inst_bins` places that
+// matches `WRAPPER_ID_RE` is a file the wrapper machinery could mistake for an
+// account launcher, so it needs two declarations a dotted name does not:
+// `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` (the orphan scan skips
+// it) and `_uninst_wrappers`' exclusion `case` (the wrapper arm skips it, so
+// `_uninst_tree_bins` owns it). `gen-wrappers.test.ts`' D-93 case derives one
+// edge of that, placed ⊆ Set; D-3173 measured the Set carrying two names
+// nothing placed while every case stayed green. The id-shaped describe below
+// reads all three lists and requires them EQUAL. Its predicate is
+// `WRAPPER_ID_RE`, read out of `ccd/ccrc-wrapper-shape` — the test
+// `_uninst_wrappers` applies right after its `case`, which is what makes a
+// name need the entry. That is NOT the dotted-name filter refused below: that
+// filter would drop names from a census; this one selects the names a third
+// list must carry. Two more lists ride the same describe. The roster reserves
+// the GPT lane's command names as account ids in `GPT_TOOLCHAIN_ACCOUNT_IDS`,
+// kept twice (`shared/roster.ts`, `shared/roster-json.mjs`): the two must be
+// one set, and it must reserve every id-shaped name `_inst_bins` places behind
+// its `!= server` gate. (`gen-accounts.test.ts`' mirror parity case also
+// compares the two, as ordered lists of the text between commas. This reader
+// compares them as sets of string literals, and it THROWS on a member that is
+// not one.) And the name `shared/wrapper.mjs` makes every Codex
+// launcher exec must be one of those. `ccgpt` is reserved there and placed
+// nowhere, deliberately: on a live fleet box it is another repository's
+// launcher (D-3478).
+//
+// AND THE RELEASE (spec §11). Every `$tree/<path>` source the four bodies
+// below read must lie under `deploy/build-release.sh`'s `PATHSPEC`.
+// `ccrc update` installs from the release tarball, and a file present in a
+// checkout but absent from the tarball is an install that dies on every
+// updated box (v0.0.2, D-3105). Tracked is necessary and not sufficient: the
+// tarball is `git archive HEAD -- <PATHSPEC>`, not the index.
+//
 // AND AGAINST `deploy/deploy.sh`, THE FALLBACK. `ccrc rollout` is the deploy
 // path and `deploy.sh` the fallback, and it keeps a THIRD hand-kept placement
 // census: `install_atomic … .local/bin/<name>` for binaries, and a
@@ -90,8 +122,10 @@
 // name some, to explain. The code types two, `ccd` and `ccrc`, as anti-vacuity
 // anchors — the tool and its launcher, which the install places on every
 // platform and every role — and reads the `BOX_UNIT_NAMES` anchors out of the
-// array `ccd/ccrc` declares. A third hand-kept copy of the census is the defect
-// this guard exists to delete.
+// array `ccd/ccrc` declares. The id-shaped describe feeds the real emitter one
+// fixture account (`codex-a`, upstream `claude`), which is an input, not a
+// census name. A third hand-kept copy of the census is the defect this guard
+// exists to delete.
 //
 // AND THE SOURCES. The last describe reads the other argument of the same
 // calls: every file `_inst_bins`, `_inst_units`, `_inst_files` and
@@ -176,6 +210,20 @@
 //     so a call written in such a comment is read as made (a phantom `rm -f`
 //     there would mask an orphan). Measured when written: none of the four
 //     occurs in `ccd/ccrc` or `deploy/deploy.sh`.
+//   - The id-shaped names. `TOOLCHAIN_EXECUTABLES` and both
+//     `GPT_TOOLCHAIN_ACCOUNT_IDS` are read as the string literals between the
+//     brackets of their ONE `const … = new Set([…]);`, comments cut; anything
+//     else there (a spread, an identifier) THROWS. `_uninst_wrappers`' `case`
+//     is read from its ONE `case "$name" in …) continue ;; esac` line, split
+//     on `|`; a glob, quote or variable there THROWS. The GPT-lane gate is the
+//     ONE `if [ "$INST_ROLE" != server ]; then` line in `_inst_bins` up to the
+//     first `fi`, and a nested block inside it THROWS. `_inst_graphify_engine`'s
+//     link is not on the Pin 4 side: that pin names `_inst_bins`.
+//   - The release. `PATHSPEC` is read from its ONE `PATHSPEC=(…)` assignment,
+//     as bare words. The conditional `PATHSPEC+=("$pkg/scripts")` arm is NOT
+//     read, so a source under a package's `scripts/` reds here by design —
+//     none does, measured when written. Build artifacts `_inst_tree` checks for
+//     (`server/dist`, …) are not `$tree/` sources of these bodies.
 //
 // READING `deploy/deploy.sh`. The same machinery — `scanLine`, `calls`,
 // `argAt`, `census` and its normalisation — and where that file's shape makes
@@ -281,6 +329,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { generateWrapperBody } from '../../shared/wrapper.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -1063,6 +1112,182 @@ function trackedFiles(): Set<string> {
   return new Set(r.stdout.split('\0').filter(Boolean));
 }
 
+// ── the id-shaped names, and the release (header: AND THE ID-SHAPED NAMES,
+//    AND THE RELEASE) ─────────────────────────────────────────────────────
+
+const SHAPE_PATH = path.resolve(here, '..', '..', 'ccd', 'ccrc-wrapper-shape');
+const RELEASE_PATH = path.resolve(here, '..', '..', 'deploy', 'build-release.sh');
+
+/** `WRAPPER_ID_RE`, read out of its one declaration in the shape contract. It
+ *  is the test `_uninst_wrappers` applies right after its exclusion `case`, so
+ *  it is what makes a placed name need an entry there. */
+function wrapperIdRe(): RegExp {
+  const all = [...readFileSync(SHAPE_PATH, 'utf8').matchAll(/^WRAPPER_ID_RE='([^']+)'$/gm)];
+  if (all.length !== 1) {
+    throw new Error(
+      `install-census.test.ts: expected exactly one \`WRAPPER_ID_RE='…'\` in ${SHAPE_PATH}, found ${all.length} — `
+      + 'this reader has gone stale. Re-point it; do NOT retype the regex here.',
+    );
+  }
+  return new RegExp(all[0]![1]!);
+}
+
+/** The id-shaped members of `names`, sorted. */
+function idShaped(names: Iterable<string>): string[] {
+  const re = wrapperIdRe();
+  return [...names].filter((n) => re.test(n)).sort();
+}
+
+/** `a − b`, sorted. */
+function minus(a: Iterable<string>, b: Set<string>): string[] {
+  return [...a].filter((n) => !b.has(n)).sort();
+}
+
+/**
+ * The members of the ONE `const <name> … = new Set([…]);` in `rel`
+ * (repository-relative), read as the string literals between the brackets with
+ * comments cut. Anything else between them — a spread, an identifier, a
+ * template — THROWS: a member this reader cannot see would vanish from one side
+ * of a comparison, the silent drop this file refuses everywhere.
+ */
+function setLiteral(rel: string, name: string): Set<string> {
+  const src = readFileSync(path.resolve(REPO, rel), 'utf8');
+  const all = [...src.matchAll(new RegExp(`\\bconst ${name}\\b[^=\\n]*= new Set\\(\\[([\\s\\S]*?)\\]\\);`, 'g'))];
+  if (all.length !== 1) {
+    throw new Error(
+      `install-census.test.ts: expected exactly one \`const ${name} … = new Set([…]);\` in ${rel}, found `
+      + `${all.length} — re-point this reader at wherever it now lives; do NOT retype its members here.`,
+    );
+  }
+  const inner = all[0]![1]!.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const members = [...inner.matchAll(/'([^'\\\n]*)'|"([^"\\\n]*)"/g)].map((m) => (m[1] ?? m[2])!);
+  const rest = inner.replace(/'[^'\\\n]*'|"[^"\\\n]*"/g, '').replace(/[\s,]/g, '');
+  if (rest !== '') {
+    throw new Error(
+      `install-census.test.ts: ${name} in ${rel} carries something that is not a string literal `
+      + `(${JSON.stringify(rest)}) — this reader will not evaluate it. Spell the members as literals, or teach it.`,
+    );
+  }
+  return new Set(members);
+}
+
+/** The names `_uninst_wrappers`' exclusion `case` skips: its ONE
+ *  `case "$name" in a|b|…) continue ;; esac` line, split on `|`. A glob, quote
+ *  or variable in an alternative THROWS — it is a pattern, and this reader does
+ *  not evaluate patterns. */
+function uninstWrappersCase(): Set<string> {
+  const fn = '_uninst_wrappers';
+  const arms = [...fnBody(fn).matchAll(/^\s*case "\$name" in ([^)\n]*)\) continue ;; esac\s*$/gm)];
+  if (arms.length !== 1) {
+    throw new Error(
+      `install-census.test.ts: expected exactly one \`case "$name" in …) continue ;; esac\` line in ${fn}, `
+      + `found ${arms.length} — this reader has gone stale.`,
+    );
+  }
+  const alts = arms[0]![1]!.split('|');
+  const odd = alts.filter((a) => !/^[A-Za-z0-9._-]+$/.test(a));
+  if (odd.length > 0) {
+    throw new Error(
+      `install-census.test.ts: ${fn}'s exclusion case carries pattern(s) ${JSON.stringify(odd)} — spell each `
+      + 'name literally, or teach this reader.',
+    );
+  }
+  return new Set(alts);
+}
+
+/** The body of the ONE `if [ "$INST_ROLE" != server ]; then … fi` block in
+ *  `_inst_bins`, comments cut — the GPT lane's gate, which that function's own
+ *  comment calls the only `!= server` gate in it. Nothing may nest inside it,
+ *  so the first `fi` after it is its own. */
+function gptGateBlock(): string {
+  const fn = '_inst_bins';
+  const lines = fnBody(fn).split('\n');
+  const opens = lines.flatMap((l, i) => (/^\s*if \[ "\$INST_ROLE" != server \]; then\s*$/.test(l) ? [i] : []));
+  if (opens.length !== 1) {
+    throw new Error(
+      `install-census.test.ts: expected exactly one \`if [ "$INST_ROLE" != server ]; then\` line in ${fn}, found `
+      + `${opens.length} — this reader has gone stale, or the GPT lane's gate moved.`,
+    );
+  }
+  const start = opens[0]!;
+  const end = lines.findIndex((l, i) => i > start && /^\s*fi\s*$/.test(l));
+  if (end < 0) throw new Error(`install-census.test.ts: the GPT-lane gate in ${fn} has no closing \`fi\` this reader can see`);
+  const block = lines.slice(start + 1, end);
+  const nested = block.filter((l) => /^\s*(?:if|case|for|while|until)\b/.test(l));
+  if (nested.length > 0) {
+    throw new Error(
+      `install-census.test.ts: the GPT-lane gate in ${fn} nests ${JSON.stringify(nested)}, so its first \`fi\` `
+      + 'may not be its own — teach this reader before trusting the id-shaped describe.',
+    );
+  }
+  return block.join('\n');
+}
+
+/** Every name the GPT-lane gate's `_inst_atomic` calls place in `$HOME/.local/bin`. */
+function gatedBins(): Set<string> {
+  const fn = '_inst_bins';
+  const local = assignments(fnBody(fn));
+  bindsExactlyOnce(fn, local, 'bin', BIN_DIR);
+  return census(fn, 'placement', argAt(fn, '_inst_atomic', calls(gptGateBlock(), '_inst_atomic'), 1), [BIN_DIR], local);
+}
+
+/** Every repository path the GPT-lane gate's `_inst_atomic` calls read out of the placed tree. */
+function gatedSources(): Set<string> {
+  const fn = '_inst_bins';
+  const local = assignments(fnBody(fn));
+  bindsExactlyOnce(fn, local, 'tree', TREE_DIR);
+  const out = new Set<string>();
+  for (const word of argAt(fn, '_inst_atomic', calls(gptGateBlock(), '_inst_atomic'), 0)) {
+    for (const raw of resolveWord(word, local)) {
+      const p = path.posix.normalize(raw);
+      const rel = p.startsWith(`${TREE_DIR}/`) ? p.slice(TREE_DIR.length + 1) : '';
+      if (rel === '' || rel.includes('$') || rel.startsWith('../')) {
+        throw new Error(
+          `install-census.test.ts: the GPT-lane gate's source "${word}" resolves to "${p}", which is not a path in `
+          + 'the placed tree — spell it literally, or teach this reader.',
+        );
+      }
+      out.add(rel);
+    }
+  }
+  return out;
+}
+
+/** The name `shared/wrapper.mjs` makes every generated Codex launcher exec,
+ *  read out of the real emitter's own output — the one exec line the shape
+ *  reader parses — never typed here. */
+function codexLauncherTarget(): string {
+  const body = generateWrapperBody({ id: 'codex-a', configDirSuffix: '.codex-a', execKind: 'codex' }, 'claude');
+  const m = /^exec "\$HOME\/\.local\/bin\/([^"]+)" "\$@"$/m.exec(body);
+  if (m === null) {
+    throw new Error(`install-census.test.ts: the emitter's Codex launcher has no \`exec "$HOME/.local/bin/<target>" "$@"\` line:\n${body}`);
+  }
+  return m[1]!;
+}
+
+/** `deploy/build-release.sh`'s `PATHSPEC`, read out of its ONE `PATHSPEC=(…)`
+ *  assignment (comments cut) as bare words. A quoted, variable or glob entry
+ *  THROWS. The conditional `PATHSPEC+=` arm is not read (header). */
+function releasePathspec(): string[] {
+  const code = readFileSync(RELEASE_PATH, 'utf8').split('\n').map((l) => scanLine(l).code).join('\n');
+  const all = [...code.matchAll(/^PATHSPEC=\(([^)]*)\)/gm)];
+  if (all.length !== 1) {
+    throw new Error(
+      `install-census.test.ts: expected exactly one \`PATHSPEC=(…)\` in ${RELEASE_PATH}, found ${all.length} — `
+      + 'this reader has gone stale.',
+    );
+  }
+  const words = all[0]![1]!.trim().split(/\s+/);
+  const odd = words.filter((w) => !/^[A-Za-z0-9._/-]+$/.test(w));
+  if (odd.length > 0) {
+    throw new Error(
+      `install-census.test.ts: PATHSPEC carries ${JSON.stringify(odd)}, which this reader will not evaluate — `
+      + 'spell each entry as a bare path, or teach it.',
+    );
+  }
+  return words;
+}
+
 // ── the floors ────────────────────────────────────────────────────────────
 //
 // A FLOOR GUARDS AGAINST AN EXTRACTOR THAT MATCHES NOTHING, or next to nothing
@@ -1349,6 +1574,52 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
   });
 });
 
+// Review fix round 1 (mut-1, important, refuter-confirmed): the describe above
+// checks ONE direction only (install ⊆ deploy) and never asks whether a
+// destination — on EITHER installer — is a name another repository already
+// owns on the live fleet box. `_inst_atomic`, `install_atomic` and
+// `_unit_atomic` all REPLACE whatever already sits at their destination, with
+// no ownership check, so a one-word slip there cuts a live lane over, or
+// overwrites an enabled foreign unit, silently. Declared ONCE, so every
+// reader below checks the same set: `ccgpt` is the other repository's
+// launcher, `ccgpt-proxy` its shim and `ccgpt-usage` its usage-window
+// publisher — none of them ours, ever (D-3478). `ccgpt-usage@` is the PREFIX
+// of its unit template and of every instance of it (an enabled
+// `ccgpt-usage@<id>.timer` already exists there), so a destination that only
+// STARTS WITH it is refused too, not only an exact match (D-3172).
+const FOREIGN_LIVE_BOX_NAMES = new Set(['ccgpt', 'ccgpt-proxy', 'ccgpt-usage']);
+const FOREIGN_LIVE_BOX_UNIT_PREFIX = 'ccgpt-usage@';
+
+describe('neither installer ever writes a name another repository owns on the live fleet box (D-3478, D-3172)', () => {
+  it('no _inst_bins/_inst_units placement, and no deploy.sh install_atomic/_unit_atomic destination, is a foreign name', () => {
+    const sources: [string, Set<string>][] = [
+      ['_inst_bins', placedBins()],
+      ['_inst_units', placedUnits()],
+      [`${DEPLOY_WHERE}'s install_atomic`, deployPlaced('install_atomic', DEPLOY_BIN_DIRS)],
+      [`${DEPLOY_WHERE}'s _unit_atomic`, deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS)],
+    ];
+    // Vacuity, before anything else: an empty destination set would pass
+    // every assertion below for free, and say nothing about the live box.
+    for (const [label, set] of sources) {
+      expect(set.size, `${label}'s destination reader found nothing — it has gone stale, so this pin would check nothing`)
+        .toBeGreaterThan(0);
+    }
+    for (const [label, set] of sources) {
+      const foreign = [...set]
+        .filter((n) => FOREIGN_LIVE_BOX_NAMES.has(n) || n.startsWith(FOREIGN_LIVE_BOX_UNIT_PREFIX))
+        .sort();
+      expect(foreign,
+        `${label} writes ${JSON.stringify(foreign)}: on the live fleet box another repository already owns that `
+        + 'name — ccgpt is its launcher, ccgpt-proxy its shim, ccgpt-usage its publisher (D-3478), and '
+        + 'ccgpt-usage@ is its unit template and every instance of it, with an instance already enabled there '
+        + '(D-3172). `_inst_atomic`, `install_atomic` and `_unit_atomic` all replace whatever already sits at '
+        + 'their destination, so a name here would cut the live lane over, or replace an enabled foreign unit, '
+        + 'silently. Rename the destination.')
+        .toEqual([]);
+    }
+  });
+});
+
 describe('every file either installer copies out of the tree is tracked in this repository', () => {
   // Header: AND THE SOURCES. A placement whose source no commit carries dies
   // on every real tree; a fixture that stubs the file hides that (D-3165).
@@ -1399,5 +1670,118 @@ describe('every file either installer copies out of the tree is tracked in this 
 
     expect(sources, 'the deploy.sh source census does not contain `ccd/ccd`: this reader no longer reads its placement')
       .toContain('ccd/ccd');
+  });
+});
+
+describe('the id-shaped executables: TOOLCHAIN_EXECUTABLES, _inst_bins and _uninst_wrappers\' case are one list (spec §5 Pin 4)', () => {
+  it('every id-shaped name _inst_bins places is in TOOLCHAIN_EXECUTABLES, and the Set names nothing _inst_bins does not place', () => {
+    const placed = new Set(idShaped(placedBins()));
+    const toolchain = setLiteral('deploy/gen-wrappers.mjs', 'TOOLCHAIN_EXECUTABLES');
+    expect(placed.size,
+      'the _inst_bins extractor found too few id-shaped placements — it has gone stale, unless the function really lost most of them')
+      .toBeGreaterThan(BIN_FLOOR);
+    expect(toolchain.size,
+      'the TOOLCHAIN_EXECUTABLES reader found too few members — it has gone stale, unless the Set really lost most of them')
+      .toBeGreaterThan(BIN_FLOOR);
+
+    expect(minus(placed, toolchain),
+      `these are id-shaped names _inst_bins places into ${BIN_DIR}, and deploy/gen-wrappers.mjs's TOOLCHAIN_EXECUTABLES `
+      + 'does not name them: the orphan scan walks that directory, and the day one gains a marker every install reports '
+      + 'ccrc\'s own executable as an account wrapper nobody claims (D-93). Add them to the Set.')
+      .toEqual([]);
+    expect(minus(toolchain, placed),
+      'these are in TOOLCHAIN_EXECUTABLES and no `_inst_atomic` in _inst_bins places them (D-3173\'s shape): the Set '
+      + 'reserves a file ccrc does not ship, and so hides a real orphan at that path. Remove them from the Set, or '
+      + 'place the file in the same commit.')
+      .toEqual([]);
+
+    for (const anchor of ['ccd', 'ccrc']) {
+      expect(toolchain, `TOOLCHAIN_EXECUTABLES does not name \`${anchor}\`: this reader no longer reads the Set whole`)
+        .toContain(anchor);
+    }
+  });
+
+  it('_uninst_wrappers\' exclusion case names exactly the id-shaped names _inst_bins places', () => {
+    const placed = new Set(idShaped(placedBins()));
+    const skip = uninstWrappersCase();
+    expect(skip.size,
+      'the _uninst_wrappers case reader found too few names — it has gone stale, unless the case really lost most of them')
+      .toBeGreaterThan(BIN_FLOOR);
+    expect(minus(skip, new Set(idShaped(skip))),
+      'these are in _uninst_wrappers\' case and WRAPPER_ID_RE never matches them, so the test after the case skips them '
+      + 'anyway — a dead entry')
+      .toEqual([]);
+
+    expect(minus(placed, skip),
+      `these are id-shaped names _inst_bins places into ${BIN_DIR} and _uninst_wrappers' case does not skip: a copy that `
+      + 'carries a marker would be removed and reported as a WRAPPER before _uninst_tree_bins — which owns the name — '
+      + 'gets a say. Add them to the case.')
+      .toEqual([]);
+    expect(minus(skip, placed),
+      'these are in _uninst_wrappers\' case and _inst_bins places no file of that name, so a ccrc-marked wrapper of that '
+      + 'name would be kept on the box for ever. Remove them from the case, or place the file.')
+      .toEqual([]);
+  });
+
+  it('the name every generated Codex launcher execs is placed by _inst_bins behind its `!= server` gate', () => {
+    const target = codexLauncherTarget();
+    const gated = gatedBins();
+    expect(gated.size, 'the GPT-lane gate in _inst_bins places nothing this reader can see — it has gone stale')
+      .toBeGreaterThanOrEqual(1);
+    expect(minus(gated, placedBins()),
+      'the gate reader saw placements the whole-body census did not — one of the two readers is wrong')
+      .toEqual([]);
+    expect([...gated],
+      `shared/wrapper.mjs makes every Codex launcher exec $HOME/.local/bin/${target}, and _inst_bins' GPT-lane gate does `
+      + 'not place a file of that name, so every Codex lane on an installed box would exec nothing. Place it behind the '
+      + 'gate, or point the emitter at what the gate places.')
+      .toContain(target);
+  });
+
+  it('both GPT_TOOLCHAIN_ACCOUNT_IDS mirrors are one set, and it reserves every id-shaped name the GPT-lane gate places', () => {
+    const ts = setLiteral('shared/roster.ts', 'GPT_TOOLCHAIN_ACCOUNT_IDS');
+    const mjs = setLiteral('shared/roster-json.mjs', 'GPT_TOOLCHAIN_ACCOUNT_IDS');
+    expect([...ts].sort(),
+      'shared/roster.ts and shared/roster-json.mjs reserve different account ids — a roster one parser refuses, the other accepts')
+      .toEqual([...mjs].sort());
+    const gated = idShaped(gatedBins());
+    expect(gated.length,
+      'the GPT-lane gate places no id-shaped name this reader can see — so the reservation below would check nothing')
+      .toBeGreaterThanOrEqual(1);
+    expect(minus(gated, ts),
+      'these are id-shaped GPT-lane executables _inst_bins places, and neither roster mirror refuses them as an account '
+      + 'id: an account of that name passes the roster and is refused only later, by cmd_wrappers\' locks, without '
+      + 'saying why (spec §5.3). Add them to both GPT_TOOLCHAIN_ACCOUNT_IDS.')
+      .toEqual([]);
+  });
+});
+
+describe('every file `ccrc install` copies out of the tree rides the release tarball (spec §11)', () => {
+  it('every `$tree/<path>` source _inst_bins, _inst_units, _inst_files and _inst_units_darwin read lies under deploy/build-release.sh\'s PATHSPEC', () => {
+    const spec = releasePathspec();
+    expect(spec.length, 'the PATHSPEC reader found too few entries — it has gone stale').toBeGreaterThanOrEqual(4);
+    const sources = ccrcTreeSources();
+    expect(sources.size,
+      `the source extractor over ${SOURCE_FNS.join(', ')} found too few tree sources — it has gone stale, unless those functions really stopped placing most of them`)
+      .toBeGreaterThan(SOURCE_FLOOR);
+    const rides = (p: string): boolean => spec.some((e) => p === e || p.startsWith(`${e}/`));
+
+    expect([...sources].filter((p) => !rides(p)).sort(),
+      `these are \`_inst_atomic\` sources in ${SOURCE_FNS.join(', ')}, and deploy/build-release.sh's PATHSPEC `
+      + `(${spec.join(' ')}) does not carry them: \`ccrc update\` installs from the release tarball, and \`_inst_atomic\` `
+      + 'dies on a missing source after `_inst_tree` has already replaced the box\'s tree — v0.0.2\'s shape (D-3105). '
+      + 'Move the file under a PATHSPEC entry, or add its directory to PATHSPEC.')
+      .toEqual([]);
+
+    // Anchors, after the comparison. Spec §11's "a release assertion names them
+    // anyway" is met by DERIVATION from the gate that places the GPT lane's
+    // files, not by a list typed here: every source that gate reads must be
+    // one the census above read.
+    const gated = gatedSources();
+    expect(gated.size, 'the GPT-lane gate reads no source this reader can see — it has gone stale').toBeGreaterThanOrEqual(1);
+    for (const src of gated) {
+      expect(sources, `${src} is placed behind _inst_bins' GPT-lane gate and the source census does not read it`)
+        .toContain(src);
+    }
   });
 });

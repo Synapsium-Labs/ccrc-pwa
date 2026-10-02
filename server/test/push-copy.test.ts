@@ -24,6 +24,7 @@ import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/updateintentlog.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import type { FleetState } from '../src/fleetstate.js';
+import { STALL_CHECK_PREFIX, STALL_FAILED_PREFIX, STALL_ORPHANED_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX, stallFailedSubject, stallOrphanESubject } from '../src/coord/stall.js';
 
 /** Item 3, fix round 1 (F3/F4): a remote-mode fleetState double — a minimal `FleetState`, same shape as
  *  `update-inventory.test.ts`'s own local factory (that file's is not exported; L0/L1 boundaries keep this
@@ -79,7 +80,7 @@ function runnerFor(info: Map<string, Seeded>, pane = 'ready\n❯ \n'): Runner {
     if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
     if (args[0] === 'list-panes') {
       const target = args[2] ?? '';
-      const id = target.startsWith('cc-') ? target.slice('cc-'.length) : '';
+      const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';   // the exact target `=cc-<id>:` (D-3525)
       const pid = info.get(id)?.pid;
       return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
     }
@@ -1537,5 +1538,148 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     // Pushed because the cached v0.0.7 is older than the candidate — a control, not this case's own claim.
     expect(w.w.pushRelease(T + 1)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
     expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.9. Tap to see what\'s new.');
+  });
+});
+
+// The stall watch on the phone (spec 2026-09-29 §4.2, "Push shape"):
+// - a stall-check and a BOUND reply are recorded, never pushed;
+// - the watch's report is pushed under its own title;
+// - any other mail wearing those prefixes is pushed as ordinary mail, so no box-token holder can use a prefix
+//   to keep a mail off the phone.
+describe('the stall watch on the phone — pushNewMail\'s stall classes', () => {
+  /** A run whose worker is cc-a (workspace cc-a-ws) and whose coordinator session is cc-b. */
+  const stallRig = async () => {
+    const sent: PushPayload[] = [];
+    const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+    const log = new NotifyLog(path.join(await dir(), 'n.json'));
+    await log.load();
+    const w = watcher({ push, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a', 'ccrc-pwa/cc-b'] });
+    await w.tick();                  // priming: seeds the mail watermark
+    const run = w.coord!.openRun({
+      program: 'stall-push', title: 'Stall push', project: 'ccrc-pwa', wave: 1, waveOf: 2, claimedBy: 'cc-b',
+    }) as { id: number };
+    w.coord!.markDispatched(run.id, 'cc-a', 'cc-a-ws', 'ws/cc-a', false);
+    /** One mail on the run, delivered to `deliverTo` (the resolved session behind `toId`). */
+    const mail = (fromId: string, toId: string, deliverTo: string, subject: string): number => {
+      const m = w.coord!.insertMail({ fromId, fromUuid: fromId, toId, runId: run.id, kind: 'status', subject, body: 'b', artifacts: [] });
+      w.coord!.queueDelivery(m.id, deliverTo, 'envelope');
+      return m.id;
+    };
+    const check = (): number => mail('operator', 'cc-a', 'cc-a', `${STALL_CHECK_PREFIX} run ${run.id} — quiet 2h 0m, owed: first report`);
+    return { sent, log, w, run, mail, check };
+  };
+
+  it('a stall-check from operator is recorded, never pushed', async () => {
+    const { sent, log, w, check } = await stallRig();
+    check();
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(1);
+  });
+
+  it('a BOUND reply (the run\'s worker, after the first check on that run) is recorded, never pushed', async () => {
+    const { sent, log, w, mail, check } = await stallRig();
+    check();
+    mail('cc-a', 'coordinator', 'cc-b', `${STALL_REPLY_PREFIX} working — task 3 of 7, next report 14:00Z`);
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(2);
+  });
+
+  it('a re stall-check: from another sender is pushed as ordinary mail', async () => {
+    const { sent, w, mail, check } = await stallRig();
+    check();
+    const subject = `${STALL_REPLY_PREFIX} waiting — nothing to see`;
+    mail('cc-c', 'coordinator', 'cc-b', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title: '✉ status › cc-a-ws', body: subject });
+  });
+
+  it('a re stall-check: from the worker with NO check on its run is pushed as ordinary mail', async () => {
+    const { sent, w, mail } = await stallRig();
+    mail('cc-a', 'coordinator', 'cc-b', `${STALL_REPLY_PREFIX} working — unprompted`);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.title).toBe('✉ status › cc-a-ws');
+  });
+
+  it('a re stall-check: OLDER than the first check on its run is pushed as ordinary mail', async () => {
+    const { sent, log, w, mail, check } = await stallRig();
+    const early = `${STALL_REPLY_PREFIX} working — before any check`;
+    mail('cc-a', 'coordinator', 'cc-b', early);
+    check();
+    await w.tick();
+    expect(sent.map((p) => p.body)).toEqual([early]);   // the check is recorded, not pushed
+    expect(log.seq).toBe(2);
+  });
+
+  it('the watch\'s stall: report to the coordinator is pushed as ⚠ stall › <run workspace>', async () => {
+    const { sent, w, mail, run } = await stallRig();
+    const subject = `${STALL_REPORT_PREFIX} run ${run.id} — worker quiet 3h 0m, check unanswered`;
+    const id = mail('operator', 'cc-b', 'cc-b', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title: '⚠ stall › cc-a-ws', body: subject, tag: `mail-cc-b-${id}` });
+  });
+
+  it('a stall-check: prefix from a session (not operator) is pushed as ordinary mail', async () => {
+    const { sent, w, mail, run } = await stallRig();
+    mail('cc-b', 'cc-a', 'cc-a', `${STALL_CHECK_PREFIX} run ${run.id} — spoofed`);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.title).toBe('✉ status › cc-a-ws');
+  });
+
+  // Wave 2 (spec 2026-09-29 §5.2): the watch's self-wakes are its own notices, so the phone records them and
+  // never buzzes. Its reports are titled by the kind their subject names. Every watch subject below is the watch's
+  // own: a self-wake comes from Task 10's builders, and a report tail is Task 13's golden form (`stallW2ReportMail`'s
+  // `stall: run <id> — <kind>: <rest>`, whose builder is private), so a fixture can never drift from what ships.
+  const W2_STOP = Date.parse('2026-09-29T10:00:00Z');
+  const W2_ORPHANED_E = stallOrphanESubject({ bgKinds: ['subagent'], stopAt: W2_STOP });
+  const W2_FAILED = stallFailedSubject('server_error', W2_STOP);
+
+  it('an orphaned: self-wake from operator to the run\'s worker is recorded, never pushed', async () => {
+    const { sent, log, w, mail } = await stallRig();
+    mail('operator', 'cc-a', 'cc-a', W2_ORPHANED_E);
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(1);
+  });
+
+  it('a failed: self-wake from operator to a RUN-LESS session (a coordinator) is recorded, never pushed', async () => {
+    const { sent, log, w } = await stallRig();
+    const m = w.coord!.insertMail({ fromId: 'operator', fromUuid: 'operator', toId: 'cc-b', runId: null, kind: 'status',
+      subject: W2_FAILED, body: 'b', artifacts: [] });
+    w.coord!.queueDelivery(m.id, 'cc-b', 'envelope');
+    await w.tick();
+    expect(sent).toEqual([]);
+    expect(log.seq).toBe(1);
+  });
+
+  it.each([
+    [STALL_ORPHANED_PREFIX, W2_ORPHANED_E],
+    [STALL_FAILED_PREFIX, W2_FAILED],
+  ] as const)('a %s subject from a session (not operator) is pushed as ordinary mail', async (prefix, subject) => {
+    const { sent, w, mail } = await stallRig();
+    expect(subject.startsWith(prefix)).toBe(true);
+    mail('cc-b', 'cc-a', 'cc-a', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title: '✉ status › cc-a-ws', body: subject });
+  });
+
+  it.each([
+    ['stall', 'worker silent 3h 0m, stall-check unanswered', '⚠ stall › cc-a-ws'],
+    ['frozen', 'frozen: no hook event for 1h 1m', '⚠ frozen › cc-a-ws'],
+    ['dead', 'dead: orphan for 0h 12m', '⚠ dead › cc-a-ws'],
+    ['failed', 'failed: server_error twice at 2026-09-29T10:00Z', '⚠ failed › cc-a-ws'],
+  ] as const)('a %s report to the coordinator is pushed under its own title', async (_kind, tail, title) => {
+    const { sent, w, mail, run } = await stallRig();
+    const subject = `${STALL_REPORT_PREFIX} run ${run.id} — ${tail}`;
+    const id = mail('operator', 'cc-b', 'cc-b', subject);
+    await w.tick();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ title, body: subject, tag: `mail-cc-b-${id}` });
   });
 });

@@ -20,7 +20,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | — | planned |
-| 2 | 4, rules 1–3 | `$REG/<id>.landed`; a carried-in banner is not a block; the rescue wait near a five-hour reset (600 s) with its own grace; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait` | **AGENT-FIRST** (ccd) | — | — | **HELD — re-plan owed (#195)** |
+| 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | — | planned — re-planned 2026-09-30 |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin | **AGENT-FIRST** (ccd) | — | — | to plan |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
 | 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
@@ -61,6 +61,29 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   that detection (Task 1), rules the 401 `carried-in` on an account rescued onto after a rate limit (Task 2), and lets a
   transcript-only 401 chain-wait (Task 4). The plan's status block names the measured fix; the re-plan is
   prototype-first on current `main`.
+- **2026-09-28 (evening) — wave 1 re-measured again; wave 2's Tasks 1–2 superseded.** `main` moved to `023fe94d`
+  (child-reclamation wave 3, #187; update-management wave 4, #181). Wave 1 still holds: `_swap_carry_sidecars` is
+  byte-identical, 54 lines lower, and only hints, README's anchors and counts moved (restated at `023fe94d`). **Ruled
+  by the operator** in the same day's residue batch: stage 4 rule 1 (C12) ships now as its own one-task fix on
+  #195's carrier, the pane's process start (`_pane_born`), not on `$REG/<id>.landed`, and a landing whose Claude
+  Code never came up (`.spawn` rc 4) is still moved. That fix supersedes wave 2's Tasks 1–2; D-3497 stays rule 1's
+  number. Tasks 3–5 are re-planned on its reader once it is on `main`; a draft re-plan against #195 alone is not
+  used, and its safety review's two rules carry forward (the plan's status block).
+- **2026-09-30 — wave 2 re-planned on the shipped carried-in fix.** Prototype-first on `main` `c88625aa`. The held
+  plan's Tasks 3–6 are its Tasks 1–4; Tasks 1–2 are not rebuilt, because #207 shipped rule 1. The waits read the row
+  that blocked a session through a new `dated` mode of the transcript reader, cached in `.tdate` beside the carried-in
+  fix's own answer, so the 30 s `tscan` cache never hides the reset. Three reviews (rescue-verdict safety at `xhigh`,
+  tests and mutations, executability and merges) raised 23 findings: 22 were applied, and one was refused because it
+  conflicted with a safer fix, shown by measurement. An independent verification followed; 102 mutation rows, all red.
+  The three rules carried from the shelved draft's safety review hold, each pinned: a pane tmux cannot place, or lost
+  auth on either surface, takes no wait; a row written at or after its own reset keeps that reset nowhere; and a
+  stalled no-room wait moves the moment a target has room. **One default is the planner's, for the operator to
+  confirm or reverse** (the plan's open question 4): the hold in place after a reset turned ends `RESCUE_CHAIN_WAIT`
+  (30 minutes) past the reset, where the spec held it without end; measured, `main` rescues that input at once. The
+  plan's deploy step measures ccrc's own update mechanism and moves nothing by hand (operator ruling 2026-09-30).
+  §11 item 6's four `noroom_…` rows ship in its instrument (CCR-20). The spec records rule 1 as shipped and amends
+  rules 2–3 to the plan (rev 6). Before the docs PR the plan was replayed onto `main` `5b1c58a8`: every edit applies
+  and its suites are green there.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -91,7 +114,10 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
 ## Next-wave brief
 
 Wave 1 is planned, reviewed and re-measured (2026-09-28); once the docs PR has merged, dispatch it on a fresh
-workspace with its plan path and this file. Wave 2 is HELD until its re-plan against #195 lands (its status block).
+workspace with its plan path and this file. Wave 2 is re-planned (2026-09-30) and ready: dispatch it on a fresh workspace with its plan path and this file. Waves 1
+and 2 may be worked in parallel but land one at a time; whichever lands second takes the other's
+`deploy/measure-continuity.py` through the plan's gated merge block. Once wave 2 is deployed, its `noroom_…` rows are
+the count §11 item 6 returns to the operator with (CCR-20).
 Wave 1's first task re-measures the write model the planner measured (journals and agent logs appended in place,
 records written whole); if it disagrees, the rules change in the plan before any code. Wave 2 changes a verdict every rescue and strand decision runs on;
 its safety lens is `xhigh`.

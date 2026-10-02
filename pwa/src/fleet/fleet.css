@@ -3131,6 +3131,8 @@ button.proj-card-pool::before {
   overflow-wrap: anywhere;
 }
 .settings-release-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+/* Wave 8 item F2 (D-3591): the running row's words, in place of a button — quiet, not a badge or a warning. */
+.settings-release-running { font-size: var(--text-xs); color: var(--ink-tertiary); }
 /* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
    disabled ink; this only stops it filling the row. Compound on purpose: it
    wins .btn-ghost's `width: 100%` by SPECIFICITY (0,2,0 over 0,1,0), not by

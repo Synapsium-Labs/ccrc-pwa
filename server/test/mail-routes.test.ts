@@ -17,6 +17,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { unreadableField as withUnreadableField } from './ioDoubles.js';
 import { okRun } from './coordReadHelpers.js';
 import { isChildReclaimKebab } from '../src/coord/childReclaim.js';
+import { isStallKebab } from '../src/coord/stall.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -641,6 +642,13 @@ describe('the rejection table is total, in both directions', () => {
                               // maps it to a status and no client switches on it. Listed
                               // rather than merged, for the reason stated above — three
                               // vocabularies sharing one scanner stay three.
+      'auto-continue-armed',  // a `SendResult` error (`inject/send.ts`) again, the
+                              // `enter-ignored` shape: store.ts's
+                              // `AUTO_CONTINUE_ARMED_LAST_ERROR`, the `lastError` the
+                              // mail sweep's `backOff` stores and the stall watch's
+                              // `autoContinueHeldUntil` reads back (stall watch wave 1).
+                              // A send refusal passing through, not a mail refusal and
+                              // not a run refusal: nothing here maps it to a status.
       'session-gone',         // claims.ts `claimExpiry`'s `endedBy` values (Build 9 D12) —
       'hard-cap',             // stored forensics on a lapsed claim, never a refusal a
                               // caller switches on. `ClaimSummary.endedBy` is deliberately
@@ -805,8 +813,22 @@ describe('the rejection table is total, in both directions', () => {
         // vocabulary, and the reasons ride `CloseOutcome` and the feed, never
         // a `refused`/`reject.code`. Admitted through the exported guard,
         // never NOT_CODES, for the reason every union above gives.
-        || isChildReclaimKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode or child-reclaim word`).toBe(true);
+        || isChildReclaimKebab(tok)
+        // WORKER STALL WATCH, WAVE 1: the TWELFTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` above states.
+        // `coord/stall.ts` spells these words as literals:
+        //   - the watch's arms, holds and arming markers, as Record keys;
+        //   - its shadow detail head;
+        //   - the three read failures and the observation miss that its store
+        //     reads answer with (`store.ts`).
+        // None is a mail rejection or a run refusal. They are observation
+        // details, a verdict's words and registry marker names, and no
+        // `refused` or `reject.code` ever carries one. They are admitted
+        // through the exported guard, which is derived from those Records and
+        // tuples, and never through NOT_CODES, for the reason every union
+        // above gives.
+        || isStallKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word or stall-watch word`).toBe(true);
     }
   });
 });

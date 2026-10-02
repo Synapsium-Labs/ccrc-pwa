@@ -85,7 +85,7 @@ describe('taskProgress', () => {
 });
 
 describe('liveSessionStatus', () => {
-  it('treats shell (a Bash command running) as busy, not idle', () => {
+  it('treats shell (an idle main loop over a background shell) as busy, not idle', () => {
     expect(liveSessionStatus('shell')).toBe('busy');
     expect(liveSessionStatus('busy')).toBe('busy');
     expect(liveSessionStatus('idle')).toBe('idle');

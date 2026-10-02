@@ -13,7 +13,8 @@
 // same-user writer left in it.
 import {
   PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, UNIX_SECONDS_MAX, UPDATE_GATE_CAP, compareDispatchOrder, dispatchRank, isReleaseTag, isUpdatePhase,
-  type AutoMode, type DispatchRefusal, type NodeRole, type RequestKind, type StampRead, type TagFileRead, type UpdateChannel,
+  rollbackTargetRefusal,
+  type AutoMode, type DispatchRefusal, type NodeRole, type ProvenanceState, type RequestKind, type StampRead, type TagFileRead, type UpdateChannel,
   type UpdatePhase, type UpdateState,
 } from '../../../shared/api.js';
 import {
@@ -52,7 +53,7 @@ export interface DispatchRow {
   stampRead: StampRead; caps: readonly string[]; agentOps: readonly string[] | null;
   reachable: boolean; updateState: UpdateState; updateTarget: string | null; updateStartedAt: number | null;
   updateDetail: string | null; reportedUpdatedAt: number | null;
-  channel: UpdateChannel | null; desiredTag: string | null;
+  channel: UpdateChannel | null; desiredTag: string | null; provenance: ProvenanceState;
   requestedTag: string | null; requestedKind: RequestKind | null; requestedAt: number | null;
 }
 /** One live node as the dispatcher sees it: its row, the `auto` its intent resolved to, and the tags THIS node
@@ -145,11 +146,17 @@ function intendedMove(v: DispatchNodeView): Intended | null {
   return null;
 }
 
+/** Wave 8 item C: THE lookup of a move target's catalogue row — moveRefusal's and the fleet holds' — so the two can
+ *  never read different rows. A non-tag target has no row. */
+const releaseRowFor = (releases: readonly EligibilityRow[], tag: string): EligibilityRow | undefined =>
+  isReleaseTag(tag) ? releases.find((r) => r.tag === tag) : undefined;
+
 /** THE per-node predicate, shared with the routes (Task 6): the first refusal in this order, else null —
  *  halted; (update) stamp-unread, floor-unread — a floor never measured (W2 D-3213), not-newer — the target
  *  not strictly newer than the node's floor, W2's floorOf (D-3403); unknown-tag — for an update, no listed (bundleListed), unyanked
  *  releases row (spec §12's apply rule, D-3395); for a rollback, no releases row at all (yanked PERMITTED: rolling back
- *  to a yanked release is the point); refused-by-node (THIS node's refusals only, either kind,
+ *  to a yanked release is the point); and — wave 8 item C — a rollback the node is known to refuse, `rollbackTargetRefusal`
+ *  (L0); refused-by-node (THIS node's refusals only, either kind,
  *  D-3394); no-detach-cap (every move rides `--detach`, the server's too);
  *  (rollback) no-rollback-cap; (auto) no-update-gate; and for a node reached over the link only (agentOps not
  *  NULL) agent-predates-update-op — the server's row, NULL by construction, is never checked for it
@@ -159,7 +166,7 @@ export function moveRefusal(view: DispatchNodeView, move: { kind: RequestKind; t
   const row = view.row;
   if (gate.haltedBy.length > 0) return 'halted';
   const tagOk = isReleaseTag(move.target);
-  const known = tagOk ? releases.find((r) => r.tag === move.target) : undefined;
+  const known = releaseRowFor(releases, move.target);
   if (move.kind === 'update') {
     const cur = currentOf(row);
     if (cur.kind === 'unread') return 'stamp-unread';
@@ -177,8 +184,12 @@ export function moveRefusal(view: DispatchNodeView, move: { kind: RequestKind; t
     const floor = floorOf(row.highestVersion, row.currentVersion);
     if (tagOk && floor !== null && !isNewerTag(move.target, floor)) return 'not-newer';
     if (known === undefined || known.yanked || !known.bundleListed) return 'unknown-tag';
-  } else if (known === undefined) {
-    return 'unknown-tag';
+  } else {
+    // Wave 8 item C, D-3587: a rollback the node is KNOWN to refuse is refused here, before any lease or spawn, with
+    // L0's predicate (the PWA calls the same one). A non-tag target leaves `known` undefined: 'unknown-tag', as
+    // before. Before refused-by-node, as unknown-tag already was: the target's own fact comes first.
+    const rb = rollbackTargetRefusal(known, row.provenance);
+    if (rb !== null) return rb;
   }
   if (refusedByNode(view, move.target)) return 'refused-by-node';
   if (!row.caps.includes(DETACH_CAP)) return 'no-detach-cap';
@@ -212,6 +223,8 @@ const REFUSAL_SENTENCE: Record<DispatchRefusal, Sentence> = {
     `auto is on for ${r.label} but its ccrc-caps has no ${UPDATE_GATE_CAP}, so auto will not move it to ${t}; an operator request still can`,
   'no-rollback-cap': (r, t) =>
     `${r.label}'s ccrc-caps has no ${ROLLBACK_CAP} — its ccrc cannot roll back to ${t}`,
+  'no-bundle': (r, t) =>
+    `the catalogue lists no provenance bundle for ${t} and ${r.label}'s install is verified, so the one-tap is not sent — its ccrc refuses to download ${t} without --allow-unsigned, which a one-tap never passes; on that box, ccrc rollback --to ${t} flips to a kept copy if it keeps one, and otherwise ccrc update --to ${t} --downgrade --allow-unsigned installs it; or Refresh if a bundle was published since the last poll, or pick a newer release`,
   'agent-predates-update-op': (r, t) =>
     `${r.label}'s agent does not advertise the ${UPDATE_OP} op — update its agent first; ${t} waits`,
   halted: (r, t, b) =>
@@ -254,20 +267,30 @@ function moveDetail(row: DispatchRow, m: Intended): string {
  *  `waiting-for-fleet` while any live fleet-role row holds a request — whatever that row's state or
  *  reachability (D-3381), unless it is a request that row has itself refused (D-3409) — and, when its own move is AUTO, while any live fleet-role row
  *  is one auto has not converged: auto permits it and it has a desiredTag (a converged row's is NULL), whatever
- *  its state or reachability, unless the row has refused that tag (D-3402, D-3409; a request is never held by it). The
+ *  its state or reachability, unless the row has refused that tag (D-3402, D-3409; a request is never held by it), or —
+ *  wave 8 item C, D-3588 — it is a standing rollback request `rollbackTargetRefusal` already refuses: never sent, so
+ *  never a refusedByNode record, so excluded by name from both holds. The
  *  move is the first cleared node, unless a lease is held (one node at a time, fleet-wide); a cleared node after
  *  it waits its turn un-noted. */
 export function planDispatch(input: DispatchInput): DispatchPlan {
   const gate = fleetGate(input.nodes.map((v) => v.row));
   const ordered = [...input.nodes].sort((a, b) => compareDispatchOrder(a.row, b.row));
+  // Wave 8 item C: a fleet row whose standing request is a rollback the server refuses before any spawn
+  // (rollbackTargetRefusal, L0). It is never sent, so it never becomes a refusedByNode record; and while it stands it
+  // outranks that row's auto (intendedMove), so that auto cannot land either. Neither hold may wait on it — without
+  // this, every server-role move would wait for an ack. ONE test, asked by both holds.
+  const knownRefusedAsk = (v: DispatchNodeView): boolean =>
+    v.row.requestedTag !== null && v.row.requestedKind === 'rollback'
+    && rollbackTargetRefusal(releaseRowFor(input.releases, v.row.requestedTag), v.row.provenance) !== null;
   // D-3409: a fleet row whose standing request (or auto desiredTag) is one THIS node has refused on a provenance
   // verdict can never move it (refused-by-node, D-3396) — it is not an outstanding move, so it holds nothing;
   // else D-3378's non-halting refusal would hold every server move until an ack.
   const fleetAsk = ordered.find((v) =>
-    dispatchRank(v.row.role) === 0 && v.row.requestedTag !== null && !refusedByNode(v, v.row.requestedTag)) ?? null;
+    dispatchRank(v.row.role) === 0 && v.row.requestedTag !== null && !refusedByNode(v, v.row.requestedTag)
+    && !knownRefusedAsk(v)) ?? null;
   const fleetAuto = ordered.find((v) =>
     dispatchRank(v.row.role) === 0 && autoPermits(v.auto, v.row.channel) && v.row.desiredTag !== null
-    && !refusedByNode(v, v.row.desiredTag)) ?? null;
+    && !refusedByNode(v, v.row.desiredTag) && !knownRefusedAsk(v)) ?? null;
   const haltedRow = gate.haltedBy.length > 0 ? ordered.find((v) => v.row.nodeId === gate.haltedBy[0]) ?? null : null;
   const met: MetRequest[] = [];
   const refusals: PlannedRefusal[] = [];
@@ -320,10 +343,11 @@ const SKEW_DETAIL =
 export type OpAnswer =
   | { kind: 'accepted'; detail?: string }
   | { kind: 'refused'; err: string; detail: string | null }
-  | { kind: 'transport'; why: 'disconnected' | 'timeout' | 'aborted' | 'other'; message: string };
+  | { kind: 'transport'; why: 'disconnected' | 'timeout' | 'aborted' | 'other'; message: string; reached: 'never' | 'maybe' };
 
-/** What the act does to the lease it holds. `hold` writes nothing: only the inventory sweep (or a met request)
- *  settles a lease, so the row reads `pending` until then (D-3382). */
+/** What the act does to the lease it holds. `hold` settles nothing: only the inventory sweep (or a met request)
+ *  settles a lease, so the row reads `pending` until then (D-3382) — the dispatcher may NOTE the hold's words on
+ *  the lease (D-3413's arms B/D; D-3555's link-failure hold). */
 export type AnswerAction =
   | { kind: 'hold'; detail: string }
   | { kind: 'release'; to: 'idle' | 'failed'; detail: string };
@@ -336,8 +360,9 @@ const said = (text: string | null, none: string): string => (text === null ? non
  * THE ANSWER MAPPING (spec §10). `advertised` is whether the LIVE `FleetState.agentOps` names the op when the
  * answer arrives (always `true` for the server-role spawn): an agent that advertises the op and still answers
  * `bad-request` HALTS, one that does not is version skew and waits. `busy`, `not-queued` (D-3413: the bound's arm A)
- * and every transport failure release
- * the lease `idle` with the request standing (decision 7: a refusal never consumes it); `bad-tag`, `bad-kind`,
+ * and a transport failure that NEVER reached the agent release
+ * the lease `idle` with the request standing (decision 7: a refusal never consumes it); one that MAY have reached
+ * it HOLDS instead, exactly like `accepted` (D-3555) — only a report or the deadline settles it. `bad-tag`, `bad-kind`,
  * `spawn-failed` and any word this build cannot name release it `failed`, which halts until `ack`.
  * Exhaustive over `UpdateOpError`: a word added to UPDATE_OP_ERRORS and not here is a compile error at the
  * `never` below (D-3370).
@@ -351,7 +376,10 @@ export function classifyOpAnswer(a: OpAnswer, advertised: boolean): AnswerAction
     return { kind: 'hold', detail: words === 'no message' ? ACCEPTED_DETAIL : words };
   }
   if (a.kind === 'transport') {
-    const what = a.why === 'other' ? said(a.message, 'no message') : 'the node dropped mid-dispatch';
+    // D-3555: a failure after the op was handed to the link may follow a spawn, so the lease HOLDS
+    // like `accepted`; only a failure proven before the hand-off releases, and the request stands.
+    if (a.reached === 'maybe') return { kind: 'hold', detail: linkFailedHoldDetail(a.why, a.message) };
+    const what = a.why === 'other' ? said(a.message, 'no message') : 'the op never reached the fleet link';
     return { kind: 'release', to: 'idle', detail: `${a.why} — ${what}; the request stands` };
   }
   if (a.err === 'bad-request') {
@@ -426,4 +454,92 @@ export function deadlineDetail(row: Pick<DispatchRow, 'agentOps' | 'updateStarte
   if (own.phase !== 'failed') return DEADLINE_DETAIL;
   const head = `${DEADLINE_DETAIL} — the watchdog's rollback to ${own.target} failed: `;
   return (head + said(own.detail, 'no message').slice(0, Math.max(0, UPDATE_OP_DETAIL_MAX - head.length))).slice(0, UPDATE_OP_DETAIL_MAX);
+}
+
+// ── a fleet-link failure after the hand-off (D-3555, residue R1) ────────────────────────────────────────────────
+
+/** D-3555: the words a lease HELD after the fleet link failed mid-op begins with. This server writes
+ *  them (`converge.ts`, through `noteLeaseDetail`) and `linkFailedDeadlineDetail` reads them back. A node could spell
+ *  them in an arm-B/D detail; that changes only the deadline's WORDS, never its verdict. */
+export const LINK_FAILED_HOLD_PREFIX = 'link failed mid-op';
+
+export function linkFailedHoldDetail(why: 'disconnected' | 'timeout' | 'aborted' | 'other', message: string): string {
+  // Fix round 1 (review 178 O1): the three named post-send arms are measured AFTER `ws.send` returned — the op
+  // DID reach the fleet link, full stop. `other` covers a non-`Error` rejection and any error `request()` does not
+  // name, so it carries no such proof: it says only that the op MAY have reached the link.
+  const reached = why === 'other' ? 'may have reached' : 'reached';
+  const headPrefix = `${LINK_FAILED_HOLD_PREFIX} (`;
+  const tail =
+    `) — the op ${reached} the fleet link and no answer came back, so the node may have started the run; ` +
+    `the lease holds until its report or the deadline`;
+  if (why !== 'other') return `${headPrefix}${why}${tail}`.slice(0, UPDATE_OP_DETAIL_MAX);
+  // Fix round 1 (review 178, item 3): cap the MESSAGE part alone, computed from the fixed parts' own lengths, so
+  // the whole sentence always fits UPDATE_OP_DETAIL_MAX and always ENDS with the tail above — a `.slice` over the
+  // whole string (the old shape) could cut the tail off a long `other` message instead.
+  const budget = Math.max(0, UPDATE_OP_DETAIL_MAX - headPrefix.length - 'other: '.length - tail.length);
+  return `${headPrefix}other: ${said(message, 'no message').slice(0, budget)}${tail}`;
+}
+
+/** The columns `linkFailedDeadlineDetail` reads. `NodeRow` (coord/store.ts) satisfies it structurally. */
+export interface LinkHoldRow { updateDetail: string | null; updateTarget: string | null; reportedTarget: string | null }
+
+/** The failed-deadline words for a lease held after a link failure, or `null` (the caller then uses `deadlineDetail`).
+ *  Only when the row's detail begins `${LINK_FAILED_HOLD_PREFIX} (` and it names a tag. The words always say the link
+ *  failed mid-op; they say "the row's last report does not name <tag>" only when that is true (fix round 1, review
+ *  178 F1) — the row's LAST STORED report is all `reportedTarget` can prove, and the sentence must not claim more
+ *  history than that: a later writer's report can replace this run's own, and D-3214's `stamp-unmeasured` override
+ *  (`inventory.ts`) can write a PREVIOUS report back over a genuine one, so "no run of <tag> was reported" could be
+ *  false in either case. A same-tag report — which may be a previous run's (D-3405's accepted hole; no column keeps
+ *  the report as it stood at the acquire) — gets the qualified sentence instead. */
+export function linkFailedDeadlineDetail(row: LinkHoldRow): string | null {
+  if (row.updateDetail?.startsWith(`${LINK_FAILED_HOLD_PREFIX} (`) !== true || row.updateTarget === null) return null;
+  const target = row.updateTarget;
+  const text = row.reportedTarget !== target
+    ? `${DEADLINE_DETAIL} — the fleet link failed mid-op; the row's last report does not name ${target}`
+    : `${DEADLINE_DETAIL} — the fleet link failed mid-op; the row's last report names ${target}, which may be an earlier run's`;
+  return text.slice(0, UPDATE_OP_DETAIL_MAX);
+}
+
+// ── the answer follows the lease, not the node id (D-3412 amended, residue R5) ───────────────────────────────────
+
+/** R5 (review 176 F1; D-3412 amended): the LIVE row that holds the lease a dispatch run acquired — the same `label`, the
+ *  same `updateStartedAt` (the acquire's `now`, which `handOffLease` copies onto a revived heir), still busy. A revive
+ *  during the op hands the lease to the heir, so the heir is found here and the retired donor (not live) is not. `null`
+ *  unless EXACTLY one row matches — none (a report or the deadline settled it first, or R2's no-revive supersede dropped
+ *  it) or two (a state the one-lease invariant forbids) — and the caller then writes to the id it acquired, whose own
+ *  guards name what happened. `rows` are `nodes()`'s: live rows only. */
+export function leaseHolder(
+  rows: readonly Pick<DispatchRow, 'nodeId' | 'label' | 'updateState' | 'updateStartedAt'>[], label: string, startedAt: number,
+): string | null {
+  const held = rows.filter((r) => r.label === label && r.updateStartedAt === startedAt && !isSettled(r.updateState));
+  return held.length === 1 ? held[0]!.nodeId : null;
+}
+
+// ── each move's own record (wave 8 item A, D-3586) ──────────────────────────────────────────────────────────────
+
+/** What a move that TOOK A LEASE got back, as `runDispatch` returns it: converge.ts's MoveOutcome arms after the
+ *  answer satisfy this structurally (L1 never imports L3). */
+export type LeasedMoveResult =
+  | { result: 'accepted' | 'held'; detail: string }
+  | { result: 'released'; to: 'idle' | 'failed'; detail: string }
+  | { result: 'release-refused'; to: 'idle' | 'failed'; detail: string; why: string };
+/** The audit row `watch.ts` writes as a `kind: 'update'` feed event. Every move's argv says `--from pwa` whatever
+ *  asked for it (spec §10, unchanged), and settle, ack and later notes overwrite `updateDetail`, so this row is where
+ *  an auto move stays told from a requested one. The SOURCE comes from `move.source`, never from `move.detail`:
+ *  `UNVERSIONED_DETAIL` carries no source word. */
+export interface MoveFeedRecord { title: string; body: string }
+/** `null` for an idle release (busy, not-queued, version skew, a link that never reached the node): the node did not
+ *  move, the row's own updateDetail says why, and the same answer repeats every dispatch run while the condition
+ *  stands — a row per run would evict the whole feed. A refused release is recorded, and never worded "released". */
+export function moveFeedRecord(move: DispatchMove, label: string, r: LeasedMoveResult): MoveFeedRecord | null {
+  if (r.result === 'released' && r.to === 'idle') return null;
+  const title = `update ${label}: ${move.source === 'auto' ? 'auto' : 'requested'} ${move.kind} to ${move.target}`;
+  // `r.result === 'accepted' || r.result === 'held' ? … : r.result === 'released' ? … : …` does not narrow under
+  // strict mode — TS does not eliminate a discriminant member whose own literal is itself a union (`'accepted' |
+  // 'held'`) across a `||` check, so the final arm's `r.why` is unreachable to the checker even though it is the
+  // only shape left at runtime. `in` narrows on property presence instead, which is unaffected by that limitation.
+  const what = 'why' in r ? `release refused (${r.why}) — the answer was`
+    : 'to' in r ? `released ${r.to}`
+    : 'lease held';
+  return { title, body: `${move.detail} — ${what}: ${r.detail}`.slice(0, UPDATE_OP_DETAIL_MAX) };
 }

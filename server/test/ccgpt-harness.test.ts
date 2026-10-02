@@ -63,6 +63,29 @@ describe.skipIf(!PY)('the ccgpt python harness', () => {
     expect(() => runPy(f, { home, env: { HOME: '/etc' } })).toThrow(/HOME/);
   });
 
+  // Plan 2b-2 Task 3: `opts.python` borrows ANOTHER interpreter — a venv with
+  // a real litellm, for ccgpt-runtime's opt-in probe cases — under the SAME
+  // containment. Proven through a wrapper that records its own use and then
+  // execs the box's python3: the wrapper ran, and HOME is still the fixture.
+  it('runs opts.python instead of python3, still inside the fixture HOME', () => {
+    const home = mkTmp('ccgpt-harness-alt-');
+    const alt = join(home, 'alt-python');
+    writeFileSync(alt, `#!/bin/sh\necho used >> "$HOME/alt-used"\nexec '${PY}' "$@"\n`, { mode: 0o755 });
+    const f = join(home, 'probe.py');
+    writeFileSync(f, 'import os\nprint(os.environ["HOME"])\n');
+    const r = runPy(f, { home, python: alt });
+    expect(r.stdout.trim()).toBe(home);
+    expect(readFileSync(join(home, 'alt-used'), 'utf8')).toBe('used\n');
+  });
+
+  it('refuses an opts.python that is not an absolute path to an existing file', () => {
+    const home = mkTmp('ccgpt-harness-alt-refuse-');
+    const f = join(home, 'probe.py');
+    writeFileSync(f, 'print("unreached")\n');
+    expect(() => runPy(f, { home, python: 'python3' })).toThrow(/opts\.python/);
+    expect(() => runPy(f, { home, python: join(home, 'no-such-python') })).toThrow(/opts\.python/);
+  });
+
   // I3 — the second containment axis: a relative path the subject writes
   // must land in the fixture, not in the tracked repo tree.
   it('runs the child with the fixture HOME as its cwd, not the repo', () => {

@@ -94,7 +94,7 @@ describe('assembleFleet', () => {
     writeFileSync(path.join(home, '.cc-limits', 'claude-a.json'), JSON.stringify({ five: 55, seven: 70, ts: now - 60 }));
 
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-claude-a-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
@@ -415,18 +415,25 @@ describe('ctxPct on the wire (D-2011)', () => {
   });
 });
 
-// fleet.ts: a running Workflow leaves the orchestrator's pid.json `idle` while
-// it waits on subagents, so the pane's Workflow row is what keeps the card
-// `busy`. Nothing pinned that line: deleting it left every suite green.
+// fleet.ts: the pane's Workflow row promotes an `idle` card to `busy` — but
+// only where Claude Code's own live-status file did not already speak for the
+// workflow. Every build from 2.1.277 (measured through 2.1.283) writes
+// `status: isLoading || delegatedActive ? "busy" : "idle"`, and a running
+// workflow is delegated work, so an `idle` from such a file has ruled a running
+// workflow out: any row still on screen is a finished run's ~30 s linger, and
+// on 2.1.281+ a run with a failed agent reads as running (no failed count in
+// the text). The row speaks for a file with no `version` (this fixture, as it
+// always was), an older build, or no readable file at all. Nothing pinned the
+// promotion once: deleting it left every suite green.
 describe('a running Workflow reads busy over an idle pid.json', () => {
-  const assemble = async (workflowActive: boolean) => {
+  const assemble = async (workflowActive: boolean | undefined, live: Record<string, unknown> | null = {}) => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, 'claude-a-MekWarLive', 'claude-a');
     mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
-    writeFileSync(
+    if (live) writeFileSync(
       path.join(home, '.claude-a', 'sessions', '40613.json'),
-      JSON.stringify({ pid: 40613, sessionId: '1'.repeat(36), cwd: '/d', status: 'idle' }),
+      JSON.stringify({ pid: 40613, sessionId: '1'.repeat(36), cwd: '/d', status: 'idle', ...live }),
     );
     const run: Runner = async (_cmd, args) => {
       if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
@@ -446,6 +453,36 @@ describe('a running Workflow reads busy over an idle pid.json', () => {
 
   it('control: the same session without one is idle', async () => {
     expect(await assemble(false)).toBe('idle');
+  });
+
+  // The lingering-row false busy: a 2.1.283 file measured idle, and the row
+  // on screen (a finished run's, or one with a failed agent) must not undo it.
+  it('a 2.1.277+ live file\'s idle stands over the row — it already counts a running workflow', async () => {
+    expect(await assemble(true, { version: '2.1.283' })).toBe('idle');
+    expect(await assemble(true, { version: '2.1.277' })).toBe('idle');
+  });
+
+  it('the row still speaks for a build older than 2.1.277, or a version that is not one', async () => {
+    expect(await assemble(true, { version: '2.1.276' })).toBe('busy');
+    expect(await assemble(true, { version: 'not-a-version' })).toBe('busy');
+  });
+
+  it('the row still speaks when there is no live file at all (no-state reads idle)', async () => {
+    expect(await assemble(true, null)).toBe('busy');
+    expect(await assemble(false, null), 'control: no file and no row is the alive default').toBe('idle');
+  });
+
+  it('control: a 2.1.283 idle with no row is idle', async () => {
+    expect(await assemble(false, { version: '2.1.283' })).toBe('idle');
+  });
+
+  // `undefined` is a tick that did not see the statusline row, so saw no row
+  // below it either (statusline.ts): unmeasured, never a promotion. The
+  // watcher carries its last measurement across such a tick and never stores
+  // one; this pins the seam for any caller that hands one in.
+  it('an unmeasured row (`workflowActive: undefined`) promotes nothing', async () => {
+    expect(await assemble(undefined, null)).toBe('idle');
+    expect(await assemble(undefined, { version: '2.1.276' })).toBe('idle');
   });
 });
 
@@ -846,7 +883,7 @@ describe('hook state on the wire', () => {
       name: 'mekwar-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-claude-a-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
@@ -1610,5 +1647,33 @@ describe('hookAskSummary', () => {
   it('clips an approval summary to 80 characters', () => {
     const hs = mkHookState({ state: 'waiting', ask: { approval: { tool: 'Bash', summary: 'y'.repeat(120) } } });
     expect(hookAskSummary(hs)).toHaveLength(80);
+  });
+});
+
+describe('assembleFleet hands back the pane pids it read (worker stall watch wave 2, M6)', () => {
+  // `tick()` passes this map on to the stall lane as `StallTick.panePids`, so the lane never reads a pid a second
+  // time. One harness: an alive row and a dead one, `fleet.test.ts`'s first case's shape.
+  const pidsFor = async (listPanes: { code: number; stdout: string }): Promise<Map<string, number | null>> => {
+    const home = mkTmp('ccrc-fleet-pids-');
+    seedRoster(home);
+    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    seedSession(home, 'claude-dead-proj', 'claude');
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: listPanes.code, stdout: listPanes.stdout, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const pids = new Map<string, number | null>();
+    await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, pids);
+    return pids;
+  };
+
+  it('fills the map with the pid of every ALIVE row, and gives a row whose pane is not alive no entry', async () => {
+    expect([...await pidsFor({ code: 0, stdout: '40613\n' })]).toEqual([['claude-a-MekWarLive', 40613]]);
+  });
+
+  it('records null for an alive row whose pid tmux did not answer, never dropping the row', async () => {
+    expect([...await pidsFor({ code: 1, stdout: '' })]).toEqual([['claude-a-MekWarLive', null]]);
   });
 });

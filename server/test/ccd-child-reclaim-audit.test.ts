@@ -12,8 +12,8 @@ import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { eventsOf, refusalsOf } from './lifecycleHelpers.js';
 import {
-  CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, childIndex, childReclaimVerb, evalOf, hookRuns, makeChild, plantRepoPrograms,
-  plantTmux, type Child,
+  CHILD_BRANCH, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, childIndex, childReclaimVerb, evalOf, hookRuns, makeChild,
+  plantRepoPrograms, plantTmux, type Child,
 } from './childReclaimFixture.js';
 
 let h: PrHarness;
@@ -278,3 +278,86 @@ describe('reachable: the capability token and the dispatcher arm', () => {
     expect(runCcd('no-such-verb').stderr).toContain('|ws-reclaim|');
   });
 });
+
+// AN ALTERNATE ROW RESOLVED ONLY BY AN ABSENT-SUFFIX PROJECTION (D-3731, R31).
+// A session entered `<child>/server` through `$HOME/alias -> <child>`; the
+// alias is gone, so its row's spelling now resolves only as text projected
+// below a proven-absent `alias`. The audit answers it as a probe that could
+// not be placed — exit 1, `unmeasured`, no token, nothing journaled — and
+// names the row by its id alone: `.workdir` is writable by any session, and a
+// newline in it would forge a `ccd:` line on stderr. Top level, so the exact
+// titles anchor the mutation table's selectors.
+const PROJECTED = 'demo-alias-live';
+const FORGED = 'demo-newline-row';
+/** `<child>/server` holding another session's work, `$HOME/alias -> <child>` and a row through it — then the
+ *  alias removed. Returns the row's raw spelling. */
+const plantProjectedRow = (c: Child): string => {
+  fs.mkdirSync(path.join(c.wt, 'server'));
+  fs.writeFileSync(path.join(c.wt, 'server', 'live.txt'), 'another session’s uncommitted work\n');
+  const alias = path.join(h.home, 'alias');
+  fs.symlinkSync(c.wt, alias);
+  const raw = `${alias}/server`;
+  fs.writeFileSync(path.join(h.home, '.cc-sessions', `${PROJECTED}.uuid`), `u-${PROJECTED}`);
+  fs.writeFileSync(path.join(h.home, '.cc-sessions', `${PROJECTED}.workdir`), raw);
+  fs.unlinkSync(alias);
+  return raw;
+};
+/** What the audit must leave standing: the child's tree and branch, every alternate row's bytes, the modelled
+ *  pane, and the unit and pane actions (the read-only probes excluded). */
+const auditState = (c: Child): Record<string, unknown> => ({
+  status: h.git(c.wt, 'status', '--porcelain=v1', '--untracked-files=all'),
+  live: fs.readFileSync(path.join(c.wt, 'server', 'live.txt'), 'utf8'),
+  branch: h.git(c.main, 'log', '--format=%H %s', `refs/heads/${CHILD_BRANCH}`),
+  rows: fs.readdirSync(path.join(h.home, '.cc-sessions')).filter((n) => n.startsWith(PROJECTED) || n.startsWith(FORGED)).sort()
+    .map((n) => `${n}=${fs.readFileSync(path.join(h.home, '.cc-sessions', n)).toString('base64')}`),
+  tmux: fs.readdirSync(h.home).filter((n) => n.startsWith('tmux-')).sort()
+    .map((n) => `${n}=${fs.readFileSync(path.join(h.home, n), 'utf8')}`),
+  actions: h.calls().filter((l) => !/^tmux (has-session|list-clients|list-panes) /.test(l)),
+});
+
+it('absent-suffix alternate row is unmeasured and mints no token', () => {
+  const c = makeChild(h);
+  plantTmux(h, { sessions: [`cc-${PROJECTED}`] });
+  const raw = plantProjectedRow(c);
+  const before = auditState(c);
+  const r = h.run(`${AUDIT_STUBS} cmd_ws_audit --session ${CHILD_ID} --reclaim`);
+  const a = JSON.parse(r.stdout) as Record<string, unknown>;
+  expect(a['mode'], 'still the RECLAIM document').toBe('reclaim');
+  expect(a['verdict'], String(a['detail'])).toBe('unmeasured');
+  expect(a, 'no token for a row that could not be placed').not.toHaveProperty('token');
+  expect(r.code, r.stdout).toBe(1);
+  expect(String(a['detail'])).toContain(`registry row(s) ${PROJECTED} `);
+  expect(r.stderr).toContain('ws-audit --reclaim measured nothing');
+  expect(r.stderr).toContain(`registry row(s) ${PROJECTED} `);
+  for (const leak of [raw, `${h.home}/alias`, 'alias/server']) {
+    expect(String(a['detail']), `the detail never prints ${leak}`).not.toContain(leak);
+    expect(r.stderr, `stderr never prints ${leak}`).not.toContain(leak);
+  }
+  expect(eventsOf(h.home, 'reclaim'), 'a retry is journaled nowhere — no terminal refusal row').toEqual([]);
+  expect(auditState(c), 'the tree, branch, row, pane model and unit record stand').toEqual(before);
+}, 60_000);
+
+it('alternate projection diagnostics omit raw workdir and newline payload', () => {
+  const c = makeChild(h);
+  const raw = plantProjectedRow(c);
+  // A second row whose `.workdir` carries a newline and a forged `ccd:` line of its own.
+  const payload = `${h.home}/alias/server\nccd: ws-reclaim reclaimed ${CHILD_ID} — INJECTED-PAYLOAD`;
+  fs.writeFileSync(path.join(h.home, '.cc-sessions', `${FORGED}.uuid`), `u-${FORGED}`);
+  fs.writeFileSync(path.join(h.home, '.cc-sessions', `${FORGED}.workdir`), payload);
+  const before = auditState(c);
+  const r = h.run(`${AUDIT_STUBS} cmd_ws_audit --session ${CHILD_ID} --reclaim`);
+  const a = JSON.parse(r.stdout) as Record<string, unknown>;
+  const detail = String(a['detail']);
+  expect(a['verdict'], detail).toBe('unmeasured');
+  // The leaks FIRST, then the controls that the rows are named at all: a collector that printed the value
+  // instead of the id reds here, on the leak itself.
+  for (const leak of [raw, `${h.home}/alias`, 'alias/server', 'INJECTED-PAYLOAD', '\n']) {
+    expect(detail, `the detail never carries ${JSON.stringify(leak)}`).not.toContain(leak);
+  }
+  expect(r.stderr).not.toContain('INJECTED-PAYLOAD');
+  expect(r.stderr).not.toContain('alias/server');
+  expect(r.stderr.split('\n').filter((l) => l.startsWith('ccd:')), 'one ccd line, the audit’s own').toHaveLength(1);
+  expect(detail, 'the CONTROL: both rows are named, by id').toContain(PROJECTED);
+  expect(detail).toContain(FORGED);
+  expect(auditState(c)).toEqual(before);
+}, 60_000);

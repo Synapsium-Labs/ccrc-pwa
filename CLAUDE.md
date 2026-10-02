@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~3500 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~3800 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -55,10 +55,11 @@ real values: `deploy/reference-fleet.md` (gitignored).
   (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's
   existing sweep may `try-restart` `claude-session@*` units — each ONLY behind its mandatory `KillMode=process`
   preflight (which refuses the sweep when the answer is anything else); panes/tmux stay untouched, and every
-  other actor remains forbidden. Two callers reach that same `_upd_sweep` THROUGH `cmd_update`, never a copy of
-  it: `ccrc rollback`, and — UNATTENDED — a `server`/`both` Linux box's `ccrc-update-watchdog.timer`, whose
-  `ccrc rollback --from watchdog` sweeps that box's supervisors with no human in the loop (design 2026-09-20 §11:
-  R1 inherited, never re-argued). The gate-failure restore (`--from restore`) never sweeps.
+  other actor remains forbidden. `ccrc rollback` reaches that same `_upd_sweep` through `cmd_update`, or — for a
+  rollback by flip to a kept version — directly from `cmd_rollback`; never a copy of it, always behind its own
+  preflight, no actor added. So does — UNATTENDED — a `server`/`both` Linux box's `ccrc-update-watchdog.timer`,
+  whose `ccrc rollback --from watchdog` sweeps that box's supervisors with no human in the loop, by either route
+  (design 2026-09-20 §11: R1 inherited, never re-argued). The gate-failure restore (`--from restore`) never sweeps.
 - **In tests, use FIXTURE HOMEs only — never run `ccd` against the live `$HOME`.** `HOME` is the single isolation
   boundary the whole ccd suite relies on. Harness: `makeCcdHarness(prefix)` (`server/test/ccdWsHelpers.ts`);
   cleanup in `tmpHelpers.ts`. Second boundary: `ghContainedEnv()` plants a poisoned `gh` on PATH so a stray real
@@ -87,7 +88,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 - **Run suites in the FOREGROUND, timeout ≥600000ms.** Backgrounding hides a hang; the suites are load-sensitive.
 - **Known load flakes** (real suites — re-run IN ISOLATION before calling a real break): `ccd-ws-gc`,
   `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`, `ccd-bounded-reads`. CI on the quiet box is
-  the arbiter; a flake CI passes is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
+  the arbiter, but only for a file it RAN: a pull request runs its selection, so first check that the PR's `select
+  tests` summary lists the file. If it is not listed, the arbiter is the daily run's `test (server)` or a
+  `workflow_dispatch` full run (`gh workflow run ci.yml --ref <branch> -f mode=full`). A flake that CI ran and passed
+  is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
   re-stamps while it carries` (`expected ['mid-carry:orphan'] to include 'mid-carry:restarting'`) — measured
   2026-08-16 at 2/4 full runs and 1/3 under concurrent load, but **0/6 on an idle box**, so isolation alone can
   clear it and a single green isolated run is not proof it was the load. `ccd-bounded-reads`' D4 family bounds
@@ -100,9 +104,8 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   summary `test (server)`; `test (agent)`, `test (pwa)`, `build-pwa` and `probe-macos` run in full, and
   `test-macos` runs the same selection, advisory. A change under `.github/` or `server/scripts/`, to any
   `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`, `.gitattributes` or `.npmrc`, or a missing
-  map, runs the full suite instead — and **while
-  `CCRC_SELECTION` in `ci.yml` reads `shadow`, the selection is only reported and every server test still
-  runs.** **A merge to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
+  map, runs the full suite instead. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
+  `shadow`, the selection is only reported and every server test runs. **A merge to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
   **Daily**, on `main`, every leg runs in full, macOS included, and the map is rebuilt — skipped when `main`'s
   head already has a green `full-suite` job from a trusted run (a daily or manual full run on `main`, or a stable
   gate; never a pull request's). **A promotion to `stable`** needs such a green `full-suite` on the commit:
@@ -129,7 +132,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   **health gate** fails (its unit not up or not staying up, or — on a `server`/`both` box — `/health` not answering
   the staged `version`, within `CCRC_UPDATE_HEALTH_S`) restores the previous build itself and exits **4** —
   `~/.ccrc/update.json`, every run's phase report, names the restore arm — and `rollout` STOPS on 4. One update per
-  box at a time (`~/.ccrc/update.lock`); `ccrc rollback` is the typed way back. A `server`/`both` Linux box's `ccrc-update-watchdog.timer`
+  box at a time (`~/.ccrc/update.lock`); `ccrc rollback` is the typed way back. A box's tree is the symlink
+  `~/ccrc -> ~/ccrc-versions/<tag>` (a real `~/ccrc` is migrated once and kept as `~/ccrc.migrating` until a gate
+  passes), so a rollback to a kept version — and the gate-failure restore's arm 1 — is a flip with no download, and
+  `ccrc versions` lists and prunes the kept trees. A `server`/`both` Linux box's `ccrc-update-watchdog.timer`
   re-measures a self-update that died with its updater and rolls back ONLY a box that fails its health probe —
   a converged or healthy box has its stale report closed or left for the next tick, never reverted. Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
   left alone — `--force` reinstalls there too. **The first move onto the release lane is by hand, once per box (D-3106):**
@@ -283,6 +289,21 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 - **Mail delivery is idle-gated, reference-based, never awaited:** what lands in a session is a one-line nudge;
   the body lives in the durable store, fetched over `GET /api/mail/:id`. On mail rows use the DELIVERY id for
   `:id` in ack/fetch — **never the mail row's own id** (two separate autoincrement sequences).
+- **The mail gate's idle includes `shell`, and a stall watch backs it** (design
+  `docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md`). `mailTurnIdle` (`server/src/turnidle.ts`) delivers
+  on live `idle`, and on `shell` — an idle main loop over a background shell — unless `$REG/mail-gate-strict` exists.
+  A main-thread turn marker (`$REG/<id>.turn.json`, written by `ccd/session-hook.sh`, read by `server/src/turnmark.ts`)
+  changes NO delivery under the default or strict mode — the gate never reads it there. Only under `mail-gate-busy-shadow`
+  or `mail-gate-busy` does a current `working` one refuse `shell`, and on `busy` behind a current `done`/`failed` marker
+  the shadow logs and `mail-gate-busy` delivers (precedence strict > busy > busy-shadow > shell).
+  `sweepStalls` (its verdict the pure `server/src/coord/stall.ts`) mails a silent run worker a `stall-check:`, then its
+  coordinator a `stall:`, then pushes the operator; each rung is a `run_events` observation row first — a run-less
+  notice (a coordinator's, a registry row's) is keyed on its mail subject instead — so a restart never re-sends mail, and
+  it never closes, reclaims or re-dispatches. Its wave-2 arms (dead, frozen, orphaned, failed, coordinator deaf, mail
+  stuck, marker unreadable) record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
+  rung that would send mail holds. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
+  `stall-watch-w2-live`, `mail-gate-busy-shadow` and `mail-gate-busy` arm them (no `stall-watch-live`: shadow only) and,
+  like `mail-gate-strict`, have **no writer in the tree** — `single-definition.test.ts` pins that.
 - **Done-fingerprint re-measures the WORKSPACE BRANCH** (`handoffCommit === branchTip`). A worker commits on its
   workspace branch, **never a separate feature branch** (a feature branch wedges every close with `stale-tip`).
   Re-measurement reads git ref files + `.prhistory` fresh, never the claim body.

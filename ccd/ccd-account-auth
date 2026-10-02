@@ -5,9 +5,10 @@
 #
 # THE CREDENTIAL NEVER CROSSES THIS SCRIPT'S STDOUT. Two of the three methods
 # hand the credential to somebody else's file (Claude Code writes
-# `~/<suffix>/.credentials.json`; an external launcher writes its own), and the
+# `~/<suffix>/.credentials.json`; an external launcher writes its own; a codex
+# lane's own runtime writes `auth.json` into the lane's `exec.authDir`), and the
 # third captures a token line and SUBSTITUTES it on screen. The status file
-# carries a sign-in URL and, for the external launcher, a device code — the
+# carries a sign-in URL and, for an openai-login, a device code — the
 # spec says out loud that the device code is not a secret (§11).
 #
 # A SEPARATE EXECUTABLE, not a ccd verb, because it must OUTLIVE the process
@@ -26,6 +27,10 @@ SECRETS_DIR="$HOME/.cc-secrets"
 SCRATCH_ROOT="$HOME/.ccrc/auth-scratch"
 WRAPPER_DIR="$HOME/.local/bin"
 CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
+# THE ROSTER ITSELF, read for ONE fact: a lane's `exec.kind`, which the
+# projection above does not carry, and which decides openai-login's program.
+# HOME-derived, like every root here: no override.
+CCRC_ACCOUNTS_JSON="$HOME/.ccrc/accounts.json"
 # Every knob env-overridable for the harness, `ccd-graph-sweep`'s idiom
 # (CCRC_DOCTOR_GH_TIMEOUT precedent). HOME-derived roots take NO override —
 # HOME is the harness's isolation boundary, exactly as in ccd.
@@ -327,6 +332,100 @@ _auth_rostered() {   # <id> -> 0 when the roster claims it
   w="$1"
   for v in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do [[ "$w" == "$v" ]] && return 0; done
   return 1
+}
+
+# ── which program an openai-login runs ─────────────────────────────────────
+# `exec.kind`, READ FROM THE ROSTER, and never CCRC_CODEX_BACKEND. That array
+# is keyed on `telemetry` (shared/generate.mjs), and the live Codex lanes are
+# `external` WITH codex telemetry, so a telemetry test would send another
+# repository's lane down ccrc's verb. `ccd-account-health` reads this same file
+# with jq for the same reason (a fact the projection does not carry): that is
+# the precedent for this helper.
+#
+# THE BILLING HAZARD THIS FUNCTION EXISTS TO PREVENT (review round 1;
+# restored in round 2, finding N6, after the round-1 rewrite dropped it).
+# `ccrc-codex` hands EVERY argument to Claude Code and interprets none
+# (D-3479), so `<launcher> login` on a codex lane's own wrapper would open a
+# Claude Code session with "login" as its prompt, billed to the lane. An
+# empty or otherwise wrong answer here must therefore never let a codex
+# lane's wrapper reach the OLD external arm's `<launcher> login` line.
+#
+# ONE WORD PER ROSTER STATE, and no two states the caller words differently
+# share one. The empty answer this function used to give folded "no file",
+# "a dangling link", "no row" and "a row with no usable kind" into one
+# value, and the caller re-split it with a second `-e` of its own; the
+# re-split could not see the other three, so a row with `exec: {}` or
+# `exec.kind: 7` was told the roster "no longer lists" it (measured, final
+# review). The words:
+#   * `absent`: no file and no link at the path.
+#   * `dangling`: a symlink at the path whose target does not resolve.
+#   * `undecidable`: the file EXISTS but could not be read, or could not be
+#     parsed as EXACTLY ONE JSON object: empty, whitespace-only, a bare
+#     `null`, a bare `[]`, malformed input, and a multi-document file all
+#     land here (finding N1). jq missing from PATH lands here too, by the
+#     same `&&`.
+#   * `no-row`: one parseable roster object, with no account of this id.
+#   * `no-kind`: a row of this id, but none of its rows carries a STRING
+#     `exec.kind` (`exec` missing or not an object, `kind` missing or not a
+#     string).
+#   * `kind:<word>`: the first string `exec.kind` among this id's rows, the
+#     roster's own word, valid or not (`kind:codex`, `kind:external`,
+#     `kind:bogus`). The `kind:` tag is what keeps a roster that declares a
+#     kind spelled like one of the words above (`"absent"`, `"no-row"`,
+#     `"undecidable"`) from reading as that state.
+# `kind:codex` is the one the DISPATCH below reads directly. Every other
+# word reaches the WRAPPER GATE, which reads the wrapper's own content to
+# tell a codex lane from an external one, and words its refusal from the
+# word this function gave.
+#
+# MEASURED (review round 2, probes P1–P13, P16, P17): a codex lane's own
+# generated wrapper, reached through the OLD external arm, execs
+# `ccrc-codex`, which refuses for any of these roster states — and that
+# refusal is exit 1, but `_auth_openai_login`'s pty vehicle for that arm is
+# util-linux `script` without `-e` (hazard 16's own blind spot), which exits
+# 0 whatever its child did. So EVERY one of these states, not only the
+# unparseable ones, published a false `{"state":"done"}` before the wrapper
+# gate covered them too: an absent roster, a dangling-symlink roster, a
+# valid roster missing the row, `{}`, an unparseable file, and a STALE
+# ccrc-codex wrapper left behind after the roster's row for this id changed
+# to `generated` or `external`. Round 1's fix covered only the last
+# unparseable case (`undecidable`); round 2's gate (below) covers all of
+# them, because the hazard lives in the WRAPPER reaching the external arm at
+# all, not in which word this function happens to answer about the roster.
+_auth_exec_kind() {   # -> absent | dangling | undecidable | no-row | no-kind | kind:<the roster's own exec.kind> for AUTH_ID; always rc 0
+  # `-L` ONLY BEHIND A FALSE `-e`: `-e` follows a link, so a false `-e` with
+  # a true `-L` is exactly a link to nothing (or a loop). A link that
+  # resolves is read through, like any other roster.
+  if [[ ! -e "$CCRC_ACCOUNTS_JSON" ]]; then
+    if [[ -L "$CCRC_ACCOUNTS_JSON" ]]; then printf dangling; else printf absent; fi
+    return 0
+  fi
+  local out
+  if [[ -r "$CCRC_ACCOUNTS_JSON" ]]; then
+    # `-s` (SLURP): the whole file as a JSON array of its top-level values,
+    # so a truncated, whitespace-only or multi-document file is a COUNT this
+    # filter can check (`length == 1`) rather than a parse the plain `-r`
+    # form let jq silently accept or reject by its own rules. Exactly one
+    # value, and that value an object, is what "a roster" means; anything
+    # else (finding N1: empty, whitespace, `null`, `[]`, garbage, trailing
+    # garbage, or a SECOND JSON value after the first — finding R2-4/N1a,
+    # which is why this checks `length == 1` and never `length >= 1`) is
+    # `error(...)`, which fails the `&&` below and answers `undecidable`.
+    # Every other branch emits exactly one word. The kind is the FIRST
+    # string one among this id's rows, as it always was, so a roster that
+    # names the id twice answers what it answered before this split.
+    out="$(jq -rs --arg id "$AUTH_ID" \
+      'if length == 1 and (.[0] | type) == "object"
+       then [.[0] | .accounts[]? | objects | select(.id == $id)]
+            | if length == 0 then "no-row"
+              else (first(.[] | .exec | objects | .kind | strings | "kind:" + .) // "no-kind")
+              end
+       else error("not one roster object")
+       end' \
+      "$CCRC_ACCOUNTS_JSON" 2>/dev/null)" && { printf '%s' "$out"; return 0; }
+  fi
+  printf undecidable
+  return 0
 }
 
 # ── the OSC-8 strip ───────────────────────────────────────────────────────
@@ -799,6 +898,166 @@ _auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a p
   _auth_state done
 }
 _auth_openai_login() {   # `<launcher> login` — somebody else's program, under a pty
+  # A CODEX LANE'S LAUNCHER IS CCRC'S, so the argument below is not about it,
+  # and its login is a different program (spec §9.3). `ccrc-codex` hands EVERY
+  # argument to Claude Code and interprets none (D-3479), so
+  # `<launcher> login` would open a Claude Code session with "login" as its
+  # prompt, billed to the lane. Only `codex` leaves this arm.
+  # THIS IS THE DOOR spec §9.3 meant by `ccrc account auth-start`, a verb that
+  # does not exist; the pane's existing door is routed instead (D-3489).
+  local auth_kind auth_gc auth_link auth_link_rc auth_link_dir auth_link_resolved
+  # ONE READ OF THE ROSTER, AND ITS WORD IS THE WHOLE ANSWER. `_auth_exec_kind`
+  # tells no file, a dangling link, no row and no usable kind apart itself, so
+  # nothing below re-tests the path to split an answer it folded (the second
+  # `-e` this arm used to carry could split only "no file" from the rest, and
+  # a row with `exec: {}` was told the roster no longer lists it).
+  auth_kind="$(_auth_exec_kind)"
+  [[ "$auth_kind" == kind:codex ]] && { _auth_openai_login_codex; return; }
+  # THE WRAPPER GATE (review round 2 ruling; D-3530): applies to EVERY answer
+  # other than `kind:codex` — a named other kind, `absent`, `dangling`,
+  # `no-row`, `no-kind` AND `undecidable` alike — because the hazard lives in
+  # the WRAPPER reaching the OLD external arm below, not in which word
+  # `_auth_exec_kind` happens to answer about the roster. A wrapper that execs
+  # `ccrc-codex` must never reach that arm on any other answer: every one of
+  # an absent roster, a dangling-symlink roster, a valid roster missing the
+  # row, `{}`, an unparseable file, and a STALE wrapper left behind after the
+  # roster's row for this id changed to `generated` or `external`, sent a
+  # codex lane's wrapper through `ccrc-codex`'s own refusal, and `script`
+  # without `-e` published that refusal as a false `done` regardless
+  # (measured, Task 8 rounds 2 and 3).
+  #
+  # THE TWO-READ WINDOW IS CLOSED HERE, and measured (final review): the
+  # roster is read twice on the old path, once above and once by
+  # `ccrc-codex`'s own `ccrc codex start`, and a roster REPAIRED between the
+  # two used to let the second read start the lane with "login" as Claude
+  # Code's prompt. A `ccrc-codex` wrapper now never reaches that second read
+  # from this arm on any word but `kind:codex`, whatever the roster says by
+  # then; `kind:codex` itself runs `ccrc codex login`, never the wrapper.
+  # ACCEPTED: the gate cannot close a different window, where the wrapper FILE
+  # is replaced between the `grep` below and the arm's exec of it. It is narrow
+  # (measured on the fleet box: about 20 ms from the first read to the pty spawn,
+  # against 120–190 ms for a whole `ccrc wrappers` run), both actors are the same
+  # UNIX user, and the only ccrc writer replaces the external arm with bytes that
+  # are identical for that arm. Binding exec to the checked bytes would change
+  # what the external arm runs, so this wrapper-swap window remains accepted.
+  #
+  # `-F` (a literal match, not a pattern): the line is `shared/wrapper.mjs`'s
+  # own `generateWrapperBody` output byte for byte, and it contains `$`/`"`
+  # characters a regex would have to escape for no benefit. `-f` FIRST: a
+  # wrapper path that is a FIFO or a directory, not a regular file, is left
+  # to the external arm exactly as it is today — reading a FIFO here could
+  # block forever, and the external arm's own `-x` gate is the one place
+  # that already answers for a non-regular path.
+  #
+  # GREP'S EXIT STATUS IS BRANCHED, not folded (finding N5: `2>/dev/null`
+  # alone made rc 2 — cannot read the wrapper — read the same as rc 1 — no
+  # match — which is the adapter narrowing a distinction it received). rc 0
+  # is a match: this IS a `ccrc-codex` wrapper, and the roster's word decides
+  # which named refusal it gets. rc 1 is no match: a genuinely external
+  # lane's wrapper, left to the arm below, unchanged. Anything else is "could
+  # not even ask", and it is split by WHY, because each why has its own
+  # remedy (final review, D3: with grep off PATH, bash's rc 127 was told the
+  # WRAPPER could not be read): rc 2 is grep's own error, which is a file it
+  # could not read; 126 and 127 are bash failing to run grep at all; any
+  # other rc is a grep that died (a signal answers 128+n). All three are
+  # refused ONLY WHEN THE KIND ITSELF IS UNDECIDED (finding R2-1: a
+  # correctly-rostered `external`/`generated`/… lane whose launcher this
+  # function happens to be unable to read must take the external arm exactly
+  # as BASE does — that arm's own blind spot with an unreadable launcher,
+  # P18/P18b, is pre-existing and outside this ruling). When the word is one
+  # of the undecided five, the wrapper is refused by name, because the
+  # external arm could not have run such a wrapper honestly either, and this
+  # function is the one place already looking at it.
+  if [[ -f "$WRAPPER_DIR/$AUTH_ID" ]]; then
+    grep -qF 'exec "$HOME/.local/bin/ccrc-codex" "$@"' "$WRAPPER_DIR/$AUTH_ID" 2>/dev/null
+    auth_gc=$?
+    case "$auth_gc" in
+      0)
+        # EACH WORD NAMES ITS OWN CAUSE AND ITS OWN MEASURED REMEDY. Every
+        # command a remedy below names was run, in a fixture HOME, in the
+        # state it names, before its text was written (Task 8 round 3 and the
+        # final-review fix wave, whose reports hold the transcripts):
+        #   * `undecidable` → roster-unreadable.
+        #   * `absent` → roster-absent. `ccrc install` SEEDS a roster when
+        #     none exists, but a single-account default that does not know
+        #     `$AUTH_ID`, and it then regenerates `accounts.sh` FROM THAT
+        #     DEFAULT, which drops every other account from the one file that
+        #     still listed them. `ccrc wrappers` never writes `accounts.sh`,
+        #     so after the lane is declared again it is a SECOND
+        #     `ccrc install` that lets `_auth_rostered` see it (measured:
+        #     `unknown-account` after install, declare and `ccrc wrappers`;
+        #     the codex arm after install, declare and install).
+        #   * `dangling` → roster-dangling. `ccrc install` tests `-e`, which
+        #     is false through a broken link, and its `mv -f` then REPLACES
+        #     the link with the seeded default (measured: a regular file
+        #     holding the one default account, the link's target still
+        #     missing). So the remedy is the target, and install is the
+        #     warning.
+        #   * `no-row` → roster-not-codex, "no longer lists it". `ccrc
+        #     wrappers` REPORTS a ccrc-marked wrapper that no row claims as an
+        #     ORPHAN and leaves it where it is. `ccrc install` reports the same
+        #     orphan but also regenerates `accounts.sh` without the id, so a
+        #     row restored after an install needs a second one.
+        #   * `no-kind`, and a `kind:<word>` the validator does not know →
+        #     roster-kind-invalid. `ccrc wrappers` and `ccrc install` both
+        #     refuse the WHOLE roster over it and write nothing, so neither a
+        #     rewrite nor a by-hand replacement is the fix: exec.kind is.
+        #   * `kind:generated` → roster-not-codex, "`ccrc wrappers` rewrites
+        #     it": the stale file is ccrc's own and unedited, and the roster
+        #     changed (the old file is kept beside it, timestamped).
+        #   * `kind:external`, `kind:upstream` → roster-not-codex, "replace
+        #     by hand": `ccrc wrappers`, even with `--force`, never writes
+        #     that id's launcher ("upstream and external are never written"
+        #     is the verb's own summary line).
+        # `upstream`, `generated`, `external` and `codex` are the roster
+        # validator's EXEC_KINDS (`shared/roster-json.mjs`), and
+        # `ccd-account-auth.test.ts` runs every kind it declares through this
+        # gate, so a kind added there and not here reads red there, never as
+        # "invalid" on a phone.
+        case "$auth_kind" in
+          undecidable)
+            _auth_die "roster-unreadable: ~/.ccrc/accounts.json exists but could not be read as ONE JSON roster object, so $AUTH_ID (a Codex lane's own wrapper) cannot be safely routed. This can be a permissions problem (fix them by hand), a file that is not valid JSON (fix it by hand, or move it aside — 'ccrc install' never overwrites an existing accounts.json, so moving it aside is what lets the next 'ccrc install' reseed a default), or jq not on PATH (install it, or put it on PATH). Then retry." ;;
+          absent)
+            _auth_die "roster-absent: \$HOME/.ccrc/accounts.json does not exist, so $AUTH_ID (a Codex lane's own wrapper) cannot be safely routed. If you have a copy, put it back and retry. Otherwise note first which accounts \$HOME/.ccrc/accounts.sh lists, then run 'ccrc install': it seeds a single-account default roster that does not know about $AUTH_ID, and regenerates accounts.sh from that default, which drops every other account. Re-declare $AUTH_ID in the new roster as an exec.kind \"codex\" account (with its two ports and authDir), and re-declare every other account you noted, then run 'ccrc install' again — until accounts.sh lists $AUTH_ID this login refuses it as unknown-account, and 'ccrc wrappers' does not regenerate accounts.sh." ;;
+          dangling)
+            auth_link="$(readlink "$CCRC_ACCOUNTS_JSON" 2>/dev/null)"; auth_link_rc=$?
+            if (( auth_link_rc != 0 )) || [[ -z "$auth_link" ]]; then
+              _auth_die "roster-dangling-target-unmeasured: \$HOME/.ccrc/accounts.json is a dangling symlink, but readlink did not return one non-empty target, so ccrc cannot truthfully name where its roster belongs. Inspect or replace the link by hand, then retry. Do not run 'ccrc install' first: it replaces a broken link itself with a seeded single-account default that does not know about $AUTH_ID."
+            fi
+            auth_link_dir="${CCRC_ACCOUNTS_JSON%/*}"
+            if [[ "$auth_link" == /* ]]; then auth_link_resolved="$auth_link"
+            else auth_link_resolved="$auth_link_dir/$auth_link"
+            fi
+            if [[ "$auth_link" == /* ]]; then
+              _auth_die "roster-dangling: \$HOME/.ccrc/accounts.json is a symlink to $auth_link, which does not resolve, so $AUTH_ID (a Codex lane's own wrapper) cannot be safely routed. Put the roster back at $auth_link_resolved (or point the link at where it is now), then retry. Do not run 'ccrc install' first: it cannot see a roster through a broken link, and it replaces the link itself with a seeded single-account default that does not know about $AUTH_ID."
+            fi
+            _auth_die "roster-dangling: \$HOME/.ccrc/accounts.json has symlink target $auth_link, which resolves relative to $auth_link_dir as $auth_link_resolved and does not exist, so $AUTH_ID (a Codex lane's own wrapper) cannot be safely routed. Put the roster back at $auth_link_resolved (or point the link at where it is now), then retry. Do not run 'ccrc install' first: it cannot see a roster through a broken link, and it replaces the link itself with a seeded single-account default that does not know about $AUTH_ID." ;;
+          no-row)
+            _auth_die "roster-not-codex: \$HOME/.ccrc/accounts.json no longer lists $AUTH_ID, though its launcher still runs ccrc-codex. Run 'ccrc wrappers' to see it reported as an orphan — it is never removed automatically. If $AUTH_ID should still exist, restore its row (exec.kind \"codex\", with its two ports and authDir) and retry, before any 'ccrc install': install regenerates \$HOME/.ccrc/accounts.sh from the roster, and without the row that drops $AUTH_ID, which this login then refuses as unknown-account until a second install after the row is back. Otherwise remove \$HOME/.local/bin/$AUTH_ID by hand." ;;
+          kind:generated)
+            _auth_die "roster-not-codex: \$HOME/.ccrc/accounts.json declares $AUTH_ID exec.kind \"generated\", but its launcher still runs ccrc-codex — a stale file. Run 'ccrc wrappers': it rewrites a generated lane's launcher on its own. If $AUTH_ID really is meant to be a Codex lane, set exec.kind to \"codex\" instead and run 'ccrc wrappers'." ;;
+          kind:external|kind:upstream)
+            _auth_die "roster-not-codex: \$HOME/.ccrc/accounts.json declares $AUTH_ID exec.kind \"${auth_kind#kind:}\", but its launcher still runs ccrc-codex — a stale file. 'ccrc wrappers' never writes an exec.kind \"${auth_kind#kind:}\" launcher, not even with --force; replace \$HOME/.local/bin/$AUTH_ID by hand. If $AUTH_ID really is meant to be a Codex lane, set exec.kind to \"codex\" instead and run 'ccrc wrappers'." ;;
+          no-kind)
+            _auth_die "roster-kind-invalid: \$HOME/.ccrc/accounts.json lists $AUTH_ID with no usable exec.kind (none, or not a string), though its launcher runs ccrc-codex. 'ccrc wrappers' and 'ccrc install' both refuse the whole roster over it, and write nothing, until it is fixed. Set exec.kind for $AUTH_ID — to \"codex\", with its two ports and authDir, if it is a Codex lane — then retry." ;;
+          *)
+            _auth_die "roster-kind-invalid: \$HOME/.ccrc/accounts.json declares $AUTH_ID exec.kind \"${auth_kind#kind:}\", which is not a kind ccrc knows, though its launcher runs ccrc-codex. 'ccrc wrappers' and 'ccrc install' both refuse the whole roster over it, and write nothing, until it is fixed. Set exec.kind for $AUTH_ID — to \"codex\", with its two ports and authDir, if it is a Codex lane — then retry." ;;
+        esac ;;
+      1) : ;;
+      *)
+        case "$auth_kind" in
+          absent|dangling|no-row|no-kind|undecidable)
+            case "$auth_gc" in
+              2)
+                _auth_die "launcher-unreadable: $WRAPPER_DIR/$AUTH_ID exists but could not be read, so ccrc cannot tell whether it is a Codex lane's own wrapper or somebody else's launcher. Make it readable, or move it aside — 'ccrc wrappers' will not rewrite a file it cannot read either, under any flag. Then retry." ;;
+              126|127)
+                _auth_die "dependency-missing: grep could not be run (exit $auth_gc: it is not on PATH, or not executable), so ccrc cannot read $WRAPPER_DIR/$AUTH_ID to tell whether it is a Codex lane's own wrapper or somebody else's launcher. Install grep, or put it on PATH, then retry." ;;
+              *)
+                _auth_die "launcher-unmeasured: grep exited $auth_gc reading $WRAPPER_DIR/$AUTH_ID — not a match, not a miss and not a read error — so ccrc cannot tell whether it is a Codex lane's own wrapper or somebody else's launcher. Nothing was run. Retry." ;;
+            esac ;;
+        esac ;;
+    esac
+  fi
   # AN EXTERNAL LANE'S LAUNCHER IS NOT CCRC'S. `shared/wrapper.mjs` refuses to
   # generate a wrapper for `external` outright, so `$WRAPPER_DIR/$id` here is a
   # file a human wrote and this method only runs it. Its id and its launcher
@@ -826,6 +1085,72 @@ _auth_openai_login() {   # `<launcher> login` — somebody else's program, under
   # is the point: ccrc does not know where this launcher keeps its credential
   # and must not pretend to. The health probe is what measures whether the lane
   # actually works.
+  _auth_state done
+}
+_auth_openai_login_codex() {   # `ccrc codex login <id>` — ccrc's own verb over the lane's own runtime, under a pty
+  # CCRC IS THIS LANE'S LAUNCHER, so the external arm's argument is inverted
+  # here, sentence by sentence:
+  #   * the program is ccrc's. `ccrc codex login <id>` runs the ISOLATED
+  #     runtime's Authenticator with this lane's `exec.authDir` as its token
+  #     directory;
+  #   * the credential lands where ccrc NAMES it will, `auth.json` under
+  #     `exec.authDir`, although ccrc still never opens it;
+  #   * so there IS a credential assertion (existence only), and it belongs to
+  #     the verb. `ccrc codex login` exits 0 only when the runtime exited 0 AND
+  #     `auth.json` exists. The check is made once, in the file that reads the
+  #     roster row. Asserting it again here would make this helper a second
+  #     reader of `exec.authDir`.
+  # What does not change: the pty (the device flow prints to a terminal, and
+  # the pane is one), the pump that publishes the URL and the device code, and
+  # `pane-unsupported-here`.
+  #
+  # THE VERB'S STATUS COMES FROM A FILE, NEVER FROM `wait`. The pty vehicle is
+  # `script(1)`, and util-linux `script` without `-e` exits 0 whatever its
+  # child did: `server/test/script-shim-platform.test.ts` pins that, and on
+  # util-linux 2.39.3 a child's `exit 7` answers rc 0 (rc 7 only under `-e`).
+  # `_auth_script_argv`'s argv is byte-pinned without `-e`, and BSD `script`
+  # has a different option set, so the flag is not the remedy. The verb runs
+  # under a one-line `sh` INSIDE the pty instead. That shell writes the verb's
+  # own status to `$AUTH_RUN/verb.rc` and exits with it. From there:
+  #   * the file is removed BEFORE the spawn. A run that a cancel cut short
+  #     leaves one behind (`_auth_cancelled` exits past this function), and a
+  #     stale 0 would stamp `done` over a vehicle that ran nothing;
+  #   * NO FILE is its own failure: the verb never reported, so the lane is
+  #     not known to be signed in;
+  #   * `rc` still decides `expired` (124, or the pump's backstop), because an
+  #     expiry is the vehicle's fact, not the verb's.
+  # `setup-token` answers the same blind spot with a printed-token guard. This
+  # verb prints no line that its runtime could not print too, so its own
+  # status is the fact to key on.
+  #
+  # `$HOME/.local/bin/ccrc` is ABSOLUTE, like `ccd account-pane`'s own exec of
+  # this file. The pane runs under the tmux server's environment, and a user
+  # unit's PATH carries no `~/.local/bin`: `deploy/systemd/ccrc-models.service`
+  # says so beside its own PATH line, measured on the fleet host.
+  local rc vrc='' rcf='' argv=() ccrc="$HOME/.local/bin/ccrc"
+  [[ -x "$ccrc" ]] \
+    || _auth_die "ccrc-absent: $ccrc does not exist or is not executable, and a codex lane signs in only through it"
+  command -v "$CCRC_AUTH_SCRIPT" >/dev/null 2>&1 \
+    || _auth_die "pane-unsupported-here: $CCRC_AUTH_SCRIPT is not on this box, so a pty-bound login cannot run"
+  _auth_open_pipes || _auth_die 'cannot create the auth pipes'
+  rcf="$AUTH_RUN/verb.rc"
+  rm -f -- "$rcf" 2>/dev/null || _auth_die "cannot clear an earlier run's $rcf"
+  _auth_state starting
+  mapfile -t argv < <(_auth_script_argv \
+    sh -c 'f=$1; shift; "$@"; r=$?; echo "$r" > "$f"; exit "$r"' sh "$rcf" "$ccrc" codex login "$AUTH_ID")
+  _auth_spawn_pty_child "${argv[@]}"
+  local child=$AUTH_CHILD
+  exec 8<"$AUTH_RUN/out"
+  _auth_pump
+  wait "$child"; rc=$?
+  _auth_close_pipes
+  [[ -r "$rcf" ]] && IFS= read -r vrc <"$rcf"
+  rm -f -- "$rcf" 2>/dev/null
+  if (( rc == 124 || AUTH_EXPIRED )); then _auth_state expired; exit 1; fi
+  [[ -n "$vrc" ]] \
+    || _auth_die "ccrc codex login $AUTH_ID reported no exit status ($CCRC_AUTH_SCRIPT exited $rc), so the lane is not known to be signed in"
+  [[ "$vrc" == 0 ]] \
+    || _auth_die "ccrc codex login $AUTH_ID exited $vrc (its reason is the last line in this pane)"
   _auth_state done
 }
 _auth_user_code() {   # <clean line> — the launcher's DEVICE CODE, published on purpose

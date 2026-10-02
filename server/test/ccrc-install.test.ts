@@ -43,24 +43,61 @@
 // WRITES: `~/.ccrc/accounts.json`, `~/.ccrc/accounts.sh`, `~/.ccrc/ccrc.env`
 // today, and most of a box by Task 8. Nothing here may ever run against a real
 // $HOME.
-import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+//
+// ── LOAD-TIME INSTALLS: THIS FILE RUNS `ccrc install` WHEN IT LOADS ─────────
+// Five describes run a whole `runInstall` in a describe-level IIFE, and Vitest
+// calls every describe body while COLLECTING the file, before any `-t` filter
+// applies (a skipped describe's body included):
+//   - `installed` — 'ccrc install: the executables and files it installs'
+//   - `units` — 'ccrc install: the units, and the one this box must not be
+//     given', a `describeLinux` block whose body still runs on macOS
+//   - `box` — 'ccrc install: the launchd job, and what macOS deliberately
+//     does not get', a `describeDarwin` block whose body STILL RUNS on Linux
+//   - `converged` — 'ccrc install: linger, the account dirs, the hooks and
+//     the wrappers'
+//   - `skillBox` — 'ccrc install: all three skills reach every rostered
+//     account'
+// So a mutation of any containment line these runs depend on reaches a real
+// `ccrc install` the moment the file is imported, whatever `-t` says. That
+// covers `ccrcEnv`'s plants, `runInstall`'s check, and codexLaneFixture.ts'
+// fronts and checks. Only the guard under test then stands between that
+// install and the box's live user manager. Never RUN this file with such a
+// line mutated unless every runner's spawn target is first redirected to a
+// recorder. Measure containment pins through `ccrc-uninstall.test.ts`'s
+// harness-level cases instead, which build envs and call checks and never a
+// verb (Task 11 review fix round 3).
+import { describe, it, expect, afterEach } from 'vitest';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
   copyFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
-  chmodSync, readdirSync, rmSync, symlinkSync, utimesSync, lstatSync, readlinkSync,
+  chmodSync, readdirSync, rmSync, symlinkSync, utimesSync, lstatSync, readlinkSync, realpathSync,
+  appendFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
-import { describeLinux, describeDarwin, itLinux, itDarwin } from './platformFixtures.js';
+import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm } from './platformFixtures.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
-import { TREE_STUBS, installFixtureTree } from './installTreeFixture.js';
+import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest } from './installTreeFixture.js';
+import {
+  plantFakeRuntime, codexRoster, plantSystemd, killLaneProcesses, spawnListener, adoptPlantedSystemd,
+  assertSpineFrontContained, spineSystemctlArms, spineSystemdRun, SPINE_CONTAINMENT_PROBE, managerCalls,
+  spineRunCalls, isolationManagerStubs, assertIsolationWallFirst, strayManagerCalls, ccrcFunction, ccrcLine,
+  recordingStub, lockStub, freeLanes, portAccepts, laneAnswer, plantLaneAuth, plantLaneConfig, fakeLitellmSource,
+  laneUnits, registerLaneCleanup, GPT_LANE_BINS, type StubRc, type LanePorts,
+} from './codexLaneFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
+
+/** The GPT lane's four as `_inst_bins`' closing line names them — FLANKED, so
+ *  a longer sibling containing one never satisfies it — derived from the one
+ *  test-side list rather than typed again (final review F4). */
+const LANE_BINS_IN_LINE = `(?<![\\w-])${GPT_LANE_BINS.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(', ')}(?![\\w-])`;
 
 /** `command -v <name>` under THIS process's real PATH. */
 function realPath(name: string): string {
@@ -100,6 +137,12 @@ const treeFile = (home: string, rel: string): string => join(treeRoot(home), rel
 /** `<home>/ccrc` — where `_inst_tree` PLACES the tree, and the layout the PATH
  *  shim, `_dr_pkg_candidates` and both deploy lanes already assume. */
 const placed = (home: string, ...rel: string[]): string => join(home, 'ccrc', ...rel);
+/** The version directory `~/ccrc` points at (W6 Task 2), read from the link
+ *  itself — since W6 `_inst_tree` places into `~/ccrc-versions/<name>/` and
+ *  flips the link, so `placed()` reads through the link and this names the
+ *  directory the verb really wrote (npm's cwd, rsync's destination). */
+const versionDir = (home: string, ...rel: string[]): string =>
+  join(readlinkSync(join(home, 'ccrc')), ...rel);
 
 /** ── THE DOCTOR HALF OF THE FIXTURE (Task 8) ────────────────────────────
  *  `cmd_install` now ENDS with `cmd_doctor`, and its exit code is doctor's, so
@@ -248,7 +291,10 @@ const FIXTURE_BINS = ['gh', 'curl', 'journalctl', 'systemctl', 'loginctl', 'npm'
   // `flock` is on this list for tmux's reason: ccd refuses BY NAME without it,
   // and macOS does not ship it — so a fixture box that lacks it is testing the
   // refusal rather than the install.
-  'launchctl', 'plutil', 'flock'];
+  'launchctl', 'plutil', 'flock',
+  // Plan 2b-2 Task 10: the transient-unit launcher's FRONT (every run), and
+  // the pair a test's `plantSystemd` left, moved aside as the delegate.
+  'systemd-run', '.codex-systemctl', '.codex-systemd-run'];
 
 /** A box with a shipped tree on it and nothing else — no `~/.ccrc`, no
  *  `~/.local/bin` beyond the stubs the runner plants. Doctor-healthy, because
@@ -279,6 +325,27 @@ interface Result { code: number; stdout: string; stderr: string }
  *  `CCRC_*` variable this verb learns to read goes in the delete list below,
  *  or a maintainer with it exported in their shell gets a different install
  *  than the fixture asked for. */
+/** Plan 2b-2 Task 10: the venv python the `python3` stub writes into a CODEX
+ *  runtime generation when no template is planted. It is m-spine H5's shape
+ *  kept on purpose, as the positive-marker control: it answers pip honestly
+ *  (the `--report` file exists), drains a program on stdin, and exits 0 with
+ *  NOTHING on stdout for everything else. A builder that accepted rc 0 alone
+ *  would take it for a passing runtime; `ccgpt-runtime` must refuse it at
+ *  `probe`. */
+const VACUOUS_RUNTIME_PYTHON = [
+  '#!/bin/sh',
+  'printf \'%s\\n\' "$*" >> "$HOME/vacuous-python-calls"',
+  'case " $* " in *" - "*) cat >/dev/null ;; esac',
+  'if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then',
+  '  prev=""',
+  '  for a in "$@"; do',
+  '    [ "$prev" = "--report" ] && printf \'{"version": "1", "install": []}\\n\' > "$a"',
+  '    prev="$a"',
+  '  done',
+  'fi',
+  'exit 0',
+].join('\n') + '\n';
+
 function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   const env = ghContainedEnv(home, { ...process.env, HOME: home });
   // Task 11's `graphify` doctor check makes `command -v graphify` a real
@@ -415,6 +482,15 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     'exit 0',
   ].join('\n') + '\n');
 
+  // ── Plan 2b-2 Task 10: the transient-unit launcher, contained ──────────
+  // `_inst_codex_tiers` stops and starts tiers through `_svc_run_supervised`,
+  // which calls `systemd-run`, and until this task nothing here planted one
+  // (m-platform §3.2). The FRONT records and refuses (97) unless a test
+  // planted `plantSystemd`, which is adopted as its delegate FIRST, before the
+  // `systemctl` below overwrites the planted one (see codexLaneFixture.ts).
+  adoptPlantedSystemd(home);
+  plant('systemd-run', spineSystemdRun());
+
   plant('systemctl', [
     '#!/bin/sh',
     'have=',
@@ -425,6 +501,10 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     'printf \'%s\\t%s\\n\' "$*" "$have" >> "$HOME/systemctl-calls"',
     '[ "$1" = "--user" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     'shift',
+    // Plan 2b-2 Task 10: the codex tiers' verbs, BEFORE this stub's own arms —
+    // its `is-active` answers `active` for every unit, which would read every
+    // rostered codex lane as a FOREIGN tier (m-platform §3.3).
+    ...spineSystemctlArms(),
     'case "$1" in',
     '  daemon-reload) exit 0 ;;',
     '  enable)',
@@ -460,6 +540,25 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // that stayed up); `fixture-mainpid-drift` makes the SECOND sample differ,
     // which is exactly how a crash loop shows itself.
     '  show)',
+    // W6 Task 5 — spec §11's GC reads `show -p ExecStart <unit>`, answered in
+    // systemd's REAL struct form (measured on a user unit, 2026-09-23):
+    // `path=` is `/usr/bin/env` and the tree path is inside `argv[]`, so a
+    // reader of `path=` protects nothing. The argv is the shipped unit's
+    // ExecStart with %h expanded (deploy/ccrc.service:19,
+    // deploy/ccrc-agent.service:7), `fixture-execstart-<unit>`'s one line
+    // when a test plants it; `fixture-execstart-raw` is printed VERBATIM
+    // (the unparseable case). Never a bare path.
+    '    if [ "$2" = "-p" ] && [ "$3" = "ExecStart" ] && [ -n "$4" ]; then',
+    '      if [ -f "$HOME/fixture-execstart-raw" ]; then cat "$HOME/fixture-execstart-raw"; exit 0; fi',
+    '      case "$4" in',
+    '        ccrc.service) a="/usr/bin/env node $HOME/ccrc/server/dist/server/src/index.js" ;;',
+    '        ccrc-agent.service) a="/usr/bin/env node $HOME/ccrc/agent/dist/agent/src/index.js" ;;',
+    '        *) echo "fixture systemctl: unexpected argv: $*" >&2; exit 90 ;;',
+    '      esac',
+    '      if [ -f "$HOME/fixture-execstart-$4" ]; then IFS= read -r a < "$HOME/fixture-execstart-$4"; fi',
+    '      echo "ExecStart={ path=/usr/bin/env ; argv[]=$a ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"',
+    '      exit 0',
+    '    fi',
     '    [ "$2" = "-p" ] && [ "$3" = "MainPID" ] && [ "$4" = "--value" ] \\',
     '      || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     '    p=4242',
@@ -533,10 +632,30 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // stay hermetic and fast. Any other invocation is a loud refusal — nothing
   // here calls python3 any other way today, and a future one deserves to be
   // seen rather than silently mishandled.
+  // Plan 2b-2 Task 10: a CODEX runtime generation (`ccgpt-runtime build`'s
+  // `python3 -m venv <gen>`, positional exactly as this stub has always
+  // matched, m-runtime-probe HR11) gets either the TEMPLATE a test planted
+  // (`fixture-runtime-template` names its directory — copied whole, minus
+  // any stamp or pip report, so the builder writes its own) or the VACUOUS
+  // python above. Nothing else changes: graphify's venv takes the arm below.
+  writeFileSync(join(home, 'fixture-vacuous-python'), VACUOUS_RUNTIME_PYTHON, { mode: 0o755 });
   plant('python3', [
     '#!/bin/sh',
     'printf \'%s\\n\' "$*" >> "$HOME/python3-argv"',
     'if [ "$1" = "-m" ] && [ "$2" = "venv" ] && [ -n "$3" ]; then',
+    '  case "$3" in',
+    '    "$HOME"/.ccrc/runtime/codex/*)',
+    '      mkdir -p "$3" || exit 1',
+    '      tpl=""',
+    '      [ -f "$HOME/fixture-runtime-template" ] && IFS= read -r tpl < "$HOME/fixture-runtime-template"',
+    '      if [ -n "$tpl" ] && [ -d "$tpl" ]; then',
+    '        cp -R "$tpl/." "$3/" || exit 1',
+    '        rm -f "$3/.ccrc-runtime.json" "$3/.ccrc-pip-report.json"',
+    '      else',
+    '        mkdir -p "$3/bin" && cp "$HOME/fixture-vacuous-python" "$3/bin/python" && chmod 755 "$3/bin/python" || exit 1',
+    '      fi',
+    '      exit 0 ;;',
+    '  esac',
     '  bin="$3/bin"; mkdir -p "$bin" || exit 1',
     '  printf \'#!/bin/sh\\necho "$@" >> "$HOME/venv-python-calls"\\nexit 0\\n\' > "$bin/python"',
     '  chmod 755 "$bin/python"',
@@ -544,9 +663,16 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     '  chmod 755 "$bin/graphify"',
     '  exit 0',
     'fi',
+    // W6 Task 2: the Darwin flip (`_plat_ln_swap`) is `python3 -c` running
+    // `os.replace` — a local rename, no index, no network — and the Darwin
+    // preflight proves python3 runs with `python3 -c 'import os'`. Those two
+    // programs, and ONLY those, go to the REAL interpreter (or every macOS
+    // leg dies at its preflight); any other `-c` falls through to the
+    // refusal below, which is this stub's contract.
+    ...python3ProgramArm(PYTHON3),
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   // `verify-service.sh`'s own knobs, at the values its header says a test uses:
   // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
   // makes one call per install. Zeroed here rather than per test, for the
@@ -626,11 +752,37 @@ function runInstall(home: string, args: string[] = ['install'],
   for (const [name, body] of Object.entries(opts.stubs ?? {})) {
     writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
   }
+  // Fix round 2 (N1/N5): on the FINAL merged env — after extraEnv, the
+  // doctor-stub replant and opts.stubs have all landed, immediately before
+  // the spawn. `opts.omit`'s own `systemctl`/`systemd-run` entries (if any)
+  // are the ONLY legitimate "this call reaches no manager at all" case in
+  // this file (`ccrc install: a box with no systemd`, which also strips
+  // both names from every real PATH directory via `pathWithout`) — every
+  // other call keeps the full strict check.
+  const expectAbsent = (opts.omit ?? []).filter((n) => n === 'systemctl' || n === 'systemd-run');
+  assertSpineFrontContained(env, home, { expectAbsent });
   const ccrc = opts.from ?? ccrcIn(treeRoot(home));
   const r = opts.umask === undefined
     ? spawnSync(BASH, [ccrc, ...args], { env, encoding: 'utf8' })
     : spawnSync(BASH, ['-c', `umask ${opts.umask}; exec ${BASH} "$0" "$@"`,
       ccrc, ...args], { env, encoding: 'utf8' });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** The tool `_plat_sha256` runs on this platform (the platform layer's two arms). */
+const SHA256_TOOL = process.platform === 'darwin' ? 'shasum' : 'sha256sum';
+
+/** `ccrc version` through the launcher an install placed at
+ *  `~/.local/bin/ccrc` — which runs the SHIPPED ccrc, so it is a runner like
+ *  `runInstall` and gets the same containment (Task 11 review fix round 3,
+ *  C1). Its two callers used to spawn it with `{ ...process.env, HOME }`, so
+ *  both manager names resolved to the box's real binaries, and only
+ *  `cmd_version` reading nothing but files kept that harmless. `ccrcEnv`
+ *  fronts them, and the check refuses the env if it did not. */
+function runLauncherVersion(home: string): Result {
+  const env = ccrcEnv(home);
+  assertSpineFrontContained(env, home);
+  const r = spawnSync(BASH, [join(home, '.local', 'bin', 'ccrc'), 'version'], { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -690,9 +842,25 @@ function pathWithout(home: string, missing: string): string {
   // as never-up, and the enable step's stay-up gate fails the install — a
   // second, hidden absence inside a fixture whose whole subject is ONE
   // absence (measured on the macos leg's second run).
+  //
+  // `ln` and `readlink` join it in W6 Task 2, the two tools the versioned tree
+  // adds to the install path: `_plat_ln_swap` stages the `~/ccrc` flip with
+  // `ln -sfn`, and `_ver_layout` reads the link back with plain `readlink`.
+  // A PATH without them is a box that places a whole tree and then cannot
+  // point at it — a second absence inside a fixture about one.
+  //
+  // `sha256sum` (`shasum` on macOS — `_plat_sha256`'s two arms) joins it in
+  // review 179 fix round 1 (M2), for the same trap in a fourth shape: it is
+  // now an INSTALL-path tool. Every placing run measures the tree's digest
+  // through it (`_ver_digest_r1`, D-3465), and a PATH without it makes that
+  // measurement impossible — so `pathWithout(home, 'git')` would have been a
+  // fixture about TWO absences, whose placing run keeps nothing with a WARN.
+  // The absence that IS the subject has its own case (`pathWithout(home,
+  // SHA256_TOOL)`): the digest is uncomputable, so the version is not kept.
   for (const b of ['mkdir', 'cp', 'mv', 'rm', 'cat', 'chmod', 'cmp', 'date',
     'node', 'git', 'npm', 'rsync', 'bash', 'sleep', 'jq', 'mktemp', 'basename',
     'diff', 'tmux', 'python3', 'flock', 'timeout', 'stat', 'grep', 'awk', 'realpath',
+    'ln', 'readlink', SHA256_TOOL,
     // macOS: the service manager, its plist linter, and `uname`. The last one
     // is not decoration — `ccd`'s platform detection prefers bash's own
     // `$OSTYPE` precisely so a PATH without `uname` cannot silently answer
@@ -937,8 +1105,8 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
       'ci --omit=dev --no-audit --no-fund',
     ]);
     expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([
-      placed(home, 'server'),
-      placed(home, 'agent'),
+      versionDir(home, 'server'),
+      versionDir(home, 'agent'),
     ]);
     expect(existsSync(placed(home, 'agent', 'node_modules'))).toBe(true);
     expect(r.stdout).toMatch(/^install: tree: agent runtime deps in place$/m);
@@ -951,7 +1119,7 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     const home = freshBox('ccrc-install-npm-both-');
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
-    expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([placed(home, 'server')]);
+    expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([versionDir(home, 'server')]);
     expect(r.stdout).not.toMatch(/agent runtime deps/);
   });
 
@@ -970,7 +1138,9 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     expect(existsSync(placed(home, 'server', 'dist', 'server', 'src', 'index.js'))).toBe(true);
     expect(read(placed(home, 'server', 'dist-pwa', 'index.html')))
       .toBe(TREE_STUBS['server/dist-pwa/index.html']);
-    expect(r.stdout).toMatch(/^install: tree: placed at \$HOME\/ccrc$/m);
+    // W6 Task 2: placed into the version directory and flipped to; a
+    // checkout nothing measures is `unstamped-<12 hex>`.
+    expect(r.stdout).toMatch(/^install: tree: placed unstamped-[0-9a-f]{12} at \$HOME\/ccrc-versions\/unstamped-[0-9a-f]{12}$/m);
   });
 
   it('leaves node_modules, .git, env files and the mail token in the checkout', () => {
@@ -1010,9 +1180,9 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
     expect(read(join(home, 'npm-argv')).trim()).toBe('ci --omit=dev --no-audit --no-fund');
-    // In `$HOME/ccrc/server`, never in the checkout: a box whose service boots
-    // out of `~/ccrc` needs the deps THERE.
-    expect(read(join(home, 'npm-cwd')).trim()).toBe(placed(home, 'server'));
+    // In the placed version's `server/`, never in the checkout: a box whose
+    // service boots out of `~/ccrc` needs the deps in the tree it points at.
+    expect(read(join(home, 'npm-cwd')).trim()).toBe(versionDir(home, 'server'));
     expect(existsSync(placed(home, 'server', 'node_modules'))).toBe(true);
     expect(r.stdout).toMatch(/^install: tree: server runtime deps in place$/m);
   });
@@ -1042,33 +1212,50 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
       .toContain('npm ERR! code ENOTFOUND registry.npmjs.org');
     // …and the step's refusal still stands beside it, naming the consequence.
     expect(r.stderr).toMatch(
-      /^ccrc: npm ci in \$HOME\/ccrc\/server failed — the service cannot start without runtime deps$/m);
+      /^ccrc: npm ci in \$HOME\/ccrc-versions\/unstamped-[0-9a-f]{12}\/server failed — the service cannot start without runtime deps$/m);
     expect(r.stdout, 'npm\'s chatter landed in the install transcript')
       .not.toContain('npm notice');
     expect(r.stdout).not.toMatch(/^install: tree: server runtime deps in place$/m);
   });
 
-  it('does not copy the tree onto itself when it IS $HOME/ccrc', () => {
-    // The box a deploy already touched, and the box a second `ccrc install`
-    // runs on: `ccrc` is at `~/ccrc/ccd/ccrc`, so source and destination are
-    // one directory. `rsync -a --delete X X/` is not a no-op — it is a copy of
-    // the tree INTO ITSELF (`~/ccrc/ccrc/…`) whose `--delete` pass then runs
-    // over the live tree. The guard is compared on RESOLVED paths, and the
-    // assertion is that rsync was never invoked at all.
+  it('run FROM a real $HOME/ccrc, it MIGRATES rather than copying onto itself: the tree is placed as a version, $HOME/ccrc becomes the link, and the old directory goes only once the doctor gate has passed (W6 Task 3)', () => {
+    // The box a deploy already touched, and the box a second pre-W6 `ccrc
+    // install` ran on: `ccrc` is at `~/ccrc/ccd/ccrc`, a real directory. It
+    // is no longer the destination — the tree goes to ~/ccrc-versions/<name>,
+    // so there is nothing to copy onto itself — and the directory is moved
+    // aside, not deleted, until this install's own gate (its doctor, with
+    // the update lock free) has passed.
     const home = mkTmp('ccrc-install-selfcopy-');
     const root = installFixtureTree(home, 'ccrc');
-    // The only fixture in this file that does not come from `freshBox` (its
-    // tree has to BE `~/ccrc`), so it asks for the doctor half by hand — the
-    // run below asserts exit 0, which is now doctor's verdict as well.
+    // The only fixture in this describe that does not come from `freshBox`
+    // (its tree has to BE `~/ccrc`), so it asks for the doctor half by hand.
     healthyDoctorBox(home);
     const r = runInstall(home, ['install'], {}, { from: ccrcIn(root) });
     expect(r.code, r.stderr).toBe(0);
-    expect(existsSync(join(home, 'rsync-argv')), 'rsync was invoked on the tree itself').toBe(false);
-    expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
-    expect(existsSync(placed(home, 'ccrc')), 'the tree was copied inside itself').toBe(false);
-    // …and the step still finishes its other half: the deps are installed
-    // whether or not the tree had to move.
-    expect(read(join(home, 'npm-cwd')).trim()).toBe(placed(home, 'server'));
+    // No git, no build.json and no box stamp: the source names itself
+    // `unstamped-<12 hex>` (D-3425), read back off the link.
+    const target = readlinkSync(placed(home));
+    const name = path.basename(target);
+    expect(name).toMatch(/^unstamped-[0-9a-f]{12}$/);
+    expect(target).toBe(join(home, 'ccrc-versions', name));
+    // ONE rsync, from the directory INTO the version — never onto itself.
+    const argv = read(join(home, 'rsync-argv')).trim().split('\n');
+    expect(argv).toHaveLength(1);
+    expect(argv[0]!.endsWith(` ${join(home, 'ccrc-versions', name)}/`), argv[0]).toBe(true);
+    expect(existsSync(join(home, 'ccrc-versions', name, 'ccrc')), 'the tree was copied inside itself').toBe(false);
+    const lines = r.stdout.split('\n');
+    expect(lines).toContain(`install: tree: migrating — $HOME/ccrc is a directory; ${name} is complete at $HOME/ccrc-versions/${name}`);
+    expect(lines).toContain(`install: tree: $HOME/ccrc -> $HOME/ccrc-versions/${name} (the pre-versioned tree is kept at $HOME/ccrc.migrating until a health gate passes)`);
+    // The old tree went AFTER the doctor had measured the box — the removal
+    // line follows doctor's summary — and the marker went with it.
+    const summary = r.stdout.lastIndexOf('\nsummary: ');
+    const removed = r.stdout.indexOf('install: migration: $HOME/ccrc.migrating removed — ccrc doctor passed; a plain install is its own gate');
+    expect(summary, 'doctor printed no summary').toBeGreaterThan(-1);
+    expect(removed, r.stdout).toBeGreaterThan(summary);
+    expect(existsSync(join(home, 'ccrc.migrating'))).toBe(false);
+    expect(existsSync(dotCcrc(home, 'migrating-to'))).toBe(false);
+    // …and the deps were installed in the VERSION, whose tree now runs.
+    expect(read(join(home, 'npm-cwd')).trim()).toBe(join(home, 'ccrc-versions', name, 'server'));
   });
 
   it('refuses BY NAME when rsync is not on this box', () => {
@@ -1082,6 +1269,7 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: rsync is required to place the tree — sudo apt install rsync$/m);
     expect(existsSync(placed(home)), 'a half-made $HOME/ccrc was left behind').toBe(false);
+    expect(existsSync(join(home, 'ccrc-versions')), 'the versions root was made before rsync was known to be there').toBe(false);
   });
 
   it('replaces a file whose size and mtime are unchanged but whose content is not', () => {
@@ -1094,6 +1282,10 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     // removed the old one, and the old index.html kept pointing at it — a
     // black screen on any load the service worker did not answer.
     const home = freshBox('ccrc-install-same-size-');
+    // W6 Task 2: one commit, so both runs name the same version and the
+    // second rsyncs IN PLACE — the only placement where a file of the same
+    // size and mtime is already at the destination for the quick check to skip.
+    gitInit(treeRoot(home));
     expect(runInstall(home).code).toBe(0);
     const rel = 'server/dist-pwa/index.html';
     const before = read(placed(home, ...rel.split('/')));
@@ -1105,6 +1297,7 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     utimesSync(placed(home, ...rel.split('/')), 0, 0);
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: tree: reinstalled untagged-[0-9a-f]{12} in place at \$HOME\/ccrc-versions\/untagged-[0-9a-f]{12} \(the version \$HOME\/ccrc points at; same name, same release\)$/m);
     expect(read(placed(home, ...rel.split('/')))).toBe(after);
     expect(read(join(home, 'rsync-argv'))).toContain('--checksum');
   });
@@ -1116,6 +1309,8 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     // `~/ccrc/server/node_modules` — on the live box, that is a server with no
     // runtime deps for however long the reinstall takes.
     const home = freshBox('ccrc-install-deps-survive-');
+    // W6 Task 2: one commit, so the second run is the same version, in place.
+    gitInit(treeRoot(home));
     expect(runInstall(home).code).toBe(0);
     writeFileSync(placed(home, 'server', 'node_modules', 'marker'), 'installed by run 1\n');
     const r = runInstall(home);
@@ -1146,20 +1341,64 @@ describe('ccrc install: the fixture tree', () => {
     expect(read(join(REPO, 'deploy', 'accounts.default.json'))).toBe(DEFAULT_SEED);
   });
 
-  it('the fixture tree carries the two GPT-lane executables that ship today', () => {
-    // The two `.py` files only. `ccgpt` and `ccgpt-runtime` are not in the
-    // repository until Plan 2b-2, and the fixture no longer stubs them: a stub
-    // is what let a placement of them pass here while a real tree would die.
+  it('the fixture tree carries the four GPT-lane executables the repository ships, and no `ccgpt`', () => {
+    // Plan 2b-2 wrote `ccgpt-runtime` and the launcher `ccrc-codex` unplaced,
+    // because a file may land before its install line but never after it.
+    // Both then joined `_inst_bins` and this fixture in one commit, so all
+    // four are COPIED from the repository like every other executable. They
+    // are never stubbed: a stub once let a placement pass here while a real
+    // tree would die (D-3165). The pin this case replaced held both OUT of the
+    // fixture tree (and `ccgpt-runtime` in the repository) until that commit,
+    // and flipping it was that commit's intended red.
+    //
+    // And NOT `ccgpt` (D-3478): on a live fleet box `$HOME/.local/bin/ccgpt`
+    // is another repository's launcher, so the repository ships no file of that
+    // name for any installer to place over it.
     const home = mkTmp('ccrc-tree-ccgpt-');
     const root = installFixtureTree(home);
-    for (const rel of ['ccd/ccgpt-proxy.py', 'ccd/ccgpt-usage.py']) {
+    for (const rel of GPT_LANE_BINS.map((n) => `ccd/${n}`)) {
       const p = join(root, rel);
       expect(existsSync(p), `${rel} missing from the fixture tree`).toBe(true);
-      // 0o111 — both are placed 755 by `_inst_bins`, and copied at the repo's mode.
+      expect(readFileSync(p), `${rel} is not the repository's bytes`).toEqual(readFileSync(join(REPO, rel)));
+      // 0o111 — all four are placed 755 by `_inst_bins`, and copied at the repo's mode.
       expect(statSync(p).mode & 0o111, `${rel} is not executable`).toBeGreaterThan(0);
     }
-    for (const rel of ['ccd/ccgpt', 'ccd/ccgpt-runtime']) {
-      expect(existsSync(join(root, rel)), `${rel} is in the fixture tree, and the repository has no such file`).toBe(false);
+    expect(existsSync(join(REPO, 'ccd', 'ccgpt')),
+      'the repository ships ccd/ccgpt — an installer could place it over another repository\'s live launcher').toBe(false);
+    expect(existsSync(join(root, 'ccd', 'ccgpt')), 'the fixture tree carries a ccd/ccgpt').toBe(false);
+  });
+
+  it('GPT_LANE_BINS is what _inst_bins\' GPT-lane gate places, in the order its closing line names them (final review F4, a text pin)', () => {
+    // The ONE test-side list the install and uninstall suites share. The
+    // product's two spellings of it, both inside the `!= server` gate: the
+    // `_inst_atomic` calls, and the `lane_bins=` literal the closing line
+    // carries. A fifth executable, a rename or a new order in either reds
+    // here, before any case written from the constant can drift.
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const fn = /^_inst_bins\(\) \{[^\n]*\n[\s\S]*?\n\}\n/m.exec(src)?.[0] ?? '';
+    const gate = /^ {2}if \[ "\$INST_ROLE" != server \]; then\n([\s\S]*?)\n {2}fi\n/m.exec(fn)?.[1] ?? '';
+    expect(gate, 'no `!= server` gate in _inst_bins this pin can read — re-anchor it').not.toBe('');
+    const placed = [...gate.matchAll(/^\s*_inst_atomic "\$tree\/ccd\/([^"]+)"\s+"\$bin\/\1"\s+755$/gm)].map((m) => m[1]);
+    expect(placed).toEqual([...GPT_LANE_BINS]);
+    const said = /^\s*lane_bins=", ([^"]+)" lane_note=""$/m.exec(gate)?.[1];
+    expect(said?.split(', ')).toEqual([...GPT_LANE_BINS]);
+  });
+
+  it('the whole-spine cases the final review measured near the 20 s default carry an explicit bound (final review F4, a text pin)', () => {
+    // Each one's closing line, found from its own title: dropping a bound
+    // reds here rather than as a load flake a week later.
+    const src = read(fileURLToPath(import.meta.url));
+    for (const title of [
+      'writes ~/.ccrc/installed LAST, naming the stamped sha',
+      'floor: written by the LAST step from the stamped tag',
+      'ccrc version says when the install was placed unsigned',
+      'a codex lane and a passing runtime: built, stamped',
+      'a runtime whose probe FAILS degrades the install',
+    ]) {
+      const at = src.indexOf(`  it('${title}`);
+      expect(at, `no case titled ${title}`).toBeGreaterThan(-1);
+      const close = /^ {2}\}(?:, ([0-9_]+))?\);$/m.exec(src.slice(at));
+      expect(close?.[1], `'${title}' runs under the default bound again`).toBe('60_000');
     }
   });
 });
@@ -1739,30 +1978,32 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
-  it('places the two GPT-lane executables that exist today on PATH, 755 (Plan 2b-1 Task 2) — both platform arms', () => {
-    // Unlike the three darwin-gated cases above, these are NOT platform-gated:
-    // the two `.py` files are NOT timer-only tools reserved to the systemd
-    // arm. `ccgpt-proxy.py` is the engine `ccgpt` execs, and `ccgpt-usage.py`
-    // is placed here so an operator can run it by hand (no installer places
-    // its timer yet). They ARE role-gated, `!= server` (spec §11, final
-    // review F-2): this install is role `both`, the fleet describe pins
-    // `fleet`, and the `--role server` case pins their absence.
+  it('places the four GPT-lane executables on PATH, 755 — both platform arms', () => {
+    // Unlike the three darwin-gated cases above, none of these is a timer-only
+    // tool reserved to the systemd arm. `ccrc-codex` is the launcher every
+    // generated Codex wrapper execs and `ccgpt-runtime` builds the runtime its
+    // tiers run on — commands, on both arms, because the lifecycle's `nohup`
+    // fallback makes a box with no user manager a supported one.
+    // `ccgpt-proxy.py` is the shim a tier runs, and `ccgpt-usage.py` is placed
+    // so an operator can run it by hand (no installer places its timer yet).
+    // They ARE role-gated, `!= server` (spec §11): this install is role `both`,
+    // the fleet describe pins `fleet`, and the `--role server` case pins their
+    // absence.
     //
-    // Fix round 1, Finding 1: `ccgpt` and `ccgpt-runtime` are NOT placed by
-    // `_inst_bins` yet — they don't exist in the tree (`git ls-files ccd/`
-    // has no such names) until Plan 2b-2 writes them, and `_inst_atomic`
-    // dies on a missing source by design. This test covers only the two
-    // names that exist; Plan 2b-2 extends it to four in the same commit
-    // that adds the real files.
+    // Fix round 1, Finding 1: each name joined `_inst_bins` no earlier than
+    // the commit that wrote its source, because `_inst_atomic` dies on a
+    // missing source by design. So this case covered only the two `.py`
+    // files until Plan 2b-2 placed `ccgpt-runtime` and `ccrc-codex`, and it
+    // was extended to four in the commit that placed them.
     const { home } = installed;
-    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+    for (const name of GPT_LANE_BINS) {
       const bin = join(home, '.local', 'bin', name);
       expect(readFileSync(bin), `${name} was not placed`).toEqual(readFileSync(placed(home, 'ccd', name)));
       expect(mode(bin), `${name} mode`).toBe(0o755);
     }
   });
 
-  itLinux('the DARWIN arm of _inst_bins, forced on Linux (OSTYPE=darwin23): the two .py on both and fleet, neither on server', () => {
+  itLinux('the DARWIN arm of _inst_bins, forced on Linux (OSTYPE=darwin23): the four GPT-lane executables on both and fleet, none on server', () => {
     // Final review F-8 (DAR-1): the two-arm placement and the Darwin closing
     // line were pinned only by `itDarwin`/`process.platform` branches, and no
     // CI leg runs those. `ccd/ccrc` takes its arm from `$OSTYPE` first
@@ -1785,7 +2026,7 @@ describe('ccrc install: the executables and files it installs', () => {
       const r = runInstall(home, ['install', '--role', role], { OSTYPE: 'darwin23' });
       expect(r.stdout, `--role ${role}: the Darwin arm was not taken\n${r.stderr}`)
         .toMatch(/^install: units: .* in \$HOME\/Library\/LaunchAgents \(launchd\)$/m);
-      const lane = role === 'server' ? [] : ['ccgpt-proxy.py', 'ccgpt-usage.py'];
+      const lane: string[] = role === 'server' ? [] : [...GPT_LANE_BINS];
       const bins = readdirSync(join(home, '.local', 'bin'))
         .filter((b) => !FIXTURE_BINS.includes(b) && b !== 'graphify').sort();
       expect(bins, `--role ${role}: what the Darwin arm of _inst_bins placed`)
@@ -1799,9 +2040,9 @@ describe('ccrc install: the executables and files it installs', () => {
       expect(line, `--role ${role}: no \`install: bins:\` line`).toBeDefined();
       expect(line!, `--role ${role}: not the Darwin closing line`).toContain('macOS has none');
       if (role === 'server') {
-        expect(line!, 'the server-role Darwin closing line claims a GPT-lane executable').not.toMatch(/ccgpt/);
+        expect(line!, 'the server-role Darwin closing line claims a GPT-lane executable').not.toMatch(/ccgpt|ccrc-codex/);
       } else {
-        expect(line!).toMatch(/(?<![\w-])ccgpt-proxy\.py, ccgpt-usage\.py(?![\w-])/);
+        expect(line!).toMatch(new RegExp(LANE_BINS_IN_LINE));
       }
     }
   });
@@ -1849,10 +2090,9 @@ describe('ccrc install: the executables and files it installs', () => {
     // and still be a launcher pointing at a tree this verb never placed. Run
     // it against the fixture HOME and let it answer.
     const { home } = installed;
-    const r = spawnSync(BASH, [join(home, '.local', 'bin', 'ccrc'), 'version'],
-      { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    const r = runLauncherVersion(home);
     expect(r.stderr).toBe('');
-    expect(r.status, 'the launcher did not reach the shipped ccrc').toBe(0);
+    expect(r.code, 'the launcher did not reach the shipped ccrc').toBe(0);
     expect(r.stdout).toMatch(/^ccrc /);
   });
 
@@ -2025,8 +2265,14 @@ describe('ccrc install: the order is stated in one place', () => {
     expect(body, 'ccd/ccrc has no cmd_install').toBeTruthy();
     // No step is called outside the array: a bare call runs with no
     // install-step marker, so a death in it would be misclassified.
+    // W6 Task 3: the two doctor tails — the fleet arm's and the verb's last
+    // line — are the ONLY bare `_inst_*` calls left. `_inst_doctor_tail` is
+    // not a step: it runs after `_inst_installed` removed the marker, where
+    // a death leaves the completed-install record (D-3114's reading), so no
+    // marker has anything to name. Named exactly, so a real step called bare
+    // still reds this line.
     expect(body![1]!.split('\n').map((l) => l.trim()).filter((l) => /^_inst_[a-z_]+$/.test(l)),
-      'cmd_install calls a step outside CCRC_INST_SPINE').toEqual([]);
+      'cmd_install calls a step outside CCRC_INST_SPINE').toEqual(['_inst_doctor_tail', '_inst_doctor_tail']);
     expect(body![1]).toMatch(/^\s*for inst_fn in "\$\{CCRC_INST_SPINE\[@\]\}"; do _inst_step "\$inst_fn"; done$/m);
     expect(steps).toEqual([
       '_inst_banner',
@@ -2059,7 +2305,27 @@ describe('ccrc install: the order is stated in one place', () => {
       // walks them, and the wrapper converger runs before doctor judges what it
       // wrote.
       '_inst_units',
+      // Plan 2b-2 Task 10 (D-3485). The Codex lanes' LiteLLM runtime,
+      // BEFORE `_inst_enable`, for two measured reasons. First, `_inst_enable`
+      // arms `ccrc-models.timer`, whose `ccrc models refresh --all` re-renders
+      // a codex lane's config and stops/starts its tiers through the functions
+      // that resolve `ccgpt-runtime python` — so the generation they resolve
+      // must already be this run's. Second, `_inst_codex_tiers` below measures
+      // staleness AGAINST it: a build placed after the restart step restarts
+      // tiers onto the OLD runtime (m-spine H4). After `_inst_bins`, which
+      // places the builder. A failed build DEGRADES (`codex-runtime`).
+      '_inst_codex_runtime',
       '_inst_enable',
+      // Plan 2b-2 Task 10 (D-3485). Restart-after-update as a BARE
+      // step rather than code inside `_inst_enable`: it is visible in this
+      // list, and `_inst_enable` returns early on Darwin, where the nohup
+      // arm's tiers must still be restarted. Not `_upd_sweep` — the one
+      // sanctioned toucher of `claude-session@*` (spec §7.4). After
+      // `_inst_bins` (the shim's code) and `_inst_codex_runtime` (the
+      // generation): the two things a tier's staleness is measured against.
+      // Only running, verified-own, stale tiers, by stop+start; a failure
+      // DEGRADES (`codex-tiers`).
+      '_inst_codex_tiers',
       '_inst_linger',
       '_inst_dirs',
       // graphify Task 2. After `_inst_dirs` and before `_inst_hooks`, per the
@@ -2122,17 +2388,1273 @@ describe('ccrc install: the order is stated in one place', () => {
     ]);
   });
 
-  it('ends with cmd_doctor, and nothing runs after it', () => {
-    // THE VERB'S EXIT CODE IS DOCTOR'S, and that is only true while doctor is
-    // the LAST command in the function: a line added after it — a summary, a
-    // tidy-up, one more echo — silently replaces the verdict with that line's
-    // own exit status, and every "a broken box exits 1" assertion in this file
-    // would go green against an install that reported success on a failing box.
+  it('ends with _inst_doctor_tail, whose exit code is cmd_doctor\'s, and nothing runs after it (W6 Task 3)', () => {
+    // THE VERB'S EXIT CODE IS DOCTOR'S, and that is only true while the tail
+    // is the LAST command in the function AND the tail hands doctor's rc back
+    // untouched: a line added after either — a summary, a tidy-up, one more
+    // echo — silently replaces the verdict with that line's own status, and
+    // every "a broken box exits 1" assertion in this file would go green
+    // against an install that reported success on a failing box. The tail
+    // runs doctor FIRST and captures its rc, because what it does next (the
+    // migration's gate) must never become the verdict.
     const src = read(join(REPO, 'ccd', 'ccrc'));
     const body = /cmd_install\(\) \{([\s\S]*?)\n\}/.exec(src);
     const lines = body![1]!.split('\n').map((l) => l.trim())
       .filter((l) => l !== '' && !l.startsWith('#'));
-    expect(lines[lines.length - 1]).toBe('cmd_doctor');
+    expect(lines[lines.length - 1]).toBe('_inst_doctor_tail');
+    const tail = /^_inst_doctor_tail\(\) \{\n([\s\S]*?)\n\}/m.exec(src);
+    expect(tail, 'ccd/ccrc has no _inst_doctor_tail').not.toBeNull();
+    const t = tail![1]!.split('\n').map((l) => l.trim())
+      .filter((l) => l !== '' && !l.startsWith('#'));
+    expect(t[1], 'the tail does something before it runs doctor').toBe('cmd_doctor || drc=$?');
+    expect(t[t.length - 1]).toBe('return "$drc"');
+  });
+});
+
+// ── W6 Task 2: the versioned tree ─────────────────────────────────────────
+// `_inst_tree` places into `~/ccrc-versions/<name>/` and flips `~/ccrc` (a
+// symlink since W6) onto it with one rename, after the deps. The subjects,
+// in order: the layout reader and the namer, measured by SOURCING the ccrc
+// under test (its BASH_SOURCE guard keeps the verb table from dispatching);
+// then the verb itself on every guard arm — a fresh box, a new name while
+// another version runs, a re-run from the running version, a run of another
+// placed version's own ccrc, an incomplete one, a failing npm, the refusals;
+// then the kept stamp and record, and the Darwin preflight.
+describe('ccrc install: the versioned tree (W6 Task 2)', () => {
+  const REAL_MV = realPath('mv');
+  const vroot = (home: string, ...rel: string[]): string => join(home, 'ccrc-versions', ...rel);
+
+  /** Every file under `dir`, relative path -> bytes (base64), links as their
+   *  value: the "byte-unchanged" measurement a running version is held to. */
+  const treeBytes = (dir: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    const walk = (d: string, prefix: string): void => {
+      for (const e of readdirSync(d).sort()) {
+        const p = join(d, e);
+        const rel = prefix === '' ? e : `${prefix}/${e}`;
+        const st = lstatSync(p);
+        if (st.isSymbolicLink()) out[rel] = `link:${readlinkSync(p)}`;
+        else if (st.isDirectory()) walk(p, rel);
+        else out[rel] = readFileSync(p).toString('base64');
+      }
+    };
+    walk(dir, '');
+    return out;
+  };
+
+  /** Runs `snippet` in a bash that has sourced `ccrc`, HOME the fixture's,
+   *  `gh` contained, every CCRC_* input deleted (`ccrcEnv`'s rule), and the
+   *  tools a placement would reach — npm, rsync, curl, systemctl, launchctl —
+   *  POISONED at the head of PATH: a snippet that got further than it should
+   *  (the red run of the crashed-arm case, say) must fail loudly, never fetch
+   *  or copy for real. */
+  const sourced = (home: string, ccrc: string, snippet: string): Result => {
+    const poison = join(home, 'sourced-poison');
+    mkdirSync(poison, { recursive: true });
+    for (const t of ['npm', 'rsync', 'curl', 'systemctl', 'launchctl']) {
+      writeFileSync(join(poison, t), `#!/bin/sh\necho "sourced harness: ${t} must not run" >&2\nexit 97\n`, { mode: 0o755 });
+    }
+    const env = ghContainedEnv(home, { ...process.env, HOME: home });
+    env['PATH'] = `${poison}:${env['PATH'] ?? ''}`;
+    for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+    const r = spawnSync(BASH, ['-c', `source "$1" || exit 99\n${snippet}`, 'sourced', ccrc],
+      { env, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const layout = (home: string): string =>
+    sourced(home, join(REPO, 'ccd', 'ccrc'),
+      '_ver_layout; printf \'%s|%s|%s\\n\' "$VER_LAYOUT" "$VER_CURRENT" "$VER_WHY"').stdout.trim();
+  const nameOf = (home: string, src: string): string =>
+    sourced(home, join(REPO, 'ccd', 'ccrc'), `_inst_version_name "$(cd '${src}' && pwd -P)"`).stdout.trim();
+
+  /** A stamp in `build-release.sh`'s shape, written into a source tree. */
+  const shipStamp = (root: string, sha: string, version?: string): void => {
+    writeFileSync(join(root, 'build.json'), `${JSON.stringify({
+      sha, ref: 'release', builtAt: '2026-09-23T00:00:00Z', dirty: false,
+      ...(version === undefined ? {} : { version }),
+    })}\n`);
+  };
+
+  /** `mv`, recorded by nothing and executed for real — except at the two
+   *  kept-copy renames, where a knob file makes it SIGKILL the ccrc that ran
+   *  it (the stamp copy) or refuse (the record copy). `_plat_mv_notdir` runs
+   *  in ccrc's own shell, so `$PPID` is the run itself. */
+  const mvKnobs = [
+    '#!/bin/sh',
+    'for last in "$@"; do :; done',
+    'case "$last" in',
+    '  */.ccrc-stamp.json) [ -f "$HOME/fixture-kill-at-stamp-copy" ] && { kill -KILL "$PPID"; exit 1; } ;;',
+    '  */.ccrc-digest) [ -f "$HOME/fixture-kill-at-digest-copy" ] && { kill -KILL "$PPID"; exit 1; }',
+    '                  [ -f "$HOME/fixture-fail-at-digest-copy" ] && { echo "fixture mv: refusing $last" >&2; exit 1; } ;;',
+    '  */.ccrc-installed) [ -f "$HOME/fixture-fail-at-record-copy" ] && { echo "fixture mv: refusing $last" >&2; exit 1; } ;;',
+    'esac',
+    `exec ${REAL_MV} "$@"`,
+  ].join('\n') + '\n';
+  /** `ln`, recorded (argv, one line per call) and executed for real: the
+   *  call-site half of spec §18's "the flip is a rename" — `_inst_tree` must
+   *  stage `~/ccrc.new` and rename it, never `ln -sfn` onto `~/ccrc` itself. */
+  const lnRecorder = `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/ln-argv"\nexec ${realPath('ln')} "$@"\n`;
+
+  it('_ver_layout: seven words, one per shape of ~/ccrc — and a WHY built from its own words, never the link\'s', () => {
+    const home = mkTmp('ccrc-ver-layout-');
+    expect(layout(home)).toBe('absent||');
+    mkdirSync(join(home, 'ccrc.migrating'));
+    expect(layout(home)).toBe('crashed||');
+    rmSync(join(home, 'ccrc.migrating'), { recursive: true });
+    mkdirSync(join(home, 'ccrc'));
+    expect(layout(home)).toBe('directory||');
+    mkdirSync(join(home, 'ccrc.migrating'));
+    expect(layout(home)).toMatch(/^unreadable\|\|a directory beside a \$HOME\/ccrc\.migrating — two trees/);
+    rmSync(join(home, 'ccrc'), { recursive: true });
+    rmSync(join(home, 'ccrc.migrating'), { recursive: true });
+    installVersionedTree(home, 'v1.2.3');
+    expect(layout(home)).toBe('linked|v1.2.3|');
+    mkdirSync(join(home, 'ccrc.migrating'));
+    expect(layout(home)).toBe('migrated|v1.2.3|');
+    rmSync(join(home, 'ccrc.migrating'), { recursive: true });
+    // FOREIGN: every link this ccrc would never have written — a RELATIVE
+    // target, a path outside the versions root, a dangling version name, a
+    // directory under the root whose name is not a version name, a version
+    // name that is itself a link.
+    const foreign = /^foreign\|\|a link whose target is not a version directory under \$HOME\/ccrc-versions$/;
+    const relink = (target: string): void => {
+      rmSync(join(home, 'ccrc'));
+      symlinkSync(target, join(home, 'ccrc'));
+    };
+    relink(join('ccrc-versions', 'v1.2.3'));
+    expect(layout(home)).toMatch(foreign);
+    mkdirSync(join(home, 'elsewhere-9f3c'));
+    relink(join(home, 'elsewhere-9f3c'));
+    expect(layout(home)).toMatch(foreign);
+    expect(layout(home), 'the link\'s bytes reached VER_WHY').not.toContain('elsewhere-9f3c');
+    relink(vroot(home, 'v9.9.9'));
+    expect(layout(home)).toMatch(foreign);
+    mkdirSync(vroot(home, 'not-a-version'));
+    relink(vroot(home, 'not-a-version'));
+    expect(layout(home)).toMatch(foreign);
+    // …and a version NAME under the root that is itself a link, to a real
+    // directory elsewhere: `-d` follows it and the name and the prefix both
+    // match, so only the `[ -L "$val" ]` clause sees it (mutation M8b).
+    mkdirSync(join(home, 'elsewhere-2'));
+    symlinkSync(join(home, 'elsewhere-2'), vroot(home, 'v1.2.4'));
+    relink(vroot(home, 'v1.2.4'));
+    expect(layout(home)).toMatch(foreign);
+    // UNREADABLE: a regular file at the name; a .migrating that is not a dir.
+    rmSync(join(home, 'ccrc'));
+    writeFileSync(join(home, 'ccrc'), 'not a tree\n');
+    expect(layout(home)).toBe('unreadable||neither a directory nor a link');
+    rmSync(join(home, 'ccrc'));
+    writeFileSync(join(home, 'ccrc.migrating'), 'not a tree\n');
+    expect(layout(home)).toBe('unreadable||absent beside a $HOME/ccrc.migrating that is not a directory');
+  });
+
+  it('_inst_version_name: a placed version names itself; git beats a stray build.json; build.json names an artifact; a deploy.sh tree is named by the box stamp; nothing measured is unstamped, fresh each time', () => {
+    const home = mkTmp('ccrc-ver-name-');
+    // 1. a placed version — and a dot-named sibling under the root is NOT one
+    installVersionedTree(home, 'v1.2.3', { link: false });
+    expect(nameOf(home, vroot(home, 'v1.2.3'))).toBe('v1.2.3');
+    const incoming = vroot(home, '.v4.5.6.incoming.1');
+    mkdirSync(incoming, { recursive: true });
+    shipStamp(incoming, 'd'.repeat(40), 'v4.5.6');
+    expect(nameOf(home, incoming)).toBe('v4.5.6');
+    // 2. git: untagged, then a non-release tag (still untagged), then a release tag;
+    //    a stray build.json beside the repository never outvotes it
+    const repo = join(home, 'repo');
+    installFixtureTree(home, 'repo');
+    const sha = gitInit(repo);
+    shipStamp(repo, 'e'.repeat(40), 'v9.9.9');
+    expect(nameOf(home, repo)).toBe(`untagged-${sha.slice(0, 12)}`);
+    const tag = (t: string): void => {
+      const r = spawnSync('git', ['-C', repo, 'tag', t],
+        { env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`fixture git tag failed: ${r.stderr}`);
+    };
+    tag('release-7');
+    expect(nameOf(home, repo)).toBe(`untagged-${sha.slice(0, 12)}`);
+    tag('v2.3.4');
+    expect(nameOf(home, repo)).toBe('v2.3.4');
+    // 3. an artifact's build.json: its version; no version -> untagged-<sha12>;
+    //    a sha that is not hex names nothing and falls through
+    const art = join(home, 'artifact');
+    mkdirSync(art);
+    shipStamp(art, 'f'.repeat(40), 'v3.0.1');
+    expect(nameOf(home, art)).toBe('v3.0.1');
+    shipStamp(art, '0123456789abcdef0123456789abcdef01234567');
+    expect(nameOf(home, art)).toBe('untagged-0123456789ab');
+    shipStamp(art, 'not-a-sha');
+    expect(nameOf(home, art)).toMatch(/^unstamped-[0-9a-f]{12}$/);
+    // 4. the live ~/ccrc of a pre-versioned box, named by the box's own stamp
+    const deployed = mkTmp('ccrc-ver-name-deployed-');
+    mkdirSync(join(deployed, 'ccrc'));
+    mkdirSync(join(deployed, '.ccrc'));
+    writeFileSync(join(deployed, '.ccrc', 'build.json'),
+      '{"sha":"1111111111111111111111111111111111111111","ref":"main","builtAt":"2026-09-01T00:00:00Z","dirty":false,"version":"v0.0.7"}\n');
+    expect(nameOf(deployed, join(deployed, 'ccrc'))).toBe('v0.0.7');
+    // 5. nothing measures it: unstamped, and never the same name twice
+    const bare = join(home, 'bare');
+    mkdirSync(bare);
+    const a = nameOf(home, bare);
+    const b = nameOf(home, bare);
+    expect(a).toMatch(/^unstamped-[0-9a-f]{12}$/);
+    expect(b).toMatch(/^unstamped-[0-9a-f]{12}$/);
+    expect(a).not.toBe(b);
+  });
+
+  it('a staged tree INSIDE another git work tree is named and stamped by its own build.json, never by the enclosing repository\'s HEAD (D-3463)', () => {
+    // A TMPDIR under a git-tracked HOME: the release tarball is extracted into
+    // an untracked subdirectory of a repository. `git -C <stage> rev-parse
+    // HEAD` answers for the ENCLOSING repository there.
+    const home = mkTmp('ccrc-ver-name-enclosed-');
+    const encl = join(home, 'encl');
+    installFixtureTree(home, 'encl');
+    const esha = gitInit(encl);
+    const stage = join(encl, 'stage');
+    mkdirSync(join(stage, 'ccd'), { recursive: true });
+    shipStamp(stage, 'c'.repeat(40), 'v1.5.0');
+    // git really does answer for the enclosing repository from here (the hazard exists)
+    expect(spawnSync('git', ['-C', stage, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim()).toBe(esha);
+    expect(nameOf(home, stage)).toBe('v1.5.0');
+    // no build.json either: not the enclosing commit — unstamped
+    rmSync(join(stage, 'build.json'));
+    expect(nameOf(home, stage)).toMatch(/^unstamped-[0-9a-f]{12}$/);
+    // and the enclosing repository ITSELF (its own top level) is still named from git
+    expect(nameOf(home, encl)).toBe(`untagged-${esha.slice(0, 12)}`);
+    // the stamp: `_inst_stamp` reads the shipped build.json of the enclosed tree
+    shipStamp(stage, 'c'.repeat(40), 'v1.5.0');
+    const r = sourced(home, join(REPO, 'ccd', 'ccrc'), `CCRC_HERE='${stage}/ccd'; _inst_stamp`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain(`install: stamp: ${'c'.repeat(40)} (release, v1.5.0, shipped in the release artifact)`);
+    const stamp = readFileSync(join(home, '.ccrc', 'build.json'), 'utf8');
+    expect(stamp).toContain('c'.repeat(40));
+    expect(stamp, 'the stamp took the enclosing repository\'s sha').not.toContain(esha);
+  });
+
+  it('an exported GIT_DIR naming ANOTHER repository changes nothing a git read answers: the name, the stamp\'s sha, ref, dirty and version all come from the source\'s own repository (final-review fix wave, Step 0c; fix round 1)', () => {
+    // `git -C <src> <verb>` under an ambient GIT_DIR answers for that
+    // repository, and `_inst_git_own` (which unsets it) then agrees that <src>
+    // is a top level — a name and a stamp taken from another tree's commit,
+    // branch, tag and worktree state. `other` differs from `repo` in all four:
+    // another commit, a `v9.9.9` release tag at its HEAD, another branch, and a
+    // modified tracked file.
+    const home = mkTmp('ccrc-ver-name-git-dir-');
+    installFixtureTree(home, 'repo');
+    installFixtureTree(home, 'other');
+    const repo = join(home, 'repo');
+    const other = join(home, 'other');
+    writeFileSync(join(other, 'ONLY-IN-OTHER'), 'a different commit\n');
+    const sha = gitInit(repo);
+    const osha = gitInit(other);
+    expect(osha, 'the two fixture repositories share a commit — the pin would prove nothing').not.toBe(sha);
+    const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
+    const ogit = (...args: string[]): void => {
+      const r = spawnSync('git', ['-C', other, ...args], { env: gitEnv, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`fixture git ${args.join(' ')} failed: ${r.stderr}`);
+    };
+    ogit('tag', 'v9.9.9');
+    ogit('checkout', '-q', '-b', 'other-branch');
+    // Dirty in the INDEX and in the WORKTREE, both: stage one change, then
+    // modify the file again. `git add` alone leaves the worktree clean (so an
+    // ambient-GIT_DIR read of `diff --quiet` would answer clean and the pin
+    // would not see it), and an edit alone leaves the index clean (so the same
+    // is true of `diff --cached --quiet`). Each of `_inst_stamp`'s two dirty
+    // reads answers `other`'s state as dirty if it is ever unshielded.
+    writeFileSync(join(other, 'ONLY-IN-OTHER'), 'staged after the commit\n');
+    ogit('add', 'ONLY-IN-OTHER');
+    writeFileSync(join(other, 'ONLY-IN-OTHER'), 'modified again after it was staged\n');
+    // (`other`'s tracked file is now dirty in its index AND its worktree; `repo` is clean, on fixture-branch, untagged.)
+    const env = `export GIT_DIR='${other}/.git' GIT_WORK_TREE='${other}'; `;
+    const n = sourced(home, join(REPO, 'ccd', 'ccrc'), `${env}_inst_version_name "$(cd '${repo}' && pwd -P)"`);
+    expect(n.code, n.stderr).toBe(0);
+    expect(n.stdout.trim(), 'the name took the ambient GIT_DIR repository\'s release tag').toBe(`untagged-${sha.slice(0, 12)}`);
+    const r = sourced(home, join(REPO, 'ccd', 'ccrc'), `${env}CCRC_HERE='${repo}/ccd'; _inst_stamp`);
+    expect(r.code, r.stderr).toBe(0);
+    const stamp = JSON.parse(readFileSync(join(home, '.ccrc', 'build.json'), 'utf8')) as Record<string, unknown>;
+    expect(stamp['sha']).toBe(sha);
+    expect(stamp['ref'], 'the stamp\'s ref is another repository\'s branch').toBe('fixture-branch');
+    expect(stamp['dirty'], 'the stamp\'s dirty is another repository\'s index or worktree state').toBe(false);
+    expect('version' in stamp, 'the stamp carries another repository\'s release tag').toBe(false);
+  });
+
+  it('a fresh box: the tree lands in ~/ccrc-versions/<name>/, never at the live name, and ~/ccrc becomes an absolute link to it — after the deps, by one rename', () => {
+    const home = freshBox('ccrc-install-ver-fresh-');
+    const sha = gitInit(treeRoot(home));
+    const name = `untagged-${sha.slice(0, 12)}`;
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lstatSync(join(home, 'ccrc')).isSymbolicLink(), '~/ccrc is not a link').toBe(true);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(vroot(home, name));
+    // The rsync's destination is the version directory, never $HOME/ccrc.
+    const argv = read(join(home, 'rsync-argv')).trim().split('\n');
+    expect(argv).toHaveLength(1);
+    expect(argv[0]!.split(' ').at(-1)).toBe(`${vroot(home, name)}/`);
+    expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([vroot(home, name, 'server')]);
+    const lines = r.stdout.split('\n');
+    const at = (re: RegExp): number => lines.findIndex((l) => re.test(l));
+    const placedAt = at(new RegExp(`^install: tree: placed ${name} at \\$HOME/ccrc-versions/${name}$`));
+    const depsAt = at(/^install: tree: server runtime deps in place$/);
+    const flipAt = at(new RegExp(`^install: tree: \\$HOME/ccrc -> \\$HOME/ccrc-versions/${name} \\(was nothing\\) — one rename$`));
+    expect(placedAt, r.stdout).toBeGreaterThanOrEqual(0);
+    expect(depsAt).toBeGreaterThan(placedAt);
+    expect(flipAt, 'the flip ran before the deps were in place').toBeGreaterThan(depsAt);
+    expect(existsSync(join(home, 'ccrc.new')), 'the staged link was left behind').toBe(false);
+    // The version keeps the box's stamp and record, written after the record.
+    expect(read(vroot(home, name, '.ccrc-stamp.json'))).toBe(read(join(home, '.ccrc', 'build.json')));
+    expect(read(vroot(home, name, '.ccrc-installed'))).toBe(read(join(home, '.ccrc', 'installed')));
+    expect(statSync(vroot(home, name, '.ccrc-installed')).mode & 0o777).toBe(0o644);
+    const keptAt = at(new RegExp(`^install: versions: kept ${name}'s stamp and install record in \\$HOME/ccrc-versions/${name} — what a flip back restores$`));
+    expect(keptAt, r.stdout).toBeGreaterThan(at(/^install: installed: /));
+    expect(strays(home)).toEqual([]);
+  });
+
+  it('a new name while ~/ccrc points at another version: rsync into ~/ccrc-versions/<new>/, flip, and the running version\'s directory is byte-unchanged', () => {
+    const home = freshBox('ccrc-install-ver-new-');
+    installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    shipStamp(treeRoot(home), 'b'.repeat(40), 'v9.9.1');
+    // A file only the RUNNING version has. Its tree is otherwise the source's
+    // own bytes, so an rsync that landed in it would rewrite equal bytes and
+    // the digest below would stay green; `--delete` removes this one.
+    writeFileSync(vroot(home, 'v9.9.0', 'server', 'ONLY-IN-THE-RUNNING-VERSION'), 'a unit may be running this\n');
+    keepDigest(vroot(home, 'v9.9.0'), home);   // the plant is part of v9.9.0's kept bytes (D-3465)
+    const before = treeBytes(vroot(home, 'v9.9.0'));
+    const r = runInstall(home, ['install'], {}, { stubs: { ln: lnRecorder } });
+    // FIRST, before the exit code: a run that wrote into the running version
+    // dies later, at its own exit code, and this is the assertion that must
+    // name the defect (review 179 item 15).
+    expect(treeBytes(vroot(home, 'v9.9.0')), 'the running version was written into').toEqual(before);
+    expect(r.code, r.stderr).toBe(0);
+    // The flip went through the staged name: `ln` wrote `~/ccrc.new`, and no
+    // `ln` in the whole run targeted `~/ccrc` itself (unlink + symlink).
+    const lns = read(join(home, 'ln-argv')).trim().split('\n');
+    expect(lns.filter((l) => l.endsWith(` ${join(home, 'ccrc.new')}`))).toEqual([
+      `-sfn -- ${vroot(home, 'v9.9.1')} ${join(home, 'ccrc.new')}`,
+    ]);
+    expect(lns.filter((l) => l.endsWith(` ${join(home, 'ccrc')}`)), 'an ln targeted the live link').toEqual([]);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(vroot(home, 'v9.9.1'));
+    expect(read(join(home, 'rsync-argv')).trim().split(' ').at(-1)).toBe(`${vroot(home, 'v9.9.1')}/`);
+    expect(r.stdout).toMatch(/^install: tree: placed v9\.9\.1 at \$HOME\/ccrc-versions\/v9\.9\.1$/m);
+    expect(r.stdout).toMatch(/^install: tree: \$HOME\/ccrc -> \$HOME\/ccrc-versions\/v9\.9\.1 \(was \$HOME\/ccrc-versions\/v9\.9\.0\) — one rename$/m);
+    expect(JSON.parse(read(vroot(home, 'v9.9.1', '.ccrc-stamp.json'))).version).toBe('v9.9.1');
+  });
+
+  it.each(['a symlink to a real directory', 'a regular file'] as const)('a version NAME that is %s is refused BEFORE any write: nothing is voided, copied or installed into whatever it names (D-3464)', (kind) => {
+    const home = freshBox('ccrc-install-ver-linked-name-');
+    installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    shipStamp(treeRoot(home), 'b'.repeat(40), 'v9.9.1');
+    // The name the run would place into. A link into a directory that even
+    // carries a kept record — the record the copy arm voids first.
+    const elsewhere = join(home, 'elsewhere-3');
+    if (kind === 'a regular file') {
+      writeFileSync(vroot(home, 'v9.9.1'), 'not a tree\n');
+    } else {
+      mkdirSync(join(elsewhere, 'server'), { recursive: true });
+      writeFileSync(join(elsewhere, 'server', 'MINE'), 'not ccrc\n');
+      writeFileSync(join(elsewhere, '.ccrc-installed'), `${'b'.repeat(40)}\n`);
+      symlinkSync(elsewhere, vroot(home, 'v9.9.1'));
+    }
+    const before = kind === 'a regular file' ? '' : treeBytes(elsewhere);
+    const running = treeBytes(vroot(home, 'v9.9.0'));
+    const r = runInstall(home, ['install'], {}, { stubs: { ln: lnRecorder } });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toContain('ccrc: $HOME/ccrc-versions/v9.9.1 is not a directory ccrc placed — nothing was written; $HOME/ccrc and $HOME/ccrc-versions were not touched');
+    if (kind !== 'a regular file') {
+      expect(treeBytes(elsewhere), 'the link\'s target was written through').toEqual(before);
+      expect(existsSync(join(elsewhere, '.ccrc-installed')), 'the target\'s kept record was voided').toBe(true);
+    } else {
+      expect(readFileSync(vroot(home, 'v9.9.1'), 'utf8')).toBe('not a tree\n');
+    }
+    expect(existsSync(join(home, 'rsync-argv')), 'rsync ran').toBe(false);
+    expect(existsSync(join(home, 'npm-argv')), 'npm ci ran').toBe(false);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(vroot(home, 'v9.9.0'));
+    expect(treeBytes(vroot(home, 'v9.9.0'))).toEqual(running);
+  });
+
+  it('a re-run from the version ~/ccrc points at: the pre-W6 sentence, no copy, no npm ci, no flip — and the stamp comes from the version\'s own kept copy', () => {
+    const home = mkTmp('ccrc-install-ver-rerun-');
+    installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    healthyDoctorBox(home);
+    const digestBefore = read(vroot(home, 'v9.9.0', '.ccrc-digest'));
+    const r = runInstall(home, ['install'], {}, { from: join(home, 'ccrc', 'ccd', 'ccrc') });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
+    expect(existsSync(join(home, 'rsync-argv')), 'rsync ran against the running version').toBe(false);
+    expect(r.stdout).toMatch(/^install: tree: v9\.9\.0 is kept \(its install record is present and its digest re-measures equal\) — no npm ci$/m);
+    expect(existsSync(join(home, 'npm-argv')), 'npm ci emptied the running version\'s node_modules').toBe(false);
+    expect(r.stdout).not.toMatch(/one rename$/m);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(vroot(home, 'v9.9.0'));
+    expect(r.stdout).toMatch(/^install: stamp: 9{40} \(main, v9\.9\.0, kept with its version\)$/m);
+    expect(JSON.parse(read(join(home, '.ccrc', 'build.json'))).version).toBe('v9.9.0');
+    // D-3465 (b): a CLEAN version re-takes its keep on the digest it recorded,
+    // which this run leaves as it was.
+    expect(r.stdout).toMatch(/^install: versions: kept v9\.9\.0's stamp and install record in \$HOME\/ccrc-versions\/v9\.9\.0/m);
+    expect(read(vroot(home, 'v9.9.0', '.ccrc-digest'))).toBe(digestBefore);
+  });
+
+  it('a run of ANOTHER placed version\'s own ccrc flips to it without copying; a complete one fetches no deps, an incomplete one does', () => {
+    const home = mkTmp('ccrc-install-ver-other-');
+    installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    installVersionedTree(home, 'v9.9.1', { link: false, stamp: { sha: 'c'.repeat(40), version: 'v9.9.1' } });
+    healthyDoctorBox(home);
+    const before = treeBytes(vroot(home, 'v9.9.0'));
+    const r = runInstall(home, ['install'], {}, { from: vroot(home, 'v9.9.1', 'ccd', 'ccrc') });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: tree: v9\.9\.1 is already placed at \$HOME\/ccrc-versions\/v9\.9\.1 — installing from it, no copy$/m);
+    expect(existsSync(join(home, 'rsync-argv')), 'a placed version was copied onto itself').toBe(false);
+    expect(existsSync(join(home, 'npm-argv'))).toBe(false);
+    expect(r.stdout).toMatch(/^install: tree: \$HOME\/ccrc -> \$HOME\/ccrc-versions\/v9\.9\.1 \(was \$HOME\/ccrc-versions\/v9\.9\.0\) — one rename$/m);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(vroot(home, 'v9.9.1'));
+    expect(treeBytes(vroot(home, 'v9.9.0'))).toEqual(before);
+
+    const inc = mkTmp('ccrc-install-ver-incomplete-');
+    installVersionedTree(inc, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    installVersionedTree(inc, 'v9.9.1', { link: false, complete: false });
+    healthyDoctorBox(inc);
+    const ri = runInstall(inc, ['install'], {}, { from: vroot(inc, 'v9.9.1', 'ccd', 'ccrc') });
+    expect(ri.code, ri.stderr).toBe(0);
+    expect(read(join(inc, 'npm-cwd')).trim().split('\n')).toEqual([vroot(inc, 'v9.9.1', 'server')]);
+    expect(readlinkSync(join(inc, 'ccrc'))).toBe(vroot(inc, 'v9.9.1'));
+  });
+
+  it('an npm ci that fails leaves ~/ccrc where it was — the flip is the LAST act of _inst_tree', () => {
+    const home = freshBox('ccrc-install-ver-npmfail-');
+    installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    shipStamp(treeRoot(home), 'b'.repeat(40), 'v9.9.1');
+    const r = runInstall(home, ['install'], {}, {
+      stubs: { npm: '#!/bin/sh\necho "npm ERR! code ENOTFOUND registry.npmjs.org" >&2\nexit 1\n' },
+    });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(
+      /^ccrc: npm ci in \$HOME\/ccrc-versions\/v9\.9\.1\/server failed — the service cannot start without runtime deps$/m);
+    expect(readlinkSync(join(home, 'ccrc')), '~/ccrc was flipped onto a tree with no deps').toBe(vroot(home, 'v9.9.0'));
+    expect(r.stdout).not.toMatch(/one rename$/m);
+  });
+
+  it('a re-placement that dies leaves its version INCOMPLETE — the kept record goes before the first byte is written', () => {
+    const home = freshBox('ccrc-install-ver-void-');
+    const sha = gitInit(treeRoot(home));
+    const name = `untagged-${sha.slice(0, 12)}`;
+    expect(runInstall(home).code).toBe(0);
+    expect(existsSync(vroot(home, name, '.ccrc-installed')), 'the first run kept no record').toBe(true);
+    expect(existsSync(vroot(home, name, '.ccrc-digest')), 'the first run kept no digest').toBe(true);
+    const r = runInstall(home, ['install'], {}, {
+      stubs: { npm: '#!/bin/sh\necho "npm ERR! fixture" >&2\nexit 1\n' },
+    });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(new RegExp(`^install: tree: reinstalled ${name} in place at `, 'm'));
+    expect(existsSync(vroot(home, name, '.ccrc-installed')),
+      'a version whose re-placement died still says it holds a finished install').toBe(false);
+    // D-3465 (e): the digest goes with the record — it describes the bytes the rsync replaced.
+    expect(existsSync(vroot(home, name, '.ccrc-digest')),
+      'a version whose re-placement died still carries the digest of the bytes it replaced').toBe(false);
+  });
+
+  it('refuses to place or flip over a ~/ccrc this ccrc did not make — a foreign link, a regular file — and touches neither it nor the versions root', () => {
+    const home = freshBox('ccrc-install-ver-foreign-');
+    mkdirSync(join(home, 'elsewhere'));
+    symlinkSync(join(home, 'elsewhere'), join(home, 'ccrc'));
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: \$HOME\/ccrc is a link whose target is not a version directory under \$HOME\/ccrc-versions — refusing to place or flip a tree over something this ccrc did not make; \$HOME\/ccrc and \$HOME\/ccrc-versions were not touched$/m);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(join(home, 'elsewhere'));
+    expect(readdirSync(join(home, 'elsewhere'))).toEqual([]);
+    expect(existsSync(vroot(home))).toBe(false);
+    expect(existsSync(join(home, 'rsync-argv'))).toBe(false);
+
+    const file = freshBox('ccrc-install-ver-file-');
+    writeFileSync(join(file, 'ccrc'), 'not a tree\n');
+    const rf = runInstall(file);
+    expect(rf.code).toBe(1);
+    expect(rf.stderr).toMatch(/^ccrc: \$HOME\/ccrc is neither a directory nor a link — refusing to place or flip/m);
+    expect(read(join(file, 'ccrc'))).toBe('not a tree\n');
+    expect(existsSync(vroot(file))).toBe(false);
+  });
+
+  it('_inst_tree names a crashed migration a bug and places nothing (the resume that precedes it is W6 Task 3\'s)', () => {
+    const home = freshBox('ccrc-install-ver-crashed-');
+    mkdirSync(join(home, 'ccrc.migrating', 'server'), { recursive: true });
+    const r = sourced(home, ccrcIn(treeRoot(home)), 'INST_ROLE=both; _inst_tree');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: a migration of \$HOME\/ccrc is incomplete — this run should have completed it first$/m);
+    expect(existsSync(vroot(home))).toBe(false);
+    expect(existsSync(join(home, 'ccrc'))).toBe(false);
+  });
+
+  it('the kept record is written LAST: a run killed at the stamp copy leaves no record copy, and a refused record copy takes the stamp copy with it', () => {
+    const killed = freshBox('ccrc-install-ver-kill-');
+    const sha = gitInit(treeRoot(killed));
+    const name = `untagged-${sha.slice(0, 12)}`;
+    writeFileSync(join(killed, 'fixture-kill-at-stamp-copy'), '');
+    const r = runInstall(killed, ['install'], {}, { stubs: { mv: mvKnobs } });
+    expect(r.code, 'the run was not killed at the stamp copy').toBe(-1);
+    expect(existsSync(join(killed, '.ccrc', 'installed')), 'the fixture killed the run before the record').toBe(true);
+    expect(existsSync(vroot(killed, name, '.ccrc-installed')),
+      'a version that never kept its stamp is marked complete').toBe(false);
+    expect(existsSync(vroot(killed, name, '.ccrc-stamp.json'))).toBe(false);
+    expect(existsSync(vroot(killed, name, '.ccrc-digest')), 'a digest was written before the stamp copy').toBe(false);
+
+    const refused = freshBox('ccrc-install-ver-refuse-');
+    const rsha = gitInit(treeRoot(refused));
+    const rname = `untagged-${rsha.slice(0, 12)}`;
+    writeFileSync(join(refused, 'fixture-fail-at-record-copy'), '');
+    const rr = runInstall(refused, ['install'], {}, { stubs: { mv: mvKnobs } });
+    expect(rr.code, rr.stderr).toBe(0);
+    expect(rr.stdout).toMatch(new RegExp(`^install: versions: WARN: could not keep ${rname}'s stamp and install record in its directory — no flip can return to it; arm 2 still can$`, 'm'));
+    expect(existsSync(vroot(refused, rname, '.ccrc-stamp.json')), 'half a pair survived').toBe(false);
+    expect(existsSync(vroot(refused, rname, '.ccrc-installed'))).toBe(false);
+    expect(existsSync(vroot(refused, rname, '.ccrc-digest')), 'half a set survived: the digest outlived its refused record').toBe(false);
+    expect(strays(refused)).toEqual([]);
+  });
+
+  // D-3465: the record is still LAST, and the digest goes BEFORE it.
+  it('the kept DIGEST is written before the record: a run killed at the digest copy leaves a stamp copy and NO record; a refused digest copy takes the stamp copy with it and writes no record', () => {
+    const killed = freshBox('ccrc-install-ver-digest-kill-');
+    const sha = gitInit(treeRoot(killed));
+    const name = `untagged-${sha.slice(0, 12)}`;
+    writeFileSync(join(killed, 'fixture-kill-at-digest-copy'), '');
+    const r = runInstall(killed, ['install'], {}, { stubs: { mv: mvKnobs } });
+    expect(r.code, 'the run was not killed at the digest copy').toBe(-1);
+    expect(existsSync(vroot(killed, name, '.ccrc-stamp.json')), 'the fixture killed the run before the stamp copy landed').toBe(true);
+    expect(existsSync(vroot(killed, name, '.ccrc-installed')),
+      'the record was written before the digest: a version marked complete with nothing to say what its bytes are').toBe(false);
+    expect(existsSync(vroot(killed, name, '.ccrc-digest'))).toBe(false);
+
+    const refused = freshBox('ccrc-install-ver-digest-refuse-');
+    const rsha = gitInit(treeRoot(refused));
+    const rname = `untagged-${rsha.slice(0, 12)}`;
+    writeFileSync(join(refused, 'fixture-fail-at-digest-copy'), '');
+    const rr = runInstall(refused, ['install'], {}, { stubs: { mv: mvKnobs } });
+    expect(rr.code, rr.stderr).toBe(0);
+    expect(rr.stdout).toMatch(new RegExp(`^install: versions: WARN: could not keep ${rname}'s stamp and install record in its directory — no flip can return to it; arm 2 still can$`, 'm'));
+    for (const f of ['.ccrc-stamp.json', '.ccrc-digest', '.ccrc-installed']) {
+      expect(existsSync(vroot(refused, rname, f)), `${f} survived a refused digest copy`).toBe(false);
+    }
+    expect(strays(refused)).toEqual([]);
+  });
+
+  /** `_ver_kept <name> <role>` on the fixture box, sourced: `rc=<n> why=<VER_WHY>`. */
+  const keptAnswer = (home: string, name: string, role = 'both'): string => {
+    const r = sourced(home, join(REPO, 'ccd', 'ccrc'),
+      `rc=0; _ver_kept '${name}' '${role}' || rc=$?; printf 'rc=%s why=%s\\n' "$rc" "$VER_WHY"`);
+    return r.stdout.split('\n').find((l) => l.startsWith('rc=')) ?? `no answer: ${r.stderr}`;
+  };
+
+  it('a run that PLACES the tree (how=copy) records a fresh digest: `1:<64 hex>`, mode 644, equal to a re-measure of the version through the shipped recipe — and the version reads kept', () => {
+    const home = freshBox('ccrc-install-ver-digest-recorded-');
+    const sha = gitInit(treeRoot(home));
+    const name = `untagged-${sha.slice(0, 12)}`;
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    const digest = read(vroot(home, name, '.ccrc-digest'));
+    expect(digest).toMatch(/^1:[0-9a-f]{64}\n$/);
+    expect(statSync(vroot(home, name, '.ccrc-digest')).mode & 0o777).toBe(0o644);
+    const again = sourced(home, join(REPO, 'ccd', 'ccrc'),
+      `_ver_digest_of 1 '${vroot(home, name)}' && printf '%s\\n' "$VER_DIGEST_NOW"`);
+    expect(again.stdout.trim()).toBe(digest.trim());
+    expect(keptAnswer(home, name)).toBe('rc=0 why=');
+    expect(strays(home)).toEqual([]);
+  });
+
+  it('a placing run whose digest CANNOT be measured keeps nothing: the WARN names why, and neither the stamp copy, the digest nor the record survives — never a kept version with no statement about its bytes (D-3465 (c))', () => {
+    const home = mkTmp('ccrc-install-ver-digest-unmeasured-');
+    const root = installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), read(join(root, '.ccrc-stamp.json')));
+    writeFileSync(join(home, '.ccrc', 'installed'), `${'9'.repeat(40)}\n`);
+    const r = sourced(home, join(REPO, 'ccd', 'ccrc'), "_plat_sha256() { return 1; }; _ver_keep_state install v9.9.0");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("install: versions: WARN: could not keep v9.9.0's stamp and install record in its directory (its digest could not be measured (a file could not be read)) — no flip can return to it; arm 2 still can");
+    for (const f of ['.ccrc-stamp.json', '.ccrc-digest', '.ccrc-installed']) {
+      expect(existsSync(join(root, f)), `${f} survived`).toBe(false);
+    }
+  });
+
+  // ── (b) and (d): the launcher over a tree something wrote through ─────────
+  /** A W6 box whose pointed-at v9.9.0 is kept, then written through the way
+   *  deploy.sh does (a file into the tree; the BOX stamp reshaped to another
+   *  build and its record rewritten) — the input the review reproduced. */
+  const writtenThroughBox = (prefix: string, opts: { digest?: boolean } = {}): { home: string; kept: string; boxStamp: string } => {
+    const home = mkTmp(prefix);
+    const kept = installVersionedTree(home, 'v9.9.0', { digest: opts.digest, stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    healthyDoctorBox(home);
+    writeFileSync(join(kept, 'agent', 'WRITTEN-THROUGH'), 'a working tree X, rsynced through the link\n');
+    const boxStamp = `${JSON.stringify({ sha: 'e'.repeat(40), ref: 'main', builtAt: '2026-09-25T00:00:00Z', dirty: false })}\n`;
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), boxStamp);
+    writeFileSync(join(home, '.ccrc', 'installed'), `${'e'.repeat(40)}\n`);
+    return { home, kept, boxStamp };
+  };
+
+  it('`ccrc install` from the launcher over a WRITTEN-THROUGH pointed-at version: its keep is NOT taken again, the kept stamp is not installed as the box\'s, npm ci runs (the skip is gone) — and the version stays not kept (D-3465 (b), (d); review 179 F2)', () => {
+    const { home, kept, boxStamp } = writtenThroughBox('ccrc-install-ver-launcher-wt-');
+    expect(keptAnswer(home, 'v9.9.0'), 'the control is broken: the written-through tree must read as such').toMatch(/^rc=3 /);
+    const stampBefore = read(join(kept, '.ccrc-stamp.json'));
+    const recordBefore = read(join(kept, '.ccrc-installed'));
+    const digestBefore = read(join(kept, '.ccrc-digest'));
+    const r = runInstall(home, ['install'], {}, { from: join(home, 'ccrc', 'ccd', 'ccrc') });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
+    // (d) the npm-ci skip takes the bytes' answer: this is an in-place npm ci.
+    expect(r.stdout).not.toMatch(/is kept \(its install record is present and its digest re-measures equal\) — no npm ci/);
+    expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([vroot(home, 'v9.9.0', 'server')]);
+    // (d) the kept-stamp fallback takes it too: the box keeps ITS stamp.
+    expect(r.stdout).toMatch(/^install: stamp: v9\.9\.0's kept stamp is not installed — it is not a kept version \(its tree is no longer the one that was kept /m);
+    expect(read(join(home, '.ccrc', 'build.json'))).toBe(boxStamp);
+    // (b) the keep is not taken again, and nothing the version kept moved.
+    expect(r.stdout).toMatch(/^install: versions: v9\.9\.0 is NOT kept again by this run — its tree is no longer the one that was kept /m);
+    expect(r.stdout).not.toMatch(/^install: versions: kept v9\.9\.0's stamp/m);
+    expect(read(join(kept, '.ccrc-stamp.json'))).toBe(stampBefore);
+    expect(read(join(kept, '.ccrc-installed'))).toBe(recordBefore);
+    expect(read(join(kept, '.ccrc-digest'))).toBe(digestBefore);
+    expect(keptAnswer(home, 'v9.9.0'), 'the launcher made a written-through version kept').toMatch(/^rc=3 /);
+  });
+
+  it('`ccrc install` from the launcher over a version kept BEFORE digests existed: the recorded digest it needs is absent, so it is not kept again — no digest is invented by a run that placed nothing — and npm ci runs', () => {
+    const { home, kept } = writtenThroughBox('ccrc-install-ver-launcher-nodigest-', { digest: false });
+    rmSync(join(kept, 'agent', 'WRITTEN-THROUGH'));   // clean bytes: the ONLY defect is the missing digest
+    expect(keptAnswer(home, 'v9.9.0')).toMatch(/^rc=2 why=no kept digest /);
+    const r = runInstall(home, ['install'], {}, { from: join(home, 'ccrc', 'ccd', 'ccrc') });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([vroot(home, 'v9.9.0', 'server')]);
+    expect(r.stdout).toMatch(/^install: versions: v9\.9\.0 is NOT kept again by this run — no kept digest /m);
+    expect(existsSync(join(kept, '.ccrc-digest')), 'a run that placed nothing recorded a digest').toBe(false);
+    expect(keptAnswer(home, 'v9.9.0')).toMatch(/^rc=2 why=no kept digest /);
+  });
+
+  it('a run of ANOTHER placed version\'s ccrc, that version written through: it is flipped to (an operator\'s explicit act) but not kept again, its kept stamp is not installed, and it runs npm ci (D-3465 (b), (d))', () => {
+    const home = mkTmp('ccrc-install-ver-other-wt-');
+    installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    const other = installVersionedTree(home, 'v9.9.1', { link: false, stamp: { sha: 'c'.repeat(40), version: 'v9.9.1' } });
+    healthyDoctorBox(home);
+    writeFileSync(join(other, 'shared', 'WRITTEN-THROUGH'), 'x\n');
+    const digestBefore = read(join(other, '.ccrc-digest'));
+    const r = runInstall(home, ['install'], {}, { from: vroot(home, 'v9.9.1', 'ccd', 'ccrc') });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^install: tree: v9\.9\.1 is already placed at /m);
+    expect(read(join(home, 'npm-cwd')).trim().split('\n')).toEqual([vroot(home, 'v9.9.1', 'server')]);
+    expect(r.stdout).toMatch(/^install: stamp: v9\.9\.1's kept stamp is not installed — it is not a kept version /m);
+    // With no kept stamp installed the box has no stamp at all, so no record is written and nothing is kept.
+    expect(r.stdout).toMatch(/^install: installed: not recorded — this box has no readable build stamp/m);
+    expect(r.stdout).not.toMatch(/^install: versions: kept v9\.9\.1's stamp/m);
+    expect(read(join(other, '.ccrc-digest'))).toBe(digestBefore);
+    expect(keptAnswer(home, 'v9.9.1')).toMatch(/^rc=3 /);
+  });
+
+  it('the other refusal: a source tree that is NOT a placed version but carries a stray kept stamp is PLACED by copy (how=copy) — its kept stamp is refused as "not a version under $HOME/ccrc-versions", and because that run flipped `~/ccrc` the stale box stamp is removed too (review 179 I1)', () => {
+    const home = freshBox('ccrc-install-ver-stray-stamp-');
+    const tree = treeRoot(home);
+    writeFileSync(join(tree, '.ccrc-stamp.json'), `${JSON.stringify({ sha: 'd'.repeat(40), ref: 'main', builtAt: '2026-09-23T00:00:00Z', dirty: false, version: 'v9.9.9' })}\n`);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), `${JSON.stringify({ sha: 'e'.repeat(40), ref: 'main', builtAt: '2026-09-20T00:00:00Z', dirty: false })}\n`);
+    writeFileSync(join(home, '.ccrc', 'installed'), `${'e'.repeat(40)}\n`);
+    const r = runInstall(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^install: tree: placed /m);
+    expect(r.stdout).toMatch(/^install: stamp: the kept stamp beside this tree is not installed — this run placed the tree by copy, and only a version already placed under \$HOME\/ccrc-versions is read for its kept stamp$/m);
+    expect(r.stdout).toMatch(/^install: stamp: removed the box's stamp \(it names untagged-eeeeeeeeeeee, not unstamped-[0-9a-f]{12}, the version this run moved \$HOME\/ccrc to\) — ccrc version will say unstamped$/m);
+    expect(existsSync(join(home, '.ccrc', 'build.json')), 'the box kept a stamp naming a build it no longer runs').toBe(false);
+    expect(r.stdout).toMatch(/^install: installed: not recorded — this box has no readable build stamp/m);
+  });
+
+  it('`_inst_stamp_shipped` resolves no path physically: it reads the version name `_inst_tree` measured (`INST_TREE_HOW`/`INST_TREE_NAME`) — constraint 3 lists the only physical resolutions, and a second `pwd -P` on `~/ccrc` is not among them (review 179 M6). A literal-absence pin, honest as one', () => {
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const start = src.indexOf('\n_inst_stamp_shipped() {');
+    expect(start, '_inst_stamp_shipped is gone or renamed — update this pin WITH the name').toBeGreaterThan(0);
+    const end = src.indexOf('\n}\n', start);
+    const body = src.slice(start, end);
+    expect(body).toContain('INST_TREE_NAME');
+    for (const banned of ['pwd -P', 'readlink -f', 'realpath', 'cd -P']) {
+      expect(body, `_inst_stamp_shipped resolves a path physically (${banned})`).not.toContain(banned);
+    }
+  });
+
+  it('the digest is an install-path tool now: with `sha256sum` (`shasum` on macOS) ABSENT from PATH a placing run cannot measure the tree, so it keeps NOTHING — the WARN names why, no stamp copy, digest or record is written, and the version never reads kept (review 179 M2, D-3465 (c))', () => {
+    const home = freshBox('ccrc-install-ver-no-sha256-');
+    const sha = gitInit(treeRoot(home));
+    const name = `untagged-${sha.slice(0, 12)}`;
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, SHA256_TOOL) });
+    expect(r.stdout, `stderr: ${r.stderr}`).toMatch(new RegExp(`^install: versions: WARN: could not keep ${name}'s stamp and install record in its directory \\(its digest could not be measured \\(`, 'm'));
+    for (const f of ['.ccrc-stamp.json', '.ccrc-digest', '.ccrc-installed']) {
+      expect(existsSync(vroot(home, name, f)), `${f} was written by a run that could not measure the tree`).toBe(false);
+    }
+    // never "kept": a version with no record reads incomplete (rc 2), whatever the PATH
+    expect(keptAnswer(home, name)).toMatch(/^rc=2 why=no /);
+  });
+
+  it('_ver_keep_state records a fresh digest only for the version THIS run placed: a placed name that `~/ccrc` no longer names records nothing — a concurrent plain install re-pointed the link between this run\'s flip and its keep (review 179 M3, D-3465 (b))', () => {
+    const home = mkTmp('ccrc-install-ver-placed-name-');
+    const root = installVersionedTree(home, 'v9.9.0', { digest: false, stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), read(join(root, '.ccrc-stamp.json')));
+    writeFileSync(join(home, '.ccrc', 'installed'), `${'9'.repeat(40)}\n`);
+    expect(keptAnswer(home, 'v9.9.0')).toMatch(/^rc=2 why=no kept digest /);
+    // this run placed v9.9.1, but ~/ccrc names v9.9.0 by now: the bytes under v9.9.0 are not this run's
+    const other = sourced(home, join(REPO, 'ccd', 'ccrc'), '_ver_keep_state install v9.9.1');
+    expect(other.code, other.stderr).toBe(0);
+    expect(other.stdout).toContain('install: versions: this run placed v9.9.1, but $HOME/ccrc names v9.9.0 by now — no fresh digest is recorded for bytes this run did not place');
+    expect(other.stdout).toMatch(/^install: versions: v9\.9\.0 is NOT kept again by this run — no kept digest /m);
+    expect(existsSync(join(root, '.ccrc-digest')), 'a digest was blessed over bytes this run did not place').toBe(false);
+    expect(keptAnswer(home, 'v9.9.0')).toMatch(/^rc=2 why=no kept digest /);
+    // control: the name it placed IS the name ~/ccrc has — a fresh digest, and the version reads kept
+    const same = sourced(home, join(REPO, 'ccd', 'ccrc'), '_ver_keep_state install v9.9.0');
+    expect(same.code, same.stderr).toBe(0);
+    expect(same.stdout).toMatch(/^install: versions: kept v9\.9\.0's stamp and install record /m);
+    expect(read(join(root, '.ccrc-digest'))).toMatch(/^1:[0-9a-f]{64}\n$/);
+    expect(keptAnswer(home, 'v9.9.0')).toBe('rc=0 why=');
+  });
+
+  it('_ver_keep_state with NO placed name (a `running`/`placed` spine, or a pre-W6 spine that wrote in place) takes the keep again exactly when the recorded digest re-measures equal — re-placed bytes that measure equal are re-kept, bytes that differ are not (review 179 M4; D-3465 (b))', () => {
+    const home = mkTmp('ccrc-install-ver-rekeep-');
+    const root = installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), read(join(root, '.ccrc-stamp.json')));
+    writeFileSync(join(home, '.ccrc', 'installed'), `${'9'.repeat(40)}\n`);
+    const digest = read(join(root, '.ccrc-digest'));
+    const eq = sourced(home, join(REPO, 'ccd', 'ccrc'), "_ver_keep_state update ''");
+    expect(eq.stdout).toMatch(/^update: versions: kept v9\.9\.0's stamp and install record /m);
+    expect(read(join(root, '.ccrc-digest'))).toBe(digest);
+    writeFileSync(join(root, 'shared', 'WRITTEN-THROUGH'), 'x\n');
+    const differ = sourced(home, join(REPO, 'ccd', 'ccrc'), "_ver_keep_state update ''");
+    expect(differ.stdout).toMatch(/^update: versions: v9\.9\.0 is NOT kept again by this run — its tree is no longer the one that was kept /m);
+    expect(read(join(root, '.ccrc-digest')), 'the digest was rewritten over bytes this run did not place').toBe(digest);
+  });
+
+  /** A W6 box that ALREADY completed an install of v9.9.0 (pointed at, kept,
+   *  its stamp and record in `~/.ccrc`) plus a second placed version v9.9.1
+   *  that is not pointed at. The state the review's I1 probe started from —
+   *  the existing `ANOTHER placed version` pin starts from a box with NO
+   *  stamp, which is why it could not see the carry-forward. */
+  const stampedBoxWithOther = (prefix: string, other: { writeThrough: boolean }): { home: string; oldRoot: string; otherRoot: string } => {
+    const home = mkTmp(prefix);
+    const oldRoot = installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    const otherRoot = installVersionedTree(home, 'v9.9.1', { link: false, stamp: { sha: 'c'.repeat(40), version: 'v9.9.1' } });
+    healthyDoctorBox(home);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), read(join(oldRoot, '.ccrc-stamp.json')));
+    writeFileSync(join(home, '.ccrc', 'installed'), `${'9'.repeat(40)}\n`);
+    if (other.writeThrough) writeFileSync(join(otherRoot, 'shared', 'WRITTEN-THROUGH'), 'x\n');
+    return { home, oldRoot, otherRoot };
+  };
+
+  it('a run of ANOTHER placed version\'s ccrc, that version written through, from a box that ALREADY carries a stamp: the flip happens, so the box stamp that names the build the box LEFT is removed — the install is not recorded as completed for a build that is not running, and `ccrc version` says unstamped (D-3465 (d); review 179 I1)', () => {
+    const { home, otherRoot } = stampedBoxWithOther('ccrc-install-ver-other-wt-stamped-', { writeThrough: true });
+    expect(keptAnswer(home, 'v9.9.1'), 'the control is broken: the placed tree must read as written through').toMatch(/^rc=3 /);
+    const r = runInstall(home, ['install'], {}, { from: vroot(home, 'v9.9.1', 'ccd', 'ccrc') });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^install: tree: v9\.9\.1 is already placed at /m);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(otherRoot);
+    // the stamp that named v9.9.0's build is gone, and the run says so
+    expect(existsSync(join(home, '.ccrc', 'build.json')), 'the box kept a stamp naming the build it just left').toBe(false);
+    expect(r.stdout).toMatch(/^install: stamp: v9\.9\.1's kept stamp is not installed — it is not a kept version /m);
+    expect(r.stdout).toMatch(/^install: stamp: removed the box's stamp \(it names v9\.9\.0, not v9\.9\.1, the version this run moved \$HOME\/ccrc to\) — ccrc version will say unstamped$/m);
+    // so `_inst_installed` takes its no-stamp arm: nothing is recorded as completed, nothing is kept
+    expect(r.stdout).toMatch(/^install: installed: not recorded — this box has no readable build stamp/m);
+    expect(r.stdout).not.toMatch(/^install: installed: 9{40} /m);
+    expect(r.stdout).not.toMatch(/^install: versions: kept v9\.9\.1's stamp/m);
+    // what the box then says of itself
+    const v = runInstall(home, ['version'], {}, { from: join(home, 'ccrc', 'ccd', 'ccrc') });
+    expect(`${v.stdout}${v.stderr}`).toMatch(/unstamped \(no /m);
+    expect(keptAnswer(home, 'v9.9.1')).toMatch(/^rc=3 /);
+  });
+
+  it('control: the same flip onto a version that IS kept installs that version\'s kept stamp, so the box names the build it now runs (nothing is removed)', () => {
+    const { home } = stampedBoxWithOther('ccrc-install-ver-other-kept-stamped-', { writeThrough: false });
+    expect(keptAnswer(home, 'v9.9.1')).toBe('rc=0 why=');
+    const r = runInstall(home, ['install'], {}, { from: vroot(home, 'v9.9.1', 'ccd', 'ccrc') });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).not.toMatch(/removed the box's stamp/);
+    expect(JSON.parse(read(join(home, '.ccrc', 'build.json'))).sha).toBe('c'.repeat(40));
+  });
+
+  it('control: `ccrc install` from the LAUNCHER (how=running) over a written-through pointed-at version keeps the box stamp — it names the version `~/ccrc` still points at, so nothing is removed', () => {
+    const { home, boxStamp } = writtenThroughBox('ccrc-install-ver-launcher-wt-stamp-keep-');
+    const r = runInstall(home, ['install'], {}, { from: join(home, 'ccrc', 'ccd', 'ccrc') });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).not.toMatch(/removed the box's stamp/);
+    expect(read(join(home, '.ccrc', 'build.json'))).toBe(boxStamp);
+  });
+
+  // ── N1 (re-review of fix round 1): the removal is for a stamp that names
+  //    ANOTHER version. The name compared is the one `_inst_tree` placed or
+  //    flipped to (`INST_TREE_NAME`): the stamp's `version` when it has one,
+  //    else `untagged-<sha12>`; an `unstamped-*` target is never a stamp's
+  //    name, and a stamp that cannot be read names nothing comparable.
+  it('a hand repair onto a digestless version whose box stamp ALREADY names it (a killed flip\'s leftovers): the flip is a no-op, the stamp stays, the install is recorded for the build that runs, and no line says the box "just left" it (D-3465 (d); re-review N1 shape A)', () => {
+    const home = mkTmp('ccrc-install-ver-stamp-names-target-');
+    installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    const other = installVersionedTree(home, 'v9.9.1', { link: false, digest: false, stamp: { sha: 'c'.repeat(40), version: 'v9.9.1' } });
+    healthyDoctorBox(home);
+    // the killed flip's leftovers: the stamp is v9.9.1's, the record is not written
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), read(join(other, '.ccrc-stamp.json')));
+    const stampBefore = read(join(home, '.ccrc', 'build.json'));
+    expect(keptAnswer(home, 'v9.9.1'), 'the control is broken: the version must read digestless (unmeasured)').toMatch(/^rc=2 why=no kept digest /);
+    const r = runInstall(home, ['install'], {}, { from: vroot(home, 'v9.9.1', 'ccd', 'ccrc') });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(other);
+    expect(r.stdout).toMatch(/^install: stamp: v9\.9\.1's kept stamp is not installed — it is not a kept version /m);
+    expect(r.stdout, 'the run says the box left the build it is moving to').not.toMatch(/removed the box's stamp/);
+    expect(r.stdout).toMatch(/^install: stamp: the box's stamp already names v9\.9\.1, the version this run moved \$HOME\/ccrc to — it stays$/m);
+    expect(r.stdout, 'a stamp that stays is not "skipped, ccrc version will say unstamped"').not.toMatch(/^install: stamp: skipped/m);
+    expect(existsSync(join(home, '.ccrc', 'build.json')), 'the stamp that names the version this run moved to was removed').toBe(true);
+    expect(read(join(home, '.ccrc', 'build.json'))).toBe(stampBefore);
+    expect(r.stdout).toMatch(/^install: installed: c{40} /m);
+    expect(read(join(home, '.ccrc', 'installed'))).toBe(`${'c'.repeat(40)}\nunsigned\n`);
+  });
+
+  it('the same hand repair onto a version that is WRITTEN THROUGH (its digest re-measures unequal): the box stamp names it, but nothing shows those bytes to be that build — the stamp is removed whatever it names, no completed install is recorded, and `ccrc version` does not read `complete` (D-3465 (d); FX-A2 review M1)', () => {
+    const home = mkTmp('ccrc-install-ver-stamp-names-written-through-');
+    installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    const other = installVersionedTree(home, 'v9.9.1', { link: false, stamp: { sha: 'c'.repeat(40), version: 'v9.9.1' } });
+    healthyDoctorBox(home);
+    // the killed flip's leftovers, exactly as the digestless pin plants them ...
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), read(join(other, '.ccrc-stamp.json')));
+    // ... but the version was kept WITH a digest and something has written through it since
+    mkdirSync(join(other, 'shared'), { recursive: true });
+    writeFileSync(join(other, 'shared', 'WRITTEN-THROUGH'), 'a deploy.sh rsync through the link\n');
+    expect(keptAnswer(home, 'v9.9.1'), 'the control is broken: the version must read written through').toMatch(/^rc=3 why=its tree is no longer the one that was kept/);
+    const r = runInstall(home, ['install'], {}, { from: vroot(home, 'v9.9.1', 'ccd', 'ccrc') });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(other);
+    expect(r.stdout).toMatch(/^install: stamp: v9\.9\.1's kept stamp is not installed — it is not a kept version \(its tree is no longer the one that was kept/m);
+    expect(r.stdout, 'a stamp over written-through bytes stayed because it names the target').not.toMatch(/already names/);
+    expect(r.stdout).toMatch(/^install: stamp: removed the box's stamp \(it names v9\.9\.1, the version this run moved \$HOME\/ccrc to, but that version's tree was written through since it was kept/m);
+    expect(existsSync(join(home, '.ccrc', 'build.json')), 'the stamp survived over written-through bytes').toBe(false);
+    expect(r.stdout).toMatch(/^install: installed: not recorded — this box has no readable build stamp/m);
+    expect(existsSync(join(home, '.ccrc', 'installed')), 'a completed install was recorded over written-through bytes').toBe(false);
+    const v = runInstall(home, ['version'], {}, { from: join(home, 'ccrc', 'ccd', 'ccrc') });
+    expect(v.stdout).not.toMatch(/^install: complete/m);
+    expect(v.stdout).toMatch(/unstamped/);
+    expect(keptAnswer(home, 'v9.9.1'), 'the run laundered a keep').toMatch(/^rc=3 /);
+  });
+
+  it('a launcher migration of a real ~/ccrc whose target directory holds a LEFTOVER kept stamp: the box stamp names the migrated version, so it stays, and no line says "this tree is not a version" of a tree that IS the version by then (D-3465 (d); re-review N1 shape B)', () => {
+    const home = mkTmp('ccrc-install-ver-migrate-leftover-');
+    const root = installFixtureTree(home, 'ccrc');
+    healthyDoctorBox(home);
+    const stamp = `${JSON.stringify({ sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-23T00:00:00Z', dirty: false, version: 'v9.9.2' })}\n`;
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), stamp);
+    // the migrated version's name is the stamp's version; its directory already holds a kept stamp
+    mkdirSync(vroot(home, 'v9.9.2'), { recursive: true });
+    writeFileSync(vroot(home, 'v9.9.2', '.ccrc-stamp.json'), stamp);
+    const r = runInstall(home, ['install'], {}, { from: ccrcIn(root) });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^install: tree: migrating — \$HOME\/ccrc is a directory; v9\.9\.2 is complete at /m);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(vroot(home, 'v9.9.2'));
+    expect(r.stdout, 'a false "not a version" line: the migration had just made it one').not.toMatch(/this tree is not a version under/);
+    expect(r.stdout).not.toMatch(/removed the box's stamp/);
+    expect(r.stdout).toMatch(/^install: stamp: the box's stamp already names v9\.9\.2, the version this run moved \$HOME\/ccrc to — it stays$/m);
+    expect(r.stdout, 'a stamp that stays is not "skipped, ccrc version will say unstamped"').not.toMatch(/^install: stamp: skipped/m);
+    expect(read(join(home, '.ccrc', 'build.json'))).toBe(stamp);
+    expect(r.stdout).toMatch(/^install: installed: a{40} /m);
+    // the migration made the copy the version `~/ccrc` names, so it is kept with a fresh digest
+    expect(keptAnswer(home, 'v9.9.2')).toBe('rc=0 why=');
+  });
+
+  it('a stamp with NO `version` names `untagged-<sha12>`: flipped onto that very name it stays; a stamp that cannot be read names nothing comparable, so it is removed and the line says it could not be read (D-3465 (d); N1\'s rule)', () => {
+    const untagged = `untagged-${'c'.repeat(12)}`;
+    const mk = (prefix: string): { home: string; other: string } => {
+      const home = mkTmp(prefix);
+      installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+      const other = installVersionedTree(home, untagged, { link: false, digest: false, stamp: { sha: 'c'.repeat(40) } });
+      healthyDoctorBox(home);
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      return { home, other };
+    };
+    const a = mk('ccrc-install-ver-stamp-untagged-');
+    writeFileSync(join(a.home, '.ccrc', 'build.json'), read(join(a.other, '.ccrc-stamp.json')));
+    const ra = runInstall(a.home, ['install'], {}, { from: vroot(a.home, untagged, 'ccd', 'ccrc') });
+    expect(ra.code, `stderr: ${ra.stderr}\nstdout: ${ra.stdout}`).toBe(0);
+    expect(readlinkSync(join(a.home, 'ccrc'))).toBe(a.other);
+    expect(ra.stdout).not.toMatch(/removed the box's stamp/);
+    expect(ra.stdout).toMatch(new RegExp(`^install: stamp: the box's stamp already names ${untagged}, the version this run moved \\$HOME/ccrc to — it stays$`, 'm'));
+    expect(ra.stdout, 'a stamp that stays is not "skipped, ccrc version will say unstamped"').not.toMatch(/^install: stamp: skipped/m);
+    expect(existsSync(join(a.home, '.ccrc', 'build.json'))).toBe(true);
+    expect(read(join(a.home, '.ccrc', 'build.json')), 'the stamp that names the target changed').toBe(read(join(a.other, '.ccrc-stamp.json')));
+    expect(read(join(a.home, '.ccrc', 'installed')), 'the install was not recorded for the build that runs').toBe(`${'c'.repeat(40)}\nunsigned\n`);
+    const u = mk('ccrc-install-ver-stamp-unreadable-');
+    writeFileSync(join(u.home, '.ccrc', 'build.json'), 'not json {\n');
+    const ru = runInstall(u.home, ['install'], {}, { from: vroot(u.home, untagged, 'ccd', 'ccrc') });
+    expect(ru.code, `stderr: ${ru.stderr}\nstdout: ${ru.stdout}`).toBe(0);
+    expect(ru.stdout).toMatch(/^install: stamp: removed the box's stamp \(it could not be read, so it cannot be shown to name a version this box is on\) — ccrc version will say unstamped$/m);
+    expect(existsSync(join(u.home, '.ccrc', 'build.json'))).toBe(false);
+  });
+
+  itDarwin('refuses on macOS without python3, before anything is written — the flip is one rename through os.replace', () => {
+    const home = freshBox('ccrc-install-ver-nopython-');
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'python3') }, { omit: ['python3'] });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: python3 is required by 'ccrc install' on macOS — the \$HOME\/ccrc flip is one rename\(2\) through os\.replace/m);
+    expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(false);
+    expect(existsSync(vroot(home))).toBe(false);
+    expect(existsSync(join(home, 'ccrc'))).toBe(false);
+  });
+
+  it('the macOS python3 preflight, measured on a gating leg: CCD_OS forced to darwin, a python3 that is on PATH but does not run is refused before anything is written (F7, C-Minor-3)', () => {
+    const home = freshBox('ccrc-install-ver-darwin-forced-');
+    const bin = join(home, 'forced-darwin-bin');
+    mkdirSync(bin, { recursive: true });
+    for (const t of ['launchctl', 'tmux', 'flock']) writeFileSync(join(bin, t), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'python3'),
+      '#!/bin/sh\necho "xcode-select: note: No developer tools were found, requesting install." >&2\nexit 1\n', { mode: 0o755 });
+    // The stubs shadow everything after them; the real PATH follows for bash's own tools.
+    const r = sourced(home, join(REPO, 'ccd', 'ccrc'),
+      `PATH='${bin}':"$PATH"; CCD_OS=darwin; cmd_install --role both; echo "survived rc=$?"`);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stdout).not.toContain('survived');
+    expect(r.stderr).toMatch(/^ccrc: python3 is required by 'ccrc install' on macOS — the \$HOME\/ccrc flip is one rename\(2\) through os\.replace/m);
+    expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(false);
+    expect(existsSync(vroot(home))).toBe(false);
+    expect(existsSync(join(home, 'ccrc'))).toBe(false);
+  });
+
+  itDarwin('refuses on macOS when the python3 on PATH does not RUN — /usr/bin/python3 is an xcode-select stub until the Command Line Tools are installed — before anything is written', () => {
+    // The shape a real Mac without the Command Line Tools has: `command -v
+    // python3` answers /usr/bin/python3, and running it prints the
+    // xcode-select note and exits non-zero. The case above (no python3 on
+    // PATH at all) cannot happen on macOS; this one is the one that does.
+    const home = freshBox('ccrc-install-ver-stubpython-');
+    const r = runInstall(home, ['install'], {}, {
+      stubs: { python3: '#!/bin/sh\necho "xcode-select: note: No developer tools were found, requesting install." >&2\nexit 1\n' },
+    });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: python3 is required by 'ccrc install' on macOS — the \$HOME\/ccrc flip is one rename\(2\) through os\.replace/m);
+    expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(false);
+    expect(existsSync(vroot(home))).toBe(false);
+    expect(existsSync(join(home, 'ccrc'))).toBe(false);
+    expect(existsSync(join(home, 'rsync-argv')), 'a tree was placed before the refusal').toBe(false);
+  });
+
+  // PLATFORM-ONLY: the GC's running-unit read on macOS is plutil over the
+  // job's plist, which this harness's plutil stub answers with nothing — an
+  // unmeasured read, so a macOS install WARNs and prunes nothing (the safe
+  // direction, pinned in ccrc-update.test.ts, where the Darwin read itself is
+  // measured by forcing CCD_OS in a sourced shell).
+  itLinux('after an install whose doctor passed, the GC keeps the newest CCRC_VERSIONS_KEEP beside the pointed-at one and prunes the rest (W6 Task 5)', () => {
+    const home = freshBox('ccrc-install-w6-gc-');
+    ['v1.0.4', 'v1.0.3', 'v1.0.2', 'v1.0.1', 'v1.0.0'].forEach((n, i) => {
+      const root = installVersionedTree(home, n, { link: i === 0, stamp: { sha: 'b'.repeat(40), version: n } });
+      const t = 1_800_000_000 - i * 100;
+      utimesSync(join(root, '.ccrc-installed'), t, t);
+    });
+    // The projection a `both` box reads (W2's server writes it): in force and
+    // naming no tag, so every one of the GC's inputs measures.
+    const now = Math.floor(Date.now() / 1000);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'update-intent'), [
+      'epoch 1', `issued ${now - 60}`, `lease ${now + 840}`, 'channel stable',
+      'desired none', 'desired-stable none', 'desired-dev none', 'auto off', 'end',
+    ].join('\n') + '\n', { mode: 0o600 });
+    const r = runInstall(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^install: versions: pruned \$HOME\/ccrc-versions\/v1\.0\.1 \(complete, not among the newest 3\)$/m);
+    expect(r.stdout).toMatch(/^install: versions: pruned \$HOME\/ccrc-versions\/v1\.0\.0 \(complete, not among the newest 3\)$/m);
+    const left = readdirSync(join(home, 'ccrc-versions')).sort();
+    const placedName = left.find((n) => n.startsWith('unstamped-'));
+    expect(placedName, left.join(' ')).toMatch(/^unstamped-[0-9a-f]{12}$/);
+    expect(left).toEqual([placedName!, 'v1.0.2', 'v1.0.3', 'v1.0.4'].sort());
+    // …and it ran BEHIND the gate: after doctor's summary, never before it.
+    expect(r.stdout.indexOf('install: versions: pruned'))
+      .toBeGreaterThan(r.stdout.search(/^summary: /m));
+  });
+
+  // W6 Task 5 introduces a remover that can run BESIDE a plain install, which
+  // takes no lock: `ccrc versions --prune` removes an incomplete directory
+  // (the one this run is placing), and another run's automatic GC removes a
+  // complete one that nothing protects yet. `_plat_ln_swap` never checks its
+  // target, so the flip measures it again (D-3456).
+  it('a new version removed before the flip — a prune beside a plain install — is refused, and ~/ccrc keeps the version it names (W6 Task 5)', () => {
+    const home = freshBox('ccrc-install-w6-vanished-');
+    installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    shipStamp(treeRoot(home), 'b'.repeat(40), 'v9.9.1');
+    // This run's last npm ci (the default role runs none in the agent)
+    // succeeds and then stands in for the concurrent prune: the directory
+    // it ran in is gone before the flip.
+    const r = runInstall(home, ['install'], {}, {
+      stubs: {
+        npm: '#!/bin/sh\nmkdir -p node_modules\n'
+          + 'case "$PWD" in */ccrc-versions/v9.9.1/server) rm -rf -- "${PWD%/server}" ;; esac\nexit 0\n',
+      },
+    });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: the new tree at \$HOME\/ccrc-versions\/v9\.9\.1 is gone before the flip — a prune may have run beside this install; \$HOME\/ccrc was not touched, and the install can be run again$/m);
+    expect(readlinkSync(join(home, 'ccrc')), '~/ccrc was flipped onto a tree that is gone').toBe(vroot(home, 'v9.9.0'));
+    expect(existsSync(join(home, 'ccrc', 'ccd', 'ccrc'))).toBe(true);
+    expect(r.stdout).not.toMatch(/one rename$/m);
+  });
+});
+
+describe('ccrc install: the one-time migration and its crash recovery (W6 Task 3)', () => {
+  // A box installed before versioned installs has a REAL directory at
+  // `~/ccrc`. The first W6 install places the incoming tree FULLY at
+  // `~/ccrc-versions/<name>`, moves the directory aside to `~/ccrc.migrating`
+  // and links `~/ccrc` in its place — two syscalls, once per node (spec §11).
+  // The old tree goes only after a gate has passed: a plain install's own
+  // doctor while `~/.ccrc/update.lock` is FREE, an updater's `_upd_gate`
+  // otherwise (D-3431). A crash inside the window is
+  // completed FIRST by the next run, from `~/.ccrc/migrating-to` alone.
+  const holders: ChildProcess[] = [];
+  afterEach(() => {
+    for (const h of holders.splice(0)) h.kill('SIGKILL');
+  });
+  const REAL_LN = realPath('ln');
+  const lockPath = (home: string): string => dotCcrc(home, 'update.lock');
+  /** A FRESH open and a non-blocking flock — wave 4's probe, from outside. */
+  const lockFree = (home: string): boolean =>
+    spawnSync(BASH, ['-c', 'exec 9>>"$1" && flock -n 9', '_', lockPath(home)]).status === 0;
+  const waitUntil = (cond: () => boolean, what: string): void => {
+    const t0 = Date.now();
+    while (!cond()) {
+      if (Date.now() - t0 > 10_000) throw new Error(`timed out waiting for ${what}`);
+      spawnSync('sleep', ['0.05']);
+    }
+  };
+  /** Wave 4's real holder: ONE process takes the flock and then becomes
+   *  `sleep` (exec keeps the pid and the descriptor), so the pid killed is
+   *  the pid holding it. Returns once a fresh probe fails. */
+  const holdLock = (home: string): ChildProcess => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const h = spawn(BASH, ['-c', 'exec 9>>"$1" && flock 9 && exec sleep 30', '_', lockPath(home)], { stdio: 'ignore' });
+    holders.push(h);
+    waitUntil(() => !lockFree(home), 'the fixture holder to take the lock');
+    return h;
+  };
+  /** lstat, never stat: an absent or dangling `~/ccrc` must read `absent`,
+   *  and a link must read as the link it is, not as its target. */
+  const lkind = (p: string): 'absent' | 'link' | 'dir' | 'other' => {
+    try {
+      const st = lstatSync(p);
+      return st.isSymbolicLink() ? 'link' : st.isDirectory() ? 'dir' : 'other';
+    } catch { return 'absent'; }
+  };
+  /** Every entry under `dir`, relative path → its bytes — "byte-identical"
+   *  as a value two listings can be compared by. */
+  const treeBytes = (dir: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    const walk = (d: string, prefix: string): void => {
+      for (const e of readdirSync(d).sort()) {
+        const p = join(d, e);
+        const rel = prefix === '' ? e : `${prefix}/${e}`;
+        const st = lstatSync(p);
+        if (st.isSymbolicLink()) out[rel] = `link:${readlinkSync(p)}`;
+        else if (st.isDirectory()) { out[`${rel}/`] = 'dir'; walk(p, rel); }
+        else out[rel] = readFileSync(p).toString('base64');
+      }
+    };
+    walk(dir, '');
+    return out;
+  };
+  /** Makes this box's doctor FAIL on a check no install step touches — the
+   *  per-platform lever `a box doctor fails on exits 1` uses. */
+  const failDoctor = (home: string): void => {
+    if (process.platform === 'darwin') {
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'exposure.env'),
+        'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH=on\n', { mode: 0o644 });
+    } else {
+      writeFileSync(join(home, 'fixture-linger-refuse'), 'yes\n');
+    }
+  };
+  const healDoctor = (home: string): void => {
+    rmSync(join(home, '.ccrc', 'exposure.env'), { force: true });
+    rmSync(join(home, 'fixture-linger-refuse'), { force: true });
+  };
+  const migrating = (home: string): string => join(home, 'ccrc.migrating');
+  /** A box with a PRE-W6 install: a real `~/ccrc` directory (with a marker
+   *  file of its own), and a checkout that is a real one-commit repository,
+   *  so the incoming tree's name is `untagged-<sha12>` — known in advance. */
+  const preW6Box = (prefix: string): { home: string; name: string; before: Record<string, string> } => {
+    const home = freshBox(prefix);
+    const sha = gitInit(treeRoot(home));
+    installFixtureTree(home, 'ccrc');
+    writeFileSync(placed(home, 'OLD-MARKER'), 'the pre-versioned tree\n');
+    return { home, name: `untagged-${sha.slice(0, 12)}`, before: treeBytes(placed(home)) };
+  };
+  const RESUMED = (name: string): string =>
+    `install: tree: completed a crashed migration — $HOME/ccrc was absent beside $HOME/ccrc.migrating; linked to $HOME/ccrc-versions/${name} (named by ~/.ccrc/migrating-to)`;
+  const REMOVED = 'install: migration: $HOME/ccrc.migrating removed — ccrc doctor passed; a plain install is its own gate';
+  /** An `ln` that does `act` ONCE — to the first `ln` whose last argument is
+   *  `~/ccrc`, the migration's link, while `$HOME/<knob>` exists, removing
+   *  the knob first — and is the real `ln` for everything else. */
+  const lnOnce = (knob: string, act: string): string => '#!/bin/sh\n'
+    + 'for last in "$@"; do :; done\n'
+    + `if [ "$last" = "$HOME/ccrc" ] && [ -f "$HOME/${knob}" ]; then rm -f "$HOME/${knob}"; ${act}; fi\n`
+    + `exec ${REAL_LN} "$@"\n`;
+
+  it('a doctor that FAILS keeps ~/ccrc.migrating byte for byte, beside its marker — and the next install whose doctor passes removes both (§18 "the migration keeps the old tree until the gate")', () => {
+    const { home, name, before } = preW6Box('ccrc-install-migrate-doctor-fail-');
+    failDoctor(home);
+    let r = runInstall(home);
+    expect(r.code, 'the lever did not make doctor fail — the keep below would be vacuous').toBe(1);
+    expect(readlinkSync(placed(home))).toBe(join(home, 'ccrc-versions', name));
+    expect(treeBytes(migrating(home))).toEqual(before);
+    expect(read(dotCcrc(home, 'migrating-to'))).toBe(`${name}\n`);
+    expect(r.stdout).toMatch(/^install: migration: \$HOME\/ccrc\.migrating kept — ccrc doctor did not pass; the next install or update whose gate passes removes it$/m);
+    expect(r.stdout.split('\n')).not.toContain(REMOVED);
+    // THE CONTROL: the same box with its doctor healed — the directory goes.
+    healDoctor(home);
+    r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split('\n')).toContain(REMOVED);
+    expect(lkind(migrating(home))).toBe('absent');
+    expect(existsSync(dotCcrc(home, 'migrating-to'))).toBe(false);
+    expect(readlinkSync(placed(home))).toBe(join(home, 'ccrc-versions', name));
+  });
+
+  it('a spine run while ~/.ccrc/update.lock is held is a STAGED spine: its doctor passing is not the gate, so ~/ccrc.migrating stays for the updater\'s gate to decide (D-3431)', () => {
+    const { home } = preW6Box('ccrc-install-migrate-lock-held-');
+    const h = holdLock(home);
+    let r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: migration: \$HOME\/ccrc\.migrating kept — an update holds ~\/\.ccrc\/update\.lock, and its health gate decides$/m);
+    expect(lkind(migrating(home))).toBe('dir');
+    expect(lockFree(home), 'the install took, or broke, a lock it did not hold').toBe(false);
+    // THE CONTROL: the holder gone, the identical install is its own gate.
+    h.kill('SIGKILL');
+    waitUntil(() => lockFree(home), 'the fixture holder to release the lock');
+    r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split('\n')).toContain(REMOVED);
+    expect(lkind(migrating(home))).toBe('absent');
+    expect(lockFree(home), 'the install left ~/.ccrc/update.lock held').toBe(true);
+  });
+
+  it('a crash inside the two-syscall window leaves exactly ~/ccrc.migrating and ~/.ccrc/migrating-to; the next install, run by the placed version\'s own path, links it BEFORE its banner (§18 "a crashed migration is completed first")', () => {
+    const { home, name, before } = preW6Box('ccrc-install-migrate-crash-');
+    const vdir = join(home, 'ccrc-versions', name);
+    writeFileSync(join(home, 'fixture-ln-crash'), 'yes\n');
+    // The migration's `ln -sn` runs in ccrc's OWN shell, so $PPID is the run.
+    const lnStub = '#!/bin/sh\n'
+      + 'printf \'%s\\n\' "$*" >> "$HOME/ln-argv"\n'
+      + 'for last in "$@"; do :; done\n'
+      + 'if [ "$last" = "$HOME/ccrc" ] && [ -f "$HOME/fixture-ln-crash" ]; then kill -KILL "$PPID"; exit 1; fi\n'
+      + `exec ${REAL_LN} "$@"\n`;
+    let r = runInstall(home, ['install'], {}, { stubs: { ln: lnStub } });
+    expect(r.code, 'the run was not killed inside the window (-1 is the runner\'s null status)').toBe(-1);
+    expect(r.stdout.split('\n')).toContain(`install: tree: migrating — $HOME/ccrc is a directory; ${name} is complete at $HOME/ccrc-versions/${name}`);
+    // The link is placed with -n (D-3434).
+    const lnCalls = read(join(home, 'ln-argv')).trim().split('\n');
+    expect(lnCalls[lnCalls.length - 1]).toBe(`-sn -- ${vdir} ${placed(home)}`);
+    // Exactly the crash pair: the old tree aside, the marker, the new version
+    // FULLY placed before the window opened — and no ~/ccrc at all.
+    expect(lkind(placed(home))).toBe('absent');
+    expect(treeBytes(migrating(home))).toEqual(before);
+    expect(read(dotCcrc(home, 'migrating-to'))).toBe(`${name}\n`);
+    expect(existsSync(join(vdir, 'ccd', 'ccrc'))).toBe(true);
+    expect(existsSync(join(vdir, 'server', 'node_modules')), 'the version was not placed FULLY before the window').toBe(true);
+    // THE COMPLETION: disarmed, and run by the path the die sentence names
+    // (the launcher shim cannot run with no ~/ccrc).
+    rmSync(join(home, 'fixture-ln-crash'));
+    r = runInstall(home, ['install'], {}, { from: join(vdir, 'ccd', 'ccrc') });
+    expect(r.code, r.stderr).toBe(0);
+    const lines = r.stdout.split('\n');
+    expect(lines[0], 'the link was not completed FIRST').toBe(RESUMED(name));
+    expect(lines[1]).toBe(`install: box: ${home}`);
+    expect(readlinkSync(placed(home))).toBe(vdir);
+    // A placed version installing from itself copies nothing (Task 2's (a)).
+    expect(lines).toContain('install: tree: already running from $HOME/ccrc');
+    expect(lines).toContain(REMOVED);
+    expect(lkind(migrating(home))).toBe('absent');
+  });
+
+  it('the resume links what ~/.ccrc/migrating-to names — never a guess such as the newest directory (D-3432)', () => {
+    const home = freshBox('ccrc-install-migrate-marker-');
+    installFixtureTree(home, 'ccrc.migrating');
+    const kept = installVersionedTree(home, 'v1.0.0', { link: false });
+    // NEWER and incomplete: the directory a crashed run could have been
+    // half-way through placing when it died.
+    const newer = installVersionedTree(home, 'v9.9.9', { link: false, complete: false });
+    utimesSync(kept, new Date('2026-01-01T00:00:00Z'), new Date('2026-01-01T00:00:00Z'));
+    utimesSync(newer, new Date(), new Date());
+    preexisting(home, 'migrating-to', 'v1.0.0\n');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split('\n')[0]).toBe(RESUMED('v1.0.0'));
+    expect(lkind(placed(home))).toBe('link');
+  });
+
+  const refusals: Array<[string, string | null, string]> = [
+    ['is absent', null, 'is absent'],
+    ['names a version nobody placed', 'v7.7.7\n', 'does not name a placed version'],
+    ['is not a version name at all', '../../etc\n', 'does not name a placed version'],
+  ];
+  it.each(refusals)('a crash pair whose ~/.ccrc/migrating-to %s is REFUSED before the banner, with both by-hand remedies, and nothing is changed', (_label, marker, says) => {
+    const home = freshBox('ccrc-install-migrate-refused-');
+    installFixtureTree(home, 'ccrc.migrating');
+    installVersionedTree(home, 'v1.0.0', { link: false });
+    if (marker !== null) preexisting(home, 'migrating-to', marker);
+    const before = treeBytes(migrating(home));
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`ccrc: a migration of $HOME/ccrc crashed and ~/.ccrc/migrating-to ${says} — nothing was changed. To go back: mv $HOME/ccrc.migrating $HOME/ccrc — or, to go forward: ln -s $HOME/ccrc-versions/<name> $HOME/ccrc`);
+    expect(r.stdout, 'a step ran past the refusal').not.toMatch(/^install: /m);
+    expect(lkind(placed(home))).toBe('absent');
+    expect(treeBytes(migrating(home))).toEqual(before);
+  });
+
+  it('a lock that cannot be MEASURED is neither free nor held: ~/ccrc.migrating is kept with its own sentence even though the doctor passed (ruling R16)', () => {
+    const { home, name } = preW6Box('ccrc-install-migrate-lock-unmeasured-');
+    // A DIRECTORY at the lock path: the open fails whatever the uid (wave 4
+    // Task 3's idiom), so `_ver_lock_try` answers 3.
+    mkdirSync(lockPath(home), { recursive: true });
+    const r = runInstall(home);
+    // Measured red first (Step 4): if the directory also moved the doctor's
+    // verdict, the keep below would be the doctor's, not the lock arm's.
+    expect(r.code, `the doctor must pass here — ${r.stderr}`).toBe(0);
+    expect(readlinkSync(placed(home))).toBe(join(home, 'ccrc-versions', name));
+    expect(r.stdout).toMatch(/^install: migration: \$HOME\/ccrc\.migrating kept — ~\/\.ccrc\/update\.lock could not be taken or measured \(unmeasured\), so no gate is known to have passed$/m);
+    expect(r.stdout.split('\n')).not.toContain(REMOVED);
+    expect(lkind(migrating(home))).toBe('dir');
+  });
+
+  it('a link that cannot be placed moves ~/ccrc BACK: the pre-versioned directory byte for byte, no marker, the version complete — never a crash pair left for an updater to complete (D-3436)', () => {
+    const { home, name, before } = preW6Box('ccrc-install-migrate-ln-fail-');
+    const vdir = join(home, 'ccrc-versions', name);
+    const stub = lnOnce('fixture-ln-fail-once', 'echo "ln: fixture refusal" >&2; exit 1');
+    writeFileSync(join(home, 'fixture-ln-fail-once'), 'yes\n');
+    let r = runInstall(home, ['install'], {}, { stubs: { ln: stub } });
+    expect(existsSync(join(home, 'fixture-ln-fail-once')), 'the refusal never fired').toBe(false);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`ccrc: $HOME/ccrc could not be linked to $HOME/ccrc-versions/${name}, so it was moved back — nothing moved; $HOME/ccrc is still the directory it was, and ${name} is complete at $HOME/ccrc-versions/${name}`);
+    expect(lkind(placed(home))).toBe('dir');
+    expect(treeBytes(placed(home))).toEqual(before);
+    expect(lkind(migrating(home))).toBe('absent');
+    expect(lkind(dotCcrc(home, 'migrating-to'))).toBe('absent');
+    expect(existsSync(join(vdir, 'ccd', 'ccrc'))).toBe(true);
+    // THE CONTROL: the knob is spent, so the identical install migrates.
+    r = runInstall(home, ['install'], {}, { stubs: { ln: stub } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(readlinkSync(placed(home))).toBe(vdir);
+    expect(r.stdout.split('\n')).toContain(REMOVED);
+  });
+
+  it('a link nested INSIDE a real directory that appeared at ~/ccrc is refused by the [ -L ] check, never reported as placed (D-3434)', () => {
+    const { home, name } = preW6Box('ccrc-install-migrate-ln-nest-');
+    writeFileSync(join(home, 'fixture-ln-nest-once'), 'yes\n');
+    const r = runInstall(home, ['install'], {}, { stubs: { ln: lnOnce('fixture-ln-nest-once', 'mkdir -p "$HOME/ccrc"') } });
+    expect(existsSync(join(home, 'fixture-ln-nest-once')), 'the stub never fired').toBe(false);
+    // The real `ln -sn` nested the link and exited 0 — the shape `-n` cannot
+    // refuse. Without it the case would be vacuous.
+    expect(lkind(join(placed(home), name)), 'the real ln did not nest').toBe('link');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('ccrc: $HOME/ccrc was moved to $HOME/ccrc.migrating but the link could not be placed');
+    expect(r.stdout.split('\n')).not.toContain(`install: tree: $HOME/ccrc -> $HOME/ccrc-versions/${name} (the pre-versioned tree is kept at $HOME/ccrc.migrating until a health gate passes)`);
+    // The move back cannot replace the non-empty directory now standing at
+    // ~/ccrc, so the old tree stays aside, whole.
+    expect(lkind(migrating(home))).toBe('dir');
+  });
+
+  it('_inst_migrate re-measures the layout before it moves anything: a ~/ccrc that stopped being a directory while the version was placed is refused, and nothing moves (its step 0)', () => {
+    const home = freshBox('ccrc-install-migrate-changed-');
+    const v1 = installVersionedTree(home, 'v1.0.0');   // ~/ccrc is a LINK now
+    installVersionedTree(home, 'v2.0.0', { link: false });
+    const r = spawnSync(BASH, ['-c', '. "$1"; _inst_migrate v2.0.0', '_', ccrcIn(treeRoot(home))],
+      { env: ccrcEnv(home), encoding: 'utf8' });
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stderr).toContain('ccrc: $HOME/ccrc changed while this run placed v2.0.0 (it now reads linked) — nothing moved; v2.0.0 is complete at $HOME/ccrc-versions/v2.0.0');
+    expect(readlinkSync(placed(home))).toBe(v1);
+    expect(lkind(migrating(home))).toBe('absent');
+    expect(lkind(dotCcrc(home, 'migrating-to'))).toBe('absent');
   });
 });
 
@@ -2403,9 +3925,8 @@ describe('ccrc install: the build stamp', () => {
     const home = freshBox('ccrc-install-stamp-version-');
     const sha = gitInit(treeRoot(home));
     expect(runInstall(home).code).toBe(0);
-    const r = spawnSync(BASH, [join(home, '.local', 'bin', 'ccrc'), 'version'],
-      { env: { ...process.env, HOME: home }, encoding: 'utf8' });
-    expect(r.status, r.stderr).toBe(0);
+    const r = runLauncherVersion(home);
+    expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toContain(sha);
     expect(r.stdout).toContain('fixture-branch');
   });
@@ -2614,6 +4135,44 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     untouched('after uninstall');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n'), 'a systemctl verb named the foreign unit')
       .not.toContain('ccgpt-usage');
+  });
+
+  it('ccgpt-usage@.service runs the isolated runtime\'s interpreter under -I, with the cost map local (D-3486)', () => {
+    // D-3164, the half Plan 2b-2 owns: the publisher's shebang is `env
+    // python3`, and on the operator's fleet box that python imports a
+    // third-party litellm fork from user site-packages — a SILENT wrong
+    // interpreter. The unit now names the runtime `ccgpt-runtime` builds, and
+    // this case holds it there in two halves: the TEXT (one ExecStart, `-I`,
+    // the cost map local, no PATH line) and the AGREEMENT — the interpreter the
+    // unit names, resolved, is the one `ccgpt-runtime python` answers on a box
+    // that has a runtime. The pair is still placed by no installer (D-3172, the
+    // two cases above); this pins what Plan 3 will arm.
+    const unit = read(join(REPO, 'deploy', 'systemd', 'ccgpt-usage@.service'));
+    const code = unit.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'));
+    const execs = code.filter((l) => l.startsWith('ExecStart='));
+    expect(execs, 'the unit must carry exactly one ExecStart').toHaveLength(1);
+    expect(execs[0]).toBe('ExecStart=%h/.ccrc/runtime/codex/current/bin/python -I %h/.local/bin/ccgpt-usage.py');
+    expect(code, 'the cost map is not local — every poll would fetch a mutable remote JSON (D-3484)')
+      .toContain('Environment=LITELLM_LOCAL_MODEL_COST_MAP=True');
+    expect(code).toContain('Environment=CCGPT_ACCOUNT_ID=%i');
+    expect(code.filter((l) => /^Environment=["']?PATH=/.test(l)), 'a PATH line cannot choose the interpreter (D-3164)')
+      .toEqual([]);
+
+    // The agreement half, in a fixture HOME only. The runtime is planted by
+    // `codexLaneFixture.ts`' `plantFakeRuntime`, the one planter of the
+    // builder's layout in the test tree: a `gen-<UTC>-<n>` generation, a
+    // RELATIVE `current` symlink, and a stamp derived from the shipped
+    // `ccd/ccgpt-runtime`. So this case types no second copy of that layout.
+    const home = mkTmp('ccrc-usage-unit-interp-');
+    const rt = plantFakeRuntime(home);
+    const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccgpt-runtime'), 'python'],
+      { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    expect(r.status, `ccgpt-runtime python: ${r.stderr}`).toBe(0);
+    expect(realpathSync(r.stdout.trim()), 'ccgpt-runtime python answered an interpreter the fixture did not plant')
+      .toBe(realpathSync(rt.python));
+    const named = execs[0]!.slice('ExecStart='.length).split(' ')[0]!.replace(/^%h\//, `${home}/`);
+    expect(realpathSync(named), 'the unit names an interpreter the runtime builder does not answer')
+      .toBe(realpathSync(r.stdout.trim()));
   });
 
   it('the installed ccrc.service reads ccrc.env first, then exposure.env, both optional', () => {
@@ -3208,12 +4767,15 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       .toEqual(process.platform === 'darwin'
         // `ccd-account-auth` is on BOTH arms — unlike cap-scopes (cgroup-bound)
         // and the three timer-bound ones, macOS is a supported box for it. The
-        // two GPT-lane files that exist today (Plan 2b-1 Task 2) join it here
-        // for the same reason: `ccgpt-proxy.py` is the engine `ccgpt` execs
-        // and `ccgpt-usage.py` is placed for hand-running, neither timer-bound
-        // to this arm. `ccgpt`/`ccgpt-runtime` are NOT here — they don't
-        // exist in the tree until Plan 2b-2 (fix round 1, Finding 1).
-        ? ['ccd', 'ccd-account-auth', 'ccgpt-proxy.py', 'ccgpt-usage.py', 'ccrc', 'graphify']
+        // GPT lane's four join it for the same reason: none is timer-bound to
+        // this arm — `ccrc-codex` (the launcher every Codex wrapper execs) and
+        // `ccgpt-runtime` are commands, `ccgpt-proxy.py` is the shim a tier
+        // runs, `ccgpt-usage.py` is placed for hand-running. Gated `!= server`,
+        // which this `both` install is not. `ccrc-codex` and `ccgpt-runtime`
+        // joined in the commit that placed them, and no earlier than the
+        // commits that wrote them (fix round 1, Finding 1). NEVER `ccgpt`
+        // (D-3478).
+        ? ['ccd', 'ccd-account-auth', 'ccrc', 'graphify', ...GPT_LANE_BINS].sort()
         // account-pool-membership wave 1, Task 4 fix round 1 (F1): `ccd-pool-sync`
         // joins the non-Darwin list on the timer-bound names' own terms. THIS
         // ASSERTION IS THE MUTATION SITE for that line in `_inst_bins`: it is
@@ -3224,7 +4786,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // where its timer looks").
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
            'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
-           'ccd-usage-sweep.py', 'ccgpt-proxy.py', 'ccgpt-usage.py', 'ccrc', 'graphify']);
+           'ccd-usage-sweep.py', 'ccrc', 'graphify', ...GPT_LANE_BINS].sort());
   });
 
   it('_inst_bins\' own closing line names every executable it placed', () => {
@@ -3254,7 +4816,8 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       'ccd-usage-sweep.py', // engine carried by ccd-usage-sweep's own name
     ];
     // `ccgpt-usage.py` (and `ccgpt-proxy.py`, above) have NO such sibling —
-    // each must be named explicitly in the echo below on its own.
+    // each must be named explicitly in the echo below on its own, and so must
+    // `ccgpt-runtime` and `ccrc-codex`, which are dotless and so never exempt.
     const { home, r } = converged;
     const line = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
     expect(line, 'no `install: bins:` line in the transcript at all').toBeDefined();
@@ -3262,15 +4825,15 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       .filter((b) => !FIXTURE_BINS.includes(b) && b !== 'graphify'
         && !PY_SIDECARS_COVERED_BY_SIBLING.includes(b))
       .sort();
-    // Fix round 1, Finding 5: the floor is the DARWIN-ARM minimum (`ccd`,
-    // `ccd-account-auth`, `ccgpt-proxy.py`, `ccgpt-usage.py`, `ccrc`) — the
-    // smaller of the two platforms, so it holds on both. Like
-    // `gen-wrappers.test.ts`'s `TOOLCHAIN_EXECUTABLES` floor, this is a
-    // RATCHET: it only ever needs to rise as names are added, never fall,
-    // and a fall here means the derivation lost members rather than that
-    // fewer names shipped.
+    // Fix round 1, Finding 5: the floor is the DARWIN-ARM minimum — `ccd`,
+    // `ccd-account-auth`, the GPT lane's four and `ccrc`, seven since Plan 2b-2
+    // placed `ccgpt-runtime` and `ccrc-codex` — the smaller of the two
+    // platforms, so it holds on both. Like `gen-wrappers.test.ts`'s
+    // `TOOLCHAIN_EXECUTABLES` floor, this is a RATCHET: it only ever needs to
+    // rise as names are added, never fall, and a fall here means the
+    // derivation lost members rather than that fewer names shipped.
     expect(placed.length, 'the bin directory listed nothing — the derivation, not the echo, is broken')
-      .toBeGreaterThanOrEqual(5);
+      .toBeGreaterThanOrEqual(7);
     // C-I (fix wave B, item 14): `.toContain(b)` is SUBSTRING containment on
     // `line`, one whole string — `ccd` and `ccd-usage-sweep` are each a
     // PREFIX of another name this same census carries (`ccd-account-auth`,
@@ -3591,7 +5154,10 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(r.code).toBe(1);
     expect(existsSync(join(broken, '.ccrc', 'build.json')), 'the stamp is written mid-spine, as designed').toBe(true);
     expect(existsSync(join(broken, '.ccrc', 'installed')), 'a spine that died must leave NO completed-install record').toBe(false);
-  });
+    // AN EXPLICIT BOUND (final review F4): three whole install spines, legitimately. Measured alone
+    // (one file, `-t`): 6.8 s at load average 12 (2026-09-28), 7.6 s at load 30 (the final review) —
+    // a third of the 20 s default before any load spike, which is the bound that was wrong.
+  }, 60_000);
 
   // Review fix round 1 I1: EVERY released `cmd_update` before this wave ran
   // its staged spine as `env CCRC_UPDATE_VERIFIED=1 bash "$UPD_TREE/ccd/ccrc"
@@ -3720,6 +5286,82 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // would be a credential nobody chose, and one it PROMPTED for cannot be
     // read at all under `curl … | bash`, where stdin is the script itself.
     expect(existsSync(join(home, '.ccrc', 'auth.scrypt'))).toBe(false);
+  });
+
+  // ── wave 8 item G, D-3598: the gate line follows the FILE too ────────────
+  // A fresh install cannot say "no passphrase" honestly on a box that already
+  // has one — a re-run over an already-passworded, already-exposed box lands
+  // here too. The file is resolved through `_box_auth_path`, the flag through
+  // `_box_unit_env`. With a passphrase file, an exposure file that cannot be
+  // read prints "not measured"; otherwise a measured CCRC_AUTH=on, from
+  // either file with the later one winning, names the file that decides, and
+  // so does the OFF remedy — it names ccrc.env by default, or the exposure
+  // file when that is the one that would arm it. With no passphrase file, a
+  // measured CCRC_AUTH=on names the file that decides too; every other case —
+  // including an exposure file that sets CCRC_AUTH to anything but on, or one
+  // that cannot be read — prints main's else-arm line unchanged, naming
+  // ccrc.env.
+  const gateLine = (out: string): string => out.split('\n').find((l) => l.startsWith('install: gate: ')) ?? '';
+
+  it('G2b: a passphrase file at the default path with the flag OFF — "a PWA passphrase file is at", and the OFF remedy names ccrc.env', () => {
+    const home = freshBox('ccrc-install-gate-file-off-');
+    preexisting(home, 'auth.scrypt', 'fixture-not-a-real-secret\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toContain('a PWA passphrase file is at');
+    expect(line).toContain(join(home, '.ccrc', 'auth.scrypt'));
+    expect(line).toContain('the gate is OFF');
+    expect(line).toContain(join(home, '.ccrc', 'ccrc.env'));
+    expect(line).not.toContain('NO PWA passphrase');
+  });
+
+  it('G2c: an absolute CCRC_AUTH_SECRET_PATH, with the file present there and absent at the default — the present arm, naming the redirected path', () => {
+    const home = freshBox('ccrc-install-gate-redirect-');
+    const elsewhere = join(home, 'secrets', 'gate.scrypt');
+    mkdirSync(join(home, 'secrets'), { recursive: true });
+    writeFileSync(elsewhere, 'fixture-not-a-real-secret\n');
+    preexisting(home, 'ccrc.env', `CCRC_AUTH_SECRET_PATH=${elsewhere}\n`);
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toContain('a PWA passphrase file is at');
+    expect(line).toContain(elsewhere);
+    expect(line).not.toContain(join(home, '.ccrc', 'auth.scrypt'));
+  });
+
+  it('G2d: a RELATIVE CCRC_AUTH_SECRET_PATH — install cannot say whether this box has a passphrase', () => {
+    const home = freshBox('ccrc-install-gate-relative-');
+    preexisting(home, 'ccrc.env', 'CCRC_AUTH_SECRET_PATH=secrets/gate.scrypt\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toMatch(/RELATIVE \(secrets\/gate\.scrypt\)/);
+    expect(line).toContain('make it absolute');
+    expect(line).toContain("ccrc doctor's auth check");
+  });
+
+  it('G2e: a passphrase present and the exposure file CCRC_AUTH=on — names the file that decided it, and never says "armed"', () => {
+    const home = freshBox('ccrc-install-gate-exp-on-');
+    preexisting(home, 'auth.scrypt', 'fixture-not-a-real-secret\n');
+    preexisting(home, 'exposure.env', 'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH=on\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    // Anchored at the START — the OFF branch's own remedy text ALSO contains
+    // the substring "CCRC_AUTH=on in <exposure file>" (its arming words), so
+    // an unanchored `.toContain` cannot tell the ARMED line from the OFF
+    // line's own next-steps text.
+    expect(line, r.stdout).toMatch(
+      new RegExp(`^install: gate: CCRC_AUTH=on in ${join(home, '.ccrc', 'exposure.env').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, and a PWA passphrase file is at `));
+    expect(line).not.toContain('the gate is OFF');
+    expect(line).not.toContain('armed');
+  });
+
+  it('G2f: no passphrase file and the exposure file CCRC_AUTH=on — failing SHUT, no "To arm the gate"', () => {
+    const home = freshBox('ccrc-install-gate-exp-shut-');
+    preexisting(home, 'exposure.env', 'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH=on\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toContain('the gate is failing SHUT');
+    expect(line).toContain(`CCRC_AUTH=on in ${join(home, '.ccrc', 'exposure.env')}`);
+    expect(line).not.toContain('To arm the gate');
   });
 
   it('reads the PWA address back out of the env file it installed', () => {
@@ -3976,6 +5618,9 @@ function runInstallTty(home: string, args: string[], entries: string[]): Promise
   replantDoctorStubs(home);
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(raw)) if (v !== undefined) env[k] = v;
+  // Fix round 2 (N5): on the final env, before the pty spawn below — this
+  // runner has no `omit`/PATH-override path, so the full strict check applies.
+  assertSpineFrontContained(env, home);
   return new Promise((resolve) => {
     const p = pty.spawn(BASH, [ccrcIn(treeRoot(home)), ...args], {
       name: 'xterm-color', cols: 200, rows: 40, cwd: home, env,
@@ -4052,18 +5697,18 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=fleet$/m);
   });
 
-  it('places the two GPT-lane executables, and the closing line names them — the role a lane runs under', async () => {
+  it('places the four GPT-lane executables, and the closing line names them — the role a lane runs under', async () => {
     // Final review F-2 (spec §11): `_inst_bins` gates them `!= server`, on
-    // both platform arms, so a fleet box gets both. The server-role case in
-    // the next describe pins the other side of that gate.
+    // both platform arms, so a fleet box gets all four. The server-role case
+    // in the next describe pins the other side of that gate.
     const { home, r } = await fleet();
-    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+    for (const name of GPT_LANE_BINS) {
       const bin = join(home, '.local', 'bin', name);
       expect(existsSync(bin), `--role fleet did not place ${name}`).toBe(true);
       expect(readFileSync(bin), `${name} is not the placed tree's copy`).toEqual(readFileSync(placed(home, 'ccd', name)));
       expect(statSync(bin).mode & 0o777, `${name} mode`).toBe(0o755);
     }
-    expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccgpt-proxy\.py, ccgpt-usage\.py(?![\w-])/m);
+    expect(r.stdout).toMatch(new RegExp(`^install: bins: .*${LANE_BINS_IN_LINE}`, 'm'));
   });
 
   itLinux('installs ccrc-agent.service — byte for byte — and NOT ccrc.service', async () => {
@@ -4284,12 +5929,12 @@ describe('ccrc install --role: the refusals and the default', () => {
     // `!= server` — the lane needs a converged per-account launcher, and a
     // server-role box converges nothing per account (D-3111) — and the
     // closing line must not claim what the gate skipped.
-    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+    for (const name of GPT_LANE_BINS) {
       expect(existsSync(join(home, '.local', 'bin', name)), `--role server placed ${name}`).toBe(false);
     }
     const bins = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
     expect(bins, 'no `install: bins:` line in the transcript').toBeDefined();
-    expect(bins!, 'the server-role closing line claims a GPT-lane executable').not.toMatch(/ccgpt/);
+    expect(bins!, 'the server-role closing line claims a GPT-lane executable').not.toMatch(/ccgpt|ccrc-codex/);
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });
@@ -4358,6 +6003,10 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     // also plants is unused here (the recorder below never reaches any of
     // them) and harmless.
     const env = ccrcEnv(home);
+    // Fix round 2 (N5, defense-in-depth): the fake `ccd/ccrc` recorder above
+    // means this spawn never reaches a manager either way, but the check is
+    // cheap and this is still a runner that spawns install.sh with a planted spine.
+    assertSpineFrontContained(env, home);
     const r = spawnSync(BASH, [join(root, 'install.sh')], { env, encoding: 'utf8' });
     expect(r.status ?? -1, r.stderr ?? '').toBe(0);
 
@@ -4401,13 +6050,13 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\n$/;
 
   // Each wave's spine ADDS its own words (design 2026-09-20 §9): W1's three,
-  // then W4's four — `detach` on Linux only (decision 17: `--detach` refuses
-  // on Darwin), so a Linux install writes seven words and a Darwin one six.
-  // LITERALS, not a read of ccd/ccrc's arrays: a pin derived from the list
-  // it pins could never red on the list being wrong.
-  const CAPS_W4_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback'];
-  const CAPS_W4_LINUX = [...CAPS_W4_ALL, 'detach'];
-  const CAPS_HERE = process.platform === 'darwin' ? CAPS_W4_ALL : CAPS_W4_LINUX;
+  // W4's four — `detach` on Linux only (decision 17: `--detach` refuses on
+  // Darwin) — and W6's `versions`, so a Linux install writes eight words and
+  // a Darwin one seven. LITERALS, not a read of ccd/ccrc's arrays: a pin
+  // derived from the list it pins could never red on the list being wrong.
+  const CAPS_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback', 'versions'];
+  const CAPS_LINUX = [...CAPS_ALL, 'detach'];
+  const CAPS_HERE = process.platform === 'darwin' ? CAPS_ALL : CAPS_LINUX;
 
   it('node-id: minted once as a lowercase uuid, kept byte-identical by a second run', () => {
     const home = freshBox('ccrc-install-nodeid-');
@@ -4434,7 +6083,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe('not-a-uuid\n');
   });
 
-  it('ccrc-caps: line 1 is the os, then each wave\'s words — W1\'s three, W4\'s four, detach on Linux only (§18 "_inst_caps writes each wave\'s words")', () => {
+  it('ccrc-caps: line 1 is the os, then each wave\'s words — W1\'s three, W4\'s four, W6\'s versions, detach on Linux only (§18 "_inst_caps writes each wave\'s words")', () => {
     const home = freshBox('ccrc-install-caps-');
     gitInit(treeRoot(home));
     const r = runInstall(home);
@@ -4444,9 +6093,13 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(statSync(join(home, '.ccrc', 'ccrc-caps')).mode & 0o777).toBe(0o644);
     // The transcript names the same words, in the same order, as the file.
     expect(r.stdout).toMatch(new RegExp(`^install: caps: ${CAPS_HERE.join(' ')} \\(os ${os}; `, 'm'));
+    // F6 (review 167): the line names the file as `~/.ccrc/ccrc-caps`, and the
+    // fixture's absolute home appears nowhere in the line a rollout would relay.
+    expect(r.stdout).toMatch(/^install: caps: .* \(os \w+; ~\/\.ccrc\/ccrc-caps — /m);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('install: caps:')).join('\n')).not.toContain(home);
   });
 
-  it('ccrc-caps: seven words on Linux, six on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
+  it('ccrc-caps: eight words on Linux, seven on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
     // A real install reaches only the host's own arm. The other is reached by
     // running the real `_inst_caps` and `_ccrc_cap_words` out of ccd/ccrc with
     // CCD_OS set — the extraction harness the `_inst_installed` cases below
@@ -4470,15 +6123,18 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       pick(/^_ccrc_cap_words\(\) \{[\s\S]*?\n\}/m, '_ccrc_cap_words'),
       pick(/^_inst_caps\(\) \{[\s\S]*?\n\}/m, '_inst_caps'),
     ];
-    for (const [os, words] of [['linux', CAPS_W4_LINUX], ['darwin', CAPS_W4_ALL]] as const) {
+    for (const [os, words] of [['linux', CAPS_LINUX], ['darwin', CAPS_ALL]] as const) {
       const home = mkTmp(`ccrc-inst-caps-arm-${os}-`);
       const caps = join(home, '.ccrc', 'ccrc-caps');
       const p = spawnSync('bash', ['-c', [
         'set -uo pipefail', ...harness, `CCD_OS=${os}`, `BOX_CAPS_FILE=${JSON.stringify(caps)}`, '_inst_caps',
-      ].join('\n')], { encoding: 'utf8' });
+      ].join('\n')], { encoding: 'utf8', env: { ...process.env, HOME: home } });
       expect(p.status, `${os}: ${p.stderr}`).toBe(0);
       expect(readFileSync(caps, 'utf8'), os).toBe(`os ${os}\n${words.join('\n')}\n`);
-      expect(p.stdout, os).toBe(`install: caps: ${words.join(' ')} (os ${os}; ${caps} — what this install's ccrc can do, read by the server)\n`);
+      // W6 Task 8A, F6: the path is the box's own home, so it is spelled `~` —
+      // never the absolute fixture home this run wrote under.
+      expect(p.stdout, os).toBe(`install: caps: ${words.join(' ')} (os ${os}; ~/.ccrc/ccrc-caps — what this install's ccrc can do, read by the server)\n`);
+      expect(p.stdout, os).not.toContain(home);
     }
   });
 
@@ -4498,6 +6154,8 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       'update-json': [/^_upd_phase\(\) \{/m],
       'update-gate': [/^_upd_gate\(\) \{/m, /^\s*--no-gate\) no_gate=1 ;;$/m],
       rollback: [/^cmd_rollback\(\) \{/m, /^\s*rollback\)\s+cmd_rollback "\$@" ;;$/m],
+      // W6 Task 4: a kept version is a flip — restore arm 1 and rollback by flip.
+      versions: [/^_upd_restore_arm1\(\) \{/m, /^_ver_flip_back\(\) \{/m],
       detach: [/^_upd_detach\(\) \{/m, /^\s*--detach\) detach=1 ;;$/m],
     };
     const arr = (name: string): string[] => {
@@ -4506,7 +6164,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       return m![1]!.split(/\s+/).filter(Boolean);
     };
     const words = [...arr('CCRC_CAP_WORDS'), ...arr('CCRC_CAP_WORDS_LINUX')];
-    expect(words).toEqual(CAPS_W4_LINUX);
+    expect(words).toEqual(CAPS_LINUX);
     for (const w of words) {
       expect(BACKING[w], `cap word '${w}' has no entry here — name the machinery it promises`).toBeDefined();
       for (const re of BACKING[w]!) expect(src, `cap word '${w}': ccd/ccrc has no ${re}`).toMatch(re);
@@ -4542,7 +6200,9 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(c.code, c.stderr).toBe(0);
     expect(existsSync(join(untagged, '.ccrc', 'floor'))).toBe(false);
     expect(c.stdout).toMatch(/^install: floor: not raised — this stamp carries no version/m);
-  });
+    // AN EXPLICIT BOUND (final review F4): three whole install spines. Measured alone (one file, `-t`):
+    // 8.2 s at load average 12 (2026-09-28), 10.1 s at load 30 (the final review) — half the 20 s default.
+  }, 60_000);
 
   it('_ver_newer agrees with sort -V on a fixture list, and the v is stripped nowhere else', () => {
     const src = read(join(REPO, 'ccd', 'ccrc'));
@@ -4582,7 +6242,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     gitInit(treeRoot(verified));
     expect(runInstall(verified, ['install'], { CCRC_UPDATE_VERIFIED: '1' }).code).toBe(0);
     expect(runInstall(verified, ['version']).stdout).toMatch(/^install: complete \(unsigned — placed without a verified provenance bundle/m);
-  });
+  }, 60_000);
 
   it('ccrc version: the incomplete arm carries no provenance suffix — the record names a different, stale install (D-3136 minor 5)', () => {
     const home = freshBox('ccrc-install-version-incomplete-');
@@ -4788,4 +6448,1103 @@ describe('ccrc install: install-step names the step the spine is entering (desig
     expect(r.stdout, 'a step ran after its marker failed').not.toMatch(/^install: /m);
     expect(existsSync(dotCcrc(home, 'accounts.json'))).toBe(false);
   });
+});
+
+describeLinux('ccrc install and uninstall leave another repository\'s GPT-lane files alone (D-3478)', () => {
+  it('a foreign ccgpt, ccgpt-proxy and ccgpt-usage in ~/.local/bin, and an alias to the first, survive install --role fleet and uninstall, byte for byte', () => {
+    // The fleet box's shape (m-livebox): three dotless files another repository
+    // owns — the launcher both live Codex lanes exec, its shim, its publisher —
+    // and a lane alias symlinked to the launcher. `_inst_atomic` has no ownership
+    // check, so ONE placement at any of these names silently cuts over every live
+    // lane at once; that is why ccrc's launcher is `ccrc-codex`. This case reads
+    // what the verbs DID, so it also sees a placement or removal from a function
+    // `install-census.test.ts` does not read.
+    const home = freshBox('ccrc-install-foreign-ccgpt-bins-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'agent.env'),
+      'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+    const bin = join(home, '.local', 'bin');
+    // Invisible to every scan on purpose — no CLAUDE_CONFIG_DIR, no marker — so
+    // this case is about placement and removal, never about a doctor verdict.
+    const foreign: Record<string, string> = {
+      'ccgpt': '#!/usr/bin/env bash\n# FOREIGN-FIXTURE-2b2: another repository owns this launcher\nexit 0\n',
+      'ccgpt-proxy': '#!/usr/bin/env python3\n# FOREIGN-FIXTURE-2b2: another repository owns this shim\n',
+      'ccgpt-usage': '#!/usr/bin/env bash\n# FOREIGN-FIXTURE-2b2: another repository owns this publisher\nexit 0\n',
+    };
+    for (const [name, text] of Object.entries(foreign)) writeFileSync(join(bin, name), text, { mode: 0o755 });
+    symlinkSync('ccgpt', join(bin, 'ext-a'));
+    const untouched = (stage: string): void => {
+      for (const [name, text] of Object.entries(foreign)) {
+        const p = join(bin, name);
+        expect(existsSync(p), `${stage}: ${name} is gone`).toBe(true);
+        expect(lstatSync(p).isFile(), `${stage}: ${name} is no longer a regular file`).toBe(true);
+        expect(read(p), `${stage}: ${name} changed`).toBe(text);
+        expect(statSync(p).mode & 0o777, `${stage}: ${name} mode`).toBe(0o755);
+      }
+      expect(lstatSync(join(bin, 'ext-a')).isSymbolicLink(), `${stage}: the alias is gone`).toBe(true);
+      expect(readlinkSync(join(bin, 'ext-a')), `${stage}: the alias was repointed`).toBe('ccgpt');
+    };
+    const inst = runInstall(home, ['install', '--role', 'fleet']);
+    expect(inst.code, inst.stderr).toBe(0);
+    untouched('after install --role fleet');
+    // Plan 2b-2 placed ccrc's own launcher, so it lands BESIDE them. That makes
+    // this a statement about the NAME, rather than about an install that placed
+    // nothing at all.
+    expect(read(join(bin, 'ccrc-codex')), 'ccrc-codex is not the placed tree\'s copy').toBe(read(placed(home, 'ccd', 'ccrc-codex')));
+    const un = runInstall(home, ['uninstall']);
+    expect(un.code, `stderr: ${un.stderr}\nstdout: ${un.stdout}`).toBe(0);
+    untouched('after uninstall');
+    expect(existsSync(join(bin, 'ccrc-codex')), 'uninstall left ccrc\'s own launcher behind').toBe(false);
+  });
+});
+
+describe('ccrc install: the harness contains the transient-unit launcher (Plan 2b-2 Task 10)', () => {
+  it('systemd-run resolves inside the fixture HOME and refuses when no fake user manager is planted', () => {
+    // The containment rule: every `systemd-run` a test can reach is a
+    // fixture. Before this task `command -v systemd-run` answered the REAL
+    // one here (m-platform §3.2). The probe resolves the name first and runs
+    // it only when it resolves under $HOME, so a broken harness reports
+    // UNCONTAINED instead of starting a unit on this box.
+    const home = freshBox('ccrc-install-sdrun-contained-');
+    const r = spawnSync(BASH, ['-c', SPINE_CONTAINMENT_PROBE], { env: ccrcEnv(home), encoding: 'utf8' });
+    expect(r.stdout).toContain(`at=${join(home, '.local', 'bin', 'systemd-run')}\n`);
+    expect(r.stdout).toMatch(/^run-rc=97$/m);
+    expect(r.stdout).toMatch(/^env-rc=0$/m);
+    expect(spineRunCalls(home).join('\n')).toContain('--unit=fixture-containment-probe.service');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// Plan 2b-2 Task 10 — `_inst_codex_runtime` and `_inst_codex_tiers`.
+// Two instruments on purpose. The EXTRACTED function, its lane-library seams
+// stubbed (the `_inst_installed` idiom above), is what binds each decision
+// to a red. The REAL spine — real `ccgpt-runtime`, real library, real shim,
+// the fake user manager — proves they compose.
+// ════════════════════════════════════════════════════════════════════════
+const realPy = (): string => realPath('python3');
+const READY = { CCRC_CODEX_READY_S: '20' };
+const REPO_CCRC = join(REPO, 'ccd', 'ccrc');
+const runtimeDir = (home: string): string => join(home, '.ccrc', 'runtime', 'codex');
+const laneDir = (home: string, id: string): string => join(home, '.ccrc', 'codex', id);
+const generations = (home: string): string[] =>
+  (existsSync(runtimeDir(home)) ? readdirSync(runtimeDir(home)).filter((n) => n.startsWith('gen-')).sort() : []);
+const venvCalls = (home: string): string[] =>
+  (existsSync(join(home, 'python3-argv')) ? read(join(home, 'python3-argv')).split('\n') : [])
+    .filter((l) => /^-m venv .*\/\.ccrc\/runtime\/codex\//.test(l));
+/** State-changing manager calls on a CODEX TIER (reads — is-active, show,
+ *  show-environment — excluded). SCOPED to `ccgpt-` units on purpose: the
+ *  front records every call, and on Linux `_inst_enable` always runs
+ *  `systemctl --user restart "$main"` (`ccrc.service` on these boxes) through
+ *  it, so an unscoped filter reads that restart as a tier state change and
+ *  reds a correct install (the plan review measured exactly that line in
+ *  `manager-calls` on a replica of the spliced stub). The
+ *  tier units are `ccgpt-<id>-*` (D-3478), the same pattern
+ *  `spineSystemctlArms` forwards on. `systemd-run` stays unscoped: outside
+ *  Task 2's `_svc_run_supervised`, the one other `systemd-run` in `ccd/ccrc`
+ *  is `_svc_run_detached`, the swap tail's launcher, which no install step
+ *  calls. So any start the front records during an install is a codex tier's. */
+const stateChanges = (home: string): string[] => managerCalls(home)
+  .filter((l) => (/^systemctl --user (stop|start|restart|reset-failed|kill)\b/.test(l) && / ccgpt-/.test(l))
+    || l.startsWith('systemd-run '));
+const doctorCode = (home: string): number => runInstall(home, ['doctor'], READY).code;
+
+/** What `ccgpt-runtime python` answers — the instrument, never a realpath of `current`. */
+function runtimePython(home: string): string {
+  const p = spawnSync(join(home, '.local', 'bin', 'ccgpt-runtime'), ['python'],
+    { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+  if (p.status !== 0) throw new Error(`ccgpt-runtime python: ${p.stderr}`);
+  return (p.stdout ?? '').trim();
+}
+
+/** The TEMPLATE runtime python the `python3` stub copies into a codex
+ *  generation — ruling R28's one exception to "every generation is
+ *  `plantFakeRuntime`'s": it is what `python3 -m venv` hands the REAL builder,
+ *  which then builds, probes, stamps and swaps on its own, so it models the
+ *  BUILD and never a built runtime. It answers what `ccgpt-runtime` and the
+ *  tier functions ask of a generation's python, from a fixture directory baked
+ *  in at plant time — so a builder that runs its probe under a scrubbed env or
+ *  a temp HOME still finds it. pip and the probe answer by verdict; litellm's
+ *  version comes from a fixture dist-info on PYTHONPATH (so ANY
+ *  `importlib.metadata` question — `check`'s re-measure, the stamp writer's —
+ *  gets it); the litellm tier is Task 5's ONE stand-in LiteLLM
+ *  (`fakeLitellmSource`, ruling R29), written beside it by
+ *  `plantRuntimeTemplate`; everything else (the shim, the stamp writer) runs on
+ *  the real interpreter. */
+function runtimeTemplatePython(fixtureDir: string, real: string): string {
+  return [
+    '#!/bin/sh',
+    'PATH="${PATH:-/usr/bin:/bin}"; export PATH',
+    `F='${fixtureDir}'`,
+    `REAL='${real}'`,
+    'printf \'%s\\n\' "$*" >> "$F/calls"',
+    'verdict() {',
+    '  v="$(cat "$F/verdict" 2>/dev/null)"',
+    '  case "$v" in',
+    '    pass) echo "behaviour_probe: PASS litellm=$(cat "$F/version") raw-shape-leaks-system-role=yes"; exit 0 ;;',
+    '    fail:*) echo "behaviour_probe: FAIL ${v#fail:}: fixture verdict"; exit 1 ;;',
+    '  esac',
+    '  exit 0',
+    '}',
+    // Interpreter flags the builder may pass. Dropped because, under -I, the
+    // real interpreter would ignore PYTHONPATH — the fixture dist-info's only
+    // way in (m-runtime-probe HR7); PYTHONDONTWRITEBYTECODE covers -B. They
+    // are dropped BEFORE pip is recognised (final review F4, F3's note): a
+    // builder that ran `-I -m pip` would otherwise fall through to the box's
+    // REAL python, and so to a real, networked `pip install`.
+    'while :; do case "${1:-}" in -I|-B|-E|-s|-S|-u) shift ;; *) break ;; esac; done',
+    'if [ "${1:-}" = -m ] && [ "${2:-}" = pip ]; then',
+    '  prev=""',
+    '  for a in "$@"; do',
+    '    [ "$prev" = --report ] && printf \'{"version": "1", "install": []}\\n\' > "$a"',
+    '    prev="$a"',
+    '  done',
+    '  exit "$(cat "$F/pip-rc" 2>/dev/null || echo 0)"',
+    'fi',
+    'export PYTHONPATH="$F/site" PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1',
+    'if [ "${1:-}" = -m ] && [ "${2:-}" = litellm.proxy.proxy_cli ]; then',
+    '  exec "$REAL" "$F/fake-litellm.py" "$@"',
+    'fi',
+    'case "${1:-}" in',
+    '  -) prog="$(cat)"',
+    '     case "$prog" in *behaviour_probe*) verdict ;; esac',
+    '     printf \'%s\\n\' "$prog" | "$REAL" "$@"; exit $? ;;',
+    '  -c) case "${2:-}" in *behaviour_probe*) verdict ;; esac ;;',
+    '  *) if [ -f "${1:-}" ] && grep -q behaviour_probe "$1" 2>/dev/null; then verdict; fi ;;',
+    'esac',
+    'exec "$REAL" "$@"',
+  ].join('\n') + '\n';
+}
+
+function writeRuntimeFixture(home: string, opts: { verdict?: string; version?: string; pipRc?: number }): void {
+  const f = join(home, 'fixture-runtime');
+  mkdirSync(f, { recursive: true });
+  if (opts.verdict !== undefined) writeFileSync(join(f, 'verdict'), `${opts.verdict}\n`);
+  if (opts.pipRc !== undefined) writeFileSync(join(f, 'pip-rc'), `${opts.pipRc}\n`);
+  if (opts.version !== undefined) {
+    writeFileSync(join(f, 'version'), `${opts.version}\n`);
+    rmSync(join(f, 'site'), { recursive: true, force: true });
+    const di = join(f, 'site', `litellm-${opts.version}.dist-info`);
+    mkdirSync(di, { recursive: true });
+    writeFileSync(join(di, 'METADATA'), `Metadata-Version: 2.1\nName: litellm\nVersion: ${opts.version}\n`);
+  }
+}
+
+function plantRuntimeTemplate(home: string, opts: { verdict: 'pass' | `fail:${string}`; version: string }): void {
+  const f = join(home, 'fixture-runtime');
+  const tpl = join(f, 'gen-template');
+  mkdirSync(join(tpl, 'bin'), { recursive: true });
+  writeFileSync(join(tpl, 'bin', 'python'), runtimeTemplatePython(f, realPy()), { mode: 0o755 });
+  // Task 5's stand-in LiteLLM (ruling R29), never a second fake. Its knobs and
+  // its `litellm-<port>.json` evidence live in `<home>/fake-procs`, the one
+  // directory Task 5's readers and `killLaneProcesses` use; it refuses a
+  // missing `--config`, so a tier started before `plantLaneConfig` fails loudly.
+  mkdirSync(join(home, 'fake-procs'), { recursive: true });
+  writeFileSync(join(f, 'fake-litellm.py'), fakeLitellmSource(join(home, 'fake-procs')));
+  writeRuntimeFixture(home, { verdict: opts.verdict, version: opts.version, pipRc: 0 });
+  writeFileSync(join(home, 'fixture-runtime-template'), `${tpl}\n`);
+}
+
+/** A fresh box whose roster carries `lanes` as codex lanes.
+ *
+ *  TREE OVERRIDE (re-derived, not in the brief's own text): `freshBox` alone
+ *  leaves the checkout git-less, so `_inst_stamp` reports "skipped" and
+ *  `_inst_installed` never writes `~/.ccrc/installed` (`_box_build_fields`
+ *  refuses without a readable stamp) — measured directly against this tree at
+ *  Step 5 (`--role server builds nothing…` reds on `dotCcrc(home,
+ *  'installed')` even with an empty stderr). Every real-spine case in this
+ *  block asserts that record exists, so `codexBox` stamps the checkout the
+ *  same way the pre-existing stamp suite does (`gitInit`, this file's own
+ *  helper), which the brief's own snippet omitted. */
+function codexBox(prefix: string, lanes: LanePorts[], opts: { template?: boolean; systemd?: boolean } = {}): string {
+  const home = freshBox(prefix);
+  gitInit(treeRoot(home));
+  codexRoster(home, lanes);
+  if (opts.template !== false) plantRuntimeTemplate(home, { verdict: 'pass', version: '1.101.0' });
+  if (opts.systemd === true) plantSystemd(home, { userManager: true });
+  return home;
+}
+
+/** Registry, credential, rendered config, `ccrc codex start` — through the
+ *  REPOSITORY's ccrc (the fixture tree carries no models-op.mjs), against this
+ *  fixture HOME. The config is Task 5's `plantLaneConfig` (ruling R20): the
+ *  renderer's own output for a one-model catalogue, planted before the start. */
+function startLane(home: string, id: string): Result {
+  // Register before init/start can partially succeed. The real product stop
+  // runs while the roster, lane and fake-manager state are still present.
+  registerLaneCleanup(home, `install-codex:${id}`, () => {
+    runInstall(home, ['codex', 'stop', id], READY, { from: REPO_CCRC });
+  });
+  const init = runInstall(home, ['models', id, 'init', 'codex'], READY, { from: REPO_CCRC });
+  if (init.code !== 0) throw new Error(`ccrc models ${id} init codex:\n${init.stderr}`);
+  plantLaneAuth(home, id);
+  plantLaneConfig(home, id);
+  return runInstall(home, ['codex', 'start', id], READY, { from: REPO_CCRC });
+}
+
+interface StepRun {
+  code: number; stdout: string; stderr: string; calls: string[]; degraded: string[];
+  /** `CX_LOCK_FD` and `CX_LOCK_ID` after the step returned: empty unless a
+   *  lane's lock was never released through `_codex_unlock`. */
+  lockAfter: string;
+}
+
+function runStepHarness(home: string, harness: string, callsFile = 'calls'): StepRun {
+  // The containment rule reaches this harness too (Global Constraints: every
+  // `systemd-run` and `systemctl` a test can reach is a fixture). The wall's
+  // stubs come FIRST on PATH, and a step that called either is a thrown,
+  // named red, never the real binary.
+  // Task 11 review fix round 3 (C2): the wall is CHECKED, not assumed — on
+  // the env the spawn takes, on the line before it. `strayManagerCalls` reads
+  // only the wall's own log, so a name the wall lost would reach the real
+  // binary unrecorded.
+  const wall = isolationManagerStubs(home);
+  const env = { PATH: `${wall}:${process.env['PATH'] ?? ''}`, HOME: home };
+  assertIsolationWallFirst(env, home);
+  const p = spawnSync(BASH, ['-c', harness], { env, encoding: 'utf8' });
+  const stray = strayManagerCalls(home);
+  if (stray.length > 0) {
+    throw new Error(`the step reached the user manager directly, not through the stubbed lane library:\n${stray.join('\n')}\n${p.stderr ?? ''}`);
+  }
+  const lines = (f: string): string[] => (existsSync(join(home, f)) ? read(join(home, f)).split('\n').filter(Boolean) : []);
+  return {
+    code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '', calls: lines(callsFile),
+    degraded: lines('degraded'), lockAfter: lines('lock-after').join('\n'),
+  };
+}
+/** Task 4's `_codex_lanes`, stubbed: the ids at rc 0, or (`rc: 1`) its
+ *  `roster-invalid` refusal — an unreadable roster is never an empty one. */
+const lanesFn = (lanes: string[], rc = 0): string => (rc === 0
+  ? `_codex_lanes() { ${lanes.length === 0 ? ':' : `printf '%s\\n' ${lanes.join(' ')}`}; }`
+  : `_codex_lanes() { echo "ccrc codex: roster-invalid: fixture: the roster could not be read" >&2; return ${rc}; }`);
+const DEGRADED_OUT = 'printf \'%s\\n\' ${INST_DEGRADED[@]+"${INST_DEGRADED[@]}"} > "$HOME/degraded"';
+const LOCK_AFTER_OUT = 'printf \'%s\\n\' "${CX_LOCK_FD:-}" "${CX_LOCK_ID:-}" > "$HOME/lock-after"';
+/** Task 4's one-line definitions, read out of ccd/ccrc rather than re-typed. */
+const RUNTIME_CLI_DEF = (): string => ccrcLine(/^_codex_runtime_cli\(\) \{.*\}$/m, '_codex_runtime_cli');
+const CODEX_TIERS_DEF = (): string => ccrcLine(/^CODEX_TIERS=.*$/m, 'CODEX_TIERS=');
+
+/** The requirement the stub builder DECLARES, in the placed builder's own
+ *  assignment shape. A fixture value, never the real one: the real-spine case
+ *  reads the real one out of the placed `ccgpt-runtime`. */
+const FIXTURE_REQUIREMENT = 'fixture-requirement>=0';
+
+/** `_inst_codex_runtime` alone, against a stub `ccgpt-runtime` whose `python`
+ *  answers `before`, and `after` once a build exits 0. The stub declares
+ *  `requirement` (default {@link FIXTURE_REQUIREMENT}; `null` plants no
+ *  assignment line), and its `build` says `fixture ccgpt-runtime: build running`
+ *  on stderr the moment it starts. `merge` runs the step with stderr joined to
+ *  stdout, so the ORDER of the step's lines and the build's start is one
+ *  measurement (ruling R33). */
+function runRuntimeStep(c: {
+  lanes?: string[]; lanesRc?: number; role?: 'both' | 'fleet' | 'server'; builder?: boolean;
+  before?: string; after?: string; buildRc?: number; requirement?: string | null; merge?: boolean;
+}): StepRun {
+  const home = mkTmp('ccrc-codex-runtime-step-');
+  const rt = join(home, 'rt');
+  mkdirSync(rt, { recursive: true });
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  const genPy = (g: string): string => `${join(home, '.ccrc', 'runtime', 'codex', g, 'bin', 'python')}\n`;
+  if (c.before !== undefined) writeFileSync(join(rt, 'now'), genPy(c.before));
+  if (c.after !== undefined) writeFileSync(join(rt, 'after'), genPy(c.after));
+  writeFileSync(join(rt, 'build-rc'), `${c.buildRc ?? 0}\n`);
+  const requirement = c.requirement === undefined ? FIXTURE_REQUIREMENT : c.requirement;
+  if (c.builder !== false) {
+    writeFileSync(join(home, '.local', 'bin', 'ccgpt-runtime'), [
+      '#!/bin/sh',
+      ...(requirement === null ? [] : [`LITELLM_REQUIREMENT='${requirement}'`]),
+      'd="$HOME/rt"',
+      'printf \'%s\\n\' "$*" >> "$d/calls"',
+      'case "$1" in',
+      '  build)',
+      '    echo "fixture ccgpt-runtime: build running" >&2',
+      '    rc="$(cat "$d/build-rc")"',
+      '    if [ "$rc" != 0 ]; then echo "ccgpt-runtime: build failed at probe: fixture refusal — the previous runtime (if any) stays current" >&2; exit "$rc"; fi',
+      '    [ -f "$d/after" ] && cp "$d/after" "$d/now"',
+      '    echo "ccgpt-runtime: fixture builder stdout that the step must not relay"',
+      '    exit 0 ;;',
+      '  python)',
+      '    [ -s "$d/now" ] || { echo "ccgpt-runtime: absent" >&2; exit 1; }',
+      '    cat "$d/now"; exit 0 ;;',
+      'esac',
+      'echo "stub ccgpt-runtime: unexpected argv: $*" >&2; exit 90',
+    ].join('\n') + '\n', { mode: 0o755 });
+  }
+  return runStepHarness(home, [
+    'set -uo pipefail',
+    `INST_ROLE=${c.role ?? 'both'}`,
+    'INST_DEGRADED=()',
+    lanesFn(c.lanes ?? ['codex-a'], c.lanesRc ?? 0),
+    RUNTIME_CLI_DEF(),
+    ccrcFunction('_inst_codex_runtime'),
+    c.merge === true ? '_inst_codex_runtime 2>&1; rc=$?' : '_inst_codex_runtime; rc=$?',
+    DEGRADED_OUT,
+    'exit "$rc"',
+  ].join('\n'), 'rt/calls');
+}
+
+/** `_inst_codex_tiers` alone: the four lane-library seams stubbed by table,
+ *  Task 5's `_codex_lock` and `_codex_unlock` by `lockStub`, and Task 4's
+ *  one-line definitions and Task 5's `_codex_ready_secs` (ruling R27) REAL,
+ *  read out of ccd/ccrc. `stopForeign` (Task 10's own extension, ruling
+ *  PF-21) names id+tier keys whose `_codex_stop_tier` stub prints "foreign"
+ *  at rc 0 — the one word that tells "stopped" and "foreign" apart, since the
+ *  real verb returns rc 0 for both. */
+function runTiersStep(c: {
+  lanes?: string[]; lanesRc?: number; role?: 'both' | 'fleet' | 'server'; runtime?: boolean; readyS?: string;
+  ours?: Record<string, StubRc>; stale?: Record<string, StubRc>;
+  stopRc?: Record<string, StubRc>; startRc?: Record<string, StubRc>; lockRefuse?: string[]; lockNoFlock?: string[];
+  stopForeign?: readonly string[];
+  // Review round 2, N2: the WHY `_codex_tier_ours`'s fake sets right before
+  // it answers 2, so the step's own `_codex_foreign_what` call (the real
+  // function, unstubbed) resolves a real message from it, the same way the
+  // shipped library would.
+  oursWhy?: Readonly<Record<string, string>>;
+}): StepRun {
+  const home = mkTmp('ccrc-codex-tiers-step-');
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(join(home, '.local', 'bin', 'ccgpt-runtime'), [
+    '#!/bin/sh',
+    '[ "$1" = python ] || { echo "stub ccgpt-runtime: unexpected argv: $*" >&2; exit 90; }',
+    c.runtime === false
+      ? 'echo "ccgpt-runtime: absent" >&2; exit 1'
+      : 'echo "$HOME/.ccrc/runtime/codex/gen-20260101T000000Z-1/bin/python"',
+  ].join('\n') + '\n', { mode: 0o755 });
+  const stopWords = Object.fromEntries((c.stopForeign ?? []).map((k) => [k, 'foreign']));
+  return runStepHarness(home, [
+    'set -uo pipefail',
+    `INST_ROLE=${c.role ?? 'both'}`,
+    'INST_DEGRADED=()',
+    // Review round 1, spec-2/mut-3: `0` silently means 90s by
+    // `_codex_ready_secs`' own PF-19 floor (`[ "$s" -ge 1 ] || s=90`), and
+    // this file's testTimeout is 20s — a case that omits `readyS` and
+    // reaches the wait loop would then red by TIMEOUT, not by its own
+    // assertion. `1` is the smallest valid bound.
+    `CCRC_CODEX_READY_S=${c.readyS ?? '1'}`,
+    // Review round 2: `_codex_foreign_what` (real, unstubbed — called by
+    // `_inst_codex_tiers` on a 2) reads these unconditionally; the isolation
+    // harness never runs `_codex_row`, whose real job sets them. Pure-parse
+    // fixture ports (global constraints' own vocabulary), no socket opened.
+    'CX_LITELLM=45010', 'CX_PROXY=45011',
+    lanesFn(c.lanes ?? ['codex-a'], c.lanesRc ?? 0),
+    CODEX_TIERS_DEF(),
+    RUNTIME_CLI_DEF(),
+    ccrcFunction('_codex_ready_secs'),
+    // Real, unstubbed (review round 2, N2/N3): `_inst_codex_tiers` now calls
+    // this on a 2, the same helper the identity gate above it already used.
+    ccrcFunction('_codex_foreign_what'),
+    // The final-review fix wave: `_codex_foreign_what` reads its port through
+    // the ONE tier -> port helper (real), and names a unit through the lane
+    // library's unit reader, the manager probe and the status hint — stubbed
+    // here as no manager and the default unit name, so a `unit-unproven`
+    // WHY is named from the word itself, as the real helper does.
+    ccrcFunction('_codex_tier_port'),
+    '_codex_unit() { printf \'ccgpt-%s-%s.service\\n\' "$1" "$2"; }',
+    '_svc_have_user_manager() { return 1; }',
+    '_svc_status_hint() { printf \'systemctl --user status %s\' "$1"; }',
+    '_codex_bus_defaults() { :; }',
+    lockStub(c.lockRefuse ?? [], c.lockNoFlock ?? []),
+    recordingStub('_codex_tier_ours', c.ours, 1, {}, c.oursWhy ?? {}),
+    recordingStub('_codex_tier_stale', c.stale, 1),
+    recordingStub('_codex_stop_tier', c.stopRc, 0, stopWords),
+    recordingStub('_codex_start_tier', c.startRc, 0),
+    ccrcFunction('_inst_codex_tiers'),
+    '_inst_codex_tiers; rc=$?',
+    DEGRADED_OUT,
+    LOCK_AFTER_OUT,
+    'exit "$rc"',
+  ].join('\n'));
+}
+
+describe('ccrc install: the codex runtime step, measured in isolation (_inst_codex_runtime)', () => {
+  const G1 = 'gen-20260101T000000Z-1';
+  const G2 = 'gen-20260101T000000Z-2';
+
+  it('a server-role box: silent, and the builder is never run', () => {
+    const r = runRuntimeStep({ role: 'server', after: G1 });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(r.calls).toEqual([]);
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('no codex lane in the roster: one line, and the builder is never run', () => {
+    const r = runRuntimeStep({ lanes: [], after: G1 });
+    expect(r.stdout).toBe('install: codex runtime: none — no codex lane in the roster\n');
+    expect(r.calls).toEqual([]);
+  });
+
+  it('a roster that cannot be read is never "no codex lane": its own line, degraded, and nothing is built', () => {
+    // Task 4's `_codex_lanes` answers rc 1 with `roster-invalid` there; the
+    // `after` generation is the CONTROL — a step that read rc 1 as "none"
+    // would say "none", and one that built anyway would name it.
+    const r = runRuntimeStep({ lanesRc: 1, after: G1 });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/^ccrc codex: roster-invalid: /m);
+    expect(r.stdout).toBe('install: codex runtime: NOT BUILT — $HOME/.ccrc/accounts.json could not be read as a roster (the ccrc codex: roster-invalid line above says why), so this step cannot tell whether any codex lane needs a runtime. This install continues. Fix the roster (ccrc wrappers prints the validator\'s sentence), then re-run: ccrc install\n');
+    expect(r.calls).toEqual([]);
+    expect(r.degraded).toEqual(['codex-runtime']);
+  });
+
+  // Review C2: `_codex_lanes` rc 2 is a missing jq (`cmd_install` probes
+  // node and systemctl by name, never jq), and the roster it could not read
+  // is VALID — `_inst_accounts_sh` validated it through node. So the step
+  // names jq, never the roster.
+  it('a missing jq (rc 2) is its own line, never "fix the roster": degraded, and nothing is built (review C2)', () => {
+    const r = runRuntimeStep({ lanesRc: 2, after: G1 });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('install: codex runtime: NOT BUILT — jq is not on PATH (the ccrc codex: missing-dependency line above says so), so this step cannot read which roster lanes are codex lanes. This install continues. Install jq, then re-run: ccrc install\n');
+    expect(r.calls).toEqual([]);
+    expect(r.degraded).toEqual(['codex-runtime']);
+  });
+
+  // Ruling R33's line: said before every build, naming what the builder declares.
+  const BUILDING = `install: codex runtime: building ${FIXTURE_REQUIREMENT} — pip may take minutes`;
+
+  it('a build that produces a new generation says so, named by what ccgpt-runtime python resolves — never by parsing the builder', () => {
+    const r = runRuntimeStep({ after: G2 });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe(`${BUILDING}\ninstall: codex runtime: ${G2} built, probed and current for 1 codex lane(s)\n`);
+    expect(r.calls).toEqual(['python', 'build', 'python']);
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('says the build is running BEFORE the build starts, naming the requirement the builder declares, and the result line comes after it (ruling R33)', () => {
+    // `merge` joins the step's stderr to its stdout, so the builder's own
+    // `build running` line lands in order between the step's two lines. A
+    // `building` line printed after the build returned would follow it.
+    const r = runRuntimeStep({ after: G2, merge: true });
+    expect(r.stdout.split('\n').filter(Boolean)).toEqual([
+      BUILDING,
+      'fixture ccgpt-runtime: build running',
+      `install: codex runtime: ${G2} built, probed and current for 1 codex lane(s)`,
+    ]);
+  });
+
+  it('a builder whose requirement line cannot be read still builds, and the building line says it could not be read rather than naming nothing', () => {
+    const r = runRuntimeStep({ after: G2, requirement: null });
+    expect(r.stdout.split('\n')[0]).toMatch(/^install: codex runtime: building \(the requirement \S+\/\.local\/bin\/ccgpt-runtime declares could not be read\) — pip may take minutes$/);
+    expect(r.calls).toEqual(['python', 'build', 'python']);
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('a build that changed nothing says the runtime was re-measured current', () => {
+    const r = runRuntimeStep({ lanes: ['codex-a', 'codex-b'], before: G1 });
+    expect(r.stdout).toBe(`${BUILDING}\ninstall: codex runtime: ${G1} already current (requirement, probe and litellm version re-measured unchanged) for 2 codex lane(s)\n`);
+  });
+
+  it('a failed build DEGRADES: the builder\'s own sentence reaches stderr, the previous runtime is named as still current, and the step returns 0', () => {
+    const r = runRuntimeStep({ before: G1, buildRc: 2 });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/^ccgpt-runtime: build failed at probe: fixture refusal/m);
+    expect(r.stdout).toBe(`${BUILDING}\ninstall: codex runtime: NOT BUILT — ccgpt-runtime build exited 2 (its reason is the ccgpt-runtime line on stderr); the previous runtime ${G1} stays current. This install continues. Re-run: ccgpt-runtime build\n`);
+    expect(r.degraded).toEqual(['codex-runtime']);
+  });
+
+  it('a failed first build says there is no runtime at all', () => {
+    const r = runRuntimeStep({ buildRc: 2 });
+    expect(r.stdout).toMatch(/; there is no runtime at all, so no codex lane can start until a build passes\. This install continues\./);
+    expect(r.degraded).toEqual(['codex-runtime']);
+  });
+
+  it('a build that exits 0 while nothing resolves is NOT a build — an overloaded success is refused', () => {
+    const r = runRuntimeStep({});
+    expect(r.stdout).toMatch(/^install: codex runtime: NOT BUILT — ccgpt-runtime build exited 0 but no runtime resolves \(ccgpt-runtime python answers nothing\)/m);
+    expect(r.degraded).toEqual(['codex-runtime']);
+  });
+
+  it('a box with no builder on PATH degrades and names the missing file', () => {
+    const r = runRuntimeStep({ builder: false });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^install: codex runtime: NOT BUILT — \S+\/\.local\/bin\/ccgpt-runtime is not on this box/m);
+    // No builder, so nothing is building: the R33 line is never said.
+    expect(r.stdout).not.toMatch(/: building /);
+    expect(r.degraded).toEqual(['codex-runtime']);
+  });
+});
+
+describe('ccrc install: the codex tier restart step, measured in isolation (_inst_codex_tiers)', () => {
+  const LOCK_A = '_codex_lock codex-a';
+  const LOCK_B = '_codex_lock codex-b';
+  const UNLOCK_A = '_codex_unlock codex-a';
+  const UNLOCK_B = '_codex_unlock codex-b';
+  const A_L = '_codex_tier_ours codex-a litellm';
+  const A_S = '_codex_tier_ours codex-a shim';
+  const B_L = '_codex_tier_ours codex-b litellm';
+  const B_S = '_codex_tier_ours codex-b shim';
+
+  it('the isolation harness contains the user manager too: systemctl and systemd-run resolve to its wall, inside this HOME', () => {
+    // `runStepHarness` runs with the caller's PATH, where both names resolve
+    // to the REAL binaries on a Linux box. The wall's stubs must come first.
+    const home = mkTmp('ccrc-codex-step-contained-');
+    const r = runStepHarness(home, 'command -v systemctl; command -v systemd-run');
+    expect(r.stdout).toBe(`${join(home, 'isolation-bin', 'systemctl')}\n${join(home, 'isolation-bin', 'systemd-run')}\n`);
+  });
+
+  it('a server-role box: silent, and the lane library is never asked', () => {
+    const r = runTiersStep({ role: 'server', ours: { 'codex-a shim': 0 }, stale: { 'codex-a shim': 0 } });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(r.calls).toEqual([]);
+  });
+
+  it('no codex lane in the roster: one line', () => {
+    const r = runTiersStep({ lanes: [] });
+    expect(r.stdout).toBe('install: codex tiers: none — no codex lane in the roster\n');
+    expect(r.calls).toEqual([]);
+  });
+
+  it('a roster that cannot be read is never "no codex lane": its own line, degraded, and no lane is asked', () => {
+    const r = runTiersStep({ lanesRc: 1 });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/^ccrc codex: roster-invalid: /m);
+    expect(r.stderr).toMatch(/^install: codex tiers: NOT measured — \$HOME\/\.ccrc\/accounts\.json could not be read as a roster \(the ccrc codex: roster-invalid line above says why\), so no codex lane's tiers were checked or restarted/m);
+    expect(r.stdout).not.toMatch(/no codex lane in the roster/);
+    expect(r.calls).toEqual([]);
+    expect(r.degraded).toEqual(['codex-tiers']);
+  });
+
+  it('a missing jq (rc 2) is its own line, never "fix the roster": degraded, and nothing is measured (review C2)', () => {
+    const r = runTiersStep({ lanesRc: 2, ours: { 'codex-a litellm': 0 } });
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/^install: codex tiers: NOT measured — jq is not on PATH \(the ccrc codex: missing-dependency line above says so\), so no codex lane's tiers were checked or restarted; install jq, then re-run: ccrc install$/m);
+    expect(r.stderr).not.toMatch(/^install: codex tiers: .*could not be read as a roster/m);
+    expect(r.calls).toEqual([]);
+    expect(r.degraded).toEqual(['codex-tiers']);
+  });
+
+  it('a tier that is not running is never started, even when it would count as stale — a lazy lane stays lazy', () => {
+    // `stale: 0` is the CONTROL: with the tiers reading not-stale, a step
+    // that wrongly treated rc 1 as a candidate would stay green here.
+    const r = runTiersStep({ stale: { 'codex-a litellm': 0, 'codex-a shim': 0 } });
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, UNLOCK_A]);
+    // Review round 1, item 3: the lock-wait line (R33's spirit) is printed
+    // BEFORE every `_codex_lock`, even when it returns at once.
+    expect(r.stdout).toBe('install: codex tiers: codex-a: waiting up to 31s for its lane lock\n'
+      + 'install: codex tiers: 1 codex lane(s) — 0 restarted, 0 left as they were, 0 not restarted\n');
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('a tier whose port or unit answers as another lane is left alone, and said so', () => {
+    const r = runTiersStep({ ours: { 'codex-a shim': 2 }, stale: { 'codex-a shim': 0 },
+      oursWhy: { 'codex-a shim': 'listener-answers-other-lane' } });
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, UNLOCK_A]);
+    // Review A2: named in `_codex_foreign_what`'s words (the real helper),
+    // with its remedy — never a "not this lane" sentence of the step's own.
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a shim: left alone — port 45011 \(codex-a's shim tier\) is held by a listener that is not this lane's: it answers as another lane, and this step never stops what it cannot prove it started\. Stop whatever holds port 45011, or give codex-a other ports in ~\/\.ccrc\/accounts\.json\. \(read: ccrc codex status codex-a\)$/m);
+    expect(r.stdout).toMatch(/^install: codex tiers: 1 codex lane\(s\) — 0 restarted, 1 left as they were, 0 not restarted$/m);
+  });
+
+  // Review A2/E2 (ruling PF-13): this lane's own crash-looping tier reads
+  // `unit-unproven` between two restarts, so the gate says UNPROVEN, with
+  // the retry, never "not this lane".
+  it('a proven lane process whose port belongs to another process is left alone because restart cannot rebind, with its lane-stop remedy', () => {
+    const r = runTiersStep({ ours: { 'codex-a shim': 2 }, stale: { 'codex-a shim': 0 },
+      oursWhy: { 'codex-a shim': 'listener-other-process' } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("codex-a shim: left alone — port 45011 (codex-a's shim tier) is held by a process that is not this lane's shim: pid ? is this lane's by its command line, and another process holds the port's listening socket");
+    expect(r.stdout).toContain("another process owns its port, so restarting this proven lane process could not rebind it; stop this lane's process with: ccrc codex stop codex-a");
+    expect(r.stdout).not.toContain('and this step never stops what it cannot prove it started');
+  });
+
+  it('a unit whose identity is only unproven is left alone, named as unproven with its retry — never "not this lane" (review A2)', () => {
+    const r = runTiersStep({ ours: { 'codex-a shim': 2 }, stale: { 'codex-a shim': 0 },
+      oursWhy: { 'codex-a shim': 'unit-unproven' } });
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, UNLOCK_A]);
+    expect(r.stdout).toContain('install: codex tiers: codex-a shim: left alone — the unit ccgpt-codex-a-shim.service is active, but its identity as codex-a\'s shim tier is unproven: '
+      + 'a unit of that name is live with no process that proves this lane, and port 45011 does not answer, and this step never stops what it cannot prove it started. '
+      + 'Re-run in a few seconds: this lane\'s own tier reads this way between two of its restarts, and proves itself once its process is back. '
+      + 'If it still reads this way, \'systemctl --user status ccgpt-codex-a-shim.service\' shows what the unit runs. (read: ccrc codex status codex-a)\n');
+    expect(r.stdout).not.toMatch(/not this lane/);
+    expect(r.stdout).toMatch(/— 0 restarted, 1 left as they were, 0 not restarted$/m);
+  });
+
+  it('an identity answer the step cannot read is left alone too — the safe direction, with its own sentence', () => {
+    const r = runTiersStep({ ours: { 'codex-a shim': 3 }, stale: { 'codex-a shim': 0 } });
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, UNLOCK_A]);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a shim: left alone — whether it is this lane's could not be measured, and this step never stops what it cannot prove it started/m);
+    expect(r.stdout).not.toMatch(/codex-a shim: left alone — port /);
+  });
+
+  it('a tier of this lane\'s that is still STARTING (4) is never restarted, even when stale — it is named with its remedy', () => {
+    // A 4 is ours, not foreign (a live handle proves the lane; the port does
+    // not answer yet). `stale: 0` is the control: a step that treated 4 like
+    // 0 would ask staleness and stop it mid-import.
+    const r = runTiersStep({ ours: { 'codex-a shim': 4 }, stale: { 'codex-a shim': 0 } });
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, UNLOCK_A]);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a shim: left alone — it is this lane's own tier and still starting \(its port does not answer yet\), and this step never restarts a tier mid-start; if it runs code this install replaced, restart it once it answers: ccrc codex stop codex-a, then ccrc codex start codex-a$/m);
+    expect(r.stdout).toMatch(/— 0 restarted, 1 left as they were, 0 not restarted$/m);
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('a running tier this install did not replace is not touched', () => {
+    const r = runTiersStep({ ours: { 'codex-a litellm': 0, 'codex-a shim': 0 } });
+    expect(r.calls).toEqual([LOCK_A, A_L, '_codex_tier_stale codex-a litellm', A_S, '_codex_tier_stale codex-a shim', UNLOCK_A]);
+    expect(r.stdout).toMatch(/— 0 restarted, 2 left as they were, 0 not restarted$/m);
+  });
+
+  it('a running tier whose staleness cannot be measured (2) is left running, and said so — never restarted', () => {
+    const r = runTiersStep({ ours: { 'codex-a shim': 0 }, stale: { 'codex-a shim': 2 } });
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, '_codex_tier_stale codex-a shim', UNLOCK_A]);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a shim: left alone — whether it runs code this install replaced could not be measured/m);
+    expect(r.stdout).toMatch(/— 0 restarted, 1 left as they were, 0 not restarted$/m);
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('a running stale tier is stopped, then started, then re-measured until it answers as this lane', () => {
+    // Review round 1, item 5 (class fix): a NEW `_codex_tier_ours` call sits
+    // between the stop and the start — the re-ask that proves the port is
+    // free (1) before this step ever starts over it. The sequence's 2nd
+    // value (1) is that re-ask; the 3rd (4) and 4th (0) are the readiness
+    // wait's own two calls, preserving "waits through an intermediate state
+    // before succeeding".
+    const r = runTiersStep({ ours: { 'codex-a shim': [0, 1, 4, 0] }, stale: { 'codex-a shim': 0 }, readyS: '5' });
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, '_codex_tier_stale codex-a shim',
+      '_codex_stop_tier codex-a shim', A_S, '_codex_start_tier codex-a shim', A_S, A_S, UNLOCK_A]);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a shim: started, waiting up to 5s for it to answer$/m);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a shim: restarted — it was running code this install replaced$/m);
+    expect(r.stdout).toMatch(/— 1 restarted, 0 left as they were, 0 not restarted$/m);
+    expect(r.degraded).toEqual([]);
+  });
+
+  it('a restart that re-measures STARTING (4) keeps waiting; only 0 is "restarted"', () => {
+    // The class-fix re-ask (2nd value) must read 1 (free) or the start is
+    // refused before it ever happens; the wait loop's own three calls (4, 4,
+    // then 0) are what this case is actually about.
+    const r = runTiersStep({ ours: { 'codex-a shim': [0, 1, 4, 4, 0] }, stale: { 'codex-a shim': 0 }, readyS: '10' });
+    expect(r.calls.filter((l) => l === A_S)).toHaveLength(5);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a shim: restarted — /m);
+  });
+
+  it('a stop that fails is reported and never followed by a start', () => {
+    const r = runTiersStep({ ours: { 'codex-a shim': 0 }, stale: { 'codex-a shim': 0 }, stopRc: { 'codex-a shim': 1 } });
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, '_codex_tier_stale codex-a shim', '_codex_stop_tier codex-a shim', UNLOCK_A]);
+    expect(r.stderr).toMatch(/^install: codex tiers: codex-a shim: restart FAILED — it could not be stopped/m);
+    expect(r.degraded).toEqual(['codex-tiers']);
+  });
+
+  it('a stop that finds the tier no longer provably this lane\'s counts as not restarted, and no start follows (ruling PF-21)', () => {
+    // `_codex_stop_tier` returns rc 0 for BOTH "stopped" and "foreign" — only
+    // its stdout WORD tells them apart (PF-21). `foreign` is never folded
+    // into a successful stop, so this step CAPTURES the word rather than only
+    // the rc. `stopForeign` is this harness's own knob (Task 10; Task 6 has
+    // its own): it makes the stub print "foreign" at rc 0 for this one
+    // id+tier key, modelling the narrow race where the tier stopped being
+    // provably this lane's between this step's own identity gate and the
+    // stop call — extremely rare, but D-3488 governs it too: ccrc never
+    // starts over something it can no longer prove it stopped.
+    const r = runTiersStep({ ours: { 'codex-a shim': 0 }, stale: { 'codex-a shim': 0 }, stopForeign: ['codex-a shim'] });
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, '_codex_tier_stale codex-a shim', '_codex_stop_tier codex-a shim', UNLOCK_A]);
+    expect(r.calls).not.toContain('_codex_start_tier codex-a shim');
+    expect(r.stderr).toMatch(/^install: codex tiers: codex-a shim: NOT restarted — /m);
+    expect(r.stdout).toMatch(/— 0 restarted, 0 left as they were, 1 not restarted$/m);
+    expect(r.degraded).toEqual(['codex-tiers']);
+  });
+
+  it('a stop that answers rc 0 without saying "foreign" is re-measured right before the start, and a foreign holder there is NAMED and leaves the tier DOWN (review round 2, N2/N3)', () => {
+    // CLASS FIX: `_codex_stop_tier` answers `foreign` only when it stopped
+    // nothing — after a REAL stop it answers `stopped`, and a taker that
+    // arrives after its own second measurement is invisible to it. This
+    // step's own re-ask, right before the start, is what catches that: the
+    // 2nd `ours` value (2) models a foreign holder arriving after a real
+    // stop. `stopForeign` is NOT set here — the stop's own word never says
+    // foreign, on purpose, so this case binds the re-ask and not PF-21's own
+    // guard above. `oursWhy` sets CX_TIER_WHY (`listener-other-process`,
+    // real function's own contract) right before the fake returns 2, so
+    // `_codex_foreign_what` — real, unstubbed — resolves a real holder
+    // description from it (N2): nothing here hand-writes the message text.
+    const r = runTiersStep({
+      ours: { 'codex-a shim': [0, 2] }, stale: { 'codex-a shim': 0 },
+      oursWhy: { 'codex-a shim': 'listener-other-process' },
+    });
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, '_codex_tier_stale codex-a shim',
+      '_codex_stop_tier codex-a shim', A_S, UNLOCK_A]);
+    expect(r.calls).not.toContain('_codex_start_tier codex-a shim');
+    // The holder description is `_codex_foreign_what`'s own text for
+    // `listener-other-process`, never re-typed here — only its distinctive
+    // substring is asserted, so this case still binds if that wording moves.
+    // Since the fix wave the real library yields `listener-other-process`
+    // for the shim too (its proven pid while another process holds the
+    // port), and names it by the tier's own name.
+    expect(r.stderr).toMatch(/^install: codex tiers: codex-a shim: NOT restarted — the stop said "[^"]*", but a re-measurement right before the start found port \d+ \(codex-a's shim tier\) is held by a process that is not this lane's shim.*this tier is DOWN.*ccrc codex start codex-a$/m);
+    expect(r.stdout).toMatch(/— 0 restarted, 0 left as they were, 1 not restarted$/m);
+    expect(r.degraded).toEqual(['codex-tiers']);
+  });
+
+  it('a re-ask that cannot tell whether the port is free (not 1, not 2) also leaves the tier DOWN, named as unmeasured (review round 2, N3)', () => {
+    const r = runTiersStep({ ours: { 'codex-a shim': [0, 3] }, stale: { 'codex-a shim': 0 } });
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, '_codex_tier_stale codex-a shim',
+      '_codex_stop_tier codex-a shim', A_S, UNLOCK_A]);
+    expect(r.calls).not.toContain('_codex_start_tier codex-a shim');
+    expect(r.stderr).toMatch(/^install: codex tiers: codex-a shim: NOT restarted — the stop said "[^"]*", but a re-measurement right before the start could not tell whether the port is free \(answered 3\).*this tier is DOWN.*ccrc codex start codex-a$/m);
+    expect(r.stdout).toMatch(/— 0 restarted, 0 left as they were, 1 not restarted$/m);
+    expect(r.degraded).toEqual(['codex-tiers']);
+  });
+
+  it('a start that fails is reported distinctly — the tier is DOWN', () => {
+    // The 2nd `ours` value (1) is the class-fix re-ask, proving the port
+    // free right before the start that then fails.
+    const r = runTiersStep({ ours: { 'codex-a shim': [0, 1] }, stale: { 'codex-a shim': 0 }, startRc: { 'codex-a shim': 1 } });
+    expect(r.calls.slice(-2)).toEqual(['_codex_start_tier codex-a shim', UNLOCK_A]);
+    expect(r.stderr).toMatch(/^install: codex tiers: codex-a shim: restart FAILED — it was stopped and would not start again/m);
+    expect(r.degraded).toEqual(['codex-tiers']);
+  });
+
+  it('a start that never answers as this lane is a failed restart, not a restart', () => {
+    // TREE OVERRIDE (re-derived, not the brief's own text): `_codex_ready_secs`
+    // (Task 5, read at `ccd/ccrc:10246-10252`) falls back to 90 for `0` too —
+    // `[ "$s" -ge 1 ] || s=90` — not only for an empty or non-digit value. The
+    // brief's own `readyS: '0'` therefore does not bound this case at 0s: it
+    // waits the full 90s default (measured — this case took ~90s before this
+    // fix). `1` is the smallest valid bound, so the case still runs fast. At
+    // that bound the wait loop's own shape (it checks the deadline only AFTER
+    // `sleep 1`) can make ONE or TWO `_codex_tier_ours` calls before it gives
+    // up, depending on real elapsed time between computing the deadline and
+    // the first check (measured both ways on this box) — so this case asserts
+    // the SHAPE of the tail (start, one-or-more identical ours calls, unlock)
+    // rather than an exact count, which a 1s deadline cannot promise.
+    const r = runTiersStep({ ours: { 'codex-a shim': [0, 1] }, stale: { 'codex-a shim': 0 }, readyS: '1' });
+    const startAt = r.calls.indexOf('_codex_start_tier codex-a shim');
+    expect(startAt).toBeGreaterThan(-1);
+    const tail = r.calls.slice(startAt);
+    expect(tail[0]).toBe('_codex_start_tier codex-a shim');
+    expect(tail.at(-1)).toBe(UNLOCK_A);
+    const waited = tail.slice(1, -1);
+    expect(waited.length).toBeGreaterThanOrEqual(1);
+    expect(waited.every((c) => c === A_S)).toBe(true);
+    expect(r.stderr).toMatch(/^install: codex tiers: codex-a shim: restart FAILED — it was started again and did not answer as this lane within 1s/m);
+    expect(r.stdout).not.toMatch(/codex-a shim: restarted/);
+    expect(r.degraded).toEqual(['codex-tiers']);
+  });
+
+  it('with no runtime resolving, a stale tier is NOT stopped — it is never stopped when it could not be started again', () => {
+    const r = runTiersStep({ runtime: false, ours: { 'codex-a shim': 0 }, stale: { 'codex-a shim': 0 } });
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, '_codex_tier_stale codex-a shim', UNLOCK_A]);
+    expect(r.stderr).toMatch(/^install: codex tiers: codex-a shim: NOT restarted — it runs code this install replaced, but no codex runtime resolves/m);
+    expect(r.degraded).toEqual(['codex-tiers']);
+  });
+
+  it('two failed restarts degrade the step once, and the summary counts both', () => {
+    const r = runTiersStep({
+      lanes: ['codex-a', 'codex-b'],
+      ours: { 'codex-a shim': 0, 'codex-b shim': 0 },
+      stale: { 'codex-a shim': 0, 'codex-b shim': 0 },
+      stopRc: { 'codex-a shim': 1, 'codex-b shim': 1 },
+    });
+    expect(r.degraded).toEqual(['codex-tiers']);
+    expect(r.stdout).toMatch(/^install: codex tiers: 2 codex lane\(s\) — 0 restarted, 0 left as they were, 2 not restarted$/m);
+  });
+
+  it('each lane is asked and acted on under ITS lock, released through _codex_unlock before the next lane\'s is taken', () => {
+    // The lock is held from the first question to the last act (a check made
+    // outside it is a check-then-act race), and released per lane so no later
+    // spawn inherits it. The release is `_codex_unlock`, its ONLY release
+    // (ruling R19): the stub records it, so an inline close shows as a missing
+    // `_codex_unlock` line. `LOCK-STILL-HELD` is the stub's record of a lock
+    // entered while the previous one was never released; `lockAfter` is the
+    // last lane's `CX_LOCK_FD` and `CX_LOCK_ID`.
+    // The 2nd `ours` value (1) is the class-fix re-ask; the 3rd (0) is the
+    // readiness wait's own call.
+    const r = runTiersStep({
+      lanes: ['codex-a', 'codex-b'],
+      ours: { 'codex-b shim': [0, 1, 0] }, stale: { 'codex-b shim': 0 }, readyS: '5',
+    });
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, UNLOCK_A, LOCK_B, B_L, B_S, '_codex_tier_stale codex-b shim',
+      '_codex_stop_tier codex-b shim', B_S, '_codex_start_tier codex-b shim', B_S, UNLOCK_B]);
+    expect(r.lockAfter).toBe('');
+    expect(r.stdout).toMatch(/— 1 restarted, 0 left as they were, 0 not restarted$/m);
+  });
+
+  it('a lane whose lock cannot be taken is not asked at all: its own line, counted, degraded — and the next lane still runs', () => {
+    const r = runTiersStep({
+      lanes: ['codex-a', 'codex-b'], lockRefuse: ['codex-a'],
+      ours: { 'codex-a shim': 0 }, stale: { 'codex-a shim': 0 },
+    });
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([LOCK_A, LOCK_B, B_L, B_S, UNLOCK_B]);
+    expect(r.stderr).toMatch(/^install: codex tiers: codex-a: NOT measured — its lane lock could not be taken/m);
+    expect(r.stdout).toMatch(/^install: codex tiers: 2 codex lane\(s\) — 0 restarted, 0 left as they were, 2 not restarted$/m);
+    expect(r.degraded).toEqual(['codex-tiers']);
+    expect(r.lockAfter).toBe('');
+  });
+
+  it('a box with no flock: the lock answers 0 with nothing held, and the lane is still measured and restarted, unserialised', () => {
+    // Task 5's contract (ruling R19): rc 0 with CX_LOCK_FD EMPTY means "no
+    // flock on this box", never a refusal. A step that read the empty
+    // descriptor as a failed lock would leave every lane of such a box
+    // untouched and degraded. `_codex_unlock -` is the release of nothing.
+    // The 2nd `ours` value (1) is the class-fix re-ask; the 3rd (0) is the
+    // readiness wait's own call.
+    const r = runTiersStep({ lockNoFlock: ['codex-a'], ours: { 'codex-a shim': [0, 1, 0] }, stale: { 'codex-a shim': 0 }, readyS: '5' });
+    expect(r.calls).toEqual([LOCK_A, A_L, A_S, '_codex_tier_stale codex-a shim',
+      '_codex_stop_tier codex-a shim', A_S, '_codex_start_tier codex-a shim', A_S, '_codex_unlock -']);
+    expect(r.stderr).not.toMatch(/its lane lock could not be taken/);
+    expect(r.stdout).toMatch(/— 1 restarted, 0 left as they were, 0 not restarted$/m);
+    expect(r.degraded).toEqual([]);
+    expect(r.lockAfter).toBe('');
+  });
+});
+
+describe('ccrc install: the codex runtime step on a real spine (Plan 2b-2 Task 10)', () => {
+  it('the runtime template answers pip itself behind interpreter flags, and never hands pip to the box\'s real python (final review F4)', () => {
+    // No spine: the template's own venv python, run directly. `--version` is
+    // the argv measured here because, on the pre-fix template, it is the one
+    // pip argv that reaches the REAL pip harmlessly (it prints a version).
+    const home = mkTmp('ccrc-codex-template-pip-');
+    plantRuntimeTemplate(home, { verdict: 'pass', version: '1.101.0' });
+    const py = join(home, 'fixture-runtime', 'gen-template', 'bin', 'python');
+    for (const argv of [['-m', 'pip', '--version'], ['-I', '-m', 'pip', '--version'], ['-I', '-B', '-m', 'pip', '--version']]) {
+      const r = spawnSync(py, argv, { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home } });
+      expect(r.status, `${argv.join(' ')}: ${r.stderr}`).toBe(0);
+      expect(r.stdout, `${argv.join(' ')} reached the box's real pip`).not.toMatch(/^pip /m);
+    }
+    expect(read(join(home, 'fixture-runtime', 'calls'))).toMatch(/^-I -B -m pip --version$/m);
+  });
+
+  it('a roster with no codex lane: one line from each step, and nothing is built', () => {
+    const home = freshBox('ccrc-codex-steps-none-');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('install: codex runtime:')))
+      .toEqual(['install: codex runtime: none — no codex lane in the roster']);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('install: codex tiers:')))
+      .toEqual(['install: codex tiers: none — no codex lane in the roster']);
+    expect(existsSync(join(home, '.ccrc', 'runtime'))).toBe(false);
+    expect(venvCalls(home)).toEqual([]);
+    expect(spineRunCalls(home)).toEqual([]);
+  });
+
+  it('--role server builds nothing and restarts nothing, and says nothing about either', async () => {
+    const home = codexBox('ccrc-codex-steps-server-', await freeLanes(['codex-a']));
+    const r = runInstall(home, ['install', '--role', 'server']);
+    expect(existsSync(dotCcrc(home, 'installed')), r.stderr).toBe(true);
+    expect(r.stdout).not.toMatch(/^install: codex (runtime|tiers):/m);
+    expect(existsSync(join(home, '.ccrc', 'runtime'))).toBe(false);
+    expect(venvCalls(home)).toEqual([]);
+    expect(r.code).toBe(doctorCode(home));
+  });
+
+  it('a codex lane and a passing runtime: built, stamped from the declared requirement and probe; a re-run re-measures it current and builds nothing', async () => {
+    const home = codexBox('ccrc-codex-steps-built-', await freeLanes(['codex-a']));
+    const r = runInstall(home);
+    expect(existsSync(dotCcrc(home, 'installed')), `${r.stdout}\n${r.stderr}`).toBe(true);
+    expect(r.stdout).toMatch(/^install: codex runtime: gen-\d{8}T\d{6}Z-\d+ built, probed and current for 1 codex lane\(s\)$/m);
+    expect(r.stdout).not.toMatch(/^install: done — converged with .*\bcodex-runtime\b/m);
+    expect(r.code).toBe(doctorCode(home));
+    const py = runtimePython(home);
+    const gen = py.replace(/\/bin\/python$/, '');
+    expect(generations(home)).toEqual([gen.split('/').at(-1)]);
+    // The stamp names what the builder DECLARES and what the probe IS, both
+    // read out of the placed builder rather than typed here.
+    const builder = read(join(home, '.local', 'bin', 'ccgpt-runtime'));
+    const requirement = /^LITELLM_REQUIREMENT='([^']+)'/m.exec(builder)?.[1];
+    expect(requirement, 'ccgpt-runtime declares no LITELLM_REQUIREMENT').toBeDefined();
+    const probe = spawnSync(join(home, '.local', 'bin', 'ccgpt-runtime'), ['probe-source'],
+      { env: { ...process.env, HOME: home } });
+    expect(probe.status).toBe(0);
+    const stamp = JSON.parse(read(join(gen, '.ccrc-runtime.json'))) as Record<string, unknown>;
+    expect(stamp['requirement']).toBe(requirement);
+    expect(stamp['probeSha256']).toBe(createHash('sha256').update(probe.stdout).digest('hex'));
+    expect(stamp['litellm']).toBe('1.101.0');
+    // Ruling R33 against the REAL builder: the building line names the
+    // requirement the placed builder declares (the step reads that same line),
+    // and comes before the result line.
+    const out = r.stdout.split('\n');
+    const buildingAt = out.indexOf(`install: codex runtime: building ${requirement!} — pip may take minutes`);
+    const builtAt = out.findIndex((l) => /^install: codex runtime: gen-\S+ built, probed and current /.test(l));
+    expect(buildingAt, r.stdout).toBeGreaterThan(-1);
+    expect(builtAt).toBeGreaterThan(buildingAt);
+    const built = venvCalls(home).length;
+    expect(built).toBe(1);
+
+    const again = runInstall(home);
+    expect(again.stdout).toMatch(/^install: codex runtime: gen-\S+ already current \(requirement, probe and litellm version re-measured unchanged\) for 1 codex lane\(s\)$/m);
+    expect(venvCalls(home)).toHaveLength(built);
+    expect(runtimePython(home)).toBe(py);
+    // AN EXPLICIT BOUND (final review F4, Task 10 residue C3): two install spines plus doctorCode's.
+    // Measured alone (one file, `-t`): 7.4 s at load average 12 (2026-09-28); its sibling below timed
+    // out once at the 20 s default under load 40-80 (Task 10's gate).
+  }, 60_000);
+
+  it('a runtime whose probe FAILS degrades the install, never fails it, and the previous runtime stays current', async () => {
+    const home = codexBox('ccrc-codex-steps-probe-fails-', await freeLanes(['codex-a']));
+    const first = runInstall(home);
+    expect(first.stdout, first.stderr).toMatch(/^install: codex runtime: \S+ built, probed and current/m);
+    const before = runtimePython(home);
+    const gensBefore = generations(home);
+    // A new litellm under the old generation (`check` answers `mutated`),
+    // and a verdict that fails a gate the spec names.
+    writeRuntimeFixture(home, { verdict: 'fail:tool-survives', version: '1.101.1' });
+    const r = runInstall(home);
+    expect(existsSync(dotCcrc(home, 'installed')), 'a failed runtime build must not stop the spine').toBe(true);
+    expect(r.stderr).toMatch(/^ccgpt-runtime: build failed at probe: /m);
+    expect(r.stdout).toMatch(/^install: codex runtime: NOT BUILT — ccgpt-runtime build exited \d+ .*the previous runtime gen-\S+ stays current/m);
+    expect(r.stdout).toMatch(/^install: done — converged with \d+ degraded steps? \([^)]*\bcodex-runtime\b[^)]*\)$/m);
+    expect(r.code).toBe(doctorCode(home));
+    expect(runtimePython(home)).toBe(before);
+    expect(generations(home)).toEqual(gensBefore);
+    // AN EXPLICIT BOUND (final review F4, Task 10 residue C3): two install spines plus doctorCode's.
+    // Measured alone (one file, `-t`): 7.7 s at load average 12 (2026-09-28), 8.7 s at load 30 (the
+    // final review), about 12 s at load 40-80, where it timed out once at the 20 s default (Task 10).
+  }, 60_000);
+
+  it('the stock venv python, which answers nothing, fails the probe: degraded, and no generation is left behind', async () => {
+    // m-spine H5 at the spine: a runtime python that exits 0 for every argv
+    // must never become current. `template: false` leaves the stub's vacuous
+    // python in place.
+    const home = codexBox('ccrc-codex-steps-vacuous-', await freeLanes(['codex-a']), { template: false });
+    const r = runInstall(home);
+    expect(existsSync(dotCcrc(home, 'installed')), r.stderr).toBe(true);
+    expect(r.stderr).toMatch(/^ccgpt-runtime: build failed at probe: /m);
+    expect(r.stdout).toMatch(/^install: codex runtime: NOT BUILT — .*there is no runtime at all/m);
+    expect(r.stdout).toMatch(/^install: done — converged with \d+ degraded steps? \([^)]*\bcodex-runtime\b[^)]*\)$/m);
+    expect(existsSync(join(runtimeDir(home), 'current'))).toBe(false);
+    expect(generations(home)).toEqual([]);
+  });
+});
+
+// PLATFORM-ONLY: the restart path measured here is the user-manager arm, whose
+// fake is Task 4's `plantSystemd`; on Darwin `_svc_have_user_manager` is always
+// false, the nohup arm is taken, and that arm is Task 5's subject.
+describeLinux('ccrc install: the codex tier restart step on a real spine (Plan 2b-2 Task 10)', () => {
+  const homes: string[] = [];
+  // `killLaneProcesses` first runs the registered product stop while fixture
+  // state exists, then ends every current-run child Task 4's fixture tracked.
+  afterEach(async () => {
+    for (const h of homes.splice(0)) await killLaneProcesses(h);
+  });
+
+  /** codex-a RUNNING through the fake user manager: first install (builds the
+   *  runtime from the passing template), then `startLane` (registry,
+   *  credential, rendered config, `ccrc codex start`). Clears both recordings
+   *  so the NEXT install's calls are all they hold. */
+  async function runningLane(prefix: string): Promise<{
+    home: string; lane: LanePorts; units: { litellm: string; shim: string }; py: string;
+  }> {
+    const [lane] = await freeLanes(['codex-a']);
+    const home = codexBox(prefix, [lane!], { systemd: true });
+    homes.push(home);
+    const first = runInstall(home, ['install'], READY);
+    expect(existsSync(dotCcrc(home, 'installed')), `the first install did not complete:\n${first.stdout}\n${first.stderr}`).toBe(true);
+    expect(existsSync(join(home, '.local', 'bin', '.codex-systemctl')),
+      'plantSystemd did not plant into ~/.local/bin, so no spine harness can adopt it (Task 10 Interfaces)').toBe(true);
+    const s = startLane(home, 'codex-a');
+    expect(s.code, `ccrc codex start codex-a:\n${s.stdout}\n${s.stderr}`).toBe(0);
+    const units = laneUnits(home, 'codex-a');
+    // The lane really took the user-manager arm: both tiers went through the recorder.
+    expect(spineRunCalls(home).filter((l) => l.includes(`--unit=${units.litellm}`) || l.includes(`--unit=${units.shim}`)))
+      .toHaveLength(2);
+    const ans = await laneAnswer(lane!.proxyPort);   // Task 5's {status, type, body} (ruling R30)
+    expect(ans?.type).toMatch(/^application\/json/);
+    expect(JSON.parse(ans!.body)).toEqual({ lane: 'codex-a' });
+    expect(await portAccepts(lane!.litellmPort)).toBe(true);
+    rmSync(join(home, 'manager-calls'), { force: true });
+    rmSync(join(home, 'spine-systemd-run-calls'), { force: true });
+    return { home, lane: lane!, units, py: runtimePython(home) };
+  }
+
+  it('a running shim whose code this install replaced is stopped, then started from the resolved generation; the litellm tier it did not replace is untouched', async () => {
+    const { home, lane, units, py } = await runningLane('ccrc-codex-tiers-shim-');
+    const litellmBefore = read(join(laneDir(home, 'codex-a'), 'litellm.started'));
+    appendFileSync(treeFile(home, 'ccd/ccgpt-proxy.py'), '\n# fixture: the next release of the shim\n');
+    const r = runInstall(home, ['install'], READY);
+    expect(existsSync(dotCcrc(home, 'installed')), r.stderr).toBe(true);
+    expect(r.stdout).toMatch(/^install: codex runtime: \S+ already current /m);
+    expect(r.stdout).toMatch(/^install: codex tiers: codex-a shim: restarted — /m);
+    expect(r.stdout).not.toMatch(/^install: codex tiers: codex-a litellm: restarted/m);
+    expect(r.stdout).toMatch(/^install: codex tiers: 1 codex lane\(s\) — 1 restarted, 1 left as they were, 0 not restarted$/m);
+    const runs = spineRunCalls(home);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toContain(`--unit=${units.shim}`);
+    expect(runs[0]).toContain(`${py} -I ${join(home, '.local', 'bin', 'ccgpt-proxy.py')}`);
+    expect(runs[0]).not.toContain('/current/');
+    expect(runs[0]).not.toMatch(/sk-[0-9a-f]{48}|MASTER_KEY/);
+    const mc = managerCalls(home);
+    const stopAt = mc.findIndex((l) => /^systemctl --user stop\b/.test(l) && l.includes(units.shim));
+    const runAt = mc.findIndex((l) => l.startsWith('systemd-run ') && l.includes(`--unit=${units.shim}`));
+    expect(stopAt, mc.join('\n')).toBeGreaterThan(-1);
+    expect(runAt).toBeGreaterThan(stopAt);
+    expect(stateChanges(home).filter((l) => l.includes(units.litellm))).toEqual([]);
+    expect(mc.filter((l) => /^systemctl --user restart\b/.test(l) && l.includes('ccgpt-'))).toEqual([]);
+    expect(read(join(laneDir(home, 'codex-a'), 'litellm.started'))).toBe(litellmBefore);
+    const shimStarted = JSON.parse(read(join(laneDir(home, 'codex-a'), 'shim.started'))) as { code?: string };
+    expect(shimStarted.code).toBe(createHash('sha256')
+      .update(readFileSync(join(home, '.local', 'bin', 'ccgpt-proxy.py'))).digest('hex'));
+    const ans = await laneAnswer(lane.proxyPort);   // Task 5's {status, type, body} (ruling R30)
+    expect(ans?.type).toMatch(/^application\/json/);
+    expect(JSON.parse(ans!.body)).toEqual({ lane: 'codex-a' });
+  }, 180_000);
+
+  it('a rebuilt runtime restarts both tiers onto the NEW generation, because the build runs before the restart step', async () => {
+    const { home, lane, units, py: oldPy } = await runningLane('ccrc-codex-tiers-rebuild-');
+    writeRuntimeFixture(home, { version: '1.101.1' });   // the running generation now measures `mutated`
+    const r = runInstall(home, ['install'], READY);
+    expect(existsSync(dotCcrc(home, 'installed')), r.stderr).toBe(true);
+    expect(r.stdout).toMatch(/^install: codex runtime: \S+ built, probed and current for 1 codex lane\(s\)$/m);
+    const py = runtimePython(home);
+    expect(py).not.toBe(oldPy);
+    for (const tier of ['litellm', 'shim'] as const) {
+      expect(r.stdout).toMatch(new RegExp(`^install: codex tiers: codex-a ${tier}: restarted — `, 'm'));
+      const run = spineRunCalls(home).find((l) => l.includes(`--unit=${units[tier]}`));
+      expect(run, `${tier} was not started again`).toBeDefined();
+      expect(run!).toContain(py);
+      const started = JSON.parse(read(join(laneDir(home, 'codex-a'), `${tier}.started`))) as { generation?: string };
+      expect(started.generation).toBe(py.replace(/\/bin\/python$/, ''));
+    }
+    const ans = await laneAnswer(lane.proxyPort);   // Task 5's {status, type, body} (ruling R30)
+    expect(ans?.type).toMatch(/^application\/json/);
+    expect(JSON.parse(ans!.body)).toEqual({ lane: 'codex-a' });
+    expect(await portAccepts(lane.litellmPort)).toBe(true);
+  }, 180_000);
+
+  it('a rostered lane with no tier running is left lazy: nothing is stopped, started or listening', async () => {
+    // This lane was never materialised: no `~/.ccrc/codex/codex-a/` exists
+    // when the step takes its lock. So this case is ALSO the spine-level pin of
+    // one behaviour of Task 5's `_codex_lock` (Interfaces): a lane with no
+    // directory yet can be locked, because the lock creates it. If it cannot,
+    // the step's `NOT measured — its lane lock could not be taken` line
+    // appears here and the summary counts 2 not restarted.
+    const [lane] = await freeLanes(['codex-a']);
+    const home = codexBox('ccrc-codex-tiers-lazy-', [lane!], { systemd: true });
+    homes.push(home);
+    const r = runInstall(home, ['install'], READY);
+    expect(existsSync(dotCcrc(home, 'installed')), r.stderr).toBe(true);
+    expect(r.stderr).not.toMatch(/its lane lock could not be taken/);
+    expect(r.stdout).toMatch(/^install: codex tiers: 1 codex lane\(s\) — 0 restarted, 0 left as they were, 0 not restarted$/m);
+    expect(stateChanges(home)).toEqual([]);
+    expect(await portAccepts(lane!.proxyPort)).toBe(false);
+    expect(await portAccepts(lane!.litellmPort)).toBe(false);
+  }, 120_000);
+
+  it('a foreign listener on the shim port is left running, and the transcript says so', async () => {
+    // The OTHER repository's shim shape on this lane's shim port: `text/plain`
+    // with the bare id (m-tiers §1), Task 4's `spawnListener` — which resolves
+    // only once it has bound.
+    const [lane] = await freeLanes(['codex-a']);
+    const home = codexBox('ccrc-codex-tiers-foreign-', [lane!], { systemd: true });
+    homes.push(home);
+    const foreign = await spawnListener(home, { answer: 'text', lane: 'codex-a', port: lane!.proxyPort });
+    const r = runInstall(home, ['install'], READY);
+    expect(existsSync(dotCcrc(home, 'installed')), r.stderr).toBe(true);
+    // Review A2: the REAL `_codex_foreign_what` sentence, end to end.
+    expect(r.stdout).toMatch(new RegExp(`^install: codex tiers: codex-a shim: left alone — port ${lane!.proxyPort} \\(codex-a's shim tier\\) is held by a listener that is not this lane's: its identity check failed, and this step never stops`, 'm'));
+    expect(stateChanges(home)).toEqual([]);
+    expect(() => process.kill(foreign.pid, 0)).not.toThrow();
+    expect(await portAccepts(lane!.proxyPort)).toBe(true);
+  }, 120_000);
+
+  it('a restart the user manager refuses is its own FAILED line, and the closing line names codex-tiers', async () => {
+    const { home, lane, units } = await runningLane('ccrc-codex-tiers-refused-');
+    appendFileSync(treeFile(home, 'ccd/ccgpt-proxy.py'), '\n# fixture: the next release of the shim\n');
+    writeFileSync(join(home, 'fixture-systemd-run-fail'), `${units.shim}\n`);
+    const r = runInstall(home, ['install'], READY);
+    expect(existsSync(dotCcrc(home, 'installed')), 'a failed tier restart must not stop the spine').toBe(true);
+    expect(r.stderr).toMatch(/^install: codex tiers: codex-a shim: restart FAILED — it was stopped and would not start again/m);
+    expect(r.stdout).not.toMatch(/^install: codex tiers: codex-a shim: restarted/m);
+    expect(r.stdout).toMatch(/^install: done — converged with \d+ degraded steps? \([^)]*\bcodex-tiers\b[^)]*\)$/m);
+    expect(r.code).toBe(doctorCode(home));
+    expect(await laneAnswer(lane.proxyPort)).toBeNull();
+  }, 180_000);
 });
