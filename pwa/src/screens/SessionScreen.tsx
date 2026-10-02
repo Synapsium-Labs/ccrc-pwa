@@ -334,8 +334,9 @@ export function SessionScreen({
   const empty = !loading && events.length === 0 && pending.length === 0 && searchComplete && fileMeasured;
 
   // The substrate gate (spec §4): under a standing fault the console cannot
-  // SEE this session, so the two destructive controls this screen owns — the
-  // dead banner's Restart and the archive sheet (which re-reads it as it fires) — refuse rather than fire at a
+  // SEE this session, so the destructive controls this screen owns — the
+  // dead banner's Restart, the archive sheet (which re-reads it as it fires) and the header's Restore of a main
+  // checkout (the same `/ensure` request as Restart) — refuse rather than fire at a
   // pane nobody can measure. Read through `substrateFault`, never
   // `live.substrate`: the live frame is cast, not revived, so an older
   // server's row lacks the key at runtime. `faultTitle` is SessionLine's

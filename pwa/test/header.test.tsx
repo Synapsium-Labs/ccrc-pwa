@@ -545,11 +545,11 @@ describe('SessionScreen reap wiring (Task 17)', () => {
 
 // — the substrate gate (spec §4) —
 
-describe('the substrate gate — stop and restart refuse a session nobody can see', () => {
+describe('the substrate gate — Archive, Restart and Restore refuse a session nobody can see', () => {
   // Same contract as the actions sheet's gates: one derived fault per render
   // (`substrateFault`), the chip's own `tmux unreachable — <reason>` string in
   // `title`, and the click proven inert — the keycap idiom at the top of this
-  // file, aimed at the two controls this screen owns.
+  // file, aimed at the controls this screen owns (a workspace's Restore is the one ungated: `ws-restore`, not `/ensure`).
   // Workspace lifecycle §5.2: the menu's "Stop session" became "Archive" — stop and archive are one feature. The
   // `esc` keycap (interrupt) is a different control and is pinned unchanged at the top of this file.
   it('disables the Archive menu item under a fault, naming it', async () => {
@@ -571,6 +571,32 @@ describe('the substrate gate — stop and restart refuse a session nobody can se
     expect(screen.queryByRole('button', { name: /Stop session/ })).toBeNull();
     fireEvent.click(archive);
     expect(p.onArchive).toHaveBeenCalledOnce();
+  });
+
+  it('a put-away MAIN CHECKOUT under a fault: Restore is disabled, names the fault, and a click is inert', async () => {
+    // Its Restore is `POST /ensure` — the request the dead banner's Restart refuses under the same fault.
+    const p = renderHeader({ session: fleetSession({
+      status: 'dead', bucket: 'dead', stoppedBy: { at: Date.now() - 60_000, surface: 'pwa' },
+      substrate: { at: 1, text: 'x' } }) });
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const restore = await screen.findByRole('button', { name: 'Restore' });
+    expect(restore).toBeDisabled();
+    expect(restore.getAttribute('title')).toContain('x');
+    expect(restore.getAttribute('title')).toMatch(/tmux unreachable/);
+    fireEvent.click(restore);
+    expect(p.onRestore).not.toHaveBeenCalled();
+  });
+
+  it('an archived WORKSPACE under a fault keeps Restore live — ws-restore is not /ensure', async () => {
+    const p = renderHeader({ session: fleetSession({
+      workspace: 'quiet-basin', status: 'dead', bucket: 'archived', archivedAt: 1785300000,
+      substrate: { at: 1, text: 'x' } }) });
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const restore = await screen.findByRole('button', { name: 'Restore' });
+    expect(restore).toBeEnabled();
+    expect(restore.getAttribute('title')).toBeNull();
+    fireEvent.click(restore);
+    expect(p.onRestore).toHaveBeenCalledOnce();
   });
 
   it('a session already put away offers Restore in Archive\'s place', async () => {

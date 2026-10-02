@@ -21,7 +21,7 @@ import { useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '../lib/useNow';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { TypedLabel } from '../fleet/TypedLabel';
-import { isPutAway } from '../fleet/ArchiveSheet';
+import { isPutAway, restoreReachesEnsure } from '../fleet/ArchiveSheet';
 import { PrKeycap } from './PrKeycap';
 import { PrSheet } from './PrSheet';
 import './chat.css';
@@ -392,7 +392,7 @@ export function SessionHeader({
             title={faultTitle}
             onClick={() => menuAct(onMoveAccount)}
           >
-            {/* Gated like Stop below (branch review): this item opens the SAME
+            {/* Gated like Archive below (branch review): this item opens the SAME
                 SwapSheet as the actions sheet's gated opener, and SwapSheet's
                 confirm fires api.swap with no substrate check of its own — so
                 an ungated door here was a swap reachable with no gate anywhere. */}
@@ -400,9 +400,17 @@ export function SessionHeader({
           </button>
           {/* Archive for every session, Restore for one already put away (workspace lifecycle §5.2) — never both.
               Archive is gated like Move above: it ends the pane. It needs the row to choose its words, so a deep
-              link that has not seen its first frame yet offers it disabled. */}
+              link that has not seen its first frame yet offers it disabled. Restore is gated exactly where it IS
+              Restart's request (`restoreReachesEnsure`: a main checkout posts `/ensure`); a workspace's `ws-restore`
+              is a different verb and stays ungated, as in the actions sheet. */}
           {session !== null && isPutAway(session) ? (
-            <button type="button" className="menu-item" onClick={() => menuAct(onRestore)}>
+            <button
+              type="button"
+              className="menu-item"
+              disabled={fault !== null && restoreReachesEnsure(session)}
+              title={restoreReachesEnsure(session) ? faultTitle : undefined}
+              onClick={() => menuAct(onRestore)}
+            >
               <span className="menu-label">Restore</span>
             </button>
           ) : (

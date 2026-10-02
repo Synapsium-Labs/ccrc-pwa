@@ -46,7 +46,13 @@ export const isPutAway = (s: FleetSession): boolean => inArchivedFold(s) || s.bu
  *  ensured — `cmd_ensure` clears the stop stamp on the attempt and the row's own registry fields decide the respawn,
  *  exactly as Restart session does. ONE spelling, two callers. */
 export const restoreSession = (s: FleetSession): Promise<void> =>
-  s.workspace !== null ? api.restore(s.id) : api.ensure(s.id);
+  restoreReachesEnsure(s) ? api.ensure(s.id) : api.restore(s.id);
+
+/** Whether this row's Restore is the SAME request as Restart session — `POST /ensure`, which a standing substrate
+ *  fault refuses (spec §4): a main checkout. A workspace's Restore is `ws-restore`, a different verb, and stays
+ *  ungated. The ONE spelling of that rule: the actions sheet's and the header's Restore gates both read it, and
+ *  `restoreSession` above routes by it, so the gate and the route cannot drift. */
+export const restoreReachesEnsure = (s: Pick<FleetSession, 'workspace'>): boolean => s.workspace === null;
 
 /** What the sheet is asking right now. */
 type Ask =

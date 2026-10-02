@@ -42,7 +42,7 @@ import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
 import { SwapSheet } from './SwapSheet';
-import { ArchiveSheet, isPutAway, restoreSession } from './ArchiveSheet';
+import { ArchiveSheet, isPutAway, restoreReachesEnsure, restoreSession } from './ArchiveSheet';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
 
@@ -413,8 +413,8 @@ export function SessionActionsSheet({
           )}
           {putAway && (
             <button type="button" className="btn-ghost"
-                    disabled={archBusy || (fault !== null && session.workspace === null)}
-                    title={session.workspace === null ? faultTitle : undefined}
+                    disabled={archBusy || (fault !== null && restoreReachesEnsure(session))}
+                    title={restoreReachesEnsure(session) ? faultTitle : undefined}
                     onClick={() => void restoreNow()}>
               {archBusy ? 'Restoring…' : 'Restore'}
             </button>
