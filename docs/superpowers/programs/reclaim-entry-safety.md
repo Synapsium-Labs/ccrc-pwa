@@ -15,7 +15,7 @@ direct reclaim argv shapes before automatic reclamation can ship.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 (open) | **awaiting-review** — fix round 2 done at `a217af78` (wave-done 3161, re-measured); convergence review run 222 dispatched to `ccrc-pwa-calm-cove` 2026-10-02 |
+| 1 | establish an argv-selective privileged Bash boundary for direct `ws-reclaim` and direct `ws-audit --reclaim`; pin hostile inherited environments across supported entry paths; prove fail-shut behavior with mutations; merge current main and open the prerequisite PR | **AGENT-FIRST** | #222 | **done** — accepted by review run 222 on `a217af78`; merged as `cf9e4cc8` 2026-10-02 14:59; release v0.0.60 |
 
 **Deviation block: eight numbers, the first of them 3696** (allocated once at run 199 open, 2026-09-30; floor
 now 3704). The finalized plan defines the first as `ccd-imported-functions-hijack-reclaim-reads`. No other issued
@@ -178,6 +178,31 @@ unrendered.
   answered `ceiling` and the run already sits at the top class, so no route call was made. Run 199 advanced to
   `awaiting-review`. Review run 222 opened under the canonical title and dispatched with the standard panel, the
   SAFETY lens and the convergence rule, with `ownership.test.ts` named as the stamp gate.
+- **2026-10-02 15:03 — review run 222 accepts the wave; PR #222 merged.** `ccrc-pwa-calm-cove` read `a217af78`
+  (25 agents, none dead or empty; `unverifiedLenses` and `unexamined` none): correctness 2 raised, 2 confirmed; spec
+  1, 1; reproduce 1, 0 (refuted 3/3); SAFETY 3, 2 (one refuted 3/3). Five confirmations reduce to three distinct
+  findings, all minor, and all fifteen refuter votes on them say they predate fix round 2. SAFETY: for every exact
+  protected spelling through the installed launcher, no inherited state or entry path deletes a live child, measured
+  with the real installer in fixture HOMEs; items (e) and (g) are partial only through R1. Every review-217 item is
+  resolved, except F6 and F7, which are carried as ruled with truthful prose; W1 passes on the real macOS runner, and
+  the macOS legs show no tip-only red against main's daily run.
+  - **The convergence rule holds:** the SAFETY lens holds, no confirmed critical or important finding stands, and
+    fix round 2 introduced no defect. Accepted.
+  - **Carried to child-reclamation wave 4 (minor, predating):** R1, the destination-type half of "every refusal
+    comes before anything is created" has no red mutation (moving `makedirs` between the layout refusal and the
+    destination loop stays green); a fresh-HOME row with `~/.local/bin/ccd` a directory and no `libexec` pins it.
+    R3, the exit-2 sentence ("the body moved and the launcher did not … refuses every start by digest") is false
+    for the launcher-postcondition arm, which exits 2 after both halves moved; it is repeated in
+    `ccd/ccd-entry-install.py`'s header and stderr, `ccd/ccrc` and `deploy/deploy.sh`.
+  - **Carried until `ccd/ccrc` is free (minor, predating):** R2, two `ccd/ccrc` comments still say the shebang names
+    the box's canonical python3, which 3698 made false; and R3's `ccd/ccrc` sentence. `ccd/ccrc` is under another
+    programme's live claim, so wave 4 does not edit it.
+  - **Merge.** Review run 222 advanced to `working` and closed `done` on its own fingerprint. `origin/main` was still
+    `6ca3d163`, so the merge tree is the one CI tested (run 37014939506, required checks green). Run 199 advanced to
+    `merging`; `gh pr merge 222 --squash --admin --match-head-commit a217af78…` landed `cf9e4cc8` at 14:59:55;
+    run 199 closed `done` with `final:true` and `prPhase` `merged`, answering `childReclaim: queued`, and
+    `still-harbor` is gone from `ccd ls` minutes later. `release-main.yml` published prerelease v0.0.60 at 15:00;
+    both boxes follow `dev` on their own.
 - **Routing escalation.** This is a destructive-path security boundary reached after repeated wave 4 resolver
   rounds exposed the process-level class. The main loop runs Opus at `xhigh`; implementation subagents run Sonnet
   at `high`; workflows are off; compact threshold is 40. The held-out review remains outside that routing and adds

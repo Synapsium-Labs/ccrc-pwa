@@ -20,7 +20,7 @@ removed on 2026-09-10 was not.
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **deployed** v0.0.33 (`1ffdf947`, merged 2026-09-28 16:14 UTC, rolled out 16:16–16:21, fleet box first, rc 0; run 148 on `plain-summit`; reviews 170, 171, 172). Live: run 148's close reclaimed `plain-summit` in 10 s |
-| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | — | **dispatched** 2026-09-28 (run 174 on `swift-hollow`; amendments A1 to A17 merged in #188, `6ff4e2e9`) |
+| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 (open) | **working, integration round** — both prerequisites merged (#226 `0db98707`, #222 `cf9e4cc8`); run 174 on `swift-hollow` sent the integration round 2026-10-02 (amendments A1 to A17 merged in #188, `6ff4e2e9`) |
 | 5 | the closed run's reclaim chip and its sentences; R25's orphan temp-root collector (R36) | **AGENT-FIRST** (R36 makes it one) | — | planned |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
@@ -43,6 +43,39 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-02 15:03 — the entry-safety prerequisite has merged; wave 4's integration round opens.** PR #222 landed
+  as `cf9e4cc8` after review runs 216, 217 and 222 (that programme's ledger; release v0.0.60), and run 199 closed
+  final. Both prerequisites are on `main`, so the landing order reaches wave 4. Run 174 stays `working` (items 817 to
+  834 pending) and `swift-hollow` receives one integration round, by status mail, in this order:
+  1. **Merge `origin/main`** into local `1a02baac7abfbb1a88a1a7a251c7326c11ae9f08`, never rebasing. `main` now
+     carries #226's port of this branch's resolver substrate, extended with the `complete|absent-suffix|unmeasured`
+     basis, and #222's launcher, installer and 30-line body guard. Where both sides define the same code, `main`'s is
+     the base, and a wave 4 change on top of it must be deliberate and stated. Every #226 and #222 pin stays green.
+     Regenerate and re-stamp `ccd/ccd`.
+  2. **Fix round 3's two minors:** `_ws_reclaim_workdir_shared`'s prose overstates which `..` spellings are
+     re-walked, and the imported-`printf` control hard-codes `quiet-basin`.
+  3. **The row-placement carries (below):** the remedy pin binding the printed text; the three row-level ladder
+     cases; the child's rc-1 remedy clause; `_ws_reclaim_resolve`'s `..` ordering; the three plan selectors naming
+     `repairing the alias`; and the wave-3 plan's R28 citation re-anchored. The two `//` remedy wordings stay with the
+     path-identity follow-up.
+  4. **The operator's `_svc_real_home` ruling** in `ccd/ccd`.
+  5. **Review 217's carries:** case-insensitive protected tokens in `ccd/ccd-entry.py`'s `is_protected`, with the
+     guard comment and launcher header saying so. Ruling: this closes the gap 3697 recorded, so it needs no new
+     departure, and 3697's text in the merged entry-safety plan stays as history. `shared/mark.mjs` gains a real
+     `--check <file>` that exits 0 only on `ccrc-unmodified` and non-zero otherwise, a missing file included, so the
+     plans' existing citations become true.
+  6. **Review 222's R1 and R3** (below).
+  - **Claims.** Live claims 882 (run 218), 885 (run 219) and 889 (run 221) hold `ccd/ccrc`, `README.md`,
+    `CLAUDE.md`, both skills and their tests, `ccd/session-hook.sh`, `server/src/watch.ts` and others. This round makes
+    no new edit under them. Wave 4's existing diff already edits `README.md`, `CLAUDE.md`, both skills, their tests
+    and `watch.ts`. A merge resolution there is allowed and reported, and the holder is told. So R2, R3's `ccd/ccrc`
+    sentence and `ccd/ccrc`'s identical `_svc_real_home` copy are carried until `ccd/ccrc` is free. That copy is
+    reached by an operator's own `ccrc` run on Darwin, never by the unattended sweep.
+  - **Numbers.** Wave 4's block is used up, and clause 10 forbids a mid-wave allocation. Every item above is a repair,
+    a pin or a prose correction, so none needs a number. If one would need a defined departure, the worker stops
+    and reports its slug by mail, never as a number or a tracked placeholder.
+  - Then the worker re-runs the required gates (`ownership.test.ts` as the stamp gate) and submits a fresh exact
+    wave-done. Only a server-accepted fingerprint at that tip advances wave 4 to its official held-out review.
 - **2026-10-02 — the row-placement prerequisite has merged.** PR #226 landed as `0db98707` after review runs 212-215
   (release v0.0.58). The landing order moves on: run 199 (`reclaim-entry-safety`) now merges current `main` without
   rebasing, integrates that prerequisite through its fourth item and returns a fresh fingerprint for its own held-out
@@ -757,6 +790,15 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   and rests on the best-effort body guard. Protecting a superset is harmless. Separately, `node shared/mark.mjs
   --check` is a hollow stamp gate (no CLI; exits 0 for any file) cited by several plans; give it a real CLI or
   retire the citation, with `ownership.test.ts` as the gate meanwhile.
+- **Wave 4 also inherits, from entry-safety review run 222 (2026-10-02):** R1, the destination-type half of the
+  installer's "every refusal comes before anything is created" has no red mutation (moving `makedirs` between the
+  layout refusal and the destination loop stays green); pin it with a fresh-HOME row where `~/.local/bin/ccd` is a
+  directory and `~/.local/libexec` is absent. R3, the exit-2 sentence ("the body moved and the launcher did not … the
+  mismatched pair now refuses every start by digest") is false for the launcher-postcondition arm, which exits 2
+  after both halves moved; correct it in `ccd/ccd-entry-install.py`'s header and stderr and in `deploy/deploy.sh`.
+- **Carried until `ccd/ccrc` is free of another programme's claim (2026-10-02):** review 222's R2 (`ccd/ccrc`'s
+  `_inst_entry_python` signature comment and `cmd_install` comment still say the shebang names the canonical
+  python3), R3's `ccd/ccrc` sentence, and `ccd/ccrc`'s identical copy of `_svc_real_home`'s `eval`.
 - **Wave 5 inherits, from the row-placement review (2026-10-01):** recovery for gone-directory alternate rows. An
   alternate row whose path is gone holds every other child at `unmeasured`, and two vanished or interrupted children
   hold each other; the recovery must prove the gone path was ccd's own worktree without consulting process state.
@@ -786,19 +828,16 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 
 ## Next-wave brief
 
-**The next act is the separate `reclaim-row-placement-safety` prerequisite.** Its number-free programme skeleton
-records the proof-qualified alternate-row invariant and the strict landing order; it has no run, allocation, child
-or plan until Wave 4 releases the overlapping `ccd/ccd` and hardening-test claims. At run-open it receives one fresh
-deviation block, and the finalized plan defines the removed-symlink placement departure in the same act. A fresh
-child then implements one PR and receives its own exact held-out review.
+**Both prerequisites have merged** (#226 `0db98707`, #222 `cf9e4cc8`), so the landing order reaches wave 4.
 
-**Run 199 remains unchanged but waits behind that PR.** `reclaim-entry-safety` keeps its four declared items, eight-
-number block beginning at 3696, D-3696 definition, amended exact plan, routing and exclusions. `still-harbor`
-preserves its WIP and does not finalize item 4 or open/merge its PR until instructed. After the row-placement PR
-merges, its already-declared merge-current-main item integrates that prerequisite before the entry-safety gates.
+**Wave 4 is in its integration round.** It is defined in Decisions (2026-10-02 15:03). Run 174 stays `working`
+and items 817–834 stay pending. `swift-hollow`:
+- merges `origin/main` into local `1a02baac7abfbb1a88a1a7a251c7326c11ae9f08` (never rebasing), regenerating and
+  re-stamping `ccd/ccd`;
+- repairs the items listed there, making no new edit under another programme's live claim and using no new number;
+- reruns the required gates and submits a fresh exact wave-done.
 
-**Wave 4 remains blocked after its Fix Round 3 report.** Run 174 stays `working`; items 817–834 stay pending; local
-commit `1a02baac7abfbb1a88a1a7a251c7326c11ae9f08` is preserved and PR #215 stays open. Only after both prerequisite
-PRs merge does `swift-hollow` merge `origin/main` (never rebases), repair the two remaining minors, regenerate and
-re-stamp `ccd/ccd`, rerun the required gates, and submit a fresh exact handoff. Only a server-accepted fingerprint
-at that fresh tip can advance Wave 4 to its official held-out review.
+The coordinator re-measures that fingerprint, advances run 174 to `awaiting-review` and opens wave 4's official
+held-out review under this programme's title, with the standard panel and the Opus `xhigh` SAFETY lens. After it
+merges, observe the release and convergence read-only, and wave 5 opens with its own run, carrying the items marked
+"Wave 5 inherits".
