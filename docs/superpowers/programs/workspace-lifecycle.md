@@ -192,6 +192,17 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     claims, so Task 12 waits for #231's merge.
   - **Repo-wide guards:** they run in every task, per the landing-order ruling.
   - **Open questions:** the plan's three stay the operator's, built as the plan says.
+- **2026-10-02 — run 236 mid-wave: two numbers added, and a claim wait.**
+  - **Progress:** Tasks 1–5, 7 and 8 are committed and reviewed, and main is merged.
+  - **Numbers:** the block 3836–3845 is fully used. Two departures found in execution took 3866 and 3867, minted on
+    the worker's request:
+    - 3866: a wave-1 test mock resolves `null` under Task 7's new return type;
+    - 3867: ArchiveSheet shares one exported run predicate instead of a copy that falsified its one-reader docstring.
+  - **Claim wait:** CLAUDE.md and README.md, which Tasks 6 and 12 edit, are held by stall-watch wave 4's claim 897
+    (run 226). The peer protocol forbids editing a contested path, so the worker holds those tasks. Calm-harbor has
+    been asked (mail 3245) to extend the second-lander rule agreed for run 238.
+  - **Parked, accepted:** an Important finding. On a store-read failure the archive door's 409 body drops
+    `measured()`'s detail, which is base behaviour (D-2545). It is named in the PR as a follow-up.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -212,6 +223,9 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   2. Widen its `closedAt` doubt from NULL-only to the server's rule: a non-positive or non-integer close time is
      doubt too. Do it without dropping mutation row S38's anchor.
   3. Make the read-only pin structural by comparing the `-wal` file as well.
+- **A follow-up owes the archive door's unreadable-store 409 its detail.** On a store-read failure, the
+  `coordinator-has-open-runs` and `run-open` bodies drop `measured()`'s detail, and nothing logs it (base behaviour,
+  D-2545). Wave 2 parked it, because the fix reshapes about six replayed assertions.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`, `~/.cc-limits`
   or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec whitelist; never print
   secret contents.
