@@ -472,7 +472,8 @@ export function FleetScreen({
   // and the projects whose loop is running — a second call while one runs is refused, not queued. The guard is a
   // REF, not the state beside it: a second call from the same render would read the stale state (the state only
   // drives the button's disabled look). The window it covers is a phone's: the confirm sheet stays tappable while
-  // it animates closed. No test reaches it — under jsdom the sheet unmounts before a second click lands.
+  // it animates closed. fleet-screen.test.tsx's double tap cannot reach it — under jsdom the real sheet unmounts before a
+  // second click lands — so archive-all-guard.test.tsx stubs the sheet with a confirm that fires twice in one tick.
   const [archiveAllFor, setArchiveAllFor] = useState<string | null>(null);
   const [archivingAll, setArchivingAll] = useState<ReadonlySet<string>>(new Set());
   const archivingAllRef = useRef<Set<string>>(new Set());
