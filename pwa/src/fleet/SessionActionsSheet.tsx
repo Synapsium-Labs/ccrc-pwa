@@ -42,7 +42,7 @@ import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
 import { SwapSheet } from './SwapSheet';
-import { ArchiveConflictSheet, runOpenRuns, type ArchiveConflictRun } from './ArchiveConflictSheet';
+import { ArchiveSheet, isPutAway, restoreSession } from './ArchiveSheet';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
 
@@ -98,11 +98,9 @@ export function SessionActionsSheet({
   const [swapOpen, setSwapOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [archBusy, setArchBusy] = useState(false);
-  /** `undefined` = no refusal to show; otherwise the runs the server named
-   *  (possibly `[]` — a run-open whose runs we could not read, which the sheet
-   *  renders without inventing an id). Three states, because collapsing the
-   *  empty case into "no conflict" is the defect the sheet exists to close. */
-  const [conflict, setConflict] = useState<readonly ArchiveConflictRun[] | undefined>(undefined);
+  /** The one Archive's sheet (workspace lifecycle §5.2) is open over this one. It hosts every refusal the archive
+   *  door can answer — the `run-open` claim this sheet used to hold as `conflict` among them. */
+  const [archiveOpen, setArchiveOpen] = useState(false);
   // Hold's reason composer — open/closed, the typed text, and a refusal the
   // empty-reason check leaves behind. `holdBusy` is separate from `archBusy`:
   // the two actions are mutually exclusive on screen (never-both, see the
@@ -151,13 +149,15 @@ export function SessionActionsSheet({
   // that THEIR workspace is claimed by a run that never named it, and offers
   // "Archive anyway" over it. Unconditional, like the rest: the retarget
   // happens with `open` staying true, so a reset gated on close never fires.
+  // Workspace lifecycle §5.2 moved that claim into `ArchiveSheet`, which resets
+  // itself on the same two changes; `archiveOpen` takes its place here.
   useEffect(() => {
     setHoldOpen(false);
     setHoldReason('');
     setHoldError(null);
     setReleaseConfirmOpen(false);
     setForgetConfirmOpen(false);
-    setConflict(undefined);
+    setArchiveOpen(false);
   }, [open, session?.id]);
 
   if (!session) return null;
@@ -190,35 +190,34 @@ export function SessionActionsSheet({
     }
   };
 
-  const archiveNow = async (): Promise<void> => {
-    if (archBusy) return;
-    setArchBusy(true);
-    try {
-      await archive(session.id);
-      onClose();
-    } catch (err) {
-      // `409 run-open` is not a failure the operator can act on from a toast:
-      // the refusal names WHICH run, and naming it is the whole information.
-      // Everything else keeps the toast it always had.
-      const runs = runOpenRuns(err);
-      if (runs !== null) setConflict(runs);
-      else toast(`Couldn't archive — ${apiErrorText(err)}`, 'error');
-    } finally {
-      setArchBusy(false);
-    }
-  };
+  // Workspace lifecycle §5.2: every session offers Archive, and every session already put away offers Restore.
+  const putAway = isPutAway(session);
 
   const restoreNow = async (): Promise<void> => {
     if (archBusy) return;
     setArchBusy(true);
     try {
-      await api.restore(session.id);
+      await restoreSession(session);
       onClose();
     } catch (err) {
       toast(`Couldn't restore — ${apiErrorText(err)}`, 'error');
     } finally {
       setArchBusy(false);
     }
+  };
+
+  // "Stop only" — the one place it survives (spec §5.2): offered by `ArchiveSheet` after an archive refusal the
+  // operator cannot fix from the phone, so a live session is never left without a way to put it down. The same
+  // `POST /api/sessions/:id/stop` as ever, which is unchanged.
+  const stopOnly = (id: string): void => {
+    void (async () => {
+      try {
+        await api.stop(id);
+      } catch (err) {
+        toast(`Couldn't stop — ${apiErrorText(err)}`, 'error');
+      }
+    })();
+    onClose();
   };
 
   // Empty reason refuses CLIENT-SIDE, before `api.hold` is ever called —
@@ -404,16 +403,18 @@ export function SessionActionsSheet({
             Swap account
           </button>
 
-          {session.workspace !== null && session.archivedAt === null && (
-            <button type="button" className="btn-ghost" disabled={archBusy || fault !== null}
-                    title={faultTitle} onClick={() => void archiveNow()}>
-              {archBusy ? 'Archiving…' : 'Archive workspace'}
+          {/* Every session offers Archive (spec §5.2) — a workspace and a main checkout alike; every row the
+              Archived fold holds offers Restore instead. Never both. */}
+          {!putAway && (
+            <button type="button" className="btn-ghost" disabled={fault !== null}
+                    title={faultTitle} onClick={() => setArchiveOpen(true)}>
+              Archive
             </button>
           )}
-          {session.workspace !== null && session.archivedAt !== null && (
+          {putAway && (
             <button type="button" className="btn-ghost" disabled={archBusy}
                     onClick={() => void restoreNow()}>
-              {archBusy ? 'Restoring…' : 'Restore workspace'}
+              {archBusy ? 'Restoring…' : 'Restore'}
             </button>
           )}
 
@@ -562,16 +563,18 @@ export function SessionActionsSheet({
         onConfirm={forgetNow}
       />
 
-      {/* The refusal, as a surface the operator can answer — the SAME sheet
-          and the SAME reader (`runOpenRuns`) PrSheet's archive door uses, so
-          the two doors cannot drift onto two sentences. `onDone` closes this
-          sheet too: the archive succeeded, so there is nothing left here to
-          act on. */}
-      <ArchiveConflictSheet
-        sessionId={conflict === undefined ? null : session.id}
-        runs={conflict !== undefined && conflict.length > 0 ? conflict : null}
-        onClose={() => setConflict(undefined)}
-        onDone={() => { setConflict(undefined); onClose(); }}
+      {/* The one Archive (workspace lifecycle §5.2): the confirm by case and every refusal the door answers, a run's
+          claim on the workspace included, answered INSIDE it. A sibling of `<Sheet open={open}>`, so it is gated on `open`
+          too: closing the door drops whatever it was asking. Archived → this sheet closes as well, as it always did.
+          `onStopOnly` is passed HERE and nowhere else. */}
+      <ArchiveSheet
+        session={session}
+        open={open && archiveOpen}
+        onClose={() => setArchiveOpen(false)}
+        onArchived={onClose}
+        onStopOnly={stopOnly}
+        archive={archive}
+        fleet={fleet}
       />
     </>
   );
