@@ -1080,6 +1080,9 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
   // `printf`, writes a line of its own into the answer.
   type Env = 'normal' | 'set -P' | 'an imported cd' | 'an imported pwd' | 'an imported builtin' | 'an imported set'
     | 'an imported printf';
+  /** The directory name the imported `printf` keys on: the fixture CHILD's own. `expectHostile` asserts that the
+   *  child it runs beside is named this, so a renamed fixture reds there instead of leaving the function benign. */
+  const PRINTF_KEY = 'quiet-basin';
   const ENVS: Record<Env, { pre: string; vars: Record<string, string> }> = {
     normal: { pre: '', vars: {} },
     'set -P': { pre: 'set -P;', vars: {} },
@@ -1095,11 +1098,11 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     // forwards the rest (a `set --` inside it sets its OWN parameters, so ccd's verbs cannot parse theirs).
     'an imported set': { pre: '', vars: {
       'BASH_FUNC_set%%': '() { if [[ "$1" == -o && "$2" == posix ]]; then return 0; fi; builtin set "$@"; }' } },
-    // Transparent, save in a directory named `quiet-basin` — the CHILD's own: there it writes a line of its own
+    // Transparent, save in a directory named `PRINTF_KEY` — the CHILD's own: there it writes a line of its own
     // before the `x`, so a canonical of the child read through it names another path, which no row below the
     // child's `pwd -P` has for a prefix (`pwd -P` also sets `$PWD` to the physical path it prints).
     'an imported printf': { pre: '', vars: {
-      'BASH_FUNC_printf%%': '() { if [[ "$PWD" == */quiet-basin ]]; then builtin printf \'y\\nx\'; else builtin printf "$@"; fi; }' } },
+      'BASH_FUNC_printf%%': `() { if [[ "$PWD" == */${PRINTF_KEY} ]]; then builtin printf 'y\\nx'; else builtin printf "$@"; fi; }` } },
   };
   const ALL = Object.keys(ENVS) as Env[];
   /** Every environment ws-reclaim itself can run in — under an imported `set` it dies parsing its own arguments. */
@@ -1127,14 +1130,17 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
    *  Five probes, and every hostile environment answers one of them unlike `normal`: where a BARE `cd` of
    *  `$HOME/lnk/..` lands (bare `pwd -P`); what a bare `pwd -P` says after `builtin cd -L` of `$HOME/lnk`; where
    *  `builtin cd -L` of `$HOME/lnk/..` lands (`builtin pwd -P`); whether `set -o posix` turns POSIX mode on; and
-   *  what a bare `printf x` writes in a directory named `quiet-basin`. */
+   *  what a bare `printf x` writes in a directory named as the fixture child's own workdir is — which must be
+   *  `PRINTF_KEY`, asserted first, so the printf probe is bound to the child it has to steer. */
   const expectHostile = (env: Env): void => {
-    const got = shIn(env, 'mkdir -p "$HOME/probe/quiet-basin";'
+    const own = path.basename(fs.readFileSync(path.join(h.home, '.cc-sessions', `${CHILD_ID}.workdir`), 'utf8').trim());
+    expect(own, 'the CONTROL: the imported printf keys on the fixture child’s own directory name').toBe(PRINTF_KEY);
+    const got = shIn(env, `mkdir -p "$HOME/probe/${own}";`
       + ' ( cd -- "$HOME/lnk/.." >/dev/null 2>&1 && pwd -P ); printf \'\\x1f\';'
       + ' ( builtin cd -L -- "$HOME/lnk" >/dev/null 2>&1 && pwd -P ); printf \'\\x1f\';'
       + ' ( builtin cd -L -- "$HOME/lnk/.." >/dev/null 2>&1 && builtin pwd -P ); printf \'\\x1f\';'
       + ' ( set -o posix; [[ -o posix ]] && printf on || printf off ); printf \'\\x1f\';'
-      + ' ( cd -- "$HOME/probe/quiet-basin" && printf x ); rm -rf "$HOME/probe"').stdout.split('\x1f').map((x) => x.trim());
+      + ` ( cd -- "$HOME/probe/${own}" && printf x ); rm -rf "$HOME/probe"`).stdout.split('\x1f').map((x) => x.trim());
     const home = fs.realpathSync(h.home);
     const elsewhere = fs.realpathSync(path.join(h.home, 'elsewhere'));
     const sub = fs.realpathSync(path.join(h.home, 'elsewhere', 'sub'));

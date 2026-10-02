@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e44ce1c833d7ecfc7ff7cb89498e9356e3e2fde6aa3b02f8c423d2ed3843afde
+# ccrc:generated 1 sha256=aab2ae685e7f3ba799ae8cb2340e93967d2116d1a7c1d07b4294a7780f6cd1fd
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24497,11 +24497,11 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # remove its tree. Compared twice: the literal path, and the resolved one
   # (`_ws_reclaim_resolve`: where a logical `cd` of it lands — the `pwd -P` of
   # its longest directory prefix, entered logically, and the rest as written,
-  # a path holding `..` re-walked from that entry), so two spellings of one
-  # directory are one directory — save one that resolves to a `//` spelling,
-  # which is not placed at all (below). The literal arm is implied by the resolved
-  # one — one string resolves one way — and stays as the spec's stated form;
-  # deleting it alone leaves the suite green, by construction.
+  # a path whose entered prefix holds `..` re-walked from that entry), so two
+  # spellings of one directory are one directory — save one that resolves to
+  # a `//` spelling, which is not placed at all (below). The literal arm is
+  # implied by the resolved one — one string resolves one way — and stays as
+  # the spec's stated form; deleting it alone leaves the suite green, by construction.
   #
   # NOR MAY ONE BE ROOTED INSIDE IT (spec §5.5, rung 9, of a path below the
   # child's). Another row is another SESSION, never the child: a same-repo
