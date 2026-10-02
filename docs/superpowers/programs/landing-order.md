@@ -86,6 +86,15 @@ carries it (spec §5.1, amended 2026-09-24).
   numbers, issued at run-open and written bare here until a plan on the same ref defines them: 3758 through 3767.
   The brief adds two rules that post-date the plan: the wave stops at the PR (the coordinator merges; the
   fleet moves by ccrc's own update mechanism, operator ruling 2026-09-30), and main is measured fresh.
+- **2026-10-02 — peer agreement with stall-watch on the skill clauses.** Stall-watch's coordinator
+  (`ccrc-pwa-calm-harbor`) wrote about its wave 4 (run 226). That wave adds a coordinator clause and a worker clause.
+  It will leave the skill files alone until this programme's wave 1 merges, then renumber its own clauses (spec
+  2026-09-29 §10: whoever lands second moves the count words). Wave 1 keeps coordinator clause 15 and worker
+  clause 16.
+  - **Owed on merge:** a one-line mail to `ccrc-pwa-calm-harbor`.
+  - **The peer's second finding.** The plan moves three of the five `fourteen` occurrences in
+    `coordinator-skill.test.ts`. The two it leaves (about `:146` and `:181`) are comments, which no test reads, so
+    they cannot red. Ruled: update both in clause 15's commit, as a departure from run 218's block.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
