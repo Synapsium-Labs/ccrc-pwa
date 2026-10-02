@@ -17,7 +17,7 @@ automatic deletion.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **working, fix round 3** — review run 214 closed `done` on `4d0070ba` with nine minor findings; fix-round mail 3050 sent 2026-10-02 restores R31 for a leaf-link subject and four small items; the next review decides acceptance under the recorded convergence rule |
+| 1 | distinguish complete alternate-row placement from absent-suffix projection; fail shut that ambiguity at audit, locked recomputation and both final ownership arms; preserve target-child vanished-worktree behavior; prove liveness-independent mutations and controls; merge current main and open the prerequisite PR | **AGENT-FIRST** | #226 (open) | **awaiting-review** — fix round 3 answered review 214 at `1e533785` (fingerprint accepted 2026-10-02); review run 215 dispatched to `ccrc-pwa-amber-cove` and decides acceptance under the convergence rule |
 
 **Deviation block: sixteen numbers, the first of them 3731** (allocated exactly once at run 208 open,
 2026-10-01; floor now 3747). The finalized plan defines the first as
@@ -160,6 +160,12 @@ a measured departure is defined in that plan; unused headroom remains unrendered
   - **Convergence rule.** Each review so far found new minor first-round findings. The next review accepts the wave
     when SAFETY (a)-(h) hold, no confirmed critical or important finding stands, and fix round 3 introduces nothing;
     a newly found minor that predates fix round 3 is carried to wave 4 rather than opening another round.
+- **2026-10-02 — fix round 3 accepted for review.** Mail 3055 claimed `1e533785864e615e55c2762c9d2001605da0e2c8`, one
+  commit over `4d0070ba` (`origin/main` unchanged). Re-measured: remote, worker and PR #226 heads equal it, the tree
+  is clean, the diff stays inside claim 871, and `ccd/ccd` passes the marker check and `bash -n`. Its production
+  change moves the existing leaf-link refusal ahead of other-row placement in `_ws_reclaim_eval` and rewords the
+  child's own rc-1 remedy so it never invites removing what stands at the child's workdir. Issued numbers 3738 and
+  3739 are newly rendered; 3740 onward stay unrendered. Review run 215 reads it.
 
 ## Carried constraints
 
