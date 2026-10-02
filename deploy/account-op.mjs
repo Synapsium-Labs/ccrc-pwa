@@ -1105,7 +1105,7 @@ function opDoctor(a) {
     // A CODEX lane's rule is ABSENT OR EQUAL (R-C7,
     // D-3709). Its launcher exports
     // ANTHROPIC_BASE_URL itself, and no ccrc writer puts that key in
-    // settings.json (`MODEL_ENV_KEYS`, shared/modelenv.mjs), so an env block
+    // settings.json (the model-env keys shared/modelenv.mjs owns), so an env block
     // without it — or no env block at all — is that lane's healthy state.
     // Only a key naming ANOTHER endpoint is drift; which of the two Claude
     // Code honours is unmeasured, so the finding says both and judges neither.
