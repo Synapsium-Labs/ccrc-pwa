@@ -586,6 +586,23 @@ describe('the substrate gate — destructive affordances refuse a session nobody
     expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/ensure'))).toBe(false);
   });
 
+  // The fleet frame is live under the open sheets, so the handler re-reads the fault when it fires. Here the row object
+  // gains the fault AFTER the render, so the button is still enabled (no re-render) and only the fire-time check refuses.
+  it('Stop only re-checks the fault when it fires: it toasts the refusal and never posts /stop', async () => {
+    const archive = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'worktree-gone' }));
+    const session = s({ workspace: 'quiet-basin', archivedAt: null });
+    renderSheet(session, { archive });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-primary')).not.toBeNull());
+    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-primary')!);
+    const stop = await screen.findByRole('button', { name: 'Stop only' });
+    expect(stop).toBeEnabled();
+    (session as { substrate: FleetSession['substrate'] }).substrate = { at: 1, text: 'x' };
+    fireEvent.click(stop);
+    expect(await screen.findByText(/Couldn't stop — tmux unreachable — x/)).toBeInTheDocument();
+    expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/stop'))).toBe(false);
+  });
+
   it('Swap account is disabled and the swap sheet never opens', () => {
     render(<SessionActionsSheet session={faulted()} {...sheetProps} />);
     const btn = screen.getByRole('button', { name: /swap account/i });

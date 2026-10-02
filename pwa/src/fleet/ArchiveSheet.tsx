@@ -209,6 +209,10 @@ export function ArchiveSheet({
   const stopOnlyClass = ask.kind === 'partly' || (ask.kind === 'refused'
     && (ask.unfixable === true || (ask.refusal !== null && ARCHIVE_STOP_ONLY.includes(ask.refusal))));
   const stopOnly = onStopOnly !== undefined && stopOnlyClass;
+  /** "Stop only" is the only stop control in the PWA, so it carries the substrate gate the header's "Stop session" had
+   *  (spec §4: stop is destructive during an outage): disabled, with the chip's own title, while tmux cannot be reached.
+   *  The caller's handler re-checks at fire time, since the live frame can change under the open sheet. */
+  const stopFault = substrateFault(session);
 
   let title: string;
   let body: ReactNode;
@@ -283,7 +287,9 @@ export function ArchiveSheet({
             </button>
           )}
           {stopOnly && (
-            <button type="button" className="btn-primary" onClick={() => { onStopOnly!(sid); onClose(); }}>
+            <button type="button" className="btn-primary" disabled={stopFault !== null}
+                    title={stopFault !== null ? `tmux unreachable — ${stopFault.text}` : undefined}
+                    onClick={() => { onStopOnly!(sid); onClose(); }}>
               Stop only
             </button>
           )}

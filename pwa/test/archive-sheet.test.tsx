@@ -175,6 +175,26 @@ describe('"Stop only" — after a refusal the phone cannot fix, and only where t
     expect(onClose).toHaveBeenCalled();
   });
 
+  // The only stop control left in the PWA carries the gate the header's "Stop session" had (spec §4, stop is
+  // destructive during an outage): disabled with the chip's own title while tmux cannot be reached, and inert.
+  it('under a substrate fault Stop only is disabled, names the fault, and never fires', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'worktree-gone' })) as unknown as Archive;
+    const onStopOnly = vi.fn();
+    const { view, fleet, onClose } = mount(s(), { archive, onStopOnly });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    expect(await screen.findByRole('button', { name: 'Stop only' })).toBeEnabled();
+    view.rerender(
+      <ArchiveSheet session={s({ substrate: { at: 1, text: 'x' } })} open onClose={onClose} archive={archive}
+        fleet={fleet} onStopOnly={onStopOnly} />,
+    );
+    const btn = screen.getByRole('button', { name: 'Stop only' });
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toBe('tmux unreachable — x');
+    fireEvent.click(btn);
+    expect(onStopOnly).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('never offered where the caller does not ask for it — the sheet says where it is, and offers no button', async () => {
     const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'worktree-gone' })) as unknown as Archive;
     mount(s(), { archive });

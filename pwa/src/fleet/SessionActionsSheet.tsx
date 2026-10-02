@@ -80,7 +80,7 @@ export function SessionActionsSheet({
   archive = api.archive,
 }: {
   /** Injectable for tests, the same default-to-`api.archive` shape `PrSheet`
-   *  and `ArchiveConflictSheet` use — three components, one idiom. */
+   *  and `ArchiveSheet` use — three components, one idiom. */
   archive?: typeof api.archive;
   session: FleetSession | null;
   open: boolean;
@@ -106,7 +106,7 @@ export function SessionActionsSheet({
   // the two actions are mutually exclusive on screen (never-both, see the
   // buttons below) but nothing enforces that FOR the busy flags themselves,
   // and sharing one would freeze Hold's own disabled state on an unrelated
-  // archive in flight.
+  // Restore in flight (`archBusy` covers Restore only now; Archive's busy state lives in `ArchiveSheet`).
   const [holdOpen, setHoldOpen] = useState(false);
   const [holdReason, setHoldReason] = useState('');
   const [holdError, setHoldError] = useState<string | null>(null);
@@ -210,6 +210,13 @@ export function SessionActionsSheet({
   // operator cannot fix from the phone, so a live session is never left without a way to put it down. The same
   // `POST /api/sessions/:id/stop` as ever, which is unchanged.
   const stopOnly = (id: string): void => {
+    // The substrate gate (spec §4), re-read at fire time: stop is destructive while tmux cannot be reached, and the
+    // fleet frame updates live under the open sheets. `ArchiveSheet` disables the button on the same fault.
+    const stopFault = substrateFault(session);
+    if (stopFault !== null) {
+      toast(`Couldn't stop — tmux unreachable — ${stopFault.text}`, 'error');
+      return;
+    }
     void (async () => {
       try {
         await api.stop(id);
