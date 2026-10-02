@@ -2826,7 +2826,8 @@ describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', ()
     expect(await screen.findByRole('button', { name: 'Archive all 2 released workspaces in alpha' })).toBeEnabled();
   });
 
-  it('archives a PLACED row from the card it renders on, and a double tap on the confirm runs ONE loop', async () => {
+  it('archives a PLACED row from the card it renders on; a second tap after the sheet closes starts no second loop', async () => {
+    // The in-flight guard itself is pinned by archive-all-guard.test.tsx: here the real sheet unmounts after the first click.
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
     const archive = vi.spyOn(api, 'archive').mockResolvedValue(undefined);
     const store = makeStore();
