@@ -52,7 +52,7 @@ function input(mail: readonly StallMailRow[], over: { arming?: StallArming; w2?:
   const primary = runRow();
   return {
     subject: { primary, runs: [primary] }, worker: workerIdleSince(NOW - 3 * H), mail, notices: [],
-    arming: over.arming ?? ARMED, coordinationPaused: false, coordinator: null,
+    arming: over.arming ?? ARMED, coordinationPaused: false, coordinator: null, activation: { kind: 'none' },
     ...(over.w2 !== undefined ? { w2: over.w2 } : {}),
   };
 }
