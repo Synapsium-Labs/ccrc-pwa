@@ -2125,6 +2125,19 @@ project's card gains an `abroad` line, one sentence per wave working
 elsewhere ("`<program>` wave 2/3 in `<other project>`"), minus any wave whose
 worker already renders on that card.
 
+**Released workspaces** (workspace lifecycle spec §5.1). When a programme is done with a workspace — its newest
+run closed, no open run naming it as worker or as coordinator, no hold, not archived — the server says so on the
+row (`FleetSession.releasedFrom`: the run, the programme and its title, the coordinator, the close time, and
+whether it is a child), and its card folds it into `Released (N)`, collapsed, directly above `Archived (N)`.
+Inside, rows sit under their programme, newest close first. A released row that needs you — waiting, working or
+stranded — stays at the top level until it no longer does. **Archive all (N)** confirms once, then sends a plain
+archive (never `force`) for each folded row that is not a child, one at a time, re-reading each row from the
+newest frame before its turn, and reports archived, skipped and refused in one toast, each refusal with the
+server's reason; a toast that carries a refusal stays up until dismissed. Children are skipped. A `coord.db`
+read that fails folds nothing that tick. The bucket chips above the cards still count released rows under
+`Idle`, `Done` and `Dead`: folded, not removed. Placement is unchanged: a released row renders on its own
+project's card, since board placement lasts while the workspace is held.
+
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in
 an ACTIVE state — `dispatched`, `working`, `unknown` — and not merely

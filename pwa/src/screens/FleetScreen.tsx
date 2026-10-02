@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { Skeleton } from '../components/Skeleton';
+import { QuickConfirm } from '../components/QuickConfirm';
 import { toast } from '../components/Toast';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
@@ -20,7 +21,8 @@ import { MailBadge } from '../fleet/MailBadge';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { PasskeyNotice } from '../fleet/PasskeyNotice';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
-import { groupFleet } from '../fleet/groupFleet';
+import { groupFleet, inReleasedFold } from '../fleet/groupFleet';
+import { archivableReleased, archiveReleased, archiveReleasedSummary } from '../fleet/archiveReleased';
 import { ProjectCard, poolOfPlacement, type ProjectPlacementRead } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BUCKET_ORDER } from '../fleet/sortFleet';
@@ -466,6 +468,49 @@ export function FleetScreen({
   // to open. Only the id is held: the session it names is looked up fresh
   // from the live list below, same reasoning as `actionsSession` above.
   const [reapId, setReapId] = useState<string | null>(null);
+  // "Archive all" in a card's Released fold (workspace lifecycle spec §5.1): the project whose confirm is open,
+  // and the projects whose loop is running — a second call while one runs is refused, not queued. The guard is a
+  // REF, not the state beside it: a second call from the same render would read the stale state (the state only
+  // drives the button's disabled look). The window it covers is a phone's: the confirm sheet stays tappable while
+  // it animates closed. No test reaches it — under jsdom the sheet unmounts before a second click lands.
+  const [archiveAllFor, setArchiveAllFor] = useState<string | null>(null);
+  const [archivingAll, setArchivingAll] = useState<ReadonlySet<string>>(new Set());
+  const archivingAllRef = useRef<Set<string>>(new Set());
+  // `boardHome`, the card the row RENDERS on — never `s.project`, which a placed row does not share with its card.
+  const archiveAllRows = archiveAllFor === null ? []
+    : sessions.filter((s) => boardHome(s) === archiveAllFor && archivableReleased(s));
+  const archiveAllCount = archiveAllRows.length;
+  const archiveAllLive = archiveAllRows.filter((s) => s.status !== 'dead').length;
+  const runArchiveAll = async (project: string): Promise<void> => {
+    if (archivingAllRef.current.has(project)) return;
+    archivingAllRef.current.add(project);
+    // EVERY folded row of this card, children included: the loop skips a child itself, so its summary counts the
+    // whole fold — "skipped" then agrees with the card's own "skips N child workspaces".
+    const ids = sessions.filter((s) => boardHome(s) === project && inReleasedFold(s)).map((s) => s.id);
+    setArchivingAll((prev) => new Set(prev).add(project));
+    try {
+      const result = await archiveReleased(ids, {
+        // The NEWEST frame, never the render-scoped `sessions`: a row can leave the fold mid-loop.
+        current: (id) => store.getState().sessions.find((s) => s.id === id),
+        archive: (id) => api.archive(id),
+        errorText: apiErrorText,
+      });
+      // A refusal's reason is the only record of it — the refused row stays in the fold with no reason on it — so
+      // that toast carries an action, which keeps it on screen until it is read (Toast.tsx).
+      if (result.refused.length > 0) {
+        toast(archiveReleasedSummary(result), 'error', { label: 'Dismiss', onClick: () => {} });
+      } else {
+        toast(archiveReleasedSummary(result), 'info');
+      }
+    } finally {
+      archivingAllRef.current.delete(project);
+      setArchivingAll((prev) => {
+        const next = new Set(prev);
+        next.delete(project);
+        return next;
+      });
+    }
+  };
 
   useEffect(() => {
     if (actionsId === null) return;
@@ -754,8 +799,11 @@ export function FleetScreen({
               `Archived (n)`, so this row named a bucket whose rows, glyph and
               merge facts were nowhere on the screen.
 
-              Only the `Archived` chip's rows sit behind a fold, and that fold
-              states the identical count. The footer below is the wider DISK
+              Two folds hold rows a chip counts. `Archived (n)` states its
+              chip's identical count. `Released (n)` (workspace lifecycle
+              §5.1) holds rows that are still `idle`, `done` or `dead` and
+              still counted under those chips: folded, never removed, so a
+              chip may count rows that sit inside a card's Released fold. The footer below is the wider DISK
               set (everything with an `archivedAt`, merged ones included) and
               says so in its own words rather than repeating the noun.
 
@@ -892,6 +940,10 @@ export function FleetScreen({
                    a project, wrong for an archive fold that must start
                    closed. Under this composite key, presence means EXPANDED. */
                 archivedOpen={folded.has(`${g.project}::archived`)}
+                /* The same inversion, for the Released fold (workspace lifecycle spec §5.1). */
+                releasedOpen={folded.has(`${g.project}::released`)}
+                onArchiveReleased={setArchiveAllFor}
+                archivingReleased={archivingAll.has(g.project)}
               />
             ))}
           </div>
@@ -949,6 +1001,17 @@ export function FleetScreen({
         onClose={() => setActionsOpen(false)}
         onReap={setReapId}
         fleet={store}
+      />
+
+      <QuickConfirm
+        open={archiveAllFor !== null}
+        onClose={() => setArchiveAllFor(null)}
+        title="Archive released workspaces?"
+        consequence={`Archives ${archiveAllCount} released ${archiveAllCount === 1 ? 'workspace' : 'workspaces'} in ${archiveAllFor ?? ''}, one at a time. ${archiveAllLive} of them ${archiveAllLive === 1 ? 'still has a live pane' : 'still have a live pane'}, which is stopped. Restore brings any of them back. Child workspaces are skipped, and so is any row that stops being released before its turn.`}
+        confirmLabel={`Archive ${archiveAllCount}`}
+        onConfirm={() => {
+          if (archiveAllFor !== null) void runArchiveAll(archiveAllFor);
+        }}
       />
 
       <ReapSheet
