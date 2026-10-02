@@ -153,6 +153,10 @@ independent reader, then cross-checked by another. The cross-check upheld every 
     dispatch was refused `cap-daily`: 24 of 24 dispatches in the rolling 24 h, fleet-wide. Landing-order's run 238
     waits on the same cap. This session proposed a split: 238 takes the 21:27:39 slot (run 213 ages out), and 239
     takes 22:34:18 (run 214). Raising `maxSessionsPerDay` is the operator's door.
+    Agreed (mails 3253, 3276-3278). The later slots are split as follows, and whoever won't use a slot they hold mails
+    the other before it ages out:
+    - landing-order: 00:09:10, 02:42:08 and 11:53:20;
+    - this programme: 10:11:41 and 11:53:42, for a wave 4 re-review if one is needed and for wave 5's dispatch.
   - **The worker's finding is routed.** `monitor-wait-conflict-continuity-stage5` says continuity's planned stage-5
     worker clause (a Monitor wait) contradicts worker clause 17. It went to continuity's coordinator (mail 3252); this
     programme takes no number for it.
