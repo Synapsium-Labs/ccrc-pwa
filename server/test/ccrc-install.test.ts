@@ -7946,7 +7946,16 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  disposable copy of the plan's base and pasted here, never typed: both
  *  install passes' closing doctor, the two hourly refreshes
  *  (`liveShapeRefreshes`), and the doctor after them. The first case proves
- *  it is a measurement of this table that FAILs nothing. */
+ *  it is a measurement of this table that FAILs nothing.
+ *
+ *  MEASURED ON `1f9fa22d`, the plan's base and this branch's merge-base with
+ *  `origin/main` (`$SCRATCH/t10-base`). It is a golden: nothing re-measures
+ *  it, so a merge-up that moves a doctor check's class on the live shape reds
+ *  the live-shape case until Step 3 is re-run on a disposable copy of the new
+ *  base, never hand-edited (it held on the final fix wave's merge of
+ *  `origin/main`). Plan 4's deletion of the external arm retires it, or
+ *  re-measures it on that PR's own base: the hourly refresh it pins is that
+ *  arm's. */
 interface LiveShapeMeasure {
   install: Array<{ code: number; classes: Record<string, string> }>;
   refresh: RefreshObservation[];
