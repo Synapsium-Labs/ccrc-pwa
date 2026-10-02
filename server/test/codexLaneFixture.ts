@@ -1963,3 +1963,450 @@ export function probeRuntime(home: string, catalogueFile: string): ProbeRuntime 
   ].join('\n') + '\n';
   return { python, rec, stub };
 }
+
+// ── Plan 3a Task 10 — the live shape (begin) ─────────────────────────────
+// The fleet box's live SHAPE before any roster row is flipped, in fixture
+// vocabulary (ruling R13: the plan and this file state it by shape only):
+//   - two `external` rows whose telemetry is codex, provider openai, homeAble,
+//     with a palette hue, and with no ports, no authDir and no secretsFile;
+//   - the lane-1 analog `codex-a` already carries a codex class registry and
+//     a catalogue; the lane-2 analog `codex-b` carries an effort file only;
+//   - `codex-a`'s launcher is a symlink to another repository's launcher, and
+//     `codex-b`'s a small file that execs it by path; neither carries a marker;
+//   - that repository's launcher, shim and publisher in ~/.local/bin, its flat
+//     usage pair (enabled), its usage template pair with an ENABLED instance
+//     for `codex-b`, its box-global LiteLLM config and its shared env file;
+//   - that repository's LiteLLM install: a `litellm` on PATH whose directory
+//     holds the interpreter the probe's EXTERNAL path runs (here a RECORDER),
+//     and the token directory that path defaults to, which is lane 1's;
+//   - each lane's OAuth directory, 0700, holding an auth.json at 0600.
+// No ccrc runtime and no ~/.ccrc/codex/. `codex-a`/`codex-b` are fixture ids
+// (ruling R11): never a rostered id on any box.
+//
+// Written against what this module already imports and exports on the plan's
+// BASE (`fs`, `path`, `spawn`, `spawnSync`, `ChildProcess`, `createHash`,
+// `codexRoster`, `codexAuthDir`, `trackChild`, `assertSpineFrontContained`), so
+// Plan 3a Task 10 Step 3 can append this block unchanged to the BASE tree's
+// copy of this module and measure the base with the same code (ruling Z7:
+// "before" is measured, never assumed).
+// ─────────────────────────────────────────────────────────────────────────
+
+export const REHEARSAL_LANES = ['codex-a', 'codex-b'] as const;
+
+/** An `external` row in the live rows' shape: kind and provider in `exec` and
+ *  nothing else there; homeAble, with a palette hue (the fixture's, not theirs). */
+export function externalCodexRow(id: string): Record<string, unknown> {
+  return {
+    id, label: id, configDirSuffix: `.claude-${id}`,
+    exec: { kind: 'external', provider: 'openai' }, homeAble: true, hue: 'violet', telemetry: 'codex',
+  };
+}
+
+/** The class registry the lane-1 analog carries: fixture model ids only
+ *  (`gpt-x`, `probe-model`), valid against `rehearsalCatalogue`. */
+export const REHEARSAL_REGISTRY = {
+  probe: 'codex',
+  classes: { haiku: 'probe-model', sonnet: 'gpt-x', opus: 'gpt-x', fable: null },
+  subagent: 'sonnet',
+  discovery: 'catalogue',
+  effort: { haiku: 'high', sonnet: 'high', opus: 'high', fable: 'high' },
+} as const;
+
+/** Its catalogue, fetched at `fetchedAt`: UNIX SECONDS, the probe's unit. */
+export function rehearsalCatalogue(fetchedAt: number): Record<string, unknown> {
+  const m = (id: string): Record<string, unknown> => ({
+    id, label: id, context: null, maxContext: null, efforts: ['low', 'medium', 'high'],
+    hidden: false, priceIn: null, priceOut: null,
+  });
+  return { probe: 'codex', fetchedAt, stale: false, models: [m('gpt-x'), m('probe-model')] };
+}
+
+/** `~/.ccrc/models/<id>.json`: what a passing refresh leaves, or its age. */
+export function writeRehearsalCatalogue(home: string, id: string, fetchedAt: number): void {
+  const dir = path.join(home, '.ccrc', 'models');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${id}.json`), `${JSON.stringify(rehearsalCatalogue(fetchedAt))}\n`);
+}
+
+const FOREIGN_MARK = '# FOREIGN-FIXTURE-3a: another repository owns this file';
+
+/** The names the probe's interpreter is asked about, one list for the recorder
+ *  below and for `observeHourlyRefresh`'s scrub (single definition). VALUES are
+ *  recorded for the first list, PRESENCE only for the second: a credential's
+ *  value never reaches a file, even a fixture's. */
+export const PROBE_ENV_VALUES = [
+  'CHATGPT_TOKEN_DIR', 'CODEX_CLIENT_VERSION', 'LITELLM_LOCAL_MODEL_COST_MAP',
+  'CCRC_CODEX_PYTHON', 'CCRC_PROBE_ACCOUNT', 'CCRC_PROBE_PROG',
+] as const;
+export const PROBE_ENV_PRESENCE = ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'] as const;
+
+/** The Codex `/models` body, in the endpoint's own shape (the probe's codex
+ *  normaliser: `slug`, `display_name`, `supported_reasoning_levels`). */
+const FOREIGN_MODELS_BODY = JSON.stringify({
+  models: ['gpt-x', 'probe-model'].map((slug) => ({
+    slug, display_name: slug, supported_reasoning_levels: ['low', 'medium', 'high'].map((effort) => ({ effort })),
+  })),
+});
+
+/** The interpreter beside that repository's `litellm`, which the probe's
+ *  external path runs as `<it> -` with its program on stdin. A RECORDER: it
+ *  drains the program, appends one tab-separated line per call to
+ *  `$HOME/foreign-probe-calls` (`argv=…`, then each name's value or presence),
+ *  and answers the `/models` body. It never opens the token directory (spec §9:
+ *  existence and mode only), and it is plain sh, so no python resolves for it. */
+const FOREIGN_PYTHON = [
+  '#!/bin/sh',
+  FOREIGN_MARK,
+  'cat >/dev/null',
+  '{',
+  '  printf \'argv=%s\' "$*"',
+  `  for n in ${PROBE_ENV_VALUES.join(' ')}; do`,
+  '    if printenv "$n" >/dev/null; then printf \'\\t%s=%s\' "$n" "$(printenv "$n")"; else printf \'\\t%s=<unset>\' "$n"; fi',
+  '  done',
+  `  for n in ${PROBE_ENV_PRESENCE.join(' ')}; do`,
+  '    if printenv "$n" >/dev/null; then printf \'\\t%s=<set>\' "$n"; else printf \'\\t%s=<unset>\' "$n"; fi',
+  '  done',
+  '  printf \'\\n\'',
+  '} >> "$HOME/foreign-probe-calls"',
+  `printf '%s\\n' '${FOREIGN_MODELS_BODY}'`,
+  '',
+].join('\n');
+
+/** The box-global LiteLLM config the external arm renders, and the `.prev`
+ *  copy its write keeps beside it (`deploy/models-op.mjs`'s litellm op). */
+const FOREIGN_RENDER = '.handoff/litellm-config.yaml';
+const FOREIGN_RENDER_PREV = `${FOREIGN_RENDER}.prev`;
+/** That repository's LiteLLM install: fixture path, its shape only. */
+const FOREIGN_LITELLM_BIN = '.local/share/foreign-litellm/bin';
+
+/** Every regular file the shape puts at a path another repository owns:
+ *  [HOME-relative path, mode, bytes]. The launcher is a RECORDER, so a bare
+ *  `ccgpt stop` from ccrc is a measurement (`$HOME/foreign-ccgpt-calls`). */
+const FOREIGN_FILES: ReadonlyArray<readonly [string, number, string]> = [
+  ['.local/bin/ccgpt', 0o755,
+    `#!/bin/sh\n${FOREIGN_MARK}\nprintf '%s\\n' "$*" >> "$HOME/foreign-ccgpt-calls"\nexit 0\n`],
+  ['.local/bin/ccgpt-proxy', 0o755, `#!/usr/bin/env python3\n${FOREIGN_MARK}\n`],
+  ['.local/bin/ccgpt-usage', 0o755, `#!/bin/sh\n${FOREIGN_MARK}\nexit 0\n`],
+  ['.local/bin/codex-b', 0o755, `#!/bin/sh\n${FOREIGN_MARK}\nexec "$HOME/.local/bin/ccgpt" "$@"\n`],
+  [`${FOREIGN_LITELLM_BIN}/litellm`, 0o755,
+    `#!/bin/sh\n${FOREIGN_MARK}\necho "fixture litellm: resolved for its directory, never run" >&2\nexit 97\n`],
+  [`${FOREIGN_LITELLM_BIN}/python`, 0o755, FOREIGN_PYTHON],
+  ['.config/systemd/user/ccgpt-usage.service', 0o644,
+    `${FOREIGN_MARK}\n[Service]\nType=oneshot\nExecStart=%h/.local/bin/ccgpt-usage\n`],
+  ['.config/systemd/user/ccgpt-usage.service.d/path.conf', 0o644,
+    `${FOREIGN_MARK}\n[Service]\nEnvironment=PATH=%h/.local/bin:/usr/bin:/bin\n`],
+  ['.config/systemd/user/ccgpt-usage.timer', 0o644,
+    `${FOREIGN_MARK}\n[Timer]\nOnUnitActiveSec=20min\n[Install]\nWantedBy=timers.target\n`],
+  ['.config/systemd/user/ccgpt-usage@.service', 0o644,
+    `${FOREIGN_MARK}\n[Service]\nType=oneshot\nEnvironment=CCGPT_ACCOUNT_ID=%i\nExecStart=%h/.local/bin/ccgpt-usage\n`],
+  ['.config/systemd/user/ccgpt-usage@.timer', 0o644,
+    `${FOREIGN_MARK}\n[Timer]\nOnUnitActiveSec=20min\n[Install]\nWantedBy=timers.target\n`],
+  [FOREIGN_RENDER, 0o644, `${FOREIGN_MARK}\nmodel_list: []\n`],
+  ['.handoff/env', 0o600, 'FIXTURE_NOT_A_KEY=1\n'],
+];
+
+/** The links: the alias launcher (relative, as `ln -s ccgpt` makes it), the
+ *  `litellm` on PATH, the default token directory (lane 1's), and the two
+ *  enabled timers (absolute, as `systemctl --user enable` makes them). */
+const FOREIGN_LINKS: ReadonlyArray<readonly [string, string, 'relative' | 'home']> = [
+  ['.local/bin/codex-a', 'ccgpt', 'relative'],
+  ['.local/bin/litellm', `${FOREIGN_LITELLM_BIN}/litellm`, 'home'],
+  ['.handoff/chatgpt-auth', codexAuthDir('codex-a'), 'home'],
+  ['.config/systemd/user/timers.target.wants/ccgpt-usage.timer', '.config/systemd/user/ccgpt-usage.timer', 'home'],
+  ['.config/systemd/user/timers.target.wants/ccgpt-usage@codex-b.timer', '.config/systemd/user/ccgpt-usage@.timer', 'home'],
+];
+
+const OAUTH_BYTES = '{"fixture": "test-token-not-a-secret"}\n';
+
+/** Every path `foreignSnapshot` reads: the files, the links, each lane's
+ *  OAuth directory and file (spec §9.2: ccrc checks them and never writes
+ *  them), and the `.prev` an external render leaves (absent until one). */
+export const FOREIGN_PATHS: readonly string[] = [
+  ...FOREIGN_FILES.map(([rel]) => rel),
+  ...FOREIGN_LINKS.map(([rel]) => rel),
+  ...REHEARSAL_LANES.flatMap((id) => [codexAuthDir(id), `${codexAuthDir(id)}/auth.json`]),
+  FOREIGN_RENDER_PREV,
+];
+
+export type ForeignEntry =
+  | { kind: 'file'; mode: number; bytes: string }
+  | { kind: 'sealed'; mode: number; size: number; mtimeMs: number; ino: number }
+  | { kind: 'link'; target: string }
+  | { kind: 'dir'; mode: number }
+  | { kind: 'absent' };
+
+/** The key-bearing paths: each lane's auth.json and the other repository's env
+ *  file. Global Constraints: existence and mode only, never opened, fixtures
+ *  included. `lstat` alone measures them, so a 0000-mode fixture is measured
+ *  too, and a rewrite of the same bytes still shows (mtime, inode). */
+const SEALED: ReadonlySet<string> = new Set([
+  '.handoff/env', ...REHEARSAL_LANES.map((id) => `${codexAuthDir(id)}/auth.json`),
+]);
+
+/** What sits at every foreign path now. `except` drops the paths a runbook
+ *  step moves on purpose. */
+export function foreignSnapshot(home: string, except: readonly string[] = []): Record<string, ForeignEntry> {
+  const out: Record<string, ForeignEntry> = {};
+  for (const rel of FOREIGN_PATHS) {
+    if (except.includes(rel)) continue;
+    const p = path.join(home, rel);
+    let st: fs.Stats;
+    try { st = fs.lstatSync(p); } catch { out[rel] = { kind: 'absent' }; continue; }
+    if (st.isSymbolicLink()) out[rel] = { kind: 'link', target: fs.readlinkSync(p) };
+    else if (st.isDirectory()) out[rel] = { kind: 'dir', mode: st.mode & 0o7777 };
+    else if (SEALED.has(rel)) {
+      out[rel] = { kind: 'sealed', mode: st.mode & 0o7777, size: st.size, mtimeMs: st.mtimeMs, ino: st.ino };
+    } else out[rel] = { kind: 'file', mode: st.mode & 0o7777, bytes: fs.readFileSync(p, 'utf8') };
+  }
+  return out;
+}
+
+/** Plants the live shape. `ccrcModels` runs one `ccrc models …` argv under the
+ *  CALLING suite's contained harness (this module owns none). It is asked
+ *  once, for the shipped re-materialise remedy (`ccd/ccrc`'s settingsDrift
+ *  line: "re-materialise by running any models mutation"), which writes
+ *  `codex-a`'s TSV, effort file and settings env through the real op. That is
+ *  a write to a registry that ALREADY exists, which ruling Z3 leaves alone. */
+export function plantLiveShape(
+  home: string,
+  ccrcModels: (argv: string[]) => { code: number; stdout: string; stderr: string },
+): void {
+  codexRoster(home, [], REHEARSAL_LANES.map((id) => externalCodexRow(id)));
+  for (const [rel, mode, text] of FOREIGN_FILES) {
+    const p = path.join(home, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, text, { mode });
+    fs.chmodSync(p, mode);
+  }
+  for (const [rel, target, base] of FOREIGN_LINKS) {
+    const p = path.join(home, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.symlinkSync(base === 'home' ? path.join(home, target) : target, p);
+  }
+  for (const id of REHEARSAL_LANES) {
+    const dir = path.join(home, codexAuthDir(id));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.chmodSync(dir, 0o700);
+    fs.writeFileSync(path.join(dir, 'auth.json'), OAUTH_BYTES, { mode: 0o600 });
+    fs.chmodSync(path.join(dir, 'auth.json'), 0o600);
+  }
+  // codex-a's config dir exists with no env yet; codex-b's env is hand-written, never ccrc-rendered.
+  fs.mkdirSync(path.join(home, '.claude-codex-a'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude-codex-a', 'settings.json'), '{}\n');
+  fs.mkdirSync(path.join(home, '.claude-codex-b'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude-codex-b', 'settings.json'), '{"env": {"ANTHROPIC_MODEL": "gpt-x"}}\n');
+  const models = path.join(home, '.ccrc', 'models');
+  fs.mkdirSync(models, { recursive: true });
+  fs.writeFileSync(path.join(models, 'codex-a.classes.json'), `${JSON.stringify(REHEARSAL_REGISTRY, null, 2)}\n`);
+  writeRehearsalCatalogue(home, 'codex-a', Math.floor(Date.now() / 1000));
+  fs.writeFileSync(path.join(models, 'codex-b.effort.json'), '{"byModel":{}}\n');
+  const m = ccrcModels(['models', 'codex-a', 'set-subagent', 'sonnet']);
+  if (m.code !== 0) throw new Error(`plantLiveShape: ccrc models codex-a set-subagent sonnet refused:\n${m.stdout}\n${m.stderr}`);
+  for (const f of ['codex-a.classes.tsv', 'codex-a.effort.json']) {
+    if (!fs.existsSync(path.join(models, f))) throw new Error(`plantLiveShape: the re-materialise wrote no ${f}`);
+  }
+}
+
+/** Every check's CLASS in one doctor transcript: the set of verdict words its
+ *  own lines carry, in PASS/WARN/FAIL/SKIP order joined by '+'. A check may
+ *  answer in two classes at once (`cmd_doctor` counts verdict LINES), so a
+ *  class is the set, never only the worst. */
+export function doctorClasses(stdout: string): Record<string, string> {
+  const ORDER = ['PASS', 'WARN', 'FAIL', 'SKIP'];
+  const seen = new Map<string, Set<string>>();
+  for (const line of stdout.split('\n')) {
+    const v = /^(PASS|WARN|FAIL|SKIP) ([a-z0-9_-]+): /.exec(line);
+    if (v === null) continue;
+    const set = seen.get(v[2]!) ?? new Set<string>();
+    set.add(v[1]!);
+    seen.set(v[2]!, set);
+  }
+  return Object.fromEntries([...seen.keys()].sort()
+    .map((name) => [name, ORDER.filter((w) => seen.get(name)!.has(w)).join('+')]));
+}
+
+/** The check table a `ccrc-doctor-checks` file declares, in order. */
+export function doctorTable(checksFile: string): string[] {
+  const m = /^CCRC_DOCTOR_CHECKS=\(\n([\s\S]*?)\n\)$/m.exec(fs.readFileSync(checksFile, 'utf8'));
+  if (m === null) throw new Error(`${checksFile} declares no CCRC_DOCTOR_CHECKS table`);
+  // As bash reads it: a `#` starts a comment, and one line can carry two
+  // entries (Task 4's `  models codex   # …`).
+  return m[1]!.split('\n').map((l) => l.replace(/#.*$/, '').trim()).filter((l) => l !== '')
+    .flatMap((l) => l.split(/\s+/));
+}
+
+/** A systemctl argv, as the spine fronts record it (`--user <verb> …`), that
+ *  CHANGES something. Reads (is-active, is-enabled, show, list-*) never match. */
+export const STATE_CHANGING =
+  /^--user (?:enable|disable|start|stop|restart|try-restart|reload|reset-failed|mask|unmask|kill|link|preset|revert)\b/;
+
+export const stateCallsNaming = (argv: readonly string[], unit: RegExp): string[] =>
+  argv.filter((a) => STATE_CHANGING.test(a) && unit.test(a));
+
+const rehearsalLines = (p: string): string[] =>
+  (fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter((l) => l !== '') : []);
+/** Every `ccgpt` argv the other repository's launcher saw, in order. */
+export const foreignCcgptCalls = (home: string): string[] => rehearsalLines(path.join(home, 'foreign-ccgpt-calls'));
+/** One call of the other repository's LiteLLM interpreter, HOME written `~`. */
+export interface ForeignProbeCall { argv: string; env: Record<string, string> }
+export function foreignProbeCalls(home: string): ForeignProbeCall[] {
+  return rehearsalLines(path.join(home, 'foreign-probe-calls')).map((l) => {
+    const [argv = '', ...pairs] = l.split(home).join('~').split('\t');
+    return {
+      argv: argv.replace(/^argv=/, ''),
+      env: Object.fromEntries(pairs.map((p) => [p.slice(0, p.indexOf('=')), p.slice(p.indexOf('=') + 1)])),
+    };
+  });
+}
+
+/** A unit's own ExecStart argv and PATH, read from the INSTALLED copy, `%h` expanded. */
+export function unitExecOf(home: string, unit: string): { argv: string[]; path: string } {
+  const code = fs.readFileSync(path.join(home, '.config', 'systemd', 'user', unit), 'utf8')
+    .split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'));
+  const exec = code.filter((l) => l.startsWith('ExecStart='));
+  const pathLine = code.filter((l) => l.startsWith('Environment=PATH='));
+  if (exec.length !== 1 || pathLine.length !== 1) {
+    throw new Error(`${unit}: ${exec.length} ExecStart and ${pathLine.length} PATH lines, not one of each`);
+  }
+  const h = (s: string): string => s.split('%h').join(home);
+  return {
+    argv: h(exec[0]!.slice('ExecStart='.length)).split(/\s+/),
+    path: h(pathLine[0]!.slice('Environment=PATH='.length)),
+  };
+}
+
+/** THROWS unless, under `env`, `ccgpt` resolves to this shape's RECORDER and
+ *  `litellm` to its stand-in install, both in `<home>/.local/bin`, and no
+ *  `CCGPT_CONFIG` is set. On the fleet box the real `ccgpt stop` stops a lane's
+ *  units BY NAME, and a `CCGPT_CONFIG` inherited from a GPT-lane session names a
+ *  REAL config (`_models_litellm_path` honours it), so an external-arm run under
+ *  any other env could reach a live lane. It only asks `command -v` and reads a
+ *  file: nothing it resolves is run. */
+export function assertForeignFront(env: NodeJS.ProcessEnv, home: string): void {
+  if (env['CCGPT_CONFIG'] !== undefined) {
+    throw new Error('assertForeignFront: CCGPT_CONFIG is set, so the external arm would render and pgrep a config outside this HOME');
+  }
+  for (const name of ['ccgpt', 'litellm']) {
+    const r = spawnSync('/bin/sh', ['-c', `command -v ${name}`], { env, encoding: 'utf8' });
+    const got = (r.stdout ?? '').trim();
+    const want = path.join(home, '.local', 'bin', name);
+    if (got !== want) {
+      throw new Error(`assertForeignFront: ${name} resolved to ${got === '' ? '(nothing)' : got}, not ${want}`);
+    }
+  }
+  if (!fs.readFileSync(path.join(home, '.local', 'bin', 'ccgpt'), 'utf8').includes(FOREIGN_MARK)) {
+    throw new Error('assertForeignFront: ~/.local/bin/ccgpt is not this shape\'s recorder');
+  }
+}
+
+/** That repository's LiteLLM proxy RUNNING on its box-global config, as
+ *  `_models_litellm_running`'s `pgrep -f "litellm .*<config>"` sees one: a node
+ *  sleeper whose argv carries `litellm --config <config>`. It binds nothing,
+ *  expires on its own (ruling F8), and is tracked, so `killLaneProcesses` ends
+ *  it if a case dies first. Resolves once the child has exec'd. */
+export async function spawnForeignProxyStandIn(home: string): Promise<ChildProcess> {
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)', 'litellm', '--config',
+    path.join(home, FOREIGN_RENDER)], { stdio: 'ignore' });
+  trackChild(home, child);
+  await new Promise<void>((resolve, reject) => { child.once('spawn', () => resolve()); child.once('error', reject); });
+  return child;
+}
+
+/** Ends a stand-in this case started and waits for its exit. */
+export async function stopForeignProxyStandIn(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve) => { child.once('exit', () => resolve()); child.kill('SIGTERM'); });
+}
+
+/** Runs `act` while that repository's proxy runs on its box-global config. */
+export async function withForeignProxyRunning<T>(home: string, act: () => T): Promise<T> {
+  const proxy = await spawnForeignProxyStandIn(home);
+  try { return act(); } finally { await stopForeignProxyStandIn(proxy); }
+}
+
+/** The other repository re-renders its own box-global config (its installer's
+ *  act, which the fixture performs for it), so the next render differs again. */
+export function restoreForeignConfig(home: string): void {
+  const entry = FOREIGN_FILES.find(([rel]) => rel === FOREIGN_RENDER);
+  if (entry === undefined) throw new Error(`restoreForeignConfig: ${FOREIGN_RENDER} is not a planted file`);
+  fs.writeFileSync(path.join(home, entry[0]), entry[2]);
+  fs.chmodSync(path.join(home, entry[0]), entry[1]);
+}
+
+/** What one hourly refresh did, comparable across trees and runs: the unit's
+ *  exit, its rows, each call of the other repository's interpreter, every
+ *  foreign path the run changed (its new entry: a mode and a sha256, never the
+ *  bytes), and the other repository's launcher calls. */
+export interface RefreshObservation {
+  status: number | null;
+  rows: unknown[];
+  probeCalls: ForeignProbeCall[];
+  foreignChanged: Record<string, string>;
+  ccgptCalls: string[];
+}
+
+function entryWord(home: string, e: ForeignEntry | undefined): string {
+  if (e === undefined || e.kind === 'absent') return 'absent';
+  if (e.kind === 'file') return `file ${e.mode.toString(8)} sha256:${createHash('sha256').update(e.bytes).digest('hex')}`;
+  if (e.kind === 'sealed') return `sealed ${e.mode.toString(8)} rewritten`;
+  if (e.kind === 'link') return `link ${e.target.split(home).join('~')}`;
+  return `dir ${e.mode.toString(8)}`;
+}
+
+/** `ccrc-models.service` run exactly as the unit runs it: ITS `ExecStart`,
+ *  through the placed launcher, with ITS `PATH` ahead of the harness's. Two
+ *  departures from the bare unit, each a fixture's and each named:
+ *    - the install harness's `python3` is a stub that refuses every program but
+ *      its own (`ccrcEnv`), and the live box's `~/.local/bin` holds no python3,
+ *      so one directory holding only a link to the real interpreter goes first;
+ *    - every probe name above, `CCRC_MODELS_PROBE_FIXTURE` and `CCGPT_CONFIG`
+ *      are dropped: a user unit's environment is the manager's, which carries
+ *      none of them, so a developer's shell cannot decide the answer. */
+export function observeHourlyRefresh(home: string, harnessEnv: NodeJS.ProcessEnv, realPython: string): RefreshObservation {
+  const before = foreignSnapshot(home);
+  const probes0 = foreignProbeCalls(home).length;
+  const ccgpt0 = foreignCcgptCalls(home).length;
+  const unit = unitExecOf(home, 'ccrc-models.service');
+  const shadow = path.join(home, 'rehearsal-real-python');
+  fs.mkdirSync(shadow, { recursive: true });
+  fs.rmSync(path.join(shadow, 'python3'), { force: true });
+  fs.symlinkSync(realPython, path.join(shadow, 'python3'));
+  const env: NodeJS.ProcessEnv = { ...harnessEnv, PATH: `${shadow}:${unit.path}:${harnessEnv['PATH'] ?? ''}` };
+  for (const n of [...PROBE_ENV_VALUES, ...PROBE_ENV_PRESENCE, 'CCRC_MODELS_PROBE_FIXTURE', 'CCGPT_CONFIG']) delete env[n];
+  assertSpineFrontContained(env, home);
+  assertForeignFront(env, home);
+  const r = spawnSync(unit.argv[0]!, unit.argv.slice(1), { env, encoding: 'utf8', timeout: 240_000 });
+  const after = foreignSnapshot(home);
+  const foreignChanged: Record<string, string> = {};
+  for (const rel of Object.keys(after).sort()) {
+    if (JSON.stringify(after[rel]) !== JSON.stringify(before[rel])) foreignChanged[rel] = entryWord(home, after[rel]);
+  }
+  let rows: unknown[] = [];
+  try {
+    rows = (JSON.parse((r.stdout ?? '').trim().split('\n').pop() ?? '') as { refreshed?: unknown[] }).refreshed ?? [];
+  } catch { rows = [`unparseable stdout: ${(r.stdout ?? '').slice(0, 200)}`]; }
+  return {
+    status: r.status,
+    rows,
+    probeCalls: foreignProbeCalls(home).slice(probes0),
+    foreignChanged,
+    ccgptCalls: foreignCcgptCalls(home).slice(ccgpt0),
+  };
+}
+
+/** The two hourly refreshes Task 10 measures on the base and asserts at the
+ *  tip, as ONE sequence so both trees run the same code (Step 3 copies this
+ *  block):
+ *    1. nothing runs on the box-global config, so a changed render is written
+ *       and nothing is stopped (the live shape: lane 1 is idle);
+ *    2. that repository re-renders its config and its proxy runs on it, so the
+ *       external arm owes its stop, and on the base runs its bare `ccgpt stop`. */
+export async function liveShapeRefreshes(
+  home: string, harnessEnv: NodeJS.ProcessEnv, realPython: string,
+): Promise<RefreshObservation[]> {
+  const first = observeHourlyRefresh(home, harnessEnv, realPython);
+  restoreForeignConfig(home);
+  const second = await withForeignProxyRunning(home, () => observeHourlyRefresh(home, harnessEnv, realPython));
+  return [first, second];
+}
+// ── Plan 3a Task 10 — the live shape (end) ───────────────────────────────
