@@ -19,7 +19,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 (merges after #227) | **review clean** — run 221 accepted, review run 224 clean (4 Minor, ruled R11); PR awaits the operator's merge |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226 (a fresh child); the spec-approved clause text (R12) |
-| 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors | server | — | planned |
+| 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | planned and reviewed; dispatches after #227 and #228 merge |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -110,11 +110,18 @@ independent reader, then cross-checked by another. The cross-check upheld every 
   widening, if the operator approves it, lands later as a one-sentence amendment to clause 15 and its pin. With r1
   armed, a parked worker answers a stall-check with `re stall-check: waiting`, which hands the ball to the coordinator,
   so the widening matters most for escalation, which stays unarmed until a live review.
+- **R13 (coordinator, 2026-10-02): wave 5's plan review.** Two Opus lenses and a refute pass; eight findings, none
+  refuted, all accepted: R11's three items were missing (written before R11 was ledgered; now in Tasks 8 and 9); the
+  plan must be on `main` before dispatch because it alone defines D-3796, which Task 9 writes into code (it lands with
+  this ledger's docs PR, and its precondition checks for it); the reference row's generator overflowed double
+  precision and collapsed its fixture (now 32-bit safe, with explicit horizon-edge mails); two find texts crossing a
+  line wrap, the slot-dependent spellings for a migration slot other than 15, one mutation row's description, and
+  this ledger's block count.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
-  floor now 3808). Eight are assigned: wave 3's plan defines three, wave 4's four and wave 5's one, one per departure slug.
-  The other twelve are headroom for departures a wave reports. A worker never calls the allocator (worker clause 11): it
+  floor now 3808). Nine are assigned: wave 3's plan defines three, wave 4's four and wave 5's two, one per departure slug.
+  The other eleven are headroom for departures a wave reports. A worker never calls the allocator (worker clause 11): it
   names a departure in its wave-done mail, and the coordinator assigns a number from the block.
 
 ## Carried constraints (reviewers get these)
