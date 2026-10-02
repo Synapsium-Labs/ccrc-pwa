@@ -877,6 +877,9 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
       otherRow(id, spelled);
       const r = evalOf(h);
       if (id === 'demo-alias-up') {
+        // Every row that is not resolved completely gets this one answer, so the row's own resolution is
+        // asked too: it is REFUSED (a `..` below the gone child), never a projection that happens to land here.
+        expect(basisOf(spelled), 'the resolver refuses the spelling').toBe('1\x1f\x1funmeasured');
         expect(r.verdict, `${spelled}: ${r.detail}`).toBe('unmeasured');
         expect(r.token).toBe('');
         expect(r.detail).toContain(`registry row(s) ${id} name a workdir that cannot be resolved`);
@@ -1809,6 +1812,9 @@ describe('the logical resolver places every row and the child by one call (spec 
     expect(shared.verdict, shared.detail).toBe('containment-unproven');
     expect(shared.detail).toContain('is also named by registry row(s) demo-dotdot');
     fs.rmdirSync(path.join(h.home, 'gone'));
+    // A projection would get the same answer below, so the row's own resolution is asked too: the logical
+    // entry FAILS — it never falls back to the kernel's walk and projects the rest from there.
+    expect(basisOf(raw), 'the resolver refuses the spelling').toBe('1\x1f\x1funmeasured');
     const r = evalOf(h);
     expect(r.token, `the evaluation minted a destructive token — ${r.verdict}: ${r.detail}`).toBe('');
     expect(r.verdict, r.detail).toBe('unmeasured');
@@ -1820,6 +1826,9 @@ describe('the logical resolver places every row and the child by one call (spec 
     const c = makeChild(h);
     fs.symlinkSync(c.wt, path.join(h.home, 'lnk\n'));
     otherRowOf('demo-nl', `${path.join(h.home, 'lnk')}\n/gone`);
+    // A projection would get the same answer below, so the row's own resolution is asked too: a spelling
+    // holding a newline is refused outright, never walked through the link and projected below it.
+    expect(basisOf(`${path.join(h.home, 'lnk')}\n/gone`), 'the resolver refuses the spelling').toBe('1\x1f\x1funmeasured');
     const r = evalOf(h);
     expect(r.verdict, r.detail).toBe('unmeasured');
     expect(r.token).toBe('');

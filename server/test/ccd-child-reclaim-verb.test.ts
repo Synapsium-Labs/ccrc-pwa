@@ -815,6 +815,10 @@ describe('the settle', () => {
 // selectors.
 const ALT = 'demo-alias-live';
 const HEX64 = /^[0-9a-f]{64}$/;
+/** The remedy for a row that cannot be placed, as the verb PRINTS it — the locked recomputation's document and
+ *  both tails' — so a printer that drops or rewrites it reds here, not only a change to the sentence ccd builds. */
+const PROJECTED_REMEDY = 'make it searchable if a directory on its path cannot be searched, restore a link on its path'
+  + ' to its original target (never create a directory in a link\'s place), or purge the row once its session has ended';
 
 interface AliasRow {
   /** The alternate row's raw `.workdir` spelling, `$HOME/alias/server`. */
@@ -882,6 +886,7 @@ const lockedUnmeasured = (v: { code: number; stdout: string; stderr: string }, r
   expect.soft(o.refused, 'a retry, never a terminal refusal').toBeUndefined();
   expect.soft(o.failed).toBe('probe-unmeasured');
   expect.soft(o.detail).toContain(`registry row(s) ${ALT} `);
+  expect.soft(o.detail, 'the printed document carries the remedy').toContain(PROJECTED_REMEDY);
   expect.soft(`${o.detail}${v.stderr}`, 'the row is named by its id; its spelling is never printed').not.toContain(raw);
 };
 
@@ -936,6 +941,7 @@ it('fresh final ownership remeasures alternate projection', () => {
   const o = JSON.parse(v.stdout) as { failed: string; detail: string };
   expect(o.failed).toBe('worktree-remove-failed');
   expect(o.detail).toContain(`registry row(s) ${ALT} `);
+  expect(o.detail, 'the fresh tail prints the remedy').toContain(PROJECTED_REMEDY);
   expect(o.detail + v.stderr, 'the row is named by its id; its spelling is never printed').not.toContain(a.raw);
   failedPairAgrees(v);
   expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb the fresh arm wrote stays').toBe('reclaim:children');
@@ -965,6 +971,7 @@ it('resumed final ownership remeasures alternate projection', () => {
   const o = JSON.parse(v.stdout) as { failed: string; detail: string };
   expect(o.failed).toBe('worktree-remove-failed');
   expect(o.detail).toContain(`registry row(s) ${ALT} `);
+  expect(o.detail, 'the resumed tail prints the remedy').toContain(PROJECTED_REMEDY);
   expect(o.detail + v.stderr).not.toContain(a.raw);
   failedPairAgrees(v);
   expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');

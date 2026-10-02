@@ -7296,7 +7296,7 @@ Deploy is tolerant: a server that meets an older ccd sees no createdAt, the rows
 
 *Why:* The ledger assigns this to wave 3. Wave 3 is where `spent` starts to authorise destruction.
 
-*Evidence (pre-flight):* ledger docs/superpowers/programs/child-reclamation.md:266-273; contract child-reclamation-contract.md:475-483 (R28); plan grep createdAt/PR_JSON_FIELDS/incarnation = 0; plan:5285; 76594fec:server/src/coord/childSpent.ts:94-95, :102-148; 76594fec:server/src/coord/childBind.ts:62; callers 76594fec:dispatch.ts:729, routes.ts:1356; a3a93b41:ccd/ccd:5141, :5212-5214; a3a93b41:server/test/ccd-pr-state.test.ts:95-96, :279-280; a3a93b41:server/test/ccd-pr-open.test.ts:352-354
+*Evidence (pre-flight):* ledger docs/superpowers/programs/child-reclamation.md:266-273; contract child-reclamation-contract.md:482-489 (R28); plan grep createdAt/PR_JSON_FIELDS/incarnation = 0; plan:5285; 76594fec:server/src/coord/childSpent.ts:94-95, :102-148; 76594fec:server/src/coord/childBind.ts:62; callers 76594fec:dispatch.ts:729, routes.ts:1356; a3a93b41:ccd/ccd:5141, :5212-5214; a3a93b41:server/test/ccd-pr-state.test.ts:95-96, :279-280; a3a93b41:server/test/ccd-pr-open.test.ts:352-354
 
 ### A2 — Task 8 (`childReclaimDecision`) and Task 9 (`childGateAtClose`) — BLOCKING
 
