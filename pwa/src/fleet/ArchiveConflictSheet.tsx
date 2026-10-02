@@ -63,10 +63,31 @@ export interface ArchiveConflictSheetProps {
   onDone?: () => void;
 }
 
+/** THE ONE VALIDATOR of a run, shared by every reader of a run-bearing body in the client: `runOpenRuns` below and
+ *  `ArchiveSheet`'s `runsOf` (its `ended`, `closed`, `notClosed` and `coordinator-has-open-runs` members) both filter
+ *  through it, so a fix to what counts as a readable run lands once.
+ *
+ *  ALL FOUR fields are measured, `waveOf` included. It used to be the one
+ *  this predicate ASSERTED and did not check — and a type predicate that
+ *  asserts is a lie the compiler then believes everywhere downstream: a
+ *  member merely OMITTING `waveOf` passed as `undefined`, and `runPhrase`
+ *  suppresses the `/total` suffix only on `=== null`, so the sheet rendered
+ *  "wave 2/undefined" at the operator. `null` is admitted because it is the
+ *  LEGITIMATE value (a wave whose total is not known); anything else is a
+ *  body this build cannot read, and the sheet's degrade case — "A run is
+ *  still open on this workspace", naming no id — is the right answer to it. */
+export const isArchiveConflictRun = (v: unknown): v is ArchiveConflictRun =>
+  typeof v === 'object' && v !== null
+  && typeof (v as ArchiveConflictRun).id === 'number'
+  && typeof (v as ArchiveConflictRun).program === 'string'
+  && typeof (v as ArchiveConflictRun).wave === 'number'
+  && ((v as ArchiveConflictRun).waveOf === null || typeof (v as ArchiveConflictRun).waveOf === 'number');
+
 /** `409 { error:'run-open', runs }` -> the runs, or `null` for any other
  *  error. THE ONE READER of that body in the whole client: Task 213 wires TWO
  *  doors (`PrSheet`, `SessionActionsSheet`) into this sheet, and a reader per
- *  door is how the two sentences drift.
+ *  door is how the two sentences drift. A member of `runs` is read by
+ *  `isArchiveConflictRun`, the one validator of a run that `ArchiveSheet` shares.
  *
  *  THREE answers, three different facts, and they must not collapse into two:
  *    - `null`  — not a run-open refusal at all: the caller toasts it exactly
@@ -86,22 +107,7 @@ export function runOpenRuns(err: unknown): readonly ArchiveConflictRun[] | null 
   if ((body as { error?: unknown }).error !== ARCHIVE_REFUSALS.runOpen) return null;
   const raw = (body as { runs?: unknown }).runs;
   if (!Array.isArray(raw)) return [];
-  // ALL FOUR fields are measured, `waveOf` included. It used to be the one
-  // this predicate ASSERTED and did not check — and a type predicate that
-  // asserts is a lie the compiler then believes everywhere downstream: a
-  // member merely OMITTING `waveOf` passed as `undefined`, and `runPhrase`
-  // suppresses the `/total` suffix only on `=== null`, so the sheet rendered
-  // "wave 2/undefined" at the operator. `null` is admitted because it is the
-  // LEGITIMATE value (a wave whose total is not known); anything else is a
-  // body this build cannot read, and the sheet's degrade case — "A run is
-  // still open on this workspace", naming no id — is the right answer to it.
-  return raw.filter((r): r is ArchiveConflictRun =>
-    typeof r === 'object' && r !== null
-    && typeof (r as ArchiveConflictRun).id === 'number'
-    && typeof (r as ArchiveConflictRun).program === 'string'
-    && typeof (r as ArchiveConflictRun).wave === 'number'
-    && ((r as ArchiveConflictRun).waveOf === null
-        || typeof (r as ArchiveConflictRun).waveOf === 'number'));
+  return raw.filter(isArchiveConflictRun);
 }
 
 /** `err` -> the sentence rendered INSIDE the sheet. Status-first dispatch,

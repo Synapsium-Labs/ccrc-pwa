@@ -31,7 +31,9 @@ import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
 import { ARCHIVE_REFUSAL_TEXT, ApiError, api, apiErrorText, archivePartial } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
-import { CLAIMED_CONSEQUENCE, claimedSentence, runPhrase, type ArchiveConflictRun } from './ArchiveConflictSheet';
+import {
+  CLAIMED_CONSEQUENCE, claimedSentence, isArchiveConflictRun, runPhrase, type ArchiveConflictRun,
+} from './ArchiveConflictSheet';
 import './fleet.css';
 
 /** Whether a session is already put away, so its menu and its actions sheet offer Restore where every other session
@@ -61,14 +63,12 @@ type Ask =
 interface Consent { readonly force: boolean; readonly interrupt: boolean; readonly programme: boolean }
 const NO_CONSENT: Consent = { force: false, interrupt: false, programme: false };
 
-/** `runs` off a refusal body, `ArchiveConflictSheet`'s reader's rules: every field measured, never invented. */
+/** `runs` off a refusal body: every member read by `ArchiveConflictSheet`'s `isArchiveConflictRun`, the one validator
+ *  of a run — never a second copy of its checks. */
 const runsOf = (body: unknown): readonly ArchiveConflictRun[] => {
   const raw = typeof body === 'object' && body !== null ? (body as { runs?: unknown }).runs : undefined;
   if (!Array.isArray(raw)) return [];
-  return raw.filter((r): r is ArchiveConflictRun => typeof r === 'object' && r !== null
-    && typeof (r as ArchiveConflictRun).id === 'number' && typeof (r as ArchiveConflictRun).program === 'string'
-    && typeof (r as ArchiveConflictRun).wave === 'number'
-    && ((r as ArchiveConflictRun).waveOf === null || typeof (r as ArchiveConflictRun).waveOf === 'number'));
+  return raw.filter(isArchiveConflictRun);
 };
 
 /** `programme-partly-ended`, said: which runs closed, which did not and why, and that nothing else happened. */
