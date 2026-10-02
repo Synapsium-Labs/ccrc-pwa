@@ -198,6 +198,9 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     the worker's request:
     - 3866: a wave-1 test mock resolves `null` under Task 7's new return type;
     - 3867: ArchiveSheet shares one exported run predicate instead of a copy that falsified its one-reader docstring.
+    - 3868 and 3869: a stopped main checkout's Restore, in the actions sheet and in the header, sends the same
+      `/ensure` that Restart sends, so it takes the same substrate-fault gate. A workspace's `ws-restore` stays
+      ungated.
   - **Claim wait:** CLAUDE.md and README.md, which Tasks 6 and 12 edit, are held by stall-watch wave 4's claim 897
     (run 226). The peer protocol forbids editing a contested path, so the worker holds those tasks. Calm-harbor has
     been asked (mail 3245) to extend the second-lander rule agreed for run 238.
