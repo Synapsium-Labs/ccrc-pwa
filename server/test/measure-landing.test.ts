@@ -209,11 +209,33 @@ describe('measure-landing: an input it could not read is never a number', () => 
     expect(JSON.parse(under.stdout).closedRuns).toBe(499);
   });
 
+  it('mail-latency: the closed-runs read is made BEFORE the open one, so a run closing between them counts as closed', () => {
+    // The order is the whole of the skew argument (the comment above the two reads): a run
+    // that closes between them is then in the closed read and absent from the open one, so
+    // any skew OVERcounts toward `runsTruncated`; the other order drops it from both and
+    // could read 500 - k as under the cap. A stateless stub answers each read the same
+    // either way round, and swapping which read binds which name goes red for the wrong
+    // reason, so the order is read from what the stub was ASKED, in the order it was asked.
+    const h = stubHome([], [
+      '  *"runs list --closed 1"*) echo \'{"runs":[{"id":1,"claimedBy":"coord-o","state":"working"}]}\' ;;',
+      '  *"runs list"*) echo \'{"runs":[{"id":1,"claimedBy":"coord-o","state":"working"}]}\' ;;',
+      '  *"--to coord-o"*) echo \'{"ok":true,"mail":[]}\' ;;',
+    ]);
+    const r = tool(h, ['mail-latency']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(calls(h.home, 'api-calls')!.filter((c) => c.startsWith('runs list')),
+      'the open runs read was made before the closed one: a run closing between them drops out of both').toEqual(['runs list --closed 1', 'runs list']);
+  });
+
   it('mail-latency: every input left out is counted by name — an undelivered mail, a run with no claimant', () => {
     const at = Date.parse('2026-09-10T12:00:00Z');
     const mail = [
       { at, state: 'delivered' }, { at: at + 1, state: 'queued' }, { at: at + 2, state: 'rejected' },
       { at: at + 3, state: 'some-future-state' },
+      // A mail the coordinator WAS nudged, then parked `rejected` when its run closed
+      // (`cancelOutstandingDeliveries`): the read carries no `deliveredAt`, so it is
+      // `undelivered` too — the docstring says so, and this row pins the count it names.
+      { at: at + 4, state: 'rejected', lastError: 'run closed' },
       { at: Date.parse('2026-01-01T00:00:00Z'), state: 'queued' },   // outside the window: not an input of it
     ];
     const h = stubHome([], [
@@ -223,11 +245,21 @@ describe('measure-landing: an input it could not read is never a number', () => 
     const r = tool(h, ['mail-latency']);
     expect(r.status, r.stderr).toBe(0);
     const d = JSON.parse(r.stdout);
-    expect(d.undelivered, 'a window mail that was never delivered or acked was left out silently').toBe(3);
+    expect(d.undelivered, 'a window mail that was never delivered or acked was left out silently').toBe(4);
     expect(d.runsWithoutClaimant, 'a run with no claimant was dropped without a count').toBe(2);
     expect(d.unmatched, 'an undelivered mail was counted as unmatched').toBe(1);
     const per = JSON.parse(readFileSync(join(h.home, 'out', 'mail-latency-2026-09-08-2026-09-22.json'), 'utf8')).perCoordinator['coord-u'];
-    expect(per.undelivered).toBe(3);
+    expect(per.undelivered).toBe(4);
+  });
+  it('mail-latency: its docstring says `undelivered` includes mail parked rejected at its run\'s close, which may have been nudged', () => {
+    // `unmatched` and `minutes` count mail still read `delivered` or `acked`. A mail a
+    // coordinator WAS handed and never acked reads `rejected` once its run closes, so
+    // "counts only mail a coordinator was handed" overclaimed for `undelivered`'s
+    // complement. The wire has no `deliveredAt` to split the two; the docstring owns it.
+    const doc: string = py('m.cmd_mail_latency.__doc__').replace(/\s+/g, ' ');
+    expect(doc).toContain("parked `rejected` at its run's close");
+    expect(doc).toContain('may have been nudged');
+    expect(doc, 'the overclaim is back').not.toContain('count only mail a coordinator was handed');
   });
 
   it('mail-latency: a refused or failed ccrc-api read is an error, never an empty page', () => {

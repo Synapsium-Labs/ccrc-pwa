@@ -638,8 +638,14 @@ def cmd_mail_latency(win):
     EVERY INPUT LEFT OUT IS COUNTED BY NAME, never dropped silently: a run with no
     claimant is `runsWithoutClaimant`, and a window mail whose delivery is neither
     `delivered` nor `acked` (queued, rejected, or a state this file does not know)
-    is `undelivered` — in neither `minutes` nor `unmatched`, which count only mail
-    a coordinator was handed (a mail outside the window is not an input of it)."""
+    is `undelivered` — in neither `minutes` nor `unmatched`, which count the mail
+    still read `delivered` or `acked` (a mail outside the window is not an input of
+    it). `undelivered` is NOT "never handed to a coordinator": the server rewrites a
+    run's outstanding mail (`queued` or `delivered`) to `rejected` when the run closes
+    (`cancelOutstandingDeliveries`), so a mail the coordinator was nudged and never
+    acked is parked `rejected` at its run's close and lands here with the mail that
+    never left the queue. The read carries no `deliveredAt` to tell the two apart, so
+    some of what it counts may have been nudged; it is a count by name, never a loss."""
     lo = datetime.fromisoformat(win[0]).replace(tzinfo=timezone.utc).timestamp() * 1000
     hi = (datetime.fromisoformat(win[1]).replace(tzinfo=timezone.utc) + timedelta(days=1)).timestamp() * 1000
     # CLOSED read first, OPEN read second: a run that closes between the two reads is
