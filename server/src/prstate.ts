@@ -232,7 +232,10 @@ const PR_QUEUE_MAP = {
   unmeasured: 'the queue read did not answer, or the bound PR is outside its windows',
 } as const;
 export type PrQueue = keyof typeof PR_QUEUE_MAP;
-const PR_QUEUE_WORDS: readonly string[] = Object.keys(PR_QUEUE_MAP);
+/** The words, DERIVED — exported so `ccd-pr-queue-words.test.ts` can compare them with the words ccd's
+ *  `_pr_queue_py` emits (D-3882): a word renamed on the ccd side alone reads here as `unmeasured`, and the
+ *  landing lane says nothing for `unmeasured`. */
+export const PR_QUEUE_WORDS: readonly string[] = Object.keys(PR_QUEUE_MAP);
 
 /** What `queueFor` read off one line. `absent` is its OWN answer and never
  *  `unmeasured`: a line with no `queue` key comes from a ccd that predates the
