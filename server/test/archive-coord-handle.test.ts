@@ -13,12 +13,13 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRun } from './coordReadHelpers.js';
 
+const TOKEN = 'handle-test-box-token';
 const setup = () => {
   const home = mkTmp('ccrc-handle-');
   const calls: string[][] = [];
   const run: Runner = async (_cmd, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const deps = { ...testDeps(home, run), coord };
+  const deps = { ...testDeps(home, run), coord, mailToken: TOKEN };
   const app = Fastify();
   const handle = registerCoordRoutes(app, deps, new Bus(), undefined,
     { tmux: deps.tmux, queue: deps.queue, readAsk: async () => null });
@@ -81,5 +82,34 @@ describe('CoordRoutesHandle', () => {
     expect((await abandoned).json()).toMatchObject({ ok: true, id, state: 'failed' });
     expect(order).toEqual(['held', 'released', 'abandon']);
     await app.close();
+  });
+
+  // D-3879. The case above cannot go red for the property it names: the abandon ROUTE is itself a `withAbandon` caller,
+  // so it proves only that `withAbandon` serialises against itself — a `withAbandon` on its own separate `CoordMutex`
+  // would pass it. The property is that it shares the mutex the OTHER write routes take, and only a route that calls
+  // `coordMutex.run` DIRECTLY can show that.
+  describe('withAbandon shares the mutex the OTHER coordination writes take (D-3879)', () => {
+    const headers = { 'x-ccrc-mail-token': TOKEN };
+    const direct: Record<string, (id: number) => { method: 'POST'; url: string; headers: typeof headers; payload: object }> = {
+      'POST /api/runs/:id/close': (id) => ({ method: 'POST', url: `/api/runs/${id}/close`, headers, payload: {} }),
+      'POST /api/runs (open)': () => ({ method: 'POST', url: '/api/runs', headers,
+        payload: { program: 'other', title: 'T', claimedBy: 'demo-other', homeProject: 'demo' } }),
+    };
+    it.each(Object.keys(direct))('%s, which calls coordMutex.run itself, waits for a held withAbandon and completes after it', async (route) => {
+      const { app, handle, coord, id } = setup();
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      const held = handle.withAbandon(coord, async () => { await gate; });
+      let done = false;
+      const fired = app.inject(direct[route]!(id)).then((r) => { done = true; return r; });
+      await new Promise((r) => setTimeout(r, 80));
+      expect(done).toBe(false);
+      release();
+      await held;
+      const res = await fired;
+      expect(done).toBe(true);
+      expect(res.statusCode).not.toBe(401);
+      await app.close();
+    });
   });
 });
