@@ -85,7 +85,8 @@ import {
 } from '../../shared/api.js';
 import { archiveInterrupts } from '../../shared/api.js';
 import {
-  archiveFlags, archiveOutcome, busyAtStop, decideArchive, worktreeOf, type ArchiveMeasure,
+  archiveFlags, archiveOutcome, busyAtStop, decideArchive, stopIsIdle, worktreeOf, type ArchiveMeasure,
+  type LiveFileReading, type StopRowReading,
 } from './coord/archiveDoor.js';
 import { readLiveStateMeasured } from './livestate.js';
 
@@ -2908,26 +2909,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   };
 
   /**
-   * Whether a STOP nobody consented to interrupt would lose a turn — read FAIL-CLOSED, by `_ws_status`'s own rule
-   * (ccd/ccd), because `cmd_stop` refuses nothing: for a main checkout this read is the only guard there is (a
-   * workspace keeps `ws-archive`'s own fail-closed `_ws_status` behind the door). `liveRowFor` cannot answer it
-   * alone: the frame folds what it could not measure towards rest — tmux `unknown` reads dead (D-309), an unread pane
-   * pid or an absent live file leaves `idle`. Here `gone` is the one idle without a reading (no pane, nothing
-   * running); a live pane is idle only when its live file affirmatively reads `idle` (an allowlist, as ccd's) AND the
-   * frame's row reports no turn and no question (`archiveInterrupts`); tmux `unknown`, an unread pid, a wrapper with
-   * no config dir or an unread live file is busy.
+   * The READS behind "would a STOP nobody consented to interrupt lose a turn?" (`stopIsIdle`, `coord/archiveDoor.ts`,
+   * D-3878, holds the rule and its reasoning): the tmux verdict, then — only for a `live` pane — its pid, its wrapper's
+   * config dir and its live file, then the frame's row. A read a verdict makes impossible is skipped, never faked; which
+   * reads MATTER is the rule's to say, so none is skipped for being redundant. Read FAIL-CLOSED because `cmd_stop` refuses nothing: for a main
+   * checkout this is the only guard there is (a workspace keeps `ws-archive`'s own fail-closed `_ws_status` behind
+   * the door). `liveRowFor` cannot answer it alone: the frame folds what it could not measure towards rest.
    */
   const idleForStop = async (rec: SessionRecord, uuid: string): Promise<boolean> => {
     const v = await deps.tmux.sessionVerdict(rec.id);
-    if (v.verdict === 'gone') return true;
-    if (v.verdict !== 'live') return false;
+    if (v.verdict !== 'live') return stopIsIdle({ pane: v.verdict });
     const pid = await deps.tmux.panePid(rec.id);
+    if (pid === null) return stopIsIdle({ pane: 'live', pid: 'unread' });
     const cfgDir = configDirFor(deps.cfg, rec.wrapper);
-    if (pid === null || cfgDir === undefined) return false;
+    if (cfgDir === undefined) return stopIsIdle({ pane: 'live', pid, configDir: 'none' });
     const read = await readLiveStateMeasured(deps.io, cfgDir, pid);
-    if (!read.ok || read.state.status !== 'idle') return false;
-    const live = await liveRowFor(rec, uuid);
-    return live !== null && !archiveInterrupts(live);
+    const liveFile: LiveFileReading = read.ok ? { read: 'ok', status: read.state.status } : { read: read.reason };
+    const row: StopRowReading = (await liveRowFor(rec, uuid)) ?? 'missing';
+    return stopIsIdle({ pane: 'live', pid, configDir: 'present', liveFile, row });
   };
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {

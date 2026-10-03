@@ -30,7 +30,7 @@
  * Spec §5.2 asks for EVERY refusable check before any act; these are the ones the server cannot run, by measurement.
  */
 import {
-  ARCHIVE_REFUSALS, type ArchiveBody, type ArchiveRefusal,
+  ARCHIVE_REFUSALS, archiveInterrupts, type ArchiveBody, type ArchiveRefusal, type FleetSession,
 } from '../../../shared/api.js';
 import type { MeasuredStat } from '../io.js';
 import type { CloseOutcome } from './close.js';
@@ -64,6 +64,56 @@ export interface ArchiveMeasure {
   readonly busy: boolean;
   readonly worktree: 'present' | 'absent' | 'unmeasured';
   readonly verbSupported: boolean;
+}
+
+/**
+ * What `server.ts` read to answer "would a STOP nobody consented to interrupt lose a turn?" — every condition its own
+ * word, never a null, because the rule below treats each as it must, and a reading that could not be made (`'unread'`,
+ * `'unmeasured'`) is not one that came back empty (`'no-state'`, `'missing'`). `server.ts` skips only the reads a verdict
+ * makes impossible — no pid unless the pane is `live`, no live file without a pid and a config dir — and decides nothing
+ * about which reads matter.
+ */
+export type StopReadings =
+  /** `tmux has-session` proved there is no pane — the one reading that needs nothing else. */
+  | { readonly pane: 'gone' }
+  /** tmux could not be asked (D-308: a server it cannot reach is not a dead session). */
+  | { readonly pane: 'unknown' }
+  | { readonly pane: 'live'; readonly pid: 'unread' }
+  | { readonly pane: 'live'; readonly pid: number; readonly configDir: 'none' }
+  | {
+    readonly pane: 'live'; readonly pid: number; readonly configDir: 'present';
+    readonly liveFile: LiveFileReading; readonly row: StopRowReading;
+  };
+
+/** `<configDir>/sessions/<pid>.json`, as `readLiveStateMeasured` answers it, with the status word kept as read. */
+export type LiveFileReading =
+  | { readonly read: 'ok'; readonly status: string }
+  | { readonly read: 'no-state' }
+  | { readonly read: 'unmeasured' };
+
+/** The fleet frame's row for this session (`assembleFleet`, on the request): the two fields `archiveInterrupts` reads,
+ *  or `'missing'` when the frame produced no row. */
+export type StopRowReading = Pick<FleetSession, 'status' | 'bucket'> | 'missing';
+
+/**
+ * Whether a STOP nobody consented to interrupt would lose no turn — `_ws_status`'s own fail-closed rule (ccd/ccd),
+ * decided over what `server.ts` measured (D-3878: it was `idleForStop`'s body in L4). It is read this way because
+ * `cmd_stop` refuses nothing: for a main checkout this is the only guard there is, and for a workspace under
+ * `programme:'end'` it is the only read that can refuse BEFORE the programme ends (`busyReadFailsClosed`, D-3877).
+ * The frame's own row cannot answer it alone: it folds what it could not measure towards rest — tmux `unknown` reads
+ * dead (D-309), an unread pane pid or an absent live file leaves `idle`.
+ *
+ * `gone` is the one idle without a further reading (no pane, nothing running). A live pane is idle only when ALL hold,
+ * else it is busy: its pid was read; its wrapper has a config dir; its live file affirmatively reads `idle` (an
+ * allowlist, as ccd's — `busy`, `waiting`, an absent file and an unread one all fail); and the frame's row exists and
+ * reports no turn and no question (`archiveInterrupts`). tmux `unknown` is busy.
+ */
+export function stopIsIdle(r: StopReadings): boolean {
+  if (r.pane === 'gone') return true;
+  if (r.pane === 'unknown') return false;
+  if (r.pid === 'unread' || r.configDir === 'none') return false;
+  if (r.liveFile.read !== 'ok' || r.liveFile.status !== 'idle') return false;
+  return r.row !== 'missing' && !archiveInterrupts(r.row);
 }
 
 /** A worktree's measured presence (D-114: absent and unreadable are two facts, and only the first is "gone"). A

@@ -2,8 +2,8 @@
 // refusals, the one act it takes, and how ccd's answer reaches the wire.
 import { describe, it, expect } from 'vitest';
 import {
-  archiveFlags, archiveOutcome, ccdArchiveRefusal, decideArchive, worktreeOf,
-  type ArchiveCoordPort, type ArchiveMeasure,
+  archiveFlags, archiveOutcome, ccdArchiveRefusal, decideArchive, stopIsIdle, worktreeOf,
+  type ArchiveCoordPort, type ArchiveMeasure, type StopReadings,
 } from '../src/coord/archiveDoor.js';
 import type { CloseOutcome } from '../src/coord/close.js';
 import type { OpenSibling, OpenSiblingsResult } from '../src/coord/store.js';
@@ -253,5 +253,48 @@ describe('archiveOutcome — ws-archive\'s answer on the wire', () => {
   it('says a programme was ended on every answer after it', () => {
     expect(archiveOutcome(false, [run(7)], { ok: false, stderr: 'boom' }).body).toMatchObject({ ended: [run(7)] });
     expect(archiveOutcome(false, [run(7)], { ok: false, stderr: 'ccd: status-unknown' }).body).toMatchObject({ ended: [run(7)] });
+  });
+});
+
+// D-3878: the verdict-to-idle rule `server.ts` used to hold in `idleForStop` — a DECISION, so it lives here, over what
+// the route measured. One case per arm; `server.ts` keeps only the reads (and `archive-door.test.ts` the wiring).
+describe('stopIsIdle — a stop nobody consented to interrupt, read fail-closed (D-3841)', () => {
+  const live = (over: Partial<Extract<StopReadings, { configDir: 'present' }>> = {}): StopReadings => ({
+    pane: 'live', pid: 4242, configDir: 'present',
+    liveFile: { read: 'ok', status: 'idle' }, row: { status: 'idle', bucket: 'idle' }, ...over,
+  });
+
+  it('a pane that is gone is idle: nothing is running, so there is no turn to lose', () => {
+    expect(stopIsIdle({ pane: 'gone' })).toBe(true);
+  });
+
+  it('a pane tmux could not be asked about is BUSY, never idle — `unknown` is not `gone`', () => {
+    expect(stopIsIdle({ pane: 'unknown' })).toBe(false);
+  });
+
+  it('a live pane whose pid could not be read is busy', () => {
+    expect(stopIsIdle({ pane: 'live', pid: 'unread' })).toBe(false);
+  });
+
+  it('a live pane whose wrapper has no config dir is busy', () => {
+    expect(stopIsIdle({ pane: 'live', pid: 4242, configDir: 'none' })).toBe(false);
+  });
+
+  it('a live pane is idle only when its live file affirmatively says idle: an ALLOWLIST', () => {
+    expect(stopIsIdle(live())).toBe(true);
+    expect(stopIsIdle(live({ liveFile: { read: 'ok', status: 'busy' } }))).toBe(false);
+    expect(stopIsIdle(live({ liveFile: { read: 'ok', status: 'waiting' } }))).toBe(false);
+    expect(stopIsIdle(live({ liveFile: { read: 'no-state' } }))).toBe(false);
+    expect(stopIsIdle(live({ liveFile: { read: 'unmeasured' } }))).toBe(false);
+  });
+
+  it('a live pane whose live file says idle is still busy while the frame row reports a turn or a question', () => {
+    expect(stopIsIdle(live({ row: { status: 'busy', bucket: 'idle' } }))).toBe(false);
+    expect(stopIsIdle(live({ row: { status: 'idle', bucket: 'working' } }))).toBe(false);
+    expect(stopIsIdle(live({ row: { status: 'idle', bucket: 'attention' } }))).toBe(false);
+  });
+
+  it('a live pane with no frame row is busy: no row is no measurement', () => {
+    expect(stopIsIdle(live({ row: 'missing' }))).toBe(false);
   });
 });
