@@ -18,7 +18,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 1 | `shell` delivery; the run-worker quiet lane (r1 worker check, r2 coordinator report, r3 operator push), shadow until armed | server | #216 | **merged** `1f9fa22d7`, live v0.0.52 (shadow) |
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 (merges after #227) | **review clean** — run 221 accepted, review run 224 clean (4 Minor, ruled R11); PR awaits the operator's merge |
-| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; **awaiting review**: #232 at `571268cdc`. Clauses 16/17 per R14 and R15; the wave-done (20:16) was re-measured and accepted. **accepted, merging**. Review run 239 (dispatched 22:39 after a `cap-daily` wait, R16) found 4 Minor and no blocker (R17). The run waits at `merging` for the operator's squash-merge of #232 |
+| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; **awaiting review**: #232 at `571268cdc`. Clauses 16/17 per R14 and R15; the wave-done (20:16) was re-measured and accepted. **fix-round (absorb #234, R20)**, then a re-review; accepted once before (R17). Review run 239 (dispatched 22:39 after a `cap-daily` wait, R16) found 4 Minor and no blocker (R17). The run waits at `merging` for the operator's squash-merge of #232 |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | planned and reviewed; dispatches after #227 and #228 merge |
 | 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | — | planned and reviewed (R19); dispatches after waves 3–5 land |
 
@@ -286,6 +286,20 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     server restarts and registry flaps. Then either accept the repeat, or fund the latch the plan sketches under "Not in
     this wave".
   - **Its guards are measured:** `deviation-refs` 31/31 once the plan is tracked; `dtbd` and `topology-clean` green.
+- **R20 (coordinator, 2026-10-03 18:35): wave 4 goes back for one absorb.**
+  - **The conflict.** Landing-order wave 2 merged as #234 (`0087a045`). It appends its native-queue sentence to the
+    end of coordinator clause 15 and edits `CONTRACT[14]`. `git merge-tree` of `ws/still-cove` against `origin/main`
+    then exited 1 on `ccd/coordinator-skill/SKILL.md` and `server/test/coordinator-skill.test.ts`. #227 and #228
+    still merge clean.
+  - **The licence.** This is the measured conflict that coordinator clause 15 licenses, and the second-lander rule
+    agreed in mails 3240 and 3241. Run 226 went `merging → working`, and the worker got a `fix-round` (mail 3358):
+    - re-probe;
+    - take a fresh claim on the two files only (claims 891 and 897 had lapsed at the 8 h cap, and run 174 holds
+      README in claim 950);
+    - `git merge origin/main`, keeping both sides: clause 15 with #234's sentence, ours at 16, count word unchanged;
+    - re-gate, including C1–C15 and the citation cases;
+    - send a fresh wave-done.
+  - **What follows.** A new review run reads the merge, and the run then returns to `merging`.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
