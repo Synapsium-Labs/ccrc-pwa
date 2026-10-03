@@ -11,7 +11,7 @@
 // greps ccd itself, so if a rung is ever deleted the test fails here too and
 // the paragraph gets re-decided instead of quietly becoming false again.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // The path to the ccd script is spelled in exactly ONE file in this tree and
@@ -163,8 +163,12 @@ describe('README: workspace holds', () => {
     // Grounded in the code, not merely asserted in prose.
     const watchTs = readFileSync(path.join(root, 'server', 'src', 'watch.ts'), 'utf8');
     expect(watchTs).toMatch(/openRunsForSession/);
-    const serverTs = readFileSync(path.join(root, 'server', 'src', 'server.ts'), 'utf8');
-    expect(serverTs).toMatch(/'run-open'/);
+    // Workspace lifecycle wave 2: the code is L0's `ARCHIVE_REFUSALS.runOpen`, declared once and read by the door.
+    expect(readFileSync(path.join(root, 'shared', 'api.ts'), 'utf8')).toMatch(/runOpen: 'run-open'/);
+    const serverSrc = (readdirSync(path.join(root, 'server', 'src'), { recursive: true }) as string[])
+      .filter((f) => f.endsWith('.ts'))
+      .map((f) => readFileSync(path.join(root, 'server', 'src', f), 'utf8'));
+    expect(serverSrc.some((t) => t.includes('ARCHIVE_REFUSALS.runOpen'))).toBe(true);
   });
 });
 

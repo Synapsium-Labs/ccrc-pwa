@@ -240,9 +240,11 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
     expect(g!.archived.map((x) => x.id)).toEqual([]);
   });
 
-  // And the counts the two surfaces render therefore agree: the fold's own
-  // `Archived (n)` is exactly the `Archived` chip's members, never the union.
-  it('makes the fold the same set the Archived chip counts', () => {
+  // And the counts the two surfaces render therefore agree for workspaces: the
+  // fold's own `Archived (n)` is exactly the `Archived` chip's members while no
+  // main checkout is stopped. Workspace lifecycle §5.2 adds stopped main
+  // checkouts to the fold, which the Dead chip still counts (below).
+  it('makes the fold the same set the Archived chip counts when no main checkout is stopped (workspace lifecycle §5.2 adds those)', () => {
     const fleet = [arch('demo-b'), clean('demo-merged'), s({ id: 'demo-a', project: 'demo' })];
     const [g] = groupFleet(fleet, []);
     expect(g!.archived).toHaveLength(fleet.filter((x) => x.bucket === 'archived').length);
@@ -292,6 +294,91 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
     const [seenGroup] = groupFleet([clean('demo-merged', { bucketSince: 5000 })], [],
       { 'demo-merged': 6000 });
     expect(seenGroup!.unseen).toBe(0);
+  });
+});
+
+describe('the Archived fold takes stopped main checkouts (workspace lifecycle spec §5.2)', () => {
+  const STOP = (at: number) => ({ at, surface: 'pwa' as const });
+  const main = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
+    s({ id, project: 'demo', workspace: null, status: 'dead', bucket: 'dead', ...over });
+  const ws = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
+    s({ id, project: 'demo', workspace: id, ...over });
+
+  it('folds a STOPPED main checkout into Archived, out of the live list', () => {
+    const [g] = groupFleet([ws('demo-a'), main('claude2-demo', { stoppedBy: STOP(5) })], []);
+    expect(g!.sessions.map((x) => x.id)).toEqual(['demo-a']);
+    expect(g!.archived.map((x) => x.id)).toEqual(['claude2-demo']);
+  });
+
+  it.each([
+    ['a main checkout started again — the stop stamp is gone', main('claude2-demo', { status: 'idle', bucket: 'idle' })],
+    ['a crashed main checkout — dead, never stopped', main('claude2-demo')],
+    ['a stopped workspace that is not archived — it offers Archive again', ws('demo-b', {
+      status: 'dead', bucket: 'dead', stoppedBy: STOP(5) })],
+    ['a merged-and-archived workspace — `cleanup` stays in its chip\'s list',
+      ws('demo-b', { status: 'dead', archivedAt: 1785300000, bucket: 'cleanup' })],
+  ] as const)('keeps %s at the top level', (_label, row) => {
+    const [g] = groupFleet([row], []);
+    expect(g!.sessions.map((x) => x.id)).toEqual([row.id]);
+    expect(g!.archived).toEqual([]);
+  });
+
+  it('runs newest first — a workspace by its archive time, a main checkout by its stop', () => {
+    const [g] = groupFleet([
+      ws('demo-old', { status: 'dead', archivedAt: 1, bucket: 'archived', bucketSince: 100 }),
+      main('claude2-demo', { stoppedBy: STOP(300) }),
+      ws('demo-mid', { status: 'dead', archivedAt: 2, bucket: 'archived', bucketSince: 200 }),
+    ], []);
+    expect(g!.archived.map((x) => x.id)).toEqual(['claude2-demo', 'demo-mid', 'demo-old']);
+  });
+
+  it('a released workspace once archived is in Archived, never in both folds', () => {
+    const released = { runId: 4, program: 'lifecycle', programTitle: null, claimedBy: 'demo-c', closedAt: 9, child: false };
+    const [g] = groupFleet([ws('demo-r', { status: 'dead', archivedAt: 1, bucket: 'archived', bucketSince: 10,
+      releasedFrom: released })], []);
+    expect(g!.archived.map((x) => x.id)).toEqual(['demo-r']);
+    expect(g!.released).toEqual([]);
+  });
+
+  it('a stopped main checkout placed on another card is not "where its work went" — that list is live rows only', () => {
+    const g = groupFleet([ws('demo-live', { boardProject: 'intake' }),
+      main('claude2-demo', { boardProject: 'intake', stoppedBy: STOP(5) })], []);
+    expect(g.find((x) => x.project === 'demo')!.elsewhere).toEqual([{ project: 'intake', count: 1 }]);
+    expect(g.find((x) => x.project === 'intake')!.archived.map((x) => x.id)).toEqual(['claude2-demo']);
+  });
+
+  it('the fold may hold a row the Dead chip counts — stated, not changed', () => {
+    const fleet = [ws('demo-b', { status: 'dead', archivedAt: 1, bucket: 'archived' }), main('claude2-demo', { stoppedBy: STOP(5) })];
+    const [g] = groupFleet(fleet, []);
+    expect(g!.archived).toHaveLength(2);
+    // What the chips count is the fleet screen's to pin, not this fixture's: `fleet-screen.test.tsx`'s
+    // "a STOPPED main checkout sits behind the Archived fold while the Dead chip still counts it".
+  });
+
+  // The CARD ORDER is keyed on the BUCKET (wave 1's four parts), not on the fold: a stopped main checkout is
+  // bucket `dead`, so it keeps dead's rank in part 4 — after an archived row, and in `sortFleet`'s order among
+  // the other dead rows — even though the Archived fold now holds it.
+  it('keeps a stopped main checkout at dead\'s rank in the card order, though the fold holds it', () => {
+    const fleet = [
+      // oldest by `statusUpdatedAt`: were the order keyed on the fold, it would join part 3 and lead the crashed one.
+      main('claude2-stopped', { project: 'stopped', stoppedBy: STOP(5), statusUpdatedAt: 10 }),
+      main('claude2-crashed', { project: 'crashed', statusUpdatedAt: 99 }),
+      ws('demo-arch', { project: 'arch', status: 'dead', archivedAt: 1, bucket: 'archived', bucketSince: 3, statusUpdatedAt: 1 }),
+    ];
+    const g = groupFleet(fleet, []);
+    expect(g.map((x) => x.project)).toEqual(['arch', 'crashed', 'stopped']);
+    expect(g.find((x) => x.project === 'stopped')!.archived.map((x) => x.id)).toEqual(['claude2-stopped']);
+  });
+
+  it('splits one card three ways — live row on top, the stopped main checkout and the archived workspace in the fold', () => {
+    const [g] = groupFleet([
+      main('claude2-demo', { stoppedBy: STOP(5), statusUpdatedAt: 500 }),
+      ws('demo-arch', { status: 'dead', archivedAt: 1, bucket: 'archived', bucketSince: 3, statusUpdatedAt: 1 }),
+      ws('demo-live', { bucket: 'working', status: 'idle', statusUpdatedAt: 2 }),
+    ], []);
+    expect(g!.sessions.map((x) => x.id)).toEqual(['demo-live']);
+    // Newest first inside the fold (the stop at 5 beats the archive at 3); the card order above is a separate key.
+    expect(g!.archived.map((x) => x.id)).toEqual(['claude2-demo', 'demo-arch']);
   });
 });
 
