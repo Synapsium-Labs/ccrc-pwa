@@ -43,6 +43,13 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-03 18:32 — third merge done; `main` moved a fourth time; no further chase.** `swift-hollow` merged
+  `db44b136` (`0dcd3ad39`) and recorded the bounded re-walk under 3538 (`067151e64`), with nothing pushed yet. Then
+  #234 (landing-order wave 2) merged as `0087a045`. It edits `ccd/ccd`, the coordinator skill and its
+  `wave-lifecycle.md`, `childSpent.ts`, `close.ts` and `store.ts` (mail 3356); its coordinator's merge-tree showed
+  conflicts. Ruling (mail 3357): merge `0087a045`, then push and send the wave-done without re-merging for a later
+  move unless asked. If `main` moves again before landing, a conflict is ruled after the review, against its own
+  delta, so the branch does not chase every other programme's landing.
 - **2026-10-03 17:36 — items 4–6 reported (mail 3349); four slugs ruled.** The work is at local `65da6cafe`, after
   the second merge. The third merge (`db44b136`) and the push are still to come. Every slug is accepted, and none
   departs from the spec, the contract or a plan, so none takes a number:
