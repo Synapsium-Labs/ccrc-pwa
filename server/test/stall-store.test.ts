@@ -694,26 +694,33 @@ describe('stallMailFor: one mail read per candidate, and those mails\' delivery 
   });
 
   it.each([
-    ['mail at', 'mail at is not a positive safe integer'],
-    ['mail runId', 'mail runId is not a positive safe integer'],
-    ['delivery deliveredAt', 'delivery deliveredAt is not a positive safe integer'],
-    ['delivery gateSince', 'delivery gateSince is not a positive safe integer'],
-  ] as const)('refuses the WHOLE read on one unrepresentable %s, naming the column and no value (D-2545)', (column, detail) => {
+    ['mail id', 'mail-unreadable', 'mail id is not a positive safe integer'],
+    ['mail at', 'mail-unreadable', 'mail at is not a positive safe integer'],
+    ['mail runId', 'mail-unreadable', 'mail runId is not a positive safe integer'],
+    ['delivery id', 'delivery-unreadable', 'delivery id is not a positive safe integer'],
+    ['delivery deliveredAt', 'delivery-unreadable', 'delivery deliveredAt is not a positive safe integer'],
+    ['delivery ackedAt', 'delivery-unreadable', 'delivery ackedAt is not a positive safe integer'],
+    ['delivery gateSince', 'delivery-unreadable', 'delivery gateSince is not a positive safe integer'],
+  ] as const)('refuses the WHOLE read on one unrepresentable %s, naming its table\'s kind and the column, and no value (D-2545)', (column, kind, detail) => {
     const s = store();
     const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
-    mailAt(s, { fromId: 'demo-worker', toId: 'coordinator', runId: run, kind: 'status', subject: 'progress', at: S4_STATUS_AT });
+    const plain = mailAt(s, { fromId: 'demo-worker', toId: 'coordinator', runId: run, kind: 'status', subject: 'progress', at: S4_STATUS_AT });
     const bad = mailAt(s, { fromId: 'operator', toId: 'demo-worker', runId: null, kind: 'status',
       subject: W2_ORPHANED_SUBJECT, at: S4_STATUS_AT });
     const d = s.queueDelivery(bad, 'demo-worker', '');
+    // `plain` has no delivery row, so its id moves with the foreign key still on.
+    if (column === 'mail id') s.db.prepare('UPDATE mail SET id = ? WHERE id = ?').run(UNSAFE, plain);
     if (column === 'mail at') s.db.prepare('UPDATE mail SET at = ? WHERE id = ?').run(UNSAFE, bad);
     if (column === 'mail runId') {
       // A run id this process cannot represent has no runs row to reference, so the fixture lifts the FK first.
       s.db.exec('PRAGMA foreign_keys = OFF');
       s.db.prepare('UPDATE mail SET runId = ? WHERE id = ?').run(UNSAFE, bad);
     }
+    if (column === 'delivery id') s.db.prepare('UPDATE mail_deliveries SET id = ? WHERE id = ?').run(UNSAFE, d.id);
     if (column === 'delivery deliveredAt') s.db.prepare('UPDATE mail_deliveries SET deliveredAt = ? WHERE id = ?').run(UNSAFE, d.id);
+    if (column === 'delivery ackedAt') s.db.prepare('UPDATE mail_deliveries SET ackedAt = ? WHERE id = ?').run(UNSAFE, d.id);
     if (column === 'delivery gateSince') s.db.prepare('UPDATE mail_deliveries SET gateSince = ? WHERE id = ?').run(UNSAFE, d.id);
-    expect(s.stallMailFor('demo-worker', [run], W2_SINCE_AT)).toEqual({ ok: false, kind: 'mail-unreadable', detail });
+    expect(s.stallMailFor('demo-worker', [run], W2_SINCE_AT)).toEqual({ ok: false, kind, detail });
     expect(detail).not.toMatch(/[0-9]/);
   });
 });

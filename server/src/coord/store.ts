@@ -3958,11 +3958,12 @@ export class CoordStore {
    *
    * Every integer is CAST and proven (D-2545), `runId` included: an off-run row's `runId` equals none of the
    * bound ids, so it cannot be read raw the way wave 1's run-only read did. SQL NULL is decided here, at the call
-   * site, never inside `persistedInt`. ALL-OR-FAILURE: one unrepresentable value refuses the whole read, and
-   * the detail names the column and no value. `kind`, `state` and `lastGate` are the raw columns: L1 compares
+   * site, never inside `persistedInt`. ALL-OR-FAILURE: one unrepresentable value refuses the whole read, the
+   * kind names its table (`mail-unreadable` or `delivery-unreadable`), and the detail names the column and no value.
+   * `kind`, `state` and `lastGate` are the raw columns: L1 compares
    * them with words, and an unnamed token matches none.
    */
-  stallMailFor(sessionId: string, runIds: readonly number[], sinceAt: number): { ok: true; mail: StallMailRow[]; deliveries: StallDeliveryRow[] } | { ok: false; kind: Extract<StallReadFailure, 'mail-unreadable'>; detail: string } {
+  stallMailFor(sessionId: string, runIds: readonly number[], sinceAt: number): { ok: true; mail: StallMailRow[]; deliveries: StallDeliveryRow[] } | { ok: false; kind: Extract<StallReadFailure, 'mail-unreadable' | 'delivery-unreadable'>; detail: string } {
     const onRuns = runIds.length === 0 ? '' : `runId IN (${placeholders(runIds.length)}) OR `;
     const where = `${onRuns}((fromId = ? OR toId = ? OR id IN (SELECT mailId FROM mail_deliveries WHERE toId = ? ` +
       'AND mailId IN (SELECT id FROM mail WHERE at >= ?))) AND at >= ?)';
@@ -4001,15 +4002,15 @@ export class CoordStore {
     const deliveries: StallDeliveryRow[] = [];
     for (const d of drows) {
       const id = persistedInt(d.idText, 'delivery id');
-      if (!id.ok) return { ok: false, kind: 'mail-unreadable', detail: id.detail };
+      if (!id.ok) return { ok: false, kind: 'delivery-unreadable', detail: id.detail };
       const mailId = persistedInt(d.mailIdText, 'delivery mailId');
-      if (!mailId.ok) return { ok: false, kind: 'mail-unreadable', detail: mailId.detail };
+      if (!mailId.ok) return { ok: false, kind: 'delivery-unreadable', detail: mailId.detail };
       const deliveredAt = nullable(d.deliveredAtText, 'delivery deliveredAt');
-      if (!deliveredAt.ok) return { ok: false, kind: 'mail-unreadable', detail: deliveredAt.detail };
+      if (!deliveredAt.ok) return { ok: false, kind: 'delivery-unreadable', detail: deliveredAt.detail };
       const ackedAt = nullable(d.ackedAtText, 'delivery ackedAt');
-      if (!ackedAt.ok) return { ok: false, kind: 'mail-unreadable', detail: ackedAt.detail };
+      if (!ackedAt.ok) return { ok: false, kind: 'delivery-unreadable', detail: ackedAt.detail };
       const gateSince = nullable(d.gateSinceText, 'delivery gateSince');
-      if (!gateSince.ok) return { ok: false, kind: 'mail-unreadable', detail: gateSince.detail };
+      if (!gateSince.ok) return { ok: false, kind: 'delivery-unreadable', detail: gateSince.detail };
       deliveries.push({ id: id.value, mailId: mailId.value, toId: d.toId, state: d.state, deliveredAt: deliveredAt.value,
         ackedAt: ackedAt.value, lastGate: d.lastGate, gateSince: gateSince.value });
     }
