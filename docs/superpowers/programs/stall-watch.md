@@ -28,7 +28,7 @@ the two plans' own "Deviations found" sections and their PRs. Run-tracked waves 
 
 | marker | arms | state | gate |
 |---|---|---|---|
-| `stall-watch-live` | wave 1's r1 (a check mailed to the worker; never pushed) | not armed | recommended now — the shadow review found every false r1 harmless |
+| `stall-watch-live` | wave 1's r1 (a check mailed to the worker; never pushed) | not armed | recommended now — the shadow review found every false r1 harmless, and run 237's 15 h silence (2026-10-03) is a fourth true stall r1 would have caught |
 | `stall-watch-escalate` | r2 (coordinator report), r3 and every operator push, including the limit, dialog and coordinator-ball caps | not armed | after waves 3 and 4 land, a live period with r1 armed, and a repeat of the shadow review on live data |
 | `mail-gate-busy-shadow` | the busy gate logs only | not armed | any time |
 | `mail-gate-busy` | busy delivery | not armed | after busy-shadow evidence; C7 (the spinner row on a busy+done pane) is still unobserved |
@@ -52,6 +52,19 @@ independent reader, then cross-checked by another. The cross-check upheld every 
     so the ball stayed with the worker. A protocol fix: wave 4's coordinator clause, widened (ruling R2 below).
 - **The rate.** r1 fired 7 times (about 4 a day; the spec's census predicted about 3.5). In shadow a standing r1 counts
   as done, so r2 and r3 fall due on workers that never got a check; the shadow r2/r3 counts overstate a live rate.
+
+**Since the review: one more true stall (2026-10-03, reported by landing-order's coordinator in mail 3309).**
+- **What happened.** Run 237 (session-continuity wave 2) was `dispatched`. Its worker's background mutation run was
+  killed by Claude Code's memory-pressure reap, with about 2 GB available on the box. The reap notice told the worker
+  not to restart unasked, so it ended its turn asking its own unattended pane to "resume". It stayed silent until its
+  coordinator found it by hand at 11:56, 15 hours after its last act.
+- **What the shadow watch recorded** (coord.db, read read-only), all with episode key 20:46:37 (the last activity):
+  - r1 at 23:06:44;
+  - r2 at 00:07:29;
+  - r3 at 01:08:14.
+- **What arming would have saved.** Armed, r1 would have mailed the worker about 13 hours before the hand discovery,
+  and the escalation arms would have followed within two more hours.
+- **Verdict:** a true positive for the quiet arm, and a measured cost of leaving `stall-watch-live` unarmed.
 
 ## Decisions & deviations
 
