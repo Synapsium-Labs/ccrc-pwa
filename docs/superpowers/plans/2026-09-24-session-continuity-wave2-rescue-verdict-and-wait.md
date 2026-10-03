@@ -4070,6 +4070,24 @@ what this plan builds.
   `return int(time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))` inside `s4_epoch` →
   `return int(calendar.timegm(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))` reds `1 failed | 9 passed (10)`, the new
   case only. No instrument line changed.
+- **D-3849** — The coordinator's ruling (B) on Task 2's review finding: a rescue whose only account with room is one
+  this session just left blocked strands (do not bounce, as planned), but `_strand_mark` was called with no cause, so
+  `_strand_why` — which knows no skip list — wrote "no account in pool … can take it" to the marker, swap.log and the
+  banner. That and "no account has room" ask the operator for opposite acts (leave it alone, versus wait or add
+  capacity), and the false sentence invites the hand bounce rule 3 exists to stop: an overloaded null at a seam. A new
+  `_rescue_strand_cause id cur home hard-blocked hrc` in the RESCUE POLICY section asks `_swap_target` UNSKIPPED and,
+  only when that names an account in `RESCUE_SKIP_LEFT` (and not the one the session sits on), prints "its only
+  account with room, <acct>, is one it left blocked inside RESCUE_CHAIN_WINDOW, and a rescue does not take it back
+  (do not bounce)"; the no-target strand line in `_auto_swap_check` passes it as `_strand_mark`'s existing fourth
+  argument, one line for one line (the citation census unmoved). An empty probe (genuine no room) returns before the
+  swap log is read, so a strand's later ticks still pay no `_rescue_history` pass (Review Focus 17), pinned by the
+  control. Its cost, measured on a fixture under load 13: the extra probe adds about 111 ms to a genuine no-room
+  strand tick (`_swap_target` alone 96 ms) and about 178 ms to a do-not-bounce strand tick, which also reads the
+  swap log; it runs only on a stranded session's tick. Three cases in `ccd-rescue-policy.test.ts` ("the do-not-bounce
+  strand names the account it will not take back"). Mutation rows, each measured on its own commit: dropping the
+  cause at the call site reds `1 failed | 96 passed (97)` (the strand case); deleting the `RESCUE_SKIP_LEFT`
+  membership check reds 1 (the unit case, "room the skip did not remove"); dropping `"$out" != "$2"` reds 1 (the
+  unit case, "the account it sits on").
 
 ---
 

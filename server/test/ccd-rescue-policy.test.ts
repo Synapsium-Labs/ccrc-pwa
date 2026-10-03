@@ -1055,3 +1055,67 @@ describe('rule 3: spread, no bounce, and the chain wait', () => {
     expect(h.sh(`_hard_block_date 3 5 100; echo "$HARD_BLOCK_RESET|$HARD_BLOCK_TYPE|$HARD_BLOCK_ROW"`)).toBe('||100');
   });
 });
+
+// ── THE DO-NOT-BOUNCE STRAND SAYS SO (departure 3849, the coordinator's ruling (B)) ──
+// "No account in the pool has room" and "the only account with room is one this
+// session just left blocked" ask the operator for opposite acts — wait or add
+// capacity, versus leave it alone — so the strand's marker, swap.log line and
+// banner must not say the first when the second is true (no overloaded null at
+// a seam). `_rescue_strand_cause` asks `_swap_target` UNSKIPPED, on the
+// no-target strand path only, and names a cause only when that answer is an
+// account rule 3 skipped as just left; otherwise `_strand_mark` keeps its own
+// computed reason, as today.
+describe('the do-not-bounce strand names the account it will not take back', () => {
+  const fill = (lanes: Record<string, number>): void => {
+    const t = now();
+    for (const [w, five] of Object.entries(lanes)) {
+      fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`),
+        JSON.stringify({ five, seven: 5, ts: t, fiveResetAt: t + 10000, sevenResetAt: t + 400000 }));
+    }
+  };
+  const plantNotify = (): void => {
+    fs.writeFileSync(regFile('notify.sh'), '#!/bin/sh\nprintf \'%s\\n\' "$1" >> "$HOME/notify-log"\n', { mode: 0o755 });
+  };
+  const notified = (): string => (fs.existsSync(path.join(h.home, 'notify-log')) ? fs.readFileSync(path.join(h.home, 'notify-log'), 'utf8') : '');
+  const blockNow = (): void => { const t = now(); writeTranscript([limitRow(t - 5, t + 9000, 'five_hour')]); };
+  /** `_rescue_history` counted: each call logs, then runs the real one. */
+  const COUNTED = `eval "$(declare -f _rescue_history | sed '1s/^_rescue_history/_rh_real/')";
+    _rescue_history() { echo history-read >> "$HOME/ccd-calls"; _rh_real "$@"; };`;
+
+  it('the only account with room is the one just left blocked: marker, swap.log and banner name it and say do not bounce', () => {
+    seed(); plantNotify(); blockNow();
+    fill({ claude: 100, 'claude-a': 10, 'claude-b': 100, 'claude-d': 100 });
+    pastLog(900, `auto-rescue ${ID}: claude-a (blocked) -> claude [home=claude]`);
+    tick(STALLED, null);
+    expect(dispatches()).toEqual([]);
+    const marker = fs.readFileSync(regFile(`${ID}.stranded`), 'utf8');
+    expect(marker).toMatch(/claude-a/);
+    expect(marker).toMatch(/do not bounce/);
+    const line = swapLog().split('\n').find((l) => l.includes(` stranded ${ID}: `)) ?? '';
+    expect(line).toMatch(/claude-a.*do not bounce/);
+    expect(notified()).toMatch(new RegExp(`STRANDED: ${ID} is blocked on claude — .*claude-a.*do not bounce`));
+    expect(notified(), 'the false sentence').not.toMatch(/can take it/);
+  });
+
+  it('control: a genuine no-room strand reads as today, and its later ticks read no swap log', () => {
+    seed(); plantNotify(); blockNow();
+    fill({ claude: 100, 'claude-a': 100, 'claude-b': 100, 'claude-d': 100 });
+    tick(STALLED, null);
+    expect(dispatches()).toEqual([]);
+    expect(notified()).toMatch(new RegExp(`STRANDED: ${ID} is blocked on claude and no account in pool \\(untagged\\) can take it`));
+    expect(fs.readFileSync(regFile(`${ID}.stranded`), 'utf8')).not.toMatch(/do not bounce/);
+    fs.rmSync(path.join(h.home, 'ccd-calls'), { force: true });
+    h.sh(`${STUBS(STALLED, null)} ${COUNTED} _auto_swap_check ${ID}`, BORN());
+    expect(h.calls().filter((l) => l === 'history-read'), 'a stranded tick paid the swap-log read').toEqual([]);
+  });
+
+  it('_rescue_strand_cause names an account only when rule 3 skipped it as just left', () => {
+    const ask = (probe: string, left: string): string => h.sh(`_swap_target() { [[ -n "${probe}" ]] && echo "${probe}"; return 0; };
+      _rescue_history() { RESCUE_COUNT=1 RESCUE_SKIP_LEFT="${left}" RESCUE_SKIP_RECENT=""; return 0; };
+      out=$(_rescue_strand_cause ${ID} claude claude 1 0); echo "$?|$out"`);
+    expect(ask('claude-a', 'claude-a')).toMatch(/^0\|.*claude-a.*do not bounce/);
+    expect(ask('claude-b', 'claude-a'), 'room the skip did not remove').toBe('1|');
+    expect(ask('', 'claude-a'), 'no room at all').toBe('1|');
+    expect(ask('claude', 'claude'), 'the account it sits on').toBe('1|');
+  });
+});

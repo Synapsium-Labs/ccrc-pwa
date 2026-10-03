@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=cd85b795a0b4ef0437b51abe171b707a647f524da99c057f88ec22b3e278880a
+# ccrc:generated 1 sha256=66ee5be30944ead137a96ddf5f0e052e3fb469b88c50fa85a54fcdf3360af5a2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -17728,7 +17728,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # ceiling reaches exactly this state — which is the pre-existing silent
   # strand made loud, not a new behaviour for tagged projects only.
   if [[ -z "$target" || "$target" == "$wrapper" ]]; then
-    [[ -z "$target" && -n "$hard_blocked" ]] && { _strand_mark "$id" "$wrapper" "$project"; _rescuewait_open "$id" "$wrapper" noroom; }
+    [[ -z "$target" && -n "$hard_blocked" ]] && { _strand_mark "$id" "$wrapper" "$project" "$(_rescue_strand_cause "$id" "$wrapper" "$home" "$hard_blocked" "$hrc")"; _rescuewait_open "$id" "$wrapper" noroom; }
     return 0
   fi
   # A destination exists: whatever the pane says, this row is not stranded.
@@ -23259,6 +23259,26 @@ _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout a
     # candidate and left only an unmeasured lane — the just-left-only pass decides.
   fi
   SWAP_TARGET_SKIP="$RESCUE_SKIP_LEFT" _swap_target "$@"
+}
+
+_rescue_strand_cause() {   # id cur home hard-blocked hrc -> rc 0 prints a strand cause when rule 3's do-not-bounce alone left this rescue nowhere to go | rc 1 prints nothing
+  # THE DO-NOT-BOUNCE STRAND SAYS SO (departure 3849). `_rescue_target`'s
+  # just-left-only pass answers an empty name both when no account has room
+  # and when the only one with room is an account this session just left
+  # blocked; `_strand_mark`'s computed reason (`_strand_why`, which knows no
+  # skip list) then tells the operator "no account in pool … can take it" in
+  # both. Those ask for opposite acts — wait or add capacity, versus leave it
+  # alone — and the false one invites the hand bounce rule 3 exists to stop,
+  # so this names the account, and `_strand_mark` takes it as its cause.
+  # It asks `_swap_target` UNSKIPPED, on the no-target strand path only: an
+  # empty answer (genuine no room) returns before the swap log is read, so a
+  # strand's later ticks still pay no `_rescue_history` pass (Review Focus 17).
+  local out
+  out=$(_swap_target "$@")
+  [[ -n "$out" && "$out" != "$2" ]] || return 1
+  _rescue_history "$1" || return 1
+  [[ " $RESCUE_SKIP_LEFT " == *" $out "* ]] || return 1
+  printf '%s\n' "its only account with room, $out, is one it left blocked inside RESCUE_CHAIN_WINDOW, and a rescue does not take it back (do not bounce)"
 }
 
 _rescue_line_extra() {   # -> the dated row's tokens for the `auto-rescue` line: ` reset=<epoch>`, ` type=<word>`, ` row=<epoch>`, each only when the verdict kept it
