@@ -116,7 +116,7 @@ describe('the worker merge deny', () => {
       'while true; do gh pr merge 42; done', '{ gh pr merge 42; }', '! gh pr merge 42',
       'time gh pr merge 42', 'timeout 60 gh pr merge 42', 'nohup gh pr merge 42',
       'env GH_TOKEN=x gh pr merge 42', 'gh pr --repo o/r merge 42',
-      // A "…" span that holds a `$(` runs it, so it is never stripped; and a
+      // A "…" span that holds a `$(` keeps that substitution, which runs; and a
       // quote INSIDE a "…" span does not open a '…' one.
       'x="$(gh pr merge 42)"', 'echo "it\'s" && gh pr merge 42',
       // A `#` comment and a backslash-escaped quote open no '…' span: bash
@@ -185,19 +185,75 @@ describe('the worker merge deny', () => {
     // A token class that can cross a separator, or a blank class that includes
     // the newline, makes every `;a=` / `\na=` / `;gh -R ` start walk to the end
     // of the payload: 5 to 9 s at 36 KB, and 1.6 s at 36 KB for the gh-flag
-    // classes alone (so 100 KB, where a walk costs ~12 s and the fix ~0.2 s). The
-    // tail carries `merge`, so the prefilter lets the match run; none is a merge.
-    for (const sep of [';', '\n']) {
-      for (const unit of ['a=', 'gh ', 'gh -R ', 'timeout 1 ']) {
-        const u = `${sep}${unit}`;
-        const t0 = Date.now();
-        const r = bash(u.repeat(Math.ceil(100000 / u.length)) + '\n# merge origin');
-        const ms = Date.now() - t0;
-        expect(r.deny, `a non-merge was denied: ${JSON.stringify(u)}`).toBeNull();
-        expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(3000);
-      }
+    // classes alone (so 100 KB, where a walk costs ~12 s and the fix ~0.2 s). An
+    // unterminated `<<a` is the strip's own walk: a heredoc that had to find its
+    // terminator would scan to the end once per `<<`. The tail carries `merge`
+    // outside any quote or comment, so the prefilter lets the match run and a
+    // regex that matched any `merge` would deny; none is a merge. The hold makes
+    // a wrong match a deny this case can see (review 241 F6).
+    hold(WAVE_HOLD);
+    const units = [';', '\n'].flatMap((sep) => ['a=', 'gh ', 'gh -R ', 'timeout 1 '].map((unit) => `${sep}${unit}`));
+    for (const u of [...units, '<<a\n']) {
+      const t0 = Date.now();
+      const r = bash(u.repeat(Math.ceil(100000 / u.length)) + '\necho merge origin');
+      const ms = Date.now() - t0;
+      expect(r.deny, `a non-merge was denied: ${JSON.stringify(u)}`).toBeNull();
+      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(3000);
     }
   }, 60000);
+
+  it('strips a heredoc line of many `<<` and a body of unclosed `$(` in bounded time — no recursion per `<<`', () => {
+    // A heredoc's rest-of-line is stripped WITHOUT a second heredoc, and a `$(`
+    // that never closes is dropped, not stripped again: either one recursing
+    // walks the rest of the payload once per `<<` (2.4 to 3.8 s and 0.4 to
+    // 0.6 GB at 16 KB, measured on the strip alone; 15 s and 2.9 GB at 36 KB).
+    hold(WAVE_HOLD);
+    for (const u of ['<<a ', '$(cat <<a\n']) {
+      const t0 = Date.now();
+      const r = bash(u.repeat(Math.ceil(16000 / u.length)) + '\necho merge origin');
+      const ms = Date.now() - t0;
+      expect(r.deny, `a non-merge was denied: ${JSON.stringify(u)}`).toBeNull();
+      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(1500);
+    }
+  }, 60000);
+
+  // Review 241 F1: the strip once kept a "…" span that held a `$(` whole, so
+  // its CLOSING quote opened a new span that swallowed the merge after it; and
+  // a heredoc body's apostrophe opened a '…' span the same way. Each shape is
+  // its own case, so a mutation names every shape it lets through.
+  it.each([
+    ['X="$(date)"; gh pr merge 42; echo "ok"'],
+    ['echo "$(date)" && gh pr merge 42 --squash && echo "merged"'],
+    ['echo "it\'s $(date)"; gh pr merge 42; echo \'x\''],
+    ['cat <<\'EOF\'\nit\'s green\nEOF\ngh pr merge 42\necho \'ok\''],
+    ['sha="$(git rev-parse HEAD)"\ngh pr merge 42 --match-head-commit "$sha"'],
+    ['echo "hi"; gh pr merge 42; echo "ok"'],
+  ])('refuses a merge after a quoted substitution or a heredoc: %j', (c) => {
+    hold(WAVE_HOLD);
+    expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
+  });
+
+  // The strip's own edges, each read as bash reads it: an unquoted heredoc's
+  // body runs its substitutions; a heredoc inside `$(…)` may end at `EOF)`; a
+  // `<<` in arithmetic (or before a word that is not a name) opens no heredoc;
+  // a backtick span, a `#` comment, an escaped quote and a nested "…" span
+  // inside a "…" span end where bash ends them; `<<-` lets its terminator be
+  // indented with tabs; a `$'…'` string's `\'` does not close it.
+  it.each([
+    ['cat <<EOF\n$(gh pr merge 42)\nEOF'],
+    ['echo "$(cat <<EOF\nit\'s\nEOF)"; gh pr merge 42; echo \'x\''],
+    ['X=$((x<<y))\ngh pr merge 42; echo \'z\''],
+    ['echo $(( (a+(b+(c))) << 2 ))\ngh pr merge 42; echo \'z\''],
+    ['echo "`echo "it\'s"`"; gh pr merge 42; echo \'x\''],
+    ['echo "$(date # it\'s\n)"; gh pr merge 42; echo \'x\''],
+    ['echo "a \\" $(date)"; gh pr merge 42; echo "b"'],
+    ['echo "$(echo "a)b")"; gh pr merge 42; echo "y"'],
+    ['cat <<-\'EOF\'\n\tit\'s\n\tEOF\ngh pr merge 42\necho \'ok\''],
+    ['echo $\'it\\\'s\'; gh pr merge 42; echo \'x\''],
+  ])('reads a quote, heredoc or arithmetic edge as bash does: %j', (c) => {
+    hold(WAVE_HOLD);
+    expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
+  });
 
   it('leaves every other gh and every mention of the words alone', () => {
     hold(WAVE_HOLD);
@@ -205,6 +261,8 @@ describe('the worker merge deny', () => {
       'gh pr view 42', 'gh pr list --search merge', 'gh pr merged 42',
       "grep -rn 'gh pr merge' docs", 'echo "gh pr merge 42"', 'ghx pr merge 42',
       'echo run gh pr merge later', 'echo hi # gh pr merge 42 after the CI run',
+      // A closing backtick is no command head: bash runs `echo <date> gh …`.
+      'echo `date` gh pr merge 42',
       // What a wave on THIS feature writes about it: commit messages and PR
       // bodies that quote the command, in Markdown code spans and in prose.
       'git commit -m "docs (gh pr merge 42 enqueues)"',
@@ -212,6 +270,13 @@ describe('the worker merge deny', () => {
       'git commit -m "the coordinator lands with `gh pr merge <n>`, never --admin"',
       "git commit -m \"$(cat <<'MSG'\nfeat(hook): deny `gh pr merge --admin` in every session\nMSG\n)\"",
       "gh pr create --title t --body 'landing is `gh pr merge <n>` with no --admin'",
+      // A plain quoted mention, and one holding a separator; a heredoc body is
+      // text to its terminator, or to the end when it has none — bash runs
+      // none of it, even a line that begins `gh pr merge`.
+      'echo "gh pr merge"', 'git commit -m "docs; gh pr merge 42 is how"',
+      "git commit -F - <<'EOF'\nfix: it's the strip\ngh pr merge 42 enqueues\nEOF",
+      "gh pr create --body \"$(cat <<'EOF'\n## Summary\n- it's (part of it\ngh pr merge 42 lands it\nEOF\n)\"",
+      "cat <<EOF\nit's\ngh pr merge 42",
     ]) {
       expect(bash(c).deny, `denied: ${c}`).toBeNull();
     }

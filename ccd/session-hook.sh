@@ -3362,33 +3362,64 @@ fi
 # merge flag are the same act from a worker and are denied with it.
 #
 # QUOTED TEXT IS REMOVED BEFORE MATCHING, in the same jq that reads the
-# command, leftmost first as bash reads it: a backslash escape, every '…'
-# span, every "…" span that holds no `$(`, and a `#` comment that starts a
-# word — so a commit message, a PR body, a grep pattern or a comment that
-# MENTIONS `gh pr merge` passes, and neither an apostrophe in a comment nor
-# an escaped quote opens a span that swallows a live merge after it. A "…"
-# span that holds a `$(` is kept, because that substitution runs.
-# WHAT PASSES UNPARSED, said rather than hidden: `bash -c "…"`, a quoted
-# command word (`"gh" pr merge`), legacy backticks, `xargs`, an unlisted
-# wrapper (`nice`, `stdbuf`), a named wrapper's own flags (`sudo -E`,
-# `command -p`; only `timeout`'s one argument is parsed), a `$'…'` string
-# holding `\'`, a `#` comment straight after a `)`, a backslash-newline
-# continuation (`gh pr \<newline> merge`), and a `$(…)` that holds a newline,
-# a `;` `&` `|` or `(` inside a `VAR=` or flag value. What is DENIED
-# though it is not a merge: a heredoc BODY line that begins `gh pr merge`
-# (heredocs are not stripped) — write such text through a quoted string
-# instead. The hook is a contract the fleet honours, not an access boundary
-# (spec §4), and identity on this box is attribution. A session with neither
-# — a coordinator's own, the operator's — is never asked, so the
-# coordinator's `gh pr merge <n> --match-head-commit <sha>` enqueues. A
-# coordinator whose workspace DOES carry one is refused like a worker: a
-# self-claimed run's hold (`POST /api/runs` admits a claimant that is its own
-# session), or a reclaim heir that was the programme's own worker (hold and
-# marker both). The hook cannot tell it from a worker; the lifecycle
-# reference sends that coordinator to the operator's shell.
-# The strip's jq uses lookaround gsub, so a jq built without Oniguruma yields
-# an empty mcmd and the deny FAILS OPEN (#224 keeps the hookstate parse
-# regex-free for exactly that reason).
+# command (MERGE_STRIP_JQ), leftmost first as bash reads it: a backslash
+# escape, a `$'…'` string (its `\'` escapes honoured), a '…' span, a "…" span,
+# a heredoc, a `#` comment that starts a word. A "…" span is matched WHOLE —
+# its `\"` escapes, backtick spans and `$(…)` substitutions included, each
+# substitution with its own quotes, parentheses and heredocs — and is replaced
+# by its substitutions alone, each stripped the same way: `X="$(date)"` reads
+# `X=$(date)`, and "docs; gh pr merge 42 is how" reads as nothing. A "…" span
+# or a `$'…'` that never closes, and an unclosed `$(…)` inside a "…" span or a
+# heredoc body, runs to the end and is dropped: bash runs none of it, and none
+# of what follows (a syntax error at the end of input). A heredoc keeps its
+# `<<` line and loses its body up to the terminator line (`<<-`: tab-indented;
+# a `)` may follow it, as inside `$(…)`), or to the END when no terminator
+# comes, which is how bash reads one; an unquoted delimiter's body keeps its
+# substitutions; the rest of the `<<` line is stripped too, though not of a
+# second heredoc. `$((…))`, `((…))` and `$[…]` (to two nested parentheses, on
+# one line) are kept as written, so a shift's `<<` opens no heredoc, and a
+# delimiter must start with a letter or `_`. So a commit message, a PR body, a
+# grep pattern, a heredoc or a comment that MENTIONS `gh pr merge` passes, and
+# no apostrophe in a comment, a heredoc body or a "…" span, and no escaped
+# quote, opens a span that swallows a live merge after it — wherever the strip
+# can parse the span, which the list below bounds.
+# WHAT PASSES UNPARSED, said rather than hidden. The deny is contract-grade
+# (spec §4), so these are listed, not closed (review 241 F8 measured each):
+# `bash -c "…"`; a quoted or escaped command word (`"gh" pr merge`) and
+# quoting INSIDE the `pr` or `merge` word (`gh pr "merge"`, `gh 'pr' merge`,
+# `gh pr m'erg'e`, `gh pr \merge`: the strip drops a quoted span, it does not
+# unquote it); legacy backticks; `xargs`; an unlisted wrapper (`nice`,
+# `stdbuf`, `coproc`); a named wrapper's own flags (`sudo -E`, `command -p`;
+# only `timeout`'s one argument is parsed); a leading redirection (`2>&1 gh
+# …`, `>/dev/null gh …`, `</dev/null gh …`); a `case` arm (`*) gh pr merge`);
+# a function body (`f() { gh pr merge 42; }`); a variable command word or
+# argument (`$GH pr merge`, `gh pr $m`); a gh alias (`gh alias set m 'pr
+# merge'`); a `#` comment straight after a `)`; a backslash-newline
+# continuation (`gh pr \<newline> merge`); a `$(…)` that holds a newline, a
+# `;` `&` `|` or `(` inside a `VAR=` or flag value. And where the strip itself
+# stops parsing — a "…" span is then read as unquoted text, so an apostrophe
+# in it can open a span that hides a merge after it: a `case` pattern's bare
+# `)` inside a "…" span's `$(…)`; a "…" span nesting `$("…")` more than six
+# deep (the regex engine's call-depth bound); a heredoc delimiter quoted in
+# part or holding a blank (`<<E"O"F`, `<<'MY EOF'`), or starting with neither
+# a letter nor `_` (`<<1`); a second heredoc on one line (`<<A <<B`: the
+# second body is read as commands); arithmetic deeper than two parentheses or
+# spanning lines, whose shift before a name (`<< y`) opens a heredoc that
+# hides the lines after it. A heredoc BODY line that begins `gh pr merge` is
+# text and passes, unless an unquoted body runs it inside `$(…)`. The hook is
+# a contract the fleet honours, not an access boundary (spec §4), and identity
+# on this box is attribution. A session with neither — a coordinator's own,
+# the operator's — is never asked, so the coordinator's `gh pr merge <n>
+# --match-head-commit <sha>` enqueues. A coordinator whose workspace DOES
+# carry one is refused like a worker: a self-claimed run's hold (`POST
+# /api/runs` admits a claimant that is its own session), or a reclaim heir
+# that was the programme's own worker (hold and marker both). The hook cannot
+# tell it from a worker; the lifecycle reference sends that coordinator to the
+# operator's shell.
+# The strip's jq is Oniguruma regex throughout (lookaround, atomic groups,
+# subexpression calls, backreferences), so a jq built without Oniguruma —
+# or any jq error — yields an empty mcmd and the deny FAILS OPEN (#224 keeps
+# the hookstate parse regex-free for exactly that reason).
 #
 # WHY THE MARKER TOO. A close releases the hold (`ws-release`), and a child's
 # reclaim runs AFTER the close answers, on its own queue, and defers while the
@@ -3428,13 +3459,51 @@ fi
 # body stops at the first `)`: linear against the separator-restart inputs the
 # plan's regex was quadratic on. Separator-free chains still grow superlinearly
 # (closed `$(…)`: 79, 369 and 1418 ms at 50, 100 and 200 KB; and the space/tab
-# family the plan's regex already had).
+# family the plan's regex already had). The strip pays one regex match per
+# quoted span, heredoc or comment, and jq 1.7's match costs grow with each
+# match's offset, so a command DENSE with quotes is superlinear too: 1.3 s at
+# 36 KB and 6.3 s at 100 KB of bare `"` through the hook (the strip before
+# this one: 21 s at 100 KB on jq alone). No start scans the rest of the
+# payload twice: a span, substitution or heredoc that never closes runs to
+# the end instead of failing and being retried from the next character, and
+# a heredoc's rest-of-line is stripped without a second heredoc (a `<<a <<a`
+# line once recursed once per `<<`: 15 s and 2.9 GB at 36 KB, measured).
 GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+pr([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+merge([[:space:]]|$)'
+MERGE_STRIP_JQ='
+def SQ: $q + "[^" + $q + "]*" + $q;
+def AQ: "\\$" + $q + "(?>(?:[^\\\\" + $q + "]++|\\\\(?:.|\\n|\\z))*)(?:" + $q + "|\\z)";
+def W: "[A-Za-z_][^\\s;&|()<>\"" + $q + "\\\\]*";
+def T($n; $tabs): $tabs + "\\k<w\($n)>(?![^\\n)])";
+def hd1($n; $tabs):
+  "\\\\?(?<q\($n)>[\"" + $q + "]?)(?<w\($n)>" + W + ")\\k<q\($n)>(?>[^\\n]*)(?:\\n|\\z)"
+  + "(?>(?:(?!" + T($n; $tabs) + ")[^\\n]*\\n)*(?:(?!" + T($n; $tabs) + ")[^\\n]++)?)(?:" + T($n; $tabs) + ")?";
+def AR: "(?>(?:[^()\\n]++|\\((?>(?:[^()\\n]++|\\([^()\\n]*+\\))*)\\))*)";
+def DEFS:
+  "(?<hd>(?<!<)<<(?:-[ \\t]*" + hd1("t"; "\\t*") + "|[ \\t]*" + hd1(""; "") + ")){0}"
+  + "(?<sub>\\$\\(\\(" + AR + "\\)\\)|\\$\\((?<sb>(?>(?:[^" + $q + "\"()\\\\<#$]++|" + AQ + "|\\$|\\\\(?:.|\\n|\\z)|\\g<hd>|<|(?<![^\\s;&|(])#[^\\n]*|#|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<dq>|\\(\\(" + AR + "\\)\\)|\\(\\g<sb>(?:\\)|\\z))*))(?:\\)|(?<us>\\z))){0}"
+  + "(?<dq>\"(?>(?:[^\"\\\\$`]++|\\\\(?:.|\\n|\\z)|\\$(?!\\()|\\g<sub>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`)*)(?:\"|(?<ud>\\z))){0}";
+def fs(re; f): . as $in | [match(re; "g") | [.offset, .length, .string, any(.captures[]; (.name == "us" or .name == "ud") and .string != null)]] as $ms
+  | if ($ms | length) == 0 then $in else ($in | explode) as $cp
+    | [range(0; $ms | length) as $i | $ms[$i] as $m
+       | (if $i == 0 then 0 else $ms[$i - 1] | .[0] + .[1] end) as $p
+       | ($cp[$p:$m[0]] | implode), ($m[2:4] | f)]
+      + [$cp[($ms[-1] | .[0] + .[1]):] | implode] | add end;
+def plain: . as $s | all(($q, "\"", "\\", "#", "<", "`", "((", "$["); . as $c | $s | contains($c) | not);
+def qs($h):
+  def subs: if contains("$(") | not then ""
+    elif startswith("$(") and endswith(")") and (.[2:-1] | plain and (contains("(") or contains(")") or contains("$") | not)) then .
+    else fs(DEFS + "\\\\(?:.|\\n)|\\g<sub>|[^\\\\$]+|\\$";
+      .[1] as $open | .[0] | if $open or (startswith("$(") | not) then "" elif startswith("$((") then . else "$(" + (.[2:-1] | qs(true)) + ")" end) end;
+  if plain then . else fs(DEFS + "\\\\.|" + AQ + "|" + SQ + "|\\g<dq>|" + (if $h then "\\g<hd>|" else "" end) + "(?<![^\\s;&|(])#[^\\n]*|\\$?\\(\\(" + AR + "\\)\\)|\\$\\[[^\\]\\n]*\\]";
+    .[1] as $open | .[0] | if startswith("\"") then (if $open then "" else .[1:-1] | subs end)
+    elif startswith("<<") then capture("^<<-?[ \\t]*(?<x>\\\\?)(?<q>[\"" + $q + "]?)" + W + "\\k<q>(?<r>[^\\n]*)(?<b>[\\s\\S]*)")
+      | "<<" + (.r | qs(false)) + "\n" + (if .x == "" and .q == "" then .b | subs else "" end)
+    elif startswith("$(") or startswith("((") or startswith("$[") then .
+    else "" end) end;
+if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end'
 if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
-  mcmd=$(jq -r --arg q "'" 'if .tool_name == "Bash" then ((.tool_input.command // "")
-      | gsub("\\\\.|" + $q + "[^" + $q + "]*" + $q + "|\"(?:[^\"\\\\$]|\\\\.|\\$(?!\\())*\"|(?<![^\\s;&|(])#[^\\n]*"; "")) else "" end' \
-    <<<"$payload" 2>/dev/null) || mcmd=""
+  mcmd=$(jq -r --arg q "'" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mcmd=""
   if [[ -n "$mcmd" && "$mcmd" =~ $GH_MERGE_RE ]]; then
     mwhy=""
     if _ct_read "$REG/$id.hold" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then
