@@ -17,9 +17,9 @@ file in the fleet registry. No marker has a writer in the tree.
 |---|---|---|---|---|
 | 1 | `shell` delivery; the run-worker quiet lane (r1 worker check, r2 coordinator report, r3 operator push), shadow until armed | server | #216 | **merged** `1f9fa22d7`, live v0.0.52 (shadow) |
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
-| 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 (merges after #227) | **review clean** — run 221 accepted, review run 224 clean (4 Minor, ruled R11); PR awaits the operator's merge |
-| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; **awaiting review**: #232 at `571268cdc`. Clauses 16/17 per R14 and R15; the wave-done (20:16) was re-measured and accepted. **accepted, merging** at `bc1a13edd`, after the #234 absorb (R20) and re-review 251 (R21). Review run 239 (dispatched 22:39 after a `cap-daily` wait, R16) found 4 Minor and no blocker (R17). The run waits at `merging` for the operator's squash-merge of #232 |
-| 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | planned and reviewed; dispatches after #227 and #228 merge |
+| 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 | **merged** `3255571a1` (2026-10-03 23:09, R22); live at the next auto-update |
+| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
+| 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | run 252 open (planned); dispatch held for run 174's answer on claim 950 (R22) |
 | 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | — | planned and reviewed (R19); dispatches after waves 3–5 land |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
@@ -322,6 +322,26 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     `resume` scan) for the next wave that edits `worker-skill.test.ts`. F2 and F3 repeat R17's rulings.
   - **Where the run stands.** Run 226 is back at `merging` (worker told, mail 3362), waiting for the operator's
     squash-merge of #232.
+- **R22 (coordinator, 2026-10-03 23:10): the operator said "Do the pr merges", and waves 3 and 4 are on `main`.**
+  - **The merges.** Each was squash-merged with `--admin`, pinned to its reviewed head with `--match-head-commit`,
+    after a fresh `git merge-tree` against `main`:
+    - #227 at `84bae7299`;
+    - #232 at `4a3de53ea`; head `bc1a13edd` = handoff, wave 4's merge proof;
+    - #228 at `3255571a1`; head `c8555f818` = handoff, wave 3's merge proof.
+  - **#228 needed a fresh CI run.** The first admin merge of #228 was refused: branch protection enforces the
+    required checks on admins, and #228's only red was `deviation-refs` from before #227 landed. A re-run reuses the
+    old merge ref, so this session cancelled it. Instead it closed and reopened the PR for a fresh `pull_request`
+    run (37160223742), on which all four required checks passed. Before that, `main` plus #228 had measured green
+    locally: `deviation-refs`, the stall suites, `mail-sweep`, `push-copy`, the citation cases and `tsc`.
+  - **`full-suite` on #227 and #232** is red only because the macOS legs are red. It is not a required check (the
+    operator's ruling on macOS).
+  - **Wave 4 is closed.** Run 252 (wave 5 of 6) was opened first, then run 226 closed `final:true`: `done`,
+    `released:true`, child reclaim queued.
+  - **Wave 5's dispatch waits.** Re-reading `GET /api/claims` before it (clause 10) found run 174's claim 950
+    (child-reclamation wave 4, #215) holding `server/src/coord/store.ts` and `README.md`. Wave 5 edits both, and its
+    migration's slot 15 is also #215's. This session proposed the second-lander rule to run 174's coordinator (mail
+    3363) and holds the dispatch for the answer. #215 was last pushed 09-30, and its worker has been at a Bash
+    approval prompt since 10-02 19:38.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
