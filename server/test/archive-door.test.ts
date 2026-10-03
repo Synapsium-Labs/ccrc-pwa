@@ -96,6 +96,14 @@ const liveStatus = (home: string, status: string): void => {
     JSON.stringify({ pid: PANE, sessionId: 'u', status, statusUpdatedAt: Date.now() - 60_000 }));
 };
 
+/** The live file of a pane whose Claude wrote a `sessionId` and NO `status` — `readLiveStateMeasured` reads it `ok` with
+ *  `status: ''`, a word ccd's `grep -oE '"status":"[a-z_-]+"'` cannot extract (F1, review 243). */
+const liveNoStatus = (home: string): void => {
+  const dir = path.join(home, '.claude-a', 'sessions');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, `${PANE}.json`), JSON.stringify({ pid: PANE, sessionId: 'u' }));
+};
+
 /** The live file removed — a pane whose status nobody can read any more (`no-state`). */
 const dropLiveStatus = (home: string): void => rmSync(path.join(home, '.claude-a', 'sessions', `${PANE}.json`), { force: true });
 
@@ -154,9 +162,39 @@ describe('the one Archive — a workspace', () => {
     expect(b.ccd()).toEqual([['stop', 'demo-amber'], ['ws-archive', '--session', 'demo-amber']]);
   });
 
+  // F7 (review 243, the coordinator's ruling): `interrupt` brings a STOP ahead of `ws-archive`'s own `_ws_status`, so
+  // ccd cannot catch a pane nobody could read afterwards. The frame row folds tmux `unknown` to dead and leaves an
+  // unread pid or an absent live file idle — it would have stopped the pane. With `interrupt` the read is fail-closed
+  // for an ORDINARY workspace too (no runs, no `programme`): every unmeasured reading refuses before any verb.
+  describe('an ordinary workspace archived with `interrupt` is read fail-closed before its stop (F7)', () => {
+    it.each([
+      ['tmux cannot be asked (`unknown`), the live file says busy', { tmuxUnknown: true }, true],
+      ['the pane pid cannot be read, the live file says busy', { noPanePid: true }, true],
+      ['there is no live file', {}, false],
+    ] as const)('%s: 409 status-unknown, nothing stopped, nothing archived', async (_why, cfg, withLive) => {
+      const b = await box(cfg);
+      seed(b.home, 'demo-amber');
+      if (withLive) liveStatus(b.home, 'busy');
+      const res = await post(b.app, 'demo-amber', { interrupt: true });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ ok: false, error: 'status-unknown' });
+      expect(b.ccd()).toEqual([]);
+    });
+
+    it('without `interrupt` the frame row and ccd decide, as before: an unreadable pid still archives through ws-archive alone', async () => {
+      const b = await box({ noPanePid: true });
+      seed(b.home, 'demo-amber');
+      liveStatus(b.home, 'idle');
+      const res = await post(b.app, 'demo-amber');
+      expect(res.json()).toEqual({ ok: true, archived: true, stopped: false, ended: [] });
+      expect(b.ccd()).toEqual([['ws-archive', '--session', 'demo-amber']]);
+    });
+  });
+
   it('refuses a workspace whose worktree is gone, before anything is stopped or archived', async () => {
     const b = await box();
     seed(b.home, 'demo-amber', { worktree: false });
+    liveStatus(b.home, 'busy'); // `interrupt` now reads the turn fail-closed (F7): a readable one reaches the worktree check
     const res = await post(b.app, 'demo-amber', { interrupt: true });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'worktree-gone' });
@@ -251,6 +289,17 @@ describe('the one Archive — a main checkout', () => {
     const b = await box(cfg);
     seed(b.home, 'claude-a-demo', { workspace: null });
     liveStatus(b.home, 'busy');
+    expect((await post(b.app, 'claude-a-demo')).json()).toEqual({ ok: false, error: 'status-unknown' });
+    expect((await post(b.app, 'claude-a-demo', { interrupt: true })).json()).toEqual({ ok: false, error: 'status-unknown' });
+    expect(b.ccd()).toEqual([]);
+  });
+
+  // F1 (review 243): ccd's `_ws_status` extracts the word with `grep -oE '"status":"[a-z_-]+"'` and returns 1 on none, so
+  // a live file with a `sessionId` and no `status` is a state nobody could read — not "a word other than idle".
+  it('a live file with no `status` word is unmeasured, not busy: 409 status-unknown, with and without `interrupt`, no verb', async () => {
+    const b = await box();
+    seed(b.home, 'claude-a-demo', { workspace: null });
+    liveNoStatus(b.home);
     expect((await post(b.app, 'claude-a-demo')).json()).toEqual({ ok: false, error: 'status-unknown' });
     expect((await post(b.app, 'claude-a-demo', { interrupt: true })).json()).toEqual({ ok: false, error: 'status-unknown' });
     expect(b.ccd()).toEqual([]);
@@ -368,6 +417,28 @@ describe('the one Archive — a coordinator (L5)', () => {
         expect(b.ccd()).toEqual([]);
       });
     }
+
+    // F2 (review 243): ccd reads the config dir BEFORE the tmux verdict, so a GONE pane whose wrapper has no config dir
+    // is a state nobody could read — never idle. The registry row names a wrapper the roster does not know.
+    it.each(Object.keys(bodies))('a GONE pane whose wrapper has no config dir is unmeasured, never idle, %s: 409 status-unknown, nothing ended', async (how) => {
+      const b = await box({ alive: false });
+      seed(b.home, COORDINATOR);
+      writeFileSync(path.join(b.home, '.cc-sessions', `${COORDINATOR}.wrapper`), 'claude-unrostered');
+      const [r1, r2] = coordinates(b.coord, 2);
+      const res = await post(b.app, COORDINATOR, bodies[how as keyof typeof bodies]);
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ ok: false, error: 'status-unknown' });
+      expect([r1!, r2!].map((r) => okRun(b.coord.run(r))!.state)).toEqual(['planned', 'planned']);
+      expect(b.ccd()).toEqual([]);
+    });
+
+    it('control: a GONE pane whose wrapper HAS a config dir is idle — nothing to lose, the programme ends and it archives', async () => {
+      const b = await box({ alive: false });
+      seed(b.home, COORDINATOR);
+      const [r1] = coordinates(b.coord, 1);
+      expect((await post(b.app, COORDINATOR, { programme: 'end' })).json()).toMatchObject({ ok: true, archived: true });
+      expect(okRun(b.coord.run(r1!))!.state).toBe('failed');
+    });
 
     it('control: a MEASURED busy workspace is 409 session-busy without `interrupt`, and nothing is ended', async () => {
       const b = await box();

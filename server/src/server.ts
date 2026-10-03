@@ -2911,25 +2911,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   /**
    * The READS behind "what turn would a STOP lose?" (`stopVerdict`, `coord/archiveDoor.ts`, D-3878, holds the rule and
-   * its reasoning, and since 3881 answers idle, busy or unmeasured): the tmux verdict, then — only for a `live` pane — its
-   * pid, its wrapper's config dir and its live file, then the frame's row. A read a verdict makes impossible is skipped,
-   * never faked; which reads MATTER is the rule's to say, so none is skipped for being redundant. Read FAIL-CLOSED
-   * because `cmd_stop` refuses nothing: for a main checkout this is the only guard there is. Its second caller is a
-   * workspace whose programme is to end (`busyReadFailsClosed`, D-3877), with or without `interrupt`, where it is the
-   * only read that can refuse before that end; every other workspace keeps `ws-archive`'s own fail-closed `_ws_status`
-   * behind the door. `liveRowFor` cannot answer it alone: the frame folds what it could not measure towards rest.
+   * its reasoning, and since 3881 answers idle, busy or unmeasured): the wrapper's config dir FIRST (a pure config
+   * lookup, in ccd's order — F2), then the tmux verdict, then — only for a `live` pane — its pid and its live file, then
+   * the frame's row. A read a verdict makes impossible is skipped, never faked; which reads MATTER is the rule's to say,
+   * so none is skipped for being redundant. Read FAIL-CLOSED because `cmd_stop` refuses nothing: for a main checkout
+   * this is the only guard there is. Its second caller is a workspace whose programme is to end or that is archived with
+   * `interrupt` (`busyReadFailsClosed`, D-3877, F7), where it is the only read that can refuse before that end or stop;
+   * every other workspace keeps `ws-archive`'s own fail-closed `_ws_status` behind the door. `liveRowFor` cannot answer
+   * it alone: the frame folds what it could not measure towards rest.
    */
   const stopVerdictFor = async (rec: SessionRecord, uuid: string): Promise<TurnVerdict> => {
-    const v = await deps.tmux.sessionVerdict(rec.id);
-    if (v.verdict !== 'live') return stopVerdict({ pane: v.verdict });
-    const pid = await deps.tmux.panePid(rec.id);
-    if (pid === null) return stopVerdict({ pane: 'live', pid: 'unread' });
     const cfgDir = configDirFor(deps.cfg, rec.wrapper);
-    if (cfgDir === undefined) return stopVerdict({ pane: 'live', pid, configDir: 'none' });
+    if (cfgDir === undefined) return stopVerdict({ configDir: 'none' });
+    const v = await deps.tmux.sessionVerdict(rec.id);
+    if (v.verdict !== 'live') return stopVerdict({ configDir: 'present', pane: v.verdict });
+    const pid = await deps.tmux.panePid(rec.id);
+    if (pid === null) return stopVerdict({ configDir: 'present', pane: 'live', pid: 'unread' });
     const read = await readLiveStateMeasured(deps.io, cfgDir, pid);
     const liveFile: LiveFileReading = read.ok ? { read: 'ok', status: read.state.status } : { read: read.reason };
     const row: StopRowReading = (await liveRowFor(rec, uuid)) ?? 'missing';
-    return stopVerdict({ pane: 'live', pid, configDir: 'present', liveFile, row });
+    return stopVerdict({ configDir: 'present', pane: 'live', pid, liveFile, row });
   };
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {
@@ -3204,9 +3205,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * refuses inside `ws-archive`, before ITS act; `archiveOutcome` carries `ended` on that answer. This handler
    * measures, hands the measurements over, and does what the decision says, in its order: end the programme (inside
    * the decision), stop (`{interrupt}`, or a main checkout), archive (a workspace). A main checkout's turn is read
-   * fail-closed (`stopVerdictFor`) — and so is a workspace's, when the programme is to end, with or without `interrupt`
-   * (`busyReadFailsClosed`, D-3877) — into THREE words (3881): a turn measured in progress is `409 session-busy`, which
-   * `interrupt` consents to; one nobody could measure is `409 status-unknown`, whatever the consents. A stop nobody
+   * fail-closed (`stopVerdictFor`) — and so is a workspace's, when the programme is to end or it is archived with
+   * `interrupt` (`busyReadFailsClosed`, D-3877, 3881) — into THREE words (3881): a turn measured in progress is
+   * `409 session-busy`, which `interrupt` consents to; one nobody could measure is `409 status-unknown`, whatever the
+   * consents. A stop nobody
    * consented to interrupt re-reads it at the act and refuses in the same two words (`refusedAtStop`): `cmd_stop`
    * refuses nothing, so that read is the only guard between a turn begun — or a state that became unreadable — during
    * the claim reads, the mutex wait or the programme end and its loss.
@@ -3244,8 +3246,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const measure: ArchiveMeasure = {
       workspace: rec.workspace !== null,
       // WHICH read is `busyReadFailsClosed`'s to say (D-3877): the fail-closed `stopVerdictFor` for a main checkout (its
-      // stop's only guard) and for a workspace whose programme is about to END, `interrupt` or not (3881); otherwise
-      // the frame's own row, with `ws-archive`'s fail-closed `_ws_status` behind it — two-valued, busy or idle. No row
+      // stop's only guard), for a workspace whose programme is about to END, `interrupt` or not (3881), and for a
+      // workspace archived with `interrupt`, whose stop runs ahead of ccd's own read (F7); otherwise the frame's own
+      // row, with `ws-archive`'s fail-closed `_ws_status` behind it — two-valued, busy or idle. No row
       // would be no measurement, read as busy — unreachable by construction (`assembleFleet` maps its records 1:1),
       // kept rather than pinned.
       turn: busyReadFailsClosed(rec.workspace !== null, flags)

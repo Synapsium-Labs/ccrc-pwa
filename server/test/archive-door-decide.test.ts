@@ -278,25 +278,28 @@ describe('archiveOutcome — ws-archive\'s answer on the wire', () => {
 // route measured. D-3881 made it three-valued (3878's `stopIsIdle` answered a boolean). One case per arm; `server.ts`
 // keeps only the reads (and `archive-door.test.ts` the wiring).
 describe('stopVerdict — a stop read fail-closed (D-3841), with "could not measure" its own word (D-3881)', () => {
-  const live = (over: Partial<Extract<StopReadings, { configDir: 'present' }>> = {}): StopReadings => ({
-    pane: 'live', pid: 4242, configDir: 'present',
+  const live = (over: Partial<Extract<StopReadings, { pane: 'live'; pid: number }>> = {}): StopReadings => ({
+    configDir: 'present', pane: 'live', pid: 4242,
     liveFile: { read: 'ok', status: 'idle' }, row: { status: 'idle', bucket: 'idle' }, ...over,
   });
 
-  it('a pane that is gone is idle: nothing is running, so there is no turn to lose', () => {
-    expect(stopVerdict({ pane: 'gone' })).toBe('idle');
+  it('a pane that is gone, under a wrapper with a config dir, is idle: nothing is running, so there is no turn to lose', () => {
+    expect(stopVerdict({ configDir: 'present', pane: 'gone' })).toBe('idle');
+  });
+
+  it('a wrapper with no config dir is UNMEASURED whatever its pane did — ccd reads the config dir BEFORE the tmux verdict (`cfg=$(_cfg_dir "$wrapper"); [[ -n "$cfg" ]] || return 1`), so a gone pane is not idle there', () => {
+    expect(stopVerdict({ configDir: 'none' })).toBe('unmeasured');
+    // There is no way to say "gone without a config dir": the reading has no `pane` to carry.
+    // @ts-expect-error `pane` belongs to the `present` arms only
+    expect(stopVerdict({ configDir: 'none', pane: 'gone' })).toBe('unmeasured');
   });
 
   it('a pane tmux could not be asked about is UNMEASURED — `unknown` is neither `gone` nor busy', () => {
-    expect(stopVerdict({ pane: 'unknown' })).toBe('unmeasured');
+    expect(stopVerdict({ configDir: 'present', pane: 'unknown' })).toBe('unmeasured');
   });
 
   it('a live pane whose pid could not be read is unmeasured', () => {
-    expect(stopVerdict({ pane: 'live', pid: 'unread' })).toBe('unmeasured');
-  });
-
-  it('a live pane whose wrapper has no config dir is unmeasured (ccd: `cfg=$(_cfg_dir ...) || return 1`)', () => {
-    expect(stopVerdict({ pane: 'live', pid: 4242, configDir: 'none' })).toBe('unmeasured');
+    expect(stopVerdict({ configDir: 'present', pane: 'live', pid: 'unread' })).toBe('unmeasured');
   });
 
   it('a live pane is idle only when its live file affirmatively says idle: an ALLOWLIST', () => {
@@ -304,6 +307,17 @@ describe('stopVerdict — a stop read fail-closed (D-3841), with "could not meas
     expect(stopVerdict(live({ liveFile: { read: 'ok', status: 'busy' } }))).toBe('busy');
     expect(stopVerdict(live({ liveFile: { read: 'ok', status: 'waiting' } }))).toBe('busy');
     expect(stopVerdict(live({ liveFile: { read: 'ok', status: 'some-new-word' } }))).toBe('busy');
+  });
+
+  // ccd's `_ws_status` extracts the word with `grep -oE '"status":"[a-z_-]+"'` and returns 1 when that finds nothing,
+  // so a word it could not extract is a state it could not read. `readLiveStateMeasured` answers `status: ''` for a
+  // file with a `sessionId` and no `status` (F1, review 243).
+  it('a status word ccd could not extract is UNMEASURED, not busy: empty, capitals, digits', () => {
+    for (const status of ['', 'Idle', 'BUSY', 'busy2', 'a b', '1']) {
+      expect(stopVerdict(live({ liveFile: { read: 'ok', status } })), JSON.stringify(status)).toBe('unmeasured');
+    }
+    expect(stopVerdict(live({ liveFile: { read: 'ok', status: 'some-new-word' } }))).toBe('busy');
+    expect(stopVerdict(live({ liveFile: { read: 'ok', status: 'under_score' } }))).toBe('busy');
   });
 
   it('a live pane whose live file is absent or unread is unmeasured, not busy (ccd: `[[ -f $sf ]] || return 1`)', () => {
@@ -317,7 +331,8 @@ describe('stopVerdict — a stop read fail-closed (D-3841), with "could not meas
     expect(stopVerdict(live({ row: { status: 'idle', bucket: 'attention' } }))).toBe('busy');
   });
 
-  it('a live pane with no frame row is unmeasured: no row is no measurement', () => {
+  // ccd reads no frame row at all: this arm is the SERVER's own, stricter than ccd.
+  it('a live pane with no frame row is unmeasured: no row is no measurement (the server\'s own arm, stricter than ccd)', () => {
     expect(stopVerdict(live({ row: 'missing' }))).toBe('unmeasured');
   });
 
@@ -343,9 +358,16 @@ describe('busyReadFailsClosed — which read answers the turn verdict before any
     expect(busyReadFailsClosed(true, { force: false, interrupt: true, programmeEnd: true })).toBe(true);
   });
 
-  it('a workspace otherwise keeps the frame\'s own row, with ccd\'s `_ws_status` behind it at ws-archive', () => {
-    for (const flags of [NONE, { ...NONE, force: true }, { ...NONE, interrupt: true },
-      { force: true, interrupt: true, programmeEnd: false }]) {
+  // F7 (review 243, ruled by the coordinator): the stop `interrupt` brings precedes `ws-archive`'s `_ws_status`, so ccd
+  // cannot catch an unreadable pane afterwards. The frame row folds tmux `unknown` to dead and leaves an unread pid or an
+  // absent live file idle, so an ordinary workspace archive with `interrupt` would STOP a pane nobody could read.
+  it('a workspace with `interrupt` alone is read fail-closed too: its stop runs BEFORE ccd\'s own read', () => {
+    expect(busyReadFailsClosed(true, { ...NONE, interrupt: true })).toBe(true);
+    expect(busyReadFailsClosed(true, { force: true, interrupt: true, programmeEnd: false })).toBe(true);
+  });
+
+  it('a workspace with neither `interrupt` nor a programme end keeps the frame\'s own row, with ccd\'s `_ws_status` behind it at ws-archive', () => {
+    for (const flags of [NONE, { ...NONE, force: true }]) {
       expect(busyReadFailsClosed(true, flags)).toBe(false);
     }
   });

@@ -220,17 +220,20 @@ undone.
      both kinds of row. Without `interrupt:true`, a busy row refuses `409 session-busy`. Busy is one L0 predicate,
      `archiveInterrupts`: a live `busy`, or a bucket of `working` or `attention` (a question waiting is a turn in
      progress). A live `busy` counts even where the hook says the turn finished, since `ws-archive` refuses on it.
-     A main checkout's stop refuses nothing, so its busy is read fail-closed, by `_ws_status`'s own rule: no pane is
-     idle; a live pane is idle only when its live file reads `idle` and the predicate is false. A measured busy
-     refuses `409 session-busy` (`interrupt:true` lets it proceed); tmux `unknown`, an unread pane pid or an unread
-     live file is not busy but unmeasured, and refuses `409 status-unknown` whatever the consents (3881). Without
-     `interrupt:true` it is re-read at the stop, so a turn begun during the claim reads or the programme end refuses
-     `409 session-busy` (or `status-unknown`, if the state became unreadable), naming any runs already ended.
-     The same fail-closed read applies to a workspace whenever `programme:'end'` is set, with or without
-     `interrupt:true`, because the end cannot be undone: a measured busy refuses `409 session-busy` unless
-     `interrupt:true`, and one the server could not measure (what `ws-archive`'s own status read would refuse as
-     `status-unknown`) refuses `409 status-unknown`, before anything ends (3877, 3881). Every other workspace archive
-     keeps the frame's row, with `ws-archive`'s status read behind it.
+     A main checkout's stop refuses nothing, so its busy is read fail-closed, by `_ws_status`'s own rule (the
+     server's `stopVerdict`): a wrapper with no config dir is unmeasured, whatever the pane; no pane is idle; a live
+     pane is idle only when its live file reads `idle` and the predicate is false. A measured busy refuses
+     `409 session-busy` (`interrupt:true` lets it proceed). Whatever could not be read is not busy but unmeasured,
+     and refuses `409 status-unknown` whatever the consents (3881): no config dir, tmux `unknown`, an unread pane
+     pid, an absent or unreadable live file, a status word `_ws_status` could not extract, and, the server's own
+     stricter arm, a missing frame row. Without `interrupt:true` it is re-read at the stop, so a turn begun during
+     the claim reads or the programme end refuses `409 session-busy` (or `status-unknown`, if the state became
+     unreadable), naming any runs already ended.
+     The same fail-closed read applies to a workspace whenever `programme:'end'` or `interrupt:true` is set: the end
+     cannot be undone, and a stop that `interrupt:true` sends runs before `ws-archive`'s own status read could refuse
+     it. A measured busy refuses `409 session-busy` unless `interrupt:true`, and one the server could not measure
+     refuses `409 status-unknown`, before anything ends or is stopped (3877, 3881). Every other workspace archive,
+     with neither, keeps the frame's row, with `ws-archive`'s status read behind it.
    - For a workspace, the worktree is not PROVEN gone, and `ws-archive`'s verb is supported. The server box can
      read a worktree only in local mode: in remote mode the fleet agent's read roots exclude `~/worktrees`, so an
      unmeasured worktree is left to `ws-archive`'s own refusal, which precedes its act.
@@ -261,8 +264,9 @@ undone.
 **Refusal codes** (`session-busy`, `coordinator-has-open-runs`, `programme-partly-ended`, and the existing
 `run-open`, a bare literal written twice in `server.ts` and once in the PWA today) are declared once, in an L0
 `ARCHIVE_REFUSALS` const. So are the three refusals "Stop only" answers, `worktree-gone`, `status-unknown` and
-`manifest-unbuildable`: `ws-archive`'s own, read off its `die` lines, and the server's only where it proves the
-worktree absent. Server and PWA read that const, and a test pins it.
+`manifest-unbuildable`: `ws-archive`'s own, read off its `die` lines. The server issues two of them itself:
+`status-unknown` where its fail-closed read (step 1) could not measure the turn, and `worktree-gone` where it
+proves the worktree absent. Server and PWA read that const, and a test pins it.
 
 **The census.** With `programme:'end'`, the archive route becomes a coordination write, session-gated with no box
 token, like the abandon door (D-282). It is added to the box-token census the way CLAUDE.md records the kickoff
@@ -491,9 +495,10 @@ agent frame in remote mode.
 - **Ending a programme succeeds, then the archive refuses.** Every refusable check the server can measure runs
   first, and a partly ended programme stops the door before any stop or archive. A workspace's turn is among them
   when the programme is to end (3877, 3881): before the end, a measured busy workspace is refused `session-busy`
-  unless `interrupt:true`, and an unmeasurable one `status-unknown` whatever the consents. What only `ccd` measures can still refuse after the end, which includes its own
-  `status-unknown`, the worktree in remote mode and the archive manifest; that answer names the runs it ended, and
-  the sheet offers "Stop only" where it applies (§5.2).
+  unless `interrupt:true`, and an unmeasurable one `status-unknown` whatever the consents. What only `ccd`
+  measures can still refuse after the end, which includes the worktree in remote mode and the archive manifest
+  (and its own `status-unknown` or `session-busy`, should the state change after the server's read); that answer
+  names the runs it ended, and the sheet offers "Stop only" where it applies (§5.2).
 - **A busy archive loses a turn.** Only after the busy confirm, which alone sends `interrupt:true`.
 - **The stop succeeds and the archive refuses.** The row stays visible, stopped, with its reason and Archive again
   (§5.2).

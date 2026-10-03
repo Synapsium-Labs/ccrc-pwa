@@ -8953,15 +8953,15 @@ export const REVIEW_DONE_SUBJECT = 'review-done';
  * like `REVIEW_DONE_SUBJECT` above, so no line README or a contract cites moves.
  *
  *   - `runOpen` — a non-terminal run names this session as its WORKER. `{force:true}` proceeds; the 409 names the runs.
- *   - `sessionBusy` — a turn is in progress: read live on the request (`archiveInterrupts`), or answered by ccd after
- *     that read (a race). `{interrupt:true}` stops the session first, and the turn is lost.
+ *   - `sessionBusy` — a turn MEASURED in progress: the server's fail-closed read (`stopVerdict`) or the frame's row
+ *     (`archiveInterrupts`), or ccd after that read (a race). `{interrupt:true}` stops the session first; the turn is lost.
  *   - `coordinatorHasOpenRuns` — this session is the CLAIMANT of a non-terminal run. `{programme:'end'}` ends the
  *     programme first; the 409 names the runs, or carries `runs: []` when the store could not be read (fail-shut).
  *   - `programmePartlyEnded` — `{programme:'end'}` could not end every run. Nothing was stopped or archived.
  *   - `worktreeGone`, `statusUnknown`, `manifestUnbuildable` — the three refusals the operator cannot fix from the
- *     phone (`ARCHIVE_STOP_ONLY`), each ccd's own `cmd_ws_archive` refusal, which it answers before it touches
- *     anything. `worktreeGone` is also the server's, where its box can PROVE the worktree absent (local mode: the
- *     fleet agent's read roots do not include the worktrees, so in remote mode only ccd can tell).
+ *     phone (`ARCHIVE_STOP_ONLY`), each ccd's own `cmd_ws_archive` refusal before it touches anything. The server
+ *     issues two itself: `statusUnknown` where its fail-closed read could not measure the turn (`decideArchive`,
+ *     `refusedAtStop`; a main checkout's only source), `worktreeGone` where it PROVES the worktree absent (local mode).
  *
  * A refusal or failure that arrives AFTER `{programme:'end'}` closed runs carries them as `ended` beside its `error`
  * (`archiveOutcome`, `server/src/coord/archiveDoor.ts`): what only ccd measures is measured after the end.
