@@ -960,7 +960,7 @@ describe('wave 2: frozen (§5.2, §10 step 7)', () => {
     { label: 'a hook with an empty session id', hook: hookAt(NOW - 5 * H, 'PostToolUse', { sessionId: '' }) },
     { label: 'an unmeasured hook', hook: { ok: false, reason: 'unmeasured' } as HookRawFact },
     { label: 'an absent hook', hook: HOOK_ABSENT },
-  ])('8: $label makes the frozen clock unmeasurable: hold busy, never frozen', ({ hook }) => {
+  ])('7: $label makes the frozen clock unmeasurable: hold busy, never frozen', ({ hook }) => {
     expect(fv(hook)).toEqual(hold('busy'));
   });
 
