@@ -3403,8 +3403,8 @@ fi
 # span, and no escaped quote, opens a span that swallows a live merge after it
 # — wherever the strip can parse the span, which the list below bounds.
 # WHAT PASSES UNPARSED, said rather than hidden. The deny is contract-grade
-# (spec §4), so these are listed, not closed (review 241 F8 measured most;
-# review 247 F2, F4, F5 and its re-review measured the rest):
+# (spec §4), so these are listed, not closed; each one was measured passing
+# by this wave's tasks, its reviews (241, 247) or their fix rounds:
 # `bash -c "…"`; a quoted or escaped command word (`"gh" pr merge`) and
 # quoting INSIDE the `pr` or `merge` word (`gh pr "merge"`, `gh 'pr' merge`,
 # `gh pr m'erg'e`, `gh pr \merge`: the strip drops a quoted span, it does not
