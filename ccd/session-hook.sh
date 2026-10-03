@@ -3363,26 +3363,33 @@ fi
 #
 # QUOTED TEXT IS REMOVED BEFORE MATCHING, in the same jq that reads the
 # command (MERGE_STRIP_JQ), leftmost first as bash reads it: a backslash
-# escape, a `$'…'` string (its `\'` escapes honoured), a '…' span, a "…" span,
-# a heredoc, a `#` comment that starts a word. A "…" span is matched WHOLE —
-# its `\"` escapes, backtick spans and `$(…)` substitutions included, each
-# substitution with its own quotes, parentheses and heredocs — and is replaced
-# by its substitutions alone, each stripped the same way: `X="$(date)"` reads
-# `X=$(date)`, and "docs; gh pr merge 42 is how" reads as nothing. A "…" span
-# or a `$'…'` that never closes, and an unclosed `$(…)` inside a "…" span or a
-# heredoc body, runs to the end and is dropped: bash runs none of it, and none
-# of what follows (a syntax error at the end of input). A heredoc keeps its
-# `<<` line and loses its body up to the terminator line (`<<-`: tab-indented;
-# a `)` may follow it, as inside `$(…)`), or to the END when no terminator
-# comes, which is how bash reads one; an unquoted delimiter's body keeps its
-# substitutions; the rest of the `<<` line is stripped too, though not of a
-# second heredoc. `$((…))`, `((…))` and `$[…]` (to two nested parentheses, on
-# one line) are kept as written, so a shift's `<<` opens no heredoc, and a
-# delimiter must start with a letter or `_`. So a commit message, a PR body, a
-# grep pattern, a heredoc or a comment that MENTIONS `gh pr merge` passes, and
-# no apostrophe in a comment, a heredoc body or a "…" span, and no escaped
-# quote, opens a span that swallows a live merge after it — wherever the strip
-# can parse the span, which the list below bounds.
+# escape, `$$` (a word, never the `$` of a `$'…'`), a `$'…'` string (its `\'`
+# escapes honoured), a '…' span, a "…" span, a heredoc, a `#` comment that
+# starts a word. A "…" span is matched WHOLE — its `\"` escapes, backtick
+# spans, `${…}` expansions with their own "…" and '…' (as bash reads them
+# there) and `$(…)` substitutions included, each substitution with its own
+# quotes, parentheses and heredocs — and is replaced by its substitutions
+# alone, each stripped the same way: `X="$(date)"` reads `X=$(date)`, and
+# "docs; gh pr merge 42 is how" reads as nothing. A "…" span or a `$'…'` that
+# never closes, and an unclosed `$(…)` inside a "…" span, a heredoc body or a
+# top-level `$(…)` that opens a heredoc, runs to the end and is dropped: bash
+# runs none of it, and none of what follows (a syntax error at the end of
+# input). A heredoc keeps its `<<` line and loses its body up to the
+# terminator line, or to the END when no terminator comes, which is how bash
+# reads one. At the top level the terminator is the WHOLE line (`<<-`:
+# tab-indented); inside `$(…)` it may go on with `)`, as bash ends one there,
+# so a top-level `$(…)` whose heredoc opens within its first 200 characters,
+# before any `)` or other `<`, is parsed as a substitution. An unquoted
+# delimiter's body keeps its substitutions; the rest of the `<<` line is
+# stripped too, though not of a second heredoc. `$((…))`, `((…))` and `$[…]`
+# (to two nested parentheses, on one line) are kept as written — never
+# dropped, so a `$(…)` inside them still reaches the match — and a shift's
+# `<<` in them opens no heredoc, and a delimiter must start with a letter or
+# `_`. So a commit message, a PR body, a grep pattern, a heredoc or a comment
+# that MENTIONS `gh pr merge` passes, and no apostrophe in a comment, a
+# heredoc body or a "…" span, and no escaped quote, opens a span that swallows
+# a live merge after it — wherever the strip can parse the span, which the
+# list below bounds.
 # WHAT PASSES UNPARSED, said rather than hidden. The deny is contract-grade
 # (spec §4), so these are listed, not closed (review 241 F8 measured each):
 # `bash -c "…"`; a quoted or escaped command word (`"gh" pr merge`) and
@@ -3403,11 +3410,15 @@ fi
 # deep (the regex engine's call-depth bound); a heredoc delimiter quoted in
 # part or holding a blank (`<<E"O"F`, `<<'MY EOF'`), or starting with neither
 # a letter nor `_` (`<<1`); a second heredoc on one line (`<<A <<B`: the
-# second body is read as commands); arithmetic deeper than two parentheses or
-# spanning lines, whose shift before a name (`<< y`) opens a heredoc that
-# hides the lines after it. A heredoc BODY line that begins `gh pr merge` is
-# text and passes, unless an unquoted body runs it inside `$(…)`. The hook is
-# a contract the fleet honours, not an access boundary (spec §4), and identity
+# second body is read as commands); a "…" span that runs past a heredoc's `<<`
+# line (`cat <<EOF "x<newline>y"; gh pr merge 42`: the strip starts the body
+# at the first newline, bash after the logical line); a heredoc that opens
+# later in a top-level `$(…)` than the gate above and ends at `EOF)` (it is
+# then read to the end); arithmetic deeper than two parentheses or spanning
+# lines, whose shift before a name (`<< y`) opens a heredoc that hides the
+# lines after it. A heredoc BODY line that begins `gh pr merge` is text and
+# passes, unless an unquoted body runs it inside `$(…)`. The hook is a
+# contract the fleet honours, not an access boundary (spec §4), and identity
 # on this box is attribution. A session with neither — a coordinator's own,
 # the operator's — is never asked, so the coordinator's `gh pr merge <n>
 # --match-head-commit <sha>` enqueues. A coordinator whose workspace DOES
@@ -3461,9 +3472,10 @@ fi
 # (closed `$(…)`: 79, 369 and 1418 ms at 50, 100 and 200 KB; and the space/tab
 # family the plan's regex already had). The strip pays one regex match per
 # quoted span, heredoc or comment, and jq 1.7's match costs grow with each
-# match's offset, so a command DENSE with quotes is superlinear too: 1.3 s at
-# 36 KB and 6.3 s at 100 KB of bare `"` through the hook (the strip before
-# this one: 21 s at 100 KB on jq alone). No start scans the rest of the
+# match's offset, so a command DENSE with quotes is superlinear too: 1.4 s at
+# 36 KB and 6.4 s (0.5 GB) at 100 KB of bare `"` through the hook (the strip
+# before this one: 21 s at 100 KB on jq alone), while 100 KB of real prose
+# in a heredoc commit or PR body takes ~130 ms. No start scans the rest of the
 # payload twice: a span, substitution or heredoc that never closes runs to
 # the end instead of failing and being retried from the next character, and
 # a heredoc's rest-of-line is stripped without a second heredoc (a `<<a <<a`
@@ -3473,15 +3485,17 @@ MERGE_STRIP_JQ='
 def SQ: $q + "[^" + $q + "]*" + $q;
 def AQ: "\\$" + $q + "(?>(?:[^\\\\" + $q + "]++|\\\\(?:.|\\n|\\z))*)(?:" + $q + "|\\z)";
 def W: "[A-Za-z_][^\\s;&|()<>\"" + $q + "\\\\]*";
-def T($n; $tabs): $tabs + "\\k<w\($n)>(?![^\\n)])";
-def hd1($n; $tabs):
+def T($n; $tabs; $end): $tabs + "\\k<w\($n)>" + $end;
+def hd1($n; $tabs; $end):
   "\\\\?(?<q\($n)>[\"" + $q + "]?)(?<w\($n)>" + W + ")\\k<q\($n)>(?>[^\\n]*)(?:\\n|\\z)"
-  + "(?>(?:(?!" + T($n; $tabs) + ")[^\\n]*\\n)*(?:(?!" + T($n; $tabs) + ")[^\\n]++)?)(?:" + T($n; $tabs) + ")?";
+  + "(?>(?:(?!" + T($n; $tabs; $end) + ")[^\\n]*\\n)*(?:(?!" + T($n; $tabs; $end) + ")[^\\n]++)?)(?:" + T($n; $tabs; $end) + ")?";
 def AR: "(?>(?:[^()\\n]++|\\((?>(?:[^()\\n]++|\\([^()\\n]*+\\))*)\\))*)";
 def DEFS:
-  "(?<hd>(?<!<)<<(?:-[ \\t]*" + hd1("t"; "\\t*") + "|[ \\t]*" + hd1(""; "") + ")){0}"
-  + "(?<sub>\\$\\(\\(" + AR + "\\)\\)|\\$\\((?<sb>(?>(?:[^" + $q + "\"()\\\\<#$]++|" + AQ + "|\\$|\\\\(?:.|\\n|\\z)|\\g<hd>|<|(?<![^\\s;&|(])#[^\\n]*|#|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<dq>|\\(\\(" + AR + "\\)\\)|\\(\\g<sb>(?:\\)|\\z))*))(?:\\)|(?<us>\\z))){0}"
-  + "(?<dq>\"(?>(?:[^\"\\\\$`]++|\\\\(?:.|\\n|\\z)|\\$(?!\\()|\\g<sub>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`)*)(?:\"|(?<ud>\\z))){0}";
+  "(?<hd>(?<!<)<<(?:-[ \\t]*" + hd1("t"; "\\t*"; "(?![^\\n])") + "|[ \\t]*" + hd1(""; ""; "(?![^\\n])") + ")){0}"
+  + "(?<hs>(?<!<)<<(?:-[ \\t]*" + hd1("st"; "\\t*"; "(?![^\\n)])") + "|[ \\t]*" + hd1("s"; ""; "(?![^\\n)])") + ")){0}"
+  + "(?<sub>\\$\\(\\(" + AR + "\\)\\)|\\$\\((?<sb>(?>(?:[^" + $q + "\"()\\\\<#$]++|\\$\\$|" + AQ + "|\\$|\\\\(?:.|\\n|\\z)|\\g<hs>|<|(?<![^\\s;&|(])#[^\\n]*|#|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<dq>|\\(\\(" + AR + "\\)\\)|\\(\\g<sb>(?:\\)|\\z))*))(?:\\)|(?<us>\\z))){0}"
+  + "(?<pe>\\$\\{(?>(?:[^}\"" + $q + "\\\\$`]++|\\\\(?:.|\\n|\\z)|\\g<dq>|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<sub>|\\g<pe>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`|\\$(?![({]))*)(?:\\}|\\z)){0}"
+  + "(?<dq>\"(?>(?:[^\"\\\\$`]++|\\\\(?:.|\\n|\\z)|\\g<pe>|\\$(?![({])|\\g<sub>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`)*)(?:\"|(?<ud>\\z))){0}";
 def fs(re; f): . as $in | [match(re; "g") | [.offset, .length, .string, any(.captures[]; (.name == "us" or .name == "ud") and .string != null)]] as $ms
   | if ($ms | length) == 0 then $in else ($in | explode) as $cp
     | [range(0; $ms | length) as $i | $ms[$i] as $m
@@ -3494,11 +3508,12 @@ def qs($h):
     elif startswith("$(") and endswith(")") and (.[2:-1] | plain and (contains("(") or contains(")") or contains("$") | not)) then .
     else fs(DEFS + "\\\\(?:.|\\n)|\\g<sub>|[^\\\\$]+|\\$";
       .[1] as $open | .[0] | if $open or (startswith("$(") | not) then "" elif startswith("$((") then . else "$(" + (.[2:-1] | qs(true)) + ")" end) end;
-  if plain then . else fs(DEFS + "\\\\.|" + AQ + "|" + SQ + "|\\g<dq>|" + (if $h then "\\g<hd>|" else "" end) + "(?<![^\\s;&|(])#[^\\n]*|\\$?\\(\\(" + AR + "\\)\\)|\\$\\[[^\\]\\n]*\\]";
+  if plain then . else fs(DEFS + "\\\\.|\\$\\$(?=" + $q + ")|" + AQ + "|" + SQ + "|\\g<dq>|" + (if $h then "\\g<hd>|" else "" end) + "(?<![^\\s;&|(])#[^\\n]*|\\$?\\(\\(" + AR + "\\)\\)|\\$\\[[^\\]\\n]*\\]|(?=\\$\\([^)\\n<]{0,200}<<)\\g<sub>";
     .[1] as $open | .[0] | if startswith("\"") then (if $open then "" else .[1:-1] | subs end)
     elif startswith("<<") then capture("^<<-?[ \\t]*(?<x>\\\\?)(?<q>[\"" + $q + "]?)" + W + "\\k<q>(?<r>[^\\n]*)(?<b>[\\s\\S]*)")
       | "<<" + (.r | qs(false)) + "\n" + (if .x == "" and .q == "" then .b | subs else "" end)
-    elif startswith("$(") or startswith("((") or startswith("$[") then .
+    elif startswith("$((") or startswith("((") or startswith("$[") or startswith("$$") then .
+    elif startswith("$(") then (if $open then "" else "$(" + (.[2:-1] | qs(true)) + ")" end)
     else "" end) end;
 if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end'
 if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \

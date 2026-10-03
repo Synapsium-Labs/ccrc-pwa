@@ -208,9 +208,11 @@ describe('the worker merge deny', () => {
     // walks the rest of the payload once per `<<` (2.4 to 3.8 s and 0.4 to
     // 0.6 GB at 16 KB, measured on the strip alone; 15 s and 2.9 GB at 36 KB).
     hold(WAVE_HOLD);
-    for (const u of ['<<a ', '$(cat <<a\n']) {
+    // The `$(` units sit in an unquoted heredoc body, the one place an unclosed
+    // `$(` is stripped as a substitution rather than as the top-level `$(…)`.
+    for (const [pre, u] of [['', '<<a '], ['cat <<a\n', '$(cat <<a\n']]) {
       const t0 = Date.now();
-      const r = bash(u.repeat(Math.ceil(16000 / u.length)) + '\necho merge origin');
+      const r = bash(pre + u.repeat(Math.ceil(16000 / u.length)) + '\necho merge origin');
       const ms = Date.now() - t0;
       expect(r.deny, `a non-merge was denied: ${JSON.stringify(u)}`).toBeNull();
       expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(1500);
@@ -238,11 +240,16 @@ describe('the worker merge deny', () => {
   // `<<` in arithmetic (or before a word that is not a name) opens no heredoc;
   // a backtick span, a `#` comment, an escaped quote and a nested "…" span
   // inside a "…" span end where bash ends them; `<<-` lets its terminator be
-  // indented with tabs; a `$'…'` string's `\'` does not close it.
+  // indented with tabs; a `$'…'` string's `\'` does not close it; a `${…}`
+  // inside a "…" span holds its own quotes; a top-level heredoc ends only at
+  // its whole terminator line (`EOF)` ends one only inside `$(…)`, top-level
+  // `$(…)` included); `$$` is a word, never the `$` of a `$'…'`; arithmetic is
+  // kept as written, never dropped, so a `$(…)` inside it still runs.
   it.each([
     ['cat <<EOF\n$(gh pr merge 42)\nEOF'],
     ['echo "$(cat <<EOF\nit\'s\nEOF)"; gh pr merge 42; echo \'x\''],
-    ['X=$((x<<y))\ngh pr merge 42; echo \'z\''],
+    ['X=$((x<<y))\ngh pr merge 42; echo \'z\''], ['(( x << y ))\ngh pr merge 42; echo \'z\''],
+    ['(( $(gh pr merge 42) ))'], ['echo $(( $(gh pr merge 42) ))'], ['echo "$(( $(gh pr merge 42) ))"'],
     ['echo $(( (a+(b+(c))) << 2 ))\ngh pr merge 42; echo \'z\''],
     ['echo "`echo "it\'s"`"; gh pr merge 42; echo \'x\''],
     ['echo "$(date # it\'s\n)"; gh pr merge 42; echo \'x\''],
@@ -250,6 +257,13 @@ describe('the worker merge deny', () => {
     ['echo "$(echo "a)b")"; gh pr merge 42; echo "y"'],
     ['cat <<-\'EOF\'\n\tit\'s\n\tEOF\ngh pr merge 42\necho \'ok\''],
     ['echo $\'it\\\'s\'; gh pr merge 42; echo \'x\''],
+    ['echo "${x:-"it\'s"}"; gh pr merge 42; echo \'x\''],
+    ['echo "${x//"\'"/}"; gh pr merge 42; echo \'x\''],
+    ['cat <<\'EOF\'\nEOF)\nit\'s\nEOF\ngh pr merge 42\necho \'x\''],
+    ['cat <<EOF\nEOF) and more\nit\'s\nEOF\ngh pr merge 42\necho \'x\''],
+    ['x=$(cat <<EOF\nit\'s\nEOF)\ngh pr merge 42; echo \'y\''],
+    ['echo $$\'\\\'; gh pr merge 42; echo \'x\''],
+    ['echo "$(echo $$\'\\\')"; gh pr merge 42; echo \'x\''],
   ])('reads a quote, heredoc or arithmetic edge as bash does: %j', (c) => {
     hold(WAVE_HOLD);
     expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
