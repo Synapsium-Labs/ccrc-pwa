@@ -20,7 +20,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 (merges after #227) | **review clean** — run 221 accepted, review run 224 clean (4 Minor, ruled R11); PR awaits the operator's merge |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; **awaiting review**: #232 at `571268cdc`. Clauses 16/17 per R14 and R15; the wave-done (20:16) was re-measured and accepted. **accepted, merging**. Review run 239 (dispatched 22:39 after a `cap-daily` wait, R16) found 4 Minor and no blocker (R17). The run waits at `merging` for the operator's squash-merge of #232 |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | planned and reviewed; dispatches after #227 and #228 merge |
-| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | — | planning (R18); dispatches after waves 3–5 land |
+| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | — | planned and reviewed (R19); dispatches after waves 3–5 land |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -257,11 +257,31 @@ Output: `w2-shadow-review.json` in the coordinator notes.
   
   The programme becomes six waves. The review is the shadow review that spec §5 asks for before w2-live, so its fixes
   are in scope (the precedent is wave 3, from the first review).
+- **R19 (coordinator, 2026-10-03 13:43): wave 6's plan, and the gate on G4's deferral.** The plan is
+  `docs/superpowers/plans/2026-10-03-stall-watch-w6-review-fixes.md`, four tasks, defining D-3797, D-3798, D-3799 and
+  D-3800.
+  - **How it was made.** Four Opus verifiers re-measured G1–G4 against wave 3's tip and confirmed all four. G1 is wider
+    than the review said: 12 of the 23 mails sent to the alias `worker` since 09-25 landed while the coordinator held the
+    ball, five of them answers to a worker's question, and the coordinator skill tells coordinators to use the alias. An
+    Opus planner wrote the plan. Two Opus lenses reviewed it, and two fix rounds followed, each re-reviewed.
+  - **Rulings in those rounds:**
+    - coord-deaf times from the first delivery (the replay count tells it: a replay re-stamps `deliveredAt`);
+    - a still-queued, undelivered mail is bounded at `DELEGATE_CAP_MS + COORD_DEAF_MS`, about 5 h, not held forever.
+      A coordinator stuck in a running turn has no other arm;
+    - a row parked before delivery is timed from its queue, as before;
+    - the dialog cap is done when any standing row was written since the dialog's onset, whatever its key.
+  - **Left as residuals in the plan:** the limit cap still keys on the mail episode (a limit clears itself), and
+    mail-stuck still reads `shell` as idle under strict mode, which nobody arms.
+  - **G4's durable run-less latch stays deferred** (D-3751's ruling stands). It has a gate: between arming
+    `stall-watch-escalate` and `stall-watch-w2-live` (R18 step 5), count the repeated run-less operator pushes against
+    server restarts and registry flaps. Then either accept the repeat, or fund the latch the plan sketches under "Not in
+    this wave".
+  - **Its guards are measured:** `deviation-refs` 31/31 once the plan is tracked; `dtbd` and `topology-clean` green.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
-  floor now 3808). Nine are assigned: wave 3's plan defines three, wave 4's four and wave 5's two, one per departure slug.
-  The other eleven are headroom for departures a wave reports. A worker never calls the allocator (worker clause 11): it
+  floor now 3808). Thirteen are assigned: wave 3's plan defines three, wave 4's four, wave 5's two and wave 6's four, one per
+  departure slug, and one more was assigned to wave 3 at its wave-done. The other seven are headroom for departures a wave reports. A worker never calls the allocator (worker clause 11): it
   names a departure in its wave-done mail, and the coordinator assigns a number from the block.
 
 ## Carried constraints (reviewers get these)
@@ -295,7 +315,16 @@ Output: `w2-shadow-review.json` in the coordinator notes.
 
 ## Next-wave brief
 
-Wave 4: `docs/superpowers/plans/2026-10-02-worker-stall-watch-w3.md`, all tasks, on a fresh child of `ccrc-pwa`, read
-by its commit sha; the spec-approved clause text (R12). Wave 5: `docs/superpowers/plans/2026-10-02-stall-watch-w5-follow-ups.md`
-once its plan review is ruled, dispatched only after #227 and #228 are proven merged (it builds on wave 3's code); it
-carries R11's F2 and F3 pins.
+- **Wave 5:** `docs/superpowers/plans/2026-10-02-stall-watch-w5-follow-ups.md`, all tasks, on a fresh child of
+  `ccrc-pwa`.
+  - Read by its commit sha.
+  - Dispatched only after #227 and #228 are proven merged; it builds on wave 3's code.
+  - It carries R11's F2 and F3 pins.
+  - Before dispatch: re-read claims, and take a dispatch slot by measurement or by agreement with landing-order (R16).
+- **Wave 6:** `docs/superpowers/plans/2026-10-03-stall-watch-w6-review-fixes.md`, all four tasks, on a fresh child.
+  - Read by its sha.
+  - Dispatched only after wave 5's PR is proven merged: it re-anchors against wave 5's `stall.ts` and `store.ts` by
+    content.
+  - Its precondition also needs this plan on `main`, so that `deviation-refs` can resolve the four numbers its code
+    cites.
+- **Wave 4** is accepted and waits at `merging` (R17).
