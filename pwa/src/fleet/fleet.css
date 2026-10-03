@@ -2929,8 +2929,12 @@ button.proj-card-pool::before {
   color: var(--ink-primary);
   overflow: hidden;
 }
+/* `min-height` was absent here, so this head sized to its content alone — the
+   only one of the three strip heads with no floor at all. Same chrome, same
+   criterion. */
 .hotfiles-head {
   display: flex; align-items: center; gap: var(--sp-2); width: 100%;
+  min-height: var(--tap-min);
   padding: var(--sp-2) var(--sp-3); background: none; border: 0;
   color: inherit; font: inherit; text-align: left; cursor: pointer;
 }

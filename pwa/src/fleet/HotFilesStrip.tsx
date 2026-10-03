@@ -17,7 +17,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ClaimSummary } from '../../../shared/api';
 import { api } from '../lib/api';
-import { useNow } from '@ccrc/ui';
+import { CollapsibleStrip, useNow } from '@ccrc/ui';
 import './fleet.css';
 
 export const CLAIMS_POLL_MS = 30_000;
@@ -33,7 +33,6 @@ function expiresIn(at: number, now: number): string {
 
 export function HotFilesStrip(): ReactNode {
   const [claims, setClaims] = useState<readonly ClaimSummary[]>([]);
-  const [open, setOpen] = useState(false);
   const now = useNow(30_000);
 
   useEffect(() => {
@@ -59,37 +58,32 @@ export function HotFilesStrip(): ReactNode {
   if (liveClaims.length === 0) return null;
 
   return (
-    <section className={open ? 'hotfiles hotfiles--open' : 'hotfiles'} aria-label="Hot files">
-      <button type="button" className="hotfiles-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <span className="hotfiles-mark" aria-hidden="true">✋</span>
-        <span className="hotfiles-headline">
-          {liveClaims.length === 1 ? '1 hot-file claim' : `${liveClaims.length} hot-file claims`}
-        </span>
-        <span className="hotfiles-chevron" aria-hidden="true">{open ? '⌃' : '⌄'}</span>
-      </button>
-      {open && (
-        <ol className="hotfiles-rows">
-          {liveClaims.map((c) => (
-            <li key={c.id} className="hotfiles-row">
-              <span className="hotfiles-holder">{c.heldBy}</span>
-              <span className="hotfiles-expiry">{expiresIn(c.expiresAt, now)}</span>
-              {/* Intent is free text off the wire — rendered VERBATIM,
-                  parsed nowhere: `.sess-held`'s rule for the hold reason. */}
-              {c.intent !== null && c.intent !== '' && (
-                <span className="hotfiles-intent">{c.intent}</span>
-              )}
-              {/* Paths render project-qualified — the claim's own key is
-                  (project, path), and a bare `shared/api.ts` on a mixed
-                  fleet names half a fact. */}
-              <ul className="hotfiles-paths">
-                {c.paths.map((p) => (
-                  <li key={p} className="hotfiles-path">{c.project}/{p}</li>
-                ))}
-              </ul>
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
+    <CollapsibleStrip
+      root="hotfiles"
+      part="hotfiles"
+      label="Hot files"
+      mark="✋"
+      headline={liveClaims.length === 1 ? '1 hot-file claim' : `${liveClaims.length} hot-file claims`}
+    >
+      {liveClaims.map((c) => (
+        <li key={c.id} className="hotfiles-row">
+          <span className="hotfiles-holder">{c.heldBy}</span>
+          <span className="hotfiles-expiry">{expiresIn(c.expiresAt, now)}</span>
+          {/* Intent is free text off the wire — rendered VERBATIM,
+              parsed nowhere: `.sess-held`'s rule for the hold reason. */}
+          {c.intent !== null && c.intent !== '' && (
+            <span className="hotfiles-intent">{c.intent}</span>
+          )}
+          {/* Paths render project-qualified — the claim's own key is
+              (project, path), and a bare `shared/api.ts` on a mixed
+              fleet names half a fact. */}
+          <ul className="hotfiles-paths">
+            {c.paths.map((p) => (
+              <li key={p} className="hotfiles-path">{c.project}/{p}</li>
+            ))}
+          </ul>
+        </li>
+      ))}
+    </CollapsibleStrip>
   );
 }

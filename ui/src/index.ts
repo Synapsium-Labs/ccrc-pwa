@@ -15,6 +15,7 @@ export { LimitBar, limitBand, fillVariants, TRACK as LIMIT_TRACK, type LimitBand
 export { Skeleton, type SkeletonProps } from './primitives/skeleton';
 export { Sheet, type SheetProps } from './primitives/sheet';
 export { OptionRow, type OptionRowProps } from './primitives/option-row';
+export { CollapsibleStrip, type CollapsibleStripProps } from './primitives/collapsible-strip';
 export { QuickConfirm, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,

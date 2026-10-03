@@ -18,7 +18,7 @@
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
 import type { CoordCapsView } from '../../shared/api';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import type { CoordStatus, FleetSession, MailSummary, NotifyEvent, PrState, RunSummary, WsAudit } from '../../shared/api';
 import { declValue, norm, ruleIn, stripComments } from './cssRule';
@@ -478,5 +478,64 @@ describe('.program-start-go — the sheet’s own confirm control', () => {
       loadProjects={async () => ({ roots: [], projects: [{ name: 'ccrc-pwa', workdir: '/w' }] })} />);
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
     expect(await screen.findByRole('button', { name: /^start/i })).toHaveClass('program-start-go');
+  });
+});
+
+// THE STRIP CHROME'S HEAD, ALL THREE AT ONCE — and a census rather than a
+// third named control, because naming them one at a time is how two of them
+// came to have no floor.
+//
+// `CollapsibleStrip` gives MailStrip, TaskStrip and HotFilesStrip one shape,
+// and each keeps its own skin — which is cheap (no rule moved, so no gate key
+// moved) and leaves the floor re-stated three times. It had already drifted
+// when the chrome was extracted: `.mail-strip-head` floored at `--tap-min`,
+// `.task-head` at `--sp-8` (32px, under the spec criterion, on the control that
+// opens the plan) and `.hotfiles-head` at nothing at all, sizing to its content.
+// The tests above cover controls one by one, by design, so none of them was in
+// scope for any of it.
+//
+// Derived from one list, so a fourth strip is a one-line addition here and a
+// red suite until it is made — not a silent fourth spelling.
+describe('every strip head clears the tap floor — the whole chrome, not one control', () => {
+  const HEADS: [string, string, string][] = [
+    ['mail-strip.css', '.mail-strip .mail-strip-head', mailStripCss],
+    ['task-strip.css', '.task-head', readUi('components', 'task-strip.css')],
+    ['fleet.css', '.hotfiles-head', fleetCss],
+  ];
+
+  for (const [sheet, selector, css] of HEADS) {
+    it(`${sheet} ${selector} floors at var(--tap-min)`, () => {
+      const rule = ruleIn(css, selector);
+      expect(rule, `${selector} has no rule in ${sheet}`).not.toBeNull();
+      expect(declValue(rule!, 'min-height')).toBe('var(--tap-min)');
+    });
+  }
+
+  it('is every strip CollapsibleStrip builds, found by walking both packages', () => {
+    // WALKS the tree rather than reading three named files. The first spelling
+    // of this test read exactly the three consumers it already knew about, so
+    // a fourth strip anywhere else left it green — measured, by planting a
+    // `<CollapsibleStrip` in a fourth file and watching all 43 pass. A census
+    // that cannot see a newcomer is not a census.
+    const walk = (dir: string): string[] => {
+      const out: string[] = [];
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) out.push(...walk(full));
+        else if (e.name.endsWith('.tsx') && !e.name.endsWith('.stories.tsx')) out.push(full);
+      }
+      return out;
+    };
+    const roots = [
+      path.join(import.meta.dirname, '..', 'src'),
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src'),
+    ];
+    const consumers = roots
+      .flatMap(walk)
+      .filter((f) => /<CollapsibleStrip\b/.test(readFileSync(f, 'utf8')))
+      .map((f) => path.basename(f))
+      .sort();
+    expect(consumers).toEqual(['HotFilesStrip.tsx', 'mail-strip.tsx', 'task-strip.tsx']);
+    expect(consumers).toHaveLength(HEADS.length);
   });
 });

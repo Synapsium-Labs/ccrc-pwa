@@ -11,6 +11,7 @@
 // nothing at all, so ordinary conversations never pay a row for it.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { CollapsibleStrip } from '../primitives/collapsible-strip';
 import type { TaskItem } from '../../../shared/api';
 import './task-strip.css';
 
@@ -68,7 +69,6 @@ export function TaskStrip({ tasks }: { tasks: TaskItem[] }): ReactNode {
   // Collapsed by default: sitting above the composer, an open list spends chat
   // height on every screen. One live line (what's running + the tally) is the
   // glance; the rows are one tap away.
-  const [open, setOpen] = useState(false);
   const [showDone, setShowDone] = useState(false);
   if (tasks.length === 0) return null;
 
@@ -81,44 +81,29 @@ export function TaskStrip({ tasks }: { tasks: TaskItem[] }): ReactNode {
   const headline = running ? running.activeForm || running.subject : 'Tasks';
 
   return (
-    <section className={open ? 'task-strip task-strip--open' : 'task-strip'} aria-label="Task list">
-      <button
-        type="button"
-        className="task-head"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-      >
-        <span className={running ? 'task-mark task-mark--running' : 'task-mark'} aria-hidden="true">
-          ✳
-        </span>
-        <span className="task-headline">{headline}</span>
-        <span className="task-count">
-          {done.length}/{tasks.length}
-        </span>
-        <span className="task-chevron" aria-hidden="true">
-          {open ? '⌃' : '⌄'}
-        </span>
-      </button>
-
-      <p className="task-summary">{summarize(tasks)}</p>
-
-      {open && (
-        <ol className="task-rows">
-          {outstanding.map((t) => (
-            <TaskRow key={t.id} task={t} />
-          ))}
-          {done.length > 0 &&
-            (showDone ? (
-              done.map((t) => <TaskRow key={t.id} task={t} />)
-            ) : (
-              <li className="task-row task-row--fold">
-                <button type="button" className="task-fold" onClick={() => setShowDone(true)}>
-                  … +{done.length} completed
-                </button>
-              </li>
-            ))}
-        </ol>
-      )}
-    </section>
+    <CollapsibleStrip
+      root="task-strip"
+      part="task"
+      label="Task list"
+      mark="✳"
+      markClass={running ? 'task-mark--running' : undefined}
+      headline={headline}
+      count={`${done.length}/${tasks.length}`}
+      summary={summarize(tasks)}
+    >
+      {outstanding.map((t) => (
+        <TaskRow key={t.id} task={t} />
+      ))}
+      {done.length > 0 &&
+        (showDone ? (
+          done.map((t) => <TaskRow key={t.id} task={t} />)
+        ) : (
+          <li className="task-row task-row--fold">
+            <button type="button" className="task-fold" onClick={() => setShowDone(true)}>
+              … +{done.length} completed
+            </button>
+          </li>
+        ))}
+    </CollapsibleStrip>
   );
 }

@@ -24,12 +24,17 @@
     border-color: var(--edge-strong);
   }
 
+  /* `--tap-min`, not `--sp-8`. This head was 32px while the two strips built
+     from the same chrome floored at 44 — under the spec's touch-target
+     criterion, on the control that opens the plan. Nothing pinned it, because
+     the tap guard covered named controls rather than this shape; it now covers
+     all three heads together. */
   .task-head {
     display: flex;
     align-items: center;
     gap: var(--sp-2);
     width: 100%;
-    min-height: var(--sp-8);
+    min-height: var(--tap-min);
     padding: var(--sp-2) var(--sp-3);
     background: none;
     border: 0;

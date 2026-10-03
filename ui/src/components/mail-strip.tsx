@@ -18,8 +18,8 @@
 // assumed: PR I shipped no `body` and no `rejectCode` on the wire (see
 // stores/session.ts's own `mail` frame comment) — every row here is
 // necessarily sender/kind/subject/artifacts only.
-import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { CollapsibleStrip } from '../primitives/collapsible-strip';
 import type { MailGate, MailSummary } from '../../../shared/api';
 import {
   MAIL_MAX_ATTEMPTS, MAIL_GATE_HELD_MS, MAIL_GATE_HELD_COUNT, MAIL_GATE_FRESH_MS,
@@ -261,7 +261,6 @@ function statusArm(item: MailSummary, held: { gate: string; forMs: number } | nu
  *  overridden after — a hook behind a `??` would be a hook behind a condition,
  *  which React forbids and which no test would catch until the prop was used. */
 export function MailStrip({ mail, now: nowProp }: { mail: MailSummary[]; now?: number }): ReactNode {
-  const [open, setOpen] = useState(false);
   // 30s, matching FleetHostBanner: the coarsest span `elapsedWords` prints is
   // a minute, so a faster tick would re-render without ever changing a word.
   const tick = useNow(30_000);
@@ -274,87 +273,76 @@ export function MailStrip({ mail, now: nowProp }: { mail: MailSummary[]; now?: n
   const heldCount = arm.filter((a) => a === 'held').length;
 
   return (
-    <section className={open ? 'mail-strip mail-strip--open' : 'mail-strip'} aria-label="Mail">
-      <button type="button" className="mail-strip-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <span className="mail-strip-mark" aria-hidden="true">✉</span>
-        <span className="mail-strip-headline">{newest.subject}</span>
-        <span className="mail-strip-count">{mail.length}</span>
-        {/* THE STRIP OPENS CLOSED, so a flag that only exists in the expanded
-            rows is invisible in the state the operator is actually in. */}
-        {mail.some(isBlocked) && (
-          <span className="mail-strip-blocked-mark" title="A message can't be delivered — this session's input box has unsent text.">
-            blocked
-          </span>
-        )}
-        {/* Same argument as the blocked mark directly above, for the same
-            reason: the strip OPENS CLOSED, so a gate named only in an
-            expanded row is invisible in the state the operator is in. It is a
-            COUNT and not a reason — the reason is per-row and there may be
-            more than one, and picking one to promote would be the console
-            choosing which of two true things to say. */}
-        {heldCount > 0 && (
-          <span
-            className="mail-strip-held-mark"
-            title={heldCount === 1
-              ? 'One gate has been holding a message for a while. Open the strip for which, and how long.'
-              : `${heldCount} messages are each being held at a gate. Open the strip for which, and how long.`}
-          >
-            held {heldCount}
-          </span>
-        )}
-        <span className="mail-strip-chevron" aria-hidden="true">{open ? '⌃' : '⌄'}</span>
-      </button>
-
-      <p className="mail-strip-summary">{summarizeMail(mail)}</p>
-
-      {open && (
-        <ol className="mail-strip-rows">
-          {mail.map((item, i) => (
-            <li key={item.id} className="mail-strip-row" data-state={item.state}>
-              <span className="mail-strip-from">{item.fromId}</span>
-              <span className="mail-strip-kind">{item.kind}</span>
-              <span className="mail-strip-subject">{item.subject}</span>
-              {/* Review finding 2: `outstandingMailFor` now also carries a
-                  delivery the lane gave up retrying past its own replay
-                  ceiling, never acked, never acted on — a distinct
-                  `state:'rejected'` row that must not read as an ordinary
-                  pending message, or a coordinator would keep waiting for a
-                  reply the lane has already stopped attempting to deliver.
-
-                  ONE status line per row, written as a ternary rather than two
-                  independent guards: a rejected delivery is terminal and says
-                  so, a queued-but-blocked one is still being retried and says
-                  how much room is left. Rendering both would state two
-                  different fates for one message. */}
-              {/* ONE status line per row, and `statusArm` — not this JSX — is
-                  where the precedence lives, so the head's count and the row's
-                  line cannot drift apart. Reading the arm here rather than
-                  re-deciding it is the whole point. */}
-              {arm[i] === 'abandoned' ? (
-                <span className="mail-strip-abandoned" title="The delivery lane gave up retrying this before it was acked.">
-                  undeliverable — act on it directly
-                </span>
-              ) : arm[i] === 'blocked' ? (
-                <span className="mail-strip-blocked" title="The lane is still retrying. Clear this session's input box and it will land.">
-                  {blockedLine(item)}
-                </span>
-              ) : arm[i] === 'held' ? (
-                <span className="mail-strip-held" title="Nothing has failed. The delivery lane keeps re-offering this message and one gate keeps declining it.">
-                  {heldLine(held[i]!)}
-                </span>
-              ) : null}
-              {/* Artifacts are PATHS, never payloads (spec §1) — so they render
-                  as paths, in the machine's voice, and nothing here fetches
-                  one. */}
-              {item.artifacts.length > 0 && (
-                <ul className="mail-strip-artifacts">
-                  {item.artifacts.map((p) => <li key={p}>{p}</li>)}
-                </ul>
-              )}
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
+    <CollapsibleStrip
+      root="mail-strip"
+      part="mail-strip"
+      label="Mail"
+      mark="✉"
+      headline={newest.subject}
+      count={mail.length}
+      summary={summarizeMail(mail)}
+      marks={
+        <>
+          {/* THE STRIP OPENS CLOSED, so a flag that only exists in the expanded
+              rows is invisible in the state the operator is actually in. */}
+          {mail.some(isBlocked) && (
+            <span className="mail-strip-blocked-mark" title="A message can't be delivered — this session's input box has unsent text.">
+              blocked
+            </span>
+          )}
+          {/* Same argument as the blocked mark directly above, for the same
+              reason: the strip OPENS CLOSED, so a gate named only in an
+              expanded row is invisible in the state the operator is in. It is a
+              COUNT and not a reason — the reason is per-row and there may be
+              more than one, and picking one to promote would be the console
+              choosing which of two true things to say. */}
+          {heldCount > 0 && (
+            <span
+              className="mail-strip-held-mark"
+              title={heldCount === 1
+                ? 'One gate has been holding a message for a while. Open the strip for which, and how long.'
+                : `${heldCount} messages are each being held at a gate. Open the strip for which, and how long.`}
+            >
+              held {heldCount}
+            </span>
+          )}
+        </>
+      }
+    >
+      {mail.map((item, i) => (
+        <li key={item.id} className="mail-strip-row" data-state={item.state}>
+          <span className="mail-strip-from">{item.fromId}</span>
+          <span className="mail-strip-kind">{item.kind}</span>
+          <span className="mail-strip-subject">{item.subject}</span>
+          {/* ONE status line per row, and `statusArm` — not this JSX — is
+              where the precedence lives, so the head's count and the row's
+              line cannot drift apart. Reading the arm here rather than
+              re-deciding it is the whole point. A rejected delivery is
+              terminal and says so; a queued-but-blocked one is still being
+              retried and says how much room is left. Rendering both would
+              state two different fates for one message. */}
+          {arm[i] === 'abandoned' ? (
+            <span className="mail-strip-abandoned" title="The delivery lane gave up retrying this before it was acked.">
+              undeliverable — act on it directly
+            </span>
+          ) : arm[i] === 'blocked' ? (
+            <span className="mail-strip-blocked" title="The lane is still retrying. Clear this session's input box and it will land.">
+              {blockedLine(item)}
+            </span>
+          ) : arm[i] === 'held' ? (
+            <span className="mail-strip-held" title="Nothing has failed. The delivery lane keeps re-offering this message and one gate keeps declining it.">
+              {heldLine(held[i]!)}
+            </span>
+          ) : null}
+          {/* Artifacts are PATHS, never payloads (spec §1) — so they render
+              as paths, in the machine's voice, and nothing here fetches one. */}
+          {item.artifacts.length > 0 && (
+            <ul className="mail-strip-artifacts">
+              {item.artifacts.map((p) => <li key={p}>{p}</li>)}
+            </ul>
+          )}
+        </li>
+      ))}
+    </CollapsibleStrip>
   );
 }
