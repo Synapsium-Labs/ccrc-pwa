@@ -281,6 +281,17 @@ export function resolveSpawnCmd(cmd: string, home: string): string {
   return cmd === 'ccd' ? path.join(home, '.local', 'bin', 'ccd') : cmd;
 }
 
+/** The BODY half of the installed `ccd` pair — the Bash the launcher at
+ *  `resolveSpawnCmd('ccd', home)` hashes and hands control to. Derived here,
+ *  once, and used for ONE thing: a local `stat` that tells `refreshVerbs` whether
+ *  `ccd caps` could now answer differently. It is NOT a wire read and NOT a
+ *  read-whitelist grant — no request can name it, and nothing opens it, execs
+ *  it or reads its bytes; the entry is still the only thing the agent ever
+ *  spawns. */
+function ccdBodyPath(home: string): string {
+  return path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
+}
+
 /**
  * §1.4. `error.code ?? 1` used to be the WHOLE answer, which made `{code:1}` from
  * "ccd exited 1" byte-identical to `{code:1}` from "we SIGTERM'd ccd at the
@@ -1026,39 +1037,64 @@ function readBuildStamp(home: string): BuildInfo | undefined {
   return parseBuildInfo(raw) ?? undefined;
 }
 
-/** The list `readCcdVerbs` last produced, plus the stat of the script that
- *  produced it. Per-`startAgent` state, never module-level: the test suite
- *  boots several agents in one process and they must not share a cache. */
-type VerbCache = { verbs: string[]; mtimeMs: number | null; size: number | null };
+/** One file's `(mtimeMs, size)` — what a half of the cache key is made of. */
+type FileStamp = { mtimeMs: number; size: number };
 
-/** Re-exec `ccd caps` only when the script it would exec has changed. `caps`
- *  is a static heredoc and does no I/O, but a spawn on every server tick would
- *  be tens of thousands of bash processes a day to learn nothing. A replacement
- *  identical in mtime AND size reads as no change — the accepted cost of not
- *  hashing.
+/** The list `readCcdVerbs` last produced, plus the stats of BOTH halves of the
+ *  installed `ccd` that produced it: the entry the agent execs and the body that
+ *  entry hands control to. `caps` is printed by the body, so a body-only change
+ *  (a new verb) leaves the entry's bytes and stat as they were — a key made of the
+ *  entry alone would answer the old list for as long as the agent ran. `null`
+ *  means "never measured", and the two halves are only ever written TOGETHER
+ *  (`refreshVerbs`), so one is `null` exactly when the other is. Per-`startAgent`
+ *  state, never module-level: the test suite boots several agents in one process
+ *  and they must not share a cache. */
+type VerbCache = { verbs: string[]; entry: FileStamp | null; body: FileStamp | null };
+
+/** Re-exec `ccd caps` only when the `ccd` it would exec has changed — in EITHER
+ *  half. `caps` is a static heredoc and does no I/O, but a spawn on every server
+ *  tick would be tens of thousands of bash processes a day to learn nothing. A
+ *  replacement identical in mtime AND size reads as no change — the accepted cost
+ *  of not hashing — and a hit needs all four numbers (entry and body, mtime and
+ *  size) to equal the cached key.
  *
- *  Two situations are "no evidence" and must leave `cache` untouched — neither
- *  writes back `mtimeMs`/`size`, and neither overwrites `cache.verbs`:
- *   - `ccd` missing at stat time (a deploy moving it aside mid-install): the
- *     refresh is a no-op, not a clearing event.
- *   - the exec itself failing once the stat DID differ (a timeout under load,
- *     a fork failure, the `+x` bit lost mid-write): a previously-good list
- *     survives instead of being pinned to `[]`.
- *  Because neither writes back the stat, the NEXT caller (the 60 s fleet lane,
- *  not the 2 s pane poll — the exec only happens from that once-a-minute call
- *  path) sees the exact same mismatch it saw this time and retries, so a
- *  transient failure self-heals within a minute instead of being served
- *  forever from a cache entry that (wrongly) claims to already reflect the
- *  current file. */
+ *  Three situations are "no evidence" and must leave `cache` untouched — none
+ *  writes back either half of the key, and none overwrites `cache.verbs`:
+ *   - EITHER half missing or unmeasurable at stat time (a deploy moving the entry
+ *     or the body aside mid-install, an unreadable directory): the refresh is a
+ *     no-op, not a clearing event, and it is a no-op for the WHOLE key — the half
+ *     that did stat is not adopted while the other cannot be measured, or a
+ *     pair that returns identical to the old one would read as a hit on a
+ *     half-updated key. This includes a box whose installed entry is still the
+ *     self-contained pre-launcher one: it has no body to stat, so its list is the
+ *     one read at boot until the install moves it onto the pair.
+ *   - the exec itself failing once a stat DID differ (a timeout under load, a
+ *     fork failure, the `+x` bit lost mid-write, a launcher refusing a body it
+ *     cannot verify): a previously-good list survives instead of being pinned
+ *     to `[]`.
+ *  Because none writes back the key, the NEXT caller (the 60 s fleet lane, not
+ *  the 2 s pane poll — the exec only happens from that once-a-minute call path)
+ *  sees the exact same mismatch it saw this time and retries, so a transient
+ *  failure self-heals within a minute instead of being served forever from a
+ *  cache entry that (wrongly) claims to already reflect the current files. The
+ *  key is written only after a SUCCESSFUL `caps` read, and both stats are taken
+ *  BEFORE that read, so a file replaced while `caps` runs reads as a change on
+ *  the next call rather than being absorbed into the key. */
 async function refreshVerbs(cache: VerbCache, home: string): Promise<string[]> {
-  const st = await statMeasured(resolveSpawnCmd('ccd', home));
-  if (!st.ok) return cache.verbs;
-  if (st.mtimeMs === cache.mtimeMs && st.size === cache.size) return cache.verbs;
+  const [entry, body] = await Promise.all([
+    statMeasured(resolveSpawnCmd('ccd', home)),
+    statMeasured(ccdBodyPath(home)),
+  ]);
+  if (!entry.ok || !body.ok) return cache.verbs;
+  if (
+    cache.entry !== null && entry.mtimeMs === cache.entry.mtimeMs && entry.size === cache.entry.size &&
+    cache.body !== null && body.mtimeMs === cache.body.mtimeMs && body.size === cache.body.size
+  ) return cache.verbs;
   const verbs = await readCcdVerbs(home);
   if (verbs === null) return cache.verbs;
   cache.verbs = verbs;
-  cache.mtimeMs = st.mtimeMs;
-  cache.size = st.size;
+  cache.entry = { mtimeMs: entry.mtimeMs, size: entry.size };
+  cache.body = { mtimeMs: body.mtimeMs, size: body.size };
   return cache.verbs;
 }
 
@@ -1212,8 +1248,10 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     // failed read, and there is no prior list yet to fall back to — [] is the
     // correct answer here, not a special case of it.
     verbs: (await readCcdVerbs(opts.home)) ?? [],
-    mtimeMs: null,
-    size: null,
+    // Both halves of the key stay unset: boot's read is not tied to any stat,
+    // so the first live `caps` request measures the pair and establishes it.
+    entry: null,
+    body: null,
   };
 
   const httpServer: Server = createServer();

@@ -182,7 +182,10 @@ The wire field is named for what it carries: `released` is already a member of `
 - "Stop only" survives in exactly one place: the actions sheet offers it after an archive REFUSAL the operator
   cannot fix from the phone (worktree gone, status unreadable, manifest not buildable, a coordination store the
   server cannot read, a programme it cannot end, or a fleet box whose `ccd` has no `ws-archive`), so no live
-  session is ever left without a way to put it down.
+  session is ever left without a way to put it down. That holds while tmux can be asked. Under a substrate fault
+  (tmux unreachable) the button is disabled, with the fault's title, as "Restart session" already is, because a stop
+  POSTed at a pane nobody can measure during an outage is a stop on a guess (3870). The gate lifts with the fault, so
+  an outage defers the way to put the session down and never removes it.
 - `ccd stop` and `POST /api/sessions/:id/stop` are unchanged.
 - The confirm reads by case:
   - An idle workspace: "Archive this workspace? It goes offline and folds into Archived. Restore brings it back."
@@ -200,9 +203,11 @@ The wire field is named for what it carries: `released` is already a member of `
   both kinds of row; the gate is never keyed on `archivedAt` or `workspace` alone. For a workspace, Restore calls
   `POST /api/sessions/:id/restore` (`ws-restore`). For a main checkout it calls `POST /api/sessions/:id/ensure`:
   `cmd_ensure` clears the stop stamp on the attempt, and the row's own registry fields (wrapper, `rc`, project)
-  decide the respawn, exactly as Revive does today. A merged-and-archived workspace (the `cleanup` bucket) stays
-  in the live list its chip counts and offers Restore too, as it does today; the session header's menu offers
-  Restore in Archive's place on the same rows.
+  decide the respawn, exactly as Revive does today. For a main checkout that is the same `/ensure` that "Restart
+  session" calls, so it is disabled with the fault's title under a substrate fault, in the actions sheet (3868) and in
+  the session header's menu (3869) alike. A workspace's Restore (`ws-restore`) is not that path and is not gated. A
+  merged-and-archived workspace (the `cleanup` bucket) stays in the live list its chip counts and offers Restore too,
+  as it does today; the session header's menu offers Restore in Archive's place on the same rows.
 
 **The server's one door.** `POST /api/sessions/:id/archive` (`server.ts`) takes
 `{ force?, interrupt?, programme?: 'end' }`. EVERY check that can refuse runs before ANY act that cannot be
@@ -215,10 +220,20 @@ undone.
      both kinds of row. Without `interrupt:true`, a busy row refuses `409 session-busy`. Busy is one L0 predicate,
      `archiveInterrupts`: a live `busy`, or a bucket of `working` or `attention` (a question waiting is a turn in
      progress). A live `busy` counts even where the hook says the turn finished, since `ws-archive` refuses on it.
-     A main checkout's stop refuses nothing, so its busy is read fail-closed, by `_ws_status`'s own rule: no pane is
-     idle; a live pane is idle only when its live file reads `idle` and the predicate is false; tmux `unknown`, an
-     unread pane pid or an unread live file is busy. Without `interrupt:true` it is re-read at the stop, so a turn
-     begun during the claim reads or the programme end refuses `409 session-busy`, naming any runs already ended.
+     A main checkout's stop refuses nothing, so its busy is read fail-closed, by `_ws_status`'s own rule (the
+     server's `stopVerdict`): a wrapper with no config dir is unmeasured, whatever the pane; no pane is idle; a live
+     pane is idle only when its live file reads `idle` and the predicate is false. A measured busy refuses
+     `409 session-busy` (`interrupt:true` lets it proceed). Whatever could not be read is not busy but unmeasured,
+     and refuses `409 status-unknown` whatever the consents (3881): no config dir, tmux `unknown`, an unread pane
+     pid, an absent or unreadable live file, a status word `_ws_status` could not extract, and, the server's own
+     stricter arm, a missing frame row. Without `interrupt:true` it is re-read at the stop, so a turn begun during
+     the claim reads or the programme end refuses `409 session-busy` (or `status-unknown`, if the state became
+     unreadable), naming any runs already ended.
+     The same fail-closed read applies to a workspace whenever `programme:'end'` or `interrupt:true` is set: the end
+     cannot be undone, and a stop that `interrupt:true` sends runs before `ws-archive`'s own status read could refuse
+     it. A measured busy refuses `409 session-busy` unless `interrupt:true`, and one the server could not measure
+     refuses `409 status-unknown`, before anything ends or is stopped (3877, 3881). Every other workspace archive,
+     with neither, keeps the frame's row, with `ws-archive`'s status read behind it.
    - For a workspace, the worktree is not PROVEN gone, and `ws-archive`'s verb is supported. The server box can
      read a worktree only in local mode: in remote mode the fleet agent's read roots exclude `~/worktrees`, so an
      unmeasured worktree is left to `ws-archive`'s own refusal, which precedes its act.
@@ -249,8 +264,9 @@ undone.
 **Refusal codes** (`session-busy`, `coordinator-has-open-runs`, `programme-partly-ended`, and the existing
 `run-open`, a bare literal written twice in `server.ts` and once in the PWA today) are declared once, in an L0
 `ARCHIVE_REFUSALS` const. So are the three refusals "Stop only" answers, `worktree-gone`, `status-unknown` and
-`manifest-unbuildable`: `ws-archive`'s own, read off its `die` lines, and the server's only where it proves the
-worktree absent. Server and PWA read that const, and a test pins it.
+`manifest-unbuildable`: `ws-archive`'s own, read off its `die` lines. The server issues two of them itself:
+`status-unknown` where its fail-closed read (step 1) could not measure the turn, and `worktree-gone` where it
+proves the worktree absent. Server and PWA read that const, and a test pins it.
 
 **The census.** With `programme:'end'`, the archive route becomes a coordination write, session-gated with no box
 token, like the abandon door (D-282). It is added to the box-token census the way CLAUDE.md records the kickoff
@@ -477,9 +493,12 @@ agent frame in remote mode.
 - **Archiving a coordinator ends a programme the operator meant to pause.** Only with an explicit
   `programme:'end'`. There is no keep, and pausing is the pause switch (§5.2).
 - **Ending a programme succeeds, then the archive refuses.** Every refusable check the server can measure runs
-  first, and a partly ended programme stops the door before any stop or archive. What only `ccd` measures can still
-  refuse after the end; that answer names the runs it ended, and the sheet offers "Stop only" where it applies
-  (§5.2).
+  first, and a partly ended programme stops the door before any stop or archive. A workspace's turn is among them
+  when the programme is to end (3877, 3881): before the end, a measured busy workspace is refused `session-busy`
+  unless `interrupt:true`, and an unmeasurable one `status-unknown` whatever the consents. What only `ccd`
+  measures can still refuse after the end, which includes the worktree in remote mode and the archive manifest
+  (and its own `status-unknown` or `session-busy`, should the state change after the server's read); that answer
+  names the runs it ended, and the sheet offers "Stop only" where it applies (§5.2).
 - **A busy archive loses a turn.** Only after the busy confirm, which alone sends `interrupt:true`.
 - **The stop succeeds and the archive refuses.** The row stays visible, stopped, with its reason and Archive again
   (§5.2).

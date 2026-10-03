@@ -532,8 +532,9 @@ of this verb's tokens share names with the audit's. So the server composes the s
 the status; the PWA renders what it is given and maps no token itself. A reclaimed child's row stops
 offering to open its session, which no longer exists.
 
-**No child ever appears in the reap or archive sheets.** Both are gated on a workspace being archived, which
-a child never is.
+**No child appears in the reap or archive sheets unless a person archived it by hand.** Every session offers
+Archive (workspace lifecycle §5.2), so a child can be archived like any workspace; "Archive all" skips children
+(workspace lifecycle §5.1, §6 item 3).
 
 **One fleet-level attention item** collects children under a terminal refusal, and children whose reclaim
 has kept failing past the defer ceiling (retries back off in between), with each one's sentence.

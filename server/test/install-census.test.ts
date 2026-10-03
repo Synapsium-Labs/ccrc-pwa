@@ -688,6 +688,64 @@ function rmFOperands(body: string): string[] {
 
 // ── the censuses ──────────────────────────────────────────────────────────
 
+// ── ccd's direct-entry PAIR (D-3696) ────────────────────────────────────
+// `_inst_bins` no longer places `ccd` with `_inst_atomic`, and deploy.sh no
+// longer with `install_atomic`: both call ONE program, `ccd/ccd-entry-install.py`
+// (`_inst_ccd_pair` in ccrc, `install_ccd_pair` in deploy.sh), which renders the
+// launcher onto PATH and publishes the Bash body under ~/.local/libexec/ccrc.
+// That program declares its two sources and two destinations ONCE, as four
+// constant lines, and these readers derive the pair from those lines — never a
+// list typed here. The launcher's destination joins the `.local/bin` censuses
+// as an ordinary name, so every direction below checks it like any other; the
+// body's destination is OUTSIDE `.local/bin`, so it gets a describe of its own
+// (placement, removal, backup) rather than a silent drop.
+const PAIR_HELPER_REL = 'ccd/ccd-entry-install.py';
+const PAIR_HELPER = readFileSync(path.resolve(here, '..', '..', PAIR_HELPER_REL), 'utf8');
+
+/** The four paths the pair publisher declares, read from its own text. */
+function pairDecl(): { bodySource: string; templateSource: string; entryDest: string; bodyDest: string } {
+  const one = (name: string): string => {
+    const all = [...PAIR_HELPER.matchAll(new RegExp(`^${name} = '([^'\\n]+)'$`, 'gm'))];
+    if (all.length !== 1) {
+      throw new Error(`install-census.test.ts: expected exactly one \`${name} = '…'\` line in ${PAIR_HELPER_REL}, `
+        + `found ${all.length}. This reader has gone stale — re-point it; do NOT retype the pair here.`);
+    }
+    return all[0]![1]!;
+  };
+  return { bodySource: one('BODY_SOURCE'), templateSource: one('TEMPLATE_SOURCE'), entryDest: one('ENTRY_DEST'), bodyDest: one('BODY_DEST') };
+}
+
+/** The `.local/bin` name the pair publisher places, when `body` calls `publisher`
+ *  — exactly once, or a THROW: a second call is a second publication nobody ordered. */
+function pairBin(body: string, publisher: string, where: string): Set<string> {
+  const n = calls(body, publisher).length;
+  if (n === 0) return new Set();
+  if (n !== 1) throw new Error(`install-census.test.ts: ${where} calls ${publisher} ${n} times, not once`);
+  const { entryDest } = pairDecl();
+  const m = /^\.local\/bin\/([^/]+)$/.exec(entryDest);
+  if (m === null) {
+    throw new Error(`install-census.test.ts: ${PAIR_HELPER_REL}'s ENTRY_DEST "${entryDest}" is not one name under .local/bin — teach this reader`);
+  }
+  return new Set([m[1]!]);
+}
+
+/** The helper path a pair call site runs it from, read out of `text`'s
+ *  `<root>ccd/…py` words, which must all be the one tracked helper. */
+function pairHelperFrom(text: string, root: string, where: string): string {
+  const found = new Set([...text.matchAll(/(?:"\$tree\/|~\/ccrc\/)([A-Za-z0-9_./-]+\.py)/g)].map((m) => m[1]!));
+  if (found.size !== 1) {
+    throw new Error(`install-census.test.ts: ${where} names ${found.size} helper path(s) under ${root} (${[...found].join(', ')}), not one`);
+  }
+  return [...found][0]!;
+}
+
+/** The body of deploy.sh's pair publisher. */
+function deployPairBody(): string {
+  const m = /\ninstall_ccd_pair\(\) \{([\s\S]*?)\n\}/.exec(deployText());
+  if (m === null) throw new Error('install-census.test.ts: deploy/deploy.sh has no `install_ccd_pair() {` — extractor stale');
+  return m[1]!;
+}
+
 /** Every name the destination argument of an `_inst_atomic` call in
  *  `_inst_bins` places in `$HOME/.local/bin`. */
 function placedBins(): Set<string> {
@@ -695,7 +753,17 @@ function placedBins(): Set<string> {
   const body = fnBody(fn);
   const local = assignments(body);
   bindsExactlyOnce(fn, local, 'bin', BIN_DIR);
-  return census(fn, 'placement', argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1), [BIN_DIR], local);
+  const placed = census(fn, 'placement', argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1), [BIN_DIR], local);
+  for (const n of pairBin(body, '_inst_ccd_pair', fn)) placed.add(n);
+  return placed;
+}
+
+/** deploy.sh's `.local/bin` placements: its `install_atomic` destinations, and
+ *  the launcher its pair publisher places. */
+function deployPlacedBins(): Set<string> {
+  const placed = deployPlaced('install_atomic', DEPLOY_BIN_DIRS);
+  for (const n of pairBin(deployCode(), 'install_ccd_pair', DEPLOY_WHERE)) placed.add(n);
+  return placed;
 }
 
 /**
@@ -1059,6 +1127,20 @@ function ccrcTreeSources(): Set<string> {
       }
     }
   }
+  // ccd's pair: `_inst_bins` hands `"$tree"` (bound to `$BOX_TREE_DIR` above)
+  // to `_inst_ccd_pair`, which runs the helper from that tree, and the helper
+  // reads its two declared sources out of it.
+  const bins = fnBody('_inst_bins');
+  if (calls(bins, '_inst_ccd_pair').length > 0) {
+    const args = calls(bins, '_inst_ccd_pair')[0]!;
+    if (args.length !== 1 || args[0] !== '$tree') {
+      throw new Error(`install-census.test.ts: _inst_bins calls _inst_ccd_pair with ${JSON.stringify(args)}, not the one "$tree" this reader resolves`);
+    }
+    const { bodySource, templateSource } = pairDecl();
+    out.add(pairHelperFrom(fnBody('_inst_ccd_pair'), '$tree/', '_inst_ccd_pair'));
+    out.add(bodySource);
+    out.add(templateSource);
+  }
   return out;
 }
 
@@ -1095,6 +1177,13 @@ function deployTreeSources(): Set<string> {
       }
       out.add(p.slice(root.length));
     }
+  }
+  // ccd's pair, run ON THE BOX out of the rsynced ~/ccrc tree.
+  if (calls(code, 'install_ccd_pair').length > 0) {
+    const { bodySource, templateSource } = pairDecl();
+    out.add(pairHelperFrom(deployPairBody(), '~/ccrc/', 'install_ccd_pair'));
+    out.add(bodySource);
+    out.add(templateSource);
   }
   return out;
 }
@@ -1482,7 +1571,7 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
 
   it('every binary _inst_bins places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.bins)', () => {
     const placed = placedBins();
-    const deployed = deployPlaced('install_atomic', DEPLOY_BIN_DIRS);
+    const deployed = deployPlacedBins();
     expect(placed.size,
       'the _inst_bins extractor found too few placed binaries — it has gone stale, unless the function it reads really lost most of them')
       .toBeGreaterThan(BIN_FLOOR);
@@ -1595,7 +1684,7 @@ describe('neither installer ever writes a name another repository owns on the li
     const sources: [string, Set<string>][] = [
       ['_inst_bins', placedBins()],
       ['_inst_units', placedUnits()],
-      [`${DEPLOY_WHERE}'s install_atomic`, deployPlaced('install_atomic', DEPLOY_BIN_DIRS)],
+      [`${DEPLOY_WHERE}'s install_atomic`, deployPlacedBins()],
       [`${DEPLOY_WHERE}'s _unit_atomic`, deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS)],
     ];
     // Vacuity, before anything else: an empty destination set would pass
@@ -1617,6 +1706,52 @@ describe('neither installer ever writes a name another repository owns on the li
         + 'silently. Rename the destination.')
         .toEqual([]);
     }
+  });
+});
+
+describe('ccd\'s pair (D-3696): the body under ~/.local/libexec is placed, removed and backed up as one pair with its launcher', () => {
+  it('both installers run the ONE tracked publisher, and it declares one launcher under .local/bin and one body under .local/libexec/ccrc', () => {
+    const { entryDest, bodyDest, bodySource, templateSource } = pairDecl();
+    expect(entryDest).toMatch(/^\.local\/bin\/[^/]+$/);
+    expect(bodyDest, 'the body lives in ccrc\'s own libexec directory').toMatch(/^\.local\/libexec\/ccrc\/[^/]+$/);
+    expect([bodySource, templateSource]).toEqual(['ccd/ccd', 'ccd/ccd-entry.py']);
+    expect(pairBin(fnBody('_inst_bins'), '_inst_ccd_pair', '_inst_bins').size, '_inst_bins publishes the pair').toBe(1);
+    expect(pairBin(deployCode(), 'install_ccd_pair', DEPLOY_WHERE).size, 'deploy.sh publishes the pair').toBe(1);
+    expect(pairHelperFrom(fnBody('_inst_ccd_pair'), '$tree/', '_inst_ccd_pair')).toBe(PAIR_HELPER_REL);
+    expect(pairHelperFrom(deployPairBody(), '~/ccrc/', 'install_ccd_pair')).toBe(PAIR_HELPER_REL);
+  });
+
+  it('the launcher derives its body from the SAME two paths the publisher declares (D-3699: the publisher re-asks the launcher\'s question)', () => {
+    const { entryDest, bodyDest } = pairDecl();
+    const launcher = readFileSync(path.resolve(here, '..', '..', 'ccd', 'ccd-entry.py'), 'utf8');
+    const one = (name: string): string => {
+      const all = [...launcher.matchAll(new RegExp(`^${name} = '([^'\\n]+)'$`, 'gm'))];
+      expect(all, `ccd/ccd-entry.py declares ${name} once`).toHaveLength(1);
+      return all[0]![1]!;
+    };
+    expect(one('ENTRY_SUFFIX')).toBe(`/${entryDest}`);
+    expect(one('BODY_SUFFIX')).toBe(`/${bodyDest}`);
+  });
+
+  it('the uninstall census removes the body by name, and its directory only with rmdir — never rm -r', () => {
+    const { bodyDest } = pairDecl();
+    const body = fnBody('_uninst_tree_bins');
+    expect(rmFOperands(body), `_uninst_tree_bins does not rm -f the body at $HOME/${bodyDest}`).toContain(`$HOME/${bodyDest}`);
+    const dir = `$HOME/${path.posix.dirname(bodyDest)}`;
+    expect(calls(body, 'rmdir').map(operands), `_uninst_tree_bins does not rmdir ${dir} (only-if-empty)`).toContainEqual([dir]);
+    const recursive = calls(body, 'rm').filter((a) => /^-[A-Za-z]*[rR]/.test(a[0] ?? '')).flatMap(operands)
+      .filter((o) => o === dir || o.startsWith('$HOME/.local/libexec'));
+    expect(recursive, 'a recursive rm reaches into ~/.local/libexec, where an operator\'s files may live').toEqual([]);
+  });
+
+  it('the update backup takes the body and then the launcher — arm 3 restores in that order', () => {
+    const { bodyDest, entryDest } = pairDecl();
+    const sources = calls(fnBody('_upd_backup_set'), '_upd_backup_copy').map((a) => a[0]!);
+    const b = sources.indexOf(`$HOME/${bodyDest}`);
+    const e = sources.indexOf(`$HOME/${entryDest}`);
+    expect(b, `_upd_backup_set does not back up the body at $HOME/${bodyDest}`).toBeGreaterThan(-1);
+    expect(e, `_upd_backup_set does not back up the launcher at $HOME/${entryDest}`).toBeGreaterThan(-1);
+    expect(b, 'the body must be backed up (and so restored) BEFORE the launcher that names its digest').toBeLessThan(e);
   });
 });
 

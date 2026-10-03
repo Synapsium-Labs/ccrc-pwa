@@ -1000,7 +1000,7 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
     expect(verdict(NEW_BANNER)).toBe('1:');
     expect(reads()).toBe(1);
     const p = h.sh(`_transcript_path ${ID}`);
-    expect(h.reg(ID, 'tdate')).toBe(`${BORN} ${Math.floor(fs.statSync(p).mtimeMs / 1000)} ${fs.statSync(p).size} 3 ${BANNER_AT} ${p}`);
+    expect(h.reg(ID, 'tdate')).toBe(`${BORN} ${Math.floor(fs.statSync(p).mtimeMs / 1000)} ${fs.statSync(p).size} 3 ${BANNER_AT} - - ${p}`);
     expect(verdict(NEW_BANNER)).toBe('1:');
     expect(verdict(FOOTER)).toBe('1:');
     expect(reads()).toBe(1);
@@ -1099,6 +1099,112 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
     // Likewise, an rc 1 record cannot carry a row epoch.
     h.sh(`_reg_set ${ID} tdate "${BORN} ${m} ${s} 1 ${BANNER_AT} ${p}"`);
     expect(verdict(NEW_BANNER)).toBe('1:');
+    expect(reads()).toBe(2);
+  });
+});
+
+// ── The `dated` read, and the row `_limit_read` caches (session-continuity §5.4
+// rule 2, D-3498). `dated` mode is `stuck` mode plus the rate-limit row's own
+// epoch as a third field, so the rescue waits read `resetsAt`, the window and the
+// row's epoch from the answer the verdict itself came from — cached in
+// `$REG/<id>.tdate` on the process and the file, never a second read on the
+// 5 s tick. Every other answer — rc 1, 2, 3, and a 401's rc 0 — is stuck mode's.
+describe('_transcript_limit_banner dated mode, and the row _limit_read caches (session-continuity §5.4 rule 2)', () => {
+  const read = (p: string, since: string | number, mode = 'dated'): { rc: string; out: string } => {
+    const raw = h.sh(`out=$(_transcript_limit_banner ${JSON.stringify(p)} ${mode} ${JSON.stringify(String(since))}); rc=$?; printf '%s|%s|' "$rc" "$out"`);
+    const i = raw.indexOf('|');
+    return { rc: raw.slice(0, i), out: raw.slice(i + 1, -1) };
+  };
+  const at = (row: string, epoch: number): string => JSON.stringify({ ...JSON.parse(row), timestamp: iso(epoch) });
+  /** `_limit_read`, with every transcript read it makes counted. */
+  const COUNTED = `eval "$(declare -f _transcript_limit_banner | sed '1s/^_transcript_limit_banner/_tlb_real/')";
+    _transcript_limit_banner() { echo transcript-read >> "$HOME/ccd-calls"; _tlb_real "$@"; };`;
+  const reads = (): number => h.calls().filter((l) => l === 'transcript-read').length;
+  const limitRead = (p: string, born: number): string =>
+    h.sh(`${COUNTED} out=$(_limit_read ${ID} ${JSON.stringify(p)} ${born}); echo "$?|$out|"`);
+  const key = (p: string, born: number): string =>
+    `${born} ${Math.floor(fs.statSync(p).mtimeMs / 1000)} ${fs.statSync(p).size}`;
+
+  it('a rate-limit row this process wrote: rc 0, stuck mode\'s two fields, then the row\'s own epoch', () => {
+    seed(); const p = writeTranscript([L.human(), L.banner()]);
+    expect(read(p, BANNER_AT)).toEqual({ rc: '0', out: `1789430400\tseven_day\t${BANNER_AT}` });
+    expect(read(p, BANNER_AT, 'stuck')).toEqual({ rc: '0', out: '1789430400\tseven_day' });
+  });
+  it('no since, or one that is not digits: still rc 0 — never taken away — but the row cannot be placed: `-`', () => {
+    seed(); const p = writeTranscript([L.human(), L.banner()]);
+    expect(read(p, '')).toEqual({ rc: '0', out: '1789430400\tseven_day\t-' });
+    expect(read(p, 'soon')).toEqual({ rc: '0', out: '1789430400\tseven_day\t-' });
+  });
+  it('a row without quotaLimits keeps both empty fields, so the epoch is always the third', () => {
+    seed(); const p = writeTranscript([L.banner({ quotaLimits: undefined })]);
+    expect(read(p, BANNER_AT)).toEqual({ rc: '0', out: `\t\t${BANNER_AT}` });
+  });
+  it('rc 1, rc 3 and a 401 are stuck mode\'s answers, byte for byte', () => {
+    seed();
+    const p = writeTranscript([L.human(), L.banner()]);
+    expect(read(p, BANNER_AT + 60)).toEqual({ rc: '3', out: String(BANNER_AT) });
+    expect(read(writeTranscript([L.banner(), L.metaPrompt()]), BANNER_AT)).toEqual({ rc: '1', out: '' });
+    expect(read(writeTranscript([AUTH()]), ROW_AT)).toEqual({ rc: '0', out: '\t\tauthentication_failed' });
+  });
+  // THE MEASUREMENT BEHIND "LOST AUTH DATES NOTHING". Whoever wrote the 401, it
+  // is newer than the rate-limit row, so that row is never the answer: with no
+  // `since` (or a torn one) the 401 is not counted and still ends the banner's
+  // run (rc 1); a 401 this process wrote is the answer, with no epoch or reset;
+  // a 401 an earlier process wrote ends the run as well (rc 1).
+  it.each([
+    ['[banner, turn, 401]', () => [L.banner(), at(L.assistant(), BANNER_AT + 60), at(AUTH(), BANNER_AT + 120)]],
+    ['[banner, 401]', () => [L.banner(), at(AUTH(), BANNER_AT + 120)]],
+  ])('%s: no since or a torn one, rc 1; born before the 401, the 401; born after it, rc 1 — in both modes', (_what, rows) => {
+    seed(); const p = writeTranscript(rows());
+    for (const mode of ['dated', 'stuck']) {
+      expect(read(p, '', mode).rc, mode).toBe('1');
+      expect(read(p, 'soon', mode).rc, mode).toBe('1');
+      expect(read(p, BANNER_AT + 90, mode), mode).toEqual({ rc: '0', out: '\t\tauthentication_failed' });
+      expect(read(p, BANNER_AT + 180, mode).rc, mode).toBe('1');
+    }
+  });
+
+  it('_limit_read caches the rc-0 row beside the answer, and prints it from the cache without a read', () => {
+    seed(); const p = writeTranscript([L.human(), L.banner()]);
+    expect(limitRead(p, BANNER_AT)).toBe(`0|${BANNER_AT}\t1789430400\tseven_day|`);
+    expect(h.reg(ID, 'tdate')).toBe(`${key(p, BANNER_AT)} 0 ${BANNER_AT} 1789430400 seven_day ${p}`);
+    expect(limitRead(p, BANNER_AT)).toBe(`0|${BANNER_AT}\t1789430400\tseven_day|`);
+    expect(reads()).toBe(1);
+  });
+  it('each field is its own: a row with no quotaLimits caches `- -` after its epoch, never its epoch as a reset', () => {
+    seed(); const p = writeTranscript([L.banner({ quotaLimits: undefined })]);
+    expect(limitRead(p, BANNER_AT)).toBe(`0|${BANNER_AT}\t-\t-|`);
+    expect(h.reg(ID, 'tdate')).toBe(`${key(p, BANNER_AT)} 0 ${BANNER_AT} - - ${p}`);
+  });
+  it('a 401 caches rc 0 with nothing dated; rc 1 caches `- - -`; rc 3 its row and `- -`', () => {
+    seed();
+    const q = writeTranscript([AUTH()]);
+    expect(limitRead(q, ROW_AT)).toBe('0|-\t-\t-|');
+    expect(h.reg(ID, 'tdate')).toBe(`${key(q, ROW_AT)} 0 - - - ${q}`);
+    const r = writeTranscript([L.banner(), L.metaPrompt()]);
+    expect(limitRead(r, BANNER_AT)).toBe('1||');
+    expect(h.reg(ID, 'tdate')).toBe(`${key(r, BANNER_AT)} 1 - - - ${r}`);
+    const s = writeTranscript([L.human(), L.banner()]);
+    expect(limitRead(s, BANNER_AT + 60)).toBe(`3|${BANNER_AT}|`);
+    expect(h.reg(ID, 'tdate')).toBe(`${key(s, BANNER_AT + 60)} 3 ${BANNER_AT} - - ${s}`);
+  });
+  it('a record in the shape before this wave is re-read, never trusted, and rewritten', () => {
+    seed(); const p = writeTranscript([L.human(), L.banner()]);
+    // The old shape "<key> <rc> <row|-> <path>" for THIS key: had it been parsed
+    // it would have answered rc 0 with no row — no wait, for as long as the file
+    // stood still.
+    h.sh(`_reg_set ${ID} tdate "${key(p, BANNER_AT)} 0 - ${p}"`);
+    expect(limitRead(p, BANNER_AT)).toBe(`0|${BANNER_AT}\t1789430400\tseven_day|`);
+    expect(reads()).toBe(1);
+    expect(h.reg(ID, 'tdate')).toBe(`${key(p, BANNER_AT)} 0 ${BANNER_AT} 1789430400 seven_day ${p}`);
+  });
+  it('a torn record for this key — an rc 1 with a row, an rc 3 with a reset — is never trusted', () => {
+    seed(); const p = writeTranscript([L.human(), L.banner()]);
+    h.sh(`_reg_set ${ID} tdate "${key(p, BANNER_AT)} 1 ${BANNER_AT} - - ${p}"`);
+    expect(limitRead(p, BANNER_AT)).toBe(`0|${BANNER_AT}\t1789430400\tseven_day|`);
+    expect(reads()).toBe(1);
+    h.sh(`_reg_set ${ID} tdate "${key(p, BANNER_AT + 60)} 3 ${BANNER_AT} 1789430400 - ${p}"`);
+    expect(limitRead(p, BANNER_AT + 60)).toBe(`3|${BANNER_AT}|`);
     expect(reads()).toBe(2);
   });
 });

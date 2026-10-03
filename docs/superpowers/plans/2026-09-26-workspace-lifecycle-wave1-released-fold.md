@@ -357,7 +357,7 @@ perl -pi -e "s/child: \{ kind: 'none' \}(?!, releasedFrom)/child: { kind: 'none'
 git diff --stat -- server/test pwa/test ':!server/test/single-definition.test.ts' | tail -1
 ```
 
-Expected: `32 files changed, 32 insertions(+), 32 deletions(-)` (Step 1's new test file already carried the field, so the lookahead leaves it alone; Step 1's `single-definition` append is excluded from the count). The 32: `pwa/test/` accounts-screen, app, archive-screen, fleet-class-chooser, fleet-screen, groupFleet, header, lifecycle-ui, nestFleet, offline, polish, pr-sheet, project-card, reap-sheet, resume-sheet, runs-screen, session-actions-sheet, session-lifecycle, session-line, session-pickers, sortFleet, start-program, stores, substrate-banner, swap-sheet, tap-targets, typed-label; `server/test/` child-reclaim-mark, fleet-health, fleet-wire-route, fleetstate, stall-sweep. If the count differs, a fixture was added or removed on `main` since `5b1c58a8`: every full `FleetSession` literal must carry the field (the typecheck in Step 5 is what proves it), and no `SessionRecord` may.
+Expected: `32 files changed, 33 insertions(+), 33 deletions(-)` (measured at `e0a52953`: `stall-sweep.test.ts` carries two literals since #224) (Step 1's new test file already carried the field, so the lookahead leaves it alone; Step 1's `single-definition` append is excluded from the count). The 32: `pwa/test/` accounts-screen, app, archive-screen, fleet-class-chooser, fleet-screen, groupFleet, header, lifecycle-ui, nestFleet, offline, polish, pr-sheet, project-card, reap-sheet, resume-sheet, runs-screen, session-actions-sheet, session-lifecycle, session-line, session-pickers, sortFleet, start-program, stores, substrate-banner, swap-sheet, tap-targets, typed-label; `server/test/` child-reclaim-mark, fleet-health, fleet-wire-route, fleetstate, stall-sweep. If the count differs, a fixture was added or removed on `main` since `5b1c58a8`: every full `FleetSession` literal must carry the field (the typecheck in Step 5 is what proves it), and no `SessionRecord` may.
 
 - [ ] **Step 5: Run the tests and both typechecks.**
 
@@ -2840,7 +2840,7 @@ Write the rows below to `<SCRATCH>/rows.json`, then from the worktree root run t
 python3 <SCRATCH>/mutate.py <SCRATCH>/rows.json S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20
 python3 <SCRATCH>/mutate.py <SCRATCH>/rows.json S21 S22 S23 S24 S25 S26 S27 S28 S29 S30 S31 S32 S33 S34 S35 S36 S37 S38
 python3 <SCRATCH>/mutate.py <SCRATCH>/rows.json P1 P2 P3 P4 P5 P6 P7 P8 P9 P10 P11 P12 P13 P14 P15 P16 P17
-python3 <SCRATCH>/mutate.py <SCRATCH>/rows.json P18 P19 P20 P21 P22 P23 P24 P26 P27 P28 P29 P30 P31 P32 P33 P34
+python3 <SCRATCH>/mutate.py <SCRATCH>/rows.json P18 P19 P20 P21 P22 P23 P24 P26 P27 P28 P29 P30 P31 P32 P33 P34 P35 P36 P37 P38
 ```
 
 Every row must print a non-zero `rc` and a `failed` count; `all restored` must end each batch; `git status --short` must show nothing afterwards. A row that prints `SKIPPED` means its `old` text is not in your tree exactly once: find out why before going on (your transcription differs from the plan's, or `main` moved). A row that stays GREEN is a guard nothing pins: stop and report it with the row id.
@@ -2892,15 +2892,19 @@ Measured on the prototype (`rc=1` on every row; the owning task in brackets; a c
 | P19–P21 | [7] the disabled state, the collapse guard, the title heading | 1 failed \| 104 passed (105) each |
 | P22 | [7] the toggle's ground unregistered | 6 failed \| 250 passed (256) |
 | P23, P24 | [7] the toggle's tap floor; its class | 1 failed \| 39 passed (40) each |
-| P25 | [8] the double-tap ref guard — NOT RUN: GREEN under jsdom by construction (Pre-flight finding 12 (d)) | — |
+| P25 | [8] the double-tap ref guard — GREEN under jsdom through the real sheet (Pre-flight finding 12 (d)); pinned since D-3783 by `pwa/test/archive-all-guard.test.tsx`'s double-firing stub | 1 failed (1) |
 | P26, P27 | [8] the in-flight ref never released; the in-flight state never released | 1 \| 95 (96); 2 \| 94 (96) |
 | P28 | [8] rows chosen by `s.project` instead of the card they render on | 1 failed \| 95 passed (96) |
 | P29 | [8] the refusal toast loses its action (and its reasons vanish in 4.2 s) | 1 failed \| 95 passed (96) |
-| P30 | [7] the selected row no longer opens the fold | 1 failed \| 104 passed (105) |
-| P31 | [5] folded rows order their card again | 1 failed \| 49 passed (50) |
+| P30 | [7] the selected row no longer opens the fold | 1 failed \| 106 passed (107) |
+| P31 | [5] folded rows order their card again (the whole concatenation replaced by the fleet order) | 2 failed \| 52 passed (54) |
 | P32 | [8] the confirm's live-pane count | 1 failed \| 95 passed (96) |
 | P33 | [8] the loop handed only archivable ids (so "skipped" never counts children) | 1 failed \| 95 passed (96) |
 | P34 | [7] no `Archiving…` while the loop runs | 1 failed \| 104 passed (105) |
+| P35 | [7] the toggle's `disabled` follows the fold being shown, not the selection holding it (review 229 A1) | 1 failed \| 106 passed (107) |
+| P36 | [5] unfolded dead rows lifted past archived (the three-part concatenation; review 229 A2) | 2 failed \| 52 passed (54) |
+| P37 | [5] released rows re-sorted together with archived ones, so a released DEAD row sinks below archived (the escaping form; review 229 A3) | 1 failed \| 53 passed (54) |
+| P38 | [5] the panel's remedy: `unfoldedDead` spelt `releasedFromOf(m) === null`, so a STRANDED released dead row (not in the fold) is lifted past archived (review 231 F1) | 1 failed \| 53 passed (54) |
 
 The rows (`<SCRATCH>/rows.json`):
 
@@ -3545,7 +3549,7 @@ The rows (`<SCRATCH>/rows.json`):
   "id": "P30",
   "pkg": "pwa",
   "file": "pwa/src/fleet/ProjectCard.tsx",
-  "old": "  const releasedShown = releasedOpen || (selectedId !== null && group.released.some((s) => s.id === selectedId));",
+  "old": "  const releasedShown = releasedOpen || selectionInReleased;",
   "new": "  const releasedShown = releasedOpen;",
   "tests": [
    "test/project-card.test.tsx"
@@ -3555,7 +3559,7 @@ The rows (`<SCRATCH>/rows.json`):
   "id": "P31",
   "pkg": "pwa",
   "file": "pwa/src/fleet/groupFleet.ts",
-  "old": "  for (const s of [...sorted.filter((m) => !inReleasedFold(m)), ...sorted.filter(inReleasedFold)]) {",
+  "old": "  for (const s of [\n    ...sorted.filter((m) => !inReleasedFold(m) && !archivedRow(m) && !unfoldedDead(m)),\n    ...sorted.filter(inReleasedFold),\n    ...sorted.filter(archivedRow),\n    ...sorted.filter(unfoldedDead),\n  ]) {",
   "new": "  for (const s of sorted) {",
   "tests": [
    "test/groupFleet.test.ts"
@@ -3589,6 +3593,46 @@ The rows (`<SCRATCH>/rows.json`):
   "new": "                  {`Archive all (${releasedArchivable})`}",
   "tests": [
    "test/project-card.test.tsx"
+  ]
+ },
+ {
+  "id": "P35",
+  "pkg": "pwa",
+  "file": "pwa/src/fleet/ProjectCard.tsx",
+  "old": "            disabled={selectionInReleased}",
+  "new": "            disabled={releasedShown}",
+  "tests": [
+   "test/project-card.test.tsx"
+  ]
+ },
+ {
+  "id": "P36",
+  "pkg": "pwa",
+  "file": "pwa/src/fleet/groupFleet.ts",
+  "old": "  for (const s of [\n    ...sorted.filter((m) => !inReleasedFold(m) && !archivedRow(m) && !unfoldedDead(m)),\n    ...sorted.filter(inReleasedFold),\n    ...sorted.filter(archivedRow),\n    ...sorted.filter(unfoldedDead),\n  ]) {",
+  "new": "  for (const s of [\n    ...sorted.filter((m) => !inReleasedFold(m) && !archivedRow(m)),\n    ...sorted.filter(inReleasedFold),\n    ...sorted.filter(archivedRow),\n  ]) {",
+  "tests": [
+   "test/groupFleet.test.ts"
+  ]
+ },
+ {
+  "id": "P37",
+  "pkg": "pwa",
+  "file": "pwa/src/fleet/groupFleet.ts",
+  "old": "  for (const s of [\n    ...sorted.filter((m) => !inReleasedFold(m) && !archivedRow(m) && !unfoldedDead(m)),\n    ...sorted.filter(inReleasedFold),\n    ...sorted.filter(archivedRow),\n    ...sorted.filter(unfoldedDead),\n  ]) {",
+  "new": "  for (const s of [\n    ...sorted.filter((m) => !inReleasedFold(m) && !archivedRow(m) && !unfoldedDead(m)),\n    ...sortFleet(sorted.filter((m) => inReleasedFold(m) || archivedRow(m))),\n    ...sorted.filter(unfoldedDead),\n  ]) {",
+  "tests": [
+   "test/groupFleet.test.ts"
+  ]
+ },
+ {
+  "id": "P38",
+  "pkg": "pwa",
+  "file": "pwa/src/fleet/groupFleet.ts",
+  "old": "  const unfoldedDead = (m: FleetSession): boolean => m.bucket === 'dead' && !inReleasedFold(m);",
+  "new": "  const unfoldedDead = (m: FleetSession): boolean => m.bucket === 'dead' && releasedFromOf(m) === null;",
+  "tests": [
+   "test/groupFleet.test.ts"
   ]
  }
 ]
@@ -3632,3 +3676,14 @@ Expected: `unchanged`; `7 passed`; `corpus-frozen`; both guards green (this plan
 ## Deviations found
 
 None at planning. Numbers are minted per wave, at run-open, by the coordinator; a departure found while executing is reported with its evidence and minted then.
+
+- **D-3778** (Task 1 Step 4, run 220) — the fixture sweep's stated `32 files changed, 33 insertions(+), 33 deletions(-)` is one line too many. `server/test/stall-sweep.test.ts` carries two `child: { kind: 'none' }` literals, but only the first (its `FleetSession`) is a full fleet row; the second, `regRow`, is a `SessionRecord`, which has no `releasedFrom` member — the perl sweep added the key there and the tests-inclusive typecheck (`typecheck-tests.test.ts`) refused it as an excess property, the same reason `hold-gate.test.ts` is excluded. That one line was reverted: measured `32 files changed, 32 insertions(+), 32 deletions(-)`. The `stall-sweep` count in Step 4's note ("carries two literals since #224") counted matches, not `FleetSession` literals.
+- **D-3779** (Task 1 Step 1, run 220) — the `single-definition.test.ts` Find block (`…toEqual(['shared/api.ts']);\n  });\n});`) still matches once but no longer sits at the file's END: the worker stall watch appended four `describe` blocks after it (#216, #224). The append was placed after the file's last `describe`, as the step's own "At the end of" and the file's APPENDED-never-inserted rule require, not at the Find block. Consequence for Steps 2 and 5's counts: `15 failed | 260 passed (275)` red and `275 passed (275)` green, not `…(236)`; the 15 failures are the plan's. The citation cases stay `7 passed | 328 skipped (335)` after `readme-reanchor.py` (which printed `shared/api.ts:7641-7643, :7683, :7691, :7704`), and the corpus is frozen.
+- **D-3780** (Task 3 Step 4, run 220) — the stated `176 passed (176)` for `released-store.test.ts` + `coord-store.test.ts` measures `177 passed (177)`: `coord-store.test.ts` carries 170 cases on `6ca3d163`, one more than when the plan was measured. The seven new cases are the plan's (red: `7 failed (7)`, each `lastRunBySession is not a function`); no code or anchor was adapted — every `store.ts` Find matched once.
+- **D-3781** (Task 4 Step 4, run 220) — the stated `94 passed (94)` for `fleet-released.test.ts` + `fleet.test.ts` measures `101 passed (101)`: `fleet.test.ts` carries 94 cases on `6ca3d163` (87 when the plan was measured), and the seven new cases are the plan's (red: `5 failed | 2 passed (7)`, as stated). No code or anchor was adapted.
+- **D-3782** (Task 8 Steps 1–4, run 220) — three adaptations, no behaviour changed. (a) Counts: `fleet-screen.test.tsx` + `tap-targets.test.tsx` measure `4 failed | 133 passed (137)` red and `137 passed (137)` green, not `…132 passed (136)` / `136 passed (136)` — one more pre-existing case on `6ca3d163`; the four red cases are the plan's. (b) Step 1 says "At the end of `pwa/test/fleet-screen.test.tsx`", but its Find block (`warn.mockRestore(); }); });`) matches once MID-file, before the "centralised-update programme wave 5" describe that landed after the plan was measured; the Find was followed, so the new describe sits there (older plans cite this file by line, but the audited citation cases stay `7 passed | 328 skipped (335)` after it, so the corpus `session-hook.test.ts` audits did not move). (c) Step 3's import of `inReleasedFold` from `../fleet/groupFleet` was merged into the existing `groupFleet` import line rather than added as a second import from the same module.
+- **D-3783** (Task 8, Pre-flight finding 12 (d) and Task 10 row P25, run 220) — the double-tap in-flight ref guard was accepted at planning as unpinned ("no test reaches it — under jsdom the sheet unmounts before a second click lands"); the task review raised it as a guard with no red-on-deletion test, against this repository's mutation-table rule, and the worker ruled to pin it. `pwa/test/archive-all-guard.test.tsx` mocks `QuickConfirm` (file-wide, hence its own file) with a stub whose one handler calls `onConfirm()` twice: with the guard line deleted it reds `1 failed (1)` (two loops, two summary toasts); restored, `138 passed (138)` across it, `fleet-screen` and `tap-targets`. The existing double-tap case is unchanged; `FleetScreen.tsx`'s comment now names the new file. Row P25 is therefore pinned, no longer NOT RUN.
+- **D-3784** (final whole-branch review, run 220; ruled in review 225's F1) — no task of this plan touches `ProjectCard`'s `holdsSelection`, but this wave moved a released row out of `group.sessions`, so a COLLAPSED card stopped marking that it holds the selection when the selected row was released — a regression the wave itself introduced. Commit `798120433` widens `holdsSelection` to `group.sessions` and `group.released` (never `group.archived`, whose identical gap predates this wave), pinned by `project-card.test.tsx:1461` at `eb632e605` — `:1478` once D-3785's case was inserted above it — (`a COLLAPSED card still marks the selection when the selected row sits only in Released`): red `1 failed | 105 passed (106)` before the fix, and review 225's mutation H1 (reverted to `group.sessions` only) measured the same `1 failed | 105 passed (106)`. The change stays.
+- **D-3785** (review 225's F2) — D-3784's sibling in the same card: while the selected row sits in `group.released`, `ProjectCard` forces the Released fold open (`releasedShown`), yet its toggle still called `onToggle('<project>::released')`, so a tap on an `aria-expanded="true"` toggle did nothing visible and silently inverted the stored key. Ruled: the toggle takes `disabled` while the selection lives in the fold, so a screen reader announces it unavailable and a tap cannot invert the stored key (a sighted operator sees the same toggle, ink and all); otherwise unchanged. The predicate is one named const, `selectionInReleased`, read by both `releasedShown` and the toggle. Review 229 completed it in three ways. The one CSS rule is `.proj-released-toggle:disabled { cursor: default; }`, nothing else, so the pointer no longer offers a tap that does nothing (the contrast, fleet-css and tap-targets suites needed no registration). The comment at `ProjectCard.tsx`'s `holdsSelection` that called it "the only place the card itself reads selectedId" is made true: `selectionInReleased` and `releasedShown` read it too, so it now names the card's own mark as the one read of that kind (comment only). And the control gains a third render, `releasedOpen` true with the selection elsewhere, asserting the toggle is enabled and a click reaches `onToggle` once. Pinned by `project-card.test.tsx` (`the toggle is disabled while the selected row holds the fold open, and live otherwise`, whose control asserts the toggle is enabled and calls `onToggle` with a selection elsewhere, and, in its third render, with the fold operator-opened): red `1 failed | 106 passed (107)` with the `disabled` wiring removed, green `107 passed (107)`; the third render alone reds `1 failed | 106 passed (107)` under `disabled={releasedShown}`, a mutation the first two renders left green, which Task 10 now carries as row P35. Row P30 is re-anchored to `releasedShown = releasedOpen || selectionInReleased`, as `ProjectCard.tsx` now reads.
+- **D-3786** (review 225's F3) — D-3783 pinned the double-tap in-flight guard in `archive-all-guard.test.tsx`, but the case in `fleet-screen.test.tsx` that carried the double-tap in its title could not red for it: under jsdom the real sheet unmounts after the first click, so the second click never reaches the guard (`FleetScreen.tsx` says as much). Title and comment only, no assertion dropped: the case is retitled `archives a PLACED row from the card it renders on; a second tap after the sheet closes starts no second loop`, and a one-line comment points at `archive-all-guard.test.tsx` for the in-flight guard (review 225 measured deleting it as `1 failed (1)` there). No red measured, by ruling: nothing but a name changed; `fleet-screen.test.tsx` green at `97 passed (97)`. Review 229 found that retitle half-true: its second clause named something the case cannot red for. Once the real sheet has unmounted, the second `fireEvent.click(go)` lands on a detached node (jsdom's detachment, not ccrc code). Review 229 recorded the measurement, with `-t` on that case: the in-flight guard deleted alone (`FleetScreen.tsx:486`) leaves the case green, `1 passed`; the sheet's `onClose` made a no-op alone (the sheet stays open) reds it, at the re-open of the sheet (`Unable to find role="button" … Archive all 1 …`); the two together red it at the summary toast (`Found multiple elements with the text: Archived 1, skipped 0, refused 0.`). Ruled: the second `fireEvent.click(go)` is dropped and the title is `archives a PLACED row from the card it renders on`, and the comment still points at `archive-all-guard.test.tsx` for the in-flight guard. Review 231 (F2) corrected what the case then claims: it pins TWO things, not one. First, the placed row is archived exactly once (the `archive.mock.calls` assertion at `fleet-screen.test.tsx:2847`). Second, a second loop on the same card runs once the first ends: the last assertion (`:2851`, `[['b-one'], ['b-one']]`) is the in-flight ref's release, and row P26 (the in-flight ref never released) reds exactly there. The assertions that remain are unchanged and the file stays at `97 passed (97)`.
+- **D-3787** (review 225's F5) — Task 5's `groupFleet` reorder put folded Released rows after EVERY other row, archived ones included, so a card holding only archived rows now outranked a card holding only released rows — the opposite of the order before the fold, and against the reorder's own stated reason. Ruled: the concatenation is three parts, live rows (neither in the released fold nor `bucket === 'archived'`), then `inReleasedFold` rows, then archived rows, each stable in the fleet order, and the comment now says that a folded row must not lift its card above a visible one while released rows still rank above archived ones. Pinned by `groupFleet.test.ts` (`a released-only card still ranks above an archived-only card`); the existing `a folded row never lifts its card` case stays green: red `1 failed | 50 passed (51)` with the two-part concatenation restored, green `51 passed (51)`. Review 229 completed it in four ways. (A2) That three-part form also lifted UNRELEASED `dead` rows past archived ones, because its first part took every row neither folded nor archived, and `sortFleet`'s `RANK` puts archived (5) above dead (6); F5's ruling lifts RELEASED rows only. The concatenation is now four parts, each stable: rows that are neither folded, archived nor unfolded `dead` (dead and not in the Released fold); folded (released); archived; unfolded `dead`. Pinned by `groupFleet.test.ts` (`an UNRELEASED dead row keeps its rank below archived: the lift is for released rows only`: card `dead-card` holding one `bucket: 'dead'` row with no `releasedFrom`, card `arch-card` holding one archived row, ordered `[arch-card, dead-card]`): red `1 failed | 52 passed (53)` under the three-part form (row P36; `2 failed | 52 passed (54)` once review 231's stranded pin joined the file, the new case reds there too), green `53 passed (53)`. Review 231 (F1) found the word "unreleased" wrong for what the code does: the predicate, renamed `unfoldedDead`, is `bucket === 'dead' && !inReleasedFold(m)`, so a RELEASED dead row that carries a strand marker (`inReleasedFold` is false for it, so it is not folded and stays visible in `sessions`) is in part 4 too and keeps `RANK`'s place below archived, which is where it ranked before the fold. Ruled, option (a): the behaviour is kept, because a row that is not folded must not move relative to `RANK`, and the const, the order comment and the `released` docstring now say "unfolded" where they mean it. Option (b), the panel's `releasedFromOf(m) === null`, would lift an unfolded, visible row past archived and is not taken. Pinned by `groupFleet.test.ts` (`a STRANDED released dead row is not in the fold, so its card keeps RANK's place below an archived-only card`: card `A` holding only a `bucket: 'dead'` row with a strand marker and a `releasedFrom`, card `B` holding only an archived row, ordered `[B, A]`): red `1 failed | 53 passed (54)` under the panel's remedy (row P38), green `54 passed (54)`. (A3) The order comment names a released DEAD row, which the first pin (a released `done` row, already above archived in `sortFleet`) did not exercise; `groupFleet.test.ts` gains `a released DEAD-only card ranks above an archived-only card, though sortFleet alone ranks dead below archived` (a `bucket: 'dead'` row with a `releasedFrom` against an archived-only card), red `1 failed | 52 passed (53)` under `[...live, ...sortFleet([...released, ...archived])]` adapted to the code's names (row P37; `1 failed | 53 passed (54)` at the file's 54 cases), a mutation both earlier cases left green. (A6) The `released` field's docstring no longer says released rows take no part in the card's ORDER: they do, after every live row except an unfolded `dead` one, and before those and before archived rows (review 231 F4 made this sentence match the docstring: unfolded `dead` rows are live, `group.sessions`, and part 2 precedes them). Row P31 is re-anchored to the four-part form (its mutation, the plain fleet order, reds `2 failed | 51 passed (53)`, `2 failed | 52 passed (54)` at the file's 54 cases), and rows P36 and P37 carry the two parts that P31's wholesale replacement cannot tell apart; row P38 carries the stranded released dead row (review 231 F1). Rows P31, P36 and P37 are re-anchored to the renamed `unfoldedDead`.

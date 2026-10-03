@@ -206,6 +206,12 @@ const SESSION_ONLY_DOORS = harvestSet('SESSION_ONLY');
  *  this literal comes out and the harvest covers it. */
 const KICKOFF = '/api/sessions/:id/kickoff';
 
+/** The archive door (workspace lifecycle wave 2, spec §5.2). With `{programme:'end'}` it ends a coordinator's open
+ *  runs through the abandon door's own decision, so it is a coordination WRITE — session-gated, no box token (D-282's
+ *  argument: the token's holder is the coordinator being archived). Registered in `server.ts`, so `SESSION_ONLY`
+ *  cannot see it, for the kickoff route's reason; named here beside it. */
+const ARCHIVE = '/api/sessions/:id/archive';
+
 /** Every coordination write the bullet must describe as carrying no box token. */
 /** The update control plane's session-only routes (design 2026-09-20 §12 census
  *  step (b): all six of §12's session routes — W2's four and wave 5's two moves). Registered from `server/src/update/routes.ts`,
@@ -218,7 +224,7 @@ const UPDATE_DOORS = ['/api/updates', '/api/updates/intent', '/api/updates/refre
   '/api/updates/apply', '/api/updates/rollback'];
 
 /** Every session-only route the bullet must describe as carrying no box token. */
-const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ...UPDATE_DOORS];
+const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, ...UPDATE_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -374,6 +380,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // — so it is the natural probe for a scanner that had started matching
     // everything.
     expect(ALL_LANES).not.toContain('POST /api/sessions/:id/kickoff');
+    expect(ALL_LANES).not.toContain(`POST ${ARCHIVE}`);
     for (const door of UNGATED_DOORS) expect(ALL_LANES).not.toContain(`POST ${door}`);
   });
 

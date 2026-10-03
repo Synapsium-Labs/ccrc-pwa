@@ -116,6 +116,37 @@ export interface CloseRunBody {
 }
 
 /**
+ * The operator abandon's one move (D-2807): a `planned` run, or any review run (its machine has no `closing`), fails
+ * directly; every other run moves to `closing` — unless its own machine has no such edge (a run already `closing`, or
+ * in `unknown`), which is the arm's `bad-transition`. ONE spelling, two readers: `closeRun`'s abandon arm below, and
+ * `abandonRefusal`, which the archive door asks of every run a programme holds BEFORE it ends the first (workspace
+ * lifecycle §5.2: every check that can refuse runs before any act that cannot be undone).
+ */
+export function abandonMove(run: Pick<RunRow, 'state' | 'kind'>):
+  | { readonly ok: true; readonly to: RunState }
+  | { readonly ok: false; readonly kind: 'bad-transition'; readonly from: RunState; readonly to: RunState } {
+  const to: RunState = run.state === 'planned' || run.kind === 'review' ? 'failed' : 'closing';
+  return transitionsFor(run.kind)[run.state].includes(to)
+    ? { ok: true, to } : { ok: false, kind: 'bad-transition', from: run.state, to };
+}
+
+/**
+ * What `closeRun`'s abandon arm would refuse for this run from the ROW ALONE — its read, then `abandonMove` — asked
+ * without acting. `null`: the arm can move it. The archive door reads it for every run inside the same `coordMutex`
+ * hold that then runs the abandons (`CoordRoutesHandle.withAbandon`), so nothing moves between this read and the act.
+ * What only the act measures — the sibling read, a hand-over hold, the verb, ccd's own answer — can still refuse after
+ * an earlier run was ended, and the door says which runs it ended (`programme-partly-ended`).
+ */
+export function abandonRefusal(coord: CoordStore, id: number): Extract<CloseOutcome, { ok: false }> | null {
+  const read = coord.run(id);
+  // `closeRun`'s own two answers for a row it cannot use (D-2545; an absent run).
+  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
+  if (read.run === null) return { ok: false, kind: 'unknown-run' };
+  const move = abandonMove(read.run);
+  return move.ok ? null : move;
+}
+
+/**
  * Close a run: re-measure the done claim (never believe it) — UNLESS the
  * operator is explicitly ABANDONING the run (`state:'failed'`, deviation
  * D-49): that is not a done-claim at all, so there is nothing to re-measure.
@@ -207,11 +238,11 @@ export async function closeRun(
      */
     // D-2807: a review run has no `closing` (REVIEW_RUN_TRANSITIONS); the
     // operator's ungated valve must still reach it, so it fails directly — its
-    // own machine's terminal hop.
-    const target: RunState = run.state === 'planned' || run.kind === 'review' ? 'failed' : 'closing';
-    if (!transitionsFor(run.kind)[run.state].includes(target)) {
-      return { ok: false, kind: 'bad-transition', from: run.state, to: target };
-    }
+    // own machine's terminal hop. `abandonMove` (above) is that rule, spelled
+    // once for this arm and for the archive door's pre-read.
+    const move = abandonMove(run);
+    if (!move.ok) return move;
+    const target = move.to;
     // The fleet act, AHEAD of the commit (D-48), and only when there is
     // something to act on: a `planned` run that never dispatched holds no
     // workspace. RELEASE ONLY WHEN NOTHING ELSE CLAIMS IT — otherwise HAND
@@ -607,9 +638,9 @@ const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child
  * sibling makes TWO sequential `pr-state` calls inside the mutex in BOTH of
  * its cases: a fast-path spent re-dated here through `childSpentLive`, and a
  * fast-path MISS, where `childSpent`'s own live rung makes the second — the
- * ordinary PR-bearing wave. Up to ~40 s against the 30 s client timeout
+ * ordinary PR-bearing wave. Up to ~50 s against the 30 s client timeout
  * `CloseRunDeps.childReclaim`'s docstring cites, each call bounded by
- * `pr-state`'s 20 s remote budget. Accepted by design; wave 4 (reusing
+ * `pr-state`'s 25 s remote budget. Accepted by design; wave 4 (reusing
  * `verifyDone`'s measurement) is where the aggregate would be addressed.
  */
 async function childGateAtClose(

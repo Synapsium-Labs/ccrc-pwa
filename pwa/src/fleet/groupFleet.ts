@@ -1,4 +1,5 @@
-import { boardHome, type FleetSession } from '../../../shared/api';
+import { boardHome, releasedFromOf, type FleetSession, type ReleasedFrom } from '../../../shared/api';
+import { archivedFoldSince, inArchivedFold } from '../../../shared/api';
 import { isUnseen, type Acks } from '../lib/seen';
 import { sortFleet } from './sortFleet';
 
@@ -40,7 +41,8 @@ export interface FleetGroup {
    *  them now. */
   busy: number;
   /** How many LIVE members this device has not yet acknowledged — `isUnseen`
-   *  (pwa/src/lib/seen.ts) run over `sessions`.
+   *  (pwa/src/lib/seen.ts) run over `sessions` AND `released` (a released row is
+   *  live; folding it must not quiet its count).
    *
    *  NOTHING RENDERS THIS YET. It is part of the group shape so a per-project
    *  badge has a count to read, and it is pinned by groupFleet.test.ts, but
@@ -77,7 +79,10 @@ export interface FleetGroup {
    *  more: an archived session is stopped, so a marker it still carries
    *  describes a rescue that no longer has anything to rescue. */
   stranded: number;
-  /** Members in the `archived` BUCKET — folded out of the live list, never
+  /** Members in the `Archived (N)` fold — `inArchivedFold` (workspace lifecycle
+   *  spec §5.2): the `archived` BUCKET, plus a STOPPED main checkout, which
+   *  archiving now puts away too (it is never deleted). Newest first, on
+   *  `archivedFoldSince`. Folded out of the live list, never
    *  dropped. `/s/<id>` still resolves and the transcript still renders, so a
    *  card that omitted them entirely would leave the workspace reachable only
    *  by a URL nobody has. They take no part in `attention`, `busy`, `unseen`
@@ -92,20 +97,81 @@ export interface FleetGroup {
    *  on the screen, while the fold above the footer read `Archived (2)`. Its
    *  own facts — `merged`, `#157`, the reclaimable size — were unreachable
    *  without expanding a fold that disclaims them. Splitting on the bucket
-   *  makes this list exactly the `Archived` chip's members and leaves
-   *  `cleanup` in `sessions`, where its chip's count and its rows agree.
+   *  makes this list the `Archived` chip's members — plus any stopped main
+   *  checkout, below — and leaves `cleanup` in `sessions`, where its chip's count and its rows agree.
    *
    *  The fleet footer (`FleetScreen`'s route into `/archive`) is a THIRD,
    *  deliberately wider set — everything with an `archivedAt`, because that
    *  is the disk fact — which is why it no longer says the bare word
-   *  "Archived". */
+   *  "Archived".
+   *
+   *  The stopped main checkout is the one member a DIFFERENT chip counts: its
+   *  bucket is still `dead` (M10 — a lifecycle moves no bucket), so the Dead
+   *  chip counts a row this fold holds. Stated, not changed (spec §5.2); and
+   *  the footer stays a WORKSPACE list, since a main checkout has no
+   *  `archivedAt`. */
   archived: FleetSession[];
+  /** Members in the `Released (N)` fold (workspace lifecycle spec §5.1) — `inReleasedFold` below, newest close
+   *  first. The transition zone: a programme is done with them, and they wait here to be archived. Like
+   *  `archived`, folded and never dropped; unlike `archived`, they still count toward `unseen`, since a
+   *  released row is live. They take no part in `attention`, `busy` or `stranded` — by construction, which is
+   *  the fold's own rule. They DO take part in the card's ORDER (`groupFleet`'s four-part
+   *  concatenation): after every live row except a `dead` one not in this fold, before archived
+   *  rows, and before `dead` rows not in this fold — so a released-only card ranks above an archived-only one, and
+   *  above a card holding only a dead row not in this fold, but never above a card with any other live row. A released
+   *  dead row that carries a strand marker is not in this fold, so it is a `dead` row not in this fold and keeps
+   *  `sortFleet`'s RANK place below archived. They take part in `pin` only on a card with no live row,
+   *  where the pin falls back to every member, exactly as it does on a card whose members are all archived. */
+  released: FleetSession[];
   /** Where this project's OWN workspaces render when it is not here — one
    *  entry per destination card, live rows only, most first. Spec §6: "an
    *  emptied card says where its work went", as PLAIN TEXT, never a link — a
    *  tappable route would be the second access path R2 excludes. Empty on a
    *  card that has lost nothing. */
   elsewhere: readonly { project: string; count: number }[];
+}
+
+/**
+ * Whether a row belongs in its card's `Released (N)` fold (workspace lifecycle spec §5.1): the server says it was
+ * released, and nothing about it needs a person. Attention, a turn in progress and a strand are never folded —
+ * a fold "can never hide the one thing this screen exists to surface" (the `attention` field above) — so such a
+ * row stays at the top level, released or not, and folds on the first frame where none of them holds. The
+ * strand is read as `(s.stranded ?? null) !== null`, the `stranded` count's own spelling, dead or alive: a
+ * marker the row still carries is the operator's to see. `archived` is excluded here too, though `releasedFrom`
+ * already is null for an archived row: the two folds must never share a row.
+ */
+export function inReleasedFold(s: FleetSession): boolean {
+  return releasedFromOf(s) !== null && s.bucket !== 'archived' && s.bucket !== 'attention'
+    && s.bucket !== 'working' && (s.stranded ?? null) === null;
+}
+
+/** One programme's rows inside the `Released (N)` fold. `title` is the programme's title when the server knew it,
+ *  else `null` and the card shows the slug alone. */
+export interface ReleasedProgramme {
+  program: string;
+  title: string | null;
+  sessions: FleetSession[];
+}
+
+const closedAtOf = (s: FleetSession): number => (releasedFromOf(s) as ReleasedFrom).closedAt;
+
+/** The fold's contents grouped by programme (spec §5.1): groups and the rows within them run newest `closedAt`
+ *  first, a group ranked by its newest row; ties fall back to the slug, then the session id, so the order is
+ *  total. Rows `releasedFromOf` answers null for are not this function's: it takes `FleetGroup.released`. */
+export function releasedByProgramme(released: readonly FleetSession[]): ReleasedProgramme[] {
+  const by = new Map<string, ReleasedProgramme>();
+  const sorted = [...released].filter((s) => releasedFromOf(s) !== null)
+    .sort((a, b) => closedAtOf(b) - closedAtOf(a) || a.id.localeCompare(b.id));
+  for (const s of sorted) {
+    const r = releasedFromOf(s) as ReleasedFrom;
+    const g = by.get(r.program);
+    if (g) {
+      g.sessions.push(s);
+      if (g.title === null && r.programTitle !== null) g.title = r.programTitle;
+    } else by.set(r.program, { program: r.program, title: r.programTitle, sessions: [s] });
+  }
+  return [...by.values()].sort((a, b) =>
+    closedAtOf(b.sessions[0]!) - closedAtOf(a.sessions[0]!) || a.program.localeCompare(b.program));
 }
 
 /**
@@ -126,7 +192,29 @@ export function groupFleet(
   sessions: FleetSession[], projects: readonly string[], acks: Acks = {},
 ): FleetGroup[] {
   const byProject = new Map<string, FleetSession[]>();
-  for (const s of sortFleet(sessions)) {
+  // Folded rows after the live ones (workspace lifecycle §5.1): a card's place comes from its first member, and a
+  // folded row must not lift its card above a live row other than a `dead` one not in the Released fold. "Dead, not
+  // in the Released fold" is dead and not in the Released fold (`inReleasedFold`): a released dead row that carries a
+  // strand marker is one too.
+  // Four parts, each stable in the fleet order:
+  // (1) rows that are neither folded, archived nor dead-not-in-the-Released-fold; (2) folded (released) rows, which
+  // rank above archived ones as idle, done and cleanup rows did before the fold — and a released DEAD row in the fold
+  // too, which `sortFleet` alone ranks below archived; (3) archived rows; (4) dead-not-in-the-Released-fold rows (a
+  // stopped main checkout too, though the Archived fold holds it: the order keys on the BUCKET), which keep
+  // `sortFleet`'s RANK (archived 5 above dead 6): only a row in the Released fold is lifted past archived, so a card
+  // holding only a dead row not in that fold (an unreleased one, or a released one whose strand marker keeps it out
+  // of the fold) still ranks below one holding only an archived row, as it did before the fold.
+  const sorted = sortFleet(sessions);
+  const archivedRow = (m: FleetSession): boolean => m.bucket === 'archived';
+  // "Dead and not in the RELEASED fold" — the BUCKET's `dead`, which a stopped main checkout now in the ARCHIVED
+  // fold still is: the order keys on the bucket (wave 1's ruling), so such a row keeps dead's rank here.
+  const deadNotInReleasedFold = (m: FleetSession): boolean => m.bucket === 'dead' && !inReleasedFold(m);
+  for (const s of [
+    ...sorted.filter((m) => !inReleasedFold(m) && !archivedRow(m) && !deadNotInReleasedFold(m)),
+    ...sorted.filter(inReleasedFold),
+    ...sorted.filter(archivedRow),
+    ...sorted.filter(deadNotInReleasedFold),
+  ]) {
     const card = boardHome(s);
     const list = byProject.get(card);
     if (list) list.push(s);
@@ -142,12 +230,17 @@ export function groupFleet(
 
   const groups: FleetGroup[] = [];
   for (const [project, members] of byProject) {
-    // See the `archived` field's doc: the split is on the BUCKET, so a
+    // See the `archived` field's doc: the split is `inArchivedFold`, which reads a WORKSPACE's bucket, so a
     // `cleanup` member stays in the live list its own chip counts it in.
-    const live = members.filter((m) => m.bucket !== 'archived');
-    const archived = members.filter((m) => m.bucket === 'archived');
-    // `live` can be empty (every workspace of a project archived), so the pin
-    // falls back to the whole membership; and the whole membership can be
+    const live = members.filter((m) => !inArchivedFold(m) && !inReleasedFold(m));
+    // Workspace lifecycle §5.2: newest first — a workspace by its archive time, a main checkout by its stop.
+    const archived = members.filter(inArchivedFold)
+      .sort((a, b) => (archivedFoldSince(b) ?? 0) - (archivedFoldSince(a) ?? 0) || a.id.localeCompare(b.id));
+    // Workspace lifecycle §5.1: newest close first, the fold's own order.
+    const released = members.filter(inReleasedFold)
+      .sort((a, b) => closedAtOf(b) - closedAtOf(a) || a.id.localeCompare(b.id));
+    // `live` can be empty (every workspace of a project archived or released),
+    // so the pin falls back to the whole membership; and the whole membership can be
     // empty (a durable card), which is the union's third state — never an
     // indexed read of an empty array.
     const forPin = live.length > 0 ? live : members;
@@ -158,7 +251,7 @@ export function groupFleet(
       : { state: 'mixed' };
     const away = new Map<string, number>();
     for (const s of sessions) {
-      if (s.project !== project || s.bucket === 'archived') continue;
+      if (s.project !== project || inArchivedFold(s)) continue;
       const dest = boardHome(s);
       if (dest === project) continue;
       away.set(dest, (away.get(dest) ?? 0) + 1);
@@ -169,9 +262,11 @@ export function groupFleet(
       project,
       sessions: live,
       archived,
+      released,
       attention: live.some((m) => m.bucket === 'attention'),
       busy: live.filter((m) => m.bucket === 'working').length,
-      unseen: live.filter((m) => isUnseen(m, acks)).length,
+      // A released row is live, so it still counts (spec §5.1) — folding it must not quiet its badge.
+      unseen: [...live, ...released].filter((m) => isUnseen(m, acks)).length,
       pin,
       // `(m.stranded ?? null) !== null`, never a truthiness test and never a
       // read of `m.stranded.at` — see this field's own docstring for the two

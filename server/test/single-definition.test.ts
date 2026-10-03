@@ -24,6 +24,7 @@ import {
   ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_ROLES, NODE_OSES, TAG_FILE_READS,
   SPAWN_VERDICTS,
 } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS } from '../../shared/api.js';
 import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
@@ -4122,6 +4123,41 @@ describe('worker stall watch: the wave-done subject is spelled once (spec §4.2 
   });
 });
 
+describe('the archive door\'s refusal codes are spelled once, in L0 (workspace lifecycle wave 2)', () => {
+  // `ARCHIVE_REFUSALS` (spec §5.2) is the one declaration; the server sends `ARCHIVE_REFUSALS.<name>` and the PWA
+  // compares against it. `run-open` was a bare literal written twice in `server.ts` and once in
+  // `ArchiveConflictSheet.tsx` before this wave. Code lines only (`stallCode`): prose names the codes in backticks.
+  // Two OTHER vocabularies share spellings, and each is excused here by name rather than by widening the scan:
+  //   - `server/src/wsaudit.ts` keys its sentences by ccd's AUDIT verdict words, two of which ccd also dies with
+  //     in `cmd_ws_archive` (`session-busy`, `status-unknown`) — the audit's seam, not the door's;
+  //   - `className="run-open"` is the runs board's row button (D-287), a CSS identity — excluded by the pattern.
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const literal = (code: string): RegExp => new RegExp(`(?<!className=)(['"\`])${esc(code)}\\1`);
+  const AUDIT_WORDS = new Set(['session-busy', 'status-unknown']);
+
+  it('CONTROL: the pattern sees a quoted code and passes over a class name and a longer word', () => {
+    expect(literal('run-open').test("error: 'run-open',")).toBe(true);
+    expect(literal('run-open').test('className="run-open"')).toBe(false);
+    expect(literal('worktree-gone').test("'worktree-gone-later'")).toBe(false);
+    expect(ALL.filter((f) => literal('coordinator-has-open-runs').test(stallCode(f))).map(rel))
+      .toEqual(['shared/api.ts']);
+  });
+
+  // The codes as test DATA, bound to the declaration by the first case: a scan driven by `Object.values` alone would
+  // scan nothing, and stay green, on a tree where the declaration is gone.
+  const CODES = ['run-open', 'session-busy', 'coordinator-has-open-runs', 'programme-partly-ended', 'worktree-gone',
+    'status-unknown', 'manifest-unbuildable'];
+
+  it('scans every code the declaration holds', () => {
+    expect(Object.values(ARCHIVE_REFUSALS ?? {}).sort()).toEqual([...CODES].sort());
+  });
+
+  it.each(CODES)("'%s' is a code-line literal in shared/api.ts alone", (code) => {
+    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : ['shared/api.ts'];
+    expect(ALL.filter((f) => literal(code).test(stallCode(f))).map(rel).sort(), `a second '${code}'`).toEqual(want);
+  });
+});
+
 // WORKER STALL WATCH, WAVE 2 (design 2026-09-29 §5.2). APPENDED after the last describe, for the reason the wave-1
 // blocks above state: `session-hook.test.ts`'s citation audit cites this file by line. The two self-wake prefixes
 // join the spelled-once set: a second quoted copy is a second classifier (`stallMailClass`'s `self-wake`) in waiting.
@@ -4202,5 +4238,25 @@ describe('worker stall watch wave 2: the self-wake prefixes are spelled once (sp
 
   it.each(LITERALS)("'%s' is spelled on a code line in %s alone", (lit, home) => {
     expect(ALL.filter((f) => spelling(lit).test(stallCode(f))).map(rel).sort(), `a second '${lit}'`).toEqual([home]);
+  });
+});
+
+describe('one releasedFromOf (workspace lifecycle wave 1)', () => {
+  // `FleetSession.releasedFrom` has ONE reader, `releasedFromOf` in `shared/api.ts`. The live `fleet` frame is
+  // CAST, not revived, so a raw property read anywhere else meets `undefined` from a server older than the field,
+  // where the accessor answers `null` — the two-readers drift this suite exists to forbid. Comment LINES are
+  // blanked first (the field is NAMED in prose across the tree), line by line — `blankComments`' shape above. A
+  // block-comment regex is NOT safe here: a `/*` inside a string or a `//` line (`server.ts`'s `.cc-limits/*.json`)
+  // opens a "comment" that swallows hundreds of lines of real code, the `/ws/fleet` handler among them (measured).
+  const code = (f: string): string => readFileSync(f, 'utf8')
+    .split('\n').map((l) => (/^\s*(\*|\/\*|\/\/)/.test(l) ? '' : l)).join('\n');
+  const READ = /\.releasedFrom\b/;
+
+  it('is read as a property in exactly one file, and that file is shared/api.ts', () => {
+    expect(ALL.filter((f) => READ.test(code(f))).map(rel)).toEqual(['shared/api.ts']);
+  });
+
+  it('the scan sees the one read it licenses (a blanker that ate code would pass the pin above vacuously)', () => {
+    expect(code(path.join(ccrcRoot, 'shared', 'api.ts'))).toMatch(/return s\.releasedFrom \?\? null;/);
   });
 });

@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~3800 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~3900 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -105,7 +105,9 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   `test-macos` runs the same selection, advisory. A change under `.github/` or `server/scripts/`, to any
   `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`, `.gitattributes` or `.npmrc`, or a missing
   map, runs the full suite instead. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
-  `shadow`, the selection is only reported and every server test runs. **A merge to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
+  `shadow`, the selection is only reported and every server test runs. **A merge-queue run** (`merge_group`) runs what a pull request runs, its pipeline check included, in a
+  concurrency group of its own, and never the macOS legs or `full-suite` (operator ruling 2026-09-28). **A merge
+  to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
   **Daily**, on `main`, every leg runs in full, macOS included, and the map is rebuilt — skipped when `main`'s
   head already has a green `full-suite` job from a trusted run (a daily or manual full run on `main`, or a stable
   gate; never a pull request's). **A promotion to `stable`** needs such a green `full-suite` on the commit:
@@ -281,6 +283,11 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   registered from `server/src/update/routes.ts`, a file neither `SESSION_ONLY` nor the kickoff literal can see, so
   `box-token-census.test.ts` reads it as a lane source of its own and keeps their names in a hand-kept
   `UPDATE_DOORS`, checked against that file in both directions.
+  `POST /api/sessions/:id/archive` joins that class when its body carries `programme:'end'` (workspace lifecycle
+  wave 2): it then ends the coordinator's open runs through the abandon door's own decision, on the coordination
+  serialiser, and consults no box token — session-gated when the auth gate is armed, like the abandon door. It is
+  registered in `server.ts` for the kickoff route's reason, so `box-token-census.test.ts` names it beside that
+  route's literal.
   Don't assume — read the guards.
 - **The dispatch cap counts ACTIVE runs** (`ACTIVE_RUN_STATES` in `shared/api.ts`: `dispatched`, `working`,
   `unknown`) — a run at `awaiting-review`/`merging`/`closing`/`planned` holds no slot, and `advance -> working`
@@ -313,13 +320,13 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
   documented recovery for an already-retired program.
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
-  (`ccd/coordinator-skill/SKILL.md`); its fourteen clauses are pinned VERBATIM by
+  (`ccd/coordinator-skill/SKILL.md`); its sixteen clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES
   (`$REG/coordinator-paused`, `$REG/mail-disabled`). `mail-disabled` has **no writer in the tree** — touch/rm by
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by
   `POST /api/coord/pause`, both raises and lowers it, so it is reachable from a phone — `routes.ts` calls the
   boundary what it now is, "convention with a speed bump".
-- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, fifteen clauses pinned by
+- **The worker has a skill too** (`ccd/worker-skill/SKILL.md`, `ccrc-worker`, seventeen clauses pinned by
   `server/test/worker-skill.test.ts`; it ships no `references/` and points at the coordinator's).
   `WORKER_KICKOFF_PREFIX` (`server/src/coord/dispatch.ts`) prefixes EVERY brief mail with the sentence that
   invokes it, so a wave brief carries WAVE SPECIFICS — plan path, task range, interfaces, deviations — never the

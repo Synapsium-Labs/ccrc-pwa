@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c9de9f70826812ca0e65ce9182db5d0888d0b6f5f0b67ad554c3d47c9e203cea
+# ccrc:generated 1 sha256=61f92d23118b1e2d750221a8fd2bc5affea9caaeb76751c72f0f576bf67a0f77
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -7,6 +7,36 @@
 # a row stamped `rc=off` (`ws-add --no-rc` — a dispatched worker, task #37) spawns
 # plain even on an `on` box.
 set -uo pipefail
+
+# ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
+# A direct `ws-reclaim`, or a direct `ws-audit --session <id> --reclaim
+# [--defer-expired]`, must be running under Bash >= 4.4 in PRIVILEGED mode with
+# no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
+# rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
+# word; no environment marker is read. `$-` alone is not enough — a plain bash
+# importing `SHELLOPTS=privileged` reports `p` and still imports exported
+# functions (measured, bash 5.2) — so an imported function refuses too: ccd has
+# defined none at this line. Nothing here consults PATH, but the guard is
+# BEST-EFFORT wherever no launcher `-p` start stands behind it, since `printf`,
+# `exit` and `declare` can each be shadowed by a startup-defined function: an
+# explicit `bash ccd/ccd` (a hostile `BASH_ENV` already ran), and a case-variant
+# protected verb under an inherited `nocasematch`, which the launcher compares
+# exactly and starts ORDINARY. The guarantee is the launcher's `-p` start of an
+# exact spelling (D-3696, D-3700). SOURCE MODE never runs this; the classifier
+# is the launcher's, shape for shape, and the dispatcher still owns every tail.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim ]] \
+     || { [[ $# -eq 4 || $# -eq 5 ]] && [[ "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --reclaim ]] \
+          && [[ $# -eq 4 || "${5-}" == --defer-expired ]]; }; }; then
+  if ! (( BASH_VERSINFO[0] > 4 || ( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4 ) )) || [[ $- != *p* ]]; then
+    printf 'ccd: refused (entry-unprivileged): %s reaches ccd only through its installed direct entry, under Bash >= 4.4 in privileged mode (-p); this is Bash %s with flags %s — nothing was run\n' \
+      "$1" "${BASH_VERSION-unknown}" "$-" >&2
+    exit 125
+  fi
+  if [[ -n "$(declare -F)" ]]; then
+    printf 'ccd: refused (entry-imported-functions): %s started with shell functions already defined, which only Bash startup can have imported — nothing was run\n' "$1" >&2
+    exit 125
+  fi
+fi
 
 # ── THE PLATFORM LAYER — one file, two userlands ────────────────────────
 # ccd was written against GNU/Linux and says so out loud: `_reg_set`'s header
@@ -3104,11 +3134,11 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 176
-# invocations across 147 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 179
+# invocations across 150 non-comment lines.
 #
-# THE LAST MOVE WAS D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in
-# `_carried_in_note`); before it the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
+# THE LAST MOVE WAS the rescue wait's reads (session-continuity wave 2), the +3; before it D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`);
+# then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
 # bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
@@ -3856,16 +3886,16 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42 — by addition, NOT a fresh census of
+  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 42: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # The 43: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `carriednote`, `child`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
-  # `reaping`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
+  # `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
   # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
@@ -5332,22 +5362,22 @@ PR_GH_TIMEOUT=8           # gh pr list has no --timeout of its own; a blocking
 # killed, which the server reads as `agent-down` and backs the whole project
 # off on.
 #
-# THE OUTER BOUND IS 20 s, NOT 90, AND THIS PAIR HAS TO FIT INSIDE IT.
-# An earlier version of this comment asserted the opposite — that
-# `remote/runner.ts`'s `CCD_VERB_TIMEOUT_MS` had no `pr-state` key and the live
-# bound was therefore the flat 90 s default. It ships `'pr-state': 20_000` as
-# the FIRST key in that map (`server/src/remote/runner.ts:28`, and on
-# `origin/main` since 27946f31), so the spec's number IS the code's number, and
-# `sweepPr`'s every `ccd pr-state --project` is killed at 20 s in remote mode —
-# which is this fleet's standing config.
+# THE OUTER BOUND IS 25 s, NOT 90, AND EVERY CALL HERE HAS TO FIT INSIDE IT.
+# An earlier version of this comment asserted that `remote/runner.ts`'s
+# `CCD_VERB_TIMEOUT_MS` had no `pr-state` key and the live bound was the flat
+# 90 s default. It has one, the FIRST key in that map (on `origin/main` since
+# 27946f31), so that number IS this verb's bound, and `sweepPr`'s every `ccd
+# pr-state --project` is killed at it in remote mode — this fleet's standing
+# config. It was 20 s until landing-order wave 2 added a THIRD call, the merge
+# queue read (`PR_GH_QUEUE_TIMEOUT`, at `_gh_pr_queue` below `cmd_clip`).
 #
-# That matters because THIS verb now makes TWO network calls, not one. The old
-# 12 + 6 spent 18 of the 20 before `_pr_state_one` had run for a single
-# workspace, and each workspace then costs a dozen-odd `git` spawns plus a
-# python3 start. The pair is now 8 + 5 = 13, leaving 7 s — 35 % — for the local
-# loop, and `pr-timeout-budget.test.ts` PINS that relationship across the two
-# languages so this comment can never drift from the map again. A comment is a
-# request; that test is the mechanism.
+# That matters because the calls' budgets add up. The old 12 + 6 spent 18 of
+# 20 before `_pr_state_one` had run for a single workspace, and each workspace
+# then costs a dozen-odd `git` spawns plus a python3 start. The three are now
+# 8 + 5 + 4 = 17 of 25, leaving 8 s — 32 % — for the local loop, and
+# `pr-timeout-budget.test.ts` PINS that relationship across the two languages
+# so this comment can never drift from the map again. A comment is a request;
+# that test is the mechanism.
 #
 # Both numbers stay generous against what they cover, because the expensive
 # query is gone: the row window without `statusCheckRollup` answered in 0.89 s
@@ -6332,14 +6362,14 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # lock" on two different inodes — reopening the double compare-and-set this
 # branch's lock migration closed.
 #
-# NOT reachable this way, and this set IS the boundary — ELEVEN dot-prefixed
-# artifacts live under `$REG`; the five above are reachable, these six are
+# NOT reachable this way, and this set IS the boundary — TWELVE dot-prefixed
+# artifacts live under `$REG`; the five above are reachable, these seven are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The six:
+# a paragraph that disagrees with it. The seven: `$REG/.carry.lock` (no id is the dash-free `.carry`);
 # `$REG/.lifecycle/` (the lifecycle journal — a dotted DIRECTORY for
 # exactly this reason; see the LC-BEGIN block, and note that its generations,
 # `errors` and `.rotate.lock` are counted WITH it, as `.reaped/`'s tombstones
@@ -10709,14 +10739,14 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
 
 cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <project>
   # A CONSTANT NUMBER OF gh CALLS PER REPO, never one per session — one for
-  # `--session`, two for `--project`, and neither number moves when a project
-  # grows a ninth workspace. That was "ONE gh call per repo, whichever form"
-  # until `--project` had to stop asking for a hundred check rollups GitHub
-  # answers with `HTTP 504`; the rollups are a second call now, and the budget
-  # argument the sentence was making (8 projects x 1 call / 120 s ~ 5 % of the
-  # GraphQL allowance) survives doubling and would not survive going per
-  # session. Read-only apart from the three registry fields it persists so a
-  # ccrc restart degrades to honest stale.
+  # `--session`, three for `--project` (the rows, the rollups, and the merge
+  # queue read `_pr_queue_stamp` makes), and no number moves when a project
+  # grows a ninth workspace. The budget argument (8 projects x 1 call / 120 s
+  # ~ 5 % of the GraphQL allowance) survives tripling and would not survive
+  # going per session, and `pr-timeout-budget.test.ts` sums the three calls'
+  # timeouts against the server's outer bound on this verb. Read-only apart
+  # from the three registry fields it persists so a ccrc restart degrades to
+  # honest stale.
   [[ $# -eq 2 ]] || die "usage: ccd pr-state --session <id> | ccd pr-state --project <project>"
   local mode=$1 arg=$2
   case "$mode" in
@@ -10903,7 +10933,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # three are handed down together. `""` on the `--project` fan-out says these
   # rows are the whole repository's, which is what makes the same loop right for
   # both forms.
-  for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt" "$head"; done
+  { for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt" "$head"; done; } | _pr_queue_stamp "$mode" "$repo"
 }
 
 cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --draft <true|false>
@@ -16499,7 +16529,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     # forced call would skip the candidate loop's rank-101 demotion by landing
     # here first. The probe clears the marker on a live answer, and `_authdead`
     # expires it once a credential file ccd can name changes (D-3524) — no spawn.
-    if [[ "$hrc" -eq 0 ]] \
+    if [[ "$hrc" -eq 0 && " ${SWAP_TARGET_SKIP:-} " != *" $home "* ]] \
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
       && ! _authdead "$home" && _avail "$home"; then
       _class_gate "$home" "$cls"; src=$?                                     # home recovered: go back — if it can serve the class
@@ -16564,7 +16594,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     pcls="$cls"; [[ "$pass" -eq 2 ]] && pcls=$(_class_below "$cls")
     unserv=0; unmeas=0
     for cand in $(_pool_for "$id"); do
-      [[ "$cand" == "$cur" ]] && continue
+      [[ "$cand" == "$cur" || " ${SWAP_TARGET_SKIP:-} " == *" $cand "* ]] && continue
       # THE FILTER LIVES HERE, AFTER `_pool_for`, AND NEVER INSIDE `_default_pool`:
       # a hand-set `$REG/<id>.pool` candidate list bypasses `_default_pool`
       # entirely (grep `ccd/ccd` for `^_pool_for()` — D-1913 replaced a line
@@ -16935,7 +16965,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # PREDICATE — `KS_WHY`/`KS_DETAIL` and `PROBE_VERDICT` are the same shape, for
   # the same reason — and because a `$( )` call site would lose a well-known
   # variable to the subshell.
-  HARD_BLOCK_VIA=""
+  HARD_BLOCK_VIA=""; HARD_BLOCK_RESET=""; HARD_BLOCK_TYPE=""; HARD_BLOCK_ROW=""
   # DEFENCE IN DEPTH, AND IT DECIDES NOTHING TODAY — measured, not assumed.
   # Both paths into this function are already below `_auto_swap_check`'s own
   # guard: its direct call, and `_tick_strand_undecidable`, whose only two call
@@ -16976,7 +17006,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # the provenance has to be stamped on the success side only: `! cmd` as a tail
   # says the same thing about the rc and gives nowhere to write the word.
   _pane_box_has_content "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)" && return 1
-  HARD_BLOCK_VIA=transcript
+  HARD_BLOCK_VIA=transcript; _hard_block_dated "$id"
   return 0
 }
 
@@ -17562,7 +17592,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # pay the registry/cache read; a positive also re-measures the draft. The
   # `_tick_strand_undecidable` block at its own call site below discloses that
   # its same-cadence call shares this cache rather than adding another scan.
-  _session_hard_blocked "$id" "$pane" && hard_blocked=1
+  _session_hard_blocked "$id" "$pane" && hard_blocked=1; _rescue_policy "$id" "$wrapper" "$pane" "$hard_blocked" || { [[ -z "$stuck" ]] && _tick_decided "$id"; return 0; }
   [[ -n "$pane" || -n "$hard_blocked" ]] || return 0
   # (The Fable-unavailable override that routed any session to gpt was removed
   #  2026-07-26 and stays removed. A lane that is not home-able re-entered the
@@ -17581,7 +17611,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # A HEALTHY PANE IS NOT STRANDED. `_strand_clear` tests `-e` first, so the
   # steady state of a healthy session writes nothing at all.
   [[ -n "$hard_blocked" ]] || _strand_clear "$id"
-  target=$(_swap_target "$id" "$wrapper" "$home" "$hard_blocked" "$hrc"); strc=$?
+  target=$(_rescue_target "$id" "$wrapper" "$home" "$hard_blocked" "$hrc"); strc=$?
   # rc 6 IS A DECISION, handled BEFORE the `-ge 2` undecidable guard (routing
   # spec §5.4): a destination chosen one rung DOWN because every lane was
   # measured-unservable at the intended class. Put after that guard it would be
@@ -17698,7 +17728,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # ceiling reaches exactly this state — which is the pre-existing silent
   # strand made loud, not a new behaviour for tagged projects only.
   if [[ -z "$target" || "$target" == "$wrapper" ]]; then
-    [[ -z "$target" && -n "$hard_blocked" ]] && _strand_mark "$id" "$wrapper" "$project"
+    [[ -z "$target" && -n "$hard_blocked" ]] && { _strand_mark "$id" "$wrapper" "$project" "$(_rescue_strand_cause "$id" "$wrapper" "$home" "$hard_blocked" "$hrc")"; _rescuewait_open "$id" "$wrapper" noroom; }
     return 0
   fi
   # A destination exists: whatever the pane says, this row is not stranded.
@@ -17755,7 +17785,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # keeps its exact shape; `via=transcript` is unchanged; `via=banner` is the
     # new word, and an operator seeing it knows the pane said so in this year's
     # wording rather than the transcript having been scanned for it.
-    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")" >> "$REG/swap.log"
+    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")$(_rescue_line_extra)" >> "$REG/swap.log"; _rescuewait_close "$id" swap
     _dispatch_swap "$id" "$target"
     return 0
   fi
@@ -20721,7 +20751,7 @@ _transcript_stalled_pair() {   # transcript-path -> 0 the newest real turn is th
   [[ "$state" -eq 2 ]]
 }
 
-_transcript_limit_banner() {   # transcript-path [stuck since-epoch] -> 0 the newest real row is a rate-limit banner (prints "<resetsAt>\t<rateLimitType>"; stuck mode's 401 prints "\t\tauthentication_failed") | 1 not | 2 unreadable | 3 stuck mode: that banner provably predates since-epoch (prints its epoch; D-3526) (D-2362, D-2456)
+_transcript_limit_banner() {   # transcript-path [stuck|dated since-epoch] -> 0 the newest real row is a rate-limit banner (prints "<resetsAt>\t<rateLimitType>"; stuck mode's 401 prints "\t\tauthentication_failed"; dated mode is stuck mode plus "\t<rowEpoch|->" after a rate-limit row's two fields) | 1 not | 2 unreadable | 3 stuck or dated mode: that banner provably predates since-epoch (prints its epoch; D-3526) (D-2362, D-2456)
   # STRUCTURAL, NOT TEXTUAL. The row Claude Code appends on a 429 carries
   # TOP-LEVEL `isApiErrorMessage:true` and `error:"rate_limit"` (measured
   # 2026-09-10: `quotaLimits:{status:"rejected",resetsAt:<epoch s>,
@@ -20759,7 +20789,7 @@ _transcript_limit_banner() {   # transcript-path [stuck since-epoch] -> 0 the ne
 import json, sys
 from datetime import datetime
 
-stuck = sys.argv[1:2] == ["stuck"]
+stuck = sys.argv[1:2] in (["stuck"], ["dated"])
 since = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
 
 
@@ -20824,7 +20854,7 @@ quota = quota if isinstance(quota, dict) else {}
 reset = quota.get("resetsAt")
 kind = quota.get("rateLimitType")
 reset = str(reset) if isinstance(reset, int) and not isinstance(reset, bool) else ""
-print(f"{reset}\t{kind if isinstance(kind, str) else chr(0)}".rstrip(chr(0)))
+print(f"{reset}\t{kind if isinstance(kind, str) else chr(0)}".rstrip(chr(0)) + (f"\t{int(stamp(found)) if stamp(found) is not None else chr(45)}" if sys.argv[1:2] == ["dated"] else ""))
 ' "$mode" "$since" 2>/dev/null
   rc=$?
   [[ "$rc" -le 1 || "$rc" -eq 3 ]] && return "$rc"
@@ -22129,63 +22159,380 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1)
   return 0
 }
 
-_swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar as a hardlink tree. Always rc 0.
+# ── THE CARRY MERGES (session continuity, spec §5.1) ─────────────────────────
+# A return visit — a session carried back onto an account it once left — finds
+# its sidecar directory already at the destination. Until this build that was
+# `(kept)`: the whole tree skipped, so every subagent transcript, workflow
+# journal and tool result written since the session last left stayed behind on
+# the source (774 of 1,310 carries, spec §1.2; and eight "journal not on disk"
+# resume refusals, every one after only `(kept)` carries). The existing-
+# destination branch now WALKS the source tree file by file and decides on
+# content and size — `_swap_carry_merge_walk`, below — and nothing is deleted.
+#
+# BOUNDED, BECAUSE THE WALK READS WHERE `(kept)` READ NOTHING. Two bounds,
+# neither of which waits — the unit is already stopped, so a carry that queued
+# would be a session held down:
+#   - a BOX-WIDE NON-BLOCKING SLOT, `$REG/.carry.lock`, taken inside the carry
+#     itself, so every path that carries is covered — the tick's rescue and
+#     auto-home, a manual or PWA swap, `swap-self` — not only `_dispatch_swap`'s
+#     (the box-wide lock park-and-wake R4 designed for `_dispatch_swap` had not
+#     shipped when this was written, measured, so this slot is the carry's
+#     own). A supervisor revival carries nothing (it never changes account),
+#     so it never reaches here. Contended: `(kept: busy)`.
+#   - a BYTE BUDGET, CARRY_MERGE_BUDGET, spent as a PRIORITY FILL. A dry pass
+#     over `lstat` alone prices every action BEFORE the first byte moves (the
+#     bytes it would read to compare, plus the bytes it would copy), orders
+#     them by what a resume needs — the rewritten records, then the runs'
+#     journals, then every other log, then the rest, newest first within each
+#     — and places them whole, in that order, until the next one would overrun
+#     the budget. That one and every one after it is DEFERRED: counted, never
+#     started, priced again on the next visit, which finds the placed ones
+#     equal — so a backlog bigger than one budget drains over repeat visits.
+#     (An all-or-nothing budget moved nothing on an over-budget walk, so the
+#     next visit priced the same backlog plus the new bytes and the pair
+#     stayed stranded for good.) `(merged +N ~R !D, deferred K)`; and
+#     `(kept: budget)` only when the FIRST action is priced over the budget on
+#     its own — nothing touched, the destination exactly as it was.
+#     The drain has TWO NAMED COSTS, both measured at zero on the box when this
+#     was written: an action priced over the budget on its own heads its queue
+#     and holds everything behind it for good (the largest on the box was
+#     64 MiB, an eighth of the budget); and a compare that can place nothing (a
+#     same-size file that is not a newer record, a log whose destination is
+#     longer) is priced again on EVERY visit, so enough of them ahead of a
+#     placement could hold it back. "Zero" for the second rests on the census's
+#     two assumptions: a shorter destination log IS a prefix of its source, and
+#     a same-size newer record differs from its destination. The two cases that
+#     break them place nothing too and are priced again on every visit: a newer
+#     record whose bytes are equal (3x its size, tier 0), and a longer source
+#     log whose shorter destination is not a prefix (2x the destination plus
+#     the source, then counted !D). The same-size compare is left as it is (a
+#     carried finding), so both remain. The stage-1 instrument makes either
+#     cost visible if it ever appears: the first as `kept: budget` (steady
+#     state is the walker's rc 3, logged `(kept: budget)`, which it counts
+#     apart), the second as `deferred_carries` and `deferred_actions`.
+# A walk that could not run at all — no `flock`, no python3, a destination that
+# is not a real directory, the walker's own failure — is `(kept: error)`, with
+# the cause on stderr: a third word, because "someone else is carrying" and
+# "this box cannot carry" want different remedies (never one overloaded word).
+#
+# The slot is NEVER unlinked (`.rotate.lock`'s rule: unlinking a held lock file
+# is how two processes come to hold "the lock" on two inodes). It is taken at
+# the carry's FIRST existing destination and held to the end of the loop, not
+# only through the merge walk, so a carry whose sidecars are ALL first carries
+# (today's `cp -al`/`cp -a` path, unchanged) takes no slot, but a first carry
+# that sorts AFTER a merge in the same call runs inside the slot already held.
+# That is a NAMED COST, kept: its `cp -al` -> `cp -a` fallback (an EXDEV on
+# every carry on this fleet, and not covered by CARRY_MERGE_BUDGET) can copy
+# for as long as it takes, and every other carry on the box that reaches an
+# existing destination meanwhile logs `(kept: busy)` and is left for its next
+# visit — the same bounded, never-waiting answer, only for longer.
+CARRY_MERGE_BUDGET=536870912    # bytes one sidecar's merge walk may read + copy per visit (512 MiB); what does not fit is deferred
+
+_carry_slot_take() {   # -> 0 and the CALLER's local CARRY_SLOT_FD set | 1 contended | 2 no mechanism (no flock, the lock file, any other flock failure)
+  command -v flock >/dev/null 2>&1 || return 2
+  local fd frc=0
+  { exec {fd}>>"$REG/.carry.lock"; } 2>/dev/null || return 2
+  # `flock -n` exits 1 ONLY on a conflict; a lock it cannot take at all (EBADF, ENOLCK) exits a sysexits code.
+  flock -n "$fd" 2>/dev/null || frc=$?
+  if (( frc != 0 )); then { exec {fd}>&-; } 2>/dev/null; (( frc == 1 )) && return 1; return 2; fi
+  CARRY_SLOT_FD=$fd
+}
+
+_swap_carry_merge_walk() {   # src dst budget -> stdout rows; rc 0 merged (K deferred) | 3 the first action alone over budget (nothing touched) | other: failed
+  # THE WALK, one python3 process rather than a fork per file: the measured
+  # sidecar census at planning ran to 6,142 files in one directory (p99 3,497),
+  # and a `stat`+`cmp` pair per file would hold the unit down for that long.
+  # The program arrives on fd 3 (`_pr_py`'s idiom), so stdin stays free.
+  #
+  # THE TABLE (spec §5.1), per REGULAR file of the source; directories are
+  # created as needed, and anything else in the source (a symlink, a fifo) is
+  # never followed and never copied:
+  #   absent at destination             -> hardlink, else copy       +N
+  #   the same inode (a linked carry)   -> nothing: equal by identity
+  #   equal size and equal mtime_ns     -> nothing (the quick check below)
+  #   equal size, bytes compared equal  -> nothing
+  #   *.jsonl, destination a strict prefix of a longer source -> replace  ~R
+  #   *.jsonl, source a prefix of a longer destination -> keep (it is further along)
+  #   *.jsonl, neither a prefix of the other -> keep destination         !D
+  #   a rewritten record — workflows/<runId>.json, any agent-*.meta.json,
+  #     workflows/scripts/* — source newer (mtime_ns)   -> replace         ~R
+  #   the same record, source not newer                 -> keep
+  #   any other file whose bytes differ (a tool result is written once)  !D
+  #   a destination entry of another type where the source has a file    !D
+  # Every !D prints `diverged <kept path> longer <longer copy's path>` for
+  # stage 3's manifest to name; the summary row is `merged <N> <R> <D> <K>`.
+  #
+  # THE FILL. Every row above that costs bytes (an absent file, a compare, a
+  # replace) is an ACTION, priced by the dry pass from `lstat` alone; a verdict
+  # `lstat` decides by itself (equal, or another type in the way) costs nothing
+  # and is taken on every visit. The actions are placed in RESUME ORDER —
+  #   1. the rewritten records a resume reads: workflows/<runId>.json,
+  #      workflows/scripts/*, agent-*.meta.json;
+  #   2. the append-only logs: every journal.jsonl, then agent-*.jsonl and
+  #      every other *.jsonl;
+  #   3. everything else (tool results and the rest);
+  # newest source mtime first within each — each one WHOLE, until the next
+  # would overrun the budget. That one and every one after it is deferred:
+  # counted (K), never started, so no deferred action leaves a partial file.
+  # The next visit finds every placed file equal (a link is the same inode; a
+  # copy keeps size and mtime_ns) and prices only what is left plus what is
+  # new, so a backlog drains, most valuable bytes first — with the fill's two
+  # named costs (the header above states them): an action over the budget on
+  # its own holds its queue for good, and a compare that places nothing is
+  # priced again on every visit. Measured on the box's
+  # 673 real return-visit pairs at 512 MiB: 630 place everything at once, 43
+  # defer some, and with no new bytes those 43 drain in 2 visits (27) or 3
+  # (16); the largest single action priced 64 MiB. Not even the first action
+  # fits (it is priced over the budget on its own): `budget <its cost>`, rc 3.
+  #
+  # IDENTITY DECIDES ONLY "EQUAL", NEVER "DIFFERENT": a same-inode pair is the
+  # same bytes by definition, and every other pair is decided on size and
+  # content. THE QUICK CHECK (equal size AND equal nanosecond mtime -> equal,
+  # no bytes read) is rsync's default and this plan's measured choice: every
+  # carry since the bind-mount move is a `cp -a`, which preserves mtime_ns, so
+  # a file untouched since its last carry passes it; measured on the box's 673
+  # real return-visit pairs, it cuts the walk's p90 cost from 764 MiB to 208 MiB
+  # — about the bytes that are actually new. Its named cost: two different
+  # files of identical size AND identical nanosecond mtime read as equal.
+  #
+  # REPLACE IS TEMP-AND-RENAME in the destination's own directory, never a
+  # write through the destination's inode: a destination name may share its
+  # inode with another name (a linked carry), which a write-through would
+  # rewrite too. A temp left by a killed walk is named `.ccd-carry-*` and
+  # skipped on every later walk, as source and as destination.
+  python3 /dev/fd/3 "$@" 3<<'PY'
+import os, stat, sys, shutil, tempfile
+
+src, dst, budget = sys.argv[1], sys.argv[2], int(sys.argv[3])
+sys.stdout.reconfigure(errors='backslashreplace')   # a non-UTF-8 file name must not fail the report after the merge ran
+TMP = '.ccd-carry-'
+CHUNK = 1 << 20
+
+def is_log(rel):
+    return rel.endswith('.jsonl')
+
+def is_record(rel):
+    parts = rel.split('/')
+    if parts[0] == 'workflows' and len(parts) == 2 and parts[1].endswith('.json'):
+        return True
+    if len(parts) >= 3 and parts[0] == 'workflows' and parts[1] == 'scripts':
+        return True
+    return parts[-1].startswith('agent-') and parts[-1].endswith('.meta.json')
+
+def tier(rel):
+    """Resume value, highest first: 0 a rewritten record, 1 a run's journal, 2 any other log, 3 the rest."""
+    if is_record(rel):
+        return 0
+    if rel.split('/')[-1] == 'journal.jsonl':
+        return 1
+    if is_log(rel):
+        return 2
+    return 3
+
+def prefix_equal(a, b, n):
+    """True iff the first n bytes of a and b are identical."""
+    with open(a, 'rb') as fa, open(b, 'rb') as fb:
+        left = n
+        while left > 0:
+            k = min(CHUNK, left)
+            x, y = fa.read(k), fb.read(k)
+            if x != y or len(x) < k:
+                return False
+            left -= k
+    return True
+
+def files(root):
+    out = []
+    for dp, dns, fns in os.walk(root, followlinks=False):
+        dns[:] = sorted(d for d in dns if not d.startswith(TMP))
+        for f in sorted(fns):
+            if f.startswith(TMP):
+                continue
+            full = os.path.join(dp, f)
+            if stat.S_ISREG(os.lstat(full).st_mode):
+                out.append(os.path.relpath(full, root))
+    return out
+
+def dst_blocked(rel):
+    """An ancestor of dst/rel that exists and is not a real directory."""
+    parts = rel.split('/')[:-1]
+    cur = dst
+    for p in parts:
+        cur = os.path.join(cur, p)
+        try:
+            st = os.lstat(cur)
+        except FileNotFoundError:
+            return False
+        if not stat.S_ISDIR(st.st_mode):
+            return True
+    return False
+
+# THE DRY PASS: lstat alone, nothing read, nothing moved. `todo` holds every
+# action that costs bytes, priced; `diverged` every !D lstat decides alone.
+todo, diverged = [], []
+
+def queue(cost, kind, rel, s, d):
+    todo.append(((tier(rel), -s.st_mtime_ns, rel), cost, kind, rel, s, d))
+
+for rel in files(src):
+    sp, dp = os.path.join(src, rel), os.path.join(dst, rel)
+    s = os.lstat(sp)
+    if dst_blocked(rel):
+        diverged.append((dp, sp)); continue
+    try:
+        d = os.lstat(dp)
+    except FileNotFoundError:
+        queue(s.st_size, 'absent', rel, s, None); continue
+    if not stat.S_ISREG(d.st_mode):
+        diverged.append((dp, sp)); continue
+    if (d.st_dev, d.st_ino) == (s.st_dev, s.st_ino):
+        continue
+    if d.st_size == s.st_size:
+        if d.st_mtime_ns == s.st_mtime_ns:
+            continue
+        # both read to compare; a newer record is then copied as well, and priced here
+        cost = 2 * s.st_size + (s.st_size if is_record(rel) and s.st_mtime_ns > d.st_mtime_ns else 0)
+        queue(cost, 'same-size', rel, s, d); continue
+    if is_log(rel):
+        cost = 2 * min(s.st_size, d.st_size) + (s.st_size if d.st_size < s.st_size else 0)
+        queue(cost, 'log', rel, s, d); continue
+    if is_record(rel):
+        if s.st_mtime_ns > d.st_mtime_ns:
+            queue(s.st_size, 'replace', rel, s, d)
+        continue
+    diverged.append((dp, sp if s.st_size > d.st_size else dp))
+
+# THE FILL: resume order (tier, then the newest source first), each action
+# placed WHOLE until the next would overrun the budget; it and every one after
+# it are deferred, never started. Not even the first fits: nothing is touched.
+todo.sort(key=lambda a: a[0])
+spent, go = 0, []
+for a in todo:
+    if spent + a[1] > budget:
+        break
+    spent += a[1]
+    go.append(a)
+if todo and not go:
+    print(f'budget {todo[0][1]}')
+    sys.exit(3)
+deferred = len(todo) - len(go)
+
+def mkparents(rel):
+    parts = rel.split('/')[:-1]
+    cur_s, cur_d = src, dst
+    for p in parts:
+        cur_s, cur_d = os.path.join(cur_s, p), os.path.join(cur_d, p)
+        if not os.path.isdir(cur_d):
+            os.mkdir(cur_d)
+            shutil.copystat(cur_s, cur_d)
+
+def replace(rel):
+    target = os.path.join(dst, rel)
+    fd, tmp = tempfile.mkstemp(prefix=TMP, dir=os.path.dirname(target))
+    os.close(fd)
+    try:
+        shutil.copy2(os.path.join(src, rel), tmp)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+added = replaced = 0
+for key, cost, kind, rel, s, d in go:
+    sp, dp = os.path.join(src, rel), os.path.join(dst, rel)
+    if kind == 'absent':
+        mkparents(rel)
+        try:
+            os.link(sp, dp)
+        except OSError:
+            fd, tmp = tempfile.mkstemp(prefix=TMP, dir=os.path.dirname(dp))
+            os.close(fd)
+            try:
+                shutil.copy2(sp, tmp)
+                os.replace(tmp, dp)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        added += 1
+    elif kind == 'replace':
+        replace(rel); replaced += 1
+    elif kind == 'same-size':
+        if prefix_equal(sp, dp, s.st_size):
+            continue
+        if is_record(rel) and s.st_mtime_ns > d.st_mtime_ns:
+            replace(rel); replaced += 1
+        elif is_record(rel):
+            continue
+        else:
+            diverged.append((dp, sp))
+    elif kind == 'log':
+        if d.st_size < s.st_size:
+            if prefix_equal(sp, dp, d.st_size):
+                replace(rel); replaced += 1
+            else:
+                diverged.append((dp, sp))
+        elif not prefix_equal(sp, dp, s.st_size):
+            diverged.append((dp, dp))
+
+for kept, longer in diverged:
+    print(f'diverged {kept} longer {longer}')
+print(f'merged {added} {replaced} {len(diverged)} {deferred}')
+PY
+}
+
+_swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first carry as a hardlink tree, a return visit as a merge. Always rc 0.
   # <projects dir>/<uuid>/ holds subagents, tool-results and workflows, and was
   # copied by NOTHING before this build: 188MB of the incident session's state,
   # left behind on the account it was swapped off. Globbed in its own right
   # because sidecars exist in project dirs with no .jsonl for the same uuid, and
   # each lands at the mirror of its OWN source dir.
   #
-  # `cp -al` — a hardlink tree, the one place a source inode is shared across
-  # accounts, and the asymmetry with §2.2 is deliberate: the transcript is
-  # appended to, a sidecar's contents are write-once artifacts read after they
-  # are written. `cp -a` without `-l` is the fallback the moment linking fails
-  # (a cross-device destination), so the degradation is a slow correct copy
-  # rather than nothing — and it is the whole remedy if the write-once property
-  # is ever disproved: delete one flag, pay the bytes, change nothing else. The
-  # mode is logged so the evidence exists if a future defect implicates a shared
-  # checkpoint.
+  # A FIRST CARRY (no destination yet) is `cp -al` — a hardlink tree — with
+  # `cp -a` as the fallback the moment linking fails. NOT WRITE-ONCE, measured
+  # (session continuity, Task 1): an `agent-*.jsonl` and a run's `journal.jsonl`
+  # are APPENDED IN PLACE (same inode, growing; `workflows/<runId>.json` is
+  # written whole at the run's end), so a linked tree would share those appends
+  # between the two accounts. That is harmless — both names are this session's own
+  # record, and a later merge reads a shared inode as equal — and on this fleet
+  # it no longer happens at all: every account root is its own bind mount, and
+  # link(2) across two mounts answers EXDEV even on one filesystem (measured),
+  # so every carry since the move logs `(copy)`. The mode is logged so the
+  # evidence exists if a future defect implicates a shared file.
   #
-  # An existing destination sidecar is LEFT ALONE rather than merged — the
-  # opposite of the transcript's unlink-first rule, because a tree can be
-  # half-merged where a single file is replaced in one step. `_sidecar_matches`
-  # strips the source's trailing slash; the anti-nesting guard is that `$dst`
-  # (the `<uuid>` directory itself, not just its parent) must not already
-  # exist before a copy attempt runs — measured: `cp -al src/<uuid> dst/<uuid>`
-  # (and `cp -a`, identically) onto an ALREADY-EXISTING destination nests the
-  # tree inside itself regardless of either path's trailing slash. `mkdir -p`
-  # below only creates the PARENT (`$dstcfg/projects/$pdir`), never `$dst`
-  # itself, so the FIRST attempt (`cp -al`) always starts clean.
+  # AN EXISTING DESTINATION IS MERGED, NOT LEFT ALONE (C8, reversing this
+  # branch's old rule): `_swap_carry_merge_walk` above, under the carry slot and
+  # CARRY_MERGE_BUDGET, logging `(merged +N ~R !D)`, `(merged +N ~R !D,
+  # deferred K)` when K actions did not fit this visit's budget, or
+  # `(kept: busy|budget|error)`. A destination a failed first carry left
+  # partial is repaired by the same walk — it simply finds the missing files
+  # absent — so `(kept)` is no longer permanent.
   #
-  # The SECOND attempt does not start clean on its own, and this is the
-  # subtle half of the guard: `cp -al` builds the destination directory
-  # skeleton before it fails on the first unlinkable file — measured on this
-  # box, a cross-device `$dst` gets every subdirectory created and every file
-  # missing, `cp` exits nonzero, and `$dst` now EXISTS where a moment ago it
-  # did not. Falling back to `cp -a "$src" "$dst"` against that survivor nests
-  # the whole tree one level down (`$dst/$uuid/…`) exactly as the top-of-loop
-  # case does, leaving the real path full of empty directories — and because
-  # `$dst` now exists, EVERY later swap onto this account hits the top-of-loop
-  # guard and logs `(kept)`, permanently, never repairing it. The fallback
-  # therefore clears any partial `$dst` immediately before it copies.
+  # THE FIRST-CARRY PATH IS UNCHANGED, and so is its anti-nesting guard:
+  # `_sidecar_matches` strips the source's trailing slash, and `$dst` (the
+  # `<uuid>` directory itself) must not exist before `cp -al` runs — measured:
+  # `cp -al src/<uuid> dst/<uuid>` (and `cp -a`) onto an ALREADY-EXISTING
+  # destination nests the tree inside itself. `mkdir -p` below only creates the
+  # PARENT, never `$dst`. The merge never runs `cp` on a directory at all.
   #
-  # Success is read from `cp`'s own exit status, not `[[ -d "$dst" ]]`: a
-  # same-device partial failure (one unreadable member, ENOSPC, EMLINK) can
-  # leave `$dst` populated as a directory before `cp -al` reports failure, so
-  # a directory-existence check would read a half-linked tree as a clean
-  # success — and log `(link)` for a tree that is only partly shared. Clearing
-  # `$dst` before the fallback and always doing a full `cp -a` on ANY first-
-  # attempt failure means the logged mode never overstates what is shared:
-  # `(link)` only when the whole tree is hardlinks to `$src`, `(copy)`
-  # whenever any part of it needed a real copy.
+  # The fallback does not start clean on its own: `cp -al` builds the
+  # destination skeleton before it fails on the first unlinkable file (measured:
+  # a cross-device `$dst` gets every subdirectory and no file), and `cp -a` onto
+  # that survivor would nest. So the fallback clears any partial `$dst` first.
+  # Success is read from `cp`'s own exit status, not `[[ -d "$dst" ]]`, so the
+  # logged mode never overstates what is shared: `(link)` only when the whole
+  # tree is hardlinks, `(copy)` whenever any part needed a real copy.
   #
-  # C-collated sort: no destination is ever contested (each sidecar's `pdir`
-  # comes from a distinct source project directory), so ordering never changes
-  # WHAT is carried — only the order of the swap.log lines a human reads
-  # afterward. Sorted anyway so that order is reproducible rather than a
-  # function of glob/readdir order, which is locale- and filesystem-dependent.
+  # C-collated sort: no destination is ever contested, so ordering changes only
+  # the order of the swap.log lines a human reads, which is kept reproducible.
   local srccfg="$1" dstcfg="$2" uuid="$3" src pdir dst mode rc
-  local -a sidecars=()
+  local slot="" slot_rc=0 wout wrc line n r dv k dfr bud CARRY_SLOT_FD=""
+  local -a sidecars=() rows=()
   mapfile -t sidecars < <(_sidecar_matches "$srccfg" "$uuid" | LC_ALL=C sort)
   (( ${#sidecars[@]} )) || return 0
   for src in "${sidecars[@]}"; do
@@ -22193,9 +22540,52 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar as a har
     # dir starts with `-`, and GNU basename would read it as options.
     pdir="${src%/*}"; pdir="${pdir##*/}"
     dst="$dstcfg/projects/$pdir/$uuid"
-    if [[ -e "$dst" ]]; then
-      echo "ccd: sidecar already present at $dst — left alone (not merged)" >&2
-      echo "$(date '+%F %T') sidecar $uuid -> $dst (kept)" >> "$REG/swap.log"
+    if [[ -e "$dst" || -L "$dst" ]]; then
+      # The slot is taken once, at the first existing destination, and held
+      # for the rest of this carry; its answer is remembered, so a busy slot
+      # is not retried per sidecar. A first carry later in this loop therefore
+      # copies INSIDE the slot (the header's named cost).
+      if [[ -z "$slot" ]]; then
+        _carry_slot_take; slot_rc=$?; slot=taken
+      fi
+      if (( slot_rc == 1 )); then
+        echo "ccd: sidecar present at $dst — another carry holds the merge slot; left alone" >&2
+        echo "$(date '+%F %T') sidecar $uuid -> $dst (kept: busy)" >> "$REG/swap.log"
+        continue
+      fi
+      if (( slot_rc != 0 )) || [[ -L "$dst" || ! -d "$dst" ]] || ! command -v python3 >/dev/null 2>&1; then
+        echo "ccd: warn: sidecar present at $dst but it cannot be merged (flock, the lock file, python3, or a destination that is not a real directory) — left alone" >&2
+        echo "$(date '+%F %T') sidecar $uuid -> $dst (kept: error)" >> "$REG/swap.log"
+        continue
+      fi
+      wout=$(_swap_carry_merge_walk "$src" "$dst" "$CARRY_MERGE_BUDGET"); wrc=$?
+      # `rows` is cleared first and the last row read behind a length test: a
+      # here-string of 64 KiB or more is spilled to a temp file, and when that
+      # cannot be created `mapfile` does not run — an empty `rows` read at
+      # `[-1]` under `set -u` would kill this shell between the unit's stop and
+      # its restart, and a stale one would give this sidecar the last one's verdict.
+      rows=(); mapfile -t rows <<< "$wout"
+      if (( wrc == 3 )); then
+        bud="${rows[0]-}"; bud="${bud#budget }"   # an unset row (an empty array) reads as empty, never as an unbound variable
+        echo "ccd: sidecar at $dst not merged — its first action alone would exceed CARRY_MERGE_BUDGET ($bud bytes); left alone" >&2
+        echo "$(date '+%F %T') sidecar $uuid -> $dst (kept: budget)" >> "$REG/swap.log"
+        continue
+      fi
+      line=""; if (( ${#rows[@]} )); then line="${rows[${#rows[@]}-1]}"; fi
+      if (( wrc != 0 )) || [[ ! "$line" =~ ^merged\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)$ ]]; then
+        echo "ccd: warn: the merge walk into $dst failed (rc $wrc); every file it placed is whole, the rest stays on the source" >&2
+        echo "$(date '+%F %T') sidecar $uuid -> $dst (kept: error)" >> "$REG/swap.log"
+        continue
+      fi
+      n="${BASH_REMATCH[1]}"; r="${BASH_REMATCH[2]}"; dv="${BASH_REMATCH[3]}"; k="${BASH_REMATCH[4]}"
+      for line in "${rows[@]}"; do
+        [[ "$line" == diverged\ * ]] || continue
+        echo "$(date '+%F %T') sidecar $uuid diverged ${line#diverged }" >> "$REG/swap.log"
+      done
+      # K > 0: the budget ran out part way. What was placed is whole; the K
+      # actions left wait on the source for the next visit, which prices them first.
+      if (( k > 0 )); then dfr=", deferred $k"; else dfr=""; fi
+      echo "$(date '+%F %T') sidecar $uuid -> $dst (merged +$n ~$r !$dv$dfr)" >> "$REG/swap.log"
       continue
     fi
     mkdir -p "$dstcfg/projects/$pdir"
@@ -22213,12 +22603,15 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar as a har
       echo "$(date '+%F %T') sidecar $uuid -> $dst ($mode)" >> "$REG/swap.log"
     else
       echo "ccd: warn: could not carry sidecar $src -> $dst" >&2
-      # Do not leave a half-built $dst behind on total failure either: the
-      # top-of-loop existence check would read it as "already carried" and
-      # this sidecar would never be retried by a later swap.
+      # Do not leave a half-built $dst behind on total failure either: a later
+      # swap would find it and merge into a tree this carry abandoned — which
+      # the merge now repairs, but a clean absence re-runs the fast path.
       [[ -e "$dst" ]] && rm -rf "$dst" 2>/dev/null
     fi
   done
+  # The slot is released here, on the loop's one way out, so the restart that
+  # follows the carry never inherits it.
+  if [[ -n "$CARRY_SLOT_FD" ]]; then { exec {CARRY_SLOT_FD}>&-; } 2>/dev/null; fi
   return 0
 }
 
@@ -22413,6 +22806,7 @@ _limit_dated() {   # id via born -> 0 the transcript's newest real row is a bloc
   local id="$1" via="$2" born="$3" f out rc sw
   f=$(_transcript_path "$id") || return 1
   out=$(_limit_read "$id" "$f" "$born"); rc=$?
+  _hard_block_date "$rc" "$born" "$out"   # the dated row the rescue waits read (session-continuity §5.4 rule 2)
   (( rc == 0 )) && return 0
   (( rc == 3 )) || return 1
   # Condition (2): the regex goes FIRST, so the arithmetic never sees an
@@ -22425,14 +22819,14 @@ _limit_dated() {   # id via born -> 0 the transcript's newest real row is a bloc
   return 3
 }
 
-_limit_read() {   # id transcript-path born -> the stuck-mode read's rc (0|1|2|3; on 3 prints the row's epoch), cached in `$REG/<id>.tdate` on the process and the file (D-3526)
+_limit_read() {   # id transcript-path born -> the dated read's rc (0|1|2|3; on 0 prints "<row>\t<reset>\t<type>", `-` for a field it lacks; on 3 prints the row's epoch), cached in `$REG/<id>.tdate` on the process and the file (D-3526)
   # THE PANE RUNGS ASK THIS ON EVERY TICK OF A POSITIVE, for as long as a real
   # block sits stranded (the round-1 review read 24 strands in swap.log since
   # 2026-09-11: a median of 75 to 160 minutes, the longest 1852) and as long as a
   # suppressed carried-in banner stays on screen, so an uncached read put
   # D-2444's python pass back on the 5 s tick. The answer is a pure function
   # of the file and of `since`, so it is cached on exactly those:
-  # "<born> <mtime> <size> <rc> <row-epoch|-> <path>", and read again the moment
+  # "<born> <mtime> <size> <rc> <row|-> <reset|-> <type|-> <path>", and read again the moment
   # any of them changes. Every row Claude Code appends grows the file, so a fresh
   # block is never hidden by the cache — the rule the pane rungs keep, that an
   # old answer must not overrule what is on screen now. `lastswap` and `.spawn`
@@ -22441,35 +22835,60 @@ _limit_read() {   # id transcript-path born -> the stuck-mode read's rc (0|1|2|3
   # is never cached: it can be transient, and a stuck session's file does not
   # change to clear it. Born unknown, or a file stat cannot measure, reads
   # uncached — today's answer. A record for any other key, or a torn one, is
-  # read past, never trusted: the regex admits digits and the path only.
-  local id="$1" f="$2" born="$3" m s key="" rec out rc cached_key cached_rc cached_row cached_path
-  local re='^([0-9]+ [0-9]+ [0-9]+) ([013]) ([0-9]+|-) (.+)$'
+  # read past, never trusted: the regex admits digits, `-`, a window's word and the path only.
+  # THE rc-0 ANSWER CARRIES ITS ROW (session-continuity §5.4 rule 2, D-3498):
+  # the `dated` read is `stuck` plus the rate-limit row's own epoch, so the
+  # rescue waits read the row's `resetsAt`, window and epoch from the same
+  # cached answer the verdict came from — no second read on the 5 s tick. A 401
+  # answers rc 0 with `-` in all three: lost auth has no reset. A record in the
+  # shape before this one ("<key> <rc> <row|-> <path>") is re-read, never
+  # parsed: its sixth field is an absolute path, where this shape types the
+  # reset, so the regex cannot match it.
+  local id="$1" f="$2" born="$3" m s key="" rec out rc cached_key cached_rc cached_row cached_reset cached_type cached_path
+  local row reset kind rest
+  local re='^([0-9]+ [0-9]+ [0-9]+) ([013]) ([0-9]+|-) ([0-9]+|-) ([a-z_]+|-) (/.+)$'
   m=$(_plat_mtime "$f" 2>/dev/null); s=$(_plat_size "$f" 2>/dev/null)
   [[ "$born" =~ ^[0-9]+$ && "$m" =~ ^[0-9]+$ && "$s" =~ ^[0-9]+$ ]] && key="$born $m $s"
   if [[ -n "$key" ]]; then
     rec=$(_reg_get "$id" tdate)
     if [[ "$rec" =~ $re ]]; then
       cached_key="${BASH_REMATCH[1]}"; cached_rc="${BASH_REMATCH[2]}"
-      cached_row="${BASH_REMATCH[3]}"; cached_path="${BASH_REMATCH[4]}"
-      # An rc 3 has a dated row; rc 0/1 has no row. A record that mixes the
-      # two is torn, not a safe cached verdict.
+      cached_row="${BASH_REMATCH[3]}"; cached_reset="${BASH_REMATCH[4]}"
+      cached_type="${BASH_REMATCH[5]}"; cached_path="${BASH_REMATCH[6]}"
+      # An rc 3 has a dated row and nothing else; an rc 1 has none; an rc 0
+      # has whatever its row carried. A record that mixes them is torn, not
+      # a safe cached verdict.
       if [[ "$cached_key" == "$key" && "$cached_path" == "$f" ]] \
-        && { [[ "$cached_rc" == 3 && "$cached_row" =~ ^[0-9]+$ ]] \
-          || [[ "$cached_rc" =~ ^[01]$ && "$cached_row" == - ]]; }; then
+        && { [[ "$cached_rc" == 3 && "$cached_row" =~ ^[0-9]+$ && "$cached_reset$cached_type" == -- ]] \
+          || [[ "$cached_rc" == 1 && "$cached_row$cached_reset$cached_type" == --- ]] \
+          || [[ "$cached_rc" == 0 ]]; }; then
         [[ "$cached_rc" == 3 ]] && printf '%s\n' "$cached_row"
+        [[ "$cached_rc" == 0 ]] && printf '%s\t%s\t%s\n' "$cached_row" "$cached_reset" "$cached_type"
         return "$cached_rc"
       fi
     fi
   fi
-  out=$(_transcript_limit_banner "$f" stuck "$born"); rc=$?
+  out=$(_transcript_limit_banner "$f" dated "$born"); rc=$?
+  if (( rc == 0 )); then
+    # "<resetsAt>\t<rateLimitType>\t<rowEpoch|->", or a 401's "\t\tauthentication_failed":
+    # split on the literal tab, never `read` (IFS whitespace collapses an empty field),
+    # and each field typed, so a 401 dates nothing.
+    reset="${out%%$'\t'*}"; rest="${out#*$'\t'}"; kind="${rest%%$'\t'*}"; row="${rest#*$'\t'}"
+    [[ "$row" =~ ^[0-9]+$ ]] || row=-
+    [[ "$reset" =~ ^[0-9]+$ ]] || reset=-
+    [[ "$kind" =~ ^[a-z_]+$ ]] || kind=-
+  fi
   if [[ -n "$key" ]]; then
-    if (( rc == 0 || rc == 1 )); then
-      _reg_set "$id" tdate "$key $rc - $f" 2>/dev/null || true
+    if (( rc == 0 )); then
+      _reg_set "$id" tdate "$key 0 $row $reset $kind $f" 2>/dev/null || true
+    elif (( rc == 1 )); then
+      _reg_set "$id" tdate "$key 1 - - - $f" 2>/dev/null || true
     elif (( rc == 3 )) && [[ "$out" =~ ^[0-9]+$ ]]; then
-      _reg_set "$id" tdate "$key 3 $out $f" 2>/dev/null || true
+      _reg_set "$id" tdate "$key 3 $out - - $f" 2>/dev/null || true
     fi
   fi
   (( rc == 3 )) && printf '%s\n' "$out"
+  (( rc == 0 )) && printf '%s\t%s\t%s\n' "$row" "$reset" "$kind"
   return "$rc"
 }
 
@@ -22510,6 +22929,371 @@ _carried_in_note() {   # id via row-epoch born — one swap.log line per process
   _reg_set "$id" carriednote "$4" 2>/dev/null || true
   st=$(_reg_get "$id" spawn)
   echo "$(date '+%F %T') carried-in $id: via=$2 rate-limit row at $3 predates this pane's process (born $4) — not a block [wrapper=$(_reg_get "$id" wrapper)] [spawn=${st##* }]" >> "$REG/swap.log"
+}
+
+# ── THE RESCUE POLICY (session-continuity spec §5.4, rules 2–3; D-3498) ─────
+# Rule 1 of that section — a carried-in banner is not a block — shipped as
+# D-3526, above (`_limit_dated`, on the pane's own process start). What sits
+# between that verdict and the rescue arm's `_dispatch_swap` lives here,
+# below the frozen citation corpus, reached from one-line call sites above it:
+#   2. WAIT NEAR THE CURRENT ACCOUNT'S OWN FIVE-HOUR RESET (C6, C13), and
+#      record today's `stranded` path as the no-room wait.
+#   3. SPREAD, DO NOT BOUNCE, AND CHAIN-WAIT a fourth rescue inside the hour.
+# Every wait is recorded once on entry and once on exit, in
+# `$REG/<id>.rescuewait` and in swap.log — never under the word `hold`, which
+# is the workspace-reap hold (`$REG/<id>.hold`).
+#
+# THE DATED ROW. `_session_hard_blocked` clears HARD_BLOCK_RESET/TYPE/ROW on
+# every call — `cmd_supervise` runs every tick in one long-lived shell, and a
+# value this call did not set is a previous tick's — and `_hard_block_date`
+# sets them only from a rate-limit row the dated read (`_limit_read`, cached
+# on this process and file) answered rc 0 on: a pane rung through D-3526's own
+# read, the transcript rung through `_hard_block_dated`, because its 30 s
+# `tscan` cache skips the read. Four inputs date nothing, each measured:
+#   - LOST AUTH. An auth-failure pane is never read (`_pane_carried_in`), and a
+#     401 newer than the rate-limit row is the newest real row whoever wrote
+#     it: the reader answers this process's 401 (`-` in every field) or, for an
+#     earlier process's, no block row at all — never the rate-limit row under it;
+#   - AN UNPLACED PROCESS. `_pane_born` unanswered: nothing is dated, so no wait
+#     — and D-3526 already keeps the positive;
+#   - A CARRIED-IN ROW. rc 3 is never a dated row, even where D-3526 keeps it a
+#     block (no swap after it, or a process that never came up — which has no
+#     live TUI, so no armed auto-continue either);
+#   - A ROW WRITTEN AT OR AFTER ITS OWN `resetsAt` keeps no reset: that reset did
+#     not turn the account, so it reaches no wait, no `.rescuewait` and no
+#     `reset=` token — the reset is kept only where it could have turned it.
+# A WAIT OF ANY KIND opens only on a dated rate-limit row carrying a kept reset
+# and its window (`_rescuewait_open`'s gate). No such row is today's behaviour:
+# swap, or strand. `~/.cc-limits` IS NOT A FALLBACK for the reset: it cannot say
+# which window blocked, and a wait taken on the wrong window is a session
+# parked for days.
+RESCUE_WAIT_BOUND=600           # C13 — seconds before a five-hour reset inside which the rescue waits for Claude Code's armed auto-continue; 0 turns the NEAR wait off (a wait of another kind still ends in place at its reset, rule 2)
+RESCUE_WAIT_GRACE=120           # seconds after that reset a wait holds for the continuation before it ends. ITS OWN CONSTANT, not STALE_PRESS_COOLDOWN, which paces keystrokes, not waits
+RESCUE_CHAIN_WAIT=1800          # spec §5.4's 30 minutes (a knob), the longest the rescue holds a session on its account: in place after a reset turned (rule 2, until this long past that reset) and in a chain wait (rule 3, this long from its start)
+HARD_BLOCK_RESET="" HARD_BLOCK_TYPE="" HARD_BLOCK_ROW=""   # the verdict's dated row (above); declared here so a stub of `_session_hard_blocked` leaves them set under `set -u`
+RESCUE_CHAIN_COUNT=3            # rescues of ONE session inside RESCUE_CHAIN_WINDOW after which the next one chain-waits first
+RESCUE_CHAIN_WINDOW=3600        # the window those rescues are counted in; also how long an account the session left blocked is skipped, unless its logged reset passes first
+RESCUE_SPREAD_WINDOW=600        # a target that received ANY session's rescue this recently is taken only when no other placeable target exists
+RESCUE_LOG_TAIL_BYTES=1048576   # swap.log bytes rule 3 reads (1 MiB, spec §5.4 rule 3); a short read undercounts, which is today's behaviour
+RESCUE_COUNT=0 RESCUE_SKIP_LEFT="" RESCUE_SKIP_RECENT=""   # `_rescue_history`'s answers
+
+_hard_block_date() {   # rc born answer — what `_limit_read`'s answer tells HARD_BLOCK_ROW/TYPE/RESET; always rc 0
+  local row reset kind
+  # AN UNPLACED PROCESS DATES NOTHING. The reader cannot place a row without
+  # `since` either (it prints `-`), so this is the second of two locks, and
+  # the one the policy owns.
+  [[ "$2" =~ ^[0-9]+$ ]] || return 0
+  # rc 3 — a row older than this process that D-3526 keeps a block (no swap
+  # after it, or a process that never came up) — tells the rescue line its
+  # `row=` and nothing more: it keeps no reset and no window, so no wait keys on it.
+  [[ "$1" == 3 && "$3" =~ ^[0-9]+$ ]] && { HARD_BLOCK_ROW="$3"; return 0; }
+  [[ "$1" == 0 ]] || return 0               # only a block row this process wrote: rc 1 and 2 date nothing
+  IFS=$'\t' read -r row reset kind <<<"$3"  # `_limit_read` writes `-` for a missing field, so none is empty
+  [[ "$row" =~ ^[0-9]+$ ]] || return 0      # a 401, or a row whose timestamp would not parse
+  HARD_BLOCK_ROW="$row"
+  [[ "$kind" =~ ^[a-z_]+$ ]] && HARD_BLOCK_TYPE="$kind"
+  # A ROW WRITTEN AT OR AFTER ITS OWN RESET KEEPS NONE: that reset did not turn
+  # the account. Real on this fleet — a 14-day survey found `five_hour` and
+  # `seven_day` rows whose `resetsAt` was hours to days before their own
+  # timestamp. The regex goes first (D-299); `10#` keeps a leading zero base ten.
+  [[ "$reset" =~ ^[0-9]+$ ]] && (( 10#$row < 10#$reset )) && HARD_BLOCK_RESET="$reset"
+  return 0
+}
+
+_hard_block_dated() {   # id — date the transcript rung's positive: `_limit_read`'s answer for this process and file, read even when the `tscan` cache skipped it
+  local born f out
+  born=$(_pane_born "$1"); [[ "$born" =~ ^[0-9]+$ ]] || return 0
+  f=$(_transcript_path "$1") || return 0
+  out=$(_limit_read "$1" "$f" "$born"); _hard_block_date "$?" "$born" "$out"
+}
+
+_rw_field() {   # record key -> that key's value from a `.rescuewait` line ("" when absent)
+  [[ " $1 " =~ \ $2=([^ ]*)\  ]] && printf '%s' "${BASH_REMATCH[1]}"
+  return 0
+}
+
+_rescuewait_open() {   # id wrapper kind(near|chain|noroom) -> 0 recorded, or this wait already open | 1 could not record | 2 nothing dated to wait on
+  local id="$1" w="$2" kind="$3" reset="-" rec now
+  # THE GATE FOR EVERY WAIT (section header): a dated rate-limit row carrying a
+  # kept reset and its window. Lost auth, an unplaced process, a carried-in row
+  # and a row written after its own reset all fail it, and the tick does what
+  # it does today.
+  [[ "${HARD_BLOCK_RESET:-}" =~ ^[0-9]+$ && "${HARD_BLOCK_TYPE:-}" =~ ^[a-z_]+$ ]] || return 2
+  # THE RESET IT RECORDS is the five-hour reset, or `-`: `_rescue_policy` ends
+  # a wait at the reset it was taken on and at no other, and only on the
+  # account it was taken on, because two accounts can share a reset epoch.
+  [[ "$HARD_BLOCK_TYPE" == five_hour ]] && reset="$HARD_BLOCK_RESET"
+  rec=$(_reg_get "$id" rescuewait)
+  if [[ "$(_rw_field "$rec" state)" == open ]]; then
+    # THIS WAIT, CONTINUING — the same kind, account and reset — says nothing.
+    # Any other open wait ends here: in the kind that replaces it (a chain wait
+    # with no room left becomes the no-room wait), or `swap` when the session is
+    # on another account now. So the record never holds two waits, and swap.log
+    # never shows an entry without its exit.
+    [[ "$(_rw_field "$rec" kind)" == "$kind" && "$(_rw_field "$rec" wrapper)" == "$w" \
+       && "$(_rw_field "$rec" reset)" == "$reset" ]] && return 0
+    if [[ "$(_rw_field "$rec" wrapper)" == "$w" ]]; then _rescuewait_close "$id" "$kind"; else _rescuewait_close "$id" swap; fi
+  fi
+  now=$(date +%s)
+  _reg_set "$id" rescuewait "state=open kind=$kind since=$now reset=$reset wrapper=$w" || return 1
+  echo "$(date '+%F %T') rescuewait $id: kind=$kind on $w reset=$reset" >> "$REG/swap.log"
+  return 0
+}
+
+_rescuewait_close() {   # id end-word — RECORDED ONCE ON EXIT; a no-op unless a wait is open
+  local id="$1" end="$2" rec kind since reset w now
+  rec=$(_reg_get "$id" rescuewait)
+  [[ "$(_rw_field "$rec" state)" == open ]] || return 0
+  kind=$(_rw_field "$rec" kind); since=$(_rw_field "$rec" since)
+  reset=$(_rw_field "$rec" reset); w=$(_rw_field "$rec" wrapper)
+  [[ "$since" =~ ^[0-9]+$ ]] || since=0   # a torn record is never evaluated (D-299)
+  now=$(date +%s)
+  _reg_set "$id" rescuewait "state=closed kind=$kind since=$since reset=$reset wrapper=$w until=$now end=$end" || return 0
+  echo "$(date '+%F %T') rescuewait-end $id: kind=$kind on $w reset=$reset after $((now - 10#$since))s end=$end" >> "$REG/swap.log"
+}
+
+_rescue_armed() {   # pane text -> Claude Code's own auto-continue FOOTER: `_pane_auto_continue_armed`'s phrases, outside the prompt box and on a `·`-separated line
+  # A FALSE "ARMED" HERE PARKS A STALLED SESSION, where the typing sites that share the
+  # detector only decline to type. So the footer's shape, as the two pane rungs read theirs:
+  # a human's draft is not it (the footer renders BELOW the box, which `_pane_outside_box`
+  # keeps), and nor is an assistant line that says the words without the separator.
+  _pane_auto_continue_armed "$(_pane_outside_box "$1" | grep -F '·')"
+}
+
+_rescue_policy() {   # id wrapper pane hard-blocked -> 0 PROCEED as today | 1 HOLD this tick
+  # THE ONE CALL SITE is `_auto_swap_check`'s verdict line, below both
+  # cooldown gates — so every wait sits INSIDE `SWAP_COOLDOWN` and
+  # `SWAPBLOCK_COOLDOWN`, never instead of them — and above target choice.
+  # `_tick_strand_undecidable` deliberately does not call it: a tick that
+  # cannot decide has no rescue to hold.
+  #
+  # IN ORDER:
+  #   (0) not blocked: any open wait ends `clear` — which is how Claude Code's
+  #       own timer, or the stale-phase Enter (D-2360), ends a wait at the reset;
+  #   (a) a wait recorded against THIS dated five-hour reset on THIS account:
+  #       hold through the reset and its grace — a near wait from entry, any
+  #       other from the reset itself, except a STALLED no-room wait, which a
+  #       target with room ends at once, as today's strand does. Past the grace
+  #       an ARMED pane ends it `turned` and is held on this reset until
+  #       RESCUE_CHAIN_WAIT past it, then the tick is today's — and only a wait
+  #       that was open before that grace ran out, because one first taken
+  #       after it never saw the account turn: Claude Code re-sends the turn
+  #       itself, and ccd never swaps away from an account that has
+  #       just reset. A STALLED pane is rescued as today: a
+  #       near or chain wait ends `turned` and the tick proceeds, with no chain
+  #       wait on this reset; a no-room wait stays open and ends in a swap the
+  #       moment a target has room;
+  #   (b) a near reset and an ARMED auto-continue: the near wait;
+  #   (c) a fourth rescue inside RESCUE_CHAIN_WINDOW, on an Anthropic lane: the
+  #       chain wait, up to RESCUE_CHAIN_WAIT;
+  #   otherwise proceed — and `_rescue_target` applies rule 3's skip lists.
+  # WHY (b) — AND AN END IN PLACE — NEED AN ARMED AUTO-CONTINUE: mechanism 5
+  # names the cost of D-2236 as "the wait for one whose reset is minutes away"
+  # — the session Claude Code will continue by itself. A STALLED session
+  # (auto-resume off, its re-arm cap hit, a human's Esc) has nothing that
+  # re-sends its turn at the reset, and nothing here types — the redrive
+  # fallback types only on an unsubmitted resume pair, which a session waiting
+  # on a banner is not — so a wait would park it; it is rescued as today, by a
+  # swap whose `--resume` spawn re-drives the turn. ARMED is Claude Code's own
+  # footer (`_rescue_armed`), never a draft or a line of prose saying the words.
+  local id="$1" wrapper="$2" pane="$3" hb="$4" now rec state kind since rreset rend R
+  if [[ -z "$hb" ]]; then
+    _rescuewait_close "$id" clear
+    return 0
+  fi
+  now=$(date +%s); R="${HARD_BLOCK_RESET:-}"
+  rec=$(_reg_get "$id" rescuewait)
+  state=$(_rw_field "$rec" state); kind=$(_rw_field "$rec" kind); since=$(_rw_field "$rec" since)
+  rreset=$(_rw_field "$rec" reset); rend=$(_rw_field "$rec" end)
+  # A NO-ROOM WAIT WHOSE RESET A NEWER ROW PROVES DID NOT TURN THE ACCOUNT — a
+  # rate-limit row written at or after that reset whose own reset is kept
+  # nowhere (S2: the retry at the reset met a stale `resetsAt`) — ends `stale`,
+  # so §11 item 6 never counts it as a session idling past a reset.
+  if [[ "$state" == open && "$kind" == noroom && "$rreset" =~ ^[0-9]+$ && "${HARD_BLOCK_ROW:-}" =~ ^[0-9]+$ \
+        && -z "${HARD_BLOCK_RESET:-}" && -n "${HARD_BLOCK_TYPE:-}" && "$(_rw_field "$rec" wrapper)" == "$wrapper" ]] \
+     && (( 10#$HARD_BLOCK_ROW >= 10#$rreset )); then
+    _rescuewait_close "$id" stale; state=closed; rend=stale
+  fi
+  if [[ "$R" =~ ^[0-9]+$ && "${HARD_BLOCK_TYPE:-}" == five_hour ]] && _is_anthropic_backend "$wrapper"; then
+    if [[ "$rreset" == "$R" && "$(_rw_field "$rec" wrapper)" == "$wrapper" ]] \
+       && { [[ "$state" == open ]] || [[ "$state" == closed && "$rend" == turned ]]; }; then
+      if (( now >= 10#$R + RESCUE_WAIT_GRACE )); then
+        # …a wait that was open before its reset's grace ran out: one first taken
+        # after it never saw the account turn, so it is not ended `turned` here.
+        # AND ONLY UNTIL RESCUE_CHAIN_WAIT PAST THE RESET: an ARMED footer that far
+        # past its reset, with the 429 still the newest row, says Claude Code is
+        # not continuing, and `main` rescues that input at once. From then the
+        # tick is today's — a swap to a target with room, or the strand — and no
+        # second wait holds in place on this reset: one taken now is first taken
+        # past its grace.
+        if [[ "$since" =~ ^[0-9]+$ ]] && (( 10#$since < 10#$R + RESCUE_WAIT_GRACE )) \
+           && (( now < 10#$R + RESCUE_CHAIN_WAIT )) && _rescue_armed "$pane"; then
+          [[ "$state" == open ]] && { _rescuewait_close "$id" turned; _strand_clear "$id"; }
+          return 1
+        fi
+        [[ "$state" == open && "$kind" != noroom ]] && { _rescuewait_close "$id" turned; state=closed; }
+      elif [[ "$state" == open ]] && { [[ "$kind" == near ]] || (( now >= 10#$R )); } \
+           && { [[ "$kind" != noroom ]] || _rescue_armed "$pane"; }; then
+        return 1
+      fi
+    fi
+    if (( RESCUE_WAIT_BOUND > 0 && now >= 10#$R - RESCUE_WAIT_BOUND && now < 10#$R + RESCUE_WAIT_GRACE )) \
+       && _rescue_armed "$pane"; then
+      _rescuewait_open "$id" "$wrapper" near && return 1
+    fi
+  fi
+  # (c) THE CHAIN WAIT (rule 3) — for a dated rate-limit block on an Anthropic
+  # lane, and never on a five-hour reset whose grace has already run out: (a)
+  # rules on that reset for a wait that saw it (a STALLED near or chain wait
+  # ends `turned` there and is rescued, with no second chain wait), and a reset
+  # no wait saw turn is not one to wait on either. A Codex-lane hold would
+  # return before the rescue arm writes that lane's only "pool is full" signal
+  # (`$LIMITS_DIR/<wrapper>.json`), so other sessions would keep landing on the
+  # exhausted lane — the herd this rule exists to stop. Lost auth dates nothing
+  # (section header), so it never chain-waits, and an open chain wait ends on
+  # the tick its verdict stops being a dated rate-limit block: a 401 arriving
+  # mid-wait is rescued at once. The swap log is read here only with no wait
+  # open, so an open no-room wait never turns back into a chain wait, and an
+  # open chain wait runs to its own bound whatever the hour's count does — on the
+  # account it was taken on only.
+  if [[ "$R" =~ ^[0-9]+$ && "${HARD_BLOCK_TYPE:-}" =~ ^[a-z_]+$ ]] && _is_anthropic_backend "$wrapper"; then
+    if [[ "$state" == open ]]; then
+      [[ "$kind" == chain && "$since" =~ ^[0-9]+$ && "$(_rw_field "$rec" wrapper)" == "$wrapper" ]] \
+        && (( now - 10#$since < RESCUE_CHAIN_WAIT )) && return 1
+    elif ! { [[ "${HARD_BLOCK_TYPE:-}" == five_hour ]] && (( now >= 10#$R + RESCUE_WAIT_GRACE )); } \
+         && _rescue_history "$id" && (( RESCUE_COUNT >= RESCUE_CHAIN_COUNT )); then
+      _rescuewait_open "$id" "$wrapper" chain && return 1
+    fi
+  fi
+  return 0
+}
+
+_rescue_history() {   # id -> 0 measured (RESCUE_COUNT, RESCUE_SKIP_LEFT, RESCUE_SKIP_RECENT set) | 2 unmeasurable (all empty)
+  # RULE 3 READS THE SWAP LOG, which already carries every rescue with its
+  # time, source and target — the same file §9's instrument reads, so the
+  # policy and its measurement cannot disagree about what happened. Only its
+  # tail (`RESCUE_LOG_TAIL_BYTES`), and only when a decision needs it: the chain
+  # check of a blocked tick with no wait open, and the target choice of a
+  # rescue that has somewhere to go — not the ticks a strand waits through,
+  # which need neither.
+  # Its times are `date '+%F %T'`, LOCAL time, so python converts with `mktime`.
+  #   RESCUE_COUNT       this session's `auto-rescue` lines in RESCUE_CHAIN_WINDOW;
+  #   RESCUE_SKIP_LEFT   their SOURCE accounts ("an account the session just
+  #                      left blocked"), except one whose logged `reset=` passed;
+  #   RESCUE_SKIP_RECENT every session's rescue TARGET in RESCUE_SPREAD_WINDOW.
+  # UNMEASURABLE IS TODAY'S BEHAVIOUR: no chain wait, no skip. A log that does
+  # not exist yet is a MEASURED empty history (rc 0), not an unreadable one, and
+  # so is a tail with no rescue in it (`grep` rc 1).
+  local id="$1" out
+  RESCUE_COUNT=0; RESCUE_SKIP_LEFT=""; RESCUE_SKIP_RECENT=""
+  [[ -e "$REG/swap.log" ]] || return 0
+  [[ -f "$REG/swap.log" && -r "$REG/swap.log" ]] || return 2
+  command -v python3 >/dev/null 2>&1 || return 2
+  out=$(tail -c "$RESCUE_LOG_TAIL_BYTES" "$REG/swap.log" 2>/dev/null | { grep -F ' auto-rescue ' || (( $? == 1 )); } | python3 -c '
+import re, sys, time
+sid, now, chain, spread = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+pat = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) auto-rescue (\S+): (\S+) \(blocked\) -> (\S+)(.*)$")
+count, left, recent = 0, [], []
+for raw in sys.stdin.buffer:
+    m = pat.match(raw.decode("utf-8", "replace").rstrip("\n"))
+    if not m:
+        continue
+    try:
+        at = int(time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")))
+    except (ValueError, OverflowError):
+        continue
+    age = now - at
+    if age < 0:
+        continue
+    if m.group(2) == sid and age < chain:
+        count += 1
+        r = re.search(r" reset=(\d+)", m.group(5))
+        if not (r and int(r.group(1)) <= now) and m.group(3) not in left:
+            left.append(m.group(3))
+    if age < spread and m.group(4) not in recent:
+        recent.append(m.group(4))
+print(str(count) + "|" + " ".join(left) + "|" + " ".join(recent))
+' "$id" "$(date +%s)" "$RESCUE_CHAIN_WINDOW" "$RESCUE_SPREAD_WINDOW" 2>/dev/null) || return 2
+  IFS='|' read -r RESCUE_COUNT RESCUE_SKIP_LEFT RESCUE_SKIP_RECENT <<<"$out"
+  [[ "$RESCUE_COUNT" =~ ^[0-9]+$ ]] || { RESCUE_COUNT=0; RESCUE_SKIP_LEFT=""; RESCUE_SKIP_RECENT=""; return 2; }
+  return 0
+}
+
+_rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout and rc, rule 3's skip lists applied to a RESCUE
+  # NOT A RESCUE, NOWHERE TO GO, OR NOBODY CAN SAY IS `_swap_target` BYTE FOR
+  # BYTE: the affinity path's choice is not this spec's; skipping can only
+  # remove a candidate, so a strand — asked every 5 s for hours — never pays
+  # the swap-log read; and the unskipped probe's undecidable answer (rc 2-5)
+  # goes back as it came — the spread pass's never does.
+  # For a rescue with somewhere to go, SWAP_TARGET_SKIP names what the
+  # candidate walk and the home-return branch pass over: first the accounts
+  # this session just left blocked AND every target a rescue landed on inside
+  # RESCUE_SPREAD_WINDOW; if that leaves nothing, the just-left accounts alone
+  # ("prefers a target that has not received a rescue ... when another
+  # placeable target exists"). A just-left account is never taken back while
+  # it is skipped — that is "do not bounce" — so a rescue whose only room is
+  # the account it just left strands, and waits there.
+  # SPREAD IS A PREFERENCE, NEVER BOUGHT WITH A CLASS DEGRADE: the first pass's
+  # name is taken only at rc 0. Its rc 6 ("a name, chosen one rung DOWN") can
+  # mean the only same-class target with room is one the spread skipped — the
+  # walk passes a skipped candidate before `_class_gate` counts it — and the
+  # just-left-only pass below then decides, as it does for everything else.
+  # SPREAD NEVER PASSES OVER HOME: a recovered home another session was just
+  # rescued onto would only be returned to by the affinity path at the next
+  # idle tick — two moves where one does (do-not-bounce still skips a home the
+  # session just left blocked).
+  local out rc recent
+  out=$(_swap_target "$@"); rc=$?
+  if [[ -z "$4" || -z "$out" ]] || (( rc >= 2 && rc <= 5 )) || ! _rescue_history "$1" \
+     || [[ -z "$RESCUE_SKIP_LEFT$RESCUE_SKIP_RECENT" ]]; then
+    [[ -n "$out" ]] && printf '%s\n' "$out"
+    return "$rc"
+  fi
+  recent=" $RESCUE_SKIP_RECENT "; [[ -n "$3" ]] && recent="${recent// "$3" / }"   # spread never passes over HOME: the affinity path would only move it back
+  if [[ -n "${recent// /}" ]]; then
+    out=$(SWAP_TARGET_SKIP="$RESCUE_SKIP_LEFT $recent" _swap_target "$@"); rc=$?
+    [[ -n "$out" && "$rc" -eq 0 ]] && { printf '%s\n' "$out"; return 0; }
+    # …and ITS undecidable answer is never returned: the unskipped probe above
+    # already answered every question the skip cannot change (rc 2-4 are asked
+    # before the walk), so an rc 5 here means the skip removed every measured
+    # candidate and left only an unmeasured lane — the just-left-only pass decides.
+  fi
+  SWAP_TARGET_SKIP="$RESCUE_SKIP_LEFT" _swap_target "$@"
+}
+
+_rescue_strand_cause() {   # id cur home hard-blocked hrc -> rc 0 prints a strand cause when rule 3's do-not-bounce alone left this rescue nowhere to go | rc 1 prints nothing
+  # THE DO-NOT-BOUNCE STRAND SAYS SO (departure 3849). `_rescue_target`'s
+  # just-left-only pass answers an empty name both when no account has room
+  # and when the only one with room is an account this session just left
+  # blocked; `_strand_mark`'s computed reason (`_strand_why`, which knows no
+  # skip list) then tells the operator "no account in pool … can take it" in
+  # both. Those ask for opposite acts — wait or add capacity, versus leave it
+  # alone — and the false one invites the hand bounce rule 3 exists to stop,
+  # so this names the account, and `_strand_mark` takes it as its cause.
+  # It asks `_swap_target` UNSKIPPED, on the no-target strand path only: an
+  # empty answer (genuine no room) returns before the swap log is read, so a
+  # strand's later ticks still pay no `_rescue_history` pass (Review Focus 17).
+  local out
+  out=$(_swap_target "$@")
+  [[ -n "$out" && "$out" != "$2" ]] || return 1
+  _rescue_history "$1" || return 1
+  [[ " $RESCUE_SKIP_LEFT " == *" $out "* ]] || return 1
+  printf '%s\n' "its only account with room, $out, is one it left blocked inside RESCUE_CHAIN_WINDOW, and a rescue does not take it back (do not bounce)"
+}
+
+_rescue_line_extra() {   # -> the dated row's tokens for the `auto-rescue` line: ` reset=<epoch>`, ` type=<word>`, ` row=<epoch>`, each only when the verdict kept it
+  # APPENDED, so every line this fleet's log already carries keeps its exact
+  # shape when nothing was dated. `_rescue_history` reads `reset=` back (an
+  # account whose logged reset passed is not "just left blocked" any more), and
+  # §9's instrument compares `row=` with the landing the log itself records.
+  # `reset=` is only ever a reset the row predates (see `_hard_block_date`), so
+  # a row written after its own reset lifts no skip; `row=` is also told for a
+  # row older than this process that D-3526 kept a block, so a rescue on a
+  # carried-in banner stays countable.
+  [[ -n "${HARD_BLOCK_RESET:-}" ]] && printf ' reset=%s' "$HARD_BLOCK_RESET"
+  [[ -n "${HARD_BLOCK_TYPE:-}" ]] && printf ' type=%s' "$HARD_BLOCK_TYPE"
+  [[ -n "${HARD_BLOCK_ROW:-}" ]] && printf ' row=%s' "$HARD_BLOCK_ROW"
+  return 0
 }
 
 _strand_clear() {   # id — the strand is over; say so exactly once per strand.
@@ -23527,6 +24311,7 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   # …and it supersedes a STRAND for the same reason: "no account can take it"
   # is falsified by the session having just moved.
   _strand_clear "$id"
+  _rescuewait_close "$id" swap   # and so is a rescue wait, whoever asked for the move (session-continuity §5.4)
   # ONCE, AT THE TAIL. The guard above runs a SECOND time when the swap
   # re-execs itself detached, so a line written there would tell the operator
   # they crossed twice.
@@ -27364,6 +28149,171 @@ _authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the
   _authdead_cred_changed "$1" "$t"
   [[ $? -eq 1 ]] && return 0
   rm -f -- "$f"
+}
+
+# ── THE MERGE QUEUE, READ ONCE PER REPOSITORY PER SWEEP (landing-order wave 2) ──
+# `pr-state --project`'s THIRD gh call (spec §5.2), and it lives down here, below
+# every line the frozen compaction-card corpus cites, so that adding it moved
+# none of their anchors: `cmd_pr_state` pays one in-place line for it.
+#
+# WHAT IT ASKS. `gh pr list --json` has no field for a merge-queue entry, so the
+# sweep asks GitHub's GraphQL API directly, with ONE constant query: the hundred
+# NEWEST open pull requests' `mergeQueueEntry` — newest by creation, which is
+# `gh pr list`'s own order, so every open PR `_gh_pr_list`'s hundred-row window
+# can bind is inside this one (with no `orderBy` GitHub answers the OLDEST
+# hundred, and on a busy repository the PRs being landed would all read
+# `unmeasured`) — and the twenty most recently updated MERGED ones, each with
+# the LAST queue act on its timeline. The spec names
+# `mergeQueueEntry` and the last `REMOVED_FROM_MERGE_QUEUE_EVENT`; the last act
+# of EITHER kind is read instead, because a removal alone cannot tell "dequeued,
+# re-enqueued, landed" from "dequeued, then merged by hand" — the ADDED event
+# after the removal is the whole difference.
+#
+# WHAT IT ANSWERS, per full line, in the additive `queue` field:
+#   queued      the PR is OPEN and has a queue entry now
+#   dequeued    the PR is OPEN, has no entry, and its last queue act is a removal
+#               — GitHub does not re-enqueue after a failed group
+#   landed      the PR is MERGED and its last queue act is the add (the queue merged it)
+#   none        measured, and none of the above — including "this workspace has
+#               no bound PR", and a PR that never met the queue
+#   unmeasured  the call did not answer, or the bound PR is outside both windows
+# plus `queueAt`, the ISO timestamp of that last act, only when it has one and
+# only when it is shaped like a timestamp. `--session` never makes this call and
+# never carries the key: its absence is the OLDER-build answer, which a reader
+# must tell apart from `unmeasured`.
+#
+# ITS OWN BOUND, AND IT MAY NOT COST THE ROWS. `PR_GH_QUEUE_TIMEOUT` is summed
+# with the other two calls' against the server's outer bound by
+# `pr-timeout-budget.test.ts`. Measured 2026-09-23 on this project's own
+# repository (11-12 open PRs, the 20 most recent merged): 0.72-1.39 s over five
+# runs, and 0.74-1.12 s over five more with the open window ordered, so 4 s is
+# about three times the worst. A failed call, an unreadable
+# answer, and a stamping pass that itself fails each leave every row, phase and
+# `checks` value exactly as `_pr_state_one` printed them; the first two say
+# `unmeasured`, the third prints the lines unstamped.
+#
+# THE QUERY IS A CONSTANT, and owner and name travel as `-f` (raw string)
+# variables — never interpolated into the document, and never `-F`, which reads
+# `@file` and coerces types. Both halves come from `_gh_repo_slug`, whose regex
+# anchors them to `[A-Za-z0-9._-]`.
+PR_GH_QUEUE_TIMEOUT=4
+PR_QUEUE_QUERY='query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    open: pullRequests(first: 100, states: [OPEN], orderBy: {field: CREATED_AT, direction: DESC}) { nodes { ...Q } }
+    merged: pullRequests(first: 20, states: [MERGED], orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ...Q } }
+  }
+}
+fragment Q on PullRequest {
+  number
+  state
+  mergeQueueEntry { state }
+  timelineItems(last: 1, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]) {
+    nodes { __typename ... on AddedToMergeQueueEvent { createdAt } ... on RemovedFromMergeQueueEvent { createdAt } }
+  }
+}'
+
+_gh_pr_queue() {   # repo -> the GraphQL answer on stdout, or NOTHING and non-zero
+  # Prints nothing on failure, `_gh_pr_checks`'s rule and for its reason: this
+  # is an annotation on rows somebody else already read, so the only outcomes
+  # are "here is an answer" and "there is none to attach".
+  local repo="$1" out rc
+  out=$(_plat_timeout "$PR_GH_QUEUE_TIMEOUT" gh api graphql -f query="$PR_QUEUE_QUERY" \
+          -f owner="${repo%%/*}" -f name="${repo#*/}" 2>/dev/null); rc=$?
+  (( rc == 0 )) || return 1
+  [[ -n "$out" ]] || return 1
+  printf '%s\n' "$out"
+}
+
+_pr_queue_stamp() {   # mode repo; stdin = the sweep's lines -> the same lines, full ones stamped
+  # BUFFERED, and that costs nothing: the server reads a sweep's stdout only
+  # when the verb exited 0 (`sweepPr` backs the project off on anything else),
+  # so a half-printed sweep was never read.
+  local mode="$1" repo="$2" lines answer="" stamped src=0
+  lines=$(cat)
+  [[ -n "$lines" ]] || return 0
+  if [[ $mode != --project ]]; then printf '%s\n' "$lines"; return 0; fi
+  answer=$(_gh_pr_queue "$repo") || answer=""
+  stamped=$(printf '%s\n' "$lines" | _pr_queue_py 4<<<"$answer"); src=$?
+  if (( src == 0 )) && [[ -n "$stamped" ]]; then printf '%s\n' "$stamped"; else printf '%s\n' "$lines"; fi
+}
+
+_pr_queue_py() {   # stdin = the sweep's lines, fd 4 = the GraphQL answer (maybe empty)
+  # The program on fd 3 and the two GitHub-sourced documents on stdin and fd 4 —
+  # `_pr_py rollups`' layout, for its reason: nothing GitHub wrote is ever
+  # placed in an argv or a shell word.
+  python3 /dev/fd/3 3<<'PY'
+import json, re, sys
+ISO = re.compile(r'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$')
+
+def facts_in():
+    """{number: (state, has_entry, last_act, at)}, or None when the call did not
+    answer or its body is not the shape the query asks for — never {} for that,
+    because {} would read every bound PR as `unmeasured` for the WRONG reason
+    and `none` for a PR the window genuinely covers is a claim."""
+    try:
+        with open('/dev/fd/4') as f:
+            raw = f.read().strip()
+    except OSError:
+        raw = ''
+    if not raw:
+        return None
+    try:
+        repo = json.loads(raw)['data']['repository']
+        groups = (repo['open']['nodes'], repo['merged']['nodes'])
+    except Exception:
+        return None
+    out = {}
+    for nodes in groups:
+        if not isinstance(nodes, list):
+            return None
+        for n in nodes:
+            num = n.get('number') if isinstance(n, dict) else None
+            if not isinstance(num, int) or isinstance(num, bool):
+                continue
+            items = (n.get('timelineItems') or {}).get('nodes') if isinstance(n.get('timelineItems'), dict) else None
+            last = items[-1] if isinstance(items, list) and items and isinstance(items[-1], dict) else {}
+            at = last.get('createdAt')
+            at = at if isinstance(at, str) and ISO.match(at) else None
+            out[num] = (n.get('state'), n.get('mergeQueueEntry') is not None, last.get('__typename'), at)
+    return out
+
+FACTS = facts_in()
+
+def word(line):
+    if FACTS is None:
+        return 'unmeasured', None
+    num = line.get('number')
+    if not isinstance(num, int) or isinstance(num, bool):
+        return 'none', None
+    f = FACTS.get(num)
+    if f is None:
+        return 'unmeasured', None
+    state, entry, act, at = f
+    if state == 'OPEN' and entry:
+        return 'queued', at
+    if state == 'OPEN' and act == 'RemovedFromMergeQueueEvent':
+        return 'dequeued', at
+    if state == 'MERGED' and act == 'AddedToMergeQueueEvent':
+        return 'landed', at
+    return 'none', None
+
+for raw in sys.stdin.read().split('\n'):
+    if raw == '':
+        continue
+    try:
+        v = json.loads(raw)
+    except Exception:
+        sys.stdout.write(raw + '\n')
+        continue
+    if isinstance(v, dict) and isinstance(v.get('id'), str) and isinstance(v.get('rows'), list):
+        w, at = word(v)
+        v['queue'] = w
+        if at is not None:
+            v['queueAt'] = at
+        sys.stdout.write(json.dumps(v) + '\n')
+    else:
+        sys.stdout.write(raw + '\n')
+PY
 }
 
 # Guard so the script can be `source`d by tests without running a command.

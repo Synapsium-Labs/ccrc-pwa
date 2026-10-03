@@ -115,7 +115,7 @@ const fleetRow = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
   branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: 'running', stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' },
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
   ...over,
 });
 
@@ -1812,5 +1812,120 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
       [COORD, [], D_AT - BACKLOG_HORIZON_MS],
       [ORPHAN, [], D_AT - BACKLOG_HORIZON_MS],
     ]);
+  });
+});
+
+// ── quiet-restarts-on-reactivation (D-3788): the lane reads the re-activation from the run's own events ─────────────
+describe('sweepStalls: a send-back starts the clocks again (quiet-restarts-on-reactivation)', () => {
+  // E4's measured shape (run 187) on this file's fixtures: dispatched, the worker's wave-done, working, awaiting-review,
+  // the worker's ordinary status #2811, the coordinator's "keep holding", the worker's Stop, then awaiting-review ->
+  // working 8 h 53 m later, the shadow r1's measured time 3.8 s after it, and the fix-round brief 35.4 s after it.
+  const E4 = {
+    dispatched: Date.parse('2026-09-30T19:48:51.388Z'), waveDone: Date.parse('2026-09-30T21:07:02.804Z'),
+    working: Date.parse('2026-09-30T21:08:58.578Z'), awaiting: Date.parse('2026-09-30T21:09:36.698Z'),
+    w2811: Date.parse('2026-09-30T21:10:32.578Z'), c2814: Date.parse('2026-09-30T21:12:34.943Z'),
+    stop: Date.parse('2026-09-30T21:13:21.557Z'), react: Date.parse('2026-10-01T06:02:30.571Z'),
+    fire: Date.parse('2026-10-01T06:02:34.392Z'), brief: Date.parse('2026-10-01T06:03:05.971Z'),
+  };
+  const fromWorker = (coord: CoordStore, runId: number, ms: number, subject: string): void => {
+    at(ms);
+    coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId, kind: 'status', subject, body: 'b', artifacts: [] });
+  };
+  const toWorker = (coord: CoordStore, runId: number, ms: number, subject: string): void => {
+    at(ms);
+    coord.insertMail({ fromId: COORD, fromUuid: COORD_UUID, toId: WORKER, runId, kind: 'status', subject, body: 'b', artifacts: [] });
+  };
+  const advanceAt = (coord: CoordStore, runId: number, ms: number, to: Parameters<CoordStore['advance']>[1]): void => {
+    at(ms);
+    const adv = coord.advance(runId, to, 'coordinator');
+    if (!adv.ok) throw new Error(`advance refused: ${JSON.stringify(adv)}`);
+  };
+  /** One work run dispatched at `dispatchedAt`, its planned -> dispatched row written `lagMs` later. */
+  const dispatchAt = (coord: CoordStore, program: string, dispatchedAt: number, lagMs = 0): number => {
+    at(dispatchedAt);
+    const opened = coord.openRun({ program, title: program, project: 'demo', wave: 2, waveOf: 4, claimedBy: COORD });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    coord.markDispatched(opened.id, WORKER, `${WORKER}-ws`, `ws/${WORKER}`, false, dispatchedAt);
+    advanceAt(coord, opened.id, dispatchedAt + lagMs, 'dispatched');
+    return opened.id;
+  };
+  /** E4 through the worker's Stop; the run sits at awaiting-review. */
+  const seedE4 = (h: Harness, coord: CoordStore): number => {
+    seedLiveState(h.home, { statusUpdatedAt: E4.stop });
+    const runId = dispatchAt(coord, 'demo-program', E4.dispatched);
+    fromWorker(coord, runId, E4.waveDone, WAVE_DONE_SUBJECT);
+    advanceAt(coord, runId, E4.working, 'working');
+    advanceAt(coord, runId, E4.awaiting, 'awaiting-review');
+    fromWorker(coord, runId, E4.w2811, 'claim still holds');
+    toWorker(coord, runId, E4.c2814, 'keep holding');
+    return runId;
+  };
+  const sweepAt = async (w: FleetWatcher, ms: number, names: readonly string[]): Promise<void> => {
+    at(ms);
+    await w.sweepStalls([fleetRow(WORKER)], names, tickOf());
+  };
+
+  it('E4: no stall-check on the sweeps after the advance; one r1 two hours after the brief, keyed on the advance', async () => {
+    const { h, coord, w } = await rig();
+    const runId = seedE4(h, coord);
+    advanceAt(coord, runId, E4.react, 'working');
+    await sweepAt(w, E4.fire, LIVE);
+    expect(operatorMail(coord)).toEqual([]);
+    expect(stallRows(coord, runId)).toEqual([]);
+    toWorker(coord, runId, E4.brief, 'fix-round');
+    await sweepAt(w, E4.brief + STALL_SWEEP_MS, LIVE);
+    await sweepAt(w, E4.brief + STALL_QUIET_MS - STALL_SWEEP_MS, LIVE);   // the lane's own cadence: one sweep a minute
+    expect(operatorMail(coord)).toEqual([]);
+    await sweepAt(w, E4.brief + STALL_QUIET_MS, LIVE);
+    const mail = operatorMail(coord);
+    expect(mail).toHaveLength(1);
+    expect(mail[0]).toMatchObject({ toId: WORKER, runId, at: E4.brief + STALL_QUIET_MS });
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, E4.react)]);
+  });
+
+  it('a row recorded under the pre-advance key stays; no r2 is timed from it, and the new episode records its own r1', async () => {
+    const { h, coord, w } = await rig();
+    const runId = seedE4(h, coord);
+    advanceAt(coord, runId, E4.react, 'working');
+    const old = stallDetail('shadow', 'quiet', 1, E4.w2811);   // the census row, as the build before this one wrote it
+    expect(coord.recordStallObservation(runId, old, E4.fire)).toMatchObject({ recorded: true });
+    await sweepAt(w, E4.fire + STALL_ESCALATE_MS, []);
+    expect(stallRows(coord, runId)).toEqual([old]);
+    await sweepAt(w, E4.react + STALL_QUIET_MS, []);
+    expect(stallRows(coord, runId)).toEqual([old, stallDetail('shadow', 'quiet', 1, E4.react)]);
+    expect(operatorMail(coord)).toEqual([]);
+  });
+
+  it('a run never sent back keys as before, even when its planned -> dispatched row trails dispatchedAt', async () => {
+    const { coord, w } = await rig();
+    const runId = dispatchAt(coord, 'demo-program', DISPATCHED_AT, 3);
+    await sweepAt(w, R1_AT, LIVE);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, DISPATCHED_AT)]);
+  });
+
+  it('a sibling run\'s send-back does not restart the clock: the lane reads the PRIMARY run\'s events', async () => {
+    const { coord, w } = await rig();
+    // Run A, dispatched first, is sent back 30 min before r1 falls due. Run B, the primary (dispatched later), never
+    // left working, and its worker has been silent on it since S4's mails.
+    const a = dispatchAt(coord, 'prog-a', DISPATCHED_AT - 3_600_000);
+    advanceAt(coord, a, DISPATCHED_AT - 1_800_000, 'working');
+    const b = seedRun(coord, { program: 'prog-b' });
+    advanceAt(coord, a, DISPATCHED_AT + 3_600_000, 'awaiting-review');
+    advanceAt(coord, a, R1_AT - 1_800_000, 'working');
+    await sweepAt(w, R1_AT, LIVE);
+    expect(stallRows(coord, b)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
+  });
+
+  it('a run whose events cannot be read is held as before: its warn, nothing sent for it, and the next subject runs', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, OTHER_WORKER);
+    seedRun(coord, { program: 'prog-a' });
+    seedRun(coord, { program: 'prog-b', worker: OTHER_WORKER });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(coord, 'runEvents').mockImplementationOnce(() => { throw new Error('SQLITE_BUSY'); });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER), fleetRow(OTHER_WORKER)], LIVE, tickOf(PID, [regRow(WORKER), regRow(OTHER_WORKER)]));
+    expect(operatorMail(coord).map((m) => m.toId)).toEqual([OTHER_WORKER]);
+    expect(warn.mock.calls.some((c) => /^ccrc-server: stall-watch run \d+ \(demo-quiet-mesa\) failed \(SQLITE_BUSY\)/.test(String(c[0])))).toBe(true);
   });
 });

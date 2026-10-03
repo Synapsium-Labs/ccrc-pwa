@@ -31,7 +31,9 @@ const repoRoot = path.resolve(here, '..', '..');
 const RESULTS: JobResult[] = ['success', 'failure', 'cancelled', 'skipped', ''];
 const TESTS: TestsMode[] = ['selected', 'full', 'none', ''];
 const COUNTS: Array<'0' | '3' | ''> = ['0', '3', ''];
-const EVENTS = ['pull_request', 'push'];
+// `merge_group` since landing-order wave 2: a merge-queue run runs what a pull
+// request runs (operator ruling 2026-09-28), so it never answers tests none.
+const EVENTS = ['pull_request', 'push', 'merge_group'];
 
 /** Independent oracle, transcribed from the contract's own prose (not from
  *  verdict.mjs), plus the operator's rulings that a pull request always runs
@@ -43,7 +45,7 @@ function expectedOk({ select, typecheck, shards, tests, count, event }: {
   select: string; typecheck: string; shards: string; tests: string; count: string; event: string;
 }): boolean {
   if (select !== 'success') return false;
-  if (tests === 'none') return event !== 'pull_request';
+  if (tests === 'none') return event !== 'pull_request' && event !== 'merge_group';
   if (tests !== 'selected' && tests !== 'full') return false;
   if (typecheck !== 'success') return false;
   if (count === '0') return tests === 'selected' && shards === 'skipped';
@@ -108,6 +110,13 @@ describe('serverVerdict — the named scenarios from the plan brief', () => {
       select: 'success', typecheck: '', shards: '', tests: 'none', count: '', event: 'pull_request',
     });
     expect(v).toEqual({ ok: false, reason: expect.stringContaining('pull_request') });
+  });
+
+  it('tests none on a merge_group -> red too: a merge-queue run runs what a pull request runs (operator ruling 2026-09-28)', () => {
+    const v = serverVerdict({
+      select: 'success', typecheck: '', shards: '', tests: 'none', count: '', event: 'merge_group',
+    });
+    expect(v).toEqual({ ok: false, reason: expect.stringContaining('merge_group') });
   });
 
   it('the ordinary green path: count 3, shards success', () => {

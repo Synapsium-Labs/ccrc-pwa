@@ -8,10 +8,13 @@
 //   • the Linux arms are unchanged — the port is not allowed to rewrite the
 //     platform both production fleet boxes run on, and "unchanged" is a claim
 //     a test can hold rather than a promise a comment makes;
-//   • the two copies of the platform block stay identical, because ccd must
-//     stay self-contained (it is installed as a COPY on PATH, where a sourced
-//     sibling would not be there) and a drifting copy is the failure mode that
-//     shape invites;
+//   • the two copies of the platform block stay identical, because the
+//     generated Bash BODY (`ccd/ccd`, which the installed launcher starts from
+//     `~/.local/libexec/ccrc/ccd`) must stay self-contained — it is installed as
+//     a COPY, where a sourced sibling would not be there — and a drifting copy is
+//     the failure mode that shape invites. The Python launcher template
+//     (`ccd/ccd-entry.py`) is NOT a third copy: it carries none of the block, and
+//     a test below holds that rather than a comment;
 //   • the policy systemd enforces declaratively and launchd cannot — the start
 //     limit — is the SAME policy on both, read from the unit file rather than
 //     restated here.
@@ -28,6 +31,9 @@ const IS_DARWIN = process.platform === 'darwin';
 const ccdRoot = path.dirname(CCD);
 const ccd = readFileSync(CCD, 'utf8');
 const ccrc = readFileSync(path.join(ccdRoot, 'ccrc'), 'utf8');
+/** The launcher TEMPLATE — rendered into `~/.local/bin/ccd` on the box. Python,
+ *  not Bash: the platform block is Bash and has no business here. */
+const ccdEntry = readFileSync(path.join(ccdRoot, 'ccd-entry.py'), 'utf8');
 const unitFile = readFileSync(path.join(ccdRoot, 'claude-session@.service'), 'utf8');
 
 /** The shared block, sliced out of a file by its two anchors. Both files
@@ -52,13 +58,32 @@ function platformBlock(src: string): string {
 
 describe('the platform block is one definition, spelled in two files', () => {
   it('is byte-identical in ccd and ccrc', () => {
-    // ccd is installed as a COPY into ~/.local/bin (see `_inst_bins`, which
-    // explains why it is a copy and ccrc is a launcher), so it cannot source a
-    // sibling: on a box whose tree has moved, a sourced ccd would stop
-    // working where today it keeps running. Two copies plus this test is the
-    // same trade `_inst_shim` and deploy.sh already make for the launcher's
-    // bytes.
+    // `ccd` here is the generated Bash BODY, `ccd/ccd`. It is installed as a
+    // COPY (to `~/.local/libexec/ccrc/ccd`, behind the rendered launcher in
+    // `~/.local/bin/ccd`), so it cannot source a sibling: on a box whose tree
+    // has moved, a sourced body would stop working where today it keeps
+    // running. Two copies plus this test is the same trade `_inst_shim` and
+    // deploy.sh already make for the launcher's bytes.
     expect(platformBlock(ccd)).toBe(platformBlock(ccrc));
+  });
+
+  it('is NOT duplicated into the Python launcher template — two copies, not three', () => {
+    // The launcher decides the protected argv shapes before Bash exists and
+    // then starts the body; it needs no platform shim, and a Python file holding
+    // a third spelling of a Bash block would be a copy nothing above compares.
+    // Measured three ways, so deleting any one reds a different one: neither
+    // sentinel is present; no `_plat_`/`_svc_` DEFINITION line is present; and
+    // none of the NAMES the block defines (derived from the block, not listed
+    // here) appears in the launcher's code — its comments may talk about them.
+    expect(ccdEntry, 'the launcher carries the block\'s opening sentinel').not.toContain('# ── THE PLATFORM LAYER');
+    expect(ccdEntry, 'the launcher carries the block\'s closing sentinel').not.toContain('# ── END PLATFORM LAYER');
+    expect(ccdEntry.match(/^(?:_plat_|_svc_)[a-z0-9_]+\(\)/gm) ?? [], 'the launcher defines a platform helper').toEqual([]);
+    const names = [...platformBlock(ccd).matchAll(/^((?:_plat_|_svc_)[a-z0-9_]+)\(\)/gm)].map((m) => m[1]!);
+    expect(names.length, 'the block defines no helper — the derivation above went blind').toBeGreaterThan(5);
+    const code = ccdEntry.split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n');
+    for (const name of names) {
+      expect(code, `the launcher's code mentions ${name}, a platform-block helper`).not.toContain(name);
+    }
   });
 
   it('spells the registry path identically to ccd\'s own $REG', () => {
