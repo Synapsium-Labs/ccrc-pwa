@@ -308,7 +308,7 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     - C1–C15 red as planned.
 
     Run 226 is at `awaiting-review`. Review run 251 was dispatched to read the merge.
-- **R21 (coordinator, 2026-10-03 18:49): wave 4 accepted again after its absorb.**
+- **R21 (coordinator, 2026-10-03 18:48): wave 4 accepted again after its absorb.**
   - **What the review read.** Review run 251 read `bc1a13edd` and closed done.
   - **The merge lens:** nothing found, each check by hash.
     - Clause 15 equals `main`'s.
