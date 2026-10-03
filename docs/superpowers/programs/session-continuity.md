@@ -213,6 +213,18 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     `~/.local/bin/ccd` is a launcher) carries `_swap_carry_merge_walk() {` once.
   - **Owed:** Task 4 Step 7's §9 measurement, one week after the deploy (about 2026-10-09), read-only, on the fleet
     box.
+- **2026-10-03 11:56 — run 237 resumed after 15 idle hours** (mail 3307).
+  - **What happened.** The worker's last turn ended at 21:06 on 2026-10-02 with Task 2's code applied: red-first
+    15|79 of 94, as the plan forecast, and 17 of 24 mutation rows matching. Claude Code had killed its background
+    mutation run for low memory. It restored `ccd/ccd` from its snapshot, then asked for "resume" at its own pane,
+    where no one is attached. No mail was sent, so the coordinator heard nothing. Nothing in the fleet woke it.
+  - **The resume:**
+    - the remaining rows (2.8 again, then 2.18–2.24) and Tasks 3–4 run in the FOREGROUND, one file per process;
+    - a killed run is restored from the snapshot, reported in a status mail, and the turn ends;
+    - its Task 2 finding comes as a `question` mail, while the plan's text ships unchanged meanwhile. The finding:
+      do-not-bounce's strand push says no account can take the session while the account it just left has room.
+  - **README:** no claim is live. The worker claims it before Task 3. Stall-watch #232 also edits README, and the
+    second lander merges main and keeps both sides.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -250,6 +262,10 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - **Not now:** the spec is under the stall watch's claim 891, and stage 5 is unplanned.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; never print secret contents.
+
+- **Every brief says how a killed run is reported.** A worker that ends its turn waiting for a word typed at its
+  own pane is never woken, because only mail reaches it. A run killed by the memory reaper, or anything else, is
+  restored and reported in a status mail; long runs go in the foreground (run 237, 2026-10-02).
 
 ## Next-wave brief
 
