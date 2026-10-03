@@ -95,21 +95,27 @@ describe('CoordRoutesHandle', () => {
       'POST /api/runs (open)': () => ({ method: 'POST', url: '/api/runs', headers,
         payload: { program: 'other', title: 'T', claimedBy: 'demo-other', homeProject: 'demo' } }),
     };
+    // DETERMINISTIC ON THE MUTATED SIDE. The hold is released when EITHER the route settles OR a generous timeout passes,
+    // whichever comes first, and the order is recorded. With the mutex shared the route cannot settle while the hold is
+    // open, so the timeout releases the hold first; on a separate mutex the route settles first, however slow the box.
+    // (A fixed sleep before an "is it done yet?" check would let a loaded box's slow mutated route escape.)
+    const HOLD_TIMEOUT_MS = 2000;
     it.each(Object.keys(direct))('%s, which calls coordMutex.run itself, waits for a held withAbandon and completes after it', async (route) => {
       const { app, handle, coord, id } = setup();
-      let release!: () => void;
-      const gate = new Promise<void>((r) => { release = r; });
-      const held = handle.withAbandon(coord, async () => { await gate; });
-      let done = false;
-      const fired = app.inject(direct[route]!(id)).then((r) => { done = true; return r; });
-      await new Promise((r) => setTimeout(r, 80));
-      expect(done).toBe(false);
-      release();
+      const order: string[] = [];
+      let routeSettled!: () => void;
+      const routeSettling = new Promise<void>((r) => { routeSettled = r; });
+      const held = handle.withAbandon(coord, async () => {
+        await Promise.race([routeSettling, new Promise<void>((r) => { setTimeout(r, HOLD_TIMEOUT_MS); })]);
+        order.push('hold-released');
+      });
+      const fired = app.inject(direct[route]!(id)).then((r) => { order.push('route-done'); routeSettled(); return r; },
+        (e: unknown) => { order.push('route-done'); routeSettled(); throw e; });
       await held;
       const res = await fired;
-      expect(done).toBe(true);
+      expect(order).toEqual(['hold-released', 'route-done']);
       expect(res.statusCode).not.toBe(401);
       await app.close();
-    });
+    }, 15_000);
   });
 });

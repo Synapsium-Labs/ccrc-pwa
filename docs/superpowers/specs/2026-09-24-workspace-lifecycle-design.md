@@ -224,6 +224,10 @@ undone.
      idle; a live pane is idle only when its live file reads `idle` and the predicate is false; tmux `unknown`, an
      unread pane pid or an unread live file is busy. Without `interrupt:true` it is re-read at the stop, so a turn
      begun during the claim reads or the programme end refuses `409 session-busy`, naming any runs already ended.
+     The same fail-closed read applies to a workspace when `programme:'end'` is set without `interrupt:true`, because
+     the end cannot be undone: a workspace that is busy, or that the server could not measure (what `ws-archive`'s own
+     status read would refuse as `session-busy` or `status-unknown`), is refused `409 session-busy` before anything
+     ends (3877). Every other workspace archive keeps the frame's row, with `ws-archive`'s status read behind it.
    - For a workspace, the worktree is not PROVEN gone, and `ws-archive`'s verb is supported. The server box can
      read a worktree only in local mode: in remote mode the fleet agent's read roots exclude `~/worktrees`, so an
      unmeasured worktree is left to `ws-archive`'s own refusal, which precedes its act.
@@ -482,9 +486,11 @@ agent frame in remote mode.
 - **Archiving a coordinator ends a programme the operator meant to pause.** Only with an explicit
   `programme:'end'`. There is no keep, and pausing is the pause switch (§5.2).
 - **Ending a programme succeeds, then the archive refuses.** Every refusable check the server can measure runs
-  first, and a partly ended programme stops the door before any stop or archive. What only `ccd` measures can still
-  refuse after the end; that answer names the runs it ended, and the sheet offers "Stop only" where it applies
-  (§5.2).
+  first, and a partly ended programme stops the door before any stop or archive. A workspace's busy is among them
+  when the programme is to end without `interrupt:true` (3877), so `session-busy` and `status-unknown` there come
+  before anything ends. What only `ccd` measures can still refuse after the end, for example the worktree in remote
+  mode or the archive manifest; that answer names the runs it ended, and the sheet offers "Stop only" where it
+  applies (§5.2).
 - **A busy archive loses a turn.** Only after the busy confirm, which alone sends `interrupt:true`.
 - **The stop succeeds and the archive refuses.** The row stays visible, stopped, with its reason and Archive again
   (§5.2).

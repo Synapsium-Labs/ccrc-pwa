@@ -1396,10 +1396,10 @@ export type BucketInput = Pick<
  * what it describes: `cmd_ws_archive` kills the session before it stamps
  * (`ccd:5164`), but `ccd start`/`ccd ensure` once cleared `.stopped` and
  * `.swapblocked` on a deliberate revival and left `$REG/<id>.archived`
- * standing — only `ws-restore` removes it (`ccd:5704`). So a workspace
- * archived on merge and later revived carried a marker that outranked
- * every live rung below, for ever. MEASURED 2026-08-17, BEFORE #143: 5 of
- * the 7 archive markers sat on sessions with a live tmux pane, 4 mid-turn.
+ * standing; `ws-restore` (`ccd:5704`) clears it, and since #143 so does a spawn.
+ * So a workspace archived on merge and later revived carried a marker that
+ * outranked every live rung below, for ever. MEASURED 2026-08-17, BEFORE #143:
+ * 5 of the 7 archive markers sat on sessions with a live tmux pane, 4 mid-turn.
  * SINCE #143 (f06abdce3, 2026-09-17) `_spawn_start` calls `_ws_unarchive` on
  * every pane ccd creates, so a live pane still carrying the marker is now a
  * pre-#143 pane that never respawned, or one made outside ccd: rarer, but
