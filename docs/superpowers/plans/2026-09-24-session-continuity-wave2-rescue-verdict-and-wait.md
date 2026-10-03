@@ -4043,6 +4043,56 @@ what this plan builds.
   wait is recorded once on entry and once on exit in `$REG/<id>.rescuewait` and `swap.log`, never under the word
   `hold`. A stalled session, a `seven_day` or non-Anthropic block, or a row without a kept reset swaps as today;
   `~/.cc-limits` is not a fallback. Implemented by this plan's Tasks 1–2.
+- **D-3846** — Wave 1's text residue from review 233 (`d1ca968e`), accepted by the coordinator at #230's merge and
+  carried here as this wave's first commit; no behaviour moves. F1: `server/test/ccd-swap-carry-merge.test.ts`'s comment
+  on the real here-string case sized each diverged path at "~100 bytes"; a path is the fixture HOME plus a 133-byte
+  suffix, about 165 bytes or more, so the comment now says "~165 bytes or more" (its conclusion, "well over 64 KiB",
+  stands). F2: wave 1's plan, entry 3774, listed rows 1, 6, 7, 15 and 17 as the ones the two real-cause cases moved,
+  leaving out rows 50, 58 and 63, which the same entry records moving; the sentence now scopes its list to rows 1-45
+  and names 50, 58 and 63 for rows 46-65.
+- **D-3847** — Task 1 Step 6's `_reg_purge` inventory, measured on `main` `a934a59b` (the coordinator replayed the
+  plan's 30 anchors there; these two were the only misses) and again after `10f32755`: the stall watch's `turn` field
+  took 42 after this plan was measured, so the count sentence reads "…`tdate` 41, the stall watch's `turn` 42,
+  continuity's `rescuewait` 43 — by addition…" and the list's head "The 43:", where the plan wrote 42 for both; the
+  third inventory edit (`rescuewait` in the `reaping, …` line) applied as written. The same `turn` addition spent the
+  14 characters of headroom Pre-flight finding 7 counted in `ccd-auto-swap-pool.test.ts`'s fixed 2400-character
+  window, so with `rescuewait` added `` `strandnotify` `` began at character 2401 and "names the three per-id fields
+  this build adds" went red. The window now ends at the inventory list's own last field (`` `wrapper`. Note that
+  `pool` here ``), asserted found after the claim, so no byte count can be outgrown again; measured red when
+  `` `strandnotify` `` is deleted from the list (`1 failed | 42 passed (43)`). The `_reg_get` census needed no
+  adaptation: `reg-get-census.py` measured `176/147 -> 179/150`, the plan's pair.
+- **D-3848** — Task 3's Opus review found stage 4's local-time conversion unpinned: every hand-built case runs
+  `TZ=UTC` and the real-ccd cases inherit the box's zone (UTC here), so `s4_epoch` with `calendar.timegm` for
+  `time.mktime` left all nine cases green, while the two rows that compare a true epoch (`row=`, `reset=`) with
+  swap.log's local stamp would miscount by the zone offset on a non-UTC box — the class wave 1's stage 1 closed under
+  `TZ=PST8`. `measure-continuity-stage4.test.ts` gains one case, "under TZ=PST8 a stranded wait past its reset and a
+  carried-in rescue still count": ccd writes and the instrument reads both rows in `PST8`. Its mutation row, 3.21:
+  `return int(time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))` inside `s4_epoch` →
+  `return int(calendar.timegm(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))` reds `1 failed | 9 passed (10)`, the new
+  case only. No instrument line changed.
+- **D-3849** — The coordinator's ruling (B) on Task 2's review finding: a rescue whose only account with room is one
+  this session just left blocked strands (do not bounce, as planned), but `_strand_mark` was called with no cause, so
+  `_strand_why` — which knows no skip list — wrote "no account in pool … can take it" to the marker, swap.log and the
+  banner. That and "no account has room" ask the operator for opposite acts (leave it alone, versus wait or add
+  capacity), and the false sentence invites the hand bounce rule 3 exists to stop: an overloaded null at a seam. A new
+  `_rescue_strand_cause id cur home hard-blocked hrc` in the RESCUE POLICY section asks `_swap_target` UNSKIPPED and,
+  only when that names an account in `RESCUE_SKIP_LEFT` (and not the one the session sits on), prints "its only
+  account with room, <acct>, is one it left blocked inside RESCUE_CHAIN_WINDOW, and a rescue does not take it back
+  (do not bounce)"; the no-target strand line in `_auto_swap_check` passes it as `_strand_mark`'s existing fourth
+  argument, one line for one line (the citation census unmoved). An empty probe (genuine no room) returns before the
+  swap log is read, so a strand's later ticks still pay no `_rescue_history` pass (Review Focus 17), pinned by the
+  control. Its cost, measured on a fixture under load 13: the extra probe adds about 111 ms to a genuine no-room
+  strand tick (`_swap_target` alone 96 ms) and about 178 ms to a do-not-bounce strand tick, which also reads the
+  swap log; it runs only on a stranded session's tick. Three cases in `ccd-rescue-policy.test.ts` ("the do-not-bounce
+  strand names the account it will not take back"). Mutation rows, each measured on its own commit: dropping the
+  cause at the call site reds `1 failed | 96 passed (97)` (the strand case); deleting the `RESCUE_SKIP_LEFT`
+  membership check reds 1 (the unit case, "room the skip did not remove"); dropping `"$out" != "$2"` reds 1 (the
+  unit case, "the account it sits on").
+- **D-3850** — CLAUDE.md's README size figure, re-measured in this branch: `pools-prose.test.ts` holds CLAUDE.md's
+  "`README.md` (~N lines)" within 100 lines of the real file, and Task 3's new subsection (+53) on top of `main` at
+  `fe7b9775` (3853 lines) made it 3905 against the stated ~3800 — red in the merged tip's shard 5 ("keeps CLAUDE.md's
+  README size claim within 100 lines of the real file"). The plan did not foresee the ratchet; the figure now reads
+  ~3900. No other CLAUDE.md text changed.
 
 ---
 
