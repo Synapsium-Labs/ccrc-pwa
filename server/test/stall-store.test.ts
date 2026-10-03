@@ -778,3 +778,106 @@ describe('queueStallNotice(null): the run-less notice, deduped on its subject in
     expect(s.hasMailWithSubject('operator', null, 'demo-worker', W2_ORPHANED_SUBJECT)).toBe(false);
   });
 });
+
+describe('stallMailFor: planned on indexes, and no other mail read re-planned (wave 5)', () => {
+  /** Every statement `fn` prepares, in order, as it prepared it. */
+  const preparedBy = (s: CoordStore, fn: () => unknown): string[] => {
+    const spy = vi.spyOn(s.db, 'prepare');
+    try { fn(); return spy.mock.calls.map((c) => String(c[0])); } finally { spy.mockRestore(); }
+  };
+  /** EXPLAIN QUERY PLAN's detail lines, joined. The server never runs ANALYZE, so this is the plan it runs. */
+  const planOf = (s: CoordStore, sql: string): string =>
+    (s.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[]).map((r) => r.detail).join(' | ');
+  const SCAN = /\bSCAN (mail|mail_deliveries)\b/;
+
+  it('CONTROL: the scan pattern sees a table scan and a covering-index scan, and not a SEARCH or a CTE scan', () => {
+    expect(SCAN.test('SCAN mail | LIST SUBQUERY 1')).toBe(true);
+    expect(SCAN.test('SCAN mail_deliveries USING COVERING INDEX mail_deliveries_due')).toBe(true);
+    expect(SCAN.test('SEARCH mail USING INDEX mail_by_at (at>?)')).toBe(false);
+    expect(SCAN.test('SCAN sel')).toBe(false);
+  });
+
+  it.each([
+    ['a run worker (its runs bound)', true],
+    ['a coordinator or a registry row (no runs)', false],
+  ] as const)('%s: both statements SEARCH, and neither scans mail or mail_deliveries', (_name, withRun) => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    // One selected mail, so the delivery statement is prepared too.
+    s.queueDelivery(mailAt(s, { fromId: 'demo-worker', toId: 'coordinator', runId: run, kind: 'status',
+      subject: 'progress', at: S4_STATUS_AT }), 'demo-coordinator', '');
+    const sql = preparedBy(s, () => s.stallMailFor('demo-worker', withRun ? [run] : [], W2_SINCE_AT));
+    expect(sql).toHaveLength(2);
+    for (const q of sql) expect(planOf(s, q), q).not.toMatch(SCAN);
+  });
+
+  it('hasMailWithSubject reads mail through an index', () => {
+    const s = store();
+    const [q] = preparedBy(s, () => s.hasMailWithSubject('operator', null, 'demo-worker', 'x'));
+    expect(planOf(s, q!)).not.toMatch(SCAN);
+  });
+
+  it.each([
+    ['hasOutstandingPeerDuplicate', (s: CoordStore) => s.hasOutstandingPeerDuplicate('demo-a', 'demo-b', 'x')],
+    ['outstandingPeerCount', (s: CoordStore) => s.outstandingPeerCount('demo-a', 'demo-b')],
+    ['outstandingMailFor', (s: CoordStore) => s.outstandingMailFor('demo-b')],
+    ['dueDeliveries', (s: CoordStore) => s.dueDeliveries(1, 1)],
+  ] as const)('%s still reads its deliveries through mail_deliveries_due (an index led by toId would take it)', (_name, fn) => {
+    const s = store();
+    const sql = preparedBy(s, () => fn(s));
+    expect(sql.length).toBeGreaterThan(0);
+    for (const q of sql) expect(planOf(s, q), q).toContain('mail_deliveries_due');
+  });
+
+  it('selects exactly the rows its predicate names, against a reference over the raw tables', () => {
+    const s = store();
+    const runA = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    const runB = seedRun(s, { sessionId: 'demo-other', wave: 6, reach: 'working', at: DISPATCHED_AT });
+    const who = ['demo-worker', 'demo-other', 'demo-peer', 'operator', 'coordinator'] as const;
+    const ats = [W2_SINCE_AT - W2_HOUR, W2_SINCE_AT - 1, W2_SINCE_AT, W2_SINCE_AT + 1, S4_STATUS_AT] as const;
+    // A fixed 32-bit LCG, so the fixture is the same on every run and every box. `Math.imul` and `>>> 0` keep every
+    // step exact (a plain `*` passes 2^53 and loses the low bits), and `% n` reads the high bits, never the low ones.
+    let seed = 7;
+    const pick = (n: number): number => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return (seed >>> 16) % n; };
+    for (let i = 0; i < 80; i++) {
+      const id = mailAt(s, { fromId: who[pick(4)]!, toId: who[1 + pick(4)]!, runId: [runA, runB, null][pick(3)]!,
+        kind: 'status', subject: `m${i}`, at: ats[pick(ats.length)]! });
+      for (let k = pick(3); k > 0; k--) s.queueDelivery(id, who[pick(3)]!, '');
+    }
+    // The bounded subquery's edge, written out rather than left to the draws: mail to the coordinator ROLE that
+    // reaches demo-peer only through its delivery row, once exactly AT the horizon (selected) and once a
+    // millisecond before it (not selected).
+    for (const at of [W2_SINCE_AT, W2_SINCE_AT - 1]) {
+      s.queueDelivery(mailAt(s, { fromId: 'demo-other', toId: 'coordinator', runId: null, kind: 'question',
+        subject: `role mail at ${at}`, at }), 'demo-peer', '');
+    }
+    const mail = s.db.prepare('SELECT id, at, runId, fromId, toId FROM mail ORDER BY id').all() as
+      { id: number; at: number; runId: number | null; fromId: string; toId: string }[];
+    const dels = s.db.prepare('SELECT id, mailId, toId FROM mail_deliveries ORDER BY id').all() as
+      { id: number; mailId: number; toId: string }[];
+    let compared = 0;
+    for (const sid of ['demo-worker', 'demo-other', 'demo-peer']) {
+      for (const runIds of [[], [runA], [runA, runB]]) {
+        const want = mail.filter((m) => (m.runId !== null && runIds.includes(m.runId))
+          || ((m.fromId === sid || m.toId === sid || dels.some((d) => d.mailId === m.id && d.toId === sid))
+              && m.at >= W2_SINCE_AT)).map((m) => m.id);
+        const got = s.stallMailFor(sid, runIds, W2_SINCE_AT);
+        expect(got.ok && got.mail.map((m) => m.id), `${sid} on [${runIds.join(',')}]`).toEqual(want);
+        expect(got.ok && got.deliveries.map((d) => d.id), `${sid} on [${runIds.join(',')}]`)
+          .toEqual(dels.filter((d) => want.includes(d.mailId)).map((d) => d.id));
+        compared += want.length;
+      }
+    }
+    // Non-vacuity: the draws spread over every sender and recipient, and the reference compared well over 100 rows.
+    expect(new Set(mail.map((m) => m.fromId)).size).toBe(4);
+    expect(new Set(mail.map((m) => m.toId)).size).toBe(4);
+    expect(compared).toBeGreaterThan(100);
+    // The horizon edge: a coordinator-role mail at exactly `sinceAt` reaches demo-peer through its delivery row alone,
+    // and is selected; its twin a millisecond older is not.
+    const roleAt = (at: number): number => mail.find((m) => m.toId === 'coordinator' && m.fromId === 'demo-other'
+      && m.at === at && dels.some((d) => d.mailId === m.id && d.toId === 'demo-peer'))!.id;
+    const peer = s.stallMailFor('demo-peer', [], W2_SINCE_AT);
+    expect(peer.ok && peer.mail.map((m) => m.id)).toContain(roleAt(W2_SINCE_AT));
+    expect(peer.ok && peer.mail.map((m) => m.id)).not.toContain(roleAt(W2_SINCE_AT - 1));
+  });
+});
