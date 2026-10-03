@@ -20,7 +20,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | merged 2026-10-02 (`a934a59b`); run 219 closed; deploy AGENT-FIRST by the update mechanism |
-| 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | awaiting review (run 237 at `55137231`; review run 246 dispatched 2026-10-03 15:07) |
+| 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin | **AGENT-FIRST** (ccd) | — | — | to plan |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
 | 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
@@ -262,6 +262,42 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     - failed dispatches counted as rescues;
     - §9's target of 0.
   - **Review run 246** was dispatched at 15:07 to `ccrc-pwa-swift-harbor`. The window had room.
+- **2026-10-03 16:38 — review 246 ruled; wave 2 MERGED as #235 (`db44b136`)**, squash, at the reviewed head
+  `55137231`, with every required check green (report `~/.cc-clips/ccrc-pwa-swift-harbor/review-246-55137231.md`;
+  27 agents, no lens unverified; 4 confirmed and 4 refuted, all minor).
+  - **The safety questions, measured:**
+    - no input makes a session wait forever, because every hold in `_rescue_policy` is bounded;
+    - there is no bounce on the rescue path;
+    - a stalled pane is never held past a turned reset;
+    - open question 4's bound is as planned.
+    The panel replayed the plan's blocks onto `fe7b9775` and found the code matches byte for byte, apart from the
+    ledgered departures.
+  - **Carried to wave 3's first commit (residue):**
+    - F1: `end=swap` is written before a dispatch that can be refused, so stage 4 counts `noroom:swap`/`chain:swap`
+      for a refused auto-rescue. Until it is fixed, a stage-4 reading subtracts refused dispatches, which swap.log's
+      `_swap_refuse` lines show.
+    - F2: "its only account with room" can be one of several; say "best".
+    - F3: README :1579 and the comment at ccd :23225 scope "a strand reads no swap log" to the genuine no-room strand.
+    - F5: a `[[ -e "$REG/$id.rescuewait" ]]` guard on the `clear` close, which forks about 1.7 ms per tick per
+      session today.
+    - The worker's minors 3–5: cap `reset=` at `\d{1,12}`, a set beside the skip lists, and whether the rescue count
+      keys on a landing.
+  - **F6, ruled: spec §9's stage-4 target.** "Sessions with 4+ auto-rescues in an hour: 0" cannot be met by design,
+    because a chain wait that runs its full 30 minutes still ends in a fourth rescue inside the hour. The target is
+    restated to what the design promises: 0 sessions with a fourth rescue in an hour that NO chain wait preceded.
+    The raw 4+ count is still reported. It is spec text, so it goes in wave 3's residue commit; the stall-watch
+    programme claims the spec, so check its claims first.
+  - **The boundary:**
+    - wave 3's run 248 opened first (planned; block 3896–3905, written bare);
+    - run 237 closed `final` (`released:true`, `childReclaim:queued`).
+  - **Overlap notices** (mails 3343–3345):
+    - landing's run 238 merges main and re-stamps before its wave-done;
+    - #215 and #232 are second landers on ccd/ccd and on README/CLAUDE.md.
+  - **Deploy:** AGENT-FIRST (ccd only), through ccrc's updater. The §9 stage-4 week-after reading follows it, with
+    F1's subtraction.
+  - **For wave 4b's priority:** on the night of 2026-10-02, Claude Code's background-shell memory reap killed work
+    in three sessions, and run 237 sat idle for 15 hours. Wave 4b ships `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1`,
+    so that night is measured evidence for it.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -306,11 +342,15 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
 
 ## Next-wave brief
 
-Wave 1 is planned, reviewed and re-measured (2026-09-28); once the docs PR has merged, dispatch it on a fresh
-workspace with its plan path and this file. Wave 2 is re-planned (2026-09-30) and ready: dispatch it on a fresh workspace with its plan path and this file. Waves 1
-and 2 may be worked in parallel but land one at a time; whichever lands second takes the other's
-`deploy/measure-continuity.py` through the plan's gated merge block. Once wave 2 is deployed, its `noroom_…` rows are
-the count §11 item 6 returns to the operator with (CCR-20).
-Wave 1's first task re-measures the write model the planner measured (journals and agent logs appended in place,
-records written whole); if it disagrees, the rules change in the plan before any code. Wave 2 changes a verdict every rescue and strand decision runs on;
-its safety lens is `xhigh`.
+Waves 1 and 2 are merged (#230 `a934a59b`, #235 `db44b136`). Owed after their deploys:
+- wave 1's §9 stage-1 measurement, about 2026-10-09;
+- wave 2's stage-4 reading, with refused dispatches subtracted (F1 above).
+
+Wave 3 (spec stage 7: `$REG/<id>.typed`, the operator's own `/model`/`/effort` promoted to the route record, the
+alias table) is open as run 248 (planned), with deviation numbers 3896 to 3905, written bare.
+- **It is to plan.**
+- **Its plan's FIRST commit is wave 2's residue**, the list above from review 246: F1, F2, F3, F5, the minors 3–5
+  and F6's restated §9 target.
+
+Waves 4 and 4b (the reap-class OOM count, the scope sweep, then the pressure-reap disable) are AGENT-FIRST.
+2026-10-02's reaped runs argue for planning 4b early.
