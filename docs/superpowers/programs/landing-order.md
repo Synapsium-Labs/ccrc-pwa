@@ -295,6 +295,11 @@ carries it (spec §5.1, amended 2026-09-24).
     - F10(a), 3884: §5's read-back asks the PR's `state` and `autoMergeRequest`, so a merged PR never reads as
       "disarm it".
     - F7 folds into 3873. F3, F4 and F11 are plan-text corrections. 3885 is a spare.
+- **2026-10-03 11:58 — run 238 resumed** (mail 3310).
+  - The fix round's hook-strip subagent ran a jq timing script at 72 KB. That command was SIGKILLed (exit 137) at
+    03:41 on a memory-short box, and the session sat idle for 8 hours with a clean tree at `a89d3dc7`.
+  - It restarts the round from the hook strip. Timing runs are now foreground, under `ulimit -v`, at 36 KB and
+    100 KB only. A killed run is reported by mail, never left waiting at the pane.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
