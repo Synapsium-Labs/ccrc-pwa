@@ -18,7 +18,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
-| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | awaiting review (run 238 at `a89d3dc7`; review run 241 dispatched 2026-10-03 02:43) |
+| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | fix round 1 (review 241 ruled 2026-10-03 03:25; run 238 back at `working`) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | — | — | to plan |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
@@ -265,6 +265,36 @@ carries it (spec §5.1, amended 2026-09-24).
     this session's slot under the split with stall-watch.
 - **2026-10-03 02:43 — review run 241 dispatched** to `ccrc-pwa-brisk-ridge`, in the 02:42:08 slot, after
   re-measuring the tip as `a89d3dc7`.
+- **2026-10-03 03:25 — review 241 closed and ruled** (report
+  `~/.cc-clips/ccrc-pwa-brisk-ridge/review-241-a89d3dc7.md`; the held-out panel, 27 agents, no lens unverified;
+  6 confirmed 3–0, 2 refuted 3–0; 11 findings, 2 important).
+  - **The review accepts the wave's shape:**
+    - ci.yml's concurrency and legs;
+    - the 17-of-25 budget;
+    - the seven-site census;
+    - both landing outcomes with no re-send;
+    - clause 15 byte-identical;
+    - the residue.
+    All suites are green and 16 mutation rows reproduce.
+  - **The deploy order (3864): fleet-first is safe**, measured against the tip. The old server's 20 s bound kills an
+    overrunning sweep, which retries next tick. The deny only refuses. The land-before-close rule applies only to a
+    project that requires the queue, and none does before Task 7. One correction: ccd writes its three registry fields
+    before the queue call, the same measurements the old ccd writes. So at merge the operator's update from the
+    console, fleet node first, is the deploy, and no hand order is needed.
+  - **Fix round 1** (mail 3305; 3876 plus newly issued 3882–3885, written bare here):
+    - F2 (must): the plan's Task 6 Step 6, PR-body template and rollback line still said `ccrc rollout --server-first`
+      by hand. They are rewritten to the updater's order.
+    - F1, 3876: the deny's quote strip failed OPEN on ordinary spellings, including clause 15's own natural
+      `sha="$(git rev-parse HEAD)"`, then `gh pr merge … "$sha"`. The strip must consume a `$(`-holding span without
+      opening a new one, with the five shapes added as deny cases. F6 folds in: the bounded-time case gets its hold.
+    - F8: the hook header lists every unlisted pass class the review measured. The deny is contract-grade, so they
+      are listed, not closed.
+    - F5, 3882: ccd's five queue words are pinned to the server's map across languages. A rename silenced the lane
+      before.
+    - F9, 3883: `sweepLanding`'s decisions move to a pure L1 `landingVerdict`, the ring rule #233 was held to.
+    - F10(a), 3884: §5's read-back asks the PR's `state` and `autoMergeRequest`, so a merged PR never reads as
+      "disarm it".
+    - F7 folds into 3873. F3, F4 and F11 are plan-text corrections. 3885 is a spare.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -292,6 +322,12 @@ carries it (spec §5.1, amended 2026-09-24).
     - `~N`/`^N`, `refs/remotes/origin/main`, `main:main`.
 
     Each needs a pinned case and a timing check.
+- **From wave 2's review (241), carried:**
+  - a closed-unmerged PR reads `unmeasured` on every sweep, though its line already carries `phase: closed`;
+  - a doctor check for jq's lookaround, so the deny's Oniguruma fail-open becomes a visible FAIL;
+  - an optional cap on the payload the deny inspects (its 200 KB shapes run 1.4–2.9 s);
+  - the no-`--squash` assertion's exact-text match on #178's span, which is brittle but not blind.
+  Task 7's runbook names the deny's listed pass classes as its known limits before the operator relies on it.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
