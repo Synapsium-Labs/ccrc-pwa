@@ -269,6 +269,44 @@ describe('the worker merge deny', () => {
     expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
   });
 
+  // Fail closed (fix round 2): what the strip cannot COMPLETE keeps its raw
+  // text, so a merge after it is still seen. A heredoc with no exact
+  // terminator line keeps its body (bash ends one at `EOF)` inside a `$(…)`
+  // the strip may not have parsed); an unclosed span keeps its text; `$` pairs
+  // are read from the start of a run; a `${…}` inside `$(…)` holds its `(`; a
+  // `<<` line that leaves a quote open keeps its body; a line of two heredocs
+  // is read from the last; a quoted delimiter may hold a blank, and a bare
+  // one may start with any word character; a body line `EOF)` keeps the body
+  // (bash ends a heredoc there inside a `$(…)` the strip does not parse). Any
+  // heredoc opener the strip sees but cannot complete keeps everything from it
+  // to the end RAW. An escape takes the rest of its word, so `\ #` opens no
+  // comment; a `#` in `${…}` is part of the expansion.
+  it.each([
+    ['cat <<EOF\nit\'s\ngh pr merge 42'],
+    ['echo $$$\'\\\'\'; gh pr merge 42; echo \'x\''],
+    ['echo $$$$$\'\\\'\'; gh pr merge 42; echo \'x\''],
+    ['x=$(cd "$(git rev-parse --show-toplevel 2>/dev/null)" && cat <<EOF\nhi\nEOF)\ngh pr merge 42'],
+    ['x=$(echo ")"; cat <<EOF\nhi\nEOF)\ngh pr merge 42'],
+    ['x=$(\ncat <<EOF\nhi\nEOF)\ngh pr merge 42'],
+    [`x=$(true ${'a'.repeat(210)}; cat <<EOF\nhi\nEOF)\ngh pr merge 42`],
+    ['x=$(cat <<EOF\nhi\nEOF\necho ${y/(/z})\ngh pr merge 42'],
+    ['x=$(cat <<EOF\nhi\nEOF\necho ${y/(/z})\ngh pr merge 42; echo \'x\''],
+    ['echo "unterminated; gh pr merge 42'],
+    ['cat <<EOF "x\ny"; gh pr merge 42\nbody\nEOF\necho z'],
+    ['cat <<A <<B\nit\'s\nA\nit\'s\nB\ngh pr merge 42\necho \'x\''],
+    ['cat <<\'MY EOF\'\nit\'s\nMY EOF\ngh pr merge 42\necho \'x\''],
+    ['cat <<1\nit\'s\n1\ngh pr merge 42\necho \'x\''],
+    ['x=$(cat <<EOF\nhi\nEOF)\ngh pr merge 42\nEOF'],
+    ['cat <<A \'<<\'\nit\'s\nA\ngh pr merge 42\necho \'x\''],
+    ['cat <<A # <<\nit\'s\nA\ngh pr merge 42\necho \'x\''],
+    ['echo a\\ #; gh pr merge 42'], ['echo a\\\t#x; gh pr merge 42'],
+    ['echo ${#x}; gh pr merge 42'], ['echo "${x#y}"; gh pr merge 42'],
+    ['echo "$(echo ${x##*/})"; gh pr merge 42; echo \'x\''],
+  ])('keeps what it cannot complete, so a merge after it is seen: %j', (c) => {
+    hold(WAVE_HOLD);
+    expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
+  });
+
   it('leaves every other gh and every mention of the words alone', () => {
     hold(WAVE_HOLD);
     for (const c of [
@@ -285,12 +323,22 @@ describe('the worker merge deny', () => {
       "git commit -m \"$(cat <<'MSG'\nfeat(hook): deny `gh pr merge --admin` in every session\nMSG\n)\"",
       "gh pr create --title t --body 'landing is `gh pr merge <n>` with no --admin'",
       // A plain quoted mention, and one holding a separator; a heredoc body is
-      // text to its terminator, or to the end when it has none — bash runs
-      // none of it, even a line that begins `gh pr merge`.
+      // text up to its terminator line — bash runs none of it, even a line
+      // that begins `gh pr merge`.
       'echo "gh pr merge"', 'git commit -m "docs; gh pr merge 42 is how"',
       "git commit -F - <<'EOF'\nfix: it's the strip\ngh pr merge 42 enqueues\nEOF",
       "gh pr create --body \"$(cat <<'EOF'\n## Summary\n- it's (part of it\ngh pr merge 42 lands it\nEOF\n)\"",
-      "cat <<EOF\nit's\ngh pr merge 42",
+      "x=$(cat <<'EOF'\nbody: gh pr merge 42 lands it\nEOF\n)",
+      // Precision, now that what the strip cannot complete is kept raw: each of
+      // these is parsed to its end, so the heredoc mention after it stays text.
+      "gh pr create --body \"$(cat <<'EOF'\nit's\ngh pr merge 42 lands it\nEOF)\"",
+      "(( x << y ))\ngit commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
+      "x=\"$(date # it's\n)\"\ngit commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
+      "git commit -F - <<-'EOF'\n\tgh pr merge 42 is how\n\tEOF\necho done",
+      "echo \"${x:-\"a\"}\" && git commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
+      "echo \"$(echo $$'\\')\" && git commit -F - <<'EOF'\ngh pr merge 42 is how\nEOF",
+      "git commit -F - <<'MY EOF'\ngh pr merge 42 is how\nMY EOF",
+      "git commit -F - <<1\ngh pr merge 42 is how\n1",
     ]) {
       expect(bash(c).deny, `denied: ${c}`).toBeNull();
     }
