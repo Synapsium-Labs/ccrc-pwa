@@ -487,10 +487,10 @@ agent frame in remote mode.
   `programme:'end'`. There is no keep, and pausing is the pause switch (§5.2).
 - **Ending a programme succeeds, then the archive refuses.** Every refusable check the server can measure runs
   first, and a partly ended programme stops the door before any stop or archive. A workspace's busy is among them
-  when the programme is to end without `interrupt:true` (3877), so `session-busy` and `status-unknown` there come
-  before anything ends. What only `ccd` measures can still refuse after the end, for example the worktree in remote
-  mode or the archive manifest; that answer names the runs it ended, and the sheet offers "Stop only" where it
-  applies (§5.2).
+  when the programme is to end without `interrupt:true` (3877): before the end, a busy or unmeasurable workspace is
+  refused `session-busy`. What only `ccd` measures can still refuse after the end, which includes its own
+  `status-unknown`, the worktree in remote mode and the archive manifest; that answer names the runs it ended, and
+  the sheet offers "Stop only" where it applies (§5.2).
 - **A busy archive loses a turn.** Only after the busy confirm, which alone sends `interrupt:true`.
 - **The stop succeeds and the archive refuses.** The row stays visible, stopped, with its reason and Archive again
   (§5.2).
