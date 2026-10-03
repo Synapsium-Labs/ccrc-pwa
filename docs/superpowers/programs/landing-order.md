@@ -18,7 +18,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
-| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | fix round 1 (review 241 ruled 2026-10-03 03:25; run 238 back at `working`) |
+| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | awaiting re-review (fix round 1 at `1a71493a`; review run 247 dispatched 2026-10-03 15:23) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | — | — | to plan |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
@@ -300,6 +300,23 @@ carries it (spec §5.1, amended 2026-09-24).
     03:41 on a memory-short box, and the session sat idle for 8 hours with a clean tree at `a89d3dc7`.
   - It restarts the round from the hook strip. Timing runs are now foreground, under `ulimit -v`, at 36 KB and
     100 KB only. A killed run is reported by mail, never left waiting at the pane.
+- **2026-10-03 15:21 — fix round 1 done at `1a71493a`** (wave-done 3333; report
+  `~/.cc-clips/ccrc-pwa-plain-prairie/wave-done-238-fix1.md`). It is 11 commits, plus a clean merge of main `fe7b9775`
+  (#233) with ccd/ccd untouched. On the merged tree, 6837 passed and 0 failed; citations 7|328.
+  - **3876, the deny:** three hook rounds. The per-part security reviews and the commit scanner found regressions, so
+    the strip now FAILS CLOSED, and whatever it cannot complete stays raw to the end. merge-deny has 62 cases and 58
+    live rows; sync-advisory is 68/68 within 1500 ms.
+    - The accepted cost, named in the header: three non-standard heredoc spellings false-deny.
+    - Listed for Task 7's runbook: the remaining unparsed classes, and the payload cap. Quote-dense input around
+      0.5 MB can exhaust the hook, and it then fails open.
+  - **The other rulings:**
+    - 3882: the queue words are pinned;
+    - 3883: `landingVerdict` is L1 in `coord/landing.ts`;
+    - 3884: the read-back has three answers;
+    - F2 and F7: the text follows the updater.
+    3885 is unused.
+  - **Review run 247** was dispatched at 15:23 to `ccrc-pwa-amber-hollow`. Its brief keeps the deny a security
+    boundary, and asks for false denies on ordinary commands. Timing runs stay at or below 100 KB, under `ulimit -v`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
