@@ -155,7 +155,7 @@ independent reader, then cross-checked by another. The cross-check upheld every 
     takes 22:34:18 (run 214). Raising `maxSessionsPerDay` is the operator's door.
     Agreed (mails 3253, 3276-3278). The later slots are split as follows, and whoever won't use a slot they hold mails
     the other before it ages out:
-    - landing-order: 00:09:10, 02:42:08 and 11:53:20;
+    - landing-order: 00:09:10, 02:42:08, 11:53:20 and 11:54:07 (mails 3301, 3302);
     - this programme: 10:11:41 and 11:53:42, for a wave 4 re-review if one is needed and for wave 5's dispatch.
   - **The worker's finding is routed.** `monitor-wait-conflict-continuity-stage5` says continuity's planned stage-5
     worker clause (a Monitor wait) contradicts worker clause 17. It went to continuity's coordinator (mail 3252); this
