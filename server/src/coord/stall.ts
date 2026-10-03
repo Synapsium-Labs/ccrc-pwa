@@ -1,5 +1,5 @@
 import { ACTIVE_RUN_STATES, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
-import type { MailGate } from '../../../shared/api.js';
+import type { MailGate, RunState } from '../../../shared/api.js';
 /**
  * The worker stall watch's pure half (design 2026-09-29 §4.2, wave 1). L1: clock-free, fs-free, fastify-free and
  * store-free. `stall-vocabulary.test.ts` pins that, and the coord-ring scan in `single-definition.test.ts` forbids
@@ -482,18 +482,22 @@ export type StallActivation =
   | { readonly kind: 'reactivated'; readonly at: number }
   | { readonly kind: 'none' }
   | { readonly kind: 'unmeasured' };
+/** The state a run enters at its dispatch: `RUN_TRANSITIONS`' one edge into it is `planned -> dispatched`. */
+const STALL_DISPATCH_STATE = 'dispatched' satisfies RunState;
+
 /** The time of the newest transition INTO `ACTIVE_RUN_STATES` (L0, never a second list) from a state outside them,
- *  other than the run's FIRST such entry, in the store's `ORDER BY id`. The first entry is the dispatch, the run's one
- *  way in, and `dispatchedAt` already measures it: `markDispatched` and `advanceInner` stamp the two with separate
- *  `Date.now()` calls, so counting the dispatch's own row would move a never-mailed episode's key off `dispatchedAt`.
+ *  other than an entry into `dispatched`. That entry is the dispatch, the run's one way in, and `dispatchedAt` already
+ *  measures it: `markDispatched` and `advanceInner` stamp the two with separate `Date.now()` calls, so counting the
+ *  dispatch's own row would move a never-mailed episode's key off `dispatchedAt`. Keyed on the EDGE, never the
+ *  position (`reactivation-first-entry-by-edge` (D-3796)).
  *  An observation row (`fromState === toState`) is never an entry. A `fromState` this build cannot name, into an
  *  active state, IS one: the clock restarts once, which defers r1 by at most `STALL_QUIET_MS`, where refusing it
- *  would hold the run until its next transition. A run rebuilt by `CoordStore.reconstruct()` has no events, so its first
- *  send-back is its only entry and reads `none`: it keeps today's clock, never an invented restart. */
+ *  would hold the run until its next transition. A run rebuilt by `CoordStore.reconstruct()` has no events, and its
+ *  first send-back restarts the clocks as any send-back does: it is an entry, and no dispatch row precedes it. */
 export function stallReactivation(events: readonly StallEventRow[]): StallActivation {
   const active: readonly string[] = ACTIVE_RUN_STATES;
-  const entries = events.filter((e) => active.includes(e.toState) && !active.includes(e.fromState));
-  if (entries.length < 2) return { kind: 'none' };
+  const entries = events.filter((e) => active.includes(e.toState) && !active.includes(e.fromState) && e.toState !== STALL_DISPATCH_STATE);
+  if (entries.length === 0) return { kind: 'none' };
   const at = entries[entries.length - 1]!.at;
   return Number.isSafeInteger(at) && at >= 0 ? { kind: 'reactivated', at } : { kind: 'unmeasured' };
 }
@@ -623,6 +627,13 @@ function stallCoordinatorIds(runs: readonly StallRunRow[]): ReadonlySet<string> 
  *  `dispatchedAt`. */
 function stallReactivatedAt(input: StallInput): number {
   return input.activation.kind === 'reactivated' ? input.activation.at : 0;
+}
+
+/** When the coordinator-ball cap's 30 h starts: the run's newest relevant mail, or its re-activation when that is later
+ *  (`coord-ball-restarts-on-reactivation` (D-3789)). ONE definition: the verdict times the cap from it, and the push
+ *  names it. Null when no relevant mail exists, and then the cap never fires. */
+function stallCoordBallFrom(input: StallInput, f: StallFacts): number | null {
+  return f.lastExchangeAt === null ? null : Math.max(f.lastExchangeAt, stallReactivatedAt(input));
 }
 
 export function stallFacts(input: StallInput): StallFacts {
@@ -998,7 +1009,8 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
       return { act: 'notify', arm: 'coord-deaf', rung: 1, key: deaf.id, to: 'operator' };
     }
     // `coord-ball-restarts-on-reactivation` (D-3789): the coordinator's 30 h runs from its own send-back too.
-    const ballAge = f.lastExchangeAt === null ? 0 : now - Math.max(f.lastExchangeAt, stallReactivatedAt(input));
+    const ballFrom = stallCoordBallFrom(input, f);
+    const ballAge = ballFrom === null ? 0 : now - ballFrom;
     return ballAge >= COORD_BALL_CAP_MS && rungDoneAt(input, 'coord-ball', 1, key) === null ? capVerdict('coord-ball', key) : VERDICT_NONE;
   }
   // (10) the worker's ball. Without the w2 marker, or without a current marker: wave 1's ladder, unchanged.
@@ -1323,9 +1335,15 @@ export function stallPushText(input: StallInput, facts: StallFacts, n: StallNoti
       // "handed" the run over; and a run with no claimant names none.
       const last = facts.lastExchangeAt ?? n.key;
       const claimant = run.claimedBy === null ? '' : ` ${coordinator}`;
+      // The cap's clock (`stallCoordBallFrom`). After a send-back with no mail since, that is the send-back; the last
+      // mail is named too, because it is still true.
+      const from = stallCoordBallFrom(input, facts) ?? last;
+      const since = from > last
+        ? `the run went back to work at ${stallUtc(from)} (${stallSpan(now - from)}) and no mail has crossed it since; the last mail on the run was at ${stallUtc(last)} (${stallSpan(now - last)})`
+        : `no mail on the run since ${stallUtc(last)} (${stallSpan(now - last)})`;
       return {
         title: `⚠ waiting › ${ws}`,
-        body: `${label}: the run is waiting on its coordinator${claimant} (worker ${worker}); no mail on the run since ${stallUtc(last)} (${stallSpan(now - last)}).`,
+        body: `${label}: the run is waiting on its coordinator${claimant} (worker ${worker}); ${since}.`,
       };
     }
     case 'frozen':

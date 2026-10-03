@@ -1440,7 +1440,7 @@ import type { StallEventRow } from '../src/coord/stall.js';
 const ev = (at: number, fromState: string, toState: string): StallEventRow => ({ at, fromState, toState });
 const reactivated = (at: number): StallActivation => ({ kind: 'reactivated', at });
 
-describe('stallReactivation: the newest entry into ACTIVE_RUN_STATES after the first (quiet-restarts-on-reactivation)', () => {
+describe('stallReactivation: the newest entry into ACTIVE_RUN_STATES other than the dispatch (quiet-restarts-on-reactivation)', () => {
   const D = t('2026-09-30T19:48:51.388Z');
   const DISPATCH = ev(D, 'planned', 'dispatched');
   const WORKING = ev(D + H, 'dispatched', 'working');
@@ -1454,7 +1454,7 @@ describe('stallReactivation: the newest entry into ACTIVE_RUN_STATES after the f
 
   it('the dispatch row is never a re-activation, even when it trails dispatchedAt by milliseconds', () => {
     // markDispatched and advanceInner each read their own Date.now(): the planned -> dispatched row can land after
-    // dispatchedAt. It is the run's first entry, and dispatchedAt already measures it.
+    // dispatchedAt. It is the dispatch, and dispatchedAt already measures it.
     expect(stallReactivation([ev(D + 3, 'planned', 'dispatched'), ev(D + H, 'dispatched', 'working')])).toEqual({ kind: 'none' });
   });
 
@@ -1495,6 +1495,13 @@ describe('stallReactivation: the newest entry into ACTIVE_RUN_STATES after the f
     ['a string the store did not prove', '1790834550571' as unknown as number],
   ])('the newest entry\'s time %s: unmeasured, never 0', (_label, at) => {
     expect(stallReactivation([DISPATCH, WORKING, TO_REVIEW, ev(at, 'awaiting-review', 'working')])).toEqual({ kind: 'unmeasured' });
+  });
+
+  it('keyed on the edge, never the position: a run with no dispatch row (rebuilt by reconstruct()) re-activates at its first send-back (reactivation-first-entry-by-edge (D-3796))', () => {
+    expect(stallReactivation([ev(D + 9 * H, 'awaiting-review', 'working')])).toEqual(reactivated(D + 9 * H));
+    expect(stallReactivation([ev(D + 9 * H, 'merging', 'working')])).toEqual(reactivated(D + 9 * H));
+    // A planned -> dispatched row is the dispatch wherever it sits, so it is never the newest re-activation.
+    expect(stallReactivation([ev(D + 9 * H, 'awaiting-review', 'working'), ev(D + 10 * H, 'planned', 'dispatched')])).toEqual(reactivated(D + 9 * H));
   });
 
   it('an unprovable time on an OLDER entry does not touch the newest one', () => {
@@ -1650,6 +1657,16 @@ describe('E5 (run 199): a send-back 2.97 s before the shadow r1, the brief 36 mi
     expect(stallVerdict(e5(), E5.brief - 1)).toEqual(NONE);
     const briefed = e5({ mail: [...MAIL, mailRow(2971, E5.brief, COORD, WORKER, 'status', 'fix round', 199)] });
     expect(stallVerdict(briefed, E5.w2972 - 1)).toEqual(NONE);
+  });
+});
+
+describe('reactivation-first-entry-by-edge (D-3796): a reconstructed run\'s first send-back restarts its clocks', () => {
+  it('a run whose events begin at its send-back (CoordStore.reconstruct() writes none) keys the episode on it and holds r1', () => {
+    const back = NOW - MIN;
+    const input = stallInput({ activation: stallReactivation([ev(back, 'awaiting-review', 'working')]) });
+    expect(stallFacts(input).episodeKeyMs).toBe(back);
+    expect(stallVerdict(input, NOW)).toEqual(NONE);
+    expect(stallVerdict(stallInput(), NOW), 'the control: the same run without the send-back draws r1').toEqual(r1(RUN67_DISPATCHED));
   });
 });
 
