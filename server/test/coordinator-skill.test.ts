@@ -365,7 +365,7 @@ describe('the coordinator skill: its contract', () => {
       .toContain("the last wave's producer lands BEFORE this close");
   });
 
-  it('reads the landing back as THREE answers — merged, armed or neither — so a merged PR never reads as "nothing is queued, disarm it" (landing-order wave 2, review 241 F10(a))', () => {
+  it('reads the landing back as FOUR answers — queued, merged, armed or neither — so a merged PR never reads as "nothing is queued, disarm it" (landing-order wave 2, review 241 F10(a))', () => {
     const wl = refs('wave-lifecycle.md');
     const at = wl.indexOf('**Landing on a native-queue project**');
     expect(at, 'wave-lifecycle.md lost its native-queue landing paragraph').toBeGreaterThanOrEqual(0);
@@ -375,7 +375,7 @@ describe('the coordinator skill: its contract', () => {
     // so the entry alone cannot tell "merged" from "nothing queued".
     expect(para, 'the read-back query no longer asks the PR\'s state, autoMergeRequest and mergeQueueEntry together')
       .toContain('pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } }');
-    // The three answers, each with its own act.
+    // The four answers (queued, merged, armed, neither), each with its own act.
     expect(para, 'the queued answer (a non-null entry) is gone').toContain('answers a non-null `mergeQueueEntry`');
     expect(para, 'the MERGED answer is gone: a merged PR would read as nothing queued')
       .toContain('A `state` of `MERGED` means it already landed: wait for or prove `merged:#<pr>`, and never disarm');

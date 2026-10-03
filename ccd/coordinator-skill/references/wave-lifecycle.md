@@ -777,7 +777,7 @@ whole time, which is the only prevention this ordering rule buys.
    because the queue's merge method applies, and never `--admin`. Prove it
    is IN the queue before you rely on the server:
    `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'`
-   gives one of three answers. A queued PR answers a non-null
+   gives one of four answers. A queued PR answers a non-null
    `mergeQueueEntry`, the success answer. A `state` of `MERGED` means it
    already landed: wait for or prove `merged:#<pr>`, and never disarm — a
    merged PR answers a null entry too, so the entry alone cannot tell merged
