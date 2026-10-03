@@ -776,12 +776,18 @@ whole time, which is the only prevention this ordering rule buys.
    `gh pr merge <pr> --match-head-commit <handoffCommit>`: no `--squash`,
    because the queue's merge method applies, and never `--admin`. Prove it
    is IN the queue before you rely on the server:
-   `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { mergeQueueEntry { state } } } }'`
-   answers a non-null `mergeQueueEntry`. A null one means nothing is queued
-   and nothing will tell you so: disarm it (`gh pr merge <pr> --disable-auto`)
-   and read why before you do anything else. Disarm the same way before any
-   fix round from `merging` — an armed auto-merge queues whatever head the
-   branch carries once its checks pass, and GitHub disarms it on a push only
+   `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'`
+   gives one of three answers. A queued PR answers a non-null
+   `mergeQueueEntry`, the success answer. A `state` of `MERGED` means it
+   already landed: wait for or prove `merged:#<pr>`, and never disarm — a
+   merged PR answers a null entry too, so the entry alone cannot tell merged
+   from nothing queued. A PR with no entry but a non-null `autoMergeRequest`
+   means it is only armed, and nothing is queued and nothing will tell you so:
+   disarm it (`gh pr merge <pr> --disable-auto`) and read why before you do
+   anything else. A PR with no entry, no `autoMergeRequest` and not merged
+   means nothing is queued: read why before you do anything else. Disarm the
+   same way before any fix round from `merging` — an armed auto-merge queues
+   whatever head the branch carries once its checks pass, and GitHub disarms it on a push only
    from a login without write access. End your turn. The run waits at
    `merging`, holding the child, so its workspace is not reclaimed under a PR
    still in the queue, and the server tells you how the queue answered: a

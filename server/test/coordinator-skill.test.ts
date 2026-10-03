@@ -365,6 +365,31 @@ describe('the coordinator skill: its contract', () => {
       .toContain("the last wave's producer lands BEFORE this close");
   });
 
+  it('reads the landing back as THREE answers — merged, armed or neither — so a merged PR never reads as "nothing is queued, disarm it" (landing-order wave 2, review 241 F10(a))', () => {
+    const wl = refs('wave-lifecycle.md');
+    const at = wl.indexOf('**Landing on a native-queue project**');
+    expect(at, 'wave-lifecycle.md lost its native-queue landing paragraph').toBeGreaterThanOrEqual(0);
+    const para = flat(wl.slice(at, wl.indexOf('**Same project:**', at)));
+    // The read-back asks the PR's own `state` and its `autoMergeRequest` beside
+    // the queue entry: a PR the queue already merged answers a null entry too,
+    // so the entry alone cannot tell "merged" from "nothing queued".
+    expect(para, 'the read-back query no longer asks the PR\'s state, autoMergeRequest and mergeQueueEntry together')
+      .toContain('pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } }');
+    // The three answers, each with its own act.
+    expect(para, 'the queued answer (a non-null entry) is gone').toContain('answers a non-null `mergeQueueEntry`');
+    expect(para, 'the MERGED answer is gone: a merged PR would read as nothing queued')
+      .toContain('A `state` of `MERGED` means it already landed: wait for or prove `merged:#<pr>`, and never disarm');
+    expect(para, 'the ARMED answer is gone')
+      .toContain('no entry but a non-null `autoMergeRequest` means it is only armed');
+    expect(para, 'the NEITHER answer is gone')
+      .toContain('no entry, no `autoMergeRequest` and not merged means nothing is queued: read why');
+    // The disarm is the armed answer's act ALONE: it sits after the MERGED rule.
+    const merged = para.indexOf('and never disarm');
+    const disarm = para.indexOf('`gh pr merge <pr> --disable-auto`');
+    expect(merged, 'the MERGED rule is gone').toBeGreaterThanOrEqual(0);
+    expect(disarm, 'the disarm spelling is gone').toBeGreaterThan(merged);
+  });
+
   it('tells the session how to learn its own id the ONE way that is actually its own', () => {
     // The bare derivation this replaced was measured on the fleet host three
     // times on 2026-09-02: with no TMUX_PANE it exits 0 naming the MOST RECENTLY
