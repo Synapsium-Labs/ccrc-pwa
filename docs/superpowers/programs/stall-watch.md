@@ -255,6 +255,8 @@ Output: `w2-shadow-review.json` in the coordinator notes.
   - **What ran on it:** the README citation cases (7 passed / 328 skipped), the skill pins, `single-definition`,
     `deviation-refs`, `dtbd`, `topology-clean` and the six stall suites. All green.
   - **Result:** no conflict, measured, so no fix-round (mail 3330).
+  Re-measured the same way after session-continuity wave 2 merged (#235, `db44b136`; README +54 lines). The results
+  were identical and all green.
 - **R18 (coordinator, 2026-10-03 12:15): the wave-2 review sets the arming order and adds a wave 6.** The order:
   1. `stall-watch-live` now. Its one r1 in the window was true.
   2. `mail-gate-busy-shadow` now.
