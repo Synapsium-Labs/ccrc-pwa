@@ -43,6 +43,25 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-03 17:37 — items 4–6 reported (mail 3349); four slugs ruled.** The work is at local `65da6cafe`, after
+  the second merge. The third merge (`db44b136`) and the push are still to come. Every slug is accepted, and none
+  departs from the spec, the contract or a plan, so none takes a number:
+  - **`unresolved-real-home-refuses-system-launchctl`.** `_svc_real_home` evaluates only a login name matching
+    `^[A-Za-z_][A-Za-z0-9._-]*$`, with the letters spelled out because a bracket range follows collation. A leading
+    digit, `+` or `-` is excluded, since `~0`, `~+N` and `~-` read the directory stack. Any other name answers no
+    home with exit 1. `_svc_launchctl` now also treats an unresolved home as a sandbox, which closes the case where an
+    empty `$HOME` compared `""` with `""` and reached the system launchctl. That follows the guard's own stated rule:
+    a sandbox HOME plus the system launchctl must not proceed, and an unresolved home cannot prove it is not one.
+    Both copies are changed identically and the change is line-neutral. Accepted. The held-out review judges whether
+    the charset refuses a real macOS account-name class (a directory-bound name, for one), because on such a box this
+    refusal would stop launchd management altogether.
+  - **`protected-fold-is-a-locale-superset`.** U+0130 was measured to fold under `nocasematch` in a UTF-8 locale, so
+    an ASCII-only fold would leave that gap open. A non-ASCII character is a one-character wildcard, counted in code
+    points and in bytes. This is inside the 2026-10-02 ruling that a superset is harmless: a variant started
+    protected meets the body's exact compare and exits 1 `usage:`.
+  - **`mark-check-runs-only-as-the-started-script`.** It was measured that `ccrc restamp` imports `mark.mjs` under
+    `node -e` with `argv[1]` set to that file. An eval run therefore checks only when `--check` follows.
+  - **`exit2-launcher-arm-pinned-by-a-fixture-installer`.** It stays inside the claimed test file.
 - **2026-10-03 16:40 — items 4–6 committed; `main` moved again.** `swift-hollow` merged `fe7b9775` (`3a4b88070`) and
   committed items 4 to 6 locally (`ec18654fb`, `6d5a736e3`, `65da6cafe`). Then #235 (session-continuity wave 2) merged
   as `db44b136` and added 458 lines to `ccd/ccd` (mail 3344). Mail 3346 asks for one more merge of `origin/main`
