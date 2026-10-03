@@ -18,7 +18,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
-| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | fix round 2 (review 247 ruled 2026-10-03 16:15; run 238 back at `working`) |
+| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | awaiting re-review (fix round 2 at `7e3b30bc`; review run 249 dispatched 2026-10-03 17:51) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | — | — | to plan |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
@@ -334,6 +334,19 @@ carries it (spec §5.1, amended 2026-09-24).
     - The payload cap and a quote-dense timing pin become preconditions of Task 7.
     - F6–F13 are text and rows.
     - The next review checks the rulings and looks for regressions. Any new bypass is classified, not hunted.
+- **2026-10-03 17:50 — fix round 2 done at `7e3b30bc`** (wave-done 3352). Four commits, plus main `db44b136` (#235)
+  absorbed: a stamp-only conflict, re-stamped; cite-remeasure unmoved at 147/197/52/35.
+  - **Closed:**
+    - F1, with H61;
+    - F3, the operator terminator, with H62;
+    - a regression the F1 fix itself opened (`pe` lacked `$$` and `$'…'`), with H63.
+  - **Listed:** F2, F4, F5, and the top-level `"$${"` shape.
+  - **F6:** the header is corrected, and Task 7 now carries PRECONDITIONS.
+  - **F7–F13:** text and rows L24, W1, W2, S19 and S20.
+  - **Merged tree:** merge-deny 71, sync-advisory 68, coordinator-skill 154, citations 7|328. No new number; 3885
+    is still a spare.
+  - **Review run 249** was dispatched at 17:51 to `ccrc-pwa-quiet-harbor`, under the stopping line: rulings and
+    regressions, plus ordinary commands that must still pass. Any new bypass is classified, not hunted.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
