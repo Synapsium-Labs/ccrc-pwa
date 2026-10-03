@@ -20,7 +20,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isReclaimRefuseCode, type ReclaimRefuseCode, type RunSummary } from '../../../shared/api';
-import { Button, Sheet } from '@ccrc/ui';
+import { Button, Sheet, TextInput } from '@ccrc/ui';
 import { ApiError, api, apiErrorText, kickoffErrorText } from '../lib/api';
 import './fleet.css';
 
@@ -303,14 +303,11 @@ export function ResumeSheet({
             </Button>
             {reclaimOpen ? (
               <>
-                {/* `.sess-hold-input` verbatim, not a new class: the same
-                    object — a single-line id field inside a fleet sheet — and
-                    it is already self-grounded, tap-floored and carries the
-                    ::placeholder ink. The identical reuse `.run-row` already
-                    makes of `.sess-unmeasured`. */}
-                <input
-                  type="text"
-                  className="sess-hold-input"
+                {/* The same object `.sess-hold-input` was: a single-line id
+                    field inside a fleet sheet, self-grounded, tap-floored, with
+                    the ::placeholder ink. It is `TextInput` now rather than a
+                    third copy of those ten declarations. */}
+                <TextInput
                   aria-label={`Hand run ${run.id} to this session id`}
                   placeholder="session id"
                   value={to}

@@ -1176,7 +1176,20 @@ describe('every stylesheet under src/ is audited', () => {
     // vacuously green — the exact shape of a fake gate.
     expect(report.counts.rules).toBeGreaterThanOrEqual(400);
     expect(report.counts.selfGrounded).toBeGreaterThanOrEqual(50);
-    expect(report.counts.pseudo).toBeGreaterThanOrEqual(3);
+    // ROUTE 3 IS SHRINKING, and that is a migration outcome rather than a
+    // parser fault. This floor was 3 while `.sess-hold-input::placeholder` and
+    // `.proj-search::placeholder` existed; both left when those fields became
+    // @ccrc/ui's `TextInput`, whose placeholder ink is now the utility
+    // `placeholder:text-ink-tertiary` — measured, but by
+    // `utility-pairs.test.ts`, not by this parser. Lowered to the honest 2
+    // rather than padded, for the reason the wave-2 plan gives about the gate's
+    // own total: a drop is the correct outcome, not a regression to paper over.
+    //
+    // The anti-vacuity job this line does is nearly spent, though: the three
+    // ::placeholder rules left are chat.css's, and when the composer migrates
+    // this count reaches 1. The assertions above and below are what will still
+    // catch a parser that matches nothing.
+    expect(report.counts.pseudo).toBeGreaterThanOrEqual(2);
     expect(report.measured.length).toBeGreaterThanOrEqual(120);
   });
 

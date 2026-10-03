@@ -572,25 +572,12 @@
 }
 
 /* Project picker — mono directory listing under a search line. */
-.proj-search {
-  width: 100%;
-  min-height: var(--tap-min);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  background: var(--bg-raised);
-  color: var(--ink-primary);
-  font: var(--weight-regular) var(--fs-input) / var(--lh-normal) var(--family-ui);
-  padding: 0 var(--sp-3);
-  margin-bottom: var(--sp-2);
-  outline: none;
-  transition: border-color var(--dur-fast) var(--curve-swift);
-}
-.proj-search:focus {
-  border-color: var(--accent);
-}
-.proj-search::placeholder {
-  color: var(--ink-tertiary);
-}
+/* `.proj-search` and `.sess-hold-input` are @ccrc/ui's `TextInput` now —
+   the same ten declarations, which this file's own comment admitted were
+   "copies … verbatim". The two things `.proj-search` carried BEYOND that set,
+   a `margin-bottom` and a focus `transition`, moved to its call sites as
+   `mb-2 transition-[border-color] duration-fast ease-swift`: they are the
+   call site's layout and motion, not part of what an input IS. */
 .proj-list {
   display: grid;
   border-top: 1px solid var(--edge-subtle);
@@ -691,9 +678,11 @@
   padding: var(--sp-3) 0;
 }
 /* The new-session sheet's optional routing row (routing spec, slice 4, Task
- * 6) — three plain selects under the project list. Reuses `.proj-search`'s
- * chrome tokens (edge, raised ground, tap-min height) rather than inventing a
- * second control style for the app's first `<select>`. */
+ * 6) — three plain selects under the project list. Reuses the chrome tokens
+ * @ccrc/ui's `TextInput` carries (edge, raised ground, tap-min height) rather
+ * than inventing a second control style for the app's first `<select>`. A
+ * `<select>` is not a `TextInput`, so these stay rules — but they stay the
+ * same tokens. */
 .route-row {
   display: grid;
   /* `minmax(0, 1fr)`, never a bare `1fr`: a grid item's automatic minimum size
@@ -742,8 +731,7 @@
   .notice-x,
   .acct-change,
   .acct-list .acct-row,
-  .proj-row,
-  .proj-search {
+  .proj-row {
     transition: none;
   }
 }
@@ -1589,7 +1577,7 @@ button.sess-held {
 /* Hold's reason composer — inline in place of the opener button, not a
    stacked confirm sheet (SessionActionsSheet.tsx explains why: the
    empty-reason refusal needs exactly one control on screen at a time to stay
-   trivially testable). `.sess-hold-input` copies .proj-search's declarations
+   trivially testable). The field is `TextInput` now; it once copied .proj-search's declarations
    verbatim (edge-subtle border, bg-raised, ink-primary, and the
    ink-tertiary ::placeholder the first version of this comment claimed to
    have copied and had not) rather than reusing the class name across an
@@ -1602,23 +1590,6 @@ button.sess-held {
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-}
-.sess-hold-input {
-  width: 100%;
-  min-height: var(--tap-min);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  background: var(--bg-raised);
-  color: var(--ink-primary);
-  font: var(--weight-regular) var(--fs-input) / var(--lh-normal) var(--family-ui);
-  padding: 0 var(--sp-3);
-  outline: none;
-}
-.sess-hold-input:focus {
-  border-color: var(--accent);
-}
-.sess-hold-input::placeholder {
-  color: var(--ink-tertiary);
 }
 .sess-hold-actions {
   display: flex;

@@ -298,7 +298,7 @@
 
    Every declaration here is either layout or a token pair that already ships:
    the container is .block-screen's own --ink-primary on --bg-page, and
-   .login-input copies .sess-hold-input's declarations verbatim (edge-subtle
+   The passphrase field is `TextInput`; it once copied .sess-hold-input's declarations verbatim (edge-subtle
    border, bg-raised, ink-primary) — same tokens, no new pair for the contrast
    gate to measure. The copy and the label set NO colour and inherit the
    container's ink. */
@@ -332,20 +332,9 @@
   max-width: 320px;
   text-align: left;
 }
+/* The passphrase field is @ccrc/ui's `TextInput` (primitives/text-input.tsx).
+   shell.css declared the same ten declarations fleet.css declared twice more;
+   the component says them once. */
 .login-label {
   font: var(--weight-medium) var(--fs-sm) / var(--lh-normal) var(--family-ui);
-}
-.login-input {
-  width: 100%;
-  min-height: var(--tap-min);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  background: var(--bg-raised);
-  color: var(--ink-primary);
-  font: var(--weight-regular) var(--fs-input) / var(--lh-normal) var(--family-ui);
-  padding: 0 var(--sp-3);
-  outline: none;
-}
-.login-input:focus {
-  border-color: var(--accent);
 }

@@ -906,16 +906,43 @@ describe('the program-start door and sheet are not living panes, and every real 
 });
 
 describe('the hold composer', () => {
-  it('declares its own placeholder colour — the block comment claims .proj-search verbatim', () => {
-    // FIX-WAVE OBSERVATION. The comment above this block says `.sess-hold-input`
-    // "copies .proj-search's declarations verbatim … same tokens, no new pair",
-    // and it omitted `::placeholder`, which .proj-search does declare. Left
+  it('declares its placeholder ink ONCE, in the component the three copies became', () => {
+    // FIX-WAVE OBSERVATION, kept because it is the argument for the component.
+    // This assertion used to compare two rules: `.sess-hold-input::placeholder`
+    // against `.proj-search::placeholder`. The block comment above the first
+    // claimed it copied the second "verbatim … same tokens, no new pair", and
+    // it had omitted `::placeholder` — which the second does declare. Left
     // undeclared the placeholder falls to the UA default in both colour
-    // schemes — and this placeholder is the ONLY place the reason convention
+    // schemes, and this placeholder is the ONLY place the reason convention
     // (`program:name wave:2/4`) is shown to whoever is typing it.
-    expect(declValue(ruleIn(css, '.sess-hold-input::placeholder'), 'color'))
-      .toBe(declValue(ruleIn(css, '.proj-search::placeholder'), 'color'));
-    expect(declValue(ruleIn(css, '.sess-hold-input::placeholder'), 'color')).toBe('var(--ink-tertiary)');
+    //
+    // The defect was that the fix had to be applied TWICE and the second
+    // application was found by reading rather than by a red suite. Both rules
+    // are now @ccrc/ui's `TextInput`, so there is one declaration to assert
+    // and no copy left to drift from it. The pair itself
+    // (--ink-primary on --bg-raised) is measured across all twelve palettes by
+    // utility-pairs.test.ts, which derives it from this same string.
+    const textInput = readFileSync(
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'text-input.tsx'), 'utf8');
+    expect(textInput).toContain('placeholder:text-ink-tertiary');
+
+    // THE INK AND THE GROUND, pinned by name. utility-pairs.test.ts measures
+    // this pair's CONTRAST across twelve palettes, which is a different
+    // question: swapping `text-ink-primary` for `text-ink-tertiary` keeps the
+    // ratio over 4.5 and passed that guard silently (measured). What typed
+    // text is MADE of is a design decision, not a ratio — the placeholder is
+    // deliberately the dimmer token and the value deliberately is not, and a
+    // guard that cannot tell them apart would let the two swap.
+    expect(textInput).toContain('bg-raised text-ink-primary');
+    // And both old classes are gone from this stylesheet, so nothing can
+    // quietly resurrect a third copy under an old name. `ruleIn` THROWS on a
+    // missing rule rather than returning null, so absence is asserted that way
+    // — the names survive in prose above, which a text scan would match.
+    // (`.login-input` was the third copy and lived in shell.css; the component
+    // assertion above is what now covers all three.)
+    for (const dead of ['.sess-hold-input', '.proj-search']) {
+      expect(() => ruleIn(css, dead), `${dead} should have retired into TextInput`).toThrow();
+    }
   });
 });
 

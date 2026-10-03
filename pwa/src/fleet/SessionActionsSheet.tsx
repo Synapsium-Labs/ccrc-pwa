@@ -15,7 +15,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
-import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
+import { Button, QuickConfirm, Sheet, TextInput, toast } from '@ccrc/ui';
 import { api, ApiError, apiErrorText, HOLD_EMPTY_REASON_TEXT } from '../lib/api';
 
 /**
@@ -439,9 +439,7 @@ export function SessionActionsSheet({
           {session.workspace !== null && session.archivedAt === null
             && session.held === null && holdOpen && (
             <div className="sess-hold-form">
-              <input
-                type="text"
-                className="sess-hold-input"
+              <TextInput
                 placeholder="program:name wave:2/4"
                 aria-label="Hold reason"
                 value={holdReason}

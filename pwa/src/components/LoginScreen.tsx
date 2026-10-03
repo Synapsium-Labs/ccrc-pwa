@@ -26,7 +26,7 @@ import type { AuthStatus, AuthVerdict } from '../../../shared/api';
 import { ApiError, api } from '../lib/api';
 import { clearAuthLost, readAuthStatus, useAuthLost, verdictOf } from '../lib/auth';
 import { PasskeyCeremonyError, assertPasskey, passkeyLoginSupported } from '../lib/passkey';
-import { Button } from '@ccrc/ui';
+import { Button, TextInput } from '@ccrc/ui';
 
 /**
  * One sentence per verdict — the whole point of `AuthVerdict` being a six-member
@@ -312,9 +312,8 @@ export function LoginScreen(): ReactNode {
         <label className="login-label" htmlFor="ccrc-passphrase">
           Passphrase
         </label>
-        <input
+        <TextInput
           id="ccrc-passphrase"
-          className="login-input"
           name="passphrase"
           type="password"
           autoComplete="current-password"

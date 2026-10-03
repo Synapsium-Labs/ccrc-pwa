@@ -42,7 +42,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
 import { ledgerPath, programKickoffVerdict, shapeProgramSlug } from '../../../shared/api';
-import { Sheet, Skeleton } from '@ccrc/ui';
+import { Sheet, Skeleton, TextInput } from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
 import { markerState } from './coordWords';
 import { ApiError, api, apiErrorText, kickoffErrorText } from '../lib/api';
@@ -816,9 +816,8 @@ export function StartProgramSheet({
         <p className="sheet-copy">
           Slug, title, and the project it runs in — the coordinator picks up from there.
         </p>
-        <input
-          className="proj-search"
-          type="text"
+        <TextInput
+          className="mb-2 transition-[border-color] duration-fast ease-swift motion-reduce:transition-none"
           placeholder="Program slug (e.g. build4-conversation-and-controls)"
           aria-label="Program slug"
           aria-invalid={showKickoffError}
@@ -829,9 +828,8 @@ export function StartProgramSheet({
         {showKickoffError && (
           <p id="program-kickoff-error" className="program-start-error">{kickoffVerdict.detail}.</p>
         )}
-        <input
-          className="proj-search"
-          type="text"
+        <TextInput
+          className="mb-2 transition-[border-color] duration-fast ease-swift motion-reduce:transition-none"
           placeholder="Program title"
           aria-label="Program title"
           aria-invalid={title !== '' && kickoffOversize}
@@ -840,8 +838,8 @@ export function StartProgramSheet({
           onChange={(e) => setTitle(e.target.value)}
         />
 
-        <input
-          className="proj-search"
+        <TextInput
+          className="mb-2 transition-[border-color] duration-fast ease-swift motion-reduce:transition-none"
           type="search"
           placeholder="Search projects"
           aria-label="Search projects"

@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ProjectRow } from '../../../shared/api';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { Button, Sheet, Skeleton, toast } from '@ccrc/ui';
+import { Button, Sheet, Skeleton, TextInput, toast } from '@ccrc/ui';
 import { accountLabel, accountPool, accountPoolState } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { effortOptions, modelOptions } from '../lib/models';
@@ -310,8 +310,8 @@ export function NewSessionSheet({
           >
             <span aria-hidden="true">‹</span> on {accountLabel(roster, wrapper)} — change
           </button>
-          <input
-            className="proj-search"
+          <TextInput
+            className="mb-2 transition-[border-color] duration-fast ease-swift motion-reduce:transition-none"
             type="search"
             placeholder="Search projects"
             aria-label="Search projects"

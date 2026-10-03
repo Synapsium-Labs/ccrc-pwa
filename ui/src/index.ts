@@ -17,6 +17,7 @@ export { Sheet, type SheetProps } from './primitives/sheet';
 export { OptionRow, type OptionRowProps } from './primitives/option-row';
 export { CollapsibleStrip, type CollapsibleStripProps } from './primitives/collapsible-strip';
 export { Banner, bannerVariants, type BannerProps } from './primitives/banner';
+export { TextInput, TEXT_INPUT, type TextInputProps } from './primitives/text-input';
 export { QuickConfirm, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,
