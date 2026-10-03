@@ -901,6 +901,24 @@ describe('POST /api/sessions/:id/stop', () => {
     await app.close();
   });
 
+  it('the archive door refuses 503 registry-unmeasurable too, and runs no ccd verb (workspace lifecycle §5.2)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, ID, 'claude-a');
+    const calls: string[][] = [];
+    const run: Runner = async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField(ID, 'wrapper'), queue: new KeyedQueue() },
+      new Bus(),
+    );
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive` });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    expect(calls.filter((c) => c[0] === 'ws-archive' || c[0] === 'stop')).toEqual([]);
+    await app.close();
+  });
+
   it('still refuses 404 unknown-session for a session PROVEN absent from the registry', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
@@ -1235,6 +1253,12 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, id, 'claude-a');
+    // Workspace lifecycle wave 2: the one Archive archives a WORKSPACE whose worktree it measured present; a row with
+    // no `workspace` is a main checkout, which it stops instead (`archive-door.test.ts`).
+    const worktree = path.join(home, 'worktrees', id);
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.workspace`), id);
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.workdir`), worktree);
     return home;
   };
   const recording = (calls: string[][]): Runner => async (_cmd, args) => {

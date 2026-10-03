@@ -67,7 +67,7 @@ const rel = (closedAt: number) =>
 describe("Archive all's in-flight guard (workspace lifecycle spec §5.1)", () => {
   it('a confirm that fires twice in one tick runs ONE loop: each row is archived once, not twice', async () => {
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
-    const archive = vi.spyOn(api, 'archive').mockResolvedValue(undefined);
+    const archive = vi.spyOn(api, 'archive').mockResolvedValue(null);
     const store = makeStore();
     render(<><FleetScreen store={store} /><ToastHost /></>);
     act(() => {

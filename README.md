@@ -2190,6 +2190,33 @@ read that fails folds nothing that tick. The bucket chips above the cards still 
 `Idle`, `Done` and `Dead`: folded, not removed. Placement is unchanged: a released row renders on its own
 project's card, since board placement lasts while the workspace is held.
 
+**One Archive** (workspace lifecycle spec §5.2). Stop and archive are one feature. Every session's menu and its
+actions sheet offer **Archive**, and a session already put away offers **Restore** in its place. The confirm reads by
+case: an idle workspace goes offline and folds into Archived; a busy session asks first, because the turn in progress
+is lost; a main checkout is stopped and folds into Archived, and is never deleted; a coordinator with open runs offers
+only **End programme and archive** or **Cancel**, since pausing a programme is the coordinator pause switch.
+`POST /api/sessions/:id/archive` runs every check it can make before anything it cannot undo: a turn in progress
+(`409 session-busy` unless `{interrupt:true}`; a main checkout's, whose stop refuses nothing, is read fail-closed —
+tmux unreachable or no readable live file is `409 status-unknown`, whatever the consents — and read again at the stop;
+a workspace's too when the programme is to end or `{interrupt:true}` is sent, before that end or stop), a worktree it
+can prove gone, a run naming the workspace as its worker (`409 run-open` unless `{force:true}`), a run it coordinates
+(`409 coordinator-has-open-runs`, naming them, unless `{programme:'end'}`), a store it cannot read (refused, fail-shut),
+and a run the abandon cannot move (one already `closing`: `409 programme-partly-ended`, nothing ended).
+Then it ends the programme through the abandon door's own decision, stops (a main checkout, or with `interrupt`) and
+archives (a workspace). An abandon that still refuses at the act stops the door there, naming what it ended, with
+nothing stopped or archived. What only `ccd` can measure — its status read, the archive manifest and, in remote mode,
+the worktree itself — refuses inside `ws-archive`, before it touches anything, so such a refusal can follow a
+programme the door already ended; the answer then names those runs (`ended`). A stop followed by a refused archive
+answers `200 {archived:false, stopped:true, refusal}`, and the row stays visible with Archive offered again. After a
+refusal the phone cannot fix (the worktree is gone, the status unreadable, the manifest unbuildable, the coordination
+store unreadable, a programme only partly ended, a box whose ccd has no `ws-archive`) the actions sheet offers **Stop
+only**, disabled while tmux cannot be reached. Restore, in the actions sheet and the session header's menu, is
+`ws-restore` for a workspace (a merged-and-archived one included) and `ensure` for a main checkout, so a substrate
+fault disables a main checkout's. `Archived (N)` holds archived workspaces and stopped main checkouts
+(`inArchivedFold`), newest first; the Dead chip still counts a stopped main checkout, and the footer's archive list is
+still workspaces only. `ccd stop` and `POST /api/sessions/:id/stop` are unchanged. The refusal codes are
+`ARCHIVE_REFUSALS`, declared once in `shared/api.ts`.
+
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in
 an ACTIVE state — `dispatched`, `working`, `unknown` — and not merely

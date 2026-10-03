@@ -191,7 +191,7 @@ describe('the session header crumb', () => {
     session, status: 'idle', statusUpdatedAt: null,
     onInterrupt: () => {}, onOpenTerminal: () => {}, onBack: () => {},
     onChangeModel: () => {}, onChangeEffort: () => {}, onMoveAccount: () => {},
-    onStopSession: () => {}, onOpenHistory: () => {}, onReapWorkspace: () => {},
+    onArchive: () => {}, onRestore: () => {}, onOpenHistory: () => {}, onReapWorkspace: () => {},
   });
 
   it('types the new branch in on the crumb when a rename lands', () => {

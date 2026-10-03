@@ -794,14 +794,18 @@ export function FleetScreen({
               come from THIS render's own `sessions` array, the identical one
               the cards below iterate, so a chip's number is always the number
               of ROWS the cards hold for that bucket. `groupFleet` splits its
-              per-project fold on `bucket === 'archived'` for exactly this
+              per-project fold on `inArchivedFold` — the `archived` bucket, and
+              (workspace lifecycle §5.2) a stopped main checkout — and never on
+              `archivedAt`, for exactly this
               reason: on the `archivedAt` split, a merged workspace counted
               under `Cleanup` here and rendered inside a fold labelled
               `Archived (n)`, so this row named a bucket whose rows, glyph and
               merge facts were nowhere on the screen.
 
-              Two folds hold rows a chip counts. `Archived (n)` states its
-              chip's identical count. `Released (n)` (workspace lifecycle
+              Two folds hold rows a chip counts. `Archived (n)` holds its
+              chip's members and every STOPPED main checkout, whose bucket is
+              still `dead` (M10), so the Dead chip counts a row that fold holds
+              — stated, not changed (spec §5.2). `Released (n)` (workspace lifecycle
               §5.1) holds rows that are still `idle`, `done` or `dead` and
               still counted under those chips: folded, never removed, so a
               chip may count rows that sit inside a card's Released fold. The footer below is the wider DISK
