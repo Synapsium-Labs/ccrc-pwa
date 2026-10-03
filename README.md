@@ -1449,7 +1449,8 @@ calls, not that the re-drive took.
 The one thing ccd must never do is cancel Claude Code's armed auto-continue with a keystroke.
 `_pane_auto_continue_armed` ("continuing automatically" / "continuing shortly") gates the compactor
 (`compact-skip <id>: auto-continue`), the `/effort` injection, and the fallback re-drive. The rescue
-arm is deliberately **not** gated: a swap that re-drives beats waiting out the window. On the PWA the
+arm is not gated on it either — a swap that re-drives beats waiting out the window — except within
+ten minutes of the account's own five-hour reset, where it now waits (next section but one). On the PWA the
 pair renders as two system lines, the second reading "interrupted turn not re-driven — send a
 message to resume"; the server parser keys on the structural markers — `isMeta` for the prompt
 line, `message.model === '<synthetic>'` for the padding — each narrowed by the exact sentence
@@ -1532,6 +1533,57 @@ The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
   without counting an attempt and tells the sender once. Your own send from the PWA is not
   held: typing is Claude Code's documented cancel and the pane is on your screen.
 - Both transcript readers pair `-f` with `-r` (D-2370, closing D-2347).
+### The rescue waits near a reset, and spreads (session-continuity stage 4)
+
+Rules 2–3 of `docs/superpowers/specs/2026-09-23-session-continuity-design.md` §5.4; rule 1 is the carried-in
+banner above (D-3526). Before them no rescue read the reset its transcript row already carried, and four sessions
+were rescued four times inside an hour (2026-09-08..09-23).
+
+- **The dated row.** The verdict keeps a rate-limit row's `resetsAt`, `rateLimitType` and own epoch only when the
+  dated read — `_transcript_limit_banner`'s `dated` mode, `stuck` mode plus the row's epoch — answered rc 0 on a
+  row this pane's process wrote. `$REG/<id>.tdate` caches that row beside the answer, so the pane rungs, and the
+  transcript rung on a tick its `tscan` cache answers, read it with no second pass. Four inputs date nothing and
+  so take no wait of any kind: lost auth (an auth-failure pane, or a 401 newer than the rate-limit row, whoever
+  wrote it); a pane whose process tmux cannot place; a carried-in row, even one D-3526 keeps a block; and — for
+  its reset — a row written at or after its own `resetsAt`, which proves that reset did not turn the account.
+- **Near a five-hour reset the rescue waits.** A `five_hour` block on an Anthropic lane whose kept reset is within
+  `RESCUE_WAIT_BOUND=600` seconds, with Claude Code's auto-continue armed on the pane, leaves that auto-continue
+  alone and types nothing. Armed means Claude Code's own footer — below the prompt box, on its `·`-separated
+  line — never a draft in the box or a line of prose that says the words, because a false "armed" parks a stalled
+  session. The wait ends at the reset (Claude Code's own timer, or the stale-phase Enter), or
+  `RESCUE_WAIT_GRACE=120` seconds after it: in a swap if a newer rate-limit row exists; otherwise, while the pane
+  is still armed, in place, and never in a swap away from an account that has just reset — for a wait that was
+  open before that grace ran out; one first taken after it never saw the account turn and is rescued as today.
+  That hold in place lasts until `RESCUE_CHAIN_WAIT=1800` seconds past the reset: an armed footer that far past
+  it, with the 429 still the newest row, says Claude Code is not continuing, and the session is rescued as today.
+  `0` turns the near wait off; a wait of another kind still ends in place at its reset. A stalled session
+  (nothing armed), a `seven_day` or Codex-lane block, or a row with no kept reset swaps as before; `~/.cc-limits`
+  is not a fallback, because it cannot say which window blocked.
+- **No room is a wait too.** Today's `stranded` path also records `kind=noroom` when its block is dated; every
+  line it logged before is unchanged. It ends in a swap the moment a target gains room — for a stalled pane
+  inside the grace after its reset too. At its reset an armed session ends it in place, held there up to that
+  same bound; a stalled one stays in it and swaps once a target has room, whose `--resume` spawn re-drives the
+  turn. When its own account is the only one with room it idles there as before; `--stage 4` counts those waits
+  and the seconds each spent past its reset (spec §11 item 6). A rate-limit row written at or after that reset
+  proves it did not turn the account: the wait ends `stale` (the strand stands, as before), and the count leaves
+  it out.
+- **Spread, do not bounce, chain-wait.** A rescue skips every account this session left blocked in the last hour
+  (until that rescue's logged `reset=` passes), and prefers a target no rescue landed on in the last
+  `RESCUE_SPREAD_WINDOW=600` seconds when another has room — never at the price of a class degrade, never by
+  turning a rescue with a target into an undecidable one, and never by passing over the session's own recovered
+  home (the affinity path would only move it back). A fourth rescue within the hour on an Anthropic lane, on a
+  dated block not already past its five-hour reset's grace, first waits up to `RESCUE_CHAIN_WAIT=1800`
+  seconds (`kind=chain`), then swaps; with no room it becomes the no-room wait; at its account's reset it ends in
+  place if armed and is rescued if stalled. A Codex-lane session is never chain-waited, so the lane's "pool is
+  full" signal is written at once. Rule 3 reads the tail of `swap.log` (`RESCUE_LOG_TAIL_BYTES`) only when a
+  decision needs it — not on the ticks a strand waits through.
+- **Where to look.** `$REG/<id>.rescuewait` holds the one current or last wait (`state= kind= since= reset=
+  wrapper=`, plus `until= end=` once it ends) and purges with the row. `swap.log` says `rescuewait <id>: …` once
+  on entry and `rescuewait-end <id>: … end=<word>` once on exit — never the word `hold`, which is the
+  workspace-reap hold. The `auto-rescue` line appends ` reset= type= row=` when the verdict kept them (`row=`
+  alone for a carried row D-3526 kept a block). `python3 deploy/measure-continuity.py --stage 4` reads it all
+  back, read-only.
+
 ### One memory store per project: `ccrc memory`
 
 **A project's durable memory is per-ACCOUNT, and ccrc exists to move sessions between
@@ -2137,6 +2189,33 @@ server's reason; a toast that carries a refusal stays up until dismissed. Childr
 read that fails folds nothing that tick. The bucket chips above the cards still count released rows under
 `Idle`, `Done` and `Dead`: folded, not removed. Placement is unchanged: a released row renders on its own
 project's card, since board placement lasts while the workspace is held.
+
+**One Archive** (workspace lifecycle spec §5.2). Stop and archive are one feature. Every session's menu and its
+actions sheet offer **Archive**, and a session already put away offers **Restore** in its place. The confirm reads by
+case: an idle workspace goes offline and folds into Archived; a busy session asks first, because the turn in progress
+is lost; a main checkout is stopped and folds into Archived, and is never deleted; a coordinator with open runs offers
+only **End programme and archive** or **Cancel**, since pausing a programme is the coordinator pause switch.
+`POST /api/sessions/:id/archive` runs every check it can make before anything it cannot undo: a turn in progress
+(`409 session-busy` unless `{interrupt:true}`; a main checkout's, whose stop refuses nothing, is read fail-closed —
+tmux unreachable or no readable live file is `409 status-unknown`, whatever the consents — and read again at the stop;
+a workspace's too when the programme is to end or `{interrupt:true}` is sent, before that end or stop), a worktree it
+can prove gone, a run naming the workspace as its worker (`409 run-open` unless `{force:true}`), a run it coordinates
+(`409 coordinator-has-open-runs`, naming them, unless `{programme:'end'}`), a store it cannot read (refused, fail-shut),
+and a run the abandon cannot move (one already `closing`: `409 programme-partly-ended`, nothing ended).
+Then it ends the programme through the abandon door's own decision, stops (a main checkout, or with `interrupt`) and
+archives (a workspace). An abandon that still refuses at the act stops the door there, naming what it ended, with
+nothing stopped or archived. What only `ccd` can measure — its status read, the archive manifest and, in remote mode,
+the worktree itself — refuses inside `ws-archive`, before it touches anything, so such a refusal can follow a
+programme the door already ended; the answer then names those runs (`ended`). A stop followed by a refused archive
+answers `200 {archived:false, stopped:true, refusal}`, and the row stays visible with Archive offered again. After a
+refusal the phone cannot fix (the worktree is gone, the status unreadable, the manifest unbuildable, the coordination
+store unreadable, a programme only partly ended, a box whose ccd has no `ws-archive`) the actions sheet offers **Stop
+only**, disabled while tmux cannot be reached. Restore, in the actions sheet and the session header's menu, is
+`ws-restore` for a workspace (a merged-and-archived one included) and `ensure` for a main checkout, so a substrate
+fault disables a main checkout's. `Archived (N)` holds archived workspaces and stopped main checkouts
+(`inArchivedFold`), newest first; the Dead chip still counts a stopped main checkout, and the footer's archive list is
+still workspaces only. `ccd stop` and `POST /api/sessions/:id/stop` are unchanged. The refusal codes are
+`ARCHIVE_REFUSALS`, declared once in `shared/api.ts`.
 
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in

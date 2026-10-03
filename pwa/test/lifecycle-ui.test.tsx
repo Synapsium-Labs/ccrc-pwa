@@ -757,25 +757,44 @@ describe('SessionScreen overflow menu', () => {
     expect(screen.queryByRole('button', { name: /team·max/ })).not.toBeInTheDocument();
   });
 
-  it('stop asks for confirmation and fires api.stop only on confirm', () => {
+  // Workspace lifecycle §5.2: the header's "Stop session" is now "Archive", one feature for both kinds of row — the
+  // confirm reads by case, and the header never stops a session on its own any more.
+  it('archive asks for confirmation in the case\'s words and fires api.archive only on confirm — never api.stop', async () => {
+    const archive = vi.spyOn(api, 'archive').mockResolvedValue(null);
     const stop = vi.spyOn(api, 'stop').mockResolvedValue(undefined);
     renderScreen();
 
-    // Cancel path: the consequence sheet closes without stopping anything.
+    // Cancel path: the sheet closes without archiving anything.
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    fireEvent.click(screen.getByRole('button', { name: /Stop session/ }));
-    expect(
-      screen.getByText(
-        'The session goes offline until you start it again. Its conversation is kept.',
-      ),
-    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    expect(screen.getByText(
+      'It goes offline and folds into Archived. Restore starts it again. It is never deleted.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(stop).not.toHaveBeenCalled();
+    expect(archive).not.toHaveBeenCalled();
 
     // Confirm path.
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
-    fireEvent.click(screen.getByRole('button', { name: /Stop session/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Stop session' }));
-    expect(stop).toHaveBeenCalledWith('claude:OpenClawHetzner');
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-primary')!);
+    await waitFor(() => expect(archive).toHaveBeenCalledWith(fleetSession().id, {}));
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a stopped main checkout is ENSURED — the stop stamp clears and its own registry fields respawn it', 'ensure',
+      { status: 'dead', bucket: 'dead', stoppedBy: { at: Date.now() - MIN, surface: 'pwa' } }],
+    ['an archived workspace is RESTORED', 'restore',
+      { workspace: 'quiet-basin', status: 'dead', archivedAt: 1785300000, bucket: 'archived', bucketSince: 1785300000_000 }],
+  ] as const)('Restore in the menu of a session already put away: %s', async (_label, verb, patch) => {
+    const ensure = vi.spyOn(api, 'ensure').mockResolvedValue(undefined);
+    const restore = vi.spyOn(api, 'restore').mockResolvedValue(undefined);
+    const { fleet } = renderScreen();
+    act(() => { fleet.setState({ sessions: [fleetSession(patch as Partial<FleetSession>)] }); });
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(screen.queryByRole('button', { name: 'Archive' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    const [called, other] = verb === 'ensure' ? [ensure, restore] : [restore, ensure];
+    await waitFor(() => expect(called).toHaveBeenCalledWith(fleetSession().id));
+    expect(other).not.toHaveBeenCalled();
   });
 });

@@ -2882,6 +2882,33 @@ export class CoordStore {
   }
 
   /**
+   * "Which OPEN runs does this session COORDINATE?" — `openRunsForSession`'s question asked of the OTHER column
+   * (workspace lifecycle spec §5.2): every non-terminal run whose `claimedBy` is `claimantId`, in id order, for the
+   * archive door's `coordinator-has-open-runs` refusal and its `{programme:'end'}` act. `openCoordinatorIds` answers
+   * WHO coordinates something, as a set of ids; this answers WHICH runs, with the columns the refusal names.
+   *
+   * `openRunsForSession`'s predicate (`state NOT IN` the terminal set, so a row in a state this build cannot name
+   * counts as open) and its row (`OpenSibling`, the four integers CAST and proven, ALL-OR-FAILURE, D-2545): a partial
+   * list is how "this coordinator has no open runs" gets asserted about one that does, one step from an archive.
+   * Synchronous, like every other read on this store.
+   */
+  openRunsClaimedBy(claimantId: string): OpenSiblingsResult {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText FROM runs ' +
+      `WHERE claimedBy = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
+    ).all(claimantId) as unknown as
+      { idText: string; program: string; waveText: string; waveOfText: string | null; reviewsText: string | null }[];
+    const runs: OpenSibling[] = [];
+    for (const r of rows) {
+      const m = measureRunNumbers(r);
+      if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
+      runs.push({ id: m.nums.id, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf });
+    }
+    return { ok: true, siblings: runs };
+  }
+
+  /**
    * "Which OPEN runs name this session?" — the question the hold file
    * structurally cannot answer, asked at three destructive decision points.
    *
@@ -4818,6 +4845,18 @@ export class CoordStore {
       // written after it — this event is about no run.
       title: r.title, body: r.body, runId: r.runId,
     }));
+  }
+
+  /** Whether the feed archive holds a record of this kind, about this session,
+   *  with exactly this body — `sweepLanding`'s durable "already told" read for
+   *  a removal no open run names (landing-order wave 2), whose body carries the
+   *  removal time. Bounded by `FEED_RETENTION` like every feed read: a record
+   *  pruned out of the archive reads as never recorded, and is announced again. */
+  hasFeedEvent(kind: string, sessionId: string, body: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS x FROM feed_events WHERE kind = ? AND sessionId = ? AND body = ? LIMIT 1',
+    ).get(kind, sessionId, body);
+    return row !== undefined;
   }
 
   /**

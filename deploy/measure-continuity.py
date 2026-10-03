@@ -257,7 +257,177 @@ def stage1(ctx):
     return {"carry": carry_section(ctx), "resume": resume_section(ctx)}
 
 
-STAGES = {1: stage1}
+# ── stage 4 (wave 2): the rescue policy ─────────────────────────────────────
+# §9's stage-4 rows but "non-rescue swaps that cut delegated work" (wave 7's),
+# read off swap.log; the no-room rows also read a session's `.rescuewait`
+# record, read-only, to tell a wait open NOW from one a purge cut short. The
+# line shapes are ccd's own, and `server/test/measure-continuity-stage4.test.ts`
+# binds each regex below to a line the real ccd function wrote. Self-contained:
+# it reads `ctx` as the contract's dict and uses no helper outside this block,
+# so it drops in unchanged whichever wave wrote the rest of the file.
+S4_TS = r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)"
+S4_RESCUE = re.compile(S4_TS + r" auto-rescue (\S+): (\S+) \(blocked\) -> (\S+) \[home=[^\]]*\](.*)$")
+S4_LANDING = re.compile(S4_TS + r" swap (\S+): (\S+) -> (\S+) \(uuid ")
+S4_CARRIED = re.compile(S4_TS + r" carried-in (\S+): via=(\S+) ")
+S4_WAIT_OPEN = re.compile(S4_TS + r" rescuewait (\S+): kind=(\S+) on (\S+) reset=(\S+)$")
+S4_WAIT_END = re.compile(S4_TS + r" rescuewait-end (\S+): kind=(\S+) on (\S+) reset=(\S+) after (\d+)s end=(\S+)$")
+S4_TOKEN = re.compile(r" (reset|type|row)=(\d+|[a-z_]+)")
+# ccd's RESCUE_WAIT_GRACE; the stage-4 test binds the two numbers together.
+S4_GRACE = 120
+
+
+def s4_epoch(stamp):
+    """swap.log's LOCAL-time stamp -> epoch seconds (time.mktime), or None."""
+    try:
+        return int(time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))
+    except (ValueError, OverflowError):
+        return None
+
+
+def stage4(ctx):
+    since, until = ctx["since"], ctx["until"]
+    path = ctx["swap_log"] or os.path.join(ctx["home"], ".cc-sessions", "swap.log")
+    try:
+        with open(path, "rb") as fh:
+            lines = [raw.decode("utf-8", "replace").rstrip("\n") for raw in fh]
+    except FileNotFoundError:
+        return {"rescue": {"swap_log": "absent"}}
+    rescues, landings, carried = [], collections.defaultdict(list), []
+    opened, ended = collections.Counter(), collections.Counter()
+    chain_neither, near_swap = 0, 0
+    # §11 item 6, ruled 2026-09-24 "leave it and count it": a STALLED session
+    # whose own account is the only one with room idles in the no-room wait
+    # after that account resets, because only an ARMED pane ends a wait in place
+    # there (`turned`). Counted: a no-room wait with a numeric reset — ccd records
+    # one only for a five-hour row written before it, and ends it `stale` when a
+    # newer row proves that reset did not turn the account — not ended `turned`
+    # or `stale`, whose end (its end line in the window) or, still open, the
+    # window's end (`--until`, else now) is more than S4_GRACE past its reset;
+    # seconds run from the reset. `pending` pairs
+    # each session's entry line with its exit line — the record holds one wait at
+    # a time, so they alternate. A purge removes the record and writes no exit
+    # line, so a wait measured NOW is open only while
+    # `<home>/.cc-sessions/<id>.rescuewait` still says `state=open` (a later
+    # session of the same id may have re-used a closed one); a past window
+    # (`--until`) has only the log, and a session purged mid-wait there counts to
+    # the window's end. Named cost: a no-room wait whose block turned into lost
+    # auth mid-strand still counts past its reset — the log does not say the
+    # verdict changed while the strand stood.
+    now = int(time.time())
+    ref = until if until is not None else now
+    upto = lambda t: t is not None and (t < until if until is not None else t <= now)   # the window's end, or now
+    pending, past = {}, []
+    inwin = lambda t: t is not None and (since is None or t >= since) and (until is None or t < until)
+    for line in lines:
+        m = S4_LANDING.match(line)
+        if m:
+            t = s4_epoch(m.group(1))
+            if t is not None:
+                landings[m.group(2)].append(t)
+            continue
+        m = S4_RESCUE.match(line)
+        if m:
+            t = s4_epoch(m.group(1))
+            if inwin(t):
+                rescues.append((t, m.group(2), dict(S4_TOKEN.findall(m.group(5)))))
+            continue
+        m = S4_CARRIED.match(line)
+        if m:
+            t = s4_epoch(m.group(1))
+            if inwin(t):
+                carried.append((t, m.group(2), m.group(3)))
+            continue
+        m = S4_WAIT_OPEN.match(line)
+        if m:
+            t = s4_epoch(m.group(1))
+            if inwin(t):
+                opened[m.group(3)] += 1
+            if upto(t):
+                pending[m.group(2)] = (m.group(3), m.group(5))
+            continue
+        m = S4_WAIT_END.match(line)
+        if m:
+            t = s4_epoch(m.group(1))
+            if upto(t):
+                pending.pop(m.group(2), None)
+            if not inwin(t):
+                continue
+            kind, reset, end = m.group(3), m.group(5), m.group(7)
+            ended[f"{kind}:{end}"] += 1
+            if kind == "noroom" and end not in ("turned", "stale") and reset.isdigit() and t > int(reset) + S4_GRACE:
+                past.append((end, t - int(reset)))
+            # A chain wait reaches its reset when it ends there (`turned`), when
+            # Claude Code continued at or after it (`clear`), or when it became the
+            # near wait on that same reset (`near`, ended by rule 2 at the reset).
+            at_reset = end in ("turned", "near") or (end == "clear" and reset.isdigit() and t >= int(reset))
+            if kind == "chain" and end != "swap" and not at_reset:
+                chain_neither += 1
+            if kind == "near" and end == "swap":
+                near_swap += 1
+
+    for sid, (kind, reset) in pending.items():
+        if kind != "noroom" or not reset.isdigit() or ref <= int(reset) + S4_GRACE:
+            continue
+        if until is None:
+            try:
+                with open(os.path.join(ctx["home"], ".cc-sessions", sid + ".rescuewait")) as fh:
+                    rec = fh.read().split()
+            except OSError:
+                continue
+            if "state=open" not in rec:
+                continue
+        past.append(("open", ref - int(reset)))
+    past_by_end = collections.Counter(end for end, _ in past)
+
+    # Sessions with RESCUE_CHAIN_COUNT + 1 (= 4) or more auto-rescues inside any 60 minutes.
+    by_sess = collections.defaultdict(list)
+    for t, sid, _ in rescues:
+        by_sess[sid].append(t)
+    worst, four_plus = 0, 0
+    for ts in by_sess.values():
+        ts.sort()
+        best = max((sum(1 for u in ts if t <= u < t + 3600) for t in ts), default=0)
+        worst = max(worst, best)
+        four_plus += best >= 4
+    # A rescue on a carried-in banner: its `row=` is older than the landing the
+    # LOG records for that session (the newest `swap <id>:` line before the
+    # rescue) — measured from the log, not from the clock that decided. Since
+    # D-3526 the one sanctioned case is a landing whose Claude Code never came up.
+    dated, on_carried = 0, 0
+    for t, sid, tok in rescues:
+        if "row" not in tok:
+            continue
+        dated += 1
+        before = [u for u in landings.get(sid, []) if u <= t]
+        if before and int(tok["row"]) < max(before) - 1:
+            on_carried += 1
+    # §9: pane positives D-3526 suppressed that became a rescue of the same
+    # session within 5 minutes (a real block read as carried in while the
+    # transcript lagged the pane). The transcript rung's suppressions are
+    # counted by `via` beside it.
+    pane_became = sum(1 for t, sid, via in carried if via in ("pane", "banner")
+                      and any(r[1] == sid and 0 <= r[0] - t <= 300 for r in rescues))
+
+    return {"rescue": {
+        "rescues": len(rescues),
+        "sessions_with_4plus_rescues_in_an_hour": four_plus,
+        "max_rescues_in_an_hour": worst,
+        "chain_waits_ending_in_neither_swap_nor_reset": chain_neither,
+        "rescues_on_a_carried_in_banner": on_carried,
+        "rescues_with_a_dated_row": dated,
+        "near_reset_waits_ending_in_a_swap": near_swap,
+        "rule1_suppressions_by_via": dict(sorted(collections.Counter(v for _, _, v in carried).items())),
+        "rule1_pane_suppressions_rescued_within_5min": pane_became,
+        "waits_opened_by_kind": dict(sorted(opened.items())),
+        "waits_ended_by_kind_and_end": dict(sorted(ended.items())),
+        "noroom_waits_past_their_reset": len(past),
+        "noroom_waits_past_their_reset_by_end": dict(sorted(past_by_end.items())),
+        "noroom_seconds_past_their_reset_total": sum(s for _, s in past),
+        "noroom_seconds_past_their_reset_max": max((s for _, s in past), default=0),
+    }}
+
+
+STAGES = {1: stage1, 4: stage4}
 
 
 def when(s):
