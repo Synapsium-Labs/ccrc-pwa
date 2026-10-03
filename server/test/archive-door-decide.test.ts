@@ -2,7 +2,7 @@
 // refusals, the one act it takes, and how ccd's answer reaches the wire.
 import { describe, it, expect } from 'vitest';
 import {
-  archiveFlags, archiveOutcome, busyReadFailsClosed, ccdArchiveRefusal, decideArchive, stopIsIdle, worktreeOf,
+  archiveFlags, archiveOutcome, busyReadFailsClosed, ccdArchiveRefusal, decideArchive, refusedAtStop, stopVerdict, worktreeOf,
   type ArchiveCoordPort, type ArchiveMeasure, type StopReadings,
 } from '../src/coord/archiveDoor.js';
 import type { CloseOutcome } from '../src/coord/close.js';
@@ -10,8 +10,8 @@ import type { OpenSibling, OpenSiblingsResult } from '../src/coord/store.js';
 
 const run = (id: number, wave = 1): OpenSibling => ({ id, program: 'lifecycle', wave, waveOf: 3 });
 const NONE = { force: false, interrupt: false, programmeEnd: false };
-const IDLE_WS: ArchiveMeasure = { workspace: true, busy: false, worktree: 'present', verbSupported: true };
-const IDLE_MAIN: ArchiveMeasure = { workspace: false, busy: false, worktree: 'present', verbSupported: false };
+const IDLE_WS: ArchiveMeasure = { workspace: true, turn: 'idle', worktree: 'present', verbSupported: true };
+const IDLE_MAIN: ArchiveMeasure = { workspace: false, turn: 'idle', worktree: 'present', verbSupported: false };
 const UNREADABLE: OpenSiblingsResult = { ok: false, kind: 'run-unreadable', detail: 'runs.wave' };
 
 /** A port double that records every read and every abandon, in order. `blocked`: what the abandon arm would refuse
@@ -78,14 +78,14 @@ describe('worktreeOf', () => {
 describe('decideArchive — every check that can refuse runs before any act', () => {
   it('refuses a turn in progress first, reading nothing from the store', async () => {
     const { p, seen } = port({ claimed: { ok: true, siblings: [run(1)] } });
-    expect(await decideArchive(p, 'demo-a', NONE, { ...IDLE_WS, busy: true }))
+    expect(await decideArchive(p, 'demo-a', NONE, { ...IDLE_WS, turn: 'busy' }))
       .toEqual({ ok: false, reply: { status: 409, body: { ok: false, error: 'session-busy' } } });
     expect(seen).toEqual([]);
   });
 
   it('a busy row with `interrupt` proceeds, and the stop comes first', async () => {
     const { p } = port();
-    expect(await decideArchive(p, 'demo-a', { ...NONE, interrupt: true }, { ...IDLE_WS, busy: true }))
+    expect(await decideArchive(p, 'demo-a', { ...NONE, interrupt: true }, { ...IDLE_WS, turn: 'busy' }))
       .toEqual({ ok: true, stop: true, wsArchive: true, ended: [] });
   });
 
@@ -96,8 +96,26 @@ describe('decideArchive — every check that can refuse runs before any act', ()
   });
 
   it('a busy main checkout without `interrupt` refuses too — busy is read for both kinds of row', async () => {
-    expect(await decideArchive(port().p, 'claude-demo', NONE, { ...IDLE_MAIN, busy: true }))
+    expect(await decideArchive(port().p, 'claude-demo', NONE, { ...IDLE_MAIN, turn: 'busy' }))
       .toMatchObject({ ok: false, reply: { status: 409, body: { error: 'session-busy' } } });
+  });
+
+  // D-3881: a turn nobody could MEASURE is its own word. `interrupt` consents to losing a turn that was measured in
+  // progress, never to acting on a state nobody could read, so the refusal comes first and ignores the consents.
+  it.each([
+    ['a workspace', 'demo-a', IDLE_WS], ['a main checkout', 'claude-demo', IDLE_MAIN],
+  ] as const)('an UNMEASURED turn on %s is 409 status-unknown with and without `interrupt`, and the port is never called', async (_k, id, base) => {
+    for (const flags of [NONE, { ...NONE, interrupt: true }, { force: true, interrupt: true, programmeEnd: true }]) {
+      const { p, seen } = port({ claimed: { ok: true, siblings: [run(1)] } });
+      expect(await decideArchive(p, id, flags, { ...base, turn: 'unmeasured' }))
+        .toEqual({ ok: false, reply: { status: 409, body: { ok: false, error: 'status-unknown' } } });
+      expect(seen).toEqual([]);
+    }
+  });
+
+  it('an unmeasured turn is refused before a gone worktree is: the first check is the read nobody could make', async () => {
+    expect(await decideArchive(port().p, 'demo-a', NONE, { ...IDLE_WS, turn: 'unmeasured', worktree: 'absent' }))
+      .toMatchObject({ reply: { body: { error: 'status-unknown' } } });
   });
 
   it('refuses a workspace whose worktree is PROVEN gone, before the store is asked', async () => {
@@ -256,51 +274,61 @@ describe('archiveOutcome — ws-archive\'s answer on the wire', () => {
   });
 });
 
-// D-3878: the verdict-to-idle rule `server.ts` used to hold in `idleForStop` — a DECISION, so it lives here, over what
-// the route measured. One case per arm; `server.ts` keeps only the reads (and `archive-door.test.ts` the wiring).
-describe('stopIsIdle — a stop nobody consented to interrupt, read fail-closed (D-3841)', () => {
+// D-3878: the verdict rule `server.ts` used to hold in `idleForStop` — a DECISION, so it lives here, over what the
+// route measured. D-3881 made it three-valued (3878's `stopIsIdle` answered a boolean). One case per arm; `server.ts`
+// keeps only the reads (and `archive-door.test.ts` the wiring).
+describe('stopVerdict — a stop read fail-closed (D-3841), with "could not measure" its own word (D-3881)', () => {
   const live = (over: Partial<Extract<StopReadings, { configDir: 'present' }>> = {}): StopReadings => ({
     pane: 'live', pid: 4242, configDir: 'present',
     liveFile: { read: 'ok', status: 'idle' }, row: { status: 'idle', bucket: 'idle' }, ...over,
   });
 
   it('a pane that is gone is idle: nothing is running, so there is no turn to lose', () => {
-    expect(stopIsIdle({ pane: 'gone' })).toBe(true);
+    expect(stopVerdict({ pane: 'gone' })).toBe('idle');
   });
 
-  it('a pane tmux could not be asked about is BUSY, never idle — `unknown` is not `gone`', () => {
-    expect(stopIsIdle({ pane: 'unknown' })).toBe(false);
+  it('a pane tmux could not be asked about is UNMEASURED — `unknown` is neither `gone` nor busy', () => {
+    expect(stopVerdict({ pane: 'unknown' })).toBe('unmeasured');
   });
 
-  it('a live pane whose pid could not be read is busy', () => {
-    expect(stopIsIdle({ pane: 'live', pid: 'unread' })).toBe(false);
+  it('a live pane whose pid could not be read is unmeasured', () => {
+    expect(stopVerdict({ pane: 'live', pid: 'unread' })).toBe('unmeasured');
   });
 
-  it('a live pane whose wrapper has no config dir is busy', () => {
-    expect(stopIsIdle({ pane: 'live', pid: 4242, configDir: 'none' })).toBe(false);
+  it('a live pane whose wrapper has no config dir is unmeasured (ccd: `cfg=$(_cfg_dir ...) || return 1`)', () => {
+    expect(stopVerdict({ pane: 'live', pid: 4242, configDir: 'none' })).toBe('unmeasured');
   });
 
   it('a live pane is idle only when its live file affirmatively says idle: an ALLOWLIST', () => {
-    expect(stopIsIdle(live())).toBe(true);
-    expect(stopIsIdle(live({ liveFile: { read: 'ok', status: 'busy' } }))).toBe(false);
-    expect(stopIsIdle(live({ liveFile: { read: 'ok', status: 'waiting' } }))).toBe(false);
-    expect(stopIsIdle(live({ liveFile: { read: 'no-state' } }))).toBe(false);
-    expect(stopIsIdle(live({ liveFile: { read: 'unmeasured' } }))).toBe(false);
+    expect(stopVerdict(live())).toBe('idle');
+    expect(stopVerdict(live({ liveFile: { read: 'ok', status: 'busy' } }))).toBe('busy');
+    expect(stopVerdict(live({ liveFile: { read: 'ok', status: 'waiting' } }))).toBe('busy');
+    expect(stopVerdict(live({ liveFile: { read: 'ok', status: 'some-new-word' } }))).toBe('busy');
+  });
+
+  it('a live pane whose live file is absent or unread is unmeasured, not busy (ccd: `[[ -f $sf ]] || return 1`)', () => {
+    expect(stopVerdict(live({ liveFile: { read: 'no-state' } }))).toBe('unmeasured');
+    expect(stopVerdict(live({ liveFile: { read: 'unmeasured' } }))).toBe('unmeasured');
   });
 
   it('a live pane whose live file says idle is still busy while the frame row reports a turn or a question', () => {
-    expect(stopIsIdle(live({ row: { status: 'busy', bucket: 'idle' } }))).toBe(false);
-    expect(stopIsIdle(live({ row: { status: 'idle', bucket: 'working' } }))).toBe(false);
-    expect(stopIsIdle(live({ row: { status: 'idle', bucket: 'attention' } }))).toBe(false);
+    expect(stopVerdict(live({ row: { status: 'busy', bucket: 'idle' } }))).toBe('busy');
+    expect(stopVerdict(live({ row: { status: 'idle', bucket: 'working' } }))).toBe('busy');
+    expect(stopVerdict(live({ row: { status: 'idle', bucket: 'attention' } }))).toBe('busy');
   });
 
-  it('a live pane with no frame row is busy: no row is no measurement', () => {
-    expect(stopIsIdle(live({ row: 'missing' }))).toBe(false);
+  it('a live pane with no frame row is unmeasured: no row is no measurement', () => {
+    expect(stopVerdict(live({ row: 'missing' }))).toBe('unmeasured');
+  });
+
+  it('a live file that MEASURED a turn is busy even when the frame row is missing: a read turn is not an unread one', () => {
+    expect(stopVerdict(live({ liveFile: { read: 'ok', status: 'busy' }, row: 'missing' }))).toBe('busy');
   });
 });
 
-// D-3877: which read answers `busy`. The decision is here; `server.ts` obeys it when it builds `ArchiveMeasure.busy`.
-describe('busyReadFailsClosed — which read answers "busy" before any act', () => {
+// D-3877, D-3881: which read answers the turn verdict. The decision is here; `server.ts` obeys it when it builds
+// `ArchiveMeasure.turn`.
+describe('busyReadFailsClosed — which read answers the turn verdict before any act', () => {
   it('a main checkout is always read fail-closed: its stop refuses nothing', () => {
     for (const flags of [NONE, { ...NONE, programmeEnd: true }, { ...NONE, interrupt: true },
       { force: true, interrupt: true, programmeEnd: true }]) {
@@ -308,16 +336,30 @@ describe('busyReadFailsClosed — which read answers "busy" before any act', () 
     }
   });
 
-  it('a workspace is read fail-closed when the programme is to END and nobody consented to interrupt: the end is irreversible', () => {
+  it('a workspace is read fail-closed when the programme is to END, with or without `interrupt`: the end is irreversible', () => {
     expect(busyReadFailsClosed(true, { ...NONE, programmeEnd: true })).toBe(true);
     expect(busyReadFailsClosed(true, { force: true, interrupt: false, programmeEnd: true })).toBe(true);
+    // `interrupt` consents to a MEASURED turn lost, never to acting on a state nobody could read (D-3881).
+    expect(busyReadFailsClosed(true, { force: false, interrupt: true, programmeEnd: true })).toBe(true);
   });
 
   it('a workspace otherwise keeps the frame\'s own row, with ccd\'s `_ws_status` behind it at ws-archive', () => {
-    expect(busyReadFailsClosed(true, NONE)).toBe(false);
-    expect(busyReadFailsClosed(true, { ...NONE, force: true })).toBe(false);
-    expect(busyReadFailsClosed(true, { ...NONE, interrupt: true })).toBe(false);
-    // `interrupt` is the operator's consent to lose the turn: the programme end then rides it, as it does today.
-    expect(busyReadFailsClosed(true, { force: false, interrupt: true, programmeEnd: true })).toBe(false);
+    for (const flags of [NONE, { ...NONE, force: true }, { ...NONE, interrupt: true },
+      { force: true, interrupt: true, programmeEnd: false }]) {
+      expect(busyReadFailsClosed(true, flags)).toBe(false);
+    }
+  });
+});
+
+// D-3881: the stop's own re-read refused — one word per verdict, chosen in L1.
+describe('refusedAtStop — the re-read at the stop, one word per verdict', () => {
+  it('a measured busy is `session-busy`, an unmeasured one `status-unknown`', () => {
+    expect(refusedAtStop('busy', [])).toEqual({ status: 409, body: { ok: false, error: 'session-busy' } });
+    expect(refusedAtStop('unmeasured', [])).toEqual({ status: 409, body: { ok: false, error: 'status-unknown' } });
+  });
+
+  it('carries `ended` only when a programme was ended, for either word', () => {
+    expect(refusedAtStop('busy', [run(7)]).body).toEqual({ ok: false, error: 'session-busy', ended: [run(7)] });
+    expect(refusedAtStop('unmeasured', [run(7)]).body).toEqual({ ok: false, error: 'status-unknown', ended: [run(7)] });
   });
 });

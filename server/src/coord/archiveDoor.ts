@@ -8,7 +8,8 @@
  * serialiser (`CoordRoutesHandle.withAbandon`). No fs, no fastify, no clock.
  *
  * THE ORDER IS THE CONTRACT: every check that can refuse runs before any act that cannot be undone (spec §5.2, §8).
- * `decideArchive` refuses, in order: a turn in progress without `interrupt`; a workspace whose worktree this box
+ * `decideArchive` refuses, in order: a turn nobody could MEASURE (`status-unknown`, whatever the consents); a turn
+ * measured in progress without `interrupt` (`session-busy`); a workspace whose worktree this box
  * PROVED gone; a run naming the session as its WORKER, without `force` (the existing door, unchanged); a
  * non-terminal run naming it as CLAIMANT, without `programme:'end'`, or an unreadable store either way (fail-shut,
  * `runs: []` — a store read that THROWS is unreadable too, never a 500); a box whose ccd predates `ws-archive`; and,
@@ -54,14 +55,16 @@ export function archiveFlags(raw: unknown): ArchiveFlags | null {
   return { force: b.force === true, interrupt: b.interrupt === true, programmeEnd: b.programme === 'end' };
 }
 
-/** What `server.ts` measured before deciding. `busy` is `archiveInterrupts` of the row assembled on the request;
- *  `worktree` and `verbSupported` are read for a workspace only (a main checkout never reaches `ws-archive`).
+/** What `server.ts` measured before deciding. `turn` is the turn verdict (`TurnVerdict`): from the fail-closed read
+ *  (`stopVerdict`) where `busyReadFailsClosed` says so, else `archiveInterrupts` of the row assembled on the request
+ *  (`busy` or `idle` only — that path has no word for "could not measure"). `worktree` and `verbSupported` are read
+ *  for a workspace only (a main checkout never reaches `ws-archive`).
  *  `worktree: 'unmeasured'` is NOT a refusal: in remote mode — the live deployment — the fleet agent's read roots
  *  (`checkPath`) exclude `~/worktrees`, so this box can never stat a workspace's worktree there, and refusing on
  *  that would refuse every archive. ccd's own `[[ -d $workdir ]]` refusal, which precedes its act, measures it. */
 export interface ArchiveMeasure {
   readonly workspace: boolean;
-  readonly busy: boolean;
+  readonly turn: TurnVerdict;
   readonly worktree: 'present' | 'absent' | 'unmeasured';
   readonly verbSupported: boolean;
 }
@@ -95,42 +98,56 @@ export type LiveFileReading =
  *  or `'missing'` when the frame produced no row. */
 export type StopRowReading = Pick<FleetSession, 'status' | 'bucket'> | 'missing';
 
+/** The turn verdict — THREE words, because the PWA answers two of them oppositely (D-3881). `idle`: nothing to lose.
+ *  `busy`: a turn or a question was MEASURED in progress — `session-busy`, which the operator may consent to lose
+ *  (`interrupt`). `unmeasured`: nobody could read the state — `status-unknown`, which no consent covers. */
+export type TurnVerdict = 'idle' | 'busy' | 'unmeasured';
+
 /**
- * Whether a STOP nobody consented to interrupt would lose no turn — `_ws_status`'s own fail-closed rule (ccd/ccd),
- * decided over what `server.ts` measured (D-3878: it was `idleForStop`'s body in L4). It is read this way because
- * `cmd_stop` refuses nothing: for a main checkout this is the only guard there is, and for a workspace under
- * `programme:'end'` it is the only read that can refuse BEFORE the programme ends (`busyReadFailsClosed`, D-3877).
- * The frame's own row cannot answer it alone: it folds what it could not measure towards rest — tmux `unknown` reads
- * dead (D-309), an unread pane pid or an absent live file leaves `idle`.
+ * The turn verdict a STOP would face — `_ws_status`'s own fail-closed rule (ccd/ccd), decided over what `server.ts`
+ * measured (D-3878: it was `idleForStop`'s body in L4; 3881 made its answer three-valued, replacing `stopIsIdle`).
+ * It is read this way because `cmd_stop` refuses nothing: for a main checkout this is the only guard there is, and for
+ * a workspace under `programme:'end'` it is the only read that can refuse BEFORE the programme ends
+ * (`busyReadFailsClosed`, D-3877). The frame's own row cannot answer it alone: it folds what it could not measure
+ * towards rest — tmux `unknown` reads dead (D-309), an unread pane pid or an absent live file leaves `idle`.
  *
- * `gone` is the one idle without a further reading (no pane, nothing running). A live pane is idle only when ALL hold,
- * else it is busy: its pid was read; its wrapper has a config dir; its live file affirmatively reads `idle` (an
- * allowlist, as ccd's — `busy`, `waiting`, an absent file and an unread one all fail); and the frame's row exists and
- * reports no turn and no question (`archiveInterrupts`). tmux `unknown` is busy.
+ * `gone` is the one `idle` without a further reading (no pane, nothing running). A live pane is `idle` only when ALL
+ * hold: its pid was read; its wrapper has a config dir; its live file affirmatively reads `idle` (an allowlist, as
+ * ccd's: a status word other than `idle` — `busy`, `waiting`, one this build has never seen — is `busy`); and the
+ * frame's row exists and reports no turn and no question (`archiveInterrupts` — else `busy`).
+ *
+ * Whatever could not be READ is `unmeasured`, never `busy`, and the arms follow ccd's `_ws_status`, which is non-zero
+ * "when it cannot be read" and which `ws-archive` turns into `status-unknown`: tmux `unknown`, an unread pid, no
+ * config dir (`cfg=$(_cfg_dir ...) || return 1`), an absent or unread live file (`[[ -f $sf ]] || return 1`), and a
+ * missing frame row (no row is no measurement). Folding these into `busy` told an operator "it is working", whose
+ * consent (`interrupt`) then skipped the read and ended a programme that ccd refused `status-unknown` afterwards.
  */
-export function stopIsIdle(r: StopReadings): boolean {
-  if (r.pane === 'gone') return true;
-  if (r.pane === 'unknown') return false;
-  if (r.pid === 'unread' || r.configDir === 'none') return false;
-  if (r.liveFile.read !== 'ok' || r.liveFile.status !== 'idle') return false;
-  return r.row !== 'missing' && !archiveInterrupts(r.row);
+export function stopVerdict(r: StopReadings): TurnVerdict {
+  if (r.pane === 'gone') return 'idle';
+  if (r.pane === 'unknown') return 'unmeasured';
+  if (r.pid === 'unread' || r.configDir === 'none') return 'unmeasured';
+  if (r.liveFile.read !== 'ok') return 'unmeasured';
+  if (r.liveFile.status !== 'idle') return 'busy';
+  if (r.row === 'missing') return 'unmeasured';
+  return archiveInterrupts(r.row) ? 'busy' : 'idle';
 }
 
 /**
- * Which read answers `ArchiveMeasure.busy` — a DECISION, so it is made here and `server.ts` obeys it (D-3877). A
- * `true` is the fail-closed read, `stopIsIdle` over `StopReadings`; a `false` is the fleet frame's own row
+ * Which read answers `ArchiveMeasure.turn` — a DECISION, so it is made here and `server.ts` obeys it (D-3877). A
+ * `true` is the fail-closed read, `stopVerdict` over `StopReadings`; a `false` is the fleet frame's own row
  * (`archiveInterrupts`), with ccd's `_ws_status` behind it at `ws-archive`.
  *
  * - A main checkout: always fail-closed. Its stop refuses nothing, so this read is the only guard it has.
- * - A workspace that is to END its programme, with nobody having consented to `interrupt`: fail-closed too. The end is
- *   the one act that cannot be undone, and the frame's row folds what it could not measure towards rest — tmux
- *   `unknown`, an unread pid, an absent live file — so reading it here would end the programme and THEN have
- *   `ws-archive`'s fail-closed status refuse `session-busy`/`status-unknown`. `interrupt` is the consent to lose the turn,
- *   so with it the read has nothing left to refuse.
- * - Any other workspace archive: the frame's row, as before; nothing irreversible runs ahead of ccd's own read.
+ * - A workspace that is to END its programme: fail-closed too, with or without `interrupt` (3881). The end is the one
+ *   act that cannot be undone, and the frame's row folds what it could not measure towards rest — tmux `unknown`, an
+ *   unread pid, an absent live file — so reading it here would end the programme and THEN have `ws-archive`'s
+ *   fail-closed status refuse `status-unknown`. `interrupt` consents to losing a turn that was MEASURED, so a `busy`
+ *   verdict proceeds with it; an `unmeasured` one is refused whatever the consents, before anything ends.
+ * - Any other workspace archive: the frame's row, as before (`busy` or `idle`); nothing irreversible runs ahead of
+ *   ccd's own read.
  */
 export function busyReadFailsClosed(workspace: boolean, flags: ArchiveFlags): boolean {
-  return !workspace || (flags.programmeEnd && !flags.interrupt);
+  return !workspace || flags.programmeEnd;
 }
 
 /** A worktree's measured presence (D-114: absent and unreadable are two facts, and only the first is "gone"). A
@@ -186,7 +203,10 @@ export function closeRefusalOf(id: number, r: Extract<CloseOutcome, { ok: false 
 export async function decideArchive(
   port: ArchiveCoordPort | null, id: string, flags: ArchiveFlags, m: ArchiveMeasure,
 ): Promise<ArchiveDecision> {
-  if (m.busy && !flags.interrupt) return refuse(409, ARCHIVE_REFUSALS.sessionBusy);
+  // `unmeasured` first, and blind to the consents: `interrupt` is the consent to lose a turn that was READ in progress,
+  // never to act on a state nobody could read (D-3881). Then a measured busy, which `interrupt` lets through.
+  if (m.turn === 'unmeasured') return refuse(409, ARCHIVE_REFUSALS.statusUnknown);
+  if (m.turn === 'busy' && !flags.interrupt) return refuse(409, ARCHIVE_REFUSALS.sessionBusy);
   // A PROVEN absence only. `unmeasured` proceeds: see `ArchiveMeasure.worktree`.
   if (m.workspace && m.worktree === 'absent') return refuse(409, ARCHIVE_REFUSALS.worktreeGone);
   let claimed: readonly OpenSibling[] = [];
@@ -239,13 +259,15 @@ export async function decideArchive(
 }
 
 /**
- * The stop's own busy re-read refused (`server.ts`: a stop nobody consented to interrupt — a main checkout's — re-reads
- * busy fail-closed at the act, because `cmd_stop` refuses nothing). A turn began after the door's first read: during
- * the claim reads, the mutex wait or the programme end. `409 session-busy`, carrying the runs already ended, so the
- * busy question that follows never reads as "nothing happened".
+ * The stop's own re-read refused (`server.ts`: a stop nobody consented to interrupt — a main checkout's — re-reads the
+ * turn fail-closed at the act, because `cmd_stop` refuses nothing). Something changed after the door's first read:
+ * during the claim reads, the mutex wait or the programme end, a turn began (`busy` → `409 session-busy`) or the
+ * state became unreadable (`unmeasured` → `409 status-unknown`, D-3881). The word is chosen HERE, from the verdict.
+ * Carries the runs already ended, so the question that follows never reads as "nothing happened".
  */
-export function busyAtStop(ended: readonly OpenSibling[]): ArchiveReply {
-  return { status: 409, body: { ok: false, error: ARCHIVE_REFUSALS.sessionBusy, ...(ended.length > 0 ? { ended } : {}) } };
+export function refusedAtStop(verdict: 'busy' | 'unmeasured', ended: readonly OpenSibling[]): ArchiveReply {
+  const error = verdict === 'busy' ? ARCHIVE_REFUSALS.sessionBusy : ARCHIVE_REFUSALS.statusUnknown;
+  return { status: 409, body: { ok: false, error, ...(ended.length > 0 ? { ended } : {}) } };
 }
 
 /**

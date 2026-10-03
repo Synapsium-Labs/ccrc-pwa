@@ -85,7 +85,8 @@ import {
 } from '../../shared/api.js';
 import { archiveInterrupts } from '../../shared/api.js';
 import {
-  archiveFlags, archiveOutcome, busyAtStop, busyReadFailsClosed, decideArchive, stopIsIdle, worktreeOf, type ArchiveMeasure,
+  archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, refusedAtStop, stopVerdict, worktreeOf, type ArchiveMeasure,
+  type TurnVerdict,
   type LiveFileReading, type StopRowReading,
 } from './coord/archiveDoor.js';
 import { readLiveStateMeasured } from './livestate.js';
@@ -2909,26 +2910,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   };
 
   /**
-   * The READS behind "would a STOP nobody consented to interrupt lose a turn?" (`stopIsIdle`, `coord/archiveDoor.ts`,
-   * D-3878, holds the rule and its reasoning): the tmux verdict, then — only for a `live` pane — its pid, its wrapper's
-   * config dir and its live file, then the frame's row. A read a verdict makes impossible is skipped, never faked; which
-   * reads MATTER is the rule's to say, so none is skipped for being redundant. Read FAIL-CLOSED because `cmd_stop` refuses nothing: for a main
-   * checkout this is the only guard there is. Its second caller is a workspace whose programme is to end
-   * (`busyReadFailsClosed`, D-3877), where it is the only read that can refuse before that end; every other workspace
-   * keeps `ws-archive`'s own fail-closed `_ws_status` behind the door. `liveRowFor` cannot answer it alone: the frame
-   * folds what it could not measure towards rest.
+   * The READS behind "what turn would a STOP lose?" (`stopVerdict`, `coord/archiveDoor.ts`, D-3878, holds the rule and
+   * its reasoning, and since 3881 answers idle, busy or unmeasured): the tmux verdict, then — only for a `live` pane — its
+   * pid, its wrapper's config dir and its live file, then the frame's row. A read a verdict makes impossible is skipped,
+   * never faked; which reads MATTER is the rule's to say, so none is skipped for being redundant. Read FAIL-CLOSED
+   * because `cmd_stop` refuses nothing: for a main checkout this is the only guard there is. Its second caller is a
+   * workspace whose programme is to end (`busyReadFailsClosed`, D-3877), with or without `interrupt`, where it is the
+   * only read that can refuse before that end; every other workspace keeps `ws-archive`'s own fail-closed `_ws_status`
+   * behind the door. `liveRowFor` cannot answer it alone: the frame folds what it could not measure towards rest.
    */
-  const idleForStop = async (rec: SessionRecord, uuid: string): Promise<boolean> => {
+  const stopVerdictFor = async (rec: SessionRecord, uuid: string): Promise<TurnVerdict> => {
     const v = await deps.tmux.sessionVerdict(rec.id);
-    if (v.verdict !== 'live') return stopIsIdle({ pane: v.verdict });
+    if (v.verdict !== 'live') return stopVerdict({ pane: v.verdict });
     const pid = await deps.tmux.panePid(rec.id);
-    if (pid === null) return stopIsIdle({ pane: 'live', pid: 'unread' });
+    if (pid === null) return stopVerdict({ pane: 'live', pid: 'unread' });
     const cfgDir = configDirFor(deps.cfg, rec.wrapper);
-    if (cfgDir === undefined) return stopIsIdle({ pane: 'live', pid, configDir: 'none' });
+    if (cfgDir === undefined) return stopVerdict({ pane: 'live', pid, configDir: 'none' });
     const read = await readLiveStateMeasured(deps.io, cfgDir, pid);
     const liveFile: LiveFileReading = read.ok ? { read: 'ok', status: read.state.status } : { read: read.reason };
     const row: StopRowReading = (await liveRowFor(rec, uuid)) ?? 'missing';
-    return stopIsIdle({ pane: 'live', pid, configDir: 'present', liveFile, row });
+    return stopVerdict({ pane: 'live', pid, configDir: 'present', liveFile, row });
   };
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {
@@ -3202,11 +3203,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * that cannot be undone. What only ccd can measure (its status read, the manifest, and in remote mode the worktree)
    * refuses inside `ws-archive`, before ITS act; `archiveOutcome` carries `ended` on that answer. This handler
    * measures, hands the measurements over, and does what the decision says, in its order: end the programme (inside
-   * the decision), stop (`{interrupt}`, or a main checkout), archive (a workspace). A main checkout's busy is read
-   * fail-closed (`idleForStop`) — and so is a workspace's, when the programme is to end unconsented
-   * (`busyReadFailsClosed`, D-3877) — and a stop nobody consented to interrupt re-reads it at the act: `cmd_stop` refuses
-   * nothing, so that read is the only guard between a turn begun during the claim reads, the mutex wait or the
-   * programme end and its loss.
+   * the decision), stop (`{interrupt}`, or a main checkout), archive (a workspace). A main checkout's turn is read
+   * fail-closed (`stopVerdictFor`) — and so is a workspace's, when the programme is to end, with or without `interrupt`
+   * (`busyReadFailsClosed`, D-3877) — into THREE words (3881): a turn measured in progress is `409 session-busy`, which
+   * `interrupt` consents to; one nobody could measure is `409 status-unknown`, whatever the consents. A stop nobody
+   * consented to interrupt re-reads it at the act and refuses in the same two words (`refusedAtStop`): `cmd_stop`
+   * refuses nothing, so that read is the only guard between a turn begun — or a state that became unreadable — during
+   * the claim reads, the mutex wait or the programme end and its loss.
    *
    * ON THE COORDINATION SERIALISER. `server.ts` used to hold no handle on `coordMutex`, so a forced archive could race
    * an in-flight dispatch or close; `registerCoordRoutes` now returns it (`CoordRoutesHandle.withAbandon`), and the
@@ -3240,13 +3243,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const archiveArgv = rec.workspace === null ? null : CCD_ARGV.wsArchive(id, pwaDec(req));
     const measure: ArchiveMeasure = {
       workspace: rec.workspace !== null,
-      // WHICH read is `busyReadFailsClosed`'s to say (D-3877): the fail-closed `idleForStop` for a main checkout (its
-      // stop's only guard) and for a workspace whose programme is about to END unconsented; otherwise the frame's own
-      // row, with `ws-archive`'s fail-closed `_ws_status` behind it. No row would be no measurement, read as busy —
-      // unreachable by construction (`assembleFleet` maps its records 1:1), kept rather than pinned.
-      busy: busyReadFailsClosed(rec.workspace !== null, flags)
-        ? !(await idleForStop(rec, identity.uuid))
-        : await liveRowFor(rec, identity.uuid).then((live) => live === null || archiveInterrupts(live)),
+      // WHICH read is `busyReadFailsClosed`'s to say (D-3877): the fail-closed `stopVerdictFor` for a main checkout (its
+      // stop's only guard) and for a workspace whose programme is about to END, `interrupt` or not (3881); otherwise
+      // the frame's own row, with `ws-archive`'s fail-closed `_ws_status` behind it — two-valued, busy or idle. No row
+      // would be no measurement, read as busy — unreachable by construction (`assembleFleet` maps its records 1:1),
+      // kept rather than pinned.
+      turn: busyReadFailsClosed(rec.workspace !== null, flags)
+        ? await stopVerdictFor(rec, identity.uuid)
+        : await liveRowFor(rec, identity.uuid).then((live): TurnVerdict => (live === null || archiveInterrupts(live) ? 'busy' : 'idle')),
       // In remote mode this stat is outside the agent's read roots and answers `unmeasured`, which proceeds — ccd's
       // own `[[ -d $workdir ]]` refusal measures it there (`ArchiveMeasure.worktree`).
       worktree: rec.workspace === null ? 'present' : worktreeOf(await deps.io.statMeasured(rec.workdir)),
@@ -3265,10 +3269,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const endedSpread = plan.ended.length > 0 ? { ended: plan.ended } : {};
     let stopped = false;
     if (plan.stop) {
-      // Re-read at the act, fail-closed, unless the operator consented to lose the turn.
-      if (!flags.interrupt && !(await idleForStop(rec, identity.uuid))) {
-        const busyNow = busyAtStop(plan.ended);
-        return reply.code(busyNow.status).send(busyNow.body);
+      // Re-read at the act, fail-closed, unless the operator consented to lose the turn. A turn measured in progress
+      // is `session-busy`, a state nobody could read `status-unknown` — the word is `refusedAtStop`'s (3881).
+      if (!flags.interrupt) {
+        const verdict = await stopVerdictFor(rec, identity.uuid);
+        if (verdict !== 'idle') {
+          const refused = refusedAtStop(verdict, plan.ended);
+          return reply.code(refused.status).send(refused.body);
+        }
       }
       const res = await deps.runCcd(stopArgvFor(id, rec, identity));
       if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr, ...endedSpread });

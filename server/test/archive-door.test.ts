@@ -2,7 +2,7 @@
 // `buildServer`, over a fixture HOME: the registry rows, the worktree, the live status file and the hook state are
 // files in it, the coordination store is a real `coord.db`, and every tmux and ccd call is a recorded double.
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
@@ -95,6 +95,9 @@ const liveStatus = (home: string, status: string): void => {
   writeFileSync(path.join(dir, `${PANE}.json`),
     JSON.stringify({ pid: PANE, sessionId: 'u', status, statusUpdatedAt: Date.now() - 60_000 }));
 };
+
+/** The live file removed — a pane whose status nobody can read any more (`no-state`). */
+const dropLiveStatus = (home: string): void => rmSync(path.join(home, '.claude-a', 'sessions', `${PANE}.json`), { force: true });
 
 const post = (app: FastifyInstance, id: string, payload?: Record<string, unknown>) =>
   app.inject({ method: 'POST', url: `/api/sessions/${id}/archive`, ...(payload === undefined ? {} : { payload }) });
@@ -238,15 +241,18 @@ describe('the one Archive — a main checkout', () => {
   });
 
   // `cmd_stop` refuses nothing, so the door's own read is a main checkout's only guard: it is read FAIL-CLOSED, by
-  // `_ws_status`'s rule, where the fleet frame folds an unmeasured pane towards rest (D-309).
+  // `_ws_status`'s rule, where the fleet frame folds an unmeasured pane towards rest (D-309). A turn nobody could
+  // MEASURE is `status-unknown` (D-3881), not `session-busy`: the PWA offers "Stop only" for the one and a busy
+  // confirm that re-sends `interrupt` for the other, and `interrupt` consents only to a turn that was read.
   it.each([
     ['tmux cannot be asked (`unknown`, which the frame reads as dead)', { tmuxUnknown: true }],
     ['the pane pid cannot be read (the frame leaves `idle`)', { noPanePid: true }],
-  ] as const)('a busy main checkout is not stopped when %s — 409 session-busy, no verb', async (_why, cfg) => {
+  ] as const)('a main checkout is not stopped when %s — 409 status-unknown, with or without `interrupt`, no verb', async (_why, cfg) => {
     const b = await box(cfg);
     seed(b.home, 'claude-a-demo', { workspace: null });
     liveStatus(b.home, 'busy');
-    expect((await post(b.app, 'claude-a-demo')).json()).toEqual({ ok: false, error: 'session-busy' });
+    expect((await post(b.app, 'claude-a-demo')).json()).toEqual({ ok: false, error: 'status-unknown' });
+    expect((await post(b.app, 'claude-a-demo', { interrupt: true })).json()).toEqual({ ok: false, error: 'status-unknown' });
     expect(b.ccd()).toEqual([]);
   });
 
@@ -262,13 +268,12 @@ describe('the one Archive — a main checkout', () => {
     expect(b.ccd()).toEqual([]);
   });
 
-  it('a live main checkout with no live file has not said it is idle: busy, and `interrupt` stops it', async () => {
+  it('a live main checkout with no live file could not be measured: 409 status-unknown, with and without `interrupt`', async () => {
     const b = await box();
     seed(b.home, 'claude-a-demo', { workspace: null });
-    expect((await post(b.app, 'claude-a-demo')).json()).toEqual({ ok: false, error: 'session-busy' });
+    expect((await post(b.app, 'claude-a-demo')).json()).toEqual({ ok: false, error: 'status-unknown' });
+    expect((await post(b.app, 'claude-a-demo', { interrupt: true })).json()).toEqual({ ok: false, error: 'status-unknown' });
     expect(b.ccd()).toEqual([]);
-    expect((await post(b.app, 'claude-a-demo', { interrupt: true })).json()).toMatchObject({ archived: true, stopped: true });
-    expect(b.ccd()).toEqual([['stop', 'claude-a', 'demo']]);
   });
 
   it('a turn that starts DURING the programme end is not lost: the stop re-reads busy at the act and refuses, naming the end', async () => {
@@ -286,6 +291,25 @@ describe('the one Archive — a main checkout', () => {
     const res = await post(b.app, 'claude-a-demo', { programme: 'end' });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'session-busy',
+      ended: [{ id: r.id, program: 'lifecycle', wave: 1, waveOf: 3 }] });
+    expect(b.ccd()).toEqual([['ws-release', '--session', 'demo-w']]);
+  });
+
+  it('a live file that VANISHES during the programme end is unmeasured at the stop: 409 status-unknown naming the end, no stop', async () => {
+    let home = '';
+    const b = await box({ onCall: (args) => { if (args[0] === 'ws-release') dropLiveStatus(home); } });
+    home = b.home;
+    seed(b.home, 'claude-a-demo', { workspace: null });
+    seed(b.home, 'demo-w');
+    liveStatus(b.home, 'idle');
+    const r = b.coord.openRun({ program: 'lifecycle', title: 'T', project: 'demo', wave: 1, waveOf: 3,
+      claimedBy: 'claude-a-demo' });
+    if (!('id' in r)) throw new Error('fixture openRun refused');
+    b.coord.markDispatched(r.id, 'demo-w', 'demo-w', 'ws/w', false);
+    expect(b.coord.advance(r.id, 'dispatched', 'coordinator').ok).toBe(true);
+    const res = await post(b.app, 'claude-a-demo', { programme: 'end' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'status-unknown',
       ended: [{ id: r.id, program: 'lifecycle', wave: 1, waveOf: 3 }] });
     expect(b.ccd()).toEqual([['ws-release', '--session', 'demo-w']]);
   });
@@ -321,29 +345,46 @@ describe('the one Archive — a coordinator (L5)', () => {
     expect(b.ccd()).toEqual([['ws-archive', '--session', COORDINATOR]]);
   });
 
-  // D-3877: ending a programme is irreversible, so a workspace's busy is read FAIL-CLOSED before it — by the same rule
-  // as a main checkout's stop (`stopIsIdle`). The frame's own row folds tmux `unknown` and an absent live file towards
-  // rest, and `ws-archive`'s `_ws_status` would then refuse `session-busy`/`status-unknown` AFTER the end.
-  describe('with `programme:"end"` and no `interrupt`, a workspace coordinator is read fail-closed BEFORE the end', () => {
+  // D-3877, D-3881: ending a programme is irreversible, so a workspace's turn is read FAIL-CLOSED before it — by the
+  // same rule as a main checkout's stop (`stopVerdict`) and with or without `interrupt`. The frame's own row folds
+  // tmux `unknown` and an absent live file towards rest, and `ws-archive`'s `_ws_status` would then refuse
+  // `status-unknown` AFTER the end. A turn nobody could measure is `status-unknown`, whatever the consents.
+  describe('with `programme:"end"`, a workspace coordinator is read fail-closed BEFORE the end', () => {
     const unread: Record<string, BoxCfg> = {
       'tmux cannot be asked (`unknown`)': { tmuxUnknown: true },
       'it has no live file': {},
     };
-    it.each(Object.keys(unread))('%s: 409 session-busy, no run ended, no ccd verb ran', async (why) => {
-      const b = await box(unread[why]);
+    const bodies = { 'without `interrupt`': { programme: 'end' }, 'WITH `interrupt`': { programme: 'end', interrupt: true } };
+    for (const [how, body] of Object.entries(bodies)) {
+      it.each(Object.keys(unread))(`%s, ${how}: 409 status-unknown, no run ended, no ccd verb ran`, async (why) => {
+        const b = await box(unread[why]);
+        seed(b.home, COORDINATOR);
+        if (why.startsWith('tmux')) liveStatus(b.home, 'idle');
+        const [r1, r2] = coordinates(b.coord, 2);
+        const res = await post(b.app, COORDINATOR, body);
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toEqual({ ok: false, error: 'status-unknown' });
+        expect([r1!, r2!].map((r) => okRun(b.coord.run(r))!.state)).toEqual(['planned', 'planned']);
+        expect(b.ccd()).toEqual([]);
+      });
+    }
+
+    it('control: a MEASURED busy workspace is 409 session-busy without `interrupt`, and nothing is ended', async () => {
+      const b = await box();
       seed(b.home, COORDINATOR);
-      if (why.startsWith('tmux')) liveStatus(b.home, 'idle');
-      const [r1, r2] = coordinates(b.coord, 2);
+      liveStatus(b.home, 'busy');
+      const [r1] = coordinates(b.coord, 1);
       const res = await post(b.app, COORDINATOR, { programme: 'end' });
       expect(res.statusCode).toBe(409);
       expect(res.json()).toEqual({ ok: false, error: 'session-busy' });
-      expect([r1!, r2!].map((r) => okRun(b.coord.run(r))!.state)).toEqual(['planned', 'planned']);
+      expect(okRun(b.coord.run(r1!))!.state).toBe('planned');
       expect(b.ccd()).toEqual([]);
     });
 
-    it('control: the same row WITH `interrupt` is the operator\'s consent, and proceeds as it always has', async () => {
-      const b = await box({ tmuxUnknown: true });
+    it('control: a MEASURED busy workspace WITH `interrupt` is the operator\'s consent: stop, then ws-archive, runs ended', async () => {
+      const b = await box();
       seed(b.home, COORDINATOR);
+      liveStatus(b.home, 'busy');
       const [r1] = coordinates(b.coord, 1);
       const res = await post(b.app, COORDINATOR, { programme: 'end', interrupt: true });
       expect(res.json()).toMatchObject({ ok: true, archived: true, stopped: true });
