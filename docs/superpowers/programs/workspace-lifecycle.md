@@ -19,7 +19,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
-| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | awaiting re-review (fix round 1 at `4daf7696`; review run 242 dispatched 2026-10-03 11:54) |
+| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | fix round 2 (review 242 ruled 2026-10-03 12:20; run 236 back at `working`) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
@@ -297,6 +297,23 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     11:54:07, goes to continuity's review: stall-watch agreed (mail 3302).
 - **2026-10-03 11:54 — review run 242 dispatched** to `ccrc-pwa-swift-canyon`, in the 11:53:20 slot, after
   re-measuring the tip as `4daf7696`.
+- **2026-10-03 12:20 — review 242 closed and ruled** (report
+  `~/.cc-clips/ccrc-pwa-swift-canyon/review-242-4daf7696.md`; the held-out panel, 27 agents, no lens unverified;
+  5 confirmed, merged to 4, and 3 refuted).
+  - **Round 1's rulings hold:**
+    - F8 and F9 are pure L1, with verdicts identical;
+    - the mutex pin reds 4 of 4 under X8 and stays green across 14 repeats at load 17–27;
+    - 17 rows reproduce, and every suite is green.
+  - **Fix round 2** (mail 3316):
+    - F5, 3881 (the spare): the fail-closed read folded "unmeasured" into `session-busy`. So the operator was offered
+      the interrupt consent on a false "it is working", and with it the programme ended and ccd then refused
+      `status-unknown`. The PWA handles the two words oppositely, so this is the overloaded-result defect, on the very
+      act the wave was asked to protect. The verdict becomes three-valued in L1, and unmeasured answers
+      `status-unknown` for both kinds of row. Under `programme:'end'`, a workspace's read runs even with `interrupt`,
+      so only a measured busy is consented.
+    - F1–F4: comment and plan-text corrections. The pin's 2 s bound is stated, the comment names functions rather
+      than `ccd:N` lines, the spec is cited by section rather than the "A10" label, and the docstring names its second
+      caller.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
