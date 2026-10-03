@@ -18,7 +18,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 1 | `shell` delivery; the run-worker quiet lane (r1 worker check, r2 coordinator report, r3 operator push), shadow until armed | server | #216 | **merged** `1f9fa22d7`, live v0.0.52 (shadow) |
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 (merges after #227) | **review clean** — run 221 accepted, review run 224 clean (4 Minor, ruled R11); PR awaits the operator's merge |
-| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; **awaiting review**: #232 at `571268cdc`. Clauses 16/17 per R14 and R15; the wave-done (20:16) was re-measured and accepted. **fix-round (absorb #234, R20)**, then a re-review; accepted once before (R17). Review run 239 (dispatched 22:39 after a `cap-daily` wait, R16) found 4 Minor and no blocker (R17). The run waits at `merging` for the operator's squash-merge of #232 |
+| 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; **awaiting review**: #232 at `571268cdc`. Clauses 16/17 per R14 and R15; the wave-done (20:16) was re-measured and accepted. **accepted, merging** at `bc1a13edd`, after the #234 absorb (R20) and re-review 251 (R21). Review run 239 (dispatched 22:39 after a `cap-daily` wait, R16) found 4 Minor and no blocker (R17). The run waits at `merging` for the operator's squash-merge of #232 |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | planned and reviewed; dispatches after #227 and #228 merge |
 | 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | — | planned and reviewed (R19); dispatches after waves 3–5 land |
 
@@ -308,6 +308,20 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     - C1–C15 red as planned.
 
     Run 226 is at `awaiting-review`. Review run 251 was dispatched to read the merge.
+- **R21 (coordinator, 2026-10-03 18:49): wave 4 accepted again after its absorb.**
+  - **What the review read.** Review run 251 read `bc1a13edd` and closed done.
+  - **The merge lens:** nothing found, each check by hash.
+    - Clause 15 equals `main`'s.
+    - Clause 16 equals `571268cdc`'s.
+    - `CONTRACT[14]` and `CONTRACT[15]`, and both imports, are as briefed.
+    - The count word reads `sixteen` everywhere.
+    - `--remerge-diff` touches only the two conflicted files.
+    - Nothing of `main` is reverted.
+  - **The gates:** all suites green, and C1–C15 red as planned.
+  - **Findings.** F1 is new and Minor: the S3 row guards on three words only. It is parked with R17's F2 (the
+    `resume` scan) for the next wave that edits `worker-skill.test.ts`. F2 and F3 repeat R17's rulings.
+  - **Where the run stands.** Run 226 is back at `merging` (worker told, mail 3362), waiting for the operator's
+    squash-merge of #232.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
