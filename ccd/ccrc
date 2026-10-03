@@ -13633,9 +13633,11 @@ CCRC_SHIM
 # destination that is a directory or a link to one and re-measuring each
 # destination afterwards. A half already carrying the exact bytes and mode is
 # left alone, so a converged box rewrites nothing. Its exit 2 is the partial
-# state: the body moved and the old launcher refuses it by digest, or the
-# launcher moved too and failed its re-measurement, leaving it unverified — until
-# a re-run converges; nothing is rolled back across the two directories.
+# state: when only the body moved, the old launcher refuses every start by
+# digest; when the launcher's own rename ran — alone, the body already
+# current, or after the body's own move — and its re-measurement failed, what
+# stands is unverified. Either way, a re-run converges the pair; nothing is
+# rolled back across the two directories.
 CCRC_ENTRY_PY=""
 CCRC_ENTRY_WHY=""
 _inst_entry_python() {   # <helper> -> rc 0 with CCRC_ENTRY_PY = the canonical python3 that runs the helper

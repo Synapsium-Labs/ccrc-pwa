@@ -18,8 +18,8 @@
 # `SHELLOPTS`/`BASHOPTS`/`CDPATH`/`GLOBIGNORE`. It is a startup boundary, not a
 # privilege change, and not a sandbox.
 #
-# WHAT IS PROTECTED (the body re-classifies the same shapes, and a test runs one
-# table against both):
+# WHAT IS PROTECTED (the body re-classifies the exact shapes — plus whatever an
+# inherited `nocasematch` folds — and a test runs one table against both):
 #   ws-reclaim <any tail>                         — the body's parser owns the tail
 #   ws-audit --session <value> --reclaim [--defer-expired] — the token skeleton;
 #     <value> is any string here, and the body still validates it as a session id

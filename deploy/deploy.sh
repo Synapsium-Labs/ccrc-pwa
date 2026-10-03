@@ -225,7 +225,7 @@ install_atomic() {   # <local src> <HOME-relative dest> <mode>
 # so it must run after that rsync, and before the agent restart for
 # `install_atomic`'s own reason. Exit 1: nothing moved. Exit 2: a half moved and
 # no verified pair stands — the old launcher refuses every start by digest, or
-# (both moved) the launcher is unverified — until a re-run converges. Either aborts (set -e).
+# (the launcher moved, alone or with the body) it is unverified — until a re-run converges. Either aborts (set -e).
 install_ccd_pair() {
   "${SSH[@]}" "$BOX" 'py="$(python3 -IS -c "import os,sys;sys.stdout.write(os.path.realpath(sys.executable))")" && [ -n "$py" ] && "$py" -IS ~/ccrc/ccd/ccd-entry-install.py install ~/ccrc "$HOME"'
 }

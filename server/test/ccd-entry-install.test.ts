@@ -340,7 +340,7 @@ describe('the pre-publication kernel self-test, and the order of publication, pr
     assertNoLeftovers();
   }, 60_000);
 
-  it('a launcher that moved and then failed its re-measurement is exit 2 too — with BOTH halves moved, it says the launcher is unverified, never that starts refuse by digest', () => {
+  it('a launcher that moved and then failed its re-measurement is exit 2 too — whether the body moved with it or was already current, it says the launcher is unverified, never that starts refuse by digest', () => {
     const runners: ReadonlyArray<readonly [string, () => Ran]> = [['helper', () => helper(['install', tree(), home])], ...Object.entries(LANES)];
     for (const [what, change, moved] of [
       ['a body and launcher change', { ccd: '\n# v2\n' }, 'the body and the launcher'],
