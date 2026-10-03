@@ -3041,6 +3041,32 @@ describe('sweepMail: the turn marker and the busy modes (worker stall watch §5.
     }
   });
 
+  it('mail-gate-busy-shadow: a logged delivery backed off past a sweep is still outstanding, so it is said once, not again on its return', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedAll(h, { status: 'busy', statusUpdatedAt: NOW - 1_000 });
+    seedTurnMark(h.home);
+    arm(h, MAIL_GATE_BUSY_SHADOW_MARKER);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await w.sweepMail();
+      expect(shadowWarns(warn), 'premise: logged once').toEqual([wouldDeliver(id)]);
+      // Held past the next sweep by another lane's back-off: still `queued`, so still outstanding, but not due.
+      coord.backOff(id, 'held by a test', Date.now() + 3 * PAST_SWEEP_MS, false);
+      advance(PAST_SWEEP_MS);
+      await w.sweepMail();
+      expect(logged(w).has(id), 'a queued delivery is outstanding whether or not it is due this sweep').toBe(true);
+      advance(3 * PAST_SWEEP_MS);
+      await w.sweepMail();
+      expect(deliveryRow(coord, id).lastGate, 'premise: the return reached the busy gate again').toBe('not-idle');
+      expect(shadowWarns(warn), 'one line per delivery, not one per return').toEqual([wouldDeliver(id)]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('busy modes: a live shell with a working marker at least as new as statusUpdatedAt refuses not-idle; an older one does not', async () => {
     const S = NOW - MAIL_QUIET_MS - 1_000;
     for (const marker of [MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_BUSY_MARKER]) {
