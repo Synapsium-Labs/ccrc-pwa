@@ -19,7 +19,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
-| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | fix round 2 (review 242 ruled 2026-10-03 12:20; run 236 back at `working`) |
+| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | awaiting re-review (fix round 2 at `a2e5744f`; review run 243 dispatched 2026-10-03 12:35) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
@@ -314,6 +314,17 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - F1–F4: comment and plan-text corrections. The pin's 2 s bound is stated, the comment names functions rather
       than `ccd:N` lines, the spec is cited by section rather than the "A10" label, and the docstring names its second
       caller.
+- **2026-10-03 12:34 — fix round 2 done at `a2e5744f`** (wave-done 3318).
+  - **3881:** `stopVerdict` is idle, busy or unmeasured, in L1. Unmeasured refuses `status-unknown` before anything,
+    and a measured busy without `interrupt` refuses `session-busy`. A workspace under `programme:'end'` is read with or
+    without `interrupt`.
+  - **The worker's three rulings**, for the review to judge:
+    - the arm mapping follows ccd's `_ws_status`;
+    - unmeasured refuses whatever the consents, the main checkout included (`interrupt` consents to a measured turn's
+      loss only);
+    - the stop's re-read runs only without `interrupt`.
+  - **Review run 243** is dispatched to `ccrc-pwa-plain-canyon` at 12:35. The window had room: 21 of 24, and
+    stall-watch holds no slot.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
