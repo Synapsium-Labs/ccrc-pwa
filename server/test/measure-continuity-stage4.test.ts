@@ -221,6 +221,32 @@ describe('each regex is bound to the line the real ccd writes', () => {
     expect(r.rescues_on_a_carried_in_banner).toBe(1);
   });
 
+  // THE TWO ROWS THAT COMPARE A TRUE EPOCH WITH swap.log'S LOCAL STAMP, under a
+  // zone that is not UTC (the stage-1 convention, D-3777): ccd writes its
+  // `date '+%F %T'` and the instrument reads it back in the SAME zone, so a
+  // conversion that ignored the zone (`timegm` for `mktime`) would miscount
+  // both by eight hours. On a UTC box every other case here is blind to that.
+  it('under TZ=PST8 a stranded wait past its reset and a carried-in rescue still count (departure 3848)', () => {
+    const TZ = 'PST8';
+    const t = Math.floor(Date.now() / 1000);
+    seedSession(t - 5000, { quotaLimits: { status: 'rejected', resetsAt: t - 200, rateLimitType: 'five_hour' } });
+    h.sh(`${stubs("You've hit your session limit · resets 9:10pm (UTC)\n❯ ", '')} _auto_swap_check ${ID}`, { ...env(t), TZ });
+    const stranded = run(h.home, [], { TZ });
+    expect(stranded.noroom_waits_past_their_reset).toBe(1);
+    expect(stranded.noroom_seconds_past_their_reset_max).toBeGreaterThan(0);
+    expect(stranded.noroom_seconds_past_their_reset_max).toBeLessThan(3600);
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'swap.log'));
+    h.sh(`_reg_purge ${ID}`);
+    const born = t - 990;
+    seedSession(t - 3000, { quotaLimits: { status: 'rejected', resetsAt: t + 300, rateLimitType: 'five_hour' } });
+    const SWAP = 'systemctl() { :; }; launchctl() { :; }; tmux() { :; }; sleep() { :; };';
+    h.sh(`${SWAP} cmd_swap ${ID} claude-a`, { TMUX: '', TZ });
+    h.sh(`_reg_set ${ID} lastswap ${t - 1000}; _reg_set ${ID} spawn "${born + 30} 4"`);
+    h.sh(`${stubs('Usage limit reached · continuing automatically at 9:10pm · esc to cancel\n❯ ', 'claude-b')} _auto_swap_check ${ID}`,
+      { TMUX_CREATED: String(born), TZ });
+    expect(run(h.home, [], { TZ }).rescues_on_a_carried_in_banner).toBe(1);
+  });
+
   it('the landing line the carried-in row compares against is cmd_swap\'s own', () => {
     expect(fs.readFileSync(CCD, 'utf8')).toContain(`echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"`);
   });

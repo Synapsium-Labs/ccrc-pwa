@@ -4061,6 +4061,15 @@ what this plan builds.
   `pool` here ``), asserted found after the claim, so no byte count can be outgrown again; measured red when
   `` `strandnotify` `` is deleted from the list (`1 failed | 42 passed (43)`). The `_reg_get` census needed no
   adaptation: `reg-get-census.py` measured `176/147 -> 179/150`, the plan's pair.
+- **D-3848** — Task 3's Opus review found stage 4's local-time conversion unpinned: every hand-built case runs
+  `TZ=UTC` and the real-ccd cases inherit the box's zone (UTC here), so `s4_epoch` with `calendar.timegm` for
+  `time.mktime` left all nine cases green, while the two rows that compare a true epoch (`row=`, `reset=`) with
+  swap.log's local stamp would miscount by the zone offset on a non-UTC box — the class wave 1's stage 1 closed under
+  `TZ=PST8`. `measure-continuity-stage4.test.ts` gains one case, "under TZ=PST8 a stranded wait past its reset and a
+  carried-in rescue still count": ccd writes and the instrument reads both rows in `PST8`. Its mutation row, 3.21:
+  `return int(time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))` inside `s4_epoch` →
+  `return int(calendar.timegm(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))` reds `1 failed | 9 passed (10)`, the new
+  case only. No instrument line changed.
 
 ---
 
