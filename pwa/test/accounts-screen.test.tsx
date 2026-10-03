@@ -290,7 +290,14 @@ describe('AccountsScreen — back control', () => {
 // describes; see test/cssRule.ts for why a text scrape is the tool here.
 describe('AccountsScreen — tap targets', () => {
   it('.accounts-back is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.accounts-back'), 'min-height')).toBe('var(--tap-min)');
+    // The floor is @ccrc/ui's `BackButton` now, not a rule in this stylesheet
+    // — `min-h-tap` resolves through theme.css's `--spacing-tap: var(--tap-min)`,
+    // which theme-bridge.test.ts pins. The render assertion below is the half
+    // that still proves the class reaches the element.
+    const backButton = readFileSync(
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'back-button.tsx'), 'utf8');
+    expect(backButton).toContain('min-h-tap');
+    expect(backButton).not.toContain('44px');
   });
 
   it('.accounts-back is the class the rendered back button carries', async () => {

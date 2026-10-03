@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { TEXT_INPUT } from '@ccrc/ui';
 import { POOL_NAME_RE } from '../../shared/roster';
 import {
   atBlock, declValue, declaredValues, norm, normSel, ruleIn, selectorsOf, stripComments,
@@ -922,9 +923,11 @@ describe('the hold composer', () => {
     // and no copy left to drift from it. The pair itself
     // (--ink-primary on --bg-raised) is measured across all twelve palettes by
     // utility-pairs.test.ts, which derives it from this same string.
-    const textInput = readFileSync(
-      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'text-input.tsx'), 'utf8');
-    expect(textInput).toContain('placeholder:text-ink-tertiary');
+    // THE EXPORTED CONSTANT, not the source file. Reading the file would let
+    // a comment satisfy these assertions — which is not hypothetical: the
+    // identical guard written for `BackButton` was vacuous for exactly that
+    // reason and the mutation table caught it (see primitives.test.tsx).
+    expect(TEXT_INPUT).toContain('placeholder:text-ink-tertiary');
 
     // THE INK AND THE GROUND, pinned by name. utility-pairs.test.ts measures
     // this pair's CONTRAST across twelve palettes, which is a different
@@ -933,7 +936,7 @@ describe('the hold composer', () => {
     // text is MADE of is a design decision, not a ratio — the placeholder is
     // deliberately the dimmer token and the value deliberately is not, and a
     // guard that cannot tell them apart would let the two swap.
-    expect(textInput).toContain('bg-raised text-ink-primary');
+    expect(TEXT_INPUT).toContain('bg-raised text-ink-primary');
     // And both old classes are gone from this stylesheet, so nothing can
     // quietly resurrect a third copy under an old name. `ruleIn` THROWS on a
     // missing rule rather than returning null, so absence is asserted that way

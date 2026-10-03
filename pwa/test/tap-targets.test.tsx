@@ -254,8 +254,10 @@ describe('the two rules that were already scraped still reach a real element', (
     // with it and buys nothing, so it is gone rather than corrected.
     // A literal would not follow `--tap-min` if the acceptance criterion ever
     // moves, and would not be found by the scrapes above either. Build 7 Task
-    // 4 (`.mail-badge`, `.mail-back`), Task 5 (`.fleet-runs-row`,
-    // `.runs-back`, `.run-row`, `.run-open`), Task 6 (`.mail-strip-head`),
+    // 4 (`.mail-badge`), Task 5 (`.fleet-runs-row`, `.run-row`, `.run-open`),
+    // Task 6 (`.mail-strip-head`),  — `.mail-back` and `.runs-back` left this
+    // loop with the other three back chevrons when they became `BackButton`;
+    // their floor is asserted against the component below,
     // Build 4 Task 11 (`.coord-banner`, `.coord-toggle`), Task 12
     // (`.run-abandon`) and Task 13 (`.program-start-door`, `.program-start-go`)
     // join the same loop rather than getting their own — one place where
@@ -265,8 +267,8 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.fleet-archived-row'), ruleIn(fleetCss, '.archive-row'),
       ruleIn(fleetCss, '.proj-archived-toggle'), ruleIn(chatCss, '.pr-title-input'),
       ruleIn(chatCss, '.reap-go'), ruleIn(chatCss, '.keycap--pr'),
-      ruleIn(fleetCss, '.mail-badge'), ruleIn(fleetCss, '.mail-back'),
-      ruleIn(fleetCss, '.fleet-runs-row'), ruleIn(fleetCss, '.runs-back'),
+      ruleIn(fleetCss, '.mail-badge'),
+      ruleIn(fleetCss, '.fleet-runs-row'),
       ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),
       ruleIn(mailStripCss, '.mail-strip .mail-strip-head'),
       ruleIn(fleetCss, '.coord-banner'), ruleIn(fleetCss, '.coord-toggle'),
@@ -296,9 +298,22 @@ describe('.mail-badge — the only door to /mail', () => {
   });
 });
 
+// THE BACK CHEVRON'S FLOOR MOVED FROM A RULE TO A COMPONENT. All five
+// `.*-back` rules became @ccrc/ui's `BackButton`, so there is no stylesheet
+// rule left to scrape. The claim is unchanged and the chain is one link
+// longer: `min-w-tap`/`min-h-tap` resolve through theme.css's
+// `--spacing-tap: var(--tap-min)`, which `test/theme-bridge.test.ts` pins —
+// so a utility that silently stopped resolving to the token would red there.
+// The render half of each pair below is untouched: the hook class is still on
+// the element, which is the half that proves the floor reaches real markup.
+const backButton = readUi('primitives', 'back-button.tsx');
+
 describe('.mail-back — the feed’s back control', () => {
   it('is at least one tap square, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.mail-back'), 'min-height')).toBe('var(--tap-min)');
+    expect(backButton).toContain('min-w-tap');
+    expect(backButton).toContain('min-h-tap');
+    // No bare literal, the same bind the scrape loop above applies to rules.
+    expect(backButton).not.toContain('44px');
   });
   it('is the class the rendered control actually carries', () => {
     render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} />);
@@ -368,7 +383,7 @@ describe('.fleet-runs-row — the only door to /runs', () => {
 
 describe('.runs-back — the run board’s own back control', () => {
   it('is at least one tap square, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.runs-back'), 'min-height')).toBe('var(--tap-min)');
+    expect(backButton).toContain('min-h-tap');   // the same component .mail-back is
   });
   it('is the class the rendered control actually carries', () => {
     render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);

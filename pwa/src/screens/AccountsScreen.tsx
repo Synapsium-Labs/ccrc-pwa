@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountUsage, AuthStatus, PasskeyListResponse, ProjectedHome, RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
-import { Button, toast, Skeleton, useNow } from '@ccrc/ui';
+import { BackButton, Button, Skeleton, toast, useNow } from '@ccrc/ui';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
 import { formatAge } from '../fleet/formatReset';
@@ -259,9 +259,9 @@ export function AccountsScreen(): ReactNode {
   return (
     <div className="accounts-screen">
       <header className="accounts-head">
-        <button type="button" className="accounts-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
+        <BackButton className="accounts-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
           ‹
-        </button>
+        </BackButton>
         <h1 className="accounts-title">Accounts</h1>
       </header>
 

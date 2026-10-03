@@ -59,8 +59,14 @@ describe('SettingsScreen — the shell', () => {
 
 describe('SettingsScreen — tap targets and the header door', () => {
   it('.settings-back is at least one tap square, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.settings-back'), 'min-height')).toBe('var(--tap-min)');
-    expect(declValue(ruleIn(fleetCss, '.settings-back'), 'min-width')).toBe('var(--tap-min)');
+    // `BackButton`'s floor, not this stylesheet's: all five back chevrons are
+    // one component, and `min-w-tap`/`min-h-tap` resolve through theme.css's
+    // `--spacing-tap: var(--tap-min)` (pinned by theme-bridge.test.ts).
+    const backButton = readFileSync(
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'back-button.tsx'), 'utf8');
+    expect(backButton).toContain('min-h-tap');
+    expect(backButton).toContain('min-w-tap');
+    expect(backButton).not.toContain('44px');
   });
 
   it('.settings-back is the class the rendered back button carries', () => {

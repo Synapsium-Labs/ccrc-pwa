@@ -14,7 +14,7 @@ import {
   substrateFault,
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
-import { Sheet, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
+import { BackButton, Sheet, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { sessionLabel } from '../fleet/sessionLabel';
@@ -244,9 +244,9 @@ export function SessionHeader({
 
   return (
     <header className="chat-head">
-      <button type="button" className="chat-back" aria-label="Back to fleet" onClick={onBack}>
+      <BackButton className="chat-back" aria-label="Back to fleet" onClick={onBack}>
         ‹
-      </button>
+      </BackButton>
       <div className="chat-title-wrap">
         <h1 className="chat-title">
           {title}

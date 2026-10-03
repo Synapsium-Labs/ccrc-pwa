@@ -99,6 +99,14 @@ const pairs = (T, name) => [
   // other raised+edge-subtle affordance in this file (.proj-search,
   // .account-gauge, .notice, .acct-list .acct-row) is exempt for the same
   // reason tokens.css gives hairlines: "decorative — no contrast claim".
+  // The back chevron on every detail screen. @ccrc/ui's `BackButton` paints
+  // --ink-secondary and grounds on body's --bg-page, through a .shell-detail /
+  // .*-head / .*-screen chain that paints nothing. FIVE stylesheet rules said
+  // this before; only `.settings-back` was ever measured (an INHERITED_GROUNDS
+  // entry whose own `why:` called the other four "grandfathered debt"), so
+  // stating it once here measures four rules that nothing measured before.
+  // Also `.settings-title`'s <h1> and the `···` glyph, same ink, same ground.
+  [`${name} ink-secondary / page`, T.inkS, T.page, 4.5],
   [`${name} ink-secondary / raised`, T.inkS, T.raised, 4.5],
   [`${name} ink-secondary / sheet`, T.inkS, T.sheet, 4.5],
   [`${name} ink-tertiary / surface`, T.inkT, T.surface, 4.5],

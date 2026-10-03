@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { LimitBar, QuickConfirm, Sheet, Skeleton, StatusDot, ToastHost, toast } from '@ccrc/ui';
+import { BACK_BUTTON, BackButton, LimitBar, QuickConfirm, Sheet, Skeleton, StatusDot, ToastHost, toast } from '@ccrc/ui';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself.
 afterEach(() => {
@@ -342,5 +342,63 @@ describe('toast + ToastHost', () => {
     });
     fireEvent.click(screen.getByText('Tap me away'));
     expect(screen.queryByText('Tap me away')).not.toBeInTheDocument();
+  });
+});
+
+// — BackButton —
+
+describe('BackButton', () => {
+  // The five rules this replaced had drifted twice, and both drifts were
+  // invisible from any one of them. The measured mutation table said neither
+  // claim below was guarded: dropping `motion-reduce:transition-none` and
+  // swapping the ink both left 192 tests green and the gate at ALL 3432 PASS.
+  // THE EXPORTED CONSTANT, not the file. Reading the source made the first
+  // version of these assertions VACUOUS and the mutation table caught it:
+  // deleting `motion-reduce:transition-none` from the class string left the
+  // phrase in the comment ABOVE it that explains the fix, so `toContain` was
+  // satisfied by prose while the utility was gone. 217 tests stayed green.
+  // `BACK_BUTTON` is the value the component actually renders.
+  const source = BACK_BUTTON;
+
+  it('honours prefers-reduced-motion, which four of the five rules did not', () => {
+    // THE ONE BEHAVIOUR CHANGE in the extraction, so it gets a guard rather
+    // than a comment. chat.css's reduced-motion block named `.chat-back`;
+    // fleet.css's named `.fab`, `.card`, `.notice-x`, `.acct-change`,
+    // `.acct-list .acct-row` and `.proj-row` — no back button. So four of the
+    // five animated for a reader who had asked nothing to animate, and the
+    // component is where that stops being per-stylesheet luck.
+    expect(source).toContain('motion-reduce:transition-none');
+  });
+
+  it('keeps the two transitions on their own durations', () => {
+    // `transform` at --dur-press and `color` at --dur-fast. A single
+    // `duration-*` utility cannot say that, so collapsing them would be a
+    // silent change to how the press feels — which is why this is an
+    // arbitrary property and why the shape is asserted.
+    expect(source).toContain('transform_var(--dur-press)_var(--curve-swift)');
+    expect(source).toContain('color_var(--dur-fast)_var(--curve-swift)');
+  });
+
+  it('paints --ink-secondary at rest and --ink-primary pressed', () => {
+    // Pinned BY NAME, not by ratio. Both inks clear 4.5 on --bg-page in all
+    // twelve palettes, so a swap passes every contrast check silently — the
+    // same gap TextInput's ink had. Which ink a control rests at is a design
+    // decision: the chevron is quiet until touched, and the lift to
+    // --ink-primary is one of the two cues the press gives.
+    expect(source).toContain('text-ink-secondary');
+    expect(source).toContain('active:text-ink-primary');
+    expect(source).toContain('active:scale-[0.88]');
+  });
+
+  it('renders a real button carrying the call site’s hook class', () => {
+    const onClick = vi.fn();
+    render(<BackButton className="chat-back" aria-label="Back to fleet" onClick={onClick}>‹</BackButton>);
+    const el = screen.getByRole('button', { name: 'Back to fleet' });
+    // The hook class is what shell.css's desktop-hiding rules still key on,
+    // and it is the half of the old assertions that did not need rewriting.
+    expect(el).toHaveClass('chat-back');
+    expect(el).toHaveAttribute('type', 'button');
+    fireEvent.click(el);
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 });

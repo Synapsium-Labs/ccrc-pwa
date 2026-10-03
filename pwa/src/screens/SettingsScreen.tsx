@@ -16,7 +16,7 @@ import type { AuthStatus, AutoMode, CatalogueErrorReason, CatalogueState, NodeWi
 import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, SETTLED_UPDATE_STATES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode, isReleaseTag, isStampRead, isUpdateChannel } from '../../../shared/api';
 import { LOOPBACK_HOSTS } from '../../../shared/base-url';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
-import { Button, elapsedWords, PHOSPHOR, Skeleton, SYSTEM, THEMES, type ThemeChoice, toast, useNow } from '@ccrc/ui';
+import { BackButton, Button, PHOSPHOR, SYSTEM, Skeleton, THEMES, elapsedWords, toast, type ThemeChoice, useNow } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { isManagedNode, planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
@@ -691,9 +691,9 @@ export function SettingsScreen(): ReactNode {
   return (
     <div className="settings-screen">
       <header className="settings-head">
-        <button type="button" className="settings-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
+        <BackButton className="settings-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
           ‹
-        </button>
+        </BackButton>
         <h1 className="settings-title">Settings</h1>
       </header>
       <UnarmedExposureBanner />

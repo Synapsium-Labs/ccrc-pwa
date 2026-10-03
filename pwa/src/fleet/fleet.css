@@ -2115,19 +2115,6 @@ button.proj-card-pool::before {
    screens keep their styles in different sheets (session/chat.css vs this
    file) and .chat-back's own selectors (`.shell-detail .chat-back`) are
    scoped to the chat surface specifically. */
-.accounts-back {
-  flex: none;
-  min-width: var(--tap-min);
-  min-height: var(--tap-min);
-  border: none;
-  background: none;
-  border-radius: var(--r-sm);
-  font: var(--weight-regular) 26px / 1 var(--family-ui);
-  color: var(--ink-secondary);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
-}
-.accounts-back:active { transform: scale(0.88); color: var(--ink-primary); }
 .accounts-title {
   font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono);
   color: var(--ink-primary);
@@ -2284,13 +2271,6 @@ button.proj-card-pool::before {
 
 .mail-screen { display: grid; gap: var(--sp-2); padding: var(--sp-2); }
 .mail-head { display: flex; align-items: center; gap: var(--sp-2); }
-.mail-back {
-  flex: none; min-width: var(--tap-min); min-height: var(--tap-min);
-  border: none; background: none; border-radius: var(--r-sm);
-  font: var(--weight-regular) 26px / 1 var(--family-ui); color: var(--ink-secondary); cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
-}
-.mail-back:active { transform: scale(0.88); color: var(--ink-primary); }
 .mail-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
 .mail-note { font-size: var(--fs-xs); color: var(--ink-secondary); }
 .mail-dropped { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
@@ -2364,13 +2344,6 @@ button.proj-card-pool::before {
 }
 .runs-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); }
 .runs-head { display: flex; align-items: center; gap: var(--sp-2); }
-.runs-back {
-  flex: none; min-width: var(--tap-min); min-height: var(--tap-min);
-  border: none; background: none; border-radius: var(--r-sm);
-  font: var(--weight-regular) 26px / 1 var(--family-ui); color: var(--ink-secondary); cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
-}
-.runs-back:active { transform: scale(0.88); color: var(--ink-primary); }
 .runs-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
 .runs-empty { padding: var(--sp-4); color: var(--ink-secondary); }
 .runs-group { display: grid; gap: var(--sp-1); }
@@ -2866,19 +2839,6 @@ button.proj-card-pool::before {
 /* Same visual contract as `.accounts-back` (and chat.css's `.chat-back`) — a
    rule of its own rather than a shared class, for the reason `.accounts-back`
    gives: two screens with one shape are not one thing. */
-.settings-back {
-  flex: none;
-  min-width: var(--tap-min);
-  min-height: var(--tap-min);
-  border: none;
-  background: none;
-  border-radius: var(--r-sm);
-  font: var(--weight-regular) 26px / 1 var(--family-ui);
-  color: var(--ink-secondary);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
-}
-.settings-back:active { transform: scale(0.88); color: var(--ink-primary); }
 .settings-title {
   font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono);
   color: var(--ink-primary);

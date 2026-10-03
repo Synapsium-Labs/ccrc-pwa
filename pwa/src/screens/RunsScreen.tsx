@@ -46,7 +46,7 @@ import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
-import { useNow } from '@ccrc/ui';
+import { BackButton, useNow } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 
@@ -641,9 +641,9 @@ export function RunsScreen({
   return (
     <div className="runs-screen" data-conn={conn}>
       <header className="runs-head">
-        <button type="button" className="runs-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
+        <BackButton className="runs-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
           ‹
-        </button>
+        </BackButton>
         <h1 className="runs-title">Runs</h1>
       </header>
 

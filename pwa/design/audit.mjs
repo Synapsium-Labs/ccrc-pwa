@@ -830,17 +830,18 @@ export const INHERITED_GROUNDS = {
     why: "centralised-update W3 Task 12, corrected fix round 1 (F15): BuildLine's ' → vX' affix, a span inside a .build-line-side span inside .build-line, the last child of FleetScreen's own <main class=\"fleet\">, itself always inside app.tsx's <aside className=\"shell-nav\">. The old claim — 'no ancestor between it and the app shell paints a background' — was false on desktop: .shell-nav paints --bg-surface there (styles/shell.css:131-155), the same corrected ground as the two build-line rules above. Re-measured 10.09:1 dark / 5.92:1 light for --status-attention-text on it, both clearing the 4.5 floor. Mobile's .shell-nav sets no background and falls through to --bg-page instead (also safe, 10.89:1 dark / 5.45:1 light), not registered for the same one-ground-per-rule reason the base rule's entry gives.",
   },
   // ── centralised update management W3, Task 6: the /settings shell and its door ──
-  'fleet.css .settings-back': {
-    under: ['var(--bg-page)'],
-    why: "SettingsScreen's back chevron, in .settings-head inside .settings-screen inside .shell-detail — none of the three paints a background, so body's --bg-page (styles/base.css:111) is behind it, the .mail-chip reasoning. Its selector names no painted ancestor, so no route could ground it; .accounts-back, its twin, is grandfathered debt, and the frozen census admits no new identity (D-2689)",
-  },
-  'fleet.css .settings-back:active': {
-    under: ['var(--bg-page)'],
-    why: 'the pressed state of the same chevron, same ground. Registered separately for the reason the .mail-chip[data-on] entry states: it overrides `color` directly, and grounding only the base rule would leave the state a tap confirms unmeasured',
-  },
+  // `.settings-back` and `.settings-back:active` RETIRED from this registry
+  // when the five back chevrons became @ccrc/ui's `BackButton`. This entry had
+  // been the only one of the five that was measured — its own `why:` named the
+  // others as "grandfathered debt" the frozen census would admit no new
+  // identity for. The replacement is better than the entry: the pair it
+  // grounded, --ink-secondary on --bg-page, is now a TOKEN PAIR in
+  // design/contrast-check.mjs, which measures it in all twelve palettes for
+  // every one of the five rather than for one of them. Worst 6.55 in
+  // solarized-light.
   'fleet.css .settings-title': {
     under: ['var(--bg-page)'],
-    why: "the screen's own <h1> beside the chevron, on the same unpainted .settings-head, so the same --bg-page ground and the same reason as .settings-back",
+    why: "the screen's own <h1> beside the chevron, on the same unpainted .settings-head, so the same --bg-page ground. The chevron itself is `BackButton` now and its ink/ground pair moved to contrast-check.mjs's token contract; this <h1> is still a rule, so it is still grounded here",
   },
   'fleet.css .settings-door': {
     under: ['var(--bg-page)'],

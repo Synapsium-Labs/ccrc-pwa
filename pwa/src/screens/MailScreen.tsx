@@ -18,7 +18,7 @@ import { eventRunId, recordKey, reviveNotifyEvents } from '../lib/feed';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { ack, acksSnapshot, FEED_ACK_KEY, isUnseenAt, subscribeAcks } from '../lib/seen';
-import { useNow } from '@ccrc/ui';
+import { BackButton, useNow } from '@ccrc/ui';
 import { formatAge } from '../fleet/formatReset';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -179,9 +179,9 @@ export function MailScreen({
   return (
     <div className="mail-screen">
       <header className="mail-head">
-        <button type="button" className="mail-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
+        <BackButton className="mail-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
           ‹
-        </button>
+        </BackButton>
         <h1 className="mail-title">Mail</h1>
       </header>
 

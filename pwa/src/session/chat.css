@@ -28,22 +28,6 @@
   border-bottom: 1px solid var(--edge-subtle);
   background: var(--bg-surface);
 }
-.chat-back {
-  flex: none;
-  min-width: var(--tap-min);
-  min-height: var(--tap-min);
-  border: none;
-  background: none;
-  border-radius: var(--r-sm);
-  font: var(--weight-regular) 26px / 1 var(--family-ui);
-  color: var(--ink-secondary);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
-}
-.chat-back:active {
-  transform: scale(0.88);
-  color: var(--ink-primary);
-}
 .chat-title-wrap {
   flex: 1;
   min-width: 0;
@@ -1621,7 +1605,9 @@ button.metachip:active {
   }
   .send-btn,
   .inputbar,
-  .chat-back,
+  /* `.chat-back` left this list when the five back chevrons became @ccrc/ui's
+     `BackButton`, which carries `motion-reduce:transition-none` itself — and
+     carries it for all five, where this rule only ever covered one of them. */
   .jump-latest,
   .draft-cancel,
   .dlg-later,
