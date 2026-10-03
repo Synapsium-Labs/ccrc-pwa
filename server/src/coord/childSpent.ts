@@ -170,7 +170,7 @@ const LIVE_PHASE: Readonly<Record<PrPhase, 'spent' | 'unspent' | 'unmeasured'>> 
  * alone, and is REQUIRED here anyway so no caller can reach rung 3 without it.
  *
  * COST, measured rather than assumed: steps 1–2 are file reads; step 3 is one
- * gh call on the fleet box, bounded by `pr-state`'s 20 s remote budget, and it
+ * gh call on the fleet box, bounded by `pr-state`'s 25 s remote budget, and it
  * runs only for a CHILD with no PR on record — never for a workspace with no
  * marker (`childBindGate` returns before calling this).
  */
@@ -238,7 +238,7 @@ export async function childSpent(
  * branch's PR), a whole-repo failure, a failed ccd call, an unparseable or
  * foreign line — answers `unmeasured`, with the reason in `detail`.
  *
- * COST: one gh call on the fleet box, bounded by `pr-state`'s 20 s remote
+ * COST: one gh call on the fleet box, bounded by `pr-state`'s 25 s remote
  * budget — for the close, inside whatever lock the close holds.
  */
 export async function childSpentLive(

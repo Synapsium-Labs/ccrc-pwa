@@ -25,7 +25,7 @@ import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
-import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
+import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
 import { reclaimChild, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
@@ -415,6 +415,28 @@ export function shapeHomeProject(raw: string): HomeProjectShape {
 }
 
 /**
+ * What `registerCoordRoutes` hands back to `buildServer` (workspace lifecycle spec §5.2): the coordination
+ * serialiser — this server's ONE `CoordMutex` — with the operator's abandon inside it, so a door registered OUTSIDE
+ * this file (the archive door's `{programme:'end'}`, in `server.ts`) runs on the same chokepoint and the same
+ * decision as `POST /api/runs/:id/abandon`, never a second spelling of either. `server.ts`'s archive route used to say
+ * why it held no mutex ("the change is to have `registerCoordRoutes` return its mutex"); this is that change.
+ *
+ * ONE METHOD, NOT TWO, on purpose: `closeRun` may only be called lexically inside `coordMutex.run(...)`
+ * (`dispatch-mutex-gate.test.ts`, D-46), so the abandon is handed to `fn` from INSIDE the hold rather than exported
+ * beside it — a caller can only reach it serialised.
+ */
+export interface CoordRoutesHandle {
+  /** Run `fn` as one coordination write — queued behind whichever write route's body is running, ahead of the next —
+   *  handed `closeRun`'s abandon arm exactly as the abandon route runs it, and `abandonRefusal` (close.ts): what that
+   *  arm would refuse for a run from its row alone, read without acting, so a caller that ends several runs can find
+   *  the one it cannot move before it ends the first. */
+  withAbandon<T>(coord: CoordStore, fn: (
+    abandon: (runId: number) => Promise<CloseOutcome>,
+    refusalOf: (runId: number) => Extract<CloseOutcome, { ok: false }> | null,
+  ) => Promise<T>): Promise<T>;
+}
+
+/**
  * The coordination routes. Registered from `buildServer` rather than declared
  * there, because `server.ts` is already the file whose whole discipline is not
  * holding a second copy of a contract, and six more routes inline would be six
@@ -480,12 +502,21 @@ export function registerCoordRoutes(
    * had ever held it in memory in the first place.
    */
   watcher?: FleetWatcher,
-): void {
+): CoordRoutesHandle {
   const notConfigured = (reply: FastifyReply) => reply.code(501).send({ ok: false, error: 'not-configured' });
 
   // One instance for this server (see `CoordMutex`'s own docstring) —
   // serialises the WRITE routes' bodies below: open, dispatch, close, advance.
   const coordMutex = new CoordMutex();
+
+  /** `closeRun`'s abandon arm exactly as `POST /api/runs/:id/abandon` runs it — `{intent:'abandon'}` built here and
+   *  never read off a body (D-280), `causedBy:'operator'`, CCR-15 wave 3's `childReclaim` port onto the session's own
+   *  queue — handed to `fn` INSIDE `coordMutex`. ONE spelling, two callers: that route, and the archive door's
+   *  `{programme:'end'}` through the handle this function returns. */
+  const withAbandon: CoordRoutesHandle['withAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId) => closeRun(
+    { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState,
+      childReclaim: childReclaimPort(deps, coord) },
+    runId, { intent: 'abandon' }, 'operator'), (runId) => abandonRefusal(coord, runId)));
 
   // The process's ONE `LedgerLog` (the parts-B handoff): the file half of the
   // allocator's MAX(file, db) recovery, held here and handed into
@@ -1373,7 +1404,7 @@ export function registerCoordRoutes(
     // handler's first awaited read of the registry and, for a child with no PR
     // on record, a live `pr-state` round trip — a cheaper refusal is never
     // kept waiting behind it. It runs inside `coordMutex`, which is the cost:
-    // at most `pr-state`'s 20 s budget, and only for a CHILD with no PR on
+    // at most `pr-state`'s 25 s budget, and only for a CHILD with no PR on
     // record — a workspace with no marker costs one registry read. The two
     // codes are spelled here, not forwarded from the verdict: `mail-routes.
     // test.ts` requires every `RunRefuseCode` to be quoted in this directory.
@@ -1588,9 +1619,7 @@ export function registerCoordRoutes(
     const id = parseCanonicalPositiveSafeInteger(idParam);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState, childReclaim: childReclaimPort(deps, coord) };
-    const outcome = await coordMutex.run(() => closeRun(closeDeps, id, { intent: 'abandon' }, 'operator'));
+    const outcome = await withAbandon(coord, (abandon) => abandon(id));
     return sendCloseOutcome(reply, outcome);
   });
 
@@ -3699,4 +3728,6 @@ export function registerCoordRoutes(
     }
     return reply.code(200).send({ ok: true, asks: read.asks });
   });
+
+  return { withAbandon };
 }

@@ -490,6 +490,10 @@ export interface FleetSession {
    * `none`. No `FLEET_PROTO` bump.
    */
   readonly child: ChildMark;
+
+  /** Where this workspace was RELEASED from, or `null` — `ReleasedFrom`, at the end of this file, carries the
+   *  contract; `releasedFromOf` there is the field's one reader. */
+  readonly releasedFrom: ReleasedFrom | null;
 }
 
 /**
@@ -1389,17 +1393,17 @@ export type BucketInput = Pick<
  * …and that sentence is also the archived rungs' PRECONDITION, not merely
  * their justification (D-74). They are entered on `archivedAt !== null` AND
  * `status === 'dead'`, because a live pane is proof the marker has outlived
- * what it describes: `cmd_ws_archive` kills the session before it stamps
- * (`ccd:5164`), but `ccd start`/`ccd ensure` clear `.stopped` and
- * `.swapblocked` on a deliberate revival and leave `$REG/<id>.archived`
- * standing — only `ws-restore` removes it (`ccd:5704`). So a workspace
- * archived on merge and later revived for more work carried a marker that
- * outranked every live rung below, for ever. MEASURED on the live fleet
- * 2026-08-17: 5 of the 7 archive markers on the box sat on sessions with a
- * live tmux pane, 4 of them mid-turn — a quarter of the fleet reading
- * `merged` while working, ranked below idle and counted out of its project's
- * busy total, and a revived workspace's QUESTION unreachable through the
- * attention section it belongs in.
+ * what it describes: `cmd_ws_archive` kills the session before it stamps,
+ * but `ccd start`/`ccd ensure` once cleared `.stopped` and `.swapblocked` on
+ * a deliberate revival and left `$REG/<id>.archived` standing; `cmd_ws_restore`
+ * clears it through `_ws_unarchive`, and since #143 so does `_spawn_start`.
+ * So a workspace archived on merge and later revived carried a marker that
+ * outranked every live rung below, for ever. MEASURED 2026-08-17, BEFORE #143:
+ * 5 of the 7 archive markers sat on sessions with a live tmux pane, 4 mid-turn.
+ * SINCE #143 (f06abdce3, 2026-09-17) `_spawn_start` calls `_ws_unarchive` on
+ * every pane ccd creates, so a live pane still carrying the marker is now a
+ * pre-#143 pane that never respawned, or one made outside ccd: rarer, but
+ * the same proof the marker outlived its pane, so this conjunct stays.
  *
  * The conjunct costs the cleanup bucket nothing: an ordinary archive is dead,
  * which is what every archived case in `bucket.test.ts` already fixtures. And
@@ -3039,6 +3043,7 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       boardProject: optStr(o, 'boardProject'),
       route: reviveRoute(o, 'route'),
       child: reviveChildMark(o, 'child'),
+      releasedFrom: reviveReleasedFrom(o, 'releasedFrom'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
@@ -4020,8 +4025,8 @@ export interface NotifyEvent {
    *  attribution row would land in `run_events` and be seen by nobody (D-1163). Additive: an
    *  older client degrades it to `unknown` through `reviveNotifyEvent`, which is the
    *  degradation this union was given `unknown` for. `update` is a move the update dispatcher
-   *  leased (wave 8 item A) — about no session and no run, recorded and never pushed. */
-  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'unknown';
+   *  leased (wave 8 item A) — about no session and no run, recorded, never pushed; `queue` is the landing lane's dequeue notice. */
+  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'queue' | 'unknown';
   sessionId: string; title: string; body: string;
   /**
    * WHICH RUN this notification is about, or `null` when it is about none.
@@ -4060,7 +4065,7 @@ export interface CatchUp { epoch: string; seq: number; resync: boolean; events: 
 /** The recognised `NotifyEvent.kind` tokens. Kept private; the door in is
  *  `isNotifyKind` below, the same split `PR_PHASES`/`isPrPhase` use and for
  *  the identical reason (that function's own docstring has the argument). */
-const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'unknown'];
+const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'unknown'];
 
 /**
  * Use THIS, never `NOTIFY_KINDS.includes(x as NotifyEvent['kind'])` — the
@@ -8735,6 +8740,64 @@ export function isTagFileRead(v: unknown): v is TagFileRead {
  *  one word. `server/src/update/resolve.ts` re-exports it, so W2's importers keep their path. */
 export const UPDATE_GATE_CAP = 'update-gate';
 
+/**
+ * `FleetSession.releasedFrom` — the run a WORKSPACE was released from (workspace lifecycle spec §5.1), which is
+ * what puts its row in its card's `Released (N)` fold. The server writes it once, in `assembleFleet`'s row
+ * literal, from the pure `releasedFrom` decision (`server/src/coord/released.ts`); nothing else computes it.
+ *
+ * Non-null only when the row is a workspace, carries no hold, is not archived, its NEWEST run as `sessionId` is
+ * terminal, no non-terminal run names it as `sessionId`, and no non-terminal run names it as `claimedBy` (a former
+ * worker that now coordinates is not released).
+ *
+ * `null` collapses THREE conditions, deliberately: not released; this server did not decide (an older peer, or a
+ * snapshot from a build predating the field); and this server could not decide (its `coord.db` read failed this
+ * tick, or the newest run carried no readable close time). A reader does the identical thing with all three —
+ * the row renders where it always did — and none may branch on which it was: that distinction is not on the
+ * wire. `boardProject` makes the same trade for the same reason.
+ *
+ * The wire word is not "released": `released` already names an `AskState` and a `ClaimState` with other
+ * meanings, so the word appears only as the fold's label.
+ *
+ *   - `runId`, `program`, `claimedBy`, `closedAt` — the newest run's own columns; `closedAt` is epoch MS.
+ *   - `programTitle` — `programs.title`, `null` only if the programme row could not be joined.
+ *   - `child` — the registry's CCR-15 child reading (`FleetSession.child`) is `child` or `unreadable`. An
+ *     unreadable marker reads as a child, the direction that defers: "Archive all" skips children, which leave
+ *     through CCR-15's own reclamation.
+ *
+ * ADDITIVE; `FLEET_PROTO` is not bumped. The LIVE `fleet` frame is CAST, not revived (`pwa/src/stores/fleet.ts`'s
+ * `asFleetMsg`), so a row from an older server has no key at all — read it ONLY through `releasedFromOf`.
+ */
+export interface ReleasedFrom {
+  readonly runId: number;
+  readonly program: string;
+  readonly programTitle: string | null;
+  readonly claimedBy: string | null;
+  readonly closedAt: number;
+  readonly child: boolean;
+}
+
+/** THE ONE READER of `FleetSession.releasedFrom`. `undefined` (a live frame from a server predating the field)
+ *  reads exactly as `null`. */
+export function releasedFromOf(s: FleetSession): ReleasedFrom | null {
+  return s.releasedFrom ?? null;
+}
+
+/** `FleetSession.releasedFrom`'s persistence contract: absent or null → `null`. A present value this build cannot
+ *  read ALSO revives as `null`, rather than rejecting the whole session the way `child` does — here the
+ *  degrade is the safe direction, since `null` leaves the row at the top level of its card, where it rendered
+ *  before this field existed. */
+function reviveReleasedFrom(o: RawObj, k: string): ReleasedFrom | null {
+  const v = o[k];
+  if (v === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const r = v as RawObj;
+  const { runId, program, programTitle, claimedBy, closedAt, child } = r;
+  if (!isPositiveDecimalSafeInteger(runId) || typeof program !== 'string') return null;
+  if (programTitle !== null && typeof programTitle !== 'string') return null;
+  if (claimedBy !== null && typeof claimedBy !== 'string') return null;
+  if (!isPositiveDecimalSafeInteger(closedAt) || typeof child !== 'boolean') return null;
+  return { runId, program, programTitle, claimedBy, closedAt, child };
+}
+
 /** What a `~/.ccrc/update.json` text says about a run IN FLIGHT (design
  *  2026-09-20 §10). Two callers ask it: the agent's `update` op, before it spawns
  *  (D-3371), and the server-role local spawn
@@ -8882,3 +8945,101 @@ export function settledDoneDetail(tag: string): string {
  *  (`stall-vocabulary.test.ts` pins the two together). It is appended at the end of this file, not beside
  *  `WAVE_DONE_SUBJECT`, because an insertion there would move README's citation anchors into this file. */
 export const REVIEW_DONE_SUBJECT = 'review-done';
+
+/**
+ * The archive door's refusal codes (workspace lifecycle spec §5.2): every `error` word `POST
+ * /api/sessions/:id/archive` refuses with, declared ONCE. The server sends them and the PWA branches on them and says
+ * each in words; neither spells one as a bare literal (`single-definition.test.ts`). Appended at the end of this file,
+ * like `REVIEW_DONE_SUBJECT` above, so no line README or a contract cites moves.
+ *
+ *   - `runOpen` — a non-terminal run names this session as its WORKER. `{force:true}` proceeds; the 409 names the runs.
+ *   - `sessionBusy` — a turn MEASURED in progress: the server's fail-closed read (`stopVerdict`) or the frame's row
+ *     (`archiveInterrupts`), or ccd after that read (a race). `{interrupt:true}` stops the session first; the turn is lost.
+ *   - `coordinatorHasOpenRuns` — this session is the CLAIMANT of a non-terminal run. `{programme:'end'}` ends the
+ *     programme first; the 409 names the runs, or carries `runs: []` when the store could not be read (fail-shut).
+ *   - `programmePartlyEnded` — `{programme:'end'}` could not end every run. Nothing was stopped or archived.
+ *   - `worktreeGone`, `statusUnknown`, `manifestUnbuildable` — the three refusals the operator cannot fix from the
+ *     phone (`ARCHIVE_STOP_ONLY`), each ccd's own `cmd_ws_archive` refusal before it touches anything. The server
+ *     issues two itself: `statusUnknown` where its fail-closed read could not measure the turn (`decideArchive`,
+ *     `refusedAtStop`; a main checkout's only source), `worktreeGone` where it PROVES the worktree absent (local mode).
+ *
+ * A refusal or failure that arrives AFTER `{programme:'end'}` closed runs carries them as `ended` beside its `error`
+ * (`archiveOutcome`, `server/src/coord/archiveDoor.ts`): what only ccd measures is measured after the end.
+ */
+export const ARCHIVE_REFUSALS = {
+  runOpen: 'run-open',
+  sessionBusy: 'session-busy',
+  coordinatorHasOpenRuns: 'coordinator-has-open-runs',
+  programmePartlyEnded: 'programme-partly-ended',
+  worktreeGone: 'worktree-gone',
+  statusUnknown: 'status-unknown',
+  manifestUnbuildable: 'manifest-unbuildable',
+} as const;
+export type ArchiveRefusal = (typeof ARCHIVE_REFUSALS)[keyof typeof ARCHIVE_REFUSALS];
+
+/** Every archive refusal code, DERIVED from `ARCHIVE_REFUSALS` — never a second list. */
+export const ARCHIVE_REFUSAL_CODES: readonly ArchiveRefusal[] = Object.values(ARCHIVE_REFUSALS);
+
+export function isArchiveRefusal(v: unknown): v is ArchiveRefusal {
+  return typeof v === 'string' && (ARCHIVE_REFUSAL_CODES as readonly string[]).includes(v);
+}
+
+/** The refusals after which the session actions sheet offers "Stop only" (spec §5.2): the ones the operator cannot
+ *  fix from the phone, so a live session is never left without a way to put it down. Exactly these three. */
+export const ARCHIVE_STOP_ONLY: readonly ArchiveRefusal[] = [
+  ARCHIVE_REFUSALS.worktreeGone, ARCHIVE_REFUSALS.statusUnknown, ARCHIVE_REFUSALS.manifestUnbuildable,
+];
+
+/** `POST /api/sessions/:id/archive`'s body (spec §5.2). Each consent is a SECOND tap, sent only after the operator read
+ *  the refusal it answers: `force` answers `run-open`, `interrupt` answers `session-busy` and `programme: 'end'`
+ *  answers `coordinator-has-open-runs`. Absent means not given. The PWA builds it (`api.archive`) and the server reads
+ *  it by these keys (`archiveFlags`), so a renamed consent is a compile error on both sides. */
+export interface ArchiveBody {
+  readonly force?: true;
+  readonly interrupt?: true;
+  readonly programme?: 'end';
+}
+
+/** The door's 2xx answer. `archived: true` — the session is put away: a workspace archived, a main checkout stopped
+ *  (it folds into Archived and is never deleted). `archived: false` arises only when the door STOPPED the session
+ *  and `ws-archive` then refused (`refusal`, or `null` for a refusal this build has no word for, with ccd's text in
+ *  `detail`): the row stays at the top level, stopped, with Archive offered again. `ended` lists the runs a
+ *  `{programme:'end'}` closed, `[]` when none was asked or none was open. */
+export interface ArchiveAnswer {
+  readonly ok: true;
+  readonly archived: boolean;
+  readonly stopped: boolean;
+  readonly ended: readonly { readonly id: number; readonly program: string; readonly wave: number; readonly waveOf: number | null }[];
+  readonly refusal?: ArchiveRefusal | null;
+  readonly detail?: string;
+}
+
+/**
+ * Whether ARCHIVING this row costs a turn in progress — spec §5.2's "busy (either kind)". ONE predicate: the door
+ * reads it off a row it assembles on the request (`assembleFleet` over that one registry row, the fleet frame's own
+ * derivation), and the PWA reads it off the row it holds to choose the confirm's words. `status` is Claude Code's own
+ * live word (`waiting` already collapsed into `busy`, an unreadable live file painted `busy`, D-115); `working` and
+ * `attention` are the bucket ladder's reading of the hook beside it. A dead row is none of these.
+ */
+export function archiveInterrupts(s: Pick<FleetSession, 'status' | 'bucket'>): boolean {
+  return s.status === 'busy' || s.bucket === 'working' || s.bucket === 'attention';
+}
+
+/**
+ * Whether a row belongs in its card's `Archived (N)` fold (workspace lifecycle spec §5.2) — the ONE predicate the
+ * board's split and the actions sheet's Restore gate both read; neither keys on `archivedAt` or `workspace` alone.
+ * An archived workspace (the `archived` BUCKET: archived and dead, never `cleanup`), or a STOPPED main checkout (no
+ * workspace, no pane, and a stop stamp). A main checkout started again leaves the fold, because `cmd_start` and
+ * `cmd_ensure` remove the stop stamp on the attempt; a stopped workspace that is not archived stays at the top level,
+ * where Archive is offered again. `stoppedBy` is read `?? null`: the live frame is cast, not revived.
+ */
+export function inArchivedFold(s: Pick<FleetSession, 'bucket' | 'workspace' | 'status' | 'stoppedBy'>): boolean {
+  return s.bucket === 'archived' || (s.workspace === null && s.status === 'dead' && (s.stoppedBy ?? null) !== null);
+}
+
+/** When a row entered the Archived fold, the fold's sort key (newest first): `bucketSince` for an archived workspace
+ *  (its archive time), the stop stamp's time for a stopped main checkout. `null` when neither is known. */
+export function archivedFoldSince(s: Pick<FleetSession, 'bucket' | 'bucketSince' | 'stoppedBy'>): number | null {
+  if (s.bucket === 'archived') return s.bucketSince;
+  return (s.stoppedBy ?? null)?.at ?? null;
+}

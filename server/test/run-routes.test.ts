@@ -3572,9 +3572,13 @@ describe('the hold reason', () => {
     const match = hook.match(/^CCRC_HOLD_MAX=(\d+)$/m);
     if (!match) throw new Error('session-hook.sh no longer assigns CCRC_HOLD_MAX as a decimal literal');
     expect(Number(match[1])).toBe(HOLD_REASON_MAX_CHARS);
+    // ONE spelling since landing-order wave 2: the card's gate and the worker
+    // merge deny both read `CCRC_HOLD_WAVE_RE`, so the grammar is pinned where
+    // it is assigned, and the card is pinned to read it.
     expect(hook).toContain(
-      '[[ "$h" =~ ^program:[A-Za-z0-9._-]+\' \'wave:[0-9]+(/[0-9]+)?(\' \'run:[0-9]+)?$ ]] || return 0',
+      "CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'",
     );
+    expect(hook).toContain('[[ "$h" =~ $CCRC_HOLD_WAVE_RE ]] || return 0');
 
     // SUBSET, NOT EQUALITY, and the asymmetry is deliberate rather than a gap.
     // The hook is a DISPLAY gate over strings already on disk — holds written by

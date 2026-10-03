@@ -774,36 +774,49 @@ describe('§1.7 — cutShort: one reader for both halves, three answers, one ado
 });
 
 describe('wave 6 — the dec flags are sent only to a ccd that says it parses them', () => {
+  // Workspace lifecycle §5.2: the one Archive sends `ws-archive` for a WORKSPACE (a main checkout is stopped instead)
+  // and measures the pane first, through the same runner — so the default session is made a workspace with a real
+  // worktree here, and only ccd's own calls are compared.
+  const asWorkspace = (home: string): void => {
+    const worktree = path.join(home, 'worktrees', 'mek');
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', `${ID}.workspace`), 'mek');
+    writeFileSync(path.join(home, '.cc-sessions', `${ID}.workdir`), worktree);
+  };
+  const ccdCalls = (calls: string[][], bin: string): string[][] => calls.filter((c) => c[0] === bin);
   // THE HEADLINE CASE. An old ccd meets `--surface pwa` inside
   // `cmd_ws_archive`'s exact-arity guard; on the paths where it does not die,
   // `runCcdOr502` renders exit 0 as `200 {ok:true}` for a call that recorded
   // nothing. Guessing wrong here costs a SILENT SUCCESS, which is why
   // `capSupported` refuses on no evidence.
   it('an OLD ccd (no actor-flags-v1) receives the bare argv, byte for byte', async () => {
-    const { app, calls, cfg } = await makeApp({ ccdVerbs: ['ws-archive', 'ws-restore', 'ws-hold', 'ws-release'] });
+    const { app, calls, cfg, home } = await makeApp({ ccdVerbs: ['ws-archive', 'ws-restore', 'ws-hold', 'ws-release'] });
+    asWorkspace(home);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID]]);
+    expect(ccdCalls(calls, cfg.ccdBin)).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID]]);
     await app.close();
   });
 
   it('NO EVIDENCE AT ALL is treated as an old ccd, never as a new one', async () => {
-    const { app, calls, cfg } = await makeApp({ ccdVerbs: null });
+    const { app, calls, cfg, home } = await makeApp({ ccdVerbs: null });
+    asWorkspace(home);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID]]);
+    expect(ccdCalls(calls, cfg.ccdBin)).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID]]);
     await app.close();
   });
 
   it('a NEW ccd receives --surface pwa and the device actor', async () => {
-    const { app, calls, cfg } = await makeApp({ ccdVerbs: ['ws-archive', 'actor-flags-v1'] });
+    const { app, calls, cfg, home } = await makeApp({ ccdVerbs: ['ws-archive', 'actor-flags-v1'] });
+    asWorkspace(home);
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive`, payload: {} });
     expect(res.statusCode).toBe(200);
     // The gate is DARK in this harness (`CCRC_AUTH` unset), so `secretNow()` is
     // SECRET_UNREAD, `sessionVerdict` refuses at the `kind !== 'ok'` arm, and
     // its `device` is null — the record says `unmeasured` rather than naming a
     // browser nobody saw.
-    expect(calls).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID,
+    expect(ccdCalls(calls, cfg.ccdBin)).toEqual([[cfg.ccdBin, 'ws-archive', '--session', ID,
                             '--surface', 'pwa', '--actor', 'unmeasured']]);
     await app.close();
   });

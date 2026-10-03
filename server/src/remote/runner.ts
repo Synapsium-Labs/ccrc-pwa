@@ -25,10 +25,20 @@ const CLIENT_TIMEOUT_SLACK_MS = 5_000;
  *  CCD_TIMEOUT_MS default is what bounds the push, and 90 s is the right budget
  *  for one, so there is nothing to override here. */
 const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
-  'pr-state': 20_000,
-  // Same reach as pr-state, and the same number: it shells out to `git
-  // ls-remote` against origin before it will rename. Without an entry it
-  // silently inherits the flat 90 s, which is nine naming lanes' worth.
+  // 25, not 20, since landing-order wave 2: `pr-state --project` makes THREE
+  // gh calls now (rows, rollups, the merge-queue read), and their timeouts are
+  // summed against this number by `pr-timeout-budget.test.ts`. The key is the
+  // VERB, so `--session` (one gh call) is bounded at 25 s too, and it is read
+  // INSIDE `coordMutex` — by `verifyDone` at close and at advance, and through
+  // `childSpent` by every child-bind check (`childBindGate` on `POST /api/runs`,
+  // dispatch's resume arm) and by the close's child gate (`childGateAtClose`,
+  // up to two reads per close) — so every other coordination write can queue
+  // behind one slow read for up to this long.
+  'pr-state': 25_000,
+  // Same reach as pr-state: it shells out to `git ls-remote` against origin
+  // before it will rename. Without an entry it silently inherits the flat
+  // 90 s, which is nine naming lanes' worth. It makes ONE network call, so it
+  // keeps the 20 s pr-state had before its third.
   'ws-rename': 20_000,
   'ws-archive': 60_000,
   'ws-restore': 60_000,
