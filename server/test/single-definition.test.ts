@@ -4260,3 +4260,21 @@ describe('one releasedFromOf (workspace lifecycle wave 1)', () => {
     expect(code(path.join(ccrcRoot, 'shared', 'api.ts'))).toMatch(/return s\.releasedFrom \?\? null;/);
   });
 });
+
+describe('worker stall watch wave 5: the largest epoch a Date holds is spelled once', () => {
+  // The turn marker's reader bounds every epoch by it (`marker-epochs-bounded` (D-3662)) and the watch's formatter
+  // refuses a value past it (`stallIso`). Two literals are two bounds that can drift apart; the reader's bound is
+  // only a guarantee for the formatter while they are the same number. Code lines only, so a sentence about it is
+  // not a second spelling.
+  const SPELLING = /\b8\.64e15\b|\b8_?640_?000_?000_?000_?000\b/;
+
+  it('CONTROL: the pattern sees both spellings of the number, and not a neighbour', () => {
+    expect(SPELLING.test('export const STALL_EPOCH_MAX = 8.64e15;')).toBe(true);
+    expect(SPELLING.test('const M = 8_640_000_000_000_000;')).toBe(true);
+    expect(SPELLING.test('const M = 8.64e14;')).toBe(false);
+  });
+
+  it('is spelled on a code line in server/src/coord/stall.ts alone', () => {
+    expect(ALL.filter((f) => SPELLING.test(stallCode(f))).map(rel).sort(), 'a second spelling').toEqual(['server/src/coord/stall.ts']);
+  });
+});

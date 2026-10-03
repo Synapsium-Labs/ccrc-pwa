@@ -1036,10 +1036,14 @@ function stallInt(n: number): string {
   return Number.isSafeInteger(n) ? String(n) : STALL_UNPRINTABLE;
 }
 
+/** The largest epoch, in ms, a JavaScript `Date` holds. ONE spelling (`single-definition.test.ts`): the turn
+ *  marker's reader bounds every epoch by it (`marker-epochs-bounded` (D-3662)), and `stallIso` refuses past it. */
+export const STALL_EPOCH_MAX = 8.64e15;
+
 /** The ONE Date use in this module, and the only shape `stall-vocabulary.test.ts` admits: formatting a measured
  *  epoch, never reading the clock. It returns null for a value `toISOString` would throw on. */
 function stallIso(ms: number): string | null {
-  return Number.isFinite(ms) && Math.abs(ms) <= 8.64e15 ? new Date(ms).toISOString() : null;
+  return Number.isFinite(ms) && Math.abs(ms) <= STALL_EPOCH_MAX ? new Date(ms).toISOString() : null;
 }
 
 /** `YYYY-MM-DDTHH:MMZ`: the time on a phone line. */
