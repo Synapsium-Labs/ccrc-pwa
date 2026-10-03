@@ -234,7 +234,10 @@ describe('measure-landing: an input it could not read is never a number', () => 
       { at: at + 3, state: 'some-future-state' },
       // A mail the coordinator WAS nudged, then parked `rejected` when its run closed
       // (`cancelOutstandingDeliveries`): the read carries no `deliveredAt`, so it is
-      // `undelivered` too — the docstring says so, and this row pins the count it names.
+      // `undelivered` too — the docstring says so. This row adds no red the `at + 2`
+      // `rejected` row above does not already give (`cmd_mail_latency` branches on
+      // `state` alone and never reads `lastError`); it guards a FUTURE split keyed on
+      // `lastError`, which only this row would red.
       { at: at + 4, state: 'rejected', lastError: 'run closed' },
       { at: Date.parse('2026-01-01T00:00:00Z'), state: 'queued' },   // outside the window: not an input of it
     ];

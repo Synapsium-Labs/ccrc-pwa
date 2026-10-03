@@ -638,9 +638,9 @@ const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child
  * sibling makes TWO sequential `pr-state` calls inside the mutex in BOTH of
  * its cases: a fast-path spent re-dated here through `childSpentLive`, and a
  * fast-path MISS, where `childSpent`'s own live rung makes the second — the
- * ordinary PR-bearing wave. Up to ~40 s against the 30 s client timeout
+ * ordinary PR-bearing wave. Up to ~50 s against the 30 s client timeout
  * `CloseRunDeps.childReclaim`'s docstring cites, each call bounded by
- * `pr-state`'s 20 s remote budget. Accepted by design; wave 4 (reusing
+ * `pr-state`'s 25 s remote budget. Accepted by design; wave 4 (reusing
  * `verifyDone`'s measurement) is where the aggregate would be addressed.
  */
 async function childGateAtClose(

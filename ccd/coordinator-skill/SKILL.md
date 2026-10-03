@@ -81,7 +81,7 @@ with a shell on the fleet host". They are not advice.
 12. A verified `wave-done` is READ by a review run, never by this session. Once `POST /api/runs/:id/advance` has moved the work run to `awaiting-review`, this session opens a run of `kind:'review'` naming it, dispatches the reviewer with `references/review-brief.md`, and ends its turn; when `review-done` arrives it closes the review run with the reviewer’s own `{reviewedTip, report}` and rules on the report the server accepted. This session does not read the diff itself, and a `stale-review` refusal means a fresh review run against the live tip, never a ruling on the old report.
 13. Every brief names the shape of the wave and the routing the matrix derives from it — class, effort, subagent class and workflow mode, and the subagent effort the worker is expected to name on its calls — read from `references/routing-matrix.md`; this session revises routing only on the evidence a wave returns, and records each change and why in the ledger before the next dispatch.
 14. The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.
-15. This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR.
+15. This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`.
 
 **Reading ccd is fine.** `ccd ls`, `ccd caps`, `ccd pr-state --session <id>` and
 `ccd ws-audit --session <id>` are read-only and answer faster than a round trip.
@@ -374,7 +374,9 @@ not after.
      marker, before wave 1's deploy, or by a dispatch that journaled
      `child-omitted` — is never refused this way; dropping its `sessionId`
      anyway is still safe and follows the same one-PR rule. The same-project
-     arm is for a producer whose workspace opened no PR.
+     arm is for a producer whose workspace opened no PR. On a native-queue
+     project the producer LANDS before it closes (clause 15;
+     `references/wave-lifecycle.md` §5, "Landing on a native-queue project").
      **Same project:** open wave N+1 first with this producer's `sessionId`, close
      the producer with `final:false` so its hold transfers to the already-open
      successor on the same workspace, then run `"$API" runs list --closed 1`,
@@ -389,7 +391,10 @@ not after.
      exact-SHA merge proof that is absent means report and do not dispatch. The
      closed row proves the fingerprint and terminal run state; it does not prove
      a required interface merged. Only then dispatch wave N+1 (step 2).
-7. **Final merge:** `POST /api/runs/:id/close` with `final:true` closes the run
+7. **Final merge:** on a native-queue project the last wave's producer LANDS
+   before this close, as every producer does (clause 15;
+   `references/wave-lifecycle.md` §5, "Landing on a native-queue project").
+   `POST /api/runs/:id/close` with `final:true` closes the run
    and, *if no other open run names this workspace*, releases the hold. What
    happens to the workspace next depends on whose it is. A **child** — one
    dispatch minted for one of your runs — is reclaimed by the server right

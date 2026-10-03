@@ -264,6 +264,12 @@ describe('modeInvariantViolation: what a trigger can never answer (ruling T2)', 
     expect(modeInvariantViolation('pull_request', 'full', 'full')).toBeNull();
   });
 
+  it('a merge_group never answers tests none either — a queue run runs what a pull request runs (operator ruling 2026-09-28)', () => {
+    expect(modeInvariantViolation('merge_group', undefined, 'none')).toMatch(/merge_group/);
+    expect(modeInvariantViolation('merge_group', undefined, 'selected')).toBeNull();
+    expect(modeInvariantViolation('merge_group', 'full', 'full')).toBeNull();
+  });
+
   it('a schedule, a refresh push and a rebuild never answer tests selected', () => {
     expect(modeInvariantViolation('schedule', undefined, 'selected')).toMatch(/schedule/);
     expect(modeInvariantViolation('push', undefined, 'selected')).toMatch(/push/);
@@ -299,6 +305,18 @@ describe('select.mjs CLI — pull_request', () => {
     expect(summary).toContain('| 4 PROBED | `server/test/b.test.ts` | `src/newfile.ts` |');
     expect(summary).toContain('| 2 ALWAYS | `server/test/c.test.ts` |');
     expect(summary).not.toContain('server/test/d.test.ts');
+  });
+
+  it('merge_group (a merge-queue run) -> the SAME selection as the pull request, matrices and all (operator ruling 2026-09-28)', () => {
+    const { repo, mapFile, baseSha } = buildMainFixture();
+    const pr = runSelect(repo, { event: 'pull_request', selection: 'enforce', mapFile });
+    const queue = runSelect(repo, { event: 'merge_group', selection: 'enforce', mapFile });
+    expect(queue.status).toBe(0);
+    expect(queue.outputs.tests).toBe('selected');
+    expect(queue.outputs.map_sha).toBe(baseSha);
+    expect(queue.outputs.count).toBe(pr.outputs.count);
+    expect(queue.outputs.server_matrix).toBe(pr.outputs.server_matrix);
+    expect(queue.summary).toContain('- event: `merge_group`');
   });
 
   it('a directory a test linked whole: a change under it selects the test, and the table names rule 6 SUBTREE', () => {

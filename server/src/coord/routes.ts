@@ -1404,7 +1404,7 @@ export function registerCoordRoutes(
     // handler's first awaited read of the registry and, for a child with no PR
     // on record, a live `pr-state` round trip — a cheaper refusal is never
     // kept waiting behind it. It runs inside `coordMutex`, which is the cost:
-    // at most `pr-state`'s 20 s budget, and only for a CHILD with no PR on
+    // at most `pr-state`'s 25 s budget, and only for a CHILD with no PR on
     // record — a workspace with no marker costs one registry read. The two
     // codes are spelled here, not forwarded from the verdict: `mail-routes.
     // test.ts` requires every `RunRefuseCode` to be quoted in this directory.
