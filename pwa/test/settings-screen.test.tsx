@@ -29,7 +29,7 @@ import {
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { ApiError, api, apiErrorText, updateErrorText } from '../src/lib/api';
-import { ToastHost } from '@ccrc/ui';
+import { DOOR, ToastHost } from '@ccrc/ui';
 import { declValue, ruleIn } from './cssRule';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -75,9 +75,13 @@ describe('SettingsScreen — tap targets and the header door', () => {
   });
 
   it('.settings-door is at least one tap tall, off the shared token', () => {
-    // The render half — a real element still carries the class — is the
-    // fleet-screen.test.tsx door case, where the door is mounted.
-    expect(declValue(ruleIn(fleetCss, '.settings-door'), 'min-height')).toBe('var(--tap-min)');
+    // The floor is @ccrc/ui's `Door` now, asserted against the EXPORTED
+    // constant rather than the source file — reading the file let a comment
+    // satisfy the identical guard written for `BackButton`, which the mutation
+    // table caught. The render half — a real element still carries the class —
+    // is the fleet-screen.test.tsx door case, where the door is mounted.
+    expect(DOOR).toContain('min-h-tap');
+    expect(DOOR).not.toContain('44px');
   });
 
   it('.settings-bell-row .bell is at least one tap square, off the shared token — the CONTROL, not just the row (F2)', () => {

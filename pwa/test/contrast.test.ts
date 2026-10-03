@@ -206,8 +206,6 @@ const GRANDFATHERED_UNCOVERED = new Set([
   'fleet.css .mail-badge',
   'fleet.css .mail-badge:active',
   'fleet.css .mail-badge[data-unread=\'true\']',
-  'fleet.css .accounts-door',
-  'fleet.css .accounts-door:active',
   'fleet.css .mail-title',
   'fleet.css .mail-note',
   'fleet.css .mail-dropped',
@@ -1883,16 +1881,23 @@ describe("the sign-in block's ink is measured, not asserted in a comment", () =>
     }
   });
 
-  it('leaves the header door in the census, because its ground is genuinely two', () => {
-    // NOT an oversight, and stated here so the next reader does not "fix" it:
-    // `.fleet-head` paints nothing, so `.accounts-door` sits on the page on a
-    // phone and on `.shell-nav`'s --bg-surface in the desktop sidebar, while an
-    // INHERITED_GROUNDS entry is a layer STACK and cannot say "either of these".
-    // Its `.mail-badge`/`.bell` neighbours are in the census for the same
-    // reason. The pair clears AA on BOTH candidate grounds (fleet.css carries
-    // the four numbers), so the census line is the whole cost.
+  it('covers the header door on BOTH its grounds, which is why it left the census', () => {
+    // THIS USED TO ASSERT THE OPPOSITE, and the reason it flipped is the point.
+    // `.fleet-head` paints nothing, so a door sat on --bg-page on a phone and
+    // on `.shell-nav`'s --bg-surface in the desktop sidebar. An
+    // INHERITED_GROUNDS entry is a layer STACK and cannot say "either of
+    // these", so `.settings-door` was registered on one ground and
+    // `.accounts-door` was left in the frozen census as debt — the census line
+    // WAS the whole cost, as the old comment here said.
+    //
+    // Both doors are @ccrc/ui's `Door` now, and the token contract has no DOM
+    // chain to choose: design/contrast-check.mjs carries all four pairs
+    // outright. So the rules are gone from both the registry and the census,
+    // and the coverage went UP — `.accounts-door`'s ground was never measured
+    // by this gate before.
     expect(INHERITED_GROUNDS['fleet.css .accounts-door']).toBeUndefined();
-    expect(report.uncovered).toContain('fleet.css .accounts-door');
+    expect(INHERITED_GROUNDS['fleet.css .settings-door']).toBeUndefined();
+    expect(report.uncovered).not.toContain('fleet.css .accounts-door');
     for (const ground of ['var(--bg-page)', 'var(--bg-surface)']) {
       for (const theme of [DARK, LIGHT]) {
         expect(ratio('var(--ink-secondary)', [ground], theme)).toBeGreaterThanOrEqual(4.5);
@@ -1949,8 +1954,6 @@ describe('the /settings shell and its door are measured, not left in the blind s
 
   it.each([
     ['fleet.css .settings-title'],
-    ['fleet.css .settings-door'],
-    ['fleet.css .settings-door:active'],
   ])('%s is registered on the page and measured in both themes', (key) => {
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-page)']);
     expect(report.uncovered).not.toContain(key);
@@ -1963,8 +1966,6 @@ describe('the /settings shell and its door are measured, not left in the blind s
   });
 
   it.each([
-    ['fleet.css .settings-door'],
-    ['fleet.css .settings-door:active'],
   ])('%s also clears AA on the desktop sidebar it sits on', (key) => {
     // Measured at d759c914 with this task's rules: --ink-secondary 8.67 dark /
     // 7.41 light, --ink-primary 15.68 / 16.58 on --bg-surface.

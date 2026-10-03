@@ -52,7 +52,7 @@
    — the settings door — to this group; the four-item, 38px figure above is
    unchanged by that addition; with `20 sessions` the group WRAPS below a 460px
    viewport (369px with no count) rather than holding everything on one line, as
-   this note assumes — see the override comment near `.settings-door` below.) */
+   this note assumes — see the head-wrap override comment below.) */
 .pool-epoch-lag {
   font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
@@ -78,7 +78,7 @@
  * the settings door — to this same group; "four other items" above still
  * names only the ones this note measured, unaffected by that addition, and a
  * fortiori closes no more of the 129px deficit — see the `.fleet-head-right`
- * wrap override near `.settings-door` for what the fifth item does instead.)
+ * head-wrap override below for what the fifth item does instead.)
  *
  * It does not get a row of its own either — that read as an orphan, a lone
  * right-aligned control on an otherwise empty band. `.fleet-runs-row` was
@@ -2255,19 +2255,12 @@ button.proj-card-pool::before {
    It has a TEXT label on purpose. Icon-only would leave it exactly as
    undiscoverable as the AccountsStrip tap target it exists to supplement,
    which is the entire defect (FleetScreen.tsx carries that story). */
-.accounts-door {
-  display: inline-flex; align-items: center; gap: 5px;
-  min-height: var(--tap-min); padding: 0 var(--sp-1);
-  border: 0; border-radius: var(--r-sm);
-  background: none; color: var(--ink-secondary);
-  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
-}
-.accounts-door:active { transform: scale(0.88); color: var(--ink-primary); }
-/* The glyph is decoration beside the word, so it is aria-hidden in the markup
-   and sized in the UI font — the label is what carries the meaning. */
-.accounts-door-glyph { font-family: var(--family-ui); font-size: var(--fs-xs); line-height: 1; }
+/* The two header doors are @ccrc/ui's `Door` (primitives/door.tsx) — they were
+   byte-identical, nine declarations plus an `:active` and a `-glyph` each, and
+   FleetScreen.tsx's own comment pointed the second at the first. Both grounds
+   the ink needs are token pairs in design/contrast-check.mjs already:
+   ink-secondary / page on a phone, ink-secondary / surface on the desktop
+   sidebar's .shell-nav. */
 
 .mail-screen { display: grid; gap: var(--sp-2); padding: var(--sp-2); }
 .mail-head { display: flex; align-items: center; gap: var(--sp-2); }
@@ -2843,28 +2836,13 @@ button.proj-card-pool::before {
   font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono);
   color: var(--ink-primary);
 }
-/* — The door to /settings, in the fleet header beside `.accounts-door` —
-   The `.accounts-door` box exactly: the 44px floor, no background, the same
-   ink as its neighbours, a TEXT label (FleetScreen.tsx says why). Its ground
-   is two — the page on a phone, `.shell-nav`'s --bg-surface in the desktop
-   sidebar — and unlike `.accounts-door` it is REGISTERED, on the page
-   (design/audit.mjs; the `.pool-epoch-lag` entry, same header, is the
-   precedent), because the frozen census admits no new identity; the sidebar
-   ground is measured off this rule's own ink in contrast.test.ts, so neither
-   ground is claimed without a number (D-3304). */
-.settings-door {
-  display: inline-flex; align-items: center; gap: 5px;
-  min-height: var(--tap-min); padding: 0 var(--sp-1);
-  border: 0; border-radius: var(--r-sm);
-  background: none; color: var(--ink-secondary);
-  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
-}
-.settings-door:active { transform: scale(0.88); color: var(--ink-primary); }
-/* The glyph is decoration beside the word — aria-hidden in the markup, sized
-   in the UI font, as `.accounts-door-glyph` is. */
-.settings-door-glyph { font-family: var(--family-ui); font-size: var(--fs-xs); line-height: 1; }
+/* The doors to /accounts and /settings are @ccrc/ui's `Door` — no rules here.
+   Their ground was always two (the page on a phone, `.shell-nav`'s
+   --bg-surface in the desktop sidebar), which is why one was REGISTERED on one
+   ground and the other sat in the frozen census as debt (D-3304). The token
+   contract carries all four pairs instead, so both are measured on both
+   grounds in all twelve palettes. */
+
 /* THE HEAD'S RIGHT GROUP WRAPS (D-3303). The width
    note above `.fleet-runs-line` is a Chromium measurement: the group's four
    steady-state items need 244px of min-content and have 294px at 390px, so

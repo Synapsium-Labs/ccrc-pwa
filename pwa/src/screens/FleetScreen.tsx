@@ -5,7 +5,7 @@
 // the NewSessionSheet.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import { BuildLine, Button, Skeleton, toast, useNow } from '@ccrc/ui';
+import { BuildLine, Button, Door, Skeleton, toast, useNow } from '@ccrc/ui';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
@@ -559,15 +559,14 @@ export function FleetScreen({
               accessible name names both halves of the screen — sign-in and
               accounts — because "Account" alone is what the strip already
               failed to communicate. */}
-          <button
-            type="button"
+          <Door
             className="accounts-door"
+            glyph="🔑"
             aria-label="Your sign-in and accounts"
             onClick={() => navigate('/accounts')}
           >
-            <span className="accounts-door-glyph" aria-hidden="true">🔑</span>
             Account
-          </button>
+          </Door>
           {/* THE DOOR TO /settings (centralised update management §13) — the
               `.accounts-door` pattern directly above, for the argument its
               comment makes: a glyph AND a short text label, because an
@@ -581,15 +580,14 @@ export function FleetScreen({
               item does not fit this group's measured width budget on a
               phone, so the group now wraps rather than overflowing
               (fleet.css, D-3303). */}
-          <button
-            type="button"
+          <Door
             className="settings-door"
+            glyph="⚙"
             aria-label="Settings — updates and notifications"
             onClick={() => navigate('/settings')}
           >
-            <span className="settings-door-glyph" aria-hidden="true">⚙</span>
             Settings
-          </button>
+          </Door>
           <MailBadge unread={unreadMail} />
           <NotificationBell />
         </div>

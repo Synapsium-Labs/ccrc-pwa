@@ -843,14 +843,20 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the screen's own <h1> beside the chevron, on the same unpainted .settings-head, so the same --bg-page ground. The chevron itself is `BackButton` now and its ink/ground pair moved to contrast-check.mjs's token contract; this <h1> is still a rule, so it is still grounded here",
   },
-  'fleet.css .settings-door': {
-    under: ['var(--bg-page)'],
-    why: "the fleet header's door to /settings, in .fleet-head-right beside .accounts-door and .pool-epoch-lag. .fleet, .fleet-head and .fleet-head-right paint nothing, so on a phone the ground is body's --bg-page — the .pool-epoch-lag entry's ground and reasoning. On the desktop sidebar it is .shell-nav's --bg-surface instead, which one layer stack cannot also say; contrast.test.ts measures this rule's own ink on that second ground in both themes, so this registration is not the whole claim",
-  },
-  'fleet.css .settings-door:active': {
-    under: ['var(--bg-page)'],
-    why: 'the pressed state of the same door, with the same two grounds and the same second measurement in contrast.test.ts; registered separately because it overrides `color` directly (the .mail-chip[data-on] reason)',
-  },
+  // `.settings-door` and `.settings-door:active` RETIRED from this registry
+  // with the two header doors, which are @ccrc/ui's `Door` now.
+  //
+  // THE PROBLEM THEY DOCUMENTED IS GONE, not moved. Their own `why:` said the
+  // door's ground is genuinely TWO — body's --bg-page on a phone, .shell-nav's
+  // --bg-surface in the desktop sidebar — and that "one layer stack cannot
+  // also say" the second, so the registration was never the whole claim and
+  // contrast.test.ts had to measure the other ground separately.
+  // design/contrast-check.mjs's token contract has no DOM chain to pick, so it
+  // simply carries all four pairs: ink-secondary and ink-primary (the pressed
+  // state), over --bg-page and --bg-surface, in all twelve palettes. That is
+  // the "either of these" an INHERITED_GROUNDS entry structurally could not
+  // express — and it covers `.accounts-door`, which the frozen census had been
+  // carrying as pre-existing debt for exactly the same reason.
   // ── centralised update management W3, Task 7: the Updates section ───────
   'fleet.css .settings-note': {
     under: ['var(--bg-page)'],

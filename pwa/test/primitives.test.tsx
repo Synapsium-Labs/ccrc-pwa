@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { BACK_BUTTON, BackButton, LimitBar, QuickConfirm, Sheet, Skeleton, StatusDot, ToastHost, toast } from '@ccrc/ui';
+import { BACK_BUTTON, BackButton, DOOR, Door, LimitBar, QuickConfirm, Sheet, Skeleton, StatusDot, ToastHost, toast } from '@ccrc/ui';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself.
 afterEach(() => {
@@ -400,5 +400,44 @@ describe('BackButton', () => {
     expect(el).toHaveAttribute('type', 'button');
     fireEvent.click(el);
     expect(onClick).toHaveBeenCalledTimes(1);
+  });
+});
+
+// — Door —
+
+describe('Door', () => {
+  // Asserted against the EXPORTED constant for the reason BackButton's block
+  // gives: reading the source file let the comment explaining a fix satisfy
+  // the assertion about the fix.
+  it('honours prefers-reduced-motion, which neither door rule did', () => {
+    // fleet.css's reduced-motion block named `.fab`, `.card`, `.notice-x`,
+    // `.acct-change`, `.acct-list .acct-row` and `.proj-row`. Neither door.
+    expect(DOOR).toContain('motion-reduce:transition-none');
+  });
+
+  it('keeps the 5px gap a literal, because the rules did', () => {
+    // 5px sits between --sp-1 (4px) and --sp-2 (8px) and neither reads right
+    // against a mono micro-label. Pinned so a later tidy-up cannot round it
+    // to a token and call that a no-op — it would be a visual change.
+    expect(DOOR).toContain('gap-[5px]');
+  });
+
+  it('paints --ink-secondary at rest and --ink-primary pressed, on the tap floor', () => {
+    expect(DOOR).toContain('text-ink-secondary');
+    expect(DOOR).toContain('active:text-ink-primary');
+    expect(DOOR).toContain('active:scale-[0.88]');
+    expect(DOOR).toContain('min-h-tap');
+  });
+
+  it('renders the glyph aria-hidden beside an accessible name', () => {
+    render(<Door className="settings-door" glyph="⚙" aria-label="Settings — updates and notifications">Settings</Door>);
+    const el = screen.getByRole('button', { name: 'Settings — updates and notifications' });
+    expect(el).toHaveClass('settings-door');
+    // The glyph carries no meaning — the label does — so it must not reach the
+    // accessibility tree. `getByRole` above already proves the name comes from
+    // aria-label rather than the glyph; this pins the attribute itself.
+    expect(el.querySelector('[aria-hidden="true"]')).toHaveTextContent('⚙');
+    // And the visible word is still there for a voice user reading the screen.
+    expect(el).toHaveTextContent('Settings');
   });
 });
