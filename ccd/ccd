@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2425a8e76703c8db3c3f2725723509e62574305d26b3cc2378a6f882478e70dd
+# ccrc:generated 1 sha256=58cfa58a87fb830e8008884f22acec88685e9d533ef62f390c5a64805750d06a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -751,33 +751,33 @@ _have_systemctl() {
 # `systemctl` on the other platform, so a harness that puts its own launchctl
 # ahead of /bin keeps full control and full observability.
 #
-# `_SVC_REAL_HOME` is resolved ONCE via tilde expansion, which reads the
-# password database rather than $HOME — that is the whole point, and it is why
-# this cannot be `[ "$HOME" = "$HOME" ]` in disguise.
-# RESOLVED LAZILY, AND ONLY ON DARWIN. Two reasons, both learned the hard
-# way: at source time this ran on every ccd invocation on both platforms
-# including Linux, where nothing reads it; and it forked `id`, which on a
-# contained PATH is a `command not found` on stderr — see `_svc_domain` above.
-#
-# `$USER`/`$LOGNAME` first because they are already in the environment;
-# `id -un` only if neither is, and silenced. The tilde expansion is what
-# actually consults the password database, which is the whole point: it
-# answers the real home even when `$HOME` has been pointed somewhere else.
+# `_SVC_REAL_HOME` comes from tilde expansion, which reads the password
+# database rather than $HOME — the whole point, and why this cannot be
+# `[ "$HOME" = "$HOME" ]` in disguise: it answers the real home even when
+# `$HOME` points elsewhere. RESOLVED LAZILY, AND ONLY ON DARWIN: at source time
+# it ran on every invocation on Linux too, forking `id`, a `command not found`
+# on a contained PATH. `$USER`/`$LOGNAME` first, `id -un` (silenced) if neither.
+# THE NAME IS CHECKED BEFORE `eval`: it is the environment's, and `eval` runs
+# any shell syntax in it (`$(…)`, a backtick, `;`) inside a protected start. Only
+# a portable login name expands — a letter or `_`, then letters, digits, `.`,
+# `_`, `-`, spelled out (a RANGE follows the locale) and never a leading digit,
+# `+` or `-` (`~0`, `~+` name the directory stack). Else: no home, exit 1.
 _SVC_REAL_HOME=""
 _svc_real_home() {
   [ -n "$_SVC_REAL_HOME" ] && { printf '%s' "$_SVC_REAL_HOME"; return 0; }
-  local u="${USER:-${LOGNAME:-}}"
+  local u="${USER:-${LOGNAME:-}}" az=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
   [ -n "$u" ] || u="$(id -un 2>/dev/null)"
-  [ -n "$u" ] && _SVC_REAL_HOME="$(eval printf '%s' "~$u" 2>/dev/null)"
+  [[ "$u" =~ ^[${az}_][${az}0123456789._-]*$ ]] || return 1
+  _SVC_REAL_HOME="$(eval printf '%s' "~$u" 2>/dev/null)"
   printf '%s' "$_SVC_REAL_HOME"
 }
 _svc_launchctl() {   # <launchctl args...>
-  local bin; bin="$(command -v launchctl 2>/dev/null)" || return 1
+  local bin rh; bin="$(command -v launchctl 2>/dev/null)" || return 1
   [ -n "$bin" ] || return 1
   # A sandbox HOME plus the SYSTEM launchctl is the combination that must not
-  # proceed. Either alone is fine: the real home is an operator's box, and a
-  # stub anywhere is a harness that asked for this call.
-  if [ "$HOME" != "$(_svc_real_home)" ] \
+  # proceed. Either alone is fine: the real home is an operator's box, and a stub
+  # is a harness that asked. A home that cannot be RESOLVED counts as a sandbox.
+  if { ! rh="$(_svc_real_home)" || [ "$HOME" != "$rh" ]; } \
      && [ "${CCRC_ALLOW_SANDBOX_LAUNCHCTL:-}" != 1 ] \
      && case "$bin" in /bin/launchctl|/usr/bin/launchctl) true ;; *) false ;; esac; then
     return 1
