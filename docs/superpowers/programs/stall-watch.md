@@ -342,7 +342,7 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     migration's slot 15 is also #215's. This session proposed the second-lander rule to run 174's coordinator (mail
     3363) and holds the dispatch for the answer. #215 was last pushed 09-30, and its worker has been at a Bash
     approval prompt since 10-02 19:38.
-- **R23 (coordinator, 2026-10-03 23:17): wave 5 dispatched under an agreed claim overlap.**
+- **R23 (coordinator, 2026-10-03 23:14): wave 5 dispatched under an agreed claim overlap.**
   - **The agreement.** Run 174's coordinator agreed (mail 3364) to the second-lander rule for claim 950:
     - both PRs land;
     - whichever merges second merges `main`, keeps both sides, renumbers its own migration to the next free
