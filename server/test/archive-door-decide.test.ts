@@ -2,7 +2,7 @@
 // refusals, the one act it takes, and how ccd's answer reaches the wire.
 import { describe, it, expect } from 'vitest';
 import {
-  archiveFlags, archiveOutcome, ccdArchiveRefusal, decideArchive, stopIsIdle, worktreeOf,
+  archiveFlags, archiveOutcome, busyReadFailsClosed, ccdArchiveRefusal, decideArchive, stopIsIdle, worktreeOf,
   type ArchiveCoordPort, type ArchiveMeasure, type StopReadings,
 } from '../src/coord/archiveDoor.js';
 import type { CloseOutcome } from '../src/coord/close.js';
@@ -296,5 +296,28 @@ describe('stopIsIdle — a stop nobody consented to interrupt, read fail-closed 
 
   it('a live pane with no frame row is busy: no row is no measurement', () => {
     expect(stopIsIdle(live({ row: 'missing' }))).toBe(false);
+  });
+});
+
+// D-3877: which read answers `busy`. The decision is here; `server.ts` obeys it when it builds `ArchiveMeasure.busy`.
+describe('busyReadFailsClosed — which read answers "busy" before any act', () => {
+  it('a main checkout is always read fail-closed: its stop refuses nothing', () => {
+    for (const flags of [NONE, { ...NONE, programmeEnd: true }, { ...NONE, interrupt: true },
+      { force: true, interrupt: true, programmeEnd: true }]) {
+      expect(busyReadFailsClosed(false, flags)).toBe(true);
+    }
+  });
+
+  it('a workspace is read fail-closed when the programme is to END and nobody consented to interrupt: the end is irreversible', () => {
+    expect(busyReadFailsClosed(true, { ...NONE, programmeEnd: true })).toBe(true);
+    expect(busyReadFailsClosed(true, { force: true, interrupt: false, programmeEnd: true })).toBe(true);
+  });
+
+  it('a workspace otherwise keeps the frame\'s own row, with ccd\'s `_ws_status` behind it at ws-archive', () => {
+    expect(busyReadFailsClosed(true, NONE)).toBe(false);
+    expect(busyReadFailsClosed(true, { ...NONE, force: true })).toBe(false);
+    expect(busyReadFailsClosed(true, { ...NONE, interrupt: true })).toBe(false);
+    // `interrupt` is the operator's consent to lose the turn: the programme end then rides it, as it does today.
+    expect(busyReadFailsClosed(true, { force: false, interrupt: true, programmeEnd: true })).toBe(false);
   });
 });

@@ -307,6 +307,7 @@ describe('the one Archive — a coordinator (L5)', () => {
   it('with `programme:"end"`, abandons every run as the operator, then archives', async () => {
     const b = await box();
     seed(b.home, COORDINATOR);
+    liveStatus(b.home, 'idle');
     const [r1, r2] = coordinates(b.coord, 2);
     const res = await post(b.app, COORDINATOR, { programme: 'end' });
     expect(res.json()).toEqual({ ok: true, archived: true, stopped: false, ended: [
@@ -318,6 +319,46 @@ describe('the one Archive — a coordinator (L5)', () => {
       expect(ev.causedBy).toBe('operator');
     }
     expect(b.ccd()).toEqual([['ws-archive', '--session', COORDINATOR]]);
+  });
+
+  // D-3877: ending a programme is irreversible, so a workspace's busy is read FAIL-CLOSED before it — by the same rule
+  // as a main checkout's stop (`stopIsIdle`). The frame's own row folds tmux `unknown` and an absent live file towards
+  // rest, and `ws-archive`'s `_ws_status` would then refuse `session-busy`/`status-unknown` AFTER the end.
+  describe('with `programme:"end"` and no `interrupt`, a workspace coordinator is read fail-closed BEFORE the end', () => {
+    const unread: Record<string, BoxCfg> = {
+      'tmux cannot be asked (`unknown`)': { tmuxUnknown: true },
+      'it has no live file': {},
+    };
+    it.each(Object.keys(unread))('%s: 409 session-busy, no run ended, no ccd verb ran', async (why) => {
+      const b = await box(unread[why]);
+      seed(b.home, COORDINATOR);
+      if (why.startsWith('tmux')) liveStatus(b.home, 'idle');
+      const [r1, r2] = coordinates(b.coord, 2);
+      const res = await post(b.app, COORDINATOR, { programme: 'end' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ ok: false, error: 'session-busy' });
+      expect([r1!, r2!].map((r) => okRun(b.coord.run(r))!.state)).toEqual(['planned', 'planned']);
+      expect(b.ccd()).toEqual([]);
+    });
+
+    it('control: the same row WITH `interrupt` is the operator\'s consent, and proceeds as it always has', async () => {
+      const b = await box({ tmuxUnknown: true });
+      seed(b.home, COORDINATOR);
+      const [r1] = coordinates(b.coord, 1);
+      const res = await post(b.app, COORDINATOR, { programme: 'end', interrupt: true });
+      expect(res.json()).toMatchObject({ ok: true, archived: true, stopped: true });
+      expect(okRun(b.coord.run(r1!))!.state).toBe('failed');
+      expect(b.ccd().map((c) => c[0])).toEqual(['stop', 'ws-archive']);
+    });
+
+    it('control: an affirmatively idle workspace still ends its programme and archives', async () => {
+      const b = await box();
+      seed(b.home, COORDINATOR);
+      liveStatus(b.home, 'idle');
+      const [r1] = coordinates(b.coord, 1);
+      expect((await post(b.app, COORDINATOR, { programme: 'end' })).json()).toMatchObject({ ok: true, archived: true });
+      expect(okRun(b.coord.run(r1!))!.state).toBe('failed');
+    });
   });
 
   it.each(['last', 'first'] as const)(
@@ -361,6 +402,7 @@ describe('the one Archive — a coordinator (L5)', () => {
   it('every refusable check runs before the programme is ended: a gone worktree ends nothing', async () => {
     const b = await box();
     seed(b.home, COORDINATOR, { worktree: false });
+    liveStatus(b.home, 'idle');
     const [r1] = coordinates(b.coord, 1);
     expect((await post(b.app, COORDINATOR, { programme: 'end' })).json()).toEqual({ ok: false, error: 'worktree-gone' });
     expect(okRun(b.coord.run(r1!))!.state).toBe('planned');
@@ -369,6 +411,7 @@ describe('the one Archive — a coordinator (L5)', () => {
   it('an unreadable store refuses fail-shut with `runs: []`, programme or not', async () => {
     const b = await box();
     seed(b.home, COORDINATOR);
+    liveStatus(b.home, 'idle');
     coordinates(b.coord, 1);
     b.coord.db.prepare(
       'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -383,6 +426,7 @@ describe('the one Archive — a coordinator (L5)', () => {
   it('a store that THROWS is a store this box cannot read: the same fail-shut 409s, never a 500', async () => {
     const b = await box();
     seed(b.home, COORDINATOR);
+    liveStatus(b.home, 'idle');
     b.coord.db.close();
     const plain = await post(b.app, COORDINATOR);
     expect(plain.statusCode).toBe(409);
@@ -400,6 +444,7 @@ describe('the one Archive — a coordinator (L5)', () => {
     const queue = new KeyedQueue();
     const b = await box({}, { queue, notifyLog });
     seed(b.home, COORDINATOR);
+    liveStatus(b.home, 'idle');
     seed(b.home, 'demo-child');
     const [r1] = coordinates(b.coord, 1);
     b.coord.markDispatched(r1!, 'demo-child', 'demo-child', 'ws/child', false);
@@ -425,6 +470,7 @@ describe('the one Archive — remote mode, where this box cannot read a worktree
     const b = await box({ worktreeUnreadable: true, ccd: { 'ws-archive': { code: 1,
       stderr: `ccd: worktree is gone: /w — cannot describe it for the archive record; see: ccd ws-attic --session ${COORDINATOR}\n` } } });
     seed(b.home, COORDINATOR, { worktree: false });
+    liveStatus(b.home, 'idle');
     const [r1] = coordinates(b.coord, 1);
     const res = await post(b.app, COORDINATOR, { programme: 'end' });
     expect(res.statusCode).toBe(409);

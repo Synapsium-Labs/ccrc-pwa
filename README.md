@@ -2145,7 +2145,8 @@ is lost; a main checkout is stopped and folds into Archived, and is never delete
 only **End programme and archive** or **Cancel**, since pausing a programme is the coordinator pause switch.
 `POST /api/sessions/:id/archive` runs every check it can make before anything it cannot undo: a turn in progress
 (`409 session-busy` unless `{interrupt:true}`; a main checkout's, whose stop refuses nothing, is read fail-closed —
-tmux unreachable or no readable live file is busy — and read again at the stop), a worktree it can prove gone, a run
+tmux unreachable or no readable live file is busy — and read again at the stop; a workspace's too when the programme
+is to end without `interrupt`, because the end cannot be undone), a worktree it can prove gone, a run
 naming the workspace as its worker (`409 run-open` unless `{force:true}`), a run it coordinates
 (`409 coordinator-has-open-runs`, naming them, unless `{programme:'end'}`), a store it cannot read (refused,
 fail-shut), and a run the abandon cannot move (one already `closing`: `409 programme-partly-ended`, nothing ended).

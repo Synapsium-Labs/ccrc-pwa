@@ -116,6 +116,23 @@ export function stopIsIdle(r: StopReadings): boolean {
   return r.row !== 'missing' && !archiveInterrupts(r.row);
 }
 
+/**
+ * Which read answers `ArchiveMeasure.busy` — a DECISION, so it is made here and `server.ts` obeys it (D-3877). A
+ * `true` is the fail-closed read, `stopIsIdle` over `StopReadings`; a `false` is the fleet frame's own row
+ * (`archiveInterrupts`), with ccd's `_ws_status` behind it at `ws-archive`.
+ *
+ * - A main checkout: always fail-closed. Its stop refuses nothing, so this read is the only guard it has.
+ * - A workspace that is to END its programme, with nobody having consented to `interrupt`: fail-closed too. The end is
+ *   the one act that cannot be undone, and the frame's row folds what it could not measure towards rest — tmux
+ *   `unknown`, an unread pid, an absent live file — so reading it here would end the programme and THEN have
+ *   `ws-archive`'s fail-closed status refuse `session-busy`/`status-unknown`. `interrupt` is the consent to lose the turn,
+ *   so with it the read has nothing left to refuse.
+ * - Any other workspace archive: the frame's row, as before; nothing irreversible runs ahead of ccd's own read.
+ */
+export function busyReadFailsClosed(workspace: boolean, flags: ArchiveFlags): boolean {
+  return !workspace || (flags.programmeEnd && !flags.interrupt);
+}
+
 /** A worktree's measured presence (D-114: absent and unreadable are two facts, and only the first is "gone"). A
  *  stat the agent refused as outside its read roots arrives as `unreadable` (`remote/io.ts`), so it is `unmeasured`. */
 export function worktreeOf(s: MeasuredStat): ArchiveMeasure['worktree'] {

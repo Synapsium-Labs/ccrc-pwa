@@ -85,7 +85,7 @@ import {
 } from '../../shared/api.js';
 import { archiveInterrupts } from '../../shared/api.js';
 import {
-  archiveFlags, archiveOutcome, busyAtStop, decideArchive, stopIsIdle, worktreeOf, type ArchiveMeasure,
+  archiveFlags, archiveOutcome, busyAtStop, busyReadFailsClosed, decideArchive, stopIsIdle, worktreeOf, type ArchiveMeasure,
   type LiveFileReading, type StopRowReading,
 } from './coord/archiveDoor.js';
 import { readLiveStateMeasured } from './livestate.js';
@@ -3201,7 +3201,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * refuses inside `ws-archive`, before ITS act; `archiveOutcome` carries `ended` on that answer. This handler
    * measures, hands the measurements over, and does what the decision says, in its order: end the programme (inside
    * the decision), stop (`{interrupt}`, or a main checkout), archive (a workspace). A main checkout's busy is read
-   * fail-closed (`idleForStop`), and a stop nobody consented to interrupt re-reads it at the act: `cmd_stop` refuses
+   * fail-closed (`idleForStop`) — and so is a workspace's, when the programme is to end unconsented
+   * (`busyReadFailsClosed`, D-3877) — and a stop nobody consented to interrupt re-reads it at the act: `cmd_stop` refuses
    * nothing, so that read is the only guard between a turn begun during the claim reads, the mutex wait or the
    * programme end and its loss.
    *
@@ -3237,10 +3238,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const archiveArgv = rec.workspace === null ? null : CCD_ARGV.wsArchive(id, pwaDec(req));
     const measure: ArchiveMeasure = {
       workspace: rec.workspace !== null,
-      // A main checkout: the fail-closed read, its stop's only guard (`idleForStop`). A workspace: the frame's own row,
-      // with `ws-archive`'s fail-closed `_ws_status` behind it. No row would be no measurement, read as busy —
+      // WHICH read is `busyReadFailsClosed`'s to say (D-3877): the fail-closed `idleForStop` for a main checkout (its
+      // stop's only guard) and for a workspace whose programme is about to END unconsented; otherwise the frame's own
+      // row, with `ws-archive`'s fail-closed `_ws_status` behind it. No row would be no measurement, read as busy —
       // unreachable by construction (`assembleFleet` maps its records 1:1), kept rather than pinned.
-      busy: rec.workspace === null
+      busy: busyReadFailsClosed(rec.workspace !== null, flags)
         ? !(await idleForStop(rec, identity.uuid))
         : await liveRowFor(rec, identity.uuid).then((live) => live === null || archiveInterrupts(live)),
       // In remote mode this stat is outside the agent's read roots and answers `unmeasured`, which proceeds — ccd's
