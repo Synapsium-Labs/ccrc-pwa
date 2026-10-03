@@ -281,6 +281,11 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   registered from `server/src/update/routes.ts`, a file neither `SESSION_ONLY` nor the kickoff literal can see, so
   `box-token-census.test.ts` reads it as a lane source of its own and keeps their names in a hand-kept
   `UPDATE_DOORS`, checked against that file in both directions.
+  `POST /api/sessions/:id/archive` joins that class when its body carries `programme:'end'` (workspace lifecycle
+  wave 2): it then ends the coordinator's open runs through the abandon door's own decision, on the coordination
+  serialiser, and consults no box token — session-gated when the auth gate is armed, like the abandon door. It is
+  registered in `server.ts` for the kickoff route's reason, so `box-token-census.test.ts` names it beside that
+  route's literal.
   Don't assume — read the guards.
 - **The dispatch cap counts ACTIVE runs** (`ACTIVE_RUN_STATES` in `shared/api.ts`: `dispatched`, `working`,
   `unknown`) — a run at `awaiting-review`/`merging`/`closing`/`planned` holds no slot, and `advance -> working`

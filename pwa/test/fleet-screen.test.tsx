@@ -2167,6 +2167,23 @@ describe('a chip never names rows that are not on the screen', () => {
     expect(screen.queryByRole('button', { name: /archived \(2\)/i })).not.toBeInTheDocument();
   });
 
+  it('a STOPPED main checkout sits behind the Archived fold while the Dead chip still counts it (workspace lifecycle §5.2)', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [plain(), session({
+      id: 'claude-P', project: 'P', workspace: null, status: 'dead', bucket: 'dead',
+      stoppedBy: { at: 1785300000_000, surface: 'pwa' },
+    })] });
+    const deadChip = screen.getByText('Dead').closest('.bucket-head') as HTMLElement;
+    expect(deadChip.querySelector('.bucket-head-count')).toHaveTextContent('1');
+    const archivedChip = screen.getByText('Archived').closest('.bucket-head') as HTMLElement;
+    expect(archivedChip.querySelector('.bucket-head-count')).toHaveTextContent('1');
+    // The fold holds both — the archived workspace and the stopped main checkout.
+    expect(screen.getByRole('button', { name: /^archived \(2\)$/i })).toBeInTheDocument();
+    // …and the footer stays the WORKSPACE archive list (`archivedAt`): a main checkout has none, so it counts one.
+    expect(screen.getByRole('button', { name: /^archived on disk · 1 · /i })).toBeInTheDocument();
+  });
+
   it('does not put a third, larger count under the same noun', () => {
     // The footer covers the DISK set — everything with an archivedAt, merged
     // ones included, which is what makes its byte figure honest — so it is
@@ -2797,7 +2814,7 @@ describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', ()
   it('opens on its own key, confirms once, archives each non-child row with its id alone, and reports in one toast', async () => {
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
     const archive = vi.spyOn(api, 'archive')
-      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(null)
       .mockRejectedValueOnce(new Error('busy: a turn is in progress'));
     const store = makeStore();
     render(<><FleetScreen store={store} /><ToastHost /></>);
@@ -2829,7 +2846,7 @@ describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', ()
   it('archives a PLACED row from the card it renders on', async () => {
     // The in-flight guard itself is pinned by archive-all-guard.test.tsx: here the real sheet unmounts after the first click.
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
-    const archive = vi.spyOn(api, 'archive').mockResolvedValue(undefined);
+    const archive = vi.spyOn(api, 'archive').mockResolvedValue(null);
     const store = makeStore();
     render(<><FleetScreen store={store} /><ToastHost /></>);
     seed(store, {
@@ -2861,6 +2878,7 @@ describe('Archive all in the Released fold (workspace lifecycle spec §5.1)', ()
           session({ id: 'a-two', project: 'alpha', workspace: 'two', bucket: 'working', releasedFrom: rel(200) }),
         ] });
       }
+      return null;
     });
     render(<><FleetScreen store={store} /><ToastHost /></>);
     seed(store, {

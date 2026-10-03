@@ -10,6 +10,9 @@ const jsonResponse = (status: number, body: unknown): Response =>
     headers: { 'content-type': 'application/json' },
   });
 
+import { ARCHIVE_REFUSAL_TEXT } from '../src/lib/api';
+import { ARCHIVE_REFUSAL_CODES } from '../../shared/api';
+
 const asError = (status: number, body: unknown): unknown => {
   try { throw new ApiError(status, body); } catch (e) { return e; }
 };
@@ -212,6 +215,32 @@ describe('PR lifecycle (Task 13)', () => {
     const a = createApi(async (u, init) => { calls.push([String(u), init]); return new Response('', { status: 200 }); });
     await a.archive('demo-x', { force: false });
     expect(calls[0]![1]).toEqual({ method: 'POST' });
+  });
+
+  // Workspace lifecycle §5.2: the two other consents, on `force`'s rule — sent only when given, each alone.
+  it.each([
+    [{ interrupt: true }, { interrupt: true }],
+    [{ programme: 'end' as const }, { programme: 'end' }],
+    [{ force: true, interrupt: true, programme: 'end' as const }, { force: true, interrupt: true, programme: 'end' }],
+  ])('archive(id, %j) posts exactly %j', async (opts, body) => {
+    const calls: [string, RequestInit | undefined][] = [];
+    const a = createApi(async (u, init) => { calls.push([String(u), init]); return new Response('', { status: 200 }); });
+    await a.archive('demo-x', opts);
+    expect(JSON.parse(calls[0]![1]!.body as string)).toEqual(body);
+  });
+
+  it('archive(id, {interrupt:false}) is the plain call — a consent that says no is no consent', async () => {
+    const calls: [string, RequestInit | undefined][] = [];
+    const a = createApi(async (u, init) => { calls.push([String(u), init]); return new Response('', { status: 200 }); });
+    await a.archive('demo-x', { force: false, interrupt: false });
+    expect(calls[0]![1]).toEqual({ method: 'POST' });
+  });
+
+  it('archive resolves to the door\'s answer, and to null when a 2xx carried nothing readable', async () => {
+    const answer = { ok: true, archived: false, stopped: true, ended: [], refusal: 'status-unknown', detail: 'ccd: status-unknown' };
+    expect(await createApi(vi.fn().mockResolvedValue(jsonResponse(200, answer)) as unknown as typeof fetch)
+      .archive('demo-x', { interrupt: true })).toEqual(answer);
+    expect(await createApi((async () => new Response('', { status: 200 })) as typeof fetch).archive('demo-x')).toBeNull();
   });
 
   it('restore POSTs to /api/sessions/:id/restore with no body', async () => {
@@ -762,6 +791,13 @@ describe('apiErrorText and the code translators that compose with it', () => {
     const sentence = apiErrorText(asError(501, { ok: false, error: 'not-configured' }));
     expect(sentence).toMatch(/does not run coordination/i);
     expect(kickoffErrorText(sentence)).toBe(sentence);
+  });
+
+  it('says every archive refusal in words — never a bare slug (workspace lifecycle §5.2)', () => {
+    for (const code of ARCHIVE_REFUSAL_CODES) {
+      expect(ARCHIVE_REFUSAL_TEXT[code], code).toMatch(/\w+ \w+/);
+      expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(ARCHIVE_REFUSAL_TEXT[code]);
+    }
   });
 
   it('does not shadow any code the SEND translator owns either', () => {
