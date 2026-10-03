@@ -3372,30 +3372,34 @@ fi
 # each substitution with its own quotes, parentheses, `${…}` and heredocs —
 # and is replaced by its substitutions alone, each stripped the same way:
 # `X="$(date)"` reads `X=$(date)`, and "docs; gh pr merge 42 is how" reads as
-# nothing. A heredoc (its delimiter bare, backslashed or quoted, blanks
-# allowed when quoted) keeps its `<<` line and loses its body up to its
-# terminator line: the WHOLE line at the top level (`<<-`: tab-indented), and
-# inside a quoted `$(…)` a line that may go on with `)`, as bash ends one
-# there. An unquoted delimiter's body keeps its substitutions, and the rest of
-# the `<<` line is stripped too. `$((…))`, `((…))` and `$[…]` (to two nested
-# parentheses, on one line) are kept as written — never dropped, so a `$(…)`
-# inside them still reaches the match — and a shift's `<<` in them opens no
-# heredoc. FAIL CLOSED: what the strip cannot COMPLETE keeps its RAW text, so
-# a merge after it is still matched — a "…" span, a `$'…'` or a `$(…)` that
-# never closes keeps its own text; and a heredoc opener the strip SEES (not
-# `<<<`, not in quotes or arithmetic) but cannot complete keeps EVERYTHING
-# from the opener to the end raw, so no quote is ever parsed through a body it
-# did not remove. A heredoc is incomplete when its exact terminator line never
-# comes, when its `<<` line holds another `<<`, or once stripped still holds a
-# quote or a backtick, or when its body holds a line that begins `EOF)` (bash
-# would read the body to the end, or end it at `EOF)` inside a `$(…)` the
-# strip does not parse at the top level). The cost is a deny bash would not
-# need: such a text that holds a merge at a command head is refused. So a
-# commit message, a PR body, a grep pattern, a terminated heredoc or a comment
-# that MENTIONS `gh pr merge` passes, and no apostrophe in a comment, a
-# heredoc body or a "…" span, and no escaped quote, opens a span that swallows
-# a live merge after it — wherever the strip can parse the span, which the
-# list below bounds.
+# nothing. A heredoc (its delimiter a bare word, a backslash and a word, or
+# one quoted word, blanks allowed when quoted) keeps its `<<` line and loses
+# its body up to its terminator line: the WHOLE line at the top level (`<<-`:
+# tab-indented), and inside a quoted `$(…)` a line that may go on with `)`, as
+# bash ends one there. An unquoted delimiter's body keeps its substitutions,
+# and the rest of the `<<` line is stripped too. `$((…))`, `((…))` and `$[…]`
+# (to two nested parentheses, on one line) are kept as written — never
+# dropped, so a `$(…)` inside them still reaches the match — and a shift's
+# `<<` in them opens no heredoc. FAIL CLOSED: what the strip cannot COMPLETE
+# keeps its RAW text, so a merge after it is still matched — a "…" span, a
+# `$'…'` or a `$(…)` that never closes keeps its own text; and a heredoc
+# opener the strip SEES (not `<<<`, not in quotes or arithmetic) but cannot
+# complete keeps EVERYTHING from the opener to the end raw, so no quote is
+# ever parsed through a body it did not remove. A heredoc is incomplete when
+# its exact terminator line never comes, when its `<<` line holds another
+# `<<`, or once stripped still holds a quote or a backtick, or when its body
+# holds a line that begins `EOF)` (bash would read the body to the end, or end
+# it at `EOF)` inside a `$(…)` the strip does not parse at the top level). The
+# cost is a deny bash would not need: such a text that holds a merge at a
+# command head is refused. Three spellings that passed before this rule now
+# deny: `x=$(cat <<'EOF'…EOF)` whose body has a line that begins `gh pr
+# merge`, a heredoc whose terminator line carries a trailing blank, and a
+# heredoc with a body line that begins `EOF)`. The standard commit and PR-body
+# form, `EOF` and `)` on separate lines, still passes. So a commit message, a
+# PR body, a grep pattern, a terminated heredoc or a comment that MENTIONS `gh
+# pr merge` passes, and no apostrophe in a comment, a heredoc body or a "…"
+# span, and no escaped quote, opens a span that swallows a live merge after it
+# — wherever the strip can parse the span, which the list below bounds.
 # WHAT PASSES UNPARSED, said rather than hidden. The deny is contract-grade
 # (spec §4), so these are listed, not closed (review 241 F8 measured each):
 # `bash -c "…"`; a quoted or escaped command word (`"gh" pr merge`) and
@@ -3413,17 +3417,25 @@ fi
 # mis-reads a span it can close — a "…" span is then read as unquoted text, so
 # an apostrophe in it can open a span that hides a merge after it: a `case`
 # pattern's bare `)` inside a "…" span's `$(…)`; a "…" span nesting `$("…")`
-# more than six deep (the regex engine's call-depth bound). A terminated
-# heredoc BODY line that begins `gh pr merge` is text and passes, unless an
-# unquoted body runs it inside `$(…)`. The hook is a contract the fleet
-# honours, not an access boundary (spec §4), and identity on this box is
-# attribution. A session with neither — a coordinator's own, the operator's —
-# is never asked, so the coordinator's `gh pr merge <n> --match-head-commit
-# <sha>` enqueues. A coordinator whose workspace DOES carry one is refused
-# like a worker: a self-claimed run's hold (`POST /api/runs` admits a claimant
-# that is its own session), or a reclaim heir that was the programme's own
-# worker (hold and marker both). The hook cannot tell it from a worker; the
-# lifecycle reference sends that coordinator to the operator's shell.
+# more than six deep (the regex engine's call-depth bound). And heredocs the
+# strip reads as complete though bash does not, so a merge after them can run:
+# a delimiter quoted in part or carrying a suffix (`<<E"O"F`, `<<"EOF"x`),
+# when a line equal to the strip's shorter word (`E`, `EOF`) follows the
+# merge; a `<<` line that goes on past its newline without a quote, through a
+# trailing `\` or an open `$(`; a heredoc inside `$(…)` that bash 5.2 ends at
+# a line that starts with the word and holds a `)` later (`EOF )`,
+# `EOF<tab>)`, `EOFx)`), when an exact `EOF` follows the merge; and a heredoc
+# inside backticks, likewise. A terminated heredoc BODY line that begins `gh
+# pr merge` is text and passes, unless an unquoted body runs it inside `$(…)`.
+# The hook is a contract the fleet honours, not an access boundary (spec §4),
+# and identity on this box is attribution. A session with neither — a
+# coordinator's own, the operator's — is never asked, so the coordinator's `gh
+# pr merge <n> --match-head-commit <sha>` enqueues. A coordinator whose
+# workspace DOES carry one is refused like a worker: a self-claimed run's hold
+# (`POST /api/runs` admits a claimant that is its own session), or a reclaim
+# heir that was the programme's own worker (hold and marker both). The hook
+# cannot tell it from a worker; the lifecycle reference sends that coordinator
+# to the operator's shell.
 # The strip's jq is Oniguruma regex throughout (lookaround, atomic groups,
 # subexpression calls, backreferences), so a jq built without Oniguruma —
 # or any jq error — yields an empty mcmd and the deny FAILS OPEN (#224 keeps
