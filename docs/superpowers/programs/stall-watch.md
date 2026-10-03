@@ -20,6 +20,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 (merges after #227) | **review clean** — run 221 accepted, review run 224 clean (4 Minor, ruled R11); PR awaits the operator's merge |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | — | **dispatched** 2026-10-02 as run 226; **awaiting review**: #232 at `571268cdc`. Clauses 16/17 per R14 and R15; the wave-done (20:16) was re-measured and accepted. **accepted, merging**. Review run 239 (dispatched 22:39 after a `cap-daily` wait, R16) found 4 Minor and no blocker (R17). The run waits at `merging` for the operator's squash-merge of #232 |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | planned and reviewed; dispatches after #227 and #228 merge |
+| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | — | planning (R18); dispatches after waves 3–5 land |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -29,10 +30,10 @@ the two plans' own "Deviations found" sections and their PRs. Run-tracked waves 
 | marker | arms | state | gate |
 |---|---|---|---|
 | `stall-watch-live` | wave 1's r1 (a check mailed to the worker; never pushed) | not armed | recommended now — the shadow review found every false r1 harmless, and run 237's 15 h silence (2026-10-03) is a fourth true stall r1 would have caught |
-| `stall-watch-escalate` | r2 (coordinator report), r3 and every operator push, including the limit, dialog and coordinator-ball caps | not armed | after waves 3 and 4 land, a live period with r1 armed, and a repeat of the shadow review on live data |
-| `mail-gate-busy-shadow` | the busy gate logs only | not armed | any time |
+| `stall-watch-escalate` | r2 (coordinator report), r3 and every operator push, including the limit, dialog and coordinator-ball caps | not armed | after #228 is deployed and wave 6 re-keys the dialog cap, and only while w2-live is off or `mail-gate-busy` is armed (R18). r2/r3 were true on run 237, and the dialog cap is 2/2 true |
+| `mail-gate-busy-shadow` | the busy gate logs only | not armed | **recommended now** (R18). Its log is the evidence for `mail-gate-busy`, which removes the mail-stuck/coord-deaf false class at its cause |
 | `mail-gate-busy` | busy delivery | not armed | after busy-shadow evidence; C7 (the spinner row on a busy+done pane) is still unobserved |
-| `stall-watch-w2-live` | every wave-2 arm's sends | not armed | after 48 h of wave-2 shadow (from 2026-10-01 ~12:30) and a review of it |
+| `stall-watch-w2-live` | every wave-2 arm's sends | not armed | the 48 h review is done (R18). It is NOT ready as one marker. orphan-d is 2/2 true, but mail-stuck (0/4) and coord-deaf (0/1) misreport busy-gate deafness, and w2-live also switches the quiet ladder to the marker clock, which was never measured in shadow. It arms after wave 6 and a busy-shadow period |
 
 ## The shadow review (2026-10-02)
 
@@ -65,6 +66,42 @@ independent reader, then cross-checked by another. The cross-check upheld every 
 - **What arming would have saved.** Armed, r1 would have mailed the worker about 13 hours before the hand discovery,
   and the escalation arms would have followed within two more hours.
 - **Verdict:** a true positive for the quiet arm, and a measured cost of leaving `stall-watch-live` unarmed.
+
+**The wave-2 review (2026-10-03, 48 h of wave-2 shadow, R18).** It covered every stall row and run-less journal line
+since the first review: 8 episodes and 13 fires. One Opus classifier read each episode, from coord.db, the server
+journal, the registry and transcripts (all read-only). An Opus cross-checker re-measured every fire and corrected two.
+Output: `w2-shadow-review.json` in the coordinator notes.
+- **orphan-d: 2/2 true.**
+  - A run-less session orphaned by an OOM restart that nothing woke for 45 h. Its two later lines restate the same
+    key after server restarts.
+  - Run 238's worker, silent 8 h after a restart. The quiet arm could not see it (the alias defect below).
+- **mail-stuck: 0/4 and coord-deaf: 0/1, all harmless.** Each was mail held by the default `shell` gate while the
+  recipient's main loop idled over a background subagent or workflow that was making progress. Not a lane fault. One
+  coord-deaf was this coordinator, waiting on its own workflow.
+- **dialog-cap: 2/2 true.**
+  - Run 174's worker is at a Bash approval prompt.
+  - Run 67's worker has been at one since 01:15 today, still standing.
+  
+  Only a human can clear these. Their coordinators were told (mails 3313, 3314).
+- **quiet (run 237): r1, r2, r3 all true.**
+- **Defects found, for wave 6:**
+  - **G1, a false negative of high severity.** A fix-round send-back addressed to the alias `toId:'worker'` is invisible
+    to `stallFacts`: it counts only mail from or to the worker's session id. So after a wave-done the ball stays with
+    the coordinator for the whole fix round, and the quiet arm never fires. That is how run 238 went 8 h without an
+    r1. Measured: 22 such mails from 3 coordinators since 09-25. #228 does not change it.
+  - **G2, a false class.** mail-stuck and coord-deaf fire on mail the gate holds behind a progressing subagent.
+    - mail-stuck falls back to the marker's `stopAt` under live `busy`.
+    - coord-deaf counts an undelivered delivery as unacked.
+    - The push text names a fault that is not there.
+    - Its cause goes with `mail-gate-busy`, and a hold in the arms prevents a misreport until then.
+  - **G3, a false negative.** The dialog cap is keyed once per mail episode, not per dialog, so a second dialog in one
+    episode is never reported: run 174's second prompt, 16.5 h and counting. Its push also prints the episode's age,
+    not the dialog's.
+  - **G4, low.** Run-less latches live in memory, so a server restart repeats a notice: the shadow line in shadow, and
+    a pending run-less operator push when live. The server restarted 4 times on 10-02 for auto-updates. The shadow
+    line also omits its key.
+- **Unverified, not clean:** frozen, dead, failed, marker-unreadable and orphan-e (no fires in 48 h). The marker-clock
+  quiet ladder that w2-live switches on was never computed in shadow.
 
 ## Decisions & deviations
 
@@ -211,6 +248,15 @@ independent reader, then cross-checked by another. The cross-check upheld every 
   (run 238) and workspace-lifecycle wave 2 (run 236). A conflict before the merge then has a live worker, through
   `merging → working` and a `fix-round` (worker clause 16's third trigger). After a merge proof the run closes
   `final:true`, with wave 5's run opened first.
+- **R18 (coordinator, 2026-10-03 12:15): the wave-2 review sets the arming order and adds a wave 6.** The order:
+  1. `stall-watch-live` now. Its one r1 in the window was true.
+  2. `mail-gate-busy-shadow` now.
+  3. Wave 6 fixes G1–G4. It is planned now and dispatched after waves 3–5 land, because it edits the same `stall.ts`.
+  4. `mail-gate-busy` after its shadow log is reviewed.
+  5. `stall-watch-escalate` and `stall-watch-w2-live` after wave 6 is live, with a live review between them.
+  
+  The programme becomes six waves. The review is the shadow review that spec §5 asks for before w2-live, so its fixes
+  are in scope (the precedent is wave 3, from the first review).
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
