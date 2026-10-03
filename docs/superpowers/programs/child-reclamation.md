@@ -43,6 +43,10 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-03 16:40 — items 4–6 committed; `main` moved again.** `swift-hollow` merged `fe7b9775` (`3a4b88070`) and
+  committed items 4 to 6 locally (`ec18654fb`, `6d5a736e3`, `65da6cafe`). Then #235 (session-continuity wave 2) merged
+  as `db44b136` and added 458 lines to `ccd/ccd` (mail 3344). Mail 3346 asks for one more merge of `origin/main`
+  before the wave-done, with the stamp, the S6-R11 census and the citation re-measure re-run.
 - **2026-10-03 15:35 — integration items 1–3 done locally; one ruling.** `swift-hollow` reported by mail 3335,
   with nothing pushed. The second merge of `fe7b9775`, items 4–6 and mail 3329's additions are still to come. Its
   resolutions:
