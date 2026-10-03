@@ -18,9 +18,9 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
-| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | awaiting re-review (fix round 2 at `7e3b30bc`; review run 249 dispatched 2026-10-03 17:51) |
+| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
-| 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | — | — | to plan |
+| 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror; FIRST, wave 2's residue and Task 7's preconditions | ccd, deploy | — | — | to plan; run 250 open (planned), block 3906–3915 |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
@@ -347,6 +347,30 @@ carries it (spec §5.1, amended 2026-09-24).
     is still a spare.
   - **Review run 249** was dispatched at 17:51 to `ccrc-pwa-quiet-harbor`, under the stopping line: rulings and
     regressions, plus ordinary commands that must still pass. Any new bypass is classified, not hunted.
+- **2026-10-03 18:30 — review 249 ruled; wave 2 MERGED as #234 (`0087a045`)**, squash, at the reviewed head
+  `7e3b30bc` (report `~/.cc-clips/ccrc-pwa-quiet-harbor/review-249-7e3b30bc.md`; 24 agents, no lens unverified).
+  - **No bypass and no regression:**
+    - review 241's and 247's shapes deny through the real hook;
+    - 41 of 41 deny shapes deny;
+    - both earlier tips' merge-deny tests pass on the tip's hook;
+    - 24 of 24 ordinary commands pass, including a coordinator's landing without a hold;
+    - the merge of main changed only ccd/ccd's stamp.
+  - **Four findings, carried as residue** (stopping line):
+    - F1: the bounded-time case's unclosed-`$(` payload cannot red its guard, and H40's retirement reason is false.
+      With a terminator line, a mutation takes the hook from 69 ms to 3896 ms. A timeout fails the deny open.
+    - F2: only `;`, `&` and `)` of the operator terminators are pinned; `|<>` are not.
+    - F3: the "four answers" count is unpinned.
+    - F4: stale diff and row counts.
+  - **CI:** every required Linux check is green. `full-suite` is red only because it needs `test-macos`, and this
+    PR touches `.github/`, so it ran the full mode. The macOS legs gate nothing (2026-09-28), and a pull request's
+    `full-suite` is never stable-gate evidence.
+  - **The boundary:**
+    - the next run, 250 (wave 3), opened first (planned; block 3906–3915, written bare);
+    - run 238 closed `final` (`released:true`, `childReclaim:queued`).
+  - **Overlap notices** (mails 3355 and 3356): #232 lands second on the clause 15/16 line and keeps both sides;
+    #215 lands second on ccd/ccd and the coordinator files.
+  - **Deploy:** through ccrc's updater. Fleet-first was measured safe (review 241). The deny is live on the fleet
+    box at its update, and refuses only a held or child session.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -389,9 +413,22 @@ carries it (spec §5.1, amended 2026-09-24).
 
 ## Next-wave brief
 
-Waves 1 and 2 are planned and reviewed; once the docs PR has merged, dispatch wave 1 on a fresh workspace with its
-plan path and this file. Wave 2 needs wave 1's clause 15 to append its native-queue sentence to, and is dispatched
-once wave 1 has merged; its dispatching coordinator re-measures Tasks 2–5 on the `main` it cuts the workspace from
-(the plan's status block). After wave 2
-merges, the operator applies the ruleset and approval change and runs the proof (spec §5.2 steps 2–3); wave 2b is
-planned and dispatched only on that proof's result.
+Waves 1 and 2 are merged (#231 `10f32755`, #234 `0087a045`).
+
+**Task 7 (the operator's: the queue ruleset, approvals at 0, the proof run) WAITS.** It starts only once these
+preconditions are on `main`:
+- the deny's listed classes in its runbook (done, in #234);
+- a payload cap on what the deny inspects;
+- a quote-dense timing pin;
+- review 249's F1, a live H40 row whose payload has a terminator.
+Until then, nothing in #234 changes how a PR lands.
+
+The next run is 250, wave 3 (planned; deviation numbers 3906 to 3915, written bare).
+- **Its FIRST commit carries wave 2's residue and Task 7's preconditions:**
+  - review 249 F1–F4;
+  - the payload cap and the quote-dense timing pin;
+  - the review-241 carries: closed-unmerged reads `unmeasured`, the doctor check for jq's lookaround, and the
+    `--squash` span.
+- **Then stage 3:** `ccd-land-probe`, the read-only conflict radar.
+- If the operator would rather run Task 7 sooner, those preconditions can be a small wave of their own.
+- **Wave 2b** (deny `--admin` and `gh api` merges fleet-wide) is planned only on Task 7's proof result.
