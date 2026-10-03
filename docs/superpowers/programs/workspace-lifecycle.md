@@ -19,8 +19,8 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
-| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | awaiting re-review (fix round 3 at `53f31389`; review run 244 dispatched 2026-10-03 13:10) |
-| 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
+| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
+| 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | — | to plan; run 245 open (planned), block 3886–3895 |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
 ## Decisions & deviations
@@ -345,6 +345,26 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - The new rows X14–X16 are red.
   - **Review run 244** is dispatched to `ccrc-pwa-still-canyon` at 13:10. It asks whether the unmeasured rule is now
     whole on every path, and whether `stopVerdict` agrees with ccd's `_ws_status` arm for arm.
+- **2026-10-03 13:31 — review 244 ruled; wave 2 MERGED as #233 (`fe7b9775`)**, squash, at the reviewed head
+  `53f31389`, with every required check green (report `~/.cc-clips/ccrc-pwa-still-canyon/review-244-53f31389.md`;
+  24 agents, no lens unverified; 3 minor findings).
+  - **The panel's verdict.** The unmeasured rule is whole on every path, apart from the windows inherent to reading
+    before the mutex. `stopVerdict` matches ccd's `_ws_status` arm for arm and in order. There is no regression.
+  - **Accepted after four review rounds.** The three findings left are carried to wave 3's first commit as residue,
+    as landing-order did with its wave 1:
+    - F1: the status-word check reads the parsed value, not ccd's raw grep, so a spaced or non-string `status`
+      diverges. All 40 live files observed are compact, and no writer is seen to produce another shape.
+    - F2: reading the config dir first also refuses a main checkout's gone pane under an unrostered wrapper. It fails
+      closed, and "Stop only" remains.
+    - F3: a present-but-malformed live file is a second stricter arm the spec does not list.
+  - **The boundary:**
+    - wave 3's run 245 opened first (planned; block 3886–3895);
+    - run 236 closed `final` (`released:true`, `childReclaim:queued`).
+  - **Overlap notices** (mails 3325–3328):
+    - run 238 merges main before its wave-done (routes.ts, close.ts, store.ts and shared/api.ts, measured clean);
+    - run 237 merges main before its README edits;
+    - stall-watch's #232 and child-reclamation's #215 are now second landers on README/CLAUDE.md and store.ts.
+  - **Deploy:** server + PWA, measure-only. It rides ccrc's own updater; nobody moves boxes by hand.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -381,22 +401,24 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 ## Next-wave brief
 
-Wave 1 is merged (#229, `a7b9831c`). After its deploy converges, run the instrument on the server box from the
-installed tree, `python3 deploy/measure-workspace-lifecycle.py`. Record here:
-- `released_top_level`: target 0, baseline 29 of 56 on 2026-09-24;
-- `released_wire_only`: target 0;
-- the archive→return rows, which wave 3 waits on.
+Waves 1 and 2 are merged (#229 `a7b9831c`, #233 `fe7b9775`). Wave 1's measurement on the server box is recorded
+above: `released_top_level` 0 and `released_wire_only` 0, and the archive→return delay does not hold stage 3. After
+wave 2's deploy converges, check that `/health` reports the merge's tag and that doctor shows 0 FAIL lines.
 
-Wave 2 is dispatched (run 236, `docs/superpowers/plans/2026-10-01-workspace-lifecycle-wave2-one-archive.md`,
-13 tasks).
-- **Task 12** waits for landing-order #231 to merge. The worker mails when Tasks 1–11 are done; mail it back when
-  #231 lands.
-- **Its review** is the held-out panel. Hold it to the four-part order and to the door's irreversible-act safety:
-  the programme end, and the stop before a refused archive.
-- **The operator's questions** (the plan's three):
-  1. Whether the PR sheet's "Archive now" opens ArchiveSheet in a follow-up.
-  2. Whether the remote-mode worktree check stays deferred to `ccd` for good.
-  3. Whether the L5 confirm's "Its workers will be cleaned up" stands until wave 3.
-
-Wave 3 (`ws-expire`, AGENT-FIRST) is to plan. It needs child-reclamation waves 3–4 merged and deployed, and the
-archive→return delay measured. Its plan carries the three instrument items listed under Carried constraints.
+Wave 3 (`ws-expire`, AGENT-FIRST) is open as run 245 (planned), with deviation numbers 3886 to 3895, written bare.
+- **It is to plan.** It needs child-reclamation waves 3–4 merged and deployed. Wave 4 is #215, still open.
+- **Its plan's FIRST commit is wave 2's residue** from review 244 (`~/.cc-clips/ccrc-pwa-still-canyon/review-244-53f31389.md`):
+  - F1: `stopVerdict` reads `status` only when it is a string, and its docstring and the 3881 entry name the
+    parsed-value limit (a non-compact file diverges from ccd's grep);
+  - F2: 3881 states the main-checkout consequence of reading the config dir first, with a pin;
+  - F3: the present-but-malformed live file is named as a stricter arm in the spec, in 3881 and in the docstring.
+- **It also takes up**, or rules out, the follow-ups listed under Carried constraints:
+  - the three instrument items;
+  - the 409 detail;
+  - `already archived`;
+  - the 404 fold;
+  - fold disjointness.
+- **The operator's questions** from wave 2's plan stay open:
+  1. whether the PR sheet's "Archive now" opens ArchiveSheet;
+  2. whether the remote-mode worktree check stays deferred to `ccd`;
+  3. whether L5's "Its workers will be cleaned up" stands until wave 3.
