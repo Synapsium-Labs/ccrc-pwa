@@ -182,7 +182,10 @@ The wire field is named for what it carries: `released` is already a member of `
 - "Stop only" survives in exactly one place: the actions sheet offers it after an archive REFUSAL the operator
   cannot fix from the phone (worktree gone, status unreadable, manifest not buildable, a coordination store the
   server cannot read, a programme it cannot end, or a fleet box whose `ccd` has no `ws-archive`), so no live
-  session is ever left without a way to put it down.
+  session is ever left without a way to put it down. That holds while tmux can be asked. Under a substrate fault
+  (tmux unreachable) the button is disabled, with the fault's title, as "Restart session" already is, because a stop
+  POSTed at a pane nobody can measure during an outage is a stop on a guess (3870). The gate lifts with the fault, so
+  an outage defers the way to put the session down and never removes it.
 - `ccd stop` and `POST /api/sessions/:id/stop` are unchanged.
 - The confirm reads by case:
   - An idle workspace: "Archive this workspace? It goes offline and folds into Archived. Restore brings it back."
@@ -200,9 +203,11 @@ The wire field is named for what it carries: `released` is already a member of `
   both kinds of row; the gate is never keyed on `archivedAt` or `workspace` alone. For a workspace, Restore calls
   `POST /api/sessions/:id/restore` (`ws-restore`). For a main checkout it calls `POST /api/sessions/:id/ensure`:
   `cmd_ensure` clears the stop stamp on the attempt, and the row's own registry fields (wrapper, `rc`, project)
-  decide the respawn, exactly as Revive does today. A merged-and-archived workspace (the `cleanup` bucket) stays
-  in the live list its chip counts and offers Restore too, as it does today; the session header's menu offers
-  Restore in Archive's place on the same rows.
+  decide the respawn, exactly as Revive does today. For a main checkout that is the same `/ensure` that "Restart
+  session" calls, so it is disabled with the fault's title under a substrate fault, in the actions sheet (3868) and in
+  the session header's menu (3869) alike. A workspace's Restore (`ws-restore`) is not that path and is not gated. A
+  merged-and-archived workspace (the `cleanup` bucket) stays in the live list its chip counts and offers Restore too,
+  as it does today; the session header's menu offers Restore in Archive's place on the same rows.
 
 **The server's one door.** `POST /api/sessions/:id/archive` (`server.ts`) takes
 `{ force?, interrupt?, programme?: 'end' }`. EVERY check that can refuse runs before ANY act that cannot be

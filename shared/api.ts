@@ -1394,16 +1394,16 @@ export type BucketInput = Pick<
  * their justification (D-74). They are entered on `archivedAt !== null` AND
  * `status === 'dead'`, because a live pane is proof the marker has outlived
  * what it describes: `cmd_ws_archive` kills the session before it stamps
- * (`ccd:5164`), but `ccd start`/`ccd ensure` clear `.stopped` and
- * `.swapblocked` on a deliberate revival and leave `$REG/<id>.archived`
+ * (`ccd:5164`), but `ccd start`/`ccd ensure` once cleared `.stopped` and
+ * `.swapblocked` on a deliberate revival and left `$REG/<id>.archived`
  * standing — only `ws-restore` removes it (`ccd:5704`). So a workspace
- * archived on merge and later revived for more work carried a marker that
- * outranked every live rung below, for ever. MEASURED on the live fleet
- * 2026-08-17: 5 of the 7 archive markers on the box sat on sessions with a
- * live tmux pane, 4 of them mid-turn — a quarter of the fleet reading
- * `merged` while working, ranked below idle and counted out of its project's
- * busy total, and a revived workspace's QUESTION unreachable through the
- * attention section it belongs in.
+ * archived on merge and later revived carried a marker that outranked
+ * every live rung below, for ever. MEASURED 2026-08-17, BEFORE #143: 5 of
+ * the 7 archive markers sat on sessions with a live tmux pane, 4 mid-turn.
+ * SINCE #143 (f06abdce3, 2026-09-17) `_spawn_start` calls `_ws_unarchive` on
+ * every pane ccd creates, so a live pane still carrying the marker is now a
+ * pre-#143 pane that never respawned, or one made outside ccd: rarer, but
+ * the same proof the marker outlived its pane, so this conjunct stays.
  *
  * The conjunct costs the cleanup bucket nothing: an ordinary archive is dead,
  * which is what every archived case in `bucket.test.ts` already fixtures. And
