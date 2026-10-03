@@ -43,6 +43,38 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-03 23:15 — item 3d is reverted: the re-walk-first order deleted a live child. The 15:35 ruling is
+  withdrawn.** `swift-hollow` stopped before push (mail 3366). Its own integration review's Opus SAFETY lens
+  measured end to end, in a scratch copy, that 3d's order deletes a live child (C1, critical):
+  - **The row.** A crafted `.workdir` row `$HOME/L1/../L2/s/../../worktrees/demo/quiet-basin`, with a plantable
+    landscape of symlinks and a decoy directory. Its pane's logical `cd` lands exactly in the child.
+  - **What 3d did with it.** The resolver answered `complete` at `$HOME/d/worktrees/demo/quiet-basin`, outside the
+    child. `_ws_reclaim_workdir_shared` ignored the row, evaluation minted a token, and `ws-reclaim` removed the
+    child tree.
+  - **Every merge parent refused it.** `abb3f6940`, `cf9e4cc8` and `db44b136` all answer `unmeasured` for the same
+    spelling.
+  - **Mechanism.** Re-walking the prefix before the rest's `..` is checked lets a rest `..` pop above the re-walk's
+    landing, into a physical path the decoy makes exist.
+
+  This falsifies the claim the 15:35 ruling accepted ("refuses none that BASE resolved"). That claim was taken from
+  the worker's report without an adversarial measurement of the new order. **Ruling (mail 3367):** option A.
+  - Revert 3d's resolver lines to `main`'s order, the rest's `..` refusal first, as reviewed four times in #226.
+  - Revert `067151e64`'s member slug under 3538.
+  - Replace 3d's two cases with a regression case pinning C1's spelling at `unmeasured`, whose mutation (restoring
+    the re-walk-first line) must go red.
+  - Keep 3a, 3b and 3c.
+  - Option B, keeping 3d behind a net-`..` guard, is declined. Each reorder of this resolver has produced the next
+    measured bypass, and the only thing 3d bought was a truthful detail on a fail-shut retry.
+  - **Carried to the path-identity follow-up:** the row that logically IS the child still lands in retryable `unres`
+    with a detail that is false for it.
+  - **Also carried there:** m1, which the same lens measured. The `/proc` unplaced arm is literal-only, so a row
+    spelled through a symlink to `/proc/self/cwd` resolves against the reclaim process's own cwd, and with that cwd
+    elsewhere the verb removed the child. It predates this round in a stronger form, because `main` has no `/proc`
+    arm at all, and no ccd writer produces such a row. That is the same reasoning as review 217's F6.
+  - **m2** (a future Python's UTF-8 mode against the GB18030 fold) is noted for the Python-floor decision; nothing
+    changes now.
+
+  The ordering in mail 3357 is superseded: revert first, then merge `0087a045`, then push and send the wave-done.
 - **2026-10-03 23:11 — wave 4 is blocked again; an overlap rule agreed with stall-watch.** `swift-hollow` has not
   committed since 17:35 (`067151e64`, nothing pushed). Mails 3350 and 3357 have sat `queued` at gate `not-idle`
   since they were sent, and the stall-watch coordinator reports a Bash approval prompt (mail 3363). The operator was
@@ -99,7 +131,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     - a third nested `<lnk>/..` answers `unres`, so the reclaim reads `unmeasured` and refuses.
 
     Against the old order it resolves strictly more spellings (depths 1 and 2, the row that IS the child), and
-    refuses none the old order resolved. Accepted. It is fail-shut and holds a child rather than deleting one, the
+    refuses none the old order resolved. Accepted. **(Withdrawn 2026-10-03 23:15: C1 measured that it does.)** It is fail-shut and holds a child rather than deleting one, the
     same class of accepted cost as a gone alternate row. Like `resolvable-rest-dotdot` and
     `resolvable-dotdot-physical-fallback` before it, it joins 3538 as a member slug added by coordinator mail: that
     number's scope is fail-shut refusal semantics for unsafe path spellings. No new number. The bounded form costs
