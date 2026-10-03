@@ -43,6 +43,35 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-03 15:40 — integration items 1–3 done locally; one ruling.** `swift-hollow` reported by mail 3335,
+  with nothing pushed. The second merge of `fe7b9775`, items 4–6 and mail 3329's additions are still to come. Its
+  resolutions:
+  - **The merge.** `main`'s span from `_ws_reclaim_workdir_shared` to `_ws_reclaim_absent` was taken byte for byte,
+    plus two deliberate wave-4 additions: the `/proc` arm and the newline-safe `dirname` read.
+  - **Item 2:** the re-walk prose now names only an entered-prefix `..`, and the `printf` control is bound to the
+    child.
+  - **Item 3:** each surface now pins the printed remedy text; each ladder row case asserts its own resolver answer;
+    the rc-1 clause is pinned as printed.
+  - **Ruling, `rest-refusal-applies-once-rewalked` (item 3d's form).** A plain swap (re-walk before every rest's
+    `..` refusal) measured cubic on `lnk/../`×N: 11.2 s at N=200, and still running at 600 s on the way to N=585.
+    Any session can write a `.workdir` row and every reclaim reads every row, so one such row would stall every
+    reclaim. The committed form:
+    - the top-level call re-walks first;
+    - inside a re-walk, the rest's refusal applies first, so a spelling is re-walked at most twice;
+    - a third nested `<lnk>/..` answers `unres`, so the reclaim reads `unmeasured` and refuses.
+
+    Against the old order it resolves strictly more spellings (depths 1 and 2, the row that IS the child), and
+    refuses none the old order resolved. Accepted. It is fail-shut and holds a child rather than deleting one, the
+    same class of accepted cost as a gone alternate row. Like `resolvable-rest-dotdot` and
+    `resolvable-dotdot-physical-fallback` before it, it joins 3538 as a member slug added by coordinator mail: that
+    number's scope is fail-shut refusal semantics for unsafe path spellings. No new number. The bounded form costs
+    21 s on a 14 KB hand-written row (N=2000), against 7.7 s for the old order; the held-out review judges that cost.
+  - **Accepted as no departure:**
+    - `ladder-row-cases-assert-the-row-resolution`: an eval-level split is impossible, because every non-`complete`
+      row gets one answer by design;
+    - `verb-split-keeps-mains-alternate-row-cases`;
+    - `r28-shift-measured-five-not-three`: the 2026-10-02 entry's "three lines" was wrong; R28 moved from 477 to
+      482 and is re-anchored by content at :482–489.
 - **2026-10-03 13:34 — `main` moved and `ccd/ccrc` is free, so the integration round widens.** `origin/main` is
   now `fe7b9775`, after #230 (session continuity wave 1), #231 (landing-order wave 1) and #233 (workspace-lifecycle
   wave 2). Since `cf9e4cc8` they change `ccd/ccd` (483 lines), `ccd/ccrc` and `server/src/coord/store.ts`. #233's
