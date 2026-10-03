@@ -19,7 +19,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
-| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | awaiting review (run 236 at `3b07b2bc`; review run 240, dispatch at the 00:09:10 slot) |
+| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | awaiting review (run 236 at `3b07b2bc`; review run 240 dispatched 2026-10-03 00:10) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
@@ -256,6 +256,8 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - this session's three programmes take 00:09:10, 02:42:08 and 11:53:20;
     - stall-watch takes 10:11:41 and 11:53:42.
     Whoever won't use a slot mails the other before it ages out.
+- **2026-10-03 00:10 — review run 240 dispatched** to `ccrc-pwa-brisk-hollow`, in the 00:09:10 slot, after
+  re-measuring the tip as `3b07b2bc`. #233's required CI is green.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
