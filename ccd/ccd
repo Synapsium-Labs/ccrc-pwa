@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9b10a3e2c15f887f8b69bd2205231193c389cfae0eac446d5483070e8a74a8ac
+# ccrc:generated 1 sha256=66ee5be30944ead137a96ddf5f0e052e3fb469b88c50fa85a54fcdf3360af5a2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3134,11 +3134,11 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 176
-# invocations across 147 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 179
+# invocations across 150 non-comment lines.
 #
-# THE LAST MOVE WAS D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in
-# `_carried_in_note`); before it the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
+# THE LAST MOVE WAS the rescue wait's reads (session-continuity wave 2), the +3; before it D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`);
+# then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
 # bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
@@ -3886,16 +3886,16 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42 — by addition, NOT a fresh census of
+  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 42: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # The 43: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `carriednote`, `child`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
-  # `reaping`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
+  # `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
   # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
@@ -16529,7 +16529,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     # forced call would skip the candidate loop's rank-101 demotion by landing
     # here first. The probe clears the marker on a live answer, and `_authdead`
     # expires it once a credential file ccd can name changes (D-3524) — no spawn.
-    if [[ "$hrc" -eq 0 ]] \
+    if [[ "$hrc" -eq 0 && " ${SWAP_TARGET_SKIP:-} " != *" $home "* ]] \
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
       && ! _authdead "$home" && _avail "$home"; then
       _class_gate "$home" "$cls"; src=$?                                     # home recovered: go back — if it can serve the class
@@ -16594,7 +16594,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     pcls="$cls"; [[ "$pass" -eq 2 ]] && pcls=$(_class_below "$cls")
     unserv=0; unmeas=0
     for cand in $(_pool_for "$id"); do
-      [[ "$cand" == "$cur" ]] && continue
+      [[ "$cand" == "$cur" || " ${SWAP_TARGET_SKIP:-} " == *" $cand "* ]] && continue
       # THE FILTER LIVES HERE, AFTER `_pool_for`, AND NEVER INSIDE `_default_pool`:
       # a hand-set `$REG/<id>.pool` candidate list bypasses `_default_pool`
       # entirely (grep `ccd/ccd` for `^_pool_for()` — D-1913 replaced a line
@@ -16965,7 +16965,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # PREDICATE — `KS_WHY`/`KS_DETAIL` and `PROBE_VERDICT` are the same shape, for
   # the same reason — and because a `$( )` call site would lose a well-known
   # variable to the subshell.
-  HARD_BLOCK_VIA=""
+  HARD_BLOCK_VIA=""; HARD_BLOCK_RESET=""; HARD_BLOCK_TYPE=""; HARD_BLOCK_ROW=""
   # DEFENCE IN DEPTH, AND IT DECIDES NOTHING TODAY — measured, not assumed.
   # Both paths into this function are already below `_auto_swap_check`'s own
   # guard: its direct call, and `_tick_strand_undecidable`, whose only two call
@@ -17006,7 +17006,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # the provenance has to be stamped on the success side only: `! cmd` as a tail
   # says the same thing about the rc and gives nowhere to write the word.
   _pane_box_has_content "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)" && return 1
-  HARD_BLOCK_VIA=transcript
+  HARD_BLOCK_VIA=transcript; _hard_block_dated "$id"
   return 0
 }
 
@@ -17592,7 +17592,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # pay the registry/cache read; a positive also re-measures the draft. The
   # `_tick_strand_undecidable` block at its own call site below discloses that
   # its same-cadence call shares this cache rather than adding another scan.
-  _session_hard_blocked "$id" "$pane" && hard_blocked=1
+  _session_hard_blocked "$id" "$pane" && hard_blocked=1; _rescue_policy "$id" "$wrapper" "$pane" "$hard_blocked" || { [[ -z "$stuck" ]] && _tick_decided "$id"; return 0; }
   [[ -n "$pane" || -n "$hard_blocked" ]] || return 0
   # (The Fable-unavailable override that routed any session to gpt was removed
   #  2026-07-26 and stays removed. A lane that is not home-able re-entered the
@@ -17611,7 +17611,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # A HEALTHY PANE IS NOT STRANDED. `_strand_clear` tests `-e` first, so the
   # steady state of a healthy session writes nothing at all.
   [[ -n "$hard_blocked" ]] || _strand_clear "$id"
-  target=$(_swap_target "$id" "$wrapper" "$home" "$hard_blocked" "$hrc"); strc=$?
+  target=$(_rescue_target "$id" "$wrapper" "$home" "$hard_blocked" "$hrc"); strc=$?
   # rc 6 IS A DECISION, handled BEFORE the `-ge 2` undecidable guard (routing
   # spec §5.4): a destination chosen one rung DOWN because every lane was
   # measured-unservable at the intended class. Put after that guard it would be
@@ -17728,7 +17728,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # ceiling reaches exactly this state — which is the pre-existing silent
   # strand made loud, not a new behaviour for tagged projects only.
   if [[ -z "$target" || "$target" == "$wrapper" ]]; then
-    [[ -z "$target" && -n "$hard_blocked" ]] && _strand_mark "$id" "$wrapper" "$project"
+    [[ -z "$target" && -n "$hard_blocked" ]] && { _strand_mark "$id" "$wrapper" "$project" "$(_rescue_strand_cause "$id" "$wrapper" "$home" "$hard_blocked" "$hrc")"; _rescuewait_open "$id" "$wrapper" noroom; }
     return 0
   fi
   # A destination exists: whatever the pane says, this row is not stranded.
@@ -17785,7 +17785,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # keeps its exact shape; `via=transcript` is unchanged; `via=banner` is the
     # new word, and an operator seeing it knows the pane said so in this year's
     # wording rather than the transcript having been scanned for it.
-    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")" >> "$REG/swap.log"
+    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")$(_rescue_line_extra)" >> "$REG/swap.log"; _rescuewait_close "$id" swap
     _dispatch_swap "$id" "$target"
     return 0
   fi
@@ -20751,7 +20751,7 @@ _transcript_stalled_pair() {   # transcript-path -> 0 the newest real turn is th
   [[ "$state" -eq 2 ]]
 }
 
-_transcript_limit_banner() {   # transcript-path [stuck since-epoch] -> 0 the newest real row is a rate-limit banner (prints "<resetsAt>\t<rateLimitType>"; stuck mode's 401 prints "\t\tauthentication_failed") | 1 not | 2 unreadable | 3 stuck mode: that banner provably predates since-epoch (prints its epoch; D-3526) (D-2362, D-2456)
+_transcript_limit_banner() {   # transcript-path [stuck|dated since-epoch] -> 0 the newest real row is a rate-limit banner (prints "<resetsAt>\t<rateLimitType>"; stuck mode's 401 prints "\t\tauthentication_failed"; dated mode is stuck mode plus "\t<rowEpoch|->" after a rate-limit row's two fields) | 1 not | 2 unreadable | 3 stuck or dated mode: that banner provably predates since-epoch (prints its epoch; D-3526) (D-2362, D-2456)
   # STRUCTURAL, NOT TEXTUAL. The row Claude Code appends on a 429 carries
   # TOP-LEVEL `isApiErrorMessage:true` and `error:"rate_limit"` (measured
   # 2026-09-10: `quotaLimits:{status:"rejected",resetsAt:<epoch s>,
@@ -20789,7 +20789,7 @@ _transcript_limit_banner() {   # transcript-path [stuck since-epoch] -> 0 the ne
 import json, sys
 from datetime import datetime
 
-stuck = sys.argv[1:2] == ["stuck"]
+stuck = sys.argv[1:2] in (["stuck"], ["dated"])
 since = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
 
 
@@ -20854,7 +20854,7 @@ quota = quota if isinstance(quota, dict) else {}
 reset = quota.get("resetsAt")
 kind = quota.get("rateLimitType")
 reset = str(reset) if isinstance(reset, int) and not isinstance(reset, bool) else ""
-print(f"{reset}\t{kind if isinstance(kind, str) else chr(0)}".rstrip(chr(0)))
+print(f"{reset}\t{kind if isinstance(kind, str) else chr(0)}".rstrip(chr(0)) + (f"\t{int(stamp(found)) if stamp(found) is not None else chr(45)}" if sys.argv[1:2] == ["dated"] else ""))
 ' "$mode" "$since" 2>/dev/null
   rc=$?
   [[ "$rc" -le 1 || "$rc" -eq 3 ]] && return "$rc"
@@ -22806,6 +22806,7 @@ _limit_dated() {   # id via born -> 0 the transcript's newest real row is a bloc
   local id="$1" via="$2" born="$3" f out rc sw
   f=$(_transcript_path "$id") || return 1
   out=$(_limit_read "$id" "$f" "$born"); rc=$?
+  _hard_block_date "$rc" "$born" "$out"   # the dated row the rescue waits read (session-continuity §5.4 rule 2)
   (( rc == 0 )) && return 0
   (( rc == 3 )) || return 1
   # Condition (2): the regex goes FIRST, so the arithmetic never sees an
@@ -22818,14 +22819,14 @@ _limit_dated() {   # id via born -> 0 the transcript's newest real row is a bloc
   return 3
 }
 
-_limit_read() {   # id transcript-path born -> the stuck-mode read's rc (0|1|2|3; on 3 prints the row's epoch), cached in `$REG/<id>.tdate` on the process and the file (D-3526)
+_limit_read() {   # id transcript-path born -> the dated read's rc (0|1|2|3; on 0 prints "<row>\t<reset>\t<type>", `-` for a field it lacks; on 3 prints the row's epoch), cached in `$REG/<id>.tdate` on the process and the file (D-3526)
   # THE PANE RUNGS ASK THIS ON EVERY TICK OF A POSITIVE, for as long as a real
   # block sits stranded (the round-1 review read 24 strands in swap.log since
   # 2026-09-11: a median of 75 to 160 minutes, the longest 1852) and as long as a
   # suppressed carried-in banner stays on screen, so an uncached read put
   # D-2444's python pass back on the 5 s tick. The answer is a pure function
   # of the file and of `since`, so it is cached on exactly those:
-  # "<born> <mtime> <size> <rc> <row-epoch|-> <path>", and read again the moment
+  # "<born> <mtime> <size> <rc> <row|-> <reset|-> <type|-> <path>", and read again the moment
   # any of them changes. Every row Claude Code appends grows the file, so a fresh
   # block is never hidden by the cache — the rule the pane rungs keep, that an
   # old answer must not overrule what is on screen now. `lastswap` and `.spawn`
@@ -22834,35 +22835,60 @@ _limit_read() {   # id transcript-path born -> the stuck-mode read's rc (0|1|2|3
   # is never cached: it can be transient, and a stuck session's file does not
   # change to clear it. Born unknown, or a file stat cannot measure, reads
   # uncached — today's answer. A record for any other key, or a torn one, is
-  # read past, never trusted: the regex admits digits and the path only.
-  local id="$1" f="$2" born="$3" m s key="" rec out rc cached_key cached_rc cached_row cached_path
-  local re='^([0-9]+ [0-9]+ [0-9]+) ([013]) ([0-9]+|-) (.+)$'
+  # read past, never trusted: the regex admits digits, `-`, a window's word and the path only.
+  # THE rc-0 ANSWER CARRIES ITS ROW (session-continuity §5.4 rule 2, D-3498):
+  # the `dated` read is `stuck` plus the rate-limit row's own epoch, so the
+  # rescue waits read the row's `resetsAt`, window and epoch from the same
+  # cached answer the verdict came from — no second read on the 5 s tick. A 401
+  # answers rc 0 with `-` in all three: lost auth has no reset. A record in the
+  # shape before this one ("<key> <rc> <row|-> <path>") is re-read, never
+  # parsed: its sixth field is an absolute path, where this shape types the
+  # reset, so the regex cannot match it.
+  local id="$1" f="$2" born="$3" m s key="" rec out rc cached_key cached_rc cached_row cached_reset cached_type cached_path
+  local row reset kind rest
+  local re='^([0-9]+ [0-9]+ [0-9]+) ([013]) ([0-9]+|-) ([0-9]+|-) ([a-z_]+|-) (/.+)$'
   m=$(_plat_mtime "$f" 2>/dev/null); s=$(_plat_size "$f" 2>/dev/null)
   [[ "$born" =~ ^[0-9]+$ && "$m" =~ ^[0-9]+$ && "$s" =~ ^[0-9]+$ ]] && key="$born $m $s"
   if [[ -n "$key" ]]; then
     rec=$(_reg_get "$id" tdate)
     if [[ "$rec" =~ $re ]]; then
       cached_key="${BASH_REMATCH[1]}"; cached_rc="${BASH_REMATCH[2]}"
-      cached_row="${BASH_REMATCH[3]}"; cached_path="${BASH_REMATCH[4]}"
-      # An rc 3 has a dated row; rc 0/1 has no row. A record that mixes the
-      # two is torn, not a safe cached verdict.
+      cached_row="${BASH_REMATCH[3]}"; cached_reset="${BASH_REMATCH[4]}"
+      cached_type="${BASH_REMATCH[5]}"; cached_path="${BASH_REMATCH[6]}"
+      # An rc 3 has a dated row and nothing else; an rc 1 has none; an rc 0
+      # has whatever its row carried. A record that mixes them is torn, not
+      # a safe cached verdict.
       if [[ "$cached_key" == "$key" && "$cached_path" == "$f" ]] \
-        && { [[ "$cached_rc" == 3 && "$cached_row" =~ ^[0-9]+$ ]] \
-          || [[ "$cached_rc" =~ ^[01]$ && "$cached_row" == - ]]; }; then
+        && { [[ "$cached_rc" == 3 && "$cached_row" =~ ^[0-9]+$ && "$cached_reset$cached_type" == -- ]] \
+          || [[ "$cached_rc" == 1 && "$cached_row$cached_reset$cached_type" == --- ]] \
+          || [[ "$cached_rc" == 0 ]]; }; then
         [[ "$cached_rc" == 3 ]] && printf '%s\n' "$cached_row"
+        [[ "$cached_rc" == 0 ]] && printf '%s\t%s\t%s\n' "$cached_row" "$cached_reset" "$cached_type"
         return "$cached_rc"
       fi
     fi
   fi
-  out=$(_transcript_limit_banner "$f" stuck "$born"); rc=$?
+  out=$(_transcript_limit_banner "$f" dated "$born"); rc=$?
+  if (( rc == 0 )); then
+    # "<resetsAt>\t<rateLimitType>\t<rowEpoch|->", or a 401's "\t\tauthentication_failed":
+    # split on the literal tab, never `read` (IFS whitespace collapses an empty field),
+    # and each field typed, so a 401 dates nothing.
+    reset="${out%%$'\t'*}"; rest="${out#*$'\t'}"; kind="${rest%%$'\t'*}"; row="${rest#*$'\t'}"
+    [[ "$row" =~ ^[0-9]+$ ]] || row=-
+    [[ "$reset" =~ ^[0-9]+$ ]] || reset=-
+    [[ "$kind" =~ ^[a-z_]+$ ]] || kind=-
+  fi
   if [[ -n "$key" ]]; then
-    if (( rc == 0 || rc == 1 )); then
-      _reg_set "$id" tdate "$key $rc - $f" 2>/dev/null || true
+    if (( rc == 0 )); then
+      _reg_set "$id" tdate "$key 0 $row $reset $kind $f" 2>/dev/null || true
+    elif (( rc == 1 )); then
+      _reg_set "$id" tdate "$key 1 - - - $f" 2>/dev/null || true
     elif (( rc == 3 )) && [[ "$out" =~ ^[0-9]+$ ]]; then
-      _reg_set "$id" tdate "$key 3 $out $f" 2>/dev/null || true
+      _reg_set "$id" tdate "$key 3 $out - - $f" 2>/dev/null || true
     fi
   fi
   (( rc == 3 )) && printf '%s\n' "$out"
+  (( rc == 0 )) && printf '%s\t%s\t%s\n' "$row" "$reset" "$kind"
   return "$rc"
 }
 
@@ -22903,6 +22929,371 @@ _carried_in_note() {   # id via row-epoch born — one swap.log line per process
   _reg_set "$id" carriednote "$4" 2>/dev/null || true
   st=$(_reg_get "$id" spawn)
   echo "$(date '+%F %T') carried-in $id: via=$2 rate-limit row at $3 predates this pane's process (born $4) — not a block [wrapper=$(_reg_get "$id" wrapper)] [spawn=${st##* }]" >> "$REG/swap.log"
+}
+
+# ── THE RESCUE POLICY (session-continuity spec §5.4, rules 2–3; D-3498) ─────
+# Rule 1 of that section — a carried-in banner is not a block — shipped as
+# D-3526, above (`_limit_dated`, on the pane's own process start). What sits
+# between that verdict and the rescue arm's `_dispatch_swap` lives here,
+# below the frozen citation corpus, reached from one-line call sites above it:
+#   2. WAIT NEAR THE CURRENT ACCOUNT'S OWN FIVE-HOUR RESET (C6, C13), and
+#      record today's `stranded` path as the no-room wait.
+#   3. SPREAD, DO NOT BOUNCE, AND CHAIN-WAIT a fourth rescue inside the hour.
+# Every wait is recorded once on entry and once on exit, in
+# `$REG/<id>.rescuewait` and in swap.log — never under the word `hold`, which
+# is the workspace-reap hold (`$REG/<id>.hold`).
+#
+# THE DATED ROW. `_session_hard_blocked` clears HARD_BLOCK_RESET/TYPE/ROW on
+# every call — `cmd_supervise` runs every tick in one long-lived shell, and a
+# value this call did not set is a previous tick's — and `_hard_block_date`
+# sets them only from a rate-limit row the dated read (`_limit_read`, cached
+# on this process and file) answered rc 0 on: a pane rung through D-3526's own
+# read, the transcript rung through `_hard_block_dated`, because its 30 s
+# `tscan` cache skips the read. Four inputs date nothing, each measured:
+#   - LOST AUTH. An auth-failure pane is never read (`_pane_carried_in`), and a
+#     401 newer than the rate-limit row is the newest real row whoever wrote
+#     it: the reader answers this process's 401 (`-` in every field) or, for an
+#     earlier process's, no block row at all — never the rate-limit row under it;
+#   - AN UNPLACED PROCESS. `_pane_born` unanswered: nothing is dated, so no wait
+#     — and D-3526 already keeps the positive;
+#   - A CARRIED-IN ROW. rc 3 is never a dated row, even where D-3526 keeps it a
+#     block (no swap after it, or a process that never came up — which has no
+#     live TUI, so no armed auto-continue either);
+#   - A ROW WRITTEN AT OR AFTER ITS OWN `resetsAt` keeps no reset: that reset did
+#     not turn the account, so it reaches no wait, no `.rescuewait` and no
+#     `reset=` token — the reset is kept only where it could have turned it.
+# A WAIT OF ANY KIND opens only on a dated rate-limit row carrying a kept reset
+# and its window (`_rescuewait_open`'s gate). No such row is today's behaviour:
+# swap, or strand. `~/.cc-limits` IS NOT A FALLBACK for the reset: it cannot say
+# which window blocked, and a wait taken on the wrong window is a session
+# parked for days.
+RESCUE_WAIT_BOUND=600           # C13 — seconds before a five-hour reset inside which the rescue waits for Claude Code's armed auto-continue; 0 turns the NEAR wait off (a wait of another kind still ends in place at its reset, rule 2)
+RESCUE_WAIT_GRACE=120           # seconds after that reset a wait holds for the continuation before it ends. ITS OWN CONSTANT, not STALE_PRESS_COOLDOWN, which paces keystrokes, not waits
+RESCUE_CHAIN_WAIT=1800          # spec §5.4's 30 minutes (a knob), the longest the rescue holds a session on its account: in place after a reset turned (rule 2, until this long past that reset) and in a chain wait (rule 3, this long from its start)
+HARD_BLOCK_RESET="" HARD_BLOCK_TYPE="" HARD_BLOCK_ROW=""   # the verdict's dated row (above); declared here so a stub of `_session_hard_blocked` leaves them set under `set -u`
+RESCUE_CHAIN_COUNT=3            # rescues of ONE session inside RESCUE_CHAIN_WINDOW after which the next one chain-waits first
+RESCUE_CHAIN_WINDOW=3600        # the window those rescues are counted in; also how long an account the session left blocked is skipped, unless its logged reset passes first
+RESCUE_SPREAD_WINDOW=600        # a target that received ANY session's rescue this recently is taken only when no other placeable target exists
+RESCUE_LOG_TAIL_BYTES=1048576   # swap.log bytes rule 3 reads (1 MiB, spec §5.4 rule 3); a short read undercounts, which is today's behaviour
+RESCUE_COUNT=0 RESCUE_SKIP_LEFT="" RESCUE_SKIP_RECENT=""   # `_rescue_history`'s answers
+
+_hard_block_date() {   # rc born answer — what `_limit_read`'s answer tells HARD_BLOCK_ROW/TYPE/RESET; always rc 0
+  local row reset kind
+  # AN UNPLACED PROCESS DATES NOTHING. The reader cannot place a row without
+  # `since` either (it prints `-`), so this is the second of two locks, and
+  # the one the policy owns.
+  [[ "$2" =~ ^[0-9]+$ ]] || return 0
+  # rc 3 — a row older than this process that D-3526 keeps a block (no swap
+  # after it, or a process that never came up) — tells the rescue line its
+  # `row=` and nothing more: it keeps no reset and no window, so no wait keys on it.
+  [[ "$1" == 3 && "$3" =~ ^[0-9]+$ ]] && { HARD_BLOCK_ROW="$3"; return 0; }
+  [[ "$1" == 0 ]] || return 0               # only a block row this process wrote: rc 1 and 2 date nothing
+  IFS=$'\t' read -r row reset kind <<<"$3"  # `_limit_read` writes `-` for a missing field, so none is empty
+  [[ "$row" =~ ^[0-9]+$ ]] || return 0      # a 401, or a row whose timestamp would not parse
+  HARD_BLOCK_ROW="$row"
+  [[ "$kind" =~ ^[a-z_]+$ ]] && HARD_BLOCK_TYPE="$kind"
+  # A ROW WRITTEN AT OR AFTER ITS OWN RESET KEEPS NONE: that reset did not turn
+  # the account. Real on this fleet — a 14-day survey found `five_hour` and
+  # `seven_day` rows whose `resetsAt` was hours to days before their own
+  # timestamp. The regex goes first (D-299); `10#` keeps a leading zero base ten.
+  [[ "$reset" =~ ^[0-9]+$ ]] && (( 10#$row < 10#$reset )) && HARD_BLOCK_RESET="$reset"
+  return 0
+}
+
+_hard_block_dated() {   # id — date the transcript rung's positive: `_limit_read`'s answer for this process and file, read even when the `tscan` cache skipped it
+  local born f out
+  born=$(_pane_born "$1"); [[ "$born" =~ ^[0-9]+$ ]] || return 0
+  f=$(_transcript_path "$1") || return 0
+  out=$(_limit_read "$1" "$f" "$born"); _hard_block_date "$?" "$born" "$out"
+}
+
+_rw_field() {   # record key -> that key's value from a `.rescuewait` line ("" when absent)
+  [[ " $1 " =~ \ $2=([^ ]*)\  ]] && printf '%s' "${BASH_REMATCH[1]}"
+  return 0
+}
+
+_rescuewait_open() {   # id wrapper kind(near|chain|noroom) -> 0 recorded, or this wait already open | 1 could not record | 2 nothing dated to wait on
+  local id="$1" w="$2" kind="$3" reset="-" rec now
+  # THE GATE FOR EVERY WAIT (section header): a dated rate-limit row carrying a
+  # kept reset and its window. Lost auth, an unplaced process, a carried-in row
+  # and a row written after its own reset all fail it, and the tick does what
+  # it does today.
+  [[ "${HARD_BLOCK_RESET:-}" =~ ^[0-9]+$ && "${HARD_BLOCK_TYPE:-}" =~ ^[a-z_]+$ ]] || return 2
+  # THE RESET IT RECORDS is the five-hour reset, or `-`: `_rescue_policy` ends
+  # a wait at the reset it was taken on and at no other, and only on the
+  # account it was taken on, because two accounts can share a reset epoch.
+  [[ "$HARD_BLOCK_TYPE" == five_hour ]] && reset="$HARD_BLOCK_RESET"
+  rec=$(_reg_get "$id" rescuewait)
+  if [[ "$(_rw_field "$rec" state)" == open ]]; then
+    # THIS WAIT, CONTINUING — the same kind, account and reset — says nothing.
+    # Any other open wait ends here: in the kind that replaces it (a chain wait
+    # with no room left becomes the no-room wait), or `swap` when the session is
+    # on another account now. So the record never holds two waits, and swap.log
+    # never shows an entry without its exit.
+    [[ "$(_rw_field "$rec" kind)" == "$kind" && "$(_rw_field "$rec" wrapper)" == "$w" \
+       && "$(_rw_field "$rec" reset)" == "$reset" ]] && return 0
+    if [[ "$(_rw_field "$rec" wrapper)" == "$w" ]]; then _rescuewait_close "$id" "$kind"; else _rescuewait_close "$id" swap; fi
+  fi
+  now=$(date +%s)
+  _reg_set "$id" rescuewait "state=open kind=$kind since=$now reset=$reset wrapper=$w" || return 1
+  echo "$(date '+%F %T') rescuewait $id: kind=$kind on $w reset=$reset" >> "$REG/swap.log"
+  return 0
+}
+
+_rescuewait_close() {   # id end-word — RECORDED ONCE ON EXIT; a no-op unless a wait is open
+  local id="$1" end="$2" rec kind since reset w now
+  rec=$(_reg_get "$id" rescuewait)
+  [[ "$(_rw_field "$rec" state)" == open ]] || return 0
+  kind=$(_rw_field "$rec" kind); since=$(_rw_field "$rec" since)
+  reset=$(_rw_field "$rec" reset); w=$(_rw_field "$rec" wrapper)
+  [[ "$since" =~ ^[0-9]+$ ]] || since=0   # a torn record is never evaluated (D-299)
+  now=$(date +%s)
+  _reg_set "$id" rescuewait "state=closed kind=$kind since=$since reset=$reset wrapper=$w until=$now end=$end" || return 0
+  echo "$(date '+%F %T') rescuewait-end $id: kind=$kind on $w reset=$reset after $((now - 10#$since))s end=$end" >> "$REG/swap.log"
+}
+
+_rescue_armed() {   # pane text -> Claude Code's own auto-continue FOOTER: `_pane_auto_continue_armed`'s phrases, outside the prompt box and on a `·`-separated line
+  # A FALSE "ARMED" HERE PARKS A STALLED SESSION, where the typing sites that share the
+  # detector only decline to type. So the footer's shape, as the two pane rungs read theirs:
+  # a human's draft is not it (the footer renders BELOW the box, which `_pane_outside_box`
+  # keeps), and nor is an assistant line that says the words without the separator.
+  _pane_auto_continue_armed "$(_pane_outside_box "$1" | grep -F '·')"
+}
+
+_rescue_policy() {   # id wrapper pane hard-blocked -> 0 PROCEED as today | 1 HOLD this tick
+  # THE ONE CALL SITE is `_auto_swap_check`'s verdict line, below both
+  # cooldown gates — so every wait sits INSIDE `SWAP_COOLDOWN` and
+  # `SWAPBLOCK_COOLDOWN`, never instead of them — and above target choice.
+  # `_tick_strand_undecidable` deliberately does not call it: a tick that
+  # cannot decide has no rescue to hold.
+  #
+  # IN ORDER:
+  #   (0) not blocked: any open wait ends `clear` — which is how Claude Code's
+  #       own timer, or the stale-phase Enter (D-2360), ends a wait at the reset;
+  #   (a) a wait recorded against THIS dated five-hour reset on THIS account:
+  #       hold through the reset and its grace — a near wait from entry, any
+  #       other from the reset itself, except a STALLED no-room wait, which a
+  #       target with room ends at once, as today's strand does. Past the grace
+  #       an ARMED pane ends it `turned` and is held on this reset until
+  #       RESCUE_CHAIN_WAIT past it, then the tick is today's — and only a wait
+  #       that was open before that grace ran out, because one first taken
+  #       after it never saw the account turn: Claude Code re-sends the turn
+  #       itself, and ccd never swaps away from an account that has
+  #       just reset. A STALLED pane is rescued as today: a
+  #       near or chain wait ends `turned` and the tick proceeds, with no chain
+  #       wait on this reset; a no-room wait stays open and ends in a swap the
+  #       moment a target has room;
+  #   (b) a near reset and an ARMED auto-continue: the near wait;
+  #   (c) a fourth rescue inside RESCUE_CHAIN_WINDOW, on an Anthropic lane: the
+  #       chain wait, up to RESCUE_CHAIN_WAIT;
+  #   otherwise proceed — and `_rescue_target` applies rule 3's skip lists.
+  # WHY (b) — AND AN END IN PLACE — NEED AN ARMED AUTO-CONTINUE: mechanism 5
+  # names the cost of D-2236 as "the wait for one whose reset is minutes away"
+  # — the session Claude Code will continue by itself. A STALLED session
+  # (auto-resume off, its re-arm cap hit, a human's Esc) has nothing that
+  # re-sends its turn at the reset, and nothing here types — the redrive
+  # fallback types only on an unsubmitted resume pair, which a session waiting
+  # on a banner is not — so a wait would park it; it is rescued as today, by a
+  # swap whose `--resume` spawn re-drives the turn. ARMED is Claude Code's own
+  # footer (`_rescue_armed`), never a draft or a line of prose saying the words.
+  local id="$1" wrapper="$2" pane="$3" hb="$4" now rec state kind since rreset rend R
+  if [[ -z "$hb" ]]; then
+    _rescuewait_close "$id" clear
+    return 0
+  fi
+  now=$(date +%s); R="${HARD_BLOCK_RESET:-}"
+  rec=$(_reg_get "$id" rescuewait)
+  state=$(_rw_field "$rec" state); kind=$(_rw_field "$rec" kind); since=$(_rw_field "$rec" since)
+  rreset=$(_rw_field "$rec" reset); rend=$(_rw_field "$rec" end)
+  # A NO-ROOM WAIT WHOSE RESET A NEWER ROW PROVES DID NOT TURN THE ACCOUNT — a
+  # rate-limit row written at or after that reset whose own reset is kept
+  # nowhere (S2: the retry at the reset met a stale `resetsAt`) — ends `stale`,
+  # so §11 item 6 never counts it as a session idling past a reset.
+  if [[ "$state" == open && "$kind" == noroom && "$rreset" =~ ^[0-9]+$ && "${HARD_BLOCK_ROW:-}" =~ ^[0-9]+$ \
+        && -z "${HARD_BLOCK_RESET:-}" && -n "${HARD_BLOCK_TYPE:-}" && "$(_rw_field "$rec" wrapper)" == "$wrapper" ]] \
+     && (( 10#$HARD_BLOCK_ROW >= 10#$rreset )); then
+    _rescuewait_close "$id" stale; state=closed; rend=stale
+  fi
+  if [[ "$R" =~ ^[0-9]+$ && "${HARD_BLOCK_TYPE:-}" == five_hour ]] && _is_anthropic_backend "$wrapper"; then
+    if [[ "$rreset" == "$R" && "$(_rw_field "$rec" wrapper)" == "$wrapper" ]] \
+       && { [[ "$state" == open ]] || [[ "$state" == closed && "$rend" == turned ]]; }; then
+      if (( now >= 10#$R + RESCUE_WAIT_GRACE )); then
+        # …a wait that was open before its reset's grace ran out: one first taken
+        # after it never saw the account turn, so it is not ended `turned` here.
+        # AND ONLY UNTIL RESCUE_CHAIN_WAIT PAST THE RESET: an ARMED footer that far
+        # past its reset, with the 429 still the newest row, says Claude Code is
+        # not continuing, and `main` rescues that input at once. From then the
+        # tick is today's — a swap to a target with room, or the strand — and no
+        # second wait holds in place on this reset: one taken now is first taken
+        # past its grace.
+        if [[ "$since" =~ ^[0-9]+$ ]] && (( 10#$since < 10#$R + RESCUE_WAIT_GRACE )) \
+           && (( now < 10#$R + RESCUE_CHAIN_WAIT )) && _rescue_armed "$pane"; then
+          [[ "$state" == open ]] && { _rescuewait_close "$id" turned; _strand_clear "$id"; }
+          return 1
+        fi
+        [[ "$state" == open && "$kind" != noroom ]] && { _rescuewait_close "$id" turned; state=closed; }
+      elif [[ "$state" == open ]] && { [[ "$kind" == near ]] || (( now >= 10#$R )); } \
+           && { [[ "$kind" != noroom ]] || _rescue_armed "$pane"; }; then
+        return 1
+      fi
+    fi
+    if (( RESCUE_WAIT_BOUND > 0 && now >= 10#$R - RESCUE_WAIT_BOUND && now < 10#$R + RESCUE_WAIT_GRACE )) \
+       && _rescue_armed "$pane"; then
+      _rescuewait_open "$id" "$wrapper" near && return 1
+    fi
+  fi
+  # (c) THE CHAIN WAIT (rule 3) — for a dated rate-limit block on an Anthropic
+  # lane, and never on a five-hour reset whose grace has already run out: (a)
+  # rules on that reset for a wait that saw it (a STALLED near or chain wait
+  # ends `turned` there and is rescued, with no second chain wait), and a reset
+  # no wait saw turn is not one to wait on either. A Codex-lane hold would
+  # return before the rescue arm writes that lane's only "pool is full" signal
+  # (`$LIMITS_DIR/<wrapper>.json`), so other sessions would keep landing on the
+  # exhausted lane — the herd this rule exists to stop. Lost auth dates nothing
+  # (section header), so it never chain-waits, and an open chain wait ends on
+  # the tick its verdict stops being a dated rate-limit block: a 401 arriving
+  # mid-wait is rescued at once. The swap log is read here only with no wait
+  # open, so an open no-room wait never turns back into a chain wait, and an
+  # open chain wait runs to its own bound whatever the hour's count does — on the
+  # account it was taken on only.
+  if [[ "$R" =~ ^[0-9]+$ && "${HARD_BLOCK_TYPE:-}" =~ ^[a-z_]+$ ]] && _is_anthropic_backend "$wrapper"; then
+    if [[ "$state" == open ]]; then
+      [[ "$kind" == chain && "$since" =~ ^[0-9]+$ && "$(_rw_field "$rec" wrapper)" == "$wrapper" ]] \
+        && (( now - 10#$since < RESCUE_CHAIN_WAIT )) && return 1
+    elif ! { [[ "${HARD_BLOCK_TYPE:-}" == five_hour ]] && (( now >= 10#$R + RESCUE_WAIT_GRACE )); } \
+         && _rescue_history "$id" && (( RESCUE_COUNT >= RESCUE_CHAIN_COUNT )); then
+      _rescuewait_open "$id" "$wrapper" chain && return 1
+    fi
+  fi
+  return 0
+}
+
+_rescue_history() {   # id -> 0 measured (RESCUE_COUNT, RESCUE_SKIP_LEFT, RESCUE_SKIP_RECENT set) | 2 unmeasurable (all empty)
+  # RULE 3 READS THE SWAP LOG, which already carries every rescue with its
+  # time, source and target — the same file §9's instrument reads, so the
+  # policy and its measurement cannot disagree about what happened. Only its
+  # tail (`RESCUE_LOG_TAIL_BYTES`), and only when a decision needs it: the chain
+  # check of a blocked tick with no wait open, and the target choice of a
+  # rescue that has somewhere to go — not the ticks a strand waits through,
+  # which need neither.
+  # Its times are `date '+%F %T'`, LOCAL time, so python converts with `mktime`.
+  #   RESCUE_COUNT       this session's `auto-rescue` lines in RESCUE_CHAIN_WINDOW;
+  #   RESCUE_SKIP_LEFT   their SOURCE accounts ("an account the session just
+  #                      left blocked"), except one whose logged `reset=` passed;
+  #   RESCUE_SKIP_RECENT every session's rescue TARGET in RESCUE_SPREAD_WINDOW.
+  # UNMEASURABLE IS TODAY'S BEHAVIOUR: no chain wait, no skip. A log that does
+  # not exist yet is a MEASURED empty history (rc 0), not an unreadable one, and
+  # so is a tail with no rescue in it (`grep` rc 1).
+  local id="$1" out
+  RESCUE_COUNT=0; RESCUE_SKIP_LEFT=""; RESCUE_SKIP_RECENT=""
+  [[ -e "$REG/swap.log" ]] || return 0
+  [[ -f "$REG/swap.log" && -r "$REG/swap.log" ]] || return 2
+  command -v python3 >/dev/null 2>&1 || return 2
+  out=$(tail -c "$RESCUE_LOG_TAIL_BYTES" "$REG/swap.log" 2>/dev/null | { grep -F ' auto-rescue ' || (( $? == 1 )); } | python3 -c '
+import re, sys, time
+sid, now, chain, spread = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+pat = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) auto-rescue (\S+): (\S+) \(blocked\) -> (\S+)(.*)$")
+count, left, recent = 0, [], []
+for raw in sys.stdin.buffer:
+    m = pat.match(raw.decode("utf-8", "replace").rstrip("\n"))
+    if not m:
+        continue
+    try:
+        at = int(time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")))
+    except (ValueError, OverflowError):
+        continue
+    age = now - at
+    if age < 0:
+        continue
+    if m.group(2) == sid and age < chain:
+        count += 1
+        r = re.search(r" reset=(\d+)", m.group(5))
+        if not (r and int(r.group(1)) <= now) and m.group(3) not in left:
+            left.append(m.group(3))
+    if age < spread and m.group(4) not in recent:
+        recent.append(m.group(4))
+print(str(count) + "|" + " ".join(left) + "|" + " ".join(recent))
+' "$id" "$(date +%s)" "$RESCUE_CHAIN_WINDOW" "$RESCUE_SPREAD_WINDOW" 2>/dev/null) || return 2
+  IFS='|' read -r RESCUE_COUNT RESCUE_SKIP_LEFT RESCUE_SKIP_RECENT <<<"$out"
+  [[ "$RESCUE_COUNT" =~ ^[0-9]+$ ]] || { RESCUE_COUNT=0; RESCUE_SKIP_LEFT=""; RESCUE_SKIP_RECENT=""; return 2; }
+  return 0
+}
+
+_rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout and rc, rule 3's skip lists applied to a RESCUE
+  # NOT A RESCUE, NOWHERE TO GO, OR NOBODY CAN SAY IS `_swap_target` BYTE FOR
+  # BYTE: the affinity path's choice is not this spec's; skipping can only
+  # remove a candidate, so a strand — asked every 5 s for hours — never pays
+  # the swap-log read; and the unskipped probe's undecidable answer (rc 2-5)
+  # goes back as it came — the spread pass's never does.
+  # For a rescue with somewhere to go, SWAP_TARGET_SKIP names what the
+  # candidate walk and the home-return branch pass over: first the accounts
+  # this session just left blocked AND every target a rescue landed on inside
+  # RESCUE_SPREAD_WINDOW; if that leaves nothing, the just-left accounts alone
+  # ("prefers a target that has not received a rescue ... when another
+  # placeable target exists"). A just-left account is never taken back while
+  # it is skipped — that is "do not bounce" — so a rescue whose only room is
+  # the account it just left strands, and waits there.
+  # SPREAD IS A PREFERENCE, NEVER BOUGHT WITH A CLASS DEGRADE: the first pass's
+  # name is taken only at rc 0. Its rc 6 ("a name, chosen one rung DOWN") can
+  # mean the only same-class target with room is one the spread skipped — the
+  # walk passes a skipped candidate before `_class_gate` counts it — and the
+  # just-left-only pass below then decides, as it does for everything else.
+  # SPREAD NEVER PASSES OVER HOME: a recovered home another session was just
+  # rescued onto would only be returned to by the affinity path at the next
+  # idle tick — two moves where one does (do-not-bounce still skips a home the
+  # session just left blocked).
+  local out rc recent
+  out=$(_swap_target "$@"); rc=$?
+  if [[ -z "$4" || -z "$out" ]] || (( rc >= 2 && rc <= 5 )) || ! _rescue_history "$1" \
+     || [[ -z "$RESCUE_SKIP_LEFT$RESCUE_SKIP_RECENT" ]]; then
+    [[ -n "$out" ]] && printf '%s\n' "$out"
+    return "$rc"
+  fi
+  recent=" $RESCUE_SKIP_RECENT "; [[ -n "$3" ]] && recent="${recent// "$3" / }"   # spread never passes over HOME: the affinity path would only move it back
+  if [[ -n "${recent// /}" ]]; then
+    out=$(SWAP_TARGET_SKIP="$RESCUE_SKIP_LEFT $recent" _swap_target "$@"); rc=$?
+    [[ -n "$out" && "$rc" -eq 0 ]] && { printf '%s\n' "$out"; return 0; }
+    # …and ITS undecidable answer is never returned: the unskipped probe above
+    # already answered every question the skip cannot change (rc 2-4 are asked
+    # before the walk), so an rc 5 here means the skip removed every measured
+    # candidate and left only an unmeasured lane — the just-left-only pass decides.
+  fi
+  SWAP_TARGET_SKIP="$RESCUE_SKIP_LEFT" _swap_target "$@"
+}
+
+_rescue_strand_cause() {   # id cur home hard-blocked hrc -> rc 0 prints a strand cause when rule 3's do-not-bounce alone left this rescue nowhere to go | rc 1 prints nothing
+  # THE DO-NOT-BOUNCE STRAND SAYS SO (departure 3849). `_rescue_target`'s
+  # just-left-only pass answers an empty name both when no account has room
+  # and when the only one with room is an account this session just left
+  # blocked; `_strand_mark`'s computed reason (`_strand_why`, which knows no
+  # skip list) then tells the operator "no account in pool … can take it" in
+  # both. Those ask for opposite acts — wait or add capacity, versus leave it
+  # alone — and the false one invites the hand bounce rule 3 exists to stop,
+  # so this names the account, and `_strand_mark` takes it as its cause.
+  # It asks `_swap_target` UNSKIPPED, on the no-target strand path only: an
+  # empty answer (genuine no room) returns before the swap log is read, so a
+  # strand's later ticks still pay no `_rescue_history` pass (Review Focus 17).
+  local out
+  out=$(_swap_target "$@")
+  [[ -n "$out" && "$out" != "$2" ]] || return 1
+  _rescue_history "$1" || return 1
+  [[ " $RESCUE_SKIP_LEFT " == *" $out "* ]] || return 1
+  printf '%s\n' "its only account with room, $out, is one it left blocked inside RESCUE_CHAIN_WINDOW, and a rescue does not take it back (do not bounce)"
+}
+
+_rescue_line_extra() {   # -> the dated row's tokens for the `auto-rescue` line: ` reset=<epoch>`, ` type=<word>`, ` row=<epoch>`, each only when the verdict kept it
+  # APPENDED, so every line this fleet's log already carries keeps its exact
+  # shape when nothing was dated. `_rescue_history` reads `reset=` back (an
+  # account whose logged reset passed is not "just left blocked" any more), and
+  # §9's instrument compares `row=` with the landing the log itself records.
+  # `reset=` is only ever a reset the row predates (see `_hard_block_date`), so
+  # a row written after its own reset lifts no skip; `row=` is also told for a
+  # row older than this process that D-3526 kept a block, so a rescue on a
+  # carried-in banner stays countable.
+  [[ -n "${HARD_BLOCK_RESET:-}" ]] && printf ' reset=%s' "$HARD_BLOCK_RESET"
+  [[ -n "${HARD_BLOCK_TYPE:-}" ]] && printf ' type=%s' "$HARD_BLOCK_TYPE"
+  [[ -n "${HARD_BLOCK_ROW:-}" ]] && printf ' row=%s' "$HARD_BLOCK_ROW"
+  return 0
 }
 
 _strand_clear() {   # id — the strand is over; say so exactly once per strand.
@@ -23920,6 +24311,7 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   # …and it supersedes a STRAND for the same reason: "no account can take it"
   # is falsified by the session having just moved.
   _strand_clear "$id"
+  _rescuewait_close "$id" swap   # and so is a rescue wait, whoever asked for the move (session-continuity §5.4)
   # ONCE, AT THE TAIL. The guard above runs a SECOND time when the swap
   # re-execs itself detached, so a line written there would tell the operator
   # they crossed twice.
