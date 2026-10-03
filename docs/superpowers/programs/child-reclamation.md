@@ -43,6 +43,12 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-03 12:15 — wave 4's integration round is stalled on a permission prompt.** The stall-watch coordinator
+  reported (mail 3313) that `swift-hollow` has been at a Claude Code Bash approval prompt since 2026-10-02 19:38Z.
+  The command is a read-only `git diff --stat abb3f6940 HEAD; git diff abb3f6940 HEAD | grep …`, and the prompt is
+  not a ccrc ask. Measured read-only: `origin/main` `cf9e4cc8` is merged as `abb3f6940`, without a rebase. Items 2
+  and 3 are in progress (`1d2cdffd1`, `823c9523d`, the last at 19:23); nothing is pushed, and the tree is clean. No
+  coordinator route clears a pane dialog, so the operator was asked to approve it from the PWA or the pane.
 - **2026-10-02 15:03 — the entry-safety prerequisite has merged; wave 4's integration round opens.** PR #222 landed
   as `cf9e4cc8` after review runs 216, 217 and 222 (that programme's ledger; release v0.0.60), and run 199 closed
   final. Both prerequisites are on `main`, so the landing order reaches wave 4. Run 174 stays `working` (items 817 to
