@@ -208,9 +208,9 @@ describe('the worker merge deny', () => {
     // walks the rest of the payload once per `<<` (2.4 to 3.8 s and 0.4 to
     // 0.6 GB at 16 KB, measured on the strip alone; 15 s and 2.9 GB at 36 KB).
     hold(WAVE_HOLD);
-    // The `$(` units sit in an unquoted heredoc body, where the substitution
-    // reader meets an unclosed `$(`, stops there and keeps the rest raw (the
-    // top level has no `$(` arm of its own).
+    // The second payload's heredoc never terminates, so the strip keeps the
+    // whole text raw from its `<<` without reading the `$(`s (the top level
+    // has no `$(` arm of its own); the substitution reader never runs here.
     for (const [pre, u] of [['', '<<a '], ['cat <<a\n', '$(cat <<a\n']]) {
       const t0 = Date.now();
       const r = bash(pre + u.repeat(Math.ceil(16000 / u.length)) + '\necho merge origin');
@@ -266,6 +266,10 @@ describe('the worker merge deny', () => {
     ['echo $$\'\\\'; gh pr merge 42; echo \'x\''],
     ['echo "$(echo $$\'\\\')"; gh pr merge 42; echo \'x\''],
     ['echo "$(echo ${x:-)} "it\'s" )"; gh pr merge 42; echo \'z\''],
+    // `pe` reads `$$` and `$'…'` inside a `${…}` as `sb` does (review 247's re-review I1).
+    ['echo "$(echo ${v:-$${})"; gh pr merge 42; echo "})"'],
+    ['echo "$(echo ${v:-$${})"\ngh pr merge 42\necho "})"'],
+    ['echo "$(echo ${v:-$\'\\\'\'})"\ngh pr merge 42\necho "\'})"'],
   ])('reads a quote, heredoc or arithmetic edge as bash does: %j', (c) => {
     hold(WAVE_HOLD);
     expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();

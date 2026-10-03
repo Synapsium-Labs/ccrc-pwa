@@ -3403,37 +3403,41 @@ fi
 # span, and no escaped quote, opens a span that swallows a live merge after it
 # — wherever the strip can parse the span, which the list below bounds.
 # WHAT PASSES UNPARSED, said rather than hidden. The deny is contract-grade
-# (spec §4), so these are listed, not closed (review 241 F8 measured each):
+# (spec §4), so these are listed, not closed (review 241 F8 measured most;
+# review 247 F2, F4, F5 and its re-review measured the rest):
 # `bash -c "…"`; a quoted or escaped command word (`"gh" pr merge`) and
 # quoting INSIDE the `pr` or `merge` word (`gh pr "merge"`, `gh 'pr' merge`,
 # `gh pr m'erg'e`, `gh pr \merge`: the strip drops a quoted span, it does not
 # unquote it); legacy backticks; `xargs`; an unlisted wrapper (`nice`,
 # `stdbuf`, `coproc`); a NAMED wrapper spelled with a path (`/usr/bin/env gh
 # pr merge`, `/usr/bin/timeout 60 gh pr merge`); a named wrapper's own
-# flags (`sudo -E`, `command -p`; only `timeout`'s one argument is parsed); a leading redirection (`2>&1 gh
-# …`, `>/dev/null gh …`, `</dev/null gh …`); a `case` arm (`*) gh pr merge`);
-# a function body (`f() { gh pr merge 42; }`); a variable command word or
-# argument (`$GH pr merge`, `gh pr $m`); a gh alias (`gh alias set m 'pr
-# merge'`); a `#` comment straight after a `)`; a ` #` or `(#` inside an
-# unquoted top-level `${…}`, which the strip reads as a comment (`echo ${x:-
-# #}; gh pr merge 42`); a form feed or vertical tab before a `#` (the strip's
-# blank class is Oniguruma `\s`; bash splits words on space, tab and newline
-# only); a backslash-newline
-# continuation (`gh pr \<newline> merge`); a `$(…)` that holds a newline, a
-# `;` `&` `|` or `(` inside a `VAR=` or flag value. And where the strip itself
-# mis-reads a span it can close — a "…" span is then read as unquoted text, so
-# an apostrophe in it can open a span that hides a merge after it: a `case`
-# pattern's bare `)` inside a "…" span's `$(…)`; a "…" span nesting `$("…")`
-# more than six deep (the regex engine's call-depth bound). And heredocs the
-# strip reads as complete though bash does not, so a merge after them can run:
-# a delimiter quoted in part or carrying a suffix (`<<E"O"F`, `<<"EOF"x`),
-# when a line equal to the strip's shorter word (`E`, `EOF`) follows the
-# merge; a `<<` line that goes on past its newline without a quote, through a
-# trailing `\` or an open `$(`; a heredoc inside `$(…)` that bash 5.2 ends at
-# a line that starts with the word and holds a `)` later (`EOF )`,
-# `EOF<tab>)`, `EOFx)`), when an exact `EOF` follows the merge; and a heredoc
-# inside backticks, likewise. A terminated heredoc BODY line that begins `gh
-# pr merge` is text and passes, unless an unquoted body runs it inside `$(…)`.
+# flags (`sudo -E`, `command -p`; only `timeout`'s one argument is parsed); a
+# leading redirection (`2>&1 gh …`, `>/dev/null gh …`, `</dev/null gh …`); a
+# `case` arm (`*) gh pr merge`); a function body (`f() { gh pr merge 42; }`);
+# a variable command word or argument (`$GH pr merge`, `gh pr $m`); a gh alias
+# (`gh alias set m 'pr merge'`); a `#` comment straight after a `)`; a ` #` or
+# `(#` inside an unquoted top-level `${…}`, which the strip reads as a comment
+# (`echo ${x:- #}; gh pr merge 42`); a form feed or vertical tab before a `#`
+# (the strip's blank class is Oniguruma `\s`; bash splits words on space, tab
+# and newline only); a top-level "…" span holding `$${`, whose `${` the strip
+# reads as an expansion that closes at a later `}` where bash reads `$$` and a
+# literal `{` (`(echo "$${"); gh pr merge 42; (echo "}")`); a
+# backslash-newline continuation (`gh pr \<newline> merge`); a `$(…)` that
+# holds a newline, a `;` `&` `|` or `(` inside a `VAR=` or flag value. And
+# where the strip itself mis-reads a span it can close — a "…" span is then
+# read as unquoted text, so an apostrophe in it can open a span that hides a
+# merge after it: a `case` pattern's bare `)` inside a "…" span's `$(…)`; a
+# "…" span nesting `$("…")` more than six deep (the regex engine's call-depth
+# bound). And heredocs the strip reads as complete though bash does not, so a
+# merge after them can run: a delimiter quoted in part or carrying a suffix
+# (`<<E"O"F`, `<<"EOF"x`), when a line equal to the strip's shorter word (`E`,
+# `EOF`) follows the merge; a `<<` line that goes on past its newline without
+# a quote, through a trailing `\` or an open `$(`; a heredoc inside `$(…)`
+# that bash 5.2 ends at a line that starts with the word and holds a `)` later
+# (`EOF )`, `EOF<tab>)`, `EOFx)`), when an exact `EOF` follows the merge; and
+# a heredoc inside backticks, likewise. A terminated heredoc BODY line that
+# begins `gh pr merge` is text and passes, unless an unquoted body runs it
+# inside `$(…)`.
 # The hook is a contract the fleet honours, not an access boundary (spec §4),
 # and identity on this box is attribution. A session with neither — a
 # coordinator's own, the operator's — is never asked, so the coordinator's `gh
@@ -3514,7 +3518,7 @@ def DEFS:
   "(?<hd>(?<!<)<<(?:-[ \\t]*" + hd1("t"; "\\t*"; "(?![^\\n])") + "|[ \\t]*" + hd1(""; ""; "(?![^\\n])") + ")){0}"
   + "(?<hs>(?<!<)<<(?:-[ \\t]*" + hd1("st"; "\\t*"; "(?![^\\n)])") + "|[ \\t]*" + hd1("s"; ""; "(?![^\\n)])") + ")){0}"
   + "(?<sub>\\$\\(\\(" + AR + "\\)\\)|\\$\\((?<sb>(?>(?:[^" + $q + "\"()\\\\<#$]++|\\$\\$|" + AQ + "|\\g<pe>|\\$|\\\\(?:.|\\n|\\z)[^\\s;&|()<>\"" + $q + "`\\\\$]*|\\g<hs>|(?<!<)<<(?!<)[\\s\\S]*|<|(?<![^\\s;&|(])#[^\\n]*|#|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<dq>|\\(\\(" + AR + "\\)\\)|\\(\\g<sb>(?:\\)|\\z))*))(?:\\)|(?<us>\\z))){0}"
-  + "(?<pe>\\$\\{(?>(?:[^}\"" + $q + "\\\\$`]++|\\\\(?:.|\\n|\\z)|\\g<dq>|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<sub>|\\g<pe>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`|\\$(?![({]))*)(?:\\}|\\z)){0}"
+  + "(?<pe>\\$\\{(?>(?:[^}\"" + $q + "\\\\$`]++|\\\\(?:.|\\n|\\z)|\\g<dq>|\\$\\$|" + AQ + "|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<sub>|\\g<pe>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`|\\$(?![({]))*)(?:\\}|\\z)){0}"
   + "(?<dq>\"(?>(?:[^\"\\\\$`]++|\\\\(?:.|\\n|\\z)|\\g<pe>|\\$(?![({])|\\g<sub>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`)*)(?:\"|(?<ud>\\z))){0}";
 def fs(re; f): . as $in | [match(re; "g") | [.offset, .length, .string, any(.captures[]; (.name == "us" or .name == "ud" or .name == "ua") and .string != null)]] as $ms
   | if ($ms | length) == 0 then $in else ($in | explode) as $cp
