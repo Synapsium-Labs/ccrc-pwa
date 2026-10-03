@@ -294,7 +294,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - Re-measured: the tip is the claimed sha. Run 236 advanced to `awaiting-review`, ok.
   - **Review run 242** is open. Its brief holds the round to its rulings, F2's determinism under load, and F9's
     verdict identity. It dispatches at 11:53:20, this programme's agreed slot. The next age-out after the split,
-    11:54:07, is asked of stall-watch for continuity's review (mail 3301).
+    11:54:07, goes to continuity's review: stall-watch agreed (mail 3302).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
