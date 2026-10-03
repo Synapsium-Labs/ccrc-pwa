@@ -300,6 +300,14 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     - re-gate, including C1–C15 and the citation cases;
     - send a fresh wave-done.
   - **What follows.** A new review run reads the merge, and the run then returns to `merging`.
+  - **18:37, the wave-done.** The fix round returned (mail 3359) and was re-measured:
+    - tip `bc1a13edd`;
+    - the probe against `main` exits 0;
+    - three hunks were resolved by hand, every one byte-checked;
+    - the gate is green, with `coordinator-skill` at 156;
+    - C1–C15 red as planned.
+
+    Run 226 is at `awaiting-review`. Review run 251 was dispatched to read the merge.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
