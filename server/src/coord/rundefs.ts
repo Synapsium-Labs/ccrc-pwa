@@ -381,17 +381,10 @@ export function queueStallNotice(
   });
 }
 
-/** The landing lane's two notice subjects (landing-order wave 2), each spelled
- *  ONCE: `watch.ts`'s `sweepLanding` queues them and asks `hasMailWithSubject`
- *  about them, and the coordinator skill tells its reader to expect them
- *  (`references/wave-lifecycle.md` §5) — `coordinator-skill.test.ts` holds the
- *  skill's spelling to these. A dequeue is unique per REMOVAL — the PR and the
- *  removal's own time (`queueAt`, shape-gated by `queueFor`) — so a second
- *  removal of the same PR is a new notice, and a reading with no well-shaped
- *  time falls back to the PR alone; a merge happens once per PR. */
-export const dequeuedSubject = (pr: number, at: string | null): string =>
-  at === null ? `dequeued:#${pr}` : `dequeued:#${pr}@${at}`;
-export const mergedSubject = (pr: number): string => `merged:#${pr}`;
+/** The landing lane's two notice subjects live in `landing.ts` (L1: the lane's verdict spells them, and this
+ *  file holds the database handle an L1 file may not reach); re-exported so `watch.ts` and the coordinator-skill
+ *  test keep the import they always had. Spelled ONCE, there. */
+export { dequeuedSubject, mergedSubject } from './landing.js';
 
 /** The ask pre-emption lane's own nudge-mail subject prefix — the ONE source
  *  `askNudgeSubject` (the queue side) and `isAskNudgeMail` (the reader side)

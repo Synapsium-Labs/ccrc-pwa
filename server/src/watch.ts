@@ -43,9 +43,9 @@ import { JournalMirror } from './coord/mirror.js';
 // a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
 // literals exist. `single-definition.test.ts` pins both halves of that split.
 import {
-  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, askNudgeSubject, dequeuedSubject, isAskNudgeMail, mergedSubject,
-  queueStallNotice, queueSystemMail, survivorOf,
+  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, askNudgeSubject, isAskNudgeMail, queueStallNotice, queueSystemMail, survivorOf,
 } from './coord/rundefs.js';
+import { landingAsk, landingVerdict, type LandingFacts } from './coord/landing.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
@@ -71,7 +71,7 @@ import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
-import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore, type AskRow, type MarkReleaseNotifiedResult } from './coord/store.js';
+import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore, type OpenSibling, type AskRow, type MarkReleaseNotifiedResult } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { localIO } from './io.js';
@@ -4850,67 +4850,47 @@ export class FleetWatcher {
     for (const r of records) {
       if (measuredIdentity(r) === null) continue;
       if (r.workspace === null || r.archivedAt !== null) continue;
-      const pr = this.prStates.get(r.id);
-      const q = this.prQueues.get(r.id);
-      const number = pr?.number ?? null;
-      const dequeued = q?.state === 'dequeued';
-      if (number === null || (!dequeued && pr?.phase !== 'merged')) continue;
-      const at = dequeued ? q.at : null;
-      const key = `${r.id}#${number}:${dequeued ? 'dequeued' : 'merged'}@${at ?? ''}`;
-      if (this.landingNotified.has(key)) continue;
+      // EVERY DECISION is `coord/landing.ts`'s (D-3883, pure L1): `landingAsk` says what this line asks for and
+      // whether it is already latched, and `landingVerdict` says the next step given the facts read so far. This
+      // loop is the READS and the DELIVERIES, nothing else.
+      const ask = landingAsk({
+        sessionId: r.id, workspace: r.workspace, number: this.prStates.get(r.id)?.number ?? null,
+        phase: this.prStates.get(r.id)?.phase, queue: this.prQueues.get(r.id),
+      }, this.landingNotified);
+      if (ask === null) continue;
       // ONE BAD ROW MAY NOT COST THE REST OF THE SWEEP: `node:sqlite` throws
       // synchronously, and this runs inside the void-dispatched `sweepPr`.
       try {
-        const sib = coord.openRunsForSession(r.id);
-        if (!sib.ok) {
-          console.warn(`ccrc-server: landing notice for ${r.id} deferred (run rows unreadable: ${sib.detail})`);
-          continue;
-        }
-        const run = survivorOf(sib.siblings);
-        const coordinator = run === null ? null : coord.resolveCoordinator(run.id);
-        if (!dequeued) {
-          // A MERGE: told only to a coordinator whose run waits at `merging`.
-          if (run === null || coordinator === null) { this.landingNotified.add(key); continue; }
-          const read = coord.run(run.id);
-          if (!read.ok) {
-            console.warn(`ccrc-server: landing notice for ${r.id} deferred (run rows unreadable: ${read.detail})`);
-            continue;
+        const facts: LandingFacts = {};
+        let run: OpenSibling | null = null;
+        for (;;) {
+          const s = landingVerdict(ask, facts);
+          if (s.step === 'runs') {
+            const sib = coord.openRunsForSession(r.id);
+            run = sib.ok ? survivorOf(sib.siblings) : null;
+            facts.runs = sib.ok ? { ok: true, run } : { ok: false, detail: sib.detail };
+          } else if (s.step === 'coordinator') {
+            facts.coordinator = coord.resolveCoordinator(s.runId);
+          } else if (s.step === 'runState') {
+            const read = coord.run(s.runId);
+            facts.runState = read.ok ? { ok: true, state: read.run?.state ?? null } : { ok: false, detail: read.detail };
+          } else if (s.step === 'toldMail') {
+            facts.told = coord.hasMailWithSubject('operator', s.runId, s.toId, s.subject);
+          } else if (s.step === 'toldFeed') {
+            facts.told = coord.hasFeedEvent('queue', r.id, s.body);
+          } else if (s.step === 'defer') {
+            console.warn(`ccrc-server: landing notice for ${r.id} deferred (run rows unreadable: ${s.detail})`);
+            break;
+          } else if (s.step === 'latch') {
+            this.landingNotified.add(ask.key);
+            break;
+          } else {
+            if (s.mail !== null) queueSystemMail(coord, run, s.mail);
+            if (s.record !== null) this.pushOne({ kind: 'queue', sessionId: r.id, project: r.project, ...s.record }, this.activeProjects);
+            this.landingNotified.add(ask.key);
+            break;
           }
-          if (read.run?.state === 'merging') {
-            const subject = mergedSubject(number);
-            if (!coord.hasMailWithSubject('operator', run.id, coordinator, subject)) {
-              queueSystemMail(coord, run, {
-                fromId: 'operator', toId: coordinator, runId: run.id, kind: 'status',
-                subject, body: renderMergedBrief(r.id, number),
-              });
-            }
-          }
-          this.landingNotified.add(key);
-          continue;
         }
-        const subject = dequeuedSubject(number, at);
-        const body = `PR #${number} left the merge queue without landing`
-          + (at === null ? '' : ` (removed ${at})`) + '; GitHub does not re-enqueue it. '
-          + (coordinator === null ? 'No open run names a coordinator to tell.' : `Mailed coordinator ${coordinator}.`);
-        const told = run !== null && coordinator !== null
-          ? coord.hasMailWithSubject('operator', run.id, coordinator, subject)
-          : coord.hasFeedEvent('queue', r.id, body);
-        if (!told) {
-          if (run !== null && coordinator !== null) {
-            queueSystemMail(coord, run, {
-              fromId: 'operator', toId: coordinator, runId: run.id, kind: 'status',
-              subject, body: renderDequeueBrief(r.id, number),
-            });
-          }
-          this.pushOne({
-            kind: 'queue', sessionId: r.id, project: r.project,
-            title: `⤺ dequeued › ${r.workspace}`, body,
-            runId: run?.id ?? null,
-            tag: `queue-${key}`,
-            recordAlways: true,
-          }, this.activeProjects);
-        }
-        this.landingNotified.add(key);
       } catch (err) {
         console.warn(`ccrc-server: landing notice for ${r.id} failed (${err instanceof Error ? err.message : String(err)})`);
       }
@@ -5549,39 +5529,6 @@ export class FleetWatcher {
     });
     return { until: now + ASK_GRACE_MS, askId, ev, answeringSince: null };
   }
-}
-
-/** The dequeue notice's body. Every value in it is this server's own — a PR
- *  number, a registry-validated session id — and nothing GitHub wrote (the
- *  removal's reason is never carried): this text lands in a model's context.
- *  The re-enqueue spelling is clause 15's, exact-SHA binding and all. The why
- *  is the QUEUE's own CI run: a queue failure is the `merge_group` run on the
- *  queue branch's commit, which the PR head's checks never include, so they
- *  can read green while the queue reads red. A fix round disarms first: an
- *  armed auto-merge would queue whatever head the round pushes. */
-export function renderDequeueBrief(sessionId: string, pr: number): string {
-  return `PR #${pr} (workspace \`${sessionId}\`) was removed from this repository's merge queue without landing. ` +
-    `GitHub does not re-enqueue a PR after a failed group.\n` +
-    `Read why from the QUEUE's own CI run, not the PR's checks — they ran on a different commit and can read green: ` +
-    `\`gh run list --event merge_group --limit 20 --json databaseId,headBranch,conclusion\` finds it by its ` +
-    `\`headBranch\` (\`gh-readonly-queue/<base>/pr-${pr}-…\`), \`gh run view <id> --log-failed\` says why, and ` +
-    `\`gh pr view ${pr} --json mergeStateStatus\` answers a conflict.\n` +
-    `Then either re-enqueue it — \`gh pr merge ${pr} --match-head-commit <handoffCommit>\`, the run's verified ` +
-    `handoffCommit, never \`--admin\` (clause 15) — or disarm any armed auto-merge ` +
-    `(\`gh pr merge ${pr} --disable-auto\`) and send the owning worker a fix round on the ` +
-    `\`merging → working\` edge.\n\n` +
-    `Run the ccrc-coordinator skill.`;
-}
-
-/** The merged notice's body — the same provenance rule as the dequeue's. It
- *  asks for the merge PROOF before the close, because a merged PR is not yet
- *  proof that the exact head the review read is the one that landed. */
-export function renderMergedBrief(sessionId: string, pr: number): string {
-  return `PR #${pr} (workspace \`${sessionId}\`) merged while its run waited at \`merging\`.\n` +
-    `Prove it from your own shell — \`gh pr view ${pr} --json state,headRefOid\` answers MERGED with ` +
-    `\`headRefOid\` equal to the run's verified handoffCommit — then close the run as ` +
-    `references/wave-lifecycle.md §5 closes a producer.\n\n` +
-    `Run the ccrc-coordinator skill.`;
 }
 
 /**
