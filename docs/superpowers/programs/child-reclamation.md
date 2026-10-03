@@ -43,7 +43,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
-- **2026-10-03 17:37 — items 4–6 reported (mail 3349); four slugs ruled.** The work is at local `65da6cafe`, after
+- **2026-10-03 17:36 — items 4–6 reported (mail 3349); four slugs ruled.** The work is at local `65da6cafe`, after
   the second merge. The third merge (`db44b136`) and the push are still to come. Every slug is accepted, and none
   departs from the spec, the contract or a plan, so none takes a number:
   - **`unresolved-real-home-refuses-system-launchctl`.** `_svc_real_home` evaluates only a login name matching
