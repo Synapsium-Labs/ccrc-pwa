@@ -133,84 +133,84 @@ defined below in the same commit). This plan was executed subagent-driven by the
 coordinator run. A departure found while executing is reported under a slug with its evidence, and minted then.
 Each departure from the spec's literal text, by number and slug:
 
-- **D-3561** `turnidle-deliver-arm-carries-via`: the deliver arm is `{deliver: true; since: number; via: 'idle' | 'shell'}`. The
+- **D-3561** — `turnidle-deliver-arm-carries-via`: the deliver arm is `{deliver: true; since: number; via: 'idle' | 'shell'}`. The
   pane guard runs only when `via !== 'idle'`, so the caller must know. `live` may be `null` (the folded
   `readLiveState`), which reads as `not-idle`. That makes the spec's "one call" literally true.
-- **D-3562** `w1-defines-only-its-own-markers`: wave 1 defines `MailTurnMode = 'strict' | 'shell'` and four markers only:
+- **D-3562** — `w1-defines-only-its-own-markers`: wave 1 defines `MailTurnMode = 'strict' | 'shell'` and four markers only:
   `mail-gate-strict`, `stall-watch-disabled`, `stall-watch-live` and `stall-watch-escalate`. Wave 2 adds
   `mail-gate-busy`, `mail-gate-busy-shadow`, `stall-watch-w2-live`, and every wave-2 arm, hold, prefix (`orphaned:`,
   `failed:`) and class (`self-wake`). No name is declared before the code that reads it.
-- **D-3563** `turnidle-mark-param-deferred`: `mailTurnIdle` takes no `mark` parameter in wave 1. Wave 2 adds it with its reader.
-- **D-3564** `review-done-subject-appended`: `REVIEW_DONE_SUBJECT` is APPENDED at the end of `shared/api.ts`, not beside
+- **D-3563** — `turnidle-mark-param-deferred`: `mailTurnIdle` takes no `mark` parameter in wave 1. Wave 2 adds it with its reader.
+- **D-3564** — `review-done-subject-appended`: `REVIEW_DONE_SUBJECT` is APPENDED at the end of `shared/api.ts`, not beside
   `WAVE_DONE_SUBJECT`. Inserting it there would shift README's four citation anchors into `shared/api.ts`.
-- **D-3565** `ask-hold-correlates-the-dialog`: hold 2a is "the live word is `waiting`, AND EITHER a hookstate ask whose
+- **D-3565** — `ask-hold-correlates-the-dialog`: hold 2a is "the live word is `waiting`, AND EITHER a hookstate ask whose
   `updatedAt` is no earlier than the live `statusUpdatedAt` minus `ASK_DIALOG_SLACK_MS` (60 s) — read identity-gated
   but NOT aged — OR the worker's newest asks row is `held` or `answering`". The spec's reads could not hold a long
   question: the hookstate ask ages out at `HOOKSTATE_FRESH_MS` (30 min), and asks rows go `released` after
   `ASK_GRACE_MS` (2 min). So the census's 6.6 h legit question would have fallen to hold 2b and drawn the dialog push.
-- **D-3566** `absent-worker-holds`: a worker missing from this tick's `sessions` holds (`'absent'`). Wave 2's dead arm owns it.
-- **D-3567** `stall-notices-via-runevents`: rung times come from the existing `runEvents(runId)`, parsed by `parseStallDetail`.
+- **D-3566** — `absent-worker-holds`: a worker missing from this tick's `sessions` holds (`'absent'`). Wave 2's dead arm owns it.
+- **D-3567** — `stall-notices-via-runevents`: rung times come from the existing `runEvents(runId)`, parsed by `parseStallDetail`.
   There is no `stallNotices` store read.
-- **D-3568** `stall-read-ports-declared-by-the-consumer`: the row shapes the lane reads (`StallRunRow`, `StallMailRow`) are
+- **D-3568** — `stall-read-ports-declared-by-the-consumer`: the row shapes the lane reads (`StallRunRow`, `StallMailRow`) are
   declared in `stall.ts`, the consumer (L2 port rule). `store.ts` implements them and imports those types from
   `./stall.js`.
-- **D-3569** `mail-read-is-one-scan`: the lane reads every mail row on the subject's runs in ONE read (`mailOnRuns`). L1 derives
+- **D-3569** — `mail-read-is-one-scan`: the lane reads every mail row on the subject's runs in ONE read (`mailOnRuns`). L1 derives
   from it the worker's last mail, the newest inbound mail, the coordinator's `wait:`, the ball and the episode key.
-- **D-3570** `r2-measures-on-demand`: when r2 falls due, `stallVerdict` returns `{act: 'measure-coordinator'}`. The lane runs
+- **D-3570** — `r2-measures-on-demand`: when r2 falls due, `stallVerdict` returns `{act: 'measure-coordinator'}`. The lane runs
   `measureClaimant` only then, and re-runs the verdict with the answer.
-- **D-3571** `run-less-notice-deferred`: `queueStallNotice` takes a run. Its run-less arm is wave 2's.
-- **D-3572** `shadow-rung-accounting`: a rung is DONE when a live row exists for it, or when a shadow row exists and that rung's
+- **D-3571** — `run-less-notice-deferred`: `queueStallNotice` takes a run. Its run-less arm is wave 2's.
+- **D-3572** — `shadow-rung-accounting`: a rung is DONE when a live row exists for it, or when a shadow row exists and that rung's
   delivery is still shadow under the current markers. The next rung's hour runs from the previous rung's EARLIEST
   LIVE row when one exists, else from its earliest row. So arming mid-episode sends the pending rung once, and the
   recipient of a live rung always gets the hour the r1 body promised: r2 is never due one sweep after a fresh live
   r1, and r3 never one sweep after a fresh live r2 (plan review, 2026-09-29).
-- **D-3573** `ask-read-matters-only-under-a-dialog`: a failed asks-row read holds only while the worker is dialog-shaped (live
+- **D-3573** — `ask-read-matters-only-under-a-dialog`: a failed asks-row read holds only while the worker is dialog-shaped (live
   `waiting` or `dialogPending`), which is the only time the row is consulted. Spec hold 1 says "a failed store read"
   holds. But `ask-unreadable` is the hydrate failure of the NEWEST row, which stays newest until the next ask, so
   one malformed old row would silence the watch for an idle worker indefinitely. The auto-continue read's failure
   does fold into `unmeasured`.
-- **D-3574** `coord-ball-below-cap-is-none`: under the coordinator's ball, below the 30 h cap, the verdict is `{act: 'none'}`,
+- **D-3574** — `coord-ball-below-cap-is-none`: under the coordinator's ball, below the 30 h cap, the verdict is `{act: 'none'}`,
   not a hold (§10 order step 9).
-- **D-3575** `stall-kebab-guard`: `mail-routes.test.ts`'s "every quoted kebab token in server/src/coord is declared" scan gains
+- **D-3575** — `stall-kebab-guard`: `mail-routes.test.ts`'s "every quoted kebab token in server/src/coord is declared" scan gains
   a twelfth union, `isStallKebab`, exported from `stall.ts` and derived from its Records.
-- **D-3576** `dialog-cap-is-wave-1`: §11 item 8's ruling. After `STALL_QUIET_MS` of quiet under hold 2b there is one operator
+- **D-3576** — `dialog-cap-is-wave-1`: §11 item 8's ruling. After `STALL_QUIET_MS` of quiet under hold 2b there is one operator
   push per episode, arm `dialog-cap`.
-- **D-3577** `r1-body-names-who-is-told` (Task 6): the r1 body's last line reads "No mail from you on run N by HH:MMZ: the
+- **D-3577** — `r1-body-names-who-is-told` (Task 6): the r1 body's last line reads "No mail from you on run N by HH:MMZ: the
   operator is told." when coordination is paused or the run has no claimant. In both cases the verdict skips r2 and
   sends r3 at r1 + 1 h (§4.2), so the spec's "the coordinator is told" would be false. A dead coordinator is unknown
   at r1 time, so that case keeps the spec's line.
-- **D-3578** `store-ties-auto-continue-to-sendresult` (Task 7): `store.ts` spells the `auto-continue-armed` lastError once. It
+- **D-3578** — `store-ties-auto-continue-to-sendresult` (Task 7): `store.ts` spells the `auto-continue-armed` lastError once. It
   types that spelling as `Extract<…SendResult error…, 'auto-continue-armed'>` through a type-only import from
   `../inject/send.js`, and admits it to `mail-routes.test.ts`'s scan with a `NOT_CODES` entry, the `enter-ignored`
   precedent.
 
 **Found while executing** (minted 2026-09-29 at the task reviews, each a controller ruling):
 
-- **D-3579** `rung-due-on-the-raw-stamp` (Task 5 review): r2 and r3 fall due at the previous rung plus its hour, or at
+- **D-3579** — `rung-due-on-the-raw-stamp` (Task 5 review): r2 and r3 fall due at the previous rung plus its hour, or at
   the RAW live stamp plus the hour when that stamp is later. That later stamp means the worker read busy when the rung
   fell due and went idle again after. The plan timed them from `max(previousRung, quietSince)`, so any restamp or inbound
   mail re-timed them, including the turn the r1 nudge itself starts. Spec §4.2 says "r2 at r1 + 1 h", "busy when r2 or
   r3 falls due defers the rung", and "an open episode is not reset".
-- **D-3580** `any-null-stamp-holds` (Task 5 review): an ok live read whose `statusUpdatedAt` is null holds `unmeasured`
+- **D-3580** — `any-null-stamp-holds` (Task 5 review): an ok live read whose `statusUpdatedAt` is null holds `unmeasured`
   whatever the word. The plan held only for `idle`/`shell`. Under `waiting`, the null silently broke hold 2a's
   correlation, and folded to 0 in the cap clock, which fired a false `dialog-cap`. This is the overloaded-null rule.
-- **D-3581** `r1-body-states-its-arming` (Task 6 review): the r1 body's last line promises escalation only when
+- **D-3581** — `r1-body-states-its-arming` (Task 6 review): the r1 body's last line promises escalation only when
   escalation is armed. While `stall-watch-escalate` is absent, as it is in §11 decision 3's first 48 h and after its kill
   rule, the body says that nobody else is told, and still asks for the mail. The spec's example line assumed arming.
-- **D-3582** `r2-r3-span-from-the-episode` (Task 6 review): the r2 subject and body, and the r3 push, measure the
+- **D-3582** — `r2-r3-span-from-the-episode` (Task 6 review): the r2 subject and body, and the r3 push, measure the
   silence from the episode key (the worker's own last mail, a coordinator `wait:`, or dispatch), and name it as time
   since the worker's last mail. The plan used `quietSince`, which r1's own delivery restamps, so a 4 h stall read as
   about 2 h. §3.4: only the worker's own mail is immune to restamps.
-- **D-3583** `r3-reports-what-was-measured` (Task 6 review): r3's `still-silent` text states measured facts. It gives
+- **D-3583** — `r3-reports-what-was-measured` (Task 6 review): r3's `still-silent` text states measured facts. It gives
   when the stall check and the stall report went out, to whom the report went (its own recipient, not today's
   claimant), and whether and when a coordinator last mailed the worker after it. The plan asserted "both went
   unanswered", which is false whenever the coordinator obeyed r2 and sent a resume.
-- **D-3584** `run-gone-includes-inactive` (Task 7 review): `insertStallObservation` answers `run-gone` for a run that is
+- **D-3584** — `run-gone-includes-inactive` (Task 7 review): `insertStallObservation` answers `run-gone` for a run that is
   absent OR no longer active (`state IN INACTIVE_RUN_STATES_SQL`), so neither a row nor a mail is written. The lane
   awaits between its candidate read and the notice (pane, live file, `measureClaimant`), and a close landing in that
   window would otherwise queue a stall mail on a closed run after close's `cancelOutstandingDeliveries` ran, which
   `dueDeliveries` would deliver. The spec's `run-gone` meant absent only.
-- **D-3585** `r2-keeps-a-missing-delivery-row` (Task 8, the implementer's departure, accepted): when the r1 check mail
+- **D-3585** — `r2-keeps-a-missing-delivery-row` (Task 8, the implementer's departure, accepted): when the r1 check mail
   has no delivery row, the lane passes `null` to `stallReportMail` instead of folding it to "not delivered, not acked".
   The plan's `?? { deliveredAt: null, ackedAt: null }` narrowed a distinction it received (the adapter rule), and made
   Task 6's "has no delivery row" sentence unreachable.
