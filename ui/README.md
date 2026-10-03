@@ -140,4 +140,32 @@ update-management logic in alongside the button.
 
 Recorded rather than fixed, deliberately: it is cheap to reverse now (both
 belong in `pwa/src/fleet/`, built FROM ui primitives) and expensive once more
-components follow the precedent. Do not treat these two as licence.
+components follow the precedent.
+
+"Do not treat these two as licence" used to be the whole of the enforcement,
+which is to say there was none. It is now `pwa/test/ui-package-boundary.test.ts`,
+which scans every file `tsconfig.build.json` actually EMITS — stories are
+excluded there, so a story may build a fixture from `MAIL_GATE_HELD_COUNT`
+without reaching `dist/` — and asserts the holder list is **exactly** these two.
+Both directions: a third component cannot follow the precedent, and an entry
+left behind after one is reversed reds as stale rather than quietly holding the
+door open for a replacement.
+
+## What the app may reach back into
+
+The ordering above means an app sheet can always scope over a ui class, and
+several rules rely on it. The line is between PLACING a component and
+REDRESSING one: size, spacing, flow and position are the call site's business —
+only `fleet.css` knows a ghost button sits in a two-up action row — while a
+colour, border, face or shadow set from outside is a second definition of what
+the thing looks like, living in a sheet the component's own story never loads.
+That is how a palette drifts in one theme only, and the contrast gate cannot
+see it either: it reads the rule it finds and has no opinion about which
+package should own it.
+
+The same test guards this, on the rule's SUBJECT rather than its ancestors —
+`.sheet-panel .proj-ready` is the app scoping its own class inside a sheet and
+is nobody's business but the app's; `.chat-meta .dot` is the reverse. The
+remedy for a refused rule is the `className` modifier shape above. Three
+appearance reach-ins predate the guard and are carried as a named census with
+their reasons, asserted in both directions like the import list.

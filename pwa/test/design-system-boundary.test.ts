@@ -56,7 +56,7 @@ const SRC = path.join(import.meta.dirname, '..', 'src');
  *      not even always on a row: the approval sheet's Allow/Deny buttons
  *      wear it too. Word-bounded matching is what keeps `opts` from reading
  *      as `opt`. */
-const OWNED = [
+export const OWNED = [
   'btn-primary', 'btn-ghost',                                    // Button / buttonVariants
   'dot', 'dot--busy', 'dot--attention', 'dot--idle',             // StatusDot / dotVariants
   'dot--done', 'dot--cleanup', 'dot--dead',
