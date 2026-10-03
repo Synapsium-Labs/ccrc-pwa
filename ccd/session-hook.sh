@@ -3358,8 +3358,10 @@ fi
 # `elif` `while` `until` `{` `!`), the wrappers `time` `env` `command` `exec`
 # `nohup` `sudo` and `timeout <n>` (in any order, `env`'s assignments too); a
 # path to the binary; and gh's own flags before `pr` or between `pr` and
-# `merge` (`-R owner/repo`). `--auto`, `--squash`, `--admin` and every other
-# merge flag are the same act from a worker and are denied with it.
+# `merge` (`-R owner/repo`). The `merge` word may be followed by a blank, one
+# of `;` `&` `|` `(` `)` `<` `>`, or the end (`gh pr merge;echo ok` runs the
+# merge). `--auto`, `--squash`, `--admin` and every other merge flag are the
+# same act from a worker and are denied with it.
 #
 # QUOTED TEXT IS REMOVED BEFORE MATCHING, in the same jq that reads the
 # command (MERGE_STRIP_JQ), leftmost first as bash reads it: a backslash
@@ -3406,12 +3408,17 @@ fi
 # quoting INSIDE the `pr` or `merge` word (`gh pr "merge"`, `gh 'pr' merge`,
 # `gh pr m'erg'e`, `gh pr \merge`: the strip drops a quoted span, it does not
 # unquote it); legacy backticks; `xargs`; an unlisted wrapper (`nice`,
-# `stdbuf`, `coproc`); a named wrapper's own flags (`sudo -E`, `command -p`;
-# only `timeout`'s one argument is parsed); a leading redirection (`2>&1 gh
+# `stdbuf`, `coproc`); a NAMED wrapper spelled with a path (`/usr/bin/env gh
+# pr merge`, `/usr/bin/timeout 60 gh pr merge`); a named wrapper's own
+# flags (`sudo -E`, `command -p`; only `timeout`'s one argument is parsed); a leading redirection (`2>&1 gh
 # …`, `>/dev/null gh …`, `</dev/null gh …`); a `case` arm (`*) gh pr merge`);
 # a function body (`f() { gh pr merge 42; }`); a variable command word or
 # argument (`$GH pr merge`, `gh pr $m`); a gh alias (`gh alias set m 'pr
-# merge'`); a `#` comment straight after a `)`; a backslash-newline
+# merge'`); a `#` comment straight after a `)`; a ` #` or `(#` inside an
+# unquoted top-level `${…}`, which the strip reads as a comment (`echo ${x:-
+# #}; gh pr merge 42`); a form feed or vertical tab before a `#` (the strip's
+# blank class is Oniguruma `\s`; bash splits words on space, tab and newline
+# only); a backslash-newline
 # continuation (`gh pr \<newline> merge`); a `$(…)` that holds a newline, a
 # `;` `&` `|` or `(` inside a `VAR=` or flag value. And where the strip itself
 # mis-reads a span it can close — a "…" span is then read as unquoted text, so
@@ -3437,9 +3444,10 @@ fi
 # cannot tell it from a worker; the lifecycle reference sends that coordinator
 # to the operator's shell.
 # The strip's jq is Oniguruma regex throughout (lookaround, atomic groups,
-# subexpression calls, backreferences), so a jq built without Oniguruma —
-# or any jq error — yields an empty mcmd and the deny FAILS OPEN (#224 keeps
-# the hookstate parse regex-free for exactly that reason).
+# subexpression calls, backreferences), so a jq built without Oniguruma — or
+# any jq error, a jq killed for memory (OOM), or a hook timeout — leaves no
+# mcmd to match and the deny FAILS OPEN (#224 keeps the hookstate parse
+# regex-free for exactly that reason).
 #
 # WHY THE MARKER TOO. A close releases the hold (`ws-release`), and a child's
 # reclaim runs AFTER the close answers, on its own queue, and defers while the
@@ -3481,8 +3489,8 @@ fi
 # (hook, 36/100/200 KB: closed `$(…)` 142, 559, 1532 ms; the space/tab
 # family 186, 902, 2895 ms, which the plan's regex had). The strip pays one regex match per
 # quoted span, heredoc or comment, and jq 1.7's match costs grow with each
-# match's offset, so a command DENSE with quotes is superlinear too: 1.7 s at
-# 36 KB and 7.1 s (0.56 GB) at 100 KB of bare `"` through the hook (the strip
+# match's offset, so a command DENSE with quotes is superlinear too: 1584 ms at
+# 36 KB and 6885 ms (0.56 GB) at 100 KB of bare `"` through the hook (the strip
 # before this one: 21 s at 100 KB on jq alone), while 100 KB of real prose
 # in a heredoc commit or PR body takes ~130 ms. No start scans the rest of the
 # payload twice: a span, substitution or heredoc that never closes runs to
@@ -3491,7 +3499,7 @@ fi
 # incomplete heredoc ends the strip there (one cut, kept raw), and a
 # heredoc's rest-of-line is stripped without a second heredoc (a `<<a <<a`
 # line once recursed once per `<<`: 15 s and 2.9 GB at 36 KB, measured).
-GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+pr([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+merge([[:space:]]|$)'
+GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+pr([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+merge([[:space:];&|()<>]|$)'
 MERGE_STRIP_JQ='
 def SQ: $q + "[^" + $q + "]*" + $q;
 def AQ: "\\$" + $q + "(?>(?:[^\\\\" + $q + "]++|\\\\(?:.|\\n|\\z))*)(?:" + $q + "|(?<ua>\\z))";
@@ -3505,7 +3513,7 @@ def AR: "(?>(?:[^()\\n]++|\\((?>(?:[^()\\n]++|\\([^()\\n]*+\\))*)\\))*)";
 def DEFS:
   "(?<hd>(?<!<)<<(?:-[ \\t]*" + hd1("t"; "\\t*"; "(?![^\\n])") + "|[ \\t]*" + hd1(""; ""; "(?![^\\n])") + ")){0}"
   + "(?<hs>(?<!<)<<(?:-[ \\t]*" + hd1("st"; "\\t*"; "(?![^\\n)])") + "|[ \\t]*" + hd1("s"; ""; "(?![^\\n)])") + ")){0}"
-  + "(?<sub>\\$\\(\\(" + AR + "\\)\\)|\\$\\((?<sb>(?>(?:[^" + $q + "\"()\\\\<#$]++|\\$\\$|" + AQ + "|\\$|\\\\(?:.|\\n|\\z)[^\\s;&|()<>\"" + $q + "`\\\\$]*|\\g<hs>|(?<!<)<<(?!<)[\\s\\S]*|<|(?<![^\\s;&|(])#[^\\n]*|#|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<dq>|\\g<pe>|\\(\\(" + AR + "\\)\\)|\\(\\g<sb>(?:\\)|\\z))*))(?:\\)|(?<us>\\z))){0}"
+  + "(?<sub>\\$\\(\\(" + AR + "\\)\\)|\\$\\((?<sb>(?>(?:[^" + $q + "\"()\\\\<#$]++|\\$\\$|" + AQ + "|\\g<pe>|\\$|\\\\(?:.|\\n|\\z)[^\\s;&|()<>\"" + $q + "`\\\\$]*|\\g<hs>|(?<!<)<<(?!<)[\\s\\S]*|<|(?<![^\\s;&|(])#[^\\n]*|#|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<dq>|\\(\\(" + AR + "\\)\\)|\\(\\g<sb>(?:\\)|\\z))*))(?:\\)|(?<us>\\z))){0}"
   + "(?<pe>\\$\\{(?>(?:[^}\"" + $q + "\\\\$`]++|\\\\(?:.|\\n|\\z)|\\g<dq>|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<sub>|\\g<pe>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`|\\$(?![({]))*)(?:\\}|\\z)){0}"
   + "(?<dq>\"(?>(?:[^\"\\\\$`]++|\\\\(?:.|\\n|\\z)|\\g<pe>|\\$(?![({])|\\g<sub>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`)*)(?:\"|(?<ud>\\z))){0}";
 def fs(re; f): . as $in | [match(re; "g") | [.offset, .length, .string, any(.captures[]; (.name == "us" or .name == "ud" or .name == "ua") and .string != null)]] as $ms

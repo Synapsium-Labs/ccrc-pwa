@@ -204,12 +204,13 @@ describe('the worker merge deny', () => {
 
   it('strips a heredoc line of many `<<` and a body of unclosed `$(` in bounded time — no recursion per `<<`', () => {
     // A heredoc's rest-of-line is stripped WITHOUT a second heredoc, and a `$(`
-    // that never closes is dropped, not stripped again: either one recursing
+    // that never closes is kept raw, not stripped again: either one recursing
     // walks the rest of the payload once per `<<` (2.4 to 3.8 s and 0.4 to
     // 0.6 GB at 16 KB, measured on the strip alone; 15 s and 2.9 GB at 36 KB).
     hold(WAVE_HOLD);
-    // The `$(` units sit in an unquoted heredoc body, the one place an unclosed
-    // `$(` is stripped as a substitution rather than as the top-level `$(…)`.
+    // The `$(` units sit in an unquoted heredoc body, where the substitution
+    // reader meets an unclosed `$(`, stops there and keeps the rest raw (the
+    // top level has no `$(` arm of its own).
     for (const [pre, u] of [['', '<<a '], ['cat <<a\n', '$(cat <<a\n']]) {
       const t0 = Date.now();
       const r = bash(pre + u.repeat(Math.ceil(16000 / u.length)) + '\necho merge origin');
@@ -264,6 +265,7 @@ describe('the worker merge deny', () => {
     ['x=$(cat <<EOF\nit\'s\nEOF)\ngh pr merge 42; echo \'y\''],
     ['echo $$\'\\\'; gh pr merge 42; echo \'x\''],
     ['echo "$(echo $$\'\\\')"; gh pr merge 42; echo \'x\''],
+    ['echo "$(echo ${x:-)} "it\'s" )"; gh pr merge 42; echo \'z\''],
   ])('reads a quote, heredoc or arithmetic edge as bash does: %j', (c) => {
     hold(WAVE_HOLD);
     expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
@@ -273,14 +275,16 @@ describe('the worker merge deny', () => {
   // text, so a merge after it is still seen. A heredoc with no exact
   // terminator line keeps its body (bash ends one at `EOF)` inside a `$(…)`
   // the strip may not have parsed); an unclosed span keeps its text; `$` pairs
-  // are read from the start of a run; a `${…}` inside `$(…)` holds its `(`; a
+  // are read from the start of a run; a `${…}` inside a quoted `$(…)` holds its `(`; a
   // `<<` line that leaves a quote open keeps its body; a line of two heredocs
   // is read from the last; a quoted delimiter may hold a blank, and a bare
   // one may start with any word character; a body line `EOF)` keeps the body
   // (bash ends a heredoc there inside a `$(…)` the strip does not parse). Any
   // heredoc opener the strip sees but cannot complete keeps everything from it
   // to the end RAW. An escape takes the rest of its word, so `\ #` opens no
-  // comment; a `#` in `${…}` is part of the expansion.
+  // comment; a `#` right after `${` or in `"${…}"` is part of the expansion (a
+  // ` #` or `(#` inside an UNQUOTED top-level `${…}` is still read as a comment,
+  // which the deny's header lists).
   it.each([
     ['cat <<EOF\nit\'s\ngh pr merge 42'],
     ['echo $$$\'\\\'\'; gh pr merge 42; echo \'x\''],
@@ -289,8 +293,9 @@ describe('the worker merge deny', () => {
     ['x=$(echo ")"; cat <<EOF\nhi\nEOF)\ngh pr merge 42'],
     ['x=$(\ncat <<EOF\nhi\nEOF)\ngh pr merge 42'],
     [`x=$(true ${'a'.repeat(210)}; cat <<EOF\nhi\nEOF)\ngh pr merge 42`],
-    ['x=$(cat <<EOF\nhi\nEOF\necho ${y/(/z})\ngh pr merge 42'],
-    ['x=$(cat <<EOF\nhi\nEOF\necho ${y/(/z})\ngh pr merge 42; echo \'x\''],
+    ['echo "$(cat <<EOF\nhi\nEOF\necho ${y/(/z})"; gh pr merge 42; echo "k)"'],
+    ['echo "$(echo ${y/(/z})"\ngh pr merge 42\necho "k)"'],
+    ['x=$(cat <<EOF\nhi\nEOF\necho z\ngh pr merge 42'],
     ['echo "unterminated; gh pr merge 42'],
     ['cat <<EOF "x\ny"; gh pr merge 42\nbody\nEOF\necho z'],
     ['cat <<A <<B\nit\'s\nA\nit\'s\nB\ngh pr merge 42\necho \'x\''],
@@ -303,6 +308,16 @@ describe('the worker merge deny', () => {
     ['echo ${#x}; gh pr merge 42'], ['echo "${x#y}"; gh pr merge 42'],
     ['echo "$(echo ${x##*/})"; gh pr merge 42; echo \'x\''],
   ])('keeps what it cannot complete, so a merge after it is seen: %j', (c) => {
+    hold(WAVE_HOLD);
+    expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
+  });
+
+  // The merge word may be followed by an operator with no blank between: `;`
+  // `&` `|` `(` `)` `<` `>` end it as a blank does (review 247 F3; bare `gh pr
+  // merge` merges the current branch's PR, a worker's own wave PR).
+  it.each([
+    ['gh pr merge;echo ok'], ['gh pr merge&&echo ok'], ['x=$(gh pr merge)'], ['(gh pr merge)'],
+  ])('refuses a merge word that an operator ends: %j', (c) => {
     hold(WAVE_HOLD);
     expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
   });
