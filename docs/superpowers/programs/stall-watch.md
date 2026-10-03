@@ -248,6 +248,13 @@ Output: `w2-shadow-review.json` in the coordinator notes.
   (run 238) and workspace-lifecycle wave 2 (run 236). A conflict before the merge then has a live worker, through
   `merging → working` and a `fix-round` (worker clause 16's third trigger). After a merge proof the run closes
   `final:true`, with wave 5's run opened first.
+  Re-measured 2026-10-03 after workspace-lifecycle wave 2 merged (#233, `fe7b9775`), whose README and CLAUDE.md hunks
+  landed under claim 897. #227, #228 and #232 each merge clean against `main`.
+  - **The merged tree,** in the operator's merge order (main, then #227, then #228, then #232), built in a scratch
+    worktree since removed.
+  - **What ran on it:** the README citation cases (7 passed / 328 skipped), the skill pins, `single-definition`,
+    `deviation-refs`, `dtbd`, `topology-clean` and the six stall suites. All green.
+  - **Result:** no conflict, measured, so no fix-round (mail 3330).
 - **R18 (coordinator, 2026-10-03 12:15): the wave-2 review sets the arming order and adds a wave 6.** The order:
   1. `stall-watch-live` now. Its one r1 in the window was true.
   2. `mail-gate-busy-shadow` now.
