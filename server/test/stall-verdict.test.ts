@@ -10,7 +10,7 @@ import {
   STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, STALL_REPLY_WAITING_PREFIX, STALL_REPORT_PREFIX, STALL_WAIT_PREFIX,
 } from '../src/coord/stall.js';
 import type {
-  CoordinatorState, LiveWordRead, StallArm, StallArming, StallHold, StallInput, StallMailRow, StallMode,
+  CoordinatorState, LiveWordRead, StallActivation, StallArm, StallArming, StallHold, StallInput, StallMailRow, StallMode,
   StallNotice, StallR3Cause, StallRunRow, StallSubject, StallVerdict, StallWorker,
 } from '../src/coord/stall.js';
 import { REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT } from '../../shared/api.js';
@@ -67,7 +67,7 @@ function notice(mode: StallMode, arm: StallArm, rung: 1 | 2 | 3, key: number, at
 interface Over {
   primary?: Partial<StallRunRow>; runs?: readonly StallRunRow[]; subject?: StallSubject; worker?: StallWorker;
   mail?: readonly StallMailRow[]; notices?: readonly StallNotice[]; arming?: StallArming;
-  coordinationPaused?: boolean; coordinator?: CoordinatorState | null;
+  coordinationPaused?: boolean; coordinator?: CoordinatorState | null; activation?: StallActivation;
 }
 function stallInput(over: Over = {}): StallInput {
   const primary = runRow(over.primary);
@@ -79,6 +79,7 @@ function stallInput(over: Over = {}): StallInput {
     arming: over.arming ?? ARMED,
     coordinationPaused: over.coordinationPaused ?? false,
     coordinator: over.coordinator ?? null,
+    activation: over.activation ?? { kind: 'none' },
   };
 }
 
@@ -194,7 +195,7 @@ describe('stallVerdict order: first match wins (spec §10, wave-1 subset)', () =
 // the verdict's.
 const WAITING: Partial<PresentWorker> = { live: { ok: true, word: 'waiting', since: NOW - 3 * H } };
 const MENU: Partial<PresentWorker> = { dialogPending: true };
-const SLOTS: ReadonlyArray<{ slot: string; base: Partial<PresentWorker>; set: Partial<PresentWorker>; run?: Partial<StallRunRow> }> = [
+const SLOTS: ReadonlyArray<{ slot: string; base: Partial<PresentWorker>; set: Partial<PresentWorker>; run?: Partial<StallRunRow>; activation?: StallActivation }> = [
   { slot: 'FleetSession.unmeasured, where statusUnmeasured folds', base: {}, set: { unmeasured: true } },
   { slot: 'a null pane pid', base: {}, set: { live: { ok: false, reason: 'no-pane' } } },
   { slot: 'a null config dir', base: {}, set: { live: { ok: false, reason: 'no-config-dir' } } },
@@ -204,6 +205,7 @@ const SLOTS: ReadonlyArray<{ slot: string; base: Partial<PresentWorker>; set: Pa
   { slot: 'lifecycle unmeasurable', base: {}, set: { lifecycle: 'unmeasurable' } },
   { slot: 'a lifecycle word this build cannot name', base: {}, set: { lifecycle: 'hibernating' } },
   { slot: 'a null dispatchedAt', base: {}, set: {}, run: { dispatchedAt: null } },
+  { slot: 'a re-activation whose time is unmeasured', base: {}, set: {}, activation: { kind: 'unmeasured' } },
   { slot: 'idle with a null statusUpdatedAt', base: {}, set: { live: { ok: true, word: 'idle', since: null } } },
   { slot: 'shell with a null statusUpdatedAt', base: { live: { ok: true, word: 'shell', since: NOW - 3 * H } }, set: { live: { ok: true, word: 'shell', since: null } } },
   { slot: 'waiting with a null statusUpdatedAt', base: WAITING, set: { live: { ok: true, word: 'waiting', since: null } } },
@@ -218,10 +220,10 @@ const BASES: ReadonlyArray<{ name: string; mail: StallMailRow[] }> = [
   { name: 'the coordinator ball', mail: [mailRow(4001, NOW - 4 * H, WORKER, 'coordinator', 'question', 'which base?')] },
 ];
 describe.each(BASES)('the unmeasured slots, over $name', ({ mail }) => {
-  it.each(SLOTS)('$slot', ({ base, set, run }) => {
+  it.each(SLOTS)('$slot', ({ base, set, run, activation }) => {
     const control = stallVerdict(stallInput({ worker: workerAt(base), mail }), NOW);
     expect(control, 'control: without the slot the verdict is something else').not.toEqual(hold('unmeasured'));
-    expect(stallVerdict(stallInput({ worker: workerAt({ ...base, ...set }), primary: run, mail }), NOW)).toEqual(hold('unmeasured'));
+    expect(stallVerdict(stallInput({ worker: workerAt({ ...base, ...set }), primary: run, mail, activation }), NOW)).toEqual(hold('unmeasured'));
   });
 });
 
@@ -281,7 +283,7 @@ describe('stallFacts: the ball, the episode key and the quiet clock', () => {
 
   it('with no mail the worker has the ball, and dispatchedAt keys the episode', () => {
     expect(facts([])).toEqual({
-      ball: 'worker', episodeKeyMs: D, quietSince: D + 5 * H, workerLast: null, inboundLast: null, lastExchangeAt: null,
+      ball: 'worker', episodeKeyMs: D, capKeyMs: D, quietSince: D + 5 * H, workerLast: null, inboundLast: null, lastExchangeAt: null,
     });
   });
 
@@ -316,7 +318,7 @@ describe('stallFacts: the ball, the episode key and the quiet clock', () => {
     const check = mailRow(3003, D + 4 * H, 'operator', WORKER, 'status', `${STALL_CHECK_PREFIX} run 31 — quiet 2h 0m, owed: next report`, 31);
     const report = mailRow(3004, D + 5 * H, 'operator', COORD, 'status', `${STALL_REPORT_PREFIX} run 31 worker silent`, 31);
     expect(facts([own, check, report], workerAt({ live: liveWord('idle', D + 2 * H) }))).toEqual({
-      ball: 'worker', episodeKeyMs: D + H, quietSince: D + 2 * H, workerLast: own, inboundLast: null, lastExchangeAt: D + H,
+      ball: 'worker', episodeKeyMs: D + H, capKeyMs: D + H, quietSince: D + 2 * H, workerLast: own, inboundLast: null, lastExchangeAt: D + H,
     });
   });
 
@@ -324,7 +326,7 @@ describe('stallFacts: the ball, the episode key and the quiet clock', () => {
     const check = mailRow(3003, D + 4 * H, 'operator', WORKER, 'status', `${STALL_CHECK_PREFIX} run 31 — quiet 2h 0m, owed: first report`, 31);
     const reply = mailRow(3005, D + 4 * H + 10 * MIN, WORKER, 'coordinator', 'status', `${STALL_REPLY_PREFIX} working on Task 4`, 31);
     expect(facts([check, reply], workerAt({ live: liveWord('idle', D + 4 * H + 12 * MIN) }))).toEqual({
-      ball: 'worker', episodeKeyMs: reply.at, quietSince: D + 4 * H + 12 * MIN, workerLast: reply, inboundLast: null, lastExchangeAt: reply.at,
+      ball: 'worker', episodeKeyMs: reply.at, capKeyMs: reply.at, quietSince: D + 4 * H + 12 * MIN, workerLast: reply, inboundLast: null, lastExchangeAt: reply.at,
     });
   });
 
@@ -1426,5 +1428,266 @@ describe('stallNewestDelivery', () => {
     expect(stallNewestDelivery(rows, 4002)?.id).toBe(9103);
     expect(stallNewestDelivery(rows, 4999)).toBeNull();
     expect(stallNewestDelivery([], 4001)).toBeNull();
+  });
+});
+
+// ── quiet-restarts-on-reactivation (D-3788): a run that comes back into an active state starts its clocks again ─────
+// The golden fixtures are the two shadow episodes measured in the live census (coord.db `runs`, `run_events` and
+// `mail`; ids and times as recorded, the sessions renamed to this file's fixtures). E4 is run 187, E5 is run 199.
+import { stallReactivation } from '../src/coord/stall.js';
+import type { StallEventRow } from '../src/coord/stall.js';
+
+const ev = (at: number, fromState: string, toState: string): StallEventRow => ({ at, fromState, toState });
+const reactivated = (at: number): StallActivation => ({ kind: 'reactivated', at });
+
+describe('stallReactivation: the newest entry into ACTIVE_RUN_STATES after the first (quiet-restarts-on-reactivation)', () => {
+  const D = t('2026-09-30T19:48:51.388Z');
+  const DISPATCH = ev(D, 'planned', 'dispatched');
+  const WORKING = ev(D + H, 'dispatched', 'working');
+  const TO_REVIEW = ev(D + 2 * H, 'working', 'awaiting-review');
+
+  it('no events, the dispatch alone, or dispatch then working: none', () => {
+    expect(stallReactivation([])).toEqual({ kind: 'none' });
+    expect(stallReactivation([DISPATCH])).toEqual({ kind: 'none' });
+    expect(stallReactivation([DISPATCH, WORKING])).toEqual({ kind: 'none' });
+  });
+
+  it('the dispatch row is never a re-activation, even when it trails dispatchedAt by milliseconds', () => {
+    // markDispatched and advanceInner each read their own Date.now(): the planned -> dispatched row can land after
+    // dispatchedAt. It is the run's first entry, and dispatchedAt already measures it.
+    expect(stallReactivation([ev(D + 3, 'planned', 'dispatched'), ev(D + H, 'dispatched', 'working')])).toEqual({ kind: 'none' });
+  });
+
+  it.each([
+    ['awaiting-review', 'working'],
+    ['merging', 'working'],
+  ])('a send-back %s -> %s is a re-activation, at its own time', (from, to) => {
+    expect(stallReactivation([DISPATCH, WORKING, TO_REVIEW, ev(D + 9 * H, from, to)])).toEqual(reactivated(D + 9 * H));
+  });
+
+  it('two send-backs: the newest one', () => {
+    const events = [DISPATCH, WORKING, TO_REVIEW, ev(D + 3 * H, 'awaiting-review', 'working'),
+      ev(D + 4 * H, 'working', 'awaiting-review'), ev(D + 7 * H, 'awaiting-review', 'working')];
+    expect(stallReactivation(events)).toEqual(reactivated(D + 7 * H));
+  });
+
+  it('an exit after the re-activation does not move it, and a transition inside the active set is no entry', () => {
+    const events = [DISPATCH, WORKING, TO_REVIEW, ev(D + 3 * H, 'awaiting-review', 'working'), ev(D + 4 * H, 'working', 'awaiting-review')];
+    expect(stallReactivation(events)).toEqual(reactivated(D + 3 * H));
+    expect(stallReactivation([DISPATCH, ev(D + H, 'dispatched', 'working'), ev(D + 2 * H, 'dispatched', 'working')])).toEqual({ kind: 'none' });
+  });
+
+  it('observation rows (fromState === toState) are never entries, whatever their state', () => {
+    const events = [DISPATCH, WORKING, ev(D + 5 * H, 'working', 'working'), ev(D + 6 * H, 'planned', 'planned')];
+    expect(stallReactivation(events)).toEqual({ kind: 'none' });
+  });
+
+  it('a fromState this build cannot name, into an active state, is an entry; an unnamed toState is not', () => {
+    expect(stallReactivation([DISPATCH, WORKING, ev(D + 5 * H, 'parked-by-a-newer-build', 'working')])).toEqual(reactivated(D + 5 * H));
+    expect(stallReactivation([DISPATCH, WORKING, ev(D + 5 * H, 'awaiting-review', 'parked-by-a-newer-build')])).toEqual({ kind: 'none' });
+  });
+
+  it.each([
+    ['not an integer', 1.5],
+    ['NaN', Number.NaN],
+    ['negative', -1],
+    ['past the safe range', Number.MAX_SAFE_INTEGER + 2],
+    ['a string the store did not prove', '1790834550571' as unknown as number],
+  ])('the newest entry\'s time %s: unmeasured, never 0', (_label, at) => {
+    expect(stallReactivation([DISPATCH, WORKING, TO_REVIEW, ev(at, 'awaiting-review', 'working')])).toEqual({ kind: 'unmeasured' });
+  });
+
+  it('an unprovable time on an OLDER entry does not touch the newest one', () => {
+    const events = [DISPATCH, WORKING, TO_REVIEW, ev(Number.NaN, 'awaiting-review', 'working'),
+      ev(D + 4 * H, 'working', 'awaiting-review'), ev(D + 7 * H, 'awaiting-review', 'working')];
+    expect(stallReactivation(events)).toEqual(reactivated(D + 7 * H));
+  });
+});
+
+describe('E4 (run 187): a send-back after 8 h 53 m at awaiting-review starts the quiet clock and the episode again', () => {
+  const E4 = {
+    dispatched: t('2026-09-30T19:48:51.388Z'),  // runs.dispatchedAt; the planned -> dispatched row, same ms
+    w2811: t('2026-09-30T21:10:32.578Z'),       // the worker's ordinary status: the pre-advance episode key
+    c2814: t('2026-09-30T21:12:34.943Z'),       // the coordinator's status, "keep holding": inbound, not wait:
+    stop: t('2026-09-30T21:13:21.557Z'),        // the worker's Stop: its live stamp from then on
+    react: t('2026-10-01T06:02:30.571Z'),       // awaiting-review -> working (run_events)
+    fire: t('2026-10-01T06:02:34.392Z'),        // the shadow r1 row, 3.8 s after the advance
+    brief: t('2026-10-01T06:03:05.971Z'),       // the fix-round brief #2924
+  };
+  const MAIL = [
+    mailRow(2809, t('2026-09-30T21:07:02.804Z'), WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT, 187),
+    mailRow(2811, E4.w2811, WORKER, 'coordinator', 'status', 'claim still holds', 187),
+    mailRow(2814, E4.c2814, COORD, WORKER, 'status', 'keep holding', 187),
+  ];
+  const BRIEF = mailRow(2924, E4.brief, COORD, WORKER, 'status', 'fix-round', 187);
+  const e4 = (over: Over = {}): StallInput => stallInput({
+    primary: { id: 187, dispatchedAt: E4.dispatched }, worker: workerAt({ live: liveWord('idle', E4.stop) }),
+    mail: MAIL, activation: reactivated(E4.react), ...over,
+  });
+
+  it('CONTROL: with no re-activation term the measured input fires r1 at the measured time, keyed on #2811 (the defect)', () => {
+    expect(stallVerdict(e4({ activation: { kind: 'none' } }), E4.fire)).toEqual(r1(E4.w2811));
+  });
+
+  it('the first sweeps after the advance answer none, before and after the brief lands', () => {
+    expect(stallVerdict(e4(), E4.fire)).toEqual(NONE);
+    expect(stallVerdict(e4({ mail: [...MAIL, BRIEF] }), E4.brief + MIN)).toEqual(NONE);
+  });
+
+  it('r1 falls due only after 2 h of NEW silence: from the brief when one came, keyed on the advance', () => {
+    const briefed = e4({ mail: [...MAIL, BRIEF] });
+    expect(stallVerdict(briefed, E4.brief + STALL_QUIET_MS - 1)).toEqual(NONE);
+    expect(stallVerdict(briefed, E4.brief + STALL_QUIET_MS)).toEqual(r1(E4.react));
+  });
+
+  it('with no brief at all, r1 falls due 2 h after the advance itself', () => {
+    expect(stallVerdict(e4(), E4.react + STALL_QUIET_MS - 1)).toEqual(NONE);
+    expect(stallVerdict(e4(), E4.react + STALL_QUIET_MS)).toEqual(r1(E4.react));
+  });
+
+  it('a brief queued BEFORE the advance does not win: the clock runs from the later of the two', () => {
+    const early = { ...BRIEF, at: E4.react - 30_000 };
+    expect(stallVerdict(e4({ mail: [...MAIL, early] }), E4.react + STALL_QUIET_MS - 1)).toEqual(NONE);
+    expect(stallVerdict(e4({ mail: [...MAIL, early] }), E4.react + STALL_QUIET_MS)).toEqual(r1(E4.react));
+  });
+
+  it('rows recorded under the pre-advance key stay where they are: they neither count as this episode\'s r1 nor time its r2', () => {
+    // The shadow r1 the census recorded, keyed on #2811. Without the term it counts as done, and r2 falls due an hour
+    // after it (the lane is asked to measure the coordinator). With the term it is another episode's row.
+    const OLD_R1 = notice('shadow', 'quiet', 1, E4.w2811, E4.fire);
+    expect(stallVerdict(e4({ arming: SHADOW, notices: [OLD_R1], activation: { kind: 'none' } }), E4.fire + STALL_ESCALATE_MS))
+      .toEqual({ act: 'measure-coordinator', coordinatorId: COORD });
+    expect(stallVerdict(e4({ arming: SHADOW, notices: [OLD_R1] }), E4.fire + STALL_ESCALATE_MS)).toEqual(NONE);
+    expect(stallVerdict(e4({ arming: SHADOW, notices: [OLD_R1] }), E4.react + STALL_QUIET_MS)).toEqual(r1(E4.react));
+  });
+
+  it('a worker mail after the advance keys the next episode on itself, as before', () => {
+    const wd = mailRow(2927, t('2026-10-01T06:18:27.727Z'), WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT, 187);
+    expect(stallFacts(e4({ mail: [...MAIL, BRIEF, wd] })).episodeKeyMs).toBe(wd.at);
+  });
+
+  it('the dialog cap (2b) keeps today\'s clock and key: a dialog up through the review is pushed on the first sweep after the advance', () => {
+    // Coordinator ruling: the caps measure the pane or the account, not the worker's silence, and a dialog that blocked
+    // the pane through the review still blocks the fix-round brief. Keyed on #2811, so its text's span stays true.
+    const menu = (activation: StallActivation): StallInput => e4({ worker: workerAt({ live: liveWord('waiting', E4.stop) }), activation });
+    expect(stallVerdict(menu(reactivated(E4.react)), E4.fire)).toEqual(capOf('dialog-cap', E4.w2811));
+    expect(stallVerdict(menu(reactivated(E4.react)), E4.fire)).toEqual(stallVerdict(menu({ kind: 'none' }), E4.fire));
+  });
+
+  it('the limit cap (hold 3) keeps today\'s clock and key: 13 h quiet before the advance still counts', () => {
+    const late = E4.stop + 13 * H;   // chosen: the measured shape, moved past LIMIT_HOLD_CAP_MS
+    const limited = (activation: StallActivation): StallInput =>
+      e4({ worker: workerAt({ live: liveWord('idle', E4.stop), limits: { five: 100, seven: 40 } }), activation });
+    expect(stallVerdict(limited(reactivated(late)), late + 4_000)).toEqual(capOf('limit-cap', E4.w2811));
+    expect(stallVerdict(limited(reactivated(late)), late + 4_000)).toEqual(stallVerdict(limited({ kind: 'none' }), late + 4_000));
+  });
+
+  it('the dialog cap stays once per episode across a send-back: a push recorded before the advance holds it', () => {
+    // (D-3788) The caps dedupe on `capKeyMs`, the pre-advance key; keying the dedupe on the episode key would re-push.
+    const menu = e4({ worker: workerAt({ live: liveWord('waiting', E4.stop) }) });
+    const pushed = [notice('live', 'dialog-cap', 1, E4.w2811, E4.react - 60_000)];
+    expect(stallVerdict(menu, E4.fire)).toEqual(capOf('dialog-cap', E4.w2811));   // CONTROL: no push recorded
+    expect(stallVerdict({ ...menu, notices: pushed }, E4.fire)).toEqual(hold('dialog'));
+  });
+
+  it('the limit cap stays once per episode across a send-back: a push recorded before the advance holds it', () => {
+    // (D-3788) Same pin for the limit cap's dedupe argument.
+    const late = E4.stop + 13 * H;
+    const limited = e4({ worker: workerAt({ live: liveWord('idle', E4.stop), limits: { five: 100, seven: 40 } }), activation: reactivated(late) });
+    const pushed = [notice('live', 'limit-cap', 1, E4.w2811, late - 60_000)];
+    expect(stallVerdict(limited, late + 4_000)).toEqual(capOf('limit-cap', E4.w2811));   // CONTROL: no push recorded
+    expect(stallVerdict({ ...limited, notices: pushed }, late + 4_000)).toEqual(hold('limit'));
+  });
+
+  it('the ladder and the caps key apart: the episode key moves to the advance, the caps\' key stays on #2811', () => {
+    const f = stallFacts(e4());
+    expect({ episodeKeyMs: f.episodeKeyMs, capKeyMs: f.capKeyMs }).toEqual({ episodeKeyMs: E4.react, capKeyMs: E4.w2811 });
+  });
+
+  it('the marker clock (§5.1) restarts with it: a Stop 8 h before the advance draws no r1 after it', () => {
+    const mark = markOf({ at: E4.stop, turnAt: E4.stop - 10 * MIN, stopAt: E4.stop });
+    const marked = (activation: StallActivation): StallInput => ({ ...e4({ arming: W2_LIVE, activation }), w2: w2({ mark }) });
+    expect(stallVerdict(marked({ kind: 'none' }), E4.fire)).toEqual(r1(E4.w2811));
+    expect(stallVerdict(marked(reactivated(E4.react)), E4.fire)).toEqual(NONE);
+    expect(stallVerdict(marked(reactivated(E4.react)), E4.react + STALL_QUIET_MS)).toEqual(r1(E4.react));
+  });
+
+  it('an unmeasured re-activation holds every quiet clock, while 2a and 2b, which read only the key, still run', () => {
+    expect(stallVerdict(e4({ activation: { kind: 'unmeasured' } }), E4.fire)).toEqual(hold('unmeasured'));
+    // A worker gone from the tick past DEAD_GRACE_MS: the dead arm (step 2b) precedes the hold, keyed as before the term.
+    const gone = { ...e4({ arming: W2_LIVE, worker: { present: false }, activation: { kind: 'unmeasured' } }), w2: w2({ absentSince: E4.fire - DEAD_GRACE_MS }) };
+    expect(stallVerdict(gone, E4.fire)).toEqual(dead(E4.w2811, 'registry-absent'));
+  });
+});
+
+describe('E5 (run 199): a send-back 2.97 s before the shadow r1, the brief 36 min later', () => {
+  const E5 = {
+    dispatched: t('2026-09-30T23:55:37.757Z'),
+    c2913: t('2026-10-01T04:08:10.855Z'),   // the coordinator's "hold remains binding", not wait:
+    w2914: t('2026-10-01T04:08:37.795Z'),   // the worker's ordinary status: the pre-advance key
+    stop: t('2026-10-01T04:10:44.665Z'),    // the worker's Stop
+    react: t('2026-10-01T10:22:32.628Z'),   // awaiting-review -> working
+    fire: t('2026-10-01T10:22:35.601Z'),    // the shadow r1 row
+    brief: t('2026-10-01T10:58:57.853Z'),   // fix-round #2971
+    w2972: t('2026-10-01T11:07:24.379Z'),   // the worker's report on the fix round
+  };
+  const MAIL = [
+    mailRow(2909, t('2026-10-01T04:01:25.850Z'), WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT, 199),
+    mailRow(2913, E5.c2913, COORD, WORKER, 'status', 'hold remains binding', 199),
+    mailRow(2914, E5.w2914, WORKER, 'coordinator', 'status', 'hold acked', 199),
+  ];
+  const e5 = (over: Over = {}): StallInput => stallInput({
+    primary: { id: 199, dispatchedAt: E5.dispatched }, worker: workerAt({ live: liveWord('idle', E5.stop) }),
+    mail: MAIL, activation: reactivated(E5.react), ...over,
+  });
+
+  it('CONTROL: with no re-activation term the measured input fires r1 at the measured time, keyed on #2914', () => {
+    expect(stallVerdict(e5({ activation: { kind: 'none' } }), E5.fire)).toEqual(r1(E5.w2914));
+  });
+
+  it('none at the measured fire, none up to the brief, none after it until the worker reports', () => {
+    expect(stallVerdict(e5(), E5.fire)).toEqual(NONE);
+    expect(stallVerdict(e5(), E5.brief - 1)).toEqual(NONE);
+    const briefed = e5({ mail: [...MAIL, mailRow(2971, E5.brief, COORD, WORKER, 'status', 'fix round', 199)] });
+    expect(stallVerdict(briefed, E5.w2972 - 1)).toEqual(NONE);
+  });
+});
+
+describe('quiet-restarts-on-reactivation: the first dispatch changes nothing', () => {
+  it('a planned -> dispatched row 3 ms after dispatchedAt leaves the base verdict and its facts exactly as they were', () => {
+    const events = [ev(RUN67_DISPATCHED + 3, 'planned', 'dispatched'), ev(RUN67_DISPATCHED + H, 'dispatched', 'working')];
+    const input = stallInput({ activation: stallReactivation(events) });
+    expect(stallVerdict(input, NOW)).toEqual(r1(RUN67_DISPATCHED));
+    expect(stallFacts(input)).toEqual(stallFacts(stallInput()));
+  });
+});
+
+// ── coord-ball-restarts-on-reactivation (D-3789): the coordinator's 30 h runs from its own send-back ─────────────────
+describe('coord-ball-restarts-on-reactivation: the coordinator\'s 30 h runs from the send-back too', () => {
+  // The common send-back shape: the worker's wave-done is the newest mail, so the ball stays the coordinator's while
+  // the run sits at awaiting-review and after the advance, until the brief lands.
+  const DONE = t('2026-10-01T04:01:25.850Z');           // E5's wave-done #2909
+  const REACT = DONE + 31 * H;                          // chosen: past COORD_BALL_CAP_MS at awaiting-review
+  const ballInput = (activation: StallActivation): StallInput => stallInput({
+    primary: { id: 199, dispatchedAt: t('2026-09-30T23:55:37.757Z') },
+    worker: workerAt({ live: liveWord('idle', DONE + 2 * MIN) }),
+    mail: [mailRow(2909, DONE, WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT, 199)], activation,
+  });
+
+  it('CONTROL: with no re-activation term the advance draws the coord-ball push within a sweep', () => {
+    expect(stallVerdict(ballInput({ kind: 'none' }), REACT + 4_000)).toEqual(capOf('coord-ball', DONE));
+  });
+
+  it('with it: none after the advance, and one push 30 h after it, keyed on it', () => {
+    expect(stallVerdict(ballInput(reactivated(REACT)), REACT + 4_000)).toEqual(NONE);
+    expect(stallVerdict(ballInput(reactivated(REACT)), REACT + COORD_BALL_CAP_MS - 1)).toEqual(NONE);
+    expect(stallVerdict(ballInput(reactivated(REACT)), REACT + COORD_BALL_CAP_MS)).toEqual(capOf('coord-ball', REACT));
+  });
+
+  it('a coordinator mail after the advance still restarts it as before', () => {
+    const resume = mailRow(2971, REACT + H, COORD, WORKER, 'status', `${STALL_WAIT_PREFIX} the rebase`, 199);
+    const input = { ...ballInput(reactivated(REACT)), mail: [mailRow(2909, DONE, WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT, 199), resume] };
+    expect(stallVerdict(input, REACT + COORD_BALL_CAP_MS)).toEqual(NONE);
+    expect(stallVerdict(input, resume.at + COORD_BALL_CAP_MS)).toEqual(capOf('coord-ball', resume.at));
   });
 });

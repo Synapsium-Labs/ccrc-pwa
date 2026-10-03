@@ -50,7 +50,8 @@ const worker = (over: Partial<LiveWorker> = {}): StallWorker => ({
 });
 const s4 = (over: Partial<StallInput> = {}, primary: StallRunRow = run67): StallInput => ({
   subject: { primary, runs: [primary] }, worker: worker(), mail: [m2509, m2510], notices: [],
-  arming: { disabled: false, live: true, escalate: false }, coordinationPaused: false, coordinator: null, ...over,
+  arming: { disabled: false, live: true, escalate: false }, coordinationPaused: false, coordinator: null,
+  activation: { kind: 'none' }, ...over,
 });
 const escalated = { disabled: false, live: true, escalate: true } as const;
 
@@ -1331,5 +1332,42 @@ describe('wave 2 texts: every remaining branch and sanitising call site has a ro
       expect(stallVerdict(interrupted, R1_AT)).toEqual({ act: 'notify', arm: 'quiet', rung: 1, key: EPISODE, to: 'worker' });
       expect(lastOf(interrupted)).toBe('No mail from you on run 67: the coordinator is told when your next turn ends without one, and by 02:57Z at the latest; the operator 1 h after that.');
     });
+  });
+});
+
+// `quiet-restarts-on-reactivation` (D-3788): S4's run went to awaiting-review after #2510 and came back to working at
+// REACT. r1 counts its quiet from the advance, so its subject and body never charge the worker the hours the run spent
+// waiting on its coordinator.
+describe('r1 after a send-back names the restarted clock (quiet-restarts-on-reactivation)', () => {
+  const REACT = T('2026-09-29T08:00:00Z');   // chosen: 10 h after S4's Stop
+  const back = s4({ activation: { kind: 'reactivated', at: REACT } });
+
+  it('the verdict fires r1 two hours after the advance, keyed on it, and not a millisecond before', () => {
+    expect(stallVerdict(back, REACT + 2 * 3_600_000 - 1)).toEqual({ act: 'none' });
+    expect(stallVerdict(back, REACT + 2 * 3_600_000)).toEqual({ act: 'notify', arm: 'quiet', rung: 1, key: REACT, to: 'worker' });
+  });
+
+  it('its subject and its quiet line count from the advance, never from the Stop before it', () => {
+    const text = stallCheckMail(back, stallFacts(back), REACT + 2 * 3_600_000);
+    expect(text.subject).toBe('stall-check: run 67 — quiet 2h 0m, owed: reply to #2510');
+    expect(text.body.split('\n')[1]).toBe('Your main loop has been idle since 2026-09-29T08:00:00Z (2h 0m). Your last mail on this run: #2509 status at 21:17:43Z. Newest mail to you on this run: #2510 answer at 21:19:17Z.');
+  });
+});
+
+// The dialog and limit caps keep today's clock and key (coordinator ruling on `quiet-restarts-on-reactivation`, D-3788):
+// pushed on the first sweep after a send-back, their text still names the episode the worker's last mail opened, so
+// the span it prints is at least the cap's own threshold, as before.
+describe('the dialog cap after a send-back keeps today\'s key, so the span it prints stays true', () => {
+  const REACT = T('2026-09-29T08:00:00Z');   // chosen: 10 h after S4's Stop
+  const menu = s4({
+    worker: worker({ live: { ok: true, word: 'waiting', since: IDLE_SINCE }, dialogPending: true }), arming: escalated,
+    activation: { kind: 'reactivated', at: REACT },
+  });
+
+  it('pushes on the first sweep after the advance, keyed on the worker\'s last mail, with the episode\'s true span', () => {
+    const at = REACT + 4_000;
+    const n = stallVerdict(menu, at);
+    expect(n).toEqual({ act: 'notify', arm: 'dialog-cap', rung: 1, key: EPISODE, to: 'operator' });
+    expect(stallPushText(menu, stallFacts(menu), n as StallNotify, at).body).toContain('this quiet episode opened 2026-09-28T21:17Z (10h 42m).');
   });
 });
