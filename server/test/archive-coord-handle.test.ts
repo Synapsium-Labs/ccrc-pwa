@@ -95,10 +95,10 @@ describe('CoordRoutesHandle', () => {
       'POST /api/runs (open)': () => ({ method: 'POST', url: '/api/runs', headers,
         payload: { program: 'other', title: 'T', claimedBy: 'demo-other', homeProject: 'demo' } }),
     };
-    // DETERMINISTIC ON THE MUTATED SIDE. The hold is released when EITHER the route settles OR a generous timeout passes,
+    // WHAT IT PROVES, AND ITS BOUND. The hold is released when EITHER the route settles OR HOLD_TIMEOUT_MS passes,
     // whichever comes first, and the order is recorded. With the mutex shared the route cannot settle while the hold is
-    // open, so the timeout releases the hold first; on a separate mutex the route settles first, however slow the box.
-    // (A fixed sleep before an "is it done yet?" check would let a loaded box's slow mutated route escape.)
+    // open, so the timeout releases the hold first: green every time. On a separate mutex it is red whenever the route
+    // settles inside the 2 s release; a route slower than that would let the timer win and pass, as a fixed sleep would.
     const HOLD_TIMEOUT_MS = 2000;
     it.each(Object.keys(direct))('%s, which calls coordMutex.run itself, waits for a held withAbandon and completes after it', async (route) => {
       const { app, handle, coord, id } = setup();

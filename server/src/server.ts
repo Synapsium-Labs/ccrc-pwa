@@ -2913,8 +2913,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * D-3878, holds the rule and its reasoning): the tmux verdict, then — only for a `live` pane — its pid, its wrapper's
    * config dir and its live file, then the frame's row. A read a verdict makes impossible is skipped, never faked; which
    * reads MATTER is the rule's to say, so none is skipped for being redundant. Read FAIL-CLOSED because `cmd_stop` refuses nothing: for a main
-   * checkout this is the only guard there is (a workspace keeps `ws-archive`'s own fail-closed `_ws_status` behind
-   * the door). `liveRowFor` cannot answer it alone: the frame folds what it could not measure towards rest.
+   * checkout this is the only guard there is. Its second caller is a workspace whose programme is to end
+   * (`busyReadFailsClosed`, D-3877), where it is the only read that can refuse before that end; every other workspace
+   * keeps `ws-archive`'s own fail-closed `_ws_status` behind the door. `liveRowFor` cannot answer it alone: the frame
+   * folds what it could not measure towards rest.
    */
   const idleForStop = async (rec: SessionRecord, uuid: string): Promise<boolean> => {
     const v = await deps.tmux.sessionVerdict(rec.id);

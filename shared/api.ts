@@ -1393,10 +1393,10 @@ export type BucketInput = Pick<
  * …and that sentence is also the archived rungs' PRECONDITION, not merely
  * their justification (D-74). They are entered on `archivedAt !== null` AND
  * `status === 'dead'`, because a live pane is proof the marker has outlived
- * what it describes: `cmd_ws_archive` kills the session before it stamps
- * (`ccd:5164`), but `ccd start`/`ccd ensure` once cleared `.stopped` and
- * `.swapblocked` on a deliberate revival and left `$REG/<id>.archived`
- * standing; `ws-restore` (`ccd:5704`) clears it, and since #143 so does a spawn.
+ * what it describes: `cmd_ws_archive` kills the session before it stamps,
+ * but `ccd start`/`ccd ensure` once cleared `.stopped` and `.swapblocked` on
+ * a deliberate revival and left `$REG/<id>.archived` standing; `cmd_ws_restore`
+ * clears it through `_ws_unarchive`, and since #143 so does `_spawn_start`.
  * So a workspace archived on merge and later revived carried a marker that
  * outranked every live rung below, for ever. MEASURED 2026-08-17, BEFORE #143:
  * 5 of the 7 archive markers sat on sessions with a live tmux pane, 4 mid-turn.
