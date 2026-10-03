@@ -43,6 +43,14 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-03 23:11 — wave 4 is blocked again; an overlap rule agreed with stall-watch.** `swift-hollow` has not
+  committed since 17:35 (`067151e64`, nothing pushed). Mails 3350 and 3357 have sat `queued` at gate `not-idle`
+  since they were sent, and the stall-watch coordinator reports a Bash approval prompt (mail 3363). The operator was
+  asked to clear it. Stall-watch wave 5 (run 252) edits `server/src/coord/store.ts` (the stall read only), the
+  `README.md` stall-watch paragraphs, and adds a migration that, like #215's, takes `user_version` 15. Agreed by mail
+  3364: both PRs land, and the second lander merges `main`, keeps both sides, renumbers its own migration to the
+  next free version, and re-runs `coord-db`, `coord-store` and the README citation cases. If #215 lands second, its
+  renumber is a landing delta ruled after its review.
 - **2026-10-03 18:32 — third merge done; `main` moved a fourth time; no further chase.** `swift-hollow` merged
   `db44b136` (`0dcd3ad39`) and recorded the bounded re-walk under 3538 (`067151e64`), with nothing pushed yet. Then
   #234 (landing-order wave 2) merged as `0087a045`. It edits `ccd/ccd`, the coordinator skill and its
