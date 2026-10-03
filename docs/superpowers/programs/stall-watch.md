@@ -286,7 +286,7 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     server restarts and registry flaps. Then either accept the repeat, or fund the latch the plan sketches under "Not in
     this wave".
   - **Its guards are measured:** `deviation-refs` 31/31 once the plan is tracked; `dtbd` and `topology-clean` green.
-- **R20 (coordinator, 2026-10-03 18:35): wave 4 goes back for one absorb.**
+- **R20 (coordinator, 2026-10-03 18:33): wave 4 goes back for one absorb.**
   - **The conflict.** Landing-order wave 2 merged as #234 (`0087a045`). It appends its native-queue sentence to the
     end of coordinator clause 15 and edits `CONTRACT[14]`. `git merge-tree` of `ws/still-cove` against `origin/main`
     then exited 1 on `ccd/coordinator-skill/SKILL.md` and `server/test/coordinator-skill.test.ts`. #227 and #228
