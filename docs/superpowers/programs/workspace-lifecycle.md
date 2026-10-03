@@ -19,7 +19,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
-| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | awaiting review (run 236 at `3b07b2bc`; review run 240 dispatched 2026-10-03 00:10) |
+| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | fix round 1 (review 240 ruled 2026-10-03 00:40; run 236 back at `working`) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
@@ -258,6 +258,31 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     Whoever won't use a slot mails the other before it ages out.
 - **2026-10-03 00:10 — review run 240 dispatched** to `ccrc-pwa-brisk-hollow`, in the 00:09:10 slot, after
   re-measuring the tip as `3b07b2bc`. #233's required CI is green.
+- **2026-10-03 00:40 — review 240 closed and ruled** (report
+  `~/.cc-clips/ccrc-pwa-brisk-hollow/review-240-3b07b2bc.md`; the held-out panel, 27 agents, no lens unverified;
+  7 confirmed, 1 refuted, 2 more from the reviewer).
+  - **The review accepts the wave's shape:**
+    - the door's check-before-act ordering;
+    - the rings, apart from F9;
+    - the four-part order (X3 red);
+    - the three fault gates on one predicate;
+    - the census, the removed and unchanged surfaces, and the open questions (none widened).
+    All suites are green at the tip, 17 sampled mutation rows reproduce, and boot.test.ts is unmoved against main.
+  - **Fix round 1** (mail 3296; numbers 3877–3881 issued, written bare here):
+    - F8, 3877: with `{programme:'end'}` and no `interrupt`, a workspace's busy is read fail-closed before the
+      programme ends. This wave made it measurable, and spec §5.2 asks for every measurable check before the
+      irreversible act.
+    - F9, 3878: `idleForStop`'s rule moves to L1 beside `decideArchive` (it was a decision in delivery).
+    - F2, 3879: the test that `withAbandon` shares the routes' mutex must red under a second, separately bound mutex.
+      It was green 82/82 under that mutation.
+    - F5, 3880: the Task 2 fixture change gets its number.
+    - F1: comment correction only. Since #143 every ccd spawn clears the archive marker, so the panel's premise (a
+      live pane carrying a marker) is history except for a pre-#143 pane never respawned. The door reading ccd's
+      `already archived` exit 0 as success is carried.
+    - F3 and F4: the Deviations preamble is reworded, and spec amendment A10 names the three fault gates.
+    - F6 needs no number. F7 is commit-message history, so no action.
+    - 3881 is a spare.
+  - **The re-review** needs a dispatch slot. This programme's next agreed slot is 11:53:20.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -281,6 +306,13 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 - **A follow-up owes the archive door's unreadable-store 409 its detail.** On a store-read failure, the
   `coordinator-has-open-runs` and `run-open` bodies drop `measured()`'s detail, and nothing logs it (base behaviour,
   D-2545). Wave 2 parked it, because the fix reshapes about six replayed assertions.
+- **Wave 2's carried follow-ups** (review 240):
+  - the archive door reads ccd's `already archived` exit 0 as `archived:true` without checking that a measured-live
+    row was stopped (reachable only on a pre-#143 pane never respawned);
+  - the base's 404 for an unlistable registry (`knownId` before the 503 ladder) folds "unlistable" into "unknown";
+  - Released/Archived fold disjointness rests on `released.ts` alone, and `inReleasedFold` could add
+    `!inArchivedFold` (FM7).
+  Wave 3 rewrites the archive's end of life, so its plan takes these up or rules them out.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`, `~/.cc-limits`
   or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec whitelist; never print
   secret contents.
