@@ -19,7 +19,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
-| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | awaiting re-review (fix round 2 at `a2e5744f`; review run 243 dispatched 2026-10-03 12:35) |
+| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | fix round 3 (review 243 ruled 2026-10-03 12:55; run 236 back at `working`) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
@@ -325,6 +325,18 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - the stop's re-read runs only without `interrupt`.
   - **Review run 243** is dispatched to `ccrc-pwa-plain-canyon` at 12:35. The window had room: 21 of 24, and
     stall-watch holds no slot.
+- **2026-10-03 12:55 — review 243 closed and ruled** (report
+  `~/.cc-clips/ccrc-pwa-plain-canyon/review-243-a2e5744f.md`; 8 minor findings; the panel confirmed 10, each 3–0,
+  and refuted 3).
+  - **Fix round 2 holds.** The verdict is pure L1, and the worker's rulings 2 and 3 are consistent with the intent.
+    18 rows reproduce, and every suite is green.
+  - **Fix round 3** (mail 3321), with each leak closed under 3881 by extending its entry, no new number:
+    - F7 (ruled): a plain workspace archive with `interrupt` still stopped a pane it could not measure, because the
+      frame row folds tmux `unknown` to dead and the stop precedes ccd's `_ws_status`. `busyReadFailsClosed` now
+      also holds whenever `interrupt` is set: interrupt consents to losing a measured turn only.
+    - F1: an empty or unextractable status word is unmeasured, as ccd's `[[ -n "$st" ]]` reads it.
+    - F2: the config dir is read before the tmux verdict, in ccd's order.
+    - F3–F6 and F8: L0 refusal docs, spec text, the preamble, and README re-wrapped to its line count.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
