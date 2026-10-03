@@ -251,7 +251,7 @@ export function stallMailClass(
 ): StallMailClass | null {
   if (m.fromId === STALL_SENDER && m.subject.startsWith(STALL_CHECK_PREFIX)) return 'check';
   if (m.fromId === STALL_SENDER && m.subject.startsWith(STALL_REPORT_PREFIX)) return 'report';
-  // 'self-wake' is tested after check and report, so a report naming a failure stays a report.
+  // No class prefix starts another (`stall-vocabulary.test.ts` pins it), so the order of these tests decides nothing.
   if (m.fromId === STALL_SENDER && (m.subject.startsWith(STALL_ORPHANED_PREFIX) || m.subject.startsWith(STALL_FAILED_PREFIX))) return 'self-wake';
   if (bind !== undefined && m.subject.startsWith(STALL_REPLY_PREFIX) && stallReplyBound(m, bind)) return 'reply';
   return null;
@@ -652,7 +652,7 @@ export function stallFacts(input: StallInput): StallFacts {
 export const STALL_WORKING_BACKOFF_CAP = 2;
 
 /**
- * I2: how long the marker branch (step 11, under `stall-watch-w2-live` with a readable marker) lets the worker go
+ * I2: how long the marker branch (§10 step 10, under `stall-watch-w2-live` with a readable marker) lets the worker go
  * quiet before r1. The wait backs off per check the worker answered ONLY with `re stall-check: working`. Such a
  * worker is not silent, and a 2 h check on every episode would teach it to ignore them.
  *
@@ -844,7 +844,7 @@ function stallR2Due(input: StallInput, key: number): StallVerdict {
   return r3Verdict(key, 'coordinator-dead');
 }
 
-/** §10 step 11 without the w2 marker, or without a current turn marker: wave 1's ladder, unchanged. The quiet clock
+/** §10 step 10 without the w2 marker, or without a current turn marker: wave 1's ladder, unchanged. The quiet clock
  *  (the live stamp, and any mail) gates r1 only. A later rung falls due an hour after the previous one on the RAW
  *  live stamp (`rungDueAt`), so it re-times only when a busy read pushed the word's turn to idle past that hour. */
 function stallWaveOneLadder(input: StallInput, f: StallFacts, word: string, liveSince: number, key: number, now: number): StallVerdict {
@@ -882,7 +882,7 @@ function stallProofDue(input: StallInput, mark: TurnMark, deliveries: readonly S
   return check !== null && d !== null && d.deliveredAt === null && now - check.at >= CHECK_UNDELIVERED_MS;
 }
 
-/** The limit-hold condition (§10 step (6)), the ONE definition: `stallVerdictInner` and the session verdicts
+/** The limit-hold condition (§10 step (5)), the ONE definition: `stallVerdictInner` and the session verdicts
  *  (`stallSessionHold`, `stallSessionMarkerInner`) both call it, so the run verdict and the session verdicts cannot
  *  disagree on what a limited worker is. A window at its ceiling, a strand, a blocked swap, or an auto-continue hold
  *  begun within AUTO_CONTINUE_RECENT_MS. A null `limits` or a null window is neither at the ceiling nor unmeasured. */
@@ -898,25 +898,25 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
   return stallMailDisabledHold(stallVerdictInner(input, now), input.arming);
 }
 
-/** §10 after wave 2. The first match wins:
+/** §10 after wave 2, in the spec's own numbers. The first match wins:
  *  (1) a run this build cannot name;
  *  (2) the marker-unreadable push, then a worker absent from the tick (the dead arm after DEAD_GRACE_MS), then an
  *      unmeasured fleet row, lifecycle, dispatch or re-activation;
  *  (3) lifecycle: a deliberate stop holds; an orphan or never-started pane is the dead arm after DEAD_GRACE_MS;
- *  (4) the live read, and under the w2 marker an unmeasured turn marker;
- *  (5) hold 2a, then 2b;
- *  (6) the limit hold;
- *  (7) restart grace;
- *  (8) frozen;
- *  (9) delegates;
- *  (10) the coordinator's ball: coord-deaf, the cap, or none;
- *  (11) the worker's ball: under the w2 marker, on the marker clock and escalating on proof; otherwise wave 1's
+ *  (3b) the live read, and under the w2 marker an unmeasured turn marker (step 2's hold, after (3) by D-3630);
+ *  (4) hold 2a, then 2b;
+ *  (5) the limit hold;
+ *  (6) restart grace;
+ *  (7) frozen;
+ *  (8) delegates;
+ *  (9) the coordinator's ball: coord-deaf, the cap, or none;
+ *  (10) the worker's ball: under the w2 marker, on the marker clock and escalating on proof; otherwise wave 1's
  *      ladder.
  *  Without `stall-watch-w2-live`, every LIVE outcome is wave 1's (`dark-mode-keeps-wave-1-verdict` (D-3645)). A wave-2 arm
  *  still answers `notify`, `stallNotifyDelivery` makes it shadow, and its standing shadow row marks it done.
  *  Exception (i): a shadow arm takes its sweep, so THREE arms can defer a wave-1 send by one sweep, once per the
  *  arm's own key: `marker-unreadable` (step 2a: it precedes EVERY wave-1 outcome, so it can defer r1, measure-coordinator,
- *  r2, r3 and the caps alike), `coord-deaf` (ahead of the coord-ball cap) and `frozen` (step 8, ahead of the coord-ball
+ *  r2, r3 and the caps alike), `coord-deaf` (ahead of the coord-ball cap) and `frozen` (step 7, ahead of the coord-ball
  *  cap, for a busy worker with a `working` marker). The lane guarantees that `input.mail` is run-scoped (`stallRunMail`,
  *  F4). */
 function stallVerdictInner(input: StallInput, now: number): StallVerdict {
@@ -958,7 +958,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
     return w2 !== undefined && stallDeadDue(input, w2.deadSince, key, now) ? stallW2Notify(input, 'dead', key, because) : holdVerdict('lifecycle');
   }
   if (lc === 'restarting' || lifecycleIsDead(lc)) return holdVerdict('lifecycle');
-  // (4) the live read. The marker's `unmeasured` holds only under the w2 marker: the dark keeps wave 1 (F3).
+  // (3b) the live read. The marker's `unmeasured` holds only under the w2 marker: the dark keeps wave 1 (F3).
   if (!live.ok) return holdVerdict('unmeasured');
   if (w2Live && markReason === 'unmeasured') return holdVerdict('unmeasured');
   if (live.since === null) return holdVerdict('unmeasured'); // D-3580 any-null-stamp-holds: whatever the word
@@ -966,19 +966,19 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   if (dialogShaped && (w.hookAsk.kind === 'unmeasured' || w.askRow.kind === 'unmeasured')) return holdVerdict('unmeasured');
   const capQuiet = now - capQuietSince(input, f, live.since);
   const capKey = f.capKeyMs; // the caps keep the spec's clock and key (`quiet-restarts-on-reactivation` (D-3788))
-  // (5) hold 2a (a question, uncapped), then 2b (a dialog with no ask, capped once per episode). An `approval` is 2b.
+  // (4) hold 2a (a question, uncapped), then 2b (a dialog with no ask, capped once per episode). An `approval` is 2b.
   const hookAskCorrelated = w.hookAsk.kind === 'ask' && live.since !== null && w.hookAsk.at >= live.since - ASK_DIALOG_SLACK_MS;
   const askRowOpen = w.askRow.kind === 'row' && (w.askRow.state === 'held' || w.askRow.state === 'answering');
   if (live.word === 'waiting' && (hookAskCorrelated || askRowOpen)) return holdVerdict('ask');
   if (dialogShaped) return capQuiet >= STALL_QUIET_MS && rungDoneAt(input, 'dialog-cap', 1, capKey) === null ? capVerdict('dialog-cap', capKey) : holdVerdict('dialog');
-  // (6) the limit hold, capped once per episode (`stallLimited`, shared with the session verdicts)
+  // (5) the limit hold, capped once per episode (`stallLimited`, shared with the session verdicts)
   if (stallLimited(w, now)) {
     return capQuiet >= LIMIT_HOLD_CAP_MS && rungDoneAt(input, 'limit-cap', 1, capKey) === null ? capVerdict('limit-cap', capKey) : holdVerdict('limit');
   }
-  // (7) restart grace: a restart cut a turn short, and ccd's redrive re-prompts it
+  // (6) restart grace: a restart cut a turn short, and ccd's redrive re-prompts it
   if (w2Live && okMark !== null && okMark.graceUntil !== null && now < okMark.graceUntil) return holdVerdict('restart-grace');
   const view = okMark === null ? null : stallMarkView(okMark, live);
-  // (8) frozen: a turn in flight under a busy word with no main hook event for FROZEN_NO_EVENT_MS, once per turn
+  // (7) frozen: a turn in flight under a busy word with no main hook event for FROZEN_NO_EVENT_MS, once per turn
   if (w2 !== undefined && okMark !== null && view !== null && view.state === 'working' && live.word === 'busy') {
     const turnKey = okMark.turnAt ?? okMark.at;
     const frozenSince = stallFrozenSince(okMark, w2.hook);
@@ -986,12 +986,12 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
       return stallW2Notify(input, 'frozen', turnKey, 'no-hook-event');
     }
   }
-  // (9) delegates: subagent activity holds the quiet arm, capped at DELEGATE_CAP_MS of main silence. It needs the worker's
+  // (8) delegates: subagent activity holds the quiet arm, capped at DELEGATE_CAP_MS of main silence. It needs the worker's
   // ball (`delegates-requires-the-workers-ball` (D-3684)), or it would also silence coord-deaf and the coord-ball cap.
   const quietStart = view === null ? null : stallMarkQuiet(view, f, input);
   if (w2 !== undefined && w2Live && view !== null && view.state !== 'working' && f.ball === 'worker' && quietStart !== null
     && stallHookFresh(w2.hook, now) && now - quietStart < DELEGATE_CAP_MS) return holdVerdict('delegates');
-  // (10) the coordinator's ball: coord-deaf, then the cap, then none (`coord-ball-below-cap-is-none`, D-3574)
+  // (9) the coordinator's ball: coord-deaf, then the cap, then none (`coord-ball-below-cap-is-none`, D-3574)
   if (f.ball === 'coordinator') {
     const deaf = w2 === undefined ? null : stallDeafMail(input, w2.deliveries);
     if (deaf !== null && now - deaf.at >= COORD_DEAF_MS && rungDoneAt(input, 'coord-deaf', 1, deaf.id) === null) {
@@ -1001,7 +1001,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
     const ballAge = f.lastExchangeAt === null ? 0 : now - Math.max(f.lastExchangeAt, stallReactivatedAt(input));
     return ballAge >= COORD_BALL_CAP_MS && rungDoneAt(input, 'coord-ball', 1, key) === null ? capVerdict('coord-ball', key) : VERDICT_NONE;
   }
-  // (11) the worker's ball. Without the w2 marker, or without a current marker: wave 1's ladder, unchanged.
+  // (10) the worker's ball. Without the w2 marker, or without a current marker: wave 1's ladder, unchanged.
   if (!w2Live || w2 === undefined || okMark === null || view === null) return stallWaveOneLadder(input, f, live.word, live.since, key, now);
   if (view.state === 'working') return holdVerdict('busy');
   if (live.word !== 'busy' && !isIdleWord(live.word)) return holdVerdict('unmeasured');
@@ -1100,7 +1100,7 @@ function stallQuietFrom(facts: StallFacts): number {
   return facts.quietSince ?? facts.episodeKeyMs;
 }
 
-/** The marker ladder's quiet start, when §10 step 11's marker ladder is the one that decides r1: `stall-watch-w2-live`
+/** The marker ladder's quiet start, when §10 step 10's marker ladder is the one that decides r1: `stall-watch-w2-live`
  *  armed, a marker that reads on a present worker, and a view that is not `working` and names a turn end. Null when
  *  wave 1's ladder decides it. `stallVerdictInner` sends a `working` view to hold `busy` and a view with no `stopAt` to
  *  wave 1's ladder, so this is exactly the set of r1s the marker clock sent. */
@@ -1119,7 +1119,8 @@ export function stallR1QuietFrom(input: StallInput, facts: StallFacts): number {
 }
 
 /** D-3582 r2-r3-span-from-the-episode: what r2 and r3 report is the time since the worker's last mail on the run,
- *  measured from the episode key (the same clock the caps use), so a restamp by r1's own delivery cannot shorten
+ *  measured from the episode key (the coord-ball cap's key too; the dialog and limit caps keep `capKeyMs`, which a
+ *  re-activation does not move), so a restamp by r1's own delivery cannot shorten
  *  it. `at` formats the key. When the key IS the dispatch time the worker has never mailed on this run, and the
  *  text says `dispatch`. A coordinator's `wait:` can also move the key, and so can the run's re-activation
  *  (`quiet-restarts-on-reactivation` (D-3788)); "no mail from the worker since" either moment is still true. */

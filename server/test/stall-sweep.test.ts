@@ -1626,7 +1626,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(stuckTags(sent)).toHaveLength(1);
   });
 
-  // Frozen (§5.1, step 8): a turn in flight under a busy word with no main hook event for FROZEN_NO_EVENT_MS. The
+  // Frozen (§5.1, §10 step 7): a turn in flight under a busy word with no main hook event for FROZEN_NO_EVENT_MS. The
   // lane hands L1 the RAW hookstate (`stallHookFactOf`), identity and event carried, and L1 judges both.
   const TURN_AT = IDLE_AT;
   const FROZEN: [string, Record<string, unknown>, number, boolean][] = [

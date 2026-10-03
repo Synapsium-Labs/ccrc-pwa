@@ -940,7 +940,7 @@ describe('wave 2: the §10 order after the turn marker, first match wins', () =>
   });
 });
 
-describe('wave 2: frozen (§5.2, §10 step 8)', () => {
+describe('wave 2: frozen (§5.2, §10 step 7)', () => {
   it('8: FROZEN_NO_EVENT_MS with no main hook event fires to the claimant, keyed on turnAt; a fresher event holds busy', () => {
     expect(fv(hookAt(NOW - 59 * MIN))).toEqual(hold('busy'));
     expect(fv(hookAt(NOW - FROZEN_NO_EVENT_MS + 1))).toEqual(hold('busy'));
@@ -977,7 +977,7 @@ describe('wave 2: frozen (§5.2, §10 step 8)', () => {
   });
 });
 
-describe('wave 2: delegates (§5.1, §10 step 9)', () => {
+describe('wave 2: delegates (§5.1, §10 step 8)', () => {
   const dv = (hook: HookRawFact, over: Over = {}, facts: Partial<StallW2Facts> = {}): StallVerdict =>
     vw({ arming: W2_LIVE, ...over }, { hook, ...facts });
 
@@ -1008,7 +1008,7 @@ describe('wave 2: delegates (§5.1, §10 step 9)', () => {
   });
 });
 
-describe('wave 2: coord-deaf (§5.2, §10 step 10)', () => {
+describe('wave 2: coord-deaf (§5.2, §10 step 9)', () => {
   const cv = (mail: StallMailRow[], deliveries: StallDeliveryRow[], over: Over = {}, at = NOW): StallVerdict =>
     vw({ arming: W2_LIVE, mail, ...over }, { deliveries }, at);
 
@@ -1052,7 +1052,7 @@ describe('wave 2: coord-deaf (§5.2, §10 step 10)', () => {
   });
 });
 
-describe('wave 2: the worker ball on the marker clock (§5.1, §10 step 11)', () => {
+describe('wave 2: the worker ball on the marker clock (§5.1, §10 step 10)', () => {
   it('11: quiet runs from stopAt: a restamped live stamp does not restart it', () => {
     const restamped = workerAt({ live: liveWord('idle', NOW - 30 * MIN) });
     expect(vw({ arming: W2_LIVE, worker: restamped })).toEqual(r1(RUN67_DISPATCHED));
@@ -1352,7 +1352,7 @@ describe('wave 2: the marker quiet clock holds on each of its terms (§5.1, "Qui
   });
 });
 
-describe('wave 2: frozen needs a BUSY word, and delegates a non-working marker (§10 steps 8 and 9)', () => {
+describe('wave 2: frozen needs a BUSY word, and delegates a non-working marker (§10 steps 7 and 8)', () => {
   // A turn begun 2 h ago, at least as new as a 3 h live stamp (so the marker reads `working` as written), and a hook
   // event 61 min old: the frozen clock has run out, so ONLY the word term keeps this worker from `frozen`.
   const staleWorking = { mark: markOf(FROZEN_OVER), hook: hookAt(NOW - 61 * MIN) };
