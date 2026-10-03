@@ -20,7 +20,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | merged 2026-10-02 (`a934a59b`); run 219 closed; deploy AGENT-FIRST by the update mechanism |
-| 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | — | dispatched 2026-10-02 (run 237) |
+| 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | awaiting review (run 237 at `55137231`; review run 246 dispatched 2026-10-03 15:07) |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin | **AGENT-FIRST** (ccd) | — | — | to plan |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
 | 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
@@ -238,6 +238,30 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - **The stall watch's shadow rows** (stall-watch coordinator, mail 3311) caught run 237's silence: r1 at 23:06,
     r2 at 00:07 and r3 at 01:08 on 2026-10-03. Armed, r1 would have mailed the worker about 13 hours before it was
     found by hand.
+- **2026-10-03 15:05 — wave 2 done: PR #235 at `55137231`** (wave-done 3331; report
+  `~/.cc-clips/ccrc-pwa-calm-delta/wave-done-237-55137231.md`).
+  - **Re-measured:** the tip is the claimed sha, and the branch has absorbed main `fe7b9775` (#231, then #233, both
+    clean). Advanced to `working`, then `awaiting-review`, both ok. All 5 items are settled.
+  - **Counts:** every red-first and green count matches the plan where it states one. All 102 mutation rows are red,
+    plus 4 added. The first full run had 3 reds, all load or main-red; the second run's only red is tmp-sweep, which
+    is red on main. Agent 422, PWA 3205. Signals: `suite: red`, `failure: unclear`.
+  - **Departures:**
+    - 3846: the residue;
+    - 3847: inventory 43, plus ccd-auto-swap-pool's window, which `strandnotify` had overflowed;
+    - 3848: the stage-4 TZ pin;
+    - 3849: ruling B, costing about 111 ms per no-room strand tick and 178 ms per do-not-bounce strand tick;
+    - 3850: CLAUDE.md's README figure.
+    3851–3855 are unused.
+  - **Census:** cite-remeasure reads 147/197/52/35, with stated = base = tree. `_reg_get` reads 179/150. The stage-4
+    live baseline (248 rescues, 4 sessions, max 4) reproduces the plan.
+  - **Six minors are carried for the review to weigh:**
+    - the `_rescuewait_close clear` fork;
+    - `end=swap` written before the dispatch;
+    - the 4300-digit `reset=`;
+    - the quadratic scans;
+    - failed dispatches counted as rescues;
+    - §9's target of 0.
+  - **Review run 246** was dispatched at 15:07 to `ccrc-pwa-swift-harbor`. The window had room.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
