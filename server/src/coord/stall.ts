@@ -365,13 +365,13 @@ export function stopFailureClass(err: string | null): StopFailureClass | null {
 
 // ── the kind and event sets, each spelled once ───────────────────────────────────────────────────────────────
 /** Each background kind a turn end can wake with, and whether it resumes the session on its own (§5.1 proof (a))
- *  or only could have woken it (§5.2 E; a shell, clause 16). One total Record with unquoted keys: a bracketed list
+ *  or only could have woken it (§5.2 E; a shell, clause 17). One total Record with unquoted keys: a bracketed list
  *  of two of these words reads as a copy of L0's `ROUTE_WRITABLE_FIELDS` to single-definition's route-field scan. */
 const STALL_BG_KIND_MAP = { subagent: 'resumes', workflow: 'resumes', shell: 'wakes' } as const;
 /** §5.2 orphan (E): the kinds whose end could have woken the session. A shell counts here: E detects a task that
  *  could have woken it and did not. */
 export const STALL_WAKE_KINDS: readonly string[] = Object.keys(STALL_BG_KIND_MAP);
-/** §5.1 proof (a): the kinds that resume the session on their own when they end. A shell does not (clause 16). */
+/** §5.1 proof (a): the kinds that resume the session on their own when they end. A shell does not (clause 17). */
 export const STALL_RESUMING_KINDS: readonly string[] = STALL_WAKE_KINDS.filter((k) => STALL_BG_KIND_MAP[k as keyof typeof STALL_BG_KIND_MAP] === 'resumes');
 /** §5.1 "the one bounded exception": hook events that are plumbing. They never refresh the frozen clock or the
  *  `delegates` hold. */

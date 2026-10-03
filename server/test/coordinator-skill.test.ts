@@ -1,6 +1,6 @@
 // The coordinator skill is prose a model follows unsupervised against a fleet
 // it can destroy. These are the properties a review cannot hold in place:
-// fifteen contract clauses, the routes it names, the refusal codes it promises,
+// sixteen contract clauses, the routes it names, the refusal codes it promises,
 // the envelope it quotes and the template it ships. `wsaudit.test.ts` already
 // established the idiom — harvest tokens out of a source and require the
 // copy to match it in both directions.
@@ -22,6 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderEnvelope, type EnvelopeInput } from '../src/coord/envelope.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+import { STALL_REPORT_PREFIX, STALL_WAIT_PREFIX } from '../src/coord/stall.js';
 import { dequeuedSubject, mergedSubject } from '../src/coord/rundefs.js';
 import type { DoneClaim } from '../src/coord/fingerprint.js';
 import {
@@ -92,7 +93,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The fifteen clauses, verbatim. Kept as a literal array rather than a regex per
+// The sixteen clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -122,10 +123,13 @@ const CONTRACT = [
   // Landing-order wave 1 (spec 2026-09-23 §5.1). Written with no apostrophe at
   // all, so neither the straight nor the curly spelling can drift.
   'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`.',
+  // Worker stall watch, wave 3 (spec 2026-09-29 §6.1). Typographic apostrophes
+  // and quotes, as clauses 3–12 are typed; no straight apostrophe at all.
+  'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for, which the watch reads as the run waiting on you until your next mail; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker.',
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all fifteen clauses verbatim', () => {
+  it('carries all sixteen clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -147,7 +151,7 @@ describe('the coordinator skill: its contract', () => {
   // "pinned verbatim" exists to prevent. `worker-skill.test.ts` already
   // carries this guard; this ports it, with two adaptations the worker's
   // version does not need. First, the coordinator states its count in prose as
-  // "These fifteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
+  // "These sixteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
   // worker skill says, so the in-file harvest is widened to accept all three.
   // Second, README.md's own mention line-wraps the count word onto the line
   // after "clauses" (measured — CLAUDE.md's does not), so the cross-file
@@ -182,7 +186,7 @@ describe('the coordinator skill: its contract', () => {
   it('spells that same count, as one derived word, everywhere prose states it', () => {
     expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
       .toBeTruthy();
-    // SKILL.md states it once in its own words ("These fifteen sentences").
+    // SKILL.md states it once in its own words ("These sixteen sentences").
     // HARVESTED, never matched literally, so a revert to "ten" fails with the
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
@@ -2539,5 +2543,48 @@ describe('the routing door in the references (routing slice 5, Task 4)', () => {
     // excluded from its arm's mean. Named beside the `armUnparsed` field
     // itself so this cannot be satisfied by the field name alone.
     expect(signalsSection).toMatch(/armUnparsed === 0[\s\S]{0,200}armUnparsed > 0/);
+  });
+});
+
+// ── Worker stall watch, wave 3 (spec 2026-09-29 §6.1) ────────────────────────
+// APPENDED at the foot: the CONTRACT entry is this wave's only insertion into
+// the body of the file. The stall clause quotes three things the server owns:
+// the report prefix the watch SENDS (`stall:`), the prefix it READS as the run
+// waiting on the coordinator (`wait:`), and the sender it mails from
+// (`operator`). It also names one section of this skill. The verbatim pin above
+// holds the clause's bytes and none of those four relations: a prefix renamed in
+// `stall.ts`, or this section renamed, would leave the clause byte-exact and
+// wrong. The clause is read from SKILL.md, the shipped text, and found by its
+// opening words, never by its number, which §10 assigns at merge.
+describe('the stall clause quotes what the stall watch sends and reads (stall watch spec §6.1)', () => {
+  const stallClause = (): string | undefined => {
+    const at = skill.indexOf('## The contract');
+    const section = skill.slice(at, skill.indexOf('\n## ', at + 1));
+    return section.split('\n').find((l) => /^\d+\. A mail from `[^`]+` whose subject begins `/.test(l));
+  };
+
+  it('quotes STALL_REPORT_PREFIX and STALL_WAIT_PREFIX byte for byte', () => {
+    const line = stallClause();
+    expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
+    expect(/whose subject begins `([^`]+)`/.exec(line!)?.[1],
+      'the clause quotes a report prefix the stall watch does not send').toBe(STALL_REPORT_PREFIX);
+    expect(/a subject beginning `([^`]+)`/.exec(line!)?.[1],
+      'the clause quotes a wait prefix the stall watch does not read').toBe(STALL_WAIT_PREFIX);
+  });
+
+  it('names the sender the watch mails from, and a section this skill still has', () => {
+    const line = stallClause();
+    expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
+    // `STALL_SENDER` is module-private, so its ONE definition line is read from
+    // source rather than imported; a reshaped definition reds here and says so.
+    const src = readFileSync(path.join(root, 'server/src/coord/stall.ts'), 'utf8');
+    const sender = /^(?:export )?const STALL_SENDER = '([^']+)';$/m.exec(src)?.[1];
+    expect(sender, 'stall.ts no longer defines STALL_SENDER as one quoted literal — re-derive this pin').toBeDefined();
+    expect(/^\d+\. A mail from `([^`]+)`/.exec(line!)?.[1],
+      'the clause names a sender the stall watch does not mail from').toBe(sender);
+    const named = /as ‘([^’]+)’ says/.exec(line!)?.[1];
+    expect(named, 'the clause no longer names the section it defers to').toBeDefined();
+    expect(skill, `the clause defers to ‘${named}’, and SKILL.md has no such section`)
+      .toContain(`\n## ${named}\n`);
   });
 });
