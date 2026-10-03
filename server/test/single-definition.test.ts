@@ -4202,10 +4202,17 @@ describe('worker stall watch wave 2: the three new operator-switch markers have 
     ['mail-gate-busy', 'server/src/turnidle.ts'],
   ];
 
-  it('CONTROL: the match is a substring — a line spelling mail-gate-busy-shadow also holds mail-gate-busy, never the reverse', () => {
+  it('CONTROL: the match is a substring — a line spelling mail-gate-busy-shadow also holds mail-gate-busy, never the reverse', async () => {
     expect(stallCodeText("export const MAIL_GATE_BUSY_SHADOW_MARKER = 'mail-gate-busy-shadow';").includes('mail-gate-busy')).toBe(true);
     expect(stallCodeText("export const MAIL_GATE_BUSY_MARKER = 'mail-gate-busy';").includes('mail-gate-busy-shadow')).toBe(false);
-    expect('stall-watch-w2-live'.includes('stall-watch-live')).toBe(false);
+    // From the SHIPPED names, never two literals (a literal against a literal can never fail): of every operator-switch
+    // marker the two describes pin, the one pair where a name holds another is the busy pair the caveat names. Imported
+    // here, not at the head of the file, because this file is cited by line.
+    const { STALL_MARKERS } = await import('../src/coord/stall.js');
+    const gate = await import('../src/turnidle.js');
+    const names: string[] = [...STALL_MARKERS, gate.MAIL_GATE_STRICT_MARKER, gate.MAIL_GATE_BUSY_MARKER, gate.MAIL_GATE_BUSY_SHADOW_MARKER];
+    expect(names.flatMap((a) => names.filter((b) => a !== b && a.includes(b)).map((b) => `${a} holds ${b}`)))
+      .toEqual([`${gate.MAIL_GATE_BUSY_SHADOW_MARKER} holds ${gate.MAIL_GATE_BUSY_MARKER}`]);
   });
 
   it.each(MARKERS)('%s: no shell line names it, and its one TS holder is its definer (%s)', (name, definer) => {

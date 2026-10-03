@@ -3122,6 +3122,29 @@ describe('sweepMail: the turn marker and the busy modes (worker stall watch §5.
     }
   });
 
+  it('the busy modes read no marker for a recipient with no live file: that row is not-idle already (a counting io, with its control)', async () => {
+    // `sweepMail`'s `live !== null` conjunct: the marker reader needs the live `startedAt` to call a marker stale,
+    // and a null live read answers not-idle whatever the marker says, so the read would buy nothing. The control
+    // seeds the live file on the same fixture and reads the marker once.
+    for (const [withLive, readCount] of [[false, 0], [true, 1]] as const) {
+      const { io, reads } = turnReadsIO();
+      const h = harness({ panes: HAPPY_PANES });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord, { io });
+      seedRegistry(h.home, ID); seedHookState(h.home, ID); seedRegistry(h.home, FROM_ID, FROM_UUID);
+      if (withLive) seedLiveState(h.home, { startedAt: STARTED, status: 'busy', statusUpdatedAt: NOW - 1_000 });
+      seedTurnMark(h.home);
+      arm(h, MAIL_GATE_BUSY_SHADOW_MARKER);
+      const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+
+      await w.sweepMail();
+      const label = withLive ? 'with a live file (control)' : 'no live file';
+      expect(reads, label).toHaveLength(readCount);
+      expect(literalSends(h.calls), label).toEqual([]);
+      expect(deliveryRow(coord, id).lastGate, label).toBe('not-idle');
+    }
+  });
+
   it('mail-gate-strict reads no marker at all, even beside a touched busy marker (a counting io, with its control)', async () => {
     for (const strictOn of [true, false]) {
       const { io, reads } = turnReadsIO();

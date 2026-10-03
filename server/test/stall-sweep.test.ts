@@ -1099,6 +1099,27 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     expect(orphanReads()).toEqual([`${PID}.json`, `${ORPHAN}.turn.json`]);
   });
 
+  // A read-budget skip, and the line the marker read stands on: a registry row whose identity the tick could not
+  // measure has no uuid to judge a marker against (`coordinator-marker-unreadable` (D-3654)), so the orphan pass
+  // returns before any read. The control is the same row measured.
+  it('a registry row whose identity is unmeasured costs NO read and draws nothing; measured, it reads its marker', async () => {
+    const reads: string[] = [];
+    const { h, coord, w } = await rig({ io: countingIO(reads) });
+    seedOrphan(h.home);
+    const orphanReads = (): string[] => reads.filter((p) => p.includes(ORPHAN)).map((p) => path.basename(p));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(D_AT);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, tickOf(PID, [regRow(ORPHAN, ORPHAN_UUID, { unmeasured: ['uuid'] })]));
+    expect(orphanReads()).toEqual([]);
+    expect(operatorMail(coord)).toEqual([]);
+    // Returned, never thrown: a throw is caught per row and said as `… failed (…)`, which would also read nothing.
+    expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes(`session ${ORPHAN} failed`))).toEqual([]);
+    warn.mockRestore();
+    at(D_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());                     // the control
+    expect(orphanReads()).toContain(`${ORPHAN}.turn.json`);
+  });
+
   // A read-budget skip: orphan D answers none without an idle live word, and a row with no live pane has none, so
   // the orphan pass spends no agent read on it (most registry rows are long-dead sessions).
   it('a registry row with no live pane costs NO read: no pid entry, or tmux answering none; a live pane reads its marker', async () => {
