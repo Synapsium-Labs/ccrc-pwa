@@ -43,6 +43,14 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-03 13:34 — `main` moved and `ccd/ccrc` is free, so the integration round widens.** `origin/main` is
+  now `fe7b9775`, after #230 (session continuity wave 1), #231 (landing-order wave 1) and #233 (workspace-lifecycle
+  wave 2). Since `cf9e4cc8` they change `ccd/ccd` (483 lines), `ccd/ccrc` and `server/src/coord/store.ts`. #233's
+  coordinator measured its `store.ts` hunk disjoint from #215's (mail 3328), and #215 is the second lander. No claim
+  is live in `ccrc-pwa`: claim 882 ended with #231, and wave 4's own 890 has lapsed. Ruling: the items carried
+  "until `ccd/ccrc` is free" join this round. They are review 222's R2, R3's `ccd/ccrc` sentence, and the same
+  `_svc_real_home` repair in `ccd/ccrc`'s identical copy, so the two copies do not diverge. Before its wave-done, the
+  worker merges `origin/main` again, never rebasing, takes both sides, re-stamps `ccd/ccd` and re-takes its claims.
 - **2026-10-03 12:15 — wave 4's integration round is stalled on a permission prompt.** The stall-watch coordinator
   reported (mail 3313) that `swift-hollow` has been at a Claude Code Bash approval prompt since 2026-10-02 19:38Z.
   The command is a read-only `git diff --stat abb3f6940 HEAD; git diff abb3f6940 HEAD | grep …`, and the prompt is
@@ -802,7 +810,7 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   directory and `~/.local/libexec` is absent. R3, the exit-2 sentence ("the body moved and the launcher did not … the
   mismatched pair now refuses every start by digest") is false for the launcher-postcondition arm, which exits 2
   after both halves moved; correct it in `ccd/ccd-entry-install.py`'s header and stderr and in `deploy/deploy.sh`.
-- **Carried until `ccd/ccrc` is free of another programme's claim (2026-10-02):** review 222's R2 (`ccd/ccrc`'s
+- **Carried until `ccd/ccrc` is free of another programme's claim (2026-10-02; joined wave 4's round 2026-10-03):** review 222's R2 (`ccd/ccrc`'s
   `_inst_entry_python` signature comment and `cmd_install` comment still say the shebang names the canonical
   python3), R3's `ccd/ccrc` sentence, and `ccd/ccrc`'s identical copy of `_svc_real_home`'s `eval`.
 - **Wave 5 inherits, from the row-placement review (2026-10-01):** recovery for gone-directory alternate rows. An
