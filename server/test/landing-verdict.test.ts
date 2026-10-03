@@ -6,6 +6,9 @@
  * are the direct cases, one decision each, with no store and no clock.
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   landingAsk, landingVerdict, renderDequeueBrief, renderMergedBrief,
   type LandingAsk, type LandingFacts, type LandingLine, type LandingStep,
@@ -180,5 +183,59 @@ describe('the notice bodies', () => {
 
   it('the merged brief asks for the merge proof', () => {
     expect(renderMergedBrief(ID, 42)).toContain('`gh pr view 42 --json state,headRefOid`');
+  });
+});
+
+// `stall-vocabulary.test.ts`'s purity pin, for this file's header's claim: the coord-ring scan in
+// `single-definition.test.ts` sees only a direct `./db.js` or `node:sqlite` import, so an import of `./rundefs.js`
+// (which holds the handle) or of `node:fs` would pass it. This reads the import block itself.
+describe('landing.ts is the pure L1 module its docstring says it is', () => {
+  const SRC = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'landing.ts'), 'utf8');
+  /** Comments blanked, positions kept: the header names the things it promises not to use. */
+  const code = (): string => SRC
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/\/\/[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
+  const NODE_BUILTIN = /\bfrom\s*['"]node:/;
+  const SIDE_EFFECT_IMPORT = /^\s*import\s*['"]/m;
+  const RE_EXPORT = /^\s*export\s+(?:type\s+)?(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\b/m;
+  /** The specifier of every import that is not `import type`; the clause holds no quote, so a match cannot run on
+   *  into a later import's specifier. */
+  const valueImportSpecifiers = (c: string): string[] =>
+    [...c.matchAll(/^\s*import\s+(type\s+)?[^'"]*?\bfrom\s*(['"])([^'"]+)\2/gm)]
+      .filter((m) => m[1] === undefined).map((m) => m[3]!);
+
+  it('the scan is over real code, not an empty string', () => {
+    expect(code()).toContain('export function landingVerdict');
+    expect(code().replace(/\s/g, '').length).toBeGreaterThan(400);
+  });
+  it('CONTROL: the scans see either quote, a re-export, and a second import behind a first', () => {
+    expect(NODE_BUILTIN.test(`import { readFileSync } from "node:fs";`)).toBe(true);
+    expect(NODE_BUILTIN.test(`import { readFileSync } from 'node:fs';`)).toBe(true);
+    expect(NODE_BUILTIN.test(`import { x } from '../../../shared/api.js';`)).toBe(false);
+    expect(SIDE_EFFECT_IMPORT.test(`import "./rundefs.js";`)).toBe(true);
+    expect(SIDE_EFFECT_IMPORT.test(`import { x } from './rundefs.js';`)).toBe(false);
+    expect(RE_EXPORT.test(`export { survivorOf } from './rundefs.js';`)).toBe(true);
+    expect(RE_EXPORT.test(`export const x = 1;`)).toBe(false);
+    expect(valueImportSpecifiers(`import { survivorOf } from "./rundefs.js";\nimport { x } from '../../../shared/api.js';`))
+      .toEqual(['./rundefs.js', '../../../shared/api.js']);
+    expect(valueImportSpecifiers(`import type { A } from './rundefs.js';`)).toEqual([]);
+  });
+  it('has no clock, no fs and no other node builtin', () => {
+    expect(code(), 'landing.ts reads the clock').not.toMatch(/\bDate\s*\.\s*now\s*\(|performance\s*\.\s*now|\bnew\s+Date\b/);
+    expect(code(), 'landing.ts imports a node builtin').not.toMatch(NODE_BUILTIN);
+    expect(code(), 'landing.ts reaches for a filesystem').not.toMatch(/\bfs\s*\.|require\s*\(/);
+  });
+  it('has no fastify, no reply, no store, no handle', () => {
+    expect(code(), 'landing.ts answers HTTP').not.toMatch(/\breply\s*\.|\bFastify|\bapp\s*\./);
+    expect(code(), 'landing.ts reaches the store').not.toMatch(/CoordStore|\bcoord\s*\.|\bstore\s*\.|\bdb\s*\.|\.prepare\s*\(/);
+  });
+  it('imports values only from shared/api.ts (L0); anything else is a type import', () => {
+    const c = code();
+    expect(c, 'a side-effect import').not.toMatch(SIDE_EFFECT_IMPORT);
+    expect(c, 'a dynamic import').not.toMatch(/\bimport\s*\(/);
+    expect(c, 'a re-export').not.toMatch(RE_EXPORT);
+    for (const spec of valueImportSpecifiers(c)) {
+      expect(spec, `landing.ts takes a value import from ${spec}`).toBe('../../../shared/api.js');
+    }
   });
 });

@@ -4863,32 +4863,48 @@ export class FleetWatcher {
       try {
         const facts: LandingFacts = {};
         let run: OpenSibling | null = null;
-        for (;;) {
+        // ENDS: every step that is not an end records one fact (`runs`, `coordinator`, `runState`, `told`) that
+        // `landingVerdict` then reads as made, and the facts have those four keys (`told` once: the mail proof or
+        // the feed proof, never both), so at most four reads precede an end. The switch is exhaustive: a new step
+        // kind is a compile error here, never a silent delivery.
+        steps: for (;;) {
           const s = landingVerdict(ask, facts);
-          if (s.step === 'runs') {
-            const sib = coord.openRunsForSession(r.id);
-            run = sib.ok ? survivorOf(sib.siblings) : null;
-            facts.runs = sib.ok ? { ok: true, run } : { ok: false, detail: sib.detail };
-          } else if (s.step === 'coordinator') {
-            facts.coordinator = coord.resolveCoordinator(s.runId);
-          } else if (s.step === 'runState') {
-            const read = coord.run(s.runId);
-            facts.runState = read.ok ? { ok: true, state: read.run?.state ?? null } : { ok: false, detail: read.detail };
-          } else if (s.step === 'toldMail') {
-            facts.told = coord.hasMailWithSubject('operator', s.runId, s.toId, s.subject);
-          } else if (s.step === 'toldFeed') {
-            facts.told = coord.hasFeedEvent('queue', r.id, s.body);
-          } else if (s.step === 'defer') {
-            console.warn(`ccrc-server: landing notice for ${r.id} deferred (run rows unreadable: ${s.detail})`);
-            break;
-          } else if (s.step === 'latch') {
-            this.landingNotified.add(ask.key);
-            break;
-          } else {
-            if (s.mail !== null) queueSystemMail(coord, run, s.mail);
-            if (s.record !== null) this.pushOne({ kind: 'queue', sessionId: r.id, project: r.project, ...s.record }, this.activeProjects);
-            this.landingNotified.add(ask.key);
-            break;
+          switch (s.step) {
+            case 'runs': {
+              const sib = coord.openRunsForSession(r.id);
+              run = sib.ok ? survivorOf(sib.siblings) : null;
+              facts.runs = sib.ok ? { ok: true, run } : { ok: false, detail: sib.detail };
+              break;
+            }
+            case 'coordinator':
+              facts.coordinator = coord.resolveCoordinator(s.runId);
+              break;
+            case 'runState': {
+              const read = coord.run(s.runId);
+              facts.runState = read.ok ? { ok: true, state: read.run?.state ?? null } : { ok: false, detail: read.detail };
+              break;
+            }
+            case 'toldMail':
+              facts.told = coord.hasMailWithSubject('operator', s.runId, s.toId, s.subject);
+              break;
+            case 'toldFeed':
+              facts.told = coord.hasFeedEvent('queue', r.id, s.body);
+              break;
+            case 'defer':
+              console.warn(`ccrc-server: landing notice for ${r.id} deferred (run rows unreadable: ${s.detail})`);
+              break steps;
+            case 'latch':
+              this.landingNotified.add(ask.key);
+              break steps;
+            case 'deliver':
+              if (s.mail !== null) queueSystemMail(coord, run, s.mail);
+              if (s.record !== null) this.pushOne({ kind: 'queue', sessionId: r.id, project: r.project, ...s.record }, this.activeProjects);
+              this.landingNotified.add(ask.key);
+              break steps;
+            default: {
+              const unhandled: never = s;
+              throw new Error(`landing: unhandled step ${JSON.stringify(unhandled)}`);
+            }
           }
         }
       } catch (err) {

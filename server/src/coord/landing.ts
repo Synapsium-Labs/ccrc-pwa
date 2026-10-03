@@ -2,7 +2,8 @@ import type { PrQueueRead } from '../prstate.js';
 /**
  * The landing lane's pure half (landing-order wave 2, `landing-verdict-is-l1` (D-3883)). L1: clock-free, fs-free,
  * fastify-free and store-free, on `stall.ts`'s precedent — the coord-ring scan in `single-definition.test.ts` forbids
- * this file `./db.js` and `node:sqlite`, and its imports are TYPES only. `watch.ts`'s `sweepLanding` keeps the READS
+ * this file `./db.js` and `node:sqlite`, and `landing-verdict.test.ts` pins the rest: no node builtin, and no value
+ * import but L0's `shared/api.ts` (today its imports are TYPES only). `watch.ts`'s `sweepLanding` keeps the READS
  * (the store, the registry, `survivorOf`, `resolveCoordinator`, `hasMailWithSubject`, `hasFeedEvent`) and the
  * DELIVERIES (`queueSystemMail`, the feed record, the latch write); every DECISION is here: which notice a line asks
  * for, its latch key and whether it is already latched, whom to tell, whether a merge is told at all, which durable
