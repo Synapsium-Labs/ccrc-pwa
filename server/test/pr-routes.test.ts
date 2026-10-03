@@ -7,12 +7,15 @@ import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
-/** A registry home with one workspace session, so `knownId` resolves. */
+/** A registry home with one workspace session, so `knownId` resolves — and its worktree really there, which the
+ *  archive door measures before it acts (workspace lifecycle §5.2). */
 function seedWorkspace(): string {
   const home = mkTmp('ccrc-');
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
-  for (const [f, v] of [['uuid', 'u'], ['wrapper', 'claude'], ['workdir', '/w'],
+  const worktree = path.join(home, 'w');
+  mkdirSync(worktree);
+  for (const [f, v] of [['uuid', 'u'], ['wrapper', 'claude'], ['workdir', worktree],
     ['project', 'demo'], ['workspace', 'quiet-basin'], ['branch', 'ws/quiet-basin'],
     ['base', 'origin/main']]) {
     writeFileSync(path.join(reg, `demo-quiet-basin.${f}`), v!);
@@ -273,7 +276,9 @@ describe('archive and restore', () => {
       const res = await a.inject({ method: 'POST', url: `/api/sessions/demo-quiet-basin/${route}` });
       expect(res.statusCode).toBe(501);
       expect(res.json()).toEqual({ ok: false, error: 'unsupported' });
-      expect(calls).toEqual([]);
+      // No ccd verb at all. The archive door MEASURES first — tmux's read-only `has-session`/`list-panes`, its busy
+      // read (workspace lifecycle §5.2) — and refuses before any act.
+      expect(calls.filter((c) => c[0] !== 'has-session' && c[0] !== 'list-panes')).toEqual([]);
       // The sibling verb being advertised is what makes this a per-verb gate
       // and not one shared "is the fleet new enough" flag.
       expect(others).not.toContain(verb);

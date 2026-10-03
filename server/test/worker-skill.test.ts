@@ -34,7 +34,7 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
  *  first. */
 const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
-// The fifteen clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
+// The sixteen clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
 // quotes `toId:'coordinator'` — the one genuinely single-quoted literal left,
 // since clause 1 stopped quoting `'#S'` — and clause 9 carries the apostrophe in
 // `done-claim's` (its eight enum words are BACKTICKED, not single-quoted).
@@ -67,14 +67,25 @@ const CONTRACT = [
   "When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session's pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child's reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator's; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.",
   "Route your own subagents by the shape of their task, from `../ccrc-coordinator/references/routing-matrix.md`, and never let one inherit your model: name the class on every Agent or Workflow call and the effort on every Workflow `agent()` call (an Agent-tool subagent runs at your own effort) — implementation from a spec'd plan on Sonnet at high, review with judgement and adversarial verification on Opus at high, scouts and transcription-grade edits on Haiku, and Fable never as a fan-out worker. A subagent effort the brief names governs over that default.",
   "Your wave-done body opens with two signal lines the server parses, before any prose and before the fingerprint: `suite: green|red|unrun` says whether the whole suite passed on its FIRST full run after this wave's implementation was complete (red stays red however many fix rounds followed; unrun when no full run happened), and, only when a check failed, `failure: shallow|ceiling|unclear` names the kind — shallow for tests missed or a plan half-followed, ceiling for an ambiguity you could not resolve, a design flaw or a debug that survived two attempts, unclear otherwise. The suite line is never omitted.",
+  // Landing-order wave 1 (spec 2026-09-23 §5.1). The probe's exit code alone
+  // is NOT the conflict verdict: measured on git 2.43, `git merge-tree
+  // --write-tree` exits 1 for a conflict (a tree id on stdout's first line)
+  // AND for an unresolvable ref (`not something we can merge`, stdout empty),
+  // so the clause names both halves of the conflict answer and says what every
+  // other answer licenses: nothing.
+  "Absorb `origin/main` into this branch only on one of three triggers, each read after one `git fetch origin`: your own probe `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 with a tree id on its first line (the branch conflicts; exit 0 is clean, and any other answer is unmeasured and licenses nothing); a required check on your PR is red while main passes the same tests, measured by re-running its failing test files on a clean checkout of `origin/HEAD` in scratch; or a `fix-round` mail from the coordinator names this PR ejected from the landing line with a base sha, or next to land in a strict-protection repository. The first two license at most one absorption per PR — a second occurrence before the first absorption lands is not a second license — and the third arrives on the `merging → working` edge, after which you absorb, re-gate and send a fresh `wave-done`. Absorb with `git merge` only: never a rebase, a force-push or `update-branch` by any route, including `gh api -X PUT`. Never write any repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`. Never hand-resolve a generated stamp: on a conflict in a `# ccrc:generated` line such as `ccd/ccd`'s line 2, take either side of that line only, resolve every other hunk of the file as the source it is, then run `~/.local/bin/ccrc restamp <file>`. A red that main also shows is reported once as `main-red` and left alone. Keep no local `main`: read `origin/HEAD`, fetched once.",
 ];
+
+/** The absorb clause, by its own index — the one clause licensed to name
+ *  `update-branch`, and it names it to forbid it (spec §5.1 "Pins"). */
+const ABSORB = CONTRACT[15]!;
 
 /** The forbidding clause, by its own index — named once so a re-ordering of the
  *  array cannot silently point the census at the wrong sentence. */
 const FORBIDS = CONTRACT[7]!;
 
 describe('the worker skill: its contract', () => {
-  it('carries all fifteen clauses verbatim', () => {
+  it('carries all sixteen clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -158,7 +169,7 @@ describe('the worker skill: its contract', () => {
   });
 
   // Child reclamation, wave 3 (spec 2026-09-22 §6): NOT a clause — clause 8 is
-  // unchanged and the count stays fifteen — but a sentence in the reporting
+  // unchanged and the count was fifteen then, unmoved by this wave — but a sentence in the reporting
   // section, because it is the fact a worker needs at the moment it reports.
   it('says, in its reporting section, that this workspace ends when the coordinator is finished with it', () => {
     const at = skill.indexOf('**This workspace ends when the coordinator is finished with it — usually when\nits run closes.**');
@@ -167,6 +178,34 @@ describe('the worker skill: its contract', () => {
     expect(at).toBeLessThan(skill.indexOf('## When something is wrong'));
     expect(skill.slice(at).replace(/\s+/g, ' ')).toContain('committed for you as a WIP commit and attic-pinned');
     expect(skill).not.toContain('ws-reclaim');
+  });
+
+  it('names `update-branch` ONLY inside clause 16, which forbids it — counted, not absent (spec §5.1)', () => {
+    // The skill corpus is where the word is LICENSED, once, to forbid it; the
+    // executable source is where it is absent (`update-branch-absent.test.ts`).
+    // EQUALITY, as the destructive-verb census above: an extra mention anywhere
+    // else in SKILL.md is a model given a reason to consider the act.
+    // (`allow_update_branch` is spelled with underscores and is not a hit.)
+    const hits = skill.split('update-branch').length - 1;
+    const licensed = ABSORB.split('update-branch').length - 1;
+    expect(licensed, 'clause 16 no longer names update-branch to forbid it').toBe(1);
+    expect(hits, `update-branch appears ${hits}×; only clause 16 may name it`).toBe(licensed);
+  });
+
+  it('clause 16 names the probe with both halves of its conflict answer, the settings it never writes, and the regenerator', () => {
+    // A clause that said "exits 1" alone would license an absorb on a
+    // mistyped ref: git 2.43 exits 1 for `not something we can merge` too.
+    expect(ABSORB).toContain('git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD');
+    expect(ABSORB).toContain('exits 1 with a tree id on its first line');
+    expect(ABSORB).toContain('any other answer is unmeasured and licenses nothing');
+    // Spec §4's Worker row: settings writes are forbidden to the worker too.
+    expect(ABSORB).toContain('rulesets, branch protection, auto-merge setting or `allow_update_branch`');
+    // The STAMP line is taken, never the whole file: `ccd/ccd` is hand-written
+    // source carrying a stamp, and taking one side of the file would drop the
+    // other side's hunks. And the launcher by its PATH: `~/.local/bin` is not
+    // on the fleet session unit's PATH (this skill's own ccrc-api section).
+    expect(ABSORB).toContain('take either side of that line only');
+    expect(ABSORB).toContain('`~/.local/bin/ccrc restamp <file>`');
   });
 
   it('carries no references of its own — the census corpus is the whole skill (D-103)', () => {

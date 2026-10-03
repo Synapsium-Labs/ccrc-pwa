@@ -1858,7 +1858,7 @@ disaster-recovery drill, and the Build 4 dogfood runbook.
 
 **All three skills ship to every rostered account's config dir.** The
 coordinator's protocol is now a trio: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, fifteen clauses pinned by
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, sixteen clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
 `ccrc-reviewer` skill (`ccd/reviewer-skill/SKILL.md`, ten clauses pinned by
 `server/test/reviewer-skill.test.ts`), which reads a finished wave in its own
@@ -2125,6 +2125,46 @@ project's card gains an `abroad` line, one sentence per wave working
 elsewhere ("`<program>` wave 2/3 in `<other project>`"), minus any wave whose
 worker already renders on that card.
 
+**Released workspaces** (workspace lifecycle spec §5.1). When a programme is done with a workspace — its newest
+run closed, no open run naming it as worker or as coordinator, no hold, not archived — the server says so on the
+row (`FleetSession.releasedFrom`: the run, the programme and its title, the coordinator, the close time, and
+whether it is a child), and its card folds it into `Released (N)`, collapsed, directly above `Archived (N)`.
+Inside, rows sit under their programme, newest close first. A released row that needs you — waiting, working or
+stranded — stays at the top level until it no longer does. **Archive all (N)** confirms once, then sends a plain
+archive (never `force`) for each folded row that is not a child, one at a time, re-reading each row from the
+newest frame before its turn, and reports archived, skipped and refused in one toast, each refusal with the
+server's reason; a toast that carries a refusal stays up until dismissed. Children are skipped. A `coord.db`
+read that fails folds nothing that tick. The bucket chips above the cards still count released rows under
+`Idle`, `Done` and `Dead`: folded, not removed. Placement is unchanged: a released row renders on its own
+project's card, since board placement lasts while the workspace is held.
+
+**One Archive** (workspace lifecycle spec §5.2). Stop and archive are one feature. Every session's menu and its
+actions sheet offer **Archive**, and a session already put away offers **Restore** in its place. The confirm reads by
+case: an idle workspace goes offline and folds into Archived; a busy session asks first, because the turn in progress
+is lost; a main checkout is stopped and folds into Archived, and is never deleted; a coordinator with open runs offers
+only **End programme and archive** or **Cancel**, since pausing a programme is the coordinator pause switch.
+`POST /api/sessions/:id/archive` runs every check it can make before anything it cannot undo: a turn in progress
+(`409 session-busy` unless `{interrupt:true}`; a main checkout's, whose stop refuses nothing, is read fail-closed —
+tmux unreachable or no readable live file is `409 status-unknown`, whatever the consents — and read again at the stop;
+a workspace's too when the programme is to end or `{interrupt:true}` is sent, before that end or stop), a worktree it
+can prove gone, a run naming the workspace as its worker (`409 run-open` unless `{force:true}`), a run it coordinates
+(`409 coordinator-has-open-runs`, naming them, unless `{programme:'end'}`), a store it cannot read (refused, fail-shut),
+and a run the abandon cannot move (one already `closing`: `409 programme-partly-ended`, nothing ended).
+Then it ends the programme through the abandon door's own decision, stops (a main checkout, or with `interrupt`) and
+archives (a workspace). An abandon that still refuses at the act stops the door there, naming what it ended, with
+nothing stopped or archived. What only `ccd` can measure — its status read, the archive manifest and, in remote mode,
+the worktree itself — refuses inside `ws-archive`, before it touches anything, so such a refusal can follow a
+programme the door already ended; the answer then names those runs (`ended`). A stop followed by a refused archive
+answers `200 {archived:false, stopped:true, refusal}`, and the row stays visible with Archive offered again. After a
+refusal the phone cannot fix (the worktree is gone, the status unreadable, the manifest unbuildable, the coordination
+store unreadable, a programme only partly ended, a box whose ccd has no `ws-archive`) the actions sheet offers **Stop
+only**, disabled while tmux cannot be reached. Restore, in the actions sheet and the session header's menu, is
+`ws-restore` for a workspace (a merged-and-archived one included) and `ensure` for a main checkout, so a substrate
+fault disables a main checkout's. `Archived (N)` holds archived workspaces and stopped main checkouts
+(`inArchivedFold`), newest first; the Dead chip still counts a stopped main checkout, and the footer's archive list is
+still workspaces only. `ccd stop` and `POST /api/sessions/:id/stop` are unchanged. The refusal codes are
+`ARCHIVE_REFUSALS`, declared once in `shared/api.ts`.
+
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in
 an ACTIVE state — `dispatched`, `working`, `unknown` — and not merely
@@ -2209,10 +2249,10 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its fourteen
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its fifteen
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), fifteen clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), sixteen clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -2784,11 +2824,11 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   because neither the census nor `manifest.json` carries one (D-1246); the freshness pair are git ref
   reads. **Stdout is this card on `SessionStart` — with the compaction card appended
   to it on the `compact` source alone (R8, below) — the search gate's deny on a gated `PreToolUse`
-  (R5, below) and the Read nudge's `additionalContext` on a nudged one (R6, below) — at most one of
-  those two per event, and empty on every other event**, because a stdout JSON on `PreToolUse` is
+  (R5, below), the Read nudge's `additionalContext` on a nudged one (R6, below) or the landing advisory's on a sync of main — at most one of
+  those per event (a deny or nudge wins), and empty on every other event**, because a stdout JSON on `PreToolUse` is
   read as this hook having something to say about the call, and it says nothing there unless it
-  does. All three are pinned in both directions by `server/test/session-hook.test.ts`.
-- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries fifteen clauses (thirteen at R2; routing slice 2 added 14 and 15), pinned verbatim: a
+  does. The card, the deny and the nudge are pinned in both directions by `server/test/session-hook.test.ts`, the advisory by `server/test/session-hook-sync-advisory.test.ts`.
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries sixteen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16), pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
   and every other word makes a query answer a lead to verify by opening the file it names — and never
@@ -3087,8 +3127,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7679-7681`), each with an operator sentence of its own at `:7721`,
-`:7729` and `:7742`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7684-7686`), each with an operator sentence of its own at `:7726`,
+`:7734` and `:7747`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

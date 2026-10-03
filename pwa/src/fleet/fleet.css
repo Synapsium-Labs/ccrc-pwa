@@ -2159,6 +2159,23 @@ button.proj-card-pool::before {
 }
 
 .proj-archived { border-top: 1px solid var(--edge-subtle); margin-top: var(--sp-1); }
+/* Workspace lifecycle §5.1: the Released fold wears the Archived fold's rule and toggle — the same ink on the
+   same ground, registered in design/audit.mjs's INHERITED_GROUNDS — but NOT the past-tense ink step below: a
+   released row is live. */
+.proj-released { border-top: 1px solid var(--edge-subtle); margin-top: var(--sp-1); }
+.proj-released-toggle {
+  display: flex; align-items: center; gap: var(--sp-1);
+  min-height: var(--tap-min); width: 100%; padding: 0;
+  background: none; border: 0; cursor: pointer; text-align: left;
+  font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--ink-tertiary);
+}
+/* Disabled while the selection holds the fold open: a tap does nothing, so the pointer no longer offers one. */
+.proj-released-toggle:disabled { cursor: default; }
+.proj-released-heading, .proj-released-note {
+  display: block; padding: var(--sp-1) 0 0;
+  font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--ink-tertiary);
+}
+.proj-released-archive { margin-top: var(--sp-1); min-height: var(--tap-min); }
 .proj-archived-toggle {
   display: flex; align-items: center; gap: var(--sp-1);
   min-height: var(--tap-min); width: 100%; padding: 0;
