@@ -3478,8 +3478,8 @@ fi
 # merge` runs, and a class that stopped at `(` would let it through. The
 # body stops at the first `)`: linear against the separator-restart inputs the
 # plan's regex was quadratic on. Separator-free chains still grow superlinearly
-# (closed `$(…)`: 79, 369 and 1418 ms at 50, 100 and 200 KB; and the space/tab
-# family the plan's regex already had). The strip pays one regex match per
+# (hook, 36/100/200 KB: closed `$(…)` 142, 559, 1532 ms; the space/tab
+# family 186, 902, 2895 ms, which the plan's regex had). The strip pays one regex match per
 # quoted span, heredoc or comment, and jq 1.7's match costs grow with each
 # match's offset, so a command DENSE with quotes is superlinear too: 1.7 s at
 # 36 KB and 7.1 s (0.56 GB) at 100 KB of bare `"` through the hook (the strip
