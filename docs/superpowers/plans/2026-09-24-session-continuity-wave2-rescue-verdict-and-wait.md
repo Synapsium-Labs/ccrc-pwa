@@ -4088,6 +4088,11 @@ what this plan builds.
   cause at the call site reds `1 failed | 96 passed (97)` (the strand case); deleting the `RESCUE_SKIP_LEFT`
   membership check reds 1 (the unit case, "room the skip did not remove"); dropping `"$out" != "$2"` reds 1 (the
   unit case, "the account it sits on").
+- **D-3850** — CLAUDE.md's README size figure, re-measured in this branch: `pools-prose.test.ts` holds CLAUDE.md's
+  "`README.md` (~N lines)" within 100 lines of the real file, and Task 3's new subsection (+53) on top of `main` at
+  `fe7b9775` (3853 lines) made it 3905 against the stated ~3800 — red in the merged tip's shard 5 ("keeps CLAUDE.md's
+  README size claim within 100 lines of the real file"). The plan did not foresee the ratchet; the figure now reads
+  ~3900. No other CLAUDE.md text changed.
 
 ---
 
