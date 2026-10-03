@@ -43,9 +43,11 @@
    Every ui component stylesheet declares `@layer components`, while the app's
    own sheets (fleet.css, chat.css, shell.css) are imported UNLAYERED — and
    unlayered beats every layer regardless of specificity. So the precedence
-   runs: utilities (a call site's className) > app sheets > ui components.
-   Both directions are deliberate. A call site can always override a component
-   through `className`, which is what tailwind-merge assumes. And the app can
+   runs: app sheets (unlayered) > utilities > ui components. An app sheet beats
+   a call site's Tailwind className too — `@layer utilities` is still a layer.
+   Both arrows are deliberate. A call site can override a component through
+   `className`, which is what tailwind-merge assumes, as long as no app sheet
+   rule also claims that property. And the app can
    always scope over a primitive (`.block-screen .btn-primary`,
    `.update-banner-actions .btn-ghost`, chat.css's retained `.opt-inert`),
    which several rules rely on. The consequence to know: a ui rule can NEVER
