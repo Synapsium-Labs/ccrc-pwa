@@ -19,7 +19,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
-| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | fix round 1 (review 240 ruled 2026-10-03 00:40; run 236 back at `working`) |
+| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | awaiting re-review (fix round 1 at `4daf7696`; review run 242 dispatches at the 11:53:20 slot) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
@@ -283,6 +283,18 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - F6 needs no number. F7 is commit-message history, so no action.
     - 3881 is a spare.
   - **The re-review** needs a dispatch slot. This programme's next agreed slot is 11:53:20.
+- **2026-10-03 01:04 — fix round 1 done at `4daf7696`** (wave-done 3300; 7 commits, 9 files).
+  - F9 landed first: `stopIsIdle` is pure L1 in `archiveDoor.ts`.
+  - F8: `busyReadFailsClosed` (L1) refuses a busy or unmeasurable workspace with `409 session-busy` before any
+    programme end. X7 and its variants are red.
+  - F2: the pin races `close` and `open` against a held `withAbandon`. X8 was green before the change and is red
+    now.
+  - F1, F3, F4 and F5 are as ruled. A10 is in the spec, and the worker also stated 3877 in §5.2 step 1 and §8.
+    3881 is unused.
+  - Re-measured: the tip is the claimed sha. Run 236 advanced to `awaiting-review`, ok.
+  - **Review run 242** is open. Its brief holds the round to its rulings, F2's determinism under load, and F9's
+    verdict identity. It dispatches at 11:53:20, this programme's agreed slot. The next age-out after the split,
+    11:54:07, is asked of stall-watch for continuity's review (mail 3301).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
