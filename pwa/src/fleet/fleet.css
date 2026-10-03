@@ -285,84 +285,16 @@
   background: var(--status-attention);
 }
 
-/* ------------------------------------------------------------------ *
- *  Fleet host banner — degraded mode: the REMOTE fleet host is        *
- *  unreachable. Louder than the quiet offline-banner (red-toned, the  *
- *  same "dead" language as an exited session) since it carries a      *
- *  destructive action.                                                *
- * ------------------------------------------------------------------ */
-.fleet-host-banner {
-  position: sticky;
-  top: calc(var(--sp-2) + var(--safe-top));
-  z-index: var(--z-header);
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  /* Same correction as .chat-banner--dead (chat.css): the 12%-alpha tint is
-     priced over a card in tokens.css, and this banner floats on the fleet's
-     --bg-page, which drops the text pair to 4.44 in light.
-     --status-dead-tint-solid is that wash pre-composited on --bg-surface:
-     5.88 dark / 4.81 light. */
-  background: var(--status-dead-tint-solid);
-  border: 1px solid var(--status-dead);
-  border-radius: var(--r-md);
-  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
-  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
-  color: var(--status-dead-text);
-}
-.fleet-host-banner-msg {
-  flex: 1;
-  min-width: 0;
-}
-.fleet-host-banner .btn-primary {
-  flex: none;
-}
-/* Roster divergence: the host is UP, so this is not the "dead" language above
-   — it is the attention amber the fleet already uses for "waiting on you".
-   `--status-attention-tint` is a solid colour in both themes (unlike the dead
-   banner's 12%-alpha tint, which needed a pre-composited `-tint-solid`), and
-   the attention-text/attention-tint pair is already floored at 4.5 by
-   pwa/design/contrast-check.mjs, so this adds no new colour pairing. */
-.fleet-host-banner--warn {
-  background: var(--status-attention-tint);
-  border-color: var(--status-attention);
-  color: var(--status-attention-text);
-}
-.fleet-host-banner--warn code {
-  font-family: var(--family-mono);
-  font-size: var(--fs-xs);
-}
+/* The fleet host banner and the substrate banner are @ccrc/ui's `Banner` now
+   (primitives/banner.tsx) — shadcn's Alert shape on ccrc tokens, tone `dead`
+   and `attention`. 77 lines of CSS said one shape in two tones here; the cva
+   says it once and `pwa/test/utility-pairs.test.ts` derives both tone pairs
+   from it and measures them across all twelve palettes, which no rule in this
+   file was ever measured for. The swap is token-for-token identical — proved
+   property by property before the delete, not asserted.
 
-/* ------------------------------------------------------------------ *
- *  Substrate banner — one fault, one banner (spec §4): every RUNNING  *
- *  row reports a substrate fault, so it is said once up here and the  *
- *  per-row .sess-substrate chips keep the partial case. Amber, not    *
- *  the dead red: the sessions are still running, unattached. Same     *
- *  token pair as .fleet-host-banner--warn above (attention-text on    *
- *  attention-tint, both solid, already floored at 4.5 by              *
- *  design/contrast-check.mjs), so no new colour pairing. Not sticky   *
- *  and no button — recovery is a human at a terminal (spec §1), so    *
- *  there is no action here to keep in reach while scrolling.          *
- * ------------------------------------------------------------------ */
-.substrate-banner {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  background: var(--status-attention-tint);
-  border: 1px solid var(--status-attention);
-  border-radius: var(--r-md);
-  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
-  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
-  color: var(--status-attention-text);
-}
-.substrate-banner-msg {
-  flex: 1;
-  min-width: 0;
-}
-.substrate-banner-reason {
-  font-family: var(--family-mono);
-  font-size: var(--fs-xs);
-}
+   The slim `.offline-banner` above STAYS: it is a different shape (centred,
+   mono, caps, a pulse dot via ::before), not this one in another tone. */
 
 /* ------------------------------------------------------------------ *
  *  Notices — dismissible fleet-wide banners (account moves etc.).     *
@@ -1389,7 +1321,7 @@
    until D-2016's wedge signature escalates it. --status-attention-text is
    already floored against --bg-surface (tokens.css: "8.52:1 on
    attention-tint, 10.09:1 on surface") and is the same ink
-   .fleet-host-banner--warn/.substrate-banner already use for "worth
+   @ccrc/ui's `Banner` tone="attention" already uses for "worth
    noticing, not yet an emergency" — no new contrast pair. `flex: none`,
    same reasoning as .sess-warn/.sess-spawn: the only shrinkable cell in
    .sess-meta is .sess-held. */
@@ -3178,8 +3110,9 @@ button.proj-card-pool::before {
 /* — centralised update management W3, Task 10: Notifications + the unarmed banner —
    .settings-unarmed is the §12 red sentence: the gate is off and this page
    was reached over a non-loopback address. It is SELF-GROUNDED — its own
-   background AND colour, the .fleet-host-banner pair (--status-dead-text on
-   --status-dead-tint-solid, the 12% wash pre-composited on --bg-surface) — so
+   background AND colour, the same pair `Banner` tone="dead" carries
+   (--status-dead-text on --status-dead-tint-solid, the 12% wash
+   pre-composited on --bg-surface) — so
    the auditor measures it with no INHERITED_GROUNDS registration, and it is
    not sticky: it heads a screen, it does not float over a list.
    .settings-bell-row is layout only (it sets no colour): the reused

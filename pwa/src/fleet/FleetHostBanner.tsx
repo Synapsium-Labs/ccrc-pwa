@@ -30,7 +30,7 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetHealth, NodeWire } from '../../../shared/api';
 import { api, apiErrorText } from '../lib/api';
-import { Button, elapsedWords, QuickConfirm, toast, useNow } from '@ccrc/ui';
+import { Banner, Button, elapsedWords, QuickConfirm, toast, useNow } from '@ccrc/ui';
 import { useFleetHealth } from './useFleetHealth';
 import { remoteSides, statedOf } from '../../../shared/update-summary';
 import './fleet.css';
@@ -65,12 +65,10 @@ export function FleetHostBanner(
   // the box is back, so the two never render together.
   if (health && health.mode === 'remote' && health.connected && health.roster === 'divergent') {
     return (
-      <div className="fleet-host-banner fleet-host-banner--warn" role="status">
-        <span className="fleet-host-banner-msg">
+      <Banner tone="attention" sticky>
           This server and the fleet host are projecting different account rosters. Redeploy both
           boxes; if it persists, reconcile <code>~/.ccrc/accounts.json</code> on each.
-        </span>
-      </div>
+      </Banner>
     );
   }
 
@@ -91,12 +89,10 @@ export function FleetHostBanner(
     const sides = Array.isArray(nodes) ? remoteSides(nodes) : null;
     const fleet = sides ? ` fleet ${name(sides.fleet)} · server ${name(sides.server)}.` : '';
     return (
-      <div className="fleet-host-banner fleet-host-banner--warn" role="status">
-        <span className="fleet-host-banner-msg">
+      <Banner tone="attention" sticky>
           The two boxes run different builds.{fleet} Run <code>ccrc rollout</code> from the deploying
           machine, or <code>ccrc update</code> on the lagging box, fleet box first.
-        </span>
-      </div>
+      </Banner>
     );
   }
 
@@ -104,11 +100,9 @@ export function FleetHostBanner(
   // while an unavailable pool capability is a feature absent from the host.
   if (health && health.mode === 'remote' && health.connected && health.projectPools === 'unavailable') {
     return (
-      <div className="fleet-host-banner fleet-host-banner--warn" role="status">
-        <span className="fleet-host-banner-msg">
+      <Banner tone="attention" sticky>
           The fleet host's ccd does not honour project pools yet. Redeploy the agent lane.
-        </span>
-      </div>
+      </Banner>
     );
   }
 
@@ -124,17 +118,37 @@ export function FleetHostBanner(
   };
 
   return (
-    <div className="fleet-host-banner" role="status">
-      <span className="fleet-host-banner-msg">
-        Fleet host unreachable{health.downSince !== null ? ` since ${elapsedSince(health.downSince, now)}` : ''}
-      </span>
-      <Button
-        variant="primary"
-        disabled={rebooting}
-        onClick={() => setConfirmOpen(true)}
+    <>
+      <Banner
+        tone="dead"
+        sticky
+        action={(
+          <Button
+            variant="primary"
+            // `flex-none` ALONE, which is exactly what `.fleet-host-banner
+            // .btn-primary` set — and Button's base is `w-full`, so this
+            // button claims the row and collapses the message to its
+            // `min-width: 0`. PRESERVED rather than corrected: adding
+            // `w-auto` would be a visual change, and this wave changes no
+            // visual output. Its sibling `.update-banner-actions` sets BOTH
+            // `flex: none` and `width: auto`, which is almost certainly the
+            // shape this one wants. Flagged, not fixed — and no test could
+            // have caught it, because vitest runs with `css: false`.
+            className="flex-none"
+            disabled={rebooting}
+            onClick={() => setConfirmOpen(true)}
+          >
+            Reboot
+          </Button>
+        )}
       >
-        Reboot
-      </Button>
+        Fleet host unreachable{health.downSince !== null ? ` since ${elapsedSince(health.downSince, now)}` : ''}
+      </Banner>
+      {/* A SIBLING of the banner, not a child. It was nested in the old div
+          because that div was the whole return; the dialog portals out of its
+          parent either way, but keeping it inside `Banner`'s message region
+          would put a dialog inside the `flex-1 min-w-0` span that exists to
+          wrap a sentence. */}
       <QuickConfirm
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
@@ -143,6 +157,6 @@ export function FleetHostBanner(
         confirmLabel="Reboot the fleet host"
         onConfirm={reboot}
       />
-    </div>
+    </>
   );
 }

@@ -55,7 +55,14 @@ const SRC = path.join(import.meta.dirname, '..', 'src');
  *      row's `marker`/`children` slots wearing these names. `opt-wait` is
  *      not even always on a row: the approval sheet's Allow/Deny buttons
  *      wear it too. Word-bounded matching is what keeps `opts` from reading
- *      as `opt`. */
+ *      as `opt`.
+ *    - `substrate-banner`, `offline-banner`, `chat-banner*`, `coord-banner`,
+ *      `update-banner`: the app's. `banner` IS owned (Banner's base), and the
+ *      boundary between it and these is the same whitespace one that keeps
+ *      `opts` out: `substrate-banner` has a hyphen where the matcher needs a
+ *      space, so it reads as a hook class the call site passes through
+ *      `className` — which is exactly what it is, carrying no styling and
+ *      existing so a screen rendering two banners can say which is which. */
 export const OWNED = [
   'btn-primary', 'btn-ghost',                                    // Button / buttonVariants
   'dot', 'dot--busy', 'dot--attention', 'dot--idle',             // StatusDot / dotVariants
@@ -67,6 +74,7 @@ export const OWNED = [
   'toast', 'toast--error', 'toast-action',                       // ToastHost / toast()
   'opt', 'opt--selected', 'opt-glyph', 'opt-idx',                // OptionRow
   'opt-body', 'opt-label', 'opt-desc', 'opt-enter',
+  'banner', 'banner-msg',                                        // Banner / bannerVariants
 ];
 
 /** Every `className="..."` / `className={'...'}` string literal in a file. */
