@@ -19,7 +19,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 | **merged** `3255571a1` (2026-10-03 23:09, R22); live at the next auto-update |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
-| 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | run 252 open (planned); dispatch held for run 174's answer on claim 950 (R22) |
+| 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | **dispatched** 2026-10-03 as run 252 to a fresh child (`ccrc-pwa-clear-delta`), with the claim agreement and migration-slot rule (R23) |
 | 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | — | planned and reviewed (R19); dispatches after waves 3–5 land |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
@@ -342,6 +342,21 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     migration's slot 15 is also #215's. This session proposed the second-lander rule to run 174's coordinator (mail
     3363) and holds the dispatch for the answer. #215 was last pushed 09-30, and its worker has been at a Bash
     approval prompt since 10-02 19:38.
+- **R23 (coordinator, 2026-10-03 23:17): wave 5 dispatched under an agreed claim overlap.**
+  - **The agreement.** Run 174's coordinator agreed (mail 3364) to the second-lander rule for claim 950:
+    - both PRs land;
+    - whichever merges second merges `main`, keeps both sides, renumbers its own migration to the next free
+      `user_version`, and re-runs coord-db, coord-store and the README citation cases;
+    - wave 5's `store.ts` edits stay inside the stall read, and its README edits stay inside the stall-watch
+      paragraphs.
+
+    #215 is not yet up for review, so wave 5 will probably land first and keep slot 15.
+  - **The dispatch.** Claims were re-read immediately before it; 950 is the only other ccrc-pwa claim, and it is
+    covered by the agreement. The dispatch window was at 9 of 24. The brief reads the plan at `main`'s `3255571a1`.
+    Route: Opus · high, workflows off, compact 40, subagent `sonnet`. Nine items.
+  - **A correction to R22.** Run 174's worker was not at an approval prompt continuously since 10-02 19:38. It
+    committed between 15:43 and 17:35 today and was blocked again after (its coordinator, mail 3364). R18 measured
+    it at a prompt at 12:13, and that measurement stands.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
