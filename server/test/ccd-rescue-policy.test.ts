@@ -722,3 +722,336 @@ describe('a completed swap ends an open wait as a swap, whoever asked for it', (
     expect(field(h.reg(ID, 'rescuewait'), 'state')).toBe('open');
   });
 });
+
+// ── RULE 3 — spread, do not bounce, chain-wait ────────────────────────────────
+
+/** A swap.log line at `ago` seconds in the past, in the log's own LOCAL-time format. */
+const pastLog = (ago: number, rest: string): void => {
+  h.sh(`printf '%(%F %T)T %s\\n' "$(( $(date +%s) - ${ago} ))" ${JSON.stringify(rest)} >> "$REG/swap.log"`);
+};
+
+describe('rule 3: spread, no bounce, and the chain wait', () => {
+  /** Real `_swap_target`: every home-able lane under the ceiling but `claude`,
+   *  claude-a the least used, so an unskipped rescue from `claude` takes claude-a. */
+  const lanes = (): void => {
+    const t = now();
+    for (const [w, five] of [['claude', 100], ['claude-a', 10], ['claude-b', 20], ['claude-d', 30]] as const) {
+      fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`),
+        JSON.stringify({ five, seven: 5, ts: t, fiveResetAt: t + 10000, sevenResetAt: t + 400000 }));
+    }
+  };
+  const blockNow = (): void => { const t = now(); writeTranscript([limitRow(t - 5, t + 9000, 'five_hour')]); };
+  const threeFrom = (from: string): void => {
+    for (const ago of [3000, 2500, 2000]) pastLog(ago, `auto-rescue ${ID}: ${from} (blocked) -> claude [home=claude]`);
+  };
+
+  it('the auto-rescue line carries the dated row: reset=, type= and row=', () => {
+    seed(); const t = now();
+    writeTranscript([limitRow(t - 10, t + 9000, 'five_hour')]);
+    tick(PROMPT);
+    expect(logLines('auto-rescue')[0]).toMatch(new RegExp(`via=transcript reset=${t + 9000} type=five_hour row=${t - 10}$`));
+  });
+
+  it('control: with no history the least-used lane takes the rescue', () => {
+    seed(); lanes(); blockNow();
+    tick(STALLED, null);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+  });
+
+  it('a target the session just left blocked is skipped', () => {
+    seed(); lanes(); blockNow();
+    pastLog(900, `auto-rescue ${ID}: claude-a (blocked) -> claude [home=claude]`);
+    tick(STALLED, null);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-b`]);
+  });
+
+  it('…unless its logged five-hour reset has already passed', () => {
+    seed(); lanes(); blockNow();
+    pastLog(900, `auto-rescue ${ID}: claude-a (blocked) -> claude [home=claude] via=transcript reset=${now() - 60} type=five_hour row=1`);
+    tick(STALLED, null);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+  });
+
+  // A reset the row was written after is never logged, so it lifts no skip: the
+  // account the row proved still blocked is not taken back inside the hour.
+  it('a row written days after its own reset logs no reset=, and the next rescue does not bounce back to that account', () => {
+    seed('claude-a'); lanes(); const t = now();
+    writeTranscript([limitRow(t - 5, t - 8 * 86400, 'seven_day')]);
+    tick(STALLED, null);
+    expect(logLines('auto-rescue')[0]).toMatch(new RegExp(`claude-a \\(blocked\\) -> claude-b \\[home=claude\\] via=banner type=seven_day row=${t - 5}$`));
+    h.sh(`_reg_set ${ID} wrapper claude-b; _reg_set ${ID} lastswap ${t - 1000}`);
+    tick(STALLED, null);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-b`, `dispatch ${ID} -> claude-d`]);
+  });
+
+  it('spread: a target another session was rescued onto minutes ago is passed over while another has room', () => {
+    seed(); lanes(); blockNow();
+    pastLog(120, 'auto-rescue other-sess: claude-d (blocked) -> claude-a [home=claude-d]');
+    tick(STALLED, null);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-b`]);
+  });
+
+  it('control: a target rescued onto longer ago than RESCUE_SPREAD_WINDOW is not passed over', () => {
+    seed(); lanes(); blockNow();
+    pastLog(900, 'auto-rescue other-sess: claude-d (blocked) -> claude-a [home=claude-d]');
+    tick(STALLED, null);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+  });
+
+  it("control: other sessions' rescues neither count toward this session's chain wait nor mark an account it left", () => {
+    seed(); lanes(); blockNow();
+    for (const ago of [3000, 2500, 2000]) pastLog(ago, 'auto-rescue other-sess: claude-a (blocked) -> claude-d [home=claude]');
+    tick(STALLED, null);
+    expect(h.reg(ID, 'rescuewait')).toBeNull();
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+  });
+
+  it('control: rescues older than RESCUE_CHAIN_WINDOW neither count toward the chain wait nor skip the account left', () => {
+    seed(); lanes(); blockNow();
+    for (const ago of [5000, 4500, 4000]) pastLog(ago, `auto-rescue ${ID}: claude-a (blocked) -> claude [home=claude]`);
+    tick(STALLED, null);
+    expect(h.reg(ID, 'rescuewait')).toBeNull();
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+  });
+
+  it('spread is a preference: when the recent target is the only one with room, it is taken', () => {
+    seed(); lanes(); blockNow();
+    for (const w of ['claude-b', 'claude-d']) {
+      fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`), JSON.stringify({ five: 100, seven: 5, ts: now() }));
+    }
+    pastLog(120, 'auto-rescue other-sess: claude-d (blocked) -> claude-a [home=claude-d]');
+    tick(STALLED, null);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+  });
+
+  it('a fourth rescue within the hour takes the chain wait — recorded with kind=chain, nothing dispatched', () => {
+    seed(); lanes(); blockNow();
+    for (const ago of [3000, 2000, 1000]) pastLog(ago, `auto-rescue ${ID}: claude-d (blocked) -> claude [home=claude]`);
+    tick(STALLED, null); tick(STALLED, null);
+    expect(dispatches()).toEqual([]);
+    expect(field(h.reg(ID, 'rescuewait'), 'kind')).toBe('chain');
+    expect(logLines('rescuewait')).toHaveLength(1);
+  });
+
+  it('the chain wait holds on the transcript rung\'s cached tick too — the dated row is read there', () => {
+    seed(); lanes(); blockNow();
+    threeFrom('claude-d');
+    tick(PROMPT, null); tick(PROMPT, null);
+    expect(h.reg(ID, 'tscan')).toMatch(/^\d+ 1$/);
+    expect(dispatches()).toEqual([]);
+    expect(field(h.reg(ID, 'rescuewait'), 'state')).toBe('open');
+  });
+
+  it('after RESCUE_CHAIN_WAIT the chain wait swaps — to a target that is not the account it just left blocked', () => {
+    seed(); lanes(); blockNow();
+    threeFrom('claude-a');
+    h.sh(`_reg_set ${ID} rescuewait "state=open kind=chain since=$(( $(date +%s) - 1801 )) reset=- wrapper=claude"`);
+    tick(STALLED, null);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-b`]);
+    expect(field(h.reg(ID, 'rescuewait'), 'end')).toBe('swap');
+  });
+
+  it('an ARMED chain wait whose account resets inside it ends in place and does not swap', () => {
+    seed(); lanes(); const t = now(); const R = t - 200;
+    writeTranscript([limitRow(t - 1000, R, 'five_hour')]);
+    threeFrom('claude-d');
+    openWait('chain', t - 1000, R);
+    tick(ARMED, null);
+    expect(dispatches()).toEqual([]);
+    expect(field(h.reg(ID, 'rescuewait'), 'end')).toBe('turned');
+  });
+
+  it('a STALLED chain wait whose account reset ends turned and the tick rescues, with no second chain wait', () => {
+    seed(); lanes(); const t = now(); const R = t - 200;
+    writeTranscript([limitRow(t - 1000, R, 'five_hour')]);
+    threeFrom('claude-a');
+    openWait('chain', t - 1000, R);
+    tick(STALLED, null);
+    expect(dispatches(), 'claude-a is the account it just left blocked').toEqual([`dispatch ${ID} -> claude-b`]);
+    expect(field(h.reg(ID, 'rescuewait'), 'end')).toBe('turned');
+    expect(logLines('rescuewait'), 'a second chain wait opened on the reset that just turned').toHaveLength(0);
+  });
+
+  it('a chain wait at its bound with no target that has room becomes the no-room wait', () => {
+    seed(); blockNow();
+    threeFrom('claude-d');
+    h.sh(`_reg_set ${ID} rescuewait "state=open kind=chain since=$(( $(date +%s) - 1801 )) reset=- wrapper=claude"`);
+    tick(STALLED, ''); tick(STALLED, '');
+    expect(dispatches()).toEqual([]);
+    expect(logLines('rescuewait-end'), 'the no-room wait flapped back into a chain wait').toHaveLength(1);
+    expect(logLines('rescuewait-end')[0]).toContain('kind=chain');
+    expect(logLines('rescuewait-end')[0]).toContain('end=noroom');
+    expect(field(h.reg(ID, 'rescuewait'), 'kind')).toBe('noroom');
+  });
+
+  it('the home-return branch honours the skip too: a session rescued off its home is not sent straight back', () => {
+    seed('claude-b'); lanes(); blockNow();
+    fs.writeFileSync(path.join(h.home, '.cc-limits', 'claude.json'),
+      JSON.stringify({ five: 10, seven: 5, ts: now() }));            // telemetry lags: home "looks" fine
+    fs.writeFileSync(path.join(h.home, '.cc-limits', 'claude-b.json'),
+      JSON.stringify({ five: 100, seven: 5, ts: now() }));
+    pastLog(900, `auto-rescue ${ID}: claude (blocked) -> claude-b [home=claude]`);
+    tick(STALLED, null);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+  });
+
+  it('spread never passes over HOME: a recovered home another session was rescued onto minutes ago is still where the rescue goes', () => {
+    seed('claude-b'); lanes(); const t = now();
+    fs.writeFileSync(path.join(h.home, '.cc-limits', 'claude.json'), JSON.stringify({ five: 10, seven: 5, ts: t }));
+    fs.writeFileSync(path.join(h.home, '.cc-limits', 'claude-b.json'), JSON.stringify({ five: 100, seven: 5, ts: t }));
+    blockNow();
+    pastLog(120, 'auto-rescue other-sess: claude-d (blocked) -> claude [home=claude]');
+    tick(STALLED, null);
+    expect(dispatches(), 'a third account first, then the affinity path home: two moves for one').toEqual([`dispatch ${ID} -> claude`]);
+  });
+
+  it('an unreadable swap log is today\'s behaviour: no chain wait, no skip', () => {
+    seed(); lanes(); blockNow();
+    fs.mkdirSync(regFile('swap.log'));
+    tick(STALLED, null);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+  });
+
+  it('a tail with no rescue in it is a MEASURED empty history (rc 0); a log nobody can read is not (rc 2)', () => {
+    seed();
+    pastLog(60, 'swap other-sess: claude -> claude-a (uuid u1)');
+    expect(h.sh(`_rescue_history ${ID}; echo "rc=$? $RESCUE_COUNT|$RESCUE_SKIP_LEFT|$RESCUE_SKIP_RECENT"`)).toBe('rc=0 0||');
+    fs.rmSync(regFile('swap.log')); fs.mkdirSync(regFile('swap.log'));
+    expect(h.sh(`_rescue_history ${ID}; echo "rc=$?"`)).toBe('rc=2');
+  });
+
+  it('a NON-rescue tick is `_swap_target` byte for byte: no skip list reaches the affinity path', () => {
+    seed();
+    pastLog(120, 'auto-rescue other-sess: claude-d (blocked) -> claude-a [home=claude-d]');
+    const out = h.sh(`_swap_target() { echo "skip=[\${SWAP_TARGET_SKIP:-}]"; }; _rescue_target ${ID} claude claude '' 0`);
+    expect(out).toBe('skip=[]');
+  });
+
+  it('nowhere to go is `_swap_target` byte for byte, and reads no swap log — a strand is asked every tick', () => {
+    seed();
+    const out = h.sh(`_swap_target() { return 1; }; _rescue_history() { echo history-read >> "$HOME/ccd-calls"; return 0; };
+      out=$(_rescue_target ${ID} claude claude 1 0); echo "[$out] rc=$?"`);
+    expect(out).toBe('[] rc=1');
+    expect(h.calls()).not.toContain('history-read');
+  });
+
+  it('spread never buys a class degrade: a first-pass rc 6 falls through to the just-left-only pass', () => {
+    seed();
+    // claude-a is the only same-class target with room, and a rescue landed on
+    // it minutes ago; with it skipped, `_swap_target` degrades onto claude-d.
+    pastLog(120, 'auto-rescue other-sess: claude-d (blocked) -> claude-a [home=claude-d]');
+    const out = h.sh(`_swap_target() { if [[ " \${SWAP_TARGET_SKIP:-} " == *" claude-a "* ]]; then echo claude-d; return 6; fi; echo claude-a; return 0; };
+      out=$(_rescue_target ${ID} claude claude 1 0); echo "$out rc=$?"`);
+    expect(out).toBe('claude-a rc=0');
+  });
+
+  it('spread never turns a rescue undecidable: a spread-pass rc 5 falls through to the just-left-only pass', () => {
+    seed();
+    pastLog(120, 'auto-rescue other-sess: claude-d (blocked) -> claude-a [home=claude-d]');
+    const out = h.sh(`_swap_target() { if [[ " \${SWAP_TARGET_SKIP:-} " == *" claude-a "* ]]; then return 5; fi; echo claude-a; return 0; };
+      out=$(_rescue_target ${ID} claude claude 1 0); echo "$out rc=$?"`);
+    expect(out).toBe('claude-a rc=0');
+  });
+
+  it('…end to end: the recent target is the only measured lane with room and another lane is unmeasured — rescued, not marked undecidable', () => {
+    seed(); lanes(); const t = now();
+    blockNow();
+    fs.writeFileSync(path.join(h.home, '.cc-limits', 'claude-b.json'), JSON.stringify({ five: 100, seven: 5, ts: t }));
+    pastLog(120, 'auto-rescue other-sess: claude-b (blocked) -> claude-a [home=claude-b]');
+    // The class window is unmeasured on claude-d alone (`_class_gate` rc 2).
+    h.sh(`${STUBS(STALLED, null)} _route_peek() { [[ "$2" == class ]] && echo opus; return 0; };
+      _class_gate() { [[ -z "\${2:-}" ]] && return 0; [[ "$1" == claude-d ]] && return 2; return 0; };
+      _auto_swap_check ${ID}`, BORN());
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+    expect(h.reg(ID, 'tickstuck')).toBeNull();
+    expect(fs.existsSync(regFile(`${ID}.stranded`))).toBe(false);
+  });
+
+  it('a Codex-lane session on its fourth rescue in the hour is rescued at once, and its exclusion is written', () => {
+    seed('gpt'); const t = now();
+    writeTranscript([limitRow(t - 5, t + 9000, 'five_hour')]);
+    for (const ago of [3000, 2000, 1000]) pastLog(ago, `auto-rescue ${ID}: claude-d (blocked) -> gpt [home=claude]`);
+    tick(PROMPT, 'claude-a');
+    expect(dispatches()).toHaveLength(1);
+    expect(h.reg(ID, 'rescuewait')).toBeNull();
+    expect(fs.existsSync(path.join(h.home, '.cc-limits', 'gpt.json')), 'the lane\'s "pool is full" signal').toBe(true);
+  });
+
+  it('an auth-failure pane is never chain-waited — lost auth has no reset to wait for', () => {
+    seed(); const t = now();
+    writeTranscript([limitRow(t - 5, t + 9000, 'five_hour')]);
+    threeFrom('claude-d');
+    tick(AUTH);
+    expect(h.reg(ID, 'rescuewait')).toBeNull();
+    expect(dispatches()).toHaveLength(1);
+  });
+
+  it('a 401 only the transcript shows is never chain-waited either (D-3522)', () => {
+    seed(); const t = now();
+    writeTranscript([limitRow(t - 100, t + 9000, 'five_hour'), authRow(t - 5)]);
+    threeFrom('claude-d');
+    tick(PROMPT);
+    expect(h.reg(ID, 'rescuewait')).toBeNull();
+    expect(dispatches()).toHaveLength(1);
+  });
+
+  it('a pane positive the transcript cannot date is never chain-waited — no dated row, no wait of any kind', () => {
+    seed(); const t = now();
+    writeTranscript([limitRow(t - 300, t + 9000, 'five_hour'), turn(t - 30)]);
+    threeFrom('claude-d');
+    tick(STALLED);
+    expect(h.reg(ID, 'rescuewait')).toBeNull();
+    expect(dispatches()).toHaveLength(1);
+  });
+
+  it('a 401 arriving during an open chain wait is rescued at once', () => {
+    seed(); const t = now();
+    writeTranscript([limitRow(t - 100, t + 9000, 'five_hour'), authRow(t - 5)]);
+    threeFrom('claude-d');
+    openWait('chain', t - 60, t + 9000);
+    tick(PROMPT);
+    expect(dispatches()).toHaveLength(1);
+    expect(field(h.reg(ID, 'rescuewait'), 'end')).toBe('swap');
+  });
+
+  it('a torn chain record is never evaluated, and does not hold (D-299)', () => {
+    seed(); blockNow();
+    threeFrom('claude-d');
+    const marker = path.join(h.home, 'evaluated');
+    h.sh(`_reg_set ${ID} rescuewait 'state=open kind=chain since=REG[$(touch ${marker})] reset=- wrapper=claude'`);
+    tick(STALLED);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(dispatches()).toHaveLength(1);
+  });
+
+  it('no chain wait opens on a five-hour reset whose grace has passed: the fourth rescue in the hour goes at once', () => {
+    seed(); lanes(); const t = now(); const R = t - 3000;
+    writeTranscript([limitRow(t - 5000, R, 'five_hour')]);
+    for (const ago of [3000, 2500, 2000]) pastLog(ago, `auto-rescue ${ID}: claude-d (blocked) -> claude [home=claude]`);
+    tick(ARMED, null); tick(ARMED, null);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+    expect(h.reg(ID, 'rescuewait')).toBeNull();
+  });
+
+  it('an open chain wait taken on ANOTHER account does not hold this one', () => {
+    seed(); const t = now();
+    writeTranscript([limitRow(t - 5, t + 300000, 'seven_day')]);
+    openWait('chain', t - 60, '-', 'claude-b');
+    tick(STALLED);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+    expect(field(h.reg(ID, 'rescuewait'), 'end')).toBe('swap');
+  });
+
+  // D-3526's never-came-up landing: its row is carried in (rc 3), kept a block,
+  // and dates nothing — but the rescue line still names the row, so §9's
+  // "rescues on a carried-in banner" stays countable.
+  it('a rescue of a landing that never came up names its carried row= and no reset= or type=', () => {
+    seed(); const t = now(); const born = t - 990;
+    writeTranscript([limitRow(t - 3000, t + 300, 'five_hour')]);
+    h.sh(`_reg_set ${ID} lastswap ${t - 1000}; _reg_set ${ID} spawn "${born + 30} 4"`);
+    tick(ARMED, 'claude-a', { TMUX_CREATED: String(born) });
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+    expect(logLines('auto-rescue')[0]).toMatch(new RegExp(`\\[home=claude\\] row=${t - 3000}$`));
+    expect(h.sh(`_hard_block_date 3 5 100; echo "$HARD_BLOCK_RESET|$HARD_BLOCK_TYPE|$HARD_BLOCK_ROW"`)).toBe('||100');
+  });
+});

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=59c0c66453001ec1d8d21e34ccf85f47d874fc1bc8430df43aa06eeba9656d4e
+# ccrc:generated 1 sha256=cd85b795a0b4ef0437b51abe171b707a647f524da99c057f88ec22b3e278880a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -16529,7 +16529,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     # forced call would skip the candidate loop's rank-101 demotion by landing
     # here first. The probe clears the marker on a live answer, and `_authdead`
     # expires it once a credential file ccd can name changes (D-3524) — no spawn.
-    if [[ "$hrc" -eq 0 ]] \
+    if [[ "$hrc" -eq 0 && " ${SWAP_TARGET_SKIP:-} " != *" $home "* ]] \
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
       && ! _authdead "$home" && _avail "$home"; then
       _class_gate "$home" "$cls"; src=$?                                     # home recovered: go back — if it can serve the class
@@ -16594,7 +16594,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     pcls="$cls"; [[ "$pass" -eq 2 ]] && pcls=$(_class_below "$cls")
     unserv=0; unmeas=0
     for cand in $(_pool_for "$id"); do
-      [[ "$cand" == "$cur" ]] && continue
+      [[ "$cand" == "$cur" || " ${SWAP_TARGET_SKIP:-} " == *" $cand "* ]] && continue
       # THE FILTER LIVES HERE, AFTER `_pool_for`, AND NEVER INSIDE `_default_pool`:
       # a hand-set `$REG/<id>.pool` candidate list bypasses `_default_pool`
       # entirely (grep `ccd/ccd` for `^_pool_for()` — D-1913 replaced a line
@@ -17611,7 +17611,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # A HEALTHY PANE IS NOT STRANDED. `_strand_clear` tests `-e` first, so the
   # steady state of a healthy session writes nothing at all.
   [[ -n "$hard_blocked" ]] || _strand_clear "$id"
-  target=$(_swap_target "$id" "$wrapper" "$home" "$hard_blocked" "$hrc"); strc=$?
+  target=$(_rescue_target "$id" "$wrapper" "$home" "$hard_blocked" "$hrc"); strc=$?
   # rc 6 IS A DECISION, handled BEFORE the `-ge 2` undecidable guard (routing
   # spec §5.4): a destination chosen one rung DOWN because every lane was
   # measured-unservable at the intended class. Put after that guard it would be
@@ -17785,7 +17785,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # keeps its exact shape; `via=transcript` is unchanged; `via=banner` is the
     # new word, and an operator seeing it knows the pane said so in this year's
     # wording rather than the transcript having been scanned for it.
-    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")" >> "$REG/swap.log"; _rescuewait_close "$id" swap
+    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")$(_rescue_line_extra)" >> "$REG/swap.log"; _rescuewait_close "$id" swap
     _dispatch_swap "$id" "$target"
     return 0
   fi
@@ -22931,13 +22931,14 @@ _carried_in_note() {   # id via row-epoch born — one swap.log line per process
   echo "$(date '+%F %T') carried-in $id: via=$2 rate-limit row at $3 predates this pane's process (born $4) — not a block [wrapper=$(_reg_get "$id" wrapper)] [spawn=${st##* }]" >> "$REG/swap.log"
 }
 
-# ── THE RESCUE POLICY (session-continuity spec §5.4, rule 2; D-3498) ──────
+# ── THE RESCUE POLICY (session-continuity spec §5.4, rules 2–3; D-3498) ─────
 # Rule 1 of that section — a carried-in banner is not a block — shipped as
 # D-3526, above (`_limit_dated`, on the pane's own process start). What sits
 # between that verdict and the rescue arm's `_dispatch_swap` lives here,
 # below the frozen citation corpus, reached from one-line call sites above it:
 #   2. WAIT NEAR THE CURRENT ACCOUNT'S OWN FIVE-HOUR RESET (C6, C13), and
 #      record today's `stranded` path as the no-room wait.
+#   3. SPREAD, DO NOT BOUNCE, AND CHAIN-WAIT a fourth rescue inside the hour.
 # Every wait is recorded once on entry and once on exit, in
 # `$REG/<id>.rescuewait` and in swap.log — never under the word `hold`, which
 # is the workspace-reap hold (`$REG/<id>.hold`).
@@ -22970,6 +22971,11 @@ RESCUE_WAIT_BOUND=600           # C13 — seconds before a five-hour reset insid
 RESCUE_WAIT_GRACE=120           # seconds after that reset a wait holds for the continuation before it ends. ITS OWN CONSTANT, not STALE_PRESS_COOLDOWN, which paces keystrokes, not waits
 RESCUE_CHAIN_WAIT=1800          # spec §5.4's 30 minutes (a knob), the longest the rescue holds a session on its account: in place after a reset turned (rule 2, until this long past that reset) and in a chain wait (rule 3, this long from its start)
 HARD_BLOCK_RESET="" HARD_BLOCK_TYPE="" HARD_BLOCK_ROW=""   # the verdict's dated row (above); declared here so a stub of `_session_hard_blocked` leaves them set under `set -u`
+RESCUE_CHAIN_COUNT=3            # rescues of ONE session inside RESCUE_CHAIN_WINDOW after which the next one chain-waits first
+RESCUE_CHAIN_WINDOW=3600        # the window those rescues are counted in; also how long an account the session left blocked is skipped, unless its logged reset passes first
+RESCUE_SPREAD_WINDOW=600        # a target that received ANY session's rescue this recently is taken only when no other placeable target exists
+RESCUE_LOG_TAIL_BYTES=1048576   # swap.log bytes rule 3 reads (1 MiB, spec §5.4 rule 3); a short read undercounts, which is today's behaviour
+RESCUE_COUNT=0 RESCUE_SKIP_LEFT="" RESCUE_SKIP_RECENT=""   # `_rescue_history`'s answers
 
 _hard_block_date() {   # rc born answer — what `_limit_read`'s answer tells HARD_BLOCK_ROW/TYPE/RESET; always rc 0
   local row reset kind
@@ -22977,7 +22983,11 @@ _hard_block_date() {   # rc born answer — what `_limit_read`'s answer tells HA
   # `since` either (it prints `-`), so this is the second of two locks, and
   # the one the policy owns.
   [[ "$2" =~ ^[0-9]+$ ]] || return 0
-  [[ "$1" == 0 ]] || return 0               # only a block row this process wrote: rc 1, 2 and 3 date nothing
+  # rc 3 — a row older than this process that D-3526 keeps a block (no swap
+  # after it, or a process that never came up) — tells the rescue line its
+  # `row=` and nothing more: it keeps no reset and no window, so no wait keys on it.
+  [[ "$1" == 3 && "$3" =~ ^[0-9]+$ ]] && { HARD_BLOCK_ROW="$3"; return 0; }
+  [[ "$1" == 0 ]] || return 0               # only a block row this process wrote: rc 1 and 2 date nothing
   IFS=$'\t' read -r row reset kind <<<"$3"  # `_limit_read` writes `-` for a missing field, so none is empty
   [[ "$row" =~ ^[0-9]+$ ]] || return 0      # a 401, or a row whose timestamp would not parse
   HARD_BLOCK_ROW="$row"
@@ -23070,10 +23080,13 @@ _rescue_policy() {   # id wrapper pane hard-blocked -> 0 PROCEED as today | 1 HO
   #       after it never saw the account turn: Claude Code re-sends the turn
   #       itself, and ccd never swaps away from an account that has
   #       just reset. A STALLED pane is rescued as today: a
-  #       near wait ends `turned` and the tick proceeds; a no-room wait stays
-  #       open and ends in a swap the moment a target has room;
+  #       near or chain wait ends `turned` and the tick proceeds, with no chain
+  #       wait on this reset; a no-room wait stays open and ends in a swap the
+  #       moment a target has room;
   #   (b) a near reset and an ARMED auto-continue: the near wait;
-  #   otherwise proceed.
+  #   (c) a fourth rescue inside RESCUE_CHAIN_WINDOW, on an Anthropic lane: the
+  #       chain wait, up to RESCUE_CHAIN_WAIT;
+  #   otherwise proceed — and `_rescue_target` applies rule 3's skip lists.
   # WHY (b) — AND AN END IN PLACE — NEED AN ARMED AUTO-CONTINUE: mechanism 5
   # names the cost of D-2236 as "the wait for one whose reset is minutes away"
   # — the session Claude Code will continue by itself. A STALLED session
@@ -23118,7 +23131,7 @@ _rescue_policy() {   # id wrapper pane hard-blocked -> 0 PROCEED as today | 1 HO
           [[ "$state" == open ]] && { _rescuewait_close "$id" turned; _strand_clear "$id"; }
           return 1
         fi
-        [[ "$state" == open && "$kind" != noroom ]] && _rescuewait_close "$id" turned
+        [[ "$state" == open && "$kind" != noroom ]] && { _rescuewait_close "$id" turned; state=closed; }
       elif [[ "$state" == open ]] && { [[ "$kind" == near ]] || (( now >= 10#$R )); } \
            && { [[ "$kind" != noroom ]] || _rescue_armed "$pane"; }; then
         return 1
@@ -23129,6 +23142,137 @@ _rescue_policy() {   # id wrapper pane hard-blocked -> 0 PROCEED as today | 1 HO
       _rescuewait_open "$id" "$wrapper" near && return 1
     fi
   fi
+  # (c) THE CHAIN WAIT (rule 3) — for a dated rate-limit block on an Anthropic
+  # lane, and never on a five-hour reset whose grace has already run out: (a)
+  # rules on that reset for a wait that saw it (a STALLED near or chain wait
+  # ends `turned` there and is rescued, with no second chain wait), and a reset
+  # no wait saw turn is not one to wait on either. A Codex-lane hold would
+  # return before the rescue arm writes that lane's only "pool is full" signal
+  # (`$LIMITS_DIR/<wrapper>.json`), so other sessions would keep landing on the
+  # exhausted lane — the herd this rule exists to stop. Lost auth dates nothing
+  # (section header), so it never chain-waits, and an open chain wait ends on
+  # the tick its verdict stops being a dated rate-limit block: a 401 arriving
+  # mid-wait is rescued at once. The swap log is read here only with no wait
+  # open, so an open no-room wait never turns back into a chain wait, and an
+  # open chain wait runs to its own bound whatever the hour's count does — on the
+  # account it was taken on only.
+  if [[ "$R" =~ ^[0-9]+$ && "${HARD_BLOCK_TYPE:-}" =~ ^[a-z_]+$ ]] && _is_anthropic_backend "$wrapper"; then
+    if [[ "$state" == open ]]; then
+      [[ "$kind" == chain && "$since" =~ ^[0-9]+$ && "$(_rw_field "$rec" wrapper)" == "$wrapper" ]] \
+        && (( now - 10#$since < RESCUE_CHAIN_WAIT )) && return 1
+    elif ! { [[ "${HARD_BLOCK_TYPE:-}" == five_hour ]] && (( now >= 10#$R + RESCUE_WAIT_GRACE )); } \
+         && _rescue_history "$id" && (( RESCUE_COUNT >= RESCUE_CHAIN_COUNT )); then
+      _rescuewait_open "$id" "$wrapper" chain && return 1
+    fi
+  fi
+  return 0
+}
+
+_rescue_history() {   # id -> 0 measured (RESCUE_COUNT, RESCUE_SKIP_LEFT, RESCUE_SKIP_RECENT set) | 2 unmeasurable (all empty)
+  # RULE 3 READS THE SWAP LOG, which already carries every rescue with its
+  # time, source and target — the same file §9's instrument reads, so the
+  # policy and its measurement cannot disagree about what happened. Only its
+  # tail (`RESCUE_LOG_TAIL_BYTES`), and only when a decision needs it: the chain
+  # check of a blocked tick with no wait open, and the target choice of a
+  # rescue that has somewhere to go — not the ticks a strand waits through,
+  # which need neither.
+  # Its times are `date '+%F %T'`, LOCAL time, so python converts with `mktime`.
+  #   RESCUE_COUNT       this session's `auto-rescue` lines in RESCUE_CHAIN_WINDOW;
+  #   RESCUE_SKIP_LEFT   their SOURCE accounts ("an account the session just
+  #                      left blocked"), except one whose logged `reset=` passed;
+  #   RESCUE_SKIP_RECENT every session's rescue TARGET in RESCUE_SPREAD_WINDOW.
+  # UNMEASURABLE IS TODAY'S BEHAVIOUR: no chain wait, no skip. A log that does
+  # not exist yet is a MEASURED empty history (rc 0), not an unreadable one, and
+  # so is a tail with no rescue in it (`grep` rc 1).
+  local id="$1" out
+  RESCUE_COUNT=0; RESCUE_SKIP_LEFT=""; RESCUE_SKIP_RECENT=""
+  [[ -e "$REG/swap.log" ]] || return 0
+  [[ -f "$REG/swap.log" && -r "$REG/swap.log" ]] || return 2
+  command -v python3 >/dev/null 2>&1 || return 2
+  out=$(tail -c "$RESCUE_LOG_TAIL_BYTES" "$REG/swap.log" 2>/dev/null | { grep -F ' auto-rescue ' || (( $? == 1 )); } | python3 -c '
+import re, sys, time
+sid, now, chain, spread = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+pat = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) auto-rescue (\S+): (\S+) \(blocked\) -> (\S+)(.*)$")
+count, left, recent = 0, [], []
+for raw in sys.stdin.buffer:
+    m = pat.match(raw.decode("utf-8", "replace").rstrip("\n"))
+    if not m:
+        continue
+    try:
+        at = int(time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")))
+    except (ValueError, OverflowError):
+        continue
+    age = now - at
+    if age < 0:
+        continue
+    if m.group(2) == sid and age < chain:
+        count += 1
+        r = re.search(r" reset=(\d+)", m.group(5))
+        if not (r and int(r.group(1)) <= now) and m.group(3) not in left:
+            left.append(m.group(3))
+    if age < spread and m.group(4) not in recent:
+        recent.append(m.group(4))
+print(str(count) + "|" + " ".join(left) + "|" + " ".join(recent))
+' "$id" "$(date +%s)" "$RESCUE_CHAIN_WINDOW" "$RESCUE_SPREAD_WINDOW" 2>/dev/null) || return 2
+  IFS='|' read -r RESCUE_COUNT RESCUE_SKIP_LEFT RESCUE_SKIP_RECENT <<<"$out"
+  [[ "$RESCUE_COUNT" =~ ^[0-9]+$ ]] || { RESCUE_COUNT=0; RESCUE_SKIP_LEFT=""; RESCUE_SKIP_RECENT=""; return 2; }
+  return 0
+}
+
+_rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout and rc, rule 3's skip lists applied to a RESCUE
+  # NOT A RESCUE, NOWHERE TO GO, OR NOBODY CAN SAY IS `_swap_target` BYTE FOR
+  # BYTE: the affinity path's choice is not this spec's; skipping can only
+  # remove a candidate, so a strand — asked every 5 s for hours — never pays
+  # the swap-log read; and the unskipped probe's undecidable answer (rc 2-5)
+  # goes back as it came — the spread pass's never does.
+  # For a rescue with somewhere to go, SWAP_TARGET_SKIP names what the
+  # candidate walk and the home-return branch pass over: first the accounts
+  # this session just left blocked AND every target a rescue landed on inside
+  # RESCUE_SPREAD_WINDOW; if that leaves nothing, the just-left accounts alone
+  # ("prefers a target that has not received a rescue ... when another
+  # placeable target exists"). A just-left account is never taken back while
+  # it is skipped — that is "do not bounce" — so a rescue whose only room is
+  # the account it just left strands, and waits there.
+  # SPREAD IS A PREFERENCE, NEVER BOUGHT WITH A CLASS DEGRADE: the first pass's
+  # name is taken only at rc 0. Its rc 6 ("a name, chosen one rung DOWN") can
+  # mean the only same-class target with room is one the spread skipped — the
+  # walk passes a skipped candidate before `_class_gate` counts it — and the
+  # just-left-only pass below then decides, as it does for everything else.
+  # SPREAD NEVER PASSES OVER HOME: a recovered home another session was just
+  # rescued onto would only be returned to by the affinity path at the next
+  # idle tick — two moves where one does (do-not-bounce still skips a home the
+  # session just left blocked).
+  local out rc recent
+  out=$(_swap_target "$@"); rc=$?
+  if [[ -z "$4" || -z "$out" ]] || (( rc >= 2 && rc <= 5 )) || ! _rescue_history "$1" \
+     || [[ -z "$RESCUE_SKIP_LEFT$RESCUE_SKIP_RECENT" ]]; then
+    [[ -n "$out" ]] && printf '%s\n' "$out"
+    return "$rc"
+  fi
+  recent=" $RESCUE_SKIP_RECENT "; [[ -n "$3" ]] && recent="${recent// "$3" / }"   # spread never passes over HOME: the affinity path would only move it back
+  if [[ -n "${recent// /}" ]]; then
+    out=$(SWAP_TARGET_SKIP="$RESCUE_SKIP_LEFT $recent" _swap_target "$@"); rc=$?
+    [[ -n "$out" && "$rc" -eq 0 ]] && { printf '%s\n' "$out"; return 0; }
+    # …and ITS undecidable answer is never returned: the unskipped probe above
+    # already answered every question the skip cannot change (rc 2-4 are asked
+    # before the walk), so an rc 5 here means the skip removed every measured
+    # candidate and left only an unmeasured lane — the just-left-only pass decides.
+  fi
+  SWAP_TARGET_SKIP="$RESCUE_SKIP_LEFT" _swap_target "$@"
+}
+
+_rescue_line_extra() {   # -> the dated row's tokens for the `auto-rescue` line: ` reset=<epoch>`, ` type=<word>`, ` row=<epoch>`, each only when the verdict kept it
+  # APPENDED, so every line this fleet's log already carries keeps its exact
+  # shape when nothing was dated. `_rescue_history` reads `reset=` back (an
+  # account whose logged reset passed is not "just left blocked" any more), and
+  # §9's instrument compares `row=` with the landing the log itself records.
+  # `reset=` is only ever a reset the row predates (see `_hard_block_date`), so
+  # a row written after its own reset lifts no skip; `row=` is also told for a
+  # row older than this process that D-3526 kept a block, so a rescue on a
+  # carried-in banner stays countable.
+  [[ -n "${HARD_BLOCK_RESET:-}" ]] && printf ' reset=%s' "$HARD_BLOCK_RESET"
+  [[ -n "${HARD_BLOCK_TYPE:-}" ]] && printf ' type=%s' "$HARD_BLOCK_TYPE"
+  [[ -n "${HARD_BLOCK_ROW:-}" ]] && printf ' row=%s' "$HARD_BLOCK_ROW"
   return 0
 }
 
