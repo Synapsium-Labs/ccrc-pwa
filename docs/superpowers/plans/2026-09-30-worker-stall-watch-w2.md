@@ -139,124 +139,124 @@ slug. Each departure from the spec's literal text, by number and slug:
 
 From the planning decisions:
 
-- **D-3604** `part-a-capture-ships-first`: Tasks 1–2 are their own PR. The orchestrator runs the checkpoint. Part B's PR
+- **D-3604** — `part-a-capture-ships-first`: Tasks 1–2 are their own PR. The orchestrator runs the checkpoint. Part B's PR
   waits for its PASS. A C1 failure stops Part B.
-- **D-3605** `w2-arms-ship-dark`: `stall-watch-w2-live` gates every wave-2 arm. Without it, the arms record shadow only.
-- **D-3606** `busy-gate-precedence`: When several gate markers are present, strict > busy > busy-shadow > shell:
+- **D-3605** — `w2-arms-ship-dark`: `stall-watch-w2-live` gates every wave-2 arm. Without it, the arms record shadow only.
+- **D-3606** — `busy-gate-precedence`: When several gate markers are present, strict > busy > busy-shadow > shell:
   `mail-gate-strict` beats `mail-gate-busy`, which beats `mail-gate-busy-shadow`, which beats the default `shell`.
-- **D-3607** `gate-markers-spelled-in-turnidle-only`: The two wave-2 gate markers, `mail-gate-busy-shadow` and
+- **D-3607** — `gate-markers-spelled-in-turnidle-only`: The two wave-2 gate markers, `mail-gate-busy-shadow` and
   `mail-gate-busy`, are spelled only in `server/src/turnidle.ts`. The no-writer pin matches by substring, and
   `mail-gate-busy` is a substring of `mail-gate-busy-shadow`.
-- **D-3608** `no-migration-no-wire`: `user_version` stays 14. The only additions are a `MailGate` member, optional
+- **D-3608** — `no-migration-no-wire`: `user_version` stays 14. The only additions are a `MailGate` member, optional
   arming fields and a server-internal `LiveState` field.
-- **D-3609** `no-shell-doctor-probe`: §11 item 11 is not in wave 2. The operator gave no recommendation to approve,
+- **D-3609** — `no-shell-doctor-probe`: §11 item 11 is not in wave 2. The operator gave no recommendation to approve,
   nothing in the tree enumerates lane binaries, and the probe would collide with centralised-update wave 8's doctor
   edits. Its purpose is covered by the pane guard, the `turn-running` telemetry and `mail-gate-strict`.
-- **D-3610** `deliberate-stop-excluded`: A `stopped` worker holds `lifecycle-stopped`. Only `orphan` and `never-started`
+- **D-3610** — `deliberate-stop-excluded`: A `stopped` worker holds `lifecycle-stopped`. Only `orphan` and `never-started`
   feed the dead arm. The `$REG/<id>.stopped` file is written only by deliberate stops, and the server exposes
   `FleetSession.stoppedBy`, which answers §11 item 10 from code.
-- **D-3611** `stopfailure-sets-a-flag`: The arm sets `stopfail=1`, and code after `esac` exits before `f=`.
-- **D-3612** `capture-arm-keyed-on-hookcap`: The capture arm is gated on the session's ccd id ending `-hookcap`
+- **D-3611** — `stopfailure-sets-a-flag`: The arm sets `stopfail=1`, and code after `esac` exits before `f=`.
+- **D-3612** — `capture-arm-keyed-on-hookcap`: The capture arm is gated on the session's ccd id ending `-hookcap`
   (`[[ "$id" == *-hookcap ]]`). Scratch sessions are started as `ccd start <wrapper> hookcap <dir>`, so their id is
   `<wrapper>-hookcap`. Any other session pays that one test and nothing more. The arm sits right after `esac`, before
   the StopFailure exit and before `f=`.
-- **D-3613** `capture-arm-is-permanent`: The capture arm and its reducer stay in the tree after wave 2 as a permanent
+- **D-3613** — `capture-arm-is-permanent`: The capture arm and its reducer stay in the tree after wave 2 as a permanent
   re-capture tool for new Claude Code lanes. The arm is inert outside a `-hookcap` session.
-- **D-3614** `marker-identity-from-env`: The marker's `sessionId` is `${CLAUDE_CODE_SESSION_ID:-}`, the source hookstate
+- **D-3614** — `marker-identity-from-env`: The marker's `sessionId` is `${CLAUDE_CODE_SESSION_ID:-}`, the source hookstate
   already uses, so both files agree. It falls back to the payload's cleaned `session_id` only when the env is empty.
-- **D-3615** `marker-logic-in-the-tail`: All marker logic goes in the hook's tail, after `esac`: `_hook_turn_mark` is
+- **D-3615** — `marker-logic-in-the-tail`: All marker logic goes in the hook's tail, after `esac`: `_hook_turn_mark` is
   defined and called there. README anchors `ccd/session-hook.sh:2900`, so the only edits above that line are
   line-neutral, in place.
-- **D-3616** `one-stamp-per-hook-run`: The marker write reuses the one `_hook_epoch_ms` value that the same hook run's
+- **D-3616** — `one-stamp-per-hook-run`: The marker write reuses the one `_hook_epoch_ms` value that the same hook run's
   hookstate write uses. No second `$( )` fork is added.
-- **D-3617** `marker-tmp-parity-with-hookstate`: A temp left by a killed marker write is dotted and never swept, the
+- **D-3617** — `marker-tmp-parity-with-hookstate`: A temp left by a killed marker write is dotted and never swept, the
   same as today's hookstate temp. Accepted and documented; `_hook_family_sweepable` is not widened.
-- **D-3618** `purge-loop-uses-fresh-variable`: The loop uses `hf`, because a second `rm -f "$f"` double-matches
+- **D-3618** — `purge-loop-uses-fresh-variable`: The loop uses `hf`, because a second `rm -f "$f"` double-matches
   canonical-write ALLOW entry 12.
-- **D-3619** `empty-uuid-is-foreign`: A registry uuid of `''` or `null` reads as unregistered, so the marker is
+- **D-3619** — `empty-uuid-is-foreign`: A registry uuid of `''` or `null` reads as unregistered, so the marker is
   `foreign`, and a hook whose `sessionId` is `''` is not current either. Consumers take the wave-1 path for `foreign`,
   so this is safe. It applies to the turn marker only.
-- **D-3620** `raw-read-replaces-the-private-parse`: `readHookStateRawMeasured` REPLACES the private `readHookStateGated`
+- **D-3620** — `raw-read-replaces-the-private-parse`: `readHookStateRawMeasured` REPLACES the private `readHookStateGated`
   as the ONE `JSON.parse`. `readHookStateMeasured` and `readHookStateUnaged` become folds over it, keeping exactly one
   `> HOOKSTATE_FRESH_MS`. A non-string `sessionId` answers `malformed`. The stale `ccd/session-hook.sh:96,100` citation
   and the `without nothing else` typo in `hookstate.ts` are fixed by content.
-- **D-3621** `turnidle-declares-its-mark-shape`: `turnidle.ts` stays import-free. It declares its own structural
+- **D-3621** — `turnidle-declares-its-mark-shape`: `turnidle.ts` stays import-free. It declares its own structural
   `TurnMarkFact` type, and the marker reader's read union (`TurnMarkRead`) must stay assignable to it, which a type pin
   in `turnidle.test.ts` checks.
-- **D-3622** `shell-allowed-by-positive-list`: `shell` delivers only under a mode on a POSITIVE list (`shell`,
+- **D-3622** — `shell-allowed-by-positive-list`: `shell` delivers only under a mode on a POSITIVE list (`shell`,
   `busy-shadow`, `busy`), never `!== 'strict'`, so a mode added later is refused until someone places it.
-- **D-3623** `working-marker-refuses-shell-as-not-idle`: Under `busy-shadow` and `busy`, a live `shell` with a `working`
+- **D-3623** — `working-marker-refuses-shell-as-not-idle`: Under `busy-shadow` and `busy`, a live `shell` with a `working`
   marker at least as new as `statusUpdatedAt` records `not-idle`, because that turn is running. An OLDER `working`
   marker is an interrupted turn (Stop does not fire on Esc) and is read as done at `statusUpdatedAt`.
-- **D-3624** `busy-shadow-verdict-arm`: The verdict has an arm
+- **D-3624** — `busy-shadow-verdict-arm`: The verdict has an arm
   `{deliver: false; gate: 'not-idle'; wouldDeliver: true; since}` under `busy-shadow`. `watch.ts` logs
   `console.warn('ccrc-server: mail-gate busy-shadow would deliver …')` once per deliveryId, because `turnidle.ts` cannot
   log.
-- **D-3625** `turn-mark-unreadable-gate`: An `unmeasured` or `malformed` marker under `busy` answers a new gate,
+- **D-3625** — `turn-mark-unreadable-gate`: An `unmeasured` or `malformed` marker under `busy` answers a new gate,
   `turn-mark-unreadable`: a new `MailGate` member, its `MailStrip` phrase and every exhaustive map, server and PWA. A
   fleet fault then never hides behind `not-idle`. `watch.ts` gets a LITERAL `gated(d, 'turn-mark-unreadable')` call
   site, and the `shared/api.ts` edits are line-neutral.
-- **D-3626** `busy-re-anchored`: M3. `BUSY_RE` is anchored to Claude Code's spinner-row shape instead of matching the
+- **D-3626** — `busy-re-anchored`: M3. `BUSY_RE` is anchored to Claude Code's spinner-row shape instead of matching the
   phrase anywhere. The phrase must end the row or be followed by `)` or a ` ·` hint segment, on a row that is not the
   prompt, a tool continuation or a quote. The unanchored phrase refused a `shell` or `busy` delivery with `turn-running`
   whenever a transcript line, a draft or a quoted capture in the last 8 rows carried it.
-- **D-3627** `turnidle-rulings-rewritten-per-mode`: `turnidle.test.ts`'s row asserting that the five coordinator rulings
+- **D-3627** — `turnidle-rulings-rewritten-per-mode`: `turnidle.test.ts`'s row asserting that the five coordinator rulings
   of 09-28 stay `not-idle` is rewritten per mode. Under `busy` with a current `done` marker they deliver, a quiet window
   after each of the worker's next Stops. Under `busy-shadow` the same moments would deliver and are still held
   `not-idle`.
-- **D-3628** `w2-arming-optional`: `StallArming.w2Live` and `mailDisabled` are optional, so wave 1's fixture literals
+- **D-3628** — `w2-arming-optional`: `StallArming.w2Live` and `mailDisabled` are optional, so wave 1's fixture literals
   stay valid. Absent reads as false. `stallArmingOf` always sets `w2Live`.
-- **D-3629** `w2-facts-separate-object`: `StallInput.w2?` carries the new facts, so `StallFacts` is unchanged and wave
+- **D-3629** — `w2-facts-separate-object`: `StallInput.w2?` carries the new facts, so `StallFacts` is unchanged and wave
   1's whole-object `toEqual` rows stay green.
-- **D-3630** `dead-lifecycle-precedes-live-stamp`: For a lifecycle-dead-shaped worker (`orphan`, `never-started`), the
+- **D-3630** — `dead-lifecycle-precedes-live-stamp`: For a lifecycle-dead-shaped worker (`orphan`, `never-started`), the
   lifecycle check runs BEFORE the null-live-stamp `unmeasured` hold. A dead pane has no live stamp.
-- **D-3631** `absent-worker-is-dead-after-grace`: A worker missing from the tick's sessions for `DEAD_GRACE_MS` feeds
+- **D-3631** — `absent-worker-is-dead-after-grace`: A worker missing from the tick's sessions for `DEAD_GRACE_MS` feeds
   the dead arm, naming "registry row absent". The in-memory `absentSince` and `deadSince` restart with the server, so a
   restart re-times the grace.
-- **D-3632** `rung-recipient-per-arm`: `rungRecipient` becomes one exported, total per-arm table. A rung an arm does not
+- **D-3632** — `rung-recipient-per-arm`: `rungRecipient` becomes one exported, total per-arm table. A rung an arm does not
   have is absent from its row. Some rungs go to the operator instead: frozen or dead with no claimant or under a pause,
   and failed rung 2.
-- **D-3633** `self-wake-is-a-watch-notice`: `StallMailClass` gains `self-wake` (an `orphaned:` or `failed:` notice from
+- **D-3633** — `self-wake-is-a-watch-notice`: `StallMailClass` gains `self-wake` (an `orphaned:` or `failed:` notice from
   the operator role to the session itself), and `isWatchNotice` includes it. Such a notice moves neither the quiet
   clock, the inbound mail nor the episode key. `pushNewMail` records it without pushing.
-- **D-3634** `cited-check-derived-in-l1`: M7a. The r1 notice that r2's body cites is derived in L1 by an exported
+- **D-3634** — `cited-check-derived-in-l1`: M7a. The r1 notice that r2's body cites is derived in L1 by an exported
   `stallCitedCheck`: r1's earliest LIVE row on the key when one exists, else its earliest row. The lane's warn fires
   once per episode (in memory), not every 60 s.
-- **D-3635** `approval-is-a-hook-ask-fact`: M7b. A PermissionRequest approval envelope becomes a `HookAskFact` member
+- **D-3635** — `approval-is-a-hook-ask-fact`: M7b. A PermissionRequest approval envelope becomes a `HookAskFact` member
   (`kind: 'approval'`), and L1 decides what it holds. It is never hold 2a.
-- **D-3636** `lane-honours-mail-disabled`: The lane reads watch.ts's LOCAL `MAIL_DISABLED_MARKER` and passes
+- **D-3636** — `lane-honours-mail-disabled`: The lane reads watch.ts's LOCAL `MAIL_DISABLED_MARKER` and passes
   `mailDisabled` in the arming. L1 holds every mail rung that would send with hold `mail-disabled`, and push-only rungs
   still push.
-- **D-3637** `session-arms-are-separate-verdicts`: Orphan D, orphan E, failed and mail-stuck are pure verdicts beside
+- **D-3637** — `session-arms-are-separate-verdicts`: Orphan D, orphan E, failed and mail-stuck are pure verdicts beside
   `stallVerdict`, not steps inside it. Orphan D, orphan E and failed apply holds 1 and 2 (2b: a `dialogPending` pane)
   and the limit hold only. Mail-stuck takes the same holds except 2b: spec §5.2 fires it "whatever its gate" (amended
   at the final review; the plan's code had read "holds 1, 2" as §10 steps and applied no dialog hold to any of them).
-- **D-3638** `mail-stuck-decided-in-l1`: mail-stuck is decided in L1 from rows the store SELECTs with `lastGate` and
+- **D-3638** — `mail-stuck-decided-in-l1`: mail-stuck is decided in L1 from rows the store SELECTs with `lastGate` and
   `gateSince` as plain columns. `watch.ts` never names those identifiers and passes the rows through whole, so the pins
   on gate-column naming in `mail-sweep.test.ts` stand.
-- **D-3639** `has-mail-with-subject-lands-here-first`: `hasMailWithSubject(fromId, runId, toId, subject)` lands in this
+- **D-3639** — `has-mail-with-subject-lands-here-first`: `hasMailWithSubject(fromId, runId, toId, subject)` lands in this
   wave, copied EXACTLY from landing-order wave 2's plan: the same code, signature, return type and SQL over `mail` alone
   with `runId IS ?`. Only the docstring differs, naming both readers. The landing-order coordinator is told at
   execution.
-- **D-3640** `run-less-stall-notice`: `queueStallNotice(coord, run | null, n)` gains a run-less arm. It dedupes with
+- **D-3640** — `run-less-stall-notice`: `queueStallNotice(coord, run | null, n)` gains a run-less arm. It dedupes with
   `hasMailWithSubject('operator', null, toId, subject)` inside the same tx, and answers
   `{queued:true, mailId, deliveryId, eventId: null}` or `{queued:false, why:'duplicate'}`. The queued union's `eventId`
   widens to `number | null`.
-- **D-3641** `one-mail-read-per-candidate`: M5. One mail read per candidate per sweep (`stallMailFor`), filtered in L1.
+- **D-3641** — `one-mail-read-per-candidate`: M5. One mail read per candidate per sweep (`stallMailFor`), filtered in L1.
   It replaces the per-subject scans wave 1 made several times.
-- **D-3642** `three-reads-per-candidate`: M6. At most three agent reads per worker per sweep (the live file, the turn
+- **D-3642** — `three-reads-per-candidate`: M6. At most three agent reads per worker per sweep (the live file, the turn
   marker and the raw hookstate), and two per coordinator. The pane pid and the registry uuid come from data the tick
   already measured.
-- **D-3643** `titles-by-arm`: `pushNewMail` titles each notice by its arm: ⚠ stall, ⚠ frozen, ⚠ dead, ⚠ failed, ⚠
+- **D-3643** — `titles-by-arm`: `pushNewMail` titles each notice by its arm: ⚠ stall, ⚠ frozen, ⚠ dead, ⚠ failed, ⚠
   coordinator deaf, ⚠ mail stuck, ⚠ orphaned, ⚠ marker. The arm is derived from the subject form the texts define.
-- **D-3644** `working-reply-backs-off`: I2, Task 17, isolated and droppable; the operator has not ruled. The r1 quiet
+- **D-3644** — `working-reply-backs-off`: I2, Task 17, isolated and droppable; the operator has not ruled. The r1 quiet
   threshold is `STALL_QUIET_MS × 2^min(streak, 2)`: 2 h, 4 h, 8 h. `streak` counts consecutive episodes on the run that
   were closed ONLY by a worker `re stall-check: working` reply since the worker's last other mail. Any other worker mail
   resets it.
 
 The skeleton's own departures, each argued in its task:
 
-- **D-3645** `dark-mode-keeps-wave-1-verdict`: Without `w2Live`, every LIVE outcome of the run verdict (a notify that
+- **D-3645** — `dark-mode-keeps-wave-1-verdict`: Without `w2Live`, every LIVE outcome of the run verdict (a notify that
   sends, a `measure-coordinator`) is wave 1's. This covers the marker `unmeasured` hold (4b is gated on `w2Rules`),
   restart grace, delegates, the marker clock, judging `busy`, the proof escalation and I2. Hold WORDS may differ in dark
   mode, but a hold is never a send, so no wave-1 send is lost: `lifecycle-stopped`, and the dead-shaped lifecycle judged
@@ -267,178 +267,178 @@ The skeleton's own departures, each argued in its task:
     coord-ball cap, for a busy worker with a `working` marker while the ball is with the coordinator).
   - (ii) The `mail-disabled` filter: a kill switch the operator already set, honoured whatever `w2Live` says. It applies
     only to rungs that would SEND (`mail-disabled-holds-only-sends`).
-- **D-3646** `mail-disabled-holds-only-sends`: Under `mail-disabled`, a worker- or coordinator-bound rung (and a
+- **D-3646** — `mail-disabled-holds-only-sends`: Under `mail-disabled`, a worker- or coordinator-bound rung (and a
   `measure-coordinator`) becomes hold `mail-disabled` only when `stallNotifyDelivery` answers `send`. A shadow rung
   still records its shadow row, so the shadow census keeps counting while mail is off.
-- **D-3647** `coordinator-candidates-derived`: The coordinator candidates are derived in L1 (`stallCoordinatorSubjects`)
+- **D-3647** — `coordinator-candidates-derived`: The coordinator candidates are derived in L1 (`stallCoordinatorSubjects`)
   from the distinct non-blank claimants of the rows `stallCandidates()` already returned, whose predicate is already the
   INACTIVE one. No store read is added, where the planning ruling had named one.
-- **D-3648** `delivery-and-deaf-facts-ride-the-mail-read`: The delivery rows that mail-stuck and coord-deaf judge
+- **D-3648** — `delivery-and-deaf-facts-ride-the-mail-read`: The delivery rows that mail-stuck and coord-deaf judge
   (`deliveredAt`, `ackedAt`, `lastGate`, `gateSince`, all plain columns) come back with the candidate's mail from the
   one read, `stallMailFor`, whose second statement runs back to back with the first. So the plan adds no separate
   outstanding-deliveries read and no separate coordinator-deaf read, and `watch.ts` passes the rows through whole
   without naming a field.
-- **D-3649** `tick-hands-the-lane-pids-and-records`: `sweepStalls(sessions, names, tick)` takes `tick` as a REQUIRED
+- **D-3649** — `tick-hands-the-lane-pids-and-records`: `sweepStalls(sessions, names, tick)` takes `tick` as a REQUIRED
   parameter. The lane's own per-candidate pid and uuid reads are deleted, so there is one path and no test-only
   fallback.
-- **D-3650** `run-mail-filtered-in-l1`: `StallInput.mail` stays exactly wave 1's set: `stallRunMail(rows, runIds)` keeps
+- **D-3650** — `run-mail-filtered-in-l1`: `StallInput.mail` stays exactly wave 1's set: `stallRunMail(rows, runIds)` keeps
   the rows whose `runId` is on the subject's runs. Only the session arms and `w2.deliveries` see the whole read.
-- **D-3651** `stall-mail-read-time-bounded`: The read's non-run predicates are bounded by `at >= sinceAt` (the lane
+- **D-3651** — `stall-mail-read-time-bounded`: The read's non-run predicates are bounded by `at >= sinceAt` (the lane
   passes `now - BACKLOG_HORIZON_MS`). This bounds the rows loaded. It does not remove the scan, because `mail` has no
   index but its PK and adding one is a migration.
-- **D-3652** `restart-grace-derived-from-turn-and-stop`: A mid-turn restart is `turnAt > (stopAt ?? -∞)`. No new marker
+- **D-3652** — `restart-grace-derived-from-turn-and-stop`: A mid-turn restart is `turnAt > (stopAt ?? -∞)`. No new marker
   field.
-- **D-3653** `coordinator-notices-are-run-less`: A coordinator's session notices are keyed on mail rows and in-memory
+- **D-3653** — `coordinator-notices-are-run-less`: A coordinator's session notices are keyed on mail rows and in-memory
   push latches, never on a claimed run's `run_events`. Otherwise its `orphan-e` rows would feed the worker's proof (b).
-- **D-3654** `coordinator-marker-unreadable`: Coordinator candidates also get `marker-unreadable` (§5.1, "on a
+- **D-3654** — `coordinator-marker-unreadable`: Coordinator candidates also get `marker-unreadable` (§5.1, "on a
   candidate"). They get it as a session verdict keyed on the in-memory first-seen time. Orphan-D registry rows do not
   get it: they are not candidates until their marker reads.
-- **D-3655** `stale-when-live-has-no-startedat`: A live file without a numeric `startedAt` reads the marker as `stale`.
-- **D-3656** `fresh-marker-on-a-new-session`: A SessionStart under a new `sessionId` carries nothing (checked by C6).
-- **D-3657** `bgkinds-strip-comma-per-element`: Each alias is cleaned to `[a-z_-]` before the join.
-- **D-3658** `alias-list-fits-whole-aliases`: Kinds lists are joined whole-alias-first under 200 bytes (the jq `fitk`),
+- **D-3655** — `stale-when-live-has-no-startedat`: A live file without a numeric `startedAt` reads the marker as `stale`.
+- **D-3656** — `fresh-marker-on-a-new-session`: A SessionStart under a new `sessionId` carries nothing (checked by C6).
+- **D-3657** — `bgkinds-strip-comma-per-element`: Each alias is cleaned to `[a-z_-]` before the join.
+- **D-3658** — `alias-list-fits-whole-aliases`: Kinds lists are joined whole-alias-first under 200 bytes (the jq `fitk`),
   never cut mid-alias. So the writer can never emit a trailing comma that its own reader rejects.
-- **D-3659** `bg-kinds-only-from-an-array`: A non-array `background_tasks` gives `bg:-1` AND empty kinds and ids.
-- **D-3660** `lost-kinds-accumulate`: Spec §5.1 says `lostKinds`/`lostIds` "take" `prev.bgKinds`/`prev.bgIds`. Read
+- **D-3659** — `bg-kinds-only-from-an-array`: A non-array `background_tasks` gives `bg:-1` AND empty kinds and ids.
+- **D-3660** — `lost-kinds-accumulate`: Spec §5.1 says `lostKinds`/`lostIds` "take" `prev.bgKinds`/`prev.bgIds`. Read
   literally, a second restart with `bg:0` wipes the kinds while `lostBg` keeps its count. They therefore take the UNION
   of `prev.lost*` and `prev.bg*`, fitted by the same clip.
-- **D-3661** `event-name-sanitised-in-parse`: `hook_event_name` passes through `gsub("[^A-Za-z]"; "")` in the one parse.
+- **D-3661** — `event-name-sanitised-in-parse`: `hook_event_name` passes through `gsub("[^A-Za-z]"; "")` in the one parse.
   The three-line read is positional, so an uncleaned event name carrying a newline would shift into the next field.
-- **D-3662** `marker-epochs-bounded`: Every marker epoch must be an integer in `[0, 8.64e15]`, or the read is
+- **D-3662** — `marker-epochs-bounded`: Every marker epoch must be an integer in `[0, 8.64e15]`, or the read is
   `malformed`.
-- **D-3663** `proof-a-reads-the-newest-stop`: The marker keeps only the newest Stop, and a StopFailure is not a Stop.
-- **D-3664** `failed-holds-are-named`: The failed arm's holds are named by class: `failed-account` and `failed-unknown`.
+- **D-3663** — `proof-a-reads-the-newest-stop`: The marker keeps only the newest Stop, and a StopFailure is not a Stop.
+- **D-3664** — `failed-holds-are-named`: The failed arm's holds are named by class: `failed-account` and `failed-unknown`.
   The latter is a StopFailure token this build cannot classify, never guessed into a self-wake, and it warns once.
-- **D-3665** `mail-disabled-hold-shares-the-refusal-spelling`: The hold word `mail-disabled` is spelled exactly as the
+- **D-3665** — `mail-disabled-hold-shares-the-refusal-spelling`: The hold word `mail-disabled` is spelled exactly as the
   existing marker and refusal literal, so `stall.ts` becomes one more named holder in `single-definition.test.ts`'s
   `mail-disabled` row. That row is edited in place on two lines, and no cited line moves.
-- **D-3666** `err-field-provisional-until-c5`: The StopFailure arm reads the error name from the payload's `.error`
+- **D-3666** — `err-field-provisional-until-c5`: The StopFailure arm reads the error name from the payload's `.error`
   field, provisionally. Checkpoint criterion C5 settles the real field name, and amendment A1 swaps one token if it
   differs.
-- **D-3667** `r1-body-names-the-proof-bound`: With the marker rules armed, r1's last line names the `STALL_BOUND_MS`
+- **D-3667** — `r1-body-names-the-proof-bound`: With the marker rules armed, r1's last line names the `STALL_BOUND_MS`
   deadline.
-- **D-3668** `self-mail-subjects-carry-the-date`: The E and failed subjects use `stallUtc(stopAt)` (date and minute),
+- **D-3668** — `self-mail-subjects-carry-the-date`: The E and failed subjects use `stallUtc(stopAt)` (date and minute),
   not the spec's `<hh:mm>Z`. The run-less dedupe (`hasMailWithSubject`) searches all of `mail`, which is never pruned.
   With only `hh:mm`, a later day's episode at the same minute would read as a duplicate and never be sent.
-- **D-3669** `capture-file-carries-a-meta-line`: A capture file is `<event>-<ms>-<pid>.cap`. Line 1 is
+- **D-3669** — `capture-file-carries-a-meta-line`: A capture file is `<event>-<ms>-<pid>.cap`. Line 1 is
   `{"envSid":"<sanitised CLAUDE_CODE_SESSION_ID>"}` and the rest is the payload. The reducer can then compare identities
   without emitting them (C6), and with no fork.
-- **D-3670** `reducer-key-names-filtered`: Key segments pass the same token test as values. Maps wider than 50 keys
+- **D-3670** — `reducer-key-names-filtered`: Key segments pass the same token test as values. Maps wider than 50 keys
   collapse to `(map)`. The reducer never descends `tool_input` or `tool_response`.
-- **D-3671** `busy-re-anchor-measured-at-checkpoint`: Task 9 ships a TOLERANT anchor. C7's pane observation settles the
+- **D-3671** — `busy-re-anchor-measured-at-checkpoint`: Task 9 ships a TOLERANT anchor. C7's pane observation settles the
   final tail, and the orchestrator amends it (one token) before Part B's PR.
-- **D-3672** `working-streak-counts-checks`: I2's streak counts distinct CHECKS answered only by working replies, not
+- **D-3672** — `working-streak-counts-checks`: I2's streak counts distinct CHECKS answered only by working replies, not
   reply mails.
-- **D-3673** `account-removal-drops-turn-json`: `ccd/ccrc`'s account-removal loop removes `turn.json` beside
+- **D-3673** — `account-removal-drops-turn-json`: `ccd/ccrc`'s account-removal loop removes `turn.json` beside
   `hookstate.json` (Task 5).
 
 Added by the orchestrator's rulings on the skeleton and on the drafts:
 
-- **D-3674** `shell-mode-ignores-the-marker`: Under the default mode `shell` (and under `strict`), the mail gate neither
+- **D-3674** — `shell-mode-ignores-the-marker`: Under the default mode `shell` (and under `strict`), the mail gate neither
   reads nor consults the turn marker, so wave 1's answers hold exactly. The interrupted-turn view, the working-marker
   refusal of a live `shell`, the `turn-mark-unreadable` gate and `busy` delivery apply only under `busy-shadow` and
   `busy`.
-- **D-3675** `a-prompt-always-opens-a-turn`: `UserPromptSubmit` writes `working` with a fresh `turnAt` even over a
+- **D-3675** — `a-prompt-always-opens-a-turn`: `UserPromptSubmit` writes `working` with a fresh `turnAt` even over a
   `working` marker. Spec §5.1 exempts only later main TOOL events.
-- **D-3676** `mailonruns-and-deliverytimesfor-deleted`: Task 15 removes the last production caller of `mailOnRuns` and
+- **D-3676** — `mailonruns-and-deliverytimesfor-deleted`: Task 15 removes the last production caller of `mailOnRuns` and
   of `deliveryTimesFor` and deletes both, moving their behavioural tests onto their `stallMailFor` successors. No dead
   code ships.
-- **D-3677** `unaged-hookstate-read-deleted`: Task 15 removes the last production caller of `readHookStateUnaged` and
+- **D-3677** — `unaged-hookstate-read-deleted`: Task 15 removes the last production caller of `readHookStateUnaged` and
   deletes it, moving its behavioural tests onto `readHookStateRawMeasured`. No dead code ships.
-- **D-3678** `marker-unreadable-counts-marker-reads-only`: An unmeasured registry uuid neither reads the marker nor
+- **D-3678** — `marker-unreadable-counts-marker-reads-only`: An unmeasured registry uuid neither reads the marker nor
   starts the marker-unreadable clock.
-- **D-3679** `orphan-d-candidate-decided-in-l1`: The lane's orphan pre-filter calls `stallOrphanDCandidate`; L4 spells
+- **D-3679** — `orphan-d-candidate-decided-in-l1`: The lane's orphan pre-filter calls `stallOrphanDCandidate`; L4 spells
   no conjunct.
-- **D-3680** `no-model-name-in-a-mail-body`: The D self-mail says "an expensive or long-running workflow", not the
+- **D-3680** — `no-model-name-in-a-mail-body`: The D self-mail says "an expensive or long-running workflow", not the
   spec's model-named phrase.
-- **D-3681** `proof-a-requires-a-done-mark`: Task 11. Proof (a) requires a `done` mark (`mark.state === 'done'`). A
+- **D-3681** — `proof-a-requires-a-done-mark`: Task 11. Proof (a) requires a `done` mark (`mark.state === 'done'`). A
   StopFailure is not a Stop, and a `failed` mark may carry an earlier Stop's `bg`.
-- **D-3682** `proofs-read-checks-in-the-episode`: Task 11. Proofs (a) and (c) read only a check queued inside the
+- **D-3682** — `proofs-read-checks-in-the-episode`: Task 11. Proofs (a) and (c) read only a check queued inside the
   episode (`check.at >= key`). Otherwise an earlier episode's check would prove (a) at once when delivered, or (c) at
   once when undelivered.
-- **D-3683** `proof-a-drops-the-unreachable-term`: Task 11. The spec's "no worker mail newer than the check" term is
+- **D-3683** — `proof-a-drops-the-unreachable-term`: Task 11. The spec's "no worker mail newer than the check" term is
   dropped. A worker mail after the check opens a new episode (the key moves), so r1 is not done on the new key and the
   proofs are never reached. The term could never be red.
-- **D-3684** `delegates-requires-the-workers-ball`: Task 11. `delegates` also requires the worker's ball
+- **D-3684** — `delegates-requires-the-workers-ball`: Task 11. `delegates` also requires the worker's ball
   (`f.ball === 'worker'`). The spec says "the quiet arm only", and without this term `delegates` would also silence
   coord-deaf and the coord-ball cap.
-- **D-3685** `session-hold-takes-now`: Task 12. `stallSessionHold(input, now)` takes a second parameter, because the
+- **D-3685** — `session-hold-takes-now`: Task 12. `stallSessionHold(input, now)` takes a second parameter, because the
   limit hold is not computable without a clock: wave 1's limit condition includes
   `w.autoContinueHeldAt > now - AUTO_CONTINUE_RECENT_MS`. Nothing outside Task 12's block calls it.
-- **D-3686** `stuck-gate-precedes-holds`: Task 12. mail-stuck's `registry-unmeasurable` clause is judged BEFORE the
+- **D-3686** — `stuck-gate-precedes-holds`: Task 12. mail-stuck's `registry-unmeasurable` clause is judged BEFORE the
   shared holds. The gate word means the mail lane could not measure the recipient's registry row, which is exactly the
   state in which hold 2 answers `absent`/`unmeasured`. Behind the holds, the clause could never fire. The idle clause
   stays behind them.
-- **D-3687** `ratio-baseline-skips-the-marker`: Task 4; this REVISES an earlier orchestrator ruling on the ratio row.
+- **D-3687** — `ratio-baseline-skips-the-marker`: Task 4; this REVISES an earlier orchestrator ruling on the ratio row.
   The SessionStart ratio row's baseline PostToolUse carries an `agent_id`, so the marker never writes on it. The row
   bounds SessionStart's per-row cost, not the marker's. When both arms paid the write, the trial measured overlapping
   bands (shipped 1.98–3.34, mutated 3.24–4.26).
-- **D-3688** `turn-mark-modes-decided-in-l1`: `mailTurnReadsMark(mode)` is the one spelling of which modes consult the
+- **D-3688** — `turn-mark-modes-decided-in-l1`: `mailTurnReadsMark(mode)` is the one spelling of which modes consult the
   marker. `sweepMail` calls it.
-- **D-3689** `newest-delivery-rule-lives-in-l1`: `stallNewestDelivery` is exported from `stall.ts` and used by the
+- **D-3689** — `newest-delivery-rule-lives-in-l1`: `stallNewestDelivery` is exported from `stall.ts` and used by the
   verdicts and the lane alike.
-- **D-3690** `mark-unreadable-and-dead-shaped-in-l1`: `stallMarkUnreadable` and `stallDeadShaped` are exported from
+- **D-3690** — `mark-unreadable-and-dead-shaped-in-l1`: `stallMarkUnreadable` and `stallDeadShaped` are exported from
   `stall.ts` and used by the verdicts and the lane alike.
-- **D-3691** `hook-ask-projection-in-l4`: The lane keeps wave 1's shipped projection of the hookstate ask, identity cut
+- **D-3691** — `hook-ask-projection-in-l4`: The lane keeps wave 1's shipped projection of the hookstate ask, identity cut
   included, in L4. That is a named exception to "L4 does not decide", kept because wave 1 ships it and moving it would
   touch three tasks.
-- **D-3692** `has-mail-with-subject-returns-boolean`: It is byte-identical to landing-order wave 2's definition, which
+- **D-3692** — `has-mail-with-subject-returns-boolean`: It is byte-identical to landing-order wave 2's definition, which
   returns a boolean, not a result union.
 
 **Found while executing** (minted 2026-09-30 at the task reviews, each a controller ruling):
 
-- **D-3693** `reducer-error-values-enum-shaped`: the reducer prints a StopFailure error-field VALUE only when it matches
+- **D-3693** — `reducer-error-values-enum-shaped`: the reducer prints a StopFailure error-field VALUE only when it matches
   `/^[a-z0-9_]{1,40}$/`, and `(unprintable)` otherwise; the field NAMES print as before. The planned `TOKEN` test admits
   spaces and dots, so short free text in `error_details` (a host name, a user name) would have reached the committed,
   public checkpoint table. C5 needs only the name; `TOKEN` itself stays wide for C3's `types`.
-- **D-3694** `reducer-collapses-digit-keyed-maps`: an object below the payload root with any digit-bearing key
+- **D-3694** — `reducer-collapses-digit-keyed-maps`: an object below the payload root with any digit-bearing key
   collapses to `(map)`, so a map keyed by task or agent ids never prints its ids as key segments. The payload root is
   exempt, so one digit-bearing top-level field cannot erase every key name of an event. It is a heuristic: an
   all-letter id would still print, and the reducer's header says so.
-- **D-3695** `reducer-counts-an-absent-payload-id`: `envSid` gains `payloadAbsent` for a payload whose `session_id` is
+- **D-3695** — `reducer-counts-an-absent-payload-id`: `envSid` gains `payloadAbsent` for a payload whose `session_id` is
   missing or not a string. The plan counted it as `differsFromPayload`, a false "differs" for C6.
-- **D-3704** `ratio-row-reads-the-median`: the D-1898 SessionStart/PostToolUse ratio row reads the MEDIAN of its 20
+- **D-3704** — `ratio-row-reads-the-median`: the D-1898 SessionStart/PostToolUse ratio row reads the MEDIAN of its 20
   runs, not p95, and its bound is re-argued on median bands (shipped 3.19-3.64, ERE mutation 4.88-5.73, R=4.2,
   margins +15%/+16%). Under wave 2's marker, p95 bands measured at load 17-25 gave margins of +3%/+5% and overlapped
   when pooled (a mutated 3.79 against a shipped 3.97). The sibling compact row had already moved to the median for the
   same reason: p95 of n=20 is the second-largest value.
-- **D-3747** `session-wakes-fire-on-shell`: the orphan D self-mail and the failed self-mail fire on live `shell` as well
+- **D-3747** — `session-wakes-fire-on-shell`: the orphan D self-mail and the failed self-mail fire on live `shell` as well
   as `idle`. Spec §5.2 says "live `idle`"; a worker idle over a background shell is as wakeable as an idle one, and
   wave 1's mail gate already delivers on `shell`. Recorded at Task 12's review; the plan's code carried it unnamed.
-- **D-3748** `mail-stuck-idle-accepts-failed`: mail-stuck's idle start accepts a current `failed` marker as well as
+- **D-3748** — `mail-stuck-idle-accepts-failed`: mail-stuck's idle start accepts a current `failed` marker as well as
   `done`. Spec §5.2 names "a current marker `done`"; a turn that ended in a StopFailure is equally over. Recorded at
   Task 12's review.
 - Task 12's review also made the limit predicate one function, `stallLimited`, which wave 1's run verdict now calls.
   The plan's Task 12 text names it `stallSessionLimited`; the shipped name is the authority. This is a refactor, not a
   departure from the spec, so it carries no number.
-- **D-3749** `coordinators-draw-orphan-d`: a run coordinator draws orphan D, run-less (spec §5.2: "any session"). The
+- **D-3749** — `coordinators-draw-orphan-d`: a run coordinator draws orphan D, run-less (spec §5.2: "any session"). The
   plan's Task 15 lane omitted `stallOrphanDVerdict` from the coordinator's verdict list, and the orphan-row loop skips
   every judged id, so a restarted coordinator with lost background tasks drew no orphan wake of any kind.
-- **D-3750** `stall-clocks-drop-on-an-unobserved-gap`: the lane clears its first-seen clocks (absent, dead and
+- **D-3750** — `stall-clocks-drop-on-an-unobserved-gap`: the lane clears its first-seen clocks (absent, dead and
   marker-unreadable) when more than `STALL_CLOCK_GAP_MS` (two and a half sweeps, 150 s) has passed since its last judged
   sweep ended (so a slow sweep is not a gap): a `stall-watch-disabled` window, unreadable candidates or unlistable ticks alike. One missed sweep keeps the
   clocks; two drop them. A clock carried across such a gap made a worker absent for a minute read as "absent for 3h"
   and skipped `DEAD_GRACE_MS`.
-- **D-3751** `run-less-push-latches-are-in-memory`: a coordinator's run-less pushes (rung 2, mail-stuck,
+- **D-3751** — `run-less-push-latches-are-in-memory`: a coordinator's run-less pushes (rung 2, mail-stuck,
   marker-unreadable) are latched in memory, so a server restart re-pushes while the condition stands. Spec §9.7 names
   only the delayed orphan push's latch as in memory. Accepted for wave 2 (pushes only, never mail); durable keying is
   deferred. A coordinator's marker-unreadable push re-keys after a D-3750 clock drop, and its failed rung-2 push is also
   in memory. Every stall push's kind and tag now come from one L1 helper, `stallPushRoute`, per spec §11's resolution:
   the delayed orphan push is tagged `orphaned-<toId>-<restartAt>` for every session (§4.2), and is kind `mail` only for
   a run-less session (`run` otherwise).
-- **D-3752** `failed-arm-bounded-by-the-mail-horizon`: the failed session verdict answers none once
+- **D-3752** — `failed-arm-bounded-by-the-mail-horizon`: the failed session verdict answers none once
   `now - stopAt > BACKLOG_HORIZON_MS - FAILED_REPEAT_MS`. The lane reads 24 h of mail, so a repeat failure would
   otherwise be re-classified as a first failure once its prior self-mail left the read, and a retry nudge would be
   typed into a pane about a day late.
-- **D-3754** `frozen-keyed-per-turn`: the frozen arm's key is the marker's `turnAt` (once per turn), not the spec
+- **D-3754** — `frozen-keyed-per-turn`: the frozen arm's key is the marker's `turnAt` (once per turn), not the spec
   §4.2 `episodeKeyMs`, so a worker that freezes in two turns of one episode draws two reports. Recorded at the final
   review; the plan's Task 11 code carried it unnamed.
-- **D-3755** `coord-deaf-keyed-per-mail`: the coord-deaf arm's key is the unanswered ball-passing mail's id, not
+- **D-3755** — `coord-deaf-keyed-per-mail`: the coord-deaf arm's key is the unanswered ball-passing mail's id, not
   `episodeKeyMs`, so two unacked ball-passing mails in one episode draw two pushes. Recorded at the final review.
-- **D-3756** `failed-repeat-counts-rung-one-notices`: the failed arm's repeat window counts prior rung-1 notices only.
+- **D-3756** — `failed-repeat-counts-rung-one-notices`: the failed arm's repeat window counts prior rung-1 notices only.
   A rung-2 notice carries no error class, so counting it would also count request-class priors; a chain of retry-class
   failures about 1.5 h apart therefore alternates self-mail and coordinator report. Recorded at the final review.
-- **D-3757** `w2-planned-changes-ship-live`: three planned changes take effect with no marker touched, beside D-3645's
+- **D-3757** — `w2-planned-changes-ship-live`: three planned changes take effect with no marker touched, beside D-3645's
   two named exceptions: M3's anchored `BUSY_RE` (the pane guard on every `shell` delivery now matches a spinner row
   only, tolerant until C7 measures the tail), report push titles through `stallSafe`, and self-wake mail recorded
   rather than pushed. None gains or loses a send by marker logic. Recorded at the final review.
