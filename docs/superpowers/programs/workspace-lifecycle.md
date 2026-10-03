@@ -19,7 +19,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
-| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | fix round 3 (review 243 ruled 2026-10-03 12:55; run 236 back at `working`) |
+| 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | awaiting re-review (fix round 3 at `53f31389`; review run 244 dispatched 2026-10-03 13:10) |
 | 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured | — | to plan |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
@@ -337,6 +337,14 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - F1: an empty or unextractable status word is unmeasured, as ccd's `[[ -n "$st" ]]` reads it.
     - F2: the config dir is read before the tmux verdict, in ccd's order.
     - F3–F6 and F8: L0 refusal docs, spec text, the preamble, and README re-wrapped to its line count.
+- **2026-10-03 13:09 — fix round 3 done at `53f31389`** (wave-done 3322; one commit, all under 3881).
+  - F7: interrupt takes the fail-closed read, and the review's three probes now refuse `status-unknown` with nothing
+    stopped.
+  - F1: an unextractable status word is unmeasured.
+  - F2: the config dir is read first, as in ccd.
+  - The new rows X14–X16 are red.
+  - **Review run 244** is dispatched to `ccrc-pwa-still-canyon` at 13:10. It asks whether the unmeasured rule is now
+    whole on every path, and whether `stopVerdict` agrees with ccd's `_ws_status` arm for arm.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
