@@ -43,7 +43,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
-- **2026-10-03 15:40 — integration items 1–3 done locally; one ruling.** `swift-hollow` reported by mail 3335,
+- **2026-10-03 15:35 — integration items 1–3 done locally; one ruling.** `swift-hollow` reported by mail 3335,
   with nothing pushed. The second merge of `fe7b9775`, items 4–6 and mail 3329's additions are still to come. Its
   resolutions:
   - **The merge.** `main`'s span from `_ws_reclaim_workdir_shared` to `_ws_reclaim_absent` was taken byte for byte,
