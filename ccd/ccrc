@@ -12164,11 +12164,11 @@ cmd_install() {
 
   # THE DIRECT ENTRY'S INTERPRETER (D-3696), proved BEFORE anything moves.
   # `~/.local/bin/ccd` is a standard-library Python launcher whose shebang names
-  # this box's canonical python3 in isolated mode; a python3 that is missing,
-  # is not Python 3, does not honour -IS, or lives at a path no shebang can
-  # carry would publish a launcher no kernel can start — so it refuses here,
-  # with the old pair untouched. The same check runs again inside `_inst_bins`,
-  # against the PLACED tree's helper, right before the pair is published.
+  # this box's python3 in isolated mode: PATH's spelling of it when that resolves
+  # to the very interpreter probed, else its canonical path. A python3 missing,
+  # not Python 3, not honouring -IS, or at a path no shebang can carry would
+  # publish a launcher no kernel can start, so it refuses here, old pair untouched;
+  # it runs again in `_inst_bins`, on the PLACED tree's helper, before publishing.
   _inst_entry_python "$CCRC_HERE/ccd-entry-install.py" \
     || _ccrc_die "$CCRC_ENTRY_WHY Nothing on this box was written or changed."
 
@@ -13632,13 +13632,13 @@ CCRC_SHIM
 # publishes the body FIRST and the launcher LAST, one rename each, refusing a
 # destination that is a directory or a link to one and re-measuring each
 # destination afterwards. A half already carrying the exact bytes and mode is
-# left alone, so a converged box rewrites nothing. Its exit 2 is the one partial
-# state — the body moved, the launcher did not — in which the old launcher
-# refuses the new body by digest until a re-run converges; nothing is rolled
-# back across the two directories.
+# left alone, so a converged box rewrites nothing. Its exit 2 is the partial
+# state: the body moved and the old launcher refuses it by digest, or the
+# launcher moved too and failed its re-measurement, leaving it unverified — until
+# a re-run converges; nothing is rolled back across the two directories.
 CCRC_ENTRY_PY=""
 CCRC_ENTRY_WHY=""
-_inst_entry_python() {   # <helper> -> rc 0 with CCRC_ENTRY_PY = the canonical python3 the launcher's shebang names
+_inst_entry_python() {   # <helper> -> rc 0 with CCRC_ENTRY_PY = the canonical python3 that runs the helper
   # The interpreter is asked for its OWN canonical path (`realpath` of
   # `sys.executable`, under -IS), and that exact binary re-runs the helper's
   # `check`, which proves Python 3 and all four isolation flags and prints the
@@ -13667,7 +13667,7 @@ _inst_ccd_pair() {   # <tree> — render, self-test and publish ccd's launcher/b
   "$CCRC_ENTRY_PY" -IS "$tree/ccd/ccd-entry-install.py" install "$tree" "$HOME" || rc=$?
   case "$rc" in
     0) return 0 ;;
-    2) _ccrc_die "ccd's pair was left half-published — the line above names the half that moved and why; until a re-run converges it, ccd starts on this box may refuse: re-run 'ccrc update' (or 'ccrc install')" ;;
+    2) _ccrc_die "ccd's pair was left unconverged — the line above names what moved and why; until a re-run converges it, ccd starts on this box may refuse, or run an unverified launcher: re-run 'ccrc update' (or 'ccrc install')" ;;
     *) _ccrc_die "ccd's direct-entry pair was not installed (the line above says why) — neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd moved" ;;
   esac
 }

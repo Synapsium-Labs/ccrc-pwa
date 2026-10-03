@@ -37,10 +37,14 @@
 # refused, and no active file moved — neither half was replaced. That is all
 # exit 1 proves: by the self-test, `~/.local/bin` and `~/.local/libexec/ccrc`
 # may already have been created and this installer's own leftovers swept, and
-# a refusal after it can follow the body's in-place mode repair; 2 the body
-# moved and the launcher did not — the mismatched pair now refuses every start
-# by digest, and a re-run converges. No rollback is attempted across the two
-# directories.
+# a refusal after it can follow the body's in-place mode repair; 2 a half moved
+# and the run stopped short of a verified pair, and stderr names what moved.
+# When only the body moved, the old launcher refuses every start by digest.
+# When the launcher moved too — its re-measurement after the rename failed —
+# both halves (or the launcher alone, the body having been current) were
+# replaced and what stands at ~/.local/bin/ccd is UNVERIFIED: it may start ccd
+# or refuse. Either way a re-run converges the pair. No rollback is attempted
+# across the two directories.
 #
 # STANDARD LIBRARY ONLY. Nothing here trusts the environment: `-I` already
 # ignores every PYTHON* variable, and the paths it writes come from argv.
@@ -419,8 +423,12 @@ def install(tree, home):
     except (OSError, Refused) as e:
         if not moved:
             raise
-        sys.stderr.write('install: ccd: refused after the %s moved: %s — until a re-run converges the pair, every'
-                         ' ccd start refuses by digest\n' % (' and the '.join(moved), e))
+        if 'launcher' in moved:
+            state = ('the launcher was renamed into place and did not re-measure as the file just staged, so what'
+                     ' stands at %s is unverified until a re-run converges the pair' % entry_dest)
+        else:
+            state = 'the launcher did not move, so until a re-run converges the pair, every ccd start refuses by digest'
+        sys.stderr.write('install: ccd: refused after the %s moved: %s — %s\n' % (' and the '.join(moved), e, state))
         return 2
     finally:
         for p in (staged_body, staged_entry):

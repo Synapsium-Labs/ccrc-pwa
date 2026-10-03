@@ -66,15 +66,24 @@ const HOOK = [
 
 /** A shipped-tree copy at `<home>/ccrc`: the body, the template and the helper.
  *  `template` rewrites the template's text (a hook, a broken self-test); `ccd`
- *  appends to the body. */
-function plantTree(o: { template?: (t: string) => string; ccd?: string } = {}): void {
+ *  appends to the body; `installer` rewrites the helper's text (a fixture
+ *  failure at a step no hook can reach). */
+function plantTree(o: { template?: (t: string) => string; ccd?: string; installer?: (t: string) => string } = {}): void {
   const dir = path.join(tree(), 'ccd');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'ccd'), fs.readFileSync(CCD, 'utf8') + (o.ccd ?? ''), { mode: 0o755 });
   const tpl = fs.readFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), 'utf8');
   fs.writeFileSync(path.join(dir, 'ccd-entry.py'), o.template ? o.template(tpl) : tpl);
-  fs.copyFileSync(path.join(REPO, 'ccd', 'ccd-entry-install.py'), path.join(dir, 'ccd-entry-install.py'));
+  const inst = fs.readFileSync(path.join(REPO, 'ccd', 'ccd-entry-install.py'), 'utf8');
+  fs.writeFileSync(path.join(dir, 'ccd-entry-install.py'), o.installer ? o.installer(inst) : inst);
 }
+/** The helper with the LAUNCHER's post-rename re-measurement failing — the one
+ *  exit-2 arm in which both halves moved. */
+const launcherPostFails = (t: string): string => {
+  const at = '    file — not a link — of the staged mode and bytes."""\n';
+  if (!t.includes(at)) throw new Error('the installer has no postcondition docstring to hook');
+  return t.replace(at, `${at}    if label == 'launcher':\n        raise Refused('fixture: the launcher did not re-measure')\n`);
+};
 const withHook = (t: string): string => {
   const at = "    if argv == [SELFTEST_ARGV]:\n";
   if (!t.includes(at)) throw new Error('the template has no self-test branch for the hook');
@@ -253,6 +262,33 @@ describe('destinations are inspected without following them — in both lanes, f
   }
 });
 
+describe('every refusal comes before anything is created — a destination refusal on a fresh box', () => {
+  // The destination-type half of "asks every refusal ... BEFORE it creates,
+  // repairs or stages anything": on a FRESH box (no pair yet, no
+  // ~/.local/libexec) whose ~/.local/bin/ccd is a directory, the refusal must
+  // land before the installer creates the body's directory. Every other
+  // destination case above starts from a converged pair, where that directory
+  // already exists, so moving the `makedirs` ahead of the destination checks
+  // left them green.
+  for (const [lane, run] of [['helper', () => helper(['install', tree(), home])], ...Object.entries(LANES)] as const) {
+    it(`${lane}: ~/.local/bin/ccd is a DIRECTORY and ~/.local/libexec is absent → refused, and ~/.local/libexec/ccrc is never created`, () => {
+      plantTree();
+      fs.mkdirSync(entry(), { recursive: true });
+      fs.writeFileSync(path.join(entry(), 'kept'), 'k\n');
+      const libexec = path.join(home, '.local', 'libexec');
+      expect(fs.existsSync(libexec), 'the CONTROL: a fresh box has no ~/.local/libexec').toBe(false);
+      const r = run();
+      if (lane === 'helper') expect(r.code, `${r.stdout}${r.stderr}`).toBe(1);
+      else expect(r.code, `${r.stdout}${r.stderr}`).not.toBe(0);
+      expect(r.stderr).toMatch(/is a directory/);
+      expect(fs.existsSync(path.join(libexec, 'ccrc')), '~/.local/libexec/ccrc was created before the refusal').toBe(false);
+      expect(fs.existsSync(libexec), '~/.local/libexec was created before the refusal').toBe(false);
+      expect(fs.readdirSync(entry()), 'something was moved into the directory').toEqual(['kept']);
+      assertNoLeftovers();
+    }, 60_000);
+  }
+});
+
 describe('the pre-publication kernel self-test, and the order of publication, proved by an executable hook', () => {
   it('the self-test runs before EITHER live file moves: the hook sees the old pair', () => {
     plantTree();
@@ -288,6 +324,8 @@ describe('the pre-publication kernel self-test, and the order of publication, pr
     expect(r.code, r.stderr).toBe(2);
     expect(r.stdout).toContain('body published');
     expect(r.stderr).toContain('refused after the body moved');
+    expect(r.stderr, 'the launcher did not move, so the old one refuses the new body').toContain(
+      'the launcher did not move, so until a re-run converges the pair, every ccd start refuses by digest');
     expect(fs.readFileSync(body()).equals(fs.readFileSync(path.join(tree(), 'ccd/ccd'))), 'the body is the new one').toBe(true);
     expect(fs.lstatSync(entry()).isDirectory(), 'the obstruction stands').toBe(true);
     // Both lanes say the same thing about it.
@@ -301,6 +339,33 @@ describe('the pre-publication kernel self-test, and the order of publication, pr
     assertPair();
     assertNoLeftovers();
   }, 60_000);
+
+  it('a launcher that moved and then failed its re-measurement is exit 2 too — with BOTH halves moved, it says the launcher is unverified, never that starts refuse by digest', () => {
+    const runners: ReadonlyArray<readonly [string, () => Ran]> = [['helper', () => helper(['install', tree(), home])], ...Object.entries(LANES)];
+    for (const [what, change, moved] of [
+      ['a body and launcher change', { ccd: '\n# v2\n' }, 'the body and the launcher'],
+      ['a launcher-only change', { template: (t: string) => `${t}\n# a launcher-only change\n` }, 'the launcher'],
+    ] as const) {
+      for (const [lane, run] of runners) {
+        plantTree();
+        expect(helper(['install', tree(), home]).code).toBe(0);
+        plantTree({ ...change, installer: launcherPostFails });
+        const r = run();
+        if (lane === 'helper') expect(r.code, `${what}: ${r.stderr}`).toBe(2);
+        else expect(r.code, `${lane}, ${what}: ${r.stderr}`).not.toBe(0);
+        expect(r.stderr, `${lane}, ${what}`).toContain(`refused after ${moved} moved: fixture: the launcher did not re-measure`);
+        expect(r.stderr, `${lane}, ${what}`).toContain(`so what stands at ${entry()} is unverified until a re-run converges the pair`);
+        expect(r.stderr, `${lane}, ${what}: the both-moved arm claims a digest refusal`).not.toContain('refuses by digest');
+        if (lane === 'ccrc install/update') expect(r.stderr).toContain('run an unverified launcher');
+        // A re-run with the shipped helper converges.
+        plantTree(change);
+        const again = helper(['install', tree(), home]);
+        expect(again.code, again.stderr).toBe(0);
+        assertPair();
+        assertNoLeftovers();
+      }
+    }
+  }, 120_000);
 
   it('a staged launcher whose kernel self-test fails publishes nothing and leaves nothing behind', () => {
     plantTree();
