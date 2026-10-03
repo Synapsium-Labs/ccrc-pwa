@@ -225,6 +225,19 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
       do-not-bounce's strand push says no account can take the session while the account it just left has room.
   - **README:** no claim is live. The worker claims it before Task 3. Stall-watch #232 also edits README, and the
     second lander merges main and keeps both sides.
+- **2026-10-03 12:01 — ruling on run 237's Task 2 finding** (question 3308, answer 3312): option (B), fixed in this
+  wave.
+  - **The finding.** When do-not-bounce strands a rescue (the only account with room is one the session just left
+    blocked), the strand marker, swap.log and banner say no account in the pool can take it.
+  - **The ruling.** Those two conditions ask the operator for opposite acts, so collapsing them is the overloaded-result
+    defect CLAUDE.md names, and it invites the hand bounce rule 3 exists to stop.
+    - `_rescue_strand_cause` probes `_swap_target` unskipped on the no-target strand path only.
+    - It feeds `_strand_mark`'s existing 4th argument, one line for one line.
+    - It has a test, a no-room control, a mutation row, and the measured per-tick cost stated in its departure.
+  - **Option (C) was declined:** it adds a history read to every computed cause.
+  - **The stall watch's shadow rows** (stall-watch coordinator, mail 3311) caught run 237's silence: r1 at 23:06,
+    r2 at 00:07 and r3 at 01:08 on 2026-10-03. Armed, r1 would have mailed the worker about 13 hours before it was
+    found by hand.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
