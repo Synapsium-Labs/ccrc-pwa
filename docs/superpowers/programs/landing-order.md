@@ -18,7 +18,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
-| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | awaiting re-review (fix round 1 at `1a71493a`; review run 247 dispatched 2026-10-03 15:23) |
+| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | fix round 2 (review 247 ruled 2026-10-03 16:15; run 238 back at `working`) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | — | — | to plan |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
@@ -317,6 +317,23 @@ carries it (spec §5.1, amended 2026-09-24).
     3885 is unused.
   - **Review run 247** was dispatched at 15:23 to `ccrc-pwa-amber-hollow`. Its brief keeps the deny a security
     boundary, and asks for false denies on ordinary commands. Timing runs stay at or below 100 KB, under `ulimit -v`.
+- **2026-10-03 16:15 — review 247 closed and ruled** (report
+  `~/.cc-clips/ccrc-pwa-amber-hollow/review-247-1a71493a.md`; 63 agents, no lens unverified; 13 findings).
+  - **What holds:**
+    - the merge of main is clean, with ccd/ccd unchanged;
+    - 3882, 3883 and 3884 hold and red;
+    - no hand deploy remains.
+  - **The deny keeps leaking under attack.** F1 is a regression: a `${…}` inside a quoted `$(…)` passed, where
+    `a89d3dc7` denied it. F2–F5 are older unlisted bypasses. Every round's regex change has cost a regression.
+  - **The stopping line**, ruled (fix round 2, mail 3340):
+    - The deny is a contract, not an access boundary (spec §4).
+    - A bypass is closed only if it is a regression or an ordinary spelling a careful session might type: F1, and
+      F3's `gh pr merge;echo ok`, since bare `merge` lands the branch's own PR.
+    - Deliberate evasions are listed in the header and in Task 7's runbook: F2 (` #` inside an unquoted `${…}`), F4
+      (a form feed before `#`) and F5 (a path-qualified wrapper).
+    - The payload cap and a quote-dense timing pin become preconditions of Task 7.
+    - F6–F13 are text and rows.
+    - The next review checks the rulings and looks for regressions. Any new bypass is classified, not hunted.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -350,6 +367,9 @@ carries it (spec §5.1, amended 2026-09-24).
   - an optional cap on the payload the deny inspects (its 200 KB shapes run 1.4–2.9 s);
   - the no-`--squash` assertion's exact-text match on #178's span, which is brittle but not blind.
   Task 7's runbook names the deny's listed pass classes as its known limits before the operator relies on it.
+- **The deny's stopping line (2026-10-03, review 247).** The hook's `gh pr merge` deny is contract-grade. A later
+  wave closes a bypass only if it is a regression or an ordinary spelling, and lists a deliberate evasion. Task 7
+  starts only once its runbook carries the listed classes, the payload cap and a quote-dense timing pin.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
