@@ -9043,3 +9043,11 @@ export function archivedFoldSince(s: Pick<FleetSession, 'bucket' | 'bucketSince'
   if (s.bucket === 'archived') return s.bucketSince;
   return (s.stoppedBy ?? null)?.at ?? null;
 }
+
+/** How long an UNACKED delivery waits before `sweepMail` replays it (10 min), the way `MAIL_MAX_ATTEMPTS` is L0: both sides
+ *  name it. `watch.ts` ENFORCES it, and `stall.ts` (L1) estimates a replayed row's first delivery from it,
+ *  `deliveredAt - replayCount * MAIL_REPLAY_MS` (`replayed-deaf-from-first-delivery-estimate` (D-3803)), where a second
+ *  `600_000` would be a second copy of a policy number. What it MEANS lives beside its enforcement, on `watch.ts`'s import.
+ *  It stands at the END of this file, not beside `MAIL_MAX_ATTEMPTS`: README and the compaction card cite this file by line,
+ *  and an insertion above those lines moves every anchor under it. */
+export const MAIL_REPLAY_MS = 600_000;

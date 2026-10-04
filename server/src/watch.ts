@@ -35,7 +35,7 @@ import type {
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -372,11 +372,11 @@ const MAIL_COOLDOWN_MS = 120_000;
 const COORD_QUIET_MS = 15_000;
 const COORD_COOLDOWN_MS = 30_000;
 
-/** How long an UNACKED delivery waits before it is replayed. Dated from the
+/** WHAT `MAIL_REPLAY_MS` MEANS, kept beside the code that enforces it: how long
+ *  an UNACKED delivery waits before it is replayed. Dated from the
  *  `UserPromptSubmit` edge when there is one, from `deliveredAt` otherwise —
  *  the edge proves the turn started, so the recipient is thinking, not
- *  ignoring. */
-const MAIL_REPLAY_MS = 600_000;
+ *  ignoring. The VALUE is `shared/api.ts`'s (`stall.ts` reads it too). */
 
 /** WHAT `MAIL_MAX_ATTEMPTS` MEANS, kept beside the code that enforces it. The
  *  VALUE moved to `shared/api.ts` in Task 408 — `MailSummary.attempts` puts

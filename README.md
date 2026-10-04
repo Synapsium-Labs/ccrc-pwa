@@ -2712,10 +2712,10 @@ unreadable (ahead of every wave-1 rung and cap), coordinator deaf (ahead of the
 - **frozen**: the marker reads `working`, the live word `busy`, and there has
   been no hook event for 60 min. A `stall: … frozen:` mail, sent the same way.
 - **coordinator deaf**: the worker's `question`, `wave-done` or `review-done` to
-  its coordinator is still unacked 1 h after its first delivery (1 h after it was queued once the mail sweep has replayed it), or 5 h after it was queued while it is still queued behind the gate (a row parked before delivery counts from its queue). One `⚠ coordinator deaf` push.
+  its coordinator is still unacked 1 h after its first delivery (once the mail sweep has replayed it, 1 h after its estimated first delivery, `deliveredAt` less one replay interval per replay, never before it was queued), or 5 h after it was queued while it is still queued behind the gate (a row parked before delivery counts from its queue). One `⚠ coordinator deaf` push.
 - **mail stuck**: a delivery still queued 1.2 h after its recipient went idle
   (a live word of `idle` or `shell`, or a current marker reading `done` or `failed`; under a live `busy`
-  the gate holds mail by design unless `mail-gate-busy` is armed, so that clock then starts 4 h after the Stop),
+  the gate holds mail by design unless `mail-gate-busy` is armed and `mail-gate-strict` is absent (strict wins over busy), so that clock then starts 4 h after the Stop),
   or refused `registry-unmeasurable` for 1.2 h. One `⚠ mail stuck` push per delivery.
 - **marker unreadable**: a worker's or coordinator's marker that could not be
   read or parsed for 1 h. One `⚠ marker` push.

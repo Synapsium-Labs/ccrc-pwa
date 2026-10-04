@@ -13,7 +13,7 @@ import type {
   CoordinatorState, LiveWordRead, StallActivation, StallArm, StallArming, StallHold, StallInput, StallMailRow, StallMode,
   StallNotice, StallR3Cause, StallRunRow, StallSubject, StallVerdict, StallWorker,
 } from '../src/coord/stall.js';
-import { RUN_TRANSITIONS, REVIEW_RUN_TRANSITIONS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT } from '../../shared/api.js';
+import { MAIL_REPLAY_MS, RUN_TRANSITIONS, REVIEW_RUN_TRANSITIONS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT } from '../../shared/api.js';
 import { STALL_FAILED_PREFIX, STALL_ORPHANED_PREFIX } from '../src/coord/stall.js';
 import type { StallW2Facts } from '../src/coord/stall.js';
 
@@ -682,7 +682,7 @@ describe('shadow-rung-accounting: arming mid-episode sends the pending rung once
   });
 });
 
-describe('the three caps fire once per episode', () => {
+describe('the three caps fire once: the limit and coord-ball caps per episode, the dialog cap per dialog (D-3799)', () => {
   const K = RUN67_DISPATCHED;
   const since = t('2026-09-27T00:00:00Z');
   const limited = (over: Partial<PresentWorker> = {}) =>
@@ -1589,7 +1589,7 @@ describe('E4 (run 187): a send-back after 8 h 53 m at awaiting-review starts the
     expect(stallVerdict(limited(reactivated(late)), late + 4_000)).toEqual(stallVerdict(limited({ kind: 'none' }), late + 4_000));
   });
 
-  it('the dialog cap stays once per episode across a send-back: a push recorded before the advance holds it', () => {
+  it('the dialog cap stays once per dialog across a send-back: a push recorded before the advance holds it', () => {
     // `dialog-cap-keyed-on-the-dialog` (D-3799): any push written since the dialog's stamp is this dialog's, whatever its key.
     const menu = e4({ worker: workerAt({ live: liveWord('waiting', E4.stop) }) });
     const pushed = [notice('live', 'dialog-cap', 1, E4.w2811, E4.react - 60_000)];
@@ -1771,13 +1771,26 @@ describe('fix-round-alias-reaches-the-ball (D-3797): the role worker on the subj
     const marked: StallInput = { ...input([own, fix]), arming: W2_LIVE, w2: w2({ mark: markOf({ at: D + H + 5 * MIN, turnAt: D + H, stopAt: D + H + 5 * MIN }) }) };
     expect(stallVerdict(marked, react + 30_000 + STALL_QUIET_MS)).toEqual(r1(react));
   });
+
+  // review-256-pins (D-3804): the multi-run subject, which no row above covered. `stallToWorker`'s run test must accept
+  // role mail on ANY subject run, as session-id mail always counted on any of them.
+  it('role mail on a non-primary run of a multi-run subject is the worker\'s', () => {
+    const second = runRow({ id: 32, dispatchedAt: D });
+    const multi = (mail: StallMailRow[]) => stallFacts(stallInput({
+      primary, runs: [runRow(primary), second], mail, worker: workerAt({ live: liveWord('idle', D + 5 * H) }),
+    }));
+    const fix = mailRow(3011, D + 3 * H, COORD, 'worker', 'status', 'fix-round', 32);
+    expect(multi([own, fix])).toMatchObject({ ball: 'worker', inboundLast: fix, lastExchangeAt: D + 3 * H });
+    const foreign = mailRow(3012, D + 3 * H, COORD, 'worker', 'status', 'fix-round', 99);
+    expect(multi([own, foreign]), 'CONTROL: a run that is none of the subject\'s still is not').toMatchObject({ ball: 'coordinator', inboundLast: null });
+  });
 });
 
 // ── gate-held-mail-is-not-stuck (D-3798): coord-deaf runs from the delivery the coordinator could hear ─────────────────
 // `sweepMail` re-stamps `deliveredAt` on every replay (`markDelivered`, then `bumpReplayCount`), every MAIL_REPLAY_MS
 // while the row stays unacked, so only a first delivery (`replayCount` 0) dates the hearing. A replayed row was first
-// delivered at least MAIL_REPLAY_MS before its newest stamp, and never before its queue time, so it is timed from the
-// queue, which no replay moves. A mail still queued behind the gate is bounded at DELEGATE_CAP_MS + COORD_DEAF_MS from its queue time (a row parked before delivery is no gate hold, and is timed from its queue): a
+// delivered at least MAIL_REPLAY_MS per replay before its newest stamp, and never before its queue time, so it is timed from
+// `max(queue, deliveredAt − replayCount × MAIL_REPLAY_MS)` (`replayed-deaf-from-first-delivery-estimate` (D-3803)). A mail still queued behind the gate is bounded at DELEGATE_CAP_MS + COORD_DEAF_MS from its queue time (a row parked before delivery is no gate hold, and is timed from its queue): a
 // coordinator held in a running turn has no other arm (its mail-stuck needs a finished turn; no frozen arm watches it).
 describe('coord-deaf is timed from the delivery the coordinator could hear (gate-held-mail-is-not-stuck (D-3798))', () => {
   const cvd = (mail: StallMailRow[], deliveries: StallDeliveryRow[], at = NOW): StallVerdict => vw({ arming: W2_LIVE, mail }, { deliveries }, at);
@@ -1791,10 +1804,12 @@ describe('coord-deaf is timed from the delivery the coordinator could hear (gate
     expect(cvd([q62], [{ ...QD, deliveredAt: NOW - COORD_DEAF_MS }])).toEqual(w2Push('coord-deaf', 4001));
   });
 
-  it('a replayed delivery is timed from the mail\'s queue time, not from its newest deliveredAt, which every replay re-stamps', () => {
+  it('a replayed delivery is timed from its first-delivery estimate, not from its newest deliveredAt (which every replay re-stamps) and not from the queue (D-3803)', () => {
     const replayed: StallDeliveryRow = { ...QD, deliveredAt: NOW - 5 * MIN, replayCount: 5 };
-    expect(cvd([Q], [replayed]), 'queued 61 min ago, re-stamped 5 min ago').toEqual(w2Push('coord-deaf', 4001));
-    expect(cvd([{ ...Q, at: NOW - COORD_DEAF_MS + 1 }], [replayed])).toEqual(NONE);
+    const EST = NOW - 5 * MIN - 5 * MAIL_REPLAY_MS;   // deliveredAt − replayCount × MAIL_REPLAY_MS = NOW − 55 min, after the queue (NOW − 61 min)
+    expect(cvd([Q], [replayed]), 'queued 61 min ago, estimated first delivery 55 min ago, re-stamped 5 min ago').toEqual(NONE);
+    expect(cvd([Q], [replayed], EST + COORD_DEAF_MS - 1)).toEqual(NONE);
+    expect(cvd([Q], [replayed], EST + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));
     expect(cvd([Q], [{ ...replayed, replayCount: 0 }]), 'CONTROL: a first delivery 5 min ago is not yet deaf').toEqual(NONE);
   });
 
@@ -1812,6 +1827,38 @@ describe('coord-deaf is timed from the delivery the coordinator could hear (gate
     expect(cvd([old], [oldHeld])).toEqual(w2Push('coord-deaf', 4001));
     const deaf = notice('live', 'coord-deaf', 1, 4001, old.at + BOUND);
     expect(vw({ arming: W2_LIVE, mail: [old], notices: [deaf] }, { deliveries: [oldHeld] })).toEqual(capOf('coord-ball', old.at));
+  });
+
+  // replayed-deaf-from-first-delivery-estimate (D-3803): a replayed row is timed from its first delivery, ESTIMATED as
+  // `deliveredAt − replayCount × MAIL_REPLAY_MS` (each replay lands at least MAIL_REPLAY_MS after the previous stamp, so the
+  // estimate is never early), and never from before the queue.
+  describe('a replayed delivery is timed from its first-delivery estimate (replayed-deaf-from-first-delivery-estimate (D-3803))', () => {
+    // Queued 70 min ago, held 55 min behind the gate, first delivered 15 min ago, replayed once 5 min ago.
+    const q70 = { ...Q, at: NOW - 70 * MIN };
+    const once: StallDeliveryRow = { ...QD, deliveredAt: NOW - 5 * MIN, replayCount: 1 };
+    const FIRST = NOW - 5 * MIN - MAIL_REPLAY_MS;
+
+    it('a mail held 50 min or more, delivered and replayed once, is not deaf at its first replay', () => {
+      expect(FIRST, 'CONTROL: the first delivery 15 min ago').toBe(NOW - 15 * MIN);
+      expect(cvd([q70], [once]), 'queued 70 min ago, but the coordinator could hear it only 15 min ago').toEqual(NONE);
+      expect(cvd([q70], [{ ...once, replayCount: 0 }]), 'CONTROL: the same row as a first delivery 5 min ago').toEqual(NONE);
+    });
+
+    it('it reads deaf once COORD_DEAF_MS has passed since the estimate, and not 1 ms before', () => {
+      expect(cvd([q70], [once], FIRST + COORD_DEAF_MS - 1)).toEqual(NONE);
+      expect(cvd([q70], [once], FIRST + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));
+      const twice: StallDeliveryRow = { ...once, deliveredAt: NOW - 5 * MIN + MAIL_REPLAY_MS, replayCount: 2 };
+      expect(cvd([q70], [twice], FIRST + COORD_DEAF_MS - 1), 'a second replay moves the stamp, not the estimate').toEqual(NONE);
+      expect(cvd([q70], [twice], FIRST + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));
+    });
+
+    it('the estimate never precedes the queue: a row whose estimate falls before it is timed from the queue', () => {
+      const q20 = { ...Q, at: NOW - 20 * MIN };
+      const many: StallDeliveryRow = { ...QD, deliveredAt: NOW - MIN, replayCount: 5 };   // estimate NOW − 51 min, before the queue
+      expect(many.deliveredAt! - many.replayCount * MAIL_REPLAY_MS).toBeLessThan(q20.at);
+      expect(cvd([q20], [many], q20.at + COORD_DEAF_MS - 1)).toEqual(NONE);
+      expect(cvd([q20], [many], q20.at + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));
+    });
   });
 });
 

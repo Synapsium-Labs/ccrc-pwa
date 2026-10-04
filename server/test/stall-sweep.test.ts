@@ -1866,7 +1866,9 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     const { h, coord, w } = await rig();
     seedRegistry(h.home, COORD, COORD_UUID);
     seedRun(coord, { program: 'demo-program' });
+    queuedTo(coord, 'demo-elsewhere', INBOUND_AT - 1_000);   // review-256-pins (D-3804): one prior delivery, so this id is not its rung (1)
     const id = queuedTo(coord, COORD, INBOUND_AT);
+    expect(id).not.toBe(1);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     at(IDLE_AT + MAIL_STUCK_MS);
     await w.sweepStalls([fleetRow(WORKER), fleetRow(COORD)], ARMED, tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]));
@@ -2073,7 +2075,7 @@ describe('sweepStalls: mail-stuck reads the mail gate\'s mode from the tick\'s l
 // every MAIL_REPLAY_MS (`markDelivered`, then `bumpReplayCount`), so its newest `deliveredAt` is never 10 min old. The
 // store's `replayCount`, carried by `stallMailFor`, is what lets L1 time it from the queue.
 describe('sweepStalls: coord-deaf on a delivery the mail sweep keeps replaying (gate-held-mail-is-not-stuck (D-3798))', () => {
-  it('is recorded an hour after the question was queued, while the newest deliveredAt is under ten minutes old', async () => {
+  it('is recorded an hour after the question\'s first delivery, while the newest deliveredAt is no more than ten minutes old (replayed-deaf-from-first-delivery-estimate (D-3803))', async () => {
     const { coord, w, sent } = await rig();
     const runId = seedRun(coord, { program: 'demo-program', workerMail: null, inbound: null });
     const Q_AT = IDLE_AT - 60_000;                       // chosen: the worker asks, and its turn ends a minute later
@@ -2087,12 +2089,15 @@ describe('sweepStalls: coord-deaf on a delivery the mail sweep keeps replaying (
       expect(coord.bumpReplayCount(d.id)).toEqual({ state: 'counted', replayCount: k });
     }
     const deafRows = (): string[] => stallRows(coord, runId).filter((x) => x.includes('coord-deaf'));
-    at(Q_AT + COORD_DEAF_MS - STALL_SWEEP_MS);
+    // Five replays: the estimate, newest deliveredAt less 5 x MAIL_REPLAY_MS, is the first delivery, Q_AT + 60 s. The queue time
+    // (Q_AT) would read it deaf a minute early, and the newest deliveredAt (Q_AT + 51 min) not for 50 min more.
+    const FIRST_AT = Q_AT + 60_000;
+    at(FIRST_AT + COORD_DEAF_MS - STALL_SWEEP_MS);
     await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
     expect(deafRows()).toEqual([]);
-    at(Q_AT + COORD_DEAF_MS);
+    at(FIRST_AT + COORD_DEAF_MS);
     await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
-    // The newest deliveredAt (Q_AT + 51 min) is 9 min old here: timed from it, nothing would be deaf for 51 min more.
+    // The newest deliveredAt (Q_AT + 51 min) is at most 10 min old here: timed from it, nothing would be deaf for 50 min more.
     expect(deafRows()).toEqual([stallDetail('live', 'coord-deaf', 1, q.id)]);
     expect(sent.map((p) => p.tag)).toContain(`stall-${runId}-coord-deaf-1-${q.id}`);
   });

@@ -1,4 +1,4 @@
-import { ACTIVE_RUN_STATES, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
+import { ACTIVE_RUN_STATES, MAIL_REPLAY_MS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
 import type { MailGate, RunState } from '../../../shared/api.js';
 import type { MailTurnMode } from '../turnidle.js';
 /**
@@ -60,7 +60,7 @@ const STALL_ARM_MAP = {
   frozen: 'the marker reads working under a busy word and no hook event arrived for FROZEN_NO_EVENT_MS: the coordinator, or the operator',
   dead: 'the worker read orphan or never-started, or was absent from the registry, for DEAD_GRACE_MS: the coordinator, or the operator',
   'coord-deaf': 'the worker passed the ball to its coordinator and that mail sat unacked COORD_DEAF_MS from its first delivery, or DELEGATE_CAP_MS + COORD_DEAF_MS from its queue while it stays queued behind the gate: one operator push',
-  'mail-stuck': 'a delivery to the session stayed queued MAIL_STUCK_MS after its main loop went idle as the mail gate in force reads it, or behind a registry gate: one operator push per delivery',
+  'mail-stuck': 'a delivery to the session stayed queued MAIL_STUCK_MS after its main loop went idle as the mail gate in force reads it (the `busy` mode delivers on a live busy only while the strict mode is absent), or behind a registry gate: one operator push per delivery',
   'marker-unreadable': 'the turn marker read unmeasured or malformed for MARKER_UNREADABLE_MS: one operator push per episode',
 } as const;
 export type StallArm = keyof typeof STALL_ARM_MAP;
@@ -633,9 +633,10 @@ const STALL_WORKER_ROLE = 'worker';
 /** Mail addressed to the subject's worker: its session id, or the `worker` role on one of the subject's runs, which
  *  the mail route resolved to this very session (`fix-round-alias-reaches-the-ball` (D-3797)). Every subject run
  *  carries the worker's `sessionId` (`stallSubjects` groups by it), and a re-bind re-issues the role's mail to the
- *  heir. Run-less mail to the role names no run, so it is no one's. One definition, for `stallFacts` and r3's text. */
+ *  heir. Run-less mail to the role names no run, so it matches none (a run id is a number, `runs.some` never finds a null: no
+ *  separate null test, `review-256-pins` (D-3804)). One definition, for `stallFacts` and r3's text. */
 function stallToWorker(m: StallMailRow, workerId: string, runs: readonly StallRunRow[]): boolean {
-  return m.toId === workerId || (m.toId === STALL_WORKER_ROLE && m.runId !== null && runs.some((r) => r.id === m.runId));
+  return m.toId === workerId || (m.toId === STALL_WORKER_ROLE && runs.some((r) => r.id === m.runId));
 }
 
 /** `quiet-restarts-on-reactivation` (D-3788): the re-activation as a term of a max(). `none` adds nothing. So does
@@ -863,9 +864,13 @@ export function stallNewestDelivery(rows: readonly StallDeliveryRow[], mailId: n
  *  whose subject EQUALS wave-done or review-done. It counts only while its newest delivery row is unacked, and it
  *  answers `deafSince`, the time COORD_DEAF_MS runs from (`gate-held-mail-is-not-stuck` (D-3798)):
  *  - a first delivery (`replayCount` 0): its `deliveredAt`, so a mail the gate held is not deaf the moment it lands;
- *  - a replayed one: the mail's queue time. Every replay re-stamps `deliveredAt`, every MAIL_REPLAY_MS while the row
- *    stays unacked, so that column would hold the clock back until the replay ceiling parks the row. The first delivery
- *    came at least MAIL_REPLAY_MS before the newest stamp, and never before the queue;
+ *  - a replayed one: its first delivery, ESTIMATED as `deliveredAt − replayCount × MAIL_REPLAY_MS`, and never before the
+ *    queue (`replayed-deaf-from-first-delivery-estimate` (D-3803)). Every replay re-stamps `deliveredAt`, every MAIL_REPLAY_MS
+ *    while the row stays unacked, so that column alone would hold the clock back until the replay ceiling parks the row, and
+ *    the queue time alone would read a mail the gate held for 50 min or more as deaf at its first replay. The estimate is
+ *    never early: each replay lands at least MAIL_REPLAY_MS after the previous stamp (the `dueDeliveries` predicate), so
+ *    `deliveredAt − n × MAIL_REPLAY_MS` is at or after the first delivery. Its error is lateness only, bounded by the
+ *    replay ceiling;
  *  - a mail still QUEUED behind the gate, undelivered: its queue time plus DELEGATE_CAP_MS. A coordinator in a RUNNING turn (marker
  *    `working` under a live `busy`: a hung foreground call, a blocking wait) has no other arm. Its own mail-stuck needs
  *    a finished turn, and no frozen arm watches a coordinator. So the hold is bounded like mail-stuck's busy hold, and
@@ -884,7 +889,7 @@ function stallDeafMail(input: StallInput, deliveries: readonly StallDeliveryRow[
   if (d === null || d.ackedAt !== null) return null;
   // Only a row the gate can still deliver is bounded; a parked or unnamed state is timed from its queue.
   if (d.deliveredAt === null) return { mail: passed, deafSince: d.state === 'queued' ? passed.at + DELEGATE_CAP_MS : passed.at };
-  return { mail: passed, deafSince: d.replayCount === 0 ? d.deliveredAt : passed.at };
+  return { mail: passed, deafSince: d.replayCount === 0 ? d.deliveredAt : Math.max(passed.at, d.deliveredAt - d.replayCount * MAIL_REPLAY_MS) };
 }
 
 /** r2 is due: the shipped decision on the coordinator's state (§4.2), which both ladders share. */
@@ -1714,8 +1719,8 @@ export function stallFailedVerdict(input: StallSessionInput, now: number): Stall
 /** When the recipient's main loop went idle, as the mail gate in force can deliver to it (§5.2;
  *  `gate-held-mail-is-not-stuck` (D-3798)): the live stamp under idle or shell; else the CURRENT marker's stop when it
  *  reads done or failed. A live `busy` over that finished turn is a main loop idling over background work. The gate
- *  delivers on it only in the `busy` mode (`turnidle.ts`'s `mailTurnIdle`, armed by its marker), and under every other
- *  mode it holds that mail by design. So under those modes the clock starts DELEGATE_CAP_MS after the stop: that is the cap on
+ *  delivers on it only in the `busy` mode (`turnidle.ts`'s `mailTurnIdle`, armed by its marker) and only while the strict mode is
+ *  absent (strict wins over `busy`), and under every other mode it holds that mail by design. So under those modes the clock starts DELEGATE_CAP_MS after the stop: that is the cap on
  *  subagent-covered main silence, past which a delivery still queued cannot reach its recipient. Else null. */
 function stallIdleStart(input: StallSessionInput): number | null {
   const live = stallSessionLive(input);
