@@ -20,7 +20,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 | **merged** `3255571a1` (2026-10-03 23:09, R22); live at the next auto-update |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | #237 | **merged** `7e858c8bf` (2026-10-04 12:40, R26) |
-| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **in review** — wave-done 2026-10-04 15:05 at `4980d79fb`, re-measured; review run 256 (R27) |
+| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **fix round** — review 256 clean but for F1 (R28); one fix round, then a fresh review |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -30,10 +30,10 @@ the two plans' own "Deviations found" sections and their PRs. Run-tracked waves 
 | marker | arms | state | gate |
 |---|---|---|---|
 | `stall-watch-live` | wave 1's r1 (a check mailed to the worker; never pushed) | **ARMED** 2026-10-04 12:39:43, on the fleet registry at the operator's request (R26) | recommended now — the shadow review found every false r1 harmless, and run 237's 15 h silence (2026-10-03) is a fourth true stall r1 would have caught |
-| `stall-watch-escalate` | r2 (coordinator report), r3 and every operator push, including the limit, dialog and coordinator-ball caps | not armed | after #228 is deployed and wave 6 re-keys the dialog cap, and only while w2-live is off or `mail-gate-busy` is armed (R18). r2/r3 were true on run 237, and the dialog cap is 2/2 true |
+| `stall-watch-escalate` | r2 (coordinator report), r3 and every operator push, including the limit, dialog and coordinator-ball caps | not armed | after #228 is deployed and wave 6 re-keys the dialog cap, and only while w2-live is off or `mail-gate-busy` is armed (R18). r2/r3 were true on run 237, and the dialog cap is 2/2 true. Wave 6's review (R28) adds two accepted residues to weigh: a second menu under `dialogPending` inside one unchanged non-`waiting` word is not pushed (a miss, as before wave 6), and a plumbing restamp re-pushes a standing dialog at most once per restamp, 2 h apart (an extra true push) |
 | `mail-gate-busy-shadow` | the busy gate logs only | **ARMED** 2026-10-04 12:39:43, at the operator's request (R26) | **recommended now** (R18). Its log is the evidence for `mail-gate-busy`, which removes the mail-stuck/coord-deaf false class at its cause |
 | `mail-gate-busy` | busy delivery | not armed | after busy-shadow evidence; C7 (the spinner row on a busy+done pane) is still unobserved |
-| `stall-watch-w2-live` | every wave-2 arm's sends | not armed | the 48 h review is done (R18). It is NOT ready as one marker. orphan-d is 2/2 true, but mail-stuck (0/4) and coord-deaf (0/1) misreport busy-gate deafness, and w2-live also switches the quiet ladder to the marker clock, which was never measured in shadow. It arms after wave 6 and a busy-shadow period |
+| `stall-watch-w2-live` | every wave-2 arm's sends | not armed | the 48 h review is done (R18). It is NOT ready as one marker. orphan-d is 2/2 true, but mail-stuck (0/4) and coord-deaf (0/1) misreport busy-gate deafness, and w2-live also switches the quiet ladder to the marker clock, which was never measured in shadow. It arms after wave 6 and a busy-shadow period. Wave 6's review (R28) found one more gate, coord-deaf's replay door (a hold of 50 min or more read deaf at the first replay); the fix round closes it (D-3803). After that it waits on the busy-shadow log review, a shadow re-measure of coord-deaf's new clocks and mail-stuck's busy hold, and R19's run-less push count between escalate and w2-live |
 
 ## The shadow review (2026-10-02)
 
@@ -429,11 +429,39 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     and whether each R18 gate on `stall-watch-escalate` and `stall-watch-w2-live` closes once this merges. It also
     runs the stall suites on the merged tree, since `main` moved after the wave's base. The worker's own minors go
     to the panel to confirm or refute; this session rules on the report, not on the mail.
+- **R28 (coordinator, 2026-10-04 15:38): review 256 rules wave 6 clean but for one finding, and one fix round goes
+  back.** Review run 256 (`ccrc-pwa-soft-mesa`) read `4980d79fb`: 43 panel agents, none died, 13 raised, 10 survived,
+  merged to 9. Every suite is green at the tip, 29 of 29 mutation rows red, and the tree merged with `main`
+  (`c9ada6543`) is clean, its five stall suites and `single-definition` green. Each of G1–G4 is closed where R18
+  measured it. PR #241's required checks are green. Run 256 closed `done` on its own fingerprint. Rulings:
+  - **F1, fix now (D-3803).** The replay door: D-3798 (b) timed a replayed row from its queue, so a gate hold of 50 min
+    or more read deaf at the first replay, 10 min after delivery. That is G2's class again, and it would sit in the
+    shadow census `stall-watch-w2-live` arms on. The reviewer proved the worker's proposed estimate sound (never early,
+    late only, bounded), so it lands in this PR rather than a wave 7. `MAIL_REPLAY_MS`'s value moves to `shared/api.ts`,
+    the precedent `MAIL_MAX_ATTEMPTS` set; `shared/api.ts` is unclaimed.
+  - **F2 and F3, accepted as residue, no code.** F2: under `dialogPending` with an unchanged non-`waiting` word, a
+    second menu is not pushed (the build before wave 6 missed it too). F3: a plumbing restamp re-pushes a standing dialog
+    at most once per restamp, 2 h apart, which is an extra true push, never a miss. Both are written on the arming
+    track beside `stall-watch-escalate`. Keying `dialogPending` on its own onset needs a stamp the pane scrape does not
+    carry (`fleet.ts` reads it as a `Set<string>` of session ids), so it would be a design change, not a fix.
+  - **F4, accepted.** Worker clause 16 governs over the plan's handoff-gate "merge origin/main": the probe is clean,
+    #239 touches none of the nine files, and the reviewer ran the merged tree green. The fix round takes no absorb
+    unless the worker's own probe measures a trigger.
+  - **F7 and F8, fix now (D-3804).** Add the multi-run row; drop the unpinnable `m.runId !== null` conjunct; seed one
+    prior delivery in the coordinator mail-stuck shadow fixture.
+  - **F5, F6 and F9, fix now, no number.** PR body: `watch.ts` changes three lines, not two. Wording at README :2717
+    and `stall.ts` :63 and :1714: busy delivers only while `mail-gate-strict` is absent. The two titles at
+    `stall-verdict.test.ts` :1592 and :685 say "once per dialog".
+  - **The worker's "was delivered at" minor is refuted (3/3)**: the sentence is true and prints the queue age beside it.
+  - **Arming readiness, from the review.** `stall-watch-escalate`'s code gates close on merge; it still waits on wave 6
+    deployed and seen live in shadow, G1's newly visible fix-round r2/r3 shapes, and the operator's R2/R17-F1 clause
+    amendment. `stall-watch-w2-live` is not ready (arming track).
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
-  floor now 3808). Fifteen are assigned: wave 3's plan defines three, wave 4's four, wave 5's two and wave 6's four, one per
-  departure slug. Three more were assigned at wave-done: one to wave 3 and two to wave 5. The other five are headroom for departures a wave reports. A worker never calls the allocator (worker clause 11): it
+  floor now 3808). Seventeen are assigned, one per departure slug, each defined in its wave's plan: wave 3's three (one
+  at wave-done), wave 4's four, wave 5's four (two at wave-done) and wave 6's six (two at its review, R28). The other
+  three are headroom for departures a wave reports. A worker never calls the allocator (worker clause 11): it
   names a departure in its wave-done mail, and the coordinator assigns a number from the block.
 
 ## Carried constraints (reviewers get these)

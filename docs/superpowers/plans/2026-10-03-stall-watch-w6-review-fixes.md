@@ -2078,6 +2078,25 @@ Four numbers, issued by the coordinator, one per behaviour change. No verifier r
   it costs a migration slot. So wave 6 makes the repeat countable and honestly documented, and leaves the cure to a
   measured ruling.
 
+
+Two more numbers, issued by the coordinator from the programme's block at the wave's review (run 256, ledger R28):
+
+- **D-3803** — `replayed-deaf-from-first-delivery-estimate` (fix round): D-3798 (b) timed a replayed row from the mail's
+  queue time. Review 256 measured the cost: a gate hold of `COORD_DEAF_MS − MAIL_REPLAY_MS` (50 min) or more makes the
+  mail read deaf at its first replay, 10 min after the coordinator could first hear it. Hours-long holds are G2's own
+  class, so the replay door re-admitted it. The fix round times a replayed row from
+  `max(queue, deliveredAt − replayCount × MAIL_REPLAY_MS)`. Each replay lands at least `MAIL_REPLAY_MS` after the
+  previous stamp, so the estimate is never earlier than the first delivery and adds no false positive. Its error is
+  lateness only, and it is bounded (the replay ceiling parks the row). `MAIL_REPLAY_MS`'s value moves to
+  `shared/api.ts`, defined once, as `MAIL_MAX_ATTEMPTS`'s did; `watch.ts` keeps its meaning beside the code that
+  enforces it. That is this plan's one `shared/` edit. No migration and no new writer; a persisted first-delivery
+  column stays the exact alternative, not taken.
+- **D-3804** — `review-256-pins` (fix round): three pins review 256 found missing or unpinnable. A row puts role-worker
+  mail on a non-primary subject run, so narrowing `runs.some` to the primary run reds. `stallToWorker`'s
+  `m.runId !== null` conjunct is dropped: no row can reach it, because `stallRunMail` drops run-less mail first. The
+  coordinator mail-stuck shadow row's fixture seeds one prior delivery, so its delivery id differs from its rung and
+  T4-M2 reds both rows.
+
 ## Self-review (record)
 
 Re-run after the coordinator's rulings on the plan review (rulings 1–6), over every changed passage.
