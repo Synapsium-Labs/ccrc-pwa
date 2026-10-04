@@ -2822,6 +2822,53 @@ describe('ccrc doctor: config', () => {
 // UNCAUGHT at boot, so a line a bash approximation would wave through is a
 // server that does not start. Doctor is the one place an operator can see that
 // coming before a restart does.
+/** Wave 9 R10e (D-3823): what a NOT-MEASURED verdict about one file says, on either platform — the file by path,
+ *  "was not measured", never D-3596's "cannot be read" (that sentence is for an exposure file there and
+ *  unreadable) — and the platform's own clause: Linux says the reader does not decide the shape, macOS (round-2
+ *  ruling R-A) names the file and the LINE NUMBER that is not plain. */
+const expectUndecided = (detail: string, file: string): void => {
+  expect(detail).toContain(file);
+  expect(detail).toContain('was not measured');
+  expect(detail).not.toContain('cannot be read');
+  if (IS_DARWIN) expect(detail).toContain(`${file} line `);
+  else expect(detail).toContain('in a shape this reader does not decide');
+};
+
+/** One row of `_box_unit_env`'s answer, read back from a sourced `ccd/ccrc`: the rc and its four out-params. */
+interface UnitEnvRow { label: string; env: string | null; exp: string | 'UNREADABLE' | null; key: string }
+interface UnitEnvAnswer { rc: number; val: string; src: string; why: string; fix: string; envPath: string; expPath: string }
+
+/** `_box_unit_env <key>` over each row's fixture files, with `CCD_OS` set AFTER sourcing (so the Darwin arm runs on
+ *  every platform). One bash for all rows; every result goes through a file, so no `$(…)` eats a byte. */
+function unitEnvAnswers(rows: UnitEnvRow[], os: 'linux' | 'darwin'): UnitEnvAnswer[] {
+  const dir = mkTmp('ccrc-doctor-unitenv-');
+  rows.forEach((row, i) => {
+    const d = join(dir, `r${i}`);
+    mkdirSync(d, { recursive: true });
+    if (row.env !== null) writeFileSync(join(d, 'ccrc.env'), row.env);
+    if (row.exp === 'UNREADABLE') mkdirSync(join(d, 'exposure.env'));
+    else if (row.exp !== null) writeFileSync(join(d, 'exposure.env'), row.exp);
+    writeFileSync(join(d, 'key'), row.key);
+  });
+  const script = [
+    'set -uo pipefail', `. ${shq(CCRC_SRC)}`, `CCD_OS=${os}`,
+    `for ((i=0;i<${rows.length};i++)); do d=${shq(dir)}/r$i`,
+    '  BOX_ENV_FILE=$d/ccrc.env; CCRC_EXPOSURE_FILE=$d/exposure.env; read -r key < "$d/key"',
+    '  _box_unit_env "$key"; rc=$?',
+    '  printf "%s" "$rc" > "$d/rc"; printf "%s" "$BUE_VAL" > "$d/val"; printf "%s" "$BUE_SRC" > "$d/src"',
+    '  printf "%s" "$BUE_WHY" > "$d/why"; printf "%s" "$BUE_FIX" > "$d/fix"',
+    'done',
+  ].join('\n');
+  const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { HOME: dir, PATH: join(dir, 'no-bin'), LC_ALL: 'C' } });
+  expect(r.status, r.stderr).toBe(0);
+  return rows.map((_, i) => {
+    const d = join(dir, `r${i}`);
+    const g = (n: string): string => readFileSync(join(d, n), 'utf8');
+    return { rc: Number(g('rc')), val: g('val'), src: g('src'), why: g('why'), fix: g('fix'),
+      envPath: join(d, 'ccrc.env'), expPath: join(d, 'exposure.env') };
+  });
+}
+
 describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   /** `CCRC_AUTH=<value>` appended to the fixture's own `ccrc.env` — the file
    *  the SERVER reads its environment from. Appended rather than rewritten so
@@ -2944,7 +2991,10 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // running — `_check_config` pins the same rule for CCRC_FLEET.
     const home = unexposedBox('ccrc-doctor-auth-flagcase-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
-    for (const v of ['ON', 'true', 'yes', 'on ', '"on"x']) {
+    // D-3824: `'on '` and `'"on"x'` LEFT this list. `'on '` was pinned OFF on a wrong premise — systemd hands `on` to the
+    // server for `CCRC_AUTH=on ` (A1 below, which expects ARMED) — and `'"on"x'` is now case E8: this reader does not
+    // model what either parser does after a closing quote, so it answers "not measured", never a value.
+    for (const v of ['ON', 'true', 'yes']) {
       armGate(home, v);
       expect(authLine(runDoctor(home).stdout), v).toMatch(/^PASS auth: no passphrase file/);
       writeCcrcEnv(home, readFileSync(join(home, '.ccrc', 'ccrc.env'), 'utf8')
@@ -3351,7 +3401,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   // and removes only the FUNCTION, so every constant the guard also checks
   // stays present — a dropped `_box_unit_env` term is the only thing that can
   // red this pin. `BUE_VAL=on` is preset AFTER sourcing ccrc (a shell
-  // assignment, never an env entry — `ccd/ccrc:2768` resets it at file scope
+  // assignment, never an env entry — `ccd/ccrc:2856` resets it at file scope
   // on load) in case some path through the ungoverned body reads it, but in
   // THIS harness (`PATH` pointing nowhere) it never gets the chance: without
   // the guard term, `_check_auth`'s body FAILs elsewhere first — the node
@@ -3365,6 +3415,345 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     expect(r.stdout).toMatch(/^FAIL auth: ccrc's own config reader is not loaded/m);
     expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
     expect(r.status).toBe(1);
+  });
+
+  // ── wave 9 R10a/R10e (D-3822, D-3823, D-3824) ───────────────────────────
+  // The flag as the unit's FEEDER hands it. Linux: systemd's `EnvironmentFile=`, which discards whitespace around an
+  // unquoted value — modelled — and whose other quirks are not modelled but REPORTED as not measured. macOS: the
+  // launchd job's `set -a; . file` under bash, where a file that is not plain assignments throughout (round-2 ruling
+  // R-A) makes every key not measured. Cases marked `d` are the macOS twins of the Linux case before them and run on
+  // macOS only (`itDarwin`); the Linux ones cannot run there for the platform's own reason.
+  describe('wave 9 R10a/R10e — the flag as the unit\'s feeder hands it, and not measured where that cannot be decided', () => {
+    const envPath = (home: string): string => join(home, '.ccrc', 'ccrc.env');
+    const expPath = (home: string): string => join(home, '.ccrc', 'exposure.env');
+    const readEnv = (home: string): string => readFileSync(envPath(home), 'utf8');
+    /** The 1-based number of the LAST line of a file that ends in a newline. */
+    const lastLineNo = (p: string): number => readFileSync(p, 'utf8').split('\n').length - 1;
+    const editExposure = (home: string, f: (s: string) => string): void =>
+      writeFileSync(expPath(home), f(readFileSync(expPath(home), 'utf8')));
+    /** `unexposedBox`, no passphrase, then `CCRC_AUTH=<value>` appended — A1/E4/E6/E7/E8/E11/E12's box. */
+    const noPassBox = (prefix: string, appended: string): string => {
+      const home = unexposedBox(prefix);
+      rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+      writeCcrcEnv(home, `${readEnv(home)}${appended}`);
+      return home;
+    };
+    /** Exactly one `WARN auth` line, not measured, about `file` — and never a PASS or FAIL auth line. */
+    const expectOneUndecidedWarn = (out: string, file: string): void => {
+      const warns = out.split('\n').filter((l) => l.startsWith('WARN auth: '));
+      expect(warns.length, out).toBe(1);
+      expectUndecided(warns[0] ?? '', file);
+      expect(out).not.toMatch(/^(PASS|FAIL) auth: /m);
+    };
+
+    // D-3824: `reads a value systemd would not set as OFF` once pinned `'on '` as OFF. systemd hands `on` to the
+    // server for `CCRC_AUTH=on ` (it discards the whitespace), so that premise was wrong.
+    itLinux('A1: whitespace around an UNQUOTED value is discarded, as systemd discards it — `on `, `on<tab>`, ` on` and `<tab>on ` all arm the gate', () => {
+      const home = noPassBox('ccrc-doctor-auth-a1-', '');
+      const base = readEnv(home);
+      for (const v of ['on ', 'on\t', ' on', '\ton ']) {
+        writeCcrcEnv(home, `${base}CCRC_AUTH=${v}\n`);
+        const r = runDoctor(home);
+        expect(authLine(r.stdout), JSON.stringify(v)).toMatch(/^FAIL auth: CCRC_AUTH=on in .*NO passphrase file/);
+        expect(authLine(r.stdout), JSON.stringify(v)).toMatch(/failing SHUT/);
+        expect(r.code, JSON.stringify(v)).toBe(1);
+      }
+    });
+
+    itDarwin('A1d: the same box on macOS — a trailing space or tab is dropped by bash (ARMED); a leading one makes the line a command, so not measured', () => {
+      const home = noPassBox('ccrc-doctor-auth-a1d-', '');
+      const base = readEnv(home);
+      for (const v of ['on ', 'on\t']) {
+        writeCcrcEnv(home, `${base}CCRC_AUTH=${v}\n`);
+        const r = runDoctor(home);
+        expect(authLine(r.stdout), JSON.stringify(v)).toMatch(/^FAIL auth: CCRC_AUTH=on in .*NO passphrase file/);
+        expect(r.code, JSON.stringify(v)).toBe(1);
+      }
+      for (const v of [' on', '\ton ']) {
+        writeCcrcEnv(home, `${base}CCRC_AUTH=${v}\n`);
+        expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+        expect(authLine(runDoctor(home).stdout)).toContain(`${envPath(home)} line ${lastLineNo(envPath(home))} `);
+      }
+    });
+
+    it('A2: the control — a QUOTED inner space stays, so `"on "` is not `on` and the gate is OFF (green at main, on both platforms)', () => {
+      const home = noPassBox('ccrc-doctor-auth-a2-', 'CCRC_AUTH="on "\n');
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^PASS auth: no passphrase file/);
+      expect(authLine(r.stdout)).toMatch(/the gate is OFF/);
+      expect(r.code).toBe(0);
+    });
+
+    it('E1: the exposure file names the flag with spaces around `=` — one WARN, not measured, naming that file (main: a false ARMED PASS)', () => {
+      const home = healthy('ccrc-doctor-auth-e1-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=on\n`);
+      editExposure(home, (s) => s.replace('CCRC_AUTH=on\n', 'CCRC_AUTH = off\n'));
+      const r = runDoctor(home);
+      expectOneUndecidedWarn(r.stdout, expPath(home));
+    });
+
+    it('E2: a physical line ending in a backslash above the key line in the exposure file — not measured (main: a false ARMED PASS)', () => {
+      const home = healthy('ccrc-doctor-auth-e2-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\n`);
+      editExposure(home, (s) => s.replace('CCRC_AUTH=on\n', 'FOO=bar \\\nCCRC_AUTH=on\n'));
+      expectOneUndecidedWarn(runDoctor(home).stdout, expPath(home));
+    });
+
+    itLinux('E3: a key line after a comment ending in \\ is not measured — systemd before v254 continued it, v254+ does not, and the reader does not know which runs', () => {
+      const home = healthy('ccrc-doctor-auth-e3-');
+      editExposure(home, (s) => s.replace('CCRC_AUTH=on\n', '# a comment ending in a backslash \\\nCCRC_AUTH=on\n'));
+      expectOneUndecidedWarn(runDoctor(home).stdout, expPath(home));
+    });
+
+    itDarwin('E3d: the same files read gated on macOS — bash ends a comment at the newline, backslash or not (measured, bash 5.2)', () => {
+      const home = healthy('ccrc-doctor-auth-e3d-');
+      editExposure(home, (s) => s.replace('CCRC_AUTH=on\n', '# a comment ending in a backslash \\\nCCRC_AUTH=on\n'));
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^PASS auth: CCRC_AUTH=on in .*logins are gated/);
+    });
+
+    it('E4: `CCRC_AUTH = on` in ccrc.env, no passphrase — one WARN, not measured, naming ccrc.env (main: a false OFF PASS)', () => {
+      const home = noPassBox('ccrc-doctor-auth-e4-', 'CCRC_AUTH = on\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    itLinux('E5: the control for precedence by presence — an undecidable ccrc.env LOSES to an exposure file that decides the key, as the second EnvironmentFile= does (green at main by accident)', () => {
+      const home = healthy('ccrc-doctor-auth-e5-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH = on\n`);
+      editExposure(home, (s) => s.replace('CCRC_AUTH=on\n', 'CCRC_AUTH=off\n'));
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^PASS auth: .*but the gate is OFF/);
+      expect(authLine(r.stdout)).toContain(expPath(home));
+      expect(r.stdout).not.toMatch(/^WARN auth: /m);
+    });
+
+    itDarwin('E5d: the same files on macOS — the WHOLE-FILE rule has no precedence over a failing file: not measured, naming ccrc.env', () => {
+      const home = healthy('ccrc-doctor-auth-e5d-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH = on\n`);
+      editExposure(home, (s) => s.replace('CCRC_AUTH=on\n', 'CCRC_AUTH=off\n'));
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    itLinux('E6: `export CCRC_AUTH=on` in ccrc.env, no exposure file — not measured (systemd does not take `export`)', () => {
+      const home = noPassBox('ccrc-doctor-auth-e6-', 'export CCRC_AUTH=on\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    itDarwin('E6d: the same line on macOS — bash\'s `export NAME=value` is a plain assignment, so ARMED, and with no passphrase the gate FAILs shut', () => {
+      const home = noPassBox('ccrc-doctor-auth-e6d-', 'export CCRC_AUTH=on\n');
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^FAIL auth: CCRC_AUTH=on in .*NO passphrase file/);
+      expect(r.code).toBe(1);
+    });
+
+    it('E6b: the export arm\'s control — `export CCRC_AUTH_SECRET_PATH=…` is another key, so `CCRC_AUTH=off` after it is MEASURED (OFF), on both platforms', () => {
+      const missing = join(mkTmp('ccrc-doctor-auth-e6b-secret-'), 'no-such-secret');
+      const home = unexposedBox('ccrc-doctor-auth-e6b-');
+      writeCcrcEnv(home, `${readEnv(home)}export CCRC_AUTH_SECRET_PATH=${missing}\nCCRC_AUTH=off\n`);
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^PASS auth: /);
+      expect(authLine(r.stdout)).toMatch(/the gate is OFF/);
+      expect(authLine(r.stdout)).not.toContain('was not measured');
+    });
+
+    it('E7: `CCRC_AUTH="o\\"n"` — an escaped quote inside the value — is not measured', () => {
+      const home = noPassBox('ccrc-doctor-auth-e7-', 'CCRC_AUTH="o\\"n"\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    it('E8: `CCRC_AUTH="on"x` — text after a closing quote, the value that left the `reads a value systemd would not set as OFF` list — is not measured (main: PASS OFF)', () => {
+      const home = noPassBox('ccrc-doctor-auth-e8-', 'CCRC_AUTH="on"x\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    it('E9: an unclosed double quote that may swallow the key line — not measured, naming the exposure file (main: a false ARMED)', () => {
+      const home = healthy('ccrc-doctor-auth-e9-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\n`);
+      writeFileSync(expPath(home), 'CCRC_ORIGIN="https://x\nCCRC_AUTH=on\nCCRC_RP_ID=x\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, expPath(home));
+    });
+
+    it('E10: a single-quoted value spanning lines may swallow the key line — not measured (main: a false ARMED)', () => {
+      const home = healthy('ccrc-doctor-auth-e10-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\n`);
+      writeFileSync(expPath(home), "FOO='a\nCCRC_AUTH=on\n'\n");
+      expectOneUndecidedWarn(runDoctor(home).stdout, expPath(home));
+    });
+
+    it('E11: an unquoted escape — `CCRC_AUTH=o\\n` (systemd reads `on`) — is not measured (main: PASS OFF)', () => {
+      const home = noPassBox('ccrc-doctor-auth-e11-', 'CCRC_AUTH=o\\n\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    it('E12: a trailing unpaired quote — `CCRC_AUTH=on"` — is not measured', () => {
+      const home = noPassBox('ccrc-doctor-auth-e12-', 'CCRC_AUTH=on"\n');
+      expectOneUndecidedWarn(runDoctor(home).stdout, envPath(home));
+    });
+
+    itDarwin('E13: the round-2 attack\'s readonly shape — `readonly CCRC_AUTH` in ccrc.env keeps `off` against the exposure file\'s `on` — is not measured, naming ccrc.env line 2 of the failing shape, never the exposure file\'s PASS', () => {
+      const home = healthy('ccrc-doctor-auth-e13-');
+      const base = readEnv(home);
+      writeCcrcEnv(home, `${base}CCRC_AUTH=off\nreadonly CCRC_AUTH\n`);
+      const r = runDoctor(home);
+      expectOneUndecidedWarn(r.stdout, envPath(home));
+      expect(authLine(r.stdout)).toContain(`${envPath(home)} line ${base.split('\n').length + 1} `);
+    });
+
+    itLinux('E13l: the control — the same files read gated on Linux (systemd ignores a line with no `=`, and the exposure file wins by presence)', () => {
+      const home = healthy('ccrc-doctor-auth-e13l-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\nreadonly CCRC_AUTH\n`);
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^PASS auth: CCRC_AUTH=on in .*logins are gated/);
+      expect(authLine(r.stdout)).toContain(expPath(home));
+    });
+
+    itLinux('E14: a CR in the OTHER file is discarded by systemd — `CCRC_AUTH=on` in ccrc.env still arms, and with no passphrase the gate FAILs shut, as at main', () => {
+      const home = healthy('ccrc-doctor-auth-e14-');
+      rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=on\n`);
+      writeFileSync(expPath(home), 'CCRC_RP_ID=x\r\n');
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^FAIL auth: CCRC_AUTH=on in .*NO passphrase file/);
+      expect(r.code).toBe(1);
+    });
+
+    itDarwin('E14d: the same files on macOS — bash keeps a CR in the exposure file\'s value, so not measured, naming the exposure file line 1', () => {
+      const home = healthy('ccrc-doctor-auth-e14d-');
+      rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=on\n`);
+      writeFileSync(expPath(home), 'CCRC_RP_ID=x\r\n');
+      const r = runDoctor(home);
+      expectOneUndecidedWarn(r.stdout, expPath(home));
+      expect(authLine(r.stdout)).toContain(`${expPath(home)} line 1 `);
+    });
+
+    // ── the reader itself, as tables ─────────────────────────────────────
+    // [label, file bytes, [stdout, rc] at MAIN (two-argument, `_box_env_value f CCRC_AUTH`), [stdout, rc] in `unit` mode]
+    // The `main` column was CAPTURED from a copy of `ccd/ccrc` at the merge base, in a scratch tree, before the
+    // function was touched: it is what 43 callers must keep reading, byte for byte.
+    const SHAPES: Array<[string, string, [string, number], [string, number]]> = [
+      ['A1 trailing space', 'CCRC_AUTH=on \n', ['on ', 0], ['on', 0]],
+      ['A1 trailing tab', 'CCRC_AUTH=on\t\n', ['on\t', 0], ['on', 0]],
+      ['A1 leading space in value', 'CCRC_AUTH= on\n', [' on', 0], ['on', 0]],
+      ['A1 leading tab and trailing space', '\tCCRC_AUTH=on \n', ['on ', 0], ['on', 0]],
+      ['A1 indented key and tab', ' CCRC_AUTH=\ton\n', ['\ton', 0], ['on', 0]],
+      ['A2 quoted inner space', 'CCRC_AUTH="on "\n', ['on ', 0], ['on ', 0]],
+      ['E1 spaced key', 'CCRC_AUTH = off\n', ['', 1], ['', 2]],
+      ['E2 continuation above', 'FOO=bar \\\nCCRC_AUTH=on\n', ['on', 0], ['', 2]],
+      ['E3 comment continuation above', '# c \\\nCCRC_AUTH=on\n', ['on', 0], ['', 2]],
+      ['E6 export', 'export CCRC_AUTH=on\n', ['', 1], ['', 2]],
+      ['E6b export of another key', 'export CCRC_AUTH_SECRET_PATH=/x/y\nCCRC_AUTH=off\n', ['off', 0], ['off', 0]],
+      ['E7 escaped quote', 'CCRC_AUTH="o\\"n"\n', ['o\\"n', 0], ['', 2]],
+      ['E8 text after a closing quote', 'CCRC_AUTH="on"x\n', ['"on"x', 0], ['', 2]],
+      ['E9 open double quote above', 'CCRC_ORIGIN="https://x\nCCRC_AUTH=on\nCCRC_RP_ID=x\n', ['on', 0], ['', 2]],
+      ['E10 open single quote above', 'FOO=\'a\nCCRC_AUTH=on\n\'\n', ['on', 0], ['', 2]],
+      ['E11 unquoted escape', 'CCRC_AUTH=o\\n\n', ['o\\n', 0], ['', 2]],
+      ['E12 trailing unpaired quote', 'CCRC_AUTH=on"\n', ['on"', 0], ['', 2]],
+      ['E13 readonly line', 'CCRC_AUTH=off\nreadonly CCRC_AUTH\n', ['off', 0], ['off', 0]],
+      ['E14 CR on another line', 'CCRC_AUTH=on\nCCRC_RP_ID=x\r\n', ['on', 0], ['on', 0]],
+      ['CR after value', 'CCRC_AUTH=on\r\n', ['on', 0], ['on', 0]],
+      ['two CRs after value', 'CCRC_AUTH=v\r\r\n', ['v\r', 0], ['v', 0]],
+      ['one CR after value', 'CCRC_AUTH=v\r\n', ['v', 0], ['v', 0]],
+      ['no trailing newline', 'CCRC_AUTH=on', ['on', 0], ['on', 0]],
+      ['bare key', 'CCRC_AUTH=\n', ['', 0], ['', 0]],
+      ['single-quoted', 'CCRC_AUTH=\'on\'\n', ['on', 0], ['on', 0]],
+      ['double-quoted inner space', 'CCRC_AUTH="o n"\n', ['o n', 0], ['o n', 0]],
+      ['longer key', 'CCRC_AUTHX=on\n', ['', 1], ['', 1]],
+      ['last wins', 'CCRC_AUTH=off\nCCRC_AUTH=on\n', ['on', 0], ['on', 0]],
+      ['one-char quote value', 'CCRC_AUTH="\n', ['"', 0], ['', 2]],
+      ['empty quote pair', 'CCRC_AUTH=""\n', ['', 0], ['', 0]],
+      ['absent key', 'FOO=1\n', ['', 1], ['', 1]],
+    ];
+    /** `_box_env_value <file> CCRC_AUTH [mode]` over every shape: stdout and rc, read back through files. */
+    const readShapes = (mode: string): Array<[string, number]> => {
+      const dir = mkTmp('ccrc-doctor-shapes-');
+      SHAPES.forEach(([, content], i) => writeFileSync(join(dir, `f${i}`), content));
+      const script = [
+        'set -uo pipefail', `. ${shq(CCRC_SRC)}`,
+        `for ((i=0;i<${SHAPES.length};i++)); do _box_env_value ${shq(dir)}/f$i CCRC_AUTH ${mode} > ${shq(dir)}/o$i; echo $? > ${shq(dir)}/c$i; done`,
+      ].join('\n');
+      const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { HOME: dir, PATH: join(dir, 'no-bin'), LC_ALL: 'C' } });
+      expect(r.status, r.stderr).toBe(0);
+      return SHAPES.map((_, i): [string, number] =>
+        [readFileSync(join(dir, `o${i}`), 'utf8'), Number(readFileSync(join(dir, `c${i}`), 'utf8').trim())]);
+    };
+
+    it('U1: plain mode (two arguments) reads every shape exactly as main did — stdout and rc, byte for byte, CR handling included', () => {
+      const got = readShapes('');
+      SHAPES.forEach(([label, , plain], i) => expect(got[i], label).toEqual(plain));
+    });
+
+    it('U2: `unit` mode — whitespace around an unquoted value goes, a quoted inner space stays, and every shape the reader cannot decide is rc 2 with nothing on stdout', () => {
+      const got = readShapes('unit');
+      SHAPES.forEach(([label, , , unit], i) => expect(got[i], label).toEqual(unit));
+    });
+
+    /** `[label, ccrc.env, exposure file, key, macOS answer, Linux answer]`. */
+    type Dar = { rc: 3; file: 'env' | 'exp'; line: number; cause: 'cr' | 'shape' } | { rc: 0 | 2; val: string; src: '' | 'env' | 'exp' };
+    type Lin = [number, string, '' | 'env' | 'exp'];
+    const U3: Array<[string, string | null, string | null, string, Dar, Lin]> = [
+      ['a CR after the value', 'CCRC_AUTH=on\r\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'cr' }, [0, 'on', 'env']],
+      ['a second assignment on a later line', 'CCRC_AUTH=on\nFOO=1 CCRC_AUTH=off\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 2, cause: 'shape' }, [0, 'on', 'env']],
+      ['an unset behind an assignment', 'CCRC_AUTH=on\nFOO=a unset CCRC_AUTH\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 2, cause: 'shape' }, [0, 'on', 'env']],
+      ['a semicolon command behind an assignment', 'CCRC_AUTH=on\nFOO=1;unset CCRC_AUTH\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 2, cause: 'shape' }, [0, 'on', 'env']],
+      ['a command substitution on line 3', 'X=1\nCCRC_AUTH=on\nFOO=$(echo) CCRC_AUTH=off\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 3, cause: 'shape' }, [0, 'on', 'env']],
+      ['a space after the equals sign', 'CCRC_AUTH= on\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, 'on', 'env']],
+      ['a declare word', 'declare CCRC_AUTH=off\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, '', '']],
+      ['a semicolon comment', '; c\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, 'on', 'env']],
+      ['a trailing comment on the assignment', 'CCRC_AUTH=on # c\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, 'on # c', 'env']],
+      ['a plus-equals assignment', 'CCRC_AUTH+=x\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, '', '']],
+      ['an indented assignment', '  CCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, 'on', 'env']],
+      ['readonly in ccrc.env, the exposure file arms', 'CCRC_AUTH=off\nreadonly CCRC_AUTH\n', 'CCRC_AUTH=on\n', 'CCRC_AUTH', { rc: 3, file: 'env', line: 2, cause: 'shape' }, [0, 'on', 'exp']],
+      ['a CR in the exposure file only', 'CCRC_AUTH=on\n', 'X=1\r\n', 'CCRC_AUTH', { rc: 3, file: 'exp', line: 1, cause: 'cr' }, [0, 'on', 'env']],
+      ['a planted canary after the key line', 'CCRC_AUTH=on\nFOO=canary-9f2 x\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 2, cause: 'shape' }, [0, 'on', 'env']],
+      ['every key: the readonly files read through CCRC_HOST', 'CCRC_AUTH=off\nreadonly CCRC_AUTH\n', 'CCRC_AUTH=on\n', 'CCRC_HOST', { rc: 3, file: 'env', line: 2, cause: 'shape' }, [0, '', '']],
+      ['control: a trailing space', 'CCRC_AUTH=on \n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
+      ['control: a trailing tab', 'CCRC_AUTH=on\t\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
+      ['control: export', 'export CCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [3, '', '']],
+      ['control: export of another name', 'export FOO=1\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
+      ['control: a comment', '# comment\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
+      ['control: a comment ending in a backslash', '# x \\\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [3, '', '']],
+      ['control: single quotes', 'CCRC_AUTH=\'on\'\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
+      ['control: double quotes with an inner space', 'CCRC_AUTH="o n"\n', null, 'CCRC_AUTH', { rc: 0, val: 'o n', src: 'env' }, [0, 'o n', 'env']],
+      ['control: the exposure file wins by presence', 'CCRC_AUTH=off\n', 'CCRC_AUTH=on\n', 'CCRC_AUTH', { rc: 0, val: 'on', src: 'exp' }, [0, 'on', 'exp']],
+      ['control: a bare key in the exposure file wins', 'CCRC_AUTH=on\n', 'CCRC_AUTH=\n', 'CCRC_AUTH', { rc: 0, val: '', src: 'exp' }, [0, '', 'exp']],
+      ['control: an exposure file there and unreadable', 'CCRC_AUTH=on\n', 'UNREADABLE', 'CCRC_AUTH', { rc: 2, val: 'on', src: 'env' }, [2, 'on', 'env']],
+    ];
+    const u3Rows: UnitEnvRow[] = U3.map(([label, env, exp, key]) => ({ label, env, exp, key }));
+
+    it('U3: the Darwin table through `_box_unit_env` — either file not plain assignments (or any CR) is rc 3 for EVERY key, naming the file and the line NUMBER, never its bytes; plain files answer what bash would', () => {
+      const got = unitEnvAnswers(u3Rows, 'darwin');
+      U3.forEach(([label, , , , dar], i) => {
+        const a = got[i]!;
+        const path = (w: 'env' | 'exp' | ''): string => (w === 'env' ? a.envPath : w === 'exp' ? a.expPath : '');
+        expect(a.rc, label).toBe(dar.rc);
+        if (dar.rc === 3) {
+          expect([a.val, a.src], label).toEqual(['', '']);
+          expect(a.why.startsWith(`${path(dar.file)} line ${dar.line} `), `${label}: ${a.why}`).toBe(true);
+          expect(a.why, label).toContain(dar.cause === 'cr' ? 'carriage return' : 'is not a plain NAME=value line');
+          expect(a.fix, label).toContain(path(dar.file));
+          // The reason names a NUMBER, never a line: ccrc.env holds tokens.
+          expect(a.why + a.fix, label).not.toContain('canary-9f2');
+        } else {
+          expect([a.val, a.src], label).toEqual([dar.val, path(dar.src)]);
+          expect([a.why, a.fix], label).toEqual(['', '']);
+        }
+      });
+    });
+
+    it('U3l: the same rows with CCD_OS=linux — `unit` mode\'s answers, the platform split stated as data: one set of bytes, two feeders', () => {
+      const got = unitEnvAnswers(u3Rows, 'linux');
+      U3.forEach(([label, , , , , lin], i) => {
+        const a = got[i]!;
+        const path = (w: '' | 'env' | 'exp'): string => (w === 'env' ? a.envPath : w === 'exp' ? a.expPath : '');
+        expect([a.rc, a.val, a.src], label).toEqual([lin[0], lin[1], path(lin[2])]);
+        if (lin[0] === 3) {
+          expect(a.why, label).toContain('in a shape this reader does not decide');
+          expect(a.why.startsWith(a.envPath), label).toBe(true);
+          expect(a.fix, label).toContain(a.envPath);
+        }
+      });
+    });
   });
 });
 
@@ -7587,7 +7976,7 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
   // BOTH files intact and removes only the FUNCTION (never `unset
   // CCRC_EXPOSURE_FILE`, which the guard tests first and would mask the
   // mutation), with `BUE_VAL=on` preset AFTER sourcing ccrc as a shell
-  // assignment (an env entry is reset at ccrc's own file scope, `:2768`) — a
+  // assignment (an env entry is reset at ccrc's own file scope, `:2856`) — a
   // guard missing this term reads that stale value as ARMED instead of
   // failing shut.
   it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, not a stale ARMED PASS', () => {
@@ -7598,6 +7987,90 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     expect(r.stdout).toMatch(/^FAIL update-exposure: ccrc's own config and exposure constants are not loaded/m);
     expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
     expect(r.status).toBe(1);
+  });
+
+  // ── wave 9 R10e (D-3823): an undecidable flag or bind is NOT MEASURED, never a verdict ────
+  // Each case below shares the auth describe's reader (`_box_unit_env`), so the shape that makes `_check_auth` say
+  // "not measured" makes this check say it too — worded for what THIS check decides (whether the update routes are
+  // gated, and whether the box is reachable). The describe's existing cases above run UNEDITED.
+  describe('wave 9 R10e — an undecidable CCRC_AUTH or CCRC_HOST is not measured', () => {
+    const envPath = (home: string): string => join(home, '.ccrc', 'ccrc.env');
+    const expPath = (home: string): string => join(home, '.ccrc', 'exposure.env');
+    const lineOf = (p: string, text: string): number => readFileSync(p, 'utf8').split('\n').indexOf(text) + 1;
+
+    it('X1: a reachable box whose exposure file carries `CCRC_AUTH = on` WARNs, not measured, naming the file, with a non-empty cause (main: FAIL "CCRC_AUTH is not on")', () => {
+      const home = unexposed('ccrc-doctor-upx-x1-',
+        'CCRC_FLEET=local\nCCRC_HOST=ccrc-fixture.invalid\nCCRC_PORT=7788\n');
+      writeExposureEnv(home, { omit: ['CCRC_AUTH'] });
+      appendFileSync(expPath(home), 'CCRC_AUTH = on\n');
+      const r = runDoctor(home);
+      const l = line(r.stdout);
+      expect(l, r.stdout).toMatch(/^WARN update-exposure: /);
+      expectUndecided(l, expPath(home));
+      // The cause is captured at the CCRC_AUTH read; the later CCRC_HOST read resets the out-params (M16).
+      expect(l).not.toMatch(/^WARN update-exposure: ,/);
+      expect(l).toContain('so whether CCRC_AUTH is on — and so whether the update routes are gated — was not measured');
+      noRunnerBugLine(r.stdout, 'update-exposure');
+    });
+
+    itLinux('X2: an exposure file that DECIDES `CCRC_AUTH=on` is gated whatever its bind says — `CCRC_HOST = 0.0.0.0` does not WARN a gated box', () => {
+      const home = unexposed('ccrc-doctor-upx-x2-');
+      writeExposureEnv(home);
+      appendFileSync(expPath(home), 'CCRC_HOST = 0.0.0.0\n');
+      const r = runDoctor(home);
+      expect(line(r.stdout), r.stdout).toBe(`PASS update-exposure: CCRC_AUTH=on (read from ${expPath(home)}) — the update routes sit behind the session gate`);
+      noRunnerBugLine(r.stdout, 'update-exposure');
+    });
+
+    itDarwin('X2d: the same files on macOS — the spaced line fails the whole-file rule, so not measured, naming the exposure file and that line\'s number', () => {
+      const home = unexposed('ccrc-doctor-upx-x2d-');
+      writeExposureEnv(home);
+      appendFileSync(expPath(home), 'CCRC_HOST = 0.0.0.0\n');
+      const l = line(runDoctor(home).stdout);
+      expect(l).toMatch(/^WARN update-exposure: /);
+      expectUndecided(l, expPath(home));
+      expect(l).toContain(`${expPath(home)} line ${lineOf(expPath(home), 'CCRC_HOST = 0.0.0.0')} `);
+    });
+
+    itLinux('X3: no exposure artifact, `CCRC_AUTH` absent and `CCRC_HOST = 0.0.0.0` in ccrc.env — whether the box is REACHABLE is not measured (main: the loopback PASS, a false PASS)', () => {
+      const home = unexposed('ccrc-doctor-upx-x3-',
+        'CCRC_FLEET=local\nCCRC_HOST = 0.0.0.0\nCCRC_PORT=7788\n');
+      const r = runDoctor(home);
+      const l = line(r.stdout);
+      expect(l, r.stdout).toMatch(/^WARN update-exposure: /);
+      expect(l).toContain('so whether this box is reachable — and so whether its ungated update routes answer anyone — was not measured');
+      expect(l).toContain(envPath(home));
+      expect(l).toContain('CCRC_HOST');
+      expect(l).not.toContain('cannot be read');
+      noRunnerBugLine(r.stdout, 'update-exposure');
+    });
+
+    itDarwin('X3d: the same box on macOS — both reads are rc 3 (the whole-file rule), so arm 2 speaks: whether CCRC_AUTH is on is not measured, naming ccrc.env line 2', () => {
+      const home = unexposed('ccrc-doctor-upx-x3d-',
+        'CCRC_FLEET=local\nCCRC_HOST = 0.0.0.0\nCCRC_PORT=7788\n');
+      const l = line(runDoctor(home).stdout);
+      expect(l).toMatch(/^WARN update-exposure: /);
+      expectUndecided(l, envPath(home));
+      expect(l).toContain(`${envPath(home)} line 2 `);
+      expect(l).toContain('so whether CCRC_AUTH is on');
+    });
+
+    itLinux('X4: the loopback control for arm 2\'s reach term — a box PROVABLY loopback-only is a PASS whatever an undecidable CCRC_AUTH says (green at main, which reads the spaced line as absent)', () => {
+      const home = unexposed('ccrc-doctor-upx-x4-',
+        'CCRC_FLEET=local\nCCRC_AUTH = on\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n');
+      const r = runDoctor(home);
+      expect(line(r.stdout), r.stdout).toBe('PASS update-exposure: loopback only — no exposure artifact and CCRC_HOST=127.0.0.1');
+      noRunnerBugLine(r.stdout, 'update-exposure');
+    });
+
+    itDarwin('X4d: the same box on macOS — the whole-file rule makes CCRC_HOST rc 3 too, so arm 2 WARNs, naming ccrc.env line 2', () => {
+      const home = unexposed('ccrc-doctor-upx-x4d-',
+        'CCRC_FLEET=local\nCCRC_AUTH = on\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n');
+      const l = line(runDoctor(home).stdout);
+      expect(l).toMatch(/^WARN update-exposure: /);
+      expectUndecided(l, envPath(home));
+      expect(l).toContain(`${envPath(home)} line 2 `);
+    });
   });
 });
 

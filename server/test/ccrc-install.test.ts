@@ -82,7 +82,7 @@ import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { renderCcdEntry } from './ccdWsHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { CONTAINED_TOOLS, assertNoRealTool, plantPoison } from './containedTools.js';
-import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm } from './platformFixtures.js';
+import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm, IS_DARWIN } from './platformFixtures.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
 import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest, rsyncRecorder } from './installTreeFixture.js';
 import {
@@ -5475,6 +5475,45 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(line, r.stdout).toContain('the gate is failing SHUT');
     expect(line).toContain(`CCRC_AUTH=on in ${join(home, '.ccrc', 'exposure.env')}`);
     expect(line).not.toContain('To arm the gate');
+  });
+
+  // ── wave 9 R10e (D-3823): a SECOND unmeasured state, rc 3 ─────────────────
+  // A readable env file names the flag in a shape the reader cannot decide (on macOS: either file is not plain
+  // assignments). The line says so from `_box_unit_env`'s own `BUE_WHY`, in both arms; it never borrows the rc-2
+  // sentence ("is there and cannot be read"), which is about an exposure file the reader cannot open.
+  /** The platform's own clause of a not-measured verdict about `file` (ccrc-doctor.test.ts's `expectUndecided`). */
+  const expectUndecided = (detail: string, file: string): void => {
+    expect(detail).toContain(file);
+    expect(detail).toContain('was not measured');
+    expect(detail).not.toContain('cannot be read');
+    if (IS_DARWIN) expect(detail).toContain(`${file} line `);
+    else expect(detail).toContain('in a shape this reader does not decide');
+  };
+
+  it('I1: a passphrase present and the exposure file `CCRC_AUTH = on` — "not measured", worded from the reader\'s own cause, never as an unreadable file', () => {
+    const home = freshBox('ccrc-install-gate-exp-spaced-');
+    preexisting(home, 'auth.scrypt', 'fixture-not-a-real-secret\n');
+    const exposure = join(home, '.ccrc', 'exposure.env');
+    preexisting(home, 'exposure.env', 'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH = on\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toMatch(new RegExp(
+      `^install: gate: a PWA passphrase file is at .*auth\\.scrypt, and ${exposure.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    expect(line).toContain('so whether CCRC_AUTH is on was not measured');
+    expectUndecided(line, exposure);
+  });
+
+  it('I2: no passphrase and ccrc.env `CCRC_AUTH = on` — the rc-3 line naming ccrc.env, not the fresh-box line', () => {
+    const home = freshBox('ccrc-install-gate-env-spaced-');
+    preexisting(home, 'ccrc.env', 'CCRC_FLEET=local\nCCRC_AUTH = on\n');
+    const envFile = join(home, '.ccrc', 'ccrc.env');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toMatch(new RegExp(
+      `^install: gate: this box has NO PWA passphrase, and ${envFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    expect(line).toContain('so whether CCRC_AUTH is on was not measured');
+    expectUndecided(line, envFile);
+    expect(line).not.toContain('install never writes one');
   });
 
   it('reads the PWA address back out of the env file it installed', () => {

@@ -834,8 +834,8 @@ one with the dev opt-out left on.
 (that is the shipped default, and a doctor that warned about it would train an operator to
 skim), a FAIL on an armed box with no passphrase file, and a FAIL on a passphrase file the
 server would refuse to boot on. The flag is read exactly as `ccrc.service` gets it —
-`ccrc.env`, then the exposure file, the later one winning — never from the shell doctor runs
-in. It prints no byte of the file's contents, and neither does the server's own boot refusal.
+`ccrc.env`, then the exposure file, the later one winning — never from the shell doctor runs in; whitespace around an unquoted value is read as the unit's feeder reads it (systemd on Linux; on macOS the launchd job's shell, where a file that is not plain assignments throughout is not measured), and a shape the reader cannot decide is reported as not measured, not guessed.
+It prints no byte of the file's contents, and neither does the server's own boot refusal.
 
 ## The box decides `--remote-control`: `~/.ccrc/remote-control`
 

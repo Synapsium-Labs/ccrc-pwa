@@ -2738,18 +2738,65 @@ _box_server_addr() {
 # to it. Collapsing both to "" (this function's stdout, still) is exactly
 # right for every OTHER caller, which only ever wants a default when unset —
 # this is the one caller that needs told apart.
-_box_env_value() {
-  local file="$1" key="$2" line v="" found=0
+#
+# THIRD ARGUMENT, `unit` OR `shell` (wave 9 R10a/R10e, D-3822/D-3823) — only
+# `_box_unit_env` passes one; the 43 other callers pass two and read exactly what
+# they always read, CR handling included.
+#   unit   systemd's `EnvironmentFile=` (Linux). A CR ends a line as it does for
+#          systemd, whitespace (space, tab, CR) around an UNQUOTED value is
+#          discarded (the run-182 ruling, systemd.exec(5)), and every shape this
+#          reader cannot DECIDE answers rc 2 with nothing on stdout: a space or
+#          tab before `=`, a physical line ending in `\` directly above the key
+#          line (a comment's too — systemd before v254 continued it, v254+ does
+#          not, and this reader does not know which runs), a backslash in the
+#          value, a quote that is not one whole pair, a quote left open on an
+#          earlier line, an `export` prefix.
+#   shell  the launchd job's `set -a; . file` (Darwin). Called ONLY on a file
+#          `_box_env_shell_plain` passed, so every assignment line is plain: an
+#          `export` word and trailing spaces and tabs are dropped, as bash does.
+_box_env_value() {   # <file> <key> [unit|shell]
+  local file="$1" key="$2" mode="${3:-}" line v="" found=0 und=0 prevcont=0 qtaint=0 rest
   # Space, tab, CR — systemd's set, minus the newline `read` has consumed. A
   # variable rather than a literal bracket expression because a tab and a CR
   # typed inline are invisible in a diff and one stray edit from being deleted.
   local ws=$' \t\r'
   while IFS= read -r line || [ -n "$line" ]; do
+    # `unit` mode only: a CR ends the line, as it does for systemd (wave 9 R10a).
+    if [ "$mode" = unit ]; then line="${line%$'\r'}"; fi
     # Leading whitespace, exactly as systemd skips it — `_dr_trim`'s left half,
     # in the one namespace this file can reach, over systemd's character set
     # rather than POSIX's. `$ws` expands INSIDE the bracket expression, which
     # is why the pattern is unquoted here.
     line="${line#"${line%%[!$ws]*}"}"
+    if [ "$mode" = unit ]; then
+      # Wave 9 R10e (D-3823): shapes systemd may read and this reader cannot decide.
+      case "$line" in
+        "$key"[$' \t']*=*|"export"[$' \t']*"$key"[$' \t']*=*|"export"[$' \t']*"$key="*) und=1 ;;
+        "$key="*) { [ "$prevcont" -eq 1 ] || [ "$qtaint" -eq 1 ]; } && und=1 ;;
+      esac
+      # A QUOTE THAT MAY SPAN LINES: systemd's '-quoted and "-quoted values can span lines, so a non-comment line
+      # whose value carries a quote that is not ONE WHOLE PAIR on that line taints every later key line (never
+      # cleared — conservative: it can only cost a "not measured").
+      case "$line" in
+        ''|'#'*|';'*) ;;
+        *\"*|*\'*)
+          rest="${line#*=}"; rest="${rest#"${rest%%[!$ws]*}"}"; rest="${rest%"${rest##*[!$ws]}"}"
+          case "$line" in *=*) ;; *) qtaint=1 ;; esac
+          case "$rest" in
+            \"*\") case "${rest:1:${#rest}-2}" in *\"*|*\\*) qtaint=1 ;; esac ;;
+            \'*\') case "${rest:1:${#rest}-2}" in *\'*) qtaint=1 ;; esac ;;
+            *) qtaint=1 ;;
+          esac ;;
+      esac
+      # systemd before v254 continued a comment line that ends in `\`, v254+ does not; this reader does not know which
+      # version the box runs, so a key line after ANY line ending in `\` is not measured.
+      case "$line" in *\\) prevcont=1 ;; *) prevcont=0 ;; esac
+    elif [ "$mode" = shell ]; then
+      # Wave 9 R10a, Darwin (round-2 ruling R-A): ONLY ever called on a file `_box_env_shell_plain` passed, so every
+      # assignment line is `[export<ws>]NAME=<plain value>`. bash drops the export word and trailing spaces/tabs.
+      case "$line" in export[$' \t']*) line="${line#export}"; line="${line#"${line%%[!$' \t']*}"}" ;; esac
+      line="${line%"${line##*[!$' \t']}"}"
+    fi
     case "$line" in
       "$key="*) v="${line#"$key="}"; found=1 ;;
       *) continue ;;
@@ -2757,12 +2804,53 @@ _box_env_value() {
   done < "$file"
   # Trailing CR (a file edited on Windows) and surrounding quotes.
   v="${v%$'\r'}"
+  if [ "$mode" = unit ] && [ "$found" -eq 1 ]; then
+    # Wave 9 R10a (D-3822): whitespace (space, tab, CR) around an UNQUOTED value goes, as systemd
+    # discards it (the run-182 ruling; systemd.exec(5)).
+    v="${v#"${v%%[!$ws]*}"}"; v="${v%"${v##*[!$ws]}"}"
+    case "$v" in
+      *\\*) und=1 ;;                                   # an escape, quoted or not
+      \"*\") rest="${v#?}"; case "${rest%?}" in *\"*) und=1 ;; esac ;;
+      \'*\') rest="${v#?}"; case "${rest%?}" in *\'*) und=1 ;; esac ;;
+      *\"*|*\'*) und=1 ;;                              # a quote that is not one whole pair ("on"x, on")
+    esac
+  fi
+  if [ "$und" -eq 1 ]; then return 2; fi
   case "$v" in
     \"*\") v="${v#\"}"; v="${v%\"}" ;;
     \'*\') v="${v#\'}"; v="${v%\'}" ;;
   esac
   printf '%s' "$v"
   [ "$found" -eq 1 ]
+}
+
+# _box_env_shell_plain <file> — Darwin only (wave 9 R10a, round-2 ruling R-A). rc 0 when every line is blank, a
+# comment, or `[export<ws>]NAME=` + a shell-inert value / one whole '…' pair / one whole "…" pair with no $, backtick,
+# \ or " inside, then only spaces/tabs; and no line holds a CR. rc 1 otherwise: BEP_LINE is the first failing line's
+# NUMBER and BEP_CAUSE is `cr` or `shape`. It never records the line's bytes — ccrc.env holds tokens. Called
+# directly, never in `$(…)`, so the out-params reach the caller.
+_box_env_shell_plain() {   # <file>
+  local file="$1" raw rest name val inner n=0
+  BEP_LINE=0; BEP_CAUSE=""
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    n=$((n + 1))
+    case "$raw" in *$'\r'*) BEP_LINE=$n; BEP_CAUSE=cr; return 1 ;; esac
+    rest="${raw#"${raw%%[!$' \t']*}"}"
+    case "$rest" in ''|'#'*) continue ;; esac
+    rest="$raw"
+    case "$rest" in export[$' \t']*) rest="${rest#export}"; rest="${rest#"${rest%%[!$' \t']*}"}" ;; esac
+    case "$rest" in *=*) ;; *) BEP_LINE=$n; BEP_CAUSE=shape; return 1 ;; esac
+    name="${rest%%=*}"
+    case "$name" in ''|[0-9]*|*[!A-Za-z0-9_]*) BEP_LINE=$n; BEP_CAUSE=shape; return 1 ;; esac
+    val="${rest#*=}"; val="${val%"${val##*[!$' \t']}"}"
+    case "$val" in *[!A-Za-z0-9_./:@%+,=-]*) ;; *) continue ;; esac
+    case "$val" in
+      \'*\') inner="${val:1:${#val}-2}"; case "$inner" in *\'*) ;; *) continue ;; esac ;;
+      \"*\") inner="${val:1:${#val}-2}"; case "$inner" in *[\$\`\\\"]*) ;; *) continue ;; esac ;;
+    esac
+    BEP_LINE=$n; BEP_CAUSE=shape; return 1
+  done < "$file"
+  return 0
 }
 
 # Out-params, at file scope — `_box_unit_env`'s own comment argues why
@@ -2773,6 +2861,10 @@ BUE_SRC=""     # the file whose line decided ("" when neither readable file name
 BUE_NAMED=0    # 1 iff either READABLE file named the key at all (presence, not a non-empty value)
 BUE_ENV=""     # ccrc.env's state: ok | unreadable | absent
 BUE_EXP=""     # the exposure file's state: absent | readable | unreadable
+BUE_WHY=""     # rc 3 only (wave 9 R10e, D-3823): the cause, as a clause naming the file; "" otherwise
+BUE_FIX=""     # rc 3 only: the remedy clause for that cause
+BEP_LINE=0     # _box_env_shell_plain: the first failing line's NUMBER (never its bytes)
+BEP_CAUSE=""   # _box_env_shell_plain: cr | shape
 
 # ── _box_unit_env — ONE KEY AS ccrc.service RECEIVES IT (wave 8 item D) ────
 # The unit carries two EnvironmentFile lines, ccrc.env then $CCRC_EXPOSURE_FILE, and the later wins by PRESENCE: a
@@ -2782,14 +2874,27 @@ BUE_EXP=""     # the exposure file's state: absent | readable | unreadable
 # exposure file that is THERE AND UNREADABLE answers rc 2 (UNMEASURED — what the service manager receives from it
 # was not measured), never absent;
 # BUE_VAL/BUE_SRC then carry what ccrc.env alone says, for a caller that must word that. rc 0 measured.
+# Wave 9 R10a/R10e (D-3822, D-3823): the two files reach the server by DIFFERENT FEEDERS, and each is modelled as its own.
+#   Linux  systemd's `EnvironmentFile=` — `_box_env_value`'s `unit` mode. A shape it cannot decide is rc 3.
+#   Darwin the launchd job's `set -a; . file` under /bin/bash (`_svc_install`'s `set -a; [ -f '$env1' ] …` line) —
+#          `_box_unit_env_shell`, by round-2 ruling R-A.
+# rc 3 UNMEASURED, the SECOND unmeasured state (rc 2 is the unreadable exposure file, checked first on both platforms):
+# on Linux a readable file names the key in a shape this reader does not decide (an exposure file that DECIDES the key
+# still wins over an undecidable ccrc.env, by presence, as the second `EnvironmentFile=` does); on Darwin either
+# readable file is not plain assignments throughout, and then EVERY key is rc 3. BUE_WHY is the cause as a clause
+# naming the file (and, on Darwin, the line NUMBER, never its bytes — ccrc.env holds tokens); BUE_FIX is its remedy clause.
 _box_unit_env() {   # <KEY>
-  local key="$1" v rc
-  BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0; BUE_ENV=absent; BUE_EXP=absent
+  local key="$1" v rc envund=0 expund=0 f
+  BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0; BUE_ENV=absent; BUE_EXP=absent; BUE_WHY=""; BUE_FIX=""
+  if [ "${CCD_OS:-linux}" = darwin ]; then _box_unit_env_shell "$key"; return; fi
   if [ -e "$BOX_ENV_FILE" ]; then
     if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
       BUE_ENV=ok
-      v="$(_box_env_value "$BOX_ENV_FILE" "$key")"; rc=$?
-      if [ "$rc" -eq 0 ]; then BUE_VAL="$v"; BUE_SRC="$BOX_ENV_FILE"; BUE_NAMED=1; fi
+      v="$(_box_env_value "$BOX_ENV_FILE" "$key" unit)"; rc=$?
+      case "$rc" in
+        0) BUE_VAL="$v"; BUE_SRC="$BOX_ENV_FILE"; BUE_NAMED=1 ;;
+        2) envund=1 ;;
+      esac
     else
       BUE_ENV=unreadable
     fi
@@ -2797,14 +2902,67 @@ _box_unit_env() {   # <KEY>
   if [ -n "${CCRC_EXPOSURE_FILE:-}" ] && [ -e "$CCRC_EXPOSURE_FILE" ]; then
     if [ -f "$CCRC_EXPOSURE_FILE" ] && [ -r "$CCRC_EXPOSURE_FILE" ]; then
       BUE_EXP=readable
-      v="$(_box_env_value "$CCRC_EXPOSURE_FILE" "$key")"; rc=$?
-      if [ "$rc" -eq 0 ]; then BUE_VAL="$v"; BUE_SRC="$CCRC_EXPOSURE_FILE"; BUE_NAMED=1; fi
+      v="$(_box_env_value "$CCRC_EXPOSURE_FILE" "$key" unit)"; rc=$?
+      case "$rc" in
+        0) BUE_VAL="$v"; BUE_SRC="$CCRC_EXPOSURE_FILE"; BUE_NAMED=1 ;;
+        2) expund=1 ;;
+      esac
     else
       BUE_EXP=unreadable
       return 2
     fi
   fi
+  if [ "$expund" -eq 1 ] || { [ "$envund" -eq 1 ] && [ "$BUE_SRC" != "$CCRC_EXPOSURE_FILE" ]; }; then
+    f="$BOX_ENV_FILE"; [ "$expund" -eq 1 ] && f="$CCRC_EXPOSURE_FILE"
+    BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0
+    BUE_WHY="$f names $key in a shape this reader does not decide (a space around '=', an export prefix, a backslash, a quote that is not one whole pair, a quote left open on an earlier line, or a line after one ending in a backslash)"
+    BUE_FIX="rewrite the line naming $key in $f, or the line above it when that one ends in a backslash, as KEY=value: no space before or after '=', no export, no backslash, no quote except one whole pair around the value, and no quote left open on an earlier line (ccrc expose rewrites the exposure file)"
+    return 3
+  fi
   return 0
+}
+# _box_unit_env_shell — the Darwin arm (round-2 ruling R-A): BOTH readable files must pass `_box_env_shell_plain`
+# before either is read; one that fails makes every key rc 3. ccrc.env is checked first, as bash sources it first.
+_box_unit_env_shell() {   # <KEY>
+  local key="$1" v rc bad=""
+  if [ -e "$BOX_ENV_FILE" ]; then
+    if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+      BUE_ENV=ok
+      if _box_env_shell_plain "$BOX_ENV_FILE"; then
+        v="$(_box_env_value "$BOX_ENV_FILE" "$key" shell)"; rc=$?
+        if [ "$rc" -eq 0 ]; then BUE_VAL="$v"; BUE_SRC="$BOX_ENV_FILE"; BUE_NAMED=1; fi
+      else
+        bad="$BOX_ENV_FILE"
+      fi
+    else
+      BUE_ENV=unreadable
+    fi
+  fi
+  if [ -n "${CCRC_EXPOSURE_FILE:-}" ] && [ -e "$CCRC_EXPOSURE_FILE" ]; then
+    if [ -f "$CCRC_EXPOSURE_FILE" ] && [ -r "$CCRC_EXPOSURE_FILE" ]; then
+      BUE_EXP=readable
+      if [ -z "$bad" ]; then
+        if _box_env_shell_plain "$CCRC_EXPOSURE_FILE"; then
+          v="$(_box_env_value "$CCRC_EXPOSURE_FILE" "$key" shell)"; rc=$?
+          if [ "$rc" -eq 0 ]; then BUE_VAL="$v"; BUE_SRC="$CCRC_EXPOSURE_FILE"; BUE_NAMED=1; fi
+        else
+          bad="$CCRC_EXPOSURE_FILE"
+        fi
+      fi
+    else
+      BUE_EXP=unreadable
+      return 2
+    fi
+  fi
+  [ -z "$bad" ] && return 0
+  BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0
+  case "$BEP_CAUSE" in
+    cr) BUE_WHY="$bad line $BEP_LINE carries a carriage return, which bash keeps in the value — on macOS the launchd job sources both env files with bash"
+        BUE_FIX="save $bad without carriage returns (ccrc expose rewrites the exposure file)" ;;
+    *)  BUE_WHY="$bad line $BEP_LINE is not a plain NAME=value line, and on macOS the launchd job sources both env files with bash, so that line can change what they set"
+        BUE_FIX="rewrite line $BEP_LINE of $bad as NAME=value, with a value of letters, digits and _./:@%+,=- only, or one whole '…' pair, or one whole \"…\" pair with no \$, backtick, backslash or \" inside — or delete it (ccrc expose rewrites the exposure file)" ;;
+  esac
+  return 3
 }
 
 # ── _box_auth_path — WHICH FILE IS THIS BOX'S PASSPHRASE SECRET (D-143) ───
@@ -12271,14 +12429,19 @@ cmd_install() {
   # every other case — including an exposure file that sets CCRC_AUTH to
   # anything but on, or one that cannot be read — prints main's else-arm line
   # unchanged, naming ccrc.env. The fresh-box line (no file, flag off) is
-  # byte-identical to what this line always said.
+  # byte-identical to what this line always said. Wave 9 R10e (D-3823): a
+  # SECOND unmeasured state, rc 3 — a readable file names the flag in a shape
+  # the reader cannot decide (on macOS, either file is not plain assignments),
+  # worded from `$BUE_WHY` in both arms; the rc-2 sentence above is untouched.
   local gsec grc urc=0
   gsec="$(_box_auth_path)"; grc=$?
   if [ "$grc" -eq 3 ]; then
     echo "install: gate: CCRC_AUTH_SECRET_PATH in $BOX_ENV_FILE is RELATIVE ($gsec), so install cannot say whether this box has a PWA passphrase — make it absolute (or remove the line); ccrc doctor's auth check says the rest"
   elif [ -e "$gsec" ]; then
     _box_unit_env CCRC_AUTH || urc=$?
-    if [ "$urc" -ne 0 ]; then
+    if [ "$urc" -eq 3 ]; then
+      echo "install: gate: a PWA passphrase file is at $gsec, and $BUE_WHY, so whether CCRC_AUTH is on was not measured — ccrc doctor's auth check says what to do"
+    elif [ "$urc" -ne 0 ]; then
       echo "install: gate: a PWA passphrase file is at $gsec, and $CCRC_EXPOSURE_FILE is there and cannot be read, so whether CCRC_AUTH is on was not measured — ccrc doctor's auth check says what to do"
     elif [ "$BUE_VAL" = on ]; then
       echo "install: gate: CCRC_AUTH=on in $BUE_SRC, and a PWA passphrase file is at $gsec (arming also needs CCRC_RP_ID and CCRC_ORIGIN beside the flag; ccrc doctor's auth check measures whether the file is usable)"
@@ -12291,6 +12454,8 @@ cmd_install() {
     _box_unit_env CCRC_AUTH || urc=$?
     if [ "$urc" -eq 0 ] && [ "$BUE_VAL" = on ]; then
       echo "install: gate: CCRC_AUTH=on in $BUE_SRC and this box has NO PWA passphrase — the gate is failing SHUT: every route answers 401 until: ccrc passwd"
+    elif [ "$urc" -eq 3 ]; then
+      echo "install: gate: this box has NO PWA passphrase, and $BUE_WHY, so whether CCRC_AUTH is on was not measured — ccrc doctor's auth check says what to do"
     else
       echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, then: $(_svc_restart_hint ccrc.service)"
     fi
