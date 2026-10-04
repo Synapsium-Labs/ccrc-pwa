@@ -13633,11 +13633,11 @@ CCRC_SHIM
 # destination that is a directory or a link to one and re-measuring each
 # destination afterwards. A half already carrying the exact bytes and mode is
 # left alone, so a converged box rewrites nothing. Its exit 2 is a run that never
-# reported a verified pair: when only the body moved, the old launcher refuses every start by
-# digest; when the launcher's own rename ran — alone, the body already current, or after the
-# body's own move — and its re-measurement failed, what stands is unverified; when only the
-# report failed after that re-measurement passed, the pair stands as staged. Every way, a re-run
-# converges the pair; nothing is rolled back across the two directories.
+# reported a verified pair: a half whose re-measurement after its rename failed is unverified;
+# when the body moved and the launcher did not, and is not proved current, a start may be
+# refused (by digest, by an earlier launcher) or run an entry the run never verified; when
+# only the report failed, every moved half re-measured, the pair stands as staged. Every way, a
+# re-run converges the pair; nothing is rolled back across the two directories.
 CCRC_ENTRY_PY=""
 CCRC_ENTRY_WHY=""
 _inst_entry_python() {   # <helper> -> rc 0 with CCRC_ENTRY_PY = the canonical python3 that runs the helper
@@ -13664,13 +13664,13 @@ _inst_entry_python() {   # <helper> -> rc 0 with CCRC_ENTRY_PY = the canonical p
 
 _inst_ccd_pair() {   # <tree> — render, self-test and publish ccd's launcher/body pair from <tree>
   local tree="$1" rc=0
-  _inst_entry_python "$tree/ccd/ccd-entry-install.py" \
-    || _ccrc_die "$CCRC_ENTRY_WHY Neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd was changed."
+  _inst_entry_python "$tree/ccd/ccd-entry-install.py" || _ccrc_die "$CCRC_ENTRY_WHY Neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd was changed."
   "$CCRC_ENTRY_PY" -IS "$tree/ccd/ccd-entry-install.py" install "$tree" "$HOME" || rc=$?
   case "$rc" in
     0) return 0 ;;
-    2) _ccrc_die "ccd's pair was left unconverged — the line above names what moved and why; until a re-run converges it, ccd starts on this box may refuse, or run an unverified launcher: re-run 'ccrc update' (or 'ccrc install')" ;;
-    *) _ccrc_die "ccd's direct-entry pair was not installed (the line above says why) — neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd moved" ;;
+    1) _ccrc_die "ccd's direct-entry pair was not installed (the line above says why) — neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd moved" ;;
+    2) _ccrc_die "ccd's pair install stopped after a half moved and before it reported a verified pair — the line above names what moved and the state it left; unless it says the pair stands as staged, ccd starts on this box may refuse, or run an unverified launcher, until a re-run converges it: re-run 'ccrc update' (or 'ccrc install')" ;;
+    *) _ccrc_die "ccd's direct-entry pair install ended with an unexpected status ($rc), so what moved is unmeasured: re-run 'ccrc update' (or 'ccrc install') to converge the pair" ;;
   esac
 }
 

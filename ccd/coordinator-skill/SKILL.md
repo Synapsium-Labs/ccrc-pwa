@@ -374,10 +374,10 @@ not after.
      marker: by a box whose ccd did not yet mark children, or by a
      dispatch that journaled `child-omitted` — is never refused this way;
      dropping its `sessionId` anyway is still safe and follows the same
-     one-PR rule. The same-project arm is for a producer whose workspace opened
-     no PR. On a native-queue project the producer LANDS before it closes
-     (clause 15; `references/wave-lifecycle.md` §5, "Landing on a native-queue
-     project").
+     one-PR rule. The same-project arm is for a producer whose workspace
+     opened no PR. On a native-queue project the producer LANDS before it
+     closes (clause 15; `references/wave-lifecycle.md` §5,
+     "Landing on a native-queue project").
      **Same project:** open wave N+1 first with this producer's `sessionId`, close
      the producer with `final:false` so its hold transfers to the already-open
      successor on the same workspace, then run `"$API" runs list --closed 1`,
