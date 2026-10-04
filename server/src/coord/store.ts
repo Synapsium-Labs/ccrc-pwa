@@ -1901,8 +1901,8 @@ export class CoordStore {
    * writer in the tree to give one `mail` row a second delivery. Nothing else
    * ever did — `queueDelivery` has exactly two other call sites and each follows
    * an `insertMail` — and `mail_deliveries` carries no unique key on
-   * `(mailId, toId)` to fall back on (`schema.ts`: the one index is
-   * `mail_deliveries_due`). So:
+   * `(mailId, toId)` to fall back on (`schema.ts`: neither of its indexes,
+   * `mail_deliveries_due` and `mail_deliveries_by_mail`, is unique). So:
    *   `GROUP BY m.id` — a program whose rows disagree about the claimant (the
    *     hand-recovered row the caller's own comment describes) puts TWO
    *     displaced ids in `displaced`, and one mail parked against both would
@@ -3935,11 +3935,15 @@ export class CoordStore {
    * verdict's history, UNBOUNDED, because the ladder keys on the run's whole exchange), or when it touches the
    * session inside the horizon: sent by it, addressed to it by the row's own `toId`, or delivered to it (a mail
    * to the coordinator ROLE carries the role in `toId`, and the session only on its delivery row). The horizon
-   * is `at >= sinceAt` (`stall-mail-read-time-bounded` (D-3651)), and the lane passes `now - BACKLOG_HORIZON_MS`. It
-   * bounds the rows LOADED, not the scan: `mail` has no index but its key, and adding one is a migration. The
-   * same holds for the two `mail_deliveries` scans, statement 1's delivered-to subquery and statement 2's (that
-   * table's one index is `mail_deliveries_due`): each candidate's read grows with the whole mail history, on the
-   * synchronous handle, until a migration indexes them. An empty `runIds` drops the run clause rather than binding an empty list.
+   * is `at >= sinceAt` (`stall-mail-read-time-bounded` (D-3651)), and the lane passes `now - BACKLOG_HORIZON_MS`.
+   * PLANNED ON INDEXES, NEVER A TABLE SCAN (schema.ts's stall-read entry; `stall-store.test.ts` pins each plan): the
+   * run clause reads `mail_by_run`, the horizon `mail_by_at`, and both delivery reads `mail_deliveries_by_mail`. Two
+   * shapes here exist for the planner, and neither changes an answer. The delivered-to subquery is bounded by the
+   * horizon too: the outer row it selects must pass `at >= sinceAt` anyway, so the bound only lets the subquery walk
+   * `mail_by_at` instead of every delivery (there is deliberately no index led by `toId`; schema.ts says why).
+   * Statement 1 is MATERIALIZED before its ORDER BY, because this server never runs ANALYZE and the planner
+   * otherwise prefers a rowid-order scan of all of `mail` to an index read and a sort. An empty `runIds` drops the
+   * run clause rather than binding an empty list.
    *
    * The read is a SUPERSET of the run's mail. The lane therefore narrows the run verdict's `StallInput.mail`
    * through L1's `stallRunMail` (`run-mail-filtered-in-l1` (D-3650)), and only the session verdicts see the whole read.
@@ -3954,17 +3958,20 @@ export class CoordStore {
    *
    * Every integer is CAST and proven (D-2545), `runId` included: an off-run row's `runId` equals none of the
    * bound ids, so it cannot be read raw the way wave 1's run-only read did. SQL NULL is decided here, at the call
-   * site, never inside `persistedInt`. ALL-OR-FAILURE: one unrepresentable value refuses the whole read, and
-   * the detail names the column and no value. `kind`, `state` and `lastGate` are the raw columns: L1 compares
+   * site, never inside `persistedInt`. ALL-OR-FAILURE: one unrepresentable value refuses the whole read, the
+   * kind names its table (`mail-unreadable` or `delivery-unreadable`), and the detail names the column and no value.
+   * `kind`, `state` and `lastGate` are the raw columns: L1 compares
    * them with words, and an unnamed token matches none.
    */
-  stallMailFor(sessionId: string, runIds: readonly number[], sinceAt: number): { ok: true; mail: StallMailRow[]; deliveries: StallDeliveryRow[] } | { ok: false; kind: Extract<StallReadFailure, 'mail-unreadable'>; detail: string } {
+  stallMailFor(sessionId: string, runIds: readonly number[], sinceAt: number): { ok: true; mail: StallMailRow[]; deliveries: StallDeliveryRow[] } | { ok: false; kind: Extract<StallReadFailure, 'mail-unreadable' | 'delivery-unreadable'>; detail: string } {
     const onRuns = runIds.length === 0 ? '' : `runId IN (${placeholders(runIds.length)}) OR `;
-    const where = `${onRuns}((fromId = ? OR toId = ? OR id IN (SELECT mailId FROM mail_deliveries WHERE toId = ?)) AND at >= ?)`;
-    const binds = [...runIds, sessionId, sessionId, sessionId, sinceAt];
+    const where = `${onRuns}((fromId = ? OR toId = ? OR id IN (SELECT mailId FROM mail_deliveries WHERE toId = ? ` +
+      'AND mailId IN (SELECT id FROM mail WHERE at >= ?))) AND at >= ?)';
+    const binds = [...runIds, sessionId, sessionId, sessionId, sinceAt, sinceAt];
     const rows = this.db.prepare(
-      'SELECT CAST(id AS TEXT) AS idText, CAST(at AS TEXT) AS atText, CAST(runId AS TEXT) AS runIdText, ' +
-      `fromId, toId, kind, subject FROM mail WHERE ${where} ORDER BY id`,
+      'WITH sel AS MATERIALIZED (SELECT id, CAST(id AS TEXT) AS idText, CAST(at AS TEXT) AS atText, ' +
+      `CAST(runId AS TEXT) AS runIdText, fromId, toId, kind, subject FROM mail WHERE ${where}) ` +
+      'SELECT idText, atText, runIdText, fromId, toId, kind, subject FROM sel ORDER BY id',
     ).all(...binds) as unknown as
       { idText: string; atText: string; runIdText: string | null; fromId: string; toId: string; kind: string; subject: string }[];
     const mail: StallMailRow[] = [];
@@ -3995,15 +4002,15 @@ export class CoordStore {
     const deliveries: StallDeliveryRow[] = [];
     for (const d of drows) {
       const id = persistedInt(d.idText, 'delivery id');
-      if (!id.ok) return { ok: false, kind: 'mail-unreadable', detail: id.detail };
+      if (!id.ok) return { ok: false, kind: 'delivery-unreadable', detail: id.detail };
       const mailId = persistedInt(d.mailIdText, 'delivery mailId');
-      if (!mailId.ok) return { ok: false, kind: 'mail-unreadable', detail: mailId.detail };
+      if (!mailId.ok) return { ok: false, kind: 'delivery-unreadable', detail: mailId.detail };
       const deliveredAt = nullable(d.deliveredAtText, 'delivery deliveredAt');
-      if (!deliveredAt.ok) return { ok: false, kind: 'mail-unreadable', detail: deliveredAt.detail };
+      if (!deliveredAt.ok) return { ok: false, kind: 'delivery-unreadable', detail: deliveredAt.detail };
       const ackedAt = nullable(d.ackedAtText, 'delivery ackedAt');
-      if (!ackedAt.ok) return { ok: false, kind: 'mail-unreadable', detail: ackedAt.detail };
+      if (!ackedAt.ok) return { ok: false, kind: 'delivery-unreadable', detail: ackedAt.detail };
       const gateSince = nullable(d.gateSinceText, 'delivery gateSince');
-      if (!gateSince.ok) return { ok: false, kind: 'mail-unreadable', detail: gateSince.detail };
+      if (!gateSince.ok) return { ok: false, kind: 'delivery-unreadable', detail: gateSince.detail };
       deliveries.push({ id: id.value, mailId: mailId.value, toId: d.toId, state: d.state, deliveredAt: deliveredAt.value,
         ackedAt: ackedAt.value, lastGate: d.lastGate, gateSince: gateSince.value });
     }

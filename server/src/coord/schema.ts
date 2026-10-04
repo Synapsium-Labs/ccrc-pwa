@@ -1129,6 +1129,38 @@ export const MIGRATIONS: readonly string[] = [
   CREATE TABLE update_epoch (id INTEGER PRIMARY KEY CHECK (id = 1), epoch INTEGER NOT NULL, issuedAt INTEGER NOT NULL);
   INSERT INTO update_epoch (id, epoch, issuedAt) VALUES (1, 0, 0);
   `,
+
+  // ── 15: user_version 14 -> 15 ───────────────────────────────────────────
+  // Indexes for the stall watch's per-candidate mail read, `CoordStore.stallMailFor` (worker stall watch wave 5).
+  // That read runs once per stall candidate per sweep on the server's one synchronous handle, and before this entry
+  // both of its statements planned `SCAN mail` and `SCAN mail_deliveries` (EXPLAIN QUERY PLAN, measured), so every
+  // sweep's cost grew with the whole mail history, which is never pruned.
+  //
+  // THREE INDEXES, AND `mail_deliveries(toId)` IS NOT ONE OF THEM. The review that found the scan proposed
+  // `mail_deliveries(mailId)` and `mail_deliveries(toId)`. Measured: an index led by `toId` takes over every
+  // delivery read that filters `toId = ? AND state IN ('queued','delivered')`, because this server never runs
+  // ANALYZE and the planner rates one equality above a two-value IN. On a 20 000-mail fixture whose busiest
+  // recipient held half the deliveries, the peer-duplicate and peer-quota probes went from about 0.01 ms to about
+  // 14 ms and `outstandingMailFor` from about 0.7 ms to about 33 ms. The read's delivered-to arm is bounded through
+  // `mail_by_at` instead (`store.ts`, `stallMailFor`), so it needs no `toId` index. `stall-store.test.ts`'s plan rows
+  // pin that those reads still use `mail_deliveries_due`.
+  //
+  // `mail_by_run` serves the read's run clause (and `hasMailWithSubject`, every per-run mail statement, and the
+  // health read's join); `mail_by_at` its horizon; `mail_deliveries_by_mail` its delivery statement. `mail` is
+  // append-only and `mail_deliveries.mailId` is never rewritten, so the write cost is one b-tree insert per row.
+  // `IF NOT EXISTS`, so a database where an operator made one of these by hand still starts.
+  //
+  // MIGRATIONS[0..13] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry
+  // never runs. THIS ENTRY IS SLOT 15 AS WRITTEN, measured against origin/main at the wave's first step; an open
+  // branch held `user_version 14 -> 15` too, and whichever merges second moves up (entry 12 records the last branch
+  // that lost this race). RE-MEASURE immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE INDEX IF NOT EXISTS mail_by_run ON mail(runId);
+  CREATE INDEX IF NOT EXISTS mail_by_at ON mail(at);
+  CREATE INDEX IF NOT EXISTS mail_deliveries_by_mail ON mail_deliveries(mailId);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

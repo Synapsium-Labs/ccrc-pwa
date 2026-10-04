@@ -4202,10 +4202,17 @@ describe('worker stall watch wave 2: the three new operator-switch markers have 
     ['mail-gate-busy', 'server/src/turnidle.ts'],
   ];
 
-  it('CONTROL: the match is a substring — a line spelling mail-gate-busy-shadow also holds mail-gate-busy, never the reverse', () => {
+  it('CONTROL: the match is a substring — a line spelling mail-gate-busy-shadow also holds mail-gate-busy, never the reverse', async () => {
     expect(stallCodeText("export const MAIL_GATE_BUSY_SHADOW_MARKER = 'mail-gate-busy-shadow';").includes('mail-gate-busy')).toBe(true);
     expect(stallCodeText("export const MAIL_GATE_BUSY_MARKER = 'mail-gate-busy';").includes('mail-gate-busy-shadow')).toBe(false);
-    expect('stall-watch-w2-live'.includes('stall-watch-live')).toBe(false);
+    // From the SHIPPED names, never two literals (a literal against a literal can never fail): of every operator-switch
+    // marker the two describes pin, the one pair where a name holds another is the busy pair the caveat names. Imported
+    // here, not at the head of the file, because this file is cited by line.
+    const { STALL_MARKERS } = await import('../src/coord/stall.js');
+    const gate = await import('../src/turnidle.js');
+    const names: string[] = [...STALL_MARKERS, gate.MAIL_GATE_STRICT_MARKER, gate.MAIL_GATE_BUSY_MARKER, gate.MAIL_GATE_BUSY_SHADOW_MARKER];
+    expect(names.flatMap((a) => names.filter((b) => a !== b && a.includes(b)).map((b) => `${a} holds ${b}`)))
+      .toEqual([`${gate.MAIL_GATE_BUSY_SHADOW_MARKER} holds ${gate.MAIL_GATE_BUSY_MARKER}`]);
   });
 
   it.each(MARKERS)('%s: no shell line names it, and its one TS holder is its definer (%s)', (name, definer) => {
@@ -4258,5 +4265,23 @@ describe('one releasedFromOf (workspace lifecycle wave 1)', () => {
 
   it('the scan sees the one read it licenses (a blanker that ate code would pass the pin above vacuously)', () => {
     expect(code(path.join(ccrcRoot, 'shared', 'api.ts'))).toMatch(/return s\.releasedFrom \?\? null;/);
+  });
+});
+
+describe('worker stall watch wave 5: the largest epoch a Date holds is spelled once', () => {
+  // The turn marker's reader bounds every epoch by it (`marker-epochs-bounded` (D-3662)) and the watch's formatter
+  // refuses a value past it (`stallIso`). Two literals are two bounds that can drift apart; the reader's bound is
+  // only a guarantee for the formatter while they are the same number. Code lines only, so a sentence about it is
+  // not a second spelling.
+  const SPELLING = /\b8\.64e15\b|\b8_?640_?000_?000_?000_?000\b/;
+
+  it('CONTROL: the pattern sees both spellings of the number, and not a neighbour', () => {
+    expect(SPELLING.test('export const STALL_EPOCH_MAX = 8.64e15;')).toBe(true);
+    expect(SPELLING.test('const M = 8_640_000_000_000_000;')).toBe(true);
+    expect(SPELLING.test('const M = 8.64e14;')).toBe(false);
+  });
+
+  it('is spelled on a code line in server/src/coord/stall.ts alone', () => {
+    expect(ALL.filter((f) => SPELLING.test(stallCode(f))).map(rel).sort(), 'a second spelling').toEqual(['server/src/coord/stall.ts']);
   });
 });
