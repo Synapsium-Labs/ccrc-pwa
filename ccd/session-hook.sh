@@ -3503,6 +3503,45 @@ fi
 # incomplete heredoc ends the strip there (one cut, kept raw), and a
 # heredoc's rest-of-line is stripped without a second heredoc (a `<<a <<a`
 # line once recursed once per `<<`: 15 s and 2.9 GB at 36 KB, measured).
+# THE PAYLOAD CAP (landing-order wave 3): a command longer than
+# MERGE_PARSE_CAP bytes (UTF-8, as jq's `utf8bytelength` counts them) is never
+# parsed: neither the strip nor GH_MERGE_RE reads it. The strip's cost grows
+# with the quoted spans and substitutions it reads, and a hook that times out
+# or a jq killed for memory fails this deny OPEN (above), so an unbounded
+# command was a way past it. Over the cap the program asks the RAW command one
+# question, with one linear regex (MERGE_OVERCAP_RE, no nested quantifier):
+# does it spell a word-bounded `gh pr merge` — `gh`, not preceded by a letter,
+# digit or `_`, then blanks, `pr`, blanks, `merge`, ended as GH_MERGE_RE ends
+# it? Yes: the arm reads it as a merge it could not parse, and a held or child
+# session is DENIED with a reason that names the length and the cap and tells
+# it to split the command or rephrase it (a long PR body or mail goes in a
+# file the Write tool writes, passed by path); a landing is the operator's,
+# from their own shell. No: it passes unparsed. The word rule, not two bare
+# substrings, because `gh` is inside "though" and "high" and `merge` inside
+# "merged": over two days of fleet Bash commands, 4,478 ran longer than 2 KB,
+# the two substrings matched 1,340 of them (mostly prose) and the word rule
+# 131 (landing-order wave 3, the coordinator's amendment).
+# Only where the deny already applies: a session with no wave hold and no
+# child marker is never refused, under the cap or over it. THE VALUE IS
+# MEASURED: the largest round size at which the worst quote-dense shape
+# measured costs about a quarter of `session-hook-sync-advisory.test.ts`'s
+# 1500 ms whole-hook bound. That shape is a run of quoted substitutions that
+# each hold a quote or a `<` (`"$(<)"` repeated), one nested strip per span:
+# ~350 ms of CPU at 2048 bytes and ~650 ms at 4096 (bare `"`: ~125 and
+# ~190 ms), measured on the fleet box at load ~18.
+# THE COST, said: a held session's long command whose raw text spells
+# `gh pr merge` — a PR body or a mail that QUOTES it — is refused until it is
+# split or rephrased. WHAT PASSES OVER THE CAP, said: gh's own flags between
+# the words (`gh -R o/r pr merge`, `gh pr --repo o/r merge`), and every
+# spelling the word rule does not see (quoting inside a word, a variable, an
+# alias), padded past the cap; catching flags needs a repeated group, the
+# nested quantifier this regex is kept free of. Classified, not closed (the
+# stopping line, ruled 2026-10-03).
+# The cap also BOUNDS every superlinear walk above: the strip and GH_MERGE_RE
+# never read more than MERGE_PARSE_CAP bytes, so the 36-200 KB timings above
+# are what the cap prevents, not what a command costs.
+MERGE_PARSE_CAP=2048
+MERGE_OVERCAP_RE='(^|[^A-Za-z0-9_])gh\s+pr\s+merge($|[[:space:];&|()<>])'
 GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+pr([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+merge([[:space:];&|()<>]|$)'
 MERGE_STRIP_JQ='
 def SQ: $q + "[^" + $q + "]*" + $q;
@@ -3548,20 +3587,34 @@ def qs($h):
       | if $done | not then null else "<<" + $rest + "\n" + (if .x == "" and .q == null then .b | subs else "" end) end end
     elif startswith("$((") or startswith("((") or startswith("$[") or startswith("$$") then .
     else "" end) end;
-if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end'
+def capped(f): (.tool_input.command // "") as $c
+  | if ($c | type) == "string" and ($c | utf8bytelength) > $cap
+    then (if ($c | test($mre)) then "!\($c | utf8bytelength)" else "" end)
+    else "=" + f end;
+capped(if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end)'
 if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
-  mcmd=$(jq -r --arg q "'" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mcmd=""
-  if [[ -n "$mcmd" && "$mcmd" =~ $GH_MERGE_RE ]]; then
+  mout=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg mre "$MERGE_OVERCAP_RE" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mout=""
+  mcmd="" mover=""
+  case "$mout" in
+    '='*) mcmd=${mout#=} ;;
+    '!'*) mover=${mout#!} ;;
+  esac
+  if [[ -n "$mover" ]] || [[ -n "$mcmd" && "$mcmd" =~ $GH_MERGE_RE ]]; then
     mwhy=""
     if _ct_read "$REG/$id.hold" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then
       mwhy="this workspace's hold reads \`$CT_V\` — a programme wave's session"
     elif [[ -e "$REG/$id.child" ]]; then
       mwhy="this workspace carries the child marker — a dispatched child, whose run has let it go"
     fi
-    if [[ -n "$mwhy" ]]; then
+    if [[ -n "$mwhy" && -n "$mover" ]]; then
+      mreason="ccrc: this command is $mover bytes, over the merge deny's $MERGE_PARSE_CAP-byte parse cap, and its raw text spells \`gh pr merge\`, so the deny cannot read whether it runs one; $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
+      mreason+=" Split it into commands of at most $MERGE_PARSE_CAP bytes, or rephrase it so its text does not spell \`gh pr merge\` (a mail or PR body that quotes it): write a long body to a file with the Write tool and pass the path (\`gh pr create --body-file <file>\`, \`ccrc-api ... --json <file>\`). A landing is the operator's, from their own shell."
+    elif [[ -n "$mwhy" ]]; then
       mreason="ccrc: $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
       mreason+=" Report wave-done to your coordinator; it lands the PR."
+    fi
+    if [[ -n "$mwhy" ]]; then
       pre_json=$(_hook_deny_json "$mreason") || pre_json=""
     fi
   fi

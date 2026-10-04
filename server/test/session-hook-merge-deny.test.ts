@@ -38,6 +38,17 @@ const hold = (text: string): void => { fs.writeFileSync(path.join(home, '.cc-ses
 /** The child marker, as `cmd_ws_add --child 17` writes it. */
 const marker = (): void => { fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.child`), '17'); };
 
+/** The payload cap, READ from the hook (never re-typed here): a command longer
+ *  than this many bytes is never parsed (landing-order wave 3). */
+const CAP = ((): number => {
+  const m = /^MERGE_PARSE_CAP=(\d+)$/m.exec(fs.readFileSync(HOOK, 'utf8'));
+  if (m === null) throw new Error('the hook no longer defines MERGE_PARSE_CAP as a bare integer');
+  return Number(m[1]);
+})();
+/** `unit` repeated, then `tail`, cut to exactly `bytes` bytes (ASCII units). */
+const sized = (unit: string, tail: string, bytes: number): string =>
+  unit.repeat(Math.ceil(bytes / unit.length)).slice(0, bytes - tail.length) + tail;
+
 /** One PreToolUse Bash call through the real hook. Exit 0 and a silent stderr
  *  are the hook's standing contract, asserted on every call. */
 const bash = (command: string): { deny: string | null; stdout: string } => {
@@ -181,24 +192,31 @@ describe('the worker merge deny', () => {
     }
   });
 
-  it('answers a 100 KB adversarial command in bounded time — the head match restarts at every separator', () => {
+  it('denies none of a cap-sized adversarial command, in bounded time — the separator walks the cap now bounds', () => {
     // A token class that can cross a separator, or a blank class that includes
     // the newline, makes every `;a=` / `\na=` / `;gh -R ` start walk to the end
     // of the payload: 5 to 9 s at 36 KB, and 1.6 s at 36 KB for the gh-flag
-    // classes alone (so 100 KB, where a walk costs ~12 s and the fix ~0.2 s). An
-    // unterminated `<<a` is the strip's own walk: a heredoc that had to find its
-    // terminator would scan to the end once per `<<`. The tail carries `merge`
+    // classes alone, before the payload cap. Since the cap nothing longer than
+    // MERGE_PARSE_CAP bytes is parsed, so these run at exactly the cap, the
+    // largest command the strip and the head match still read; the cap's own
+    // cases below keep everything longer out. At this size those walks cost too
+    // little for the clock to catch (wave 2's rows H20, H21 and H39 measure
+    // green here, at 2048 and at 8192): the cap, not this clock, is their guard
+    // now, and this case is the boundary and no-false-deny check it reads as.
+    // An unterminated `<<a` is the strip's own walk. The tail carries `merge`
     // outside any quote or comment, so the prefilter lets the match run and a
-    // regex that matched any `merge` would deny; none is a merge. The hold makes
-    // a wrong match a deny this case can see (review 241 F6).
+    // regex that matched any `merge` would deny; none is a merge. The hold
+    // makes a wrong match a deny this case can see (review 241 F6).
     hold(WAVE_HOLD);
     const units = [';', '\n'].flatMap((sep) => ['a=', 'gh ', 'gh -R ', 'timeout 1 '].map((unit) => `${sep}${unit}`));
     for (const u of [...units, '<<a\n']) {
+      const c = sized(u, '\necho merge origin', CAP);
+      expect(Buffer.byteLength(c)).toBe(CAP);
       const t0 = Date.now();
-      const r = bash(u.repeat(Math.ceil(100000 / u.length)) + '\necho merge origin');
+      const r = bash(c);
       const ms = Date.now() - t0;
       expect(r.deny, `a non-merge was denied: ${JSON.stringify(u)}`).toBeNull();
-      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(3000);
+      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(1500);
     }
   }, 60000);
 
@@ -219,6 +237,92 @@ describe('the worker merge deny', () => {
       expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(1500);
     }
   }, 60000);
+
+  // THE PAYLOAD CAP (landing-order wave 3). Over MERGE_PARSE_CAP bytes nothing
+  // is parsed: the raw command is asked only whether it holds both `gh` and
+  // `merge`, and a held or child session's command that does is refused unread.
+  describe('the payload cap', () => {
+    const MENTION = 'echo "then gh pr merge 42 later" ';
+    it('parses a command of exactly the cap, and refuses one byte more unread — naming both numbers', () => {
+      hold(WAVE_HOLD);
+      expect(bash(sized(MENTION, 'x', CAP)).deny, 'at the cap the strip reads the quoted mention as text').toBeNull();
+      const over = bash(sized(MENTION, 'x', CAP + 1)).deny;
+      expect(over, 'one byte over the cap, a command spelling `gh pr merge` was let through').not.toBeNull();
+      expect(over).toContain(`this command is ${CAP + 1} bytes`);
+      expect(over).toContain(`${CAP}-byte parse cap`);
+      expect(over).toContain(WAVE_HOLD);
+      expect(over).toContain('the coordinator merges, workers never do');
+      expect(over).toContain('or rephrase it');
+      // A real merge at the cap is read, and refused for what it is.
+      const real = bash(sized('gh pr merge 42 ', ' ', CAP)).deny;
+      expect(real).not.toBeNull();
+      expect(real, 'a merge at the cap was refused unread: the parse did not run').not.toContain('parse cap');
+    });
+
+    it('counts bytes, not characters', () => {
+      hold(WAVE_HOLD);
+      // Each `é` is two bytes: fewer characters than the cap, more bytes.
+      const c = 'echo gh pr merge ' + 'é'.repeat(Math.ceil(CAP / 2));
+      expect(c.length).toBeLessThan(CAP);
+      expect(Buffer.byteLength(c)).toBeGreaterThan(CAP);
+      const d = bash(c).deny;
+      expect(d, 'a command over the cap in BYTES was parsed as if it were under it').not.toBeNull();
+      expect(d).toContain(`this command is ${Buffer.byteLength(c)} bytes`);
+    });
+
+    it('lets an over-cap command through unparsed unless its raw text spells a word-bounded `gh pr merge`', () => {
+      hold(WAVE_HOLD);
+      // The fixture's cwd carries `merge`, so the arm's substring prefilter
+      // passes whatever the command says, and the jq program is reached.
+      expect(home).toContain('merge');
+      // Prose holding both substrings: the rule the coordinator replaced
+      // would have refused this (landing-order wave 3's amendment).
+      expect(bash(sized('though the branch merged, the high road held; ', ' ', CAP + 1)).deny, 'prose holding `gh` and `merge` as substrings').toBeNull();
+      expect(bash(sized('echo merge ', ' ', CAP + 1)).deny, 'no `gh` in it').toBeNull();
+      expect(bash(sized('gh pr view 42; echo merge ', ' ', CAP + 1)).deny, 'gh and merge, but not `gh pr merge`').toBeNull();
+      expect(bash(sized('echo xgh pr merge 42 ', ' ', CAP + 1)).deny, 'a `gh` that is the tail of another word').toBeNull();
+      expect(bash(sized('echo gh pr merged it ', ' ', CAP + 1)).deny, 'a `merge` that is the head of another word').toBeNull();
+    });
+
+    it('refuses only where the deny applies: a session with no wave hold and no marker is never asked', () => {
+      expect(bash(sized('gh pr merge 42 ', ' ', CAP + 1)).deny).toBeNull();
+      marker();
+      const r = bash(sized('gh pr merge 42 ', ' ', CAP + 1)).deny;
+      expect(r, 'a marked child\'s over-cap merge went through').not.toBeNull();
+      expect(r).toContain('child marker');
+      expect(r).toContain('parse cap');
+    });
+
+    it('refuses an over-cap body that QUOTES `gh pr merge` — the accepted cost — and says to split or rephrase', () => {
+      hold(WAVE_HOLD);
+      const mail = (pad: number): string => "ccrc-api mail send --json - <<'J'\n" +
+        sized('the wave is done and the suite is green. ', '', pad) + '\nthe coordinator then runs `gh pr merge 42`.\nJ';
+      // Under the cap the same body is a quoted heredoc's text, and passes.
+      expect(bash(mail(200)).deny, 'a short quoted body was refused: the parse did not run').toBeNull();
+      const c = mail(CAP);
+      expect(Buffer.byteLength(c)).toBeGreaterThan(CAP);
+      const d = bash(c).deny;
+      expect(d, 'an over-cap body spelling `gh pr merge` went through').not.toBeNull();
+      expect(d).toContain('parse cap');
+      expect(d).toContain('or rephrase it');
+      expect(d).toContain('Write tool');
+    });
+
+    it('answers an over-cap quote-dense command in bounded time — the strip never reads it', () => {
+      // `"$(<)"` repeated is the costliest shape measured per byte (one nested
+      // strip per span): ~350 ms of CPU at 2048 bytes, so 36 KB parsed would
+      // take seconds. Over the cap it costs one fixed-string scan.
+      hold(WAVE_HOLD);
+      for (const [unit, tail, denied] of [['"$(<)"', '\ngh pr merge 42', true], ['"', '\necho merge origin', false]] as const) {
+        const c = sized(unit, tail, 36000);
+        const t0 = Date.now();
+        const r = bash(c);
+        const ms = Date.now() - t0;
+        expect(r.deny !== null, `${JSON.stringify(unit)}: denied ${r.deny !== null}`).toBe(denied);
+        expect(ms, `the hook took ${ms} ms on 36 KB of ${JSON.stringify(unit)}`).toBeLessThan(1500);
+      }
+    }, 60000);
+  });
 
   // Review 241 F1: the strip once kept a "…" span that held a `$(` whole, so
   // its CLOSING quote opened a new span that swallowed the merge after it; and
