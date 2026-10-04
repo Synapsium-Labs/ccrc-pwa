@@ -20,7 +20,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 | **merged** `3255571a1` (2026-10-03 23:09, R22); live at the next auto-update |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | #237 | **merged** `7e858c8bf` (2026-10-04 12:40, R26) |
-| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **fix round** — review 256 clean but for F1 (R28); one fix round, then a fresh review |
+| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **in review** — fix round done at `b29aba143` (2026-10-04 16:28), re-measured; review run 257 (R29) |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -456,6 +456,20 @@ Output: `w2-shadow-review.json` in the coordinator notes.
   - **Arming readiness, from the review.** `stall-watch-escalate`'s code gates close on merge; it still waits on wave 6
     deployed and seen live in shadow, G1's newly visible fix-round r2/r3 shapes, and the operator's R2/R17-F1 clause
     amendment. `stall-watch-w2-live` is not ready (arming track).
+- **R29 (coordinator, 2026-10-04 16:33): the fix round is verified, and its review is dispatched.**
+  - **The claim.** Mail 3397 reports two commits on `4980d79fb`. `94063f217` carries all five R28 rulings (D-3803 and
+    D-3804): `MAIL_REPLAY_MS`'s value is in `shared/api.ts`, at the end of the file so cited lines do not shift.
+    `b29aba143` fixes three stale comments its own re-review found. The worker re-gated each suite: stall-verdict
+    301 (+4), the rest unchanged, the citation instrument 7 passed | 328 skipped, and 33 mutation rows red (the plan's
+    29 plus four new). Its suite line stays `red`/`unclear`, on purpose: clause 15 reads the first full run, which was
+    the load run R27 records.
+  - **Re-measured.** The branch tip, the PR head and the handoff all read `b29aba143`. The probe against `main`
+    (`c9ada6543`) is clean, and no absorb was taken. Run 255 advanced to `awaiting-review` and the server agreed.
+  - **Review run 257** is dispatched to a fresh reviewer, with the held-out panel and a fix-round lens. The lens
+    covers: whether D-3803's estimate is ever early, every caller of `stallToWorker` after the dropped conjunct, the
+    two re-derived assertions, and whether `shared/api.ts` stays L0. The reviewer also runs the merged tree and the
+    PWA build. The dispatch call timed out on the client (curl rc 28), but the run list shows it dispatched with the
+    brief queued, so it was not re-sent.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
