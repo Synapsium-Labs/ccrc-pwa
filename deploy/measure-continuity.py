@@ -293,6 +293,7 @@ def stage4(ctx):
     except FileNotFoundError:
         return {"rescue": {"swap_log": "absent"}}
     rescues, landings, carried = [], collections.defaultdict(list), []
+    moves, landed_moves, chain_opens = collections.defaultdict(list), collections.defaultdict(list), collections.defaultdict(list)
     opened, ended = collections.Counter(), collections.Counter()
     chain_neither, near_swap = 0, 0
     # §11 item 6, ruled 2026-09-24 "leave it and count it": a STALLED session
@@ -324,12 +325,15 @@ def stage4(ctx):
             t = s4_epoch(m.group(1))
             if t is not None:
                 landings[m.group(2)].append(t)
+                landed_moves[m.group(2)].append((t, m.group(3), m.group(4)))
             continue
         m = S4_RESCUE.match(line)
         if m:
             t = s4_epoch(m.group(1))
             if inwin(t):
                 rescues.append((t, m.group(2), dict(S4_TOKEN.findall(m.group(5)))))
+            if t is not None:
+                moves[m.group(2)].append((t, m.group(3), m.group(4), dict(S4_TOKEN.findall(m.group(5)))))
             continue
         m = S4_CARRIED.match(line)
         if m:
@@ -342,6 +346,8 @@ def stage4(ctx):
             t = s4_epoch(m.group(1))
             if inwin(t):
                 opened[m.group(3)] += 1
+            if t is not None and m.group(3) == "chain":
+                chain_opens[m.group(2)].append(t)
             if upto(t):
                 pending[m.group(2)] = (m.group(3), m.group(5))
             continue
@@ -379,6 +385,39 @@ def stage4(ctx):
         past.append(("open", ref - int(reset)))
     past_by_end = collections.Counter(end for end, _ in past)
 
+    # §9's stage-4 target, restated 2026-10-03 (review 246's F6): no session
+    # takes a FOURTH rescue inside an hour that no chain wait preceded. Rule 3
+    # counts LANDED rescues (a dispatch whose swap was refused never left), so
+    # this row does too: a rescue landed when the session's next `swap <id>:
+    # <from> -> <to>` line, before its next rescue, names the same move. Only a
+    # fourth rescue the chain wait could have held is asked about — one on a
+    # dated block (`reset=` and `type=` on its line) not past its five-hour
+    # reset's grace, the chain wait's own gate; "preceded" is a `kind=chain`
+    # entry line for that session between the third rescue and the fourth. A
+    # `reset=` that is not one to twelve digits is no date: any session can
+    # append to swap.log, and `int()` of a forged token raises.
+    # Named cost: a Codex-lane session is never chain-waited, by rule, and the
+    # log does not say which lane a source account is, so a dated fourth rescue
+    # of one counts here; its line names its source account.
+    unchained = 0
+    for sid, mv in moves.items():
+        mv.sort(key=lambda x: x[0])
+        lands = sorted(landed_moves.get(sid, []))
+        done = []
+        for k, (t, src, dst, tok) in enumerate(mv):
+            nxt = mv[k + 1][0] if k + 1 < len(mv) else float("inf")
+            if any(t <= lt < nxt and (ls, ld) == (src, dst) for lt, ls, ld in lands):
+                done.append((t, tok))
+        for i in range(3, len(done)):
+            t, tok = done[i]
+            if not inwin(t) or t - done[i - 3][0] >= 3600 or not re.fullmatch(r"\d{1,12}", tok.get("reset", "")) or "type" not in tok:
+                continue
+            if tok.get("type") == "five_hour" and t >= int(tok["reset"]) + S4_GRACE:
+                continue
+            if not any(done[i - 1][0] <= c <= t for c in chain_opens.get(sid, [])):
+                unchained += 1
+                break
+
     # Sessions with RESCUE_CHAIN_COUNT + 1 (= 4) or more auto-rescues inside any 60 minutes.
     by_sess = collections.defaultdict(list)
     for t, sid, _ in rescues:
@@ -412,6 +451,7 @@ def stage4(ctx):
         "rescues": len(rescues),
         "sessions_with_4plus_rescues_in_an_hour": four_plus,
         "max_rescues_in_an_hour": worst,
+        "sessions_with_an_unchained_4th_rescue_in_an_hour": unchained,
         "chain_waits_ending_in_neither_swap_nor_reset": chain_neither,
         "rescues_on_a_carried_in_banner": on_carried,
         "rescues_with_a_dated_row": dated,

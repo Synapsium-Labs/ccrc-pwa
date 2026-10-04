@@ -2845,15 +2845,15 @@ while executing is named in the wave-done mail by a new slug. A session that can
 Departures from the spec (and from wave 2's plan) that this plan makes, each measured above — nine, against a block
 of ten (Open question 9):
 
-- **`rule-three-counts-landed-rescues`** — minor 5, decided with F1: spec §5.4 rule 3's count and its just-left skip
+- **D-3896** `rule-three-counts-landed-rescues` — minor 5, decided with F1: spec §5.4 rule 3's count and its just-left skip
   read only rescues whose `cmd_swap` landing line followed them before the session's next rescue; the spread list
   keeps every dispatch, landed or in flight (a move still carrying is the herd). Spec rev 7 amended (Task 1 Step 6).
   Rows 1.2, 1.3.
-- **`stage-four-target-restated`** — F6, ruled by the coordinator 2026-10-03: §9's stage-4 target is "0 sessions with
+- **D-3897** `stage-four-target-restated` — F6, ruled by the coordinator 2026-10-03: §9's stage-4 target is "0 sessions with
   a fourth auto-rescue in an hour that no chain wait preceded" (the raw 4+ count reported). This plan adds two
   readings the ruling did not carry and writes BOTH into the §9 row (Task 1 Step 6): it counts landed rescues, and it
   asks only of a fourth rescue the chain wait could have held (a dated block not past its five-hour reset's grace,
-  rule 3's own gate) — the second is a narrowing put to the coordinator to confirm or drop (Open question 5). A
+  rule 3's own gate) — the second, a narrowing the ruling did not carry, was confirmed by the coordinator at dispatch (Open question 5). A
   Codex-lane session, never chain-waited by rule, is the named cost; a `reset=` that is not one to twelve digits is
   no date. Rows 1.7–1.10, 1.12–1.14.
 - **`operator-choice-which-command`** — §5.7 says "the newest `/model` or `/effort` local command that no `.typed`

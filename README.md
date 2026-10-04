@@ -2261,12 +2261,14 @@ were rescued four times inside an hour (2026-09-08..09-23).
   (until that rescue's logged `reset=` passes), and prefers a target no rescue landed on in the last
   `RESCUE_SPREAD_WINDOW=600` seconds when another has room — never at the price of a class degrade, never by
   turning a rescue with a target into an undecidable one, and never by passing over the session's own recovered
-  home (the affinity path would only move it back). A fourth rescue within the hour on an Anthropic lane, on a
+  home (the affinity path would only move it back). A fourth landed rescue within the hour on an Anthropic lane, on a
   dated block not already past its five-hour reset's grace, first waits up to `RESCUE_CHAIN_WAIT=1800`
   seconds (`kind=chain`), then swaps; with no room it becomes the no-room wait; at its account's reset it ends in
   place if armed and is rescued if stalled. A Codex-lane session is never chain-waited, so the lane's "pool is
   full" signal is written at once. Rule 3 reads the tail of `swap.log` (`RESCUE_LOG_TAIL_BYTES`) only when a
-  decision needs it — not on the ticks a strand waits through.
+  decision needs it — not on the ticks a genuine no-room strand waits through (a do-not-bounce strand reads it).
+  A rescue counts, and marks the account it left, only once `cmd_swap`'s landing line follows it: a refused swap
+  never left.
 - **Where to look.** `$REG/<id>.rescuewait` holds the one current or last wait (`state= kind= since= reset=
   wrapper=`, plus `until= end=` once it ends) and purges with the row. `swap.log` says `rescuewait <id>: …` once
   on entry and `rescuewait-end <id>: … end=<word>` once on exit — never the word `hold`, which is the

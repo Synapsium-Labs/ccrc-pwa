@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1fcb583acc4bf160bea7e70035ad61327511793f83c8c581f3d98066f5778816
+# ccrc:generated 1 sha256=b3a7c386cd3e7331156c546fbfcbfa640e0be84bd429f31d840b5521c70097dc
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -17787,8 +17787,8 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # keeps its exact shape; `via=transcript` is unchanged; `via=banner` is the
     # new word, and an operator seeing it knows the pane said so in this year's
     # wording rather than the transcript having been scanned for it.
-    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")$(_rescue_line_extra)" >> "$REG/swap.log"; _rescuewait_close "$id" swap
-    _dispatch_swap "$id" "$target"
+    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")$(_rescue_line_extra)" >> "$REG/swap.log"
+    _dispatch_swap "$id" "$target"   # an open rescue wait ends `swap` at cmd_swap's landing, never here: the swap can still be refused
     return 0
   fi
   # WAVE 3 §3.3, AND THE PLACEMENT IS THE WHOLE RULING. Everything from here
@@ -23191,7 +23191,11 @@ _rescue_policy() {   # id wrapper pane hard-blocked -> 0 PROCEED as today | 1 HO
   # footer (`_rescue_armed`), never a draft or a line of prose saying the words.
   local id="$1" wrapper="$2" pane="$3" hb="$4" now rec state kind since rreset rend R
   if [[ -z "$hb" ]]; then
-    _rescuewait_close "$id" clear
+    # EVERY NOT-BLOCKED TICK OF EVERY SESSION reaches this line, and the close's
+    # two command substitutions fork whether or not a record exists (measured
+    # ~1.7 ms a tick a session). The `-e` test is `_strand_clear`'s, and it
+    # changes no answer: the close is a no-op with no open record.
+    [[ -e "$REG/$id.rescuewait" ]] && _rescuewait_close "$id" clear
     return 0
   fi
   now=$(date +%s); R="${HARD_BLOCK_RESET:-}"
@@ -23267,28 +23271,48 @@ _rescue_history() {   # id -> 0 measured (RESCUE_COUNT, RESCUE_SKIP_LEFT, RESCUE
   # policy and its measurement cannot disagree about what happened. Only its
   # tail (`RESCUE_LOG_TAIL_BYTES`), and only when a decision needs it: the chain
   # check of a blocked tick with no wait open, and the target choice of a
-  # rescue that has somewhere to go — not the ticks a strand waits through,
-  # which need neither.
+  # rescue that has somewhere to go — not the ticks a GENUINE no-room strand
+  # waits through, which need neither. A do-not-bounce strand (its only room
+  # is an account it just left) reads it on every tick, twice: once in
+  # `_rescue_target` and once to say so (`_rescue_strand_cause`, departure 3849).
   # Its times are `date '+%F %T'`, LOCAL time, so python converts with `mktime`.
-  #   RESCUE_COUNT       this session's `auto-rescue` lines in RESCUE_CHAIN_WINDOW;
+  #   RESCUE_COUNT       this session's rescues in RESCUE_CHAIN_WINDOW that LANDED;
   #   RESCUE_SKIP_LEFT   their SOURCE accounts ("an account the session just
   #                      left blocked"), except one whose logged `reset=` passed;
   #   RESCUE_SKIP_RECENT every session's rescue TARGET in RESCUE_SPREAD_WINDOW.
+  # A RESCUE LANDED when `cmd_swap`'s own `swap <id>: <from> -> <to> (uuid …)`
+  # line follows its `auto-rescue` line before this session's next one: a
+  # dispatch the swap refused never left its account, so it neither counts
+  # toward the chain wait nor marks that account left. The spread list keeps
+  # every dispatch, landed or in flight — a move still carrying is the herd.
   # UNMEASURABLE IS TODAY'S BEHAVIOUR: no chain wait, no skip. A log that does
   # not exist yet is a MEASURED empty history (rc 0), not an unreadable one, and
-  # so is a tail with no rescue in it (`grep` rc 1).
+  # so is a tail with no rescue in it (`grep` rc 1). A forged line cannot crash
+  # the read: `reset=` takes at most twelve digits, and each list is checked
+  # against a set beside it, so a long tail costs one pass.
   local id="$1" out
   RESCUE_COUNT=0; RESCUE_SKIP_LEFT=""; RESCUE_SKIP_RECENT=""
   [[ -e "$REG/swap.log" ]] || return 0
   [[ -f "$REG/swap.log" && -r "$REG/swap.log" ]] || return 2
   command -v python3 >/dev/null 2>&1 || return 2
-  out=$(tail -c "$RESCUE_LOG_TAIL_BYTES" "$REG/swap.log" 2>/dev/null | { grep -F ' auto-rescue ' || (( $? == 1 )); } | python3 -c '
+  out=$(tail -c "$RESCUE_LOG_TAIL_BYTES" "$REG/swap.log" 2>/dev/null | { grep -F -e ' auto-rescue ' -e ' swap ' || (( $? == 1 )); } | python3 -c '
 import re, sys, time
 sid, now, chain, spread = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 pat = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) auto-rescue (\S+): (\S+) \(blocked\) -> (\S+)(.*)$")
-count, left, recent = 0, [], []
+land = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d swap (\S+): (\S+) -> (\S+) \(uuid ")
+count, left, recent, in_left, in_recent, pending = 0, [], [], set(), set(), None
 for raw in sys.stdin.buffer:
-    m = pat.match(raw.decode("utf-8", "replace").rstrip("\n"))
+    line = raw.decode("utf-8", "replace").rstrip("\n")
+    m = land.match(line)
+    if m:
+        if pending is not None and m.group(1) == sid and (m.group(2), m.group(3)) == pending[:2]:
+            count += 1
+            r = re.search(r" reset=(\d{1,12})(?!\d)", pending[2])
+            if not (r and int(r.group(1)) <= now) and pending[0] not in in_left:
+                in_left.add(pending[0]); left.append(pending[0])
+            pending = None
+        continue
+    m = pat.match(line)
     if not m:
         continue
     try:
@@ -23298,13 +23322,10 @@ for raw in sys.stdin.buffer:
     age = now - at
     if age < 0:
         continue
-    if m.group(2) == sid and age < chain:
-        count += 1
-        r = re.search(r" reset=(\d+)", m.group(5))
-        if not (r and int(r.group(1)) <= now) and m.group(3) not in left:
-            left.append(m.group(3))
-    if age < spread and m.group(4) not in recent:
-        recent.append(m.group(4))
+    if m.group(2) == sid:
+        pending = (m.group(3), m.group(4), m.group(5)) if age < chain else None
+    if age < spread and m.group(4) not in in_recent:
+        in_recent.add(m.group(4)); recent.append(m.group(4))
 print(str(count) + "|" + " ".join(left) + "|" + " ".join(recent))
 ' "$id" "$(date +%s)" "$RESCUE_CHAIN_WINDOW" "$RESCUE_SPREAD_WINDOW" 2>/dev/null) || return 2
   IFS='|' read -r RESCUE_COUNT RESCUE_SKIP_LEFT RESCUE_SKIP_RECENT <<<"$out"
@@ -23315,8 +23336,9 @@ print(str(count) + "|" + " ".join(left) + "|" + " ".join(recent))
 _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout and rc, rule 3's skip lists applied to a RESCUE
   # NOT A RESCUE, NOWHERE TO GO, OR NOBODY CAN SAY IS `_swap_target` BYTE FOR
   # BYTE: the affinity path's choice is not this spec's; skipping can only
-  # remove a candidate, so a strand — asked every 5 s for hours — never pays
-  # the swap-log read; and the unskipped probe's undecidable answer (rc 2-5)
+  # remove a candidate, so a GENUINE no-room strand — asked every 5 s for
+  # hours — never pays the swap-log read (a do-not-bounce strand does: its
+  # unskipped probe names the account it left); and the unskipped probe's undecidable answer (rc 2-5)
   # goes back as it came — the spread pass's never does.
   # For a rescue with somewhere to go, SWAP_TARGET_SKIP names what the
   # candidate walk and the home-return branch pass over: first the accounts
@@ -23357,8 +23379,10 @@ _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout a
 _rescue_strand_cause() {   # id cur home hard-blocked hrc -> rc 0 prints a strand cause when rule 3's do-not-bounce alone left this rescue nowhere to go | rc 1 prints nothing
   # THE DO-NOT-BOUNCE STRAND SAYS SO (departure 3849). `_rescue_target`'s
   # just-left-only pass answers an empty name both when no account has room
-  # and when the only one with room is an account this session just left
-  # blocked; `_strand_mark`'s computed reason (`_strand_why`, which knows no
+  # and when every one with room is an account this session just left
+  # blocked — after two or three rescues inside RESCUE_CHAIN_WINDOW that can be
+  # several, so the cause names the unskipped probe's BEST one, never "the
+  # only" one; `_strand_mark`'s computed reason (`_strand_why`, which knows no
   # skip list) then tells the operator "no account in pool … can take it" in
   # both. Those ask for opposite acts — wait or add capacity, versus leave it
   # alone — and the false one invites the hand bounce rule 3 exists to stop,
@@ -23371,7 +23395,7 @@ _rescue_strand_cause() {   # id cur home hard-blocked hrc -> rc 0 prints a stran
   [[ -n "$out" && "$out" != "$2" ]] || return 1
   _rescue_history "$1" || return 1
   [[ " $RESCUE_SKIP_LEFT " == *" $out "* ]] || return 1
-  printf '%s\n' "its only account with room, $out, is one it left blocked inside RESCUE_CHAIN_WINDOW, and a rescue does not take it back (do not bounce)"
+  printf '%s\n' "its best account with room, $out, is one it left blocked inside RESCUE_CHAIN_WINDOW, and a rescue does not take it back (do not bounce)"
 }
 
 _rescue_line_extra() {   # -> the dated row's tokens for the `auto-rescue` line: ` reset=<epoch>`, ` type=<word>`, ` row=<epoch>`, each only when the verdict kept it

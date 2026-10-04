@@ -5,6 +5,8 @@ adversarial review (all surviving findings applied) and a rev-3 verification pas
 rulings on the written spec (C9–C11, C13, C14; §11 items 1–5 ruled 2026-09-23, item 6 found at plan time and ruled 2026-09-24) and the measurements behind
 them; rev 5 reconciles it with its first wave plans, 2026-09-24; rev 6 records rule 1 (C12) as shipped on the pane's
 own process start (D-3526) and rules 2–3 as re-planned on its reader, 2026-09-30 ·
+rev 7 counts rule 3's rescues on their landing and restates §9's stage-4 target (review 246, ruled 2026-10-03),
+and records stage 7 as planned by its wave-3 plan, 2026-10-04 ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-landing-order-and-main-churn-design.md`. Its stage 5 needs this spec's stage 1; this
@@ -425,15 +427,16 @@ is the move, the carry and a round trip.
    A longer bound for a session with delegated work in flight is not specified: no paused run has been seen under
    a blocked parent (§1.1), and the stage-2 spike measures whether one survives a wait (§11 item 3).
 3. **Spread and do not bounce.** Target choice skips an account the session just left blocked — the source account
-   of any of this session's auto-rescues within `RESCUE_CHAIN_WINDOW` (3600 s), until that rescue's logged reset
+   of any of this session's auto-rescues that landed within `RESCUE_CHAIN_WINDOW` (3600 s), until that rescue's logged reset
    passes — and prefers a target that has not received any session's rescue within `RESCUE_SPREAD_WINDOW` (600 s)
    when another placeable target exists — never the session's own recovered home, which the affinity path would
    only return it to, and never at the price of a class degrade or of a tick that cannot decide: a spread that
    leaves only lanes nobody measured falls back to the just-left-only choice. The history is read from the swap
-   log's tail (`RESCUE_LOG_TAIL_BYTES`, 1 MiB) only when a decision needs it, never on the ticks a strand waits
+   log's tail (`RESCUE_LOG_TAIL_BYTES`, 1 MiB) only when a decision needs it, never on the ticks a genuine no-room strand waits
    through; its `auto-rescue` line carries the dated row as appended `reset=` (a reset the row predates), `type=`
    and `row=` tokens (`row=` alone for a carried row D-3526 keeps a block). A session already rescued three times
-   in the last hour, on an Anthropic lane and a dated block, is not rescued a fourth time at once: it takes a
+   in the last hour (rescues whose swap landed: a refused one never left), on an Anthropic lane and a dated block,
+   is not rescued a fourth time at once: it takes a
    **chain wait** on its current account for at most 30 minutes (a knob), recorded in `.rescuewait` with
    `kind=chain` — never opened on a five-hour reset whose grace has already passed, and held only on the account
    it was taken on — then swaps to a target with room that is not the account it just left blocked. A chain wait ends early at its account's
@@ -645,7 +648,7 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 | 1 | `(kept)` carries by reason (`busy`, `budget`, `error`, bare); journal-missing resume refusals | 774 of 1,310, all by existence; 8 | only `busy`/`budget`, under 2%, reported with and without the pairs stranded before stage 1's deploy; 0 |
 | 2 | spike outcome | — | decides stage 3 |
 | 3 | rescues with live work that resumed the exact run; finished agents re-run by relaunches; manifest writes ending `unmeasured`; stalled vs not-stalled restarts with a non-empty manifest | 11 of 30; up to 3.6M tokens; —; — | over two thirds; near 0; under 5%; reported |
-| 4 | sessions with 4 or more auto-rescues in an hour; chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner (since D-3526, only a landing whose Claude Code never came up); near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min; no-room waits a stalled session outlived its own reset in, with the seconds past it (§11 item 6) | at least 1 (archive max 4); —; 4 of 5 manual swaps with live work; 32 of 248; —; —; — | 0; 0; 0; reported; reported; reported; reported |
+| 4 | sessions with a fourth auto-rescue in an hour that no chain wait preceded, counting rescues that landed and asking it only of a fourth rescue the chain wait could have held (a dated block not past its five-hour reset's grace — rule 3's own gate; the raw count of sessions with 4 or more is reported beside it); chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner (since D-3526, only a landing whose Claude Code never came up); near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min; no-room waits a stalled session outlived its own reset in, with the seconds past it (§11 item 6) | at least 1 (archive max 4); —; 4 of 5 manual swaps with live work; 32 of 248; —; —; — | 0; 0; 0; reported; reported; reported; reported |
 | 5 | holed or unmeasured wave-dones accepted without a note | not measured | 0 |
 | 6 | pressure kills of background shells; dead ccd scopes that pass the inert test yet survive a day; OOM stops of pane scopes whose session was idle 30 minutes or more with a live background shell, and all pane-scope OOM stops | 186 since 2026-09-04 (9 since 09-18); 5 of 12 on 2026-09-23; B, measured the week before the variable ships, and 16 in 2026-09-16..23 | 0; 0; at most B + 2 a week, reported |
 | 7 | restarts that revert an operator's `/model` | this session's case | 0 |
