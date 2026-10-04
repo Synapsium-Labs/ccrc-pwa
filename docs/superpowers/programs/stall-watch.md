@@ -22,7 +22,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | #237 | **merged** `7e858c8bf` (2026-10-04 12:40, R26) |
 | 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **merged** `698f679da` (2026-10-04 21:21, R33); live at the next auto-update |
-| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`); Task 4 server comments | — | **dispatched** 2026-10-04 as run 259 to a fresh child (`ccrc-pwa-amber-meadow`), R33 |
+| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`); Task 4 server comments | #246 | **in review** — wave-done at `35fe57070` (read 2026-10-04 23:49), re-measured; review run 262 (R34) |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -553,6 +553,25 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     brief reads the plan at `b620da428` and carries the split agreed with run 174.
   - **Still open with the operator:** the worker-clause sentence (R31's Important finding), and the Settings section's
     scope (R30).
+- **R34 (coordinator, 2026-10-04 23:51): wave 7's wave-done is verified, and its review is dispatched.**
+  - **The claim.** Mail 3429 reports PR #246 from `ws/amber-meadow`: seven commits on `698f679da`, all four tasks done,
+    and the whole-branch review clean. The counts: coordinator-skill 156 → 159, worker-skill 48 → 50, the citation
+    instrument unchanged. Mutation rows C1–C10 and W1–W14 are red. The suite line reads `red`/`unclear`: the first
+    full run was concurrent and loaded, and every red file but two went green alone. Those two, ccrc-install and the
+    PWA, were left unmeasured when the reaper killed their quiet re-runs; CI's selection is their arbiter.
+  - **Re-measured.** The branch tip, the PR head and the handoff all read `35fe57070`. The probe against `main`
+    (`b40f4145e`, which now carries #215) is clean, so nothing licensed an absorb. Run 259 advanced `working`, then
+    `awaiting-review`. All four items settled `done`.
+  - **Three departures.**
+    - **D-3807 `wake-list-split-closes-and-joins`**, the block's last number. The extended wake-list split changes
+      the guard's logic and adds four mutation rows, so it is a departure in substance. It is defined in wave 7's plan.
+    - `closed-row-message-backticks-escaped` and `stall-deaf-docstrings-scoped-to-serial-replays` take no number. One
+      fixes a row message that did not parse, with the same text; the other is comments only.
+  - **The block is exhausted.** A later departure needs a fresh allocation from `POST /api/ledger/deviations`, made
+    by this session at the time. That includes the worker-clause sentence, if the operator says yes.
+  - **Review run 262** is dispatched to a fresh reviewer, with the held-out panel and a contract-text lens. The lens
+    covers clause 16's truth against `main`'s ball rule after #241, the wake-list split's stopping line, and Task 4's
+    scoped docstrings. The reviewer also runs the quiet ccrc-install and PWA suites, and the tree merged with #215.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
