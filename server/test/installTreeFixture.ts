@@ -77,6 +77,17 @@ export const TREE_FILES = [
   // rather than of an installed box. Its two imports, `shared/roster-json.mjs`
   // and `shared/base-url.mjs`, are both in this list too.
   'deploy/account-op.mjs',
+  // Plan 3a Task 10: the model-registry op, the two modules it imports at
+  // load, the probe it runs and the template `ccrc models litellm` renders,
+  // so the PLACED launcher can run `ccrc models refresh --all` the way
+  // `ccrc-models.service` runs it (`ExecStart=%h/.local/bin/ccrc models
+  // refresh --all`). Without the two imports every models verb dies with
+  // ERR_MODULE_NOT_FOUND. Copied, never stubbed, for the GPT lane's reason above.
+  'ccd/ccrc-models-probe',
+  'deploy/models-op.mjs',
+  'deploy/litellm-config.template.yaml',
+  'shared/modelenv.mjs',
+  'shared/litellm.mjs',
   // The roster SEED `_inst_roster` places on a box that has none. The
   // realistic "the operator already has a roster" fixture is no repo file any
   // more — the shipped five-account migration roster left the tree with the

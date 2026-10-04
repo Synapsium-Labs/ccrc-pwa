@@ -42,7 +42,8 @@ import { markGenerated } from '../../shared/mark.mjs';
 import { generateWrapperBody } from '../../shared/wrapper.mjs';
 import {
   alive, assertManagerStandIns, codexAuthDir, eventually, fakeUnit, failUnitStop, freePorts,
-  killLaneProcesses, MANAGER_STANDIN_MARK, plantSystemd, portAccepts, psArgs, spawnFakeLitellm, systemctlCalls, systemdRunCalls,
+  killLaneProcesses, MANAGER_STANDIN_MARK, plantCodexUsage, plantForeignUsage, plantSystemd, portAccepts, psArgs, spawnFakeLitellm,
+  systemctlCalls, systemdRunCalls,
 } from './codexLaneFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
 
@@ -5270,6 +5271,34 @@ function plantLockProbe(home: string, id: string): string {
   return dir;
 }
 
+/** Plan 3a Task 7: a marked `systemctl` stand-in, FIRST on PATH through
+ *  `run()`'s extraEnv. It answers `--user disable --now ccrc-codex-usage@*.timer`
+ *  by removing that timer's wants link, and records it. It records any argv
+ *  naming `ccgpt-usage` to `usage-ctl-foreign`, and passes EVERY other call to
+ *  this file's own stand-in at `~/.local/bin/systemctl`, whose poison still
+ *  answers the lane library. `keepLink` makes it a manager that answers 0 and
+ *  leaves the link where it was (C15). */
+function plantUsageCtl(home: string, o: { keepLink?: boolean } = {}): string {
+  const dir = join(home, 'usage-ctl');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'systemctl'), [
+    '#!/bin/sh',
+    MANAGER_STANDIN_MARK,
+    'case " $* " in *" ccgpt-usage"*) printf \'%s\\n\' "$*" >> "$HOME/usage-ctl-foreign" ;; esac',
+    'if [ "$1" = --user ] && [ "$2" = disable ] && [ "$3" = --now ]; then',
+    '  case "$4" in ccrc-codex-usage@*.timer)',
+    '    printf \'%s\\n\' "$*" >> "$HOME/usage-ctl-calls"',
+    o.keepLink === true ? '    exit 0 ;;' : '    rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$4"; exit 0 ;;',
+    '  esac',
+    'fi',
+    `exec '${join(home, '.local', 'bin', 'systemctl')}' "$@"`,
+  ].join('\n') + '\n', { mode: 0o755 });
+  return dir;
+}
+const usageCtlCalls = (home: string): string[] =>
+  (existsSync(join(home, 'usage-ctl-calls')) ? readFileSync(join(home, 'usage-ctl-calls'), 'utf8').split('\n').filter(Boolean) : []);
+const lexists = (p: string): boolean => { try { lstatSync(p); return true; } catch { return false; } };
+
 // These cases deliberately share one process across sequential ordinary tests.
 // The first mimics setup failing after it obtained a current-run supervisor; the
 // second is its only pre-fix escape hatch, and proves afterEach drained it.
@@ -5997,6 +6026,97 @@ describe('ccrc account remove', () => {
     expect(r.stderr).not.toMatch(/stop that owner by hand/);
     expect(readFileSync(roster, 'utf8'), 'the roster was dropped past an unproven tier').toBe(rosterBefore);
     for (const f of state.laneOnly) expect(existsSync(f), `${f} was reaped past an unproven tier`).toBe(true);
+  });
+
+  it('C12: removing a codex account disables ccrc\'s own usage timer for it, reports the link removed, keeps its OAuth and logs, and never names another repository\'s (Plan 3a Task 7)', async () => {
+    const home = box('ccrc-account-remove-codex-usage-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    const auth = join(home, codexAuthDir(lane.id), 'auth.json');
+    mkdirSync(path.dirname(auth), { recursive: true });
+    writeFileSync(auth, '{"fixture":"oauth"}\n');
+    // The OAuth file is compared by lstat only — size, mtime, inode — and never
+    // read: nothing this plan adds opens an auth.json, its tests included (G8).
+    const authStat = (): [number, number, number] => { const st = lstatSync(auth); return [st.size, st.mtimeMs, st.ino]; };
+    const authBefore = authStat();
+    const state = plantLaneState(home, lane);
+    const { link } = plantCodexUsage(home, lane.id, { row: false });
+    const foreign = plantForeignUsage(home, lane.id);
+    const ctl = plantUsageCtl(home);
+    plantTmux(home, []);
+    const r = run(home, ['account', 'remove', '--id', lane.id], '', { PATH: `${ctl}:${env(home)['PATH'] ?? ''}` });
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    expect(usageCtlCalls(home)).toEqual([`--user disable --now ccrc-codex-usage@${lane.id}.timer`]);
+    expect(lexists(link), 'ccrc\'s usage timer is still enabled for a removed account').toBe(false);
+    expect(j['removed']).toContain(link);
+    expect(lexists(foreign) && lstatSync(foreign).isSymbolicLink(), 'another repository\'s usage link was removed').toBe(true);
+    expect(existsSync(join(home, 'usage-ctl-foreign')), 'a systemctl call named another repository\'s usage unit').toBe(false);
+    expect(authStat(), 'the removal changed the lane\'s OAuth file').toEqual(authBefore);
+    for (const [f, bytes] of Object.entries(state.logs)) expect(readFileSync(f, 'utf8'), f).toBe(bytes);
+  });
+
+  it('C13: a usage timer the manager will not disable is an operator step, and the removal still completes', async () => {
+    const home = box('ccrc-account-remove-codex-usage-refused-');
+    const lane = await codexLaneOnFreePorts();
+    seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantCodexLauncher(home);
+    plantLaneState(home, lane);
+    const { link } = plantCodexUsage(home, lane.id, { row: false });
+    plantTmux(home, []);
+    // No stand-in: this file's own systemctl poison refuses every call (97).
+    const r = run(home, ['account', 'remove', '--id', lane.id]);
+    expect(r.code, r.stderr).toBe(0);
+    const steps = oneObject(r)['operator-steps'] as string[];
+    expect(steps).toContain(`ccrc's usage timer ccrc-codex-usage@${lane.id}.timer is still enabled for the removed account ${lane.id}, so it may go on rewriting $HOME/.cc-limits/${lane.id}.json. Run: systemctl --user disable --now ccrc-codex-usage@${lane.id}.timer`);
+    expect(lexists(link)).toBe(true);
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toContain(`"${lane.id}"`);
+  });
+
+  it('C14: an EXTERNAL account still carrying the ccrc usage timer its codex days enabled has it disabled too — and asks the manager nothing else (C4 stands)', () => {
+    const home = box('ccrc-account-remove-external-usage-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'ext-a', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-ext-a', homeAble: false,
+        telemetry: 'codex', exec: { kind: 'external', provider: 'openai' } },
+      HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantLauncher(home, 'ext-a', '#!/bin/sh\n# somebody else wrote this\nexit 0\n');
+    const { link } = plantCodexUsage(home, 'ext-a', { row: false });
+    const ctl = plantUsageCtl(home);
+    plantTmux(home, []);
+    const r = run(home, ['account', 'remove', '--id', 'ext-a'], '', { PATH: `${ctl}:${env(home)['PATH'] ?? ''}` });
+    expect(r.code, r.stderr).toBe(0);
+    expect(usageCtlCalls(home)).toEqual(['--user disable --now ccrc-codex-usage@ext-a.timer']);
+    expect(lexists(link)).toBe(false);
+    expect(existsSync(join(home, 'systemctl-poison')), 'an external removal asked the manager anything else').toBe(false);
+  });
+
+  // The guard C12-C14 cannot reach: ccrc reports the link removed only once a
+  // re-read finds it gone, never on the manager's exit code alone. Without
+  // this case `_acct_remove_usage`'s `! _codex_usage_enabled` re-measure can be
+  // deleted with every case green (measured: mutation row A4g).
+  it('C15: a disable the manager answers 0 while the link stays is NOT reported removed — it is an operator step, measured and not assumed (Plan 3a Task 7)', () => {
+    const home = box('ccrc-account-remove-usage-unmeasured-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'ext-a', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-ext-a', homeAble: false,
+        telemetry: 'codex', exec: { kind: 'external', provider: 'openai' } },
+      HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    plantLauncher(home, 'ext-a', '#!/bin/sh\n# somebody else wrote this\nexit 0\n');
+    const { link } = plantCodexUsage(home, 'ext-a', { row: false });
+    const ctl = plantUsageCtl(home, { keepLink: true });
+    plantTmux(home, []);
+    const r = run(home, ['account', 'remove', '--id', 'ext-a'], '', { PATH: `${ctl}:${env(home)['PATH'] ?? ''}` });
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    // THE ATTEMPT IS THE CONTROL: the disable was asked, and answered 0.
+    expect(usageCtlCalls(home)).toEqual(['--user disable --now ccrc-codex-usage@ext-a.timer']);
+    expect(lexists(link)).toBe(true);
+    expect(j['removed'], 'a link still on disk was reported removed on the manager\'s word').not.toContain(link);
+    expect(j['operator-steps']).toContain('ccrc\'s usage timer ccrc-codex-usage@ext-a.timer is still enabled for the removed account ext-a, so it may go on rewriting $HOME/.cc-limits/ext-a.json. Run: systemctl --user disable --now ccrc-codex-usage@ext-a.timer');
   });
 
   it('keeps a generated lane credential whose path ccrc cannot prove it derived', () => {

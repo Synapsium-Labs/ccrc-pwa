@@ -108,7 +108,7 @@ const serverSources = (): string => {
 const CONTRACT = [
   'Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.',
   'The box token is read from `~/.cc-secrets/ccrc-mail.token` and sent as the `x-ccrc-mail-token` header. It is never printed, never pasted into a prompt, never committed.',
-  'This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server when that child’s run closes; this session’s own workspace is cleaned up by a human, never by a sweep.',
+  'This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server once this session is finished with it — at its run’s close when nothing still needs it, otherwise later by the server’s sweep (a child held for its program’s next wave once that program has no open run, a review child once the run it reviewed has closed, a child whose reclaim was deferred or never started); this session’s own workspace is cleaned up by a human, never by a sweep.',
   'This session never unpauses itself. `$REG/coordinator-paused` is the operator’s file; a dispatch refused `paused` is a stop, and the next act is a report, not a retry.',
   'A wave brief is written prose, reviewed like code. The template is the shape; the content is this session’s judgement, and a brief that is missing something the next wave needs is a defect in the ledger.',
   'A `wave-done` is a claim, not a fact. Re-measure it, then submit the fingerprint to `POST /api/runs/:id/advance` and believe the server’s answer over your own.',
@@ -248,7 +248,7 @@ describe('the coordinator skill: its contract', () => {
     const childReclaimSrc = readFileSync(path.join(root, 'server/src/coord/childReclaim.ts'), 'utf8');
     const notWhyUnion = /export type ChildReclaimNotWhy =([^;]+);/.exec(childReclaimSrc)![1]!;
     const shippedNotWhy = [...notWhyUnion.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]).sort();
-    expect(shippedNotWhy, 'the derivation read nothing from childReclaim.ts').toHaveLength(6);
+    expect(shippedNotWhy, 'the derivation read nothing from childReclaim.ts').toHaveLength(10);
     expect(listed, '§6 childReclaimWhy list ≠ ChildReclaimNotWhy').toEqual(shippedNotWhy);
     // Spec §5.7: the report outlives the review close; the coordinator
     // cites the reviewer's own path, and step 6 is not changed to say otherwise.
@@ -524,6 +524,13 @@ describe('the coordinator skill: linkage', () => {
       // first half of an invitation.
       'GET /api/coord/caps',
       'POST /api/coord/caps',
+      // CHILD-RECLAMATION wave 4 — the operator-dial shape once more, and the
+      // `POST /api/coord/pause` argument applied to the lane that deletes. A
+      // coordinator told about this route would be told how to stop, or
+      // restart, the reclamation of its OWN children — the act rule 4 takes out
+      // of every session's hands. The forbid-mention case below is what turns
+      // this permission-to-omit into a prohibition.
+      'POST /api/coord/reclaim-pause',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -1564,6 +1571,19 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // omission, and this is what forbids the mention. Both halves, because the
     // read is the first half of the invitation.
     expect(allSkillText).not.toContain('/api/coord/caps');
+  });
+
+  it('never names the reclaim switch — a door that would tell a coordinator how to stop its own children being reclaimed', () => {
+    // Child-reclamation wave 4, the caps dial's accounting: EXEMPT only
+    // PERMITS the omission; this is what FORBIDS the mention. Rule 4 takes
+    // the reclamation of a coordinator's children out of every session's
+    // hands and gives it to the server; the one switch over that is the
+    // operator's, from the phone. The BARE verb too, not only the route: ccd
+    // has no caller auth, so `ccd reclaim-pause --state on` from a session's
+    // own shell is the shorter door (and `reclaim-paused`, the marker it
+    // writes, contains the same token).
+    expect(allSkillText).not.toContain('/api/coord/reclaim-pause');
+    expect(allSkillText).not.toContain('reclaim-pause');
   });
 
   it('never names the break door — a door the claimant is not the one to walk through', () => {

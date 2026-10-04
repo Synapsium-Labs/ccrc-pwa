@@ -1,5 +1,5 @@
 import { CCD_ARGV, verbSupported } from '../ccdargv.js';
-import { isFullLine, parsePrLines, phaseFor } from '../prstate.js';
+import { isFullLine, parsePrLines, phaseFor, type CcdPrLine } from '../prstate.js';
 import { measuredIdentity, readRegistryMeasured } from '../registry.js';
 import { readBranchTip } from './gitref.js';
 import type { CcrcConfig } from '../config.js';
@@ -27,7 +27,16 @@ export interface DoneClaim {
 }
 
 export type DoneVerdict =
-  | { ok: true; measured: { branchTip: string; prNumber: number | null; prPhase: PrPhase } }
+  | { ok: true; measured: { branchTip: string; prNumber: number | null; prPhase: PrPhase };
+      /** The `pr-state` line this verdict measured — SERVER-INTERNAL, never
+       *  serialised onto the wire (neither close route ever spreads `verdict`
+       *  into a reply; both read `.code`/`.detail` off the `ok:false` arm
+       *  only). Spec 2026-09-22 §5.7: the close reuses this line for
+       *  its own child-spent redate instead of asking `pr-state` a second
+       *  time inside the same mutex section — the same `CCD_ARGV.prStateSession`
+       *  call and the same `parsePrLines`, so a second call would measure
+       *  nothing this one has not already. */
+      line: CcdPrLine }
   | { ok: false; code: DoneRejectCode; detail: string };
 
 /** `verifyDone`'s two object parameters, named rather than inlined: the
@@ -193,6 +202,12 @@ export async function resolveDoneBranch(
  *    diff — spec:246-252, "briefs are written prose reviewed like code". Do
  *    not let a later reader mistake this token for the stronger claim.
  *
+ * The `ok:true` verdict also carries the measured `pr-state` `line` itself
+ * (spec §5.7) — not a new measurement, the SAME `CCD_ARGV.prStateSession`
+ * row this function already read to answer `prNumber`/`prPhase`. It exists so
+ * the close's own child-spent redate can reuse it instead of asking
+ * `pr-state` again inside the same mutex section; it is never put on the wire.
+ *
  * The claim is UNTRUSTED (`DoneClaim`'s own docstring): `branchTip` and
  * `handoffCommit` are validated below by the same `SHA` regex; `prPhase` and
  * `prNumber` are validated the same way, through `isPrPhase` and a `typeof`
@@ -265,7 +280,7 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
     return { ok: false, code: 'pr-regressed',
       detail: `the claim names PR #${claim.prNumber}, the branch is bound to #${measured.number}` };
   }
-  return { ok: true, measured: { branchTip: tip, prNumber: measured.number, prPhase: measured.phase } };
+  return { ok: true, measured: { branchTip: tip, prNumber: measured.number, prPhase: measured.phase }, line };
 }
 
 /** A review run's done-claim (design 2026-09-14 §5.3): the tip the reviewer

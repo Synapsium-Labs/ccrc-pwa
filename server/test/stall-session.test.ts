@@ -14,12 +14,13 @@ import {
   stallOrphanDSubject, stallOrphanESubject, stallFailedSubject,
   ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS, FAILED_IDLE_MS, FAILED_REPEAT_MS, MAIL_STUCK_MS, BACKLOG_HORIZON_MS,
   ORPHAN_PUSH_MS, MARKER_UNREADABLE_MS, AUTO_CONTINUE_RECENT_MS, STALL_ORPHANED_PREFIX, STALL_FAILED_PREFIX,
-  STOP_FAILURE_ERRORS, stallVerdict,
+  STOP_FAILURE_ERRORS, stallVerdict, DELEGATE_CAP_MS,
 } from '../src/coord/stall.js';
 import type {
   StallArm, StallArming, StallDeliveryRow, StallHold, StallInput, StallMailRow, StallMode, StallNotice, StallRunRow,
   StallSessionInput, StallSessionRole, StallVerdict, StallWorker, TurnMark, TurnMarkRead,
 } from '../src/coord/stall.js';
+import { mailTurnIdle, type MailTurnMode } from '../src/turnidle.js';
 
 const H = 3_600_000;
 const MIN = 60_000;
@@ -72,7 +73,7 @@ function mailRow(id: number, at: number, fromId: string, toId: string, subject: 
   return { id, at, runId, fromId, toId, kind, subject };
 }
 function delivery(id: number, mailId: number, over: Partial<StallDeliveryRow> = {}): StallDeliveryRow {
-  return { id, mailId, toId: WORKER, state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null, ...over };
+  return { id, mailId, toId: WORKER, state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null, replayCount: 0, ...over };
 }
 function notice(mode: StallMode, arm: StallArm, rung: 1 | 2 | 3, key: number, at: number): StallNotice {
   return { mode, arm, rung, key, at };
@@ -631,9 +632,9 @@ describe('mail-stuck (§5.2): per queued delivery to a run worker or a coordinat
   });
   it('mail-stuck: idle is live idle or shell, else a current marker that reads done or failed', () => {
     expect(stallMailStuckVerdicts(stuckInput({}, { worker: workerAt('shell', NOW - 2 * H) }), NOW), 'shell').toEqual([stuck()]);
-    expect(stallMailStuckVerdicts(stuckInput({}, { worker: busy }), NOW), 'busy with a current done mark').toEqual([stuck()]);
+    expect(stallMailStuckVerdicts(stuckInput({}, { worker: busy, arming: { ...W2, mailMode: 'busy' } }), NOW), 'busy with a current done mark, under mail-gate-busy (D-3798)').toEqual([stuck()]);
     const failedMark = mark({ state: 'failed', err: 'server_error', at: NOW - 2 * H, stopAt: NOW - 2 * H });
-    expect(stallMailStuckVerdicts(stuckInput({}, { worker: busy, mark: failedMark }), NOW), 'busy with a current failed mark').toEqual([stuck()]);
+    expect(stallMailStuckVerdicts(stuckInput({}, { worker: busy, mark: failedMark, arming: { ...W2, mailMode: 'busy' } }), NOW), 'busy with a current failed mark, under mail-gate-busy (D-3798)').toEqual([stuck()]);
     expect(stallMailStuckVerdicts(stuckInput({}, { worker: busy, mark: workingMark }), NOW), 'busy with a working mark').toEqual([NONE]);
     expect(stallMailStuckVerdicts(stuckInput({}, { worker: busy, liveStartedAt: NOW - MIN }), NOW), 'busy with a stale done mark').toEqual([NONE]);
     expect(stallMailStuckVerdicts(stuckInput({}, { worker: busy, mark: { ok: false, reason: 'malformed' } }), NOW), 'busy, malformed').toEqual([NONE]);
@@ -768,5 +769,52 @@ describe('hold 2b: the session verdicts hold where the run verdict caps (session
     const clear = workerAt('idle', IDLE);
     expect(stallFailedVerdict(sessionInput({ worker: clear, mark: failedMark }), NOW)).toMatchObject({ act: 'notify', arm: 'failed', rung: 1 });
     expect(stallOrphanEVerdict(sessionInput({ worker: clear, mark: doneMark }), NOW)).toMatchObject({ act: 'notify', arm: 'orphan-e', rung: 1 });
+  });
+});
+
+// ── gate-held-mail-is-not-stuck (D-3798): mail-stuck's idle clock follows the mail gate in force ─────────────────────
+// Only `mail-gate-busy` delivers on a live `busy` over a finished turn (`turnidle.ts`'s `mailTurnIdle`). Under every other
+// mode the gate holds that mail by design while background work runs, so the clock starts DELEGATE_CAP_MS after the Stop.
+describe('mail-stuck under the mail gate in force (gate-held-mail-is-not-stuck (D-3798))', () => {
+  const STOP = NOW - 2 * H;
+  const doneAt = (stopAt: number): TurnMarkRead => mark({ at: stopAt, turnAt: stopAt - 10 * MIN, stopAt });
+  /** A worker whose turn ended at `stopAt` and whose live word has read busy since five minutes later: a main loop
+   *  idling over a background subagent. One brief, queued at `mailAt`, still queued. */
+  const busyOver = (stopAt: number, mailAt: number, arming: StallArming = W2): StallSessionInput => sessionInput({
+    worker: workerAt('busy', stopAt + 5 * MIN), mark: doneAt(stopAt), arming,
+    mail: [mailRow(501, mailAt, COORD, WORKER, 'brief', 67)], deliveries: [delivery(901, 501)],
+  });
+  const stuck = (key = 901): StallVerdict => ({ act: 'notify', arm: 'mail-stuck', rung: 1, key, to: 'operator' });
+
+  it('under the default gate (no mode given reads shell) a live busy over a current done marker holds: no push at 1.2 h', () => {
+    expect(stallMailStuckVerdicts(busyOver(STOP, NOW - 3 * H), NOW)).toEqual([NONE]);
+  });
+
+  it('the hold releases under exactly the modes whose gate delivers busy over a done marker (turnidle.ts owns that rule)', () => {
+    const delivers = (mode: MailTurnMode): boolean =>
+      mailTurnIdle({ status: 'busy', statusUpdatedAt: STOP + 5 * MIN }, { ok: true, state: 'done', at: STOP, stopAt: STOP, graceUntil: null }, NOW, 0, mode).deliver;
+    for (const mode of ['strict', 'shell', 'busy-shadow', 'busy'] as const) {
+      expect(stallMailStuckVerdicts(busyOver(STOP, NOW - 3 * H, { ...W2, mailMode: mode }), NOW), mode).toEqual(delivers(mode) ? [stuck()] : [NONE]);
+    }
+    // CONTROLS, so the loop is never vacuous: the gate delivers busy under `busy`, and not under `busy-shadow`.
+    expect(delivers('busy')).toBe(true);
+    expect(delivers('busy-shadow')).toBe(false);
+  });
+
+  it('the busy hold is bounded: from DELEGATE_CAP_MS after the Stop the clock runs, so a recipient wedged at busy is still reported', () => {
+    const old = NOW - DELEGATE_CAP_MS - MAIL_STUCK_MS;
+    expect(stallMailStuckVerdicts(busyOver(old, old - H), NOW), 'at the bound').toEqual([stuck()]);
+    expect(stallMailStuckVerdicts(busyOver(old + MIN, old - H), NOW), 'a minute short of it').toEqual([NONE]);
+  });
+
+  it('S2: three mails queued to a worker idling over a progressing subagent push nothing before the bound, then once per delivery', () => {
+    const T = NOW - 4 * H;   // the worker's Stop; its subagent ran on for about 4 h (the review's S2: deliveries 3148, 3156, 3177)
+    const input = sessionInput({
+      worker: workerAt('busy', T + 5 * MIN), mark: doneAt(T),
+      mail: [mailRow(3148, T - 79 * MIN, COORD, WORKER, 'resume', 67), mailRow(3156, T + 7 * MIN, COORD, WORKER, 'resume', 67), mailRow(3177, T + 145 * MIN, COORD, WORKER, 'resume', 67)],
+      deliveries: [delivery(3148, 3148), delivery(3156, 3156), delivery(3177, 3177)],
+    });
+    expect(stallMailStuckVerdicts(input, T + 3 * H + 38 * MIN)).toEqual([NONE, NONE, NONE]);
+    expect(stallMailStuckVerdicts(input, T + DELEGATE_CAP_MS + MAIL_STUCK_MS)).toEqual([stuck(3148), stuck(3156), stuck(3177)]);
   });
 });

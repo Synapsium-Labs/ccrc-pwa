@@ -55,7 +55,7 @@ import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
 import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
 import {
   SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,
-  spineSystemdRun,
+  spineSystemdRun, plantLiveShape, foreignSnapshot, stateCallsNaming,
 } from './codexLaneFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -414,6 +414,9 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     'case "$1" in',
     '  daemon-reload) exit 0 ;;',
     '  enable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
+    // Plan 3a Task 6: the usage converge (`_inst_enable`) may withdraw a ccrc
+    // usage timer; recorded and answered here, never a real manager.
+    '  disable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
     '  restart) [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
     '  try-restart) [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     // Task 2 (§18 "the lock closes before the sweep": "a lingering stub
@@ -12708,4 +12711,37 @@ describe('ccrc update: the codex steps ride the staged spine (Plan 2b-2 Task 10)
     expect(tiers).toBeGreaterThan(services);
     expect(spineRunCalls(home)).toEqual([]);
   });
+});
+
+// Plan 3a Task 10 — the merge is itself an inert rollout: the REAL update onto
+// this tree, over the fleet box's live shape (codexLaneFixture's `plantLiveShape`),
+// on the box the "codex steps ride the staged spine" describe above uses.
+describe('Plan 3a Task 10 — ccrc update onto this tree over today\'s live shape', () => {
+  itLinux('a real update leaves every foreign byte and link, names no ccgpt- unit in a state-changing verb, and builds nothing', () => {
+    const home = freshUpdateBox('ccrc-update-rehearsal-live-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    plantLiveShape(home, (argv) => {
+      const env: NodeJS.ProcessEnv = { ...updateEnv(home), CCGPT_CONFIG: undefined };   // REHEARSAL_ENV's reason
+      assertSpineFrontContained(env, home);
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), ...argv], { env, encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    });
+    const s0 = foreignSnapshot(home);
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(foreignSnapshot(home), 'the update changed a byte, mode or link another repository owns').toEqual(s0);
+    const calls = existsSync(join(home, 'systemctl-calls'))
+      ? readFileSync(join(home, 'systemctl-calls'), 'utf8').split('\n').filter(Boolean) : [];
+    expect(stateCallsNaming(calls, /\bccgpt-/), 'a state-changing systemctl verb named a ccgpt- unit').toEqual([]);
+    expect(calls.filter((a) => /^--user enable --now ccrc-codex-usage@/.test(a)),
+      'an instance was enabled on a box with no codex lane').toEqual([]);
+    expect(spineRunCalls(home)).toEqual([]);
+    expect(existsSync(join(home, 'foreign-ccgpt-calls')), 'ccrc ran the other repository\'s launcher').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'runtime', 'codex')), 'a runtime was built').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'codex')), 'lane state was written').toBe(false);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('SKIP codex: ')), 'the staged spine\'s closing doctor')
+      .toHaveLength(1);
+  }, 120_000);
 });
