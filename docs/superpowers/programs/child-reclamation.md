@@ -43,6 +43,13 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-04 23:41 — still halted; no further checks scheduled.** Re-measured read-only at 23:41. The fleet box's
+  `~/.ccrc/update.json` still reads `phase: failed` for v0.0.78, written at 22:10 and not changed since. `ccrc
+  rollout --to v0.0.79 --check` still reports the fleet box on v0.0.78 and the server box on v0.0.76, both behind.
+  The feed has no update event after 22:02's queued v0.0.78 run. The halt lifts only when the operator acks the
+  fleet node from the Updates screen. Convergence and the first sweep passes are measured after that ack, not by a
+  timer.
+
 - **2026-10-04 22:59 — v0.0.79 has not converged: a failed v0.0.78 row on the fleet box halts the updater.**
   Measured read-only at 22:57.
   - **Where the boxes are:** `ccrc rollout --to v0.0.79 --check` reports the fleet box on v0.0.78 (`f789d97d`) and
