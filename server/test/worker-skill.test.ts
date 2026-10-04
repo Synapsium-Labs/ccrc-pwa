@@ -715,14 +715,19 @@ describe('the stop clause names only wakes that wake (stall watch spec §6.2)', 
   // asks, a structured ask, or a background kind whose words map, one for one,
   // to `stall.ts`'s STALL_RESUMING_KINDS. The second scans the list for any
   // form of resume, the word S4's interim completion used.
-  // The list splits on every comma, so kinds inside one background member are
-  // joined by `or` or `and` only: "a background agent, workflow or teammate"
-  // leaves a bare "a background agent" that matches no member shape, and reds
-  // on purpose.
+  // Where the stopping line sits. Closed: a comma, a semicolon, and an `or` or
+  // `and` before a determiner (a, an, any, the, your, one) all split the list,
+  // so a wake joined in any of those ordinary ways must match a member shape on
+  // its own. The list splits on every comma, so kinds inside one background
+  // member are joined by `or` or `and` only, with no determiner: "a background
+  // agent, workflow or teammate" leaves a bare "a background agent" that
+  // matches no member shape, and reds on purpose. Not closed, known evasions: a
+  // modifier clause after "asks" inside the mail member, and a `. ` inside a
+  // member, which cuts the list short (the S3 row shares that `. ` assumption).
   const wakeMembers = (line: string): string[] => {
     const colon = line.indexOf(': ');
     const list = line.slice(colon + 2, line.indexOf('. ', colon));
-    return list.split(/,\s+(?:or\s+)?|\s+or\s+(?=an?\s)/);
+    return list.split(/;\s+|,\s+(?:(?:or|and)\s+)?|\s+(?:or|and)\s+(?=(?:an?|any|the|your|one)\s)/);
   };
   /** The word the clause uses for each kind `stall.ts` says resumes the session on its own. */
   const RESUMING_WORD: Record<string, string> = { subagent: 'agent', workflow: 'workflow' };
