@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~3900 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~5600 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -251,7 +251,9 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 - `~/.ccrc/coord.db`: `node:sqlite` `DatabaseSync`, WAL, `user_version` migrations that **refuse to start rather
   than open empty**. Its synchrony is a stated concurrency invariant — **do not wrap it async** (a repository/async
   interface over `CoordStore` is explicitly rejected). It is a server-side RE-MEASUREMENT of ccd's flat files
-  (registry, hold, `.prhistory`), which stay ground truth; a lost coord.db reconstructs from them.
+  (registry, hold, `.prhistory`), which stay ground truth; a lost coord.db re-measures those from them, but
+  what it adds on top — mail, claims, asks, central pool edges, update intents — is gone without the snapshot
+  every `ccrc update` (and `ccrc backup`) takes into `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed).
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
