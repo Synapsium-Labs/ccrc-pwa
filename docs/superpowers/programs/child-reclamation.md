@@ -43,6 +43,12 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-04 17:06 — overlap rule agreed with stall-watch wave 7 (mail 3401).** Stall-watch wave 7 amends
+  coordinator clause 16, with `CONTRACT[15]`, its own new rows in `coordinator-skill.test.ts` and
+  `worker-skill.test.ts`, and the sentences that quote that clause. #215 changes clause 3 only (`CONTRACT` at :110,
+  plus added blocks at :523 and :1572), measured at `6138030e`, and clause 16 reaches #215 only through `main`. So the
+  edits are disjoint: both PRs land, and the second lander merges `main`, keeps both sides and re-runs the skill
+  suites and the README citation cases.
 - **2026-10-04 15:52 — F1's bound refined to 2.5 sweep intervals.** `swift-hollow` implemented the 15:13 bound at
   exactly two intervals (≤ 120,000 ms) and measured a consequence (mail 3393). The watcher ticks every 2 s and the
   sweep keeps its own 60 s clock, so passes land 60 to 62 s apart. A child that sits out one pass is therefore
