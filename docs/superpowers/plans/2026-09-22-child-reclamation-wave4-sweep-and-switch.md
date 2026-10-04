@@ -5143,6 +5143,36 @@ The frozen corpus cites none of these sites by content (measured).
      request carries `deferExpired: false`.
 
    **Mutation:** restore the old clock in any arm, and its case reds.
+
+   **Continuity (amended 2026-10-04, review 254 F1).** R-4's "continuous" is literal. This amends the item in place. It
+   is no departure and takes no number.
+   - The entry gains `lastPresenceDeferredAt: number | null`, the time of the latest presence-class answer.
+   - An episode stays continuous only while consecutive presence-class answers are at most two sweep-pass intervals
+     apart (inclusive). A longer gap restarts the episode at the new answer.
+   - A request goes out licensed only when BOTH hold: the episode spans the ceiling, and its latest presence answer is
+     within two intervals of the ask (inclusive).
+   - `childReclaimNextEntry` and `childReclaimDeferExpired` take `passIntervalMs` as a required argument. The lane
+     passes `CHILD_RECLAIM_SWEEP_MS`.
+   - A licensed request answered presence-class still restarts the episode. Every other outcome ends it and clears both
+     presence fields.
+   - Both rules only remove licensed asks, never add one. Under a backlog of three or more due children, presence-held
+     children wait unlicensed until it drains. That fails closed, and is accepted.
+
+   **Cases:**
+   - lane: one presence sample, then sixteen other due children. The child's next request goes out unlicensed. Red
+     before the change;
+   - lane: the same backlog then drains. Nothing is licensed until the episode that began after the gap spans the
+     ceiling;
+   - policy, gap restart: a presence answer, a gap over two intervals, then another unlicensed presence answer. The
+     episode starts at the second, so nothing is licensed shortly after it, although the first is past the ceiling. At
+     exactly two intervals the episode continues;
+   - policy, freshness: an episode past the ceiling whose latest answer is older than two intervals licenses nothing.
+     At exactly two intervals it does;
+   - the lane cases that crossed the whole ceiling in one step now answer presence pass by pass.
+
+   **Mutations:**
+   - drop the gap restart → the two policy gap-restart cases and the lane drain case red;
+   - drop the freshness check → the policy freshness case, the backlog case and the lane drain case red.
 2. **The hold (R-1).** This replaces `held: string | null` (plan:2343-2344) and plan:2373's check:
    ```ts
    export type ChildReclaimHoldRead =
