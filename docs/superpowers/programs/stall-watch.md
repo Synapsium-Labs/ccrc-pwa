@@ -3,7 +3,8 @@
 Spec: `docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md` (rev 3.1, approved 2026-09-29)
 Plans: `docs/superpowers/plans/2026-09-29-worker-stall-watch-w1.md`, `…/2026-09-30-worker-stall-watch-w2.md`,
 `…/2026-10-02-stall-watch-reactivation-quiet.md` (wave 3), `…/2026-10-02-worker-stall-watch-w3.md` (wave 4: skills and
-docs; the file keeps the spec's "wave 3" name)
+docs; the file keeps the spec's "wave 3" name), `…/2026-10-02-stall-watch-w5-follow-ups.md` (wave 5),
+`…/2026-10-03-stall-watch-w6-review-fixes.md` (wave 6), `…/2026-10-04-stall-watch-w7-wait-clause-amendment.md` (wave 7)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-harbor`   Workspace: **a fresh child per wave**
 
 **What this program is.** The server notices a silent session and acts. It delivers mail past background work, and
@@ -21,6 +22,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | #237 | **merged** `7e858c8bf` (2026-10-04 12:40, R26) |
 | 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **in review** — fix round done at `b29aba143` (2026-10-04 16:28), re-measured; review run 257 (R29) |
+| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`) | — | **planned** — plan reviewed (R31); dispatch after the plan is on `main` and claim 956's split is agreed |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -488,6 +490,31 @@ Output: `w2-shadow-review.json` in the coordinator notes.
   - **"Yes to stall watch section", with the question "should we be able to configure any parameters?"** That is a
     design question with its own spec. It is brainstormed with the operator before any plan, starting from a
     read-only survey of the stall watch's constants, ccrc's configuration precedents and the Settings screen.
+- **R31 (coordinator, 2026-10-04 17:47): wave 7's plan is drafted and reviewed.** A planner (Opus) measured the plan
+  on `main` at `22f7931af`, prototyped every edit in a scratch tree and removed it. Two Opus lenses, the contract text
+  and executability, returned seven findings. One was Important, and every one was folded or answered.
+  - **The prototype measured:** coordinator-skill 156 → 159, worker-skill 48 → 50; the README instrument unchanged; the
+    SKILL.md edit line-neutral. The mutation rows go red as planned. Six of the worker rows go undetected on today's
+    tests, which is the gap R21-F1 named.
+  - **The overlap measured:** #215 never touches clause 16 or `CONTRACT[15]`, and merging the prototype with #215
+    conflicts on no file that #215 does not already conflict on against `main`. The prototype merges cleanly with
+    #241.
+  - **Rulings on the planner's questions:**
+    - The clause bytes are this session's to settle under the operator's approval. They read "whenever you tell a
+      `working` worker to wait, behind another run or programme or until a time", not R2's "parks", because "park" means
+      a mail-delivery park in the coordinator references. The ball sentence names every hand-back exception, so that
+      three rows can pin it. That makes the clause about 1140 characters, which is accepted.
+    - A parked `dispatched` worker is not named in the clause, and is recorded as residue.
+    - The plan lands on `main` through the ledger PR before dispatch. That is the wave 6 convention, and it is the
+      plan's own precondition 1.
+    - The plan's own "merge origin/main first" and handoff-merge sentences are rewritten to worker clause 16's measured
+      triggers (review 256's F4).
+  - **The Important finding goes to the operator.** The true ball sentence, together with worker clause 17's turn-end
+    mail ("mail the coordinator what you did and what wakes you next"), means a worker that acknowledges a `wait:`
+    hands the ball straight back. The widening then helps only while the worker stays silent. One cure is a
+    worker-clause sentence: the turn-end mail after a `wait:` takes a subject beginning `re stall-check: waiting`, which
+    already passes the ball. That is a worker-skill change beyond the approved amendment, so the operator decides it.
+    It would take the block's last number.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
