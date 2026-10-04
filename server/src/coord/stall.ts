@@ -1188,6 +1188,8 @@ export function stallCheckMail(input: StallInput, facts: StallFacts, now: number
   // r1 at the latest (§5.1 (a)–(d)). The body promises that, and names the operator when r2 would be skipped. The
   // predicate is the marker ladder's own (Task 11), shared with the quiet start above (`stallR1MarkQuiet`): an ok marker
   // whose view has no stopAt runs wave 1's ladder, and keeps wave 1's line.
+  // `r1-proof-line-names-running-subagents` (D-3794): the clause naming a still-running subagent or workflow departs from
+  // §4.2's example sentence, because `stallProofDue`'s proof (a) does not count such a turn end.
   const proofBound = stallR1MarkQuiet(input, facts) !== null;
   const last = stallDelivery('coordinator', input.arming) === 'shadow'
     ? STALL_UNARMED_LINE

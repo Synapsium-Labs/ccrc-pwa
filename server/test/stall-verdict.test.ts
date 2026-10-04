@@ -13,7 +13,7 @@ import type {
   CoordinatorState, LiveWordRead, StallActivation, StallArm, StallArming, StallHold, StallInput, StallMailRow, StallMode,
   StallNotice, StallR3Cause, StallRunRow, StallSubject, StallVerdict, StallWorker,
 } from '../src/coord/stall.js';
-import { REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT } from '../../shared/api.js';
+import { RUN_TRANSITIONS, REVIEW_RUN_TRANSITIONS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT } from '../../shared/api.js';
 import { STALL_FAILED_PREFIX, STALL_ORPHANED_PREFIX } from '../src/coord/stall.js';
 import type { StallW2Facts } from '../src/coord/stall.js';
 
@@ -1667,6 +1667,14 @@ describe('reactivation-first-entry-by-edge (D-3796): a reconstructed run\'s firs
     expect(stallFacts(input).episodeKeyMs).toBe(back);
     expect(stallVerdict(input, NOW)).toEqual(NONE);
     expect(stallVerdict(stallInput(), NOW), 'the control: the same run without the send-back draws r1').toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  // STALL_DISPATCH_STATE is not exported, so the literal is spelled here; the edge rule rests on this one claim.
+  it('its premise: in both transition tables the one edge into dispatched is from planned', () => {
+    const into = (table: Readonly<Record<string, readonly string[]>>): string[] =>
+      Object.entries(table).filter(([, targets]) => targets.includes('dispatched')).map(([from]) => from).sort();
+    expect(into(RUN_TRANSITIONS), 'RUN_TRANSITIONS').toEqual(['planned']);
+    expect(into(REVIEW_RUN_TRANSITIONS), 'REVIEW_RUN_TRANSITIONS').toEqual(['planned']);
   });
 });
 
