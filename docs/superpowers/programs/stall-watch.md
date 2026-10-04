@@ -20,7 +20,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 | **merged** `3255571a1` (2026-10-03 23:09, R22); live at the next auto-update |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | #237 | **merged** `7e858c8bf` (2026-10-04 12:40, R26) |
-| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | — | **dispatched** 2026-10-04 as run 255 to a fresh child (`ccrc-pwa-warm-basin`), with R25's carry-overs (R26) |
+| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **in review** — wave-done 2026-10-04 15:05 at `4980d79fb`, re-measured; review run 256 (R27) |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -415,6 +415,20 @@ Output: `w2-shadow-review.json` in the coordinator notes.
   - **An open operator question (2026-10-04): should arming default on for other installs, or be a Settings-page
     toggle?** Today no install arms anything; the markers have no writer in the tree, by design. This session's advice
     is in its reply to the operator. A toggle would be a spec change, planned only on the operator's yes.
+- **R27 (coordinator, 2026-10-04 15:09): wave 6's wave-done is verified, and its review is dispatched.**
+  - **The claim.** Mail 3385 (15:05:56) reports PR #241 from `ws/warm-basin`: five commits on base `59a435f0d`
+    (Tasks 1–4 under D-3797, D-3798, D-3799 and D-3800, then R25's carry-overs under D-3801). Its suite line reads `red`,
+    `failure: unclear`: the worker's full server run had 17 reds in 10 files the wave does not touch, at load average
+    about 170. Sixteen passed in isolation; the seventeenth is `tmp-sweep`'s known FAILS CLOSED row.
+  - **Re-measured, not believed.** The branch tip, the PR head and the handoff all read `4980d79fb`. The merge-tree
+    probe against `main` (`c9ada6543`) is clean, so nothing licensed an absorb (worker clause 16), and the worker
+    took none. Run 255 advanced `working` then `awaiting-review`, and the server's re-measurement agreed. All five
+    items settled `done`.
+  - **Review run 256 is dispatched** to a fresh reviewer, with the held-out panel and one wave lens, THE FOUR DEFECTS
+    AND THE ARMING. It measures D-3798's accepted cost (a replayed mail timed from its queue time), G3's restamp,
+    and whether each R18 gate on `stall-watch-escalate` and `stall-watch-w2-live` closes once this merges. It also
+    runs the stall suites on the merged tree, since `main` moved after the wave's base. The worker's own minors go
+    to the panel to confirm or refute; this session rules on the report, not on the mail.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
