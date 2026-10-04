@@ -13,10 +13,10 @@
 // block byte for byte — `macos-platform.test.ts` holds that):
 //   • a hostile name never executes (a canary file stays absent) and answers NO
 //     home, exit 1 — never a guessed one;
-//   • a name that would expand to something other than a user's home is refused
+//   • a name that may expand to something other than its user's home is refused
 //     the same way: an ALL-DIGIT one (only an all-number tilde prefix, signed or
-//     not — `~0`, `~+1`, `~-2` — reads the directory stack, so it answers an
-//     entry or stays literal; `~+` and `~-` are $PWD and $OLDPWD), and a
+//     not — `~0`, `~+1` — reads the directory stack, whenever that entry exists:
+//     `~0` is $PWD; else the password database; `~+`, `~-` are $PWD, $OLDPWD), and a
 //     sign-led one, a backslash or any other shell syntax;
 //   • a digit-led or `@`-bearing login name (`5user`, `21jsmith`,
 //     `user@corp.example`) is NOT refused: `~5user` is a password-database
@@ -136,9 +136,10 @@ describe.each(SCRIPTS)('%s: _svc_real_home never executes the login name', (_lab
   });
 
   it('a name outside the login-name charset is refused: all digits, a leading sign or `.`, a backslash, other shell syntax', () => {
-    // All digits because only an all-number tilde prefix, signed or not, reads
-    // the directory stack: `~0` answers an entry, `~123456` stays literal, and
-    // neither is a user's home. `+` and `-` alone would be $PWD and $OLDPWD.
+    // All digits because an all-number tilde prefix, signed or not, reads the
+    // directory stack whenever that entry exists — `~0` answers $PWD, which a
+    // sandbox chooses — and the password database only when it does not.
+    // `+` and `-` alone would be $PWD and $OLDPWD.
     for (const name of ['0', '123456', '+', '-', '-x', '+1', '.hidden', 'a b', 'a/b', '~', 'a*', 'CORP\\jdoe']) {
       expect(realHome(script, name), `the login name ${JSON.stringify(name)}`).toEqual({ out: '', rc: '1' });
     }

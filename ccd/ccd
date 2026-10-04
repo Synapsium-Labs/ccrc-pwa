@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d8e17a5cbc7ffe3cbd11218873937eb59d38ac7405444a58aaba46dd10d8dee4
+# ccrc:generated 1 sha256=1fcb583acc4bf160bea7e70035ad61327511793f83c8c581f3d98066f5778816
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -759,9 +759,9 @@ _have_systemctl() {
 # the environment's, and `eval` runs any shell syntax in it (`$(…)`, a backtick,
 # `;`) inside a protected start. Only a login name expands — a letter, digit or
 # `_`, then those, `.`, `@`, `-`, spelled out (a RANGE follows the locale) —
-# never ALL DIGITS: only that, signed or not (`~0`, `~+1`, `~-2`), reads the
-# directory stack, an entry or left literal, never a home; `~+`, `~-` are $PWD,
-# $OLDPWD; `~5user`, `~1x` read the password database. Else: no home, exit 1.
+# never ALL DIGITS: only that, signed or not (`~0`, `~+1`), reads the directory
+# stack when the entry exists (`~0` is $PWD, a sandbox's choice), else passwd;
+# `~+`, `~-` are $PWD, $OLDPWD; `~5user` reads only passwd. Else: no home, exit 1.
 _SVC_REAL_HOME=""
 _svc_real_home() {
   [ -n "$_SVC_REAL_HOME" ] && { printf '%s' "$_SVC_REAL_HOME"; return 0; }
