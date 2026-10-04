@@ -3369,8 +3369,10 @@ export class FleetWatcher {
       const req: ChildReclaimRequest = {
         sessionId: r.id, runId, trigger: 'sweep',
         // THE CEILING READS THE PRESENCE CLOCK ALONE (spec §5.7, "Presence,
-        // and its bound": the ceiling bounds presence and nothing else).
-        deferExpired: childReclaimDeferExpired(entry, now),
+        // and its bound": the ceiling bounds presence and nothing else), and
+        // licenses only a CONTINUOUS episode whose latest presence answer is
+        // recent, measured in this lane's own pass intervals.
+        deferExpired: childReclaimDeferExpired(entry, now, CHILD_RECLAIM_SWEEP_MS),
         // THE ELAPSED DEFER RIDES THE REQUEST. Spec §5.7: past the ceiling
         // "the feed row says how long it waited and why"; §5.9: a deferral is
         // shown "with its elapsed time". So it is the FIRST deferral of ANY
@@ -3399,7 +3401,7 @@ export class FleetWatcher {
           // attempt was sent past the previous presence ceiling, which is
           // what lets a presence-class answer RESTART the episode rather than
           // silently keep skipping ccd's presence rungs forever (spec §5.7).
-          const nextEntry = childReclaimNextEntry(entry, outcome, now, req.deferExpired);
+          const nextEntry = childReclaimNextEntry(entry, outcome, now, req.deferExpired, CHILD_RECLAIM_SWEEP_MS);
           if (nextEntry === null) this.childReclaimSweepState.delete(r.id);
           else this.childReclaimSweepState.set(r.id, nextEntry);
         },

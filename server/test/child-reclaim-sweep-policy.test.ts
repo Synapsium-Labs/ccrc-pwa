@@ -352,83 +352,90 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
 
   it('a first sighting starts no clock, counts no failure, and was never asked', () => {
     expect(entry).toEqual({ firstEligibleAt: NOW - 60_000, firstDeferredAt: null, firstPresenceDeferredAt: null,
-      consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null });
+      lastPresenceDeferredAt: null, consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null });
   });
 
   it('forgets a child whose reclaim ended outright — reclaimed, or already gone', () => {
-    expect(childReclaimNextEntry(entry, { kind: 'reclaimed' }, NOW, false)).toBeNull();
-    expect(childReclaimNextEntry(entry, { kind: 'gone' }, NOW, false)).toBeNull();
+    expect(childReclaimNextEntry(entry, { kind: 'reclaimed' }, NOW, false, PASS)).toBeNull();
+    expect(childReclaimNextEntry(entry, { kind: 'gone' }, NOW, false, PASS)).toBeNull();
   });
 
   it('a TERMINAL refusal keeps its entry — the lifecycle mirror holds the refusal, this memory only paces the re-ask', () => {
-    const refused = childReclaimNextEntry(entry, { kind: 'refused', token: 'tree-unreadable' }, NOW, false);
+    const refused = childReclaimNextEntry(entry, { kind: 'refused', token: 'tree-unreadable' }, NOW, false, PASS);
     expect(refused).toEqual({ ...entry, consecutiveFailures: 0, lastFailedAt: null,
       firstPresenceDeferredAt: null, refusedAt: NOW, lastAskedAt: NOW });
   });
 
   it('a refusal ends a run of failures and the presence episode alike', () => {
     const failing: ChildReclaimSweepEntry = { ...entry, consecutiveFailures: 3, lastFailedAt: NOW - 1,
-      firstPresenceDeferredAt: NOW - 10 * C };
-    expect(childReclaimNextEntry(failing, { kind: 'refused', token: 'tree-unreadable' }, NOW, false))
-      .toMatchObject({ consecutiveFailures: 0, lastFailedAt: null, firstPresenceDeferredAt: null, refusedAt: NOW });
+      firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS };
+    expect(childReclaimNextEntry(failing, { kind: 'refused', token: 'tree-unreadable' }, NOW, false, PASS))
+      .toMatchObject({ consecutiveFailures: 0, lastFailedAt: null, firstPresenceDeferredAt: null,
+        lastPresenceDeferredAt: null, refusedAt: NOW });
   });
 
   it('counts a failed attempt and stamps when it was asked — the any-kind clock untouched, the presence episode ended', () => {
-    const withPresence: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 1000 };
-    const once = childReclaimNextEntry(withPresence, { kind: 'failed' }, NOW, false);
+    const withPresence: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 1000,
+      lastPresenceDeferredAt: NOW - 1000 };
+    const once = childReclaimNextEntry(withPresence, { kind: 'failed' }, NOW, false, PASS);
     expect(once).toEqual({ ...withPresence, consecutiveFailures: 1, lastFailedAt: NOW,
-      firstPresenceDeferredAt: null, refusedAt: null, lastAskedAt: NOW });
-    expect(childReclaimNextEntry(once!, { kind: 'failed' }, NOW + 120_000, false))
+      firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, refusedAt: null, lastAskedAt: NOW });
+    expect(childReclaimNextEntry(once!, { kind: 'failed' }, NOW + 120_000, false, PASS))
       .toEqual({ ...withPresence, consecutiveFailures: 2, lastFailedAt: NOW + 120_000,
-        firstPresenceDeferredAt: null, refusedAt: null, lastAskedAt: NOW + 120_000 });
+        firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, refusedAt: null, lastAskedAt: NOW + 120_000 });
   });
 
   it('any deferral ends a run of failures — a defer is not a failure', () => {
     const failing: ChildReclaimSweepEntry = { ...entry, consecutiveFailures: 3, lastFailedAt: NOW - 1 };
-    expect(childReclaimNextEntry(failing, { kind: 'deferred', why: 'held' }, NOW, false))
+    expect(childReclaimNextEntry(failing, { kind: 'deferred', why: 'held' }, NOW, false, PASS))
       .toMatchObject({ consecutiveFailures: 0, lastFailedAt: null });
   });
 
-  it('an UNLICENSED PRESENCE defer starts BOTH clocks, once, and never restarts either', () => {
+  it('an UNLICENSED PRESENCE defer starts BOTH clocks, once; the next one a pass later restarts neither, and only moves the latest answer', () => {
     for (const why of CHILD_RECLAIM_PRESENCE_DEFERS) {
-      const first = childReclaimNextEntry(entry, { kind: 'deferred', why }, NOW, false);
-      expect(first, why).toEqual({ ...entry, firstDeferredAt: NOW, firstPresenceDeferredAt: NOW, lastAskedAt: NOW });
-      expect(childReclaimNextEntry(first!, { kind: 'deferred', why }, NOW + 60_000, false), why).toEqual({
-        ...first!, lastAskedAt: NOW + 60_000,
+      const first = childReclaimNextEntry(entry, { kind: 'deferred', why }, NOW, false, PASS);
+      expect(first, why).toEqual({ ...entry, firstDeferredAt: NOW, firstPresenceDeferredAt: NOW,
+        lastPresenceDeferredAt: NOW, lastAskedAt: NOW });
+      expect(childReclaimNextEntry(first!, { kind: 'deferred', why }, NOW + 60_000, false, PASS), why).toEqual({
+        ...first!, lastPresenceDeferredAt: NOW + 60_000, lastAskedAt: NOW + 60_000,
       });
     }
   });
 
   it('a LICENSED presence defer RESTARTS the episode even while one is already running', () => {
-    const running: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 10 * C, firstPresenceDeferredAt: NOW - 10 * C };
-    const restarted = childReclaimNextEntry(running, { kind: 'deferred', why: 'presence' }, NOW, true);
-    expect(restarted).toEqual({ ...running, firstPresenceDeferredAt: NOW, lastAskedAt: NOW });
-    expect(childReclaimDeferExpired(running, NOW)).toBe(true);
-    expect(childReclaimDeferExpired(restarted!, NOW)).toBe(false);
+    const running: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 10 * C, firstPresenceDeferredAt: NOW - 10 * C,
+      lastPresenceDeferredAt: NOW - PASS };
+    const restarted = childReclaimNextEntry(running, { kind: 'deferred', why: 'presence' }, NOW, true, PASS);
+    expect(restarted).toEqual({ ...running, firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW, lastAskedAt: NOW });
+    expect(childReclaimDeferExpired(running, NOW, PASS)).toBe(true);
+    expect(childReclaimDeferExpired(restarted!, NOW, PASS)).toBe(false);
   });
 
   it('`licensed` is read only on a presence-class defer — it changes nothing for failed, refused, or any other why', () => {
-    const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C };
+    const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS };
     for (const outcome of [{ kind: 'failed' as const }, { kind: 'refused' as const, token: 'tree-unreadable' },
       { kind: 'deferred' as const, why: 'held' }]) {
-      expect(childReclaimNextEntry(stale, outcome, NOW, true), outcome.kind)
-        .toEqual(childReclaimNextEntry(stale, outcome, NOW, false));
+      expect(childReclaimNextEntry(stale, outcome, NOW, true, PASS), outcome.kind)
+        .toEqual(childReclaimNextEntry(stale, outcome, NOW, false, PASS));
     }
   });
 
   it('a defer that is not presence starts the ANY-kind clock, and clears the presence clock', () => {
     for (const why of ['state-changed', 'paused', 'held', 'in-progress', 'reap-in-progress', 'siblings-open',
       'unsupported', 'paused-at-server']) {
-      const withPresence: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 1000 };
-      expect(childReclaimNextEntry(withPresence, { kind: 'deferred', why }, NOW, false), why)
-        .toEqual({ ...withPresence, firstDeferredAt: NOW, firstPresenceDeferredAt: null, refusedAt: null, lastAskedAt: NOW });
+      const withPresence: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 1000,
+        lastPresenceDeferredAt: NOW - 1000 };
+      expect(childReclaimNextEntry(withPresence, { kind: 'deferred', why }, NOW, false, PASS), why)
+        .toEqual({ ...withPresence, firstDeferredAt: NOW, firstPresenceDeferredAt: null, lastPresenceDeferredAt: null,
+          refusedAt: null, lastAskedAt: NOW });
     }
   });
 
   it('a presence defer AFTER another kind keeps the earlier any-kind clock and starts its own', () => {
-    const other = childReclaimNextEntry(entry, { kind: 'deferred', why: 'state-changed' }, NOW, false)!;
-    expect(childReclaimNextEntry(other, { kind: 'deferred', why: 'attached' }, NOW + 60_000, false))
-      .toEqual({ ...entry, firstDeferredAt: NOW, firstPresenceDeferredAt: NOW + 60_000, lastAskedAt: NOW + 60_000 });
+    const other = childReclaimNextEntry(entry, { kind: 'deferred', why: 'state-changed' }, NOW, false, PASS)!;
+    expect(childReclaimNextEntry(other, { kind: 'deferred', why: 'attached' }, NOW + 60_000, false, PASS))
+      .toEqual({ ...entry, firstDeferredAt: NOW, firstPresenceDeferredAt: NOW + 60_000,
+        lastPresenceDeferredAt: NOW + 60_000, lastAskedAt: NOW + 60_000 });
   });
 
   it('names exactly the three presence defers — rungs 5 and 6 and the server\'s visibility claim', () => {
@@ -438,12 +445,15 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
   it('the ceiling is fifteen minutes, reached at exactly fifteen — on the PRESENCE clock alone', () => {
     // A HARDCODED literal on purpose — the mutation control for the constant.
     expect(CHILD_RECLAIM_DEFER_CEILING_MS).toBe(900_000);
-    const presence: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 10 * C, firstPresenceDeferredAt: NOW };
-    expect(childReclaimDeferExpired(entry, NOW + 10 * C)).toBe(false);
+    // Its latest presence answer one pass before the ceiling, so freshness
+    // holds at both rows below and only the ceiling's own edge decides them.
+    const presence: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 10 * C, firstPresenceDeferredAt: NOW,
+      lastPresenceDeferredAt: NOW + C - PASS };
+    expect(childReclaimDeferExpired(entry, NOW + 10 * C, PASS)).toBe(false);
     // An any-kind deferral ten ceilings old expires nothing: only presence is bounded.
-    expect(childReclaimDeferExpired({ ...entry, firstDeferredAt: NOW - 10 * C }, NOW)).toBe(false);
-    expect(childReclaimDeferExpired(presence, NOW + C - 1)).toBe(false);
-    expect(childReclaimDeferExpired(presence, NOW + C)).toBe(true);
+    expect(childReclaimDeferExpired({ ...entry, firstDeferredAt: NOW - 10 * C }, NOW, PASS)).toBe(false);
+    expect(childReclaimDeferExpired(presence, NOW + C - 1, PASS)).toBe(false);
+    expect(childReclaimDeferExpired(presence, NOW + C, PASS)).toBe(true);
   });
 
   it('backs off min(ceiling, pass interval × 2^k) after k failures in a row — and not at all with none', () => {
@@ -460,19 +470,56 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
 
   it('every arm except `refused` clears `refusedAt` — a stale one from an earlier refusal does not survive a later failure or deferral', () => {
     const stale: ChildReclaimSweepEntry = { ...entry, refusedAt: NOW - 1 };
-    expect(childReclaimNextEntry(stale, { kind: 'failed' }, NOW, false)).toMatchObject({ refusedAt: null });
-    expect(childReclaimNextEntry(stale, { kind: 'deferred', why: 'held' }, NOW, false)).toMatchObject({ refusedAt: null });
+    expect(childReclaimNextEntry(stale, { kind: 'failed' }, NOW, false, PASS)).toMatchObject({ refusedAt: null });
+    expect(childReclaimNextEntry(stale, { kind: 'deferred', why: 'held' }, NOW, false, PASS)).toMatchObject({ refusedAt: null });
   });
 
   it("starting past the ceiling, ENDING the episode makes childReclaimDeferExpired false — for failed, refused, and every non-presence why, asked of the function itself", () => {
-    const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C };
+    const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS };
+    expect(childReclaimDeferExpired(stale, NOW, PASS), 'the control: past the ceiling, its latest answer recent').toBe(true);
     const outcomes: ChildReclaimSweepOutcome[] = [
       { kind: 'failed' }, { kind: 'refused', token: 'tree-unreadable' }, { kind: 'deferred', why: 'held' },
     ];
     for (const outcome of outcomes) {
-      const next = childReclaimNextEntry(stale, outcome, NOW, false)!;
-      expect(childReclaimDeferExpired(next, NOW), outcome.kind).toBe(false);
+      const next = childReclaimNextEntry(stale, outcome, NOW, false, PASS)!;
+      expect(childReclaimDeferExpired(next, NOW, PASS), outcome.kind).toBe(false);
     }
+  });
+
+  describe('the episode is CONTINUOUS — two pass intervals at most between its presence answers, and to the ask', () => {
+    const presence: ChildReclaimSweepOutcome = { kind: 'deferred', why: 'presence' };
+
+    it('a presence answer more than two intervals after the last one starts a NEW episode — although the first answer is past the ceiling', () => {
+      const first = childReclaimNextEntry(entry, presence, NOW - C - 10 * PASS, false, PASS)!;
+      expect(first).toMatchObject({ firstPresenceDeferredAt: NOW - C - 10 * PASS, lastPresenceDeferredAt: NOW - C - 10 * PASS });
+      const second = childReclaimNextEntry(first, presence, NOW - PASS, false, PASS)!;
+      expect(second, 'the episode restarts at the second answer').toMatchObject({
+        firstDeferredAt: NOW - C - 10 * PASS, firstPresenceDeferredAt: NOW - PASS, lastPresenceDeferredAt: NOW - PASS });
+      expect(childReclaimDeferExpired(second, NOW, PASS), 'shortly after the second answer nothing is licensed').toBe(false);
+    });
+
+    it('…at EXACTLY two intervals the episode continues, one ms more and it restarts — measured in the interval it is handed', () => {
+      const first = childReclaimNextEntry(entry, presence, NOW, false, PASS)!;
+      expect(childReclaimNextEntry(first, presence, NOW + 2 * PASS, false, PASS))
+        .toMatchObject({ firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW + 2 * PASS });
+      expect(childReclaimNextEntry(first, presence, NOW + 2 * PASS + 1, false, PASS))
+        .toMatchObject({ firstPresenceDeferredAt: NOW + 2 * PASS + 1, lastPresenceDeferredAt: NOW + 2 * PASS + 1 });
+      // The same gap under a longer interval is continuous: the bound is the
+      // argument's, never a constant of its own.
+      expect(childReclaimNextEntry(first, presence, NOW + 2 * PASS + 1, false, 10 * PASS))
+        .toMatchObject({ firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW + 2 * PASS + 1 });
+    });
+
+    it('an episode past the ceiling licenses nothing once its latest presence answer is older than two intervals — at exactly two it still does', () => {
+      const ep: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 2 * C, firstPresenceDeferredAt: NOW - 2 * C,
+        lastPresenceDeferredAt: NOW - 2 * PASS - 1 };
+      expect(childReclaimDeferExpired(ep, NOW, PASS), 'one sample, then time nobody measured').toBe(false);
+      expect(childReclaimDeferExpired({ ...ep, lastPresenceDeferredAt: NOW - 2 * PASS }, NOW, PASS), 'the inclusive boundary')
+        .toBe(true);
+      expect(childReclaimDeferExpired({ ...ep, lastPresenceDeferredAt: null }, NOW, PASS), 'no presence answer on record')
+        .toBe(false);
+      expect(childReclaimDeferExpired(ep, NOW, 10 * PASS), 'measured in the interval it is handed').toBe(true);
+    });
   });
 
   describe('childReclaimDue — the lane\'s ONE "may I ask again" question, folding both pacings', () => {
@@ -497,7 +544,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
 
     it('a later non-refusal outcome clears refusedAt, so the child is due on the ordinary backoff alone again', () => {
       const refused: ChildReclaimSweepEntry = { ...entry, refusedAt: NOW - 1 };
-      const next = childReclaimNextEntry(refused, { kind: 'deferred', why: 'held' }, NOW, false)!;
+      const next = childReclaimNextEntry(refused, { kind: 'deferred', why: 'held' }, NOW, false, PASS)!;
       expect(next.refusedAt).toBeNull();
       expect(childReclaimDue(next, NOW, PASS)).toBe(true);
     });

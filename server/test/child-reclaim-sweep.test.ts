@@ -773,17 +773,24 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     finishedChild(f);
     await f.pass(); f.next(); await f.pass();                 // request 1 → deferred; BOTH clocks start NOW
     const deferredAt = f.now();
-    f.next(); await f.pass();                                 // request 2, inside the ceiling
-    f.advance(deferredAt + CHILD_RECLAIM_DEFER_CEILING_MS - f.now()); await f.pass();   // request 3, AT it — LICENSED
-    expect(f.requests.map((q) => [q.deferExpired, q.deferredSinceMs]))
-      .toEqual([[false, null], [false, deferredAt], [true, deferredAt]]);
-    // Request 3 was LICENSED (`deferExpired: true`) and STILL came back
-    // presence-class: `childReclaimNextEntry`'s own rule (spec §5.7,
-    // "Presence, and its bound") RESTARTS the episode at that request's
-    // own instant, rather than silently keeping the ceiling exhausted
-    // forever — a licensed attempt that finds someone still there must get
-    // a fresh 15 minutes, not an immediate second bypass.
-    expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: deferredAt, firstPresenceDeferredAt: f.now() });
+    // Presence answered on EVERY pass, exactly one interval apart, so the
+    // episode is continuous (spec §5.7) — every request inside the ceiling.
+    while (f.now() + CHILD_RECLAIM_SWEEP_MS < deferredAt + CHILD_RECLAIM_DEFER_CEILING_MS) {
+      f.advance(CHILD_RECLAIM_SWEEP_MS); await f.pass();
+    }
+    const inside = f.requests.length;
+    expect(inside, 'fourteen more presence answers inside the ceiling').toBe(15);
+    f.advance(deferredAt + CHILD_RECLAIM_DEFER_CEILING_MS - f.now()); await f.pass();   // the next request, AT it — LICENSED
+    expect(f.requests.map((q) => [q.deferExpired, q.deferredSinceMs])).toEqual([
+      [false, null], ...Array.from({ length: inside - 1 }, () => [false, deferredAt]), [true, deferredAt]]);
+    // The licensed request STILL came back presence-class:
+    // `childReclaimNextEntry`'s own rule (spec §5.7, "Presence, and its
+    // bound") RESTARTS the episode at that request's own instant, rather
+    // than silently keeping the ceiling exhausted forever — a licensed
+    // attempt that finds someone still there must get a fresh 15 minutes,
+    // not an immediate second bypass.
+    expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: deferredAt, firstPresenceDeferredAt: f.now(),
+      lastPresenceDeferredAt: f.now() });
   });
 
   it('a non-presence defer starts the any-kind clock, which the request carries, and never the ceiling', async () => {
@@ -802,16 +809,23 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     finishedChild(f);
     await f.pass(); f.next(); await f.pass();                 // request 1 → state-changed: the ANY-kind clock starts
     const firstDefer = f.now();
-    f.next(); await f.pass();                                 // request 2 → presence: the presence clock starts
+    f.advance(CHILD_RECLAIM_SWEEP_MS); await f.pass();        // request 2 → presence: the presence clock starts
     const firstPresence = f.now();
-    f.advance(firstDefer + CHILD_RECLAIM_DEFER_CEILING_MS - f.now()); await f.pass();     // request 3: a ceiling after the FIRST deferral
-    f.advance(firstPresence + CHILD_RECLAIM_DEFER_CEILING_MS - f.now()); await f.pass();  // request 4: a ceiling of PRESENCE — LICENSED
+    // Presence answered on EVERY pass from here, one interval apart — a
+    // continuous episode (spec §5.7) — up to a ceiling after the FIRST deferral.
+    while (f.now() < firstDefer + CHILD_RECLAIM_DEFER_CEILING_MS) { f.advance(CHILD_RECLAIM_SWEEP_MS); await f.pass(); }
+    expect(f.now(), 'the last of these requests is a ceiling after the FIRST deferral')
+      .toBe(firstDefer + CHILD_RECLAIM_DEFER_CEILING_MS);
+    const atAnyKindCeiling = f.requests.length;
+    expect(f.requests[atAnyKindCeiling - 1]?.deferExpired, 'a ceiling of the ANY-kind clock licenses nothing').toBe(false);
+    f.advance(firstPresence + CHILD_RECLAIM_DEFER_CEILING_MS - f.now()); await f.pass();  // the next: a ceiling of PRESENCE — LICENSED
     expect(f.requests.map((q) => [q.deferExpired, q.deferredSinceMs])).toEqual([
-      [false, null], [false, firstDefer], [false, firstDefer], [true, firstDefer]]);
-    // Request 4 was licensed and still came back presence-class:
+      [false, null], ...Array.from({ length: atAnyKindCeiling - 1 }, () => [false, firstDefer]), [true, firstDefer]]);
+    // The licensed request still came back presence-class:
     // `childReclaimNextEntry`'s rule (spec §5.7) restarts the episode at
-    // request 4's own instant.
-    expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: firstDefer, firstPresenceDeferredAt: f.now() });
+    // that request's own instant.
+    expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: firstDefer, firstPresenceDeferredAt: f.now(),
+      lastPresenceDeferredAt: f.now() });
   });
 
   it('never dispatches a child twice while its reclaim is still in flight', async () => {
@@ -917,11 +931,18 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     finishedChild(f);
     await f.pass(); f.next(); await f.pass();                 // request 1 → presence
     const deferredAt = f.now();
-    f.advance(deferredAt + CHILD_RECLAIM_DEFER_CEILING_MS - f.now()); await f.pass();  // request 2, licensed → refused
-    expect(f.requests.map((q) => q.deferExpired)).toEqual([false, true]);
+    // Presence answered on EVERY pass, one interval apart, inside the ceiling.
+    while (f.now() + CHILD_RECLAIM_SWEEP_MS < deferredAt + CHILD_RECLAIM_DEFER_CEILING_MS) {
+      f.advance(CHILD_RECLAIM_SWEEP_MS); await f.pass();
+    }
+    f.advance(deferredAt + CHILD_RECLAIM_DEFER_CEILING_MS - f.now()); await f.pass();  // AT the ceiling: licensed → refused
+    const licensed = f.requests.length;
+    expect(f.requests.map((q) => q.deferExpired)).toEqual([...Array.from({ length: licensed - 1 }, () => false), true]);
+    expect(f.entryOf('demo-a'), 'the refusal ended the presence episode')
+      .toMatchObject({ firstPresenceDeferredAt: null, lastPresenceDeferredAt: null });
     f.advance(CHILD_RECLAIM_DEFER_CEILING_MS + 1); await f.pass();  // due again on the terminal-refusal wait
-    expect(f.requests).toHaveLength(3);
-    expect(f.requests[2]?.deferExpired, 'the refusal ended the presence episode; nothing is licensed again').toBe(false);
+    expect(f.requests).toHaveLength(licensed + 1);
+    expect(f.requests[licensed]?.deferExpired, 'the refusal ended the presence episode; nothing is licensed again').toBe(false);
   });
 
   it('an executor `failed` with no mirror line is retried with backoff and never listed', async () => {
@@ -1377,5 +1398,19 @@ describe('the production path', () => {
     const feed = f.coord.feedEvents(50).filter((e) => e.sessionId === 'demo-a');
     expect(feed).toHaveLength(1);
     expect(feed[0]?.title).toBe('child reclaim failed');
+  });
+});
+
+describe('R254 SAFETY probe: how continuous is a presence episode under the in-flight bound', () => {
+  it('R254-P: one presence sample, then sixteen other due children — the child\'s NEXT request does NOT go out licensed', async () => {
+    const f = fixture({ outcome: (req) => deferredAs(req.sessionId === 'demo-a' ? 'presence' : 'state-changed', req) });
+    const others = Array.from({ length: 16 }, (_, k) => `demo-${String.fromCharCode(98 + k)}`);   // demo-b .. demo-q
+    finishedChild(f, 'demo-a');
+    for (const id of others) finishedChild(f, id);
+    await f.pass(); f.next(); await f.pass();          // pass 2: demo-a asked (sorted first by id) -> presence, ONE sample
+    for (let k = 0; k < others.length; k += 1) { f.next(); await f.pass(); }   // one never-asked child per pass
+    f.next(); await f.pass();                          // demo-a's turn again
+    const asks = f.requests.filter((q) => q.sessionId === 'demo-a');
+    expect(asks.map((q) => q.deferExpired), 'demo-a was sampled present exactly once').toEqual([false, false]);
   });
 });
