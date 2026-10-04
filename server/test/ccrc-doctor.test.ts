@@ -1609,6 +1609,67 @@ describe('ccrc doctor: the binaries a fleet box needs', () => {
   });
 });
 
+// ── jq_regex: the regex engine the session hook's merge deny runs on ──────
+
+describe('ccrc doctor: jq_regex — a jq without lookaround fails the merge deny open, and says so', () => {
+  /** A jq that answers the lookbehind probe as `answer` says and runs the real
+   *  jq for everything else, so every other check that reads JSON is
+   *  untouched. `rmSync` first: `healthy()` links the REAL jq here, and a write
+   *  through that symlink would land on the box's own binary. */
+  const lookbehindJq = (home: string, answer: string): void => {
+    unstub(home, 'jq');
+    stub(home, 'jq', `case "$*" in *'(?<!b)a'*) ${answer} ;; esac\nexec ${shq(realPath('jq'))} "$@"`);
+  };
+
+  it('passes on a jq that matches a lookbehind, naming the binary', () => {
+    const home = healthy('ccrc-doctor-jqre-ok-');
+    const line = lineFor(runDoctor(home).stdout, 'jq_regex');
+    expect(line).toMatch(/^PASS jq_regex: /);
+    expect(line, 'the PASS line does not name the jq it measured').toContain(`${join(home, 'stub-bin', 'jq')} matches a lookbehind`);
+  });
+
+  it('FAILs, with a remedy, on a jq built without Oniguruma — the deny would read no command', () => {
+    const home = healthy('ccrc-doctor-jqre-noonig-');
+    // jq 1.7 built without Oniguruma answers every regex builtin with this
+    // error and exit 5 (its src/builtin.c, the `#else` arm of f_match).
+    lookbehindJq(home, "echo 'jq: error (at <unknown>): jq was compiled without ONIGURUMA regex library. match/test/sub and related functions are not available.' >&2; exit 5");
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL jq_regex: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('FAILS OPEN');
+    expect(lines[i]).toContain('rc 5');
+    expect(lines[i]).toContain('compiled without ONIGURUMA');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: install a jq built with Oniguruma/);
+    expect(r.code).toBe(1);
+    // The presence check still passes: jq is there, its regex is not.
+    expect(lineFor(r.stdout, 'jq')).toMatch(/^PASS jq: /);
+  });
+
+  it('FAILs when the probe answers anything but true — a lookbehind that does not match', () => {
+    const home = healthy('ccrc-doctor-jqre-false-');
+    lookbehindJq(home, 'echo false; exit 0');
+    expect(lineFor(runDoctor(home).stdout, 'jq_regex')).toMatch(/^FAIL jq_regex: .*answered 'false', rc 0/);
+  });
+
+  it('skips on a server-role box — no session hook runs there', () => {
+    const home = healthy('ccrc-doctor-jqre-server-');
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    lookbehindJq(home, 'exit 5');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP jq_regex: this box records CCRC_ROLE=server/m);
+    expect(lineFor(r.stdout, 'jq_regex')).toBeUndefined();
+  });
+
+  it('skips with no jq on PATH — presence is the jq check\'s FAIL, not this one\'s', () => {
+    const home = healthy('ccrc-doctor-jqre-nojq-');
+    unstub(home, 'jq');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP jq_regex: jq is not on PATH/m);
+    expect(r.stdout).toMatch(/^FAIL jq: not on PATH/m);
+  });
+});
+
 // ── tmux client/server skew ───────────────────────────────────────────────
 // The loaded gun (substrate-unreachable spec §5): `tmux -V` is the CLIENT on
 // disk, `display-message -p '#{version}'` is the RUNNING SERVER's own answer,

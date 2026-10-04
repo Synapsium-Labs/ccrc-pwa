@@ -170,6 +170,7 @@ CCRC_DOCTOR_CHECKS=(
   git
   gh
   jq
+  jq_regex
   python3
   flock
   gh_auth
@@ -486,6 +487,38 @@ _check_gh() {
 _check_jq() {
   _dr_need_bin jq "ccrc and ccrc-adopt read this box's small JSON files with it (ccrc version, accounts.json)" \
     "install it: sudo apt install jq"
+}
+
+# ── jq_regex: the regex engine the session hook's merge deny runs on ──────
+# The worker merge deny in `session-hook.sh` (landing-order wave 2) strips
+# quoted text in ONE jq program written in Oniguruma regex, lookbehind among
+# it. A jq built without Oniguruma errors there, the hook is left with no
+# command to match, and the deny FAILS OPEN with nothing on any screen (the
+# hook's own header: "a jq built without Oniguruma ... the deny FAILS OPEN").
+# This check is how that becomes a FAIL line: it asks jq the one question the
+# strip depends on, whether a lookbehind matches, and nothing else. PRESENCE is
+# the `jq` check's: with no jq on PATH this one has nothing to measure. A
+# server-role box hosts no sessions, so no session hook runs there.
+_check_jq_regex() {
+  local _srv_role="" out rc
+  # `${BOX_ENV_FILE:-}` and `-f` before `-r`: `_check_memory`'s reasons.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip jq_regex "this box records CCRC_ROLE=server, so it hosts no sessions and runs no session hook"
+    return 3
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    _dr_skip jq_regex "jq is not on PATH, so there is no regex engine to measure — the 'jq' check above owns that"
+    return 3
+  fi
+  out="$(jq -n '"a" | test("(?<!b)a")' 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] && [ "$out" = true ]; then
+    _dr_pass jq_regex "$(command -v jq) matches a lookbehind, (?<!b)a: the session hook's merge deny can read a command"
+    return 0
+  fi
+  _dr_fail jq_regex "jq cannot run the session hook's regex (a lookbehind answered '$(_dr_first_line "$out")', rc $rc), so its worker merge deny reads no command and FAILS OPEN" \
+    "install a jq built with Oniguruma (Debian/Ubuntu: sudo apt install jq; macOS: brew install jq), then re-run ccrc doctor"
+  return 1
 }
 _check_python3() {
   _dr_need_bin python3 "ccd's session hook and its registry locking are python3 (ccd:1043-1110)" \

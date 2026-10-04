@@ -341,11 +341,12 @@ describe('the worker merge deny', () => {
   // would drop the '…' span below and the merge line inside it. Bash runs
   // neither (it stops at the unclosed `$(`), so this deny is the fail-closed
   // rule's named cost; what the case proves is that the raw text is kept.
-  it('keeps an unclosed `$(` in an unquoted heredoc body raw, never stripped again (review 249 F1)', () => {
+  it.each([
+    ['a \'…\' span', "cat <<a\n$(echo 'x\ngh pr merge 42\n'\na"],
+    ['a "…" span', 'cat <<a\n$(echo "x\ngh pr merge 42\n"\na'],
+  ])('keeps an unclosed `$(` in an unquoted heredoc body raw, never stripped again — %s (review 249 F1)', (_n, c) => {
     hold(WAVE_HOLD);
-    for (const c of ["cat <<a\n$(echo 'x\ngh pr merge 42\n'\na", 'cat <<a\n$(echo "x\ngh pr merge 42\n"\na']) {
-      expect(bash(c).deny, `the unclosed $( was stripped again: ${c}`).not.toBeNull();
-    }
+    expect(bash(c).deny, `the unclosed $( was stripped again: ${c}`).not.toBeNull();
   });
 
   // Review 241 F1: the strip once kept a "…" span that held a `$(` whole, so
@@ -446,9 +447,11 @@ describe('the worker merge deny', () => {
 
   // The merge word may be followed by an operator with no blank between: `;`
   // `&` `|` `(` `)` `<` `>` end it as a blank does (review 247 F3; bare `gh pr
-  // merge` merges the current branch's PR, a worker's own wave PR).
+  // merge` merges the current branch's PR, a worker's own wave PR). Every
+  // member of the end class has its own case (review 249 F2).
   it.each([
     ['gh pr merge;echo ok'], ['gh pr merge&&echo ok'], ['x=$(gh pr merge)'], ['(gh pr merge)'],
+    ['gh pr merge|cat'], ['gh pr merge>/tmp/o'], ['gh pr merge</dev/null'],
   ])('refuses a merge word that an operator ends: %j', (c) => {
     hold(WAVE_HOLD);
     expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
