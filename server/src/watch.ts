@@ -35,7 +35,7 @@ import type {
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -372,11 +372,11 @@ const MAIL_COOLDOWN_MS = 120_000;
 const COORD_QUIET_MS = 15_000;
 const COORD_COOLDOWN_MS = 30_000;
 
-/** How long an UNACKED delivery waits before it is replayed. Dated from the
+/** WHAT `MAIL_REPLAY_MS` MEANS, kept beside the code that enforces it: how long
+ *  an UNACKED delivery waits before it is replayed. Dated from the
  *  `UserPromptSubmit` edge when there is one, from `deliveredAt` otherwise —
  *  the edge proves the turn started, so the recipient is thinking, not
- *  ignoring. */
-const MAIL_REPLAY_MS = 600_000;
+ *  ignoring. The VALUE is `shared/api.ts`'s (`stall.ts` reads it too). */
 
 /** WHAT `MAIL_MAX_ATTEMPTS` MEANS, kept beside the code that enforces it. The
  *  VALUE moved to `shared/api.ts` in Task 408 — `MailSummary.attempts` puts
@@ -3047,7 +3047,7 @@ export class FleetWatcher {
     try {
       // `mail-disabled` reaches L1 as a fact, and `stallMailDisabledHold` decides what it holds (slug
       // `lane-honours-mail-disabled` (D-3636)). The module-local literal, never rundefs' export: see the import note.
-      const arming: StallArming = { ...stallArmingOf(names), mailDisabled: names.includes(MAIL_DISABLED_MARKER) };
+      const arming: StallArming = { ...stallArmingOf(names), mailDisabled: names.includes(MAIL_DISABLED_MARKER), mailMode: mailTurnModeOf(names) };
       if (arming.disabled) return;
       const paused = names.includes(COORDINATOR_PAUSE_MARKER);
       let candidates: ReturnType<CoordStore['stallCandidates']>;
@@ -3406,7 +3406,7 @@ export class FleetWatcher {
   /** Applies one session verdict (orphan D and E, failed, mail stuck, a coordinator's marker), and decides nothing.
    *  - A hold applies nothing, except `failed-unknown`, which warns once (spec §5.2: never guessed into a
    *    self-wake).
-   *  - Shadow: a worker records a `stall-shadow:` row on its run; a run-less session warns once.
+   *  - Shadow: a worker records a `stall-shadow:` row on its run; a run-less session warns once per key, the key in the line (`runless-shadow-line-carries-its-key` (D-3800)).
    *  - To the session itself or to its coordinator: one `queueStallNotice`, on the worker's run, or run-less and
    *    deduped by its subject.
    *  - To the operator: a worker records the row first and pushes only when it is new; a run-less session latches in
@@ -3425,7 +3425,7 @@ export class FleetWatcher {
     const run = si.run;
     if (stallNotifyDelivery(v.arm, v.to, si.arming) === 'shadow') {
       if (run === null) {
-        this.stallWarnOnce(id, `shadow-${v.arm}-${v.rung}-${v.key}`, `ccrc-server: stall-watch shadow ${v.arm} r${v.rung} ${id} (run-less)`);
+        this.stallWarnOnce(id, `shadow-${v.arm}-${v.rung}-${v.key}`, `ccrc-server: stall-watch shadow ${v.arm} r${v.rung} ${id} (run-less) key ${v.key}`);
         return;
       }
       const obs = store.recordStallObservation(run.id, stallDetail('shadow', v.arm, v.rung, v.key), now);

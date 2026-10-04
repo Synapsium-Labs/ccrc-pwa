@@ -25,7 +25,7 @@ import {
   BACKLOG_HORIZON_MS, DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
   FROZEN_NO_EVENT_MS, ORPHAN_PUSH_MS, STALL_FAILED_PREFIX, stallFailedSubject,
   STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
-  parseStallDetail, stallDetail,
+  parseStallDetail, stallDetail, COORD_DEAF_MS,
 } from '../src/coord/stall.js';
 import type { PushPayload } from '../src/push.js';
 import { WAVE_DONE_SUBJECT, type FleetSession } from '../../shared/api.js';
@@ -33,6 +33,7 @@ import { tmuxTarget } from '../../shared/tmux-target.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
+import { MAIL_GATE_BUSY_MARKER } from '../src/turnidle.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -50,6 +51,9 @@ const WORKER_MAIL_AT = Date.parse('2026-09-28T21:17:43Z');  // S4 #2509 status
 const INBOUND_AT = Date.parse('2026-09-28T21:19:17Z');      // S4 #2510 answer
 const IDLE_AT = Date.parse('2026-09-28T21:56:31Z');         // S4 main loop idle since
 const KEY = WORKER_MAIL_AT;                                  // episodeKeyMs: the worker's newest mail
+/** The dialog cap's key on a pane that reads waiting since the S4 idle stamp: the stamp, later than KEY
+ *  (`dialog-cap-keyed-on-the-dialog` (D-3799)). */
+const DIALOG_KEY = IDLE_AT;
 const R1_AT = IDLE_AT + STALL_QUIET_MS;
 const R2_AT = R1_AT + STALL_ESCALATE_MS;
 const R3_AT = R2_AT + STALL_OPERATOR_MS;
@@ -686,7 +690,7 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${KEY}` });
+    expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${DIALOG_KEY}` });
     expect(operatorMail(coord)).toEqual([]);          // neither worker nor coordinator can land on waiting
   });
 
@@ -712,8 +716,8 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${KEY}` });
-    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
+    expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${DIALOG_KEY}` });
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, DIALOG_KEY)]);
     expect(operatorMail(coord)).toEqual([]);
   });
 
@@ -831,7 +835,7 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     nothingWritten(coord, runId, sent);               // the hookstate ask reads `unmeasured`, never "no ask"
     at(R1_AT + STALL_SWEEP_MS);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
-    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, DIALOG_KEY)]);
     expect(sent).toHaveLength(1);
   });
 
@@ -846,7 +850,7 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     broken = false;
     at(R1_AT + STALL_SWEEP_MS);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
-    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, DIALOG_KEY)]);
     expect(sent).toHaveLength(1);
   });
 
@@ -860,7 +864,7 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     nothingWritten(coord, runId, sent);
     at(R1_AT + STALL_SWEEP_MS);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
-    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, DIALOG_KEY)]);
     expect(sent).toHaveLength(1);
   });
 
@@ -1059,7 +1063,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     expect(operatorMail(coord)).toHaveLength(1);      // deduped by its subject, which a restart does not forget
   });
 
-  it('orphan D: ⚠ orphaned once, when the self-mail is still undelivered ORPHAN_PUSH_MS on; a new watcher may push once more (the latch is in memory)', async () => {
+  it('orphan D: ⚠ orphaned once, when the self-mail is still undelivered ORPHAN_PUSH_MS on; each new watcher (a server restart) pushes it once more, same tag (the latch is in memory)', async () => {
     const { h, w, sent } = await rig();
     seedOrphan(h.home);
     at(D_AT);
@@ -1079,7 +1083,14 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     const again = await primedWatcher(h, store(h.home), { push: spy2.push as never });
     at(D_AT + ORPHAN_PUSH_MS + 2 * STALL_SWEEP_MS);
     await again.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
-    expect(spy2.sent).toHaveLength(1);                 // documented (spec §5.2): the tag collapses the two on the phone
+    expect(spy2.sent).toHaveLength(1);
+    // Once PER restart, not once in total (`runless-shadow-line-carries-its-key` (D-3800) corrects README's "once more"):
+    // a third watcher pushes it again, same tag. A durable latch would flip this row, deliberately.
+    const spy3 = pushSpy();
+    const third = await primedWatcher(h, store(h.home), { push: spy3.push as never });
+    at(D_AT + ORPHAN_PUSH_MS + 3 * STALL_SWEEP_MS);
+    await third.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
+    expect(spy3.sent.map((p) => p.tag)).toEqual([`orphaned-${ORPHAN}-${RESTART_AT}`]);
   });
 
   it('a registry row whose marker lost nothing costs ONE read; one that lost tasks costs two (the live file too)', async () => {
@@ -1194,7 +1205,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], [...ARMED, 'mail-disabled'], tickOf());
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ tag: `stall-${runId}-dialog-cap-1-${KEY}` });
+    expect(sent[0]).toMatchObject({ tag: `stall-${runId}-dialog-cap-1-${DIALOG_KEY}` });
   });
 
   it('mail-disabled: a rung that is shadow anyway still records its shadow row', async () => {
@@ -1236,7 +1247,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${KEY}` });
+    expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${DIALOG_KEY}` });
   });
 
   it('a coordinator whose turn marker stays unreadable MARKER_UNREADABLE_MS draws ⚠ marker once per first-seen time', async () => {
@@ -1673,7 +1684,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
-    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${KEY}`]);
+    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${DIALOG_KEY}`]);
   });
 
   it('hold 2a\'s identity cut, its other half: a question file with no registry row behind it is no ask, so the dialog-cap push goes out', async () => {
@@ -1685,7 +1696,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, { panePids: new Map([[WORKER, PID]]), records: [] });
-    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${KEY}`]);
+    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${DIALOG_KEY}`]);
   });
 
   it('a run worker that also claims a run is judged once, as a worker: one mail-stuck push per delivery, never a second run-less one', async () => {
@@ -1834,6 +1845,35 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
       [ORPHAN, [], D_AT - BACKLOG_HORIZON_MS],
     ]);
   });
+
+  it('dark, the run-less shadow line names its key, so a restart\'s repeat reads as the same episode (runless-shadow-line-carries-its-key (D-3800))', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, ORPHAN, ORPHAN_UUID);
+    seedCaseD(h.home, ORPHAN, ORPHAN_UUID);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const t = tickOf(PID, [regRow(ORPHAN, ORPHAN_UUID)]);
+    at(D_AT);
+    await w.sweepStalls([fleetRow(ORPHAN)], ARMED, t);
+    const again = await primedWatcher(h, coord);       // a server restart: the warn-once set is in memory
+    at(D_AT + STALL_SWEEP_MS);
+    await again.sweepStalls([fleetRow(ORPHAN)], ARMED, t);
+    const prefix = `ccrc-server: stall-watch shadow orphan-d r1 ${ORPHAN} (run-less)`;
+    expect(lines(warn, prefix)).toBe(2);
+    expect(lines(warn, `${prefix} key ${RESTART_AT}`)).toBe(2);
+  });
+
+  it('dark, a coordinator\'s mail-stuck shadow line is keyed on its delivery id (runless-shadow-line-carries-its-key (D-3800))', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    seedRun(coord, { program: 'demo-program' });
+    queuedTo(coord, 'demo-elsewhere', INBOUND_AT - 1_000);   // review-256-pins (D-3804): one prior delivery, so this id is not its rung (1)
+    const id = queuedTo(coord, COORD, INBOUND_AT);
+    expect(id).not.toBe(1);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(IDLE_AT + MAIL_STUCK_MS);
+    await w.sweepStalls([fleetRow(WORKER), fleetRow(COORD)], ARMED, tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]));
+    expect(lines(warn, `ccrc-server: stall-watch shadow mail-stuck r1 ${COORD} (run-less) key ${id}`)).toBe(1);
+  });
 });
 
 // ── quiet-restarts-on-reactivation (D-3788): the lane reads the re-activation from the run's own events ─────────────
@@ -1917,7 +1957,7 @@ describe('sweepStalls: a send-back starts the clocks again (quiet-restarts-on-re
     expect(operatorMail(coord)).toEqual([]);
   });
 
-  it('after a send-back, r2 cites the new episode\'s r1, never a row recorded under the pre-advance key (R11 F3: stallCitedCheck)', async () => {
+  it('after a send-back, r2 cites the new episode\'s r1, never a row recorded under the pre-advance key (R11 F3: the lane passes r2\'s episode key; the key filter itself is pinned by the L1 stallCitedCheck row in stall-verdict)', async () => {
     const { h, coord, w } = await rig();
     seedRegistry(h.home, COORD, COORD_UUID);          // an alive coordinator, so r2 is sent
     const runId = seedE4(h, coord);
@@ -1966,5 +2006,122 @@ describe('sweepStalls: a send-back starts the clocks again (quiet-restarts-on-re
     await w.sweepStalls([fleetRow(WORKER), fleetRow(OTHER_WORKER)], LIVE, tickOf(PID, [regRow(WORKER), regRow(OTHER_WORKER)]));
     expect(operatorMail(coord).map((m) => m.toId)).toEqual([OTHER_WORKER]);
     expect(warn.mock.calls.some((c) => /^ccrc-server: stall-watch run \d+ \(demo-quiet-mesa\) failed \(SQLITE_BUSY\)/.test(String(c[0])))).toBe(true);
+  });
+});
+
+// ── fix-round-alias-reaches-the-ball (D-3797): the lane carries a mail to the role `worker` to the verdict ─────────────
+// Run 238's measured shape (2026-10-02/03, the times as recorded): the worker's wave-done, the run sent back, and the
+// fix-round brief to the role `worker` 29 s after the advance. The real store read (`stallMailFor`'s run arm) must
+// carry the role mail end to end.
+describe('sweepStalls: a fix round addressed to the role worker after a wave-done (run 238)', () => {
+  it('draws r1 two hours after the brief, keyed on the send-back', async () => {
+    const { h, coord, w } = await rig();
+    const D0 = Date.parse('2026-10-02T20:00:00Z');        // chosen: the dispatch
+    const WD = Date.parse('2026-10-02T23:56:31Z');        // the worker's wave-done
+    const STOP = WD + 120_000;                             // chosen: the worker's Stop two minutes later
+    const REACT = Date.parse('2026-10-03T03:16:47Z');     // awaiting-review -> working
+    const BRIEF = Date.parse('2026-10-03T03:17:16Z');     // the fix-round brief, to the role worker
+    seedLiveState(h.home, { statusUpdatedAt: STOP });
+    at(D0);
+    const opened = coord.openRun({ program: 'demo-program', title: 'demo-program', project: 'demo', wave: 1, waveOf: 2, claimedBy: COORD });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    const runId = opened.id;
+    coord.markDispatched(runId, WORKER, `${WORKER}-ws`, `ws/${WORKER}`, false, D0);
+    const adv = (ms: number, to: Parameters<CoordStore['advance']>[1]): void => {
+      at(ms);
+      const r = coord.advance(runId, to, 'coordinator');
+      if (!r.ok) throw new Error(`advance refused: ${JSON.stringify(r)}`);
+    };
+    adv(D0, 'dispatched');
+    adv(D0 + 60_000, 'working');
+    at(WD);
+    coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId, kind: 'status', subject: WAVE_DONE_SUBJECT, body: 'b', artifacts: [] });
+    adv(WD + 60_000, 'awaiting-review');
+    adv(REACT, 'working');
+    at(BRIEF);
+    coord.insertMail({ fromId: COORD, fromUuid: COORD_UUID, toId: 'worker', runId, kind: 'status', subject: 'fix-round', body: 'b', artifacts: [] });
+    at(BRIEF + STALL_QUIET_MS - STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
+    expect(operatorMail(coord)).toEqual([]);
+    at(BRIEF + STALL_QUIET_MS);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
+    expect(operatorMail(coord).map((m) => m.toId)).toEqual([WORKER]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, REACT)]);
+  });
+});
+
+// ── gate-held-mail-is-not-stuck (D-3798): the lane reads the gate's mode from the listing it already holds ────────────
+describe('sweepStalls: mail-stuck reads the mail gate\'s mode from the tick\'s listing (gate-held-mail-is-not-stuck (D-3798))', () => {
+  it('a delivery queued to a worker that reads busy over a done marker is mail-stuck under mail-gate-busy only', async () => {
+    const stuckRows = async (names: readonly string[]): Promise<string[]> => {
+      const { h, coord, w } = await rig();
+      const runId = seedRun(coord, { program: 'demo-program' });
+      seedLiveState(h.home, { status: 'busy', statusUpdatedAt: IDLE_AT + 300_000, startedAt: STARTED_AT });
+      seedTurnMark(h.home, WORKER);                   // done, its Stop at IDLE_AT
+      // Queued at 21:19:17Z (seedRun leaves the clock there) and never delivered.
+      const m = coord.insertMail({ fromId: 'demo-boss', fromUuid: 'u', toId: WORKER, runId: null, kind: 'finding', subject: 'hi', body: 'b', artifacts: [] });
+      coord.queueDelivery(m.id, WORKER, 'envelope');
+      at(IDLE_AT + MAIL_STUCK_MS);
+      await w.sweepStalls([fleetRow(WORKER, { status: 'busy' })], names, tickOf());
+      return stallRows(coord, runId).filter((d) => d.includes('mail-stuck'));
+    };
+    expect(await stuckRows([...LIVE, MAIL_GATE_BUSY_MARKER])).toHaveLength(1);
+    expect(await stuckRows(LIVE), 'the default gate holds busy mail by design').toEqual([]);
+  });
+});
+
+// ── gate-held-mail-is-not-stuck (D-3798): a replay re-stamps deliveredAt, so the real store must say it was a replay ─────
+// The coordinator coord-deaf exists for: idle, the mail typed into its pane, never acked. `sweepMail` replays such a row
+// every MAIL_REPLAY_MS (`markDelivered`, then `bumpReplayCount`), so its newest `deliveredAt` is never 10 min old. The
+// store's `replayCount`, carried by `stallMailFor`, is what lets L1 time a replayed row from its first-delivery estimate (`replayed-deaf-from-first-delivery-estimate` (D-3803)).
+describe('sweepStalls: coord-deaf on a delivery the mail sweep keeps replaying (gate-held-mail-is-not-stuck (D-3798))', () => {
+  it('is recorded an hour after the question\'s first delivery, while the newest deliveredAt is no more than ten minutes old (replayed-deaf-from-first-delivery-estimate (D-3803))', async () => {
+    const { coord, w, sent } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program', workerMail: null, inbound: null });
+    const Q_AT = IDLE_AT - 60_000;                       // chosen: the worker asks, and its turn ends a minute later
+    const REPLAY_MS = 10 * 60_000;                       // shared/api.ts's MAIL_REPLAY_MS
+    at(Q_AT);
+    const q = coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId, kind: 'question', subject: 'which base?', body: 'b', artifacts: [] });
+    const d = coord.queueDelivery(q.id, COORD, 'envelope');
+    coord.markDelivered(d.id, Q_AT + 60_000);           // the first delivery
+    for (let k = 1; k <= 5; k++) {                       // five replays, as sweepMail writes them
+      coord.markDelivered(d.id, Q_AT + 60_000 + k * REPLAY_MS);
+      expect(coord.bumpReplayCount(d.id)).toEqual({ state: 'counted', replayCount: k });
+    }
+    const deafRows = (): string[] => stallRows(coord, runId).filter((x) => x.includes('coord-deaf'));
+    // Five replays: the estimate, newest deliveredAt less 5 x MAIL_REPLAY_MS, is the first delivery, Q_AT + 60 s. The queue time
+    // (Q_AT) would read it deaf a minute early, and the newest deliveredAt (Q_AT + 51 min) not for 50 min more.
+    const FIRST_AT = Q_AT + 60_000;
+    at(FIRST_AT + COORD_DEAF_MS - STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    expect(deafRows()).toEqual([]);
+    at(FIRST_AT + COORD_DEAF_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    // The newest deliveredAt (Q_AT + 51 min) is at most 10 min old here: timed from it, nothing would be deaf for 50 min more.
+    expect(deafRows()).toEqual([stallDetail('live', 'coord-deaf', 1, q.id)]);
+    expect(sent.map((p) => p.tag)).toContain(`stall-${runId}-coord-deaf-1-${q.id}`);
+  });
+});
+
+// ── dialog-cap-keyed-on-the-dialog (D-3799): one dialog-cap push per dialog, through a restart ──────────────────────────
+describe('sweepStalls: one dialog-cap push per dialog (dialog-cap-keyed-on-the-dialog (D-3799))', () => {
+  it('one push per dialog across sweeps and a fresh watcher; a second dialog in the same episode pushes again', async () => {
+    const { h, coord, w, sent } = await rig();
+    seedLiveState(h.home, { status: 'waiting' });            // the first dialog, since IDLE_AT
+    const runId = seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
+    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${IDLE_AT}`]);
+    const spy2 = pushSpy();
+    const again = await primedWatcher(h, coord, { push: spy2.push as never });   // a server restart
+    at(R1_AT + STALL_SWEEP_MS);
+    await again.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
+    expect(spy2.sent).toEqual([]);                           // the row on the dialog's key holds it
+    const S2 = R1_AT + 2 * STALL_SWEEP_MS;                   // the word turned and a second prompt shows: a new stamp
+    seedLiveState(h.home, { status: 'waiting', statusUpdatedAt: S2 });
+    at(S2 + STALL_QUIET_MS);
+    await again.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
+    expect(spy2.sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${S2}`]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, IDLE_AT), stallDetail('live', 'dialog-cap', 1, S2)]);
   });
 });
