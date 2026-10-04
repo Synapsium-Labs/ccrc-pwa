@@ -84,6 +84,13 @@ const launcherPostFails = (t: string): string => {
   if (!t.includes(at)) throw new Error('the installer has no postcondition docstring to hook');
   return t.replace(at, `${at}    if label == 'launcher':\n        raise Refused('fixture: the launcher did not re-measure')\n`);
 };
+/** The helper with the LAUNCHER's report failing as a closed stdout fails it —
+ *  AFTER its post-rename re-measurement passed. */
+const launcherReportFails = (t: string): string => {
+  const at = 'def say(msg):\n';
+  if (!t.includes(at)) throw new Error('the installer has no say() to hook');
+  return t.replace(at, `${at}    if msg.startswith('launcher published'):\n        raise BrokenPipeError(32, 'fixture: stdout closed')\n`);
+};
 const withHook = (t: string): string => {
   const at = "    if argv == [SELFTEST_ARGV]:\n";
   if (!t.includes(at)) throw new Error('the template has no self-test branch for the hook');
@@ -366,6 +373,32 @@ describe('the pre-publication kernel self-test, and the order of publication, pr
       }
     }
   }, 120_000);
+
+  it('a launcher that re-measured and whose report then failed is exit 2 — it says the launcher stands as self-tested, never that it did not re-measure, and the pair is in place', () => {
+    for (const [what, change, moved] of [
+      ['a body and launcher change', { ccd: '\n# v2\n' }, 'the body and the launcher'],
+      ['a launcher-only change', { template: (t: string) => `${t}\n# a launcher-only change\n` }, 'the launcher'],
+    ] as const) {
+      plantTree();
+      expect(helper(['install', tree(), home]).code).toBe(0);
+      plantTree({ ...change, installer: launcherReportFails });
+      const r = helper(['install', tree(), home]);
+      expect(r.code, `${what}: ${r.stderr}`).toBe(2);
+      expect(r.stderr, what).toContain(`refused after ${moved} moved: [Errno 32] fixture: stdout closed`);
+      expect(r.stderr, what).toContain(
+        `re-measured as the file just staged, so what stands at ${entry()} is the launcher this run self-tested`);
+      expect(r.stderr, `${what}: the re-measurement passed`).not.toContain('did not re-measure');
+      expect(r.stderr, what).not.toContain('refuses by digest');
+      assertPair();
+      // A re-run with the shipped helper finds the pair converged and moves nothing.
+      plantTree(change);
+      const again = helper(['install', tree(), home]);
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stdout).toContain('converged');
+      assertPair();
+      assertNoLeftovers();
+    }
+  }, 60_000);
 
   it('a staged launcher whose kernel self-test fails publishes nothing and leaves nothing behind', () => {
     plantTree();

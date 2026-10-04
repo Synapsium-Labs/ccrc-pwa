@@ -38,13 +38,15 @@
 # exit 1 proves: by the self-test, `~/.local/bin` and `~/.local/libexec/ccrc`
 # may already have been created and this installer's own leftovers swept, and
 # a refusal after it can follow the body's in-place mode repair; 2 a half moved
-# and the run stopped short of a verified pair, and stderr names what moved.
-# When only the body moved, the old launcher refuses every start by digest.
-# When the launcher moved too — its re-measurement after the rename failed —
-# both halves (or the launcher alone, the body having been current) were
-# replaced and what stands at ~/.local/bin/ccd is UNVERIFIED: it may start ccd
-# or refuse. Either way a re-run converges the pair. No rollback is attempted
-# across the two directories.
+# and the run failed before it reported a verified pair, and stderr names what
+# moved. When only the body moved, the old launcher refuses every start by
+# digest. When the launcher moved too (or alone, the body having been current)
+# and its re-measurement after the rename failed, what stands at
+# ~/.local/bin/ccd is UNVERIFIED: it may start ccd or refuse. When that
+# re-measurement passed and only the run's own report failed after it (a
+# closed stdout), the pair stands as staged and self-tested. Every way, a
+# re-run converges the pair. No rollback is attempted across the two
+# directories.
 #
 # STANDARD LIBRARY ONLY. Nothing here trusts the environment: `-I` already
 # ignores every PYTHON* variable, and the paths it writes come from argv.
@@ -389,6 +391,9 @@ def install(tree, home):
 
     staged_body = staged_entry = None
     moved = []
+    # Set only once the launcher's re-measurement passed: what fails after it
+    # (the report on stdout) leaves the pair as staged, and says so.
+    remeasured = False
     try:
         staged_body = stage(libexec, body_data, BODY_MODE) if body_state == 'differ' else None
         staged_entry = stage(bindir, entry_data, ENTRY_MODE) if entry_state == 'differ' else None
@@ -418,12 +423,17 @@ def install(tree, home):
             staged_entry = None
             moved.append('launcher')
             postcondition(entry_dest, entry_data, ENTRY_MODE, 'launcher')
+            remeasured = True
             say('launcher published at %s for %s (replaced: %s)' % (entry_dest, python, kind))
         return 0
     except (OSError, Refused) as e:
         if not moved:
             raise
-        if 'launcher' in moved:
+        if remeasured:
+            state = ('the launcher was renamed into place and re-measured as the file just staged, so what stands'
+                     ' at %s is the launcher this run self-tested; only the run\'s report failed after that, and a'
+                     ' re-run converges without moving anything' % entry_dest)
+        elif 'launcher' in moved:
             state = ('the launcher was renamed into place and did not re-measure as the file just staged, so what'
                      ' stands at %s is unverified until a re-run converges the pair' % entry_dest)
         else:
