@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
-import { installFixtureTree } from './installTreeFixture.js';
+import { installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -294,8 +294,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   plant('npm',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
-  plant('rsync',
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
+  plant('rsync', rsyncRecorder(RSYNC));
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';

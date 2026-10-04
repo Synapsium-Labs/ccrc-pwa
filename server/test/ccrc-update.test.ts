@@ -47,7 +47,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { itLinux, itDarwin, platformContrast, python3ProgramArm, IS_DARWIN } from './platformFixtures.js';
-import { installVersionedTree, keepDigest } from './installTreeFixture.js';
+import { installVersionedTree, keepDigest, rsyncRecorder } from './installTreeFixture.js';
 import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
 // Fix round 1 item 3 / review 155 C31: W2's OWN reader (never a hand copy),
 // the same import pattern `update-intent-cross-side.test.ts` already uses.
@@ -536,8 +536,7 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
   plant('npm',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
-  plant('rsync',
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
+  plant('rsync', rsyncRecorder(RSYNC));
   // Task 1 (design §10, "update.json is written at every phase … by rename"):
   // a RECORDING mv. When the destination is `~/.ccrc/update.json` it appends
   // the SOURCE file's one line to `$HOME/update-json-writes` before the real
@@ -4168,7 +4167,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
     const home = mkTmp('ccrc-update-redact-unit-');
     const call = (text: string): string => {
-      const p = spawnSync('bash', ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
+      const p = spawnSync(BASH, ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
         { env: { HOME: home }, encoding: 'utf8' });
       expect(p.status, p.stderr).toBe(0);
       return p.stdout;
@@ -4201,7 +4200,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     const redactBlock = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
     expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
     const callWithHome = (text: string, home: string): string => {
-      const p = spawnSync('bash', ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
+      const p = spawnSync(BASH, ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
         { env: { HOME: home }, encoding: 'utf8' });
       expect(p.status, p.stderr).toBe(0);
       return p.stdout;
@@ -4239,7 +4238,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     const redactBlock = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
     expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
     const call = (text: string): string => {
-      const p = spawnSync('bash', ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
+      const p = spawnSync(BASH, ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
         { env: { HOME: '/home/u' }, encoding: 'utf8' });
       expect(p.status, p.stderr).toBe(0);
       return p.stdout;
@@ -4377,7 +4376,7 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     chmodSync(join(longHome, '.ccrc', 'floor'), 0o000);
     let r: Result;
     try {
-      const p = spawnSync('bash', ['-c', harness],
+      const p = spawnSync(BASH, ['-c', harness],
         { env: { HOME: longHome, UPD_VERSION: 'v2.0.0' }, encoding: 'utf8' });
       r = { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
     } finally {
@@ -4427,11 +4426,34 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       `_upd_phase failed "unreadable: $HOME/.ccrc/ccrc.env is not a regular file"`,
     ].join('\n');
     mkdirSync(join(home, '.ccrc'), { recursive: true });
-    const r = spawnSync('bash', ['-c', harness], { env: { HOME: home }, encoding: 'utf8' });
+    const r = spawnSync(BASH, ['-c', harness], { env: { HOME: home }, encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(0);
     const rep = JSON.parse(readFileSync(jsonPath, 'utf8')) as Record<string, unknown>;
     expect(String(rep['detail']), JSON.stringify(rep)).not.toContain(home);
     expect(rep['detail']).toBe('unreadable: ~/.ccrc/ccrc.env is not a regular file');
+  });
+
+  // Wave 9 M1-M3 (D-3808): five harnesses run functions extracted from ccd/ccrc
+  // under a PATH-less env, and a bare `bash` under that env resolves macOS's
+  // /bin/bash 3.2 (no BASHPID, `\/` in a ${//} replacement). They spawn the
+  // file's resolved BASH instead. This case reads the file itself, and the
+  // needle is built from two halves so the case never matches its own text.
+  it('no bare-`bash` spawn in this file hands its child an env — a PATH-less env resolves macOS\'s /bin/bash 3.2 (wave 9 M1–M3)', () => {
+    const text = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+    const NEEDLE = ['spawnSync(', "'bash'"].join('');
+    const hits: number[] = [];
+    for (let at = text.indexOf(NEEDLE); at !== -1; at = text.indexOf(NEEDLE, at + 1)) hits.push(at);
+    for (const at of hits) {
+      const end = text.indexOf('encoding:', at);
+      const slice = text.slice(at, end === -1 ? text.length : end);
+      expect(slice.includes('env:'),
+        `ccrc-update.test.ts spawns bare bash with an env at offset ${at} — use BASH`).toBe(false);
+    }
+    // The six env-less sites: the realPath and REAL_PYTHON3 probes, writeManifest,
+    // the SHA256SUMS writer, and the two locale probes.
+    expect(hits.length,
+      `ccrc-update.test.ts has ${hits.length} bare-bash spawns, expected exactly 6 — a new one must use BASH or be counted here`)
+      .toBe(6);
   });
 });
 
@@ -11779,7 +11801,9 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     expect(linkOf(home)).toBe(v1);
   });
 
-  it('control (the detached child): `rollback --to v1.0.0 --detach --from pwa` in the killed-flip state with the target NOT kept — the parent hands the run on, and the CHILD (which gets `--to` and never runs C27) dies with C27\'s sentence: no rsync, no npm, nothing downloaded, the report closed `failed`', () => {
+  // PLATFORM-ONLY: --detach is Linux-only (decision 17) — the macOS answer is
+  // `itDarwin('--detach refuses on macOS by name …')` above.
+  itLinux('control (the detached child): `rollback --to v1.0.0 --detach --from pwa` in the killed-flip state with the target NOT kept — the parent hands the run on, and the CHILD (which gets `--to` and never runs C27) dies with C27\'s sentence: no rsync, no npm, nothing downloaded, the report closed `failed`', () => {
     const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-detached-');
     rmSync(join(v1, '.ccrc-installed'));
     publishV1(home);

@@ -82,7 +82,7 @@ import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { ghContainedEnv, renderCcdEntry } from './ccdWsHelpers.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm } from './platformFixtures.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
-import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest } from './installTreeFixture.js';
+import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest, rsyncRecorder } from './installTreeFixture.js';
 import {
   plantFakeRuntime, codexRoster, plantSystemd, killLaneProcesses, spawnListener, adoptPlantedSystemd,
   assertSpineFrontContained, spineSystemctlArms, spineSystemdRun, SPINE_CONTAINMENT_PROBE, managerCalls,
@@ -605,13 +605,14 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   plant('npm',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
-  // `rsync` is a RECORDER, not a poison: it logs its argv and then EXECS THE
-  // REAL BINARY. Both halves are load-bearing. Asserting on argv alone passes
+  // `rsync` is a RECORDER, not a poison: it logs the argv of each call ccrc
+  // makes and then EXECS THE REAL BINARY (`rsyncRecorder`, which skips only the
+  // implementation's own `--server` re-exec — wave 9 M6). Both halves are
+  // load-bearing. Asserting on argv alone passes
   // against a step that composes a perfect command line and copies nothing;
   // asserting on the placed tree alone cannot tell "the excludes are spelled
   // correctly" from "the fixture happened to hold nothing they match".
-  plant('rsync',
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
+  plant('rsync', rsyncRecorder(RSYNC));
   // ── python3: graphify's engine venv, contained the same way (Task 2) ─────
   // `_inst_graphify_engine` (graphify Task 2) now runs, on every role but
   // `server`, `python3 -m venv "$venv"` followed by a REAL
@@ -746,6 +747,7 @@ function runInstall(home: string, args: string[] = ['install'],
   extraEnv: NodeJS.ProcessEnv = {},
   opts: {
     umask?: string; omit?: string[]; from?: string; stubs?: Record<string, string>;
+    noManager?: true;
   } = {}): Result {
   const env = { ...ccrcEnv(home, opts.omit ?? []), ...extraEnv };
   replantDoctorStubs(home);
@@ -755,11 +757,16 @@ function runInstall(home: string, args: string[] = ['install'],
   // Fix round 2 (N1/N5): on the FINAL merged env — after extraEnv, the
   // doctor-stub replant and opts.stubs have all landed, immediately before
   // the spawn. `opts.omit`'s own `systemctl`/`systemd-run` entries (if any)
-  // are the ONLY legitimate "this call reaches no manager at all" case in
-  // this file (`ccrc install: a box with no systemd`, which also strips
-  // both names from every real PATH directory via `pathWithout`) — every
-  // other call keeps the full strict check.
-  const expectAbsent = (opts.omit ?? []).filter((n) => n === 'systemctl' || n === 'systemd-run');
+  // are one of exactly TWO legitimate "this call reaches no manager at all"
+  // cases in this file (`ccrc install: a box with no systemd`, which also
+  // strips both names from every real PATH directory via `pathWithout`). The
+  // other is `opts.noManager` (wave 9 M7, D-3812): the `describeDarwin`
+  // missing-dependency block's PATH deliberately drops `~/.local/bin`, so
+  // neither `systemctl` nor `systemd-run` resolves. Every other call keeps the
+  // full strict check.
+  const expectAbsent = opts.noManager
+    ? ['systemd-run', 'systemctl']
+    : (opts.omit ?? []).filter((n) => n === 'systemctl' || n === 'systemd-run');
   assertSpineFrontContained(env, home, { expectAbsent });
   const ccrc = opts.from ?? ccrcIn(treeRoot(home));
   const r = opts.umask === undefined
@@ -965,6 +972,44 @@ function gitInit(root: string): string {
   return spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], { env, encoding: 'utf8' })
     .stdout.trim();
 }
+
+// Wave 9 M6 (D-3811). openrsync — macOS's /usr/bin/rsync — copies locally by
+// forking `rsync --server …` through PATH, so a recorder first on PATH is
+// reached a second time by the implementation's own re-exec. Samba rsync on
+// Linux copies in-process and never does, so this twin runs a fake that DOES
+// re-exec on every platform. The recorder must log the call ccrc made and
+// hand the `--server` call straight on.
+describe('the rsync recorder logs only the call ccrc made (wave 9 M6)', () => {
+  const setup = (fakeBody: string): { dir: string; env: NodeJS.ProcessEnv } => {
+    const dir = mkTmp('ccrc-rsync-recorder-');
+    mkdirSync(join(dir, 'bin'));
+    mkdirSync(join(dir, 'poison'));
+    writeFileSync(join(dir, 'bin', 'rsync'), rsyncRecorder(join(dir, 'fake-openrsync')), { mode: 0o755 });
+    writeFileSync(join(dir, 'fake-openrsync'), fakeBody, { mode: 0o755 });
+    // A recorder that was not executable would fall through to this, never to the real rsync.
+    writeFileSync(join(dir, 'poison', 'rsync'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/rsync-poison"\nexit 97\n', { mode: 0o755 });
+    return { dir, env: { HOME: dir, PATH: `${dir}/bin:${dir}/poison:/usr/bin:/bin` } };
+  };
+
+  it('a local copy that re-execs `rsync --server` through PATH reaches the recorder twice and is logged once', () => {
+    const { dir, env } = setup('#!/bin/sh\nif [ "$1" = --server ]; then touch "$HOME/server-ran"; exit 0; fi\n'
+      + 'rsync --server --sender -logDtpre.iLsfxC . "$2"\nexit 0\n');
+    const r = spawnSync('sh', [join(dir, 'bin', 'rsync'), '-a', 'src/', 'dst/'], { env, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readFileSync(join(dir, 'rsync-argv'), 'utf8')).toBe('-a src/ dst/\n');
+    expect(existsSync(join(dir, 'server-ran')), 'the fake\'s --server arm never ran through the recorder').toBe(true);
+    expect(existsSync(join(dir, 'rsync-poison')), 'the recorder fell through to the poison').toBe(false);
+  });
+
+  it('control: a copy that never re-execs is logged once too', () => {
+    const { dir, env } = setup('#!/bin/sh\nexit 0\n');
+    const r = spawnSync('sh', [join(dir, 'bin', 'rsync'), '-a', 'src/', 'dst/'], { env, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readFileSync(join(dir, 'rsync-argv'), 'utf8')).toBe('-a src/ dst/\n');
+    expect(existsSync(join(dir, 'rsync-poison'))).toBe(false);
+  });
+});
 
 describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
   // WHY THE TREE IS COPIED AT ALL, since the verb is already running out of
@@ -1744,6 +1789,14 @@ describeLinux('ccrc install: a box with no systemd', () => {
 // platform the refusal an operator actually meets is one of THOSE, and it
 // carries the same three promises the systemd one does: by name, before the
 // first write, with a remedy that works.
+// Wave 9 M7 (D-3812): runInstall's `noManager` option.
+describe('runInstall: the noManager option (wave 9 M7)', () => {
+  itLinux('noManager makes the final-env check require BOTH manager names absent — under ccrcEnv they resolve to the fixture front, so it refuses (wave 9 M7)', () => {
+    expect(() => runInstall(freshBox('ccrc-install-nomgr-'), ['install'], {}, { noManager: true }))
+      .toThrow(/systemd-run was expected absent/);
+  });
+});
+
 describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
   // `omit` alone is not enough here: `runInstall` calls `replantDoctorStubs`
   // on every run, which copies `healthyDoctorBox`'s stubs back into
@@ -1771,7 +1824,7 @@ describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
   it('refuses by name BEFORE the first write when tmux is absent', () => {
     const home = freshBox('ccrc-install-notmux-');
     const r = runInstall(home, ['install'], { PATH: pathMissing(home, 'tmux') },
-      { omit: ['tmux'] });
+      { omit: ['tmux'], noManager: true });
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/tmux is required by ccrc/);
     expect(r.stderr).toMatch(/brew install tmux/);
@@ -1786,7 +1839,7 @@ describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
   it('refuses when flock is absent, naming the formula that provides it', () => {
     const home = freshBox('ccrc-install-noflock-');
     const r = runInstall(home, ['install'], { PATH: pathMissing(home, 'flock') },
-      { omit: ['flock'] });
+      { omit: ['flock'], noManager: true });
     expect(r.code).toBe(1);
     // ccd already refuses BY NAME at three workspace sites without it, so the
     // outcome this prevents is a box that installs cleanly and then cannot
@@ -1800,7 +1853,7 @@ describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
   it('refuses when launchctl is absent — systemd\'s probe, on this platform', () => {
     const home = freshBox('ccrc-install-nolaunchctl-');
     const r = runInstall(home, ['install'], { PATH: pathMissing(home, 'launchctl') },
-      { omit: ['launchctl'] });
+      { omit: ['launchctl'], noManager: true });
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/launchctl is required by 'ccrc install'/);
     // The two conditions stay apart, exactly as they do on Linux: this is not

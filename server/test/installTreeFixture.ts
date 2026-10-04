@@ -310,3 +310,13 @@ export function installVersionedTree(
   if (opts.link ?? true) symlinkSync(root, join(home, 'ccrc'));
   return root;
 }
+
+/** THE rsync recorder (wave 9 M6, D-3811): logs the argv of every call ccrc MAKES, then execs the real binary. A call
+ *  whose first argument is `--server` is the rsync implementation's OWN re-exec — openrsync, macOS's /usr/bin/rsync,
+ *  forks `rsync --server …` by PATH lookup for a local copy and so reaches this file a second time; samba rsync on
+ *  Linux copies in-process and never does — so it is handed straight on and not logged. One spelling, imported by
+ *  ccrc-install, ccrc-update and ccrc-install-graphify. */
+export function rsyncRecorder(realRsync: string): string {
+  return `#!/bin/sh\ncase "$1" in --server) exec ${realRsync} "$@" ;; esac\n`
+    + `printf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${realRsync} "$@"\n`;
+}

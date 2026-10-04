@@ -570,14 +570,14 @@ Re-measure the JS quoting. Before running any suite, run each planted launcher o
 
 | # | Guard | Mutation | Must red | Run | Measured |
 |---|---|---|---|---|---|
-| T1-M1 | M1–M3 use the resolved bash | `:4421` back to `spawnSync('bash', …)` | (1d): the `env:` assertion names one offset, and the count reads 7 | `ccrc-update -t "no bare-"` | pending |
-| T1-M2 | the scan cannot match itself | `NEEDLE` written as the plain literal | (1d)'s exact count (7, its own line counted); the `env:` assertion may stay green, which is why the count exists | same | pending |
+| T1-M1 | M1–M3 use the resolved bash | `:4421` back to `spawnSync('bash', …)` | (1d): the `env:` assertion names one offset, and the count reads 7 | `ccrc-update -t "no bare-"` | 1 red, the `env:` assertion at one offset (`… spawns bare bash with an env at offset 275075 — use BASH`); the file then holds 7 bare-bash hits |
+| T1-M2 | the scan cannot match itself | `NEEDLE` written as the plain literal | (1d)'s exact count (7, its own line counted); the `env:` assertion may stay green, which is why the count exists | same | 1 red, the exact count (`has 7 bare-bash spawns, expected exactly 6`); the `env:` assertion stayed green on the self-slice, as the row says |
 | T1-M4 | M4 is Linux-only | `itLinux` → `it` at `:11773` | none on Linux (no pin claimed); macOS case 4 SKIPS only with it | macOS leg | macOS |
-| T1-M5a | the escapee leaves the group | `ESCAPEE`'s node spawn with `detached: false` | both escapee cases, on the pgid assertion | `update-spawn` (server and agent) | pending |
-| T1-M5b | the wait is bounded | drop `&& [ "$SECONDS" -lt "$w" ]` from `ESCAPEE_WAIT` | (1g): `spawnSync` ends at its 10 s timeout (`r.signal` `SIGTERM`, `r.status` null) inside the case's 20 s budget, so the status-91 assertion reds — never the case timeout | `update-spawn -t "is bounded"` (server and agent) | pending |
-| T1-M6 | the recorder skips `--server` | drop the `case` line from `rsyncRecorder` | (1f-a) | `ccrc-install -t "rsync recorder"` | pending |
-| T1-M6b | one spelling | re-inline the old body at `ccrc-update:540` | none by behaviour on Linux; `git grep -c 'rsync-argv"\\nexec' -- server/test` reads 1 only with the import (Step 4 checks; no pin claimed) | grep | pending |
-| T1-M7 | `noManager` reaches `expectAbsent` | `runInstall` ignores `opts.noManager` | the `noManager` case | `ccrc-install -t "noManager"` | pending |
+| T1-M5a | the escapee leaves the group | `ESCAPEE`'s node spawn with `detached: false` | both escapee cases, on the pgid assertion | `update-spawn` (server and agent) | 2 red per package (server 2 of 15, agent 2 of 12), both escapee cases, on the pgid assertion (`the escapee did not leave the parent's group …`) |
+| T1-M5b | the wait is bounded | drop `&& [ "$SECONDS" -lt "$w" ]` from `ESCAPEE_WAIT` | (1g): `spawnSync` ends at its 10 s timeout (`r.signal` `SIGTERM`, `r.status` null) inside the case's 20 s budget, so the status-91 assertion reds — never the case timeout | `update-spawn -t "is bounded"` (server and agent) | 1 red per package, (1g): `r.status` null, `r.signal` SIGTERM after 10.0 s (`signal SIGTERM — the wait did not stop at its bound: expected null to be 91`), inside the case's 20 s budget |
+| T1-M6 | the recorder skips `--server` | drop the `case` line from `rsyncRecorder` | (1f-a) | `ccrc-install -t "rsync recorder"` | 1 red, (1f-a): `rsync-argv` held `-a src/ dst/` plus the `--server --sender …` line; (1f-b) stayed green |
+| T1-M6b | one spelling | re-inline the old body at `ccrc-update:540` | none by behaviour on Linux; `git grep -c 'rsync-argv"\\nexec' -- server/test` reads 1 only with the import (Step 4 checks; no pin claimed) | grep | `git grep -c` read `installTreeFixture.ts:1` only with the import, and `ccrc-update.test.ts:1` + `installTreeFixture.ts:1` with the body re-inlined; no behavioural red (none claimed) |
+| T1-M7 | `noManager` reaches `expectAbsent` | `runInstall` ignores `opts.noManager` | the `noManager` case | `ccrc-install -t "noManager"` | 1 red, the `noManager` case: `expected [Function] to throw an error` (runInstall spawned) |
 
 ### Task 2: M8 — `ccd` names a tmux session already sanitised (LIVE)
 
