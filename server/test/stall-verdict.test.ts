@@ -13,7 +13,7 @@ import type {
   CoordinatorState, LiveWordRead, StallActivation, StallArm, StallArming, StallHold, StallInput, StallMailRow, StallMode,
   StallNotice, StallR3Cause, StallRunRow, StallSubject, StallVerdict, StallWorker,
 } from '../src/coord/stall.js';
-import { REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT } from '../../shared/api.js';
+import { RUN_TRANSITIONS, REVIEW_RUN_TRANSITIONS, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT } from '../../shared/api.js';
 import { STALL_FAILED_PREFIX, STALL_ORPHANED_PREFIX } from '../src/coord/stall.js';
 import type { StallW2Facts } from '../src/coord/stall.js';
 
@@ -907,7 +907,7 @@ describe('wave 2: the §10 order after the turn marker, first match wins', () =>
     expect(vw({ arming: W2_LIVE, worker, notices: [notice('live', 'dead', 1, RUN67_DISPATCHED, NOW - MIN)] }, { deadSince: NOW - H })).toEqual(hold('lifecycle'));
   });
 
-  it('3 before 4: a dead-shaped lifecycle with no pane or a null stamp is the dead path', () => {
+  it('3 before 3b: a dead-shaped lifecycle with no pane or a null stamp is the dead path', () => {
     const noPane = workerAt({ lifecycle: 'orphan', live: { ok: false, reason: 'no-pane' } });
     const noStamp = workerAt({ lifecycle: 'never-started', live: liveWord('idle', null) });
     expect(vw({ arming: W2_LIVE, worker: noPane }, { deadSince: NOW - 11 * MIN })).toEqual(dead(RUN67_DISPATCHED, 'orphan'));
@@ -916,17 +916,17 @@ describe('wave 2: the §10 order after the turn marker, first match wins', () =>
     expect(stallVerdict(stallInput({ worker: noPane }), NOW)).toEqual(hold('lifecycle'));
   });
 
-  it('4: under the w2 marker an unmeasured turn marker holds unmeasured, and a malformed one takes wave 1', () => {
+  it('3b: under the w2 marker an unmeasured turn marker holds unmeasured, and a malformed one takes wave 1', () => {
     expect(vw({ arming: W2_LIVE }, { mark: UNREADABLE })).toEqual(hold('unmeasured'));
     expect(vw({ arming: W2_LIVE }, { mark: MALFORMED })).toEqual(r1(RUN67_DISPATCHED));
   });
 
-  it('6 before 7: a limit-locked worker inside a restart grace holds limit', () => {
+  it('5 before 6: a limit-locked worker inside a restart grace holds limit', () => {
     expect(vw({ arming: W2_LIVE, worker: workerAt({ limits: { five: 100, seven: 10 } }) }, { mark: markOf({ graceUntil: NOW + MIN }) }))
       .toEqual(hold('limit'));
   });
 
-  it('7: restart-grace holds until graceUntil, under the w2 marker only', () => {
+  it('6: restart-grace holds until graceUntil, under the w2 marker only', () => {
     const graceMark = (graceUntil: number): TurnMarkRead => markOf({
       event: 'SessionStart', at: NOW - 4 * MIN, restartAt: NOW - 4 * MIN, turnAt: NOW - 3 * H + 5 * MIN, graceUntil,
     });
@@ -935,13 +935,13 @@ describe('wave 2: the §10 order after the turn marker, first match wins', () =>
     expect(vw({}, { mark: graceMark(NOW + 1) })).toEqual(r1(RUN67_DISPATCHED));
   });
 
-  it('7 before 8: a frozen-shaped worker inside a restart grace holds restart-grace', () => {
+  it('6 before 7: a frozen-shaped worker inside a restart grace holds restart-grace', () => {
     expect(fv(hookAt(NOW - 2 * H), {}, { mark: markOf({ ...FROZEN_OVER, graceUntil: NOW + MIN }) })).toEqual(hold('restart-grace'));
   });
 });
 
-describe('wave 2: frozen (§5.2, §10 step 8)', () => {
-  it('8: FROZEN_NO_EVENT_MS with no main hook event fires to the claimant, keyed on turnAt; a fresher event holds busy', () => {
+describe('wave 2: frozen (§5.2, §10 step 7)', () => {
+  it('7: FROZEN_NO_EVENT_MS with no main hook event fires to the claimant, keyed on turnAt; a fresher event holds busy', () => {
     expect(fv(hookAt(NOW - 59 * MIN))).toEqual(hold('busy'));
     expect(fv(hookAt(NOW - FROZEN_NO_EVENT_MS + 1))).toEqual(hold('busy'));
     expect(fv(hookAt(NOW - FROZEN_NO_EVENT_MS))).toEqual(frozenV(NOW - 2 * H));
@@ -950,7 +950,7 @@ describe('wave 2: frozen (§5.2, §10 step 8)', () => {
     expect(fv(hookAt(NOW - MIN, null))).toEqual(hold('busy'));
   });
 
-  it.each(['SessionStart', 'PreCompact', 'PostCompact'])('8: a %s hook event is plumbing and never refreshes the frozen clock', (event) => {
+  it.each(['SessionStart', 'PreCompact', 'PostCompact'])('7: a %s hook event is plumbing and never refreshes the frozen clock', (event) => {
     expect(fv(hookAt(NOW - MIN, event))).toEqual(frozenV(NOW - 2 * H));
   });
 
@@ -960,16 +960,16 @@ describe('wave 2: frozen (§5.2, §10 step 8)', () => {
     { label: 'a hook with an empty session id', hook: hookAt(NOW - 5 * H, 'PostToolUse', { sessionId: '' }) },
     { label: 'an unmeasured hook', hook: { ok: false, reason: 'unmeasured' } as HookRawFact },
     { label: 'an absent hook', hook: HOOK_ABSENT },
-  ])('8: $label makes the frozen clock unmeasurable: hold busy, never frozen', ({ hook }) => {
+  ])('7: $label makes the frozen clock unmeasurable: hold busy, never frozen', ({ hook }) => {
     expect(fv(hook)).toEqual(hold('busy'));
   });
 
-  it('8: paused, or with no claimant, frozen goes to the operator', () => {
+  it('7: paused, or with no claimant, frozen goes to the operator', () => {
     expect(fv(hookAt(NOW - 61 * MIN), { coordinationPaused: true })).toEqual(frozenV(NOW - 2 * H, null));
     expect(fv(hookAt(NOW - 61 * MIN), { primary: { claimedBy: null } })).toEqual(frozenV(NOW - 2 * H, null));
   });
 
-  it('8: frozen fires once per turn, and again on the next turn', () => {
+  it('7: frozen fires once per turn, and again on the next turn', () => {
     const done = [notice('live', 'frozen', 1, NOW - 2 * H, NOW - 50 * MIN)];
     expect(fv(hookAt(NOW - 61 * MIN), { notices: done })).toEqual(hold('busy'));
     const nextTurn = markOf({ ...FROZEN_OVER, at: NOW - 90 * MIN, turnAt: NOW - 90 * MIN });
@@ -977,42 +977,42 @@ describe('wave 2: frozen (§5.2, §10 step 8)', () => {
   });
 });
 
-describe('wave 2: delegates (§5.1, §10 step 9)', () => {
+describe('wave 2: delegates (§5.1, §10 step 8)', () => {
   const dv = (hook: HookRawFact, over: Over = {}, facts: Partial<StallW2Facts> = {}): StallVerdict =>
     vw({ arming: W2_LIVE, ...over }, { hook, ...facts });
 
-  it('9: a current main hook event inside DELEGATE_WINDOW_MS holds delegates; at the window it does not', () => {
+  it('8: a current main hook event inside DELEGATE_WINDOW_MS holds delegates; at the window it does not', () => {
     expect(dv(hookAt(NOW - 29 * MIN))).toEqual(hold('delegates'));
     expect(dv(hookAt(NOW - DELEGATE_WINDOW_MS + 1))).toEqual(hold('delegates'));
     expect(dv(hookAt(NOW - DELEGATE_WINDOW_MS))).toEqual(r1(RUN67_DISPATCHED));
     expect(dv(hookAt(NOW - 31 * MIN))).toEqual(r1(RUN67_DISPATCHED));
   });
 
-  it('9: delegates is capped at DELEGATE_CAP_MS of main silence', () => {
+  it('8: delegates is capped at DELEGATE_CAP_MS of main silence', () => {
     const quietFrom = (t0: number): Partial<StallW2Facts> => ({ mark: markOf({ at: t0, stopAt: t0, turnAt: t0 - 10 * MIN }) });
     const idleFrom = (t0: number): Over => ({ worker: workerAt({ live: liveWord('idle', t0) }) });
     expect(dv(hookAt(NOW - MIN), idleFrom(NOW - DELEGATE_CAP_MS + 1), quietFrom(NOW - DELEGATE_CAP_MS + 1))).toEqual(hold('delegates'));
     expect(dv(hookAt(NOW - MIN), idleFrom(NOW - DELEGATE_CAP_MS), quietFrom(NOW - DELEGATE_CAP_MS))).toEqual(r1(RUN67_DISPATCHED));
   });
 
-  it('9: a plumbing event, a foreign hook, the dark and an empty session id never hold delegates', () => {
+  it('8: a plumbing event, a foreign hook, the dark and an empty session id never hold delegates', () => {
     expect(dv(hookAt(NOW - MIN, 'SessionStart'))).toEqual(r1(RUN67_DISPATCHED));
     expect(dv(hookAt(NOW - MIN, 'PostToolUse', { identity: 'foreign' }))).toEqual(r1(RUN67_DISPATCHED));
     expect(vw({}, { hook: hookAt(NOW - MIN) })).toEqual(r1(RUN67_DISPATCHED));
     expect(dv(hookAt(NOW - MIN, 'PostToolUse', { sessionId: '' }))).toEqual(r1(RUN67_DISPATCHED));
   });
 
-  it('9: delegates holds the quiet arm only: under the coordinator ball the verdict is the ball verdict', () => {
+  it('8: delegates holds the quiet arm only: under the coordinator ball the verdict is the ball verdict', () => {
     const question = mailRow(4001, NOW - 4 * H, WORKER, 'coordinator', 'question', 'which base?');
     expect(dv(hookAt(NOW - MIN), { mail: [question] })).toEqual(NONE);
   });
 });
 
-describe('wave 2: coord-deaf (§5.2, §10 step 10)', () => {
+describe('wave 2: coord-deaf (§5.2, §10 step 9)', () => {
   const cv = (mail: StallMailRow[], deliveries: StallDeliveryRow[], over: Over = {}, at = NOW): StallVerdict =>
     vw({ arming: W2_LIVE, mail, ...over }, { deliveries }, at);
 
-  it('10: a question to the coordinator unacked COORD_DEAF_MS pushes coord-deaf once, keyed on the mail', () => {
+  it('9: a question to the coordinator unacked COORD_DEAF_MS pushes coord-deaf once, keyed on the mail', () => {
     expect(cv([Q], [QD])).toEqual(w2Push('coord-deaf', 4001));
     expect(cv([Q], [QD], {}, Q_AT + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));
     expect(cv([Q], [QD], {}, Q_AT + COORD_DEAF_MS - 1)).toEqual(NONE);
@@ -1020,11 +1020,11 @@ describe('wave 2: coord-deaf (§5.2, §10 step 10)', () => {
     expect(cv([Q], [QD], { notices: [notice('live', 'coord-deaf', 1, 4001, NOW - MIN)] })).toEqual(NONE);
   });
 
-  it('10: an acked question is not deaf', () => {
+  it('9: an acked question is not deaf', () => {
     expect(cv([Q], [{ ...QD, state: 'acked', ackedAt: Q_AT + 2 * MIN }])).toEqual(NONE);
   });
 
-  it('10: a ball-passing mail with NO delivery row is not deaf: nothing measured it unacked, and the coord-ball cap still fires', () => {
+  it('9: a ball-passing mail with NO delivery row is not deaf: nothing measured it unacked, and the coord-ball cap still fires', () => {
     expect(cv([Q], [])).toEqual(NONE);
     const done = mailRow(4002, Q_AT, WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT);
     expect(cv([done], [])).toEqual(NONE);
@@ -1035,7 +1035,7 @@ describe('wave 2: coord-deaf (§5.2, §10 step 10)', () => {
     expect(cv([Q], [QD])).toEqual(w2Push('coord-deaf', 4001));
   });
 
-  it('10: a wave-done or review-done status is deaf too; a question to a peer is not the coordinator one', () => {
+  it('9: a wave-done or review-done status is deaf too; a question to a peer is not the coordinator one', () => {
     for (const subject of [WAVE_DONE_SUBJECT, REVIEW_DONE_SUBJECT]) {
       const done = mailRow(4002, Q_AT, WORKER, 'coordinator', 'status', subject);
       expect(cv([done], [{ ...QD, mailId: 4002 }]), subject).toEqual(w2Push('coord-deaf', 4002));
@@ -1044,7 +1044,7 @@ describe('wave 2: coord-deaf (§5.2, §10 step 10)', () => {
     expect(cv([toPeer], [{ ...QD, mailId: 4003, toId: PEER }])).toEqual(NONE);
   });
 
-  it('10: coord-deaf comes before the coord-ball cap, and the cap still fires once after it', () => {
+  it('9: coord-deaf comes before the coord-ball cap, and the cap still fires once after it', () => {
     const old = mailRow(4001, NOW - COORD_BALL_CAP_MS, WORKER, 'coordinator', 'question', 'which base?');
     const oldD = delivery(9101, 4001, COORD, { state: 'delivered', deliveredAt: old.at + MIN });
     expect(cv([old], [oldD])).toEqual(w2Push('coord-deaf', 4001));
@@ -1052,18 +1052,18 @@ describe('wave 2: coord-deaf (§5.2, §10 step 10)', () => {
   });
 });
 
-describe('wave 2: the worker ball on the marker clock (§5.1, §10 step 11)', () => {
-  it('11: quiet runs from stopAt: a restamped live stamp does not restart it', () => {
+describe('wave 2: the worker ball on the marker clock (§5.1, §10 step 10)', () => {
+  it('10: quiet runs from stopAt: a restamped live stamp does not restart it', () => {
     const restamped = workerAt({ live: liveWord('idle', NOW - 30 * MIN) });
     expect(vw({ arming: W2_LIVE, worker: restamped })).toEqual(r1(RUN67_DISPATCHED));
     expect(vw({ worker: restamped })).toEqual(NONE);
   });
 
-  it('11: busy workers are judged: a busy word over a done marker fires r1', () => {
+  it('10: busy workers are judged: a busy word over a done marker fires r1', () => {
     expect(vw({ arming: W2_LIVE, worker: workerAt({ live: liveWord('busy', NOW - 3 * H) }) })).toEqual(r1(RUN67_DISPATCHED));
   });
 
-  it('11: a working marker at least as new as the live stamp holds busy; an older one reads as a turn interrupted at the stamp', () => {
+  it('10: a working marker at least as new as the live stamp holds busy; an older one reads as a turn interrupted at the stamp', () => {
     const working = (at: number, stopAt: number | null = null): Partial<StallW2Facts> =>
       ({ mark: markOf({ state: 'working', event: 'UserPromptSubmit', at, turnAt: at, stopAt }) });
     expect(vw({ arming: W2_LIVE }, working(NOW - 3 * H))).toEqual(hold('busy'));
@@ -1072,11 +1072,11 @@ describe('wave 2: the worker ball on the marker clock (§5.1, §10 step 11)', ()
     expect(vw({ arming: W2_LIVE, worker: workerAt({ live: liveWord('shell', NOW - H) }) }, working(NOW - 3 * H))).toEqual(NONE);
   });
 
-  it('11: a word other than idle, shell or busy holds unmeasured', () => {
+  it('10: a word other than idle, shell or busy holds unmeasured', () => {
     expect(vw({ arming: W2_LIVE, worker: workerAt({ live: liveWord('thinking', NOW - 3 * H) }) })).toEqual(hold('unmeasured'));
   });
 
-  it('11: a done marker with no stopAt takes wave 1 ladder', () => {
+  it('10: a done marker with no stopAt takes wave 1 ladder', () => {
     const noStop: Partial<StallW2Facts> = { mark: markOf({ stopAt: null, event: 'SessionStart' }) };
     expect(vw({ arming: W2_LIVE, worker: workerAt({ live: liveWord('busy', NOW - 3 * H) }) }, noStop)).toEqual(hold('busy'));
     expect(vw({ arming: W2_LIVE, worker: workerAt({ live: liveWord('idle', NOW - 30 * MIN) }) }, noStop)).toEqual(NONE);
@@ -1352,18 +1352,18 @@ describe('wave 2: the marker quiet clock holds on each of its terms (§5.1, "Qui
   });
 });
 
-describe('wave 2: frozen needs a BUSY word, and delegates a non-working marker (§10 steps 8 and 9)', () => {
+describe('wave 2: frozen needs a BUSY word, and delegates a non-working marker (§10 steps 7 and 8)', () => {
   // A turn begun 2 h ago, at least as new as a 3 h live stamp (so the marker reads `working` as written), and a hook
   // event 61 min old: the frozen clock has run out, so ONLY the word term keeps this worker from `frozen`.
   const staleWorking = { mark: markOf(FROZEN_OVER), hook: hookAt(NOW - 61 * MIN) };
   const under = (word: string, arming: StallArming): Over => ({ arming, worker: workerAt({ live: liveWord(word, NOW - 3 * H) }) });
 
-  it.each(['idle', 'shell'])('8: a working marker as new as the %s live stamp, with a stale current hook, is not frozen: hold busy', (word) => {
+  it.each(['idle', 'shell'])('7: a working marker as new as the %s live stamp, with a stale current hook, is not frozen: hold busy', (word) => {
     expect(vw(under(word, W2_LIVE), staleWorking)).toEqual(hold('busy'));
     expect(vw(under(word, W2_LIVE), { ...staleWorking, hook: hookAt(NOW - 5 * H) })).toEqual(hold('busy'));
   });
 
-  it('8: in the dark the same facts give wave 1\'s verdict, and frozen answers nothing', () => {
+  it('7: in the dark the same facts give wave 1\'s verdict, and frozen answers nothing', () => {
     const waveOne = stallVerdict(stallInput(under('idle', ARMED)), NOW);
     expect(waveOne).toEqual(r1(RUN67_DISPATCHED));
     expect(vw(under('idle', ARMED), staleWorking)).toEqual(waveOne);
@@ -1371,14 +1371,14 @@ describe('wave 2: frozen needs a BUSY word, and delegates a non-working marker (
     expect(vw(under('busy', W2_LIVE), staleWorking)).toEqual(frozenV(NOW - 2 * H));
   });
 
-  it('8: a turn marker with no turnAt keys frozen on its own `at`', () => {
+  it('7: a turn marker with no turnAt keys frozen on its own `at`', () => {
     const noTurnAt = { mark: markOf({ ...FROZEN_OVER, turnAt: null }) };
     expect(fv(hookAt(NOW - 61 * MIN), {}, noTurnAt)).toEqual(frozenV(NOW - 2 * H));
     const done = [notice('live', 'frozen', 1, NOW - 2 * H, NOW - 50 * MIN)];
     expect(fv(hookAt(NOW - 61 * MIN), { notices: done }, noTurnAt)).toEqual(hold('busy'));
   });
 
-  it('9: a working marker never holds delegates, even with a fresh hook inside the cap: it holds busy', () => {
+  it('8: a working marker never holds delegates, even with a fresh hook inside the cap: it holds busy', () => {
     const working = markOf({ state: 'working', event: 'UserPromptSubmit', at: NOW - 2 * H, turnAt: NOW - 2 * H, stopAt: NOW - 3 * H });
     expect(vw({ arming: W2_LIVE }, { mark: working, hook: hookAt(NOW - 5 * MIN) })).toEqual(hold('busy'));
     // CONTROL: the same hook over a done marker holds delegates
@@ -1440,7 +1440,7 @@ import type { StallEventRow } from '../src/coord/stall.js';
 const ev = (at: number, fromState: string, toState: string): StallEventRow => ({ at, fromState, toState });
 const reactivated = (at: number): StallActivation => ({ kind: 'reactivated', at });
 
-describe('stallReactivation: the newest entry into ACTIVE_RUN_STATES after the first (quiet-restarts-on-reactivation)', () => {
+describe('stallReactivation: the newest entry into ACTIVE_RUN_STATES other than the dispatch (quiet-restarts-on-reactivation)', () => {
   const D = t('2026-09-30T19:48:51.388Z');
   const DISPATCH = ev(D, 'planned', 'dispatched');
   const WORKING = ev(D + H, 'dispatched', 'working');
@@ -1454,7 +1454,7 @@ describe('stallReactivation: the newest entry into ACTIVE_RUN_STATES after the f
 
   it('the dispatch row is never a re-activation, even when it trails dispatchedAt by milliseconds', () => {
     // markDispatched and advanceInner each read their own Date.now(): the planned -> dispatched row can land after
-    // dispatchedAt. It is the run's first entry, and dispatchedAt already measures it.
+    // dispatchedAt. It is the dispatch, and dispatchedAt already measures it.
     expect(stallReactivation([ev(D + 3, 'planned', 'dispatched'), ev(D + H, 'dispatched', 'working')])).toEqual({ kind: 'none' });
   });
 
@@ -1495,6 +1495,13 @@ describe('stallReactivation: the newest entry into ACTIVE_RUN_STATES after the f
     ['a string the store did not prove', '1790834550571' as unknown as number],
   ])('the newest entry\'s time %s: unmeasured, never 0', (_label, at) => {
     expect(stallReactivation([DISPATCH, WORKING, TO_REVIEW, ev(at, 'awaiting-review', 'working')])).toEqual({ kind: 'unmeasured' });
+  });
+
+  it('keyed on the edge, never the position: a run with no dispatch row (rebuilt by reconstruct()) re-activates at its first send-back (reactivation-first-entry-by-edge (D-3796))', () => {
+    expect(stallReactivation([ev(D + 9 * H, 'awaiting-review', 'working')])).toEqual(reactivated(D + 9 * H));
+    expect(stallReactivation([ev(D + 9 * H, 'merging', 'working')])).toEqual(reactivated(D + 9 * H));
+    // A planned -> dispatched row is the dispatch wherever it sits, so it is never the newest re-activation.
+    expect(stallReactivation([ev(D + 9 * H, 'awaiting-review', 'working'), ev(D + 10 * H, 'planned', 'dispatched')])).toEqual(reactivated(D + 9 * H));
   });
 
   it('an unprovable time on an OLDER entry does not touch the newest one', () => {
@@ -1650,6 +1657,24 @@ describe('E5 (run 199): a send-back 2.97 s before the shadow r1, the brief 36 mi
     expect(stallVerdict(e5(), E5.brief - 1)).toEqual(NONE);
     const briefed = e5({ mail: [...MAIL, mailRow(2971, E5.brief, COORD, WORKER, 'status', 'fix round', 199)] });
     expect(stallVerdict(briefed, E5.w2972 - 1)).toEqual(NONE);
+  });
+});
+
+describe('reactivation-first-entry-by-edge (D-3796): a reconstructed run\'s first send-back restarts its clocks', () => {
+  it('a run whose events begin at its send-back (CoordStore.reconstruct() writes none) keys the episode on it and holds r1', () => {
+    const back = NOW - MIN;
+    const input = stallInput({ activation: stallReactivation([ev(back, 'awaiting-review', 'working')]) });
+    expect(stallFacts(input).episodeKeyMs).toBe(back);
+    expect(stallVerdict(input, NOW)).toEqual(NONE);
+    expect(stallVerdict(stallInput(), NOW), 'the control: the same run without the send-back draws r1').toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  // STALL_DISPATCH_STATE is not exported, so the literal is spelled here; the edge rule rests on this one claim.
+  it('its premise: in both transition tables the one edge into dispatched is from planned', () => {
+    const into = (table: Readonly<Record<string, readonly string[]>>): string[] =>
+      Object.entries(table).filter(([, targets]) => targets.includes('dispatched')).map(([from]) => from).sort();
+    expect(into(RUN_TRANSITIONS), 'RUN_TRANSITIONS').toEqual(['planned']);
+    expect(into(REVIEW_RUN_TRANSITIONS), 'REVIEW_RUN_TRANSITIONS').toEqual(['planned']);
   });
 });
 

@@ -21,7 +21,7 @@ const DISPATCHED = Date.parse('2026-09-15T12:00:00Z');
 
 /** Wave 1's full arming: the marker rules are off, so the verdict is wave 1's. */
 const ARMED: StallArming = { disabled: false, live: true, escalate: true };
-/** The same with `stall-watch-w2-live`: the marker branch (Task 11, step 11) decides r1. */
+/** The same with `stall-watch-w2-live`: the marker branch (§10 step 10) decides r1. */
 const W2_LIVE: StallArming = { disabled: false, live: true, escalate: true, w2Live: true };
 
 function runRow(): StallRunRow {

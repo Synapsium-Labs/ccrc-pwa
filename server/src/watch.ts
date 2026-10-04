@@ -35,7 +35,7 @@ import type {
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -887,7 +887,8 @@ export class FleetWatcher {
    *  logged (worker stall watch §5.1). Before `mail-gate-busy` is armed, the
    *  operator checks each line against the session's transcript for 48 h, so
    *  there is one line per delivery, not one per sweep. `sweepMail` prunes it
-   *  at its head to the deliveries still outstanding. IN MEMORY BY DESIGN, as
+   *  at its head to the deliveries still outstanding, due or not (a row backed
+   *  off past a sweep is kept). IN MEMORY BY DESIGN, as
    *  `mailCooldown` is: a restart logs a still-held delivery once more. */
   private busyShadowLogged = new Set<number>();
   /** `emitRuns`'s own byte-equality guard, the same idiom as `lastJson`
@@ -3810,8 +3811,15 @@ export class FleetWatcher {
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
     // The busy-shadow log's memory keeps only deliveries still outstanding.
     // It is pruned BEFORE the empty-queue return, so an idle box empties it.
+    // Due or delivered this sweep is outstanding; a row in neither is looked up,
+    // because a queued row another lane backed off past this sweep is still
+    // outstanding and must not be said a second time when it returns.
     const outstandingIds = new Set([...unacked, ...dueBefore].map((r) => r.id));
-    for (const loggedId of this.busyShadowLogged) if (!outstandingIds.has(loggedId)) this.busyShadowLogged.delete(loggedId);
+    for (const loggedId of this.busyShadowLogged) {
+      if (outstandingIds.has(loggedId)) continue;
+      const row = store.delivery(loggedId);
+      if (row === null || (TERMINAL_DELIVERY_STATES as readonly string[]).includes(row.state)) this.busyShadowLogged.delete(loggedId);
+    }
     if (unacked.length === 0 && dueBefore.length === 0) return;
     // Fix — blocking review findings 1/5: `readRegistry`'s OLD signature
     // collapses a whole-fleet `io.readdir` failure to `[]` — the SAME shape

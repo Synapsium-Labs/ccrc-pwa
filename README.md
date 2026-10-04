@@ -2645,7 +2645,7 @@ anything it could not measure (a live file with no timestamp included), a dead o
 worker, an open question, a harness dialog (one `⚠ stalled … (dialog)` push
 after 2 h), a usage limit (one `⚠ limit` push after 12.5 h) and a `busy`
 worker. When the ball is the coordinator's it waits, and pushes `⚠ waiting`
-once after 30 h with no mail on the run. Every rung is written as a
+once after 30 h with no mail on the run and no send-back. Every rung is written as a
 `run_events` observation row before it is sent, so a restart never sends one
 twice, and a run that has left the active states by then gets neither; the
 watch never closes, reclaims or re-dispatches anything. Three markers in

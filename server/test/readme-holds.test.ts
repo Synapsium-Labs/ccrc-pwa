@@ -379,3 +379,14 @@ describe('README: the --surface bullet', () => {
     expect(bullet).toMatch(/bare one-token/);
   });
 });
+
+describe('README: the coordinator-ball push (stall watch wave 5)', () => {
+  // `coord-ball-restarts-on-reactivation` (D-3789): the 30 h runs from the later of the last mail on the run and the
+  // run's return to work. The sentence that announces the push says so, not only the paragraph after it.
+  it('the sentence that names the `⚠ waiting` push says its 30 h restarts on a send-back', () => {
+    const sentence = readme.replace(/\s+/g, ' ').split(/(?<=\.)\s+/).find((s) => s.includes('pushes `⚠ waiting`'));
+    expect(sentence, 'no README sentence names the push').toBeDefined();
+    expect(sentence).toMatch(/30 h/);
+    expect(sentence).toMatch(/send-back/);
+  });
+});

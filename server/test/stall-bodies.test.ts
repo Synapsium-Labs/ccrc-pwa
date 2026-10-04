@@ -954,10 +954,10 @@ describe('r1: the proof-bound line (planning departure r1-body-names-the-proof-b
   const lastLine = (input: StallInput): string | undefined => stallCheckMail(input, stallFacts(input), R1_AT).body.split('\n').at(-1);
   it('marker rules armed, the marker reading, escalation armed: the coordinator is told at the next turn end, and by r1 + 3 h; the operator 1 h after that (§4.2)', () => {
     expect(lastLine(s4({ arming: W2_ARMED, w2: w2Of() })))
-      .toBe('No mail from you on run 67: the coordinator is told when your next turn ends without one, and by 02:57Z at the latest; the operator 1 h after that.');
+      .toBe('No mail from you on run 67: the coordinator is told when your next turn ends without one and no subagent or workflow of yours is still running, and by 02:57Z at the latest; the operator 1 h after that.');
   });
   it('paused, or with no claimant, it names the operator, and adds no later rung (the operator is the one told)', () => {
-    const operatorLine = 'No mail from you on run 67: the operator is told when your next turn ends without one, and by 02:57Z at the latest.';
+    const operatorLine = 'No mail from you on run 67: the operator is told when your next turn ends without one and no subagent or workflow of yours is still running, and by 02:57Z at the latest.';
     expect(lastLine(s4({ arming: W2_ARMED, w2: w2Of(), coordinationPaused: true }))).toBe(operatorLine);
     expect(lastLine(s4({ arming: W2_ARMED, w2: w2Of() }, { ...run67, claimedBy: null }))).toBe(operatorLine);
   });
@@ -1330,7 +1330,7 @@ describe('wave 2 texts: every remaining branch and sanitising call site has a ro
       // that stamp, `stallVerdict` sends r1 on the marker clock, and the body must promise what that ladder does.
       const interrupted = s4({ arming: W2_ARMED, w2: w2Of({ mark: markOf({ state: 'working', event: 'PostToolUse', at: T('2026-09-28T20:00:00Z'), turnAt: T('2026-09-28T20:00:00Z'), stopAt: null, bg: -1, bgKinds: [], bgIds: [] }) }) });
       expect(stallVerdict(interrupted, R1_AT)).toEqual({ act: 'notify', arm: 'quiet', rung: 1, key: EPISODE, to: 'worker' });
-      expect(lastOf(interrupted)).toBe('No mail from you on run 67: the coordinator is told when your next turn ends without one, and by 02:57Z at the latest; the operator 1 h after that.');
+      expect(lastOf(interrupted)).toBe('No mail from you on run 67: the coordinator is told when your next turn ends without one and no subagent or workflow of yours is still running, and by 02:57Z at the latest; the operator 1 h after that.');
     });
   });
 });
@@ -1369,5 +1369,49 @@ describe('the dialog cap after a send-back keeps today\'s key, so the span it pr
     const n = stallVerdict(menu, at);
     expect(n).toEqual({ act: 'notify', arm: 'dialog-cap', rung: 1, key: EPISODE, to: 'operator' });
     expect(stallPushText(menu, stallFacts(menu), n as StallNotify, at).body).toContain('this quiet episode opened 2026-09-28T21:17Z (10h 42m).');
+  });
+});
+
+// `coord-ball-restarts-on-reactivation` (D-3789): the coordinator's 30 h runs from the later of the run's last mail and its
+// return to work, so the push names that clock, and still names the last mail, which stays true.
+describe('coord-ball after a send-back names the clock the cap runs from', () => {
+  const q = mail(2600, EPISODE, WORKER, 'coordinator', 'question', 'which base branch');
+  const H = 3_600_000;
+  const REACT = EPISODE + 31 * H;   // 2026-09-30T04:17:43Z: the question sat 31 h, then the run went back to work
+
+  it('the later send-back is named with its span, and the last mail with its own', () => {
+    const input = s4({ mail: [q], arming: escalated, activation: { kind: 'reactivated', at: REACT } });
+    const at = REACT + 30 * H;
+    const n = stallVerdict(input, at);
+    expect(n).toEqual({ act: 'notify', arm: 'coord-ball', rung: 1, key: REACT, to: 'operator' });
+    expect(stallPushText(input, stallFacts(input), n as StallNotify, at).body).toBe('run 67 — demo-program wave 9/9: the run is waiting on its coordinator demo-coordinator (worker demo-worker); the run went back to work at 2026-09-30T04:17Z (30h 0m) and no mail has crossed it since; the last mail on the run was at 2026-09-28T21:17Z (61h 0m).');
+  });
+
+  it('a mail after the send-back is the clock again, and the text names only that mail', () => {
+    const q2 = mail(2601, REACT + H, WORKER, 'coordinator', 'question', 'and the release note?');
+    const input = s4({ mail: [q, q2], arming: escalated, activation: { kind: 'reactivated', at: REACT } });
+    const at = REACT + 31 * H;
+    const n = stallVerdict(input, at);
+    expect(n).toEqual({ act: 'notify', arm: 'coord-ball', rung: 1, key: REACT + H, to: 'operator' });
+    expect(stallPushText(input, stallFacts(input), n as StallNotify, at).body).toBe('run 67 — demo-program wave 9/9: the run is waiting on its coordinator demo-coordinator (worker demo-worker); no mail on the run since 2026-09-30T05:17Z (30h 0m).');
+  });
+});
+
+// `quiet-restarts-on-reactivation` (D-3788) on r2: its subject span and its silence line read the episode key, which a
+// send-back moves, so both count from the send-back (R11's F3).
+describe('r2 after a send-back reports the silence from the send-back', () => {
+  const H = 3_600_000;
+  const REACT = T('2026-09-29T08:00:00Z');   // 10 h after S4's Stop, as the r1 rows above
+  const r1: StallNotice = { mode: 'live', arm: 'quiet', rung: 1, key: REACT, at: REACT + 2 * H };
+  const back = s4({ activation: { kind: 'reactivated', at: REACT }, arming: escalated, coordinator: 'alive', notices: [r1] });
+
+  it('the verdict sends r2 an hour after the new r1, keyed on the send-back', () => {
+    expect(stallVerdict(back, REACT + 3 * H)).toEqual({ act: 'notify', arm: 'quiet', rung: 2, key: REACT, to: 'coordinator', coordinatorId: COORD });
+  });
+
+  it('its subject spans the silence since the send-back, and its silence line names the send-back', () => {
+    const text = stallReportMail(back, stallFacts(back), r1, null, REACT + 3 * H);
+    expect(text.subject).toBe('stall: run 67 — worker silent 3h 0m, stall-check unanswered');
+    expect(text.body.split('\n')[1]).toContain('no mail from the worker since 2026-09-29T08:00:00Z (3h 0m).');
   });
 });

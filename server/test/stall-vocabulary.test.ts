@@ -436,7 +436,11 @@ describe('wave 2: the self-wake class', () => {
     expect(stallMailClass(mail('demo-worker', `${STALL_ORPHANED_PREFIX} x`))).toBeNull();
     expect(stallMailClass(mail('demo-coordinator', `${STALL_FAILED_PREFIX} x`))).toBeNull();
   });
-  it('check and report are tested first: a report naming a failure stays a report', () => {
+  it('no class prefix starts another, so the order of stallMailClass\'s tests decides nothing', () => {
+    const P = [STALL_CHECK_PREFIX, STALL_REPORT_PREFIX, STALL_ORPHANED_PREFIX, STALL_FAILED_PREFIX, STALL_REPLY_PREFIX];
+    expect(P.flatMap((a) => P.filter((b) => a !== b && a.startsWith(b)).map((b) => `${a} starts with ${b}`))).toEqual([]);
+  });
+  it('a report naming a failure stays a report, and a check a check', () => {
     expect(stallMailClass(mail('operator', `${STALL_REPORT_PREFIX} run 67 — failed: server_error twice at 2026-09-29T10:00Z`))).toBe('report');
     expect(stallMailClass(mail('operator', `${STALL_CHECK_PREFIX} run 67`))).toBe('check');
   });

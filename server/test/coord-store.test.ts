@@ -2555,7 +2555,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
 
   it('one mail parked against TWO displaced claimants reaches the heir once, not twice', () => {
     // THE HAZARD THIS TREE HAS NEVER HAD BEFORE. `mail_deliveries` has no unique
-    // constraint on (mailId, toId) — the only index is `mail_deliveries_due`
+    // constraint on (mailId, toId) — neither of its two indexes is unique
     // (schema.ts) — and until this arm nothing ever wrote a second delivery
     // for one mail. Two claimants is the state reclaimProgram's own comment
     // (store.ts:648-656) says is reachable.
