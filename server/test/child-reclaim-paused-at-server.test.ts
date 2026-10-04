@@ -81,7 +81,7 @@ const fixture = async (over: { visible?: boolean } = {}) => {
   const feed = (): string[] => coord.feedEvents(50).filter((e) => e.sessionId === 'demo-a').map((e) => e.title);
   const bodies = (): string[] => coord.feedEvents(50).filter((e) => e.sessionId === 'demo-a').map((e) => e.body);
   const raise = (): void => writeFileSync(path.join(reg, 'reclaim-paused'), '');
-  return { reg, coord, deps, runId: opened.id, ccdCalls, feed, bodies, raise };
+  return { reg, coord, deps, runId: opened.id, calls, ccdCalls, feed, bodies, raise };
 };
 
 describe('reclaimChild — the pause, read before any argv', () => {
@@ -506,6 +506,39 @@ describe('reclaimChild — a rejecting readdir still defers, with a feed row', (
     });
     expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });
     expect(f.ccdCalls()).toEqual([]);
+    expect(f.feed()).toEqual(['child reclaim deferred']);
+  });
+});
+
+// The pause read's THIRD answer: a registry that lists at step 1 (the marker
+// re-read) and then does not list at step 2b. "Not listed" is not "switch
+// down" (`childReclaimPauseRead`'s `unmeasurable`), so the executor defers on
+// anything but `clear` — a raised switch it cannot rule out stops it exactly
+// as a raised one does, before any argv.
+describe('reclaimChild — a registry that does not list at the pause read defers too', () => {
+  it('paused-at-server when step 2b\'s listing answers null, with no argv composed or sent', async () => {
+    const f = await fixture();
+    // The FIRST `readdir` is step 1's marker re-read — it must succeed, or the
+    // case would stop at `marker-unreadable` for a reason unrelated to 2b. The
+    // SECOND is `childReclaimPauseRead`'s own listing: `null`, the shipped
+    // adapters' answer for a directory they could not list.
+    let readdirCalls = 0;
+    const unlistedIo = {
+      ...f.deps.io,
+      readdir: async (dir: string, timeoutMs?: number, signal?: AbortSignal) => {
+        readdirCalls += 1;
+        if (readdirCalls === 1) return f.deps.io.readdir(dir, timeoutMs, signal);
+        return null;
+      },
+    };
+    const deps: ChildReclaimDeps = { ...f.deps, io: unlistedIo };
+    const out = await reclaimChild(deps, {
+      sessionId: 'demo-a', runId: f.runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
+    });
+    expect(readdirCalls, 'step 1 listed, then step 2b asked once').toBe(2);
+    expect(out).toMatchObject({ kind: 'deferred', sessionId: 'demo-a', runId: f.runId, why: 'paused-at-server' });
+    expect(out.kind === 'deferred' ? out.detail : '').toContain('did not list');
+    expect(f.calls, 'no argv composed or sent').toEqual([]);
     expect(f.feed()).toEqual(['child reclaim deferred']);
   });
 });
