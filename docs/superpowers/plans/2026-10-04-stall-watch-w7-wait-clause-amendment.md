@@ -177,6 +177,17 @@ Issued by the coordinator, one per slug; a departure found during execution is n
   - a scan: no form of "resum" appears in the wake list.
   - No worker SKILL.md text changes; the existing S3 and S4 rows stay as they are.
 
+One more number, assigned by the coordinator at wave-done (ledger R34):
+
+- **D-3807** — `wake-list-split-closes-and-joins` (Task 2, recorded at wave-done): the plan's `wakeMembers` split the
+  stop clause's wake list on commas only. Task 2's review found three wordings that passed every row: "…and a
+  background task you started", "or any background task" and "; a sleep you started". The split now also cuts on `;`
+  and on `and`/`or` before a determiner (`a`, `an`, `any`, `the`, `your`, `one`). Four mutation rows (W11 to W14) go
+  red on it. The row's comment states its stopping line and lists the evasions it does not close (a modifier after
+  "asks", and a `. ` inside a member), the shape the contract-grade guards in this tree take. The other two departures
+  that wave-done names carry no number: an escaped-backtick fix to a row message that did not parse as written (same
+  text), and Task 4's docstrings scoped to serial replays (comments only).
+
 ## File Structure
 
 | File | Change | Task |
