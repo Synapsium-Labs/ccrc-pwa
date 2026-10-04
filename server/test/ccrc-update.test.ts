@@ -2833,7 +2833,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
   // the per-unit "not active after it" warnings and the old success line;
   // the restart itself already happened (its rc is untouched), so
   // try-restart IS in the recording.
-  itLinux('(b) the verify listing fails after a real restart — two DEGRADED lines replace the per-unit warnings and the old success line, rc stays 0', () => {
+  itLinux('(b) the verify listing fails after a real restart — a warning and a DEGRADED line replace the per-unit warnings and the old success line, rc stays 0', () => {
     const home = freshUpdateBox('ccrc-update-sweep-verify-fail-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantKillModeDropIn(home);
@@ -12518,7 +12518,8 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
   // kept v1.0.0 — this box carries no v0.0.50) plus a plain timestamp-named
   // file, which is not a timestamped backup at all and must survive
   // unpruned. CCRC_BACKUP_KEEP=0 and every planted name below the run's lock
-  // second (2025…) put all three squarely in the removal set; neither target
+  // second (2025…) put both links squarely in the removal set; the plain file is
+  // never listed (`_bak_list` admits directories only); neither target
   // holds a coord.db, server-dist or agent-dist, so neither can be chosen as
   // the protected newest-earlier snap or tree keep. Assertions read the
   // FILESYSTEM (lstat for the links, a content digest for their targets),

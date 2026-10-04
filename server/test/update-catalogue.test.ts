@@ -1446,8 +1446,10 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       //     FULL suite. Ruling A's own tag-check mechanism yanks S2 anyway
       //     once the check resolves, regardless of which request ran first
       //     this poll, so (a)'s own assertions stay green. The mutation
-      //     reds three OTHER, pre-existing cases instead, and the mechanism
-      //     is the SAME one in both: the `etag = null` reset (item 3 below)
+      //     reds OTHER, pre-existing cases instead (ELEVEN, re-measured, wave
+      //     9, at e12391b56 — listed at the end of this entry), and the
+      //     mechanism of the first four listed there is the SAME one in
+      //     each: the `etag = null` reset (item 3 below)
       //     was written to run BEFORE the listing, so a kept-tag change
       //     this poll forces the listing's NEXT request fresh; flipped, it
       //     now runs AFTER a listing that already sent its own (stale-keep)
@@ -1466,12 +1468,22 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       //     NOTHING is warned' reds on its warn-count assertion; ruling A's
       //     own '(e) after a restart …' reds the same way, on its
       //     confirming-request-count assertion). C5 (fix round 2, review
-      //     143) CORRECTS this list: it is FOUR reds, not three — the same
-      //     spurious "K already known" also fires R12's own case
-      //     ("R12: a 404 with a kept K re-arms the probe's warning dedupe …")
-      //     one poll early, off a K the reordering planted rather than one
-      //     `/latest` itself ever confirmed. The ordering IS pinned — just
-      //     not by case (a).
+      //     143) found a fourth: the same spurious "K already known" also
+      //     fires R12's own case ("R12: a 404 with a kept K re-arms the
+      //     probe's warning dedupe …") one poll early, off a K the
+      //     reordering planted rather than one `/latest` itself ever
+      //     confirmed. The ordering IS pinned — just not by case (a).
+      //     (re-measured, wave 9, at e12391b56) The whole file run with
+      //     only that reorder applied in place to `catalogue.ts` reds
+      //     ELEVEN cases, each on an assertion (the earlier three and four
+      //     were counted before the later fix rounds added cases that script
+      //     requests in order): the four above; ruling A's (a), (c) and (e)
+      //     ('(a) stable S2 deleted …', '(c) the only stable release deleted
+      //     …', '(e) after a restart …'); 'F2 (review 151, coverage) …
+      //     ETag-keep decision is SKIPPED …'; the two F3 always-throwing-store
+      //     cases; and the two B3 request-stamp cases ('lastRequestAt() is the
+      //     LAST request's own send time …', 'C-a: the moved-away tag check
+      //     stamps lastRequestAt …').
       // (2) removing `lastLatestTag = null` from the 404 arm reds (c) — S1
       //     stays kept (and un-yanked) forever.
       // (3) CORRECTED (fix round 3, B2): removing the ENTIRE `etag = null`

@@ -3403,11 +3403,18 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   // red this pin. `BUE_VAL=on` is preset AFTER sourcing ccrc (a shell
   // assignment, never an env entry — `ccd/ccrc:2910` resets it at file scope
   // on load) in case some path through the ungoverned body reads it, but in
-  // THIS harness (`PATH` pointing nowhere) it never gets the chance: without
-  // the guard term, `_check_auth`'s body FAILs elsewhere first — the node
-  // check, ahead of anything that reads the flag — so it is the SPECIFIC
-  // regex below, not a stale-ARMED read, that makes this pin red.
-  it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, just not on this check’s own text', () => {
+  // THIS harness (`PATH` pointing nowhere) it never gets the chance.
+  // MEASURED (wave 9, R11-F2), with the guard's `|| ! declare -F _box_unit_env`
+  // term dropped from a scratch copy of the checks file: the read
+  // `_box_unit_env CCRC_AUTH || unmeasured=$?` runs the missing function
+  // (bash prints `_box_unit_env: command not found` on stderr, rc 127 lands in
+  // `unmeasured`), nothing between that read and the node check prints the
+  // unmeasured state, and `_check_auth` prints `FAIL auth: node is not on PATH,
+  // so the passphrase file could not be read` (the node check, `command -v node`
+  // under `PATH` pointing nowhere) and returns 1 — never the not-measured WARN.
+  // So it is the SPECIFIC regex below, not a stale-ARMED read, that makes this
+  // pin red.
+  it('the not-loaded guard also requires _box_unit_env — without that term the read\'s `command not found` (rc 127) is swallowed by `|| unmeasured=$?` and the node check FAILs instead, not this check’s own text', () => {
     const nowhere = join(REPO, 'no-such-home-for-check-auth-bue');
     const r = spawnSync(BASH, ['-c',
       `set -uo pipefail; . ${shq(CCRC_SRC)}; . ${shq(CHECKS_SRC)}; unset -f _box_unit_env; BUE_VAL=on; _check_auth`],
