@@ -383,14 +383,17 @@ export type ChildReclaimSweepOutcome =
 /** How many sweep-pass intervals may separate two presence-class answers of
  *  one CONTINUOUS episode, and the episode's latest answer from the ask the
  *  ceiling would license (spec §5.7, "continuous deferral"): two and a half,
- *  inclusive. A pass lands one interval after the last plus up to one
- *  watcher tick, so a child asked on every pass is always inside it, and so
- *  is a child that sat out ONE pass (its previous request still in flight,
- *  or one other due child ahead of it for the one slot), asked again at
- *  most two intervals plus two ticks later. A child that sat out TWO passes
- *  (three or more due children) lands at three intervals or more, always
- *  past it: its episode restarts and its ask goes out unlicensed, which
- *  fails closed. The half interval is the margin between the two. */
+ *  inclusive. Under normal tick timing a pass lands one interval after the
+ *  last plus up to one watcher tick, so a child asked on every pass is
+ *  inside it, and so is a child that sat out ONE pass (its previous request
+ *  still in flight, or one other due child ahead of it for the one slot),
+ *  asked again at most two intervals plus two ticks later. A slow tick can
+ *  push either gap past the bound: the episode restarts and the licence is
+ *  withheld, which fails closed and costs only liveness. A child that sat
+ *  out TWO passes (three or more due children) lands at three intervals or
+ *  more, always past it: its episode restarts and its ask goes out
+ *  unlicensed, which fails closed. The half interval is the margin between
+ *  the two. */
 const CHILD_RECLAIM_PRESENCE_GAP_PASSES = 2.5;
 
 /** Is the entry's LATEST presence-class answer within

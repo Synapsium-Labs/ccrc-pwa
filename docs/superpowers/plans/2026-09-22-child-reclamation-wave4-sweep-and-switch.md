@@ -5157,9 +5157,11 @@ The frozen corpus cites none of these sites by content (measured).
      passes `CHILD_RECLAIM_SWEEP_MS`.
    - A licensed request answered presence-class still restarts the episode. Every other outcome ends it and clears both
      presence fields.
-   - Why 2.5. A pass lands one interval plus up to one 2 s tick after the last. A child that sits out ONE pass is asked
-     again at most about 124 s later, inside the bound, so its episode continues. A child that sits out TWO passes is
-     asked again 180 s or more later, past it, so its episode restarts.
+   - Why 2.5. Under normal tick timing, a pass lands one interval plus up to one 2 s tick after the last. A child that
+     sits out ONE pass is then asked again at most about 124 s later, inside the bound, so its episode continues. A
+     slow tick can push that gap past the bound. The episode then restarts and the licence is withheld, which fails
+     closed and costs only liveness. A child that sits out TWO passes is asked again 180 s or more later, past it, so
+     its episode restarts.
    - So under a backlog of three or more due children, presence-held children wait unlicensed until it drains. That
      fails closed, and is accepted.
    - Neither rule ever licenses an ask EARLIER, or more OFTEN, than the ceiling would without them. Where one licenses
@@ -5286,7 +5288,11 @@ The frozen corpus cites none of these sites by content (measured).
      - The next eligible verdict consumes the mark and seeds nothing that pass. A pass's listing is read before the
        lanes ahead of the sweep are awaited, so the answer can land between a listing and its loop. The lane cannot
        tell such a listing from a fresh one, so it skips one sighting either way. That fails closed and costs one pass.
-     - The mark is cleared wherever the child's other memory is: the vanished-row loop and every pass-level reset.
+     - The mark is cleared at three sites: the mirror or coordination-history fail-shut, the switches and capabilities
+       return, and the vanished-row loop.
+     - An ineligible verdict deletes the entry but keeps the mark, deliberately. The listing that matters most is the
+       stale held one, read before ccd unlinked the hold. Spending the mark there would reopen the window it exists to
+       close. Keeping it costs at most one pass, once.
      - So (ii) reads: after the release, one pass that seeds nothing, then two more passes and one reclaim request.
        (ix)'s two fresh unheld passes are counted after that pass.
      - Case: a pass whose listing was read before the answer, and whose loop ran after it, seeds nothing. Two fresh

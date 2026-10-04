@@ -803,9 +803,14 @@ export class FleetWatcher {
    *  than the answer must not count as one of the two fresh unheld passes the
    *  answer requires (spec §5.7). The lane cannot tell such a listing from a
    *  fresh one, so it skips one sighting either way: that fails closed and
-   *  costs one pass. Cleared wherever this child's other memory is (the
-   *  vanished-row loop, and every pass-level reset), so a mark never
-   *  outlives its child. IN MEMORY ONLY, the `childReclaimSweepState` idiom. */
+   *  costs one pass. CLEARED in three places only: the two pass-level resets
+   *  (the mirror or coordination-history fail-shut, and the switches and
+   *  capabilities return), and the vanished-row loop, so a mark never
+   *  outlives its child. An INELIGIBLE verdict deletes the entry but KEEPS
+   *  the mark, deliberately: the listing that matters most is the stale HELD
+   *  one, read before ccd unlinked the hold, and spending the mark there
+   *  would reopen the window it exists to close. Keeping it costs at most one
+   *  pass, once. IN MEMORY ONLY, the `childReclaimSweepState` idiom. */
   private childReclaimReleaseAnswered = new Set<string>();
   /** The seventh lane's clock — the journal mirror. `sweepLifecycle` below
    *  carries the lane's own docstring; this is only the clock field, same

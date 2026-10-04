@@ -1530,7 +1530,8 @@ describe('the presence bound at the lane: two and a half pass intervals between 
   it('a child that sits out ONE pass at the tick jitter\'s high end (124 s between its answers) keeps its episode — the licence arrives on time', async () => {
     const f = fixture({ outcome: (req) => deferredAs('presence', req) });
     finishedChild(f, 'demo-a'); finishedChild(f, 'demo-b');
-    // One pass interval plus one whole 2 s watcher tick: the latest a pass lands.
+    // One pass interval plus one whole 2 s watcher tick: the latest a pass lands
+    // under normal tick timing (a slower tick restarts the episode, fail-closed).
     const jittered = CHILD_RECLAIM_SWEEP_MS + 2_000;
     await f.pass();                                           // both: first sighting
     f.advance(jittered); await f.pass();                      // demo-a asked: its episode starts
