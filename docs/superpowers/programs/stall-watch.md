@@ -357,7 +357,7 @@ Output: `w2-shadow-review.json` in the coordinator notes.
   - **A correction to R22.** Run 174's worker was not at an approval prompt continuously since 10-02 19:38. It
     committed between 15:43 and 17:35 today and was blocked again after (its coordinator, mail 3364). R18 measured
     it at a prompt at 12:13, and that measurement stands.
-- **R24 (coordinator, 2026-10-04 00:44): wave 5's wave-done is accepted for review, and its two departures are
+- **R24 (coordinator, 2026-10-04 00:41): wave 5's wave-done is accepted for review, and its two departures are
   numbered.**
   - **The claim matched.** Mail 3368 claimed tip `365a5c516` on PR #237. The tip, the local copy and the PR head
     agree, and it merges clean against `main`.
