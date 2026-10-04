@@ -371,6 +371,20 @@ carries it (spec §5.1, amended 2026-09-24).
     #215 lands second on ccd/ccd and the coordinator files.
   - **Deploy:** through ccrc's updater. Fleet-first was measured safe (review 241). The deny is live on the fleet
     box at its update, and refuses only a held or child session.
+- **2026-10-04 12:41 — the operator delegates Task 7 to this coordinator**: "Run task 7 when you think it's most
+  appropriate..let's continue to finishing the programme". Task 7's own text says "not the coordinator", citing
+  clause 15's "never writes rulesets or protection". This is the operator's explicit instruction in their own words,
+  so this session runs Task 7 on the operator's behalf, from its shell, and records every write and the rollback file.
+  - **The sequence it judges most appropriate:**
+    1. run 250 lands Task 7 Step 1's two code preconditions (the payload cap and the quote-dense timing pin);
+    2. ccrc's updater moves both boxes onto that build;
+    3. a trusted full CI run on `main` passes;
+    4. then Task 7, Steps 1–7, with Step 4's write backed up by `ruleset-rollback.json`.
+  - **Deployed (2026-10-04, read-only):** both boxes run v0.0.69, which carries #233, #235 and #234. The fleet
+    box's doctor shows 0 FAIL, skills 17/17, and the merge deny and the rescue policy are present in the installed
+    tree. The server box's doctor also shows 0 FAIL.
+  - **Run 250's plan** is being drafted, reviewed by three Opus lenses, and revised by a planning workflow
+    (`docs/landing-order-wave3-plan`).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
