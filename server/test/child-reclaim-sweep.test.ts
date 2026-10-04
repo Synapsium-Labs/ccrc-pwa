@@ -1448,4 +1448,28 @@ describe('R254 SAFETY probe: how continuous is a presence episode under the in-f
     const asks = f.requests.filter((q) => q.sessionId === 'demo-a');
     expect(asks.map((q) => q.deferExpired), 'demo-a was sampled present exactly once').toEqual([false, false]);
   });
+
+  it('…and once the backlog drains, the episode runs from the answer after the gap, never from the sample before it', async () => {
+    const f = fixture({ outcome: (req) => deferredAs(req.sessionId === 'demo-a' ? 'presence' : 'state-changed', req) });
+    const others = Array.from({ length: 16 }, (_, k) => `demo-${String.fromCharCode(98 + k)}`);   // demo-b .. demo-q
+    finishedChild(f, 'demo-a');
+    for (const id of others) finishedChild(f, id);
+    await f.pass(); f.next(); await f.pass();          // demo-a's first presence answer
+    for (let k = 0; k < others.length; k += 1) { f.next(); await f.pass(); }   // one never-asked child per pass
+    f.next(); await f.pass();                          // demo-a again, over a ceiling later: unlicensed, a NEW episode
+    const restartedAt = f.now();
+    for (const id of others) {                         // the backlog drains: every other row leaves the registry
+      for (const fld of ['uuid', 'wrapper', 'project', 'workdir', 'workspace', 'branch', 'base', 'started', 'child']) {
+        rmSync(path.join(f.reg, `${id}.${fld}`), { force: true });
+      }
+    }
+    // demo-a alone now: asked on every pass, one interval apart, presence on each.
+    while (f.now() + CHILD_RECLAIM_SWEEP_MS < restartedAt + CHILD_RECLAIM_DEFER_CEILING_MS) {
+      f.advance(CHILD_RECLAIM_SWEEP_MS); await f.pass();
+    }
+    f.advance(restartedAt + CHILD_RECLAIM_DEFER_CEILING_MS - f.now()); await f.pass();   // a ceiling after the NEW episode began
+    const asks = f.requests.filter((q) => q.sessionId === 'demo-a').map((q) => q.deferExpired);
+    expect(asks, 'licensed only once the episode that began after the gap spans the ceiling')
+      .toEqual([...Array.from({ length: 16 }, () => false), true]);
+  });
 });
