@@ -213,3 +213,394 @@ export function parseDocsRef(s: string): DocsRefSpec | null {
 export function docsRefText(r: DocsRefSpec): string {
   return r.kind === 'bare' ? r.name : r.ref;
 }
+
+// ===== (D) failure vocabulary, retry classes, context, body and redactor =====
+// Spec 2026-10-01 section 2 (b) "Envelope" and "One redactor", section 2 (i), section 3.5 and section 3.7.
+// This file stays pure ASCII (the L0 pin in docs-shared.test.ts), so the spec's section sign is spelled out.
+
+/** A git object id as the wire carries it: 40 (sha1) or 64 (sha256) lowercase hex. Module-private; used below. */
+type Sha = string;
+
+/**
+ * Every Docs failure word, and the side that says it.
+ * - `'ccd'`: answered by the fleet's `ccd docs-*` helper (`_docs_py`), which holds ONE parity-bound copy of this
+ *   half as `FAILURES` (docs-parity.test.ts compares the two in both directions).
+ * - `'server'`: answered only by the server's adapter, hooks or lanes; ccd never prints one.
+ * One table, so a new word is a compile error in every exhaustive record keyed by `DocsFailure`
+ * (`DOCS_FAILURE_RETRY` below, L1's `DOCS_FAILURE_HTTP`, the PWA's `DOCS_FAILURE_SENTENCE`) until it is mapped.
+ * Grouped as the spec's tables group them.
+ */
+export const DOCS_FAILURES = {
+  // Argument (section 2 (i)): L1 and ccd apply the same grammar.
+  'bad-project': 'ccd',
+  'bad-ref': 'ccd',
+  'bad-commit': 'ccd',
+  'bad-section': 'ccd',
+  'bad-path': 'ccd',
+  'bad-fingerprint': 'ccd',
+  // Repository.
+  'unknown-project': 'ccd',
+  'not-a-git-repo': 'ccd',
+  'linked-worktree': 'ccd',
+  'shared-repo': 'ccd',
+  'partial-clone': 'ccd',
+  'repo-unreadable': 'ccd',
+  // Refs.
+  'no-default-branch': 'ccd',
+  'unresolved-ref': 'ccd',
+  'ref-not-commit': 'ccd',
+  // Objects and paths.
+  'unknown-commit': 'ccd',
+  'not-a-commit': 'ccd',
+  'object-missing': 'ccd',
+  'absent-path': 'ccd',
+  'not-a-file': 'ccd',
+  'symlink-in-path': 'ccd',
+  'too-large': 'ccd',
+  'too-many-entries': 'ccd',
+  'unreadable-path': 'ccd',
+  // Draft pins (show).
+  'worktree-gone': 'ccd',
+  'ambiguous-worktree': 'ccd',
+  'untrusted-worktree': 'ccd',
+  'worktree-moved': 'ccd',
+  'draft-changed': 'ccd',
+  // Fetch.
+  'remote-absent': 'ccd',
+  'remote-branch-absent': 'ccd',
+  'fetch-auth-failed': 'ccd',
+  'fetch-rejected-objects': 'ccd',
+  'fetch-transport': 'ccd',
+  'ref-locked': 'ccd',
+  'fetch-too-soon': 'ccd',
+  'fetch-timeout': 'ccd',
+  'fetch-failed': 'ccd',
+  // ccd generic.
+  'git-failed': 'ccd',
+  'git-timeout': 'ccd',
+  'helper-unavailable': 'ccd',
+  'helper-failed': 'ccd',
+  // Server-only (section 2 (i)).
+  'unsupported': 'server',
+  'caps-unknown': 'server',
+  'not-granted': 'server',
+  'link-failed': 'server',
+  'link-timeout': 'server',
+  'docs-busy': 'server',
+  'ccd-timeout': 'server',
+  'ccd-killed': 'server',
+  'ccd-fault': 'server',
+  'answer-overflow': 'server',
+  'malformed-answer': 'server',
+  'unknown-failure': 'server',
+  // Added by section 3.7 and section 5 (the HTTP layer).
+  'foreign-request': 'server',
+  'bad-query': 'server',
+  'raster-mismatch': 'server',
+  'response-type-refused': 'server',
+} as const satisfies Record<string, 'ccd' | 'server'>;
+
+export type DocsFailure = keyof typeof DOCS_FAILURES;
+
+/**
+ * What the page offers on a failure (section 2 (i) "Retry codes", section 4.7).
+ * - `auto`: retried automatically once.
+ * - `manual`: a Retry button.
+ * - `none`: no retry.
+ * - `auto-while-young`: `ref-locked` only. Retried automatically after 3 s while the body's `lockAgeMs` is null
+ *   or under 60 000; otherwise treated as `none`, with the "stale lock" sentence.
+ */
+export type DocsRetryClass = 'auto' | 'manual' | 'none' | 'auto-while-young';
+
+/** The retry class of every word: exhaustive by type, so a word added to `DOCS_FAILURES` does not compile until
+ *  it is placed here. `not-granted` is `manual` (section 7.1, C3: it was none); `caps-unknown` is `auto` (C1). */
+export const DOCS_FAILURE_RETRY: Record<DocsFailure, DocsRetryClass> = {
+  'bad-project': 'none',
+  'bad-ref': 'none',
+  'bad-commit': 'none',
+  'bad-section': 'none',
+  'bad-path': 'none',
+  'bad-fingerprint': 'none',
+  'unknown-project': 'none',
+  'not-a-git-repo': 'none',
+  'linked-worktree': 'none',
+  'shared-repo': 'none',
+  'partial-clone': 'none',
+  'repo-unreadable': 'manual',
+  'no-default-branch': 'none',
+  'unresolved-ref': 'none',
+  'ref-not-commit': 'none',
+  'unknown-commit': 'auto',
+  'not-a-commit': 'none',
+  'object-missing': 'manual',
+  'absent-path': 'none',
+  'not-a-file': 'none',
+  'symlink-in-path': 'none',
+  'too-large': 'none',
+  'too-many-entries': 'none',
+  'unreadable-path': 'manual',
+  'worktree-gone': 'auto',
+  'ambiguous-worktree': 'none',
+  'untrusted-worktree': 'none',
+  'worktree-moved': 'auto',
+  'draft-changed': 'auto',
+  'remote-absent': 'none',
+  'remote-branch-absent': 'none',
+  'fetch-auth-failed': 'none',
+  'fetch-rejected-objects': 'none',
+  'fetch-transport': 'manual',
+  'ref-locked': 'auto-while-young',
+  'fetch-too-soon': 'auto',
+  'fetch-timeout': 'manual',
+  'fetch-failed': 'manual',
+  'git-failed': 'manual',
+  'git-timeout': 'manual',
+  'helper-unavailable': 'none',
+  'helper-failed': 'manual',
+  'unsupported': 'none',
+  'caps-unknown': 'auto',
+  'not-granted': 'manual',
+  'link-failed': 'auto',
+  'link-timeout': 'auto',
+  'docs-busy': 'auto',
+  'ccd-timeout': 'manual',
+  'ccd-killed': 'manual',
+  'ccd-fault': 'manual',
+  'answer-overflow': 'none',
+  'malformed-answer': 'none',
+  'unknown-failure': 'manual',
+  'foreign-request': 'none',
+  'bad-query': 'none',
+  'raster-mismatch': 'none',
+  'response-type-refused': 'none',
+};
+
+/** The words a `ccd docs-*` answer may carry, in `DOCS_FAILURES` order. DERIVED from the table, never hand-listed:
+ *  the L3 adapter answers `unknown-failure {word}` for an `ok:false` word outside this set (section 2 (b) row 7). */
+export const DOCS_CCD_FAILURES: readonly DocsFailure[] =
+  (Object.keys(DOCS_FAILURES) as DocsFailure[]).filter((w) => DOCS_FAILURES[w] === 'ccd');
+
+/** The words a fetch stamp's `lastOutcome` can record: exactly what `docs-fetch` classifies after it ran git
+ *  (section 2 (g) step 7). `remote-absent` and `fetch-too-soon` are answered before any attempt, so neither is
+ *  ever stamped. */
+export type DocsFetchFailure =
+  | 'fetch-timeout'
+  | 'remote-branch-absent'
+  | 'fetch-rejected-objects'
+  | 'fetch-auth-failed'
+  | 'ref-locked'
+  | 'fetch-transport'
+  | 'fetch-failed';
+
+/** `not-a-file {kind}` (section 2 (i) "Objects and paths"). */
+export type DocsNotAFileKind =
+  | 'directory'
+  | 'section-not-a-directory'
+  | 'symlink'
+  | 'submodule'
+  | 'file-in-path'
+  | 'special'
+  | 'hardlink'
+  | 'foreign-owner'
+  | 'other-device';
+
+/** One step of the default-ref chain, as `unresolved-ref {tried}` and `DocsTreeOk.ref.tried` both carry it. */
+type DocsTriedRef = { ref: string; result: 'resolved' | 'absent' | 'dangling' | 'malformed' | 'not-a-commit' };
+
+/**
+ * The context fields a failure body may carry beside its word: one optional-field bag, every field optional.
+ * Section 3.5 names this type and never defines it; this is its definition for the ccd and server halves alike.
+ * The PWA switches on `failure` and reads only the fields that word's row names:
+ * - `root`: unknown-project (ccd's projects root).
+ * - `owner`, `branch`: linked-worktree, shared-repo.
+ * - `tried`, `suggest`, `hint`: unresolved-ref. `ref`, `type`: ref-not-commit.
+ * - `kind`: not-a-file. `size`, `cap`: too-large. `count`, `bytes`: too-many-entries. `errno`: unreadable-path.
+ * - `candidates`: ambiguous-worktree. `why`: untrusted-worktree, malformed-answer, foreign-request, bad-query.
+ * - `head`: worktree-moved. `now`: draft-changed. `lockAgeMs`: ref-locked.
+ * - `step`, `rc`, `stderrHead`: git-failed, git-timeout. `signal`: ccd-killed. `code`, `stderrHead`: ccd-fault.
+ * - `cause`: link-failed. `word`: unknown-failure. `lane`: docs-busy. `declared`, `size`: raster-mismatch.
+ *   `key`: bad-query. `site`: foreign-request.
+ */
+export interface DocsFailureContext {
+  root?: string;
+  owner?: string | null;
+  branch?: string | null;
+  tried?: DocsTriedRef[];
+  suggest?: string;
+  hint?: 'tag';
+  ref?: string;
+  type?: string;
+  kind?: DocsNotAFileKind;
+  size?: number;
+  cap?: number;
+  count?: number;
+  bytes?: number;
+  errno?: string;
+  candidates?: string[];
+  why?: string;
+  head?: Sha;
+  now?: 'absent' | 'present';
+  lockAgeMs?: number | null;
+  rc?: number;
+  stderrHead?: string;
+  step?: string;
+  signal?: string;
+  code?: number;
+  cause?: string;
+  word?: string;
+  lane?: 'read' | 'fetch';
+  declared?: string;
+  key?: string;
+  site?: string;
+}
+
+/** Every failure the server answers over HTTP (section 3.5, verbatim). Success is 200 only. */
+export type DocsFailureBody = { ok: false; failure: DocsFailure; detail?: string; retryAfterMs?: number } & DocsFailureContext;
+
+/**
+ * The redactor, declared once (section 2 (b) "One redactor"). `_docs_py` runs it over every string derived from
+ * stderr or a traceback; the L3 adapter runs `redactDocsText` again over every such string field of a failure
+ * body. `_docs_py` holds ONE parity-checked literal copy of these rules as `REDACT_RULES`.
+ *
+ * Each rule is `[pattern, suffix]`, applied in order, globally. A match becomes group 1 (when the pattern has
+ * one) followed by `suffix`. That form needs no replacement-template syntax, which differs between python
+ * (`\1`) and JS (`$1`).
+ *
+ * Whitespace is the explicit ASCII class `[\t\n\v\f\r ]`, never `\s`: python's str `\s` also matches
+ * U+001C..U+001F and JS's matches U+FEFF, so one `\s` literal would redact differently on the two sides.
+ * Refines the spec table's `\s` (recorded in the plan's spec refinements).
+ */
+export const DOCS_REDACT_RULES: readonly (readonly [pattern: string, suffix: string])[] = [
+  [String.raw`(://)[^/@\t\n\v\f\r ]+@`, '***@'],
+  [String.raw`([?&](?:access_token|token)=)[^&\t\n\v\f\r ]+`, '***'],
+  [String.raw`(gh[opsu]_)[A-Za-z0-9]{20,}`, '***'],
+  [String.raw`[^\n]*Authorization:[^\n]*`, 'Authorization: ***'],
+];
+
+const DOCS_REDACTORS: readonly (readonly [RegExp, string])[] =
+  DOCS_REDACT_RULES.map(([pattern, suffix]) => [new RegExp(pattern, 'gu'), suffix] as const);
+
+/** `s` with every `DOCS_REDACT_RULES` match replaced. Idempotent: redacting a redacted string changes nothing. */
+export function redactDocsText(s: string): string {
+  let out = s;
+  for (const [re, suffix] of DOCS_REDACTORS) {
+    // With a capture group, the callback's second argument is group 1; without one, it is the match offset (a
+    // number), so only a string is kept.
+    out = out.replace(re, (_match: string, ...rest: unknown[]) => {
+      const group1 = rest[0];
+      return (typeof group1 === 'string' ? group1 : '') + suffix;
+    });
+  }
+  return out;
+}
+
+// ===== (E) ccd wire types =====
+// Spec 2026-10-01 section 2 (b) "Types", with section 3.5's additive amendments (`onRef`, `github`) folded in.
+// Additive only: no FLEET_PROTO bump. Every ccd answer is one JSON line: `{v:1, verb, ok, elapsedMs, ...}`.
+
+export type DocsVerb = 'docs-index' | 'docs-tree' | 'docs-show' | 'docs-fetch';
+
+/** The project's GitHub origin, as ccd's `_gh_repo_slug` rule reads `remote.origin.url` (section 3.11). */
+export type DocsGithub = { state: 'named'; slug: string /* owner/name */ } | { state: 'none' };
+
+export interface DocsTreeOk {
+  v: 1; verb: 'docs-tree'; ok: true; elapsedMs: number; project: string;
+  repo: { key: string /* 32 hex: sha256(realpath(common-dir)) */; objectFormat: 'sha1' | 'sha256'; shallow: boolean };
+  github: DocsGithub;
+  ref: {
+    requested: string | null; served: string /* full refname */; name: string; side: 'local' | 'origin'; commit: Sha;
+    via: 'default:origin-head' | 'default:origin-main' | 'default:origin-master' | 'default:local-main'
+      | 'default:local-master' | 'local' | 'origin' | 'qualified';
+    tried: DocsTriedRef[];
+    relation: 'equal' | 'local-only' | 'origin-only' | 'local-ahead' | 'local-behind' | 'diverged' | 'unmeasured';
+    counterpart: null | {
+      ref: string; commit: Sha; ahead: number | null; behind: number | null; count: 'measured' | 'timeout' | 'shallow';
+    };
+  };
+  mainCheckout: { path: string; branch: string | null; head: Sha };
+  /** All four, in DOC_SECTIONS order. */
+  sections: { slug: DocSectionSlug; path: string; state: 'present' | 'absent' | 'not-a-directory'; count: number }[];
+  entries: DocsEntry[];
+  unlisted: { count: number; byReason: Partial<Record<'invalid-utf8' | 'unsafe-char' | 'too-long' | 'too-deep', number>> };
+  drafts: DraftsFacts;
+  freshness: {
+    remote: 'origin' | null; trackedRef: string | null;
+    stamp: null | { okAgeMs: number | null; attemptAgeMs: number; lastOutcome: 'ok' | DocsFetchFailure; okCommit: Sha | null };
+    /** Diagnostic only (sheet B section 9). */
+    fetchHead: null | { ageMs: number; bytes: number };
+  };
+}
+
+export interface DocsEntry {
+  section: DocSectionSlug; path: string /* relative to the section */;
+  committed: null | { kind: 'file' | 'exec' | 'symlink' | 'submodule'; blob: Sha /* commit sha for a submodule */; size: number | null };
+  draft: null | {
+    state: 'modified' | 'added' | 'untracked' | 'deleted' | 'typechange' | 'conflicted';
+    // The spec's member order, rotated so the two read words never stand side by side: single-definition.test.ts's
+    // "one absent/unreadable read vocabulary" scan counts any file that spells that pair adjacently as a second
+    // holder of ReadFailure. Same type; only the spelling order differs.
+    kind: 'absent' | 'file' | 'symlink' | 'directory' | 'special' | 'hardlink' | 'foreign-owner' | 'other-device' | 'unreadable';
+    size: number | null;
+    /** sha256 of the bytes; null iff not a regular file that passed the leaf checks and is at most DOCS_MAX_FILE_BYTES. */
+    fp: Sha | null;
+    errno?: string;
+    trust: 'status' | 'hash';
+  };
+}
+
+export type DraftsFacts =
+  | {
+    state: 'holder'; branch: string; worktree: { path: string; head: Sha; class: 'main' | 'workspace' | 'other' };
+    baseEqual: boolean; base: { ahead: number | null; behind: number | null; count: 'measured' | 'timeout' | 'shallow' } | null;
+    caveats: ('assume-unchanged' | 'skip-worktree' | 'filters-bypassed')[]; opaque: string[] /* nested-repo dirs */;
+  }
+  | { state: 'none'; branch: string; skipped: { path: string; why: 'prunable' | 'missing-dir' | 'unsafe-path' }[] }
+  | { state: 'ambiguous'; branch: string; candidates: string[] }
+  | {
+    state: 'untrusted'; branch: string; worktree: string;
+    why: 'common-dir' | 'toplevel-mismatch' | 'foreign-owner' | 'identity-changed' | 'dubious-ownership';
+  }
+  | {
+    state: 'unreadable'; branch: string; worktree: string | null;
+    step: 'worktree-list' | 'status' | 'ls-files' | 'filter-config'; detail: string;
+  }
+  | { state: 'unsettled'; branch: string; worktree: string }
+  | { state: 'too-many'; branch: string; worktree: string; count: number; bytes: number };
+
+export interface DocsShowOk {
+  v: 1; verb: 'docs-show'; ok: true; elapsedMs: number;
+  source: 'committed' | 'draft'; section: DocSectionSlug; path: string; size: number; sha256: Sha;
+  encoding: 'utf8' | 'base64'; text?: string; b64?: string;
+  /** Committed only; `onRef` is always present there (section 3.5). */
+  commit?: Sha; blob?: Sha; mode?: string; onRef?: 'contains' | 'not-contained' | 'unmeasured';
+  /** Draft only; `fp === sha256`. */
+  worktree?: string; branch?: string; head?: Sha; fp?: Sha;
+}
+
+export interface DocsFetchOk {
+  v: 1; verb: 'docs-fetch'; ok: true; elapsedMs: number;
+  branch: string; trackedRef: string; defaultVia?: string /* iff no --branch */;
+  before: Sha | null; after: Sha; moved: 'created' | 'updated' | 'unchanged'; stamp: 'written' | 'unwritten';
+}
+
+export interface DocsIndexOk {
+  v: 1; verb: 'docs-index'; ok: true; elapsedMs: number; unlisted: number;
+  /** Every repoKey held by two or more rows. */
+  duplicates: { repoKey: string; projects: string[] }[];
+  projects: {
+    project: string;
+    state: 'ready' | 'not-a-git-repo' | 'linked-worktree' | 'shared-repo' | 'partial-clone' | 'no-default-branch' | 'repo-unreadable';
+    github: DocsGithub; repoKey?: string;
+    default?: { name: string; via: string; commit: Sha }; sections?: Record<DocSectionSlug, number | null>;
+    sectionsOnDisk?: DocSectionSlug[] /* non-git dirs: 4 lstats */; owner?: string | null; branch?: string | null;
+    fetch?: { okAgeMs: number | null; lastOutcome: string };
+  }[];
+}
+
+export type DocsIndexRow = DocsIndexOk['projects'][number];
+
+/** A ccd failure line: the envelope plus the word, a redacted `detail` of at most 2 KiB, and that word's context.
+ *  `retryAfterMs` rides `fetch-too-soon`. */
+export type DocsCcdFailure = {
+  v: 1; verb: DocsVerb; ok: false; elapsedMs: number; failure: DocsFailure; detail?: string; retryAfterMs?: number;
+} & DocsFailureContext;

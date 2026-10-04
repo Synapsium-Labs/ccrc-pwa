@@ -4153,7 +4153,7 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   });
 
   it.each(CODES)("'%s' is a code-line literal in shared/api.ts alone", (code) => {
-    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : ['shared/api.ts'];
+    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
     expect(ALL.filter((f) => literal(code).test(stallCode(f))).map(rel).sort(), `a second '${code}'`).toEqual(want);
   });
 });
@@ -4393,5 +4393,73 @@ describe('docs L0 single definitions (docs reader W1a, row 48)', () => {
       'the %s body is spelled out only where it is declared', (_what, re, files) => {
         expect(holders(re)).toEqual([...files]);
       });
+  });
+});
+
+// Docs W1, Task 2 (spec 2026-10-01 section 2 (b), section 2 (i), section 3.5): the failure vocabulary, its retry
+// classes, the redactor and the ccd wire types each have ONE home, `shared/docs.ts`. The server's L1 status table,
+// its L3 adapter and the PWA's sentence table all key on these names, so a second declaration is a second
+// vocabulary that nothing forces to agree. The python copies (`FAILURES`, `REDACT_RULES`) live in `ccd/ccd`,
+// outside ROOTS; `docs-parity.test.ts` binds those. APPENDED after the file's last line:
+// `session-hook.test.ts`'s citation audit cites this file by line, so nothing above may move.
+describe('docs failure vocabulary, redactor and ccd wire types are declared once, in shared/docs.ts (docs W1)', () => {
+  const DOCS = path.join(ccrcRoot, 'shared', 'docs.ts');
+  const TYPES = [
+    'DocsFailure', 'DocsRetryClass', 'DocsFetchFailure', 'DocsNotAFileKind', 'DocsFailureContext', 'DocsFailureBody',
+    'DocsVerb', 'DocsGithub', 'DocsTreeOk', 'DocsEntry', 'DraftsFacts', 'DocsShowOk', 'DocsFetchOk', 'DocsIndexOk',
+    'DocsIndexRow', 'DocsCcdFailure',
+  ] as const;
+  const VALUES = ['DOCS_FAILURES', 'DOCS_FAILURE_RETRY', 'DOCS_CCD_FAILURES', 'DOCS_REDACT_RULES'] as const;
+  const FUNCTIONS = ['redactDocsText'] as const;
+  // The declaration shapes of the update-control-plane describe above (its `DEF_OF` is block-local there): a
+  // type needs its `=` and an interface its keyword, so an inline `type X,` import specifier is no holder.
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  const VALUE_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
+  const FUNCTION_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\b`, 'm');
+  const holdersOf = (re: RegExp): string[] => ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel);
+
+  it('CONTROL: each shape sees a declaration and an un-exported copy, and not an import, a re-export or a longer name', () => {
+    expect(TYPE_DEF('DocsFailure').test("export type DocsFailure = keyof typeof DOCS_FAILURES;")).toBe(true);
+    expect(TYPE_DEF('DocsFailure').test("type DocsFailure = 'bad-ref';"), 'an un-exported copy is still a copy').toBe(true);
+    expect(TYPE_DEF('DocsTreeOk').test('export interface DocsTreeOk {'), 'an interface').toBe(true);
+    expect(TYPE_DEF('DocsFailure').test("import {\n  type DocsFailure,\n} from '../../../shared/docs.js';"), 'an import specifier').toBe(false);
+    expect(TYPE_DEF('DocsFailure').test('export type DocsFailureBody = { ok: false };'), 'a longer name').toBe(false);
+    expect(VALUE_DEF('DOCS_FAILURES').test('export const DOCS_FAILURES = {'), 'a declaration').toBe(true);
+    expect(VALUE_DEF('DOCS_FAILURES').test("export { DOCS_FAILURES } from './docs.js';"), 'a re-export').toBe(false);
+    expect(VALUE_DEF('DOCS_FAILURES').test('const DOCS_FAILURES_SEEN = 1;'), 'a longer name').toBe(false);
+    expect(FUNCTION_DEF('redactDocsText').test('export function redactDocsText(s: string): string {')).toBe(true);
+    expect(FUNCTION_DEF('redactDocsText').test('const x = redactDocsText(s);'), 'a call').toBe(false);
+  });
+
+  for (const name of TYPES) {
+    it(`declares type ${name} exactly once, in shared/docs.ts`, () => {
+      expect(holdersOf(TYPE_DEF(name))).toEqual(['shared/docs.ts']);
+    });
+  }
+
+  it('declares every value and the redactor function exactly once, in shared/docs.ts', () => {
+    for (const name of VALUES) expect(holdersOf(VALUE_DEF(name)), name).toEqual(['shared/docs.ts']);
+    for (const name of FUNCTIONS) expect(holdersOf(FUNCTION_DEF(name)), name).toEqual(['shared/docs.ts']);
+  });
+
+  it('spells the redactor patterns in one TS file: no second copy of a rule', () => {
+    // Fragments every copy of rules 2 and 3 must contain however it is escaped or quoted.
+    for (const fragment of ['(?:access_token|token)=', 'gh[opsu]_']) {
+      expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(fragment)).map(rel), fragment).toEqual(['shared/docs.ts']);
+    }
+  });
+
+  it('DOCS_CCD_FAILURES is derived from DOCS_FAILURES, never hand-listed', () => {
+    const src = readFileSync(DOCS, 'utf8');
+    expect(src).toMatch(
+      /^export const DOCS_CCD_FAILURES: readonly DocsFailure\[\] =\n {2}\(Object\.keys\(DOCS_FAILURES\) as DocsFailure\[\]\)\.filter\(\(w\) => DOCS_FAILURES\[w\] === 'ccd'\);$/m,
+    );
+  });
+
+  it('DOCS_FAILURE_RETRY is typed by the vocabulary, so a new word does not compile until it is placed', () => {
+    const src = readFileSync(DOCS, 'utf8');
+    expect(src).toMatch(/^export const DOCS_FAILURE_RETRY: Record<DocsFailure, DocsRetryClass> = \{$/m);
+    expect(src).toMatch(/^export type DocsFailure = keyof typeof DOCS_FAILURES;$/m);
   });
 });
