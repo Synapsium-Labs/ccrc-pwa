@@ -20,7 +20,8 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
-| 3 | 3 | `ws-expire`: archived workspaces cleaned 7 days after archive, losslessly; `reclaim-paused` becomes the one cleanup switch | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | — | to plan; run 245 open (planned), block 3886–3895 |
+| 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | — | planning (workflow, 2026-10-04 22:28); run 245 open (planned), block 3886–3895 |
+| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed | — | to plan after wave 3 merges |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
 ## Decisions & deviations
@@ -365,6 +366,34 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - run 237 merges main before its README edits;
     - stall-watch's #232 and child-reclamation's #215 are now second landers on README/CLAUDE.md and store.ts.
   - **Deploy:** server + PWA, measure-only. It rides ccrc's own updater; nobody moves boxes by hand.
+- **2026-10-04 22:28 — wave 3 split at the agent-first seam; its plan is drafting.**
+  - **Unblocked:** child-reclamation wave 4 merged as #215 (`b40f4145`, 22:10). Its deploy waits for the operator to
+    acknowledge the fleet box's failed v0.0.78 update row (landing-order ledger, same date). Wave 3 dispatches only once
+    #215 is deployed.
+  - **Why split.** Stage 3 holds a sibling verb and a sweep population. Child-reclamation shipped the same two things
+    as two waves: its verb was a 7,498-line plan and a +14k PR, its sweep 5,533 lines and +14k. One wave would not be
+    reviewable. Agent-first is the spec's own order.
+  - **Wave 3 is the verb**, inert on deploy because nothing calls it:
+    - `ws-audit --expire` and `ws-expire`, with spec §5.3's ladder, pin phase and tail;
+    - the `expire:` breadcrumb, ws-reap's resume arm and every spawn path's refusal;
+    - the `expire` act in `_LC_ACTS` and every declaration that agrees with it;
+    - the server's argv builder, `expire-v1` and the type fixture;
+    - CLAUDE.md's SAFETY list, which is true as soon as the verb exists.
+  - **Wave 3b is the lane:**
+    - `archivedExpiryVerdict` and the second population in the sweep;
+    - the widened switch and its banner label;
+    - coordinator clause 3's move;
+    - README and wave-lifecycle §6, which would be false before the server expires anything.
+  - **Rulings in the brief:**
+    - the first commit is review 244's residue (F1–F3);
+    - all three instrument items land in wave 3, with `expire` joining `ENDS_THE_ARCHIVE` in the same commit as `_LC_ACTS`;
+    - review 240's `already archived` follow-up becomes a SAFETY requirement: an `.archived` row whose pane or
+      supervisor is live is never expired, and the plan names and pins the rung that refuses it;
+    - the 409 detail, the 404 fold and FM7 go to wave 3b;
+    - child-reclamation wave 5 (run 260) is the overlap on ccd/ccd: whichever lands second merges main.
+  - **The plan workflow** (wf_0b9331f4-22e): an Opus drafter prototyping in its own worktree; four Opus lenses (spec,
+    safety and data loss, replay, test honesty); an Opus reviser; a Sonnet replay verifier. The plan goes to branch
+    `docs/workspace-lifecycle-wave3-plan`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -405,8 +434,10 @@ Waves 1 and 2 are merged (#229 `a7b9831c`, #233 `fe7b9775`). Wave 1's measuremen
 above: `released_top_level` 0 and `released_wire_only` 0, and the archive→return delay does not hold stage 3. After
 wave 2's deploy converges, check that `/health` reports the merge's tag and that doctor shows 0 FAIL lines.
 
-Wave 3 (`ws-expire`, AGENT-FIRST) is open as run 245 (planned), with deviation numbers 3886 to 3895, written bare.
-- **It is to plan.** It needs child-reclamation waves 3–4 merged and deployed. Wave 4 is #215, still open.
+Wave 3 (the `ws-expire` verb, AGENT-FIRST) is open as run 245 (planned), with deviation numbers 3886 to 3895,
+written bare. Wave 3b (the lane) is planned after it merges.
+- **Its plan is drafting** (2026-10-04, see the 22:28 entry). It dispatches once child-reclamation wave 4 (#215,
+  merged `b40f4145`) is deployed.
 - **Its plan's FIRST commit is wave 2's residue** from review 244 (`~/.cc-clips/ccrc-pwa-still-canyon/review-244-53f31389.md`):
   - F1: `stopVerdict` reads `status` only when it is a string, and its docstring and the 3881 entry name the
     parsed-value limit (a non-compact file diverges from ccd's grep);
