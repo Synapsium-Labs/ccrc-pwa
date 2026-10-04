@@ -53,19 +53,35 @@ export function plantPoison(bin: string, name: string): void {
     + `echo "ccrc tests must never reach a real ${name}" >&2\nexit 97\n`, { mode: 0o755 });
 }
 
-/** A curl that execs `realCurl` ONLY when every URL it is handed (any argument containing `://`, and the argument after
- *  `--url`) is `http://127.0.0.1:<port>/…` with `<port>` a line of `$HOME/curl-allow-ports`; it appends each passed
- *  URL to `$HOME/curl-front-passed`. Anything else — another host, an unlisted loopback port (the live server's 7788
- *  and the agent's 7789 included), `-K`/`--config` — is appended to `$HOME/curl-poison` and refused, exit 97. */
+/** A curl that runs `realCurl` ONLY for a call it can fully account for (wave 9 R10d, review fix). It PARSES argv:
+ *
+ *  - PASSES: the options ccrc's own curl calls use, measured in ccd/ccrc and ccd/ccrc-doctor-checks — the short flag
+ *    clusters made of `s`, `S`, `f`, `L` (`-s`, `-fsS`, `-fsSL`); `-o`, `-w` and `-H` with the one value each takes; and
+ *    `--connect-timeout`, `--max-time`, `--max-filesize`, `--speed-limit`, `--speed-time` with theirs. A value-taking
+ *    option's value is CONSUMED as its value, never read as a URL. Names are matched exactly: curl itself accepts
+ *    unambiguous prefixes (`--max-t`), and an abbreviation is refused here.
+ *  - EVERY URL — each remaining positional argument, and the value of `--url` or `--url=` — must be
+ *    `http://127.0.0.1:<port>/…` (or end after the port) with `<port>` a line of `$HOME/curl-allow-ports`. A scheme-less
+ *    positional (curl defaults it to http), another host, userinfo, https, and an unlisted port (the live server's 7788
+ *    and the agent's 7789 included) are refused.
+ *  - REFUSED, whatever its value: every other option. That subsumes `-K`/`--config`, `-x`/`--proxy`, `--preproxy`,
+ *    `--socks*`, `--connect-to`, `--resolve`, `--unix-socket`, `--abstract-unix-socket`, `--doh-url`, `--next`/`-:`, `--`
+ *    and an unknown spelling: each could move the connection off the URL this scan reads.
+ *
+ *  A refused call is appended to `$HOME/curl-poison` and exits 97 without running curl; a passed call appends each URL to
+ *  `$HOME/curl-front-passed` and execs `realCurl` with `-q` as its FIRST argument (no `.curlrc`, whatever `CURL_HOME` or
+ *  `XDG_CONFIG_HOME` name) and the proxy variables unset. A call with no URL at all (`curl -s`) passes: it reaches nothing.
+ *  Not covered, by design: a redirect (`-L`) answered by a LISTED listener — that listener is the case's own. */
 export function loopbackCurlFront(realCurl: string): string {
   const real = `'${realCurl.replace(/'/g, `'\\''`)}'`;
   return [
     '#!/bin/sh',
-    '# wave 9 R10d (D-3819): the loopback curl front — see containedTools.ts.',
+    '# wave 9 R10d (D-3819, review fix): the loopback curl front — see containedTools.ts.',
     'allow="$HOME/curl-allow-ports"',
+    'argv_log="$*"',
     'refuse() {',
-    '  printf \'%s\\n\' "$*" >> "$HOME/curl-poison"',
-    '  echo "ccrc tests: this curl reaches only http://127.0.0.1:<port>/ with <port> listed in $HOME/curl-allow-ports" >&2',
+    '  printf \'%s\\n\' "$argv_log" >> "$HOME/curl-poison"',
+    '  echo "ccrc tests: this curl takes only ccrc\'s own options and reaches only http://127.0.0.1:<port>/ with <port> listed in $HOME/curl-allow-ports" >&2',
     '  exit 97',
     '}',
     'allowed() {',
@@ -81,27 +97,28 @@ export function loopbackCurlFront(realCurl: string): string {
     '    *) return 1 ;;',
     '  esac',
     '}',
-    // One pass decides, a second records: a refusal after a partial record would be a lie in curl-front-passed.
+    // One pass decides (check), a second records: a refusal after a partial record would be a lie in curl-front-passed.
+    'url_ok() {',
+    '  if [ "$mode" = check ]; then allowed "$1" || refuse; else printf \'%s\\n\' "$1" >> "$HOME/curl-front-passed"; fi',
+    '}',
     'scan() {',
-    '  prev=',
-    '  for a in "$@"; do',
-    '    u=',
+    '  while [ $# -gt 0 ]; do',
+    '    a=$1; shift',
     '    case "$a" in',
-    '      -K|--config|--config=*|-[!-]*K*) refuse "$@" ;;',
-    '      --url=*) u=${a#--url=} ;;',
-    '      *://*) u=$a ;;',
+    '      --url) [ $# -gt 0 ] || refuse; url_ok "$1"; shift ;;',
+    '      --url=*) url_ok "${a#--url=}" ;;',
+    '      --connect-timeout|--max-time|--max-filesize|--speed-limit|--speed-time|-o|-w|-H) [ $# -gt 0 ] || refuse; shift ;;',
+    '      -[sSfL]*) case "${a#-}" in *[!sSfL]*) refuse ;; esac ;;',
+    '      -*) refuse ;;',
+    '      *) url_ok "$a" ;;',
     '    esac',
-    '    [ "$prev" = --url ] && u=$a',
-    '    prev=$a',
-    '    [ -n "$u" ] || continue',
-    '    if [ "$mode" = check ]; then allowed "$u" || refuse "$@"; else printf \'%s\\n\' "$u" >> "$HOME/curl-front-passed"; fi',
     '  done',
     '}',
     'mode=check; scan "$@"',
     'mode=record; scan "$@"',
     // A proxy in the parent env would carry a loopback URL off the box.
     'unset http_proxy HTTP_PROXY https_proxy HTTPS_PROXY all_proxy ALL_PROXY',
-    `exec ${real} "$@"`,
+    `exec ${real} -q "$@"`,
   ].join('\n') + '\n';
 }
 

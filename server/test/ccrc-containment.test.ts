@@ -18,7 +18,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { harnessBin } from './ccdWsHelpers.js';
-import { CONTAINED_TOOLS, assertNoRealTool } from './containedTools.js';
+import { CONTAINED_TOOLS, assertNoRealTool, loopbackCurlFront } from './containedTools.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { installVersionedTree, keepDigestEnv } from './installTreeFixture.js';
 
@@ -137,11 +137,102 @@ describe('ccrcContainedEnv — create-if-absent, spine builders, and the loopbac
       expect(run(env, ['http://127.0.0.1:7788/health']), 'the live server\'s port').toBe(97);
       expect(run(env, ['https://example.invalid/']), 'another host').toBe(97);
       expect(run(env, ['-K', 'x', `http://127.0.0.1:${P}/`]), '-K').toBe(97);
+      // `--url <listed>` reaches the real curl too (7); the `=` form is not a curl option at all (2, curl's own).
+      expect(run(env, ['-sS', '--url', `http://127.0.0.1:${P}/`]), '--url').toBe(7);
+      expect(run(env, [`--url=http://127.0.0.1:${P}/`]), '--url=').toBe(2);
       const refused = readFileSync(join(home, 'curl-poison'), 'utf8');
       expect(refused).toContain('http://127.0.0.1:7788/health');
       expect(refused).toContain('https://example.invalid/');
       expect(refused).toContain('-K');
     });
+  });
+});
+
+// (h) again, for the front's ARGV PARSER (review fix, wave 9 R10d). The refusal rows build the front around a FAKE
+// "real curl" that only records its argv, so a regressed front cannot reach any listener — not the live server's
+// 7788, not a unix socket — while the test measures it: "refused" means exit 97 AND the fake never ran.
+describe('the loopback curl front parses argv — an option it does not allowlist, a scheme-less URL, or a value that redirects the connection is refused (wave 9 R10d)', () => {
+  const P = 41999;
+  const setup = (): { run: (args: string[]) => number; fakeArgv: () => string[]; poison: () => string; passed: () => string } => {
+    const home = mkTmp('contain-h2-');
+    const bin = join(home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const fake = join(bin, 'fake-real-curl');
+    writeFileSync(fake, '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/fake-curl-argv"\nexit 0\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'curl'), loopbackCurlFront(fake), { mode: 0o755 });
+    writeFileSync(join(home, 'curl-allow-ports'), `${P}\n`);
+    const env: NodeJS.ProcessEnv = { HOME: home, PATH: `${bin}:/usr/bin:/bin` };
+    const read = (f: string): string => (existsSync(join(home, f)) ? readFileSync(join(home, f), 'utf8') : '');
+    return {
+      run: (args) => spawnSync('/bin/sh', ['-c', 'exec curl "$@"', 'curl', ...args], { env, encoding: 'utf8' }).status ?? -1,
+      fakeArgv: () => read('fake-curl-argv').split('\n').filter(Boolean),
+      poison: () => read('curl-poison'),
+      passed: () => read('curl-front-passed'),
+    };
+  };
+  const ok = `http://127.0.0.1:${P}/`;
+  const refused: Array<[string, string[]]> = [
+    ['a scheme-less URL on the live server\'s port', ['127.0.0.1:7788/health']],
+    ['a scheme-less host', ['example.com/x']],
+    ['a scheme-less URL on a LISTED port', [`127.0.0.1:${P}/`]],
+    ['-x (proxy) with a listed URL', ['-x', '127.0.0.1:7788', ok]],
+    ['--proxy', ['--proxy', 'http://127.0.0.1:7788', ok]],
+    ['--preproxy', ['--preproxy', 'socks5://127.0.0.1:7788', ok]],
+    ['--socks5', ['--socks5', '127.0.0.1:7788', ok]],
+    ['--connect-to', ['--connect-to', `127.0.0.1:${P}:evil.example:443`, ok]],
+    ['--resolve', ['--resolve', `127.0.0.1:${P}:203.0.113.7`, ok]],
+    ['--unix-socket', ['--unix-socket', '/run/user/1000/bus', ok]],
+    ['--abstract-unix-socket', ['--abstract-unix-socket', 'x', ok]],
+    ['--doh-url', ['--doh-url', 'https://evil.example/dns', ok]],
+    ['--next', [ok, '--next', 'http://127.0.0.1:7788/']],
+    ['-:', [ok, '-:', 'http://127.0.0.1:7788/']],
+    ['-K', ['-K', 'x', ok]],
+    ['--config', ['--config', 'x', ok]],
+    ['--', ['--', ok]],
+    ['an unknown option', ['--no-such-option', ok]],
+    ['an abbreviated allowlisted option (curl accepts prefixes; the front is exact)', ['--max-t', '3', ok]],
+    ['a short cluster with a letter outside the set', ['-sx', '127.0.0.1:7788', ok]],
+    ['a good URL beside a bad positional', [ok, 'http://127.0.0.1:7788/health']],
+    ['--url on the live server\'s port', ['--url', 'http://127.0.0.1:7788/']],
+    ['--url= on the live server\'s port', ['--url=http://127.0.0.1:7788/']],
+    ['a scheme-less --url', ['--url', '127.0.0.1:7788/health']],
+    ['userinfo that moves the host', [`http://127.0.0.1:${P}@evil.example/`]],
+    ['https to the listed port', [`https://127.0.0.1:${P}/`]],
+  ];
+  for (const [what, args] of refused) {
+    it(`refuses ${what}: exit 97, recorded, and nothing reaches curl`, () => {
+      const t = setup();
+      expect(t.run(args), args.join(' ')).toBe(97);
+      expect(t.fakeArgv(), 'the (fake) real curl must not have run').toEqual([]);
+      expect(t.poison()).toContain(args.join(' '));
+      expect(t.passed()).toBe('');
+    });
+  }
+  const passes: Array<[string, string[]]> = [
+    ['the SHA256SUMS fetch shape ccrc uses', ['-fsSL', '--connect-timeout', '2', '--max-time', '5', '--max-filesize', '4096',
+      '--speed-limit', '1024', '--speed-time', '30', '-o', '/tmp/x', `${ok}rel/SHA256SUMS`]],
+    ['the bundle probe shape', ['-fsSL', '--connect-timeout', '2', '--max-time', '5', '-o', '/tmp/x', '-w', '%{http_code}', `${ok}b.sigstore.json`]],
+    ['the health probe shape (an -H value that looks like a URL is a VALUE)', ['-s', '--max-time', '3', '-H', 'accept: application/json',
+      '-w', '\n%{http_code}', `${ok}health`]],
+    ['--url', ['--url', ok]],
+    ['a header value that holds a URL, beside a good positional', ['-H', 'Referer: http://example.com/', ok]],
+  ];
+  for (const [what, args] of passes) {
+    it(`passes ${what}, to the real curl, with -q first`, () => {
+      const t = setup();
+      expect(t.run(args), args.join(' ')).toBe(0);
+      const argv = t.fakeArgv();
+      expect(argv.length, 'the (fake) real curl ran (a `-w` value holding a newline logs two lines)').toBeGreaterThan(0);
+      expect(argv[0]!.startsWith('-q '), `argv was: ${argv[0]}`).toBe(true);
+      expect(t.passed()).toContain(ok);
+      expect(t.poison()).toBe('');
+    });
+  }
+  it('--url=<listed> passes the front (curl itself answers 2: it has no `--url=` form) and is recorded as passed; the live port is refused above', () => {
+    const t = setup();
+    expect(t.run([`--url=${ok}`])).toBe(0);
+    expect(t.fakeArgv()[0]).toBe(`-q --url=${ok}`);
+    expect(t.passed()).toContain(ok);
   });
 });
 
