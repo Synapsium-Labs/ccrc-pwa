@@ -21,7 +21,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 |---|---|---|---|---|---|---|
 | 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | merged 2026-10-02 (`a934a59b`); run 219 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
-| 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin | **AGENT-FIRST** (ccd) | — | — | to plan |
+| 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | — | dispatched 2026-10-04 22:22 as run 248 (`ccrc-pwa-still-harbor`); block 3896–3905 + 3921–3925 |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
 | 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
@@ -315,6 +315,15 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     - (g) the older unguarded `int()` calls in `--stage 4` are carried.
   - **Numbers:** 3896–3905, plus 3921–3925 issued for the plan's nine slugs, rulings (c) and (d), and the worker's
     own.
+- **2026-10-04 22:22 — wave 3 dispatched** (run 248 → `ccrc-pwa-still-harbor`; branch `ws/still-harbor` at
+  `b40f4145`, nothing ahead of `main` although the slug was wave 2's worker's; worker skill present; route Opus · high,
+  Sonnet subagents, workflow off, compact 40; five items, one per plan task).
+  - **Plan merged first:** #245 (`f789d97d`), every required check green.
+  - **Held 20 minutes** while ccrc's PWA-driven update to v0.0.78 restarted the fleet agent. The update ended `failed`
+    on a hand archive inside its serial verify window, not on a broken box (landing-order ledger, same date).
+  - **The brief was re-dated at dispatch.** #215 merged at `b40f4145` (22:10) before it, so the overlap line now says
+    the branch already carries it and the plan's anchors in ccd/ccd, ccd/ccrc and session-hook.test.ts must be
+    re-measured.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -364,8 +373,8 @@ Waves 1 and 2 are merged (#230 `a934a59b`, #235 `db44b136`). Owed after their de
 - wave 2's stage-4 reading, with refused dispatches subtracted (F1 above).
 
 Wave 3 (spec stage 7: `$REG/<id>.typed`, the operator's own `/model`/`/effort` promoted to the route record, the
-alias table) is open as run 248 (planned), with deviation numbers 3896 to 3905, written bare.
-- **It is to plan.**
+alias table) is run 248, dispatched 2026-10-04 22:22 to `ccrc-pwa-still-harbor`, with deviation numbers 3896 to
+3905 and 3921 to 3925, written bare.
 - **Its plan's FIRST commit is wave 2's residue**, the list above from review 246: F1, F2, F3, F5, the minors 3–5
   and F6's restated §9 target.
 

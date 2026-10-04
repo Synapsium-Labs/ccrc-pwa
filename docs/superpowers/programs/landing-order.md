@@ -20,7 +20,8 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
-| 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror; FIRST, wave 2's residue and Task 7's preconditions | ccd, deploy | — | — | to plan; run 250 open (planned), block 3906–3915 |
+| 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | — | dispatched 2026-10-04 22:21 as run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
+| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | to plan after wave 3 merges |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
@@ -402,6 +403,20 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Carried, with owners:**
     - `PR_QUEUE_MAP`'s `unmeasured` gloss lacks a not-closed qualifier; landing wave 4 owns it (server).
     - a repo-wide slicing convention for files over 600 s (ccrc-doctor, ccrc-install, ccrc-update) is a follow-up.
+- **2026-10-04 22:21 — wave 3 dispatched** (run 250 → `ccrc-pwa-still-delta`; branch `ws/still-delta` at
+  `b40f4145`; worker skill present; route Opus · high, Sonnet subagents, workflow off, compact 40; five items, one per
+  plan task).
+  - **Plans merged first:** #244 (`d9e18633`) and #245 (`f789d97d`), every required check green.
+  - **The first attempt (about 22:02) was refused `registry-unmeasurable` (`disconnected`).** ccrc's PWA-driven update
+    to v0.0.78 had restarted the fleet agent. Before any retry it was measured that nothing was spawned: no session on
+    the run, and no new worktree or registry row. So the retry could not strand a workspace.
+  - **That update ended `failed`, falsely.** `_upd_sweep` verifies each restarted supervisor in turn, and
+    `verify-service.sh` holds each for 3 s plus 5 s, so 63 units take about 8.5 minutes. `still-summit` was archived by
+    hand at 22:10:51, inside its own window, and the sweep died with "did not stay up". The fleet box is on v0.0.78
+    with every supervisor active. The server box stays on v0.0.76 until the failed row is acknowledged. Reported to
+    the operator and to the update-management coordinator.
+  - **The brief was re-dated at dispatch.** #215 merged at `b40f4145` (22:10) before it, so the overlap line now says
+    the branch already carries it and the plan's anchors in its files must be re-measured.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -454,12 +469,17 @@ preconditions are on `main`:
 - review 249's F1, a live H40 row whose payload has a terminator.
 Until then, nothing in #234 changes how a PR lands.
 
-The next run is 250, wave 3 (planned; deviation numbers 3906 to 3915, written bare).
-- **Its FIRST commit carries wave 2's residue and Task 7's preconditions:**
-  - review 249 F1–F4;
-  - the payload cap and the quote-dense timing pin;
-  - the review-241 carries: closed-unmerged reads `unmeasured`, the doctor check for jq's lookaround, and the
-    `--squash` span.
-- **Then stage 3:** `ccd-land-probe`, the read-only conflict radar.
-- If the operator would rather run Task 7 sooner, those preconditions can be a small wave of their own.
+Run 250, wave 3, is dispatched (2026-10-04 22:21, `ccrc-pwa-still-delta`; deviation numbers 3906 to 3920, written
+bare). It is the small preconditions wave:
+- review 249 F1–F4;
+- the payload cap and the quote-dense timing pin, with the coordinator's word-bounded over-cap amendment;
+- the review-241 carries: closed-unmerged reads `none`, the doctor check for jq's lookaround, and the `--squash` span;
+- Task 7's runbook text.
+
+Then, in order:
+1. ccrc's updater moves both boxes onto wave 3's build;
+2. a trusted full CI run passes on `main`;
+3. this coordinator runs Task 7 (delegated 2026-10-04 12:41).
+
+**Wave 3b (stage 3, `ccd-land-probe`)** is planned after wave 3 merges.
 - **Wave 2b** (deny `--admin` and `gh api` merges fleet-wide) is planned only on Task 7's proof result.
