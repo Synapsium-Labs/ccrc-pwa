@@ -867,12 +867,12 @@ export function stallNewestDelivery(rows: readonly StallDeliveryRow[], mailId: n
  *  - a replayed one: its first delivery, ESTIMATED as `deliveredAt − replayCount × MAIL_REPLAY_MS`, and never before the
  *    queue (`replayed-deaf-from-first-delivery-estimate` (D-3803)). Every replay re-stamps `deliveredAt`, every MAIL_REPLAY_MS
  *    while the row stays unacked, so that column alone would hold the clock back until the replay ceiling parks the row, and
- *    the queue time alone would read a mail the gate held for 50 min or more as deaf at its first replay. The estimate is
+ *    the queue time alone would read a mail the gate held for 50 min or more as deaf at its first replay. Under serial replays the estimate is
  *    never early: each replay lands at least MAIL_REPLAY_MS after the previous stamp (the `dueDeliveries` predicate), so
- *    `deliveredAt − n × MAIL_REPLAY_MS` is at or after the first delivery. Its error is lateness only, bounded by the
+ *    `deliveredAt − n × MAIL_REPLAY_MS` is at or after the first delivery. Its error there is lateness only, bounded by the
  *    replay ceiling; it assumes one send per row per replay interval, so the mail lane's overlapping-sweep double send
- *    (two sends about 30 s apart) can make it early by up to MAIL_REPLAY_MS less 30 s, a residual of that race, to which
- *    the estimate adds nothing;
+ *    (two sends at least 30 s apart) can make it early by up to MAIL_REPLAY_MS less 30 s, a residual of that race, which
+ *    the estimate does not cause;
  *  - a mail still QUEUED behind the gate, undelivered: its queue time plus DELEGATE_CAP_MS. A coordinator in a RUNNING turn (marker
  *    `working` under a live `busy`: a hung foreground call, a blocking wait) has no other arm. Its own mail-stuck needs
  *    a finished turn, and no frozen arm watches a coordinator. So the hold is bounded like mail-stuck's busy hold, and
@@ -891,7 +891,8 @@ function stallDeafMail(input: StallInput, deliveries: readonly StallDeliveryRow[
   if (d === null || d.ackedAt !== null) return null;
   // Only a row the gate can still deliver is bounded; a parked or unnamed state is timed from its queue.
   if (d.deliveredAt === null) return { mail: passed, deafSince: d.state === 'queued' ? passed.at + DELEGATE_CAP_MS : passed.at };
-  // The queue floor is defensive: no state the store writes puts the estimate before the queue; it binds only on a backward clock step.
+  // The queue floor is defensive: no serial replay puts the estimate before the queue; it binds only on the overlapping-sweep
+  // double send or a backward clock step.
   return { mail: passed, deafSince: d.replayCount === 0 ? d.deliveredAt : Math.max(passed.at, d.deliveredAt - d.replayCount * MAIL_REPLAY_MS) };
 }
 
