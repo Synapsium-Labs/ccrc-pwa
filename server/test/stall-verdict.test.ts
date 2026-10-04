@@ -265,7 +265,7 @@ describe('holds 2a and 2b: a question holds uncapped, a dialog with no ask is ca
   it('a Fable-consent menu with no ask draws exactly one dialog-cap push at 2 h', () => {
     const worker = workerAt({ live: liveWord('waiting', A) });
     expect(v(worker, A + STALL_QUIET_MS - 1)).toEqual(hold('dialog'));
-    expect(v(worker, A + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', K));
+    expect(v(worker, A + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', A));   // keyed on the dialog's live stamp (`dialog-cap-keyed-on-the-dialog` (D-3799))
     expect(v(worker, A + 5 * H, [notice('live', 'dialog-cap', 1, K, A + STALL_QUIET_MS + 20_000)])).toEqual(hold('dialog'));
   });
 
@@ -703,7 +703,7 @@ describe('the three caps fire once per episode', () => {
   });
   it('dialog-cap: once at STALL_QUIET_MS under hold 2b, then hold dialog', () => {
     const worker = workerAt({ live: liveWord('waiting', since) });
-    expect(stallVerdict(stallInput({ worker }), since + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', K));
+    expect(stallVerdict(stallInput({ worker }), since + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', since));
     const n = [notice('live', 'dialog-cap', 1, K, since + STALL_QUIET_MS + 20_000)];
     expect(stallVerdict(stallInput({ worker, notices: n }), since + 9 * H)).toEqual(hold('dialog'));
   });
@@ -1233,7 +1233,7 @@ describe('wave 2: mail-disabled holds every mail rung that would send (lane-hono
 
   it('md: the caps still push', () => {
     expect(stallVerdict(stallInput({ arming: MD, worker: workerAt({ live: liveWord('waiting', NOW - 3 * H) }) }), NOW))
-      .toEqual(capOf('dialog-cap', RUN67_DISPATCHED));
+      .toEqual(capOf('dialog-cap', NOW - 3 * H));
   });
 
   it('md: a wave-2 dead notice to the claimant holds; to the operator it pushes; in the dark it stands', () => {
@@ -1317,7 +1317,7 @@ describe('wave 2: the approval envelope and the cause words', () => {
     const primary: Partial<StallRunRow> = { dispatchedAt: A - 5 * H };
     const worker = workerAt({ live: liveWord('waiting', A), hookAsk: { kind: 'approval', at: A } });
     expect(stallVerdict(stallInput({ primary, worker }), A + H)).toEqual(hold('dialog'));
-    expect(stallVerdict(stallInput({ primary, worker }), A + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', A - 5 * H));
+    expect(stallVerdict(stallInput({ primary, worker }), A + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', A));
   });
 
   it('the wave-2 causes are declared for the coord kebab scan', () => {
@@ -1573,11 +1573,11 @@ describe('E4 (run 187): a send-back after 8 h 53 m at awaiting-review starts the
     expect(stallFacts(e4({ mail: [...MAIL, BRIEF, wd] })).episodeKeyMs).toBe(wd.at);
   });
 
-  it('the dialog cap (2b) keeps today\'s clock and key: a dialog up through the review is pushed on the first sweep after the advance', () => {
+  it('the dialog cap (2b) keeps today\'s clock, keyed on the dialog\'s own stamp: a dialog up through the review is pushed on the first sweep after the advance', () => {
     // Coordinator ruling: the caps measure the pane or the account, not the worker's silence, and a dialog that blocked
-    // the pane through the review still blocks the fix-round brief. Keyed on #2811, so its text's span stays true.
+    // the pane through the review still blocks the fix-round brief. Keyed on its live stamp (`dialog-cap-keyed-on-the-dialog` (D-3799)), which no send-back moves.
     const menu = (activation: StallActivation): StallInput => e4({ worker: workerAt({ live: liveWord('waiting', E4.stop) }), activation });
-    expect(stallVerdict(menu(reactivated(E4.react)), E4.fire)).toEqual(capOf('dialog-cap', E4.w2811));
+    expect(stallVerdict(menu(reactivated(E4.react)), E4.fire)).toEqual(capOf('dialog-cap', E4.stop));
     expect(stallVerdict(menu(reactivated(E4.react)), E4.fire)).toEqual(stallVerdict(menu({ kind: 'none' }), E4.fire));
   });
 
@@ -1590,10 +1590,10 @@ describe('E4 (run 187): a send-back after 8 h 53 m at awaiting-review starts the
   });
 
   it('the dialog cap stays once per episode across a send-back: a push recorded before the advance holds it', () => {
-    // (D-3788) The caps dedupe on `capKeyMs`, the pre-advance key; keying the dedupe on the episode key would re-push.
+    // `dialog-cap-keyed-on-the-dialog` (D-3799): any push written since the dialog's stamp is this dialog's, whatever its key.
     const menu = e4({ worker: workerAt({ live: liveWord('waiting', E4.stop) }) });
     const pushed = [notice('live', 'dialog-cap', 1, E4.w2811, E4.react - 60_000)];
-    expect(stallVerdict(menu, E4.fire)).toEqual(capOf('dialog-cap', E4.w2811));   // CONTROL: no push recorded
+    expect(stallVerdict(menu, E4.fire)).toEqual(capOf('dialog-cap', E4.stop));   // CONTROL: no push recorded
     expect(stallVerdict({ ...menu, notices: pushed }, E4.fire)).toEqual(hold('dialog'));
   });
 
@@ -1812,5 +1812,82 @@ describe('coord-deaf is timed from the delivery the coordinator could hear (gate
     expect(cvd([old], [oldHeld])).toEqual(w2Push('coord-deaf', 4001));
     const deaf = notice('live', 'coord-deaf', 1, 4001, old.at + BOUND);
     expect(vw({ arming: W2_LIVE, mail: [old], notices: [deaf] }, { deliveries: [oldHeld] })).toEqual(capOf('coord-ball', old.at));
+  });
+});
+
+// ── dialog-cap-keyed-on-the-dialog (D-3799): one dialog-cap push per dialog, keyed on its live stamp ─────────────────
+// Run 174 (live coord.db, 2026-10-03): one dialog-cap row on the episode key (#2837), written 2026-10-02T18:50:16Z, and a
+// second permission prompt standing since 19:38:19Z with no row possible. Run 67: a row on its episode key written
+// 03:15:12Z, after its 01:14:44Z stamp.
+describe('dialog-cap-keyed-on-the-dialog (D-3799): the dialog cap is pushed once per dialog, not once per mail episode', () => {
+  const K = t('2026-09-30T22:48:29.848Z');   // run 174's episode key: the worker's last run mail
+  const D1 = t('2026-10-02T16:40:00Z');      // chosen: the first dialog's live stamp
+  const D2 = t('2026-10-02T19:38:19.419Z');  // run 174's second dialog: the stamp its live file carries
+  const own = mailRow(2837, K, WORKER, 'coordinator', 'status', 'Task 5 pushed', 174);
+  const first = notice('live', 'dialog-cap', 1, K, t('2026-10-02T18:50:16.434Z'));   // the one row run 174 has
+  const menu = (since: number, notices: StallNotice[] = [], over: Partial<PresentWorker> = {}): StallInput => stallInput({
+    primary: { id: 174, dispatchedAt: K - 48 * H }, mail: [own], notices,
+    worker: workerAt({ live: liveWord('waiting', since), ...over }),
+  });
+
+  it('the first dialog is pushed on its own live stamp at 2 h', () => {
+    expect(stallVerdict(menu(D1), D1 + STALL_QUIET_MS - 1)).toEqual(hold('dialog'));
+    expect(stallVerdict(menu(D1), D1 + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', D1));
+  });
+
+  it('a second dialog in the same mail episode gets its own push, once (run 174)', () => {
+    expect(stallVerdict(menu(D2, [first]), D2 + STALL_QUIET_MS - 1)).toEqual(hold('dialog'));
+    expect(stallVerdict(menu(D2, [first]), D2 + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', D2));
+    const second = notice('live', 'dialog-cap', 1, D2, D2 + STALL_QUIET_MS + 20_000);
+    expect(stallVerdict(menu(D2, [first, second]), D2 + 16 * H)).toEqual(hold('dialog'));
+  });
+
+  it('a row on the episode key written after the live stamp reported this dialog: no second push at the re-key (run 67 at deploy)', () => {
+    const K67 = t('2026-10-03T01:00:24.353Z');   // run 67's episode key: mail 3299
+    const S67 = t('2026-10-03T01:14:44.433Z');   // its live stamp: waiting since
+    const row = notice('shadow', 'dialog-cap', 1, K67, t('2026-10-03T03:15:12.508Z'));   // written by the build before this one
+    const input = (notices: StallNotice[]): StallInput => stallInput({
+      primary: { dispatchedAt: K67 - 5 * H }, mail: [mailRow(3299, K67, WORKER, 'coordinator', 'status', 'Task 3 pushed')],
+      notices, arming: SHADOW, worker: workerAt({ live: liveWord('waiting', S67) }),
+    });
+    expect(stallVerdict(input([row]), S67 + 11 * H)).toEqual(hold('dialog'));
+    expect(stallVerdict(input([]), S67 + 11 * H), 'CONTROL: with no row the dialog is pushed on its stamp').toEqual(capOf('dialog-cap', S67));
+    // rungDoneAt's standing rule, per row: armed since, the shadow row no longer stands, so the dialog is pushed live once.
+    expect(stallVerdict({ ...input([row]), arming: ARMED }, S67 + 11 * H), 'armed since the shadow row').toEqual(capOf('dialog-cap', S67));
+  });
+
+  it('the same-stretch boundary: an episode-key row written AT the stamp holds, one a millisecond before it does not', () => {
+    const rowAt = (at: number): StallInput => menu(D2, [notice('live', 'dialog-cap', 1, K, at)]);
+    expect(stallVerdict(rowAt(D2), D2 + STALL_QUIET_MS)).toEqual(hold('dialog'));
+    expect(stallVerdict(rowAt(D2 - 1), D2 + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', D2));
+  });
+
+  it('a send-back and an inbound brief move neither key: the dialog standing through them keeps its one push (R7, D-3788)', () => {
+    const pushed = notice('live', 'dialog-cap', 1, D2, D2 + STALL_QUIET_MS + 20_000);
+    const brief = mailRow(2900, D2 + 3 * H, COORD, WORKER, 'status', 'fix-round', 174);
+    const back = stallInput({
+      primary: { id: 174, dispatchedAt: K - 48 * H }, mail: [own, brief], notices: [pushed],
+      worker: workerAt({ live: liveWord('waiting', D2) }), activation: { kind: 'reactivated', at: D2 + 3 * H - 30_000 },
+    });
+    expect(stallVerdict(back, D2 + 6 * H)).toEqual(hold('dialog'));
+  });
+
+  it('the key never reads the hookstate time, which every later hook event restamps while the prompt stands', () => {
+    expect(stallVerdict(menu(D2, [first], { hookAsk: { kind: 'approval', at: D2 + 15_000 } }), D2 + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', D2));
+    const pushed = notice('live', 'dialog-cap', 1, D2, D2 + STALL_QUIET_MS + 20_000);
+    expect(stallVerdict(menu(D2, [first, pushed], { hookAsk: { kind: 'approval', at: D2 + 75_000 } }), D2 + 5 * H)).toEqual(hold('dialog'));
+  });
+
+  it('a coordinator wait: to the role worker while the dialog stands moves the key, and the dialog keeps its one push', () => {
+    // Task 1 lets an alias `wait:` move capKeyMs past the live stamp, and the wait is inbound mail, so it restarts the cap's
+    // quiet too. Two hours on, a per-key check finds no row on the new key and pushes the same dialog again.
+    const pushed = notice('live', 'dialog-cap', 1, D2, D2 + STALL_QUIET_MS + 20_000);
+    const wait = mailRow(2901, D2 + 3 * H, COORD, 'worker', 'status', `${STALL_WAIT_PREFIX} CI`, 174);
+    const input = stallInput({
+      primary: { id: 174, dispatchedAt: K - 48 * H }, mail: [own, wait], notices: [pushed],
+      worker: workerAt({ live: liveWord('waiting', D2) }),
+    });
+    expect(stallFacts(input).capKeyMs, 'CONTROL: the wait moved the cap key past the stamp').toBe(D2 + 3 * H);
+    expect(stallVerdict(input, D2 + 6 * H)).toEqual(hold('dialog'));
   });
 });

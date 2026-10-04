@@ -52,7 +52,7 @@ const STALL_SENDER = 'operator';
 const STALL_ARM_MAP = {
   quiet: 'the ladder: the worker holds the ball and has been idle past the quiet threshold (r1 worker, r2 coordinator, r3 operator)',
   'limit-cap': 'the usage-limit hold past its cap: one operator push per episode',
-  'dialog-cap': 'a dialog with no question behind it, past the quiet threshold: one operator push per episode',
+  'dialog-cap': 'a dialog with no question behind it, past the quiet threshold: one operator push per dialog, keyed on its live stamp',
   'coord-ball': 'the coordinator has held the ball past its cap with no mail on the run: one operator push per episode',
   'orphan-d': 'a restart killed background tasks the session ran at its last turn end, and it sat idle past ORPHAN_D_IDLE_MS (any session): a mail to it, then an operator push',
   'orphan-e': 'the session ended its turn over a wake-bearing background task and sat idle past ORPHAN_E_IDLE_MS with no turn: a mail to it',
@@ -481,7 +481,7 @@ export type CoordinatorState = 'alive' | 'dead' | 'unmeasurable';
 export interface StallEventRow { readonly at: number; readonly fromState: string; readonly toState: string }
 /** The primary run's newest RE-activation (planning departure `quiet-restarts-on-reactivation` (D-3788)). Three words,
  *  never folded: `reactivated` restarts the episode key and the quiet clocks (never the dialog and limit caps, which
- *  keep `capKeyMs` and `capQuietSince`); `none` changes nothing; `unmeasured` (the newest entry's time is not a
+ *  keep `capQuietSince` and keys no re-activation moves); `none` changes nothing; `unmeasured` (the newest entry's time is not a
  *  non-negative safe integer) holds at §10 step 2c, beside a null `dispatchedAt`. */
 export type StallActivation =
   | { readonly kind: 'reactivated'; readonly at: number }
@@ -567,8 +567,8 @@ const STALL_VERDICT_KEBABS: ReadonlySet<string> = new Set([
   ...Object.keys(STALL_W2_CAUSE_MAP),
 ]);
 
-/** Exported for tests and for the bodies (Task 6): the derived facts the verdict used. `capKeyMs` is the dialog and
- *  limit caps' episode: the key without the re-activation term (coordinator ruling on `quiet-restarts-on-reactivation`
+/** Exported for tests and for the bodies (Task 6): the derived facts the verdict used. `capKeyMs` is the limit cap's key and
+ *  the dialog cap's floor (it keys on the later of this and its live stamp, `dialog-cap-keyed-on-the-dialog` (D-3799)): the key without the re-activation term (`quiet-restarts-on-reactivation`
  *  (D-3788)), because the caps measure the pane or the account, not the worker's silence. */
 export interface StallFacts { readonly ball: 'worker' | 'coordinator'; readonly episodeKeyMs: number; readonly capKeyMs: number; readonly quietSince: number | null;
   readonly workerLast: StallMailRow | null; readonly inboundLast: StallMailRow | null; readonly lastExchangeAt: number | null }
@@ -710,7 +710,7 @@ export function stallBackoff(input: StallInput): { readonly streak: number; read
 
 /** The dialog and limit caps' clock: the same mail terms, from the live stamp whatever the word. The caller
  *  passes a MEASURED stamp: a null one is hold `unmeasured` before this is reached, never a 0. It carries NO
- *  re-activation term, and the caps key on `capKeyMs` (coordinator ruling on `quiet-restarts-on-reactivation`
+ *  re-activation term, and neither cap's key moves with one (coordinator ruling on `quiet-restarts-on-reactivation`
  *  (D-3788)): a dialog that blocked the pane through the review still blocks the fix-round brief. */
 function capQuietSince(input: StallInput, f: StallFacts, liveSince: number): number {
   return Math.max(liveSince, f.workerLast?.at ?? 0, f.inboundLast?.at ?? 0, input.subject.primary.dispatchedAt ?? 0);
@@ -760,6 +760,17 @@ function rungDoneAt(input: Pick<StallInput, 'notices' | 'arming'>, arm: StallArm
   const live = rows.filter((n) => n.mode === 'live');
   const timed = live.length > 0 ? live : rows;
   return timed.reduce((earliest, n) => Math.min(earliest, n.at), Number.POSITIVE_INFINITY);
+}
+
+/** Is the dialog standing now already pushed (`dialog-cap-keyed-on-the-dialog` (D-3799))? Yes when any dialog-cap row
+ *  that still stands was written at or after `since`, the live stamp the pane has read waiting from, WHATEVER ITS KEY.
+ *  The pane has shown this one dialog since that stamp, so every push written since reported it: a row the build
+ *  before this one keyed on the episode, and a row on a key a coordinator `wait:` has since moved. A row written
+ *  before the stamp reported an earlier dialog, so the one standing now gets its own push. A row stands by
+ *  `rungDoneAt`'s rule, applied per row: a live row, or a shadow row while the rung's delivery is still shadow. */
+function stallDialogCapDone(input: Pick<StallInput, 'notices' | 'arming'>, since: number): boolean {
+  const shadowStands = stallNotifyDelivery('dialog-cap', rungRecipient('dialog-cap', 1), input.arming) === 'shadow';
+  return input.notices.some((n) => n.arm === 'dialog-cap' && n.rung === 1 && n.at >= since && (n.mode === 'live' || shadowStands));
 }
 
 // ── wave 2: the run verdict's own helpers (design 2026-09-29 §5.1, §5.2, §10) ────────────────────────────────────
@@ -1008,12 +1019,14 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   const dialogShaped = live.word === 'waiting' || w.dialogPending;
   if (dialogShaped && (w.hookAsk.kind === 'unmeasured' || w.askRow.kind === 'unmeasured')) return holdVerdict('unmeasured');
   const capQuiet = now - capQuietSince(input, f, live.since);
-  const capKey = f.capKeyMs; // the caps keep the spec's clock and key (`quiet-restarts-on-reactivation` (D-3788))
-  // (4) hold 2a (a question, uncapped), then 2b (a dialog with no ask, capped once per episode). An `approval` is 2b.
+  const capKey = f.capKeyMs; // the caps keep the spec's clock, the limit cap its key (`quiet-restarts-on-reactivation` (D-3788))
+  // The dialog cap's key is its own dialog's live stamp, or the episode's when that is later (`dialog-cap-keyed-on-the-dialog` (D-3799)).
+  const dialogKey = Math.max(capKey, live.since);
+  // (4) hold 2a (a question, uncapped), then 2b (a dialog with no ask, capped once per dialog). An `approval` is 2b.
   const hookAskCorrelated = w.hookAsk.kind === 'ask' && live.since !== null && w.hookAsk.at >= live.since - ASK_DIALOG_SLACK_MS;
   const askRowOpen = w.askRow.kind === 'row' && (w.askRow.state === 'held' || w.askRow.state === 'answering');
   if (live.word === 'waiting' && (hookAskCorrelated || askRowOpen)) return holdVerdict('ask');
-  if (dialogShaped) return capQuiet >= STALL_QUIET_MS && rungDoneAt(input, 'dialog-cap', 1, capKey) === null ? capVerdict('dialog-cap', capKey) : holdVerdict('dialog');
+  if (dialogShaped) return capQuiet >= STALL_QUIET_MS && !stallDialogCapDone(input, live.since) ? capVerdict('dialog-cap', dialogKey) : holdVerdict('dialog');
   // (5) the limit hold, capped once per episode (`stallLimited`, shared with the session verdicts)
   if (stallLimited(w, now)) {
     return capQuiet >= LIMIT_HOLD_CAP_MS && rungDoneAt(input, 'limit-cap', 1, capKey) === null ? capVerdict('limit-cap', capKey) : holdVerdict('limit');
@@ -1163,8 +1176,8 @@ export function stallR1QuietFrom(input: StallInput, facts: StallFacts): number {
 }
 
 /** D-3582 r2-r3-span-from-the-episode: what r2 and r3 report is the time since the worker's last mail on the run,
- *  measured from the episode key (the coord-ball cap's key too; the dialog and limit caps keep `capKeyMs`, which a
- *  re-activation does not move), so a restamp by r1's own delivery cannot shorten
+ *  measured from the episode key (the coord-ball cap's key too; the limit cap keeps `capKeyMs` and the dialog cap keys off it, neither of which a
+ *  re-activation moves), so a restamp by r1's own delivery cannot shorten
  *  it. `at` formats the key. When the key IS the dispatch time the worker has never mailed on this run, and the
  *  text says `dispatch`. A coordinator's `wait:` can also move the key, and so can the run's re-activation
  *  (`quiet-restarts-on-reactivation` (D-3788)); "no mail from the worker since" either moment is still true. */
@@ -1353,11 +1366,19 @@ export function stallPushText(input: StallInput, facts: StallFacts, n: StallNoti
         title: `⚠ stalled › ${ws}`,
         body: `${label}: no mail from worker ${worker} ${stallSilence(run, facts, now, stallUtc)}. ${stallR3Cause(n.because, input, coordinator)}`,
       };
-    case 'dialog-cap':
+    case 'dialog-cap': {
+      // `dialog-cap-keyed-on-the-dialog` (D-3799): the dialog's own stretch, read from the live stamp its key comes from.
+      // `n.key` is the episode key whenever the dialog predates the worker's last mail, so it is never printed as the age.
+      const w = input.worker;
+      const live = w.present && w.live.ok && w.live.since !== null ? { word: w.live.word, since: w.live.since } : null;
+      const stretch = live === null
+        ? 'its live status was not measured'
+        : `its live status has read ${stallSafe(live.word)} since ${stallUtc(live.since)} (${stallSpan(now - live.since)})`;
       return {
         title: `⚠ stalled › ${ws} (dialog)`,
-        body: `${label}: worker ${worker} shows a dialog with no question behind it; this quiet episode opened ${stallUtc(n.key)} (${stallSpan(now - n.key)}). Mail to the worker, its coordinator's included, cannot land while the dialog shows: answer or dismiss it on the pane.`,
+        body: `${label}: worker ${worker} shows a dialog with no question behind it; ${stretch}. Mail to the worker, its coordinator's included, cannot land while the dialog shows: answer or dismiss it on the pane.`,
       };
+    }
     case 'limit-cap':
       return {
         title: `⚠ limit › ${ws}`,

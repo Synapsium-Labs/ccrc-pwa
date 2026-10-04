@@ -2642,7 +2642,7 @@ the run's latest return to an active state, none of which the watch's own
 notices can move. A paused coordinator, a dead
 one or none at all skips r2, and r3 says which. It holds — sends nothing — on
 anything it could not measure (a live file with no timestamp included), a dead or restarting
-worker, an open question, a harness dialog (one `⚠ stalled … (dialog)` push
+worker, an open question, a harness dialog (one `⚠ stalled … (dialog)` push per dialog
 after 2 h), a usage limit (one `⚠ limit` push after 12.5 h) and a `busy`
 worker. When the ball is the coordinator's it waits, and pushes `⚠ waiting`
 once after 30 h with no mail on the run and no send-back. Every rung is written as a

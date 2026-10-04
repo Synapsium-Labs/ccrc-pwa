@@ -51,6 +51,9 @@ const WORKER_MAIL_AT = Date.parse('2026-09-28T21:17:43Z');  // S4 #2509 status
 const INBOUND_AT = Date.parse('2026-09-28T21:19:17Z');      // S4 #2510 answer
 const IDLE_AT = Date.parse('2026-09-28T21:56:31Z');         // S4 main loop idle since
 const KEY = WORKER_MAIL_AT;                                  // episodeKeyMs: the worker's newest mail
+/** The dialog cap's key on a pane that reads waiting since the S4 idle stamp: the stamp, later than KEY
+ *  (`dialog-cap-keyed-on-the-dialog` (D-3799)). */
+const DIALOG_KEY = IDLE_AT;
 const R1_AT = IDLE_AT + STALL_QUIET_MS;
 const R2_AT = R1_AT + STALL_ESCALATE_MS;
 const R3_AT = R2_AT + STALL_OPERATOR_MS;
@@ -687,7 +690,7 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${KEY}` });
+    expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${DIALOG_KEY}` });
     expect(operatorMail(coord)).toEqual([]);          // neither worker nor coordinator can land on waiting
   });
 
@@ -713,8 +716,8 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${KEY}` });
-    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
+    expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${DIALOG_KEY}` });
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, DIALOG_KEY)]);
     expect(operatorMail(coord)).toEqual([]);
   });
 
@@ -832,7 +835,7 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     nothingWritten(coord, runId, sent);               // the hookstate ask reads `unmeasured`, never "no ask"
     at(R1_AT + STALL_SWEEP_MS);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
-    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, DIALOG_KEY)]);
     expect(sent).toHaveLength(1);
   });
 
@@ -847,7 +850,7 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     broken = false;
     at(R1_AT + STALL_SWEEP_MS);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
-    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, DIALOG_KEY)]);
     expect(sent).toHaveLength(1);
   });
 
@@ -861,7 +864,7 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     nothingWritten(coord, runId, sent);
     at(R1_AT + STALL_SWEEP_MS);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
-    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, DIALOG_KEY)]);
     expect(sent).toHaveLength(1);
   });
 
@@ -1195,7 +1198,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], [...ARMED, 'mail-disabled'], tickOf());
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ tag: `stall-${runId}-dialog-cap-1-${KEY}` });
+    expect(sent[0]).toMatchObject({ tag: `stall-${runId}-dialog-cap-1-${DIALOG_KEY}` });
   });
 
   it('mail-disabled: a rung that is shadow anyway still records its shadow row', async () => {
@@ -1237,7 +1240,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${KEY}` });
+    expect(sent[0]).toMatchObject({ title: `⚠ stalled › ${WORKER}-ws (dialog)`, tag: `stall-${runId}-dialog-cap-1-${DIALOG_KEY}` });
   });
 
   it('a coordinator whose turn marker stays unreadable MARKER_UNREADABLE_MS draws ⚠ marker once per first-seen time', async () => {
@@ -1674,7 +1677,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
-    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${KEY}`]);
+    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${DIALOG_KEY}`]);
   });
 
   it('hold 2a\'s identity cut, its other half: a question file with no registry row behind it is no ask, so the dialog-cap push goes out', async () => {
@@ -1686,7 +1689,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     const runId = seedRun(coord, { program: 'demo-program' });
     at(R1_AT);
     await w.sweepStalls([fleetRow(WORKER)], ARMED, { panePids: new Map([[WORKER, PID]]), records: [] });
-    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${KEY}`]);
+    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${DIALOG_KEY}`]);
   });
 
   it('a run worker that also claims a run is judged once, as a worker: one mail-stuck push per delivery, never a second run-less one', async () => {
@@ -2058,5 +2061,28 @@ describe('sweepStalls: coord-deaf on a delivery the mail sweep keeps replaying (
     // The newest deliveredAt (Q_AT + 51 min) is 9 min old here: timed from it, nothing would be deaf for 51 min more.
     expect(deafRows()).toEqual([stallDetail('live', 'coord-deaf', 1, q.id)]);
     expect(sent.map((p) => p.tag)).toContain(`stall-${runId}-coord-deaf-1-${q.id}`);
+  });
+});
+
+// ── dialog-cap-keyed-on-the-dialog (D-3799): one dialog-cap push per dialog, through a restart ──────────────────────────
+describe('sweepStalls: one dialog-cap push per dialog (dialog-cap-keyed-on-the-dialog (D-3799))', () => {
+  it('one push per dialog across sweeps and a fresh watcher; a second dialog in the same episode pushes again', async () => {
+    const { h, coord, w, sent } = await rig();
+    seedLiveState(h.home, { status: 'waiting' });            // the first dialog, since IDLE_AT
+    const runId = seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
+    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${IDLE_AT}`]);
+    const spy2 = pushSpy();
+    const again = await primedWatcher(h, coord, { push: spy2.push as never });   // a server restart
+    at(R1_AT + STALL_SWEEP_MS);
+    await again.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
+    expect(spy2.sent).toEqual([]);                           // the row on the dialog's key holds it
+    const S2 = R1_AT + 2 * STALL_SWEEP_MS;                   // the word turned and a second prompt shows: a new stamp
+    seedLiveState(h.home, { status: 'waiting', statusUpdatedAt: S2 });
+    at(S2 + STALL_QUIET_MS);
+    await again.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
+    expect(spy2.sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${S2}`]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, IDLE_AT), stallDetail('live', 'dialog-cap', 1, S2)]);
   });
 });
