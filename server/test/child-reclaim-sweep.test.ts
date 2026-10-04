@@ -235,6 +235,20 @@ const finishedChild = (f: ReturnType<typeof fixture>, id = 'demo-a'): number => 
 const deferredAs = (why: 'presence' | 'state-changed', req: ChildReclaimRequest): ChildReclaimOutcome =>
   ({ kind: 'deferred', sessionId: req.sessionId, runId: req.runId, why, detail: `deferred: ${why}` });
 
+/** A child whose retired hold the lane has RELEASED: two hold-retired passes, the second running the release job,
+ *  which the fixture's ccd answers `released` after unlinking the hold. So the answer's mark stands, and no eligible
+ *  verdict has consumed it yet. Returns the minting run's id. */
+const releasedChild = async (f: ReturnType<typeof fixture>): Promise<number> => {
+  const r1 = f.openRun(); f.abandon(r1);
+  f.plant('demo-a', { child: String(r1.id), hold: holdReason(r1.program, 2, null, null) });
+  await f.pass();                                              // 1st hold-retired sighting
+  f.next(); await f.pass();                                    // 2nd — the release runs and answers
+  expect(f.calls.filter((c) => c[0] === 'ws-release')).toHaveLength(1);
+  expect(existsSync(path.join(f.reg, 'demo-a.hold')), 'the hold file is gone').toBe(false);
+  expect(f.entryOf('demo-a'), 'the answer left no entry').toBeUndefined();
+  return r1.id;
+};
+
 describe('sweepChildReclaim — what reaches the executor', () => {
   it('nothing on the FIRST eligible pass; one request on the second — twice observed', async () => {
     const f = fixture();
@@ -649,6 +663,49 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.calls.filter((c) => c[0] === 'ws-release'), 'queued on one sighting after the pause lowered').toEqual([]);
     f.next(); await f.pass();                                  // …and its second — only now
     expect(f.calls.filter((c) => c[0] === 'ws-release')).toHaveLength(1);
+  });
+
+  // The release answer's mark is cleared by the same three resets as the sighting memory. A mark that survived one
+  // would be consumed by the child's next eligible verdict, landing the reclaim one pass LATER than the two fresh
+  // passes every reset otherwise costs — each case below stands a mark, resets, and counts exactly two.
+  it('the release answer\'s mark is cleared by the mirror/coordinator-read pass-level fail-shut — two fresh passes, not three', async () => {
+    const f = fixture();
+    const runId = await releasedChild(f);                     // a mark stands
+    const spy = vi.spyOn(f.coord, 'childReclaimCoordinatorIds')
+      .mockImplementation(() => { throw new Error('coordination history unreadable'); });
+    f.next(); await f.pass();                                  // the whole pass fails shut
+    spy.mockRestore();
+    f.next(); await f.pass();                                  // the FIRST fresh pass — a first sighting
+    expect(f.requests).toEqual([]);
+    f.next(); await f.pass();                                  // the SECOND — the request
+    expect(f.requests, 'the mark outlived the fail-shut').toEqual([
+      { sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+  });
+
+  it('the release answer\'s mark is cleared when reclaim-paused is raised then lowered — two fresh passes, not three', async () => {
+    const f = fixture();
+    const runId = await releasedChild(f);                     // a mark stands
+    writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
+    f.next(); await f.pass();                                  // paused: the switches' early return
+    rmSync(path.join(f.reg, 'reclaim-paused'));
+    f.next(); await f.pass();                                  // the FIRST fresh pass — a first sighting
+    expect(f.requests).toEqual([]);
+    f.next(); await f.pass();                                  // the SECOND — the request
+    expect(f.requests, 'the mark outlived the pause').toEqual([
+      { sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+  });
+
+  it('the release answer\'s mark leaves with its row: listed again, the child needs two fresh passes, not three', async () => {
+    const f = fixture();
+    const runId = await releasedChild(f);                     // a mark stands
+    for (const n of readdirSync(f.reg)) if (n.startsWith('demo-a.')) rmSync(path.join(f.reg, n));
+    f.next(); await f.pass();                                  // the row is gone: the vanished-row loop
+    f.plant('demo-a', { child: String(runId) });              // the same id listed again, unheld
+    f.next(); await f.pass();                                  // the FIRST fresh pass — a first sighting
+    expect(f.requests).toEqual([]);
+    f.next(); await f.pass();                                  // the SECOND — the request
+    expect(f.requests, 'the mark outlived its row').toEqual([
+      { sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
   });
 
   it('a box that does not advertise ws-release never releases the hold — gated exactly as the close route gates it', async () => {
