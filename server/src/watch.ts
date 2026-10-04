@@ -3297,6 +3297,14 @@ export class FleetWatcher {
                     + `(${err instanceof Error ? err.message : String(err)}) — left for the next pass`);
                 },
               ).finally(() => {
+                // THE ANSWER DELETES THE ENTRY, whatever it was — every
+                // answer word and a throw alike (spec §5.7, the twice-observed
+                // rule). ccd may unlink the hold before it answers, and a pass
+                // in that window records an eligible first sighting while the
+                // job is still in flight; keeping it would let the reclaim go
+                // out ONE pass after the answer. Deleted here, the child needs
+                // two fresh unheld passes after the answer, never fewer.
+                this.childReclaimSweepState.delete(r.id);
                 this.childReclaimInFlight.delete(r.id);
               }));
             } else {

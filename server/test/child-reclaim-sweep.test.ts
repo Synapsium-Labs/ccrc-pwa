@@ -439,15 +439,16 @@ describe('sweepChildReclaim — what reaches the executor', () => {
       { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
   });
 
-  it('a SECOND interleaving: ccd unlinks the hold before it answers — the eligible FIRST sighting lands while the release is still in flight, and the reclaim goes out one pass after the answer', async () => {
+  it('a SECOND interleaving: ccd unlinks the hold before it answers — the eligible sighting made while the release is in flight dies with the answer, and the reclaim still needs two fresh passes after it', async () => {
     // The first interleaving (above) has the stub apply ccd's effect exactly
     // AT the moment it answers. Here the effect and the answer are pulled
     // apart: the row is unheld first, and a pass reads that BEFORE the
     // release job's own promise ever resolves. The eligible branch sets its
     // first-sighting entry ahead of its own in-flight check, so this pass
-    // records the sighting despite the release still being unsettled — and
-    // the reclaim still needs only ONE further pass once the answer lands,
-    // not two, because that sighting already happened.
+    // records a sighting despite the release still being unsettled — and the
+    // job's answer DELETES that entry (spec §5.7's twice-observed rule, as
+    // the release's own answer must), so the reclaim still needs TWO fresh
+    // unheld passes once the answer lands, never one.
     let resolveRelease!: (v: { code: number; stdout: string; stderr: string }) => void;
     const f = fixture({ release: () => new Promise((resolve) => { resolveRelease = resolve; }) });
     const r1 = f.openRun(); f.abandon(r1);
@@ -461,9 +462,13 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.next(); await f.pass();                                   // a pass while still in flight — the eligible
                                                                  // branch's own first sighting lands HERE
     expect(f.requests, 'only the first eligible sighting so far').toEqual([]);
+    expect(f.entryOf('demo-a'), 'the in-flight pass did record a sighting').toBeDefined();
     resolveRelease({ code: 0, stdout: 'released demo-a\n', stderr: '' });   // the answer, matching what already happened
     await second;
-    f.next(); await f.pass();                                   // the FIRST pass after the answer — dispatches
+    expect(f.entryOf('demo-a'), 'the answer deleted the entry').toBeUndefined();
+    f.next(); await f.pass();                                   // the FIRST pass after the answer — a fresh first sighting
+    expect(f.requests, 'never reclaimed one pass after the answer').toEqual([]);
+    f.next(); await f.pass();                                   // the SECOND — only now
     expect(f.requests).toEqual([
       { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
   });
