@@ -1401,6 +1401,36 @@ describe('the production path', () => {
   });
 });
 
+describe('R254 SAFETY probe: the entry does not outlive an ineligible gap', () => {
+  it('R254-L10: a presence episode is not carried across a pass where the child was ineligible', async () => {
+    const f = fixture({ outcome: (req) => deferredAs('presence', req) });
+    finishedChild(f);
+    await f.pass(); f.next(); await f.pass();                 // request 1 -> presence; the episode starts
+    const r2 = f.openRun(); f.coord.setSession(r2.id, 'demo-a');   // re-bound: an open run names it
+    f.next(); await f.pass();                                 // ineligible (siblings-open)
+    f.advance(CHILD_RECLAIM_DEFER_CEILING_MS + 1);
+    f.abandon(r2);
+    await f.pass();                                           // the first eligible pass after the gap
+    expect(f.requests.map((q) => q.deferExpired), 'asked on the first sighting after the gap').toEqual([false]);
+    f.next(); await f.pass();
+    expect(f.requests.map((q) => q.deferExpired), 'a fresh episode, never a licensed attempt').toEqual([false, false]);
+  });
+
+  it('R254-L12: a row that leaves the registry takes its entry with it', async () => {
+    const f = fixture({ outcome: (req) => deferredAs('presence', req) });
+    const runId = finishedChild(f);
+    await f.pass(); f.next(); await f.pass();                 // request 1 -> presence; the episode starts
+    for (const fld of ['uuid', 'wrapper', 'project', 'workdir', 'workspace', 'branch', 'base', 'started', 'child']) {
+      rmSync(path.join(f.reg, `demo-a.${fld}`), { force: true });
+    }
+    f.next(); await f.pass();                                 // the row is gone
+    f.advance(CHILD_RECLAIM_DEFER_CEILING_MS + 1);
+    f.plant('demo-a', { child: String(runId) });              // the same id listed again
+    await f.pass();
+    expect(f.requests.map((q) => q.deferExpired), 'asked on the first sighting after the gap').toEqual([false]);
+  });
+});
+
 describe('R254 SAFETY probe: how continuous is a presence episode under the in-flight bound', () => {
   it('R254-P: one presence sample, then sixteen other due children — the child\'s NEXT request does NOT go out licensed', async () => {
     const f = fixture({ outcome: (req) => deferredAs(req.sessionId === 'demo-a' ? 'presence' : 'state-changed', req) });
