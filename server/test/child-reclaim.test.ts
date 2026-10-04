@@ -456,7 +456,7 @@ describe('parseChildReclaimResult', () => {
 describe('childReclaimDecision — has the coordinator finished with this child?', () => {
   const OPEN_NONE: OpenSiblingsResult = { ok: true, siblings: [] };
   // Every `ChildReclaimMinting` row fixture carries `sessionBornAt`/
-  // `sessionBornFor`/`dispatchStartedAt` (migration 15/migration 5) — a
+  // `sessionBornFor`/`dispatchStartedAt` (migration 16/migration 5) — a
   // plain literal here, since the pure decision reads only
   // `reviews`/`sessionId`, never these columns; Task 9 is the one that places
   // a fast-path spent verdict against them before it decides.

@@ -38,7 +38,7 @@ export type ChildSpentVerdict =
 /**
  * A child's BIRTH: the instant its CURRENT occupant's session was bound to
  * this run, which every PR row on its branch is dated against. It is the
- * MINTING run's `sessionBornAt` (migration 15) — the server's own clock,
+ * MINTING run's `sessionBornAt` (migration 16) — the server's own clock,
  * stamped once by the fresh-spawn dispatch arm and write-once per bound
  * session (`CoordStore.bindSession`), never `dispatchStartedAt`, which moves
  * on every fresh-spawn attempt including retries and so cannot say which

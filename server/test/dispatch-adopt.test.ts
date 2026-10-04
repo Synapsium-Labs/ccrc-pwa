@@ -530,7 +530,7 @@ describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () 
   });
 });
 
-// Child-reclamation spec §5.1, §5.3; migration 15: the child's BIRTH is
+// Child-reclamation spec §5.1, §5.3; migration 16: the child's BIRTH is
 // write-once per BOUND session, spent from the SAME `startedAt` this arm
 // stamps onto `dispatchStartedAt` above — never a second `Date.now()` read,
 // which could date the two columns apart for no reason a reader could

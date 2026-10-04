@@ -1910,7 +1910,7 @@ disaster-recovery drill, and the Build 4 dogfood runbook.
 
 **All three skills ship to every rostered account's config dir.** The
 coordinator's protocol is now a trio: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, sixteen clauses pinned by
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, seventeen clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
 `ccrc-reviewer` skill (`ccd/reviewer-skill/SKILL.md`, ten clauses pinned by
 `server/test/reviewer-skill.test.ts`), which reads a finished wave in its own
@@ -2301,10 +2301,10 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its fifteen
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its sixteen
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), sixteen clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), seventeen clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -2650,14 +2650,15 @@ rung falls due defers it, and that rung's hour then runs again from the live
 file's next stamp; a restamp inside the hour (the worker's own turn after a
 notice) does not re-time it, and neither does mail — worker mail opens a new
 episode instead. r2 and r3 measure the silence from the episode's start: the
-worker's own last mail on the run, a later coordinator `wait:`, or dispatch,
-none of which the watch's own notices can move. A paused coordinator, a dead
+worker's own last mail on the run, a later coordinator `wait:`, dispatch, or
+the run's latest return to an active state, none of which the watch's own
+notices can move. A paused coordinator, a dead
 one or none at all skips r2, and r3 says which. It holds — sends nothing — on
 anything it could not measure (a live file with no timestamp included), a dead or restarting
 worker, an open question, a harness dialog (one `⚠ stalled … (dialog)` push
 after 2 h), a usage limit (one `⚠ limit` push after 12.5 h) and a `busy`
 worker. When the ball is the coordinator's it waits, and pushes `⚠ waiting`
-once after 30 h with no mail on the run. Every rung is written as a
+once after 30 h with no mail on the run and no send-back. Every rung is written as a
 `run_events` observation row before it is sent, so a restart never sends one
 twice, and a run that has left the active states by then gets neither; the
 watch never closes, reclaims or re-dispatches anything. Three markers in
@@ -2668,7 +2669,12 @@ by nothing in the tree: `stall-watch-disabled` stops the lane; with no
 sends the notices addressed to the worker; `stall-watch-escalate` sends the
 coordinator mails and the operator pushes too. The quiet clock restarts on ANY
 mail to the worker on the run that is not the watch's own, so a session that
-mails the worker there at least every 2 h keeps r1 from ever falling due. The
+mails the worker there at least every 2 h keeps r1 from ever falling due. Time
+the run spends outside the active states is never charged to the worker: when
+the coordinator moves it back into one (a send-back from `awaiting-review` to
+`working`, say), the quiet clock, the episode and the coordinator's 30 h start
+again from that move; the dialog and limit caps keep their clocks, which measure
+the pane and the account, not the worker. The
 guarantee that no box-token holder can keep a mail off the phone covers the
 `re stall-check:` prefix only (a reply is kept off the phone only when it is
 bound to a check); nothing limits who may mail the worker and so hold off the
@@ -2880,7 +2886,7 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   those per event (a deny or nudge wins), and empty on every other event**, because a stdout JSON on `PreToolUse` is
   read as this hook having something to say about the call, and it says nothing there unless it
   does. The card, the deny and the nudge are pinned in both directions by `server/test/session-hook.test.ts`, the advisory by `server/test/session-hook-sync-advisory.test.ts`.
-- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries sixteen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16), pinned verbatim: a
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries seventeen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16, the stall watch added 17), pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
   and every other word makes a query answer a lead to verify by opening the file it names — and never

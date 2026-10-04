@@ -277,7 +277,10 @@ const TAILNET_RESIDUE: string[] = ['dGFpbDMzZjExYw==', 'Y2xhdWRlLXJj']
   .map((b) => Buffer.from(b, 'base64').toString('utf8'));
 
 /** The reference fleet's four real account labels plus its operator's old
- *  employer name (Task 5, spec §5) — BASE64-ENCODED, the same residue idiom
+ *  employer name (Task 5, spec §5), and (Plan 3a) every GPT-lane label that
+ *  this class's `passes` does not pin: a label a pass pins cannot join a
+ *  case-insensitive substring class without redding that pin, so it is left
+ *  to the close-out's hand-grep (D-3722) — BASE64-ENCODED, the same residue idiom
  *  as TAILNET_RESIDUE above and for the same reason: these are concrete
  *  values no pattern can express without spelling them, and a suite that
  *  spelled them verbatim would itself publish the strings it exists to hunt.
@@ -287,6 +290,7 @@ const TAILNET_RESIDUE: string[] = ['dGFpbDMzZjExYw==', 'Y2xhdWRlLXJj']
  *  replacements. */
 const ROSTER_RESIDUE: string[] = [
   'ZXhwb8K3bWF4', 'Z21haWzCt21heA==', 'ZXhwb8K3dGVhbQ==', 'c3luwrdkZXYw', 'ZXhwb3BsYXRmb3Jt',
+  'Z3B0wrdleHBvYWk=',
 ].map((b) => Buffer.from(b, 'base64').toString('utf8'));
 
 /** The residue no pattern can express (Task 8, spec §3): the operator's

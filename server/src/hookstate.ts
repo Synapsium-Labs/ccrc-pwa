@@ -329,11 +329,19 @@ export async function readHookStateRawMeasured(io: FleetIO, registryDir: string,
   }
 }
 
+/** The aged fold's answer for each raw failure, TOTAL over the reasons: a reason added to `HookStateRawRead` without
+ *  its row here is a compile error, never a silent `NO_STATE`. `unmeasured` stays `unmeasured` (D-115). */
+const RAW_FAILURE_FOLD: Record<Extract<HookStateRawRead, { ok: false }>['reason'], HookStateRead> = {
+  absent: NO_STATE,
+  unmeasured: { ok: false, reason: 'unmeasured' },
+  malformed: NO_STATE,
+};
+
 /** The aged door's ONE decision over the raw read (`readHookStateMeasured`): the identity cut, the age cut, and the
- *  fold of `absent`/`malformed` into `no-state`. `unmeasured` stays `unmeasured` (D-115). The unaged door that once
+ *  fold of `absent`/`malformed` into `no-state` (`RAW_FAILURE_FOLD`). The unaged door that once
  *  shared it is gone (worker stall watch wave 2): the lane reads the raw read and makes its own cut. */
 function foldHookStateRead(raw: HookStateRawRead, now: number): HookStateRead {
-  if (!raw.ok) return raw.reason === 'unmeasured' ? { ok: false, reason: 'unmeasured' } : NO_STATE;
+  if (!raw.ok) return RAW_FAILURE_FOLD[raw.reason];
   if (raw.identity !== 'current') return NO_STATE;
   if (now - raw.state.updatedAt > HOOKSTATE_FRESH_MS) return NO_STATE;
   return { ok: true, state: raw.state };

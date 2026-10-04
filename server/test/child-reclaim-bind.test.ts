@@ -41,7 +41,7 @@ const renameShapeLine = JSON.stringify(
 
 /** The minting run's row, as the gate's birth port reads it: run 5 — every
  *  fixture's `.child` — minted THIS session with a birth at `BIRTH_MS`
- *  (migration 15). A case that needs another answer passes its own `runs`. */
+ *  (migration 16). A case that needs another answer passes its own `runs`. */
 const BIRTH_MS = Date.parse('2026-09-24T12:00:00Z');
 const HOUR = 3_600_000;
 const iso = (ms: number): string => new Date(ms).toISOString();
@@ -154,7 +154,7 @@ describe('childBindGate', () => {
 
 // Incarnation placement at the bind (child-reclamation spec §5.3; a slug is
 // recycled, §5.5). The gate reads the child's BIRTH — its minting run's
-// `sessionBornAt` (migration 15) — through its own port over the run row its
+// `sessionBornAt` (migration 16) — through its own port over the run row its
 // marker names, and refuses on a spent answer of EITHER incarnation. Only a
 // row proven to predate the birth stops counting.
 describe('childBindGate — incarnation placement', () => {

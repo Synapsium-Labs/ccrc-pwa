@@ -322,7 +322,7 @@ export type ChildReclaimDecision =
 /** The minting run's row, read by the id the marker names — the SERVER's half
  *  of spec §5.1's two authorities. Three answers, never two. `reviews` is the
  *  row's own column: the work run a REVIEW run reads, `null` on a work run.
- *  `sessionBornAt`/`sessionBornFor`/`dispatchStartedAt` (migration 15, and
+ *  `sessionBornAt`/`sessionBornFor`/`dispatchStartedAt` (migration 16, and
  *  migration 5 for the last) are the same columns `childBirthOf` reads
  *  (`childSpent.ts`) — carried here so the close (Task 9) can place a
  *  fast-path spent verdict's evidence against this child's own birth before

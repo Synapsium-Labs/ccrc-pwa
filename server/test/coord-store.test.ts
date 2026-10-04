@@ -2556,7 +2556,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
 
   it('one mail parked against TWO displaced claimants reaches the heir once, not twice', () => {
     // THE HAZARD THIS TREE HAS NEVER HAD BEFORE. `mail_deliveries` has no unique
-    // constraint on (mailId, toId) — the only index is `mail_deliveries_due`
+    // constraint on (mailId, toId) — neither of its two indexes is unique
     // (schema.ts) — and until this arm nothing ever wrote a second delivery
     // for one mail. Two claimants is the state reclaimProgram's own comment
     // (store.ts:648-656) says is reachable.
@@ -3182,11 +3182,11 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     expect(updates[0]![0]).toContain('sessionId');
   });
 
-  // Migration 15, child-reclamation spec §5.1, §5.3: the child's BIRTH is
+  // Migration 16, child-reclamation spec §5.1, §5.3: the child's BIRTH is
   // write-once PER BOUND SESSION, never a first stamp per run. `bindSession`
   // is where the logic lives — `setSession` only forwards — so these cases
   // drive `bindSession` directly, on the describe's own idiom above.
-  describe('sessionBornAt / sessionBornFor (migration 15) — the write-once birth', () => {
+  describe('sessionBornAt / sessionBornFor (migration 16) — the write-once birth', () => {
     it('an explicit bornAt on a first bind writes it, and sessionBornFor names the bound session', () => {
       const s = store();
       const runId = openOne(s);

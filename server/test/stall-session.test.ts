@@ -756,7 +756,7 @@ describe('hold 2b: the session verdicts hold where the run verdict caps (session
   const run = runRow();
   const runInput: StallInput = {
     subject: { primary: run, runs: [run] }, worker: w, mail: [], notices: [], arming: W2, coordinationPaused: false,
-    coordinator: null,
+    coordinator: null, activation: { kind: 'none' },
   };
 
   it('the run verdict answers dialog-cap for the dialogPending worker', () => {

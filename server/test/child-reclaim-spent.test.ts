@@ -72,7 +72,7 @@ const recordOf = async (deps: ChildSpentDeps): Promise<SessionRecord> => {
   if (!r.found) throw new Error(`fixture row not found: ${r.reason}`);
   return r.record;
 };
-/** This child's birth — its minting run's `sessionBornAt` (migration 15) — for
+/** This child's birth — its minting run's `sessionBornAt` (migration 16) — for
  *  every case that does not test placement itself. The rows of those cases carry
  *  no `createdAt` (an older ccd's shape), so they place `unplaced` whatever
  *  the birth, and every `spent` they answer says so. */
@@ -505,7 +505,7 @@ describe('childSpent — incarnation placement', () => {
   });
 });
 
-// A child's birth is its MINTING run's `sessionBornAt` (migration 15; spec
+// A child's birth is its MINTING run's `sessionBornAt` (migration 16; spec
 // §5.1: the marker names the minting run). Every way that cannot be read is
 // its own `unplaceable` answer — and the bind cannot tell some of them apart
 // from a placed birth (a null stamp read as 0 would place every row `this`,
