@@ -146,7 +146,30 @@ describe('ccd journals its own keystrokes in $REG/<id>.typed', () => {
     const keepRows = Number(h.sh('echo "$TYPED_KEEP_ROWS"'));
     expect(typedRows()).toHaveLength(keepRows);
     expect(typedRows()[keepRows - 1]).toMatch(/ effort l20$/);
-    expect(floorRow(), 'the floor never rotates out, and never moves').toBe(floor);
+    expect(floorRow(), 'the floor is the first row, never rotates out, and never moves backward').toMatch(/^\d{10} since$/);
+    expect(Number(floorRow()!.split(' ')[0])).toBeGreaterThanOrEqual(Number(floor!.split(' ')[0]));
+  });
+
+  it('a keystroke that rotated out of the journal is still never promoted: the floor follows the rotation', () => {
+    seed(); record({ effort: 'high' });
+    const keepRows = Number(h.sh('echo "$TYPED_KEEP_ROWS"'));
+    const window = Number(h.sh('echo "$TYPED_MATCH_WINDOW"'));
+    const first = floorRow()!;
+    const t0 = now() - 4000, step = 2 * window;   // each keystroke is its own match window apart
+    const times = Array.from({ length: keepRows + 1 }, (_, i) => t0 + i * step);
+    // ccd types the settle's /effort ultracode keepRows+1 times, journalling each one (the clock is stubbed per call)
+    h.sh(`date() { if [[ "\${1:-}" == +%s ]]; then echo "$T"; else command date "$@"; fi; };
+      for T in ${times.join(' ')}; do _typed_note ${ID} effort ultracode; done`);
+    writeTranscript(times.flatMap((t) => [cmd(t, 'effort', 'ultracode'), ack(t, ULTRACODE_ACK)]));
+    expect(typedRows()).toHaveLength(keepRows);
+    const floorEpoch = Number(floorRow()!.split(' ')[0]);
+    expect(floorRow(), 'the floor keeps its shape and place').toMatch(/^\d{10} since$/);
+    expect(floorEpoch, 'the floor moved forward, past the rotated-out row\'s command').toBe(times[0] + window + 1);
+    expect(floorEpoch).toBeGreaterThan(Number(first.split(' ')[0]));
+    expect(floorEpoch, 'and still precedes every kept row').toBeLessThan(Number(typedRows()[0].split(' ')[0]));
+    expect(keep()).toBe('rc=0');
+    expect(routeLines(), swapLog()).toEqual([]);
+    expect(h.reg(ID, 'effort')).toBe('high');
   });
 
   it('.typed purges with the row', () => {

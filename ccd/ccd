@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c94ef4657396544fe4e9e8edf9a755af38121895c04547af42363a09126904fd
+# ccrc:generated 1 sha256=d040faaf58f03ab7c0570b75054e210351eb3cdbed4c278ddcc9755a62671d0c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19320,8 +19320,10 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 #
 # THE JOURNAL HAS A FLOOR. Its first row, `<epoch> since`, is written when the
 # journal opens — at the first spawn this ccd makes (`_spawn_start`), the first
-# keystroke it journals, or the first stop that finds none — and is kept when
-# older rows rotate out. A command older than the floor is never read: an
+# keystroke it journals, or the first stop that finds none — and moves only
+# forward: when the newest-but-16 row rotates out, the floor passes that row's
+# epoch by TYPED_MATCH_WINDOW + 1, so the command it explained stays unreadable
+# and is not promoted as the operator's. A command older than the floor is never read: an
 # older ccd typed the settle's `/effort` and `route --apply`'s `/model` without
 # journalling them, so before the floor ccd's keystrokes and the operator's
 # cannot be told apart. A stop that finds no floor opens it and promotes
@@ -19361,7 +19363,7 @@ TYPED_KEEP_ROWS=16      # `.typed` keystroke rows kept beside its floor: only a 
 MODEL_FAMILY_TOKENS="-fable-:fable -opus-:opus -sonnet-:sonnet -haiku-:haiku"   # `familyClassOf`'s FAMILY_TOKENS (shared/models.mjs), in its match order — the agreement test reds on any drift
 
 _typed_note() {   # id model|effort value — journal one keystroke ccd is about to type; id since — open the journal only (§5.7). Never fails its caller.
-  local id="$1" kind="$2" v="${3:-}" rows floor
+  local id="$1" kind="$2" v="${3:-}" rows floor n dropped fe
   [[ "$kind" == since || ( "$kind" =~ ^(model|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ) ]] || return 0
   rows=$(_reg_get "$id" typed)
   floor="${rows%%$'\n'*}"
@@ -19370,7 +19372,14 @@ _typed_note() {   # id model|effort value — journal one keystroke ccd is about
   else
     floor="$(date +%s) since"
   fi
-  rows=$(grep -E '^[0-9]{1,12} (model|effort) ' <<<"$rows" | tail -n "$((TYPED_KEEP_ROWS - 1))")
+  rows=$(grep -E '^[0-9]{1,12} (model|effort) ' <<<"$rows")
+  n=$(printf '%s' "$rows" | grep -c . || true)
+  if (( n >= TYPED_KEEP_ROWS )); then   # a row rotates out: its command must stay unreadable, so the floor follows (never backward)
+    dropped=$(printf '%s\n' "$rows" | sed -n "$((n - TYPED_KEEP_ROWS + 1))p")
+    fe=$(( 10#${dropped%% *} + TYPED_MATCH_WINDOW + 1 ))
+    (( fe > 10#${floor%% *} )) && floor="$fe since"
+  fi
+  rows=$(printf '%s\n' "$rows" | tail -n "$((TYPED_KEEP_ROWS - 1))")
   [[ "$kind" == since ]] || rows="${rows:+$rows$'\n'}$(date +%s) $kind $v"
   _reg_set "$id" typed "$floor${rows:+$'\n'$rows}" 2>/dev/null || true
   return 0

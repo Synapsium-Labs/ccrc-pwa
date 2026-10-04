@@ -1713,7 +1713,7 @@ Expected: `26 passed (26)` (9 + 3 + 14); then `372 passed (372)` (`ccd-auto-swap
 | 2.1 | `ccd/ccd` | `_typed_note "$id" effort "$level"   # the settle's keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “the settle journals its /effort before it types it”; “the settle /effort on a session with no effort field is not promoted” |
 | 2.2 | `ccd/ccd` | `_typed_note "$id" model "$cls"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 3 failed \| 34 passed (37): “route --apply journals the class it types and the effort, and nothing for auto”; “the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator's own”; “a route --apply /model is not promoted — not even a degraded class typed over the operator's fable, in either acknowledgement shape” |
 | 2.3 | `ccd/ccd` | `_typed_note "$id" effort "$eff"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “route --apply journals the class it types and the effort, and nothing for auto” |
-| 2.4 | `ccd/ccd` | `<<<"$rows" \| tail -n "$((TYPED_KEEP_ROWS - 1))")` → `<<<"$rows")` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token” |
+| 2.4 | `ccd/ccd` | `rows=$(printf '%s\n' "$rows" \| tail -n "$((TYPED_KEEP_ROWS - 1))")` → `rows=$(printf '%s\n' "$rows")` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token” |
 | 2.5 | `ccd/ccd` | `[[ "$kind" == since \|\| ( "$kind" =~ ^(model\|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ) ]] \|\| return 0` → `[[ "$kind" == since \|\| "$kind" =~ ^(model\|effort)$ ]] \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token” |
 | 2.6 | `ccd/ccd` | `_route_word_in "${v,,}" "$ROUTE_CLASSES" && { printf '%s\n' "${v,,}"; return 0; }` → (nothing) | ccd-operator-choice.test.ts | 11 failed \| 26 passed (37): “the aliases — ROUTE_CLASSES, each also with [1m] — and an acknowledgement's display word”; “/model opus, acknowledged: the class is written through cmd_route, actor=operator-session”; “the picker takes no argument: its acknowledgement names the value, in either shape Claude Code writes it”; … and 8 more |
 | 2.7 | `ccd/ccd` | `local v="${1%\[1m\]}"` → `local v="$1"` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the aliases — ROUTE_CLASSES, each also with [1m] — and an acknowledgement's display word” |
@@ -1721,6 +1721,7 @@ Expected: `26 passed (26)` (9 + 3 + 14); then `372 passed (372)` (`ccd-auto-swap
 | 2.9 | `ccd/ccd` | `[[ "$1" == *"${t%%:*}"* ]] && { printf '%s\n' "${t##*:}"; return 0; }` → `[[ "$1" == *"${t##*:}"* ]] && { printf '%s\n' "${t##*:}"; return 0; }` | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “a full model id through the port, and everything else outside the vocabulary”; “_model_family_class agrees with familyClassOf on every id, and MODEL_FAMILY_TOKENS is FAMILY_TOKENS” |
 | 2.10 | `ccd/ccd` | `_typed_note "$id" since   # the operator-choice journal opens at this ccd's first spawn of the row: no older command is read as the operator's (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the spawn opens the journal at a floor, and a later spawn or keystroke keeps that floor” |
 | 2.11 | `ccd/ccd` | `if [[ "$floor" =~ ^[0-9]{1,12}\ since$ ]]; then` → `if false; then` | ccd-operator-choice.test.ts | 4 failed \| 33 passed (37): “the spawn opens the journal at a floor, and a later spawn or keystroke keeps that floor”; “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token”; “the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator's own”; … and 1 more |
+| 2.12 | `ccd/ccd` | `(( fe > 10#${floor%% *} )) && floor="$fe since"` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 39 passed (40): “a keystroke that rotated out of the journal is still never promoted: the floor follows the rotation” |
 
 Every row is measured on the full prototype (37 cases), so rows 2.1, 2.2 and 2.11 also red Task 3's cases — among
 them the spec's first two mutation rows ("the settle /effort on a session with no effort field is not promoted", "a
@@ -2871,8 +2872,8 @@ of ten (Open question 9):
   coordinator choice made after the operator's `/model` stands, and no stop re-writes the same value. Rows 3.6, 3.7,
   3.13.
 - **D-3900** `operator-choice-journal-floor` — §5.7 does not bound `.typed` or say where it starts: it keeps its last
-  `TYPED_KEEP_ROWS` (16) keystroke rows below a FLOOR row (`<epoch> since`) that `_spawn_start` opens and nothing
-  moves, admits one-token values only, and matches within `TYPED_MATCH_WINDOW` (60 s); no command older than the
+  `TYPED_KEEP_ROWS` (16) keystroke rows below a FLOOR row (`<epoch> since`) that `_spawn_start` opens and that moves only
+  forward, past a rotated-out row (see the rotation bullet below), admits one-token values only, and matches within `TYPED_MATCH_WINDOW` (60 s); no command older than the
   floor is read, and a stop that finds no floor opens it and promotes nothing — because before the floor an older
   ccd's unjournalled keystrokes and the operator's cannot be told apart (review measured on the first draft: `effort ∅ ->
   ultracode` and `class fable -> opus [actor=operator-session]` from pre-deploy keystrokes). Rows 2.4, 2.5, 2.10,
@@ -2906,6 +2907,16 @@ of ten (Open question 9):
   frequent. The call is unconditional: a `mode=new` spawn has no transcript yet, so the keep returns silently. The stop
   census gains a `REVIVES` list beside `KEEPS` (a revival holds no stop line, so it is not a keeper of the first kind)
   and pins that the call is the statement before the spawn. Rows 3.28.
+- **D-3922** `journal-floor-follows-rotation` — found by Task 2's review, by simulation: `_typed_note` kept the last
+  `TYPED_KEEP_ROWS` keystroke rows below a floor that never moved, so after the 17th keystroke ccd journalled the oldest
+  ccd command in the transcript had no row, became "the newest command no row explains", and the next stop promoted it
+  as `actor=operator-session` (17 settle `/effort ultracode` keystrokes -> `effort ∅ -> ultracode`; 16 promoted nothing).
+  Decided (the coordinator's ruling): when keeping the last rows drops one or more, the floor moves FORWARD to the
+  newest dropped row's epoch + `TYPED_MATCH_WINDOW` + 1, never backward (the larger of the old floor and that value),
+  its shape `<epoch> since` and its first place unchanged, so the reader's `at < floor` refusal covers the dropped
+  row's own command. Cost: an operator command typed within `TYPED_MATCH_WINDOW` after a rotated-out ccd keystroke,
+  and never kept at a stop since, falls under the moved floor and is not kept, silently (the same silence as any
+  command older than the floor). It adds no `_reg_get`. Row 2.12.
 
 ---
 
