@@ -1441,49 +1441,69 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
 
       // Mutations (measured by hand, each reds a case above):
       // (1) R15 (fix round 2, review 143) CORRECTS this entry: reverting to
-      //     the old order (`pollListing` before `pollLatest`) does NOT red
-      //     case (a) — measured, on a scratch copy, against this file's
-      //     FULL suite. Ruling A's own tag-check mechanism yanks S2 anyway
-      //     once the check resolves, regardless of which request ran first
-      //     this poll, so (a)'s own assertions stay green. The mutation
-      //     reds OTHER, pre-existing cases instead (ELEVEN, re-measured, wave
-      //     9, at e12391b56 — listed at the end of this entry), and the
-      //     mechanism of the first four listed there is the SAME one in
-      //     each: the `etag = null` reset (item 3 below)
-      //     was written to run BEFORE the listing, so a kept-tag change
-      //     this poll forces the listing's NEXT request fresh; flipped, it
-      //     now runs AFTER a listing that already sent its own (stale-keep)
-      //     request and set its own `etag` — so the reset wipes the value
-      //     the listing JUST fetched, and the very next poll's listing
-      //     carries no If-None-Match at all ('a 304 on the latest probe
-      //     writes nothing … independent of the listing's' reds on its
-      //     `seen[1]` header assertion). The SAME reordering also means a
-      //     fresh poller's very first listing call now runs BEFORE any
-      //     stable release is known, so its own 'complete' upsert plants
-      //     the store's first stable row itself — `currentK()` then reads
-      //     that row back on the SAME poll's `pollLatest`, so a bare 404
-      //     with genuinely nothing known yet is wrongly read as a
-      //     moved-away signal and fires an extra, unscripted confirming
-      //     request that warns ('a 404 on the latest probe is an ANSWER …
-      //     NOTHING is warned' reds on its warn-count assertion; ruling A's
-      //     own '(e) after a restart …' reds the same way, on its
-      //     confirming-request-count assertion). C5 (fix round 2, review
-      //     143) found a fourth: the same spurious "K already known" also
-      //     fires R12's own case ("R12: a 404 with a kept K re-arms the
-      //     probe's warning dedupe …") one poll early, off a K the
+      //     the old order (`pollListing` before `pollLatest`) did NOT red
+      //     N1 case (a) on that round's measurement — on a scratch copy,
+      //     against this file's FULL suite. Ruling A's own tag-check
+      //     mechanism yanks S2 anyway once the check resolves, regardless of
+      //     which request ran first this poll, so N1 (a)'s YANK assertions
+      //     stay green (that is true of the yank assertions still). It reds
+      //     OTHER cases, and the list was re-measured at wave 9 (below),
+      //     because fix round 3 later added B2's ETag-keep assertion to N1
+      //     (a) and (c), and those two now red on it.
+      //     The mechanism of the ETag reds is the `etag = null` reset (item 3
+      //     below): it was written to run BEFORE the listing, so a kept-tag
+      //     change this poll forces the listing's NEXT request fresh; flipped,
+      //     it now runs AFTER a listing that already sent its own (stale-keep)
+      //     request and set its own `etag` — so the reset wipes the value the
+      //     listing JUST fetched, and the very next poll's listing carries no
+      //     If-None-Match at all. The SAME reordering also means a fresh
+      //     poller's very first listing call now runs BEFORE any stable
+      //     release is known, so its own 'complete' upsert plants the store's
+      //     first stable row itself — `currentK()` then reads that row back on
+      //     the SAME poll's `pollLatest`, so a bare 404 with genuinely nothing
+      //     known yet is wrongly read as a moved-away signal (C5, fix round 2,
+      //     review 143: this also fires R12's case one poll early, off a K the
       //     reordering planted rather than one `/latest` itself ever
-      //     confirmed. The ordering IS pinned — just not by case (a).
-      //     (re-measured, wave 9, at e12391b56) The whole file run with
-      //     only that reorder applied in place to `catalogue.ts` reds
-      //     ELEVEN cases, each on an assertion (the earlier three and four
-      //     were counted before the later fix rounds added cases that script
-      //     requests in order): the four above; ruling A's (a), (c) and (e)
-      //     ('(a) stable S2 deleted …', '(c) the only stable release deleted
-      //     …', '(e) after a restart …'); 'F2 (review 151, coverage) …
-      //     ETag-keep decision is SKIPPED …'; the two F3 always-throwing-store
-      //     cases; and the two B3 request-stamp cases ('lastRequestAt() is the
-      //     LAST request's own send time …', 'C-a: the moved-away tag check
-      //     stamps lastRequestAt …').
+      //     confirmed).
+      //     (re-measured, wave 9, at e12391b56) The whole file run with only
+      //     that reorder applied in place to `catalogue.ts` reds ELEVEN cases,
+      //     each on an assertion, each listed once under its own describe:
+      //       the D-3215 describe itself:
+      //       - 'a 304 on the latest probe writes nothing, and it carries its
+      //         OWN ETag …' — the second poll's listing `if-none-match`
+      //         (`seen[1]`), expected "eL1", got undefined;
+      //       - 'a 404 on the latest probe is an ANSWER …' —
+      //         `expect(warn).not.toHaveBeenCalled()`, called once;
+      //       - 'R12: a 404 with a kept K re-arms the probe's warning dedupe
+      //         …' — the http-500 warn count, expected 2, got 3;
+      //       'N1 — a withdrawn stable release is still yanked …' (the yank
+      //       assertions stay green; these two red on fix round 3's B2
+      //       ETag-keep assertion):
+      //       - '(a) stable S2 deleted; /latest moves to the older S1 …' —
+      //         `seen[1]` `if-none-match`, expected "eL1", got undefined;
+      //       - '(c) the only stable release deleted, /latest answering 404
+      //         …' — the same assertion, expected "eL1", got undefined;
+      //       'B2 — the listing wins ONLY when it DISAGREES with the check …':
+      //       - 'F2 (review 151, coverage): the ETag-keep decision is SKIPPED
+      //         …' — `seen[1]` `if-none-match`, expected "eL1", got undefined;
+      //       'ruling A — a withdrawn or demoted stable OFF the window …' (its
+      //       (a) and (c) stay GREEN):
+      //       - '(e) after a restart, a fresh poller derives K from the store
+      //         alone …' — `seenWithdrawn` length, expected 1, got 0;
+      //       'F3 — a persistent store throw on the /latest 200 arm …':
+      //       - 'an always-throwing store: T is protected in keepTags every
+      //         poll …' — poll 1's `keepTags`, expected ['v0.0.5'], got [];
+      //       - 'F2: an always-throwing store, then /latest itself answers 404
+      //         …' — the planted row `toMatchObject({ yanked: true })`;
+      //       'B3 — each request stamps the clock at its own send time …':
+      //       - 'lastRequestAt() is the LAST request's own send time …' —
+      //         expected 1100, got 1200;
+      //       - 'C-a: the moved-away tag check stamps lastRequestAt before the
+      //         listing is even sent …' — 'the listing has not been sent yet',
+      //         expected 1 request, got 2.
+      //     The ordering IS pinned — the earlier three and four were counted
+      //     before the later fix rounds added the cases that script requests
+      //     in order.
       // (2) removing `lastLatestTag = null` from the 404 arm reds (c) — S1
       //     stays kept (and un-yanked) forever.
       // (3) CORRECTED (fix round 3, B2): removing the ENTIRE `etag = null`
