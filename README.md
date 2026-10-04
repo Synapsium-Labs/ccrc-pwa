@@ -3883,6 +3883,19 @@ refuses outright (`409 refused:'mail-disabled'`) rather than resuming a
 worker and injecting `/clear` into a context whose wave brief would then sit
 held by the very kill-switch the operator just raised.
 
+**The reclaim sweep, and how to stop it.** Besides the close path, the server
+runs an automatic sweep (once a minute) that reclaims CHILD workspaces through
+`ccd ws-reclaim` — only a child whose minting run is terminal, or has bound a
+different session, with no other open run, no hold and no coordination history,
+asked on two consecutive passes and at most one at a time (**A child is not a
+reap**, above). Its switch is `$REG/reclaim-paused`: tap the reclaim row on
+`/runs` (`POST /api/coord/reclaim-pause`, session-gated, no box token), or run
+`ccd reclaim-pause --state on` on the fleet host; `--state off` lowers it. While
+it stands the sweep and the close path ask for nothing, and `ws-reclaim` itself
+refuses `paused` on the box. The same row lists the children that need a
+human's eye: each standing under a terminal refusal, and each whose reclaim
+has kept failing for 15 minutes.
+
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
 `git fetch origin`: the branch conflicts —
@@ -4570,8 +4583,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7641-7643`), each with an operator sentence of its own at `:7683`,
-`:7691` and `:7704`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7684-7686`), each with an operator sentence of its own at `:7726`,
+`:7734` and `:7747`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

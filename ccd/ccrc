@@ -780,33 +780,33 @@ _have_systemctl() {
 # `systemctl` on the other platform, so a harness that puts its own launchctl
 # ahead of /bin keeps full control and full observability.
 #
-# `_SVC_REAL_HOME` is resolved ONCE via tilde expansion, which reads the
-# password database rather than $HOME — that is the whole point, and it is why
-# this cannot be `[ "$HOME" = "$HOME" ]` in disguise.
-# RESOLVED LAZILY, AND ONLY ON DARWIN. Two reasons, both learned the hard
-# way: at source time this ran on every ccd invocation on both platforms
-# including Linux, where nothing reads it; and it forked `id`, which on a
-# contained PATH is a `command not found` on stderr — see `_svc_domain` above.
-#
-# `$USER`/`$LOGNAME` first because they are already in the environment;
-# `id -un` only if neither is, and silenced. The tilde expansion is what
-# actually consults the password database, which is the whole point: it
-# answers the real home even when `$HOME` has been pointed somewhere else.
+# `_SVC_REAL_HOME` comes from tilde expansion, which reads the password database,
+# not $HOME — the whole point: it answers the real home even when `$HOME` points
+# elsewhere. RESOLVED LAZILY, AND ONLY ON DARWIN: at source time it forked `id`
+# on Linux too, a `command not found` on a contained PATH. `$USER`/`$LOGNAME`
+# first, `id -un` (silenced) if neither. THE NAME IS CHECKED BEFORE `eval`: it is
+# the environment's, and `eval` runs any shell syntax in it (`$(…)`, a backtick,
+# `;`) inside a protected start. Only a login name expands — a letter, digit or
+# `_`, then those, `.`, `@`, `-`, spelled out (a RANGE follows the locale) —
+# never ALL DIGITS: only that, signed or not (`~0`, `~+1`), reads the directory
+# stack when the entry exists (`~0` is $PWD, a sandbox's choice), else passwd;
+# `~+`, `~-` are $PWD, $OLDPWD; `~5user` reads only passwd. Else: no home, exit 1.
 _SVC_REAL_HOME=""
 _svc_real_home() {
   [ -n "$_SVC_REAL_HOME" ] && { printf '%s' "$_SVC_REAL_HOME"; return 0; }
-  local u="${USER:-${LOGNAME:-}}"
+  local u="${USER:-${LOGNAME:-}}" az=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ d=0123456789
   [ -n "$u" ] || u="$(id -un 2>/dev/null)"
-  [ -n "$u" ] && _SVC_REAL_HOME="$(eval printf '%s' "~$u" 2>/dev/null)"
+  [[ "$u" =~ ^[${az}${d}_][${az}${d}._@-]*$ && ! "$u" =~ ^[$d]+$ ]] || return 1
+  _SVC_REAL_HOME="$(eval printf '%s' "~$u" 2>/dev/null)"
   printf '%s' "$_SVC_REAL_HOME"
 }
 _svc_launchctl() {   # <launchctl args...>
-  local bin; bin="$(command -v launchctl 2>/dev/null)" || return 1
+  local bin rh; bin="$(command -v launchctl 2>/dev/null)" || return 1
   [ -n "$bin" ] || return 1
   # A sandbox HOME plus the SYSTEM launchctl is the combination that must not
-  # proceed. Either alone is fine: the real home is an operator's box, and a
-  # stub anywhere is a harness that asked for this call.
-  if [ "$HOME" != "$(_svc_real_home)" ] \
+  # proceed. Either alone is fine: the real home is an operator's box, and a stub
+  # is a harness that asked. A home that cannot be RESOLVED counts as a sandbox.
+  if { ! rh="$(_svc_real_home)" || [ "$HOME" != "$rh" ]; } \
      && [ "${CCRC_ALLOW_SANDBOX_LAUNCHCTL:-}" != 1 ] \
      && case "$bin" in /bin/launchctl|/usr/bin/launchctl) true ;; *) false ;; esac; then
     return 1
@@ -12244,11 +12244,11 @@ cmd_install() {
 
   # THE DIRECT ENTRY'S INTERPRETER (D-3696), proved BEFORE anything moves.
   # `~/.local/bin/ccd` is a standard-library Python launcher whose shebang names
-  # this box's canonical python3 in isolated mode; a python3 that is missing,
-  # is not Python 3, does not honour -IS, or lives at a path no shebang can
-  # carry would publish a launcher no kernel can start — so it refuses here,
-  # with the old pair untouched. The same check runs again inside `_inst_bins`,
-  # against the PLACED tree's helper, right before the pair is published.
+  # this box's python3 in isolated mode: PATH's spelling of it when that resolves
+  # to the very interpreter probed, else its canonical path. A python3 missing,
+  # not Python 3, not honouring -IS, or at a path no shebang can carry would
+  # publish a launcher no kernel can start, so it refuses here, old pair untouched;
+  # it runs again in `_inst_bins`, on the PLACED tree's helper, before publishing.
   _inst_entry_python "$CCRC_HERE/ccd-entry-install.py" \
     || _ccrc_die "$CCRC_ENTRY_WHY Nothing on this box was written or changed."
 
@@ -13712,13 +13712,15 @@ CCRC_SHIM
 # publishes the body FIRST and the launcher LAST, one rename each, refusing a
 # destination that is a directory or a link to one and re-measuring each
 # destination afterwards. A half already carrying the exact bytes and mode is
-# left alone, so a converged box rewrites nothing. Its exit 2 is the one partial
-# state — the body moved, the launcher did not — in which the old launcher
-# refuses the new body by digest until a re-run converges; nothing is rolled
-# back across the two directories.
+# left alone, so a converged box rewrites nothing. Its exit 2 is a run that never
+# reported a verified pair: a half whose re-measurement after its rename failed is unverified;
+# when the body moved and the launcher did not, and is not proved current, a start may be
+# refused (by digest, by an earlier launcher) or run an entry the run never verified; when
+# only the report failed, every moved half re-measured, the pair stands as staged. Every way, a
+# re-run converges the pair; nothing is rolled back across the two directories.
 CCRC_ENTRY_PY=""
 CCRC_ENTRY_WHY=""
-_inst_entry_python() {   # <helper> -> rc 0 with CCRC_ENTRY_PY = the canonical python3 the launcher's shebang names
+_inst_entry_python() {   # <helper> -> rc 0 with CCRC_ENTRY_PY = the canonical python3 that runs the helper
   # The interpreter is asked for its OWN canonical path (`realpath` of
   # `sys.executable`, under -IS), and that exact binary re-runs the helper's
   # `check`, which proves Python 3 and all four isolation flags and prints the
@@ -13742,13 +13744,13 @@ _inst_entry_python() {   # <helper> -> rc 0 with CCRC_ENTRY_PY = the canonical p
 
 _inst_ccd_pair() {   # <tree> — render, self-test and publish ccd's launcher/body pair from <tree>
   local tree="$1" rc=0
-  _inst_entry_python "$tree/ccd/ccd-entry-install.py" \
-    || _ccrc_die "$CCRC_ENTRY_WHY Neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd was changed."
+  _inst_entry_python "$tree/ccd/ccd-entry-install.py" || _ccrc_die "$CCRC_ENTRY_WHY Neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd was changed."
   "$CCRC_ENTRY_PY" -IS "$tree/ccd/ccd-entry-install.py" install "$tree" "$HOME" || rc=$?
   case "$rc" in
     0) return 0 ;;
-    2) _ccrc_die "ccd's pair was left half-published — the line above names the half that moved and why; until a re-run converges it, ccd starts on this box may refuse: re-run 'ccrc update' (or 'ccrc install')" ;;
-    *) _ccrc_die "ccd's direct-entry pair was not installed (the line above says why) — neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd moved" ;;
+    1) _ccrc_die "ccd's direct-entry pair was not installed (the line above says why) — neither \$HOME/.local/bin/ccd nor \$HOME/.local/libexec/ccrc/ccd moved" ;;
+    2) _ccrc_die "ccd's pair install stopped after a half moved and before it reported a verified pair — the line above names what moved and the state it left; unless it says the pair stands as staged, ccd starts on this box may refuse, or run an unverified launcher, until a re-run converges it: re-run 'ccrc update' (or 'ccrc install')" ;;
+    *) _ccrc_die "ccd's direct-entry pair install ended with an unexpected status ($rc), so what moved is unmeasured: re-run 'ccrc update' (or 'ccrc install') to converge the pair" ;;
   esac
 }
 
