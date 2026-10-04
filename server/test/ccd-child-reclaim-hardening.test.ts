@@ -1555,55 +1555,73 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     expect(o.verdict, o.detail).toBe('reclaimable');
   }, 60_000);
 
-  // THE RE-WALK COMES BEFORE THE REST'S `..` REFUSAL. Below `<lnk>/..` the
+  // THE REST'S `..` IS REFUSED BEFORE ANY RE-WALK. Below `<lnk>/..` the
   // kernel's walk stops where the logical path does not, so the rest as
-  // written can hold a `..` that follows a directory which stands: the row
-  // below IS the child. Asked of the written rest first, it was a row that
-  // cannot be placed — a retry, with a why that is false for it.
-  it('a `..` in the written rest of a spelling whose prefix holds one is asked of the re-walked spelling: `<lnk>/../<child path>/server/..` IS the child — SHARED', () => {
+  // written starts at the wrong directory. Re-walked first, a `..` in that
+  // rest can pop ABOVE where the logical entry lands, into a physical path a
+  // decoy directory makes stand: the row then resolves completely, but at a
+  // place no logical `cd` of it visits — outside the child — and is never
+  // placed against it, while its pane lives in the child. Refused first, the
+  // row cannot be placed and holds the child (spec §5.5, rung 9).
+  it('a crafted row whose rest pops above its re-walk’s landing — `$HOME/L1/../L2/s/../../<child path>` beside a decoy `$HOME/a/L2` — cannot be resolved: unmeasured, no token, and ws-reclaim removes nothing', () => {
+    const c = makeChild(h);
+    // The REAL token, taken before the row is planted — the rows are no input to it, so
+    // without the refusal the verb accepts it.
+    const tok = evalOf(h).token;
+    expect(tok, 'the CONTROL: without the row the ladder passes').toMatch(/^[0-9a-f]{64}$/);
+    const rel = path.relative(h.home, c.wt);
+    fs.mkdirSync(path.join(h.home, 'a', 'b'), { recursive: true });
+    fs.mkdirSync(path.join(h.home, 'a', 'L2'));
+    fs.mkdirSync(path.join(h.home, 'd', 'e', 's'), { recursive: true });
+    fs.mkdirSync(path.join(h.home, 'd', rel), { recursive: true });
+    fs.symlinkSync(path.join(h.home, 'a', 'b'), path.join(h.home, 'L1'));
+    fs.symlinkSync(path.join(h.home, 'd', 'e'), path.join(h.home, 'L2'));
+    const raw = `${h.home}/L1/../L2/s/../../${rel}`;
+    expect(h.sh(`[[ -d "${h.home}/L1/../L2" && ! -d "${h.home}/L1/../L2/s" ]] && printf stops || printf walks`),
+      'the CONTROL: the kernel’s walk stops at the decoy `$HOME/a/L2`, so the written rest holds the `..`s').toBe('stops');
+    expect(h.sh(`[[ -d "${h.home}/d/e/s/../../${rel}" ]] && printf stands || printf absent`),
+      'the CONTROL: re-walked from where `<L1>/../L2` lands, the rest’s `..`s reach a directory that stands, outside the child')
+      .toBe('stands');
+    plantLiveRow(c, raw);
+    const before = treeOf(c.wt);
+    // The VERB first, with the real token, so its half is asserted on its own.
+    const v = childReclaimVerb(h, tok);
+    expect(v.stdout, 'the verb reclaimed the child — the live session’s tree').not.toContain('"reclaimed"');
+    preserved(c, raw, before);
+    expect(v.code, v.stdout + v.stderr).toBe(1);
+    const o = JSON.parse(v.stdout) as { failed: string; detail: string };
+    expect(o.failed, 'refused at evaluation, before anything started').toBe('probe-unmeasured');
+    expect(o.detail).toContain(`registry row(s) ${DOTDOT}`);
+    expect(h.sh(`_ws_reclaim_resolve "${raw}"; printf '%s\\x1f%s\\x1f%s' "$?" "$_WS_RESOLVED" "$_WS_RESOLVE_BASIS"`),
+      'the resolver answers unresolvable, and names no path').toBe('1\x1f\x1funmeasured');
+    const r = evalOf(h);
+    expect(r.token, `a destructive token was minted — ${r.verdict}: ${r.detail}`).toBe('');
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.detail).toContain(`registry row(s) ${DOTDOT}`);
+    preserved(c, raw, before);
+  }, 90_000);
+
+  // THE COST OF THAT ORDER, KEPT FAIL-SHUT: a rest whose `..` follows a
+  // directory that stands below the logical entry — `<lnk>/../<child
+  // path>/server/..`, which IS the child — is refused with the rest, so the
+  // row cannot be placed and holds the child as a retry. The outcome is
+  // asserted; its sentence is not, since it says the row cannot be resolved.
+  it('a `..` in the written rest below `<lnk>/..` is refused before any re-walk: `<lnk>/../<child path>/server/..`, though it IS the child, cannot be resolved — unmeasured, never a token', () => {
     const c = makeChild(h);
     plantLinkedPrefix();
     fs.mkdirSync(path.join(c.wt, 'server'));
     const rel = path.relative(h.home, c.wt);
     const raw = `${h.home}/lnk/../${rel}/server/..`;
-    const child = fs.realpathSync(c.wt);
-    expect(h.sh(`cd -- "${raw}" && pwd -P`), 'the CONTROL: a pane entering the row lands in the child').toBe(child);
+    expect(h.sh(`cd -- "${raw}" && pwd -P`), 'the CONTROL: a pane entering the row lands in the child').toBe(fs.realpathSync(c.wt));
     expect(h.sh(`[[ -d "${h.home}/lnk/../${rel}" ]] && printf walks || printf stops`),
       'the CONTROL: the kernel’s walk stops at `<lnk>/..`, so the written rest holds the `..`').toBe('stops');
     expect(h.sh(`_ws_reclaim_resolve "${raw}"; printf '%s\\x1f%s\\x1f%s' "$?" "$_WS_RESOLVED" "$_WS_RESOLVE_BASIS"`),
-      'the resolver places the row at the child, completely').toBe(`0\x1f${child}\x1fcomplete`);
+      'the resolver answers unresolvable, and names no path').toBe('1\x1f\x1funmeasured');
     otherRowOf('demo-server-up', raw);
     const r = evalOf(h);
     expect(r.token, `a destructive token was minted — ${r.verdict}: ${r.detail}`).toBe('');
-    expect(r.verdict, r.detail).toBe('containment-unproven');
-    expect(r.detail).toContain('is also named by registry row(s) demo-server-up');
-    expect(r.detail, 'never the why of a row that cannot be placed').not.toContain('cannot be resolved');
-  }, 60_000);
-
-  // AND IT IS ASKED ONCE MORE AT MOST: the re-walked spelling's own rest is
-  // asked for a `..` before it is re-walked again, so a third nested
-  // `<lnk>/..` is never resolvable — the bound that keeps a hand-written row's
-  // cost a constant times one walk.
-  it('a re-walk re-walks once more at most: `<lnk>/..` nested twice resolves, three times cannot be resolved — never a placement', () => {
-    makeChild(h);
-    plantLinkedPrefix();
-    fs.mkdirSync(path.join(h.home, 'x'));
-    const home = fs.realpathSync(h.home);
-    const nested = (n: number): string => `${h.home}/${'lnk/../'.repeat(n)}x`;
-    for (const n of [1, 2, 3]) {
-      expect(h.sh(`cd -- "${nested(n)}" && pwd -P`), `the CONTROL: a pane’s \`cd\` of ${n} lands in $HOME/x`).toBe(`${home}/x`);
-    }
-    const basis = (p: string): string =>
-      h.sh(`_ws_reclaim_resolve "${p}"; printf '%s\\x1f%s\\x1f%s' "$?" "$_WS_RESOLVED" "$_WS_RESOLVE_BASIS"`);
-    expect(basis(nested(1))).toBe(`0\x1f${home}/x\x1fcomplete`);
-    // Walked, proven and entered from where the second entry landed — never a rest re-attached below `<lnk>/..`.
-    expect(basis(nested(2)), 'nested twice: the re-walked spelling re-walked once more').toBe(`0\x1f${home}/x\x1fcomplete`);
-    expect(basis(nested(3)), 'nested three times: never re-walked a third time').toBe('1\x1f\x1funmeasured');
-    otherRowOf('demo-deep', nested(3));
-    const r = evalOf(h);
-    expect(r.token).toBe('');
     expect(r.verdict, r.detail).toBe('unmeasured');
-    expect(r.detail).toContain(`registry row(s) demo-deep ${UNRESOLVED}`);
+    expect(r.detail).toContain('demo-server-up');
   }, 60_000);
 });
 

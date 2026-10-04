@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b4daa0416407862c5dc882620a03bd954a14a83f8462110d1457afaccf04bc31
+# ccrc:generated 1 sha256=257257006f7efa9b88807e5ca9fbdac7d39cd2e844e853ba1171ae00018047c3
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -25478,8 +25478,7 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
   #                           that is a directory (its own walk, fork-free), entered LOGICALLY, then
   #                           the rest as written, one `/` between components — the rest's first
   #                           component PROVEN absent (`_ws_reclaim_absent`), and a path whose entered
-  #                           prefix holds `..` re-walked from where that entry lands, before its rest
-  #                           is asked for one (a second argument marks a re-walk, internal only); rc 1,
+  #                           prefix holds `..` re-walked from where that entry lands; rc 1,
   #                           _WS_RESOLVED='', otherwise. _WS_RESOLVE_BASIS says how the answer was
   #                           formed: `complete` when the whole current spelling was walked and entered
   #                           (no rest), `absent-suffix` when a rest was re-attached as text below a
@@ -25517,20 +25516,12 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
   # root included — so the rest, re-attached as text, kept a link nothing
   # resolved, the row read as outside the child, and the verb removed the
   # live tree (measured). So such a path is answered as
-  # `<where its entry landed>/<rest>`, walked, proven and entered as a logical
-  # `cd` of the row would be; no `..` is ever normalised as text. The re-walk
-  # comes FIRST, before the rest is asked for a `..`: the rest of the spelling
-  # AS WRITTEN starts where the kernel's walk stopped, and below `<link>/..`
-  # that is not where the logical path goes, so a `..` there can follow a
-  # directory that stands (`<lnk>/../<child>/server/..` is the child) — and
-  # refusing it before the re-walk read a row that IS the child as one that
-  # cannot be placed. The rest's `..` refusal then applies to the re-walked
-  # spelling, before any further re-walk: where its entry landed holds no
-  # `..`, so one in its own prefix comes from its rest, and a second re-walk
-  # is asked only once that rest holds none, so its spelling holds no `..` at
-  # all. Two re-walks at most, so the cost stays a constant times one walk —
-  # re-walking ahead of every rest made it cubic in the `..`s a row holds
-  # (measured: 200 `<lnk>/..` pairs, 11 s).
+  # `<where its entry landed>/<rest>`, which holds no `..` (the rest never
+  # does — below) and so is walked, proven and entered as a logical `cd` of
+  # the row would be; no `..` is ever normalised as text. Asked of the
+  # PREFIX, so the re-walk ends by construction: where its entry landed holds
+  # no `..`, so one in the re-walk's own prefix comes from the rest, and each
+  # re-walk's rest is shorter than the one before.
   # NO AMBIENT `cd`, `pwd` OR `printf` DECIDES IT: each is environment-shaped —
   # a physical mode carried in (`set -P`, `SHELLOPTS`), or a function of that
   # name, or of `builtin` or `set`, imported through the environment (bash
@@ -25559,10 +25550,9 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
   # a path holding a control character (a `dirname`/`basename` capture drops
   # a trailing newline, so a textual walk reads another directory) — the
   # re-walked `<where its entry landed>/<rest>` included — and one whose
-  # unresolved rest holds a `..` component (exactly `..`), asked of the
-  # re-walked spelling where the prefix held one: below a missing directory
-  # it names wherever that directory once led, so the textual re-attachment
-  # is not where the session lives.
+  # unresolved rest holds a `..` component (exactly `..`): below a missing
+  # directory it names wherever that directory once led, so the textual
+  # re-attachment is not where the session lives.
   local p="$1" head="$1" rest real c out=''
   _WS_RESOLVED=''
   _WS_RESOLVE_BASIS='unmeasured'
@@ -25582,9 +25572,8 @@ _ws_reclaim_resolve() {   # path -> rc 0 with _WS_RESOLVED = where a LOGICAL `cd
   if [[ "$head" == . && "$p" != . && "$p" != ./* ]]; then rest="$p"; else rest="${p#"$head"}"; fi
   while [[ "$rest" == /* ]]; do rest="${rest#/}"; done
   if [[ -z "$rest" ]]; then _WS_RESOLVED="$real"; _WS_RESOLVE_BASIS='complete'; return 0; fi
-  [[ -n "${2:-}" ]] || case "/$head/" in */../*) _ws_reclaim_resolve "${real%/}/$rest" rewalked; return ;; esac
   case "/$rest/" in */../*) return 1 ;; esac
-  case "/$head/" in */../*) _ws_reclaim_resolve "${real%/}/$rest" rewalked; return ;; esac
+  case "/$head/" in */../*) _ws_reclaim_resolve "${real%/}/$rest"; return ;; esac
   _ws_reclaim_absent "${head%/}/${rest%%/*}" || return 1
   while [[ -n "$rest" ]]; do
     c="${rest%%/*}"
