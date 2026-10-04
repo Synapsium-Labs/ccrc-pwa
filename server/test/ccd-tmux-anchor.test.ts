@@ -41,6 +41,7 @@ import { makeCcdHarness, harnessBin, ghContainedEnv, CCD, type CcdHarness } from
 import { tmuxName, tmuxTarget } from '../../shared/tmux-target.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { mkTmp } from './tmpHelpers.js';
+import { CONTAINED_TOOLS, plantPoison, assertNoRealTool } from './containedTools.js';
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const KEEPALIVE = path.join(ROOT, 'ccd', 'ccd-telemetry-keepalive');
@@ -384,6 +385,9 @@ describe('wave 9 M8 — ccd creates the NAME already sanitised, so the target ma
       XDG_RUNTIME_DIR: path.join(home, 'no-runtime-dir'),
       DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(home, 'no-bus')}`,
     }, { systemd: true, tmux: true });
+    // Wave 9 R10d: create-if-absent, so a no-op for what ghContainedEnv planted; it adds ssh, scp and curl.
+    for (const n of CONTAINED_TOOLS) plantPoison(harnessBin(home), n);
+    assertNoRealTool(env, home);
     const probe = (listing: string): { measured: string; ids: string[] } => {
       const r = spawnSync(BASH, ['-c',
         `. "$1"; _plat_timeout() { shift; "$@"; }; tmux() { printf "${listing}"; }; `

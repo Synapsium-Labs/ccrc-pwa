@@ -45,7 +45,8 @@ import {
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
+import { assertNoRealTool } from './containedTools.js';
 import { itLinux, itDarwin, platformContrast, python3ProgramArm, IS_DARWIN } from './platformFixtures.js';
 import { installVersionedTree, keepDigest, rsyncRecorder } from './installTreeFixture.js';
 import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
@@ -323,13 +324,29 @@ function updateSpineSystemdRun(): string {
     .replace(`${terminalRefusal}\n`, `${ordinaryDetach}\n`);
 }
 
-/** `ccrcEnv` (ccrc-install.test.ts), trimmed: the poisoned gh from
- *  `ghContainedEnv` (later shadowed by the doctor stub — the shadow answers,
- *  never execs), journalctl poisoned, systemctl/loginctl as RECORDERS that
- *  answer the shapes the install spine asks, npm a recorder that fabricates
- *  node_modules, rsync a recorder that execs the real binary. */
+/** Wave 9 R10d (D-3819): a real-curl case lists the ONE loopback port its own listener holds (M4: its refused port 9)
+ *  in `$HOME/curl-allow-ports`, which `updateEnv`'s loopback curl front reads. Nothing else is let through. */
+function allowCurlPort(home: string, port: number): void {
+  writeFileSync(join(home, 'curl-allow-ports'), `${port}\n`);
+}
+/** What the loopback front handed to the REAL curl (one URL per line), '' when it handed none. A real-curl case
+ *  asserts this holds its URL, so a case that silently stopped reaching the real curl reds. */
+function curlFrontPassed(home: string): string {
+  const p = join(home, 'curl-front-passed');
+  return existsSync(p) ? readFileSync(p, 'utf8') : '';
+}
+
+/** `ccrcEnv` (ccrc-install.test.ts), trimmed: it starts from `ccrcContainedEnv` (wave 9 R10d, D-3818) — HOME the
+ *  fixture, the user bus pointed at two absent paths under it, and recording poisons for gh (later shadowed by the
+ *  doctor stub — the shadow answers, never execs), ssh, scp, tmux and launchctl, create-if-absent. It is a SPINE
+ *  builder, so it passes `managers: false`: it fronts its own systemctl/systemd-run below, after
+ *  `adoptPlantedSystemd`, which would rename an unmarked poison to a `.codex-*` delegate. Its curl is the LOOPBACK
+ *  front (D-3819): it execs the real curl only for `http://127.0.0.1:<port>/…` with the port listed in
+ *  `$HOME/curl-allow-ports`, which the real-curl cases write for their own listener; anything else is recorded and
+ *  refused. Then journalctl poisoned, systemctl/loginctl as RECORDERS that answer the shapes the install spine
+ *  asks, npm a recorder that fabricates node_modules, rsync a recorder that execs the real binary. */
 function updateEnv(home: string): NodeJS.ProcessEnv {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  const env = ccrcContainedEnv(home, process.env, { managers: false, curl: 'loopback' });
   const plant = (name: string, body: string): void =>
     writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
   const poison = (name: string, says: string): void =>
@@ -652,6 +669,7 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
   // after this point in `updateEnv` touches PATH or these two names), and
   // `runUpdate`'s own call on the truly final env is the one that counts.
   assertSpineFrontContained(env, home);
+  assertNoRealTool(env, home);
   return env;
 }
 
@@ -663,6 +681,22 @@ function replantDoctorStubs(home: string): void {
     chmodSync(join(home, '.local', 'bin', f), 0o755);
   }
 }
+
+describe('updateEnv: containment (wave 9 R10d)', () => {
+  it('updateEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-update-contained-');
+    expect(() => assertNoRealTool(updateEnv(home), home)).not.toThrow();
+  });
+
+  it('updateEnv is a SPINE builder: it hands `adoptPlantedSystemd` nothing to rename — no .codex-systemctl or .codex-systemd-run delegate (wave 9 R10d)', () => {
+    // `managers: true` would plant poisons that `adoptPlantedSystemd` renames to `.codex-*` delegates the fronts forward
+    // to: every `--detach` systemd-run would answer 97. The twin of ccrc-containment.test.ts's (g), at this builder.
+    const home = mkTmp('ccrc-update-spine-');
+    updateEnv(home);
+    const bin = join(home, '.local', 'bin');
+    for (const n of ['.codex-systemctl', '.codex-systemd-run']) expect(existsSync(join(bin, n)), n).toBe(false);
+  });
+});
 
 /** A box with an OLD install on it: an old `~/ccrc` tree (with a marker file
  *  a real update must delete), an old `~/.local/bin/ccd`, the two units, and
@@ -925,6 +959,8 @@ function runUpdate(home: string, args: string[] = [],
   // lost. This call is that fallback. No case in this file legitimately
   // reaches no manager at all.
   assertSpineFrontContained(env, home);
+  // Wave 9 R10d: and no real ssh, scp, tmux, gh, curl, launchctl, nor the real user bus (the final env).
+  assertNoRealTool(env, home);
   const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', ...args],
     { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
@@ -1333,7 +1369,10 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
   // and the assertions below measure that it did, at its own bound and not
   // before. A real `net.createServer`, NEVER a stubbed curl (modelled on the
   // never-answering-socket pin for `_upd_asset_listed`, fix round 1 item 12 /
-  // review 155 C32, below) — `updateEnv` alone, like that pin, NEVER
+  // review 155 C32, below) — `updateEnv` alone (whose curl is, since wave 9
+  // D-3819, the LOOPBACK FRONT: it execs the REAL curl only for the one port
+  // this case lists in `$HOME/curl-allow-ports`, and the case asserts the front
+  // passed its URL), like that pin, NEVER
   // `runUpdate`/`freshUpdateBox`'s own `replantDoctorStubs`, which would shadow
   // the real curl with the LOCAL-URL-only fixture shim (it never writes `-o`'s
   // destination file for a bare `http://` URL, so a run through it "fails" for
@@ -1402,11 +1441,13 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
         CCRC_RELEASE_SPEED_TIME: '1',
         CCRC_RELEASE_CONNECT_TIMEOUT: '2',
       };
+      allowCurlPort(home, host.port);
       const t0 = Date.now();
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update'],
         { env, encoding: 'utf8', timeout: 20_000 });
       const elapsedMs = Date.now() - t0;
       sent = await host.stop();
+      expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain(`http://127.0.0.1:${host.port}/`);
       expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
       // Ended by the OVERRIDDEN total bound (2 s): not before it (a stall or a
       // size bound would have ended it sooner), and not left trickling to
@@ -1449,10 +1490,12 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
         CCRC_RELEASE_CONNECT_TIMEOUT: '2',
       };
       delete env['CCRC_RELEASE_SUMS_MAX_FILESIZE'];
+      allowCurlPort(home, host.port);
       const t0 = Date.now();
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update'],
         { env, encoding: 'utf8', timeout: 25_000 });
       const elapsedMs = Date.now() - t0;
+      expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain(`http://127.0.0.1:${host.port}/`);
       expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
       // Ended by the size bound: curl 63, quickly — and the 30 s total bound
       // (set high on purpose) is nowhere near.
@@ -4136,7 +4179,9 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
         'set -uo pipefail', progLine![0], redactBlock![0], dieLine![0],
         `_upd_phase() { printf '%s|%s\\n' "$1" "$2" >> '${rec}'; }`,
         'UPD_FAIL_PREFIX=""', body,
-      ].join('\n')], { encoding: 'utf8' });
+        // Wave 9 R10d: this harness handed no env and so inherited the REAL HOME. An extracted-function harness
+        // (builtins plus date/mkdir/chmod/mv/rm only), so it is exempt from assertNoRealTool, and PATH-less on purpose.
+      ].join('\n')], { env: { HOME: home }, encoding: 'utf8' });
       return { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
     };
     let r = run('UPD_REPORTING=0; _ccrc_die before the lock');
@@ -4304,10 +4349,10 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
         ].join('\n'), { mode: 0o755 });
       }
       const env = {
-        ...process.env, HOME: home,
-        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
         CCRC_RELEASE_BASE_URL: `http://user:${secret}@127.0.0.1:1/rel`,
       };
+      assertNoRealTool(env, home);
       const args = verb === 'update' ? ['update', '--to', 'v0.0.1'] : ['rollback', '--to', 'v0.0.1', '--from', 'pwa'];
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), ...args], { env, encoding: 'utf8' });
       expect(r.stdout, `${verb} stdout`).not.toContain(secret);
@@ -6734,8 +6779,10 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     const q = sourcedCcrc(home, 'UPD_REPORT_TARGET=v0.0.9\nUPD_FROM=pwa\n_upd_phase queued');
     expect(q.code, `stderr: ${q.stderr}`).toBe(0);
     const env = { ...updateEnv(home), CCRC_RELEASE_BASE_URL: 'http://127.0.0.1:9' };
+    allowCurlPort(home, 9);
     const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.9', '--from', 'pwa'],
       { env, encoding: 'utf8' });
+    expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain('http://127.0.0.1:9/');
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/could not ask the release host whether v0\.0\.9 exists/);
     const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
@@ -6763,7 +6810,8 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
   // Fix round 1 item 12 / review 155 C32: the pre-detach check
   // (`_upd_asset_listed`, via cmd_rollback's SHA256SUMS ask) against a
   // release host that ACCEPTS the TCP connection and never answers — a real
-  // `net.createServer` that never writes, NEVER a stubbed curl, so the REAL
+  // `net.createServer` that never writes, NEVER a stubbed curl (the loopback
+  // front, D-3819, execs the REAL curl for this one listed port), so the REAL
   // curl's own `--max-time` bound is what is measured. `CCRC_RELEASE_PROBE_
   // MAX_TIME` is overridden small so this pin finishes in a few seconds
   // rather than the production default (15s, itself well under W5's 20s
@@ -6782,10 +6830,12 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
         CCRC_RELEASE_PROBE_MAX_TIME: '2',
         CCRC_RELEASE_CONNECT_TIMEOUT: '2',
       };
+      allowCurlPort(home, port);
       const t0 = Date.now();
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.9', '--from', 'pwa'],
         { env, encoding: 'utf8', timeout: 20_000 });
       const elapsedMs = Date.now() - t0;
+      expect(curlFrontPassed(home), 'the real curl was reached through the loopback front').toContain(`http://127.0.0.1:${port}/`);
       expect(r.status, r.stderr).toBe(1);
       // Bounded by the OVERRIDDEN probe bound (2s), not left hanging to
       // curl's own (much longer) defaults or to this test's 20s kill.
@@ -6813,10 +6863,10 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       mkdirSync(join(home, '.local', 'bin'), { recursive: true });
       writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
       const env = {
-        ...process.env, HOME: home,
-        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
         [envVar]: badValue,
       };
+      assertNoRealTool(env, home);
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.1', '--from', 'pwa'],
         { env, encoding: 'utf8' });
       // The probe's own ceiling is the pre-detach one (W6 Task 8A); the
@@ -6846,10 +6896,10 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       mkdirSync(join(home, '.local', 'bin'), { recursive: true });
       writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
       const env = {
-        ...process.env, HOME: home,
-        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
         CCRC_RELEASE_PROBE_MAX_TIME: value,
       };
+      assertNoRealTool(env, home);
       return spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.1', '--from', 'pwa'],
         { env, encoding: 'utf8' });
     };
@@ -6882,10 +6932,10 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       mkdirSync(join(home, '.local', 'bin'), { recursive: true });
       writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
       const env = {
-        ...process.env, HOME: home,
-        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
         [envVar]: badValue,
       };
+      assertNoRealTool(env, home);
       const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--to', 'v0.0.1'],
         { env, encoding: 'utf8' });
       const what = envVar === 'CCRC_RELEASE_SPEED_LIMIT'
@@ -11086,10 +11136,14 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
 // a harness that could not see a leak would say so.
 describe('ccrc: one EXIT chain — a killed writer leaves no <dest>.tmp.$$, and no per-function trap clobbers another (W6 Task 8A)', () => {
   const chainEnv = (home: string): NodeJS.ProcessEnv => {
-    const env = ghContainedEnv(home, { ...process.env, HOME: home });
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
     for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
     return env;
   };
+  it('chainEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-exit-chain-contained-');
+    expect(() => assertNoRealTool(chainEnv(home), home)).not.toThrow();
+  });
   const run = (home: string, body: string): { code: number; stdout: string; stderr: string } => {
     const r = spawnSync(BASH, ['-c', `set --; source "${join(REPO, 'ccd', 'ccrc')}"; mkdir -p "$HOME/.ccrc"; ${body}`],
       { env: chainEnv(home), encoding: 'utf8', timeout: 30_000 });
