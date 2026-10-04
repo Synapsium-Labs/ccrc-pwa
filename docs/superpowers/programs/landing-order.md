@@ -385,6 +385,23 @@ carries it (spec §5.1, amended 2026-09-24).
     tree. The server box's doctor also shows 0 FAIL.
   - **Run 250's plan** is being drafted, reviewed by three Opus lenses, and revised by a planning workflow
     (`docs/landing-order-wave3-plan`).
+- **2026-10-04 21:20 — wave 3 planned** (#244, `docs/superpowers/plans/2026-10-04-landing-order-wave3-task7-preconditions.md`).
+  - **How it was made:** drafted on a measured prototype, reviewed by three Opus lenses (spec, replay, test
+    honesty), and all 14 findings applied.
+  - **What it covers:**
+    - Task 7's two code preconditions: `MERGE_PARSE_CAP` 2048, chosen so the costliest quote-dense shape (`"$(<)"`)
+      stays inside 25% of the 1500 ms bound, and the quote-dense timing pin;
+    - wave 2's residue: review 249 F2–F4, the `jq_regex` doctor check, and a closed-unmerged PR reading `none`;
+    - Task 7's runbook text.
+  - **Coordinator amendment at dispatch.** Over the cap, the deny matches a word-bounded `gh pr merge` against the
+    raw text instead of the two fixed substrings "gh" and "merge". Measured over two days of fleet Bash commands longer
+    than 2 KB, the substring rule matched 1,340 of 4,478, mostly prose ("through", "merged"), so a worker's long mail
+    would be refused. The word-bounded rule matched 131. Its accepted cost: an over-cap mail that quotes `gh pr merge`
+    literally is refused, with a split-or-rephrase message.
+  - **Numbers:** 3906–3915, plus 3916–3920 issued for the plan's nine slugs, the amendment and the worker's own.
+  - **Carried, with owners:**
+    - `PR_QUEUE_MAP`'s `unmeasured` gloss lacks a not-closed qualifier; landing wave 4 owns it (server).
+    - a repo-wide slicing convention for files over 600 s (ccrc-doctor, ccrc-install, ccrc-update) is a follow-up.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

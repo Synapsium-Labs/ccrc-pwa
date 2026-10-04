@@ -298,6 +298,23 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - **For wave 4b's priority:** on the night of 2026-10-02, Claude Code's background-shell memory reap killed work
     in three sessions, and run 237 sat idle for 15 hours. Wave 4b ships `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1`,
     so that night is measured evidence for it.
+- **2026-10-04 21:20 — wave 3 planned** (#245, `docs/superpowers/plans/2026-10-04-session-continuity-wave3-operator-choice.md`).
+  - **How it was made:** drafted on a measured prototype, reviewed by three Opus lenses, and all 16 findings applied.
+    The plan's 45 blocks replay byte-identically onto main.
+  - **Two design changes from review:**
+    - a journal floor, so the first post-deploy stop never promotes keystrokes the old ccd typed;
+    - the acknowledgement shapes the fleet actually writes, measured read-only across 6,669 transcripts.
+  - **Rulings on its open questions:**
+    - (a) the stage-4 filter is confirmed: count a fourth rescue only where a chain wait could have held it;
+    - (b) the floor's two one-time costs are accepted;
+    - (c) gpt-lane sessions are SKIPPED, keyed on `_is_anthropic_backend` like the settle;
+    - (d) a supervisor revival (`cmd_ensure` after a crash) also keeps the operator's choice, because stage 7's
+      purpose is surviving a RESTART, and a crash revival is the fleet's commonest restart;
+    - (e) `opus[1m]` losing its 1M context is accepted and listed, because the record has no context field;
+    - (f) `ccd stop` and `ws-archive` keep the choice, as planned;
+    - (g) the older unguarded `int()` calls in `--stage 4` are carried.
+  - **Numbers:** 3896–3905, plus 3921–3925 issued for the plan's nine slugs, rulings (c) and (d), and the worker's
+    own.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
