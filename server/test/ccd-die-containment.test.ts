@@ -346,8 +346,15 @@ describe('ccd/ccd', () => {
     // `_place_for_class` is deliberately NOT here: it is called inside a command
     // substitution on both of its call sites, so it must answer on stdout and a
     // `die` in it would be demoted to rc 1 — the D-297 shape.
+    // `_operator_choice_keep` (session-continuity stage 7) is here although it
+    // CANNOT die: it calls `cmd_route` inside a plain `( … )` subshell, so that
+    // verb's refusal ends only the subshell, and this scanner models `$( )` but
+    // not `( )`. Its own suite pins the real property — a refusal inside a swap
+    // never ends the swap (`ccd-operator-choice.test.ts`, "…nor does a value the
+    // record's own checks refuse") — and it is never captured in `$( )`, which
+    // the demotion scan below still checks.
     expect([...fatal].filter((f) => f.startsWith('_')).sort())
-      .toEqual(['_account_still_rostered', '_lc_refuse', '_route_argv_check',
+      .toEqual(['_account_still_rostered', '_lc_refuse', '_operator_choice_keep', '_route_argv_check',
         '_route_argv_write', '_route_seed_default', '_spawn', '_spawn_start',
         '_supervised_start', '_swap_refuse']);
     expect(fatal.has('_place_for_class'),

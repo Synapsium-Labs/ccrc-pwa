@@ -191,3 +191,324 @@ describe('a /model value maps through the alias table, then familyClassOf\'s das
     expect(declared?.[1]).toBe(FAMILY_TOKENS.map(([t, c]) => `${t}:${c}`).join(' '));
   });
 });
+
+// ── THE PROMOTION ─────────────────────────────────────────────────────────────
+
+describe('_operator_choice_keep writes the operator\'s own /model and /effort to the record', () => {
+  it('/model opus, acknowledged: the class is written through cmd_route, actor=operator-session', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([turn(t - 10), cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5')), turn(t + 5)]);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('opus');
+    expect(routeLines(), swapLog()).toHaveLength(1);
+    expect(routeLines()[0]).toMatch(new RegExp(`route ${ID}: class fable -> opus \\[actor=operator-session\\]`));
+  });
+
+  it('the picker takes no argument: its acknowledgement names the value, in either shape Claude Code writes it', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK('Opus 5.5 (1M context)'))]);
+    keep();
+    expect(h.reg(ID, 'class'), 'backticks (2.1.250 and later)').toBe('opus');
+    record({ class: 'fable' });
+    writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK_ANSI('Sonnet 5'))]);
+    keep();
+    expect(h.reg(ID, 'class'), 'ANSI bold (2.1.226)').toBe('sonnet');
+  });
+
+  it('a picker row Claude Code marks (default) is the default class, not the model it resolves to', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK('Sonnet 5 (default)'))]);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('default');
+  });
+
+  it('/effort high, and both kinds in one transcript', () => {
+    seed(); record({ class: 'fable', effort: 'ultracode' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'sonnet'), ack(t, MODEL_ACK('Sonnet 5')), cmd(t + 30, 'effort'), ack(t + 30, EFFORT_ACK('high'))]);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('sonnet');
+    expect(h.reg(ID, 'effort')).toBe('high');
+  });
+
+  it('/effort ultracode as 2.1.284 and later acknowledge it ("Ultracode on …") is read', () => {
+    seed(); record({ effort: 'high' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'effort', 'ultracode'), ack(t, 'Ultracode on (this session only): dynamic workflows on every task. Effort stays medium.')]);
+    keep();
+    expect(h.reg(ID, 'effort')).toBe('ultracode');
+  });
+
+  it('the newest of two acknowledged commands wins', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'sonnet'), ack(t, MODEL_ACK('Sonnet 5')), cmd(t + 60, 'model', 'opus'), ack(t + 60, MODEL_ACK('Opus 5.5'))]);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('opus');
+  });
+
+  it('the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator\'s own', () => {
+    seed(); record({ class: 'fable', degraded: 'opus' }); const t = now() - 600;
+    h.sh(`_route_type_model() { return 0; }; _route_apply_now ${ID}`);   // journals `model opus` now: the degraded class
+    writeTranscript([cmd(t, 'model', 'sonnet'), ack(t, MODEL_ACK('Sonnet 5')), cmd(now() + 5, 'model'), ack(now() + 5, MODEL_ACK('Opus 5.5'))]);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('sonnet');
+  });
+
+  it('an acknowledged command wins over a later one Claude Code refused, which changed nothing', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'sonnet'), ack(t, MODEL_ACK('Sonnet 5')),
+      cmd(t + 60, 'model', 'opus'), ack(t + 60, "Model 'opus' is not available on this plan")]);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('sonnet');
+  });
+
+  it('the record wins when it is newer: a field written after the command is not overwritten', () => {
+    seed(); record({ class: 'fable' }, ID, 60); const t = now() - 3600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(routeLines()).toEqual([]);
+  });
+
+  it('a field whose time cannot be read is not overwritten', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    h.sh(`_plat_mtime() { return 1; }; _operator_choice_keep ${ID}`);
+    expect(h.reg(ID, 'class')).toBe('fable');
+  });
+
+  it('an argument that is not one token is logged with its real size as outside the vocabulary, never split into fields', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus 1712345678'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: /model \\(15 bytes, not one token\\) is outside the class vocabulary`));
+  });
+
+  it('a session on a non-Anthropic lane is skipped: its /model is never read, logged or written', () => {
+    seed(); record({ class: 'fable' }); h.sh(`_reg_set ${ID} wrapper gpt`); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(swapLog(), 'no operator-choice line, no route line').toBe('');
+  });
+
+  it('a value the record already holds is not written again', () => {
+    seed(); record({ class: 'opus' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    keep();
+    expect(routeLines()).toEqual([]);
+  });
+
+  it('a human QUOTING the envelope is not a command, even above an acknowledgement', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    const quoting = JSON.stringify({ parentUuid: 'p', isSidechain: false, type: 'user', uuid: 'q', timestamp: iso(t),
+      message: { role: 'user', content: '<command-name>/model</command-name>\n<command-args>opus</command-args>\nthat is what I typed yesterday' } });
+    writeTranscript([quoting, ack(t, MODEL_ACK('Opus 5.5'))]);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('fable');
+  });
+
+  it('a subagent\'s row is not the operator\'s', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus', { isSidechain: true }), ack(t, MODEL_ACK('Opus 5.5'), { isSidechain: true })]);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('fable');
+  });
+
+  it('nothing to read is silent: no transcript, or no registry row — rc 0, nothing written, nothing logged', () => {
+    seed(); record({ class: 'fable' });
+    expect(keep()).toBe('rc=0');
+    expect(keep('nobody-here')).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(swapLog()).toBe('');
+  });
+
+  it('could not measure is said, never silent: a directory for a transcript, no python3, a reader that failed — rc 0, the record unchanged', () => {
+    seed(); record({ class: 'fable' });
+    const p = writeTranscript([cmd(now() - 600, 'model', 'opus'), ack(now() - 600, MODEL_ACK('Opus 5.5'))]);
+    expect(h.sh(`command() { [[ "$*" == "-v python3" ]] && return 1; builtin command "$@"; }; _operator_choice_keep ${ID}; echo "rc=$?"`)).toBe('rc=0');
+    expect(h.sh(`python3() { return 1; }; _operator_choice_keep ${ID}; echo "rc=$?"`)).toBe('rc=0');
+    fs.rmSync(p); fs.mkdirSync(p);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(swapLog().split('\n').filter(Boolean).map((l) => l.replace(/^\S+ \S+ /, ''))).toEqual([
+      `operator-choice ${ID}: unmeasured (no python3)`,
+      `operator-choice ${ID}: unmeasured (the transcript reader failed)`,
+      `operator-choice ${ID}: unmeasured (its transcript is not a readable regular file)`,
+    ]);
+  });
+
+  it('a FIFO where the transcript should be is never opened: the stop is not held, and it is said', () => {
+    seed(); record({ class: 'fable' });
+    const p = h.sh(`_transcript_path ${ID}`);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    h.sh(`mkfifo ${JSON.stringify(p)}`);
+    const out = h.sh(`_operator_choice_keep ${ID} & pid=$!
+      for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+      if kill -0 "$pid" 2>/dev/null; then kill "$pid"; : > ${JSON.stringify(p)}; echo held; else wait "$pid"; echo "rc=$?"; fi`);
+    expect(out, 'a grep on a FIFO blocks the stop until somebody writes to it').toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: unmeasured \\(its transcript is not a readable regular file\\)`));
+  });
+
+  // ── the journal's floor: what an older ccd typed is never the operator's ──
+
+  it('a session with no journal yet (spawned by an older ccd) promotes nothing at its first stop, opens the journal, and says so', () => {
+    seed(ID, false); const t = now() - 7200;
+    writeTranscript([cmd(t, 'effort', 'ultracode'), ack(t, ULTRACODE_ACK)]);   // an older ccd's settle, never journalled
+    keep();
+    expect(h.reg(ID, 'effort'), 'the box default became an operator choice at the deploy').toBeNull();
+    expect(floorRow()).toMatch(/^\d{10} since$/);
+    expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: unmeasured \\(its journal opened only now`));
+    keep();
+    expect(h.reg(ID, 'effort'), 'and at its second: the command is older than the floor').toBeNull();
+  });
+
+  it('a command older than the journal\'s floor is not read', () => {
+    seed(ID, false); journal(ID, 1800); record({ class: 'fable' }); const t = now() - 3600;
+    writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK_ANSI('Opus 5.5'))]);   // an older ccd's route --apply
+    keep();
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(swapLog()).toBe('');
+  });
+
+  // ── the spec's four mutation rows ──
+
+  it('the settle /effort on a session with no effort field is not promoted', () => {
+    seed();
+    h.sh(`sleep() { :; }; tmux() { ${WIDE_PANE} case "\${1:-}" in capture-pane) printf '? for shortcuts\\n❯ \\n' ;; esac; return 0; };
+      _pane_box_draft() { printf ''; }; _inject_spawn_effort cc-${ID}`);
+    const t = now() + 2;
+    writeTranscript([cmd(t, 'effort', 'ultracode'), ack(t, ULTRACODE_ACK)]);
+    keep();
+    expect(h.reg(ID, 'effort'), 'the box default became an operator choice').toBeNull();
+  });
+
+  it('control: the same /effort an hour from any journalled keystroke is the operator\'s', () => {
+    seed();
+    h.sh(`_typed_note ${ID} effort ultracode; _reg_set ${ID} typed "$(sed "2s/^[0-9]*/$(( $(date +%s) - 3600 ))/" "$REG/${ID}.typed")"`);
+    const t = now() - 10;
+    writeTranscript([cmd(t, 'effort', 'ultracode'), ack(t, ULTRACODE_ACK)]);
+    keep();
+    expect(h.reg(ID, 'effort')).toBe('ultracode');
+  });
+
+  it('a route --apply /model is not promoted — not even a degraded class typed over the operator\'s fable, in either acknowledgement shape', () => {
+    seed(); record({ class: 'fable', degraded: 'opus' });
+    h.sh(`_route_type_model() { return 0; }; _route_apply_now ${ID}`);
+    const t = now() + 5;
+    writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    keep();
+    writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK_ANSI('Opus 5.5'))]);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(routeLines()).toEqual([]);
+    expect(swapLog(), 'nor logged as a revert').toBe('');
+  });
+
+  it('an unmappable value does not abort a swap: logged, the record unchanged, and the swap lands', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+    h.sh(`${SWAP} cmd_swap ${ID} claude-d`, { TMUX: '' });
+    expect(h.reg(ID, 'wrapper')).toBe('claude-d');
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: /model gpt-5\\.6-sol is outside the class vocabulary — the record is unchanged`));
+  });
+
+  it('…nor does a value the record\'s own checks refuse (haiku takes no effort level)', () => {
+    seed(); record({ class: 'haiku' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'effort', 'high'), ack(t, EFFORT_ACK('high'))]);
+    h.sh(`${SWAP} cmd_swap ${ID} claude-d`, { TMUX: '' });
+    expect(h.reg(ID, 'wrapper')).toBe('claude-d');
+    expect(h.reg(ID, 'effort')).toBeNull();
+    expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: /effort high refused by the route record's own checks`));
+  });
+
+  it('an operator /model opus survives an auto-home: the home-ward swap writes it before its stop, and the next spawn composes opus', () => {
+    seed(); h.sh(`_reg_set ${ID} wrapper claude-d`); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5')), turn(t + 5)]);
+    h.sh(`${SWAP} CCD_SWAP_AUTO=1 cmd_swap ${ID} claude`, { TMUX: '' });
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(h.sh(`_route_wanted ${ID}`).split(' ')[0], 'the class the spawn and the applier compose').toBe('opus');
+    const log = swapLog().split('\n');
+    const route = log.findIndex((l) => l.includes(` route ${ID}: class fable -> opus [actor=operator-session]`));
+    const landed = log.findIndex((l) => l.includes(` swap ${ID}: claude-d -> claude `));
+    expect(route).toBeGreaterThan(-1);
+    expect(landed).toBeGreaterThan(route);
+  });
+});
+
+// ── EVERY STOP THAT A SPAWN FOLLOWS ───────────────────────────────────────────
+
+describe('every stop that a spawn follows keeps the operator\'s choice first', () => {
+  it('ccd stop: `ccd start`/`enable` respawn from the record', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    h.sh(`_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; }; tmux() { :; }; cmd_stop ${ID}`);
+    expect(h.calls()).toContain(`unsupervise ${ID}`);
+    expect(h.reg(ID, 'class')).toBe('opus');
+  });
+
+  it('a supervisor revival: cmd_ensure in the unit keeps the operator\'s /model before its spawn', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    h.sh(`_alive() { return 1; }
+      _spawn_start() { echo "spawn $1 $2" >> "$HOME/ccd-calls"; return 0; }
+      _spawn_settle() { echo "settle $1" >> "$HOME/ccd-calls"; return 0; }
+      CCD_IN_UNIT=1 cmd_ensure ${ID}`);
+    expect(h.reg(ID, 'class')).toBe('opus');
+    expect(h.sh(`_route_wanted ${ID}`).split(' ')[0]).toBe('opus');
+    expect(routeLines().some((l) => l.includes(`route ${ID}: class fable -> opus [actor=operator-session]`)), swapLog()).toBe(true);
+    expect(h.calls()).toContain(`spawn ${ID} resume`);
+  });
+
+  it('ccd ws-archive: ws-restore respawns from the record', () => {
+    h.makeRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const WS = 'demo-quiet-basin';
+    journal(WS); record({ class: 'fable' }, WS); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))], WS);
+    const ARCH = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; }; tmux() { return 1; }; _session_verdict() { echo gone; };`;
+    expect(h.sh(`${ARCH} cmd_ws_archive --session ${WS}`)).toMatch(/^archived /);
+    expect(h.reg(WS, 'class')).toBe('opus');
+  });
+
+  // THE CENSUS OF STOPS. Every function in ccd that stops a session — a
+  // `tmux kill-session`, a `claude-session@` unit stopped or booted out, or a
+  // `_ws_unsupervise` — is named here: either a stop a spawn follows, which
+  // must call `_operator_choice_keep` as the statement before its stop, or a
+  // stop after which no spawn follows, with the reason. A NEW function that
+  // stops a session is in neither list, and this reds until it is classified.
+  it('every stop in ccd is classified: three keep the operator\'s choice first, the rest end the row', () => {
+    const KEEPS = ['cmd_stop', 'cmd_swap', 'cmd_ws_archive'];
+    // A revival follows no ccd stop (cmd_supervise -> cmd_ensure, after Claude Code
+    // exited — most often a pane-scope OOM kill), so its keep sits before its own
+    // spawn rather than before a stop; it holds no stop line, so it is not a KEEP.
+    const REVIVES = ['cmd_ensure'];
+    const ENDS: Record<string, string> = {
+      cmd_ws_rm: 'the workspace and its row are removed',
+      cmd_forget: 'the row is forgotten',
+      _ws_reap_tail: 'the reap ends the row',
+      _ws_reclaim_tail: 'the reclaim ends the child row',
+      cmd_account_pane: 'an account\'s login pane, not a session',
+      cmd_supervise: 'a crash loop\'s give-up: Claude Code already exited, and no ccd stop precedes a revival',
+    };
+    const src = fs.readFileSync(CCD, 'utf8').split('\n');
+    const owner = (i: number): string => {
+      for (let j = i; j >= 0; j--) { const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(src[j]!); if (m) return m[1]!; }
+      return '';
+    };
+    const STOP = /tmux kill-session|_svc_stop "claude-session@|bootout .*claude-session@|_ws_unsupervise "/;
+    const live = (l: string): boolean => !/^\s*#/.test(l);
+    const stoppers = new Set(src.flatMap((l, i) => (live(l) && STOP.test(l) ? [owner(i)] : [])));
+    expect([...stoppers].sort(), 'a function that stops a session is in neither list').toEqual([...KEEPS, ...Object.keys(ENDS)].sort());
+    const sites = src.flatMap((l, i) => (live(l) && l.includes('_operator_choice_keep "$id"') ? [i] : []));
+    expect(sites.map(owner).sort()).toEqual([...KEEPS, ...REVIVES].sort());
+    for (const i of sites) {
+      const fn = owner(i);
+      if (fn === 'cmd_swap') expect(src[i + 1]).toMatch(/^ {2}_svc_stop "claude-session@\$id"/);
+      if (fn === 'cmd_stop') expect(src[i + 1]).toMatch(/^ {2}_ws_unsupervise "\$id" "\$surface" "\$declared"$/);
+      if (fn === 'cmd_ensure') expect(src[i + 1]).toMatch(/^ {2}_spawn_start "\$id" "\$mode" \|\| return \$\?$/);
+      if (fn === 'cmd_ws_archive') expect(src[i]).toMatch(/^ {2}_operator_choice_keep "\$id"; _ws_unsupervise "\$id" /);
+    }
+  });
+});
