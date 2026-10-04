@@ -685,12 +685,12 @@ if [ "$TARGET" = "agent" ]; then
   # fleet host, so there is no server-role branch to gate it against the way
   # `ccd/ccrc`'s own `_inst_bins` has to.
   install_atomic ccd/ccd-graph-sweep .local/bin/ccd-graph-sweep 755
-  # The model-class registry's catalogue probe (spec §5), unconditional here
-  # exactly as its two siblings above: the agent lane only ever ships to a
-  # fleet host, so there is no server-role branch to gate it against. The
-  # rsync of `ccd/` above ALSO lands it at ~/ccrc/ccd/, which is where the
-  # verbs resolve it from; this copy is the one an operator can run by hand.
-  install_atomic ccd/ccrc-models-probe .local/bin/ccrc-models-probe 755
+  # NO ~/.local/bin COPY OF THE MODEL-CLASS CATALOGUE PROBE (Plan 3a Task 7,
+  # ruling R-C11). ccrc runs its own tree's copy, which the rsync of `ccd/`
+  # above lands at ~/ccrc/ccd/. `ccrc update` never refreshes a PATH copy, and
+  # a stale one reads lane one's OAuth directory for a codex lane too. An old
+  # copy is removed by hand at the box cleanup (Plan 4). This note is as long
+  # as the lines it replaced, so no line this file's readers cite moves.
   # D-1160: the sweep's DEFAULT noise list — ccrc's own footprint, kept out of
   # every corpus. Shipped on this lane and not only by `ccrc install`, because a
   # fleet host is DEPLOYED day to day and installed rarely; without it the box
@@ -712,8 +712,8 @@ if [ "$TARGET" = "agent" ]; then
   # that is a
   # constraint rather than a preference: `graph-noise-ship.test.ts` pins the
   # sweep and the list it feeds as NEIGHBOURS — "if the sweep moves, this
-  # follows it" — with three code lines of slack, and `ccrc-models-probe` had
-  # already spent one of them. Inserting here instead of there costs nothing:
+  # follows it" — with three code lines of slack, and `ccrc-models-probe` spent
+  # one of them until Plan 3a stopped placing it. Inserting here costs nothing:
   # both sites are inside the agent block and both precede the restart.
   install_atomic ccd/ccd-account-auth .local/bin/ccd-account-auth 755
   # The account-health probe (spec 2026-09-07 §A). Ships beside the sweep and on
@@ -728,8 +728,8 @@ if [ "$TARGET" = "agent" ]; then
   # scanner, unconditional here exactly as its siblings above. PLACED BELOW THE
   # NOISE LIST, NOT BESIDE ccd-graph-sweep, for the same D-2600 reason
   # ccd-account-auth gives above: `graph-noise-ship.test.ts` pins the sweep and
-  # the noise list as neighbours with three code lines of slack, and
-  # `ccrc-models-probe` already spends one of them.
+  # the noise list as neighbours with three code lines of slack, of which
+  # `ccrc-models-probe` spent one until Plan 3a stopped placing it.
   install_atomic ccd/ccd-usage-sweep .local/bin/ccd-usage-sweep 755
   install_atomic ccd/ccd-usage-sweep.py .local/bin/ccd-usage-sweep.py 755
   # The per-uid temp-dir reaper (Claude Code's /tmp/claude-<uid>, 138G on the
@@ -831,17 +831,17 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.service ~/.config/systemd/user/ccd-usage-sweep.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.timer ~/.config/systemd/user/ccd-usage-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.service ~/.config/systemd/user/ccd-tmp-sweep.service \
-    && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.timer ~/.config/systemd/user/ccd-tmp-sweep.timer'
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.timer ~/.config/systemd/user/ccd-tmp-sweep.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccrc-codex-usage@.service ~/.config/systemd/user/ccrc-codex-usage@.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccrc-codex-usage@.timer ~/.config/systemd/user/ccrc-codex-usage@.timer'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
   # Plan 2b-1 Task 7: the GPT-lane files. They sit HERE, not beside the
   # ccd-usage-sweep pair they belong with: a citation corpus this plan may not
   # edit cites this file's lines by number above this point, and an insert
   # above them would move what they cite.
   #
-  # The chain above places NO `ccgpt-usage@.{service,timer}`, and neither does
-  # `ccd/ccrc`'s `_inst_units`: a live fleet box already has a unit pair at those
-  # names, owned by another repository and with an instance enabled, so placing
-  # ours is the cutover, which is Plan 3's. The files ship in the tree only.
+  # The chain above places ccrc's OWN usage pair, `ccrc-codex-usage@`, never
+  # `ccgpt-usage@` (another repo's), and arms none: `ccrc install` does, per lane.
   #
   # The GPT lane's four executables, on this agent lane only: `ccd/ccrc`'s
   # `_inst_bins` places them on every role but server. The rsync above already

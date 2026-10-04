@@ -637,8 +637,8 @@ describe('stallMailFor: one mail read per candidate, and those mails\' delivery 
       { id: offRun, at: S4_ANSWER_AT, runId: other, fromId: 'demo-worker', toId: 'demo-other', kind: 'answer', subject: 'peer answer' },
       { id: toRole, at: S4_ANSWER_AT, runId: null, fromId: 'demo-other', toId: 'coordinator', kind: 'question', subject: 'to the role' },
     ], deliveries: [
-      { id: toRoleDelivery.id, mailId: toRole, toId: 'demo-worker', state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null },
-      { id: selfWakeDelivery.id, mailId: selfWake, toId: 'demo-worker', state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null },
+      { id: toRoleDelivery.id, mailId: toRole, toId: 'demo-worker', state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null, replayCount: 0 },
+      { id: selfWakeDelivery.id, mailId: selfWake, toId: 'demo-worker', state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null, replayCount: 0 },
     ] });
   });
 
@@ -657,9 +657,9 @@ describe('stallMailFor: one mail read per candidate, and those mails\' delivery 
     const read = s.stallMailFor('demo-worker', [run], W2_SINCE_AT);
     expect(read.ok && read.deliveries).toEqual([
       { id: first.id, mailId: check, toId: 'demo-worker', state: 'acked', deliveredAt: S4_R1_AT + 5_000,
-        ackedAt: S4_R1_AT + 60_000, lastGate: null, gateSince: null },
+        ackedAt: S4_R1_AT + 60_000, lastGate: null, gateSince: null, replayCount: 0 },
       { id: second.id, mailId: check, toId: 'demo-heir', state: 'queued', deliveredAt: null, ackedAt: null,
-        lastGate: 'registry-unmeasurable', gateSince: S4_R1_AT + 120_000 },
+        lastGate: 'registry-unmeasurable', gateSince: S4_R1_AT + 120_000, replayCount: 0 },
     ]);
   });
 
@@ -693,6 +693,8 @@ describe('stallMailFor: one mail read per candidate, and those mails\' delivery 
     }
   });
 
+  // No row for `delivery mailId`: a delivery is read only through a `mailId` statement 1 already proved, so its check
+  // cannot be reached on its own.
   it.each([
     ['mail id', 'mail-unreadable', 'mail id is not a positive safe integer'],
     ['mail at', 'mail-unreadable', 'mail at is not a positive safe integer'],
@@ -886,5 +888,39 @@ describe('stallMailFor: planned on indexes, and no other mail read re-planned (w
     const peer = s.stallMailFor('demo-peer', [], W2_SINCE_AT);
     expect(peer.ok && peer.mail.map((m) => m.id)).toContain(roleAt(W2_SINCE_AT));
     expect(peer.ok && peer.mail.map((m) => m.id)).not.toContain(roleAt(W2_SINCE_AT - 1));
+  });
+});
+
+// ── gate-held-mail-is-not-stuck (D-3798): the stall read carries replayCount, so coord-deaf can tell a replay ────────────
+// `sweepMail` re-stamps `deliveredAt` on every replay, so the column alone cannot date the first delivery. The count of
+// replays (`bumpReplayCount`, called only after a send onto an already-delivered row) can say whether it does.
+describe('stallMailFor carries each delivery\'s replayCount (gate-held-mail-is-not-stuck (D-3798))', () => {
+  const seeded = (): { s: CoordStore; run: number; d: { id: number } } => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    const q = mailAt(s, { fromId: 'demo-worker', toId: 'coordinator', runId: run, kind: 'question', subject: 'which base?', at: S4_STATUS_AT });
+    return { s, run, d: s.queueDelivery(q, 'demo-coordinator', '') };
+  };
+
+  it('zero on a fresh row and after a first delivery, then the count of replays beside the re-stamped deliveredAt', () => {
+    const { s, run, d } = seeded();
+    const row = () => {
+      const r = s.stallMailFor('demo-worker', [run], W2_SINCE_AT);
+      if (!r.ok) throw new Error(r.detail);
+      return r.deliveries;
+    };
+    expect(row()).toMatchObject([{ id: d.id, deliveredAt: null, replayCount: 0 }]);
+    s.markDelivered(d.id, S4_STATUS_AT + 60_000);
+    expect(row()).toMatchObject([{ deliveredAt: S4_STATUS_AT + 60_000, replayCount: 0 }]);
+    s.markDelivered(d.id, S4_STATUS_AT + 660_000);
+    expect(s.bumpReplayCount(d.id)).toEqual({ state: 'counted', replayCount: 1 });
+    expect(row()).toMatchObject([{ deliveredAt: S4_STATUS_AT + 660_000, replayCount: 1 }]);
+  });
+
+  it.each([['an unsafe count', UNSAFE], ['a negative count', -1n]] as const)('refuses the WHOLE read on %s, naming the column and no value', (_label, value) => {
+    const { s, run, d } = seeded();
+    s.db.prepare('UPDATE mail_deliveries SET replayCount = ? WHERE id = ?').run(value, d.id);
+    expect(s.stallMailFor('demo-worker', [run], W2_SINCE_AT))
+      .toEqual({ ok: false, kind: 'delivery-unreadable', detail: 'delivery replayCount is not a positive safe integer' });
   });
 });

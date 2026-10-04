@@ -3992,11 +3992,11 @@ export class CoordStore {
     const drows = this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, CAST(mailId AS TEXT) AS mailIdText, toId, state, ' +
       'CAST(deliveredAt AS TEXT) AS deliveredAtText, CAST(ackedAt AS TEXT) AS ackedAtText, lastGate, ' +
-      'CAST(gateSince AS TEXT) AS gateSinceText ' +
+      'CAST(gateSince AS TEXT) AS gateSinceText, CAST(replayCount AS TEXT) AS replayCountText ' +
       `FROM mail_deliveries WHERE mailId IN (SELECT id FROM mail WHERE ${where}) ORDER BY id`,
     ).all(...binds) as unknown as
       { idText: string; mailIdText: string; toId: string; state: string; deliveredAtText: string | null;
-        ackedAtText: string | null; lastGate: string | null; gateSinceText: string | null }[];
+        ackedAtText: string | null; lastGate: string | null; gateSinceText: string | null; replayCountText: string }[];
     const nullable = (text: string | null, column: string): { ok: true; value: number | null } | { ok: false; detail: string } =>
       text === null ? { ok: true, value: null } : persistedInt(text, column);
     const deliveries: StallDeliveryRow[] = [];
@@ -4011,8 +4011,12 @@ export class CoordStore {
       if (!ackedAt.ok) return { ok: false, kind: 'delivery-unreadable', detail: ackedAt.detail };
       const gateSince = nullable(d.gateSinceText, 'delivery gateSince');
       if (!gateSince.ok) return { ok: false, kind: 'delivery-unreadable', detail: gateSince.detail };
+      // NOT NULL DEFAULT 0, and zero is decided here as NULL is for the nullable columns, because `persistedInt` proves a
+      // positive count (`gate-held-mail-is-not-stuck` (D-3798): coord-deaf tells a first delivery from a replay by it).
+      const replayCount = d.replayCountText === '0' ? { ok: true as const, value: 0 } : persistedInt(d.replayCountText, 'delivery replayCount');
+      if (!replayCount.ok) return { ok: false, kind: 'delivery-unreadable', detail: replayCount.detail };
       deliveries.push({ id: id.value, mailId: mailId.value, toId: d.toId, state: d.state, deliveredAt: deliveredAt.value,
-        ackedAt: ackedAt.value, lastGate: d.lastGate, gateSince: gateSince.value });
+        ackedAt: ackedAt.value, lastGate: d.lastGate, gateSince: gateSince.value, replayCount: replayCount.value });
     }
     return { ok: true, mail, deliveries };
   }

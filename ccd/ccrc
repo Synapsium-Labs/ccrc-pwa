@@ -2015,8 +2015,8 @@ already running).
   version   print the build this box is running, from ~/.ccrc/build.json
   doctor    check this box's prerequisites — one PASS/WARN/FAIL line per
             check, each non-pass followed by its remedy; exit 1 if any failed.
-            --fix cures the checks that know how (skills: the shipped tree's
-            installers into every rostered home) and measures them again
+            --fix cures the checks that know how (skills, wrappers, codex —
+            each by the shipped tree's own installer) and measures them again
   status    print what this box IS: its build stamp, its services, how many
             ccd sessions it holds, and — when it knows where its server is —
             whether the two boxes agree. Read-only; always exit 0
@@ -4174,8 +4174,17 @@ cmd_wrappers() {
       # declared. (It is the same "." that drops the `ccd.bak-<date>` and
       # `claude2.bak-<date>` files a real box accumulates — see
       # `ccd/ccrc-wrapper-shape:63-67`.)
-      # `cp -p` so the backup keeps the mode and timestamps of what it replaced.
-      cp -p -- "$WRAPPER_BIN_DIR/$id" "$WRAPPER_BIN_DIR/$backup" \
+      # `cp -p` so the backup keeps the mode and timestamps of what it replaced,
+      # and `-P` so it keeps WHAT it replaced (Plan 3a Task 9): the rename below
+      # REPLACES a symlink at this path rather than writing through it, so the
+      # thing moved out of the way is the LINK, and its backup must be the link
+      # too. Without `-P`, cp follows it and saves the bytes behind it: a `mv`
+      # of that backup would then put a frozen second copy of somebody else's
+      # launcher where the link to it was. A live fleet box has a launcher of
+      # exactly that shape (a symlink to another tool's launcher). `-P` changes
+      # nothing for a regular file, and both userlands take it: GNU cp, and BSD
+      # cp, whose `-P` without `-R` copies the link itself.
+      cp -P -p -- "$WRAPPER_BIN_DIR/$id" "$WRAPPER_BIN_DIR/$backup" \
         || _ccrc_die "could not back up $WRAPPER_BIN_DIR/$id to $WRAPPER_BIN_DIR/$backup, so nothing was overwritten"
     fi
 
@@ -8408,6 +8417,7 @@ _acct_remove() {
     esac
   fi
 
+  _acct_remove_usage "$id"; [ -z "$ACCT_USAGE_REMOVED" ] || removed+=("$ACCT_USAGE_REMOVED"); [ -z "$ACCT_USAGE_STEP" ] || operator_steps+=("$ACCT_USAGE_STEP")
   for f in "$CCRC_LIMITS_DIR/$id.json" "$_SVC_REG/$id-disabled" "$_SVC_REG/$id.hookstate.json" "$_SVC_REG/$id.turn.json"; do
     { [ -e "$f" ] || [ -L "$f" ]; } || continue
     { [ ! -d "$f" ] || [ -L "$f" ]; } \
@@ -9493,18 +9503,20 @@ _models_class_ok() {   # <class>
 #
 # THE PROBE IS A BOX-LEVEL EXECUTABLE WITH NO LANE CONTEXT: it reads
 # ANTHROPIC_AUTH_TOKEN out of its own environment, and only THIS helper knows
-# which lane is asking. The roster row for `<accountId>` is read for exactly
-# one fact, `exec.secretsFile`, and — when it has one — that file is sourced in
+# which lane is asking. The roster row for `<accountId>` is read for two
+# facts: `exec.secretsFile` and, through the lane library's readers, whether
+# it is an exec.kind "codex" row (`_models_probe_codex_env`, below). When it
+# has a secrets file, that file is sourced in
 # a SUBSHELL that runs the probe and nothing else, never the verb's own shell,
 # which must never carry the lane's key past this one call. The line is
 # `shared/wrapper.mjs`'s generated wrapper's own, verbatim:
 # `[ -r "$HOME/${secrets}" ] && . "$HOME/${secrets}"`. BOTH branches unset the
 # credential names `ccrc-models-probe` actually reads: ANTHROPIC_AUTH_TOKEN
 # (the two arms that send it — openrouter --endpoints and compatible; the
-# codex arm sends its own bearer header too, but via `_fetch_codex`'s
+# codex arms send their own bearer header too, but via `_fetch_codex`'s or `_fetch_codex_lane`'s
 # litellm `Authenticator`, driven by CHATGPT_TOKEN_DIR, never this
-# variable) and, on the codex arm only,
-# CHATGPT_TOKEN_DIR (it names the directory `_fetch_codex` reads `auth.json`
+# variable) and, on the codex arms only,
+# CHATGPT_TOKEN_DIR (it names the directory either codex arm's `Authenticator` reads `auth.json`
 # from) — measured fix, C3 of the final wave: without this, a lane with no
 # secrets file ran the probe against whatever this shell already had,
 # which on this fleet is ordinarily the CALLING lane's own key (every
@@ -9512,7 +9524,7 @@ _models_class_ok() {   # <class>
 # models refresh --all` could ship that key, or another lane's codex token
 # directory, to a lane it was never issued for. Scrubbed first, a lane with a
 # secrets file gets only what that file sets, and a lane with none gets NO
-# credential, ever, regardless of what the calling session is carrying — and
+# credential, ever, whatever the calling session carries (a codex row then adds only its own exec.authDir, `_models_probe_codex_env`) — and
 # its own refusal ("needs the lane's key: set ANTHROPIC_AUTH_TOKEN") is what
 # surfaces — captured here, not reworded, and never containing the
 # credential's VALUE, only its name. ANTHROPIC_API_KEY is unset alongside them
@@ -9532,11 +9544,45 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
   if [ -n "$secrets" ]; then
     ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CHATGPT_TOKEN_DIR
       [ -r "$HOME/$secrets" ] && . "$HOME/$secrets"
+      _models_probe_codex_env "$id" || exit $?
       exec "$@" )
   else
     ( unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CHATGPT_TOKEN_DIR
+      _models_probe_codex_env "$id" || exit $?
       exec "$@" )
   fi
+}
+
+# THE CODEX LANE'S PROBE INPUTS (spec §9.1; Plan 3a Task 1, D-3706).
+#   - An exec.kind "codex" row: this exports the row's own `exec.authDir`,
+#     under $HOME, as CHATGPT_TOKEN_DIR; the interpreter `ccgpt-runtime
+#     python` resolves as CCRC_CODEX_PYTHON, EMPTY when none resolves, so the
+#     probe refuses `runtime-absent` rather than inheriting a caller's value;
+#     and CCRC_PROBE_LANE_KIND=codex, the one marker that sends the probe
+#     down its codex-lane fetch, which has no default directory.
+#   - Every other row: it UNSETS CCRC_CODEX_PYTHON and CCRC_PROBE_LANE_KIND
+#     and touches nothing else. That row's CHATGPT_TOKEN_DIR is exactly what
+#     it was before this function existed (scrubbed above, then whatever its
+#     secrets file sets), so an external lane's fetch keeps today's bytes,
+#     default directory included, until its own flip (Plan 3b).
+# Called ONLY inside `_models_run_probe`'s two subshells, after the scrub and
+# the source line: neither a caller nor a secrets file can choose a lane's
+# arm, directory or interpreter, and none of it reaches the verb's own shell.
+# The row is read through the lane library's one reader of `exec.kind`
+# (`_models_litellm_codex`, that is `_codex_lanes`) and its one reader of a
+# row (`_codex_row`). A codex row that does not validate is refused with
+# `_codex_row`'s own rc and sentence, and the probe never runs.
+_models_probe_codex_env() {   # <accountId> -> 0, or _codex_row's rc for a codex row that does not validate
+  if ! _models_litellm_codex "$1"; then
+    unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
+    return 0
+  fi
+  _codex_row "$1" || return $?
+  export CHATGPT_TOKEN_DIR="$HOME/$CX_AUTH"
+  export CCRC_PROBE_LANE_KIND=codex
+  CCRC_CODEX_PYTHON="$("$(_codex_runtime_cli)" python 2>/dev/null)" || CCRC_CODEX_PYTHON=''
+  export CCRC_CODEX_PYTHON
+  return 0
 }
 
 MODELS_ENDPOINTS_TMP=""
@@ -9772,6 +9818,30 @@ _models_litellm_template() { printf '%s' "$CCRC_HERE/../deploy/litellm-config.te
 # is listening on THESE bytes, and the question here is exactly whether the
 # process holds a config this run just replaced.
 _models_litellm_running() { pgrep -f "litellm .*$(_models_litellm_path)" >/dev/null 2>&1; }
+
+# THE BARE STOP'S PRECONDITION (Plan 3a Task 2, operator ruling Z4,
+# D-3753). The external arm's only stop is
+# another repository's bare `ccgpt stop`, which stops units BY NAME, and a
+# codex-kind lane's own tiers carry those names (`ccgpt-<id>-{litellm,shim}
+# .service`, spec §19.2). With no codex-kind row on the roster, today's shape,
+# that stop can reach only that repository's own units: rc 1, nothing printed,
+# and the arm runs exactly as before. Once ANY row is codex-kind, ccrc cannot
+# tell whose units that stop would name: rc 0, the reason as one clause on
+# stdout, and the arm refuses before it writes. A roster whose codex lanes
+# cannot be told (`_codex_lanes` rc 1 or rc 2) answers rc 0 too, because
+# undecidable is never "no codex lane". Asked of `_codex_lanes`, the lane
+# library's ONE reader of exec.kind.
+_models_litellm_stop_blocked() {   # -> rc 0 and one clause on stdout iff the external arm must not run the bare stop
+  local ids rc=0
+  ids="$(_codex_lanes 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'which roster lanes are codex-kind cannot be read (the lane library answered rc %s)' "$rc"
+    return 0
+  fi
+  [ -n "$ids" ] || return 1
+  printf 'the roster names codex-kind lane(s) %s' "${ids//$'\n'/, }"
+  return 0
+}
 
 # WHICH ARM (D-3482): `exec.kind == "codex"` read off
 # ~/.ccrc/accounts.json by the lane library's ONE reader of that question
@@ -10071,8 +10141,10 @@ _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON o
 _models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's final answer, or a refusal
   # A codex-kind lane takes its own arm (`_models_litellm_lane`, above).
   # Everything below is the EXTERNAL arm, unchanged byte for byte
-  # (D-3482): the live lanes are external, and another
-  # repository's LiteLLM reads that arm's file. Plan 3 retires it at cutover.
+  # (D-3482) but for one guard (Plan 3a Task 2, D-3753): its bare stop is
+  # refused once any roster row is codex-kind. The live lanes are external, and
+  # another repository's LiteLLM reads that arm's file. Each lane leaves this
+  # arm at its own flip (Plan 3b), and Plan 4's ccrc PR deletes it (ruling Z8).
   if _models_litellm_codex "$1"; then _models_litellm_lane "$1"; return $?; fi
   local file check crc
   file="$(_models_roster_path)"
@@ -10085,6 +10157,14 @@ _models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's 
   fi
   local restarted=false
   if _models_litellm_running; then
+    # NEVER THE BARE STOP ONCE A CODEX-KIND LANE EXISTS (Plan 3a Task 2,
+    # operator ruling Z4, D-3753). Refused
+    # HERE, through this arm's own restart-failed path and before PHASE 2, so
+    # nothing is written and the next run sees the same difference again.
+    local blocked
+    if blocked="$(_models_litellm_stop_blocked)"; then
+      _models_refuse restart-failed 1 "the LiteLLM proxy is running on the PREVIOUS config, and ccrc will not stop it: $blocked, and the only stop this arm has is another repository's bare 'ccgpt stop', which stops units by name, the names a codex lane's own tiers carry. Stop that proxy by hand once you know which lane's units that stop would name, or flip lane $1 to codex (Plan 3b), then re-run this command — until then this box serves the old model list. Nothing was written and nothing was stopped."
+    fi
     if command -v ccgpt >/dev/null 2>&1 && ccgpt stop >/dev/null 2>&1; then
       restarted=true
       echo "$PROG: stopped the running LiteLLM proxy — it was holding the previous rendering; the next gpt session starts it again on the new one." >&2
@@ -14385,12 +14465,20 @@ _inst_units() {
     # left the timer enabled and orphaned.
     _inst_atomic "$tree/deploy/systemd/ccrc-models.service" "$dir/ccrc-models.service" 644
     _inst_atomic "$tree/deploy/systemd/ccrc-models.timer" "$dir/ccrc-models.timer" 644
-    # NOT the GPT-usage publisher's `ccgpt-usage@.{service,timer}` pair, which
-    # ships in `deploy/systemd/` and is placed by no installer yet: a live fleet
-    # box already has a unit pair at those two names, owned by another
-    # repository, with an instance ENABLED. Writing ours there would replace a
-    # running timer's definition, so placing it is the cutover, and that is
-    # Plan 3's (spec §15 step 3), never an install's side effect.
+    # Plan 3a Task 6: the Codex lanes' usage pair, under ccrc's OWN name
+    # (D-3717). NEVER `ccgpt-usage@`:
+    # on a live fleet box that template is another repository's, with an
+    # instance ENABLED, and `_inst_atomic` replaces whatever sits at its
+    # destination (install-census.test.ts refuses the prefix). Role-gated for
+    # its own reason: its one consumer is a codex lane, which runs through a
+    # per-account launcher, and a server-role box converges nothing per account
+    # (D-3111). Linux only by construction — the Darwin arm returned at the top
+    # of this function, and `_inst_units_darwin` places no timer at all
+    # (decision 17). The TEMPLATE lands on every fleet/both box, codex lane or
+    # not: a template nobody enables runs nothing. Its instances are
+    # `_inst_codex_usage`'s, one per codex lane, from `_inst_enable`.
+    _inst_atomic "$tree/deploy/systemd/ccrc-codex-usage@.service" "$dir/ccrc-codex-usage@.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccrc-codex-usage@.timer" "$dir/ccrc-codex-usage@.timer" 644
   fi
   # W4a Task 9 (design §11): the server-role watchdog's pair, gated
   # `!= fleet` — the complement of pool-sync's `= fleet`, and derived like it
@@ -14511,6 +14599,199 @@ _inst_codex_runtime() {
   fi
 }
 
+# ── The Codex lanes' usage pair: ccrc's OWN template, and whose timer is on ─
+# Plan 3a Task 6 (spec §10, §11; rulings R2, R6). ccrc's publisher runs as
+# `ccrc-codex-usage@<id>.{service,timer}`, NEVER as `ccgpt-usage@`: on a live
+# fleet box that template name is another repository's, with an instance
+# enabled, and `_inst_atomic` replaces whatever sits at its destination — a
+# merge placing the pair there would rewrite a running timer's definition on
+# the next auto-update and point its enabled instance at a lane.json that does
+# not exist (D-3717).
+#
+# "ENABLED" IS READ FROM THE MANAGER'S OWN LINKS, never asked
+# (D-3726). Enabling a timer whose
+# `[Install]` says `WantedBy=timers.target` makes exactly one symlink,
+# `timers.target.wants/<unit>`, and disabling it removes that link. No systemctl
+# verb lists a template's enabled INSTANCES, and a per-id `is-enabled` needs the
+# user bus for a question one directory answers — including on a box whose bus
+# is down, where uninstall must still find ccrc's instances. The converge,
+# uninstall, account removal and doctor all read THESE helpers, so they cannot
+# disagree about what "enabled" means. What this cannot see, stated rather than
+# hidden: a timer STARTED but never enabled, and one enabled under another
+# target.
+#
+# PLACED HERE, beside the first caller, and not in the lane library above
+# `cmd_codex`: an insert there would move lines the compaction-card citation
+# corpus cites into this file (session-hook.test.ts).
+_codex_usage_timer() {   # <id> -> ccrc's usage timer for that lane
+  printf 'ccrc-codex-usage@%s.timer' "$1"
+}
+_codex_usage_foreign() {   # <id> -> ANOTHER repository's usage timer for that lane: read, never acted on
+  printf 'ccgpt-usage@%s.timer' "$1"
+}
+_codex_usage_wants() {   # -> the directory `systemctl --user enable` links a timer into
+  printf '%s/timers.target.wants' "$BOX_UNIT_DIR"
+}
+_codex_usage_enabled() {   # <unit> -> rc 0 iff its wants link exists, a dangling one included
+  local l
+  l="$(_codex_usage_wants)/$1"
+  [ -L "$l" ] || [ -e "$l" ]
+}
+# Every id with a ccrc usage timer enabled, one per line, in glob (lexical)
+# order. The ROSTER IS NOT READ: uninstall and the converge both need the
+# instances ccrc armed whatever the roster says now, and an uninstall must work
+# over a roster it cannot read. A name that fails the account-id grammar is
+# skipped — ccrc never enables one, so it is not ccrc's. rc 1, with
+# `_codex_shape`'s own sentence, when the shape contract is missing.
+_codex_usage_enabled_ids() {
+  local f n
+  _codex_shape || return 1
+  for f in "$(_codex_usage_wants)"/ccrc-codex-usage@*.timer; do
+    { [ -L "$f" ] || [ -e "$f" ]; } || continue
+    n="${f##*/ccrc-codex-usage@}"; n="${n%.timer}"
+    [[ "$n" =~ $WRAPPER_ID_RE ]] && printf '%s\n' "$n"
+  done
+  return 0
+}
+# Another repository's FLAT `ccgpt-usage.timer`. It names no lane — its lane is
+# that repository's own shell default, which ccrc does not spell — so ccrc can
+# say only THAT it is enabled, never which lane's row it writes.
+_codex_usage_flat_foreign() {
+  _codex_usage_enabled ccgpt-usage.timer
+}
+
+# ── _inst_codex_usage — one usage timer per codex lane, and no other ──────
+# Plan 3a Task 6. CONVERGES the set of ENABLED `ccrc-codex-usage@<id>.timer`
+# instances to exactly the roster's codex lanes
+# (D-3718):
+#   - WITHDRAW FIRST: an enabled ccrc instance whose id is no longer a codex
+#     lane — a lane flipped back to external, an account removed while this
+#     box had no systemctl — is disabled, so a flip-back converges on the next
+#     install and is never polled again;
+#   - a codex lane's instance is enabled (`enable --now`, idempotent), through
+#     `_inst_enable_timer`, whose refusal is a counted degraded step;
+#   - a codex lane for which ANOTHER repository's `ccgpt-usage@<id>.timer` is
+#     enabled gets no ccrc instance, and one ccrc had enabled is withdrawn: two
+#     publishers would race one `~/.cc-limits/<id>.json`, and two Authenticator
+#     refreshes one rotating refresh token (D-3719).
+#     ccrc NEVER disables the foreign timer; the line names the operator's own
+#     command. The flat `ccgpt-usage.timer` names no lane, so it is reported as
+#     unattributable and blocks nothing.
+# An unreadable roster (`_codex_lanes` rc 1), a missing jq (rc 2) or a missing
+# shape contract converges NOTHING — enables none and withdraws none — because
+# a set nobody read is not an empty set. Each degrades (`codex-usage`).
+# LINUX ONLY: `_inst_units_darwin` places no timer at all (decision 17), so on
+# macOS a box with a codex lane is told once that its usage row is not
+# published here, and that is NOT a degraded step (`_inst_linger_darwin`'s
+# doctrine: a property of the platform, not an event in this run). A
+# server-role box converges nothing per account (D-3111) and has no pair.
+# THE TRANSCRIPT CLAIMS ONLY WHAT THIS RUN DID (fix round 1): a withdrawal is
+# named wherever it happened, the foreign arm's included; a ccrc timer this run
+# had to withdraw and could not is its own NOT CONVERGED line, and then `none`
+# is never printed over it; and `codex-usage` is ONE degraded step however many
+# lanes it withheld or withdrawals it failed, `_inst_codex_tiers`' rule. A
+# refused ENABLE is the exception, and is named by its unit
+# (`_inst_enable_timer`).
+# POSITION: inside `_inst_enable`, after the daemon-reload that read the
+# template `_inst_units` placed, and after `_inst_codex_runtime` made the
+# runtime current that the publisher's ExecStart names.
+_inst_codex_usage() {
+  [ "$INST_ROLE" = server ] && return 0
+  local lanes have id e u f keep before took lrc=0 hrc=0
+  local -a codex=() enabled=() withheld=() withdrawn=() stuck=()
+  lanes="$(_codex_lanes)" || lrc=$?
+  if [ "$CCD_OS" = darwin ]; then
+    { [ "$lrc" -eq 0 ] && [ -n "$lanes" ]; } || return 0
+    echo "install: codex-usage: not applicable on macOS — ccrc places no launchd job for a codex lane's usage poller (decision 17: macOS is not centrally managed), so this box publishes no ~/.cc-limits row for: ${lanes//$'\n'/, }"
+    return 0
+  fi
+  if [ "$lrc" -eq 2 ]; then
+    echo "install: codex-usage: NOT CONVERGED — jq is not on PATH (the ccrc codex: missing-dependency line above says so), so which roster lanes are codex lanes cannot be told, and no usage timer was enabled or disabled. This install continues. Install jq, then re-run: ccrc install"
+    INST_DEGRADED+=(codex-usage)
+    return 0
+  fi
+  if [ "$lrc" -ne 0 ]; then
+    echo "install: codex-usage: NOT CONVERGED — \$HOME/.ccrc/accounts.json could not be read as a roster (the ccrc codex: roster-invalid line above says why), so no usage timer was enabled or disabled. This install continues. Fix the roster (ccrc wrappers prints the validator's sentence), then re-run: ccrc install"
+    INST_DEGRADED+=(codex-usage)
+    return 0
+  fi
+  have="$(_codex_usage_enabled_ids)" || hrc=$?
+  if [ "$hrc" -ne 0 ]; then
+    echo "install: codex-usage: NOT CONVERGED — the wrapper shape contract could not be read (the ccrc codex: line above says so), so ccrc's own usage timers cannot be told from anything else, and none was enabled or disabled. This install continues. Re-run: ccrc install"
+    INST_DEGRADED+=(codex-usage)
+    return 0
+  fi
+  [ -z "$lanes" ] || mapfile -t codex <<< "$lanes"
+  for e in $have; do
+    keep=0
+    for id in ${codex[@]+"${codex[@]}"}; do [ "$id" = "$e" ] && keep=1; done
+    [ "$keep" -eq 1 ] && continue
+    u="$(_codex_usage_timer "$e")"
+    if systemctl --user disable --now "$u"; then
+      withdrawn+=("$e")
+    else
+      echo "install: codex-usage: could not disable $u — account $e is no longer a codex lane, so its timer must not poll; run: systemctl --user disable --now $u" >&2
+      stuck+=("$e")
+    fi
+  done
+  for id in ${codex[@]+"${codex[@]}"}; do
+    u="$(_codex_usage_timer "$id")"; f="$(_codex_usage_foreign "$id")"
+    if _codex_usage_enabled "$f"; then
+      withheld+=("$id")
+      took=''
+      if _codex_usage_enabled "$u"; then
+        if systemctl --user disable --now "$u"; then
+          withdrawn+=("$id")
+          took=" ccrc's own $u was enabled, and this run disabled it."
+        else
+          echo "install: codex-usage: could not disable $u — run: systemctl --user disable --now $u" >&2
+          stuck+=("$id")
+          took=" ccrc's own $u is enabled too, and this run could not disable it, so both publishers are armed."
+        fi
+      fi
+      echo "install: codex-usage: NOT ENABLED for $id — another repository's $f is enabled on this box, and two publishers would race this lane's ~/.cc-limits row.$took ccrc never disables another tool's unit: once this lane's cutover retires it, run: systemctl --user disable --now $f — then re-run: ccrc install"
+      continue
+    fi
+    before="${#INST_DEGRADED[@]}"
+    _inst_enable_timer codex-usage "$u"
+    [ "${#INST_DEGRADED[@]}" -gt "$before" ] || enabled+=("$id")
+  done
+  if [ "${#codex[@]}" -gt 0 ] && _codex_usage_flat_foreign; then
+    echo "install: codex-usage: note — another repository's ccgpt-usage.timer is enabled on this box. It names no lane, so ccrc cannot tell which lane's ~/.cc-limits row it writes; if it is one of ${codex[*]}, two publishers race that row. ccrc leaves it alone; once no lane on this box relies on it, run: systemctl --user disable --now ccgpt-usage.timer"
+  fi
+  # ONE degraded step for a withheld lane or a withdrawal systemd refused,
+  # however many of either (`_inst_codex_tiers`' `[ "$failed" -eq 0 ] ||`).
+  { [ "${#withheld[@]}" -eq 0 ] && [ "${#stuck[@]}" -eq 0 ]; } || INST_DEGRADED+=(codex-usage)
+  # `none` ONLY when this run did nothing and left nothing of ccrc's enabled.
+  if [ "${#codex[@]}" -eq 0 ] && [ "${#withdrawn[@]}" -eq 0 ] && [ "${#stuck[@]}" -eq 0 ]; then
+    echo "install: codex-usage: none — no codex lane in the roster"
+    return 0
+  fi
+  if [ "${#codex[@]}" -gt 0 ] || [ "${#withdrawn[@]}" -gt 0 ]; then
+    echo "install: codex-usage: enabled for ${enabled[*]:-no lane}; withheld from ${withheld[*]:-no lane}; withdrawn from ${withdrawn[*]:-no lane}"
+  fi
+  if [ "${#stuck[@]}" -gt 0 ]; then
+    echo "install: codex-usage: NOT CONVERGED — ccrc's own usage timer is still enabled for ${stuck[*]}, which this run had to withdraw and systemd would not disable (the could-not-disable line above names each, with its command). This install continues. Run those commands, then re-run: ccrc install"
+  fi
+}
+
+# ── _inst_enable_timer — enable one timer, or DEGRADE and count it ────────
+# Plan 3a Task 6 (2b-2 carry-forward 10). Every timer `_inst_enable` arms below
+# `ccd-cap-scopes.timer` DEGRADES rather than dies when systemd refuses it —
+# the idiom each one's own comment argues — and until this helper that degrade
+# was only a line on stderr: nine refusals, measured on main at 1f9fa22d,
+# appended nothing to INST_DEGRADED, so the closing line read "every step above
+# converged" over a timer that never armed, the state-asserted-never-measured
+# defect that line's own comment names. ONE spelling of the remedy, and the
+# degraded step is named by the UNIT the remedy names, which is what an
+# operator greps for.
+_inst_enable_timer() {   # <transcript word> <unit>
+  systemctl --user enable --now "$2" && return 0
+  echo "install: $1: could not enable $2 — run: systemctl --user enable --now $2" >&2
+  INST_DEGRADED+=("$2")
+  return 0
+}
+
 # ── _inst_enable — ask systemd to read them, then prove one stayed up ─────
 # `deploy.sh:461-466`'s chain, in the same order and for the same reasons, with
 # the agent's unit replaced by this box's own.
@@ -14544,7 +14825,7 @@ _inst_codex_runtime() {
 # SERVICE. The `CCRC_VERIFY_*` knobs are the script's own (settle, window, log
 # lines) and are honoured here by not being touched.
 _inst_enable() {
-  if [ "$CCD_OS" = darwin ]; then _inst_enable_darwin; return $?; fi
+  if [ "$CCD_OS" = darwin ]; then _inst_enable_darwin || return $?; _inst_codex_usage; return 0; fi
   # THE ROLE'S UNIT, `_inst_units`' own gate applied to the asking side: on a
   # fleet box the long-running unit this step must enable, restart and verify
   # is the agent's, and `ccrc.service` — which that box was never given — must
@@ -14578,14 +14859,12 @@ _inst_enable() {
   # silent rather than loud (`ccrc-doctor-checks`'s `known` array covers it
   # for exactly that reason), which is an argument for doctor catching a
   # stopped timer, not for dying here over one that merely would not enable.
-  [ "$INST_ROLE" != fleet ] || systemctl --user enable --now ccd-pool-sync.timer \
-    || echo "install: pool-sync: could not enable ccd-pool-sync.timer — run: systemctl --user enable --now ccd-pool-sync.timer" >&2
+  [ "$INST_ROLE" != fleet ] || _inst_enable_timer pool-sync ccd-pool-sync.timer
   # programme wave 4: the update-intent puller's timer, on the gate its unit
   # files carry in `_inst_units`, and DEGRADING the same way — a timer that
   # will not enable is doctor's `services` finding (`known` names it), not a
   # reason to fail an otherwise-converged install.
-  [ "$INST_ROLE" != fleet ] || systemctl --user enable --now ccd-update-sync.timer \
-    || echo "install: update-sync: could not enable ccd-update-sync.timer — run: systemctl --user enable --now ccd-update-sync.timer" >&2
+  [ "$INST_ROLE" != fleet ] || _inst_enable_timer update-sync ccd-update-sync.timer
   # graphify Task 10 (O3/O6b): the sweep timer, gated exactly as
   # `_inst_units` gates its unit files — SKIPPED on a server box, which runs
   # no per-tree AST sweep at all. UNLIKE the loop above, a refusal here
@@ -14593,44 +14872,42 @@ _inst_enable() {
   # will not take this one timer must not turn an otherwise-converged install
   # into a failed one the way `ccrc.service`'s own enable is entitled to — the
   # sweep is convenience, not the guardrail `ccd-cap-scopes.timer` is.
-  [ "$INST_ROLE" = server ] || systemctl --user enable --now ccd-graph-sweep.timer \
-    || echo "install: graphify: could not enable ccd-graph-sweep.timer — run: systemctl --user enable --now ccd-graph-sweep.timer" >&2
+  [ "$INST_ROLE" = server ] || _inst_enable_timer graphify ccd-graph-sweep.timer
   # Same gate, same DEGRADE-rather-than-die idiom as the sweep above it: the
   # usage-accounting sweep is a reading, not the guardrail `ccd-cap-scopes.timer`
   # is, so a systemd that will not take this one timer must not turn an
   # otherwise converged install into a failed one.
-  [ "$INST_ROLE" = server ] || systemctl --user enable --now ccd-usage-sweep.timer \
-    || echo "install: usage-sweep: could not enable ccd-usage-sweep.timer — run: systemctl --user enable --now ccd-usage-sweep.timer" >&2
+  [ "$INST_ROLE" = server ] || _inst_enable_timer usage-sweep ccd-usage-sweep.timer
   # Same gate as its unit files above (a server box runs no sessions, so has no
   # temp dir to reap), and the same DEGRADE-rather-than-die idiom: reclaiming
   # disk is housekeeping, not the guardrail `ccd-cap-scopes.timer` is.
-  [ "$INST_ROLE" = server ] || systemctl --user enable --now ccd-tmp-sweep.timer \
-    || echo "install: tmp-sweep: could not enable ccd-tmp-sweep.timer — run: systemctl --user enable --now ccd-tmp-sweep.timer" >&2
+  [ "$INST_ROLE" = server ] || _inst_enable_timer tmp-sweep ccd-tmp-sweep.timer
   # Same gate, same DEGRADE-rather-than-die idiom as the sweep above it: a
   # health probe is a reading, not the guardrail `ccd-cap-scopes.timer` is, so a
   # systemd that will not take this one timer must not turn an otherwise
   # converged install into a failed one.
-  [ "$INST_ROLE" = server ] || systemctl --user enable --now ccd-account-health.timer \
-    || echo "install: account-health: could not enable ccd-account-health.timer — run: systemctl --user enable --now ccd-account-health.timer" >&2
+  [ "$INST_ROLE" = server ] || _inst_enable_timer account-health ccd-account-health.timer
   # spec 2026-09-07 §C: gated exactly as the sweep above — a server box takes no
   # keepalive, because it holds no account wrappers to take a turn on. And it
   # DEGRADES rather than dies for the same reason: the keepalive keeps placement
   # well-informed, it is not the guardrail `ccd-cap-scopes.timer` is.
-  [ "$INST_ROLE" = server ] || systemctl --user enable --now ccd-telemetry-keepalive.timer \
-    || echo "install: keepalive: could not enable ccd-telemetry-keepalive.timer — run: systemctl --user enable --now ccd-telemetry-keepalive.timer" >&2
+  [ "$INST_ROLE" = server ] || _inst_enable_timer keepalive ccd-telemetry-keepalive.timer
   # C5: same gate, same DEGRADE-rather-than-die idiom — a server box has no
   # lanes to refresh, and a systemd that will not take this one timer must not
   # turn an otherwise converged install into a failed one.
-  [ "$INST_ROLE" = server ] || systemctl --user enable --now ccrc-models.timer \
-    || echo "install: models: could not enable ccrc-models.timer — run: systemctl --user enable --now ccrc-models.timer" >&2
+  [ "$INST_ROLE" = server ] || _inst_enable_timer models ccrc-models.timer
   # W4a Task 9: the watchdog's timer, on `_inst_units`' own gate for its
   # files (`!= fleet`), spelled `= fleet ||` so it reads in the shape of the
   # enables above while naming its own set. DEGRADES rather than dies, the
   # idiom of every timer here: an install that converged must not be failed
   # over the actor that bounds a FUTURE update — doctor's `services` check
   # names the stopped timer (`known`). No restart: a oneshot holds no code.
-  [ "$INST_ROLE" = fleet ] || systemctl --user enable --now ccrc-update-watchdog.timer \
-    || echo "install: update-watchdog: could not enable ccrc-update-watchdog.timer — run: systemctl --user enable --now ccrc-update-watchdog.timer" >&2
+  [ "$INST_ROLE" = fleet ] || _inst_enable_timer update-watchdog ccrc-update-watchdog.timer
+  # Plan 3a Task 6: the Codex lanes' usage timers, converged to exactly the
+  # roster's codex set, after daemon-reload read the template `_inst_units`
+  # placed. `_inst_codex_usage` says why each of its acts, and why none of
+  # them is fatal.
+  _inst_codex_usage
   # ── THE RESTART, AND WHY `enable --now` IS NOT ENOUGH ─────────────────
   # `deploy.sh:808-810` has this line between the enable and the verify, and
   # Task 8 shipped without it. Measured consequence on the SECOND run — the
@@ -21734,6 +22011,62 @@ cmd_uninstall() {
   fi
 }
 
+# ── ccrc's usage INSTANCES, on the way out (Plan 3a Task 7; spec §13) ─────
+# Every ENABLED instance of ccrc's own usage template, stopped and disabled
+# while its template is still on disk — `_uninst_units` calls this BEFORE its
+# `rm -f`, because a template removed under an enabled instance leaves systemd
+# holding a dangling enablement (ruling R-C9). Found through the manager's own
+# links (`_codex_usage_enabled_ids`), NEVER the roster: an uninstall must reach
+# an instance whose lane the roster no longer names, and must work over a
+# roster it cannot read. It never names another repository's `ccgpt-usage`
+# unit, template or instance — those are not ccrc's (R2). ITS OWN FUNCTION,
+# not a loop inside `_uninst_units`: install-census.test.ts reads every
+# `disable --now` operand there as a literal unit name, and an instance name is
+# built from an id at run time. A refusal is reported and the uninstall
+# continues, as every `disable --now` in `_uninst_units` is.
+_uninst_codex_usage() {
+  local ids id u n=0 failed=0
+  if ! ids="$(_codex_usage_enabled_ids)"; then
+    echo "uninstall: units: ccrc's enabled codex usage timers could not be listed (the ccrc codex: line above says why), so none was disabled — the template is removed below; finish by hand: list \$HOME/.config/systemd/user/timers.target.wants/ccrc-codex-usage@*.timer, and run systemctl --user disable --now on each" >&2
+    return 0
+  fi
+  for id in $ids; do
+    u="$(_codex_usage_timer "$id")"
+    if systemctl --user disable --now "$u"; then
+      n=$((n + 1))
+    else
+      failed=$((failed + 1))
+      echo "uninstall: units: disable --now $u failed (continuing — the template is removed below; read: systemctl --user status $u)" >&2
+    fi
+  done
+  [ $((n + failed)) -eq 0 ] || echo "uninstall: units: $n codex usage timer(s) stopped and disabled"
+}
+
+# Account removal's usage half (Plan 3a Task 7): ccrc's own
+# `ccrc-codex-usage@<id>.timer`, disabled if this box has it enabled — WHATEVER
+# the row's kind (D-3727). A lane
+# flipped back to external can still carry the instance its codex days enabled,
+# and after the removal nothing converges it until the next install, while it
+# rewrites the very ~/.cc-limits row the removal deletes. Found by the manager's
+# own link, never the roster. Another repository's `ccgpt-usage@<id>.timer` is
+# never touched or named in a systemctl call. Sets ACCT_USAGE_REMOVED (the link,
+# once the disable MEASURABLY took it) or ACCT_USAGE_STEP (the operator step
+# when it did not). It never refuses: by the time it runs the roster no longer
+# names the id, and a oneshot poller holds no state the next install cannot
+# converge. Every byte the manager says goes to stderr: `_acct_remove`'s
+# stdout is one JSON object.
+_acct_remove_usage() {   # <id>
+  ACCT_USAGE_REMOVED=''; ACCT_USAGE_STEP=''
+  local u; u="$(_codex_usage_timer "$1")"
+  _codex_usage_enabled "$u" || return 0
+  _codex_bus_defaults
+  if systemctl --user disable --now "$u" >&2 && ! _codex_usage_enabled "$u"; then
+    ACCT_USAGE_REMOVED="$(_codex_usage_wants)/$u"
+    return 0
+  fi
+  ACCT_USAGE_STEP="ccrc's usage timer $u is still enabled for the removed account $1, so it may go on rewriting \$HOME/.cc-limits/$1.json. Run: systemctl --user disable --now $u"
+}
+
 # Stop, disable, delete — in that order, because a unit file removed under a
 # still-enabled unit leaves systemd holding a dangling enablement symlink.
 # `disable --now` per unit that is actually installed here; a failure is
@@ -21797,12 +22130,17 @@ _uninst_units() {
       systemctl --user disable --now "$u" \
         || echo "uninstall: units: disable --now $u failed (continuing — the unit file is removed below; read: systemctl --user status $u)" >&2
     done
+    # Plan 3a Task 7: every ENABLED instance of ccrc's usage template, while
+    # the template is still on disk (spec §13; ruling R-C9). Its own function:
+    # `_uninst_codex_usage`'s header says why.
+    _uninst_codex_usage
   else
     echo "uninstall: units: systemctl is not on PATH — the unit files are removed but nothing was stopped or disabled"
   fi
-  # NOT `ccgpt-usage@.{service,timer}`: `_inst_units` places neither (its own
-  # comment says why), and on a live fleet box those names hold another
-  # repository's enabled unit pair. An uninstall removes only what ccrc placed.
+  # ccrc's OWN usage pair, `ccrc-codex-usage@.{service,timer}`, goes with the
+  # rest, its enabled instances disabled above first (Plan 3a). NEVER `ccgpt-usage@.{service,timer}` or an instance of it:
+  # on a live fleet box those names hold another repository's enabled units,
+  # and an uninstall removes only what ccrc placed.
   rm -f -- "$dir/${BOX_UNIT_NAMES[0]}" "$dir/${BOX_UNIT_NAMES[1]}" \
     "$dir/claude-session@.service" "$dir/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.timer" \
     "$dir/ccd-pool-sync.service" "$dir/ccd-pool-sync.timer" \
@@ -21814,6 +22152,7 @@ _uninst_units() {
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
     "$dir/ccrc-models.service" "$dir/ccrc-models.timer" \
     "$dir/ccrc-update-watchdog.service" "$dir/ccrc-update-watchdog.timer" \
+    "$dir/ccrc-codex-usage@.service" "$dir/ccrc-codex-usage@.timer" \
     || _ccrc_die "removing the unit files under $dir failed"
   rm -rf -- "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "removing the drop-in directories under $dir failed"

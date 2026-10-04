@@ -18,11 +18,13 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
-import { CODEX } from './fixtures/modelCases.js';
+import { CODEX, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
 import { randomBytes } from 'node:crypto';
 import {
-  assertManagerStandIns, freePort, MANAGER_STANDIN_MARK, plantCodexBins, plantFakeRuntime,
+  assertManagerStandIns, authDirOf, codexAuthDir, freePort, freePorts, MANAGER_STANDIN_MARK, plantCodexBins,
+  plantFakeRuntime, plantLaneAuth, probeArgv0, probeRuntime, probeRuntimeCalls, authAsks, setAuthStubMode,
 } from './codexLaneFixture.js';
+import { pythonOrSkip } from './ccgptHarness.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -118,6 +120,58 @@ function boxWithStubOp(stubSource: string, roster: unknown = ROSTER): string {
   return h;
 }
 
+/** One `exec.kind: "codex"` roster row, its authDir the fixture's. Hoisted out of
+ *  the codex-kind litellm describe by Plan 3a Task 1; that describe still uses it.
+ *  `extraExec` adds exec fields (`secretsFile`, which a codex row may carry). */
+const codexRow = (id: string, proxyPort: number, litellmPort: number,
+  extraExec: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id, label: id, configDirSuffix: `.claude-${id}`,
+  exec: { kind: 'codex', provider: 'openai', proxyPort, litellmPort, authDir: codexAuthDir(id), ...extraExec },
+  homeAble: false, telemetry: 'codex',
+});
+
+/** Plan 3a Task 1: `box()` with one codex row per id appended, each on two DISTINCT
+ *  kernel-chosen ports (never a constant: the real lane library probes them), then
+ *  `extra`. It replaces the box the file-level `beforeEach` made. */
+async function codexBox(ids: readonly string[], extra: readonly Record<string, unknown>[] = []): Promise<string> {
+  const ports = await freePorts(ids.length * 2);
+  fs.rmSync(home, { recursive: true, force: true });
+  return box({ ...ROSTER, accounts: [...ROSTER.accounts,
+    ...ids.map((id, i) => codexRow(id, ports[2 * i]!, ports[2 * i + 1]!)), ...extra] });
+}
+
+/** An EXTERNAL lane in the live Codex lanes' SHAPE (exec.kind "external",
+ *  provider openai, telemetry "codex"), under a fixture id. */
+const EXT_A_ROW = {
+  id: 'ext-a', label: 'ext-a', configDirSuffix: '.claude-ext-a',
+  exec: { kind: 'external', provider: 'openai' }, homeAble: false, telemetry: 'codex',
+} as const;
+
+/** ROSTER's external row that the external-arm and refresh cases were
+ *  written against, read by position rather than spelled, so no added line
+ *  names a roster id outside Plan 3a's fixture vocabulary (ruling R13). */
+const LEGACY_EXTERNAL_ID = ROSTER.accounts[2]!.id;
+
+/** ROSTER's other external row, the one that carries `exec.secretsFile`,
+ *  read by position for the same reason as `LEGACY_EXTERNAL_ID`. */
+const LEGACY_SECRETS_EXTERNAL_ID = ROSTER.accounts[5]!.id;
+
+/** Plan 3a Task 2 (operator ruling Z3, D-3706): `ccrc models <id> init codex`
+ *  no longer CREATES a codex registry on a row that is not exec.kind "codex",
+ *  and this file's external rows are the live Codex lanes' kind before their
+ *  flip. A case that needs such a row WITH a codex registry is the live
+ *  shape, a registry that predates the refusal, which the refusal leaves
+ *  untouched. So it is planted in `init codex`'s own bytes
+ *  (`SEEDED_REGISTRY_BYTES`, bound to the op in `models-op.test.ts`), 0600,
+ *  and the box's own `materialise` then writes what `init` writes after them. */
+function seedCodex(id: string): void {
+  fs.mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
+  fs.writeFileSync(join(home, '.ccrc', 'models', `${id}.classes.json`), SEEDED_REGISTRY_BYTES, { mode: 0o600 });
+  const m = spawnSync(process.execPath, [join(home, 'ccrc', 'deploy', 'models-op.mjs'), 'materialise',
+    '--file', join(home, '.ccrc', 'accounts.json'), '--id', id], { env: env(home), encoding: 'utf8' });
+  expect(m.status, `${m.stdout}${m.stderr}`).toBe(0);
+}
+
 /** Prints nothing and exits 0 — the pre-existing emptiness case. */
 const STUB_SILENT_OK = '#!/usr/bin/env node\nprocess.exit(0);\n';
 /** Prints a two-line, non-JSON stack to STDOUT and exits 7 — the exact shape
@@ -165,7 +219,11 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   // case, so neither is INHERITED. `extra` is applied after the deletion, so
   // a case that wants a bound still passes one.
   const inherited: NodeJS.ProcessEnv = { ...process.env };
-  for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete inherited[k];
+  // Plan 3a Task 2 (operator ruling Z1): nor is `CCGPT_CONFIG`, the other
+  // repository's override of the external arm's box-global path, which that
+  // arm still honours and a GPT-lane session can carry. Inherited, it would
+  // aim a case's render and its `pgrep -f` at a real config.
+  for (const k of ['CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S', 'CCGPT_CONFIG']) delete inherited[k];
   const e = ghContainedEnv(h, { ...inherited, HOME: h, ...extra }, { systemd: true });
   const poison = (name: string, says: string): void =>
     fs.writeFileSync(join(h, '.local', 'bin', name),
@@ -179,6 +237,14 @@ function env(h: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   poison('systemctl', 'ccrc tests must never query this box\'s real systemd');
   poison('systemd-run', 'ccrc tests must never start a real transient unit on this box\'s systemd');
   poison('launchctl', 'ccrc tests must never query this box\'s real launchd');
+  // Plan 3a Task 2 (operator ruling Z1): the external arm keeps its `pgrep -f`
+  // and its bare `ccgpt stop`, and on the fleet box a real `ccgpt stop` stops
+  // a live lane's units BY NAME, which the census cannot see. So a HOME that
+  // holds no stand-in of its own gets a poison. Only then: the functional
+  // stubs a describe writes before a run must survive that run's env().
+  for (const name of ['pgrep', 'ccgpt']) {
+    if (!fs.existsSync(join(h, '.local', 'bin', name))) poison(name, `ccrc tests must never reach a real ${name}`);
+  }
   assertManagerStandIns(e, h);
   return e;
 }
@@ -191,6 +257,32 @@ describe('the models harness containment wall', () => {
     expect(body).toContain('{ systemd: true }');
     expect(body).toContain('assertManagerStandIns(e, h);');
     expect(body.indexOf('assertManagerStandIns(e, h);')).toBeLessThan(body.indexOf('return e;'));
+  });
+
+  it('drops an inherited CCGPT_CONFIG, and poisons pgrep and ccgpt wherever a case planted no stand-in of its own (Plan 3a Task 2)', () => {
+    // `command -v` and file reads only: nothing here EXECUTES either name, so a
+    // mutation that deletes a poison reds this case without ever reaching a
+    // real `ccgpt` that a runner's PATH might carry.
+    const was = process.env['CCGPT_CONFIG'];
+    process.env['CCGPT_CONFIG'] = join(home, 'a-config-no-case-made.yaml');
+    try {
+      for (const name of ['pgrep', 'ccgpt']) fs.rmSync(join(home, '.local', 'bin', name), { force: true });
+      const e = env(home);
+      expect(e['CCGPT_CONFIG'] === undefined, 'an inherited CCGPT_CONFIG reached a case').toBe(true);
+      expect(env(home, { CCGPT_CONFIG: 'from-extra' })['CCGPT_CONFIG'], 'a case still passes one in extra').toBe('from-extra');
+      for (const name of ['pgrep', 'ccgpt']) {
+        const at = spawnSync('/bin/sh', ['-c', `command -v ${name}`], { env: e, encoding: 'utf8' }).stdout.trim();
+        expect(at, name).toBe(join(home, '.local', 'bin', name));
+        expect(fs.readFileSync(at, 'utf8'), name).toContain(MANAGER_STANDIN_MARK);
+      }
+      // A case's own stand-in, written before a run, survives that run's env().
+      const own = '#!/bin/sh\nexit 0\n';
+      fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'), own, { mode: 0o755 });
+      env(home);
+      expect(fs.readFileSync(join(home, '.local', 'bin', 'ccgpt'), 'utf8'), 'env() overwrote a case\'s own ccgpt').toBe(own);
+    } finally {
+      if (was === undefined) delete process.env['CCGPT_CONFIG']; else process.env['CCGPT_CONFIG'] = was;
+    }
   });
 });
 
@@ -521,7 +613,7 @@ describe('ccrc models <id> show', () => {
 
   it('summarises a probed, seeded lane: the four unclassified, the missing fable, the subagent', () => {
     writeCatalogue('gpt');
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     const r = run(['models', 'gpt', 'show']);
     expect(r.code).toBe(0);
     const b = oneObject(r);
@@ -533,7 +625,7 @@ describe('ccrc models <id> show', () => {
 
   it('names the render failure on a lane whose subagent is a legacy opus/fable (fix round 2A, N1)', () => {
     writeCatalogue('gpt');
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     // A registry already on disk with `subagent: opus`, the way a lane set
     // up before the 2026-09-09 narrowing would still read — `parseRegistry`
     // reads it faithfully; `show` must NAME why nothing can be materialised.
@@ -564,7 +656,7 @@ describe('ccrc models <id> show', () => {
 
   it('names a drifted settings key in the summary, with the remedy', () => {
     writeCatalogue('gpt');
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     const p = join(home, '.claude-gpt', 'settings.json');
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
     j.env.ANTHROPIC_MODEL = 'wrong';
@@ -576,7 +668,7 @@ describe('ccrc models <id> show', () => {
 
   it('an ORPHAN registry — no roster row for this id — answers orphan:true rather than refusing (§11)', () => {
     writeCatalogue('gpt');
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     fs.writeFileSync(join(home, '.ccrc', 'models', 'ghost.classes.json'),
       fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.classes.json'), 'utf8'));
     const r = run(['models', 'ghost', 'show']);
@@ -608,14 +700,48 @@ describe('ccrc models <id> show', () => {
 });
 
 describe('ccrc models <id> init', () => {
-  it('seeds the gpt registry and materialises, at exit 0', () => {
-    const r = run(['models', 'gpt', 'init', 'codex']);
+  // Plan 3a Task 2 (operator ruling Z3, D-3706): the verb CREATES a codex
+  // registry on an `exec.kind: "codex"` row only. Its seeding claim moves to
+  // one; the live Codex lanes' shape (`EXT_A_ROW`) is refused by name with
+  // nothing written, and keeps a registry it already has.
+  it('seeds a codex-kind lane\'s registry and materialises, at exit 0', () => {
+    fs.rmSync(home, { recursive: true, force: true });
+    home = box({ ...ROSTER, accounts: [...ROSTER.accounts, codexRow('codex-a', 45010, 45011)] });
+    const r = run(['models', 'codex-a', 'init', 'codex']);
     expect(r.code).toBe(0);
     expect(oneObject(r)['created']).toBe(true);
-    expect((registryOf('gpt')['classes'] as Record<string, unknown>)['opus']).toBe('gpt-5.6-sol');
-    expect(registryOf('gpt')['subagent']).toBe('sonnet');
-    const settings = JSON.parse(fs.readFileSync(join(home, '.claude-gpt', 'settings.json'), 'utf8'));
+    expect((registryOf('codex-a')['classes'] as Record<string, unknown>)['opus']).toBe(SEEDED.classes.opus);
+    expect(registryOf('codex-a')['subagent']).toBe('sonnet');
+    const settings = JSON.parse(fs.readFileSync(join(home, '.claude-codex-a', 'settings.json'), 'utf8'));
     expect(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
+  });
+
+  it('refuses to CREATE a codex registry on an external lane, by name, and writes nothing (Z3)', () => {
+    fs.rmSync(home, { recursive: true, force: true });
+    home = box({ ...ROSTER, accounts: [...ROSTER.accounts, EXT_A_ROW] });
+    writeCatalogue('ext-a');
+    const r = run(['models', 'ext-a', 'init', 'codex']);
+    expect(r.code).toBe(1);
+    const b = oneObject(r);
+    expect(b['error']).toBe('codex-registry-needs-codex-lane');
+    expect(String(b['detail'])).toContain('Flip the lane to "codex" first (Plan 3b)');
+    expect(r.stderr).toMatch(/^models-op: account "ext-a" is not a codex-kind lane/m);
+    for (const f of ['ext-a.classes.json', 'ext-a.classes.tsv', 'ext-a.effort.json']) {
+      expect(fs.existsSync(join(home, '.ccrc', 'models', f)), f).toBe(false);
+    }
+    expect(fs.existsSync(join(home, '.claude-ext-a'))).toBe(false);
+  });
+
+  it('an external lane whose codex registry predates this build keeps it: init answers created:false, byte for byte (Z3)', () => {
+    fs.rmSync(home, { recursive: true, force: true });
+    home = box({ ...ROSTER, accounts: [...ROSTER.accounts, EXT_A_ROW] });
+    seedCodex('ext-a');
+    const p = join(home, '.ccrc', 'models', 'ext-a.classes.json');
+    const before = fs.readFileSync(p, 'utf8');
+    const r = run(['models', 'ext-a', 'init', 'codex']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(oneObject(r)['created']).toBe(false);
+    expect(fs.readFileSync(p, 'utf8')).toBe(before);
   });
 
   it('needs a probe kind', () => {
@@ -832,7 +958,7 @@ describe('ccrc models refresh --all guards the lanes answer\'s SHAPE, not just i
 describe('ccrc models <id> set-class', () => {
   beforeEach(() => {
     writeCatalogue('gpt');
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
   });
 
   it('assigns a class and rewrites the lane\'s settings.json and TSV', () => {
@@ -875,7 +1001,7 @@ describe('ccrc models <id> set-class', () => {
 describe('ccrc models <id> set-subagent', () => {
   beforeEach(() => {
     writeCatalogue('gpt');
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
   });
 
   it('moves CLAUDE_CODE_SUBAGENT_MODEL, and nothing else in the block', () => {
@@ -925,7 +1051,7 @@ describe('ccrc models <id> set-subagent', () => {
 describe('ccrc models <id> set-effort', () => {
   beforeEach(() => {
     writeCatalogue('gpt');
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
   });
 
   it('sets a level and it reaches the effort file the shim reads', () => {
@@ -970,7 +1096,7 @@ describe('ccrc models <id> discovery', () => {
 
   it('add and rm on a codex lane, with no whitelist question asked', () => {
     writeCatalogue('gpt');
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     const r = run(['models', 'gpt', 'discovery', 'add', 'gpt-5.5']);
     expect(r.code).toBe(0);
     // `deploy/models-op.mjs`'s scope conversion (Task 6, ruling 2026-09-08):
@@ -1185,7 +1311,7 @@ describe('ccrc models <id> discovery', () => {
     fs.writeFileSync(join(home, '.local', 'bin', 'litellm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     fs.writeFileSync(join(home, '.local', 'bin', 'python'),
       '#!/bin/sh\nprintf \'%s\\n\' "$CHATGPT_TOKEN_DIR" >> "$HOME/python-poison"\nexit 1\n', { mode: 0o755 });
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     const r = run(['models', 'refresh', 'gpt'], { CHATGPT_TOKEN_DIR: poisonedDir });
     expect(r.code).toBe(1);
     expect(fs.existsSync(join(home, 'python-poison')),
@@ -1216,7 +1342,7 @@ describe('ccrc models <id> discovery', () => {
     fs.writeFileSync(join(home, '.local', 'bin', 'litellm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     fs.writeFileSync(join(home, '.local', 'bin', 'python'),
       '#!/bin/sh\nprintf \'%s\\n\' "$CHATGPT_TOKEN_DIR" >> "$HOME/python-poison"\nexit 1\n', { mode: 0o755 });
-    run(['models', 'gpt2', 'init', 'codex']);
+    seedCodex(LEGACY_SECRETS_EXTERNAL_ID);
     const r = run(['models', 'refresh', 'gpt2'], { CHATGPT_TOKEN_DIR: poisonedDir });
     expect(r.code).toBe(1);
     expect(fs.existsSync(join(home, 'python-poison')),
@@ -1251,10 +1377,175 @@ describe('ccrc models <id> discovery', () => {
   });
 });
 
+// ── Plan 3a Task 1 (spec §9.1, D-3706): each codex lane's probe reads its OWN
+// OAuth through its OWN runtime. `_models_run_probe` exports the inputs and the
+// codex-lane marker for an exec.kind "codex" row, after the scrub and after
+// any secrets file. Every other row keeps today's probe environment exactly
+// (operator ruling Z1): the two CHATGPT_TOKEN_DIR scrub cases in the describe
+// above still hold it, unchanged. CONTAINMENT FIRST: every case poisons a PATH
+// `litellm` and the `python` beside it, so no old or mutated probe can reach
+// the runner's own LiteLLM.
+describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN authDir through its OWN runtime, with no default; every other row keeps today\'s probe environment (Plan 3a Task 1)', () => {
+  const poisonedDir = (): string => join(home, 'someone-elses-token-dir');
+  const poisonRan = (): boolean => fs.existsSync(join(home, 'python-poison'));
+  const poisonPathLitellm = (): string => {
+    const bin = join(home, '.local', 'bin');
+    fs.writeFileSync(join(bin, 'litellm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const p = join(bin, 'python');
+    fs.writeFileSync(p, '#!/bin/sh\nprintf \'%s\\n\' "$0" >> "$HOME/python-poison"\nexit 1\n', { mode: 0o755 });
+    return p;
+  };
+  const rowsOf = (r: Result): Record<string, unknown>[] => oneObject(r)['refreshed'] as Record<string, unknown>[];
+
+  it('two codex lanes: each probe is handed its own authDir and the resolved runtime — never the other lane\'s, an ambient one, or a secrets file\'s', async () => {
+    const [pa, la, pb, lb] = await freePorts(4);
+    fs.rmSync(home, { recursive: true, force: true });
+    home = box({ ...ROSTER, accounts: [...ROSTER.accounts,
+      codexRow('codex-a', pa!, la!), codexRow('codex-b', pb!, lb!, { secretsFile: '.secrets/codex-b.env' })] });
+    const poison = poisonPathLitellm();
+    fs.mkdirSync(poisonedDir(), { recursive: true });
+    fs.writeFileSync(join(poisonedDir(), 'auth.json'), JSON.stringify({ account_id: 'leaked-account-id' }));
+    // codex-b's secrets file (legal on a codex row) tries to hand its probe
+    // another directory and another interpreter. The codex inputs are exported
+    // AFTER it is sourced, so neither may win.
+    fs.mkdirSync(join(home, '.secrets'), { recursive: true });
+    fs.writeFileSync(join(home, '.secrets', 'codex-b.env'),
+      `export CHATGPT_TOKEN_DIR=${poisonedDir()}\nexport CCRC_CODEX_PYTHON=${poison}\n`);
+    plantCodexBins(home);
+    const pr = probeRuntime(home, CODEX_RAW);
+    const rt = plantFakeRuntime(home, { python: pr.python });
+    for (const id of ['codex-a', 'codex-b']) {
+      plantLaneAuth(home, id);
+      expect(run(['models', id, 'init', 'codex']).code).toBe(0);
+    }
+    const r = run(['models', 'refresh', '--all'], { CHATGPT_TOKEN_DIR: poisonedDir(), CCRC_CODEX_PYTHON: poison });
+    expect(rowsOf(r).map((x) => [x['id'], x['ok']])).toEqual([['codex-a', true], ['codex-b', true]]);
+    expect(r.code, 'refresh --all').toBe(0);
+    const calls = probeRuntimeCalls(pr.rec);
+    expect(calls.map((c) => c.env['CHATGPT_TOKEN_DIR']).sort())
+      .toEqual([authDirOf(home, 'codex-a'), authDirOf(home, 'codex-b')]);
+    expect(calls.map((c) => c.requests[0]?.headers['chatgpt-account-id']).sort())
+      .toEqual(['acct-codex-a', 'acct-codex-b']);
+    expect(probeArgv0(pr.rec)).toEqual([rt.python, rt.python]);
+    for (const id of ['codex-a', 'codex-b']) {
+      const cat = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', `${id}.json`), 'utf8')) as { models: unknown[] };
+      expect(cat.models, id).toHaveLength(9);
+    }
+    expect(poisonRan(), 'an interpreter the runtime did not resolve ran').toBe(false);
+    expect(r.stdout + r.stderr).not.toContain(poisonedDir());
+    expect(r.stdout + r.stderr).not.toContain('leaked-account-id');
+  });
+
+  it('a codex lane with no runtime refuses runtime-absent, naming ccrc install — an ambient interpreter and the PATH litellm never run', async () => {
+    home = await codexBox(['codex-a']);
+    const poison = poisonPathLitellm();
+    plantCodexBins(home);                      // ccgpt-runtime is placed; no generation is built
+    plantLaneAuth(home, 'codex-a');
+    expect(run(['models', 'codex-a', 'init', 'codex']).code).toBe(0);
+    const r = run(['models', 'refresh', 'codex-a'], { CCRC_CODEX_PYTHON: poison });
+    expect(r.code).toBe(1);
+    const [row] = rowsOf(r);
+    expect(row).toMatchObject({ id: 'codex-a', probe: 'codex', ok: false });
+    // Booleans: before this task the reason names the probe's default
+    // directory, a real lane's path, which a failing `toMatch` would print.
+    expect(/runtime-absent: run ccrc install/.test(String(row!['reason'])), 'the runtime-absent refusal').toBe(true);
+    expect(poisonRan(), 'an inherited interpreter ran').toBe(false);
+  });
+
+  it('a codex lane whose authDir holds no auth.json is not-logged-in, naming ccrc codex login, and no interpreter runs', async () => {
+    home = await codexBox(['codex-a']);
+    poisonPathLitellm();
+    plantCodexBins(home);
+    const pr = probeRuntime(home, CODEX_RAW);
+    plantFakeRuntime(home, { python: pr.python });
+    expect(run(['models', 'codex-a', 'init', 'codex']).code).toBe(0);
+    const r = run(['models', 'refresh', 'codex-a']);
+    expect(r.code).toBe(1);
+    expect(/not-logged-in: run ccrc codex login codex-a/.test(String(rowsOf(r)[0]!['reason'])), 'the not-logged-in refusal').toBe(true);
+    expect(probeArgv0(pr.rec)).toEqual([]);
+    expect(poisonRan()).toBe(false);
+  });
+
+  it('_models_run_probe hands a codex row its own authDir, runtime and marker; every other row gets neither marker nor runtime, and today\'s CHATGPT_TOKEN_DIR', async () => {
+    home = await codexBox(['codex-a']);
+    plantCodexBins(home);
+    const rt = plantFakeRuntime(home);
+    fs.mkdirSync(join(home, '.secrets'), { recursive: true });
+    fs.writeFileSync(join(home, '.secrets', 'router.env'), 'export ANTHROPIC_AUTH_TOKEN=lane-token\n'
+      + `export CHATGPT_TOKEN_DIR=${join(home, 'from-a-secrets-file')}\nexport CCRC_CODEX_PYTHON=${join(home, 'from-a-secrets-file-py')}\n`
+      + 'export CCRC_PROBE_LANE_KIND=codex\n');
+    // The ambient marker is a value no row would get, so a codex row's own
+    // export is what the first expectation reads, never an inherited one.
+    const ambient = { CHATGPT_TOKEN_DIR: join(home, 'ambient-dir'), CCRC_CODEX_PYTHON: join(home, 'ambient-py'), CCRC_PROBE_LANE_KIND: 'ambient' };
+    const seen = (id: string): Record<string, string> => {
+      const r = sourced(`_models_run_probe ${id} env`, [], ambient);
+      expect(r.code, r.stderr).toBe(0);
+      return Object.fromEntries(r.stdout.split('\n')
+        .filter((l) => /^(CHATGPT_TOKEN_DIR|CCRC_CODEX_PYTHON|CCRC_PROBE_LANE_KIND)=/.test(l))
+        .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+    };
+    expect(seen('codex-a')).toEqual({
+      CHATGPT_TOKEN_DIR: authDirOf(home, 'codex-a'), CCRC_CODEX_PYTHON: rt.python, CCRC_PROBE_LANE_KIND: 'codex' });
+    // Z1: what the probe got before this task, and nothing more. The scrub
+    // keeps an ambient CHATGPT_TOKEN_DIR out; a secrets file's value still
+    // reaches the probe; the marker and the interpreter never do.
+    expect(seen('router'), 'a row with a secrets file').toEqual({ CHATGPT_TOKEN_DIR: join(home, 'from-a-secrets-file') });
+    expect(seen('router2'), 'a row with none').toEqual({});
+  });
+
+  // Fix round 1: a codex row `_codex_row` refuses is refused HERE, with that
+  // reader's own rc and sentence, and the probe never runs. Without the
+  // `|| return $?`, CX_AUTH is empty and the probe is handed `$HOME/`.
+  it('a codex row that does not validate is refused with _codex_row\'s own rc and sentence, and its probe is never handed a directory', async () => {
+    const [p, l] = await freePorts(2);
+    fs.rmSync(home, { recursive: true, force: true });
+    // An absolute exec.authDir: `_codex_row` refuses it (`shared/roster.ts`'s parseAuthDir, rule for rule).
+    home = box({ ...ROSTER, accounts: [...ROSTER.accounts,
+      codexRow('codex-a', p!, l!, { authDir: `/${codexAuthDir('codex-a')}` })] });
+    const r = sourced('_models_run_probe codex-a env', []);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc codex: roster-invalid: account 'codex-a''s codex row does not validate \(exec\.authDir\)/m);
+    expect(r.stdout.split('\n').filter((x) => /^(CHATGPT_TOKEN_DIR|CCRC_PROBE_LANE_KIND|CCRC_CODEX_PYTHON)=/.test(x)),
+      'the probe ran with codex inputs').toEqual([]);
+  });
+
+  // Fix round 1: on a dead refresh token, litellm LOGS its own warning (the
+  // token endpoint's answer in it) before the guard refuses. The refresh row's
+  // reason and the stale catalogue's lastError both keep the remedy, and carry
+  // none of that text.
+  it('a dead refresh token reaches the refresh row and the stale catalogue as login-required, remedy intact, with none of litellm\'s own log text', async () => {
+    home = await codexBox(['codex-a']);
+    poisonPathLitellm();
+    plantCodexBins(home);
+    const pr = probeRuntime(home, CODEX_RAW);
+    plantFakeRuntime(home, { python: pr.python });
+    plantLaneAuth(home, 'codex-a');
+    expect(run(['models', 'codex-a', 'init', 'codex']).code).toBe(0);
+    writeCatalogue('codex-a');                 // a previous catalogue, so the stale path records lastError
+    setAuthStubMode(pr.rec, 'refresh-fails');
+    const r = run(['models', 'refresh', 'codex-a']);
+    expect(r.code).toBe(1);
+    const reason = String(rowsOf(r)[0]!['reason']);
+    const cat = JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', 'codex-a.json'), 'utf8')) as
+      { stale?: unknown; lastError?: unknown };
+    expect(cat.stale).toBe(true);
+    const lastError = String(cat.lastError);
+    expect(reason).toContain('login-required: run ccrc codex login codex-a');
+    expect(lastError).toContain('login-required: run ccrc codex login codex-a');
+    for (const text of ['ChatGPT refresh token failed', 'stand-in-token-endpoint-body']) {
+      expect(reason.includes(text), `the refresh row carries "${text}"`).toBe(false);
+      expect(lastError.includes(text), `the stale catalogue carries "${text}"`).toBe(false);
+      expect((r.stdout + r.stderr).includes(text), `the verb's output carries "${text}"`).toBe(false);
+    }
+    // The control: the stand-in did take its logging path.
+    expect(authAsks(pr.rec)).toEqual(['get_access_token']);
+  });
+});
+
 describe('ccrc models <id> rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
   beforeEach(() => {
     writeCatalogue('gpt');
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
   });
 
   it('removes all four files and clears exactly the eight env keys, leaving another env key', () => {
@@ -1323,7 +1614,7 @@ describe('ccrc models refresh', () => {
   });
 
   it('refreshes one lane and writes its catalogue', () => {
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
     expect(r.code).toBe(0);
     const b = oneObject(r);
@@ -1366,7 +1657,7 @@ describe('ccrc models refresh', () => {
     // with the mutation below (deleting the materialise call), the inode is
     // IDENTICAL before and after, because nothing touches the file during
     // refresh at all.
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     const effortPath = join(home, '.ccrc', 'models', 'gpt.effort.json');
     const before = fs.statSync(effortPath).ino;
     run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
@@ -1381,7 +1672,7 @@ describe('ccrc models refresh', () => {
   });
 
   it('re-materialises the TSV too, so a RETIRED class is visible to ccd', () => {
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     run(['models', 'gpt', 'set-class', 'sonnet', 'gpt-5.5-mini']);
     run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
     expect(fs.readFileSync(join(home, '.ccrc', 'models', 'gpt.classes.tsv'), 'utf8'))
@@ -1393,7 +1684,7 @@ describe('ccrc models refresh', () => {
     // without one has no probe to run — asking would be a question with no
     // answer. `router` is initialised too, so this run is a MIXED result:
     // its normaliser refuses a Codex body.
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     run(['models', 'router', 'init', 'openrouter']);
     const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
     const refreshed = oneObject(r)['refreshed'] as { id: string }[];
@@ -1409,7 +1700,7 @@ describe('ccrc models refresh', () => {
   });
 
   it('--all exits 1 when any lane failed, and still reports the ones that worked', () => {
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     run(['models', 'router', 'init', 'openrouter']);
     const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
     expect(r.code).toBe(1);
@@ -1428,7 +1719,7 @@ describe('ccrc models refresh', () => {
   // file), the same failure shape a permissions or disk-full problem would
   // produce on a real box.
   it('a lane whose re-materialise fails is a FAILED row, and litellm never runs (C7)', () => {
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     const tsvPath = join(home, '.ccrc', 'models', 'gpt.classes.tsv');
     fs.rmSync(tsvPath, { force: true });
     fs.mkdirSync(tsvPath);
@@ -1511,7 +1802,7 @@ describe('ccrc models refresh', () => {
   });
 
   it('a single-lane failure exits 1 and leaves the previous catalogue stale, not deleted', () => {
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
     const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: join(home, 'nope') });
     expect(r.code).toBe(1);
@@ -1551,7 +1842,7 @@ describe('ccrc models refresh', () => {
     // `init` itself refuses on an already-broken catalogue file (the general
     // op path's early `cat.err` gate), so the registry has to be seeded
     // first, with no catalogue file yet, and the catalogue corrupted after.
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     fs.writeFileSync(join(home, '.ccrc', 'models', 'gpt.json'), '{"probe":"gemini"}');
     const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
     expect(r.code).toBe(0);
@@ -1611,7 +1902,7 @@ describe('ccrc models refresh', () => {
     fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'),
       '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/ccgpt-poison"\n'
       + 'echo "ccrc tests must never reach a real ccgpt" >&2\nexit 97\n', { mode: 0o755 });
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     const r = run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
     expect(r.code).toBe(0);
     expect(poisonLog('ccgpt')).toEqual([]);
@@ -1640,7 +1931,7 @@ describe('ccrc models litellm', () => {
 
   beforeEach(() => {
     pgrep(false); ccgpt();
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
     run(['models', 'refresh', 'gpt'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
     fs.rmSync(join(home, 'ccgpt-calls'), { force: true });
     fs.rmSync(configPath(), { force: true });
@@ -1781,7 +2072,7 @@ describe('ccrc models litellm', () => {
   // own row.
   it('the external arm is untouched: pgrep on the box-global path, a bare `ccgpt stop`, and the lane library never asked', () => {
     writeCatalogue('router2');
-    expect(run(['models', 'router2', 'init', 'codex']).code).toBe(0);
+    seedCodex('router2');
     fs.rmSync(join(home, 'pgrep-calls'), { force: true });
     pgrep(true);
     const r = sourced('cmd_models litellm router2', ['lock', 'ours', 'stop', 'start']);
@@ -1797,7 +2088,7 @@ describe('ccrc models litellm', () => {
 
   it('the external arm still honours CCGPT_CONFIG — the other repository\'s override of that one path', () => {
     writeCatalogue('router2');
-    expect(run(['models', 'router2', 'init', 'codex']).code).toBe(0);
+    seedCodex('router2');
     const elsewhere = join(home, 'elsewhere', 'litellm-config.yaml');
     fs.rmSync(join(home, 'pgrep-calls'), { force: true });
     const r = run(['models', 'litellm', 'router2'], { CCGPT_CONFIG: elsewhere });
@@ -1806,6 +2097,111 @@ describe('ccrc models litellm', () => {
     expect(fs.existsSync(elsewhere)).toBe(true);
     expect(fs.existsSync(configPath())).toBe(false);
     expect(calls('pgrep')).toEqual([`-f litellm .*${elsewhere}`]);
+  });
+
+  // Plan 3a Task 2 (operator ruling Z4, D-3753).
+  // Once ANY roster row is codex-kind (lane A, after its flip), this arm's
+  // bare `ccgpt stop` could stop lane A's own tiers, which carry the unit
+  // names that stop uses. So for a still-external lane B with a registry, the
+  // arm refuses the stop, through its own restart-failed path, and writes
+  // nothing. Lane B is `ext-a` in the live Codex lanes' shape, lane A
+  // `codex-a`. Pure-parse ports: nothing in this describe connects to one.
+  describe('once a codex-kind lane exists, the bare stop is never run (Z4)', () => {
+    const flip = (rows: Record<string, unknown>[] = [codexRow('codex-a', 45010, 45011)]): void => {
+      const p = join(home, '.ccrc', 'accounts.json');
+      const roster = JSON.parse(fs.readFileSync(p, 'utf8')) as { accounts: unknown[] };
+      roster.accounts.push(...rows);
+      fs.writeFileSync(p, `${JSON.stringify(roster, null, 2)}\n`);
+    };
+
+    beforeEach(() => {
+      fs.rmSync(home, { recursive: true, force: true });
+      home = box({ ...ROSTER, accounts: [...ROSTER.accounts, EXT_A_ROW] });
+      pgrep(false); ccgpt();
+      writeCatalogue('ext-a');
+      seedCodex('ext-a');
+    });
+
+    it('on today\'s shape (no codex-kind row) the bare stop still runs, byte for byte (Z1)', () => {
+      pgrep(true);
+      const r = run(['models', 'litellm', 'ext-a']);
+      expect(r.code, r.stderr).toBe(0);
+      expect(oneObject(r)['restarted']).toBe(true);
+      expect(calls('ccgpt')).toEqual(['stop']);
+      expect(fs.existsSync(configPath())).toBe(true);
+    });
+
+    it('after a flip, a running proxy on a changed render is REFUSED restart-failed, naming why: nothing stopped, nothing written', () => {
+      flip(); pgrep(true);
+      const r = run(['models', 'litellm', 'ext-a']);
+      expect(r.code).toBe(1);
+      const b = oneObject(r);
+      expect(b['error']).toBe('restart-failed');
+      expect(String(b['detail'])).toContain('the roster names codex-kind lane(s) codex-a');
+      expect(String(b['detail'])).toContain('Nothing was written and nothing was stopped.');
+      expect(String(b['detail'])).not.toContain("Run 'ccgpt stop' by hand");
+      expect(r.stderr).toMatch(/^ccrc: the LiteLLM proxy is running on the PREVIOUS config, and ccrc will not stop it/m);
+      expect(calls('ccgpt')).toEqual([]);
+      expect(fs.existsSync(configPath())).toBe(false);
+      expect(fs.existsSync(`${configPath()}.prev`)).toBe(false);
+    });
+
+    // Plan 3a Task 2, fix round 1: every other case here flips ONE row, so
+    // the helper's join of several ids was pinned by nothing. The sentence
+    // names EVERY codex-kind lane, in roster order, joined by ", ", and the
+    // list ends where the sentence goes on.
+    it('after two flips, the refusal names BOTH codex-kind lanes, in roster order, joined by ", "', () => {
+      flip([codexRow('codex-a', 45010, 45011), codexRow('codex-b', 45020, 45021)]); pgrep(true);
+      const r = run(['models', 'litellm', 'ext-a']);
+      expect(r.code).toBe(1);
+      const b = oneObject(r);
+      expect(b['error']).toBe('restart-failed');
+      expect(String(b['detail'])).toContain('the roster names codex-kind lane(s) codex-a, codex-b, and the only stop');
+      expect(calls('ccgpt')).toEqual([]);
+      expect(fs.existsSync(configPath())).toBe(false);
+    });
+
+    it('after a flip, with nothing running, the render lands exactly as before: the guard binds the stop alone', () => {
+      flip();
+      const r = run(['models', 'litellm', 'ext-a']);
+      expect(r.code, r.stderr).toBe(0);
+      expect(oneObject(r)['changed']).toBe(true);
+      expect(oneObject(r)['restarted']).toBe(false);
+      expect(fs.existsSync(configPath())).toBe(true);
+      expect(calls('ccgpt')).toEqual([]);
+    });
+
+    it('after a flip, an unchanged render asks nothing, even with a proxy running', () => {
+      expect(run(['models', 'litellm', 'ext-a']).code).toBe(0);
+      flip(); pgrep(true);
+      const r = run(['models', 'litellm', 'ext-a']);
+      expect(r.code, r.stderr).toBe(0);
+      expect(oneObject(r)['changed']).toBe(false);
+      expect(calls('ccgpt')).toEqual([]);
+    });
+
+    it('a roster whose codex lanes cannot be told refuses the stop too: undecidable is never "no codex lane"', () => {
+      pgrep(true);
+      const r = sourced('_codex_lanes() { return 1; }; cmd_models litellm ext-a', []);
+      expect(r.code).toBe(1);
+      const b = oneObject(r);
+      expect(b['error']).toBe('restart-failed');
+      expect(String(b['detail'])).toContain('which roster lanes are codex-kind cannot be read (the lane library answered rc 1)');
+      expect(calls('ccgpt')).toEqual([]);
+      expect(fs.existsSync(configPath())).toBe(false);
+    });
+
+    it('the hourly refresh carries the refusal as a FAILED row, exits 1, and still stops nothing', () => {
+      flip(); pgrep(true);
+      const r = run(['models', 'refresh', '--all'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+      expect(r.code).toBe(1);
+      const rows = oneObject(r)['refreshed'] as { id: string; ok: boolean; reason?: string }[];
+      const lane = rows.find((x) => x.id === 'ext-a');
+      expect(lane?.ok).toBe(false);
+      expect(String(lane?.reason)).toContain('the roster names codex-kind lane(s) codex-a');
+      expect(calls('ccgpt')).toEqual([]);
+      expect(fs.existsSync(configPath())).toBe(false);
+    });
   });
 
   it('needs an id', () => {
@@ -1818,7 +2214,7 @@ describe('refresh runs the litellm step for a codex lane (§5)', () => {
   beforeEach(() => {
     fs.writeFileSync(join(home, '.local', 'bin', 'pgrep'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
     fs.writeFileSync(join(home, '.local', 'bin', 'ccgpt'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    run(['models', 'gpt', 'init', 'codex']);
+    seedCodex(LEGACY_EXTERNAL_ID);
   });
 
   it('a first refresh of the gpt lane renders the config', () => {
@@ -1914,11 +2310,6 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
   const lanePath = (id: string): string => join(laneDir(id), 'litellm.yaml');
   const boxGlobal = (): string => join(home, '.handoff', 'litellm-config.yaml');
   const OLD = 'model_list: []\n';
-  const codexRow = (id: string, proxyPort: number, litellmPort: number): Record<string, unknown> => ({
-    id, label: id, configDirSuffix: `.claude-${id}`,
-    exec: { kind: 'codex', provider: 'openai', proxyPort, litellmPort, authDir: `.local/share/ccrc/codex/${id}` },
-    homeAble: false, telemetry: 'codex',
-  });
   /** Dynamic and DISTINCT (global constraint: never a hard-coded port). No
    *  case binds one — every tier is faked or idle — but the roster refuses a
    *  shared port, and `freePort()` can hand the same one out twice. */
@@ -2620,7 +3011,7 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
       // non-codex id here is `router2`, the tree's existing external row —
       // never a live lane id.
       writeCatalogue('router2');
-      expect(run(['models', 'router2', 'init', 'codex']).code).toBe(0);
+      seedCodex('router2');
       sourced('_codex_litellm_ensure router2', ['lock', 'ours', 'stop', 'start']);
       expect(fs.existsSync(boxGlobal())).toBe(false);
       for (const name of ['pgrep', 'ccgpt']) expect(poisonLog(name), name).toEqual([]);
