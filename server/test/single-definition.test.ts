@@ -4285,3 +4285,113 @@ describe('worker stall watch wave 5: the largest epoch a Date holds is spelled o
     expect(ALL.filter((f) => SPELLING.test(stallCode(f))).map(rel).sort(), 'a second spelling').toEqual(['server/src/coord/stall.ts']);
   });
 });
+
+// Docs reader W1a (design 2026-10-01: section 2 (a), section 2 (f), section 6.1, mutation row 48's TypeScript
+// half): every docs cap and every value grammar is declared ONCE, in L0 `shared/docs.ts`. The python parity copies
+// in `ccd/ccd` sit outside ROOTS, so `docs-parity.test.ts` binds those; this pins the one TypeScript copy. APPENDED
+// after the file's last line: `session-hook.test.ts`'s citation audit cites this file by line, so nothing above
+// may move.
+describe('docs L0 single definitions (docs reader W1a, row 48)', () => {
+  const DOCS_TS = path.join(ccrcRoot, 'shared', 'docs.ts');
+  /** A declaration of `name`, exported or not; an import or a re-export declares nothing. */
+  const DEF = (name: string): RegExp =>
+    new RegExp(String.raw`^\s*(?:export\s+)?(?:const|let|var)\s+` + name + String.raw`\b`, 'm');
+  const text = new Map<string, string>();
+  const src = (f: string): string => {
+    const hit = text.get(f);
+    if (hit !== undefined) return hit;
+    const t = readFileSync(f, 'utf8');
+    text.set(f, t);
+    return t;
+  };
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(src(f))).map(rel);
+
+  it('CONTROL: DEF sees a declaration and an un-exported copy, and not an import, a re-export or a longer name', () => {
+    expect(DEF('DOCS_MAX_ENTRIES').test('export const DOCS_MAX_ENTRIES = 5000;')).toBe(true);
+    expect(DEF('DOCS_MAX_ENTRIES').test('  const DOCS_MAX_ENTRIES = 5000;'), 'an un-exported copy is still a copy').toBe(true);
+    expect(DEF('DOCS_MAX_ENTRIES').test("import { DOCS_MAX_ENTRIES } from '../../shared/docs.js';")).toBe(false);
+    expect(DEF('DOCS_MAX_ENTRIES').test('export { DOCS_MAX_ENTRIES };'), 'a re-export declares nothing').toBe(false);
+    expect(DEF('DOCS_MAX_ENTRIES').test('export const DOCS_MAX_ENTRIES_SEEN = 1;'), 'another name').toBe(false);
+  });
+
+  // Each cap holds its OWN literal. DOCS_MAX_DOC_BYTES and DOCS_MAX_IMAGE_BYTES are both 2 MiB by two separate
+  // rulings, so "one definition" must mean an own-value literal, never an alias of the neighbour that happens to
+  // hold the same integer (HOLD_ROUTE_REASON_MAX_BYTES's argument, above). The grammar bounds are held to the same
+  // rule.
+  describe('docs caps are declared once, in shared/docs.ts, each its own literal', () => {
+    const CAPS = [
+      'DOCS_MAX_FILE_BYTES', 'DOCS_MAX_DOC_BYTES', 'DOCS_MAX_IMAGE_BYTES', 'DOCS_ENVELOPE_RESERVE',
+      'DOCS_MAX_ANSWER_BYTES', 'DOCS_MAX_LISTING_WIRE_BYTES', 'DOCS_MAX_ENTRIES', 'DOCS_DRAFT_HASH_BUDGET',
+      'DOCS_MAX_DRAFTS', 'DOCS_MAX_IMAGES_PER_PAGE', 'DOCS_FETCH_MIN_INTERVAL_MS', 'DOCS_STALE_MS',
+      'DOCS_RETRY_FLOOR_MS',
+      'DOCS_REF_MAX_CHARS', 'DOCS_PATH_MAX_BYTES', 'DOCS_PATH_MAX_COMPONENT_BYTES', 'DOCS_PATH_MAX_DEPTH',
+    ];
+    const OWN = (name: string): RegExp => new RegExp('^export const ' + name + String.raw`\s*=\s*\d+\s*;`, 'm');
+
+    it('CONTROL: OWN accepts an integer literal and refuses an alias and an expression', () => {
+      expect(OWN('DOCS_MAX_IMAGE_BYTES').test('export const DOCS_MAX_IMAGE_BYTES = 2097152;')).toBe(true);
+      expect(OWN('DOCS_MAX_IMAGE_BYTES').test('export const DOCS_MAX_IMAGE_BYTES = DOCS_MAX_DOC_BYTES;'), 'an alias').toBe(false);
+      expect(OWN('DOCS_MAX_IMAGE_BYTES').test('export const DOCS_MAX_IMAGE_BYTES = 2 * 1024 * 1024;'), 'an expression').toBe(false);
+    });
+
+    it.each(CAPS)('%s is declared in shared/docs.ts and nowhere else across the four roots', (name) => {
+      expect(holders(DEF(name))).toEqual(['shared/docs.ts']);
+    });
+
+    it.each(CAPS)('%s holds its own integer literal', (name) => {
+      expect(OWN(name).test(src(DOCS_TS)), `${name} must read \`export const ${name} = <digits>;\``).toBe(true);
+    });
+  });
+
+  // Each grammar is a pattern body. DEF pins its declaration. LITERAL pins the body text itself, by a
+  // backslash-free fingerprint, so a copy written as a regex literal, a raw template or an escaped string is seen
+  // alike. The commit and fingerprint bodies are plain hex runs that unrelated code already spells (measured at
+  // planning: `[0-9a-f]{40}` in four server/src files, `[0-9a-f]{64}` in one), so those two are pinned by DEF alone.
+  // The section body is derived by `join`, so its spelled-out form belongs in no file at all. KNOWN WIDTH: a body
+  // rebuilt from fragments evades LITERAL; `docs-parity.test.ts` still compares the helper's copy with the value.
+  describe('docs grammar bodies are declared once, in L0', () => {
+    const BODIES = [
+      'DOC_SECTIONS', 'DOCS_PROJECT_RE_BODY', 'DOCS_BARE_REF_RE_BODY', 'DOCS_QUALIFIED_PREFIX_RE_BODY',
+      'DOCS_QUALIFIED_REF_RE_BODY', 'DOCS_SHA_RE_BODY', 'DOCS_FINGERPRINT_RE_BODY', 'DOCS_MAX_BYTES_RE_BODY',
+      'DOCS_SECTION_RE_BODY', 'DOCS_REL_PATH_RE_BODY', 'DOCS_PATH_EXCLUDED_CATEGORIES', 'DOCS_PATH_EXCLUDED_RANGES',
+    ];
+    const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    /** [what, fingerprint, the files that may hold it, a planted copy it must see, a near miss it must not]. */
+    const LITERALS: readonly (readonly [string, RegExp, readonly string[], string, string])[] = [
+      ['project', new RegExp(esc('[A-Za-z0-9_][A-Za-z0-9._-]{0,99}')), ['shared/docs.ts'],
+        'const P = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;', 'const P = /^[A-Za-z0-9._-]+$/;'],
+      ['bare ref', new RegExp(esc('(?!HEAD$)(?!refs/)')), ['shared/docs.ts'],
+        "const R = '^(?!HEAD$)(?!refs/)(?!.*\\\\.\\\\.)';", "if (s === 'HEAD') return false;"],
+      ['qualified prefix', new RegExp(esc('(?:refs/heads/|refs/remotes/origin/)')), ['shared/docs.ts'],
+        "new RegExp('^(?:refs/heads/|refs/remotes/origin/)')", "s.startsWith('refs/heads/')"],
+      ['max-bytes', new RegExp(esc('[1-9][0-9]{0,7}')), ['shared/docs.ts'],
+        'const N = /^[1-9][0-9]{0,7}$/;', 'const N = /^[0-9]+$/;'],
+      ['rel path', new RegExp(esc('(?!/)(?!.*/$)(?!.*//)')), ['shared/docs.ts'],
+        'const X = String.raw`(?!/)(?!.*/$)(?!.*//)`;', "const X = '(?!/)';"],
+      ['section map', /(['"`])docs\/product-design\1/, ['shared/docs.ts'],
+        "  'product-design': 'docs/product-design',", '// docs/product-design is a section'],
+      ['section', new RegExp(esc('specs|plans|product-design|conventions')), [],
+        "const S = 'specs|plans|product-design|conventions';", "const S = 'specs|plans';"],
+      ['path categories', /(['"])Cf\1,\s*(['"])Zl\2,\s*(['"])Zp\3,\s*(['"])Co\4,\s*(['"])Cn\5/, ['shared/docs.ts'],
+        'const C = ["Cf","Zl","Zp","Co","Cn"];', "const C = ['Cf', 'Zl'];"],
+      ['selector ranges', /0xe0100\s*,\s*0xe01ef/i, ['shared/docs.ts'],
+        'const V = [[0xFE00, 0xFE0F], [0xE0100, 0xE01EF]];', 'const V = 0xe0100;'],
+    ];
+
+    it('CONTROL: each fingerprint sees its planted copy and not its near miss', () => {
+      for (const [what, re, , copy, miss] of LITERALS) {
+        expect(re.test(copy), `${what}: the planted copy`).toBe(true);
+        expect(re.test(miss), `${what}: the near miss`).toBe(false);
+      }
+    });
+
+    it.each(BODIES)('%s is declared in shared/docs.ts and nowhere else across the four roots', (name) => {
+      expect(holders(DEF(name))).toEqual(['shared/docs.ts']);
+    });
+
+    it.each(LITERALS.map(([what, re, files]) => [what, re, files] as const))(
+      'the %s body is spelled out only where it is declared', (_what, re, files) => {
+        expect(holders(re)).toEqual([...files]);
+      });
+  });
+});
