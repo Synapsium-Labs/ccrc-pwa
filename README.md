@@ -2767,10 +2767,10 @@ re-times or repeats them:
 - the 10 min before a worker counts as dead;
 - the hour before a marker counts as unreadable;
 - the run-less operator pushes' latch: `⚠ orphaned` from any session but a run
-  worker, and a coordinator's `⚠ mail stuck`, `⚠ marker` and `⚠ failed`. A
-  restart may push each once more. The tag collapses the two on the phone for
-  every one but `⚠ marker`, whose key is its first-seen time, which a restart
-  re-times.
+  worker, and a coordinator's `⚠ mail stuck`, `⚠ marker` and `⚠ failed`. Every
+  server restart, and every time its row leaves the registry and returns, while one still stands pushes it again (`⚠ orphaned` up to 24 h after its restart, `⚠ failed` up to
+  22 h, `⚠ mail stuck` while its delivery stays queued, up to 24 h, `⚠ marker` re-keyed each time); the tag keeps one tray
+  entry, but the phone alerts again, and each repeat is one more feed row.
 
 The two clocks above also restart when more than two and a half sweeps (150 s)
 pass with no judged sweep: a `stall-watch-disabled` window, unreadable
@@ -2784,7 +2784,7 @@ names no run). So a delivery to a coordinator, or a worker's non-run delivery,
 queued more than 24 h ago is outside mail-stuck's read: it was reported inside
 that window, and after a server restart it is not reported again. Runbook:
 hand-classify 48 h of wave-2 `stall-shadow:` rows and `stall-watch shadow`
-lines before touching `stall-watch-w2-live`; `rm` it to go back to wave 1's
+lines before touching `stall-watch-w2-live` (a run-less line ends `key <n>`, and a restart or a registry flap repeats it, so count one per session, arm, rung and key; `⚠ marker`'s key re-times); `rm` it to go back to wave 1's
 ladder.
 `ccrc uninstall` leaves `stall-watch-w2-live`, `mail-gate-busy` and
 `mail-gate-busy-shadow` in place, as it leaves every other operator switch.

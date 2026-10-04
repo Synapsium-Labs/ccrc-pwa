@@ -3406,7 +3406,7 @@ export class FleetWatcher {
   /** Applies one session verdict (orphan D and E, failed, mail stuck, a coordinator's marker), and decides nothing.
    *  - A hold applies nothing, except `failed-unknown`, which warns once (spec §5.2: never guessed into a
    *    self-wake).
-   *  - Shadow: a worker records a `stall-shadow:` row on its run; a run-less session warns once.
+   *  - Shadow: a worker records a `stall-shadow:` row on its run; a run-less session warns once per key, the key in the line (`runless-shadow-line-carries-its-key` (D-3800)).
    *  - To the session itself or to its coordinator: one `queueStallNotice`, on the worker's run, or run-less and
    *    deduped by its subject.
    *  - To the operator: a worker records the row first and pushes only when it is new; a run-less session latches in
@@ -3425,7 +3425,7 @@ export class FleetWatcher {
     const run = si.run;
     if (stallNotifyDelivery(v.arm, v.to, si.arming) === 'shadow') {
       if (run === null) {
-        this.stallWarnOnce(id, `shadow-${v.arm}-${v.rung}-${v.key}`, `ccrc-server: stall-watch shadow ${v.arm} r${v.rung} ${id} (run-less)`);
+        this.stallWarnOnce(id, `shadow-${v.arm}-${v.rung}-${v.key}`, `ccrc-server: stall-watch shadow ${v.arm} r${v.rung} ${id} (run-less) key ${v.key}`);
         return;
       }
       const obs = store.recordStallObservation(run.id, stallDetail('shadow', v.arm, v.rung, v.key), now);

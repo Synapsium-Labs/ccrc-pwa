@@ -1063,7 +1063,7 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     expect(operatorMail(coord)).toHaveLength(1);      // deduped by its subject, which a restart does not forget
   });
 
-  it('orphan D: ⚠ orphaned once, when the self-mail is still undelivered ORPHAN_PUSH_MS on; a new watcher may push once more (the latch is in memory)', async () => {
+  it('orphan D: ⚠ orphaned once, when the self-mail is still undelivered ORPHAN_PUSH_MS on; each new watcher (a server restart) pushes it once more, same tag (the latch is in memory)', async () => {
     const { h, w, sent } = await rig();
     seedOrphan(h.home);
     at(D_AT);
@@ -1083,7 +1083,14 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     const again = await primedWatcher(h, store(h.home), { push: spy2.push as never });
     at(D_AT + ORPHAN_PUSH_MS + 2 * STALL_SWEEP_MS);
     await again.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
-    expect(spy2.sent).toHaveLength(1);                 // documented (spec §5.2): the tag collapses the two on the phone
+    expect(spy2.sent).toHaveLength(1);
+    // Once PER restart, not once in total (`runless-shadow-line-carries-its-key` (D-3800) corrects README's "once more"):
+    // a third watcher pushes it again, same tag. A durable latch would flip this row, deliberately.
+    const spy3 = pushSpy();
+    const third = await primedWatcher(h, store(h.home), { push: spy3.push as never });
+    at(D_AT + ORPHAN_PUSH_MS + 3 * STALL_SWEEP_MS);
+    await third.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());
+    expect(spy3.sent.map((p) => p.tag)).toEqual([`orphaned-${ORPHAN}-${RESTART_AT}`]);
   });
 
   it('a registry row whose marker lost nothing costs ONE read; one that lost tasks costs two (the live file too)', async () => {
@@ -1837,6 +1844,33 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
       [COORD, [], D_AT - BACKLOG_HORIZON_MS],
       [ORPHAN, [], D_AT - BACKLOG_HORIZON_MS],
     ]);
+  });
+
+  it('dark, the run-less shadow line names its key, so a restart\'s repeat reads as the same episode (runless-shadow-line-carries-its-key (D-3800))', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, ORPHAN, ORPHAN_UUID);
+    seedCaseD(h.home, ORPHAN, ORPHAN_UUID);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const t = tickOf(PID, [regRow(ORPHAN, ORPHAN_UUID)]);
+    at(D_AT);
+    await w.sweepStalls([fleetRow(ORPHAN)], ARMED, t);
+    const again = await primedWatcher(h, coord);       // a server restart: the warn-once set is in memory
+    at(D_AT + STALL_SWEEP_MS);
+    await again.sweepStalls([fleetRow(ORPHAN)], ARMED, t);
+    const prefix = `ccrc-server: stall-watch shadow orphan-d r1 ${ORPHAN} (run-less)`;
+    expect(lines(warn, prefix)).toBe(2);
+    expect(lines(warn, `${prefix} key ${RESTART_AT}`)).toBe(2);
+  });
+
+  it('dark, a coordinator\'s mail-stuck shadow line is keyed on its delivery id (runless-shadow-line-carries-its-key (D-3800))', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    seedRun(coord, { program: 'demo-program' });
+    const id = queuedTo(coord, COORD, INBOUND_AT);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(IDLE_AT + MAIL_STUCK_MS);
+    await w.sweepStalls([fleetRow(WORKER), fleetRow(COORD)], ARMED, tickOf(PID, [regRow(WORKER), regRow(COORD, COORD_UUID)]));
+    expect(lines(warn, `ccrc-server: stall-watch shadow mail-stuck r1 ${COORD} (run-less) key ${id}`)).toBe(1);
   });
 });
 
