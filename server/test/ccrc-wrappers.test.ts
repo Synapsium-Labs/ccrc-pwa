@@ -41,8 +41,8 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
-  chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readdirSync, readFileSync,
-  renameSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, closeSync, existsSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync,
+  readlinkSync, renameSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1434,5 +1434,72 @@ describe('ccrc wrappers: the Codex launcher target (D-3478)', () => {
     expect(text).toContain('\nexec "$HOME/.local/bin/ccrc-codex" "$@"\n');
     expect(text).not.toContain('/.local/bin/ccgpt"');
     expect(existsSync(join(binOf(home), 'ccgpt')), 'ccrc wrappers wrote a file at ccgpt').toBe(false);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// Plan 3a Task 9 — a launcher that is a SYMLINK is backed up as that symlink.
+// `--force` (and every other rewrite) copies the file at `<id>` aside as
+// `<id>.pre-ccrc-<UTC>` before the rename lands. The rename REPLACES a
+// symlink at `<id>` rather than writing through it, so the backup must be the
+// symlink too: a copy of the bytes behind it would restore, by `mv`, a frozen
+// second copy of somebody else's launcher in place of the link to it.
+// ════════════════════════════════════════════════════════════════════════
+describe('ccrc wrappers: a rewritten launcher is backed up as what was there (Plan 3a Task 9)', () => {
+  /** A wrapper-shaped launcher nobody generated, saying something else (its
+   *  own config dir), so `--force` rewrites it: the foreign class's `dok = ok`
+   *  arm. It sits BESIDE the id under a dot-name, which can never match
+   *  WRAPPER_ID_RE, so neither the witness scan nor the orphan report reads it
+   *  as an account; the id is a RELATIVE symlink to it. */
+  const TARGET = '.codex-a-launcher';
+  const targetText = handWritten({
+    suffix: '.codex-a-elsewhere', target: 'ccrc-codex',
+    note: 'another tool\'s launcher, reached through a symlink',
+  });
+
+  it('a symlinked launcher rewritten under --force is backed up as the same symlink, and one mv restores it exactly', () => {
+    const home = makeHome('ccrc-wrappers-symlink-force-', { roster: CODEX_FIXTURE });
+    writeFileSync(join(binOf(home), TARGET), targetText, { mode: 0o755 });
+    symlinkSync(TARGET, join(binOf(home), CODEX_ID));
+    const r = runWrappers(home, ['--force']);
+    expect(r.code, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout).toMatch(/^REWRITE codex-a: /m);
+    // The launcher is the roster's now: a regular file that REPLACED the link
+    // by a rename, and the file the link pointed at is byte for byte what it was.
+    const p = join(binOf(home), CODEX_ID);
+    expect(lstatSync(p).isSymbolicLink()).toBe(false);
+    expect(readFileSync(p, 'utf8')).toBe(bodyFor(CODEX_FIXTURE, CODEX_ID));
+    expect(readFileSync(join(binOf(home), TARGET), 'utf8')).toBe(targetText);
+    const backups = backupsFor(home, CODEX_ID);
+    expect(backups).toHaveLength(1);
+    expect(backups[0]).toMatch(/^codex-a\.pre-ccrc-\d{8}T\d{6}Z$/);
+    const b = join(binOf(home), backups[0] ?? '');
+    expect(lstatSync(b).isSymbolicLink(),
+      'the backup is a regular file: the copy followed the link and saved the bytes behind it').toBe(true);
+    expect(readlinkSync(b)).toBe(TARGET);
+    // The one act the backup's name promises restores what was there, exactly.
+    renameSync(b, p);
+    expect(lstatSync(p).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(p)).toBe(TARGET);
+    expect(readFileSync(p, 'utf8')).toBe(targetText);
+    expect(binEntries(home)).toEqual([TARGET, CODEX_ID, ...GENERATED_IDS].sort());
+  });
+
+  it('a regular-file launcher is still backed up as a regular file, with its bytes and its mtime', () => {
+    // The CONTROL for the row above: `-P` changes nothing for a file that is
+    // not a link, and `-p` still carries the replaced file's timestamps.
+    const home = makeHome('ccrc-wrappers-regular-force-', { roster: CODEX_FIXTURE });
+    const p = join(binOf(home), CODEX_ID);
+    writeFileSync(p, targetText, { mode: 0o755 });
+    const then = new Date('2026-01-02T03:04:05Z');
+    utimesSync(p, then, then);
+    const r = runWrappers(home, ['--force']);
+    expect(r.code, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0);
+    const backups = backupsFor(home, CODEX_ID);
+    expect(backups).toHaveLength(1);
+    const b = join(binOf(home), backups[0] ?? '');
+    expect(lstatSync(b).isFile()).toBe(true);
+    expect(readFileSync(b, 'utf8')).toBe(targetText);
+    expect(Math.round(statSync(b).mtimeMs)).toBe(then.getTime());
   });
 });

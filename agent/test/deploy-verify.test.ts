@@ -36,7 +36,7 @@
 // that as a second net.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bodyDigest, markGenerated } from '../../shared/mark.mjs';
@@ -706,7 +706,13 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(deploySh).toContain('install_atomic ccd/ccd-graph-sweep .local/bin/ccd-graph-sweep 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-account-health .local/bin/ccd-account-health 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-telemetry-keepalive .local/bin/ccd-telemetry-keepalive 755');
-    expect(deploySh).toContain('install_atomic ccd/ccrc-models-probe .local/bin/ccrc-models-probe 755');
+    // Plan 3a Task 7 (ruling R-C11): NO ~/.local/bin copy of the model probe.
+    // ccrc runs its own tree's copy, which the rsync of `ccd/` lands; `ccrc
+    // update` never refreshes a PATH copy, and a stale one reads lane one's
+    // OAuth directory for a codex lane too. Code lines only, so the note that
+    // replaced the call may say why.
+    expect(deploySh.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
+      .filter((l) => l.includes('ccrc-models-probe')), 'deploy.sh places a PATH copy of the model probe again').toEqual([]);
     expect(deploySh).toContain('install_atomic ccd/ccd-account-auth .local/bin/ccd-account-auth 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-pool-sync .local/bin/ccd-pool-sync 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-tmp-sweep .local/bin/ccd-tmp-sweep 755');
@@ -887,17 +893,34 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // Every artifact the by-name list above claims, present on disk with the
     // source's bytes — including the escaped slice directory, which is the one
     // destination no by-name scan of the source can prove.
-    const landed: Array<[string, string]> = [
-      ['ccrc-agent.service', join(src, 'deploy', 'ccrc-agent.service')],
-      ['claude-session@.service', join(src, 'ccd', 'claude-session@.service')],
-      ['claude-session@.service.d/limits.conf', join(src, 'deploy', 'systemd', 'claude-session@.service.d', 'limits.conf')],
-      ['app-claude\\x2dsession.slice.d/limits.conf', join(src, 'deploy', 'systemd', 'app-claude-session.slice.d', 'limits.conf')],
-      ['app-claude\\x2dsession.slice.d/zz-no-memoryhigh.conf', join(src, 'deploy', 'systemd', 'app-claude-session.slice.d', 'zz-no-memoryhigh.conf')],
-      ['ccrc-agent.service.d/protect.conf', join(src, 'deploy', 'systemd', 'ccrc-agent.service.d', 'protect.conf')],
-      ...['ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep']
-        .flatMap((n) => ['service', 'timer'].map((ext) =>
-          [`${n}.${ext}`, join(src, 'deploy', 'systemd', `${n}.${ext}`)] as [string, string])),
-    ];
+    // Every artifact the chain places, DERIVED FROM THE CHAIN THIS CASE JUST
+    // RAN (Plan 3a Task 7; 2b-1 item 20), never typed: a unit `_unit_atomic`
+    // gains is measured landing the day it is added. The hand list this
+    // replaces named sixteen and had missed the pool-sync, models and
+    // usage-sweep pairs while every case stayed green. From the chain and not
+    // from `_inst_units` (D-3729):
+    // install-census.test.ts already holds every `_inst_units` unit to one of
+    // deploy.sh's lanes, and this lane places units `_inst_units` does not.
+    const unitRoot = /^(?:~|\$HOME)\/\.config\/systemd\/user\//;
+    const landed: Array<[string, string]> = [...script.matchAll(/(?:^|&&)\s*_unit_atomic\s+(\S+)\s+(\S+)/gm)]
+      .map((m) => {
+        const from = m[1]!.replace(/^"|"$/g, '');
+        const to = m[2]!.replace(/^"|"$/g, '');
+        if (!from.startsWith('~/ccrc/') || !unitRoot.test(to)) {
+          throw new Error(`deploy-verify: a _unit_atomic call this reader cannot place: ${m[0]} — spell its source under ~/ccrc/ and its destination under ~/.config/systemd/user/, or teach this reader`);
+        }
+        return [to.replace(unitRoot, ''), join(src, from.slice('~/ccrc/'.length))] as [string, string];
+      });
+    expect(landed.length, 'the unit chain read as fewer calls than the hand list it replaced — this reader has gone stale')
+      .toBeGreaterThanOrEqual(16);
+    // THE ANCHOR, derived from the tree: every TEMPLATE unit file under
+    // deploy/systemd lands on this lane — ccrc's usage pair today (Plan 3a) —
+    // because a codex lane runs on the fleet host.
+    const templates = readdirSync(join(deployDir, 'systemd')).filter((n) => /@\.[A-Za-z]+$/.test(n));
+    expect(templates.length, 'deploy/systemd ships no template unit — this anchor would check nothing').toBeGreaterThanOrEqual(1);
+    for (const t of templates) {
+      expect(landed.map(([d]) => d), `${t} ships in deploy/systemd and the agent lane never places it`).toContain(t);
+    }
     for (const [dest, from] of landed) {
       expect(existsSync(join(unitDir, dest)), `${dest} never reached the unit directory`).toBe(true);
       expect(readFileSync(join(unitDir, dest), 'utf8'), `${dest} did not land byte-for-byte`)

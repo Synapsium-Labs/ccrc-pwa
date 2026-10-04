@@ -37,6 +37,15 @@ export const SEEDED: Registry = {
   effort: { haiku: 'high', sonnet: 'high', opus: 'max', fable: 'max' },
 };
 
+/** `SEEDED` byte for byte as `init codex` writes it: `writeRegistry`'s 2-space
+ *  JSON and a trailing newline (Plan 3a Task 2). Since operator ruling Z3 the
+ *  op refuses to CREATE a codex registry on a row that is not exec.kind
+ *  "codex", so a case that needs the live Codex lanes' shape (an external row
+ *  whose registry predates that refusal) plants these bytes instead.
+ *  `models-op.test.ts`' `seeds today's codex registry, byte for byte, on a
+ *  codex-kind lane` binds them to the op's own write. */
+export const SEEDED_REGISTRY_BYTES = `${JSON.stringify(SEEDED, null, 2)}\n`;
+
 /** What `ccrc models <id> init openrouter` writes: a legal but UNSEEDED
  *  registry (deviation B-1). Every class null, so the "subagent's slot is
  *  non-null" and "discovery is non-empty" rules stand down until one is set. */
