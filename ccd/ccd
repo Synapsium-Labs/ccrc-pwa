@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=3ad904843a10f88543b8f2ad90b960477b341ebf14bd5de1998922ab54cc050e
+# ccrc:generated 1 sha256=d8e17a5cbc7ffe3cbd11218873937eb59d38ac7405444a58aaba46dd10d8dee4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -26252,7 +26252,13 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
   # ladder (`_ws_reclaim_fork`) and of `ws-audit --reclaim`
   # (`_ws_reclaim_audit_contained`). `local -x` scopes the export to this
   # call, and entries a caller already exported are kept: ours are APPENDED,
-  # and a later entry wins.
+  # and a later entry wins. EXCEPT GIT_CONFIG_PARAMETERS, what `git -c`
+  # exports to its children: git applies it AFTER the GIT_CONFIG_COUNT entries,
+  # so an inherited one OVERRIDES every pin here whose key it names, the hook
+  # and fsmonitor pins included (measured, git 2.43.0). The unattended agent
+  # and systemd path does not carry it: only a ccd started under a `git -c …`
+  # (from a hook, say) inherits one, and its value is the operator's own. It is
+  # NOT unset here; that decision is carried to the next wave.
   local n="${GIT_CONFIG_COUNT:-0}"
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
   local -x GIT_CONFIG_COUNT=$(( n + 3 )) \
@@ -26274,7 +26280,8 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
   # would land outside the child's repository. GIT_NAMESPACE, not on that
   # list, scopes every ref read and write, so it goes too. The GIT_CONFIG_*
   # entries stay: they are this function's own mechanism, and a caller's are
-  # kept by design (above). GIT_NO_REPLACE_OBJECTS is not unset but SET (below). So the OUTERMOST containment unsets them all, and does not put
+  # kept, an inherited GIT_CONFIG_PARAMETERS too, though it outranks the pins
+  # (above). GIT_NO_REPLACE_OBJECTS is not unset but SET (below). So the OUTERMOST containment unsets them all, and does not put
   # them back: nothing a reclaim runs wants its caller's repository, and a
   # restore would re-arm it for everything after. Unset, never shadowed —
   # measured, bash 5.2: a `local` of an exported name, set or unset, still
