@@ -1473,3 +1473,41 @@ describe('R254 SAFETY probe: how continuous is a presence episode under the in-f
       .toEqual([...Array.from({ length: 16 }, () => false), true]);
   });
 });
+
+describe('the presence bound at the lane: two and a half pass intervals between a child\'s presence answers', () => {
+  const asksOf = (f: ReturnType<typeof fixture>, id: string): boolean[] =>
+    f.requests.filter((q) => q.sessionId === id).map((q) => q.deferExpired);
+
+  it('a child that sits out ONE pass at the tick jitter\'s high end (124 s between its answers) keeps its episode — the licence arrives on time', async () => {
+    const f = fixture({ outcome: (req) => deferredAs('presence', req) });
+    finishedChild(f, 'demo-a'); finishedChild(f, 'demo-b');
+    // One pass interval plus one whole 2 s watcher tick: the latest a pass lands.
+    const jittered = CHILD_RECLAIM_SWEEP_MS + 2_000;
+    await f.pass();                                           // both: first sighting
+    f.advance(jittered); await f.pass();                      // demo-a asked: its episode starts
+    const startedAt = f.now();
+    // Two due children, one slot: each is asked on every OTHER pass, so
+    // demo-a's presence answers land 2 × 62 s = 124 s apart.
+    while (asksOf(f, 'demo-a').length < 9) { f.advance(jittered); await f.pass(); }
+    expect(f.now() - startedAt, 'demo-a\'s ninth ask, eight 124 s gaps after its first').toBe(8 * 2 * jittered);
+    // 7 × 124 s = 868 s is inside the ceiling; 8 × 124 s = 992 s is the first ask past it.
+    expect(asksOf(f, 'demo-a'), 'licensed at the first ask past the ceiling, not later')
+      .toEqual([...Array.from({ length: 8 }, () => false), true]);
+  });
+
+  it('a child that sits out TWO passes (three due children, 180 s between its answers) restarts its episode on every answer — never licensed', async () => {
+    const f = fixture({ outcome: (req) => deferredAs('presence', req) });
+    for (const id of ['demo-a', 'demo-b', 'demo-c']) finishedChild(f, id);
+    await f.pass();                                           // all three: first sighting
+    f.advance(CHILD_RECLAIM_SWEEP_MS); await f.pass();        // demo-a asked: its first presence answer
+    const firstAt = f.now();
+    // Three due children, one slot: each is asked on every THIRD pass, so
+    // demo-a's presence answers land exactly 180 s apart.
+    while (asksOf(f, 'demo-a').length < 9) { f.advance(CHILD_RECLAIM_SWEEP_MS); await f.pass(); }
+    expect(f.now() - firstAt, 'demo-a\'s ninth ask, 24 minutes after its first').toBe(8 * 3 * CHILD_RECLAIM_SWEEP_MS);
+    expect(asksOf(f, 'demo-a'), 'never licensed while its answers are three intervals apart')
+      .toEqual(Array.from({ length: 9 }, () => false));
+    expect(f.entryOf('demo-a'), 'the latest answer restarted the episode; the any-kind clock did not move')
+      .toMatchObject({ firstDeferredAt: firstAt, firstPresenceDeferredAt: f.now(), lastPresenceDeferredAt: f.now() });
+  });
+});

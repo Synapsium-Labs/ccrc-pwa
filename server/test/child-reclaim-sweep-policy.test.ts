@@ -486,10 +486,12 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
     }
   });
 
-  describe('the episode is CONTINUOUS — two pass intervals at most between its presence answers, and to the ask', () => {
+  describe('the episode is CONTINUOUS — two and a half pass intervals at most between its presence answers, and to the ask', () => {
     const presence: ChildReclaimSweepOutcome = { kind: 'deferred', why: 'presence' };
+    /** The bound, as the policy derives it from the interval it is handed. */
+    const GAP = 2.5 * PASS;
 
-    it('a presence answer more than two intervals after the last one starts a NEW episode — although the first answer is past the ceiling', () => {
+    it('a presence answer more than two and a half intervals after the last one starts a NEW episode — although the first answer is past the ceiling', () => {
       const first = childReclaimNextEntry(entry, presence, NOW - C - 10 * PASS, false, PASS)!;
       expect(first).toMatchObject({ firstPresenceDeferredAt: NOW - C - 10 * PASS, lastPresenceDeferredAt: NOW - C - 10 * PASS });
       const second = childReclaimNextEntry(first, presence, NOW - PASS, false, PASS)!;
@@ -498,27 +500,36 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
       expect(childReclaimDeferExpired(second, NOW, PASS), 'shortly after the second answer nothing is licensed').toBe(false);
     });
 
-    it('…at EXACTLY two intervals the episode continues, one ms more and it restarts — measured in the interval it is handed', () => {
+    it('…at EXACTLY two and a half intervals the episode continues, one ms more and it restarts — measured in the interval it is handed', () => {
       const first = childReclaimNextEntry(entry, presence, NOW, false, PASS)!;
-      expect(childReclaimNextEntry(first, presence, NOW + 2 * PASS, false, PASS))
-        .toMatchObject({ firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW + 2 * PASS });
-      expect(childReclaimNextEntry(first, presence, NOW + 2 * PASS + 1, false, PASS))
-        .toMatchObject({ firstPresenceDeferredAt: NOW + 2 * PASS + 1, lastPresenceDeferredAt: NOW + 2 * PASS + 1 });
+      expect(childReclaimNextEntry(first, presence, NOW + GAP, false, PASS))
+        .toMatchObject({ firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW + GAP });
+      expect(childReclaimNextEntry(first, presence, NOW + GAP + 1, false, PASS))
+        .toMatchObject({ firstPresenceDeferredAt: NOW + GAP + 1, lastPresenceDeferredAt: NOW + GAP + 1 });
       // The same gap under a longer interval is continuous: the bound is the
       // argument's, never a constant of its own.
-      expect(childReclaimNextEntry(first, presence, NOW + 2 * PASS + 1, false, 10 * PASS))
-        .toMatchObject({ firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW + 2 * PASS + 1 });
+      expect(childReclaimNextEntry(first, presence, NOW + GAP + 1, false, 10 * PASS))
+        .toMatchObject({ firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW + GAP + 1 });
     });
 
-    it('an episode past the ceiling licenses nothing once its latest presence answer is older than two intervals — at exactly two it still does', () => {
+    it('an episode past the ceiling licenses nothing once its latest presence answer is older than two and a half intervals — at exactly that it still does', () => {
       const ep: ChildReclaimSweepEntry = { ...entry, firstDeferredAt: NOW - 2 * C, firstPresenceDeferredAt: NOW - 2 * C,
-        lastPresenceDeferredAt: NOW - 2 * PASS - 1 };
+        lastPresenceDeferredAt: NOW - GAP - 1 };
       expect(childReclaimDeferExpired(ep, NOW, PASS), 'one sample, then time nobody measured').toBe(false);
-      expect(childReclaimDeferExpired({ ...ep, lastPresenceDeferredAt: NOW - 2 * PASS }, NOW, PASS), 'the inclusive boundary')
+      expect(childReclaimDeferExpired({ ...ep, lastPresenceDeferredAt: NOW - GAP }, NOW, PASS), 'the inclusive boundary')
         .toBe(true);
       expect(childReclaimDeferExpired({ ...ep, lastPresenceDeferredAt: null }, NOW, PASS), 'no presence answer on record')
         .toBe(false);
       expect(childReclaimDeferExpired(ep, NOW, 10 * PASS), 'measured in the interval it is handed').toBe(true);
+    });
+
+    it('an entry off the invariant — a recent latest answer but no episode running — STARTS an episode, never extends a null one', () => {
+      // `lastPresenceDeferredAt` is null exactly when `firstPresenceDeferredAt`
+      // is, on every entry the lane can reach. This literal breaks that on
+      // purpose: a recent latest answer alone must not count as an episode.
+      const offInvariant: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: null, lastPresenceDeferredAt: NOW - PASS };
+      expect(childReclaimNextEntry(offInvariant, presence, NOW, false, PASS))
+        .toMatchObject({ firstPresenceDeferredAt: NOW, lastPresenceDeferredAt: NOW });
     });
   });
 

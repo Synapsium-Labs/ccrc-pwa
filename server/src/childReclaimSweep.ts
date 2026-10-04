@@ -55,12 +55,15 @@ export const CHILD_RECLAIM_PRESENCE_DEFERS = ['presence', 'attached', 'tree-busy
  *  minutes of continuous deferral"): a child that is not asked writes
  *  nothing, so time nobody measured must never count as presence observed.
  *  Two consecutive presence-class answers further apart than
- *  `CHILD_RECLAIM_PRESENCE_GAP_PASSES` sweep-pass intervals do not extend one
- *  episode — the later answer starts a new one — and the ceiling licenses an
- *  attempt only while the episode's LATEST answer is that recent. Both rules
- *  only ever withhold a licence: a backlog that spaces one child's asks
- *  wider than that makes its presence defers wait UNLICENSED until the
- *  backlog drains, which fails closed. */
+ *  `CHILD_RECLAIM_PRESENCE_GAP_PASSES` (two and a half) sweep-pass intervals
+ *  do not extend one episode — the later answer starts a new one — and the
+ *  ceiling licenses an attempt only while the episode's LATEST answer is that
+ *  recent. Neither rule ever licenses an ask EARLIER, or more OFTEN, than the
+ *  ceiling would without them; where one licenses later, it is on a
+ *  continuous, fresh episode, the one the spec sanctions. A backlog that
+ *  makes one child sit out two passes (three or more due children behind the
+ *  one slot) makes its presence defers wait UNLICENSED until the backlog
+ *  drains, which fails closed. */
 export interface ChildReclaimSweepEntry {
   readonly firstEligibleAt: number;
   /** The FIRST deferral of ANY kind the sweep saw — what each request carries
@@ -74,8 +77,8 @@ export interface ChildReclaimSweepEntry {
    *  (the pass time of the request it answered) — what makes the episode
    *  continuous rather than a span between two samples: the next answer
    *  extends the episode only within `CHILD_RECLAIM_PRESENCE_GAP_PASSES`
-   *  intervals of it, and the ceiling licenses an attempt only within as
-   *  many. `null` exactly when `firstPresenceDeferredAt` is: every outcome
+   *  (two and a half) intervals of it, and the ceiling licenses an attempt
+   *  only within as many. `null` exactly when `firstPresenceDeferredAt` is: every outcome
    *  that ends the episode clears both. */
   readonly lastPresenceDeferredAt: number | null;
   /** `failed` outcomes in a row (spec §5.9: "retries back off in between");
@@ -379,16 +382,16 @@ export type ChildReclaimSweepOutcome =
 
 /** How many sweep-pass intervals may separate two presence-class answers of
  *  one CONTINUOUS episode, and the episode's latest answer from the ask the
- *  ceiling would license (spec §5.7, "continuous deferral"). Inclusive: at
- *  exactly this many intervals the episode is still continuous. Consecutive
- *  passes fall inside it — a pass lands one interval after the last, plus
- *  about one watcher tick. A pass the child sat out (its previous
- *  request still in flight, or another due child ahead of it for the one
- *  slot) lands AT the bound or just past it, by that same tick's jitter, and
- *  a backlog that skips more passes always lands past it. Past it the
- *  episode restarts and the ask goes out unlicensed, so the error only ever
- *  withholds a licence. */
-const CHILD_RECLAIM_PRESENCE_GAP_PASSES = 2;
+ *  ceiling would license (spec §5.7, "continuous deferral"): two and a half,
+ *  inclusive. A pass lands one interval after the last plus up to one
+ *  watcher tick, so a child asked on every pass is always inside it, and so
+ *  is a child that sat out ONE pass (its previous request still in flight,
+ *  or one other due child ahead of it for the one slot), asked again at
+ *  most two intervals plus two ticks later. A child that sat out TWO passes
+ *  (three or more due children) lands at three intervals or more, always
+ *  past it: its episode restarts and its ask goes out unlicensed, which
+ *  fails closed. The half interval is the margin between the two. */
+const CHILD_RECLAIM_PRESENCE_GAP_PASSES = 2.5;
 
 /** Is the entry's LATEST presence-class answer within
  *  `CHILD_RECLAIM_PRESENCE_GAP_PASSES` pass intervals of `nowMs`
@@ -415,8 +418,8 @@ const childReclaimPresenceRecent = (entry: ChildReclaimSweepEntry, nowMs: number
  *  sent it with `deferExpired: true`, past the previous ceiling), so a
  *  presence answer to it restarts the episode rather than letting every
  *  later retry silently keep skipping ccd's presence rungs; or the previous
- *  presence answer is more than `CHILD_RECLAIM_PRESENCE_GAP_PASSES` ×
- *  `passIntervalMs` old, so the time between the two was never observed and
+ *  presence answer is more than `CHILD_RECLAIM_PRESENCE_GAP_PASSES` (two and
+ *  a half) × `passIntervalMs` old, so the time between the two was never observed and
  *  the episode was not continuous. Only an UNLICENSED presence answer that
  *  follows the last one within that gap (inclusive) extends the episode
  *  already running. `passIntervalMs` is the lane's pass interval — an
@@ -458,7 +461,7 @@ export function childReclaimNextEntry(
 /** May this ask go out LICENSED (`deferExpired: true`)? Only when BOTH hold:
  *  the current PRESENCE episode spans the ceiling (at EXACTLY the ceiling,
  *  yes), and its latest presence-class answer is within
- *  `CHILD_RECLAIM_PRESENCE_GAP_PASSES` × `passIntervalMs` of `nowMs`
+ *  `CHILD_RECLAIM_PRESENCE_GAP_PASSES` (two and a half) × `passIntervalMs` of `nowMs`
  *  (inclusive) — so the licence rests on presence observed continuously up
  *  to the ask, never on one sample followed by time nobody measured (spec
  *  §5.7: "15 minutes of continuous deferral"). The presence clock alone:
