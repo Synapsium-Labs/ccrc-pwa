@@ -713,24 +713,24 @@ running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_K
 stay. An input that cannot be read prunes nothing (a `CCRC_VERSIONS_KEEP` that is not a whole number from 0 to 9999 is one), a dead process's `.pruning-`/`.incoming.` leftover is swept once per prune, and only `--prune` removes an incomplete tree. `deploy.sh` still
 pushes its tree through `~/ccrc`, into whichever version directory that points at.
 
-**The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape, pruned
-to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — hand-made siblings are never touched), as
-update and rollback do after a passed gate. `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own
-unit (`ccrc.service`, or `ccrc-agent.service` when the recorded role is `fleet`). `ccrc uninstall`
-takes the box off ccrc and leaves reinstall safe: it refuses while live sessions exist, and while an update holds
-`~/.ccrc/update.lock` or that lock cannot be measured (`--force` passes both; D-3453), removes the units, ccrc's
-managed settings.json hook entries (per-file backup;
-unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts
-inside `~/.cc-sessions` file-by-file, `~/ccrc`, a staged `~/ccrc.new` link (D-3452), every kept tree under
-`~/ccrc-versions` and a leftover `~/ccrc.migrating`, and the installed executables — and preserves
-`~/.ccrc` (less the node's install-state files — `installed`, `node-id`, `ccrc-caps`, `floor`,
-`previous`, `install-step`, `update.json`, `update.lock`, `update-intent`, `migrating-to` — which leave with the
-tree), the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
-(never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc`'s config
-(roster, identity, `ccrc.env`, `build.json`, …) and `~/ccrc-backups` — but **preserves
-`~/.ccrc/memory`** (every project's durable memory, the sole live copy since `ccrc memory --apply`;
-a session's prose is not configuration) unless `--purge-memory` is also given, which extends `--purge`
-to remove it too; never worktrees, never tmux state.
+**The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape,
+pruned to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — never the backup it just made,
+a dir named after it began, or the newest earlier tree backup and coord.db snapshot, and nothing at all while
+another ccrc run holds `~/.ccrc/update.lock`; hand-made siblings are never touched), as update and rollback do
+after a passed gate. `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own unit (`ccrc.service`,
+or `ccrc-agent.service` when the recorded role is `fleet`). `ccrc uninstall` takes the box off ccrc and leaves
+reinstall safe: it refuses while live sessions exist, and while an update holds `~/.ccrc/update.lock` or that
+lock cannot be measured (`--force` passes both; D-3453), removes the units, ccrc's managed settings.json hook
+entries (per-file backup; unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own
+artifacts inside `~/.cc-sessions` file-by-file, `~/ccrc`, a staged `~/ccrc.new` link (D-3452), every kept tree
+under `~/ccrc-versions` and a leftover `~/ccrc.migrating`, and the installed executables — and preserves
+`~/.ccrc` (less the node's install-state files — `installed`, `node-id`, `ccrc-caps`, `floor`, `previous`,
+`install-step`, `update.json`, `update.lock`, `update-intent`, `migrating-to` — which leave with the tree), the
+registry rows and operator switches, worktrees and `~/ccrc-backups`, printing (never running) the keep-aside
+restore commands. `--purge` additionally removes `~/.ccrc`'s config (roster, identity, `ccrc.env`, `build.json`,
+…) and `~/ccrc-backups` — but **preserves `~/.ccrc/memory`** (every project's durable memory, the sole live copy
+since `ccrc memory --apply`; a session's prose is not configuration) unless `--purge-memory` is also given, which
+extends `--purge` to remove it too; never worktrees, never tmux state.
 
 ## The session gate: `CCRC_AUTH` (off by default)
 

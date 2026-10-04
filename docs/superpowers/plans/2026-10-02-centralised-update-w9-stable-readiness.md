@@ -1203,14 +1203,14 @@ T4-M18's run is `cd server && ./node_modules/.bin/vitest run test/ccrc-doctor.te
 
 | # | Guard | Mutation | Must red | Run | Measured |
 |---|---|---|---|---|---|
-| T5-M1 | the floor protects | drop the floor skip in `_bak_prune` | B4 (the future-dated dir is removed at KEEP=0; only the floor protected it) | `ccrc-update -t "wave 9 R10g"` | pending |
-| T5-M2 | its own dir by exact path | drop the `$UPD_BACKUP_DIR` skip | none expected: the floor also covers its own dir (named after the floor was set). Defence in depth, no pin claimed, record green | same | pending |
-| T5-M3 | the newest earlier tree | drop the `$BAK_KEEP_TREE` skip | B2 | same | pending |
-| T5-M4 | the newest earlier snapshot | drop the `$BAK_KEEP_SNAP` skip | B2 | same | pending |
-| T5-M5 | the lock is taken | delete the `_ver_lock_try` call and its case | B3 | same | pending |
-| T5-M6 | no flock prunes nothing | the rc-2 arm falls through to prune | B5 | same | pending |
-| T5-M7 | one selection | `_bak_gc` re-inlines its loop and ignores `_bak_keepset` | none by behaviour; a source pin in the same describe, "`_bak_gc` and `_bak_prune` each call `_bak_keepset`, and `[ -f "$d/coord.db" ]` appears once in ccd/ccrc", reds | same | pending |
-| T5-M8 | an unparsed floor prunes nothing | drop `_bak_prune`'s floor check | B8: record the assertion that fired. If the mutant only dies on `$((10#))` before any assertion, that is a crash, not a pin: say so and claim none | same | pending |
+| T5-M1 | the floor protects | drop the floor skip in `_bak_prune` | B4 (the future-dated dir is removed at KEEP=0; only the floor protected it) | `ccrc-update -t "wave 9 R10g"` | red 1: B4, `only the floor protects it: expected false to be true` |
+| T5-M2 | its own dir by exact path | drop the `$UPD_BACKUP_DIR` skip | none expected: the floor also covers its own dir (named after the floor was set). Defence in depth, no pin claimed, record green | same | green, 0 red of 7: the floor also covers its own dir; defence in depth, no pin claimed |
+| T5-M3 | the newest earlier tree | drop the `$BAK_KEEP_TREE` skip | B2 | same | red 1: B2, `the newest earlier tree backup: expected false to be true` |
+| T5-M4 | the newest earlier snapshot | drop the `$BAK_KEEP_SNAP` skip | B2 | same | red 1: B2, `the newest earlier coord.db snapshot: expected false to be true` |
+| T5-M5 | the lock is taken | delete the `_ver_lock_try` call and its case | B3 | same | red 2: B3 (`toContain 'backup: prune skipped — another ccrc …'`) and B5 (the lock never taken, so the flock-absent skip line is never printed either) |
+| T5-M6 | no flock prunes nothing | the rc-2 arm falls through to prune | B5 | same | red 1: B5, `toContain 'backup: prune skipped — flock is not …'` |
+| T5-M7 | one selection | `_bak_gc` re-inlines its loop and ignores `_bak_keepset` | none by behaviour; a source pin in the same describe, "`_bak_gc` and `_bak_prune` each call `_bak_keepset`, and `[ -f "$d/coord.db" ]` appears once in ccd/ccrc", reds | same | red 1: the source pin, `_bak_gc: expected '_bak_gc() {…' to match /^ +_bak_keepset(\s|$)/m`; behaviour reds none (the inlined loop is the same loop); the inlined copy also makes `[ -f "$d/coord.db" ]` appear twice |
+| T5-M8 | an unparsed floor prunes nothing | drop `_bak_prune`'s floor check | B8: record the assertion that fired. If the mutant only dies on `$((10#))` before any assertion, that is a crash, not a pin: say so and claim none | same | red 1: B8, `toContain` of the skip line — but the mutant is a CRASH: `$((10#))` dies `10#: invalid integer constant` (shell rc 1, nothing printed, nothing pruned) before any pruning, so no pin is claimed beyond the message and exit 0 that B8 asserts |
 
 ### Task 6: The prose batch — R7, R11 F1–F5, R8i, R4-2, R9-F1, R10b, R9-F6
 

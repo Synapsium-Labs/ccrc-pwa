@@ -1843,6 +1843,8 @@ UPD_VERSION=""
 UPD_STAGED_SHA=""    # _upd_fetch: the extracted tree's OWN sha (review fix round 1 I3) — arm 3 compares it to old_sha to tell a same-tag REBUILD (mixed) from a same-tag REPEAT (not mixed)
 UPD_BACKUP_DIR=""
 BAK_DIRS=()        # `_bak_list`'s out-param: the timestamped backup dirs, oldest first
+BAK_KEEP_SNAP=""   # `_bak_keepset`'s out-params (wave 9 R10g): the newest earlier coord.db snapshot and the newest earlier tree backup,
+BAK_KEEP_TREE=""   # each chosen among the dirs the floor and this run's own path do not already protect
 UPD_BAK_FLOOR=""   # the second this run first held ~/.ccrc/update.lock (`_upd_lock`); `_bak_gc` keeps every dir named at or after it
 UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
 UPD_URL_DIR_SAFE=""    # _upd_resolve: same, through _upd_redact — every "fetching …"/WARN line prints THIS, never UPD_URL_DIR, so a credentialed CCRC_RELEASE_BASE_URL never reaches stdout (review 155 C17, fix round 1 item 11); the real curl calls still read UPD_URL_DIR
@@ -2200,8 +2202,10 @@ already running).
             is also given; never worktrees, never tmux state
   backup    take update's backup step standalone: coord.db snapshot, dists,
             ccd and the units to ~/ccrc-backups/<ts>/, then prune to the
-            newest \$CCRC_BACKUP_KEEP (default 10) timestamped backups —
-            hand-made siblings in that directory are never touched
+            newest \$CCRC_BACKUP_KEEP (default 10) timestamped backups — never
+            this run's own or one named after it began, nor the newest earlier
+            tree backup and coord.db snapshot; skipped while another ccrc run
+            holds ~/.ccrc/update.lock — hand-made siblings are never touched
   logs      this box's service journal: journalctl --user -u ccrc.service
             (or ccrc-agent.service when ccrc.env records CCRC_ROLE=fleet).
             Exit 3: the install completed but the trailing doctor failed
@@ -21185,6 +21189,14 @@ cmd_rollout() {
 # deploy.sh's `prune_backups` exists for, and a backup directory that only
 # ever grows is that function's own measured failure case (18MB/13 dirs
 # before it existed).
+# The prune keeps what `_bak_gc` keeps (wave 9 R10g, D-3825), through the one helper `_bak_keepset`: this run's own
+# dir by exact path, every dir named at or after the second this verb began, and the newest earlier tree backup and
+# coord.db snapshot — so at CCRC_BACKUP_KEEP=0 the backup just taken survives, and more than KEEP dirs can. It takes
+# ~/.ccrc/update.lock for the PRUNE only (D-3826) and skips, exit 0, while another holder has it, when flock is absent
+# or when the lock cannot be measured: the backup itself was taken. The COPY is not locked, by ruling (an update's
+# `_bak_gc` can still prune a dir of this verb's that is still being copied, if that dir was named before the update
+# took its lock — wave 8's Risk (a), unchanged): holding the lock across a coord.db VACUUM would make a console move
+# answer busy for its whole length.
 cmd_backup() {
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -21198,6 +21210,9 @@ cmd_backup() {
   # coord.db.
   command -v node >/dev/null 2>&1 \
     || _ccrc_die "node is required by 'ccrc backup' (it runs deploy/backup-coord.mjs for the coord.db snapshot) but is not on PATH — nothing was backed up"
+  # The floor is `_upd_lock`'s own line, set here because this verb takes no lock for the copy: every dir named at or
+  # after this second is this run's, or later than it, and `_bak_prune` protects them all (wave 9 R10g, D-3825).
+  [ -n "$UPD_BAK_FLOOR" ] || UPD_BAK_FLOOR="$(date +%Y%m%d-%H%M%S)"
   _upd_backup backup
   _bak_prune
 }
@@ -21244,17 +21259,66 @@ _bak_list() {
 # host today) that a bare newest-N sweep would silently destroy. The glob
 # expansion is already lexically sorted, which for this shape IS
 # chronological order.
+# Wave 9 R10g (D-3825, D-3826): the removal set is cut by `_bak_keepset`, the helper `_bak_gc` shares — this run's own dir,
+# every dir named at or after UPD_BAK_FLOOR (`cmd_backup` sets it before it backs up) and the newest earlier tree backup
+# and coord.db snapshot are never removed — and the prune holds ~/.ccrc/update.lock. Where `_bak_gc` WARNs and returns,
+# this verb says "prune skipped" and returns 0: the backup was taken, and its echo and its invalid-KEEP refusal (the two
+# `_ccrc_die`s) are unchanged. A floor that is not recorded (only a direct call reaches it) prunes nothing.
 _bak_prune() {
   local keep="${CCRC_BACKUP_KEEP:-10}"
   _keep_ok "$keep" || _ccrc_die "$(_keep_why CCRC_BACKUP_KEEP "$keep") — nothing was pruned"
   keep=$((10#$keep))   # `0002` is two: the loop below is ARITHMETIC, where a leading 0 is octal (or an error)
+  if ! [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+    echo "backup: prune skipped — this run's start time was not recorded, so nothing can say which backups are its own; nothing was pruned"
+    return 0
+  fi
+  local took=0 lrc=0
+  [ -n "$UPD_LOCK_FD" ] || took=1
+  _ver_lock_try || lrc=$?
+  case "$lrc" in
+    0) ;;
+    1) echo "backup: prune skipped — another ccrc run holds ~/.ccrc/update.lock; nothing was pruned"; return 0 ;;
+    2) echo "backup: prune skipped — flock is not on PATH, so ~/.ccrc/update.lock cannot be taken; nothing was pruned"; return 0 ;;
+    *) echo "backup: prune skipped — ~/.ccrc/update.lock could not be measured; nothing was pruned"; return 0 ;;
+  esac
   _bak_list
-  local n=${#BAK_DIRS[@]} i
+  local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name
+  _bak_keepset   # cannot fail here: the floor was checked above
   for ((i = 0; i < n - keep; i++)); do
+    d="${BAK_DIRS[$i]}"; name="${d##*/}"
+    [ "$d" = "$UPD_BACKUP_DIR" ] && continue
+    [ "$((10#${name//-/}))" -ge "$floor" ] && continue
+    [ "$d" = "$BAK_KEEP_SNAP" ] && continue
+    [ "$d" = "$BAK_KEEP_TREE" ] && continue
     rm -rf -- "${BAK_DIRS[$i]}" \
       || _ccrc_die "could not prune ${BAK_DIRS[$i]} — the newer backups above it are all intact"
     echo "backup: pruned ${BAK_DIRS[$i]} (keeping the newest $keep timestamped backups; hand-made siblings are never touched)"
   done
+  if [ "$took" -eq 1 ]; then _upd_unlock; fi
+  return 0
+}
+
+# ── _bak_keepset — which two earlier dirs a prune keeps beyond the floor (wave 9 R10g, D-3825) ──
+# The ONE spelling of `_bak_gc`'s selection, shared with `_bak_prune`, so the two pruners cannot drift on WHAT is protected.
+# The two extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own): the protected
+# ones are kept anyway, so picking one of them would protect nothing. READS BAK_DIRS (`_bak_list` first), UPD_BACKUP_DIR and
+# UPD_BAK_FLOOR; WRITES BAK_KEEP_SNAP (the newest earlier coord.db snapshot) and BAK_KEEP_TREE (the newest earlier tree
+# backup), "" when none. rc 1 when UPD_BAK_FLOOR is not a timestamp, WITHOUT touching either out-param. It declares its
+# own floor and n: the callers' locals are not its to read. Links are counted as `_bak_list` counts them (R10i, deferred).
+_bak_keepset() {
+  local floor n i d name
+  [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
+  floor=$((10#${UPD_BAK_FLOOR//-/})); n=${#BAK_DIRS[@]}
+  BAK_KEEP_SNAP=""; BAK_KEEP_TREE=""
+  for ((i = n - 1; i >= 0; i--)); do
+    d="${BAK_DIRS[$i]}"; name="${d##*/}"
+    [ "$d" = "$UPD_BACKUP_DIR" ] && continue
+    [ "$((10#${name//-/}))" -ge "$floor" ] && continue
+    if [ -z "$BAK_KEEP_SNAP" ] && [ -f "$d/coord.db" ]; then BAK_KEEP_SNAP="$d"; fi
+    if [ -z "$BAK_KEEP_TREE" ] && { [ -e "$d/server-dist" ] || [ -e "$d/agent-dist" ]; }; then BAK_KEEP_TREE="$d"; fi
+    [ -n "$BAK_KEEP_SNAP" ] && [ -n "$BAK_KEEP_TREE" ] && break
+  done
+  return 0
 }
 
 # ── _bak_gc — update's and rollback's own prune of ~/ccrc-backups (wave 8 item B) ──
@@ -21291,23 +21355,14 @@ _bak_gc() {   # <lead word: update|rollback>
     *) echo "$lead: backups: WARN: ~/.ccrc/update.lock could not be measured — nothing pruned"; return 1 ;;
   esac
   _bak_list
-  local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name shown snap="" tree="" rc=0
-  # The two extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own):
-  # the protected ones are kept anyway, so picking one of them would protect nothing.
-  for ((i = n - 1; i >= 0; i--)); do
-    d="${BAK_DIRS[$i]}"; name="${d##*/}"
-    [ "$d" = "$UPD_BACKUP_DIR" ] && continue
-    [ "$((10#${name//-/}))" -ge "$floor" ] && continue
-    if [ -z "$snap" ] && [ -f "$d/coord.db" ]; then snap="$d"; fi
-    if [ -z "$tree" ] && { [ -e "$d/server-dist" ] || [ -e "$d/agent-dist" ]; }; then tree="$d"; fi
-    [ -n "$snap" ] && [ -n "$tree" ] && break
-  done
+  local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name shown rc=0
+  _bak_keepset   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
   for ((i = 0; i < n - keep; i++)); do
     d="${BAK_DIRS[$i]}"; name="${d##*/}"
     [ "$d" = "$UPD_BACKUP_DIR" ] && continue   # D-3593
     [ "$((10#${name//-/}))" -ge "$floor" ] && continue   # D-3593
-    [ "$d" = "$snap" ] && continue
-    [ "$d" = "$tree" ] && continue
+    [ "$d" = "$BAK_KEEP_SNAP" ] && continue
+    [ "$d" = "$BAK_KEEP_TREE" ] && continue
     shown="$d"; case "$d" in "$HOME"/*) shown="\$HOME${d#"$HOME"}" ;; esac
     if rm -rf -- "$d" 2>/dev/null; then
       echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups, every one named at or after this run took its lock, this run's own, the newest earlier tree backup and the newest earlier coord.db snapshot; hand-made siblings are never touched)"

@@ -46,7 +46,7 @@ import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
-import { assertNoRealTool } from './containedTools.js';
+import { assertNoRealTool, CONTAINED_TOOLS } from './containedTools.js';
 import { itLinux, itDarwin, platformContrast, python3ProgramArm, IS_DARWIN } from './platformFixtures.js';
 import { installVersionedTree, keepDigest, rsyncRecorder } from './installTreeFixture.js';
 import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
@@ -12360,6 +12360,154 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     expect(r.stdout).toContain(
       `backup: pruned ${join(backupRoot(home), '20250101-000000')} (keeping the newest 1 timestamped backups; hand-made siblings are never touched)`);
     assertNoExtras(home);
+  });
+
+  // wave 9 R10g (D-3825, D-3826): `ccrc backup`'s prune keeps what `_bak_gc` keeps — through the ONE helper
+  // `_bak_keepset` — and takes ~/.ccrc/update.lock for the prune only. Nested here so `runBackup`, `plantDir`,
+  // `backupRoot` and `assertNoExtras` are in scope; the enclosing describe has no `holders`, so this one declares its own.
+  describe('ccrc backup: the prune keeps what _bak_gc keeps, and takes the lock (wave 9 R10g)', () => {
+    const holders: ChildProcess[] = [];
+    afterEach(() => {
+      for (const h of holders.splice(0)) h.kill('SIGKILL');
+    });
+    const lockPath = (home: string): string => join(home, '.ccrc', 'update.lock');
+    /** A FRESH open and a non-blocking flock — the probe's own measurement (the lock describe's, copied as a pattern). */
+    const lockFree = (home: string): boolean =>
+      spawnSync(BASH, ['-c', 'exec 9>>"$1" && flock -n 9', '_', lockPath(home)]).status === 0;
+    const waitUntil = (cond: () => boolean, what: string): void => {
+      const t0 = Date.now();
+      while (!cond()) {
+        if (Date.now() - t0 > 10_000) throw new Error(`timed out waiting for ${what}`);
+        spawnSync('sleep', ['0.05']);
+      }
+    };
+    /** ONE process takes flock on the lock file and becomes `sleep` (exec keeps the pid and the descriptor). Returns
+     *  once a fresh probe fails. */
+    const holdLock = (home: string): ChildProcess => {
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      const h = spawn(BASH, ['-c', 'exec 9>>"$1" && flock 9 && exec sleep 30', '_', lockPath(home)], { stdio: 'ignore' });
+      holders.push(h);
+      waitUntil(() => !lockFree(home), 'the fixture holder to take the lock');
+      return h;
+    };
+    /** The directory the backup announced: `backup: <dir> (coord.db snapshot, …`. */
+    const ownDir = (r: Result): string => {
+      const m = /^backup: (\S+) \(coord\.db snapshot/m.exec(r.stdout);
+      expect(m, `no "backup: <dir>" line — stdout: ${r.stdout}\nstderr: ${r.stderr}`).not.toBeNull();
+      return m![1]!;
+    };
+    const has = (home: string, name: string): boolean => existsSync(join(backupRoot(home), name));
+
+    it('B1: CCRC_BACKUP_KEEP=0 never removes the backup it just made, and removes both planted older dirs', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b1-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      const own = ownDir(r);
+      expect(existsSync(own), `this run's own backup ${own} must survive KEEP=0`).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(false);
+      expect(has(home, '20250102-000000')).toBe(false);
+      assertNoExtras(home);
+    });
+
+    it('B2: KEEP=0 keeps the newest earlier tree backup and the newest earlier coord.db snapshot, and removes an unprotected dir', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b2-');
+      mkdirSync(join(plantDir(home, '20250101-000000'), 'server-dist'), { recursive: true });
+      plantDir(home, '20250102-000000', { coordDb: true });
+      plantDir(home, '20250103-000000');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20250101-000000'), 'the newest earlier tree backup').toBe(true);
+      expect(has(home, '20250102-000000'), 'the newest earlier coord.db snapshot').toBe(true);
+      expect(has(home, '20250103-000000'), 'nothing protects the empty one').toBe(false);
+      assertNoExtras(home);
+    });
+
+    it('B3: while another process holds ~/.ccrc/update.lock the prune says so, removes nothing, and ccrc backup exits 0', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b3-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      holdLock(home);
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain('backup: prune skipped — another ccrc run holds ~/.ccrc/update.lock; nothing was pruned');
+      expect(existsSync(ownDir(r))).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(true);
+      expect(has(home, '20250102-000000')).toBe(true);
+      assertNoExtras(home);
+    });
+
+    it('B4: the floor ALONE — a dir named after this run began survives KEEP=0, though it is neither its own path nor a snapshot nor a tree', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b4-');
+      plantDir(home, '20991231-235959');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(has(home, '20991231-235959'), 'only the floor protects it').toBe(true);
+      expect(existsSync(ownDir(r))).toBe(true);
+      assertNoExtras(home);
+    });
+
+    it('B5: with no flock on PATH the prune says so, removes nothing, and ccrc backup exits 0 (the backup was taken first)', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b5-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      // `ccrc-uninstall.test.ts`'s `pathWithout` idiom: ONE link farm of every command on the parent's PATH, except
+      // flock and every CONTAINED_TOOLS name (those resolve to the fixture's stubs and poisons in $HOME/.local/bin).
+      // `pathWithoutFlock` links nine tools and `ccrc backup` outruns them before its prune.
+      const bin = join(home, '.local', 'bin');
+      expect(existsSync(join(bin, 'flock')), 'updateEnv must plant no flock').toBe(false);
+      const farm = join(home, 'no-flock-backup-bin');
+      mkdirSync(farm);
+      const skip = new Set<string>(['flock', ...CONTAINED_TOOLS]);
+      for (const dir of (process.env['PATH'] ?? '/usr/bin:/bin').split(':')) {
+        let names: string[] = [];
+        try { names = readdirSync(dir); } catch { continue; }
+        for (const name of names) {
+          if (skip.has(name)) continue;
+          skip.add(name);
+          symlinkSync(join(dir, name), join(farm, name));
+        }
+      }
+      const env = { ...updateEnv(home), PATH: `${bin}:${farm}` };
+      assertNoRealTool(env, home);
+      expect(spawnSync(BASH, ['-c', 'command -v flock'], { env, encoding: 'utf8' }).stdout.trim(), 'no flock under this PATH').toBe('');
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0', PATH: env.PATH });
+      const own = ownDir(r);   // BEFORE the skip line: a backup that died cannot pass as a prune that skipped
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain('backup: prune skipped — flock is not on PATH, so ~/.ccrc/update.lock cannot be taken; nothing was pruned');
+      expect(existsSync(own)).toBe(true);
+      expect(has(home, '20250101-000000')).toBe(true);
+      expect(has(home, '20250102-000000')).toBe(true);
+      assertNoExtras(home);
+    });
+
+    it('B8: _bak_prune called with no recorded floor prunes nothing and says why — exit 0', () => {
+      const home = freshUpdateBox('ccrc-w9-r10g-b8-');
+      plantDir(home, '20250101-000000');
+      plantDir(home, '20250102-000000');
+      const script = ['set -uo pipefail', '. "$1"', 'UPD_BAK_FLOOR=""', 'rc=0; _bak_prune || rc=$?', 'echo "rc=$rc"'].join('\n');
+      const r = spawnSync(BASH, ['-c', script, 'floor-guard', join(REPO, 'ccd', 'ccrc')],
+        { env: { ...updateEnv(home), CCRC_BACKUP_KEEP: '0' }, encoding: 'utf8' });
+      expect(r.stdout, `stderr: ${r.stderr}`).toContain(
+        "backup: prune skipped — this run's start time was not recorded, so nothing can say which backups are its own; nothing was pruned");
+      expect(r.stdout).toContain('rc=0');
+      expect(has(home, '20250101-000000')).toBe(true);
+      expect(has(home, '20250102-000000')).toBe(true);
+    });
+
+    it('_bak_gc and _bak_prune each call _bak_keepset, and [ -f "$d/coord.db" ] appears once in ccd/ccrc (one selection)', () => {
+      const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+      const body = (name: string): string => {
+        const m = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(src);
+        expect(m, `ccd/ccrc has no ${name}`).not.toBeNull();
+        return m![0];
+      };
+      // A CALL (a command word at the start of a line), never a mention in a comment.
+      expect(body('_bak_gc'), '_bak_gc').toMatch(/^ +_bak_keepset(\s|$)/m);
+      expect(body('_bak_prune'), '_bak_prune').toMatch(/^ +_bak_keepset(\s|$)/m);
+      expect(src.split('[ -f "$d/coord.db" ]').length - 1, 'the snapshot test is spelled once').toBe(1);
+    });
   });
 
   // fix round 1 item 9 (review 196 F10): a timestamp-named SYMLINK is a
