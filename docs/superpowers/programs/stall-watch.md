@@ -470,6 +470,24 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     two re-derived assertions, and whether `shared/api.ts` stays L0. The reviewer also runs the merged tree and the
     PWA build. The dispatch call timed out on the client (curl rc 28), but the run list shows it dispatched with the
     brief queued, so it was not re-sent.
+- **R30 (coordinator, 2026-10-04 17:05): the operator approves the amendment and the Settings section, and adds a
+  wave 7.**
+  - **"Amendments approved."** The operator approved R2 together with R17-F1 as one amendment to coordinator clause
+    16. It widens the `wait:` mail to every park of a `working` worker behind another run or programme, and to every
+    ruled timed action, not only answers to a `stall:` mail. It also states the ball the way the server reads it:
+    the worker's next ordinary mail hands it back. Spec §11 decision 13's text gains the amendment; the server's ball
+    rule is unchanged. It ships as **wave 7**, with the two parked worker-skill pins (R17-F2's `resume` scan and
+    R21-F1's three-word guard). The plan is being drafted and reviewed before dispatch. It defines D-3805 and D-3806
+    from the block, leaving one number of headroom.
+  - **Overlap.** PR #215 (run 174, claim 956) also edits both skill files and both skill tests, in other clauses
+    (its coordinator clause 3, for one). Wave 7 dispatches only once claim 956 is released or the two coordinators
+    agree a split like R23. Either way, the second PR to land merges `main` and keeps both sides.
+  - **"Clear stuck bash approvals, if they are still there."** Measured read-only at 17:01: neither is still there.
+    `MekWarLive-swift-harbor` restarted at 17:01 after a rate limit and reads `done`. `ccrc-pwa-swift-hollow` reads
+    `working`, with a prompt submitted at 16:58. Neither hookstate carries an `ask`. Nothing was typed into any pane.
+  - **"Yes to stall watch section", with the question "should we be able to configure any parameters?"** That is a
+    design question with its own spec. It is brainstormed with the operator before any plan, starting from a
+    read-only survey of the stall watch's constants, ccrc's configuration precedents and the Settings screen.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
