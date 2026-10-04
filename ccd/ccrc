@@ -2742,10 +2742,14 @@ _box_server_addr() {
 # THIRD ARGUMENT, `unit` OR `shell` (wave 9 R10a/R10e, D-3822/D-3823) — only
 # `_box_unit_env` passes one; the 43 other callers pass two and read exactly what
 # they always read, CR handling included.
-#   unit   systemd's `EnvironmentFile=` (Linux). A CR ends a line as it does for
-#          systemd, whitespace (space, tab, CR) around an UNQUOTED value is
-#          discarded (the run-182 ruling, systemd.exec(5)), and every shape this
-#          reader cannot DECIDE answers rc 2 with nothing on stdout: a space or
+#   unit   systemd's `EnvironmentFile=` (Linux). Whitespace (space, tab, CR)
+#          around an UNQUOTED value is discarded (the run-182 ruling,
+#          systemd.exec(5)), ONE trailing CR ends a CRLF line, and every shape
+#          this reader cannot DECIDE answers rc 2 with nothing on stdout. (A file
+#          systemd would split or skip WHOLE — a CR still inside a line, a NUL
+#          byte, a byte >= 0x80 in a non-comment line — is rc 2 before the loop
+#          runs: `_box_env_unit_whole` asks first, wave 9 R10a, D-3831.)
+#          The per-key shapes: a space or
 #          tab before `=`, a physical line ending in `\` directly above the key
 #          line (a comment's too — systemd before v254 continued it, v254+ does
 #          not, and this reader does not know which runs), a backslash in the
@@ -2760,6 +2764,7 @@ _box_env_value() {   # <file> <key> [unit|shell]
   # variable rather than a literal bracket expression because a tab and a CR
   # typed inline are invisible in a diff and one stray edit from being deleted.
   local ws=$' \t\r'
+  if [ "$mode" = unit ]; then _box_env_unit_whole "$file" || return 2; fi
   while IFS= read -r line || [ -n "$line" ]; do
     # `unit` mode only: a CR ends the line, as it does for systemd (wave 9 R10a).
     if [ "$mode" = unit ]; then line="${line%$'\r'}"; fi
@@ -2853,6 +2858,32 @@ _box_env_shell_plain() {   # <file>
   return 0
 }
 
+# _box_env_unit_whole <file> — Linux only (wave 9 R10a, D-3831). rc 0 when systemd's `EnvironmentFile=` would read the
+# file as lines this reader reads; rc 1 when it would not: BEW_CAUSE is `cr` (a CR still inside a line after ONE trailing
+# CR is dropped — systemd's NEWLINE is "\n\r", so a bare CR ends a line), `nul` (a NUL byte anywhere: systemd cannot read
+# the file, and both `EnvironmentFile=` lines are `-`-prefixed, so the unit skips it whole), or `utf8` (a byte >= 0x80 in
+# a line that is neither blank nor a comment: systemd fails a file whose keys or values are not valid UTF-8, and this
+# reader does not check validity, so ANY such byte is not decided — a valid IDN value costs a "not measured", never a
+# false answer). Comments are not checked for `utf8`: systemd checks keys and values only, and `ccrc expose`'s own first
+# line carries a valid UTF-8 em dash. BEW_LINE is the first offending line's NUMBER (0 for `nul`); the bytes are never
+# recorded. NUL is detected without trusting `read`, which drops it: a `read -d ''` that succeeds found one. Called
+# directly, never in `$(…)`.
+_box_env_unit_whole() {   # <file>
+  local file="$1" line chunk trimmed n=0
+  local LC_ALL=C ws=$' \t\r'
+  BEW_LINE=0; BEW_CAUSE=""
+  while IFS= read -r -d '' chunk; do BEW_CAUSE=nul; return 1; done < "$file"
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    line="${line%$'\r'}"
+    case "$line" in *$'\r'*) BEW_LINE=$n; BEW_CAUSE=cr; return 1 ;; esac
+    trimmed="${line#"${line%%[!$ws]*}"}"
+    case "$trimmed" in ''|'#'*|';'*) continue ;; esac
+    case "$trimmed" in *[!$'\001'-$'\177']*) BEW_LINE=$n; BEW_CAUSE=utf8; return 1 ;; esac
+  done < "$file"
+  return 0
+}
+
 # Out-params, at file scope — `_box_unit_env`'s own comment argues why
 # presence must be told from empty, the same reason `_box_env_value`'s own
 # header gives for its return code.
@@ -2865,6 +2896,8 @@ BUE_WHY=""     # rc 3 only (wave 9 R10e, D-3823): the cause, as a clause naming 
 BUE_FIX=""     # rc 3 only: the remedy clause for that cause
 BEP_LINE=0     # _box_env_shell_plain: the first failing line's NUMBER (never its bytes)
 BEP_CAUSE=""   # _box_env_shell_plain: cr | shape
+BEW_LINE=0     # _box_env_unit_whole: the first offending line's NUMBER (0 for a NUL byte; never its bytes)
+BEW_CAUSE=""   # _box_env_unit_whole: cr | nul | utf8
 
 # ── _box_unit_env — ONE KEY AS ccrc.service RECEIVES IT (wave 8 item D) ────
 # The unit carries two EnvironmentFile lines, ccrc.env then $CCRC_EXPOSURE_FILE, and the later wins by PRESENCE: a
@@ -2884,7 +2917,7 @@ BEP_CAUSE=""   # _box_env_shell_plain: cr | shape
 # readable file is not plain assignments throughout, and then EVERY key is rc 3. BUE_WHY is the cause as a clause
 # naming the file (and, on Darwin, the line NUMBER, never its bytes — ccrc.env holds tokens); BUE_FIX is its remedy clause.
 _box_unit_env() {   # <KEY>
-  local key="$1" v rc envund=0 expund=0 f
+  local key="$1" v rc envund=0 expund=0 f envwhole="" envline=0 expwhole="" expline=0 whole wline
   BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0; BUE_ENV=absent; BUE_EXP=absent; BUE_WHY=""; BUE_FIX=""
   if [ "${CCD_OS:-linux}" = darwin ]; then _box_unit_env_shell "$key"; return; fi
   if [ -e "$BOX_ENV_FILE" ]; then
@@ -2893,7 +2926,9 @@ _box_unit_env() {   # <KEY>
       v="$(_box_env_value "$BOX_ENV_FILE" "$key" unit)"; rc=$?
       case "$rc" in
         0) BUE_VAL="$v"; BUE_SRC="$BOX_ENV_FILE"; BUE_NAMED=1 ;;
-        2) envund=1 ;;
+        # Wave 9 R10a (D-3831): rc 2 is also what a file systemd would split or skip WHOLE answers, for any key; it is
+        # told apart here (the read ran in a subshell), and is otherwise treated exactly as a per-key undecidable one.
+        2) envund=1; _box_env_unit_whole "$BOX_ENV_FILE" || { envwhole="$BEW_CAUSE"; envline="$BEW_LINE"; } ;;
       esac
     else
       BUE_ENV=unreadable
@@ -2905,7 +2940,7 @@ _box_unit_env() {   # <KEY>
       v="$(_box_env_value "$CCRC_EXPOSURE_FILE" "$key" unit)"; rc=$?
       case "$rc" in
         0) BUE_VAL="$v"; BUE_SRC="$CCRC_EXPOSURE_FILE"; BUE_NAMED=1 ;;
-        2) expund=1 ;;
+        2) expund=1; _box_env_unit_whole "$CCRC_EXPOSURE_FILE" || { expwhole="$BEW_CAUSE"; expline="$BEW_LINE"; } ;;
       esac
     else
       BUE_EXP=unreadable
@@ -2915,8 +2950,18 @@ _box_unit_env() {   # <KEY>
   if [ "$expund" -eq 1 ] || { [ "$envund" -eq 1 ] && [ "$BUE_SRC" != "$CCRC_EXPOSURE_FILE" ]; }; then
     f="$BOX_ENV_FILE"; [ "$expund" -eq 1 ] && f="$CCRC_EXPOSURE_FILE"
     BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0
-    BUE_WHY="$f names $key in a shape this reader does not decide (a space around '=', an export prefix, a backslash, a quote that is not one whole pair, a quote left open on an earlier line, or a line after one ending in a backslash)"
-    BUE_FIX="rewrite the line naming $key in $f, or the line above it when that one ends in a backslash, as KEY=value: no space before or after '=', no export, no backslash, no quote except one whole pair around the value, and no quote left open on an earlier line (ccrc expose rewrites the exposure file)"
+    whole="$envwhole"; wline="$envline"
+    if [ "$expund" -eq 1 ]; then whole="$expwhole"; wline="$expline"; fi
+    case "$whole" in
+      cr)   BUE_WHY="$f line $wline has a carriage return inside a line, and systemd ends a line at one, so what the unit receives from that file is not decided here"
+            BUE_FIX="save $f with one line ending per line (LF, or CRLF) and no bare carriage return inside a line (ccrc expose rewrites the exposure file)" ;;
+      nul)  BUE_WHY="$f holds a NUL byte, which systemd does not accept in an EnvironmentFile= (the unit's lines are optional, so it carries on without the file), so what the unit receives from that file is not decided here"
+            BUE_FIX="remove the NUL byte from $f (ccrc expose rewrites the exposure file)" ;;
+      utf8) BUE_WHY="$f line $wline has a non-ASCII byte in a NAME=value line, and systemd skips a file whose keys or values are not valid UTF-8, which this reader does not check, so what the unit receives from that file is not decided here"
+            BUE_FIX="keep every NAME=value line of $f to ASCII (a non-ASCII host goes in as its punycode xn-- form; comments may stay as they are), then re-run (ccrc expose rewrites the exposure file)" ;;
+      *)    BUE_WHY="$f names $key in a shape this reader does not decide (a space around '=', an export prefix, a backslash, a quote that is not one whole pair, a quote left open on an earlier line, or a line after one ending in a backslash)"
+            BUE_FIX="rewrite the line naming $key in $f, or the line above it when that one ends in a backslash, as KEY=value: no space before or after '=', no export, no backslash, no quote except one whole pair around the value, and no quote left open on an earlier line (ccrc expose rewrites the exposure file)" ;;
+    esac
     return 3
   fi
   return 0

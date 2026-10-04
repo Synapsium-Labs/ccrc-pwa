@@ -3401,7 +3401,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   // and removes only the FUNCTION, so every constant the guard also checks
   // stays present — a dropped `_box_unit_env` term is the only thing that can
   // red this pin. `BUE_VAL=on` is preset AFTER sourcing ccrc (a shell
-  // assignment, never an env entry — `ccd/ccrc:2856` resets it at file scope
+  // assignment, never an env entry — `ccd/ccrc:2887` resets it at file scope
   // on load) in case some path through the ungoverned body reads it, but in
   // THIS harness (`PATH` pointing nowhere) it never gets the chance: without
   // the guard term, `_check_auth`'s body FAILs elsewhere first — the node
@@ -3627,6 +3627,53 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       expect(authLine(r.stdout)).toContain(`${expPath(home)} line 1 `);
     });
 
+    // ── wave 9 R10a (D-3831): a FILE systemd would split or skip whole ──────────────
+    // Review found three shapes the Linux reader DECIDED (rc 0, `on`) while systemd hands the server something else: a
+    // carriage return inside a line (systemd's NEWLINE is "\n\r", so a bare CR ends a line), a NUL byte (the file is
+    // unreadable to systemd, and both EnvironmentFile= lines are `-`-prefixed, so it is skipped whole), and a byte that
+    // is not valid UTF-8 in a key or value (the file fails). Each is written byte for byte (latin1).
+    /** `[label, the lines that follow `CCRC_AUTH=…`'s own decider, the phrase BUE_WHY must carry]`. */
+    const WHOLE_FILE: Array<[string, (decider: string) => string, string]> = [
+      ['a CR inside a line', (d) => `# c\rX=1\r${d}\r\n`, 'carriage return inside a line'],
+      ['a NUL byte', (d) => `CCRC_RP_ID=x\0y\n${d}\n`, 'NUL byte'],
+      ['a byte that is not valid UTF-8 in a value', (d) => `CCRC_RP_ID=x\xff\n${d}\n`, 'non-ASCII byte in a NAME=value line'],
+    ];
+    const expectWholeFileWarn = (out: string, file: string, phrase: string, label: string): void => {
+      const warns = out.split('\n').filter((l) => l.startsWith('WARN auth: '));
+      expect(warns.length, `${label}\n${out}`).toBe(1);
+      expect(warns[0], label).toContain(file);
+      expect(warns[0], label).toContain(phrase);
+      expect(warns[0], label).toContain('was not measured');
+      expect(warns[0], label).not.toContain('cannot be read');
+      expect(out, label).not.toMatch(/^(PASS|FAIL) auth: /m);
+    };
+
+    itLinux('E15: the EXPOSURE file is split or skipped whole by systemd — ccrc.env says `on`, the exposure file `off` (or a key the reader would have decided) — not measured, never a false ARMED (main: `on`)', () => {
+      for (const [label, shape, phrase] of WHOLE_FILE) {
+        const home = healthy('ccrc-doctor-auth-e15-');
+        writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=on\n`);
+        writeFileSync(expPath(home), shape('CCRC_AUTH=off'), 'latin1');
+        expectWholeFileWarn(runDoctor(home).stdout, expPath(home), phrase, label);
+      }
+    });
+
+    itLinux('E16: ccrc.env is split or skipped whole by systemd — with the flag on in it and no exposure file, not measured, never a false OFF or ARMED (main: a false OFF for a CR, a false ARMED for NUL and non-UTF-8)', () => {
+      for (const [label, shape, phrase] of WHOLE_FILE) {
+        const home = noPassBox('ccrc-doctor-auth-e16-', '');
+        writeFileSync(envPath(home), `${readEnv(home)}${shape('CCRC_AUTH=on')}`, 'latin1');
+        expectWholeFileWarn(runDoctor(home).stdout, envPath(home), phrase, label);
+      }
+    });
+
+    itLinux('E17: the control — a valid UTF-8 em dash in a COMMENT of the exposure file reads ARMED as before (the real writer\'s own first line carries one)', () => {
+      const home = healthy('ccrc-doctor-auth-e17-');
+      writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\n`);
+      writeFileSync(expPath(home), '# a comment with an em dash \xe2\x80\x94 in it\nCCRC_AUTH=on\n', 'latin1');
+      const r = runDoctor(home);
+      expect(authLine(r.stdout)).toMatch(/^PASS auth: CCRC_AUTH=on in .*logins are gated/);
+      expect(r.stdout).not.toMatch(/^WARN auth: /m);
+    });
+
     // ── the reader itself, as tables ─────────────────────────────────────
     // [label, file bytes, [stdout, rc] at MAIN (two-argument, `_box_env_value f CCRC_AUTH`), [stdout, rc] in `unit` mode]
     // The `main` column was CAPTURED from a copy of `ccd/ccrc` at the merge base, in a scratch tree, before the
@@ -3652,7 +3699,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       ['E13 readonly line', 'CCRC_AUTH=off\nreadonly CCRC_AUTH\n', ['off', 0], ['off', 0]],
       ['E14 CR on another line', 'CCRC_AUTH=on\nCCRC_RP_ID=x\r\n', ['on', 0], ['on', 0]],
       ['CR after value', 'CCRC_AUTH=on\r\n', ['on', 0], ['on', 0]],
-      ['two CRs after value', 'CCRC_AUTH=v\r\r\n', ['v\r', 0], ['v', 0]],
+      // D-3831: after ONE trailing CR is stripped a CR still inside the line makes the file undecidable (`unit` mode).
+      ['two CRs after value', 'CCRC_AUTH=v\r\r\n', ['v\r', 0], ['', 2]],
       ['one CR after value', 'CCRC_AUTH=v\r\n', ['v', 0], ['v', 0]],
       ['no trailing newline', 'CCRC_AUTH=on', ['on', 0], ['on', 0]],
       ['bare key', 'CCRC_AUTH=\n', ['', 0], ['', 0]],
@@ -3663,11 +3711,23 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       ['one-char quote value', 'CCRC_AUTH="\n', ['"', 0], ['', 2]],
       ['empty quote pair', 'CCRC_AUTH=""\n', ['', 0], ['', 0]],
       ['absent key', 'FOO=1\n', ['', 1], ['', 1]],
+      // Wave 9 R10a (D-3831): a file systemd would split or skip whole. `main` is again captured from the merge-base
+      // copy (two-argument reads are untouched); the `unit` column is rc 2 for a carriage return inside a line, a NUL
+      // byte anywhere, and a byte >= 0x80 in a non-comment line — and the two controls, whose only non-ASCII is a COMMENT,
+      // read as before. Every row is written byte for byte (latin1), so `\xff` is one invalid-UTF-8 byte.
+      ['W CR mid-line, key after it', 'X=1\rCCRC_AUTH=off\r\n', ['', 1], ['', 2]],
+      ['W CR mid-line in a comment', '# c\rCCRC_AUTH=off\r\n', ['', 1], ['', 2]],
+      ['W NUL in another line', 'CCRC_RP_ID=x\0y\nCCRC_AUTH=on\n', ['on', 0], ['', 2]],
+      ['W invalid UTF-8 in another value', 'CCRC_RP_ID=x\xff\nCCRC_AUTH=on\n', ['on', 0], ['', 2]],
+      ['W invalid UTF-8 in the key line', 'CCRC_AUTH=\xff\n', ['\xff', 0], ['', 2]],
+      ['W valid UTF-8 in a value (a cost, never a false answer)', 'CCRC_RP_ID=\xc3\xa9\nCCRC_AUTH=on\n', ['on', 0], ['', 2]],
+      ['W control: a valid UTF-8 em dash in a comment', '# a \xe2\x80\x94 b\nCCRC_AUTH=on\n', ['on', 0], ['on', 0]],
+      ['W control: a non-ASCII comment after the key', 'CCRC_AUTH=on\n; \xe2\x80\x94\n', ['on', 0], ['on', 0]],
     ];
     /** `_box_env_value <file> CCRC_AUTH [mode]` over every shape: stdout and rc, read back through files. */
     const readShapes = (mode: string): Array<[string, number]> => {
       const dir = mkTmp('ccrc-doctor-shapes-');
-      SHAPES.forEach(([, content], i) => writeFileSync(join(dir, `f${i}`), content));
+      SHAPES.forEach(([, content], i) => writeFileSync(join(dir, `f${i}`), content, 'latin1'));
       const script = [
         'set -uo pipefail', `. ${shq(CCRC_SRC)}`,
         `for ((i=0;i<${SHAPES.length};i++)); do _box_env_value ${shq(dir)}/f$i CCRC_AUTH ${mode} > ${shq(dir)}/o$i; echo $? > ${shq(dir)}/c$i; done`,
@@ -3675,7 +3735,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { HOME: dir, PATH: join(dir, 'no-bin'), LC_ALL: 'C' } });
       expect(r.status, r.stderr).toBe(0);
       return SHAPES.map((_, i): [string, number] =>
-        [readFileSync(join(dir, `o${i}`), 'utf8'), Number(readFileSync(join(dir, `c${i}`), 'utf8').trim())]);
+        [readFileSync(join(dir, `o${i}`), 'latin1'), Number(readFileSync(join(dir, `c${i}`), 'utf8').trim())]);
     };
 
     it('U1: plain mode (two arguments) reads every shape exactly as main did — stdout and rc, byte for byte, CR handling included', () => {
@@ -7976,7 +8036,7 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
   // BOTH files intact and removes only the FUNCTION (never `unset
   // CCRC_EXPOSURE_FILE`, which the guard tests first and would mask the
   // mutation), with `BUE_VAL=on` preset AFTER sourcing ccrc as a shell
-  // assignment (an env entry is reset at ccrc's own file scope, `:2856`) — a
+  // assignment (an env entry is reset at ccrc's own file scope, `:2887`) — a
   // guard missing this term reads that stale value as ARMED instead of
   // failing shut.
   it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, not a stale ARMED PASS', () => {

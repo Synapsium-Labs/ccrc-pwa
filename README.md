@@ -830,12 +830,12 @@ with a `Secure` cookie, which produces a login that answers 204 and bounces
 straight back to the login screen with nothing failing anywhere, or an `https:`
 one with the dev opt-out left on.
 
-**`ccrc doctor`'s `auth` check** reports where a box actually stands: a PASS on an un-armed box
-(that is the shipped default, and a doctor that warned about it would train an operator to
-skim), a FAIL on an armed box with no passphrase file, and a FAIL on a passphrase file the
-server would refuse to boot on. The flag is read exactly as `ccrc.service` gets it —
-`ccrc.env`, then the exposure file, the later one winning — never from the shell doctor runs in; whitespace around an unquoted value is read as the unit's feeder reads it (systemd on Linux; on macOS the launchd job's shell, where a file that is not plain assignments throughout is not measured), and a shape the reader cannot decide is reported as not measured, not guessed.
-It prints no byte of the file's contents, and neither does the server's own boot refusal.
+**`ccrc doctor`'s `auth` check** reports where a box actually stands: a PASS on an un-armed box (that is the
+shipped default, and a doctor that warned about it would train an operator to skim), a FAIL on an armed box with
+no passphrase file, and a FAIL on a passphrase file the server would refuse to boot on. The flag is read exactly
+as `ccrc.service` gets it — `ccrc.env`, then the exposure file, the later one winning, each as its feeder reads
+it (systemd; on macOS the launchd job's shell) — never from the shell doctor runs in; what it cannot decide is
+not measured. It prints no byte of the file's contents, and neither does the server's own boot refusal.
 
 ## The box decides `--remote-control`: `~/.ccrc/remote-control`
 
