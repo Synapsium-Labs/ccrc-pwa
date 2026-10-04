@@ -1702,7 +1702,7 @@ for name, edits, (pkg, files), anchor in M:
 
 ## Deviations found
 
-Two numbers, issued by the coordinator from the programme's block:
+Four numbers, issued by the coordinator from the programme's block (the last two at wave-done):
 
 - **D-3794** — `r1-proof-line-names-running-subagents` (Task 7): spec §4.2's example last line of r1's body reads "the
   coordinator is told when your next turn ends without one, and by 02:57Z at the latest; the operator 1 h after that."
@@ -1718,6 +1718,15 @@ Two numbers, issued by the coordinator from the programme's block:
   the same thing only when the run's history begins with its dispatch row, and `CoordStore.reconstruct()` rebuilds a
   run with none, whose first send-back the positional rule skipped (keeping the false r1 D-3788 removes). Every run
   with a full history answers exactly as before (every existing row stays green).
+
+- **D-3801** — `w8-it-titles-renumbered` (Task 8, recorded at wave-done): the plan's Task 8 table names `describe`
+  titles only. Its execution also renumbered 28 step-prefixed `it` titles in `stall-verdict.test.ts`'s wave-2 §10-order
+  describes, so that each names spec §10's step. Titles only; no assertion moved. The wave-1-subset describe's six
+  titles kept wave 1's compressed numbers, and its review found the same step number naming two spec steps in one
+  file. Wave 6's brief carries those six, titles only, under this number.
+- **D-3802** — `d3796-premise-pinned` (final review, recorded at wave-done): one `stall-verdict` row beyond the plan pins
+  D-3796's premise. In `RUN_TRANSITIONS` and `REVIEW_RUN_TRANSITIONS`, `planned` is the only state with `dispatched`
+  among its targets. It was measured red under an added `awaiting-review -> dispatched` edge in either table.
 
 Two decisions this plan takes against its brief, not against the spec, so they carry no number unless the coordinator
 rules otherwise: no index led by `mail_deliveries.toId` (it re-plans eighteen of the 93 captured mail statements, three reads measurably worse),
