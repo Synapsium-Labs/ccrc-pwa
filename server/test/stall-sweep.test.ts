@@ -2073,13 +2073,13 @@ describe('sweepStalls: mail-stuck reads the mail gate\'s mode from the tick\'s l
 // ── gate-held-mail-is-not-stuck (D-3798): a replay re-stamps deliveredAt, so the real store must say it was a replay ─────
 // The coordinator coord-deaf exists for: idle, the mail typed into its pane, never acked. `sweepMail` replays such a row
 // every MAIL_REPLAY_MS (`markDelivered`, then `bumpReplayCount`), so its newest `deliveredAt` is never 10 min old. The
-// store's `replayCount`, carried by `stallMailFor`, is what lets L1 time it from the queue.
+// store's `replayCount`, carried by `stallMailFor`, is what lets L1 time a replayed row from its first-delivery estimate (`replayed-deaf-from-first-delivery-estimate` (D-3803)).
 describe('sweepStalls: coord-deaf on a delivery the mail sweep keeps replaying (gate-held-mail-is-not-stuck (D-3798))', () => {
   it('is recorded an hour after the question\'s first delivery, while the newest deliveredAt is no more than ten minutes old (replayed-deaf-from-first-delivery-estimate (D-3803))', async () => {
     const { coord, w, sent } = await rig();
     const runId = seedRun(coord, { program: 'demo-program', workerMail: null, inbound: null });
     const Q_AT = IDLE_AT - 60_000;                       // chosen: the worker asks, and its turn ends a minute later
-    const REPLAY_MS = 10 * 60_000;                       // watch.ts's MAIL_REPLAY_MS, module-local there
+    const REPLAY_MS = 10 * 60_000;                       // shared/api.ts's MAIL_REPLAY_MS
     at(Q_AT);
     const q = coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId, kind: 'question', subject: 'which base?', body: 'b', artifacts: [] });
     const d = coord.queueDelivery(q.id, COORD, 'envelope');
