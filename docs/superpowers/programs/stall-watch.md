@@ -470,7 +470,7 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     two re-derived assertions, and whether `shared/api.ts` stays L0. The reviewer also runs the merged tree and the
     PWA build. The dispatch call timed out on the client (curl rc 28), but the run list shows it dispatched with the
     brief queued, so it was not re-sent.
-- **R30 (coordinator, 2026-10-04 17:05): the operator approves the amendment and the Settings section, and adds a
+- **R30 (coordinator, 2026-10-04 17:04): the operator approves the amendment and the Settings section, and adds a
   wave 7.**
   - **"Amendments approved."** The operator approved R2 together with R17-F1 as one amendment to coordinator clause
     16. It widens the `wait:` mail to every park of a `working` worker behind another run or programme, and to every
