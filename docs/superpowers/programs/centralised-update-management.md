@@ -30,7 +30,7 @@ numbers; the spec wave each one implements is named beside it.
 | 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | **MERGED** in two parts: the first cut as `c1c22489` (#202, 12:46 UTC, not by the coordinator), and fix round 1 as `a742eb6a` (#214, 2026-09-30 ~00:55 UTC, run 133 done; released as v0.0.49). #214's merged tree is byte-identical to its tested tip `29656594`, with `main` unmoved at `0ffa07f3` and every Linux leg green. Its two `test-macos` legs were red; they gate no merge (operator ruling 2026-09-28). Scoped review 181 met none of the bar's five classes; R1 was ruled inside item 2's accepted place (2); its findings are residue R9. Was: **Fix round 1 done** 2026-09-29 at `29656594` as new PR #214 (numbers 3465 and 3466 spent, bare: their definitions are on the worker branch; the full six local shards green at `b686e8d1`, the one later commit is prose); scoped review run 181 dispatched 23:55 UTC; after it, #214 merges. Was: **MERGED mid-round at its pre-round head** `751eb5da` as `c1c22489` (#202, 2026-09-29 12:46:52 UTC), NOT by the coordinator. So `main` carries wave 6 without fix round 1, and the round lands as a new PR from `ws/quiet-basin`. `stable` is held until it merges. Was: **Fix round 1 sent** 2026-09-29 12:05 UTC (mail 2552, `rulings-run133-fix1.md`) on review 179 at `751eb5da`: six behaviour defects the delta introduced, so the bar gives the one full round; a scoped review follows, then #202 merges. Was: **wave-done** 2026-09-29 at `751eb5da` (PR #202, 10/10 items; its one merge of `main` at `af5a29f8` has an empty remerge-diff; every Linux leg green in shadow mode; reserve spent: seven numbers, 3458 through 3464, bare: their definitions are on the worker branch); review run 179 dispatched under the bar committed before it. Was: **run 133 open, planned**; plan commits in cherry-pick order: `079f1881`, `edc98508`, `14f77194`, `e27aacae` (re-point against wave 4's reviewed tree `f546715d6`), `4e05173a` (review 173's residue); **DISPATCHED** 2026-09-28 16:57 UTC to `ccrc-pwa-quiet-basin` |
 | 7 | — (residue) | before stable: a fleet-link failure after the op's hand-off holds the lease (R1), the answer follows the lease by identity (R5), wave 5's prose and pins (R6) | server | — | **MERGED** in two parts: the first cut as `6da36f0b` (#203, 12:46 UTC, not by the coordinator), and fix round 1 as `5964e7f2` (#205, 2026-09-29 ~14:47 UTC, run 177 done). #205's merged tree is byte-identical to its tested tip `2e984395`, with `main` unmoved at `1ae3411b` and every Linux leg green. Scoped review 180 met none of the bar's four classes; its five coverage/prose findings are residue R7. Was: **Fix round 1 done** 2026-09-29 at `2e984395` as new PR #205 (it merges `main` at `1ae3411b`; its diff against `main` has exactly the changed lines of the round's own `5f6eae8e..bb5c26f8`, measured; full gate on the merged tree; no number spent). Scoped review run 180 dispatched 14:28 UTC; after it, #205 merges. Was: **MERGED mid-round at its pre-round head** `5f6eae8e` as `6da36f0b` (#203, 2026-09-29 12:46:28 UTC), NOT by the coordinator. Its fix round lands as a new PR from `ws/quiet-summit`, on a merge of `main` with a full gate. `stable` is held until it merges. Was: **Fix round 1 sent** 2026-09-29 11:40 UTC (mail 2550, `rulings-run177-fix1.md`) on review 178 at `5f6eae8e`: its F1, a deadline sentence that can be false, is a behaviour defect the delta introduced, so the bar gives the one round; a scoped review follows, then #203 merges. Was: **wave-done** 2026-09-29 at `5f6eae8e` (PR #203, 4/4 items, no reserve number spent; `main` unmoved at `af5a29f8`); review run 178 dispatched under the bar committed before it. Was: **DISPATCHED** 2026-09-29 07:25 UTC to `ccrc-pwa-quiet-summit` (run 177); plan `c3382e95` (one departure, 3555, defined in it; a five-number reserve named in the brief) |
 | 8 | — (live audit) | the live audit's residue: a move's source on record (A), backups pruned after a completed run (B), no one-tap rollback a node will refuse (C), doctor reads the armed gate (D), Settings wording (F), two box lines (G); E dropped by ruling | server + node | — | **MERGED** `5b1c58a8` (PR #219, 2026-10-01 01:49:28 UTC, run 182 done; released as v0.0.53 at 01:50:31). The merged tree is byte-identical to the tested tip `2555b082`, with `main` unmoved at `1f9fa22d` and every Linux leg green. Scoped review 203 met none of the bar's classes; its five prose findings are residue R11. Auto installed it on both boxes by 02:24 UTC. Was: **Fix round 1 done** 2026-10-01 at `2555b082` (7 commits; reserve number 3599 spent, bare: its definition is on the worker branch); scoped review run 203 dispatched under the committed bar; after it, #219 merges. Was: **Fix round 1 sent** 2026-09-30 22:50 UTC (`rulings-run182-fix1.md`) on review 196 at `1eb9b011`: F1 (item G's zero line over a failed listing) is a behaviour defect the delta introduced, so the bar gives the one round, with reserve number 3599 for the fail-closed sweep (bare: its definition goes on the worker branch); a scoped review follows, then #219 merges. Was: **Wave-done** 2026-09-30 21:10 UTC at `1eb9b011` (PR #219, 5/5 items). Its one merge of `main` at `1f9fa22d` hand-resolved two conflicts, both end-of-file appends, by keeping both sides (measured by remerge-diff). No reserve number was spent, and `DEP-move-record-kind` did not fire, so it is withdrawn unminted. Review run 196 is dispatched under the bar committed before it. Its merge reaches both boxes by auto within about 35 min. Was: **DISPATCHED** 2026-09-30 12:22 UTC to `ccrc-pwa-soft-ridge` (run 182); plan `8e73f825` (13 departures defined in it, one contingent by slug; a five-number reserve named in the brief). |
-| 9 | — (stable readiness) | this programme's 12 macOS reds (harness, the Linux-only control, the escapee, the rsync recorder, the Darwin missing-deps block), tmux names sanitised at creation (M8, live), structural containment of the ccrc builders (R10d, R9-F8), doctor's auth reader models the unit's feeder (R10a, R10e), `ccrc backup`'s prune takes the lock (R10g), a prose batch | fleet-first | — | **PLANNED** 2026-10-02 14:20 UTC; plan `e52f9859` (23 departures defined in it; a five-number reserve named in the brief). Its merge reaches both boxes by auto within about 35 min. The stable gate also needs the GPT lane's 45 macOS reds fixed by that programme. |
+| 9 | — (stable readiness) | this programme's 12 macOS reds (harness, the Linux-only control, the escapee, the rsync recorder, the Darwin missing-deps block), tmux names sanitised at creation (M8, live), structural containment of the ccrc builders (R10d, R9-F8), doctor's auth reader models the unit's feeder (R10a, R10e), `ccrc backup`'s prune takes the lock (R10g), a prose batch | fleet-first | — | **DISPATCHED** 2026-10-04 12:46 UTC to `ccrc-pwa-amber-harbor` (run 223), the brief brought up to date with `main` `59a435f0`. Was: **PLANNED** 2026-10-02 14:20 UTC; plan `e52f9859` (23 departures defined in it; a five-number reserve named in the brief). Its merge reaches both boxes by auto within about 35 min. The stable gate also needs the GPT lane's 45 macOS reds fixed by that programme. |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
 
 **Order.** 2 → {3, 4} → {5, 6} → rollout. Waves 3 and 4 touch disjoint files (PWA + notifier vs `ccd/ccrc` +
@@ -916,6 +916,28 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - The fleet box ran 01:52:51–01:59:15, and the server box 01:59:45–02:00:07.
       - One auto-source feed row per box. Each box holds 10 timestamped backups.
       - STATUS: fleet and server v0.0.58, newest v0.0.58, backups fleet 123M/server 454M, no anomalies.
+    - **2026-10-04 12:48 UTC: eight auto moves landed while the hourly probe was down, v0.0.58 to v0.0.69.**
+      - The probe's schedule was session-only and was gone by 12:47 today. It stopped at some point after the
+        entry above. These moves were read back afterwards, read-only, from the server's `update` feed rows. None
+        was watched as it happened.
+      - Each move has one auto-source "accepted" row per box. The fleet box went first and the server box followed
+        6–10 min later:
+        - v0.0.59: 10-02 11:33 and 11:39;
+        - v0.0.60: 15:12 and 15:19;
+        - v0.0.63: 19:52 and 20:01;
+        - v0.0.64: 10-03 13:35 and 13:44;
+        - v0.0.65: 16:47 and 16:56;
+        - v0.0.66: 18:58 and 19:08;
+        - v0.0.68: 23:09 and 23:19;
+        - v0.0.69: 23:21 and 23:31.
+      - Each move starts from the version the previous move targeted, and both boxes and `/health` now answer
+        v0.0.69. So every move landed, and none was reverted. v0.0.61, v0.0.62 and v0.0.67 were skipped by
+        design, because a newer release was out before the poll.
+      - The fleet box holds 10 timestamped backups and five versions. Its backup total fell from 123M to 100M
+        under the same count of 10.
+      - v0.0.70–v0.0.72 were published 12:41:17–12:44:13 today, so their poll is not yet due.
+      - STATUS: fleet and server v0.0.69, newest v0.0.72, backups fleet 100M/server 496M, disk free fleet
+        81G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
@@ -1075,6 +1097,24 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **Deviations:** the plan defines the 23 numbers issued for it. The brief names a five-number reserve.
   - Main was merged into this branch first, at `6ca3d163`. Its three hand-resolved plan files take `main`'s
     merged versions, byte for byte.
+
+- **2026-10-04 12:46 UTC: wave 9 dispatched (run 223) to `ccrc-pwa-amber-harbor`.**
+  - The first try, on 10-02, was refused `cap-concurrency` (7 of 7 running). It was retried on the operator's word
+    today, with 3 runs active.
+  - **Re-measured before dispatch, at `main` `59a435f0`, 13 commits past the plan's base:**
+    - Task 2's two censuses, the id↔name copies and the live-name readers, still give the same eleven lines each,
+      only shifted.
+    - `_tmux`'s body and the count of tmux creators are unchanged. Every `ccd/ccrc` function Tasks 2, 4 and 5
+      name is present.
+    - `_upd_backup_set` gained a `ccd-body` row (#222). It changes nothing in Task 5's keep-set, which identifies
+      a tree backup by its `server-dist`/`agent-dist` copies.
+  - **The brief was updated in two places:**
+    - It says the anchors still hold at `59a435f0`.
+    - It names the claims standing today: 955 (run 174, `ccd/ccrc`, PR #215, which also edits `ccd/ccd`) and
+      957 (run 255, `README.md`). The two it named on 10-02 have ended.
+  - #222 has merged, but the plan's ban on editing `ccdWsHelpers.ts` stands as written. The ruling did not
+    change.
+  - The route, the items and the reserve are unchanged.
 
 ## Carried constraints
 
