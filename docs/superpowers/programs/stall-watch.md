@@ -19,8 +19,8 @@ file in the fleet registry. No marker has a writer in the tree.
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 | **merged** `3255571a1` (2026-10-03 23:09, R22); live at the next auto-update |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
-| 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | **accepted, merging**: #237 at `365a5c516` (R24, R25); dispatched 2026-10-03 as run 252 to `ccrc-pwa-clear-delta` (R23) |
-| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | — | planned and reviewed (R19); dispatches after waves 3–5 land |
+| 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | #237 | **merged** `7e858c8bf` (2026-10-04 12:40, R26) |
+| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | — | **dispatched** 2026-10-04 as run 255 to a fresh child (`ccrc-pwa-warm-basin`), with R25's carry-overs (R26) |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -29,9 +29,9 @@ the two plans' own "Deviations found" sections and their PRs. Run-tracked waves 
 
 | marker | arms | state | gate |
 |---|---|---|---|
-| `stall-watch-live` | wave 1's r1 (a check mailed to the worker; never pushed) | not armed | recommended now — the shadow review found every false r1 harmless, and run 237's 15 h silence (2026-10-03) is a fourth true stall r1 would have caught |
+| `stall-watch-live` | wave 1's r1 (a check mailed to the worker; never pushed) | **ARMED** 2026-10-04 12:39:43, on the fleet registry at the operator's request (R26) | recommended now — the shadow review found every false r1 harmless, and run 237's 15 h silence (2026-10-03) is a fourth true stall r1 would have caught |
 | `stall-watch-escalate` | r2 (coordinator report), r3 and every operator push, including the limit, dialog and coordinator-ball caps | not armed | after #228 is deployed and wave 6 re-keys the dialog cap, and only while w2-live is off or `mail-gate-busy` is armed (R18). r2/r3 were true on run 237, and the dialog cap is 2/2 true |
-| `mail-gate-busy-shadow` | the busy gate logs only | not armed | **recommended now** (R18). Its log is the evidence for `mail-gate-busy`, which removes the mail-stuck/coord-deaf false class at its cause |
+| `mail-gate-busy-shadow` | the busy gate logs only | **ARMED** 2026-10-04 12:39:43, at the operator's request (R26) | **recommended now** (R18). Its log is the evidence for `mail-gate-busy`, which removes the mail-stuck/coord-deaf false class at its cause |
 | `mail-gate-busy` | busy delivery | not armed | after busy-shadow evidence; C7 (the spinner row on a busy+done pane) is still unobserved |
 | `stall-watch-w2-live` | every wave-2 arm's sends | not armed | the 48 h review is done (R18). It is NOT ready as one marker. orphan-d is 2/2 true, but mail-stuck (0/4) and coord-deaf (0/1) misreport busy-gate deafness, and w2-live also switches the quiet ladder to the marker clock, which was never measured in shadow. It arms after wave 6 and a busy-shadow period |
 
@@ -395,6 +395,26 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     saying so.
   - **D-3801 and D-3802 are defined in wave 5's plan** on this ledger branch. The code cites neither.
   - **Where the run stands.** Run 252 is at `merging` (worker told, mail 3371), waiting for #237's merge.
+- **R26 (coordinator, 2026-10-04 12:43): arming, the last merges, and the last wave.**
+  - **The operator said "Do the arming run for me."** At 12:39:43 this session created
+    `~/.cc-sessions/stall-watch-live` and `~/.cc-sessions/mail-gate-busy-shadow` on the fleet box. That is the arming
+    step R18 recommended, and none other.
+    - Both boxes measured v0.0.69 (`3255571a1`, which carries wave 3's fix and wave 4's skills) beforehand.
+    - No marker existed before. `mail-disabled` is absent.
+    - This is a one-time act at the operator's explicit request. The tree still has no writer for any marker.
+  - **The operator said "Yes to merges."** #237 (wave 5) and #238 (ledger R22–R25) were squash-merged with `--admin`,
+    each pinned to its head:
+    - #237 at `7e858c8bf`; its head `365a5c516` equals the handoff, which is wave 5's merge proof;
+    - #238 at `0750f4490`.
+  - **Wave 6 is dispatched.** Wave 6's run 255 was opened first. Then run 252 closed `final:true`: `done`,
+    `released:true`, child reclaim queued. Wave 6 was then dispatched to a fresh child.
+    - The checks before dispatch: claims re-read (run 174's three claims do not overlap), the window at 8 of 24, and
+      the plan's preconditions measured on `main`.
+    - The brief reads the plan at `0750f4490`, carries R25's three carry-overs, and warns the worker that its own run
+      is now watched.
+  - **An open operator question (2026-10-04): should arming default on for other installs, or be a Settings-page
+    toggle?** Today no install arms anything; the markers have no writer in the tree, by design. This session's advice
+    is in its reply to the operator. A toggle would be a spec change, planned only on the operator's yes.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
@@ -439,7 +459,7 @@ Output: `w2-shadow-review.json` in the coordinator notes.
   - Dispatched only after #227 and #228 are proven merged; it builds on wave 3's code.
   - It carries R11's F2 and F3 pins.
   - Before dispatch: re-read claims, and take a dispatch slot by measurement or by agreement with landing-order (R16).
-- **Wave 6:** `docs/superpowers/plans/2026-10-03-stall-watch-w6-review-fixes.md`, all four tasks, on a fresh child.
+- **Wave 6:** dispatched (R26). Plan `docs/superpowers/plans/2026-10-03-stall-watch-w6-review-fixes.md`, all four tasks, on a fresh child.
   - Read by its sha.
   - Dispatched only after wave 5's PR is proven merged: it re-anchors against wave 5's `stall.ts` and `store.ts` by
     content.
