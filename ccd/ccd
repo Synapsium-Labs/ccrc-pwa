@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=61f92d23118b1e2d750221a8fd2bc5affea9caaeb76751c72f0f576bf67a0f77
+# ccrc:generated 1 sha256=1fcb583acc4bf160bea7e70035ad61327511793f83c8c581f3d98066f5778816
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19,11 +19,11 @@ set -uo pipefail
 # defined none at this line. Nothing here consults PATH, but the guard is
 # BEST-EFFORT wherever no launcher `-p` start stands behind it, since `printf`,
 # `exit` and `declare` can each be shadowed by a startup-defined function: an
-# explicit `bash ccd/ccd` (a hostile `BASH_ENV` already ran), and a case-variant
-# protected verb under an inherited `nocasematch`, which the launcher compares
-# exactly and starts ORDINARY. The guarantee is the launcher's `-p` start of an
-# exact spelling (D-3696, D-3700). SOURCE MODE never runs this; the classifier
-# is the launcher's, shape for shape, and the dispatcher still owns every tail.
+# explicit `bash ccd/ccd` (a hostile `BASH_ENV` already ran). The guarantee is the
+# launcher's `-p` start (D-3696, D-3700). It folds case, a superset: a variant an
+# inherited `nocasematch` folds here starts PROTECTED, `-p` drops that option, and
+# this guard and the dispatcher compare exactly again. SOURCE MODE never runs this;
+# the launcher classifies a superset of these shapes; the dispatcher owns every tail.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim ]] \
      || { [[ $# -eq 4 || $# -eq 5 ]] && [[ "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --reclaim ]] \
           && [[ $# -eq 4 || "${5-}" == --defer-expired ]]; }; }; then
@@ -751,33 +751,33 @@ _have_systemctl() {
 # `systemctl` on the other platform, so a harness that puts its own launchctl
 # ahead of /bin keeps full control and full observability.
 #
-# `_SVC_REAL_HOME` is resolved ONCE via tilde expansion, which reads the
-# password database rather than $HOME — that is the whole point, and it is why
-# this cannot be `[ "$HOME" = "$HOME" ]` in disguise.
-# RESOLVED LAZILY, AND ONLY ON DARWIN. Two reasons, both learned the hard
-# way: at source time this ran on every ccd invocation on both platforms
-# including Linux, where nothing reads it; and it forked `id`, which on a
-# contained PATH is a `command not found` on stderr — see `_svc_domain` above.
-#
-# `$USER`/`$LOGNAME` first because they are already in the environment;
-# `id -un` only if neither is, and silenced. The tilde expansion is what
-# actually consults the password database, which is the whole point: it
-# answers the real home even when `$HOME` has been pointed somewhere else.
+# `_SVC_REAL_HOME` comes from tilde expansion, which reads the password database,
+# not $HOME — the whole point: it answers the real home even when `$HOME` points
+# elsewhere. RESOLVED LAZILY, AND ONLY ON DARWIN: at source time it forked `id`
+# on Linux too, a `command not found` on a contained PATH. `$USER`/`$LOGNAME`
+# first, `id -un` (silenced) if neither. THE NAME IS CHECKED BEFORE `eval`: it is
+# the environment's, and `eval` runs any shell syntax in it (`$(…)`, a backtick,
+# `;`) inside a protected start. Only a login name expands — a letter, digit or
+# `_`, then those, `.`, `@`, `-`, spelled out (a RANGE follows the locale) —
+# never ALL DIGITS: only that, signed or not (`~0`, `~+1`), reads the directory
+# stack when the entry exists (`~0` is $PWD, a sandbox's choice), else passwd;
+# `~+`, `~-` are $PWD, $OLDPWD; `~5user` reads only passwd. Else: no home, exit 1.
 _SVC_REAL_HOME=""
 _svc_real_home() {
   [ -n "$_SVC_REAL_HOME" ] && { printf '%s' "$_SVC_REAL_HOME"; return 0; }
-  local u="${USER:-${LOGNAME:-}}"
+  local u="${USER:-${LOGNAME:-}}" az=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ d=0123456789
   [ -n "$u" ] || u="$(id -un 2>/dev/null)"
-  [ -n "$u" ] && _SVC_REAL_HOME="$(eval printf '%s' "~$u" 2>/dev/null)"
+  [[ "$u" =~ ^[${az}${d}_][${az}${d}._@-]*$ && ! "$u" =~ ^[$d]+$ ]] || return 1
+  _SVC_REAL_HOME="$(eval printf '%s' "~$u" 2>/dev/null)"
   printf '%s' "$_SVC_REAL_HOME"
 }
 _svc_launchctl() {   # <launchctl args...>
-  local bin; bin="$(command -v launchctl 2>/dev/null)" || return 1
+  local bin rh; bin="$(command -v launchctl 2>/dev/null)" || return 1
   [ -n "$bin" ] || return 1
   # A sandbox HOME plus the SYSTEM launchctl is the combination that must not
-  # proceed. Either alone is fine: the real home is an operator's box, and a
-  # stub anywhere is a harness that asked for this call.
-  if [ "$HOME" != "$(_svc_real_home)" ] \
+  # proceed. Either alone is fine: the real home is an operator's box, and a stub
+  # is a harness that asked. A home that cannot be RESOLVED counts as a sandbox.
+  if { ! rh="$(_svc_real_home)" || [ "$HOME" != "$rh" ]; } \
      && [ "${CCRC_ALLOW_SANDBOX_LAUNCHCTL:-}" != 1 ] \
      && case "$bin" in /bin/launchctl|/usr/bin/launchctl) true ;; *) false ;; esac; then
     return 1
@@ -7764,11 +7764,11 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
       || _lc_refuse destroy "$id" foreign-worktree \
            "$workdir is not a worktree of $main — nothing was touched; move or delete the directory by hand, then re-run (with it gone, ccd clears the leftover record itself; \`git worktree prune\` will not, while the directory is there)" \
            dec.reason "$reason"
-    # --porcelain counts untracked files, which is what `git worktree remove`
-    # itself objects to. Doing this after the kill would leave the uncommitted
-    # work intact but the session dead and out of supervision — and the refusal
-    # would be lying about it. A status we could not read is not a clean one
-    # (same rule as _ws_gc_dirty).
+    # --untracked-files=all counts untracked files even under a config of
+    # status.showUntrackedFiles=no, where `git worktree remove` deletes them
+    # (git 2.43). Doing this after the kill would leave the uncommitted work
+    # intact but the session dead and unsupervised — and the refusal lying
+    # about it. A status we could not read is not clean (as in _ws_gc_dirty).
     #
     # AND THE EXIT CODE IS ONLY HALF OF "COULD NOT READ" — final-round
     # verification P2. The integration-5 class was closed at `_ws_reap_eval`
@@ -7795,7 +7795,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     derrf=$(_plat_mktemp) || _lc_refuse destroy "$id" scratch-unwritable \
       "could not make a scratch file to read $workdir — nothing was touched" \
       dec.reason "$reason"
-    dirty=$(git -C "$workdir" status --porcelain 2>"$derrf"); drc=$?
+    dirty=$(git -C "$workdir" status --porcelain --untracked-files=all 2>"$derrf"); drc=$?
     derr=$(cat "$derrf" 2>/dev/null); rm -f "$derrf"
     { (( drc == 0 )) && [[ -z "$derr" ]]; } \
       || _lc_refuse destroy "$id" tree-unreadable \
@@ -8459,6 +8459,7 @@ pr-open
 pr-state
 prefer
 project-pool
+reclaim-pause
 route
 start
 stop
@@ -8624,6 +8625,7 @@ EOF
   echo child-argv-v1
   # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
   echo reclaim-v1
+  echo reclaim-pause-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -11876,10 +11878,10 @@ _ws_reap_reset() {
   REAP_CHILDDIGEST=""
 }
 
-# MUTATION SURVIVOR, disclosed: the `return 1` is removable with the suite
-# green, because every call site in `_ws_reap_eval` is `… ; return 1` and none
-# of them reads this function's status. It stays so that a site CAN be written
-# `_reap_refuse … || return` — and so that the function's contract is "this
+# THE `return 1` IS READ: `_ws_reap_leaf_ok` (the MIRROR block) ends in
+# `… || _reap_refuse …`, so its status IS this function's, and `_ws_reap_eval`
+# calls it `… || return 1` — drop the `return 1` and a linked workdir reads as
+# reapable. Every other site is still `… ; return 1`. The contract is "this
 # refuses", not "this assigns two variables".
 _reap_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }
 
@@ -11926,7 +11928,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   baseShort="${base#origin/}"
   [[ -n "$project" && -n "$workdir" && -n "$branch" ]] \
     || { _reap_refuse incomplete-registry "project='$project' workdir='$workdir' branch='$branch'"; return 1; }
-  main="$PROJECTS_ROOT/$project"
+  main="$PROJECTS_ROOT/$project"; _ws_reap_leaf_ok "$workdir" "$id" || return 1   # a LEAF link refuses before any fork reads $workdir (WS-REAP'S MIRROR)
   if [[ ! -d "$workdir" ]]; then
     # A missing worktree is a refusal when the USER removed it and a resume
     # when WE did. The breadcrumb is what tells the two apart.
@@ -12185,7 +12187,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # observable is left to pin. It states the case rather than relying on a
     # later line to catch it.
     errf=$(_plat_mktemp) || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
-    dirt=$(git -C "$workdir" status --porcelain 2>"$errf"); rc=$?
+    dirt=$(git -C "$workdir" status --porcelain --untracked-files=all 2>"$errf"); rc=$?   # `all`: untracked files are dirt whatever status.showUntrackedFiles says, repo- or worktree-scoped
     err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
     (( rc == 0 )) && [[ -z "$err" ]] \
       || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
@@ -12361,12 +12363,12 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       [[ -z "$cop" ]] || { _reap_refuse child-busy "$cop in progress at $cpath"; return 1; }
       [[ -n "$cbr" ]] || { _reap_refuse child-busy "detached HEAD at $cpath"; return 1; }
       errf=$(_plat_mktemp) || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }
-      dirt=$(git -C "$cpath" status --porcelain 2>"$errf"); rc=$?
+      dirt=$(git -C "$cpath" status --porcelain --untracked-files=all 2>"$errf"); rc=$?   # `all`, as the parent's: a child's own worktree config must not hide its untracked files
       err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
       { (( rc == 0 )) && [[ -z "$err" ]]; } \
         || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }
       local cdirty; cdirty=$(printf '%s' "$dirt" | grep -c . || true)
-      (( cdirty == 0 )) || { _reap_refuse child-dirty "$cdirty uncommitted file(s) in $cpath"; return 1; }
+      (( cdirty == 0 )) || { _reap_refuse child-dirty "$cdirty uncommitted file(s) in $cpath"; return 1; }; local cign; cign=$(_ws_child_ignored_count "$cpath" "$children") || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }; (( cign == 0 )) || { _reap_refuse child-dirty "$cign ignored file(s) in $cpath"; return 1; }
       local cbase; cbase=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD) \
         || { _reap_refuse child-unpushed "no origin/HEAD to prove $cpath against"; return 1; }
       local cahead; cahead=$(git -C "$cpath" rev-list --count "$cbase..HEAD" 2>/dev/null) \
@@ -13575,19 +13577,19 @@ _ws_tombstone() {   # id clipsjson [reclaim-fragment: ws-reclaim's keys, ending 
   local tbranch="${REAP_BRANCH-}" tregbranch="${REAP_REGBRANCH-}"
   [[ -n "$tbranch" ]] || tbranch=$(_reg_get "$id" branch)
   [[ -n "$tregbranch" ]] || tregbranch=$(_reg_get "$id" branch)
-  local reflog="" transcript
-  [[ -d "$(_reg_get "$id" workdir)" ]] && reflog=$(git -C "$(_reg_get "$id" workdir)" reflog show --all --format='%H %gs' 2>/dev/null | head -200)
+  local reflog="" transcript   # `reflog`: the workdir's HEAD and `tbranch` only, never `--all` (another branch's commits are not this cleanup's)
+  [[ -d "$(_reg_get "$id" workdir)" ]] && reflog=$(wd=$(_reg_get "$id" workdir); { git -C "$wd" reflog show --format='%H %gs' HEAD; git -C "$wd" reflog show --format='%H %gs' "refs/heads/$tbranch"; } 2>/dev/null | head -200)
   transcript=$(_transcript_path "$id") || transcript=""
   {
-    # `branch` IS THE BRANCH THIS CLEANUP IS ABOUT — `REAP_BRANCH`, i.e. git's
-    # worktree record — not the registry field it used to read. Under drift the
-    # two differ, and this document is the only thing that outlives the
-    # workspace: recording the registry's name here would name a branch that
-    # still exists while saying nothing about the one that was deleted, and the
-    # resume path (which reads its branch back out of this file) would then CAS
-    # the wrong ref and wedge every later attempt on `branch-moved`.
-    # `registryBranch` records the witness beside it — the name this cleanup
-    # LEFT ALONE — so the pair can never be reconstructed as one fact.
+    # `branch` IS THE BRANCH THIS CLEANUP DELETES (`REAP_BRANCH`): for ws-reap,
+    # git's worktree record; for ws-reclaim, the registry's — and there a HEAD
+    # that drifted onto another branch keeps that branch, recorded in
+    # `keptBranches` and never deleted. Each verb's resume reads `branch` back
+    # out of this file to CAS that ref, so naming any other branch here would
+    # CAS the wrong ref and wedge every later attempt. `registryBranch` is the
+    # witness beside it: for ws-reap the registry's name, which under drift is
+    # the branch it LEFT ALONE; for ws-reclaim it equals `branch`. The pair is
+    # never reconstructed as one fact.
     printf '{"id":%s,"project":%s,"workdir":%s,"branch":%s,"registryBranch":%s,"base":%s,"tip":%s,' \
       "$(_json_str "$id")" "$(_json_str "$(_reg_get "$id" project)")" \
       "$(_json_str "$(_reg_get "$id" workdir)")" "$(_json_str "$tbranch")" \
@@ -14073,7 +14075,7 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
           "$(_json_str "could not read the tree at $workdir — refusing to finish the cleanup on a guess")"
         return 0
       }
-      rdirty=$(git -C "$workdir" status --porcelain 2>"$rerrf"); rrc=$?
+      rdirty=$(git -C "$workdir" status --porcelain --untracked-files=all 2>"$rerrf"); rrc=$?   # `all`, as the eval's
       rerr=$(cat "$rerrf" 2>/dev/null); rm -f "$rerrf"
       { (( rrc == 0 )) && [[ -z "$rerr" ]]; } || {
         printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
@@ -14208,14 +14210,14 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
                   "$(_json_str "could not read the child at $_rccpath — refusing to finish the cleanup on a guess")"
                 return 0
               }
-              _rcdirt=$(git -C "$_rccpath" status --porcelain 2>"$_rcerrf"); _rcrc=$?
+              _rcdirt=$(git -C "$_rccpath" status --porcelain --untracked-files=all 2>"$_rcerrf"); _rcrc=$?   # `all`, as the eval's
               _rcerr=$(cat "$_rcerrf" 2>/dev/null); rm -f "$_rcerrf"
               { (( _rcrc == 0 )) && [[ -z "$_rcerr" ]]; } || {
                 printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
                   "$(_json_str "could not read the child at $_rccpath — refusing to finish the cleanup on a guess")"
                 return 0
               }
-              [[ -z "$_rcdirt" ]] || rcchanged+="$_rccpath is dirty now; "
+              [[ -z "$_rcdirt" ]] || rcchanged+="$_rccpath is dirty now; "; local _rcign; _rcign=$(_ws_child_ignored_count "$_rccpath" "$rcchildren") || { printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' "$(_json_str "could not read the child at $_rccpath — refusing to finish the cleanup on a guess")"; return 0; }; (( _rcign == 0 )) || rcchanged+="$_rccpath has $_rcign ignored file(s) now; "
             fi
           else
             rcchanged+="$_rcline is not among the consented children; "
@@ -14740,9 +14742,9 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # never reach this far by accident.
   if [[ "$resumed" == "" || "$resumed" == children || "$resumed" == worktree ]]; then
     if [[ -d "$workdir" ]]; then
-      # No --force. On failure STOP: the session is already stopped and
-      # ws-restore recovers it, whereas losing the registry would not be
-      # recoverable.
+      # No --force, never through a link (re-tested here — a resume never ran
+      # `_ws_reap_eval`). On failure STOP: the session is already stopped and
+      # ws-restore recovers it; losing the registry would not be recoverable.
       #
       # THE TAIL BACKSTOP — the audit's `_ws_reap_eval` rung above proves no
       # nested checkout existed at CONSENT time, and this is the box-side
@@ -14783,7 +14785,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
       # actually gone and the breadcrumb still says `worktree`, which is a lie
       # in the one direction that matters.
       local wtout wtrc
-      wtout=$(git -C "$main" worktree remove "$workdir" 2>&1); wtrc=$?
+      if [[ -L "${workdir%"${workdir##*[!/]}"}" ]]; then wtout="$workdir is a symbolic link — ccd never follows a link to a tree it would delete"; wtrc=1; else wtout=$(git -C "$main" worktree remove "$workdir" 2>&1); wtrc=$?; fi
       if (( wtrc != 0 )); then
         printf '{"refused":"worktree-remove-failed","detail":%s,"paths":[]}\n' \
           "$(_json_str "$(printf '%s' "$wtout" | head -3)")"
@@ -15129,7 +15131,7 @@ _ws_gc_dirty() {   # workdir -> 0 when the tree has uncommitted OR untracked fil
     GC_DIRTY_WHY='no scratch file to capture git stderr, so the status was never read'
     return 0
   }
-  out=$(git -C "$1" status --porcelain 2>"$errf"); rc=$?
+  out=$(git -C "$1" status --porcelain --untracked-files=all 2>"$errf"); rc=$?   # `all` overrides status.showUntrackedFiles=no: untracked files are dirt whatever the config says
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   { (( rc == 0 )) && [[ -z "$err" ]]; } || {
     # First line only: git's diagnostic is one line per unreadable directory
@@ -19762,12 +19764,50 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 # anything minted.
 #
 # THREE ANSWERS, one line on stdout:
-#   rc 0  `free`                no refs/heads/ws/<slug>, nothing at all at $wt
-#                               (not even a dangling link), and $wt is not a
+#   rc 0  `free`                EVERY one of these holds, AND EVERY PROBE
+#                               ANSWERED (no rc-2 arm fired): no branch
+#                               `refs/heads/ws/<slug>` (packed or loose,
+#                               `show-ref`); no branch `refs/heads/ws` itself;
+#                               no child ref under `refs/heads/ws/<slug>/`
+#                               git can LIST, packed or loose
+#                               (`for-each-ref`); no loose ref/file/directory
+#                               conflict at `refs/heads/ws` or
+#                               `refs/heads/ws/<slug>`; nothing at all at $wt
+#                               (not even a dangling link); and $wt is not a
 #                               registered worktree of $main;
-#   rc 1  `taken <what>`        `branch ws/<slug>`, `path <wt>` or
-#                               `worktree <wt>` — the first one found;
-#   rc 2  `unmeasurable <why>`  git could not answer.
+#   rc 1  `taken <what>`        every shape below, the FIRST one found:
+#                                 `branch ws/<slug>`        the direct ref
+#                                 `branch ws`                a branch named
+#                                                            exactly `ws`,
+#                                                            packed or loose
+#                                 `branch ws/<slug>/<x>`    a child ref git can
+#                                                            LIST, packed or
+#                                                            loose
+#                                                            (`for-each-ref`)
+#                                 `branch ws/<slug>/ (a directory holds its
+#                                   path)`                  a directory
+#                                                            stands where a
+#                                                            child ref would: a
+#                                                            child ref git
+#                                                            CANNOT list (the
+#                                                            child itself
+#                                                            unreadable, so
+#                                                            `for-each-ref`
+#                                                            finds nothing), an
+#                                                            EMPTY directory
+#                                                            (git itself would
+#                                                            remove one and
+#                                                            succeed), or one
+#                                                            holding only a
+#                                                            stale `x.lock` and
+#                                                            no ref
+#                                 `path <wt>`                something at the
+#                                                            worktree path
+#                                 `worktree <wt>`            a registered
+#                                                            worktree whose
+#                                                            directory may be
+#                                                            gone
+#   rc 2  `unmeasurable <why>`  git, or the filesystem, could not answer.
 # The third must never fold into either of the others. Folded into `free`, it
 # retries into the very late death this exists to prevent; folded into
 # `taken`, it burns all sixty draws and blames the slug for a repository git
@@ -19780,8 +19820,8 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 # anything under an unsearchable `refs/heads` or `refs/heads/ws`, and a
 # directory/file conflict — a `ws/<slug>/<x>` branch, or one named just `ws` —
 # every one of which `git worktree add -b ws/<slug>` then dies on. Only an
-# unreadable `packed-refs` reaches the rc 128 its `*)` arm catches. So rc 1 is
-# believed only after three more probes agree:
+# unreadable or corrupt `packed-refs` reaches the rc 128 its `*)` arm catches.
+# So rc 1 is believed only after three more probes agree:
 #   - `show-ref` on `refs/heads/ws` itself, and `for-each-ref` under
 #     `refs/heads/ws/<slug>/` — the conflicts git can READ, packed or loose;
 #   - the LOOSE PATHS under `--git-common-dir`: `refs` and `refs/heads` must
@@ -19793,9 +19833,17 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 # A ref present only in `packed-refs` is already answered by `show-ref`. An
 # EMPTY directory at the ref path reads `taken` by ruling, though git itself
 # removes one and succeeds — measured; the stricter answer only skips a slug.
-# The loose probe assumes the files backend: a reftable repository's
-# `refs/heads` is no searchable directory, and it answers `unmeasurable` —
-# loud and closed, never free.
+# The loose probe assumes the files backend, and `refs/heads` NOT BEING A
+# DIRECTORY is TWO DIFFERENT SHAPES, told apart by what stands at the path —
+# "absent" is FALSE for the one real case this exists to name. A reftable
+# repository does not lack `refs/heads`; git's own `refs_create_refdir_stubs`
+# writes it as a regular FILE ("this repository uses the reftable format")
+# for every non-files backend, measured. So PRESENT but not a directory
+# answers `unmeasurable … refs/heads is not a directory` — the reftable stub,
+# or a corrupt repository that put something else there — while TRUE absence
+# (nothing at the path at all, `-e || -L` both false) answers `unmeasurable …
+# refs/heads is absent`. Both are no evidence of a loose ref either way, and
+# both stay `unmeasurable`, never `free`.
 #
 # THE REPOSITORY IS PROVED TO BE $main FIRST. git skips a `.git` it cannot read
 # and keeps discovering UPWARDS, so a broken $main inside another repository
@@ -19805,8 +19853,12 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 # PATH IS `-e || -L`: `-e` follows a link, so a dangling one reads as absent
 # while `git worktree add` still refuses the path. An empty directory is
 # `taken` too, deliberately: ccd did not make it, so ccd cannot say whose it is.
-# And `-e` is false on EACCES as well as on absence, so when `$wt` does not stat
-# the directories above it must be searchable, or the answer is `unmeasurable`.
+# And `-e` is false on EACCES as well as on absence, so when `$wt` does not
+# stat, only TWO LEVELS are checked for searchability: $WORKTREES_ROOT
+# itself, and $WORKTREES_ROOT/<project>. Either unsearchable answers
+# `unmeasurable`. Anything ABOVE $WORKTREES_ROOT — its own parent
+# directories — is RESIDUAL: unprobed, assumed reachable, exactly as the
+# ws-add race below is.
 #
 # WORKTREE COMPARES RESOLVED PATHS. git prints every worktree path with its
 # symlinks collapsed ($HOME/worktrees -> /data/worktrees in production) while
@@ -19820,7 +19872,11 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 # answer and `git worktree add` come a fetch and a mkdir — so `ws-rename`'s
 # `git branch -m`, any session's own git, or a ws-add under a second label on
 # the same repository can still take the ref in that window. git's own refusal
-# at `worktree add` is then the backstop, as it was before this existed.
+# at `worktree add` is then the backstop, as it was before this existed. A
+# STALE `refs/heads/ws/<slug>.lock` — left by an interrupted `git branch` or
+# `worktree add` — is residual too: no probe above names it, and
+# `git worktree add -b ws/<slug>` fails on it with git's own message telling
+# the operator to remove the lock, the same backstop as the race itself.
 _ws_slug_git_state() {   # project slug -> one line + rc: 0 `free` | 1 `taken <what>` | 2 `unmeasurable <why>`
   local main="$PROJECTS_ROOT/$1" wt="$WORKTREES_ROOT/$1/$2" top rc listing line rwt kid common d
   top=$(git -C "$main" rev-parse --show-toplevel 2>/dev/null) \
@@ -19844,9 +19900,29 @@ _ws_slug_git_state() {   # project slug -> one line + rc: 0 `free` | 1 `taken <w
   [[ -n "$kid" ]] && { echo "taken branch ${kid#refs/heads/}"; return 1; }
   common=$(git -C "$main" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
     || { echo "unmeasurable git rev-parse --git-common-dir failed in $main"; return 2; }
-  for d in "$common/refs" "$common/refs/heads"; do
-    [[ -d "$d" && -x "$d" ]] || { echo "unmeasurable cannot search $d"; return 2; }
-  done
+  [[ -d "$common/refs" && -x "$common/refs" ]] \
+    || { echo "unmeasurable cannot search $common/refs"; return 2; }
+  if [[ -d "$common/refs/heads" ]]; then
+    [[ -x "$common/refs/heads" ]] \
+      || { echo "unmeasurable cannot search $common/refs/heads"; return 2; }
+  elif [[ -e "$common/refs/heads" || -L "$common/refs/heads" ]]; then
+    # PRESENT but not a directory is a reftable repository's own stub — git's
+    # `refs_create_refdir_stubs` writes `refs/heads` as a regular FILE ("this
+    # repository uses the reftable format") for every non-files backend, so
+    # "absent" is FALSE here, measured. A corrupt repository that replaced the
+    # directory with something else reads the same. Either way it is no
+    # evidence of a loose ref, so this still answers unmeasurable, never free
+    # — it just says what is actually there instead of a false "absent".
+    echo "unmeasurable refs/heads is not a directory under $common — a reftable repository's stub, or a corrupt one"
+    return 2
+  else
+    # True absence is not merely unsearchable either — nothing stands at the
+    # path at all, a DIFFERENT case from the present-but-not-a-directory shape
+    # above. Either way it is no evidence of a loose ref, so this still
+    # answers unmeasurable, never free.
+    echo "unmeasurable refs/heads is absent under $common"
+    return 2
+  fi
   d="$common/refs/heads/ws"
   if [[ -e "$d" || -L "$d" ]]; then
     [[ -d "$d" ]] || { echo "taken branch ws"; return 1; }
@@ -21405,6 +21481,8 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # what `-d` accepted (a logical `..` through a linked cwd reaches another
   # directory); the `//` collapse is bash's one non-plain `pwd`. The quote
   # guard runs on the RESOLVED path: `_spawn` interpolates it into the pane.
+  [[ "$workdir" != *[[:cntrl:]]* && "$workdir" != *$'\n'* ]] \
+    || die "workdir must not contain a newline or any other control character — nothing was written"
   [[ -d "$workdir" ]] || die "workdir missing: $workdir"
   local wabs
   wabs=$(CDPATH= builtin cd -- "$workdir" >/dev/null 2>&1 && builtin pwd) || wabs=""
@@ -21413,6 +21491,21 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     || die "workdir $workdir cannot be entered, or does not resolve to one plain absolute path naming that same directory — nothing was written"
   workdir="$wabs"
   [[ "$workdir" != *\'* ]] || die "workdir must not contain a single quote: $workdir"
+  # NOR A NEWLINE OR ANY OTHER CONTROL CHARACTER (spec §5.5, rung 9): every
+  # reader of `.workdir` takes it as one line — `_reg_get`'s own read, and the
+  # ancestor walks' `$(…)` captures, which drop a trailing newline and so name
+  # another directory — and a newline in it would forge a line on any report
+  # that prints it. The value is not echoed back, for the same reason: asked
+  # of the value as given before any `die` that prints it, and again here of
+  # the resolved one (a relative value takes on the caller's cwd).
+  [[ "$workdir" != *[[:cntrl:]]* && "$workdir" != *$'\n'* ]] \
+    || die "workdir must not contain a newline or any other control character — nothing was written"
+  # NOR UNDER `/proc` (spec §5.5, rung 9): absolute in form, but what a path
+  # there names depends on the process reading it — `/proc/self/cwd/<rel>` is
+  # each reader's own cwd, as a relative spelling is — so no other reader, a
+  # reclaim included, could place it. Asked of the plain path just stored.
+  [[ "$workdir" != /proc && "$workdir" != /proc/* ]] \
+    || die "workdir must not lie under /proc — a path there names whatever the reading process's own cwd or descriptors are: $workdir"
 
   # ── POOL POLICY (§5.5.5), CREATION ONLY ──────────────────────────────────
   # Placed here rather than at the registry-wins block above because `project`
@@ -24720,6 +24813,55 @@ cmd_ls() {
   echo "(open $CLAUDE_AI_BASE in the matching account and pick the session whose name == ID)"
 }
 
+cmd_reclaim_pause() {   # ccd reclaim-pause --state on|off — raise or lower the
+  # fleet-wide RECLAIM kill-switch (child-reclamation spec §5.8). While
+  # `$REG/reclaim-paused` exists, nothing reclaims a child workspace: the
+  # server's sweep skips, the server's close path skips, and — the reader that
+  # matters — `ws-reclaim` itself refuses `paused` at its rung 3 and again on
+  # resume, because a gate only the server evaluates fails open into deletion
+  # the moment the pause lands mid-flight, the server's snapshot is one tick
+  # stale, or a crashed reclaim resumes. Pausing stops reclamation and nothing
+  # else; lowering it lets the sweep drain what waited.
+  #
+  # A COPY OF `cmd_coord_pause` IN EVERY RESPECT, and granted on its argument: a
+  # registry-file write/unlink, non-destructive and idempotent, that widens
+  # nothing that deletes — it can only STOP a deletion. CHECKED on both arms,
+  # for `cmd_ws_hold`'s reason: ccd runs `set -uo pipefail` with NO `-e`, so an
+  # unchecked `touch` that failed would fall straight through to the echo and
+  # tell the phone reclamation had stopped while the sweep kept deleting — the
+  # one polarity on this verb that may never be false. Journals nothing, for
+  # `cmd_coord_pause`'s reason.
+  #
+  # It lives HERE, not beside `cmd_coord_pause`, because that neighbourhood is
+  # above the frozen citation corpus's anchors into this file (line 19131);
+  # and after `cmd_ls`, not before it, because `ccd-refusal-scan.test.ts` reads
+  # everything from `cmd_forget` to `cmd_ls` as `cmd_forget`'s body;
+  # `cmd_caps` carries its two lines — the verb and the token — bare, for the
+  # same reason, so the token's argument is this paragraph: `reclaim-pause-v1`
+  # says this ccd has this verb, and the server gates its route on
+  # `capSupported(state,'reclaim-pause-v1')` — no evidence REFUSES, the opposite
+  # of `verbSupported`'s default, which is right for verbs that have always
+  # existed and wrong for one that never did: a phone toggle sent to a box
+  # without this verb would come back as a usage error, not a 501.
+  #
+  # The echoed word is for a human reading a journal. NOTHING parses it: the
+  # server learns the state by listing $REG (`emitCoord`'s `reclaim` field).
+  [[ $# -eq 2 && $1 == --state ]] || die "usage: ccd reclaim-pause --state on|off"
+  local state=$2
+  [[ $state == on || $state == off ]] || die "bad state: $state (want on|off)"
+  [[ -d "$REG" ]] || die "no registry at $REG"
+  local marker="$REG/reclaim-paused"
+  if [[ $state == on ]]; then
+    touch -- "$marker" || die "could not raise the reclaim pause marker — reclamation is NOT paused"
+    echo "paused"
+  else
+    if [[ -e $marker || -L $marker ]]; then   # -L: a dangling link reads as paused on every reader
+      rm -f -- "$marker" || die "could not clear the reclaim pause marker — reclamation is STILL paused"
+    fi
+    echo "running"
+  fi
+}
+
 # ── EVERY tmux TARGET IS EXACT (D-3525, closing D-2781 and D-2862) ──────────
 # `_tmux` answers a session's NAME — what `new-session -s` creates. A `-t`
 # argument is not a name to tmux, it is a SEARCH: the exact name, then a UNIQUE
@@ -25093,7 +25235,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   #                                 ('' = none); rc 2 when that could
   #                                 not be asked (_WS_SHARED_WHY): the registry would not list, a row's
   #                                 `.workdir` would not read, a row's `.workdir` is not absolute,
-  #                                 opens with `//`, cannot be resolved (a directory
+  #                                 opens with `//`, lies under `/proc`, cannot be resolved (a directory
   #                                 or link on it cannot be entered or followed, a `..` in it cannot be
   #                                 placed, or it holds a control character), resolves only with
   #                                 a basis other than `complete` (the rest re-attached as text below
@@ -25110,11 +25252,11 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # remove its tree. Compared twice: the literal path, and the resolved one
   # (`_ws_reclaim_resolve`: where a logical `cd` of it lands — the `pwd -P` of
   # its longest directory prefix, entered logically, and the rest as written,
-  # a path holding `..` re-walked from that entry), so two spellings of one
-  # directory are one directory — save one that resolves to a `//` spelling,
-  # which is not placed at all (below). The literal arm is implied by the resolved
-  # one — one string resolves one way — and stays as the spec's stated form;
-  # deleting it alone leaves the suite green, by construction.
+  # a path whose entered prefix holds `..` re-walked from that entry), so two
+  # spellings of one directory are one directory — save one that resolves to
+  # a `//` spelling, which is not placed at all (below). The literal arm is
+  # implied by the resolved one — one string resolves one way — and stays as
+  # the spec's stated form; deleting it alone leaves the suite green, by construction.
   #
   # NOR MAY ONE BE ROOTED INSIDE IT (spec §5.5, rung 9, of a path below the
   # child's). Another row is another SESSION, never the child: a same-repo
@@ -25264,7 +25406,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # SPELLING as it reads now, not the session: an alias re-pointed after the
   # session entered through it, or a bind-mount spelling, also resolves
   # complete and outside (pre-existing; left to a follow-up).
-  local id="$1" wd="$2" mine='' minewhy='' names n o w wr rok basis rc lit unread='' unplaced='' unmine='' unres=''
+  local id="$1" wd="$2" mine='' minewhy='' names n o w wr rok basis rc lit unread='' unplaced='' unmine='' unproc='' unres=''
   _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
     || { _WS_SHARED_WHY="could not list $REG"; return 2; }
@@ -25283,6 +25425,11 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     (( rc == 1 )) && continue   # gone between the listing and the read
     (( rc == 0 )) || { unread+="${unread:+, }$n"; continue; }
     [[ "$w" == /* && "$w" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
+    # NOR ONE UNDER `/proc`, however many slashes open it: absolute in form,
+    # but `/proc/self/cwd/<rel>` names each reader's own cwd, as a relative
+    # spelling does (`cmd_start` refuses one), so it is unplaced exactly as a
+    # relative row is — collected, and decided after the loop.
+    [[ ! "$w" =~ ^/+proc(/|$) ]] || { unproc+="${unproc:+, }$o"; continue; }
     wr=''; rok=0; basis=''
     _ws_reclaim_resolve "$w" && wr="$_WS_RESOLVED"
     basis="$_WS_RESOLVE_BASIS"; [[ "$basis" == complete && -n "$mine" ]] && rok=1
@@ -25316,6 +25463,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   [[ -z "$unread" ]] || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }could not read $unread"
   [[ -z "$unplaced" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unplaced name no plain absolute workdir, or one that resolves to a path opening with //, so ccd cannot place them against this child — stop and restart each (ccd start <id> stores a plain absolute workdir), re-point a link whose target opens with //, or purge its row"
+  [[ -z "$unproc" ]] \
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unproc name a workdir under /proc, which names whatever the reading process's own cwd or descriptors are, so ccd cannot place them against this child — stop each and start it again from a plain path, or purge its row"
   [[ -z "$unres" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered or followed, or no longer exists, so its spelling no longer says where that session lives; a '..' in it follows a directory that no longer exists, or cannot otherwise be placed; or it holds a control character), so ccd cannot place them against this child — make it searchable if a directory on its path cannot be searched, restore a link on its path to its original target (never create a directory in a link's place), or purge the row once its session has ended"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2
@@ -25474,11 +25623,15 @@ _ws_reclaim_absent() {   # path -> 0 when nothing stands at path and that is PRO
   # can SEARCH, and `stat` of that component fails ENOENT, by its own error in
   # the C locale. Anything else — an unsearchable or dangling parent, another
   # error — is unmeasured, and unmeasured is not absence.
+  # `dirname`'s answer is read through an `x` suffix: a command substitution
+  # drops EVERY trailing newline, so a parent whose own name ends in one would
+  # be read as another directory, and its absence "proven" there.
   local p="$1" up parent err
   _WS_ABSENT_WHY=''
   [[ -e "$p" || -L "$p" ]] && return 1
   up="$p"
-  while parent=$(dirname -- "$up"); [[ "$parent" != "$up" && ! -e "$parent" && ! -L "$parent" ]]; do
+  while parent=$(dirname -- "$up"; printf x); parent="${parent%$'\n'x}"
+        [[ "$parent" != "$up" && ! -e "$parent" && ! -L "$parent" ]]; do
     up="$parent"
   done
   [[ -d "$parent" && -x "$parent" ]] \
@@ -25518,11 +25671,11 @@ _ws_reclaim_main_line_refuse() {   # main branch -> 0 when branch is PROVEN not 
   return 0
 }
 
-_WS_GITDIR_WHY=''
+_WS_GITDIR_WHY=''; _WS_GITDIR_DIR=''
 _ws_reclaim_gitdir_own() {   # tree common -> 0 when tree's git directory is git's OWN record of tree: an
   #                               admin directory `$common/worktrees/<n>` whose `gitdir` file names
-  #                               `<tree>/.git`; 1 (_WS_GITDIR_WHY) when it is proven not; 2 when it
-  #                               could not be read
+  #                               `<tree>/.git`, with _WS_GITDIR_DIR = that directory, as read; 1
+  #                               (_WS_GITDIR_WHY) when it is proven not; 2 when it could not be read
   # A TREE IS PINNED ONLY THROUGH ITS OWN RECORD (spec §5.5, rung 9). The
   # common directory and `show-toplevel` are what a COPY of another worktree
   # answers too — its `.git` file came with it — and a `.git` file rewritten to
@@ -25535,7 +25688,7 @@ _ws_reclaim_gitdir_own() {   # tree common -> 0 when tree's git directory is git
   # path resolved through anything INSIDE a tree. A record in any other form (a
   # relative `gitdir`) is not proven, and the tree is not pinned.
   local t="$1" common="$2" gd rec
-  _WS_GITDIR_WHY=''
+  _WS_GITDIR_WHY=''; _WS_GITDIR_DIR=''
   gd=$(git -C "$t" rev-parse --absolute-git-dir 2>/dev/null) && [[ -n "$gd" ]] \
     || { _WS_GITDIR_WHY="could not read the git directory of $t"; return 2; }
   [[ "$gd" == "$common/worktrees/"?* && "${gd#"$common/worktrees/"}" != */* ]] \
@@ -25545,6 +25698,7 @@ _ws_reclaim_gitdir_own() {   # tree common -> 0 when tree's git directory is git
   { rec=$(< "$gd/gitdir"); } 2>/dev/null || { _WS_GITDIR_WHY="could not read $gd/gitdir"; return 2; }
   [[ "$rec" == "$t/.git" || "$rec" == "$(_ws_realpath "$t")/.git" ]] \
     || { _WS_GITDIR_WHY="the git directory of $t is $gd, which git records as $rec's — another checkout's"; return 1; }
+  _WS_GITDIR_DIR="$gd"
   return 0
 }
 
@@ -25578,10 +25732,67 @@ _ws_reclaim_foreign_clean() {   # path -> 0 when the checkout of ANOTHER reposit
   _ws_reclaim_hidden "$p" || { _WS_FOREIGN_WHY="$_WS_HIDDEN_WHY"; return 2; }
   (( ${#_WS_HIDDEN_PATHS[@]} == 0 )) \
     || { _WS_FOREIGN_WHY="the checkout of another repository at $p holds a hidden-flag (skip-worktree or assume-unchanged) edit to ${_WS_HIDDEN_PATHS[0]}, which ccd will not delete unkept and cannot pin into this repository"; return 1; }
-  ahead=$(git -C "$p" rev-list --count --all --not --remotes 2>/dev/null) \
-    || { _WS_FOREIGN_WHY="could not count the commits in $p that are on none of its own remotes"; return 2; }
+  # ITS REFLOGS COUNT TOO (spec §5.5, rung 9: "every commit on one of its own
+  # remotes"). A commit only a reflog names — a `reset --hard` past it, a
+  # rebase's pre-image, a deleted branch — is still that clone's to recover,
+  # and it goes with the tree: nothing of another repository can be pinned
+  # here. So `--reflog` joins `--all`, and such a clone refuses; it strands
+  # the child for a human, the accepted cost of a shape this rare. A reflog
+  # entry whose object git already pruned names nothing to lose: git warns
+  # and skips it (rc 0, measured, git 2.43). But a read that did not finish
+  # is not zero: git reads an unreadable reflog FILE as empty and says
+  # nothing, and skips one under an unreadable directory with a warning (both
+  # rc 0, count 0, measured) — and rung 8's permission pass never reaches a
+  # git directory outside the child. So every entry under its `logs/` must
+  # read first (`_ws_reclaim_logs_readable`), and any word on git's stderr
+  # but that pruned-commit warning is unmeasured.
+  _ws_reclaim_logs_readable "$p" || { _WS_FOREIGN_WHY="$_WS_LOGSREAD_WHY"; return 2; }
+  errf=$(_plat_mktemp) || { _WS_FOREIGN_WHY="could not make a scratch file to count the commits in $p"; return 2; }
+  ahead=$(LC_ALL=C git -C "$p" rev-list --count --all --reflog --not --remotes 2>"$errf"); rc=$?
+  err=$(LC_ALL=C grep -v -- "^warning: reflog of '.*' references pruned commits\$" "$errf"); [[ $? -le 1 ]] || err='its stderr could not be read'
+  rm -f "$errf"
+  { (( rc == 0 )) && [[ -z "$err" && "$ahead" =~ ^[0-9]+$ ]]; } \
+    || { _WS_FOREIGN_WHY="could not count the commits in $p that are on none of its own remotes${err:+: ${err%%$'\n'*}}"; return 2; }
   (( ahead == 0 )) \
-    || { _WS_FOREIGN_WHY="$ahead commit(s) in the checkout of another repository at $p are on none of its remotes"; return 1; }
+    || { _WS_FOREIGN_WHY="$ahead commit(s) in the checkout of another repository at $p, counting those only its reflogs name, are on none of its remotes"; return 1; }
+  return 0
+}
+
+_WS_LOGSREAD_WHY=''
+_ws_reclaim_logs_readable() {   # checkout -> 0 when every entry under the `logs/` of its git directory and
+  #                                 of its common directory reads (a directory searchable too), absent
+  #                                 counting as none; 1 (_WS_LOGSREAD_WHY) otherwise. The listing answers,
+  #                                 never a test before it: `find`'s status and stderr, as the keep reads G.
+  #                                 NO LINK, at `logs` or under it: git 2.43's `rev-list --reflog` does not
+  #                                 follow a linked `logs` and counts none of its reflogs (measured: 1
+  #                                 commit, then 0 once `logs` was moved and linked), while `find` lists only
+  #                                 the link and `-r` follows it — the count read 0 and the clone's
+  #                                 reflog-only commit went with the tree (measured). A link below
+  #                                 `logs` is followed by git, and refused all the same, as the keep refuses
+  #                                 one in the child's own G. `.git`, `refs` and `objects` as links are
+  #                                 read through by the count (measured, each 1), so they are not refused.
+  local p="$1" gd cm d e lst err rc
+  _WS_LOGSREAD_WHY=''
+  gd=$(git -C "$p" rev-parse --absolute-git-dir 2>/dev/null) && [[ -n "$gd" ]] \
+    && cm=$(git -C "$p" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [[ -n "$cm" ]] \
+    || { _WS_LOGSREAD_WHY="could not locate the git directory of the checkout at $p, so its reflogs were never read"; return 1; }
+  for d in "$gd/logs" "$cm/logs"; do
+    _ws_reclaim_absent "$d"; rc=$?
+    (( rc != 0 )) || continue
+    (( rc != 2 )) || { _WS_LOGSREAD_WHY="$_WS_ABSENT_WHY — the reflogs of the checkout at $p were never read"; return 1; }
+    [[ ! -L "$d" ]] || { _WS_LOGSREAD_WHY="$d is a symbolic link, which git's reflog count does not follow — the commits the reflogs of the checkout at $p name are unknown"; return 1; }
+    lst=$(_plat_mktemp) || { _WS_LOGSREAD_WHY="could not make a scratch file to list $d"; return 1; }
+    err=$(LC_ALL=C find "$d" -print0 2>&1 >"$lst"); rc=$?
+    if (( rc != 0 )) || [[ -n "$err" ]]; then
+      rm -f "$lst"; _WS_LOGSREAD_WHY="$d cannot be listed (find answered $rc: ${err%%$'\n'*}) — the reflogs of the checkout at $p were never read"; return 1
+    fi
+    while IFS= read -r -d '' e; do
+      [[ ! -L "$e" ]] || { rm -f "$lst"; _WS_LOGSREAD_WHY="$e is a symbolic link — ccd never follows one, so the commits the reflogs of the checkout at $p name are unknown"; return 1; }
+      if [[ -d "$e" ]]; then [[ -r "$e" && -x "$e" ]]; else [[ -r "$e" ]]; fi \
+        || { rm -f "$lst"; _WS_LOGSREAD_WHY="$e cannot be read — the commits the reflogs of the checkout at $p name are unknown"; return 1; }
+    done < "$lst"
+    rm -f "$lst"
+  done
   return 0
 }
 
@@ -25621,8 +25832,8 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
     || { _reap_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
   RECLAIM_CHILDOF="$mark"
   # 3 — the kill-switch, read HERE, at the instant of deletion (spec §5.8). -e,
-  # not -f: a pause file that is a directory, or unreadable, still pauses.
-  [[ ! -e "$REG/reclaim-paused" ]] \
+  # not -f, and -L: a directory, an unreadable file or a DANGLING link pauses.
+  [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
     || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
   # 4 — held. -e for the same reason: an unreadable hold is still a hold.
   if [[ -e "$REG/$id.hold" ]]; then
@@ -25845,6 +26056,24 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
       _ws_reclaim_gitdir_own "$p" "$mainreal"; rc=$?
       (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_GITDIR_WHY"; return 1; }
       (( rc == 0 )) || { _reap_refuse containment-unproven "$_WS_GITDIR_WHY"; return 1; }
+      # RUNG 6's QUESTION, ASKED OF THE NESTED CHECKOUT TOO (spec §5.5): the pin
+      # copies this tree's index and commits its work exactly as it does the
+      # child's, so a git command mid-write here leaves the copy a state the
+      # tree is leaving, and an operation in progress is work nobody finished.
+      # Deferrals as rung 6's are, and for its reasons: `--defer-expired`
+      # passes both (git replaces an index by rename, so the copy is never
+      # torn, and a lock a crash left must not wedge the child for good). The
+      # index is located, never assumed at `$p/.git/index`: a linked
+      # worktree's lives in its own admin directory.
+      if (( ! defer )); then
+        h=$(git -C "$p" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [[ -n "$h" ]] \
+          || { _ws_reclaim_unmeasured "could not locate the index of the nested checkout at $p"; return 1; }
+        [[ ! -e "$h.lock" && ! -L "$h.lock" ]] \
+          || { _reap_refuse tree-busy "a git command holds the index lock of the nested checkout at $p ($h.lock)"; return 1; }
+        op=$(_ws_child_op "$p") \
+          || { _ws_reclaim_unmeasured "could not probe the nested checkout at $p for an in-progress git operation"; return 1; }
+        [[ -z "$op" ]] || { _reap_refuse tree-busy "$op in progress at the nested checkout at $p"; return 1; }
+      fi
       _ws_reclaim_hidden "$p" || { _ws_reclaim_unmeasured "$_WS_HIDDEN_WHY"; return 1; }
       for hp in ${_WS_HIDDEN_PATHS[@]+"${_WS_HIDDEN_PATHS[@]}"}; do
         RECLAIM_HIDDEN+=("$p/$hp")
@@ -25964,7 +26193,7 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
   [[ -z "$childof" || "$mark" == "$childof" ]] \
     || { _reap_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
   RECLAIM_CHILDOF="$mark"
-  [[ ! -e "$REG/reclaim-paused" ]] \
+  [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
     || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
   if [[ -e "$REG/$id.hold" ]]; then
     _reap_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
@@ -25986,9 +26215,12 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
 
 _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it makes hook-free,
   #                              fsmonitor-free, free of optional locks and with untracked files
-  #                              shown whatever the repository's or the user's config files say;
+  #                              shown whatever the repository's or the user's config files say,
+  #                              and no inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE or other
+  #                              repository-selecting variable;
   #                              answers cmd's status
-  # WHAT THIS DOES — EXACTLY FOUR THINGS. Three it DISABLES (the plan's Task
+  # WHAT THIS DOES TO GIT'S CONFIG — EXACTLY FOUR THINGS (and, outermost, it
+  # drops the inherited variables that select a repository: the foot of this function). Three it DISABLES (the plan's Task
   # 3: "no hook of the repository runs"): the repository's HOOKS
   # (`core.hooksPath=/dev/null`), its FSMONITOR (`core.fsmonitor=false`) and
   # git's OPTIONAL LOCKS (`GIT_OPTIONAL_LOCKS=0`). A hook is not only a
@@ -26020,7 +26252,13 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
   # ladder (`_ws_reclaim_fork`) and of `ws-audit --reclaim`
   # (`_ws_reclaim_audit_contained`). `local -x` scopes the export to this
   # call, and entries a caller already exported are kept: ours are APPENDED,
-  # and a later entry wins.
+  # and a later entry wins. EXCEPT GIT_CONFIG_PARAMETERS, what `git -c`
+  # exports to its children: git applies it AFTER the GIT_CONFIG_COUNT entries,
+  # so an inherited one OVERRIDES every pin here whose key it names, the hook
+  # and fsmonitor pins included (measured, git 2.43.0). The unattended agent
+  # and systemd path does not carry it: only a ccd started under a `git -c …`
+  # (from a hook, say) inherits one, and its value is the operator's own. It is
+  # NOT unset here; that decision is carried to the next wave.
   local n="${GIT_CONFIG_COUNT:-0}"
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
   local -x GIT_CONFIG_COUNT=$(( n + 3 )) \
@@ -26031,8 +26269,44 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
   # opportunistically, under `index.lock`, and the pin phase, the ladder and
   # the audit all promise that file stays byte-identical.
   local -x GIT_OPTIONAL_LOCKS=0
+  # AND NO REPOSITORY BUT THE ONE EACH CALL NAMES (spec §5.5: nothing that is
+  # not the child's is read, pinned or deleted). An inherited GIT_DIR,
+  # GIT_WORK_TREE or GIT_INDEX_FILE — ccd started from a git hook, or by
+  # anything that exported one — outranks every `git -C <dir>` beneath: the
+  # ladder would read, and the pin commit, another repository or another
+  # index. So do the rest of `git rev-parse --local-env-vars` (git 2.43's own
+  # list of what selects a repository, its objects, refs and history): a
+  # pre-receive quarantine exports GIT_OBJECT_DIRECTORY, and the WIP's objects
+  # would land outside the child's repository. GIT_NAMESPACE, not on that
+  # list, scopes every ref read and write, so it goes too. The GIT_CONFIG_*
+  # entries stay: they are this function's own mechanism, and a caller's are
+  # kept, an inherited GIT_CONFIG_PARAMETERS too, though it outranks the pins
+  # (above). GIT_NO_REPLACE_OBJECTS is not unset but SET (below). So the OUTERMOST containment unsets them all, and does not put
+  # them back: nothing a reclaim runs wants its caller's repository, and a
+  # restore would re-arm it for everything after. Unset, never shadowed —
+  # measured, bash 5.2: a `local` of an exported name, set or unset, still
+  # hands the global's value to every child; and unset repeatedly, since each
+  # `unset` removes one scope's variable, a caller's local first. A NESTED
+  # containment (`_WS_RECLAIM_CONTAINED`, set by the outer one, cleared at
+  # load below so no environment can pre-set it) leaves them alone: inside,
+  # they are ccd's own — the WIP commit hands the hidden-edit read its scratch
+  # index as GIT_INDEX_FILE.
+  if [[ -z "${_WS_RECLAIM_CONTAINED:-}" ]]; then
+    local _ws_u
+    for _ws_u in 1 2 3 4; do
+      unset -v GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+        GIT_NAMESPACE GIT_IMPLICIT_WORK_TREE GIT_GRAFT_FILE GIT_REPLACE_REF_BASE GIT_PREFIX GIT_SHALLOW_FILE
+    done
+  fi
+  # And every read sees the REAL object graph: a replace ref substitutes one
+  # commit's history for another's in every reachability read (rung 9's
+  # count, `branch --contains`), so replacement is switched OFF, never merely
+  # left to an inherited value.
+  local -x GIT_NO_REPLACE_OBJECTS=1
+  local _WS_RECLAIM_CONTAINED=1
   "$@"
 }
+unset -v _WS_RECLAIM_CONTAINED   # `_ws_reclaim_contained`'s nesting mark: never taken from the environment
 
 _ws_reclaim_secret_note() {   # path -> appends path to RECLAIM_SECRETS unless it is already there
   local s
@@ -26070,10 +26344,10 @@ _ws_reclaim_index_src() {   # dir -> rc 0 with _WS_INDEX_SRC = dir's own index f
 }
 
 _WS_HIDDEN_PATHS=(); _WS_HIDDEN_MODES=(); _WS_HIDDEN_WHY=''
-declare -A _WS_HIDDEN_STAND=()   # `_ws_reclaim_hidden_absent`'s memo — directory -> 'skip' or
-                                  # 'unmeasured:<why>' — reset once per `_ws_reclaim_hidden_contained` call
-                                  # (below), so many out-of-cone siblings under one missing ancestor share
-                                  # its one walk instead of repeating it.
+declare -gA _WS_HIDDEN_STAND=()   # `_ws_reclaim_hidden_absent`'s memo — a MISSING directory -> 'skip' or
+                                  # 'unmeasured:<why>', the verdict for everything under it — reset once per
+                                  # `_ws_reclaim_hidden_contained` call (below), so many out-of-cone siblings
+                                  # under one missing ancestor share its one walk instead of repeating it.
 _ws_reclaim_hidden() {   # dir -> rc 0 with _WS_HIDDEN_PATHS = dir's skip-worktree and assume-unchanged
   #                          paths PRESENT on disk whose content differs from their index blob,
   #                          and _WS_HIDDEN_MODES = each one's index mode, index for index; rc 1
@@ -26110,8 +26384,8 @@ _ws_reclaim_hidden_absent() {   # f -> 0 "skip" — nothing can stand at f, prov
   #                                  proven `[[ ! -e "$f" && ! -L "$f" ]]` — a sparse checkout's out-of-cone
   #                                  entries are most of its index (measured: 8.5ms per
   #                                  `_ws_reclaim_absent`-shaped stat), so this walks up from f to the
-  #                                  nearest ancestor that STANDS (`-e || -L`), memoising every level the
-  #                                  walk visits in `_WS_HIDDEN_STAND` (reset once per
+  #                                  nearest ancestor that STANDS (`-e || -L`), memoising every MISSING
+  #                                  directory the walk visits in `_WS_HIDDEN_STAND` (reset once per
   #                                  `_ws_reclaim_hidden_contained` call) so many out-of-cone siblings under
   #                                  one missing directory share its one walk. This is
   #                                  `_ws_reclaim_absent`'s own ancestor walk, with one more verdict that
@@ -26122,14 +26396,30 @@ _ws_reclaim_hidden_absent() {   # f -> 0 "skip" — nothing can stand at f, prov
   #                                  non-directory parent fails its `-d` test). Never called on the leaf
   #                                  `_ws_reclaim_absent` proves absent for its OTHER callers, and that
   #                                  function's own answers for them are unchanged.
+  # THE PARENT IS TAKEN WITHOUT A FORK, and the memo is asked about it BEFORE
+  # the disk is. A `$(dirname …)` per flagged path cost a fork each before the
+  # memo could answer (measured: 5000 out-of-cone paths 16.2 s, 20000 up to
+  # 84 s), which can outrun the in-lock budgets and strand a large sparse
+  # child on every attempt. `${up%/*}` is dirname for every spelling this is
+  # handed (`<dir>/<index path>`, never a trailing `/`), with dirname's two
+  # edges spelled out: a path with no `/` has the cwd, `.`, for its parent,
+  # and one directly under the root (the root itself too) has `/`. The memo
+  # is KEYED BY THE MISSING DIRECTORY, never by the leaf: a sibling under a
+  # directory an earlier path already walked is answered by one lookup, with
+  # no test of the disk at all. Only a directory proven missing is ever a key,
+  # and its verdict is its whole subtree's: nothing can stand under a
+  # directory that is not there, and one whose absence could not be proven
+  # leaves everything under it unmeasured too.
   local f="$1" up="$1" parent verdict err c
   local chain=()
   while :; do
-    if [[ -v _WS_HIDDEN_STAND["$up"] ]]; then verdict="${_WS_HIDDEN_STAND[$up]}"; break; fi
-    chain+=("$up")
-    parent=$(dirname -- "$up")
+    case "$up" in
+      */*) parent="${up%/*}"; [[ -n "$parent" ]] || parent=/ ;;
+      *)   parent=. ;;
+    esac
+    if [[ -v _WS_HIDDEN_STAND["$parent"] ]]; then verdict="${_WS_HIDDEN_STAND[$parent]}"; break; fi
     if [[ "$parent" != "$up" && ! -e "$parent" && ! -L "$parent" ]]; then
-      up="$parent"; continue
+      chain+=("$parent"); up="$parent"; continue
     fi
     if [[ -L "$parent" ]]; then
       verdict='skip'   # a link, dangling or not: git's removal never follows it, so nothing git would touch can stand under it
@@ -26149,7 +26439,7 @@ _ws_reclaim_hidden_absent() {   # f -> 0 "skip" — nothing can stand at f, prov
     fi
     break
   done
-  for c in "${chain[@]}"; do _WS_HIDDEN_STAND["$c"]="$verdict"; done
+  for c in ${chain[@]+"${chain[@]}"}; do _WS_HIDDEN_STAND["$c"]="$verdict"; done
   case "$verdict" in
     skip) return 0 ;;
     *) _WS_HIDDEN_WHY="whether the hidden path $f holds an edit is unmeasured: ${verdict#unmeasured:}"; return 1 ;;
@@ -26275,11 +26565,31 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP
   # differs from HEAD's, and every such path is in RECLAIM_SECRETS (the
   # tombstone's `secretsDropped`) as "$prefix<path>".
   #
+  # A STAGED INTERMEDIATE VERSION IS KEPT TOO (spec §5.5, pin phase step 2:
+  # everything uncommitted). The index can hold a version that is neither
+  # HEAD's nor the disk's — stage A, then edit the file to B — and step 2
+  # stages B over it in the copy, so the WIP's tree holds B and A would die
+  # with the tree. So, as `git stash` does, the copy's tree as it stood BEFORE
+  # step 2 is written as a commit of its own on HEAD (the INDEX commit), and
+  # the WIP carries it as its LAST parent, after HEAD and any MERGE_HEAD lines,
+  # which keep the places `git commit` gives them. It is taken AFTER step 1,
+  # never from the user's untouched index: a staged secret goes back to HEAD's
+  # entry first (spec §5.5 step 1 — a secret-shaped file is never staged), so
+  # the index commit carries no secret either. An unmerged path has no one
+  # staged version, so it is HEAD's entry in that tree. For a merge its stages
+  # are the sides HEAD and MERGE_HEAD reach; for an `am -3` or `stash apply`
+  # conflict (which `--defer-expired` can reach) they may be reachable from
+  # nothing, and this commit does not keep them — as nothing did before it. Only when that
+  # tree differs from BOTH HEAD's tree and the WIP's own is it kept; otherwise
+  # the WIP's shape is exactly as before. Idempotent as the WIP is: an index
+  # commit of the same tree on the same HEAD, already the last parent of an
+  # attic WIP of the same tree and first parents, is answered instead.
+  #
   # THE IDENTITY IS FIXED, and it is `_ws_reclaim_commit_tree`'s (below): the
   # one identity every commit a reclaim writes carries.
   local dir="$1" id="$2" childof="$3" prefix="$4" sd idx entry p xy rc err tree hsha mh line sha msg have plist i
-  local f kmode blob fmode
-  local cand=() back=() parents=() kept=()
+  local f kmode blob fmode itree htree isha imsg cands c ip
+  local cand=() back=() parents=() kept=() unm=()
   RECLAIM_WIP_SHA=""; RECLAIM_WIP_WHY=""
   _ws_reclaim_index_src "$dir" || { RECLAIM_WIP_WHY="$_WS_INDEX_WHY"; return 1; }
   sd=$(_plat_mktemp_d) || { RECLAIM_WIP_WHY='could not make a scratch directory'; return 1; }
@@ -26287,8 +26597,8 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP
   # `-p`: the copy keeps the index's own timestamp. git reads an entry whose
   # file changed in the same second as the index was written as RACY, and
   # compares its content; a copy stamped "now" makes every such entry look
-  # settled, and a same-size edit in that second — a hidden one too — would
-  # be read as unchanged and never staged.
+  # settled, and a same-size edit to a tracked file in that second would be
+  # read as unchanged and never staged (a hidden-flag edit is found by content, step 3).
   cp -p -- "$_WS_INDEX_SRC" "$idx" 2>"$sd/err" \
     || { RECLAIM_WIP_WHY="could not copy the index of $dir: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
   # (1) The copy's staged secrets, back to HEAD.
@@ -26303,6 +26613,29 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP
     GIT_INDEX_FILE="$idx" GIT_LITERAL_PATHSPECS=1 git -C "$dir" reset -q HEAD --pathspec-from-file="$sd/back" --pathspec-file-nul 2>"$sd/err" \
       || { RECLAIM_WIP_WHY="could not return the staged secret-shaped paths at $dir to HEAD: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
   fi
+  # The staged version, as step 1 left it and before step 2 touches the copy
+  # (the header's "A STAGED INTERMEDIATE VERSION"): a copy of the copy, whose
+  # unmerged paths go to HEAD's entry, since `write-tree` refuses an unmerged
+  # index.
+  cp -p -- "$idx" "$sd/staged" 2>"$sd/err" \
+    || { RECLAIM_WIP_WHY="could not copy the staged version of $dir's index: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+  GIT_INDEX_FILE="$sd/staged" git -C "$dir" ls-files -u -z >"$sd/unmerged" 2>"$sd/err" \
+    || { RECLAIM_WIP_WHY="could not read which paths of $dir's index are unmerged: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+  ip=''
+  while IFS= read -r -d '' entry; do
+    p="${entry#*$'\t'}"
+    [[ -n "$p" && "$p" != "$ip" ]] && unm+=("$p")
+    ip="$p"
+  done <"$sd/unmerged"
+  if (( ${#unm[@]} )); then
+    printf '%s\0' "${unm[@]}" >"$sd/unm"
+    GIT_INDEX_FILE="$sd/staged" GIT_LITERAL_PATHSPECS=1 git -C "$dir" reset -q HEAD --pathspec-from-file="$sd/unm" --pathspec-file-nul 2>"$sd/err" \
+      || { RECLAIM_WIP_WHY="could not set the unmerged paths of the staged version of $dir to HEAD: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+  fi
+  itree=$(GIT_INDEX_FILE="$sd/staged" git -C "$dir" write-tree 2>"$sd/err") && [[ -n "$itree" ]] \
+    || { RECLAIM_WIP_WHY="could not write the tree of the version $dir's index stages: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+  htree=$(git -C "$dir" rev-parse --verify --quiet "HEAD^{tree}" 2>/dev/null) && [[ -n "$htree" ]] \
+    || { RECLAIM_WIP_WHY="the HEAD of $dir does not resolve to a tree — what its index stages cannot be compared with it"; rm -rf "$sd"; return 1; }
   # (2) The working tree's changes against the copy. `--no-renames`: no entry
   # is ever a rename or a copy (R/C in EITHER column), so each is one path —
   # a rename is its two halves, a deletion and an addition, each added below.
@@ -26389,7 +26722,9 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP
   done
   # Nothing staged is the ordinary case for a finished child: no commit — and
   # then a kept hidden edit must be HEAD's own content, or it did not land.
-  if GIT_INDEX_FILE="$idx" git -C "$dir" diff --cached --quiet 2>/dev/null; then
+  # Unless the index stages a version of its own: then the WIP is written, on
+  # HEAD's tree, to carry it (a file staged at A and edited back to HEAD's B).
+  if [[ "$itree" == "$htree" ]] && GIT_INDEX_FILE="$idx" git -C "$dir" diff --cached --quiet 2>/dev/null; then
     _ws_reclaim_landed "$dir" HEAD ${kept[@]+"${kept[@]}"} || { RECLAIM_WIP_WHY="$_WS_LANDED_WHY"; rm -rf "$sd"; return 1; }
     rm -rf "$sd"; return 0
   fi
@@ -26410,10 +26745,35 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP
     done < "$mh"
   fi
   msg="ccrc: WIP pinned at reclaim of $id (run $childof)"
-  have=$(git -C "$dir" for-each-ref --format='%(objectname)%09%(tree) %(parent)%09%(authoremail)%09%(subject)' \
-    "refs/ccrc/attic/$id/" 2>/dev/null \
-    | awk -F'\t' -v want="$tree $plist" -v subj="$msg" \
-        '$2 == want && $3 == "<ccrc-reclaim@invalid>" && $4 == subj { print $1; exit }')
+  have=''
+  if [[ "$itree" != "$htree" && "$itree" != "$tree" ]]; then
+    # The staged version is kept (the header's "A STAGED INTERMEDIATE
+    # VERSION"): an attic WIP of this tree and these first parents whose last
+    # parent is already an index commit of this staged tree on HEAD answers
+    # for both; otherwise the index commit is written, then the WIP on it.
+    imsg="ccrc: index pinned at reclaim of $id (run $childof)"
+    cands=$(git -C "$dir" for-each-ref --format='%(objectname)%09%(tree) %(parent)%09%(authoremail)%09%(subject)' \
+      "refs/ccrc/attic/$id/" 2>/dev/null \
+      | awk -F'\t' -v want="$tree $plist" -v subj="$msg" \
+          '$3 == "<ccrc-reclaim@invalid>" && $4 == subj && index($2, want " ") == 1 && split(substr($2, length(want) + 2), r, " ") == 1 { print $1 " " r[1] }')
+    while read -r c ip; do
+      [[ -n "$c" && -n "$ip" ]] || continue
+      [[ "$(git -C "$dir" log -1 --format='%T %P%x09%ae%x09%s' "$ip" 2>/dev/null)" \
+          == "$itree $hsha"$'\t'"ccrc-reclaim@invalid"$'\t'"$imsg" ]] || continue
+      have="$c"; isha="$ip"; break
+    done <<< "$cands"
+    if [[ -z "$have" ]]; then
+      isha=$(_ws_reclaim_commit_tree "$dir" -p "$hsha" -m "$imsg" "$itree" 2>"$sd/err") \
+        && [[ "$isha" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] \
+        || { RECLAIM_WIP_WHY="could not write the commit that keeps the version $dir's index stages: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+    fi
+    parents+=(-p "$isha"); plist+=" $isha"
+  else
+    have=$(git -C "$dir" for-each-ref --format='%(objectname)%09%(tree) %(parent)%09%(authoremail)%09%(subject)' \
+      "refs/ccrc/attic/$id/" 2>/dev/null \
+      | awk -F'\t' -v want="$tree $plist" -v subj="$msg" \
+          '$2 == want && $3 == "<ccrc-reclaim@invalid>" && $4 == subj { print $1; exit }')
+  fi
   if [[ "$have" =~ ^[0-9a-f]{40}$ ]]; then
     RECLAIM_WIP_SHA="$have"
   else
@@ -26561,15 +26921,19 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg [recorded] -> 0 with what 
   if [[ -d "$arg" && ! -L "$arg" ]]; then
     f=$(git -C "$arg" rev-parse --path-format=absolute --git-path logs/HEAD 2>/dev/null) && [[ "$f" == /* ]] \
       || { _WS_KEEP_WHY="could not locate the HEAD reflog of the checkout at $arg"; return 1; }
-    gd=$(git -C "$arg" rev-parse --absolute-git-dir 2>/dev/null) && [[ -n "$gd" ]] \
-      || { _WS_KEEP_WHY="could not locate the git directory of the checkout at $arg, so what it names was never read"; return 1; }
-    [[ "$gd" == "$common/worktrees/"?* && "${gd#"$common/worktrees/"}" != */* && -d "$gd" && ! -L "$gd" ]] \
-      || { _WS_KEEP_WHY="the git directory of the checkout at $arg is $gd, which is no directory directly under $common/worktrees — ccd reads only a checkout's own, so it was never read"; return 1; }
-    { g=$(cat -- "$gd/gitdir"); } 2>/dev/null \
-      || { _WS_KEEP_WHY="$gd/gitdir cannot be read — whether $gd, the git directory of the checkout at $arg, is git's record of it was never asked, so it was never read"; return 1; }
-    g="${g%%$'\n'*}"; real=$(_ws_realpath "$arg")
-    [[ "$g" == "$arg/.git" || "$g" == "$real/.git" ]] \
-      || { _WS_KEEP_WHY="the git directory of the checkout at $arg is $gd, which git records as $g's — another checkout's, so it was never read"; return 1; }
+    # G is proven the checkout's own by rung 9's one reader of that record,
+    # `_ws_reclaim_gitdir_own` (spec §5.5), never a second copy of it here;
+    # and it must be a DIRECTORY, not a link, since the walk reads under it.
+    _ws_reclaim_gitdir_own "$arg" "$common" \
+      || { _WS_KEEP_WHY="$_WS_GITDIR_WHY, so it was never read"; return 1; }
+    gd="$_WS_GITDIR_DIR"
+    [[ -d "$gd" && ! -L "$gd" ]] \
+      || { _WS_KEEP_WHY="the git directory of the checkout at $arg is $gd, which is not a directory — ccd reads only a checkout's own, so it was never read"; return 1; }
+    # G/logs/HEAD IS NEVER A LINK: `--git-path` answers a link's TARGET
+    # (measured, git 2.43), so the reader below would see a plain file and
+    # read whatever the link names in place of the reflog that goes with G.
+    [[ ! -L "$gd/logs/HEAD" ]] \
+      || { _WS_KEEP_WHY="the reflog $gd/logs/HEAD is a symbolic link — ccd never follows one, so it was never read"; return 1; }
     _WS_LOGS+=("$f" "gitdir:$gd"); return 0
   fi
   _ws_reclaim_absent "$arg"; rc=$?
@@ -26635,9 +26999,11 @@ _ws_reclaim_idfile() {   # file all(0|1) out -> 0 with the id(s) a ref file or a
   return 1
 }
 
-_ws_reclaim_gitdir_walk() {   # dir kind(ref|reflog) out skip -> 0 with the ids every file under dir names
-  #                                appended to out, dir walked entry by entry; 1 (_WS_KEEP_WHY). `skip` is one
-  #                                path left to its own reader (`G/logs/HEAD`, the caller's HEAD reflog).
+_ws_reclaim_gitdir_walk() {   # dir kind(ref|reflog) out skip name -> 0 with the ids every file under dir
+  #                                names appended to out, dir walked entry by entry; 1 (_WS_KEEP_WHY). `skip`
+  #                                is one path left to its own reader (`G/logs/HEAD`, the caller's HEAD
+  #                                reflog); `name` is the ref name dir stands for (`refs` for `G/refs`, ''
+  #                                for `G/logs`), so each entry's own ref name is `name/<entry>`.
   # ABSENT, OR EMPTY, IS NONE: `git bisect reset` leaves an empty
   # `refs/bisect/`, and `update-ref -d` empty `refs/worktree/` and
   # `logs/refs/worktree/` (measured, git 2.43). THE LISTING ITSELF ANSWERS,
@@ -26650,13 +27016,22 @@ _ws_reclaim_gitdir_walk() {   # dir kind(ref|reflog) out skip -> 0 with the ids 
   # directory that could be listed but not searched answers 2, and fails). An
   # entry that is neither a directory nor a regular file fails too: a link is
   # never followed. A name ending in `.lock` is git's own lock, never a ref.
-  local d="$1" kind="$2" out="$3" skip="$4" e rc lst err
+  # NOR IS A NAME GIT'S REF FORMAT FORBIDS (spec §5.5, the keep reads what
+  # `git worktree remove` deletes as git would read it): git's files backend
+  # passes over such an entry — one starting with `.` it never lists, and
+  # the rest it will not read as a ref or a reflog — so no commit of it is
+  # something git would have kept, and a stray `.DS_Store` must not make the
+  # keep `pin-failed` for good. Judged by `git check-ref-format`
+  # (`_ws_reclaim_refname_ok`), never by a hand list; a directory by the name
+  # of an entry under it, since a forbidden component forbids every name
+  # through it. A judgement that could not be made fails, as any read does.
+  local d="$1" kind="$2" out="$3" skip="$4" pre="${5:-}" e rc lst err rn
   local ents=()
   _ws_reclaim_absent "$d"; rc=$?
   (( rc != 0 )) || return 0
   (( rc != 2 )) || { _WS_KEEP_WHY="$_WS_ABSENT_WHY — the ${kind}s under it were never read"; return 1; }
   [[ -d "$d" && ! -L "$d" ]] \
-    || { _WS_KEEP_WHY="$d is neither a directory nor a regular file — the ${kind}s under it were never read"; return 1; }
+    || { _WS_KEEP_WHY="$d is not a directory — the ${kind}s under it were never read"; return 1; }
   lst=$(_plat_mktemp) || { _WS_KEEP_WHY="could not make a scratch file to list $d — the ${kind}s under it were never read"; return 1; }
   err=$(LC_ALL=C find "$d" -mindepth 1 -maxdepth 1 -print0 2>&1 >"$lst"); rc=$?
   if (( rc != 0 )) || [[ -n "$err" ]]; then
@@ -26669,6 +27044,11 @@ _ws_reclaim_gitdir_walk() {   # dir kind(ref|reflog) out skip -> 0 with the ids 
   for e in ${ents[@]+"${ents[@]}"}; do
     case "${e##*/}" in *.lock) continue ;; esac
     [[ "$e" != "$skip" ]] || continue
+    rn="${pre:+$pre/}${e##*/}"
+    if [[ -d "$e" && ! -L "$e" ]]; then _ws_reclaim_refname_ok "$rn/x"; else _ws_reclaim_refname_ok "$rn"; fi
+    rc=$?
+    (( rc != 1 )) || continue
+    (( rc == 0 )) || { _WS_KEEP_WHY="whether git reads $e as a ${kind} could not be told (git check-ref-format answered $rc) — what it names was never read"; return 1; }
     if [[ ! -e "$e" && ! -L "$e" ]]; then
       _ws_reclaim_absent "$e"; rc=$?
       (( rc != 2 )) || { _WS_KEEP_WHY="$_WS_ABSENT_WHY — what it names was never read"; return 1; }
@@ -26677,7 +27057,7 @@ _ws_reclaim_gitdir_walk() {   # dir kind(ref|reflog) out skip -> 0 with the ids 
     if [[ -L "$e" ]]; then
       _WS_KEEP_WHY="$e is a symbolic link, neither a directory nor a regular file — what it names was never read"; return 1
     elif [[ -d "$e" ]]; then
-      _ws_reclaim_gitdir_walk "$e" "$kind" "$out" "$skip" || return 1
+      _ws_reclaim_gitdir_walk "$e" "$kind" "$out" "$skip" "$rn" || return 1
     elif [[ ! -f "$e" ]]; then
       _WS_KEEP_WHY="$e is neither a directory nor a regular file — what it names was never read"; return 1
     elif [[ "$kind" == reflog ]]; then
@@ -26687,6 +27067,16 @@ _ws_reclaim_gitdir_walk() {   # dir kind(ref|reflog) out skip -> 0 with the ids 
     fi
   done
   return 0
+}
+
+_ws_reclaim_refname_ok() {   # name -> 0 when git's ref format admits name as a ref name (one level
+  #                              allowed: `logs/` holds pseudo-refs' reflogs too); 1 when it forbids it; any
+  #                              other status when git could not judge it. A name opening with `-` would be
+  #                              read as an option, so it is judged under `refs/`, which the rules treat the
+  #                              same way component by component.
+  local n="$1"
+  [[ "$n" != -* ]] || n="refs/$n"
+  git check-ref-format --allow-onelevel "$n" >/dev/null 2>&1
 }
 
 _ws_reclaim_gitdir_ids() {   # gitdir out -> 0 with every id the worktree's own git directory G names appended
@@ -26703,8 +27093,8 @@ _ws_reclaim_gitdir_ids() {   # gitdir out -> 0 with every id the worktree's own 
   # A file that stands and cannot be read, or is not a regular file, fails. The
   # caller holds the `extensions.refStorage` check: this is a files read.
   local g="$1" out="$2" n rc
-  _ws_reclaim_gitdir_walk "$g/refs" ref "$out" "" || return 1
-  _ws_reclaim_gitdir_walk "$g/logs" reflog "$out" "$g/logs/HEAD" || return 1
+  _ws_reclaim_gitdir_walk "$g/refs" ref "$out" "" refs || return 1
+  _ws_reclaim_gitdir_walk "$g/logs" reflog "$out" "$g/logs/HEAD" "" || return 1
   for n in ORIG_HEAD REBASE_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD \
     rebase-merge/autostash rebase-apply/autostash MERGE_AUTOSTASH; do
     _ws_reclaim_absent "$g/$n"; rc=$?
@@ -26747,6 +27137,11 @@ _ws_reclaim_keep_reflogs() {   # main id logfile... -> 0 once every commit the n
     if (( rc == 2 )); then _WS_KEEP_WHY="$_WS_ABSENT_WHY — the reflog there was never read"; rm -rf "$sd"; return 1; fi
     # `-f`, because awk is no reader of anything else: gawk SKIPS a directory
     # operand with a warning and exits 0 (measured), which would read as empty.
+    # And never a LINK — `G/logs/HEAD` above all, the one entry of G the walk
+    # leaves to this read: `-f` follows one, so a link there would have the
+    # keep read another file's ids in place of the reflog `git worktree
+    # remove` deletes, where the walk refuses a link at every other entry.
+    if [[ -L "$f" ]]; then _WS_KEEP_WHY="the reflog $f is a symbolic link — ccd never follows one, so it was never read"; rm -rf "$sd"; return 1; fi
     if [[ ! -f "$f" ]]; then _WS_KEEP_WHY="the reflog $f is not a regular file — it was never read"; rm -rf "$sd"; return 1; fi
     _ws_reclaim_reflog_ids "$f" "$sd/ids" || { rm -rf "$sd"; return 1; }
   done
@@ -27264,7 +27659,18 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   stamp=ccd
   case "$surface" in cli|pwa|agent) stamp="$surface" ;; esac
   _ws_unsupervise "$id" "$stamp" "$declared"
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null; killrc=$?
+  # THE KILL IS BOUNDED, as `_session_probe` bounds the same substrate: a
+  # wedged tmux server would otherwise hold this tail — and the lock, and the
+  # verb's caller — for as long as it stays wedged. A kill that runs out of
+  # time answers 124, never 0, so the exit-empty exception below cannot admit
+  # it, and the re-measure stops the tail with the breadcrumb kept. The same
+  # function-vs-binary split `_session_probe` makes, for its reason:
+  # `timeout` execs its argv, and a function stub cannot wedge.
+  if [[ $(type -t tmux) == function ]]; then
+    tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null; killrc=$?
+  else
+    _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null; killrc=$?
+  fi
   # RE-MEASURED, because `_ws_unsupervise` answers 0 whatever systemd did: a
   # failed `_svc_disable_now` is a stderr warning and nothing more. A unit that
   # is still up is exactly the Restart=always hazard this arm exists for (spec
@@ -28001,8 +28407,8 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 
 # ── end child reclamation ─────────────────────────────────────────────── RECLAIM-END ──
 
-# ── ws-reap's mirror of a reclaim breadcrumb (spec 2026-09-22 §5.6) ─────── MIRROR-BEGIN ──
-
+# ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
+_ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _reap_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused
 _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` breadcrumb, on stdout
   printf '{"refused":"reclaim-in-progress","detail":%s,"paths":[]}\n' \
     "$(_json_str "an interrupted reclamation of $1 stopped at its '${2#reclaim:}' step — ws-reap never finishes another verb's work")"
@@ -28010,26 +28416,69 @@ _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` br
 
 # WS-REAP'S MIRROR (spec 2026-09-22 §5.6; carried constraint 5). The one line
 # at the top of `_ws_reap_locked`'s resume fork calls `_ws_reclaim_mirror`
-# above: a `reclaim:<phase>` breadcrumb is ws-reclaim's interrupted work — it
-# never passed `archived`, and resuming it as a reap would finish a teardown
-# whose ladder asked a different question. So ws-reap refuses
-# `reclaim-in-progress` before it reads anything, and ws-reclaim refuses the
-# mirror (`reap-in-progress`). No journal emit here: the reap refusal emits
-# are pinned at exactly two.
+# above: a `reclaim:<phase>` breadcrumb is ws-reclaim's interrupted work, and
+# resuming it as a reap would finish a teardown whose ladder asked a different
+# question. So ws-reap refuses `reclaim-in-progress` before it reads anything,
+# and ws-reclaim refuses the mirror (`reap-in-progress`). And the LEAF-LINK
+# MIRROR of ws-reclaim's (spec §5.5): `_ws_reap_eval` calls `_ws_reap_leaf_ok`,
+# so a workdir that IS a link (trailing slashes stripped, so none can make `-L`
+# follow it; a linked ancestor stays legal) refuses `containment-unproven`. A
+# resume never runs the eval, and with the child's record gone git 2.43 follows
+# the link and removes the worktree it names, no --force (measured) — so
+# `_ws_reap_tail` re-tests `-L` at `git worktree remove` itself. No journal
+# emit here: the reap refusal emits are pinned at exactly two.
 #
-# WHY THIS IS ITS OWN MARKED BLOCK, and neither inside `_ws_reap_locked` nor
-# inside the RECLAIM region above. `_ws_reap_locked` sits above the frozen
-# citation corpus's anchors (`server/test/session-hook.test.ts`), where every
-# added line moves a citation, so it carries one line of code and a pointer.
-# `server/test/ccd-wsaudit-nonpoison.test.ts` counts the refusal words OUTSIDE
-# the RECLAIM region at a figure the same corpus quotes byte for byte, so the
-# literal cannot stand among ws-reap's own lines either — that test cuts this
-# block out exactly as it cuts the region. And the RECLAIM region's words are
-# ws-reclaim's alone (its header's fourteen, held equal to the server's map by
-# harvest), which `reclaim-in-progress` — ws-reap's answer — is not.
-# `server/test/wsaudit.test.ts` harvests the whole file, so its sentence is
-# found here all the same.
+# WHY ITS OWN MARKED BLOCK: `_ws_reap_locked` and `_ws_reap_eval` sit above the
+# frozen citation corpus's anchors (`server/test/session-hook.test.ts`), so each
+# carries one line and a pointer. `ccd-wsaudit-nonpoison.test.ts` counts refusal
+# words OUTSIDE the RECLAIM region at a figure that corpus quotes byte for byte,
+# so neither literal stands among ws-reap's lines — that test cuts this block
+# out as it cuts the region, whose words are ws-reclaim's alone (its header's
+# fourteen). `wsaudit.test.ts` harvests the whole file, so both words are found.
 # ── end ws-reap's mirror ─────────────────────────────────────────────────── MIRROR-END ──
+
+# ── ws-reap's ignored read of a nested child (spec 2026-09-22 §1, §5.5) ────────
+# `_ws_reap_eval`'s per-child descent and `_ws_reap_locked`'s children-phase
+# resume each call this right after the child's `status` read, and each call
+# decides: fresh, a counted entry refuses `child-dirty`; on resume, it refuses
+# `state-changed`; rc 1 is `tree-unreadable` at both. `status
+# --untracked-files=all` never lists an IGNORED file, a child's own worktree
+# config (`config --worktree core.excludesFile`) can make any file ignored in
+# that child alone, and `git worktree remove` deletes ignored files without
+# --force. "Ignored files die with the tree" is ws-reclaim's rule, and it comes
+# after that verb's classify-and-pin (§1, §5.5). ws-reap pins nothing, so it
+# refuses instead.
+#
+# CHECKED, as the status read beside each call is: rc != 0 or ANY stderr is a
+# read that did not complete. stdout goes to a FILE because `-z` output carries
+# NUL bytes, which `$(…)` drops.
+#
+# ONE SKIP. An entry `D/` (git's collapsed form for a nested repository) is not
+# counted when `"$1/D"` is EXACTLY one path of the caller's own registered set:
+# `$children` fresh, `$rcchildren` on resume, both `_ws_children` lines
+# (`path<TAB>branch<TAB>head`, resolved). A registered grandchild carries a
+# `.git` file, so git prints it as that one entry of its holder, and without the
+# skip every nested reap would refuse. Sound because the same loop reads that
+# grandchild ITSELF: fresh, its ownership pair, status and this read, before
+# anything is removed; on resume, its status and this read but NO ownership
+# pair, so a foreign repository at its path is stopped by `_ws_reap_tail`'s
+# ownership re-proof before each `worktree remove`, run innermost-first, before
+# the holder is reached. Everything else counts: a file (even at a registered
+# path), an unregistered nested repository, and a spelling that is not a whole
+# registered path (a prefix is not a match).
+_ws_child_ignored_count() {   # childdir set -> ignored entries in childdir, set's registered worktrees skipped; rc 1 = unread
+  local out err rc e n=0
+  out=$(_plat_mktemp) || return 1
+  err=$(_plat_mktemp) || { rm -f "$out"; return 1; }
+  git -C "$1" ls-files --others --ignored --exclude-standard -z >"$out" 2>"$err"; rc=$?
+  if (( rc != 0 )) || [[ -s "$err" ]]; then rm -f "$out" "$err"; return 1; fi
+  while IFS= read -r -d '' e || [[ -n "$e" ]]; do
+    [[ "$e" == */ && $'\n'"$2" == *$'\n'"$1/${e%/}"$'\t'* ]] && continue
+    n=$(( n + 1 ))
+  done <"$out"
+  rm -f "$out" "$err"
+  printf '%s\n' "$n"
+}
 
 # ── THE AUTH-DEAD MARKER'S CREDENTIAL RULE (D-3524) ─────────────────────────
 # `$REG/<account>-authdead` is a verdict about ONE credential: the one the lane
@@ -28346,6 +28795,7 @@ case "${1:-}" in
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   coord-pause) shift; cmd_coord_pause "$@" ;;
+  reclaim-pause) shift; cmd_reclaim_pause "$@" ;;
   win-size)  shift; cmd_win_size "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
@@ -28353,6 +28803,6 @@ case "${1:-}" in
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-hold|ws-release|coord-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-hold|ws-release|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
 esac
 fi

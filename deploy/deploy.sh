@@ -223,9 +223,9 @@ install_atomic() {   # <local src> <HOME-relative dest> <mode>
 # or a link to one refuses, and nothing is scp'd over either active inode (the
 # hazard `install_atomic` above exists for). It reads the RSYNCED ~/ccrc/ccd,
 # so it must run after that rsync, and before the agent restart for
-# `install_atomic`'s own reason. Exit 1: nothing moved. Exit 2: the body moved
-# and the launcher did not — every ccd start on the box refuses by digest until
-# a re-run converges the pair. Either aborts this deploy (set -e).
+# `install_atomic`'s own reason. Exit 1: nothing moved. Exit 2: a half moved and
+# no verified pair was reported — a moved half is unverified, the body moved and a launcher not proved current stands
+# in front of it, or only the report failed and the pair stands as staged — until a re-run converges. Either aborts (set -e).
 install_ccd_pair() {
   "${SSH[@]}" "$BOX" 'py="$(python3 -IS -c "import os,sys;sys.stdout.write(os.path.realpath(sys.executable))")" && [ -n "$py" ] && "$py" -IS ~/ccrc/ccd/ccd-entry-install.py install ~/ccrc "$HOME"'
 }

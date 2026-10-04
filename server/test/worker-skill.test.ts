@@ -174,8 +174,8 @@ describe('the worker skill: its contract', () => {
   // Child reclamation, wave 3 (spec 2026-09-22 §6): NOT a clause — clause 8 is
   // unchanged and the count was fifteen then, unmoved by this wave — but a sentence in the reporting
   // section, because it is the fact a worker needs at the moment it reports.
-  it('says, in its reporting section, that this workspace ends when its run closes', () => {
-    const at = skill.indexOf('**This workspace ends when its run closes.**');
+  it('says, in its reporting section, that this workspace ends when the coordinator is finished with it', () => {
+    const at = skill.indexOf('**This workspace ends when the coordinator is finished with it — usually when\nits run closes.**');
     expect(at, 'the sentence is gone').toBeGreaterThanOrEqual(0);
     expect(at, 'it moved out of the reporting section').toBeGreaterThan(skill.indexOf('## Reporting a wave-done'));
     expect(at).toBeLessThan(skill.indexOf('## When something is wrong'));
@@ -668,6 +668,16 @@ describe('the worker skill: the routing clauses (routing slice 2)', () => {
       .toContain(`The subject is exactly \`${WAVE_DONE_SUBJECT}\``);
     expect(skill, 'the worked mail-send JSON no longer carries the exact wave-done subject')
       .toContain(`"subject":"${WAVE_DONE_SUBJECT}"`);
+  });
+
+  // The reclaim switch is the operator's alone (child-reclamation spec §5.8).
+  // ccd has no caller auth, so `ccd reclaim-pause --state on` from a session's
+  // own shell is a door the route's session gate cannot close — and the
+  // session most motivated to walk through it is the one whose workspace is
+  // about to be reclaimed. The skill names neither the verb nor the marker it
+  // writes (`reclaim-paused` contains the same token).
+  it('never names the reclaim switch — neither the route nor the bare ccd verb', () => {
+    expect(skill).not.toContain('reclaim-pause');
   });
 });
 

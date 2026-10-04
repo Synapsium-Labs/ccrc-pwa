@@ -3768,11 +3768,54 @@ export function isMarkerState(v: unknown): v is MarkerState {
   return typeof v === 'string' && (MARKER_STATES as readonly string[]).includes(v);
 }
 
-/** The two markers the coordination lane is governed by: `coordinator-paused`
- *  (spec §4.2 — the one file that stops a program mid-flight) and
- *  `mail-disabled` (the injection kill-switch `sweepMail` already gates on).
- *  Read together because they come from one listing. */
-export interface CoordStatus { pause: MarkerState; mail: MarkerState }
+/** One child the fleet-level attention item reports (child-reclamation spec
+ *  §5.9): a child a TERMINAL reclaim refusal left standing, or one whose
+ *  reclaim has kept FAILING past the defer ceiling — which is still retried,
+ *  backing off in between. A REPORT, never a tap: nothing waits on it, and
+ *  ignoring it costs disk rather than correctness. DERIVED on the server from
+ *  the lifecycle mirror ALONE (the latest `reclaim` event of any outcome in the
+ *  id's current workspace generation is that refusal, or the last of that run
+ *  of failures, and the registry row still exists), so a restart does not
+ *  lose it.
+ *
+ *  `sentence` is the SERVER's — a refusal's through `wsaudit.ts`'s one lookup,
+ *  a failure's from the journal's own word for it — and the PWA renders it and
+ *  maps no token itself: several of `ws-reclaim`'s tokens share names with the
+ *  audit's, and the two vocabularies are held disjoint server-side. `token` is
+ *  the refusal's or the failure's (empty when ccd journaled a failure with
+ *  none) and rides beside it for a maintainer's grep, never for a renderer's
+ *  switch. `runId` is the minting run the registry marker names, or null when
+ *  the marker no longer reads as a child. `at` (epoch ms) is since when, on
+ *  ccd's clock alone: a refusal's journal line, or the first failure of the
+ *  run that ccd placed. A child whose latest line carried no `at` cannot be
+ *  placed and is not listed — the mirror's `ingestedAt` is the server's clock
+ *  and is never read as an event time (D8, `server/src/coord/schema.ts`). */
+export interface ChildReclaimAttention {
+  readonly sessionId: string;
+  readonly runId: number | null;
+  readonly token: string;
+  readonly sentence: string;
+  readonly at: number;
+}
+
+/** The three markers the coordination lane is governed by, read together
+ *  because they come from one listing: `coordinator-paused` (spec §4.2 — the
+ *  one file that stops a program mid-flight), `mail-disabled` (the injection
+ *  kill-switch `sweepMail` already gates on) and `reclaim-paused`
+ *  (child-reclamation §5.8 — the one file that stops automatic reclamation).
+ *  Plus the reclaim attention list, which rides this frame because it is
+ *  shown in the same banner row as the reclaim switch.
+ *
+ *  ADDITIVE on the wire (no `FLEET_PROTO` bump): a frame from a server that
+ *  predates `reclaim`/`childReclaimAttention` omits both, and the PWA's ONE
+ *  reader per field (`pwa/src/fleet/childReclaimWords.ts`) renders exactly
+ *  what it rendered before. */
+export interface CoordStatus {
+  pause: MarkerState;
+  mail: MarkerState;
+  reclaim: MarkerState;
+  childReclaimAttention: readonly ChildReclaimAttention[];
+}
 
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed
  *  (with a trailing space so arguments follow naturally). */

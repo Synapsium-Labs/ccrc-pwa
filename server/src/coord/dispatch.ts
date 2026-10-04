@@ -592,7 +592,15 @@ export async function dispatchRun(
     // "a dispatch is in flight" — the id does not exist yet, and a stamp
     // written once `runCcd` resolves would be null for the entire window it
     // exists to describe. Nothing clears it; `state` ends the render.
-    coord.markDispatchStarted(id, Date.now());
+    //
+    // ONE MEASUREMENT, SPENT TWICE (child-reclamation spec §5.1): this
+    // same instant is this attempt's `dispatchStartedAt` AND — only if the
+    // winner below turns out to be a clean spawn, never an adoption — this
+    // session's `sessionBornAt`. A second `Date.now()` at the `setSession`
+    // call below would let a slow `ws-add` date the two columns apart for no
+    // reason a reader could recover.
+    const startedAt = Date.now();
+    coord.markDispatchStarted(id, startedAt);
     const res = await deps.runCcd(argv);
     // §1.5: NO EARLY RETURN HERE ANY MORE. `!res.ok` used to short-circuit on
     // this line, before the diff below — see the gate after `winner`.
@@ -690,7 +698,16 @@ export async function dispatchRun(
     resumed = false;
     // Fix, review finding 7: persist the spawn onto the run row RIGHT AWAY —
     // before the hold, which can still fail two steps below.
-    coord.setSession(id, sessionId);
+    //
+    // The adopted arm (child-reclamation spec §5.1): a NULL birth on
+    // adoption, deliberately — the workspace `winner` names may be an EARLIER
+    // attempt's, and `dispatch.ts`'s own BEFORE read above tolerates an
+    // unlistable registry as empty, which is what makes such a false-new
+    // "WOULD BE ADOPTED" (§1.5). A null birth is unplaceable, so `childBirthOf`
+    // refuses to date any PR row against it, `childBindGate` refuses on any PR
+    // evidence, and the close holds rather than guessing which attempt this
+    // workspace's history belongs to.
+    coord.setSession(id, sessionId, adopted ? null : startedAt);
     // routing spec §6 "Arms": the `arm:` record, ONLY when routing was
     // actually seeded onto the argv above (`routeFields !== null` AND the
     // cap that gates it supported — the identical pair the omission event a

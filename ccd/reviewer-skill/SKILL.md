@@ -143,7 +143,8 @@ client exits 0 whenever a response arrived, so read stdout, not the exit code.
 Then end your turn. The coordinator closes your run; your workspace is
 released with it.
 
-**This workspace ends when its run closes.** You are a child the server
+**This workspace ends when the coordinator is finished with it — usually when
+its run closes.** You are a child the server
 minted for this review, so once the coordinator closes your run AND the run
 you reviewed has closed, the server reclaims it: anything not committed on
 this branch by then is committed for you as a WIP commit and attic-pinned,
