@@ -706,4 +706,55 @@ describe('the stop clause names only wakes that wake (stall watch spec §6.2)', 
     expect(line).toContain(
       'an agent whose completion says it may resume on its own has reported, and is not that wake either');
   });
+
+  // Stall watch wave 7 (`stop-clause-wake-list-allowlist` (D-3806)): ledger R21
+  // F1 and R17 F2. The S3 row above scans for three words, so a rewording that
+  // names a background task, job or command, or says `shells`, passes it; the
+  // S4 row pins one sentence and never reads the list. These two read the wake
+  // list itself. The first is an allowlist: every member must be a mail that
+  // asks, a structured ask, or a background kind whose words map, one for one,
+  // to `stall.ts`'s STALL_RESUMING_KINDS. The second scans the list for any
+  // form of resume, the word S4's interim completion used.
+  // The list splits on every comma, so kinds inside one background member are
+  // joined by `or` or `and` only: "a background agent, workflow or teammate"
+  // leaves a bare "a background agent" that matches no member shape, and reds
+  // on purpose.
+  const wakeMembers = (line: string): string[] => {
+    const colon = line.indexOf(': ');
+    const list = line.slice(colon + 2, line.indexOf('. ', colon));
+    return list.split(/,\s+(?:or\s+)?|\s+or\s+(?=an?\s)/);
+  };
+  /** The word the clause uses for each kind `stall.ts` says resumes the session on its own. */
+  const RESUMING_WORD: Record<string, string> = { subagent: 'agent', workflow: 'workflow' };
+
+  it('admits only a mail that asks, a structured ask, or a kind stall.ts says resumes the session (S3, allowlist)', () => {
+    const line = stopClause();
+    expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
+    expect(Object.keys(RESUMING_WORD).sort(),
+      'stall.ts changed the kinds that resume a session: name the word the clause uses for each, or drop it')
+      .toEqual([...STALL_RESUMING_KINDS].sort());
+    const allowed = new Set(Object.values(RESUMING_WORD));
+    const members = wakeMembers(line!);
+    expect(members.length, 'the wake list split into nothing').toBeGreaterThan(1);
+    for (const m of members) {
+      const mail = /^an? mail\b.*\basks?\b/i.test(m);
+      const ask = /^an? structured ask$/i.test(m);
+      const bg = /^an? background ((?:[a-z]+(?: or | and ))*[a-z]+) (?:you|that|which)\b/i.exec(m);
+      expect([mail, ask, bg !== null].filter(Boolean).length,
+        `the wake list member "${m}" is not a mail that asks, a structured ask, or a background kind`).toBe(1);
+      for (const k of bg ? bg[1]!.split(/ or | and /) : []) {
+        expect(allowed.has(k.toLowerCase()),
+          `the wake list counts a background ${k}, which stall.ts never reads as resuming the session`).toBe(true);
+      }
+    }
+  });
+
+  it('names nothing that may resume on its own among its wakes (S4, scan)', () => {
+    const line = stopClause();
+    expect(line, 'no contract clause opens "End a turn only on a wake you can name:"').toBeDefined();
+    const wakes = wakeMembers(line!).join(', ');
+    const said = /\bresum\w*/i.exec(wakes)?.[0];
+    expect(said, `the wake list says ${said}: an agent that may resume on its own has reported, and is no wake`)
+      .toBeUndefined();
+  });
 });
