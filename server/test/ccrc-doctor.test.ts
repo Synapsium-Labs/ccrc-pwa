@@ -3401,7 +3401,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   // and removes only the FUNCTION, so every constant the guard also checks
   // stays present — a dropped `_box_unit_env` term is the only thing that can
   // red this pin. `BUE_VAL=on` is preset AFTER sourcing ccrc (a shell
-  // assignment, never an env entry — `ccd/ccrc:2887` resets it at file scope
+  // assignment, never an env entry — `ccd/ccrc:2910` resets it at file scope
   // on load) in case some path through the ungoverned body reads it, but in
   // THIS harness (`PATH` pointing nowhere) it never gets the chance: without
   // the guard term, `_check_auth`'s body FAILs elsewhere first — the node
@@ -3495,7 +3495,9 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     it('E2: a physical line ending in a backslash above the key line in the exposure file — not measured (main: a false ARMED PASS)', () => {
       const home = healthy('ccrc-doctor-auth-e2-');
       writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\n`);
-      editExposure(home, (s) => s.replace('CCRC_AUTH=on\n', 'FOO=bar \\\nCCRC_AUTH=on\n'));
+      // ASCII-only comment: with the fixture's em-dash comment AND a line ending in a backslash the file is not measured
+      // as a whole instead (D-3831, fix round 2 — E18); this case is about the per-key continuation.
+      editExposure(home, (s) => s.replace('\u2014', '-').replace('CCRC_AUTH=on\n', 'FOO=bar \\\nCCRC_AUTH=on\n'));
       expectOneUndecidedWarn(runDoctor(home).stdout, expPath(home));
     });
 
@@ -3665,6 +3667,18 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       }
     });
 
+    itLinux('E18: a comment-looking line inside a value that may span lines is part of that VALUE, and systemd UTF-8-checks it — the exemption is off for the whole file, so a decided key is not answered (main and round 1: a false ARMED, and a false OFF)', () => {
+      // false ARMED: ccrc.env carries no key; the exposure file `decides` `on` before a quote that may span lines.
+      const armed = healthy('ccrc-doctor-auth-e18a-');
+      writeFileSync(expPath(armed), 'CCRC_AUTH=on\r\n"\nFOO=\'a\n # \xff\n', 'latin1');
+      expectWholeFileWarn(runDoctor(armed).stdout, expPath(armed), 'non-ASCII byte in a NAME=value line', 'false ARMED');
+      // false OFF: ccrc.env says `on`; the exposure file `decides` off, and systemd skips it whole.
+      const off = healthy('ccrc-doctor-auth-e18b-');
+      writeCcrcEnv(off, `${readEnv(off)}CCRC_AUTH=on\n`);
+      writeFileSync(expPath(off), 'CCRC_AUTH=off\nFOO="a\n\r\n # \xff\n', 'latin1');
+      expectWholeFileWarn(runDoctor(off).stdout, expPath(off), 'non-ASCII byte in a NAME=value line', 'false OFF');
+    });
+
     itLinux('E17: the control — a valid UTF-8 em dash in a COMMENT of the exposure file reads ARMED as before (the real writer\'s own first line carries one)', () => {
       const home = healthy('ccrc-doctor-auth-e17-');
       writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\n`);
@@ -3723,6 +3737,14 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       ['W valid UTF-8 in a value (a cost, never a false answer)', 'CCRC_RP_ID=\xc3\xa9\nCCRC_AUTH=on\n', ['on', 0], ['', 2]],
       ['W control: a valid UTF-8 em dash in a comment', '# a \xe2\x80\x94 b\nCCRC_AUTH=on\n', ['on', 0], ['on', 0]],
       ['W control: a non-ASCII comment after the key', 'CCRC_AUTH=on\n; \xe2\x80\x94\n', ['on', 0], ['on', 0]],
+      // D-3831, fix round 2: the comment exemption is OFF for a whole file in which a non-comment line ends in a
+      // backslash or carries a quote that is not one whole pair — systemd is then not in its key state on a later
+      // "comment", it is inside a VALUE, and UTF-8-checks it. A quote that IS one whole pair changes nothing.
+      ['W comment high byte inside a double-quoted value that spans lines', 'CCRC_AUTH=on\nX="a\n# \xff\n"\n', ['on', 0], ['', 2]],
+      ['W comment high byte inside a single-quoted value that spans lines', 'CCRC_AUTH=on\nX=\'a\n# \xff\n\'\n', ['on', 0], ['', 2]],
+      ['W comment high byte after an unquoted value ending in a backslash', 'CCRC_AUTH=on\nX=a\\\n# \xff\n', ['on', 0], ['', 2]],
+      ['W comment high byte BEFORE a value that may span lines (the whole file, conservatively)', '# \xff\nCCRC_AUTH=on\nX="a\n"\n', ['on', 0], ['', 2]],
+      ['W control: a quote that is one whole pair does not turn the exemption off', 'X="a"\n# \xff\nCCRC_AUTH=on\n', ['on', 0], ['on', 0]],
     ];
     /** `_box_env_value <file> CCRC_AUTH [mode]` over every shape: stdout and rc, read back through files. */
     const readShapes = (mode: string): Array<[string, number]> => {
@@ -8036,7 +8058,7 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
   // BOTH files intact and removes only the FUNCTION (never `unset
   // CCRC_EXPOSURE_FILE`, which the guard tests first and would mask the
   // mutation), with `BUE_VAL=on` preset AFTER sourcing ccrc as a shell
-  // assignment (an env entry is reset at ccrc's own file scope, `:2887`) — a
+  // assignment (an env entry is reset at ccrc's own file scope, `:2910`) — a
   // guard missing this term reads that stale value as ARMED instead of
   // failing shut.
   it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, not a stale ARMED PASS', () => {
