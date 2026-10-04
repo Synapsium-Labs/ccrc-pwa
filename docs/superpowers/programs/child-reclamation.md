@@ -20,7 +20,7 @@ removed on 2026-09-10 was not.
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **deployed** v0.0.33 (`1ffdf947`, merged 2026-09-28 16:14 UTC, rolled out 16:16–16:21, fleet box first, rc 0; run 148 on `plain-summit`; reviews 170, 171, 172). Live: run 148's close reclaimed `plain-summit` in 10 s |
-| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 (open) | **working, fix round 1** (review run 254 closed 2026-10-04) — both prerequisites merged (#226 `0db98707`, #222 `cf9e4cc8`); run 174 on `swift-hollow` sent the integration round as mail 3169, 2026-10-02 (amendments A1 to A17 merged in #188, `6ff4e2e9`) |
+| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 (open) | **awaiting-review** (convergence review run 258, 2026-10-04) — both prerequisites merged (#226 `0db98707`, #222 `cf9e4cc8`); run 174 on `swift-hollow` sent the integration round as mail 3169, 2026-10-02 (amendments A1 to A17 merged in #188, `6ff4e2e9`) |
 | 5 | the closed run's reclaim chip and its sentences; R25's orphan temp-root collector (R36) | **AGENT-FIRST** (R36 makes it one) | — | planned |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
@@ -43,6 +43,22 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-04 20:34 — fix round 1 re-measured; convergence review run 258 dispatched.** Wave-done 3409 claimed
+  `f8f0af9a`. Re-measured:
+  - PR #215's head is that sha, open and mergeable, and current `main` (`22f7931a`) is an ancestor, merged twice and
+    never rebased.
+  - The tip's migration 15 equals #237's line for line, and #215's own migration is 16.
+  - `verifyMarker` answers `ccrc-unmodified` with one marker line, and `mark.mjs --check` exits 0.
+  - `bash -n` passes on each shell file alone, and both Python files compile.
+  - `_ws_reclaim_resolve`, `_ws_reclaim_plain_path` and `_ws_reclaim_owned` equal `main`'s.
+  - `_svc_real_home` is identical in `ccd/ccd` and `ccd/ccrc` and reads
+    `^[${az}${d}_][${az}${d}._@-]*$ && ! ^[$d]+$`, as ruled.
+  - The deviation numbers new against `main` are still exactly wave 4's twenty.
+  - Required Linux CI is green (run 37231602141).
+
+  Run 174 advanced to `awaiting-review`. Review run 258 was dispatched to `ccrc-pwa-keen-mesa` with the panel, the
+  plan's SAFETY lens at Opus `xhigh` (extended to F1's continuity, F2 and F3's deletes, F5's charset and the merges)
+  and the convergence rule. The worker's "Named, not fixed" list is known and ruled.
 - **2026-10-04 17:06 — overlap rule agreed with stall-watch wave 7 (mail 3401).** Stall-watch wave 7 amends
   coordinator clause 16, with `CONTRACT[15]`, its own new rows in `coordinator-skill.test.ts` and
   `worker-skill.test.ts`, and the sentences that quote that clause. #215 changes clause 3 only (`CONTRACT` at :110,
