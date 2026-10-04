@@ -194,6 +194,49 @@ describe('session-hook: the landing-order advisory on a sync of main', () => {
     expect(ms, `the whole hook took ${ms} ms`).toBeLessThan(1500);
   });
 
+  // QUOTE-DENSE, AT THE MERGE DENY'S PAYLOAD CAP (landing-order wave 3). The
+  // deny's quote strip runs on every Bash call that carries `merge`, held or
+  // not, and pays per quoted span and per quoted substitution: bare `"` took
+  // 1584 ms at 36 KB, over this bound. The deny parses nothing longer than
+  // MERGE_PARSE_CAP bytes, so these are the costliest commands it still reads:
+  // each shape at exactly the cap, the cap READ from the hook. Raising the cap
+  // past what the strip can afford reds here. The landing advisory's own regex
+  // is linear on these shapes (100 KB of each, ~130 ms, measured), so it has
+  // no cap. The tail carries `merge` so the strip runs; no hold, so no deny.
+  const CAP = ((): number => {
+    const m = /^MERGE_PARSE_CAP=(\d+)$/m.exec(fs.readFileSync(HOOK, 'utf8'));
+    if (m === null) throw new Error('the hook no longer defines MERGE_PARSE_CAP as a bare integer');
+    return Number(m[1]);
+  })();
+  const QUOTE_DENSE: Array<[string, string]> = [
+    ['bare double quotes', '"'], ["bare single quotes", "'"], ['$( runs', '$('],
+    ['quoted substitutions holding a quote', '"$(\'\')"'], ['quoted substitutions holding a <', '"$(<)"'],
+  ];
+  it.each(QUOTE_DENSE)('answers a quote-dense command at the merge deny\'s cap (%s) inside the bound', (_name, unit) => {
+    const tail = '\n# merge origin';
+    const command = unit.repeat(Math.ceil(CAP / unit.length)).slice(0, CAP - tail.length) + tail;
+    expect(Buffer.byteLength(command)).toBe(CAP);
+    const t0 = Date.now();
+    const r = hook(bash(command));
+    const ms = Date.now() - t0;
+    expect(r.stdout).toBe('');
+    expect(ms, `the whole hook took ${ms} ms`).toBeLessThan(1500);
+  });
+  // The same shapes at 36 KB, far over the cap and holding no `gh`: the deny
+  // passes them unparsed after one linear regex scan (`MERGE_OVERCAP_RE`: they spell no `gh pr merge`), so what this clock times
+  // is the landing advisory's own regex on quote runs. It is linear there
+  // (measured above); a regex that walked from every quote would not be.
+  it.each(QUOTE_DENSE)('answers a 36 KB quote-dense command (%s): the deny passes it unparsed, the advisory reads it inside the bound', (_name, unit) => {
+    const command = unit.repeat(Math.ceil(36000 / unit.length)) + '\n# merge origin';
+    expect(command.length).toBeGreaterThan(36000);
+    expect(command, 'a `gh` would make the deny refuse it unread in a held session; this case times the advisory').not.toContain('gh');
+    const t0 = Date.now();
+    const r = hook(bash(command));
+    const ms = Date.now() - t0;
+    expect(r.stdout, 'no line of it merges main').toBe('');
+    expect(ms, `the whole hook took ${ms} ms`).toBeLessThan(1500);
+  });
+
   // PRECEDENCE. One envelope per event, and a graph-arm deny wins: a compound
   // call that is a search at its HEAD (the gate's question) and a sync later
   // on one line meets BOTH arms. Without the `-z "$pre_json"` conjunct the

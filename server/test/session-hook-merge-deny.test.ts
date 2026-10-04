@@ -202,7 +202,8 @@ describe('the worker merge deny', () => {
     // cases below keep everything longer out. At this size those walks cost too
     // little for the clock to catch (wave 2's rows H20, H21 and H39 measure
     // green here, at 2048 and at 8192): the cap, not this clock, is their guard
-    // now, and this case is the boundary and no-false-deny check it reads as.
+    // now, and this case is the no-false-deny and time check at the cap; the
+    // boundary itself is held by the payload cap's boundary case.
     // An unterminated `<<a` is the strip's own walk. The tail carries `merge`
     // outside any quote or comment, so the prefilter lets the match run and a
     // regex that matched any `merge` would deny; none is a merge. The hold
@@ -225,22 +226,32 @@ describe('the worker merge deny', () => {
     // that never closes is kept raw, not stripped again: either one recursing
     // walks the rest of the payload once per `<<` (2.4 to 3.8 s and 0.4 to
     // 0.6 GB at 16 KB, measured on the strip alone; 15 s and 2.9 GB at 36 KB).
+    // Each payload is whole units up to the cap, the largest command parsed.
     hold(WAVE_HOLD);
     // The second payload's heredoc never terminates, so the strip keeps the
     // whole text raw from its `<<` without reading the `$(`s (the top level
-    // has no `$(` arm of its own); the substitution reader never runs here.
-    for (const [pre, u] of [['', '<<a '], ['cat <<a\n', '$(cat <<a\n']]) {
+    // has no `$(` arm of its own). The third has its `a` terminator line
+    // (review 249 F1): the heredoc completes, its unquoted body goes to the
+    // substitution reader, and the first `$(` there never closes, so it is
+    // kept raw once. Re-stripping it would cost ~300 ms here against ~80
+    // (measured at the cap), inside any bound a loaded box can hold, so the
+    // next case pins the rule itself.
+    for (const [pre, u, end] of [['', '<<a ', '\n'], ['cat <<a\n', '$(cat <<a\n', ''], ['cat <<a\n', '$(cat <<a\n', 'a\n']]) {
+      const tail = `${end}echo merge origin`;
+      const c = pre + u.repeat(Math.floor((CAP - pre.length - tail.length) / u.length)) + tail;
+      expect(Buffer.byteLength(c)).toBeLessThanOrEqual(CAP);
       const t0 = Date.now();
-      const r = bash(pre + u.repeat(Math.ceil(16000 / u.length)) + '\necho merge origin');
+      const r = bash(c);
       const ms = Date.now() - t0;
-      expect(r.deny, `a non-merge was denied: ${JSON.stringify(u)}`).toBeNull();
-      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(1500);
+      expect(r.deny, `a non-merge was denied: ${JSON.stringify(u + end)}`).toBeNull();
+      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u + end)}`).toBeLessThan(1500);
     }
   }, 60000);
 
   // THE PAYLOAD CAP (landing-order wave 3). Over MERGE_PARSE_CAP bytes nothing
-  // is parsed: the raw command is asked only whether it holds both `gh` and
-  // `merge`, and a held or child session's command that does is refused unread.
+  // is parsed: the raw command is asked only whether its text spells a
+  // word-bounded `gh pr merge` (`MERGE_OVERCAP_RE`), and a held or child
+  // session's command that does is refused unread.
   describe('the payload cap', () => {
     const MENTION = 'echo "then gh pr merge 42 later" ';
     it('parses a command of exactly the cap, and refuses one byte more unread — naming both numbers', () => {
@@ -311,7 +322,7 @@ describe('the worker merge deny', () => {
     it('answers an over-cap quote-dense command in bounded time — the strip never reads it', () => {
       // `"$(<)"` repeated is the costliest shape measured per byte (one nested
       // strip per span): ~350 ms of CPU at 2048 bytes, so 36 KB parsed would
-      // take seconds. Over the cap it costs one fixed-string scan.
+      // take seconds. Over the cap it costs one linear regex scan.
       hold(WAVE_HOLD);
       for (const [unit, tail, denied] of [['"$(<)"', '\ngh pr merge 42', true], ['"', '\necho merge origin', false]] as const) {
         const c = sized(unit, tail, 36000);
@@ -322,6 +333,19 @@ describe('the worker merge deny', () => {
         expect(ms, `the hook took ${ms} ms on 36 KB of ${JSON.stringify(unit)}`).toBeLessThan(1500);
       }
     }, 60000);
+  });
+
+  // Review 249 F1, pinned as a rule rather than a clock: a `$(` that never
+  // closes inside an UNQUOTED heredoc body (which the substitution reader
+  // reads) keeps its RAW text, and is never stripped again. Re-stripping it
+  // would drop the '…' span below and the merge line inside it. Bash runs
+  // neither (it stops at the unclosed `$(`), so this deny is the fail-closed
+  // rule's named cost; what the case proves is that the raw text is kept.
+  it('keeps an unclosed `$(` in an unquoted heredoc body raw, never stripped again (review 249 F1)', () => {
+    hold(WAVE_HOLD);
+    for (const c of ["cat <<a\n$(echo 'x\ngh pr merge 42\n'\na", 'cat <<a\n$(echo "x\ngh pr merge 42\n"\na']) {
+      expect(bash(c).deny, `the unclosed $( was stripped again: ${c}`).not.toBeNull();
+    }
   });
 
   // Review 241 F1: the strip once kept a "…" span that held a `$(` whole, so
