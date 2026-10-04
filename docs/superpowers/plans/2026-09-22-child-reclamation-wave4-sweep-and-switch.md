@@ -5145,34 +5145,49 @@ The frozen corpus cites none of these sites by content (measured).
    **Mutation:** restore the old clock in any arm, and its case reds.
 
    **Continuity (amended 2026-10-04, review 254 F1).** R-4's "continuous" is literal. This amends the item in place. It
-   is no departure and takes no number.
+   is no departure and takes no number. The bound is **2.5 intervals, ruled 2026-10-04**.
    - The entry gains `lastPresenceDeferredAt: number | null`, the time of the latest presence-class answer.
-   - An episode stays continuous only while consecutive presence-class answers are at most two sweep-pass intervals
+   - An episode stays continuous only while consecutive presence-class answers are at most 2.5 sweep-pass intervals
      apart (inclusive). A longer gap restarts the episode at the new answer.
    - A request goes out licensed only when BOTH hold: the episode spans the ceiling, and its latest presence answer is
-     within two intervals of the ask (inclusive).
+     within 2.5 intervals of the ask (inclusive).
+   - The bound is derived from the interval: a private multiplier, `2.5`, times `passIntervalMs`. One predicate holds
+     it for both conditions. It is 150 s at the lane.
    - `childReclaimNextEntry` and `childReclaimDeferExpired` take `passIntervalMs` as a required argument. The lane
      passes `CHILD_RECLAIM_SWEEP_MS`.
    - A licensed request answered presence-class still restarts the episode. Every other outcome ends it and clears both
      presence fields.
-   - Both rules only remove licensed asks, never add one. Under a backlog of three or more due children, presence-held
-     children wait unlicensed until it drains. That fails closed, and is accepted.
+   - Why 2.5. A pass lands one interval plus up to one 2 s tick after the last. A child that sits out ONE pass is asked
+     again at most about 124 s later, inside the bound, so its episode continues. A child that sits out TWO passes is
+     asked again 180 s or more later, past it, so its episode restarts.
+   - So under a backlog of three or more due children, presence-held children wait unlicensed until it drains. That
+     fails closed, and is accepted.
+   - Neither rule ever licenses an ask EARLIER, or more OFTEN, than the ceiling would without them. Where one licenses
+     later, it is on a continuous, fresh episode, the licence the spec sanctions.
 
    **Cases:**
    - lane: one presence sample, then sixteen other due children. The child's next request goes out unlicensed. Red
      before the change;
    - lane: the same backlog then drains. Nothing is licensed until the episode that began after the gap spans the
      ceiling;
-   - policy, gap restart: a presence answer, a gap over two intervals, then another unlicensed presence answer. The
+   - lane: two due children, passes 62 s apart, so 124 s between one child's answers. The episode continues, and the
+     licence comes at the first ask past the ceiling;
+   - lane: three due children, passes 60 s apart, so 180 s between one child's answers. Every answer restarts the
+     episode, and nothing is licensed;
+   - policy, gap restart: a presence answer, a gap over 2.5 intervals, then another unlicensed presence answer. The
      episode starts at the second, so nothing is licensed shortly after it, although the first is past the ceiling. At
-     exactly two intervals the episode continues;
-   - policy, freshness: an episode past the ceiling whose latest answer is older than two intervals licenses nothing.
-     At exactly two intervals it does;
+     exactly 2.5 intervals the episode continues, and one ms more restarts it;
+   - policy, freshness: an episode past the ceiling whose latest answer is older than 2.5 intervals licenses nothing.
+     At exactly 2.5 intervals it does;
+   - policy: an off-invariant entry (no episode, a recent latest answer) starts an episode on a presence answer;
    - the lane cases that crossed the whole ceiling in one step now answer presence pass by pass.
 
    **Mutations:**
    - drop the gap restart → the two policy gap-restart cases and the lane drain case red;
-   - drop the freshness check → the policy freshness case, the backlog case and the lane drain case red.
+   - drop the freshness check → the policy freshness case, the backlog case and the lane drain case red;
+   - the multiplier at 2 → the 124 s lane case reds;
+   - the multiplier at 3 → the 180 s lane case reds;
+   - drop `continues`'s running-episode conjunct → the off-invariant policy case reds.
 2. **The hold (R-1).** This replaces `held: string | null` (plan:2343-2344) and plan:2373's check:
    ```ts
    export type ChildReclaimHoldRead =
@@ -5265,6 +5280,18 @@ The frozen corpus cites none of these sites by content (measured).
    - **Mutations:** delete the byte re-check → (iv) reds; delete the count re-check → (v) reds; delete the accounting
      re-read → (iv′) reds, where (iv′) is a different but equally renderable text.
    - **The docstring** states R-1's residual.
+   - **The answer's mark (amended 2026-10-04, review 254).** This is (ix) conformance. It is no departure and takes no
+     number.
+     - Where the job settles, beside the entry delete, the lane also marks the id in `childReclaimReleaseAnswered`.
+     - The next eligible verdict consumes the mark and seeds nothing that pass. A pass's listing is read before the
+       lanes ahead of the sweep are awaited, so the answer can land between a listing and its loop. The lane cannot
+       tell such a listing from a fresh one, so it skips one sighting either way. That fails closed and costs one pass.
+     - The mark is cleared wherever the child's other memory is: the vanished-row loop and every pass-level reset.
+     - So (ii) reads: after the release, one pass that seeds nothing, then two more passes and one reclaim request.
+       (ix)'s two fresh unheld passes are counted after that pass.
+     - Case: a pass whose listing was read before the answer, and whose loop ran after it, seeds nothing. Two fresh
+       passes after it lead to the request.
+     - Mutations: drop the consume → that case reds; drop the entry delete → the second-interleaving case reds.
 2. **Both caps (R-5b).** The early return reads:
    `!capSupported(…, RECLAIM_CAP) || !capSupported(…, RECLAIM_PAUSE_CAP) || names.includes(RECLAIM_PAUSE_MARKER)`.
    - The fixture's `ccdVerbs` (plan:2787) gains the pause token.
