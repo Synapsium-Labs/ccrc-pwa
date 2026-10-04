@@ -21,8 +21,8 @@ file in the fleet registry. No marker has a writer in the tree.
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 | **merged** `3255571a1` (2026-10-03 23:09, R22); live at the next auto-update |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | #237 | **merged** `7e858c8bf` (2026-10-04 12:40, R26) |
-| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **accepted** at `b29aba143` (review 257, R32); run 255 at `merging`, awaiting the operator's merge after #243 |
-| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`) | — | **planned** — plan reviewed (R31); split with claim 956 agreed (calm-mesa, mail 3401); dispatch after #243 (the plan) and #241 merge |
+| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **merged** `698f679da` (2026-10-04 21:21, R33); live at the next auto-update |
+| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`); Task 4 server comments | — | **dispatched** 2026-10-04 as run 259 to a fresh child (`ccrc-pwa-amber-meadow`), R33 |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -539,6 +539,20 @@ Output: `w2-shadow-review.json` in the coordinator notes.
   - **Wave 7's overlap is agreed.** Run 174's coordinator said yes in mail 3401: both PRs land, the second merges
     `main` and keeps both sides, and wave 7 stays inside clause 16, `CONTRACT[15]` and its own rows. Wave 7 gains a
     precondition that #241 is merged, since Task 4 edits wave 6's text.
+- **R33 (coordinator, 2026-10-04 21:23): the operator said "yes merge all". Wave 6 is on `main`, and wave 7 is
+  dispatched.**
+  - **#243 (ledger R26–R32 and the plans) merged first**, squashed at `b620da428` (21:21:29) and pinned to its head
+    `3e04dd23c`. Its required checks were green; the macOS legs gate nothing.
+  - **#241 (wave 6) merged second**, squashed at `698f679da` (21:21:52) and pinned to its head. The PR's head
+    `b29aba143` equals the handoff commit, which is the merge proof. The probe against the new `main` was clean
+    beforehand, and its required checks were green at that head.
+  - **The runs.** Wave 7's run 259 was opened first. Run 255 then closed `final:true`: `done`, `released:true`, child
+    reclaim queued.
+  - **Wave 7 was dispatched** to a fresh child. Before dispatch: claims re-read (claim 956 had lapsed, and only run 174's
+    claim 959 stands, with no overlap), 8 of 24 dispatches in the window, and the plan's preconditions measured. The
+    brief reads the plan at `b620da428` and carries the split agreed with run 174.
+  - **Still open with the operator:** the worker-clause sentence (R31's Important finding), and the Settings section's
+    scope (R30).
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
