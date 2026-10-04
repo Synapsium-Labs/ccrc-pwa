@@ -824,7 +824,7 @@ function w2Input(over: Over = {}, facts: Partial<StallW2Facts> = {}): StallInput
   return { ...stallInput(over), w2: w2(facts) };
 }
 function delivery(id: number, mailId: number, toId: string, over: Partial<StallDeliveryRow> = {}): StallDeliveryRow {
-  return { id, mailId, toId, state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null, ...over };
+  return { id, mailId, toId, state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null, replayCount: 0, ...over };
 }
 const vw = (over: Over = {}, facts: Partial<StallW2Facts> = {}, at = NOW): StallVerdict => stallVerdict(w2Input(over, facts), at);
 
@@ -1014,9 +1014,9 @@ describe('wave 2: coord-deaf (§5.2, §10 step 9)', () => {
 
   it('9: a question to the coordinator unacked COORD_DEAF_MS pushes coord-deaf once, keyed on the mail', () => {
     expect(cv([Q], [QD])).toEqual(w2Push('coord-deaf', 4001));
-    expect(cv([Q], [QD], {}, Q_AT + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));
-    expect(cv([Q], [QD], {}, Q_AT + COORD_DEAF_MS - 1)).toEqual(NONE);
-    expect(cv([{ ...Q, at: NOW - 59 * MIN }], [QD])).toEqual(NONE);
+    expect(cv([Q], [QD], {}, Q_AT + MIN + COORD_DEAF_MS)).toEqual(w2Push('coord-deaf', 4001));   // an hour from its first delivery (`gate-held-mail-is-not-stuck` (D-3798))
+    expect(cv([Q], [QD], {}, Q_AT + MIN + COORD_DEAF_MS - 1)).toEqual(NONE);
+    expect(cv([Q], [{ ...QD, deliveredAt: NOW - 59 * MIN }])).toEqual(NONE);
     expect(cv([Q], [QD], { notices: [notice('live', 'coord-deaf', 1, 4001, NOW - MIN)] })).toEqual(NONE);
   });
 
@@ -1414,7 +1414,7 @@ describe('wave 2: coord-deaf reads the worker\'s own ball-passing mail, by its n
   });
 
   it('the newest delivery row judges the mail, in either row order: older acked, newer unacked past the limit is deaf', () => {
-    const rows = [older({ state: 'acked', ackedAt: Q_AT + 2 * MIN }), newer({ state: 'delivered' })];
+    const rows = [older({ state: 'acked', ackedAt: Q_AT + 2 * MIN }), newer({ state: 'delivered', deliveredAt: NOW - COORD_DEAF_MS })];
     expect(cv([Q], rows)).toEqual(w2Push('coord-deaf', 4001));
     expect(cv([Q], [...rows].reverse())).toEqual(w2Push('coord-deaf', 4001));
   });
@@ -1770,5 +1770,47 @@ describe('fix-round-alias-reaches-the-ball (D-3797): the role worker on the subj
     // The marker ladder reads the same facts: under the w2 marker, from the worker's Stop, r1 falls due at the same time.
     const marked: StallInput = { ...input([own, fix]), arming: W2_LIVE, w2: w2({ mark: markOf({ at: D + H + 5 * MIN, turnAt: D + H, stopAt: D + H + 5 * MIN }) }) };
     expect(stallVerdict(marked, react + 30_000 + STALL_QUIET_MS)).toEqual(r1(react));
+  });
+});
+
+// ── gate-held-mail-is-not-stuck (D-3798): coord-deaf runs from the delivery the coordinator could hear ─────────────────
+// `sweepMail` re-stamps `deliveredAt` on every replay (`markDelivered`, then `bumpReplayCount`), every MAIL_REPLAY_MS
+// while the row stays unacked, so only a first delivery (`replayCount` 0) dates the hearing. A replayed row was first
+// delivered at least MAIL_REPLAY_MS before its newest stamp, and never before its queue time, so it is timed from the
+// queue, which no replay moves. A mail still queued behind the gate is bounded at DELEGATE_CAP_MS + COORD_DEAF_MS from its queue time (a row parked before delivery is no gate hold, and is timed from its queue): a
+// coordinator held in a running turn has no other arm (its mail-stuck needs a finished turn; no frozen arm watches it).
+describe('coord-deaf is timed from the delivery the coordinator could hear (gate-held-mail-is-not-stuck (D-3798))', () => {
+  const cvd = (mail: StallMailRow[], deliveries: StallDeliveryRow[], at = NOW): StallVerdict => vw({ arming: W2_LIVE, mail }, { deliveries }, at);
+  const held: StallDeliveryRow = { ...QD, state: 'queued', deliveredAt: null };
+  const BOUND = DELEGATE_CAP_MS + COORD_DEAF_MS;
+
+  it('deaf is timed from the first delivery: queued 62 min ago and delivered 30 s ago is not deaf (the review\'s S4)', () => {
+    const q62 = { ...Q, at: NOW - 62 * MIN };
+    expect(cvd([q62], [{ ...QD, deliveredAt: NOW - 30_000 }])).toEqual(NONE);
+    expect(cvd([q62], [{ ...QD, deliveredAt: NOW - COORD_DEAF_MS + 1 }])).toEqual(NONE);
+    expect(cvd([q62], [{ ...QD, deliveredAt: NOW - COORD_DEAF_MS }])).toEqual(w2Push('coord-deaf', 4001));
+  });
+
+  it('a replayed delivery is timed from the mail\'s queue time, not from its newest deliveredAt, which every replay re-stamps', () => {
+    const replayed: StallDeliveryRow = { ...QD, deliveredAt: NOW - 5 * MIN, replayCount: 5 };
+    expect(cvd([Q], [replayed]), 'queued 61 min ago, re-stamped 5 min ago').toEqual(w2Push('coord-deaf', 4001));
+    expect(cvd([{ ...Q, at: NOW - COORD_DEAF_MS + 1 }], [replayed])).toEqual(NONE);
+    expect(cvd([Q], [{ ...replayed, replayCount: 0 }]), 'CONTROL: a first delivery 5 min ago is not yet deaf').toEqual(NONE);
+  });
+
+  it('an undelivered ball-passing mail is deaf from DELEGATE_CAP_MS + COORD_DEAF_MS after it was queued: the bound for a coordinator held in a running turn', () => {
+    expect(cvd([{ ...Q, at: NOW - 2 * H }], [held]), 'the S4 shape: held two hours behind the gate').toEqual(NONE);
+    expect(cvd([{ ...Q, at: NOW - BOUND + 1 }], [held])).toEqual(NONE);
+    expect(cvd([{ ...Q, at: NOW - BOUND }], [held])).toEqual(w2Push('coord-deaf', 4001));
+    expect(cvd([Q], [{ ...held, state: 'rejected' }]), 'a row parked before delivery (enter-ignored, the attempt ceiling) is no gate hold: timed from its queue').toEqual(w2Push('coord-deaf', 4001));
+  });
+
+  it('past 30 h the coord-ball cap still fires: on a mail with no delivery row, and after coord-deaf on one the gate still holds', () => {
+    const old = mailRow(4001, NOW - COORD_BALL_CAP_MS, WORKER, 'coordinator', 'question', 'which base?');
+    const oldHeld = delivery(9101, 4001, COORD);   // queued, never delivered
+    expect(cvd([old], [])).toEqual(capOf('coord-ball', old.at));
+    expect(cvd([old], [oldHeld])).toEqual(w2Push('coord-deaf', 4001));
+    const deaf = notice('live', 'coord-deaf', 1, 4001, old.at + BOUND);
+    expect(vw({ arming: W2_LIVE, mail: [old], notices: [deaf] }, { deliveries: [oldHeld] })).toEqual(capOf('coord-ball', old.at));
   });
 });

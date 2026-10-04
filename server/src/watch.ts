@@ -3047,7 +3047,7 @@ export class FleetWatcher {
     try {
       // `mail-disabled` reaches L1 as a fact, and `stallMailDisabledHold` decides what it holds (slug
       // `lane-honours-mail-disabled` (D-3636)). The module-local literal, never rundefs' export: see the import note.
-      const arming: StallArming = { ...stallArmingOf(names), mailDisabled: names.includes(MAIL_DISABLED_MARKER) };
+      const arming: StallArming = { ...stallArmingOf(names), mailDisabled: names.includes(MAIL_DISABLED_MARKER), mailMode: mailTurnModeOf(names) };
       if (arming.disabled) return;
       const paused = names.includes(COORDINATOR_PAUSE_MARKER);
       let candidates: ReturnType<CoordStore['stallCandidates']>;

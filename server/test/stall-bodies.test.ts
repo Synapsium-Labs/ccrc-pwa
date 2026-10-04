@@ -561,7 +561,7 @@ const sessionOf = (over: Partial<StallSessionInput> = {}): StallSessionInput => 
   arming: W2_ARMED, coordinationPaused: false, ...over,
 });
 const deliveryOf = (id: number, mailId: number, toId: string, over: Partial<StallDeliveryRow> = {}): StallDeliveryRow => ({
-  id, mailId, toId, state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null, ...over,
+  id, mailId, toId, state: 'queued', deliveredAt: null, ackedAt: null, lastGate: null, gateSince: null, replayCount: 0, ...over,
 });
 const runLess = (m: StallMailRow): StallMailRow => ({ ...m, runId: null });
 

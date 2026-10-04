@@ -25,7 +25,7 @@ import {
   BACKLOG_HORIZON_MS, DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
   FROZEN_NO_EVENT_MS, ORPHAN_PUSH_MS, STALL_FAILED_PREFIX, stallFailedSubject,
   STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
-  parseStallDetail, stallDetail,
+  parseStallDetail, stallDetail, COORD_DEAF_MS,
 } from '../src/coord/stall.js';
 import type { PushPayload } from '../src/push.js';
 import { WAVE_DONE_SUBJECT, type FleetSession } from '../../shared/api.js';
@@ -33,6 +33,7 @@ import { tmuxTarget } from '../../shared/tmux-target.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
+import { MAIL_GATE_BUSY_MARKER } from '../src/turnidle.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -2007,5 +2008,55 @@ describe('sweepStalls: a fix round addressed to the role worker after a wave-don
     await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
     expect(operatorMail(coord).map((m) => m.toId)).toEqual([WORKER]);
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, REACT)]);
+  });
+});
+
+// ── gate-held-mail-is-not-stuck (D-3798): the lane reads the gate's mode from the listing it already holds ────────────
+describe('sweepStalls: mail-stuck reads the mail gate\'s mode from the tick\'s listing (gate-held-mail-is-not-stuck (D-3798))', () => {
+  it('a delivery queued to a worker that reads busy over a done marker is mail-stuck under mail-gate-busy only', async () => {
+    const stuckRows = async (names: readonly string[]): Promise<string[]> => {
+      const { h, coord, w } = await rig();
+      const runId = seedRun(coord, { program: 'demo-program' });
+      seedLiveState(h.home, { status: 'busy', statusUpdatedAt: IDLE_AT + 300_000, startedAt: STARTED_AT });
+      seedTurnMark(h.home, WORKER);                   // done, its Stop at IDLE_AT
+      // Queued at 21:19:17Z (seedRun leaves the clock there) and never delivered.
+      const m = coord.insertMail({ fromId: 'demo-boss', fromUuid: 'u', toId: WORKER, runId: null, kind: 'finding', subject: 'hi', body: 'b', artifacts: [] });
+      coord.queueDelivery(m.id, WORKER, 'envelope');
+      at(IDLE_AT + MAIL_STUCK_MS);
+      await w.sweepStalls([fleetRow(WORKER, { status: 'busy' })], names, tickOf());
+      return stallRows(coord, runId).filter((d) => d.includes('mail-stuck'));
+    };
+    expect(await stuckRows([...LIVE, MAIL_GATE_BUSY_MARKER])).toHaveLength(1);
+    expect(await stuckRows(LIVE), 'the default gate holds busy mail by design').toEqual([]);
+  });
+});
+
+// ── gate-held-mail-is-not-stuck (D-3798): a replay re-stamps deliveredAt, so the real store must say it was a replay ─────
+// The coordinator coord-deaf exists for: idle, the mail typed into its pane, never acked. `sweepMail` replays such a row
+// every MAIL_REPLAY_MS (`markDelivered`, then `bumpReplayCount`), so its newest `deliveredAt` is never 10 min old. The
+// store's `replayCount`, carried by `stallMailFor`, is what lets L1 time it from the queue.
+describe('sweepStalls: coord-deaf on a delivery the mail sweep keeps replaying (gate-held-mail-is-not-stuck (D-3798))', () => {
+  it('is recorded an hour after the question was queued, while the newest deliveredAt is under ten minutes old', async () => {
+    const { coord, w, sent } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program', workerMail: null, inbound: null });
+    const Q_AT = IDLE_AT - 60_000;                       // chosen: the worker asks, and its turn ends a minute later
+    const REPLAY_MS = 10 * 60_000;                       // watch.ts's MAIL_REPLAY_MS, module-local there
+    at(Q_AT);
+    const q = coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId, kind: 'question', subject: 'which base?', body: 'b', artifacts: [] });
+    const d = coord.queueDelivery(q.id, COORD, 'envelope');
+    coord.markDelivered(d.id, Q_AT + 60_000);           // the first delivery
+    for (let k = 1; k <= 5; k++) {                       // five replays, as sweepMail writes them
+      coord.markDelivered(d.id, Q_AT + 60_000 + k * REPLAY_MS);
+      expect(coord.bumpReplayCount(d.id)).toEqual({ state: 'counted', replayCount: k });
+    }
+    const deafRows = (): string[] => stallRows(coord, runId).filter((x) => x.includes('coord-deaf'));
+    at(Q_AT + COORD_DEAF_MS - STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    expect(deafRows()).toEqual([]);
+    at(Q_AT + COORD_DEAF_MS);
+    await w.sweepStalls([fleetRow(WORKER)], W2, tickOf());
+    // The newest deliveredAt (Q_AT + 51 min) is 9 min old here: timed from it, nothing would be deaf for 51 min more.
+    expect(deafRows()).toEqual([stallDetail('live', 'coord-deaf', 1, q.id)]);
+    expect(sent.map((p) => p.tag)).toContain(`stall-${runId}-coord-deaf-1-${q.id}`);
   });
 });
