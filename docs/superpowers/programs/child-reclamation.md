@@ -20,7 +20,7 @@ removed on 2026-09-10 was not.
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **deployed** v0.0.33 (`1ffdf947`, merged 2026-09-28 16:14 UTC, rolled out 16:16–16:21, fleet box first, rc 0; run 148 on `plain-summit`; reviews 170, 171, 172). Live: run 148's close reclaimed `plain-summit` in 10 s |
-| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 (open) | **awaiting-review** (review run 254, 2026-10-04) — both prerequisites merged (#226 `0db98707`, #222 `cf9e4cc8`); run 174 on `swift-hollow` sent the integration round as mail 3169, 2026-10-02 (amendments A1 to A17 merged in #188, `6ff4e2e9`) |
+| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 (open) | **working, fix round 1** (review run 254 closed 2026-10-04) — both prerequisites merged (#226 `0db98707`, #222 `cf9e4cc8`); run 174 on `swift-hollow` sent the integration round as mail 3169, 2026-10-02 (amendments A1 to A17 merged in #188, `6ff4e2e9`) |
 | 5 | the closed run's reclaim chip and its sentences; R25's orphan temp-root collector (R36) | **AGENT-FIRST** (R36 makes it one) | — | planned |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
@@ -43,6 +43,53 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-04 15:13 — review run 254: no containment bypass, two important findings; wave 4 fix round 1.**
+  `ccrc-pwa-still-cove` read `6138030e` (34 agents, none dead or empty; `unverifiedLenses` and `unexamined` none).
+  - **Panel:** correctness raised 3 and confirmed 2; spec 1, 1; reproduce 2, 1; SAFETY (Opus `xhigh`) 4, 4. Every
+    confirmation was 0/3 refuted, and two findings were refuted (3/3 and 2/3).
+  - **SAFETY:** no path removes or commits away a live child through containment, row placement or ownership. C1
+    re-measured `unmeasured` at the tip and goes red under 3d's line. 20,000 random and child-targeted decoy spellings
+    gave 0 mismatches against `cd -L; pwd -P`. #226's and #222's pins are green, and so are the full suite (12
+    shards, 493 files) and Linux CI.
+  - **Rulings.** Run 174 is back at `working`, and review run 254 closed `done`.
+    - **F1, important, predates the round:** one stale presence sample plus the one-slot round-robin licenses
+      `--defer-expired` with no continuous presence (`R254-P`: the second ask came 17 minutes after the only
+      sample), and the licensed attempt skips ccd's `attached` and `tree-busy` rungs. **Ruling:** R-4 and spec §5.7
+      say "continuous", so the rule is made literal.
+      - An episode is continuous only while consecutive presence-class answers are at most two sweep-pass intervals
+        apart; a longer gap restarts the episode at the new answer.
+      - A request goes out licensed only when the episode spans the ceiling AND its latest presence answer is within
+        two intervals of the ask.
+      - Both conditions only remove licensed asks, never add one. Under a backlog of three or more due children,
+        presence-held children wait unlicensed until it drains, which fails closed.
+      - This amends A9's presence arm in place by coordinator ruling. The plan is the coordinator's, so it is no
+        departure and takes no number. `R254-P` goes red first, and dropping either condition reds a case.
+    - **F2, important, predates the round:** the sweep's two entry-delete guards (`watch.ts` at the ineligible
+      verdict and at the vanished row) have no red test. Add the reviewer's `R254-L10` and `R254-L12` probes and their
+      mutation rows.
+    - **F3, minor, predates the round:** A10.1's "Its answer deletes the entry unconditionally" and case (ix) are not
+      implemented, and a test pins the contrary. **Ruling:** implement the plan. The release answer deletes the entry,
+      (ix) needs two fresh unheld passes after the answer, and the test at `child-reclaim-sweep.test.ts:442` moves to
+      match. That is conformance, with no number.
+    - **F4, minor, predates the round:** the executor's `unmeasurable` pause arm is unpinned (`pause === 'set'` stays
+      green). Add the second-listing-fails case and its mutation row.
+    - **F5, minor, introduced by the round:** `_svc_real_home`'s charset refuses digit-led and `@`-bearing login
+      names that `main` resolved, and its comment's reason is false: `~5user` is a password-database lookup, and only an
+      all-number prefix reads the directory stack. **Ruling:** accept `^[A-Za-z0-9_][A-Za-z0-9._@-]*$` except an
+      all-digit name. Refuse all-digit, sign-led, backslash and every other shell syntax. Correct the comment and the
+      test titles, keep every injection canary, and change both copies identically. The remaining cost is that an
+      all-digit or backslash login name on a Mac stops launchd management; it is recorded, not fixed.
+    - **F6, minor, predates the round (`main`'s mechanism):** an inherited `GIT_CONFIG_PARAMETERS` is applied after
+      the containment's COUNT entries and overrides its hook and fsmonitor pins. **Ruling:** state it truthfully in
+      the containment's comment now. A16-5's "kept by design" premise is wrong for this variable. Unsetting it is
+      carried to wave 5's SAFETY lens.
+    - **F7, minor, introduced by the round:** two stale gate-table counts in the report. Record-only.
+  - **Landing:** `main` is `c9ada654` with #237 landed. By the rule agreed in mail 3364, #215 merges `main` (never
+    rebasing), keeps #237's version 15 and renumbers its own migration to `user_version` 16 (its banner, comment and
+    pins), then re-runs `coord-db`, `coord-store`, `asks-store`, the census, S6-R11 and the stamp gate.
+  - **Convergence rule for the next review:** it accepts the wave when the SAFETY lens holds, no confirmed critical
+    or important finding stands, and this fix round introduced no defect. A newly found minor that predates the round
+    is carried to wave 5.
 - **2026-10-04 12:09 — wave 4's wave-done re-measured; held-out review run 254 dispatched.** Wave-done 3374 claimed
   `6138030e`. Re-measured:
   - PR #215's head is that sha, open, not draft and mergeable.
