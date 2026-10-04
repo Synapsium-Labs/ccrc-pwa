@@ -11609,19 +11609,33 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     expect(existsSync(join(home, 'kept-spine-argv')), "the kept version's spine ran").toBe(false);
     expect(linkOf(home)).toBe(link);
   };
-  /** Refused with C27's sentence, nothing moved. */
-  const expectRefused = (home: string, r: Result, link: string, reason?: string): void => {
+  /** The reason line's tail, by `_kf_remedy` (wave 9 R9-F1, D-3827, round-2 ruling R-D). It re-measures when it prints:
+   *  the hand install, only where the role is known and the version is kept complete, its own `ccd/ccrc` versioned and
+   *  (on a fleet box) its agent deps present; otherwise NO command and no recipe. */
+  const handInstall = (role: string): string =>
+    `re-installing v1.0.0 is a typed act, not a rollback's: bash ~/ccrc-versions/v1.0.0/ccd/ccrc install --role ${role} (it installs from that version's own kept directory: no download, no tree copy, no npm ci)`;
+  const NO_COMMAND = 'no safe one-line repair is known for this state, so this line names no command — nothing on this box was changed';
+  /** Refused with C27's sentence, nothing moved. `tail` is what the reason line ends in. */
+  const expectRefused = (home: string, r: Result, link: string, reason?: string, tail: string = NO_COMMAND): void => {
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(r.stderr).toMatch(SENTENCE);
     // The reason line, when conditions (1) to (3) held and (4)-(6) did not; none otherwise.
     if (reason === undefined) expect(r.stderr).not.toContain('the killed-flip state does not hold');
     else {
       expect(r.stderr).toContain(`rollback: the killed-flip state does not hold — ${reason}`);
-      // R-B1: the sentence's own remedy (`--to vX.Y.Z`) meets this refusal again, so the
-      // WORKING one — the typed re-install — rides the reason line.
-      expect(r.stderr).toContain(`${reason} — re-installing v1.0.0 is a typed act, not a rollback's: ccrc update --to v1.0.0 --downgrade\n`);
+      // R-B1 (as reshaped by wave 9 R9-F1): the sentence's own remedy (`--to vX.Y.Z`) meets this refusal again, so
+      // the line's tail says what the box can safely do instead — a typed hand install where it was measured safe
+      // just now, otherwise that no safe one-line repair is known. Never the in-place `update --to … --downgrade`.
+      expect(r.stderr).toContain(`${reason} — ${tail}\n`);
+      if (tail === NO_COMMAND) {
+        expect(tail, 'the no-command tail names a recipe').not.toMatch(/README|bash ~\/ccrc-versions/);
+        expect(r.stderr, 'a no-command refusal named a recipe').not.toContain('README');
+        expect(r.stderr, 'a no-command refusal named a command').not.toContain('bash ~/ccrc-versions');
+      } else {
+        expect(r.stderr, 'the hand-install refusal named a recipe').not.toContain('README');
+      }
     }
-    if (reason === undefined) expect(r.stderr).not.toContain('ccrc update --to');
+    expect(r.stderr, 'the in-place re-install is never advised (R9-F1)').not.toContain('ccrc update --to');
     expect(r.stderr).toContain('Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z');
     expectNoReinstall(home, link);
     expect(existsSync(join(home, '.ccrc', 'installed')) ? fileText(join(home, '.ccrc', 'installed')) : null,
@@ -11807,6 +11821,23 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     publishV1(home);
     note(home);
     const why = "the target's kept stamp is not this box's stamp (another build's sha)";
+    // `_kf_remedy` re-measures at print time: this version is still kept complete with a versioned spine, so the
+    // hand install is named (role server, from ccrc.env).
+    expectRefused(home, rollbackRun(home), v2, why, handInstall('server'));
+    expectRefused(home, rollbackRun(home, ['--to', 'v1.0.0']), v2, why, handInstall('server'));
+  });
+
+  it('control (conditions 5 and 6 together): a kept pre-W6 target whose kept stamp has another sha — refused with condition 5\'s reason, and the tail names no command (wave 9 R9-F1)', () => {
+    // `_rollback_killed_flip_state` returns at (5) before it reads (6), so the reason is (5)'s — but the spine here is
+    // pre-W6, and a hand install from it would run its `npm ci` in `~/ccrc`, the tree the units run. An implementation
+    // that trusted which condition failed would print the hand install here; `_kf_remedy` measures again.
+    const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-othersha-prew6-', { oldSpine: KEPT_SPINE });
+    writeFileSync(join(v1, '.ccrc-stamp.json'), `${JSON.stringify({ sha: 'e'.repeat(40), ref: 'main', builtAt: '2026-09-23T00:00:00Z', dirty: false, version: 'v1.0.0' })}\n`);
+    expect(verKeptAnswer(home), 'the control is broken: the version must still be KEPT, so only (5) and (6) refuse').toBe('rc=0 why=');
+    expect(verKeptAnswer(home, 'v1.0.0', 'server')).toBe('rc=0 why=');
+    publishV1(home);
+    note(home);
+    const why = "the target's kept stamp is not this box's stamp (another build's sha)";
     expectRefused(home, rollbackRun(home), v2, why);
     expectRefused(home, rollbackRun(home, ['--to', 'v1.0.0']), v2, why);
   });
@@ -11889,13 +11920,100 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     const r = rollbackRun(home, args);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(r.stderr).toMatch(SENTENCE);
-    expect(r.stderr).toContain('rollback: the killed-flip state holds, so this rollback may only flip, and the flip could not be made (the one rename that points $HOME/ccrc at $HOME/ccrc-versions/v1.0.0 failed) — it does not fall back to a re-install — re-installing v1.0.0 is a typed act, not a rollback\'s: ccrc update --to v1.0.0 --downgrade\n');
+    // The rename is what fails; the version is kept complete, so the tail is the hand install (wave 9 R9-F1).
+    expect(r.stderr).toContain(`rollback: the killed-flip state holds, so this rollback may only flip, and the flip could not be made (the one rename that points $HOME/ccrc at $HOME/ccrc-versions/v1.0.0 failed) — it does not fall back to a re-install — ${handInstall('server')}\n`);
+    expect(r.stderr, 'the in-place re-install is never advised (R9-F1)').not.toContain('ccrc update --to');
     expect(r.stdout).not.toContain('rolling back by re-install instead');
     expectNoReinstall(home, v2);
     expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
     if (args.includes('--from') && args[args.indexOf('--from') + 1] !== 'cli') {
       expect(lastReport(home)['phase'], 'the report was left non-terminal').toBe('failed');
     }
+  });
+
+  // ── wave 9 R9-F1 (D-3827): `_kf_remedy`, the reason line's tail, over fixture version dirs ─────────────────────
+  // It decides from a measurement it takes ITSELF, when it prints — `_ver_kept` under the role it was handed, the
+  // version's own `ccd/ccrc` carrying `^BOX_VERSIONS_ROOT=`, and (a fleet box) `agent/node_modules` — never from which
+  // condition of `_rollback_killed_flip_state` failed. The role is always named: a bare `ccrc install` defaults to role
+  // `both` and never reads the recorded role, so on a fleet box it would check and install the server build.
+  describe('_kf_remedy: the hand install only where measured safe, never the in-place update, never a recipe (wave 9 R9-F1)', () => {
+    type Row = { what: string; role: string; expected: string; kept: RegExp };
+    const keptBox = (prefix: string, o: { spine?: string; agentDeps?: boolean; keep?: boolean } = {}): { home: string; v1: string } => {
+      const home = freshUpdateBox(prefix);
+      const v1 = installVersionedTree(home, 'v1.0.0', { link: false, stamp: { sha: V1_SHA, version: 'v1.0.0' } });
+      writeFileSync(join(v1, 'ccd', 'ccrc'), o.spine ?? KEPT_SPINE_W6, { mode: 0o755 });
+      if (o.agentDeps === true) mkdirSync(join(v1, 'agent', 'node_modules'), { recursive: true });
+      keepDigest(v1, home);   // the spine and the deps dir are part of the kept bytes (D-3465)
+      return { home, v1 };
+    };
+    const remedy = (home: string, role: string): { out: string; stderr: string; status: number | null } => {
+      const r = spawnSync(BASH, ['-c', '. "$1"; _kf_remedy v1.0.0 "$2"', 'ccrc-under-test', join(REPO, 'ccd', 'ccrc'), role],
+        { env: updateEnv(home), encoding: 'utf8' });
+      return { out: r.stdout, stderr: r.stderr, status: r.status };
+    };
+    const rows: Row[] = [
+      { what: 'kept complete, a versioned ccd/ccrc, role server — the hand install, naming --role server', role: 'server',
+        expected: handInstall('server'), kept: /^rc=0 why=$/ },
+      { what: 'the same under role fleet WITH agent/node_modules — the hand install, naming --role fleet', role: 'fleet',
+        expected: handInstall('fleet'), kept: /^rc=0 why=$/ },
+      { what: 'role fleet WITHOUT agent/node_modules — no command (its kept arm would run npm ci in place)', role: 'fleet',
+        expected: NO_COMMAND, kept: /^rc=0 why=$/ /* fleet without agent deps is still KEPT: only the deps term refuses */ },
+      { what: 'kept complete with a PRE-W6 ccd/ccrc — no command (its spine runs npm ci in ~/ccrc)', role: 'server',
+        expected: NO_COMMAND, kept: /^rc=0 why=$/ /* the pre-W6 spine is still KEPT: only the spine term refuses */ },
+      { what: 'WRITTEN THROUGH since it was kept (a byte appended after the digest, _ver_kept rc 3), a versioned ccd/ccrc — no command', role: 'server',
+        expected: NO_COMMAND, kept: /^rc=3 / },
+      { what: 'not kept (no directory) — no command', role: 'server', expected: NO_COMMAND, kept: /^rc=1 / },
+      { what: 'incomplete (no install record) — no command', role: 'server', expected: NO_COMMAND, kept: /^rc=2 why=no kept install record/ },
+      { what: 'an EMPTY role, the version otherwise kept complete — no command (a bare install would default to role both)', role: '',
+        expected: NO_COMMAND, kept: /^rc=0 why=$/ /* an empty role reads both: kept, yet no command */ },
+    ];
+    const setups: Array<(name: string) => { home: string; v1: string }> = [
+      (n) => keptBox(n),
+      (n) => keptBox(n, { agentDeps: true }),
+      (n) => keptBox(n),
+      (n) => keptBox(n, { spine: KEPT_SPINE }),
+      (n) => {
+        const b = keptBox(n);
+        appendFileSync(join(b.v1, 'server', 'dist', 'server', 'src', 'index.js'), '// written through after the digest\n');
+        return b;
+      },
+      (n) => {
+        const b = keptBox(n);
+        rmSync(b.v1, { recursive: true, force: true });
+        return b;
+      },
+      (n) => {
+        const b = keptBox(n);
+        rmSync(join(b.v1, '.ccrc-installed'));
+        return b;
+      },
+      (n) => keptBox(n),
+    ];
+    it.each(rows.map((row, i) => [row.what, i] as const))('_kf_remedy: %s', (_what, i) => {
+      const row = rows[i]!;
+      const { home } = setups[i]!(`ccrc-fx-b-kf-remedy-${i}-`);
+      // the control, so a row cannot pass for another reason: `_ver_kept`'s own answer for this fixture under this role
+      expect(verKeptAnswer(home, 'v1.0.0', row.role)).toMatch(row.kept);
+      const r = remedy(home, row.role);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.out).toBe(`${row.expected}\n`);
+      expect(r.out, 'the in-place re-install is never advised').not.toContain('ccrc update --to');
+      expect(r.out).not.toContain('--downgrade');
+      if (row.expected === NO_COMMAND) {
+        expect(r.out, 'a no-command row named a recipe').not.toMatch(/README|recipe/);
+        expect(r.out, 'a no-command row named a command').not.toContain('bash ~/ccrc-versions');
+      } else {
+        expect(r.out).toContain(`--role ${row.role} (`);
+        expect(r.out).not.toMatch(/README|recipe/);
+      }
+    });
+    it('_kf_remedy: `_ver_kept` writes nothing to stdout (the remedy runs it inside $(…) on the reason line)', () => {
+      const { home } = keptBox('ccrc-fx-b-kf-quiet-');
+      const r = spawnSync(BASH, ['-c', '. "$1"; _ver_kept v1.0.0 server', 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')],
+        { env: updateEnv(home), encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe('');
+    });
   });
 });
 

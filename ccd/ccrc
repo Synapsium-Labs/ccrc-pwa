@@ -12497,14 +12497,19 @@ cmd_install() {
   # later one winning, names the file that decides, and so does the OFF
   # remedy — it names ccrc.env by default, or the exposure file when that is
   # the one that would arm it (`gate_how`'s `$BUE_SRC` switch). With no
-  # passphrase file, a measured CCRC_AUTH=on names the file that decides too;
-  # every other case — including an exposure file that sets CCRC_AUTH to
-  # anything but on, or one that cannot be read — prints main's else-arm line
-  # unchanged, naming ccrc.env. The fresh-box line (no file, flag off) is
-  # byte-identical to what this line always said. Wave 9 R10e (D-3823): a
-  # SECOND unmeasured state, rc 3 — a readable file names the flag in a shape
-  # the reader cannot decide (on macOS, either file is not plain assignments),
-  # worded from `$BUE_WHY` in both arms; the rc-2 sentence above is untouched.
+  # passphrase file, a measured CCRC_AUTH=on names the file that decides too.
+  # Wave 9 R10b (D-3829): two more cases print their own line there, after the
+  # rc-3 arm — an exposure file that is there and cannot be read (rc 2) prints
+  # "not measured", as the present-passphrase arm does, and an exposure file that
+  # DECIDES the flag (`$BUE_SRC` is it) without turning it on — `off`, or any
+  # value but `on` — gets an arming remedy naming that file, as `gate_how` does.
+  # Every other case (the flag read from ccrc.env, or from no file at all) prints
+  # main's else-arm line, naming ccrc.env: the fresh-box line (no file, flag off)
+  # is byte-identical to what this line always said.
+  # Wave 9 R10e (D-3823): a SECOND unmeasured state, rc 3 — a readable file names
+  # the flag in a shape the reader cannot decide (on macOS, either file is not
+  # plain assignments), worded from `$BUE_WHY` in both arms; the rc-2 sentence
+  # above is untouched.
   local gsec grc urc=0
   gsec="$(_box_auth_path)"; grc=$?
   if [ "$grc" -eq 3 ]; then
@@ -12528,6 +12533,10 @@ cmd_install() {
       echo "install: gate: CCRC_AUTH=on in $BUE_SRC and this box has NO PWA passphrase — the gate is failing SHUT: every route answers 401 until: ccrc passwd"
     elif [ "$urc" -eq 3 ]; then
       echo "install: gate: this box has NO PWA passphrase, and $BUE_WHY, so whether CCRC_AUTH is on was not measured — ccrc doctor's auth check says what to do"
+    elif [ "$urc" -eq 2 ]; then
+      echo "install: gate: this box has NO PWA passphrase, and $CCRC_EXPOSURE_FILE is there and cannot be read, so whether CCRC_AUTH is on (and the gate failing shut) was not measured — ccrc doctor's auth check says what to do"
+    elif [ "$BUE_SRC" = "$CCRC_EXPOSURE_FILE" ]; then
+      echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on in $CCRC_EXPOSURE_FILE, which overrides $BOX_ENV_FILE (ccrc expose writes it with CCRC_RP_ID and CCRC_ORIGIN), then: $(_svc_restart_hint ccrc.service)"
     else
       echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, then: $(_svc_restart_hint ccrc.service)"
     fi
@@ -14201,6 +14210,24 @@ _inst_stamp_shipped() {
   return 0
 }
 
+# What a skip line says about the box's stamp (wave 9, R8i, D-3828). A skip writes
+# nothing, so the stamp that stays is whatever is already there: a running
+# launcher keeps it (`_inst_stamp_unname` returns 1 for `running` before it
+# touches the stamp) and so does the no-source path. `[ -e ] || [ -L ]`, as
+# `_inst_stamp_unname` asks, admits a dangling link or an unreadable file — the
+# line promises nothing about what `ccrc version` can read of it. The path comes
+# in by argument (`_inst_stamp`'s own `dest`, the box's stamp file), so this
+# names the stamp through no second spelling of it: `single-definition.test.ts`
+# pins every line that does.
+_inst_stamp_left() {   # <the box's stamp file>
+  local f="$1"
+  if [ -e "$f" ] || [ -L "$f" ]; then
+    echo "the box's existing stamp (~/.ccrc/build.json) stays — ccrc version reports what it says"
+  else
+    echo "ccrc version will say unstamped"
+  fi
+}
+
 _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   # `deploy.sh:75-93`'s `stamp_build`, translated to one machine. Until this
   # step existed the ONLY writer of `~/.ccrc/build.json` was a deploy, so a box
@@ -14210,10 +14237,10 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   #
   # MEASURED, NEVER ASSUMED. A dirty tree may install (stage 1 does not forbid
   # it) but the stamp SAYS dirty — "a clean sha nobody measured is the forgery
-  # class this repo bans by name", in deploy's own words. Same reason the
-  # skipped case below writes NOTHING rather than carrying a previous stamp
-  # forward: a stamp that outlives the tree it described is a lie with a
-  # timestamp on it.
+  # class this repo bans by name", in deploy's own words. The skipped case below
+  # writes NOTHING: it neither rewrites nor removes an existing stamp (only
+  # `_inst_stamp_unname` removes one, for a placed or copied tree), and its line
+  # says which is the case (wave 9, R8i, D-3828: `_inst_stamp_left`).
   #
   # THROUGH `"$BOX_STAMP_FILE"`, never the literal path — `ccrc:91-101`'s rule,
   # which D-88 already applied to `ccrc.env` when `install` became that file's
@@ -14249,13 +14276,13 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   src="$CCRC_HERE/.."
   if ! command -v git >/dev/null 2>&1; then
     _inst_stamp_shipped && return 0
-    echo "install: stamp: skipped (no git on PATH) — ccrc version will say unstamped"
+    echo "install: stamp: skipped (no git on PATH) — $(_inst_stamp_left "$dest")"
     return 0
   fi
   sha="$(_inst_git "$src" rev-parse HEAD 2>/dev/null)" || rc=$?
   if [ "$rc" -eq 0 ] && [ -z "$sha" ]; then
     _inst_stamp_shipped && return 0
-    echo "install: stamp: skipped (git rev-parse HEAD exited 0 but printed no sha) — ccrc version will say unstamped"
+    echo "install: stamp: skipped (git rev-parse HEAD exited 0 but printed no sha) — $(_inst_stamp_left "$dest")"
     return 0
   fi
   if [ "$rc" -eq 0 ] && ! _inst_git_own "$src"; then
@@ -14263,7 +14290,7 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
     # release tarball extracted under a git-tracked directory) — its HEAD is
     # not this tree's. Treated as what it is, a tree that is no checkout.
     _inst_stamp_shipped && return 0
-    echo "install: stamp: skipped (this tree is not the top level of a git checkout — an enclosing repository's commit is not its own) — ccrc version will say unstamped"
+    echo "install: stamp: skipped (this tree is not the top level of a git checkout — an enclosing repository's commit is not its own) — $(_inst_stamp_left "$dest")"
     return 0
   fi
   if [ "$rc" -ne 0 ]; then
@@ -14281,7 +14308,7 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
     why="${why//[[:cntrl:]]/}"
     why="${why:0:200}"
     [ -n "$why" ] || why="it printed nothing on stderr"
-    echo "install: stamp: skipped (git rev-parse HEAD exited $rc: $why) — ccrc version will say unstamped"
+    echo "install: stamp: skipped (git rev-parse HEAD exited $rc: $why) — $(_inst_stamp_left "$dest")"
     return 0
   fi
   ref="$(_inst_git "$src" rev-parse --abbrev-ref HEAD 2>/dev/null)" || ref=""
@@ -16881,28 +16908,65 @@ _rollback_previous_agrees_with_layout() {   # [role]
   [ "$cur" = "$want" ] && return 0
   _rollback_killed_flip_state "$UPD_PREV_TAG" "$role" || krc=$?
   [ "$krc" -eq 0 ] && return 0
-  _rollback_refuse_layout "$cur" "$stamp_name" "$KF_WHY"
+  _rollback_refuse_layout "$cur" "$stamp_name" "$KF_WHY" "$role"
 }
 
-# `_rollback_refuse_layout <cur> <stamp_name> [why]` — C27's sentence, the ONE
+# `_kf_remedy <stamp_name> <role>` (wave 9 R9-F1, D-3827; round-2 ruling R-D) — the TAIL of the reason line
+# `_rollback_refuse_layout` prints: what the box can safely do about the killed-flip state. Reads only, and it
+# decides from a measurement it takes ITSELF, when it prints — never from which condition of
+# `_rollback_killed_flip_state` failed, and never from the measurement `cmd_rollback` took before `_ver_flip_back`.
+# Two reachable cases show why an earlier answer is not enough: that function returns at condition 5 before it
+# reads condition 6, so a kept pre-W6 target whose kept stamp has another sha reads as a condition-5 failure, and a
+# hand install from its directory would run that pre-W6 spine's `npm ci` in `~/ccrc`; and at the flip-failed
+# caller the state was measured before `_ver_flip_back`, which returns 1 when `_ver_kept` NOW answers anything
+# but 0, and the hand install from a written-through directory takes `_inst_tree`'s placed arm with a non-zero
+# kept answer and runs `npm ci` in the old version's tree, which the still-running units loaded from.
+# So it names `bash ~/ccrc-versions/<tag>/ccd/ccrc install --role <role>` only when `role` is non-empty and all
+# three hold now, measured under that same role: `_ver_kept` answers 0; that directory's `ccd/ccrc` carries
+# `^BOX_VERSIONS_ROOT=` (the probe `cmd_update` uses); and the role is not `fleet` or the directory holds
+# `agent/node_modules` (`_inst_tree`'s own kept condition). The role is always named: a bare `ccrc install`
+# defaults to role `both` (`cmd_install`'s `local role=both`) and never reads the recorded `CCRC_ROLE`, so on a
+# fleet box it would check and install the server build and could run `npm ci` in `$dest/server` in place. In
+# every other case — an empty role included — it names NO command and no README recipe (README's Restore recipe
+# writes through `~/ccrc`, which in this state points at the version the units do not run): no safe one-line
+# repair is known for this state. Prints one line, and nothing else; `_ver_kept` writes nothing to stdout.
+_kf_remedy() {   # <stamp_name> <role>
+  local name="$1" role="${2:-}" vdir="$BOX_VERSIONS_ROOT/$1" krc=0
+  if [ -n "$role" ]; then
+    _ver_kept "$name" "$role" || krc=$?
+    if [ "$krc" -eq 0 ] \
+       && grep -q '^BOX_VERSIONS_ROOT=' "$vdir/ccd/ccrc" 2>/dev/null \
+       && { [ "$role" != fleet ] || [ -d "$vdir/agent/node_modules" ]; }; then
+      echo "re-installing $name is a typed act, not a rollback's: bash ~/ccrc-versions/$name/ccd/ccrc install --role $role (it installs from that version's own kept directory: no download, no tree copy, no npm ci)"
+      return 0
+    fi
+  fi
+  echo "no safe one-line repair is known for this state, so this line names no command — nothing on this box was changed"
+}
+
+# `_rollback_refuse_layout <cur> <stamp_name> [why] [role]` — C27's sentence, the ONE
 # definition of it (D-3466). Every refusal of a rollback whose layout and stamp
 # disagree ends here: C27 itself, and `cmd_rollback`'s re-measurement under its
 # lock (a `--to` run, a detached run's child, a flip that cannot be made).
 # `why`, when given, is a whole line of its own — why the killed-flip state
 # (the one disagreement a rollback may act on, and only by flip) does not carry
-# this run, and the re-install that IS available (`ccrc update --to <tag>
-# --downgrade`) — printed BEFORE the sentence, so the sentence stays
-# byte-for-byte what C27 always said.
+# this run, and what the box can safely do about it (`_kf_remedy`, which
+# re-measures when it prints, for the two reachable cases its header names; `role`
+# is how it learns the box's role) — printed BEFORE the sentence, so the sentence
+# stays byte-for-byte what C27 always said.
 # A `--to` run never read `previous`, so it is read here, for the sentence only.
-_rollback_refuse_layout() {   # <cur> <stamp_name> [why]
-  local cur="$1" stamp_name="$2" why="${3:-}"
+_rollback_refuse_layout() {   # <cur> <stamp_name> [why] [role]
+  local cur="$1" stamp_name="$2" why="${3:-}" role="${4:-}"
   [ -n "$UPD_PREV_TAG" ] || _upd_read_previous || :
-  # The reason line carries the WORKING remedy (review 179 fix round 1, R-B1):
-  # the sentence below ends "--to vX.Y.Z", which in this state meets the same
-  # refusal (a `--to` run of the stamp's own version is the killed-flip state
-  # too), so the way out — the typed re-install, never a rollback's fall-through
-  # — is said here, where `stamp_name` is the state's target (condition 1).
-  [ -z "$why" ] || echo "$PROG: rollback: $(_upd_redact "$why") — re-installing $stamp_name is a typed act, not a rollback's: ccrc update --to $stamp_name --downgrade" >&2
+  # The reason line carries what the box can safely do (review 179 fix round 1,
+  # R-B1, reshaped by wave 9 R9-F1): the sentence below ends "--to vX.Y.Z", which
+  # in this state meets the same refusal (a `--to` run of the stamp's own version
+  # is the killed-flip state too), so the way out — a typed hand install, never a
+  # rollback's fall-through, never `update --to … --downgrade`, whose re-install
+  # writes in place into the tree the units run — is said here, where
+  # `stamp_name` is the state's target (condition 1), when `_kf_remedy` measures
+  # it safe, and otherwise it says that no safe one-line repair is known.
+  [ -z "$why" ] || echo "$PROG: rollback: $(_upd_redact "$why") — $(_kf_remedy "$stamp_name" "$role")" >&2
   _ccrc_die "rollback: ~/.ccrc/previous names ${UPD_PREV_TAG:-nothing usable}, but it cannot be trusted here — \$HOME/ccrc points at \$HOME/ccrc-versions/$cur while this box's stamp reads $stamp_name, so the last move was made by something that does not keep the layout (for example a pre-W6 release's updater after a rollback, or deploy.sh), and previous may not be the build before the last update. Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z"
 }
 
@@ -17240,7 +17304,7 @@ cmd_rollback() {
   case "$kf" in
     0) kept=1 ;;
     2) UPD_FROM="$run_from"; UPD_REPORT_TARGET="$to"; UPD_REPORTING=1
-       _rollback_refuse_layout "$kf_cur" "$to" "$KF_WHY" ;;
+       _rollback_refuse_layout "$kf_cur" "$to" "$KF_WHY" "$role" ;;
   esac
   if [ "$kept" -eq 1 ]; then
     # ROLLBACK BY FLIP (design §11: rollback "runs arm 1 or arm 2 above, then
@@ -17310,7 +17374,7 @@ cmd_rollback() {
       1)
         # D-3466: in the killed-flip state a flip that cannot be made is a
         # refusal, never a re-install (see the guard above).
-        [ "$kf" -eq 0 ] && _rollback_refuse_layout "$kf_cur" "$to" "the killed-flip state holds, so this rollback may only flip, and the flip could not be made ($VER_WHY) — it does not fall back to a re-install"
+        [ "$kf" -eq 0 ] && _rollback_refuse_layout "$kf_cur" "$to" "the killed-flip state holds, so this rollback may only flip, and the flip could not be made ($VER_WHY) — it does not fall back to a re-install" "$role"
         # UPD_REPORTING deliberately stays 1 here, unlike the RESET above: this
         # path has already written a non-terminal `installing "rollback by
         # flip …"` phase, so a refusal on the way into the in-process
@@ -20392,8 +20456,8 @@ _upd_legacy_target() {   # <tag> -> 0, or dies before anything is installed
 #
 # A FAILED PREFLIGHT REFUSES THE SWEEP, NEVER THE UPDATE (spec §6): the
 # install above already converged, and unwinding a good update over a
-# refused sweep would leave the box worse than degraded. The refusal is loud
-# (stderr names the resolved value and the drop-in that fixes it) and the
+# refused sweep would leave the box worse than degraded. The refusal is loud — stderr, per refusal (wave 9, R11-F5): KillMode names the resolved value
+# and the drop-in directory that can fix it, the listing names the failed command and its rc, macOS names the plist and the re-enable step — and the
 # degraded line on stdout says exactly what did not happen.
 #
 # PANES ARE NEVER TOUCHED; TMUX IS NEVER TOUCHED. KillMode=process keeps the

@@ -3285,6 +3285,24 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(read(join(home, '.ccrc', 'build.json'))).toBe(boxStamp);
   });
 
+  // Wave 9 R8i (D-3828): a skip writes nothing, so a box stamp that is still there afterwards STAYS — and the
+  // skip line must not say `ccrc version will say unstamped` over it. The run is FROM the version `~/ccrc` points
+  // at, so `_inst_tree` itself answers `running` (INST_TREE_HOW is set in-process, never read from the environment)
+  // and `_inst_stamp_unname` returns 1 for it before it touches the stamp; the tree carries no `build.json`, the
+  // kept stamp beside it is the fallback `_inst_stamp_shipped` reads, that version is NOT kept (no digest, rc 2),
+  // and git is off PATH, so `_inst_stamp` lands on its no-git skip with the box's stamp still on disk.
+  it('a skipped stamp over a box stamp that STAYS says so — the launcher run, no build.json in the tree, the version not kept, git off PATH: the line names the existing stamp, never `unstamped` (wave 9 R8i, D-3828)', () => {
+    const { home, boxStamp } = writtenThroughBox('ccrc-install-stamp-stays-skip-', { digest: false });
+    expect(existsSync(join(home, 'ccrc', 'build.json')), 'the control is broken: the tree must carry no build.json').toBe(false);
+    expect(keptAnswer(home, 'v9.9.0'), 'the control is broken: the version must be not kept').toMatch(/^rc=2 why=no kept digest /);
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'git') }, { from: join(home, 'ccrc', 'ccd', 'ccrc') });
+    expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
+    expect(r.stdout).toMatch(
+      /^install: stamp: skipped \(no git on PATH\) — the box's existing stamp \(~\/\.ccrc\/build\.json\) stays — ccrc version reports what it says$/m);
+    expect(r.stdout, 'a stamp that stays was called unstamped').not.toMatch(/will say unstamped/);
+    expect(read(join(home, '.ccrc', 'build.json')), 'the skip rewrote or removed the stamp').toBe(boxStamp);
+  });
+
   // ── N1 (re-review of fix round 1): the removal is for a stamp that names
   //    ANOTHER version. The name compared is the one `_inst_tree` placed or
   //    flipped to (`INST_TREE_NAME`): the stamp's `version` when it has one,
@@ -5410,10 +5428,12 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
   // either file with the later one winning, names the file that decides, and
   // so does the OFF remedy — it names ccrc.env by default, or the exposure
   // file when that is the one that would arm it. With no passphrase file, a
-  // measured CCRC_AUTH=on names the file that decides too; every other case —
-  // including an exposure file that sets CCRC_AUTH to anything but on, or one
-  // that cannot be read — prints main's else-arm line unchanged, naming
-  // ccrc.env.
+  // measured CCRC_AUTH=on names the file that decides too. Wave 9 R10b
+  // (D-3829) corrects the rest of this block: there, an exposure file that
+  // cannot be read prints its own "not measured" line (G2g), and an exposure
+  // file that decides the flag without turning it on gets an arming remedy
+  // naming that file (G2h); every other case (the flag read from ccrc.env, or
+  // no file at all) prints main's else-arm line, naming ccrc.env.
   const gateLine = (out: string): string => out.split('\n').find((l) => l.startsWith('install: gate: ')) ?? '';
 
   it('G2b: a passphrase file at the default path with the flag OFF — "a PWA passphrase file is at", and the OFF remedy names ccrc.env', () => {
@@ -5475,6 +5495,37 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(line, r.stdout).toContain('the gate is failing SHUT');
     expect(line).toContain(`CCRC_AUTH=on in ${join(home, '.ccrc', 'exposure.env')}`);
     expect(line).not.toContain('To arm the gate');
+  });
+
+  // ── wave 9 R10b (D-3829): the no-passphrase arm's two own lines ──────────
+  // D-3598 kept the no-passphrase line byte-identical in every case but a measured `on`. Two cases now print their
+  // own: the exposure file there and unreadable (rc 2) — "not measured", as the present-passphrase arm says — and
+  // the exposure file deciding the flag (`BUE_SRC` is the exposure file), whose arming remedy names that file, as
+  // that arm's `gate_how` already does. The fresh-box line (the pin above) is byte-identical in every other case.
+  it.skipIf(IS_DARWIN || process.getuid?.() === 0)('G2g: no passphrase and an UNREADABLE exposure file — "not measured", naming the file, never the fresh-box arming line (wave 9 R10b)', () => {
+    const home = freshBox('ccrc-install-gate-nopass-exp-unreadable-');
+    const exposure = join(home, '.ccrc', 'exposure.env');
+    preexisting(home, 'exposure.env', 'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH=on\n');
+    chmodSync(exposure, 0o000);
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toBe(
+      `install: gate: this box has NO PWA passphrase, and ${exposure} is there and cannot be read, so whether CCRC_AUTH is on (and the gate failing shut) was not measured — ccrc doctor's auth check says what to do`);
+    expect(line).not.toContain('To arm the gate');
+  });
+
+  it('G2h: no passphrase and the exposure file CCRC_AUTH=off — the arming remedy names the exposure file, which overrides ccrc.env, not ccrc.env alone (wave 9 R10b)', () => {
+    const home = freshBox('ccrc-install-gate-nopass-exp-off-');
+    const exposure = join(home, '.ccrc', 'exposure.env');
+    preexisting(home, 'exposure.env', 'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH=off\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toMatch(new RegExp(
+      `^install: gate: this box has NO PWA passphrase — install never writes one\\. To arm the gate: ccrc passwd, then set CCRC_AUTH=on in ${
+        exposure.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, which overrides ${
+        join(home, '.ccrc', 'ccrc.env').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(ccrc expose writes it with CCRC_RP_ID and CCRC_ORIGIN\\), then: .+$`));
+    expect(line).not.toContain('together with CCRC_RP_ID and CCRC_ORIGIN in');
+    expect(line).not.toContain('not measured');
   });
 
   // ── wave 9 R10e (D-3823): a SECOND unmeasured state, rc 3 ─────────────────
