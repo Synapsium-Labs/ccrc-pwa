@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=133968e5eed49c8809d042b29a0e5b56d64a4947cca01637a97a9b8c590d799c
+# ccrc:generated 1 sha256=3ad904843a10f88543b8f2ad90b960477b341ebf14bd5de1998922ab54cc050e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -751,23 +751,23 @@ _have_systemctl() {
 # `systemctl` on the other platform, so a harness that puts its own launchctl
 # ahead of /bin keeps full control and full observability.
 #
-# `_SVC_REAL_HOME` comes from tilde expansion, which reads the password
-# database rather than $HOME — the whole point, and why this cannot be
-# `[ "$HOME" = "$HOME" ]` in disguise: it answers the real home even when
-# `$HOME` points elsewhere. RESOLVED LAZILY, AND ONLY ON DARWIN: at source time
-# it ran on every invocation on Linux too, forking `id`, a `command not found`
-# on a contained PATH. `$USER`/`$LOGNAME` first, `id -un` (silenced) if neither.
-# THE NAME IS CHECKED BEFORE `eval`: it is the environment's, and `eval` runs
-# any shell syntax in it (`$(…)`, a backtick, `;`) inside a protected start. Only
-# a portable login name expands — a letter or `_`, then letters, digits, `.`,
-# `_`, `-`, spelled out (a RANGE follows the locale) and never a leading digit,
-# `+` or `-` (`~0`, `~+` name the directory stack). Else: no home, exit 1.
+# `_SVC_REAL_HOME` comes from tilde expansion, which reads the password database,
+# not $HOME — the whole point: it answers the real home even when `$HOME` points
+# elsewhere. RESOLVED LAZILY, AND ONLY ON DARWIN: at source time it forked `id`
+# on Linux too, a `command not found` on a contained PATH. `$USER`/`$LOGNAME`
+# first, `id -un` (silenced) if neither. THE NAME IS CHECKED BEFORE `eval`: it is
+# the environment's, and `eval` runs any shell syntax in it (`$(…)`, a backtick,
+# `;`) inside a protected start. Only a login name expands — a letter, digit or
+# `_`, then those, `.`, `@`, `-`, spelled out (a RANGE follows the locale) —
+# never ALL DIGITS: only that, signed or not (`~0`, `~+1`, `~-2`), reads the
+# directory stack, an entry or left literal, never a home; `~+`, `~-` are $PWD,
+# $OLDPWD; `~5user`, `~1x` read the password database. Else: no home, exit 1.
 _SVC_REAL_HOME=""
 _svc_real_home() {
   [ -n "$_SVC_REAL_HOME" ] && { printf '%s' "$_SVC_REAL_HOME"; return 0; }
-  local u="${USER:-${LOGNAME:-}}" az=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
+  local u="${USER:-${LOGNAME:-}}" az=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ d=0123456789
   [ -n "$u" ] || u="$(id -un 2>/dev/null)"
-  [[ "$u" =~ ^[${az}_][${az}0123456789._-]*$ ]] || return 1
+  [[ "$u" =~ ^[${az}${d}_][${az}${d}._@-]*$ && ! "$u" =~ ^[$d]+$ ]] || return 1
   _SVC_REAL_HOME="$(eval printf '%s' "~$u" 2>/dev/null)"
   printf '%s' "$_SVC_REAL_HOME"
 }

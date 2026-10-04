@@ -13,8 +13,14 @@
 // block byte for byte — `macos-platform.test.ts` holds that):
 //   • a hostile name never executes (a canary file stays absent) and answers NO
 //     home, exit 1 — never a guessed one;
-//   • a name that would expand to something other than a user's home (`~0`,
-//     `~+`, `~-` name the directory stack) is refused the same way;
+//   • a name that would expand to something other than a user's home is refused
+//     the same way: an ALL-DIGIT one (only an all-number tilde prefix, signed or
+//     not — `~0`, `~+1`, `~-2` — reads the directory stack, so it answers an
+//     entry or stays literal; `~+` and `~-` are $PWD and $OLDPWD), and a
+//     sign-led one, a backslash or any other shell syntax;
+//   • a digit-led or `@`-bearing login name (`5user`, `21jsmith`,
+//     `user@corp.example`) is NOT refused: `~5user` is a password-database
+//     lookup like any other name, which leaves a name nobody has unexpanded;
 //   • an ordinary name, and the `id -un` fallback, still resolve the real home;
 //   • the fail direction at the guard: an unresolved home counts as a sandbox, so
 //     the SYSTEM launchctl is refused (exit 1) rather than run — even when $HOME
@@ -129,9 +135,22 @@ describe.each(SCRIPTS)('%s: _svc_real_home never executes the login name', (_lab
     }
   });
 
-  it('a name tilde expansion would read as the directory stack, not a user, is refused: ~0, ~+, ~-', () => {
-    for (const name of ['0', '+', '-', '-x', '+1', '5user', '.hidden', 'a b', 'a/b', '~', 'a*']) {
+  it('a name outside the login-name charset is refused: all digits, a leading sign or `.`, a backslash, other shell syntax', () => {
+    // All digits because only an all-number tilde prefix, signed or not, reads
+    // the directory stack: `~0` answers an entry, `~123456` stays literal, and
+    // neither is a user's home. `+` and `-` alone would be $PWD and $OLDPWD.
+    for (const name of ['0', '123456', '+', '-', '-x', '+1', '.hidden', 'a b', 'a/b', '~', 'a*', 'CORP\\jdoe']) {
       expect(realHome(script, name), `the login name ${JSON.stringify(name)}`).toEqual({ out: '', rc: '1' });
+    }
+  });
+
+  it('a digit-led or `@`-bearing login name is accepted: a password-database lookup, unexpanded when nobody has it', () => {
+    // `~5user` and `~21jsmith` are not the directory stack, only an all-number
+    // prefix is. No such user exists here, so the lookup leaves the word as it
+    // was: `~<name>`, exit 0, where a refusal answers no home, exit 1.
+    for (const name of ['5user', '21jsmith', 'user@corp.example']) {
+      expect(realHome(script, name), `the login name ${JSON.stringify(name)} must be accepted and looked up`)
+        .toEqual({ out: `~${name}`, rc: '0' });
     }
   });
 
