@@ -974,6 +974,27 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - The fleet box pruned one backup and one version, and holds 10 timestamped backups.
       - STATUS: fleet and server v0.0.74, newest v0.0.74, backups fleet 110M/server 503M, disk free fleet
         70G/server 33G, no anomalies.
+    - **2026-10-04 22:27 UTC — FALSE FAILURE: the fleet box's auto update to v0.0.78 ended `failed` on a healthy
+      box, and the halt rule now holds every move.** Reported by `ccrc-pwa-quiet-river` (mail 3419), re-measured
+      read-only:
+      - auto moved both boxes onto v0.0.76 at about 21:47 (the server row reads v0.0.76, done). v0.0.77 and v0.0.78
+        followed at 21:44–21:45 and v0.0.79 (#215) at 22:11.
+      - The fleet box ran v0.0.78 22:02:08–22:10:56. It installed completely (`installState` complete, stamp
+        v0.0.78), and the gate passed. The sweep try-restarted all 65 supervisors at 22:05:52–22:06:13.
+      - `_upd_sweep`'s Linux verify loop lists the active set ONCE, then runs `deploy/verify-service.sh` (3 s
+        settle + 5 s window) on each listed unit IN TURN, and `_ccrc_die`s on the first that fails. At 65 units
+        the last check runs about 8.5 min after the listing.
+      - `ccrc-pwa-still-summit` was archived by hand at 22:10:51 (`.archivedreason` = manual), inside its own
+        window. verify-service.sh failed it, and the update died with exit 1, phase `failed`, detail "…was restarted
+        and did not stay up". 26 units were verified. The other 39 were restarted but never verified. At 22:25,
+        65 units are active and 0 are failed.
+      - **Consequence:** the server row reads "halted — a failed or reverted node (fleet) halts every move until it
+        is acked". The boxes differ (fleet v0.0.78, server v0.0.76), and nothing moves, not v0.0.79 and not
+        wave 9's merge, until the operator acks the fleet row in the PWA. The ack is the operator's.
+      - **The defect:** a deliberate stop inside the serial verify fails the update. Wave 8 item G already treats a
+        unit missing from the post-restart listing as a warning, never a failure. The verify arm treats the same
+        stop, landing a few minutes later, as fatal. Child reclamation wave 4 (#215, v0.0.79) makes reclaims
+        routine, so this will recur. It is residue R12, and the fix is planned through a wave.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
@@ -1271,6 +1292,13 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
 - **R4 (wave 5, item 4).** `cmd_watchdog` rewrites an out-of-vocabulary `from` to `watchdog`, which is unreachable on
   `main` today. W2's P6 test comment claims 4 reds where 11 are measured. A killed `_upd_phase` can leave an orphan
   `update.json.tmp.<pid>`.
+- **R12 (2026-10-04, live incident): a deliberate supervisor stop during the update's serial verify fails the
+  update and halts every move.** `_upd_sweep` verifies the units of one stale listing one at a time, about 8 s
+  each, and dies on the first that is not active. A hand archive at v0.0.78 did it (monitoring note,
+  2026-10-04 22:27). Archives, `ccd stop` and child reclaims all reach it. The fix shape is open. One option is
+  to re-measure a unit that fails against its registry and warn on a deliberate stop. Another is to verify the
+  whole set in one window. A third is whether one supervisor's failure after the gate passed should halt the
+  fleet at all.
 
 ## Next-wave brief
 
