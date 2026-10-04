@@ -7756,7 +7756,7 @@ ACCT_LIVE_IDS=()
 # the other callers of this function.
 ACCT_LIVE_WHY=""
 _acct_live() {   # <id>
-  local id="$1" reg="$_SVC_REG" names="" rc=0 u="" sid="" w="" had_nullglob=0
+  local id="$1" reg="$_SVC_REG" names="" rc=0 u="" sid="" w="" had_nullglob=0 n=""
   local blind=0
   local -a rows=()
   ACCT_LIVE_MEASURED=true
@@ -7848,12 +7848,12 @@ _acct_live() {   # <id>
         return 0 ;;
     esac
   fi
-  # The pane's tmux session name is `cc-<id>` — `ccd`'s `_tmux()` (ccd/ccd:1114)
-  # is the one place that mapping is spelled, and this is its second reader
-  # rather than a looser substring match: `*"$sid"*` would call `cc-orchard`
-  # live because `cc-orchard-api` is.
+  # The pane's tmux session name is `cc-<id>` with `.` and `:` as `_` — what `ccd`'s
+  # `_tmux()` creates (wave 9 M8; tmux 3.4 renamed a dot itself, 3.7c does not) —
+  # and this is an exact match rather than a looser substring match: `*"$sid"*`
+  # would call `cc-orchard` live because `cc-orchard-api` is.
   for sid in "${rows[@]}"; do
-    case $'\n'"$names"$'\n' in *$'\n'"cc-$sid"$'\n'*) ACCT_LIVE_IDS+=("$sid") ;; esac
+    n="cc-$sid"; n="${n//[.:]/_}"; case $'\n'"$names"$'\n' in *$'\n'"$n"$'\n'*) ACCT_LIVE_IDS+=("$sid") ;; esac
   done
   return 0
 }

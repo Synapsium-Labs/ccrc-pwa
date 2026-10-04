@@ -17,10 +17,11 @@
 // command ccd runs, and a missing session answers `can't find session: cc-x`
 // for all of them — the one message `_session_probe` reads as death.
 //
-// tmux rewrites `.` and `:` in a session NAME to `_` (`-s cc-w-my.site`
-// creates `cc-w-my_site`), so the target builder applies the same rewrite:
-// an unsanitised `=cc-w-my.site:` answers `can't find session` for a LIVE
-// session, which is `gone` — destroy-eligible.
+// ccd creates the NAME already sanitised (`.` and `:` become `_`: tmux 3.4
+// would have renamed `-s cc-w-my.site` to `cc-w-my_site` itself, 3.7c would
+// not — wave 9 M8), and the target builder applies the same rewrite, which is
+// a no-op on a created name: an unsanitised `=cc-w-my.site:` answers `can't
+// find session` for a LIVE session, which is `gone` — destroy-eligible.
 //
 // THIS SUITE RUNS REAL TMUX, ON A PRIVATE SOCKET, AND NOTHING ELSE. The
 // harness's poisoned `tmux` (create-if-absent in `harnessBin`) is displaced by
@@ -37,8 +38,9 @@ import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, harnessBin, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
-import { tmuxTarget } from '../../shared/tmux-target.js';
+import { tmuxName, tmuxTarget } from '../../shared/tmux-target.js';
 import { Tmux, type Runner } from '../src/exec.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const KEEPALIVE = path.join(ROOT, 'ccd', 'ccd-telemetry-keepalive');
@@ -56,6 +58,15 @@ const REAL_TMUX: string | null = (() => {
 // (`.github/actions/server-deps`), so this only fires on a box that genuinely
 // has none. The source census below runs regardless.
 const NO_TMUX = REAL_TMUX === null;
+/** The bash a spawn under a NARROWED PATH must run, resolved ONCE through the
+ *  parent's PATH (`ccrc-update.test.ts`'s idiom). A bare `'bash'` under
+ *  `/usr/bin:/bin` is macOS's 3.2. */
+const BASH: string = (() => {
+  const r = spawnSync('sh', ['-c', 'command -v bash'], { encoding: 'utf8' });
+  const p = (r.stdout ?? '').trim();
+  if (r.status !== 0 || !p.startsWith('/')) throw new Error('this box has no bash on its PATH');
+  return p;
+})();
 const BEHAVIOURAL = 'D-3525 — ccd resolves every tmux target EXACTLY (real tmux, private socket)'
   + (NO_TMUX ? ' — SKIPPED: no tmux on PATH, so there is no real tmux to measure against' : '');
 
@@ -217,10 +228,11 @@ describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
   });
 
   it('a DOTTED id, created through _tmux_new_session, probes live — tmux renamed it and the target follows', () => {
-    // `_ws_project_valid` admits a dot; tmux names `cc-w-my.site` as
-    // `cc-w-my_site`. Bare, the probe answers `can't find pane: site`
-    // (unknown); anchored WITHOUT the rewrite it answers `can't find session`
-    // (gone — destroy-eligible for a live session).
+    // `_ws_project_valid` admits a dot; ccd creates `cc-w-my.site` as
+    // `cc-w-my_site` itself (tmux 3.4 would have renamed it the same way, 3.7c
+    // would not). Bare, the probe answers `can't find pane: site` (unknown);
+    // anchored WITHOUT the rewrite it answers `can't find session` (gone —
+    // destroy-eligible for a live session).
     sh(`_tmux_new_session -d -s "$(_tmux w-my.site)" -x 200 -y 50 'exec cat' >/dev/null 2>&1; true`);
     expect(sessions()).toEqual(['cc-w-my_site']);
     expect(sh('_session_probe w-my.site; echo "$PROBE_VERDICT"')).toBe('live');
@@ -316,6 +328,80 @@ function kaProbe(id: string): string {
   return r.stdout;
 }
 
+// ── wave 9 M8: the NAME is created already sanitised ────────────────────────
+//
+// Runs WITHOUT real tmux, and has its OWN harness: it never touches `h`/`sh`
+// above, whose `beforeAll` displaces the harness's tmux poison with a shim that
+// execs the real binary. Nothing here plants a shim, so the harness's
+// create-if-absent tmux and systemd-run poisons stay in place behind the
+// function stub.
+describe('wave 9 M8 — ccd creates the NAME already sanitised, so the target matches on any tmux version', () => {
+  let m: CcdHarness;
+  beforeAll(() => { m = makeCcdHarness('ccrc-ccd-tmux-name-'); });
+  afterAll(() => { m?.cleanup(); });
+
+  it('(a) _tmux maps `.` and `:` to `_` and leaves every live-alphabet id alone', () => {
+    expect(m.sh('_tmux w-my.site; _tmux w-a:b; _tmux demo; _tmux w-x_y-z').split('\n'))
+      .toEqual(['cc-w-my_site', 'cc-w-a_b', 'cc-demo', 'cc-w-x_y-z']);
+  });
+
+  it('(b) tmux is never handed a dotted name: `new-session -s` gets the sanitised one (the tmux 3.7c model)', () => {
+    m.sh(`tmux() { printf '%s\\n' "$*" >> "$HOME/tmux-argv"; return 1; }; `
+      + `_tmux_new_session -d -s "$(_tmux w-my.site)" -x 200 -y 50 'exec cat' >/dev/null 2>&1; true`);
+    const argv = fs.readFileSync(path.join(m.home, 'tmux-argv'), 'utf8').split('\n').filter(Boolean);
+    expect(argv.some((l) => l.startsWith('new-session -d -s cc-w-my_site '))).toBe(true);
+    expect(argv.filter((l) => l.includes('cc-w-my.site'))).toEqual([]);
+  });
+
+  it('(c) tmuxName sanitises, and tmuxTarget keeps no spelling of its own', () => {
+    expect(tmuxName('w-my.site')).toBe('cc-w-my_site');
+    expect(tmuxName('demo')).toBe('cc-demo');
+    // Pins only that `tmuxTarget` derives from `tmuxName`: it is tautological
+    // under a `tmuxName` mutation (T2-M3 is caught by the assertions above and
+    // by the sanitised-target case in the census).
+    for (const id of ['demo', 'w-my.site', 'a:b', 'x.y:z', 'w-x_y-z']) {
+      expect(tmuxTarget(id)).toBe(`=${tmuxName(id)}:`);
+    }
+  });
+
+  it('(d) a live-alphabet id is named byte-for-byte as before', () => {
+    for (const id of ['demo', 'claude-a-proj', 'w-x_y-z', 'A1-b2_C3']) {
+      expect(tmuxName(id)).toBe(`cc-${id}`);
+      expect(tmuxTarget(id)).toBe(`=cc-${id}:`);
+    }
+  });
+
+  it('(e) ccrc\'s _acct_live finds a live DOTTED lane by the sanitised name _tmux creates', () => {
+    const home = mkTmp('ccrc-acct-live-dotted-');
+    const reg = path.join(home, '.cc-sessions');
+    fs.mkdirSync(reg, { recursive: true });
+    for (const id of ['w-my.site', 'demo']) {
+      fs.writeFileSync(path.join(reg, `${id}.uuid`), 'acct-a');
+      fs.writeFileSync(path.join(reg, `${id}.wrapper`), 'acct-a');
+    }
+    const env = ghContainedEnv(home, {
+      HOME: home, PATH: '/usr/bin:/bin',
+      XDG_RUNTIME_DIR: path.join(home, 'no-runtime-dir'),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(home, 'no-bus')}`,
+    }, { systemd: true, tmux: true });
+    const probe = (listing: string): { measured: string; ids: string[] } => {
+      const r = spawnSync(BASH, ['-c',
+        `. "$1"; _plat_timeout() { shift; "$@"; }; tmux() { printf "${listing}"; }; `
+        + '_acct_live acct-a; printf "%s|%s\\n" "$ACCT_LIVE_MEASURED" "${ACCT_LIVE_IDS[*]}"',
+        '_', path.join(ROOT, 'ccd', 'ccrc')],
+      { encoding: 'utf8', cwd: home, env });
+      const line = r.stdout.trim().split('\n').pop() ?? '';
+      const [measured = '', ids = ''] = line.split('|');
+      return { measured, ids: ids.split(' ').filter(Boolean).sort() };
+    };
+    expect(probe('cc-w-my_site\\ncc-demo\\n')).toEqual({ measured: 'true', ids: ['demo', 'w-my.site'] });
+    // The control: only `cc-demo` is up, so only `demo` is live.
+    expect(probe('cc-demo\\n')).toEqual({ measured: 'true', ids: ['demo'] });
+    // The harness-style tmux poison was never reached: the function stub won.
+    expect(fs.existsSync(path.join(home, 'tmux-calls'))).toBe(false);
+  });
+});
+
 // ── THE CENSUS: every target in the tree is built by the one builder ────────
 //
 // The behavioural half above proves the builder; this half proves every call
@@ -401,7 +487,7 @@ describe('D-3525 — the census: every ccd target is spelled by the exact builde
   it('the builders are defined once, and `_tmux` stays the NAME builder', () => {
     expect((CCD_SRC.match(/^_tmux_at\(\) /gm) ?? []).length).toBe(1);
     expect((CCD_SRC.match(/^_tmux_t\(\) /gm) ?? []).length).toBe(1);
-    expect(CCD_SRC).toMatch(/^_tmux\(\)\s+\{ echo "cc-\$1"; \}/m);
+    expect(CCD_SRC).toMatch(/^_tmux\(\)\s+\{ local n="cc-\$1"; echo "\$\{n\/\/\[\.:\]\/_\}"; \}/m);
   });
 
   it('a `$t` used as a target is only ever BOUND from the exact builder — or passed through from a caller that did', () => {
@@ -437,6 +523,10 @@ describe('D-3525 — the census: every ccd target is spelled by the exact builde
       }
       expect(calls, `${fn} has no callers — the pass-through check is vacuous`).toBeGreaterThan(0);
     }
+  });
+
+  it('_spawn_settle hands _inject_spawn_effort the id, not only the name (wave 9 M8)', () => {
+    expect(functions(CCD_SRC).get('_spawn_settle')).toContain('_inject_spawn_effort "$tname" "$id"');
   });
 
   it('the keepalive\'s one probe is the exact form, sanitised the way `_tmux_at` sanitises', () => {

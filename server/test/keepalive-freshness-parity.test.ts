@@ -166,7 +166,8 @@ describe('the keepalive borrows _session_state’s own notion of a live supervis
  * every deploy day (F7). Asking tmux means re-spelling three things `ccd/ccd`
  * already owns, and each is pinned here for a different reason:
  *
- *   • THE SESSION NAME (`_tmux()`, `id -> tmux name`). This is the copy a
+ *   • THE SESSION NAME (`_tmux()`, `id -> tmux name`, created already
+ *     sanitised since wave 9 M8). This is the copy a
  *     typo DISARMS rather than breaks: a prefix ccd never created makes every
  *     probe answer `can't find session`, which classifies as `gone`, which
  *     reads as "idle, go ahead and spend a turn" — silently restoring the
@@ -189,7 +190,7 @@ describe('the keepalive borrows _session_state’s own notion of a live supervis
  * per-side tests earns nothing where the value is not a tunable number.
  */
 const CCD_TMUX_BROAD = /^[ \t]*_tmux\(\)[ \t]*\{.*$/;
-const CCD_TMUX_NARROW = /^_tmux\(\)[ \t]+\{ echo "([a-z][a-z0-9-]*)\$1"; \}/;
+const CCD_TMUX_NARROW = /^_tmux\(\)[ \t]+\{ local n="([a-z][a-z0-9-]*)\$1"; echo "\$\{n\/\/\[\.:\]\/_\}"; \}/;
 
 const KA_TMUX_BROAD =
   /^[ \t]*(?:(?:export|declare|local|readonly|typeset)(?:[ \t]+-[A-Za-z]+)*[ \t]+)?KA_TMUX_PREFIX=.*$/;

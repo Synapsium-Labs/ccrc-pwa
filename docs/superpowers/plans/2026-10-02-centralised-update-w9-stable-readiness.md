@@ -670,15 +670,15 @@ Re-measure the JS quoting. Before running any suite, run each planted launcher o
 
 | # | Guard | Mutation | Must red | Run | Measured |
 |---|---|---|---|---|---|
-| T2-M1 | the name is sanitised in bash | `_tmux` back to `{ echo "cc-$1"; }` | 1(a), 1(b), `:404`, `keepalive-freshness-parity`'s 'ccd still derives the tmux name by one prefix, in exactly one spelling'; macOS case 12 | `ccd-tmux-anchor`, `keepalive-freshness-parity` | pending |
-| T2-M2 | `:` too, not only `.` | `_tmux`'s class `[.:]` → `[.]` | 1(a)'s `cc-w-a_b` | `ccd-tmux-anchor` | pending |
-| T2-M3 | the name is sanitised in TS | `tmuxName` back to `` `cc-${id}` `` | 1(c)'s `tmuxName` assertions; `ccd-tmux-anchor`'s 'tmuxTarget is the anchored, sanitised form' (`:475`, `=cc-w-my_site:`); `exec.test.ts`'s 'tmuxTarget applies tmux's own … rewrite' (`:68`). 1(c)'s target identity stays GREEN: it is tautological under this mutation | `ccd-tmux-anchor`, `exec` | pending |
-| T2-M4 | live ids are unchanged | `tmuxName` also maps `-` to `_` | 1(d) | `ccd-tmux-anchor` | pending |
-| T2-M5 | effort reads the id | `:20669` back to `id="${1#cc-}"` | 4 | `ccd-route-settle` | pending |
-| T2-M6 | the settle passes the id | `:20603` drops `"$id"` | 2 | `ccd-tmux-anchor -t "hands _inject_spawn_effort"` | pending |
-| T2-M7 | the restamp is real | edit one comment byte in `ccd/ccd` without restamping | `ownership` | `ownership` | pending |
-| T2-M8 | the parity pin still reads one prefix | `_tmux`'s prefix `cc-` → `cx-` | `keepalive-freshness-parity`'s 'and the two are the same prefix' (`cx-` ≠ `KA_TMUX_PREFIX`'s `cc-`) | `keepalive-freshness-parity` | pending |
-| T2-M9 | account removal sees a dotted lane | `ccrc:7853` back to the raw `"cc-$sid"` | 1(e): the sorted ids are `['demo']`, not `['demo', 'w-my.site']` | `ccd-tmux-anchor -t "_acct_live"` | pending |
+| T2-M1 | the name is sanitised in bash | `_tmux` back to `{ echo "cc-$1"; }` | 1(a), 1(b), `:404`, `keepalive-freshness-parity`'s 'ccd still derives the tmux name by one prefix, in exactly one spelling'; macOS case 12 | `ccd-tmux-anchor`, `keepalive-freshness-parity` | 5 red: ccd-tmux-anchor 1(a) (`cc-w-my.site` for `cc-w-my_site`), 1(b) (no `new-session -d -s cc-w-my_site ` line) and the `:404` literal pin; keepalive-freshness-parity's two `_tmux` cases (canonical spelling `+0 to be 1`, and the same-prefix case on that same assertion). MacOS case 12 not measurable on Linux (tmux 3.4 renames the dot itself, so it stays green here) |
+| T2-M2 | `:` too, not only `.` | `_tmux`'s class `[.:]` → `[.]` | 1(a)'s `cc-w-a_b` | `ccd-tmux-anchor` | 2 red: 1(a) (`cc-w-a:b` for `cc-w-a_b`) and the `:404` literal pin |
+| T2-M3 | the name is sanitised in TS | `tmuxName` back to `` `cc-${id}` `` | 1(c)'s `tmuxName` assertions; `ccd-tmux-anchor`'s 'tmuxTarget is the anchored, sanitised form' (`:475`, `=cc-w-my_site:`); `exec.test.ts`'s 'tmuxTarget applies tmux's own … rewrite' (`:68`). 1(c)'s target identity stays GREEN: it is tautological under this mutation | `ccd-tmux-anchor`, `exec` | 4 red: 1(c)'s `tmuxName` assertions (`cc-w-my.site` for `cc-w-my_site`); the census's 'tmuxTarget is the anchored, sanitised form' (`=cc-w-my.site:`); exec.test.ts's 'tmuxTarget applies tmux's own … rewrite' and the new colon-id control (`=cc-a:b:`). 1(c)'s target identity stayed green, as predicted |
+| T2-M4 | live ids are unchanged | `tmuxName` also maps `-` to `_` | 1(d) | `ccd-tmux-anchor` | 4 red: 1(d) (`cc_demo` for `cc-demo`), 1(c), the census's sanitised-target case, and the real-tmux 'control: a live cc-demo reads as itself' (`gone` for `live`); the mutation also rewrites the prefix hyphen |
+| T2-M5 | effort reads the id | `:20669` back to `id="${1#cc-}"` | 4 | `ccd-route-settle` | 1 red: ccd-route-settle's DOTTED-id case (`[ Array(1) ]` typed, expected `[]`); 15 others green |
+| T2-M6 | the settle passes the id | `:20603` drops `"$id"` | 2 | `ccd-tmux-anchor -t "hands _inject_spawn_effort"` | 1 red: 'hands _inject_spawn_effort the id' (`_spawn_settle`'s body lacks `_inject_spawn_effort "$tname" "$id"`) |
+| T2-M7 | the restamp is real | edit one comment byte in `ccd/ccd` without restamping | `ownership` | `ownership` | 1 red: ownership 'verifies as ccrc-unmodified' (`ccrc-edited`); the 13 others green |
+| T2-M8 | the parity pin still reads one prefix | `_tmux`'s prefix `cc-` → `cx-` | `keepalive-freshness-parity`'s 'and the two are the same prefix' (`cx-` ≠ `KA_TMUX_PREFIX`'s `cc-`) | `keepalive-freshness-parity` | 1 red: 'and the two are the same prefix' (`expected 'cc-' to be 'cx-'`); 'one prefix, in exactly one spelling' stayed green |
+| T2-M9 | account removal sees a dotted lane | `ccrc:7853` back to the raw `"cc-$sid"` | 1(e): the sorted ids are `['demo']`, not `['demo', 'w-my.site']` | `ccd-tmux-anchor -t "_acct_live"` | 1 red: 1(e) (`{measured:'true', ids:['demo']}` for `['demo','w-my.site']`); 33 others skipped by `-t` |
 
 ### Task 3: Containment is structural — R10d, R9-F8
 
