@@ -20,7 +20,7 @@ removed on 2026-09-10 was not.
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **deployed** v0.0.33 (`1ffdf947`, merged 2026-09-28 16:14 UTC, rolled out 16:16–16:21, fleet box first, rc 0; run 148 on `plain-summit`; reviews 170, 171, 172). Live: run 148's close reclaimed `plain-summit` in 10 s |
-| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 (open) | **working, integration round** — both prerequisites merged (#226 `0db98707`, #222 `cf9e4cc8`); run 174 on `swift-hollow` sent the integration round as mail 3169, 2026-10-02 (amendments A1 to A17 merged in #188, `6ff4e2e9`) |
+| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 (open) | **awaiting-review** (review run 254, 2026-10-04) — both prerequisites merged (#226 `0db98707`, #222 `cf9e4cc8`); run 174 on `swift-hollow` sent the integration round as mail 3169, 2026-10-02 (amendments A1 to A17 merged in #188, `6ff4e2e9`) |
 | 5 | the closed run's reclaim chip and its sentences; R25's orphan temp-root collector (R36) | **AGENT-FIRST** (R36 makes it one) | — | planned |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
@@ -43,6 +43,31 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-04 12:09 — wave 4's wave-done re-measured; held-out review run 254 dispatched.** Wave-done 3374 claimed
+  `6138030e`. Re-measured:
+  - PR #215's head is that sha, open, not draft and mergeable.
+  - `cf9e4cc8`, `db44b136` and `0087a045` are ancestors, all four merges were done without rebasing, and `main` has
+    since moved to `3255571a`. The ordered stop on chasing `main` held, and `git merge-tree` against current `main` is
+    clean. `main`'s schema ends at version 14, so the tip's version 15 is free for now.
+  - `verifyMarker` answers `ccrc-unmodified` with one marker line, and an edited control answers `ccrc-edited`.
+  - `bash -n` passes on `ccd/ccd`, `ccd/ccrc` and `deploy/deploy.sh`, each checked alone, and both Python files
+    compile.
+  - The new `shared/mark.mjs --check` exits 0 on the stamped body and 1 on a missing file.
+  - `_ws_reclaim_resolve` and `_ws_reclaim_plain_path` equal `0087a045`'s byte for byte, so option A landed.
+  - The deviation numbers new against `main` are exactly wave 4's twenty, the same set as before the round, each
+    defined. Nothing new was minted.
+  - Required Linux CI is green (run 37199924539); macOS is advisory.
+
+  Run 174 advanced to `awaiting-review`. Review run 254 opened under this programme's title and was dispatched to
+  `ccrc-pwa-still-cove` with:
+  - the standard panel;
+  - the plan's mandatory SAFETY lens at Opus `xhigh`, extended to re-measure C1, try further decoy landscapes, and
+    check that #226 and #222 survived, the case-fold superset, the login-name charset and the sweep's defer and pause
+    seams;
+  - the full server suite in twelve shards.
+
+  The worker asks that commit bodies quoting existing deviation numbers stay out of the squash message, so the
+  coordinator writes that message at merge. The #237 slot collision is ruled after this review.
 - **2026-10-03 23:15 — item 3d is reverted: the re-walk-first order deleted a live child. The 15:35 ruling is
   withdrawn.** `swift-hollow` stopped before push (mail 3366). Its own integration review's Opus SAFETY lens
   measured end to end, in a scratch copy, that 3d's order deletes a live child (C1, critical):
