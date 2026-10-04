@@ -9,6 +9,10 @@
 #   pull_request        selected — the server tests the change can affect
 #                       (a measured dependency map, .github/ci/select-tests.mjs),
 #                       sharded; agent, pwa, build-pwa and probe-macos in full.
+#   merge_group         selected — a merge-queue run runs what a pull request
+#                       runs (operator ruling 2026-09-28), the pipeline check
+#                       included, in a concurrency group of its own; no macOS
+#                       leg and no full-suite.
 #   push to main        refresh  — re-trace the tests the merge affected and
 #                       update the map. No test legs.
 #   schedule (daily)    full     — every leg, macOS included, plus a traced
@@ -43,6 +47,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  # THE MERGE QUEUE (landing-order stage 2, spec §5.2). A queue runs the
+  # REQUIRED checks on the group it built before it merges, and a workflow that
+  # does not listen for `merge_group` never reports them — the entry waits out
+  # the queue's timeout and is removed. This trigger is on `main` BEFORE the
+  # operator turns the queue on (the spec's rollout step 1). A queue run runs
+  # what a pull request runs (the mode table above). `push` stays
+  # `branches: [main]`, so the queue's own `gh-readonly-queue/main/*` branches
+  # start no second run.
+  merge_group:
   schedule:
     - cron: '17 3 * * *'
   # Manual re-run for the day the webhooks don't come: during the 2026-08-06
@@ -86,8 +99,15 @@ env:
 # release-stable.yml CALLS this file the group is evaluated in the caller's
 # context, where `github.workflow` is `release-stable` — without the prefix the
 # called run would wait on the caller's own group.
+#
+# A MERGE-QUEUE RUN gets a group of its OWN, `queue-<run id>` (landing-order
+# stage 2, spec §5.2), taken before the shared `refresh` group can be reached.
+# GitHub keeps at most one PENDING run per group and cancels the older pending
+# one even with `cancel-in-progress: false`: a queue run in a shared group
+# could lose its checks, and the queue would remove the entry. Nothing cancels
+# one either — `cancel-in-progress` stays the pull_request event alone.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || (github.event_name == 'push' && !inputs.mode) && 'refresh' || format('{0}-{1}-{2}', inputs.mode || 'full', github.event_name, github.ref_name) }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('queue-{0}', github.run_id) || (github.event_name == 'push' && !inputs.mode) && 'refresh' || format('{0}-{1}-{2}', inputs.mode || 'full', github.event_name, github.ref_name) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -132,13 +152,17 @@ jobs:
       # HERE, in plain bash, not by the selector the pull request may be
       # changing (select-tests.mjs's own `.github/` trigger is a second line).
       # A base it cannot diff against answers "changed": the safe direction.
+      # A MERGE-QUEUE RUN asks the same question of the same change (operator
+      # ruling 2026-09-28: it runs what a pull request runs), against the sha
+      # the queue built its group on — it has no `github.base_ref` — so a pull
+      # request that edits the selector cannot choose its own queue run's tests.
       - name: Does this pull request change the pipeline?
         id: pipeline
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         env:
-          BASE_REF: ${{ github.base_ref }}
+          BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}
         run: |
-          if base=$(git merge-base "origin/$BASE_REF" HEAD) && changed=$(git diff --name-only "$base" HEAD -- .github/); then
+          if base=$(git merge-base "$BASE" HEAD) && changed=$(git diff --name-only "$base" HEAD -- .github/); then
             if [ -n "$changed" ]; then
               echo "changed=true" >> "$GITHUB_OUTPUT"
               printf 'this pull request changes the pipeline:\n%s\n' "$changed"
@@ -146,7 +170,7 @@ jobs:
               echo "changed=false" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "::warning::could not diff this pull request against origin/$BASE_REF; treating its pipeline as changed"
+            echo "::warning::could not diff this change against $BASE; treating its pipeline as changed"
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
       # The newest map and duration table come ONLY from artifacts of trusted
@@ -469,7 +493,11 @@ jobs:
   test-macos:
     name: test-macos ${{ matrix.shard }}/${{ matrix.total }}
     needs: select
-    if: needs.select.outputs.macos_count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')
+    # Never on a merge-queue run (landing-order stage 2): non-required, so the
+    # queue does not wait for it, but every entry would still take the
+    # organisation's scarce macOS slots. `probe-macos` keeps a queue run out by
+    # its own event allow-list.
+    if: github.event_name != 'merge_group' && needs.select.outputs.macos_count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')
     runs-on: macos-latest
     # 55, not the 30 of a Linux shard, and the number is the measurement
     # rather than a round multiple of one run. Six green unsharded legs
@@ -862,7 +890,11 @@ jobs:
   # `verdict` output when it called this file itself.
   full-suite:
     needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos]
-    if: always() && needs.select.outputs.tests == 'full'
+    # Never on a merge-queue run: a queue run skips test-macos, and one that
+    # fell back to `full` would read that skip as a red leg (landing-order
+    # stage 2; a queue run is never the stable gate's evidence anyway —
+    # main-artifact.mjs trusts no merge_group run).
+    if: always() && github.event_name != 'merge_group' && needs.select.outputs.tests == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

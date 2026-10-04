@@ -736,12 +736,14 @@ whole time, which is the only prevention this ordering rule buys.
    MERGED with `headRefOid` equal to it — the coordinator merges with
    `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` (plus
    `--admin` where the repository's ruleset requires it) for exactly this
-   reason. An UNMARKED producer — every workspace minted without a marker: by a
-   box whose ccd did not yet mark children, or by a dispatch that journaled
-   `child-omitted` (§2) — is never refused this way; dropping its `sessionId`
-   anyway is still safe and follows the same one-PR rule. The same-project arm
-   is for a producer whose workspace opened no PR — a research or measurement
-   wave — and only for that. Naming a spent workspace is refused `workspace-spent`,
+   reason — and on a native-queue project it lands with the same binding, as
+   "Landing on a native-queue project" below says. An UNMARKED producer —
+   every workspace minted without a marker: by a box whose ccd did not yet
+   mark children, or by a dispatch that journaled `child-omitted` (§2) — is
+   never refused this way; dropping its `sessionId` anyway is still safe and
+   follows the same one-PR rule. The same-project arm is for a producer whose
+   workspace opened no PR — a research or measurement wave — and only for
+   that. Naming a spent workspace is refused `workspace-spent`,
    with `pr` naming the PR, and nothing is opened; `spent-unmeasured` means
    the server could not read the evidence either way — retry the same open,
    and do not drop `sessionId` on its account. If the PR lands after you
@@ -751,6 +753,69 @@ whole time, which is the only prevention this ordering rule buys.
    from the default branch and carrying none of the spent producer's code, so
    if wave N+1 depends on that code, wait for the same merge proof before
    redispatching.
+
+   **Landing on a native-queue project** (one whose `main` requires GitHub's
+   merge queue — measure it before each landing, never from memory: from a
+   checkout of its repository,
+   `gh api 'repos/{owner}/{repo}/rules/branches/main' --jq 'any(.[]; .type == "merge_queue")'`
+   answers `true`): the producer LANDS BEFORE IT CLOSES. Once its review is
+   clean and wave N+1 is open — or, on the programme's LAST wave, which has
+   no wave N+1, once its review is clean (its close is SKILL.md step 7's and
+   §6's) — advance the producer's run to `merging` (§4 — from
+   `awaiting-review`, re-measured). Enqueue only a PR whose required checks
+   have all passed — `gh pr checks <pr> --required` exits 0 (8 is pending, 1
+   is failed): for any other PR gh arms auto-merge instead of queueing it,
+   and prints the same "will be added to the merge queue … when ready" line
+   either way. On `8`, wait for them in the foreground —
+   `gh pr checks <pr> --required --watch`, again if the call times out —
+   never by ending your turn: no mail comes when checks finish. On `1`,
+   send the owning worker a fix round (below), or, for a red that is not
+   this PR's own, one `gh run rerun <run id> --failed` and the same wait.
+   Then, from your own session, enqueue its PR with
+   `gh pr merge <pr> --match-head-commit <handoffCommit>`: no `--squash`,
+   because the queue's merge method applies, and never `--admin`. Prove it
+   is IN the queue before you rely on the server:
+   `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }'`
+   gives one of four answers. A queued PR answers a non-null
+   `mergeQueueEntry`, the success answer. A `state` of `MERGED` means it
+   already landed: wait for or prove `merged:#<pr>`, and never disarm — a
+   merged PR answers a null entry too, so the entry alone cannot tell merged
+   from nothing queued. A PR with no entry but a non-null `autoMergeRequest`
+   means it is only armed, and nothing is queued and nothing will tell you so:
+   disarm it (`gh pr merge <pr> --disable-auto`) and read why before you do
+   anything else. A PR with no entry, no `autoMergeRequest` and not merged
+   means nothing is queued: read why before you do anything else. Disarm the
+   same way before any fix round from `merging` — an armed auto-merge queues
+   whatever head the branch carries once its checks pass, and GitHub disarms it on a push only
+   from a login without write access. End your turn. The run waits at
+   `merging`, holding the child, so its workspace is not reclaimed under a PR
+   still in the queue, and the server tells you how the queue answered: a
+   `status` mail `merged:#<pr>` once the PR reads merged, or
+   `dequeued:#<pr>@<time>` when the queue removed it without landing (GitHub
+   does not re-enqueue). On `merged:`, prove the merge exactly as above —
+   MERGED, `headRefOid` equal to `handoffCommit` — then close the producer as
+   this step closes a spent one (on the last wave, as §6 closes it), and only
+   then dispatch wave N+1. A `merged:#<pr>` can also reach a run at `merging`
+   on a project without the queue, when a sweep reads your own synchronous
+   merge before your close: prove and close as usual; a run already closed
+   needs nothing. On `dequeued:`, read why from the queue's own CI run, not
+   the PR's checks, which ran on a different commit and can read green —
+   `gh run list --event merge_group --json databaseId,headBranch,conclusion`
+   finds it by its `headBranch` (`gh-readonly-queue/<base>/pr-<pr>-…`) and
+   `gh run view <id> --log-failed` says why, while
+   `gh pr view <pr> --json mergeStateStatus` answers a conflict. Then either
+   enqueue it again exactly as above — checks first, then the read-back — or
+   send the owning worker a fix round on the `merging → working` edge
+   (SKILL.md step 6's send-back; its fresh wave-done gets a fresh review run,
+   and a fresh `merging`). Closing before the landing would hand a PR still
+   in the queue to a reclaim: nothing could then tell you of its dequeue, and
+   no worker would be left to fix it. A coordinator whose own workspace
+   carries a programme-wave hold or the child marker — a self-claimed run's,
+   or a reclaim heir that was the programme's own worker — is refused its
+   enqueue by the session hook, like any worker. Do not close to shed the
+   hold (a final close of a child reclaims your own pane): ask the operator
+   to enqueue, or disarm, with the same spellings from their own shell, and
+   wait at `merging` as above.
 
    **Same project:** open wave N+1 first with this producer's `sessionId`, then
    close the producer with `final:false`; the hold transfers to the already-open
@@ -785,6 +850,11 @@ whole time, which is the only prevention this ordering rule buys.
    proof, release proof, and exact-SHA merge proof above succeed.
 
 ## 6 — Final merge
+
+On a native-queue project the last wave's producer lands BEFORE this close,
+exactly as §5's "Landing on a native-queue project" says: with no wave N+1
+open, closing it first would retire the programme and reclaim the child
+under a PR still queued.
 
 `POST /api/runs/:id/close` `{"fingerprint":{…},"final":true}` on the last
 wave's run — re-measures, closes this run `done`, and releases the hold

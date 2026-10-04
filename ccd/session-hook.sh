@@ -836,7 +836,7 @@ _hook_hold_card() {
     return 0
   fi
   (( ${#h} <= CCRC_HOLD_MAX )) || return 0
-  [[ "$h" =~ ^program:[A-Za-z0-9._-]+' 'wave:[0-9]+(/[0-9]+)?(' 'run:[0-9]+)?$ ]] || return 0
+  [[ "$h" =~ $CCRC_HOLD_WAVE_RE ]] || return 0
   # AN ARCHIVE DOES NOT CLEAR A HOLD. `cmd_ws_archive` does no registry rm, and
   # `close.ts`'s failed+archive arm releases nothing, so the bytes outlive the
   # workspace. Live on this box today.
@@ -2660,8 +2660,8 @@ COMPACT_SHAPE_PRED='(type=="object" and (.chars|type)=="number" and (.fences|typ
 # false (fix wave, I7). There are three spellings, because an ERE cannot
 # interpolate a bracket-class variable the way `case` can: this constant, the
 # session-id gate `[[ "$id" =~ ^[A-Za-z0-9._-]+$ ]]` near the bottom of this
-# file, and the hold's shape gate `^program:[A-Za-z0-9._-]+ wave:...` in
-# `_hook_hold_card`. And `single-definition.test.ts`'s four `ROOTS` are the
+# file, and the hold's shape gate `CCRC_HOLD_WAVE_RE` (`^program:[A-Za-z0-9._-]+
+# wave:...`). And `single-definition.test.ts`'s four `ROOTS` are the
 # TypeScript packages, so they do not cover `ccd/` — BUT A SECOND BASH CORPUS
 # DOES: `bashRoots` is `[<repo>/ccd, <repo>/deploy]`, `BASH` is every bash file
 # under them plus `install.sh`, `holdersOf` filters that corpus on non-comment
@@ -2680,19 +2680,19 @@ CCRC_ID_MAX=128
 CCRC_FRESH_S=120
 # The hold's own bound. `POST /api/sessions/:id/hold` validates only that the
 # reason is a non-blank string and `ccd` only blankness, while `--actor` on the
-# same verb IS capped at 512 — so this is the first bound the value meets.
-# A hold that fails it is UNSPEAKABLE and the subject is silent.
-#
-# 127, NOT 256, AND THE OFF-BY-ONE IS THE WHOLE POINT (D-1896). `_ct_read` reads at most
+# same verb IS capped at 512 — so this is the first bound the value meets. A
+# hold that fails it is UNSPEAKABLE and the subject is silent. 127, NOT 256,
+# AND THE OFF-BY-ONE IS THE WHOLE POINT (D-1896): `_ct_read` reads at most
 # `CCRC_ID_MAX` (128) characters, so a value that comes back 128 long MAY have
-# been truncated and there is no way to tell from here. Refusing at 127 means
-# every value this function ever quotes was captured WHOLE. A 256 bound would
-# be unreachable — dead, and worse than absent, because a 400-character hold
-# would arrive truncated to 128, could lose its ` run:<id>` suffix in the cut,
-# and would then render as CASE B ("It names NO run") for a hold that names one.
-# Quoting a truncated hold as if it were the whole hold is exactly the lying
-# card this design exists to prevent, so the bound refuses instead.
+# been truncated, and refusing at 127 means every value quoted was captured
+# WHOLE. A 256 bound would let a 400-character hold arrive cut to 128, lose its
+# ` run:<id>` suffix and render as CASE B ("It names NO run") for a hold that
+# names one — the lying card this design exists to prevent.
 CCRC_HOLD_MAX=127
+# THE SHAPE of a hold that names a programme wave, spelled ONCE: the card's
+# gate (`_hook_hold_card`) and the worker merge deny (landing-order wave 2);
+# `run-routes.test.ts` holds every hold the server can write inside it.
+CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'
 # The workdir's own two bounds (C1), argued at the gate that uses them in
 # `_hook_hold_card`. The class is DERIVED from `CCRC_PROJ_CLASS` with the `/`
 # PREPENDED, never appended: appended, the `-` this file's class ends with would
@@ -3341,6 +3341,229 @@ if [[ "$event" == PreToolUse && -z "$pre_json" && "${tool:-}" == Bash ]] \
     lreason+=' Otherwise leave main alone: a clean branch lands as it is, and every needless sync restarts CI.'
     lreason+=' When you do absorb: `git merge` only — never a rebase, a force-push or the Update branch of GitHub (its button, `gh pr` verb or API) — and on a conflict in a `# ccrc:generated` stamp line, take either side of that line only, resolve the rest of the file as source, then run `~/.local/bin/ccrc restamp <file>`.'
     pre_json=$(_hook_nudge_json "$lreason") || pre_json=""
+  fi
+fi
+
+# ── THE WORKER MERGE DENY (landing-order wave 2, spec §5.2) ─────────────
+# "The coordinator merges, workers never do" (R5) was prose while every merge
+# here needed the admin bypass. Once the operator sets the ruleset's approval
+# count to 0, any session holding the fleet's one login could land with a
+# plain `gh pr merge`. So a session whose hold names a programme wave — a
+# dispatched worker's or reviewer's, the only sessions a dispatch holds — and
+# any workspace that carries the CHILD MARKER (`$REG/<id>.child`, written by
+# `ws-add --child` for a dispatch and by nothing else) is DENIED `gh pr merge`
+# in every spelling this file can parse at a COMMAND HEAD:
+# after a line start or `;` `&` `|` `(` or `$(`; past `VAR=value` prefixes,
+# the reserved words and grouping a head can follow (`if` `then` `do` `else`
+# `elif` `while` `until` `{` `!`), the wrappers `time` `env` `command` `exec`
+# `nohup` `sudo` and `timeout <n>` (in any order, `env`'s assignments too); a
+# path to the binary; and gh's own flags before `pr` or between `pr` and
+# `merge` (`-R owner/repo`). The `merge` word may be followed by a blank, one
+# of `;` `&` `|` `(` `)` `<` `>`, or the end (`gh pr merge;echo ok` runs the
+# merge). `--auto`, `--squash`, `--admin` and every other merge flag are the
+# same act from a worker and are denied with it.
+#
+# QUOTED TEXT IS REMOVED BEFORE MATCHING, in the same jq that reads the
+# command (MERGE_STRIP_JQ), leftmost first as bash reads it: a backslash
+# escape with the rest of its word (so `\ #` opens no comment), `$$` (a word,
+# so `$` pairs are read from the start of a run and never lend a `$` to a
+# `$'…'`), a `$'…'` string (its `\'` escapes honoured), a '…' span, a "…"
+# span, a heredoc, a `#` comment that starts a word. A "…" span is matched
+# WHOLE — its `\"` escapes, backtick spans, `${…}` expansions with their own
+# "…" and '…' (as bash reads them there) and `$(…)` substitutions included,
+# each substitution with its own quotes, parentheses, `${…}` and heredocs —
+# and is replaced by its substitutions alone, each stripped the same way:
+# `X="$(date)"` reads `X=$(date)`, and "docs; gh pr merge 42 is how" reads as
+# nothing. A heredoc (its delimiter a bare word, a backslash and a word, or
+# one quoted word, blanks allowed when quoted) keeps its `<<` line and loses
+# its body up to its terminator line: the WHOLE line at the top level (`<<-`:
+# tab-indented), and inside a quoted `$(…)` a line that may go on with `)`, as
+# bash ends one there. An unquoted delimiter's body keeps its substitutions,
+# and the rest of the `<<` line is stripped too. `$((…))`, `((…))` and `$[…]`
+# (to two nested parentheses, on one line) are kept as written — never
+# dropped, so a `$(…)` inside them still reaches the match — and a shift's
+# `<<` in them opens no heredoc. FAIL CLOSED: what the strip cannot COMPLETE
+# keeps its RAW text, so a merge after it is still matched — a "…" span, a
+# `$'…'` or a `$(…)` that never closes keeps its own text; and a heredoc
+# opener the strip SEES (not `<<<`, not in quotes or arithmetic) but cannot
+# complete keeps EVERYTHING from the opener to the end raw, so no quote is
+# ever parsed through a body it did not remove. A heredoc is incomplete when
+# its exact terminator line never comes, when its `<<` line holds another
+# `<<`, or once stripped still holds a quote or a backtick, or when its body
+# holds a line that begins `EOF)` (bash would read the body to the end, or end
+# it at `EOF)` inside a `$(…)` the strip does not parse at the top level). The
+# cost is a deny bash would not need: such a text that holds a merge at a
+# command head is refused. Three spellings that passed before this rule now
+# deny: `x=$(cat <<'EOF'…EOF)` whose body has a line that begins `gh pr
+# merge`, a heredoc whose terminator line carries a trailing blank, and a
+# heredoc with a body line that begins `EOF)`. The standard commit and PR-body
+# form, `EOF` and `)` on separate lines, still passes. So a commit message, a
+# PR body, a grep pattern, a terminated heredoc or a comment that MENTIONS `gh
+# pr merge` passes, and no apostrophe in a comment, a heredoc body or a "…"
+# span, and no escaped quote, opens a span that swallows a live merge after it
+# — wherever the strip can parse the span, which the list below bounds.
+# WHAT PASSES UNPARSED, said rather than hidden. The deny is contract-grade
+# (spec §4), so these are listed, not closed; each one was measured passing
+# by this wave's tasks, its reviews (241, 247) or their fix rounds:
+# `bash -c "…"`; a quoted or escaped command word (`"gh" pr merge`) and
+# quoting INSIDE the `pr` or `merge` word (`gh pr "merge"`, `gh 'pr' merge`,
+# `gh pr m'erg'e`, `gh pr \merge`: the strip drops a quoted span, it does not
+# unquote it); legacy backticks; `xargs`; an unlisted wrapper (`nice`,
+# `stdbuf`, `coproc`); a NAMED wrapper spelled with a path (`/usr/bin/env gh
+# pr merge`, `/usr/bin/timeout 60 gh pr merge`); a named wrapper's own
+# flags (`sudo -E`, `command -p`; only `timeout`'s one argument is parsed); a
+# leading redirection (`2>&1 gh …`, `>/dev/null gh …`, `</dev/null gh …`); a
+# `case` arm (`*) gh pr merge`); a function body (`f() { gh pr merge 42; }`);
+# a variable command word or argument (`$GH pr merge`, `gh pr $m`); a gh alias
+# (`gh alias set m 'pr merge'`); a `#` comment straight after a `)`; a ` #` or
+# `(#` inside an unquoted top-level `${…}`, which the strip reads as a comment
+# (`echo ${x:- #}; gh pr merge 42`); a form feed or vertical tab before a `#`
+# (the strip's blank class is Oniguruma `\s`; bash splits words on space, tab
+# and newline only); a top-level "…" span holding `$${`, whose `${` the strip
+# reads as an expansion that closes at a later `}` where bash reads `$$` and a
+# literal `{` (`(echo "$${"); gh pr merge 42; (echo "}")`); a
+# backslash-newline continuation (`gh pr \<newline> merge`); a `$(…)` that
+# holds a newline, a `;` `&` `|` or `(` inside a `VAR=` or flag value. And
+# where the strip itself mis-reads a span it can close — a "…" span is then
+# read as unquoted text, so an apostrophe in it can open a span that hides a
+# merge after it: a `case` pattern's bare `)` inside a "…" span's `$(…)`; a
+# "…" span nesting `$("…")` more than six deep (the regex engine's call-depth
+# bound). And heredocs the strip reads as complete though bash does not, so a
+# merge after them can run: a delimiter quoted in part or carrying a suffix
+# (`<<E"O"F`, `<<"EOF"x`), when a line equal to the strip's shorter word (`E`,
+# `EOF`) follows the merge; a `<<` line that goes on past its newline without
+# a quote, through a trailing `\` or an open `$(`; a heredoc inside `$(…)`
+# that bash 5.2 ends at a line that starts with the word and holds a `)` later
+# (`EOF )`, `EOF<tab>)`, `EOFx)`), when an exact `EOF` follows the merge; and
+# a heredoc inside backticks, likewise. A terminated heredoc BODY line that
+# begins `gh pr merge` is text and passes, unless an unquoted body runs it
+# inside `$(…)`.
+# The hook is a contract the fleet honours, not an access boundary (spec §4),
+# and identity on this box is attribution. A session with neither — a
+# coordinator's own, the operator's — is never asked, so the coordinator's `gh
+# pr merge <n> --match-head-commit <sha>` enqueues. A coordinator whose
+# workspace DOES carry one is refused like a worker: a self-claimed run's hold
+# (`POST /api/runs` admits a claimant that is its own session), or a reclaim
+# heir that was the programme's own worker (hold and marker both). The hook
+# cannot tell it from a worker; the lifecycle reference sends that coordinator
+# to the operator's shell.
+# The strip's jq is Oniguruma regex throughout (lookaround, atomic groups,
+# subexpression calls, backreferences), so a jq built without Oniguruma — or
+# any jq error, a jq killed for memory (OOM), or a hook timeout — leaves no
+# mcmd to match and the deny FAILS OPEN (#224 keeps the hookstate parse
+# regex-free for exactly that reason).
+#
+# WHY THE MARKER TOO. A close releases the hold (`ws-release`), and a child's
+# reclaim runs AFTER the close answers, on its own queue, and defers while the
+# pane is attached, the tree is busy or reclaim is paused: between the two a
+# released child still has its pane and its login, and no hold. The marker is
+# written at birth and purged only with the registry row, at the END of the
+# reclaim, so it covers that window. Its EXISTENCE decides — a marker this
+# hook cannot read is still a marker — and its contents are never read.
+# Only a dispatch mints a child; a coordinator carries one only as that
+# reclaim heir (above).
+# Denying `--admin` to EVERY session, and a `gh api` merge — the pulls merge
+# endpoint, or a GraphQL merge mutation (`mergePullRequest`,
+# `enqueuePullRequest`, `enablePullRequestAutoMerge`) — is wave 2b's, after
+# the operator's queue ruleset and proof run (spec §5.2 step 4); until then
+# each passes this deny, measured.
+#
+# ORDER IS BUDGET, this arm's rule: the tool name is already read, the
+# substring prefilter costs no fork, and only a Bash payload carrying `merge`
+# pays the one jq for its command. The hold is read through `_ct_read` and
+# judged by `CCRC_HOLD_WAVE_RE` under `CCRC_HOLD_MAX` — the card's own reader,
+# shape and bound — so an absent, unreadable, empty, oversized or non-wave hold
+# is not a worker wave, exactly as the card declines to call it one; such a
+# session is then asked only whether it is a marked child.
+#
+# A DENY SUPERSEDES ADVICE: `pre_json` may already hold an `additionalContext`
+# for this same call (the Read nudge, or a sync advisory); the merge deny
+# replaces it. It never replaces the graph gate's DENY, which has already
+# counted the denial it prints (D-1689) — that call is refused either way.
+# COMPLEXITY: the match restarts at every separator, so no token class may
+# cross one, and the blanks inside a head are space and tab only, never a
+# newline: a class that could walks to the end of the line for each start (5
+# to 9 s on a 36 KB `;a=;a=…` or newline x `a=` command, which
+# `session-hook-sync-advisory.test.ts`'s env-var shape pins; now ~10 ms). A
+# value, a `timeout` argument or a flag may still hold ONE `$(…)` (blanks
+# allowed, no `;` `&` `|` and no nesting past `$((…))`): `X=$(date) gh pr
+# merge` runs, and a class that stopped at `(` would let it through. The
+# body stops at the first `)`: linear against the separator-restart inputs the
+# plan's regex was quadratic on. Separator-free chains still grow superlinearly
+# (hook, 36/100/200 KB: closed `$(…)` 142, 559, 1532 ms; the space/tab
+# family 186, 902, 2895 ms, which the plan's regex had). The strip pays one regex match per
+# quoted span, heredoc or comment, and jq 1.7's match costs grow with each
+# match's offset, so a command DENSE with quotes is superlinear too: 1584 ms at
+# 36 KB and 6885 ms (0.56 GB) at 100 KB of bare `"` through the hook (the strip
+# before this one: 21 s at 100 KB on jq alone), while 100 KB of real prose
+# in a heredoc commit or PR body takes ~130 ms. No start scans the rest of the
+# payload twice: a span, substitution or heredoc that never closes runs to
+# the end instead of failing and being retried from the next character, a
+# heredoc looks ahead only as far as the next `<<` on its line, an
+# incomplete heredoc ends the strip there (one cut, kept raw), and a
+# heredoc's rest-of-line is stripped without a second heredoc (a `<<a <<a`
+# line once recursed once per `<<`: 15 s and 2.9 GB at 36 KB, measured).
+GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+pr([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+merge([[:space:];&|()<>]|$)'
+MERGE_STRIP_JQ='
+def SQ: $q + "[^" + $q + "]*" + $q;
+def AQ: "\\$" + $q + "(?>(?:[^\\\\" + $q + "]++|\\\\(?:.|\\n|\\z))*)(?:" + $q + "|(?<ua>\\z))";
+def W: "[^\\s;&|()<>\"" + $q + "\\\\]+";
+def T($n; $tabs; $end): $tabs + "\\k<w\($n)>" + $end;
+def hd1($n; $tabs; $end):
+  "(?:(?<q\($n)>[\"" + $q + "])|\\\\?)(?<w\($n)>(?(<q\($n)>)[^\"" + $q + "\\n]+|" + W + "))(?(<q\($n)>)\\k<q\($n)>)"
+  + "(?![^\\n]*?(?<!<)<<(?!<))(?>[^\\n]*)(?:\\n|\\z)"
+  + "(?>(?:(?!" + T($n; $tabs; $end) + ")[^\\n]*\\n)*(?:(?!" + T($n; $tabs; $end) + ")[^\\n]++)?)(?:" + T($n; $tabs; $end) + ")?";
+def AR: "(?>(?:[^()\\n]++|\\((?>(?:[^()\\n]++|\\([^()\\n]*+\\))*)\\))*)";
+def DEFS:
+  "(?<hd>(?<!<)<<(?:-[ \\t]*" + hd1("t"; "\\t*"; "(?![^\\n])") + "|[ \\t]*" + hd1(""; ""; "(?![^\\n])") + ")){0}"
+  + "(?<hs>(?<!<)<<(?:-[ \\t]*" + hd1("st"; "\\t*"; "(?![^\\n)])") + "|[ \\t]*" + hd1("s"; ""; "(?![^\\n)])") + ")){0}"
+  + "(?<sub>\\$\\(\\(" + AR + "\\)\\)|\\$\\((?<sb>(?>(?:[^" + $q + "\"()\\\\<#$]++|\\$\\$|" + AQ + "|\\g<pe>|\\$|\\\\(?:.|\\n|\\z)[^\\s;&|()<>\"" + $q + "`\\\\$]*|\\g<hs>|(?<!<)<<(?!<)[\\s\\S]*|<|(?<![^\\s;&|(])#[^\\n]*|#|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<dq>|\\(\\(" + AR + "\\)\\)|\\(\\g<sb>(?:\\)|\\z))*))(?:\\)|(?<us>\\z))){0}"
+  + "(?<pe>\\$\\{(?>(?:[^}\"" + $q + "\\\\$`]++|\\\\(?:.|\\n|\\z)|\\g<dq>|\\$\\$|" + AQ + "|" + $q + "[^" + $q + "]*+(?:" + $q + "|\\z)|\\g<sub>|\\g<pe>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`|\\$(?![({]))*)(?:\\}|\\z)){0}"
+  + "(?<dq>\"(?>(?:[^\"\\\\$`]++|\\\\(?:.|\\n|\\z)|\\g<pe>|\\$(?![({])|\\g<sub>|`(?>(?:[^`\\\\]++|\\\\(?:.|\\n))*)`|`)*)(?:\"|(?<ud>\\z))){0}";
+def fs(re; f): . as $in | [match(re; "g") | [.offset, .length, .string, any(.captures[]; (.name == "us" or .name == "ud" or .name == "ua") and .string != null)]] as $ms
+  | if ($ms | length) == 0 then $in else ($in | explode) as $cp
+    | [range(0; $ms | length) as $i | $ms[$i] as $m
+       | (if $i == 0 then 0 else $ms[$i - 1] | .[0] + .[1] end) as $p
+       | ($cp[$p:$m[0]] | implode), ($m[2:4] | f)] as $parts
+    | ($parts | map(. == null) | index(true)) as $stop
+    | if $stop == null then $parts + [$cp[($ms[-1] | .[0] + .[1]):] | implode] | add
+      else ($parts[0:$stop] | add // "") + ($cp[$ms[($stop - 1) / 2][0]:] | implode) end end;
+def plain: . as $s | all(($q, "\"", "\\", "#", "<", "`", "((", "$["); . as $c | $s | contains($c) | not);
+def qs($h):
+  def subs: if contains("$(") | not then ""
+    elif startswith("$(") and endswith(")") and (.[2:-1] | plain and (contains("(") or contains(")") or contains("$") | not)) then .
+    else fs(DEFS + "\\\\(?:.|\\n)|\\g<sub>|[^\\\\$]+|\\$";
+      .[1] as $open | .[0] | if (startswith("$(") | not) then "" elif $open then . elif startswith("$((") then . else "$(" + (.[2:-1] | qs(true)) + ")" end) end;
+  if plain then . else fs(DEFS + "\\\\.[^\\s;&|()<>\"" + $q + "`\\\\$]*|\\$\\$|" + AQ + "|" + SQ + "|\\g<dq>|" + (if $h then "\\g<hd>|(?<!<)<<(?!<)|" else "" end) + "(?<![^\\s;&|(])#[^\\n]*|\\$?\\(\\(" + AR + "\\)\\)|\\$\\[[^\\]\\n]*\\]";
+    .[1] as $open | .[0] | if $open then .
+    elif startswith("\"") then .[1:-1] | subs
+    elif . == "<<" then null
+    elif startswith("<<") then (split("\n") | last) as $last
+      | [capture("^<<(?<d>-?)[ \\t]*(?:(?<q>[\"" + $q + "])(?<w>[^\"" + $q + "\\n]+)\\k<q>|(?<x>\\\\?)(?<w2>" + W + "))(?<r>[^\\n]*)(?<b>[\\s\\S]*)")] | if length == 0 then null else .[0]
+      | (.r | qs(false)) as $rest
+      | ((.b | contains("\n")) and (if .d == "-" then $last | sub("^\\t+"; "") else $last end) == (.w // .w2)
+         and ($rest | contains("\"") or contains($q) or contains("`") | not)
+         and ((.w // .w2) + ")") as $wp | (.d == "-") as $dash
+             | .b | split("\n") | any(if $dash then sub("^\\t+"; "") else . end | startswith($wp)) | not) as $done
+      | if $done | not then null else "<<" + $rest + "\n" + (if .x == "" and .q == null then .b | subs else "" end) end end
+    elif startswith("$((") or startswith("((") or startswith("$[") or startswith("$$") then .
+    else "" end) end;
+if .tool_name == "Bash" then ((.tool_input.command // "") | qs(true)) else "" end'
+if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
+      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  mcmd=$(jq -r --arg q "'" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mcmd=""
+  if [[ -n "$mcmd" && "$mcmd" =~ $GH_MERGE_RE ]]; then
+    mwhy=""
+    if _ct_read "$REG/$id.hold" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then
+      mwhy="this workspace's hold reads \`$CT_V\` — a programme wave's session"
+    elif [[ -e "$REG/$id.child" ]]; then
+      mwhy="this workspace carries the child marker — a dispatched child, whose run has let it go"
+    fi
+    if [[ -n "$mwhy" ]]; then
+      mreason="ccrc: $mwhy, and a wave's session never merges (landing-order R5: the coordinator merges, workers never do)."
+      mreason+=" Report wave-done to your coordinator; it lands the PR."
+      pre_json=$(_hook_deny_json "$mreason") || pre_json=""
+    fi
   fi
 fi
 

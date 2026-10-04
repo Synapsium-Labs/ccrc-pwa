@@ -11,7 +11,9 @@ import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, RECLAIM_CAP, RECLAIM_PAUSE_CAP, capSupported, verbSupported, sweepDec } from './ccdargv.js';
-import { isFullLine, parsePrLines, phaseFor, repoCellFor, type CcdPrFailure } from './prstate.js';
+import {
+  isFullLine, parsePrLines, phaseFor, queueFor, repoCellFor, type CcdPrFailure, type PrQueueRead,
+} from './prstate.js';
 import { readLiveState, readLiveStateMeasured } from './livestate.js';
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
@@ -43,8 +45,9 @@ import { JournalMirror } from './coord/mirror.js';
 // literals exist. `single-definition.test.ts` pins both halves of that split.
 import {
   COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, askNudgeSubject, isAskNudgeMail,
-  queueStallNotice, queueSystemMail,
+  queueStallNotice, queueSystemMail, survivorOf,
 } from './coord/rundefs.js';
+import { landingAsk, landingVerdict, type LandingFacts } from './coord/landing.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
@@ -72,7 +75,7 @@ import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
 import {
   MAIL_REPLAY_CEILING_ERROR, toRunSummary, type AskRow, type CoordStore, type MarkReleaseNotifiedResult,
-  type RunRow,
+  type OpenSibling, type RunRow,
 } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
@@ -624,6 +627,23 @@ export class FleetWatcher {
    * persisting it would buy nothing back for that price.
    */
   private mergedNotified = new Set<string>();
+  /** The merge-queue word each session's last full pr-state line carried
+   *  (`queueFor`), kept beside `prStates` and written by the same arm of
+   *  `sweepPr`. Read by `sweepLanding` and nothing else. */
+  private prQueues = new Map<string, PrQueueRead>();
+  /** `sweepLanding`'s in-memory latch, per (workspace, PR, notice, removal
+   *  time) — the `mergedNotified` shape plus the notice and the removal's own
+   *  timestamp, because a PR can be dequeued, re-enqueued and dequeued AGAIN,
+   *  and each removal is a new fact the coordinator has to hear. Written only
+   *  AFTER the notice landed, after a durable read proved an earlier process
+   *  sent it, or once the lane has decided there is nobody to tell — never
+   *  before a read: a latch set ahead of a failed read or a thrown mail would
+   *  make that removal a landing that silently stops. It is NOT what stops a
+   *  restart re-announcing (a PR can sit dequeued through a whole fix round,
+   *  and every rollout restarts this process); that is `sweepLanding`'s
+   *  DURABLE read. This set spares a latched notice the coord.db reads on
+   *  every later sweep. */
+  private landingNotified = new Set<string>();
   /** Last-seen model/effort/ultracode/branch per live session (from the pane). */
   private statuslines = new Map<string, Statusline>();
   /** The branch each worktree's own HEAD names, keyed by the CCD ID measured
@@ -5249,6 +5269,7 @@ export class FleetWatcher {
             continue;
           }
           this.prStates.set(line.id, phaseFor(line));
+          this.prQueues.set(line.id, queueFor(line));
           // RETAINED, not derived: `line.repo` is `_gh_repo_slug` of this
           // project's main checkout, already measured by this same sweep and
           // until now dropped here — `phaseFor` returns a `PrState`, which has
@@ -5266,6 +5287,7 @@ export class FleetWatcher {
         }
       }
       this.sweepMerged(records);
+      this.sweepLanding(records);
     } finally {
       // Only the CURRENT sweep may clear the stamp. An abandoned sweep that
       // finally returns half an hour later must not unlatch the one that
@@ -5453,6 +5475,140 @@ export class FleetWatcher {
             ? 'a run may still be open — the run rows could not be read'
             : null;
       this.announceMerged(key, r, pr.number, reason);
+    }
+  }
+
+  /**
+   * The landing lane (landing-order wave 2, spec §5.2): the coordinator's two
+   * notices about a PR it is landing through the merge queue. It ANNOUNCES; it
+   * never enqueues, merges, re-runs or re-enqueues anything (R5).
+   *
+   *  - DEQUEUED (`queueFor` reads `dequeued`). GitHub does NOT re-enqueue a PR
+   *    its queue removed, so a removal nobody hears about is a landing that
+   *    silently stops. Once per (workspace, PR, removal): a `status` mail
+   *    (`dequeuedSubject`) to the coordinator of the open run that names the
+   *    workspace — who re-enqueues or sends a fix round — and a `queue` FEED
+   *    record, always (`recordAlways`: a removal is a fact about the
+   *    programme whether or not anyone is watching this pane). With no open
+   *    run there is nobody to tell without guessing (`resolveCoordinator(null)`
+   *    answers whichever programme is the single active one, `tellSender`'s
+   *    reason), so the record is the whole notice. A NEW kind rather than
+   *    `merged` or `mail`: a dequeue is the one PR outcome that is not a
+   *    merge; `MailScreen`'s two total maps name it, and an older client
+   *    degrades it to `unknown` through `reviveNotifyEvent`.
+   *  - MERGED (the phase `sweepPr` derived reads `merged`) while that run
+   *    waits at `merging`: a `status` mail (`mergedSubject`) to its
+   *    coordinator, once per (workspace, PR). `merging` is the coordinator's
+   *    own declaration that it is landing this PR; on a native-queue project
+   *    it enqueued and ended its turn (clause 15; `wave-lifecycle.md` §5), and
+   *    this mail is what wakes it to prove the merge and close the run — it
+   *    never polls (clause 7). The run's state is all this reads, not whether
+   *    the project has a queue: a synchronous merge elsewhere that a sweep
+   *    reads before the close is mailed too, and the skill says to prove and
+   *    close as usual. No feed record: `sweepMerged` writes the `merged` one.
+   *    A merged PR whose run is elsewhere — a hand merge, a close that came
+   *    first — asked for nothing, and the first sweep that reads the merge
+   *    decides so.
+   *
+   * WHY THE OPEN RUN IS THE KEY. Under "One PR per child" a producer that
+   * closed before its PR landed would be reclaimed (child-reclamation wave 3:
+   * registry row, worktree and pane gone), and a reclaimed workspace has no
+   * pr-state line to carry a queue word — nor a worker to take a fix round.
+   * On a native-queue project the coordinator therefore lands BEFORE it
+   * closes (clause 15): the run waits at `merging` holding the child, so the
+   * row, the line and the worker all outlive the queue. The run is the one
+   * `survivorOf` picks — the close's and dispatch's own rule.
+   *
+   * ONCE ACROSS RESTARTS TOO. Before telling, the lane asks coord.db whether
+   * this notice was ALREADY told: a mail through `hasMailWithSubject` — every
+   * delivery state, because `queueSystemMail`'s own dedupe sees OUTSTANDING
+   * rows only and an acked notice would otherwise be mailed again after every
+   * rollout — and the feed-only dequeue through `hasFeedEvent` on the exact
+   * body, which carries the removal time. A hit latches and says nothing.
+   *
+   * THREE OUTCOMES, KEPT APART. Run rows that cannot be read are NOT "no open
+   * run" (the overloaded null `sweepMerged` also refuses): the lane defers,
+   * says nothing and latches nothing, and the next sweep re-reads. A mail
+   * that throws (`node:sqlite`, synchronously) is caught with nothing recorded
+   * and nothing latched, so the next sweep tries again — the mail is queued
+   * BEFORE the feed record for exactly that reason, so a retry leaves one
+   * record. Only a notice that landed, one a durable read found, or a
+   * decision that there is nobody to tell, is latched.
+   *
+   * `unmeasured` and `absent` NEVER announce a dequeue, and neither do
+   * `queued`, `landed` or `none`: the lane fires on the one word that asks
+   * for an act. A PR the coordinator's enqueue only ARMED reads `none` too
+   * (gh 2.45 arms auto-merge, rather than queueing, a PR whose required
+   * checks have not passed, and prints the same line either way): the lane
+   * cannot tell that from "not enqueued yet", so the coordinator reads the
+   * queue entry back before it ends its turn (`wave-lifecycle.md` §5).
+   */
+  private sweepLanding(records: SessionRecord[]): void {
+    const coord = this.deps.coord;
+    if (coord === undefined) return;
+    for (const r of records) {
+      if (measuredIdentity(r) === null) continue;
+      if (r.workspace === null || r.archivedAt !== null) continue;
+      // EVERY DECISION is `coord/landing.ts`'s (D-3883, pure L1): `landingAsk` says what this line asks for and
+      // whether it is already latched, and `landingVerdict` says the next step given the facts read so far. This
+      // loop is the READS and the DELIVERIES, nothing else.
+      const ask = landingAsk({
+        sessionId: r.id, workspace: r.workspace, number: this.prStates.get(r.id)?.number ?? null,
+        phase: this.prStates.get(r.id)?.phase, queue: this.prQueues.get(r.id),
+      }, this.landingNotified);
+      if (ask === null) continue;
+      // ONE BAD ROW MAY NOT COST THE REST OF THE SWEEP: `node:sqlite` throws
+      // synchronously, and this runs inside the void-dispatched `sweepPr`.
+      try {
+        const facts: LandingFacts = {};
+        let run: OpenSibling | null = null;
+        // ENDS: every step that is not an end records one fact (`runs`, `coordinator`, `runState`, `told`) that
+        // `landingVerdict` then reads as made, and the facts have those four keys (`told` once: the mail proof or
+        // the feed proof, never both), so at most four reads precede an end. The switch is exhaustive: a new step
+        // kind is a compile error here, never a silent delivery.
+        steps: for (;;) {
+          const s = landingVerdict(ask, facts);
+          switch (s.step) {
+            case 'runs': {
+              const sib = coord.openRunsForSession(r.id);
+              run = sib.ok ? survivorOf(sib.siblings) : null;
+              facts.runs = sib.ok ? { ok: true, run } : { ok: false, detail: sib.detail };
+              break;
+            }
+            case 'coordinator':
+              facts.coordinator = coord.resolveCoordinator(s.runId);
+              break;
+            case 'runState': {
+              const read = coord.run(s.runId);
+              facts.runState = read.ok ? { ok: true, state: read.run?.state ?? null } : { ok: false, detail: read.detail };
+              break;
+            }
+            case 'toldMail':
+              facts.told = coord.hasMailWithSubject('operator', s.runId, s.toId, s.subject);
+              break;
+            case 'toldFeed':
+              facts.told = coord.hasFeedEvent('queue', r.id, s.body);
+              break;
+            case 'defer':
+              console.warn(`ccrc-server: landing notice for ${r.id} deferred (run rows unreadable: ${s.detail})`);
+              break steps;
+            case 'latch':
+              this.landingNotified.add(ask.key);
+              break steps;
+            case 'deliver':
+              if (s.mail !== null) queueSystemMail(coord, run, s.mail);
+              if (s.record !== null) this.pushOne({ kind: 'queue', sessionId: r.id, project: r.project, ...s.record }, this.activeProjects);
+              this.landingNotified.add(ask.key);
+              break steps;
+            default: {
+              const unhandled: never = s;
+              throw new Error(`landing: unhandled step ${JSON.stringify(unhandled)}`);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`ccrc-server: landing notice for ${r.id} failed (${err instanceof Error ? err.message : String(err)})`);
+      }
     }
   }
 

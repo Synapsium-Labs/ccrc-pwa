@@ -4068,8 +4068,8 @@ export interface NotifyEvent {
    *  attribution row would land in `run_events` and be seen by nobody (D-1163). Additive: an
    *  older client degrades it to `unknown` through `reviveNotifyEvent`, which is the
    *  degradation this union was given `unknown` for. `update` is a move the update dispatcher
-   *  leased (wave 8 item A) — about no session and no run, recorded and never pushed. */
-  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'unknown';
+   *  leased (wave 8 item A) — about no session and no run, recorded, never pushed; `queue` is the landing lane's dequeue notice. */
+  kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'update' | 'queue' | 'unknown';
   sessionId: string; title: string; body: string;
   /**
    * WHICH RUN this notification is about, or `null` when it is about none.
@@ -4108,7 +4108,7 @@ export interface CatchUp { epoch: string; seq: number; resync: boolean; events: 
 /** The recognised `NotifyEvent.kind` tokens. Kept private; the door in is
  *  `isNotifyKind` below, the same split `PR_PHASES`/`isPrPhase` use and for
  *  the identical reason (that function's own docstring has the argument). */
-const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'unknown'];
+const NOTIFY_KINDS: readonly NotifyEvent['kind'][] = ['ask', 'done', 'merged', 'mail', 'run', 'coord', 'update', 'queue', 'unknown'];
 
 /**
  * Use THIS, never `NOTIFY_KINDS.includes(x as NotifyEvent['kind'])` — the

@@ -646,7 +646,7 @@ const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child
  * the LIVE answer ONLY — `spent`/`this` finishes the child, anything else
  * (unspent, unmeasured, or still `unplaced`) holds it.
  *
- * COST (spec §5.7 — measured, not the ~40 s an earlier wave accepted by
+ * COST (spec §5.7 — measured, not the ~50 s an earlier wave accepted by
  * design): `verifiedLine` is `verifyDone`'s own measured `pr-state` row for
  * this SAME session, taken moments earlier inside this same mutex section
  * (`state !== 'failed'` is exactly when `verifyDone` ran at all). When its

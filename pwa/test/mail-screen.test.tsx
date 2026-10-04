@@ -251,6 +251,24 @@ describe('the mail feed', () => {
     expect(kind!.textContent, 'no word for update').toContain('update');
   });
 
+  // The NINTH kind (landing-order wave 2): a PR the merge queue removed
+  // without landing. Not `merged` — it is the one PR outcome that is NOT a
+  // merge — and not `mail`, which the coordinator's notice already is. Same
+  // runtime assertion as coord's above, for the same reason.
+  it('renders a queue-kind feed record with its own word and glyph', async () => {
+    const store = makeStore();
+    const ev = e({ seq: 11, kind: 'queue', title: 'dequeued quiet-basin',
+                   body: 'PR #42 left the merge queue without landing' });
+    act(() => { store.setState({ feed: [ev] }); });
+    const { container } = render(
+      <MailScreen store={store} loadFeed={vi.fn().mockResolvedValue({ events: [] })} />);
+    expect(await screen.findByText('dequeued quiet-basin')).toBeInTheDocument();
+    const kind = container.querySelector('.mail-kind');
+    expect(kind, 'the queue row rendered no kind cell at all').not.toBeNull();
+    expect(kind!.querySelector('.mail-kind-glyph')!.textContent, 'no glyph for queue').toBe('⤺');
+    expect(kind!.textContent, 'no word for queue').toContain('queue');
+  });
+
   const BLOCKED_TITLE = '✉ blocked › w1';
   const BLOCKED_BODY = "wave-brief: the recipient's input box has unsent text in it";
 

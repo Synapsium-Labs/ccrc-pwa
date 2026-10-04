@@ -218,7 +218,7 @@ const LIVE_PHASE: Readonly<Record<PrPhase, 'spent' | 'unspent' | 'unmeasured'>> 
  *
  * COST, measured rather than assumed: steps 1–2 are file reads; step 3, absent
  * a pre-read `line`, is one gh call on the fleet box, bounded by `pr-state`'s
- * 20 s remote budget, and it runs only for a CHILD with no PR on record —
+ * 25 s remote budget, and it runs only for a CHILD with no PR on record —
  * never for a workspace with no marker (`childBindGate` returns before
  * calling this). A caller already holding this session's own measured
  * `pr-state` line (spec §5.7 — the close reusing `verifyDone`'s line)
@@ -260,7 +260,7 @@ export async function childSpent(
  * `childSpentLiveFrom` directly, at the cost of one fewer `pr-state` call
  * inside the same mutex section.
  *
- * COST: one gh call on the fleet box, bounded by `pr-state`'s 20 s remote
+ * COST: one gh call on the fleet box, bounded by `pr-state`'s 25 s remote
  * budget — for the close, inside whatever lock the close holds.
  */
 export async function childSpentLive(

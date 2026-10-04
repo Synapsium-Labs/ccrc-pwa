@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=257257006f7efa9b88807e5ca9fbdac7d39cd2e844e853ba1171ae00018047c3
+# ccrc:generated 1 sha256=133968e5eed49c8809d042b29a0e5b56d64a4947cca01637a97a9b8c590d799c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5362,22 +5362,22 @@ PR_GH_TIMEOUT=8           # gh pr list has no --timeout of its own; a blocking
 # killed, which the server reads as `agent-down` and backs the whole project
 # off on.
 #
-# THE OUTER BOUND IS 20 s, NOT 90, AND THIS PAIR HAS TO FIT INSIDE IT.
-# An earlier version of this comment asserted the opposite — that
-# `remote/runner.ts`'s `CCD_VERB_TIMEOUT_MS` had no `pr-state` key and the live
-# bound was therefore the flat 90 s default. It ships `'pr-state': 20_000` as
-# the FIRST key in that map (`server/src/remote/runner.ts:28`, and on
-# `origin/main` since 27946f31), so the spec's number IS the code's number, and
-# `sweepPr`'s every `ccd pr-state --project` is killed at 20 s in remote mode —
-# which is this fleet's standing config.
+# THE OUTER BOUND IS 25 s, NOT 90, AND EVERY CALL HERE HAS TO FIT INSIDE IT.
+# An earlier version of this comment asserted that `remote/runner.ts`'s
+# `CCD_VERB_TIMEOUT_MS` had no `pr-state` key and the live bound was the flat
+# 90 s default. It has one, the FIRST key in that map (on `origin/main` since
+# 27946f31), so that number IS this verb's bound, and `sweepPr`'s every `ccd
+# pr-state --project` is killed at it in remote mode — this fleet's standing
+# config. It was 20 s until landing-order wave 2 added a THIRD call, the merge
+# queue read (`PR_GH_QUEUE_TIMEOUT`, at `_gh_pr_queue` below `cmd_clip`).
 #
-# That matters because THIS verb now makes TWO network calls, not one. The old
-# 12 + 6 spent 18 of the 20 before `_pr_state_one` had run for a single
-# workspace, and each workspace then costs a dozen-odd `git` spawns plus a
-# python3 start. The pair is now 8 + 5 = 13, leaving 7 s — 35 % — for the local
-# loop, and `pr-timeout-budget.test.ts` PINS that relationship across the two
-# languages so this comment can never drift from the map again. A comment is a
-# request; that test is the mechanism.
+# That matters because the calls' budgets add up. The old 12 + 6 spent 18 of
+# 20 before `_pr_state_one` had run for a single workspace, and each workspace
+# then costs a dozen-odd `git` spawns plus a python3 start. The three are now
+# 8 + 5 + 4 = 17 of 25, leaving 8 s — 32 % — for the local loop, and
+# `pr-timeout-budget.test.ts` PINS that relationship across the two languages
+# so this comment can never drift from the map again. A comment is a request;
+# that test is the mechanism.
 #
 # Both numbers stay generous against what they cover, because the expensive
 # query is gone: the row window without `statusCheckRollup` answered in 0.89 s
@@ -10741,14 +10741,14 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
 
 cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <project>
   # A CONSTANT NUMBER OF gh CALLS PER REPO, never one per session — one for
-  # `--session`, two for `--project`, and neither number moves when a project
-  # grows a ninth workspace. That was "ONE gh call per repo, whichever form"
-  # until `--project` had to stop asking for a hundred check rollups GitHub
-  # answers with `HTTP 504`; the rollups are a second call now, and the budget
-  # argument the sentence was making (8 projects x 1 call / 120 s ~ 5 % of the
-  # GraphQL allowance) survives doubling and would not survive going per
-  # session. Read-only apart from the three registry fields it persists so a
-  # ccrc restart degrades to honest stale.
+  # `--session`, three for `--project` (the rows, the rollups, and the merge
+  # queue read `_pr_queue_stamp` makes), and no number moves when a project
+  # grows a ninth workspace. The budget argument (8 projects x 1 call / 120 s
+  # ~ 5 % of the GraphQL allowance) survives tripling and would not survive
+  # going per session, and `pr-timeout-budget.test.ts` sums the three calls'
+  # timeouts against the server's outer bound on this verb. Read-only apart
+  # from the three registry fields it persists so a ccrc restart degrades to
+  # honest stale.
   [[ $# -eq 2 ]] || die "usage: ccd pr-state --session <id> | ccd pr-state --project <project>"
   local mode=$1 arg=$2
   case "$mode" in
@@ -10935,7 +10935,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
   # three are handed down together. `""` on the `--project` fan-out says these
   # rows are the whole repository's, which is what makes the same loop right for
   # both forms.
-  for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt" "$head"; done
+  { for id in "${ids[@]}"; do _pr_state_one "$id" "$main" "$repo" "$rows" "$answeredAt" "$head"; done; } | _pr_queue_stamp "$mode" "$repo"
 }
 
 cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --draft <true|false>
@@ -28591,6 +28591,171 @@ _authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the
   _authdead_cred_changed "$1" "$t"
   [[ $? -eq 1 ]] && return 0
   rm -f -- "$f"
+}
+
+# ── THE MERGE QUEUE, READ ONCE PER REPOSITORY PER SWEEP (landing-order wave 2) ──
+# `pr-state --project`'s THIRD gh call (spec §5.2), and it lives down here, below
+# every line the frozen compaction-card corpus cites, so that adding it moved
+# none of their anchors: `cmd_pr_state` pays one in-place line for it.
+#
+# WHAT IT ASKS. `gh pr list --json` has no field for a merge-queue entry, so the
+# sweep asks GitHub's GraphQL API directly, with ONE constant query: the hundred
+# NEWEST open pull requests' `mergeQueueEntry` — newest by creation, which is
+# `gh pr list`'s own order, so every open PR `_gh_pr_list`'s hundred-row window
+# can bind is inside this one (with no `orderBy` GitHub answers the OLDEST
+# hundred, and on a busy repository the PRs being landed would all read
+# `unmeasured`) — and the twenty most recently updated MERGED ones, each with
+# the LAST queue act on its timeline. The spec names
+# `mergeQueueEntry` and the last `REMOVED_FROM_MERGE_QUEUE_EVENT`; the last act
+# of EITHER kind is read instead, because a removal alone cannot tell "dequeued,
+# re-enqueued, landed" from "dequeued, then merged by hand" — the ADDED event
+# after the removal is the whole difference.
+#
+# WHAT IT ANSWERS, per full line, in the additive `queue` field:
+#   queued      the PR is OPEN and has a queue entry now
+#   dequeued    the PR is OPEN, has no entry, and its last queue act is a removal
+#               — GitHub does not re-enqueue after a failed group
+#   landed      the PR is MERGED and its last queue act is the add (the queue merged it)
+#   none        measured, and none of the above — including "this workspace has
+#               no bound PR", and a PR that never met the queue
+#   unmeasured  the call did not answer, or the bound PR is outside both windows
+# plus `queueAt`, the ISO timestamp of that last act, only when it has one and
+# only when it is shaped like a timestamp. `--session` never makes this call and
+# never carries the key: its absence is the OLDER-build answer, which a reader
+# must tell apart from `unmeasured`.
+#
+# ITS OWN BOUND, AND IT MAY NOT COST THE ROWS. `PR_GH_QUEUE_TIMEOUT` is summed
+# with the other two calls' against the server's outer bound by
+# `pr-timeout-budget.test.ts`. Measured 2026-09-23 on this project's own
+# repository (11-12 open PRs, the 20 most recent merged): 0.72-1.39 s over five
+# runs, and 0.74-1.12 s over five more with the open window ordered, so 4 s is
+# about three times the worst. A failed call, an unreadable
+# answer, and a stamping pass that itself fails each leave every row, phase and
+# `checks` value exactly as `_pr_state_one` printed them; the first two say
+# `unmeasured`, the third prints the lines unstamped.
+#
+# THE QUERY IS A CONSTANT, and owner and name travel as `-f` (raw string)
+# variables — never interpolated into the document, and never `-F`, which reads
+# `@file` and coerces types. Both halves come from `_gh_repo_slug`, whose regex
+# anchors them to `[A-Za-z0-9._-]`.
+PR_GH_QUEUE_TIMEOUT=4
+PR_QUEUE_QUERY='query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    open: pullRequests(first: 100, states: [OPEN], orderBy: {field: CREATED_AT, direction: DESC}) { nodes { ...Q } }
+    merged: pullRequests(first: 20, states: [MERGED], orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ...Q } }
+  }
+}
+fragment Q on PullRequest {
+  number
+  state
+  mergeQueueEntry { state }
+  timelineItems(last: 1, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]) {
+    nodes { __typename ... on AddedToMergeQueueEvent { createdAt } ... on RemovedFromMergeQueueEvent { createdAt } }
+  }
+}'
+
+_gh_pr_queue() {   # repo -> the GraphQL answer on stdout, or NOTHING and non-zero
+  # Prints nothing on failure, `_gh_pr_checks`'s rule and for its reason: this
+  # is an annotation on rows somebody else already read, so the only outcomes
+  # are "here is an answer" and "there is none to attach".
+  local repo="$1" out rc
+  out=$(_plat_timeout "$PR_GH_QUEUE_TIMEOUT" gh api graphql -f query="$PR_QUEUE_QUERY" \
+          -f owner="${repo%%/*}" -f name="${repo#*/}" 2>/dev/null); rc=$?
+  (( rc == 0 )) || return 1
+  [[ -n "$out" ]] || return 1
+  printf '%s\n' "$out"
+}
+
+_pr_queue_stamp() {   # mode repo; stdin = the sweep's lines -> the same lines, full ones stamped
+  # BUFFERED, and that costs nothing: the server reads a sweep's stdout only
+  # when the verb exited 0 (`sweepPr` backs the project off on anything else),
+  # so a half-printed sweep was never read.
+  local mode="$1" repo="$2" lines answer="" stamped src=0
+  lines=$(cat)
+  [[ -n "$lines" ]] || return 0
+  if [[ $mode != --project ]]; then printf '%s\n' "$lines"; return 0; fi
+  answer=$(_gh_pr_queue "$repo") || answer=""
+  stamped=$(printf '%s\n' "$lines" | _pr_queue_py 4<<<"$answer"); src=$?
+  if (( src == 0 )) && [[ -n "$stamped" ]]; then printf '%s\n' "$stamped"; else printf '%s\n' "$lines"; fi
+}
+
+_pr_queue_py() {   # stdin = the sweep's lines, fd 4 = the GraphQL answer (maybe empty)
+  # The program on fd 3 and the two GitHub-sourced documents on stdin and fd 4 —
+  # `_pr_py rollups`' layout, for its reason: nothing GitHub wrote is ever
+  # placed in an argv or a shell word.
+  python3 /dev/fd/3 3<<'PY'
+import json, re, sys
+ISO = re.compile(r'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$')
+
+def facts_in():
+    """{number: (state, has_entry, last_act, at)}, or None when the call did not
+    answer or its body is not the shape the query asks for — never {} for that,
+    because {} would read every bound PR as `unmeasured` for the WRONG reason
+    and `none` for a PR the window genuinely covers is a claim."""
+    try:
+        with open('/dev/fd/4') as f:
+            raw = f.read().strip()
+    except OSError:
+        raw = ''
+    if not raw:
+        return None
+    try:
+        repo = json.loads(raw)['data']['repository']
+        groups = (repo['open']['nodes'], repo['merged']['nodes'])
+    except Exception:
+        return None
+    out = {}
+    for nodes in groups:
+        if not isinstance(nodes, list):
+            return None
+        for n in nodes:
+            num = n.get('number') if isinstance(n, dict) else None
+            if not isinstance(num, int) or isinstance(num, bool):
+                continue
+            items = (n.get('timelineItems') or {}).get('nodes') if isinstance(n.get('timelineItems'), dict) else None
+            last = items[-1] if isinstance(items, list) and items and isinstance(items[-1], dict) else {}
+            at = last.get('createdAt')
+            at = at if isinstance(at, str) and ISO.match(at) else None
+            out[num] = (n.get('state'), n.get('mergeQueueEntry') is not None, last.get('__typename'), at)
+    return out
+
+FACTS = facts_in()
+
+def word(line):
+    if FACTS is None:
+        return 'unmeasured', None
+    num = line.get('number')
+    if not isinstance(num, int) or isinstance(num, bool):
+        return 'none', None
+    f = FACTS.get(num)
+    if f is None:
+        return 'unmeasured', None
+    state, entry, act, at = f
+    if state == 'OPEN' and entry:
+        return 'queued', at
+    if state == 'OPEN' and act == 'RemovedFromMergeQueueEvent':
+        return 'dequeued', at
+    if state == 'MERGED' and act == 'AddedToMergeQueueEvent':
+        return 'landed', at
+    return 'none', None
+
+for raw in sys.stdin.read().split('\n'):
+    if raw == '':
+        continue
+    try:
+        v = json.loads(raw)
+    except Exception:
+        sys.stdout.write(raw + '\n')
+        continue
+    if isinstance(v, dict) and isinstance(v.get('id'), str) and isinstance(v.get('rows'), list):
+        w, at = word(v)
+        v['queue'] = w
+        if at is not None:
+            v['queueAt'] = at
+        sys.stdout.write(json.dumps(v) + '\n')
+    else:
+        sys.stdout.write(raw + '\n')
+PY
 }
 
 # Guard so the script can be `source`d by tests without running a command.
