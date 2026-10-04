@@ -955,6 +955,25 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         instance on a live box. It is not a new residue item.
       - STATUS: fleet and server v0.0.73, newest v0.0.73, backups fleet 100M/server 500M, disk free fleet
         78G/server 33G, no anomalies.
+    - **2026-10-04 17:47 UTC: auto moved both boxes onto v0.0.74** (`22f7931a`, #242, docs only). This move
+      corrects the latency this ledger has quoted.
+      - The release was published at 16:59:31, and the server's catalogue first listed it at 17:29:21. The fleet
+        box ran 17:30:26–17:40:33, and the server box 17:41:11–17:41:32. There is one auto-source feed row per
+        box.
+      - **The bound is the catalogue's poll, not "8–26 min".** `CATALOGUE_POLL_INTERVAL_MS` is 30 min
+        (`server/src/update/catalogue.ts`), so a release can wait up to about 30 min before any box starts. The
+        8–26 min this ledger quoted is only the range of the samples watched so far.
+      - **So the time to live is up to about 30 min plus both runs.** The fleet run takes 6–19 min, depending on
+        load and session count, and the server run takes under a minute: about 50 min in the worst case seen. The
+        "within about 35 min" in the wave 8 entry and the wave 9 brief is an under-estimate. Nothing depends on
+        it.
+      - **The 13:07 run's slowness was load, confirmed:**
+        - at a 15-min load of 21, `npm ci` took 6 s and 4 s again;
+        - the supervisor sweep, 17:31:35–17:40:33, is now most of the fleet run, and it grows with the session
+          count.
+      - The fleet box pruned one backup and one version, and holds 10 timestamped backups.
+      - STATUS: fleet and server v0.0.74, newest v0.0.74, backups fleet 110M/server 503M, disk free fleet
+        70G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
