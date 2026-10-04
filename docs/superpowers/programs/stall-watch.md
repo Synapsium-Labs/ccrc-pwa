@@ -19,7 +19,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 2 | the main-thread turn marker; busy delivery behind markers; the wave-2 arms (orphan D/E, failed, frozen, dead, coordinator-deaf, mail-stuck, unreadable marker); wave 1's deferred items | fleet first, then server | #220 (Part A), #224 (Part B) | **merged** `cca1b6d79`, `f7e931fca`, live v0.0.56+ (dark) |
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 | **merged** `3255571a1` (2026-10-03 23:09, R22); live at the next auto-update |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
-| 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | **dispatched** 2026-10-03 as run 252 to a fresh child (`ccrc-pwa-clear-delta`), with the claim agreement and migration-slot rule (R23) |
+| 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | — | **awaiting review**: #237 at `365a5c516` (R24); dispatched 2026-10-03 as run 252 to `ccrc-pwa-clear-delta` (R23) |
 | 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | — | planned and reviewed (R19); dispatches after waves 3–5 land |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
@@ -357,11 +357,30 @@ Output: `w2-shadow-review.json` in the coordinator notes.
   - **A correction to R22.** Run 174's worker was not at an approval prompt continuously since 10-02 19:38. It
     committed between 15:43 and 17:35 today and was blocked again after (its coordinator, mail 3364). R18 measured
     it at a prompt at 12:13, and that measurement stands.
+- **R24 (coordinator, 2026-10-04 00:44): wave 5's wave-done is accepted for review, and its two departures are
+  numbered.**
+  - **The claim matched.** Mail 3368 claimed tip `365a5c516` on PR #237. The tip, the local copy and the PR head
+    agree, and it merges clean against `main`.
+  - **The server accepted it.** Run 252 is at `awaiting-review`, items 9/9.
+  - **The migration is slot 15.** `main` still has 14 entries, so there is no landing delta.
+  - **The claim agreement held.** The `store.ts` edits are inside `stallMailFor`, plus two docstring lines of the
+    method Task 1 names. README has one line, in place.
+  - **Its "suite: red" is environmental.** `tmp-sweep` is the known red, `typecheck-tests` was missing pwa modules
+    (12/12 once installed), and `ccd-spawn-split` passed in isolation.
+  - **Departures accepted and numbered** from the block, following wave 3's precedent (D-3795 at its wave-done):
+    - D-3801 `w8-it-titles-renumbered`: 28 step-prefixed `it` titles follow §10's numbering, titles only;
+    - D-3802 `d3796-premise-pinned`: one row pins that only `planned` reaches `dispatched`, measured red under an
+      added edge.
+
+    Their definitions go into wave 5's plan on this session's next ledger PR. The code cites neither.
+  - **A watch item for the review and CI.** The `EXPLAIN QUERY PLAN` pins were measured on the box's Node 24 /
+    SQLite 3.51. CI runs Node 22. The review is asked whether the pins hold across SQLite versions, and CI's result
+    on `stall-store` and `coord-db` is the arbiter.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;
-  floor now 3808). Thirteen are assigned: wave 3's plan defines three, wave 4's four, wave 5's two and wave 6's four, one per
-  departure slug, and one more was assigned to wave 3 at its wave-done. The other seven are headroom for departures a wave reports. A worker never calls the allocator (worker clause 11): it
+  floor now 3808). Fifteen are assigned: wave 3's plan defines three, wave 4's four, wave 5's two and wave 6's four, one per
+  departure slug. Three more were assigned at wave-done: one to wave 3 and two to wave 5. The other five are headroom for departures a wave reports. A worker never calls the allocator (worker clause 11): it
   names a departure in its wave-done mail, and the coordinator assigns a number from the block.
 
 ## Carried constraints (reviewers get these)
