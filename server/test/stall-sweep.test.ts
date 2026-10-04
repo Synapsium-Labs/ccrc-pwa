@@ -1955,7 +1955,7 @@ describe('sweepStalls: a send-back starts the clocks again (quiet-restarts-on-re
     expect(operatorMail(coord)).toEqual([]);
   });
 
-  it('after a send-back, r2 cites the new episode\'s r1, never a row recorded under the pre-advance key (R11 F3: stallCitedCheck)', async () => {
+  it('after a send-back, r2 cites the new episode\'s r1, never a row recorded under the pre-advance key (R11 F3: the lane passes r2\'s episode key; the key filter itself is pinned by the L1 stallCitedCheck row in stall-verdict)', async () => {
     const { h, coord, w } = await rig();
     seedRegistry(h.home, COORD, COORD_UUID);          // an alive coordinator, so r2 is sent
     const runId = seedE4(h, coord);

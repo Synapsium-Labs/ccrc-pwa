@@ -693,6 +693,8 @@ describe('stallMailFor: one mail read per candidate, and those mails\' delivery 
     }
   });
 
+  // No row for `delivery mailId`: a delivery is read only through a `mailId` statement 1 already proved, so its check
+  // cannot be reached on its own.
   it.each([
     ['mail id', 'mail-unreadable', 'mail id is not a positive safe integer'],
     ['mail at', 'mail-unreadable', 'mail at is not a positive safe integer'],

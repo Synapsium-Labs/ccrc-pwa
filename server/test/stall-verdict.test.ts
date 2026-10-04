@@ -162,27 +162,27 @@ describe('stallVerdict order: first match wins (spec §10, wave-1 subset)', () =
     expect(v({ worker: workerAt({ autoContinueHeldAt: NOW - AUTO_CONTINUE_RECENT_MS }) })).toEqual(r1(RUN67_DISPATCHED));
   });
 
-  it('5 before 6: a limit-locked worker holds limit under the coordinator ball', () => {
+  it('5 before 9: a limit-locked worker holds limit under the coordinator ball', () => {
     expect(v({ mail: QUESTION, worker: workerAt({ limits: { five: 100, seven: 10 } }) })).toEqual(hold('limit'));
   });
 
-  it('6 before 7: the coordinator ball answers none while the worker reads busy', () => {
+  it('9 before 10: the coordinator ball answers none while the worker reads busy', () => {
     expect(v({ mail: QUESTION, worker: workerAt({ live: liveWord('busy', NOW - H) }) })).toEqual(NONE);
   });
 
-  it('6: under the coordinator ball below the cap the verdict is none, not a hold', () => {
+  it('9: under the coordinator ball below the cap the verdict is none, not a hold', () => {
     expect(v({ mail: QUESTION })).toEqual(NONE);
   });
 
-  it('7: busy holds busy', () => {
+  it('10: busy holds busy', () => {
     expect(v({ worker: workerAt({ live: liveWord('busy', NOW - 5 * H) }) })).toEqual(hold('busy'));
   });
 
-  it.each(['', 'thinking'])('7: the word %j holds unmeasured', (word) => {
+  it.each(['', 'thinking'])('10: the word %j holds unmeasured', (word) => {
     expect(v({ worker: workerAt({ live: liveWord(word, NOW - 5 * H) }) })).toEqual(hold('unmeasured'));
   });
 
-  it('7: below STALL_QUIET_MS the verdict is none; at it, r1', () => {
+  it('10: below STALL_QUIET_MS the verdict is none; at it, r1', () => {
     expect(v({ worker: workerAt({ live: liveWord('idle', NOW - STALL_QUIET_MS + 1) }) })).toEqual(NONE);
     expect(v({ worker: workerAt({ live: liveWord('idle', NOW - STALL_QUIET_MS) }) })).toEqual(r1(RUN67_DISPATCHED));
   });
