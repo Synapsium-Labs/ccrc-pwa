@@ -43,6 +43,24 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-04 22:59 — v0.0.79 has not converged: a failed v0.0.78 row on the fleet box halts the updater.**
+  Measured read-only at 22:57.
+  - **Where the boxes are:** `ccrc rollout --to v0.0.79 --check` reports the fleet box on v0.0.78 (`f789d97d`) and
+    the server box on v0.0.76 (`698f679d`), both behind. The fleet box's projection says channel dev, desired
+    v0.0.79, auto channel.
+  - **Why nothing moved:** the fleet box's auto update to v0.0.78 was queued at 22:02. At 22:10 it wrote
+    `phase: failed`, because its supervisor sweep restarted `claude-session@ccrc-pwa-still-summit.service` and the
+    unit did not stay up. The box installed v0.0.78 anyway (`ccrc version`: `install: complete`). A failed node
+    halts every move in the fleet until it is acked (`dispatch.ts`, refusal `halted`), so v0.0.79 has been sent to
+    neither box.
+  - **Who has it:** `ccrc-pwa-bright-river` filed "update v0.0.78 failed falsely: serial sweep verify vs a hand
+    archive" at 22:24. `still-summit` measures stopped now. The ack is the operator's act, from the Updates
+    screen (`POST /api/updates/ack` is session-only). This programme neither acks nor rolls out.
+  - **The sweep is not live:** `ccd caps` lists `reclaim-v1` but not `reclaim-pause-v1`. There are 99 child
+    markers, none without a row: 63 rows stopped (62 at 21:25) and 36 running. Close-time reclaim still works:
+    `swift-hollow` was reclaimed at 22:12 when run 174 closed.
+  - **Next:** one more one-shot check at about 23:40, read-only.
+
 - **2026-10-04 22:12 — convergence review run 258 accepts wave 4; PR #215 merged; wave 5 opened.**
   `ccrc-pwa-keen-mesa` read `f8f0af9a` (31 agents, none dead or empty; `unverifiedLenses` and `unexamined` none).
   - **Panel:** 9 raised, 7 confirmed (6 distinct, G1 to G6), 2 refuted 3/3. Every finding is minor; none is
