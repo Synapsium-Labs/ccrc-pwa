@@ -938,6 +938,23 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - v0.0.70–v0.0.72 were published 12:41:17–12:44:13 today, so their poll is not yet due.
       - STATUS: fleet and server v0.0.69, newest v0.0.72, backups fleet 100M/server 496M, disk free fleet
         81G/server 33G, no anomalies.
+    - **2026-10-04 13:31 UTC: auto moved both boxes onto v0.0.73, skipping v0.0.70–v0.0.72 by design. The fleet
+      box's run took 19 min, against 6–10 before. The cause was box load, not the mechanism.**
+      - The release was published at 12:56:41. Auto started the fleet box at 13:07:16, and that run ended at
+        13:26:38. The server box ran 13:27:17–13:27:39.
+      - There is one auto-source feed row per box. The hourly probe at 13:27:28 caught the server box mid-move
+        (boxes differ, inventory pending/incomplete), which is the known transient. It converged by 13:31.
+      - **Where the time went:**
+        - The fleet box's `npm ci --omit=dev` for the server tree took 8 min ("added 108 packages in 8m"), and
+          the agent's took 30 s. The v0.0.69 run at 23:21 the night before took 6 s and 4 s.
+        - The 15-min load average was 78 on 16 CPUs, measured at 13:29.
+        - The supervisor sweep, about 8 s per unit, took about 8 min in both runs. It grows with the session
+          count: 85 verify lines on 10-03.
+      - **Bearing on wave 10:** `npm ci` runs with no time bound (`ccd/ccrc`'s install spine). A hung `npm ci`
+        holds the update lock indefinitely. That is R3's hung-updater class, and this run is its first measured
+        instance on a live box. It is not a new residue item.
+      - STATUS: fleet and server v0.0.73, newest v0.0.73, backups fleet 100M/server 500M, disk free fleet
+        78G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
