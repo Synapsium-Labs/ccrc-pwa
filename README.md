@@ -650,8 +650,8 @@ report's writer alive, or no readable pid) or the lock is held; otherwise it run
 --from pwa`, or `rollback` in place of `update` — two fixed argument lists with the tag the only word that varies, outside the
 exec whitelist — and answers `accepted` once the detaching parent has exited 0 (killed at its bound it answers `accepted` too
 if it queued or cannot be attributed). The server node is spawned the same way on its own box, after the same `busy` check.
-`accepted` only holds the lease (the row reads `pending`): it settles on the node's own report naming the tag, not a sweep
-measuring the target, and a request for the tag a node already runs is settled without a move. A refusal releases the lease in
+`accepted` only holds the lease (the row reads `pending`): it settles on the node's own report naming the tag, confirmed by a sweep that
+measures the target, and a request for the tag a node already runs is settled without a move. A refusal releases the lease in
 the same turn and never consumes the request — `busy`, or a link that was down before the op left the server, returns the row
 to `idle`; a link that fails after the op was handed to it holds the lease until the node's own report of the run settles it or
 the deadline fails it, because the node may already have started the run — while a spawn that fails, a tag or kind the agent
@@ -706,10 +706,10 @@ it cleared before it: the caps file, and the install record only when it was a c
 build's own sha, provided `~/ccrc` names the tree it named before (D-3462); neither comes back for a marker-less
 spine whose stamp did not move, or when a legacy flip-back failed. Arm 3's MIXED tree loses its kept record, so no
 flip returns to it. `ccrc versions` lists the kept trees (`*` marks the one `~/ccrc` points at; `written-through` marks one whose
-bytes are no longer the kept ones, and `unmeasured` one kept before digests existed or whose tree cannot be measured; neither changes a prune verdict). After an install or
-update whose gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename to a
-dot-name first: never the one `~/ccrc` points at, `previous`, a tag this node's projection names, or a version a
-running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
+bytes are no longer the kept ones, and `unmeasured` one `ccrc` cannot show to be complete — for example kept before digests existed, its tree or digest
+unmeasurable, its `ccd/ccrc` or its role's build missing, or its kept stamp missing, unparseable or naming another tag; neither
+changes a prune verdict). After an install or update whose gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename to a
+dot-name first: never the one `~/ccrc` points at, `previous`, a tag this node's projection names, or a version a running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
 stay. An input that cannot be read prunes nothing (a `CCRC_VERSIONS_KEEP` that is not a whole number from 0 to 9999 is one), a dead process's `.pruning-`/`.incoming.` leftover is swept once per prune, and only `--prune` removes an incomplete tree. `deploy.sh` still
 pushes its tree through `~/ccrc`, into whichever version directory that points at.
 
