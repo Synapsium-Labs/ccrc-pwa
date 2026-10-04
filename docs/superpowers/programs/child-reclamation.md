@@ -20,8 +20,8 @@ removed on 2026-09-10 was not.
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **deployed** v0.0.33 (`1ffdf947`, merged 2026-09-28 16:14 UTC, rolled out 16:16–16:21, fleet box first, rc 0; run 148 on `plain-summit`; reviews 170, 171, 172). Live: run 148's close reclaimed `plain-summit` in 10 s |
-| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 (open) | **awaiting-review** (convergence review run 258, 2026-10-04) — both prerequisites merged (#226 `0db98707`, #222 `cf9e4cc8`); run 174 on `swift-hollow` sent the integration round as mail 3169, 2026-10-02 (amendments A1 to A17 merged in #188, `6ff4e2e9`) |
-| 5 | the closed run's reclaim chip and its sentences; R25's orphan temp-root collector (R36) | **AGENT-FIRST** (R36 makes it one) | — | planned |
+| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 | **done** — accepted by convergence review run 258 on `f8f0af9a`; merged as `b40f4145` 2026-10-04 22:10; release v0.0.79 |
+| 5 | the closed run's reclaim chip and its sentences; R25's orphan temp-root collector (R36) | **AGENT-FIRST** (R36 makes it one) | — | **planned** — run 260 opened 2026-10-04 with its block; plan amendments before dispatch |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
 PR-bearing child refuses. **Wave 3 is the only wave that destroys anything.** Waves 3 and 4 do nothing on a
@@ -42,6 +42,52 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-04 22:12 — convergence review run 258 accepts wave 4; PR #215 merged; wave 5 opened.**
+  `ccrc-pwa-keen-mesa` read `f8f0af9a` (31 agents, none dead or empty; `unverifiedLenses` and `unexamined` none).
+  - **Panel:** 9 raised, 7 confirmed (6 distinct, G1 to G6), 2 refuted 3/3. Every finding is minor; none is
+    critical or important.
+  - **SAFETY holds:** no path removes or commits away a live child. Fix round 1 only removes licensed asks or
+    sightings, and every new guard goes red under mutation. Seeded interleavings found 0 licensed asks without a
+    continuous, fresh presence chain by the implementation's own clock (seeds 1–300, 11,760 requests, 57 licensed),
+    and review 254's F1–F6 are resolved as ruled.
+  - **Ruling, G1 (round, conditional).** "Answer" in the 15:13 and 15:52 rulings means the pass time of the request
+    it answered. That is A9 item 1's `nowMs` convention and the field's docstring, and the 15:52 arithmetic counted
+    between asks. So it is no departure. The residual: a real observation can trail its request, so consecutive
+    observations may be up to about 300 s apart while the requests stay within the bound. Freshness at the ask still
+    holds in real time. Stamping at arrival is carried to wave 5 together with G4.
+  - **Ruling, G3 (round).** Accepted as the stated cost of the F1 rule: while three or more children stay
+    presence-held, each is asked every third pass and its episode restarts at every answer, so none is ever licensed.
+    That fails closed; liveness is the only cost. It is spec §5.7's named wedge ("Unbounded would be worse than
+    absent") in that case, so **wave 5 must bound it**, for example with continuity measured per pass the child was
+    due, or a gap scaled with the due count. Wave 5 also states it truthfully in A9, the docstring and lens 1's
+    sentence.
+  - **Acceptance under the convergence rule:** the SAFETY lens holds and no confirmed critical or important finding
+    stands. The round introduced no behavioural defect: G2 is a false reason in a comment, G3's behaviour is exactly
+    the ruled rule, and G6 is a report line count. They join the carried class, as review 215's F1 did for
+    row-placement. G4 and G5 predate the round and carry to wave 5.
+  - **Landing.** `main` moved to `f789d97d` after the reviewed tip: #241 changed `watch.ts`, `store.ts`,
+    `shared/api.ts` and `README.md`, and #243, #244 and #245 were docs. GitHub's merge ref stayed on the older base,
+    so the coordinator built the exact combination locally, a scratch commit never pushed (tree `031992de`). On it:
+    - `tsc` was clean;
+    - census, deviation and store suites passed (7 files, 594 tests);
+    - stall, sweep, close, asks and auth suites passed (13 files, 1,381 tests);
+    - the README and citation pins passed (96 tests).
+
+    Run 174 then advanced to `merging`, and `gh pr merge 215 --squash --admin --match-head-commit f8f0af9a…` landed
+    `b40f4145` at 22:10:25Z with a coordinator-written message carrying no deviation number. The merged tree equals
+    the tested tree. `release-main.yml` published prerelease v0.0.79 at 22:11.
+  - **Wave 5 opened first, then wave 4 closed.** Run 260 (wave 5) opened `planned`, and its block was allocated at
+    run-open: 3926, 3927, 3928, 3929, 3930, 3931, 3932, 3933, 3934, 3935, 3936, 3937, 3938, 3939, 3940, 3941, 3942,
+    3943, 3944 and 3945. Run 174 then closed `done`, not final, with `prPhase` `merged`, answering `childReclaim:
+    queued` for `swift-hollow`.
+  - **Evidence kept.** The review reports for runs 212 to 217, 222, 254 and 258, and `swift-hollow`'s gitignored SDD
+    directory and reports, are copied to `.superpowers/sdd/ccr15-evidence-archive/` in the coordinator worktree
+    (gitignored, never reclaimed). Their originals go when their children are reclaimed.
+  - **What goes live with v0.0.79:** the sweep, once both boxes advertise `reclaim-v1` and `reclaim-pause-v1`. It
+    starts on the backlog: 62 child-marked rows sat stopped on the fleet box at 21:25, including the reviewers of this
+    programme's runs 212 to 258. The operator's kill switch is `reclaim-pause` (Runs screen). Convergence and the
+    first passes are observed read-only.
 
 - **2026-10-04 20:34 — fix round 1 re-measured; convergence review run 258 dispatched.** Wave-done 3409 claimed
   `f8f0af9a`. Re-measured:
@@ -1015,6 +1061,17 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 - **Carried until `ccd/ccrc` is free of another programme's claim (2026-10-02; joined wave 4's round 2026-10-03):** review 222's R2 (`ccd/ccrc`'s
   `_inst_entry_python` signature comment and `cmd_install` comment still say the shebang names the canonical
   python3), R3's `ccd/ccrc` sentence, and `ccd/ccrc`'s identical copy of `_svc_real_home`'s `eval`.
+- **Wave 5 inherits, from wave 4's reviews 254 and 258 (2026-10-04):**
+  - **G3 (must bound):** the F1 continuity rule never licenses while three or more children stay presence-held, which
+    is spec §5.7's unbounded wedge. Bound it, and state it truthfully in A9, the docstring and lens 1's "presence can
+    defer but never reset the ceiling".
+  - **G4:** move the lane's presence clocks onto a monotonic clock, so that a backward wall-clock step cannot hide an
+    unobserved hole.
+  - **G1's residual:** consider stamping presence at the answer's arrival.
+  - **F6:** unset `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG` inside the containment, for wave 5's SAFETY lens.
+  - **Prose:** G2's false reason for keeping the release mark (`watch.ts` and plan A10), and G5's "on the same clock"
+    in `ChildReclaimRequest`.
+  - **Measure first:** on a live box, the first sweep passes and the shape of the backlog drain.
 - **Wave 5 inherits, from the row-placement review (2026-10-01):** recovery for gone-directory alternate rows. An
   alternate row whose path is gone holds every other child at `unmeasured`, and two vanished or interrupted children
   hold each other; the recovery must prove the gone path was ccd's own worktree without consulting process state.
@@ -1044,16 +1101,16 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 
 ## Next-wave brief
 
-**Both prerequisites have merged** (#226 `0db98707`, #222 `cf9e4cc8`), so the landing order reaches wave 4.
+**Wave 4 has merged** (#215 `b40f4145`, v0.0.79), after both prerequisites (#226, #222). **Wave 5 is run 260,
+`planned`,** with its block 3926, 3927, 3928, 3929, 3930, 3931, 3932, 3933, 3934, 3935, 3936, 3937, 3938, 3939,
+3940, 3941, 3942, 3943, 3944 and 3945.
 
-**Wave 4 is in its integration round.** It is defined in Decisions (2026-10-02 15:03). Run 174 stays `working`
-and items 817–834 stay pending. `swift-hollow`:
-- merges `origin/main` into local `1a02baac7abfbb1a88a1a7a251c7326c11ae9f08` (never rebasing), regenerating and
-  re-stamping `ccd/ccd`;
-- repairs the items listed there, making no new edit under another programme's live claim and using no new number;
-- reruns the required gates and submits a fresh exact wave-done.
+Before it is dispatched:
+1. Observe v0.0.79's convergence and the sweep's first passes, read-only.
+2. Write wave 5's pre-dispatch amendments to `docs/superpowers/plans/2026-09-22-child-reclamation-wave5-run-chip.md`,
+   placing every "Wave 5 inherits" item above (G3's bound first) beside the run chip and R36. The coordinator
+   commits them on its branch, and they reach the worker as a handoff blob.
+3. Run a pre-flight review of the amended plan.
 
-The coordinator re-measures that fingerprint, advances run 174 to `awaiting-review` and opens wave 4's official
-held-out review under this programme's title, with the standard panel and the Opus `xhigh` SAFETY lens. After it
-merges, observe the release and convergence read-only, and wave 5 opens with its own run, carrying the items marked
-"Wave 5 inherits".
+Then dispatch one fresh child with the standard routing and the mandatory SAFETY lens. After wave 5 merges, open the
+path-identity follow-up programme.
