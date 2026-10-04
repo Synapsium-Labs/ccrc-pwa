@@ -2867,7 +2867,7 @@ of ten (Open question 9):
   cannot be read) is not overwritten, and a value the record already holds is not written again — so a PWA or
   coordinator choice made after the operator's `/model` stands, and no stop re-writes the same value. Rows 3.6, 3.7,
   3.13.
-- **`operator-choice-journal-floor`** — §5.7 does not bound `.typed` or say where it starts: it keeps its last
+- **D-3900** `operator-choice-journal-floor` — §5.7 does not bound `.typed` or say where it starts: it keeps its last
   `TYPED_KEEP_ROWS` (16) keystroke rows below a FLOOR row (`<epoch> since`) that `_spawn_start` opens and nothing
   moves, admits one-token values only, and matches within `TYPED_MATCH_WINDOW` (60 s); no command older than the
   floor is read, and a stop that finds no floor opens it and promotes nothing — because before the floor an older
@@ -2882,7 +2882,7 @@ of ten (Open question 9):
   `cmd_stop` and `cmd_ws_archive` (Pre-flight 4), pinned by a census that classifies EVERY stop in `ccd/ccd`, so a
   new one reds until it is named; a supervisor revival, which follows no ccd stop, is out (Open question 1). Rows
   3.3, 3.4, 3.5, 3.26.
-- **`alias-table-is-route-classes`** — the spec's alias table is derived from `ROUTE_CLASSES` (the same five words)
+- **D-3903** `alias-table-is-route-classes` — the spec's alias table is derived from `ROUTE_CLASSES` (the same five words)
   rather than written again, case-folded so an acknowledgement's display word maps, and a `[1m]` variant maps to its
   base class because the record has no context dimension (Open question 2). Rows 2.6, 2.7.
 - **`stage-seven-counts-logged-reverts`** — §9's stage-7 row ("restarts that revert an operator's `/model`") is

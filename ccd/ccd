@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b3a7c386cd3e7331156c546fbfcbfa640e0be84bd429f31d840b5521c70097dc
+# ccrc:generated 1 sha256=3aa5016cc4f745a5dc27f8de46bd2d5d70cc73cbe8f0ea4c1ce24d29b1239d3d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3134,11 +3134,11 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 179
-# invocations across 150 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 180
+# invocations across 151 non-comment lines.
 #
-# THE LAST MOVE WAS the rescue wait's reads (session-continuity wave 2), the +3; before it D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`);
-# then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
+# THE LAST MOVE WAS the operator-choice reads (session-continuity wave 3), the +1; before it the rescue wait's reads (session-continuity wave 2), the +3;
+# then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
 # bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
@@ -3886,18 +3886,18 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43 — by addition, NOT a fresh census of
+  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43 and `typed` 44 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 43: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # The 44: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `carriednote`, `child`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
-  # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
+  # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `typed`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
   # of one word in one file, disclosed rather than renamed. That is a WIDER
   # set than `_reg_set`/`_reg_get`: the inventory
@@ -19298,6 +19298,98 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
   _route_escape "$id"; return 1
 }
 
+# ── THE OPERATOR'S CHOICE SURVIVES A RESTART (session-continuity spec §5.7) ──
+# A `/model` or `/effort` typed in a session changes the running process only;
+# the next spawn rebuilds its command line from the route record — spec §1.4
+# measured an operator's switch to Opus come back as Fable at the next
+# auto-home. So before a stop that a spawn follows, ccd reads the session's
+# transcript for the newest `/model` and the newest `/effort` local command
+# that no journal row explains — one per kind, because they are two fields —
+# and writes that OPERATOR's choice to the record through `cmd_route`'s own
+# writer, `actor=operator-session`; that writer's swap.log `route` line
+# records it.
+#
+# CCD'S OWN KEYSTROKES ARE NOT THE OPERATOR'S. `_inject_spawn_effort` (the
+# settle's `/effort`) and `_route_apply_now` (`route --apply`, a degraded class
+# among them) journal each `/model` and `/effort` they are about to type in
+# `$REG/<id>.typed`, one row `<epoch> <model|effort> <value>`, and a command of
+# the same kind and value within TYPED_MATCH_WINDOW of a row is ccd's. The
+# `routeapplied` stamp cannot serve: the spawn writes it from the composed argv
+# before the settle `/effort` is typed, and `route --apply` rewrites it for
+# fields it never types.
+#
+# THE JOURNAL HAS A FLOOR. Its first row, `<epoch> since`, is written when the
+# journal opens — at the first spawn this ccd makes (`_spawn_start`), the first
+# keystroke it journals, or the first stop that finds none — and is kept when
+# older rows rotate out. A command older than the floor is never read: an
+# older ccd typed the settle's `/effort` and `route --apply`'s `/model` without
+# journalling them, so before the floor ccd's keystrokes and the operator's
+# cannot be told apart. A stop that finds no floor opens it and promotes
+# nothing, and says so (`unmeasured`).
+#
+# A COMMAND'S VALUE is its `<command-args>`, or — for the picker and the slider,
+# which take none — the value Claude Code's own acknowledgement names, with its
+# ANSI bold or backticks removed (`Set model to Opus 5.5 …`, `Set effort level to
+# high …`, `Ultracode on …`); a picker row Claude Code marks `(default)` is the
+# `default` class. A command with no
+# acknowledgement after it changed nothing and is never read, nor is a row a
+# subagent wrote, nor a user turn that carries anything besides the envelope (a
+# human quoting it). A `/model` value maps to the record's class vocabulary
+# through the alias table — `ROUTE_CLASSES` itself (`opus`, `sonnet`, `haiku`,
+# `fable`, `default`), each also with its `[1m]` suffix — then, for a full model
+# id, `_model_family_class`, the bash port of `familyClassOf`'s dash-token rule
+# (`shared/models.mjs`), pinned to it by an agreement test. A `/effort` value
+# maps through `ROUTE_EFFORTS`.
+#
+# NEVER A FAILURE IN THE STOP PATH, AND NEVER A SILENT LOSS. Every path is rc 0
+# and the stop goes on exactly as before. Silent only where nothing was lost:
+# no registry row, no transcript, no command, a value already held, a field
+# newer than the keystroke. Logged as `operator-choice <id>: …` where the
+# operator's choice may be lost: a value outside the vocabulary or one the
+# record's own checks refuse (`cmd_route` runs in a subshell, so its `die` ends
+# only that) — the record unchanged — and `unmeasured (…)` where ccd could not
+# read at all (no floor yet, a transcript that is not a readable regular file —
+# never `grep` on a FIFO — no python, a reader that failed).
+#
+# THE RECORD WINS WHEN IT IS NEWER. A field written after the keystroke — the
+# PWA's picker, a coordinator's route, this function's own last promotion — is
+# the later choice, so a command older than the field's file is not promoted;
+# a field whose time cannot be read is not overwritten either; and a value the
+# record already holds is not written again.
+TYPED_MATCH_WINDOW=60   # seconds between a journalled keystroke and the transcript command it explains: ccd's slowest typing (the effort slider: seven Lefts and up to four Rights, a second each) lands well inside it
+TYPED_KEEP_ROWS=16      # `.typed` keystroke rows kept beside its floor: only a row near a command matters, and the settle and the applier type a handful per spawn
+MODEL_FAMILY_TOKENS="-fable-:fable -opus-:opus -sonnet-:sonnet -haiku-:haiku"   # `familyClassOf`'s FAMILY_TOKENS (shared/models.mjs), in its match order — the agreement test reds on any drift
+
+_typed_note() {   # id model|effort value — journal one keystroke ccd is about to type; id since — open the journal only (§5.7). Never fails its caller.
+  local id="$1" kind="$2" v="${3:-}" rows floor
+  [[ "$kind" == since || ( "$kind" =~ ^(model|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ) ]] || return 0
+  rows=$(_reg_get "$id" typed)
+  floor="${rows%%$'\n'*}"
+  if [[ "$floor" =~ ^[0-9]{1,12}\ since$ ]]; then
+    [[ "$kind" == since ]] && return 0   # already open: the floor stays where it was
+  else
+    floor="$(date +%s) since"
+  fi
+  rows=$(grep -E '^[0-9]{1,12} (model|effort) ' <<<"$rows" | tail -n "$((TYPED_KEEP_ROWS - 1))")
+  [[ "$kind" == since ]] || rows="${rows:+$rows$'\n'}$(date +%s) $kind $v"
+  _reg_set "$id" typed "$floor${rows:+$'\n'$rows}" 2>/dev/null || true
+  return 0
+}
+
+_model_family_class() {   # model-id -> the class its first family token names | rc 1 none (`familyClassOf`, ported)
+  local t
+  for t in $MODEL_FAMILY_TOKENS; do
+    [[ "$1" == *"${t%%:*}"* ]] && { printf '%s\n' "${t##*:}"; return 0; }
+  done
+  return 1
+}
+
+_model_class_of() {   # /model value -> the record's class word | rc 1 outside the vocabulary
+  local v="${1%\[1m\]}"
+  _route_word_in "${v,,}" "$ROUTE_CLASSES" && { printf '%s\n' "${v,,}"; return 0; }
+  _model_family_class "$v"
+}
+
 _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is still pending
   # CLASS FIRST, THEN EFFORT, and the order is a measurement: a session-only
   # effort SURVIVES a model change (D-2811 — `Sonnet 5 with medium effort` after
@@ -19326,6 +19418,7 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
   want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
   have=$(_route_applied_get "$id" class)
   if [[ -n "$cls" && "$cls" != "$have" ]]; then
+    _typed_note "$id" model "$cls"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)
     _route_type_model "$id" "$cls" "$w"; rc=$?
     case "$rc" in
       0) _route_applied_set "$id" class "$cls"; _route_note_clear "$id" ;;
@@ -19339,6 +19432,7 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
       _route_applied_set "$id" effort auto
       _route_note_clear "$id"
     else
+      _typed_note "$id" effort "$eff"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)
       _route_type_effort "$id" "$eff"; rc=$?
       case "$rc" in
         0) _route_applied_set "$id" effort "$eff"; _route_note_clear "$id" ;;
@@ -20281,6 +20375,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # keys, both composed below on the Anthropic arm. The settle's keystroke
   # (`_inject_spawn_effort`) is the NO-RECORD path only — a pre-slice-1
   # session with nothing composed here.
+  _typed_note "$id" since   # the operator-choice journal opens at this ccd's first spawn of the row: no older command is read as the operator's (session-continuity §5.7)
   local routeflags="" routeenv="" rclass rsub rwf reff inert="" rapplied
   if _route_any "$id"; then
     rclass=$(_route_get "$id" class)
@@ -20794,6 +20889,7 @@ _inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the
     echo "ccd: input box not empty, skipped /effort $level" >&2; return 0
   fi
   sleep 1
+  _typed_note "$id" effort "$level"   # the settle's keystroke, never the operator's choice (session-continuity §5.7)
   tmux send-keys -t "$t" -l "/effort $level"; sleep 1; tmux send-keys -t "$t" Enter
   # Sessions with cached history confirm the switch ("full history gets re-read") — accept.
   sleep 2
