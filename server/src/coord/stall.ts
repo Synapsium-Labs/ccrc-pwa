@@ -621,6 +621,18 @@ function stallCoordinatorIds(runs: readonly StallRunRow[]): ReadonlySet<string> 
   return ids;
 }
 
+/** The role id the mail route resolves to a run's own worker (`routes.ts` check 7, `resolveWorker(runId)`), as
+ *  `stallCoordinatorIds`' `coordinator` is the coordinator's. */
+const STALL_WORKER_ROLE = 'worker';
+
+/** Mail addressed to the subject's worker: its session id, or the `worker` role on one of the subject's runs, which
+ *  the mail route resolved to this very session (`fix-round-alias-reaches-the-ball` (D-3797)). Every subject run
+ *  carries the worker's `sessionId` (`stallSubjects` groups by it), and a re-bind re-issues the role's mail to the
+ *  heir. Run-less mail to the role names no run, so it is no one's. One definition, for `stallFacts` and r3's text. */
+function stallToWorker(m: StallMailRow, workerId: string, runs: readonly StallRunRow[]): boolean {
+  return m.toId === workerId || (m.toId === STALL_WORKER_ROLE && m.runId !== null && runs.some((r) => r.id === m.runId));
+}
+
 /** `quiet-restarts-on-reactivation` (D-3788): the re-activation as a term of a max(). `none` adds nothing. So does
  *  `unmeasured`, which §10 step 2c holds on before any quiet clock is read: only steps 2a and 2b, which read the
  *  episode key and never a quiet clock, run past it, keyed as they were before this term, as they are for a null
@@ -640,9 +652,10 @@ export function stallFacts(input: StallInput): StallFacts {
   const { primary, runs } = input.subject;
   const workerId = primary.sessionId;
   const coordinatorIds = stallCoordinatorIds(runs);
-  const relevant = input.mail.filter((m) => !isWatchNotice(m) && (m.fromId === workerId || m.toId === workerId));
+  const toWorker = (m: StallMailRow): boolean => stallToWorker(m, workerId, runs);
+  const relevant = input.mail.filter((m) => !isWatchNotice(m) && (m.fromId === workerId || toWorker(m)));
   const workerLast = newestMail(relevant, (m) => m.fromId === workerId);
-  const inboundLast = newestMail(relevant, (m) => m.toId === workerId);
+  const inboundLast = newestMail(relevant, toWorker);
   const waitLast = newestMail(relevant, (m) => m.fromId !== workerId && coordinatorIds.has(m.fromId) && m.subject.startsWith(STALL_WAIT_PREFIX));
   const last = newestMail(relevant, () => true);
   const lastExchangeAt = relevant.reduce<number | null>((max, m) => (max === null || m.at > max ? m.at : max), null);
@@ -1271,7 +1284,7 @@ function stallStillSilent(input: StallInput): string {
   const report = stallLastReport(input);
   if (report === null) return checkClause;
   const coordinatorIds = stallCoordinatorIds(input.subject.runs);
-  const coordinatorMail = newestMail(input.mail, (m) => m.toId === run.sessionId && coordinatorIds.has(m.fromId) && m.id > report.id);
+  const coordinatorMail = newestMail(input.mail, (m) => stallToWorker(m, run.sessionId, input.subject.runs) && coordinatorIds.has(m.fromId) && m.id > report.id);
   const after = coordinatorMail === null
     ? 'No mail from its coordinator to the worker since the report.'
     : `Its coordinator last mailed the worker at ${stallClockMin(coordinatorMail.at)}.`;

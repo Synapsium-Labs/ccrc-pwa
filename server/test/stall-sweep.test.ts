@@ -1968,3 +1968,44 @@ describe('sweepStalls: a send-back starts the clocks again (quiet-restarts-on-re
     expect(warn.mock.calls.some((c) => /^ccrc-server: stall-watch run \d+ \(demo-quiet-mesa\) failed \(SQLITE_BUSY\)/.test(String(c[0])))).toBe(true);
   });
 });
+
+// ── fix-round-alias-reaches-the-ball (D-3797): the lane carries a mail to the role `worker` to the verdict ─────────────
+// Run 238's measured shape (2026-10-02/03, the times as recorded): the worker's wave-done, the run sent back, and the
+// fix-round brief to the role `worker` 29 s after the advance. The real store read (`stallMailFor`'s run arm) must
+// carry the role mail end to end.
+describe('sweepStalls: a fix round addressed to the role worker after a wave-done (run 238)', () => {
+  it('draws r1 two hours after the brief, keyed on the send-back', async () => {
+    const { h, coord, w } = await rig();
+    const D0 = Date.parse('2026-10-02T20:00:00Z');        // chosen: the dispatch
+    const WD = Date.parse('2026-10-02T23:56:31Z');        // the worker's wave-done
+    const STOP = WD + 120_000;                             // chosen: the worker's Stop two minutes later
+    const REACT = Date.parse('2026-10-03T03:16:47Z');     // awaiting-review -> working
+    const BRIEF = Date.parse('2026-10-03T03:17:16Z');     // the fix-round brief, to the role worker
+    seedLiveState(h.home, { statusUpdatedAt: STOP });
+    at(D0);
+    const opened = coord.openRun({ program: 'demo-program', title: 'demo-program', project: 'demo', wave: 1, waveOf: 2, claimedBy: COORD });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    const runId = opened.id;
+    coord.markDispatched(runId, WORKER, `${WORKER}-ws`, `ws/${WORKER}`, false, D0);
+    const adv = (ms: number, to: Parameters<CoordStore['advance']>[1]): void => {
+      at(ms);
+      const r = coord.advance(runId, to, 'coordinator');
+      if (!r.ok) throw new Error(`advance refused: ${JSON.stringify(r)}`);
+    };
+    adv(D0, 'dispatched');
+    adv(D0 + 60_000, 'working');
+    at(WD);
+    coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId, kind: 'status', subject: WAVE_DONE_SUBJECT, body: 'b', artifacts: [] });
+    adv(WD + 60_000, 'awaiting-review');
+    adv(REACT, 'working');
+    at(BRIEF);
+    coord.insertMail({ fromId: COORD, fromUuid: COORD_UUID, toId: 'worker', runId, kind: 'status', subject: 'fix-round', body: 'b', artifacts: [] });
+    at(BRIEF + STALL_QUIET_MS - STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
+    expect(operatorMail(coord)).toEqual([]);
+    at(BRIEF + STALL_QUIET_MS);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
+    expect(operatorMail(coord).map((m) => m.toId)).toEqual([WORKER]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, REACT)]);
+  });
+});

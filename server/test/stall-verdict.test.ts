@@ -1716,3 +1716,59 @@ describe('coord-ball-restarts-on-reactivation: the coordinator\'s 30 h runs from
     expect(stallVerdict(input, resume.at + COORD_BALL_CAP_MS)).toEqual(capOf('coord-ball', resume.at));
   });
 });
+
+// ── fix-round-alias-reaches-the-ball (D-3797): mail to the role `worker` on the subject's run is mail to the worker ──
+// The mail route stores the toId the sender wrote, and the coordinator skill addresses the worker as `toId: 'worker'`
+// with the run's id; `resolveWorker(runId)` resolved it to this session. Measured (live coord.db, 2026-10-03): 12 of the
+// 23 role mails since 2026-09-25 landed on a coordinator ball, fix rounds and answers alike.
+describe('fix-round-alias-reaches-the-ball (D-3797): the role worker on the subject\'s run is mail to the worker', () => {
+  const D = t('2026-09-10T08:00:00Z');
+  const primary: Partial<StallRunRow> = { id: 31, dispatchedAt: D };
+  const facts = (mail: StallMailRow[]) => stallFacts(stallInput({ primary, mail, worker: workerAt({ live: liveWord('idle', D + 5 * H) }) }));
+  const own = mailRow(3001, D + H, WORKER, 'coordinator', 'status', WAVE_DONE_SUBJECT, 31);
+
+  it('CONTROL: after the worker\'s wave-done the ball is the coordinator\'s', () => {
+    expect(facts([own])).toMatchObject({ ball: 'coordinator', inboundLast: null, lastExchangeAt: D + H });
+  });
+
+  it('a fix-round addressed to the role worker on the run hands the ball back, and is the newest mail to it', () => {
+    const fix = mailRow(3007, D + 3 * H, COORD, 'worker', 'status', 'fix-round', 31);
+    expect(facts([own, fix])).toMatchObject({
+      ball: 'worker', inboundLast: fix, workerLast: own, episodeKeyMs: D + H, capKeyMs: D + H, lastExchangeAt: D + 3 * H,
+    });
+  });
+
+  it('an answer to the role worker after the worker\'s question hands the ball back', () => {
+    const q = mailRow(3001, D + H, WORKER, 'coordinator', 'question', 'which base?', 31);
+    const ans = mailRow(3002, D + 2 * H, COORD, 'worker', 'answer', 'use base B', 31);
+    expect(facts([q])).toMatchObject({ ball: 'coordinator' });
+    expect(facts([q, ans])).toMatchObject({ ball: 'worker', inboundLast: ans, lastExchangeAt: D + 2 * H });
+  });
+
+  it('the role worker on a run that is not the subject\'s is not the worker\'s, and neither is run-less mail to the role', () => {
+    const foreign = mailRow(3008, D + 3 * H, COORD, 'worker', 'status', 'fix-round', 99);
+    const runless: StallMailRow = { ...mailRow(3009, D + 3 * H, COORD, 'worker', 'status', 'fix-round', 31), runId: null };
+    expect(facts([own, foreign])).toMatchObject({ ball: 'coordinator', inboundLast: null, lastExchangeAt: D + H });
+    expect(facts([own, runless])).toMatchObject({ ball: 'coordinator', inboundLast: null, lastExchangeAt: D + H });
+  });
+
+  it('a coordinator wait: addressed to the role worker keeps the ball with the coordinator and moves the key', () => {
+    const status = mailRow(3001, D + H, WORKER, 'coordinator', 'status', 'Task 2 pushed', 31);
+    const wait = mailRow(3006, D + 3 * H, COORD, 'worker', 'status', `${STALL_WAIT_PREFIX} CI on #201`, 31);
+    expect(facts([status, wait])).toMatchObject({ ball: 'coordinator', episodeKeyMs: D + 3 * H, capKeyMs: D + 3 * H });
+  });
+
+  it('run 238\'s shape: a fix round to the role worker after a wave-done and a send-back draws r1 two hours after the brief', () => {
+    const react = D + 9 * H;
+    const fix = mailRow(3010, react + 30_000, COORD, 'worker', 'status', 'fix-round', 31);
+    const input = (mail: StallMailRow[]): StallInput => stallInput({
+      primary, mail, worker: workerAt({ live: liveWord('idle', D + H + 5 * MIN) }), activation: { kind: 'reactivated', at: react },
+    });
+    expect(stallVerdict(input([own, fix]), react + 30_000 + STALL_QUIET_MS - 1)).toEqual(NONE);
+    expect(stallVerdict(input([own, fix]), react + 30_000 + STALL_QUIET_MS)).toEqual(r1(react));
+    expect(stallVerdict(input([own]), react + 30_000 + STALL_QUIET_MS), 'CONTROL: with no brief the ball stays the coordinator\'s').toEqual(NONE);
+    // The marker ladder reads the same facts: under the w2 marker, from the worker's Stop, r1 falls due at the same time.
+    const marked: StallInput = { ...input([own, fix]), arming: W2_LIVE, w2: w2({ mark: markOf({ at: D + H + 5 * MIN, turnAt: D + H, stopAt: D + H + 5 * MIN }) }) };
+    expect(stallVerdict(marked, react + 30_000 + STALL_QUIET_MS)).toEqual(r1(react));
+  });
+});

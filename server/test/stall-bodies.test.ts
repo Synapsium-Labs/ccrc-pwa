@@ -1415,3 +1415,27 @@ describe('r2 after a send-back reports the silence from the send-back', () => {
     expect(text.body.split('\n')[1]).toContain('no mail from the worker since 2026-09-29T08:00:00Z (3h 0m).');
   });
 });
+
+// `fix-round-alias-reaches-the-ball` (D-3797): mail to the role `worker` on the run is the worker's, in every text that reads it.
+describe('mail to the role worker is mail to the worker, in r1\'s body and r3\'s text', () => {
+  it('r1 names an answer sent to the role worker as the newest mail to the worker, and owes the reply to it', () => {
+    const q = mail(2511, T('2026-09-28T21:20:00Z'), WORKER, 'coordinator', 'question', 'which base');
+    const ans = mail(2512, T('2026-09-28T21:30:00Z'), COORD, 'worker', 'answer', 'base B');
+    const input = s4({ mail: [m2509, m2510, q, ans] });
+    const text = stallCheckMail(input, stallFacts(input), R1_AT);
+    expect(text.body).toContain('Newest mail to you on this run: #2512 answer at 21:30:00Z.');
+    expect(text.subject).toBe('stall-check: run 67 — quiet 2h 0m, owed: reply to #2512');
+  });
+
+  it('r3 still-silent counts the coordinator\'s mail to the role worker after the report', () => {
+    const r2Text = stallReportMail(r2In, stallFacts(r2In), r1, null, R2_AT);
+    const report = mail(2540, R2_AT, 'operator', COORD, 'status', r2Text.subject);
+    const r2: StallNotice = { mode: 'live', arm: 'quiet', rung: 2, key: EPISODE, at: R2_AT };
+    const resume = mail(2541, T('2026-09-29T01:10:20Z'), COORD, 'worker', 'answer', 'resume');
+    const input = s4({ worker: restamped, mail: [m2509, m2510, check2531, report, resume], notices: [r1, r2], arming: escalated, coordinator: 'alive' });
+    const n: StallNotify = { act: 'notify', arm: 'quiet', rung: 3, key: EPISODE, to: 'operator', because: 'still-silent' };
+    const { body } = stallPushText(input, stallFacts(input), n, R3_AT);
+    expect(body).toContain('Its coordinator last mailed the worker at 01:10Z.');
+    expect(body).not.toContain('No mail from its coordinator');
+  });
+});
