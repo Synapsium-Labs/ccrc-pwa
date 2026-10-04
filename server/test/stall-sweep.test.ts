@@ -1099,6 +1099,27 @@ describe('sweepStalls: wave 2 (spec §5)', () => {
     expect(orphanReads()).toEqual([`${PID}.json`, `${ORPHAN}.turn.json`]);
   });
 
+  // A read-budget skip, and the line the marker read stands on: a registry row whose identity the tick could not
+  // measure has no uuid to judge a marker against (`coordinator-marker-unreadable` (D-3654)), so the orphan pass
+  // returns before any read. The control is the same row measured.
+  it('a registry row whose identity is unmeasured costs NO read and draws nothing; measured, it reads its marker', async () => {
+    const reads: string[] = [];
+    const { h, coord, w } = await rig({ io: countingIO(reads) });
+    seedOrphan(h.home);
+    const orphanReads = (): string[] => reads.filter((p) => p.includes(ORPHAN)).map((p) => path.basename(p));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(D_AT);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, tickOf(PID, [regRow(ORPHAN, ORPHAN_UUID, { unmeasured: ['uuid'] })]));
+    expect(orphanReads()).toEqual([]);
+    expect(operatorMail(coord)).toEqual([]);
+    // Returned, never thrown: a throw is caught per row and said as `… failed (…)`, which would also read nothing.
+    expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes(`session ${ORPHAN} failed`))).toEqual([]);
+    warn.mockRestore();
+    at(D_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(ORPHAN)], W2, orphanTick());                     // the control
+    expect(orphanReads()).toContain(`${ORPHAN}.turn.json`);
+  });
+
   // A read-budget skip: orphan D answers none without an idle live word, and a row with no live pane has none, so
   // the orphan pass spends no agent read on it (most registry rows are long-dead sessions).
   it('a registry row with no live pane costs NO read: no pid entry, or tmux answering none; a live pane reads its marker', async () => {
@@ -1605,7 +1626,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(stuckTags(sent)).toHaveLength(1);
   });
 
-  // Frozen (§5.1, step 8): a turn in flight under a busy word with no main hook event for FROZEN_NO_EVENT_MS. The
+  // Frozen (§5.1, §10 step 7): a turn in flight under a busy word with no main hook event for FROZEN_NO_EVENT_MS. The
   // lane hands L1 the RAW hookstate (`stallHookFactOf`), identity and event carried, and L1 judges both.
   const TURN_AT = IDLE_AT;
   const FROZEN: [string, Record<string, unknown>, number, boolean][] = [
@@ -1894,6 +1915,24 @@ describe('sweepStalls: a send-back starts the clocks again (quiet-restarts-on-re
     await sweepAt(w, E4.react + STALL_QUIET_MS, []);
     expect(stallRows(coord, runId)).toEqual([old, stallDetail('shadow', 'quiet', 1, E4.react)]);
     expect(operatorMail(coord)).toEqual([]);
+  });
+
+  it('after a send-back, r2 cites the new episode\'s r1, never a row recorded under the pre-advance key (R11 F3: stallCitedCheck)', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);          // an alive coordinator, so r2 is sent
+    const runId = seedE4(h, coord);
+    advanceAt(coord, runId, E4.react, 'working');
+    const old = stallDetail('shadow', 'quiet', 1, E4.w2811);   // the census row, under the pre-advance key
+    expect(coord.recordStallObservation(runId, old, E4.fire)).toMatchObject({ recorded: true });
+    const r1At = E4.react + STALL_QUIET_MS;
+    await sweepAt(w, r1At, ARMED);
+    await sweepAt(w, r1At + STALL_ESCALATE_MS, ARMED);
+    expect(stallRows(coord, runId)).toEqual([old, stallDetail('live', 'quiet', 1, E4.react), stallDetail('live', 'quiet', 2, E4.react)]);
+    const r2 = operatorMail(coord).find((m) => m.subject.startsWith(STALL_REPORT_PREFIX));
+    expect(r2, 'premise: r2 was sent').toBeDefined();
+    const body = (coord.db.prepare('SELECT body FROM mail WHERE id = ?').get(r2!.id) as { body: string }).body;
+    expect(body).toContain('Stall check #');           // the live r1 this episode sent
+    expect(body).not.toContain('recorded in shadow');   // never the pre-advance shadow row
   });
 
   it('a run never sent back keys as before, even when its planned -> dispatched row trails dispatchedAt', async () => {

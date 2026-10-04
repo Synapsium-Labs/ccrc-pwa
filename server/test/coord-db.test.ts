@@ -77,6 +77,9 @@ describe('openCoordDb', () => {
     // MAIL_SWEEP_MS lane) was maintaining a b-tree no query ever read.
     // This pins the FULL index set, not just the dead one's absence, so
     // a stray replacement index cannot slip back in unnoticed either.
+    // Since the stall-read entry the set is two: `mail_deliveries_by_mail` serves the stall
+    // read's delivery statement, and the plan rows in `stall-store.test.ts` pin that `dueDeliveries` still reads
+    // `mail_deliveries_due`.
     const home = mkTmp('ccrc-coord-');
     const p = dbPathIn(home);
     const db = openCoordDb(p);
@@ -84,7 +87,7 @@ describe('openCoordDb', () => {
       "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='mail_deliveries' " +
       "AND name NOT LIKE 'sqlite_%'",
     ).all() as { name: string }[]).map((r) => r.name).sort();
-    expect(indexNames).toEqual(['mail_deliveries_due']);
+    expect(indexNames).toEqual(['mail_deliveries_by_mail', 'mail_deliveries_due']);
     db.close();
   });
 
@@ -657,15 +660,15 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 14 — never hand-edited beside a growing array', () => {
-    // Bumped to 14 by four migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
+  it('COORD_SCHEMA_VERSION derives to 15 — never hand-edited beside a growing array', () => {
+    // Bumped to 15 by five migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
     // design 2026-09-14 §5.1), MIGRATIONS[11] (runs.coordProject, board
     // placement wave 1 Task 1), MIGRATIONS[12] (pool_edges/pool_epoch,
     // account-pool membership wave 1 Task 6) and MIGRATIONS[13] (releases,
     // node_release_refusals, nodes, update_intent, update_epoch — centralised
-    // update management W2 Task 3).
-    expect(COORD_SCHEMA_VERSION).toBe(14);
-    expect(MIGRATIONS.length).toBe(14);
+    // update management W2 Task 3) and MIGRATIONS[14] (the stall mail read's indexes, worker stall watch wave 5).
+    expect(COORD_SCHEMA_VERSION).toBe(15);
+    expect(MIGRATIONS.length).toBe(15);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -720,9 +723,8 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION);
-    // 14 since MIGRATIONS[13] (the update control plane, centralised update
-    // management W2 Task 3); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(14);
+    // 15 since MIGRATIONS[14] (the stall read's indexes); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(15);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -1175,5 +1177,75 @@ describe('coord.db: migration 14 — the update control plane (design 2026-09-20
     banners.forEach(([n, from, to], i) => {
       expect([n, from, to], `banner ${i + 1}`).toEqual([i + 1, i, i + 1]);
     });
+  });
+});
+
+describe('coord.db: the stall mail read\'s indexes (worker stall watch wave 5)', () => {
+  // `CoordStore.stallMailFor` runs once per stall candidate per sweep, synchronously on the server's one handle.
+  // Before this entry both of its statements, and `hasMailWithSubject`, planned `SCAN mail`, and both statements
+  // `SCAN mail_deliveries`; `stall-store.test.ts`'s plan rows pin what the read plans now.
+  const INDEXES = ['mail_by_at', 'mail_by_run', 'mail_deliveries_by_mail'];
+  /** This entry's slot, found by its DDL and never hard-coded: schema.ts's rule is that whichever of two branches
+   *  holding one slot merges second moves up, and that renumber must not have to edit a line here. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('mail_deliveries_by_mail')) + 1;
+  const indexNames = (db: DatabaseSync): string[] =>
+    (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'").all() as
+      { name: string }[]).map((r) => r.name);
+  /** A database at exactly the version before this entry, carrying one mail and its delivery. */
+  const plantedBefore = (prefix: string, extra = ''): string => {
+    const p = dbPathIn(mkTmp(prefix));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body) " +
+               "VALUES (5, 'demo-a', 'u', 'demo-b', NULL, 'status', 's', 'x')");
+      raw.exec("INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (1, 'demo-b', 'acked', 'e')");
+      if (extra !== '') raw.exec(extra);
+    });
+    raw.close();
+    return p;
+  };
+
+  it('is its own entry, after every entry main carried when it was written', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates mail_deliveries_by_mail').toBeGreaterThanOrEqual(15);
+    expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => INDEXES.some((n) => m.includes(n))),
+      'an index of this entry was amended into a frozen one').toBe(false);
+  });
+
+  it('reaches a database ALREADY at the version before it, keeps its rows, and adds exactly its three indexes', () => {
+    const p = plantedBefore('ccrc-mig-stallidx-');
+    const before = new DatabaseSync(p);
+    const had = indexNames(before);
+    before.close();
+    expect(had.filter((n) => INDEXES.includes(n)), 'the plant already has one').toEqual([]);
+    const db = openCoordDb(p);
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
+    expect(indexNames(db).filter((n) => !had.includes(n)).sort()).toEqual(INDEXES);
+    expect(db.prepare('SELECT count(*) AS c FROM mail').get()).toEqual({ c: 1 });
+    expect(db.prepare('SELECT count(*) AS c FROM mail_deliveries').get()).toEqual({ c: 1 });
+    db.close();
+  });
+
+  it('a FRESH database reaches the same three', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-mig-stallidx-fresh-')));
+    expect(indexNames(db)).toEqual(expect.arrayContaining(INDEXES));
+    db.close();
+  });
+
+  it('IF NOT EXISTS: an index already made under one of its names does not refuse the start', () => {
+    const p = plantedBefore('ccrc-mig-stallidx-pre-', 'CREATE INDEX mail_by_at ON mail(at)');
+    expect(() => openCoordDb(p).close()).not.toThrow();
+  });
+
+  it('indexes the columns the read filters on, and no other (mail_deliveries.toId is deliberately absent)', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-mig-stallidx-cols-')));
+    const cols = (name: string): string[] =>
+      (db.prepare(`PRAGMA index_info(${name})`).all() as { name: string }[]).map((r) => r.name);
+    expect(INDEXES.map((n) => [n, cols(n)])).toEqual([
+      ['mail_by_at', ['at']], ['mail_by_run', ['runId']], ['mail_deliveries_by_mail', ['mailId']],
+    ]);
+    db.close();
   });
 });

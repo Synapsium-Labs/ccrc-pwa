@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { FleetIO } from './io.js';
 import {
-  TURN_MARK_STATES, turnMarkGraceUntil, turnMarkStale, type TurnMark, type TurnMarkRead, type TurnMarkState,
+  STALL_EPOCH_MAX, TURN_MARK_STATES, turnMarkGraceUntil, turnMarkStale, type TurnMark, type TurnMarkRead, type TurnMarkState,
 } from './coord/stall.js';
 
 /**
@@ -41,8 +41,8 @@ const TURN_MARK_KINDS_MAX_BYTES = 200;
 const TURN_MARK_IDS_RE = /^([A-Za-z0-9_-]{1,64}(,[A-Za-z0-9_-]{1,64}){0,7})?$/;
 /** A StopFailure's error token, cleaned by the hook to `[a-z_]` and cut at 64 bytes. */
 const TURN_MARK_ERR_RE = /^[a-z_]{0,64}$/;
-/** The largest epoch a JS `Date` holds. */
-const TURN_MARK_EPOCH_MAX = 8.64e15;
+/** The largest epoch a JS `Date` holds: the watch's one spelling, so this bound and `stallIso`'s cannot drift. */
+const TURN_MARK_EPOCH_MAX = STALL_EPOCH_MAX;
 
 const ABSENT: TurnMarkRead = { ok: false, reason: 'absent' };
 const UNMEASURED: TurnMarkRead = { ok: false, reason: 'unmeasured' };
