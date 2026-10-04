@@ -4046,19 +4046,19 @@ and wave 2's operator pushes) still fire, and shadow rows still count. When
 to silence the lane's pushes as well, touch `stall-watch-disabled` beside
 `mail-disabled`.
 
-**What the skills do with the watch's mail.** The `ccrc-coordinator` skill's
-clause 16: a mail from `operator` whose subject begins `stall:` is the watch
-reporting the worker, not the worker itself; it wakes the coordinator, and
-answering it is not polling. The coordinator acks it, re-measures the run and
-the worker's last mail, then acts once: it mails the worker a resume that names
-the worker's last mail and what the worker owes; or, when the silence is its own
-because it told the worker to wait, it mails the worker a subject beginning
-`wait:` that names what it waits for, which the watch reads as the ball passing
-to the coordinator (above); or, when the worker is dead or cannot be woken, it
-re-dispatches only a dead one and says in its turn's text for the operator which
-case it found. A stall mail never licenses re-dispatching a live worker. r2's
-own body carries the same instruction, as r1's carries the reply protocol, so
-neither waits on a skill reaching a home. The `ccrc-worker` skill's clause 17: a
+**What the skills do with the watch's mail.** The `ccrc-coordinator` skill's clause 16: a mail from
+`operator` whose subject begins `stall:` is the watch reporting the worker, not the worker itself; it
+wakes the coordinator, and answering it is not polling. The coordinator acks it, re-measures the run
+and the worker's last mail, then acts once: it mails the worker a resume that names the worker's last
+mail and what the worker owes; or, when the silence is its own because it told the worker to wait, it
+mails the worker a subject beginning `wait:` that names what it waits for; or, when the worker is
+dead or cannot be woken, it re-dispatches only a dead one and says in its turn's text for the
+operator which case it found. A stall mail never licenses re-dispatching a live worker. It sends that
+`wait:` unasked too, whenever it tells a `working` worker to wait, behind another run or programme or
+until a time. The ball that `wait:` passes (above) is the coordinator's only until the next mail to
+or from the worker: any but another coordinator `wait:`, or the worker's `question`, exact done claim
+or waiting reply, hands it back. r2's own body carries the same instruction, as r1's carries the
+reply protocol, so neither waits on a skill reaching a home. The `ccrc-worker` skill's clause 17: a
 worker ends a turn only on a wake it can name — a mail it sent that asks for an
 answer, a background agent or workflow its own main thread launched that has not
 yet reported, or a structured ask. A background shell or Monitor is never that
