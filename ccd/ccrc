@@ -20455,10 +20455,10 @@ _upd_legacy_target() {   # <tag> -> 0, or dies before anything is installed
 # cheap direction.
 #
 # A FAILED PREFLIGHT REFUSES THE SWEEP, NEVER THE UPDATE (spec §6): the
-# install above already converged, and unwinding a good update over a
-# refused sweep would leave the box worse than degraded. The refusal is loud — stderr, per refusal (wave 9, R11-F5): KillMode names the resolved value
-# and the drop-in directory that can fix it, the listing names the failed command and its rc, macOS names the plist and the re-enable step — and the
-# degraded line on stdout says exactly what did not happen.
+# install above already converged, and unwinding an update over a refused
+# sweep would leave the box worse than degraded. The refusal is loud (stderr:
+# KillMode's value and drop-in dir; listing's command and rc; macOS's plist
+# and re-enable step) and the degraded line on stdout says what did not run.
 #
 # PANES ARE NEVER TOUCHED; TMUX IS NEVER TOUCHED. KillMode=process keeps the
 # tmux substrate — the sessions themselves — alive across the restart, and
