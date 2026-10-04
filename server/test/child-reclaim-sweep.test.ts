@@ -194,6 +194,15 @@ const fixture = (opts: FixtureOpts = {}) => {
     const settle = watcher.sweepChildReclaim(records, readdirSync(reg));
     return { settle };
   };
+  /** The poll's own split, made explicit: `listing` reads the registry NOW;
+   *  `sweepOn` runs a pass over a listing read EARLIER. The poll reads the
+   *  registry, then awaits the lanes ahead of this one, then calls it — so a
+   *  release job can answer between a pass's listing and its loop. */
+  const listing = async (): Promise<{ records: Awaited<ReturnType<typeof readRegistry>>; names: string[] }> =>
+    ({ records: await readRegistry(deps.io, cfg), names: readdirSync(reg) });
+  const sweepOn = async (l: { records: Awaited<ReturnType<typeof readRegistry>>; names: string[] }): Promise<void> => {
+    await watcher.sweepChildReclaim(l.records, l.names);
+  };
   const advance = (ms: number): void => { clock += ms; };
   const next = (): void => advance(CHILD_RECLAIM_SWEEP_MS + 1);
   /** The lane's own read of one session's attention input row, at `now` —
@@ -206,7 +215,7 @@ const fixture = (opts: FixtureOpts = {}) => {
   };
   const entryOf = (id: string) => watcher.currentChildReclaimDefers().get(id);
   return { home, reg, coord, watcher, bus, calls, requests, plant, openRun, openReview, abandon, journal, pass,
-    passDispatched, next, advance, latestOf, entryOf, now: () => clock,
+    passDispatched, listing, sweepOn, next, advance, latestOf, entryOf, now: () => clock,
     // The SAME `KeyedQueue` instance `deps.queue` (and so the release job)
     // runs on — exposed so a test can occupy a child's own queue key BEFORE
     // a pass dispatches, giving deterministic control over exactly when the
@@ -399,6 +408,12 @@ describe('sweepChildReclaim — what reaches the executor', () => {
       '--surface', 'agent', '--actor', `run:${r1.id} reclaim sweep: program ${r1.program} retired`]);
     expect(existsSync(path.join(f.reg, 'demo-a.hold')), 'the hold file is gone').toBe(false);
 
+    // The release ANSWERED, so the first eligible verdict after it seeds
+    // nothing: the lane cannot tell whether that pass's listing predates the
+    // answer, and it costs one pass to be sure.
+    f.next(); await f.pass();                                 // eligible, but the answer's mark is consumed
+    expect(f.requests).toEqual([]);
+    expect(f.entryOf('demo-a'), 'no sighting seeded on the pass right after the answer').toBeUndefined();
     f.next(); await f.pass();                                 // the ordinary path's FIRST eligible sighting
     expect(f.requests).toEqual([]);
     f.next(); await f.pass();                                 // …and its second — only now
@@ -432,6 +447,8 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests, 'no re-queue while the release is in flight').toEqual([]);
     resolveRelease({ code: 0, stdout: 'released demo-a\n', stderr: '' });
     await second;                                              // the release settles, after the next pass began
+    f.next(); await f.pass();                                  // eligible, but the answer's mark is consumed: no sighting
+    expect(f.requests).toEqual([]);
     f.next(); await f.pass();                                  // the ordinary path's FIRST eligible sighting
     expect(f.requests).toEqual([]);
     f.next(); await f.pass();                                  // …and its second — only now
@@ -448,7 +465,9 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     // records a sighting despite the release still being unsettled — and the
     // job's answer DELETES that entry (spec §5.7's twice-observed rule, as
     // the release's own answer must), so the reclaim still needs TWO fresh
-    // unheld passes once the answer lands, never one.
+    // unheld passes once the answer lands, never one. The answer's mark then
+    // makes the first eligible verdict after it seed nothing too, so the
+    // sighting count starts on the pass after that.
     let resolveRelease!: (v: { code: number; stdout: string; stderr: string }) => void;
     const f = fixture({ release: () => new Promise((resolve) => { resolveRelease = resolve; }) });
     const r1 = f.openRun(); f.abandon(r1);
@@ -466,9 +485,39 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     resolveRelease({ code: 0, stdout: 'released demo-a\n', stderr: '' });   // the answer, matching what already happened
     await second;
     expect(f.entryOf('demo-a'), 'the answer deleted the entry').toBeUndefined();
-    f.next(); await f.pass();                                   // the FIRST pass after the answer — a fresh first sighting
+    f.next(); await f.pass();                                   // the FIRST pass after the answer — the mark is consumed
     expect(f.requests, 'never reclaimed one pass after the answer').toEqual([]);
-    f.next(); await f.pass();                                   // the SECOND — only now
+    f.next(); await f.pass();                                   // a fresh first sighting
+    expect(f.requests, 'never reclaimed on a sighting made before the answer').toEqual([]);
+    f.next(); await f.pass();                                   // its second — only now
+    expect(f.requests).toEqual([
+      { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+  });
+
+  it('a pass whose listing was read BEFORE the release answered seeds nothing after the answer — the reclaim still needs two fresh unheld passes', async () => {
+    // The third interleaving: ccd unlinks the hold, the next pass READS the
+    // registry (unheld), and only then does the release answer — before that
+    // pass's own loop runs. The answer deletes the entry, but a loop running
+    // on the older listing would seed a first sighting from it, and the very
+    // next pass would dispatch. The answer's mark makes that loop seed nothing.
+    let resolveRelease!: (v: { code: number; stdout: string; stderr: string }) => void;
+    const f = fixture({ release: () => new Promise((resolve) => { resolveRelease = resolve; }) });
+    const r1 = f.openRun(); f.abandon(r1);
+    f.plant('demo-a', { child: String(r1.id), hold: holdReason(r1.program, 2, null, null) });
+    await f.pass();                                            // 1st hold-retired sighting
+    f.next();
+    const second = f.pass();                                   // 2nd — queues the release, still unsettled
+    await vi.waitFor(() => expect(f.calls.filter((c) => c[0] === 'ws-release')).toHaveLength(1));
+    rmSync(path.join(f.reg, 'demo-a.hold'));                    // ccd's own unlink, already done on the box
+    f.next();
+    const stale = await f.listing();                           // the next pass's registry read — BEFORE the answer
+    resolveRelease({ code: 0, stdout: 'released demo-a\n', stderr: '' });
+    await second;                                              // the answer lands between that read and its loop
+    await f.sweepOn(stale);                                    // the pass's loop, on the listing older than the answer
+    expect(f.entryOf('demo-a'), 'a listing older than the answer seeded nothing').toBeUndefined();
+    f.next(); await f.pass();                                  // the FIRST fresh pass — a first sighting only
+    expect(f.requests, 'never reclaimed on the strength of a listing older than the answer').toEqual([]);
+    f.next(); await f.pass();                                  // the SECOND fresh pass — only now
     expect(f.requests).toEqual([
       { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
   });

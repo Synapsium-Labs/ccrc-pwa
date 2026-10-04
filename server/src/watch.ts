@@ -794,6 +794,19 @@ export class FleetWatcher {
    *  touched here — the lane has no re-entrancy guard beyond that one set, and
    *  an overlapping pass must not turn "two further passes" into one. */
   private childReclaimHoldRetiredSeen = new Set<string>();
+  /** Per marked child: has its retired-hold release job ANSWERED since this
+   *  lane last saw it eligible? Set where the job settles, beside the delete
+   *  of its sweep entry; CONSUMED by the next eligible verdict, which seeds
+   *  nothing that pass. A pass's registry listing is read before the lanes
+   *  ahead of this one are awaited, so the job can answer between a listing
+   *  and the loop that reads it — and a sighting seeded from a listing older
+   *  than the answer must not count as one of the two fresh unheld passes the
+   *  answer requires (spec §5.7). The lane cannot tell such a listing from a
+   *  fresh one, so it skips one sighting either way: that fails closed and
+   *  costs one pass. Cleared wherever this child's other memory is (the
+   *  vanished-row loop, and every pass-level reset), so a mark never
+   *  outlives its child. IN MEMORY ONLY, the `childReclaimSweepState` idiom. */
+  private childReclaimReleaseAnswered = new Set<string>();
   /** The seventh lane's clock — the journal mirror. `sweepLifecycle` below
    *  carries the lane's own docstring; this is only the clock field, same
    *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
@@ -3109,6 +3122,7 @@ export class FleetWatcher {
       console.warn(`ccrc-server: sweepChildReclaim could not read the lifecycle mirror or the coordination history (${err instanceof Error ? err.message : String(err)}) — no reclaim decisions this pass`);
       this.childReclaimSweepState.clear();
       this.childReclaimHoldRetiredSeen.clear();
+      this.childReclaimReleaseAnswered.clear();
       return;
     }
     const live = new Map<string, number | null>(
@@ -3133,6 +3147,7 @@ export class FleetWatcher {
         || names.includes(RECLAIM_PAUSE_MARKER)) {
       this.childReclaimSweepState.clear();
       this.childReclaimHoldRetiredSeen.clear();
+      this.childReclaimReleaseAnswered.clear();
       return;
     }
 
@@ -3303,8 +3318,11 @@ export class FleetWatcher {
                 // in that window records an eligible first sighting while the
                 // job is still in flight; keeping it would let the reclaim go
                 // out ONE pass after the answer. Deleted here, the child needs
-                // two fresh unheld passes after the answer, never fewer.
+                // two fresh unheld passes after the answer, never fewer — and
+                // the mark makes the next eligible verdict seed nothing, in
+                // case that pass's listing was read before this answer.
                 this.childReclaimSweepState.delete(r.id);
+                this.childReclaimReleaseAnswered.add(r.id);
                 this.childReclaimInFlight.delete(r.id);
               }));
             } else {
@@ -3321,6 +3339,9 @@ export class FleetWatcher {
         continue;
       }
       this.childReclaimHoldRetiredSeen.delete(r.id);
+      // The first eligible verdict after a release ANSWERED seeds nothing: its
+      // listing may predate the answer (`childReclaimReleaseAnswered`).
+      if (this.childReclaimReleaseAnswered.delete(r.id)) continue;
       const entry = this.childReclaimSweepState.get(r.id);
       if (entry === undefined) {
         this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(now));
@@ -3428,6 +3449,9 @@ export class FleetWatcher {
     }
     for (const id of [...this.childReclaimHoldRetiredSeen]) {
       if (!seen.has(id)) this.childReclaimHoldRetiredSeen.delete(id);
+    }
+    for (const id of [...this.childReclaimReleaseAnswered]) {
+      if (!seen.has(id)) this.childReclaimReleaseAnswered.delete(id);
     }
     await Promise.all(acts);
   }
