@@ -18,6 +18,15 @@
 >    the AGENT-FIRST deploy.
 > 3. **Deviation numbers are the coordinator's.** The block issued for this wave's WORKER is **3896 to 3905**,
 >    written bare; this plan defines none. Departures are named below as slugs only.
+> 4. **Revised 2026-10-04 after three review lenses** (conformance, replay, guard fidelity). Applied: a census of
+>    every STOP in `ccd/ccd`, not only of the calls; the newest command NO journal row explains (spec §5.7's
+>    reading); the journal's FLOOR, so an older ccd's unjournalled keystrokes are never promoted at the deploy;
+>    the acknowledgement shapes the fleet's builds write (backticks since 2.1.250, `(default)`, `Ultracode on`),
+>    measured read-only over the fleet box's transcripts; `unmeasured` lines where a stop could not read; the
+>    value, by name, of an out-of-vocabulary command; the stage-4 row's filter written into spec §9 and put to
+>    the coordinator; a forged `reset=` that can no longer crash `--stage 4`; and five new guard pins (newest of
+>    two, the FIFO, the hour bound, the chain wait's position, the `(?!\d)` lookahead). The whole plan was
+>    re-prototyped, re-replayed byte-for-byte onto `22f7931af`, and every red, green and mutation row re-measured.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -26,21 +35,23 @@
 only rescues that landed, the do-not-bounce strand names its BEST account, a not-blocked tick forks nothing, a forged
 `swap.log` line cannot crash or slow the history read, and §9's stage-4 target says what the design can promise — and
 then make an operator's own `/model` and `/effort` survive every restart ccd makes: before each stop that a spawn
-follows, ccd reads the transcript, tells its own keystrokes (journalled in `$REG/<id>.typed`) from the operator's,
-maps the operator's value to the route record's vocabulary, and writes it through `cmd_route` with
-`actor=operator-session`.
+follows, ccd reads the transcript, tells its own keystrokes (journalled in `$REG/<id>.typed`, above a floor no older
+command crosses) from the operator's, maps the operator's value to the route record's vocabulary, and writes it
+through `cmd_route` with `actor=operator-session` — and says so whenever it could not.
 
 **Architecture:** Task 1 edits wave 2's RESCUE POLICY section of `ccd/ccd` in place (`_rescue_policy`,
 `_rescue_history`, `_rescue_target`'s comment, `_rescue_strand_cause`) and one line of `_auto_swap_check`'s rescue arm,
 plus a target row in `deploy/measure-continuity.py --stage 4`. Stage 7 is one new section of `ccd/ccd`,
 `# ── THE OPERATOR'S CHOICE SURVIVES A RESTART`, directly above `_route_apply_now() {` — below the frozen citation
 corpus's last cited line (`ccd/ccd:19109` at `22f7931af`), so it moves no citation — holding three constants,
-`_typed_note` (the journal writer), `_model_family_class` (the bash port of `familyClassOf`), `_model_class_of` (the
-alias table) and `_operator_choice_keep` (the promotion); one-line journal calls in `_inject_spawn_effort` and
-`_route_apply_now`; and one call before each of the three stops a spawn follows (`cmd_swap`, `cmd_stop`,
-`cmd_ws_archive`, the last one line for one line because it sits above the corpus). The promotion reads the
-transcript with `grep -F -A1` piped into an inline python reader and writes through `cmd_route` in a subshell, so no
-path through it can fail a stop. `deploy/measure-continuity.py` gains `--stage 7`.
+`_typed_note` (the journal writer, and the journal's floor), `_model_family_class` (the bash port of
+`familyClassOf`), `_model_class_of` (the alias table), `_operator_choice_keep` (the promotion) and
+`_operator_choice_say` (its one swap.log line); one-line journal calls in `_inject_spawn_effort` and
+`_route_apply_now`; one line in `_spawn_start` that opens the journal's floor; and one call before each of the three
+stops a spawn follows (`cmd_swap`, `cmd_stop`, `cmd_ws_archive`, the last one line for one line because it sits
+above the corpus). The promotion reads the transcript with `grep -F -A1` piped into an inline python reader and
+writes through `cmd_route` in a subshell, so no path through it can fail a stop, and every path that could lose the
+operator's choice leaves an `operator-choice <id>: …` line. `deploy/measure-continuity.py` gains `--stage 7`.
 
 **Tech Stack:** bash 5.2 (`ccd/ccd`, `set -uo pipefail`, no `-e`), python 3 (the transcript reader and
 `_rescue_history` run inline under `python3 -c '…'` inside a SINGLE-quoted bash string — no `'` may appear in them),
@@ -95,13 +106,16 @@ Copied from `CLAUDE.md`, the spec and the programme ledger. Every task's require
   `boot`'s "a hung ccd … does not delay listen". Each was green in isolation, `--maxWorkers=1`, on the
   prototype.
 - **Rings / no overloaded null.** `_operator_choice_keep` is always rc 0 — a stop is never failed by it — and says
-  why it wrote nothing in `swap.log` (`operator-choice <id>: …`) only where the operator's choice is lost (a value
-  outside the vocabulary, a refusal by the record's own checks); a field newer than the keystroke, a value already
-  held, and no command at all are silent, because nothing was lost. `_model_class_of` answers a class (rc 0) or
-  outside the vocabulary (rc 1). `_rescue_history` keeps its two answers (measured, rc 0, possibly empty;
-  unmeasurable, rc 2).
+  why it wrote nothing in `swap.log` (`operator-choice <id>: …`) wherever the operator's choice may be lost: a value
+  outside the vocabulary, a refusal by the record's own checks, and — as `unmeasured (…)`, a distinct line — a stop
+  that could not read at all (no journal floor yet, a transcript that is not a readable regular file, no python3, a
+  reader that failed). Silent only where nothing was lost: no registry row, no transcript, no command, a value
+  already held, a field newer than the keystroke, a command older than the journal's floor (an older ccd's era,
+  said once by the stop that opened the floor). `_model_class_of` answers a class (rc 0) or outside the vocabulary
+  (rc 1). `_rescue_history` keeps its two answers (measured, rc 0, possibly empty; unmeasurable, rc 2).
 - **Wire discipline.** No frame changes; `FLEET_PROTO` untouched. `swap.log` gains one new line word,
-  `operator-choice`, and `route … [actor=operator-session]` lines in `cmd_route`'s existing shape. No server or agent
+  `operator-choice` (its `unmeasured (…)` form included), and `route … [actor=operator-session]` lines in
+  `cmd_route`'s existing shape. No server or agent
   code parses either (measured at `22f7931af`: `grep -rn 'operator-choice\|actor=operator-session' server/src
   agent/src shared pwa/src` → no hits).
 - **Mutation-table discipline:** every new guard ships WITH a test that goes RED when the guard is deleted or
@@ -150,12 +164,20 @@ named case in its owning task and red when its guard is removed (the mutation ta
    wait and marked an account the session never left. → Task 1, "a dispatched rescue that never landed…" (rows
    1.2, 1.3).
 3. **A forged `swap.log` line.** Any session on the box can append to it. A 4300-digit `reset=` raised in python and
-   turned rule 3 off for that session; distinct targets made two list scans quadratic. → Task 1, "a forged reset=
-   of 5000 digits…" (row 1.6); the scans' cost is Pre-flight 6 (no behavioural pin — a set changes no answer).
+   turned rule 3 off for that session; distinct targets made two list scans quadratic; and `--stage 4`'s new row
+   would have raised on `reset=abc` or a 5000-digit value. → Task 1, "a forged reset= of 5000 digits…" (rows 1.6,
+   1.11 — leading zeros, so the cap alone is not enough) and "a forged reset= is no date…" (row 1.14); the scans'
+   cost is Pre-flight 6 (no behavioural pin — a set changes no answer).
 4. **ccd's own keystrokes read as the operator's.** The settle types `/effort ultracode` into every session with no
    effort field, and `route --apply` types a DEGRADED class over an operator's `fable`; promoting either would write
    a box default, or a degrade, over the operator's record. → Task 3, the spec's first two mutation rows (rows 2.1,
    2.2), with the control "the same /effort an hour from any journalled keystroke is the operator's" (row 3.11).
+   **At the deploy** every live session's transcript holds keystrokes an older ccd typed WITHOUT journalling them
+   (the first draft promoted `effort ∅ -> ultracode` and `class fable -> opus` from them, measured by review):
+   the journal's floor (`<epoch> since`, opened by `_spawn_start`) keeps every older command out, and a stop that
+   finds no floor opens it and promotes nothing. → Task 2, "the spawn opens the journal at a floor…" (rows 2.10,
+   2.11); Task 3, "a session with no journal yet…" and "a command older than the journal's floor…" (rows 3.19,
+   3.20).
 5. **The record changed after the keystroke.** The PWA picker or a coordinator's route writes the field after the
    operator typed; re-promoting the older command at every stop would undo them. → Task 3, "the record wins when it
    is newer…" and "a field whose time cannot be read is not overwritten" (rows 3.6, 3.13).
@@ -167,13 +189,24 @@ named case in its owning task and red when its guard is removed (the mutation ta
    Code refused (no `Set model to …` after it), an argument with a space in it (bash would split it into the epoch
    field). → Task 3, four cases (rows 3.8, 3.9, 3.10, 3.12).
 8. **The picker and the slider take no argument.** `route --apply` and a human's picker both write `/model` with an
-   empty `<command-args>`; only the acknowledgement names the value, with ANSI bold and a `(1M context)` suffix. →
-   Task 3, "the picker takes no argument…" and the `route --apply` row, which matches the picker's acknowledgement
-   to the journalled class (row 2.2).
+   empty `<command-args>`; only the acknowledgement names the value — in BACKTICKS on the builds the fleet runs
+   (2.1.250 and later: ``Set model to `Opus 5` …``), in ANSI bold on 2.1.226, with a `(1M context)` suffix, and with
+   `(default)` when the picker chose Default (it names the resolved model, so `default` would otherwise round-trip
+   as `sonnet`); `/effort ultracode` acknowledges `Ultracode on …` on 2.1.284 and later (Pre-flight 1). → Task 3,
+   "the picker takes no argument… in either shape" (row 3.22), "(default)" (row 3.21), "Ultracode on" (row 3.23),
+   and the `route --apply` row in both shapes (row 2.2).
 9. **The port drifting from `familyClassOf`.** A token reordered, or matched without its dashes, classifies a hybrid
    or a vendor id differently in bash than on the server. → Task 2, the agreement pin (rows 2.8, 2.9).
-10. **A new stop-then-spawn path added later without the call.** → Task 3, the call-site census ("…called at exactly
-    three sites, each the statement before its stop"), red when any site moves or a fourth appears.
+10. **A new stop-then-spawn path added later without the call.** → Task 3, the census of STOPS: every function
+    holding a `tmux kill-session`, a `claude-session@` stop or bootout, or a `_ws_unsupervise` is either one of the
+    three that keep the operator's choice first, or named with the reason no spawn follows; a new one reds until it
+    is classified (row 3.26 adds a `_bounce_session` and reds), and a moved call reds too (rows 3.3–3.5).
+11. **A FIFO where the transcript should be.** `grep` on a FIFO blocks until a writer opens it (measured: `timeout 3
+    grep … -- fifo` → rc 124), which would hold the stop with no deadline. → Task 3, "a FIFO where the transcript
+    should be is never opened…" (row 3.16).
+12. **A choice lost where ccd could not read.** No floor yet, a transcript that is not a readable regular file, no
+    python3, a reader that failed: each is rc 0, and each is an `unmeasured (…)` line `--stage 7` reports, never
+    silence. → Task 3, "could not measure is said, never silent…" (rows 3.16–3.18); Task 4, row 4.5.
 
 ---
 
@@ -181,7 +214,7 @@ named case in its owning task and red when its guard is removed (the mutation ta
 
 | File | Created / Modified | Its one responsibility |
 |---|---|---|
-| `ccd/ccd` | Modify — Task 1: `_rescue_policy`, `_rescue_history`, `_rescue_target`'s comment, `_rescue_strand_cause`, the rescue arm's line in `_auto_swap_check`; Task 2: the new section above `_route_apply_now() {`, journal calls in `_inject_spawn_effort` and `_route_apply_now`, `_reg_purge`'s inventory, the `_reg_get` census; Task 3: `_operator_choice_keep`, three call sites, the census | The residue; the journal, the vocabulary, the promotion |
+| `ccd/ccd` | Modify — Task 1: `_rescue_policy`, `_rescue_history`, `_rescue_target`'s comment, `_rescue_strand_cause`, the rescue arm's line in `_auto_swap_check`; Task 2: the new section above `_route_apply_now() {`, journal calls in `_inject_spawn_effort` and `_route_apply_now`, the floor's line in `_spawn_start`, `_reg_purge`'s inventory, the `_reg_get` census; Task 3: `_operator_choice_keep` and `_operator_choice_say`, three call sites, the census | The residue; the journal, the vocabulary, the promotion |
 | `deploy/measure-continuity.py` | Modify — Task 1 (a stage-4 row), Task 4 (`--stage 7`) | §9's rows, read-only |
 | `server/test/ccd-rescue-policy.test.ts` | Modify (Task 1) — two helpers, one describe appended | The residue's cases |
 | `server/test/measure-continuity-stage4.test.ts` | Modify (Task 1) — one binding case re-pointed at the landing, one describe | The restated target row |
@@ -212,6 +245,16 @@ same at both); live reads are read-only.
    dynamic workflow orchestration`. `route --apply` drives the picker (`_route_type_model` types `/model` + Enter) and
    the slider (`_route_type_effort` types `/effort` + Enter, except `ultracode`), so ITS commands carry no argument
    either — the acknowledgement is the only place their value appears.
+   **The shapes the fleet's builds write** (re-measured for the revision, read-only, `.superpowers`-local script
+   over every `~/.claude*/projects/*/*.jsonl` modified in the last 40 days and under 150 MB — 6,669 files): the
+   `/model` acknowledgement wraps the name in BACKTICKS on the newer builds (``Set model to `Opus N` …``, 360
+   rows, seen on 2.1.263 through 2.1.280 in the last 8 days; review saw it from 2.1.250) and in ANSI bold on the
+   older ones (96 rows); a `(default)` suffix appears exactly when the operator chose Default — `/model default` (9
+   rows) or the picker's Default row (7 rows), in both shapes, naming the RESOLVED model (`Sonnet N (default)`,
+   `Opus N (1M context) (default)`); and `/effort ultracode` acknowledges `Ultracode on (this session only): …
+   Effort stays medium.` on 2.1.284 and 2.1.286 (9 rows) where older builds wrote `Set effort level to ultracode …`.
+   The first draft's fixtures carried only the 2.1.226 shape, so its suite was green while the picker's value read
+   as `?` on the live fleet (review's finding; row 3.22 restores the first draft's strip and reds four cases).
 2. **`routeapplied` cannot tell ccd's keystrokes from the operator's** (spec §5.7, re-read): the spawn writes it from
    the composed argv before the settle types, and `cmd_route --apply` stamps `workflow`/`subagent`/`compact` it never
    types. And `_route_wanted` answers the DEGRADED class when a `degraded` stamp exists (`ccd/ccd` ≈18718), so the
@@ -219,11 +262,14 @@ same at both); live reads are read-only.
 3. **`cmd_route` is the one writer** (≈9192): it validates, refuses the `haiku`+level pair across calls, writes each
    field with `_reg_set`, journals `_lc_done route` and appends `route <id>: <field> <old> -> <new> [actor=…] (…)` to
    swap.log. It ends a refusal with `die` (`exit 1`), so a caller in a stop path must run it in a subshell.
-4. **The stops a spawn follows** (every `_svc_stop "claude-session@` and `tmux kill-session` of a session pane in
-   `ccd/ccd`, by enclosing function): `cmd_swap` (stop, carry, start — or `_swap_refuse`'s restart), `cmd_stop`
-   (`ccd start`/`enable` respawn from the record), `cmd_ws_archive` (`ws-restore` respawns). Not followed by a spawn:
-   `cmd_ws_rm`, `cmd_forget`, `_ws_reap_tail`, `_ws_reclaim_tail` (the row ends). `_swap_refuse`'s restart follows
-   `cmd_swap`'s own stop. A supervisor revival (`cmd_supervise` → `cmd_ensure`) follows no ccd stop at all.
+4. **Every stop in `ccd/ccd`** (each non-comment line holding `tmux kill-session`, `_svc_stop "claude-session@`, a
+   `bootout` of a `claude-session@` label or `_ws_unsupervise "`, by enclosing function — the census Task 3 pins):
+   followed by a spawn — `cmd_swap` (stop, carry, start — or `_swap_refuse`'s restart), `cmd_stop` (`ccd
+   start`/`enable` respawn from the record), `cmd_ws_archive` (`ws-restore` respawns); not followed by one —
+   `cmd_ws_rm`, `cmd_forget`, `_ws_reap_tail`, `_ws_reclaim_tail` (the row ends), `cmd_account_pane` (an account's
+   login pane, `_tmux_at "$pane"`, not a session) and `cmd_supervise`'s launchd `bootout` after a crash loop (Claude
+   Code already exited; the revival path, Open question 1). `_swap_refuse`'s restart follows `cmd_swap`'s own stop.
+   A supervisor revival (`cmd_supervise` → `cmd_ensure`) follows no ccd stop at all.
 5. **The class vocabulary IS the alias table.** `ROUTE_CLASSES="fable opus sonnet haiku default"` (≈1576) — exactly
    the five aliases the spec lists — so the alias table is derived from it, not hand-kept; `single-definition`'s
    models scan already lists `ccd/ccd` as a holder of the four classes, and adding the port changes no holder list
@@ -233,30 +279,44 @@ same at both); live reads are read-only.
    targets, 429 landed rescues of the session) base and prototype both answer `count=429 left=429 recent=858`, in
    67–74 ms and 69–127 ms (noise at load 20–60). The quadratic cost shows only near 1 MiB, which the 100 KB payload
    rule forbids timing here; review 246 measured it.
-7. **`_operator_choice_keep`'s cost** on a 100 KB transcript (`( ulimit -v 4000000; timeout 600 … )`): 238 ms with a
-   promotion (most of it `cmd_route`), 53 ms with nothing to do. It runs once per stop, never on a tick. Its read is
-   `grep -F -A1` over the whole transcript, so on a 200 MB transcript the grep dominates (unmeasured: above the
-   payload cap); a swap already copies the whole file.
+7. **`_operator_choice_keep`'s cost** on a 100 KB transcript (`( ulimit -v 4000000; timeout 600 … )`, measured on
+   the first draft; the revision adds no pass over the transcript — one more regex alternative and a floor compare
+   per command row): 238 ms with a promotion (most of it `cmd_route`), 53 ms with nothing to do. It runs once per
+   stop, never on a tick. Its read is `grep -F -A1` over the whole transcript, so on a 200 MB transcript the grep
+   dominates (unmeasured: above the payload cap); a swap already copies the whole file.
 8. **`swap.log` landing lines** are `<stamp> swap <id>: <from> -> <to> (uuid <uuid>)`, written by `cmd_swap` at its
    tail and nowhere else (pinned by `measure-continuity-stage4.test.ts`'s last case), after `_rescuewait_close "$id"
    swap` — so keying rule 3 on the landing is feasible, and minor 5 is decided "key on the landing".
 9. **The live baselines** (read-only, the fleet box, `TZ=UTC`): `--stage 4 --since 2026-09-08 --until 2026-09-24` →
    248 rescues, 4 sessions with 4 or more inside an hour, max 4, and **0** sessions with an unchained fourth rescue —
    0 by construction, because no rescue line before wave 2's deploy carries `reset=`/`type=`; `--since 2026-09-24` →
-   44 rescues, 1 session with 4+, 0 dated, 0 unchained (wave 2 is not yet on this box). `--stage 7` → every row 0.
-10. **Red-first, per task** (the task's own tests on the previous task's tree): Task 1 `6 failed | 107 passed (113)`
-    (`ccd-rescue-policy` 5 of 102 — the five new cases — and `measure-continuity-stage4` 1 of 11); Task 2 `6 failed |
-    2 passed (8)` (the two that pass are a control and the purge pin, which `_reg_purge`'s suffix glob already
-    satisfies); Task 3 `14 failed | 14 passed (28)` (Task 2's eight, and six guards whose cases assert that nothing
-    is written — each measured red by its mutation row instead); Task 4 `2 failed (2)`.
-11. **Green, on the full prototype:** `ccd-rescue-policy` 102, `measure-continuity-stage4` 11, `measure-continuity`
-    5, `ccd-operator-choice` 28, `measure-continuity-stage7` 2; `single-definition`, `modelenv-single-writer`,
-    `box-token-census`, `routing-references`, `pools-prose`, `ownership`, `ccd-reg-get-census` 357 together;
-    `ccd-workspaces` 79; `deviation-refs`, `dtbd`, `topology-clean` 87 (after `git fetch origin main`);
-    `ccd-route-settle` 15, `ccd-route-apply` 42, `ccd-archive` 77, `ccd-auto-swap-pool` 43, `ccd-swap` 16,
-    `ccd-swap-pin` 13, `ccd-swap-refuse` + `ccd-swap-carry` + `ccd-lifecycle-sites` + `ccd-lifecycle-emit` +
-    `ccd-session-lifecycle` 150 (+4 skipped), `ccd-crosspool` + `ccd-swap-carry-merge` 168, `ccd-limit-banner` 136
-    (one load flake, green in isolation); `typecheck-tests` 12; the citation cases `7 passed | 328 skipped (335)`.
+   44 rescues, 1 session with 4+, 0 dated, 0 unchained (wave 2 is not yet on this box) — re-read for the revision:
+   unchanged. `--stage 7` → every row 0, `stops_that_could_not_read_the_transcript` 0.
+10. **Red-first, per task** (the task's own tests on the previous task's tree, each tree built by a replay of THIS
+    document onto `22f7931af`): Task 1 `7 failed | 107 passed (114)` (`ccd-rescue-policy` 5 of 102 — the five new
+    cases — and `measure-continuity-stage4` 2 of 12); Task 2 `7 failed | 2 passed (9)` (the two that pass are a
+    control and the purge pin, which `_reg_purge`'s suffix glob already satisfies); Task 3 `21 failed | 16 passed
+    (37)` (Task 2's nine, and seven cases that assert nothing is written — the record wins when newer; a value
+    already held; a human quoting the envelope; a subagent's row; a command older than the floor; the settle's
+    `/effort`; `route --apply`'s `/model` — each measured red by its mutation row instead: 3.6, 3.7, 3.9, 3.10,
+    3.19, 2.1, 2.2); Task 4 `2 failed (2)`.
+11. **Green, on the full prototype:** `ccd-rescue-policy` 102, `measure-continuity-stage4` 12, `measure-continuity`
+    5, `ccd-operator-choice` 37, `measure-continuity-stage7` 2; `single-definition`, `modelenv-single-writer`,
+    `box-token-census`, `routing-references`, `pools-prose`, `ownership`, `ccd-reg-get-census` 357 together (first
+    draft; re-run for the revision in two calls: `ccd-forget` + `ccd-pr-state` + `ccd-ws-slug-git` +
+    `single-definition` + `modelenv-single-writer` 413, `box-token-census` + `routing-references` 34; `pools-prose`
+    + `ccd-die-containment` + `ccd-reg-get-census` + `ownership` 56); `ccd-workspaces` 79;
+    `deviation-refs`, `dtbd`, `topology-clean` 87 (after `git fetch origin main`, the plan file in place);
+    `ccd-route-settle` + `ccd-route-apply` + `ccd-auto-swap-pool` + `single-definition` 372 (at Task 2's tree);
+    `ccd-swap` + `ccd-swap-pin` + `ccd-archive` + `ccd-swap-refuse` `124 passed | 1 skipped (125)`; `ccd-swap-carry` +
+    `ccd-lifecycle-sites` + `ccd-lifecycle-emit` + `ccd-session-lifecycle` `132 passed | 3 skipped (135)`;
+    `ccd-crosspool` + `ccd-swap-carry-merge` + `ccd-workspaces` 247; `typecheck-tests` + `ccd-die-containment` 24;
+    the citation cases `7 passed | 328 skipped (335)`.
+    **The floor's line in `_spawn_start` runs on every spawn**, so every `ccd-*` suite that reaches `_spawn_start`,
+    `cmd_start`, `cmd_ensure` or `cmd_supervise` (`grep -lE` over `server/test/ccd-*.test.ts`: 45 files) was run on
+    the revised prototype, five files a call: all green — 79, 180, 207, 97, 89, `148 passed | 4 skipped (152)`,
+    `292 passed | 4 skipped (296)`, and `ccd-ws-gc` + `ccd-child-reclaim-ladder` + `ccd-route-settle` +
+    `ccd-auto-swap-pool` + `ccd-limit-banner` 403, beside the named runs above.
 12. **`typecheck-tests` needs `agent/node_modules` and `pwa/node_modules`.** Without them it reds on
     `agent/src/server.ts`'s `ws` import, identically on the base; with both installed, 12/12.
 13. **`ccd-die-containment` pins the exact set of functions that can reach `die`**, derived by call-graph
@@ -274,7 +334,15 @@ same at both); live reads are read-only.
     isolation); and two files that did not finish inside 590 s even alone at load 14–30, `ccrc-install` (changed by
     #239 on `main`) and `ccd-child-reclaim-verb` (444 cases) — neither names a verb or function this wave changes
     (`grep` for `cmd_swap`, `cmd_stop`, `ws-archive`, `_route_apply_now`, `_inject_spawn_effort`, `_rescue_`,
-    `_auto_swap_check`: 0 hits in each), and CI on the quiet box is their arbiter.
+    `_auto_swap_check`: 0 hits in each), and CI on the quiet box is their arbiter. That sharded run was on the first
+    draft; the revision's one new reach — the floor's line in `_spawn_start` — was measured by the 45 spawn-path
+    files of finding 11 instead (neither unfinished file reaches it: `grep -cE
+    "_spawn_start|cmd_start |cmd_ensure|cmd_supervise|_spawn "` → 0 in each, and `WS_ADD` stubs `_spawn_start`).
+15. **Older `int()` calls in `--stage 4` on a forged token** (not this wave's to fix, named so nobody assumes them
+    guarded): the wait rows' `int(reset)` (each behind `reset.isdigit()`, which a 5000-digit value passes and
+    `int()` then refuses above 4300 digits) and the carried-in row's unguarded `int(tok["row"])` predate this wave.
+    The new target row guards its own (`re.fullmatch(r"\d{1,12}", …)`, row 1.14); the rest is residue for a later
+    wave, listed in Open question 6.
 
 ---
 
@@ -531,7 +599,10 @@ describe('wave 2\'s residue: the wait ends at the landing, and rule 3 counts lan
 
   it('a forged reset= of 5000 digits is no reset: the history is measured and the account stays skipped', () => {
     seed();
-    pastLog(900, `auto-rescue ${ID}: claude-a (blocked) -> claude [home=claude] via=transcript reset=${'9'.repeat(5000)} type=five_hour row=1`);
+    // Leading zeros: its first twelve digits alone would read as a reset long
+    // past, which would lift the skip — so only a cap that refuses a thirteenth
+    // digit keeps the answer, not the cap alone.
+    pastLog(900, `auto-rescue ${ID}: claude-a (blocked) -> claude [home=claude] via=transcript reset=${'0'.repeat(12)}${'1'.repeat(4988)} type=five_hour row=1`);
     expect(h.sh(`_rescue_history ${ID}; echo "$?|$RESCUE_COUNT|$RESCUE_SKIP_LEFT"`)).toBe('0|1|claude-a');
   });
 });
@@ -560,25 +631,36 @@ and insert, directly above it:
 // entry between the third and the fourth. The raw count is still reported.
 describe('the restated target: a fourth landed rescue in an hour that no chain wait preceded', () => {
   const R = utc('2026-09-20 14:00:00');
-  const four = (sid: string, opts: { chain?: boolean; refuseSecond?: boolean; undated?: boolean; pastReset?: boolean } = {}): string[] => {
+  type Four = { chain?: boolean; chainFirst?: boolean; refuseSecond?: boolean; undated?: boolean; pastReset?: boolean; reset?: string; times?: string[] };
+  const four = (sid: string, opts: Four = {}): string[] => {
     const out: string[] = [];
-    ['10:00', '10:10', '10:20', '10:55'].forEach((m, i) => {
-      const reset = opts.pastReset ? utc('2026-09-20 09:00:00') : R;
+    const chain = `rescuewait ${sid}: kind=chain on claude reset=${R}`;
+    if (opts.chainFirst) out.push(`2026-09-20 09:50:00 ${chain}`);
+    (opts.times ?? ['10:00', '10:10', '10:20', '10:55']).forEach((m, i) => {
+      const reset = opts.reset ?? (opts.pastReset ? utc('2026-09-20 09:00:00') : R);
       const tok = opts.undated ? '' : ` via=transcript reset=${reset} type=five_hour row=${utc(`2026-09-20 ${m}:00`) - 30}`;
-      if (i === 3 && opts.chain) out.push(`2026-09-20 10:25:00 rescuewait ${sid}: kind=chain on claude reset=${R}`);
+      if (i === 3 && opts.chain) out.push(`2026-09-20 10:25:00 ${chain}`);
       out.push(`2026-09-20 ${m}:00 auto-rescue ${sid}: claude (blocked) -> claude-a [home=claude]${tok}`);
       if (!(i === 1 && opts.refuseSecond)) out.push(`2026-09-20 ${m}:30 swap ${sid}: claude -> claude-a (uuid u)`);
     });
     return out;
   };
 
-  it('counts u1 only: u2 chain-waited, u3\'s second swap was refused, u4\'s blocks were undated, u5\'s reset had passed — and the raw row counts all five', () => {
+  it('counts u1 and u7 only: u2 chain-waited, u3\'s second swap was refused, u4\'s blocks were undated, u5\'s reset had passed, u6\'s fourth fell outside the hour, u7\'s only chain wait came before its first rescue — and the raw row counts six', () => {
     const log = path.join(h.home, 'f6-swap.log');
     fs.writeFileSync(log, [...four('u1'), ...four('u2', { chain: true }), ...four('u3', { refuseSecond: true }),
-      ...four('u4', { undated: true }), ...four('u5', { pastReset: true })].join('\n') + '\n');
+      ...four('u4', { undated: true }), ...four('u5', { pastReset: true }),
+      ...four('u6', { times: ['10:00', '10:10', '10:20', '11:05'] }), ...four('u7', { chainFirst: true })].join('\n') + '\n');
+    const r = run(h.home, ['--swap-log', log], { TZ: 'UTC' });
+    expect(r.sessions_with_an_unchained_4th_rescue_in_an_hour).toBe(2);
+    expect(r.sessions_with_4plus_rescues_in_an_hour, 'the raw count, reported').toBe(6);
+  });
+
+  it('a forged reset= is no date: neither a word nor 5000 digits stops the read, and neither is counted', () => {
+    const log = path.join(h.home, 'forged-swap.log');
+    fs.writeFileSync(log, [...four('f1', { reset: 'abc' }), ...four('f2', { reset: '9'.repeat(5000) }), ...four('u1')].join('\n') + '\n');
     const r = run(h.home, ['--swap-log', log], { TZ: 'UTC' });
     expect(r.sessions_with_an_unchained_4th_rescue_in_an_hour).toBe(1);
-    expect(r.sessions_with_4plus_rescues_in_an_hour, 'the raw count, reported').toBe(5);
   });
 });
 
@@ -606,8 +688,9 @@ and replace it with:
 cd server && ./node_modules/.bin/vitest run test/ccd-rescue-policy.test.ts test/measure-continuity-stage4.test.ts --maxWorkers=2
 ```
 
-Expected: `6 failed | 107 passed (113)` — the five new rescue-policy cases (a REFUSED auto-rescue…; a dispatched
-rescue that never landed…; …the BEST account…; a not-blocked tick…; a forged reset=…) and the stage-4 target case.
+Expected: `7 failed | 107 passed (114)` — the five new rescue-policy cases (a REFUSED auto-rescue…; a dispatched
+rescue that never landed…; …the BEST account…; a not-blocked tick…; a forged reset=…) and the two stage-4 target
+cases (counts u1 and u7 only…; a forged reset= is no date…).
 
 - [ ] **Step 3: The `ccd/ccd` edits**
 
@@ -821,8 +904,11 @@ Expected: `restamp: ccd/ccd: …` and `syntax-ok`.
 - [ ] **Step 4: The stage-4 target row (F6)**
 
 §9's stage-4 row is restated (Step 6) to "sessions with a fourth auto-rescue in an hour that no chain wait preceded,
-counting rescues that landed", with the raw 4+ count reported beside it. The instrument counts it with rule 3's own
-landing rule and the chain wait's own gate (a dated block not past its five-hour reset's grace):
+counting rescues that landed and asking it only of a fourth rescue the chain wait could have held", with the raw 4+
+count reported beside it. The instrument counts it with rule 3's own landing rule and the chain wait's own gate (a
+dated block not past its five-hour reset's grace) — a filter the ruled wording did not carry, so Step 6 writes it
+into the spec row itself and the wave-done mail puts it to the coordinator (Open question 5). A `reset=` that is not
+one to twelve digits is no date, so a forged line can neither raise nor count:
 
 In `deploy/measure-continuity.py`, find this anchor:
 
@@ -896,7 +982,9 @@ and insert, directly above it:
     # fourth rescue the chain wait could have held is asked about — one on a
     # dated block (`reset=` and `type=` on its line) not past its five-hour
     # reset's grace, the chain wait's own gate; "preceded" is a `kind=chain`
-    # entry line for that session between the third rescue and the fourth.
+    # entry line for that session between the third rescue and the fourth. A
+    # `reset=` that is not one to twelve digits is no date: any session can
+    # append to swap.log, and `int()` of a forged token raises.
     # Named cost: a Codex-lane session is never chain-waited, by rule, and the
     # log does not say which lane a source account is, so a dated fourth rescue
     # of one counts here; its line names its source account.
@@ -911,7 +999,7 @@ and insert, directly above it:
                 done.append((t, tok))
         for i in range(3, len(done)):
             t, tok = done[i]
-            if not inwin(t) or t - done[i - 3][0] >= 3600 or "reset" not in tok or "type" not in tok:
+            if not inwin(t) or t - done[i - 3][0] >= 3600 or not re.fullmatch(r"\d{1,12}", tok.get("reset", "")) or "type" not in tok:
                 continue
             if tok.get("type") == "five_hour" and t >= int(tok["reset"]) + S4_GRACE:
                 continue
@@ -1027,11 +1115,15 @@ with
 with
 
 ```text
-| 4 | sessions with a fourth auto-rescue in an hour that no chain wait preceded, counting rescues that landed (the raw count of sessions with 4 or more is reported beside it);
+| 4 | sessions with a fourth auto-rescue in an hour that no chain wait preceded, counting rescues that landed and asking it only of a fourth rescue the chain wait could have held (a dated block not past its five-hour reset's grace — rule 3's own gate; the raw count of sessions with 4 or more is reported beside it);
 ```
 
 The target cell stays `0`: it now names what the design promises (a chain wait that runs its full 30 minutes still
-ends in a fourth rescue inside the hour, review 246 F6).
+ends in a fourth rescue inside the hour, review 246 F6). The row also carries the instrument's filter — only a fourth
+rescue the chain wait could have held (a dated block not past its five-hour reset's grace) is asked about — because
+rule 3 never chain-waits an undated or past-reset fourth rescue, so the ruled wording alone would set a 0 the design
+cannot meet; that narrowing is the worker's reading, not the ruling, and the wave-done mail asks the coordinator to
+confirm or drop it (Open question 5).
 
 - [ ] **Step 7: Pay the citation tax, then run the tests to verify they pass**
 
@@ -1045,7 +1137,7 @@ cd server && ./node_modules/.bin/vitest run test/ccd-rescue-policy.test.ts test/
 ./node_modules/.bin/vitest run test/pools-prose.test.ts test/ccd-limit-banner.test.ts --maxWorkers=2
 ```
 
-Expected: `118 passed (118)` (102 + 11 + 5); then `89 passed (89)` (13 + 43 + 14 + 3 + 16); then `163 passed (163)`
+Expected: `119 passed (119)` (102 + 12 + 5); then `89 passed (89)` (13 + 43 + 14 + 3 + 16); then `163 passed (163)`
 (27 + 136 — `ccd-limit-banner`'s "own second" case is a load flake: re-run it alone).
 
 - [ ] **Step 8: Mutation check, then commit**
@@ -1056,20 +1148,27 @@ copy (`cmp`). Multi-line edits show their lines joined by ` / `; `(nothing)` is 
 | # | File | Exact edit (old → new) | Suite | Measured red on the full prototype |
 |---|---|---|---|---|
 | 1.1 | `ccd/ccd` | `$(_rescue_line_extra)" >> "$REG/swap.log" / _dispatch_swap "$id" "$target"   #` → `$(_rescue_line_extra)" >> "$REG/swap.log"; _rescuewait_close "$id" swap / _dispatch_swap "$id" "$target"   #` | ccd-rescue-policy.test.ts | 1 failed \| 101 passed (102): “a REFUSED auto-rescue leaves the wait open: neither the rescue arm nor the refusal writes an end” |
-|  | `ccd/ccd` | ″ | measure-continuity-stage4.test.ts | 11 passed (11) |
+|  | `ccd/ccd` | ″ | measure-continuity-stage4.test.ts | 12 passed (12) |
 | 1.2 | `ccd/ccd` | `if pending is not None and m.group(1) == sid and (m.group(2), m.group(3)) == pending[:2]:` → `if pending is not None and m.group(1) == sid:` | ccd-rescue-policy.test.ts | 1 failed \| 101 passed (102): “a dispatched rescue that never landed neither counts toward the chain wait nor marks the account it left” |
 | 1.3 | `ccd/ccd` | `pending = (m.group(3), m.group(4), m.group(5)) if age < chain else None` → `pending = None; count += age < chain` | ccd-rescue-policy.test.ts | 9 failed \| 93 passed (102): “a target the session just left blocked is skipped”; “a row written days after its own reset logs no reset=, and the next rescue does not bounce back to that account”; “after RESCUE_CHAIN_WAIT the chain wait swaps — to a target that is not the account it just left blocked”; … and 6 more |
 | 1.4 | `ccd/ccd` | `"its best account with room, $out,` → `"its only account with room, $out,` | ccd-rescue-policy.test.ts | 1 failed \| 101 passed (102): “after two rescues the do-not-bounce cause names the BEST account with room, never "the only" one” |
 | 1.5 | `ccd/ccd` | `[[ -e "$REG/$id.rescuewait" ]] && _rescuewait_close "$id" clear` → `_rescuewait_close "$id" clear` | ccd-rescue-policy.test.ts | 1 failed \| 101 passed (102): “a not-blocked tick with no record never reaches the close; with an open record it still ends it `clear`” |
 | 1.6 | `ccd/ccd` | `r" reset=(\d{1,12})(?!\d)"` → `r" reset=(\d+)"` | ccd-rescue-policy.test.ts | 1 failed \| 101 passed (102): “a forged reset= of 5000 digits is no reset: the history is measured and the account stays skipped” |
-| 1.7 | `deploy/measure-continuity.py` | `if not any(done[i - 1][0] <= c <= t for c in chain_opens.get(sid, [])):` → `if True:` | measure-continuity-stage4.test.ts | 1 failed \| 10 passed (11): “counts u1 only: u2 chain-waited, u3's second swap was refused, u4's blocks were undated, u5's reset had passed — and the raw row counts all five” |
-| 1.8 | `deploy/measure-continuity.py` | `if any(t <= lt < nxt and (ls, ld) == (src, dst) for lt, ls, ld in lands):` → `if True:` | measure-continuity-stage4.test.ts | 1 failed \| 10 passed (11): “counts u1 only: u2 chain-waited, u3's second swap was refused, u4's blocks were undated, u5's reset had passed — and the raw row counts all five” |
-| 1.9 | `deploy/measure-continuity.py` | `or "reset" not in tok or "type" not in tok:` → `:` | measure-continuity-stage4.test.ts | 1 failed \| 10 passed (11): “counts u1 only: u2 chain-waited, u3's second swap was refused, u4's blocks were undated, u5's reset had passed — and the raw row counts all five” |
-| 1.10 | `deploy/measure-continuity.py` | `if tok.get("type") == "five_hour" and t >= int(tok["reset"]) + S4_GRACE: / continue` → (nothing) | measure-continuity-stage4.test.ts | 1 failed \| 10 passed (11): “counts u1 only: u2 chain-waited, u3's second swap was refused, u4's blocks were undated, u5's reset had passed — and the raw row counts all five” |
+| 1.7 | `deploy/measure-continuity.py` | `if not any(done[i - 1][0] <= c <= t for c in chain_opens.get(sid, [])):` → `if True:` | measure-continuity-stage4.test.ts | 1 failed \| 11 passed (12): “counts u1 and u7 only: u2 chain-waited, u3's second swap was refused, u4's blocks were undated, u5's reset had passed, u6's fourth fell outside the hour, u7's only chain wait came before its first rescue — and the raw row counts six” |
+| 1.8 | `deploy/measure-continuity.py` | `if any(t <= lt < nxt and (ls, ld) == (src, dst) for lt, ls, ld in lands):` → `if True:` | measure-continuity-stage4.test.ts | 1 failed \| 11 passed (12): “counts u1 and u7 only: u2 chain-waited, u3's second swap was refused, u4's blocks were undated, u5's reset had passed, u6's fourth fell outside the hour, u7's only chain wait came before its first rescue — and the raw row counts six” |
+| 1.9 | `deploy/measure-continuity.py` | `or not re.fullmatch(r"\d{1,12}", tok.get("reset", "")) or "type" not in tok:` → `:` | measure-continuity-stage4.test.ts | 2 failed \| 10 passed (12): “counts u1 and u7 only: u2 chain-waited, u3's second swap was refused, u4's blocks were undated, u5's reset had passed, u6's fourth fell outside the hour, u7's only chain wait came before its first rescue — and the raw row counts six”; “a forged reset= is no date: neither a word nor 5000 digits stops the read, and neither is counted” |
+| 1.10 | `deploy/measure-continuity.py` | `if tok.get("type") == "five_hour" and t >= int(tok["reset"]) + S4_GRACE: / continue` → (nothing) | measure-continuity-stage4.test.ts | 1 failed \| 11 passed (12): “counts u1 and u7 only: u2 chain-waited, u3's second swap was refused, u4's blocks were undated, u5's reset had passed, u6's fourth fell outside the hour, u7's only chain wait came before its first rescue — and the raw row counts six” |
+| 1.11 | `ccd/ccd` | `r" reset=(\d{1,12})(?!\d)"` → `r" reset=(\d{1,12})"` | ccd-rescue-policy.test.ts | 1 failed \| 101 passed (102): “a forged reset= of 5000 digits is no reset: the history is measured and the account stays skipped” |
+| 1.12 | `deploy/measure-continuity.py` | `or t - done[i - 3][0] >= 3600 or` → `or` | measure-continuity-stage4.test.ts | 1 failed \| 11 passed (12): “counts u1 and u7 only: u2 chain-waited, u3's second swap was refused, u4's blocks were undated, u5's reset had passed, u6's fourth fell outside the hour, u7's only chain wait came before its first rescue — and the raw row counts six” |
+| 1.13 | `deploy/measure-continuity.py` | `done[i - 1][0] <= c <= t for c` → `c <= t for c` | measure-continuity-stage4.test.ts | 1 failed \| 11 passed (12): “counts u1 and u7 only: u2 chain-waited, u3's second swap was refused, u4's blocks were undated, u5's reset had passed, u6's fourth fell outside the hour, u7's only chain wait came before its first rescue — and the raw row counts six” |
+| 1.14 | `deploy/measure-continuity.py` | `not re.fullmatch(r"\d{1,12}", tok.get("reset", ""))` → `"reset" not in tok` | measure-continuity-stage4.test.ts | 1 failed \| 11 passed (12): “a forged reset= is no date: neither a word nor 5000 digits stops the read, and neither is counted” |
 
 Row 1.1 reds only the refused case, by design: the stubbed dispatch lands, so every other case sees the landing's own
-close. Rows 1.7–1.10 each make one of the fixture's four excluded sessions (u2 chain-waited, u3's refused swap, u4's
-undated blocks, u5's past reset) count. Minor 4's set has no row: it changes no answer (Pre-flight 6).
+close. Rows 1.7–1.10 and 1.12–1.13 each make one of the fixture's excluded sessions count (u2 chain-waited, u3's
+refused swap, u4's undated blocks, u5's past reset, u6's fourth outside the hour) or the counted u7 drop (its only
+chain entry came before its first rescue). Row 1.11 removes only the lookahead: the forged value's leading zeros then
+read as a reset long past and lift the skip. Rows 1.9 and 1.14 make a forged `reset=` raise in `--stage 4`. Minor
+4's set has no row: it changes no answer (Pre-flight 6).
 
 ```bash
 git add ccd/ccd deploy/measure-continuity.py README.md docs/superpowers/specs/2026-09-23-session-continuity-design.md \
@@ -1094,16 +1193,18 @@ EOF
 
 **Files:**
 - Modify: `ccd/ccd` — the new section directly above `_route_apply_now() {` (≈19299); one line in `_route_apply_now`
-  before each `_route_type_*` call; one line in `_inject_spawn_effort` before its `send-keys`; `_reg_purge`'s inventory
-  (≈3889–3900, three lines in place); the `_reg_get` census (≈3137–3141, in place)
+  before each `_route_type_*` call; one line in `_inject_spawn_effort` before its `send-keys`; one line in
+  `_spawn_start` before its `local routeflags=…` (≈20353, below the corpus); `_reg_purge`'s inventory (≈3889–3900,
+  three lines in place); the `_reg_get` census (≈3137–3141, in place)
 - Test: `server/test/ccd-operator-choice.test.ts` (new)
 
 **Interfaces:**
 - Consumes: `_reg_get`/`_reg_set`; `ROUTE_CLASSES`, `ROUTE_EFFORTS`, `_route_word_in`.
 - Produces: `TYPED_MATCH_WINDOW=60`, `TYPED_KEEP_ROWS=16`, `MODEL_FAMILY_TOKENS="-fable-:fable -opus-:opus
   -sonnet-:sonnet -haiku-:haiku"`; `_typed_note <id> <model|effort> <value>` — appends `"<epoch> <kind> <value>"` to
-  `$REG/<id>.typed` (a value of one token, `[A-Za-z0-9._-]{1,64}`; the last `TYPED_KEEP_ROWS` rows kept), always rc
-  0; `_model_family_class <model-id>` → the class its first family token names (`familyClassOf`), rc 1 none;
+  `$REG/<id>.typed` (a value of one token, `[A-Za-z0-9._-]{1,64}`; the last `TYPED_KEEP_ROWS` keystroke rows kept)
+  below the journal's FLOOR, its first row `"<epoch> since"`, written when the file has none and never moved;
+  `_typed_note <id> since` opens the floor alone (a no-op on an open journal); always rc 0; `_model_family_class <model-id>` → the class its first family token names (`familyClassOf`), rc 1 none;
   `_model_class_of <value>` → a `ROUTE_CLASSES` word for an alias (case-folded, `[1m]` stripped) or a full model id,
   rc 1 outside the vocabulary.
 
@@ -1118,11 +1219,12 @@ Create `server/test/ccd-operator-choice.test.ts` (Task 3 appends its promotion a
 // process only, and the next spawn rebuilds its command line from the route
 // record — §1.4 measured an operator's switch to Opus come back as Fable at the
 // next auto-home. So before every stop that a spawn follows, ccd reads the
-// transcript for the newest of each local command and writes an OPERATOR's
-// choice through `cmd_route`'s own writer (`actor=operator-session`), while
-// ccd's own keystrokes — the settle's `/effort`, `route --apply` — are
-// journalled in `$REG/<id>.typed` and never promoted. Each case is red when its
-// guard is removed (the plan's mutation table is the measurement).
+// transcript for the newest of each local command that no journal row explains
+// and writes that OPERATOR's choice through `cmd_route`'s own writer
+// (`actor=operator-session`), while ccd's own keystrokes — the settle's
+// `/effort`, `route --apply` — are journalled in `$REG/<id>.typed` and never
+// promoted. Each case is red when its guard is removed (the plan's mutation
+// table is the measurement).
 //
 // FIXTURE HOME ONLY (`makeCcdHarness`): systemd, tmux and every keystroke are
 // shell functions that LOG, and the transcript is a file this file writes.
@@ -1142,7 +1244,13 @@ const now = (): number => Math.floor(Date.now() / 1000);
 const iso = (epoch: number): string => new Date(epoch * 1000).toISOString();
 const DAY = 86400;
 
-const seed = (id = ID): void => {
+/** The journal's floor (`<epoch> since`), as a spawn by this ccd leaves it —
+ *  two days ago unless the case says otherwise, so it is older than every
+ *  command a case writes. */
+const journal = (id = ID, age = 2 * DAY): void => {
+  h.sh(`_reg_set ${id} typed "$(( $(date +%s) - ${age} )) since"`);
+};
+const seed = (id = ID, opened = true): void => {
   h.sh(`_reg_set ${id} wrapper claude
         _reg_set ${id} home claude
         _reg_set ${id} project demo
@@ -1150,6 +1258,7 @@ const seed = (id = ID): void => {
         _reg_set ${id} uuid ${UUID}
         _reg_set ${id} started 1`);
   fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
+  if (opened) journal(id);
 };
 /** Route fields, written a day ago — older than every command a case writes,
  *  unless the case says otherwise (THE RECORD WINS WHEN IT IS NEWER). */
@@ -1177,8 +1286,13 @@ const turn = (at: number): string => JSON.stringify({
   type: 'assistant', uuid: `a${at}`, timestamp: iso(at),
   message: { model: 'claude-opus-5', role: 'assistant', content: [{ type: 'text', text: 'Working on it.' }] },
 });
-const MODEL_ACK = (name: string): string => `Set model to \u001b[1m${name}\u001b[22m for this session only`;
+/** The acknowledgement as the fleet's builds write it (2.1.250 and later:
+ *  backticks), and as 2.1.226 wrote it (ANSI bold) — measured read-only over
+ *  the fleet box's transcripts while planning. */
+const MODEL_ACK = (name: string): string => `Set model to \`${name}\` for this session only`;
+const MODEL_ACK_ANSI = (name: string): string => `Set model to \u001b[1m${name}\u001b[22m for this session only`;
 const EFFORT_ACK = (level: string): string => `Set effort level to ${level} (this session only)`;
+const ULTRACODE_ACK = 'Set effort level to ultracode (this session only): xhigh + dynamic workflow orchestration';
 
 const writeTranscript = (lines: string[], id = ID): string => {
   const p = h.sh(`_transcript_path ${id}`);
@@ -1190,7 +1304,9 @@ const keep = (id = ID): string => h.sh(`_operator_choice_keep ${id}; echo "rc=$?
 const regFile = (f: string): string => path.join(h.home, '.cc-sessions', f);
 const swapLog = (): string => (fs.existsSync(regFile('swap.log')) ? fs.readFileSync(regFile('swap.log'), 'utf8') : '');
 const routeLines = (): string[] => swapLog().split('\n').filter((l) => /^\S+ \S+ route \S+: /.test(l));
-const typedRows = (id = ID): string[] => (h.reg(id, 'typed') ?? '').split('\n').filter(Boolean);
+/** The journal's KEYSTROKE rows, and its floor row apart. */
+const typedRows = (id = ID): string[] => (h.reg(id, 'typed') ?? '').split('\n').filter((l) => / (model|effort) /.test(l));
+const floorRow = (id = ID): string | undefined => (h.reg(id, 'typed') ?? '').split('\n')[0] || undefined;
 
 /** The real cmd_swap, with systemd, tmux and the flush wait stubbed (the
  *  `ccd-swap.test.ts` idiom); TMUX is emptied so the detached arm is never taken. */
@@ -1217,7 +1333,7 @@ describe('ccd journals its own keystrokes in $REG/<id>.typed', () => {
   it('a session whose record carries an effort types nothing and journals nothing', () => {
     seed(); record({ effort: 'high' });
     h.sh(`${STUBS} _inject_spawn_effort cc-${ID}`, { PANE_TEXT: READY });
-    expect(h.reg(ID, 'typed')).toBeNull();
+    expect(typedRows()).toEqual([]);
   });
 
   it('route --apply journals the class it types and the effort, and nothing for auto', () => {
@@ -1230,12 +1346,23 @@ describe('ccd journals its own keystrokes in $REG/<id>.typed', () => {
     expect(typedRows().map((r) => r.replace(/^\d{10} /, ''))).toEqual(['model sonnet']);
   });
 
-  it('keeps the last TYPED_KEEP_ROWS rows, and refuses a value that is not one token', () => {
+  it('the spawn opens the journal at a floor, and a later spawn or keystroke keeps that floor', () => {
+    const SPAWN = `tmux() { ${WIDE_PANE} :; }; _spawn_start ${ID} new || :`;
+    h.sh(`_reg_set ${ID} wrapper claude; _reg_set ${ID} workdir "$HOME"; _reg_set ${ID} uuid u1; ${SPAWN}`);
+    expect(floorRow(), 'the first spawn by this ccd opens the journal').toMatch(/^\d{10} since$/);
+    h.sh(`_reg_set ${ID} typed "1000000000 since"; ${SPAWN}; _typed_note ${ID} effort high`);
+    expect(floorRow()).toBe('1000000000 since');
+    expect(typedRows()).toHaveLength(1);
+  });
+
+  it('keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token', () => {
     seed();
+    const floor = floorRow();
     h.sh(`for i in $(seq 1 20); do _typed_note ${ID} effort "l$i"; done; _typed_note ${ID} effort "a b"; _typed_note ${ID} colour red`);
     const keepRows = Number(h.sh('echo "$TYPED_KEEP_ROWS"'));
     expect(typedRows()).toHaveLength(keepRows);
     expect(typedRows()[keepRows - 1]).toMatch(/ effort l20$/);
+    expect(floorRow(), 'the floor never rotates out, and never moves').toBe(floor);
   });
 
   it('.typed purges with the row', () => {
@@ -1289,13 +1416,13 @@ describe('a /model value maps through the alias table, then familyClassOf\'s das
 cd server && ./node_modules/.bin/vitest run test/ccd-operator-choice.test.ts --maxWorkers=2
 ```
 
-Expected: `6 failed | 2 passed (8)`. The two that pass are the control "a session whose record carries an effort
+Expected: `7 failed | 2 passed (9)`. The two that pass are the control "a session whose record carries an effort
 types nothing and journals nothing" and ".typed purges with the row", which `_reg_purge`'s dotless suffix glob
 already satisfies — it pins that `.typed` stays inside it.
 
 - [ ] **Step 3: The section, the journal calls and the inventory**
 
-The section's header states the whole stage, so Task 3 only adds its last function and the call sites:
+The section's header states the whole stage, so Task 3 only adds its last two functions and the call sites:
 
 In `ccd/ccd` (in `_reg_purge`), find this text:
 
@@ -1348,9 +1475,11 @@ and insert, directly above it:
 # the next spawn rebuilds its command line from the route record — spec §1.4
 # measured an operator's switch to Opus come back as Fable at the next
 # auto-home. So before a stop that a spawn follows, ccd reads the session's
-# transcript for the newest `/model` and the newest `/effort` local command and
-# writes an OPERATOR's choice to the record through `cmd_route`'s own writer,
-# `actor=operator-session`; that writer's swap.log `route` line records it.
+# transcript for the newest `/model` and the newest `/effort` local command
+# that no journal row explains — one per kind, because they are two fields —
+# and writes that OPERATOR's choice to the record through `cmd_route`'s own
+# writer, `actor=operator-session`; that writer's swap.log `route` line
+# records it.
 #
 # CCD'S OWN KEYSTROKES ARE NOT THE OPERATOR'S. `_inject_spawn_effort` (the
 # settle's `/effort`) and `_route_apply_now` (`route --apply`, a degraded class
@@ -1361,9 +1490,20 @@ and insert, directly above it:
 # before the settle `/effort` is typed, and `route --apply` rewrites it for
 # fields it never types.
 #
+# THE JOURNAL HAS A FLOOR. Its first row, `<epoch> since`, is written when the
+# journal opens — at the first spawn this ccd makes (`_spawn_start`), the first
+# keystroke it journals, or the first stop that finds none — and is kept when
+# older rows rotate out. A command older than the floor is never read: an
+# older ccd typed the settle's `/effort` and `route --apply`'s `/model` without
+# journalling them, so before the floor ccd's keystrokes and the operator's
+# cannot be told apart. A stop that finds no floor opens it and promotes
+# nothing, and says so (`unmeasured`).
+#
 # A COMMAND'S VALUE is its `<command-args>`, or — for the picker and the slider,
-# which take none — the value Claude Code's own acknowledgement names (`Set model
-# to Opus 5.5 …`, `Set effort level to high …`). A command with no
+# which take none — the value Claude Code's own acknowledgement names, with its
+# ANSI bold or backticks removed (`Set model to Opus 5.5 …`, `Set effort level to
+# high …`, `Ultracode on …`); a picker row Claude Code marks `(default)` is the
+# `default` class. A command with no
 # acknowledgement after it changed nothing and is never read, nor is a row a
 # subagent wrote, nor a user turn that carries anything besides the envelope (a
 # human quoting it). A `/model` value maps to the record's class vocabulary
@@ -1373,10 +1513,15 @@ and insert, directly above it:
 # (`shared/models.mjs`), pinned to it by an agreement test. A `/effort` value
 # maps through `ROUTE_EFFORTS`.
 #
-# NEVER A FAILURE IN THE STOP PATH. No transcript, no python, a value outside
-# the vocabulary (logged; the record unchanged), a refusal by the record's own
-# checks (`cmd_route` runs in a subshell, so its `die` ends only that) — each is
-# rc 0 and the stop goes on exactly as before.
+# NEVER A FAILURE IN THE STOP PATH, AND NEVER A SILENT LOSS. Every path is rc 0
+# and the stop goes on exactly as before. Silent only where nothing was lost:
+# no registry row, no transcript, no command, a value already held, a field
+# newer than the keystroke. Logged as `operator-choice <id>: …` where the
+# operator's choice may be lost: a value outside the vocabulary or one the
+# record's own checks refuse (`cmd_route` runs in a subshell, so its `die` ends
+# only that) — the record unchanged — and `unmeasured (…)` where ccd could not
+# read at all (no floor yet, a transcript that is not a readable regular file —
+# never `grep` on a FIFO — no python, a reader that failed).
 #
 # THE RECORD WINS WHEN IT IS NEWER. A field written after the keystroke — the
 # PWA's picker, a coordinator's route, this function's own last promotion — is
@@ -1384,14 +1529,22 @@ and insert, directly above it:
 # a field whose time cannot be read is not overwritten either; and a value the
 # record already holds is not written again.
 TYPED_MATCH_WINDOW=60   # seconds between a journalled keystroke and the transcript command it explains: ccd's slowest typing (the effort slider: seven Lefts and up to four Rights, a second each) lands well inside it
-TYPED_KEEP_ROWS=16      # `.typed` rows kept: only a row near a command matters, and the settle and the applier type a handful per spawn
+TYPED_KEEP_ROWS=16      # `.typed` keystroke rows kept beside its floor: only a row near a command matters, and the settle and the applier type a handful per spawn
 MODEL_FAMILY_TOKENS="-fable-:fable -opus-:opus -sonnet-:sonnet -haiku-:haiku"   # `familyClassOf`'s FAMILY_TOKENS (shared/models.mjs), in its match order — the agreement test reds on any drift
 
-_typed_note() {   # id model|effort value — journal one keystroke ccd is about to type (§5.7). Never fails its caller.
-  local id="$1" kind="$2" v="$3" rows
-  [[ "$kind" =~ ^(model|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || return 0
-  rows=$(_reg_get "$id" typed | tail -n "$((TYPED_KEEP_ROWS - 1))")
-  _reg_set "$id" typed "${rows:+$rows$'\n'}$(date +%s) $kind $v" 2>/dev/null || true
+_typed_note() {   # id model|effort value — journal one keystroke ccd is about to type; id since — open the journal only (§5.7). Never fails its caller.
+  local id="$1" kind="$2" v="${3:-}" rows floor
+  [[ "$kind" == since || ( "$kind" =~ ^(model|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ) ]] || return 0
+  rows=$(_reg_get "$id" typed)
+  floor="${rows%%$'\n'*}"
+  if [[ "$floor" =~ ^[0-9]{1,12}\ since$ ]]; then
+    [[ "$kind" == since ]] && return 0   # already open: the floor stays where it was
+  else
+    floor="$(date +%s) since"
+  fi
+  rows=$(grep -E '^[0-9]{1,12} (model|effort) ' <<<"$rows" | tail -n "$((TYPED_KEEP_ROWS - 1))")
+  [[ "$kind" == since ]] || rows="${rows:+$rows$'\n'}$(date +%s) $kind $v"
+  _reg_set "$id" typed "$floor${rows:+$'\n'$rows}" 2>/dev/null || true
   return 0
 }
 
@@ -1448,6 +1601,23 @@ and insert, directly above it:
 
 ```bash
   _typed_note "$id" effort "$level"   # the settle's keystroke, never the operator's choice (session-continuity §5.7)
+```
+
+The journal's floor opens at the spawn (review finding: without a floor, every live session's first stop after the
+deploy would promote the settle `/effort ultracode` an older ccd typed unjournalled — review measured it on the first draft:
+`effort ∅ -> ultracode [actor=operator-session]`). `_spawn_start` is below the corpus, so the line moves no citation:
+
+In `ccd/ccd` (in `_spawn_start`), find this anchor:
+
+<!-- replay: insert-above ccd/ccd -->
+```bash
+  local routeflags="" routeenv="" rclass rsub rwf reff inert="" rapplied
+```
+
+and insert, directly above it:
+
+```bash
+  _typed_note "$id" since   # the operator-choice journal opens at this ccd's first spawn of the row: no older command is read as the operator's (session-continuity §5.7)
 ```
 
 
@@ -1533,26 +1703,30 @@ cd server && ./node_modules/.bin/vitest run test/ccd-operator-choice.test.ts tes
 ./node_modules/.bin/vitest run test/ccd-route-settle.test.ts test/ccd-route-apply.test.ts test/ccd-auto-swap-pool.test.ts test/single-definition.test.ts --maxWorkers=2
 ```
 
-Expected: `25 passed (25)` (8 + 3 + 14); then green (`ccd-auto-swap-pool`'s inventory window still finds
+Expected: `26 passed (26)` (9 + 3 + 14); then `372 passed (372)` (`ccd-auto-swap-pool`'s inventory window still finds
 `` `strandnotify` `` — the window ends at the list's own last field).
 
 - [ ] **Step 7: Mutation check, then commit**
 
 | # | File | Exact edit (old → new) | Suite | Measured red on the full prototype |
 |---|---|---|---|---|
-| 2.1 | `ccd/ccd` | `_typed_note "$id" effort "$level"   # the settle's keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 2 failed \| 26 passed (28): “the settle journals its /effort before it types it”; “the settle /effort on a session with no effort field is not promoted” |
-| 2.2 | `ccd/ccd` | `_typed_note "$id" model "$cls"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 2 failed \| 26 passed (28): “route --apply journals the class it types and the effort, and nothing for auto”; “a route --apply /model is not promoted — not even a degraded class typed over the operator's fable” |
-| 2.3 | `ccd/ccd` | `_typed_note "$id" effort "$eff"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “route --apply journals the class it types and the effort, and nothing for auto” |
-| 2.4 | `ccd/ccd` | `rows=$(_reg_get "$id" typed \| tail -n "$((TYPED_KEEP_ROWS - 1))")` → `rows=$(_reg_get "$id" typed)` | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “keeps the last TYPED_KEEP_ROWS rows, and refuses a value that is not one token” |
-| 2.5 | `ccd/ccd` | `[[ "$kind" =~ ^(model\|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ]] \|\| return 0` → `[[ "$kind" =~ ^(model\|effort)$ ]] \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “keeps the last TYPED_KEEP_ROWS rows, and refuses a value that is not one token” |
-| 2.6 | `ccd/ccd` | `_route_word_in "${v,,}" "$ROUTE_CLASSES" && { printf '%s\n' "${v,,}"; return 0; }` → (nothing) | ccd-operator-choice.test.ts | 8 failed \| 20 passed (28): “the aliases — ROUTE_CLASSES, each also with [1m] — and an acknowledgement's display word”; “/model opus, acknowledged: the class is written through cmd_route, actor=operator-session”; “the picker takes no argument: its acknowledgement names the value”; … and 5 more |
-| 2.7 | `ccd/ccd` | `local v="${1%\[1m\]}"` → `local v="$1"` | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “the aliases — ROUTE_CLASSES, each also with [1m] — and an acknowledgement's display word” |
-| 2.8 | `ccd/ccd` | `MODEL_FAMILY_TOKENS="-fable-:fable -opus-:opus -sonnet-:sonnet -haiku-:haiku"` → `MODEL_FAMILY_TOKENS="-opus-:opus -fable-:fable -sonnet-:sonnet -haiku-:haiku"` | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “_model_family_class agrees with familyClassOf on every id, and MODEL_FAMILY_TOKENS is FAMILY_TOKENS” |
-| 2.9 | `ccd/ccd` | `[[ "$1" == *"${t%%:*}"* ]] && { printf '%s\n' "${t##*:}"; return 0; }` → `[[ "$1" == *"${t##*:}"* ]] && { printf '%s\n' "${t##*:}"; return 0; }` | ccd-operator-choice.test.ts | 2 failed \| 26 passed (28): “a full model id through the port, and everything else outside the vocabulary”; “_model_family_class agrees with familyClassOf on every id, and MODEL_FAMILY_TOKENS is FAMILY_TOKENS” |
+| 2.1 | `ccd/ccd` | `_typed_note "$id" effort "$level"   # the settle's keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “the settle journals its /effort before it types it”; “the settle /effort on a session with no effort field is not promoted” |
+| 2.2 | `ccd/ccd` | `_typed_note "$id" model "$cls"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 3 failed \| 34 passed (37): “route --apply journals the class it types and the effort, and nothing for auto”; “the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator's own”; “a route --apply /model is not promoted — not even a degraded class typed over the operator's fable, in either acknowledgement shape” |
+| 2.3 | `ccd/ccd` | `_typed_note "$id" effort "$eff"   # ccd's own keystroke, never the operator's choice (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “route --apply journals the class it types and the effort, and nothing for auto” |
+| 2.4 | `ccd/ccd` | `<<<"$rows" \| tail -n "$((TYPED_KEEP_ROWS - 1))")` → `<<<"$rows")` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token” |
+| 2.5 | `ccd/ccd` | `[[ "$kind" == since \|\| ( "$kind" =~ ^(model\|effort)$ && "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ) ]] \|\| return 0` → `[[ "$kind" == since \|\| "$kind" =~ ^(model\|effort)$ ]] \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token” |
+| 2.6 | `ccd/ccd` | `_route_word_in "${v,,}" "$ROUTE_CLASSES" && { printf '%s\n' "${v,,}"; return 0; }` → (nothing) | ccd-operator-choice.test.ts | 11 failed \| 26 passed (37): “the aliases — ROUTE_CLASSES, each also with [1m] — and an acknowledgement's display word”; “/model opus, acknowledged: the class is written through cmd_route, actor=operator-session”; “the picker takes no argument: its acknowledgement names the value, in either shape Claude Code writes it”; … and 8 more |
+| 2.7 | `ccd/ccd` | `local v="${1%\[1m\]}"` → `local v="$1"` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the aliases — ROUTE_CLASSES, each also with [1m] — and an acknowledgement's display word” |
+| 2.8 | `ccd/ccd` | `MODEL_FAMILY_TOKENS="-fable-:fable -opus-:opus -sonnet-:sonnet -haiku-:haiku"` → `MODEL_FAMILY_TOKENS="-opus-:opus -fable-:fable -sonnet-:sonnet -haiku-:haiku"` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “_model_family_class agrees with familyClassOf on every id, and MODEL_FAMILY_TOKENS is FAMILY_TOKENS” |
+| 2.9 | `ccd/ccd` | `[[ "$1" == *"${t%%:*}"* ]] && { printf '%s\n' "${t##*:}"; return 0; }` → `[[ "$1" == *"${t##*:}"* ]] && { printf '%s\n' "${t##*:}"; return 0; }` | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “a full model id through the port, and everything else outside the vocabulary”; “_model_family_class agrees with familyClassOf on every id, and MODEL_FAMILY_TOKENS is FAMILY_TOKENS” |
+| 2.10 | `ccd/ccd` | `_typed_note "$id" since   # the operator-choice journal opens at this ccd's first spawn of the row: no older command is read as the operator's (session-continuity §5.7)` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the spawn opens the journal at a floor, and a later spawn or keystroke keeps that floor” |
+| 2.11 | `ccd/ccd` | `if [[ "$floor" =~ ^[0-9]{1,12}\ since$ ]]; then` → `if false; then` | ccd-operator-choice.test.ts | 4 failed \| 33 passed (37): “the spawn opens the journal at a floor, and a later spawn or keystroke keeps that floor”; “keeps the last TYPED_KEEP_ROWS keystroke rows below its floor, and refuses a value that is not one token”; “the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator's own”; … and 1 more |
 
-Rows 2.1 and 2.2 are measured on the full prototype, where they also red the spec's first two mutation rows (Task 3's
-cases "the settle /effort on a session with no effort field is not promoted" and "a route --apply /model is not
-promoted…"). At this task's commit they red the journal cases only.
+Every row is measured on the full prototype (37 cases), so rows 2.1, 2.2 and 2.11 also red Task 3's cases — among
+them the spec's first two mutation rows ("the settle /effort on a session with no effort field is not promoted", "a
+route --apply /model is not promoted…"). At this task's commit they red the journal cases only. Row 2.10 is the
+floor's spawn line, row 2.11 the floor that never moves; `_typed_note since`'s early return on an open journal has
+no row — it saves a rewrite and changes no answer.
 
 ```bash
 git add ccd/ccd server/test/ccd-operator-choice.test.ts
@@ -1560,7 +1734,7 @@ git commit -F - <<'EOF'
 feat(continuity): ccd journals its own /model and /effort, and maps a /model value to the route record's class (stage 7, part 1)
 
 `_inject_spawn_effort` and `_route_apply_now` append each keystroke they type to `$REG/<id>.typed`
-(`<epoch> <kind> <value>`, the last 16 rows, purged with the row). `_model_class_of` maps an alias
+(`<epoch> <kind> <value>`, the last 16 rows below a floor row the first spawn opens, purged with the row). `_model_class_of` maps an alias
 (ROUTE_CLASSES, with `[1m]`) or, through `_model_family_class`, a full model id — the bash port of
 `familyClassOf`'s dash-token rule, pinned to it by an agreement test. `_reg_get` census +1.
 EOF
@@ -1573,7 +1747,7 @@ EOF
 **Model routing:** `opus`, effort `high` — it writes into the record every spawn reads, from a path no stop may fail on.
 
 **Files:**
-- Modify: `ccd/ccd` — `_operator_choice_keep`, directly above `_route_apply_now() {`; one line in `cmd_swap` before its
+- Modify: `ccd/ccd` — `_operator_choice_keep` and `_operator_choice_say`, directly above `_route_apply_now() {`; one line in `cmd_swap` before its
   `_svc_stop` (≈24167); one line in `cmd_stop` before its `_ws_unsupervise` (≈24514); one line for one line in
   `cmd_ws_archive` (≈9859); the `_reg_get` census (in place)
 - Test: `server/test/ccd-operator-choice.test.ts` (extend), `server/test/ccd-die-containment.test.ts` (one name in its
@@ -1581,19 +1755,24 @@ EOF
 
 **Interfaces:**
 - Consumes: Task 2's `_typed_note` journal, `TYPED_MATCH_WINDOW`, `_model_class_of`; `_transcript_path`,
-  `_route_peek`, `_route_bytes`, `_plat_mtime`, `cmd_route` (unchanged).
-- Produces: `_operator_choice_keep <id>` — always rc 0. For the newest ACKNOWLEDGED `/model` and the newest
-  acknowledged `/effort` in the session's transcript that no `.typed` row of the same kind and value explains within
-  `TYPED_MATCH_WINDOW`: a value outside the vocabulary logs `operator-choice <id>: /<kind> (<n> bytes) is outside the
-  <field> vocabulary — the record is unchanged`; a value the record holds, or a field written after the command (or
-  whose time cannot be read), writes nothing; otherwise `( cmd_route --session <id> --set <field>=<value> --actor
-  operator-session --reason "its own /<kind>, kept across a restart" )`, and on its refusal `operator-choice <id>:
-  /<kind> <value> refused by the route record's own checks — the record is unchanged`.
+  `_route_peek`, `_plat_mtime`, `cmd_route` (unchanged).
+- Produces: `_operator_choice_keep <id>` — always rc 0. With no journal floor it opens one, logs `operator-choice
+  <id>: unmeasured (its journal opened only now, …)` (when a transcript exists) and promotes nothing; a transcript
+  that is not a readable regular file, no python3, or a failed reader each log `unmeasured (<why>)`. Otherwise, per
+  kind, the newest ACKNOWLEDGED command at or after the floor that no `.typed` row of the same kind and value explains
+  within `TYPED_MATCH_WINDOW`: a value outside the vocabulary logs `operator-choice <id>: /<kind> <value> is outside
+  the <field> vocabulary — the record is unchanged` (`(<n> bytes, not one token)` in the value's place when it is not
+  one token); a value the record holds, or a field written after the command (or whose time cannot be read), writes
+  nothing; otherwise `( cmd_route --session <id> --set <field>=<value> --actor operator-session --reason "its own
+  /<kind>, kept across a restart" )`, and on its refusal `operator-choice <id>: /<kind> <value> refused by the route
+  record's own checks — the record is unchanged`. `_operator_choice_say <id> <text>` appends the one
+  `operator-choice <id>: <text>` line.
 
 - [ ] **Step 1: Write the failing tests**
 
 Append to `server/test/ccd-operator-choice.test.ts` — the promotion (including the spec's four mutation rows,
-verbatim as case names) and the three call sites with their census:
+verbatim as case names or their prefixes), the journal's floor, and the three call sites with the census of every
+stop:
 
 <!-- replay: append server/test/ccd-operator-choice.test.ts -->
 ```ts
@@ -1610,11 +1789,22 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     expect(routeLines()[0]).toMatch(new RegExp(`route ${ID}: class fable -> opus \\[actor=operator-session\\]`));
   });
 
-  it('the picker takes no argument: its acknowledgement names the value', () => {
+  it('the picker takes no argument: its acknowledgement names the value, in either shape Claude Code writes it', () => {
     seed(); record({ class: 'fable' }); const t = now() - 600;
     writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK('Opus 5.5 (1M context)'))]);
     keep();
-    expect(h.reg(ID, 'class')).toBe('opus');
+    expect(h.reg(ID, 'class'), 'backticks (2.1.250 and later)').toBe('opus');
+    record({ class: 'fable' });
+    writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK_ANSI('Sonnet 5'))]);
+    keep();
+    expect(h.reg(ID, 'class'), 'ANSI bold (2.1.226)').toBe('sonnet');
+  });
+
+  it('a picker row Claude Code marks (default) is the default class, not the model it resolves to', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK('Sonnet 5 (default)'))]);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('default');
   });
 
   it('/effort high, and both kinds in one transcript', () => {
@@ -1625,7 +1815,29 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     expect(h.reg(ID, 'effort')).toBe('high');
   });
 
-  it('the newest ACKNOWLEDGED command wins: a later one Claude Code refused changed nothing', () => {
+  it('/effort ultracode as 2.1.284 and later acknowledge it ("Ultracode on …") is read', () => {
+    seed(); record({ effort: 'high' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'effort', 'ultracode'), ack(t, 'Ultracode on (this session only): dynamic workflows on every task. Effort stays medium.')]);
+    keep();
+    expect(h.reg(ID, 'effort')).toBe('ultracode');
+  });
+
+  it('the newest of two acknowledged commands wins', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'sonnet'), ack(t, MODEL_ACK('Sonnet 5')), cmd(t + 60, 'model', 'opus'), ack(t + 60, MODEL_ACK('Opus 5.5'))]);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('opus');
+  });
+
+  it('the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator\'s own', () => {
+    seed(); record({ class: 'fable', degraded: 'opus' }); const t = now() - 600;
+    h.sh(`_route_type_model() { return 0; }; _route_apply_now ${ID}`);   // journals `model opus` now: the degraded class
+    writeTranscript([cmd(t, 'model', 'sonnet'), ack(t, MODEL_ACK('Sonnet 5')), cmd(now() + 5, 'model'), ack(now() + 5, MODEL_ACK('Opus 5.5'))]);
+    keep();
+    expect(h.reg(ID, 'class')).toBe('sonnet');
+  });
+
+  it('an acknowledged command wins over a later one Claude Code refused, which changed nothing', () => {
     seed(); record({ class: 'fable' }); const t = now() - 600;
     writeTranscript([cmd(t, 'model', 'sonnet'), ack(t, MODEL_ACK('Sonnet 5')),
       cmd(t + 60, 'model', 'opus'), ack(t + 60, "Model 'opus' is not available on this plan")]);
@@ -1648,12 +1860,12 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     expect(h.reg(ID, 'class')).toBe('fable');
   });
 
-  it('an argument that is not one token is logged as outside the vocabulary, never split into fields', () => {
+  it('an argument that is not one token is logged with its real size as outside the vocabulary, never split into fields', () => {
     seed(); record({ class: 'fable' }); const t = now() - 600;
     writeTranscript([cmd(t, 'model', 'opus 1712345678'), ack(t, MODEL_ACK('Opus 5.5'))]);
     keep();
     expect(h.reg(ID, 'class')).toBe('fable');
-    expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: /model \\(1 bytes\\) is outside the class vocabulary`));
+    expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: /model \\(15 bytes, not one token\\) is outside the class vocabulary`));
   });
 
   it('a value the record already holds is not written again', () => {
@@ -1679,12 +1891,59 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     expect(h.reg(ID, 'class')).toBe('fable');
   });
 
-  it('never a failure: no transcript, no registry row, or a directory where the transcript should be — rc 0, nothing written', () => {
+  it('nothing to read is silent: no transcript, or no registry row — rc 0, nothing written, nothing logged', () => {
     seed(); record({ class: 'fable' });
     expect(keep()).toBe('rc=0');
     expect(keep('nobody-here')).toBe('rc=0');
-    fs.mkdirSync(h.sh(`_transcript_path ${ID}`), { recursive: true });
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(swapLog()).toBe('');
+  });
+
+  it('could not measure is said, never silent: a directory for a transcript, no python3, a reader that failed — rc 0, the record unchanged', () => {
+    seed(); record({ class: 'fable' });
+    const p = writeTranscript([cmd(now() - 600, 'model', 'opus'), ack(now() - 600, MODEL_ACK('Opus 5.5'))]);
+    expect(h.sh(`command() { [[ "$*" == "-v python3" ]] && return 1; builtin command "$@"; }; _operator_choice_keep ${ID}; echo "rc=$?"`)).toBe('rc=0');
+    expect(h.sh(`python3() { return 1; }; _operator_choice_keep ${ID}; echo "rc=$?"`)).toBe('rc=0');
+    fs.rmSync(p); fs.mkdirSync(p);
     expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(swapLog().split('\n').filter(Boolean).map((l) => l.replace(/^\S+ \S+ /, ''))).toEqual([
+      `operator-choice ${ID}: unmeasured (no python3)`,
+      `operator-choice ${ID}: unmeasured (the transcript reader failed)`,
+      `operator-choice ${ID}: unmeasured (its transcript is not a readable regular file)`,
+    ]);
+  });
+
+  it('a FIFO where the transcript should be is never opened: the stop is not held, and it is said', () => {
+    seed(); record({ class: 'fable' });
+    const p = h.sh(`_transcript_path ${ID}`);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    h.sh(`mkfifo ${JSON.stringify(p)}`);
+    const out = h.sh(`_operator_choice_keep ${ID} & pid=$!
+      for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+      if kill -0 "$pid" 2>/dev/null; then kill "$pid"; : > ${JSON.stringify(p)}; echo held; else wait "$pid"; echo "rc=$?"; fi`);
+    expect(out, 'a grep on a FIFO blocks the stop until somebody writes to it').toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: unmeasured \\(its transcript is not a readable regular file\\)`));
+  });
+
+  // ── the journal's floor: what an older ccd typed is never the operator's ──
+
+  it('a session with no journal yet (spawned by an older ccd) promotes nothing at its first stop, opens the journal, and says so', () => {
+    seed(ID, false); const t = now() - 7200;
+    writeTranscript([cmd(t, 'effort', 'ultracode'), ack(t, ULTRACODE_ACK)]);   // an older ccd's settle, never journalled
+    keep();
+    expect(h.reg(ID, 'effort'), 'the box default became an operator choice at the deploy').toBeNull();
+    expect(floorRow()).toMatch(/^\d{10} since$/);
+    expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: unmeasured \\(its journal opened only now`));
+    keep();
+    expect(h.reg(ID, 'effort'), 'and at its second: the command is older than the floor').toBeNull();
+  });
+
+  it('a command older than the journal\'s floor is not read', () => {
+    seed(ID, false); journal(ID, 1800); record({ class: 'fable' }); const t = now() - 3600;
+    writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK_ANSI('Opus 5.5'))]);   // an older ccd's route --apply
+    keep();
     expect(h.reg(ID, 'class')).toBe('fable');
     expect(swapLog()).toBe('');
   });
@@ -1696,28 +1955,31 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     h.sh(`sleep() { :; }; tmux() { ${WIDE_PANE} case "\${1:-}" in capture-pane) printf '? for shortcuts\\n❯ \\n' ;; esac; return 0; };
       _pane_box_draft() { printf ''; }; _inject_spawn_effort cc-${ID}`);
     const t = now() + 2;
-    writeTranscript([cmd(t, 'effort', 'ultracode'), ack(t, 'Set effort level to ultracode (this session only): xhigh + dynamic workflow orchestration')]);
+    writeTranscript([cmd(t, 'effort', 'ultracode'), ack(t, ULTRACODE_ACK)]);
     keep();
     expect(h.reg(ID, 'effort'), 'the box default became an operator choice').toBeNull();
   });
 
   it('control: the same /effort an hour from any journalled keystroke is the operator\'s', () => {
     seed();
-    h.sh(`_reg_set ${ID} typed "$(( $(date +%s) - 3600 )) effort ultracode"`);
+    h.sh(`_typed_note ${ID} effort ultracode; _reg_set ${ID} typed "$(sed "2s/^[0-9]*/$(( $(date +%s) - 3600 ))/" "$REG/${ID}.typed")"`);
     const t = now() - 10;
-    writeTranscript([cmd(t, 'effort', 'ultracode'), ack(t, 'Set effort level to ultracode (this session only): xhigh + dynamic workflow orchestration')]);
+    writeTranscript([cmd(t, 'effort', 'ultracode'), ack(t, ULTRACODE_ACK)]);
     keep();
     expect(h.reg(ID, 'effort')).toBe('ultracode');
   });
 
-  it('a route --apply /model is not promoted — not even a degraded class typed over the operator\'s fable', () => {
+  it('a route --apply /model is not promoted — not even a degraded class typed over the operator\'s fable, in either acknowledgement shape', () => {
     seed(); record({ class: 'fable', degraded: 'opus' });
     h.sh(`_route_type_model() { return 0; }; _route_apply_now ${ID}`);
     const t = now() + 5;
     writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK('Opus 5.5'))]);
     keep();
+    writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK_ANSI('Opus 5.5'))]);
+    keep();
     expect(h.reg(ID, 'class')).toBe('fable');
     expect(routeLines()).toEqual([]);
+    expect(swapLog(), 'nor logged as a revert').toBe('');
   });
 
   it('an unmappable value does not abort a swap: logged, the record unchanged, and the swap lands', () => {
@@ -1726,7 +1988,7 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     h.sh(`${SWAP} cmd_swap ${ID} claude-d`, { TMUX: '' });
     expect(h.reg(ID, 'wrapper')).toBe('claude-d');
     expect(h.reg(ID, 'class')).toBe('fable');
-    expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: /model \\(11 bytes\\) is outside the class vocabulary — the record is unchanged`));
+    expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: /model gpt-5\\.6-sol is outside the class vocabulary — the record is unchanged`));
   });
 
   it('…nor does a value the record\'s own checks refuse (haiku takes no effort level)', () => {
@@ -1738,15 +2000,15 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: /effort high refused by the route record's own checks`));
   });
 
-  it('an operator /model opus survives an auto-home: written before the stop, so the spawn reads it', () => {
-    seed(); record({ class: 'fable' }); const t = now() - 600;
+  it('an operator /model opus survives an auto-home: the home-ward swap writes it before its stop, and the next spawn composes opus', () => {
+    seed(); h.sh(`_reg_set ${ID} wrapper claude-d`); record({ class: 'fable' }); const t = now() - 600;
     writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5')), turn(t + 5)]);
-    h.sh(`${SWAP} CCD_SWAP_AUTO=1 cmd_swap ${ID} claude-d`, { TMUX: '' });
-    expect(h.reg(ID, 'wrapper')).toBe('claude-d');
-    expect(h.sh(`_route_get ${ID} class`)).toBe('opus');
+    h.sh(`${SWAP} CCD_SWAP_AUTO=1 cmd_swap ${ID} claude`, { TMUX: '' });
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(h.sh(`_route_wanted ${ID}`).split(' ')[0], 'the class the spawn and the applier compose').toBe('opus');
     const log = swapLog().split('\n');
     const route = log.findIndex((l) => l.includes(` route ${ID}: class fable -> opus [actor=operator-session]`));
-    const landed = log.findIndex((l) => l.includes(` swap ${ID}: claude -> claude-d `));
+    const landed = log.findIndex((l) => l.includes(` swap ${ID}: claude-d -> claude `));
     expect(route).toBeGreaterThan(-1);
     expect(landed).toBeGreaterThan(route);
   });
@@ -1767,31 +2029,45 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
     h.makeRepo('demo');
     h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
     const WS = 'demo-quiet-basin';
-    record({ class: 'fable' }, WS); const t = now() - 600;
+    journal(WS); record({ class: 'fable' }, WS); const t = now() - 600;
     writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))], WS);
     const ARCH = `_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; }; tmux() { return 1; }; _session_verdict() { echo gone; };`;
     expect(h.sh(`${ARCH} cmd_ws_archive --session ${WS}`)).toMatch(/^archived /);
     expect(h.reg(WS, 'class')).toBe('opus');
   });
 
-  // THE CENSUS OF CALL SITES: every stop in ccd that a spawn follows, named. A
-  // new stop-then-spawn path must be added here, or this reds. The stops left
-  // out are named in the plan: ws-rm, forget and the reap and reclaim tails end
-  // the row (no spawn follows); `_swap_refuse`'s restart follows cmd_swap's own
-  // stop, which already kept the choice; a supervisor revival has no ccd stop.
-  it('_operator_choice_keep is called at exactly three sites, each the statement before its stop', () => {
+  // THE CENSUS OF STOPS. Every function in ccd that stops a session — a
+  // `tmux kill-session`, a `claude-session@` unit stopped or booted out, or a
+  // `_ws_unsupervise` — is named here: either a stop a spawn follows, which
+  // must call `_operator_choice_keep` as the statement before its stop, or a
+  // stop after which no spawn follows, with the reason. A NEW function that
+  // stops a session is in neither list, and this reds until it is classified.
+  it('every stop in ccd is classified: three keep the operator\'s choice first, the rest end the row', () => {
+    const KEEPS = ['cmd_stop', 'cmd_swap', 'cmd_ws_archive'];
+    const ENDS: Record<string, string> = {
+      cmd_ws_rm: 'the workspace and its row are removed',
+      cmd_forget: 'the row is forgotten',
+      _ws_reap_tail: 'the reap ends the row',
+      _ws_reclaim_tail: 'the reclaim ends the child row',
+      cmd_account_pane: 'an account\'s login pane, not a session',
+      cmd_supervise: 'a crash loop\'s give-up: Claude Code already exited, and no ccd stop precedes a revival',
+    };
     const src = fs.readFileSync(CCD, 'utf8').split('\n');
-    const sites = src.map((l, i) => [l, i] as const).filter(([l]) => !/^\s*#/.test(l) && l.includes('_operator_choice_keep "$id"'));
     const owner = (i: number): string => {
       for (let j = i; j >= 0; j--) { const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(src[j]!); if (m) return m[1]!; }
       return '';
     };
-    expect(sites.map(([, i]) => owner(i)).sort()).toEqual(['cmd_stop', 'cmd_swap', 'cmd_ws_archive']);
-    for (const [line, i] of sites) {
+    const STOP = /tmux kill-session|_svc_stop "claude-session@|bootout .*claude-session@|_ws_unsupervise "/;
+    const live = (l: string): boolean => !/^\s*#/.test(l);
+    const stoppers = new Set(src.flatMap((l, i) => (live(l) && STOP.test(l) ? [owner(i)] : [])));
+    expect([...stoppers].sort(), 'a function that stops a session is in neither list').toEqual([...KEEPS, ...Object.keys(ENDS)].sort());
+    const sites = src.flatMap((l, i) => (live(l) && l.includes('_operator_choice_keep "$id"') ? [i] : []));
+    expect(sites.map(owner).sort()).toEqual(KEEPS);
+    for (const i of sites) {
       const fn = owner(i);
       if (fn === 'cmd_swap') expect(src[i + 1]).toMatch(/^ {2}_svc_stop "claude-session@\$id"/);
       if (fn === 'cmd_stop') expect(src[i + 1]).toMatch(/^ {2}_ws_unsupervise "\$id" "\$surface" "\$declared"$/);
-      if (fn === 'cmd_ws_archive') expect(line).toMatch(/^ {2}_operator_choice_keep "\$id"; _ws_unsupervise "\$id" /);
+      if (fn === 'cmd_ws_archive') expect(src[i]).toMatch(/^ {2}_operator_choice_keep "\$id"; _ws_unsupervise "\$id" /);
     }
   });
 });
@@ -1804,10 +2080,10 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
 cd server && ./node_modules/.bin/vitest run test/ccd-operator-choice.test.ts --maxWorkers=2
 ```
 
-Expected: `14 failed | 14 passed (28)` — Task 2's eight pass, and so do six cases that assert nothing is written
-(the record wins when newer; a value already held; a human quoting the envelope; a subagent's row; the settle's
-`/effort`; `route --apply`'s `/model`), which no code can fail yet: their guards are measured by rows 2.1, 2.2, 3.6,
-3.7, 3.9 and 3.10.
+Expected: `21 failed | 16 passed (37)` — Task 2's nine pass, and so do seven cases that assert nothing is written
+(the record wins when newer; a value already held; a human quoting the envelope; a subagent's row; a command older
+than the journal's floor; the settle's `/effort`; `route --apply`'s `/model`), which no code can fail yet: their
+guards are measured by rows 3.6, 3.7, 3.9, 3.10, 3.19, 2.1 and 2.2.
 
 - [ ] **Step 3: The promotion and its three call sites**
 
@@ -1835,24 +2111,33 @@ and insert, directly above it:
 
 ```bash
 _operator_choice_keep() {   # id — before a stop that a spawn follows: the operator's own /model and /effort, written to the route record (§5.7). Always 0.
-  local id="$1" f out kind val at field want fm
+  local id="$1" f typed why="" out kind val at n field want fm shown
   [[ -f "$REG/$id.uuid" ]] || return 0
+  typed=$(_reg_get "$id" typed)
+  if ! [[ "${typed%%$'\n'*}" =~ ^[0-9]{1,12}\ since$ ]]; then
+    _typed_note "$id" since
+    why="its journal opened only now, so an older command may be an older ccd's own keystroke"
+  fi
   f=$(_transcript_path "$id") || return 0
-  [[ -f "$f" && -r "$f" ]] || return 0
-  command -v python3 >/dev/null 2>&1 || return 0
+  [[ -e "$f" ]] || return 0
+  [[ -z "$why" ]] || { _operator_choice_say "$id" "unmeasured ($why)"; return 0; }
+  [[ -f "$f" && -r "$f" ]] || { _operator_choice_say "$id" "unmeasured (its transcript is not a readable regular file)"; return 0; }
+  command -v python3 >/dev/null 2>&1 || { _operator_choice_say "$id" "unmeasured (no python3)"; return 0; }
   out=$({ grep -F -A1 -e '<command-name>/model</command-name>' -e '<command-name>/effort</command-name>' -- "$f" 2>/dev/null || (( $? == 1 )); } | python3 -c '
 import json, re, sys
 from datetime import datetime
 window = int(sys.argv[2])
+journal = sys.argv[1].splitlines()
+floor = int(journal[0].split()[0])
 rows = []
-for l in sys.argv[1].splitlines():
+for l in journal[1:]:
     p = l.split()
     if len(p) == 3 and p[0].isdigit() and p[1] in ("model", "effort"):
         rows.append((int(p[0]), p[1], p[2].lower()))
 ENV = re.compile(r"<command-(name|message|args)>([^<]*)</command-\1>")
 ACK = {"model": re.compile(r"Set model to (.+?)(?: and saved| for this session|$)"),
-       "effort": re.compile(r"Set effort level to ([A-Za-z]+)")}
-ANSI = re.compile(r"\x1b\[[0-9;]*m")
+       "effort": re.compile(r"Set effort level to ([A-Za-z]+)|(Ultracode) on\b")}
+CLEAN = re.compile(r"\x1b\[[0-9;]*m|`")
 SAFE = re.compile(r"[A-Za-z0-9._\[\]-]{1,64}")
 def user(line):
     try:
@@ -1880,16 +2165,20 @@ for i, line in enumerate(lines):
         continue
     nxt = user(lines[i + 1])[0] if i + 1 < len(lines) else None
     m = re.fullmatch(r"\s*<local-command-stdout>(.*)</local-command-stdout>\s*", nxt or "", re.S)
-    ack = ACK[kind].match(ANSI.sub("", m.group(1)).strip() if m else "")
-    if not ack:
+    ack = ACK[kind].match(CLEAN.sub("", m.group(1)).strip() if m else "")
+    if not ack or at < floor:
         continue
-    newest[kind] = ((tags.get("args", "").strip() or (ack.group(1).split() or ["?"])[0]), at)
-for kind, (val, at) in sorted(newest.items()):
+    named = (ack.group(1) or ack.group(2) or "").strip()
+    if kind == "model" and named.endswith("(default)"):
+        named = "default"
+    val = tags.get("args", "").strip() or (named.split() or ["?"])[0]
     if any(k == kind and v == val.lower() and abs(t - at) <= window for t, k, v in rows):
         continue
-    print(kind, val if SAFE.fullmatch(val) else "?", at)
-' "$(_reg_get "$id" typed)" "$TYPED_MATCH_WINDOW" 2>/dev/null) || return 0
-  while read -r kind val at; do
+    newest[kind] = (val, at)
+for kind, (val, at) in sorted(newest.items()):
+    print(kind, val if SAFE.fullmatch(val) else "?", at, len(val.encode()))
+' "$typed" "$TYPED_MATCH_WINDOW" 2>/dev/null) || { _operator_choice_say "$id" "unmeasured (the transcript reader failed)"; return 0; }
+  while read -r kind val at n; do
     [[ "$at" =~ ^[0-9]+$ ]] || continue
     case "$kind" in
       model)  field=class;  want=$(_model_class_of "$val") || want="" ;;
@@ -1897,7 +2186,8 @@ for kind, (val, at) in sorted(newest.items()):
       *)      continue ;;
     esac
     if [[ -z "$want" ]]; then
-      echo "$(date '+%F %T') operator-choice $id: /$kind ($(_route_bytes "$val") bytes) is outside the $field vocabulary — the record is unchanged" >> "$REG/swap.log"
+      shown="$val"; [[ "$val" == "?" ]] && shown="(${n//[^0-9]/} bytes, not one token)"
+      _operator_choice_say "$id" "/$kind $shown is outside the $field vocabulary — the record is unchanged"
       continue
     fi
     [[ "$(_route_peek "$id" "$field")" == "$want" ]] && continue
@@ -1906,9 +2196,13 @@ for kind, (val, at) in sorted(newest.items()):
       (( 10#$fm >= 10#$at )) && continue
     fi
     ( cmd_route --session "$id" --set "$field=$want" --actor operator-session --reason "its own /$kind, kept across a restart" ) >/dev/null 2>&1 \
-      || echo "$(date '+%F %T') operator-choice $id: /$kind $want refused by the route record's own checks — the record is unchanged" >> "$REG/swap.log"
+      || _operator_choice_say "$id" "/$kind $want refused by the route record's own checks — the record is unchanged"
   done <<<"$out"
   return 0
+}
+
+_operator_choice_say() {   # id text — one `operator-choice <id>: <text>` line in swap.log, where the operator's choice may be lost (§5.7)
+  echo "$(date '+%F %T') operator-choice $1: $2" >> "$REG/swap.log"
 }
 
 ```
@@ -1989,30 +2283,49 @@ cd server && ./node_modules/.bin/vitest run test/ccd-operator-choice.test.ts tes
 ./node_modules/.bin/vitest run test/ccd-crosspool.test.ts test/ccd-swap-carry-merge.test.ts test/ccd-workspaces.test.ts --maxWorkers=2
 ```
 
-Expected: `57 passed (57)` (28 + 3 + 14 + 12); then green (measured on the prototype: 16, 13, 77 and the rest; 150 +
-4 skipped across the third line; 168 and 79 across the fourth). Without Step 3's list edit, `ccd-die-containment`
+Expected: `66 passed (66)` (37 + 3 + 14 + 12); then `124 passed | 1 skipped (125)` (the second line, which holds
+`ccd-swap-refuse`); then `132 passed | 3 skipped (135)` (the third); then `247 passed (247)` (168 + 79, the fourth) —
+each measured on the revised prototype. Without Step 3's list edit, `ccd-die-containment`
 reds `1 failed | 11 passed (12)` here.
 
 - [ ] **Step 6: Mutation check, then commit**
 
 The spec's four rows are 2.1 (the settle `/effort`), 2.2 (`route --apply`'s `/model`), 3.1 (an unmappable value) and
-3.3 (an operator `/model opus` across an auto-home).
+3.3 (an operator `/model opus` across an auto-home). Rows 3.14–3.26 pin what the review found unpinned or new: the
+newest of two (3.14), the newest NO journal row explains (3.15 — the first draft's order, measured red), the FIFO and
+the three `unmeasured` lines (3.16–3.18), the floor (3.19, 3.20), the acknowledgement shapes (3.21–3.23), the logged
+value and its real size (3.24, 3.25), and the census of stops (3.26 adds a `_bounce_session` that stops and starts a
+unit, and reds). Row 3.8 now drops only the acknowledgement half of `if not ack or at < floor:` — a `None` match then
+raises in the reader, which logs `unmeasured` and promotes nothing, so the refused-later case reds.
 
 | # | File | Exact edit (old → new) | Suite | Measured red on the full prototype |
 |---|---|---|---|---|
-| 3.1 | `ccd/ccd` | `the record is unchanged" >> "$REG/swap.log" / continue / fi` → `the record is unchanged" >> "$REG/swap.log" / die "operator-choice: outside the vocabulary" / fi` | ccd-operator-choice.test.ts | 2 failed \| 26 passed (28): “an argument that is not one token is logged as outside the vocabulary, never split into fields”; “an unmappable value does not abort a swap: logged, the record unchanged, and the swap lands” |
-| 3.2 | `ccd/ccd` | `( cmd_route --session "$id" --set "$field=$want" --actor operator-session --reason "its own /$kind, kept across a restart" ) >/dev/null 2>&1 \` → `{ cmd_route --session "$id" --set "$field=$want" --actor operator-session --reason "its own /$kind, kept across a restart"; } >/dev/null 2>&1 \` | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “…nor does a value the record's own checks refuse (haiku takes no effort level)” |
-| 3.3 | `ccd/ccd` | `_operator_choice_keep "$id"   # a stop the spawn below follows: the operator's own /model and /effort reach the record first (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 4 failed \| 24 passed (28): “an unmappable value does not abort a swap: logged, the record unchanged, and the swap lands”; “…nor does a value the record's own checks refuse (haiku takes no effort level)”; “an operator /model opus survives an auto-home: written before the stop, so the spawn reads it”; … and 1 more |
-| 3.4 | `ccd/ccd` | `_operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 2 failed \| 26 passed (28): “ccd stop: `ccd start`/`enable` respawn from the record”; “_operator_choice_keep is called at exactly three sites, each the statement before its stop” |
-| 3.5 | `ccd/ccd` | `_operator_choice_keep "$id"; _ws_unsupervise "$id"      # clears Restart=always; ws-restore respawns from the record (§5.7)` → `_ws_unsupervise "$id"      # clears Restart=always; ws-restore respawns from the record (§5.7)` | ccd-operator-choice.test.ts | 2 failed \| 26 passed (28): “ccd ws-archive: ws-restore respawns from the record”; “_operator_choice_keep is called at exactly three sites, each the statement before its stop” |
-| 3.6 | `ccd/ccd` | `(( 10#$fm >= 10#$at )) && continue` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “the record wins when it is newer: a field written after the command is not overwritten” |
-| 3.7 | `ccd/ccd` | `[[ "$(_route_peek "$id" "$field")" == "$want" ]] && continue` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “a value the record already holds is not written again” |
-| 3.8 | `ccd/ccd` | `if not ack: / continue` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “the newest ACKNOWLEDGED command wins: a later one Claude Code refused changed nothing” |
-| 3.9 | `ccd/ccd` | `if text is None or ENV.sub("", text).strip():` → `if text is None:` | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “a human QUOTING the envelope is not a command, even above an acknowledgement” |
-| 3.10 | `ccd/ccd` | `or row.get("isSidechain") is True:` → `:` | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “a subagent's row is not the operator's” |
-| 3.11 | `ccd/ccd` | `and abs(t - at) <= window` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “control: the same /effort an hour from any journalled keystroke is the operator's” |
-| 3.12 | `ccd/ccd` | `print(kind, val if SAFE.fullmatch(val) else "?", at)` → `print(kind, val, at)` | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “an argument that is not one token is logged as outside the vocabulary, never split into fields” |
-| 3.13 | `ccd/ccd` | `fm=$(_plat_mtime "$REG/$id.$field" 2>/dev/null) && [[ "$fm" =~ ^[0-9]+$ ]] \|\| continue` → `fm=$(_plat_mtime "$REG/$id.$field" 2>/dev/null) && [[ "$fm" =~ ^[0-9]+$ ]] \|\| :` | ccd-operator-choice.test.ts | 1 failed \| 27 passed (28): “a field whose time cannot be read is not overwritten” |
+| 3.1 | `ccd/ccd` | `is outside the $field vocabulary — the record is unchanged" / continue` → `is outside the $field vocabulary — the record is unchanged" / die "operator-choice: outside the vocabulary"` | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “an argument that is not one token is logged with its real size as outside the vocabulary, never split into fields”; “an unmappable value does not abort a swap: logged, the record unchanged, and the swap lands” |
+| 3.2 | `ccd/ccd` | `( cmd_route --session "$id" --set "$field=$want" --actor operator-session --reason "its own /$kind, kept across a restart" ) >/dev/null 2>&1` → `{ cmd_route --session "$id" --set "$field=$want" --actor operator-session --reason "its own /$kind, kept across a restart"; } >/dev/null 2>&1` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “…nor does a value the record's own checks refuse (haiku takes no effort level)” |
+| 3.3 | `ccd/ccd` | `_operator_choice_keep "$id"   # a stop the spawn below follows: the operator's own /model and /effort reach the record first (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 4 failed \| 33 passed (37): “an unmappable value does not abort a swap: logged, the record unchanged, and the swap lands”; “…nor does a value the record's own checks refuse (haiku takes no effort level)”; “an operator /model opus survives an auto-home: the home-ward swap writes it before its stop, and the next spawn composes opus”; … and 1 more |
+| 3.4 | `ccd/ccd` | `_operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first (§5.7)` → (nothing) | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “ccd stop: `ccd start`/`enable` respawn from the record”; “every stop in ccd is classified: three keep the operator's choice first, the rest end the row” |
+| 3.5 | `ccd/ccd` | `_operator_choice_keep "$id"; _ws_unsupervise "$id"      #` → `_ws_unsupervise "$id"      #` | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “ccd ws-archive: ws-restore respawns from the record”; “every stop in ccd is classified: three keep the operator's choice first, the rest end the row” |
+| 3.6 | `ccd/ccd` | `(( 10#$fm >= 10#$at )) && continue` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the record wins when it is newer: a field written after the command is not overwritten” |
+| 3.7 | `ccd/ccd` | `[[ "$(_route_peek "$id" "$field")" == "$want" ]] && continue` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “a value the record already holds is not written again” |
+| 3.8 | `ccd/ccd` | `if not ack or at < floor:` → `if at < floor:` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “an acknowledged command wins over a later one Claude Code refused, which changed nothing” |
+| 3.9 | `ccd/ccd` | `if text is None or ENV.sub("", text).strip():` → `if text is None:` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “a human QUOTING the envelope is not a command, even above an acknowledgement” |
+| 3.10 | `ccd/ccd` | `or row.get("isSidechain") is True:` → `:` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “a subagent's row is not the operator's” |
+| 3.11 | `ccd/ccd` | `and abs(t - at) <= window for t, k, v in rows` → `for t, k, v in rows` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “control: the same /effort an hour from any journalled keystroke is the operator's” |
+| 3.12 | `ccd/ccd` | `print(kind, val if SAFE.fullmatch(val) else "?", at, len(val.encode()))` → `print(kind, val, at, len(val.encode()))` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “an argument that is not one token is logged with its real size as outside the vocabulary, never split into fields” |
+| 3.13 | `ccd/ccd` | `fm=$(_plat_mtime "$REG/$id.$field" 2>/dev/null) && [[ "$fm" =~ ^[0-9]+$ ]] \|\| continue` → `fm=$(_plat_mtime "$REG/$id.$field" 2>/dev/null) && [[ "$fm" =~ ^[0-9]+$ ]] \|\| :` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “a field whose time cannot be read is not overwritten” |
+| 3.14 | `ccd/ccd` | `newest[kind] = (val, at)` → `newest.setdefault(kind, (val, at))` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the newest of two acknowledged commands wins” |
+| 3.15 | `ccd/ccd` | `if any(k == kind and v == val.lower() and abs(t - at) <= window for t, k, v in rows): / continue / newest[kind] = (val, at) / for kind, (val, at) in sorted(newest.items()):` → `newest[kind] = (val, at) / for kind, (val, at) in sorted(newest.items()): / if any(k == kind and v == val.lower() and abs(t - at) <= window for t, k, v in rows): / continue` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator's own” |
+| 3.16 | `ccd/ccd` | `[[ -f "$f" && -r "$f" ]] \|\| { _operator_choice_say "$id" "unmeasured (its transcript is not a readable regular file)"; return 0; }` → (nothing) | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “could not measure is said, never silent: a directory for a transcript, no python3, a reader that failed — rc 0, the record unchanged”; “a FIFO where the transcript should be is never opened: the stop is not held, and it is said” |
+| 3.17 | `ccd/ccd` | `command -v python3 >/dev/null 2>&1 \|\| { _operator_choice_say "$id" "unmeasured (no python3)"; return 0; }` → `command -v python3 >/dev/null 2>&1 \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “could not measure is said, never silent: a directory for a transcript, no python3, a reader that failed — rc 0, the record unchanged” |
+| 3.18 | `ccd/ccd` | `2>/dev/null) \|\| { _operator_choice_say "$id" "unmeasured (the transcript reader failed)"; return 0; }` → `2>/dev/null) \|\| return 0` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “could not measure is said, never silent: a directory for a transcript, no python3, a reader that failed — rc 0, the record unchanged” |
+| 3.19 | `ccd/ccd` | `if not ack or at < floor:` → `if not ack:` | ccd-operator-choice.test.ts | 2 failed \| 35 passed (37): “a session with no journal yet (spawned by an older ccd) promotes nothing at its first stop, opens the journal, and says so”; “a command older than the journal's floor is not read” |
+| 3.20 | `ccd/ccd` | `why="its journal opened only now, so an older command may be an older ccd's own keystroke"` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “a session with no journal yet (spawned by an older ccd) promotes nothing at its first stop, opens the journal, and says so” |
+| 3.21 | `ccd/ccd` | `if kind == "model" and named.endswith("(default)"): / named = "default"` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “a picker row Claude Code marks (default) is the default class, not the model it resolves to” |
+| 3.22 | `ccd/ccd` | `CLEAN = re.compile(r"\x1b\[[0-9;]*m\|`")` → `CLEAN = re.compile(r"\x1b\[[0-9;]*m")` | ccd-operator-choice.test.ts | 4 failed \| 33 passed (37): “the picker takes no argument: its acknowledgement names the value, in either shape Claude Code writes it”; “a picker row Claude Code marks (default) is the default class, not the model it resolves to”; “the newest command NO JOURNAL ROW EXPLAINS wins: a later route --apply does not hide the operator's own”; … and 1 more |
+| 3.23 | `ccd/ccd` | `\|(Ultracode) on\b")}` → `")}` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “/effort ultracode as 2.1.284 and later acknowledge it ("Ultracode on …") is read” |
+| 3.24 | `ccd/ccd` | `shown="$val"; [[ "$val" == "?" ]] && shown=` → `shown="?"; [[ "$val" == "?" ]] && shown=` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “an unmappable value does not abort a swap: logged, the record unchanged, and the swap lands” |
+| 3.25 | `ccd/ccd` | `shown="(${n//[^0-9]/} bytes, not one token)"` → `shown="(${#val} bytes, not one token)"` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “an argument that is not one token is logged with its real size as outside the vocabulary, never split into fields” |
+| 3.26 | `ccd/ccd` | `_route_apply_now() {   # id -> 0 everything wanted is applied` → `_bounce_session() { local id="$1"; _svc_stop "claude-session@$id" 2>/dev/null; _svc_start "claude-session@$id"; } / _route_apply_now() {   # id -> 0 everything wanted is applied` | ccd-operator-choice.test.ts | 1 failed \| 36 passed (37): “every stop in ccd is classified: three keep the operator's choice first, the rest end the row” |
 
 ```bash
 git add ccd/ccd server/test/ccd-operator-choice.test.ts server/test/ccd-die-containment.test.ts
@@ -2020,9 +2333,10 @@ git commit -F - <<'EOF'
 feat(continuity): the operator's own /model and /effort survive a restart (stage 7, part 2)
 
 Before each stop that a spawn follows (cmd_swap, ccd stop, ws-archive), `_operator_choice_keep` reads the
-transcript for the newest acknowledged /model and /effort that no `.typed` row explains and writes it through
-cmd_route with actor=operator-session. A value outside the vocabulary, or one the record's checks refuse, is
-logged and leaves the record unchanged; a field written after the keystroke wins; nothing in it can fail a stop.
+transcript for the newest acknowledged /model and /effort above the journal's floor that no `.typed` row explains
+and writes it through cmd_route with actor=operator-session. A value outside the vocabulary, or one the record's
+checks refuse, is logged and leaves the record unchanged, and a stop that cannot read logs `unmeasured`; a field
+written after the keystroke wins; nothing in it can fail a stop. A census classifies every stop in ccd.
 `_reg_get` census +1 (181/152).
 EOF
 ```
@@ -2042,7 +2356,7 @@ EOF
 - Consumes: the `route … [actor=operator-session]` and `operator-choice <id>: …` lines Task 3 writes.
 - Produces: `--stage 7` → `operator_choice`: `restarts_that_reverted_an_operator_model`,
   `operator_choices_written_by_field`, `operator_values_outside_the_vocabulary_by_kind`,
-  `operator_choices_refused_by_kind`.
+  `operator_choices_refused_by_kind`, `stops_that_could_not_read_the_transcript`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2074,23 +2388,26 @@ const run = (extra: string[] = [], env: Record<string, string> = {}): Row => {
 };
 
 describe('stage 7 counts what its row says (TZ=UTC, hand-built log)', () => {
-  it('a /model outside the vocabulary or refused is a revert; the writes and the /effort skips are reported beside it', () => {
+  it('a /model outside the vocabulary or refused is a revert; the writes, the /effort skips and the unmeasured stops are reported beside it', () => {
     const log = path.join(h.home, 'hand-built-swap.log');
     fs.writeFileSync(log, [
       '2026-10-05 10:00:00 route s1: class fable -> opus [actor=operator-session] (its own /model, kept across a restart)',
       '2026-10-05 10:01:00 route s2: effort ∅ -> high [actor=operator-session] (its own /effort, kept across a restart)',
       '2026-10-05 10:02:00 route s3: class <12 bytes, unrecognised> -> sonnet [actor=operator-session] (its own /model, kept across a restart)',
       '2026-10-05 10:03:00 route s4: class opus -> fable [actor=operator] (from the PWA)',                      // not this row's writer
-      '2026-10-05 10:04:00 operator-choice s5: /model (11 bytes) is outside the class vocabulary — the record is unchanged',
+      '2026-10-05 10:04:00 operator-choice s5: /model gpt-5.6-sol is outside the class vocabulary — the record is unchanged',
       '2026-10-05 10:05:00 operator-choice s6: /model sonnet refused by the route record\'s own checks — the record is unchanged',
       '2026-10-05 10:06:00 operator-choice s7: /effort high refused by the route record\'s own checks — the record is unchanged',
-      '2026-10-04 09:00:00 operator-choice s8: /model (3 bytes) is outside the class vocabulary — the record is unchanged',   // before --since
+      '2026-10-05 10:07:00 operator-choice s9: unmeasured (its transcript is not a readable regular file)',
+      '2026-10-04 09:00:00 operator-choice s8: /model (15 bytes, not one token) is outside the class vocabulary — the record is unchanged',   // before --since
+      '2026-10-04 09:01:00 operator-choice s8: unmeasured (no python3)',                                        // before --since
     ].join('\n') + '\n');
     const r = run(['--swap-log', log, '--since', '2026-10-05'], { TZ: 'UTC' });
     expect(r.restarts_that_reverted_an_operator_model).toBe(2);
     expect(r.operator_choices_written_by_field).toEqual({ class: 2, effort: 1 });
     expect(r.operator_values_outside_the_vocabulary_by_kind).toEqual({ model: 1 });
     expect(r.operator_choices_refused_by_kind).toEqual({ effort: 1, model: 1 });
+    expect(r.stops_that_could_not_read_the_transcript, 'reported, never folded into the revert row').toBe(1);
     expect(run(['--swap-log', path.join(h.home, 'nope.log')])).toEqual({ swap_log: 'absent' });
   });
 });
@@ -2111,22 +2428,27 @@ describe('each regex is bound to the line the real _operator_choice_keep writes'
     fs.writeFileSync(p, v); fs.utimesSync(p, at - 86400, at - 86400);
   };
 
-  it('a write, a value outside the vocabulary and a refusal all parse', () => {
-    h.sh(`_reg_set ${ID} wrapper claude; _reg_set ${ID} workdir "$HOME/projects/demo"; _reg_set ${ID} uuid deadbeef-0000-4000-8000-000000000000`);
+  it('a write, a value outside the vocabulary, a refusal and an unmeasured stop all parse', () => {
+    h.sh(`_reg_set ${ID} wrapper claude; _reg_set ${ID} workdir "$HOME/projects/demo"; _reg_set ${ID} uuid deadbeef-0000-4000-8000-000000000000
+          _reg_set ${ID} typed "$(( $(date +%s) - 172800 )) since"`);
     fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
     field('class', 'fable');
-    transcript('model', 'opus', 'Set model to Opus 5.5 for this session only');
+    transcript('model', 'opus', 'Set model to `Opus 5.5` for this session only');
     h.sh(`_operator_choice_keep ${ID}`);
-    transcript('model', 'gpt-5.6-sol', 'Set model to gpt-5.6-sol for this session only');
+    transcript('model', 'gpt-5.6-sol', 'Set model to `gpt-5.6-sol` for this session only');
     h.sh(`_operator_choice_keep ${ID}`);
     field('class', 'haiku');
     transcript('effort', 'high', 'Set effort level to high (this session only)');
+    h.sh(`_operator_choice_keep ${ID}`);
+    const p = h.sh(`_transcript_path ${ID}`);
+    fs.rmSync(p); fs.mkdirSync(p);
     h.sh(`_operator_choice_keep ${ID}`);
     const r = run();
     expect(r.operator_choices_written_by_field).toEqual({ class: 1 });
     expect(r.operator_values_outside_the_vocabulary_by_kind).toEqual({ model: 1 });
     expect(r.operator_choices_refused_by_kind).toEqual({ effort: 1 });
     expect(r.restarts_that_reverted_an_operator_model).toBe(1);
+    expect(r.stops_that_could_not_read_the_transcript).toBe(1);
   });
 });
 ```
@@ -2159,11 +2481,15 @@ and replace it with:
 # [actor=operator-session]`), or says why it could not: a value outside the
 # vocabulary, or one the record's own checks refused (`operator-choice <id>: …`).
 # Those two are the restarts ccd KNOWS reverted the operator's choice, so they
-# are the row; the writes are reported beside them. Named cost: a restart no
-# stop precedes (a supervisor revival after a crash) reads no transcript and
-# leaves no line, so a revert there is not counted. Self-contained, as stage 4.
+# are the row; the writes are reported beside them, and so are the stops where
+# ccd could not read at all (`operator-choice <id>: unmeasured (…)`), which MAY
+# have reverted one — never folded into the row, never dropped. Named cost: a
+# restart no stop precedes (a supervisor revival after a crash) reads no
+# transcript and leaves no line, so a revert there is not counted.
+# Self-contained, as stage 4.
 S7_WRITE = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) route (\S+): (class|effort) .+? -> (\S+) \[actor=operator-session\]")
 S7_SKIP = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) operator-choice (\S+): /(model|effort) .*(outside the \S+ vocabulary|refused by the route record)")
+S7_UNMEASURED = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) operator-choice (\S+): unmeasured \(")
 
 
 def stage7(ctx):
@@ -2181,6 +2507,7 @@ def stage7(ctx):
             return False
         return (since is None or t >= since) and (until is None or t < until)
     written, outside, refused = collections.Counter(), collections.Counter(), collections.Counter()
+    unmeasured = 0
     for line in lines:
         m = S7_WRITE.match(line)
         if m and inwin(m.group(1)):
@@ -2189,11 +2516,16 @@ def stage7(ctx):
         m = S7_SKIP.match(line)
         if m and inwin(m.group(1)):
             (outside if m.group(4).startswith("outside") else refused)[m.group(3)] += 1
+            continue
+        m = S7_UNMEASURED.match(line)
+        if m and inwin(m.group(1)):
+            unmeasured += 1
     return {"operator_choice": {
         "restarts_that_reverted_an_operator_model": outside["model"] + refused["model"],
         "operator_choices_written_by_field": dict(sorted(written.items())),
         "operator_values_outside_the_vocabulary_by_kind": dict(sorted(outside.items())),
         "operator_choices_refused_by_kind": dict(sorted(refused.items())),
+        "stops_that_could_not_read_the_transcript": unmeasured,
     }}
 
 
@@ -2223,20 +2555,27 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
 
 - **Before a stop that a spawn follows** — `cmd_swap` (every rescue, auto-home, manual, PWA or `swap-self` move),
   `ccd stop` (a later `start`/`enable` respawns from the record) and `ccd ws-archive` (`ws-restore` does) —
-  `_operator_choice_keep` reads the transcript for the newest acknowledged `/model` and `/effort` and writes an
-  operator's value through `cmd_route`'s own writer: `route <id>: class fable -> opus [actor=operator-session]`
-  in `swap.log`. A supervisor revival after a crash has no ccd stop, so it reads nothing (spec §5.7 scopes it out).
+  `_operator_choice_keep` reads the transcript for the newest acknowledged `/model` and `/effort` that no journal
+  row explains and writes an operator's value through `cmd_route`'s own writer: `route <id>: class fable -> opus
+  [actor=operator-session]` in `swap.log`. A supervisor revival after a crash has no ccd stop, so it reads nothing
+  (spec §5.7 scopes it out).
 - **ccd's own keystrokes are not the operator's.** The settle's `/effort` and `route --apply` journal what they
   type in `$REG/<id>.typed` (`<epoch> <model|effort> <value>`, the last `TYPED_KEEP_ROWS=16`, purged with the
   row); a command with the same value within `TYPED_MATCH_WINDOW=60` seconds of a row is ccd's and is left alone.
+  The journal's first row is its floor (`<epoch> since`, written at this ccd's first spawn of the row): no command
+  older than it is read, since an older ccd typed without journalling, and a stop that finds no floor opens one and
+  promotes nothing that time.
 - **The value** is the command's argument, or — for the picker and the slider, which take none — the one Claude
-  Code's acknowledgement names (`Set model to Opus 5.5 …`). A `/model` maps through the class vocabulary itself
-  (`opus`, `sonnet`, `haiku`, `fable`, `default`, each also with `[1m]`, which the record cannot hold), then a full
-  model id through `_model_family_class`, the bash port of `familyClassOf`'s dash-token rule, pinned to it.
-- **It never fails a stop.** A value outside the vocabulary, or one the record's own checks refuse (`haiku` with an
-  effort level), is logged as `operator-choice <id>: …` and leaves the record unchanged. A field written after the
+  Code's acknowledgement names (``Set model to `Opus 5.5` …``, ANSI bold on older builds; a `(default)` row is the
+  `default` class). A `/model` maps through the class vocabulary itself (`opus`, `sonnet`, `haiku`, `fable`,
+  `default`, each also with `[1m]`, which the record cannot hold), then a full model id through
+  `_model_family_class`, the bash port of `familyClassOf`'s dash-token rule, pinned to it.
+- **It never fails a stop, and never loses a choice silently.** A value outside the vocabulary, or one the record's
+  own checks refuse (`haiku` with an effort level), is logged as `operator-choice <id>: …` and leaves the record
+  unchanged; a stop that cannot read at all logs `operator-choice <id>: unmeasured (…)`. A field written after the
   keystroke (the PWA picker, a coordinator's route, this step's last write) is the later choice and wins.
-  `python3 deploy/measure-continuity.py --stage 7` counts the writes and the restarts that reverted a `/model`.
+  `python3 deploy/measure-continuity.py --stage 7` counts the writes, the restarts that reverted a `/model`, and
+  the unmeasured stops.
 ```
 
 
@@ -2254,11 +2593,18 @@ and insert, directly above it:
 manual, PWA and `swap-self` move), `ccd stop`'s (a later `start` or `enable` respawns from the record) and
 `ccd ws-archive`'s (`ws-restore` does); the stops that end the row (`ws-rm`, `forget`, the reap and reclaim
 tails) are not, `_swap_refuse`'s restart follows `cmd_swap`'s own stop, and a supervisor revival has no ccd stop
-at all. The short window is `TYPED_MATCH_WINDOW` (60 s), and `.typed` keeps its last 16 rows. Three readings the
-text above leaves open are fixed: a command's value is its argument or, for the picker and the slider, which take
-none, the value Claude Code's acknowledgement names; a command no acknowledgement follows changed nothing and is
-not read; and a route field written after the keystroke is the later choice and is not overwritten. §9's stage-7
-row counts the restarts whose `/model` ccd logged as outside the vocabulary or refused.
+at all. The short window is `TYPED_MATCH_WINDOW` (60 s), and `.typed` keeps its last 16 rows below a floor row.
+The readings the text above leaves open are fixed: "the newest command" is one per kind (`/model` and `/effort`
+are two fields), chosen among the commands no row matches; a command's value is its argument or, for the picker and
+the slider, which take none, the value Claude Code's acknowledgement names (ANSI bold or backticks removed; a row
+marked `(default)` is the `default` class); a command no acknowledgement follows changed nothing and is not read; a
+route field written after the keystroke is the later choice and is not overwritten; the journal has a FLOOR — its
+first row, written at this ccd's first spawn of the row (or first journalled keystroke, or first stop that finds
+none) — and no command older than it is read, because an older ccd typed its keystrokes unjournalled; a value
+outside the vocabulary is logged by name when it is one token, by size otherwise; and a stop that cannot read at
+all (no floor yet, a transcript that is not a readable regular file, no python, a failed reader) logs
+`unmeasured`. §9's stage-7 row counts the restarts whose `/model` ccd logged as outside the vocabulary or refused,
+with the unmeasured stops reported beside it.
 
 ```
 
@@ -2272,7 +2618,7 @@ In `docs/superpowers/specs/2026-09-23-session-continuity-design.md`, find:
 and replace it with:
 
 ```text
-| 7 | restarts that revert an operator's `/model` (those ccd logs: a value outside the vocabulary, or refused) | this session's case | 0 |
+| 7 | restarts that revert an operator's `/model` (those ccd logs: a value outside the vocabulary, or refused; the stops that could not read the transcript are reported beside it) | this session's case | 0 |
 ```
 
 
@@ -2283,17 +2629,18 @@ cd server && ./node_modules/.bin/vitest run test/measure-continuity-stage7.test.
 python3 ../deploy/measure-continuity.py --home /nonexistent --stage 7 --json
 ```
 
-Expected: `45 passed (45)` (2 + 11 + 5 + 27), and a `stage7` → `operator_choice` → `"swap_log": "absent"` section
+Expected: `46 passed (46)` (2 + 12 + 5 + 27), and a `stage7` → `operator_choice` → `"swap_log": "absent"` section
 (the JSON is printed with `indent=1`).
 
 - [ ] **Step 6: Mutation check, then commit**
 
 | # | File | Exact edit (old → new) | Suite | Measured red on the full prototype |
 |---|---|---|---|---|
-| 4.1 | `deploy/measure-continuity.py` | `-> (\S+) \[actor=operator-session\]")` → `-> (\S+) \[actor=[^\]]*\]")` | measure-continuity-stage7.test.ts | 1 failed \| 1 passed (2): “a /model outside the vocabulary or refused is a revert; the writes and the /effort skips are reported beside it” |
-| 4.2 | `deploy/measure-continuity.py` | `outside["model"] + refused["model"]` → `sum(outside.values()) + sum(refused.values())` | measure-continuity-stage7.test.ts | 2 failed (2): “a /model outside the vocabulary or refused is a revert; the writes and the /effort skips are reported beside it”; “a write, a value outside the vocabulary and a refusal all parse” |
-| 4.3 | `deploy/measure-continuity.py` | `m = S7_SKIP.match(line) / if m and inwin(m.group(1)):` → `m = S7_SKIP.match(line) / if m:` | measure-continuity-stage7.test.ts | 1 failed \| 1 passed (2): “a /model outside the vocabulary or refused is a revert; the writes and the /effort skips are reported beside it” |
-| 4.4 | `deploy/measure-continuity.py` | `route (\S+): (class\|effort) .+? -> (\S+)` → `route (\S+): (class\|effort) \S+ -> (\S+)` | measure-continuity-stage7.test.ts | 1 failed \| 1 passed (2): “a /model outside the vocabulary or refused is a revert; the writes and the /effort skips are reported beside it” |
+| 4.1 | `deploy/measure-continuity.py` | `-> (\S+) \[actor=operator-session\]")` → `-> (\S+) \[actor=[^\]]*\]")` | measure-continuity-stage7.test.ts | 1 failed \| 1 passed (2): “a /model outside the vocabulary or refused is a revert; the writes, the /effort skips and the unmeasured stops are reported beside it” |
+| 4.2 | `deploy/measure-continuity.py` | `outside["model"] + refused["model"]` → `sum(outside.values()) + sum(refused.values())` | measure-continuity-stage7.test.ts | 2 failed (2): “a /model outside the vocabulary or refused is a revert; the writes, the /effort skips and the unmeasured stops are reported beside it”; “a write, a value outside the vocabulary, a refusal and an unmeasured stop all parse” |
+| 4.3 | `deploy/measure-continuity.py` | `m = S7_SKIP.match(line) / if m and inwin(m.group(1)):` → `m = S7_SKIP.match(line) / if m:` | measure-continuity-stage7.test.ts | 1 failed \| 1 passed (2): “a /model outside the vocabulary or refused is a revert; the writes, the /effort skips and the unmeasured stops are reported beside it” |
+| 4.4 | `deploy/measure-continuity.py` | `route (\S+): (class\|effort) .+? -> (\S+)` → `route (\S+): (class\|effort) \S+ -> (\S+)` | measure-continuity-stage7.test.ts | 1 failed \| 1 passed (2): “a /model outside the vocabulary or refused is a revert; the writes, the /effort skips and the unmeasured stops are reported beside it” |
+| 4.5 | `deploy/measure-continuity.py` | `unmeasured += 1` → `pass` | measure-continuity-stage7.test.ts | 2 failed (2): “a /model outside the vocabulary or refused is a revert; the writes, the /effort skips and the unmeasured stops are reported beside it”; “a write, a value outside the vocabulary, a refusal and an unmeasured stop all parse” |
 
 ```bash
 git add deploy/measure-continuity.py server/test/measure-continuity-stage7.test.ts README.md \
@@ -2408,7 +2755,7 @@ git fetch origin main && ./node_modules/.bin/vitest run test/deviation-refs.test
 ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'
 ```
 
-Expected (measured on the prototype): `148 passed` (28 + 102 + 11 + 2 + 5); `357 passed`; `ccd-workspaces` 79 and
+Expected (measured on the prototype): `158 passed` (37 + 102 + 12 + 2 + 5); `357 passed`; `ccd-workspaces` 79 and
 `typecheck-tests` 12 and `ccd-die-containment` 12; `87 passed` (`deviation-refs` compares this branch's entries against `origin/main`'s without
 merging); `7 passed | 328 skipped (335)`; and the S6-R11 procedure `147 / 197 / 52 / 35` with the census at main's
 stated pair + 2.
@@ -2421,8 +2768,8 @@ git push -u origin "$(git rev-parse --abbrev-ref HEAD)"
 gh pr create --base main --title "Session continuity wave 3: wave 2's residue, then the operator's choice survives a restart (AGENT-FIRST)" --body-file - <<'EOF'
 Wave 3 of the session-continuity programme (spec `docs/superpowers/specs/2026-09-23-session-continuity-design.md`; plan `docs/superpowers/plans/2026-10-04-session-continuity-wave3-operator-choice.md`). **AGENT-FIRST, ccd only.** No wire change.
 
-1. **Wave 2's residue (review 246), the first commit.** A rescue wait ends `swap` only at `cmd_swap`'s landing (a refused auto-rescue leaves it open); rule 3 counts a rescue, and marks the account it left, only once that landing follows it; the do-not-bounce cause names the BEST account with room; a not-blocked tick forks nothing; a forged `reset=` cannot crash the history read, and its lists are checked against sets. Spec §9's stage-4 target is restated as ruled: 0 sessions with a fourth rescue in an hour that no chain wait preceded (the raw 4+ count reported) — `--stage 4` counts it.
-2. **Stage 7: the operator's own `/model` and `/effort` survive a restart.** ccd journals its own keystrokes (the settle's `/effort`, `route --apply`) in `$REG/<id>.typed`; before each stop a spawn follows (`cmd_swap`, `ccd stop`, `ws-archive`) it reads the transcript for the newest acknowledged command no journal row explains, maps it (the class vocabulary as the alias table, `[1m]` too; a full id through the bash port of `familyClassOf`, pinned to it) and writes it through `cmd_route` with `actor=operator-session`. Outside the vocabulary or refused: logged, record unchanged, the stop goes on. `--stage 7` counts the writes and the reverts.
+1. **Wave 2's residue (review 246), the first commit.** A rescue wait ends `swap` only at `cmd_swap`'s landing (a refused auto-rescue leaves it open); rule 3 counts a rescue, and marks the account it left, only once that landing follows it; the do-not-bounce cause names the BEST account with room; a not-blocked tick forks nothing; a forged `reset=` cannot crash the history read, and its lists are checked against sets. Spec §9's stage-4 target is restated as ruled: 0 sessions with a fourth rescue in an hour that no chain wait preceded (the raw 4+ count reported) — `--stage 4` counts it, asked of a fourth rescue the chain wait could have held (a dated block not past its reset's grace; the coordinator confirms that filter).
+2. **Stage 7: the operator's own `/model` and `/effort` survive a restart.** ccd journals its own keystrokes (the settle's `/effort`, `route --apply`) in `$REG/<id>.typed`, above a floor the first spawn opens so an older ccd's unjournalled keystrokes are never promoted at the deploy; before each stop a spawn follows (`cmd_swap`, `ccd stop`, `ws-archive` — a census classifies every stop in ccd) it reads the transcript for the newest acknowledged command no journal row explains (backtick, ANSI, `(default)` and `Ultracode on` acknowledgements alike), maps it (the class vocabulary as the alias table, `[1m]` too; a full id through the bash port of `familyClassOf`, pinned to it) and writes it through `cmd_route` with `actor=operator-session`. Outside the vocabulary or refused: logged, record unchanged, the stop goes on; could not read: logged `unmeasured`. `--stage 7` counts the writes, the reverts and the unmeasured stops.
 
 Citation corpus (S6-R11): unmoved (`147/197/52/35`); every edit above the corpus is line-neutral. `_reg_get` census +2 over the base's stated pair (179/150 -> 181/152 on this plan's base). `_reg_purge` inventory 43 -> 44 (`typed`).
 
@@ -2465,10 +2812,28 @@ grep -E ' route [^ ]+: (class|effort) .* \[actor=operator-session\]| operator-ch
 python3 "$HOME/ccrc/deploy/measure-continuity.py" --stage 4 --stage 7 --since "$(date +%F)"
 ```
 
-A rollback is the operator's call through the same mechanism. It is safe on the data: `.typed` is inert to an older
-ccd (`_reg_purge` removes it with the row by suffix), and an older `_rescue_history` reads the same log.
+
+**What the deploy itself does to the fleet.** Every session spawned before the new ccd has no journal floor. Its first
+stop, swap or archive after the deploy opens the floor, promotes nothing and logs `operator-choice <id>: unmeasured
+(its journal opened only now, …)` once — about one line per live session, read in `--stage 7` as
+`stops_that_could_not_read_the_transcript`, and expected. Every respawn after that opens the floor at the spawn, so
+the line does not recur. An operator `/model` typed in such a session BEFORE its first post-deploy stop is the
+one-time cost (Open question 7).
+
+A rollback is the operator's call through the same mechanism. It is safe on the data: `.typed` (its floor row
+included) is inert to an older ccd (`_reg_purge` removes it with the row by suffix), and an older `_rescue_history`
+reads the same log. A roll-FORWARD after a rollback is the one sequence the floor does not cover: keystrokes the older
+ccd typed after a floor was opened are unjournalled and newer than it (Open question 7).
 
 ---
+
+## Residue carried (review 246 — not departures from the spec)
+
+Task 1's code and text bring wave 2 into line with the spec it already had, so they take no number: F1 (the rescue
+arm writes no end; the landing does — §5.4's own "the wait ends `swap` when the session moves"), F2 ("best account
+with room"), F3 (the strand's swap-log read scoped to a genuine no-room strand, in README and two comments), F5 (the
+`-e` guard), minor 3 (`reset=` at most twelve digits, with a lookahead) and minor 4 (a set beside each list). Rows
+1.1, 1.4, 1.5, 1.6, 1.11.
 
 ## Deviations found
 
@@ -2477,68 +2842,85 @@ in the same act as the wave's acceptance; a worker never calls the allocator (wo
 while executing is named in the wave-done mail by a new slug. A session that cannot reach the coordinator writes
 `D-TBD-<slug>` in its report and nowhere in a committed file.
 
-Departures from the spec (and from wave 2's plan) that this plan makes, each measured above:
+Departures from the spec (and from wave 2's plan) that this plan makes, each measured above — nine, against a block
+of ten (Open question 9):
 
-- **`wave-2-residue-review-246`** — Task 1's code and text from review 246: F1 (the rescue arm writes no end; the
-  landing does), F2 ("best account with room"), F3 (the strand's swap-log read scoped to a genuine no-room strand,
-  README and two comments), F5 (the `-e` guard), minor 3 (`reset=` at most twelve digits) and minor 4 (a set beside
-  each list). Rows 1.1, 1.4, 1.5, 1.6.
 - **`rule-three-counts-landed-rescues`** — minor 5, decided with F1: spec §5.4 rule 3's count and its just-left skip
   read only rescues whose `cmd_swap` landing line followed them before the session's next rescue; the spread list
   keeps every dispatch, landed or in flight (a move still carrying is the herd). Spec rev 7 amended (Task 1 Step 6).
   Rows 1.2, 1.3.
 - **`stage-four-target-restated`** — F6, ruled by the coordinator 2026-10-03: §9's stage-4 target is "0 sessions with
-  a fourth auto-rescue in an hour that no chain wait preceded" (counting landed rescues; the raw 4+ count reported).
-  `--stage 4`'s new row asks it only of a fourth rescue the chain wait could have held (a dated block not past its
-  five-hour reset's grace); a Codex-lane session, never chain-waited by rule, is the named cost. Rows 1.7–1.10.
-- **`operator-choice-value-from-acknowledgement`** — §5.7 says "the newest `/model` or `/effort` local command"; the
-  plan reads the value from `<command-args>` or, when that is empty (the picker, the slider, `route --apply`), from
-  Claude Code's acknowledgement, and reads only commands an acknowledgement follows; a human quoting the envelope and
-  a subagent's row are not commands. Rows 2.2, 3.8, 3.9, 3.10.
+  a fourth auto-rescue in an hour that no chain wait preceded" (the raw 4+ count reported). This plan adds two
+  readings the ruling did not carry and writes BOTH into the §9 row (Task 1 Step 6): it counts landed rescues, and it
+  asks only of a fourth rescue the chain wait could have held (a dated block not past its five-hour reset's grace,
+  rule 3's own gate) — the second is a narrowing put to the coordinator to confirm or drop (Open question 5). A
+  Codex-lane session, never chain-waited by rule, is the named cost; a `reset=` that is not one to twelve digits is
+  no date. Rows 1.7–1.10, 1.12–1.14.
+- **`operator-choice-which-command`** — §5.7 says "the newest `/model` or `/effort` local command that no `.typed`
+  row matches". The plan reads that as one newest command PER KIND (two fields), chosen among the commands no row
+  matches (so a later `route --apply` never hides the operator's earlier one — the first draft's order, which did,
+  is row 3.15); reads only commands an acknowledgement follows; takes the value from `<command-args>` or, when that
+  is empty (the picker, the slider, `route --apply`), from the acknowledgement with its ANSI bold or backticks
+  removed, a `(default)` row as the `default` class and `Ultracode on` as `ultracode`; and never reads a human
+  quoting the envelope or a subagent's row. Rows 2.2, 3.8–3.10, 3.14, 3.15, 3.21–3.23.
 - **`operator-choice-record-newer-wins`** — not in §5.7: a route field written after the keystroke (or whose time
   cannot be read) is not overwritten, and a value the record already holds is not written again — so a PWA or
   coordinator choice made after the operator's `/model` stands, and no stop re-writes the same value. Rows 3.6, 3.7,
   3.13.
+- **`operator-choice-journal-floor`** — §5.7 does not bound `.typed` or say where it starts: it keeps its last
+  `TYPED_KEEP_ROWS` (16) keystroke rows below a FLOOR row (`<epoch> since`) that `_spawn_start` opens and nothing
+  moves, admits one-token values only, and matches within `TYPED_MATCH_WINDOW` (60 s); no command older than the
+  floor is read, and a stop that finds no floor opens it and promotes nothing — because before the floor an older
+  ccd's unjournalled keystrokes and the operator's cannot be told apart (review measured on the first draft: `effort ∅ ->
+  ultracode` and `class fable -> opus [actor=operator-session]` from pre-deploy keystrokes). Rows 2.4, 2.5, 2.10,
+  2.11, 3.11, 3.19, 3.20.
+- **`operator-choice-unmeasured-logged`** — §5.7 asks only that an out-of-vocabulary value be logged. The plan logs
+  that value by name when it is one token and by its real byte size otherwise, and also logs `unmeasured (…)` where a
+  stop could not read at all (no floor yet, a transcript that is not a readable regular file — never `grep` on a
+  FIFO — no python3, a failed reader), so no lost choice is silent. Rows 3.16–3.18, 3.24, 3.25.
 - **`operator-choice-three-stop-sites`** — §5.7's "a stop that will be followed by a spawn" is read as `cmd_swap`,
-  `cmd_stop` and `cmd_ws_archive` (Pre-flight 4), pinned by a call-site census; a supervisor revival, which follows no
-  ccd stop, is out (Open question 1). Rows 3.3, 3.4, 3.5.
+  `cmd_stop` and `cmd_ws_archive` (Pre-flight 4), pinned by a census that classifies EVERY stop in `ccd/ccd`, so a
+  new one reds until it is named; a supervisor revival, which follows no ccd stop, is out (Open question 1). Rows
+  3.3, 3.4, 3.5, 3.26.
 - **`alias-table-is-route-classes`** — the spec's alias table is derived from `ROUTE_CLASSES` (the same five words)
   rather than written again, case-folded so an acknowledgement's display word maps, and a `[1m]` variant maps to its
   base class because the record has no context dimension (Open question 2). Rows 2.6, 2.7.
-- **`typed-journal-bounded`** — §5.7 does not bound `.typed`: it keeps its last `TYPED_KEEP_ROWS` (16) rows and admits
-  one-token values only; the window is `TYPED_MATCH_WINDOW` (60 s). Rows 2.4, 2.5, 3.11.
 - **`stage-seven-counts-logged-reverts`** — §9's stage-7 row ("restarts that revert an operator's `/model`") is
-  measured as the restarts whose `/model` ccd logged as outside the vocabulary or refused; a revert on a path with no
-  stop (a supervisor revival) leaves no line and is not counted. Rows 4.1–4.4.
+  measured as the restarts whose `/model` ccd logged as outside the vocabulary or refused, with the stops that could
+  not read the transcript reported beside it, never folded in; a revert on a path with no stop (a supervisor revival)
+  leaves no line and is not counted. Spec §9's row amended to say so. Rows 4.1–4.5.
 
 ---
 
 ## Review lenses
 
-Four lenses, all `opus` — a diff of one shipped script (`ccd/ccd`: +203 / −31), one read-only instrument (+84 / −1),
-README (+27 / −2), the spec (+18 / −5), two new test files (365 and 81 lines) and two extended (+97 / −5, +34 / −1) —
-sized to the fleet policy's 3–5 reviewers; one `sonnet` refute pass per finding.
+Four lenses, all `opus` — a diff of one shipped script (`ccd/ccd`: +248 / −31), one read-only instrument (+96 / −1),
+README (+34 / −2), the spec (+25 / −5), two new test files (488 and 89 lines) and three extended (+100 / −5, +45 / −1,
++8 / −1) — sized to the fleet policy's 3–5 reviewers; one `sonnet` refute pass per finding.
 
 1. **The stop path (opus, xhigh).** Prove `_operator_choice_keep` cannot fail, hang or abort any of its three stops:
-   every early return is rc 0; `cmd_route` runs in a subshell; the transcript read is a regular-file read (`-f && -r`)
-   with no `tail` on a FIFO; the python has no `'` and prints only one-token values; `read -r kind val at` cannot be
-   split by a value. Confirm it runs before `cmd_swap`'s `_svc_stop`, after the pre-flight refusal (a refused swap
-   reads nothing), and in the detached re-exec only once. Confirm nothing in it types, starts or stops anything.
+   every early return is rc 0; `cmd_route` runs in a subshell; the transcript read is a regular-file read (`-f && -r`,
+   pinned by the FIFO case) — never `grep` on a FIFO; the python has no `'` and prints only one-token values;
+   `read -r kind val at n` cannot be split by a value. Confirm every return that may lose a choice logs and every
+   silent one loses nothing. Confirm it runs before `cmd_swap`'s `_svc_stop`, after the pre-flight refusal (a refused
+   swap reads nothing), and in the detached re-exec only once. Confirm nothing in it types, starts or stops anything.
 2. **Whose keystroke is it (opus, high).** Read the journal writers against every path that types `/model` or
    `/effort` (`_inject_spawn_effort`, `_route_apply_now` → `_route_type_model`/`_route_type_effort`, and any other
-   `send-keys … /model` or `/effort` in `ccd/ccd`): every ccd keystroke is journalled BEFORE it is typed; the match
-   compares kind and value case-folded within the window; the degraded class and `ultracode`'s `/effort ultracode` are
-   both explained. Check the record-newer rule against the mtime `_reg_set`'s rename gives.
+   `send-keys … /model` or `/effort` in `ccd/ccd`): every ccd keystroke is journalled BEFORE it is typed; the floor
+   is opened at every spawn before the settle types and never moves; the match compares kind and value case-folded
+   within the window; the degraded class, `(default)` and `ultracode`'s `/effort ultracode` are all explained in both
+   acknowledgement shapes. Check the record-newer rule against the mtime `_reg_set`'s rename gives.
 3. **The residue and rule 3 (opus, high).** `_rescue_history`'s pairing: a landing binds only the session's latest
    pending rescue of the same move; a rescue older than the window is never pending; the spread list is unchanged;
    a forged log can neither raise nor go quadratic. The rescue arm's removed close: every other close site
    (`cmd_swap`'s landing, `_rescuewait_open`'s replacement, the policy's own ends) is unchanged, and no wait can now
    be left open forever by a dispatch that landed (the landing closes it).
 4. **Guard fidelity, the instrument and the tax (opus, high).** Every mutation row mutates the guard it names; the
-   agreement pin really runs both sides; the call-site census reds on a moved or added site; `--stage 4`'s new row and
-   `--stage 7` open nothing for writing and run no subprocess; the S6-R11 census and the `_reg_get` census came from
-   the instruments; `_reg_purge`'s inventory names `typed`; `ccd-die-containment`'s added name is the scanner's
-   blind spot for `( )`, not a function that can die (Pre-flight 13).
+   agreement pin really runs both sides; the census of stops reds on an unclassified stop and on a moved call;
+   `--stage 4`'s new row and `--stage 7` open nothing for writing, run no subprocess and cannot raise on a forged
+   token; the S6-R11 census and the `_reg_get` census came from the instruments; `_reg_purge`'s inventory names
+   `typed`; `ccd-die-containment`'s added name is the scanner's blind spot for `( )`, not a function that can die
+   (Pre-flight 13).
 
 ---
 
@@ -2548,13 +2930,36 @@ sized to the fleet policy's 3–5 reviewers; one `sonnet` refute pass per findin
    followed by a spawn", and a revival (Claude Code exited — the commonest cause on this fleet is a pane-scope OOM
    kill, 16 in a week per spec §1.3 — and `cmd_supervise` respawns it from the record) follows no ccd stop. The
    transcript is still readable there; one call to `_operator_choice_keep` before the resume spawn in `cmd_ensure`
-   would cover it. Built as the spec says (not covered); the operator may widen it.
+   would cover it (and the census would then list `cmd_ensure` among the keepers). Built as the spec says (not
+   covered); the operator may widen it.
 2. **`/model opus[1m]` survives as `opus`.** The route record's class has no context dimension, so the 1M-context
    choice is kept as its family and the next spawn runs the default context. Accept, or add a context field — a
    routing-spec change outside this programme.
 3. **`ccd stop` and `ws-archive` keep the choice too.** The plan reads them as stops a spawn follows (`start`/`enable`
-   and `ws-restore` spawn from the record). If the operator wants only the swap covered, drop two lines, two cases and
-   rows 3.4–3.5.
+   and `ws-restore` spawn from the record). If the operator wants only the swap covered, drop two lines, two cases,
+   rows 3.4–3.5, and move both names to the census's no-spawn list.
 4. **The restated stage-4 row reads 0 before wave 2's deploy by construction** (no rescue line carried `reset=`/`type=`
    until then — Pre-flight 9); its first meaningful reading is the week after waves 2 and 3 are on the fleet box, read
    with the owed stage-4 reading (programme ledger), with refused dispatches no longer needing to be subtracted.
+5. **For the coordinator: the stage-4 target's filter.** F6's ruled wording counts every fourth rescue no chain wait
+   preceded; the instrument asks it only of a fourth rescue the chain wait could have held (dated, not past its
+   five-hour reset's grace), because rule 3 never chain-waits the others and the ruled 0 would then measure a choice
+   the design does not make. The filter is written into §9's row (Task 1 Step 6) so the spec and the instrument
+   agree. Confirm it, or drop it: then delete `or not re.fullmatch(r"\d{1,12}", tok.get("reset", "")) or "type" not
+   in tok` and the five-hour grace test from the row, guard `int()` some other way, expect u4 and u5 to count (4
+   instead of 2), and drop rows 1.9, 1.10 and 1.14.
+6. **Older `int()` calls in `--stage 4` on a forged token** (Pre-flight 15): the wait rows' `int(reset)` behind
+   `isdigit()` and the carried-in row's bare `int(tok["row"])` raise on a 5000-digit or non-numeric token. Not this
+   wave's; a candidate for the next residue batch.
+7. **The journal floor's costs.** (a) An operator `/model` typed in a session that was already running at the deploy,
+   before that session's first post-deploy stop or respawn, is not kept at that stop (logged `unmeasured` once). (b)
+   After a rollback and a roll-forward, keystrokes the older ccd typed after a floor was opened are unjournalled and
+   newer than it, so they could read as the operator's. Both are bounded to the transition; the alternative — no
+   floor — promoted the box default into every live session at the deploy.
+8. **A gpt-lane session's own `/model`** (`gpt-5.6-astra` and the like: 30 such acknowledgements in the 40-day
+   census) is outside the class vocabulary, so it logs `operator-choice … is outside the class vocabulary` at every
+   stop of that session and counts in `--stage 7`'s revert row. That is what §5.7 says (logged, record unchanged).
+   If the operator would rather skip a non-Anthropic lane (keyed on `_is_anthropic_backend`, as the settle is), it
+   is one guard and one case.
+9. **Nine slugs against a ten-number block.** The worker's block (3896 to 3905) leaves one number for a departure
+   found while executing; a second would need a new block from the allocator.
