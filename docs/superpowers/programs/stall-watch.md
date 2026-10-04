@@ -21,8 +21,8 @@ file in the fleet registry. No marker has a writer in the tree.
 | 3 | the quiet clocks restart when a run re-enters an active state (shadow-review class 1) | server | #228 | **merged** `3255571a1` (2026-10-03 23:09, R22); live at the next auto-update |
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | #237 | **merged** `7e858c8bf` (2026-10-04 12:40, R26) |
-| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **in review** — fix round done at `b29aba143` (2026-10-04 16:28), re-measured; review run 257 (R29) |
-| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`) | — | **planned** — plan reviewed (R31); dispatch after the plan is on `main` and claim 956's split is agreed |
+| 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **accepted** at `b29aba143` (review 257, R32); run 255 at `merging`, awaiting the operator's merge after #243 |
+| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`) | — | **planned** — plan reviewed (R31); split with claim 956 agreed (calm-mesa, mail 3401); dispatch after #243 (the plan) and #241 merge |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -515,6 +515,30 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     worker-clause sentence: the turn-end mail after a `wait:` takes a subject beginning `re stall-check: waiting`, which
     already passes the ball. That is a worker-skill change beyond the approved amendment, so the operator decides it.
     It would take the block's last number.
+- **R32 (coordinator, 2026-10-04 17:51): wave 6 is accepted, and its residue moves to wave 7.** Review run 257
+  (`ccrc-pwa-still-summit`) read the fix round at `b29aba143`. The panel ran 52 agents, none died: 16 findings raised,
+  12 survived, merged into 7. Every suite is green: stall-verdict 301, the citation instrument 7 passed, both `tsc`
+  runs and the PWA build. The fix-round mutation rows are red, and so are three of the reviewer's own. Restoring the
+  dropped conjunct stays green, which proves it was unreachable. The merged tree is green against both `c9ada6543`
+  and `22f7931af`. D-3803's estimate is never early with serial replays, its lateness is bounded (deaf by the sixth
+  replay), and it closes R28's replay-door gate on `stall-watch-w2-live`. Run 257 closed `done` on its own fingerprint.
+  Rulings:
+  - **F1, a landing order, not a defect.** D-3803 and D-3804 are cited in code and defined only on this ledger branch.
+    Ledger PR #243 carries both definitions and merges BEFORE #241, so `main` never cites an undefined number. #243 also
+    reconciles three sentences in wave 6's plan that D-3803 contradicted: "exactly four" numbers, "No `shared/` edit",
+    and D-3798 (b)'s queue rule for replayed rows.
+  - **F3, keep the floor.** `Math.max(passed.at, …)` stays as a defensive guard (it binds on a backward clock step). A
+    comment says so, and its row is labelled as unreachable from the store but a valid L1 input.
+  - **F2, F4, F5, F6 and F7, accepted for wave 7's Task 4.** They are wording and test hygiene, with no behaviour change
+    and no number: the strict-mode gate wording, the replay interval imported rather than copied in a sweep row, the
+    estimate's one-send-per-interval assumption, where `MAIL_REPLAY_MS`'s meaning lives, and one comment word. A third
+    fix round would cost a review cycle for no verdict change.
+  - **The split observation, left as it is.** `stallDeafBody` prints the queue age and the newest delivery, never the
+    estimate. Everything it prints is true, and wave 6's plan left it alone on purpose.
+  - Run 255 advanced to `merging`. The merge is the operator's call: #243 first, then #241, each pinned to its head.
+  - **Wave 7's overlap is agreed.** Run 174's coordinator said yes in mail 3401: both PRs land, the second merges
+    `main` and keeps both sides, and wave 7 stays inside clause 16, `CONTRACT[15]` and its own rows. Wave 7 gains a
+    precondition that #241 is merged, since Task 4 edits wave 6's text.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;

@@ -89,7 +89,8 @@ assertion until it passes.
   is inserted above it.
 - New test rows go at the END of their file, or at the end of a named describe where they need its scoped helpers
   (Task 4). They are never inserted between existing rows, so wave 5's anchors in the same files do not move.
-- Deviation numbers: exactly four, issued by the coordinator and written in under "Deviations found". Code comments
+- Deviation numbers: exactly four at planning, issued by the coordinator and written in under "Deviations found"
+  (review 256 issued two more for the fix round, D-3803 and D-3804, defined there too). Code comments
   cite each by slug and number. Never write a number that was not issued, and never commit a placeholder number
   (`dtbd.test.ts` reds one). Name any further departure in the wave-done mail by slug, and the coordinator assigns its
   number.
@@ -2021,7 +2022,7 @@ Four numbers, issued by the coordinator, one per behaviour change. No verifier r
     reportable.
   - (b) times coordinator-deaf from the delivery the coordinator could hear, while the mail's newest delivery row is
     unacked: from its `deliveredAt` when `replayCount` is 0 (the first delivery), and from the mail's queue time once a
-    replay has re-sent it. `sweepMail` re-stamps `deliveredAt` on every replay (`markDelivered`, then
+    replay has re-sent it (for a replayed row, superseded at review by D-3803's first-delivery estimate, below). `sweepMail` re-stamps `deliveredAt` on every replay (`markDelivered`, then
     `bumpReplayCount`), every `MAIL_REPLAY_MS` (10 min) while the gate admits the row, so a clock on that column would
     push an idle coordinator that never acks at about 4.5 h (the 20-replay ceiling parks the row near 3 h 20 min, and
     the hour runs from its last stamp) instead of 1 h. A replayed row was first delivered at least `MAIL_REPLAY_MS`
@@ -2149,5 +2150,5 @@ Re-run after the coordinator's rulings on the plan review (rulings 1–6), over 
     mode").
   - `watch.ts` passes an L1 reader's answer and decides nothing.
   - `store.ts` (L3) carries one existing column and proves it, deciding zero at the call site; it narrows nothing.
-  - No `shared/` edit.
+  - No `shared/` edit at planning. D-3803's fix round adds one: `MAIL_REPLAY_MS`'s value moves to `shared/api.ts`.
 - **Review Focus.** Each of the six lines has its row in the owning task (Tasks 1, 2, 2, 2, 3, 2).

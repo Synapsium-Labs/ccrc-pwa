@@ -27,6 +27,10 @@ coordinator clause 16, and close the two parked residues on the worker clause's 
   `monitor`) and the S4 row pins one sentence. Two new rows: a positive allowlist of the wake list's members, tied to
   `stall.ts`'s `STALL_RESUMING_KINDS`, and a `resume` scan of the list. No worker SKILL.md text changes.
 
+- **Wave 6's review residue (Task 4).** Review 257 of PR #241 left six comment and test-hygiene items that the
+  coordinator accepted for this wave (ledger R32): comment and docstring wording in `stall.ts` and `shared/api.ts`, one
+  test constant imported instead of copied, and one comment word. No behaviour changes and no number is owed.
+
 **Architecture:** Prose and pins only.
 - Coordinator clause 16 stays ONE numbered line, edited in place. The clause count stays **sixteen**, so no count word
   moves anywhere (SKILL.md, CLAUDE.md, README.md, the suite's titles and comments).
@@ -64,7 +68,9 @@ spec 38/1, `server/test/coordinator-skill.test.ts` 49/4, `server/test/worker-ski
    prints `16`, and `git show origin/main:ccd/worker-skill/SKILL.md | grep -cE '^[0-9]+\. '` prints `17`. If either
    differs, another programme's clause landed: this wave still edits clause 16 by content (it is found by its opening
    words), and no count word moves, but say so in the wave-done mail.
-4. This workspace's branch starts from current `origin/main` (a fresh child does). Absorb `main` later only on worker
+4. **PR #241 (stall watch wave 6) is merged.** `git log origin/main --oneline -1 -- server/src/coord/stall.ts` names a
+   commit whose `git show` carries `replayed-deaf-from-first-delivery-estimate`. Task 4 edits that wave's text.
+5. This workspace's branch starts from current `origin/main` (a fresh child does). Absorb `main` later only on worker
    clause 16's measured triggers, always with `git merge`, never a rebase. Then take the baseline.
 
 ## Global Constraints
@@ -179,6 +185,11 @@ Issued by the coordinator, one per slug; a departure found during execution is n
 | `server/test/coordinator-skill.test.ts` | `stall.js` import (≈25) and `shared/api.js` member line (≈30), in place; the comment above `CONTRACT[15]` (≈126), in place; `CONTRACT[15]` (≈128), in place; three rows before the stall describe's closing `});` (EOF, ≈2590) | 1 |
 | `server/test/worker-skill.test.ts` | two helpers and two rows before the stop-clause describe's closing `});` (EOF, ≈709) | 2 |
 | `README.md` | **What the skills do with the watch's mail.** paragraph, 13 lines for 13 (≈4049-4061) | 3 |
+| `server/src/coord/stall.ts` | comments and docstrings only: the mail-stuck gloss, `stallDeafMail`'s docstring and one comment above its return, `stallIdleStart`'s docstring lead | 4 |
+| `shared/api.ts` | `MAIL_REPLAY_MS`'s docstring, one sentence (end of file, below every cited line) | 4 |
+| `server/src/watch.ts` | `MAIL_REPLAY_MS`'s meaning docstring, its first line, in place | 4 |
+| `server/test/stall-sweep.test.ts` | the `shared/api.js` import line; the coord-deaf replay row's `REPLAY_MS` copy; one comment word | 4 |
+| `server/test/stall-verdict.test.ts` | one comment line above the "estimate never precedes the queue" row | 4 |
 | `docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md` | status line (:3, in place); an amendment block after §6.1's pin-impact paragraph (after ≈685, 34 lines); a note under §11 decision 13 (after ≈921 before the block, ≈955 after; 3 lines) | 3 |
 
 **Deliberately unchanged** (every tracked site that quotes clause 16 or its "until your next mail" phrase, measured with
@@ -261,7 +272,7 @@ tail -3 server/test/coordinator-skill.test.ts
 ```
 
 Expected: `1` for each file; one line each for the three `grep -n` (≈25, ≈30, ≈126); the tail ends with
-`      .toContain(\`\n## ${named}\n\`);`, `  });`, `});`. If any differs, `main` moved: find the text by content and say so.
+`      .toContain(`\n## ${named}\n`);`, `  });`, `});`. If any differs, `main` moved: find the text by content and say so.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -279,7 +290,7 @@ All edits are in `server/test/coordinator-skill.test.ts`, each in place except (
 `  // Worker stall watch, wave 3 (spec 2026-09-29 §6.1). Typographic apostrophes` →
 `  // Worker stall watch, wave 3 (spec 2026-09-29 §6.1), amended by wave 7 (D-3805). Typographic apostrophes`
 
-(d) ≈128, `CONTRACT[15]`: replace the whole single-quoted literal that begins `  'A mail from \`operator\` whose subject
+(d) ≈128, `CONTRACT[15]`: replace the whole single-quoted literal that begins `  'A mail from `operator` whose subject
 begins` with this ONE line (the array's last entry, so the next line stays `];`):
 
 ```ts
@@ -332,7 +343,7 @@ lines, insert this block (it begins with one blank line):
     expect(quoted.length, 'the scan read no quoted token').toBeGreaterThan(0);
     for (const q of quoted) {
       expect(reliedOn.has(q),
-        `the clause quotes \`${q}\`, which is outside the constants it relies on: add the constant here, or unquote it`).toBe(true);
+        `the clause quotes `${q}`, which is outside the constants it relies on: add the constant here, or unquote it`).toBe(true);
     }
   });
 ```
@@ -342,7 +353,7 @@ lines, insert this block (it begins with one blank line):
 Run: `cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts`
 
 Expected (measured on the prototype): `Tests 3 failed | 156 passed (159)`. The three:
-- `carries all sixteen clauses verbatim` (`missing contract clause: A mail from \`operator\` whose subject begins \`sta…`);
+- `carries all sixteen clauses verbatim` (`missing contract clause: A mail from `operator` whose subject begins `sta…`);
 - `sends wait: past a stall mail too, for a worker in a state the watch reads`;
 - `states the ball as stall.ts reads it: only until the next mail, past the hand-backs it exempts`.
 
@@ -351,8 +362,8 @@ already one of them. Its reds are C1, C5, C6, C7, C8 and C9 below.
 
 - [ ] **Step 4: Amend the clause**
 
-In `ccd/coordinator-skill/SKILL.md`, replace the whole line that begins `16. A mail from \`operator\` whose subject
-begins \`stall:\`` (≈85) with this ONE line. Copy it exactly: curly `’`, `‘` and `’`, no straight apostrophe.
+In `ccd/coordinator-skill/SKILL.md`, replace the whole line that begins `16. A mail from `operator` whose subject
+begins `stall:`` (≈85) with this ONE line. Copy it exactly: curly `’`, `‘` and `’`, no straight apostrophe.
 
 ```
 16. A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.
@@ -633,7 +644,7 @@ mail.
 - [ ] **Step 1: README's live description of clause 16, in place**
 
 Replace these 13 lines (≈4049-4061; the first begins `**What the skills do with the watch's mail.**`, the last ends
-`The \`ccrc-worker\` skill's clause 17: a`):
+`The `ccrc-worker` skill's clause 17: a`):
 
 ```
 **What the skills do with the watch's mail.** The `ccrc-coordinator` skill's
@@ -812,6 +823,61 @@ plus a merge commit only if the Preconditions absorbed `main`.
 
 ---
 
+### Task 4: Wave 6's review residue (review 257; ledger R32)
+
+Comment, docstring and test-hygiene edits only. No assertion moves, no guard changes, so no mutation row is owed, and
+the suite counts stay exactly as `main` has them after #241. Each edit is found by CONTENT (the quoted old text occurs
+once); line numbers are wave 6's tip `b29aba143` and drift.
+
+**Files:** `server/src/coord/stall.ts`, `shared/api.ts`, `server/src/watch.ts`, `server/test/stall-sweep.test.ts`,
+`server/test/stall-verdict.test.ts`. Claim them first (wave 6's claims lapse with its run).
+
+- [ ] **Step 1: F2, the gate wording under the strict mode.** `stallIdleStart` reads a live idle or shell word as idle
+  in every mode. The strict mode's gate refuses a live `shell`, and R19 accepted that residual. Two texts still say the
+  clock follows "the mail gate in force".
+  - In `STALL_ARM_MAP`'s `'mail-stuck'` gloss (≈:63), replace `after its main loop went idle as the mail gate in force
+    reads it (the `busy` mode delivers on a live busy only while the strict mode is absent)` with `after its main loop
+    went idle (a live idle or shell word in every mode, the strict mode included, an accepted residual; or a finished
+    turn under a live busy, which the `busy` mode delivers on only while the strict mode is absent)`.
+  - In `stallIdleStart`'s docstring (≈:1719), replace `When the recipient's main loop went idle, as the mail gate in
+    force can deliver to it (§5.2;` with `When the recipient's main loop went idle (§5.2;`, and replace `the live stamp
+    under idle or shell; else` with `the live stamp under idle or shell, in every mode (the strict mode's refusal of a
+    live shell is an accepted residual, R19); else`.
+  - Spell no marker name (D-3607): "the `busy` mode" and "the strict mode" only. If a suite pins the gloss text,
+    update that pin in place and say so in the wave-done.
+- [ ] **Step 2: F3, the queue floor is defensive.** Keep `Math.max(passed.at, …)` in `stallDeafMail`.
+  - Insert one comment line directly above its `return`: `// The queue floor is defensive: no state the store writes
+    puts the estimate before the queue; it binds only on a backward clock step.`
+  - In `stall-verdict.test.ts`, insert one comment line directly above the row titled `the estimate never precedes the
+    queue: …`: `// Unreachable from the store (five replays need 50 min or more after the first delivery); a valid L1
+    input that pins the defensive floor.`
+- [ ] **Step 3: F5, the estimate's assumption.** In `stallDeafMail`'s docstring, after `Its error is lateness only,
+  bounded by the replay ceiling;` (wrapped across two lines in the file), add: ` it assumes one send per row per replay interval, so the mail lane's
+  overlapping-sweep double send (two sends about 30 s apart) can make it early by up to MAIL_REPLAY_MS less 30 s, a
+  residual of that race, to which the estimate adds nothing;` and drop the now-duplicated `;` so the bullet still ends
+  in one `;`.
+- [ ] **Step 4: F6, where the meaning lives.** In `shared/api.ts`'s `MAIL_REPLAY_MS` docstring, replace `What it MEANS
+  lives in `watch.ts`'s docstring beside the replay sweep that enforces it.` with `What it MEANS lives in
+  `watch.ts`'s docstring in that file's constants block.` In `watch.ts`'s own docstring, replace `WHAT
+  `MAIL_REPLAY_MS` MEANS, kept beside the code that enforces it:` with `WHAT `MAIL_REPLAY_MS` MEANS:`. Both edits are
+  line-neutral; `shared/api.ts`'s edit sits below every line the README or the compaction card cites.
+- [ ] **Step 5: F4, import the replay interval.** In `stall-sweep.test.ts`, add `MAIL_REPLAY_MS` to the existing
+  `../../shared/api.js` import (≈:31). In the coord-deaf replay row (≈:2082), delete the `const REPLAY_MS = 10 *
+  60_000; …` line and use `MAIL_REPLAY_MS` wherever that row used `REPLAY_MS`.
+- [ ] **Step 6: F7, one word.** In the comment above that describe (≈:2075), replace `so its newest `deliveredAt` is
+  never 10 min old` with `so its newest `deliveredAt` is at most 10 min old`.
+- [ ] **Step 7: Gate.** From `server/`, foreground, one file at a time: stall-verdict, stall-bodies, stall-session,
+  stall-sweep, stall-store, stall-vocabulary, single-definition, topology-clean, typecheck-tests; the README citation
+  instrument; `npx tsc --noEmit -p .` and the test project; in `pwa/`, `npm run build`. Every count equals `main`'s.
+  Grep the added `server/src` and `shared` lines for `stall-watch-`, `mail-gate-` and `mail-disabled`: none.
+- [ ] **Step 8: Commit.** `git add server/src/coord/stall.ts shared/api.ts server/src/watch.ts
+  server/test/stall-sweep.test.ts server/test/stall-verdict.test.ts && git commit -m "docs(stall): wave 6 review
+  residue: gate wording under strict, the defensive queue floor, the estimate's assumption, MAIL_REPLAY_MS imported in
+  the sweep row"`.
+
+Left as it is, by ruling: `stallDeafBody` prints the queue time with its age and the newest `deliveredAt`, never the
+D-3803 estimate. Everything it prints is true, and the plan of wave 6 left it unedited deliberately (R32).
+
 ## If this PR is overtaken before it merges
 
 **PR #215 (child-reclamation wave 4, run 174) edits the same four skill files.** Measured at its head `6138030ec`
@@ -820,7 +886,7 @@ plus a merge commit only if the Preconditions absorbed `main`.
   no `16. ` line; the count word there reads `fifteen`).
 - `server/test/coordinator-skill.test.ts`: `CONTRACT[2]` (≈111), the childReclaim length (≈244), the coord-routes list
   (≈520) and one new peer-protocol row (≈1562). **Not `CONTRACT[15]`** (its diff against `main` carries no `A mail from
-  \`operator\`` line), not the imports this wave edits, not the stall describe.
+  `operator`` line), not the imports this wave edits, not the stall describe.
 - `ccd/worker-skill/SKILL.md`: the reporting section's "This workspace ends…" sentence (≈261). Not clause 17.
 - `server/test/worker-skill.test.ts`: the "this workspace ends" row (≈171) and one row appended inside the routing
   describe (≈666), which on `main` is followed by the stop-clause describe. Not the stop-clause describe.
