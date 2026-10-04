@@ -871,8 +871,8 @@ export function stallNewestDelivery(rows: readonly StallDeliveryRow[], mailId: n
  *    never early: each replay lands at least MAIL_REPLAY_MS after the previous stamp (the `dueDeliveries` predicate), so
  *    `deliveredAt − n × MAIL_REPLAY_MS` is at or after the first delivery. Its error there is lateness only, bounded by the
  *    replay ceiling; it assumes one send per row per replay interval, so the mail lane's overlapping-sweep double send
- *    (two sends at least 30 s apart) can make it early by up to MAIL_REPLAY_MS less 30 s, a residual of that race, which
- *    the estimate does not cause;
+ *    (two sends at least 30 s apart) can make it early by up to MAIL_REPLAY_MS less 30 s per double send, never before the queue,
+ *    a residual of that race, which the estimate does not cause;
  *  - a mail still QUEUED behind the gate, undelivered: its queue time plus DELEGATE_CAP_MS. A coordinator in a RUNNING turn (marker
  *    `working` under a live `busy`: a hung foreground call, a blocking wait) has no other arm. Its own mail-stuck needs
  *    a finished turn, and no frozen arm watches a coordinator. So the hold is bounded like mail-stuck's busy hold, and

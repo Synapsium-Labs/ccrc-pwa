@@ -749,7 +749,7 @@ describe('the stop clause names only wakes that wake (stall watch spec §6.2)', 
         `the wake list member "${m}" is not a mail that asks, a structured ask, or a background kind`).toBe(1);
       for (const k of bg ? bg[1]!.split(/ or | and /) : []) {
         expect(allowed.has(k.toLowerCase()),
-          `the wake list counts a background ${k}, which stall.ts never reads as resuming the session`).toBe(true);
+          `the wake list counts a background ${k}, which is not the clause's word for any kind stall.ts reads as resuming the session (see RESUMING_WORD)`).toBe(true);
       }
     }
   });
