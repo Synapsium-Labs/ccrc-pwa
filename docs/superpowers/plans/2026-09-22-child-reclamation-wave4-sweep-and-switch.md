@@ -5298,6 +5298,10 @@ The frozen corpus cites none of these sites by content (measured).
      - Case: a pass whose listing was read before the answer, and whose loop ran after it, seeds nothing. Two fresh
        passes after it lead to the request.
      - Mutations: drop the consume → that case reds; drop the entry delete → the second-interleaving case reds.
+     - Cases, one per clear: a mark stands (the release answered, no eligible verdict since), then the fail-shut, a
+       raised then lowered `reclaim-paused`, or the row leaving the registry and being listed again. The request goes
+       out exactly two fresh passes after it, not three.
+     - Mutations: delete each clear in turn → its own case reds.
 2. **Both caps (R-5b).** The early return reads:
    `!capSupported(…, RECLAIM_CAP) || !capSupported(…, RECLAIM_PAUSE_CAP) || names.includes(RECLAIM_PAUSE_MARKER)`.
    - The fixture's `ccdVerbs` (plan:2787) gains the pause token.
