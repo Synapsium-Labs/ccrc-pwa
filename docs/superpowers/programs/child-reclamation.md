@@ -43,6 +43,15 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-04 15:52 — F1's bound refined to 2.5 sweep intervals.** `swift-hollow` implemented the 15:13 bound at
+  exactly two intervals (≤ 120,000 ms) and measured a consequence (mail 3393). The watcher ticks every 2 s and the
+  sweep keeps its own 60 s clock, so passes land 60 to 62 s apart. A child that sits out one pass is therefore
+  re-asked 120 to 124 s after its last presence answer, just past the bound, and the licence was withheld once two
+  children were due, not three as the ruling intended. **Ruling:** both conditions use 2.5 ×
+  `CHILD_RECLAIM_SWEEP_MS` (150,000 ms, inclusive, derived from the constant rather than written as a literal). One
+  skipped pass with tick jitter keeps the episode, and two skipped passes (≥ 180 s) restart it. So the licence is
+  withheld once three or more children are due, as intended, and it still fails closed. Pins: a one-skipped-pass case
+  at the jitter's high end keeps the episode, and a two-skipped-pass case restarts it.
 - **2026-10-04 15:13 — review run 254: no containment bypass, two important findings; wave 4 fix round 1.**
   `ccrc-pwa-still-cove` read `6138030e` (34 agents, none dead or empty; `unverifiedLenses` and `unexamined` none).
   - **Panel:** correctness raised 3 and confirmed 2; spec 1, 1; reproduce 2, 1; SAFETY (Opus `xhigh`) 4, 4. Every
