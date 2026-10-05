@@ -43,6 +43,24 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-05 13:33 — what a reclaim frees, and what it leaves.** Measured read-only, for the operator's
+  idle-process question.
+  - **Browser MCP servers:** no real headless Chrome was running. The memory is `playwright-mcp` (74 processes,
+    about 1.3 GB) and `chrome-devtools-mcp` (102 processes, about 2.1 GB). Every session starts both, about 74 MB
+    per session. Attributed by pane scope: about 1.3 GB sat in 7 finished-run children, which the sweep takes;
+    about 0.25 GB in 2 open-run children; and about 2.4 GB in 14 sessions that are not children (coordinators and
+    hand-made workspaces), which reclamation never takes (rule 4).
+  - **A reclaim does end them:** 39 sweep reclaims by 13:21, and running children fell from 31 to 19, yet no pane
+    scope without a `claude` process held an MCP server.
+  - **What it leaves:** reclaim ends a pane with `tmux kill-session`, which does not stop the pane's scope. 13 such
+    scopes hold detached stragglers, about 25 MB together, some 21 days old. One more held a SessionEnd hook's
+    900 MB parse, which was transient. This programme does not own that fix: session-continuity wave 4
+    (`ccd-scope-sweep`) and wave 9 ("ccd stops a pane's scope when it ends the pane", every verb including reclaim)
+    do. Wave 5 does not duplicate it.
+  - **Not reclamation:** the graph sweep's 14 kills in 7 days are its own `MemoryMax=4G` cgroup OOM
+    (`ccd-graph-sweep.service`, `oom-kill`). The trees near the kills are mostly `MekWarLive/swift-harbor`, then
+    `expoAI-assistant/identity-flake`, neither of them a child.
+
 - **2026-10-05 13:06 — the fleet converged past v0.0.79 and the sweep is live.** Measured read-only.
   - **Convergence:** the halt cleared overnight. The updater sent the fleet box v0.0.84 at 12:22 (from v0.0.78)
     and the server box v0.0.84 at 12:34 (from v0.0.76). The fleet box's `update.json` reads `done` for v0.0.84, and
