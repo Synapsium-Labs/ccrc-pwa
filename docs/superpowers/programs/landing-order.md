@@ -485,6 +485,26 @@ carries it (spec §5.1, amended 2026-09-24).
   - A `;` inside a quoted flag value (`gh pr -R "a;b" merge`) is LISTED as deliberate.
   - The worst over-cap shape costs about 600 ms through the hook at 100 KB, about 40% of the 1500 ms bound. It is
     pinned, and stated as such.
+- **2026-10-05 15:48 — fix round 1 done** (wave-done 3535, PR #248 at `2324053a`).
+  - **CI is fully green,** both test-macos legs included: Homebrew jq 1.8.2, merge-deny 120 cases.
+  - **F1 (3916) `94459248`:** the paren, and a structural pin over 52 jq programs. Merge-deny is 120/120 under jq
+    1.7 and 1.8.2.
+  - **F3 (3917) `60c22193` and `1804eaa6`:** MERGE_OVERCAP_RE is retired. A fixed-string split on `; & |` and
+    newline, then in-order word tests, denies the four flag shapes and the six flag-value shapes. Six 100 KB timing
+    pins run at 90–384 ms.
+  - **F4:** the operator and TAB cases.
+  - **F5 `762d572a` and `5d29390c`:** the Task 7 CANARY runs the installed hook in a fixture HOME and expects a
+    deny. It was verified to deny on jq 1.7 and 1.8.2, and to catch the old hook failing open on 1.8.2.
+  - **F6:** README's `jq_regex` row, and the plan's text brought to the shipped rule (the replay is byte-identical).
+  - **Main merged** (clause 16 trigger 1, the stamp line). 3918–3920 are unused.
+  - **The worker's ledger notes**, for the review to classify:
+    - (a) any jq runtime error passes the deny. The candidate: fail CLOSED in a held or child session whose payload
+      holds `merge`.
+    - (b) doctor's `jq_regex` PASS text claims too much.
+    - (c) a NUL makes bash warn.
+  - **Re-measured:** the tip matches the claim, and the run went to `awaiting-review`.
+  - **Acceptance review 273** is dispatched to `ccrc-pwa-quiet-mesa`, with the held-out panel named.
+  - **Overlap:** delegation-broker's run 271 is cleared by this worker to edit session-hook.sh.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
