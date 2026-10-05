@@ -1843,6 +1843,8 @@ UPD_VERSION=""
 UPD_STAGED_SHA=""    # _upd_fetch: the extracted tree's OWN sha (review fix round 1 I3) — arm 3 compares it to old_sha to tell a same-tag REBUILD (mixed) from a same-tag REPEAT (not mixed)
 UPD_BACKUP_DIR=""
 BAK_DIRS=()        # `_bak_list`'s out-param: the timestamped backup dirs, oldest first
+BAK_KEEP_SNAP=""   # `_bak_keepset`'s out-params (wave 9 R10g): the newest earlier coord.db snapshot and the newest earlier tree backup,
+BAK_KEEP_TREE=""   # each chosen among the dirs the floor and this run's own path do not already protect
 UPD_BAK_FLOOR=""   # the second this run first held ~/.ccrc/update.lock (`_upd_lock`); `_bak_gc` keeps every dir named at or after it
 UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
 UPD_URL_DIR_SAFE=""    # _upd_resolve: same, through _upd_redact — every "fetching …"/WARN line prints THIS, never UPD_URL_DIR, so a credentialed CCRC_RELEASE_BASE_URL never reaches stdout (review 155 C17, fix round 1 item 11); the real curl calls still read UPD_URL_DIR
@@ -2200,8 +2202,10 @@ already running).
             is also given; never worktrees, never tmux state
   backup    take update's backup step standalone: coord.db snapshot, dists,
             ccd and the units to ~/ccrc-backups/<ts>/, then prune to the
-            newest \$CCRC_BACKUP_KEEP (default 10) timestamped backups —
-            hand-made siblings in that directory are never touched
+            newest \$CCRC_BACKUP_KEEP (default 10) timestamped backups — never
+            this run's own or one named after it began, nor the newest earlier
+            tree backup and coord.db snapshot; skipped while another ccrc run
+            holds ~/.ccrc/update.lock — hand-made siblings are never touched
   logs      this box's service journal: journalctl --user -u ccrc.service
             (or ccrc-agent.service when ccrc.env records CCRC_ROLE=fleet).
             Exit 3: the install completed but the trailing doctor failed
@@ -2738,18 +2742,67 @@ _box_server_addr() {
 # to it. Collapsing both to "" (this function's stdout, still) is exactly
 # right for every OTHER caller, which only ever wants a default when unset —
 # this is the one caller that needs told apart.
-_box_env_value() {
-  local file="$1" key="$2" line v="" found=0
+#
+# THIRD ARGUMENT, `unit` OR `shell` (wave 9 R10a/R10e, D-3822/D-3823) — only
+# `_box_unit_env` passes one; the 45 other callers pass two and read exactly what
+# they always read, CR handling included.
+#   unit   systemd's `EnvironmentFile=` (Linux). Whitespace (space, tab, CR)
+#          around an UNQUOTED value is discarded (the run-182 ruling,
+#          systemd.exec(5)), ONE trailing CR ends a CRLF line, and every shape
+#          this reader cannot DECIDE answers rc 2 with nothing on stdout. (A file
+#          systemd would split or skip WHOLE — a CR still inside a line, a NUL
+#          byte, a byte >= 0x80 in a non-comment line — is rc 2 before the loop
+#          runs: `_box_env_unit_whole` asks first, wave 9 R10a, D-3831.)
+#          The per-key shapes: a space or
+#          tab before `=`, a physical line ending in `\` directly above the key
+#          line (a comment's too — systemd before v254 continued it, v254+ does
+#          not, and this reader does not know which runs), a backslash in the
+#          value, a quote that is not one whole pair, a quote left open on an
+#          earlier line, an `export` prefix on the key itself (`export<ws>KEY<ws>=`).
+#   shell  the launchd job's `set -a; . file` (Darwin). Called ONLY on a file
+#          `_box_env_shell_plain` passed, so every assignment line is plain: an
+#          `export` word and trailing spaces and tabs are dropped, as bash does.
+_box_env_value() {   # <file> <key> [unit|shell]
+  local file="$1" key="$2" mode="${3:-}" line v="" found=0 und=0 prevcont=0 qtaint=0 rest xk
   # Space, tab, CR — systemd's set, minus the newline `read` has consumed. A
   # variable rather than a literal bracket expression because a tab and a CR
   # typed inline are invisible in a diff and one stray edit from being deleted.
   local ws=$' \t\r'
+  if [ "$mode" = unit ]; then _box_env_unit_whole "$file" || return 2; fi
   while IFS= read -r line || [ -n "$line" ]; do
+    # `unit` mode only: a CR ends the line, as it does for systemd (wave 9 R10a).
+    if [ "$mode" = unit ]; then line="${line%$'\r'}"; fi
     # Leading whitespace, exactly as systemd skips it — `_dr_trim`'s left half,
     # in the one namespace this file can reach, over systemd's character set
     # rather than POSIX's. `$ws` expands INSIDE the bracket expression, which
     # is why the pattern is unquoted here.
     line="${line#"${line%%[!$ws]*}"}"
+    if [ "$mode" = unit ]; then
+      # Wave 9 R10e (D-3823): shapes systemd may read and this reader cannot decide.
+      case "$line" in
+        "$key"[$' \t']*=*) und=1 ;;
+        "$key="*) { [ "$prevcont" -eq 1 ] || [ "$qtaint" -eq 1 ]; } && und=1 ;;
+        # `export`, one or more spaces or tabs, exactly KEY, optional spaces or tabs, `=` — D-3823's own text, "never a
+        # longer key that begins with KEY" (fix round 1, F2): `export OLD_KEY=…` and `export NOTE=KEY=…` name another key.
+        export[$' \t']*)
+          xk="${line#export}"; xk="${xk#"${xk%%[!$' \t']*}"}"
+          case "$xk" in
+            "$key"*) xk="${xk#"$key"}"; xk="${xk#"${xk%%[!$' \t']*}"}"; case "$xk" in =*) und=1 ;; esac ;;
+          esac ;;
+      esac
+      # A QUOTE THAT MAY SPAN LINES: systemd's '-quoted and "-quoted values can span lines, so a non-comment line
+      # whose value carries a quote that is not ONE WHOLE PAIR on that line taints every later key line (never
+      # cleared — conservative: it can only cost a "not measured").
+      if _box_env_qopen "$line"; then qtaint=1; fi
+      # systemd before v254 continued a comment line that ends in `\`, v254+ does not; this reader does not know which
+      # version the box runs, so a key line after ANY line ending in `\` is not measured.
+      case "$line" in *\\) prevcont=1 ;; *) prevcont=0 ;; esac
+    elif [ "$mode" = shell ]; then
+      # Wave 9 R10a, Darwin (round-2 ruling R-A): ONLY ever called on a file `_box_env_shell_plain` passed, so every
+      # assignment line is `[export<ws>]NAME=<plain value>`. bash drops the export word and trailing spaces/tabs.
+      case "$line" in export[$' \t']*) line="${line#export}"; line="${line#"${line%%[!$' \t']*}"}" ;; esac
+      line="${line%"${line##*[!$' \t']}"}"
+    fi
     case "$line" in
       "$key="*) v="${line#"$key="}"; found=1 ;;
       *) continue ;;
@@ -2757,12 +2810,127 @@ _box_env_value() {
   done < "$file"
   # Trailing CR (a file edited on Windows) and surrounding quotes.
   v="${v%$'\r'}"
+  if [ "$mode" = unit ] && [ "$found" -eq 1 ]; then
+    # Wave 9 R10a (D-3822): whitespace (space, tab, CR) around an UNQUOTED value goes, as systemd
+    # discards it (the run-182 ruling; systemd.exec(5)).
+    v="${v#"${v%%[!$ws]*}"}"; v="${v%"${v##*[!$ws]}"}"
+    case "$v" in
+      *\\*) und=1 ;;                                   # an escape, quoted or not
+      \"*\") rest="${v#?}"; case "${rest%?}" in *\"*) und=1 ;; esac ;;
+      \'*\') rest="${v#?}"; case "${rest%?}" in *\'*) und=1 ;; esac ;;
+      *\"*|*\'*) und=1 ;;                              # a quote that is not one whole pair ("on"x, on")
+    esac
+  fi
+  if [ "$und" -eq 1 ]; then return 2; fi
   case "$v" in
     \"*\") v="${v#\"}"; v="${v%\"}" ;;
     \'*\') v="${v#\'}"; v="${v%\'}" ;;
   esac
   printf '%s' "$v"
   [ "$found" -eq 1 ]
+}
+
+# _box_env_shell_plain <file> — Darwin only (wave 9 R10a, round-2 ruling R-A). rc 0 when every line is blank, a
+# comment, or `[export<ws>]NAME=` + a shell-inert value / one whole '…' pair / one whole "…" pair with no $, backtick,
+# \ or " inside, then only spaces/tabs; no line holds a CR; and the file holds no NUL byte (D-3832: /bin/bash 3.2's
+# `. file` stops at the first NUL, so the job sets what comes before it and nothing after, while `read` below drops the
+# NUL and would pass the file — so it is found first, by `_box_env_has_nul`, never by `read`). rc 1 otherwise: BEP_LINE
+# is the first failing line's NUMBER (0 for a NUL: the cause is the file's, so no line is named) and BEP_CAUSE is `nul`,
+# `cr` or `shape`. It never records the line's bytes — ccrc.env holds tokens. Called directly, never in `$(…)`, so the
+# out-params reach the caller.
+_box_env_shell_plain() {   # <file>
+  local file="$1" raw rest name val inner n=0
+  BEP_LINE=0; BEP_CAUSE=""
+  if _box_env_has_nul "$file"; then BEP_CAUSE=nul; return 1; fi
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    n=$((n + 1))
+    case "$raw" in *$'\r'*) BEP_LINE=$n; BEP_CAUSE=cr; return 1 ;; esac
+    rest="${raw#"${raw%%[!$' \t']*}"}"
+    case "$rest" in ''|'#'*) continue ;; esac
+    rest="$raw"
+    case "$rest" in export[$' \t']*) rest="${rest#export}"; rest="${rest#"${rest%%[!$' \t']*}"}" ;; esac
+    case "$rest" in *=*) ;; *) BEP_LINE=$n; BEP_CAUSE=shape; return 1 ;; esac
+    name="${rest%%=*}"
+    case "$name" in ''|[0-9]*|*[!A-Za-z0-9_]*) BEP_LINE=$n; BEP_CAUSE=shape; return 1 ;; esac
+    val="${rest#*=}"; val="${val%"${val##*[!$' \t']}"}"
+    case "$val" in *[!A-Za-z0-9_./:@%+,=-]*) ;; *) continue ;; esac
+    case "$val" in
+      \'*\') inner="${val:1:${#val}-2}"; case "$inner" in *\'*) ;; *) continue ;; esac ;;
+      \"*\") inner="${val:1:${#val}-2}"; case "$inner" in *[\$\`\\\"]*) ;; *) continue ;; esac ;;
+    esac
+    BEP_LINE=$n; BEP_CAUSE=shape; return 1
+  done < "$file"
+  return 0
+}
+
+# _box_env_has_nul <file> — rc 0 iff the file holds a NUL byte: both arms' one detector (`_box_env_unit_whole`, D-3831;
+# `_box_env_shell_plain`, D-3832). `read` drops a NUL, so it is never trusted to report one: a `read -d ''` that
+# SUCCEEDS stopped at a NUL. rc 1 for a file with none, and for one that cannot be opened (both callers read only a
+# file already measured readable). It reads BYTES under its own `LC_ALL=C` (D-3833): under a UTF-8 locale bash's `read`
+# takes an incomplete lead byte (0xC2-0xF4) and the NUL after it as one character, never sees the delimiter, and
+# answers "no NUL" — so it never leans on a caller's locale.
+_box_env_has_nul() {   # <file>
+  local chunk LC_ALL=C
+  IFS= read -r -d '' chunk < "$1"
+}
+
+# _box_env_qopen <line> — `unit` mode's one spelling of "a quote that may span lines" (wave 9 R10e, D-3823; reused by
+# `_box_env_unit_whole`, D-3831): rc 0 for a non-comment line, leading whitespace already gone, whose value carries a
+# quote that is not ONE WHOLE PAIR on that line (or a quote on a line with no `=` at all). systemd's '-quoted and
+# "-quoted values can span lines; the caller decides what that taints.
+_box_env_qopen() {   # <line>
+  local line="$1" rest ws=$' \t\r'
+  case "$line" in
+    ''|'#'*|';'*) return 1 ;;
+    *\"*|*\'*) ;;
+    *) return 1 ;;
+  esac
+  rest="${line#*=}"; rest="${rest#"${rest%%[!$ws]*}"}"; rest="${rest%"${rest##*[!$ws]}"}"
+  case "$line" in *=*) ;; *) return 0 ;; esac
+  case "$rest" in
+    \"*\") case "${rest:1:${#rest}-2}" in *\"*|*\\*) return 0 ;; esac ;;
+    \'*\') case "${rest:1:${#rest}-2}" in *\'*) return 0 ;; esac ;;
+    *) return 0 ;;
+  esac
+  return 1
+}
+
+# _box_env_unit_whole <file> — Linux only (wave 9 R10a, D-3831). rc 0 when systemd's `EnvironmentFile=` would read the
+# file as lines this reader reads; rc 1 when it would not: BEW_CAUSE is `cr` (a CR still inside a line after ONE trailing
+# CR is dropped — systemd's NEWLINE is "\n\r", so a bare CR ends a line), `nul` (a NUL byte anywhere: systemd cannot read
+# the file, and both `EnvironmentFile=` lines are `-`-prefixed, so the unit skips it whole), or `utf8` (a byte >= 0x80 in
+# a line that is neither blank nor a comment: systemd fails a file whose keys or values are not valid UTF-8, and this
+# reader does not check validity, so ANY such byte is not decided — a valid IDN value costs a "not measured", never a
+# false answer). Comments are not checked for `utf8`: systemd checks keys and values only, and `ccrc expose`'s own first
+# line carries a valid UTF-8 em dash. EXCEPT (D-3831, fix round 2): a "comment" is only a comment while systemd is
+# between assignments. A non-comment line that ends in `\` or whose quote may span lines (`_box_env_qopen`) puts a
+# later `#` line inside a VALUE, which systemd does UTF-8-check, so in such a file the exemption is off for the WHOLE
+# file (conservative: a comment before the opener counts too, and it can only cost a "not measured"). BEW_LINE is the first offending line's NUMBER (0 for `nul`); the bytes are never
+# recorded. NUL is detected without trusting `read`, which drops it: `_box_env_has_nul`, the detector the Darwin arm
+# shares (D-3832). Called directly, never in `$(…)`.
+_box_env_unit_whole() {   # <file>
+  local file="$1" line trimmed n=0 spans=0 cmtline=0
+  local LC_ALL=C ws=$' \t\r'
+  BEW_LINE=0; BEW_CAUSE=""
+  if _box_env_has_nul "$file"; then BEW_CAUSE=nul; return 1; fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    line="${line%$'\r'}"
+    case "$line" in *$'\r'*) BEW_LINE=$n; BEW_CAUSE=cr; return 1 ;; esac
+    trimmed="${line#"${line%%[!$ws]*}"}"
+    case "$trimmed" in
+      '') continue ;;
+      '#'*|';'*)
+        # A comment: its high byte only matters if the file turns out to span values; remember the first.
+        case "$trimmed" in *[!$'\001'-$'\177']*) [ "$cmtline" -ne 0 ] || cmtline=$n ;; esac
+        continue ;;
+    esac
+    case "$trimmed" in *[!$'\001'-$'\177']*) BEW_LINE=$n; BEW_CAUSE=utf8; return 1 ;; esac
+    case "$trimmed" in *\\) spans=1 ;; esac
+    if _box_env_qopen "$trimmed"; then spans=1; fi
+  done < "$file"
+  if [ "$spans" -eq 1 ] && [ "$cmtline" -ne 0 ]; then BEW_LINE=$cmtline; BEW_CAUSE=utf8; return 1; fi
+  return 0
 }
 
 # Out-params, at file scope — `_box_unit_env`'s own comment argues why
@@ -2773,6 +2941,12 @@ BUE_SRC=""     # the file whose line decided ("" when neither readable file name
 BUE_NAMED=0    # 1 iff either READABLE file named the key at all (presence, not a non-empty value)
 BUE_ENV=""     # ccrc.env's state: ok | unreadable | absent
 BUE_EXP=""     # the exposure file's state: absent | readable | unreadable
+BUE_WHY=""     # rc 3 only (wave 9 R10e, D-3823): the cause, as a clause naming the file; "" otherwise
+BUE_FIX=""     # rc 3 only: the remedy clause for that cause
+BEP_LINE=0     # _box_env_shell_plain: the first failing line's NUMBER (0 for a NUL byte; never its bytes)
+BEP_CAUSE=""   # _box_env_shell_plain: nul | cr | shape
+BEW_LINE=0     # _box_env_unit_whole: the first offending line's NUMBER (0 for a NUL byte; never its bytes)
+BEW_CAUSE=""   # _box_env_unit_whole: cr | nul | utf8
 
 # ── _box_unit_env — ONE KEY AS ccrc.service RECEIVES IT (wave 8 item D) ────
 # The unit carries two EnvironmentFile lines, ccrc.env then $CCRC_EXPOSURE_FILE, and the later wins by PRESENCE: a
@@ -2782,14 +2956,29 @@ BUE_EXP=""     # the exposure file's state: absent | readable | unreadable
 # exposure file that is THERE AND UNREADABLE answers rc 2 (UNMEASURED — what the service manager receives from it
 # was not measured), never absent;
 # BUE_VAL/BUE_SRC then carry what ccrc.env alone says, for a caller that must word that. rc 0 measured.
+# Wave 9 R10a/R10e (D-3822, D-3823): the two files reach the server by DIFFERENT FEEDERS, and each is modelled as its own.
+#   Linux  systemd's `EnvironmentFile=` — `_box_env_value`'s `unit` mode. A shape it cannot decide is rc 3.
+#   Darwin the launchd job's `set -a; . file` under /bin/bash (`_svc_install`'s `set -a; [ -f '$env1' ] …` line) —
+#          `_box_unit_env_shell`, by round-2 ruling R-A.
+# rc 3 UNMEASURED, the SECOND unmeasured state (rc 2 is the unreadable exposure file, checked first on both platforms):
+# on Linux a readable file names the key in a shape this reader does not decide (an exposure file that DECIDES the key
+# still wins over an undecidable ccrc.env, by presence, as the second `EnvironmentFile=` does); on Darwin either
+# readable file is not plain assignments throughout (a NUL byte anywhere counts, D-3832), and then EVERY key is rc 3. BUE_WHY is the cause as a clause
+# naming the file (and, on Darwin, the line NUMBER, never its bytes — ccrc.env holds tokens); BUE_FIX is its remedy clause.
 _box_unit_env() {   # <KEY>
-  local key="$1" v rc
-  BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0; BUE_ENV=absent; BUE_EXP=absent
+  local key="$1" v rc envund=0 expund=0 f envwhole="" envline=0 expwhole="" expline=0 whole wline
+  BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0; BUE_ENV=absent; BUE_EXP=absent; BUE_WHY=""; BUE_FIX=""
+  if [ "${CCD_OS:-linux}" = darwin ]; then _box_unit_env_shell "$key"; return; fi
   if [ -e "$BOX_ENV_FILE" ]; then
     if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
       BUE_ENV=ok
-      v="$(_box_env_value "$BOX_ENV_FILE" "$key")"; rc=$?
-      if [ "$rc" -eq 0 ]; then BUE_VAL="$v"; BUE_SRC="$BOX_ENV_FILE"; BUE_NAMED=1; fi
+      v="$(_box_env_value "$BOX_ENV_FILE" "$key" unit)"; rc=$?
+      case "$rc" in
+        0) BUE_VAL="$v"; BUE_SRC="$BOX_ENV_FILE"; BUE_NAMED=1 ;;
+        # Wave 9 R10a (D-3831): rc 2 is also what a file systemd would split or skip WHOLE answers, for any key; it is
+        # told apart here (the read ran in a subshell), and is otherwise treated exactly as a per-key undecidable one.
+        2) envund=1; _box_env_unit_whole "$BOX_ENV_FILE" || { envwhole="$BEW_CAUSE"; envline="$BEW_LINE"; } ;;
+      esac
     else
       BUE_ENV=unreadable
     fi
@@ -2797,14 +2986,83 @@ _box_unit_env() {   # <KEY>
   if [ -n "${CCRC_EXPOSURE_FILE:-}" ] && [ -e "$CCRC_EXPOSURE_FILE" ]; then
     if [ -f "$CCRC_EXPOSURE_FILE" ] && [ -r "$CCRC_EXPOSURE_FILE" ]; then
       BUE_EXP=readable
-      v="$(_box_env_value "$CCRC_EXPOSURE_FILE" "$key")"; rc=$?
-      if [ "$rc" -eq 0 ]; then BUE_VAL="$v"; BUE_SRC="$CCRC_EXPOSURE_FILE"; BUE_NAMED=1; fi
+      v="$(_box_env_value "$CCRC_EXPOSURE_FILE" "$key" unit)"; rc=$?
+      case "$rc" in
+        0) BUE_VAL="$v"; BUE_SRC="$CCRC_EXPOSURE_FILE"; BUE_NAMED=1 ;;
+        2) expund=1; _box_env_unit_whole "$CCRC_EXPOSURE_FILE" || { expwhole="$BEW_CAUSE"; expline="$BEW_LINE"; } ;;
+      esac
     else
       BUE_EXP=unreadable
       return 2
     fi
   fi
+  if [ "$expund" -eq 1 ] || { [ "$envund" -eq 1 ] && [ "$BUE_SRC" != "$CCRC_EXPOSURE_FILE" ]; }; then
+    f="$BOX_ENV_FILE"; [ "$expund" -eq 1 ] && f="$CCRC_EXPOSURE_FILE"
+    BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0
+    whole="$envwhole"; wline="$envline"
+    if [ "$expund" -eq 1 ]; then whole="$expwhole"; wline="$expline"; fi
+    case "$whole" in
+      cr)   BUE_WHY="$f line $wline has a carriage return inside a line, and systemd ends a line at one, so what the unit receives from that file is not decided here"
+            BUE_FIX="save $f with one line ending per line (LF, or CRLF) and no bare carriage return inside a line (ccrc expose rewrites the exposure file)" ;;
+      nul)  BUE_WHY="$f holds a NUL byte, which systemd does not accept in an EnvironmentFile= (the unit's lines are optional, so it carries on without the file), so what the unit receives from that file is not decided here"
+            BUE_FIX="remove the NUL byte from $f (ccrc expose rewrites the exposure file)" ;;
+      utf8) BUE_WHY="$f line $wline has a non-ASCII byte in a NAME=value line (or in a comment-looking line a multi-line value may swallow), and systemd skips a file whose keys or values are not valid UTF-8, which this reader does not check, so what the unit receives from that file is not decided here"
+            BUE_FIX="keep every NAME=value line of $f to ASCII (a non-ASCII host goes in as its punycode xn-- form; comments may stay unless a value above them spans lines (a line ending in a backslash, or a quote left open) — then fix that value or make the comment ASCII), then re-run (ccrc expose rewrites the exposure file)" ;;
+      *)    BUE_WHY="$f names $key in a shape this reader does not decide (a space around '=', an export prefix, a backslash, a quote that is not one whole pair, a quote left open on an earlier line, or a line after one ending in a backslash)"
+            BUE_FIX="rewrite the line naming $key in $f, or the line above it when that one ends in a backslash, as KEY=value: no space before or after '=', no export, no backslash, no quote except one whole pair around the value, and no quote left open on an earlier line (ccrc expose rewrites the exposure file)" ;;
+    esac
+    return 3
+  fi
   return 0
+}
+# _box_unit_env_shell — the Darwin arm (round-2 ruling R-A): BOTH readable files must pass `_box_env_shell_plain`
+# before either is read; one that fails makes every key rc 3. ccrc.env is checked first, as bash sources it first.
+# The WHOLE arm reads bytes (D-3833): `local LC_ALL=C` here reaches `_box_env_shell_plain`, `_box_env_has_nul` and
+# shell-mode `_box_env_value` by bash's dynamic scope. Under a UTF-8 locale a line ending in a lone lead byte swallowed
+# its newline (two lines read as one), and a lead byte before a NUL hid the NUL; the launchd job's /bin/bash reads bytes.
+_box_unit_env_shell() {   # <KEY>
+  local key="$1" v rc bad="" LC_ALL=C
+  if [ -e "$BOX_ENV_FILE" ]; then
+    if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+      BUE_ENV=ok
+      if _box_env_shell_plain "$BOX_ENV_FILE"; then
+        v="$(_box_env_value "$BOX_ENV_FILE" "$key" shell)"; rc=$?
+        if [ "$rc" -eq 0 ]; then BUE_VAL="$v"; BUE_SRC="$BOX_ENV_FILE"; BUE_NAMED=1; fi
+      else
+        bad="$BOX_ENV_FILE"
+      fi
+    else
+      BUE_ENV=unreadable
+    fi
+  fi
+  if [ -n "${CCRC_EXPOSURE_FILE:-}" ] && [ -e "$CCRC_EXPOSURE_FILE" ]; then
+    if [ -f "$CCRC_EXPOSURE_FILE" ] && [ -r "$CCRC_EXPOSURE_FILE" ]; then
+      BUE_EXP=readable
+      if [ -z "$bad" ]; then
+        if _box_env_shell_plain "$CCRC_EXPOSURE_FILE"; then
+          v="$(_box_env_value "$CCRC_EXPOSURE_FILE" "$key" shell)"; rc=$?
+          if [ "$rc" -eq 0 ]; then BUE_VAL="$v"; BUE_SRC="$CCRC_EXPOSURE_FILE"; BUE_NAMED=1; fi
+        else
+          bad="$CCRC_EXPOSURE_FILE"
+        fi
+      fi
+    else
+      BUE_EXP=unreadable
+      return 2
+    fi
+  fi
+  [ -z "$bad" ] && return 0
+  BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0
+  case "$BEP_CAUSE" in
+    # D-3832: no line number — /bin/bash 3.2 drops everything after the first NUL in the FILE, so the cause is the file's.
+    nul) BUE_WHY="$bad holds a NUL byte, and on macOS the launchd job sources both env files with /bin/bash, which stops reading a file at its first NUL byte, so what the job sets from that file is not decided here"
+         BUE_FIX="remove the NUL byte from $bad (ccrc expose rewrites the exposure file)" ;;
+    cr) BUE_WHY="$bad line $BEP_LINE carries a carriage return, which bash keeps in the value — on macOS the launchd job sources both env files with bash"
+        BUE_FIX="save $bad without carriage returns (ccrc expose rewrites the exposure file)" ;;
+    *)  BUE_WHY="$bad line $BEP_LINE is not a plain NAME=value line, and on macOS the launchd job sources both env files with bash, so that line can change what they set"
+        BUE_FIX="rewrite line $BEP_LINE of $bad as NAME=value, with a value of letters, digits and _./:@%+,=- only, or one whole '…' pair, or one whole \"…\" pair with no \$, backtick, backslash or \" inside — or delete it (ccrc expose rewrites the exposure file)" ;;
+  esac
+  return 3
 }
 
 # ── _box_auth_path — WHICH FILE IS THIS BOX'S PASSPHRASE SECRET (D-143) ───
@@ -7765,7 +8023,7 @@ ACCT_LIVE_IDS=()
 # the other callers of this function.
 ACCT_LIVE_WHY=""
 _acct_live() {   # <id>
-  local id="$1" reg="$_SVC_REG" names="" rc=0 u="" sid="" w="" had_nullglob=0
+  local id="$1" reg="$_SVC_REG" names="" rc=0 u="" sid="" w="" had_nullglob=0 n=""
   local blind=0
   local -a rows=()
   ACCT_LIVE_MEASURED=true
@@ -7857,12 +8115,12 @@ _acct_live() {   # <id>
         return 0 ;;
     esac
   fi
-  # The pane's tmux session name is `cc-<id>` — `ccd`'s `_tmux()` (ccd/ccd:1114)
-  # is the one place that mapping is spelled, and this is its second reader
-  # rather than a looser substring match: `*"$sid"*` would call `cc-orchard`
-  # live because `cc-orchard-api` is.
+  # The pane's tmux session name is `cc-<id>` with `.` and `:` as `_` — what `ccd`'s
+  # `_tmux()` creates (wave 9 M8; tmux 3.4 renamed a dot itself, 3.7c does not) —
+  # and this is an exact match rather than a looser substring match: `*"$sid"*`
+  # would call `cc-orchard` live because `cc-orchard-api` is.
   for sid in "${rows[@]}"; do
-    case $'\n'"$names"$'\n' in *$'\n'"cc-$sid"$'\n'*) ACCT_LIVE_IDS+=("$sid") ;; esac
+    n="cc-$sid"; n="${n//[.:]/_}"; case $'\n'"$names"$'\n' in *$'\n'"$n"$'\n'*) ACCT_LIVE_IDS+=("$sid") ;; esac
   done
   return 0
 }
@@ -12347,18 +12605,28 @@ cmd_install() {
   # later one winning, names the file that decides, and so does the OFF
   # remedy — it names ccrc.env by default, or the exposure file when that is
   # the one that would arm it (`gate_how`'s `$BUE_SRC` switch). With no
-  # passphrase file, a measured CCRC_AUTH=on names the file that decides too;
-  # every other case — including an exposure file that sets CCRC_AUTH to
-  # anything but on, or one that cannot be read — prints main's else-arm line
-  # unchanged, naming ccrc.env. The fresh-box line (no file, flag off) is
-  # byte-identical to what this line always said.
+  # passphrase file, a measured CCRC_AUTH=on names the file that decides too.
+  # Wave 9 R10b (D-3829): two more cases print their own line there, after the
+  # rc-3 arm — an exposure file that is there and cannot be read (rc 2) prints
+  # "not measured", as the present-passphrase arm does, and an exposure file that
+  # DECIDES the flag (`$BUE_SRC` is it) without turning it on — `off`, or any
+  # value but `on` — gets an arming remedy naming that file, as `gate_how` does.
+  # Every other case (the flag read from ccrc.env, or from no file at all) prints
+  # main's else-arm line, naming ccrc.env: the fresh-box line (no file, flag off)
+  # is byte-identical to what this line always said.
+  # Wave 9 R10e (D-3823): a SECOND unmeasured state, rc 3 — a readable file names
+  # the flag in a shape the reader cannot decide (on macOS, either file is not
+  # plain assignments), worded from `$BUE_WHY` in both arms; the rc-2 sentence
+  # above is untouched.
   local gsec grc urc=0
   gsec="$(_box_auth_path)"; grc=$?
   if [ "$grc" -eq 3 ]; then
     echo "install: gate: CCRC_AUTH_SECRET_PATH in $BOX_ENV_FILE is RELATIVE ($gsec), so install cannot say whether this box has a PWA passphrase — make it absolute (or remove the line); ccrc doctor's auth check says the rest"
   elif [ -e "$gsec" ]; then
     _box_unit_env CCRC_AUTH || urc=$?
-    if [ "$urc" -ne 0 ]; then
+    if [ "$urc" -eq 3 ]; then
+      echo "install: gate: a PWA passphrase file is at $gsec, and $BUE_WHY, so whether CCRC_AUTH is on was not measured — ccrc doctor's auth check says what to do"
+    elif [ "$urc" -ne 0 ]; then
       echo "install: gate: a PWA passphrase file is at $gsec, and $CCRC_EXPOSURE_FILE is there and cannot be read, so whether CCRC_AUTH is on was not measured — ccrc doctor's auth check says what to do"
     elif [ "$BUE_VAL" = on ]; then
       echo "install: gate: CCRC_AUTH=on in $BUE_SRC, and a PWA passphrase file is at $gsec (arming also needs CCRC_RP_ID and CCRC_ORIGIN beside the flag; ccrc doctor's auth check measures whether the file is usable)"
@@ -12371,6 +12639,12 @@ cmd_install() {
     _box_unit_env CCRC_AUTH || urc=$?
     if [ "$urc" -eq 0 ] && [ "$BUE_VAL" = on ]; then
       echo "install: gate: CCRC_AUTH=on in $BUE_SRC and this box has NO PWA passphrase — the gate is failing SHUT: every route answers 401 until: ccrc passwd"
+    elif [ "$urc" -eq 3 ]; then
+      echo "install: gate: this box has NO PWA passphrase, and $BUE_WHY, so whether CCRC_AUTH is on was not measured — ccrc doctor's auth check says what to do"
+    elif [ "$urc" -eq 2 ]; then
+      echo "install: gate: this box has NO PWA passphrase, and $CCRC_EXPOSURE_FILE is there and cannot be read, so whether CCRC_AUTH is on (and the gate failing shut) was not measured — ccrc doctor's auth check says what to do"
+    elif [ "$BUE_SRC" = "$CCRC_EXPOSURE_FILE" ]; then
+      echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on in $CCRC_EXPOSURE_FILE, which overrides $BOX_ENV_FILE (ccrc expose writes it with CCRC_RP_ID and CCRC_ORIGIN), then: $(_svc_restart_hint ccrc.service)"
     else
       echo "install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN in $BOX_ENV_FILE, then: $(_svc_restart_hint ccrc.service)"
     fi
@@ -14046,6 +14320,24 @@ _inst_stamp_shipped() {
   return 0
 }
 
+# What a skip line says about the box's stamp (wave 9, R8i, D-3828). A skip writes
+# nothing, so the stamp that stays is whatever is already there: a running
+# launcher keeps it (`_inst_stamp_unname` returns 1 for `running` before it
+# touches the stamp) and so does the no-source path. `[ -e ] || [ -L ]`, as
+# `_inst_stamp_unname` asks, admits a dangling link or an unreadable file — the
+# line promises nothing about what `ccrc version` can read of it. The path comes
+# in by argument (`_inst_stamp`'s own `dest`, the box's stamp file), so this
+# names the stamp through no second spelling of it: `single-definition.test.ts`
+# pins every line that does.
+_inst_stamp_left() {   # <the box's stamp file>
+  local f="$1"
+  if [ -e "$f" ] || [ -L "$f" ]; then
+    echo "the box's existing stamp (~/.ccrc/build.json) stays — ccrc version reports what it says"
+  else
+    echo "ccrc version will say unstamped"
+  fi
+}
+
 _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   # `deploy.sh:75-93`'s `stamp_build`, translated to one machine. Until this
   # step existed the ONLY writer of `~/.ccrc/build.json` was a deploy, so a box
@@ -14055,10 +14347,10 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   #
   # MEASURED, NEVER ASSUMED. A dirty tree may install (stage 1 does not forbid
   # it) but the stamp SAYS dirty — "a clean sha nobody measured is the forgery
-  # class this repo bans by name", in deploy's own words. Same reason the
-  # skipped case below writes NOTHING rather than carrying a previous stamp
-  # forward: a stamp that outlives the tree it described is a lie with a
-  # timestamp on it.
+  # class this repo bans by name", in deploy's own words. The skipped case below
+  # writes NOTHING: it neither rewrites nor removes an existing stamp (only
+  # `_inst_stamp_unname` removes one, for a placed or copied tree), and its line
+  # says which is the case (wave 9, R8i, D-3828: `_inst_stamp_left`).
   #
   # THROUGH `"$BOX_STAMP_FILE"`, never the literal path — `ccrc:91-101`'s rule,
   # which D-88 already applied to `ccrc.env` when `install` became that file's
@@ -14094,13 +14386,13 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   src="$CCRC_HERE/.."
   if ! command -v git >/dev/null 2>&1; then
     _inst_stamp_shipped && return 0
-    echo "install: stamp: skipped (no git on PATH) — ccrc version will say unstamped"
+    echo "install: stamp: skipped (no git on PATH) — $(_inst_stamp_left "$dest")"
     return 0
   fi
   sha="$(_inst_git "$src" rev-parse HEAD 2>/dev/null)" || rc=$?
   if [ "$rc" -eq 0 ] && [ -z "$sha" ]; then
     _inst_stamp_shipped && return 0
-    echo "install: stamp: skipped (git rev-parse HEAD exited 0 but printed no sha) — ccrc version will say unstamped"
+    echo "install: stamp: skipped (git rev-parse HEAD exited 0 but printed no sha) — $(_inst_stamp_left "$dest")"
     return 0
   fi
   if [ "$rc" -eq 0 ] && ! _inst_git_own "$src"; then
@@ -14108,7 +14400,7 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
     # release tarball extracted under a git-tracked directory) — its HEAD is
     # not this tree's. Treated as what it is, a tree that is no checkout.
     _inst_stamp_shipped && return 0
-    echo "install: stamp: skipped (this tree is not the top level of a git checkout — an enclosing repository's commit is not its own) — ccrc version will say unstamped"
+    echo "install: stamp: skipped (this tree is not the top level of a git checkout — an enclosing repository's commit is not its own) — $(_inst_stamp_left "$dest")"
     return 0
   fi
   if [ "$rc" -ne 0 ]; then
@@ -14126,7 +14418,7 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
     why="${why//[[:cntrl:]]/}"
     why="${why:0:200}"
     [ -n "$why" ] || why="it printed nothing on stderr"
-    echo "install: stamp: skipped (git rev-parse HEAD exited $rc: $why) — ccrc version will say unstamped"
+    echo "install: stamp: skipped (git rev-parse HEAD exited $rc: $why) — $(_inst_stamp_left "$dest")"
     return 0
   fi
   ref="$(_inst_git "$src" rev-parse --abbrev-ref HEAD 2>/dev/null)" || ref=""
@@ -16923,28 +17215,65 @@ _rollback_previous_agrees_with_layout() {   # [role]
   [ "$cur" = "$want" ] && return 0
   _rollback_killed_flip_state "$UPD_PREV_TAG" "$role" || krc=$?
   [ "$krc" -eq 0 ] && return 0
-  _rollback_refuse_layout "$cur" "$stamp_name" "$KF_WHY"
+  _rollback_refuse_layout "$cur" "$stamp_name" "$KF_WHY" "$role"
 }
 
-# `_rollback_refuse_layout <cur> <stamp_name> [why]` — C27's sentence, the ONE
+# `_kf_remedy <stamp_name> <role>` (wave 9 R9-F1, D-3827; round-2 ruling R-D) — the TAIL of the reason line
+# `_rollback_refuse_layout` prints: what the box can safely do about the killed-flip state. Reads only, and it
+# decides from a measurement it takes ITSELF, when it prints — never from which condition of
+# `_rollback_killed_flip_state` failed, and never from the measurement `cmd_rollback` took before `_ver_flip_back`.
+# Two reachable cases show why an earlier answer is not enough: that function returns at condition 5 before it
+# reads condition 6, so a kept pre-W6 target whose kept stamp has another sha reads as a condition-5 failure, and a
+# hand install from its directory would run that pre-W6 spine's `npm ci` in `~/ccrc`; and at the flip-failed
+# caller the state was measured before `_ver_flip_back`, which returns 1 when `_ver_kept` NOW answers anything
+# but 0, and the hand install from a written-through directory takes `_inst_tree`'s placed arm with a non-zero
+# kept answer and runs `npm ci` in the old version's tree, which the still-running units loaded from.
+# So it names `bash ~/ccrc-versions/<tag>/ccd/ccrc install --role <role>` only when `role` is non-empty and all
+# three hold now, measured under that same role: `_ver_kept` answers 0; that directory's `ccd/ccrc` carries
+# `^BOX_VERSIONS_ROOT=` (the probe `cmd_update` uses); and the role is not `fleet` or the directory holds
+# `agent/node_modules` (`_inst_tree`'s own kept condition). The role is always named: a bare `ccrc install`
+# defaults to role `both` (`cmd_install`'s `local role=both`) and never reads the recorded `CCRC_ROLE`, so on a
+# fleet box it would check and install the server build and could run `npm ci` in `$dest/server` in place. In
+# every other case — an empty role included — it names NO command and no README recipe (README's Restore recipe
+# writes through `~/ccrc`, which in this state points at the version the units do not run): no safe one-line
+# repair is known for this state. Prints one line, and nothing else; `_ver_kept` writes nothing to stdout.
+_kf_remedy() {   # <stamp_name> <role>
+  local name="$1" role="${2:-}" vdir="$BOX_VERSIONS_ROOT/$1" krc=0
+  if [ -n "$role" ]; then
+    _ver_kept "$name" "$role" || krc=$?
+    if [ "$krc" -eq 0 ] \
+       && grep -q '^BOX_VERSIONS_ROOT=' "$vdir/ccd/ccrc" 2>/dev/null \
+       && { [ "$role" != fleet ] || [ -d "$vdir/agent/node_modules" ]; }; then
+      echo "re-installing $name is a typed act, not a rollback's: bash ~/ccrc-versions/$name/ccd/ccrc install --role $role (it installs from that version's own kept directory: no download, no tree copy, no npm ci)"
+      return 0
+    fi
+  fi
+  echo "no safe one-line repair is known for this state, so this line names no command — nothing on this box was changed"
+}
+
+# `_rollback_refuse_layout <cur> <stamp_name> [why] [role]` — C27's sentence, the ONE
 # definition of it (D-3466). Every refusal of a rollback whose layout and stamp
 # disagree ends here: C27 itself, and `cmd_rollback`'s re-measurement under its
 # lock (a `--to` run, a detached run's child, a flip that cannot be made).
 # `why`, when given, is a whole line of its own — why the killed-flip state
 # (the one disagreement a rollback may act on, and only by flip) does not carry
-# this run, and the re-install that IS available (`ccrc update --to <tag>
-# --downgrade`) — printed BEFORE the sentence, so the sentence stays
-# byte-for-byte what C27 always said.
+# this run, and what the box can safely do about it (`_kf_remedy`, which
+# re-measures when it prints, for the two reachable cases its header names; `role`
+# is how it learns the box's role) — printed BEFORE the sentence, so the sentence
+# stays byte-for-byte what C27 always said.
 # A `--to` run never read `previous`, so it is read here, for the sentence only.
-_rollback_refuse_layout() {   # <cur> <stamp_name> [why]
-  local cur="$1" stamp_name="$2" why="${3:-}"
+_rollback_refuse_layout() {   # <cur> <stamp_name> [why] [role]
+  local cur="$1" stamp_name="$2" why="${3:-}" role="${4:-}"
   [ -n "$UPD_PREV_TAG" ] || _upd_read_previous || :
-  # The reason line carries the WORKING remedy (review 179 fix round 1, R-B1):
-  # the sentence below ends "--to vX.Y.Z", which in this state meets the same
-  # refusal (a `--to` run of the stamp's own version is the killed-flip state
-  # too), so the way out — the typed re-install, never a rollback's fall-through
-  # — is said here, where `stamp_name` is the state's target (condition 1).
-  [ -z "$why" ] || echo "$PROG: rollback: $(_upd_redact "$why") — re-installing $stamp_name is a typed act, not a rollback's: ccrc update --to $stamp_name --downgrade" >&2
+  # The reason line carries what the box can safely do (review 179 fix round 1,
+  # R-B1, reshaped by wave 9 R9-F1): the sentence below ends "--to vX.Y.Z", which
+  # in this state meets the same refusal (a `--to` run of the stamp's own version
+  # is the killed-flip state too), so the way out — a typed hand install, never a
+  # rollback's fall-through, never `update --to … --downgrade`, whose re-install
+  # writes in place into the tree the units run — is said here, where
+  # `stamp_name` is the state's target (condition 1), when `_kf_remedy` measures
+  # it safe, and otherwise it says that no safe one-line repair is known.
+  [ -z "$why" ] || echo "$PROG: rollback: $(_upd_redact "$why") — $(_kf_remedy "$stamp_name" "$role")" >&2
   _ccrc_die "rollback: ~/.ccrc/previous names ${UPD_PREV_TAG:-nothing usable}, but it cannot be trusted here — \$HOME/ccrc points at \$HOME/ccrc-versions/$cur while this box's stamp reads $stamp_name, so the last move was made by something that does not keep the layout (for example a pre-W6 release's updater after a rollback, or deploy.sh), and previous may not be the build before the last update. Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z"
 }
 
@@ -17282,7 +17611,7 @@ cmd_rollback() {
   case "$kf" in
     0) kept=1 ;;
     2) UPD_FROM="$run_from"; UPD_REPORT_TARGET="$to"; UPD_REPORTING=1
-       _rollback_refuse_layout "$kf_cur" "$to" "$KF_WHY" ;;
+       _rollback_refuse_layout "$kf_cur" "$to" "$KF_WHY" "$role" ;;
   esac
   if [ "$kept" -eq 1 ]; then
     # ROLLBACK BY FLIP (design §11: rollback "runs arm 1 or arm 2 above, then
@@ -17352,7 +17681,7 @@ cmd_rollback() {
       1)
         # D-3466: in the killed-flip state a flip that cannot be made is a
         # refusal, never a re-install (see the guard above).
-        [ "$kf" -eq 0 ] && _rollback_refuse_layout "$kf_cur" "$to" "the killed-flip state holds, so this rollback may only flip, and the flip could not be made ($VER_WHY) — it does not fall back to a re-install"
+        [ "$kf" -eq 0 ] && _rollback_refuse_layout "$kf_cur" "$to" "the killed-flip state holds, so this rollback may only flip, and the flip could not be made ($VER_WHY) — it does not fall back to a re-install" "$role"
         # UPD_REPORTING deliberately stays 1 here, unlike the RESET above: this
         # path has already written a non-terminal `installing "rollback by
         # flip …"` phase, so a refusal on the way into the in-process
@@ -20433,10 +20762,10 @@ _upd_legacy_target() {   # <tag> -> 0, or dies before anything is installed
 # cheap direction.
 #
 # A FAILED PREFLIGHT REFUSES THE SWEEP, NEVER THE UPDATE (spec §6): the
-# install above already converged, and unwinding a good update over a
-# refused sweep would leave the box worse than degraded. The refusal is loud
-# (stderr names the resolved value and the drop-in that fixes it) and the
-# degraded line on stdout says exactly what did not happen.
+# install above already converged, and unwinding an update over a refused
+# sweep would leave the box worse than degraded. The refusal is loud (stderr:
+# KillMode's value and drop-in dir; listing's command and rc; macOS's plist
+# and re-enable step) and the degraded line on stdout says what did not run.
 #
 # PANES ARE NEVER TOUCHED; TMUX IS NEVER TOUCHED. KillMode=process keeps the
 # tmux substrate — the sessions themselves — alive across the restart, and
@@ -21231,6 +21560,14 @@ cmd_rollout() {
 # deploy.sh's `prune_backups` exists for, and a backup directory that only
 # ever grows is that function's own measured failure case (18MB/13 dirs
 # before it existed).
+# The prune keeps what `_bak_gc` keeps (wave 9 R10g, D-3825), through the one helper `_bak_keepset`: this run's own
+# dir by exact path, every dir named at or after the second this verb began, and the newest earlier tree backup and
+# coord.db snapshot — so at CCRC_BACKUP_KEEP=0 the backup just taken survives, and more than KEEP dirs can. It takes
+# ~/.ccrc/update.lock for the PRUNE only (D-3826) and skips, exit 0, while another holder has it, when flock is absent
+# or when the lock cannot be measured: the backup itself was taken. The COPY is not locked, by ruling (an update's
+# `_bak_gc` can still prune a dir of this verb's that is still being copied, if that dir was named before the update
+# took its lock — wave 8's Risk (a), unchanged): holding the lock across a coord.db VACUUM would make a console move
+# answer busy for its whole length.
 cmd_backup() {
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -21244,6 +21581,9 @@ cmd_backup() {
   # coord.db.
   command -v node >/dev/null 2>&1 \
     || _ccrc_die "node is required by 'ccrc backup' (it runs deploy/backup-coord.mjs for the coord.db snapshot) but is not on PATH — nothing was backed up"
+  # The floor is `_upd_lock`'s own line, set here because this verb takes no lock for the copy: every dir named at or
+  # after this second is this run's, or later than it, and `_bak_prune` protects them all (wave 9 R10g, D-3825).
+  [ -n "$UPD_BAK_FLOOR" ] || UPD_BAK_FLOOR="$(date +%Y%m%d-%H%M%S)"
   _upd_backup backup
   _bak_prune
 }
@@ -21290,17 +21630,69 @@ _bak_list() {
 # host today) that a bare newest-N sweep would silently destroy. The glob
 # expansion is already lexically sorted, which for this shape IS
 # chronological order.
+# Wave 9 R10g (D-3825, D-3826): the removal set is cut by `_bak_keepset`, the helper `_bak_gc` shares — this run's own dir,
+# every dir named at or after UPD_BAK_FLOOR (`cmd_backup` sets it before it backs up) and the newest earlier tree backup
+# and coord.db snapshot are never removed — and the prune holds ~/.ccrc/update.lock. Where `_bak_gc` WARNs and returns,
+# this verb says "prune skipped" and returns 0: the backup was taken, and its echo and its invalid-KEEP refusal (the two
+# `_ccrc_die`s) are unchanged. A floor that is not recorded (only a direct call reaches it) prunes nothing.
 _bak_prune() {
   local keep="${CCRC_BACKUP_KEEP:-10}"
   _keep_ok "$keep" || _ccrc_die "$(_keep_why CCRC_BACKUP_KEEP "$keep") — nothing was pruned"
   keep=$((10#$keep))   # `0002` is two: the loop below is ARITHMETIC, where a leading 0 is octal (or an error)
+  if ! [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+    echo "backup: prune skipped — this run's start time was not recorded, so nothing can say which backups are its own; nothing was pruned"
+    return 0
+  fi
+  local took=0 lrc=0
+  [ -n "$UPD_LOCK_FD" ] || took=1
+  _ver_lock_try || lrc=$?
+  case "$lrc" in
+    0) ;;
+    1) echo "backup: prune skipped — another ccrc run holds ~/.ccrc/update.lock; nothing was pruned"; return 0 ;;
+    2) echo "backup: prune skipped — flock is not on PATH, so ~/.ccrc/update.lock cannot be taken; nothing was pruned"; return 0 ;;
+    *) echo "backup: prune skipped — ~/.ccrc/update.lock could not be measured; nothing was pruned"; return 0 ;;
+  esac
   _bak_list
-  local n=${#BAK_DIRS[@]} i
+  local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name
+  _bak_keepset   # cannot fail here: the floor was checked above
   for ((i = 0; i < n - keep; i++)); do
+    d="${BAK_DIRS[$i]}"; name="${d##*/}"
+    [ "$d" = "$UPD_BACKUP_DIR" ] && continue
+    [ "$((10#${name//-/}))" -ge "$floor" ] && continue
+    [ "$d" = "$BAK_KEEP_SNAP" ] && continue
+    [ "$d" = "$BAK_KEEP_TREE" ] && continue
     rm -rf -- "${BAK_DIRS[$i]}" \
       || _ccrc_die "could not prune ${BAK_DIRS[$i]} — the newer backups above it are all intact"
     echo "backup: pruned ${BAK_DIRS[$i]} (keeping the newest $keep timestamped backups; hand-made siblings are never touched)"
   done
+  if [ "$took" -eq 1 ]; then _upd_unlock; fi
+  return 0
+}
+
+# ── _bak_keepset — which two earlier dirs a prune keeps beyond the floor (wave 9 R10g, D-3825) ──
+# The ONE spelling of the two extra keeps' SELECTION, shared by `_bak_gc` and `_bak_prune`: which earlier coord.db snapshot
+# and which earlier tree backup are kept, and the own-dir and floor pair that selection skips over. That is all that is
+# shared (fix round 1, F4). The four-line removal filter that APPLIES the keeps — own dir, floor, snapshot, tree — is
+# written twice, once in each pruner's loop, and nothing pins the two copies to each other.
+# The two extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own): the protected
+# ones are kept anyway, so picking one of them would protect nothing. READS BAK_DIRS (`_bak_list` first), UPD_BACKUP_DIR and
+# UPD_BAK_FLOOR; WRITES BAK_KEEP_SNAP (the newest earlier coord.db snapshot) and BAK_KEEP_TREE (the newest earlier tree
+# backup), "" when none. rc 1 when UPD_BAK_FLOOR is not a timestamp, WITHOUT touching either out-param. It declares its
+# own floor and n: the callers' locals are not its to read. Links are counted as `_bak_list` counts them (R10i, deferred).
+_bak_keepset() {
+  local floor n i d name
+  [[ "$UPD_BAK_FLOOR" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
+  floor=$((10#${UPD_BAK_FLOOR//-/})); n=${#BAK_DIRS[@]}
+  BAK_KEEP_SNAP=""; BAK_KEEP_TREE=""
+  for ((i = n - 1; i >= 0; i--)); do
+    d="${BAK_DIRS[$i]}"; name="${d##*/}"
+    [ "$d" = "$UPD_BACKUP_DIR" ] && continue
+    [ "$((10#${name//-/}))" -ge "$floor" ] && continue
+    if [ -z "$BAK_KEEP_SNAP" ] && [ -f "$d/coord.db" ]; then BAK_KEEP_SNAP="$d"; fi
+    if [ -z "$BAK_KEEP_TREE" ] && { [ -e "$d/server-dist" ] || [ -e "$d/agent-dist" ]; }; then BAK_KEEP_TREE="$d"; fi
+    [ -n "$BAK_KEEP_SNAP" ] && [ -n "$BAK_KEEP_TREE" ] && break
+  done
+  return 0
 }
 
 # ── _bak_gc — update's and rollback's own prune of ~/ccrc-backups (wave 8 item B) ──
@@ -21337,23 +21729,14 @@ _bak_gc() {   # <lead word: update|rollback>
     *) echo "$lead: backups: WARN: ~/.ccrc/update.lock could not be measured — nothing pruned"; return 1 ;;
   esac
   _bak_list
-  local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name shown snap="" tree="" rc=0
-  # The two extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own):
-  # the protected ones are kept anyway, so picking one of them would protect nothing.
-  for ((i = n - 1; i >= 0; i--)); do
-    d="${BAK_DIRS[$i]}"; name="${d##*/}"
-    [ "$d" = "$UPD_BACKUP_DIR" ] && continue
-    [ "$((10#${name//-/}))" -ge "$floor" ] && continue
-    if [ -z "$snap" ] && [ -f "$d/coord.db" ]; then snap="$d"; fi
-    if [ -z "$tree" ] && { [ -e "$d/server-dist" ] || [ -e "$d/agent-dist" ]; }; then tree="$d"; fi
-    [ -n "$snap" ] && [ -n "$tree" ] && break
-  done
+  local floor=$((10#${UPD_BAK_FLOOR//-/})) n=${#BAK_DIRS[@]} i d name shown rc=0
+  _bak_keepset   # wave 9 R10g: the selection of the two extra keeps, shared with `_bak_prune`; the floor was checked above
   for ((i = 0; i < n - keep; i++)); do
     d="${BAK_DIRS[$i]}"; name="${d##*/}"
     [ "$d" = "$UPD_BACKUP_DIR" ] && continue   # D-3593
     [ "$((10#${name//-/}))" -ge "$floor" ] && continue   # D-3593
-    [ "$d" = "$snap" ] && continue
-    [ "$d" = "$tree" ] && continue
+    [ "$d" = "$BAK_KEEP_SNAP" ] && continue
+    [ "$d" = "$BAK_KEEP_TREE" ] && continue
     shown="$d"; case "$d" in "$HOME"/*) shown="\$HOME${d#"$HOME"}" ;; esac
     if rm -rf -- "$d" 2>/dev/null; then
       echo "$lead: backups: pruned $shown (kept: the newest $keep timestamped backups, every one named at or after this run took its lock, this run's own, the newest earlier tree backup and the newest earlier coord.db snapshot; hand-made siblings are never touched)"
