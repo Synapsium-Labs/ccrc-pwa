@@ -1516,6 +1516,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       file of this wave's.
   - **Runs:** wave 11's run 270 was opened (planned) before run 223 closed final as merged (`released:true`, child
     reclaim queued, which frees the worker's workspace on the work volume). Review run 269 is done.
+  - **Wave 11's block,** allocated at its run's open (clause 10): numbers 3972 to 3991, twenty, for the plan's
+    departures and a worker reserve (bare: none is defined yet).
+  - **Wave 11's scope, ruled:**
+    - R12's sweep half (the 2026-10-04 22:56 list);
+    - R13 (a–f);
+    - R14 (f–j), the auth reader's residue, with (f) first. It edits the same `ccd/ccrc` functions and test file the
+      wave touches anyway.
+    - R14 (a–e) joins wave 12's deferrals.
   - **Live effect:** none yet. Both boxes are held by the unacked v0.0.78 fleet row. After the ack, auto moves the
     fleet box straight to the newest release, which now carries waves 9 and 10, and that move runs v0.0.78's sweep
     with wave 10's script. Wave 9's live tmux names are unchanged for every live-alphabet id (review 265, tmux 3.4).
