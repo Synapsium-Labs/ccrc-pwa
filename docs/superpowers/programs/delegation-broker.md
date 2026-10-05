@@ -34,9 +34,10 @@ the hook-side costs are below. After wave 1 merges, the coordinator adds the rea
 under its own heading. Until that is here, nothing in waves 2–6 may depend on a hook field (spec §8.1).
 
 **Versions covered:** 2.1.280, 2.1.281, 2.1.285, 2.1.286, 2.1.287, 2.1.288 and 2.1.289, each with 14 scenarios, and
-all 98 cells are `measured`. The fleet's installed lanes run 2.1.285 (one lane), 2.1.286 (four lanes) and 2.1.289 (ten
-lanes), measured read-only on 2026-10-05. **Every installed lane version is covered**, and no lane runs a version the
-corpus lacks.
+all 98 cells are `measured`. The fleet's installed lanes, re-read read-only at 2026-10-05 18:45 UTC (each lane's
+last update result), run 2.1.286 (four lanes) and 2.1.289 (eleven lanes); an earlier read the same day had one lane
+on 2.1.285 and ten on 2.1.289. **Every installed lane version is covered**, and no lane runs a version the corpus
+lacks. Lane counts drift as lanes update; re-read them before relying on one.
 
 **Scenario → §8.1 source** (the matrix is keyed by version × scenario, D-3998):
 - Agent: `agent-plain`.
@@ -73,19 +74,21 @@ not observed. Session ids appear as ordinals (`s1`, `s2`), never as values.
 
 What the table cannot show, read from the same fixtures' event order and key sets. Each item holds on all seven
 versions unless it names one.
-- **Every Agent and Workflow call launched in the background.** The launch's PostToolUse returned at once with an
-  async-launch response. The parent's Stop then fired still counting one background task. The
+- **In the rig, every Agent and Workflow call launched in the background.** The launch's PostToolUse returned at
+  once with an async-launch response. The parent's Stop then fired still counting one background task. The
   subagent's SubagentStop came later, and the result reached the parent only as a task-notification user turn.
-  D-4005 recorded this on 2.1.289, where the smoke run was made; the corpus measures it on **all seven**. The
-  scenarios asked the mock for `run_in_background: false`, and no PreToolUse input carried that key. **A foreground
-  Agent call is therefore unmeasured on every version.**
+  D-4005 recorded this on 2.1.289, where the smoke run was made; the corpus measures it on **all seven**. Six Agent
+  scenarios set `run_in_background` false and agent-iso-bg set it true; no PreToolUse input carried the key. **A
+  foreground Agent call is therefore unmeasured on every version.**
 - The Agent launch response names the subagent's agent id, the same id SubagentStart carries. The Workflow launch
   response names the workflow run id, which names that run's `wf_<run>-<n>` admin records and its
   `subagents/workflows/wf_<run>/` meta directory, and it names a task id. Each Workflow worker's SubagentStart
   `agent_id` names its meta file. The task id, or the agent id for an Agent, is the id that the parent's Stop
   `background_tasks` and the closing task notification carry.
-- SubagentStart and the launch's PostToolUse arrive in either order within one version. In agent-iso-changed, for
-  example, the launch came first on 2.1.280, 2.1.288 and 2.1.289, and SubagentStart came first on the other four.
+- SubagentStart and the launch's PostToolUse arrive in either order, and both orders occur within every version
+  across the seven Agent scenarios. On 2.1.289, for example, SubagentStart came first in agent-plain,
+  agent-iso-dirty and agent-iso-bg, and the launch came first in agent-iso-unchanged, agent-iso-changed,
+  interrupt-exit and parent-kill.
 - The Workflow PreToolUse input is the script alone. A worker's isolation is spelled inside the script text, never as
   a `tool_input` key.
 - **Q5 compact is a measurement LIMIT, not "never fired".** The hook exits for a `compact` SessionStart before its
@@ -96,12 +99,17 @@ versions unless it names one.
   versions show three), and the session-id sequence is unaffected.
 - **SessionEnd:** clear-compact-resume captured two on every version, one for `/clear` (fired under the old id just
   before the new id's SessionStart) and one for the final `/exit`. The SIGKILL between them fired none. swap-resume
-  captured two, one for each `/exit`. interrupt-exit (Escape, then `/exit`, while a background agent ran) and
-  parent-kill captured **none**. The matrix does not say whether that `/exit` completed.
-- **Q6 removal:** an unchanged isolated tree was removed natively for Agent and for Workflow. In wf-iso, the unchanged
-  worker's tree went and the committing worker's tree stayed (its record holds the commit), and wf-limit-pause left nothing. Committed, dirty,
-  background, interrupted and killed trees all stayed. Interrupted and killed agents emitted no SubagentStop and no
-  task notification.
+  captured two, one for each `/exit`. interrupt-exit and parent-kill captured **none**. In interrupt-exit the
+  Escape reached an idle prompt (the parent's Stop had already fired with one background task), and the matrix does
+  not say whether the `/exit` that followed completed. This confirms §5.11 and changes nothing: a missing SessionEnd
+  is never terminal evidence.
+- **Q6 removal:** an unchanged isolated tree was removed natively for Agent and for Workflow. In wf-iso, the
+  unchanged worker's tree went and the committing worker's tree stayed (its record holds the commit), and
+  wf-limit-pause left nothing. Committed, dirty and background trees stayed, and so did the tree of a background
+  agent still running when its parent exited (interrupt-exit) or was SIGKILLed (parent-kill); those two agents
+  emitted no SubagentStop and no task notification.
+- **Q3 raw:** a raw `git worktree add` record carries no `CLAUDE_BASE` but has a first `logs/HEAD` line, which
+  confirms §5.5's fallback as the creation base of a rung-4 lease.
 - **Q7:** in wf-iso-resume the hung worker **did not re-run within the probe window** after the parent's SIGKILL and
   `--resume`. No further SubagentStart fired, and the record left at the end is the one the before-kill snapshot
   held. In wf-limit-pause the worker answered after its mock 429 under one SubagentStart and one SubagentStop, and its
@@ -138,13 +146,14 @@ From `deploy/delegation-census.mjs` `.totals`. `adminRead` was `ok` for all five
 | project-1 | 181 | 73 | 1 | 107 | 74 | 0 | 0 | 1 | 0 | 64 | 5 | <1h 5, <1d 8, <7d 165, >=7d 3 | other 59, ccd-workspace 12, mixed 3 |
 | project-2 | 51 | 20 | 7 | 24 | 27 | 0 | 0 | 7 | 0 | 10 | 3 | <1h 13, <7d 1, >=7d 37 | ccd-workspace 18, main-checkout 8, mixed 1 |
 | project-3 | 6 | 2 | 0 | 4 | 2 | 0 | 0 | 0 | 0 | 1 | 0 | <1h 4, <7d 2 | ccd-workspace 2 |
-| project-4 | 2 | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | <1h 1, >=7d 1 | — |
+| project-4 | 2 | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | <1h 1, >=7d 1 | none |
 
 `metaMalformed`, `metaPathless`, `homesUnreadable` and `adminRead: 'not-main'` are the census's additive fields
 (D-4008). The census records show more than the totals.
 - Every `agent-*` and `wf_*` record, 123 of 123, carries a `CLAUDE_BASE` that agrees with its first `logs/HEAD` line.
 - Every found meta's `worktreePath` equals its record's path.
-- Three `other` records carry a `CLAUDE_BASE` too (`project-1` 2, `project-2` 1).
+- Three `other` records carry a `CLAUDE_BASE` too (`project-1` 2, `project-2` 1). A `CLAUDE_BASE` does not imply a
+  delegated kind; these records' origin is unmeasured.
 - Every `worktreeAbsent` record is of kind `other`.
 - Two records are `locked`.
 
@@ -177,17 +186,21 @@ parent's registry incarnation.
 
 ### Amendments the measurement forces
 
-- `delegation-posttooluse-is-a-launch` — on every version the Agent and Workflow PostToolUse arrives at launch as an
-  async acknowledgement and the work ends later, so "PostToolUse = completion / failure" holds for Bash only. An
-  Agent or Workflow activity's terminal evidence is its SubagentStop or the task notification (agent-*, wf-* cells)
-  — spec §5.3 hook table, §5.2 execution, §5.11 terminal evidence.
+Every rig-derived amendment below holds "in the rig" and stays provisional until the real-lane cross-check; the
+census-derived `admin-record-without-its-tree` and the source-derived `incarnation-is-the-row-generation-file` are
+the exception.
+
+- `delegation-posttooluse-is-a-launch` — in the rig, every Agent and Workflow call launched in the background, its
+  PostToolUse an async acknowledgement with the work ending later (its SubagentStop or the task notification); a
+  foreground Agent's PostToolUse is unmeasured, so §5.3's "completion" stands for it until the real-lane cross-check
+  (agent-*, wf-* cells) — spec §5.3 hook table, §5.2 execution, §5.11 terminal evidence.
 - `launch-response-names-the-upstream-id` — the Agent launch response carries the subagent's agent id, and the
   Workflow launch response carries the workflow run id that names its `wf_` records and meta directory. Together
   they are the only spool-side join from a parent's `tool_use_id` to either, so the envelope gains them as validated
   tokens (every agent-*, wf-* cell) — spec §5.3 envelope, §5.4 rung 2.
-- `activity-keyed-by-agent-id-not-arrival` — SubagentStart and the launch's PostToolUse arrive in either order within
-  one version (agent-iso-changed), so an Agent activity's upstream id is its agent id whichever event comes first,
-  never the `tool_use_id` — spec §5.2 activity id.
+- `activity-keyed-by-agent-id-not-arrival` — SubagentStart and the launch's PostToolUse arrive in either order, both
+  orders occurring within every version across the seven Agent scenarios, so an Agent activity's upstream id is its
+  agent id whichever event comes first, never the `tool_use_id` — spec §5.2 activity id.
 - `run-end-is-a-task-notification` — a launch ends, for the parent, as a task-notification user turn naming the
   launch's task id, and that id leaves the next Stop's `background_tasks`. This is the only "workflow-run-ended
   evidence" the corpus shows, so the spool records that task id and never the prompt text (wf-plain, wf-iso,
@@ -199,14 +212,10 @@ parent's registry incarnation.
   SessionStart under the new one, so a SessionEnd's reason separates an id rotation from an exit, and the
   session-UUID history records the pair as one rotation (clear-compact-resume) — spec §5.3 SessionEnd row,
   §5.2 `delegation_sessions`.
-- `sessionend-absent-on-an-interrupted-exit` — interrupt-exit captured no SessionEnd on any version, just as
-  parent-kill captured none, while a plain `/exit` did. "A killed parent cannot fire SessionEnd" therefore has no usable converse:
-  neither presence nor absence says how a session ended (interrupt-exit, parent-kill, swap-resume) — spec §3.1,
-  §5.3, §5.11.
-- `interrupted-agent-has-no-terminal-event` — an interrupted or killed isolated agent leaves its tree, unchanged
-  included, with a SubagentStart and no SubagentStop or task notification. Under the ephemeral rule, an interrupted
-  agent whose parent lives on is never due, so wave 2 must name what ends it (interrupt-exit, parent-kill) —
-  spec §5.11 clocks and terminal evidence, §5.2 execution.
+- `orphaned-background-agent-has-no-terminal-event` — a background isolated agent still running when its parent
+  exits or is SIGKILLed leaves its tree, unchanged included, with a SubagentStart and no SubagentStop or
+  notification. Under the ephemeral rule such a tree is never due unless the parent is proved dead, so wave 2 must
+  name what ends it (interrupt-exit, parent-kill) — spec §5.11 clocks and terminal evidence, §5.2 execution.
 - `workflow-worker-not-rerun-after-restart` — after a parent SIGKILL and `--resume`, the hung isolated worker did not
   re-run within the probe window, and its record stayed. "A paused workflow is not ended" must not wait on a resume
   the corpus never saw (wf-iso-resume, probe missed on all seven) — spec §5.11, §5.12 restart.
@@ -217,13 +226,6 @@ parent's registry incarnation.
 - `compaction-fires-an-unpaired-subagentstop` — `/compact` emits a SubagentStop with an agent id, an empty agent
   type, and no SubagentStart or launch, so a SubagentStop alone never opens an activity (clear-compact-resume) —
   spec §5.2 activity, §5.3.
-- `raw-worktree-base-is-the-first-log-line` — a raw `git worktree add` record has no `CLAUDE_BASE` and has a first
-  `logs/HEAD` line, so §5.5's fallback is a rung-4 lease's only creation base (raw-worktree, `otherClaudeBase` none)
-  — spec §5.5 census, §5.2 lease identity.
-- `claude-base-outside-the-name-patterns` — three census records, named neither `agent-` nor `wf_`, carry a
-  `CLAUDE_BASE` that agrees with their first log line. `CLAUDE_BASE` therefore does not mark the two delegated kinds,
-  and Claude Code makes a tree shape the rig does not cover. Such trees route to rungs 3–4 by name like any other
-  — spec §5.4 rung 2, §5.14.
 - `admin-record-without-its-tree` — 22 records (`this-repo` 14, `project-1` 5, `project-2` 3; census
   `worktreeAbsent`) name a worktree directory that is gone. The workspace dimension has no value for that state, so
   the census extension reports it distinctly, never as `present` — spec §5.2 workspace, §5.5 census.

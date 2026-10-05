@@ -3137,6 +3137,10 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   with `run_in_background: false` and its result reaches the main loop only inside a reminder-only turn, so the plan's
   `main-done` regex could not match; it gained `|^$`, and because that alone could end a step before the subagent's
   last reply (a false "worktree left" for Q6), the four Agent scenarios wait on `["sub-done","main-done"]`.
+  Widened by Task 9 (the corpus): measured on every captured version (2.1.280, .281, .285, .286, .287, .288, .289),
+  in the rig every Agent call launches in the background (`async_launched`), whether the mock set
+  `run_in_background` false (six scenarios) or true (agent-iso-bg), and the key never appears in PreToolUse input;
+  a foreground Agent call is unmeasured.
 - **D-4006** — `rig-guard-hardening-from-review` (Task 4 review): `reap` skips a `ccrc-dlg-rig.*` entry that is a symlink
   or not owned by the user before it resolves anything (roots now live in the shared `/tmp`); `setup` guards the
   PHYSICAL root as well as its spelling; `check-scenario` refuses an `answerDialog` or `type` that is not a one-line
@@ -3175,6 +3179,16 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   (`</result>`) read as absolute paths, so a COMPLETE closing tag of a plain name is exempt and nothing else (an
   exemption of every `<` let a shell redirect such as `wc -l</etc/hosts` through, and a row now pins that);
   and Task 7's residue row matched `/rig/tmp/`, the sanitised TMPDIR, so it skips `/tmp/` led by `/rig`.
+- **D-4011** — `writeup-evidence-beyond-matrix` (Task 9): the measurement write-up rests on four kinds of evidence
+  the plan's Step 1–3 text does not name. `q8-bench-on-this-repo-not-the-largest`: Q8 ran on `this-repo`'s main
+  checkout (74 admin records), because the largest repository's (`project-1`, 181) path is never read, and the figure
+  for the largest is a linear extrapolation, labelled as one. `matrix-table-plus-fixture-shapes`: beside the Step 1
+  table, facts are read from the fixtures' event order and key sets (async launch, launch-response ids, arrival
+  order, task notification, compaction's SubagentStop), and several amendments rest on them rather than on a matrix
+  field. `census-record-aggregates`: some census figures (`CLAUDE_BASE` coverage, the kinds of `worktreeAbsent`
+  records) aggregate the census `records` (kind and flags only, no names) rather than `.totals`.
+  `q10-amendment-grounded-in-source`: the incarnation amendment is grounded in source (D-3996), not in a matrix cell
+  or a census total. D-4011 is the last number of the run's block.
 
 ## Self-review (record)
 
