@@ -9830,11 +9830,22 @@ _models_run_probe() {   # <accountId> <probe argv…> -> the argv's own exit cod
 # (`_models_litellm_codex`, that is `_codex_lanes`) and its one reader of a
 # row (`_codex_row`). A codex row that does not validate is refused with
 # `_codex_row`'s own rc and sentence, and the probe never runs.
-_models_probe_codex_env() {   # <accountId> -> 0, or _codex_row's rc for a codex row that does not validate
-  if ! _models_litellm_codex "$1"; then
-    unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
-    return 0
-  fi
+# A ROSTER THAT CANNOT SAY (Plan 3b Task A1, D-4046): `_models_litellm_codex`
+# rc 2 is refused the same way. The lane library's own `ccrc codex:
+# roster-invalid:` or `missing-dependency:` line is already on stderr, its rc
+# is returned, and the probe never runs. Never "not codex": that arm hands an
+# exec.kind "codex" row to the external fetch, whose token directory has a
+# default, which is another lane's (D-3706's class).
+_models_probe_codex_env() {   # <accountId> -> 0; _codex_row's rc for a codex row that does not validate; the lane library's rc for a roster that cannot say
+  local kind=0
+  _models_litellm_codex "$1" || kind=$?
+  case "$kind" in
+    0) ;;
+    1) unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
+       return 0 ;;
+    *) unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
+       return "$MODELS_CODEX_UNTOLD_RC" ;;
+  esac
   _codex_row "$1" || return $?
   export CHATGPT_TOKEN_DIR="$HOME/$CX_AUTH"
   export CCRC_PROBE_LANE_KIND=codex
@@ -10101,18 +10112,38 @@ _models_litellm_stop_blocked() {   # -> rc 0 and one clause on stdout iff the ex
   return 0
 }
 
-# WHICH ARM (D-3482): `exec.kind == "codex"` read off
-# ~/.ccrc/accounts.json by the lane library's ONE reader of that question
-# (`_codex_lanes`) — never accounts.sh's CCRC_CODEX_BACKEND, which is keyed
-# on `telemetry` and names today's EXTERNAL live lanes. An unreadable roster
-# (`_codex_lanes` rc 1, no ids) answers "not codex" here and still cannot
-# write through the external arm: that arm's PHASE 1 hands the same file to
-# the op, whose `readRoster` refuses before anything is rendered, in its own
-# sentence. The library's `ccrc codex: roster-invalid:` line is discarded,
-# because it would be the wrong verb's prefix in a `ccrc models` run.
-_models_litellm_codex() {   # <accountId> -> 0 iff the roster row is exec.kind "codex"
-  local l
-  while IFS= read -r l; do [ "$l" = "$1" ] && return 0; done < <(_codex_lanes 2>/dev/null)
+# WHICH ARM, AND WHETHER IT CAN BE TOLD (D-3482; Plan 3b Task A1, D-4046):
+# `exec.kind == "codex"` read off ~/.ccrc/accounts.json by the lane library's
+# ONE reader of that question (`_codex_lanes`) — never accounts.sh's
+# CCRC_CODEX_BACKEND, which is keyed on `telemetry` and names today's EXTERNAL
+# live lanes. THREE answers, never two:
+#   - 0: the row is codex-kind;
+#   - 1: the roster was read, and the row is not;
+#   - 2: the roster cannot say: `_codex_lanes` rc 1 (`roster-invalid`) or rc 2
+#     (`missing-dependency`); any other non-zero reads `roster-invalid`, the
+#     library's word for a roster it could not read. The library's own
+#     `ccrc codex: <word>:` line is LEFT ON STDERR, never discarded, and
+#     MODELS_CODEX_UNTOLD names the word, MODELS_CODEX_UNTOLD_RC the rc.
+# Undecidable is never "not codex" (Z4's rule, `_models_litellm_stop_blocked`
+# above). Folded into 1, it sent a codex row's probe down the external
+# fetch's default token directory, and its LiteLLM render into the
+# box-global file another repository's proxy reads. Both readers refuse 2 in
+# the library's word: `_models_probe_codex_env` and `_models_litellm`'s
+# dispatcher, the only two (Plan 3b Task A1's grep). Both call it in their
+# own shell, so the two names reach them.
+MODELS_CODEX_UNTOLD=''
+MODELS_CODEX_UNTOLD_RC=0
+_models_litellm_codex() {   # <accountId> -> 0 codex, 1 not codex, 2 the roster cannot say (above)
+  local ids rc=0
+  MODELS_CODEX_UNTOLD=''; MODELS_CODEX_UNTOLD_RC=0
+  ids="$(_codex_lanes)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    MODELS_CODEX_UNTOLD_RC="$rc"
+    MODELS_CODEX_UNTOLD=roster-invalid
+    [ "$rc" -eq 2 ] && MODELS_CODEX_UNTOLD=missing-dependency
+    return 2
+  fi
+  case $'\n'"$ids"$'\n' in *$'\n'"$1"$'\n'*) return 0 ;; esac
   return 1
 }
 
@@ -10397,13 +10428,28 @@ _models_litellm_lane_held() {   # <codex accountId> -> prints exactly one JSON o
 # worth paying for a config that has changed and not one for a config that
 # has not.
 _models_litellm() {   # <accountId> -> prints exactly one JSON object: the op's final answer, or a refusal
-  # A codex-kind lane takes its own arm (`_models_litellm_lane`, above).
+  # A codex-kind lane takes its own arm (`_models_litellm_lane`, above), and a
+  # roster that cannot say whether this row is one takes NEITHER (Plan 3b Task A1).
   # Everything below is the EXTERNAL arm, unchanged byte for byte
   # (D-3482) but for one guard (Plan 3a Task 2, D-3753): its bare stop is
   # refused once any roster row is codex-kind. The live lanes are external, and
   # another repository's LiteLLM reads that arm's file. Each lane leaves this
   # arm at its own flip (Plan 3b), and Plan 4's ccrc PR deletes it (ruling Z8).
-  if _models_litellm_codex "$1"; then _models_litellm_lane "$1"; return $?; fi
+  # WHICH ARM (Plan 3b Task A1, D-4046): a roster that cannot say is refused
+  # in the lane library's own word, as `_codex_row`'s refusals are propagated,
+  # and its own line is already on stderr. The external arm would render a
+  # codex row's model list into the box-global file another repository's
+  # LiteLLM reads; the codex arm would act on a row nobody read.
+  local kind=0
+  _models_litellm_codex "$1" || kind=$?
+  case "$kind" in
+    0) _models_litellm_lane "$1"; return $? ;;
+    1) ;;
+    *) if [ "$MODELS_CODEX_UNTOLD" = missing-dependency ]; then
+         _models_refuse missing-dependency 1 "jq is not on PATH (the lane library's ccrc codex: missing-dependency line says so), so whether lane $1 is exec.kind \"codex\" cannot be told, and neither LiteLLM arm was taken: a codex lane's model list never goes to the box-global file, and an external lane's is never rendered as a codex one. Install jq, then re-run this command. Nothing was written and nothing was stopped."
+       fi
+       _models_refuse roster-invalid 1 "\$HOME/.ccrc/accounts.json could not be read as a roster (the lane library answered rc $MODELS_CODEX_UNTOLD_RC; its ccrc codex: roster-invalid line says why), so whether lane $1 is exec.kind \"codex\" cannot be told, and neither LiteLLM arm was taken: a codex lane's model list never goes to the box-global file, and an external lane's is never rendered as a codex one. Fix the roster ('ccrc wrappers' prints the validator's sentence), then re-run this command. Nothing was written and nothing was stopped." ;;
+  esac
   local file check crc
   file="$(_models_roster_path)"
   check="$(_models_answer litellm --file "$file" --id "$1" \

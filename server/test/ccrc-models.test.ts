@@ -1509,6 +1509,30 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
       'the probe ran with codex inputs').toEqual([]);
   });
 
+  // Plan 3b Task A1 (D-4046): a roster whose codex rows the lane library cannot
+  // tell is refused HERE, in that library's own word, line and rc, and the probe
+  // never runs. Read as "not codex", an exec.kind "codex" row went down the
+  // external fetch, whose token directory has a default: another lane's
+  // (D-3706's class).
+  it.each([[1, 'roster-invalid'], [2, 'missing-dependency']] as const)(
+    'a roster whose codex lanes cannot be told (the lane library answers rc %i) is refused at the probe-input seam with its own %s line and rc — never "not codex", and the probe never runs (Plan 3b Task A1)',
+    async (rc, word) => {
+      home = await codexBox(['codex-a']);
+      const r = sourced(`_codex_lanes() { _codex_say ${word} "fixture: which roster lanes are codex lanes cannot be told"; return ${rc}; }; _models_run_probe codex-a env`, []);
+      expect(r.code, r.stderr).toBe(rc);
+      expect(r.stderr).toMatch(new RegExp(`^ccrc codex: ${word}: fixture: which roster lanes are codex lanes cannot be told$`, 'm'));
+      expect(r.stdout, 'the probe ran').toBe('');
+    });
+
+  it('the REAL lane library over a roster it cannot read: its own roster-invalid sentence reaches the caller, rc 1, and the probe never runs (Plan 3b Task A1)', async () => {
+    home = await codexBox(['codex-a']);
+    fs.writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"version":1,"accounts":{}}\n');
+    const r = sourced('_models_run_probe codex-a env', []);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc codex: roster-invalid: \$HOME\/\.ccrc\/accounts\.json could not be read as a roster, so its codex lanes are unknown — 'ccrc wrappers' prints the validator's own sentence for it\.$/m);
+    expect(r.stdout, 'the probe ran').toBe('');
+  });
+
   // Fix round 1: on a dead refresh token, litellm LOGS its own warning (the
   // token endpoint's answer in it) before the guard refuses. The refresh row's
   // reason and the stale catalogue's lastError both keep the remedy, and carry
@@ -2182,7 +2206,14 @@ describe('ccrc models litellm', () => {
 
     it('a roster whose codex lanes cannot be told refuses the stop too: undecidable is never "no codex lane"', () => {
       pgrep(true);
-      const r = sourced('_codex_lanes() { return 1; }; cmd_models litellm ext-a', []);
+      // Plan 3b Task A1: the dispatcher asks `_codex_lanes` FIRST now, and refuses
+      // an undecidable roster before either arm (its own cases are in the codex-kind
+      // describe below). This case keeps its subject, Z4's own undecidable arm, with a
+      // roster that turns unreadable BETWEEN the two reads: the first answers "no codex
+      // lane", the second rc 1. The count is a file, because each read runs in its own `$(…)`.
+      const counted = `_codex_lanes() { local n; n=$(( $(cat "$HOME/lanes-reads" 2>/dev/null || echo 0) + 1 )); printf '%s\\n' "$n" > "$HOME/lanes-reads"; [ "$n" -eq 1 ] && return 0; return 1; }`;
+      const r = sourced(`${counted}; cmd_models litellm ext-a`, []);
+      expect(fs.readFileSync(join(home, 'lanes-reads'), 'utf8'), 'the dispatcher and the stop guard each read once').toBe('2\n');
       expect(r.code).toBe(1);
       const b = oneObject(r);
       expect(b['error']).toBe('restart-failed');
@@ -2360,6 +2391,39 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
     expect(fs.statSync(lanePath('codex-a')).mode & 0o777).toBe(0o600);
     expect(fs.existsSync(boxGlobal())).toBe(false);
     expect(fs.existsSync(lanePath('codex-b')), 'the other lane is untouched').toBe(false);
+    for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
+  });
+
+  // Plan 3b Task A1: the dispatcher takes NEITHER arm on a roster whose codex
+  // rows cannot be told. Before it, this row fell through to the external arm,
+  // which asked pgrep and rendered codex-a's model list into the box-global
+  // file another repository's LiteLLM reads.
+  it.each([[1, 'roster-invalid'], [2, 'missing-dependency']] as const)(
+    'a roster whose codex lanes cannot be told (the lane library answers rc %i) is refused %s before either arm — never the box-global file, pgrep, ccgpt or systemd-run (Plan 3b Task A1)',
+    (rc, word) => {
+      const r = sourced(`_codex_lanes() { _codex_say ${word} "fixture: which roster lanes are codex lanes cannot be told"; return ${rc}; }; cmd_models litellm codex-a`, []);
+      expect(r.code, r.stderr).toBe(1);
+      const b = oneObject(r);
+      expect(b['error']).toBe(word);
+      expect(String(b['detail'])).toContain('so whether lane codex-a is exec.kind "codex" cannot be told, and neither LiteLLM arm was taken');
+      expect(String(b['detail'])).toMatch(/Nothing was written and nothing was stopped\.$/);
+      expect(r.stderr).toMatch(new RegExp(`^ccrc codex: ${word}: fixture: which roster lanes are codex lanes cannot be told$`, 'm'));
+      expect(fs.existsSync(boxGlobal()), 'the codex row was rendered into the box-global file').toBe(false);
+      expect(fs.existsSync(lanePath('codex-a'))).toBe(false);
+      for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
+    });
+
+  // Plan 3b Task A1: the refresh row of such a roster is a FAILED row whose reason
+  // is the lane library's own forwarded line. The probe never runs, so the row is
+  // never fetched down the external path, and neither LiteLLM arm is taken.
+  it('refresh over a roster whose codex lanes cannot be told: the row is ok:false with the lane library\'s roster-invalid line as its reason, exit 1, and no pgrep, ccgpt or systemd-run call (Plan 3b Task A1)', () => {
+    const r = sourced('_codex_lanes() { _codex_say roster-invalid "fixture: which roster lanes are codex lanes cannot be told"; return 1; }; cmd_models refresh codex-a', [],
+      { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code, r.stderr).toBe(1);
+    const rows = oneObject(r)['refreshed'] as { id: string; probe?: string; ok: boolean; reason?: string }[];
+    expect(rows).toEqual([{ id: 'codex-a', probe: 'codex', ok: false, reason: expect.any(String) }]);
+    expect(rows[0]!.reason).toContain('ccrc codex: roster-invalid: fixture: which roster lanes are codex lanes cannot be told');
+    expect(fs.existsSync(boxGlobal()), 'the codex row was rendered into the box-global file').toBe(false);
     for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
   });
 
