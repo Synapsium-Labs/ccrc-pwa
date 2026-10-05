@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=754d8fba91b032f4b1512cac419d5561e54b2af311797627dd9c594b2049bb25
+# ccrc:generated 1 sha256=f4c8f7ebfde77ff8ddf9aca06a86607c60d3f7fa9a93481a878ff28174c578e9
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19415,6 +19415,7 @@ _model_class_of() {   # /model value -> the record's class word | rc 1 outside t
 
 _operator_choice_keep() {   # id — before a stop that a spawn follows: the operator's own /model and /effort, written to the route record (§5.7). Always 0.
   local id="$1" f typed why="" out kind val at n field want fm shown
+  local -a sets=() kinds=()
   [[ -f "$REG/$id.uuid" ]] || return 0
   _reg_set "$id" choicekept "$(date +%s)" 2>/dev/null || true   # a keep ran since the last spawn: the supervised spawn that follows a stop's keep does not read again (cmd_ensure, §5.7)
   _is_anthropic_backend "$(_reg_get "$id" wrapper)" || return 0   # a non-Anthropic lane's /model is outside the class vocabulary: skipped, as the settle skips it (§5.7)
@@ -19500,9 +19501,12 @@ for kind, (val, at) in sorted(newest.items()):
       fm=$(_plat_mtime "$REG/$id.$field" 2>/dev/null) && [[ "$fm" =~ ^[0-9]+$ ]] || continue
       (( 10#$fm >= 10#$at )) && continue
     fi
-    ( cmd_route --session "$id" --set "$field=$want" --actor operator-session --reason "its own /$kind, kept across a restart" ) >/dev/null 2>&1 \
-      || _operator_choice_say "$id" "/$kind $want refused by the route record's own checks — the record is unchanged"
+    sets+=(--set "$field=$want"); kinds+=("$kind:$want")   # collected: the pair is checked ONCE, in one call below
   done <<<"$out"
+  if (( ${#kinds[@]} )); then   # ONE call for the pair: `cmd_route` checks class against effort on the merged sets, so a haiku record that takes /model opus AND /effort high keeps both (a call per field refused the effort first)
+    ( cmd_route --session "$id" "${sets[@]}" --actor operator-session --reason "its own /${kinds[0]%%:*}${kinds[1]:+ and /${kinds[1]%%:*}}, kept across a restart" ) >/dev/null 2>&1 \
+      || for kind in "${kinds[@]}"; do _operator_choice_say "$id" "/${kind%%:*} ${kind#*:} refused by the route record's own checks — the record is unchanged"; done
+  fi
   return 0
 }
 

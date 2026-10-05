@@ -481,6 +481,26 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     expect(swapLog()).toMatch(new RegExp(`operator-choice ${ID}: /effort high refused by the route record's own checks`));
   });
 
+  // ONE cmd_route CALL for the pair (review 268, F3): the record's class/effort pair check runs on the merged sets.
+  it('a haiku record, then /model opus and /effort high: the pair is applied in one call, so class=opus AND effort=high', () => {
+    seed(); record({ class: 'haiku' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5')), cmd(t + 1, 'effort', 'high'), ack(t + 1, EFFORT_ACK('high'))]);
+    expect(keep()).toContain('rc=0');
+    expect(h.reg(ID, 'class')).toBe('opus');
+    expect(h.reg(ID, 'effort')).toBe('high');
+    expect(swapLog(), 'neither kind is logged refused').not.toMatch(/refused by the route record/);
+  });
+
+  it('a pair the record refuses (haiku, then a level) is refused whole: one line per kind, the record unchanged', () => {
+    seed(); record({ class: 'opus' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'haiku'), ack(t, MODEL_ACK('Haiku 4.5')), cmd(t + 1, 'effort', 'high'), ack(t + 1, EFFORT_ACK('high'))]);
+    expect(keep()).toContain('rc=0');
+    expect(h.reg(ID, 'class')).toBe('opus');
+    expect(h.reg(ID, 'effort')).toBeNull();
+    const refused = swapLog().split('\n').filter((l) => l.includes('refused by the route record\'s own checks — the record is unchanged'));
+    expect(refused.map((l) => /operator-choice \S+: (\/\w+)/.exec(l)![1]).sort()).toEqual(['/effort', '/model']);
+  });
+
   it('an operator /model opus survives an auto-home: the home-ward swap writes it before its stop, and the next spawn composes opus', () => {
     seed(); h.sh(`_reg_set ${ID} wrapper claude-d`); record({ class: 'fable' }); const t = now() - 600;
     writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5')), turn(t + 5)]);
