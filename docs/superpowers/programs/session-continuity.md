@@ -339,6 +339,17 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     1. confirm 3922–3924;
     2. defer the `/clear` fix, or require it now. The review costs the fix. ccd's own header there says "NEVER A
        SILENT LOSS".
+- **2026-10-05 10:27 — review 268 reported** (mail 3498; `~/.cc-clips/ccrc-pwa-plain-hollow/review-268-b00849ee.md`).
+  - **What it found:** 13 findings, no blocker. Every suite is green, 16 rows are red (spec §5.7's four among them),
+    the merge onto `4100ae1c` is clean, and the residue is whole.
+  - **F1:** `_supervised_start`'s unsupervised fallbacks revive without a keep, a silent loss.
+  - **F2–F4 need rulings:** the "NEVER A SILENT LOSS" header; effort applied before model; 3925's `/clear` fix,
+    costed at about 10 lines on the supervisor tick.
+  - **Not yet ruled.** This coordinator's brief omitted the held-out panel's Lenses line, so the reviewer ran four
+    Opus lenses of its own and no Sonnet refute pass. That is a defect of the brief, not of the reviewer. Mail 3501
+    asks it to put F1–F13 through the refute pass and report again. Review 268 stays open until then, because a
+    close would reclaim the reviewer's workspace. Review 267 had the same omission and was corrected in flight
+    (mail 3500).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
