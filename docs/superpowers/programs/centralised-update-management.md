@@ -997,6 +997,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         unit missing from the post-restart listing as a warning, never a failure. The verify arm treats the same
         stop, landing a few minutes later, as fatal. Child reclamation wave 4 (#215, v0.0.79) makes reclaims
         routine, so this will recur. It is residue R12, and the fix is planned through a wave.
+    - **2026-10-05 07:27 UTC — two more prereleases, and the halt still holds.** v0.0.81 (#249) and v0.0.82 (#246),
+      both stall-watch merges, published at 06:54–06:55. Neither box moved: the failed v0.0.78 fleet row still waits
+      for the operator's ack. The first move after the ack goes to the newest release, now v0.0.82. It runs
+      v0.0.78's sweep with wave 10's script, so the R12 protection holds. Wave 9's tip still merges cleanly onto the
+      new `main` (`git merge-tree`).
+      - STATUS: fleet v0.0.78 (update `failed`), server v0.0.76, newest v0.0.82, backups fleet 123M/server 506M,
+        disk free fleet 64G/work volume 12G/server 33G.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
