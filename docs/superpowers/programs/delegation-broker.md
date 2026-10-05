@@ -18,7 +18,7 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | — | **run 271 dispatched** 2026-10-05 15:37 UTC to a fresh child, `ccrc-pwa-swift-harbor`; plan read at `1eda8630a` (#280) |
+| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **in review** — wave-done verified 2026-10-05 19:25 UTC at `347b7b64` (run 271 `awaiting-review`, items 9/9); review run 277 (`ccrc-pwa-calm-summit`) |
 | 2 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | wave 1's matrix and its real-lane cross-check | — | to plan once wave 1's measurement section is complete |
 | 3 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 2 | — | to plan |
 | 4 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 3 | — | to plan |
@@ -59,6 +59,14 @@ its own heading. Until both are here, nothing in waves 2–6 may depend on a hoo
   sentences; theirs: four `shared/api.ts` anchors re-pointed by content). Each edits only its own region; whichever
   PR lands second absorbs main by `git merge` alone and re-runs `session-hook.test.ts` in full plus
   `typecheck-tests`; neither waits. The worker was told (mail 3564).
+- **2026-10-05 — wave 1's wave-done verified (mail 3577).** The branch tip, the remote tip and the head of #284 are
+  all `347b7b64`, and the server accepted the fingerprint. The worker sent `suite: red`, `failure: unclear`. Its
+  first full run was red on four rows: three load rows that pass in isolation, and `tmp-sweep`'s fail-closed row,
+  which it reports as also red on a clean `main`; the review brief asks for that to be reproduced. The block 3992
+  through 4011 is fully defined. Ruled: the full suite ran as one bounded background job rather than foreground
+  shards, which is accepted (the hard timeout and the log kept a hang visible; the gate suites ran in the foreground).
+  The raw synthetic capture root stays on the box until #284 merges. Review run 277 runs the held-out panel, plus
+  public-content, hook-inertness and measurement-provenance lenses.
 - **2026-10-05 — the parent incarnation field is already in the tree** (spec §5.1, §8.1 item 10): `$REG/<id>.generation`
   (D-2605) is minted once at row creation and never rewritten. The hook also sees it as `CCRC_SESSION_GENERATION`, but
   ccd does not set that on every spawn path, so later waves read the file. Wave 1 records this from source.
