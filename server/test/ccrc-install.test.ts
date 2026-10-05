@@ -7569,14 +7569,17 @@ describe('ccrc install: the codex tier restart step, measured in isolation (_ins
  *  call made any other way still reaches the wall. It answers
  *  `enable --now` and `disable --now` as a manager does, by planting and
  *  removing the timer's `timers.target.wants` link, so the converge's own
- *  reads see its own acts. A unit listed in `refuse` is refused. `enabled`,
+ *  reads see its own acts. A unit listed in `refuse` is refused. A unit listed
+ *  in `keepLink` (Plan 3b Task A2) is a disable the manager ANSWERS 0 while its
+ *  link stays — the shape `ccrc-account.test.ts`'s C15 pins for account
+ *  removal. `enabled`,
  *  `foreign` and `flatForeign` plant links before the step runs. `shape:
  *  false` (fix round 1) sources no `ccrc-wrapper-shape` and points
  *  `CCRC_HERE` at an empty directory, so `_codex_shape` cannot load the
  *  contract: the box whose tree lost the file. */
 function runUsageStep(c: {
   lanes?: string[]; lanesRc?: number; role?: 'both' | 'fleet' | 'server'; os?: 'linux' | 'darwin';
-  enabled?: string[]; foreign?: string[]; flatForeign?: boolean; refuse?: string[]; shape?: boolean;
+  enabled?: string[]; foreign?: string[]; flatForeign?: boolean; refuse?: string[]; keepLink?: string[]; shape?: boolean;
 }): StepRun & { links: string[] } {
   const home = mkTmp('ccrc-codex-usage-step-');
   const units = join(home, '.config', 'systemd', 'user');
@@ -7587,6 +7590,7 @@ function runUsageStep(c: {
   for (const id of c.foreign ?? []) link(`ccgpt-usage@${id}.timer`, 'ccgpt-usage@.timer');
   if (c.flatForeign === true) link('ccgpt-usage.timer', 'ccgpt-usage.timer');
   writeFileSync(join(home, 'refuse'), (c.refuse ?? []).map((u) => `${u}\n`).join(''));
+  writeFileSync(join(home, 'keeplink'), (c.keepLink ?? []).map((u) => `${u}\n`).join(''));
   const noShape = join(home, 'no-shape-contract');
   mkdirSync(noShape);
   const r = runStepHarness(home, [
@@ -7604,7 +7608,7 @@ function runUsageStep(c: {
     '  if grep -qxF -- "$4" "$HOME/refuse"; then echo "Failed to $2 unit $4: fixture" >&2; return 1; fi',
     '  case "$2" in',
     '    enable) ln -sfn "$HOME/.config/systemd/user/${4%%@*}@.timer" "$HOME/.config/systemd/user/timers.target.wants/$4"; return 0 ;;',
-    '    disable) rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$4"; return 0 ;;',
+    '    disable) grep -qxF -- "$4" "$HOME/keeplink" || rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$4"; return 0 ;;',
     '  esac',
     '  echo "fixture systemctl: unexpected argv: $*" >&2; return 90',
     '}',
@@ -7782,6 +7786,28 @@ describe('ccrc install: the codex usage converge, measured in isolation (_inst_c
     const r = runUsageStep({ os: 'darwin', lanes: [] });
     expect(r.stdout).toBe('');
     expect(ctl(r)).toEqual([]);
+  });
+
+  it('a withdrawal the manager answers 0 while its link stays is NOT withdrawn: the could-not-disable line, NOT CONVERGED, and one degraded step — measured, never read off the exit code (Plan 3b Task A2)', () => {
+    const r = runUsageStep({ lanes: [], enabled: ['ext-a'], keepLink: [T('ext-a')] });
+    expect(ctl(r)).toEqual([DIS('ext-a')]);
+    expect(r.links, 'the stand-in removed the link it was told to keep').toEqual([T('ext-a')]);
+    expect(r.degraded).toEqual(['codex-usage']);
+    expect(r.stderr).toMatch(/^install: codex-usage: could not disable ccrc-codex-usage@ext-a\.timer — account ext-a is no longer a codex lane, so its timer must not poll; run: systemctl --user disable --now ccrc-codex-usage@ext-a\.timer$/m);
+    expect(r.stdout, 'a withdrawal the link contradicts was claimed').toBe(
+      'install: codex-usage: NOT CONVERGED — ccrc\'s own usage timer is still enabled for ext-a, which this run had to withdraw and systemd would not disable (the could-not-disable line above names each, with its command). This install continues. Run those commands, then re-run: ccrc install\n');
+  });
+
+  it('on the foreign arm too: a disable answered 0 with the link still there says both publishers are armed, never "this run disabled it" (Plan 3b Task A2)', () => {
+    const r = runUsageStep({ lanes: ['codex-a'], enabled: ['codex-a'], foreign: ['codex-a'], keepLink: [T('codex-a')] });
+    expect(ctl(r)).toEqual([DIS('codex-a')]);
+    expect(r.links).toEqual(['ccgpt-usage@codex-a.timer', T('codex-a')]);
+    expect(r.degraded).toEqual(['codex-usage']);
+    expect(r.stderr).toMatch(/^install: codex-usage: could not disable ccrc-codex-usage@codex-a\.timer — run: systemctl --user disable --now ccrc-codex-usage@codex-a\.timer$/m);
+    expect(r.stdout).toMatch(/^install: codex-usage: NOT ENABLED for codex-a — .* ccrc's own ccrc-codex-usage@codex-a\.timer is enabled too, and this run could not disable it, so both publishers are armed\. ccrc never disables another tool's unit: /m);
+    expect(r.stdout).not.toMatch(/this run disabled it/);
+    expect(r.stdout).toMatch(/^install: codex-usage: enabled for no lane; withheld from codex-a; withdrawn from no lane$/m);
+    expect(r.stdout).toMatch(/^install: codex-usage: NOT CONVERGED — ccrc's own usage timer is still enabled for codex-a, which this run had to withdraw and systemd would not disable/m);
   });
 });
 

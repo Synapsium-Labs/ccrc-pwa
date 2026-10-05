@@ -135,7 +135,7 @@ function verbEnv(home: string): NodeJS.ProcessEnv {
     '    case "$3" in ccrc-codex-usage@*.timer)',
     '      t=absent; [ -e "$HOME/.config/systemd/user/ccrc-codex-usage@.timer" ] && t=present',
     '      printf \'%s template=%s\\n\' "$3" "$t" >> "$HOME/usage-disables"',
-    '      rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$3" ;;',
+    '      grep -qxF -- "$3" "$HOME/usage-keeplink" 2>/dev/null || rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$3" ;;',
     '    esac',
     '    exit 0 ;;',
     'esac',
@@ -582,6 +582,20 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls.indexOf('--user disable --now ccrc-codex-usage@codex-a.timer')).toBeGreaterThan(-1);
     expect(calls[calls.length - 1]).toBe('--user daemon-reload');
     expect(r.stdout).toMatch(/^uninstall: units: 2 codex usage timer\(s\) stopped and disabled$/m);
+  });
+
+  itLinux('an instance whose disable the manager answers 0 while its link stays is NOT counted stopped: its failed line names it and the count is the measured one (Plan 3b Task A2, usage template)', () => {
+    const home = mkTmp('ccrc-uninst-usage-keeplink-');
+    plantInstalledBox(home);
+    const units = join(home, '.config', 'systemd', 'user');
+    const wants = join(units, 'timers.target.wants');
+    mkdirSync(wants, { recursive: true });
+    for (const id of ['codex-a', 'codex-b']) symlinkSync(join(units, 'ccrc-codex-usage@.timer'), join(wants, `ccrc-codex-usage@${id}.timer`));
+    writeFileSync(join(home, 'usage-keeplink'), 'ccrc-codex-usage@codex-b.timer\n');
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^uninstall: units: 1 codex usage timer\(s\) stopped and disabled$/m);
+    expect(r.stderr).toMatch(/^uninstall: units: disable --now ccrc-codex-usage@codex-b\.timer failed \(continuing/m);
   });
 
   // The same three promises — stop it, forget it, remove it — in launchd's

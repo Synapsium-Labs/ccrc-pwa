@@ -10444,10 +10444,46 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
       id: 'codex-b', label: 'codex-b', configDirSuffix: '.claude-codex-b',
       exec: { kind: 'external' }, homeAble: false, telemetry: 'codex',
     }], { accountsSh: false });
+    // Plan 3b Task A2: this is the state AFTER the converge a flip back runs, which
+    // withdraws codex-b's usage timer, so its link goes as a manager's disable
+    // removes it. The timer left enabled is the next case's subject.
+    rmSync(join(home, '.config', 'systemd', 'user', 'timers.target.wants', 'ccrc-codex-usage@codex-b.timer'));
     const r = runDoctor(home);
     expect(codexVerdicts(r.stdout), r.stdout).toEqual([expect.stringMatching(
       /^WARN codex: lane state is left under \S+\/\.ccrc\/codex\/codex-b, and 'codex-b' is not a Codex lane in /)]);
     expect(existsSync(join(home, '.ccrc', 'codex', 'codex-b', 'lane.json'))).toBe(true);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  itLinux('a flip back whose usage timer is still enabled: the left-state WARN no longer says nothing of ccrc\'s reads it, and the timer is its own WARN (Plan 3b Task A2)', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-flipback-timer-', ['codex-a', 'codex-b']);
+    const keep = lanePorts(home, 'codex-a');
+    codexRoster(home, [{ id: 'codex-a', ...keep }], [{
+      id: 'codex-b', label: 'codex-b', configDirSuffix: '.claude-codex-b',
+      exec: { kind: 'external' }, homeAble: false, telemetry: 'codex',
+    }], { accountsSh: false });
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([
+      expect.stringMatching(/^WARN codex: lane state is left under \S+\/\.ccrc\/codex\/codex-b, and 'codex-b' is not a Codex lane in \$HOME\/\.ccrc\/accounts\.json — a flip back to another launcher keeps it on purpose, and ccrc's own ccrc-codex-usage@codex-b\.timer still reads it \(the WARN naming that timer says how to withdraw it\)$/),
+      SURPLUS_WARN('codex-b'),
+    ]);
+    expect(remedyAfter(r.stdout, /^WARN codex: ccrc-codex-usage@codex-b\.timer is still enabled/)).toBe(SURPLUS_FIX('codex-b'));
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  itLinux('a ccrc usage timer left enabled with no Codex lane and no lane state at all is a WARN — never the empty-population SKIP (Plan 3b Task A2)', () => {
+    const home = healthy('ccrc-doctor-codex-surplus-only-');
+    plantCodexUsage(home, 'ext-a', { pair: false, row: false });   // a dangling link still reads enabled (D-3726)
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([SURPLUS_WARN('ext-a')]);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  itLinux('a box whose usage-timer set cannot be listed is a WARN, unmeasured — never the empty-population SKIP (Plan 3b Task A2)', () => {
+    const home = healthy('ccrc-doctor-codex-surplus-unlistable-');
+    rmSync(join(home, 'ccrc', 'ccd', 'ccrc-wrapper-shape'), { force: true });
+    const r = runDoctor(home);
+    expect(codexVerdicts(r.stdout), r.stdout).toEqual([UNLISTABLE_WARN]);
     noRunnerBugLine(r.stdout, 'codex');
   });
 
@@ -10727,6 +10763,20 @@ function usageBox(prefix: string, o: Parameters<typeof plantCodexUsage>[2] = {})
   return home;
 }
 
+/** Plan 3b Task A2 (D-4048): the surplus row,
+ *  measured, recorded and printed alone, for `usageRows`' `script`. */
+const SURPLUS_ROWS = [
+  'DRX_CLASS=(); DRX_WHAT=(); DRX_FIX=()',
+  's=0; _dr_codex_usage_surplus codex-a || s=$?',
+  'printf "rc=%s\\nsurplus=%s\\n" "$s" "${DR_CODEX_USAGE_SURPLUS[*]-}"',
+  '_dr_codex_usage_surplus_rows "$s"',
+  '_dr_cx_report "surplus measured"; :',
+].join('\n');
+const SURPLUS_WARN = (id: string): string => `WARN codex: ccrc-codex-usage@${id}.timer is still enabled, and '${id}' is not a Codex lane in $HOME/.ccrc/accounts.json, so ccrc's usage publisher still runs for '${id}' every cycle: the writer of $HOME/.cc-limits/${id}.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs`;
+const SURPLUS_FIX = (id: string): string => `  remedy: systemctl --user disable --now ccrc-codex-usage@${id}.timer (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws a ccrc usage timer whose id is no longer a Codex lane and re-measures the link`;
+const UNLISTABLE_WARN = "WARN codex: ccrc's own enabled usage timers could not be listed (the wrapper shape contract could not be read), so a ccrc-codex-usage@<id>.timer left enabled for an id that is no longer a Codex lane cannot be seen — unmeasured, never none";
+const UNLISTABLE_FIX = '  remedy: ccrc install — the wrapper shape contract ships with ccrc, and the install places it again';
+
 // LINUX ONLY: on a macOS host bash's own OSTYPE is darwin*, so ccrc computes
 // CCD_OS=darwin at source time and every row below would answer
 // not-applicable. The forced-Darwin, unloaded and threshold cases need no
@@ -10762,6 +10812,18 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
 
   it('ANOTHER repository\'s timer enabled for the same lane: one WARN naming it, remedy the operator\'s own disable, and a stale row is not judged — ccrc is not its writer (R6)', () => {
     const home = usageBox('ccrc-doctor-usage-second-writer-', { ageS: 99_999 });
+    plantForeignUsage(home, 'codex-a');
+    const r = usageRows(home);
+    // Plan 3b Task A2: this fixture is BOTH armed (`usageBox` enables ccrc's own
+    // timer), so the WARN says so and names ccrc's withdrawal first. The title is
+    // §20.10's row of record, kept verbatim; the withheld-only case is the next one.
+    expect(warns(r.stdout)).toEqual([`WARN codex: codex-a: another repository's ccgpt-usage@codex-a.timer is enabled, and ccrc's own ${T} is enabled too, so two publishers race this lane's ~/.cc-limits row and two token refreshes its OAuth directory`]);
+    expect(r.stdout).toMatch(new RegExp(`^ {2}remedy: systemctl --user disable --now ${esc(T)} \\(ccrc's own unit; no ccrc fixer withdraws it\\), or leave it to the next update, whose converge withdraws ${esc(T)} while ccgpt-usage@codex-a\\.timer stands and re-measures the link\\. Once this lane's cutover no longer needs ccgpt-usage@codex-a\\.timer, disable it yourself: systemctl --user disable --now ccgpt-usage@codex-a\\.timer — ccrc never disables another tool's unit$`, 'm'));
+    expect(r.asked).toEqual([]);
+  });
+
+  it('ANOTHER repository\'s timer enabled and ccrc\'s own withheld, as the converge leaves it: the WARN says ccrc withholds its own — true only now (Plan 3b Task A2)', () => {
+    const home = usageBox('ccrc-doctor-usage-second-writer-withheld-', { enabled: false });
     plantForeignUsage(home, 'codex-a');
     const r = usageRows(home);
     expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: another repository's ccgpt-usage@codex-a\.timer is enabled, so two publishers would race this lane's ~\/\.cc-limits row and two token refreshes its OAuth directory — ccrc withholds its own ccrc-codex-usage@codex-a\.timer while it stands$/)]);
@@ -10825,6 +10887,34 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     expect(warns(r.stdout)).toEqual([expect.stringMatching(/^WARN codex: codex-a: .*codex-a\.json carries no numeric ts, so its age cannot be measured$/)]);
   });
 
+  it('every enabled ccrc usage timer belongs to a Codex lane: no surplus, nothing recorded, the manager never asked (Plan 3b Task A2)', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-surplus-none-'), false, SURPLUS_ROWS);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^rc=0$/m);
+    expect(r.stdout).toMatch(/^surplus=$/m);
+    expect(warns(r.stdout), r.stdout).toEqual([]);
+    expect(r.asked).toEqual([]);
+  });
+
+  it('a ccrc usage timer enabled for an id that is no longer a Codex lane WARNs by name — read off the manager\'s links, never the roster — remedy the exact disable, with the next update\'s converge as its automatic cure (Plan 3b Task A2)', () => {
+    const home = usageBox('ccrc-doctor-usage-surplus-');
+    plantCodexUsage(home, 'ext-a', { row: false });
+    const r = usageRows(home, false, SURPLUS_ROWS);
+    expect(r.stdout).toMatch(/^rc=0$/m);
+    expect(r.stdout).toMatch(/^surplus=ext-a$/m);
+    expect(warns(r.stdout), r.stdout).toEqual([SURPLUS_WARN('ext-a')]);
+    expect(remedyAfter(r.stdout, /^WARN codex: ccrc-codex-usage@ext-a\.timer is still enabled/)).toBe(SURPLUS_FIX('ext-a'));
+    expect(r.asked, 'the surplus row asked the user manager').toEqual([]);
+  });
+
+  it('ccrc\'s enabled usage timers that cannot be listed are their own WARN, unmeasured — never "no surplus" (Plan 3b Task A2)', () => {
+    const r = usageRows(usageBox('ccrc-doctor-usage-surplus-unlistable-'), false,
+      `unset WRAPPER_ID_RE WRAPPER_SUFFIX_SAFE_RE; CCRC_HERE="$HOME/no-shape-contract-here"\n${SURPLUS_ROWS}`);
+    expect(r.stdout).toMatch(/^rc=1$/m);
+    expect(warns(r.stdout), r.stdout).toEqual([UNLISTABLE_WARN]);
+    expect(remedyAfter(r.stdout, /^WARN codex: ccrc's own enabled usage timers could not be listed/)).toBe(UNLISTABLE_FIX);
+  });
+
   itCodex('wired into _check_codex on a doctor-clean codex box: a second writer turns its PASS into a WARN on the check\'s own name', async () => {
     const home = await healthyCodexBox('ccrc-doctor-codex-usage-e2e-');   // Task 4's fixture, extended by Step 3b
     expect(lineFor(runDoctor(home).stdout, 'codex'), 'the doctor-clean codex box no longer PASSes codex')
@@ -10849,6 +10939,15 @@ describe('ccrc doctor: codex — the usage rows, on any host (Plan 3a Task 6)', 
     expect(r.stdout).toMatch(/^note=usage timer not applicable on macOS$/m);
   });
 
+  it('forced Darwin: the surplus row is not applicable — rc 3 and nothing recorded, even over a ccrc link for a non-codex id (Plan 3b Task A2)', () => {
+    const home = usageBox('ccrc-doctor-usage-surplus-darwin-');
+    plantCodexUsage(home, 'ext-a', { row: false });
+    const r = usageRows(home, true, SURPLUS_ROWS);
+    expect(r.stdout).toMatch(/^rc=3$/m);
+    expect(r.stdout).toMatch(/^surplus=$/m);
+    expect(warns(r.stdout), r.stdout).toEqual([]);
+  });
+
   it('sourced without ccrc, the rows FAIL naming the bug, rather than reading a function that does not exist', () => {
     const home = usageBox('ccrc-doctor-usage-unloaded-');
     const r = spawnSync(BASH, ['-c', `set -uo pipefail\n. ${shq(CHECKS_SRC)}\n_dr_codex_usage_box; echo "rc=$?"`],
@@ -10864,7 +10963,7 @@ describe('ccrc doctor: codex — the usage rows, on any host (Plan 3a Task 6)', 
   // away. This box has no lane executables and no runtime, so a check that got
   // past the guard would record FAILs: one FAIL line, the guard's, is the
   // proof that nothing recorded was lost.
-  it.each(['_codex_usage_enabled', '_codex_usage_timer', '_codex_usage_foreign', '_codex_usage_wants',
+  it.each(['_codex_usage_enabled', '_codex_usage_enabled_ids', '_codex_usage_timer', '_codex_usage_foreign', '_codex_usage_wants',
     '_codex_usage_flat_foreign', '_plat_mtime'])('%s not loaded: _check_codex FAILs in its loaded guard, before any finding is recorded (fix round 1)', (fn) => {
     const r = usageRows(usageBox('ccrc-doctor-usage-guard-'), false, `unset -f ${fn}\n_check_codex; echo "rc=$?"`);
     expect(r.stdout.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) codex: /.test(l)), r.stdout).toEqual([

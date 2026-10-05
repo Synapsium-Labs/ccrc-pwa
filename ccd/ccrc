@@ -15032,6 +15032,13 @@ _codex_usage_flat_foreign() {
 # lanes it withheld or withdrawals it failed, `_inst_codex_tiers`' rule. A
 # refused ENABLE is the exception, and is named by its unit
 # (`_inst_enable_timer`).
+# A WITHDRAWAL IS RE-MEASURED, never read off the exit code (Plan 3b Task A2,
+# D-4047): both disables below count only when a
+# re-read of the manager's link finds it gone, `_acct_remove_usage`'s
+# reading. A disable the manager answers 0 while the link stays is the
+# refused withdrawal's own could-not-disable line and NOT CONVERGED step,
+# because it is the same fact (ccrc's timer is still enabled) and the same
+# operator remedy.
 # POSITION: inside `_inst_enable`, after the daemon-reload that read the
 # template `_inst_units` placed, and after `_inst_codex_runtime` made the
 # runtime current that the publisher's ExecStart names.
@@ -15067,7 +15074,7 @@ _inst_codex_usage() {
     for id in ${codex[@]+"${codex[@]}"}; do [ "$id" = "$e" ] && keep=1; done
     [ "$keep" -eq 1 ] && continue
     u="$(_codex_usage_timer "$e")"
-    if systemctl --user disable --now "$u"; then
+    if systemctl --user disable --now "$u" && ! _codex_usage_enabled "$u"; then
       withdrawn+=("$e")
     else
       echo "install: codex-usage: could not disable $u — account $e is no longer a codex lane, so its timer must not poll; run: systemctl --user disable --now $u" >&2
@@ -15080,7 +15087,7 @@ _inst_codex_usage() {
       withheld+=("$id")
       took=''
       if _codex_usage_enabled "$u"; then
-        if systemctl --user disable --now "$u"; then
+        if systemctl --user disable --now "$u" && ! _codex_usage_enabled "$u"; then
           withdrawn+=("$id")
           took=" ccrc's own $u was enabled, and this run disabled it."
         else
@@ -22463,7 +22470,7 @@ _uninst_codex_usage() {
   fi
   for id in $ids; do
     u="$(_codex_usage_timer "$id")"
-    if systemctl --user disable --now "$u"; then
+    if systemctl --user disable --now "$u" && ! _codex_usage_enabled "$u"; then
       n=$((n + 1))
     else
       failed=$((failed + 1))
