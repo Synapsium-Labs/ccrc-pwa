@@ -715,19 +715,28 @@ describe('the stop clause names only wakes that wake (stall watch spec §6.2)', 
   // asks, a structured ask, or a background kind whose words map, one for one,
   // to `stall.ts`'s STALL_RESUMING_KINDS. The second scans the list for any
   // form of resume, the word S4's interim completion used.
-  // Where the stopping line sits. Closed: a comma, a semicolon, and an `or` or
-  // `and` before a determiner (a, an, any, the, your, one) all split the list,
-  // so a wake joined in any of those ordinary ways must match a member shape on
-  // its own. The list splits on every comma, so kinds inside one background
-  // member are joined by `or` or `and` only, with no determiner: "a background
-  // agent, workflow or teammate" leaves a bare "a background agent" that
-  // matches no member shape, and reds on purpose. Not closed, known evasions: a
-  // modifier clause after "asks" inside the mail member, and a `. ` inside a
-  // member, which cuts the list short (the S3 row shares that `. ` assumption).
+  // Where the stopping line sits (`wake-list-split-closes-and-joins` (D-3807),
+  // review 262 F3; the rows are D-3806's). Closed: a comma; a semicolon; an `or`
+  // or `and` before a determiner (a, an, any, the, your, one, another, other,
+  // some, every, each, its); an `or` or `and` before a bare plural ("or
+  // background jobs you started"); and any coordination after a background
+  // member's kinds, which the tail anchor on the `bg` shape refuses (no `or`,
+  // `and` or `background` after the kinds and the `you`, `that` or `which`
+  // word). So a wake joined in any of those ordinary ways must match a member
+  // shape on its own. The list splits on every comma, so kinds inside one
+  // background member are joined by `or` or `and` only, with no determiner: "a
+  // background agent, workflow or teammate" leaves a bare "a background agent"
+  // that matches no member shape, and reds on purpose. Not closed, known
+  // evasions, and the stated line (the coordinator rules no further chasing): a
+  // modifier clause after "asks" inside the mail member; a coordination before
+  // "asks" ("a mail or reminder you set that asks for an answer"); a `. ` inside
+  // a member, or a new sentence after the list, because wakeMembers and the S3
+  // row both stop at the first `. `.
   const wakeMembers = (line: string): string[] => {
     const colon = line.indexOf(': ');
     const list = line.slice(colon + 2, line.indexOf('. ', colon));
-    return list.split(/;\s+|,\s+(?:(?:or|and)\s+)?|\s+(?:or|and)\s+(?=(?:an?|any|the|your|one)\s)/);
+    return list.split(
+      /;\s+|,\s+(?:(?:or|and)\s+)?|\s+(?:or|and)\s+(?=(?:an?|any|the|your|one|another|other|some|every|each|its)\s)|\s+(?:or|and)\s+(?=(?:background\s+)?[a-z]+s\s+(?:you|that|which)\b)/);
   };
   /** The word the clause uses for each kind `stall.ts` says resumes the session on its own. */
   const RESUMING_WORD: Record<string, string> = { subagent: 'agent', workflow: 'workflow' };
@@ -744,7 +753,7 @@ describe('the stop clause names only wakes that wake (stall watch spec §6.2)', 
     for (const m of members) {
       const mail = /^an? mail\b.*\basks?\b/i.test(m);
       const ask = /^an? structured ask$/i.test(m);
-      const bg = /^an? background ((?:[a-z]+(?: or | and ))*[a-z]+) (?:you|that|which)\b/i.exec(m);
+      const bg = /^an? background ((?:[a-z]+(?: or | and ))*[a-z]+) (?:you|that|which)\b(?:(?!\b(?:or|and|background)\b).)*$/i.exec(m);
       expect([mail, ask, bg !== null].filter(Boolean).length,
         `the wake list member "${m}" is not a mail that asks, a structured ask, or a background kind`).toBe(1);
       for (const k of bg ? bg[1]!.split(/ or | and /) : []) {
