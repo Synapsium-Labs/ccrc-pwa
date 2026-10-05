@@ -304,3 +304,122 @@ describe('hook-capture-reduce (worker stall watch §5.1)', () => {
     }
   });
 });
+
+// ── The delegation block (delegation broker wave 1, spec §8.1): tool names from a fixed set,
+// Agent/Task/Workflow top-level key names, isolation as a token, SessionEnd's reason, ordinals
+// in place of ids, and cwd as a root label. Still no value, no id, no path. ──
+describe('the delegation block (delegation broker wave 1)', () => {
+  interface Call { count: number; inputKeys: string[][]; responseKeys: string[][]; isolation: Record<string, number> }
+  interface Dlg {
+    toolNames: Record<string, Record<string, number>>;
+    calls: Record<string, Call>;
+    sessionEndReasons: string[];
+    ids: { sessions: number; agents: number; toolUses: number };
+    sequence: Array<{ event: string; sid: string | null; agent: string | null; toolUse: string | null;
+      tool: string | null; cwd: string; transcriptNamesAgent: boolean | null }>;
+  }
+  const dlgOf = (args: string[] = []): Dlg => {
+    const r = reduceRaw([dir, ...args]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toBe('');
+    // `sentinel_secret_key` is a KEY name, which this block prints for Agent/Task/Workflow calls by
+    // design; every VALUE sentinel must still be absent.
+    for (const s of SENTINELS.filter((x) => x !== 'sentinel_secret_key')) expect(r.stdout, s).not.toContain(s);
+    return (JSON.parse(r.stdout) as { delegation: Dlg }).delegation;
+  };
+
+  it('names only Agent, Task, Workflow and Bash; every other tool name counts as (other)', () => {
+    cap('PreToolUse', 1, 'sid-sentinel-0001', leaky('PreToolUse', { tool_name: 'Agent' }));
+    cap('PreToolUse', 2, 'sid-sentinel-0001', leaky('PreToolUse', { tool_name: 'Bash' }));
+    cap('PreToolUse', 3, 'sid-sentinel-0001', leaky('PreToolUse', { tool_name: 'SENTINEL-tool-value' }));
+    cap('PostToolUse', 4, 'sid-sentinel-0001', leaky('PostToolUse', { tool_name: 'Workflow' }));
+    expect(dlgOf().toolNames).toEqual({
+      PreToolUse: { Agent: 1, Bash: 1, '(other)': 1 },
+      PostToolUse: { Workflow: 1 },
+    });
+  });
+
+  it('reports top-level input and response key names and isolation as a token, never a value', () => {
+    cap('PreToolUse', 1, 'sid-sentinel-0001', leaky('PreToolUse', {
+      tool_name: 'Agent', tool_use_id: 'agent-sentinel-7',
+      tool_input: { description: 'SENTINEL-tool-value', prompt: 'SENTINEL-prompt-text', isolation: 'worktree' },
+    }));
+    cap('PostToolUse', 2, 'sid-sentinel-0001', leaky('PostToolUse', {
+      tool_name: 'Agent', tool_use_id: 'agent-sentinel-7',
+      tool_input: { description: 'SENTINEL-tool-value', prompt: 'SENTINEL-prompt-text' },
+      tool_response: { worktreePath: '/home/secret-host/x', status: 'SENTINEL-response-value' },
+    }));
+    const d = dlgOf();
+    expect(d.calls['PreToolUse:Agent']).toEqual({
+      count: 1, inputKeys: [['description', 'isolation', 'prompt']], responseKeys: [['sentinel_secret_key']],
+      isolation: { worktree: 1, remote: 0, absent: 0, other: 0 },
+    });
+    expect(d.calls['PostToolUse:Agent']?.responseKeys).toEqual([['status', 'worktreePath']]);
+    expect(d.calls['PostToolUse:Agent']?.isolation).toEqual({ worktree: 0, remote: 0, absent: 1, other: 0 });
+  });
+
+  it('prints no key name of a Bash call\'s input or response', () => {
+    cap('PreToolUse', 1, 'sid-sentinel-0001', leaky('PreToolUse', { tool_name: 'Bash' }));
+    const r = reduceRaw([dir]);
+    expect(r.status, r.stderr).toBe(0);
+    expect((JSON.parse(r.stdout) as { delegation: { calls: object } }).delegation.calls).toEqual({});
+    expect(r.stdout).not.toContain('sentinel_secret_key');
+  });
+
+  it('counts an isolation value outside worktree and remote as other, without printing it', () => {
+    cap('PreToolUse', 1, 'sid-sentinel-0001', leaky('PreToolUse', {
+      tool_name: 'Task', tool_input: { isolation: 'SENTINEL-tool-value' },
+    }));
+    expect(dlgOf().calls['PreToolUse:Task']?.isolation).toEqual({ worktree: 0, remote: 0, absent: 0, other: 1 });
+  });
+
+  it('replaces every id with an ordinal, first seen first, so equality shows and the id does not', () => {
+    cap('SubagentStart', 1, 'sid-sentinel-0001', leaky('SubagentStart', { agent_id: 'agent-sentinel-7' }));
+    cap('PreToolUse', 2, 'sid-sentinel-0001', leaky('PreToolUse', { tool_name: 'Bash', tool_use_id: 'b989ocn62', agent_id: 'agent-sentinel-7' }));
+    cap('SubagentStop', 3, 'sid-sentinel-0001', leaky('SubagentStop', { agent_id: 'agent-sentinel-7' }));
+    cap('Stop', 4, 'sid-sentinel-0001', leaky('Stop', { session_id: 'other-session-xyz' }));
+    const d = dlgOf();
+    expect(d.sequence.map((e) => [e.event, e.sid, e.agent, e.toolUse])).toEqual([
+      ['SubagentStart', 's1', 'a1', null],
+      ['PreToolUse', 's1', 'a1', 't1'],
+      ['SubagentStop', 's1', 'a1', null],
+      ['Stop', 's2', null, null],
+    ]);
+    expect(d.ids).toEqual({ sessions: 2, agents: 1, toolUses: 1 });
+  });
+
+  it('classifies cwd against --root labels (equal, below, other, absent) and never prints a path', () => {
+    cap('PreToolUse', 1, null, leaky('PreToolUse', { cwd: '/home/secret-host/x' }));
+    cap('PreToolUse', 2, null, leaky('PreToolUse', { cwd: '/home/secret-host/x/.claude/worktrees/agent-q' }));
+    cap('PreToolUse', 3, null, leaky('PreToolUse', { cwd: '/elsewhere/SENTINEL-cwd' }));
+    cap('PreToolUse', 4, null, { hook_event_name: 'PreToolUse' });
+    const d = dlgOf(['--root', 'repo=/home/secret-host/x', '--root', 'worktrees=/home/secret-host/x/.claude/worktrees']);
+    expect(d.sequence.map((e) => e.cwd)).toEqual(['repo', 'worktrees/*', 'other', '(absent)']);
+    expect(dlgOf().sequence.map((e) => e.cwd)).toEqual(['unclassified', 'unclassified', 'unclassified', '(absent)']);
+  });
+
+  it('marks a SubagentStop transcript path that names its own agent, without printing either', () => {
+    cap('SubagentStop', 1, null, leaky('SubagentStop', { agent_id: 'agent-sentinel-7', agent_transcript_path: '/home/secret-host/x/subagents/agent-agent-sentinel-7.jsonl' }));
+    cap('SubagentStop', 2, null, leaky('SubagentStop', { agent_id: 'agent-sentinel-7', agent_transcript_path: '/home/secret-host/x/subagents/agent-other.jsonl' }));
+    cap('SubagentStop', 3, null, leaky('SubagentStop', {}));
+    expect(dlgOf().sequence.map((e) => e.transcriptNamesAgent)).toEqual([true, false, null]);
+  });
+
+  it('reports SessionEnd reason through the enum test only, and only for SessionEnd', () => {
+    cap('SessionEnd', 1, null, leaky('SessionEnd', { reason: 'prompt_input_exit' }));
+    cap('SessionEnd', 2, null, leaky('SessionEnd', { reason: 'SENTINEL-last-message' }));
+    cap('SessionEnd', 3, null, leaky('SessionEnd', {}));
+    cap('Stop', 4, null, leaky('Stop', { reason: 'clear' }));
+    expect(dlgOf().sessionEndReasons).toEqual(['(absent)', '(unprintable)', 'prompt_input_exit']);
+  });
+
+  it('refuses a malformed --root with exit 2, one stderr line and no stdout', () => {
+    cap('Stop', 1, null, { hook_event_name: 'Stop' });
+    for (const bad of [['--root'], ['--root', 'repo'], ['--root', 'Repo=/x'], ['--root', 'repo=relative'], ['--bogus']]) {
+      const r = reduceRaw([dir, ...bad]);
+      expect(r.status, bad.join(' ')).toBe(2);
+      expect(r.stdout).toBe('');
+      expect(r.stderr.trim().split('\n')).toHaveLength(1);
+    }
+  });
+});

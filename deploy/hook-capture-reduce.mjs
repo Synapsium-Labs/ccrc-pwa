@@ -49,7 +49,23 @@
 //     SubagentStop window, or not), which per-event counts alone cannot show.
 // No id is emitted as a VALUE: not a session id, not an agent id, not a task id.
 //
-// Usage: node deploy/hook-capture-reduce.mjs <capture-dir>
+// THE DELEGATION BLOCK (delegation broker wave 1, spec §8.1) adds what the real-lane
+// cross-check needs and the document above cannot show — still no value, no id, no path:
+//   - tool names from a FIXED set (`Agent`, `Task`, `Workflow`, `Bash`); any other name
+//     counts as `(other)`, so a plugin's tool name is never printed;
+//   - for an Agent/Task/Workflow call, the TOP-LEVEL key names of `tool_input` and
+//     `tool_response` (the KEY test and the same width and digit collapse as above) — the one
+//     place the never-descend rule above bends, and only for key NAMES; a Bash call's are never
+//     printed — and `tool_input.isolation` counted as `worktree`, `remote`, `absent` or `other`;
+//   - SessionEnd's `reason` through the enum test (`[a-z_]`, at most 40);
+//   - ordinals in place of ids: the n-th distinct session_id is `s<n>`, agent_id `a<n>`,
+//     tool_use_id `t<n>`, first seen first — equality is visible, the id is not;
+//   - `cwd` classified against `--root <label>=<abs-path>` arguments: the label when equal,
+//     `<label>/*` when below the longest matching root, `other`, `(absent)`, or
+//     `unclassified` when no root was given;
+//   - whether SubagentStop's `agent_transcript_path` is named `agent-<its agent_id>.jsonl`.
+//
+// Usage: node deploy/hook-capture-reduce.mjs <capture-dir> [--root <label>=<abs-path>]...
 // Exit 0 with the document on stdout; exit 2 with one stderr line when the
 // argument is missing or is not a directory.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -67,6 +83,11 @@ const OPAQUE = new Set(['tool_input', 'tool_response']);
 const UNPRINTABLE = '(unprintable)';
 const MAP = '(map)';
 const ABSENT = '(absent)';
+const MEASURED_TOOLS = new Set(['Agent', 'Task', 'Workflow', 'Bash']);
+const DELEGATION_TOOLS = new Set(['Agent', 'Task', 'Workflow']);
+const ISOLATION = new Set(['worktree', 'remote']);
+const ENUM = /^[a-z_]{1,40}$/;
+const LABEL = /^[a-z][a-z0-9-]{0,20}$/;
 
 const tok = (v) => (typeof v === 'string' && TOKEN.test(v) ? v : UNPRINTABLE);
 const errValue = (v) => (typeof v === 'string' && ERROR_VALUE.test(v) ? v : UNPRINTABLE);
@@ -130,7 +151,48 @@ function newAcc() {
   };
 }
 
-const dir = process.argv[2];
+const ords = { s: new Map(), a: new Map(), t: new Map() };
+/** The ordinal standing in for an id: `s1`, `a2`, `t3` — first seen first; null when absent or empty. */
+const ord = (kind, v) => {
+  if (typeof v !== 'string' || v.length === 0) return null;
+  const m = ords[kind];
+  if (!m.has(v)) m.set(v, `${kind}${m.size + 1}`);
+  return m.get(v);
+};
+/** A cwd as a root label, never as a path. */
+const cwdClass = (v) => {
+  if (v === undefined || v === null) return ABSENT;
+  if (typeof v !== 'string') return UNPRINTABLE;
+  if (roots.length === 0) return 'unclassified';
+  const p = v.replace(/\/+$/, '') || '/';
+  let best = null;
+  for (const r of roots) {
+    if (p === r.path) return r.label;
+    if (p.startsWith(`${r.path}/`) && (best === null || r.path.length > best.path.length)) best = r;
+  }
+  return best === null ? 'other' : `${best.label}/*`;
+};
+/** Top-level key names of a value, under the same KEY test and collapse as the walk. */
+const topKeys = (v) => {
+  if (!isObject(v)) return [`(${typeOf(v)})`];
+  const names = Object.keys(v);
+  return asMap(names, false) ? [MAP] : names.map(seg).sort();
+};
+const dlg = { toolNames: {}, calls: new Map(), sessionEndReasons: new Set(), sequence: [] };
+
+const argv = process.argv.slice(2);
+const dir = argv[0];
+const roots = [];
+let badArgs = false;
+for (let i = 1; i < argv.length; i += 2) {
+  const m = argv[i] === '--root' && typeof argv[i + 1] === 'string' ? /^([^=]+)=(\/.*)$/.exec(argv[i + 1]) : null;
+  if (m === null || !LABEL.test(m[1])) { badArgs = true; break; }
+  roots.push({ label: m[1], path: m[2].replace(/\/+$/, '') || '/' });
+}
+if (badArgs) {
+  process.stderr.write('usage: node deploy/hook-capture-reduce.mjs <capture-dir> [--root <label>=<abs-path>]... (bad argument)\n');
+  process.exit(2);
+}
 let isDir = false;
 try { isDir = typeof dir === 'string' && dir.length > 0 && statSync(dir).isDirectory(); } catch { isDir = false; }
 if (!isDir) {
@@ -170,6 +232,36 @@ for (const f of files) {
   if (p === null) { unparsed += 1; sequence.push({ event: f.event, agentId: 'unparsed' }); continue; }
 
   walkObject(p, [], a.keys);
+
+  const tn = typeof p.tool_name === 'string' ? (MEASURED_TOOLS.has(p.tool_name) ? p.tool_name : '(other)') : null;
+  if (tn !== null) {
+    const h = (dlg.toolNames[f.event] ??= {});
+    h[tn] = (h[tn] ?? 0) + 1;
+  }
+  if (tn !== null && DELEGATION_TOOLS.has(tn)) {
+    const k = `${f.event}:${tn}`;
+    let c = dlg.calls.get(k);
+    if (c === undefined) {
+      c = { count: 0, inputKeys: new Set(), responseKeys: new Set(), isolation: { worktree: 0, remote: 0, absent: 0, other: 0 } };
+      dlg.calls.set(k, c);
+    }
+    c.count += 1;
+    c.inputKeys.add(JSON.stringify(p.tool_input === undefined ? [ABSENT] : topKeys(p.tool_input)));
+    if (p.tool_response !== undefined) c.responseKeys.add(JSON.stringify(topKeys(p.tool_response)));
+    const iso = isObject(p.tool_input) ? p.tool_input.isolation : undefined;
+    c.isolation[iso === undefined ? 'absent' : ISOLATION.has(iso) ? iso : 'other'] += 1;
+  }
+  if (f.event === 'SessionEnd') {
+    dlg.sessionEndReasons.add(p.reason === undefined ? ABSENT
+      : typeof p.reason === 'string' && ENUM.test(p.reason) ? p.reason : UNPRINTABLE);
+  }
+  const tp = p.agent_transcript_path;
+  dlg.sequence.push({
+    event: f.event, sid: ord('s', p.session_id), agent: ord('a', p.agent_id), toolUse: ord('t', p.tool_use_id),
+    tool: tn, cwd: cwdClass(p.cwd),
+    transcriptNamesAgent: typeof tp === 'string' && typeof p.agent_id === 'string' && p.agent_id.length > 0
+      ? path.basename(tp) === `agent-${p.agent_id}.jsonl` : null,
+  });
 
   const aid = p.agent_id;
   const cls = aid === undefined || aid === null ? 'absent' : aid === '' ? 'empty' : 'nonEmpty';
@@ -217,4 +309,19 @@ for (const name of sorted(events.keys())) {
   if (name === 'StopFailure') e.error = { fields: sorted(a.errFields), values: sorted(a.errValues) };
   out.events[name] = e;
 }
+out.delegation = {
+  toolNames: dlg.toolNames,
+  calls: Object.fromEntries(sorted(dlg.calls.keys()).map((k) => {
+    const c = dlg.calls.get(k);
+    return [k, {
+      count: c.count,
+      inputKeys: sorted(c.inputKeys).map((s) => JSON.parse(s)),
+      responseKeys: sorted(c.responseKeys).map((s) => JSON.parse(s)),
+      isolation: c.isolation,
+    }];
+  })),
+  sessionEndReasons: sorted(dlg.sessionEndReasons),
+  ids: { sessions: ords.s.size, agents: ords.a.size, toolUses: ords.t.size },
+  sequence: dlg.sequence,
+};
 process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
