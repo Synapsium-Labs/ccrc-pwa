@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2796181dc35b00f51a27bc30797d63d11fad7abdb06908edac26adfd56a6a44f
+# ccrc:generated 1 sha256=ac758e3c25f1c099e9797c149b0fc3835a5b75e03a3087a573a6ef64423c1ec2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29513,6 +29513,183 @@ def resolve(repo, requested, dl):
     raise fail('bad-ref')
 
 # ===== docs: listing =====
+# The committed listing (spec 2026-10-01 section 2 (f) Committed steps 2-3,
+# section 2 (h) 7) and the listing wire guard (section 2 (b) final guards,
+# section 6.1 "Listing bound"). ONE ls-tree at the served commit C answers
+# every committed fact a tree carries. The four section paths are this file's
+# own constants, so no caller-supplied path ever reaches an argv or a
+# pathspec: docs-show reads parse_ls_tree_long's records too, and finds its
+# one path among them by exact bytes.
+# This section's own imports; a repeat of an earlier section's is a no-op.
+import os
+import re
+
+LS_KIND_BY_MODE = {'100644': 'file', '100755': 'exec', '120000': 'symlink', '160000': 'submodule'}
+LS_UNLISTED_REASONS = ('invalid-utf8', 'unsafe-char', 'too-long', 'too-deep')
+LS_OID_RE = re.compile(rb'[0-9a-f]{40}|[0-9a-f]{64}')
+LS_SECTION_BYTES = tuple((slug, sec.encode('ascii')) for slug, sec in SECTIONS.items())
+LS_ROWS_OF = {'docs-tree': 'entries', 'docs-index': 'projects'}
+
+
+def parse_ls_tree_long(buf):
+    """The records of `ls-tree -r -z --long`, as (mode, type, oid, size, path_bytes).
+
+    Each record is split at its FIRST tab: git writes no tab inside the
+    header, and a path may hold one (or a newline; -z leaves both raw). The
+    header is split on whitespace, because git right-aligns the size in a
+    padded column. size is None for a gitlink, whose column reads '-', and an
+    int for every blob. git prints a tree entry's mode canonicalised (an odd
+    stored mode reads 100644, 100755 or 160000), so any other mode, a '-' on
+    a blob, digits on a gitlink, a type that disagrees with its mode, a tree
+    record (-r without -t never writes one), a record with no tab or an empty
+    path, or output that does not end on a NUL is git-failed {step:'ls-tree'}:
+    git's own output is never guessed at.
+    """
+    if buf == b'':
+        return []
+    if not buf.endswith(b'\0'):
+        raise fail('git-failed', step='ls-tree', detail='ls-tree output does not end on a NUL')
+    recs = []
+    for rec in buf[:-1].split(b'\0'):
+        head, tab, path = rec.partition(b'\t')
+        parts = head.split()
+        if tab != b'\t' or path == b'' or len(parts) != 4:
+            raise fail('git-failed', step='ls-tree', detail='malformed ls-tree record')
+        mode = parts[0].decode('ascii', 'replace')
+        typ = parts[1].decode('ascii', 'replace')
+        want = 'commit' if mode == '160000' else 'blob'
+        if mode not in LS_KIND_BY_MODE or typ != want or not LS_OID_RE.fullmatch(parts[2]):
+            raise fail('git-failed', step='ls-tree', detail='malformed ls-tree record')
+        if mode == '160000':
+            if parts[3] != b'-':
+                raise fail('git-failed', step='ls-tree', detail='a gitlink with a size')
+            size = None
+        else:
+            if not parts[3].isdigit():
+                raise fail('git-failed', step='ls-tree', detail='a blob without a size')
+            size = int(parts[3])
+        recs.append((mode, typ, parts[2].decode('ascii'), size, path))
+    return recs
+
+
+def listing_admit(rel_bytes):
+    """(rel, None) when docs-show could be asked for this path, else (None, reason).
+
+    valid_rel_path, the one grammar docs-show validates --path with, is the
+    gate, so every listed name is a name show accepts. The reason only labels
+    unlisted.byReason, decided in this order: invalid-utf8 (not strict UTF-8),
+    too-long (the path over PATH_MAX_BYTES or one component over
+    PATH_MAX_COMPONENT_BYTES), too-deep (more than PATH_MAX_DEPTH components),
+    then unsafe-char for every other refusal (a control or excluded code
+    point, or a component git should never have stored, such as '..'). The
+    drafts section calls listing_admit itself, so a draft's reason is this one.
+    """
+    try:
+        rel = rel_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        return None, 'invalid-utf8'
+    ok = valid_rel_path(rel)
+    if ok is not None:
+        return ok, None
+    parts = rel_bytes.split(b'/')
+    if len(rel_bytes) > PATH_MAX_BYTES or max(len(p) for p in parts) > PATH_MAX_COMPONENT_BYTES:
+        return None, 'too-long'
+    if len(parts) > PATH_MAX_DEPTH:
+        return None, 'too-deep'
+    return None, 'unsafe-char'
+
+
+def list_committed(repo, commit, dl, stdout_cap=GIT_STDOUT_CAP):
+    """The committed half of a tree answer, from ONE ls-tree at `commit`.
+
+    Returns (sections, entries, unlisted, blobs):
+    - sections: all four, in SECTIONS order, each {slug, path, state, count}.
+      state is 'present' (records under it), 'absent' (nothing there at C:
+      section 2 (h) 7, an ok answer, never an error) or 'not-a-directory'
+      (the section path is itself a record: a symlink, a gitlink or a file).
+      A section under an ancestor that is not a directory (a symlinked
+      docs/superpowers) is absent: git's tree holds nothing at that path, and
+      docs-show answers absent-path for it alike. A well-formed tree cannot
+      hold both shapes at one path; if a hand-built one does, not-a-directory
+      wins and nothing under it is listed or counted, so the tree never lists
+      what docs-show would refuse. count is the number of LISTED entries.
+    - entries: DocsEntry dicts {section, path, committed:{kind, blob, size},
+      draft: None}, in SECTIONS order and git's order within a section. kind
+      is file (100644), exec (100755), symlink (120000) or submodule
+      (160000); a submodule's blob is its commit and its size is None.
+    - unlisted: {count, byReason}, byReason holding only nonzero reasons.
+    - blobs: {(section, rel): (kind, blob, size)} for every listed entry.
+    The call is soft, so each outcome is named here: an expiry is git-timeout
+    {step:'ls-tree'}; output past stdout_cap is too-many-entries {count,
+    bytes}, with count the records read before the cap and bytes the ls-tree
+    bytes read (both lower bounds of what the listing would have framed to);
+    any other non-zero exit is git-failed {step:'ls-tree', rc, stderrHead}.
+    """
+    argv = ['ls-tree', '-r', '-z', '--long', '--full-tree', '--end-of-options', commit, '--']
+    argv.extend(SECTIONS.values())
+    s = docs_git(repo.path, argv, call_s=CALL_S['list'], dl=dl, ceiling=ceiling_of(repo.path),
+                 soft=True, stdout_cap=stdout_cap)
+    if s.timed_out:
+        raise fail('git-timeout', step='ls-tree')
+    if s.overflow:
+        raise fail('too-many-entries', count=s.out.count(b'\0'), bytes=len(s.out))
+    if s.rc != 0:
+        raise fail('git-failed', step='ls-tree', rc=s.rc, stderrHead=stderr_head(s.err))
+    under = dict((slug, []) for slug in SECTIONS)
+    is_record = set()
+    for mode, _typ, oid, size, path in parse_ls_tree_long(s.out):
+        for slug, sb in LS_SECTION_BYTES:
+            if path == sb:
+                is_record.add(slug)
+                break
+            if path.startswith(sb + b'/'):
+                under[slug].append((path[len(sb) + 1:], LS_KIND_BY_MODE[mode], oid, size))
+                break
+    sections, entries, blobs, by_reason = [], [], {}, {}
+    for slug, sec in SECTIONS.items():
+        if slug in is_record:
+            state, rows = 'not-a-directory', []
+        elif under[slug]:
+            state, rows = 'present', under[slug]
+        else:
+            state, rows = 'absent', []
+        count = 0
+        for rel_bytes, kind, oid, size in rows:
+            rel, reason = listing_admit(rel_bytes)
+            if reason is not None:
+                by_reason[reason] = by_reason.get(reason, 0) + 1
+                continue
+            count += 1
+            entries.append({'section': slug, 'path': rel,
+                            'committed': {'kind': kind, 'blob': oid, 'size': size}, 'draft': None})
+            blobs[(slug, rel)] = (kind, oid, size)
+        sections.append({'slug': slug, 'path': sec, 'state': state, 'count': count})
+    unlisted = {'count': sum(by_reason.values()),
+                'byReason': dict((r, by_reason[r]) for r in LS_UNLISTED_REASONS if r in by_reason)}
+    return sections, entries, unlisted, blobs
+
+
+def guard_listing(obj, line):
+    """The tree and index final guard (section 2 (b), section 6.1): `line`, or
+    the too-many-entries line in its place.
+
+    obj is the complete ok answer and line is line_of(obj), both as run()
+    built them. count is the answer's rows (docs-tree: entries; docs-index:
+    projects) against DOCS_MAX_ENTRIES. bytes is framed_len(line), the line
+    as the agent will JSON-encode it inside its frame, against
+    DOCS_MAX_LISTING_WIRE_BYTES. The raw length is never the measure: a quote
+    costs 2 bytes in the line and 4 once framed (M6.8). Either bound over
+    gives too-many-entries {count, bytes}, carrying the answer's own
+    elapsedMs. A failure answer is not a listing and passes through untouched.
+    """
+    if obj.get('ok') is not True:
+        return line
+    count = len(obj[LS_ROWS_OF[obj['verb']]])
+    size = framed_len(line)
+    if count <= DOCS_MAX_ENTRIES and size <= DOCS_MAX_LISTING_WIRE_BYTES:
+        return line
+    return line_of({'v': 1, 'verb': obj['verb'], 'ok': False, 'elapsedMs': obj['elapsedMs'],
+                    'failure': 'too-many-entries', 'count': count, 'bytes': size})
 
 # ===== docs: stamps =====
 
