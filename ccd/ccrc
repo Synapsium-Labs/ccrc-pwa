@@ -8627,6 +8627,7 @@ _acct_remove() {
   # the `--stands` key covers node's own refusals, which `_acct_run_op` re-emits
   # verbatim and bash may not reword.
   stands="Registry fields already rehomed to $ACCT_UPSTREAM_ID: ${rehomed_fields[*]:-none}. ccrc-managed settings, hooks, and skills were swept from $ACCT_REMOVE_CFG. The roster entry and all account artifacts still stand; the config directory and transcript history remain intentionally."
+  _acct_remove_usage "$id" "$stands"; [ -z "$ACCT_USAGE_REMOVED" ] || { removed+=("$ACCT_USAGE_REMOVED"); stands="$stands ccrc's usage timer for $id was disabled; 'ccrc install' enables it again for a lane that is still codex."; }; [ -z "$ACCT_USAGE_STEP" ] || operator_steps+=("$ACCT_USAGE_STEP"); [ -z "$ACCT_USAGE_WAIT_STEP" ] || operator_steps+=("$ACCT_USAGE_WAIT_STEP")
   _acct_write_op "$stands" drop --file "$(_acct_roster_path)" --id "$id" --stands "$stands"
   stands="The roster no longer contains $id, but \$HOME/.ccrc/accounts.sh still projects the old roster and all account artifacts still stand. Registry fields and home cleanup are not rolled back; the config directory and transcript history remain intentionally."
   _acct_projection "$stands"
@@ -8675,7 +8676,6 @@ _acct_remove() {
     esac
   fi
 
-  _acct_remove_usage "$id"; [ -z "$ACCT_USAGE_REMOVED" ] || removed+=("$ACCT_USAGE_REMOVED"); [ -z "$ACCT_USAGE_STEP" ] || operator_steps+=("$ACCT_USAGE_STEP")
   for f in "$CCRC_LIMITS_DIR/$id.json" "$_SVC_REG/$id-disabled" "$_SVC_REG/$id.hookstate.json" "$_SVC_REG/$id.turn.json"; do
     { [ -e "$f" ] || [ -L "$f" ]; } || continue
     { [ ! -d "$f" ] || [ -L "$f" ]; } \
@@ -22481,7 +22481,7 @@ _uninst_codex_usage() {
   [ $((n + failed)) -eq 0 ] || echo "uninstall: units: $n codex usage timer(s) stopped and disabled"
 }
 
-# Account removal's usage half (Plan 3a Task 7): ccrc's own
+# Account removal's usage half (Plan 3a Task 7; Plan 3b Task A3): ccrc's own
 # `ccrc-codex-usage@<id>.timer`, disabled if this box has it enabled — WHATEVER
 # the row's kind (D-3727). A lane
 # flipped back to external can still carry the instance its codex days enabled,
@@ -22490,20 +22490,97 @@ _uninst_codex_usage() {
 # own link, never the roster. Another repository's `ccgpt-usage@<id>.timer` is
 # never touched or named in a systemctl call. Sets ACCT_USAGE_REMOVED (the link,
 # once the disable MEASURABLY took it) or ACCT_USAGE_STEP (the operator step
-# when it did not). It never refuses: by the time it runs the roster no longer
-# names the id, and a oneshot poller holds no state the next install cannot
-# converge. Every byte the manager says goes to stderr: `_acct_remove`'s
+# when it did not). Every byte the manager says goes to stderr: `_acct_remove`'s
 # stdout is one JSON object.
-_acct_remove_usage() {   # <id>
-  ACCT_USAGE_REMOVED=''; ACCT_USAGE_STEP=''
-  local u; u="$(_codex_usage_timer "$1")"
-  _codex_usage_enabled "$u" || return 0
-  _codex_bus_defaults
-  if systemctl --user disable --now "$u" >&2 && ! _codex_usage_enabled "$u"; then
-    ACCT_USAGE_REMOVED="$(_codex_usage_wants)/$u"
-    return 0
+#
+# THEN IT WAITS, AND IT NEVER STOPS (D-4049).
+# Disabling the timer does not end the `ccrc-codex-usage@<id>.service` it had
+# already fired: a oneshot runs to the end of its poll, and that poll may be
+# part-way through the Authenticator's write of the lane's `auth.json`. A stop
+# could cut that write short, in the authDir removal deliberately keeps, so
+# nothing here asks for one. A limits row removed under a running poll is
+# written again by it. So the service is read through `_svc_is_active` once a
+# second, for at most `_acct_usage_wait_secs`, with one waiting line on stderr:
+#   * `inactive`, `failed`: done;
+#   * `activating` (a oneshot reads it for its WHOLE run — never `active`),
+#     `active`, `deactivating`, `reloading`, `refreshing`: in flight;
+#   * anything else, the EMPTY answer of a manager that did not reply included:
+#     UNMEASURED, never done. The removal goes on, and ACCT_USAGE_WAIT_STEP says
+#     so. Refusing would make every removal impossible on a box whose user bus
+#     is down.
+# At the bound it REFUSES `usage-refresh-in-flight`, ending its sentence with the
+# caller's what-still-stands clause ($2) and the retry. The timer is disabled
+# FIRST because a timer still enabled could fire a new poll between an
+# `inactive` read and the row's `rm`. That clause says "all account artifacts
+# still stand", which is false of the timer link this run just took, so when
+# ACCT_USAGE_REMOVED is set the refusal adds the one sentence that says so (the
+# caller's own drop clause gets the same correction after this returns).
+#
+# THE CALLER RUNS IT BEFORE THE ROSTER DROP (D-4050).
+# Plan 3a ran it after the drop, where it could not refuse. A refusal there could
+# not be retried, because `_acct_lane` answers `unknown-id` for an id the roster no
+# longer names. Before the drop, every earlier step repeats as a no-op on a second
+# run: rehoming finds no field naming the id, the home sweep finds nothing, a
+# stopped tier stays stopped, and this function skips a disabled timer. So the
+# retry the refusal asks for is safe. It waits under the placement lock
+# `_acct_marker_lock` already holds, for at most the bound. One poll is a token
+# refresh plus one request the publisher bounds at 30 s (the unit's own comment).
+#
+# ASKED ONLY WHERE A POLL CAN RUN: on Linux, with ccrc's template
+# `ccrc-codex-usage@.service` placed in the unit directory, whether or not the
+# timer link is still there (a retry finds it gone). A box without the template
+# can hold no instance, and macOS places no usage unit (decision 17), so neither
+# asks the manager anything.
+#
+# The bound: `CCRC_ACCT_USAGE_WAIT_S`, default 300, which is the unit's own
+# TimeoutStartSec (D-3707). After 300 s systemd ends the poll itself. It falls
+# back to 300 on exactly the values `_codex_ready_secs` falls back on, by the
+# same parse, and is read in base 10. Prints the number with no newline;
+# always rc 0.
+_acct_usage_wait_secs() {
+  local s="${CCRC_ACCT_USAGE_WAIT_S:-300}"
+  case "$s" in ''|*[!0-9]*|?????*) s=300 ;; esac
+  s=$(( 10#$s ))
+  [ "$s" -ge 1 ] || s=300
+  printf '%s' "$s"
+}
+_acct_remove_usage() {   # <id> <what-still-stands>
+  ACCT_USAGE_REMOVED=''; ACCT_USAGE_STEP=''; ACCT_USAGE_WAIT_STEP=''
+  local u s tpl state limit t0 said=0 timer still="${2:-}"
+  u="$(_codex_usage_timer "$1")"; s="${u%.timer}.service"; tpl="$BOX_UNIT_DIR/${s%%@*}@.service"
+  if _codex_usage_enabled "$u"; then
+    _codex_bus_defaults
+    if systemctl --user disable --now "$u" >&2 && ! _codex_usage_enabled "$u"; then
+      ACCT_USAGE_REMOVED="$(_codex_usage_wants)/$u"
+    else
+      ACCT_USAGE_STEP="ccrc's usage timer $u is still enabled for the removed account $1, so it may go on rewriting \$HOME/.cc-limits/$1.json. Run: systemctl --user disable --now $u"
+    fi
   fi
-  ACCT_USAGE_STEP="ccrc's usage timer $u is still enabled for the removed account $1, so it may go on rewriting \$HOME/.cc-limits/$1.json. Run: systemctl --user disable --now $u"
+  [ "$CCD_OS" != darwin ] || return 0
+  { [ -e "$tpl" ] || [ -L "$tpl" ]; } || return 0
+  _codex_bus_defaults
+  limit="$(_acct_usage_wait_secs)"; t0=$SECONDS
+  while :; do
+    state="$(_svc_is_active "$s")"
+    case "$state" in
+      inactive|failed) return 0 ;;
+      activating|active|deactivating|reloading|refreshing) : ;;
+      *)
+        ACCT_USAGE_WAIT_STEP="ccrc's usage poll $s may still be running for the removed account $1: the user manager did not say (systemctl --user is-active answered \"$state\"), so this removal did not wait for it, and a poll that was running may write \$HOME/.cc-limits/$1.json again after this removal. Run: systemctl --user is-active $s — once it reads inactive, remove \$HOME/.cc-limits/$1.json by hand if it is there."
+        return 0 ;;
+    esac
+    if [ "$said" -eq 0 ]; then
+      printf '%s\n' "$PROG account remove: ccrc's usage poll $s is running ($state); waiting up to ${limit}s for it to finish before \$HOME/.cc-limits/$1.json is removed. ccrc never stops it: it may be writing the lane's OAuth token file." >&2
+      said=1
+    fi
+    if [ $(( SECONDS - t0 )) -ge "$limit" ]; then
+      timer="ccrc's usage timer $u is not enabled, so no new poll starts."
+      _codex_usage_enabled "$u" && timer="ccrc's usage timer $u is still enabled, so new polls go on starting: run systemctl --user disable --now $u first."
+      [ -z "$ACCT_USAGE_REMOVED" ] || still="$still This run also disabled ccrc's usage timer $u, so that one artifact no longer stands; 'ccrc install' enables it again for a lane that is still codex."
+      _acct_refuse 1 usage-refresh-in-flight "ccrc's usage poll $s for $1 still reads $state after ${limit}s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before \$HOME/.cc-limits/$1.json: ccrc never stops a poll, because it may be writing the lane's OAuth token file, and a row removed under a running poll is written again. $timer $still Retry 'ccrc account remove --id $1' once 'systemctl --user is-active $s' reads inactive: every step this run took is safe to repeat."
+    fi
+    sleep 1
+  done
 }
 
 # Stop, disable, delete — in that order, because a unit file removed under a
