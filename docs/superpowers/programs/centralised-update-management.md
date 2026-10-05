@@ -1785,6 +1785,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         final count stays within a measured slack. If the box cannot separate the two cases, the check is listed as an
         unpinned bound.
     - **To residue (R17):** the TERM-to-the-group leak and the rejected trap.
+    - **21:10 UTC, the INT handler is kept after all (status mail 3592, answer mail 3593).** The round's own review
+      found the shape that only the handler fixes. Given a caller INT trap that does not exit, a SIGINT to the shell
+      without the handler stays unhandled for 15 s or more, leaves the dir, and leaves hundreds of survivors in the
+      launch loop. With the handler, the shell dies by INT in under 10 ms. No real caller sets an INT trap today. The
+      handler stays as in `63f1cc15`, pinned by that case and by a row that checks the caller's trap is restored after
+      a sweep with no signal. Each pin reds when its mechanism is dropped. Interleaved runs measured TERM to the group
+      at parity, 6 of 24 on the base against 7 of 24 on the head, which supersedes 39% and 31%.
   - **Noise, not this programme's:** `map-build` on `main` went red at `00f8a193` and `4100ae1c`, with five files
     "newly failing under trace". Every test leg was green. At `be93d159` only `boot.test.ts` still failed under trace,
     and at `1eda8630` none did. This belongs to the CI test-selection tooling.
@@ -1944,9 +1951,10 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   unit stop kills the whole cgroup and leaves nothing. This is the same class as `main`'s serial loop. One fix would be
   to run each foreground call as a recorded job that the kill can reach.
   - **Added 20:46 UTC, from the Ctrl-C fix's round 2:**
-    - **A TERM to the whole process group** still leaks one job in about 31% of runs. The launcher dies between a fork
-      and that job's `.pid` write, so the kill never sees the job. On the base the rate was 39%. The sender is a unit
-      stop, which TERMs the whole cgroup anyway, and the leaked verify is read-only and ends by itself in about 8 s.
+    - **A TERM to the whole process group** still leaks one job in some runs, at parity with the base (6 of 24 on the
+      base against 7 of 24 on the head, interleaved). The launcher dies between a fork and that job's `.pid` write, so
+      the kill never sees the job. The sender is a unit stop, which TERMs the whole cgroup anyway, and the leaked verify
+      is read-only and ends by itself in about 8 s.
     - **Do not retry a TERM trap in the launcher.** It was measured and rejected: the jobs briefly inherit its
       handler, and a TERM to the shell alone then leaked 18 of 36 runs.
 ## Next-wave brief
