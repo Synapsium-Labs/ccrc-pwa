@@ -2312,7 +2312,10 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   acknowledgement in the wording this ccd recognises (Claude Code's own wording drifted, or Claude Code itself
   refused the command), logs `operator-choice <id>: unmeasured (…)`, once per keep. A field written after the keystroke (the PWA picker, a coordinator's
   route, this step's last write) is the later choice and wins. `python3 deploy/measure-continuity.py --stage 7`
-  counts the writes, the restarts that logged a `/model` ccd could not keep, and the unmeasured stops. The row
+  counts the writes, the restarts that logged a `/model` ccd could not keep, and, in
+  `stops_that_could_not_read_the_transcript`, the KEEPS that could not measure: one per `unmeasured (…)` line, so a keep at a
+  spawn counts and so does the acknowledgement-drift line (a successful read of a command with no recognised acknowledgement).
+  A refused command repeats at every restart until a later one is acknowledged. The row
   counts keep-time STOPS that a spawn may follow, not distinct choices or restarts: a `/model` the record cannot hold
   is logged again at every later keep until a newer command replaces it, since it reverts again at each, and a
   session stopped for good, or archived and then removed, is counted although no restart happened (an over-count by
@@ -2337,7 +2340,10 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   - a session whose source account is not on the roster: `cmd_swap` dies at its "no config-dir mapping" check
     before the keep, and at a stop or revival `_transcript_path` fails on an empty config dir, so nothing is kept
     (deferred);
-  - a route field whose mtime cannot be read: the keep does not overwrite what it cannot date.
+  - a route field whose mtime cannot be read: the keep does not overwrite what it cannot date;
+  - an interrupted stop: if a stop dies between its keep (which writes the marker) and its kill, the pane survives marked, and
+    a later stop or revival skips its read, so a choice typed in between is lost (narrow; closing it needs the marker bound
+    to a pane instance).
 
 ### A return visit merges the session's sidecar (session-continuity stage 1)
 

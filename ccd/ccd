@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=36e572f6fa97541c97b349ba0a71246dc45e731af240f25e2d110a634450cc8a
+# ccrc:generated 1 sha256=794838373ad3342931d5463ce48753166f6ae35740adbbcffa3f7a8607d84e56
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19527,7 +19527,7 @@ if any(unack.values()):
 }
 
 _operator_choice_unmark() {   # id — after a stop's pane kill FAILED: the marker means "Claude Code is not running here", so it stays only when the session is proven gone; a live or unmeasurable one is unmarked and its next revival reads. Always 0. (§5.7)
-  [[ "$(_session_verdict "$1" 2>/dev/null)" == gone ]] || rm -f "$REG/$1.choicekept" 2>/dev/null
+  _session_probe "$1" 2>/dev/null; [[ "$PROBE_VERDICT" == gone || "$PROBE_SUBSTRATE" == absent ]] || rm -f "$REG/$1.choicekept" 2>/dev/null   # no tmux server means no pane: the session is dead whatever the verdict says
   return 0
 }
 

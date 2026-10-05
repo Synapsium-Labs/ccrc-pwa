@@ -677,8 +677,10 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
   // ── THE MARKER TRACKS A DEAD SESSION (review 268, F6) ──
 
   describe('choicekept means "Claude Code is not running here and its choice was read"', () => {
-    const DEAD = '_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; }; tmux() { return 1; }; _session_verdict() { echo gone; };';
-    const LIVE_KILL_FAILS = '_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; }; tmux() { return 1; }; _session_verdict() { echo live; };';
+    const DEAD = '_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; }; tmux() { return 1; }; _session_probe() { PROBE_VERDICT=gone; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; }; _session_verdict() { echo gone; };';
+    // the REAL probe over a tmux that answers as one does with no server: the verdict is `unknown`, the substrate `absent` (the stop's own kill fails the same way)
+    const NO_SERVER = '_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; }; tmux() { echo "no server running on /tmp/tmux-1000/default" >&2; return 1; };';
+    const LIVE_KILL_FAILS = '_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; }; tmux() { return 1; }; _session_probe() { PROBE_VERDICT=live; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; }; _session_verdict() { echo live; };';
     const oocFor = (id: string): number => swapLog().split('\n').filter((l) => l.includes(`operator-choice ${id}: /model gpt-5.6-sol is outside the class vocabulary`)).length;
 
     it('a stop and then a ws-archive of the same dead session read once and log once', () => {
@@ -714,6 +716,19 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
       h.sh(`${DEAD} cmd_stop ${ID}`);
       expect(fs.existsSync(regFile(`${ID}.choicekept`))).toBe(true);
+    });
+
+    it('a stop whose kill failed because no tmux server is running keeps the marker: a following ws-archive reads once and logs once', () => {
+      h.makeRepo('demo');
+      h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+      const WS = 'demo-quiet-basin';
+      journal(WS); record({ class: 'fable' }, WS); const t = now() - 600;
+      writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))], WS);
+      h.sh(`${NO_SERVER} cmd_stop ${WS}`);
+      expect(oocFor(WS), 'the stop read').toBe(1);
+      expect(fs.existsSync(regFile(`${WS}.choicekept`)), 'no server means no pane: the session is dead, the marker stays').toBe(true);
+      expect(h.sh(`${NO_SERVER} _ws_status() { echo idle; }; cmd_ws_archive --session ${WS}`)).toMatch(/^archived /);
+      expect(oocFor(WS), 'the archive did not read again').toBe(1);
     });
 
     it('ws-archive: a kill that failed on a live session leaves no marker', () => {

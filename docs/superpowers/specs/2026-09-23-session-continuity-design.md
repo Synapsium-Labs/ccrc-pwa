@@ -594,7 +594,9 @@ outside the vocabulary is logged by name when it is one token, by size otherwise
 all (no floor yet, a transcript that is not a readable regular file, no python, a failed reader), or whose newest
 `/model` or `/effort` has no acknowledgement in the wording this ccd recognises (drifted wording, or a command Claude
 Code itself refused), logs `unmeasured`, once per keep. §9's stage-7 row counts the keep-time stops whose `/model` ccd
-logged as outside the vocabulary or refused, with the unmeasured stops reported beside it; it counts those STOPS, not
+logged as outside the vocabulary or refused, with `stops_that_could_not_read_the_transcript` beside it (it counts KEEPS that
+could not measure, one per `unmeasured` line, keeps at a spawn and the acknowledgement-drift line included, and a refused
+command repeats at every restart until a later one is acknowledged); it counts those STOPS, not
 distinct choices or restarts, because a `/model` ccd cannot keep is logged again at every later keep until a newer
 command replaces it, and a session stopped for good, or archived and then removed, is counted although no restart
 happened (an over-count by design). A session on a non-Anthropic lane is skipped, and a swap that crosses
@@ -609,8 +611,10 @@ command typed within `TYPED_MATCH_WINDOW` after a ccd keystroke that rotated out
 a stop since; an Anthropic-lane command typed before a round trip through a non-Anthropic lane, and never through
 a stop since (nearly empty: the outbound move is itself a swap whose keep runs on the Anthropic side); a session whose
 source account is not on the roster (`cmd_swap` dies at its "no config-dir mapping" check before the keep, and at a
-stop or revival `_transcript_path` fails on an empty config dir; deferred); and a route field whose mtime cannot be
-read, which the keep does not overwrite.
+stop or revival `_transcript_path` fails on an empty config dir; deferred); a route field whose mtime cannot be
+read, which the keep does not overwrite; and an interrupted stop (if a stop dies between its keep, which writes the marker,
+and its kill, the pane survives marked, and a later stop or revival skips its read; narrow, and closing it needs the marker
+bound to a pane instance).
 
 ## 6. Invariants kept
 

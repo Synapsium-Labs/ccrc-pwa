@@ -2341,7 +2341,7 @@ raises in the reader, which logs `unmeasured` and promotes nothing, so the refus
 | 3.37 | `ccd/ccd` | `[[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"; _ws_unsupervise "$id"` → `_operator_choice_keep "$id"; _ws_unsupervise "$id"` | ccd-operator-choice.test.ts | 2 failed \| 53 passed (55): “a stop and then a ws-archive of the same dead session read once and log once”; “every stop in ccd is classified …” |
 | 3.38 | `ccd/ccd` | `_operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7) / sleep 1` → `true   # a kill that failed on a live session leaves no marker (§5.7) / sleep 1` | ccd-operator-choice.test.ts | 1 failed \| 54 passed (55): “every stop in ccd is classified …” |
 | 3.39 | `ccd/ccd` | `_ws_unsupervise "$id"      # clears Restart=always; ws-restore respawns from the record (§5.7) / tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null \|\| _operator_choice_unmark "$id"` → `_ws_unsupervise "$id"      # clears Restart=always; ws-restore respawns from the record (§5.7) / tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null \|\| true` | ccd-operator-choice.test.ts | 2 failed \| 53 passed (55): “ws-archive: a kill that failed on a live session leaves no marker”; “every stop in ccd is classified …” |
-| 3.40 | `ccd/ccd` | `[[ "$(_session_verdict "$1" 2>/dev/null)" == gone ]] \|\| rm -f "$REG/$1.choicekept" 2>/dev/null` → `rm -f "$REG/$1.choicekept" 2>/dev/null` | ccd-operator-choice.test.ts | 3 failed \| 52 passed (55): “a stop and then a ws-archive of the same dead session read once and log once”; “two stops in a row of the same dead session read once and log once”; “control: a kill that failed because the session was already gone keeps the marker” |
+| 3.40 | `ccd/ccd` | `[[ "$PROBE_VERDICT" == gone \|\| "$PROBE_SUBSTRATE" == absent ]] \|\| rm -f "$REG/$1.choicekept" 2>/dev/null` → `rm -f "$REG/$1.choicekept" 2>/dev/null` | ccd-operator-choice.test.ts | 4 failed \| 60 passed (64): “a stop and then a ws-archive of the same dead session read once and log once”; “two stops in a row of the same dead session read once and log once”; “control: a kill that failed because the session was already gone keeps the marker”; “a stop whose kill failed because no tmux server is running keeps the marker: a following ws-archive reads once and logs once” |
 | 3.41 | `ccd/ccd` | `[[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"   # a stop the spawn below follows` → `_operator_choice_keep "$id"   # a stop the spawn below follows` | ccd-operator-choice.test.ts | 1 failed \| 54 passed (55): “every stop in ccd is classified …” |
 | 3.42 | `ccd/ccd` | `_operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7) / echo "stopped $id"` → `true   # a kill that failed on a live session leaves no marker (§5.7) / echo "stopped $id"` | ccd-operator-choice.test.ts | 2 failed \| 53 passed (55): “a kill that failed on a session that is still there leaves no marker”; “every stop in ccd is classified …” |
 | 3.43 | `ccd/ccd` | `` [[ -e "$REG/$id.choicekept" ]] \|\| _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first; a session already stopped and read `` → `` _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first; a session already stopped and read `` | ccd-operator-choice.test.ts | 2 failed \| 53 passed (55): “two stops in a row of the same dead session read once and log once”; “every stop in ccd is classified …” |
@@ -2352,6 +2352,7 @@ raises in the reader, which logs `unmeasured` and promotes nothing, so the refus
 | 3.48 | `ccd/ccd` | `if not any(k == kind and (not given or v == given) and abs(t - at) <= window for t, k, v in rows):` → `if True:` | ccd-operator-choice.test.ts | 1 failed \| 62 passed (63): “ccd's own journalled keystroke whose acknowledgement drifted is not the operator's loss: no line” |
 | 3.49 | `ccd/ccd` | `unack[kind] = False` → (nothing) | ccd-operator-choice.test.ts | 1 failed \| 62 passed (63): “an unrecognised acknowledgement older than a recognised one is not the newest: no line” |
 | 3.50 | `ccd/ccd` | `drift)  _operator_choice_say "$id" "unmeasured (a /model or /effort command with no acknowledgement this ccd recognises)"; continue ;;` → (nothing) | ccd-operator-choice.test.ts | 3 failed \| 60 passed (63): “an acknowledged command wins over a later one Claude Code refused, which changed nothing”; “an acknowledgement in a wording this ccd does not recognise logs unmeasured once, writes nothing, and --stage 7 counts it”; “a /model and an /effort both unrecognised log ONE line for the keep” |
+| 3.51 | `ccd/ccd` | `[[ "$PROBE_VERDICT" == gone \|\| "$PROBE_SUBSTRATE" == absent ]] \|\| rm -f "$REG/$1.choicekept" 2>/dev/null` → `[[ "$PROBE_VERDICT" == gone ]] \|\| rm -f "$REG/$1.choicekept" 2>/dev/null` | ccd-operator-choice.test.ts | 1 failed \| 63 passed (64): “a stop whose kill failed because no tmux server is running keeps the marker: a following ws-archive reads once and logs once” |
 
 ```bash
 git add ccd/ccd server/test/ccd-operator-choice.test.ts server/test/ccd-die-containment.test.ts
@@ -2979,17 +2980,21 @@ of ten (Open question 9) and the coordinator's later issues:
   would be lost), so every spawn reads once; `cmd_ensure`'s own keep is removed (its in-unit branch calls `_spawn_start`), and
   the three stop-site keeps stay. The census test gains a spawn census: every live `tmux new-session` / `_tmux_new_session`
   sits in `_spawn_start` or a named exception (`cmd_account_pane`: a login pane, not a session). Cost: a spawn now pays the
-  keep's transcript read (bounded, rc 0 always) at its first call per restart. Rows 3.28 (rebased: the choke-point line
+  keep's transcript read (bounded, rc 0 always; it costs seconds on a GB-scale transcript, 3.3 s measured on 909 MB) at its first call per restart. Rows 3.28 (rebased: the choke-point line
   removed), 3.29, 3.30, 3.35, 3.36.
 - **D-3969** `operator-choice-marker-tracks-a-dead-session` — review 268 (F6) found the three stop-site keeps unconditional, so a
   stop followed by a swap or a ws-archive of the same dead session read twice (an out-of-vocabulary value logged twice, and
   `--stage 7` double-counting), and a `tmux kill-session … || true` that FAILED on a live session left it marked, so its next
   revival skipped its read. Ruled by the coordinator: each stop-site keep is gated on `choicekept`, and the marker is removed
-  after a failed kill unless the session is proven `gone` (`_operator_choice_unmark`, one `_session_verdict` probe, only on a
-  failed kill; a `live` or `unknown` verdict unmarks, so the worst case is one extra logged read); `_spawn_start` still removes
-  it at every spawn. Cost: a failed kill whose session cannot be proven gone (tmux server unreachable) is read again at its
-  next revival, and `ws-archive`'s line pair stays line-neutral (ccd/ccd's citation census does not move). Rows 3.3, 3.4,
-  3.5 (rebased to the guarded lines), 3.37–3.43.
+  after a failed kill unless the session is proven `gone` or no tmux server runs at all (`_operator_choice_unmark`, one
+  `_session_probe` call, only on a failed kill: it keeps the marker on `PROBE_VERDICT == gone` or `PROBE_SUBSTRATE == absent`,
+  since no server means no pane; a `live` verdict, or an `unknown` one with a server that did not answer, unmarks, so the worst
+  case is one extra logged read); `_spawn_start` still removes it at every spawn. Costs: a failed kill whose session cannot be
+  proven gone (a tmux server that is there but silent) is read again at its next revival; and an INTERRUPTED stop is a known
+  silent cost: if a stop dies between its keep (which writes the marker) and its kill, the pane survives marked, and a later
+  stop or revival skips its read, so a choice typed in between is reverted with no line. The window is narrow, and closing it
+  needs the marker bound to a pane instance. `ws-archive`'s line pair stays line-neutral (ccd/ccd's citation census does not
+  move). Rows 3.3, 3.4, 3.5 (rebased to the guarded lines), 3.37–3.43, 3.51.
 - **D-3968** `operator-choice-one-route-call` — review 268 (F3) found `for kind … in sorted(newest.items())` applied `effort` before
   `model`, one `cmd_route` call each, so a record holding `class=haiku` that took the operator's `/model opus` then `/effort high`
   ended `class=opus` with the effort lost and `/effort high refused by the route record's own checks` logged: the pair check
