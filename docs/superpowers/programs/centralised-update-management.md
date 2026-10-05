@@ -1004,6 +1004,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       new `main` (`git merge-tree`).
       - STATUS: fleet v0.0.78 (update `failed`), server v0.0.76, newest v0.0.82, backups fleet 123M/server 506M,
         disk free fleet 64G/work volume 12G/server 33G.
+    - **2026-10-05 11:27 UTC — v0.0.83 (#252) and v0.0.84 (wave 9, #251) published; the halt still holds.** Neither
+      box moved. The first move after the ack now goes to v0.0.84, carrying waves 9 and 10, and runs v0.0.78's sweep
+      with wave 10's script.
+      - STATUS: fleet v0.0.78 (update `failed`), server v0.0.76, newest v0.0.84, backups fleet 123M/server 506M,
+        disk free fleet 62G/work volume 10.5G/server 33G.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
