@@ -370,6 +370,23 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     - 3925 (`/clear`) is DEFERRED to wave 4, carrying the review's `_sync_uuid` design note as advice.
     - F10 (c)(d)(e), F11 and F12 are text.
   - **Numbers:** 3966–3971 issued (3970–3971 spares).
+- **2026-10-05 15:35 — fix round 1 done** (wave-done 3528, PR #250 at `f6faff4c`).
+  - **The fixes, one commit each:**
+    - F1 `6db10976` (3966): the keep at `_spawn_start`'s choke point;
+    - F6 `2aed328c` (3969): stop keeps gated on `choicekept`, a failed kill unmarks, an absent tmux server proves the
+      session gone;
+    - F3 `c02b96f1` (3968): one route call;
+    - F2(b) `0a7a6579` (3967): acknowledgement drift reads as unmeasured;
+    - the prose `148178f4` and `cb8bbe6f`.
+  - **Evidence:** every row is measured red. The first full run's only red is tmp-sweep, red on main too.
+  - **Main merged** (`00f8a193`; clause 16 trigger 1, the stamp line only). The census is 182/153 and S6-R11 is
+    unchanged. 3970 and 3971 are unused.
+  - **Residuals parked:** R1 (a deleted tmux socket reads as absent and keeps a live pane marked), plus nits R2 and
+    R3.
+  - **Re-measured:** the tip matches the claim, and the run went to `awaiting-review`. Required CI was still running
+    after the push.
+  - **Acceptance review 272** is dispatched to `ccrc-pwa-amber-harbor`. Its brief names the held-out panel (three
+    fresh Opus lenses and three Sonnet refuters per finding) and asks it to classify R1.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
