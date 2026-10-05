@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1190f4296ac2fdd517b9d8f8182aa824d7c6c04944ea875a7d48ab683b228a08
+# ccrc:generated 1 sha256=5b3afd509f93e23bf4e438e209701e2152dc913161ea3d619ca04488e862421c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -9,8 +9,8 @@
 set -uo pipefail
 
 # ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
-# A direct `ws-reclaim`, or a direct `ws-audit --session <id> --reclaim
-# [--defer-expired]`, must be running under Bash >= 4.4 in PRIVILEGED mode with
+# A direct `ws-reclaim` or `ws-expire`, or a direct `ws-audit --session <id>
+# --reclaim [--defer-expired]` or `… --expire`, runs under Bash >= 4.4 PRIVILEGED with
 # no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
 # rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
 # word; no environment marker is read. `$-` alone is not enough — a plain bash
@@ -24,8 +24,8 @@ set -uo pipefail
 # inherited `nocasematch` folds here starts PROTECTED, `-p` drops that option, and
 # this guard and the dispatcher compare exactly again. SOURCE MODE never runs this;
 # the launcher classifies a superset of these shapes; the dispatcher owns every tail.
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim ]] \
-     || { [[ $# -eq 4 || $# -eq 5 ]] && [[ "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --reclaim ]] \
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire ]] \
+     || { [[ $# -eq 4 || $# -eq 5 ]] && [[ "${1-}" == ws-audit && "${2-}" == --session && ( "${4-}" == --reclaim || ( $# -eq 4 && "${4-}" == --expire ) ) ]] \
           && [[ $# -eq 4 || "${5-}" == --defer-expired ]]; }; }; then
   if ! (( BASH_VERSINFO[0] > 4 || ( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4 ) )) || [[ $- != *p* ]]; then
     printf 'ccd: refused (entry-unprivileged): %s reaches ccd only through its installed direct entry, under Bash >= 4.4 in privileged mode (-p); this is Bash %s with flags %s — nothing was run\n' \
@@ -8625,7 +8625,7 @@ EOF
   echo child-argv-v1
   # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
   echo reclaim-v1
-  echo reclaim-pause-v1
+  echo reclaim-pause-v1; echo expire-v1; echo ws-expire   # the verb rides here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1"
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -28932,6 +28932,14 @@ _ws_expire_refuse_return() {   # id -> returns 0 when no `expire:` breadcrumb st
   _ws_expire_spawn_release
 }
 
+# EXPIRE-V1. `cmd_caps` echoes it: this box has `ws-audit --expire`,
+# `ws-expire`, the `expire` journal act, the `expire:` breadcrumb with ws-reap's
+# refusal of it (`expire-in-progress`, the MIRROR block) and ws-restore's, and
+# the spawn gate — one ccd inode, one token. (`ws-reclaim` meets an `expire:`
+# breadcrumb only on a row that carries a child marker, which this verb
+# refuses to touch; its fork answers it `reap-in-progress`, unchanged.) The server composes the destructive verb ONLY behind
+# `capSupported(state, 'expire-v1')`, which refuses on no evidence; wave 3b
+# composes it, this wave ships it inert.
 # ── end archived-workspace expiry ───────────────────────────────────────────── EXPIRE-END ──
 
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
@@ -29324,6 +29332,7 @@ case "${1:-}" in
   ws-audit)   shift; cmd_ws_audit "$@" ;;
   ws-reap)   shift; cmd_ws_reap "$@" ;;
   ws-reclaim) shift; cmd_ws_reclaim "$@" ;;
+  ws-expire) shift; cmd_ws_expire "$@" ;;
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   coord-pause) shift; cmd_coord_pause "$@" ;;
@@ -29335,6 +29344,6 @@ case "${1:-}" in
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-hold|ws-release|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-expire|ws-hold|ws-release|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
 esac
 fi

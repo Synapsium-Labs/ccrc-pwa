@@ -493,6 +493,16 @@ const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean, RegEx
   ['caps', ['caps'], false, null],
   ['a verb merely CONTAINING ws-reclaim later', ['caps', 'ws-reclaim'], false, null],
   ['ws-reclaimx (prefix only)', ['ws-reclaimx'], false, null],
+  // ws-expire (workspace lifecycle wave 3): the archived workspace's server-composed teardown, ws-reclaim's sibling —
+  // the same boundary, for the same reason (spec 2026-09-24 §5.3; reclaim-entry-safety's startup argument, above).
+  ['ws-expire alone', ['ws-expire'], true, null],
+  ['ws-expire with the full tail', ['ws-expire', '--expect', ANY_TOKEN, '--session', 'x'], true, null],
+  ['ws-expire with a malformed tail (the body’s parser owns that)', ['ws-expire', '--defer-expired'], true, null],
+  ['valid audit --expire', ['ws-audit', '--session', 'x', '--expire'], true, null],
+  ['audit, --expire --defer-expired (no such mode)', ['ws-audit', '--session', 'x', '--expire', '--defer-expired'], false, USAGE],
+  ['audit, a later duplicate --expire', ['ws-audit', '--session', 'x', '--expire', '--expire'], false, USAGE],
+  ['a verb merely CONTAINING ws-expire later', ['caps', 'ws-expire'], false, null],
+  ['ws-expirex (prefix only)', ['ws-expirex'], false, null],
 ];
 
 describe('the protected grammar — the launcher and the body classify the same argv the same way', () => {
@@ -539,6 +549,9 @@ const CASE_VARIANTS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['WS-AUDIT --SESSION x --RECLAIM', ['WS-AUDIT', '--SESSION', 'x', '--RECLAIM']],
   ['ws-audit --session x --Reclaim --DEFER-EXPIRED', ['ws-audit', '--session', 'x', '--Reclaim', '--DEFER-EXPIRED']],
   [`ws-audit --sess${DOTTED_I}on x --reclaim (a non-ASCII fold)`, ['ws-audit', `--sess${DOTTED_I}on`, 'x', '--reclaim']],
+  ['WS-EXPIRE alone', ['WS-EXPIRE']],
+  [`ws-exp${DOTTED_I}re (a non-ASCII fold)`, [`ws-exp${DOTTED_I}re`]],
+  ['WS-AUDIT --SESSION x --EXPIRE', ['WS-AUDIT', '--SESSION', 'x', '--EXPIRE']],
 ];
 /** Protected at the launcher although no locale measured here folds them —
  *  the superset's other half, harmless by design. A non-ASCII character stands
@@ -555,6 +568,8 @@ const CASE_ORDINARY: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['WS-AUDIT --SESSION x (a plain audit)', ['WS-AUDIT', '--SESSION', 'x']],
   ['WS-AUDIT --SESSION x --DEFER-EXPIRED', ['WS-AUDIT', '--SESSION', 'x', '--DEFER-EXPIRED']],
   ['CAPS WS-RECLAIM', ['CAPS', 'WS-RECLAIM']],
+  ['WS-EXPIREX (prefix only)', ['WS-EXPIREX']],
+  ['WS-AUDIT --SESSION x --EXPIRE --DEFER-EXPIRED', ['WS-AUDIT', '--SESSION', 'x', '--EXPIRE', '--DEFER-EXPIRED']],
 ];
 const NOCASE = { BASHOPTS: 'nocasematch', LC_ALL: 'C.UTF-8' };
 
