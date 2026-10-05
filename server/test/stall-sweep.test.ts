@@ -2072,8 +2072,8 @@ describe('sweepStalls: mail-stuck reads the mail gate\'s mode from the tick\'s l
 
 // ── gate-held-mail-is-not-stuck (D-3798): a replay re-stamps deliveredAt, so the real store must say it was a replay ─────
 // The coordinator coord-deaf exists for: idle, the mail typed into its pane, never acked. `sweepMail` replays such a row
-// every MAIL_REPLAY_MS (`markDelivered`, then `bumpReplayCount`), so its newest `deliveredAt` is at most 10 min old. The
-// store's `replayCount`, carried by `stallMailFor`, is what lets L1 time a replayed row from its first-delivery estimate (`replayed-deaf-from-first-delivery-estimate` (D-3803)).
+// every MAIL_REPLAY_MS (`markDelivered`, then `bumpReplayCount`), so its newest `deliveredAt` is about 10 min old (a replay
+// interval plus a sweep, longer while gated). The store's `replayCount`, carried by `stallMailFor`, is what lets L1 time a replayed row from its first-delivery estimate (`replayed-deaf-from-first-delivery-estimate` (D-3803)).
 describe('sweepStalls: coord-deaf on a delivery the mail sweep keeps replaying (gate-held-mail-is-not-stuck (D-3798))', () => {
   it('is recorded an hour after the question\'s first delivery, while the newest deliveredAt is no more than ten minutes old (replayed-deaf-from-first-delivery-estimate (D-3803))', async () => {
     const { coord, w, sent } = await rig();
