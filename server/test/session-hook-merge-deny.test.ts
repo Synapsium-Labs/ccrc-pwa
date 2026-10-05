@@ -391,7 +391,9 @@ describe('the worker merge deny', () => {
     // Each at 100 KB, through the whole hook, held: none is a merge, and each
     // must clear the 1500 ms whole-hook bound the sync advisory is held to.
     // `splits` over `;` or `gh;` took 43 to 52 s and 14 s here (jq 1.7); the
-    // fixed-string split and the prefilter cost 90 to 320 ms (review 267 F3).
+    // fixed-string split and the prefilter cost 90 to 320 ms (the first five
+    // shapes), and 343 to 384 ms on the costliest, at load ~15; a review
+    // measured ~600 ms once (review 267 F3).
     // The last shape is the costliest measured: many segments that pass the prefilter.
     it.each([
       ['`;` only', ';'],

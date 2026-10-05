@@ -560,7 +560,8 @@ under "Attention, notifications and answering" below.
 `SKIP` when there is nothing to measure — every WARN and FAIL followed by its `remedy:`, then one
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account state — `wrappers`,
-`skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111), and `jq_regex`, since no session hook runs there.
+`skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111), and
+`jq_regex`, since no session hook runs there.
 
 | checks | what they measure |
 |---|---|

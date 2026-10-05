@@ -224,10 +224,10 @@ describe('session-hook: the landing-order advisory on a sync of main', () => {
   });
   // The same shapes at 36 KB, far over the cap and holding no `gh`: the deny
   // passes them unparsed after one fixed-string scan (the over-cap segment
-  // rule: they hold no `gh`, so its prefilter ends it), so what this clock
-  // times is the landing
-  // advisory's own regex on quote runs. It is linear there (measured above);
-  // a regex that walked from every quote would not be.
+  // rule's prefilter wants both `gh` and `merge`, and these hold no `gh`),
+  // so what this clock times is the landing advisory's own regex on quote
+  // runs. It is linear there (measured above); a regex that walked from
+  // every quote would not be.
   it.each(QUOTE_DENSE)('answers a 36 KB quote-dense command (%s): the deny passes it unparsed, the advisory reads it inside the bound', (_name, unit) => {
     const command = unit.repeat(Math.ceil(36000 / unit.length)) + '\n# merge origin';
     expect(command.length).toBeGreaterThan(36000);
