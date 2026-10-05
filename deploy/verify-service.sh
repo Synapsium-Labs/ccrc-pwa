@@ -100,7 +100,7 @@ STOP_INTERVAL="${CCRC_VERIFY_STOP_INTERVAL:-1}"
 # always somebody's stop, so a stale stamp can only pass a deliberate stop;
 # ActiveEnterTimestamp is empty once a stopped unit is unloaded, systemd 255);
 # no cap on how many units may be stopped (this script asks whether the NEW
-# supervisor stays up); one pane death inside the window still fails.
+# supervisor stays up); one pane death that a check observes still fails.
 #
 # REG is ccd's own root, derived from HOME with no env override exactly as
 # ccd/ccd's `REG=` is (D-3948; pinned by deploy-verify.test.ts). It is only READ,

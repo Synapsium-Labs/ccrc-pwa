@@ -98,23 +98,18 @@ function runVerify(dir: string, unit = 'ccrc-agent.service',
   // hand it the real one.
   const home = opts.home ?? mkTmp('ccrc-agent-verifyhome-');
   const PATH = `${dir}${path.delimiter}${process.env.PATH ?? ''}`;
-  // PROVE the stub is what will be resolved, before executing anything. A test
+  // The spawn's env, built ONCE: the proof below runs under exactly this object.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env, PATH, HOME: home,
+    CCRC_VERIFY_SETTLE: '0', CCRC_VERIFY_WINDOW: '0', CCRC_VERIFY_LOG_LINES: '5',
+    CCRC_VERIFY_STOP_INTERVAL: '0', ...opts.env,
+  };
+  // PROVE the stubs are what will be resolved, before executing anything. A test
   // whose safety depends on the thing it is testing is the loaded gun this
-  // package has already fired four times.
-  const resolved = spawnSync('sh', ['-c', 'command -v systemctl'], {
-    encoding: 'utf8', env: { ...process.env, PATH },
-  }).stdout.trim();
-  expect(resolved.startsWith(`${dir}${path.sep}`),
-    `systemctl must resolve inside the stub dir; got "${resolved}" — REFUSING to run the verifier`).toBe(true);
+  // package has already fired four times. Both `systemctl` and `journalctl`.
+  assertStubsResolve(env, dir);
 
-  const r = spawnSync('bash', [VERIFY, unit], {
-    encoding: 'utf8', timeout: opts.timeout ?? 15_000,
-    env: {
-      ...process.env, PATH, HOME: home,
-      CCRC_VERIFY_SETTLE: '0', CCRC_VERIFY_WINDOW: '0', CCRC_VERIFY_LOG_LINES: '5',
-      CCRC_VERIFY_STOP_INTERVAL: '0', ...opts.env,
-    },
-  });
+  const r = spawnSync('bash', [VERIFY, unit], { encoding: 'utf8', timeout: opts.timeout ?? 15_000, env });
   let calls = '';
   try { calls = readFileSync(path.join(dir, 'calls'), 'utf8'); } catch { calls = ''; }
   // FIXTURE HOME, PROVEN (wave 10, critic I7): the script now reads $HOME/.cc-sessions for a session unit,
@@ -203,7 +198,7 @@ describe('deploy.sh agent verifies the restart it just performed', () => {
     const r = runVerify(stubs({ isActive: ['active', 'active'], mainPid: ['4242', '4242'] }));
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
     expect(r.stdout).toContain('MainPID 4242 stable');
-  });
+  }, 30_000);
 
   it('FAILS on the crash loop the whitelist throw produces — active twice, different PID', () => {
     // The whole finding in one case. `systemctl restart` succeeded, `is-active`
@@ -219,36 +214,37 @@ describe('deploy.sh agent verifies the restart it just performed', () => {
     expect(r.stderr).toContain('DEPLOY FAILED');
     expect(r.calls, 'the failure path did not dump the journal').toContain('journalctl');
     expect(r.stderr).toContain('refuseToBoot');
-  });
+  }, 30_000);
 
   it('FAILS when the unit never reached active — the auto-restart window', () => {
     const r = runVerify(stubs({ isActive: ['activating', 'activating'], mainPid: ['0', '0'] }));
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("unit is 'activating', not 'active'");
     expect(r.calls).toContain('journalctl');
-  });
+  }, 30_000);
 
   it('FAILS when the unit dies during the observation window', () => {
     const r = runVerify(stubs({ isActive: ['active', 'failed'], mainPid: ['4242', '0'] }));
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("became 'failed'");
-  });
+  }, 30_000);
 
   it('FAILS when systemd reports active with no MainPID', () => {
     const r = runVerify(stubs({ isActive: ['active', 'active'], mainPid: ['0', '0'] }));
     expect(r.code).toBe(1);
     expect(r.stderr).toContain('no MainPID');
-  });
+  }, 30_000);
 
   it('refuses to run without a unit name rather than verifying something else', () => {
     const dir = stubs({ isActive: ['active'], mainPid: ['1'] });
-    const r = spawnSync('bash', [VERIFY], {
-      encoding: 'utf8',
-      env: { ...process.env, HOME: mkTmp('ccrc-agent-verifyhome-'), PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}` },
-    });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env, HOME: mkTmp('ccrc-agent-verifyhome-'), PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}`,
+    };
+    assertStubsResolve(env, dir);
+    const r = spawnSync('bash', [VERIFY], { encoding: 'utf8', timeout: 15_000, env });
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('usage:');
-  });
+  }, 30_000);
 });
 
 /** A unit file's named section, anchored on a section header at the START OF A
@@ -2589,6 +2585,9 @@ describe('verify-service.sh tells a deliberate supervisor stop from a crash (wav
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('DEPLOY FAILED');
     expect(r.stderr).not.toContain('unbound variable');
+    // The safety premise, asserted: bash does not default an unset HOME, so the stub saw none.
+    expect(existsSync(path.join(dir, 'home-seen')), 'the stub never ran').toBe(true);
+    expect(readFileSync(path.join(dir, 'home-seen'), 'utf8').trim(), 'bash defaulted HOME for the script').toBe('');
   }, 30_000);
 
   it('V21: the evidence read is capped at 64 characters', () => {
