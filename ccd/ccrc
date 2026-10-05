@@ -20811,9 +20811,10 @@ _upd_legacy_target() {   # <tag> -> 0, or dies before anything is installed
 # `_inst_enable`'s Darwin arms) already sit inside a `$CCD_OS = darwin` arm,
 # so these carry no platform switch of their own — the Linux twin is
 # deploy/verify-service.sh, which reads systemd's vocabulary and stays the
-# one implementation there (single-definition's sweep pin holds the Linux
-# halves together; the Darwin halves are pinned by the same file's Darwin-arm
-# test).
+# one implementation there, and alone carries the deliberate-stop classifier
+# (wave 10), so the arms differ there (D-3949, D-3975) (single-definition's
+# sweep pin holds the Linux halves together; the Darwin halves are pinned by
+# the same file's Darwin-arm test).
 _ccrc_job_pid() {   # <unit> -> the job's pid on stdout, or nothing when it has none
   local out
   out="$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "$1")" 2>/dev/null)" || return 0
@@ -20822,14 +20823,27 @@ _ccrc_job_pid() {   # <unit> -> the job's pid on stdout, or nothing when it has 
   esac
   return 0
 }
-_ccrc_job_stayed_up() {   # <unit> -> 0 iff ONE pid held across the window; detail in CCRC_STAYED_DETAIL
-  local p1 p2
+_ccrc_job_stayed_up() {   # <unit>... -> 0 iff ONE pid held across ONE shared window for EVERY unit (wave 11, D-3975)
+  # One settle, one pid read per job, one window, a second read per job. With ONE unit this is the call sequence and
+  # the CCRC_STAYED_DETAIL the gate and `_inst_enable` have always had. With several: CCRC_STAYED_BAD lists the jobs
+  # whose pid did not hold, CCRC_STAYED_WHY their details in the same order, and CCRC_STAYED_DETAIL is the first one's.
+  local u i=0 d p2
+  local -a p1=()
+  CCRC_STAYED_BAD=(); CCRC_STAYED_WHY=(); CCRC_STAYED_DETAIL=""
   sleep "${CCRC_VERIFY_SETTLE:-3}"
-  p1="$(_ccrc_job_pid "$1")"
+  for u in "$@"; do p1+=("$(_ccrc_job_pid "$u")"); done
   sleep "${CCRC_VERIFY_WINDOW:-5}"
-  p2="$(_ccrc_job_pid "$1")"
-  CCRC_STAYED_DETAIL="pid ${p1:-none} -> ${p2:-none} across ${CCRC_VERIFY_SETTLE:-3}s+${CCRC_VERIFY_WINDOW:-5}s"
-  [ -n "$p1" ] && [ "$p1" = "$p2" ]
+  for u in "$@"; do
+    p2="$(_ccrc_job_pid "$u")"
+    d="pid ${p1[i]:-none} -> ${p2:-none} across ${CCRC_VERIFY_SETTLE:-3}s+${CCRC_VERIFY_WINDOW:-5}s"
+    [ "$#" -eq 1 ] && CCRC_STAYED_DETAIL="$d"
+    if [ -z "${p1[i]}" ] || [ "${p1[i]}" != "$p2" ]; then
+      CCRC_STAYED_BAD+=("$u"); CCRC_STAYED_WHY+=("$d")
+      [ -n "$CCRC_STAYED_DETAIL" ] || CCRC_STAYED_DETAIL="$d"
+    fi
+    i=$((i + 1))
+  done
+  [ "${#CCRC_STAYED_BAD[@]}" -eq 0 ]
 }
 # _upd_sweep_die <message> — the sweep's ONE die (wave 11, R12; D-3973). Both callers release the lock before the
 # sweep (`cmd_update`'s and `cmd_rollback`'s flip arm: `_upd_unlock` then `_upd_sweep`), so a second update may own
@@ -20897,7 +20911,9 @@ _upd_sweep_spo() {
 }
 _upd_sweep() {
   # ── THE DARWIN ARM ──────────────────────────────────────────────────────
-  # Same job, same guard, different observable. The sweep exists because a
+  # Same job, same guard, different observable — and the verify is not quite the
+  # Linux one: no deliberate-stop classifier (D-3949), and a re-check of each
+  # failure (D-3983). The sweep exists because a
   # live supervisor keeps executing the OLD ccd until it is restarted, and its
   # refusal exists because a restart that kills the whole process group would
   # take every pane with it. On Linux the property is `KillMode=process`, read
@@ -20911,7 +20927,8 @@ _upd_sweep() {
   # would kill panes. The remedy is per-session and safe — `ccd start <id>`
   # rewrites the plist through `_svc_write_session_plist`.
   if [ "$CCD_OS" = darwin ]; then
-    local u sid plist missing=0
+    local u sid plist missing=0 bi dleft=0 dfail="" dwhy=""
+    local -a first=() firstwhy=()
     for u in $(_svc_list_sessions); do
       plist="$(_svc_plist "$u")"
       [ -f "$plist" ] || continue
@@ -20950,21 +20967,37 @@ _upd_sweep() {
       fi
       _svc_is_loaded "$u" || continue
       _svc_try_restart "$u" \
-        || _ccrc_die "restarting $u failed — the supervisors' state is now mixed; read: $(_svc_status_hint "$u"). The pre-update backup is complete at $UPD_BACKUP_DIR"
+        || _upd_sweep_die "restarting $u failed — the supervisors' state is now mixed (the install completed and nothing was rolled back); read: $(_svc_status_hint "$u")"
       kicked+=("$u")
     done
-    # THE STAY-UP GATE, and it is the half the first cut of this arm dropped:
-    # kickstart's exit is the exit of the KICK, not of the process surviving
-    # it — the exact gap deploy/verify-service.sh's header describes for
-    # systemd, and the reason the Linux arm below runs that script per active
-    # unit. Each restarted supervisor is held to the same standard here, and
-    # the failure names the rollback the way the Linux `_ccrc_die` does —
-    # this is the one line in the whole update path that points an operator
-    # at the backup, and on macOS it must be able to fire.
-    for u in ${kicked[@]+"${kicked[@]}"}; do
-      _ccrc_job_stayed_up "$u" \
-        || _ccrc_die "$u was restarted and did not stay up ($CCRC_STAYED_DETAIL) — read: $(_svc_status_hint "$u"). The pre-update backup is complete at $UPD_BACKUP_DIR"
-    done
+    # THE STAY-UP GATE — ONE shared window for every kicked job, then ONE re-check of each that failed (wave 11, R12;
+    # D-3975, D-3983). kickstart's exit is the exit of the KICK, not of the process surviving it
+    # (deploy/verify-service.sh's header, for systemd), so every kicked supervisor is re-measured — in this process,
+    # because launchd has no script of its own to skew against a rollback (D-3972's reason for per-unit calls is
+    # Linux's). A job whose pid did not hold is re-measured once more, alone, and fails the update only if that fails
+    # too: every one is named, re-checks stop at the first that fails (Reading 17), and the die gives the counts (D-3974). NOT the Linux standard in one respect (D-3949): there
+    # is no deliberate-stop classifier here, so a session stopped on purpose, still stopped at its re-check, fails the
+    # update — launchd's observable for a deliberate bootout is also the start-limit emulation's, and no macOS box is
+    # centrally managed.
+    if [ "${#kicked[@]}" -gt 0 ] && ! _ccrc_job_stayed_up "${kicked[@]}"; then
+      first=("${CCRC_STAYED_BAD[@]}"); firstwhy=("${CCRC_STAYED_WHY[@]}")
+      for ((bi = 0; bi < ${#first[@]}; bi++)); do
+        u="${first[bi]}"
+        if [ -n "$dfail" ]; then   # the stop at the first failed re-check (13:58, Reading 17)
+          dleft=$((dleft + 1))
+          echo "update: sweep: re-check: $u did not stay up (${firstwhy[bi]}) and is not re-checked — a re-check already failed, so this update fails (wave 11, D-3983)" >&2
+          continue
+        fi
+        echo "update: sweep: re-check: $u did not stay up (${firstwhy[bi]}) — re-measuring it once more, alone (wave 11, D-3983)" >&2
+        if _ccrc_job_stayed_up "$u"; then
+          echo "update: sweep: re-check: $u passed its re-check ($CCRC_STAYED_DETAIL) — counted as a transient failure, not fatal" >&2
+        else
+          dfail="$u"; dwhy="$CCRC_STAYED_DETAIL"
+          echo "update: sweep: re-check: $u failed its re-check too ($CCRC_STAYED_DETAIL) — read: $(_svc_status_hint "$u")" >&2
+        fi
+      done
+      [ -z "$dfail" ] || _upd_sweep_die "sweep: ${#first[@]} of ${#kicked[@]} launchd session jobs did not stay up on a first window; a re-check failed, $dleft left un-re-checked — install complete, nothing was rolled back (first failed re-check: $dfail, $dwhy); read: $(_svc_status_hint "$dfail")"
+    fi
     # Wave 8 item G: a claim of "every … now runs the ccd this update
     # installed" is false on a box with nothing loaded — there was nothing to
     # verify. `kicked` is the set `_svc_try_restart` actually touched.
