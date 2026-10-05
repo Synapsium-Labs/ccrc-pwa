@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a0054e09cf5d09897b8ae3c01c54bc2f22eb6dbbf0b5164bccdd934f5fabacdc
+# ccrc:generated 1 sha256=9aef4e4c84fb798af589e2435216435b3cd50fae4f24e9ca25e7f746ccb6685d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -30268,6 +30268,624 @@ def enumerate_drafts_holder(ctx, repo, bd, dl, call_s=None):
 
 
 # ===== docs: drafts =====
+# Imported again here so this section reads on its own; a repeated import is a no-op.
+import collections
+import errno
+import hashlib
+import os
+import re
+import stat
+
+# The draft snapshot (spec 2026-10-01 s2 (d) "Snapshot", "Classification",
+# "Lie-mode hashing", "Draft facts" and "Race guards", with the worktree walk of
+# s2 (f)). Facts only: nothing here decides what a page shows. The phase
+# DEGRADES and never fails the tree: every overflow, expiry and git failure in
+# it becomes a DraftsFacts state, and the committed listing answers in full
+# beside it. Every bound is a parameter with its production default, so a unit
+# lowers it by argument, never by an env var or an argv flag.
+
+# The four calls the snapshot makes in W, verbatim. The filter neutralisers go
+# BEFORE `status` as -c pairs; `--attr-source` is never used (it gives false
+# `.M` under eol attributes).
+DRAFT_FILTER_ARGS = ('config', '-z', '--get-regexp', r'^filter\..*\.(clean|process|required)$')
+DRAFT_STATUS_ARGS = ('status', '--porcelain=v2', '-z', '--branch', '--no-ahead-behind', '--no-renames',
+                     '--untracked-files=all', '--ignore-submodules=all', '--')
+DRAFT_LS_FILES_ARGS = ('ls-files', '-z', '-v', '-s', '--')
+DRAFT_HEAD_ARGS = ('rev-parse', '--verify', '--end-of-options', 'HEAD')
+DRAFT_DRIVER_RE = re.compile(rb'[A-Za-z0-9._-]+')
+DRAFT_READ_CHUNK = 1048576
+# The wire's draft kinds have no word for a refused middle component: a symlink
+# on the way is a symlink, and a file on the way means the path cannot exist.
+DRAFT_KIND_OF_WALK = {'symlink-in-path': 'symlink', 'file-in-path': 'absent'}
+DRAFT_CAVEATS = ('assume-unchanged', 'skip-worktree', 'filters-bypassed')
+WALK_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+WALK_LEAF_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC
+
+# What docs-tree's draft phase hands back. `facts` is the DraftsFacts wire
+# object. `rows` maps (section, rel) to that DocsEntry's `draft` object.
+# `unlisted` counts the draft-only paths listing_admit refused, by its reasons.
+# `main` is the first `worktree list` record (enumerate_drafts_holder's), for
+# mainCheckout; None when the list failed.
+DraftPhase = collections.namedtuple('DraftPhase', 'facts rows unlisted main')
+
+
+class DraftUnreadable(Exception):
+    """Internal to the draft phase: drafts {state:'unreadable', step, detail}."""
+
+    def __init__(self, step, detail):
+        Exception.__init__(self, step, detail)
+        self.step = step
+        self.detail = detail
+
+
+class DraftTooMany(Exception):
+    """Internal to the draft phase: drafts {state:'too-many', count, bytes}."""
+
+    def __init__(self, count, nbytes):
+        Exception.__init__(self, count, nbytes)
+        self.count = count
+        self.nbytes = nbytes
+
+
+class DraftBudgetSpent(Exception):
+    """Internal: the next read would pass the aggregate draft read budget."""
+
+
+class HashBudget(object):
+    """The aggregate draft read budget of ONE snapshot attempt, in bytes."""
+
+    def __init__(self, total):
+        self.total = total
+        self.used = 0
+
+    def left(self):
+        return self.total - self.used
+
+
+def file_ceiling():
+    """The draft fp read bound, and every show's ceiling: DOCS_MAX_FILE_BYTES,
+    or CCD_DOCS_MAX_FILE_BYTES when that is lower. That variable is the
+    helper's ONE env knob. It can only lower the cap, a value that is not all
+    ASCII digits is ignored, and it is read per call, never at import. A value
+    with more digits than the cap is above it, and is never handed to int()."""
+    v = os.environ.get('CCD_DOCS_MAX_FILE_BYTES', '')
+    if re.fullmatch(r'[0-9]+', v) is None:
+        return DOCS_MAX_FILE_BYTES
+    digits = v.lstrip('0') or '0'
+    if len(digits) > len(str(DOCS_MAX_FILE_BYTES)):
+        return DOCS_MAX_FILE_BYTES
+    return min(int(digits), DOCS_MAX_FILE_BYTES)
+
+
+def filter_neutralisers(cfg_out):
+    """`config -z --get-regexp` over the filter keys -> (cflags, bypassed).
+    Each record is `<key>\\n<value>` (or a bare key) ended by a NUL, and a key
+    is `filter.<name>.<var>`, the name possibly dotted. Every driver named gets
+    clean=, process= AND required=false: MM1 measured that without the third a
+    required driver fails status with rc 128. A name outside [A-Za-z0-9._-]+
+    raises DraftUnreadable('filter-config', 'driver-name'), and status never
+    runs."""
+    names = []
+    for rec in cfg_out.split(b'\0'):
+        if not rec:
+            continue
+        key = rec.split(b'\n', 1)[0]
+        name = b''
+        if key.startswith(b'filter.'):
+            name = key[len(b'filter.'):key.rfind(b'.')]
+        if DRAFT_DRIVER_RE.fullmatch(name) is None:
+            raise DraftUnreadable('filter-config', 'driver-name')
+        text = name.decode('ascii')
+        if text not in names:
+            names.append(text)
+    cflags = []
+    for n in names:
+        cflags.extend(['-c', 'filter.%s.clean=' % n, '-c', 'filter.%s.process=' % n,
+                       '-c', 'filter.%s.required=false' % n])
+    return cflags, bool(names)
+
+
+def parse_status_v2(buf):
+    """`status --porcelain=v2 -z --branch` -> (branch_oid, branch_head, records).
+    A record is (type, xy, path): path is raw bytes, xy is None for `?`. A `2`
+    record's original path is a NUL field of its own and goes with it. A record
+    of a known type in a shape git does not write keeps its type with xy None,
+    which classify_records refuses. A buffer the stdout cap cut keeps only its
+    whole fields."""
+    fields = buf.split(b'\0')
+    fields.pop()
+    oid = head = None
+    records = []
+    i = 0
+    while i < len(fields):
+        f = fields[i]
+        i += 1
+        if f.startswith(b'# '):
+            parts = f.split(b' ', 2)
+            if len(parts) == 3 and parts[1] == b'branch.oid':
+                oid = parts[2].decode('ascii', 'replace')
+            elif len(parts) == 3 and parts[1] == b'branch.head':
+                head = os.fsdecode(parts[2])
+            continue
+        kind = f[:1].decode('ascii', 'replace')
+        if kind == '1':
+            parts = f.split(b' ', 8)
+            if len(parts) == 9:
+                records.append(('1', parts[1].decode('ascii', 'replace'), parts[8]))
+                continue
+        elif kind == 'u':
+            parts = f.split(b' ', 10)
+            if len(parts) == 11:
+                records.append(('u', parts[1].decode('ascii', 'replace'), parts[10]))
+                continue
+        elif kind == '?' and f[1:2] == b' ':
+            records.append(('?', None, f[2:]))
+            continue
+        elif kind == '2':
+            i += 1
+        records.append((kind or 'empty', None, f))
+    return oid, head, records
+
+
+def classify_records(records):
+    """Status records -> (entries, opaque, unknown), by s2 (d)'s table.
+    entries are (path, state); opaque holds the nested-repo dirs (`? dir/`),
+    without their slash. `1 AD` (added, then removed from the worktree) is
+    dropped. Within a `1` record D wins, then A (intent-to-add `.A`
+    included), then T, then M. A `2` record, an unknown type, or a `1` whose XY
+    names none of those sets unknown, and the whole drafts result is then
+    unreadable {step:'status', detail:'unexpected-record'}."""
+    entries = []
+    opaque = []
+    for kind, xy, path in records:
+        if kind == '?':
+            if path.endswith(b'/'):
+                opaque.append(path[:-1])
+            else:
+                entries.append((path, 'untracked'))
+        elif kind == 'u' and xy is not None:
+            entries.append((path, 'conflicted'))
+        elif kind == '1' and xy is not None and len(xy) == 2:
+            if xy == 'AD':
+                continue
+            if 'D' in xy:
+                entries.append((path, 'deleted'))
+            elif 'A' in xy:
+                entries.append((path, 'added'))
+            elif 'T' in xy:
+                entries.append((path, 'typechange'))
+            elif 'M' in xy:
+                entries.append((path, 'modified'))
+            else:
+                return entries, opaque, True
+        else:
+            return entries, opaque, True
+    return entries, opaque, False
+
+
+def parse_ls_files(buf):
+    """`ls-files -z -v -s` -> {path: (tag, mode, index_blob, stage)} (MM5). A
+    lowercase tag is assume-unchanged; S (s) is skip-worktree. An unmerged
+    path keeps its first stage. A cut buffer keeps its whole records; a record
+    of another shape raises DraftUnreadable('ls-files', 'unexpected-record')."""
+    index = {}
+    recs = buf.split(b'\0')
+    recs.pop()
+    for rec in recs:
+        head, sep, path = rec.partition(b'\t')
+        parts = head.split(b' ')
+        if not sep or len(parts) != 4 or len(parts[0]) != 1:
+            raise DraftUnreadable('ls-files', 'unexpected-record')
+        if path not in index:
+            index[path] = tuple(p.decode('ascii', 'replace') for p in parts)
+    return index
+
+
+def blob_id(data, fmt):
+    """The object id git gives `data` as a blob, in object format `fmt`."""
+    h = {'sha1': hashlib.sha1, 'sha256': hashlib.sha256}[fmt]()
+    h.update(b'blob %d\0' % len(data))
+    h.update(data)
+    return h.hexdigest()
+
+
+def leaf_kind(st_mode, st_nlink, st_uid, st_dev, w_dev, euid):
+    """The leaf checks of s2 (f), pure: None for a regular file that passes,
+    else the kind that withholds it, checked in this order: special (not
+    S_ISREG), hardlink, foreign-owner, other-device. No byte of a leaf that
+    fails is ever read."""
+    if not stat.S_ISREG(st_mode):
+        return 'special'
+    if st_nlink != 1:
+        return 'hardlink'
+    if st_uid != euid:
+        return 'foreign-owner'
+    if st_dev != w_dev:
+        return 'other-device'
+    return None
+
+
+def _walk_errno(code):
+    return errno.errorcode.get(code, 'E%d' % code)
+
+
+def _walk_middle_refused(fd, comp, e):
+    """A middle component that would not open as a directory -> (kind, errno)."""
+    if e.errno in (errno.ENOTDIR, errno.ELOOP):
+        try:
+            st = SYS.lstat(comp, dir_fd=fd)
+        except OSError:
+            return 'absent', None
+        return ('symlink-in-path' if stat.S_ISLNK(st.st_mode) else 'file-in-path'), None
+    if e.errno == errno.ENOENT:
+        return 'absent', None
+    return 'unreadable', _walk_errno(e.errno)
+
+
+def _walk_leaf_refused(e):
+    """A leaf that would not open -> (kind, errno). ENXIO is a socket."""
+    if e.errno == errno.ELOOP:
+        return 'symlink', None
+    if e.errno == errno.ENOENT:
+        return 'absent', None
+    if e.errno == errno.ENXIO:
+        return 'special', None
+    return 'unreadable', _walk_errno(e.errno)
+
+
+def walk_leaf(wfd, rel, w_dev):
+    """Open the W-relative path `rel` under the trusted directory fd `wfd` by
+    s2 (f)'s openat rule -> (fd | None, kind, errno | None, st | None).
+    Each middle component opens O_RDONLY|O_DIRECTORY|O_NOFOLLOW from its
+    parent's fd; on ENOTDIR or ELOOP an fstatat without following tells
+    symlink-in-path from file-in-path. The leaf opens O_RDONLY|O_NOFOLLOW|
+    O_NONBLOCK|O_NOCTTY|O_CLOEXEC, so a FIFO cannot hang the read, and its
+    fstat must pass leaf_kind against w_dev and geteuid(). Only a regular file
+    that passes comes back open, as kind 'file' with its fstat; the caller
+    closes it. Every other kind comes back with no fd: symlink,
+    symlink-in-path, file-in-path, absent, unreadable (with an errno name),
+    special, hardlink, foreign-owner, other-device (the last four with st)."""
+    parts = rel.split('/')
+    fd = wfd
+    try:
+        for comp in parts[:-1]:
+            try:
+                nfd = SYS.open(comp, WALK_DIR_FLAGS, dir_fd=fd)
+            except OSError as e:
+                kind, err = _walk_middle_refused(fd, comp, e)
+                return None, kind, err, None
+            if fd != wfd:
+                SYS.close(fd)
+            fd = nfd
+        try:
+            lfd = SYS.open(parts[-1], WALK_LEAF_FLAGS, dir_fd=fd)
+        except OSError as e:
+            kind, err = _walk_leaf_refused(e)
+            return None, kind, err, None
+    finally:
+        if fd != wfd:
+            SYS.close(fd)
+    try:
+        st = SYS.fstat(lfd)
+    except OSError as e:
+        SYS.close(lfd)
+        return None, 'unreadable', _walk_errno(e.errno), None
+    kind = leaf_kind(st.st_mode, st.st_nlink, st.st_uid, st.st_dev, w_dev, SYS.geteuid())
+    if kind is not None:
+        SYS.close(lfd)
+        return None, kind, None, st
+    return lfd, 'file', None, st
+
+
+def _draft_read(fd, limit):
+    """At most `limit` bytes of fd, in bounded chunks, stopping at EOF."""
+    chunks = []
+    got = 0
+    while got < limit:
+        b = SYS.read(fd, min(limit - got, DRAFT_READ_CHUNK))
+        if not b:
+            break
+        chunks.append(b)
+        got += len(b)
+    return b''.join(chunks)
+
+
+def draft_facts(trusted, rel, budget, fmt):
+    """One draft path's facts -> ({kind, size, fp[, errno]}, blob | None).
+    The walk gives the kind (DRAFT_KIND_OF_WALK names the two refused-middle
+    kinds in the wire's words). A regular file that passes the leaf checks and
+    is at most file_ceiling() is read ONCE: fp is the sha256 of those bytes, a
+    content hash and never stat data (MM2), size is their length, and blob is
+    their git blob id in `fmt`, which never reaches the wire. A larger file
+    keeps its size with fp None. Every other kind has size None and fp None.
+    The read draws on `budget` (a HashBudget); a file that would pass it raises
+    DraftBudgetSpent."""
+    fd, kind, err, st = walk_leaf(trusted.fd, rel, trusted.dev)
+    if fd is None:
+        facts = {'kind': DRAFT_KIND_OF_WALK.get(kind, kind), 'size': None, 'fp': None}
+        if err is not None:
+            facts['errno'] = err
+        return facts, None
+    try:
+        cap = file_ceiling()
+        if st.st_size > cap:
+            return {'kind': 'file', 'size': st.st_size, 'fp': None}, None
+        left = budget.left()
+        if st.st_size > left:
+            raise DraftBudgetSpent()
+        try:
+            data = _draft_read(fd, min(cap, left) + 1)
+        except OSError as e:
+            return {'kind': 'unreadable', 'size': None, 'fp': None, 'errno': _walk_errno(e.errno)}, None
+    finally:
+        SYS.close(fd)
+    budget.used += len(data)
+    if len(data) > cap:
+        return {'kind': 'file', 'size': len(data), 'fp': None}, None
+    if len(data) > left:
+        raise DraftBudgetSpent()
+    return {'kind': 'file', 'size': len(data), 'fp': hashlib.sha256(data).hexdigest()}, blob_id(data, fmt)
+
+
+def _draft_place(path):
+    """A repo-relative draft path (bytes) -> ((section, rel), None) when it is
+    under a section and listing_admit admits it, (None, reason) when
+    listing_admit refuses it, and (None, None) outside every section."""
+    for slug, sb in LS_SECTION_BYTES:
+        if path.startswith(sb + b'/'):
+            rel, reason = listing_admit(path[len(sb) + 1:])
+            if reason is not None:
+                return None, reason
+            return (slug, rel), None
+    return None, None
+
+
+def _draft_opaque(path):
+    """A nested-repo dir (bytes, no slash) -> (repo-relative text, None), the
+    section path itself included, or _draft_place's refusal."""
+    for slug, sb in LS_SECTION_BYTES:
+        if path == sb:
+            return SECTIONS[slug], None
+    placed, reason = _draft_place(path)
+    if placed is None:
+        return None, reason
+    return SECTIONS[placed[0]] + '/' + placed[1], None
+
+
+def _draft_count(unlisted, reason):
+    if reason is not None:
+        unlisted[reason] = unlisted.get(reason, 0) + 1
+
+
+def _draft_git(step, cwd, args, dl, call_s, stdout_cap=GIT_STDOUT_CAP):
+    """One draft-phase git call in W. Soft, so an expiry is a fact: it is the
+    step's unreadable {detail:'timeout'}, never a failure word."""
+    sp = docs_git(cwd, list(args), call_s=call_s, dl=dl, ceiling=ceiling_of(cwd), soft=True,
+                  stdout_cap=stdout_cap)
+    if sp.timed_out:
+        raise DraftUnreadable(step, 'timeout')
+    return sp
+
+
+def _draft_rc_detail(what, sp):
+    """A failed call as a drafts detail: `<what> rc N[: stderr head]`, the head
+    redacted before it is cut (stderr_head)."""
+    head = stderr_head(sp.err).split('\n', 1)[0]
+    return '%s rc %d%s' % (what, sp.rc, (': ' + head) if head else '')
+
+
+def _draft_head_is(w, head, dl, call_s):
+    """The closing HEAD bracket. A call that cannot answer is not a match."""
+    sp = docs_git(w, list(DRAFT_HEAD_ARGS), call_s=call_s, dl=dl, ceiling=ceiling_of(w), soft=True)
+    if sp.timed_out or sp.overflow or sp.rc != 0:
+        return False
+    return sp.out.strip().decode('ascii', 'replace') == head
+
+
+def _draft_reverted(base_equal, key, blob, blobs):
+    """The revert race: with baseEqual, a draft whose bytes are C's own blob was
+    reverted after status ran, so it is no draft at all."""
+    committed = blobs.get(key)
+    return (base_equal and blob is not None and committed is not None
+            and committed[0] in ('file', 'exec') and committed[1] == blob)
+
+
+def _draft_deleted(trust):
+    """The row of a draft that is gone from the worktree."""
+    return {'state': 'deleted', 'kind': 'absent', 'size': None, 'fp': None, 'trust': trust}
+
+
+def _snapshot_once(repo, trusted, holder, served_commit, blobs, dl, call_s, stdout_cap, budget):
+    """One attempt -> DraftPhase (main None), or None when a bracket disagreed
+    with H, which snapshot retries once."""
+    w = trusted.path
+    bd = holder['branch']
+    list_s = CALL_S['list'] if call_s is None else call_s
+    ref_s = CALL_S['ref'] if call_s is None else call_s
+    paths = list(SECTIONS.values())
+
+    # 1. Filter neutralisers.
+    cfg_sp = _draft_git('filter-config', w, DRAFT_FILTER_ARGS, dl, ref_s)
+    if cfg_sp.overflow:
+        raise DraftUnreadable('filter-config', 'overflow')
+    if cfg_sp.rc == 1:
+        cflags, bypassed = [], False
+    elif cfg_sp.rc != 0:
+        raise DraftUnreadable('filter-config', _draft_rc_detail('config', cfg_sp))
+    else:
+        cflags, bypassed = filter_neutralisers(cfg_sp.out)
+
+    # 2. Status. `# branch.oid` must be H and `# branch.head` Bd.
+    status_sp = _draft_git('status', w, cflags + list(DRAFT_STATUS_ARGS) + paths, dl, list_s, stdout_cap)
+    if status_sp.overflow:
+        raise DraftTooMany(len(parse_status_v2(status_sp.out)[2]), len(status_sp.out))
+    if status_sp.rc != 0:
+        raise DraftUnreadable('status', _draft_rc_detail('status', status_sp))
+    oid, head, records = parse_status_v2(status_sp.out)
+    if oid != trusted.head or head != bd:
+        return None
+    entries, opaque, unknown = classify_records(records)
+    if unknown:
+        raise DraftUnreadable('status', 'unexpected-record')
+
+    # 3. The lie-mode read (MM5).
+    ls_sp = _draft_git('ls-files', w, list(DRAFT_LS_FILES_ARGS) + paths, dl, list_s, stdout_cap)
+    if ls_sp.overflow:
+        raise DraftTooMany(len(parse_ls_files(ls_sp.out)), len(ls_sp.out))
+    if ls_sp.rc != 0:
+        raise DraftUnreadable('ls-files', _draft_rc_detail('ls-files', ls_sp))
+    index = parse_ls_files(ls_sp.out)
+
+    # One state per path. `git rm --cached` gives `D.` AND `? path` for one
+    # file: it is on disk, so untracked wins.
+    by_path = {}
+    for path, state in entries:
+        if not (state == 'deleted' and by_path.get(path) == 'untracked'):
+            by_path[path] = state
+    unlisted = {}
+    pending = []
+    for path in sorted(by_path):
+        state = by_path[path]
+        placed, reason = _draft_place(path)
+        if state in ('untracked', 'added'):
+            # A path new in W: no committed listing counts it if it is refused.
+            _draft_count(unlisted, reason)
+        if placed is not None:
+            pending.append((placed, state))
+    if len(pending) > DOCS_MAX_DRAFTS:
+        raise DraftTooMany(len(pending), 0)
+    dirs = []
+    for d in opaque:
+        text, reason = _draft_opaque(d)
+        _draft_count(unlisted, reason)
+        if text is not None:
+            dirs.append(text)
+
+    # The reads: every non-deleted draft path is walked, and a regular file
+    # that passes is hashed once.
+    spend = HashBudget(budget)
+    fmt = repo.object_format
+    base_equal = trusted.head == served_commit
+    rows = {}
+    lie_rows = 0
+    seen = {'assume-unchanged': False, 'skip-worktree': False, 'filters-bypassed': bypassed}
+    try:
+        for key, state in pending:
+            if state == 'deleted':
+                rows[key] = _draft_deleted('status')
+                continue
+            facts, blob = draft_facts(trusted, SECTIONS[key[0]] + '/' + key[1], spend, fmt)
+            if facts['kind'] == 'absent':
+                # Gone since status ran: a new path is then nothing (as `1 AD`
+                # is), and a tracked one is deleted.
+                if state not in ('untracked', 'added'):
+                    rows[key] = _draft_deleted('status')
+                continue
+            reverted = _draft_reverted(base_equal, key, blob, blobs)
+            if reverted and state in ('modified', 'typechange', 'conflicted'):
+                continue
+            row = {'state': state}
+            row.update(facts)
+            row['trust'] = 'status'
+            rows[key] = row
+        # Lie modes: an assume-unchanged (lowercase tag) or skip-worktree (S)
+        # entry hides from status, so whether it is a draft is decided by
+        # hashing. Either tag adds its caveat.
+        for path in sorted(index):
+            tag, mode, iblob, _stage = index[path]
+            assumed = tag.islower()
+            skipped = tag in ('S', 's')
+            if not (assumed or skipped):
+                continue
+            placed = _draft_place(path)[0]
+            if placed is None:
+                continue
+            seen['assume-unchanged'] = seen['assume-unchanged'] or assumed
+            seen['skip-worktree'] = seen['skip-worktree'] or skipped
+            if path in by_path or mode in ('120000', '160000'):
+                continue
+            facts, blob = draft_facts(trusted, SECTIONS[placed[0]] + '/' + placed[1], spend, fmt)
+            if facts['kind'] == 'absent':
+                # Skip-worktree and absent is a sparse checkout: no draft.
+                if not skipped:
+                    rows[placed] = _draft_deleted('hash')
+                    lie_rows += 1
+            elif blob is None or not (blob == iblob or _draft_reverted(base_equal, placed, blob, blobs)):
+                row = {'state': 'modified'}
+                row.update(facts)
+                row['trust'] = 'hash'
+                rows[placed] = row
+                lie_rows += 1
+            if len(pending) + lie_rows > DOCS_MAX_DRAFTS:
+                raise DraftTooMany(len(pending) + lie_rows, spend.used)
+    except DraftBudgetSpent:
+        raise DraftTooMany(len(pending) + lie_rows, spend.used)
+
+    # The head bracket, after the reads.
+    if not _draft_head_is(w, trusted.head, dl, ref_s):
+        return None
+    base = None
+    if not base_equal:
+        try:
+            base = counts_of(repo, trusted.head, served_commit, dl)
+        except Fail as e:
+            raise DraftUnreadable('status', 'base counts: ' + e.word)
+    drafts = dict(holder)
+    drafts['baseEqual'] = base_equal
+    drafts['base'] = base
+    drafts['caveats'] = [c for c in DRAFT_CAVEATS if seen[c]]
+    drafts['opaque'] = dirs
+    return DraftPhase(drafts, rows, unlisted, None)
+
+
+def snapshot(repo, trusted, holder, served_commit, blobs, dl, call_s=None, stdout_cap=GIT_STDOUT_CAP,
+             budget=DOCS_DRAFT_HASH_BUDGET):
+    """The snapshot of one trusted holder W at record HEAD H -> DraftPhase, main
+    None. `holder` is enumerate_drafts_holder's partial
+    {state:'holder', branch, worktree}, which this completes with baseEqual,
+    base, caveats and opaque. In W, in order: the filter neutralisers, status,
+    the lie-mode ls-files, the reads, then the HEAD bracket. A
+    `# branch.oid`/`# branch.head` that is not (H, Bd), or a bracket that is
+    not H, retries the attempt once; a second disagreement is unsettled, with
+    no rows. Bounds are parameters: `call_s` replaces every per-call bound,
+    `stdout_cap` bounds status and ls-files, `budget` is the aggregate read
+    budget in bytes. too-many's count is the drafts known at the cut, and its
+    bytes are what the phase had read: the status or ls-files stdout for an
+    overflow, the hashed draft bytes for the count and budget rules."""
+    bd = holder['branch']
+    w = trusted.path
+    try:
+        for _attempt in (1, 2):
+            got = _snapshot_once(repo, trusted, holder, served_commit, blobs, dl, call_s, stdout_cap, budget)
+            if got is not None:
+                return got
+        return DraftPhase({'state': 'unsettled', 'branch': bd, 'worktree': w}, {}, {}, None)
+    except DraftUnreadable as e:
+        return DraftPhase({'state': 'unreadable', 'branch': bd, 'worktree': w, 'step': e.step,
+                           'detail': e.detail}, {}, {}, None)
+    except DraftTooMany as e:
+        return DraftPhase({'state': 'too-many', 'branch': bd, 'worktree': w, 'count': e.count,
+                           'bytes': e.nbytes}, {}, {}, None)
+
+
+def draft_phase(ctx, repo, bd, ref, blobs, dl, call_s=None, stdout_cap=GIT_STDOUT_CAP,
+                budget=DOCS_DRAFT_HASH_BUDGET):
+    """docs-tree's whole draft phase for branch `bd` against the served `ref`
+    (only ref['commit'], C, is read) -> DraftPhase. `blobs` is
+    list_committed's map at C. enumerate_drafts_holder decides none,
+    ambiguous, untrusted and an unreadable list, each final, with rows empty;
+    exactly one trusted holder is snapshotted, and its fd is closed here
+    whatever happens. `main` is always the enumeration's. It NEVER raises a
+    failure word: every outcome is a DraftsFacts."""
+    e = enumerate_drafts_holder(ctx, repo, bd, dl, call_s)
+    if e.trusted is None:
+        return DraftPhase(e.facts, {}, {}, e.main)
+    try:
+        ph = snapshot(repo, e.trusted, e.facts, ref['commit'], blobs, dl, call_s=call_s,
+                      stdout_cap=stdout_cap, budget=budget)
+    finally:
+        SYS.close(e.trusted.fd)
+    return ph._replace(main=e.main)
 
 # ===== docs: tree =====
 def verb_tree(ctx, a):

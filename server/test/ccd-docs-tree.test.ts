@@ -1809,3 +1809,857 @@ describe('docs draft holders and holder trust: failure arms (docs W1a Task 13, G
     expect(got).toEqual({ state: 'holder', worktree: [8], 'rev-parse': [5] });
   });
 });
+
+// ── Task 14: the draft snapshot (spec 2026-10-01 §2 (d) Snapshot, Classification, Lie-mode hashing, Draft facts,
+// Race guards; the walk of §2 (f); rows 12, 13, 14, 27, 28, 34, 35, 36, 39, 40, 56 and 64, tree halves) ─────────
+// Units on fixture holders: each case builds `demo` in the file's own per-test harness `h` (the top-level
+// beforeEach/afterEach) and calls the SHIPPED helper's functions through unitJson. What a fixture HOME cannot create
+// is a canned `H.Sys` subclass or a lowered function parameter, never an env var or an argv flag. APPENDED below the
+// file's earlier blocks, so it uses the header's `describe`/`it`/`expect`/`h` and imports everything else under a
+// `t14` alias that no earlier block binds.
+import * as t14fs from 'node:fs';
+import * as t14path from 'node:path';
+import { createHash as t14createHash } from 'node:crypto';
+import { execFileSync as t14execFile } from 'node:child_process';
+import { unitJson as t14unitJson } from './docsHelperPy.js';
+import { plantGitRecorder as t14plantGitRecorder } from './ccdDocsHelpers.js';
+
+const T14_S = 'docs/superpowers/specs/';
+const T14_SECTION_PATHS = ['docs/superpowers/specs', 'docs/superpowers/plans', 'docs/product-design', 'docs/conventions'];
+const t14sha = (b: string | Buffer): string => t14createHash('sha256').update(b).digest('hex');
+/** A python string literal for an ASCII value (every fixture path here is ASCII). */
+const t14q = (s: string): string => JSON.stringify(s);
+
+interface T14Phase {
+  facts: Record<string, unknown>;
+  rows: Record<string, Record<string, unknown>>;
+  unlisted: Record<string, number>;
+  entries: number;
+  main: string | null;
+}
+
+/** `demo` with `files` committed on main and pushed, plus W: a worktree on `ws/a` under `$HOME/worktrees` (ws-add's
+ *  shape). Returns the main checkout and W as git records them (real paths), and W's HEAD. */
+function t14holder(files: Record<string, string>): { main: string; wt: string; head: string } {
+  const main = h.makeRepo('demo');
+  for (const [rel, body] of Object.entries(files)) {
+    t14fs.mkdirSync(t14path.dirname(t14path.join(main, rel)), { recursive: true });
+    t14fs.writeFileSync(t14path.join(main, rel), body);
+  }
+  h.git(main, 'add', '-A');
+  h.git(main, 'commit', '-m', 'docs');
+  h.git(main, 'push', 'origin', 'main');
+  const wt = t14path.join(h.home, 'worktrees', 'demo', 'a');
+  h.git(main, 'worktree', 'add', '-b', 'ws/a', wt);
+  return { main: t14fs.realpathSync(main), wt: t14fs.realpathSync(wt), head: h.git(wt, 'rev-parse', 'HEAD') };
+}
+
+/** Write `body` at `rel` under `dir` and push its mtime 5 s ahead, so the index's stat data no longer matches and
+ *  status has to look at the content. */
+function t14statDirty(dir: string, rel: string, body: string): void {
+  const p = t14path.join(dir, rel);
+  t14fs.writeFileSync(p, body);
+  const t = Date.now() / 1000 + 5;
+  t14fs.utimesSync(p, t, t);
+}
+
+/** The python lines that build ctx, a deadline and demo's Repo: docs-tree's own order. */
+function t14prelude(): string[] {
+  return [
+    'import os',
+    `ctx = H.Ctx(verb='docs-tree', root=${t14q(t14path.join(h.home, 'projects'))}, worktrees=${t14q(t14path.join(h.home, 'worktrees'))}, reg=${t14q(t14path.join(h.home, '.cc-sessions'))}, t0=0)`,
+    'dl = H.Deadline(60)',
+    "repo = H.discover(ctx, 'demo', dl)",
+  ];
+}
+
+/** draft_phase through the shipped helper, as docs-tree calls it: discover demo, list the served commit's blobs,
+ *  then the phase for `bd`. `pre` is python run first (a canned Sys goes there); `kw` passes lowered bounds BY
+ *  PARAMETER. */
+function t14phase(o: { served: string; bd?: string; pre?: string[]; kw?: string; env?: NodeJS.ProcessEnv }): T14Phase {
+  const bd = o.bd ?? 'ws/a';
+  const body = [
+    ...t14prelude(),
+    ...(o.pre ?? []),
+    `listed = H.list_committed(repo, ${t14q(o.served)}, dl)`,
+    `ph = H.draft_phase(ctx, repo, ${t14q(bd)}, {'name': ${t14q(bd)}, 'commit': ${t14q(o.served)}}, listed[3], dl${o.kw ? `, ${o.kw}` : ''})`,
+    "out({'facts': ph.facts, 'rows': dict((k[0] + ':' + k[1], v) for k, v in ph.rows.items()),",
+    "     'unlisted': ph.unlisted, 'entries': len(listed[1]),",
+    "     'main': None if ph.main is None else os.fsdecode(ph.main['path_bytes'])})",
+  ].join('\n');
+  return t14unitJson<T14Phase>(h.home, body, { env: o.env });
+}
+
+/** A Sys whose `spawn` answers every `status` call with `canned` (python bytes source) and counts them in `calls`;
+ *  every other spawn runs for real. */
+function t14cannedStatus(canned: string): string[] {
+  return [
+    'calls = []',
+    'class Canned(H.Sys):',
+    '    def spawn(self, argv, *a, **k):',
+    "        if 'status' in argv:",
+    '            calls.append(1)',
+    `            return H.Spawned(rc=0, out=${canned}, err=b'', timed_out=False, overflow=False)`,
+    '        return H.Sys.spawn(self, argv, *a, **k)',
+    'H.SYS = Canned()',
+  ];
+}
+
+const t14row = (state: string, facts: Record<string, unknown>, trust = 'status'): Record<string, unknown> =>
+  ({ state, ...facts, trust });
+const T14_ABSENT = { kind: 'absent', size: null, fp: null };
+const t14file = (body: string): Record<string, unknown> =>
+  ({ kind: 'file', size: Buffer.byteLength(body), fp: t14sha(body) });
+const t14withheld = (kind: string): Record<string, unknown> => ({ kind, size: null, fp: null });
+
+describe('docs draft snapshot (docs W1a Task 14)', () => {
+  describe('status shapes and classification (row 34)', () => {
+    it('classifies a staged rename as deleted + added, .D, D., .T, u and .A; drops 1 AD; a nested repo is opaque', () => {
+      const files: Record<string, string> = {};
+      for (const n of ['a', 'c', 'd', 'e', 'f', 'i']) files[`${T14_S}${n}.md`] = `${n}.md body\n`;
+      const { main, wt } = t14holder(files);
+      // A real merge conflict on f.md: one side on `side`, the other on ws/a, merged in W.
+      h.git(main, 'checkout', '-b', 'side');
+      t14fs.writeFileSync(t14path.join(main, T14_S, 'f.md'), 'side\n');
+      h.git(main, 'commit', '-am', 'side');
+      h.git(main, 'checkout', 'main');
+      t14fs.writeFileSync(t14path.join(wt, T14_S, 'f.md'), 'ours\n');
+      h.git(wt, 'commit', '-am', 'ours');
+      const head = h.git(wt, 'rev-parse', 'HEAD');
+      expect(() => h.git(wt, 'merge', 'side')).toThrow();
+      expect(h.git(wt, 'ls-files', '-u')).not.toBe('');
+      h.git(main, 'config', 'status.renames', 'true');
+      h.git(wt, 'mv', `${T14_S}a.md`, `${T14_S}b.md`);
+      t14fs.unlinkSync(t14path.join(wt, T14_S, 'c.md'));
+      h.git(wt, 'rm', '-q', `${T14_S}d.md`);
+      t14fs.unlinkSync(t14path.join(wt, T14_S, 'e.md'));
+      t14fs.symlinkSync('elsewhere', t14path.join(wt, T14_S, 'e.md'));
+      t14fs.writeFileSync(t14path.join(wt, T14_S, 'g.md'), 'g new\n');
+      h.git(wt, 'add', '-N', `${T14_S}g.md`);
+      t14fs.writeFileSync(t14path.join(wt, T14_S, 'h.md'), 'h new\n');
+      h.git(wt, 'add', `${T14_S}h.md`);
+      t14fs.unlinkSync(t14path.join(wt, T14_S, 'h.md'));
+      h.git(wt, 'rm', '-q', '--cached', `${T14_S}i.md`);
+      h.git(wt, 'init', '-q', t14path.join(wt, T14_S, 'nested'));
+      t14fs.writeFileSync(t14path.join(wt, T14_S, 'nested', 'x.md'), 'x\n');
+      // CONTROL: this repo's own status reports the rename as a `2` record, so --no-renames is load-bearing.
+      expect(h.git(wt, 'status', '--porcelain=v2').split('\n').some((l) => l.startsWith('2 '))).toBe(true);
+      expect(h.git(wt, 'status', '--porcelain=v2', '--', `${T14_S}h.md`)).toMatch(/^1 AD /);
+
+      const o = t14phase({ served: head });
+      const conflicted = t14fs.readFileSync(t14path.join(wt, T14_S, 'f.md'));
+      expect(conflicted.toString()).toContain('<<<<<<<');
+      expect(o.rows).toEqual({
+        'specs:a.md': t14row('deleted', T14_ABSENT),
+        'specs:b.md': t14row('added', t14file('a.md body\n')),
+        'specs:c.md': t14row('deleted', T14_ABSENT),
+        'specs:d.md': t14row('deleted', T14_ABSENT),
+        'specs:e.md': t14row('typechange', t14withheld('symlink')),
+        'specs:f.md': t14row('conflicted', { kind: 'file', size: conflicted.length, fp: t14sha(conflicted) }),
+        'specs:g.md': t14row('added', t14file('g new\n')),
+        'specs:i.md': t14row('untracked', t14file('i.md body\n')),
+      });
+      expect(o.facts).toEqual({
+        state: 'holder', branch: 'ws/a', worktree: { path: wt, head, class: 'workspace' },
+        baseEqual: true, base: null, caveats: [], opaque: [`${T14_S}nested`],
+      });
+      expect(o.unlisted).toEqual({});
+      expect(o.main).toBe(main);
+    }, 60000);
+
+    it('a `2` record from a canned status makes the whole result unreadable {step:status, detail:unexpected-record}', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'a\n' });
+      const canned = String.raw`b'# branch.oid ' + ${t14q(head)}.encode() + b'\x00# branch.head ws/a\x00' + b'2 R. N... 100644 100644 100644 ' + b'0' * 40 + b' ' + b'0' * 40 + b' R100 docs/superpowers/specs/b.md\x00docs/superpowers/specs/a.md\x00'`;
+      const o = t14phase({ served: head, pre: t14cannedStatus(canned) });
+      expect(o.facts).toEqual({ state: 'unreadable', branch: 'ws/a', worktree: wt, step: 'status', detail: 'unexpected-record' });
+      expect(o.rows).toEqual({});
+      expect(o.entries).toBe(1);
+    }, 60000);
+
+    it('a new draft whose name the rel grammar refuses is counted in unlisted by its reason, and never a row', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      const dir = Buffer.from(t14path.join(wt, T14_S));
+      t14fs.writeFileSync(Buffer.concat([dir, Buffer.from([0x62, 0xff, 0x2e, 0x6d, 0x64])]), 'bad utf-8\n');
+      t14fs.writeFileSync(t14path.join(wt, T14_S, `rlo-${String.fromCodePoint(0x202e)}.md`), 'bidi\n');
+      t14fs.writeFileSync(t14path.join(wt, T14_S, 'ok.md'), 'fine\n');
+      const o = t14phase({ served: head });
+      expect(o.rows).toEqual({ 'specs:ok.md': t14row('untracked', t14file('fine\n')) });
+      expect(o.unlisted).toEqual({ 'invalid-utf8': 1, 'unsafe-char': 1 });
+    }, 60000);
+
+    it('classify_records follows the table, and parse_status_v2 keeps only whole fields of a cut buffer (pure)', () => {
+      const got = t14unitJson<{ entries: [string, string][]; opaque: string[]; unknown: boolean[]; parsed: unknown }>(h.home, [
+        "recs = [('1', 'M.', b'm1'), ('1', '.M', b'm2'), ('1', 'A.', b'a1'), ('1', '.A', b'a2'), ('1', 'AM', b'a3'),",
+        "        ('1', 'D.', b'd1'), ('1', '.D', b'd2'), ('1', 'MD', b'd3'), ('1', 'AD', b'x'), ('1', '.T', b't1'),",
+        "        ('u', 'UU', b'c1'), ('?', None, b'u1'), ('?', None, b'n/')]",
+        'e, op, unk = H.classify_records(recs)',
+        "bad = [H.classify_records([r])[2] for r in [('2', None, b'x'), ('1', '..', b'x'), ('1', None, b'x'), ('u', None, b'x'), ('empty', None, b'')]]",
+        String.raw`buf = b'# branch.oid ' + b'a' * 40 + b'\x00# branch.head ws/a\x00# branch.upstream origin/ws/a\x00' + b'1 .M N... 100644 100644 100644 ' + b'b' * 40 + b' ' + b'b' * 40 + b' docs/x y.md\x00? docs/u.md\x00? docs/cut'`,
+        'oid, head, rs = H.parse_status_v2(buf)',
+        "out({'entries': [[p.decode(), s] for p, s in e], 'opaque': [d.decode() for d in op], 'unknown': [unk] + bad,",
+        "     'parsed': [oid, head, [[t, x, p.decode()] for t, x, p in rs]]})",
+      ].join('\n'));
+      expect(got.entries).toEqual([
+        ['m1', 'modified'], ['m2', 'modified'], ['a1', 'added'], ['a2', 'added'], ['a3', 'added'],
+        ['d1', 'deleted'], ['d2', 'deleted'], ['d3', 'deleted'], ['t1', 'typechange'], ['c1', 'conflicted'], ['u1', 'untracked'],
+      ]);
+      expect(got.opaque).toEqual(['n']);
+      expect(got.unknown).toEqual([false, true, true, true, true, true]);
+      expect(got.parsed).toEqual(['a'.repeat(40), 'ws/a', [['1', '.M', 'docs/x y.md'], ['?', null, 'docs/u.md']]]);
+    });
+  });
+
+  describe('git hygiene in the draft phase (rows 12, 13, 14)', () => {
+    it('row 14: clean and process drivers, both required, never run; the stat-dirty docs classify; filters-bypassed', () => {
+      const { main, wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n', [`${T14_S}p-b.md`]: 'bbbb\n' });
+      const cleanMarker = t14path.join(h.home, 'clean-marker');
+      const processMarker = t14path.join(h.home, 'process-marker');
+      h.git(main, 'config', 'filter.probe.clean', `touch ${cleanMarker}; cat`);
+      h.git(main, 'config', 'filter.probe.required', 'true');
+      h.git(main, 'config', 'filter.pdrv.process', `touch ${processMarker}`);
+      h.git(main, 'config', 'filter.pdrv.required', 'true');
+      t14fs.writeFileSync(t14path.join(wt, '.gitattributes'), 'a.md filter=probe\np-*.md filter=pdrv\n');
+      // Same size, new bytes, new mtime: status must read the content, through the driver unless neutralised.
+      t14statDirty(wt, `${T14_S}a.md`, 'cccc\n');
+      t14statDirty(wt, `${T14_S}p-b.md`, 'dddd\n');
+
+      const o = t14phase({ served: head });
+      expect(t14fs.existsSync(cleanMarker)).toBe(false);
+      expect(t14fs.existsSync(processMarker)).toBe(false);
+      expect(o.rows).toEqual({
+        'specs:a.md': t14row('modified', t14file('cccc\n')),
+        'specs:p-b.md': t14row('modified', t14file('dddd\n')),
+      });
+      expect(o.facts).toMatchObject({ state: 'holder', caveats: ['filters-bypassed'] });
+      // CONTROL: a plain status runs the drivers, and the required process driver kills it with rc 128.
+      let rc = 0;
+      try { h.git(wt, 'status', '--porcelain'); } catch (e) { rc = (e as { status?: number }).status ?? -1; }
+      expect(rc === 128 || t14fs.existsSync(cleanMarker) || t14fs.existsSync(processMarker)).toBe(true);
+    }, 60000);
+
+    it('row 14: a driver named `a b` is unreadable {step:filter-config} and status never runs', () => {
+      const { main, wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      h.git(main, 'config', 'filter.a b.clean', 'cat');
+      const rec = t14plantGitRecorder(h.home);
+      const o = t14phase({ served: head });
+      expect(o.facts).toEqual({ state: 'unreadable', branch: 'ws/a', worktree: wt, step: 'filter-config', detail: 'driver-name' });
+      const calls = rec.calls();
+      // The recorder saw the phase's own filter read, so the empty status list below is not vacuous.
+      expect(calls.some((c) => c.argv.includes('^filter\\..*\\.(clean|process|required)$'))).toBe(true);
+      expect(calls.filter((c) => c.argv.includes('status'))).toEqual([]);
+    }, 60000);
+
+    it('filter_neutralisers gives every driver clean=, process= and required=false (pure)', () => {
+      const got = t14unitJson<{ two: [string[], boolean]; none: [string[], boolean]; refused: string[] }>(h.home, [
+        String.raw`two = H.filter_neutralisers(b'filter.probe.clean\ntouch m; cat\x00filter.probe.required\x00filter.a.b.process\nx\x00filter.probe.process\ny\x00')`,
+        "none = H.filter_neutralisers(b'')",
+        'refused = []',
+        String.raw`for cfg in (b'filter.a b.clean\ncat\x00', b'filter..clean\ncat\x00', b'filter.\xc3\xa9.clean\ncat\x00', b'filter.x\x00'):`,
+        '    try:',
+        '        H.filter_neutralisers(cfg)',
+        "        refused.append('accepted')",
+        '    except H.DraftUnreadable as e:',
+        "        refused.append(e.step + ':' + e.detail)",
+        "out({'two': two, 'none': none, 'refused': refused})",
+      ].join('\n'));
+      expect(got.two).toEqual([[
+        '-c', 'filter.probe.clean=', '-c', 'filter.probe.process=', '-c', 'filter.probe.required=false',
+        '-c', 'filter.a.b.clean=', '-c', 'filter.a.b.process=', '-c', 'filter.a.b.required=false',
+      ], true]);
+      expect(got.none).toEqual([[], false]);
+      expect(got.refused).toEqual(Array(4).fill('filter-config:driver-name'));
+    });
+
+    it('row 13: core.fsmonitor never fires; CONTROL: a plain status fires it', () => {
+      const { main, wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      const marker = t14path.join(h.home, 'fsmonitor-marker');
+      const hook = t14path.join(h.home, 'fsmonitor-hook');
+      t14fs.writeFileSync(hook, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`, { mode: 0o755 });
+      h.git(main, 'config', 'core.fsmonitor', hook);
+      const o = t14phase({ served: head });
+      expect(o.facts).toMatchObject({ state: 'holder' });
+      expect(t14fs.existsSync(marker)).toBe(false);
+      h.git(wt, 'status', '--porcelain');
+      expect(t14fs.existsSync(marker)).toBe(true);
+    }, 60000);
+
+    it('row 12: a touched doc leaves .git/index (inode, mtime) and every .git file untouched; CONTROL: a plain status rewrites it', () => {
+      const { main } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      const head = h.git(main, 'rev-parse', 'HEAD');
+      const index = t14path.join(main, '.git', 'index');
+      const before = t14fs.statSync(index, { bigint: true });
+      const marker = t14path.join(h.home, 'index-marker');
+      t14fs.writeFileSync(marker, 'm\n');
+      const since = t14fs.statSync(marker, { bigint: true }).mtimeNs;
+      t14statDirty(main, `${T14_S}a.md`, 'aaaa\n');
+      const newer = (dir: string): string[] => t14fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const p = t14path.join(dir, e.name);
+        const mine = t14fs.lstatSync(p, { bigint: true }).mtimeNs > since ? [p] : [];
+        return e.isDirectory() ? [...mine, ...newer(p)] : mine;
+      });
+
+      // The main checkout holds `main` itself: class main, and no draft (the bytes are unchanged).
+      const o = t14phase({ served: head, bd: 'main' });
+      expect(o.facts).toMatchObject({ state: 'holder', branch: 'main', worktree: { path: main, head, class: 'main' } });
+      expect(o.rows).toEqual({});
+      const after = t14fs.statSync(index, { bigint: true });
+      expect([after.ino, after.mtimeNs]).toEqual([before.ino, before.mtimeNs]);
+      expect(newer(t14path.join(main, '.git'))).toEqual([]);
+      h.git(main, 'status', '--porcelain');
+      const ctl = t14fs.statSync(index, { bigint: true });
+      expect([ctl.ino, ctl.mtimeNs]).not.toEqual([before.ino, before.mtimeNs]);
+    }, 60000);
+  });
+
+  describe('lie modes and ignored files (rows 36, 35)', () => {
+    it('row 36: assume-unchanged + edit is modified {trust:hash}; skip-worktree + rm is no draft; CONTROL: status is silent', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n', [`${T14_S}b.md`]: 'bbbb\n' });
+      h.git(wt, 'update-index', '--assume-unchanged', `${T14_S}a.md`);
+      t14fs.writeFileSync(t14path.join(wt, T14_S, 'a.md'), 'edited\n');
+      h.git(wt, 'update-index', '--skip-worktree', `${T14_S}b.md`);
+      t14fs.unlinkSync(t14path.join(wt, T14_S, 'b.md'));
+      expect(h.git(wt, 'status', '--porcelain', '--', 'docs')).toBe('');
+      const o = t14phase({ served: head });
+      expect(o.rows).toEqual({ 'specs:a.md': t14row('modified', t14file('edited\n'), 'hash') });
+      expect(o.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged', 'skip-worktree'] });
+    }, 60000);
+
+    it('row 36: assume-unchanged + rm is deleted {trust:hash}; an unedited assume-unchanged doc is no draft but keeps its caveat', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n', [`${T14_S}b.md`]: 'bbbb\n' });
+      h.git(wt, 'update-index', '--assume-unchanged', `${T14_S}a.md`, `${T14_S}b.md`);
+      t14fs.unlinkSync(t14path.join(wt, T14_S, 'a.md'));
+      expect(h.git(wt, 'status', '--porcelain', '--', 'docs')).toBe('');
+      const o = t14phase({ served: head });
+      expect(o.rows).toEqual({ 'specs:a.md': t14row('deleted', T14_ABSENT, 'hash') });
+      expect(o.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged'] });
+    }, 60000);
+
+    it('row 35, tree half: a gitignored .md in a section is never listed; CONTROL: git calls it ignored', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      t14fs.writeFileSync(t14path.join(wt, '.gitignore'), 'ignored.md\n');
+      t14fs.writeFileSync(t14path.join(wt, T14_S, 'ignored.md'), 'not a draft\n');
+      expect(h.git(wt, 'status', '--porcelain', '--ignored')).toContain(`!! ${T14_S}ignored.md`);
+      const o = t14phase({ served: head });
+      expect(o.facts).toMatchObject({ state: 'holder' });
+      expect(o.rows).toEqual({});
+    }, 60000);
+  });
+
+  describe('the openat walk and the leaf checks (rows 27, 28, 56)', () => {
+    it('an untracked symlink is kind symlink, a hard link kind hardlink, a FIFO kind special within 5 s; no sentinel byte or hash on the answer', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n', [`${T14_S}q.md`]: 'q\n' });
+      const sentinel = t14path.join(h.home, 'sentinel.txt');
+      const secret = 'SENTINEL-BYTES-OUTSIDE-THE-TREE\n';
+      t14fs.writeFileSync(sentinel, secret);
+      t14fs.symlinkSync(sentinel, t14path.join(wt, T14_S, 'link.md'));
+      t14fs.linkSync(sentinel, t14path.join(wt, T14_S, 'hard.md'));
+      // git status never lists an untracked FIFO, so the FIFO replaces a tracked doc (status: .M).
+      t14fs.unlinkSync(t14path.join(wt, T14_S, 'q.md'));
+      t14execFile('mkfifo', [t14path.join(wt, T14_S, 'q.md')]);
+      const t0 = Date.now();
+      const o = t14phase({ served: head });
+      expect(Date.now() - t0).toBeLessThan(5000);
+      expect(o.rows).toEqual({
+        'specs:link.md': t14row('untracked', t14withheld('symlink')),
+        'specs:hard.md': t14row('untracked', t14withheld('hardlink')),
+        'specs:q.md': t14row('modified', t14withheld('special')),
+      });
+      const wire = JSON.stringify(o);
+      expect(wire).not.toContain('SENTINEL');
+      expect(wire).not.toContain(t14sha(secret));
+    }, 60000);
+
+    it('leaf_kind is pure: special, hardlink, foreign-owner, other-device, or None', () => {
+      const got = t14unitJson<(string | null)[]>(h.home, [
+        'import os, stat',
+        'e = os.geteuid()',
+        'R = stat.S_IFREG | 0o644',
+        'out([H.leaf_kind(R, 1, e, 7, 7, e), H.leaf_kind(R, 2, e, 7, 7, e), H.leaf_kind(R, 1, e + 1, 7, 7, e),',
+        '     H.leaf_kind(R, 1, e, 8, 7, e), H.leaf_kind(stat.S_IFIFO | 0o644, 1, e, 7, 7, e),',
+        '     H.leaf_kind(stat.S_IFDIR | 0o755, 2, e, 7, 7, e), H.leaf_kind(R, 2, e + 1, 8, 7, e)])',
+      ].join('\n'));
+      expect(got).toEqual([null, 'hardlink', 'foreign-owner', 'other-device', 'special', 'special', 'hardlink']);
+    });
+
+    it('walk_leaf: other-device by w_dev, foreign-owner by an injected euid, symlink-in-path, file-in-path, absent, an injected EACCES', () => {
+      const { wt } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      t14fs.symlinkSync(t14path.join(wt, 'docs', 'superpowers'), t14path.join(wt, 'docs', 'sp-link'));
+      const got = t14unitJson<unknown[][]>(h.home, [
+        'import errno, os',
+        `wfd = os.open(${t14q(wt)}, os.O_RDONLY | os.O_DIRECTORY)`,
+        'dev = os.fstat(wfd).st_dev',
+        'def walk(rel, w_dev):',
+        '    fd, kind, err, st = H.walk_leaf(wfd, rel, w_dev)',
+        '    if fd is not None:',
+        '        os.close(fd)',
+        '    return [fd is not None, kind, err]',
+        `A = ${t14q(`${T14_S}a.md`)}`,
+        'rows = [walk(A, dev), walk(A, dev + 1)]',
+        'class Other(H.Sys):',
+        '    def geteuid(self):',
+        '        return os.geteuid() + 1',
+        'H.SYS = Other()',
+        'rows.append(walk(A, dev))',
+        'class Denied(H.Sys):',
+        '    def open(self, path, flags, dir_fd=None):',
+        "        if path in ('a.md', 'plans'):",
+        "            raise OSError(errno.EACCES, 'denied')",
+        '        return H.Sys.open(self, path, flags, dir_fd=dir_fd)',
+        'H.SYS = Denied()',
+        'rows.append(walk(A, dev))',
+        "rows.append(walk('docs/superpowers/plans/x.md', dev))",
+        'H.SYS = H.Sys()',
+        `rows += [walk('docs/sp-link/specs/a.md', dev), walk(${t14q(`${T14_S}a.md/x`)}, dev), walk(${t14q(`${T14_S}nope.md`)}, dev)]`,
+        'out(rows)',
+      ].join('\n'));
+      expect(got).toEqual([
+        [true, 'file', null],
+        [false, 'other-device', null],
+        [false, 'foreign-owner', null],
+        [false, 'unreadable', 'EACCES'],
+        [false, 'unreadable', 'EACCES'],
+        [false, 'symlink-in-path', null],
+        [false, 'file-in-path', null],
+        [false, 'absent', null],
+      ]);
+    });
+  });
+
+  describe('budgets and bounds (rows 40, 64)', () => {
+    it('row 40: 1000 untracked drafts are listed; 1001 are too-many {count, bytes}', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      for (let i = 0; i < 1000; i++) t14fs.writeFileSync(t14path.join(wt, T14_S, `n${String(i).padStart(4, '0')}.md`), 'n\n');
+      const ok = t14phase({ served: head });
+      expect(ok.facts).toMatchObject({ state: 'holder' });
+      expect(Object.keys(ok.rows)).toHaveLength(1000);
+      t14fs.writeFileSync(t14path.join(wt, T14_S, 'n1000.md'), 'n\n');
+      const over = t14phase({ served: head });
+      expect(over.facts).toEqual({ state: 'too-many', branch: 'ws/a', worktree: wt, count: 1001, bytes: 0 });
+      expect(over.rows).toEqual({});
+      expect(over.entries).toBe(1);   // the committed listing beside it is whole
+    }, 120000);
+
+    it('row 40: a lowered `budget` parameter past the aggregate read budget is too-many; CONTROL: the default hashes it', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      t14fs.writeFileSync(t14path.join(wt, T14_S, 'big.md'), 'x'.repeat(100));
+      const low = t14phase({ served: head, kw: 'budget=10' });
+      expect(low.facts).toEqual({ state: 'too-many', branch: 'ws/a', worktree: wt, count: 1, bytes: 0 });
+      const ctl = t14phase({ served: head });
+      expect(ctl.rows['specs:big.md']).toEqual(t14row('untracked', t14file('x'.repeat(100))));
+    }, 60000);
+
+    it('rows 40 and 26 (the env knob): a draft above CCD_DOCS_MAX_FILE_BYTES=1000 keeps its size with fp null; CONTROL: unset, it is hashed', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      t14fs.writeFileSync(t14path.join(wt, T14_S, 'big.md'), 'y'.repeat(2000));
+      const low = t14phase({ served: head, env: { CCD_DOCS_MAX_FILE_BYTES: '1000' } });
+      expect(low.rows['specs:big.md']).toEqual(t14row('untracked', { kind: 'file', size: 2000, fp: null }));
+      const ctl = t14phase({ served: head });
+      expect(ctl.rows['specs:big.md']).toEqual(t14row('untracked', t14file('y'.repeat(2000))));
+    }, 60000);
+
+    it('row 26 (the env knob, 999999999 included): file_ceiling: the one env knob only lowers, and only an all-ASCII-digit value counts', () => {
+      const got = t14unitJson<number[]>(h.home, [
+        'import os',
+        'vals = []',
+        "for v in (None, '1000', '0', '0001000', '9999999', '999999999', '9' * 5000, 'abc', '', '12a', ' 12', '\\u00b2'):",
+        "    os.environ.pop('CCD_DOCS_MAX_FILE_BYTES', None)",
+        '    if v is not None:',
+        "        os.environ['CCD_DOCS_MAX_FILE_BYTES'] = v",
+        '    vals.append(H.file_ceiling())',
+        'out(vals)',
+      ].join('\n'));
+      expect(got).toEqual([4194304, 1000, 0, 1000, 4194304, 4194304, 4194304, 4194304, 4194304, 4194304, 4194304, 4194304]);
+    });
+
+    it('row 64: a status stdout overflow under a lowered `stdout_cap` is too-many; the committed listing is intact', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      for (let i = 0; i < 20; i++) t14fs.writeFileSync(t14path.join(wt, T14_S, `long-name-${i}-${'x'.repeat(40)}.md`), 'n\n');
+      const o = t14phase({ served: head, kw: 'stdout_cap=200' });
+      expect(o.facts).toMatchObject({ state: 'too-many', branch: 'ws/a', worktree: wt });
+      expect(o.facts['bytes']).toBe(200);
+      expect(o.facts['count']).toBeLessThan(20);
+      expect(o.entries).toBe(1);
+    }, 60000);
+
+    it('row 64: a lowered `call_s` against a sleeping status is unreadable {step:status, detail:timeout}', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      t14plantGitRecorder(h.home, { sleepWhen: ['status --porcelain=v2'], sleepS: 5 });
+      const t0 = Date.now();
+      const o = t14phase({ served: head, kw: 'call_s=1' });
+      expect(o.facts).toEqual({ state: 'unreadable', branch: 'ws/a', worktree: wt, step: 'status', detail: 'timeout' });
+      expect(o.entries).toBe(1);
+      expect(Date.now() - t0).toBeLessThan(5000);
+    }, 60000);
+
+    it('row 64: the recorded status argv is exact, --no-ahead-behind and --no-renames included, filter flags before it', () => {
+      const { main, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      h.git(main, 'config', 'filter.probe.clean', 'cat');
+      const rec = t14plantGitRecorder(h.home);
+      t14phase({ served: head });
+      const status = rec.calls().filter((c) => c.argv.includes('status'));
+      expect(status).toHaveLength(1);
+      const argv = status[0]!.argv;
+      expect(argv.slice(argv.indexOf('status'))).toEqual([
+        'status', '--porcelain=v2', '-z', '--branch', '--no-ahead-behind', '--no-renames',
+        '--untracked-files=all', '--ignore-submodules=all', '--', ...T14_SECTION_PATHS,
+      ]);
+      const before = argv.slice(0, argv.indexOf('-C'));
+      expect(before.slice(-6)).toEqual([
+        '-c', 'filter.probe.clean=', '-c', 'filter.probe.process=', '-c', 'filter.probe.required=false',
+      ]);
+      expect(argv.some((a) => a.startsWith('--attr-source'))).toBe(false);
+    }, 60000);
+
+    it('a `worktree list` that fails is unreadable {step:worktree-list, worktree:null}, never none, and has no main record', () => {
+      const { head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      t14plantGitRecorder(h.home, { failWhen: ['worktree list'] });
+      const o = t14phase({ served: head });
+      expect(o.facts).toMatchObject({ state: 'unreadable', branch: 'ws/a', worktree: null, step: 'worktree-list' });
+      expect(typeof o.facts['detail']).toBe('string');
+      expect(o.rows).toEqual({});
+      expect(o.main).toBeNull();
+    }, 60000);
+  });
+
+  describe('race guards and base facts (rows 39, 64)', () => {
+    it('row 39: a branch.oid that is not H, a branch.head that is not Bd, or a HEAD bracket that is not H retries once, then is unsettled', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      const z = '0'.repeat(40);
+      const body = [
+        ...t14prelude(),
+        `HEAD_SHA = ${t14q(head)}`,
+        `listed = H.list_committed(repo, HEAD_SHA, dl)`,
+        'class Canned(H.Sys):',
+        '    def __init__(self, oid, branch, bracket):',
+        '        self.oid, self.branch, self.bracket, self.status, self.heads = oid, branch, bracket, 0, 0',
+        '    def spawn(self, argv, *a, **k):',
+        "        if 'status' in argv:",
+        '            self.status += 1',
+        String.raw`            out = b'# branch.oid ' + self.oid.encode() + b'\x00# branch.head ' + self.branch.encode() + b'\x00'`,
+        "            return H.Spawned(rc=0, out=out, err=b'', timed_out=False, overflow=False)",
+        "        if '--verify' in argv:",
+        '            self.heads += 1',
+        String.raw`            return H.Spawned(rc=0, out=self.bracket.encode() + b'\n', err=b'', timed_out=False, overflow=False)`,
+        '        return H.Sys.spawn(self, argv, *a, **k)',
+        'got = {}',
+        `for name, oid, branch, bracket in (('oid', ${t14q(z)}, 'ws/a', HEAD_SHA), ('branch', HEAD_SHA, 'ws/b', HEAD_SHA),`,
+        `                                   ('bracket', HEAD_SHA, 'ws/a', ${t14q(z)}), ('control', HEAD_SHA, 'ws/a', HEAD_SHA)):`,
+        '    H.SYS = Canned(oid, branch, bracket)',
+        "    ph = H.draft_phase(ctx, repo, 'ws/a', {'name': 'ws/a', 'commit': HEAD_SHA}, listed[3], dl)",
+        "    got[name] = {'state': ph.facts['state'], 'facts': ph.facts if ph.facts['state'] == 'unsettled' else None,",
+        "                 'rows': len(ph.rows), 'status': H.SYS.status, 'heads': H.SYS.heads}",
+        'out(got)',
+      ].join('\n');
+      const o = t14unitJson<Record<string, unknown>>(h.home, body);
+      const unsettled = { state: 'unsettled', branch: 'ws/a', worktree: wt };
+      expect(o).toEqual({
+        oid: { state: 'unsettled', facts: unsettled, rows: 0, status: 2, heads: 0 },
+        branch: { state: 'unsettled', facts: unsettled, rows: 0, status: 2, heads: 0 },
+        bracket: { state: 'unsettled', facts: unsettled, rows: 0, status: 2, heads: 2 },
+        control: { state: 'holder', facts: null, rows: 0, status: 1, heads: 1 },
+      });
+    }, 60000);
+
+    it('row 39: with baseEqual, a modified draft whose blob equals C\'s is dropped; CONTROL: baseEqual false keeps it, with base counts', () => {
+      const { wt, head: c0 } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+      t14fs.writeFileSync(t14path.join(wt, 'notes.txt'), 'n\n');
+      h.git(wt, 'add', 'notes.txt');
+      h.git(wt, 'commit', '-m', 'outside the sections');
+      const head = h.git(wt, 'rev-parse', 'HEAD');
+      const blob = h.git(wt, 'rev-parse', `HEAD:${T14_S}a.md`);
+      // A status that says a.md is modified while its bytes are C's: reverted after status ran.
+      const canned = String.raw`b'# branch.oid ' + ${t14q(head)}.encode() + b'\x00# branch.head ws/a\x00' + ${t14q(`1 .M N... 100644 100644 100644 ${blob} ${blob} ${T14_S}a.md`)}.encode() + b'\x00'`;
+      const equal = t14phase({ served: head, pre: t14cannedStatus(canned) });
+      expect(equal.facts).toMatchObject({ state: 'holder', baseEqual: true, base: null });
+      expect(equal.rows).toEqual({});
+      const behind = t14phase({ served: c0, pre: t14cannedStatus(canned) });
+      expect(behind.facts).toMatchObject({ state: 'holder', baseEqual: false, base: { ahead: 1, behind: 0, count: 'measured' } });
+      expect(behind.rows).toEqual({ 'specs:a.md': t14row('modified', t14file('aaaa\n')) });
+    }, 60000);
+
+    it('canned races: a draft gone before its walk, a symlink or a file met on the way, and `?` beside `D.` in either order', () => {
+      const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n', [`${T14_S}x.md`]: 'x\n' });
+      const real = t14path.join(h.home, 'real-dir');
+      t14fs.mkdirSync(real);
+      t14fs.writeFileSync(t14path.join(real, 'y.md'), 'SENTINEL-THROUGH-A-LINK\n');
+      t14fs.symlinkSync(real, t14path.join(wt, T14_S, 'sub'));
+      const z = '0'.repeat(40);
+      const rec = (r: string): string => `${t14q(r)}.encode() + b'\\x00'`;
+      const canned = [
+        String.raw`b'# branch.oid ' + ${t14q(head)}.encode() + b'\x00# branch.head ws/a\x00'`,
+        rec(`1 .M N... 100644 100644 100644 ${z} ${z} ${T14_S}gone.md`),
+        rec(`? ${T14_S}gone-new.md`),
+        rec(`? ${T14_S}x.md`),
+        rec(`1 D. N... 100644 000000 000000 ${z} ${z} ${T14_S}x.md`),
+        rec(`? ${T14_S}sub/y.md`),
+        rec(`? ${T14_S}a.md/inner.md`),
+      ].join(' + ');
+      const o = t14phase({ served: head, pre: t14cannedStatus(canned) });
+      expect(o.facts).toMatchObject({ state: 'holder' });
+      expect(o.rows).toEqual({
+        // .M, then gone: deleted. `? path`, then gone, and a file met on the way: nothing.
+        'specs:gone.md': t14row('deleted', T14_ABSENT),
+        // `D.` printed after `? x.md`: the file is on disk, so untracked still wins.
+        'specs:x.md': t14row('untracked', t14file('x\n')),
+        // A symlinked directory on the way: withheld as a symlink, never followed.
+        'specs:sub/y.md': t14row('untracked', t14withheld('symlink')),
+      });
+      expect(JSON.stringify(o)).not.toContain('SENTINEL');
+    }, 60000);
+
+    it('blob_id hashes the way git hashes a blob', () => {
+      const { main } = t14holder({ [`${T14_S}a.md`]: 'hello\n' });
+      const got = t14unitJson<string>(h.home, "out(H.blob_id(b'hello\\n', 'sha1'))");
+      expect(got).toBe(h.git(main, 'hash-object', `${T14_S}a.md`));
+    }, 60000);
+  });
+});
+
+// ── Task 14, controller ruling G8: the guards the cases above leave unpinned. Each case goes red when its guard is
+// deleted (measured in a scratch copy; the rows are R14-1..R14-n in Task 19's table). ─────────────────────────────
+/** A Sys whose `spawn` answers every call whose argv holds `token` with `Spawned(<kw>)`; the rest run for real. */
+function t14cannedSpawn(token: string, kw: string): string[] {
+  return [
+    'class Canned(H.Sys):',
+    '    def spawn(self, argv, *a, **k):',
+    `        if ${t14q(token)} in argv:`,
+    `            return H.Spawned(${kw})`,
+    '        return H.Sys.spawn(self, argv, *a, **k)',
+    'H.SYS = Canned()',
+  ];
+}
+
+describe('docs draft snapshot guards (docs W1a Task 14, G8)', () => {
+  it('each failing step of the phase degrades to its own DraftsFacts word, never a failure', () => {
+    const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+    const ok = 'timed_out=False';
+    const cases: [string, string, Record<string, unknown>][] = [
+      ['--get-regexp', `rc=0, out=b'', err=b'', ${ok}, overflow=True`, { step: 'filter-config', detail: 'overflow' }],
+      ['--get-regexp', `rc=128, out=b'', err=b'fatal: boom\\n', ${ok}, overflow=False`, { step: 'filter-config' }],
+      ['status', `rc=128, out=b'', err=b'fatal: boom\\n', ${ok}, overflow=False`, { step: 'status' }],
+      ['ls-files', `rc=128, out=b'', err=b'fatal: boom\\n', ${ok}, overflow=False`, { step: 'ls-files' }],
+    ];
+    const details: string[] = [];
+    for (const [token, kw, want] of cases) {
+      const o = t14phase({ served: head, pre: t14cannedSpawn(token, kw) });
+      expect(o.facts).toMatchObject({ state: 'unreadable', branch: 'ws/a', worktree: wt, ...want });
+      expect(o.rows).toEqual({});
+      expect(o.entries).toBe(1);
+      details.push(String(o.facts['detail']));
+    }
+    expect(details[1]).toMatch(/^config rc 128/);
+    expect(details[2]).toMatch(/^status rc 128/);
+    expect(details[3]).toMatch(/^ls-files rc 128/);
+    // An ls-files that runs out of stdout is too-many, with the whole records it had.
+    const over = t14phase({ served: head, pre: t14cannedSpawn('ls-files', `rc=0, out=b'', err=b'', ${ok}, overflow=True`) });
+    expect(over.facts).toEqual({ state: 'too-many', branch: 'ws/a', worktree: wt, count: 0, bytes: 0 });
+    expect(over.rows).toEqual({});
+  }, 120000);
+
+  it('a closing HEAD bracket that cannot answer (rc, expiry or overflow) is a disagreement: unsettled, after one retry', () => {
+    const { head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+    const body = [
+      ...t14prelude(),
+      `HEAD_SHA = ${t14q(head)}`,
+      'listed = H.list_committed(repo, HEAD_SHA, dl)',
+      'class Canned(H.Sys):',
+      '    def __init__(self, kw):',
+      '        self.kw, self.heads = kw, 0',
+      '    def spawn(self, argv, *a, **k):',
+      "        if '--verify' in argv:",
+      '            self.heads += 1',
+      '            return H.Spawned(**self.kw)',
+      '        return H.Sys.spawn(self, argv, *a, **k)',
+      'got = {}',
+      'ok = HEAD_SHA.encode() + b"\\n"',
+      "for name, kw in (('rc', dict(rc=128, out=ok, err=b'', timed_out=False, overflow=False)),",
+      "                 ('expiry', dict(rc=0, out=ok, err=b'', timed_out=True, overflow=False)),",
+      "                 ('overflow', dict(rc=0, out=ok, err=b'', timed_out=False, overflow=True)),",
+      "                 ('control', dict(rc=0, out=ok, err=b'', timed_out=False, overflow=False))):",
+      '    H.SYS = Canned(kw)',
+      "    ph = H.draft_phase(ctx, repo, 'ws/a', {'name': 'ws/a', 'commit': HEAD_SHA}, listed[3], dl)",
+      "    got[name] = [ph.facts['state'], H.SYS.heads]",
+      'out(got)',
+    ].join('\n');
+    const o = t14unitJson<Record<string, [string, number]>>(h.home, body);
+    expect(o).toEqual({ rc: ['unsettled', 2], expiry: ['unsettled', 2], overflow: ['unsettled', 2], control: ['holder', 1] });
+  }, 60000);
+
+  it('a base count that fails without running out is unreadable {step:status, detail:base counts: git-failed}', () => {
+    const { wt, head: c0 } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+    t14fs.writeFileSync(t14path.join(wt, 'notes.txt'), 'n\n');
+    h.git(wt, 'add', 'notes.txt');
+    h.git(wt, 'commit', '-m', 'outside the sections');
+    t14plantGitRecorder(h.home, { failWhen: ['rev-list'] });
+    const o = t14phase({ served: c0 });
+    expect(o.facts).toEqual({ state: 'unreadable', branch: 'ws/a', worktree: wt, step: 'status', detail: 'base counts: git-failed' });
+    expect(o.rows).toEqual({});
+  }, 60000);
+
+  it('the trusted fd is closed on every path out of the phase (a holder, and a snapshot that degrades)', () => {
+    const { head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+    const body = [
+      ...t14prelude(),
+      `HEAD_SHA = ${t14q(head)}`,
+      'listed = H.list_committed(repo, HEAD_SHA, dl)',
+      'class Rec(H.Sys):',
+      '    def __init__(self, fail_status):',
+      '        self.fail_status, self.opened, self.closed = fail_status, 0, 0',
+      '    def open(self, path, flags, dir_fd=None):',
+      '        fd = H.Sys.open(self, path, flags, dir_fd=dir_fd)',
+      '        self.opened += 1',
+      '        return fd',
+      '    def close(self, fd):',
+      '        self.closed += 1',
+      '        H.Sys.close(self, fd)',
+      '    def spawn(self, argv, *a, **k):',
+      "        if self.fail_status and 'status' in argv:",
+      "            return H.Spawned(rc=128, out=b'', err=b'', timed_out=False, overflow=False)",
+      '        return H.Sys.spawn(self, argv, *a, **k)',
+      'got = {}',
+      "for name, fs in (('holder', False), ('degraded', True)):",
+      '    H.SYS = Rec(fs)',
+      "    ph = H.draft_phase(ctx, repo, 'ws/a', {'name': 'ws/a', 'commit': HEAD_SHA}, listed[3], dl)",
+      "    got[name] = [ph.facts['state'], H.SYS.opened > 0, H.SYS.opened == H.SYS.closed]",
+      'out(got)',
+    ].join('\n');
+    const o = t14unitJson<Record<string, [string, boolean, boolean]>>(h.home, body);
+    expect(o).toEqual({ holder: ['holder', true, true], degraded: ['unreadable', true, true] });
+  }, 60000);
+
+  it('lie modes: a tagged symlink is never hashed but keeps its caveat; a tagged doc whose name is refused adds none', () => {
+    const { wt } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n', [`${T14_S}rlo-${String.fromCodePoint(0x202e)}.md`]: 'bidi\n' });
+    t14fs.symlinkSync('a.md', t14path.join(wt, T14_S, 'l.md'));
+    h.git(wt, 'add', `${T14_S}l.md`);
+    h.git(wt, 'commit', '-m', 'a link');
+    const head = h.git(wt, 'rev-parse', 'HEAD');
+    h.git(wt, 'update-index', '--assume-unchanged', `${T14_S}l.md`);
+    h.git(wt, 'update-index', '--skip-worktree', `${T14_S}rlo-${String.fromCodePoint(0x202e)}.md`);
+    t14fs.unlinkSync(t14path.join(wt, T14_S, 'l.md'));
+    t14fs.symlinkSync('elsewhere', t14path.join(wt, T14_S, 'l.md'));
+    t14fs.writeFileSync(t14path.join(wt, T14_S, `rlo-${String.fromCodePoint(0x202e)}.md`), 'edited\n');
+    const o = t14phase({ served: head });
+    expect(o.rows).toEqual({});
+    expect(o.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged'] });
+    expect(o.unlisted).toEqual({});
+  }, 60000);
+
+  it('row 40: 1001 hidden (assume-unchanged) edits are too-many {count, bytes}; CONTROL: 1000 are listed', () => {
+    const files: Record<string, string> = {};
+    const names: string[] = [];
+    for (let i = 0; i < 1001; i++) {
+      const rel = `${T14_S}l${String(i).padStart(4, '0')}.md`;
+      files[rel] = 'x\n';
+      names.push(rel);
+    }
+    const { wt, head } = t14holder(files);
+    h.git(wt, 'update-index', '--assume-unchanged', ...names);
+    for (const rel of names.slice(0, 1000)) t14fs.writeFileSync(t14path.join(wt, rel), 'z\n');
+    const ok = t14phase({ served: head });
+    expect(ok.facts).toMatchObject({ state: 'holder', caveats: ['assume-unchanged'] });
+    expect(Object.keys(ok.rows)).toHaveLength(1000);
+    t14fs.writeFileSync(t14path.join(wt, names[1000]!), 'z\n');
+    const over = t14phase({ served: head });
+    expect(over.facts).toEqual({ state: 'too-many', branch: 'ws/a', worktree: wt, count: 1001, bytes: 2002 });
+    expect(over.rows).toEqual({});
+  }, 180000);
+
+  it('unlisted counts only paths NEW in W: a refused tracked doc is not counted, a refused nested repo is', () => {
+    const bidi = String.fromCodePoint(0x202e);
+    const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n', [`${T14_S}rlo-${bidi}.md`]: 'bidi\n' });
+    t14fs.writeFileSync(t14path.join(wt, T14_S, `rlo-${bidi}.md`), 'a longer edit\n');
+    h.git(wt, 'init', '-q', t14path.join(wt, T14_S, `nest${bidi}dir`));
+    t14fs.writeFileSync(t14path.join(wt, T14_S, `nest${bidi}dir`, 'x.md'), 'x\n');
+    const o = t14phase({ served: head });
+    expect(o.rows).toEqual({});
+    expect(o.unlisted).toEqual({ 'unsafe-char': 1 });
+    expect(o.facts).toMatchObject({ state: 'holder', opaque: [] });
+  }, 60000);
+
+  it('parse_ls_files keeps the first stage of a path and only whole records, and refuses a record of another shape (pure)', () => {
+    const got = t14unitJson<{ parsed: Record<string, string[]>; refused: string }>(h.home, [
+      "a, b, c = b'a' * 40, b'b' * 40, b'c' * 40",
+      "buf = (b'H 100644 ' + a + b' 0\\tdocs/x y.md\\0' + b'S 100644 ' + b + b' 1\\tdocs/u.md\\0' +",
+      "       b'S 100644 ' + c + b' 2\\tdocs/u.md\\0' + b'h 120000 ' + a + b' 0\\tdocs/cut')",
+      "parsed = H.parse_ls_files(buf)",
+      "try:",
+      "    H.parse_ls_files(b'junk\\0')",
+      "    refused = 'accepted'",
+      "except H.DraftUnreadable as e:",
+      "    refused = e.step + ':' + e.detail",
+      "out({'parsed': dict((p.decode(), list(v)) for p, v in parsed.items()), 'refused': refused})",
+    ].join('\n'));
+    expect(got.parsed).toEqual({
+      'docs/x y.md': ['H', '100644', 'a'.repeat(40), '0'],
+      'docs/u.md': ['S', '100644', 'b'.repeat(40), '1'],
+    });
+    expect(got.refused).toBe('ls-files:unexpected-record');
+  });
+
+  it('draft_facts: a read that fails is unreadable with its errno; a file that outgrew the ceiling or the budget while read is refused', () => {
+    const { wt } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+    const got = t14unitJson<unknown[]>(h.home, [
+      'import errno, os',
+      `wfd = os.open(${t14q(wt)}, os.O_RDONLY | os.O_DIRECTORY)`,
+      'st = os.fstat(wfd)',
+      "trusted = H.Trusted('w', 'x', wfd, st.st_dev, st.st_ino)",
+      `REL = ${t14q(`${T14_S}a.md`)}`,
+      'class ReadFails(H.Sys):',
+      '    def read(self, fd, n):',
+      "        raise OSError(errno.EIO, 'io')",
+      'class Grows(H.Sys):',
+      '    def read(self, fd, n):',
+      "        return b'x' * n",
+      'res = []',
+      'H.SYS = ReadFails()',
+      "res.append(H.draft_facts(trusted, REL, H.HashBudget(10 ** 6), 'sha1'))",
+      "os.environ['CCD_DOCS_MAX_FILE_BYTES'] = '10'",
+      'H.SYS = Grows()',
+      "res.append(H.draft_facts(trusted, REL, H.HashBudget(10 ** 6), 'sha1'))",
+      "del os.environ['CCD_DOCS_MAX_FILE_BYTES']",
+      'try:',
+      "    H.draft_facts(trusted, REL, H.HashBudget(5), 'sha1')",
+      "    res.append('accepted')",
+      'except H.DraftBudgetSpent:',
+      "    res.append('budget-spent')",
+      'out(res)',
+    ].join('\n'));
+    expect(got).toEqual([
+      [{ kind: 'unreadable', size: null, fp: null, errno: 'EIO' }, null],
+      [{ kind: 'file', size: 11, fp: null }, null],
+      'budget-spent',
+    ]);
+  }, 60000);
+
+  it('walk_leaf: ENXIO is special, a failing fstat is unreadable, and a missing middle directory is absent', () => {
+    const { wt } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
+    const got = t14unitJson<unknown[][]>(h.home, [
+      'import errno, os',
+      `wfd = os.open(${t14q(wt)}, os.O_RDONLY | os.O_DIRECTORY)`,
+      'dev = os.fstat(wfd).st_dev',
+      'def walk(rel):',
+      '    fd, kind, err, st = H.walk_leaf(wfd, rel, dev)',
+      '    if fd is not None:',
+      '        os.close(fd)',
+      '    return [kind, err]',
+      `A = ${t14q(`${T14_S}a.md`)}`,
+      'class Socket(H.Sys):',
+      '    def open(self, path, flags, dir_fd=None):',
+      "        if path == 'a.md':",
+      "            raise OSError(errno.ENXIO, 'no such device or address')",
+      '        return H.Sys.open(self, path, flags, dir_fd=dir_fd)',
+      'class NoFstat(H.Sys):',
+      '    def fstat(self, fd):',
+      "        raise OSError(errno.EIO, 'io')",
+      'rows = []',
+      'H.SYS = Socket()',
+      'rows.append(walk(A))',
+      'H.SYS = NoFstat()',
+      'rows.append(walk(A))',
+      'H.SYS = H.Sys()',
+      "rows.append(walk('docs/nothere/x.md'))",
+      'out(rows)',
+    ].join('\n'));
+    expect(got).toEqual([['special', null], ['unreadable', 'EIO'], ['absent', null]]);
+  });
+});
