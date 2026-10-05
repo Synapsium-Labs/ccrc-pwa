@@ -603,7 +603,7 @@ Output: `w2-shadow-review.json` in the coordinator notes.
     which was false for the double send, rather than only scoping it. The allowlist message's wording, named in
     `35fe57070`'s subject, is recorded here too.
   - Run 259 goes back to `working` for the fix round. A fresh review run reads it.
-- **R36 (coordinator, 2026-10-05 03:19): wave 7's fix round is verified, and its re-review is dispatched.**
+- **R36 (coordinator, 2026-10-05 03:17): wave 7's fix round is verified, and its re-review is dispatched.**
   - **The claim.** Mail 3459 reports four commits on `35fe57070`, test files and one comment only:
     - F2: the rows take `JUDGED_STATES`, which is `ACTIVE_RUN_STATES` without `unknown`; the new row C11 reds both;
     - F3: the ordinary joins are closed, and W15–W21 are red;
