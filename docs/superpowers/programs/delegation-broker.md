@@ -18,7 +18,7 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **in review** — wave-done verified 2026-10-05 19:25 UTC at `347b7b64` (run 271 `awaiting-review`, items 9/9); review run 277 (`ccrc-pwa-calm-summit`) |
+| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **fix round 1** since 2026-10-05 20:27 UTC — review 277 at `347b7b64`: 36 findings, 0 critical, 11 important |
 | 2 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | wave 1's matrix and its real-lane cross-check | — | to plan once wave 1's measurement section is complete |
 | 3 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 2 | — | to plan |
 | 4 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 3 | — | to plan |
@@ -67,9 +67,38 @@ its own heading. Until both are here, nothing in waves 2–6 may depend on a hoo
   shards, which is accepted (the hard timeout and the log kept a hang visible; the gate suites ran in the foreground).
   The raw synthetic capture root stays on the box until #284 merges. Review run 277 runs the held-out panel, plus
   public-content, hook-inertness and measurement-provenance lenses.
+- **2026-10-05 — review 277's verdict (`ccrc-pwa-calm-summit`, at `347b7b64`):** 36 findings (0 critical, 11 important,
+  25 minor), merged from 59 confirmed. Per lens, confirmed out of raised:
+  - Panel: correctness 4/5, spec 5/5, reproduce 6/7.
+  - Wave lenses: public-content 0/4, hook-change 1/2, provenance-matrix 6/7, provenance-amendments 9/10,
+    deviations 5/7, whole-branch 2/5.
+  - Mutation agents: 13 of 126 cells survived.
+
+  No lens came back unverified. The committed corpus is clean; `matrix.json` re-derives byte-identically; `SessionEnd`
+  is measured inert outside `-hookcap` (no file written, a median of 32 ms); the `tmp-sweep` main-red claim
+  reproduced. The systematic weakness is guard arms added in review and fix rounds that have no row able to go red.
+- **2026-10-05 — fix round 1 rulings (mail 3587).** Every finding is fixed except F34, a dated spec anchor that stays
+  as it is. The rulings that needed one:
+  - F4: re-script interrupt-exit and re-run it on all seven versions (plan Task 6 Step 3), falling back to unmeasured
+    after one honest attempt.
+  - F6, F22, F23: new or widened amendments.
+  - F7: no merge of `main`. Coordinator clause 15 allows asking for an absorb only on a measured conflict, and the
+    merge is clean, so the plan's merge-before-handoff constraint is superseded as a planning error.
+  - F8, F10, F28: the departures are recorded.
+  - F13, F14, F15, F16 are in scope. F16 means Q8 is re-run on the largest repo.
+  - F17: SIGKILL and swap-resume are declared as proxies.
+
+  A second block was minted for the round: ten numbers, 4058 through 4067 (4058 F4, 4059 F7, 4060 and 4061 F8,
+  4062 F10, 4063 F28, the rest spare).
+- **2026-10-05 — routing:** the worker's effort rises from high to xhigh for fix round 1 (`runs route`, kind `shallow`:
+  tests missed). The review found guards without a red row; the routing matrix raises effort one rung for that.
 - **2026-10-05 — the parent incarnation field is already in the tree** (spec §5.1, §8.1 item 10): `$REG/<id>.generation`
-  (D-2605) is minted once at row creation and never rewritten. The hook also sees it as `CCRC_SESSION_GENERATION`, but
-  ccd does not set that on every spawn path, so later waves read the file. Wave 1 records this from source.
+  (D-2605) is never rewritten once present. The hook also sees it as `CCRC_SESSION_GENERATION`, but ccd does not set
+  that on every spawn path, so later waves read the file. Wave 1 records this from source. **Corrected after review
+  277 (F27):** the file is not minted at row creation alone — ccd mints it on genuine absence at four sites, and a
+  live row can lack it (ccd's own comments quote 31 of 34 rows without it, measured 2026-09-17). The resume retry
+  spawn also drops the environment value silently when its re-read fails. So an absent or invalid file is an
+  UNMEASURED incarnation, never a changed one.
 
 Deviation numbers: each wave's block is minted at its run-open and recorded here in prose; no number is spelled as
 a `D-` token in this file until a plan defines it. **Wave 1 (run 271):** twenty numbers, 3992 through 4011, minted
