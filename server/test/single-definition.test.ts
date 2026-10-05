@@ -1823,6 +1823,19 @@ describe('the model files, and who reads each one', () => {
     expect(spell('providers-whitelist.json')).toEqual(['deploy/models-op.mjs']);
   });
 
+  it('a lane file\'s type-tested read is DEFINED once, in shared/modelenv.mjs, and deploy/models-op.mjs imports it (Plan 3b A-6)', () => {
+    // A definition, not a mention: `shared/modelenv.d.mts` declares it
+    // (`export declare function …`) and every reader calls it, and neither is
+    // a second opinion about what "a lane file's read" means. Two copies were
+    // what Plan 3a's MF-2 left (one per module), and ruling A-6 makes it one.
+    const defines = MODELS_CORPUS
+      .filter((f) => /^(?:export\s+)?function\s+readRegular\s*\(/m.test(codeOf(f)))
+      .map(rel).sort();
+    expect(defines).toEqual(['shared/modelenv.mjs']);
+    expect(readFileSync(path.join(ccrcRoot, 'deploy', 'models-op.mjs'), 'utf8'))
+      .toMatch(/import\s*\{[^}]*\breadRegular\b[^}]*\}\s*from\s*'\.\.\/shared\/modelenv\.mjs'/);
+  });
+
   it('the four class names are enumerated only where a walk needs the sequence', () => {
     // A file may list all four ONLY if it walks them in order. SEVEN print,
     // and SIX of them walk it: the TypeScript source, its bare-`node` twin,
