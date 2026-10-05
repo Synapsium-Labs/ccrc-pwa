@@ -165,13 +165,14 @@ task, and each test has a mutation row that reds it.
    rows P3, P5.
 3. **The segment rule, over the cap.** The raw command is split on `;` `&` `|` and the newline (fixed-string `split`,
    never `splits`); a `contains("gh") and contains("merge")` prefilter runs; and in one segment `gh` (not after a word
-   character, and followed by a blank), `pr` (ended by a blank or the segment's end) and `merge` (ended by a blank, the
-   segment's end, a backtick, `(`, `)`, `<` or `>`: that end class is `merge`'s alone) are searched in that order. A held or child session's command that matches is refused unread, gh's own flags and a flag value
-   holding a substitution or a redirection included; any other over-cap command passes. → "lets an over-cap command
-   through unparsed unless its raw text spells a word-bounded `gh pr merge`", "refuses gh's own flags between the words
-   over the cap, as main's full parse does", "refuses %s over the cap (review 267 F4)", "refuses a flag value that holds
-   a substitution or a redirection over the cap", "lets an over-cap command through that is not a merge", and the six
-   100 KB timing pins; rows P2, P7, P8, P11, and fix round 1's S0–S10 and SP.
+   character, and followed by a blank), `pr` as a word (a blank before it, a blank or the segment's end after it) and
+   `merge` (ended by a blank, the segment's end, a backtick, `(`, `)`, `<` or `>`: that end class is `merge`'s alone)
+   are searched in that order. A held or child session's command that matches is refused unread, gh's own flags and a
+   flag value holding a substitution or a redirection included; any other over-cap command passes. → "lets an over-cap
+   command through unparsed unless its raw text spells a word-bounded `gh pr merge`", "refuses gh's own flags between
+   the words over the cap, as main's full parse does", "refuses %s over the cap (review 267 F4)", "refuses a flag
+   value that holds a substitution or a redirection over the cap", "lets an over-cap command through that is not a
+   merge", and the six 100 KB timing pins; rows P2, P7, P8, P11, and fix round 1's S0–S10 and SP.
 4. **Only where the deny applies.** No hold and no marker: never refused, over the cap or under it; a marked child is
    refused over the cap too, with the child's reason. → "refuses only where the deny applies"; rows P6 (the child's
    half) and P10 (the unheld half: a refusal with no hold, through the case's own `toBeNull`). P9 reds the same case
@@ -611,13 +612,13 @@ and insert, directly below it (above `GH_MERGE_RE=`):
 # question, with a fixed-string segment rule (`ocwords`): split the command on
 # each of `;` `&` `|` and the newline, the separators between COMMANDS, and in
 # any one segment find `gh` (not preceded by a letter, digit or `_`, and
-# followed by a blank), then `pr` (a blank or the segment's end after it),
-# then `merge` as a word that a blank, the end of the segment, a backtick,
-# `(`, `)`, `<` or `>` ends (that end class is `merge`'s alone), each searched
-# for after the one before (one leftmost match each, so linear). The
-# redirections and parentheses do not split: a gh flag's value may hold them
-# (`gh -R $(echo o/r) pr merge`, `gh -R o/r<x pr merge`), and a merge is
-# still a merge there.
+# followed by a blank), then `pr` as a word (a blank before it, a blank or the
+# segment's end after it), then `merge` as a word that a blank, the end of the
+# segment, a backtick, `(`, `)`, `<` or `>` ends (that end class is `merge`'s
+# alone), each searched for after the one before (one leftmost match each, so
+# linear). The redirections and parentheses do not split: a gh flag's value may
+# hold them (`gh -R $(echo o/r) pr merge`, `gh -R o/r<x pr merge`), and a merge
+# is still a merge there.
 # gh's own flags may stand between the words (`gh -R o/r pr merge`, `gh pr -R
 # o/r merge`), which main's full parse refuses (landing-order wave 3's fix
 # round, review 267 F3). Yes: the arm reads it as a merge it could not

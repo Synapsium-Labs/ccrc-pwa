@@ -3512,13 +3512,13 @@ fi
 # question, with a fixed-string segment rule (`ocwords`): split the command on
 # each of `;` `&` `|` and the newline, the separators between COMMANDS, and in
 # any one segment find `gh` (not preceded by a letter, digit or `_`, and
-# followed by a blank), then `pr` (a blank or the segment's end after it),
-# then `merge` as a word that a blank, the end of the segment, a backtick,
-# `(`, `)`, `<` or `>` ends (that end class is `merge`'s alone), each searched
-# for after the one before (one leftmost match each, so linear). The
-# redirections and parentheses do not split: a gh flag's value may hold them
-# (`gh -R $(echo o/r) pr merge`, `gh -R o/r<x pr merge`), and a merge is
-# still a merge there.
+# followed by a blank), then `pr` as a word (a blank before it, a blank or the
+# segment's end after it), then `merge` as a word that a blank, the end of the
+# segment, a backtick, `(`, `)`, `<` or `>` ends (that end class is `merge`'s
+# alone), each searched for after the one before (one leftmost match each, so
+# linear). The redirections and parentheses do not split: a gh flag's value may
+# hold them (`gh -R $(echo o/r) pr merge`, `gh -R o/r<x pr merge`), and a merge
+# is still a merge there.
 # gh's own flags may stand between the words (`gh -R o/r pr merge`, `gh pr -R
 # o/r merge`), which main's full parse refuses (landing-order wave 3's fix
 # round, review 267 F3). Yes: the arm reads it as a merge it could not
