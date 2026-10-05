@@ -668,7 +668,7 @@ function stubLaunchctl(home: string): void {
     + '  print)\n'
     + '    lbl="${2##*/}"\n'
     + '    unit="${lbl#app.ccrc.}"\n'
-    + '    case "$unit" in session.*) unit="claude-session@${unit#session.}" ;;'
+    + '    case "$unit" in session.*) unit="claude-session@${unit#session.}.service" ;;'
     + ' *) unit="$unit.service" ;; esac\n'
     + '    f="$HOME/fixture-unit-$unit"\n'
     + '    if [ -f "$f" ]; then IFS= read -r v < "$f";'
@@ -10827,6 +10827,28 @@ function fixerNames(): string[] {
   if (r.status !== 0) throw new Error(`could not list the fixers: ${r.stderr}`);
   return (r.stdout ?? '').split('\n').filter(Boolean);
 }
+
+// `stubLaunchctl` answers a SESSION unit from the same
+// `fixture-unit-claude-session@<id>.service` file the systemctl stub reads, as
+// its own contract says. Forced Darwin, so it is measured on any host: the stub
+// once looked up `fixture-unit-claude-session@<id>` (no `.service`), and the
+// LIVE-session case in codex part 2 went red on macOS alone (PR #239's
+// test-macos 2/2) while every Linux run stayed green.
+describe('stubLaunchctl: a session unit reads the fixture file systemctl reads (forced Darwin)', () => {
+  it('_svc_is_active answers active, inactive and unasked for claude-session@<id> from fixture-unit-claude-session@<id>.service', () => {
+    const home = mkTmp('ccrc-doctor-launchctl-session-');
+    stubLaunchctl(home);
+    const ask = (): string => spawnSync(BASH, ['-c', `. ${shq(CCRC_SRC)}; printf '[%s]' "$(_svc_is_active claude-session@proj-b.service)"`],
+      { env: { ...doctorEnv(home), OSTYPE: 'darwin23' }, encoding: 'utf8' }).stdout;
+    const f = join(home, 'fixture-unit-claude-session@proj-b.service');
+    writeFileSync(f, 'active\n');
+    expect(ask()).toBe('[active]');
+    writeFileSync(f, 'inactive\n');
+    expect(ask()).toBe('[inactive]');
+    writeFileSync(f, '\n');
+    expect(ask()).toBe('[]');
+  });
+});
 
 describe('ccrc doctor --fix: the contract every fixer runs under (Plan 3a Task 8)', () => {
   it('a fixer runs on a FAIL only: a WARN keeps its verdict and its fixer never runs (R-C8)', () => {
