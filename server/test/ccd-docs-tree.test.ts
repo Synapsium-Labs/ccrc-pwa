@@ -1763,4 +1763,49 @@ describe('docs draft holders and holder trust: failure arms (docs W1a Task 13, G
       out({'got': got, 'opened': len(opened)})
     `)).toEqual({ got: ['untrusted', 'dubious-ownership'], opened: 0 });
   });
+
+  it('parse_worktrees refuses a list cut before any NUL and a record that does not open with its worktree line', () => {
+    // Each refused input is paired with the same bytes completed (the control), so only the guard tells them apart:
+    // the cut list parses as ONE record without the NUL guard (the cut second record is silently dropped), and the
+    // mis-spelled line parses as a record without the worktree-line guard.
+    const r = unitJson<unknown>(h.home, t13ctx() + t13py(String.raw`
+      Z = b'\x00'
+      A = b'a' * 40
+      def count(buf):
+          try:
+              return len(H.parse_worktrees(buf))
+          except ValueError:
+              return 'ValueError'
+      first = b'worktree /a' + Z + b'HEAD ' + A + Z + Z
+      out({
+          'cut-before-nul': count(first + b'worktree /b'),
+          'cut-control': count(first + b'worktree /b' + Z + b'HEAD ' + A + Z + Z),
+          'no-worktree-line': count(b'xxxxxxxxx/b' + Z + b'HEAD ' + A + Z + b'branch refs/heads/ws/a' + Z + Z),
+          'line-control': count(b'worktree /b' + Z + b'HEAD ' + A + Z + b'branch refs/heads/ws/a' + Z + Z),
+      })
+    `));
+    expect(r).toEqual({
+      'cut-before-nul': 'ValueError', 'cut-control': 2, 'no-worktree-line': 'ValueError', 'line-control': 1,
+    });
+  });
+
+  it('the list runs under the 8 s list class and the holder trust rev-parse under the 5 s ref class', () => {
+    t13heldA();
+    // A `Sys` that records (subcommand, timeout_s) for each spawn and then runs it for real. The deadline is 12 s,
+    // so dl.bound clips neither value. The subcommand is the word after `-C <path>`.
+    const got = t13trustUnit(`
+      REC = []
+      class Records(H.Sys):
+          def spawn(self, argv, env, cwd, timeout_s, *a, **k):
+              REC.append([argv[argv.index('-C') + 2], timeout_s])
+              return H.Sys.spawn(self, argv, env, cwd, timeout_s, *a, **k)
+      H.SYS = Records()
+      e = H.enumerate_drafts_holder(CTX, REPO, 'ws/a', DL)
+      if e.trusted is not None:
+          os.close(e.trusted.fd)
+      out({'state': e.facts.get('state'), 'worktree': [t for s, t in REC if s == 'worktree'],
+           'rev-parse': [t for s, t in REC if s == 'rev-parse']})
+    `);
+    expect(got).toEqual({ state: 'holder', worktree: [8], 'rev-parse': [5] });
+  });
 });
