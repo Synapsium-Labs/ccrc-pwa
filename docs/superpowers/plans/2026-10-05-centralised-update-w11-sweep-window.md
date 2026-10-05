@@ -170,7 +170,7 @@ Reviewers: do not raise these.
 - **Critic M4:** a second update's `try-restart` during this run's window still reads as MainPID churn on the first call. The re-check covers it if the churn has settled. The ownership guard (Task 6) stops the report being overwritten.
 - **Critic I9 / ruling 5:** no bulk-stop cap. **No freshness clause** (ruling 4). **No `ActiveEnterTimestamp` read.**
 - **A registry test that would tell a purged row from a never-existed id** (Risk notes, R13(a)). D-2605's purge keeps nothing, measured: 0 of 35 purged ids still hold a `.generation`. So no registry fact tells the two apart, and the input is unreachable.
-- **README / CLAUDE.md:** no sentence states the sweep verify's rule, measured. `README.md:789-790` and `:875` name the sweep and its preflight only, and stay true. Neither file is edited.
+- **README / CLAUDE.md:** the README's update-path paragraph (`README.md:795`, after #283 landed on `main`) DOES state the sweep verify's rule, so it is edited: one sentence, in place, by the coordinator's ruling of 2026-10-05 21:49 UTC (mail 3599, option A), this wave's one scope exception. It states the Linux shared window and D-3984's extra units, D-3983's single re-check, and the Darwin window and re-check without a classifier. CLAUDE.md is not edited.
 - **Other stale `ccd/ccrc:<n>` citations** in test comments are left: `ccrc-account.test.ts`, `ccrc-install.test.ts`, `session-hook.test.ts` and more are already stale at `00f8a193`. Only the six this wave owns are re-pointed:
   - R13(f)'s three;
   - `ccrc-doctor.test.ts:3591`'s and `:8384`'s `:2939`;

@@ -793,10 +793,13 @@ the staged tree (role-aware, atomic, seed-once files untouched, every rostered h
 tree in a version directory of its own and flips `~/ccrc` to it — Versioned installs, below; it mints `~/.ccrc/node-id`
 once, rewrites `~/.ccrc/ccrc-caps` with what this install can do, and raises the floor last); the health gate (below);
 the supervisor sweep behind its mandatory `KillMode=process` preflight, each restarted supervisor then held to the
-stay-up check (`deploy/verify-service.sh` on Linux) — one that does not stay up fails the run (exit 1, reported
-`failed`), but on Linux a session stopped on purpose while the sweep walks (its unit settled `inactive` with ccd's
+stay-up check (`deploy/verify-service.sh` on Linux), all of them in one shared window — a unit the post-restart listing
+shows `activating` or `failed` is verified too — and a crash-like first failure gets ONE re-check, alone: it fails the
+run (exit 1, reported `failed` unless a newer update owns the report) only if that fails too, and the re-checks stop at
+the first that fails; macOS runs the same window and re-check in-process, with no stop-on-purpose classifier. On Linux a
+session stopped on purpose while the sweep walks (its unit settled `inactive` with ccd's
 `~/.cc-sessions/<id>.stopped` stamp present or its registry row purged; a stop with neither still fails) passes on a
-line of its own, as it does in `deploy.sh agent`'s sweep; then the from→to report, and, after a passed gate and a
+line of its own, as it does in `deploy.sh agent`'s sweep (a serial loop with no re-check); then the from→to report, and, after a passed gate and a
 finished sweep, the `~/ccrc-backups` prune (`CCRC_BACKUP_KEEP` from the process environment, default 10).
 Rolling back is `ccrc rollback` (below), which, like any move below the floor, prints the coord.db restore commands rather than
 auto-restoring. **Across a two-box fleet, `ccrc rollout [--to] [--server-first] [--check] [--force]`** (with `--channel`,
