@@ -2348,4 +2348,260 @@ describe('verify-service.sh tells a deliberate supervisor stop from a crash (wav
     expect(lines[60]).toBe('WINDOW="${CCRC_VERIFY_WINDOW:-5}"');
     expect(lines[61]).toBe('LOG_LINES="${CCRC_VERIFY_LOG_LINES:-60}"');
   }, 30_000);
+
+  const STAMPED_LINE = `stopped on purpose: ${U} settled 'inactive', and ccd's stop stamp ~/.cc-sessions/demo-gone.stopped is present (reads '1791151850 ccd') — a deliberate stop, not a crash`;
+  const PURGED_LINE = `stopped on purpose: ${U} settled 'inactive', and its registry row is purged (no ~/.cc-sessions/demo-gone.uuid) — a deliberate stop, not a crash`;
+  const FIFO_LINE = `stopped on purpose: ${U} settled 'inactive', and ccd's stop stamp ~/.cc-sessions/demo-gone.stopped is present (not read: not a plain file) — a deliberate stop, not a crash`;
+  const MUTATING = / (start|stop|restart|try-restart|reset-failed|enable|disable|kill|daemon-reload) /;
+
+  /** The live content of ccd's stamp, measured at 22:10:50, beside the row's uuid. */
+  const stamp = (home: string): void =>
+    plantReg(home, { 'demo-gone.uuid': 'u', 'demo-gone.stopped': '1791151850 ccd' });
+  const fixtureHome = (): string => mkTmp('ccrc-agent-verifyhome-');
+
+  it('V1: stopped on purpose, stamped (the window path) passes with its own line', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(STAMPED_LINE);
+    expect(r.stderr).not.toContain('DEPLOY FAILED');
+    expect(r.calls.trim().split('\n')).toEqual([
+      `systemctl --user is-active ${U}`,
+      `systemctl --user show -p MainPID --value ${U}`,
+      `systemctl --user is-active ${U}`,
+      `systemctl --user is-active ${U}`,
+    ]);
+  }, 30_000);
+
+  it('V2: a purged row passes (the purge keeps `generation`, D-2605)', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.generation': '7' });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(PURGED_LINE);
+  }, 30_000);
+
+  it('V3: a unit caught `deactivating` is re-polled until it settles', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({
+      isActive: ['active', 'deactivating', 'deactivating', 'deactivating', 'inactive'], mainPid: ['4242'],
+    }), U, { home });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(STAMPED_LINE);
+    expect(nIsActive(r.calls)).toBe(5);
+  }, 30_000);
+
+  it('V4: the re-poll is bounded — a unit that never settles still fails', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', 'deactivating'], mainPid: ['4242'] }), U,
+      { home, env: { CCRC_VERIFY_STOP_POLLS: '3' }, timeout: 5_000 });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(1);
+    expect(r.stderr).toContain("became 'deactivating'");
+    // settle, window, the first re-read, then 3 polls.
+    expect(nIsActive(r.calls)).toBe(6);
+  }, 30_000);
+
+  it('V5: unstamped with the row kept fails as before (a hand stop, a swap mid-carry)', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u' });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("became 'inactive'");
+    expect(r.stderr).toContain('DEPLOY FAILED');
+    expect(r.calls).toContain('journalctl');
+  }, 30_000);
+
+  it.each(['failed', 'activating'])('V6: `%s` seen in the window is never classified, stamp or no stamp', (x) => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', x, 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`became '${x}'`);
+    expect(nIsActive(r.calls)).toBe(2);
+  }, 30_000);
+
+  it('V6b: `activating` at the settle read is never classified', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['activating', 'inactive'], mainPid: ['0'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("unit is 'activating', not 'active'");
+    expect(nIsActive(r.calls)).toBe(1);
+  }, 30_000);
+
+  it.each(['active', 'failed', 'activating'])('V6c: `%s` as the classifier\'s re-read is not a settled stop', (x) => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', x], mainPid: ['4242'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("became 'inactive'");
+    expect(nIsActive(r.calls)).toBe(3);
+  }, 30_000);
+
+  it('V7: MainPID churn with a stamp is a crash loop (ruling 6)', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', 'active', 'active'], mainPid: ['111', '222'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('CRASH-LOOPING');
+    expect(nIsActive(r.calls)).toBe(2);
+  }, 30_000);
+
+  it('V7b: MainPID churn, then a stamped stop before any re-read, is still a crash loop (ruling 6)', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', 'active', 'inactive'], mainPid: ['111', '222'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('CRASH-LOOPING');
+    expect(nIsActive(r.calls)).toBe(2);
+  }, 30_000);
+
+  it('V8: scope — ccrc-agent.service never reaches the registry (critic I5)', () => {
+    // Without the scope check the id would strip to `ccrc-agent` and match both arms.
+    const home = fixtureHome(); plantReg(home, { 'ccrc-agent.stopped': '1 ccd' });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }),
+      'ccrc-agent.service', { home });
+    expect(r.code).toBe(1);
+    expect(nIsActive(r.calls)).toBe(2);
+  }, 30_000);
+
+  it('V9: another session\'s stamp is not this session\'s', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u', 'demo-other.stopped': '1 ccd' });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code).toBe(1);
+  }, 30_000);
+
+  it('V10: an absent registry is "not measured", not "purged"', () => {
+    const home = fixtureHome();
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code).toBe(1);
+    expect(nIsActive(r.calls)).toBe(2);
+  }, 30_000);
+
+  it('V11: a FIFO stamp is classified without being read', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u' });
+    expect(spawnSync('mkfifo', [path.join(home, '.cc-sessions', 'demo-gone.stopped')]).status).toBe(0);
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U,
+      { home, timeout: 5_000 });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(FIFO_LINE);
+  }, 30_000);
+
+  it('V12: read-only — the registry is byte-identical after, and no state-changing verb was issued', () => {
+    const shapes: Array<[string, (home: string) => void]> = [
+      ['stamped', (home) => stamp(home)],
+      ['purged', (home) => plantReg(home, { 'demo-gone.generation': '7' })],
+      ['fifo', (home) => {
+        plantReg(home, { 'demo-gone.uuid': 'u' });
+        expect(spawnSync('mkfifo', [path.join(home, '.cc-sessions', 'demo-gone.stopped')]).status).toBe(0);
+      }],
+    ];
+    for (const [label, plant] of shapes) {
+      const home = fixtureHome(); plant(home);
+      const before = regSnapshot(home);
+      if (label === 'fifo') expect(before).toContainEqual(['demo-gone.stopped', '<fifo>']);
+      const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U,
+        { home, timeout: 5_000 });
+      // The run COMPLETED — a spawn timeout is `code` -1 (a read that blocked on the FIFO). This case is
+      // about what the script WRITES, so it takes no position on pass or fail: V1, V2 and V11 own that.
+      expect(r.code, `${label}: the run did not complete (spawn timeout) — stderr:\n${r.stderr}`).not.toBe(-1);
+      expect(regSnapshot(home), `${label}: the script changed the registry`).toEqual(before);
+      for (const l of r.calls.split('\n')) expect(l, `${label}: a state-changing systemctl verb`).not.toMatch(MUTATING);
+    }
+  }, 30_000);
+
+  it('V14: the registry root is derived from HOME exactly as ccd/ccd derives REG (D-3948)', () => {
+    expect(readFileSync(ccdSrcPath, 'utf8')).toMatch(/^REG="\$HOME\/\.cc-sessions"$/m);
+    expect(readFileSync(VERIFY, 'utf8').split('\n')).toContain('  reg="$HOME/.cc-sessions"');
+  }, 30_000);
+
+  /** deploy.sh's SWEEP_CMD, extracted and RUN, over the REAL verify-service.sh. */
+  const runSweepWithRealScript = (home: string): { code: number; stdout: string; stderr: string } => {
+    const deploySh = readFileSync(path.join(deployDir, 'deploy.sh'), 'utf8');
+    const sweep = /SWEEP_CMD='([\s\S]*?)'\n/.exec(deploySh);
+    expect(sweep, 'the supervisor sweep is no longer a single quoted block').toBeTruthy();
+    plantUnit(home, true);
+    mkdirSync(path.join(home, 'ccrc', 'deploy'), { recursive: true });
+    copyFileSync(VERIFY, path.join(home, 'ccrc', 'deploy', 'verify-service.sh'));
+    const bin = sweepStubs(home, [
+      { unit: 'claude-session@demo-good.service', isActive: ['active', 'active'], mainPid: ['4242', '4242'] },
+      { unit: U, isActive: ['active', 'inactive', 'inactive'], mainPid: ['5151'] },
+    ]);
+    const env = {
+      ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+      CCRC_VERIFY_SETTLE: '0', CCRC_VERIFY_WINDOW: '0', CCRC_VERIFY_LOG_LINES: '5', CCRC_VERIFY_STOP_INTERVAL: '0',
+    };
+    assertStubsResolve(env, bin);
+    const r = spawnSync('bash', ['-c', sweep![1]!], { encoding: 'utf8', timeout: 15_000, env });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+
+  it('V16(a): deploy.sh\'s sweep, with the REAL script, passes a session stopped mid-sweep', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runSweepWithRealScript(home);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain('verified: claude-session@demo-good.service active, MainPID 4242 stable across 0s');
+    expect(r.stdout).toContain(STAMPED_LINE);
+  }, 30_000);
+
+  it('V16(b): the same sweep still dies on an unstamped stop', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u' });
+    const r = runSweepWithRealScript(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('DEPLOY FAILED — claude-session@demo-gone.service');
+  }, 30_000);
+
+  it('V17: inactive at the settle read — a reclaimed unit the loop reaches late — passes', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.generation': '7' });
+    const r = runVerify(stubs({ isActive: ['inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(PURGED_LINE);
+    expect(r.calls.trim().split('\n')).toEqual([
+      `systemctl --user is-active ${U}`,
+      `systemctl --user is-active ${U}`,
+    ]);
+  }, 30_000);
+
+  it('V18: no MainPID — a stop that finished between the settle read and the MainPID read — passes', () => {
+    const home = fixtureHome(); stamp(home);
+    const r = runVerify(stubs({ isActive: ['active', 'inactive'], mainPid: ['0'] }), U, { home });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout.trim()).toBe(STAMPED_LINE);
+    expect(r.calls.trim().split('\n')).toEqual([
+      `systemctl --user is-active ${U}`,
+      `systemctl --user show -p MainPID --value ${U}`,
+      `systemctl --user is-active ${U}`,
+    ]);
+  }, 30_000);
+
+  it('V19: an id containing a slash is refused, whatever sits beside the registry', () => {
+    const home = fixtureHome(); plantReg(home, {});
+    writeFileSync(path.join(home, 'outside.stopped'), '1 ccd');
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }),
+      'claude-session@../outside.service', { home });
+    expect(r.code).toBe(1);
+    expect(nIsActive(r.calls)).toBe(2);
+  }, 30_000);
+
+  it('V20: with HOME unset nothing was measured, so the unit fails — and does not die on `unbound variable`', () => {
+    const dir = stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] });
+    const { HOME: _unset, ...rest } = process.env;
+    const env: NodeJS.ProcessEnv = {
+      ...rest, PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}`,
+      CCRC_VERIFY_SETTLE: '0', CCRC_VERIFY_WINDOW: '0', CCRC_VERIFY_LOG_LINES: '5', CCRC_VERIFY_STOP_INTERVAL: '0',
+    };
+    expect(env.HOME, 'the case must run with HOME unset').toBeUndefined();
+    assertStubsResolve(env, dir);
+    const r = spawnSync('bash', [VERIFY, U], { encoding: 'utf8', timeout: 15_000, env });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('DEPLOY FAILED');
+    expect(r.stderr).not.toContain('unbound variable');
+  }, 30_000);
+
+  it('V21: the evidence read is capped at 64 characters', () => {
+    const home = fixtureHome(); plantReg(home, { 'demo-gone.uuid': 'u', 'demo-gone.stopped': 'x'.repeat(100) });
+    const r = runVerify(stubs({ isActive: ['active', 'inactive', 'inactive'], mainPid: ['4242'] }), U, { home });
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain(`(reads '${'x'.repeat(64)}')`);
+    expect(r.stdout).not.toContain('x'.repeat(65));
+  }, 30_000);
+
+  it('V22: the default bound is what the risk note says — 10 re-reads, 1 s apart (a "10 × 1 s" ceiling)', () => {
+    const lines = readFileSync(VERIFY, 'utf8').split('\n');
+    expect(lines).toContain('STOP_POLLS="${CCRC_VERIFY_STOP_POLLS:-10}"');
+    expect(lines).toContain('STOP_INTERVAL="${CCRC_VERIFY_STOP_INTERVAL:-1}"');
+  }, 30_000);
 });
