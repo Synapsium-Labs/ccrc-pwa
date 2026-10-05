@@ -7,7 +7,8 @@
 // known Claude Code meta key names — any other key (an id-shaped one included) prints as '(unprintable)'.
 // An unparsable or path-less meta, and an unreadable home or projects directory, each carry their own
 // marker (`meta.malformed`, `totals.metaMalformed`, `totals.homesUnreadable`) so they never read as
-// "no metadata" or "nothing there".
+// "no metadata" or "nothing there". A meta that parses but names no worktreePath is the ORDINARY shape
+// (an agent spawned without a worktree), not corruption: it is `meta.pathless` / `totals.metaPathless`.
 // Usage: node deploy/delegation-census.mjs --repo <main checkout> [--ccd-root <dir>] --home <dir> [--home <dir>]...
 import fs from 'node:fs';
 import path from 'node:path';
@@ -61,6 +62,7 @@ const wantRun = new Set(names.map((n) => /^(wf_[A-Za-z0-9-]+)-[0-9]+$/.exec(n)).
 const agentMetas = new Map();
 const wfMetas = new Map();
 const wfMalformedRuns = new Set();
+const wfPathlessRuns = new Set();
 const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
 if (wantAgent.size + wantRun.size > 0) {
   for (const home of homes) {
@@ -79,9 +81,11 @@ if (wantAgent.size + wantRun.size > 0) {
           for (const e of ls(path.join(sub, 'workflows', run), home)) {
             if (!e.endsWith('.meta.json')) continue;
             const meta = json(path.join(sub, 'workflows', run, e));
-            // An unparsable or path-less workflow meta names no record; it marks its whole run instead.
-            if (meta !== MALFORMED && typeof meta.worktreePath === 'string') push(wfMetas, meta.worktreePath, { home, proj, uuid, meta });
-            else wfMalformedRuns.add(run);
+            // An unparsable meta, or one with no worktreePath, names no record; each marks its whole run instead,
+            // under its own marker (corruption and the ordinary path-less shape are different conditions).
+            if (meta === MALFORMED) wfMalformedRuns.add(run);
+            else if (typeof meta.worktreePath !== 'string') wfPathlessRuns.add(run);
+            else push(wfMetas, meta.worktreePath, { home, proj, uuid, meta });
           }
         }
       }
@@ -94,14 +98,15 @@ const parentClass = (proj) => {
   if (ccdRoot !== null && proj.startsWith(`${munge(ccdRoot)}-`)) return 'ccd-workspace';
   return 'other';
 };
-function metaSummary(list, wt, runMalformed) {
-  if (list === undefined || list.length === 0) return { found: false, malformed: runMalformed, homes: 0, uuids: 0, worktreePathEquals: null, keys: [], parentCwdClass: null };
+function metaSummary(list, wt, runMalformed, runPathless) {
+  if (list === undefined || list.length === 0) return { found: false, malformed: runMalformed, pathless: runPathless, homes: 0, uuids: 0, worktreePathEquals: null, keys: [], parentCwdClass: null };
   const valid = list.filter((x) => x.meta !== MALFORMED);
   const keys = new Set();
   for (const x of valid) for (const k of Object.keys(x.meta)) keys.add(KNOWN_KEYS.has(k) ? k : '(unprintable)');
   const classes = new Set(list.map((x) => parentClass(x.proj)));
   return {
     found: true, malformed: runMalformed || valid.length < list.length,
+    pathless: runPathless || valid.some((x) => typeof x.meta.worktreePath !== 'string'),
     homes: new Set(list.map((x) => x.home)).size, uuids: new Set(list.map((x) => x.uuid)).size,
     worktreePathEquals: wt === null || valid.length === 0 ? null : valid.every((x) => x.meta.worktreePath === wt),
     keys: [...keys].sort(), parentCwdClass: classes.size === 1 ? [...classes][0] : 'mixed',
@@ -135,8 +140,8 @@ for (const n of names) {
     locked: exists(path.join(a, 'locked')),
     worktreeDir: wt === null ? 'unmeasured' : exists(wt) ? 'present' : 'absent',
     ageBucket: ageBucket(a),
-    meta: kind === 'agent' ? metaSummary(agentMetas.get(n.slice('agent-'.length)), wt, false)
-      : kind === 'wf' ? metaSummary(wt === null ? undefined : wfMetas.get(wt), wt, wfMalformedRuns.has(runId)) : null,
+    meta: kind === 'agent' ? metaSummary(agentMetas.get(n.slice('agent-'.length)), wt, false, false)
+      : kind === 'wf' ? metaSummary(wt === null ? undefined : wfMetas.get(wt), wt, wfMalformedRuns.has(runId), wfPathlessRuns.has(runId)) : null,
   });
 }
 const count = (pred) => records.filter(pred).length;
@@ -146,7 +151,7 @@ const out = {
   totals: {
     records: records.length, agent: count((r) => r.kind === 'agent'), wf: count((r) => r.kind === 'wf'), other: count((r) => r.kind === 'other'),
     metaFound: count((r) => r.meta?.found === true), metaMissing: count((r) => r.meta !== null && !r.meta.found),
-    metaMalformed: count((r) => r.meta?.malformed === true), homesUnreadable: unreadableHomes.size,
+    metaMalformed: count((r) => r.meta?.malformed === true), metaPathless: count((r) => r.meta?.pathless === true), homesUnreadable: unreadableHomes.size,
     multiHome: count((r) => (r.meta?.homes ?? 0) > 1), worktreeAbsent: count((r) => r.worktreeDir === 'absent'),
     byAge: tally((r) => r.ageBucket), byParent: tally((r) => r.meta?.parentCwdClass ?? null),
   },

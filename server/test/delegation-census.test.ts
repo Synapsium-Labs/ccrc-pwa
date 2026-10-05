@@ -77,7 +77,7 @@ describe('delegation-census (read-only, path-free)', () => {
     expect(r.status, r.stderr).toBe(0);
     const out = JSON.parse(r.stdout);
     expect(out.adminRead).toBe('ok');
-    expect(out.totals).toMatchObject({ records: 3, agent: 1, wf: 1, other: 1, metaFound: 2, metaMissing: 0, metaMalformed: 0, homesUnreadable: 0, multiHome: 1, worktreeAbsent: 1 });
+    expect(out.totals).toMatchObject({ records: 3, agent: 1, wf: 1, other: 1, metaFound: 2, metaMissing: 0, metaMalformed: 0, metaPathless: 0, homesUnreadable: 0, multiHome: 1, worktreeAbsent: 1 });
     const agent = out.records.find((x: { kind: string }) => x.kind === 'agent');
     expect(agent).toMatchObject({ head: 'detached', claudeBase: 'ok', baseAgreesFirstLog: true, movedFromBase: true, locked: false, worktreeDir: 'present' });
     expect(agent.meta).toMatchObject({ found: true, homes: 2, uuids: 1, worktreePathEquals: true, parentCwdClass: 'main-checkout' });
@@ -138,13 +138,15 @@ describe('delegation-census (read-only, path-free)', () => {
     w.meta(w.h1, munge(w.repo), 'u1/subagents/agent-nop.meta.json', { agentType: 'g' });
     const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
     expect(out.records[0].meta).toMatchObject({ found: true, malformed: true, worktreePathEquals: null, keys: [] });
-    expect(out.records[1].meta).toMatchObject({ found: true, malformed: false, worktreePathEquals: false, keys: ['agentType'] });
-    expect(out.totals).toMatchObject({ metaMalformed: 1, metaFound: 2 });
+    expect(out.records[1].meta).toMatchObject({ found: true, malformed: false, pathless: true, worktreePathEquals: false, keys: ['agentType'] });
+    expect(out.records[0].meta.pathless).toBe(false);   // the unparsable one is corruption, not the path-less shape
+    expect(out.totals).toMatchObject({ metaMalformed: 1, metaPathless: 1, metaFound: 2 });
   });
 
-  it('marks a malformed or path-less workflow meta on its run, and a differing path is simply not found', () => {
+  it('marks a malformed workflow meta and a path-less one on their runs, separately; a differing path is simply not found', () => {
     const w = mini([
       { name: 'wf_bad-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: 'wt-w1' },
+      { name: 'wf_nop-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: 'wt-w4' },
       { name: 'wf_ok-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: 'wt-w2' },
       { name: 'wf_diff-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: 'wt-w3' },
     ]);
@@ -154,15 +156,17 @@ describe('delegation-census (read-only, path-free)', () => {
       fs.writeFileSync(f, body);
     };
     wfm('wf_bad', 'a.meta.json', '{oops');
-    wfm('wf_bad', 'b.meta.json', JSON.stringify({ workflowPhase: 'p' }));   // path-less
+    wfm('wf_bad', 'b.meta.json', '[1,2]');   // parses but is not an object: malformed too
+    wfm('wf_nop', 'a.meta.json', JSON.stringify({ workflowPhase: 'p' }));   // parses, no worktreePath: the ordinary path-less shape
     wfm('wf_ok', 'a.meta.json', JSON.stringify({ workflowPhase: 'p', worktreePath: w.wt('wt-w2') }));
     wfm('wf_diff', 'a.meta.json', JSON.stringify({ workflowPhase: 'p', worktreePath: `${w.wt('wt-w3')}-other` }));
     const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
-    const [bad, diff, ok] = out.records;   // sorted by admin name: wf_bad-1, wf_diff-1, wf_ok-1
-    expect(bad.meta).toMatchObject({ found: false, malformed: true });
-    expect(diff.meta).toMatchObject({ found: false, malformed: false });
-    expect(ok.meta).toMatchObject({ found: true, malformed: false, worktreePathEquals: true });
-    expect(out.totals).toMatchObject({ wf: 3, metaFound: 1, metaMissing: 2, metaMalformed: 1 });
+    const [bad, diff, nop, ok] = out.records;   // sorted by admin name: wf_bad-1, wf_diff-1, wf_nop-1, wf_ok-1
+    expect(bad.meta).toMatchObject({ found: false, malformed: true, pathless: false });
+    expect(diff.meta).toMatchObject({ found: false, malformed: false, pathless: false });
+    expect(nop.meta).toMatchObject({ found: false, malformed: false, pathless: true });
+    expect(ok.meta).toMatchObject({ found: true, malformed: false, pathless: false, worktreePathEquals: true });
+    expect(out.totals).toMatchObject({ wf: 4, metaFound: 1, metaMissing: 3, metaMalformed: 1, metaPathless: 1 });
   });
 
   it('counts an unreadable projects directory as an unreadable home, not as nothing there', () => {
