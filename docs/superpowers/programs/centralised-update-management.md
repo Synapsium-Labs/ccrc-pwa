@@ -1689,6 +1689,25 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **Live effect at merge:** the move INTO wave 11 runs the box's current sweep with the new script. Wave 11's own
     sweep protects the moves after it.
 
+- **2026-10-05 16:27 UTC: `stable` readiness — the GPT lane's macOS reds are fixed (#240, `be93d159`; its mail
+  3524).**
+  - **The cause:** `codexLaneFixture.ts`'s two Python stand-ins called `socket.getfqdn` between bind and listen, the
+    macOS stall that #204 had fixed in the shipped shim. #240 also fixed P18 and `_rt_fail`, and made C12–C15 and L0e
+    systemd-only. It is test-only.
+  - **The evidence:** #240's `test-macos` 1/2 and 2/2 passed with 0 failed, on a merge ref that includes wave 9. Per
+    file: `ccrc-codex` 203, `ccrc-account` 331, `ccrc-doctor` 676, `ccd-account-auth` 125, `ccgpt-runtime` 72,
+    `ccrc-install` 313 and `ccrc-update` 504.
+  - **What is left before a promotion:**
+    - landing-order's `session-hook-merge-deny` macOS reds, in that programme's fix round (review 267: jq 1.8's `as`
+      precedence);
+    - then a green `full-suite` on a `main` commit, from a daily run or the stable gate. A pull request's selection
+      does not count.
+
+    The promotion itself, a fast-forward push to `stable`, is the operator's to call.
+  - **Noise, not this programme's:** `map-build` on `main` went red at `00f8a193` and `4100ae1c`, with five files
+    "newly failing under trace". Every test leg was green. At `be93d159` only `boot.test.ts` still failed under trace,
+    and at `1eda8630` none did. This belongs to the CI test-selection tooling.
+
   - **Live effect:** none yet. Both boxes are held by the unacked v0.0.78 fleet row. After the ack, auto moves the
     fleet box straight to the newest release, which now carries waves 9 and 10, and that move runs v0.0.78's sweep
     with wave 10's script. Wave 9's live tmux names are unchanged for every live-alphabet id (review 265, tmux 3.4).
