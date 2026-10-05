@@ -712,33 +712,35 @@ skipped (335)`.
 
 - [ ] **Step 8: Mutation check — this task's rows, then wave 2's table under the cap**
 
-| # | Exact edit in `ccd/session-hook.sh` | Test file | Expected red (measured at this task's tree, 76 cases; the branch-tip counts are in Task 5 Step 3) |
+| # | Exact edit in `ccd/session-hook.sh` | Test file | Expected red (measured at this task's tree, 77 cases; the branch-tip counts are in Task 5 Step 3) |
 |---|---|---|---|
-| P1 | the cap removed: `($c \| utf8bytelength) > $cap` → `false` | `session-hook-merge-deny` | `4 failed \| 72 passed` — "one byte over the cap, a command holding both words was let through", the bytes case, the child case ("…to contain 'parse cap'"), "the hook took 5264 ms on 36 KB of "$(<)"" |
-| P2 | the both-words condition dropped: `if ($c \| contains("gh")) and ($c \| contains("merge")) then` → `if true then` | same | `3 failed` — "a non-merge was denied: "<<a ": expected 'ccrc: this command is 16018 bytes…'" (the heredoc case, still 16 KB until Task 2), "no `gh` in it: expected 'ccrc: this command is 2049 bytes…' to be null", `"\"": denied true` |
-| P3 | the boundary off by one: `> $cap` → `>= $cap` | same | `2 failed` — "a non-merge was denied: ";gh "", "at the cap the strip reads the quoted mention as text" |
-| P4 | the arm ignores the over-cap answer: `if [[ -n "$mover" ]] \|\| [[ -n "$mcmd" …` → `if [[ -n "$mcmd" …` | same | `4 failed` — the boundary, bytes and child cases, and `"\"$(<)\"": denied false` |
+| P1 | the cap removed: `($c \| utf8bytelength) > $cap` → `false` | `session-hook-merge-deny` | `5 failed` — the boundary case, the bytes case, the child case ("…to contain 'parse cap'"), the quoted-body case, and the 36 KB bounded-time case |
+| P2 | the over-cap match removed: `then (if ($c \| test($mre)) then` → `then (if false then` | same | `5 failed` — the boundary, bytes, child and quoted-body cases, and the bounded-time case (`"$(<)"` denied false) |
+| P3 | the boundary off by one: `> $cap` → `>= $cap` | same | `1 failed` — "at the cap the strip reads the quoted mention as text" (the cap-sized adversarial payloads spell no `gh pr merge`, so `>=` lets them pass) |
+| P4 | the arm ignores the over-cap answer: `if [[ -n "$mover" ]] \|\| [[ -n "$mcmd" …` → `if [[ -n "$mcmd" …` | same | `5 failed` — as P2 |
 | P5 | characters, not bytes: `utf8bytelength` → `length` in the cap test | same | `1 failed` — "a command over the cap in BYTES was parsed as if it were under it" |
-| P6 | the over-cap reason lost: `    if [[ -n "$mwhy" && -n "$mover" ]]; then` → `    if false; then` | same | `3 failed` — "…to contain 'this command is 2049 bytes'", "…'this command is 2062 bytes'", "…to contain 'parse cap'" |
-| P7 | only `gh` asked: ` and ($c \| contains("merge")) then` → ` then` | same | `1 failed` — "no `merge` in it" |
-| P8 | only `merge` asked: drop `($c \| contains("gh")) and ` | same | `3 failed` — the same three as P2 |
+| P6 | the over-cap reason lost: `    if [[ -n "$mwhy" && -n "$mover" ]]; then` → `    if false; then` | same | `4 failed` — the over-cap reason's text assertions |
+| P7 | the two-substring rule restored: `then (if ($c \| test($mre)) then` → `then (if ($c \| contains("gh")) and ($c \| contains("merge")) then` | same | `1 failed` — the prose case ("prose holding `gh` and `merge` as substrings") |
+| P8 | the start boundary dropped: `MERGE_OVERCAP_RE='(^\|[^A-Za-z0-9_])gh` → `MERGE_OVERCAP_RE='gh` | same | `1 failed` — the `xgh` line ("a `gh` that is the tail of another word") |
 | P9 | refused without a hold: `    if [[ -n "$mwhy" ]]; then` (before `pre_json=`) → `    if [[ -n "$mwhy" \|\| -n "$mover" ]]; then` | same | `1 failed` — "the hook contract: silent on stderr" (an unheld over-cap command reaches `_hook_deny_json` with `mreason` unset under `set -u`: the hook CRASHES, and the case's own `toBeNull` would pass; P10 is the non-crashing form) |
 | P10 | a refusal with no hold, no crash: `    mwhy=""` → `    mwhy=""; [[ -n "$mover" ]] && mwhy="over"` | same | `1 failed` — "refuses only where the deny applies…": `expected 'ccrc: this command is 2049 bytes, ove…' to be null` |
+| P11 | the end boundary dropped: `merge($\|[[:space:];&\|()<>])'` → `merge'` | same | `1 failed` — the `merged` line ("a `merge` that is the head of another word") |
 
 Rows (`$SCRATCH/lo-w3/mut-task1.json`):
 
 ```json
 [
  {"id": "P1", "file": "ccd/session-hook.sh", "old": "($c | utf8bytelength) > $cap", "new": "false", "tests": ["test/session-hook-merge-deny.test.ts"]},
- {"id": "P2", "file": "ccd/session-hook.sh", "old": "if ($c | contains(\"gh\")) and ($c | contains(\"merge\")) then", "new": "if true then", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "P2", "file": "ccd/session-hook.sh", "old": "then (if ($c | test($mre)) then", "new": "then (if false then", "tests": ["test/session-hook-merge-deny.test.ts"]},
  {"id": "P3", "file": "ccd/session-hook.sh", "old": "($c | utf8bytelength) > $cap", "new": "($c | utf8bytelength) >= $cap", "tests": ["test/session-hook-merge-deny.test.ts"]},
  {"id": "P4", "file": "ccd/session-hook.sh", "old": "  if [[ -n \"$mover\" ]] || [[ -n \"$mcmd\" && \"$mcmd\" =~ $GH_MERGE_RE ]]; then", "new": "  if [[ -n \"$mcmd\" && \"$mcmd\" =~ $GH_MERGE_RE ]]; then", "tests": ["test/session-hook-merge-deny.test.ts"]},
  {"id": "P5", "file": "ccd/session-hook.sh", "old": "($c | utf8bytelength) > $cap", "new": "($c | length) > $cap", "tests": ["test/session-hook-merge-deny.test.ts"]},
  {"id": "P6", "file": "ccd/session-hook.sh", "old": "    if [[ -n \"$mwhy\" && -n \"$mover\" ]]; then", "new": "    if false; then", "tests": ["test/session-hook-merge-deny.test.ts"]},
- {"id": "P7", "file": "ccd/session-hook.sh", "old": " and ($c | contains(\"merge\")) then", "new": " then", "tests": ["test/session-hook-merge-deny.test.ts"]},
- {"id": "P8", "file": "ccd/session-hook.sh", "old": "if ($c | contains(\"gh\")) and ($c | contains(\"merge\")) then", "new": "if ($c | contains(\"merge\")) then", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "P7", "file": "ccd/session-hook.sh", "old": "then (if ($c | test($mre)) then", "new": "then (if ($c | contains(\"gh\")) and ($c | contains(\"merge\")) then", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "P8", "file": "ccd/session-hook.sh", "old": "MERGE_OVERCAP_RE='(^|[^A-Za-z0-9_])gh", "new": "MERGE_OVERCAP_RE='gh", "tests": ["test/session-hook-merge-deny.test.ts"]},
  {"id": "P9", "file": "ccd/session-hook.sh", "old": "    if [[ -n \"$mwhy\" ]]; then\n      pre_json=$(_hook_deny_json", "new": "    if [[ -n \"$mwhy\" || -n \"$mover\" ]]; then\n      pre_json=$(_hook_deny_json", "tests": ["test/session-hook-merge-deny.test.ts"]},
- {"id": "P10", "file": "ccd/session-hook.sh", "old": "    mwhy=\"\"\n", "new": "    mwhy=\"\"; [[ -n \"$mover\" ]] && mwhy=\"over\"\n", "tests": ["test/session-hook-merge-deny.test.ts"]}
+ {"id": "P10", "file": "ccd/session-hook.sh", "old": "    mwhy=\"\"\n", "new": "    mwhy=\"\"; [[ -n \"$mover\" ]] && mwhy=\"over\"\n", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "P11", "file": "ccd/session-hook.sh", "old": "merge($|[[:space:];&|()<>])'", "new": "merge'", "tests": ["test/session-hook-merge-deny.test.ts"]}
 ]
 ```
 
@@ -756,7 +758,7 @@ python3 "$SCRATCH/lo-w3/mutate.py" "$SCRATCH/lo-w3/w2-task4.json" H1 H2 H3 H4 H5
 # … then H13–H24, H25–H37 (H32 is not in the JSON), H38–H52, H53–H63, C1 C2
 ```
 
-Expected (measured; `N` = failed of 76): H1 69, H2 4, H3 1, H4 1, H5 1, H6 2, H7 1, H8 1, H9 1, H10 1, H11 1, H12 2,
+Expected (measured; `N` = failed of 77): H1 70, H2 4, H3 1, H4 1, H5 1, H6 2, H7 1, H8 1, H9 1, H10 1, H11 1, H12 2,
 H13 1, H14 2, H15 3, H16 1, H17 1, H18 1, H19 3, **H20 0, H21 0**, H22 1, H23 1, H24 1, H25 1, H26 12, H27 10, H28 2,
 H29 1, H30 1, H31 1, H33 1, H34 1, H35 1, H36 1, H37 1, H38 3, **H39 0**, H42 1, H43 1, H44 2, H46 1, H47 1, H48 2,
 H49 1, H50 9, H51 2, H52 1, H53 2, H54 1, H55 1, H56 1, H57 1, H58 1,
@@ -1776,16 +1778,12 @@ done
 ./node_modules/.bin/vitest run --maxWorkers=2 test/session-hook.test.ts
 ```
 
-Expected: `80`, `78`, `156`, `14`, `3`, `18`, `28`, `99`, `54`, `13`, `3`, `2`, `54`, `30`; `1 passed | 229 skipped
+Expected: `82`, `78`, `157`, `14`, `3`, `18`, `28`, `99`, `54`, `13`, `3`, `2`, `54`, `30`; `1 passed | 229 skipped
 (230)`; `6 passed | 297 skipped (303)`; `335 passed (335)` (~135 s).
 
-Then every row of Tasks 1–3, re-run on the branch tip, is red. The per-task tables were measured at each task's own
-tree; on the tip (merge-deny 80 cases, sync-advisory 78) the counts are, measured: P1 `4 failed`, **P2 `2 failed`**
-(the heredoc case is at the cap since Task 2, so its 16 KB red is gone; "no `gh` in it" and `"\"": denied true`
-remain), P3 `2`, P4 `4`, P5 `1`, P6 `3`, P7 `1`, **P8 `2 failed`** (as P2), P9 `1`, P10 `1`, H40 `1 failed | 79 passed
-(80)`, Q1 `2 failed | 76 passed (78)`, Q2 `4 failed` under its `-t`, Q3 `4 failed` under its `-t` at load ~13 (at
-least 2 on any box), R1 `3 failed | 77 passed (80)`, R2 `1`, R3 `1` (words `3 passed`), J1 `2`, J2 `1`, J3 `1`, J4 `6`,
-J5 `1`, J6 `2`, J8 `1`, J4r `3`. Wave 2's H20, H21 and H39 stay `80 passed (80)` (retired, Task 2 Step 3). A row that
+Then every row of Tasks 1–3, re-run on the branch tip, is red. The per-task tables above give each row's red at its own
+task's tree; on the tip (merge-deny 82 cases, sync-advisory 78, coordinator-skill 157) the counts are re-measured by
+the wave and reported in its wave-done, and every row must red. Wave 2's H20, H21 and H39 stay `80 passed (80)` (retired, Task 2 Step 3). A row that
 reds one timing case MORE than this is load (Global Constraints): re-run it alone.
 
 - [ ] **Step 4: Confirm the author, push, open the PR**
@@ -1796,7 +1794,7 @@ git push -u origin "$(git rev-parse --abbrev-ref HEAD)"
 gh pr create --base main --title "Landing order wave 3: the merge deny's payload cap and quote-dense pin (Task 7's preconditions), and wave 2's residue" --body-file - <<'EOF'
 Wave 3 of the landing-order programme: the two CODE preconditions the wave-2 plan's Task 7 Step 1 names, and wave 2's residue. Plan: `docs/superpowers/plans/2026-10-04-landing-order-wave3-task7-preconditions.md`. Changes NO repository setting; nothing here changes how a PR lands.
 
-1. **The payload cap** (`ccd/session-hook.sh`) — the merge deny parses no command longer than `MERGE_PARSE_CAP` = 2048 bytes. Over the cap its jq program asks the raw command two fixed-string questions; a held or child session's command holding both `gh` and `merge` is refused unread, naming the length and the cap. No input can time the hook out into a fail-open any more. Cost: such a session's long command that merely holds both words must be split (a long body goes in a file).
+1. **The payload cap** (`ccd/session-hook.sh`) — the merge deny parses no command longer than `MERGE_PARSE_CAP` = 2048 bytes. Over the cap its jq program never runs the quote strip; it matches one linear regex, `MERGE_OVERCAP_RE` (a word-bounded `gh pr merge`), against the raw command, and a held or child session's command that spells it is refused unread, the reason naming the length and the cap and telling the session to split or rephrase. No input can time the hook out into a fail-open any more. Costs: such a session's long command that quotes `gh pr merge` (a PR body, a mail) must be split or rephrased; and over the cap gh's own flags between the words (`gh -R o/r pr merge`) pass unparsed, classified in the hook's header (the coordinator's amendment over the plan's two-substring rule).
 2. **The quote-dense timing pin** — `session-hook-sync-advisory` times five quote-dense shapes at exactly the cap against its 1500 ms bound, and the same five at 36 KB, where the clock times the landing advisory's own regex; `session-hook-merge-deny`'s heredoc case carries review 249 F1's terminator, and H40 is a live row again.
 3. **Residue** — review 249 F2 (every merge-word terminator), F3 (the four-answers count), F4 (the wave-2 plan's counts); review 241's doctor `jq_regex` check (FAIL on a jq without lookaround; Plan 3a's `BASE_LIVE_SHAPE` golden re-measured for it) and a closed-unmerged PR reading `none`.
 4. **Task 7's runbook** names (1) and (2) as landed.
@@ -1863,7 +1861,7 @@ Departures from the spec, the brief or the merged wave-2 plan. Numbered from run
 - **D-3912 — `preconditions-wave-before-land-probe`.** the ledger's wave-3 row carries stage 3's `ccd-land-probe`; this wave is the small preconditions-and-residue wave the Next-wave brief allows, and stage 3 is planned after it. The Next-wave brief also listed review 241's `--squash`-span carry in wave 3's first commit; the coordinator's task list for this plan does not, so it stays carried (Open question 3).
 - **D-3913 — `advisory-quote-runs-pinned-at-36kb`.** the brief made an advisory CAP conditional on a superlinear parse; the advisory measured linear and gets no cap, but this wave adds a 36 KB quote-dense pin (row Q2) so that measurement is a mechanism, not a comment.
 - **D-3914 — `runbook-says-more-than-landed`.** Task 4's paragraph does more than name the cap and the pin as landed: it adds two read-only reads to the arming gate (the hook's constant, and `PASS jq_regex` from doctor, which makes doctor's check a de facto third precondition), says what the cap costs, and brings its WHAT PASSES UNPARSED list level with the hook header's (a vertical tab before `#`, a top-level "…" span holding `$${`: an omission review 249 ruled "not a finding"). Cutting it back to the naming alone is a text edit. Under the word rule (`overcap-word-bounded-match`) the paragraph states that rule and its two costs, a quoted mention refused and gh's flags passing over the cap.
-- **D-3915 — `overcap-word-bounded-match`.** The coordinator's amendment to Task 1, which wins over this plan's text: over the cap the deny does NOT ask the two fixed substrings `gh` and `merge`; it matches a word-bounded `gh pr merge` against the RAW command, with one linear regex and no nested quantifier, `MERGE_OVERCAP_RE='(^|[^A-Za-z0-9_])gh\s+pr\s+merge($|[[:space:];&|()<>])'`, passed to the jq program with `--arg`. Why: of 4,478 fleet Bash commands longer than 2 KB over two days, the two substrings matched 1,340, mostly prose ("through", "high", "merged"), so a worker's long wave-done mail would be refused; the word rule matched 131. Three choices inside it: the START is any ASCII non-word character (a literal word boundary), wider than the amendment's example `(^|[;&|(\s])`, so a markdown-quoted mention, a path-spelled `gh` and a backtick substitution are refused too; the END is `GH_MERGE_RE`'s end class with its alternation reordered, the same set, so row R1's anchor on `GH_MERGE_RE`'s tail stays unique; and gh's own flags between the words (`gh -R o/r pr merge`) pass over the cap where `main`'s full parse refuses them, because catching them needs the nested quantifier the amendment excludes — classified in the hook's header, not closed (the stopping line). Tests: an over-cap `gh pr merge 42` is denied; over-cap prose holding "though … merged … high" passes; an over-cap body QUOTING `gh pr merge` is denied (the accepted cost) and the refusal says to split or rephrase. Rows: P2 (the over-cap match removed) and P7 (the two-substring rule restored: the prose case reds) replace the plan's P2/P7/P8, with P8 and P11 for the start and end boundary. The cap value, 2048, and the 25 % timing argument stand. Where this plan's Goal, Architecture, Review Focus 3, Pre-flight 3, Task 4's paragraph and Task 5's PR body say "two fixed-string questions" or "holds both `gh` and `merge`", this entry supersedes them; Task 4's paragraph and the PR body are written to it.
+- **D-3915 — `overcap-word-bounded-match`.** The coordinator's amendment to Task 1, which wins over this plan's text: over the cap the deny does NOT ask the two fixed substrings `gh` and `merge`; it matches a word-bounded `gh pr merge` against the RAW command, with one linear regex and no nested quantifier, `MERGE_OVERCAP_RE='(^|[^A-Za-z0-9_])gh\s+pr\s+merge($|[[:space:];&|()<>])'`, passed to the jq program with `--arg`. Why: of 4,478 fleet Bash commands longer than 2 KB over two days, the two substrings matched 1,340, mostly prose ("through", "high", "merged"), so a worker's long wave-done mail would be refused; the word rule matched 131. Three choices inside it: the START is any ASCII non-word character (a literal word boundary), wider than the amendment's example `(^|[;&|(\s])`, so a markdown-quoted mention, a path-spelled `gh` and a backtick substitution with arguments are refused too (a bare `` `gh pr merge` `` passes over the cap, as legacy backticks pass under it); the END is `GH_MERGE_RE`'s end class with its alternation reordered, the same set, so row R1's anchor on `GH_MERGE_RE`'s tail stays unique; and gh's own flags between the words (`gh -R o/r pr merge`) pass over the cap where `main`'s full parse refuses them, because catching them needs the nested quantifier the amendment excludes — classified in the hook's header, not closed (the stopping line). Tests: an over-cap `gh pr merge 42` is denied; over-cap prose holding "though … merged … high" passes; an over-cap body QUOTING `gh pr merge` is denied (the accepted cost) and the refusal says to split or rephrase. Rows: P2 (the over-cap match removed) and P7 (the two-substring rule restored: the prose case reds) replace the plan's P2/P7/P8, with P8 and P11 for the start and end boundary. The cap value, 2048, and the 25 % timing argument stand. Where this plan's Goal, Architecture, Review Focus 3, Pre-flight 3, Task 4's paragraph and Task 5's PR body say "two fixed-string questions" or "holds both `gh` and `merge`", this entry supersedes them; Task 4's paragraph and the PR body are written to it.
 
 ---
 

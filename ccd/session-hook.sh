@@ -3532,11 +3532,13 @@ fi
 # THE COST, said: a held session's long command whose raw text spells
 # `gh pr merge` — a PR body or a mail that QUOTES it — is refused until it is
 # split or rephrased. WHAT PASSES OVER THE CAP, said: gh's own flags between
-# the words (`gh -R o/r pr merge`, `gh pr --repo o/r merge`), and every
-# spelling the word rule does not see (quoting inside a word, a variable, an
-# alias), padded past the cap; catching flags needs a repeated group, the
-# nested quantifier this regex is kept free of. Classified, not closed (the
-# stopping line, ruled 2026-10-03).
+# the words (`gh -R o/r pr merge`, `gh pr --repo o/r merge`), a bare
+# backtick substitution (``gh pr merge`` with nothing after the word, whose
+# closing backtick is not in the end class), and every spelling the word rule
+# does not see (quoting inside a word, a variable, an alias), padded past the
+# cap; catching flags needs a repeated group, the nested quantifier this regex
+# is kept free of. Classified, not closed (the stopping line, ruled
+# 2026-10-03).
 # The cap also BOUNDS every superlinear walk above: the strip and GH_MERGE_RE
 # never read more than MERGE_PARSE_CAP bytes, so the 36-200 KB timings above
 # are what the cap prevents, not what a command costs.
