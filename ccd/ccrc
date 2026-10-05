@@ -20828,6 +20828,70 @@ _ccrc_job_stayed_up() {   # <unit> -> 0 iff ONE pid held across the window; deta
   CCRC_STAYED_DETAIL="pid ${p1:-none} -> ${p2:-none} across ${CCRC_VERIFY_SETTLE:-3}s+${CCRC_VERIFY_WINDOW:-5}s"
   [ -n "$p1" ] && [ "$p1" = "$p2" ]
 }
+# _upd_sweep_die <message> — the sweep's ONE die (wave 11, R12; D-3973). Both callers release the lock before the
+# sweep (`cmd_update`'s and `cmd_rollback`'s flip arm: `_upd_unlock` then `_upd_sweep`), so a second update may own
+# ~/.ccrc/update.json when a supervisor fails, and `_ccrc_die` would overwrite its in-flight report with this run's
+# `failed`. So, exactly as both callers' closing writes do, the report is written only while `_upd_report_is_mine`:
+# a report that POSITIVELY names another pid is left alone, with one line saying so. NEVER called inside `$(…)`, a
+# pipeline or `( … )`: `_ccrc_die` reports only from the run's own shell (`$BASHPID = $$`), so a die there would end
+# that subshell alone and the sweep would print its success line over a failed unit (the R12 critic's I8).
+_upd_sweep_die() {
+  if [ "${UPD_REPORTING:-0}" = 1 ] && ! _upd_report_is_mine; then
+    echo "update: report: skipped — ~/.ccrc/update.json no longer names this run's pid (${UPD_REPORT_PID:-$$}); a newer update took the lock this run released before the sweep, and this run's failed report would have overwritten its in-flight one"
+    UPD_REPORTING=0
+  fi
+  _ccrc_die "$@"
+}
+# _upd_sweep_launch <vdir> <verify> <from> <to> — ALWAYS run in a subshell, `( … )` (wave 11, D-3972 e). Starts one
+# verify job per unit in units[from..to-1] (the caller's array, by dynamic scope), each in a process group of its own
+# (`set -m`) so the exit path can stop a job with everything it started, records each job's pid, and waits for them.
+# A fork that fails ends THIS subshell (bash exits the shell that forked: rc 254, measured) — never the run.
+_upd_sweep_launch() {
+  local vdir="$1" verify="$2" k
+  set -m
+  for ((k = $3; k < $4; k++)); do
+    { bash "$verify" "${units[k]}" </dev/null >"$vdir/$k.out" 2>"$vdir/$k.err"; printf '%s\n' "$?" >"$vdir/$k.rc"; } </dev/null >/dev/null 2>&1 &
+    printf '%s\n' "$!" >"$vdir/$k.pid"
+  done
+  wait
+}
+# _upd_sweep_kill <vdir> — TERM the process group of each verify job of the chunk in flight that recorded no result
+# (D-3972 f). The exit chain runs it when a signal ends the run mid-verify, and the sweep runs it when its launcher
+# failed. Each job is signalled AT MOST ONCE, and only while its own chunk is in flight. It skips a job that recorded a
+# result (`.rc`), a job whose chunk's results were read (`.done`) and a job already signalled (`.killed`), and it
+# refuses a pid of 1 or less (`kill -- -1` would signal every process the user owns). The markers are builtin writes,
+# with no fork (verify L1).
+_upd_sweep_kill() {
+  local f p
+  for f in "$1"/*.pid; do
+    [ -f "$f" ] || continue
+    { [ -e "${f%.pid}.rc" ] || [ -e "${f%.pid}.done" ] || [ -e "${f%.pid}.killed" ]; } && continue
+    p=""; IFS= read -r p < "$f" || :
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    [ "$p" -gt 1 ] || continue
+    kill -TERM -- "-$p" 2>/dev/null
+    : >"${f%.pid}.killed"
+  done
+  return 0
+}
+# _upd_sweep_replay <file> <1|2> — a captured file to stdout (1) or stderr (2), by builtins: no fork (D-3972 c).
+_upd_sweep_replay() {
+  local l
+  [ -f "$1" ] || return 0
+  if [ "$2" = 2 ]; then
+    while IFS= read -r l || [ -n "$l" ]; do printf '%s\n' "$l" >&2; done < "$1"
+  else
+    while IFS= read -r l || [ -n "$l" ]; do printf '%s\n' "$l"; done < "$1"
+  fi
+}
+# _upd_sweep_spo <file> — rc 0 iff a captured stdout holds a `stopped on purpose:` line: the one place the sweep reads
+# the script's text, to tell a failure that is NOT crash-like from one that is (D-3983).
+_upd_sweep_spo() {
+  local l
+  [ -f "$1" ] || return 1
+  while IFS= read -r l || [ -n "$l" ]; do case "$l" in 'stopped on purpose: '*) return 0 ;; esac; done < "$1"
+  return 1
+}
 _upd_sweep() {
   # ── THE DARWIN ARM ──────────────────────────────────────────────────────
   # Same job, same guard, different observable. The sweep exists because a
@@ -20950,7 +21014,7 @@ _upd_sweep() {
   # verify query — in that argv order" case — cited by title, since its line
   # range moves.
   systemctl --user try-restart "claude-session@*" \
-    || _ccrc_die "systemctl --user try-restart claude-session@* failed — the supervisors' state is now mixed; read: systemctl --user list-units 'claude-session@*'"
+    || _upd_sweep_die "systemctl --user try-restart claude-session@* failed — the supervisors' state is now mixed; read: systemctl --user list-units 'claude-session@*'"
   # try-restart is a no-op on a failed unit (its own man page), so a
   # pre-existing failed session was neither restarted nor verified — not this
   # update's doing, must not fail it, must not be silent either.
@@ -20958,11 +21022,21 @@ _upd_sweep() {
     echo "update: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2
     failed+=("$u")
   done
-  # Each restarted supervisor is held to the same standard as the services the
-  # staged install just verified — verify-service.sh out of the NEW tree,
-  # guarded by [ -f ] exactly as `_inst_enable` guards it. `--state=active`
-  # here and NOT above: handing verify-service.sh a unit try-restart never
-  # touched is deploy.sh's final-review finding 6.
+  # THE VERIFY — ONE SHARED WINDOW, BY CONCURRENT PER-UNIT CALLS, RE-CHECKED ONCE (wave 11, R12; D-3972, D-3983,
+  # D-3984). Each restarted supervisor is held to verify-service.sh out of the tree `~/ccrc` names AT CALL TIME,
+  # resolved here and never cached: that protects the move INTO a release (it runs the OLD sweep with the NEW script),
+  # and it is why a rollback pairs THIS sweep with an OLDER script. So every call passes ONE unit — an older script
+  # reads only `$1` and would verify the first of a list and pass the rest unverified (the R12 critic's B2).
+  # The calls run CONCURRENTLY, in chunks of at most CCRC_SWEEP_VERIFY_JOBS (default 128; one chunk, one window), from
+  # a launcher subshell whose failed fork cannot end this run. EVERY unit is verified, a failure included; each one's
+  # output is replayed in listing order. A unit whose first call failed crash-like — a non-zero or unrecorded rc, and
+  # no `stopped on purpose:` line — gets ONE more call, alone, in the foreground, after its batch, and fails only if
+  # that fails too (the operator's ruling of 2026-10-05 13:58): a pane that died and came back inside the hot minute
+  # after the restart is not a crashed build. A unit that was active before try-restart and reads `activating` or
+  # `failed` after it is verified too (D-3984); one that reads `inactive` keeps item G's warning below. With no scratch
+  # directory, the calls are the old loop's: one at a time, in the foreground. No die sits inside a job, a pipeline or
+  # `$(…)` (I8). `--state=active` here and NOT above: handing verify-service.sh a unit try-restart never touched is
+  # deploy.sh's final-review finding 6.
   local verify="$BOX_TREE_DIR/deploy/verify-service.sh"
   local after_listing arc=0
   after_listing="$(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend)" || arc=$?
@@ -20978,13 +21052,110 @@ _upd_sweep() {
     echo "update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep."
     return 0
   fi
-  for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do
-    if [ -f "$verify" ]; then
-      bash "$verify" "$u" \
-        || _ccrc_die "$u was restarted and did not stay up — read: systemctl --user status $u. The pre-update backup is complete at $UPD_BACKUP_DIR"
+  local -a units=() missing=() crash=() unrec=() ncfail=()
+  local vdir="" vjobs="${CCRC_SWEEP_VERIFY_JOBS:-128}" i j k r lrc d o cu _cl cw _cs _cd clist crc=0 m inb cb kc=0 mn=0 rfail=""
+  [[ "$vjobs" =~ ^[1-9][0-9]{0,3}$ ]] || vjobs=128
+  for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do units+=("$u"); done
+  if [ -f "$verify" ]; then
+    for cb in ${before[@]+"${before[@]}"}; do
+      inb=0; for u in ${units[@]+"${units[@]}"}; do [ "$u" = "$cb" ] && { inb=1; break; }; done
+      [ "$inb" -eq 1 ] || missing+=("$cb")
+    done
+    if [ "${#missing[@]}" -gt 0 ]; then
+      clist="$(systemctl --user list-units "claude-session@*" --state=activating,failed --plain --no-legend)" || crc=$?
+      if [ "$crc" -ne 0 ]; then
+        echo "update: warning: the crash listing was not measured (systemctl --user list-units \"claude-session@*\" --state=activating,failed --plain --no-legend failed, rc $crc), so a crash-looping supervisor among the units missing from the active listing is only warned about below — none of them is verified or claimed healthy" >&2
+      else
+        while read -r cu _cl cw _cs _cd; do
+          [ -n "$cu" ] || continue
+          for m in "${missing[@]}"; do
+            if [ "$m" = "$cu" ]; then
+              units+=("$cu")
+              echo "update: sweep: $cu was active before try-restart and reads '$cw' after it — it is verified with the rest (wave 11, D-3984)" >&2
+              break
+            fi
+          done
+        done <<< "$clist"
+      fi
     fi
-    after+=("$u")
-  done
+  fi
+  if [ -f "$verify" ] && [ "${#units[@]}" -gt 0 ]; then
+    # A SIGKILLed sweep leaves its dir (nothing runs on SIGKILL): remove every one whose recorded owner is gone (D-3972 g).
+    for d in "${TMPDIR:-/tmp}"/ccrc-sweep.*; do
+      { [ -d "$d" ] && [ ! -L "$d" ]; } || continue
+      o=""; [ -f "$d/owner" ] && IFS= read -r o < "$d/owner"
+      case "$o" in ''|*[!0-9]*) continue ;; esac
+      kill -0 "$o" 2>/dev/null && continue
+      rm -rf -- "$d"
+    done
+    if vdir="$(mktemp -d "${TMPDIR:-/tmp}/ccrc-sweep.XXXXXX" 2>/dev/null)" && [ -d "$vdir" ] && printf '%s\n' "$$" >"$vdir/owner" 2>/dev/null; then
+      _exit_add "_upd_sweep_kill $(printf '%q' "$vdir"); rm -rf -- $(printf '%q' "$vdir")"
+    else
+      [ -z "$vdir" ] || rm -rf -- "$vdir"
+      vdir=""
+      echo "update: warning: no scratch directory for the verify (mktemp -d under ${TMPDIR:-/tmp} failed) — the supervisors are verified one at a time, as before wave 11" >&2
+    fi
+    i=0
+    while [ "$i" -lt "${#units[@]}" ]; do
+      crash=(); unrec=()
+      if [ -n "$vdir" ]; then
+        j=$((i + vjobs)); [ "$j" -le "${#units[@]}" ] || j=${#units[@]}
+        lrc=0; ( _upd_sweep_launch "$vdir" "$verify" "$i" "$j" ) 2>"$vdir/launch.err" || lrc=$?
+        if [ "$lrc" -ne 0 ]; then
+          _upd_sweep_kill "$vdir"
+          echo "update: warning: the verify launcher exited $lrc — each unit of this batch with no recorded result is verified alone, in the foreground" >&2
+          _upd_sweep_replay "$vdir/launch.err" 2
+        fi
+        for ((k = i; k < j; k++)); do
+          : >"$vdir/$k.done"   # this job's chunk is read: no later kill signals it (verify L1)
+          r=""; [ -f "$vdir/$k.rc" ] && IFS= read -r r < "$vdir/$k.rc"
+          _upd_sweep_replay "$vdir/$k.out" 1; _upd_sweep_replay "$vdir/$k.err" 2
+          case "$r" in
+            0) ;;
+            ''|*[!0-9]*) unrec+=("$k") ;;
+            *) if _upd_sweep_spo "$vdir/$k.out"; then ncfail+=("${units[k]}"); else crash+=("$k"); fi ;;
+          esac
+        done
+        # A unit with no recorded result (its launcher failed, or its rc could not be written) gets its FIRST verify
+        # here, alone, in the foreground; a crash-like failure of it is re-checked by the same rule as any other (13:58).
+        for k in ${unrec[@]+"${unrec[@]}"}; do
+          echo "update: sweep: ${units[k]} recorded no result; verifying it alone, in the foreground — this is its first verify (wave 11, D-3983)" >&2
+          r=0; bash "$verify" "${units[k]}" || r=$?
+          [ "$r" -eq 0 ] || crash+=("$k")
+        done
+      else
+        j=$((i + 1))
+        r=0; bash "$verify" "${units[i]}" || r=$?
+        [ "$r" -eq 0 ] || crash+=("$i")
+      fi
+      # THE RE-CHECK, which STOPS AT THE FIRST THAT FAILS (13:58, Reading 17): re-checks run one at a time in the
+      # foreground, so a crash-looping fleet fails after one of them, never after N; a re-check that passes goes on.
+      for k in ${crash[@]+"${crash[@]}"}; do
+        kc=$((kc + 1))
+        if [ -n "$rfail" ]; then
+          mn=$((mn + 1))
+          echo "update: sweep: re-check: ${units[k]} failed its first verify and is not re-checked — a re-check already failed, so this update fails (wave 11, D-3983)" >&2
+          continue
+        fi
+        echo "update: sweep: re-check: ${units[k]} — its first verify did not pass; verifying it once more, alone (wave 11, D-3983)" >&2
+        r=0; bash "$verify" "${units[k]}" || r=$?
+        if [ "$r" -eq 0 ]; then
+          echo "update: sweep: re-check: ${units[k]} passed its re-check — counted as a transient failure, not fatal" >&2
+        else
+          rfail="${units[k]}"
+          echo "update: sweep: re-check: ${units[k]} failed its re-check too — read: systemctl --user status ${units[k]}" >&2
+        fi
+      done
+      i=$j
+    done
+    [ -z "$vdir" ] || rm -rf -- "$vdir"
+  fi
+  after=(${units[@]+"${units[@]}"})
+  if [ -n "$rfail" ]; then
+    _upd_sweep_die "sweep: $kc of ${#units[@]} supervisors did not stay up on a first verify; a re-check failed, $mn left un-re-checked — install complete, nothing was rolled back (first failed re-check: $rfail); read: systemctl --user status $rfail"
+  elif [ "${#ncfail[@]}" -gt 0 ]; then
+    _upd_sweep_die "sweep: ${#ncfail[@]} of ${#units[@]} supervisors exited non-zero after a 'stopped on purpose' line, never re-checked — install complete, nothing was rolled back (first: ${ncfail[0]}); read: systemctl --user status ${ncfail[0]}"
+  fi
   # Wave 8 item G: a claim that "every … now runs the ccd this update
   # installed" is false for a unit that WAS active before try-restart and is
   # neither active nor failed after it — this sweep did not verify it, and
