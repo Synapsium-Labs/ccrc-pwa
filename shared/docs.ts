@@ -741,8 +741,6 @@ type DocRefRefusal = Extract<DocRefResolution, { kind: 'refused' }>['why'];
 
 const refusedRef = (why: DocRefRefusal): DocRefResolution => ({ kind: 'refused', why });
 
-/** What a browser strips from both ends of an attribute URL: C0 controls and space. */
-const DOC_REF_EDGE_RE = /^[\x00-\x20]+|[\x00-\x20]+$/g;
 /** What a browser would delete or reinterpret further in (a tab inside `java<TAB>script:`, a backslash read as
  *  `/`): C0, space, DEL and backslash anywhere. Refused, never deleted-and-continued. */
 const DOC_REF_MALFORMED_RE = /[\x00-\x20\x7f\\]/;
@@ -816,7 +814,14 @@ function resolveSchemeRef(raw: string): DocRefResolution {
  *  Every directory segment of the page's own path is percent-encoded before it joins the base, so a directory
  *  named `a#b` or `%2e%2e` stays one literal segment; the page's path must itself pass the rel-path grammar. */
 export function resolveDocRef(from: { section: DocSectionSlug; path: string }, ref: string): DocRefResolution {
-  const raw = ref.replace(DOC_REF_EDGE_RE, '');
+  // What a browser strips from both ends of an attribute URL: C0 controls and space (0x00-0x20). A linear scan,
+  // not a regex: an alternation anchored at both ends is quadratic on interior whitespace, and this runs on
+  // untrusted refs on the PWA main thread (spec 5.6.2).
+  let lo = 0;
+  let hi = ref.length;
+  while (lo < hi && ref.charCodeAt(lo) <= 0x20) lo += 1;
+  while (hi > lo && ref.charCodeAt(hi - 1) <= 0x20) hi -= 1;
+  const raw = ref.slice(lo, hi);
   if (DOC_REF_MALFORMED_RE.test(raw)) return refusedRef('malformed');
   if (raw === '') return refusedRef('empty');
   if (raw.startsWith('#')) return { kind: 'fragment', fragment: raw.slice(1) };

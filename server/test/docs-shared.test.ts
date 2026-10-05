@@ -777,6 +777,15 @@ describe('(G) resolveDocRef (spec 4.11; M5.7, L0 cases)', () => {
     expect(DocsFG.resolveDocRef(from, ref)).toEqual(want);
   });
 
+  it('a long run of interior whitespace is refused as malformed in linear time (spec 5.6.2: a mockup never freezes the console)', () => {
+    const ref = 'x' + ' '.repeat(200000) + 'y';
+    const t0 = performance.now();
+    const got = DocsFG.resolveDocRef(SPEC, ref);
+    const elapsed = performance.now() - t0;
+    expect(got).toEqual(refused('malformed'));
+    expect(elapsed).toBeLessThan(2000);
+  });
+
   it('CONTROL: URL itself clamps a climb at the root, so the above-root rows pin the walk and not URL', () => {
     expect(new URL('../../../../x', 'https://docs.invalid/docs/superpowers/specs/').pathname).toBe('/x');
   });
