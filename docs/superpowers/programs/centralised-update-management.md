@@ -1051,6 +1051,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         available.
       - STATUS: fleet and server v0.0.84, newest v0.0.84, backups fleet 98M/server 510M, disk free fleet 61G/work
         volume 11G/server 33G; no anomaly but the work volume.
+    - **2026-10-05 13:27 UTC — the work volume was resized (491G → 672G, 213G free), and the probe is clean.** The
+      operator did it; ccd's 10 GB `ws-add` floor no longer binds. The finished waves' leftovers are untouched and no
+      longer pressing.
+      - STATUS: fleet and server v0.0.84, newest v0.0.84, backups fleet 98M/server 510M, disk free fleet 80G/work
+        volume 213G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
