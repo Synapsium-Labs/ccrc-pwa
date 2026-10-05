@@ -505,6 +505,21 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Re-measured:** the tip matches the claim, and the run went to `awaiting-review`.
   - **Acceptance review 273** is dispatched to `ccrc-pwa-quiet-mesa`, with the held-out panel named.
   - **Overlap:** delegation-broker's run 271 is cleared by this worker to edit session-hook.sh.
+- **2026-10-05 15:49 — Task 7, read through (Steps 1–7, from the branch's wave-2 plan) before it is due.** Three things gate
+  it beyond the sequence above:
+  1. **Step 5 needs five PRs bound to fleet workspaces.** The runbook was written for the operator, as five
+     `ccd ws-add`s. Coordinator clause 1 forbids this session a `ccd` act that changes fleet state.
+     - Within the contract: dispatch five one-wave proof runs, each committing a one-line doc change and opening a
+       PR. The server binds them, and reclaims them at close. The dequeue lane's mails, which the runbook says the
+       proof cannot stage, would then be measured too.
+     - Otherwise the operator makes the five.
+     - Put to the operator.
+  2. **Stop rule 4.** `allow_auto_merge` is false. If gh reaches a required queue only through the auto-merge
+     mutation, the enqueue is refused, and the proof halts for the operator (ruling 2026-09-29). It is not this
+     coordinator's setting to write.
+  3. **After Step 4, this coordinator's landing spelling becomes clause 15's queue spelling:**
+     `gh pr merge <n> --match-head-commit <sha>`, with no `--admin` and no `--squash`. Step 1's two box reads use
+     `ccrc version` on each box (read-only). No `ccrc rollout`, even `--check`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
