@@ -970,7 +970,10 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
       const f = path.join(FIX, v, `${s}.json`);
       if (!fs.existsSync(f)) continue;
       const text = fs.readFileSync(f, 'utf8');
-      for (const bad of ['/tmp/', '/home/', '/Users/', '/var/folders/', '/mnt/', 'ccrc-dlg-rig', 'sk-ant-']) expect(text.includes(bad), `${v}/${s}: ${bad}`).toBe(false);
+      // `/rig/tmp/…` is the sanitised spelling of the run's TMPDIR (Claude Code's task output files), not residue: only
+      // a `/tmp/` that is not under `/rig` is.
+      expect(/(?<!\/rig)\/tmp\//.test(text), `${v}/${s}: /tmp/`).toBe(false);
+      for (const bad of ['/home/', '/Users/', '/var/folders/', '/mnt/', 'ccrc-dlg-rig', 'sk-ant-']) expect(text.includes(bad), `${v}/${s}: ${bad}`).toBe(false);
     }
   });
 });
