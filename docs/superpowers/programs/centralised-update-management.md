@@ -1688,7 +1688,9 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   - (a) While any node halts the fleet, the home banner names the halted node, its target and its detail, and offers
     that node's **Ack** in place, through the same route and the same `canAck`.
   - (b) **Update all** does not answer a silent 202 on a halted fleet: the skip and its reason are shown, or the
-    button is disabled with the reason.
+    button is disabled with the reason. Measured at 12:18:59 and 12:19:15: two more of the operator's taps were applies
+    (202), each shown as a red refusal saying to "acknowledge that node". The button that does that is labelled
+    **Ack** on another item, so the operator could not find the remedy from the refusal.
   - (c) The "boxes run different builds" banner stops advising `ccrc rollout` or `ccrc update` while auto is on and
     the console can move the nodes; it points at the console's own move or the halt.
 ## Next-wave brief
