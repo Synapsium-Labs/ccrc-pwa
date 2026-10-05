@@ -17,6 +17,7 @@
 #   rig.sh reap                      remove what killed runs left: dlg<pid> tmux servers and
 #                                    ccrc-dlg-rig.* roots whose owning rig.sh pid is gone, or that have
 #                                    no .owner, nothing modified for 10 minutes and no process under them
+#                                    (and a box with no /proc, where that cannot be measured, keeps them)
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TREE=$(cd "$HERE/../../.." && pwd)
@@ -322,6 +323,11 @@ cleanup_run() {
   [[ -n $MOCK_PID ]] && kill "$MOCK_PID" 2>/dev/null || true
   if [[ -n $RUN_R ]] && guard_root "$RUN_R"; then
     wait_run_quiet "$RUN_R" "$tree"
+    # Without /proc the wait above could not see a process by its cwd: never rm what cannot be measured.
+    if [[ ! -d ${RIG_PROC_ROOT:-/proc}/self ]]; then
+      printf 'rig: no /proc to measure processes under run root %s; leaving it\n' "${RUN_R##*/}" >&2
+      return 0
+    fi
     for _ in 1 2 3 4 5 6; do rm -rf -- "$RUN_R" 2>/dev/null && break; sleep 2; done
     # a writer that slipped past the wait recreates the tree: a short grace, removing it again
     for _ in 1 2 3 4 5 6 7 8 9 10; do sleep 0.2; [[ -e $RUN_R ]] && rm -rf -- "$RUN_R" 2>/dev/null; done
@@ -374,6 +380,8 @@ cmd_reap() {
     else
       # No .owner: a late writer (a dying Claude Code's transcript flush) recreated a removed root, or run
       # is between mktemp and writing .owner. Only an AGED root with no process under it is ours to clear.
+      # Without /proc procs_under finds nothing, which would read as "no process under it": fail CLOSED.
+      [[ -d ${RIG_PROC_ROOT:-/proc}/self ]] || continue
       d=$(cd -P -- "$d" && pwd) || continue
       guard_root "$d" || continue
       [[ -z $(find "$d" -mmin -10 -print -quit 2>/dev/null) ]] || continue
@@ -408,5 +416,5 @@ case ${1-} in
   run)            shift; cmd_run "$@" ;;
   all)            shift; cmd_all "$@" ;;
   reap)           cmd_reap ;;
-  *)              sed -n '2,22p' "$0" >&2; exit 2 ;;
+  *)              sed -n '2,20p' "$0" >&2; exit 2 ;;
 esac

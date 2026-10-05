@@ -23,7 +23,9 @@ const cmpV = (a, b) => {
   for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return x[i] - y[i];
   return 0;
 };
-const FAIL_NOTE = /timeout|no ready prompt|no session id|no pid|unknown step|run aborted/;
+// The notes rig.sh writes when a run did not go as scripted, spelled as rig.sh's own printf/note lines spell
+// them (anchored: a probe's `probe ["x-timeout"]: not reached`, or a dialog's text, must never match).
+const FAIL_NOTE = /^(waitLabels \[.*\]: timeout|waitReady: no ready prompt|kill9: no pid|relaunch: no session id captured|unknown step verb .*|run aborted)$/;
 const PROBE_NOTE = /^probe (\[.*\]): not reached$/;
 const CAPTURE_CAP = 200;
 const share = (xs, pred) => (xs.length === 0 ? null : xs.every(pred) ? 'all' : xs.some(pred) ? 'some' : 'none');

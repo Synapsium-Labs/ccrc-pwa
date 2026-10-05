@@ -143,6 +143,9 @@ describe('mockapi.mjs (the rig\'s mock Anthropic API)', () => {
 });
 
 const RIGSH = path.join(RIG, 'rig.sh');
+// The rig is Linux-only: claude_pid and procs_under read /proc (and `find -printf`), so a row that needs a
+// process found by its working directory is skipped elsewhere. On macOS the reap's ownerless arm fails closed.
+const LINUX = process.platform === 'linux';
 const TREE = path.resolve(__dirname, '../..');
 const rigsh = (args: string[], env: NodeJS.ProcessEnv = {}, cwd?: string): { status: number | null; stdout: string; stderr: string } => {
   const r = spawnSync('bash', [RIGSH, ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 120_000, ...(cwd ? { cwd } : {}) });
@@ -246,7 +249,7 @@ describe('rig.sh reap, an ownerless run root (a late writer recreated it after c
   };
   const old = new Date(Date.now() - 30 * 60_000);
 
-  it('removes one whose newest mtime is older than 10 minutes', () => {
+  it.skipIf(!LINUX)('removes one whose newest mtime is older than 10 minutes', () => {
     const tmp = mkTmp('ccrc-dlg-tmp-');
     const root = ownerless(tmp);
     ageTree(root, old);
@@ -278,7 +281,7 @@ describe('rig.sh reap, an ownerless run root (a late writer recreated it after c
     expect(fs.lstatSync(path.join(tmp, 'ccrc-dlg-rig.link')).isSymbolicLink()).toBe(true);
   }, 60_000);
 
-  it('keeps an aged one while a process has its working directory under it', () => {
+  it.skipIf(!LINUX)('keeps an aged one while a process has its working directory under it', () => {
     const tmp = mkTmp('ccrc-dlg-tmp-');
     const root = ownerless(tmp);
     ageTree(root, old);
@@ -288,9 +291,24 @@ describe('rig.sh reap, an ownerless run root (a late writer recreated it after c
     expect(r.status, r.stderr).toBe(0);
     expect(fs.existsSync(root)).toBe(true);
   }, 60_000);
+
+  it('keeps an aged one when there is no /proc to measure by (fails closed), and removes it when there is', () => {
+    const tmp = mkTmp('ccrc-dlg-tmp-');
+    const root = ownerless(tmp);
+    ageTree(root, old);
+    const env = { TMPDIR: tmp, TMUX_TMPDIR: mkTmp('ccrc-dlg-tmux-'), HOME: mkTmp('ccrc-dlg-home-') };
+    const blind = rigsh(['reap'], { ...env, RIG_PROC_ROOT: path.join(tmp, 'no-such-proc') });
+    expect(blind.status, blind.stderr).toBe(0);
+    expect(fs.existsSync(root)).toBe(true);
+    if (LINUX) {   // the same root, with the real /proc, is cleared: the guard is what held it
+      const sighted = rigsh(['reap'], env);
+      expect(sighted.status, sighted.stderr).toBe(0);
+      expect(fs.existsSync(root)).toBe(false);
+    }
+  }, 60_000);
 });
 
-describe('rig.sh wait_run_quiet (cleanup_run waits out a process still under the run root)', () => {
+describe.skipIf(!LINUX)('rig.sh wait_run_quiet (cleanup_run waits out a process still under the run root)', () => {
   /** Run wait_run_quiet from rig.sh's own text (the case dispatch at its foot would otherwise run), with a 1 s bound. */
   const wait = (root: string): { status: number | null; stderr: string; ms: number } => {
     const text = fs.readFileSync(RIGSH, 'utf8');
@@ -873,6 +891,19 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
     expect(m.cells['2.1.9/probe']).toMatchObject({ status: 'measured', probesMissed: ['r1-resumed'], subagentStarts: 0 });
   });
 
+  it('a probe whose label merely contains "timeout" is still an outcome (FAIL_NOTE is anchored to rig.sh\'s own note shapes)', () => {
+    const fix = mkTmp('ccrc-dlg-mx-');
+    const scen = mkTmp('ccrc-dlg-sc-');
+    fs.writeFileSync(path.join(scen, 'probe.json'), '{}');
+    fs.mkdirSync(path.join(fix, '2.1.9'), { recursive: true });
+    fs.writeFileSync(path.join(fix, '2.1.9', 'probe.json'), JSON.stringify(fixture({
+      version: '2.1.9', scenario: 'probe', notes: ['probe ["x-timeout"]: not reached', 'dialog answered: no ready prompt?'], events: [ev(1, 'SessionStart', { session_id: 'S' })],
+    })));
+    const r = build([fix, scen]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).cells['2.1.9/probe']).toMatchObject({ status: 'measured', probesMissed: ['x-timeout'] });
+  });
+
   it('derives the per-question fields from payloads and disk', () => {
     const { fix, scen } = corpus();
     const c = JSON.parse(build([fix, scen]).stdout).cells['2.1.10/measured'];
@@ -996,5 +1027,16 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
       expect(/(?<!\/rig)\/tmp\//.test(text), `${v}/${s}: /tmp/`).toBe(false);
       for (const bad of ['/home/', '/Users/', '/var/folders/', '/mnt/', 'ccrc-dlg-rig', 'sk-ant-']) expect(text.includes(bad), `${v}/${s}: ${bad}`).toBe(false);
     }
+  });
+});
+
+describe('one capture-file-name grammar', () => {
+  it('sanitize.mjs\'s CAP_NAME is the same literal as deploy/hook-capture-reduce.mjs\'s', () => {
+    const grammar = (file: string): string[] => [...fs.readFileSync(file, 'utf8').matchAll(/^const CAP_NAME = (\/.*\/[a-z]*);$/gm)].map((m) => m[1] as string);
+    const a = grammar(path.join(RIG, 'sanitize.mjs'));
+    const b = grammar(path.join(TREE, 'deploy/hook-capture-reduce.mjs'));
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+    expect(a).toEqual(b);
   });
 });
