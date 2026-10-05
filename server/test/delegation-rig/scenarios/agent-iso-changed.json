@@ -1,0 +1,17 @@
+{
+  "scenario": "agent-iso-changed", "covers": ["Q3", "Q6"],
+  "steps": [
+    {"waitReady": 60}, {"type": "dlg agent-iso-changed"}, {"keys": ["Enter"]},
+    {"waitLabels": ["main-done"], "timeoutS": 120}
+  ],
+  "settleS": 10,
+  "entries": [
+    {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg agent-iso-changed"},
+     "tool_use": {"nameAny": ["Agent", "Task"], "input": {"description": "dlg iso changed", "prompt": "dlg-sub-iso-c", "subagent_type": "general-purpose", "run_in_background": false, "isolation": "worktree"}}},
+    {"label": "sub-bash", "match": {"kind": "tools", "lastUser": "dlg-sub-iso-c"},
+     "tool_use": {"name": "Bash", "input": {"command": "printf 'x\\n' > changed.txt && git add changed.txt && git commit -qm dlg-changed && echo DLG-ACK-iso-c", "description": "commit a change"}}},
+    {"label": "sub-done", "match": {"kind": "tools", "lastUser": "DLG-ACK-iso-c"}, "text": "DLG-SUB-DONE-iso-c"},
+    {"label": "main-done", "match": {"kind": "tools", "lastUser": "DLG-SUB-DONE-iso-c|^$"}, "text": "DLG-DONE"}
+  ],
+  "default": {"text": "DLG-WAIT", "repeat": true}
+}

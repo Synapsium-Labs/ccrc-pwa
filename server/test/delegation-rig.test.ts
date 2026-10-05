@@ -141,3 +141,136 @@ describe('mockapi.mjs (the rig\'s mock Anthropic API)', () => {
     expect(fs.readdirSync(RIG).filter((n) => /\.log$|^reqs/.test(n))).toEqual([]);
   });
 });
+
+const RIGSH = path.join(RIG, 'rig.sh');
+const TREE = path.resolve(__dirname, '../..');
+const rigsh = (args: string[], env: NodeJS.ProcessEnv = {}): { status: number | null; stdout: string; stderr: string } => {
+  const r = spawnSync('bash', [RIGSH, ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 120_000 });
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+};
+
+describe('rig.sh guards (the rig never names the real HOME or the default tmux server)', () => {
+  it('guard-root accepts only an absolute, canonical ccrc-dlg-rig.* path outside $HOME', () => {
+    const home = mkTmp('ccrc-dlg-home-');
+    expect(rigsh(['guard-root', '/tmp/ccrc-dlg-rig.Ab12'], { HOME: home }).status).toBe(0);
+    for (const bad of ['ccrc-dlg-rig.rel', '/tmp/other', `${home}/ccrc-dlg-rig.x`, '/tmp/ccrc-dlg-rig.x/../y',
+      '/tmp//ccrc-dlg-rig.x', '/tmp/./ccrc-dlg-rig.x', '/tmp/ccrc-dlg-rig.x/', '/']) {
+      expect(rigsh(['guard-root', bad], { HOME: home }).status, bad).not.toBe(0);
+    }
+    expect(rigsh(['guard-root', `${home}/ccrc-dlg-rig.x`], { HOME: `${home}/` }).status, 'a HOME with a trailing slash').not.toBe(0);
+  });
+
+  it('guard-sock accepts only ^dlg[A-Za-z0-9_-]*$', () => {
+    expect(rigsh(['guard-sock', 'dlg123']).status).toBe(0);
+    for (const bad of ['default', '', 'dlg/x', 'xdlg', 'dlg x']) expect(rigsh(['guard-sock', bad]).status, bad).not.toBe(0);
+  });
+
+  it('setup refuses a root the guard refuses, and creates nothing there', () => {
+    const home = mkTmp('ccrc-dlg-home-');
+    const r = rigsh(['setup', path.join(home, 'ccrc-dlg-rig.inside')], { HOME: home });
+    expect(r.status).toBe(2);
+    expect(fs.existsSync(path.join(home, 'ccrc-dlg-rig.inside'))).toBe(false);
+  });
+
+  it('check-scenario refuses a non-integer wait, a tmux separator among keys, and an unknown verb', () => {
+    const dir = mkTmp('ccrc-dlg-sc-');
+    const write = (name: string, steps: object[]): string => {
+      const f = path.join(dir, `${name}.json`);
+      fs.writeFileSync(f, JSON.stringify({ steps, entries: [] }));
+      return f;
+    };
+    expect(rigsh(['check-scenario', write('ok', [{ waitReady: 60 }, { keys: ['Enter'] }, { probeLabels: ['a-1'], timeoutS: 9 }, { snapshot: 'before-kill' }])]).status).toBe(0);
+    expect(rigsh(['check-scenario', write('arith', [{ waitReady: 'SECONDS[$(touch x)]' }])], { PWD: dir }).status).toBe(2);
+    expect(rigsh(['check-scenario', write('chain', [{ keys: ['Enter', ';', 'run-shell'] }])]).status).toBe(2);
+    expect(rigsh(['check-scenario', write('verb', [{ bogus: 1 }])]).status).toBe(2);
+  });
+
+  it('run-base picks /tmp when TMPDIR sits under HOME by its spelling or its physical path, and keeps one outside', () => {
+    const real = fs.realpathSync(mkTmp('ccrc-dlg-home-'));
+    const outside = fs.realpathSync(mkTmp('ccrc-dlg-out-'));
+    const linkHome = path.join(outside, 'home-link');
+    fs.symlinkSync(real, linkHome);                       // HOME spelled through a symlink to the real directory
+    const inside = path.join(real, 'sub'); fs.mkdirSync(inside);
+    const viaLink = path.join(outside, 'tmp-link'); fs.symlinkSync(inside, viaLink);   // outside by spelling, inside by path
+    const linkIn = path.join(real, 'out-link'); fs.symlinkSync(outside, linkIn);        // inside by spelling, outside by path
+    const base = (home: string, tmpdir: string): string => rigsh(['run-base'], { HOME: home, TMPDIR: tmpdir }).stdout.trim();
+    expect(base(real, inside), 'spelled under HOME').toBe('/tmp');
+    expect(base(real, viaLink), 'physically under HOME').toBe('/tmp');
+    expect(base(linkHome, inside), 'under the physical HOME, HOME spelled through a link').toBe('/tmp');
+    expect(base(real, linkIn), 'spelled under HOME, physically outside').toBe('/tmp');
+    expect(base(real, outside), 'outside HOME').toBe(outside);
+    const text = fs.readFileSync(RIGSH, 'utf8');
+    expect(text).toContain('mktemp -d "$(run_base)/ccrc-dlg-rig.XXXXXX"');
+    expect(text).toContain('for d in "$(run_base)"/ccrc-dlg-rig.*; do');
+  }, 120_000);
+
+  it('no line of rig.sh calls tmux except through the private-socket helper', () => {
+    const lines = fs.readFileSync(RIGSH, 'utf8').split('\n').filter((l) => /\btmux\b(?!-)/.test(l) && !/^\s*#/.test(l));
+    const ok = (l: string): boolean => l.includes('tmux -L "$s" -f /dev/null') || l.includes('for c in jq tmux git');
+    expect(lines.filter((l) => !ok(l))).toEqual([]);
+  });
+
+  it('reap removes a run root whose owner is gone and keeps one whose owner lives', () => {
+    const tmp = mkTmp('ccrc-dlg-tmp-');
+    const dead = fs.mkdtempSync(path.join(tmp, 'ccrc-dlg-rig.'));
+    const live = fs.mkdtempSync(path.join(tmp, 'ccrc-dlg-rig.'));
+    fs.writeFileSync(path.join(dead, '.owner'), `${spawnSync('true').pid}\n`);   // a finished child's pid
+    fs.writeFileSync(path.join(live, '.owner'), `${process.pid}\n`);
+    const r = rigsh(['reap'], { TMPDIR: tmp, TMUX_TMPDIR: mkTmp('ccrc-dlg-tmux-'), HOME: mkTmp('ccrc-dlg-home-') });
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.existsSync(dead)).toBe(false);
+    expect(fs.existsSync(live)).toBe(true);
+  });
+});
+
+describe('rig.sh setup (fixture HOME and repo)', () => {
+  it('builds the fixture HOME and repo under its root, with ccrc\'s own hook registered by ccrc\'s own installer', () => {
+    const home = mkTmp('ccrc-dlg-home-');
+    const root = mkTmp('ccrc-dlg-rig.');
+    const r = rigsh(['setup', root, '2.1.999'], { HOME: home });
+    expect(r.status, r.stderr).toBe(0);
+    const s = JSON.parse(fs.readFileSync(path.join(root, 'fixhome/cfg/settings.json'), 'utf8'));
+    for (const ev of ['PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop', 'SessionStart', 'SessionEnd', 'Stop']) {
+      expect(JSON.stringify(s.hooks[ev] ?? []), ev).toContain('/session-hook.sh');
+    }
+    expect(s.hooks.WorktreeCreate).toBeUndefined();
+    expect(s.hooks.WorktreeRemove).toBeUndefined();
+    expect(s).toMatchObject({ enableWorkflows: true, worktree: { baseRef: 'head' } });
+    expect(s.permissions.allow).toEqual(expect.arrayContaining(['Bash', 'Agent', 'Workflow']));
+    expect(fs.readFileSync(path.join(root, 'fixhome/.cc-sessions/session-hook.sh')))
+      .toEqual(fs.readFileSync(path.join(TREE, 'ccd/session-hook.sh')));
+    expect(fs.readFileSync(path.join(root, 'fixhome/.cc-sessions/rig-hookcap.generation'), 'utf8'))
+      .toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(fs.statSync(path.join(root, 'key')).mode & 0o777).toBe(0o600);
+    const log = spawnSync('git', ['-C', path.join(root, 'repo'), 'log', '--format=%an <%ae>'], { encoding: 'utf8' });
+    expect(log.stdout.trim()).toBe('Rig Fixture <you@example.com>');
+    const cj = JSON.parse(fs.readFileSync(path.join(root, 'fixhome/cfg/.claude.json'), 'utf8'));
+    expect(cj.projects[path.join(root, 'repo')]).toMatchObject({ hasTrustDialogAccepted: true });
+    expect(cj.lastReleaseNotesSeen).toBe('2.1.999');
+  });
+
+  it('setup writes only under its root: the HOME it ran with is left empty', () => {
+    const home = mkTmp('ccrc-dlg-home-');
+    const root = mkTmp('ccrc-dlg-rig.');
+    expect(rigsh(['setup', root], { HOME: home }).status).toBe(0);
+    expect(fs.readdirSync(home)).toEqual([]);
+  });
+
+  it('every scenario passes check-scenario, names itself, and its waits and probes name its labels', () => {
+    const dir = path.join(RIG, 'scenarios');
+    const files = fs.readdirSync(dir).filter((n) => n.endsWith('.json')).sort();
+    expect(files).toHaveLength(14);
+    for (const f of files) {
+      expect(rigsh(['check-scenario', path.join(dir, f)]).status, f).toBe(0);
+      const s = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as { scenario: string; covers: string[]; steps: Array<Record<string, unknown>>; entries: Array<{ label?: string }> };
+      expect(s.scenario, f).toBe(f.replace(/\.json$/, ''));
+      expect(s.covers.length, f).toBeGreaterThan(0);
+      const labels = new Set(s.entries.map((e) => e.label).filter(Boolean));
+      for (const st of s.steps) {
+        const verb = Object.keys(st)[0] as string;
+        if (verb === 'waitLabels' || verb === 'probeLabels') for (const l of st[verb] as string[]) expect(labels.has(l), `${f}: ${l}`).toBe(true);
+      }
+      expect(JSON.stringify(s), f).not.toMatch(/WorktreeCreate|WorktreeRemove|dangerously/);
+    }
+  }, 120_000);
+});

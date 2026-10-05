@@ -1,0 +1,16 @@
+{
+  "scenario": "wf-plain", "covers": ["Q1", "Q2", "Q4"],
+  "steps": [
+    {"waitReady": 60}, {"type": "dlg wf-plain"}, {"keys": ["Enter"]},
+    {"answerDialog": "Run a dynamic workflow", "timeoutS": 10},
+    {"waitLabels": ["wf-p1", "wf-p2"], "timeoutS": 180}
+  ],
+  "settleS": 15,
+  "entries": [
+    {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg wf-plain"},
+     "tool_use": {"name": "Workflow", "input": {"script": "export const meta = { name: 'dlgwfp', description: 'dlg wf plain' }\nconst r = await Promise.all([agent('dlg-wf-p1', { label: 'p1' }), agent('dlg-wf-p2', { label: 'p2' })])\nreturn r\n"}}},
+    {"label": "wf-p1", "match": {"kind": "tools", "lastUser": "dlg-wf-p1"}, "text": "DLG-WF-P1"},
+    {"label": "wf-p2", "match": {"kind": "tools", "lastUser": "dlg-wf-p2"}, "text": "DLG-WF-P2"}
+  ],
+  "default": {"text": "DLG-WAIT", "repeat": true}
+}
