@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1661b6921a503d6e99bcea3d5c3da9a677439e5ab830302baa08715150505a2f
+# ccrc:generated 1 sha256=e3f922970258757783ee8f42aa38f9f016918dc7fdace62dd2e45225750dbfde
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3134,8 +3134,8 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 185
-# invocations across 155 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 187
+# invocations across 157 non-comment lines.
 #
 # THE LAST MOVE WAS the EXPIRE region's reads (workspace lifecycle wave 3); before it the rescue wait's, the +3; before that D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`);
 # then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
@@ -10372,7 +10372,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
       "another ccd process is reaping $id and still holds the lock — refusing to restore mid-cleanup"
   }
 
-  [[ -f "$REG/$id.archived" ]]   || _lc_refuse restore "$id" not-archived "not archived: $id"
+  [[ -f "$REG/$id.archived" ]]   || _lc_refuse restore "$id" not-archived "not archived: $id"; ! _ws_expire_breadcrumb_why "$id" >/dev/null || _lc_refuse restore "$id" in-progress "$(_ws_expire_breadcrumb_why "$id")"
   local workdir; workdir=$(_reg_get "$id" workdir)
   [[ -d "$workdir" ]] || _lc_refuse restore "$id" worktree-missing \
     "worktree is gone: $workdir — see: ccd ws-attic --session $id"
@@ -20216,6 +20216,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # deliberate way back never trips this arm. It fires only on the paths that
   # had no opinion at all — start, ensure, swap, and the two unsupervised
   # fallbacks in `_supervised_start`.
+  # A RETURN DURING AN EXPIRY REFUSES, here, where every spawn path meets
+  # (`_ws_expire_spawn_gate`, the EXPIRE region, says which paths and why).
+  _ws_expire_spawn_gate "$id" || die "$_WS_EXPIRE_SPAWN_WHY"
   if [[ -f "$REG/$id.archived" ]]; then
     local archreason; archreason=$(_reg_get "$id" archivedreason)
     echo "ccd: warn: $id was archived${archreason:+ ($archreason)} — clearing the archive stamp, because a pane is being created for it; ws-restore is the deliberate way back" >&2
@@ -20223,6 +20226,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       meas.archivedAt "$(_reg_get "$id" archived)" meas.archivedReason "$archreason"
     _ws_unarchive "$id"
   fi
+  _ws_expire_spawn_release
   tname=$(_tmux "$id")
   # A spawn within 5 min of a swap is the swap LANDING on the new account — resume from
   # summary there (cheap) instead of full-as-is (700k re-read on the fresh limit pool).
@@ -21540,6 +21544,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     echo "ccd: warn: $id lives on $wrapper, which is not in project '$project''s pool '${pps#named }' — the auto-swapper relocates it at the next idle boundary" >&2
   fi
 
+  _ws_expire_refuse_return "$id"   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
   if _alive "$id"; then
     # M5's shape, reachable from a keyboard: a live pane whose unit was never enabled, or was
     # disabled without `--now` some other way. A bare `ccd start` staying a pure no-op here is
@@ -21742,6 +21747,7 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   # argument without asking what a hostile string does once it lands.
   local id="${1:?usage: ccd ensure <id>}"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id' (run ccd start first)"
+  _ws_expire_refuse_return "$id"   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
   if _alive "$id"; then
     # A LIVE PANE IS NOT NECESSARILY A SUPERVISED ONE, and this early return used
     # to treat the two as the same thing. `_resupervise_live` is the one place
@@ -24117,6 +24123,7 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   local id="${1:?usage: ccd swap [--force] [--cross-pool] <id> <target-wrapper>}" target="${2:?usage: ccd swap [--force] [--cross-pool] <id> <target-wrapper>}"
   _is_valid_wrapper "$target" || die "unknown wrapper '$target' (valid: ${CCRC_ACCOUNTS[*]})"
   [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
+  _ws_expire_refuse_return "$id"   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
   local cur; cur=$(_reg_get "$id" wrapper)
   [[ "$target" != "$cur" ]] || die "'$id' is already on $cur"
   [[ -x "$WRAPPER_DIR/$target" ]] || die "wrapper missing: $WRAPPER_DIR/$target"
@@ -24547,6 +24554,7 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # `start` line; this one records that boot-persistence was asked for. No
   # shared tx: tx is for one intent/outcome PAIR, never for a call tree, and
   # folding these would report one act where two happened.
+  _ws_expire_refuse_return "$id"   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
   _lc_done enable "$id" ""
   cmd_start ${cross:+--cross-pool} "${route[@]}" "$@" || return $?
   echo "enabled boot-persistence for $id"
@@ -28788,6 +28796,85 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
     phase="$start"
   fi
   _ws_reclaim_tail "$id" "$phase" "$lctx" "$EXPIRE_ARCHIVED_AT" "$surface" "$declared" "$resumed"
+}
+
+_WS_EXPIRE_SPAWN_FD=""; _WS_EXPIRE_SPAWN_WHY=""
+_ws_expire_spawn_gate() {   # id -> 0 when a pane may be created for id; rc 1 with _WS_EXPIRE_SPAWN_WHY when not.
+  #                            On rc 0 for an ARCHIVED row it HOLDS the reap lock (_WS_EXPIRE_SPAWN_FD) until
+  #                            `_ws_expire_spawn_release`, so the unarchive that follows cannot interleave with an
+  #                            expiry, a reap or a restore of the same row.
+  # A RETURN DURING AN EXPIRY REFUSES (spec §5.3), on every path that creates
+  # a pane — `_spawn_start` is the one they all reach (start and enable, ensure,
+  # the unit's `supervise`, swap's respawn, attach and menu through ensure, the
+  # server's Revive through ensure, ws-add), so this gate is the backstop; the return
+  # verbs refuse first, before they journal (`_ws_expire_refuse_return`), and
+  # ws-restore asks the same breadcrumb itself before it unarchives. Two
+  # windows, two answers. AFTER a crash the
+  # `expire:` breadcrumb stands and the lock is free: refused by the
+  # breadcrumb, whatever the archive stamp says. DURING the act the expiry
+  # holds `$REG/.reap-<id>.lock` from its ladder to its last deletion, and the
+  # `.archived` stamp still stands: so a spawn that is about to clear that
+  # stamp takes the same lock first, `-n`, and refuses if anyone holds it — a
+  # refusal, never a wait, because the holder may be minutes into a teardown.
+  # No breadcrumb and no stamp: nothing to ask, no lock taken, and a box with
+  # no flock cannot be running an expiry (`cmd_ws_expire` refuses there).
+  local id="$1" rbc
+  _WS_EXPIRE_SPAWN_FD=""; _WS_EXPIRE_SPAWN_WHY=""
+  rbc=$(_reg_get "$id" reaping)
+  if [[ "$rbc" == expire:* ]]; then
+    _WS_EXPIRE_SPAWN_WHY="$id is being expired — an interrupted ws-expire stopped at its '${rbc#expire:}' step, and a pane is never created for a workspace whose teardown has begun"
+    return 1
+  fi
+  [[ -f "$REG/$id.archived" ]] || return 0
+  # A BREADCRUMB THAT STANDS BUT READS AS NOTHING, ON AN ARCHIVED ROW, IS NOT
+  # "NONE": an interrupted expiry leaves `.archived` standing (its purge takes
+  # the breadcrumb first), so it may be one — which verb left it, and where, is
+  # unknown, exactly as `_ws_expire_fork` reads it (unmeasured). Asked of an
+  # archived row only: no spawn of a row that is not archived ever read one.
+  if [[ -z "$rbc" ]] && [[ -e "$REG/$id.reaping" || -L "$REG/$id.reaping" ]]; then
+    _WS_EXPIRE_SPAWN_WHY="a breadcrumb stands at $REG/$id.reaping but cannot be read — whether $id is being expired is unknown, so no pane is created for it"
+    return 1
+  fi
+  command -v flock >/dev/null 2>&1 || return 0
+  local fd
+  exec {fd}>>"$REG/.reap-$id.lock" || { _WS_EXPIRE_SPAWN_WHY="cannot open the reap lock at $REG/.reap-$id.lock, so whether $id is being expired was never asked"; return 1; }
+  if ! flock -n "$fd"; then
+    exec {fd}>&-
+    _WS_EXPIRE_SPAWN_WHY="another ccd process is expiring, reaping or restoring $id and still holds the lock — refusing to create a pane for it mid-cleanup"
+    return 1
+  fi
+  _WS_EXPIRE_SPAWN_FD="$fd"
+}
+
+_ws_expire_spawn_release() {   # -> gives back the lock `_ws_expire_spawn_gate` took, if it took one
+  [[ -z "$_WS_EXPIRE_SPAWN_FD" ]] || exec {_WS_EXPIRE_SPAWN_FD}>&-
+  _WS_EXPIRE_SPAWN_FD=""
+}
+
+_ws_expire_breadcrumb_why() {   # id -> rc 0 with the refusal sentence on stdout when an `expire:` breadcrumb
+  #                                stands for id, or one that cannot be read (the gate's reason); rc 1 when none
+  local rbc; rbc=$(_reg_get "$1" reaping)
+  if [[ -z "$rbc" ]] && [[ -e "$REG/$1.reaping" || -L "$REG/$1.reaping" ]]; then
+    printf 'a breadcrumb stands at %s but cannot be read — whether %s is being expired is unknown, so it is not brought back' "$REG/$1.reaping" "$1"
+    return 0
+  fi
+  [[ "$rbc" == expire:* ]] || return 1
+  printf '%s is being expired — an interrupted ws-expire stopped at its %s step; bringing it back now would return a workspace whose teardown has begun' "$1" "'${rbc#expire:}'"
+}
+
+_ws_expire_refuse_return() {   # id -> returns 0 when no `expire:` breadcrumb stands; else DIES with the sentence
+  # THE RETURN VERBS' OWN REFUSAL, asked by `cmd_start`, `cmd_ensure`, `cmd_swap`
+  # and `cmd_enable` BEFORE they journal their act or write a field: a return that a
+  # breadcrumb refuses must leave no `start`/`ensure`/`swap`/`enable` row behind, or
+  # the lifecycle instrument (`deploy/measure-workspace-lifecycle.py`) pairs
+  # it with the archive as a RETURN, seven days or more after it — the exact
+  # number spec §9's kill rule reads. `ws-restore` asks the same breadcrumb
+  # under its lock and refuses through `_lc_refuse` (`in-progress`), and
+  # `_spawn_start`'s gate is the backstop under all of them. It IS that gate,
+  # asked early and let go at once: the breadcrumb after a crash, and the reap
+  # lock while an expiry (or a reap, or a restore) of an archived row holds it.
+  _ws_expire_spawn_gate "$1" || die "$_WS_EXPIRE_SPAWN_WHY"
+  _ws_expire_spawn_release
 }
 
 # ── end archived-workspace expiry ───────────────────────────────────────────── EXPIRE-END ──
