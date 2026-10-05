@@ -2292,6 +2292,27 @@ describe('refresh runs the litellm step for a codex lane (§5)', () => {
     expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.json'))).toBe(true);
     expect(fs.existsSync(configPath())).toBe(false);
   });
+
+  // Plan 3b Task A4 (D-4051): a render that
+  // FAILS with no `.detail` to read — no stdout at all (a killed subshell), an
+  // envelope with no `detail`, or bytes that are not JSON — is a FAILED row
+  // naming its exit, never `ok:true` with the `skipped` default and never the
+  // reason "null". Every case above reaches `_models_refuse`, which always prints
+  // a body, so none of them could see this. The function is redefined after
+  // `ccd/ccrc` is sourced, the idiom the Z4 case uses for `_codex_lanes`.
+  it.each([
+    ['no stdout at all', '_models_litellm() { return 1; }', 1],
+    ['an envelope with no detail', '_models_litellm() { printf \'%s\\n\' \'{"ok":false}\'; return 5; }', 5],
+    ['bytes that are not JSON', '_models_litellm() { printf \'%s\\n\' \'not json\'; return 1; }', 1],
+  ])('Plan 3b Task A4: a render that fails with %s is a FAILED row naming its exit, never ok:true with litellm "skipped"', (_what, stub, rc) => {
+    const r = sourced(`${stub}\ncmd_models refresh ${LEGACY_EXTERNAL_ID}`, [], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code, r.stderr).toBe(1);
+    const b = oneObject(r);
+    expect(b['ok']).toBe(false);
+    expect(b['refreshed']).toEqual([{ id: LEGACY_EXTERNAL_ID, ok: false, reason: `_models_litellm exited ${rc} with no answer` }]);
+    expect(r.stderr, 'the block\'s own jq spoke on stderr').not.toMatch(/parse error/);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', `${LEGACY_EXTERNAL_ID}.json`)), 'the probe\'s catalogue stands').toBe(true);
+  });
 });
 
 // D-3482 (spec §8): for an `exec.kind: "codex"` lane ONLY, the
@@ -2974,6 +2995,16 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
     const rows = oneObject(r)['refreshed'] as { id: string; ok: boolean; reason?: string }[];
     expect(rows).toEqual([{ id: 'codex-a', ok: false, reason: expect.any(String) }]);
     expect(rows[0]!.reason).toMatch(/could not be stopped/);
+    expect(fs.readFileSync(lanePath('codex-a'), 'utf8')).toBe(OLD);
+  });
+
+  it('Plan 3b Task A4: refresh — a codex lane whose render dies with no answer is a FAILED row naming its exit, and its tier is never asked', () => {
+    fs.writeFileSync(lanePath('codex-a'), OLD);
+    const r = sourced('_models_litellm() { return 137; }\ncmd_models refresh codex-a', ['lock', 'ours', 'stop', 'start'],
+      { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['refreshed']).toEqual([{ id: 'codex-a', ok: false, reason: '_models_litellm exited 137 with no answer' }]);
+    expect(laneCalls(), 'a stubbed render reached the lane library').toEqual([]);
     expect(fs.readFileSync(lanePath('codex-a'), 'utf8')).toBe(OLD);
   });
 

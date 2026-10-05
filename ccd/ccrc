@@ -10631,10 +10631,10 @@ _models_box_sub() {   # <subcommand> [args…]
           # "did the visible set change", and it is the same question,
           # because the visible set is the only input the rendering has.
           lit="skipped"
-          local lreason=""
+          local lreason="" lbody lrc=0
           if [ -z "$mreason" ] && [ "$probe" = "codex" ]; then
-            local lbody
-            if lbody="$(_models_litellm "$id" 2>/dev/null)"; then
+            lbody="$(_models_litellm "$id" 2>/dev/null)" || lrc=$?
+            if [ "$lrc" -eq 0 ]; then
               [ "$(printf '%s' "$lbody" | tail -n1 | jq -r '.changed')" = "true" ] \
                 && lit="rendered" || lit="unchanged"
             else
@@ -10648,8 +10648,8 @@ _models_box_sub() {   # <subcommand> [args…]
               # and their effects stand, but `litellm: "failed"` is retired
               # from this row's vocabulary (rendered|unchanged|skipped only):
               # an `ok:true` row that quietly named a failure was exactly the
-              # bug this ruling fixes.
-              lreason="$(printf '%s' "$lbody" | tail -n1 | jq -r '.detail')"
+              # bug this ruling fixes; so is one with no .detail (Plan 3b A4, D-4051).
+              lreason="$(printf '%s' "$lbody" | tail -n1 | jq -r '.detail // empty' 2>/dev/null)"; [ -n "$lreason" ] || lreason="_models_litellm exited $lrc with no answer"
             fi
           fi
           if [ -n "$mreason" ]; then
