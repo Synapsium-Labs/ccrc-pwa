@@ -30,7 +30,7 @@ import { askActions, askKey } from './askkey.js';
 import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  ChildReclaimAttention, CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth,
+  ChildMark, ChildReclaimAttention, CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth,
   MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
   SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
@@ -1026,6 +1026,12 @@ export class FleetWatcher {
    *  tick measures — see `currentCoord()`. */
   private coord: CoordStatus | null = null;
   private lastCoordJson: string | null = null;
+  /** Child-reclamation wave 5: each LISTED registry row's `ChildMark`, off the
+   *  listing `tick()` already made. `null` until the first listed tick, which is
+   *  `currentCoord()`'s "never measured" and not "no children". Retained, not
+   *  erased, across an unlistable tick, the same retain-don't-erase rule the
+   *  fail-shut return in `tick()` applies to every map it guards. */
+  private childMarks: ReadonlyMap<string, ChildMark> | null = null;
   /** The reclaim attention list as `sweepChildReclaim` last derived it from
    *  the lifecycle mirror (child-reclamation wave 4). `emitCoord` reads it on
    *  every tick; the sweep's MIRROR DERIVATION is its ONLY writer, on its own
@@ -1528,6 +1534,14 @@ export class FleetWatcher {
     return this.coord;
   }
 
+  /** The child marks off the last LISTED registry read, for `GET /api/runs`'s
+   *  reclaim chip (wave 5), or null when no tick has listed one. In memory, and
+   *  the reason is cost: a route-time `readRegistry` is ~721 agent-WS operations
+   *  per board load in remote mode. */
+  currentChildMarks(): ReadonlyMap<string, ChildMark> | null {
+    return this.childMarks;
+  }
+
   /** The sweep's in-memory state, read-only (child-reclamation wave 4) — what
    *  wave 5's run chip reads to tell `deferred` from `pending`. Empty after a
    *  restart, by design: see `childReclaimSweepState`'s own docstring. Its
@@ -1673,6 +1687,9 @@ export class FleetWatcher {
         return;
       }
       const records = registryRead.records;
+      // Wave 5: the reclaim chip's registry answer, off THIS listing. Never a
+      // second read; see `childMarks`.
+      this.childMarks = new Map(records.map((r) => [r.id, r.child] as const));
       // hook states FIRST, dialogs second — the order is load-bearing and there
       // is a test on it. `detectDialogs` composes the ask push, and the actions
       // it attaches come from `this.hookStates`; with the old ordering that map
