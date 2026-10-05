@@ -3117,6 +3117,31 @@ first commit (allocate and define in the same act), and cites only those. Each s
   from disk: a ccd main session's working directory is the main checkout too. Wave 1 reports the census's parent
   working-directory class as a proxy; wave 2's spool answers it exactly.
 
+Found mid-wave (issued from the run's block; each defined in the commit after the work that makes it):
+
+- **D-4002** — `rig-plan-text-corrections` (Task 4): three places where the plan's own text could not hold as written —
+  the reap line `printf 'rig: reaped tmux server …'` reds the plan's own "no line of rig.sh calls tmux" row (reworded to
+  "private server"); T4-M1 as worded SURVIVES because `guard_root`'s physical-HOME arm still refuses both cases (measured
+  0 red; measured instead by deleting the whole HOME loop, 2 red); and rows that spawn `rig.sh` carry explicit timeouts
+  (the fourteen-scenario check measured 5.7 s against vitest's 20 s default).
+- **D-4003** — `rig-root-base-falls-back-to-tmp` (Task 4): a fleet session's `TMPDIR` is `~/.cc-tmp/<id>`, inside
+  `$HOME`, so every run root `mktemp` made there was refused by `guard_root` and no bundle was written while `all`
+  still wrote `.done`. `rig.sh run-base` now answers `${TMPDIR:-/tmp}` unless it is under `$HOME` by spelling or by
+  physical path, and then `/tmp`; `run` and `reap` use it, and `guard_root` is unchanged.
+- **D-4004** — `rig-measured-2-1-289-adaptations` (Task 4, smoke on 2.1.289): the ready footer no longer prints
+  "? for shortcuts", so `waitReady` also accepts the "<mode> on" line; the fixture `settings.json` sets
+  `permissions.defaultMode: "default"` and `disableAutoMode`, so an unanswered auto-mode modal cannot block a run (no
+  bypass: tools are still granted by `permissions.allow` alone, pinned by the setup row); `cleanup_run` retries the
+  root's removal and removes its socket file, and `reap` removes stale `dlg<pid>` sockets.
+- **D-4005** — `scenario-agent-wait-covers-sub-done` (Task 4): on 2.1.289 the Agent call runs in the background even
+  with `run_in_background: false` and its result reaches the main loop only inside a reminder-only turn, so the plan's
+  `main-done` regex could not match; it gained `|^$`, and because that alone could end a step before the subagent's
+  last reply (a false "worktree left" for Q6), the four Agent scenarios wait on `["sub-done","main-done"]`.
+- **D-4006** — `rig-guard-hardening-from-review` (Task 4 review): `reap` skips a `ccrc-dlg-rig.*` entry that is a symlink
+  or not owned by the user before it resolves anything (roots now live in the shared `/tmp`); `setup` guards the
+  PHYSICAL root as well as its spelling; `check-scenario` refuses an `answerDialog` or `type` that is not a one-line
+  string, so a scenario cannot forge a `notes` line Task 7 parses.
+
 ## Self-review (record)
 
 - **Spec coverage:** §3.1 re-measured by the corpus; §5.3's `SessionEnd` → Task 1; §7 stage 1 → Tasks 3–9; §8.1
