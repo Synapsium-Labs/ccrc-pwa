@@ -350,6 +350,26 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     asks it to put F1–F13 through the refute pass and report again. Review 268 stays open until then, because a
     close would reclaim the reviewer's workspace. Review 267 had the same omission and was corrected in flight
     (mail 3500).
+- **2026-10-05 10:35 — review 268 ruled; fix round 1 sent** (mail 3503). The review run closed `done`, keeping its
+  workspace (`review-report-live`).
+  - **The panel** (votes in `review-268-b00849ee-panel.md`): 39 Sonnet refuters, three per finding, all voted.
+    - CONFIRMED: F1, F2, F3, F6, F10 (c)(d)(e), F11, F12.
+    - REFUTED: F4, F5, F7, F8, F9, F13.
+    - Recorded departure from the panel: the does-it-reproduce lens was the reviewer's own measurement (suites, 16
+      rows, citations, the merge probe) rather than a fresh agent, and the refuters named no explicit effort. It is
+      accepted for this round; the re-review runs the panel as written.
+  - **Confirmed departures:** 3922, 3923, 3924.
+  - **Rulings:**
+    - F1 (3966): the guarded keep moves into `_spawn_start`, one choke point covering `_supervised_start`'s
+      unsupervised fallbacks and ws-restore.
+    - F2 (3967): the "NEVER A SILENT LOSS" header and README's list are made true, and acknowledgement-wording drift
+      logs `unmeasured` once per keep. `--stage 7` must never read a rewording as zero.
+    - F3 (3968): model and effort are applied as one `cmd_route` call.
+    - F6 (3969): the stop-site keeps are gated on `choicekept`, and the marker is removed only after a successful kill
+      or spawn.
+    - 3925 (`/clear`) is DEFERRED to wave 4, carrying the review's `_sync_uuid` design note as advice.
+    - F10 (c)(d)(e), F11 and F12 are text.
+  - **Numbers:** 3966–3971 issued (3970–3971 spares).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -404,5 +424,6 @@ alias table) is run 248, dispatched 2026-10-04 22:22 to `ccrc-pwa-still-harbor`,
 - **Its plan's FIRST commit is wave 2's residue**, the list above from review 246: F1, F2, F3, F5, the minors 3–5
   and F6's restated §9 target.
 
-Waves 4 and 4b (the reap-class OOM count, the scope sweep, then the pressure-reap disable) are AGENT-FIRST.
+Waves 4 and 4b (the reap-class OOM count, the scope sweep, then the pressure-reap disable) are AGENT-FIRST. Wave 4
+also owes 3925's `/clear` code fix (review 268's F4 design note: read the outgoing transcript at the uuid rotation).
 2026-10-02's reaped runs argue for planning 4b early.
