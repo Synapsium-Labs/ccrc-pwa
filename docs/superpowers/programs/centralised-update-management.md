@@ -1297,6 +1297,31 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     was the right call on 10-01, when the root disk was the scarce one. From now on, scratch goes on the root
     disk.
 
+- **2026-10-05 03:17 UTC: review 263 ruled. Wave 10 meets the bar, and #247 merges.**
+  - **The review:** `ccrc-pwa-clear-meadow`, workflow `wf_4f6cc413-32b`, 54 agents. Six Opus lenses ran, each
+    finding got three Sonnet refuters, and the majority decided: 5 findings confirmed, 11 refuted. No lens went
+    unverified and none was unexamined.
+    - `main`'s unedited `_upd_sweep` with the new script returns 0/0/1/1 for a stamped stop, a purged stop, an
+      unstamped stop and a crash. So the move INTO wave 10 is protected.
+  - **CI:** every Linux leg of run 37254804678 and of the PR is green. `full-suite` is red only through the macOS
+    legs. None of the macOS reds is in a wave 10 file, re-measured from the four job logs.
+  - **Rulings:**
+    - **F2: residue R13a, by the bar.** A never-loaded or oddly named session unit, with the registry present
+      and no `<id>.uuid`, reads as purged and passes. That is class 1 by the letter. It was measured
+      unreachable: both sweeps list only active units, the gate and `_inst_enable` pass only the agent and
+      server units, and ccd's ids match `^[A-Za-z0-9._-]+$`.
+      - Wave 11 closes it: the id must match ccd's grammar, and the unit must read `LoadState=loaded` before the
+        purged arm.
+    - **F1, F3, F4 and F5: residue R13b–e.** No fix round runs, so they are fixed in wave 11:
+      - F1: an unpinned re-poll `sleep`;
+      - F3: an unpinned `-L` half on the evidence read;
+      - F4: an unpinned `?*` in the unit glob;
+      - F5: one plan sentence wider than its Global Constraint.
+  - **Seen while measuring macOS for `stable`:** main's full run also fails on macOS in
+    `session-hook-merge-deny.test.ts` (20 cases), `ccd-lifecycle-purge.test.ts` (1) and `ccd-account-auth.test.ts`
+    (1). None of the three is in the 10-02 census, so their owners are to be traced and told, because they also
+    block `stable`.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
@@ -1424,6 +1449,7 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   whole set in one window. A third is whether one supervisor's failure after the gate passed should halt the
   fleet at all.
 
+- **R13 (wave 10, review 263; for wave 11).** (a) F2: before the purged arm, require the id to match ccd's grammar and the unit to be `LoadState=loaded`. (b) F1: pin the re-poll's `sleep`. (c) F3: pin the `-L` half. (d) F4: pin `?*`. (e) F5: reword the plan's Task 1 summary to its Global Constraint.
 ## Next-wave brief
 
 **Wave 2 (run 128) — dispatched 2026-09-23.** The brief as sent is the plan's path and sha, tasks 1–15, execution
