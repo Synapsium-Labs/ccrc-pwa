@@ -79,10 +79,12 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
-import { ghContainedEnv, renderCcdEntry } from './ccdWsHelpers.js';
-import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm } from './platformFixtures.js';
+import { renderCcdEntry } from './ccdWsHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
+import { CONTAINED_TOOLS, assertNoRealTool, plantPoison } from './containedTools.js';
+import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm, IS_DARWIN } from './platformFixtures.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
-import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest } from './installTreeFixture.js';
+import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest, rsyncRecorder } from './installTreeFixture.js';
 import { verifyMarker } from '../../shared/mark.mjs';
 import {
   plantFakeRuntime, codexRoster, plantSystemd, killLaneProcesses, spawnListener, adoptPlantedSystemd,
@@ -284,7 +286,7 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
 /** The names `healthyDoctorBox` and the runner between them put in
  *  `~/.local/bin`. Everything else there was written by the verb — which is
  *  what the "the default roster generates no wrappers" assertion measures. */
-const FIXTURE_BINS = ['gh', 'curl', 'journalctl', 'systemctl', 'loginctl', 'npm', 'rsync',
+const FIXTURE_BINS = [...new Set(['gh', 'curl', 'journalctl', 'systemctl', 'loginctl', 'npm', 'rsync',
   'df', 'claude', 'tmux',
   // graphify Task 2: `python3 -m venv` is stubbed here, never real.
   'python3',
@@ -298,7 +300,10 @@ const FIXTURE_BINS = ['gh', 'curl', 'journalctl', 'systemctl', 'loginctl', 'npm'
   'launchctl', 'plutil', 'flock',
   // Plan 2b-2 Task 10: the transient-unit launcher's FRONT (every run), and
   // the pair a test's `plantSystemd` left, moved aside as the delegate.
-  'systemd-run', '.codex-systemctl', '.codex-systemd-run'];
+  'systemd-run', '.codex-systemctl', '.codex-systemd-run',
+  // Wave 9 R10d (D-3818): every contained name — `ccrcContainedEnv` plants `ssh` and `scp` poisons beside the rest —
+  // derived from the one list, so the exact-listing readers do not read a poison as the verb's.
+  ...CONTAINED_TOOLS])];
 
 /** A box with a shipped tree on it and nothing else — no `~/.ccrc`, no
  *  `~/.local/bin` beyond the stubs the runner plants. Doctor-healthy, because
@@ -351,7 +356,10 @@ const VACUOUS_RUNTIME_PYTHON = [
 ].join('\n') + '\n';
 
 function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  // Wave 9 R10d (D-3818): a SPINE builder, so `managers: false` — it fronts its own systemctl/systemd-run below,
+  // after `adoptPlantedSystemd`, which would rename an unmarked poison to a `.codex-*` delegate (`assertSpineFrontContained`
+  // pins those two names). The curl below is a poison, planted over `ccrcContainedEnv`'s.
+  const env = ccrcContainedEnv(home, process.env, { managers: false, curl: 'poison' });
   // Task 11's `graphify` doctor check makes `command -v graphify` a real
   // finding (a WARN when PATH resolves it anywhere but the pinned venv), and
   // unlike gh/curl/systemctl below there is no stub-bin entry that can
@@ -630,13 +638,14 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   plant('npm',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
-  // `rsync` is a RECORDER, not a poison: it logs its argv and then EXECS THE
-  // REAL BINARY. Both halves are load-bearing. Asserting on argv alone passes
+  // `rsync` is a RECORDER, not a poison: it logs the argv of each call ccrc
+  // makes and then EXECS THE REAL BINARY (`rsyncRecorder`, which skips only the
+  // implementation's own `--server` re-exec — wave 9 M6). Both halves are
+  // load-bearing. Asserting on argv alone passes
   // against a step that composes a perfect command line and copies nothing;
   // asserting on the placed tree alone cannot tell "the excludes are spelled
   // correctly" from "the fixture happened to hold nothing they match".
-  plant('rsync',
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
+  plant('rsync', rsyncRecorder(RSYNC));
   // ── python3: graphify's engine venv, contained the same way (Task 2) ─────
   // `_inst_graphify_engine` (graphify Task 2) now runs, on every role but
   // `server`, `python3 -m venv "$venv"` followed by a REAL
@@ -771,6 +780,7 @@ function runInstall(home: string, args: string[] = ['install'],
   extraEnv: NodeJS.ProcessEnv = {},
   opts: {
     umask?: string; omit?: string[]; from?: string; stubs?: Record<string, string>;
+    noManager?: true;
   } = {}): Result {
   const env = { ...ccrcEnv(home, opts.omit ?? []), ...extraEnv };
   replantDoctorStubs(home);
@@ -780,12 +790,18 @@ function runInstall(home: string, args: string[] = ['install'],
   // Fix round 2 (N1/N5): on the FINAL merged env — after extraEnv, the
   // doctor-stub replant and opts.stubs have all landed, immediately before
   // the spawn. `opts.omit`'s own `systemctl`/`systemd-run` entries (if any)
-  // are the ONLY legitimate "this call reaches no manager at all" case in
-  // this file (`ccrc install: a box with no systemd`, which also strips
-  // both names from every real PATH directory via `pathWithout`) — every
-  // other call keeps the full strict check.
-  const expectAbsent = (opts.omit ?? []).filter((n) => n === 'systemctl' || n === 'systemd-run');
+  // are one of exactly TWO legitimate "this call reaches no manager at all"
+  // cases in this file (`ccrc install: a box with no systemd`, which also
+  // strips both names from every real PATH directory via `pathWithout`). The
+  // other is `opts.noManager` (wave 9 M7, D-3812): the `describeDarwin`
+  // missing-dependency block's PATH deliberately drops `~/.local/bin`, so
+  // neither `systemctl` nor `systemd-run` resolves. Every other call keeps the
+  // full strict check.
+  const expectAbsent = opts.noManager
+    ? ['systemd-run', 'systemctl']
+    : (opts.omit ?? []).filter((n) => n === 'systemctl' || n === 'systemd-run');
   assertSpineFrontContained(env, home, { expectAbsent });
+  assertNoRealTool(env, home);
   const ccrc = opts.from ?? ccrcIn(treeRoot(home));
   const r = opts.umask === undefined
     ? spawnSync(BASH, [ccrc, ...args], { env, encoding: 'utf8' })
@@ -805,10 +821,19 @@ const SHA256_TOOL = process.platform === 'darwin' ? 'shasum' : 'sha256sum';
  *  `cmd_version` reading nothing but files kept that harmless. `ccrcEnv`
  *  fronts them, and the check refuses the env if it did not. */
 function runLauncherVersion(home: string): Result {
+  // Wave 9 R10d: `ccrc-uninstall.test.ts`'s N2c pin wants `const r = ` on the line after the spine check (a literal
+  // shape), so the real-tool check rides the spawn's own `env` argument: it still runs on the final env, before the spawn.
   const env = ccrcEnv(home);
   assertSpineFrontContained(env, home);
-  const r = spawnSync(BASH, [join(home, '.local', 'bin', 'ccrc'), 'version'], { env, encoding: 'utf8' });
+  const r = spawnSync(BASH, [join(home, '.local', 'bin', 'ccrc'), 'version'],
+    { env: checkedEnv(env, home), encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** `env`, after `assertNoRealTool` has passed on it (it throws otherwise) — for a spawn that checks inline. */
+function checkedEnv(env: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
+  assertNoRealTool(env, home);
+  return env;
 }
 
 /** A PATH with everything this verb shells out to EXCEPT one named tool: the
@@ -990,6 +1015,44 @@ function gitInit(root: string): string {
   return spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], { env, encoding: 'utf8' })
     .stdout.trim();
 }
+
+// Wave 9 M6 (D-3811). openrsync — macOS's /usr/bin/rsync — copies locally by
+// forking `rsync --server …` through PATH, so a recorder first on PATH is
+// reached a second time by the implementation's own re-exec. Samba rsync on
+// Linux copies in-process and never does, so this twin runs a fake that DOES
+// re-exec on every platform. The recorder must log the call ccrc made and
+// hand the `--server` call straight on.
+describe('the rsync recorder logs only the call ccrc made (wave 9 M6)', () => {
+  const setup = (fakeBody: string): { dir: string; env: NodeJS.ProcessEnv } => {
+    const dir = mkTmp('ccrc-rsync-recorder-');
+    mkdirSync(join(dir, 'bin'));
+    mkdirSync(join(dir, 'poison'));
+    writeFileSync(join(dir, 'bin', 'rsync'), rsyncRecorder(join(dir, 'fake-openrsync')), { mode: 0o755 });
+    writeFileSync(join(dir, 'fake-openrsync'), fakeBody, { mode: 0o755 });
+    // A recorder that was not executable would fall through to this, never to the real rsync.
+    writeFileSync(join(dir, 'poison', 'rsync'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/rsync-poison"\nexit 97\n', { mode: 0o755 });
+    return { dir, env: { HOME: dir, PATH: `${dir}/bin:${dir}/poison:/usr/bin:/bin` } };
+  };
+
+  it('a local copy that re-execs `rsync --server` through PATH reaches the recorder twice and is logged once', () => {
+    const { dir, env } = setup('#!/bin/sh\nif [ "$1" = --server ]; then touch "$HOME/server-ran"; exit 0; fi\n'
+      + 'rsync --server --sender -logDtpre.iLsfxC . "$2"\nexit 0\n');
+    const r = spawnSync('sh', [join(dir, 'bin', 'rsync'), '-a', 'src/', 'dst/'], { env, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readFileSync(join(dir, 'rsync-argv'), 'utf8')).toBe('-a src/ dst/\n');
+    expect(existsSync(join(dir, 'server-ran')), 'the fake\'s --server arm never ran through the recorder').toBe(true);
+    expect(existsSync(join(dir, 'rsync-poison')), 'the recorder fell through to the poison').toBe(false);
+  });
+
+  it('control: a copy that never re-execs is logged once too', () => {
+    const { dir, env } = setup('#!/bin/sh\nexit 0\n');
+    const r = spawnSync('sh', [join(dir, 'bin', 'rsync'), '-a', 'src/', 'dst/'], { env, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readFileSync(join(dir, 'rsync-argv'), 'utf8')).toBe('-a src/ dst/\n');
+    expect(existsSync(join(dir, 'rsync-poison'))).toBe(false);
+  });
+});
 
 describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
   // WHY THE TREE IS COPIED AT ALL, since the verb is already running out of
@@ -1764,11 +1827,26 @@ describeLinux('ccrc install: a box with no systemd', () => {
   });
 });
 
+describe('ccrcEnv: containment (wave 9 R10d)', () => {
+  it('ccrcEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-install-contained-');
+    expect(() => assertNoRealTool(ccrcEnv(home), home)).not.toThrow();
+  });
+});
+
 // The same probe, on the platform where the missing dependency is real. macOS
 // ships neither tmux nor flock, and its /bin/bash is 3.2.57 — so on this
 // platform the refusal an operator actually meets is one of THOSE, and it
 // carries the same three promises the systemd one does: by name, before the
 // first write, with a remedy that works.
+// Wave 9 M7 (D-3812): runInstall's `noManager` option.
+describe('runInstall: the noManager option (wave 9 M7)', () => {
+  itLinux('noManager makes the final-env check require BOTH manager names absent — under ccrcEnv they resolve to the fixture front, so it refuses (wave 9 M7)', () => {
+    expect(() => runInstall(freshBox('ccrc-install-nomgr-'), ['install'], {}, { noManager: true }))
+      .toThrow(/systemd-run was expected absent/);
+  }, 60_000);   // freshBox builds a whole tree: measured past the 20 s default under load 30-50 (final review)
+});
+
 describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
   // `omit` alone is not enough here: `runInstall` calls `replantDoctorStubs`
   // on every run, which copies `healthyDoctorBox`'s stubs back into
@@ -1785,18 +1863,30 @@ describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
   // the stub, the gate never fired, and the run died at the wrappers step for
   // a reason this test is not about.)
   //
-  // Dropping it costs nothing HERE and only here: every one of these probes
+  // Dropping it costs nothing HERE as to STUBS: every one of these probes
   // runs BEFORE the first of the fourteen steps, so no step is reached that
-  // would want `claude`, `gh` or any other planted stub.
+  // would want `claude`, `gh` or any other planted stub. It DOES cost something
+  // on the macOS runner (wave 9 R10d, D-3821): `pathMissing` would keep only
+  // `<home>/no-<tool>-bin`, which symlinks real binaries (`pathWithout`'s list)
+  // — always `tmux` and, on darwin, `launchctl` — so with `~/.local/bin` gone a
+  // real tmux and a real launchctl would resolve (gh, curl and ssh resolve
+  // nowhere). So the PATH leads with a poison dir of its own, FIRST: a recording
+  // poison for every contained name but the tool this case removes and the two
+  // managers (the case reaches no manager — `noManager`). The probes only ask
+  // `command -v` (the darwin dependency probes in ccd/ccrc), so a poison satisfies
+  // a probe it is not the subject of.
   const pathMissing = (home: string, tool: string): string => {
     const full = pathWithout(home, tool);
-    return full.split(':').slice(1).join(':');
+    const poison = join(home, `no-${tool}-poison-bin`);
+    mkdirSync(poison, { recursive: true });
+    for (const n of CONTAINED_TOOLS) if (n !== tool && n !== 'systemctl' && n !== 'systemd-run') plantPoison(poison, n);
+    return [poison, ...full.split(':').slice(1)].join(':');
   };
 
   it('refuses by name BEFORE the first write when tmux is absent', () => {
     const home = freshBox('ccrc-install-notmux-');
     const r = runInstall(home, ['install'], { PATH: pathMissing(home, 'tmux') },
-      { omit: ['tmux'] });
+      { omit: ['tmux'], noManager: true });
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/tmux is required by ccrc/);
     expect(r.stderr).toMatch(/brew install tmux/);
@@ -1811,7 +1901,7 @@ describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
   it('refuses when flock is absent, naming the formula that provides it', () => {
     const home = freshBox('ccrc-install-noflock-');
     const r = runInstall(home, ['install'], { PATH: pathMissing(home, 'flock') },
-      { omit: ['flock'] });
+      { omit: ['flock'], noManager: true });
     expect(r.code).toBe(1);
     // ccd already refuses BY NAME at three workspace sites without it, so the
     // outcome this prevents is a box that installs cleanly and then cannot
@@ -1825,7 +1915,7 @@ describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
   it('refuses when launchctl is absent — systemd\'s probe, on this platform', () => {
     const home = freshBox('ccrc-install-nolaunchctl-');
     const r = runInstall(home, ['install'], { PATH: pathMissing(home, 'launchctl') },
-      { omit: ['launchctl'] });
+      { omit: ['launchctl'], noManager: true });
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/launchctl is required by 'ccrc install'/);
     // The two conditions stay apart, exactly as they do on Linux: this is not
@@ -2486,15 +2576,20 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
    *  POISONED at the head of PATH: a snippet that got further than it should
    *  (the red run of the crashed-arm case, say) must fail loudly, never fetch
    *  or copy for real. */
-  const sourced = (home: string, ccrc: string, snippet: string): Result => {
+  const sourcedEnv = (home: string): NodeJS.ProcessEnv => {
     const poison = join(home, 'sourced-poison');
     mkdirSync(poison, { recursive: true });
     for (const t of ['npm', 'rsync', 'curl', 'systemctl', 'launchctl']) {
       writeFileSync(join(poison, t), `#!/bin/sh\necho "sourced harness: ${t} must not run" >&2\nexit 97\n`, { mode: 0o755 });
     }
-    const env = ghContainedEnv(home, { ...process.env, HOME: home });
+    // Wave 9 R10d (D-3818): from `ccrcContainedEnv`, with its own `sourced-poison` still prepended — it answers first.
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
     env['PATH'] = `${poison}:${env['PATH'] ?? ''}`;
     for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+    return env;
+  };
+  const sourced = (home: string, ccrc: string, snippet: string): Result => {
+    const env = sourcedEnv(home);
     const r = spawnSync(BASH, ['-c', `source "$1" || exit 99\n${snippet}`, 'sourced', ccrc],
       { env, encoding: 'utf8' });
     return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
@@ -2532,6 +2627,11 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
    *  call-site half of spec §18's "the flip is a rename" — `_inst_tree` must
    *  stage `~/ccrc.new` and rename it, never `ln -sfn` onto `~/ccrc` itself. */
   const lnRecorder = `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/ln-argv"\nexec ${realPath('ln')} "$@"\n`;
+
+  it('sourcedEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-sourced-contained-');
+    expect(() => assertNoRealTool(sourcedEnv(home), home)).not.toThrow();
+  });
 
   it('_ver_layout: seven words, one per shape of ~/ccrc — and a WHY built from its own words, never the link\'s', () => {
     const home = mkTmp('ccrc-ver-layout-');
@@ -3208,6 +3308,24 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout).not.toMatch(/removed the box's stamp/);
     expect(read(join(home, '.ccrc', 'build.json'))).toBe(boxStamp);
+  });
+
+  // Wave 9 R8i (D-3828): a skip writes nothing, so a box stamp that is still there afterwards STAYS — and the
+  // skip line must not say `ccrc version will say unstamped` over it. The run is FROM the version `~/ccrc` points
+  // at, so `_inst_tree` itself answers `running` (INST_TREE_HOW is set in-process, never read from the environment)
+  // and `_inst_stamp_unname` returns 1 for it before it touches the stamp; the tree carries no `build.json`, the
+  // kept stamp beside it is the fallback `_inst_stamp_shipped` reads, that version is NOT kept (no digest, rc 2),
+  // and git is off PATH, so `_inst_stamp` lands on its no-git skip with the box's stamp still on disk.
+  it('a skipped stamp over a box stamp that STAYS says so — the launcher run, no build.json in the tree, the version not kept, git off PATH: the line names the existing stamp, never `unstamped` (wave 9 R8i, D-3828)', () => {
+    const { home, boxStamp } = writtenThroughBox('ccrc-install-stamp-stays-skip-', { digest: false });
+    expect(existsSync(join(home, 'ccrc', 'build.json')), 'the control is broken: the tree must carry no build.json').toBe(false);
+    expect(keptAnswer(home, 'v9.9.0'), 'the control is broken: the version must be not kept').toMatch(/^rc=2 why=no kept digest /);
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'git') }, { from: join(home, 'ccrc', 'ccd', 'ccrc') });
+    expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
+    expect(r.stdout).toMatch(
+      /^install: stamp: skipped \(no git on PATH\) — the box's existing stamp \(~\/\.ccrc\/build\.json\) stays — ccrc version reports what it says$/m);
+    expect(r.stdout, 'a stamp that stays was called unstamped').not.toMatch(/will say unstamped/);
+    expect(read(join(home, '.ccrc', 'build.json')), 'the skip rewrote or removed the stamp').toBe(boxStamp);
   });
 
   // ── N1 (re-review of fix round 1): the removal is for a stamp that names
@@ -5371,10 +5489,12 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
   // either file with the later one winning, names the file that decides, and
   // so does the OFF remedy — it names ccrc.env by default, or the exposure
   // file when that is the one that would arm it. With no passphrase file, a
-  // measured CCRC_AUTH=on names the file that decides too; every other case —
-  // including an exposure file that sets CCRC_AUTH to anything but on, or one
-  // that cannot be read — prints main's else-arm line unchanged, naming
-  // ccrc.env.
+  // measured CCRC_AUTH=on names the file that decides too. Wave 9 R10b
+  // (D-3829) corrects the rest of this block: there, an exposure file that
+  // cannot be read prints its own "not measured" line (G2g), and an exposure
+  // file that decides the flag without turning it on gets an arming remedy
+  // naming that file (G2h); every other case (the flag read from ccrc.env, or
+  // no file at all) prints main's else-arm line, naming ccrc.env.
   const gateLine = (out: string): string => out.split('\n').find((l) => l.startsWith('install: gate: ')) ?? '';
 
   it('G2b: a passphrase file at the default path with the flag OFF — "a PWA passphrase file is at", and the OFF remedy names ccrc.env', () => {
@@ -5436,6 +5556,76 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(line, r.stdout).toContain('the gate is failing SHUT');
     expect(line).toContain(`CCRC_AUTH=on in ${join(home, '.ccrc', 'exposure.env')}`);
     expect(line).not.toContain('To arm the gate');
+  });
+
+  // ── wave 9 R10b (D-3829): the no-passphrase arm's two own lines ──────────
+  // D-3598 kept the no-passphrase line byte-identical in every case but a measured `on`. Two cases now print their
+  // own: the exposure file there and unreadable (rc 2) — "not measured", as the present-passphrase arm says — and
+  // the exposure file deciding the flag (`BUE_SRC` is the exposure file), whose arming remedy names that file, as
+  // that arm's `gate_how` already does. The fresh-box line (the pin above) is byte-identical in every other case.
+  it.skipIf(IS_DARWIN || process.getuid?.() === 0)('G2g: no passphrase and an UNREADABLE exposure file — "not measured", naming the file, never the fresh-box arming line (wave 9 R10b)', () => {
+    const home = freshBox('ccrc-install-gate-nopass-exp-unreadable-');
+    const exposure = join(home, '.ccrc', 'exposure.env');
+    preexisting(home, 'exposure.env', 'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH=on\n');
+    chmodSync(exposure, 0o000);
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toBe(
+      `install: gate: this box has NO PWA passphrase, and ${exposure} is there and cannot be read, so whether CCRC_AUTH is on (and the gate failing shut) was not measured — ccrc doctor's auth check says what to do`);
+    expect(line).not.toContain('To arm the gate');
+  });
+
+  it('G2h: no passphrase and the exposure file CCRC_AUTH=off — the arming remedy names the exposure file, which overrides ccrc.env, not ccrc.env alone (wave 9 R10b)', () => {
+    const home = freshBox('ccrc-install-gate-nopass-exp-off-');
+    const exposure = join(home, '.ccrc', 'exposure.env');
+    preexisting(home, 'exposure.env', 'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH=off\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toMatch(new RegExp(
+      `^install: gate: this box has NO PWA passphrase — install never writes one\\. To arm the gate: ccrc passwd, then set CCRC_AUTH=on in ${
+        exposure.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, which overrides ${
+        join(home, '.ccrc', 'ccrc.env').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(ccrc expose writes it with CCRC_RP_ID and CCRC_ORIGIN\\), then: .+$`));
+    expect(line).not.toContain('together with CCRC_RP_ID and CCRC_ORIGIN in');
+    expect(line).not.toContain('not measured');
+  });
+
+  // ── wave 9 R10e (D-3823): a SECOND unmeasured state, rc 3 ─────────────────
+  // A readable env file names the flag in a shape the reader cannot decide (on macOS: either file is not plain
+  // assignments). The line says so from `_box_unit_env`'s own `BUE_WHY`, in both arms; it never borrows the rc-2
+  // sentence ("is there and cannot be read"), which is about an exposure file the reader cannot open.
+  /** The platform's own clause of a not-measured verdict about `file` (ccrc-doctor.test.ts's `expectUndecided`). */
+  const expectUndecided = (detail: string, file: string): void => {
+    expect(detail).toContain(file);
+    expect(detail).toContain('was not measured');
+    expect(detail).not.toContain('cannot be read');
+    if (IS_DARWIN) expect(detail).toContain(`${file} line `);
+    else expect(detail).toContain('in a shape this reader does not decide');
+  };
+
+  it('I1: a passphrase present and the exposure file `CCRC_AUTH = on` — "not measured", worded from the reader\'s own cause, never as an unreadable file', () => {
+    const home = freshBox('ccrc-install-gate-exp-spaced-');
+    preexisting(home, 'auth.scrypt', 'fixture-not-a-real-secret\n');
+    const exposure = join(home, '.ccrc', 'exposure.env');
+    preexisting(home, 'exposure.env', 'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH = on\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toMatch(new RegExp(
+      `^install: gate: a PWA passphrase file is at .*auth\\.scrypt, and ${exposure.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    expect(line).toContain('so whether CCRC_AUTH is on was not measured');
+    expectUndecided(line, exposure);
+  });
+
+  it('I2: no passphrase and ccrc.env `CCRC_AUTH = on` — the rc-3 line naming ccrc.env, not the fresh-box line', () => {
+    const home = freshBox('ccrc-install-gate-env-spaced-');
+    preexisting(home, 'ccrc.env', 'CCRC_FLEET=local\nCCRC_AUTH = on\n');
+    const envFile = join(home, '.ccrc', 'ccrc.env');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toMatch(new RegExp(
+      `^install: gate: this box has NO PWA passphrase, and ${envFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    expect(line).toContain('so whether CCRC_AUTH is on was not measured');
+    expectUndecided(line, envFile);
+    expect(line).not.toContain('install never writes one');
   });
 
   it('reads the PWA address back out of the env file it installed', () => {
@@ -5695,6 +5885,7 @@ function runInstallTty(home: string, args: string[], entries: string[]): Promise
   // Fix round 2 (N5): on the final env, before the pty spawn below — this
   // runner has no `omit`/PATH-override path, so the full strict check applies.
   assertSpineFrontContained(env, home);
+  assertNoRealTool(env, home);
   return new Promise((resolve) => {
     const p = pty.spawn(BASH, [ccrcIn(treeRoot(home)), ...args], {
       name: 'xterm-color', cols: 200, rows: 40, cwd: home, env,
@@ -6085,6 +6276,7 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     // means this spawn never reaches a manager either way, but the check is
     // cheap and this is still a runner that spawns install.sh with a planted spine.
     assertSpineFrontContained(env, home);
+    assertNoRealTool(env, home);
     const r = spawnSync(BASH, [join(root, 'install.sh')], { env, encoding: 'utf8' });
     expect(r.status ?? -1, r.stderr ?? '').toBe(0);
 
@@ -6206,7 +6398,11 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       const caps = join(home, '.ccrc', 'ccrc-caps');
       const p = spawnSync('bash', ['-c', [
         'set -uo pipefail', ...harness, `CCD_OS=${os}`, `BOX_CAPS_FILE=${JSON.stringify(caps)}`, '_inst_caps',
-      ].join('\n')], { encoding: 'utf8', env: { ...process.env, HOME: home } });
+      ].join('\n')], {
+        // Wave 9 R10d (D-3818): an extracted-function harness (`_inst_caps` and its helpers call builtins plus
+        // mkdir/mv/rm/date), so it is exempt from assertNoRealTool — but it no longer inherits the real bus or tools.
+        encoding: 'utf8', env: ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
+      });
       expect(p.status, `${os}: ${p.stderr}`).toBe(0);
       expect(readFileSync(caps, 'utf8'), os).toBe(`os ${os}\n${words.join('\n')}\n`);
       // W6 Task 8A, F6: the path is the box's own home, so it is spelled `~` —

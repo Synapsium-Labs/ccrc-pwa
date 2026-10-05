@@ -421,7 +421,7 @@ const MAIL_COOLDOWN_MS = 120_000;
 const COORD_QUIET_MS = 15_000;
 const COORD_COOLDOWN_MS = 30_000;
 
-/** WHAT `MAIL_REPLAY_MS` MEANS, kept beside the code that enforces it: how long
+/** WHAT `MAIL_REPLAY_MS` MEANS: how long
  *  an UNACKED delivery waits before it is replayed. Dated from the
  *  `UserPromptSubmit` edge when there is one, from `deliveredAt` otherwise —
  *  the edge proves the turn started, so the recipient is thinking, not

@@ -8,7 +8,9 @@
 // helpers would register that whole suite a second time. That reasoning
 // still holds — it just argues for a THIRD file with no `describe` in it,
 // not for two copies. This file is that third file: it imports nothing from
-// vitest and registers no tests, so both suites can import it directly.
+// vitest and registers no tests, so both suites can import it directly. Its one
+// non-`node:` import is `containedTools.ts` (itself `node:*` only), for
+// `keepDigestEnv`; it never imports `ccrcContainment.ts`, which reaches vitest.
 //
 // The cost of the two-copy shape was real: an edit to one `TREE_FILES` that
 // missed the other broke 34 tests in the file nobody touched. This module
@@ -19,6 +21,9 @@ import {
 import { spawnSync } from 'node:child_process';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The ONE non-`node:` import, and it imports only `node:*` itself — which is what keeps this file vitest-free
+// (wave 9 R9-F8). It may never import `ccrcContainment.ts`, which reaches vitest through `ccdWsHelpers.ts`.
+import { CONTAINED_TOOLS, plantPoison } from './containedTools.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -267,6 +272,23 @@ export function installFixtureTree(home: string, sub = 'checkout'): string {
   return root;
 }
 
+/** keepDigest's env (wave 9 R9-F8, D-3820): the real `ccd/ccrc` is sourced here, so nothing real may resolve. Its
+ *  poisons live in `<home>/.keep-digest-poison-bin` — INSIDE the fixture HOME, so `assertNoRealTool` (which passes only
+ *  a realpath under home) passes and the dir goes when the mkTmp home goes; OUTSIDE `~/.local/bin`, so
+ *  `adoptPlantedSystemd` and the exact listings of that dir never read it. Create-if-absent, on every call. PATH keeps
+ *  the parent's PATH after it, so `bash`, `sha256sum`/`shasum` and `find` resolve as they do today (a narrowed PATH
+ *  would hand macOS's /bin/bash 3.2 — M1's lesson). No process-exit cleanup: the agent suite measured
+ *  `process.on('exit')` as insufficient under vitest's forks pool (agent/test/contain-path.setup.ts). */
+export function keepDigestEnv(home: string): NodeJS.ProcessEnv {
+  const bin = join(home, '.keep-digest-poison-bin');
+  mkdirSync(bin, { recursive: true });
+  for (const n of CONTAINED_TOOLS) plantPoison(bin, n);
+  return {
+    HOME: home, PATH: `${bin}:${process.env['PATH'] ?? '/usr/bin:/bin'}`,
+    XDG_RUNTIME_DIR: join(home, 'no-runtime-dir'), DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(home, 'no-bus')}`,
+  };
+}
+
 /** Record `root`'s digest the way the SHIPPED code does (D-3465): source the
  *  checkout's `ccd/ccrc` (its dispatch is guarded by `BASH_SOURCE[0] == $0`, so
  *  sourcing runs nothing) in a fixture-HOME shell and call its own
@@ -277,7 +299,7 @@ export function installFixtureTree(home: string, sub = 'checkout'): string {
 export function keepDigest(root: string, home: string): void {
   const r = spawnSync('bash', ['-c', '. "$1"; _ver_digest_write "$2" || { echo "$VER_WHY" >&2; exit 1; }',
     'keep-digest', join(REPO, 'ccd', 'ccrc'), root],
-  { env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' }, encoding: 'utf8' });
+  { env: keepDigestEnv(home), encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`keepDigest(${root}) failed: ${r.stderr}`);
 }
 
@@ -320,4 +342,14 @@ export function installVersionedTree(
   }
   if (opts.link ?? true) symlinkSync(root, join(home, 'ccrc'));
   return root;
+}
+
+/** THE rsync recorder (wave 9 M6, D-3811): logs the argv of every call ccrc MAKES, then execs the real binary. A call
+ *  whose first argument is `--server` is the rsync implementation's OWN re-exec — openrsync, macOS's /usr/bin/rsync,
+ *  forks `rsync --server …` by PATH lookup for a local copy and so reaches this file a second time; samba rsync on
+ *  Linux copies in-process and never does — so it is handed straight on and not logged. One spelling, imported by
+ *  ccrc-install, ccrc-update and ccrc-install-graphify. */
+export function rsyncRecorder(realRsync: string): string {
+  return `#!/bin/sh\ncase "$1" in --server) exec ${realRsync} "$@" ;; esac\n`
+    + `printf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${realRsync} "$@"\n`;
 }

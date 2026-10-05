@@ -26,7 +26,8 @@ import { writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, rmSync
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
+import { assertNoRealTool } from './containedTools.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CCRC = path.resolve(here, '..', '..', 'ccd', 'ccrc');
@@ -55,7 +56,10 @@ interface Result { code: number; stdout: string; stderr: string }
  *  PATH is left intact deliberately — `ccrc version` genuinely needs `jq`, and
  *  a fixture-only PATH would test a box nobody runs. */
 function runCcrcRaw(home: string, args: string[] = []): Result {
-  const r = spawnSync('bash', [CCRC, ...args], { env: ccrcEnv(home), encoding: 'utf8' });
+  const env = ccrcEnv(home);
+  // Wave 9 R10d: the runner's FINAL env holds no real ssh, scp, manager, tmux, gh or curl, and no real user bus.
+  assertNoRealTool(env, home);
+  const r = spawnSync('bash', [CCRC, ...args], { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -71,7 +75,9 @@ function runCcrcRaw(home: string, args: string[] = []): Result {
  *  a containment that each test has to remember is the containment that was
  *  already missing for `gh` when `doctor` landed. */
 function ccrcEnv(home: string): NodeJS.ProcessEnv {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  // Wave 9 R10d (D-3818): from `ccrcContainedEnv` — ssh, scp, tmux, the managers, launchctl and curl poisoned and the
+  // user bus pointed at two absent paths under HOME — and the three poisons below only restate what it planted.
+  const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
   const poison = (name: string, says: string): void =>
     writeFileSync(join(home, '.local', 'bin', name),
       `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
@@ -633,7 +639,10 @@ describe('ccrc: version', () => {
     writeFileSync(join(home, '.ccrc', 'build.json'),
       JSON.stringify({ sha: 'abc123', ref: 'main', builtAt: '2026-08-15T00:00:00Z', dirty: false }));
     const script = `real_bash="$(command -v bash)"; PATH=/nonexistent-ccrc-test-path "$real_bash" "${CCRC}" version`;
-    const r = spawnSync('bash', ['-c', script], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    // The inner `PATH=/nonexistent-…` stays: it is this case's subject. The OUTER env is contained (wave 9 R10d).
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
+    assertNoRealTool(env, home);
+    const r = spawnSync('bash', ['-c', script], { env, encoding: 'utf8' });
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/jq/);
     expect(r.stderr).not.toMatch(/unreadable/);
@@ -659,9 +668,11 @@ describe('ccrc: the BASH_SOURCE guard actually guards', () => {
     // "Important 1" section for the before/after mutation measurement this
     // finding demanded.
     const home = mkTmp('ccrc-cli-source-guard-');
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
+    assertNoRealTool(env, home);
     const r = spawnSync('bash', ['-c',
       `source "${CCRC}" version; declare -F cmd_version >/dev/null && echo CMD_VERSION_DEFINED`],
-      { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+      { env, encoding: 'utf8' });
     expect(r.status).toBe(0);
     expect(r.stderr).toBe('');
     expect(r.stdout).toContain('CMD_VERSION_DEFINED');
@@ -764,5 +775,10 @@ describe('ccrc: the runner cannot reach the real gh', () => {
     const home = mkTmp('ccrc-cli-gh-contained-');
     const r = spawnSync('bash', ['-c', 'command -v gh'], { env: ccrcEnv(home), encoding: 'utf8' });
     expect(r.stdout.trim()).toBe(join(home, '.local', 'bin', 'gh'));
+  });
+
+  it('ccrcEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-cli-contained-');
+    expect(() => assertNoRealTool(ccrcEnv(home), home)).not.toThrow();
   });
 });

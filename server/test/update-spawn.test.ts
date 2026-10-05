@@ -3,7 +3,8 @@
 // case wrote. The agent has a twin of this file (`agent/test/update-spawn.test.ts`) over `makeUpdateSpawn`; both
 // pin the same rule — its own process group, the whole group killed at the bound, stdout read to EOF or `null`,
 // an answer that arrives within `UPDATE_SPAWN_DRAIN_MS` of the parent's exit even while a grandchild that left the
-// group holds the pipes. Every process a case starts is killed by its RECORDED pid in `afterEach`, never by name.
+// group (one the test's own node starts with `detached: true`, which is libuv's setsid()) holds the pipes. Every
+// process a case starts is killed by its RECORDED pid in `afterEach`, never by name.
 import { afterEach, describe, expect, it } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -52,8 +53,19 @@ async function deadAt(pid: number): Promise<number> {
 }
 /** The room a kill-path case gives its scripts to write their pid files before the bound can fire. */
 const KILL_BOUND_MS = 3000;
-/** A grandchild in its OWN session that inherits (and so holds) the parent's stdout and stderr pipes. */
-const ESCAPEE = `setsid bash -c 'echo $$ > "$DIR/escapee.pid"; exec sleep 300' &\nwhile [ ! -s "$DIR/escapee.pid" ]; do sleep 0.01; done`;
+/** A grandchild in its OWN session that inherits (and so holds) the parent's stdout and stderr pipes. The node that
+ *  runs this suite starts it with `detached: true` — libuv calls setsid() — and `stdio: 'inherit'` hands it the
+ *  launcher's stdout and stderr, the pipes under test (wave 9 M5, D-3810: macOS has no setsid(1)). `process.execPath`
+ *  is absolute because ENV's PATH (`/usr/bin:/bin`) holds no node on a runner. The wait is BOUNDED BY TIME, not by a
+ *  count of `sleep` forks (500 x `sleep 0.01` measured 6.6-6.8 s at load 45-57): bash's own `SECONDS` (whole seconds,
+ *  so the bound is 2-3 s of wall time — measured 2.7-3.0 s at load 22-56; a builtin in bash 3.2 too, and the launcher
+ *  is `#!/bin/bash`). It says why it stopped — pinned by the bounded-wait case below. */
+const ESCAPEE_WAIT = 'w=$((SECONDS + 3)); while [ ! -s "$DIR/escapee.pid" ] && [ "$SECONDS" -lt "$w" ]; do sleep 0.05; done\n'
+  + '[ -s "$DIR/escapee.pid" ] || { echo "fixture: the escapee never wrote its pid" >&2; exit 91; }';
+const ESCAPEE = `'${process.execPath}' -e 'require("child_process").spawn("bash", ["-c", "echo $$ > \\"$DIR/escapee.pid\\"; exec sleep 300"], { detached: true, stdio: "inherit" }).unref()'\n`
+  + ESCAPEE_WAIT;
+/** The process group `pid` is in, by `ps` (procps and BSD ps both answer `-o pgid=`). */
+const pgidOf = (pid: number): number => Number(spawnSync('ps', ['-o', 'pgid=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim());
 
 describe('boundedUpdateSpawn — the real process-group spawner (server role)', () => {
   it("hands the parent exactly the environment it was given", async () => {
@@ -123,7 +135,9 @@ describe('boundedUpdateSpawn — the real process-group spawner (server role)', 
     const running = boundedUpdateSpawn(file, [], { env: ENV, timeoutMs: 10_000 });
     const parent = await pidFrom(path.join(dir, 'parent.pid'));
     pids.push(parent);   // recorded before the answer, so a red run still cleans up
-    pids.push(await pidFrom(path.join(dir, 'escapee.pid')));
+    const escapee = await pidFrom(path.join(dir, 'escapee.pid'));
+    pids.push(escapee);
+    expect(pgidOf(escapee), 'the escapee did not leave the parent\'s group — the case would not test a pipe holder outside it').not.toBe(parent);
     const parentGone = deadAt(parent);
     const answeredAt = running.then(() => Date.now());
     const r = await running;
@@ -140,7 +154,9 @@ describe('boundedUpdateSpawn — the real process-group spawner (server role)', 
     const running = boundedUpdateSpawn(file, [], { env: ENV, timeoutMs: KILL_BOUND_MS });
     const parent = await pidFrom(path.join(dir, 'parent.pid'));
     pids.push(parent);   // recorded before the answer, so a red run still cleans up
-    pids.push(await pidFrom(path.join(dir, 'escapee.pid')));
+    const escapee = await pidFrom(path.join(dir, 'escapee.pid'));
+    pids.push(escapee);
+    expect(pgidOf(escapee), 'the escapee did not leave the parent\'s group — the case would not test a pipe holder outside it').not.toBe(parent);
     const parentGone = deadAt(parent);
     const answeredAt = running.then(() => Date.now());
     const r = await running;
@@ -148,6 +164,16 @@ describe('boundedUpdateSpawn — the real process-group spawner (server role)', 
     expect(r).toMatchObject({ killed: true, stdout: null });
     expect(took).toBeLessThan(UPDATE_SPAWN_DRAIN_MS + 1500);
     expect(took).toBeLessThan(UPDATE_OP_TIMEOUT_MS);
+  }, 20_000);
+
+  it('the escapee\'s pid wait is bounded: with no escapee it stops at its own bound and says why (wave 9 M5)', () => {
+    const dir = fixtureDir();
+    const file = script(dir, ESCAPEE_WAIT);   // no escapee is started, so nothing leaks
+    const t0 = Date.now();
+    const r = spawnSync(file, [], { env: ENV, encoding: 'utf8', timeout: 10_000 });
+    expect(r.status, `signal ${String(r.signal)} — the wait did not stop at its bound`).toBe(91);
+    expect(r.stderr).toContain('fixture: the escapee never wrote its pid');
+    expect(Date.now() - t0).toBeLessThan(6000);
   }, 20_000);
 
   it('a parent that a signal it did not get from us ended answers 128 + signo, not code 1 (M4)', async () => {
