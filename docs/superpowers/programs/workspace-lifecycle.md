@@ -20,7 +20,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 |---|---|---|---|---|---|---|
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
-| 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | — | planned (#252 merged `b5593725`); run 245 open (planned), block 3886–3895 + 3958–3965; dispatches once #215 is deployed |
+| 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | — | dispatched 2026-10-05 12:41 as run 245 (`ccrc-pwa-bright-canyon`); plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
 | 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed | — | to plan after wave 3 merges |
 | 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan |
 
@@ -417,6 +417,12 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     are ready.
 - **2026-10-05 10:31 — #252 merged** (`b5593725`), squash, at the verified head `93771c0b2`, with every required check
   green. The fleet is still on v0.0.78 behind the unacknowledged failed row, so run 245 waits.
+- **2026-10-05 12:41 — wave 3 dispatched** (run 245 → `ccrc-pwa-bright-canyon`; worker skill present; route Opus ·
+  high, Sonnet subagents, workflow off, compact 40; ten items, one per plan task).
+  - **The gate was met:** the operator acknowledged the failed row, and both boxes reached v0.0.84 (`00f8a193`, phase
+    done). That build contains #215 (`b40f4145`) and #252.
+  - **The brief carries rulings 1–4,** including the `in-use` amendment (3962). The worktree disk had 13 GB free at
+    dispatch, against ccd's 10 GB floor.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -459,8 +465,8 @@ wave 2's deploy converges, check that `/health` reports the merge's tag and that
 
 Wave 3 (the `ws-expire` verb, AGENT-FIRST) is open as run 245 (planned), with deviation numbers 3886 to 3895,
 written bare. Wave 3b (the lane) is planned after it merges.
-- **Its plan is #252** (2026-10-05 10:07 entry; numbers 3886–3895 and 3958–3965). It dispatches once
-  child-reclamation wave 4 (#215, merged `b40f4145`) is deployed.
+- **Dispatched 2026-10-05 12:41** to `ccrc-pwa-bright-canyon` (plan #252; numbers 3886–3895 and 3958–3965).
+  Wave 3b (the lane) is planned after it merges.
 - **Its plan's FIRST commit is wave 2's residue** from review 244 (`~/.cc-clips/ccrc-pwa-still-canyon/review-244-53f31389.md`):
   - F1: `stopVerdict` reads `status` only when it is a string, and its docstring and the 3881 entry name the
     parsed-value limit (a non-compact file diverges from ccd's grep);
