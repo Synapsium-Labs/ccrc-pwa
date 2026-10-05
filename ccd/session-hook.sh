@@ -3545,6 +3545,12 @@ fi
 # The cap needs jq 1.6 or later (utf8bytelength): on an older jq the whole
 # program fails to compile, and the deny fails OPEN at every length, as with
 # no Oniguruma (above).
+# The deny's jq floor is 1.6, and it is tested on jq 1.7 and 1.8. jq 1.8 binds
+# `E as $x` to the whole binary chain left of it where 1.7 binds the nearest
+# term, so every `as` in these programs that follows a binary operator is
+# parenthesised on its own, and the merge-deny suite pins that structurally;
+# before that, a jq 1.8 box failed this deny open on every command holding a
+# heredoc.
 MERGE_PARSE_CAP=2048
 MERGE_OVERCAP_RE='(^|[^A-Za-z0-9_])gh\s+pr\s+merge($|[[:space:];&|()<>])'
 GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[ \t]+|timeout[ \t]+([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+[ \t]+|[A-Za-z_][A-Za-z0-9_]*=([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*[ \t]+)*([^[:space:];&|()]*/)?gh([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+pr([ \t]+-([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))+([ \t]+([^-[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))([^[:space:];&|()]|\\$\\(\\(?[^;&|()\n]*\\)?\\))*)?)*[ \t]+merge([[:space:];&|()<>]|$)'
@@ -3587,8 +3593,8 @@ def qs($h):
       | (.r | qs(false)) as $rest
       | ((.b | contains("\n")) and (if .d == "-" then $last | sub("^\\t+"; "") else $last end) == (.w // .w2)
          and ($rest | contains("\"") or contains($q) or contains("`") | not)
-         and ((.w // .w2) + ")") as $wp | (.d == "-") as $dash
-             | .b | split("\n") | any(if $dash then sub("^\\t+"; "") else . end | startswith($wp)) | not) as $done
+         and (((.w // .w2) + ")") as $wp | (.d == "-") as $dash
+             | .b | split("\n") | any(if $dash then sub("^\\t+"; "") else . end | startswith($wp)) | not)) as $done
       | if $done | not then null else "<<" + $rest + "\n" + (if .x == "" and .q == null then .b | subs else "" end) end end
     elif startswith("$((") or startswith("((") or startswith("$[") or startswith("$$") then .
     else "" end) end;

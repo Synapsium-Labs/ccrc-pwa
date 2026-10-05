@@ -3375,7 +3375,7 @@ Fifty-nine live mutations at wave 2's merge (fifty-six since wave 3's cap), H1�
 | H55 | a heredoc no longer declines when its line holds another `<<`: the `(?![^\\n]*?(?<!<)<<(?!<))` look-ahead deleted | same | `1 failed` — `not denied: cat <<A <<B` |
 | H56 | a quoted delimiter may not hold a blank: `(?(<q…>)[^"'\\n]+\|` → `(?(<q…>)" + W + "\|` | same | `1 failed` — `denied: git commit -F - <<'MY EOF'` |
 | H57 | a bare delimiter must start with a letter or `_` again: `def W: "[^…]+"` → `def W: "[A-Za-z_][^…]*"` | same | `1 failed` — `denied: git commit -F - <<1` |
-| H58 | a body line `EOF)` no longer makes a heredoc incomplete: the `any(… startswith($wp))` test → `true` | same | `1 failed` — `not denied: x=$(cat <<EOF` |
+| H58 | a body line `EOF)` no longer makes a heredoc incomplete: the `any(… startswith($wp))` test → `true` (anchor adapted in landing-order wave 3's fix round) | same | `1 failed` — `not denied: x=$(cat <<EOF` |
 | H59 | no choke point: `($parts \| map(. == null) \| index(true)) as $stop` → `null as $stop` in `fs` | same | `11 failed` — `not denied: echo $(( (a+(b+(c))) << 2 ))`, `not denied: x=$(cat <<EOF` |
 | H60 | the escape no longer takes the rest of its word: `"\\\\.[^\\s;&\|()<>…]*\|` → `"\\\\.\|` | same | `2 failed` — `not denied: echo a\ #; gh pr merge 42`, `not denied: echo a\<tab>#x; gh pr merge 42` |
 | H61 | review 247 F1, `\\g<pe>` was unreachable in a substitution: in `sb`, `AQ + "\|\\g<pe>\|\\$\|` → `AQ + "\|\\$\|` | same | `3 failed` — `not denied: echo "$(echo ${x:-)} "it's" )"; gh pr merge 42; echo 'z'`, `not denied: echo "$(cat <<EOF`, `not denied: echo "$(echo ${y/(/z})"` |
@@ -3441,7 +3441,7 @@ Rows (`$SCRATCH/mut-task4.json`; a `t` field is passed to vitest as `-t`):
  {"id": "H55", "file": "ccd/session-hook.sh", "old": "\"(?![^\\\\n]*?(?<!<)<<(?!<))(?>[^\\\\n]*)", "new": "\"(?>[^\\\\n]*)", "tests": ["test/session-hook-merge-deny.test.ts"]},
  {"id": "H56", "file": "ccd/session-hook.sh", "old": "(?(<q\\($n)>)[^\\\"\" + $q + \"\\\\n]+|", "new": "(?(<q\\($n)>)\" + W + \"|", "tests": ["test/session-hook-merge-deny.test.ts"]},
  {"id": "H57", "file": "ccd/session-hook.sh", "old": "def W: \"[^\\\\s;&|()<>\\\"\" + $q + \"\\\\\\\\]+\";", "new": "def W: \"[A-Za-z_][^\\\\s;&|()<>\\\"\" + $q + \"\\\\\\\\]*\";", "tests": ["test/session-hook-merge-deny.test.ts"]},
- {"id": "H58", "file": "ccd/session-hook.sh", "old": "             | .b | split(\"\\n\") | any(if $dash then sub(\"^\\\\t+\"; \"\") else . end | startswith($wp)) | not) as $done", "new": "             | true) as $done", "tests": ["test/session-hook-merge-deny.test.ts"]},
+ {"id": "H58", "file": "ccd/session-hook.sh", "old": "             | .b | split(\"\\n\") | any(if $dash then sub(\"^\\\\t+\"; \"\") else . end | startswith($wp)) | not)) as $done", "new": "             | true)) as $done", "tests": ["test/session-hook-merge-deny.test.ts"]},
  {"id": "H59", "file": "ccd/session-hook.sh", "old": "| ($parts | map(. == null) | index(true)) as $stop", "new": "| null as $stop", "tests": ["test/session-hook-merge-deny.test.ts"]},
  {"id": "H60", "file": "ccd/session-hook.sh", "old": "fs(DEFS + \"\\\\\\\\.[^\\\\s;&|()<>\\\"\" + $q + \"`\\\\\\\\$]*|", "new": "fs(DEFS + \"\\\\\\\\.|", "tests": ["test/session-hook-merge-deny.test.ts"]},
  {"id": "H61", "file": "ccd/session-hook.sh", "old": "AQ + \"|\\\\g<pe>|\\\\$|", "new": "AQ + \"|\\\\$|", "tests": ["test/session-hook-merge-deny.test.ts"]},

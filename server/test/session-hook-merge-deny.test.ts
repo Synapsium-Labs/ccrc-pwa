@@ -494,3 +494,169 @@ describe('the worker merge deny', () => {
     }
   });
 });
+
+// ---- the jq `as` checker, used by the last describe in this file ----
+type JqTok = { k: 'str' | 'op' | 'open' | 'close' | 'stop' | 'as' | 'word'; s: string };
+/** The binary operators (`and` and `or` are words, read in the identifier arm
+ *  below), longest first: `//=` before `//` before `/`. `|` is a stop, not one. */
+const JQ_SYMBOLS = ['?//', '//=', '|=', '+=', '-=', '*=', '/=', '%=', '==', '!=', '<=', '>=', '//',
+  '+', '-', '*', '/', '%', '<', '>', '=', ','];
+const JQ_STOP_WORDS = new Set(['then', 'else', 'elif', 'if', 'reduce', 'foreach', 'label', 'def', 'catch']);
+
+/** The index just past the jq string literal that opens at `i` (a `"`); each
+ *  `\(…)` interpolation's source is pushed on `subs`, so it is checked too. */
+const jqString = (src: string, i: number, subs: string[]): number => {
+  let j = i + 1;
+  while (j < src.length) {
+    const ch = src[j];
+    if (ch === '"') return j + 1;
+    if (ch === '\\' && src[j + 1] === '(') {
+      let depth = 1;
+      let k = j + 2;
+      while (k < src.length && depth > 0) {
+        if (src[k] === '"') { k = jqString(src, k, subs); continue; }
+        if (src[k] === '(') depth++;
+        else if (src[k] === ')') depth--;
+        k++;
+      }
+      subs.push(src.slice(j + 2, k - 1));
+      j = k;
+    } else j += ch === '\\' ? 2 : 1;
+  }
+  throw new Error(`an unterminated jq string in: ${src.slice(i, i + 60)}`);
+};
+
+const jqTokens = (src: string, subs: string[]): JqTok[] => {
+  const out: JqTok[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const rest = src.slice(i);
+    const c = src[i] as string;
+    let m: RegExpExecArray | null;
+    if (/\s/.test(c)) { i++; continue; }
+    if (c === '#') { while (i < src.length && src[i] !== '\n') i++; continue; }
+    if (c === '"') { i = jqString(src, i, subs); out.push({ k: 'str', s: '"' }); continue; }
+    if ((m = /^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/.exec(rest)) !== null) { out.push({ k: 'word', s: m[0] }); i += m[0].length; continue; }
+    if ((m = /^\.\.|^\.[A-Za-z_][A-Za-z0-9_]*|^\$[A-Za-z_][A-Za-z0-9_:]*/.exec(rest)) !== null) { out.push({ k: 'word', s: m[0] }); i += m[0].length; continue; }
+    if ((m = /^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*/.exec(rest)) !== null) {
+      const w = m[0];
+      out.push({ k: w === 'as' ? 'as' : w === 'and' || w === 'or' ? 'op' : JQ_STOP_WORDS.has(w) ? 'stop' : 'word', s: w });
+      i += w.length; continue;
+    }
+    if (c === '(' || c === '[' || c === '{') { out.push({ k: 'open', s: c }); i++; continue; }
+    if (c === ')' || c === ']' || c === '}') { out.push({ k: 'close', s: c }); i++; continue; }
+    if (c === ';' || c === ':') { out.push({ k: 'stop', s: c }); i++; continue; }
+    if (rest.startsWith('|') && !rest.startsWith('|=')) { out.push({ k: 'stop', s: '|' }); i++; continue; }
+    const sym = JQ_SYMBOLS.find((s) => rest.startsWith(s));
+    if (sym !== undefined) { out.push({ k: 'op', s: sym }); i += sym.length; continue; }
+    out.push({ k: 'word', s: c }); i++;
+  }
+  return out;
+};
+
+/** Every `as` binding in `program` whose source term, read leftwards from the
+ *  keyword to where the term starts, holds a binary operator at depth 0: jq 1.7
+ *  binds `as` to the nearest term, jq 1.8 to the whole chain, so it means two
+ *  different programs. The source ends at an unmatched opener, a `|`, `;`, `:`,
+ *  or a keyword that precedes a term (`then`, `reduce`, …), or the start. */
+const jqAmbiguousAs = (program: string): Array<{ binding: string; op: string }> => {
+  const subs: string[] = [];
+  const t = jqTokens(program, subs);
+  const found: Array<{ binding: string; op: string }> = [];
+  t.forEach((tok, i) => {
+    if (tok.k !== 'as') return;
+    let depth = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      const x = t[j] as JqTok;
+      if (x.k === 'close') depth++;
+      else if (x.k === 'open') { if (depth === 0) break; depth--; }
+      else if (depth > 0) continue;
+      else if (x.k === 'stop') break;
+      else if (x.k === 'op') { found.push({ binding: `as ${(t[i + 1] as JqTok | undefined)?.s ?? ''}`, op: x.s }); break; }
+    }
+  });
+  for (const sub of subs) found.push(...jqAmbiguousAs(sub));
+  return found;
+};
+
+/** Every jq program in a shell script: a single-quoted span on a line that holds
+ *  `jq`, and a single-quoted `NAME='…'` assignment (the programs the hook keeps
+ *  in variables). Comments and double-quoted text are skipped, so an apostrophe
+ *  in either opens nothing; a `$'…'` span is skipped with its `\'` escapes. */
+const jqPrograms = (sh: string): Array<{ name: string; body: string }> => {
+  const out: Array<{ name: string; body: string }> = [];
+  let i = 0;
+  let lineStart = 0;
+  while (i < sh.length) {
+    const c = sh[i] as string;
+    if (c === '\n') { lineStart = ++i; continue; }
+    if (c === '\\') { i += 2; continue; }
+    if (c === '#' && (i === 0 || /\s/.test(sh[i - 1] as string))) { while (i < sh.length && sh[i] !== '\n') i++; continue; }
+    if (c === '"') {
+      i++;
+      while (i < sh.length && sh[i] !== '"') { if (sh[i] === '\\') i++; if (sh[i] === '\n') lineStart = i + 1; i++; }
+      i++; continue;
+    }
+    if (c === '\'') {
+      const ansi = sh[i - 1] === '$';
+      const prefix = sh.slice(lineStart, i);
+      let j = i + 1;
+      while (j < sh.length && sh[j] !== '\'') { if (ansi && sh[j] === '\\') j++; j++; }
+      const named = /^[A-Z][A-Z0-9_]*=$/.exec(prefix);
+      if (!ansi && (named !== null || /(^|[^A-Za-z0-9_])jq([^A-Za-z0-9_]|$)/.test(prefix))) {
+        const line = sh.slice(0, i).split('\n').length;
+        out.push({ name: named !== null ? prefix.slice(0, -1) : `jq at line ${line}`, body: sh.slice(i + 1, j) });
+      }
+      for (let k = i; k < j; k++) if (sh[k] === '\n') lineStart = k + 1;
+      i = j + 1; continue;
+    }
+    i++;
+  }
+  return out;
+};
+
+describe('every jq `as $name` binding in the hook is parenthesised on its own (jq 1.8 binds `as` to the whole binary chain left of it)', () => {
+  const asBindings = (programs: Array<{ body: string }>): number =>
+    programs.reduce((n, p) => n + (p.body.match(/\bas \$/g) ?? []).length, 0);
+
+  it('the checker flags what jq 1.7 and 1.8 read differently and accepts what they read alike', () => {
+    for (const bad of [
+      '1 + (2) as $x | $x', 'true and ((.w) + ")") as $wp | $wp', '.a // (.b) as $x | $x', '.a, (.b) as $x | $x',
+      'if . then 1 else 2 + (3) as $x | $x end', '"\\(1 + (2) as $x | $x)"',
+    ]) expect(jqAmbiguousAs(bad), `flagged: ${bad}`).not.toEqual([]);
+    expect(jqAmbiguousAs('true and ((.w) + ")") as $wp | $wp').map((f) => f.op)).toEqual(['and']);
+    for (const ok of [
+      '1 + ((2) as $x | $x)', '(.a + .b) as $x | $x', '.x as $v | $v', 'reduce (1, 2) as $s (0; . + $s)',
+      '"a and b" as $s | $s', '.a | (.b + 1) as $y | $y', 'def f(a; b): (a + b) as $z | $z; 1',
+      '[.[] | select(. > 1) as $v | $v]', 'foreach (1, 2) as $i (0; . + $i)', '"\\((.a + 1) as $x | $x)"',
+    ]) expect(jqAmbiguousAs(ok), `accepted: ${ok}`).toEqual([]);
+  });
+
+  it('the extractor reads a jq program in a quote, a variable or a continued line, and nothing in a comment or a double quote', () => {
+    const sh = [
+      '# a jq that isn\'t here: \'x as $a\'',
+      "NAME='1 + (2) as $x | $x'",
+      "echo \"it's\" # it's a comment",
+      "v=$(jq -r --arg n \"$n\" '.a as $b",
+      "  | $b' <<<\"$p\")",
+      "printf '%s' \"$x\" | jq -c \"$DEFS\"'.k as $k | $k'",
+    ].join('\n');
+    expect(jqPrograms(sh).map((p) => [p.name, p.body])).toEqual([
+      ['NAME', '1 + (2) as $x | $x'], ['jq at line 4', '.a as $b\n  | $b'], ['jq at line 6', '.k as $k | $k'],
+    ]);
+  });
+
+  it('no jq program in ccd/session-hook.sh binds `as` to a binary chain', () => {
+    const hook = fs.readFileSync(HOOK, 'utf8');
+    const programs = jqPrograms(hook);
+    expect(programs.map((p) => p.name), 'the merge strip is among them').toContain('MERGE_STRIP_JQ');
+    // A FLOOR, so the scan can never go vacuous: a deleted jq call lowers these, and the
+    // number is then re-measured here rather than silently accepted.
+    expect(programs.length, 'jq programs found').toBeGreaterThanOrEqual(53);
+    expect(asBindings(programs), '`as $` bindings found').toBeGreaterThanOrEqual(31);
+    expect(hook.split('\n').filter((l) => /\bjq\b[^'\n#]*"[^"\n]*\bas \$/.test(l)),
+      'a double-quoted jq program with a binding is outside the extractor').toEqual([]);
+    const findings = programs.flatMap((p) => jqAmbiguousAs(p.body).map((f) => `${p.name}: \`${f.binding}\` follows \`${f.op}\``));
+    expect(findings, 'an `as` after a binary operator reads differently on jq 1.7 and 1.8: parenthesise it on its own').toEqual([]);
+  });
+});
