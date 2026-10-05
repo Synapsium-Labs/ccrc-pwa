@@ -1711,6 +1711,30 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - Ruled: add the two names to the refused set, spending reserve number 3987 (bare until the worker defines it).
       Refusing by name stays order-free and file-free. Refusing only non-decimal values would put a second parser in
       the plain test, and leaving it would leave a measured false ARMED in place.
+  - **2026-10-05 18:24 UTC, run 270's Task 6 signal question (mail 3561), ruled (answer mail 3565).** Task 6 committed
+    (`e92b38cd`), and its per-task review approved the sweep as the plan's block. The review measured two behaviours
+    that the plan mandates:
+    - **(1) Ctrl-C: fix in this wave, spending reserve number 3988 (bare until the worker defines it).**
+      - **The behaviour:** `set -m` gives each verify job its own process group. So a SIGINT to the sweep's group
+        during a concurrent batch is lost, and the run ends `SWEEP_OK`, rc 0. On `main`, the serial sweep dies in
+        under a second.
+      - **Why fix it:** it is a regression this wave introduces, of a class this file has already ruled (D-141,
+        `cmd_passwd`: an operator's Ctrl-C must abort).
+      - **The outcome required:** the run ends by SIGINT within about a second, with no `SWEEP_OK`. The in-flight jobs
+        are killed through `_upd_sweep_kill`. No process survives, and no scratch dir is left. TERM and HUP stay as
+        shipped.
+      - **Placement cautions, which the worker measures:**
+        - The sweep shell runs its own trap only after the launcher subshell returns.
+        - An `exit 130` would read as a failed launcher, so the handler re-raises instead.
+      - **The pin:** a SIGINT case, and a mutation row that drops the handler. Its per-task reviewer hunts for any
+        verdict that moves with no SIGINT.
+    - **(2) Foreground calls outside the kill's reach go to residue (R17).** These are the re-check, an unrecorded
+      unit's first verify, and the no-scratch fallback. A TERM to the sweep's pid alone leaves the call to finish,
+      read-only, within seconds. That is the same class as `main`'s serial loop. A unit stop kills the whole cgroup,
+      and no test leaks.
+    - **Also:** the worker found that `list-units --plain` prints no marker column for failed units. systemctl's man
+      page says the same: `--plain` omits the bullet circles. So the crash-shaped listing parses correctly, and not
+      only on systemd 255.
   - **Noise, not this programme's:** `map-build` on `main` went red at `00f8a193` and `4100ae1c`, with five files
     "newly failing under trace". Every test leg was green. At `be93d159` only `boot.test.ts` still failed under trace,
     and at `1eda8630` none did. This belongs to the CI test-selection tooling.
@@ -1864,6 +1888,11 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   (`/proc/<pid>/cmdline`) for the life of each call. It appeared in a coordinator's read-only `ps` during this
   monitoring. The fix shape is a header read from a 0600 file or from stdin (`curl -H @file`, or `-K -`), with a test
   that scans the argv the client builds. Rotating the token is the operator's.
+- **R17 (wave 11, run 270's Task 6 review; for wave 12).** The sweep's foreground calls are outside
+  `_upd_sweep_kill`'s reach: the re-check, an unrecorded unit's first verify, and the no-scratch fallback. A SIGTERM to
+  the sweep's pid alone during one of them leaves the verify and its `sleep` to finish, read-only, within seconds. A
+  unit stop kills the whole cgroup and leaves nothing. This is the same class as `main`'s serial loop. One fix would be
+  to run each foreground call as a recorded job that the kill can reach.
 ## Next-wave brief
 
 **Wave 2 (run 128) — dispatched 2026-09-23.** The brief as sent is the plan's path and sha, tasks 1–15, execution
