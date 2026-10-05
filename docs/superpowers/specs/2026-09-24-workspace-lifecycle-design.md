@@ -391,15 +391,17 @@ and the README and `wave-lifecycle.md` §6 text above are wave 3b's, planned aft
   archived workspace has had no pane since its archive (§3 item 2), and `attached` and `tree-busy` alone let both
   through, measured. The question is keyed on the token's binding, not on a flavour a caller could forget; on Darwin a
   `failed` unit answer that comes from ccd's own stamp is re-asked of launchd, as the reclaim tail re-asks it; and an
-  interrupted expiry's resume asks it again at its first phase, before anything has been stopped. `ws-reclaim` is never
-  asked this. It asks the pane and the unit, not processes: a shell an operator opened in the worktree by hand is not
+  interrupted expiry's resume asks it again when it resumes at `children`, or at `branch` when the tombstone records the
+  worktree absent (the vanished-worktree arm's first phase), before that attempt's tail stops anything (3963).
+  `ws-reclaim` is never asked this. It asks the pane and the unit, not processes: a shell an operator opened in the worktree by hand is not
   seen.
 - **Rung 2′'s words.** `not-archived` (no stamp), `not-expired` (younger than `WS_EXPIRE_AFTER_S`, a future stamp
   included) and `child`; a stamp that is not an epoch ccd writes is unmeasured, never old.
 - **`ws-reap`'s `expire:` arm refuses** (`expire-in-progress`), the twin of its `reclaim:` mirror. The arm that RESUMES
-  an interrupted expiry and re-asserts the archive epoch is `ws-expire`'s own. `ws-reclaim` meets an `expire:`
-  breadcrumb only on a row with a child marker, which `ws-expire` never touches, and answers it `reap-in-progress`, as
-  it answers every breadcrumb not its own.
+  an interrupted expiry and re-asserts the archive epoch is `ws-expire`'s own. `ws-expire` refuses a row
+  with a child marker, so an `expire:` breadcrumb stands only on an unmarked row; `ws-reclaim`, which runs only on
+  children, never meets one in practice, and answers it `reap-in-progress` wherever it does, as it answers every
+  breadcrumb not its own.
 - **A return during an expiry refuses, on every path.** Measured: before this wave no spawn path honoured a breadcrumb,
   and only `ws-restore` took the reap lock. `start`, `ensure` and `swap` now refuse an `expire:` breadcrumb — and, for
   an archived row, a held reap lock — before they journal their act (a refused return must not read as a return to
@@ -414,6 +416,10 @@ and the README and `wave-lifecycle.md` §6 text above are wave 3b's, planned aft
 - **The temp root.** The shared tail removes `~/.cc-tmp/<id>` unrecorded, as it does for a reclaim. Only a child is
   ever given one, and an expiry never touches a row with a child marker, so what stands there was a previous row's
   under a recycled slug — leaked scratch, not this workspace's.
+- **The instrument classifies every act.** §9's measurement reads the journal through three lists that place each of
+  ccd's acts exactly once: those that return from an archive, those that end one — `expire` and `reclaim` among them,
+  a removal and never a return — and a third, `NEUTRAL_ACTS`, for the rest (3887). A test runs ccd's own list, so a
+  new act is decided, not silently ignored.
 - **Its records.** The tombstone's kind is `"mode":"expire"` with `archivedAt`; the journal carries the epoch as the
   existing `meas.archivedAt`; `ws-audit --expire` prints a document of its own (`session`, `mode`, `archivedAt`,
   `alive`, `exists`, `reaping`, `sensitive`, `resume` when resuming, `verdict`, `detail`, `token` when it mints one).

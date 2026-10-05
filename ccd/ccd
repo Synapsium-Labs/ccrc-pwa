@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5b3afd509f93e23bf4e438e209701e2152dc913161ea3d619ca04488e862421c
+# ccrc:generated 1 sha256=c6f81ced2bb9c918cd64c4e2cce1c5e810ef726f2e8a4c9f11ced213cd696c9d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -25865,6 +25865,10 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   #                         EXPIRE region): each asks its own rungs 1-2 first and sets `_WS_LADDER_BIND`, the
   #                         token's leading inputs. 0 with REAP_VERDICT=reclaimable and REAP_TOKEN; else
   #                         REAP_VERDICT names the refusal. Its one flavour question is rung 5's (see THE FLAVOUR).
+  # RUNS ONLY CONTAINED, as `_ws_reclaim_eval`'s header says of the reads it makes: every caller
+  # (`_ws_reclaim_fork`, `_ws_expire_fork`) runs it under `_ws_reclaim_contained`, so no hook or fsmonitor
+  # of the repository runs and no read rewrites the tree's index. Called outside it, this ladder would
+  # run the programs of a tree nothing has proved nobody is in — a caller outside it is a defect.
   local id="$1" defer="$2"
   local project workdir regbranch branch wthead main mainreal common
   local op clients elsewhere elsrc nested p pcommon ptop rc h hs clipsjson hp wdreal
@@ -25929,7 +25933,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     # reclaim's question: a child's tail kills its pane by design (spec §5.6).
     # Keyed on the BINDING the expiry's rungs 1-2 set, never on the flavour
     # global: a caller of `_ws_expire_eval` that forgot the flavour still asks.
-    [[ "${_WS_LADDER_BIND[0]-}" != mode=expire ]] || _ws_expire_presence "$id" "$PROBE_VERDICT" || return 1
+    [[ "${_WS_LADDER_BIND[0]-}" != mode=expire ]] || _ws_expire_presence "$id" "$PROBE_VERDICT" detached || return 1
   fi
   # THE LEAF IS NEVER FOLLOWED (spec §5.5). A workdir that is itself a link
   # reaches a tree ccd cannot prove is this child's: the pin would commit that
@@ -26165,7 +26169,9 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
 
 _ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer for a child whose worktree
   #                               directory is GONE and no breadcrumb says a reclaim took it; called ONLY
-  #                               from `_ws_reclaim_eval`, after rungs 1-5. rc 0 with REAP_VERDICT=reclaimable,
+  #                               from `_ws_reclaim_ladder`, for BOTH verbs (`_ws_reclaim_eval` and
+  #                               `_ws_expire_eval` each reach it through the ladder), after rungs 1-5.
+  #                               rc 0 with REAP_VERDICT=reclaimable,
   #                               REAP_TOKEN and RECLAIM_WORKTREE=absent; else REAP_VERDICT names it
   # A VANISHED WORKTREE IS NOT A REFUSAL (spec §5.5): there is nothing left on
   # disk that could be lost, so the reclaim pins what IS left and runs its tail
@@ -27210,7 +27216,8 @@ _ws_reclaim_keep_reflogs() {   # main id logfile... -> 0 once every commit the n
   prev=$(LC_ALL=C awk -F'\t' -v r="$ref" '$1 == r { print $2 }' <<< "$prev")
   tree=$(git -C "$main" mktree < /dev/null 2>/dev/null) && [[ "$tree" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] \
     || { _WS_KEEP_WHY="could not write the empty tree the reflog keep is made of"; return 1; }
-  msg="ccrc: reflog commits kept at reclaim of $id"
+  local what=reclaim; [[ "$_WS_RCL_ACT" != expire ]] || what=expiry   # THE FLAVOUR: a reclaim's bytes are unchanged
+  msg="ccrc: reflog commits kept at $what of $id"
   c="$prev"
   for (( i = 0; i < ${#all[@]}; i += 100 )); do
     args=()
@@ -27934,7 +27941,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       if (( ! _WS_NPROOF_GONE )); then
         if (( rec != 0 )) || [[ "$_WS_NREC_BRANCH" != "$cbr" ]]; then
           _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
-            "git's record of the checkout at $cpath is $( (( rec == 0 )) && printf "on '%s', not '%s'" "$_WS_NREC_BRANCH" "$cbr" || printf 'missing') — ccd cannot prove it is the checkout this reclaim pinned, so nothing further was deleted"
+            "git's record of the checkout at $cpath is $( (( rec == 0 )) && printf "on '%s', not '%s'" "$_WS_NREC_BRANCH" "$cbr" || printf 'missing') — ccd cannot prove it is the checkout this $noun pinned, so nothing further was deleted"
           return 1
         fi
         _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$cpath" \
@@ -27944,7 +27951,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       elif (( rec == 0 )); then
         if [[ "$_WS_NREC_BRANCH" != "$cbr" ]]; then
           _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
-            "git's record of the vanished checkout at $cpath is on '$_WS_NREC_BRANCH', not '$cbr' — ccd cannot prove it is the checkout this reclaim pinned, so nothing further was deleted"
+            "git's record of the vanished checkout at $cpath is on '$_WS_NREC_BRANCH', not '$cbr' — ccd cannot prove it is the checkout this $noun pinned, so nothing further was deleted"
           return 1
         fi
         _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$cpath" 1 \
@@ -28525,10 +28532,15 @@ _ws_expire_not_child() {   # id -> 0 when NO `.child` marker stands; else rc 1 r
     || { _reap_refuse child "$id carries a child marker ($REG/$id.child) — a child is reclaimed by ws-reclaim when its run closes, never expired"; return 1; }
 }
 
-_ws_expire_presence() {   # id probe-verdict -> 0 when nothing runs for id; else rc 1 (`live`, or unmeasured)
+_ws_expire_presence() {   # id probe-verdict [detached] -> 0 when nothing runs for id; else rc 1 (`live`, or unmeasured)
   # RUNG 5, ASKED MORE OF FOR AN EXPIRY (the RECLAIM region's ladder calls this
   # after its own `attached` question, only when the binding leads with
-  # `mode=expire`; `_ws_expire_resume_eval` asks it at the `children` phase).
+  # `mode=expire`; `_ws_expire_resume_eval` asks it where nothing has been
+  # stopped yet: at `children`, and at `branch` on the vanished-worktree arm).
+  # `detached` is passed by the caller that has ALREADY proved no client is
+  # attached (the ladder, just after its `attached` question): only then may
+  # the refusal say so. The resume's anchored probe never asked for clients, so
+  # its refusal for a pane that is up claims no more than that it is up.
   # An archived workspace has had no pane since its archive — that is half of
   # why expiring it is safe (spec §3, item 2) — so a pane that is up, attached
   # or not, or a unit that is running, means somebody is using it: `live`,
@@ -28544,9 +28556,9 @@ _ws_expire_presence() {   # id probe-verdict -> 0 when nothing runs for id; else
   # other status is a question never answered — unmeasured.
   # WHAT IT DOES NOT SEE: a process with its cwd in the worktree that runs
   # outside the `cc-<id>` pane and outside the unit (an operator's own shell).
-  local id="$1" verdict="$2" unit out lrc
+  local id="$1" verdict="$2" how="${3-}" unit out lrc
   [[ "$verdict" != live ]] \
-    || { _reap_refuse live "$(_tmux "$id") is up with no terminal attached — an archived workspace whose pane runs is in use, and is never expired"; return 1; }
+    || { _reap_refuse live "$(_tmux "$id") is up$([[ "$how" == detached ]] && printf ' with no terminal attached') — an archived workspace whose pane runs is in use, and is never expired"; return 1; }
   unit=$(_svc_is_active "claude-session@$id")
   if [[ "$CCD_OS" == darwin && "$unit" == failed ]]; then
     out=$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "claude-session@$id")" 2>/dev/null); lrc=$?
@@ -28574,7 +28586,11 @@ _ws_expire_eval() {   # id -> 0 when the expiry ladder passes (REAP_VERDICT=expi
   # enough; not a child), then the RECLAIM region's rungs 3-10 unchanged, with
   # rung 5 asked more of. The archive EPOCH is a token input, so a workspace
   # brought back and archived again can never be expired on its old token:
-  # `state-changed` (spec §5.3).
+  # `state-changed` (spec §5.3). RUNS ONLY CONTAINED (its one caller,
+  # `_ws_expire_fork`, runs it under `_ws_reclaim_contained`, and the shared
+  # ladder it calls reads git in the tree): no hook or fsmonitor of the
+  # repository runs, no read rewrites the index. The archive may be a week old;
+  # nothing has proved nobody is in it.
   _ws_reclaim_reset
   local id="$1" ws
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -28606,10 +28622,10 @@ _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token,
   # EPOCH — still the one the tombstone recorded when the act began, and still
   # old enough (a workspace that was returned is `not-archived`; one archived
   # again since is `state-changed`); no child marker; the pause; the hold; and,
-  # at `children`, rung 5's presence. The resume token binds the phase, the
-  # epoch and the recorded tip.
+  # where nothing has been stopped yet, rung 5's presence (below). The resume
+  # token binds the phase, the epoch and the recorded tip.
   _ws_reclaim_reset
-  local id="$1" phase="$2" tomb tombtip tombbranch tombarch
+  local id="$1" phase="$2" tomb tombtip tombbranch tombarch tombwt askpresence=0
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
   tomb="$REG/.reaped/$id.json"
   tombarch=$(_ws_expire_tomb_epoch "$tomb") \
@@ -28624,13 +28640,30 @@ _ws_expire_resume_eval() {   # id phase -> 0 with REAP_TOKEN = the RESUME token,
     _reap_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
   fi
   # A PANE THAT CAME BACK IS NEVER KILLED BEFORE THE TEARDOWN BEGINS (ruling D,
-  # carried to the resume). At `children` nothing has been deleted yet and the
-  # tail has not stopped anything, so rung 5's two questions are asked again: a
-  # pane that is up, attached or not, or a running unit, refuses `live` and the
-  # breadcrumb stands for the retry. From `worktree` on, the interrupted run had
-  # already stopped both and proved the pane gone, so the tail's own
-  # unsupervise-and-kill runs as a reclaim's does.
+  # carried to the resume). The tail's first step stops the unit and kills the
+  # pane, and an attempt's breadcrumb moves past its first phase only after
+  # that step ran. So rung 5's questions are asked again exactly where the
+  # interrupted attempt may not have reached it: at `children`, the present
+  # worktree's first breadcrumb, and at `branch` when the tombstone records the
+  # worktree ABSENT — the vanished-worktree arm's first breadcrumb, written
+  # BEFORE the tail stops anything (the arm skips `children`), so a crash
+  # between that write and the tail's unsupervise leaves a `branch` resume with
+  # nothing stopped (3963). A pane that is up, attached or not, or a running
+  # unit, refuses `live` and the breadcrumb stands for the retry. A `branch`
+  # resume whose tombstone says `present` follows `worktree`, which only a tail
+  # that had stopped both writes, as do `worktree` and `artifacts`: the tail's
+  # own unsupervise-and-kill runs as a reclaim's does. The field is read as
+  # `_ws_tomb_str` answers it: a tombstone that cannot be read is unmeasured,
+  # and anything but the word `present` — absent, or a value ccd never writes —
+  # asks, because asking only refuses (retryably) and never kills.
   if [[ "$phase" == children ]]; then
+    askpresence=1
+  elif [[ "$phase" == branch ]]; then
+    tombwt=$(_ws_tomb_str "$tomb" worktree) \
+      || { _ws_reclaim_unmeasured "the tombstone at $tomb cannot be read, so whether this expiry's worktree was already gone when it began is unknown"; return 1; }
+    [[ "$tombwt" == present ]] || askpresence=1
+  fi
+  if (( askpresence )); then
     _session_probe "$id" anchored
     case "$PROBE_VERDICT" in
       gone|live) : ;;
@@ -28810,9 +28843,11 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
 # journaled (`_lc_emit expire refused … verb ws-audit`), and only a terminal one.
 _ws_expire_audit() {   # id -> `ccd ws-audit --session <id> --expire`, whole: the expiry ladder's answer as
   #                       ONE JSON document on stdout; exit 1 on `unmeasured` (the server retries), else 0
-  # No flavour is set here: the audit writes nothing, and the one question the
-  # ladder asks only of an expiry (rung 5's) is keyed on the binding
-  # `_ws_expire_eval` sets, so this read asks it exactly as the verb does.
+  # No flavour is set here: the audit writes nothing the flavour governs — no
+  # pin, tombstone, breadcrumb or tail (it journals a terminal refusal, and rung
+  # 8's permission pass may chmod) — and the one question the ladder asks only of
+  # an expiry (rung 5's) is keyed on the binding `_ws_expire_eval` sets, so this
+  # read asks it exactly as the verb does.
   _ws_reclaim_contained _ws_expire_audit_contained "$@"
 }
 
@@ -28917,7 +28952,9 @@ _ws_expire_breadcrumb_why() {   # id -> rc 0 with the refusal sentence on stdout
   printf '%s is being expired — an interrupted ws-expire stopped at its %s step; bringing it back now would return a workspace whose teardown has begun' "$1" "'${rbc#expire:}'"
 }
 
-_ws_expire_refuse_return() {   # id -> returns 0 when no `expire:` breadcrumb stands; else DIES with the sentence
+_ws_expire_refuse_return() {   # id -> returns 0 when nothing refuses a return; else DIES with the sentence. It
+  #                                dies on an `expire:` breadcrumb, on a breadcrumb that stands but cannot be read
+  #                                (an ARCHIVED row only) and on a held reap lock (an ARCHIVED row only)
   # THE RETURN VERBS' OWN REFUSAL, asked by `cmd_start`, `cmd_ensure`, `cmd_swap`
   # and `cmd_enable` BEFORE they journal their act or write a field: a return that a
   # breadcrumb refuses must leave no `start`/`ensure`/`swap`/`enable` row behind, or
@@ -28928,6 +28965,14 @@ _ws_expire_refuse_return() {   # id -> returns 0 when no `expire:` breadcrumb st
   # `_spawn_start`'s gate is the backstop under all of them. It IS that gate,
   # asked early and let go at once: the breadcrumb after a crash, and the reap
   # lock while an expiry (or a reap, or a restore) of an archived row holds it.
+  # A RESIDUAL, DISCLOSED (3893; carried to wave 3b). The gate is taken and
+  # RELEASED here, before the verb's own journal line, so an expiry that wins the
+  # lock inside that gap leaves the refused return journaled as `done`, and a
+  # minutes-long `swap` can write registry fields onto a purged row. No pane
+  # returns — `_spawn_start`'s backstop refuses, holding the lock across the
+  # unarchive — and nothing is lost: the pin precedes every delete. Closing it
+  # holds the lock across the journal, or clears the archive at the verb: a
+  # behaviour change to four verbs, beyond this wave.
   _ws_expire_spawn_gate "$1" || die "$_WS_EXPIRE_SPAWN_WHY"
   _ws_expire_spawn_release
 }

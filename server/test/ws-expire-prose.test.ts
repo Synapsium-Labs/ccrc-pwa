@@ -43,7 +43,9 @@ describe('the skill corpora never name the verb', () => {
     expect(files.length).toBeGreaterThanOrEqual(SKILLS.length);
   });
   it.each(SKILLS)('%s never names ws-expire', (dir) => {
-    for (const f of files.filter((p) => p.startsWith(path.join(root, dir)))) {
+    const own = files.filter((p) => p.startsWith(path.join(root, dir) + path.sep));
+    expect(own.length, `${dir} has files to read — an empty directory would pass vacuously`).toBeGreaterThan(0);
+    for (const f of own) {
       expect(readFileSync(f, 'utf8'), path.relative(root, f)).not.toContain('ws-expire');
     }
   });

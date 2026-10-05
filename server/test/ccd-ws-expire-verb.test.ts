@@ -63,7 +63,7 @@ const plantTranscript = (a: Archived): string => {
 const interrupted = (a: Archived, phase: 'children' | 'worktree' | 'branch' | 'artifacts'): void => {
   h.sh(`${EXP_STUBS} _WS_RCL_ACT=expire; _ws_expire_eval ${EXP_ID} >/dev/null`
     + ` && _ws_reclaim_pin ${EXP_ID} "${a.wt}" "${a.main}" "$REAP_BRANCH" "$EXPIRE_ARCHIVED_AT"`
-    + ` && _ws_tombstone ${EXP_ID} '[]' "$(_ws_reclaim_tomb_fields "$EXPIRE_ARCHIVED_AT")" >/dev/null`
+    + ` && _ws_tombstone ${EXP_ID} '[]' "$(_ws_reclaim_tomb_fields "$EXPIRE_ARCHIVED_AT" present)" >/dev/null`
     + ` && _reg_set ${EXP_ID} reaping expire:${phase}`);
   if (phase === 'branch' || phase === 'artifacts') h.git(a.main, 'worktree', 'remove', '--force', a.wt);
   if (phase === 'artifacts') h.git(a.main, 'update-ref', '-d', `refs/heads/${EXP_BRANCH}`);
@@ -295,6 +295,65 @@ describe('a crash at each phase resumes through the `expire:` breadcrumb — and
     expect(h.reg(EXP_ID, 'reaping'), 'the breadcrumb stands, for the retry').toBe('expire:children');
     expect(unsupervised(), 'the unit was not touched').toEqual([]);
     expect(h.calls(), 'the pane was not touched').not.toContain(KILL);
+  }, 120_000);
+
+  it('the resume’s live refusal never claims "no terminal attached" — its probe never asked for clients', () => {
+    const a = makeArchived(h);
+    interrupted(a, 'children');
+    const tok = resumeToken('children');
+    plantTmux(h, { sessions: [`cc-${EXP_ID}`], clients: { [`cc-${EXP_ID}`]: '/dev/pts/3' } });
+    const r = expireVerb(h, tok);
+    expect(refusedWith(r), 'a pane with a terminal attached').toBe('live');
+    const detail = (JSON.parse(r.stdout) as { detail: string }).detail;
+    expect(detail).toContain(`cc-${EXP_ID} is up`);
+    expect(detail, 'true of a pane with a client too').not.toContain('no terminal attached');
+  }, 120_000);
+
+  // THE VANISHED-WORKTREE ARM'S FIRST BREADCRUMB IS `expire:branch`, written before the tail has stopped anything (the
+  // arm skips `children`). A crash between that breadcrumb and the tail's unsupervise leaves a resume at `branch` with
+  // nothing stopped — the same moment `children` is for a present worktree — so ruling (D) asks presence there too.
+  // The crash is made the way it happens: the real verb runs, and dies where `_ws_unsupervise` would have run.
+  const vanishedThenCrash = (): Archived => {
+    const a = makeArchived(h);
+    fs.rmSync(a.wt, { recursive: true, force: true });
+    const r = expireVerb(h, expireEvalOf(h).token, { pre: '_ws_unsupervise() { exit 9; };' });
+    expect(r.code, 'the crash').toBe(9);
+    expect(h.reg(EXP_ID, 'reaping'), 'the vanished arm entered at the branch').toBe('expire:branch');
+    expect(tombOf()['worktree']).toBe('absent');
+    return a;
+  };
+
+  it('at `branch` on the VANISHED-worktree arm, a pane or a unit that stands refuses live — nothing is stopped', () => {
+    const a = vanishedThenCrash();
+    const tok = resumeToken('branch');
+    expect(tok, 'the resume token is minted while nothing runs').toMatch(/^[0-9a-f]{64}$/);
+    plantTmux(h, { sessions: [`cc-${EXP_ID}`] });
+    expect(refusedWith(expireVerb(h, tok)), 'a detached pane').toBe('live');
+    plantTmux(h, { sessions: [] });
+    expect(refusedWith(expireVerb(h, tok, { pre: '_svc_is_active() { printf active; };' })), 'a running unit').toBe('live');
+    expect(h.git(a.main, 'branch', '--list', EXP_BRANCH), 'the branch survives').toContain(EXP_BRANCH);
+    expect(h.reg(EXP_ID, 'reaping'), 'the breadcrumb stands, for the retry').toBe('expire:branch');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.reaped', `${EXP_ID}.json`)), 'the tombstone stands').toBe(true);
+    expect(unsupervised(), 'the unit was not touched').toEqual([]);
+    expect(h.calls(), 'the pane was not touched').not.toContain(KILL);
+  }, 120_000);
+
+  it('the CONTROL: at `branch` with the worktree PRESENT in the tombstone, the tail had already stopped both — a pane that stands is its to kill', () => {
+    const a = makeArchived(h);
+    interrupted(a, 'branch');
+    plantTmux(h, { sessions: [`cc-${EXP_ID}`] });
+    const r = expireVerb(h, resumeToken('branch'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(tmuxSessions(h), 'the tail killed the pane').toEqual([]);
+    expired(a);
+  }, 120_000);
+
+  it('an expiry’s reflog-keep commit says expiry, where a reclaim’s says reclaim', () => {
+    const a = makeArchived(h);
+    const r = expireVerb(h, expireEvalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const ref = `refs/ccrc/attic/${EXP_ID}/reflogs`;
+    expect(h.git(a.main, 'log', '-1', '--format=%s', ref)).toBe(`ccrc: reflog commits kept at expiry of ${EXP_ID}`);
   }, 120_000);
 
   it('the CONTROL: from `worktree` on, a pane that stands is the tail’s to kill — the expiry finishes', () => {
