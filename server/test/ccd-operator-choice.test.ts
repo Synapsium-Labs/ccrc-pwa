@@ -593,6 +593,59 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
     });
   });
 
+  // ── THE MARKER TRACKS A DEAD SESSION (review 268, F6) ──
+
+  describe('choicekept means "Claude Code is not running here and its choice was read"', () => {
+    const DEAD = '_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; }; tmux() { return 1; }; _session_verdict() { echo gone; };';
+    const LIVE_KILL_FAILS = '_ws_unsupervise() { echo "unsupervise $1" >> "$HOME/ccd-calls"; }; tmux() { return 1; }; _session_verdict() { echo live; };';
+    const oocFor = (id: string): number => swapLog().split('\n').filter((l) => l.includes(`operator-choice ${id}: /model gpt-5.6-sol is outside the class vocabulary`)).length;
+
+    it('a stop and then a ws-archive of the same dead session read once and log once', () => {
+      h.makeRepo('demo');
+      h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+      const WS = 'demo-quiet-basin';
+      journal(WS); record({ class: 'fable' }, WS); const t = now() - 600;
+      writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))], WS);
+      h.sh(`${DEAD} cmd_stop ${WS}`);
+      expect(oocFor(WS), 'the stop read').toBe(1);
+      expect(fs.existsSync(regFile(`${WS}.choicekept`)), 'the stop left its marker: the session is dead').toBe(true);
+      expect(h.sh(`${DEAD} cmd_ws_archive --session ${WS}`)).toMatch(/^archived /);
+      expect(oocFor(WS), 'the archive of the same dead session did not read again').toBe(1);
+    });
+
+    it('two stops in a row of the same dead session read once and log once', () => {
+      seed(); record({ class: 'fable' }); const t = now() - 600;
+      writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+      h.sh(`${DEAD} cmd_stop ${ID}; cmd_stop ${ID}`);
+      expect(oocLines()).toBe(1);
+    });
+
+    it('a kill that failed on a session that is still there leaves no marker', () => {
+      seed(); record({ class: 'fable' }); const t = now() - 600;
+      writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+      h.sh(`${LIVE_KILL_FAILS} cmd_stop ${ID}`);
+      expect(oocLines(), 'the stop read').toBe(1);
+      expect(fs.existsSync(regFile(`${ID}.choicekept`)), 'a live session is never marked').toBe(false);
+    });
+
+    it('control: a kill that failed because the session was already gone keeps the marker', () => {
+      seed(); record({ class: 'fable' }); const t = now() - 600;
+      writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+      h.sh(`${DEAD} cmd_stop ${ID}`);
+      expect(fs.existsSync(regFile(`${ID}.choicekept`))).toBe(true);
+    });
+
+    it('ws-archive: a kill that failed on a live session leaves no marker', () => {
+      h.makeRepo('demo');
+      h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+      const WS = 'demo-quiet-basin';
+      journal(WS); record({ class: 'fable' }, WS); const t = now() - 600;
+      writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))], WS);
+      h.sh(`${LIVE_KILL_FAILS} _ws_status() { echo idle; }; cmd_ws_archive --session ${WS} || :`);
+      expect(fs.existsSync(regFile(`${WS}.choicekept`))).toBe(false);
+    });
+  });
+
   // THE CENSUS OF STOPS. Every function in ccd that stops a session — a
   // `tmux kill-session`, a `claude-session@` unit stopped or booted out, or a
   // `_ws_unsupervise` — is named here: either a stop a spawn follows, which
@@ -631,14 +684,29 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
     expect(sites.map(owner).sort()).toEqual([...KEEPS, ...CHOKE].sort());
     for (const i of sites) {
       const fn = owner(i);
-      if (fn === 'cmd_swap') expect(src[i + 1]).toMatch(/^ {2}_svc_stop "claude-session@\$id"/);
-      if (fn === 'cmd_stop') expect(src[i + 1]).toMatch(/^ {2}_ws_unsupervise "\$id" "\$surface" "\$declared"$/);
+      // Each stop's keep is GUARDED on the marker (a session already stopped and read is not read again), and
+      // its kill — the statement after the stop's own — unmarks on failure, so a live session is never marked.
+      const GUARD = /^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id"/;
+      const UNMARK = /tmux kill-session -t "\$\(_tmux_t "\$id"\)" 2>\/dev\/null \|\| _operator_choice_unmark "\$id"/;
+      if (fn === 'cmd_swap') {
+        expect(src[i]).toMatch(GUARD);
+        expect(src[i + 1]).toMatch(/^ {2}_svc_stop "claude-session@\$id"/);
+        expect(src[i + 2]).toMatch(UNMARK);
+      }
+      if (fn === 'cmd_stop') {
+        expect(src[i]).toMatch(GUARD);
+        expect(src[i + 1]).toMatch(/^ {2}_ws_unsupervise "\$id" "\$surface" "\$declared"$/);
+        expect(src[i + 2]).toMatch(UNMARK);
+      }
       if (fn === '_spawn_start') {   // BEFORE the journal's floor line, then the marker's removal
         expect(src[i]).toMatch(/^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id" /);
         expect(src[i + 1]).toMatch(/^ {2}_typed_note "\$id" since /);
         expect(src[i + 2]).toMatch(/^ {2}rm -f "\$REG\/\$id\.choicekept" /);
       }
-      if (fn === 'cmd_ws_archive') expect(src[i]).toMatch(/^ {2}_operator_choice_keep "\$id"; _ws_unsupervise "\$id" /);
+      if (fn === 'cmd_ws_archive') {
+        expect(src[i]).toMatch(/^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id"; _ws_unsupervise "\$id" /);
+        expect(src[i + 1]).toMatch(UNMARK);
+      }
     }
   });
 

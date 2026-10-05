@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=984101002b30bf952ded3e0843c492253f812b17e2bdf28cecb2dc13487e0daf
+# ccrc:generated 1 sha256=754d8fba91b032f4b1512cac419d5561e54b2af311797627dd9c594b2049bb25
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -9858,8 +9858,8 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # changes in one commit.
   _reg_set "$id" archivemanifest "$manifest"$'\n'
 
-  _operator_choice_keep "$id"; _ws_unsupervise "$id"      # clears Restart=always; ws-restore respawns from the record (§5.7)
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
+  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"; _ws_unsupervise "$id"      # clears Restart=always; ws-restore respawns from the record (§5.7)
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"
 
   # Truthful in three values, not always "merged": a workspace can be archived
   # with a PR the gh-verified prphase machinery has confirmed merged, PR
@@ -19506,6 +19506,11 @@ for kind, (val, at) in sorted(newest.items()):
   return 0
 }
 
+_operator_choice_unmark() {   # id — after a stop's pane kill FAILED: the marker means "Claude Code is not running here", so it stays only when the session is proven gone; a live or unmeasurable one is unmarked and its next revival reads. Always 0. (§5.7)
+  [[ "$(_session_verdict "$1" 2>/dev/null)" == gone ]] || rm -f "$REG/$1.choicekept" 2>/dev/null
+  return 0
+}
+
 _operator_choice_say() {   # id text — one `operator-choice <id>: <text>` line in swap.log, where the operator's choice may be lost (§5.7)
   echo "$(date '+%F %T') operator-choice $1: $2" >> "$REG/swap.log"
 }
@@ -24499,9 +24504,9 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
     _swap_refuse "$id" "$cur" "$target" "no transcript found for $uuid under $cur" 0
     return 1
   fi
-  _operator_choice_keep "$id"   # a stop the spawn below follows: the operator's own /model and /effort reach the record first (§5.7)
+  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # a stop the spawn below follows: the operator's own /model and /effort reach the record first; a session already stopped and read (a marker) is not read again (§5.7)
   _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
   sleep 1                                                  # let claude flush its final transcript entries
   # A SWAP IS NOT AN ABANDONMENT. Between the stop and the start this row is
   # not alive and, after 120 seconds, would also stop looking watched — and
@@ -24849,9 +24854,9 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   # the stamp's word; `$declared` is empty unless a flag actually arrived, and
   # the journal keeps the two apart.
   _lc_done stop "$id" "" dec.surface "$(_lc_surface_norm "$declared")"
-  _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first (§5.7)
+  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first; a session already stopped and read is not read again (§5.7)
   _ws_unsupervise "$id" "$surface" "$declared"
-  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || true
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
   echo "stopped $id"
 }
 
