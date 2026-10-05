@@ -18,7 +18,7 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | — | **run 271 open** (`planned`) since 2026-10-05 15:20 UTC; dispatches once this ledger's PR merges |
+| 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | — | **run 271 dispatched** 2026-10-05 15:37 UTC to a fresh child, `ccrc-pwa-swift-harbor`; plan read at `1eda8630a` (#280) |
 | 2 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | wave 1's matrix and its real-lane cross-check | — | to plan once wave 1's measurement section is complete |
 | 3 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 2 | — | to plan |
 | 4 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 3 | — | to plan |
@@ -48,7 +48,11 @@ its own heading. Until both are here, nothing in waves 2–6 may depend on a hoo
   written and reviewed before its run opens.
 - **2026-10-05 — operator decision: the programme runs through ccrc** — wave 1 is dispatched as run 271 to a fresh
   child worker executing subagent-driven, not run in the spec-writing session (§10). The operator approved merging
-  this ledger's docs PR once its checks are green.
+  this ledger's docs PR once its checks are green. #280 merged 2026-10-05 as `1eda8630a`, every check green.
+- **2026-10-05 — wave 1's brief and routing.** The spec'd-plan row: Opus · high main loop, Sonnet · high implementers,
+  an Opus · high reviewer per task, Haiku scouts, workflows off, compact 40. Nine items, one per task. The brief
+  routes Task 1 around a live peer claim on `ccd/session-hook.sh` (landing-order wave 3's fix round, hard cap 19:04 UTC):
+  Tasks 2–5 first, and the peer protocol for the three disjoint lines Task 1 changes.
 - **2026-10-05 — the parent incarnation field is already in the tree** (spec §5.1, §8.1 item 10): `$REG/<id>.generation`
   (D-2605) is minted once at row creation and never rewritten. The hook also sees it as `CCRC_SESSION_GENERATION`, but
   ccd does not set that on every spawn path, so later waves read the file. Wave 1 records this from source.
