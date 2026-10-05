@@ -1,18 +1,21 @@
 # Stall watch settings: one arming ladder and one quiet time on the Settings page (design)
 
-**Status:** draft rev 3, 2026-10-05; rev 3 folds the adversarial review (44 findings, workflow wf_02c96a48-da4); awaiting
-the operator's review. Rev 2 folded three review lenses (codebase fit, operator intent, safety). The shape was approved
-in dialogue (§2): one ladder, one timing, a small read-only part, and approach 1 (server-side storage). Nothing in this
-spec is planned yet. No D-number has been allocated. Each departure from the approved text is named by its slug (§16)
-and gets a number when the plan is written. The defaults the operator may still change are listed in §19.
-- **Citations.** Mapped read-only at origin/main be93d159e, which carries stall-watch waves 1–7. Line numbers are
+**Status:** draft rev 3.1, 2026-10-05; rev 3.1 folds the verification of rev 3 (28 findings, workflow wf_6b6351ad-f06);
+rev 3 folds the adversarial review (44 findings, workflow wf_02c96a48-da4); awaiting the operator's review. Rev 2 folded
+three review lenses (codebase fit, operator intent, safety). The shape was approved in dialogue (§2): one ladder, one
+timing, a small read-only part, and approach 1 (server-side storage). Nothing in this spec is planned yet. No D-number
+has been allocated. Each departure from the approved text is named by its slug (§16) and gets a number when the plan is
+written. The defaults the operator may still change are listed in §19.
+- **Citations.** Mapped read-only at origin/main be93d159e, which carries stall-watch waves 1–7. Rev 3.1's new and
+  changed citations are measured at origin/main beafb3fd8. Between the two only README, two `ccd` scripts,
+  `coord/token.ts`, two doctor and install tests, and docs changed, so the older hints still land. Line numbers are
   hints and are written `≈`. Every citation also names its function or constant, so the text can still be found
   after `main` moves. Ledger entry R38 is quoted from the coordinator's ledger branch (`d956bfd1d`, stall-watch.md
   ≈:643–676); R18 (≈:262–268), R28 (≈:434–450) and the arming track (≈:30–38) are on `main`.
 - **Inputs.** Three read-only surveys from 2026-10-04 (stall constants, configuration precedents, the Settings
   screen), re-checked against `origin/main` after waves 6 and 7 merged; the stall-watch design spec; the stall-watch
-  programme ledger's arming track (R18, R19, R26, R28, R38); and the adversarial review of rev 2 with the
-  coordinator's rulings on it.
+  programme ledger's arming track (R18, R19, R26, R28, R38); the adversarial review of rev 2 and the verification of
+  rev 3, each with the coordinator's rulings on it.
 
 **Date:** 2026-10-05 · **Branch:** chosen by the coordinator (from `origin/main`, measured at execution)
 **Related:**
@@ -74,7 +77,7 @@ The one timing an operator might reasonably want to change, the 2 h quiet time b
      `mail-gate-strict` keeps its precedence for the mail gate; otherwise a chosen level decides; otherwise the box
      files decide, as today. A box-file combination that matches no step reads "custom (box files)". An unreadable
      registry reads "unknown", never "off".
-     - *Restatement note:* under departure `files-level-match-ignores-the-busy-log` (§6.4, Q1), a box with no files
+     - *Restatement note:* under departure `files-level-match-ignores-the-busy-gate` (§6.4, Q1), a box with no files
        at all reads "Log only", with the busy gate off, rather than "custom". That narrows the approved "matches no
        step reads custom" for that one case.
      - *Restatement note:* the user-facing strings use one term for the box files, "the fleet box's files", so the
@@ -82,8 +85,9 @@ The one timing an operator might reasonably want to change, the 2 h quiet time b
   2. **Guide, don't block.** Any level may be chosen. The section shows what the current level does, the next step,
      and that step's gate. Raising the level asks for a confirm that shows the gate text. The server does not
      track whether a gate is met; it cannot know.
-     - *Restatement note:* under departure `confirm-on-stage-diff` (§13), "raising" is measured by what a choice
-       turns on, not by rank, and each gate belongs to the stage it guards (§5.1).
+     - *Restatement note:* under departures `confirm-on-stage-diff` and `server-decides-the-confirm` (§10, §13),
+       "raising" is measured by what a write turns on, not by rank, and the server measures it at the write. Each gate
+       belongs to the stage it guards (§5.1).
   3. **One timing:** the quiet time before a worker check, adjustable from 30 min to 12 h, defaulting to the
      built-in value. All other timings stay fixed in code. There is no install-time configuration.
   4. **A small read-only part:**
@@ -109,12 +113,13 @@ The one timing an operator might reasonably want to change, the 2 h quiet time b
 2. The operator can choose a ladder level, or "Follow the fleet box's files", and a quiet time, from Settings on any
    device. The control settles on the server's re-read answer.
 3. A stall sweep and a mail sweep given the same registry listing and the same stored row resolve the same arming,
-   because both call one never-throwing helper over one pure function. Under a chosen level, the stall sweep's
-   stuck-mail clock for busy delivery starts no earlier than the moment the mail gate first applied busy delivery
-   (§9).
-4. While nothing is chosen (the migration's seed), the server behaves byte-for-byte as it does today: under `follow`
-   the stall sweep passes no busy bound and the verdicts receive today's exact arming (§9, M4). W1 can deploy first
-   and change nothing.
+   because both call one never-throwing helper over one pure function. When the mail gate moves into busy delivery
+   while the server runs, whether by a chosen level, by Follow or by a file touched by hand, the stall sweep's
+   stuck-mail clock starts no earlier than the moment the mail gate first applied it (§9).
+4. W1 changes nothing until a level or a quiet time is written (the migration's seed is today's behaviour), or until
+   the mail gate moves into busy delivery while the server runs. That last case gets the busy clock's grace (§9),
+   which fixes today's false stuck-mail window on a raise made by hand. At boot, with the fleet box's files on busy
+   delivery, the verdicts receive today's exact arming (M4). So W1 can deploy first.
 
 ## 4. Non-goals
 
@@ -161,7 +166,7 @@ step waits on.
 | 1 | `log` | Log only | false | false | false | false | `busy-shadow` | "Every notice the watch would send is recorded, and nothing is sent." | the busy gate, where the fleet box's files leave it off |
 | 2 | `check` | Check silent workers | false | true | false | false | `busy-shadow` | "Adds a check mail to a worker that has been quiet past the quiet time. No one else is told." | checks |
 | 3 | `alert` | Alert coordinator and you | false | true | true | false | `busy-shadow` | "Adds a report to the worker's coordinator after an unanswered check, then a push to you, and pushes to you about a long usage limit, a dialog left open, and a coordinator that has held a run too long. Pushes arrive wherever push notifications are switched on in Settings." | alerts |
-| 4 | `deliver` | Deliver mail to busy sessions | false | true | true | false | `busy` | "Adds delivery to a busy session whose main turn has ended, so mail stops waiting for that session's background work." | busy delivery (the busy gate stops) |
+| 4 | `deliver` | Deliver mail to busy sessions | false | true | true | false | `busy` | "Adds delivery to a busy session whose main turn has ended, so mail stops waiting for that session's background work." | busy delivery (the busy gate stays on: §5.1) |
 | 5 | `all` | Everything | false | true | true | true | `busy` | "Adds the further checks: a worker that died, froze or failed, lost background work, a coordinator not reading its mail, mail stuck in the queue, and a turn record that cannot be read. A worker's quiet time then follows its turn record, backs off for a worker that keeps answering 'working', and holds while its subagents run." | the further checks |
 
 No `does` text carries a duration, a rung code, a wave number or a date. The durations it would name
@@ -174,27 +179,36 @@ stale sentence. The busy gate's clause is not in any `does` text: the Now block 
 A stage is one thing the watch or the mail gate does that the operator is told about before it starts. Each is a
 boolean the server derives from a resolved arming (`stallStages`, L1, §12), so the section never reads a flag or a
 mail mode. A gate belongs to the stage it guards, not to a level. The Next step line and the confirm (§13) show the
-gates of the stages a choice turns on. All three text columns are L0 (`STALL_STAGE_TEXT`).
+gates of the stages a write turns on, and the server works out which those are (§10). All three text columns are L0
+(`STALL_STAGE_TEXT`).
 
 | stage (wire key) | on when (`stallStages`) | name | stops | gate |
 |---|---|---|---|---|
 | `checks` | runs and `live` | "Checks on quiet workers" | "Checks on quiet workers stop." | "A review of the notices recorded in shadow finds the would-be checks true or harmless." |
 | `alerts` | runs, `live` and `escalate` | "Reports to coordinators and pushes to you" | "Reports to coordinators and pushes to you stop." | "Checks have run live for a while, and the reports and pushes recorded in shadow look right. A known limit: a dialog left open can be pushed to you again, at most once each quiet time." |
 | `busyDelivery` | mode `busy`, and mail not switched off | "Busy delivery" | "Busy delivery stops." | "The busy-gate log has been reviewed (it is in the server log, not on this page), and a pane still showing a running turn has been seen to refuse the delivery." |
-| `busyGate` | mode `busy-shadow`, and mail not switched off | "The busy gate" | "The busy gate stops." | "None: it delivers nothing new." |
-| `wave2` | runs and `w2Live` | "The further checks" | "The further checks stop, and a worker's quiet time goes back to the plain clock: no back-off, and no hold while its subagents run or just after a restart. Some checks, and at Alert or Deliver some reports, can fall due at the next sweep." | "Busy delivery is on and its log has been reviewed (in the server log, not on this page); the stuck-mail and coordinator-not-reading checks have been re-measured in shadow; and repeated pushes about sessions on no run have been counted while alerts were on. This step also moves each worker's quiet time onto its turn record, which shadow never measured." |
+| `busyGate` | the gate reads the turn marker: mode `busy` or `busy-shadow` (`mailTurnReadsMark`, `turnidle.ts` ≈:89), and mail not switched off | "The busy gate" | "The busy gate stops." | none (`null`): it adds no delivery, so nothing waits on it |
+| `wave2` | runs and `w2Live` | "The further checks" | "The further checks stop, and a worker's quiet time goes back to the plain clock: no back-off, and no hold while its subagents run or just after a restart. Some checks, and while reports to coordinators are on some reports, can fall due at the next sweep." | "Busy delivery is on and its log has been reviewed (in the server log, not on this page); the stuck-mail and coordinator-not-reading checks have been re-measured in shadow; and repeated pushes about sessions on no run have been counted while alerts were on. This step also moves each worker's quiet time onto its turn record, which shadow never measured." |
 
 - **`runs`** (`!disabled`) is on the wire too, for the Now block. It is not a confirm stage: starting the watch in
   shadow sends nothing.
 - **Mail switched off.** While `mail-disabled` stands, `sweepMail` returns before it reads any mode (`watch.ts`
-  ≈:4541), so neither mail-gate stage is in force and both read false.
-- **The busy gate, as measured.** Its Now sentence, L0 `STALL_BUSY_GATE_TEXT`, is "The mail gate also holds mail for
-  a session whose main turn is running, and logs what busy delivery would do." That is true of `busy-shadow`. The
-  mode refuses a `shell` session whose current turn marker reads `working` (`mailTurnIdle`, `turnidle.ts` ≈:121),
-  which the default `shell` mode delivers. It adds one marker read per due row (`watch.ts` ≈:4970). It logs only
-  the busy rows it would deliver (`turnidle.ts` ≈:134, `watch.ts` ≈:4999), never a held `shell` row. Log only, Check
-  and Alert keep `busy-shadow`, as the approved table has it. On a box whose files leave the gate off, choosing one
-  of them turns a stage on and so opens the confirm (§13). Operator default, §19 Q6.
+  ≈:4541), so neither mail-gate stage is in force and both read false in the Now block. A confirm, the Next step and
+  the files-exceed line read the stages with mail switched off read as on, because a stored choice arms them for the
+  moment mail returns (§10).
+- **Which stages send.** `checks`, `alerts`, `busyDelivery` and `wave2` send something or deliver mail. `busyGate`
+  sends nothing; it only holds mail longer. So the files-exceed line compares the four sending stages only (§10).
+  A confirm still opens when the busy gate turns on, because it changes what the mail gate delivers.
+- **The busy gate, as measured.** It is the turn-marker read that `busy` and `busy-shadow` share: both refuse a
+  `shell` session whose current turn marker reads `working` (`mailTurnIdle`, `turnidle.ts` ≈:121), which the
+  default `shell` mode delivers, and both add one marker read per due row (`watch.ts` ≈:4970). So busy delivery
+  includes the busy gate, and moving between Deliver and a lower level turns no busy gate on or off. Its Now
+  sentence is two L0 texts, `STALL_BUSY_GATE_TEXT`: `holds`, "The mail gate also holds mail for a session whose
+  main turn is running.", always; and `logs`, "It also logs what busy delivery would do.", only under `busy-shadow`,
+  which the section reads as `busyGate` on and `busyDelivery` off. That mode logs only the busy rows it would deliver
+  (`turnidle.ts` ≈:134, `watch.ts` ≈:4999), never a held `shell` row. Log only, Check and Alert keep `busy-shadow`,
+  as the approved table has it. On a box whose files leave the gate off, choosing one of them turns a stage on and
+  so opens the confirm (§13). Operator default, §19 Q6.
 - **The leave-Everything line.** `wave2`'s `stops` text is the line the confirm shows on leaving Everything. Without
   `w2Live`, the restart-grace hold (`stall.ts` ≈:1044) and the delegates hold (≈:1057) lapse, and the worker's ball
   falls back to wave 1's ladder (≈:1071): r1 at the plain quiet time (`stallWaveOneLadder`, ≈:918) rather than the
@@ -224,13 +238,16 @@ needed: R38 is the operator's current plan.
 - The labels and `does` texts are defined **once**, in L0 `shared/api.ts`, as one total
   `Record<StallLevel, {label, does}>` (`STALL_LEVEL_TEXT`). `STALL_LEVELS` is derived from it with `Object.keys`, in
   ladder order, and a test pins that order. The stage names, `stops` texts and gates are one total
-  `Record<StallStage, {name, stops, gate}>` (`STALL_STAGE_TEXT`). Every other section string is an L0 constant too,
-  each named in §12, and the whole block is appended at the end of `shared/api.ts` (§12).
+  `Record<StallStage, {name: string; stops: string; gate: string | null}>` (`STALL_STAGE_TEXT`). `gate` is `null`
+  for the busy gate alone, which nothing waits on, and that `null` has that one meaning. Every other section string
+  is an L0 constant too, each named in §12, and the whole block is appended at the end of `shared/api.ts` (§12).
 - The flag and mode columns are defined once, in L1 `server/src/coord/stallsettings.ts` (new), as
   `STALL_LADDER: Record<StallLevel, StallLadderRow>`, where `StallLadderRow` is a discriminated union:
   `{ disabled: true } | { disabled: false; live: boolean; escalate: boolean; w2Live: boolean; mailMode: 'busy-shadow' | 'busy' }`.
   The `off` row is `{ disabled: true }` and carries no flags and no mode; the resolver reads it as "stop the lane,
   leave the box's mode" (§6.2). Step matching in `stallLevelOf` runs over the levels other than `off` (§6.4).
+  Narrowing the key does not narrow the value, so every reader narrows the row on `row.disabled` before it reads a
+  flag or the mode (§6.2's `run`).
 - A level added to one record and not the other is a compile error.
 - **No text spells a marker name.** Every string in `shared/api.ts`, `pwa/src` and the new server file is a code
   line, and the no-writer pin's TS half allows exactly one code-line spelling per marker, in its definer
@@ -291,30 +308,36 @@ quietMs     = applies && settings.quiet.kind === 'set' ? settings.quiet.ms : STA
 quietSource = applies && settings.quiet.kind === 'set' ? 'chosen' : 'default'
 chosen      = applies && settings.level.kind === 'chosen' ? settings.level.level : null
 strict      = box.mailMode === 'strict'
+row         = chosen === null ? null : STALL_LADDER[chosen]   // indexed only after isStallLevelChoice answered true
+run         = row !== null && row.disabled === false ? row : null   // narrows the union: a running level's row
 if chosen === null:                                    // follow, or a row that does not apply whole
   arming = box                                         // the SAME object: today's behaviour exactly
 else if box.disabled:                                  // the lane's kill file restores today's behaviour wholesale
   arming = box                                         // mail mode included
-else if chosen === 'off':
+else if run === null:                                  // a chosen 'off'
   arming = { ...box, disabled: true }                  // the lane stops; the mail gate keeps the box's mode
 else:
-  row = STALL_LADDER[chosen]                           // indexed only after isStallLevelChoice answered true
   arming = { disabled: false,
-             live: row.live, escalate: row.escalate,
-             w2Live: row.w2Live && !strict,            // strict switched busy delivery off; the wave-2 step needs it
+             live: run.live, escalate: run.escalate,
+             w2Live: run.w2Live && !strict,            // strict switched busy delivery off; the wave-2 step needs it
              mailDisabled: box.mailDisabled,           // the mail kill file is never overridden
-             mailMode: strict ? 'strict' : row.mailMode }   // strict keeps its precedence
+             mailMode: strict ? 'strict' : run.mailMode }   // strict keeps its precedence
+free        = run === null ? null                      // what a running choice does with no held flag on the box
+            : { disabled: false, live: run.live, escalate: run.escalate, w2Live: run.w2Live, mailMode: run.mailMode }
 effective   = stallLevelOf(arming)                     // what the watch is actually doing
 files       = stallLevelOf(box)                        // what the fleet box's files alone say
-heldBack    = chosen !== null && effective !== chosen && (box.disabled || strict)
+heldBack    = free !== null && !sameStages(armedStages(arming), armedStages(free))   // a held flag changed it
 levelSource = chosen === null ? 'files' : heldBack ? 'held' : 'chosen'
 held        = { watchOff: box.disabled, mailOff: box.mailDisabled === true, gateStrict: strict,
-                wave2HeldByStrict: chosen !== null && chosen !== 'off' && STALL_LADDER[chosen].w2Live && strict }
+                wave2HeldByStrict: run !== null && run.w2Live && strict }
 ```
 
-`StallResolved` is `{ arming, quietMs, quietSource, levelSource, effective, files, held }`, and its `arming` always
-carries a `mailMode` (`stallBoxArmingOf` sets one, and every branch keeps or sets it). The `held` words are camelCase
-booleans, never file names.
+`armedStages(a)` is `stallStages({ ...a, mailDisabled: false })`: the stages with mail switched off read as on (§5.1).
+`sameStages` compares the five confirm stages and `runs`.
+
+`StallResolved` is `{ arming, quietMs, quietSource, chosen, levelSource, effective, files, held }`, and its `arming`
+always carries a `mailMode` (`stallBoxArmingOf` sets one, and every branch keeps or sets it). The `held` words are
+camelCase booleans, never file names.
 
 - **Whole-row fallback.** `applies` is false when the row is absent or unreadable, or when either field is
   unreadable. Then neither stored choice applies: the fleet box's files and the built-in quiet time, as today. A
@@ -323,14 +346,21 @@ booleans, never file names.
 - **`levelSource`** has three values:
   - `files`: nothing applies from the row;
   - `chosen`: the chosen level decides;
-  - `held`: a level is chosen, and the lane's kill file or the strict mail gate on the fleet box changes what it
-    reads as. A chosen `off` under the kill file reads `off` and stays `chosen`. A chosen `off` over a box busy file
-    reads `custom` and stays `chosen`, because neither the kill file nor strict changed it (§13 shows its stages).
+  - `held`: a level is chosen, and the lane's kill file or the strict mail gate on the fleet box actually changed
+    what it does. The test is causal: the chosen row's stages with no held flag (`free`) are compared with the
+    resolved stages, both with mail switched off read as on, and `held` is set only when they differ. A flag that
+    merely stands beside the choice sets nothing.
+  - A chosen `off` is never `held`. Off leaves the mail gate as the fleet box's files set it, strict included, and
+    the kill file only does what Off does. So a chosen `off` under the kill file reads `off` and stays `chosen`, and
+    a chosen `off` over a box busy file reads `custom` and stays `chosen`, with or without the kill file (§13 shows
+    its stages).
+  - Any other chosen level under strict reads `held`, because strict at least holds the busy gate off that the
+    level's own row turns on. A chosen `check` under strict keeps the reading `check`, with the source `held`.
 
 ### 6.3 Precedence, stated once
 
 1. **`stall-watch-disabled` on the box beats everything.** The resolver returns the box arming unchanged, mail mode
-   included, whatever level is chosen, and `levelSource` reads `held` when that changes the chosen level's reading.
+   included, whatever level is chosen, and `levelSource` reads `held` when that changes what the chosen level does.
    The lane returns (`if (arming.disabled) return`, `watch.ts` ≈:3789), and the mail gate runs exactly as the box
    files set it, as today.
 2. **`mail-disabled` on the box beats everything.**
@@ -340,8 +370,8 @@ booleans, never file names.
    - Neither mail-gate stage reads true while it stands (§5.1).
 3. **`mail-gate-strict` on the box keeps its mail-gate precedence:** strict > busy > busy-shadow > shell. With a
    level chosen, strict still wins the mail gate, and it also holds the wave-2 step off, because that step needs
-   busy delivery (`strict-holds-the-wave-2-step`). The chosen level still decides `live` and `escalate`. A chosen
-   `deliver` or `all` then reads `held`.
+   busy delivery (`strict-holds-the-wave-2-step`). The chosen level still decides `live` and `escalate`. Any chosen
+   level other than Off then reads `held` (§6.2), and a chosen `deliver` or `all` also reads as Alert.
 4. **Otherwise a chosen level decides every other flag and the mail mode.** That includes turning off a busy mode the
    files set: a chosen `check` with `mail-gate-busy` on the box gives `busy-shadow`. A chosen `off` stops the lane
    and leaves the mail gate on the box's mode.
@@ -360,22 +390,25 @@ booleans, never file names.
 - Otherwise it returns `custom`.
 
 Modes `shell`, `busy-shadow` and `strict` all count as "does not deliver on busy" for this match, so the busy gate
-alone never splits a level. Departure `files-level-match-ignores-the-busy-log`, §19 Q1. The reply carries the busy
-gate separately (`stages.busyGate`, §12), and `choices` says whether the level's own choice would turn it on, so the
-section can say when a level is running without it, for example a fresh install with no files at all (§13).
+alone never splits a level. Departure `files-level-match-ignores-the-busy-gate`, §19 Q1. The reply carries the busy
+gate separately (`stages.busyGate`, §12), and the Now block says when a level read from the fleet box's files runs
+without it, for example a fresh install with no files at all (§13).
 
 The consequences, stated once:
 - A box with no files reads `log` from files, with the busy gate off.
 - The operator's fleet today (`stall-watch-live` plus `mail-gate-busy-shadow`) reads `check` exactly.
 - `escalate` without `live`, or `w2-live` without `escalate`, reads `custom`.
-- A chosen level under `mail-gate-strict` reads as the level that gate leaves standing. A chosen `deliver` or `all`
-  under strict reads `alert`, with `levelSource` `held`, `held.gateStrict`, and `held.wave2HeldByStrict` for `all`.
+- A chosen level under `mail-gate-strict` reads as the level that gate leaves standing, with `levelSource` `held`.
+  A chosen `deliver` or `all` under strict reads `alert`, with `held.gateStrict`, and `held.wave2HeldByStrict` for
+  `all`.
 - A chosen `off`, or the lane's kill file, with `mail-gate-busy` on the box reads `custom`.
 
 **The hazard line.** Whatever the source, when the effective stages read `alerts` on, `wave2` on and `busyDelivery`
 off (reachable only through the fleet box's files set by hand), the Now block shows one warning line, L0
 `STALL_HAZARD_TEXT`: "Alerts and the further checks are on while busy delivery is off: the stuck-mail and
-coordinator-not-reading pushes will mistake a busy session for a deaf one." Guide, don't block.
+coordinator-not-reading pushes will mistake a busy session for a deaf one." It is not shown while `held.mailOff`
+stands: no mail is delivered then, so busy delivery reads off for that reason and the mechanism it warns of is not
+running. Guide, don't block.
 
 ### 6.5 "Unknown"
 
@@ -384,10 +417,11 @@ An unlistable registry (`io.readdir` answers `null`) is never resolved and never
   before `sweepStalls` (`watch.ts` ≈:1616–1625, the fail-shut return on `RegistryRead`), and `sweepMail` returns on
   `listing === null` (≈:4541).
 - **The GET route** answers `effective: { measured: false }`, which the PWA renders "Unknown — the fleet registry
-  could not be read".
-- **`choices` is absent with it** (§12), so the section cannot preview a choice. Every level or Follow choice then
-  opens the confirm with one line, "The fleet box's files could not be read, so what this choice turns on cannot be
-  shown." (§13). The Follow option reads "Follow the fleet box's files (they say: unknown)".
+  could not be read". It carries no Next step and no files-exceed reading.
+- **The POST** cannot work out what a write turns on, so it answers the unmeasured effect, `{ measured: false }`,
+  and every write needs the confirm (§10). Its sheet holds one line, "The fleet box's files could not be read, so
+  what this choice turns on cannot be shown." (§13). The Follow option reads "Follow the fleet box's files (they
+  say: unknown)".
 
 The settings row needs no listing to read, so the chosen values are still shown.
 
@@ -441,8 +475,8 @@ The settings row needs no listing to read, so the chosen values are still shown.
     clamped: a stored value is always the value sent.
   - A stored value that fails `isStallQuietMs` reads `unreadable`, never clamped. The row then does not apply
     whole: neither stored choice applies (§6.2).
-  - The floor stays the approved 30 min. A value below the built-in opens the confirm (§13). Operator default, §19
-    Q7.
+  - The floor stays the approved 30 min. A write that brings in a value below the current one, or below the
+    built-in, opens the confirm (§10, §13). Operator default, §19 Q7.
 - **What a change does,** from the next stall sweep (`STALL_SWEEP_MS`, 60 s):
   - **Lowering** makes every worker already quiet past the new value due at once, so the next sweep can send a
     burst of r1 checks. At `alert` and above it also makes a dialog-cap push to you due for every standing dialog
@@ -464,10 +498,11 @@ The settings row needs no listing to read, so the chosen values are still shown.
     dialog re-arms the cap, and it pushes again one quiet time later. R28 accepted this residue at "at most once per
     restamp, 2 h apart" (stall-watch.md ≈:445–446). The 2 h is the quiet time, so a chosen 30 min spaces repeat pushes
     30 min apart. The note and the alerts gate disclose it. Operator default, §19 Q8.
-- **The note under the control.** One static line, L0 `STALL_QUIET_NOTE`, with no number in it: "This also sets when
-  a dialog left open is pushed to you, how far apart repeat pushes about one open dialog can be, and, at Everything,
-  the base of the back-off for a worker that keeps answering 'working'. Below Everything there is no back-off and no
-  hold while subagents run, so a worker that keeps waiting is checked once every quiet time."
+- **The note under the control.** One static line, L0 `STALL_QUIET_NOTE`, with no number and no level label in it:
+  "This also sets when a dialog left open is pushed to you, how far apart repeat pushes about one open dialog can be,
+  and, while the further checks are on, the base of the back-off for a worker that keeps answering 'working'. While
+  they are off there is no back-off and no hold while subagents run, so a worker that keeps waiting is checked once
+  every quiet time."
 
 ## 8. Storage and migration
 
@@ -526,12 +561,15 @@ CREATE INDEX IF NOT EXISTS run_events_by_at ON run_events(at);
       of `9223372036854775807` makes `.get()` throw `ERR_OUT_OF_RANGE` ("Value is too large to be represented as a
       JavaScript number"), so one bad field would cost the whole read and every field's own state. With it, that
       value reads as a `bigint` and only that field parses `unreadable`; a TEXT `updatedAt` of `'abc'` comes back as
-      a string and parses `null`. The API is already in use at the repo's floor: `store.ts` calls `setReadBigInts(true)`
-      on `insertRun` (≈:1594) and `insertAsk` (≈:6372) under the same `engines` (`>=22.13.0`, `server/package.json`
-      ≈:7), which `node-floor.test.ts` pins. The per-statement switch converts every INTEGER column of this one
-      three-column SELECT, which is what the parse wants here. That is the opposite of the run-row case, where
-      `store.ts` chose `CAST(... AS TEXT)` (≈:821) to spare a dozen unrelated columns. A store row pins both values
-      (M11c).
+      a string and parses `null`. The method itself is available at the repo's floor: `store.ts` calls
+      `setReadBigInts(true)` on `insertRun` (≈:1594) and `insertAsk` (≈:6372) under the same `engines` (`>=22.13.0`,
+      `server/package.json` ≈:7), which `node-floor.test.ts` pins. That precedent covers availability only: both
+      sites read `.run()`'s `lastInsertRowid`, and neither reads a row through `.get()`. The `.get()` behaviour above
+      was measured on v24 alone. So W1's store row (M11c) pins it on CI's Node, `ci.yml`'s `node-version: '22'`
+      (≈:150), which is at or above the 22.13 floor, and the plan's first step re-measures it on the floor version
+      itself if one is available. The per-statement switch converts every INTEGER column of this one three-column
+      SELECT, which is what the parse wants here. That is the opposite of the run-row case, where `store.ts` chose
+      `CAST(... AS TEXT)` (≈:821) to spare a dozen unrelated columns.
   - `setStallSettings(patch, at): { before: StallSettingsRead; after: StallSettingsRead }`. The patch is
     `{ level?: StallLevelChoice; quiet?: {kind:'default'} | {kind:'set', ms} }`. It runs in one `tx()`: read, then
     write, then read again.
@@ -542,15 +580,25 @@ CREATE INDEX IF NOT EXISTS run_events_by_at ON run_events(at);
       overridden only by the named fields, with `updatedAt = at`.
     - **The update arm** sets only the named fields and `updatedAt`, so a quiet-only write keeps a stored level as it
       is, an unreadable token included. The row then still does not apply whole until a level is written (§6.2).
+    - **A read that is itself unreadable takes neither arm.** The store cannot tell an insert from an update then,
+      so it throws inside the `tx()`, which rolls back. The route answers Fastify's 500 (§10 step 8), and nothing is
+      written.
     - It validates nothing; the route has already decided (the `setCaps` division of labour).
+    - **The same arms, as a projection.** The route must know what a write will do before it writes (§10), so L1
+      `stallSettingsAfter(before, patch)` returns the read the store would leave: for an absent row, the insert arm's
+      seed overridden by the named fields; for a row, the named fields over the stored ones, the other field kept as
+      it is (an unreadable value stays unreadable); for an unreadable read, the read unchanged, since nothing is
+      written. A store row pins that `setStallSettings`' `after` parses the same as the projection, for each kind of
+      `before` (M12d).
   - `stallObservationsSince(since): {ok: true, rows: {at, detail}[]} | {ok: false, detail}` (§11).
 - **Fallback when unreadable or absent: the whole row.** If the row is absent or unreadable, or either field is
   unreadable, each sweep acts on today's behaviour whole: the fleet box's files and the built-in quiet time (§6.2,
   Q11). No chosen value applies beside an unreadable one.
-  - **A warn latch per read state** (absent, unreadable, level unreadable, quiet time unreadable, and the helper's
-    own fallback, §9). It prints `console.warn('ccrc-server: stall-watch settings not applied (…) — following the
-    box files and the built-in quiet time')` once per latch, and re-arms once a read applies again. So a stuck row
-    does not log every 10 s through the mail sweep. The server never uses `req.log` (`Fastify({ logger: false })`).
+  - **A warn latch per read state** (absent, unreadable, level unreadable, quiet time unreadable). It prints
+    `console.warn('ccrc-server: stall-watch settings not applied (…) — following the box files and the built-in
+    quiet time')` once per latch, and re-arms once a read applies again. So a stuck row does not log every 10 s
+    through the mail sweep. The helper's own fallback never goes through the latch: its catch warns on its own (§9).
+    The server never uses `req.log` (`Fastify({ logger: false })`).
   - **The reply says so.** It reports `stored: 'absent'` or `'unreadable'`, and each field's own `unreadable`, so
     the section never shows a choice it is not applying (§13's stored-choice lines).
 - **A boot trace.** The first successful read after the server starts prints one line when anything is chosen:
@@ -569,12 +617,18 @@ resolution: `stallBoxArmingOf(names, mailDisabled)`, then `store.stallSettings()
 `resolveStallWatch`, plus the warn latch and boot trace from §8. It returns `{ arming, quietMs, levelSource }`, and
 `arming` always carries a `mailMode`.
 - **It never throws.** Its whole body is wrapped in a `try/catch`. On any throw (a store bug, a parse bug, a resolver
-  bug, a bad driver value) it answers today's expression over the same listing:
-  `{ ...stallArmingOf(names), mailDisabled, mailMode: mailTurnModeOf(names) }`, with the built-in quiet time and
-  `levelSource: 'files'`. That expression is exactly what runs unwrapped today (`watch.ts` ≈:3788, ≈:4546), so the
-  fallback adds nothing that could throw where today's code does not. It warns through the latch.
-- **It records the fallback.** On a throw it sets `this.lastFallback = { at, reason }`, where `reason` is the thrown
-  message cut to 200 characters. A resolution that succeeds sets it back to `null`.
+  bug, a bad driver value, or a fault in the warn latch or the boot trace) it answers today's expression over the
+  same listing: `{ ...stallArmingOf(names), mailDisabled, mailMode: mailTurnModeOf(names) }`, with the built-in
+  quiet time and `levelSource: 'files'`. That expression is exactly what runs unwrapped today (`watch.ts` ≈:3788,
+  ≈:4546), so the fallback adds nothing that could throw where today's code does not.
+- **The catch calls nothing that can throw.** It never calls the latch, which may be the fault itself.
+  - It composes `reason` inside its own inner `try`, as the thrown message cut to 200 characters, and keeps a fixed
+    word when even reading the error throws.
+  - It warns with a bare `console.warn('ccrc-server: stall-watch settings not applied (<reason>) — following the box
+    files and the built-in quiet time')`, inside its own inner `try`, and only when `lastFallback` was `null`. So a
+    standing fault logs once, not every 10 s.
+- **It records the fallback.** On a throw it sets `this.lastFallback = { at, reason }`. A resolution that succeeds
+  sets it back to `null`.
 - **Why it matters.** `sweepMail` runs under `void this.sweepMail().catch(() => {})` (`watch.ts` ≈:1725), which drops
   an error without a log line. A throw on this path would otherwise stop all mail delivery fleet-wide, silently.
 - **One reader of the row.** It is the only place either sweep reads the row, so the two cannot read it differently.
@@ -583,22 +637,58 @@ resolution: `stallBoxArmingOf(names, mailDisabled)`, then `store.stallSettings()
 seam. The watcher reaches the coordination routes as `registerCoordRoutes`' optional `watcher?: FleetWatcher`
 parameter (`coord/routes.ts` ≈:504, passed from `server.ts` ≈:1648), the same way `POST /api/asks/:id/release` calls
 the public `FleetWatcher.releaseHeldAsk` (`routes.ts` ≈:3667, `watch.ts` ≈:6217). `Deps` does not carry the
-watcher, and this adds no field to it. With no watcher (a test, or a coord-only server), the view reports `null`.
-The section then says "Your choice is not being applied (<reason>); the watch is following the fleet box's files."
-(§13).
+watcher, and this adds no field to it. With no watcher (a test, or a coord-only server), the view reports only its
+own builder's fallback, or `null` (§10). When a fallback is reported, the section says "Your choice is not being
+applied (<reason>); the watch is following the fleet box's files." (§13).
 
-**`busySince: number | null`** is a new field on `FleetWatcher`, `null` at server start. Only the mail sweep writes
-it.
-- It is set to `now` when the mail sweep applies mode `busy` and `busySince` is `null`.
-- It is set back to `null` whenever the mail sweep applies any other mode, and on its early return for a missing
-  listing or `mail-disabled`.
+**The busy clock** (departure `busy-clock-starts-when-busy-delivery-starts`). Two fields on `FleetWatcher`, one L1
+function, one optional arming field, and a bounded change to `stallIdleStart`, which stays pure and spells no marker.
+The rule is the same under `follow` and under a chosen level.
+- **Two fields, written only by the mail sweep:** `lastApplied: MailTurnMode | null` and `busySince: number | null`,
+  both `null` at server start.
+  - When the mail sweep applies a mode, it sets `busySince = now` if the mode is `busy` and `lastApplied` is a known
+    non-busy mode (neither `null` nor `busy`), and `busySince = null` if the mode is not `busy`. Then it sets
+    `lastApplied = mode`. So `busy` over `busy` keeps `busySince`, and the first `busy` after a start leaves it `null`.
+  - The null-listing return and the `mail-disabled` return leave both fields unchanged, because neither says
+    anything about the mode. In remote mode `readdir` answers `null` on any request error or timeout (`remote/io.ts`
+    ≈:104–112), so a passing failure never restarts the clock.
+- **One L1 function decides the judged mode and the mail-stuck start:**
+  `stallBusyClock(resolvedMode, lastApplied, busySince): { mailMode: MailTurnMode; busySince?: number }`, in
+  `stallsettings.ts`.
+  - If the resolved mode is `busy` and `lastApplied` is a known non-busy mode, busy delivery has not happened yet.
+    It answers `{ mailMode: 'busy-shadow' }`, so busy is judged as the busy gate is.
+  - Else, if the resolved mode is `busy` and `busySince` is a number, it answers `{ mailMode: 'busy', busySince }`,
+    so the busy idle start is `max(stop, busySince)`.
+  - Else it answers `{ mailMode: resolvedMode }`: today's expression.
+- **At boot** `lastApplied` is `null`, so the stall sweep judges exactly as today until busy delivery begins again
+  while the server runs. A restart neither delays a stuck-mail notice nor grants a grace.
+- **The field.** `StallArming` (`stall.ts` ≈:126) gains `readonly busySince?: number`, the companion of `mailMode`,
+  which the same clock already reads. Absent means today's clock: the `w2-arming-optional` precedent. It has no
+  `null`: a gate that has not delivered on busy yet is judged through its `mailMode` instead.
+- **Why the arming carries it, not `StallInput`.** The clock is `stallIdleStart` (`stall.ts` ≈:1730), which reads
+  `StallSessionInput` (≈:1483), not `StallInput` (≈:509). `watch.ts` builds that input at three sites (`judgeStall`
+  ≈:3895, `judgeStallCoordinator` ≈:3927, `judgeStallOrphan` ≈:3966), and each takes `arming` from `sweepStalls`.
+  Both inputs carry `StallArming`, so the field is set once and reaches every site. `mailMode` is read nowhere else in
+  `stall.ts`, so judging it as `busy-shadow` changes this one clock and nothing else.
+- **The change.** `stallIdleStart`'s busy line (≈:1735) becomes:
+
+  ```ts
+  if (live !== null && live.word === 'busy') {
+    if ((input.arming.mailMode ?? 'shell') !== 'busy') return m.stopAt + DELEGATE_CAP_MS;
+    if (input.arming.busySince !== undefined) return Math.max(m.stopAt, input.arming.busySince);
+  }
+  return m.stopAt;
+  ```
+
+  With `busySince` absent this is today's line exactly. Under `busy`, held mail gets the full `MAIL_STUCK_MS` from
+  the moment busy delivery began, never from a turn stop that happened under the busy gate.
 
 **`sweepMail`** (≈:4531):
-1. The `listing === null || listing.includes(MAIL_DISABLED_MARKER)` return (≈:4541) stays first and is unchanged,
-   except that it sets `this.busySince = null` first.
+1. The `listing === null || listing.includes(MAIL_DISABLED_MARKER)` return (≈:4541) stays first and is unchanged. It
+   writes neither clock field.
 2. The mode line at ≈:4546 becomes `const mode = this.stallResolveNow(store, listing, false).arming.mailMode;`,
-   followed by `this.busySince = mode === 'busy' ? (this.busySince ?? now) : null;`. `false` is correct here because
-   the return above has already proven `mail-disabled` absent from this listing.
+   followed by the two clock writes above. `false` is correct here because the return above has already proven
+   `mail-disabled` absent from this listing.
 3. Everything downstream is unchanged and keeps reading `mode`: `mailTurnReadsMark(mode)`, the
    `mailTurnIdle(…, mode)` call at ≈:4972, and the busy-shadow "would deliver" log at ≈:4999.
 
@@ -606,42 +696,16 @@ it.
 
 ```ts
 const r = this.stallResolveNow(store, names, names.includes(MAIL_DISABLED_MARKER));
-const arming: StallArming = r.levelSource === 'files' ? r.arming : { ...r.arming, busySince: this.busySince };
+const arming: StallArming = { ...r.arming, ...stallBusyClock(r.arming.mailMode, this.lastApplied, this.busySince) };
 if (arming.disabled) return;
 ```
 
-Under `follow` (`levelSource` `files`) the stall sweep passes **no bound and no substitution**: `arming` is the very
-object `stallBoxArmingOf` built, or the fallback's today-expression. Its arming and mail mode are today's expression
-byte for byte: at boot, under `mail-disabled`, and after a failed listing. A box-file raise made by hand keeps
-today's window, which is today's behaviour.
-
-**The busy clock** (departure `busy-clock-starts-when-busy-delivery-starts`). It is one optional field and a bounded
-change to one L1 function, which stays pure and spells no marker.
-- **The field.** `StallArming` (`stall.ts` ≈:126) gains `readonly busySince?: number | null`, the companion of
-  `mailMode`, which the same clock already reads. It has three values, and each has one meaning:
-  - absent: no bound is asked for (`follow`), so the clock is today's;
-  - `null`: a level is chosen, and the mail gate has not applied `busy` since it last applied another mode;
-  - a number: when the mail gate began applying `busy`.
-
-  Absent being today's behaviour is the `w2-arming-optional` precedent.
-- **Why the arming carries it, not `StallInput`.** The clock is `stallIdleStart` (`stall.ts` ≈:1730), which reads
-  `StallSessionInput` (≈:1483), not `StallInput` (≈:509). `watch.ts` builds that input at three sites (`judgeStall`
-  ≈:3895, `judgeStallCoordinator` ≈:3927, `judgeStallOrphan` ≈:3966), and each takes `arming` from `sweepStalls`.
-  Both inputs carry `StallArming`, so the field is set once and reaches every site.
-- **The change.** `stallIdleStart`'s busy line (≈:1735) becomes:
-
-  ```ts
-  if (live !== null && live.word === 'busy') {
-    const since = input.arming.busySince;
-    if ((input.arming.mailMode ?? 'shell') !== 'busy' || since === null) return m.stopAt + DELEGATE_CAP_MS;
-    if (since !== undefined) return Math.max(m.stopAt, since);
-  }
-  return m.stopAt;
-  ```
-
-  Under `busy`, held mail gets the full `MAIL_STUCK_MS` from the moment busy delivery began, never from a turn stop
-  that happened under the busy gate. With a level chosen and `busySince` still `null`, busy is judged as the busy
-  gate is: nothing has been delivered under it yet.
+`stallBusyClock` answers today's expression unless the resolved mode is `busy` and the mail sweep has applied a
+non-busy mode earlier in this server's life. So at boot, under `follow` or a chosen level, with or without
+`mail-disabled`, the arming is today's expression byte for byte, with no `busySince` key (M4). A raise into busy
+delivery while the server runs gets the grace, whether it comes from a chosen level, from Follow or from
+`mail-gate-busy` touched by hand. The last two change today's behaviour: today such a raise can fire a false
+stuck-mail push during the first busy pass, and the grace removes that window.
 
 **Why a busy clock, and not a flag.** Each sweep reads the row at its own time: the mail sweep every 10 s
 (`MAIL_SWEEP_MS`, ≈:377), the stall sweep at most once per 60 s (`STALL_SWEEP_MS`, ≈:194). So a write can split them
@@ -653,8 +717,12 @@ every such mail would read stuck at once, with the further checks live.
   seconds (≈:5060), with `markDelivered` only after it (≈:5065), and a second mail to one session waits out
   `MAIL_COOLDOWN_MS` (120 s, ≈:399). Both sweeps are void-dispatched on their own clocks (≈:1725, ≈:1878), so a stall
   sweep could land inside that pass and judge a still-queued mail stuck.
-- The clock closes it for every row, the ones the first pass gates included: a held mail is judged against
-  `max(stop, busySince)`, so nothing can read stuck until `MAIL_STUCK_MS` after busy delivery began.
+- The clock closes it for every row, the ones the first pass gates included: until the mail sweep has applied `busy`
+  once, busy is judged as the busy gate; after that a held mail is judged against `max(stop, busySince)`. So nothing
+  can read stuck until `MAIL_STUCK_MS` after busy delivery began.
+- Rev 3 granted the grace to a chosen level alone, and cleared the clock on every failed listing and every restart,
+  which could hold a stuck-mail notice off for as long as the failures kept coming. Keying the grace on a mode change
+  the mail sweep saw closes both.
 - Lowering is the harmless direction, and needs nothing.
 
 `r.quietMs` is threaded to `judgeStall` and set on the `StallInput` built at ≈:3877. `judgeStallCoordinator` and
@@ -662,14 +730,16 @@ every such mail would read stuck at once, with the further checks live.
 use fixed constants.
 
 **Agreement.** Given the same listing and the same row, the two sweeps resolve the same arming, because both call
-`stallResolveNow`. Under a chosen level, the stall sweep's mail-stuck clock under `busy` starts no earlier than the
-moment the mail sweep first applied `busy`. A test drives both sweeps from one fixture listing and one stored row,
-for every level and for `follow`, and asserts equal arming (§17, M8a). An interleaving test pins the clock (M8).
+`stallResolveNow`. A test drives both sweeps from one fixture listing without `mail-disabled` (the mail sweep passes
+`false` only after its own return proved the file absent) and one stored row, for every level and for `follow`. It
+asserts three things: the two `stallResolveNow` answers are equal; the mode the mail sweep applies equals that
+answer's `arming.mailMode`; and the arming the verdicts receive differs from that answer only in `mailMode` and
+`busySince`, as `stallBusyClock` decides (§17, M8a). An interleaving test pins the clock (M8).
 
-**With nothing chosen,** `arming` is the very object `stallBoxArmingOf` built, which is today's expression, and no
-`busySince` is added. So `follow` is today's behaviour by construction. A property test over every combination of
-the seven arming files plus `mail-disabled` asserts it, and one row asserts the arming the verdicts actually receive
-under `follow`: with `busySince` `null` and set, and with `mail-disabled` present (§17, M4).
+**With nothing chosen,** the resolver returns the very object `stallBoxArmingOf` built, which is today's expression.
+A property test over every combination of the seven arming files plus `mail-disabled` asserts it. One stall-sweep row
+asserts the arming the verdicts actually receive at boot, with the fleet box's files on busy delivery, and with
+`mail-disabled` present: today's expression exactly, with no `busySince` key (§17, M4).
 
 ## 10. The two routes
 
@@ -679,38 +749,63 @@ One path, registered in `server/src/coord/routes.ts` beside `/api/coord/caps`: *
 - **`GET /api/coord/stall-watch`.**
   - No `deps.coord`: 501 `{ok: false, error: 'not-configured'}`, the existing `notConfigured` helper (≈:506).
   - Otherwise 200 `{ ok: true, ...StallWatchView }`, from one view builder,
-    `stallWatchView(store, names | null, now, fallback)`. The builder is defined once and shared by both halves (the
-    `capsView` precedent, ≈:2404). `names` comes from `await deps.io.readdir(deps.cfg.registryDir)`, which the route
-    file already does at ≈:587 and four other sites. `fallback` is `watcher?.stallFallback() ?? null` (§9).
-  - The builder computes `choices` (§12) by resolving each of `follow` and the six levels against the listing's box
-    arming, and `stages` for each through `stallStages` (L1). It composes, and decides nothing itself.
+    `stallWatchView(store, names | null, now, watcherFallback)`. The builder is defined once and shared by both
+    halves (the `capsView` precedent, ≈:2404). `names` comes from `await deps.io.readdir(deps.cfg.registryDir)`, which
+    the route file already does at ≈:587 and four other sites. `watcherFallback` is `watcher?.stallFallback() ?? null`
+    (§9).
+  - The builder composes, and decides nothing itself. Over the listing's box arming it calls the resolver, then three
+    L1 readers: `stallStages` (the stages now), `stallNextStep` (the next step and the gates it waits on) and
+    `stallFilesExceed` (whether the fleet box's files arm more than the choice). It previews no other choice: what a
+    write would do is the POST's question, answered at the write.
+  - **It never throws, like the sweeps' helper.** The parse, the resolve and the three readers run inside one `try`.
+    - On a throw it answers 200 with the files-only reading and `fallback` set to `{ at: now, reason }` from its own
+      catch, with `reason` composed and guarded as §9's catch composes its own.
+    - When `watcherFallback` is set, that is the `fallback` reported, and `effective` is the files-only reading too.
+    - So whenever `fallback` is non-null, the Now block shows what the sweeps are actually doing: the fleet box's
+      files, with the source `files`.
+    - The files-only reading is `stallLevelOf`, `stallStages` and `stallNextStep` over the box arming alone, with
+      `filesExceed` false. It calls neither `parseStallSettings` nor `resolveStallWatch`, so a parse or resolver
+      fault cannot reach it. A fault in those three readers themselves still answers 500. The sweeps never call them
+      on their own fallback path, so they are unaffected.
   - It answers 200 even when the listing failed (`effective.measured: false`), when the row is absent or unreadable
     (`stored`), and when the notice read failed (`notices.ok: false`). Each is a fact the section renders, not a
     refusal.
   - **Counting never fails the reply.** The builder wraps the count in a `try`, so a throw from L1 counting becomes
     `notices: { ok: false }` and never a 500 (§11, M17b).
-- **`POST /api/coord/stall-watch`.** The body is `StallWatchRequest { level?: StallLevelChoice; quietMs?: number |
-  'default' }`, a partial in which an omitted field keeps its stored value. `'default'` returns to the built-in. No
-  `null` crosses the wire.
+- **`POST /api/coord/stall-watch`** (departure `server-decides-the-confirm`). The body is `StallWatchRequest {
+  level?: StallLevelChoice; quietMs?: number | 'default'; confirm?: string }`, a partial in which an omitted field
+  keeps its stored value. `'default'` returns to the built-in. No `null` crosses the wire.
   1. No `deps.coord`: 501 `not-configured`.
   2. `decideStallSettings(req.body)`, which is L1 and pure, refuses with 400
      `{ok: false, error: 'bad-request', detail}`:
      - a non-object body;
-     - a body naming neither field;
+     - a body naming neither `level` nor `quietMs`;
      - **an unknown key, named in the detail.** This follows the update-intent precedent over the caps one: a newer
        PWA sending a knob this server lacks must hear that it was not applied. Departure `unknown-keys-refused`.
      - a level that is not a `StallLevelChoice`;
-     - a `quietMs` that is not `'default'` and fails `isStallQuietMs`.
+     - a `quietMs` that is not `'default'` and fails `isStallQuietMs`;
+     - a `confirm` that is not a string.
 
-     Refusals never clamp.
-  3. `const { before, after } = coord.setStallSettings(patch, Date.now())`. This is one synchronous transaction
+     Refusals never clamp. It answers `{ patch, confirm }`, with `confirm` `null` when the body carries none.
+  3. Take the listing, `await deps.io.readdir(deps.cfg.registryDir)`. From here to the write in step 5 there is no
+     `await`, so no other request can move the row between the effect and the write.
+  4. **The effect.** `stored = coord.stallSettings()`; `projected = stallSettingsAfter(stored, patch)` (§8); then
+     `effect` is `{ measured: false }` when the listing is `null`, and otherwise
+     `stallWriteEffect(stallBoxArmingOf(names, mailDisabled), stored, projected)`. `key` is
+     `stallEffectKey(effect, updatedAt)`, where `updatedAt` is `stored`'s parsed `updatedAt`.
+     - If `stallNeedsConfirm(effect)` is true and `confirm !== key`, the POST answers 409
+       `{ ok: false, error: 'confirm-required', effect, effectKey: key }` and writes nothing. A body with no
+       `confirm` meets this the first time. A body whose key no longer matches meets it again, with the fresh effect:
+       another page wrote, or the fleet box's files moved, after its sheet opened.
+     - Otherwise the write goes straight on: it needs no confirm, or its key matches.
+  5. `const { before, after } = coord.setStallSettings(patch, Date.now())`. This is one synchronous transaction
      with no `await` inside, so two concurrent writes cannot interleave a read-merge-write.
      - **No `coordMutex`.** Caps needed the mutex because its merge base was read across an `await`, and because
        dispatch decisions read caps under that mutex. Neither is true here: nothing decides a dispatch on these
        values, and the sweeps' reads are synchronous too.
      - Departure `no-coord-mutex-for-stall-settings`. If review prefers the caps shape anyway, wrapping the one call
        costs nothing.
-  4. **The feed event,** only when `stallSettingsChange(before, after)` (L1, `stallsettings.ts`) answers a body
+  6. **The feed event,** only when `stallSettingsChange(before, after)` (L1, `stallsettings.ts`) answers a body
      rather than `null`. It compares `level` and `quietMs` only, never `updatedAt`. A no-op write skipped its
      `UPDATE` (§8), so `before` equals `after` and nothing is recorded; departure
      `no-op-write-records-no-feed-event`.
@@ -722,15 +817,61 @@ One path, registered in `server/src/coord/routes.ts` beside `/api/coord/caps`: *
        `stallSettingsChange` composes it, and names a `before` that was not a readable row explicitly
        (`level: no stored choice → …`, `level: unreadable stored level → …`), so a write that restores a lost row is
        recorded and never prints `undefined`.
-     - **The actor.** The route appends `; by <actor>`. `<actor>` is `deviceActor(sessionAuth(req).device)`
-       (`ccdargv.ts` ≈:195), the attribution `server.ts` uses for workspace verbs (≈:605), when
-       `deps.cfg.authEnabled`. When the gate is unarmed it is `flag-off`, because `sessionVerdict` (`auth/gate.ts`
-       ≈:552) does not read `enabled` and would otherwise record a session nobody presented. `sessionAuth` already
-       reaches this file as `registerCoordRoutes`' fourth parameter (`routes.ts` ≈:476).
+     - **The actor.** The route appends `; by <actor>`. When `deps.cfg.authEnabled`, `<actor>` is
+       `deviceActor(sessionAuth(req).device)` (`ccdargv.ts` ≈:195): the same call, spelled the same way, that
+       `server.ts`'s `pwaDec` makes for workspace verbs (≈:603–606). When the gate is unarmed it is `flag-off`,
+       because `sessionVerdict` (`auth/gate.ts` ≈:552) does not read `enabled` and would otherwise record a session
+       nobody presented; the word is the gate's own (`GateAllowReason`, `auth/gate.ts` ≈:449). `sessionAuth` already
+       reaches this file as `registerCoordRoutes`' fourth parameter (`routes.ts` ≈:476), and `deviceActor` joins the
+       file's existing `ccdargv.js` import (≈:14).
+     - **It never branches on the device label.** `auth-gate.test.ts`'s structural scan (≈:1526–1544) slices `pwaDec`
+       out of `server.ts` alone, strips that one call, and asserts that no `device` token is left. It does not read
+       `coord/routes.ts`, and that scan is not edited. Instead `stall-settings-route.test.ts` applies the same strip and
+       assert to the stall-watch POST handler's slice of `coord/routes.ts` (M29). The existing row's title, "the one
+       ROUTE-LEVEL site", stays true of the file it scans; the new row covers the second site.
      - A failed archive write degrades the record, never the write.
-  5. Take a fresh listing, then 200 `{ ok: true, ...stallWatchView(store, names, now, fallback) }`. The builder
+  7. 200 `{ ok: true, ...stallWatchView(store, names, now, watcherFallback) }`, over the same listing. The builder
      **re-reads** the row from the store, never echoing the body or `after`, so the reply is what is now stored.
-  6. A thrown store write becomes Fastify's 500, which is the caps precedent. No new code word is minted.
+  8. A thrown store write becomes Fastify's 500, which is the caps precedent. The 409's `confirm-required` is the one
+     new code word.
+
+**What a write does: `stallWriteEffect(box, beforeRead, afterRead)`** (L1, `stallsettings.ts`).
+- It parses each read and resolves it through `resolveStallWatch` against the same box arming, so each side gets
+  the whole-row fallback (§6.2). The after read is the projection the store's write will leave (§8): the insert
+  arm's seed for an absent row, and the other stored field kept as it is, an unreadable value included.
+- It compares the two resolutions' stages with mail switched off read as on (`armedStages`, §6.2). The Now block
+  still shows `held.mailOff`; the comparison does not, because a stored choice arms its stages for the moment mail
+  returns.
+- It answers `StallWriteEffect` (§12):
+  - `turnsOn` and `turnsOff`: the stage ids on after and off before, and the reverse, in §5.1's order;
+  - `leavesWave2`: `wave2` on before and off after;
+  - `quietLowered`: the effective quiet time after differs from the one before, and is below it or below the
+    built-in;
+  - `filesExceed`: `stallFilesExceed` over the after resolution;
+  - and, for the sheet's wording (§13), `before` and `after` (the two sets of stages it compared), `quietMs`
+    (`{ before, after }`, the two effective quiet times) and `mailOff` (the box's `mailDisabled`).
+- **`stallNeedsConfirm(effect)`** is true for `{ measured: false }`, and otherwise exactly when `turnsOn` is not
+  empty, or `leavesWave2`, or `quietLowered`. Each of the five stages sends something or changes what the mail gate
+  delivers, so every stage turning on counts. A pure lowering needs none.
+- **The quiet write takes the same path.** So a quiet-time write that makes a stored level apply is confirmed by the
+  stages it turns on, and a level write that makes a stored quiet time apply is confirmed by `quietLowered`.
+- **`stallEffectKey(effect, updatedAt)`** is a short deterministic digest: eight hex characters of a 32-bit FNV-1a
+  hash over `JSON.stringify(effect)` and the before-row's `updatedAt` (a fixed word when it is `null`). It is pure
+  JavaScript with no `node:` import, so it stays L1 (§14 item 5). The builders return literals, so the key order is
+  fixed. It is a staleness check, not a credential: the session gate guards the door. Because `updatedAt` is in it, a
+  write that changed the row between the 409 and the re-POST fails the match even when the effect reads the same.
+
+**Two more readers for the view.**
+- **`stallNextStep(arming, chosen): StallNextStep`.** `{ kind: 'none' }` when `stallLevelOf(arming)` is `custom`, or
+  when a level is chosen and the reading differs from it (a held level that reads lower, a chosen `off` over a busy
+  file). `{ kind: 'top' }` at `all`. Otherwise `{ kind: 'step', level, waitsOn }`: `level` is the next in
+  `STALL_LEVELS`, and `waitsOn` lists the stages that level's own row turns on and the current arming has off, both
+  through `armedStages`, in §5.1's order, leaving out a stage whose `gate` is `null` (the busy gate).
+- **`stallFilesExceed(box, resolved): boolean`.** False when `levelSource` is `files`. Otherwise true when a sending
+  stage (`checks`, `alerts`, `busyDelivery` or `wave2`) is on in the box's own stages and off in the resolved ones,
+  both through `armedStages`. The busy gate sends nothing and is never compared (§5.1). So on today's fleet
+  (`stall-watch-live` plus `mail-gate-busy-shadow`), a chosen Deliver or Everything does not exceed: the files' one
+  sending stage is `checks`, and the choice has it too.
 - **Gating.** Session-gated when `CCRC_AUTH` is armed, open dark otherwise.
   - No box token and no `UNGATED` membership. The route's docstring argues both, as caps' does (`routes.ts`
     ≈:2361–2373): an operator control is not a machine lane, and a ladder raise releases no wedge.
@@ -740,6 +881,10 @@ One path, registered in `server/src/coord/routes.ts` beside `/api/coord/caps`: *
     forbid-mention pins in all three skills, the feed row with its `flag-off` actor, and arming the gate. Nothing is
     added to `CLAUDE.md`'s SAFETY list, which does not list the caps door either.
   - `auth/gate.ts` gains no `EXEMPT` row.
+  - **The prose names no device.** The route's docstring, the `SESSION_ONLY` paragraph and every new server comment
+    call the control "the Settings page" or "the PWA". The two passages they are modelled on each use a device word
+    (the caps docstring, `routes.ts` ≈:2365–2366; the reclaim-pause paragraph, `coord-pause-route.test.ts` ≈:208), and
+    neither wording is copied. M29's scan holds it for the new handler and `stallsettings.ts`.
 - **Census changes (all in W1):**
   - **`server/test/coord-pause-route.test.ts`:** `SESSION_ONLY` (≈:221) gains `'/api/coord/stall-watch'`. Its
     scan reads `app.post` handlers only, and the shared path is how caps' GET half rides the same entry. Its
@@ -796,11 +941,18 @@ One path, registered in `server/src/coord/routes.ts` beside `/api/coord/caps`: *
     arming files, never `stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`, and writes no file.
   - **`CLAUDE.md`, the `coord.db` bullet** (≈:255): its list of what a lost `coord.db` loses ("mail, claims, asks,
     central pool edges, update intents") gains "the stall-watch settings choice".
-- **Kebab scan.** The new file spells one kebab token, `'busy-shadow'`, as a `MailTurnMode` value in
-  `StallLadderRow`'s type and rows and in `stallStages`. It is declared to `mail-routes.test.ts`'s scan through a
-  guard the file exports, `isStallSettingsKebab`, added as one more union beside `isStallKebab` (≈:831). Every other
-  word is a single word or camelCase by choice: level ids, `follow`, `default`, `chosen`, `files`, `held`, `custom`,
-  `unknown`, the stage keys and the count-row keys.
+- **Kebab scan.** `mail-routes.test.ts`'s scan runs `/'([a-z]+(?:-[a-z]+)+)'/g` over every `.ts` file in
+  `server/src/coord` (≈:523–525, ≈:734), so both the new file and the new handler in `coord/routes.ts` reach it.
+  Three quoted kebab tokens are new:
+  - `'busy-shadow'`, a `MailTurnMode` value in `StallLadderRow`'s type and rows and in `stallBusyClock`;
+  - `'confirm-required'`, the POST's refusal code (§10);
+  - `'flag-off'`, the feed actor when the gate is unarmed. Today it is spelled only in `auth/gate.ts`, which the scan
+    does not read.
+
+  All three are declared through one guard `stallsettings.ts` exports, `isStallSettingsKebab`, derived from one tuple
+  there and added as one more union beside `isStallKebab` (≈:831), with the scan's failure message naming it. Every
+  other word is a single word or camelCase by choice: level ids, `follow`, `default`, `chosen`, `files`, `held`,
+  `custom`, `unknown`, `none`, `top`, `step`, the stage keys and the count-row keys.
 
 ## 11. The notice-count read
 
@@ -841,7 +993,8 @@ One path, registered in `server/src/coord/routes.ts` beside `/api/coord/caps`: *
     Each row has `sent` (mode `live`) and `shadow` (mode `shadow`), summed across arms, kept separate. The four
     labels are defined once in L0 (`STALL_NOTICE_TEXT`).
 - **Window:** `STALL_NOTICE_WINDOW_MS = 48 h`, defined once in `stallsettings.ts`. `since = now - window`. The reply
-  carries `windowMs` and `since`.
+  carries `windowMs` and `since`. The PWA composes the counts heading from `windowMs`, formatted as it formats the
+  quiet values, through `STALL_SECTION_TEXT.counts` ('Last {window}'), so no text copies the 48 h.
 - **What a row means.**
   - One row is one rung's observation on one run, recorded before it is sent. `insertStallObservation` dedupes on
     `(runId, detail)`, so a restart never double-counts.
@@ -880,17 +1033,30 @@ export type StallLevelChoice = StallLevel | 'follow';
 export function isStallLevelChoice(v: unknown): v is StallLevelChoice {
   return typeof v === 'string' && (v === 'follow' || (STALL_LEVELS as readonly string[]).includes(v));
 }
-export const STALL_STAGE_TEXT = { checks: {name, stops, gate}, alerts: {…}, busyDelivery: {…}, busyGate: {…}, wave2: {…} } as const;
+export const STALL_STAGE_TEXT = { checks: {name, stops, gate}, alerts: {…}, busyDelivery: {…},
+  busyGate: {name, stops, gate: null}, wave2: {…} } as const;                // gate null: nothing waits on it
 export type StallStage = keyof typeof STALL_STAGE_TEXT;                      // the five confirm stages (§5.1)
 
 export interface StallWatchStages { runs: boolean; checks: boolean; alerts: boolean;
   busyDelivery: boolean; busyGate: boolean; wave2: boolean }
 export interface StallHeld { watchOff: boolean; mailOff: boolean; gateStrict: boolean; wave2HeldByStrict: boolean }
+export type StallNextStep =
+  | { kind: 'none' }                                                 // custom, or the reading differs from the choice
+  | { kind: 'top' }                                                  // at Everything
+  | { kind: 'step'; level: StallLevel; waitsOn: StallStage[] };      // §5.1 order, gated stages only
 export type StallWatchEffective =
-  | { measured: false }                                              // unlistable registry → "unknown"; no choices
+  | { measured: false }                                              // unlistable registry → "unknown"
   | { measured: true; level: StallLevel | 'custom'; files: StallLevel | 'custom';
       source: 'chosen' | 'files' | 'held'; stages: StallWatchStages; held: StallHeld;
-      choices: Record<StallLevelChoice, StallWatchStages> };
+      next: StallNextStep; filesExceed: boolean };
+export type StallWriteEffect =
+  | { measured: false }                                              // unlistable registry: cannot be shown
+  | { measured: true; turnsOn: StallStage[]; turnsOff: StallStage[]; leavesWave2: boolean;
+      quietLowered: boolean; filesExceed: boolean;                   // filesExceed: for the state after the write
+      before: StallWatchStages; after: StallWatchStages;             // mail switched off read as on
+      quietMs: { before: number; after: number }; mailOff: boolean };
+export interface StallConfirmRequired {                              // the POST's 409 body (§10)
+  ok: false; error: 'confirm-required'; effect: StallWriteEffect; effectKey: string }
 export interface StallNoticeCount { row: keyof typeof STALL_NOTICE_TEXT; sent: number; shadow: number }
 export interface StallWatchView {
   chosen: { level: StallLevelChoice | 'unreadable'; quietMs: number | 'default' | 'unreadable';
@@ -899,9 +1065,9 @@ export interface StallWatchView {
   quiet: { effectiveMs: number; builtInMs: number; minMs: number; maxMs: number; stepMs: number;
            source: 'chosen' | 'default' };
   notices: { ok: true; since: number; windowMs: number; counts: StallNoticeCount[] } | { ok: false };
-  fallback: { at: number; reason: string } | null;                   // §9's lastFallback, through stallFallback()
+  fallback: { at: number; reason: string } | null;                   // the builder's own catch, or stallFallback()
 }
-export interface StallWatchRequest { level?: StallLevelChoice; quietMs?: number | 'default' }
+export interface StallWatchRequest { level?: StallLevelChoice; quietMs?: number | 'default'; confirm?: string }
 ```
 
 **Every other string, by name.** Each user-facing string of the section is one of these L0 constants, and no other
@@ -911,24 +1077,28 @@ form that keeps every word in L0.
 | constant | holds |
 |---|---|
 | `STALL_LEVEL_TEXT` | the six labels and `does` texts (§5) |
-| `STALL_STAGE_TEXT` | the five stage names, `stops` texts and gates (§5.1) |
+| `STALL_STAGE_TEXT` | the five stage names, `stops` texts and gates, the busy gate's gate `null` (§5.1) |
 | `STALL_FOLLOW_LABEL` | "Follow the fleet box's files" |
 | `STALL_SOURCE_TEXT` | `{ files: "Following the fleet box's files", chosen: 'Chosen here', held: 'Chosen: {label}, held back by the fleet box ({reason})' }` |
 | `STALL_HELD_REASON` | `{ watchOff: 'its kill switch is on', gateStrict: 'its mail gate is set to strict' }` |
 | `STALL_HELD_TEXT` | the four held lines, one per `StallHeld` key (§13) |
-| `STALL_BUSY_GATE_TEXT` | the busy gate's Now sentence (§5.1) |
+| `STALL_BUSY_GATE_TEXT` | `{ holds, logs }`, the busy gate's Now sentence in its two parts (§5.1) |
 | `STALL_BUSY_GATE_OFF_TEXT` | "The busy gate is off: the fleet box's files do not turn it on." |
 | `STALL_HAZARD_TEXT` | the hazard line (§6.4) |
 | `STALL_FILES_EXCEED_TEXT` | "The fleet box's files arm more than this choice. If the choice stops applying (a rollback, a lost setting), they apply again, and notices recorded in shadow meanwhile go out." |
-| `STALL_STORED_TEXT` | `{ absent, unreadable, level, quiet }`, the four stored-choice lines (§13) |
+| `STALL_STORED_TEXT` | `{ absent, unreadable, level, quiet, both }`, the five stored-choice lines (§13) |
 | `STALL_FALLBACK_TEXT` | "Your choice is not being applied ({reason}); the watch is following the fleet box's files." |
 | `STALL_NOT_AVAILABLE_TEXT` | "Stall-watch settings are not available on this server. Any choice shown before is no longer applied; the watch follows the fleet box's files." |
 | `STALL_NEXT_TEXT` | `{ lead: 'Next step:', waitsOn: 'Waits on:', top: 'Top of the ladder.' }` |
-| `STALL_QUIET_NOTE` | §7's note, with no number |
-| `STALL_CONFIRM_TEXT` | the confirm lines (§13): `title`, `quietTitle`, `confirm`, `turnsOn`, `backOn`, `due`, `dueFromOff`, `quietDue`, `quietRepeat`, `unknown`, `recheckFailed` |
+| `STALL_QUIET_NOTE` | §7's note, with no number and no level label |
+| `STALL_CONFIRM_TEXT` | the sheet's lines (§13): `title`, `followTitle`, `quietTitle`, `confirm`, `turnsOn`, `turnsOnFree`, `backOn`, `due`, `dueFromOff`, `dueMail`, `quietDue`, `quietDueAll`, `quietRecorded`, `quietOff`, `quietRepeat`, `quietDialogs`, `unknown`, and the refusal toast `refused` |
 | `STALL_NOTICE_TEXT` | `{ checks, wakes, reports, pushes }`, the four count labels (§11) |
 | `STALL_RUNLESS_FOOTNOTE` | "Counts notices on runs only. Notices about a session on no run, or about a coordinator itself, sent or shadow, are not counted here; shadow ones appear only in the server log." |
-| `STALL_SECTION_TEXT` | the headings and small words: `title` ('Stall watch'), `level`, `quiet` ('Quiet time before a worker check'), `builtIn`, `chosenHere`, `range` ('{min} to {max}'), `counts` ('Last 48 h'), `sent`, `shadow`, `countsFailed`, `custom`, `unknown`, `theySay` ('they say: {level}'), `stale`, `unread` |
+| `STALL_SECTION_TEXT` | the headings and small words: `title` ('Stall watch'), `level`, `quiet` ('Quiet time before a worker check'), `builtIn`, `chosenHere`, `range` ('{min} to {max}'), `counts` ('Last {window}', filled from `windowMs`), `sent`, `shadow`, `countsFailed`, `custom`, `unknown`, `theySay` ('they say: {level}'), `stale`, `unread` |
+
+No text copies a level label in short form. A line that needs a level's name takes it through a `{label}` slot from
+`STALL_LEVEL_TEXT`, and the texts that once said "at Everything" or "at Alert or Deliver" now name the stage instead
+("while the further checks are on", "while reports to coordinators are on").
 
 - **`stages` is derived server-side** by `stallStages(arming)` (L1, `stallsettings.ts`) from a resolved `StallArming`:
   - `runs = !disabled`;
@@ -936,24 +1106,23 @@ form that keeps every word in L0.
   - `alerts = runs && live && escalate`;
   - `wave2 = runs && w2Live === true`;
   - `busyDelivery = mailMode === 'busy' && mailDisabled !== true`;
-  - `busyGate = mailMode === 'busy-shadow' && mailDisabled !== true`.
+  - `busyGate = mailTurnReadsMark(mailMode) && mailDisabled !== true`, so `busy` and `busy-shadow` alike
+    (`turnidle.ts` ≈:89).
 
   The last two read false while mail is switched off, because the mail gate does not run then (§5.1). So no mail-mode
   word crosses the wire, and `MailTurnMode` gains no second definition in L0. Departure
   `stages-on-the-wire-not-modes`.
-- **`choices`** carries, for `follow` and each of the six levels, the stages that choice would produce on this box
-  now: the view builder resolves each choice against the listing's box arming (§10), with the stored quiet time,
-  and calls `stallStages` on each. The confirm, the Next step line, the files-exceed line and the busy-gate-off note
-  (§13) compare these wire facts, so the PWA keeps no list of level ids and no copy of a ladder column. `follow`'s
-  entry is the fleet box's files' own stages.
+- **`next` and `filesExceed`** are the view's two server-side readings for the Now and Next blocks: `stallNextStep`
+  and `stallFilesExceed` (§10). With them the PWA keeps no list of level ids, no copy of a ladder column, and no
+  preview of any choice. What a write would do is answered by the POST, at the write, as `StallWriteEffect` (§10).
 - **`chosen` for a row that is not there.** When `stored` is not `'row'`, `chosen.level` and `chosen.quietMs` are
   both `'unreadable'` and `updatedAt` is `null`; `stored` tells absent from unreadable. No absent row is ever sent as
   `follow` or `'default'`.
 - **`counts` always carries the four rows**, zeros included, in L0 key order.
 - **The reply builders return literals,** so a field added later is a compile error until every path computes it.
 - **Absence-permits.** A newer PWA reading an older reply treats a missing optional field as "not stated", never as
-  `false` (§13's wire guard). A missing `choices` reads as "cannot preview", the unknown confirm (§13); a missing
-  `fallback` reads as no fallback stated.
+  `false` (§13's wire guard). A missing `next` reads as no Next step block; a missing `filesExceed` reads as no
+  files-exceed line; a missing `fallback` reads as no fallback stated.
 
 ## 13. The PWA section
 
@@ -968,10 +1137,10 @@ own component file, `pwa/src/screens/StallWatchSection.tsx`, which `SettingsScre
 - `STALL_WATCH_POLL_MS = 60_000`, the stall sweep's cadence; a faster read would fetch the same answer again.
 - A re-poll when the page becomes visible again.
 - The newest issued request is authoritative. Unlike `useUpdatesView`, whose `issued` counter is local to its effect
-  (≈:240), this hook keeps `issued` in a `useRef` shared by `load`, `refresh` and `settle`, because `refresh` and
-  `settle` must bump it.
+  (≈:240), this hook keeps `issued` in a `useRef` shared by `load` and `settle`, because `settle` must bump it.
 - `pollMs <= 0` puts the hook in injected mode, for tests.
-- It returns `{ view, failure, reload, refresh, settle }`:
+- It returns `{ view, failure, reload, settle }`. It has no `refresh()`: rev 3 needed a fresh read to decide a confirm
+  on, and the server now decides the confirm at the write (§10).
   - `view` is the **last good** answer;
   - `failure` is `'not-configured' | 'failed' | null`. Only 501 with `error: 'not-configured'`, and 404 with
     `error: 'not-found'` (an older server that lacks the route: the server's `/api/*` not-found answer, `server.ts`
@@ -979,22 +1148,22 @@ own component file, `pwa/src/screens/StallWatchSection.tsx`, which `SettingsScre
     requires (≈:217–222). Anything else is `failed`. Departure `older-server-404-reads-not-configured`.
   - `reload()` is fire-and-forget, as `useUpdatesView`'s is (≈:271: it returns `void`, and in injected mode it is a
     no-op).
-  - **`refresh(): Promise<StallWatchView | 'not-configured' | 'failed'>`** issues one read under the same generation
-    counter as `load` and `settle`, installs its answer in state as `load` would, and resolves with **that
-    request's own parsed answer**. The section decides a confirm only on that returned value, never on `view` from
-    its closure, which can be up to a minute old. In injected mode it calls `api.stallWatch()` as well, so P3 can
-    pin both arms against a spy.
   - `settle(view)` installs a write's reply and bumps the request generation, so a poll issued before the write that
     lands after it cannot overwrite the reply.
 - **Wire guard.** `asStallWatchView(raw)` accepts only a structurally readable answer, and anything else counts as a
   failed read. It drops malformed `counts` elements with one `console.warn`, as `asUpdatesView` does. It reads a
-  missing `choices` or `fallback` as "not stated" (§12).
+  missing `next`, `filesExceed` or `fallback` as "not stated" (§12). A second guard, `asStallConfirm(raw)`, reads a
+  409 body: it accepts only `error: 'confirm-required'` with a structurally readable `effect` and a string
+  `effectKey`, and anything else is an ordinary refusal.
 
 **API.** In `pwa/src/lib/api.ts`:
 - `stallWatch: () => getJson<StallWatchView>('/api/coord/stall-watch')`.
 - `setStallWatch: (body: StallWatchRequest) => postJsonOr<StallWatchView | 'unreadable'>('/api/coord/stall-watch',
   'unreadable', body)`. It uses `postJsonOr` for `setCoordCaps`' reason (`pwa/src/lib/api.ts` ≈:660): after a write,
   "the answer could not be read" is not "the request never happened".
+- A non-2xx answer still rejects with `ApiError { status, body }` (`pwa/src/lib/api.ts` ≈:9–23). So the section reads
+  a 409's body off the error, as the composer reads the 409 `draft-present` body and opens its sheet (that file's
+  header note, ≈:1–4; `pwa/src/session/Composer.tsx` ≈:97).
 
 **States.** These follow the Updates section's discipline (`SettingsScreen.tsx` ≈:699–716), with one deliberate
 difference. "Don't know yet" never borrows the rendering of "nothing there".
@@ -1016,9 +1185,12 @@ difference. "Don't know yet" never borrows the rendering of "nothing there".
    - **The level.** The effective level's label and its `does` text. Or "Custom", followed by one line listing the
      names of the stages that are on (`STALL_STAGE_TEXT`). Or "Unknown — the fleet registry could not be read",
      never "Off".
-   - **The busy gate.** When `stages.busyGate` is true, `STALL_BUSY_GATE_TEXT`. Otherwise, when the effective level
-     is a ladder level whose own choice would turn the gate on (`choices[effective.level].busyGate`), the note
-     `STALL_BUSY_GATE_OFF_TEXT`. Both come from wire facts, so the section spells no level id.
+   - **The busy gate.** When `stages.busyGate` is true, `STALL_BUSY_GATE_TEXT.holds`, followed by `logs` when
+     `stages.busyDelivery` is false (the `busy-shadow` mode). Otherwise, when the source is `files`, `stages.runs` is
+     true and the level is not `custom`, the note `STALL_BUSY_GATE_OFF_TEXT`: a level read from the fleet box's
+     files that runs without the gate its own row has. Under a chosen level the ladder sets the gate, and the held
+     lines say when strict or mail switched off holds it. All of it comes from wire facts, so the section spells no
+     level id.
    - **The source line**, from `effective.source`:
      - `files`: "Following the fleet box's files";
      - `chosen`: "Chosen here";
@@ -1028,91 +1200,115 @@ difference. "Don't know yet" never borrows the rendering of "nothing there".
      - `watchOff`: "A kill switch on the fleet box has the watch off, whatever is chosen here."
      - `mailOff`: "Mail is switched off on the fleet box: no mail is delivered, and checks and reports are held.
        Pushes to you still go."
-     - `gateStrict`: "The mail gate is set to strict on the fleet box: busy delivery is off."
+     - `gateStrict`: "The mail gate is set to strict on the fleet box: busy delivery and the busy gate are off."
      - `wave2HeldByStrict`: "The strict mail gate also holds the further checks off, because they need busy
        delivery."
-   - **The hazard line** (§6.4), when the stages call for it.
-   - **The files-exceed line** (`STALL_FILES_EXCEED_TEXT`), whenever the source is not `files` and any of the five
-     confirm stages is on in `choices.follow` but off in `stages`. The fleet box's files then arm more than the
-     choice, and any fallback (a rollback, the watchdog's included; a lost, absent or unreadable row; a resolver
-     fallback) sends what the choice recorded in shadow (§15).
+   - **The hazard line** (§6.4), when the stages call for it and `held.mailOff` is false.
+   - **The files-exceed line** (`STALL_FILES_EXCEED_TEXT`), whenever `effective.filesExceed` is true. The server
+     sets it when the source is not `files` and a sending stage is on in the fleet box's own stages but off in the
+     resolved ones (§10). The fleet box's files then arm more than the choice, and any fallback (a rollback, the
+     watchdog's included; a lost, absent or unreadable row; a resolver fallback) sends what the choice recorded in
+     shadow (§15).
    - **The stored-choice lines** (`STALL_STORED_TEXT`). Whenever the stored row does not apply whole, exactly one:
      - `stored` absent: "No stored choice was found: following the fleet box's files and the built-in quiet time."
      - `stored` unreadable: "The stored choice could not be read: following the fleet box's files and the built-in
        quiet time."
+     - `chosen.level` and `chosen.quietMs` both unreadable in a row that reads: "The stored level and quiet time
+       could not be read, so neither applies: following the fleet box's files and the built-in quiet time."
      - only `chosen.level` unreadable: "The stored level could not be read, so neither stored choice applies:
        following the fleet box's files and the built-in quiet time."
      - only `chosen.quietMs` unreadable: "The stored quiet time could not be read, so neither stored choice
        applies: following the fleet box's files and the built-in quiet time."
    - **The fallback line** (`STALL_FALLBACK_TEXT`), whenever `fallback` is not `null`: "Your choice is not being
-     applied (<reason>); the watch is following the fleet box's files."
-2. **Next step.** Shown only for a ladder level below `all` whose source is `files`, or which equals the chosen
-   level. It reads "Next step: <next level's label>.", then "Waits on:" and the gate of each stage that
-   `choices[next]` turns on and `stages` has off, in §5.1's order. At `all`: "Top of the ladder." It is omitted for
-   `custom` and `unknown`, and whenever the effective level differs from the chosen one: a `held` source, or a
-   chosen `off` over a busy file.
+     applied (<reason>); the watch is following the fleet box's files." The server then sends the files-only reading
+     as `effective`, so the rest of the Now block already shows what the sweeps are doing (§10).
+2. **Next step**, from `effective.next` (§10).
+   - `step`: "Next step: <level's label>.", then "Waits on:" and the gate of each stage in `waitsOn`. The "Waits
+     on:" part is left out when `waitsOn` is empty.
+   - `top`: "Top of the ladder."
+   - `none`: nothing. The server answers `none` for `custom`, and whenever the effective level differs from the
+     chosen one (a level held lower, or a chosen `off` over a busy file). It never lists the busy gate, which has no
+     gate. With `effective.measured` false there is no Next step.
 3. **Level.** A radio `fieldset` of labels only. The first option is "Follow the fleet box's files (they say:
    <files level label>)", or "(they say: unknown)" while the registry cannot be read; the six level labels follow.
    The selected option's `does` and gates are not repeated here; they are in the Now and Next blocks.
    - The checked option is `chosen.level` **from the server's answer, never from the tap.** If the level is
      `unreadable`, no radio is checked.
-   - The fieldset is disabled while a re-check or a write is in flight.
+   - The fieldset is disabled while a write is in flight or its sheet is open.
 4. **Quiet time before a worker check.** The effective value and its source ("2 h (built-in)" or "3 h (chosen
    here)"), its range ("30 min to 12 h", composed from `minMs`/`maxMs`), a `<select>`, and the note (§7).
    - The select offers "Built-in (<builtInMs>)", then every `stepMs` step from `minMs` to `maxMs` except the one
      equal to `builtInMs`, so the built-in value appears once.
    - Its checked value also comes from the server's answer.
-5. **Last 48 h.** Four rows, by the L0 labels: `<label> — <sent> sent · <shadow> shadow`. With `notices.ok` false:
-   "The notice counts could not be read." The footnote, `STALL_RUNLESS_FOOTNOTE`, is always shown.
+5. **The counts**, headed `STALL_SECTION_TEXT.counts` filled from `windowMs` ("Last 48 h" at the shipped window).
+   Four rows, by the L0 labels: `<label> — <sent> sent · <shadow> shadow`. With `notices.ok` false: "The notice
+   counts could not be read." The footnote, `STALL_RUNLESS_FOOTNOTE`, is always shown.
 
-**Writes: re-check, confirm when needed, settle on the reply, never optimistic.**
-1. On a level, Follow or quiet-time choice, the section first awaits `refresh()`.
-   - `'failed'`: write nothing, and `toast(STALL_CONFIRM_TEXT.recheckFailed, 'error')`: "Could not re-check the
-     current level; nothing was changed."
-   - `'not-configured'`: write nothing; the section now renders the not-available text.
-   - A view: decide the confirm from it (below). Cancel writes nothing.
-2. Call `api.setStallWatch` with only the field moved.
-3. A 2xx whose body passes `asStallWatchView` is installed with `settle(view)`, and the controls re-render from it.
-4. A 2xx whose body is unreadable gives `toast(UNCONFIRMED_TEXT)`, the existing constant (≈:72), then `reload()`.
-5. A refusal gives `toast(<error text naming the server's detail>, 'error')`, then `reload()`. Because the controls
-   render from the server's answer, they show the stored value again.
+**Writes: the server decides the confirm; settle on the reply; never optimistic** (departure
+`server-decides-the-confirm`).
+1. On a level, Follow or quiet-time choice, the section calls `api.setStallWatch` with only the field moved, and no
+   `confirm`.
+2. A 2xx whose body passes `asStallWatchView` is installed with `settle(view)`, and the controls re-render from it.
+3. A 2xx whose body is unreadable gives `toast(UNCONFIRMED_TEXT)`, the existing constant (`SettingsScreen.tsx`
+   ≈:72), then `reload()`.
+4. A 409 whose body passes `asStallConfirm` opens the sheet, built from its `effect` (below).
+   - Cancel writes nothing, because nothing was written.
+   - Set sends the same body again with `confirm: effectKey`, and its answer goes through steps 2 to 5 again. So a
+     key the server no longer matches opens a fresh sheet from the fresh effect: another page wrote, or the fleet
+     box's files moved, while the sheet was open. Nothing is written until the operator has confirmed what the
+     server will actually do.
+5. Any other refusal gives `toast(STALL_CONFIRM_TEXT.refused, 'error')`, "Nothing was changed: <detail>", with the
+   server's detail in the slot, then `reload()`. Because the controls render from the server's answer, they show the
+   stored value again.
 
-**The confirm: a stage diff, from wire data** (departure `confirm-on-stage-diff`). It compares the fresh view's
-`stages` (now) with `choices[target]` (after), over the five confirm stages of §5.1. No rank is involved, so `custom`
-needs no rank and no label of its own.
-- **When it opens,** on a level or Follow choice:
-  - the target turns **on** any stage that is off now; or
-  - the target leaves the further checks (`wave2` on now, off after): a lowering, but one that makes some notices
-    fall due sooner (§5.1); or
-  - `choices` is missing (the registry cannot be read, or an older reply): the sheet then holds the one line
-    `STALL_CONFIRM_TEXT.unknown`, "The fleet box's files could not be read, so what this choice turns on cannot be
-    shown."
+The section never decides whether a write needs a confirm, never previews a choice, and holds no ladder.
 
-  A pure lowering, which turns stages off and leaves the further checks off, opens no confirm.
-- **When it opens,** on a quiet-time choice: the new value is below the current effective value, or below the
-  built-in (the built-in itself counts as `builtInMs`). Raising it, at or above the built-in, opens none.
-- **The level sheet** (`QuickConfirm`, `pwa/src/components/QuickConfirm.tsx`):
-  - title: "Set the stall watch to <label>?" (`STALL_CONFIRM_TEXT.title`), or "Follow the fleet box's files?" for
-    Follow;
-  - consequence, one paragraph per line:
-    - the target's `does` (none for Follow);
-    - for each stage turning on: "<name> turns on. Waits on: <gate>" (`turnsOn`). When the target is `off`, a
-      stage can only turn on because the fleet box's files arm it, so the line reads "<name> turns back on: the
-      fleet box's files arm it." (`backOn`), for example "Busy delivery turns back on: the fleet box's files arm
-      it." That keeps Q2's Off and says what it re-arms;
-    - for each stage turning off: its `stops` text, for example "Busy delivery stops." Leaving the further checks
-      gives `wave2`'s `stops`, the line that says checks fall back to the plain quiet time;
-    - when a sending stage (`checks`, `alerts`, `busyDelivery` or `wave2`) turns on and the watch runs now:
-      `due`, "At the next sweep every notice now due is sent, including ones recorded in shadow; later rungs follow
-      on their own clocks." When the watch is off now and `checks` turns on: `dueFromOff`, "Off recorded nothing;
-      every worker already quiet past the quiet time is checked at the next sweep.";
-  - confirm label: "Set".
-- **The quiet sheet:** title "Set the quiet time to <value>?" (`quietTitle`); confirm label "Set"; consequence, one
-  paragraph per line:
-  - when the value is below the current one, `quietDue`: "Every worker already quiet past <value> is checked at the
-    next sweep.";
-  - when the value is below the built-in, `quietRepeat`: "Below Everything this repeats every <value> for a worker
-    that keeps waiting, because no back-off applies there."
+**The sheet, built from the effect** (`QuickConfirm`, `pwa/src/components/QuickConfirm.tsx`; departure
+`confirm-on-stage-diff`). One pure helper, `stallConfirmLines(effect, request, builtInMs)`, maps the effect's facts to
+L0 lines keyed by stage id. No rank is involved, so `custom` needs no rank and no label of its own. `builtInMs` is the
+view's `quiet.builtInMs`, a build constant.
+- **Title.** "Set the stall watch to <label>?" (`title`) for a level; `followTitle`, "<label>?" filled with
+  `STALL_FOLLOW_LABEL`, for Follow; "Set the quiet time to <value>?" (`quietTitle`) for a quiet time. Confirm label
+  "Set" (`confirm`).
+- **The unmeasured effect** (`measured: false`) gives one line, `unknown`: "The fleet box's files could not be read,
+  so what this choice turns on cannot be shown."
+- **Otherwise one paragraph per line, in this order:**
+  - for a level write, the target's `does` (none for Follow);
+  - **for each stage in `turnsOn`:**
+    - when `after.runs` is false, `backOn`: "<name> turns back on: the fleet box's files arm it." With the watch off
+      after the write, only a mail-gate stage can turn on, and only because the fleet box's files arm it. This is
+      the line Off shows when it hands busy delivery back to a box busy file, which keeps Q2's Off;
+    - otherwise `turnsOn`, "<name> turns on. Waits on: <gate>", or, for the busy gate, which has no gate,
+      `turnsOnFree`, "<name> turns on.";
+  - **for each stage in `turnsOff`:** its `stops` text, for example "Busy delivery stops." Leaving the further checks
+    gives `wave2`'s `stops`, the line that says checks fall back to the plain quiet time;
+  - **what falls due**, chosen per stage that turns on. None of these lines shows while `mailOff`: the Now block's
+    held line already says that checks and reports wait for mail.
+    - `due`, when `checks`, `alerts` or `wave2` turns on and `before.runs`: "At the next sweep every notice now due
+      is sent, including ones recorded in shadow; later rungs follow on their own clocks.";
+    - `dueFromOff`, when `checks` turns on and `before.runs` is false: "Off recorded nothing. At the next sweep every
+      worker already quiet past the quiet time is checked, and a worker whose check went out before Off gets the
+      next notice now due.";
+    - `dueMail`, when `busyDelivery` turns on: "Mail held for a busy session whose main turn has ended is delivered
+      at the next mail sweep." Busy delivery alone makes no recorded notice due, because `stallNotifyDelivery`
+      (`stall.ts` ≈:146) reads `live`, `escalate` and `w2Live`, never the mail mode;
+  - **the quiet time**, when `quietLowered`, with `<value>` the effective quiet time after the write:
+    - when it is below the one before, one line on what falls due, chosen by the stages after the write:
+      `quietOff` when `after.runs` is false, "The watch is off, so nothing falls due until it runs."; `quietRecorded`
+      when `after.checks` is false, "Every worker already quiet past <value> has a check recorded in shadow at the
+      next sweep; nothing is sent."; `quietDueAll` when `after.wave2`, "At the next sweep every worker whose turn
+      record has been quiet past <value> is checked, unless it is backed off for answering 'working' or its
+      subagents are running."; otherwise `quietDue`, "Every worker already quiet past <value> is checked at the next
+      sweep.";
+    - `quietRepeat`, when `after.checks`, not `after.wave2`, and the value is below the built-in: "While the further
+      checks are off, a worker that keeps waiting is checked every <value>, because no back-off applies.";
+    - `quietDialogs`, when `after.alerts`: "A dialog left open longer than <value> is pushed to you from the next
+      sweep, and repeat pushes about one open dialog can come <value> apart.";
+  - **the files-exceed line**, `STALL_FILES_EXCEED_TEXT`, when `filesExceed`: after the write, the fleet box's files
+    arm more than the choice.
+- **Every line can join any sheet.** A level write that brings a stored quiet time into force shows the quiet lines
+  under its level lines. A quiet write that brings a stored level into force shows that level's stage lines under
+  the quiet title.
 - **`QuickConfirm` takes several lines.** Its props are `title: string`, `consequence: string`,
   `confirmLabel: string`, `onConfirm`, `open` and `onClose` (≈:9–16), and it renders `consequence` as one
   `<p className="qc-consequence">` (≈:28). W2 widens `consequence` to `string | string[]`, rendering one `<p>` per
@@ -1130,10 +1326,11 @@ it. Nothing in `server/test`, README or `CLAUDE.md` spells it. P6's scan covers 
 text says pushes arrive wherever push notifications are switched on in Settings, which points at that row.
 
 **Test hooks.**
-- The hook's injected mode, and `refresh()`'s two failure arms.
-- `vi.spyOn(api, 'stallWatch' | 'setStallWatch')`.
-- Exported pure helpers, each unit-tested: `stallStageDiff(now, after)`, `stallConfirmLines(view, target)`,
-  `stallNowLines(view)`, `quietChoices(view)` and `fillStallText(text, slots)`.
+- The hook's injected mode.
+- `vi.spyOn(api, 'stallWatch' | 'setStallWatch')`, with an `ApiError(409, …)` rejection carrying a fixture effect
+  and key for the confirm path.
+- Exported pure helpers, each unit-tested: `stallConfirmLines(effect, request, builtInMs)`, `stallNowLines(view)`,
+  `quietChoices(view)`, `fillStallText(text, slots)`, and the two guards, `asStallWatchView` and `asStallConfirm`.
 - A new `describe` in `pwa/test/settings-screen.test.tsx` per task, using that file's idiom (≈:46–51 `afterEach`,
   module-level fixtures, `ApiError(501)`/`(404)` rejections, a never-resolving promise for loading).
 - `pwa/test/use-stall-watch-view.test.tsx` beside `use-updates-view.test.tsx`.
@@ -1151,9 +1348,10 @@ text says pushes arrive wherever push notifications are switched on in Settings,
 2. **Zero new ccd verbs, and no agent change.** The routes touch `coord.db` and one `readdir` only.
    `EXEC_COMMANDS = ['tmux','ccd']` is unchanged.
 3. **`gate-markers-spelled-in-turnidle-only` (`turnidle.ts` ≈:24): the mail-gate marker names stay in `turnidle.ts`
-   alone.** The new file calls `mailTurnModeOf` and never spells a name. `stall.ts` gains only: the `quietMs` field
-   and its reader; the backoff ceiling; `StallArming.busySince` and the bounded change to `stallIdleStart`; and
-   `stallArmHasRung`. None spells a marker. Its single value import stays L0, which `stall-vocabulary.test.ts` pins.
+   alone.** The new file calls `mailTurnModeOf` and `mailTurnReadsMark` and never spells a name. `stall.ts` gains
+   only: the `quietMs` field and its reader; the backoff ceiling; `StallArming.busySince` and the bounded change to
+   `stallIdleStart`; and `stallArmHasRung`. None spells a marker. Its single value import stays L0, which
+   `stall-vocabulary.test.ts` pins.
 4. **L0 imports nothing.** The new `shared/api.ts` members are literals, types and one guard, appended at the end
    of the file (§12).
 5. **L1 purity, enforced by its own rows.** No existing scan covers a new L1 file, so
@@ -1161,6 +1359,7 @@ text says pushes arrive wherever push notifications are switched on in Settings,
    `NODE_BUILTIN`, `SIDE_EFFECT_IMPORT` and `valueImportSpecifiers` shapes): no `node:` import, no `require` or
    dynamic import, no `Date.now` or `new Date`, and value imports only from `../../../shared/api.js`, `./stall.js` and
    `../turnidle.js`, with a CONTROL row proving the scan reads the file. `turnidle.ts` still imports nothing.
+   `stallEffectKey`'s hash is plain JavaScript, so the key needs no `node:crypto`.
 6. **The mail gate's precedence (strict > busy > busy-shadow > shell)** holds whenever the files decide; a strict
    file still wins under any chosen level, and also holds the wave-2 step off (§6.3).
 7. **Kill switches fail shut.** An unlistable registry still stops both sweeps before any resolve.
@@ -1179,31 +1378,39 @@ text says pushes arrive wherever push notifications are switched on in Settings,
 
    `UNGATED` is unchanged, and so is every count site's `FOUR`.
 10. **Wire discipline.** Additive types. `FLEET_PROTO` is untouched and no frame changes. Each new field has one
-    reader (the PWA's `asStallWatchView`, and the server's `parseStallSettings`).
+    reader: the PWA's `asStallWatchView` for the view, its `asStallConfirm` for the 409 body, and the server's
+    `parseStallSettings` for the row.
 11. **No overloaded null at a seam.**
     - Absent and unreadable are separate words from the store to the wire, per field, and `stored` tells an absent
       row from an unreadable one.
     - `'default'`, never `null`, means the built-in on the wire.
     - `{measured: false}` is not `off`, and `off` is never read back while busy delivery is on.
     - The SQL column's `NULL` has exactly one meaning and is converted at the store's read.
-    - `StallArming.busySince` has three values with three meanings (absent: no bound asked; `null`: chosen, busy not
-      yet applied; a number: busy applied since then). Absence is the `w2-arming-optional` precedent, not a second
-      `null`.
+    - `StallArming.busySince` is absent (today's clock) or a number (when busy delivery began). Absence is the
+      `w2-arming-optional` precedent. On the watcher, `lastApplied` is `null` only before the mail sweep's first
+      applied mode, and `busySince` is `null` whenever no move into busy delivery has been seen since the server
+      started. A failed listing writes neither.
+    - The busy gate's `gate` is `null` for one reason only: nothing waits on it.
+    - `next.kind` says `none`, `top` or `step`, so "no Next step" and "the top" are two words, not one `null`.
 12. **Single definition.**
     - The level texts, the stage texts and every section string are defined once, in L0, with no copy of a stall
-      constant's value: no `does` text or gate carries a duration (§5).
-    - The ladder flags are defined once, in L1, and the PWA keeps no list of level ids: it compares `stages` with
-      `choices` (§12).
+      constant's value and no short form of a level label: no `does` text or gate carries a duration (§5), and the
+      counts heading takes the window from the wire (§11).
+    - The ladder flags are defined once, in L1, and the PWA keeps no ladder knowledge: the server answers the Next
+      step, the files-exceed reading and every write's effect (§10, §12).
+    - The store's two write arms and their L1 projection, `stallSettingsAfter`, agree, which a store row pins (M12d).
     - The quiet bounds, step and the notice window are defined once, in L1, and shipped on the reply.
     - One predicate, `isStallQuietMs`, serves the write and the read, and one guard, `isStallLevelChoice`, likewise.
     - `STALL_QUIET_MS` stays the one built-in default, and its constants pin is unchanged. The backoff ceiling is
       derived from the constants it guards.
     - The detail heads stay spelled only in `stall.ts`, and the rung table only in `STALL_RUNG_RECIPIENTS`.
-13. **The kebab scan.** `'busy-shadow'` is declared through `isStallSettingsKebab`. Every other word is a single
-    word or camelCase.
-14. **"Follow" is today's behaviour.** The resolver returns the box arming object itself, and the stall sweep adds
-    no `busySince` under `files`. A property test pins the first, and a row pins the arming the verdicts receive
-    (M4). The backoff ceiling sits above the default's 8 h peak, so the default is unchanged there too.
+13. **The kebab scan.** `'busy-shadow'`, `'confirm-required'` and `'flag-off'` are declared through
+    `isStallSettingsKebab`. Every other word is a single word or camelCase.
+14. **"Follow" is today's behaviour, with one named exception.** The resolver returns the box arming object itself,
+    which a property test pins. At boot the verdicts receive today's exact arming, which a row pins (M4). The one
+    change is the busy clock's grace once the mail gate moves into busy delivery while the server runs, under
+    `follow` as under a chosen level (§9, `busy-clock-starts-when-busy-delivery-starts`). The backoff ceiling sits
+    above the default's 8 h peak, so the default is unchanged there too.
 15. **The watch never closes, reclaims or re-dispatches.** That is unchanged. Settings only changes which rungs send,
     when r1 falls due, and when a held mail can read stuck under busy delivery.
 16. **Server logs** go through `console.warn('ccrc-server: …')`.
@@ -1216,18 +1423,23 @@ text says pushes arrive wherever push notifications are switched on in Settings,
     `coord-caps-route.test.ts` ≈:556–578) but scoped to the handler, holds both (M16b).
 19. **A row applies whole or not at all.** No chosen level runs beside an unreadable quiet time, and no chosen quiet
     time beside an unreadable level (§6.2, M25).
-20. **Neither sweep can be stopped by the settings path.** `stallResolveNow` never throws, its fallback is today's
-    expression, and the view says when it fell back (§9, M20).
+20. **Neither sweep can be stopped by the settings path, and the view still answers.** `stallResolveNow` never
+    throws, its fallback is today's expression, and its catch calls nothing that can throw. The view builder falls
+    back to the files-only reading on a parse or resolver fault, and says so (§9, §10, M20).
+21. **The confirm is the server's.** Whether a write needs a confirm is decided by the POST, at the write, from the
+    row as it stands and the row the write will leave, against the listing it just took. The key ties the
+    confirmation to that effect and that row, and the PWA holds no ladder (§10, §13).
 
 ## 15. Failure modes
 
 | Condition | What happens | What the operator sees |
 |---|---|---|
-| The registry cannot be listed | Both sweeps return before resolving, as today. The GET answers `effective.measured: false`, with no `choices`. | "Unknown — the fleet registry could not be read". The chosen values are still shown. Follow reads "(they say: unknown)", and any level or Follow choice opens the confirm with the unknown line. |
-| The settings row is absent, or its read throws | Both sweeps follow the fleet box's files and the built-in quiet time, whole. One warn per latch. If the lost choice armed less than the files, every notice it recorded in shadow becomes due and goes out at the next sweep, unconfirmed (`rungDoneAt` ≈:756–764), and r1 re-bases on the 2 h built-in. | The absent or unreadable stored-choice line. The files-exceed line had warned of this while the choice applied. |
-| Any throw inside `stallResolveNow` (a store, parse or resolver bug, or one in its latch or boot trace) | Caught. Each sweep runs today's expression over its own listing, so mail delivery continues at the listing's mode and the lane at the files' arming. One warn per latch, and `lastFallback` records it. The same shadow burst as the row above, when the choice armed less than the files. | The fallback line, "Your choice is not being applied (<reason>); the watch is following the fleet box's files.", read through `watcher.stallFallback()`. |
+| The registry cannot be listed | Both sweeps return before resolving, as today. The GET answers `effective.measured: false`, with no Next step and no files-exceed reading. A POST answers the unmeasured effect, so every write needs the confirm. | "Unknown — the fleet registry could not be read". The chosen values are still shown. Follow reads "(they say: unknown)", and any write opens the confirm with the unknown line. |
+| The settings row is absent, or its read throws | Both sweeps follow the fleet box's files and the built-in quiet time, whole. One warn per latch. If the lost choice armed less than the files, every notice it recorded in shadow becomes due and goes out at the next sweep, unconfirmed (`rungDoneAt` ≈:756–764), and r1 re-bases on the 2 h built-in. A write that brings a lost row back is measured against the files, so whatever it turns on is confirmed (§10). A write while the read throws is refused with a 500, and nothing is written (§8). | The absent or unreadable stored-choice line. The files-exceed line had warned of this while the choice applied. |
+| Any throw inside `stallResolveNow` (a store, parse or resolver bug, or one in its latch or boot trace) | Caught. Each sweep runs today's expression over its own listing, so mail delivery continues at the listing's mode and the lane at the files' arming. The catch warns once, bare, never through the latch, and `lastFallback` records it. The same shadow burst as the row above, when the choice armed less than the files. | The fallback line, "Your choice is not being applied (<reason>); the watch is following the fleet box's files.", from `watcher.stallFallback()` or the view builder's own catch, over a Now block that shows the fleet box's files (§10). |
 | The level token is out of vocabulary (a newer build wrote it, then a rollback), or a prototype name such as `constructor` | `unreadable`, so the row does not apply: the files and the built-in quiet time, even when the stored quiet time reads. The same shadow burst when the files arm more. | The stored-level line. No radio is checked. |
-| The stored quiet time fails `isStallQuietMs`, or is an integer too large for a JS number | `unreadable` (the read itself survives an oversize integer, through `setReadBigInts`), so the row does not apply: the files and the built-in, even when the stored level reads. It is never clamped. | The stored-quiet-time line. |
+| The stored quiet time fails `isStallQuietMs`, or is an integer too large for a JS number | `unreadable` (the read itself survives an oversize integer, through `setReadBigInts`), so the row does not apply: the files and the built-in, even when the stored level reads. It is never clamped. If the stored level armed less than the files, every notice the files' arming recorded in shadow becomes due and goes out at the next sweep, as in the absent-row row. | The stored-quiet-time line. The files-exceed line had warned of this while the row applied. |
+| Both stored fields read unreadable in a row that reads | The row does not apply: the files and the built-in quiet time, with the same shadow burst when the files arm more. | The stored line for both fields. No radio is checked. |
 | A hand-edited `updatedAt` that is not a safe integer | It parses `null`; nothing else changes. | The section renders as usual. |
 | Rollback to a build without the table (a hand rollback, or the unattended `ccrc rollback --from watchdog` on a `server`/`both` box) | The older build reads `coord.db` at the higher version as-is and migrates nothing (`openCoordDb`, `db.ts` ≈:171–179), and ignores the table. The choice, `off` included, stops applying, and the watch re-arms from the fleet box's files with the built-in quiet time. Every notice a lower choice recorded in shadow then goes out at the first sweep: checks to quiet workers and cap pushes at once, coordinator reports an hour later. In the watchdog's case no one is present. | An open tab's next poll (within 60 s) answers 404 `not-found`, and the section's body becomes the not-available text, with no control and no checked radio (§13). The service worker loads the older bundle within 15 min, or on return to the foreground, and the section is gone. The files-exceed line had warned beforehand. After a roll-forward the stored choice applies again, and the boot trace logs it. |
 | `coord.db` is lost or restored from an older snapshot | The choice is lost or reverts; the watch follows the files or the older choice. A loss of a choice that armed less than the files sends the shadow backlog, as above. | The section shows what is stored now, and the boot trace logs a restored choice. For a stop that survives this, the fleet box's kill switch (Off's own text says so). |
@@ -1238,16 +1450,20 @@ text says pushes arrive wherever push notifications are switched on in Settings,
 | Busy delivery armed by file (R18's order), then a level below Deliver chosen in Settings | Busy delivery turns off: the chosen level decides the mail mode. | The confirm listed "Busy delivery stops." first. The source line shows "Chosen here"; "they say:" shows the files' level. |
 | After that, Off is chosen | Off leaves the mail gate as the files set it (Q2), so busy delivery turns back on. | The confirm said "Busy delivery turns back on: the fleet box's files arm it." Now reads Custom, with busy delivery among the stages on, and no Next step. |
 | A level is chosen before its gate is met | The stage's known false classes go live: for example the stuck-mail and coordinator-not-reading pushes under `all`, which R18 measured at 0/4 and 0/1. | The confirm showed the gate of every stage turning on. Lowering takes effect at the next sweep. |
-| A chosen `deliver` or `all` under `mail-gate-strict` | Strict wins the mail gate; for `all` the wave-2 step is held off too (strict switched busy delivery off). | Reads Alert, with "Chosen: <label>, held back by the fleet box (its mail gate is set to strict)", the strict held lines, and no Next step. |
+| A chosen level other than Off under `mail-gate-strict` | Strict wins the mail gate, so the busy gate is off; for `all` the wave-2 step is held off too (strict switched busy delivery off). | "Chosen: <label>, held back by the fleet box (its mail gate is set to strict)" and the strict held lines. A chosen `deliver` or `all` reads Alert and shows no Next step; a lower level keeps its reading and its Next step. |
 | A chosen level other than Off under the lane's kill file | The lane does not run, and the mail gate runs as the files set it. | Reads Off (or Custom), with "Chosen: <label>, held back by the fleet box (its kill switch is on)", the kill-switch held line, and no Next step. |
+| A chosen Off under the lane's kill file, with or without a box busy file | Off and the kill file do the same thing; the mail gate runs as the files set it. | "Chosen here", because no held flag changed what Off does. Reads Off, or Custom over a busy file. |
 | Box files set by hand to escalation + wave-2 without busy delivery | Today's behaviour (the files decide). | The hazard line (§6.4). |
 | The level is raised mid-episode | At the next sweep every notice now due is sent, including ones recorded in shadow (`rungDoneAt` ≈:756–764 counts a shadow row as done only while that rung's delivery is still shadow). Later rungs follow on their own clocks: a check re-sent live times the next report an hour from itself (`stallWaveOneLadder` ≈:922), so from Log the report and the push come an hour apart, not at once. Each run gets one verdict per sweep. Nothing already sent live is sent again. | The confirm's `due` line said so. |
 | The level is raised from Off | Off recorded nothing: the lane returns before it records (`watch.ts` ≈:3789). At the next sweep every worker already quiet past the quiet time is checked, and at Alert and above a run whose check went out before Off gets its coordinator report at once. | The confirm's `dueFromOff` line. |
 | The level is lowered out of Everything | The further checks stop, and the worker's ball returns to wave 1's ladder, with no back-off and no delegates or restart-grace hold (§5.1). A worker already quiet past the plain quiet time gets a check at the next sweep; at Alert or Deliver, a worker whose check is over an hour old gets its coordinator report. | The confirm listed the further checks' `stops` line. |
-| A level that turns on busy delivery is chosen straight from a lower one | The stall sweep's stuck-mail clock under busy starts at `max(stop, busySince)`, and until the mail sweep has applied busy once, busy is judged as the busy gate is (§9). A held mail gets the full `MAIL_STUCK_MS` from the moment busy delivery began. | Nothing extra: no false stuck-mail push during the first busy pass. |
-| The quiet time is lowered (for example 2 h to 30 min) | The next sweep makes every worker quiet past 30 min due at once; at `alert` and above, every dialog open longer than 30 min also falls due for a push to you. Below Everything a worker in a long legitimate wait is then checked once per quiet time: about 48 checks a day at 30 min against 12 at 2 h, each a worker turn and a coordinator turn. A restamped dialog can be re-pushed every 30 min (§7). | The confirm said so first. The remedy is to set the quiet time back to the built-in, not to lower the level. The parent spec's kill rule (more than 10 armed r1 a day for two days) reads the "Stall checks to quiet workers" row. |
-| Two Settings pages write at once | Each write is one transaction, and the last one wins. Each reply re-reads, and the feed records both, each with its actor. A confirm is decided on `refresh()`'s own answer (§13), but between that read and the write another page can still move the level; this is accepted, with the feed as the audit. | The next poll shows the final value on both pages. |
-| The re-check before a write fails | Nothing is written. | "Could not re-check the current level; nothing was changed." |
+| Busy delivery begins while the server runs: a chosen level, Follow over a box busy file, or `mail-gate-busy` touched by hand | Until the mail sweep has applied busy once after a non-busy mode, busy is judged as the busy gate is; after that the stuck-mail clock under busy starts at `max(stop, busySince)` (§9). A held mail gets the full `MAIL_STUCK_MS` from the moment busy delivery began. For Follow and a hand-touched file this changes today's behaviour, which could push a false stuck mail during the first busy pass. | Nothing extra: no false stuck-mail push during the first busy pass. |
+| The registry listing fails between two busy mail sweeps | Neither clock field moves, so `busySince` keeps its first value and mail-stuck is not deferred again. | Nothing. |
+| The server restarts with busy delivery on | `lastApplied` starts `null`, so the stall sweep judges exactly as today: no grace, and no delay. | Today's behaviour: a mail held past `MAIL_STUCK_MS` before the restart can read stuck at the first stall sweep after it. |
+| The quiet time is lowered (for example 2 h to 30 min) | The next sweep makes every worker quiet past 30 min due at once; at `alert` and above, every dialog open longer than 30 min also falls due for a push to you. Below Everything a worker in a long legitimate wait is then checked once per quiet time: about 48 checks a day at 30 min against 12 at 2 h, each a worker turn and a coordinator turn. A restamped dialog can be re-pushed every 30 min (§7). | The confirm said so first, with the dialog-push line when alerts are on. The remedy is to set the quiet time back to the built-in, not to lower the level. The parent spec's kill rule (more than 10 armed r1 a day for two days) reads the "Stall checks to quiet workers" row. |
+| A write that makes a stored choice apply: a level written over a stored quiet time that did not apply, or a quiet time written over a stored level that did not | The effect is measured on the row the write will leave, so the stored half that comes into force is part of it (§10). | The confirm, with the stage lines or the quiet lines the other half brings. |
+| Two Settings pages write at once | Each write is one transaction, and the last one wins. Each reply re-reads, and the feed records both, each with its actor. A confirm is decided by the server at the write, and its key carries the row's `updatedAt`, so a write that lands between one page's sheet and its re-POST makes that page's key stale. | The second page gets a fresh sheet for what its write now does. The next poll shows the final value on both pages. |
+| The confirm's key no longer matches (another page wrote, or the fleet box's files moved, while the sheet was open) | Nothing is written. The POST answers 409 again with the fresh effect and key. | A fresh sheet. |
 | The feed archive write fails | The setting is written and the record degrades, with a warn, and the flush still runs. | No feed row for that change. |
 | A write's reply cannot be read | It may have landed. | "Saved — the server's answer could not be read; the screen will re-check." Then a reload. |
 | A newer PWA meets an older server | The GET answers 404 `not-found`. | The not-available text, whether or not a view had landed (§13). |
@@ -1257,15 +1473,18 @@ text says pushes arrive wherever push notifications are switched on in Settings,
 
 ## 16. Departures from the approved text (slugs; numbered at plan time)
 
-- `files-level-match-ignores-the-busy-log`: reading a level back treats `shell`, `busy-shadow` and `strict` alike,
-  so the busy gate never splits a level; a fresh install reads "Log only", with the busy gate off. `stages.busyGate`
-  reports it separately, and `choices` lets the section say when a level runs without it (§6.4, Q1).
+- `files-level-match-ignores-the-busy-gate` (renamed from rev 3's `files-level-match-ignores-the-busy-log`): reading a
+  level back treats `shell`, `busy-shadow` and `strict` alike, so the busy gate never splits a level; a fresh install
+  reads "Log only", with the busy gate off. `stages.busyGate` reports it separately, and the Now block says when a
+  level read from the files runs without it (§6.4, Q1).
 - `strict-holds-the-wave-2-step`: under `mail-gate-strict`, a chosen level's wave-2 step is held off, because strict
   switched busy delivery off (§6.2).
 - `busy-clock-starts-when-busy-delivery-starts` (renamed from rev 2's `stall-sweep-reads-the-applied-mail-mode`,
-  which is dropped): under a chosen level, `StallArming.busySince` bounds mail-stuck's idle clock under `busy` to
-  `max(stop, busySince)`, and a `null` bound judges busy as the busy gate. Under `follow` no bound is passed, so the
-  arming is today's (§9).
+  which is dropped; reworded in rev 3.1): when the mail gate moves into busy delivery while the server runs, from a
+  mode the mail sweep applied, the stall sweep judges busy as the busy gate until busy delivery has been applied once,
+  and then bounds mail-stuck's idle clock to `max(stop, busySince)`. The rule is the same under `follow` and under a
+  chosen level, so a raise by Follow or by a file touched by hand gets the grace too, which changes today's
+  behaviour there. At boot, and after a failed listing, the clock is today's (§9, goal 4).
 - `backoff-ceiling-from-the-horizon`: the computed working-reply backoff is capped at 16 h, derived from the mail
   read's horizon, so the approved 12 h maximum cannot push the ladder out of its own read (§7).
 - `quiet-half-hour-steps`: the server accepts only 30-minute steps in range, one rule with the PWA's list (§7).
@@ -1279,13 +1498,16 @@ text says pushes arrive wherever push notifications are switched on in Settings,
 - `no-coord-mutex-for-stall-settings`: one synchronous transaction instead of caps' mutex (§10).
 - `no-op-write-records-no-feed-event`: a write that changes no named field skips its `UPDATE`, so `updatedAt` does
   not move, and records no feed event (§8, §10, Q4).
-- `stages-on-the-wire-not-modes`: the reply carries derived booleans, and a per-choice preview of them, never
-  `MailTurnMode` words (§12).
+- `stages-on-the-wire-not-modes`: the reply carries derived booleans, never `MailTurnMode` words (§12).
 - `older-server-404-reads-not-configured`: the PWA reads a 404 `not-found` as "not available on this server", and
   that answer replaces a landed view rather than sitting under it (§13).
 - `confirm-on-stage-diff`: the approved "raising the level asks for a confirm that shows the gate text" becomes a
-  confirm on what a choice turns on, on leaving the further checks, and on a quiet time below the current one or the
-  built-in; each gate belongs to the stage it guards, and the sheet also lists what stops (§5.1, §13).
+  confirm on what a write turns on, on leaving the further checks, and on a quiet time brought below the current one
+  or the built-in; each gate belongs to the stage it guards, and the sheet also lists what stops (§5.1, §13).
+- `server-decides-the-confirm`: the POST works out what a write does, from the row as it stands and the row the write
+  will leave, against the listing it just took, and refuses a write that needs a confirm with 409
+  `confirm-required` until the body carries the matching key. The PWA holds no ladder and previews no choice; it
+  renders the sheet from the server's effect and sends the key back (§10, §13).
 - `notifications-label-says-push`: W2 renames the existing Notifications row to "Push notifications for this
   browser", which rev 2 had left out of scope (§4, §13, Q10).
 
@@ -1295,17 +1517,21 @@ text says pushes arrive wherever push notifications are switched on in Settings,
 - **New:**
   - `server/test/stall-settings.test.ts`, the L1 suite: the ladder and its type, the resolver (the whole-row mixed
     cases and `levelSource` included), decide, parse (prototype names, `bigint`, `updatedAt`), `isStallQuietMs`,
-    `isStallLevelChoice`, `stallStages`, `stallSettingsChange`, the counts by role and `stallArmHasRung`, and the
-    purity rows. It also holds two source scans: the control row proving the new files sit inside
-    `single-definition.test.ts`'s four walked roots, and the single-writer pin (§14 item 18).
+    `isStallLevelChoice`, `stallStages`, `stallNextStep`, `stallFilesExceed`, `stallSettingsAfter`,
+    `stallWriteEffect` with `stallNeedsConfirm` and `stallEffectKey`, `stallBusyClock`, `stallSettingsChange`, the
+    counts by role and `stallArmHasRung`, and the purity rows. It also holds two source scans: the control row
+    proving the new files sit inside `single-definition.test.ts`'s four walked roots, and the single-writer pin (§14
+    item 18).
   - `server/test/stall-settings-store.test.ts`: migration, seed, store reads and writes, the insert arm's seed
-    defaults, the no-op skip, the `setReadBigInts` reads, the window boundary, and the `EXPLAIN QUERY PLAN` row.
-  - `server/test/stall-settings-route.test.ts`: both halves, the feed with its actor, refusals, the re-read, the
-    reported fallback, and a counting throw answering 200.
+    defaults, the no-op skip, the projection's agreement with the store, the `setReadBigInts` reads, the window
+    boundary, and the `EXPLAIN QUERY PLAN` row.
+  - `server/test/stall-settings-route.test.ts`: both halves, the 409 and its key, the feed with its actor, refusals,
+    the re-read, the reported fallback, a really throwing resolver answering 200, a counting throw answering 200,
+    and the handler's device scan (M29).
 - **Extended:**
-  - `stall-sweep.test.ts` (M4's row, M8, M8a, M9c), `mail-sweep.test.ts` (the resolved mode, `busySince`, never
-    throws), `stall-session.test.ts` (the busy clock, beside the `gate-held-mail-is-not-stuck` describe ≈:777),
-    `stall-verdict.test.ts`, `stall-backoff.test.ts` (the ceiling and the relation pins);
+  - `stall-sweep.test.ts` (M4's row, M8, M8a, M9c), `mail-sweep.test.ts` (the resolved mode, `lastApplied` and
+    `busySince`, never throws), `stall-session.test.ts` (the busy clock, beside the `gate-held-mail-is-not-stuck`
+    describe ≈:777), `stall-verdict.test.ts`, `stall-backoff.test.ts` (the ceiling and the relation pins);
   - `coord-pause-route.test.ts` (member, docstring), `auth-gate.test.ts` (the two pins and the three needle
     numerals), `coordinator-skill.test.ts` (`EXEMPT`, forbid-mention), `worker-skill.test.ts` and
     `reviewer-skill.test.ts` (forbid-mention), `mail-routes.test.ts` (kebab union);
@@ -1334,13 +1560,13 @@ text says pushes arrive wherever push notifications are switched on in Settings,
 | M2 | `mail-disabled` passes through | Set `mailDisabled: false` in the chosen arm | stall-settings, stall-sweep (a held rung under a chosen level) |
 | M3 | Strict keeps its precedence | Use `row.mailMode` unconditionally | stall-settings, mail-sweep (strict plus chosen `deliver` delivers no `busy`) |
 | M3b | Strict holds the wave-2 step | Drop `&& !strict` | stall-settings (chosen `all` under strict gives `w2Live` false and `wave2HeldByStrict`) |
-| M4 | "Follow" is today's behaviour | Return a rebuilt object, or alter any field; or add `busySince` under `files` | stall-settings property test over all 2^8 file combinations: the resolved arming equals today's expression; stall-sweep, under `follow`: with `busySince` `null`, with it set, and with `mail-disabled` present, the verdicts receive today's exact arming (no `busySince` key) |
+| M4 | "Follow" is today's behaviour at boot | Return a rebuilt object, or alter any field; or let `stallBusyClock` substitute or bound while `lastApplied` is `null` | stall-settings property test over all 2^8 file combinations: the resolved arming equals today's expression; stall-sweep, at boot with the fleet box's files on busy delivery, and again with `mail-disabled` present: the verdicts receive today's exact arming, with no `busySince` key |
 | M5 | `custom` | Map no-match to the nearest step, or let `off` take part in step matching | stall-settings (escalate without live gives `custom`; a running arming with no flags reads `log`, never `off`) |
-| M6 | Unknown is never off | Map a `null` listing to `off` | stall-settings-route (`measured: false`, no `choices`), PWA (the "Unknown" line and "they say: unknown") |
+| M6 | Unknown is never off | Map a `null` listing to `off` | stall-settings-route (the GET answers `measured: false`; a POST answers 409 with the effect `{ measured: false }`), PWA (the "Unknown" line, "they say: unknown", and the sheet's one `unknown` line) |
 | M7 | `sweepMail` uses the resolved mode | Revert to `mailTurnModeOf(listing)` | mail-sweep (chosen `deliver` with no busy file delivers on `busy`; chosen `off` keeps the box's mode; on a box with no files, chosen `log` holds a live `shell` row over a current `working` marker `not-idle`, which `follow` delivers) |
-| M8 | The busy clock | Drop the bound (use `m.stopAt` under `busy` whatever `busySince` says) | stall-sweep interleaving: raise `alert` → `all` while a mail has been held over 72 min; the mail sweep applies `busy` at T; a stall sweep at T + 1 s sends no mail-stuck; at T + `MAIL_STUCK_MS`, the mail still undelivered, mail-stuck is judged. stall-session: `busySince` `null` under `busy` gives stop + `DELEGATE_CAP_MS` |
-| M8a | One resolver for both sweeps | Give one sweep its own mapping | A shared fixture drives both sweeps from one listing and one stored row: equal arming for every choice and for `follow` |
-| M8b | `busySince` is cleared when busy is not applied | Skip the clear on the early return, or on a non-`busy` mode | mail-sweep (busy applied, then `mail-disabled` touched and removed, then busy again: `busySince` is the second time, not the first) |
+| M8 | The busy clock | Drop the bound (use `m.stopAt` under `busy` whatever `busySince` says); drop `stallBusyClock`'s busy-gate substitution; or grant the grace to a chosen level only | stall-sweep interleaving, three raises, each while a mail has been held over 72 min: a chosen `alert` → `all`; Follow from a chosen `alert` over files armed for Everything; `mail-gate-busy` touched by hand under `follow`. In each the mail sweep applies `busy` at T; a stall sweep before T and one at T + 1 s send no mail-stuck; at T + `MAIL_STUCK_MS`, the mail still undelivered, mail-stuck is judged. stall-session: `busySince` absent under `busy` gives the stop; a number gives `max(stop, busySince)`; `busy-shadow` gives stop + `DELEGATE_CAP_MS`. stall-settings: `stallBusyClock` over each of its three answers |
+| M8a | One resolver for both sweeps | Give one sweep its own mapping | A shared fixture drives both sweeps from one listing without `mail-disabled` and one stored row, for every choice and for `follow`: the two `stallResolveNow` answers are equal; the mode the mail sweep applies equals the answer's `arming.mailMode`; the verdicts' arming differs from the answer only in `mailMode` and `busySince` |
+| M8b | The clock fields move only on an applied mode | Clear either field on the null-listing or `mail-disabled` return; restart `busySince` on `busy` over `busy`; or leave it set after a non-busy mode | mail-sweep (busy applied at T1, a null listing, busy again: `busySince` stays T1. Busy at T1, then `busy-shadow`, then busy at T2: `busySince` is T2. A restart: both fields `null`, and the first `busy` leaves `busySince` `null`) |
 | M9 | The quiet time reaches all three uses | Revert any one site to `STALL_QUIET_MS` | stall-verdict (r1 and the dialog cap at a chosen 30 min and 12 h), stall-backoff (base times 1, 2, 4) |
 | M9b | The backoff ceiling | Drop the cap, or raise the ceiling past its relation | stall-backoff (12 h quiet with streak 2 gives 16 h; the four relation pins in §7) |
 | M9c | `watch.ts` threads the chosen quiet time | Delete `quietMs` from `judgeStall`'s input literal | stall-sweep (stored `quietMs` 30 min; a worker quiet 31 min; under `log`, an r1 shadow row is recorded) |
@@ -1351,6 +1577,7 @@ text says pushes arrive wherever push notifications are switched on in Settings,
 | M12 | The seed and the insert arm are today's behaviour | Seed any level or quiet time; insert a quiet-only patch with another level | stall-settings-store (`follow`/`NULL`; delete the row, POST `{quietMs}` alone, level reads `follow`), stall-sweep (an unchanged verdict with the migrated database) |
 | M12b | A no-op write moves nothing | Always run the `UPDATE` | stall-settings-store (the same patch twice leaves `updatedAt` unchanged and `before` equal to `after`) |
 | M12c | The update arm keeps a stored level it was not asked to write | Rewrite the level on a quiet-only write | stall-settings-store (an unreadable stored level stays unreadable after `{quietMs}` alone) |
+| M12d | The projection is the store's write | Let `stallSettingsAfter` seed another default, or rewrite the field it was not given; or let the store write over an unreadable read | stall-settings-store (for an absent row, a row, a row with an unreadable level and a row with an unreadable quiet time, and each kind of patch: `setStallSettings`' `after` parses equal to the parsed projection; with the store's read made to answer `unreadable`, the write throws and the row is unchanged) |
 | M13 | The reply re-reads | Echo the body | stall-settings-route (a write racing a second write answers the stored value) |
 | M14 | Unknown key or empty body refused | Ignore unknown keys | stall-settings-route (400 names the key) |
 | M15 | Feed event on a change of level or quiet time only, flush in `finally`, actor named | Compare whole reads (with `updatedAt`); move the flush into the `try`; drop the actor | stall-settings-route (the same body POSTed twice gives one feed row; a throwing `recordFeedEvent` still flushes; the body ends `by flag-off` unarmed and `by device:<label>` armed) |
@@ -1360,26 +1587,38 @@ text says pushes arrive wherever push notifications are switched on in Settings,
 | M17 | Counts: live versus shadow, run-bound only, by role | Swap the modes; count unparsed rows; tally quiet rung 1 under `wakes`, or tally by rung number | stall-settings (a transition row is ignored; quiet rung 1 counts as `checks`; orphan E rung 1 as `wakes`; frozen rung 1 as `reports`; a dialog-cap row as `pushes`) |
 | M17b | A rung the arm lacks is skipped, and counting never fails the reply | Call `rungRecipient` without `stallArmHasRung`; remove the builder's `try` | stall-settings (a planted `stall:dialog-cap:2:…` row is skipped), stall-settings-route (the view still answers 200; a throwing count gives `notices.ok: false`) |
 | M17c | The window boundary | Use `>` for `>=` | stall-settings-store (rows at `since` and `since - 1`: only the first comes back) |
-| M18 | Kebab declaration | Remove `isStallSettingsKebab` from the scan | mail-routes |
+| M17d | The index serves the count read | Drop `run_events_by_at` from the migration | stall-settings-store (the pinned `EXPLAIN QUERY PLAN` row no longer reads `USING INDEX run_events_by_at`) |
+| M18 | Kebab declaration | Remove `isStallSettingsKebab` from the scan, or drop one of its three words | mail-routes (`busy-shadow`, `confirm-required` and `flag-off` each red when undeclared) |
 | M19 | No marker name in new code | Spell a marker in a gate text | single-definition (the existing pins, unedited), stall-settings (the control row: the new files sit inside the four walked roots) |
 | M19b | L1 purity of `stallsettings.ts` | Add a `node:fs` import, a `Date.now()`, or a `db.js` value import | stall-settings purity rows |
-| M20 | `stallResolveNow` never throws | Remove its try/catch | mail-sweep (a throwing `store.stallSettings`, and separately a throwing resolver, still let `sweepMail` deliver at the listing's mode); stall-settings-route (the view reports `fallback` with its reason) |
+| M20 | `stallResolveNow` never throws, and the view still answers | Remove its try/catch; call the latch from the catch; compose `reason` outside its inner `try`; or remove the view builder's `try` | mail-sweep (a throwing `store.stallSettings`, a throwing resolver, a throwing latch, and an error whose `message` getter throws: each still lets `sweepMail` deliver at the listing's mode); stall-settings-route (with `resolveStallWatch` replaced, through the module mock, by one that really throws for a chosen row, and no watcher: the GET answers 200 with `fallback` set from the builder's own catch and `effective.source` `files`) |
+| M20b | The fallback clears | Never reset `lastFallback` | mail-sweep (a throw, then a resolution that succeeds: `stallFallback()` reads `null`) |
 | M21 | The warn latch | Warn on every read; or never re-arm | mail-sweep (an unreadable row warns once across many sweeps; a read that applies, then a second failure, warns again) |
-| M22 | `stallStages` | Derive `busyDelivery` or `busyGate` from the mode alone | stall-settings (with `mailDisabled` both read false; under strict both read false) |
-| M23 | The held flags and `held` | Drop any of `watchOff`, `mailOff`, `gateStrict`; report `chosen` under strict | stall-settings (each flag alone; chosen `deliver` under strict reads `alert` with `levelSource` `held`; chosen `check` under strict stays `chosen`) |
-| M24 | The hazard line | Drop its condition | settings-screen (files arming alerts and the further checks without busy delivery show it; with busy delivery they do not) |
+| M22 | `stallStages` | Derive `busyDelivery` or `busyGate` from the mode alone; or read `busyGate` from `busy-shadow` only | stall-settings (`busyGate` true under `busy` and under `busy-shadow`; with `mailDisabled` both mail-gate stages read false; under strict both read false) |
+| M23 | The held flags, and `held` only when a flag changed what the choice does | Drop any of `watchOff`, `mailOff`, `gateStrict`; report `chosen` under strict; or set `held` whenever a flag merely stands | stall-settings (each flag alone; chosen `deliver` under strict reads `alert` with `levelSource` `held`; chosen `check` under strict reads `check` with `held`; chosen `off` under the kill file, with and without a box busy file, stays `chosen`) |
+| M24 | The hazard line | Drop its condition, or its `mailOff` exception | settings-screen (files arming alerts and the further checks without busy delivery show it; with busy delivery they do not; under `held.mailOff` they do not) |
 | M25 | A row applies whole | Resolve field by field | stall-settings (level unreadable with a set quiet time: built-in quiet time and the files; level chosen with an unreadable quiet time: the files, not the level) |
+| M26 | The server decides the confirm | Drop any arm of `stallNeedsConfirm`; build the after side from the row as it stands rather than from `stallSettingsAfter`; or let `mailDisabled` into the comparison | stall-settings (each needs a confirm: a stage turning on; leaving the further checks; a quiet time brought below the current one, and one brought below the built-in; an absent row with the files at Check and a write of `all`; a stored `all` with an unreadable quiet time and a quiet write of 3 h; an unreadable level with a stored 30 min and a write of Follow; `mail-disabled` with Alert → Deliver. Neither needs one: a pure lowering; Deliver → Alert over a box busy-shadow file); stall-settings-route (each needing arm answers 409 and writes nothing) |
+| M27 | The key ties the confirm to the effect and the row | Accept any `confirm`; or leave `updatedAt` out of the digest | stall-settings-route (a 409, then another page's write, then the first page's re-POST with its old key: 409 again with the fresh effect, and nothing written by it; a matching key writes; a body that needs no confirm writes without one) |
+| M28 | Files-exceed compares sending stages only | Compare all five stages, or include `busyGate` | stall-settings (box `stall-watch-live` plus `mail-gate-busy-shadow` with a chosen `deliver`: `filesExceed` false; files at Alert with a chosen `check`: true; the same in the effect's after state) |
+| M29 | The handler never branches on the device label, and new server prose names no device | Add a branch on `sessionAuth(req).device`; or write the device word the old Notifications label began with into a new comment | stall-settings-route (the POST handler's slice of `coord/routes.ts`, comments stripped and `deviceActor(sessionAuth(req).device)` removed, holds no `device` token; the handler's slice with its docstring, and `stallsettings.ts`, hold no device word), with a control row proving the slice is not empty |
+| M30 | `stallNextStep` | List the busy gate in `waitsOn`; or answer a step when the reading differs from the choice | stall-settings (files with no gate file reading `log`: a step to `check` waiting on checks alone; chosen `deliver` under strict: `none`; `all`: `top`) |
 | P1 | Three-state render | Collapse `failed` into the skeleton | settings-screen |
 | P1b | Not-configured wins over a landed view | Render the landed view first, as the Updates section does | settings-screen (a landed view, then a 404 `not-found` poll: the not-available text, no radio checked) |
 | P2 | Checked from the server | Check from the tap | settings-screen (a refused write leaves the old radio checked) |
-| P3 | The confirm is a stage diff, decided on `refresh()`'s own answer | Decide from the hook's `view`; drop the leave-Everything arm; confirm on a pure lowering; write after a failed re-check | settings-screen (a stage turning on opens it; leaving Everything opens it; a pure lowering does not; a quiet value below the current one or the built-in opens it; `refresh()` `'failed'` writes nothing and toasts; `'not-configured'` writes nothing), `stallStageDiff` and `stallConfirmLines` units |
-| P3b | Off over a busy file says busy delivery comes back | Use the generic turn-on line | `stallConfirmLines` unit (target `off`, box busy, chosen `check` now: "Busy delivery turns back on: the fleet box's files arm it.") |
-| P4 | Settle and refresh win over a stale poll | Drop the generation bump in `settle` or in `refresh` | use-stall-watch-view |
+| P3 | The confirm comes from the server | Decide a confirm in the section; send anything on Cancel; re-POST without the key | settings-screen (a 409 opens the sheet from its effect; Cancel sends nothing more; Set re-POSTs the same body with `confirm` equal to `effectKey`, and the 2xx settles; a write answered 2xx at once opens no sheet) |
+| P3b | Off over a busy file says busy delivery comes back | Use the generic turn-on line | `stallConfirmLines` unit (an effect with `busyDelivery` turning on and `after.runs` false: "Busy delivery turns back on: the fleet box's files arm it.") |
+| P3c | A stale key opens a fresh sheet | Treat a second 409 as a refusal, or keep the first effect | settings-screen (Set answered by a second 409 with a new effect: the sheet shows the new lines, and the next Set carries the new key) |
+| P3d | The lines say what the write does | Show `due` for busy delivery alone; show a due line under `mailOff`; word the quiet line the same whatever runs after; drop the dialog line | `stallConfirmLines` units (busy delivery alone: `dueMail`, not `due`; checks from a running watch: `due`; from Off: `dueFromOff`; `mailOff`: no due line; a lowered quiet time with the watch off, at Log, at Check and at Everything after the write: `quietOff`, `quietRecorded`, `quietDue`, `quietDueAll`; with alerts on: `quietDialogs`) |
+| P4 | Settle wins over a stale poll | Drop the generation bump in `settle` | use-stall-watch-view |
 | P5 | The run-less footnote is always shown | Hide it when counts are zero | settings-screen |
 | P6 | No device word, no device branch | Add a `matchMedia` branch, or the word the old Notifications label began with | a source scan of `StallWatchSection.tsx`, the L0 `STALL_*` strings and the renamed Notifications row label |
 | P7 | Only 501 `not-configured` and 404 `not-found` read not-configured | Map every 404, or every 501 | use-stall-watch-view |
 | P8 | `QuickConfirm` renders a list | Join the lines into one string | primitives (`consequence` as an array renders one `<p className="qc-consequence">` per line; a string renders one) |
-| P9 | The section spells no level id | Hard-code a level list for the busy-gate-off note | a source scan of `StallWatchSection.tsx` finds no `StallLevel` literal; settings-screen (a files-read `log` without the gate shows the note from `choices`) |
+| P9 | The section spells no level id | Hard-code a level list for the busy-gate-off note | a source scan of `StallWatchSection.tsx` finds no `StallLevel` literal; settings-screen (a files-read `log` without the gate shows the note; a chosen level under strict does not) |
+| P10 | The held source and the Next step render from the wire | Render `held` as "Chosen here"; render a Next step for `next.kind` `none` | settings-screen (a `held` source shows "Chosen: <label>, held back by the fleet box (<reason>)"; `none` shows no Next step; a `step` with an empty `waitsOn` shows no "Waits on:") |
+| P11 | The files-exceed line follows `effective.filesExceed` | Drop it, or show it whenever the source is not `files` | settings-screen (true shows it; false under a chosen level does not) |
+| P12 | The stored and fallback lines | Drop the `both` line or any other stored line; or drop the fallback line | settings-screen (each of the five stored lines for its case; a non-null `fallback` shows the fallback line) |
 
 ## 18. Waves (a new programme, `stall-watch-settings`)
 
@@ -1391,18 +1630,20 @@ from `POST /api/ledger/deviations` when the plan is written.
   - Store methods: `stallSettings` (read with `setReadBigInts(true)`), `setStallSettings` (with the no-op skip),
     `stallObservationsSince`.
   - L1 `server/src/coord/stallsettings.ts`: `StallLadderRow` and `STALL_LADDER`, `stallBoxArmingOf`,
-    `isStallQuietMs`, `parseStallSettings`, `resolveStallWatch`, `stallLevelOf`, `stallStages`,
-    `stallSettingsChange`, `decideStallSettings`, `stallNoticeCounts`, the bounds, step and window constants, and
-    `isStallSettingsKebab`.
+    `isStallQuietMs`, `parseStallSettings`, `resolveStallWatch`, `stallLevelOf`, `stallStages`, `stallNextStep`,
+    `stallFilesExceed`, `stallSettingsAfter`, `stallWriteEffect`, `stallNeedsConfirm`, `stallEffectKey`,
+    `stallBusyClock`, `stallSettingsChange`, `decideStallSettings`, `stallNoticeCounts`, the bounds, step and window
+    constants, and `isStallSettingsKebab` with its three words.
   - `stall.ts`: `StallInput.quietMs`, `stallQuietMs`, the three use sites, `STALL_BACKOFF_CEILING_MS` in
     `stallBackoff`, `StallArming.busySince` and the bounded `stallIdleStart` change (§9), `stallArmHasRung` (§11), and
     the comment rewording (§7).
-  - `watch.ts`: both sweeps, `busySince`, `lastFallback` and its public read `stallFallback()`, `stallResolveNow`
-    (never throws) with its warn latch and boot trace, `quietMs` threaded into `judgeStall`, and the `STALL_SWEEP_MS`
-    comment.
-  - The routes in `coord/routes.ts`, with the docstring arguing gating and the unarmed-box insider case, the
-    view builder over `choices` and `fallback`, and the feed body's actor (`deviceActor`, imported from
-    `ccdargv.js`).
+  - `watch.ts`: both sweeps, `lastApplied` and `busySince`, `lastFallback` and its public read `stallFallback()`,
+    `stallResolveNow` (never throws, and its catch calls nothing that can throw) with its warn latch and boot trace,
+    `quietMs` threaded into `judgeStall`, and the `STALL_SWEEP_MS` comment.
+  - The routes in `coord/routes.ts`: the docstring arguing gating and the unarmed-box insider case, worded as the
+    Settings page's control with no device word; the view builder that never throws, with `next`, `filesExceed` and
+    `fallback`; the POST's effect, 409 and key; and the feed body's actor (`deviceActor`, joining the existing
+    `ccdargv.js` import, or `flag-off`).
   - L0 wire types and texts, appended at the end of `shared/api.ts` (§12).
   - **The census edits:**
     - `SESSION_ONLY` and its docstring;
@@ -1411,7 +1652,7 @@ from `POST /api/ledger/deviations` when the plan is written.
       `worker-skill.test.ts` and `reviewer-skill.test.ts`;
     - `CLAUDE.md`: the box-token sentence, the mail-gate sentence (as the operator's Settings control), and the
       `coord.db` bullet's loss list (≈:255) gaining "the stall-watch settings choice".
-  - The kebab union.
+  - The kebab union, its failure message, and M29's device scan in `stall-settings-route.test.ts`.
   - **README** (each line re-measured at the first step):
     - **The stall-watch paragraph** (≈:3999). "for the quiet time (2 h unless Settings sets another, 30 min to 12 h)"
       wherever it says 2 h for r1, the dialog cap or the backoff base (≈:4005, ≈:4023, ≈:4036, ≈:4046); and that
@@ -1433,11 +1674,15 @@ from `POST /api/ledger/deviations` when the plan is written.
   - **The parent spec** (`2026-09-29-worker-stall-watch-design.md`): the one-line status pointer, and §10's kill
     rules (≈:874–876, "`rm stall-watch-live`", "`rm stall-watch-escalate`") qualified with the same clause.
 
-  **It deploys first and changes nothing** until a level or a quiet time is written, because the seed is `follow`
-  plus the built-in. The door is reachable with `curl` behind the session gate before W2 lands.
+  **It deploys first.** It changes nothing until a level or a quiet time is written, because the seed is `follow`
+  plus the built-in, or until the mail gate moves into busy delivery while the server runs, which gets the busy
+  clock's grace (§9, goal 4). The door is reachable with `curl` behind the session gate before W2 lands: a write
+  that needs a confirm answers 409 with its effect and key, and the same body sent again with `confirm` set to that
+  key writes.
 - **W2: the PWA section (deploy class: server, which serves the PWA).**
-  - `useStallWatchView` (with `refresh()`), the API methods, `StallWatchSection.tsx`, the stage-diff confirm and its
-    pure helpers, and the header and "ONE poll" comment amendments in `SettingsScreen.tsx`.
+  - `useStallWatchView` (with `settle`, and no `refresh`), the API methods, `StallWatchSection.tsx`, the 409 handling
+    and the sheet built from the server's effect, the pure helpers and the two guards, and the header and "ONE poll"
+    comment amendments in `SettingsScreen.tsx`.
   - `QuickConfirm.tsx`: `consequence: string | string[]`, one paragraph per line, with its row in
     `pwa/test/primitives.test.tsx`.
   - The Notifications row's label, renamed to "Push notifications for this browser" (`SettingsScreen.tsx` ≈:650),
@@ -1452,14 +1697,14 @@ carries a default that the coordinator took, so that one review of this document
 of them, say so in the review.
 
 1. **Reading a level from the files when the busy gate does not match.** Default:
-   `files-level-match-ignores-the-busy-log`. A box with no files reads "Log only", with the busy gate off, not
+   `files-level-match-ignores-the-busy-gate`. A box with no files reads "Log only", with the busy gate off, not
    "custom", so a fresh install shows a ladder step.
 2. **What `off` does to the mail gate.** Default: as approved. `off` stops the stall lane and leaves the mail gate as
    the fleet box's files set it. `off-sets-the-shell-gate` is not taken. Where a lower choice had switched busy
    delivery off over a box busy file, Off's confirm now says "Busy delivery turns back on: the fleet box's files arm
    it." (§13).
 3. **Choosing "Follow the fleet box's files" when the files arm more than the effective level.** Default: it asks
-   for a confirm, as any choice that turns a stage on does (§13), since it can arm more.
+   for a confirm, as any write that turns a stage on does (§10, §13), since it can arm more.
 4. **A write that changes nothing.** Default: no feed event, and no `UPDATE` either: the store compares the named
    fields first, so `updatedAt` does not move (§8). The reply re-reads the stored values.
 5. **Who coordinates.** The coordinator of the completed stall-watch programme (`ccrc-pwa-calm-harbor`) coordinates
@@ -1470,9 +1715,9 @@ of them, say so in the review.
    would do. On a box whose files leave the gate off, choosing one of them turns that stage on and opens the confirm
    (§5.1). Alternative: below Deliver, leave the gate as the fleet box's files set it, with a box `busy` demoted to
    `busy-shadow`.
-7. **The quiet-time floor.** Default: the approved 30 min. A value below the built-in opens the confirm, and the note
-   says that below Everything a waiting worker is checked once per quiet time (§7, §13). Alternative: a floor of
-   1 h.
+7. **The quiet-time floor.** Default: the approved 30 min. A value brought below the built-in opens the confirm, and
+   the note says that while the further checks are off a waiting worker is checked once per quiet time (§7, §13).
+   Alternative: a floor of 1 h.
 8. **Repeat pushes about one open dialog.** Default: the chosen quiet time also spaces them, as R28's accepted
    residue does at today's 2 h, and the note and the alerts gate disclose it (§7). Alternative: keep the dialog cap
    on the built-in 2 h, so the setting changes worker checks only.
@@ -1486,3 +1731,10 @@ of them, say so in the review.
     either field is unreadable, or the row is absent or unreadable, neither stored choice applies; the wire still
     reports each field's state (§6.2, §8). Alternative: field by field, so a readable level or quiet time applies
     beside an unreadable other.
+
+**A note to the operator on goal 4 (not a question).** Rev 3 promised that W1 changes nothing until a level or a
+quiet time is written. Rev 3.1 keeps that, with one named exception: when the mail gate moves into busy delivery
+while the server runs, the stall sweep waits until busy delivery has actually started before it times stuck mail
+(`busy-clock-starts-when-busy-delivery-starts`, §9). That now applies to Follow and to `mail-gate-busy` touched by
+hand as well as to a chosen level. On those two paths it is a change from today: it removes today's window for a
+false stuck-mail push during the first busy pass. At boot, and after a failed listing, the clock is exactly today's.
