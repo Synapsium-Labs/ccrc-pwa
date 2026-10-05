@@ -1363,6 +1363,23 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     finding is fixed in that round if one runs, and otherwise becomes residue. The worker's six parked minors are
     residue for wave 11 or 12 unless the review shows one reachable live.
 
+- **2026-10-05 06:29 UTC: wave 9's macOS acceptance met, read from PR #251's own `test-macos` legs** (run
+  37269535399, jobs 111633442008 and 111633442042).
+  - The four files that hold the 12 cases are green on macOS:
+    - `ccrc-update`: 503 tests, 123 skipped;
+    - `ccrc-install`: 313 tests, 48 skipped;
+    - `update-spawn`: 15 tests;
+    - `ccd-tmux-anchor`: 34 tests.
+
+    Case 4 is `itLinux` now, so it skips on macOS by construction.
+  - `update-killed-arms` is green too.
+  - The legs' remaining reds are all the GPT lane's: `ccrc-codex` 39, `ccrc-account` 8, `ccrc-doctor` 7,
+    `ccgpt-runtime` 1, `ccd-account-auth` 1.
+    - `ccrc-doctor`'s seven are all "codex, part 2" and `--fix: codex` cases, from Plan 3a (#239). So none of
+      Task 4's `itDarwin` twins is red.
+  - Every Linux leg of the PR is green. The held-out review (run 265, `ccrc-pwa-warm-mesa`, dispatched 05:54) is
+    still to rule.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
