@@ -229,6 +229,7 @@ describe('the move INTO wave 11: the pre-wave-11 _upd_sweep (frozen, v0.0.60–v
       ...FIRST_11,
       `--user is-active ${DEMO_GONE}`,
       `--user is-active ${DEMO_GONE}`,
+      `--user show -p LoadState --value ${DEMO_GONE}`,
     ]);
     expect(poisonFiles(box)).toEqual([]);
   }, 60_000);
