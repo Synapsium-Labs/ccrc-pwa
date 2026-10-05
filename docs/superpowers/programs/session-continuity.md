@@ -324,6 +324,21 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - **The brief was re-dated at dispatch.** #215 merged at `b40f4145` (22:10) before it, so the overlap line now says
     the branch already carries it and the plan's anchors in ccd/ccd, ccd/ccrc and session-hook.test.ts must be
     re-measured.
+- **2026-10-05 10:15 — wave 3's wave-done** (mail 3469; PR #250 at `b00849ee`): every task done.
+  - **Numbers defined:** 3896–3905 and 3921. The worker also used all four spares:
+    - 3922: the journal floor follows rotation;
+    - 3923: one transcript read per restart (`choicekept`);
+    - 3924: a lane change moves the floor;
+    - 3925: a `/model` typed before `/clear` is lost. It is listed as a known cost, with the code fix deferred.
+  - **Re-measured:** the tip matches the claim, and every required Linux check is green. The reds are load or
+    tmp-sweep, which is red on main. The run went to `awaiting-review`, and its five items were settled.
+  - **Review run 268** is dispatched to `ccrc-pwa-plain-hollow`. It was first refused by ccd's 10 GB disk floor;
+    this coordinator's three spent planning worktrees were removed (1.85 GB, all clean and pushed) and it was
+    dispatched again.
+  - **The worker's asks,** ruled after the review:
+    1. confirm 3922–3924;
+    2. defer the `/clear` fix, or require it now. The review costs the fix. ccd's own header there says "NEVER A
+       SILENT LOSS".
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

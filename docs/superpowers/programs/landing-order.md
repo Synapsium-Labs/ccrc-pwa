@@ -417,6 +417,22 @@ carries it (spec §5.1, amended 2026-09-24).
     the operator and to the update-management coordinator.
   - **The brief was re-dated at dispatch.** #215 merged at `b40f4145` (22:10) before it, so the overlap line now says
     the branch already carries it and the plan's anchors in its files must be re-measured.
+- **2026-10-05 10:15 — wave 3's wave-done** (mail 3457; PR #248 at `3f9cca09`): the plan's five tasks, the
+  amendment, and 3906–3915 defined. 3916–3920 are unused.
+  - **Re-measured:** the tip matches the claim, and every required Linux check is green. The worker's reds are load
+    (each green alone) or tmp-sweep, which is red on main. The run went to `awaiting-review`, and its five items were
+    settled.
+  - **Review run 267** is dispatched to `ccrc-pwa-bright-hollow`.
+  - **Open, ruled after the review (mail 3421):** over the cap, gh's own flags between the words
+    (`gh -R o/r pr merge 42`) pass, where main denies them. That is a regression against main, so under the
+    stopping line it will be CLOSED in the fix round, with a spare. The worker proposes a linear closure: split the
+    raw text on separators, then test each segment. Review 267 costs it first.
+  - **macOS (mail 3461, from bright-river).** session-hook-merge-deny fails 20 of 71 cases on test-macos in a full
+    run on main, and 22 of 82 on #248. Every one is a merge after a heredoc or quoted substitution that is not
+    denied: the deny fails OPEN on macOS. It blocks the stable gate. Review 267 diagnoses it from the job logs, and
+    the fix round owns it.
+  - **Main moved** under the branch (#247, #249, #246). #246 edits coordinator-skill.test.ts; the review judges the
+    merged tree.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
