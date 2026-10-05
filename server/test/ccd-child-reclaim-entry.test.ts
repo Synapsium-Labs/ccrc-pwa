@@ -486,6 +486,7 @@ const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean, RegEx
   // session id (`^[A-Za-z0-9._-]+$`), so this is a read-only plain audit of a session of that name.
   ['audit, missing session-value position', ['ws-audit', '--session', '--reclaim'], false, null],
   ['audit, --reclaim out of order', ['ws-audit', '--reclaim', '--session', 'x'], false, USAGE],
+  ['audit, --expire out of order', ['ws-audit', '--expire', '--session', 'x'], false, USAGE],
   ['audit, --defer-expired before --reclaim', ['ws-audit', '--session', 'x', '--defer-expired', '--reclaim'], false, USAGE],
   ['audit, a later duplicate --reclaim', ['ws-audit', '--session', 'x', '--reclaim', '--reclaim'], false, USAGE],
   ['audit, an extra token', ['ws-audit', '--session', 'x', '--reclaim', 'extra'], false, USAGE],

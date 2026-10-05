@@ -33,11 +33,12 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { parseCcdCaps } from '../../shared/agent-protocol.js';
+import { EXPIRE_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
 import { CCD } from './ccdWsHelpers.js';
 
 /** The literal tokens `cmd_caps` prints unconditionally, read from ccd itself.
- *  Only bare `echo <token>` lines inside the function body — anything
- *  interpolated or conditional is a runtime question this static read cannot
+ *  Only `echo <token>` statements inside the function body — a line may carry several, split on `;`, with a trailing
+ *  `# …` comment stripped; anything interpolated or conditional is a runtime question this static read cannot
  *  answer, and pretending otherwise would be a worse lie than omitting it. */
 function emittedCapsTokens(): string[] {
   const src = readFileSync(CCD, 'utf8').split('\n');
@@ -46,7 +47,8 @@ function emittedCapsTokens(): string[] {
   const end = src.findIndex((l, i) => i > start && /^\}/.test(l));
   if (end < 0) throw new Error('ccd/ccd: cmd_caps() has no closing brace at column 0 — re-anchor this test');
   const toks = src.slice(start, end)
-    .map((l) => /^\s*echo\s+([A-Za-z0-9][A-Za-z0-9_-]*)\s*$/.exec(l))
+    .flatMap((l) => l.replace(/\s+#.*$/, '').split(';'))
+    .map((piece) => /^\s*echo\s+([A-Za-z0-9][A-Za-z0-9_-]*)\s*$/.exec(piece))
     .filter((m): m is RegExpExecArray => m !== null)
     .map((m) => m[1]!);
   if (toks.length === 0) throw new Error('ccd/ccd: cmd_caps() printed no bare `echo <token>` lines — re-anchor this test');
@@ -59,6 +61,18 @@ describe('every ccd caps token survives parseCcdCaps', () => {
     // If this ever shrinks to nothing the assertions below pass vacuously.
     expect(toks.length).toBeGreaterThanOrEqual(3);
     expect(new Set(toks).size).toBe(toks.length);
+  });
+
+  it('collects the tokens on a shared `;` line, and the verb echoed beside them', () => {
+    // `cmd_caps` sits above the frozen citation anchors, so wave 3 could not add lines there: `reclaim-pause-v1`,
+    // `expire-v1` and the verb `ws-expire` share ONE line. A bare-line read dropped all three without a sound (the
+    // set shrank to twelve, `reclaim-pause-v1` among the lost) while the assertions above stayed green. `ws-expire`
+    // is a VERB name rather than a capability token; it is collected too, because it is something `cmd_caps` prints
+    // that must survive `parseCcdCaps` — the same question asked of every other line.
+    const toks = emittedCapsTokens();
+    expect(toks).toContain(RECLAIM_PAUSE_CAP);
+    expect(toks).toContain(EXPIRE_CAP);
+    expect(toks).toContain('ws-expire');
   });
 
   it('keeps EVERY token ccd advertises — none is silently dropped by the filter', () => {
