@@ -158,6 +158,13 @@ fi
 # knob.)
 : "${CCRC_DOCTOR_GH_TIMEOUT:=15}"
 
+# How long `ccd docs-index --all` may take before the `docs` check calls it
+# unanswered (spec 2026-10-01 §7.2). The DEFAULT equals the server's runner
+# budget for the same verb (20 s), so doctor waits exactly as long as a Docs
+# page would; Docs W2 adds that budget and the test that holds the two equal.
+# Overridable for the gh knob's reason above.
+: "${CCRC_DOCTOR_DOCS_TIMEOUT:=20}"
+
 # ── the check table ───────────────────────────────────────────────────────
 # DATA. `cmd_doctor` iterates this array and calls `_check_<name>` for each
 # entry, so adding a check is one entry here, one function below, and one test
@@ -203,6 +210,7 @@ CCRC_DOCTOR_CHECKS=(
   memory
   routing
   models
+  docs
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -488,7 +496,7 @@ _check_jq() {
     "install it: sudo apt install jq"
 }
 _check_python3() {
-  _dr_need_bin python3 "ccd's session hook and its registry locking are python3 (ccd:1043-1110)" \
+  _dr_need_bin python3 "ccd's session hook, its registry quoting and its Docs helper are python3" \
     "install it: sudo apt install python3"
 }
 _check_flock() {
@@ -5686,4 +5694,169 @@ _check_models() {
   local n="${#ok[@]}" plural=lane
   [ "$n" -eq 1 ] || plural=lanes
   _dr_pass models "$n $plural, $(_dr_join "${ok[@]}")"
+}
+
+# ── docs: does this box's ccd answer Docs (spec 2026-10-01 §7.2) ──────────
+# The FLEET half of Docs, measured through the verb itself. Every Docs page
+# is read by the agent exec-ing `$HOME/.local/bin/ccd docs-*` (spec §7.1), so
+# this check runs the one verb of the four that is read-only by construction
+# — `docs-index --all` writes nothing, never fetches and enumerates no
+# worktree (§2 (h)) — under a deadline, and classifies its one-line answer.
+# It is the first check in this file that runs a ccd verb against the live
+# box, and it also runs inside `ccrc update`'s closing doctor
+# (`_inst_doctor_tail` in ccd/ccrc), which gates the migration finish and the
+# version GC and makes the update exit 3 on a FAIL. So a FAIL here has that
+# consequence: a box whose ccd cannot answer Docs updates, keeps its
+# `ccrc.migrating` tree and its older versions until the next gate passes, and
+# exits 3 — the FAIL is honest (the box is on the new build, but Docs cannot
+# run on it), and it is meant to be seen, not swallowed. A WARN never gates.
+#
+# THE PYTHON FLOOR LIVES IN ccd, NOT HERE (C2). `_check_python3` stays a
+# presence check; the 3.8 floor is ccd's docs bash front, which answers
+# `helper-unavailable` with the detail `python-missing` or `python-too-old`,
+# so this check reads the floor through the verb rather than restating it.
+# It measures the python3 ccd finds under THIS shell's PATH; the agent's unit
+# may carry another PATH, which no doctor check can see.
+#
+# COUNTS ONLY, NEVER A PROJECT NAME: doctor output gets pasted. No arm below
+# prints a field of the answer except the failure WORD (held to a word
+# grammar by the jq program) and the two fixed `helper-unavailable` details;
+# a row's name and a `detail` string never reach a verdict line. The WARN's
+# remedy is the one-liner that lists the unreadable rows on the operator's
+# own terminal.
+#
+# STDOUT AND STDERR ARE CAPTURED APART, never `2>&1`: the answer is one JSON
+# line by contract (§2 (b)), and one merged warning would turn a working box
+# into an unparseable answer. NO TEMP FILE holds the stderr either: `mktemp`
+# and `rm` are coreutils, and this file does not let a check's own diagnosis
+# depend on a binary the broken box may lack (`_check_node`'s rule; the
+# doctor suite's PATH carries neither). The inner shell serialises the three
+# values with `declare -p` and `eval` reads them back here — bash's own
+# quoting, so no byte ccd prints can escape it — and `3>&-` keeps ccd from
+# inheriting the descriptor that carries them.
+#
+# `unwalked` (docs-index's count of projects its walk did not reach before its
+# helper deadline, absent when 0) is a WARN, never a FAIL: the rows listed are
+# intact and the box answers Docs. The line gains ", N not checked (time
+# budget)"; a count, never a name.
+#
+# "SERVED BY DOCS" is a row whose `state` is `ready`: a repository with a
+# default branch, the one state whose tree the Docs screen opens. The other
+# six states are listed and serve no page.
+_check_docs() {
+  # A server-role box runs no ccd verb for Docs: the fleet box's doctor
+  # measures the verb where the agent execs it. The role read is
+  # `_check_memory`'s idiom — `-f` before `-r`, and `${BOX_ENV_FILE:-}`
+  # because this file is sourced under `set -u` by callers that are not ccrc.
+  local _srv_role=""
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip docs "no ccd answers Docs here; the fleet box's doctor measures it"
+    return 3
+  fi
+  # The path the agent execs (spec §7.1), never `command -v ccd`, which can
+  # find a checkout's copy the agent never runs.
+  local ccd="$HOME/.local/bin/ccd"
+  if [ ! -e "$ccd" ] && [ ! -L "$ccd" ]; then
+    _dr_fail docs "no ccd at \$HOME/.local/bin/ccd, the file the agent runs for every Docs read" \
+      "ccrc update"
+    return 1
+  fi
+  if [ ! -f "$ccd" ] || [ ! -x "$ccd" ]; then
+    _dr_fail docs "\$HOME/.local/bin/ccd is not an executable file, so the agent cannot run it for a Docs read" \
+      "ccrc update"
+    return 1
+  fi
+
+  local out="" err="" rc=0 cap
+  cap="$(
+    {
+      err="$(
+        { out="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" "$ccd" docs-index --all </dev/null 3>&-)"; rc=$?; } 2>&1
+        declare -p out rc >&3
+      )"
+      declare -p err
+    } 3>&1
+  )"
+  eval "$cap"
+
+  if [ "$rc" -eq 124 ]; then
+    _dr_fail docs "ccd docs-index did not answer within $CCRC_DOCTOR_DOCS_TIMEOUT s" \
+      "run \$HOME/.local/bin/ccd docs-index --all by hand to see whether it returns at all, then re-run: ccrc doctor"
+    return 1
+  fi
+  if [ "$rc" -ne 0 ]; then
+    # An old ccd's unknown-verb arm answers exactly rc 1 with `usage: ccd
+    # {...}` on stderr (spec §7.2), which is the line this quotes: the first
+    # one, cut to 200 BYTES — `LC_ALL=C` inside the substitution only, so the
+    # cut counts bytes and the rest of the check keeps the box's locale.
+    local first
+    first="$(_dr_first_line "$err")"
+    first="$(LC_ALL=C; printf '%s' "${first:0:200}")"
+    _dr_fail docs "ccd could not run docs-index (rc $rc: ${first:-nothing on stderr}); it predates Docs or died" \
+      "ccrc update"
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    _dr_fail docs "jq is not on PATH, so ccd's docs-index answer cannot be read" \
+      "install jq first — see the 'jq' check above"
+    return 1
+  fi
+
+  # ONE jq program is both the shape gate and the reader, so no state exists
+  # in which the shape was accepted and the fields could not be read. `-s`
+  # slurps every JSON value stdout carries, so two answers are refused as
+  # surely as none, and `type == "object"` comes first so a bare number reads
+  # false rather than raising. The answer must be exactly one object with v 1
+  # and verb docs-index, and either ok:true with a projects array or ok:false
+  # with a word-shaped failure; anything else prints nothing and lands on the
+  # last arm. The program is one single-quoted string: no apostrophe in it.
+  local row tag a b c d
+  row="$(jq -r -s '
+    if length == 1 and (.[0] | type == "object" and .v == 1 and .verb == "docs-index") then .[0] else empty end
+    | if .ok == true and (.projects | type) == "array" then
+        "ok \(.projects | length) \([.projects[] | select(type == "object" and .state == "ready")] | length) \([.projects[] | select(type == "object" and .state == "repo-unreadable")] | length) \(if (.unwalked | type) == "number" and .unwalked > 0 then .unwalked | floor else 0 end)"
+      elif .ok == false and (.failure | type) == "string" and (.failure | test("^[a-z][a-z0-9-]{0,63}$")) then
+        "fail \(.failure) \(if .detail == "python-missing" or .detail == "python-too-old" then .detail else "-" end)"
+      else empty end' <<<"$out" 2>/dev/null)"
+  read -r tag a b c d <<<"$row"
+  case "$tag" in
+    ok)
+      local line="$a projects under ccd's projects root, $b served by Docs"
+      [ "$c" -gt 0 ] && line="$line, $c unreadable"
+      [ "$d" -gt 0 ] && line="$line, $d not checked (time budget)"
+      if [ "$c" -gt 0 ]; then
+        _dr_warn docs "$line" \
+          "ccd docs-index --all | jq -r '.projects[] | select(.state==\"repo-unreadable\") | .project'"
+        return 2
+      fi
+      if [ "$d" -gt 0 ]; then
+        _dr_warn docs "$line" \
+          "the index walk stopped at its time budget; re-run when the box is quieter: ccrc doctor"
+        return 2
+      fi
+      _dr_pass docs "$line"
+      return 0
+      ;;
+    fail)
+      if [ "$a" = helper-unavailable ]; then
+        local why="its python3 probe failed"
+        case "$b" in
+          python-missing) why="ccd found no python3 it can run (python-missing)" ;;
+          python-too-old) why="the python3 ccd runs is older than 3.8 (python-too-old)" ;;
+        esac
+        _dr_fail docs "ccd answers docs-index with helper-unavailable: $why — its Docs helper needs python3 3.8 or newer" \
+          "install python3 3.8 or newer on the PATH ccd runs with (Debian/Ubuntu: sudo apt install python3; macOS: brew install python3), then re-run: ccrc doctor"
+        return 1
+      fi
+      _dr_fail docs "ccd answers docs-index with $a — Docs cannot list this box's projects" \
+        "run \$HOME/.local/bin/ccd docs-index --all by hand and read its detail field; if it names ccd itself: ccrc update"
+      return 1
+      ;;
+    *)
+      _dr_fail docs "ccd's docs-index answer is not one docs-v1 JSON object (v 1, verb docs-index, ok:true with a projects list or ok:false with a failure word)" \
+        "run \$HOME/.local/bin/ccd docs-index --all by hand and read what it prints; ccrc update brings ccd and this doctor to one build"
+      return 1
+      ;;
+  esac
 }

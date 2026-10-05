@@ -51,6 +51,11 @@ import { plantAuthHelper, plantAuthModule, fixtureSecretLine } from './authFixtu
 import { SCRATCH_SLUGS, PERSISTENT_SLUGS } from './scratchSlugs.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin, IS_DARWIN } from './platformFixtures.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
+// The canned `docs-index` answers (Docs W1a): ONE module, which `ccd-docs-index.test.ts`
+// holds the real verb to, so the `docs` check's stub ccd cannot drift from ccd.
+import {
+  DOCS_INDEX_READY, DOCS_INDEX_UNREADABLE, DOCS_HELPER_UNAVAILABLE_MISSING_LINE, docsIndexStubScript,
+} from './docsIndexFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -1199,6 +1204,14 @@ function healthy(prefix: string): string {
   writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
     started: new Date().toISOString(), finished: new Date().toISOString(),
     pin: '0.9.9', status: 'ok', trees: [] }] }));
+  // …and its ccd answers Docs (spec 2026-10-01 §7.2): `docs` is a check, and
+  // healthy()'s contract is that every check PASSES. `$HOME/.local/bin/ccd`,
+  // the file the agent execs and the check runs, prints the canned ready
+  // `docs-index` answer — builtins only, because this PATH holds no system
+  // directory — and `ccd-docs-index.test.ts` holds the real verb to the same
+  // object, so this stub cannot drift from ccd.
+  writeFileSync(join(home, '.local', 'bin', 'ccd'),
+    docsIndexStubScript(JSON.stringify(DOCS_INDEX_READY)), { mode: 0o755 });
   return home;
 }
 
@@ -9026,5 +9039,279 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
     expect(lines[unreachIdx + 1]).toMatch(/^ {2}remedy: .*install-session-hooks\.sh/);
     expect(r.stdout).not.toMatch(/the check exited/);
     expect(r.code).toBe(1);
+  });
+});
+
+// ── docs (spec 2026-10-01 §7.2; mutation rows M7.4 and M7.6) ──────────────
+//
+// `_check_docs` runs `$HOME/.local/bin/ccd docs-index --all` — the file the
+// agent execs — and classifies its one line. Every case below replaces that
+// file and reads one verdict. The canned answers come from
+// `docsIndexFixtures.ts`, the module `ccd-docs-index.test.ts` holds the REAL
+// verb to, so a PASS here is a PASS on the bytes the real ccd prints. M7.4's
+// last clause (the timeout default equals the server's runner budget) is
+// Docs W2's `docs-budget.test.ts`, not this file's.
+
+/** `$HOME/.local/bin/ccd`: where `healthy()` plants the canned stub. */
+function docsCcd(home: string): string {
+  return join(home, '.local', 'bin', 'ccd');
+}
+
+/** Replaces the fixture's ccd. `writeFileSync`'s `mode` applies only when it
+ *  CREATES the file, and `healthy()` already did, so the mode is set again. */
+function plantDocsCcd(home: string, script: string, mode = 0o755): void {
+  writeFileSync(docsCcd(home), script, { mode });
+  chmodSync(docsCcd(home), mode);
+}
+
+/** The `docs` verdict line and the line after it (its remedy, when it has
+ *  one). Two empty strings when doctor printed no `docs` line at all. */
+function docsVerdict(out: string): { line: string; next: string } {
+  const lines = out.split('\n');
+  const i = lines.findIndex((l) => /^(PASS|WARN|FAIL|SKIP) docs: /.test(l));
+  return i < 0 ? { line: '', next: '' } : { line: lines[i] ?? '', next: lines[i + 1] ?? '' };
+}
+
+/** What the check counts, computed from the canned answer rather than
+ *  re-typed: every row, the `ready` rows, the `repo-unreadable` rows. */
+function docsCounts(o: typeof DOCS_INDEX_READY): { n: number; k: number; u: number } {
+  return {
+    n: o.projects.length,
+    k: o.projects.filter((p) => p.state === 'ready').length,
+    u: o.projects.filter((p) => p.state === 'repo-unreadable').length,
+  };
+}
+
+describe('ccrc doctor: docs', () => {
+  it('is in the table, right after models', () => {
+    const names = tableNames();
+    expect(names).toContain('docs');
+    expect(names.indexOf('docs')).toBe(names.indexOf('models') + 1);
+  });
+
+  it('PASSES on the healthy box, reporting counts only', () => {
+    const { n, k, u } = docsCounts(DOCS_INDEX_READY);
+    // The fixture's premise, checked rather than assumed: more rows than
+    // served ones (so "K served" cannot be "N rows" mislabelled), at least one
+    // served, none unreadable.
+    expect(n).toBeGreaterThan(k);
+    expect(k).toBeGreaterThan(0);
+    expect(u).toBe(0);
+    const r = runDoctor(healthy('ccrc-doctor-docs-pass-'));
+    expect(docsVerdict(r.stdout).line, r.stdout)
+      .toBe(`PASS docs: ${n} projects under ccd's projects root, ${k} served by Docs`);
+  });
+
+  it.each([
+    ['ready', DOCS_INDEX_READY, 'PASS'],
+    ['unreadable', DOCS_INDEX_UNREADABLE, 'WARN'],
+  ] as const)('never prints a project name (%s answer)', (label, fixture, verdict) => {
+    // SENTINEL names, planted into the canned answer: the CONTROL proves they
+    // really are in what ccd prints, so their absence from doctor's stdout is
+    // the check's doing, not an accident of the fixture.
+    const named = {
+      ...fixture,
+      projects: fixture.projects.map((p, i) => ({ ...p, project: `docs-sentinel-${label}-${i}` })),
+    };
+    const script = docsIndexStubScript(JSON.stringify(named));
+    expect(named.projects.length).toBeGreaterThan(0);
+    for (const p of named.projects) expect(script).toContain(`"project":"${p.project}"`);
+    const home = healthy(`ccrc-doctor-docs-names-${label}-`);
+    plantDocsCcd(home, script);
+    const r = runDoctor(home);
+    expect(docsVerdict(r.stdout).line, r.stdout).toMatch(new RegExp(`^${verdict} docs: `));
+    expect(r.stdout).not.toContain('docs-sentinel');
+  });
+
+  it('WARNS on a repo-unreadable row, with the one-liner that lists them', () => {
+    const { n, k, u } = docsCounts(DOCS_INDEX_UNREADABLE);
+    expect(u).toBeGreaterThan(0);   // the fixture's premise
+    const home = healthy('ccrc-doctor-docs-unreadable-');
+    plantDocsCcd(home, docsIndexStubScript(JSON.stringify(DOCS_INDEX_UNREADABLE)));
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout)
+      .toBe(`WARN docs: ${n} projects under ccd's projects root, ${k} served by Docs, ${u} unreadable`);
+    expect(v.next)
+      .toBe(`  remedy: ccd docs-index --all | jq -r '.projects[] | select(.state=="repo-unreadable") | .project'`);
+    expect(r.stdout).not.toMatch(/^FAIL docs: /m);
+  });
+
+  it('WARNS, never FAILS, when the index walk left projects unchecked (unwalked), counting them', () => {
+    // docs-index's answer carries `unwalked` (only when above 0): the projects
+    // its walk did not reach before its helper deadline. Rows are intact, so
+    // the box answers Docs; the count line says how many were not checked.
+    const { n, k } = docsCounts(DOCS_INDEX_READY);
+    const unwalked = 3;
+    const home = healthy('ccrc-doctor-docs-unwalked-');
+    plantDocsCcd(home, docsIndexStubScript(JSON.stringify({ ...DOCS_INDEX_READY, unwalked })));
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout)
+      .toBe(`WARN docs: ${n} projects under ccd's projects root, ${k} served by Docs, ${unwalked} not checked (time budget)`);
+    expect(v.next).toMatch(/^ {2}remedy: \S/);
+    expect(r.stdout).not.toMatch(/^FAIL docs: /m);
+  });
+
+  it.each([
+    ['python-missing', DOCS_HELPER_UNAVAILABLE_MISSING_LINE],
+    ['python-too-old', DOCS_HELPER_UNAVAILABLE_MISSING_LINE.replace('"python-missing"', '"python-too-old"')],
+  ] as const)('FAILS naming python3 3.8 when ccd answers helper-unavailable (%s)', (detail, line) => {
+    expect(line).toContain(`"detail":"${detail}"`);   // CONTROL: the replace above really happened
+    const home = healthy(`ccrc-doctor-docs-${detail}-`);
+    plantDocsCcd(home, docsIndexStubScript(line));
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout)
+      .toMatch(/^FAIL docs: ccd answers docs-index with helper-unavailable: .* — its Docs helper needs python3 3\.8 or newer$/);
+    expect(v.line).toContain(`(${detail})`);
+    expect(v.next).toMatch(/^ {2}remedy: install python3 3\.8 or newer /);
+    expect(r.code).toBe(1);
+  });
+
+  it('FAILS naming the word on any other ok:false answer, and quotes none of its detail', () => {
+    const home = healthy('ccrc-doctor-docs-helper-failed-');
+    plantDocsCcd(home, docsIndexStubScript(JSON.stringify({
+      v: 1, verb: 'docs-index', ok: false, elapsedMs: 3, failure: 'helper-failed',
+      detail: 'RuntimeError: docs-detail-sentinel',
+    })));
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout)
+      .toBe("FAIL docs: ccd answers docs-index with helper-failed — Docs cannot list this box's projects");
+    expect(v.line).not.toContain('python3');   // not the helper-unavailable arm
+    expect(v.next).toMatch(/^ {2}remedy: \S/);
+    expect(r.stdout).not.toContain('docs-detail-sentinel');
+  });
+
+  it('PASSES when ccd also writes to stderr: the two streams are never merged', () => {
+    const home = healthy('ccrc-doctor-docs-stderr-');
+    plantDocsCcd(home,
+      `#!/bin/sh\necho 'docs-stderr-sentinel' >&2\nprintf '%s\\n' '${JSON.stringify(DOCS_INDEX_READY)}'\n`);
+    const r = runDoctor(home);
+    expect(docsVerdict(r.stdout).line, r.stdout).toMatch(/^PASS docs: /);
+    expect(r.stdout).not.toContain('docs-stderr-sentinel');
+  });
+
+  it('FAILS naming jq, not the answer, when jq is not on PATH', () => {
+    const home = healthy('ccrc-doctor-docs-no-jq-');
+    unstub(home, 'jq');
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout).toBe("FAIL docs: jq is not on PATH, so ccd's docs-index answer cannot be read");
+    expect(v.next).toBe("  remedy: install jq first — see the 'jq' check above");
+  });
+
+  it('quotes a hostile stderr line literally: the capture executes nothing it reads', () => {
+    // `$(...)`, backquotes, a double quote and a trailing backslash: every
+    // shape an unquoted re-read would run or mangle. The payload creates its
+    // marker with `: >`, a shell builtin, because this PATH has no `touch`: a
+    // payload that could not run anyway would prove nothing by not running.
+    const home = healthy('ccrc-doctor-docs-hostile-');
+    const pwned = join(home, 'docs-pwned');
+    expect(existsSync(pwned)).toBe(false);
+    const hostile = 'boom $(: > "$HOME/docs-pwned") `: > "$HOME/docs-pwned"` "q" \\';
+    plantDocsCcd(home, `#!/bin/sh\nprintf '%s\\n' '${hostile}' >&2\nexit 2\n`);
+    const v = docsVerdict(runDoctor(home).stdout);
+    expect(v.line).toBe(`FAIL docs: ccd could not run docs-index (rc 2: ${hostile}); it predates Docs or died`);
+    expect(existsSync(pwned)).toBe(false);
+  });
+
+  it("FAILS 'predates' on an old ccd's usage refusal, quoting at most 200 bytes of its stderr", () => {
+    // An old ccd's unknown-verb arm: exactly rc 1 with `usage: ccd {...}` on
+    // stderr. Longer than 200 bytes, so the bound has something to cut.
+    const usage = `usage: ccd {${Array.from({ length: 40 }, (_, i) => `verb-${i}`).join('|')}|version}`;
+    expect(usage.length).toBeGreaterThan(200);
+    const home = healthy('ccrc-doctor-docs-old-ccd-');
+    plantDocsCcd(home, `#!/bin/sh\nprintf '%s\\n' '${usage}' >&2\nexit 1\n`);
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    const m = /^FAIL docs: ccd could not run docs-index \(rc 1: (.*)\); it predates Docs or died$/.exec(v.line);
+    expect(m, r.stdout).toBeTruthy();
+    expect(m?.[1]).toBe(usage.slice(0, 200));
+    expect(v.next).toBe('  remedy: ccrc update');
+  });
+
+  it('FAILS "did not answer" when ccd outlives CCRC_DOCTOR_DOCS_TIMEOUT', () => {
+    // Bounded by the check's OWN deadline, the tmux_skew wedge case's idiom:
+    // the stub sleeps 5 s and the knob says 1.
+    const home = healthy('ccrc-doctor-docs-slow-');
+    linkReal(home, 'sleep');
+    plantDocsCcd(home, '#!/bin/sh\nexec sleep 5\n');
+    const r = runDoctor(home, ['doctor'], { CCRC_DOCTOR_DOCS_TIMEOUT: '1' });
+    const v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout).toBe('FAIL docs: ccd docs-index did not answer within 1 s');
+    expect(v.next).toMatch(/^ {2}remedy: \S/);
+  });
+
+  it.each([
+    ['not JSON', '#!/bin/sh\necho not json\n'],
+    ['nothing at all', '#!/bin/sh\nexit 0\n'],
+    ['two answers', `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(DOCS_INDEX_READY)}' '${JSON.stringify(DOCS_INDEX_READY)}'\n`],
+    ['wire v 2', docsIndexStubScript('{"v":2}')],
+    ['another verb', docsIndexStubScript(JSON.stringify({ ...DOCS_INDEX_READY, verb: 'docs-tree' }))],
+    ['ok:true with no projects list', docsIndexStubScript('{"v":1,"verb":"docs-index","ok":true,"elapsedMs":0}')],
+    ['ok neither true nor false', docsIndexStubScript('{"v":1,"verb":"docs-index","ok":"yes","elapsedMs":0}')],
+    ['a failure that is not a word',
+      docsIndexStubScript('{"v":1,"verb":"docs-index","ok":false,"elapsedMs":0,"failure":"Not A Word"}')],
+  ] as const)('FAILS on an answer that is not one docs-v1 object: %s', (label, script) => {
+    const home = healthy('ccrc-doctor-docs-shape-');
+    plantDocsCcd(home, script);
+    const r = runDoctor(home);
+    const v = docsVerdict(r.stdout);
+    expect(v.line, `${label}\n${r.stdout}`)
+      .toMatch(/^FAIL docs: ccd's docs-index answer is not one docs-v1 JSON object /);
+    expect(v.next).toMatch(/^ {2}remedy: \S/);
+    expect(r.stdout).not.toContain('Not A Word');
+  });
+
+  it("FAILS with remedy 'ccrc update' when there is no ccd at $HOME/.local/bin/ccd", () => {
+    const home = healthy('ccrc-doctor-docs-no-ccd-');
+    rmSync(docsCcd(home), { force: true });
+    const v = docsVerdict(runDoctor(home).stdout);
+    expect(v.line).toMatch(/^FAIL docs: no ccd at \$HOME\/\.local\/bin\/ccd, /);
+    expect(v.next).toBe('  remedy: ccrc update');
+  });
+
+  it("FAILS with remedy 'ccrc update' when $HOME/.local/bin/ccd is not executable", () => {
+    const home = healthy('ccrc-doctor-docs-noexec-ccd-');
+    chmodSync(docsCcd(home), 0o644);
+    const v = docsVerdict(runDoctor(home).stdout);
+    expect(v.line).toMatch(/^FAIL docs: \$HOME\/\.local\/bin\/ccd is not an executable file, /);
+    expect(v.next).toBe('  remedy: ccrc update');
+  });
+
+  it('SKIPS on a server-role box, with no remedy line, and never runs ccd', () => {
+    // A RECORDING stub: `: >` is a shell builtin, so it needs nothing on PATH.
+    const home = healthy('ccrc-doctor-docs-server-');
+    const ran = join(home, 'docs-ccd-ran');
+    plantDocsCcd(home,
+      `#!/bin/sh\n: > "$HOME/docs-ccd-ran"\nprintf '%s\\n' '${JSON.stringify(DOCS_INDEX_READY)}'\n`);
+    writeCcrcEnv(home,
+      ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    let r = runDoctor(home);
+    let v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout).toBe("SKIP docs: no ccd answers Docs here; the fleet box's doctor measures it");
+    expect(v.next).not.toMatch(/^ {2}remedy:/);
+    expect(existsSync(ran)).toBe(false);
+    // CONTROL: the same box with no role recorded runs the same stub and
+    // PASSES, so the SKIP was the role's doing and the marker can be written.
+    writeCcrcEnv(home, ['CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    r = runDoctor(home);
+    v = docsVerdict(r.stdout);
+    expect(v.line, r.stdout).toMatch(/^PASS docs: /);
+    expect(existsSync(ran)).toBe(true);
+  });
+
+  it("names the Docs helper in python3's reason, which the docs check does not replace", () => {
+    // `_check_python3` stays a presence check (spec §7.2); only its reason
+    // changes. The docs check still PASSES here, because the canned ccd needs
+    // no python — the floor is measured through the verb, never twice.
+    const home = healthy('ccrc-doctor-docs-python3-reason-');
+    unstub(home, 'python3');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(
+      /^FAIL python3: not on PATH — ccd's session hook, its registry quoting and its Docs helper are python3$/m);
+    expect(docsVerdict(r.stdout).line).toMatch(/^PASS docs: /);
   });
 });

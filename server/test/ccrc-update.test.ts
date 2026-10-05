@@ -56,6 +56,20 @@ import {
   SPINE_CONTAINMENT_PROBE, spineRunCalls, adoptPlantedSystemd, assertSpineFrontContained, spineSystemctlArms,
   spineSystemdRun,
 } from './codexLaneFixture.js';
+import { docsProbeProgram } from './docsHelperPy.js';
+import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
+
+/** The two python3 invocations ccd's Docs front makes when the closing
+ *  doctor's `docs` check runs the installed ccd (Docs W1a): the floor probe,
+ *  read off the shipped ccd/ccd so it is never re-typed, and the ready line
+ *  the doctor suite's own stub prints. The `python3` stub below embeds both
+ *  in single quotes, so a quote or a newline in either is refused here,
+ *  before a stub that parses differently is ever written. */
+const DOCS_PROBE = docsProbeProgram();
+const DOCS_READY_LINE = JSON.stringify(DOCS_INDEX_READY);
+if (/['\n]/.test(DOCS_PROBE + DOCS_READY_LINE)) {
+  throw new Error('the docs probe or the ready line holds a quote or a newline; the python3 stub cannot embed it');
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -590,6 +604,12 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     // preflight probe (`import os`) go to the real interpreter; every other
     // `-c` is refused below, like any other unexpected argv.
     ...python3ProgramArm(REAL_PYTHON3),
+    // ccd's Docs front, reached by the closing doctor's `docs` check through the
+    // INSTALLED ccd (Docs W1a): the 3.8 floor probe passes, and the helper
+    // prints the canned ready answer. Canned rather than forwarded to the real
+    // python3, so the install stays hermetic and reads no projects root.
+    `[ "$1" = -c ] && [ "$2" = '${DOCS_PROBE}' ] && exit 0`,
+    `[ "$1" = /dev/fd/3 ] && [ "$2" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
   // The verifier seam (design §5): `ccrc update` runs the INSTALLED tree's
@@ -629,7 +649,7 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     'esac',
     `exec ${REAL_NODE} "$@"`,
   ].join('\n') + '\n');
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT',
     'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
