@@ -233,3 +233,58 @@ export function docsRepo(
   h.git(main, 'push', '-q', 'origin', 'main');
   return main;
 }
+
+// ── Ref fixtures (docs W1a, the ref-resolution task; spec 2026-10-01 §2 (c)) ──────────────────────────────
+// These move refs in a fixture main checkout with the harness's own `git` (the real binary, the fixture
+// identity, never the PATH recorder), so a resolution unit can stand up any shape the default chain, Q2 or the
+// counterpart reads without touching the checkout, its index or origin's own repository. This block adds no
+// import: the fixtures take a structural `{ git }`, which a `CcdHarness` satisfies.
+
+/** All the ref fixtures need from a harness. */
+interface RefFixtureGit { git(cwd: string, ...args: string[]): string }
+
+/** Points `refs/remotes/origin/HEAD` at `target`, a full refname, or deletes it (`null`) the way an operator
+ *  does, with `remote set-head -d` (which exits 0 even when nothing is set; measured). */
+export function setOriginHead(h: RefFixtureGit, dir: string, target: string | null): void {
+  if (target === null) h.git(dir, 'remote', 'set-head', 'origin', '-d');
+  else h.git(dir, 'symbolic-ref', 'refs/remotes/origin/HEAD', target);
+}
+
+/** `refs/remotes/origin/HEAD` as a symref to a ref that does not exist: the shape `for-each-ref` omits without a
+ *  word and only `symbolic-ref` can see (MM4). */
+export function danglingOriginHead(h: RefFixtureGit, dir: string): void {
+  h.git(dir, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/gone');
+}
+
+let refFixtureSeq = 0;
+
+/** A new commit whose tree is `parent`'s and whose one parent is `parent`, made by `commit-tree`, so no checkout,
+ *  index or working file moves. The message carries a counter: two `commit-tree`s of one tree, one parent and one
+ *  message within the same second are the SAME commit (measured), which would quietly turn a diverged fixture
+ *  into an equal one. */
+export function commitOn(h: RefFixtureGit, dir: string, parent: string, msg = 'fixture'): string {
+  refFixtureSeq += 1;
+  return h.git(dir, 'commit-tree', `${parent}^{tree}`, '-p', parent, '-m', `${msg} ${refFixtureSeq}`);
+}
+
+/** How a branch's two sides stand: the six shapes §2 (c) 3's table and §2 (c) 4's counterpart rule read. */
+export type BranchShape = 'equal' | 'local-ahead' | 'local-behind' | 'diverged' | 'local-only' | 'origin-only';
+
+/** Sets `refs/heads/<b>` and `refs/remotes/origin/<b>` in `dir` so that they stand in `shape`, on new commits
+ *  above `dir`'s `refs/heads/main`, by `update-ref` alone. Ahead and behind are by exactly one commit; diverged is
+ *  one commit on each side of a shared one. Returns both sides' commits, `null` for a side the shape leaves out. */
+export function shapeBranch(
+  h: RefFixtureGit, dir: string, b: string, shape: BranchShape,
+): { local: string | null; origin: string | null } {
+  const base = h.git(dir, 'rev-parse', 'refs/heads/main');
+  const shared = commitOn(h, dir, base, `${b} shared`);
+  let local: string | null = shared;
+  let origin: string | null = shared;
+  if (shape === 'local-ahead' || shape === 'diverged') local = commitOn(h, dir, shared, `${b} local`);
+  if (shape === 'local-behind' || shape === 'diverged') origin = commitOn(h, dir, shared, `${b} origin`);
+  if (shape === 'origin-only') local = null;
+  if (shape === 'local-only') origin = null;
+  if (local !== null) h.git(dir, 'update-ref', `refs/heads/${b}`, local);
+  if (origin !== null) h.git(dir, 'update-ref', `refs/remotes/origin/${b}`, origin);
+  return { local, origin };
+}

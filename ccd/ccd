@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=02e47ee6eba7cdf71381f4b0eb7a74d0a4feb5149c93d95338f168d112d140d3
+# ccrc:generated 1 sha256=2796181dc35b00f51a27bc30797d63d11fad7abdb06908edac26adfd56a6a44f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29200,6 +29200,317 @@ def github_of(url):
 
 
 # ===== docs: refs =====
+# Ref resolution (spec 2026-10-01 section 2 (c)). Every call runs in M, the
+# project's main checkout, after discovery, and git only ever sees fully
+# qualified refnames. Every for-each-ref answer is read by its EXACT refname
+# (MM3: the pattern refs/heads/ws2 also matches refs/heads/ws2/foo). Only
+# origin is ever named to git (section 2 (c) 5), so a second remote is never read.
+FER_FORMAT='%(refname)%00%(objecttype)%00%(objectname)%00%(*objecttype)%00%(*objectname)'
+REF_HEADS = 'refs/heads/'
+REF_ORIGIN = 'refs/remotes/origin/'
+REF_TAGS = 'refs/tags/'
+ORIGIN_HEAD = 'refs/remotes/origin/HEAD'
+# Rungs 2-5 of the default chain, in order. Rung 1 is origin/HEAD's target T,
+# and its `tried` row always names ORIGIN_HEAD itself, whatever T is.
+DEFAULT_RUNGS = (
+    ('refs/remotes/origin/main', 'default:origin-main'),
+    ('refs/remotes/origin/master', 'default:origin-master'),
+    ('refs/heads/main', 'default:local-main'),
+    ('refs/heads/master', 'default:local-master'),
+)
+
+
+def ref_git(repo, args, dl, call_s=None, soft=False):
+    """One git call in M through the one door, under CALL_S['ref'] unless
+    call_s is given. Unless soft, docs_git itself answers an expiry with
+    git-timeout {step} and an overflow with too-many-entries; a soft call hands
+    its Spawned back and the caller reads timed_out itself."""
+    return docs_git(repo.path, args, call_s=CALL_S['ref'] if call_s is None else call_s,
+                    dl=dl, ceiling=ceiling_of(repo.path), soft=soft)
+
+
+def parse_for_each_ref(out):
+    """for-each-ref --format=FER_FORMAT stdout -> {refname: (type, oid, ptype,
+    poid)}, keyed by the exact refname. ptype and poid are empty unless the ref
+    names a tag object; then they are the type and id it peels to, one level.
+    A record without exactly five fields is git-failed: git never writes one."""
+    rows = {}
+    for rec in out.split(b'\n'):
+        if not rec:
+            continue
+        parts = rec.split(b'\x00')
+        if len(parts) != 5:
+            raise fail('git-failed', step='for-each-ref',
+                       detail='a for-each-ref record with %d fields' % len(parts))
+        name, typ, oid, ptyp, poid = [p.decode('utf-8', 'surrogateescape') for p in parts]
+        rows[name] = (typ, oid, ptyp, poid)
+    return rows
+
+
+def usable_commit(row):
+    """The commit a for-each-ref row stands for: a commit, or a tag object
+    that peels to a commit. Anything else, and an absent row, is None."""
+    if row is None:
+        return None
+    typ, oid, ptyp, poid = row
+    if typ == 'commit':
+        return oid
+    if typ == 'tag' and ptyp == 'commit':
+        return poid
+    return None
+
+
+def peeled_type(row):
+    """The type ref-not-commit reports: a tag's peeled type, else the object's own."""
+    typ, _oid, ptyp, _poid = row
+    if typ == 'tag' and ptyp:
+        return ptyp
+    return typ
+
+
+def ref_result(row):
+    """One `tried` row's result for a candidate for-each-ref did or did not list."""
+    if row is None:
+        return 'absent'
+    if usable_commit(row) is None:
+        return 'not-a-commit'
+    return 'resolved'
+
+
+def for_each_ref(repo, refs, dl):
+    """ONE for-each-ref over full refnames -> the rows whose name is EXACTLY
+    one of them. Anything else the patterns matched (refs below a requested
+    name) is dropped here and never consulted."""
+    r = ref_git(repo, ['for-each-ref', '--format=' + FER_FORMAT, '--end-of-options'] + list(refs), dl)
+    if r.rc != 0:
+        raise fail('git-failed', step='for-each-ref', rc=r.rc, stderrHead=stderr_head(r.err))
+    rows = parse_for_each_ref(r.out)
+    return dict((ref, rows[ref]) for ref in refs if ref in rows)
+
+
+def ref_side(ref):
+    """(name, side) of a servable full refname."""
+    if ref.startswith(REF_HEADS):
+        return (ref[len(REF_HEADS):], 'local')
+    if ref.startswith(REF_ORIGIN):
+        return (ref[len(REF_ORIGIN):], 'origin')
+    raise ValueError('not a servable ref: %r' % (ref,))
+
+
+def counterpart_ref(served):
+    """The other side of the served name (section 2 (c) 4): refs/heads/<n> for
+    a served refs/remotes/origin/<n>, refs/remotes/origin/<n> for refs/heads/<n>."""
+    name, side = ref_side(served)
+    return (REF_ORIGIN if side == 'local' else REF_HEADS) + name
+
+
+def origin_head_target(repo, dl):
+    """Rung 1's lookup: ('unset', None), ('malformed', None) or ('target', T).
+    A symbolic-ref call, because for-each-ref drops a dangling symref without a
+    word (MM4). symbolic-ref -q exits 1 both when the ref is absent and when it
+    is not a symref; both are unset. T must be refs/remotes/origin/<bare>."""
+    r = ref_git(repo, ['symbolic-ref', '-q', ORIGIN_HEAD], dl)
+    if r.rc == 1:
+        return ('unset', None)
+    if r.rc != 0:
+        raise fail('git-failed', step='symbolic-ref', rc=r.rc, stderrHead=stderr_head(r.err))
+    raw = r.out[:-1] if r.out.endswith(b'\n') else r.out
+    try:
+        target = raw.decode('utf-8')
+    except UnicodeDecodeError:
+        return ('malformed', None)
+    if not target.startswith(REF_ORIGIN) or not valid_bare_ref(target[len(REF_ORIGIN):]):
+        return ('malformed', None)
+    return ('target', target)
+
+
+def default_chain(repo, dl):
+    """Section 2 (c) 1 -> (served, commit, via, tried, rows, queried); served is
+    None when no rung resolves. The rungs are tried strictly in order, so the
+    checked-out branch is never consulted and a local rung is never reached
+    once an origin rung resolved. rows and queried are the chain's one
+    for-each-ref answer and the names it asked for, which the counterpart reuses."""
+    state, target = origin_head_target(repo, dl)
+    rungs = list(DEFAULT_RUNGS)
+    tried = []
+    if state == 'target':
+        rungs.insert(0, (target, 'default:origin-head'))
+    else:
+        tried.append({'ref': ORIGIN_HEAD, 'result': 'absent' if state == 'unset' else 'malformed'})
+    queried = [ref for ref, _via in rungs]
+    rows = for_each_ref(repo, queried, dl)
+    for ref, via in rungs:
+        row = rows.get(ref)
+        result = ref_result(row)
+        if via == 'default:origin-head':
+            tried.append({'ref': ORIGIN_HEAD, 'result': 'dangling' if row is None else result})
+        else:
+            tried.append({'ref': ref, 'result': result})
+        if result == 'resolved':
+            return (ref, usable_commit(row), via, tried, rows, queried)
+    return (None, None, None, tried, rows, queried)
+
+
+def default_branch_name(repo, dl):
+    """(name, via) of the default chain's pick, or None when no rung resolves:
+    the branch docs-fetch fetches when it is given none. It raises only what
+    the chain's own git calls raise."""
+    served, _commit, via, _tried, _rows, _queried = default_chain(repo, dl)
+    if served is None:
+        return None
+    return (ref_side(served)[0], via)
+
+
+def relation_of(repo, served_commit, other_commit, dl):
+    """Ancestry of served_commit against other_commit, in SERVED terms: equal;
+    behind (served is an ancestor of other); ahead (other is an ancestor of
+    served); diverged; or unmeasured, for a shallow repo, a merge-base that ran
+    out of its 2 s soft bound, or a merge-base rc of 2 or more. wire_relation
+    turns the word into the wire's relation by the served side."""
+    if served_commit == other_commit:
+        return 'equal'
+    if repo.shallow:
+        return 'unmeasured'
+    first = ref_git(repo, ['merge-base', '--is-ancestor', '--end-of-options', served_commit, other_commit],
+                    dl, call_s=CALL_S['count'], soft=True)
+    if first.timed_out or first.overflow or first.rc not in (0, 1):
+        return 'unmeasured'
+    if first.rc == 0:
+        return 'behind'
+    second = ref_git(repo, ['merge-base', '--is-ancestor', '--end-of-options', other_commit, served_commit],
+                     dl, call_s=CALL_S['count'], soft=True)
+    if second.timed_out or second.overflow or second.rc not in (0, 1):
+        return 'unmeasured'
+    return 'ahead' if second.rc == 0 else 'diverged'
+
+
+def wire_relation(side, raw):
+    """relation_of's served-terms word as DocsTreeOk's relation, by the served side."""
+    if raw in ('equal', 'diverged', 'unmeasured'):
+        return raw
+    if side == 'local':
+        return 'local-behind' if raw == 'behind' else 'local-ahead'
+    return 'local-ahead' if raw == 'behind' else 'local-behind'
+
+
+def counts_of(repo, s, k, dl):
+    """{ahead, behind, count} of commit s against commit k, from rev-list
+    --left-right --count S...K under the 2 s soft bound: ahead is the left
+    count (reachable from s, not from k), behind the right. A shallow repo
+    answers count shallow without a spawn, a bound that ran out answers count
+    timeout, and both carry null counts. A rev-list that fails without running
+    out is git-failed {step:'rev-list'}: no count word means 'it broke'."""
+    if repo.shallow:
+        return {'ahead': None, 'behind': None, 'count': 'shallow'}
+    if s == k:
+        return {'ahead': 0, 'behind': 0, 'count': 'measured'}
+    r = ref_git(repo, ['rev-list', '--left-right', '--count', '--end-of-options', s + '...' + k],
+                dl, call_s=CALL_S['count'], soft=True)
+    if r.timed_out:
+        return {'ahead': None, 'behind': None, 'count': 'timeout'}
+    fields = r.out.split()
+    if r.rc != 0 or r.overflow or len(fields) != 2 or not (fields[0].isdigit() and fields[1].isdigit()):
+        raise fail('git-failed', step='rev-list', rc=r.rc, stderrHead=stderr_head(r.err))
+    return {'ahead': int(fields[0]), 'behind': int(fields[1]), 'count': 'measured'}
+
+
+def finish_ref(repo, requested, served, commit, via, tried, other_row, dl, relation=None):
+    """The DocsTreeOk ref object. other_row is the counterpart's for-each-ref
+    row (None when absent; a row that is not a commit counts as absent).
+    relation is passed only by Q2, which has already measured it; otherwise it
+    is measured here from served and its counterpart (section 2 (c) 4),
+    whichever way served was chosen."""
+    name, side = ref_side(served)
+    other_commit = usable_commit(other_row)
+    if other_commit is None:
+        relation = 'local-only' if side == 'local' else 'origin-only'
+        counterpart = None
+    else:
+        if relation is None:
+            relation = wire_relation(side, relation_of(repo, commit, other_commit, dl))
+        counterpart = {'ref': counterpart_ref(served), 'commit': other_commit}
+        counterpart.update(counts_of(repo, commit, other_commit, dl))
+    return {'requested': requested, 'served': served, 'name': name, 'side': side, 'commit': commit,
+            'via': via, 'tried': tried, 'relation': relation, 'counterpart': counterpart}
+
+
+def resolve_default(repo, dl):
+    """Section 2 (c) 1, then the counterpart. The chain's one for-each-ref has
+    already asked for the counterpart of every rung except an origin/HEAD
+    target outside main and master; that one gets a call of its own."""
+    served, commit, via, tried, rows, queried = default_chain(repo, dl)
+    if served is None:
+        raise fail('no-default-branch', tried=tried)
+    other = counterpart_ref(served)
+    if other in queried:
+        other_row = rows.get(other)
+    else:
+        other_row = for_each_ref(repo, [other], dl).get(other)
+    return finish_ref(repo, None, served, commit, via, tried, other_row, dl)
+
+
+def resolve_qualified(repo, q, dl):
+    """Section 2 (c) 2: exactly that ref, via qualified, with NO fallback to
+    the other side. One for-each-ref covers it and its counterpart."""
+    other = counterpart_ref(q)
+    rows = for_each_ref(repo, [q, other], dl)
+    row = rows.get(q)
+    if row is None:
+        raise fail('unresolved-ref', tried=[{'ref': q, 'result': 'absent'}])
+    commit = usable_commit(row)
+    if commit is None:
+        raise fail('ref-not-commit', ref=q, type=peeled_type(row))
+    return finish_ref(repo, q, q, commit, 'qualified', [{'ref': q, 'result': 'resolved'}],
+                      rows.get(other), dl)
+
+
+def resolve_bare(repo, b, dl):
+    """Section 2 (c) 3, Q2: the newer side wins. One for-each-ref covers L, R,
+    the tag (read only for the hint) and, for a name starting origin/, the
+    remote-tracking ref of the remainder (read only for suggest). A candidate
+    that does not peel to a commit is excluded exactly as if it were absent."""
+    local, origin, tag = REF_HEADS + b, REF_ORIGIN + b, REF_TAGS + b
+    refs = [local, origin, tag]
+    suggest = None
+    if b.startswith('origin/') and valid_bare_ref(b[len('origin/'):]):
+        suggest = REF_ORIGIN + b[len('origin/'):]
+        refs.append(suggest)
+    rows = for_each_ref(repo, refs, dl)
+    lrow, orow = rows.get(local), rows.get(origin)
+    tried = [{'ref': local, 'result': ref_result(lrow)}, {'ref': origin, 'result': ref_result(orow)}]
+    if lrow is None and orow is None:
+        ctx = {'tried': tried}
+        if suggest is not None and usable_commit(rows.get(suggest)) is not None:
+            ctx['suggest'] = suggest
+        if tag in rows:
+            ctx['hint'] = 'tag'
+        raise fail('unresolved-ref', **ctx)
+    lc, oc = usable_commit(lrow), usable_commit(orow)
+    if lc is None and oc is None:
+        bad = local if lrow is not None else origin
+        raise fail('ref-not-commit', ref=bad, type=peeled_type(rows[bad]))
+    if oc is None:
+        return finish_ref(repo, b, local, lc, 'local', tried, None, dl)
+    if lc is None:
+        return finish_ref(repo, b, origin, oc, 'origin', tried, None, dl)
+    raw = relation_of(repo, lc, oc, dl)
+    if raw == 'behind':
+        return finish_ref(repo, b, origin, oc, 'origin', tried, lrow, dl, relation='local-behind')
+    return finish_ref(repo, b, local, lc, 'local', tried, orow, dl, relation=wire_relation('local', raw))
+
+
+def resolve(repo, requested, dl):
+    """Section 2 (c): the DocsTreeOk ref object for --ref `requested`, None
+    being the default view. It raises unresolved-ref {tried, suggest?, hint?},
+    ref-not-commit {ref, type} or no-default-branch {tried}. read_args has
+    already applied the grammar, so the last line is a contract assertion."""
+    if requested is None:
+        return resolve_default(repo, dl)
+    if valid_qualified_ref(requested):
+        return resolve_qualified(repo, requested, dl)
+    if valid_bare_ref(requested):
+        return resolve_bare(repo, requested, dl)
+    raise fail('bad-ref')
 
 # ===== docs: listing =====
 
