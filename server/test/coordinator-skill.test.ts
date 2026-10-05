@@ -2594,6 +2594,11 @@ describe('the stall clause quotes what the stall watch sends and reads (stall wa
   // `wait:` holds the run only until the next mail to or from the worker,
   // unless that mail passes the ball again. The verbatim pin holds the bytes;
   // these three rows hold what a co-edit of SKILL.md and CONTRACT could lose.
+  //
+  // `unknown` is an active state, but the watch never judges it — `stallVerdictInner` holds it
+  // `run-unnamed` — so the clause may not tell the coordinator to send `wait:` to such a worker
+  // (review 262 F2).
+  const JUDGED_STATES: readonly string[] = ACTIVE_RUN_STATES.filter((s) => s !== 'unknown');
   it('sends wait: past a stall mail too, for a worker in a state the watch reads', () => {
     const line = stallClause();
     expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
@@ -2601,9 +2606,9 @@ describe('the stall clause quotes what the stall watch sends and reads (stall wa
     expect(tail, 'the clause lost its last-but-two sentence').toMatch(/^A stall mail never licenses/);
     expect(/ `([^`]+)` mail unasked/.exec(tail)?.[1],
       'the clause sends wait: only in answer to a stall mail (ledger R2, approved 2026-10-04)').toBe(STALL_WAIT_PREFIX);
-    const state = /tell a `([^`]+)` worker to wait/.exec(tail)?.[1];
-    expect((ACTIVE_RUN_STATES as readonly string[]).includes(state ?? ''),
-      `the clause names a worker in run state ${state}, which the watch never reads`).toBe(true);
+    const state = /tell an? `([^`]+)` worker to wait/.exec(tail)?.[1];
+    expect(JUDGED_STATES.includes(state ?? ''),
+      `the clause names a worker in run state ${state}, which the watch never judges (only an active state other than unknown)`).toBe(true);
   });
 
   it('states the ball as stall.ts reads it: only until the next mail, past the hand-backs it exempts', () => {
@@ -2624,7 +2629,7 @@ describe('the stall clause quotes what the stall watch sends and reads (stall wa
     const src = readFileSync(path.join(root, 'server/src/coord/stall.ts'), 'utf8');
     const sender = /^(?:export )?const STALL_SENDER = '([^']+)';$/m.exec(src)?.[1];
     const reliedOn = new Set<string>([sender ?? '', STALL_REPORT_PREFIX, STALL_WAIT_PREFIX, STALL_REPLY_WAITING_PREFIX,
-      WAVE_DONE_SUBJECT, REVIEW_DONE_SUBJECT, ...ACTIVE_RUN_STATES]);
+      WAVE_DONE_SUBJECT, REVIEW_DONE_SUBJECT, ...JUDGED_STATES]);
     const quoted = [...new Set([...line!.matchAll(/`([^`]+)`/g)].map((m) => m[1]!))];
     expect(quoted.length, 'the scan read no quoted token').toBeGreaterThan(0);
     for (const q of quoted) {
