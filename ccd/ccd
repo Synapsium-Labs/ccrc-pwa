@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5c6e3ec8ac255f2c7ee202acc264cce6bbdd79195018562233e3064a96cb3ab4
+# ccrc:generated 1 sha256=36e572f6fa97541c97b349ba0a71246dc45e731af240f25e2d110a634450cc8a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19345,15 +19345,21 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # (`shared/models.mjs`), pinned to it by an agreement test. A `/effort` value
 # maps through `ROUTE_EFFORTS`.
 #
-# NEVER A FAILURE IN THE STOP PATH, AND NEVER A SILENT LOSS. Every path is rc 0
-# and the stop goes on exactly as before. Silent only where nothing was lost:
-# no registry row, no transcript, no command, a value already held, a field
-# newer than the keystroke. Logged as `operator-choice <id>: …` where the
-# operator's choice may be lost: a value outside the vocabulary or one the
-# record's own checks refuse (`cmd_route` runs in a subshell, so its `die` ends
-# only that) — the record unchanged — and `unmeasured (…)` where ccd could not
-# read at all (no floor yet, a transcript that is not a readable regular file —
-# never `grep` on a FIFO — no python, a reader that failed).
+# NEVER A FAILURE IN THE STOP PATH; the silent cases are listed in README (the
+# stage-7 subsection), not here. Every path is rc 0 and the stop goes on exactly
+# as before. Silent where nothing was lost: no registry row, no transcript, no
+# command, a value already held, a field newer than the keystroke. Logged as
+# `operator-choice <id>: …` where the operator's choice may be lost: a value
+# outside the vocabulary or one the record's own checks refuse (`cmd_route` runs
+# in a subshell, so its `die` ends only that) — the record unchanged — and
+# `unmeasured (…)` where ccd could not read at all (no floor yet, a transcript
+# that is not a readable regular file — never `grep` on a FIFO — no python, a
+# reader that failed) or could not recognise what it read (a /model or /effort
+# command with no acknowledgement in the wording this ccd knows). A choice IS
+# lost without a line in a few cases, each named in README: a command within
+# TYPED_MATCH_WINDOW after a rotated-out keystroke, a round trip through a
+# non-Anthropic lane, a /clear, an unrostered source account, and a route field
+# whose mtime cannot be read.
 #
 # ONE READ PER RESTART. Every call leaves `$REG/<id>.choicekept`, and every
 # `_spawn_start` removes it, so the marker means "a keep ran since the last

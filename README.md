@@ -2261,7 +2261,7 @@ were rescued four times inside an hour (2026-09-08..09-23).
   (until that rescue's logged `reset=` passes), and prefers a target no rescue landed on in the last
   `RESCUE_SPREAD_WINDOW=600` seconds when another has room — never at the price of a class degrade, never by
   turning a rescue with a target into an undecidable one, and never by passing over the session's own recovered
-  home (the affinity path would only move it back). A fourth landed rescue within the hour on an Anthropic lane, on a
+  home (the affinity path would only move it back). After three landed rescues within the hour, a fourth on an Anthropic lane, on a
   dated block not already past its five-hour reset's grace, first waits up to `RESCUE_CHAIN_WAIT=1800`
   seconds (`kind=chain`), then swaps; with no room it becomes the no-room wait; at its account's reset it ends in
   place if armed and is rescued if stalled. A Codex-lane session is never chain-waited, so the lane's "pool is
@@ -2286,10 +2286,13 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   `ccd stop` (a later `start`/`enable` respawns from the record) and `ccd ws-archive` (`ws-restore` does) —
   `_operator_choice_keep` reads the transcript for the newest acknowledged `/model` and `/effort` that no journal
   row explains and writes an operator's value through `cmd_route`'s own writer: `route <id>: class fable -> opus
-  [actor=operator-session]` in `swap.log`. A supervisor revival (`cmd_ensure` in the unit, most often after a
-  pane-scope OOM kill) follows no ccd stop, so it keeps the choice before its own spawn; each stop leaves a one-shot
-  `$REG/<id>.choicekept` marker that `cmd_ensure` honours and `_spawn_start` clears, so a restart reads once and logs
-  at most once per kind (one `/model` line, one `/effort` line).
+  [actor=operator-session]` in `swap.log`. A spawn that follows no ccd stop (a supervisor revival, most often after
+  a pane-scope OOM kill or an `/exit`; the unsupervised fallbacks of `_supervised_start`; `ws-restore`) keeps the
+  choice too, because `_spawn_start`, the one choke point of every spawn, runs the keep before its own journal-floor
+  write. Each keep leaves a one-shot `$REG/<id>.choicekept` marker that `_spawn_start` honours and then clears, so a
+  restart reads once and logs at most once per kind (one `/model` line, one `/effort` line). The marker means Claude
+  Code is not running: a stop whose pane kill failed on a session not proven gone removes it, so that session's next
+  revival reads.
 - **ccd's own keystrokes are not the operator's.** The settle's `/effort` and `route --apply` journal what they
   type in `$REG/<id>.typed` (`<epoch> <model|effort> <value>`, the last `TYPED_KEEP_ROWS=16`, purged with the
   row); a command with the same value within `TYPED_MATCH_WINDOW=60` seconds of a row is ccd's and is left alone.
@@ -2303,12 +2306,18 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   `_model_family_class`, the bash port of `familyClassOf`'s dash-token rule, pinned to it.
 - **It never fails a stop, and loses a choice silently only in the cases listed below.** A value outside the
   vocabulary, or one the record's own checks refuse (`haiku` with an effort level), is logged as
-  `operator-choice <id>: …` and leaves the record unchanged; a stop that cannot read at all logs
-  `operator-choice <id>: unmeasured (…)`. A field written after the keystroke (the PWA picker, a coordinator's
+  `operator-choice <id>: …` and leaves the record unchanged. A `/model` and an `/effort` are written by ONE
+  `cmd_route` call, so a pair the record refuses is refused whole (`/model haiku` beside `/effort high` keeps
+  neither, and two lines say so). A stop that cannot read at all, or whose newest `/model` or `/effort` has no
+  acknowledgement in the wording this ccd recognises (Claude Code's own wording drifted, or Claude Code itself
+  refused the command), logs `operator-choice <id>: unmeasured (…)`, once per keep. A field written after the keystroke (the PWA picker, a coordinator's
   route, this step's last write) is the later choice and wins. `python3 deploy/measure-continuity.py --stage 7`
   counts the writes, the restarts that logged a `/model` ccd could not keep, and the unmeasured stops. The row
-  counts RESTARTS, not distinct choices: a `/model` the record cannot hold is logged again at every later restart
-  until a newer command replaces it, since it reverts again at each.
+  counts keep-time STOPS that a spawn may follow, not distinct choices or restarts: a `/model` the record cannot hold
+  is logged again at every later keep until a newer command replaces it, since it reverts again at each, and a
+  session stopped for good, or archived and then removed, is counted although no restart happened (an over-count by
+  design). A refused command stays the newest unacknowledged one, so it reads as `unmeasured` at every keep until a
+  later command of its kind is acknowledged.
 - **Skipped, and the known costs.** A session on a non-Anthropic lane is skipped, silently (`_is_anthropic_backend`,
   as the settle is), and a swap that crosses lanes moves the journal floor to the landing, so nothing typed on the
   other lane is read. `/model opus[1m]` is kept as `opus` and loses its 1M context (the record has no context
@@ -2317,15 +2326,18 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   transcript exists; but if a `route --apply` keystroke opened the journal first, an earlier operator `/model` is
   dropped with no line); and after a rollback and a roll-forward, keystrokes the older ccd typed after a floor was
   opened are unjournalled and newer than it, so they could read as the operator's.
-- **Known silent costs**, each a choice lost with no line:
+- **Known silent costs**, each a choice lost with no line (a command whose acknowledgement drifted is not one: it
+  is logged `unmeasured`):
   - a `/model` or `/effort` typed before a `/clear`: `/clear` starts a new transcript and the keep reads only the
     current one (deferred to a later wave);
   - an operator command typed within `TYPED_MATCH_WINDOW` after a ccd keystroke that rotated out of the journal,
     and never through a stop since;
   - an Anthropic-lane command typed before a round trip through a non-Anthropic lane, and never through a stop
-    since;
-  - a session whose Anthropic source account has just left the roster reads as non-Anthropic, so its swap keeps
-    nothing (deferred).
+    since (nearly empty: the outbound move is itself a swap whose keep runs on the Anthropic side);
+  - a session whose source account is not on the roster: `cmd_swap` dies at its "no config-dir mapping" check
+    before the keep, and at a stop or revival `_transcript_path` fails on an empty config dir, so nothing is kept
+    (deferred);
+  - a route field whose mtime cannot be read: the keep does not overwrite what it cannot date.
 
 ### A return visit merges the session's sidecar (session-continuity stage 1)
 

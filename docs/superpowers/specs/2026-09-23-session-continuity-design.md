@@ -574,12 +574,15 @@ writer with `actor=operator-session`, and the swap log records it. Mutation rows
 with no effort field is not promoted; a `route --apply` `/model` is not promoted; an unmappable value does not abort
 a swap; an operator `/model opus` survives an auto-home.
 
-**As planned (wave 3, 2026-10-04).** The stops that a spawn follows are `cmd_swap`'s (every rescue, auto-home,
+**As built (wave 3, 2026-10-05), with the coordinator's rulings.** The stops that a spawn follows are `cmd_swap`'s (every rescue, auto-home,
 manual, PWA and `swap-self` move), `ccd stop`'s (a later `start` or `enable` respawns from the record) and
 `ccd ws-archive`'s (`ws-restore` does); the stops that end the row (`ws-rm`, `forget`, the reap and reclaim
-tails) are not, `_swap_refuse`'s restart follows `cmd_swap`'s own stop, and a supervisor revival,
-which follows no ccd stop, keeps the choice before its own spawn (`cmd_ensure`), a one-shot marker making a restart
-read once (and log at most once per kind). The short window is `TYPED_MATCH_WINDOW` (60 s), and `.typed` keeps its last 16 rows below a floor row.
+tails) are not, `_swap_refuse`'s restart follows `cmd_swap`'s own stop, and a spawn that follows no ccd stop (a
+supervisor revival, `_supervised_start`'s unsupervised fallbacks, `ws-restore`) keeps the choice too, because the keep
+sits in `_spawn_start`, the one choke point of every spawn. A one-shot marker, which means Claude Code is not running
+(a stop whose pane kill failed on a session not proven gone clears it), makes a restart read once (and log at most
+once per kind). A `/model` and an `/effort` are written by one `cmd_route` call, so a pair the record refuses is
+refused whole. The short window is `TYPED_MATCH_WINDOW` (60 s), and `.typed` keeps its last 16 rows below a floor row.
 The readings the text above leaves open are fixed: "the newest command" is one per kind (`/model` and `/effort`
 are two fields), chosen among the commands no row matches; a command's value is its argument or, for the picker and
 the slider, which take none, the value Claude Code's acknowledgement names (ANSI bold or backticks removed; a row
@@ -588,21 +591,26 @@ route field written after the keystroke is the later choice and is not overwritt
 first row, written at this ccd's first spawn of the row (or first journalled keystroke, or first stop that finds
 none) — and no command older than it is read, because an older ccd typed its keystrokes unjournalled; a value
 outside the vocabulary is logged by name when it is one token, by size otherwise; and a stop that cannot read at
-all (no floor yet, a transcript that is not a readable regular file, no python, a failed reader) logs
-`unmeasured`. §9's stage-7 row counts the restarts whose `/model` ccd logged as outside the vocabulary or refused,
-with the unmeasured stops reported beside it; it counts RESTARTS, not distinct choices, because a `/model` ccd
-cannot keep is logged again at every later restart until a newer command replaces it. A session on a non-Anthropic lane is skipped, and a swap that crosses
+all (no floor yet, a transcript that is not a readable regular file, no python, a failed reader), or whose newest
+`/model` or `/effort` has no acknowledgement in the wording this ccd recognises (drifted wording, or a command Claude
+Code itself refused), logs `unmeasured`, once per keep. §9's stage-7 row counts the keep-time stops whose `/model` ccd
+logged as outside the vocabulary or refused, with the unmeasured stops reported beside it; it counts those STOPS, not
+distinct choices or restarts, because a `/model` ccd cannot keep is logged again at every later keep until a newer
+command replaces it, and a session stopped for good, or archived and then removed, is counted although no restart
+happened (an over-count by design). A session on a non-Anthropic lane is skipped, and a swap that crosses
 lanes moves the journal floor to the landing. The known costs: `/model opus[1m]` is kept as `opus` and loses its 1M
 context, the record having no context field; a `/model` typed in a session already running at the deploy, before its
 first post-deploy stop or respawn, is not kept at that stop (the first such stop logs `unmeasured` once when the
 transcript exists, but if a `route --apply` keystroke opened the journal first, the earlier command is dropped with
 no line); and after a rollback and a roll-forward, keystrokes the older ccd typed after a floor was opened could
-read as the operator's. Known silent costs, each with no line: a `/model` or `/effort` typed before a `/clear`
+read as the operator's. Known silent costs, each with no line (drifted acknowledgement wording is not one: it logs `unmeasured`): a `/model` or `/effort` typed before a `/clear`
 (`/clear` starts a new transcript and the keep reads only the current one; deferred to a later wave); an operator
 command typed within `TYPED_MATCH_WINDOW` after a ccd keystroke that rotated out of the journal, and never through
 a stop since; an Anthropic-lane command typed before a round trip through a non-Anthropic lane, and never through
-a stop since; and a session whose Anthropic source account has just left the roster, which reads as non-Anthropic
-so its swap keeps nothing (deferred).
+a stop since (nearly empty: the outbound move is itself a swap whose keep runs on the Anthropic side); a session whose
+source account is not on the roster (`cmd_swap` dies at its "no config-dir mapping" check before the keep, and at a
+stop or revival `_transcript_path` fails on an empty config dir; deferred); and a route field whose mtime cannot be
+read, which the keep does not overwrite.
 
 ## 6. Invariants kept
 
@@ -678,10 +686,10 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 | 1 | `(kept)` carries by reason (`busy`, `budget`, `error`, bare); journal-missing resume refusals | 774 of 1,310, all by existence; 8 | only `busy`/`budget`, under 2%, reported with and without the pairs stranded before stage 1's deploy; 0 |
 | 2 | spike outcome | — | decides stage 3 |
 | 3 | rescues with live work that resumed the exact run; finished agents re-run by relaunches; manifest writes ending `unmeasured`; stalled vs not-stalled restarts with a non-empty manifest | 11 of 30; up to 3.6M tokens; —; — | over two thirds; near 0; under 5%; reported |
-| 4 | sessions with a fourth auto-rescue in an hour that no chain wait preceded, counting rescues that landed and asking it only of a fourth rescue the chain wait could have held (a dated block not past its five-hour reset's grace — rule 3's own gate; the raw count of sessions with 4 or more is reported beside it); chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner (since D-3526, only a landing whose Claude Code never came up); near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min; no-room waits a stalled session outlived its own reset in, with the seconds past it (§11 item 6) | at least 1 (archive max 4); —; 4 of 5 manual swaps with live work; 32 of 248; —; —; — | 0; 0; 0; reported; reported; reported; reported |
+| 4 | sessions with a fourth auto-rescue in an hour that no chain wait preceded, counting rescues that landed and asking it only of a fourth rescue the chain wait could have held (a dated block not past its five-hour reset's grace — rule 3's own gate; the raw count of sessions with 4 or more is reported beside it); chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner (since D-3526, only a landing whose Claude Code never came up); near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min; no-room waits a stalled session outlived its own reset in, with the seconds past it (§11 item 6) | at least 1 (archive max 4), owed at the stage-4 reading, not re-measured for the restated metric; —; 4 of 5 manual swaps with live work; 32 of 248; —; —; — | 0; 0; 0; reported; reported; reported; reported |
 | 5 | holed or unmeasured wave-dones accepted without a note | not measured | 0 |
 | 6 | pressure kills of background shells; dead ccd scopes that pass the inert test yet survive a day; OOM stops of pane scopes whose session was idle 30 minutes or more with a live background shell, and all pane-scope OOM stops | 186 since 2026-09-04 (9 since 09-18); 5 of 12 on 2026-09-23; B, measured the week before the variable ships, and 16 in 2026-09-16..23 | 0; 0; at most B + 2 a week, reported |
-| 7 | restarts that revert an operator's `/model` (those ccd logs: a value outside the vocabulary, or refused; the stops that could not read the transcript are reported beside it) | this session's case | 0 |
+| 7 | keep-time stops that revert an operator's `/model` (those ccd logs: a value outside the vocabulary, or refused; the stops that could not read the transcript or recognise its acknowledgement are reported beside it; a session stopped for good, or archived then removed, is counted with no restart: an over-count by design) | this session's case | 0 |
 
 Stage 1's first merges meet the backlog C9 does not backfill: 43 of the 673 return-visit pairs on the box exceed
 `CARRY_MERGE_BUDGET` and defer part of their walk. Its row is therefore reported over all carries and over carries
