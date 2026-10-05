@@ -36,7 +36,7 @@
 // that as a second net.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bodyDigest, markGenerated } from '../../shared/mark.mjs';
@@ -46,6 +46,13 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const deployDir = path.resolve(here, '..', '..', 'deploy');
 const VERIFY = path.join(deployDir, 'verify-service.sh');
 
+/** One unit's answers, consumed one per call and the last one repeated — the
+ *  sequence `stubs()` has always built, hoisted so `sweepStubs` shares it. */
+const seqArm = (counter: string, values: string[]): string =>
+  `c="$D/${counter}.n"; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c";\n`
+  + values.map((v, i) => `  [ "$n" = "${i + 1}" ] && { printf '%s\\n' ${JSON.stringify(v)}; }\n`).join('')
+  + `  [ "$n" -gt ${values.length} ] && { printf '%s\\n' ${JSON.stringify(values[values.length - 1] ?? '')}; }\n`;
+
 /** Build a stub `systemctl`/`journalctl` pair whose answers are scripted.
  *
  *  `isActive` and `mainPid` are lists consumed one per call, so a crash loop is
@@ -53,15 +60,15 @@ const VERIFY = path.join(deployDir, 'verify-service.sh');
  *  differently on either side of the observation window. */
 function stubs(opts: { isActive: string[]; mainPid: string[] }): string {
   const dir = mkTmp('ccrc-agent-deployverify-');
-  const seq = (name: string, values: string[]): string =>
-    `c="$D/${name}.n"; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c";\n`
-    + values.map((v, i) => `  [ "$n" = "${i + 1}" ] && { printf '%s\\n' ${JSON.stringify(v)}; }\n`).join('')
-    + `  [ "$n" -gt ${values.length} ] && { printf '%s\\n' ${JSON.stringify(values[values.length - 1] ?? '')}; }\n`;
+  const seq = seqArm;
 
   writeFileSync(path.join(dir, 'systemctl'),
     '#!/bin/sh\n'
     + `D=${JSON.stringify(dir)}\n`
     + 'echo "systemctl $*" >> "$D/calls"\n'
+    // The HOME this stub saw, so `runVerify` can PROVE the script ran under the
+    // fixture's (wave 10, critic I7): the script now reads $HOME/.cc-sessions.
+    + 'printf \'%s\\n\' "$HOME" > "$D/home-seen"\n'
     // `status` is only ever called on the failure path; it must not be counted
     // as one of the scripted queries, and it must never be a real invocation.
     + 'case " $* " in *" status "*) echo "[stub status]"; exit 0;; esac\n'
@@ -83,9 +90,13 @@ function stubs(opts: { isActive: string[]; mainPid: string[] }): string {
   return dir;
 }
 
-function runVerify(dir: string, unit = 'ccrc-agent.service'): {
-  code: number; stdout: string; stderr: string; calls: string;
-} {
+function runVerify(dir: string, unit = 'ccrc-agent.service',
+  opts: { home?: string; env?: Record<string, string>; timeout?: number } = {},
+): { code: number; stdout: string; stderr: string; calls: string; home: string } {
+  // A FIXTURE HOME, always (wave 10, critic I7): the script reads
+  // $HOME/.cc-sessions for a session unit, and spreading `process.env` used to
+  // hand it the real one.
+  const home = opts.home ?? mkTmp('ccrc-agent-verifyhome-');
   const PATH = `${dir}${path.delimiter}${process.env.PATH ?? ''}`;
   // PROVE the stub is what will be resolved, before executing anything. A test
   // whose safety depends on the thing it is testing is the loaded gun this
@@ -97,15 +108,94 @@ function runVerify(dir: string, unit = 'ccrc-agent.service'): {
     `systemctl must resolve inside the stub dir; got "${resolved}" — REFUSING to run the verifier`).toBe(true);
 
   const r = spawnSync('bash', [VERIFY, unit], {
-    encoding: 'utf8',
+    encoding: 'utf8', timeout: opts.timeout ?? 15_000,
     env: {
-      ...process.env, PATH,
+      ...process.env, PATH, HOME: home,
       CCRC_VERIFY_SETTLE: '0', CCRC_VERIFY_WINDOW: '0', CCRC_VERIFY_LOG_LINES: '5',
+      CCRC_VERIFY_STOP_INTERVAL: '0', ...opts.env,
     },
   });
   let calls = '';
   try { calls = readFileSync(path.join(dir, 'calls'), 'utf8'); } catch { calls = ''; }
-  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', calls };
+  // FIXTURE HOME, PROVEN (wave 10, critic I7): the script now reads $HOME/.cc-sessions for a session unit,
+  // so the HOME it ran under is asserted, never assumed.
+  const seen = existsSync(path.join(dir, 'home-seen')) ? readFileSync(path.join(dir, 'home-seen'), 'utf8').trim() : '';
+  expect(seen, 'verify-service.sh ran under a HOME that is not the fixture\'s').toBe(home);
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', calls, home };
+}
+
+/** `<home>/.cc-sessions/<name>` = content, for each entry. An empty map makes the dir and nothing in it. */
+function plantReg(home: string, files: Record<string, string>): void {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  for (const [name, content] of Object.entries(files)) writeFileSync(path.join(reg, name), content);
+}
+
+/** [name, entry] for every entry under <home>/.cc-sessions, sorted — the before/after of V12. Each entry is
+ *  `lstatSync`'d FIRST and read ONLY when `isFile()`: a FIFO is recorded as '<fifo>', a symlink as '<symlink>',
+ *  anything else as '<other>', never opened. A sync read of V11's FIFO would block the vitest worker in
+ *  `open()` for ever, beyond the reach of any `it` timeout — the hazard the script's own guard exists for. */
+function regSnapshot(home: string): Array<[string, string]> {
+  const reg = path.join(home, '.cc-sessions');
+  if (!existsSync(reg)) return [];
+  return readdirSync(reg).sort().map((name): [string, string] => {
+    const st = lstatSync(path.join(reg, name));
+    if (st.isFile()) return [name, readFileSync(path.join(reg, name), 'utf8')];
+    if (st.isFIFO()) return [name, '<fifo>'];
+    if (st.isSymbolicLink()) return [name, '<symlink>'];
+    return [name, '<other>'];
+  });
+}
+
+/** Before a spawn that runs the REAL script: `command -v systemctl` and `command -v journalctl`, run through
+ *  `sh -c` under exactly the env the spawn will use, must each resolve inside `bin`; REFUSES otherwise.
+ *  `journalctl` is not in the package-wide net (`contain-path.setup.ts` covers tmux, gh and systemctl only). */
+function assertStubsResolve(env: NodeJS.ProcessEnv, bin: string): void {
+  for (const name of ['systemctl', 'journalctl']) {
+    const resolved = spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8', env }).stdout.trim();
+    expect(resolved.startsWith(`${bin}${path.sep}`),
+      `${name} must resolve inside the stub dir; got "${resolved}" — REFUSING to run the real script`).toBe(true);
+  }
+}
+
+/** deploy.sh's SWEEP_CMD over several units with the REAL script, planted in `<home>/stubbin` (the existing
+ *  sweep cases' bin): SHOW_KILLMODE first, then list-units (unfiltered and --state=active list every unit;
+ *  --state=failed lists none), try-restart exit 0, `status` recorded, and `is-active` / `show -p MainPID --value`
+ *  answered PER UNIT (the unit is the last argv word) from `seqArm` counters keyed by the unit's index. A stub
+ *  `journalctl` records its argv. Anything else: "stub systemctl: unexpected argv", exit 64. Returns the bin. */
+function sweepStubs(home: string, units: Array<{ unit: string; isActive: string[]; mainPid: string[] }>): string {
+  const bin = path.join(home, 'stubbin');
+  mkdirSync(bin, { recursive: true });
+  const calls = path.join(home, 'calls');
+  const perUnit = (query: 'isactive' | 'mainpid'): string =>
+    '    u=""; for a in "$@"; do u="$a"; done;\n'
+    + '    case "$u" in\n'
+    + units.map((u, i) =>
+      `      ${JSON.stringify(u.unit)})\n        ${seqArm(`${query}-${i}`, query === 'isactive' ? u.isActive : u.mainPid)}        exit 0;;\n`).join('')
+    + '    esac\n    echo "stub systemctl: unexpected unit: $u" >&2; exit 64;;\n';
+  writeFileSync(path.join(bin, 'systemctl'),
+    '#!/bin/sh\n'
+    + `D=${JSON.stringify(bin)}\n`
+    + `echo "systemctl $*" >> ${JSON.stringify(calls)}\n`
+    + SHOW_KILLMODE
+    + 'case "$*" in\n'
+    + '  *list-units*)\n'
+    + '    case "$*" in\n'
+    + '      *--state=failed*) ;;\n'
+    + `      *) ${units.map((u) => `echo "${u.unit} loaded active running x"`).join('; ')} ;;\n`
+    + '    esac\n    exit 0;;\n'
+    + 'esac\n'
+    + 'case " $* " in\n'
+    + '  *" try-restart "*) exit 0;;\n'
+    + '  *" status "*) echo "[stub status]"; exit 0;;\n'
+    + '  *" is-active "*)\n' + perUnit('isactive')
+    + '  *" MainPID "*)\n' + perUnit('mainpid')
+    + 'esac\n'
+    + 'echo "stub systemctl: unexpected argv: $*" >&2\nexit 64\n', { mode: 0o755 });
+  writeFileSync(path.join(bin, 'journalctl'),
+    `#!/bin/sh\necho "journalctl $*" >> ${JSON.stringify(calls)}\n`
+    + 'echo "[stub journal] sweep"\n', { mode: 0o755 });
+  return bin;
 }
 
 describe('deploy.sh agent verifies the restart it just performed', () => {
@@ -153,7 +243,8 @@ describe('deploy.sh agent verifies the restart it just performed', () => {
   it('refuses to run without a unit name rather than verifying something else', () => {
     const dir = stubs({ isActive: ['active'], mainPid: ['1'] });
     const r = spawnSync('bash', [VERIFY], {
-      encoding: 'utf8', env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}` },
+      encoding: 'utf8',
+      env: { ...process.env, HOME: mkTmp('ccrc-agent-verifyhome-'), PATH: `${dir}${path.delimiter}${process.env.PATH ?? ''}` },
     });
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('usage:');
