@@ -43,6 +43,22 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-05 14:31 — the backlog has drained; wave 5's "measure first" item is measured.** Read-only.
+  - **Drain:** 90 sweep reclaims, the last at 14:19, about one every 70 s from 12:36, with no presence wedge seen.
+    3 failures, all the same child.
+  - **Left, with reasons (10 children whose own run is finished):**
+    - Six are review children of `eng-metrics-way-forward`, whose work runs 183, 187 and 198 sit at
+      `awaiting-review` since 2026-09-30 and 2026-10-01. That rule is `review-report-live`: they leave when those
+      runs settle. That programme's coordinator owns the settling, not this programme.
+    - `bright-hollow` (review 267 of run 250) and `plain-hollow` (review 268 of run 248) are kept by the same rule.
+      Their work runs are `working`.
+    - `brisk-meadow` (review 171 of run 148, both `done`, no `.hold`) is passed over with no feed row. That skip is
+      invisible by construction. It is wave 5's attention-list item (R37/R-5d skips) in a live case.
+    - `expoAI-assistant-calm-mesa` (run 139) fails `pin-failed: refs/heads/ws/calm-mesa does not resolve … there is
+      no branch tip to pin` at 14:04, 14:20 and 14:24. It fails closed, retries, and will reach the attention list.
+      **New for wave 5:** a child whose branch is already gone can never be reclaimed today. Wave 5 decides what
+      may be pinned instead (the worktree's HEAD) or names the operator act.
+
 - **2026-10-05 13:33 — what a reclaim frees, and what it leaves.** Measured read-only, for the operator's
   idle-process question.
   - **Browser MCP servers:** no real headless Chrome was running. The memory is `playwright-mcp` (74 processes,
