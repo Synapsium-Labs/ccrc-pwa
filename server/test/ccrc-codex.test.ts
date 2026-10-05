@@ -2038,7 +2038,10 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     expect(await portAccepts(a.litellmPort)).toBe(false);
   }, 60_000);
 
-  it('L0e fixture cleanup calls the real product stop before direct handles', async () => {
+  // Linux only: the product stop is measured through the fake `systemctl`'s
+  // `--user stop` record, and on macOS ccrc's manager is launchctl, so that
+  // record stays empty there (PR #240's test-macos 2/2), as L16's does.
+  itLinux('L0e fixture cleanup calls the real product stop before direct handles', async () => {
     const { home, lanes } = await lifeBox({ userManager: true, ids: ['codex-a'] });
     const a = lanes['codex-a']!;
     const started = codex(home, ['start', 'codex-a']);
