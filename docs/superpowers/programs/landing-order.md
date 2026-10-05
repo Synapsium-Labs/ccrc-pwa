@@ -449,6 +449,27 @@ carries it (spec §5.1, amended 2026-09-24).
     residue.
   - **Not yet ruled:** this report also lacks the refute pass (the same brief omission). Mail 3505 asks for it, and
     review 267 stays open until it arrives.
+- **2026-10-05 11:01 — review 267 ruled; fix round 1 sent** (mail 3507). The review run closed `done`, keeping its
+  workspace.
+  - **The panel** (votes in `review-267-3f9cca09-panel.md`): 18 Sonnet refuters, none died.
+    - CONFIRMED: F1, F3, F4, F5, F6.
+    - REFUTED: F2. `jq_regex` claims only that a regex engine is present, and that is true.
+    - The panel's three lenses were the reviewer's own single read, as in review 268. That is accepted for a fix
+      round only; the re-review runs the panel as written before the wave is accepted.
+  - **Rulings:**
+    - **F1 (3916):** the jq 1.8 paren fix, now, because it gates Task 7. Also a structural pin against any `as`
+      bound after a binary operator, and the jq floor named in the header.
+    - **F3 (3917):** the over-cap flag shapes are CLOSED, with the reviewer's fixed-string split (never `splits()`,
+      which is superlinear on jq 1.7), timing pins at 100 KB, and the +12 false-deny cost accepted. The bare
+      backtick stays listed.
+    - **F4:** two test cases.
+    - **F5:** the runbook reads `^MERGE_PARSE_CAP=2048$`, names the jq floor, and gains a CANARY read for Task 7: the
+      installed hook must deny a heredoc followed by `gh pr merge` in a fixture HOME. That canary, not
+      `PASS jq_regex`, is what proves the deny on a box's jq.
+    - **F6:** README's `jq_regex` row, and the plan's text brought to the shipped rule.
+  - **Numbers:** 3918–3920 stay spares.
+  - **For the stable gate:** F1's fix should also clear session-hook-merge-deny's macOS reds (bright-river's mail
+    3461), because the macOS runner's jq is 1.8.2.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
