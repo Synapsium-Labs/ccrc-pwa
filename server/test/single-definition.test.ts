@@ -4531,3 +4531,45 @@ describe('docs content classes, headers, wrappers and resolver are declared once
     expect(ALL.filter((f) => PNG_MAGIC.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
   });
 });
+
+// Docs W1a, Task 4 (spec 2026-10-01 4.6 and 3.11): the entry view and the GitHub link builder
+// are declared once, in shared/docs.ts. The PWA's rows and leaf headers both call entryView
+// ("one badge function", spec 2 (d)), so a second derivation of a badge, or a second URL
+// builder, anywhere in the four roots is the drift this pins. The pattern-2 bundle shape of
+// the update control plane block above, with a planted CONTROL. APPENDED after the file's
+// last line: `session-hook.test.ts`'s citation audit cites this file by line.
+describe('docs section H is declared once, in shared/docs.ts (docs W1a)', () => {
+  const TYPES = ['EntryMode', 'EntryBadge', 'WithheldReason', 'EntryView', 'GithubTarget', 'GithubLink'] as const;
+  const FUNCTIONS = ['admitDraft', 'entryView', 'githubBlobUrl'] as const;
+  // A type is declared by `type <Name> =` or `interface <Name>`, `export`/`declare` optional:
+  // an un-exported local copy is still a copy, and an inline import specifier is not one.
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  // A function is declared by `function <name>` or bound by `const|let|var <name>`: an arrow
+  // copy is the likeliest second copy, and a call or an import binds nothing.
+  const FN_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:function\\s+${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
+
+  it('CONTROL: the patterns see a declaration, a local copy and an arrow copy, and not an import, a call or another name', () => {
+    expect(TYPE_DEF('EntryView').test('export interface EntryView {')).toBe(true);
+    expect(TYPE_DEF('EntryBadge').test("type EntryBadge = 'new' | 'deleted';"), 'an un-exported local type').toBe(true);
+    expect(TYPE_DEF('EntryView').test("import {\n  type EntryView,\n} from '../../../shared/docs.js';"), 'an import specifier').toBe(false);
+    expect(TYPE_DEF('EntryView').test('export interface EntryViewRow {'), 'another name').toBe(false);
+    expect(FN_DEF('entryView').test('export function entryView(e: DocsEntry, d: DraftsFacts, mode: EntryMode): EntryView {')).toBe(true);
+    expect(FN_DEF('entryView').test('const entryView = (e: DocsEntry) => e;'), 'an arrow copy').toBe(true);
+    expect(FN_DEF('entryView').test("import { entryView } from '../../../shared/docs.js';"), 'an import').toBe(false);
+    expect(FN_DEF('entryView').test("  const v = entryView(e, drafts, 'ref');"), 'a call').toBe(false);
+    expect(FN_DEF('githubBlobUrl').test('export function githubBlobUrls('), 'another name').toBe(false);
+  });
+
+  for (const name of TYPES) {
+    it(`declares ${name} exactly once, in shared/docs.ts`, () => {
+      expect(ALL.filter((f) => TYPE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+    });
+  }
+  for (const name of FUNCTIONS) {
+    it(`defines ${name} exactly once, in shared/docs.ts`, () => {
+      expect(ALL.filter((f) => FN_DEF(name).test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+    });
+  }
+});

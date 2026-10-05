@@ -794,3 +794,442 @@ describe('(G) resolveDocRef (spec 4.11; M5.7, L0 cases)', () => {
     expect(new URL('java\tscript:alert(1)').protocol).toBe('javascript:');
   });
 });
+
+// ---- Section H: entryView, admitDraft and githubBlobUrl (docs W1a, Task 4) ----------------------------------
+// Spec 2026-10-01 2 (d) "What overlays", 4.6 and 3.11; row 53 (L0 half) and M3.11. APPENDED after the earlier
+// tasks' blocks. One namespace import, so no binding here can collide with a name an earlier block imported.
+import * as docsH from '../../shared/docs.js';
+
+describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
+  type Entry = docsH.DocsEntry;
+  type Drafts = docsH.DraftsFacts;
+  type Draft = NonNullable<Entry['draft']>;
+  type CommittedKind = NonNullable<Entry['committed']>['kind'];
+  type NonHolder = Exclude<Drafts['state'], 'holder'>;
+
+  // Every axis is the KEY SET of a Record over the wire type's own union: a member added to the type without a
+  // row here, or a row the type does not have, is a compile error (typecheck-tests), so the matrix below cannot
+  // silently skip a state or a kind.
+  const STATE_KEYS: Record<Draft['state'], true> = {
+    modified: true, added: true, untracked: true, deleted: true, typechange: true, conflicted: true,
+  };
+  const KIND_KEYS: Record<Draft['kind'], true> = {
+    file: true, symlink: true, directory: true, special: true, hardlink: true, 'foreign-owner': true,
+    'other-device': true, unreadable: true, absent: true,
+  };
+  const COMMITTED_KEYS: Record<CommittedKind | 'none', true> = {
+    none: true, file: true, exec: true, symlink: true, submodule: true,
+  };
+  const STATES = Object.keys(STATE_KEYS) as Draft['state'][];
+  const KINDS = Object.keys(KIND_KEYS) as Draft['kind'][];
+  const COMMITTED = Object.keys(COMMITTED_KEYS) as (CommittedKind | 'none')[];
+  const MODES: docsH.EntryMode[] = ['default', 'ref'];
+
+  const SHA_C = 'c'.repeat(40);
+  const holder = (baseEqual: boolean): Drafts => ({
+    state: 'holder', branch: 'ws/a',
+    worktree: { path: '/srv/worktrees/demo-a', head: baseEqual ? SHA_C : 'd'.repeat(40), class: 'workspace' },
+    baseEqual, base: baseEqual ? null : { ahead: 1, behind: 0, count: 'measured' }, caveats: [], opaque: [],
+  });
+  const NON_HOLDER: { [S in NonHolder]: Extract<Drafts, { state: S }> } = {
+    none: { state: 'none', branch: 'ws/a', skipped: [] },
+    ambiguous: { state: 'ambiguous', branch: 'ws/a', candidates: ['/srv/worktrees/demo-a', '/srv/worktrees/demo-b'] },
+    untrusted: { state: 'untrusted', branch: 'ws/a', worktree: '/srv/worktrees/demo-a', why: 'common-dir' },
+    unreadable: { state: 'unreadable', branch: 'ws/a', worktree: null, step: 'worktree-list', detail: 'timeout' },
+    unsettled: { state: 'unsettled', branch: 'ws/a', worktree: '/srv/worktrees/demo-a' },
+    'too-many': { state: 'too-many', branch: 'ws/a', worktree: '/srv/worktrees/demo-a', count: 1001, bytes: 1 },
+  };
+
+  /** One point of the matrix, described by its own axes; the oracle reads these, never an EntryView. */
+  interface Case {
+    draft: null | { state: Draft['state']; kind: Draft['kind']; fp: boolean };
+    drafts: 'holder' | NonHolder;
+    baseEqual: boolean;   // read only when drafts is 'holder'
+    mode: docsH.EntryMode;
+    committed: CommittedKind | 'none';
+  }
+  const entryOf = (c: Case): Entry => ({
+    section: 'specs', path: '2026-01-01-demo.md',
+    committed: c.committed === 'none' ? null : { kind: c.committed, blob: 'b'.repeat(40), size: 120 },
+    draft: c.draft === null ? null
+      : { state: c.draft.state, kind: c.draft.kind, size: 120, fp: c.draft.fp ? 'f'.repeat(64) : null, trust: 'status' },
+  });
+  const factsOf = (c: Case): Drafts => (c.drafts === 'holder' ? holder(c.baseEqual) : NON_HOLDER[c.drafts]);
+  const label = (c: Case): string => JSON.stringify(c);
+
+  const DRAFTS: Case['draft'][] = [null];
+  for (const state of STATES) for (const kind of KINDS) for (const fp of [true, false]) DRAFTS.push({ state, kind, fp });
+  const FACTS: [Case['drafts'], boolean][] = [
+    ['holder', true], ['holder', false], ...(Object.keys(NON_HOLDER) as NonHolder[]).map((s): [NonHolder, boolean] => [s, false]),
+  ];
+  const CASES: Case[] = [];
+  for (const draft of DRAFTS) for (const [drafts, baseEqual] of FACTS) for (const mode of MODES) {
+    for (const committed of COMMITTED) CASES.push({ draft, drafts, baseEqual, mode, committed });
+  }
+
+  // THE ORACLE: spec 4.6's ten case rows, transcribed as data. Each row is a predicate over the case's axes and
+  // the view that row requires. Nothing here calls shared/docs.ts. The overlay formula is spec 2 (d)'s, written
+  // out again from the spec on purpose: `overlay = mode === 'ref' && admitDraft(e, d)`.
+  //
+  // Two readings, both recorded in this plan's Spec refinements list:
+  //  - "opens committed" in rows 6-10 means the committed side as rows 1-2 open it: a file or exec opens
+  //    committed; a symlink, a submodule or nothing committed opens nothing.
+  //  - row 10 is every kind that is neither `file` nor `unreadable`. ccd emits `absent` only with `deleted`
+  //    (row 6), so an `absent` under another state is off-contract, and it lands here, on not-a-file.
+  const overlay = (c: Case): boolean => c.mode === 'ref' && c.drafts === 'holder' && c.baseEqual && c.draft !== null;
+  const has = (c: Case, p: (d: NonNullable<Case['draft']>) => boolean): boolean => c.draft !== null && p(c.draft);
+  const fileSide = (c: Case): boolean => c.committed === 'file' || c.committed === 'exec';
+  const kindOf = (c: Case): docsH.EntryView['committedKind'] => (c.committed === 'none' ? null : c.committed);
+  const sideOpens = (c: Case): docsH.EntryView['opens'] => (fileSide(c) ? 'committed' : 'none');
+  const notDelTc = (d: NonNullable<Case['draft']>): boolean => d.state !== 'deleted' && d.state !== 'typechange';
+  const withheldRow = (c: Case, why: docsH.WithheldReason): docsH.EntryView => ({
+    listed: c.committed !== 'none' || has(c, (d) => d.state === 'added' || d.state === 'untracked'),
+    opens: sideOpens(c), badge: 'withheld', withheld: why, offersCommitted: false, committedKind: kindOf(c),
+  });
+  const ROWS: readonly { row: string; when: (c: Case) => boolean; view: (c: Case) => docsH.EntryView }[] = [
+    {
+      row: '1 no overlay, committed file/exec',
+      when: (c) => !overlay(c) && fileSide(c),
+      view: (c) => ({ listed: true, opens: 'committed', badge: null, withheld: null, offersCommitted: false, committedKind: kindOf(c) }),
+    },
+    {
+      row: '2 no overlay, committed symlink/submodule',
+      when: (c) => !overlay(c) && (c.committed === 'symlink' || c.committed === 'submodule'),
+      view: (c) => ({ listed: true, opens: 'none', badge: null, withheld: null, offersCommitted: false, committedKind: kindOf(c) }),
+    },
+    {
+      row: '3 no overlay, no committed entry',
+      when: (c) => !overlay(c) && c.committed === 'none',
+      view: () => ({ listed: false, opens: 'none', badge: null, withheld: null, offersCommitted: false, committedKind: null }),
+    },
+    {
+      row: '4 overlay, modified/conflicted, file with fp',
+      when: (c) => overlay(c) && has(c, (d) => (d.state === 'modified' || d.state === 'conflicted') && d.kind === 'file' && d.fp),
+      view: (c) => ({
+        listed: true, opens: 'draft', badge: c.draft?.state === 'conflicted' ? 'conflicted' : 'modified', withheld: null,
+        offersCommitted: fileSide(c), committedKind: kindOf(c),
+      }),
+    },
+    {
+      row: '5 overlay, added/untracked, file with fp',
+      when: (c) => overlay(c) && has(c, (d) => (d.state === 'added' || d.state === 'untracked') && d.kind === 'file' && d.fp),
+      view: (c) => ({ listed: true, opens: 'draft', badge: 'new', withheld: null, offersCommitted: fileSide(c), committedKind: kindOf(c) }),
+    },
+    {
+      row: '6 overlay, deleted',
+      when: (c) => overlay(c) && has(c, (d) => d.state === 'deleted'),
+      view: (c) => ({
+        listed: c.committed !== 'none', opens: sideOpens(c), badge: 'deleted', withheld: null, offersCommitted: false,
+        committedKind: kindOf(c),
+      }),
+    },
+    {
+      row: '7 overlay, typechange',
+      when: (c) => overlay(c) && has(c, (d) => d.state === 'typechange'),
+      view: (c) => ({
+        listed: c.committed !== 'none', opens: sideOpens(c), badge: 'typechange', withheld: null, offersCommitted: false,
+        committedKind: kindOf(c),
+      }),
+    },
+    {
+      row: '8 overlay, file with fp null',
+      when: (c) => overlay(c) && has(c, (d) => notDelTc(d) && d.kind === 'file' && !d.fp),
+      view: (c) => withheldRow(c, 'too-large'),
+    },
+    {
+      row: '9 overlay, kind unreadable',
+      when: (c) => overlay(c) && has(c, (d) => notDelTc(d) && d.kind === 'unreadable'),
+      view: (c) => withheldRow(c, 'unreadable'),
+    },
+    {
+      row: '10 overlay, kind symlink/directory/special/hardlink/foreign-owner/other-device',
+      when: (c) => overlay(c) && has(c, (d) => notDelTc(d) && d.kind !== 'file' && d.kind !== 'unreadable'),
+      view: (c) => withheldRow(c, 'not-a-file'),
+    },
+  ];
+  const VIEW_KEYS = ['listed', 'opens', 'badge', 'withheld', 'offersCommitted', 'committedKind'] as const;
+
+  describe('the entryView matrix against the spec 4.6 oracle (row 53, L0 half)', () => {
+    it('generates the whole matrix: 109 drafts x 8 drafts facts x 2 modes x 5 committed sides', () => {
+      // 109 = no draft, plus 6 states x 9 kinds x fp set or null; 8 = a holder with baseEqual true or false, plus
+      // the 6 other states.
+      expect(DRAFTS.length).toBe(1 + 6 * 9 * 2);
+      expect(FACTS.length).toBe(8);
+      expect(CASES.length).toBe(109 * 8 * 2 * 5);
+    });
+
+    it('CONTROL: the oracle matches every case exactly once, and each of its ten rows is reached', () => {
+      const overlapsOrGaps: string[] = [];
+      const reached = new Map<string, number>(ROWS.map((r) => [r.row, 0]));
+      for (const c of CASES) {
+        const m = ROWS.filter((r) => r.when(c));
+        if (m.length !== 1) overlapsOrGaps.push(`${label(c)} -> ${m.map((r) => r.row).join(' + ') || 'no row'}`);
+        for (const r of m) reached.set(r.row, (reached.get(r.row) ?? 0) + 1);
+      }
+      expect(overlapsOrGaps.slice(0, 10)).toEqual([]);
+      expect([...reached].filter(([, n]) => n === 0).map(([row]) => row)).toEqual([]);
+    });
+
+    it('entryView equals the oracle on every case, field by field, with no extra field', () => {
+      const wrong: string[] = [];
+      for (const c of CASES) {
+        const row = ROWS.find((r) => r.when(c));
+        if (row === undefined) { wrong.push(`${label(c)}: no oracle row`); continue; }
+        const want = row.view(c);
+        const got = docsH.entryView(entryOf(c), factsOf(c), c.mode);
+        const fields = VIEW_KEYS.filter((k) => got[k] !== want[k]);
+        const keys = Object.keys(got).sort().join(',');
+        if (fields.length > 0 || keys !== [...VIEW_KEYS].sort().join(',')) {
+          wrong.push(`${label(c)} [${row.row}]: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+        }
+      }
+      expect(wrong.slice(0, 10)).toEqual([]);
+      expect(wrong.length).toBe(0);
+    });
+  });
+
+  describe('entryView precedence (spec 2 (d), 4.6)', () => {
+    const at = (committed: Entry['committed'], draft: Entry['draft']): Entry =>
+      ({ section: 'plans', path: '2026-01-01-demo.md', committed, draft });
+    const FILE: Entry['committed'] = { kind: 'file', blob: 'b'.repeat(40), size: 10 };
+    const d = (state: Draft['state'], kind: Draft['kind'], fp: string | null): Draft =>
+      ({ state, kind, size: 10, fp, trust: 'status' });
+    const FP = 'f'.repeat(64);
+
+    it('a deleted draft with kind absent and fp null is badge deleted, not withheld', () => {
+      expect(docsH.entryView(at(FILE, d('deleted', 'absent', null)), holder(true), 'ref')).toEqual({
+        listed: true, opens: 'committed', badge: 'deleted', withheld: null, offersCommitted: false, committedKind: 'file',
+      });
+    });
+
+    it('a typechange to a symlink is badge typechange, not withheld; the committed bytes open', () => {
+      expect(docsH.entryView(at(FILE, d('typechange', 'symlink', null)), holder(true), 'ref')).toEqual({
+        listed: true, opens: 'committed', badge: 'typechange', withheld: null, offersCommitted: false, committedKind: 'file',
+      });
+    });
+
+    it('a regular file with fp null is withheld too-large, and a new one is still listed', () => {
+      expect(docsH.entryView(at(FILE, d('modified', 'file', null)), holder(true), 'ref')).toMatchObject({
+        listed: true, opens: 'committed', badge: 'withheld', withheld: 'too-large',
+      });
+      expect(docsH.entryView(at(null, d('untracked', 'file', null)), holder(true), 'ref')).toEqual({
+        listed: true, opens: 'none', badge: 'withheld', withheld: 'too-large', offersCommitted: false, committedKind: null,
+      });
+    });
+
+    it('kind unreadable is withheld unreadable', () => {
+      expect(docsH.entryView(at(FILE, d('modified', 'unreadable', null)), holder(true), 'ref')).toMatchObject({
+        badge: 'withheld', withheld: 'unreadable', opens: 'committed',
+      });
+    });
+
+    it.each(['symlink', 'directory', 'special', 'hardlink', 'foreign-owner', 'other-device'] as const)(
+      'kind %s is withheld not-a-file', (kind) => {
+        expect(docsH.entryView(at(FILE, d('modified', kind, null)), holder(true), 'ref')).toMatchObject({
+          badge: 'withheld', withheld: 'not-a-file', opens: 'committed',
+        });
+      });
+
+    it('the default view never overlays, even over a trusted holder at the served commit', () => {
+      expect(docsH.entryView(at(FILE, d('modified', 'file', FP)), holder(true), 'default')).toEqual({
+        listed: true, opens: 'committed', badge: null, withheld: null, offersCommitted: false, committedKind: 'file',
+      });
+      expect(docsH.entryView(at(null, d('untracked', 'file', FP)), holder(true), 'default').listed).toBe(false);
+    });
+
+    it('baseEqual false never overlays, even in a ref view', () => {
+      expect(docsH.entryView(at(FILE, d('modified', 'file', FP)), holder(false), 'ref')).toEqual({
+        listed: true, opens: 'committed', badge: null, withheld: null, offersCommitted: false, committedKind: 'file',
+      });
+    });
+
+    it('a modified file with an fp opens the draft and offers the committed version; an exec does too', () => {
+      expect(docsH.entryView(at(FILE, d('modified', 'file', FP)), holder(true), 'ref')).toEqual({
+        listed: true, opens: 'draft', badge: 'modified', withheld: null, offersCommitted: true, committedKind: 'file',
+      });
+      const exec: Entry['committed'] = { kind: 'exec', blob: 'b'.repeat(40), size: 10 };
+      expect(docsH.entryView(at(exec, d('conflicted', 'file', FP)), holder(true), 'ref')).toMatchObject({
+        opens: 'draft', badge: 'conflicted', offersCommitted: true, committedKind: 'exec',
+      });
+    });
+
+    it('offersCommitted holds iff the row opens the draft and the committed side is a file or exec, on every case', () => {
+      const wrong = CASES.filter((c) => {
+        const v = docsH.entryView(entryOf(c), factsOf(c), c.mode);
+        return v.offersCommitted !== (v.opens === 'draft' && (v.committedKind === 'file' || v.committedKind === 'exec'));
+      });
+      expect(wrong.map(label).slice(0, 10)).toEqual([]);
+      // Non-vacuous: the matrix holds rows that offer and rows that open the draft without offering.
+      const views = CASES.map((c) => docsH.entryView(entryOf(c), factsOf(c), c.mode));
+      expect(views.some((v) => v.offersCommitted)).toBe(true);
+      expect(views.some((v) => v.opens === 'draft' && !v.offersCommitted)).toBe(true);
+    });
+
+    it('admitDraft: a trusted holder at the served commit and a draft on the entry, nothing else', () => {
+      const draft = d('modified', 'file', FP);
+      expect(docsH.admitDraft(at(FILE, draft), holder(true))).toBe(true);
+      expect(docsH.admitDraft(at(FILE, null), holder(true)), 'no draft').toBe(false);
+      expect(docsH.admitDraft(at(FILE, draft), holder(false)), 'baseEqual false').toBe(false);
+      for (const s of Object.keys(NON_HOLDER) as NonHolder[]) {
+        expect(docsH.admitDraft(at(FILE, draft), NON_HOLDER[s]), s).toBe(false);
+      }
+    });
+  });
+
+  describe('githubBlobUrl (spec 3.11; M3.11)', () => {
+    type Ref = docsH.DocsTreeOk['ref'];
+    const SIDE_KEYS: Record<Ref['side'], true> = { local: true, origin: true };
+    const RELATION_KEYS: Record<Ref['relation'], true> = {
+      equal: true, 'local-only': true, 'origin-only': true, 'local-ahead': true, 'local-behind': true,
+      diverged: true, unmeasured: true,
+    };
+    const VIA_KEYS: Record<Ref['via'], true> = {
+      'default:origin-head': true, 'default:origin-main': true, 'default:origin-master': true,
+      'default:local-main': true, 'default:local-master': true, local: true, origin: true, qualified: true,
+    };
+    const SIDES = Object.keys(SIDE_KEYS) as Ref['side'][];
+    const RELATIONS = Object.keys(RELATION_KEYS) as Ref['relation'][];
+    const VIAS = Object.keys(VIA_KEYS) as Ref['via'][];
+    const NAMED: docsH.DocsGithub = { state: 'named', slug: 'example-org/example-repo' };
+    const NONE: docsH.DocsGithub = { state: 'none' };
+    const refOf = (side: Ref['side'], relation: Ref['relation'], via: Ref['via'], name = 'ws/a b'): Ref => ({
+      requested: null, served: (side === 'local' ? 'refs/heads/' : 'refs/remotes/origin/') + name, name, side,
+      commit: 'c'.repeat(40), via, tried: [], relation, counterpart: null,
+    });
+    const TARGETS = {
+      leaf: { kind: 'leaf', section: 'plans', path: 'sub dir/x y.md', uncommitted: false },
+      newLeaf: { kind: 'leaf', section: 'plans', path: 'sub dir/x y.md', uncommitted: true },
+      section: { kind: 'section', section: 'plans' },
+      dir: { kind: 'dir', section: 'plans', path: 'sub dir' },
+    } as const satisfies Record<string, docsH.GithubTarget>;
+    type TargetName = keyof typeof TARGETS;
+    // Hand-written; never built by the code under test. `newLeaf` never reaches a link (row 3 refuses it first).
+    const URL_OF: Record<Exclude<TargetName, 'newLeaf'>, string> = {
+      leaf: 'https://github.com/example-org/example-repo/blob/ws/a%20b/docs/superpowers/plans/sub%20dir/x%20y.md',
+      section: 'https://github.com/example-org/example-repo/tree/ws/a%20b/docs/superpowers/plans',
+      dir: 'https://github.com/example-org/example-repo/tree/ws/a%20b/docs/superpowers/plans/sub%20dir',
+    };
+
+    interface LinkCase {
+      github: 'named' | 'none'; side: Ref['side']; relation: Ref['relation']; via: Ref['via']; target: TargetName;
+    }
+    const urlFor = (c: LinkCase): string => (c.target === 'newLeaf' ? 'unreachable' : URL_OF[c.target]);
+    // THE ORACLE: spec 3.11's table, in its order, the first match winning, plus one row the table leaves out:
+    // a local side reading `origin-only` cannot arrive, and the builder gives it the cautious note.
+    type LinkRow = { row: string; when: (c: LinkCase) => boolean; link: (c: LinkCase) => docsH.GithubLink };
+    const LINK_ROWS: readonly LinkRow[] = [
+      { row: '1 no github origin', when: (c) => c.github === 'none', link: () => ({ ok: false, why: 'no-github-origin' }) },
+      {
+        row: '2 local-only, or a local default',
+        when: (c) => c.relation === 'local-only' || c.via === 'default:local-main' || c.via === 'default:local-master',
+        link: () => ({ ok: false, why: 'not-on-origin' }),
+      },
+      { row: '3 a new draft leaf', when: (c) => c.target === 'newLeaf', link: () => ({ ok: false, why: 'uncommitted' }) },
+      {
+        row: '4 origin side, or equal',
+        when: (c) => c.side === 'origin' || c.relation === 'equal',
+        link: (c) => ({ ok: true, url: urlFor(c), note: null }),
+      },
+      {
+        row: '5 local side, ahead, behind, diverged or unmeasured',
+        when: (c) => c.side === 'local' && ['local-ahead', 'local-behind', 'diverged', 'unmeasured'].includes(c.relation),
+        link: (c) => ({ ok: true, url: urlFor(c), note: 'may-differ' }),
+      },
+      {
+        row: '6 local side reading origin-only (off-contract)',
+        when: (c) => c.side === 'local' && c.relation === 'origin-only',
+        link: (c) => ({ ok: true, url: urlFor(c), note: 'may-differ' }),
+      },
+    ];
+    const LINK_CASES: LinkCase[] = [];
+    for (const github of ['named', 'none'] as const) for (const side of SIDES) for (const relation of RELATIONS) {
+      for (const via of VIAS) for (const target of Object.keys(TARGETS) as TargetName[]) {
+        LINK_CASES.push({ github, side, relation, via, target });
+      }
+    }
+    const canon = (o: object): string => JSON.stringify(Object.entries(o).sort(([a], [b]) => (a < b ? -1 : 1)));
+    const linkOf = (c: LinkCase): docsH.GithubLink =>
+      docsH.githubBlobUrl(c.github === 'named' ? NAMED : NONE, refOf(c.side, c.relation, c.via), TARGETS[c.target]);
+
+    it('the table covers 2 origins x 2 sides x 7 relations x 8 vias x 4 targets, and every oracle row is reached', () => {
+      expect(LINK_CASES.length).toBe(2 * 2 * 7 * 8 * 4);
+      const reached = new Set(LINK_CASES.map((c) => LINK_ROWS.find((r) => r.when(c))?.row ?? 'no row'));
+      expect([...reached].sort()).toEqual(LINK_ROWS.map((r) => r.row).sort());
+    });
+
+    it('githubBlobUrl equals the oracle on every case', () => {
+      const wrong: string[] = [];
+      for (const c of LINK_CASES) {
+        const row = LINK_ROWS.find((r) => r.when(c));
+        const want = row === undefined ? null : row.link(c);
+        const got = linkOf(c);
+        if (want === null || canon(got) !== canon(want)) {
+          const at = `${JSON.stringify(c)} [${row?.row ?? 'no row'}]`;
+          wrong.push(`${at}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+        }
+      }
+      expect(wrong.slice(0, 10)).toEqual([]);
+      expect(wrong.length).toBe(0);
+    });
+
+    it('no GitHub origin gives no-github-origin, ahead of every other row', () => {
+      expect(docsH.githubBlobUrl(NONE, refOf('local', 'local-only', 'default:local-main'), TARGETS.newLeaf))
+        .toEqual({ ok: false, why: 'no-github-origin' });
+    });
+
+    it('local-only, default:local-main and default:local-master give not-on-origin, even when the relation reads equal', () => {
+      const refused = { ok: false, why: 'not-on-origin' };
+      expect(docsH.githubBlobUrl(NAMED, refOf('local', 'local-only', 'local'), TARGETS.leaf)).toEqual(refused);
+      expect(docsH.githubBlobUrl(NAMED, refOf('local', 'equal', 'default:local-main'), TARGETS.leaf)).toEqual(refused);
+      expect(docsH.githubBlobUrl(NAMED, refOf('local', 'equal', 'default:local-master'), TARGETS.section)).toEqual(refused);
+    });
+
+    it('a leaf that opens a new draft gives uncommitted; the same leaf committed gets its link', () => {
+      const ref = refOf('origin', 'equal', 'origin');
+      expect(docsH.githubBlobUrl(NAMED, ref, TARGETS.newLeaf)).toEqual({ ok: false, why: 'uncommitted' });
+      expect(docsH.githubBlobUrl(NAMED, ref, TARGETS.leaf)).toEqual({ ok: true, url: URL_OF.leaf, note: null });
+    });
+
+    it('the origin side, or the local side equal to origin, links with no note', () => {
+      for (const relation of ['origin-only', 'local-ahead', 'local-behind', 'diverged', 'unmeasured', 'equal'] as const) {
+        expect(docsH.githubBlobUrl(NAMED, refOf('origin', relation, 'default:origin-head'), TARGETS.dir), relation)
+          .toEqual({ ok: true, url: URL_OF.dir, note: null });
+      }
+      expect(docsH.githubBlobUrl(NAMED, refOf('local', 'equal', 'local'), TARGETS.leaf))
+        .toEqual({ ok: true, url: URL_OF.leaf, note: null });
+    });
+
+    it('the local side ahead, behind, diverged or unmeasured links with may-differ', () => {
+      for (const relation of ['local-ahead', 'local-behind', 'diverged', 'unmeasured'] as const) {
+        expect(docsH.githubBlobUrl(NAMED, refOf('local', relation, 'qualified'), TARGETS.section), relation)
+          .toEqual({ ok: true, url: URL_OF.section, note: 'may-differ' });
+      }
+    });
+
+    it('blob for a leaf, tree for a section or directory; each segment encoded, so a branch keeps its slash', () => {
+      const ok = refOf('origin', 'equal', 'default:origin-main', 'main');
+      expect(docsH.githubBlobUrl(NAMED, ok, { kind: 'leaf', section: 'specs', path: '2026-01-01-demo.md', uncommitted: false }))
+        .toEqual({
+          ok: true, note: null,
+          url: 'https://github.com/example-org/example-repo/blob/main/docs/superpowers/specs/2026-01-01-demo.md',
+        });
+      expect(docsH.githubBlobUrl(NAMED, ok, { kind: 'section', section: 'product-design' }))
+        .toEqual({ ok: true, url: 'https://github.com/example-org/example-repo/tree/main/docs/product-design', note: null });
+      expect(docsH.githubBlobUrl(NAMED, ok, { kind: 'dir', section: 'conventions', path: 'a/b' }))
+        .toEqual({ ok: true, url: 'https://github.com/example-org/example-repo/tree/main/docs/conventions/a/b', note: null });
+      // `#`, `?`, `%` and a non-ASCII letter are each encoded inside their segment; `/` between segments is kept.
+      const odd = docsH.githubBlobUrl(NAMED, refOf('origin', 'equal', 'origin', 'ws/a#1'),
+        { kind: 'leaf', section: 'specs', path: 'résumé/100%?.md', uncommitted: false });
+      expect(odd).toEqual({
+        ok: true, note: null,
+        url: 'https://github.com/example-org/example-repo/blob/ws/a%231/docs/superpowers/specs/r%C3%A9sum%C3%A9/100%25%3F.md',
+      });
+    });
+
+    it('the link names the branch, never the commit', () => {
+      const link = docsH.githubBlobUrl(NAMED, refOf('origin', 'equal', 'origin'), TARGETS.leaf);
+      expect(link.ok && link.url.includes('c'.repeat(40))).toBe(false);
+      expect(link).toMatchObject({ ok: true });
+    });
+  });
+});

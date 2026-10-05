@@ -857,3 +857,122 @@ export function resolveDocRef(from: { section: DocSectionSlug; path: string }, r
   }
   return isDocsRelPath(repoPath) ? { kind: 'repo', repoPath } : refusedRef('bad-path');
 }
+
+// ===========================================================================
+// (H) What a row opens, and its GitHub link (spec 2 (d) "What overlays",
+//     4.6 and 3.11). Pure. ccd reports draft FACTS and decides no display;
+//     every display rule for an entry lives in entryView, which the PWA's rows
+//     and leaf headers both call, so there is one badge function.
+// ===========================================================================
+
+/** `'default'` when the page has no `?ref=`, `'ref'` when it has one. The default view never overlays a draft:
+ *  every row and leaf there is the committed entry at the served commit, and the drafts only feed the hint. */
+export type EntryMode = 'default' | 'ref';
+
+/** The one badge vocabulary, for rows and leaf headers alike. Its display text is the PWA's. */
+export type EntryBadge = 'modified' | 'new' | 'deleted' | 'typechange' | 'conflicted' | 'withheld';
+
+/** Why an overlaid draft is not shown: a regular file over the hash ceiling (`fp: null`), an unreadable path, or
+ *  anything that is not a regular file which passed the leaf checks. */
+export type WithheldReason = 'too-large' | 'unreadable' | 'not-a-file';
+
+/** One entry as the page shows it (spec 4.6).
+ *  - `opens`: the bytes a tap reaches. `'none'` for a committed symlink or submodule (listed, never followed) and
+ *    for an entry with nothing committed to fall back to.
+ *  - `offersCommitted`: "open committed version", offered iff the row opens the draft and the committed side is a
+ *    file or exec.
+ *  - `committedKind`: the committed side as listed, whatever the overlay decided. */
+export interface EntryView {
+  listed: boolean;
+  opens: 'draft' | 'committed' | 'none';
+  badge: EntryBadge | null;
+  withheld: WithheldReason | null;
+  offersCommitted: boolean;
+  committedKind: 'file' | 'exec' | 'symlink' | 'submodule' | null;
+}
+
+/** Whether `e`'s draft may overlay at all: exactly one trusted holder whose HEAD is the served commit
+ *  (`baseEqual`), and a draft on this entry. Only a ref view overlays; `entryView` adds that. */
+export function admitDraft(e: DocsEntry, d: DraftsFacts): boolean {
+  return d.state === 'holder' && d.baseEqual && e.draft !== null;
+}
+
+/** THE derivation of a row and a leaf header from one tree answer (spec 4.6).
+ *
+ *  No overlay (the default view; or a ref view whose `drafts` is not a holder at the served commit; or an entry
+ *  with no draft): the committed side alone. Listed iff committed; a file or exec opens committed; a symlink or
+ *  submodule opens nothing.
+ *
+ *  An overlay is decided in this order, the first match winning:
+ *   1. `deleted`: badge deleted. The draft has no bytes.
+ *   2. `typechange`: badge typechange. The draft is never read. This comes before the withheld rule, so a type
+ *      change to a symlink is a typechange, not "not a file".
+ *   3. a regular file with an `fp`: the draft opens. Badge `new` for added or untracked, else the state itself
+ *      (modified, conflicted).
+ *   4. withheld: a file with `fp: null` is too-large, `kind: 'unreadable'` is unreadable, and every other kind is
+ *      not-a-file. Listed iff it is committed or new (added, untracked).
+ *  In 1, 2 and 4 the committed side opens: a committed file or exec opens committed, and a committed symlink, a
+ *  submodule or nothing committed opens nothing. In 1 and 2 the row is listed iff it is committed. */
+export function entryView(e: DocsEntry, d: DraftsFacts, mode: EntryMode): EntryView {
+  const committedKind = e.committed === null ? null : e.committed.kind;
+  const committedIsFile = committedKind === 'file' || committedKind === 'exec';
+  const committedSide: EntryView['opens'] = committedIsFile ? 'committed' : 'none';
+  const view = (listed: boolean, opens: EntryView['opens'], badge: EntryBadge | null,
+    withheld: WithheldReason | null): EntryView =>
+    ({ listed, opens, badge, withheld, offersCommitted: opens === 'draft' && committedIsFile, committedKind });
+  const draft = e.draft;
+  if (mode !== 'ref' || draft === null || !admitDraft(e, d)) {
+    return view(committedKind !== null, committedSide, null, null);
+  }
+  if (draft.state === 'deleted' || draft.state === 'typechange') {
+    return view(committedKind !== null, committedSide, draft.state, null);
+  }
+  const isNew = draft.state === 'added' || draft.state === 'untracked';
+  if (draft.kind === 'file' && draft.fp !== null) {
+    return view(true, 'draft', isNew ? 'new' : draft.state === 'conflicted' ? 'conflicted' : 'modified', null);
+  }
+  const withheld: WithheldReason =
+    draft.kind === 'file' ? 'too-large' : draft.kind === 'unreadable' ? 'unreadable' : 'not-a-file';
+  return view(committedKind !== null || isNew, committedSide, 'withheld', withheld);
+}
+
+/** What a "View on GitHub" action points at. A leaf's `uncommitted` is true when it opens a new draft with no
+ *  committed entry (`entryView(...).opens === 'draft'` and `committed === null`): GitHub holds no copy of it. A
+ *  directory's `path` is relative to its section, like a leaf's. */
+export type GithubTarget =
+  | { kind: 'leaf'; section: DocSectionSlug; path: string; uncommitted: boolean }
+  | { kind: 'section'; section: DocSectionSlug }
+  | { kind: 'dir'; section: DocSectionSlug; path: string };
+
+/** A link, with the caution `may-differ` ("GitHub's copy may differ from this view") or none; or the reason
+ *  there is no link. `not-on-origin` is the PWA's "not pushed". */
+export type GithubLink =
+  | { ok: true; url: string; note: 'may-differ' | null }
+  | { ok: false; why: 'no-github-origin' | 'not-on-origin' | 'uncommitted' };
+
+/** The View on GitHub builder (spec 3.11). The rows are checked in the spec table's order, the first match
+ *  winning:
+ *   1. no GitHub-shaped origin was read: `no-github-origin`;
+ *   2. a `local-only` relation, or a default resolved to a local branch (`default:local-main`,
+ *      `default:local-master`): `not-on-origin`;
+ *   3. a leaf that opens a new draft with no committed entry: `uncommitted`;
+ *   4. the origin side is served, or the local side equals origin: a link with no note;
+ *   5. otherwise (the local side ahead, behind, diverged or unmeasured): a link with `may-differ`. A local side
+ *      reading `origin-only` cannot arrive, because a local side means the local branch exists; if it did, it
+ *      would land here, on the cautious answer.
+ *  The URL names the branch, never a commit (the durable-link convention):
+ *  `https://github.com/<slug>/blob/<ref.name>/<repo path>` for a leaf, and `/tree/` for a section or directory.
+ *  Each `/`-separated segment of the slug, the branch name and the repo path is `encodeURIComponent`-encoded on
+ *  its own, so the branch `ws/a b` keeps its `/` and is written `ws/a%20b`. */
+export function githubBlobUrl(github: DocsGithub, ref: DocsTreeOk['ref'], target: GithubTarget): GithubLink {
+  if (github.state === 'none') return { ok: false, why: 'no-github-origin' };
+  if (ref.relation === 'local-only' || ref.via === 'default:local-main' || ref.via === 'default:local-master') {
+    return { ok: false, why: 'not-on-origin' };
+  }
+  if (target.kind === 'leaf' && target.uncommitted) return { ok: false, why: 'uncommitted' };
+  const segments = (p: string): string => p.split('/').map((s) => encodeURIComponent(s)).join('/');
+  const repoPath = target.kind === 'section' ? DOC_SECTIONS[target.section] : docRepoPath(target.section, target.path);
+  const url = 'https://github.com/' + segments(github.slug) + (target.kind === 'leaf' ? '/blob/' : '/tree/')
+    + segments(ref.name) + '/' + segments(repoPath);
+  return { ok: true, url, note: ref.side === 'origin' || ref.relation === 'equal' ? null : 'may-differ' };
+}
