@@ -19,9 +19,10 @@ removed on 2026-09-10 was not.
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
-| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **merged** `1ffdf947` 2026-09-28 16:14 UTC (#187; run 148 on `plain-summit`; reviews 170, 171, 172); rollout pending |
-| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | — | planned; **pre-dispatch amendments written** 2026-09-26 (A1 to A15; dispatches the moment wave 3 merges) |
-| 5 | the closed run's reclaim chip and its sentences; R25's orphan temp-root collector (R36) | **AGENT-FIRST** (R36 makes it one) | — | planned |
+| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **deployed** v0.0.33 (`1ffdf947`, merged 2026-09-28 16:14 UTC, rolled out 16:16–16:21, fleet box first, rc 0; run 148 on `plain-summit`; reviews 170, 171, 172). Live: run 148's close reclaimed `plain-summit` in 10 s |
+| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 | **done** — accepted by convergence review run 258 on `f8f0af9a`; merged as `b40f4145` 2026-10-04 22:10; release v0.0.79 |
+| 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | — | **planned** — run 260; pre-dispatch amendments and contract §11 (R38–R47) written 2026-10-05, docs PR before dispatch |
+| 6 | R36's orphan temp-root collector (positive witness); the dot-locks; F6; ccd journaling of the mirror-invisible failures; the gone-branch pin; the gone-directory row recovery | **AGENT-FIRST** | — | **to plan** (R38): its own run, block and pre-flight; dispatched after workspace-lifecycle wave 3 (run 245) merges |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
 PR-bearing child refuses. **Wave 3 is the only wave that destroys anything.** Waves 3 and 4 do nothing on a
@@ -39,10 +40,530 @@ reds on any tracked `D-` ref above the highest defined one, so an issued-but-und
 would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
 clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
 
-Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**). Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
+Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
 
+- **2026-10-05 18:35 — wave 5's pre-flight, the coordinator's rulings R38–R47 (contract §11), and the split into
+  waves 5 and 6.**
+  - **The pre-flight.** It read the 2026-09-22 plan against `334fb722a`, and the live fleet read-only.
+    - Three Opus lenses (anchors, contract, process) raised 50 findings: 9 blocking, 23 important and 18 minor.
+    - Five Opus design agents turned every "Wave 5 inherits" item into options. None of those items had been placed.
+    - The process sections were stale against the 2026-09-30 updater ruling.
+    - The estimate came to 12k to 18k insertions, above waves 3 and 4.
+  - **The rulings.** R38 to R47 are now contract §11.
+    - **R38 splits the wave.** Wave 5 is server and PWA only:
+      - the chip;
+      - the presence lease and clocks (R39);
+      - R37 fenced to the workspace's current generation (R40);
+      - the sweep's verdicts made visible (R41 to R44);
+      - the abandon copy and the prose (R45, R46).
+
+      Wave 6 is AGENT-FIRST and carries R36's collector, rewritten to a positive witness: `~/.cc-tmp` holds 16
+      foreign directories (6.5 GB) that R25 as written would delete. It also carries the dot-locks, F6, ccd's
+      journaling, the gone-branch pin and the gone-row recovery. It waits for workspace-lifecycle wave 3.
+    - **R47:** deploy through the updater only; the SAFETY lens is mandatory; delivery is by `planSha`.
+  - **How the amendments were written.** Four Opus composers wrote them, and three Opus attacks went at them:
+    SAFETY, executability and rulings. The attacks found one blocking defect: the lease had no tenure bound. The
+    rulings were corrected:
+    - a forfeit, and three stated figures for the bound;
+    - R40 stated as Task 0c's instant rule, which keeps an heir;
+    - the kept sentence's ending.
+
+    The coordinator then ruled on the composers' open issues and on the editors' remaining items. A reconcile pass,
+    a whole-text consistency check (13 conflicts, all applied) and one final edit pass followed. The records are in
+    the evidence archive (`wave5-preflight/`, `wave5-amendments/`, `wave5-final/`, `wave5-reconciled/`,
+    `wave5-applied/`).
+  - **The live cases.**
+    - `ccrc-pwa-brisk-meadow` is an R37 false positive: its slug coordinated program-leverage runs 10 to 30 in
+      August. R40 lets the sweep take it.
+    - `expoAI-assistant-calm-mesa` (`pin-failed`, branch gone, HEAD `af784dbf` on `origin/main`) waits for wave 6,
+      or for the operator's one `update-ref`.
+  - **Route (clause 13), changed from wave 4's Opus·high with workflows off:**
+    `{class:'opus', effort:'xhigh', subagent:'sonnet', workflow:'on', compact:'40'}`. This is the bulk row, because
+    the amended wave exceeds one context. The implementation floor is `sonnet` / `high`. Tasks 0b and 0c and the
+    verdict accessor are `opus`.
+  - **Overlaps.** Claims read at 18:20. Overlap rules were proposed to `ccrc-pwa-quiet-river` (mail 3560; run 245
+    holds `shared/api.ts` and `single-definition.test.ts`) and `ccrc-pwa-soft-basin` (mail 3562; run 271 holds
+    `session-hook.test.ts`). The rule: additive edits; the second lander merges main, never rebases, and re-runs the
+    shared suites; neither waits.
+  - **Docs guards pass locally:** deviation-refs, topology-clean, crossrepo-prose, routing-references,
+    ledger-instruction, runbook-holds, license and oss-metadata, 178 of 178. No block number is spent on the
+    amendments.
+
+- **2026-10-05 14:31 — the backlog has drained; wave 5's "measure first" item is measured.** Read-only.
+  - **Drain:** 90 sweep reclaims, the last at 14:19, about one every 70 s from 12:36, with no presence wedge seen.
+    3 failures, all the same child.
+  - **Left, with reasons (10 children whose own run is finished):**
+    - Six are review children of `eng-metrics-way-forward`, whose work runs 183, 187 and 198 sit at
+      `awaiting-review` since 2026-09-30 and 2026-10-01. That rule is `review-report-live`: they leave when those
+      runs settle. That programme's coordinator owns the settling, not this programme.
+    - `bright-hollow` (review 267 of run 250) and `plain-hollow` (review 268 of run 248) are kept by the same rule.
+      Their work runs are `working`.
+    - `brisk-meadow` (review 171 of run 148, both `done`, no `.hold`) is passed over with no feed row. That skip is
+      invisible by construction. It is wave 5's attention-list item (R37/R-5d skips) in a live case.
+    - `expoAI-assistant-calm-mesa` (run 139) fails `pin-failed: refs/heads/ws/calm-mesa does not resolve … there is
+      no branch tip to pin` at 14:04, 14:20 and 14:24. It fails closed, retries, and will reach the attention list.
+      **New for wave 5:** a child whose branch is already gone can never be reclaimed today. Wave 5 decides what
+      may be pinned instead (the worktree's HEAD) or names the operator act.
+
+- **2026-10-05 13:33 — what a reclaim frees, and what it leaves.** Measured read-only, for the operator's
+  idle-process question.
+  - **Browser MCP servers:** no real headless Chrome was running. The memory is `playwright-mcp` (74 processes,
+    about 1.3 GB) and `chrome-devtools-mcp` (102 processes, about 2.1 GB). Every session starts both, about 74 MB
+    per session. Attributed by pane scope: about 1.3 GB sat in 7 finished-run children, which the sweep takes;
+    about 0.25 GB in 2 open-run children; and about 2.4 GB in 14 sessions that are not children (coordinators and
+    hand-made workspaces), which reclamation never takes (rule 4).
+  - **A reclaim does end them:** 39 sweep reclaims by 13:21, and running children fell from 31 to 19, yet no pane
+    scope without a `claude` process held an MCP server.
+  - **What it leaves:** reclaim ends a pane with `tmux kill-session`, which does not stop the pane's scope. 13 such
+    scopes hold detached stragglers, about 25 MB together, some 21 days old. One more held a SessionEnd hook's
+    900 MB parse, which was transient. This programme does not own that fix: session-continuity wave 4
+    (`ccd-scope-sweep`) and wave 9 ("ccd stops a pane's scope when it ends the pane", every verb including reclaim)
+    do. Wave 5 does not duplicate it.
+  - **Not reclamation:** the graph sweep's 14 kills in 7 days are its own `MemoryMax=4G` cgroup OOM
+    (`ccd-graph-sweep.service`, `oom-kill`). The trees near the kills are mostly `MekWarLive/swift-harbor`, then
+    `expoAI-assistant/identity-flake`, neither of them a child.
+
+- **2026-10-05 13:06 — the fleet converged past v0.0.79 and the sweep is live.** Measured read-only.
+  - **Convergence:** the halt cleared overnight. The updater sent the fleet box v0.0.84 at 12:22 (from v0.0.78)
+    and the server box v0.0.84 at 12:34 (from v0.0.76). The fleet box's `update.json` reads `done` for v0.0.84, and
+    `ccd caps` lists `reclaim-v1`, `reclaim-pause-v1` and `lifecycle-v1`.
+  - **First passes:** the first sweep reclaim landed at 12:36 (`amber-basin`, run 230). By 13:03, 24 children had
+    gone, one in flight at a time, about one every 70 s, in id order through `clear-summit`. Every feed row reads
+    "Nothing uncommitted was left". The feed has no `child reclaim failed` row since the sweep went live.
+  - **What remains (13:03):** 81 child markers. Of those, 75 are children whose runs have all finished: 25 running
+    panes in the Released fold and 50 stopped rows that were already archived. The other 6 belong to open
+    runs. Two children earlier in id order were passed over. `bright-hollow` reviewed landing-order run 250, which
+    is still `working`, so it is kept as ruled. `brisk-meadow` (review 171 of run 148, both done, no `.hold`) has
+    no reason measured yet. It is checked again once the backlog drains.
+  - **Not this programme's:** 21 unmarked workspaces are archived with finished runs or none. The sweep never takes
+    them (rule 4). Their 7-day expiry is workspace-lifecycle wave 3: the plan was merged as #252, the `ws-expire`
+    verb ships inert, and the lane that calls it is wave 3b.
+
+- **2026-10-04 23:41 — still halted; no further checks scheduled.** Re-measured read-only at 23:41. The fleet box's
+  `~/.ccrc/update.json` still reads `phase: failed` for v0.0.78, written at 22:10 and not changed since. `ccrc
+  rollout --to v0.0.79 --check` still reports the fleet box on v0.0.78 and the server box on v0.0.76, both behind.
+  The feed has no update event after 22:02's queued v0.0.78 run. The halt lifts only when the operator acks the
+  fleet node from the Updates screen. Convergence and the first sweep passes are measured after that ack, not by a
+  timer.
+
+- **2026-10-04 22:59 — v0.0.79 has not converged: a failed v0.0.78 row on the fleet box halts the updater.**
+  Measured read-only at 22:57.
+  - **Where the boxes are:** `ccrc rollout --to v0.0.79 --check` reports the fleet box on v0.0.78 (`f789d97d`) and
+    the server box on v0.0.76 (`698f679d`), both behind. The fleet box's projection says channel dev, desired
+    v0.0.79, auto channel.
+  - **Why nothing moved:** the fleet box's auto update to v0.0.78 was queued at 22:02. At 22:10 it wrote
+    `phase: failed`, because its supervisor sweep restarted `claude-session@ccrc-pwa-still-summit.service` and the
+    unit did not stay up. The box installed v0.0.78 anyway (`ccrc version`: `install: complete`). A failed node
+    halts every move in the fleet until it is acked (`dispatch.ts`, refusal `halted`), so v0.0.79 has been sent to
+    neither box.
+  - **Who has it:** `ccrc-pwa-bright-river` filed "update v0.0.78 failed falsely: serial sweep verify vs a hand
+    archive" at 22:24. `still-summit` measures stopped now. The ack is the operator's act, from the Updates
+    screen (`POST /api/updates/ack` is session-only). This programme neither acks nor rolls out.
+  - **The sweep is not live:** `ccd caps` lists `reclaim-v1` but not `reclaim-pause-v1`. There are 99 child
+    markers, none without a row: 63 rows stopped (62 at 21:25) and 36 running. Close-time reclaim still works:
+    `swift-hollow` was reclaimed at 22:12 when run 174 closed.
+  - **Next:** one more one-shot check at about 23:40, read-only.
+
+- **2026-10-04 22:12 — convergence review run 258 accepts wave 4; PR #215 merged; wave 5 opened.**
+  `ccrc-pwa-keen-mesa` read `f8f0af9a` (31 agents, none dead or empty; `unverifiedLenses` and `unexamined` none).
+  - **Panel:** 9 raised, 7 confirmed (6 distinct, G1 to G6), 2 refuted 3/3. Every finding is minor; none is
+    critical or important.
+  - **SAFETY holds:** no path removes or commits away a live child. Fix round 1 only removes licensed asks or
+    sightings, and every new guard goes red under mutation. Seeded interleavings found 0 licensed asks without a
+    continuous, fresh presence chain by the implementation's own clock (seeds 1–300, 11,760 requests, 57 licensed),
+    and review 254's F1–F6 are resolved as ruled.
+  - **Ruling, G1 (round, conditional).** "Answer" in the 15:13 and 15:52 rulings means the pass time of the request
+    it answered. That is A9 item 1's `nowMs` convention and the field's docstring, and the 15:52 arithmetic counted
+    between asks. So it is no departure. The residual: a real observation can trail its request, so consecutive
+    observations may be up to about 300 s apart while the requests stay within the bound. Freshness at the ask still
+    holds in real time. Stamping at arrival is carried to wave 5 together with G4.
+  - **Ruling, G3 (round).** Accepted as the stated cost of the F1 rule: while three or more children stay
+    presence-held, each is asked every third pass and its episode restarts at every answer, so none is ever licensed.
+    That fails closed; liveness is the only cost. It is spec §5.7's named wedge ("Unbounded would be worse than
+    absent") in that case, so **wave 5 must bound it**, for example with continuity measured per pass the child was
+    due, or a gap scaled with the due count. Wave 5 also states it truthfully in A9, the docstring and lens 1's
+    sentence.
+  - **Acceptance under the convergence rule:** the SAFETY lens holds and no confirmed critical or important finding
+    stands. The round introduced no behavioural defect: G2 is a false reason in a comment, G3's behaviour is exactly
+    the ruled rule, and G6 is a report line count. They join the carried class, as review 215's F1 did for
+    row-placement. G4 and G5 predate the round and carry to wave 5.
+  - **Landing.** `main` moved to `f789d97d` after the reviewed tip: #241 changed `watch.ts`, `store.ts`,
+    `shared/api.ts` and `README.md`, and #243, #244 and #245 were docs. GitHub's merge ref stayed on the older base,
+    so the coordinator built the exact combination locally, a scratch commit never pushed (tree `031992de`). On it:
+    - `tsc` was clean;
+    - census, deviation and store suites passed (7 files, 594 tests);
+    - stall, sweep, close, asks and auth suites passed (13 files, 1,381 tests);
+    - the README and citation pins passed (96 tests).
+
+    Run 174 then advanced to `merging`, and `gh pr merge 215 --squash --admin --match-head-commit f8f0af9a…` landed
+    `b40f4145` at 22:10:25Z with a coordinator-written message carrying no deviation number. The merged tree equals
+    the tested tree. `release-main.yml` published prerelease v0.0.79 at 22:11.
+  - **Wave 5 opened first, then wave 4 closed.** Run 260 (wave 5) opened `planned`, and its block was allocated at
+    run-open: 3926, 3927, 3928, 3929, 3930, 3931, 3932, 3933, 3934, 3935, 3936, 3937, 3938, 3939, 3940, 3941, 3942,
+    3943, 3944 and 3945. Run 174 then closed `done`, not final, with `prPhase` `merged`, answering `childReclaim:
+    queued` for `swift-hollow`.
+  - **Evidence kept.** The review reports for runs 212 to 217, 222, 254 and 258, and `swift-hollow`'s gitignored SDD
+    directory and reports, are copied to `.superpowers/sdd/ccr15-evidence-archive/` in the coordinator worktree
+    (gitignored, never reclaimed). Their originals go when their children are reclaimed.
+  - **What goes live with v0.0.79:** the sweep, once both boxes advertise `reclaim-v1` and `reclaim-pause-v1`. It
+    starts on the backlog: 62 child-marked rows sat stopped on the fleet box at 21:25, including the reviewers of this
+    programme's runs 212 to 258. The operator's kill switch is `reclaim-pause` (Runs screen). Convergence and the
+    first passes are observed read-only.
+
+- **2026-10-04 20:34 — fix round 1 re-measured; convergence review run 258 dispatched.** Wave-done 3409 claimed
+  `f8f0af9a`. Re-measured:
+  - PR #215's head is that sha, open and mergeable, and current `main` (`22f7931a`) is an ancestor, merged twice and
+    never rebased.
+  - The tip's migration 15 equals #237's line for line, and #215's own migration is 16.
+  - `verifyMarker` answers `ccrc-unmodified` with one marker line, and `mark.mjs --check` exits 0.
+  - `bash -n` passes on each shell file alone, and both Python files compile.
+  - `_ws_reclaim_resolve`, `_ws_reclaim_plain_path` and `_ws_reclaim_owned` equal `main`'s.
+  - `_svc_real_home` is identical in `ccd/ccd` and `ccd/ccrc` and reads
+    `^[${az}${d}_][${az}${d}._@-]*$ && ! ^[$d]+$`, as ruled.
+  - The deviation numbers new against `main` are still exactly wave 4's twenty.
+  - Required Linux CI is green (run 37231602141).
+
+  Run 174 advanced to `awaiting-review`. Review run 258 was dispatched to `ccrc-pwa-keen-mesa` with the panel, the
+  plan's SAFETY lens at Opus `xhigh` (extended to F1's continuity, F2 and F3's deletes, F5's charset and the merges)
+  and the convergence rule. The worker's "Named, not fixed" list is known and ruled.
+- **2026-10-04 17:06 — overlap rule agreed with stall-watch wave 7 (mail 3401).** Stall-watch wave 7 amends
+  coordinator clause 16, with `CONTRACT[15]`, its own new rows in `coordinator-skill.test.ts` and
+  `worker-skill.test.ts`, and the sentences that quote that clause. #215 changes clause 3 only (`CONTRACT` at :110,
+  plus added blocks at :523 and :1572), measured at `6138030e`, and clause 16 reaches #215 only through `main`. So the
+  edits are disjoint: both PRs land, and the second lander merges `main`, keeps both sides and re-runs the skill
+  suites and the README citation cases.
+- **2026-10-04 15:52 — F1's bound refined to 2.5 sweep intervals.** `swift-hollow` implemented the 15:13 bound at
+  exactly two intervals (≤ 120,000 ms) and measured a consequence (mail 3393). The watcher ticks every 2 s and the
+  sweep keeps its own 60 s clock, so passes land 60 to 62 s apart. A child that sits out one pass is therefore
+  re-asked 120 to 124 s after its last presence answer, just past the bound, and the licence was withheld once two
+  children were due, not three as the ruling intended. **Ruling:** both conditions use 2.5 ×
+  `CHILD_RECLAIM_SWEEP_MS` (150,000 ms, inclusive, derived from the constant rather than written as a literal). One
+  skipped pass with tick jitter keeps the episode, and two skipped passes (≥ 180 s) restart it. So the licence is
+  withheld once three or more children are due, as intended, and it still fails closed. Pins: a one-skipped-pass case
+  at the jitter's high end keeps the episode, and a two-skipped-pass case restarts it.
+- **2026-10-04 15:13 — review run 254: no containment bypass, two important findings; wave 4 fix round 1.**
+  `ccrc-pwa-still-cove` read `6138030e` (34 agents, none dead or empty; `unverifiedLenses` and `unexamined` none).
+  - **Panel:** correctness raised 3 and confirmed 2; spec 1, 1; reproduce 2, 1; SAFETY (Opus `xhigh`) 4, 4. Every
+    confirmation was 0/3 refuted, and two findings were refuted (3/3 and 2/3).
+  - **SAFETY:** no path removes or commits away a live child through containment, row placement or ownership. C1
+    re-measured `unmeasured` at the tip and goes red under 3d's line. 20,000 random and child-targeted decoy spellings
+    gave 0 mismatches against `cd -L; pwd -P`. #226's and #222's pins are green, and so are the full suite (12
+    shards, 493 files) and Linux CI.
+  - **Rulings.** Run 174 is back at `working`, and review run 254 closed `done`.
+    - **F1, important, predates the round:** one stale presence sample plus the one-slot round-robin licenses
+      `--defer-expired` with no continuous presence (`R254-P`: the second ask came 17 minutes after the only
+      sample), and the licensed attempt skips ccd's `attached` and `tree-busy` rungs. **Ruling:** R-4 and spec §5.7
+      say "continuous", so the rule is made literal.
+      - An episode is continuous only while consecutive presence-class answers are at most two sweep-pass intervals
+        apart; a longer gap restarts the episode at the new answer.
+      - A request goes out licensed only when the episode spans the ceiling AND its latest presence answer is within
+        two intervals of the ask.
+      - Both conditions only remove licensed asks, never add one. Under a backlog of three or more due children,
+        presence-held children wait unlicensed until it drains, which fails closed.
+      - This amends A9's presence arm in place by coordinator ruling. The plan is the coordinator's, so it is no
+        departure and takes no number. `R254-P` goes red first, and dropping either condition reds a case.
+    - **F2, important, predates the round:** the sweep's two entry-delete guards (`watch.ts` at the ineligible
+      verdict and at the vanished row) have no red test. Add the reviewer's `R254-L10` and `R254-L12` probes and their
+      mutation rows.
+    - **F3, minor, predates the round:** A10.1's "Its answer deletes the entry unconditionally" and case (ix) are not
+      implemented, and a test pins the contrary. **Ruling:** implement the plan. The release answer deletes the entry,
+      (ix) needs two fresh unheld passes after the answer, and the test at `child-reclaim-sweep.test.ts:442` moves to
+      match. That is conformance, with no number.
+    - **F4, minor, predates the round:** the executor's `unmeasurable` pause arm is unpinned (`pause === 'set'` stays
+      green). Add the second-listing-fails case and its mutation row.
+    - **F5, minor, introduced by the round:** `_svc_real_home`'s charset refuses digit-led and `@`-bearing login
+      names that `main` resolved, and its comment's reason is false: `~5user` is a password-database lookup, and only an
+      all-number prefix reads the directory stack. **Ruling:** accept `^[A-Za-z0-9_][A-Za-z0-9._@-]*$` except an
+      all-digit name. Refuse all-digit, sign-led, backslash and every other shell syntax. Correct the comment and the
+      test titles, keep every injection canary, and change both copies identically. The remaining cost is that an
+      all-digit or backslash login name on a Mac stops launchd management; it is recorded, not fixed.
+    - **F6, minor, predates the round (`main`'s mechanism):** an inherited `GIT_CONFIG_PARAMETERS` is applied after
+      the containment's COUNT entries and overrides its hook and fsmonitor pins. **Ruling:** state it truthfully in
+      the containment's comment now. A16-5's "kept by design" premise is wrong for this variable. Unsetting it is
+      carried to wave 5's SAFETY lens.
+    - **F7, minor, introduced by the round:** two stale gate-table counts in the report. Record-only.
+  - **Landing:** `main` is `c9ada654` with #237 landed. By the rule agreed in mail 3364, #215 merges `main` (never
+    rebasing), keeps #237's version 15 and renumbers its own migration to `user_version` 16 (its banner, comment and
+    pins), then re-runs `coord-db`, `coord-store`, `asks-store`, the census, S6-R11 and the stamp gate.
+  - **Convergence rule for the next review:** it accepts the wave when the SAFETY lens holds, no confirmed critical
+    or important finding stands, and this fix round introduced no defect. A newly found minor that predates the round
+    is carried to wave 5.
+- **2026-10-04 12:09 — wave 4's wave-done re-measured; held-out review run 254 dispatched.** Wave-done 3374 claimed
+  `6138030e`. Re-measured:
+  - PR #215's head is that sha, open, not draft and mergeable.
+  - `cf9e4cc8`, `db44b136` and `0087a045` are ancestors, all four merges were done without rebasing, and `main` has
+    since moved to `3255571a`. The ordered stop on chasing `main` held, and `git merge-tree` against current `main` is
+    clean. `main`'s schema ends at version 14, so the tip's version 15 is free for now.
+  - `verifyMarker` answers `ccrc-unmodified` with one marker line, and an edited control answers `ccrc-edited`.
+  - `bash -n` passes on `ccd/ccd`, `ccd/ccrc` and `deploy/deploy.sh`, each checked alone, and both Python files
+    compile.
+  - The new `shared/mark.mjs --check` exits 0 on the stamped body and 1 on a missing file.
+  - `_ws_reclaim_resolve` and `_ws_reclaim_plain_path` equal `0087a045`'s byte for byte, so option A landed.
+  - The deviation numbers new against `main` are exactly wave 4's twenty, the same set as before the round, each
+    defined. Nothing new was minted.
+  - Required Linux CI is green (run 37199924539); macOS is advisory.
+
+  Run 174 advanced to `awaiting-review`. Review run 254 opened under this programme's title and was dispatched to
+  `ccrc-pwa-still-cove` with:
+  - the standard panel;
+  - the plan's mandatory SAFETY lens at Opus `xhigh`, extended to re-measure C1, try further decoy landscapes, and
+    check that #226 and #222 survived, the case-fold superset, the login-name charset and the sweep's defer and pause
+    seams;
+  - the full server suite in twelve shards.
+
+  The worker asks that commit bodies quoting existing deviation numbers stay out of the squash message, so the
+  coordinator writes that message at merge. The #237 slot collision is ruled after this review.
+- **2026-10-03 23:15 — item 3d is reverted: the re-walk-first order deleted a live child. The 15:35 ruling is
+  withdrawn.** `swift-hollow` stopped before push (mail 3366). Its own integration review's Opus SAFETY lens
+  measured end to end, in a scratch copy, that 3d's order deletes a live child (C1, critical):
+  - **The row.** A crafted `.workdir` row `$HOME/L1/../L2/s/../../worktrees/demo/quiet-basin`, with a plantable
+    landscape of symlinks and a decoy directory. Its pane's logical `cd` lands exactly in the child.
+  - **What 3d did with it.** The resolver answered `complete` at `$HOME/d/worktrees/demo/quiet-basin`, outside the
+    child. `_ws_reclaim_workdir_shared` ignored the row, evaluation minted a token, and `ws-reclaim` removed the
+    child tree.
+  - **Every merge parent refused it.** `abb3f6940`, `cf9e4cc8` and `db44b136` all answer `unmeasured` for the same
+    spelling.
+  - **Mechanism.** Re-walking the prefix before the rest's `..` is checked lets a rest `..` pop above the re-walk's
+    landing, into a physical path the decoy makes exist.
+
+  This falsifies the claim the 15:35 ruling accepted ("refuses none that BASE resolved"). That claim was taken from
+  the worker's report without an adversarial measurement of the new order. **Ruling (mail 3367):** option A.
+  - Revert 3d's resolver lines to `main`'s order, the rest's `..` refusal first, as reviewed four times in #226.
+  - Revert `067151e64`'s member slug under 3538.
+  - Replace 3d's two cases with a regression case pinning C1's spelling at `unmeasured`, whose mutation (restoring
+    the re-walk-first line) must go red.
+  - Keep 3a, 3b and 3c.
+  - Option B, keeping 3d behind a net-`..` guard, is declined. Each reorder of this resolver has produced the next
+    measured bypass, and the only thing 3d bought was a truthful detail on a fail-shut retry.
+  - **Carried to the path-identity follow-up:** the row that logically IS the child still lands in retryable `unres`
+    with a detail that is false for it.
+  - **Also carried there:** m1, which the same lens measured. The `/proc` unplaced arm is literal-only, so a row
+    spelled through a symlink to `/proc/self/cwd` resolves against the reclaim process's own cwd, and with that cwd
+    elsewhere the verb removed the child. It predates this round in a stronger form, because `main` has no `/proc`
+    arm at all, and no ccd writer produces such a row. That is the same reasoning as review 217's F6.
+  - **m2** (a future Python's UTF-8 mode against the GB18030 fold) is noted for the Python-floor decision; nothing
+    changes now.
+
+  The ordering in mail 3357 is superseded: revert first, then merge `0087a045`, then push and send the wave-done.
+- **2026-10-03 23:11 — wave 4 is blocked again; an overlap rule agreed with stall-watch.** `swift-hollow` has not
+  committed since 17:35 (`067151e64`, nothing pushed). Mails 3350 and 3357 have sat `queued` at gate `not-idle`
+  since they were sent, and the stall-watch coordinator reports a Bash approval prompt (mail 3363). The operator was
+  asked to clear it. Stall-watch wave 5 (run 252) edits `server/src/coord/store.ts` (the stall read only), the
+  `README.md` stall-watch paragraphs, and adds a migration that, like #215's, takes `user_version` 15. Agreed by mail
+  3364: both PRs land, and the second lander merges `main`, keeps both sides, renumbers its own migration to the
+  next free version, and re-runs `coord-db`, `coord-store` and the README citation cases. If #215 lands second, its
+  renumber is a landing delta ruled after its review.
+- **2026-10-03 18:32 — third merge done; `main` moved a fourth time; no further chase.** `swift-hollow` merged
+  `db44b136` (`0dcd3ad39`) and recorded the bounded re-walk under 3538 (`067151e64`), with nothing pushed yet. Then
+  #234 (landing-order wave 2) merged as `0087a045`. It edits `ccd/ccd`, the coordinator skill and its
+  `wave-lifecycle.md`, `childSpent.ts`, `close.ts` and `store.ts` (mail 3356); its coordinator's merge-tree showed
+  conflicts. Ruling (mail 3357): merge `0087a045`, then push and send the wave-done without re-merging for a later
+  move unless asked. If `main` moves again before landing, a conflict is ruled after the review, against its own
+  delta, so the branch does not chase every other programme's landing.
+- **2026-10-03 17:36 — items 4–6 reported (mail 3349); four slugs ruled.** The work is at local `65da6cafe`, after
+  the second merge. The third merge (`db44b136`) and the push are still to come. Every slug is accepted, and none
+  departs from the spec, the contract or a plan, so none takes a number:
+  - **`unresolved-real-home-refuses-system-launchctl`.** `_svc_real_home` evaluates only a login name matching
+    `^[A-Za-z_][A-Za-z0-9._-]*$`, with the letters spelled out because a bracket range follows collation. A leading
+    digit, `+` or `-` is excluded, since `~0`, `~+N` and `~-` read the directory stack. Any other name answers no
+    home with exit 1. `_svc_launchctl` now also treats an unresolved home as a sandbox, which closes the case where an
+    empty `$HOME` compared `""` with `""` and reached the system launchctl. That follows the guard's own stated rule:
+    a sandbox HOME plus the system launchctl must not proceed, and an unresolved home cannot prove it is not one.
+    Both copies are changed identically and the change is line-neutral. Accepted. The held-out review judges whether
+    the charset refuses a real macOS account-name class (a directory-bound name, for one), because on such a box this
+    refusal would stop launchd management altogether.
+  - **`protected-fold-is-a-locale-superset`.** U+0130 was measured to fold under `nocasematch` in a UTF-8 locale, so
+    an ASCII-only fold would leave that gap open. A non-ASCII character is a one-character wildcard, counted in code
+    points and in bytes. This is inside the 2026-10-02 ruling that a superset is harmless: a variant started
+    protected meets the body's exact compare and exits 1 `usage:`.
+  - **`mark-check-runs-only-as-the-started-script`.** It was measured that `ccrc restamp` imports `mark.mjs` under
+    `node -e` with `argv[1]` set to that file. An eval run therefore checks only when `--check` follows.
+  - **`exit2-launcher-arm-pinned-by-a-fixture-installer`.** It stays inside the claimed test file.
+- **2026-10-03 16:40 — items 4–6 committed; `main` moved again.** `swift-hollow` merged `fe7b9775` (`3a4b88070`) and
+  committed items 4 to 6 locally (`ec18654fb`, `6d5a736e3`, `65da6cafe`). Then #235 (session-continuity wave 2) merged
+  as `db44b136` and added 458 lines to `ccd/ccd` (mail 3344). Mail 3346 asks for one more merge of `origin/main`
+  before the wave-done, with the stamp, the S6-R11 census and the citation re-measure re-run.
+- **2026-10-03 15:35 — integration items 1–3 done locally; one ruling.** `swift-hollow` reported by mail 3335,
+  with nothing pushed. The second merge of `fe7b9775`, items 4–6 and mail 3329's additions are still to come. Its
+  resolutions:
+  - **The merge.** `main`'s span from `_ws_reclaim_workdir_shared` to `_ws_reclaim_absent` was taken byte for byte,
+    plus two deliberate wave-4 additions: the `/proc` arm and the newline-safe `dirname` read.
+  - **Item 2:** the re-walk prose now names only an entered-prefix `..`, and the `printf` control is bound to the
+    child.
+  - **Item 3:** each surface now pins the printed remedy text; each ladder row case asserts its own resolver answer;
+    the rc-1 clause is pinned as printed.
+  - **Ruling, `rest-refusal-applies-once-rewalked` (item 3d's form).** A plain swap (re-walk before every rest's
+    `..` refusal) measured cubic on `lnk/../`×N: 11.2 s at N=200, and still running at 600 s on the way to N=585.
+    Any session can write a `.workdir` row and every reclaim reads every row, so one such row would stall every
+    reclaim. The committed form:
+    - the top-level call re-walks first;
+    - inside a re-walk, the rest's refusal applies first, so a spelling is re-walked at most twice;
+    - a third nested `<lnk>/..` answers `unres`, so the reclaim reads `unmeasured` and refuses.
+
+    Against the old order it resolves strictly more spellings (depths 1 and 2, the row that IS the child), and
+    refuses none the old order resolved. Accepted. **(Withdrawn 2026-10-03 23:15: C1 measured that it does.)** It is fail-shut and holds a child rather than deleting one, the
+    same class of accepted cost as a gone alternate row. Like `resolvable-rest-dotdot` and
+    `resolvable-dotdot-physical-fallback` before it, it joins 3538 as a member slug added by coordinator mail: that
+    number's scope is fail-shut refusal semantics for unsafe path spellings. No new number. The bounded form costs
+    21 s on a 14 KB hand-written row (N=2000), against 7.7 s for the old order; the held-out review judges that cost.
+  - **Accepted as no departure:**
+    - `ladder-row-cases-assert-the-row-resolution`: an eval-level split is impossible, because every non-`complete`
+      row gets one answer by design;
+    - `verb-split-keeps-mains-alternate-row-cases`;
+    - `r28-shift-measured-five-not-three`: the 2026-10-02 entry's "three lines" was wrong; R28 moved from 477 to
+      482 and is re-anchored by content at :482–489.
+- **2026-10-03 13:34 — `main` moved and `ccd/ccrc` is free, so the integration round widens.** `origin/main` is
+  now `fe7b9775`, after #230 (session continuity wave 1), #231 (landing-order wave 1) and #233 (workspace-lifecycle
+  wave 2). Since `cf9e4cc8` they change `ccd/ccd` (483 lines), `ccd/ccrc` and `server/src/coord/store.ts`. #233's
+  coordinator measured its `store.ts` hunk disjoint from #215's (mail 3328), and #215 is the second lander. No claim
+  is live in `ccrc-pwa`: claim 882 ended with #231, and wave 4's own 890 has lapsed. Ruling: the items carried
+  "until `ccd/ccrc` is free" join this round. They are review 222's R2, R3's `ccd/ccrc` sentence, and the same
+  `_svc_real_home` repair in `ccd/ccrc`'s identical copy, so the two copies do not diverge. Before its wave-done, the
+  worker merges `origin/main` again, never rebasing, takes both sides, re-stamps `ccd/ccd` and re-takes its claims.
+- **2026-10-03 12:15 — wave 4's integration round is stalled on a permission prompt.** The stall-watch coordinator
+  reported (mail 3313) that `swift-hollow` has been at a Claude Code Bash approval prompt since 2026-10-02 19:38Z.
+  The command is a read-only `git diff --stat abb3f6940 HEAD; git diff abb3f6940 HEAD | grep …`, and the prompt is
+  not a ccrc ask. Measured read-only: `origin/main` `cf9e4cc8` is merged as `abb3f6940`, without a rebase. Items 2
+  and 3 are in progress (`1d2cdffd1`, `823c9523d`, the last at 19:23); nothing is pushed, and the tree is clean. No
+  coordinator route clears a pane dialog, so the operator was asked to approve it from the PWA or the pane.
+- **2026-10-02 15:03 — the entry-safety prerequisite has merged; wave 4's integration round opens.** PR #222 landed
+  as `cf9e4cc8` after review runs 216, 217 and 222 (that programme's ledger; release v0.0.60), and run 199 closed
+  final. Both prerequisites are on `main`, so the landing order reaches wave 4. Run 174 stays `working` (items 817 to
+  834 pending) and `swift-hollow` receives one integration round, by status mail, in this order:
+  1. **Merge `origin/main`** into local `1a02baac7abfbb1a88a1a7a251c7326c11ae9f08`, never rebasing. `main` now
+     carries #226's port of this branch's resolver substrate, extended with the `complete|absent-suffix|unmeasured`
+     basis, and #222's launcher, installer and 30-line body guard. Where both sides define the same code, `main`'s is
+     the base, and a wave 4 change on top of it must be deliberate and stated. Every #226 and #222 pin stays green.
+     Regenerate and re-stamp `ccd/ccd`.
+  2. **Fix round 3's two minors:** `_ws_reclaim_workdir_shared`'s prose overstates which `..` spellings are
+     re-walked, and the imported-`printf` control hard-codes `quiet-basin`.
+  3. **The row-placement carries (below):** the remedy pin binding the printed text; the three row-level ladder
+     cases; the child's rc-1 remedy clause; `_ws_reclaim_resolve`'s `..` ordering; the three plan selectors naming
+     `repairing the alias`; and the wave-3 plan's R28 citation re-anchored. The two `//` remedy wordings stay with the
+     path-identity follow-up.
+  4. **The operator's `_svc_real_home` ruling** in `ccd/ccd`.
+  5. **Review 217's carries:** case-insensitive protected tokens in `ccd/ccd-entry.py`'s `is_protected`, with the
+     guard comment and launcher header saying so. Ruling: this closes the gap 3697 recorded, so it needs no new
+     departure, and 3697's text in the merged entry-safety plan stays as history. `shared/mark.mjs` gains a real
+     `--check <file>` that exits 0 only on `ccrc-unmodified` and non-zero otherwise, a missing file included, so the
+     plans' existing citations become true.
+  6. **Review 222's R1 and R3** (below).
+  - **Claims.** Live claims 882 (run 218), 885 (run 219) and 889 (run 221) hold `ccd/ccrc`, `README.md`,
+    `CLAUDE.md`, both skills and their tests, `ccd/session-hook.sh`, `server/src/watch.ts` and others. This round makes
+    no new edit under them. Wave 4's existing diff already edits `README.md`, `CLAUDE.md`, both skills, their tests
+    and `watch.ts`. A merge resolution there is allowed and reported, and the holder is told. So R2, R3's `ccd/ccrc`
+    sentence and `ccd/ccrc`'s identical `_svc_real_home` copy are carried until `ccd/ccrc` is free. That copy is
+    reached by an operator's own `ccrc` run on Darwin, never by the unattended sweep.
+  - **Numbers.** Wave 4's block is used up, and clause 10 forbids a mid-wave allocation. Every item above is a repair,
+    a pin or a prose correction, so none needs a number. If one would need a defined departure, the worker stops
+    and reports its slug by mail, never as a number or a tracked placeholder.
+  - Then the worker re-runs the required gates (`ownership.test.ts` as the stamp gate) and submits a fresh exact
+    wave-done. Only a server-accepted fingerprint at that tip advances wave 4 to its official held-out review.
+- **2026-10-02 — the row-placement prerequisite has merged.** PR #226 landed as `0db98707` after review runs 212-215
+  (release v0.0.58). The landing order moves on: run 199 (`reclaim-entry-safety`) now merges current `main` without
+  rebasing, integrates that prerequisite through its fourth item and returns a fresh fingerprint for its own held-out
+  review; wave 4 stays stopped until PR #222 also merges.
+- **2026-10-01 — the row-placement prerequisite is in its first fix round; its review adds two carries here.**
+  Run 208 (`reclaim-row-placement-safety`) opened PR #226 at `dd4e2a86`, and held-out review run 212 found no path
+  that removes a live child through the removed-alias class. Its rulings (that programme's ledger) reach this one:
+  - The binding invariant's accepted cost holds every other child, a vanished one included, while any alternate
+    row's directory is gone, and two vanished or interrupted children hold each other (operator ruling: accept, pin,
+    fix later). Wave 5 inherits the recovery: evidence that a gone row named ccd's own former worktree, read from
+    git's worktree record or the reclaim journal and never from process state, so that row stops holding others.
+    Until wave 4's sweep ships, a held child is not retried after its one close-time attempt.
+  - Two pre-existing aliasing classes still resolve `complete` and outside: a re-pointed (not removed) alias and a
+    bind-mount spelling (operator ruling: document in #226, follow up). A path-identity follow-up programme opens
+    after wave 5, carrying device/inode ancestry and the tail's unre-asked window before `git worktree remove`.
+  - #226 edits the contract, shifting a wave-3 plan's citation of R28 by three lines; wave 4's integration round
+    re-anchors it, because that plan lies outside run 208's claim.
+- **2026-10-01 — Fix Round 3 is scoped-clean, but a second safety prerequisite now blocks both later branches.**
+  - The official read-only rereview of `1fd35e76d..1a02baac7` accepts the round's N-1, N-2, m-1 and m-2 repairs and
+    finds no new Critical or Important defect in that diff. Two minors remain for Wave 4's eventual integration:
+    `_ws_reclaim_workdir_shared` overstates which `..` spellings are re-walked, and the imported-`printf` hostility
+    control hard-codes `quiet-basin` rather than deriving or asserting the fixture child's basename.
+  - The same rereview measured a pre-existing Important-grade R31 failure outside the fix diff. A competing row can
+    enter a child through an ancestor symlink, retain that physical cwd after the symlink is removed, and then be
+    placed by `_ws_reclaim_resolve` only through textual suffix projection below the proven-absent component. The
+    current consumer treats that projection as ordinary identity evidence; evaluation mints a token and final
+    ownership remeasurement can repeat the false-safe answer before removing the live tree.
+  - **Binding invariant:** during destructive cross-row ownership comparison, an alternate registry row proves
+    non-containment only when its complete current spelling resolves through existing directories. A path rebuilt
+    textually below a proven-absent component is a namespace projection, not identity evidence, and makes reclaim
+    `unmeasured` regardless of modeled tmux state. This does not change the subject child's own R19 vanished-worktree
+    arm. Process cwd observations may strengthen refusal but never authorize deletion.
+  - The repair is the separate one-wave programme `reclaim-row-placement-safety`; run 208 opened after Wave 4
+    released claims 850 and 851, and its sixteen-number block begins at D-3731. Its finalized plan, fresh child, PR
+    and official review remain distinct acts. It is neither run 199's inherited-Bash entry boundary nor Wave 5
+    product scope, and neither existing run may absorb it by changing shape.
+  - Landing order is `reclaim-row-placement-safety`, then run 199 `reclaim-entry-safety`, then Wave 4. Run 199 keeps
+    its immutable four items and uses its existing merge-current-main item to integrate the first prerequisite.
+    Wave 4 stays stopped at local commit `1a02baac7abfbb1a88a1a7a251c7326c11ae9f08`; PR #215 receives no fresh
+    handoff until both prerequisite PRs merge and `swift-hollow` merges current main, regenerates and re-stamps ccd,
+    repairs the two remaining minors, reruns the required gates and produces a new exact fingerprint.
+- **2026-09-30 — wave 4 post-handoff safety rounds remain open; no fresh handoff accepted.**
+  - The original wave-done and its fingerprint are superseded. Run 174 remains `working`; items 817–834 remain pending;
+    no official review run is open and PR #215 is not merge-eligible from coordinator evidence.
+  - At local worker commit `1fd35e76d`, the ruled shared logical resolver places both the child and every competing row
+    from one result. The rereview still measured two blocking resolver failures: imported `builtin`/`set` can shadow
+    the primitive, and its physical prefix discovery can disagree with logical entry on a linked-root `..` spelling.
+    Fix round 3 owns those two findings and two truthful-prose minors; its claims are 850–853.
+  - The same rereview measured a separate R31 destruction: an imported `find` can return success with an empty registry
+    listing at both evaluation and final ownership remeasurement, fabricate that no competing row names the tree, and
+    let unattended `ws-reclaim` remove a live child. Mail 2807 ruled this **blocking** despite the inherited environment
+    not being remote-request input: existing ccd contracts explicitly tolerate inherited shell state, and the mandatory
+    xhigh SAFETY lens requires this fail direction shut before automatic deletion ships.
+  - Two independent audits corrected mail 2807 in mail 2818. A complete wave-4 repair may be a pre-Bash,
+    source-safe, argv-selective boundary for direct `ws-reclaim` and `ws-audit --reclaim`; every ccd verb need not
+    change. The boundary must establish and remeasure PATH-selected Bash >=4.4 privileged-mode semantics before any
+    Bash body or `BASH_ENV` runs. Normal systemd/launchd, agent, local-server and installed-path entry are in scope;
+    detached swap self-reexec is not covered because its ordinary outer `bash -c` runs first. A `find`-only patch is
+    insufficient because other decision-critical commands remain ambient.
+  - Mail 2818 also retracts the proposed deviation fold. `resolvable-dotdot-physical-fallback` is explicitly a
+    path-spelling departure; `ccd-imported-functions-hijack-reclaim-reads` is a distinct cross-cutting mechanism.
+    The run-open block is exhausted, coordinator clause 10 forbids another mid-wave allocation, and plan R-12 forbids
+    a tracked placeholder. The slug therefore remains in mail evidence only. The worker must finish and report fix
+    round 3, then stop: fix round 4 needs an operator-authorized separately opened scope with allocation at run-open,
+    and automatic reclamation remains blocked meanwhile.
+  - **Operator ruling (2026-09-30): split a safety prerequisite.** After fix round 3 reports, open a fresh run and
+    fresh child with a new run-open deviation block; land the reclaim-entry repair in its own PR before PR #215 may
+    proceed. This is not wave 5 and inherits none of wave 5's product scope. Run 174 remains `working`, its items remain
+    pending, and no old or new wave-done can advance it until the prerequisite is merged and the Wave 4 branch is
+    synchronized and freshly handed off. One child per PR remains intact.
+  - Fix round 3 reported `DONE_WITH_CONCERNS` at local worker commit
+    `1a02baac7abfbb1a88a1a7a251c7326c11ae9f08`, parent
+    `1fd35e76d7fbde678e4ca66235639267bf8cac75`; it closes only the two scoped resolver findings and two prose
+    minors. The worker stopped correctly: the branch is clean, no push and no new wave-done occurred, and PR #215
+    remains at remote head `e21247286b5cd2dcce5b5f097df3c68254114af8`.
+  - The prerequisite is the separate one-wave programme `reclaim-entry-safety`. Its number-free skeleton and
+    this parent update commit before run-open. At run-open it receives its own eight-number deviation block; the
+    first issued number defines `ccd-imported-functions-hijack-reclaim-reads` in a tracked plan committed at an
+    exact coordinator handoff SHA. A fresh child copies that blob byte-for-byte with read-only `git show`, commits
+    it first, and opens the prerequisite's one PR. No coordinator ancestry is cherry-picked and no separate docs
+    merge is inserted before the prerequisite.
+  - Deployment remains automatic-updater-only. The coordinator will not manually roll out this wave.
+- **2026-09-28 — wave 3 DEPLOYED (v0.0.33) and measured live; wave 4 dispatched (run 174).**
+  - **Rollout.** `ccrc rollout --to v0.0.33`, 16:16–16:21 UTC: fleet box first, rc 0, both boxes agreed at `1ffdf947`.
+    The server box's doctor now reads 0 failed; its standing agent-unit FAIL is gone. The fleet box's `ccd caps` lists
+    `ws-reclaim` and `reclaim-v1`.
+  - **The first live reclaim.** Run 148's non-final close (`prPhase: merged`) answered `childReclaim: queued`, and the
+    reclaim took about 10 s. The journal shows `release`, then `reclaim intent`, `unsupervise`, `purge` and
+    `reclaim done`. The feed reads "ccrc-pwa-plain-summit, child of run #148, was reclaimed (close). Nothing
+    uncommitted was left."
+    - Gone: the registry rows, the worktree, the local branch and the clips directory.
+    - Kept: the transcripts, and the tombstone `.reaped/ccrc-pwa-plain-summit.json`.
+    - The attic pins the tip `135f1625`, the merge `244a185d`, and the `reflogs` keep ref.
+    - The remote branch was deleted by GitHub's `delete_branch_on_merge` at merge time, not by the reclaim.
+    - Before the close, the coordinator archived the worker's and the reviewers' reports into its own clips
+      (`wave3-archive/`), because the ledger and wave 4's amendments cite them.
+  - **Residue seen.** Three dot-lock files outlive the reclaim: `.reap-<id>.lock`, `.<id>.compactions.lock` and
+    `.prstate-<id>.lock`. Harmless today. But wave 5's R25 collector treats any `$REG` entry named `.<id>.*` as a live
+    row, so a leftover `.compactions.lock` would keep a human-orphaned temp root uncollected. Wave 5 inherits it.
+  - **Wave 4.** Docs PR #188 merged as `6ff4e2e9` (amendments A1 to A17, contract §10). Run 174 opened and was
+    dispatched to a fresh child, `swift-hollow`, with 18 declared items and route Opus·high, subagent Sonnet,
+    workflows off. Its deviation block is twenty numbers, the first of them 3534 and the last 3553 (floor now 3554).
+  - **Run 148 closed** non-final `done`, after wave 4's run opened.
 - **2026-09-28 — review 172 (`135f1625`): no destroy path; wave 3 MERGED as `1ffdf947` (#187).**
   - **The panel.** Four lenses (SAFETY at xhigh) and fifteen refuters; none died. Every mutation row the brief named
     reds, with green controls: F-A ×2, the F-B reader, the three `//` clauses, the writer's `-ef`, F-I and F-G.
@@ -626,14 +1147,66 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 - **Wave 4's inherited items above are placed** by its plan's pre-dispatch amendments (2026-09-26). Exceptions:
   - `is_ours` and `_ws_attic_pin` left the programme (R-7, R-8);
   - R25 moved to wave 5 (R36).
-- **Wave 5 inherits from wave 4's pre-flight:**
+- **Wave 5 inherits from wave 4's pre-flight** (placed 2026-10-05 by contract §11: the close words in R42, the skips in R41;
+  R36 and ccd's journaling moved to wave 6 by R38):
   - R25's collector (R36), with the requirements the pre-flight measured;
   - whether the ten close words are recorded for the chip;
   - whether R37's and R-5d's skips (`coordinating`, `minting-run-postdates-child`, `child-birth-unplaced`) reach the
     attention list;
   - ccd journaling the failures the mirror never sees: audit-time `unmeasured`, `probe-unmeasured`, pre-lock dies,
     `flock-unavailable` and `lock-unopenable`.
-- **Wave 5 inherits:** the PWA's abandon confirmation says the child's workspace will be reclaimed. The ungated
+- **Wave 4's integration round inherits, from the row-placement reviews (2026-10-02):** a remedy pin that binds
+  `_ws_reclaim_workdir_shared`'s shared string rather than the text the audit, verb and tail print; three row-level
+  ladder cases (`demo-alias-up`, the newline spelling, the logical-entry spelling) that no longer tell their resolver
+  guards apart since every non-`complete` row gives one answer; and the two pre-existing `//` remedy wordings that
+  still name a re-point, which ride with the path-identity follow-up's wording.
+- **Wave 4's integration round also inherits, from review run 215 (2026-10-02):** the child's own rc-1 remedy
+  clause "never remove or replace what stands at this child's own workdir" is bound by no assertion (the remedy-pin
+  class above); `_ws_reclaim_resolve` refuses a `..` in the rest before re-walking a prefix that holds one, so a row
+  that logically is the child lands in retryable `unres` with a detail that is false for it; and three row-placement
+  plan selectors still name the retired `repairing the alias` control.
+- **Wave 4 fixes, by operator ruling (2026-10-02, from entry-safety review run 216):** `_svc_real_home` builds the
+  home path with `eval printf '%s' "~$u"` from `USER` or `LOGNAME`, and on Darwin both the audit's unit-state read
+  and the reclaim's launchd disable reach it, so a `USER` carrying shell syntax executes inside a protected start.
+  It is on `main` already and Darwin-only. Validate the login name before the expansion, or avoid `eval`, before the
+  sweep runs unattended on any macOS box.
+- **Wave 4 also inherits, from entry-safety review run 217 (2026-10-02):** classify the launcher's protected tokens
+  case-insensitively (`ccd/ccd-entry.py`'s `is_protected`), because an inherited `nocasematch` widens the body's
+  dispatcher and audit parse while the launcher compares exactly, so a case-variant protected verb starts ordinary
+  and rests on the best-effort body guard. Protecting a superset is harmless. Separately, `node shared/mark.mjs
+  --check` is a hollow stamp gate (no CLI; exits 0 for any file) cited by several plans; give it a real CLI or
+  retire the citation, with `ownership.test.ts` as the gate meanwhile.
+- **Wave 4 also inherits, from entry-safety review run 222 (2026-10-02):** R1, the destination-type half of the
+  installer's "every refusal comes before anything is created" has no red mutation (moving `makedirs` between the
+  layout refusal and the destination loop stays green); pin it with a fresh-HOME row where `~/.local/bin/ccd` is a
+  directory and `~/.local/libexec` is absent. R3, the exit-2 sentence ("the body moved and the launcher did not … the
+  mismatched pair now refuses every start by digest") is false for the launcher-postcondition arm, which exits 2
+  after both halves moved; correct it in `ccd/ccd-entry-install.py`'s header and stderr and in `deploy/deploy.sh`.
+- **Carried until `ccd/ccrc` is free of another programme's claim (2026-10-02; joined wave 4's round 2026-10-03):** review 222's R2 (`ccd/ccrc`'s
+  `_inst_entry_python` signature comment and `cmd_install` comment still say the shebang names the canonical
+  python3), R3's `ccd/ccrc` sentence, and `ccd/ccrc`'s identical copy of `_svc_real_home`'s `eval`.
+- **Wave 5 inherits, from wave 4's reviews 254 and 258 (2026-10-04)** (placed 2026-10-05: G3, G4 and G1 in Task 0b by
+  R39; G2 and G5 in Task 9c by R46; F6 moved to wave 6 by R38; "measure first" done at 13:06 and 14:31):
+  - **G3 (must bound):** the F1 continuity rule never licenses while three or more children stay presence-held, which
+    is spec §5.7's unbounded wedge. Bound it, and state it truthfully in A9, the docstring and lens 1's "presence can
+    defer but never reset the ceiling".
+  - **G4:** move the lane's presence clocks onto a monotonic clock, so that a backward wall-clock step cannot hide an
+    unobserved hole.
+  - **G1's residual:** consider stamping presence at the answer's arrival.
+  - **F6:** unset `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG` inside the containment, for wave 5's SAFETY lens.
+  - **Prose:** G2's false reason for keeping the release mark (`watch.ts` and plan A10), and G5's "on the same clock"
+    in `ChildReclaimRequest`.
+  - **Measure first:** on a live box, the first sweep passes and the shape of the backlog drain.
+- **Wave 6 inherits (moved from wave 5 by R38), from the row-placement review (2026-10-01):** recovery for gone-directory alternate rows. An
+  alternate row whose path is gone holds every other child at `unmeasured`, and two vanished or interrupted children
+  hold each other; the recovery must prove the gone path was ccd's own worktree without consulting process state.
+- **After wave 6 (R38), a path-identity follow-up programme:** a re-pointed alias and a bind-mount spelling resolve
+  `complete` and outside although a session may sit inside the child; device/inode ancestry is the measured
+  direction, and the window between `_ws_reclaim_owned` and the tail's `git worktree remove` rides with it.
+- **Wave 6 inherits (moved from wave 5 by R38), from wave 3's first live reclaim:** dot-lock files (`.reap-<id>.lock`,
+  `.<id>.compactions.lock`, `.prstate-<id>.lock`) outlive a reclaim. The R25 collector's "no `$REG` entry of any
+  suffix" condition must not read a lock as a live row, or the reclaim's tail must remove them.
+- **Wave 5 inherits (placed 2026-10-05 in Task 9b by R45):** the PWA's abandon confirmation says the child's workspace will be reclaimed. The ungated
   abandon door (D-282) reaching a destructive act is inside the single-user trust model; it is recorded, not
   changed.
 - **Wave 4 also carries ws-slug-collision's review residue** (that programme's ledger, "Residue"). It is two
@@ -653,13 +1226,31 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 
 ## Next-wave brief
 
-**Wave 3 is dispatched (run 148).** Brief: the plan with its binding Pre-dispatch amendments; contract §9 R24–R31; the
-three A1 settlements and review 147's text corrections above. Its review panel keeps the plan's mandatory xhigh
-safety lens. After it merges: roll out AGENT-FIRST (fleet box first).
+**Wave 5 is run 260, `planned`,** with its block 3926, 3927, 3928, 3929, 3930, 3931, 3932, 3933, 3934, 3935, 3936,
+3937, 3938, 3939, 3940, 3941, 3942, 3943, 3944 and 3945. No number is spent on the amendments themselves; the block is
+the worker's.
 
-**Wave 4 dispatches the moment wave 3 merges** (operator, 2026-09-24). Its pre-dispatch amendments are written
-(2026-09-26) and reach main in the coordinator's docs PR, which merges right after #187. The brief names:
-- the plan, with its binding amendments A1 to A15;
-- contract §9 and §10;
-- a fresh deviation block, allocated at its run-open;
-- the routing: the plan's per-task lines, and `opus` at `xhigh` for Task 2c.
+**Its plan is `docs/superpowers/plans/2026-09-22-child-reclamation-wave5-run-chip.md`, with its section "Pre-dispatch
+amendments (coordinator, 2026-10-05) — binding" appended, and contract §11 (R38–R47).** Both, and the coordinator's
+spec edits, reach `main` in one docs PR before dispatch, as #179 and #188 did. The brief names `homeRepoRoot`,
+`planRepoPath` and `planSha`, which is that PR's squash commit on `main`.
+
+Before dispatch:
+1. Merge the docs PR. Its prerelease rides the automatic updater like any other merge.
+2. Re-read `GET /api/claims?project=ccrc-pwa`. The overlap rules proposed in mails 3560 (workspace-lifecycle, run
+   245) and 3562 (delegation-broker, run 271) stand unless their coordinators replied otherwise.
+3. Record the route change in the Decisions log, with its reason (clause 13).
+
+Then dispatch one fresh child:
+- **Route:** `{class:'opus', effort:'xhigh', subagent:'sonnet', workflow:'on', compact:'40'}`.
+- **Execution skill:** `superpowers:subagent-driven-development`.
+- **Task order:** Task 0b, then Task 0c, then Tasks 1 to 9 with their new tasks, then Task 10.
+- **Lenses:** the mandatory SAFETY lens.
+
+Before the wave lands, the operator is told in one ledger line (R47). It widens what reaches the destructive path the
+moment the server converges, with no capability gate, while F6 waits for wave 6. The PR body names `brisk-meadow` and
+`reclaim-pause`.
+
+**Wave 6 (R38)** is a new run, opened before run 260 closes, with its own block at its own open. It gets its own plan
+and pre-flight, and is dispatched only after workspace-lifecycle wave 3 (run 245) merges. The path-identity follow-up
+programme comes after wave 6.
