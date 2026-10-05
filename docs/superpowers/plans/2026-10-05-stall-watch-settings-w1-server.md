@@ -66,31 +66,39 @@ this wave:
 - §18 W1 (scope), and §20 (residue, settled below).
 
 **Measured at `origin/main` `77f8d63a5`** (2026-10-05). Every line number below and in the tasks is a HINT at that
-commit. Every edit quotes the text it replaces, and each quoted text occurs exactly once in its file (measured), so
-find each edit by content.
+commit, except Task 7's, which is written against the current `origin/main`, `d12b5aba0` (below). Every edit quotes
+the text it replaces, and each quoted text occurs exactly once in its file (measured), so find each edit by content.
 - **The prototype.** Every task was built and measured in a scratch worktree of `77f8d63a5` (branch `proto/sws-w1`,
   gitignored under `.superpowers/sdd/stall-watch-settings/proto`), one commit per task:
 
   | Task | Commit |
   |---|---|
   | 1 | `2fb0123f7` |
-  | 2 | `bb5bee7b4` |
+  | 2 | `bb5bee7b4`, then the review fix `a5fa943c6` (`quietLowered` only for a strictly lower quiet time, D-4037; one row) |
   | 3 | `bc80d266d` |
   | 4 | `8d40b4552` |
   | 5 | `65b4c6c84` |
-  | 6 | `fa1241e6e` |
+  | 6 | `fa1241e6e`, then the review fix `d513b887f` (the view builder reads the resolved stages with the resolution; one route row) |
   | 7 | `ad2155ff4` |
 
+  The two review fixes sit on top of Task 7. `d513b887f` touches only Task 6's two files (`routes.ts`,
+  `stall-settings-route.test.ts`; +37 / −9), and `a5fa943c6` only Task 2's two (`stallsettings.ts`,
+  `stall-settings.test.ts`; +5 / −4). So Task 2's code below is `bb5bee7b4` plus `a5fa943c6`, Task 6's is `fa1241e6e`
+  plus `d513b887f`, and the tip `a5fa943c6` is the wave's final tree.
 - **What the counts are.** The red and green counts and every mutation table are MEASURED on that chain, not
-  derived. The prototype's diff against `77f8d63a5` is 28 files, +3,365 / −87.
+  derived. The prototype's diff against `77f8d63a5` is 28 files, +4,127 / −94 at `ad2155ff4`, 28 files,
+  +4,155 / −94 at `d513b887f`, and 28 files, +4,156 / −94 at the tip `a5fa943c6`.
 - **Main has moved since then** (measured 2026-10-05). `origin/main` is now `d12b5aba0`, two commits later:
-  - `6f6923cd8` touches only child-reclamation docs.
+  - `6f6923cd8` adds a plan, `docs/superpowers/plans/2026-09-22-child-reclamation-wave5-run-chip.md` (child-reclamation
+    W5, run 260, planned when this plan was written). It changes no code, but its wave will edit `shared/api.ts`, `store.ts`,
+    `watch.ts`, `coord/routes.ts`, README's `shared/api.ts` anchors and `session-hook.test.ts`'s citation census. See
+    Precondition 4 and "If this PR is overtaken".
   - `d12b5aba0` (#283) re-measures README (5684 → 5729 lines) and already moves `CLAUDE.md`'s README size claim from
-    "~5600" to "~5700".
-- **The merge onto `d12b5aba0`.** `git merge-tree --write-tree origin/main ad2155ff4` exits 0. The merged README is
-  5743 lines and `CLAUDE.md` reads "~5700". Task 7's size-claim hunk is therefore already on `main`: skip it when its
-  quoted "~5600" text is absent. Every other quoted README and `CLAUDE.md` line still occurs exactly once on
-  `d12b5aba0`.
+    "~5600" to "~5700". `CLAUDE.md` stays 382 lines.
+- **The merge onto `d12b5aba0`.** `git merge-tree --write-tree origin/main a5fa943c6` exits 0. The merged README is
+  5743 lines, `CLAUDE.md` 386 and reads "~5700", and the parent stall-watch spec 1000. Task 7 below is written against
+  `d12b5aba0`: it carries no size-claim hunk, because #283 already made it. Every quoted README and `CLAUDE.md` line
+  still occurs exactly once on `d12b5aba0`.
 
 ## Preconditions (check before the baseline; stop and report if one fails)
 
@@ -98,9 +106,13 @@ find each edit by content.
    prints one line. At planning it printed nothing: the spec sits on the coordinator's branch at `51aa5f0d8`.
 2. **This plan is on `origin/main`.**
    - `git ls-tree origin/main docs/superpowers/plans/2026-10-05-stall-watch-settings-w1-server.md` prints one line.
-   - Why it matters: this plan alone defines the thirteen numbers in its `## Deviations found`, and Tasks 1–6 cite
-     them in tracked comments. Until it lands, `deviation-refs.test.ts`'s floor row is red: a tracked file names a
-     D-ref above the definition-derived high-water. The prototype showed that red, with "routes.ts names D-4034" as its evidence.
+   - Why it matters: this plan alone defines the fifteen numbers in its `## Deviations found`, and Tasks 1–6 cite
+     them in tracked comments. Without it, `deviation-refs.test.ts`'s floor row is red: a tracked file names a D-ref
+     above the definition-derived high-water. The prototype, which does not carry this plan, showed that red, with
+     "routes.ts names D-4034" as its evidence.
+   - With this precondition met, `deviation-refs` is GREEN at the baseline and after every task (`31 passed (31)`).
+     Every expectation below says so. Treat any `deviation-refs` red during the wave as real: stop, and report it with
+     the failing row's name and its evidence file.
 3. **The migration slot is 16 → 17, measured.**
    - `git show origin/main:server/src/coord/schema.ts | grep -cE '^  // ── [0-9]+: user_version [0-9]+ -> [0-9]+ ─'`
      prints `16`.
@@ -118,6 +130,12 @@ find each edit by content.
      - #40 (automations, stale since 2026-09-11, on a branch that already took slot 11): `schema.ts`, `store.ts`,
        `watch.ts`, `auth/gate.ts`, `auth-gate.test.ts`, `coord-db.test.ts`, `asks-store.test.ts`, `mail-routes.test.ts`
        and `CLAUDE.md`.
+   - Planned on `main`, with no PR at planning: child-reclamation W5 (run 260,
+     `docs/superpowers/plans/2026-09-22-child-reclamation-wave5-run-chip.md`, landed by `6f6923cd8`). Its wave inserts
+     into `shared/api.ts` above README's anchors, edits `server/src/coord/store.ts`, `server/src/watch.ts`,
+     `server/src/coord/routes.ts` and README's `shared/api.ts` anchors, and re-measures `session-hook.test.ts`'s
+     citation-debt `'shared/api.ts'` entry. Before claiming, read `GET /api/runs` for run 260's state. If its worker
+     holds claims on these paths, a 409 from them is expected, and the overlap is the coordinator's to sequence.
    - None of these blocks the start. They are named so that a 409 is expected rather than a surprise.
 5. **This workspace's branch starts from current `origin/main`** (a fresh child does). Run the probe
    `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD`; it exits 0. Then take the baseline.
@@ -186,11 +204,11 @@ measured after-wave total minus the rows the prototype added. "After W1" is meas
 | pools-prose | 27 | 27 |
 | readme-holds | 17 | 17 |
 | typecheck-tests | 12 | 12 |
-| deviation-refs | 31 *derived*, green | 31, green once precondition 2 holds |
+| deviation-refs | 31 *derived*, green | 31, green (precondition 2 holds throughout) |
 | the citation instrument | `7 passed \| 328 skipped (335)` | the same |
 | new: stall-settings | — | 114 |
 | new: stall-settings-store | — | 40 |
-| new: stall-settings-route | — | 37 |
+| new: stall-settings-route | — | 38 |
 | new: stall-settings-prose | — | 15 |
 
 Record every Base line in the wave-done mail.
@@ -199,9 +217,85 @@ Record every Base line in the wave-done mail.
 - A red at base in a known load flake (`session-hook`, `typecheck-tests`, `pr-sweep`, `ccd-ws-gc`,
   `ccd-session-state` or `ccd-bounded-reads`) is re-run in isolation before it is called a break.
 
-Mutation instruments live outside the tree, in `INSTR = <repo>/.superpowers/sdd/2026-10-05-stall-watch-settings-w1-server/`
-(gitignored), and are never committed. A mutation is applied to a COMMITTED tree, measured, and restored from `HEAD`.
-After each one, `git status` must be clean.
+**The mutation rule, the same in every task.** Each task commits FIRST, and its mutation table is its last step, run
+on that commit:
+- apply one mutation; run the named suite alone, from `server/`, in the foreground, with a timeout of at least
+  600000 ms; record the `Tests` line and the names of the failed rows;
+- restore with `git checkout -- <file>` for every file the mutation touched, and check that
+  `git status --porcelain` prints nothing before the next row;
+- never `git stash`: the stash stack is shared by every worktree on the box.
+
+Because the task is committed, the restore brings back the task's own work, never the base's. If a table finds a
+guard that does not red, fix the guard or its test and amend nothing: make a new commit, then run the table again on
+it.
+
+Mutation instruments live outside the tree, in `INSTR = <repo>/.superpowers/sdd/2026-10-05-stall-watch-settings-w1-server/`.
+`.superpowers/` is git-ignored, and nothing there is ever committed. Write this runner there once, at the baseline, as
+`$INSTR/mutate.py`. Tasks 4 and 5 hand it their whole tables as JSON, and Tasks 6 and 7 their rows added at review;
+for the other rows, apply each by hand with the same discipline, or write it into a JSON table for the runner.
+
+```python
+#!/usr/bin/env python3
+"""Scratch mutation runner for the stall-watch-settings W1 plan. Never committed: it lives in the git-ignored
+.superpowers/sdd/<plan>/ directory.
+
+Usage: python3 mutate.py <repo-root> <table.json> [id ...]
+
+<table.json> is a list of {"id": str, "edits": [{"file": str, "old": str, "new": str}], "tests": [str]}.
+It runs on the task's COMMIT: it refuses to start unless `git status --porcelain` is empty. For each entry it applies
+every edit (refusing an old text that does not occur exactly once), runs each test file alone, in the foreground,
+from server/, prints its Tests line and the names of its failed rows, then restores every file it touched with
+`git checkout -- <file>`. It ends by checking that `git status --porcelain` is empty again. It never stashes.
+"""
+import json
+import os
+import subprocess
+import sys
+
+root = os.path.abspath(sys.argv[1])
+table = json.load(open(sys.argv[2], encoding='utf-8'))
+only = set(sys.argv[3:])
+
+
+def git(*args):
+    return subprocess.run(['git', '-C', root, *args], capture_output=True, text=True, check=True).stdout
+
+
+if git('status', '--porcelain').strip():
+    sys.exit('refused: the tree is not clean; commit the task first')
+for m in table:
+    if only and m['id'] not in only:
+        continue
+    touched = []
+    try:
+        for e in m['edits']:
+            p = os.path.join(root, e['file'])
+            s = open(p, encoding='utf-8').read()
+            n = s.count(e['old'])
+            if n != 1:
+                raise SystemExit(f"{m['id']}: the old text occurs {n} times in {e['file']}")
+            open(p, 'w', encoding='utf-8').write(s.replace(e['old'], e['new']))
+            touched.append(e['file'])
+        for t in m['tests']:
+            r = subprocess.run(['./node_modules/.bin/vitest', 'run', t], cwd=os.path.join(root, 'server'),
+                               capture_output=True, text=True, timeout=1200)
+            lines = [l.strip() for l in r.stdout.splitlines()]
+            tests = [l for l in lines if l.startswith('Tests ')]
+            print(f"{m['id']} {t}: {tests[-1] if tests else f'no Tests line (rc={r.returncode})'}")
+            for l in lines:
+                if l.startswith('FAIL ') or l.startswith('× '):
+                    print(f"    {l}")
+    finally:
+        if touched:
+            git('checkout', '--', *sorted(set(touched)))
+        print(f"{m['id']}: restored")
+if git('status', '--porcelain').strip():
+    sys.exit('the tree is not clean after the table')
+print('clean')
+```
+
+Run a table with `cd "$(git rev-parse --show-toplevel)" && python3 "$INSTR/mutate.py" . "$INSTR/<table>.json"`, in the
+foreground, with a timeout of at least 600000 ms per suite it names. Every run ends with `clean`.
 
 ## Global Constraints
 
@@ -243,8 +337,10 @@ After each one, `git status` must be clean.
   is not a guard (§14 item 17).
 - **How tests run.** From `server/`, in the FOREGROUND, with a timeout of at least 600000 ms, one file per command:
   `./node_modules/.bin/vitest run test/<file>.test.ts`. Never bare `npx vitest`.
-- **Deviation numbers.** Only the thirteen defined under "Deviations found" are written with their `D-` prefix.
-  Never write a range or a placeholder. The coordinator numbers any further departure at wave-done.
+- **Deviation numbers.** Write no NEW D-number other than the fifteen defined under "Deviations found". The existing
+  numbers this plan's code already cites (D-282, D-1213, D-2545, D-3636 and D-3798, in comments and row names copied
+  from the prototype) stay exactly as written: they are history, not new numbers. Never write a range or a
+  placeholder. The coordinator numbers any further departure at wave-done.
 - **Commit on this workspace's own branch** (`ws/<slug>`), never a feature branch. Absorb `origin/main` only on
   worker clause 16's triggers, with `git merge`.
 - **This repo is public.** No account label, host name, live session id, real pool name or docserver URL goes into
@@ -268,7 +364,8 @@ After each one, `git status` must be clean.
    `updatedAt`, so a stale sheet gets 409 again, and the store writes only over the row the route measured.
    - Pinned by: Task 2, `stall-settings.test.ts` (M26 in every arm, M27's digest, M28, M15b).
    - Task 4, `stall-settings-store.test.ts` (M27b).
-   - Task 6, `stall-settings-route.test.ts` (M26 answering 409 and writing nothing, M27a–e).
+   - Task 6, `stall-settings-route.test.ts` (M26 answering 409 and writing nothing, M26-after, M27a, M27-digest,
+     M27c–e).
 3. **A lost, unreadable, oversize or rolled-back row falls back whole to the files and the built-in, and says so.**
    A row applies whole or not at all (M25). Any level or quiet value out of vocabulary, prototype names included,
    reads `unreadable`; it is never clamped (M10, M11, M11b). An oversize integer survives the read through
@@ -289,7 +386,7 @@ After each one, `git status` must be clean.
    calls nothing that can throw. The fallback clears on the next success, and the warn latch fires once per standing
    fault. The view builder's two `try`s keep the GET at 200, and a counting throw gives `notices.ok: false`.
    - Pinned by: Task 5, `mail-sweep.test.ts` (M20, M20b, M21).
-   - Task 6, `stall-settings-route.test.ts` (M20a–g, M17b, M6a and M6b).
+   - Task 6, `stall-settings-route.test.ts` (M20a, M20-readers, M20-stages, M20c–g, M17b, M6a and M6b).
 
 ## File Structure
 
@@ -303,12 +400,12 @@ After each one, `git status` must be clean.
 | `server/src/watch.ts` | `STALL_SWEEP_MS`'s comment (≈192); `stallResolveNow`, `stallFallback()`, `lastApplied`, `busySince`, `lastFallback`, the warn latch and boot trace; both sweeps; `judgeStall`'s `quietMs` | 5 |
 | `server/src/coord/routes.ts` | `GET`/`POST /api/coord/stall-watch` after the caps POST; the view builder, its latch and fault reason; the feed row with its actor; the `SESSION_ONLY` docstring | 6 |
 | `server/src/auth/gate.ts` | the route-count numeral (≈8, 86 → 88) | 6 |
-| `CLAUDE.md` | the box-token sentence (T6); the mail-gate bullet's override sentence and the `coord.db` loss list (T7); the README size claim is already on `main` (T7, skip) | 6, 7 |
+| `CLAUDE.md` | the box-token sentence (T6); the mail-gate bullet's override sentence and the `coord.db` loss list (T7). The README size claim already reads "~5700" on `main` (#283), so no task edits it | 6, 7 |
 | `README.md` | mail-gate paragraph (≈3825–3845), stall-watch paragraph (≈4074–4136), backoff sentence, busy and wave-2 runbooks (≈4261), strict runbook; +14 lines | 7 |
 | `docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md` | status-block pointer; §4.2's override clause (≈474); §10's "the PWA renders none" (≈839) and kill rules (≈874–876) | 7 |
 | `server/test/stall-settings.test.ts` | **new**: 62 rows (T1), 106 (T2), 112 (T3), 114 (T6) | 1, 2, 3, 6 |
 | `server/test/stall-settings-store.test.ts` | **new**, 40 rows | 4 |
-| `server/test/stall-settings-route.test.ts` | **new**, 37 rows, including the M16b single-writer pin and the M29 device scan | 6 |
+| `server/test/stall-settings-route.test.ts` | **new**, 38 rows, including the M16b single-writer pin and the M29 device scan | 6 |
 | `server/test/stall-settings-prose.test.ts` | **new**, 15 rows | 7 |
 | `server/test/mail-routes.test.ts` | the kebab scan's thirteenth union, `isStallSettingsKebab`, and its failure message | 1 |
 | `server/test/stall-verdict.test.ts`, `stall-backoff.test.ts`, `stall-session.test.ts` | the quiet-time sites, the ceiling and relation pins, the busy clock | 3 |
@@ -1648,12 +1745,48 @@ Expected (measured, foreground, timeout 600000 ms): `274 passed (274)`, `179 pas
 the empty README entry, so the append is proven anchor-neutral. `session-hook` and `typecheck-tests` are known load
 flakes: re-run a red one alone, with `--testTimeout=240000`, before calling it real.
 
-- [ ] **Step 10: The mutation table**
+Then, from `server/`: `git fetch origin main && ./node_modules/.bin/vitest run test/deviation-refs.test.ts | grep -E '^ +Tests '`.
+Expected: `31 passed (31)`, because this plan defines every number the task cites (precondition 2). Any red there is
+real: stop, and report it with the failing row's name and its evidence file.
 
-Apply each mutation alone to the committed tree, run the named suite
-(`./node_modules/.bin/vitest run test/<file>` from `server/`), record the count, restore, and finish with
-`git status --porcelain` empty. "before → after" is exact text, each before-text occurring once in its file.
-Unmutated: stall-settings `62 passed (62)`, single-definition `274 passed (274)`, mail-routes `59 passed (59)`.
+- [ ] **Step 10: Commit**
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+git add shared/api.ts server/src/coord/stallsettings.ts server/test/stall-settings.test.ts server/test/mail-routes.test.ts
+git commit -m "$(cat <<'MSG'
+feat(stall-watch): settings L0 wire types and texts, and the L1 settings core
+
+Stall watch settings W1 Task 1 (design 2026-10-05 §5, §6, §12). The
+whole L0 block is appended at the end of shared/api.ts, so no README
+anchor into that file moves: the six ladder levels and five stages with
+their texts, the view, effect and confirm types, and every section
+string. STALL_LEVELS and STALL_STAGES are derived from their Records.
+StallStored is derived from an array, as STAMP_READS is, because the
+'absent' | 'unreadable' pair is ReadFailure's and lives in
+shared/agent-protocol.ts alone.
+
+server/src/coord/stallsettings.ts (L1, pure) holds the ladder's flag
+and mode columns, the quiet-time bounds and step (D-4026) and the notice
+window, isStallQuietMs, the settings row's port and its parse (each
+field on its own, bigint-safe, prototype names unreadable), the box
+arming and its unheld reading, the resolver (whole-row fallback, the
+kill file wholesale, strict keeping the mail gate and holding the
+wave-2 step, D-4023, and a causal held), stallLevelOf (the busy gate
+never splits a level, D-4022), stallStages (D-4032), stallNextStep and
+stallFilesExceed. isStallSettingsKebab declares its three kebab words to
+mail-routes' scan as the thirteenth union.
+MSG
+)"
+```
+
+- [ ] **Step 11: The mutation table**
+
+Run the table on Step 10's commit, by the Baseline's mutation rule. Apply each mutation alone, run the named suite
+(`./node_modules/.bin/vitest run test/<file>` from `server/`), record the count, restore every touched file with
+`git checkout -- <file>`, and check `git status --porcelain` is empty before the next row. "before → after" is exact
+text, each before-text occurring once in its file. Unmutated: stall-settings `62 passed (62)`, single-definition
+`274 passed (274)`, mail-routes `59 passed (59)`.
 
 | # | Guard | Mutation (file: before → after) | Red in | Measured |
 |---|---|---|---|---|
@@ -1712,37 +1845,6 @@ no reachable red at L1, and the table says so rather than inventing one:
   resolution, and the property row "false whenever the files decide" covers the `files` guard.
 - M4's `stallBusyClock` half and its stall-sweep row, and M11's and M11b's decide halves, belong to the tasks that
   add `stallBusyClock` and `decideStallSettings`.
-
-- [ ] **Step 11: Commit**
-
-```bash
-cd "$(git rev-parse --show-toplevel)"
-git add shared/api.ts server/src/coord/stallsettings.ts server/test/stall-settings.test.ts server/test/mail-routes.test.ts
-git commit -m "$(cat <<'MSG'
-feat(stall-watch): settings L0 wire types and texts, and the L1 settings core
-
-Stall watch settings W1 Task 1 (design 2026-10-05 §5, §6, §12). The
-whole L0 block is appended at the end of shared/api.ts, so no README
-anchor into that file moves: the six ladder levels and five stages with
-their texts, the view, effect and confirm types, and every section
-string. STALL_LEVELS and STALL_STAGES are derived from their Records.
-StallStored is derived from an array, as STAMP_READS is, because the
-'absent' | 'unreadable' pair is ReadFailure's and lives in
-shared/agent-protocol.ts alone.
-
-server/src/coord/stallsettings.ts (L1, pure) holds the ladder's flag
-and mode columns, the quiet-time bounds and step (D-4026) and the notice
-window, isStallQuietMs, the settings row's port and its parse (each
-field on its own, bigint-safe, prototype names unreadable), the box
-arming and its unheld reading, the resolver (whole-row fallback, the
-kill file wholesale, strict keeping the mail gate and holding the
-wave-2 step, D-4023, and a causal held), stallLevelOf (the busy gate
-never splits a level, D-4022), stallStages (D-4032), stallNextStep and
-stallFilesExceed. isStallSettingsKebab declares its three kebab words to
-mail-routes' scan as the thirteenth union.
-MSG
-)"
-```
 
 ---
 
@@ -1821,8 +1923,11 @@ write `stallSettingsChange(w.before, w.after)`. The `at` it passes here is the s
 - §20, the R18-order row of §15: `turnsOff` is in §5.1's order (a row pins `['checks', 'alerts', 'busyDelivery']`),
   so `alerts` sorts before `busyDelivery`; the sheet's line order (the target's `does`, then `turnsOn`, then
   `turnsOff`) is W2's, and §15's "first" is loose wording. No L1 change.
-- §20, "a quiet-time raise that stays below the built-in sets `quietLowered`": kept as §10 defines it (a row pins
-  30 min → 1 h as `quietLowered` and needing a confirm). Which line such a sheet shows at Log is W2's.
+- §20, "a quiet-time raise that stays below the built-in sets `quietLowered`": departed from,
+  `quiet-raise-asks-nothing` (D-4037). `quietLowered` is true only when the effective quiet time after the write is
+  strictly lower than the one before, so a raise never asks for a confirm on the quiet time alone, and no title-only
+  sheet can open for it. A row pins 30 min → 1 h as `[false, false]` and the built-in 2 h → 1 h as lowered. No L0
+  text is added for it.
 - §20, "a row with both fields unreadable takes two writes to repair": kept; the update arm writes only the named
   fields, as §8 says.
 - §13's sheet lines are the PWA's (`stallConfirmLines`, W2), so no §13 line is composed in L1. The feed body's three
@@ -2003,12 +2108,12 @@ describe('M26: stallWriteEffect and stallNeedsConfirm, the server deciding the c
     expect([e.turnsOn, e.turnsOff, e.leavesWave2, e.heldByBox]).toEqual([[], ['busyDelivery', 'wave2'], true, false]);
     expect(stallNeedsConfirm(e)).toBe(true);
   });
-  it('a quiet time brought below the current one, or below the built-in, needs one; a raise above both does not', () => {
+  it('a quiet time brought below the current one needs one; a raise does not, even below the built-in (departure quiet-raise-asks-nothing)', () => {
     const lower = effectOf([], rowRead('check', 4 * H), { quiet: { kind: 'set', ms: 3 * H } });
     expect([lower.quietLowered, lower.quietMs]).toEqual([true, { before: 4 * H, after: 3 * H }]);
     expect(stallNeedsConfirm(lower)).toBe(true);
     const underBuiltIn = effectOf([], rowRead('check', 30 * MIN), { quiet: { kind: 'set', ms: H } });
-    expect([underBuiltIn.quietLowered, stallNeedsConfirm(underBuiltIn)], 'a raise that stays below the built-in').toEqual([true, true]);
+    expect([underBuiltIn.quietLowered, stallNeedsConfirm(underBuiltIn)], 'a raise that stays below the built-in').toEqual([false, false]);
     expect(effectOf([], rowRead('check'), { quiet: { kind: 'set', ms: H } }).quietLowered).toBe(true);
     const raise = effectOf([], rowRead('check', 3 * H), { quiet: { kind: 'set', ms: 4 * H } });
     expect([raise.quietLowered, stallNeedsConfirm(raise)]).toEqual([false, false]);
@@ -2392,7 +2497,8 @@ export type StallMeasuredEffect = Extract<StallWriteEffect, { readonly measured:
  *    both in §5.1's order.
  *  - `leavesWave2`: the further checks on before and off after, in either reading.
  *  - `heldByBox`: a stage in `turnsOn`, or `leavesWave2`, comes from the unheld reading alone.
- *  - `quietLowered`: the effective quiet time changes, and lands below the one before or below the built-in.
+ *  - `quietLowered`: the effective quiet time after the write is strictly lower than the one before. A raise never
+ *    sets it, even one that stays below the built-in (departure `quiet-raise-asks-nothing` (D-4037)).
  *  - `filesExceed`: over the resolution the write leaves. */
 export function stallWriteEffect(box: StallBoxArming, unheld: StallBoxArming, beforeRead: StallSettingsRead, afterRead: StallSettingsRead): StallMeasuredEffect {
   const beforeSettings = parseStallSettings(beforeRead);
@@ -2409,7 +2515,7 @@ export function stallWriteEffect(box: StallBoxArming, unheld: StallBoxArming, be
   const leavesNow = before.wave2 && !after.wave2;
   const leavesWave2 = leavesNow || (freeBefore.wave2 && !freeAfter.wave2);
   const heldByBox = turnsOn.some((s) => !onNow(s)) || (leavesWave2 && !leavesNow);
-  const quietLowered = now.quietMs !== was.quietMs && (now.quietMs < was.quietMs || now.quietMs < STALL_QUIET_MS);
+  const quietLowered = now.quietMs < was.quietMs;
   return {
     measured: true,
     turnsOn,
@@ -2519,11 +2625,52 @@ Expected (measured): `Tests  106 passed (106)`. That includes Task 1's purity ro
 imports from `../../../shared/api.js` and `./stall.js` only, no clock, no `node:`), the M19 control row, and the kebab
 code-line row.
 
-- [ ] **Step 6: The mutation table**
+- [ ] **Step 6: The regression suites**
 
-Each row: apply the mutation to the named file, run `./node_modules/.bin/vitest run test/stall-settings.test.ts` from
-`server/`, record the count, restore the file, and check `git status --short` lists only this task's three files.
-Measured on the prototype (each red count is out of 106):
+```bash
+cd "$(git rev-parse --show-toplevel)/server"
+for f in single-definition mail-routes stall-vocabulary stall-verdict typecheck-tests; do
+  ./node_modules/.bin/vitest run test/$f.test.ts | grep -E '^ +Tests '
+done
+./node_modules/.bin/vitest run test/session-hook.test.ts -t 'census|citation' | grep -E '^ +Tests '
+```
+
+Expected (measured): `Tests  274 passed (274)`, `Tests  59 passed (59)`, `Tests  179 passed (179)`,
+`Tests  301 passed (301)`, `Tests  12 passed (12)`, and `Tests  15 passed | 320 skipped (335)`. `mail-routes`
+stays green because this task spells no new quoted kebab word in `server/src/coord`. The `stall.ts` insert sits at
+≈750, below every line citation of that file (the one found is `stall.ts:104`, in a spec), so no anchor moves.
+`typecheck-tests` and `session-hook` are known load flakes: re-run a red one alone with `--testTimeout=240000`.
+
+Then, from `server/`: `git fetch origin main && ./node_modules/.bin/vitest run test/deviation-refs.test.ts | grep -E '^ +Tests '`.
+Expected: `31 passed (31)`, because this plan defines every number the task cites (precondition 2). Any red there is
+real: stop, and report it with the failing row's name and its evidence file.
+
+- [ ] **Step 7: Typecheck**
+
+```bash
+cd "$(git rev-parse --show-toplevel)/server"
+./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json && echo ok
+```
+
+Expected (measured): `ok`, both exit 0.
+
+- [ ] **Step 8: Commit**
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+git add server/src/coord/stall.ts server/src/coord/stallsettings.ts server/test/stall-settings.test.ts
+git commit -m "feat(stall-watch-settings): L1 write path: decide, the write effect and its key, the feed change, and the notice counts" \
+  -m "Cites D-4026, D-4027, D-4029, D-4031, D-4033, D-4034 and D-4037."
+```
+
+- [ ] **Step 9: The mutation table**
+
+Run the table on Step 8's commit, by the Baseline's mutation rule. Each row: apply the mutation to the named file,
+run `./node_modules/.bin/vitest run test/stall-settings.test.ts` from `server/`, record the count, restore with
+`git checkout -- <file>`, and check `git status --porcelain` is empty before the next row. Measured on the prototype
+(each red count is out of 106). The two quiet-time rows, `M26: a quiet time brought lower` and `D-4037: a raise never
+asks`, were re-measured after the review fix `a5fa943c6`: over Task 2's tree with that fix applied (106 passed
+unmutated, then 2 and 1 failed), and again at the tip (out of 114, the same failing rows):
 
 | Guard | Mutation | Red in | Failing (measured) |
 |---|---|---|---|
@@ -2540,12 +2687,12 @@ Measured on the prototype (each red count is out of 106):
 | M12b: the no-op skip (D-4031) | delete `if (before.kind === 'row' && stallPatchIsNoOp(before.row, patch)) return before;` | stall-settings | 1: `a no-op leaves the read as it is, …` |
 | M26: a stage turning on | `stallNeedsConfirm` without `effect.turnsOn.length > 0 \|\|` | stall-settings | 7: the full-effect row, the busy-gate row, the absent-row row, the stored-`all` row, the mail-disabled row, the kill-file row, the strict row |
 | M26: leaving the further checks | `stallNeedsConfirm` without `effect.leavesWave2 \|\|` | stall-settings | 2: `leaving the further checks: …`, `leaving the further checks under the kill file is held too: …` |
-| M26: a quiet time brought lower | `stallNeedsConfirm` without `\|\| effect.quietLowered` | stall-settings | 2: `a quiet time brought below the current one, …`, `an unreadable level with a stored 30 min …` |
+| M26: a quiet time brought lower | `stallNeedsConfirm` without `\|\| effect.quietLowered` | stall-settings | 2: `a quiet time brought below the current one needs one; …`, `an unreadable level with a stored 30 min …` |
 | M26: the unmeasured effect | `if (!effect.measured) return true;` → `return false;` | stall-settings | 1: `the unmeasured effect always needs the confirm` |
 | M26: mail-disabled kept out of the diff | `before`/`after` from `stallStages` instead of `armedStages` | stall-settings | 1: `mail-disabled is ignored for the diff: …` |
 | M26: the unheld reading (D-4033, D-4034) | `turnsOn` from `onNow(s)` alone | stall-settings | 2: the kill-file row, the strict row |
 | M26: leaving the further checks, unheld | `leavesWave2 = leavesNow` | stall-settings | 1: `leaving the further checks under the kill file is held too: …` |
-| M26: below the built-in | `quietLowered`'s `(… \|\| now.quietMs < STALL_QUIET_MS)` → `now.quietMs < was.quietMs` | stall-settings | 1: `a quiet time brought below the current one, …` |
+| D-4037: a raise never asks | `const quietLowered = now.quietMs < was.quietMs;` → `const quietLowered = now.quietMs !== was.quietMs && (now.quietMs < was.quietMs \|\| now.quietMs < STALL_QUIET_MS);` (the built-in arm restored) | stall-settings | 1: `a quiet time brought below the current one needs one; …` |
 | heldByBox, the wave-2 half | drop `\|\| (leavesWave2 && !leavesNow)` | stall-settings | 1: `leaving the further checks under the kill file is held too: …` |
 | heldByBox, the turn-on half | `heldByBox = leavesWave2 && !leavesNow` | stall-settings | 2: the kill-file row, the strict row |
 | M28: the effect's after state | `filesExceed: stallFilesExceed(box, now)` → `(box, was)` | stall-settings | 1: `M28 (the effect's after state): …` |
@@ -2560,40 +2707,6 @@ Measured on the prototype (each red count is out of 106):
 
 M17d (the index) and M22 (`stallStages`) need no row here: M17d is the migration's (the store task's), and M22's
 stage rows are Task 1's; this task's half of M22 is the "mail-disabled kept out of the diff" row above.
-
-- [ ] **Step 7: The regression suites**
-
-```bash
-cd "$(git rev-parse --show-toplevel)/server"
-for f in single-definition mail-routes stall-vocabulary stall-verdict typecheck-tests; do
-  ./node_modules/.bin/vitest run test/$f.test.ts | grep -E '^ +Tests '
-done
-./node_modules/.bin/vitest run test/session-hook.test.ts -t 'census|citation' | grep -E '^ +Tests '
-```
-
-Expected (measured): `Tests  274 passed (274)`, `Tests  59 passed (59)`, `Tests  179 passed (179)`,
-`Tests  301 passed (301)`, `Tests  12 passed (12)`, and `Tests  15 passed | 320 skipped (335)`. `mail-routes`
-stays green because this task spells no new quoted kebab word in `server/src/coord`. The `stall.ts` insert sits at
-≈750, below every line citation of that file (the one found is `stall.ts:104`, in a spec), so no anchor moves.
-`typecheck-tests` and `session-hook` are known load flakes: re-run a red one alone with `--testTimeout=240000`.
-
-- [ ] **Step 8: Typecheck**
-
-```bash
-cd "$(git rev-parse --show-toplevel)/server"
-./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json && echo ok
-```
-
-Expected (measured): `ok`, both exit 0.
-
-- [ ] **Step 9: Commit**
-
-```bash
-cd "$(git rev-parse --show-toplevel)"
-git add server/src/coord/stall.ts server/src/coord/stallsettings.ts server/test/stall-settings.test.ts
-git commit -m "feat(stall-watch-settings): L1 write path: decide, the write effect and its key, the feed change, and the notice counts" \
-  -m "Cites D-4026, D-4027, D-4029, D-4031, D-4033 and D-4034."
-```
 
 ---
 
@@ -2651,7 +2764,7 @@ cd "$(git rev-parse --show-toplevel)"
 grep -c 'STALL_QUIET_MS' server/src/coord/stall.ts
 grep -n "^export const BACKLOG_HORIZON_MS = 24 \* 3_600_000;$" server/src/coord/stall.ts
 grep -n "^export function stallFilesExceed" server/src/coord/stallsettings.ts
-tail -2 server/test/stall-session.test.ts server/test/stall-backoff.test.ts server/test/stall-verdict.test.ts server/test/stall-settings.test.ts
+for f in stall-session stall-backoff stall-verdict stall-settings; do echo "== $f"; tail -n 2 "server/test/$f.test.ts"; done
 ```
 
 Expected:
@@ -3191,26 +3304,7 @@ Expected (measured):
 - `stall-session`: `Tests 98 passed (98)`
 - `stall-settings`: `Tests 112 passed (112)`
 
-- [ ] **Step 6: The mutation table**
-
-For each row: apply the mutation, run the named suite, record the result, then restore. `git status` then shows only the six files of this task.
-
-| # | Guard | Mutation | Red in | Measured |
-|---|---|---|---|---|
-| M9-a | r1 reads the quiet time | `stallWaveOneLadder`: `stallQuietMs(input)` → `STALL_QUIET_MS` | stall-verdict | 3 failed: r1 at a chosen 30 min, r1 at a chosen 12 h, CONTROL |
-| M9-b | The dialog cap reads it | `stallVerdictInner`: `capQuiet >= stallQuietMs(input)` → `capQuiet >= STALL_QUIET_MS` | stall-verdict | 2 failed: the dialog cap at 30 min and at 12 h |
-| M9-c | The back-off base reads it | `stallBackoff`: `stallQuietMs(input) * 2 **` → `STALL_QUIET_MS * 2 **` | stall-backoff | 10 failed: 30 min, 3 h, marker-branch 1 h, and the six ceiling `it.each` rows plus the 16 h marker row, except the 12 h / 6 h rows that match by value |
-| M9b-a | The ceiling caps | Drop the `Math.min(…, STALL_BACKOFF_CEILING_MS)` | stall-backoff | 4 failed: 12 h streak 1, 12 h streak 2, 6 h streak 2, the marker-branch 16 h row |
-| M9b-b | The ceiling's relation | Raise it to `BACKLOG_HORIZON_MS - (STALL_BOUND_MS + STALL_OPERATOR_MS)` (20 h) | stall-backoff | 6 failed: `is 16 h…`, relation 3, 12 h streak 1, 12 h streak 2, 6 h streak 2, the marker-branch 16 h row |
-| M8-s1 | The busy bound | Delete the `busySince !== undefined` line | stall-session | 1 failed: `busySince after the stop bounds the clock…` |
-| M8-s2 | max, not busySince alone | `Math.max(m.stopAt, input.arming.busySince)` → `input.arming.busySince` | stall-session | 1 failed: `busySince before the stop: the stop still bounds it…` |
-| M8-s3 | The bound applies under `busy` only | Move the `busySince` line above the `!== 'busy'` line | stall-session | 1 failed: `busy-shadow ignores busySince…` |
-| M8-c1 | `stallBusyClock`'s busy-gate substitution | Delete the `lastApplied !== null && lastApplied !== 'busy'` line | stall-settings | 2 failed: answer 1, and the spread row |
-| M4-c | It does not substitute at boot | `lastApplied !== null && lastApplied !== 'busy'` → `lastApplied !== 'busy'` | stall-settings | 2 failed: `M4: at boot…`, and the spread row |
-| M8-c2 | `stallBusyClock` bounds | Delete the `busySince !== null` line | stall-settings | 2 failed: answer 2, and the spread row |
-| M4-c2 | It does not bound at boot | The last return → `{ mailMode: resolvedMode, busySince: 0 }` | stall-settings | 3 failed: `M4: at boot…`, answer 3 (no `busySince` key), and the spread row |
-
-- [ ] **Step 7: The regression suites**
+- [ ] **Step 6: The regression suites**
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
@@ -3235,7 +3329,11 @@ Expected (measured):
 
 A red suite from the known-flake list is re-run alone with `--testTimeout=240000` before it is called real.
 
-- [ ] **Step 8: Typecheck**
+Then, from `server/`: `git fetch origin main && ./node_modules/.bin/vitest run test/deviation-refs.test.ts | grep -E '^ +Tests '`.
+Expected: `31 passed (31)`, because this plan defines every number the task cites (precondition 2). Any red there is
+real: stop, and report it with the failing row's name and its evidence file.
+
+- [ ] **Step 7: Typecheck**
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
@@ -3244,7 +3342,7 @@ cd "$(git rev-parse --show-toplevel)/server"
 
 Expected (measured): both exit 0, so the command prints `TSC-OK`.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -3257,6 +3355,27 @@ back-off base; STALL_BACKOFF_CEILING_MS, 16 h from the mail read's horizon
 busy bound max(stop, busySince), and stallBusyClock in stallsettings.ts
 (busy-clock-starts-when-busy-delivery-starts, D-4024). Stale '2 h' comments reworded."
 ```
+
+- [ ] **Step 9: The mutation table**
+
+Run the table on Step 8's commit, by the Baseline's mutation rule. For each row: apply the mutation, run the named
+suite, record the result, restore with `git checkout -- <file>`, and check `git status --porcelain` is empty before
+the next row.
+
+| # | Guard | Mutation | Red in | Measured |
+|---|---|---|---|---|
+| M9-a | r1 reads the quiet time | `stallWaveOneLadder`: `stallQuietMs(input)` → `STALL_QUIET_MS` | stall-verdict | 3 failed: r1 at a chosen 30 min, r1 at a chosen 12 h, CONTROL |
+| M9-b | The dialog cap reads it | `stallVerdictInner`: `capQuiet >= stallQuietMs(input)` → `capQuiet >= STALL_QUIET_MS` | stall-verdict | 2 failed: the dialog cap at 30 min and at 12 h |
+| M9-c | The back-off base reads it | `stallBackoff`: `stallQuietMs(input) * 2 **` → `STALL_QUIET_MS * 2 **` | stall-backoff | 10 failed: 30 min, 3 h, marker-branch 1 h, and the six ceiling `it.each` rows plus the 16 h marker row, except the 12 h / 6 h rows that match by value |
+| M9b-a | The ceiling caps | Drop the `Math.min(…, STALL_BACKOFF_CEILING_MS)` | stall-backoff | 4 failed: 12 h streak 1, 12 h streak 2, 6 h streak 2, the marker-branch 16 h row |
+| M9b-b | The ceiling's relation | Raise it to `BACKLOG_HORIZON_MS - (STALL_BOUND_MS + STALL_OPERATOR_MS)` (20 h) | stall-backoff | 6 failed: `is 16 h…`, relation 3, 12 h streak 1, 12 h streak 2, 6 h streak 2, the marker-branch 16 h row |
+| M8-s1 | The busy bound | Delete the `busySince !== undefined` line | stall-session | 1 failed: `busySince after the stop bounds the clock…` |
+| M8-s2 | max, not busySince alone | `Math.max(m.stopAt, input.arming.busySince)` → `input.arming.busySince` | stall-session | 1 failed: `busySince before the stop: the stop still bounds it…` |
+| M8-s3 | The bound applies under `busy` only | Move the `busySince` line above the `!== 'busy'` line | stall-session | 1 failed: `busy-shadow ignores busySince…` |
+| M8-c1 | `stallBusyClock`'s busy-gate substitution | Delete the `lastApplied !== null && lastApplied !== 'busy'` line | stall-settings | 2 failed: answer 1, and the spread row |
+| M4-c | It does not substitute at boot | `lastApplied !== null && lastApplied !== 'busy'` → `lastApplied !== 'busy'` | stall-settings | 2 failed: `M4: at boot…`, and the spread row |
+| M8-c2 | `stallBusyClock` bounds | Delete the `busySince !== null` line | stall-settings | 2 failed: answer 2, and the spread row |
+| M4-c2 | It does not bound at boot | The last return → `{ mailMode: resolvedMode, busySince: 0 }` | stall-settings | 3 failed: `M4: at boot…`, answer 3 (no `busySince` key), and the spread row |
 
 ---
 
@@ -3809,9 +3928,14 @@ After:
 
 - [ ] **Step 3: Run the suites to verify they fail**
 
-Run: `cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/stall-settings-store.test.ts test/coord-db.test.ts test/asks-store.test.ts`
+```bash
+cd "$(git rev-parse --show-toplevel)/server"
+for f in stall-settings-store coord-db asks-store; do
+  echo "$f: $(./node_modules/.bin/vitest run test/$f.test.ts | grep -E '^ +Tests ')"; done
+```
 
-Expected (measured on the prototype): `Test Files 3 failed (3)` and `Tests 46 failed | 93 passed (139)`:
+Expected (measured on the prototype, one file per command): `stall-settings-store` `Tests 40 failed (40)`, `coord-db`
+`Tests 5 failed | 66 passed (71)` and `asks-store` `Tests 1 failed | 27 passed (28)`:
 - `stall-settings-store.test.ts`: 40 of 40. The errors are `no such table: stall_settings`, `s.stallSettings is not a function`, `s.setStallSettings is not a function` and `s.stallObservationsSince is not a function`. The index row reads `expected [] to deeply equal [ 'at' ]`.
 - `coord-db.test.ts`: 5:
   - `COORD_SCHEMA_VERSION derives to 17 …`;
@@ -4070,11 +4194,11 @@ Expected (measured on the prototype):
 | node-floor | 3 passed (3) |
 | typecheck-tests | 12 passed (12) |
 | session-hook | 335 passed (335) |
-| deviation-refs | 1 failed, 30 passed (31). The failure was there before this task and is not from it (see below). |
+| deviation-refs | 31 passed (31), with this plan on the tree (precondition 2) |
 
 - **stall-sweep** is green with the migrated database: the seed is today's behaviour.
 - **session-hook** is green, so no README anchor into `store.ts` or `schema.ts` moved.
-- **deviation-refs** reds on `floorFromScan … seeds from the ledger high-water`. Its evidence is `server/src/coord/stallsettings.ts names D-4034`, which was already true at Task 2's commit. It clears when this wave's plan, which defines the numbers it cites, is on the tree. This task cites D-4028, D-4031 and D-4033 only.
+- **deviation-refs** is green, because this plan, which defines every number this task cites (D-4028, D-4031 and D-4033), is on the tree (precondition 2). The prototype, which does not carry the plan, measured `1 failed | 30 passed (31)` here, on `floorFromScan … seeds from the ledger high-water`. On this branch that red is never expected: if it appears, stop and report it with the row's evidence file.
 - **tsc:** `rc=0` twice.
 
 A known load flake (`session-hook`, `typecheck-tests`) that reds is re-run alone with `--testTimeout=240000` before it is called real.
@@ -4108,7 +4232,10 @@ MSG
 
 - [ ] **Step 9: The mutation table, on the committed tree**
 
-Apply each row's edits to the committed tree, run its tests, then restore with `git checkout -- <file>`. Each `old` occurs exactly once in its file. The runner may be any old/new replacer that refuses a count other than one. The JSON is the input:
+Run the table on Step 8's commit, by the Baseline's mutation rule: write the JSON below to `$INSTR/mut-task4.json`,
+then run `cd "$(git rev-parse --show-toplevel)" && python3 "$INSTR/mutate.py" . "$INSTR/mut-task4.json"`. Each `old`
+occurs exactly once in its file; the runner refuses any other count, restores each file with `git checkout -- <file>`,
+and ends with `clean`. The JSON is the input:
 
 ```json
 [
@@ -4134,7 +4261,7 @@ Apply each row's edits to the committed tree, run its tests, then restore with `
 ]
 ```
 
-N0 is a measurement, not a guard. Revert Step 2(e) and 2(f)'s `&& UPDATE_TABLES.includes(t)` / `&& INDEXES.includes(n)` and run `test/coord-db.test.ts`. That shows why the narrowing is needed now the entry exists.
+N0 is a measurement, not a guard. By hand, on the same commit: revert Step 2(e) and 2(f)'s `&& UPDATE_TABLES.includes(t)` / `&& INDEXES.includes(n)`, run `test/coord-db.test.ts`, then `git checkout -- server/test/coord-db.test.ts` and check `git status --porcelain` is empty. That shows why the narrowing is needed now the entry exists.
 
 The control is Step 6's green: 40, 71 and 28 passed. Store-suite counts are out of 40; `coord-db` out of 71; `stall-settings` out of 112.
 
@@ -5174,72 +5301,7 @@ cd "$(git rev-parse --show-toplevel)/server"
 Expected (measured): `Tests 117 passed (117)` and `Tests 115 passed (115)`. Before this task the two files had
 109 and 104 rows, so this task adds 8 and 11.
 
-- [ ] **Step 6: The mutation table**
-
-Write `$INSTR/mut-task5.json`, then run
-`cd "$(git rev-parse --show-toplevel)" && python3 "$INSTR/mutate.py" . "$INSTR/mut-task5.json"`. Each entry replaces one
-exact text, runs its suites from `server/`, and restores the file. Afterwards `git status --short` lists exactly this
-task's three files, unchanged from Step 5.
-
-```json
-[
- {"id": "M2", "edits": [{"file": "server/src/coord/stallsettings.ts", "old": "      mailDisabled: box.mailDisabled,\n", "new": "      mailDisabled: false,\n"}], "tests": ["test/stall-sweep.test.ts"]},
- {"id": "M3", "edits": [{"file": "server/src/coord/stallsettings.ts", "old": "      mailMode: strict ? 'strict' : run.mailMode,\n", "new": "      mailMode: run.mailMode,\n"}], "tests": ["test/mail-sweep.test.ts"]},
- {"id": "M4", "edits": [{"file": "server/src/coord/stallsettings.ts", "old": "  if (lastApplied !== null && lastApplied !== 'busy') return { mailMode: 'busy-shadow' };\n", "new": "  if (lastApplied !== 'busy') return { mailMode: 'busy-shadow' };\n"}], "tests": ["test/stall-sweep.test.ts"]},
- {"id": "M7", "edits": [{"file": "server/src/watch.ts", "old": "    const mode = this.stallResolveNow(store, listing, false).arming.mailMode;\n", "new": "    const mode = mailTurnModeOf(listing);\n"}], "tests": ["test/mail-sweep.test.ts", "test/stall-sweep.test.ts"]},
- {"id": "M8-bound", "edits": [{"file": "server/src/coord/stall.ts", "old": "    if (input.arming.busySince !== undefined) return Math.max(m.stopAt, input.arming.busySince);\n", "new": ""}], "tests": ["test/stall-sweep.test.ts"]},
- {"id": "M8-subst", "edits": [{"file": "server/src/coord/stallsettings.ts", "old": "  if (lastApplied !== null && lastApplied !== 'busy') return { mailMode: 'busy-shadow' };\n", "new": ""}], "tests": ["test/stall-sweep.test.ts"]},
- {"id": "M8-chosen-only", "edits": [{"file": "server/src/watch.ts", "old": "      const arming: StallArming = { ...r.arming, ...stallBusyClock(r.arming.mailMode, this.lastApplied, this.busySince) };\n", "new": "      const arming: StallArming = { ...r.arming, ...(r.levelSource === 'files' ? {} : stallBusyClock(r.arming.mailMode, this.lastApplied, this.busySince)) };\n"}], "tests": ["test/stall-sweep.test.ts"]},
- {"id": "M8a-stall", "edits": [{"file": "server/src/watch.ts", "old": "      const r = this.stallResolveNow(store, names, names.includes(MAIL_DISABLED_MARKER));\n", "new": "      const r = { arming: stallBoxArmingOf(names, names.includes(MAIL_DISABLED_MARKER)), quietMs: STALL_QUIET_MS };\n"}], "tests": ["test/stall-sweep.test.ts"]},
- {"id": "M8a-mail", "edits": [{"file": "server/src/watch.ts", "old": "    const mode = this.stallResolveNow(store, listing, false).arming.mailMode;\n", "new": "    const mode = this.stallResolveNow(store, listing, true).arming.mailMode;\n"}], "tests": ["test/stall-sweep.test.ts"]},
- {"id": "M8b-null", "edits": [{"file": "server/src/watch.ts", "old": "    if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) return;\n", "new": "    if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) { this.busySince = null; return; }\n"}], "tests": ["test/mail-sweep.test.ts"]},
- {"id": "M8b-restart", "edits": [{"file": "server/src/watch.ts", "old": "    else if (this.lastApplied !== null && this.lastApplied !== 'busy') this.busySince = now;\n", "new": "    else if (this.lastApplied !== null) this.busySince = now;\n"}], "tests": ["test/mail-sweep.test.ts"]},
- {"id": "M8b-keep", "edits": [{"file": "server/src/watch.ts", "old": "    if (mode !== 'busy') this.busySince = null;\n    else if", "new": "    if (mode !== 'busy') { /* kept */ }\n    else if"}], "tests": ["test/mail-sweep.test.ts"]},
- {"id": "M9c", "edits": [{"file": "server/src/watch.ts", "old": "notices, arming, quietMs, coordinationPaused: paused,\n", "new": "notices, arming, coordinationPaused: paused,\n"}], "tests": ["test/stall-sweep.test.ts"]},
- {"id": "M12-quiet", "edits": [{"file": "server/src/coord/schema.ts", "old": "VALUES (1, 'follow', NULL, 0);", "new": "VALUES (1, 'follow', 1800000, 0);"}], "tests": ["test/stall-sweep.test.ts"]},
- {"id": "M12-level", "edits": [{"file": "server/src/coord/schema.ts", "old": "VALUES (1, 'follow', NULL, 0);", "new": "VALUES (1, 'off', NULL, 0);"}], "tests": ["test/stall-sweep.test.ts"]},
- {"id": "M20-try", "edits": [{"file": "server/src/watch.ts", "old": "    } catch (err) {\n      let reason = 'an unreadable fault';\n      try {\n        reason = (err instanceof Error ? err.message : String(err)).slice(0, 200);\n      } catch { /* even reading the error threw: the fixed word stands */ }\n", "new": "    } catch (err) {\n      throw err;\n      let reason = 'an unreadable fault';\n      try {\n        reason = (err instanceof Error ? err.message : String(err)).slice(0, 200);\n      } catch { /* even reading the error threw: the fixed word stands */ }\n"}], "tests": ["test/mail-sweep.test.ts"]},
- {"id": "M20-latch", "edits": [{"file": "server/src/watch.ts", "old": "      if (this.lastFallback === null) {\n        try {\n          console.warn(`ccrc-server: stall-watch settings not applied (${reason}) — following the box files and the built-in quiet time`);\n        } catch { /* a log line must not stop a sweep */ }\n      }\n", "new": "      this.stallSettingsWarn('fallback', reason);\n"}], "tests": ["test/mail-sweep.test.ts"]},
- {"id": "M20-reason", "edits": [{"file": "server/src/watch.ts", "old": "      let reason = 'an unreadable fault';\n      try {\n        reason = (err instanceof Error ? err.message : String(err)).slice(0, 200);\n      } catch { /* even reading the error threw: the fixed word stands */ }\n", "new": "      const reason = (err instanceof Error ? err.message : String(err)).slice(0, 200);\n"}], "tests": ["test/mail-sweep.test.ts"]},
- {"id": "M20b", "edits": [{"file": "server/src/watch.ts", "old": "      this.lastFallback = null;\n", "new": ""}], "tests": ["test/mail-sweep.test.ts"]},
- {"id": "M21-every", "edits": [{"file": "server/src/watch.ts", "old": "    if (this.stallSettingsWarned.has(state)) return;\n", "new": ""}], "tests": ["test/mail-sweep.test.ts"]},
- {"id": "M21-rearm", "edits": [{"file": "server/src/watch.ts", "old": "    if (states.length === 0) this.stallSettingsWarned.clear();\n", "new": ""}], "tests": ["test/mail-sweep.test.ts"]},
- {"id": "T-every", "edits": [{"file": "server/src/watch.ts", "old": "    if (this.stallSettingsTraced || read.kind === 'unreadable') return;\n", "new": "    if (read.kind === 'unreadable') return;\n"}], "tests": ["test/mail-sweep.test.ts"]},
- {"id": "T-follow", "edits": [{"file": "server/src/watch.ts", "old": "    if (r.chosen === null && r.quietSource !== 'chosen') return;\n", "new": ""}], "tests": ["test/mail-sweep.test.ts"]}
-]
-```
-
-The control is Step 5's green: 117 and 115 passed on the unmutated tree.
-
-| # | Guard | Mutation | Red in | Measured |
-|---|---|---|---|---|
-| M2 | `mail-disabled` passes through a chosen level | the resolver's chosen arm sets `mailDisabled: false` | stall-sweep | `1 failed \| 116 passed`: `a chosen level keeps mail-disabled … (M2)` |
-| M3 | strict keeps the mail gate under a chosen level | `mailMode: run.mailMode` unconditionally | mail-sweep | `1 failed \| 114 passed`: `mail-gate-strict keeps its precedence … (M3)` |
-| M4 | at boot the verdicts receive today's exact arming | `stallBusyClock` substitutes while `lastApplied` is `null` | stall-sweep | `2 failed \| 115 passed`: `at boot … (M4)` and D-3798's `… mail-stuck under mail-gate-busy only` |
-| M7 | `sweepMail` uses the resolved mode | revert to `mailTurnModeOf(listing)` | mail-sweep; stall-sweep | `9 failed \| 106 passed`: the three M7 rows, then M8b's restart row, M20, M20/M20b, both latch rows and the boot trace; and `3 failed \| 114 passed`: M8a and the alert → all and alert → follow M8 rows |
-| M8 | the bound | delete `stallIdleStart`'s `busySince` line (`stall.ts`) | stall-sweep | `3 failed \| 114 passed`: the three M8 raises |
-| M8 | the busy-gate substitution | delete `stallBusyClock`'s `busy-shadow` line | stall-sweep | `3 failed \| 114 passed`: the three M8 raises |
-| M8 | the grace for every source | grant it only when `levelSource` is not `files` | stall-sweep | `2 failed \| 115 passed`: the Follow raise and the touched-file raise |
-| M8a | one resolver, stall side | `sweepStalls` builds its own box arming and the built-in quiet time | stall-sweep | `4 failed \| 113 passed`: M2, M9c, M8a, and the alert → all M8 row |
-| M8a | one resolver, mail side | the mail sweep passes `mailDisabled: true` | stall-sweep | `1 failed \| 116 passed`: M8a |
-| M8b | a null listing leaves the clock | clear `busySince` on the unlistable or kill-switch return | mail-sweep | `1 failed \| 114 passed`: `the busy clock moves only on an applied mode … (M8b)` |
-| M8b | busy over busy keeps it | restart `busySince` whenever `lastApplied` is not `null` | mail-sweep | `1 failed \| 114 passed`: the same row |
-| M8b | a non-busy mode clears it | leave `busySince` set after a non-busy mode | mail-sweep | `1 failed \| 114 passed`: `the busy clock restarts on a move back into busy … (M8b)` |
-| M9c | `quietMs` reaches the verdict | delete `quietMs` from `judgeStall`'s `StallInput` literal | stall-sweep | `1 failed \| 116 passed`: `a stored quiet time reaches the verdict … (M9c)` |
-| M12 | the seed is today's behaviour, by quiet time | seed `quietMs` 1800000 (`schema.ts`) | stall-sweep | `12 failed \| 105 passed`, the M12 row among them |
-| M12 | the seed is today's behaviour, by level | seed level `off` | stall-sweep | `107 failed \| 10 passed`, the M12 row among them |
-| M20 | `stallResolveNow` never throws | its catch rethrows (the try/catch removed, in effect) | mail-sweep | `2 failed \| 113 passed`: M20, and M20/M20b |
-| M20 | the catch never calls the latch | the catch calls `this.stallSettingsWarn('fallback', reason)` | mail-sweep | `1 failed \| 114 passed`: M20, its latch case (`promise rejected "Error: warn sink down"`) |
-| M20 | `reason` is composed inside its own `try` | compose it unguarded | mail-sweep | `1 failed \| 114 passed`: M20, its message-getter case (`promise rejected "Error: the message getter throws"`) |
-| M20b | the fallback clears | never reset `lastFallback` | mail-sweep | `1 failed \| 114 passed`: `the fallback warns once … (M20, M20b)` |
-| M21 | the latch warns once | warn on every read | mail-sweep | `2 failed \| 113 passed`: M21 and the per-state row |
-| M21 | the latch re-arms | never clear it | mail-sweep | `1 failed \| 114 passed`: M21 |
-| — | the boot trace, once | trace on every read | mail-sweep | `1 failed \| 114 passed`: the boot trace row |
-| — | the boot trace, only a choice | trace under Follow with the built-in | mail-sweep | `1 failed \| 114 passed`: the boot trace row |
-
-Every run printed `restored`, and `git status --short` afterwards listed only the three files of Step 2 and Step 4.
-
-- [ ] **Step 7: The regression suites**
+- [ ] **Step 6: The regression suites**
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
@@ -5304,7 +5366,11 @@ Expected (measured, all green). These are the suites that scan `watch.ts`'s text
 (`-t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'`) gives
 `Tests 7 passed | 328 skipped (335)`. Nothing in the README cites the `watch.ts` lines this task moves.
 
-- [ ] **Step 8: Typecheck**
+Then, from `server/`: `git fetch origin main && ./node_modules/.bin/vitest run test/deviation-refs.test.ts | grep -E '^ +Tests '`.
+Expected: `31 passed (31)`, because this plan defines every number the task cites (precondition 2). Any red there is
+real: stop, and report it with the failing row's name and its evidence file.
+
+- [ ] **Step 7: Typecheck**
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
@@ -5313,7 +5379,7 @@ cd "$(git rev-parse --show-toplevel)/server"
 
 Expected (measured): `tsc-clean`, with both exits at 0.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -5346,6 +5412,72 @@ MSG
 )"
 ```
 
+- [ ] **Step 9: The mutation table**
+
+Run the table on Step 8's commit, by the Baseline's mutation rule. Write the JSON below to `$INSTR/mut-task5.json`,
+then run `cd "$(git rev-parse --show-toplevel)" && python3 "$INSTR/mutate.py" . "$INSTR/mut-task5.json"` (the runner
+is the Baseline's). Each entry replaces one exact text, runs its suites from `server/`, and restores the file with
+`git checkout -- <file>`. The run ends with `clean`: `git status --porcelain` is empty, and the commit is as it was.
+
+```json
+[
+ {"id": "M2", "edits": [{"file": "server/src/coord/stallsettings.ts", "old": "      mailDisabled: box.mailDisabled,\n", "new": "      mailDisabled: false,\n"}], "tests": ["test/stall-sweep.test.ts"]},
+ {"id": "M3", "edits": [{"file": "server/src/coord/stallsettings.ts", "old": "      mailMode: strict ? 'strict' : run.mailMode,\n", "new": "      mailMode: run.mailMode,\n"}], "tests": ["test/mail-sweep.test.ts"]},
+ {"id": "M4", "edits": [{"file": "server/src/coord/stallsettings.ts", "old": "  if (lastApplied !== null && lastApplied !== 'busy') return { mailMode: 'busy-shadow' };\n", "new": "  if (lastApplied !== 'busy') return { mailMode: 'busy-shadow' };\n"}], "tests": ["test/stall-sweep.test.ts"]},
+ {"id": "M7", "edits": [{"file": "server/src/watch.ts", "old": "    const mode = this.stallResolveNow(store, listing, false).arming.mailMode;\n", "new": "    const mode = mailTurnModeOf(listing);\n"}], "tests": ["test/mail-sweep.test.ts", "test/stall-sweep.test.ts"]},
+ {"id": "M8-bound", "edits": [{"file": "server/src/coord/stall.ts", "old": "    if (input.arming.busySince !== undefined) return Math.max(m.stopAt, input.arming.busySince);\n", "new": ""}], "tests": ["test/stall-sweep.test.ts"]},
+ {"id": "M8-subst", "edits": [{"file": "server/src/coord/stallsettings.ts", "old": "  if (lastApplied !== null && lastApplied !== 'busy') return { mailMode: 'busy-shadow' };\n", "new": ""}], "tests": ["test/stall-sweep.test.ts"]},
+ {"id": "M8-chosen-only", "edits": [{"file": "server/src/watch.ts", "old": "      const arming: StallArming = { ...r.arming, ...stallBusyClock(r.arming.mailMode, this.lastApplied, this.busySince) };\n", "new": "      const arming: StallArming = { ...r.arming, ...(r.levelSource === 'files' ? {} : stallBusyClock(r.arming.mailMode, this.lastApplied, this.busySince)) };\n"}], "tests": ["test/stall-sweep.test.ts"]},
+ {"id": "M8a-stall", "edits": [{"file": "server/src/watch.ts", "old": "      const r = this.stallResolveNow(store, names, names.includes(MAIL_DISABLED_MARKER));\n", "new": "      const r = { arming: stallBoxArmingOf(names, names.includes(MAIL_DISABLED_MARKER)), quietMs: STALL_QUIET_MS };\n"}], "tests": ["test/stall-sweep.test.ts"]},
+ {"id": "M8a-mail", "edits": [{"file": "server/src/watch.ts", "old": "    const mode = this.stallResolveNow(store, listing, false).arming.mailMode;\n", "new": "    const mode = this.stallResolveNow(store, listing, true).arming.mailMode;\n"}], "tests": ["test/stall-sweep.test.ts"]},
+ {"id": "M8b-null", "edits": [{"file": "server/src/watch.ts", "old": "    if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) return;\n", "new": "    if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) { this.busySince = null; return; }\n"}], "tests": ["test/mail-sweep.test.ts"]},
+ {"id": "M8b-restart", "edits": [{"file": "server/src/watch.ts", "old": "    else if (this.lastApplied !== null && this.lastApplied !== 'busy') this.busySince = now;\n", "new": "    else if (this.lastApplied !== null) this.busySince = now;\n"}], "tests": ["test/mail-sweep.test.ts"]},
+ {"id": "M8b-keep", "edits": [{"file": "server/src/watch.ts", "old": "    if (mode !== 'busy') this.busySince = null;\n    else if", "new": "    if (mode !== 'busy') { /* kept */ }\n    else if"}], "tests": ["test/mail-sweep.test.ts"]},
+ {"id": "M9c", "edits": [{"file": "server/src/watch.ts", "old": "notices, arming, quietMs, coordinationPaused: paused,\n", "new": "notices, arming, coordinationPaused: paused,\n"}], "tests": ["test/stall-sweep.test.ts"]},
+ {"id": "M12-quiet", "edits": [{"file": "server/src/coord/schema.ts", "old": "VALUES (1, 'follow', NULL, 0);", "new": "VALUES (1, 'follow', 1800000, 0);"}], "tests": ["test/stall-sweep.test.ts"]},
+ {"id": "M12-level", "edits": [{"file": "server/src/coord/schema.ts", "old": "VALUES (1, 'follow', NULL, 0);", "new": "VALUES (1, 'off', NULL, 0);"}], "tests": ["test/stall-sweep.test.ts"]},
+ {"id": "M20-try", "edits": [{"file": "server/src/watch.ts", "old": "    } catch (err) {\n      let reason = 'an unreadable fault';\n      try {\n        reason = (err instanceof Error ? err.message : String(err)).slice(0, 200);\n      } catch { /* even reading the error threw: the fixed word stands */ }\n", "new": "    } catch (err) {\n      throw err;\n      let reason = 'an unreadable fault';\n      try {\n        reason = (err instanceof Error ? err.message : String(err)).slice(0, 200);\n      } catch { /* even reading the error threw: the fixed word stands */ }\n"}], "tests": ["test/mail-sweep.test.ts"]},
+ {"id": "M20-latch", "edits": [{"file": "server/src/watch.ts", "old": "      if (this.lastFallback === null) {\n        try {\n          console.warn(`ccrc-server: stall-watch settings not applied (${reason}) — following the box files and the built-in quiet time`);\n        } catch { /* a log line must not stop a sweep */ }\n      }\n", "new": "      this.stallSettingsWarn('fallback', reason);\n"}], "tests": ["test/mail-sweep.test.ts"]},
+ {"id": "M20-reason", "edits": [{"file": "server/src/watch.ts", "old": "      let reason = 'an unreadable fault';\n      try {\n        reason = (err instanceof Error ? err.message : String(err)).slice(0, 200);\n      } catch { /* even reading the error threw: the fixed word stands */ }\n", "new": "      const reason = (err instanceof Error ? err.message : String(err)).slice(0, 200);\n"}], "tests": ["test/mail-sweep.test.ts"]},
+ {"id": "M20b", "edits": [{"file": "server/src/watch.ts", "old": "      this.lastFallback = null;\n", "new": ""}], "tests": ["test/mail-sweep.test.ts"]},
+ {"id": "M21-every", "edits": [{"file": "server/src/watch.ts", "old": "    if (this.stallSettingsWarned.has(state)) return;\n", "new": ""}], "tests": ["test/mail-sweep.test.ts"]},
+ {"id": "M21-rearm", "edits": [{"file": "server/src/watch.ts", "old": "    if (states.length === 0) this.stallSettingsWarned.clear();\n", "new": ""}], "tests": ["test/mail-sweep.test.ts"]},
+ {"id": "T-every", "edits": [{"file": "server/src/watch.ts", "old": "    if (this.stallSettingsTraced || read.kind === 'unreadable') return;\n", "new": "    if (read.kind === 'unreadable') return;\n"}], "tests": ["test/mail-sweep.test.ts"]},
+ {"id": "T-follow", "edits": [{"file": "server/src/watch.ts", "old": "    if (r.chosen === null && r.quietSource !== 'chosen') return;\n", "new": ""}], "tests": ["test/mail-sweep.test.ts"]}
+]
+```
+
+The control is Step 5's green: 117 and 115 passed on the unmutated tree.
+
+| # | Guard | Mutation | Red in | Measured |
+|---|---|---|---|---|
+| M2 | `mail-disabled` passes through a chosen level | the resolver's chosen arm sets `mailDisabled: false` | stall-sweep | `1 failed \| 116 passed`: `a chosen level keeps mail-disabled … (M2)` |
+| M3 | strict keeps the mail gate under a chosen level | `mailMode: run.mailMode` unconditionally | mail-sweep | `1 failed \| 114 passed`: `mail-gate-strict keeps its precedence … (M3)` |
+| M4 | at boot the verdicts receive today's exact arming | `stallBusyClock` substitutes while `lastApplied` is `null` | stall-sweep | `2 failed \| 115 passed`: `at boot … (M4)` and D-3798's `… mail-stuck under mail-gate-busy only` |
+| M7 | `sweepMail` uses the resolved mode | revert to `mailTurnModeOf(listing)` | mail-sweep; stall-sweep | `9 failed \| 106 passed`: the three M7 rows, then M8b's restart row, M20, M20/M20b, both latch rows and the boot trace; and `3 failed \| 114 passed`: M8a and the alert → all and alert → follow M8 rows |
+| M8 | the bound | delete `stallIdleStart`'s `busySince` line (`stall.ts`) | stall-sweep | `3 failed \| 114 passed`: the three M8 raises |
+| M8 | the busy-gate substitution | delete `stallBusyClock`'s `busy-shadow` line | stall-sweep | `3 failed \| 114 passed`: the three M8 raises |
+| M8 | the grace for every source | grant it only when `levelSource` is not `files` | stall-sweep | `2 failed \| 115 passed`: the Follow raise and the touched-file raise |
+| M8a | one resolver, stall side | `sweepStalls` builds its own box arming and the built-in quiet time | stall-sweep | `4 failed \| 113 passed`: M2, M9c, M8a, and the alert → all M8 row |
+| M8a | one resolver, mail side | the mail sweep passes `mailDisabled: true` | stall-sweep | `1 failed \| 116 passed`: M8a |
+| M8b | a null listing leaves the clock | clear `busySince` on the unlistable or kill-switch return | mail-sweep | `1 failed \| 114 passed`: `the busy clock moves only on an applied mode … (M8b)` |
+| M8b | busy over busy keeps it | restart `busySince` whenever `lastApplied` is not `null` | mail-sweep | `1 failed \| 114 passed`: the same row |
+| M8b | a non-busy mode clears it | leave `busySince` set after a non-busy mode | mail-sweep | `1 failed \| 114 passed`: `the busy clock restarts on a move back into busy … (M8b)` |
+| M9c | `quietMs` reaches the verdict | delete `quietMs` from `judgeStall`'s `StallInput` literal | stall-sweep | `1 failed \| 116 passed`: `a stored quiet time reaches the verdict … (M9c)` |
+| M12 | the seed is today's behaviour, by quiet time | seed `quietMs` 1800000 (`schema.ts`) | stall-sweep | `12 failed \| 105 passed`, the M12 row among them |
+| M12 | the seed is today's behaviour, by level | seed level `off` | stall-sweep | `107 failed \| 10 passed`, the M12 row among them |
+| M20 | `stallResolveNow` never throws | its catch rethrows (the try/catch removed, in effect) | mail-sweep | `2 failed \| 113 passed`: M20, and M20/M20b |
+| M20 | the catch never calls the latch | the catch calls `this.stallSettingsWarn('fallback', reason)` | mail-sweep | `1 failed \| 114 passed`: M20, its latch case (`promise rejected "Error: warn sink down"`) |
+| M20 | `reason` is composed inside its own `try` | compose it unguarded | mail-sweep | `1 failed \| 114 passed`: M20, its message-getter case (`promise rejected "Error: the message getter throws"`) |
+| M20b | the fallback clears | never reset `lastFallback` | mail-sweep | `1 failed \| 114 passed`: `the fallback warns once … (M20, M20b)` |
+| M21 | the latch warns once | warn on every read | mail-sweep | `2 failed \| 113 passed`: M21 and the per-state row |
+| M21 | the latch re-arms | never clear it | mail-sweep | `1 failed \| 114 passed`: M21 |
+| — | the boot trace, once | trace on every read | mail-sweep | `1 failed \| 114 passed`: the boot trace row |
+| — | the boot trace, only a choice | trace under Follow with the built-in | mail-sweep | `1 failed \| 114 passed`: the boot trace row |
+
+Every row printed `restored`, and the run ended with `clean`. At review the whole table was run again with the
+Baseline's `mutate.py` on `65b4c6c84`, and every row's `Tests` line matched the table above.
+
 ---
 
 ### Task 6: The routes: `GET` and `POST /api/coord/stall-watch`, and the censuses
@@ -5359,7 +5491,7 @@ table. The view builder's three `try`s and the POST's re-measure are the parts t
 - Modify: `server/src/coord/routes.ts`:
   - imports: ≈14 `../ccdargv.js` gains `deviceActor`; ≈22 `./store.js` gains `type StallSettingsWrite`; ≈32
     `./rundefs.js` gains `MAIL_DISABLED_MARKER`, followed by two new imports (`./stall.js`, `./stallsettings.js`); ≈44
-    the `shared/api.js` type list gains four types;
+    the `shared/api.js` type list gains five types;
   - below the caps POST handler (≈2499, `return reply.code(200).send({ ok: true, ...view });`), inside
     `registerCoordRoutes`: the docstring, `stallViewWarned`, `stallViewNote`, `stallFaultReason`, `stallWatchView`,
     `app.get('/api/coord/stall-watch')` and `app.post('/api/coord/stall-watch')`.
@@ -5400,8 +5532,8 @@ table. The view builder's three `try`s and the POST's re-measure are the parts t
   `stallObservationsSince(since: number): StallObservationsRead`; and `export type StallSettingsWrite`.
 - Consumes (Task 5, `FleetWatcher`): `stallFallback(): { readonly at: number; readonly reason: string } | null`, through
   `registerCoordRoutes`' existing optional `watcher?: FleetWatcher` parameter.
-- Consumes (L0, `shared/api.ts`, Task 1): `StallWatchView`, `StallWatchEffective`, `StallWriteEffect`,
-  `StallConfirmRequired`.
+- Consumes (L0, `shared/api.ts`, Task 1): `StallWatchView`, `StallWatchEffective`, `StallWatchStages`,
+  `StallWriteEffect`, `StallConfirmRequired`.
 - Produces (L1, `server/src/coord/stallsettings.ts`):
   `export function stallBoxHeld(box: StallBoxArming): StallHeld`. It answers the files-only reading's held flags,
   equal to `resolveStallWatch(box, <follow>).held` for every box, with `wave2HeldByStrict` always `false`.
@@ -5420,11 +5552,27 @@ table. The view builder's three `try`s and the POST's re-measure are the parts t
     where `<actor>` is `deviceActor(sessionAuth(req).device)` when `deps.cfg.authEnabled`, and `flag-off` otherwise.
 
 **Residue settled here (§20, and one item §20 does not list):**
-- *What `effective` carries when `stallLevelOf` or `stallStages` throws in the second `try`:* `{ measured: false }`.
-  The second `try` assigns `effective` twice, first the base literal and then the literal with `next` and
-  `filesExceed`. A throw in `stallNextStep` or `stallFilesExceed` keeps the base. A throw in `stallStages`,
-  `stallLevelOf` or `stallBoxHeld` keeps the initial `{ measured: false }`. Neither claims a `fallback` or sends a 500,
-  and the log names the fault.
+- *What `effective` carries when a view reader throws* (review fix, proto `d513b887f`;
+  `view-reads-stages-with-the-resolution` (D-4038)). `{ measured: false }` keeps its one meaning, a registry that
+  could not be listed, which W2 renders "Unknown — the fleet registry could not be read". A reader fault over a
+  listed registry never answers it:
+  - The applied reading takes every field from the first `try`. `level`, `files`, `source` and `held` are the
+    resolver's own answer, and the resolved arming's `stallStages` is read beside the resolver, inside that `try`. A
+    fault there claims the fallback, and the reply shows the files-only reading with the built-in quiet time. The
+    resolver itself reads stages only for a chosen running level, so under Follow, or a chosen Off, that fallback is
+    the view's alone: the sweeps still apply the chosen Off or quiet time. D-4038 accepts this as bug-path residue.
+  - The second `try` assigns `effective` twice, first the measured reading and then the same reading with `next` and
+    `filesExceed`. A throw in `stallNextStep` or `stallFilesExceed` keeps the measured reading, with `next` and
+    `filesExceed` left out, which W2 reads as "not stated": no Next step block and no files-exceed line. It claims no
+    `fallback` and sends no 500, and the log names the fault.
+  - The second case D-4038 accepts as bug-path residue: under a fallback, the files-only reading's own readers
+    (`stallLevelOf`, `stallStages`, `stallBoxHeld` over the box arming) throw. Then no reading of the box can be
+    stated at all, `effective` stays `{ measured: false }`, which W2 shows as Unknown, and the `fallback` beside it
+    names the fault. The wire has no third word for it, and adding one is an L0 change W2 would have to render; it is
+    reachable only when the readers the resolver itself is built on fail for the fleet box's own files.
+  - Pinned by `M20: a stages reader that throws over a listed registry never answers unmeasured …` (mutation row
+    M20-stages) and `M20: a throwing view-only reader answers 200 with no fallback, and next and filesExceed left out`
+    (M20-readers, M20c).
 - *Whether the builder's own catch warns:* yes, once per standing fault per part (`stallViewNote`), re-armed when that
   part next succeeds, inside its own `try`. A count read that answers `{ ok: false, detail }` warns through the same
   latch.
@@ -5485,8 +5633,8 @@ them, every numeral this task writes moves by the same amount: 31 → 33, 89 →
  *
  * The routes are registered on a bare Fastify, the `archive-coord-handle.test.ts` idiom, so a row can hand
  * `registerCoordRoutes` its own `sessionAuth` (the actor when the gate is armed) and its own watcher (the reported
- * fallback). `resolveStallWatch`, `parseStallSettings`, `stallNextStep` and `stallNoticeCounts` are mocked to pass
- * straight through until a row switches one on to really throw (M20, M17b).
+ * fallback). `resolveStallWatch`, `parseStallSettings`, `stallStages`, `stallNextStep` and `stallNoticeCounts` are
+ * mocked to pass straight through until a row switches one on to really throw (M20, M17b).
  *
  * No marker name is spelled here: the lane's markers come from `STALL_MARKERS`, `mail-disabled` from its definer.
  */
@@ -5515,6 +5663,8 @@ import { mkTmp } from './tmpHelpers.js';
 
 const settingsFault = vi.hoisted(() => ({
   resolve: null as Error | null, parse: null as Error | null, next: null as Error | null, counts: null as Error | null,
+  /** Thrown by `stallStages` only for an arming whose checks run, so the files' own reading can still be read. */
+  stagesWhenLive: null as Error | null,
 }));
 vi.mock('../src/coord/stallsettings.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/coord/stallsettings.js')>();
@@ -5527,6 +5677,10 @@ vi.mock('../src/coord/stallsettings.js', async (importOriginal) => {
     parseStallSettings: (...a: Parameters<typeof real.parseStallSettings>): ReturnType<typeof real.parseStallSettings> => {
       if (settingsFault.parse !== null) throw settingsFault.parse;
       return real.parseStallSettings(...a);
+    },
+    stallStages: (...a: Parameters<typeof real.stallStages>): ReturnType<typeof real.stallStages> => {
+      if (settingsFault.stagesWhenLive !== null && a[0].live) throw settingsFault.stagesWhenLive;
+      return real.stallStages(...a);
     },
     stallNextStep: (...a: Parameters<typeof real.stallNextStep>): ReturnType<typeof real.stallNextStep> => {
       if (settingsFault.next !== null) throw settingsFault.next;
@@ -5549,6 +5703,7 @@ const H = 3_600_000;
 const apps: FastifyInstance[] = [];
 afterEach(async () => {
   settingsFault.resolve = null; settingsFault.parse = null; settingsFault.next = null; settingsFault.counts = null;
+  settingsFault.stagesWhenLive = null;
   vi.restoreAllMocks();
   while (apps.length) await apps.pop()!.close();
 });
@@ -5772,6 +5927,21 @@ describe('GET /api/coord/stall-watch', () => {
       stages: { ...STAGES_OFF, checks: true, busyGate: true }, held: HELD_NONE });
     expect(v.quiet.source).toBe('default');
     expect(warn.mock.calls.flat().join(' ')).toContain('next bug');
+  });
+
+  it('M20: a stages reader that throws over a listed registry never answers unmeasured: the resolution claims it, and the files reading stands', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { app, coord } = await setup();
+    store(coord, 'check');
+    settingsFault.stagesWhenLive = new Error('stages bug');
+    const res = await getView(app);
+    expect(res.statusCode).toBe(200);
+    const v = res.json() as StallWatchView;
+    expect(v.effective, 'a listed registry is never read back as one that could not be listed')
+      .toEqual({ measured: true, level: 'log', files: 'log', source: 'files', stages: STAGES_OFF, held: HELD_NONE,
+        next: { kind: 'step', level: 'check', waitsOn: ['checks'] }, filesExceed: false });
+    expect(v.fallback).toEqual({ at: expect.any(Number), reason: 'stages bug' });
+    expect(v.quiet).toEqual({ effectiveMs: STALL_QUIET_MS, ...QUIET_BOUNDS, source: 'default' });
   });
 });
 
@@ -6290,7 +6460,7 @@ done
 ```
 
 Expected (measured on the prototype):
-- `stall-settings-route`: `Tests 34 failed | 3 passed (37)`. The three that pass are the scanner controls that need
+- `stall-settings-route`: `Tests 35 failed | 3 passed (38)`. The three that pass are the scanner controls that need
   no route: `CONTROL: the device-word scan sees the word where it is (the caps docstring)`, `CONTROL: the scanner sees
   the definition in store.ts`, and `SQL that writes stall_settings appears only in schema.ts (the seed) and store.ts`.
   Every HTTP row reds on a 404, and the scans red on `app.post('/api/coord/stall-watch' is gone`.
@@ -6392,7 +6562,7 @@ with
 
 ```ts
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
-  type StallConfirmRequired, type StallWatchEffective, type StallWatchView, type StallWriteEffect,
+  type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
 ```
 
 (c) `server/src/coord/routes.ts`, the routes. The caps POST handler ends (≈2499) with the line
@@ -6424,9 +6594,14 @@ opens the docstring of `GET /api/runs?closed=1`, insert this block. It begins wi
    *  - The resolution runs in its own `try`, and only that `try` claims a fallback. On a throw the reply carries what
    *    the sweeps' own catch runs: the fleet box's files and the built-in quiet time, with the fallback line's reason.
    *    A fallback the watcher reports (`watcher.stallFallback()`) is reported even when this one succeeded.
+   *  - The resolved reading's stages are read inside that same `try`, beside the resolver, which reads the same
+   *    stages for every chosen running level: a fault there is the resolution's, so it claims the fallback and the
+   *    reply shows the files-only reading.
    *  - The view-only readers run in a second `try`, which claims no fallback: a throw there leaves `next` and
-   *    `filesExceed` out (or, when the stages themselves cannot be read, answers the reading unmeasured), and the sweeps
-   *    are not affected, because they never call those readers.
+   *    `filesExceed` out and keeps the reading measured, and the sweeps are not affected, because they never call
+   *    those readers. `{ measured: false }` means one thing, a registry that could not be listed; a reader fault never
+   *    answers it, except when the files-only reading's own readers throw over the box arming, under a fallback,
+   *    where no reading of the box can be stated and the `fallback` beside it names the fault.
    *  - The notice counts run in a third, so a count that fails answers `notices: { ok: false }`, never a 500.
    *  Each `try` warns once per standing fault and re-arms when it next succeeds, so a page polling every minute does
    *  not repeat the line.
@@ -6472,7 +6647,7 @@ opens the docstring of `GET /api/runs?closed=1`, insert this block. It begins wi
     // The resolution, as `stallResolveNow` runs it. With no listing it is still taken, over an empty one, for the
     // quiet time alone, which reads no flag of the box (§6.2); `effective` then stays unmeasured.
     let chosen: StallWatchView['chosen'] = { level: 'unreadable', quietMs: 'unreadable', updatedAt: null, stored: 'unreadable' };
-    let resolution: { readonly box: StallBoxArming; readonly r: StallResolved } | null = null;
+    let resolution: { readonly box: StallBoxArming; readonly r: StallResolved; readonly stages: StallWatchStages } | null = null;
     let ownFault: string | null = null;
     try {
       const parsed = parseStallSettings(store.stallSettings());
@@ -6483,7 +6658,8 @@ opens the docstring of `GET /api/runs?closed=1`, insert this block. It begins wi
         stored: parsed.stored,
       };
       const box = stallBoxArmingOf(names ?? [], names !== null && names.includes(MAIL_DISABLED_MARKER));
-      resolution = { box, r: resolveStallWatch(box, parsed) };
+      const r = resolveStallWatch(box, parsed);
+      resolution = { box, r, stages: stallStages(r.arming) };
     } catch (err) {
       ownFault = stallFaultReason(err);
     }
@@ -6497,8 +6673,8 @@ opens the docstring of `GET /api/runs?closed=1`, insert this block. It begins wi
     if (names !== null) {
       try {
         if (applied !== null) {
-          const { box, r } = applied;
-          const stages = stallStages(r.arming);
+          // Every field of the reading comes from the first `try`, so only `next` and `filesExceed` can be left out.
+          const { box, r, stages } = applied;
           effective = { measured: true, level: r.effective, files: r.files, source: r.levelSource, stages, held: r.held };
           effective = { measured: true, level: r.effective, files: r.files, source: r.levelSource, stages, held: r.held,
             next: stallNextStep(r.arming, r.chosen), filesExceed: stallFilesExceed(box, r) };
@@ -6605,8 +6781,10 @@ Its decisions, in the order the code takes them:
 - **The builder's first `try`** reads, parses and resolves, as `stallResolveNow` does. It alone sets the builder's own
   fallback, and `chosen` comes from its parse whenever the parse returned. A watcher fallback wins when one stands.
   Under any fallback, `applied` is `null`, so the reply shows the files-only reading and the built-in quiet time.
+- **The resolved reading's stages** are read inside the first `try`, beside the resolver, so the applied reading is
+  whole before the second `try` begins (`view-reads-stages-with-the-resolution` (D-4038)).
 - **The second `try`** holds the view-only readers. It claims no fallback, and a throw leaves `next` and `filesExceed`
-  out (see the residue above).
+  out while the reading stays measured (see the residue above).
 - **The third `try`** holds the counts. A failed read or a throwing count answers `{ ok: false }`.
 - **POST.** The decision first, then the listing, then no `await` to the write. The route refuses its own unreadable
   pre-read with a throw (Fastify's 500). It measures the effect over the projection, answers 409 when the confirm is
@@ -6643,22 +6821,107 @@ for f in stall-settings-route stall-settings coord-pause-route auth-gate box-tok
 done
 ```
 
-Expected (measured): `stall-settings-route` `Tests 37 passed (37)`; `stall-settings` `Tests 114 passed (114)`;
+Expected (measured): `stall-settings-route` `Tests 38 passed (38)`; `stall-settings` `Tests 114 passed (114)`;
 `coord-pause-route` `Tests 20 passed (20)`; `auth-gate` `Tests 160 passed (160)` (the per-route sweep gained one case
 per new route); `box-token-census` `Tests 23 passed (23)`; `coordinator-skill` `Tests 161 passed (161)`;
 `worker-skill` `Tests 52 passed (52)`; `reviewer-skill` `Tests 15 passed (15)`; `mail-routes` `Tests 59 passed (59)`.
 
-- [ ] **Step 6: The mutation table**
+- [ ] **Step 6: Regression suites**
 
-Apply each mutation alone, run the named suite, record the failing count and names, and restore. Each "old" text
-occurs exactly once at the commit. `git status` must show only this task's files when the table is done.
+```bash
+cd "$(git rev-parse --show-toplevel)/server"
+for f in routes coord-routes-single-file single-definition coord-caps-route archive-coord-handle stall-vocabulary pools-prose \
+         session-hook mail-sweep stall-sweep stall-settings-store coord-db typecheck-tests child-reclaim-pause-route \
+         child-reclaim-prose topology-clean mail-hardening ledger-instruction oss-metadata ccrc-install-graphify; do
+  echo "== $f"; ./node_modules/.bin/vitest run test/$f.test.ts | grep -E '^ +Tests '
+done
+for t in $(ls test/ | grep -E '^(coord-|stall-|auth-|run-routes|mail-|box-token|single-def|typecheck)'); do
+  printf '%s: ' "$t"; ./node_modules/.bin/vitest run "test/$t" | grep -E '^ +Tests '
+done
+git fetch origin main && ./node_modules/.bin/vitest run test/deviation-refs.test.ts | grep -E '^ +Tests '
+```
+
+Every command runs one file, in the foreground, with a timeout of at least 600000 ms.
+
+Expected (measured): `routes` 80, `coord-routes-single-file` 3, `single-definition` 274 (unedited), `coord-caps-route`
+26, `archive-coord-handle` 6, `stall-vocabulary` 179, `pools-prose` 27 (the `CLAUDE.md` size ratchet, +1 line),
+`session-hook` 335 (the citation instrument, `CLAUDE.md` edited and README untouched), `mail-sweep` 115, `stall-sweep`
+117, `stall-settings-store` 40, `coord-db` 71, `typecheck-tests` 12, and the seven `CLAUDE.md` and reclaim readers
+from `child-reclaim-pause-route` to `ccrc-install-graphify` 169 between them, all passed.
+
+The second loop runs the 43 files whose names match, each alone, all passed, 2997 rows between them (measured at
+`fa1241e6e` plus the review fix, one file per command): `auth-gate` 160, `auth-passkey` 154, `auth-ratelimit` 18,
+`auth-routes` 54, `auth-secret` 39, `auth-sessions` 19, `auth-wire` 11, `box-token-census` 23, `coord-abandon` 30,
+`coord-caps-policy` 25, `coord-caps-route` 26, `coord-db` 71, `coord-decide` 5, `coord-envelope` 20,
+`coord-fingerprint` 54, `coord-health` 23, `coord-items` 25, `coord-kickoff` 33, `coord-pause-route` 20,
+`coord-placement` 22, `coord-prhistory` 13, `coord-reclaim` 30, `coord-routes-single-file` 3, `coord-store` 186,
+`coord-token` 19, `mail-envelope-parse` 38, `mail-hardening` 18, `mail-peer-quota` 7, `mail-routes` 59, `mail-sweep`
+115, `run-routes` 230, `single-definition` 274, `stall-backoff` 33, `stall-bodies` 165, `stall-session` 98,
+`stall-settings-route` 38, `stall-settings-store` 40, `stall-settings` 114, `stall-store` 68, `stall-sweep` 117,
+`stall-verdict` 309, `stall-vocabulary` 179 and `typecheck-tests` 12. A red in a known load flake (`typecheck-tests`,
+or any spawn-based suite) is re-run alone, with `--testTimeout=240000`, before it is called real.
+
+`deviation-refs`: `31 passed (31)`, because this plan, which defines every number Task 6 cites, is on the tree
+(precondition 2). The prototype does not carry the plan and measured `1 failed | 30 passed (31)` here, on
+`floorFromScan over the real tracked tree seeds from the ledger high-water`. On this branch that red is never
+expected: if it appears, stop and report it with the row's evidence file.
+
+- [ ] **Step 7: Typecheck**
+
+```bash
+cd "$(git rev-parse --show-toplevel)/server"
+./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json && echo tsc-clean
+```
+
+Expected (measured): `tsc-clean`, both exit 0.
+
+- [ ] **Step 8: Commit**
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+git add CLAUDE.md server/src/auth/gate.ts server/src/coord/routes.ts server/src/coord/stallsettings.ts \
+  server/test/auth-gate.test.ts server/test/coord-pause-route.test.ts server/test/coordinator-skill.test.ts \
+  server/test/reviewer-skill.test.ts server/test/stall-settings.test.ts server/test/worker-skill.test.ts \
+  server/test/stall-settings-route.test.ts
+git commit -m "$(cat <<'MSG'
+feat(coord): GET and POST /api/coord/stall-watch, and the censuses
+
+The Settings page's door onto the stall watch's level and quiet time
+(design 2026-10-05 §10). One view builder serves both halves and never
+throws: the resolution and the resolved stages in their own try (the
+only one that claims a fallback, which then shows the files-only reading
+and the built-in quiet time), the view-only readers in a second, which
+can leave out only next and filesExceed, and the notice counts in a
+third.
+The POST decides the body (unknown keys refused, D-4029), measures the
+write's effect against the listing it just took, answers 409
+confirm-required until the body carries the effect's key
+(server-decides-the-confirm, D-4033; confirm-on-stage-diff, D-4034),
+writes over the row it measured in one transaction with no coordMutex
+(D-4030), re-measures once on a conflict, and records a feed row only on
+a change (D-4031), naming its actor. stallBoxHeld gives the files-only
+reading the held flags Follow reports.
+
+Censuses: SESSION_ONLY, the auth-gate pins and needle numerals, the
+coordinator EXEMPT entries and the three forbid-mention cases, and
+CLAUDE.md's session-only sentence.
+MSG
+)"
+```
+
+- [ ] **Step 9: The mutation table**
+
+Run the table on Step 8's commit, by the Baseline's mutation rule. Apply each mutation alone, run the named suite,
+record the failing count and names, restore with `git checkout -- <file>`, and check `git status --porcelain` is empty
+before the next row. Each "old" text occurs exactly once at the commit. The rows below the table that carry JSON
+(M20-stages, M26-after, M10-route, N501-get, N501-post and S-absent) go through `$INSTR/mutate.py` as written.
 
 | # | Guard | Mutation | Red in | Measured |
 |---|---|---|---|---|
 | M13 | The reply re-reads | The POST answers `{ ...view, chosen: { ...view.chosen, level: decided.patch.level ?? view.chosen.level } }` | stall-settings-route | `1 failed`: `M13: the reply re-reads the store, never echoing the body` |
 | M14 | Unknown keys refused | In `decideStallSettings`, `if (!(STALL_REQUEST_KEYS …).includes(k))` → `if (false && …)` | stall-settings-route | `1 failed`: `M14: refuses with 400 and the detail, writes nothing and records nothing` |
 | M15a | A no-op records nothing | `if (change !== null && log)` → `if (log)` | stall-settings-route | `1 failed`: `the same body POSTed twice records one feed row: a no-op records nothing` |
-| M15b | Flush in `finally` | `void log.flush();` moved into the `try`, after `recordFeedEvent`, `finally` removed | stall-settings-route | `1 failed`: `a throwing feed archive still writes the setting, warns, and still flushes the minted seq` |
+| M15-flush | Flush in `finally` | `void log.flush();` moved into the `try`, after `recordFeedEvent`, `finally` removed | stall-settings-route | `1 failed`: `a throwing feed archive still writes the setting, warns, and still flushes the minted seq` |
 | M15c | The actor named | `` body: `${change}; by ${actor}` `` → `body: change` | stall-settings-route | `2 failed`: `names what changed and ends "by flag-off" when the gate is unarmed`; `ends "by device:<label>" when the gate is armed` |
 | M15d | The armed actor is the session's | `const actor = 'flag-off';` | stall-settings-route | `2 failed`: `ends "by device:<label>" when the gate is armed`; M29 `CONTROL: the POST slice is the handler, and it hands the label to deviceActor exactly once` |
 | M16-1 | `SESSION_ONLY` member | Drop `'/api/coord/stall-watch'` from the set | coord-pause-route | `1 failed`: `every app.post handler in coord/routes.ts checks the box token, except the named ones` |
@@ -6677,11 +6940,11 @@ occurs exactly once at the commit. `git status` must show only this task's files
 | M16b-2 | One writer, another file | A `this.coord?.setStallSettings(…)` call planted in `watch.ts`'s `stallFallback()` | stall-settings-route | `1 failed`: `setStallSettings( is spelled on a code line only …` |
 | M16b-3 | One SQL writer | `coord.db.prepare('UPDATE stall_settings SET level = ? WHERE id = 1')` planted in the GET handler | stall-settings-route | `1 failed`: `SQL that writes stall_settings appears only in schema.ts (the seed) and store.ts` |
 | M17b | Counting never fails the reply | The count `try`'s `catch` removed (`try … finally {}`) | stall-settings-route | `1 failed`: `M17b: a throw from L1 counting answers notices {ok:false}, never a 500, and the rest of the view stands` |
-| M18a | Kebab declared | Drop `'flag-off'` from `STALL_SETTINGS_KEBABS` | mail-routes | `1 failed`: `every quoted kebab token in server/src/coord that looks like a code is declared` |
-| M18b | Kebab declared | Drop `'confirm-required'` from `STALL_SETTINGS_KEBABS` | mail-routes | `1 failed`: the same case |
-| M18c | Kebab union read | The scan's `isStallSettingsKebab(tok)` term replaced by `false` | mail-routes | `1 failed`: the same case |
-| M20a | The first `try` | Remove it (the resolution throws through) | stall-settings-route | `3 failed`: `M20: a resolver that really throws …`; `M20: the view warns once …`; `M20: a parse that throws …` |
-| M20b | View readers not in the first `try` | Call `stallNextStep(resolution.r.arming, resolution.r.chosen)` inside the first `try` | stall-settings-route | `1 failed`: `M20: a throwing view-only reader answers 200 with no fallback, and next and filesExceed left out` |
+| M18-flag | Kebab declared | Drop `'flag-off'` from `STALL_SETTINGS_KEBABS` | mail-routes | `1 failed`: `every quoted kebab token in server/src/coord that looks like a code is declared` |
+| M18-confirm | Kebab declared | Drop `'confirm-required'` from `STALL_SETTINGS_KEBABS` | mail-routes | `1 failed`: the same case |
+| M18-union | Kebab union read | The scan's `isStallSettingsKebab(tok)` term replaced by `false` | mail-routes | `1 failed`: the same case |
+| M20a | The first `try` | Remove it (the resolution throws through) | stall-settings-route | `4 failed`: `M20: a resolver that really throws …`; `M20: the view warns once …`; `M20: a parse that throws …`; `M20: a stages reader that throws over a listed registry …` |
+| M20-readers | View readers not in the first `try` | Call `stallNextStep(resolution.r.arming, resolution.r.chosen)` inside the first `try` | stall-settings-route | `1 failed`: `M20: a throwing view-only reader answers 200 with no fallback, and next and filesExceed left out` |
 | M20c | The second `try` | Its `catch` removed | stall-settings-route | `1 failed`: the same case |
 | M20d | Built-in quiet under a fallback | `effectiveMs: resolution === null ? STALL_QUIET_MS : resolution.r.quietMs` | stall-settings-route | `1 failed`: `M20: a watcher fallback is reported even when the builder's own resolution succeeded, with the built-in quiet time` |
 | M20e | Files-only under a watcher fallback | `const applied = ownFault === null ? resolution : null;` | stall-settings-route | `1 failed`: the same case |
@@ -6689,7 +6952,7 @@ occurs exactly once at the commit. `git status` must show only this task's files
 | M20g | The latch re-arms | `if (fault === null) { stallViewWarned.delete(part); return; }` → `if (fault === null) return;` | stall-settings-route | `1 failed`: the same case |
 | M26 | The server decides the confirm (route arm) | `if (false && stallNeedsConfirm(effect) && …)` | stall-settings-route | `7 failed`: the two M26 rows, M6/M26, both M27 rows, M10, and `M27b: a conflict whose fresh effect needs a confirm …` |
 | M27a | The key is checked | `decided.confirm !== effectKey` → `decided.confirm === null` | stall-settings-route | `2 failed`: `M27: a key that does not match …`; `M27: another page's write between the 409 and the re-POST …` |
-| M27b | `updatedAt` in the key | `stallEffectKey(effect, null)` | stall-settings-route | `3 failed`: `M26: a write that turns a stage on …`; `M27: another page's write …`; `M27b: a conflict whose fresh effect needs a confirm …` |
+| M27-digest | `updatedAt` in the key | `stallEffectKey(effect, null)` | stall-settings-route | `3 failed`: `M26: a write that turns a stage on …`; `M27: another page's write …`; `M27b: a conflict whose fresh effect needs a confirm …` |
 | M27c | The route's own unreadable refusal | Delete the `if (expected.kind === 'unreadable') throw …` line | stall-settings-route | `1 failed`: `M27b: a pre-read that answers unreadable is refused with a 500, and nothing is written` |
 | M27d | One re-measure on a conflict | `measure < 2` → `measure < 1` | stall-settings-route | `2 failed`: `M27b: a conflict whose fresh effect needs a confirm …`; `M27b: a conflict whose fresh effect needs none …` |
 | M27e | Re-measure on the row the store found | `else expected = w.before;` → `else expected = { ...expected };` | stall-settings-route | `2 failed`: the same two |
@@ -6700,74 +6963,47 @@ occurs exactly once at the commit. `git status` must show only this task's files
 | M6b | Unknown is never off (GET) | `if (names !== null)` → `if (true)` in the builder | stall-settings-route | `2 failed`: `M6: a registry that cannot be listed …`; `M6 / M26: …` |
 | H1 | Files-only held: strict holds no wave-2 step | `wave2HeldByStrict: box.mailMode === 'strict'` in `stallBoxHeld` | stall-settings | `2 failed`: both `stallBoxHeld` rows |
 | H2 | Files-only held: `mailOff` | `mailOff: false` in `stallBoxHeld` | stall-settings | `4 failed`: `M2: … every running level carries the box's mailDisabled, and mailOff is held`; `M23: … each flag alone`; `M23: … a flag that merely stands beside the choice sets nothing`; `nothing is chosen, so strict never holds the wave-2 step …` |
+| M20-stages | The resolved stages are read with the resolution, so a reader fault never answers unmeasured over a listed registry | Read the resolved arming's `stallStages` in the second `try` again, as before the review fix | stall-settings-route | `1 failed \| 37 passed (38)`: `M20: a stages reader that throws over a listed registry never answers unmeasured: the resolution claims it, and the files reading stands` |
+| M26-after | The effect's after side is the projection (§17 M26: "build the after side from the row as it stands") | `expected, stallSettingsAfter(expected, decided.patch, at));` → `expected, expected);` | stall-settings-route | `6 failed \| 32 passed (38)`: both M26 rows, both M27 rows, `M10: the stored value is the sent value …`, and `M27b: a conflict whose fresh effect needs a confirm …` |
+| M10-route | The stored value is the sent value (§17 M10, route half) | The POST writes its quiet time clamped one step inside the bounds | stall-settings-route | `1 failed \| 37 passed (38)`: `M10: the stored value is the sent value, at both bounds, never clamped` |
+| N501-get | No store answers 501 (GET) | Drop the GET's `if (!deps.coord) return notConfigured(reply);` | stall-settings-route | `1 failed \| 37 passed (38)`: `answers 501 not-configured, on both verbs, on a box with no coordination database` |
+| N501-post | No store answers 501 (POST) | Drop the POST's `if (!deps.coord) return notConfigured(reply);` | stall-settings-route | `1 failed \| 37 passed (38)`: the same row |
+| S-absent | Absent and unreadable stay apart on the wire, never `follow` or `default` (§14 item 11) | Map an absent read to `level: 'follow'` and `quietMs: 'default'` in the view's `chosen` | stall-settings-route | `1 failed \| 37 passed (38)`: `an absent row and an unreadable row are told apart, never sent as follow or default, and both answer 200` |
 
-The control is Step 5's green on the unmutated tree.
+The control is Step 5's green on the unmutated tree, `38 passed (38)`.
 
-- [ ] **Step 7: Regression suites**
+The ids are this table's own. Spec §17's M15b, M20b and M27b name other guards (Task 2's non-row `before`, Task 5's
+fallback that clears, Task 4's store compare), so this table's rows for the flush, the view readers and the key's
+`updatedAt` are M15-flush, M20-readers and M27-digest; its kebab rows are M18-flag, M18-confirm and M18-union, apart
+from Task 1's M18a and M18b.
 
-```bash
-cd "$(git rev-parse --show-toplevel)/server"
-for f in routes coord-routes-single-file single-definition coord-caps-route archive-coord-handle stall-vocabulary pools-prose \
-         session-hook mail-sweep stall-sweep stall-settings-store coord-db typecheck-tests child-reclaim-pause-route \
-         child-reclaim-prose topology-clean mail-hardening ledger-instruction oss-metadata ccrc-install-graphify; do
-  echo "== $f"; ./node_modules/.bin/vitest run test/$f.test.ts | grep -E '^ +Tests '
-done
-ls test/ | grep -E '^(coord-|stall-|auth-|run-routes|mail-|box-token|single-def|typecheck)' | sed 's#^#test/#' \
-  | xargs ./node_modules/.bin/vitest run | grep -E '^ +(Tests|Test Files) '
-```
+The six rows added at review (M20-stages, M26-after, M10-route, N501-get, N501-post, S-absent) as JSON, for
+`$INSTR/mut-task6-added.json` and the Baseline's runner. Each was measured on the prototype at `d513b887f` (Task 6's
+final tree), and the run ended with `clean`:
 
-Expected (measured): `routes` 80, `coord-routes-single-file` 3, `single-definition` 274 (unedited), `coord-caps-route`
-26, `archive-coord-handle` 6, `stall-vocabulary` 179, `pools-prose` 27 (the `CLAUDE.md` size ratchet, +1 line),
-`session-hook` 335 (the citation instrument, `CLAUDE.md` edited and README untouched), `mail-sweep` 115, `stall-sweep`
-117, `stall-settings-store` 40, `coord-db` 71, `typecheck-tests` 12, and the seven `CLAUDE.md` and reclaim readers
-from `child-reclaim-pause-route` to `ccrc-install-graphify` 169 between them, all passed. The batch:
-`Test Files 43 passed (43)`, `Tests 2996 passed (2996)`.
-
-`deviation-refs.test.ts` is red, `1 failed | 30 passed (31)`: `floorFromScan over the real tracked tree seeds from the
-ledger high-water, not a fixture`. It was already red at the parent `65b4c6c84`, where `stallsettings.ts` cites
-D-4034 above the ledger high-water D-3969. This task's citations move only the evidence file it names. It goes green
-when this plan's `## Deviations found` entries land, which is the coordinator's step, not this
-task's.
-
-- [ ] **Step 8: Typecheck**
-
-```bash
-cd "$(git rev-parse --show-toplevel)/server"
-./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json && echo tsc-clean
-```
-
-Expected (measured): `tsc-clean`, both exit 0.
-
-- [ ] **Step 9: Commit**
-
-```bash
-cd "$(git rev-parse --show-toplevel)"
-git add CLAUDE.md server/src/auth/gate.ts server/src/coord/routes.ts server/src/coord/stallsettings.ts \
-  server/test/auth-gate.test.ts server/test/coord-pause-route.test.ts server/test/coordinator-skill.test.ts \
-  server/test/reviewer-skill.test.ts server/test/stall-settings.test.ts server/test/worker-skill.test.ts \
-  server/test/stall-settings-route.test.ts
-git commit -m "$(cat <<'MSG'
-feat(coord): GET and POST /api/coord/stall-watch, and the censuses
-
-The Settings page's door onto the stall watch's level and quiet time
-(design 2026-10-05 §10). One view builder serves both halves and never
-throws: the resolution in its own try (the only one that claims a
-fallback, which then shows the files-only reading and the built-in quiet
-time), the view-only readers in a second, the notice counts in a third.
-The POST decides the body (unknown keys refused, D-4029), measures the
-write's effect against the listing it just took, answers 409
-confirm-required until the body carries the effect's key
-(server-decides-the-confirm, D-4033; confirm-on-stage-diff, D-4034),
-writes over the row it measured in one transaction with no coordMutex
-(D-4030), re-measures once on a conflict, and records a feed row only on
-a change (D-4031), naming its actor. stallBoxHeld gives the files-only
-reading the held flags Follow reports.
-
-Censuses: SESSION_ONLY, the auth-gate pins and needle numerals, the
-coordinator EXEMPT entries and the three forbid-mention cases, and
-CLAUDE.md's session-only sentence.
-MSG
-)"
+```json
+[
+ {"id": "M20-stages", "edits": [
+   {"file": "server/src/coord/routes.ts", "old": "      resolution = { box, r, stages: stallStages(r.arming) };\n", "new": "      resolution = { box, r, stages: null as unknown as StallWatchStages };\n"},
+   {"file": "server/src/coord/routes.ts", "old": "          const { box, r, stages } = applied;\n", "new": "          const { box, r } = applied;\n          const stages = stallStages(r.arming);\n"}],
+  "tests": ["test/stall-settings-route.test.ts"]},
+ {"id": "M26-after", "edits": [
+   {"file": "server/src/coord/routes.ts", "old": "        expected, stallSettingsAfter(expected, decided.patch, at));\n", "new": "        expected, expected);\n"}],
+  "tests": ["test/stall-settings-route.test.ts"]},
+ {"id": "M10-route", "edits": [
+   {"file": "server/src/coord/routes.ts", "old": "      const w = coord.setStallSettings(decided.patch, at, expected);\n", "new": "      const w = coord.setStallSettings(decided.patch.quiet?.kind === 'set' ? { ...decided.patch, quiet: { kind: 'set', ms: Math.min(Math.max(decided.patch.quiet.ms, STALL_QUIET_MIN_MS + STALL_QUIET_STEP_MS), STALL_QUIET_MAX_MS - STALL_QUIET_STEP_MS) } } : decided.patch, at, expected);\n"}],
+  "tests": ["test/stall-settings-route.test.ts"]},
+ {"id": "N501-get", "edits": [
+   {"file": "server/src/coord/routes.ts", "old": "  app.get('/api/coord/stall-watch', async (_req, reply) => {\n    if (!deps.coord) return notConfigured(reply);\n", "new": "  app.get('/api/coord/stall-watch', async (_req, reply) => {\n"}],
+  "tests": ["test/stall-settings-route.test.ts"]},
+ {"id": "N501-post", "edits": [
+   {"file": "server/src/coord/routes.ts", "old": "  app.post('/api/coord/stall-watch', async (req, reply) => {\n    if (!deps.coord) return notConfigured(reply);\n", "new": "  app.post('/api/coord/stall-watch', async (req, reply) => {\n"}],
+  "tests": ["test/stall-settings-route.test.ts"]},
+ {"id": "S-absent", "edits": [
+   {"file": "server/src/coord/routes.ts", "old": "        level: parsed.level.kind === 'follow' ? 'follow' : parsed.level.kind === 'chosen' ? parsed.level.level : 'unreadable',\n", "new": "        level: parsed.level.kind === 'follow' || parsed.stored === 'absent' ? 'follow' : parsed.level.kind === 'chosen' ? parsed.level.level : 'unreadable',\n"},
+   {"file": "server/src/coord/routes.ts", "old": "        quietMs: parsed.quiet.kind === 'default' ? 'default' : parsed.quiet.kind === 'set' ? parsed.quiet.ms : 'unreadable',\n", "new": "        quietMs: parsed.quiet.kind === 'default' || parsed.stored === 'absent' ? 'default' : parsed.quiet.kind === 'set' ? parsed.quiet.ms : 'unreadable',\n"}],
+  "tests": ["test/stall-settings-route.test.ts"]}
+]
 ```
 
 ---
@@ -6778,12 +7014,16 @@ MSG
 
 **Files:**
 - Create: `server/test/stall-settings-prose.test.ts` (160 lines).
-- Modify: `README.md`, in place, eight edits:
-  - the mail gate paragraph: strict's runbook and "two more markers" (≈3825–3828), the precedence sentence and the busy runbook (≈3842–3845);
-  - "**The stall watch.**": r1's quiet time (≈4080–4081), the dialog cap (≈4097–4098), the override sentence (≈4109), the check-rate sentences (≈4111, ≈4121), the backoff (≈4124–4125);
-  - "**The stall watch, wave 2.**": the wave-2 runbook (≈4261–4262).
-  - Left as they are, by §18: ≈4209 ("a second within 2 h", `FAILED_REPEAT_MS`) and ≈4226 ("the check sits undelivered for 2 h", `CHECK_UNDELIVERED_MS`).
-- Modify: `CLAUDE.md`: the README size claim (≈10), the `coord.db` bullet's loss list (≈255–256), the mail-gate bullet's last line (≈316 at `77f8d63a5`; ≈317 once Task 6's box-token sentence has landed). Task 6's box-token sentence (≈277–282) is not touched.
+This task is written against `origin/main` `d12b5aba0`, so its line hints are at that commit, not at `77f8d63a5`.
+#283 re-measured README there and moved `CLAUDE.md`'s README size claim to "~5700", so this task has no size-claim
+edit.
+
+- Modify: `README.md`, in place, nine edits, (a) to (i) in Step 4:
+  - the mail gate paragraph: strict's runbook and "two more markers" (≈3857–3860), the precedence sentence and the busy runbook (≈3874–3877);
+  - "**The stall watch.**": r1's quiet time (≈4121–4122), the dialog cap (≈4138–4139), the override sentence (≈4150), the check-rate sentences (≈4152, ≈4162), the backoff (≈4165–4166);
+  - "**The stall watch, wave 2.**": the wave-2 runbook (≈4304–4305).
+  - Left as they are, by §18: ≈4252 ("a second within 2 h", `FAILED_REPEAT_MS`) and ≈4269 ("the check sits undelivered for 2 h", `CHECK_UNDELIVERED_MS`).
+- Modify: `CLAUDE.md`: the `coord.db` bullet's loss list (≈255–256), the mail-gate bullet's last line (≈316 on `main`; ≈317 once Task 6's box-token sentence has landed). Task 6's box-token sentence (≈277–282) is not touched, and the README size claim (≈10) already reads "~5700".
 - Modify: `docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md`: the status block (≈3), §4.2's marker paragraph (≈474–476), §10's constants line (≈839) and kill rules (≈874–876).
 - Test: `server/test/stall-settings-prose.test.ts`.
 
@@ -6801,7 +7041,7 @@ MSG
 **Residue settled here (§18, §20):**
 - **The strict runbook** (§20, coordinator). "`rm` it to go back" becomes "`rm` it to lift it: under a level chosen in Settings, whatever of that level it held back (busy delivery, the further checks) then applies." Strict wins under every level, so removing it never goes back on its own. Under a chosen Deliver or Everything, removing it applies the stages the operator confirmed (`strict-holds-the-wave-2-step` (D-4023)).
 - **"Wherever it says 2 h"** (§18). The full parenthetical "(2 h unless Settings sets another, 30 min to 12 h)" appears once, at r1, where the quiet time is first used. The dialog cap and the two check-rate sentences say "the quiet time". A row pins that the stall-watch paragraph spells the built-in 2 h exactly once.
-- **The README size ratchet.** README grows 5684 → 5698. That is 98 from CLAUDE.md's "~5600", inside `pools-prose`' ±100 but leaving W2's Settings sentence no room. CLAUDE.md's claim moves to "~5700" in the same commit, which is the ratchet's own rule.
+- **The README size ratchet.** README grows 5729 → 5743 (+14). `CLAUDE.md` already claims "~5700" (#283), so the merged README sits 43 lines from the claim, inside `pools-prose`' ±100, and this task moves no claim.
 
 - [ ] **Step 1: Re-anchor**
 
@@ -6817,7 +7057,7 @@ grep -cF 'draws a check about every 2 h, and' README.md
 grep -cF 'it, to 4 h and then 8 h at most, and any other mail' README.md
 grep -cF "re-times); \`rm\` it to go back to wave 1's" README.md
 grep -c '^ladder\.$' README.md
-grep -cF 'README.md` (~5600 lines)' CLAUDE.md
+grep -cF 'README.md` (~5700 lines)' CLAUDE.md
 grep -cF 'update intents — is gone without the snapshot' CLAUDE.md
 grep -cF 'have **no writer in the tree** — `single-definition.test.ts` pins that.' CLAUDE.md
 P=docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md
@@ -6829,7 +7069,7 @@ grep -cF 'exceed 10 a day for two days, `rm stall-watch-live`;' $P
 wc -l README.md CLAUDE.md $P
 ```
 
-Expected (measured on the prototype before this task): `1` for every `grep -c`. Line counts: `5684 README.md`, `383 CLAUDE.md` (`384` once Task 6's sentence is in), `992` for the parent spec. If a count differs, `main` moved: find the text by content and say so. Each multi-line "before" in Step 4 was also measured once as a whole, with Python `str.count`.
+Expected (measured on `d12b5aba0` merged with Task 6's commit, `git merge-tree --write-tree origin/main fa1241e6e`): `1` for every `grep -c`. Line counts: `5729 README.md`, `383 CLAUDE.md` (that count includes Task 6's sentence; `main` alone has 382), `992` for the parent spec. If a count differs, `main` moved again: find the text by content and say so. Each multi-line "before" in Step 4 was also measured once as a whole, with Python `str.count`, on the same tree.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -7002,13 +7242,13 @@ describe('the parent stall-watch spec: the pointer and the three amended passage
 
 Run: `cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/stall-settings-prose.test.ts`
 
-Expected (measured on the prototype, against the unedited documents): `Tests 14 failed | 1 passed (15)`. The one that passes is `CONTROL: the two fixed 2 h constants stay fixed sentences, untouched by the quiet time`. Every other row is red, each on its own missing sentence.
+Expected (measured on the prototype, and again on `d12b5aba0` merged with Task 6's commit, against the unedited documents): `Tests 14 failed | 1 passed (15)`. The one that passes is `CONTROL: the two fixed 2 h constants stay fixed sentences, untouched by the quiet time`. Every other row is red, each on its own missing sentence.
 
 - [ ] **Step 4: Edit the three documents**
 
 Each "before" below is whole lines and occurs exactly once in its file (Step 1's `grep -c`, and `str.count == 1` for the whole block). Replace it with the "after" exactly. Some "after" lines run past 80 columns; README already carries longer lines, and the suite reads prose flattened.
 
-**README.md (a), strict's runbook and the busy gate's markers (≈3825–3828).** Before:
+**README.md (a), strict's runbook and the busy gate's markers (≈3857–3860).** Before:
 
 ```text
 `touch $REG/mail-gate-strict` on the fleet host restores the idle-only gate;
@@ -7028,7 +7268,7 @@ touched and removed by hand and written by nothing in the tree, or a level
 chosen in Settings. Under the default (and under
 ```
 
-**README.md (b), the override sentence and the busy runbook (≈3842–3845).** Before:
+**README.md (b), the override sentence and the busy runbook (≈3874–3877).** Before:
 
 ```text
 `mail-gate-strict`, then `mail-gate-busy`, then `mail-gate-busy-shadow`, then
@@ -7052,7 +7292,7 @@ otherwise lower the level in Settings, or on the fleet box touch
 `mail-gate-strict` (busy delivery) or `stall-watch-disabled` (the whole lane).
 ```
 
-**README.md (c), r1's quiet time (≈4080–4081).** Before:
+**README.md (c), r1's quiet time (≈4121–4122).** Before:
 
 ```text
 ball is the worker's and its main loop has sat `idle` or `shell` for 2 h with
@@ -7066,7 +7306,7 @@ ball is the worker's and its main loop has sat `idle` or `shell` for the quiet
 time (2 h unless Settings sets another, 30 min to 12 h) with no mail either way, it mails the worker a `stall-check:` from `operator` (r1:
 ```
 
-**README.md (d), the dialog cap (≈4098).** Before:
+**README.md (d), the dialog cap (≈4139).** Before:
 
 ```text
 after 2 h), a usage limit (one `⚠ limit` push after 12.5 h) and a `busy`
@@ -7078,7 +7318,7 @@ After:
 after the quiet time), a usage limit (one `⚠ limit` push after 12.5 h) and a `busy`
 ```
 
-**README.md (e), the override sentence in the stall-watch paragraph (≈4109).** Before:
+**README.md (e), the override sentence in the stall-watch paragraph (≈4150).** Before:
 
 ```text
 coordinator mails and the operator pushes too. The quiet clock restarts on ANY
@@ -7094,7 +7334,7 @@ never `stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`; the markers
 still have no writer, and the choice lives in `coord.db`. The quiet clock restarts on ANY
 ```
 
-**README.md (f), the first check-rate sentence (≈4111).** Before:
+**README.md (f), the first check-rate sentence (≈4152).** Before:
 
 ```text
 mails the worker there at least every 2 h keeps r1 from ever falling due. Time
@@ -7106,7 +7346,7 @@ After:
 mails the worker there at least once per quiet time keeps r1 from ever falling due. Time
 ```
 
-**README.md (g), the second check-rate sentence (≈4121).** Before:
+**README.md (g), the second check-rate sentence (≈4162).** Before:
 
 ```text
 episode: a worker in a long legitimate wait draws a check about every 2 h, and
@@ -7118,7 +7358,7 @@ After:
 episode: a worker in a long legitimate wait draws a check about once per quiet time, and
 ```
 
-**README.md (h), the backoff (≈4125), for the 16 h ceiling (`backoff-ceiling-from-the-horizon` (D-4025)).** Before:
+**README.md (h), the backoff (≈4166), for the 16 h ceiling (`backoff-ceiling-from-the-horizon` (D-4025)).** Before:
 
 ```text
 it, to 4 h and then 8 h at most, and any other mail from the worker resets it.
@@ -7130,7 +7370,7 @@ After:
 it, then doubles it again, never past 16 h, and any other mail from the worker resets it.
 ```
 
-**README.md (i), the wave-2 runbook (≈4262).** The line before it ends `` `rm` it to go back to wave 1's ``. Before (one line, `grep -c '^ladder\.$'` is `1`):
+**README.md (i), the wave-2 runbook (≈4305).** The line before it ends `` `rm` it to go back to wave 1's ``. Before (one line, `grep -c '^ladder\.$'` is `1`):
 
 ```text
 ladder.
@@ -7144,11 +7384,9 @@ in Settings, or on the fleet box touch `mail-gate-strict` (busy delivery) or
 `stall-watch-disabled` (the whole lane).
 ```
 
-README ≈4209 ("a second within 2 h") and ≈4226 ("the check sits undelivered for 2 h") are fixed constants (`FAILED_REPEAT_MS`, `CHECK_UNDELIVERED_MS`), not the quiet time. They stay as they are; the suite's CONTROL row holds them.
+README ≈4252 ("a second within 2 h") and ≈4269 ("the check sits undelivered for 2 h") are fixed constants (`FAILED_REPEAT_MS`, `CHECK_UNDELIVERED_MS`), not the quiet time. They stay as they are; the suite's CONTROL row holds them.
 
-**CLAUDE.md (a), the README size claim (≈10).** Before: `**`README.md` (~5600 lines) is the canonical system overview.` After: `**`README.md` (~5700 lines) is the canonical system overview.` The rest of the line is unchanged.
-
-**CLAUDE.md (b), the `coord.db` loss list (≈255–256).** Before:
+**CLAUDE.md (a), the `coord.db` loss list (≈255–256).** Before:
 
 ```text
   what it adds on top — mail, claims, asks, central pool edges, update intents — is gone without the snapshot
@@ -7163,7 +7401,7 @@ After:
   (`pool-edges.log` is never replayed).
 ```
 
-**CLAUDE.md (c), the mail-gate bullet's last line (≈316 at `77f8d63a5`, ≈317 after Task 6).** Before:
+**CLAUDE.md (b), the mail-gate bullet's last line (≈316 on `main`, ≈317 after Task 6).** Before:
 
 ```text
   like `mail-gate-strict`, have **no writer in the tree** — `single-definition.test.ts` pins that.
@@ -7254,31 +7492,9 @@ git diff --numstat -- README.md CLAUDE.md docs/superpowers/specs/2026-09-29-work
 wc -l README.md CLAUDE.md docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md
 ```
 
-Expected (measured): `Tests 15 passed (15)`. Numstat: `7	4	CLAUDE.md`, `28	14	README.md`, `12	4	docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md`. Line counts: `5698 README.md`, `386 CLAUDE.md` (with Task 6's sentence), `1000` for the parent spec.
+Expected (measured on `d12b5aba0` merged with the prototype, Task 6's tree against Task 7's): `Tests 15 passed (15)`. Numstat: `6	3	CLAUDE.md`, `28	14	README.md`, `12	4	docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md`. Line counts: `5743 README.md`, `386 CLAUDE.md` (with Task 6's sentence), `1000` for the parent spec.
 
-- [ ] **Step 6: The mutation table**
-
-Apply each mutation alone to the edited tree, run `./node_modules/.bin/vitest run test/stall-settings-prose.test.ts` from `server/`, then restore the file byte for byte. When the table is done, `git status --short` lists only this task's four files. The control is Step 5's green, `15 passed (15)`.
-
-| # | Guard | Mutation (old → new, in the file named) | Red in | Measured |
-|---|---|---|---|---|
-| MP1 | r1 names the quiet time and its range | README: "for the quiet⏎time (2 h unless Settings sets another, 30 min to 12 h) with" → "for 2 h with" | `r1 names the quiet time once…` | `1 failed \| 14 passed (15)` |
-| MP2 | the dialog cap says the quiet time | README: "dialog⏎after the quiet time)," → "dialog⏎after 2 h)," | `the dialog cap and the two check-rate sentences…` | `1 failed \| 14 passed (15)` |
-| MP3 | the backoff names the 16 h ceiling | README: "it, then doubles it again, never past 16 h," → "it, to 4 h and then 8 h at most," | `the backoff names its peak…` | `1 failed \| 14 passed (15)` |
-| MP4 | the stall paragraph names all three that win | README: "but⏎never `stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`; the markers" → "but⏎never `stall-watch-disabled`; the markers" | `a level chosen in Settings overrides the arming markers…` | `1 failed \| 14 passed (15)` |
-| MP5 | strict's runbook (§20) | README: the two-line "`rm` it to lift it: … then applies." → "`rm` it to go back." | `strict's runbook says removing it lets a held choice apply…` | `1 failed \| 14 passed (15)` |
-| MP6 | "or a level chosen in Settings" | README: "tree, or a level⏎chosen in Settings. Under" → "tree. Under" | `the busy gate sits behind two more markers…` | `1 failed \| 14 passed (15)` |
-| MP7 | the busy runbook's clause | README: "`rm mail-gate-busy` goes back while Settings follows" → "`rm mail-gate-busy` goes back. While Settings follows" | `the busy runbook's rm is qualified…` | `1 failed \| 14 passed (15)` |
-| MP8 | the wave-2 runbook's clause | README: the three-line "ladder while Settings follows … (the whole lane)." → "ladder." | `the wave-2 runbook's rm is qualified…` | `1 failed \| 14 passed (15)` |
-| MP9 | CLAUDE.md's override sentence | CLAUDE.md: delete " A level chosen in⏎  Settings (…) … the markers still have no writer." | `the mail-gate bullet says a level chosen in Settings…` | `1 failed \| 14 passed (15)` |
-| MP10 | CLAUDE.md's loss list | CLAUDE.md: "update intents, the stall-watch settings choice —" → "update intents —" | `the coord.db bullet lists the stall-watch settings choice…` | `1 failed \| 14 passed (15)` |
-| MP11 | the parent spec's escalate kill rule | parent spec: "`rm stall-watch-escalate` while⏎Settings follows" → "`rm stall-watch-escalate`; while⏎Settings follows" | `§10: the PWA renders none of the constants…` | `1 failed \| 14 passed (15)` |
-| MP12 | the parent spec's §4.2 amendment | parent spec: "No marker gains a writer, but a level chosen in Settings can now override the arming markers, though" → "No marker gains a writer, though" | `§4.2: no marker gains a writer…` | `1 failed \| 14 passed (15)` |
-| MP13 | the prose is grounded in the constant | `server/src/coord/stallsettings.ts`: `export const STALL_QUIET_MAX_MS = 12 * 3_600_000;` → `export const STALL_QUIET_MAX_MS = 11 * 3_600_000;` | `r1 names the quiet time once…` | `1 failed \| 14 passed (15)` |
-
-`⏎` marks a line break in the file.
-
-- [ ] **Step 7: The regression suites**
+- [ ] **Step 6: The regression suites**
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
@@ -7293,15 +7509,16 @@ for f in readme-holds pools-prose box-token-census topology-clean crossrepo-pros
 git fetch origin main && ./node_modules/.bin/vitest run test/deviation-refs.test.ts | grep -E '^ +Tests '
 ```
 
-Expected (measured on the prototype):
+Expected (measured on the prototype, and again on `d12b5aba0` merged with the prototype tip, one file per command;
+`session-hook` whole was measured on the prototype only):
 - The citation instrument: `7 passed | 328 skipped (335)`, unchanged. README's new text spells no `file:line`.
-- Per suite: `readme-holds` 17, `pools-prose` 27 (the README size claim: 5698 against "~5700"), `box-token-census` 23, `topology-clean` 55, `crossrepo-prose` 17, `dtbd` 1, `oss-metadata` 22, `child-reclaim-prose` 4, `readme-roster-mirror` 5, `coord-pause-route` 20, `coordinator-skill` 161, `worker-skill` 52, `reviewer-skill` 15, `license` 15, `ccrc-install-graphify` 58, `single-definition` 274, `auth-gate` 160, all passed.
+- Per suite: `readme-holds` 17, `pools-prose` 27 (the README size claim: 5743 against "~5700"), `box-token-census` 23, `topology-clean` 55, `crossrepo-prose` 17, `dtbd` 1, `oss-metadata` 22, `child-reclaim-prose` 4, `readme-roster-mirror` 5, `coord-pause-route` 20, `coordinator-skill` 161, `worker-skill` 52, `reviewer-skill` 15, `license` 15, `ccrc-install-graphify` 58, `single-definition` 274, `auth-gate` 160, all passed.
 - `ccrc-update -t README`: `1 passed | 504 skipped (505)`. `session-hook` whole: `335 passed (335)`.
-- `deviation-refs`: `31 passed` on the branch that carries this plan. In the prototype it measured `1 failed | 30 passed (31)`, before and after this task alike: `floorFromScan over the real tracked tree` names `server/src/coord/routes.ts names D-4034` (Task 6's citation). The prototype carries no plan defining the wave's numbers; this plan does. This task writes no D-number into any tracked file.
+- `deviation-refs`: `31 passed (31)`, because this plan is on the tree (precondition 2). Any red there is real: stop, and report it with the failing row's name and its evidence file. (The prototype, which carries no plan defining the wave's numbers, measured `1 failed | 30 passed (31)` before and after this task alike, on `floorFromScan over the real tracked tree`, naming `server/src/coord/routes.ts names D-4034`.) This task writes no D-number into any tracked file.
 
 `session-hook` is a known load flake: re-run a red one alone, with `--testTimeout=240000`, before calling it real.
 
-- [ ] **Step 8: Typecheck**
+- [ ] **Step 7: Typecheck**
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
@@ -7310,7 +7527,7 @@ cd "$(git rev-parse --show-toplevel)/server"
 
 Expected: `tsc-clean`.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -7328,9 +7545,9 @@ wave-2 runbooks' rm are qualified with the spec's clause. Strict's runbook
 says that lifting it lets a held choice apply (strict-holds-the-wave-2-step
 (D-4023)). The two fixed 2 h constants stay as they are.
 
-CLAUDE.md: the override sentence, the coord.db loss list, and the README
-size claim moved to ~5700. The parent spec: its status pointer, §4.2's
-marker paragraph, and §10's constants line and kill rules.
+CLAUDE.md: the override sentence and the coord.db loss list. The parent
+spec: its status pointer, §4.2's marker paragraph, and §10's constants
+line and kill rules.
 
 stall-settings-prose.test.ts pins each sentence, its numbers derived from
 their constants and its marker names from their definers.
@@ -7338,15 +7555,53 @@ MSG
 )"
 ```
 
+- [ ] **Step 9: The mutation table**
+
+Run the table on Step 8's commit, by the Baseline's mutation rule. Apply each mutation alone, run `./node_modules/.bin/vitest run test/stall-settings-prose.test.ts` from `server/`, restore with `git checkout -- <file>`, and check `git status --porcelain` is empty before the next row. The control is Step 5's green, `15 passed (15)`. MP11b, MP14 and MP15 carry JSON below the table, for `$INSTR/mutate.py`.
+
+| # | Guard | Mutation (old → new, in the file named) | Red in | Measured |
+|---|---|---|---|---|
+| MP1 | r1 names the quiet time and its range | README: "for the quiet⏎time (2 h unless Settings sets another, 30 min to 12 h) with" → "for 2 h with" | `r1 names the quiet time once…` | `1 failed \| 14 passed (15)` |
+| MP2 | the dialog cap says the quiet time | README: "dialog⏎after the quiet time)," → "dialog⏎after 2 h)," | `the dialog cap and the two check-rate sentences…` | `1 failed \| 14 passed (15)` |
+| MP3 | the backoff names the 16 h ceiling | README: "it, then doubles it again, never past 16 h," → "it, to 4 h and then 8 h at most," | `the backoff names its peak…` | `1 failed \| 14 passed (15)` |
+| MP4 | the stall paragraph names all three that win | README: "but⏎never `stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`; the markers" → "but⏎never `stall-watch-disabled`; the markers" | `a level chosen in Settings overrides the arming markers…` | `1 failed \| 14 passed (15)` |
+| MP5 | strict's runbook (§20) | README: the two-line "`rm` it to lift it: … then applies." → "`rm` it to go back." | `strict's runbook says removing it lets a held choice apply…` | `1 failed \| 14 passed (15)` |
+| MP6 | "or a level chosen in Settings" | README: "tree, or a level⏎chosen in Settings. Under" → "tree. Under" | `the busy gate sits behind two more markers…` | `1 failed \| 14 passed (15)` |
+| MP7 | the busy runbook's clause | README: "`rm mail-gate-busy` goes back while Settings follows" → "`rm mail-gate-busy` goes back. While Settings follows" | `the busy runbook's rm is qualified…` | `1 failed \| 14 passed (15)` |
+| MP8 | the wave-2 runbook's clause | README: the three-line "ladder while Settings follows … (the whole lane)." → "ladder." | `the wave-2 runbook's rm is qualified…` | `1 failed \| 14 passed (15)` |
+| MP9 | CLAUDE.md's override sentence | CLAUDE.md: delete " A level chosen in⏎  Settings (…) … the markers still have no writer." | `the mail-gate bullet says a level chosen in Settings…` | `1 failed \| 14 passed (15)` |
+| MP10 | CLAUDE.md's loss list | CLAUDE.md: "update intents, the stall-watch settings choice —" → "update intents —" | `the coord.db bullet lists the stall-watch settings choice…` | `1 failed \| 14 passed (15)` |
+| MP11 | the parent spec's escalate kill rule | parent spec: "`rm stall-watch-escalate` while⏎Settings follows" → "`rm stall-watch-escalate`; while⏎Settings follows" | `§10: the PWA renders none of the constants…` | `1 failed \| 14 passed (15)` |
+| MP12 | the parent spec's §4.2 amendment | parent spec: "No marker gains a writer, but a level chosen in Settings can now override the arming markers, though" → "No marker gains a writer, though" | `§4.2: no marker gains a writer…` | `1 failed \| 14 passed (15)` |
+| MP13 | the prose is grounded in the constant | `server/src/coord/stallsettings.ts`: `export const STALL_QUIET_MAX_MS = 12 * 3_600_000;` → `export const STALL_QUIET_MAX_MS = 11 * 3_600_000;` | `r1 names the quiet time once…` | `1 failed \| 14 passed (15)` |
+| MP11b | the parent spec's live kill rule | parent spec: "`rm stall-watch-live` while Settings follows" → "`rm stall-watch-live`; while Settings follows" | `§10: the PWA renders none of the constants…` | `1 failed \| 14 passed (15)` |
+| MP14 | the mail-gate paragraph's override sentence names all three that win | README: "but never⏎`stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`. Runbook: touch" → "but never⏎`stall-watch-disabled`. Runbook: touch" | `the override sentence names the busy markers it overrides and the three it never does` | `1 failed \| 14 passed (15)` |
+| MP15 | the parent spec's status pointer | parent spec: "- **Amended 2026-10-05 by `2026-10-05-stall-watch-settings-design.md`** (stall-watch settings)" → "- **Amended 2026-10-05** (stall-watch settings)" | `the status block points at the settings design` | `1 failed \| 14 passed (15)` |
+
+`⏎` marks a line break in the file.
+
+MP11b, MP14 and MP15 were added at review, so that every guard row of the suite, the CONTROL aside, has a measured
+mutation. They run through the Baseline's runner as `$INSTR/mut-task7-added.json`; each was measured on the prototype
+at `d513b887f`, and the run ended with `clean`:
+
+```json
+[
+ {"id": "MP11b", "edits": [{"file": "docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md", "old": "`rm stall-watch-live` while Settings follows", "new": "`rm stall-watch-live`; while Settings follows"}], "tests": ["test/stall-settings-prose.test.ts"]},
+ {"id": "MP14", "edits": [{"file": "README.md", "old": "Everything give busy, Off leaves the markers' mode), but never\n`stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`. Runbook: touch\n", "new": "Everything give busy, Off leaves the markers' mode), but never\n`stall-watch-disabled`. Runbook: touch\n"}], "tests": ["test/stall-settings-prose.test.ts"]},
+ {"id": "MP15", "edits": [{"file": "docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md", "old": "- **Amended 2026-10-05 by `2026-10-05-stall-watch-settings-design.md`** (stall-watch settings)", "new": "- **Amended 2026-10-05** (stall-watch settings)"}], "tests": ["test/stall-settings-prose.test.ts"]}
+]
+```
+
 ---
 
 ## Deviations found
 
 The coordinator issued this programme's block on 2026-10-05 at 17:47, through `POST /api/ledger/deviations`. This plan
-defines the thirteen numbers wave 1 owns, one per slug, and no other.
+defines the fifteen numbers wave 1 owns, one per slug, and no other: thirteen for the spec's departures, and D-4037
+and D-4038, which the coordinator issued from the programme's reserve when it ruled on the plan review.
 - **W2's numbers are not defined here.** The W2 plan defines its own two (`older-server-404-reads-not-configured`,
   `notifications-label-says-push`), so `deviation-refs.test.ts` never reads one as defined in two plans.
-- **D-4034 is defined here once.** W2's plan cites it for the sheet, and does not define it again.
+- **D-4034 and D-4037 are defined here once.** W2's plan cites both for the sheet, and defines neither again.
 
 - **D-4022** — `files-level-match-ignores-the-busy-gate` (Task 1, `stallLevelOf`):
   - *Departs from:* §2 decision 1, approved: "A box-file combination that matches no step reads 'custom (box files)'".
@@ -7365,8 +7620,10 @@ defines the thirteen numbers wave 1 owns, one per slug, and no other.
     run until strict is removed. The held line and `wave2HeldByStrict` say so.
   - *Pinned by:* M3b and M23.
 - **D-4024** — `busy-clock-starts-when-busy-delivery-starts` (Tasks 3 and 5):
-  - *Departs from:* goal 4 and §2 decision 1's "otherwise the box files decide, as today". Rev 3 promised that W1
-    changes nothing until a value is written.
+  - *Departs from:* §2's text approved in the brainstorm: decision 1, "otherwise the box files decide, as today", and
+    decision 5, "A lost or unreadable settings row means today's behaviour". The approved goal 4 already names this
+    exception ("or until the mail gate moves into busy delivery while the server runs"): it is where the spec states
+    the departure, not what the departure departs from.
   - *What changes:* when the mail gate moves into busy delivery while the server runs, under `follow` or a chosen
     level, the stall sweep judges busy as the busy gate until the mail sweep has applied busy once. After that,
     mail-stuck's clock is `max(stop, busySince)`. At boot the clock is today's.
@@ -7422,11 +7679,17 @@ defines the thirteen numbers wave 1 owns, one per slug, and no other.
   - *Cost if wrong:* a later edit that puts an `await` between the effect and the write would let a concurrent write
     slip in. The store's expected-state compare would then answer `conflict` and write nothing (M27b). If review
     prefers the mutex, wrapping the one call costs nothing.
+  - *Pinned by:* M27b, the store's expected-state compare (Task 4's `M27b (store, compare)` and
+    `M27b (store, updatedAt alone)` rows), with Task 6's M27c–e for the route's one re-measure. Nothing pins the absent
+    mutex itself: what is pinned is that a write never lands over a row other than the one measured.
 - **D-4031** — `no-op-write-records-no-feed-event` (Task 2, `stallPatchIsNoOp` and `stallSettingsChange`; Task 4, the
   store's skip; Task 6, the feed row):
   - *Departs from:* §2 decision 5, approved: "Every change is logged to the activity feed".
   - *What changes:* a write that changes no named field skips its `UPDATE`, so `updatedAt` does not move, and it
     records no feed event (§8, §19 Q4).
+  - *Why:* nothing changed, so a feed row would announce a change that did not happen, and a page that re-sends its
+    shown values would fill the feed with them. Moving `updatedAt` for it would also make every open sheet's key stale
+    (the key carries `updatedAt`, §10) for a write that changed nothing.
   - *Cost if wrong:* a repeated identical write leaves no trace in the feed.
   - *Pinned by:* M12b and M15a.
 - **D-4032** — `stages-on-the-wire-not-modes` (Task 1, `stallStages` and L0's `StallWatchStages`):
@@ -7451,12 +7714,42 @@ defines the thirteen numbers wave 1 owns, one per slug, and no other.
   - *Departs from:* §2 decision 2, approved: "Raising the level asks for a confirm", by rank.
   - *What changes:* a confirm is asked for a write that turns a stage on, now or once the fleet box's kill switch or
     strict gate is removed (`heldByBox`). It is also asked on leaving the further checks, and on a quiet time brought
-    below the current one or the built-in. Each gate belongs to the stage it guards.
+    below the current one (never on a raise: `quiet-raise-asks-nothing`, D-4037). Each gate belongs to the stage it
+    guards.
   - *Why:* rank misses writes that arm more without raising: Follow over files that arm more, Off over a busy file
     turning busy delivery back on, held stages, and a lowered quiet time (§5.1, §13).
-  - *Cost if wrong:* more confirms than a rank rule would ask for. A quiet-time raise that stays below the built-in
-    also confirms (§20; W2 needs a sheet line for it).
+  - *Cost if wrong:* more confirms than a rank rule would ask for.
   - *Pinned by:* M26 and M28.
+- **D-4037** — `quiet-raise-asks-nothing` (W1: Task 2's `stallWriteEffect`, its `quietLowered`; W2 cites this number
+  for the sheet, which adds no line for a raise):
+  - *Departs from:* spec §10's effect (`quietLowered`: "the effective quiet time after differs from the one before,
+    and is below it or below the built-in") and §13's quiet lines ("the quiet time, when `quietLowered`").
+  - *What changes:* `quietLowered` is true only when the effective quiet time after the write is strictly lower than
+    the effective quiet time before it. A raise never asks for a confirm on the quiet time alone: 30 min → 1 h answers
+    `false`, and the built-in 2 h → 1 h answers `true`.
+  - *Why:* spec §20's residue item on the title-only sheet. A raise only reduces checks, and the lower value was
+    already confirmed when it was set.
+  - *Cost if wrong:* an operator raising from 30 min to 1 h gets no reminder that 1 h is still below the built-in;
+    the Now block still shows the value.
+  - *Pinned by:* the row `a quiet time brought below the current one needs one; a raise does not, even below the
+    built-in (departure quiet-raise-asks-nothing)` and its mutation row `D-4037: a raise never asks` (Task 2).
+- **D-4038** — `view-reads-stages-with-the-resolution` (Task 6, the view builder's first `try`; review fix
+  `d513b887f`):
+  - *Departs from:* spec §10's rev 3.2 sentence, which places `stallStages` among "the view-only readers" in a second
+    `try` that "claims no fallback".
+  - *What changes:* the view reads the resolved arming's `stallStages` inside the resolution's `try`, beside the
+    resolver. A throw there claims the fallback, and the reply shows the files-only reading. Only `stallNextStep` and
+    `stallFilesExceed` stay in the second `try`, which still claims no fallback.
+  - *Why:* a reader fault must never read as an unmeasured registry over a listed one.
+  - *Cost if wrong, accepted:* these readers are pure and total over a parsed arming, so a throw is a bug path. On
+    that path the section says the choice is not applied and names the fault, while the sweeps may still apply it:
+    the resolver reads stages only for a chosen running level, so under Follow, or a chosen Off, the sweeps never
+    call `stallStages` and still apply a chosen Off or quiet time. The remedy is fixing the bug. The second case also
+    stays residue: a files-only reader (`stallLevelOf`, `stallStages` or `stallBoxHeld` over the box arming) throwing
+    under a fallback answers `{ measured: false }`, which W2 shows as Unknown.
+  - *Pinned by:* the M20 rows that already exist: `M20: a stages reader that throws over a listed registry never
+    answers unmeasured …` (M20-stages) and `M20: a throwing view-only reader answers 200 with no fallback, and next
+    and filesExceed left out` (M20-readers, M20c), Task 6.
 
 **Departures found during execution** are numbered by the coordinator, from the programme's reserve.
 - None is written here, as a number or otherwise.
@@ -7486,8 +7779,10 @@ W2 is carried to W2's plan, under "After the merge".
     safe-integer `updatedAt`, and the store's raw compare still refuses to write over a row changed by hand.
   - **"Busy delivery stops" listed first (§15).** L1 answers `turnsOn` and `turnsOff` in §5.1 order. The sheet's line
     order is W2's.
-  - **A quiet-time raise that stays below the built-in** keeps §10's definition: it is `quietLowered` and needs a
-    confirm. W2's `stallConfirmLines` needs a line for it.
+  - **A quiet-time raise that stays below the built-in** asks for no confirm, `quiet-raise-asks-nothing` (D-4037):
+    `quietLowered` is true only when the effective quiet time after the write is strictly lower than the one before,
+    so a raise alone opens no sheet, and no sheet is title-only for it. W1 adds no L0 text, and W2 adds no line for a
+    raise. Pinned by Task 2's quiet row and its `D-4037: a raise never asks` mutation row.
   - **A row with both fields unreadable.** The projection, like the store's update arm, writes only the named fields.
     A patch that names both repairs both in one write.
   - **The projection.** `stallSettingsAfter(before, patch, at)` stamps the store's `updatedAt`, and applies the no-op
@@ -7517,8 +7812,19 @@ W2 is carried to W2's plan, under "After the merge".
   - **The boot trace** prints only when the first readable read applies a chosen level or a chosen quiet time.
   - **`lastFallback.at`** is the latest throw. An unreadable or absent row is not a fallback.
 - **Task 6.**
-  - **A throw in the view's second `try`.** `effective` stays `{ measured: false }`, and a throw in `stallNextStep`
-    or `stallFilesExceed` leaves `next` and `filesExceed` out. No fallback is claimed, and no 500 is answered.
+  - **A view reader that throws** never answers `{ measured: false }` over a listed registry (review fix
+    `d513b887f`, `view-reads-stages-with-the-resolution` (D-4038)). The resolved stages are read with the resolution,
+    so a fault there claims the fallback and shows the files-only reading. A throw in `stallNextStep` or
+    `stallFilesExceed` keeps the reading measured and leaves `next` and `filesExceed` out, which W2 renders as no Next
+    step block and no files-exceed line. No fallback is claimed for it, and no 500 is answered.
+  - **Two cases are accepted as bug-path residue (D-4038).** The readers are pure and total over a parsed arming, so
+    each needs a reader defect, and the remedy is fixing it:
+    - a `stallStages` throw under Follow, or under a chosen Off, claims a fallback the sweeps do not have: the
+      resolver reads stages only for a chosen running level, so the sweeps still apply the chosen Off or quiet time
+      while the section says the choice is not applied and names the fault;
+    - the files-only reading's own readers (`stallLevelOf`, `stallStages`, `stallBoxHeld` over the box arming)
+      throwing under a fallback answer `{ measured: false }` beside a `fallback` that names the fault, which W2 shows
+      as Unknown (Task 6's residue).
   - **The view builder's catch warns** once per standing fault for each of three parts, and re-arms when that part
     next succeeds.
   - **The files-only fallback reading.** Its source is `'files'`. Its `held` comes from the new L1 `stallBoxHeld(box)`,
@@ -7562,8 +7868,14 @@ re-run `auth-gate`, `coord-pause-route` and `box-token-census`:
 If `main` gains another `SESSION_ONLY` member, keep both, and the `CLAUDE.md` sentence names every member ("The other
 three" moves with them).
 
-**`shared/api.ts`.** If another PR has also appended at EOF, keep both blocks whole. Re-run `session-hook` in full, and
-check that the per-file census `'shared/api.ts': 1` holds.
+**`shared/api.ts`.** If another PR has also appended at EOF, keep both blocks whole. The likeliest overtaker is
+child-reclamation W5 (run 260, `docs/superpowers/plans/2026-09-22-child-reclamation-wave5-run-chip.md`, on `main` since
+`6f6923cd8`): it inserts into `shared/api.ts` above README's anchors, edits `store.ts`, `watch.ts`, `coord/routes.ts`
+and README's `shared/api.ts` anchors, and re-measures `session-hook.test.ts`'s citation-debt `'shared/api.ts'` entry.
+After absorbing it, re-run `session-hook` in full, and check that the `'shared/api.ts'` census entry equals `main`'s
+value: W1's EOF append moves no anchor, so this wave never changes that number, and a value other than 1 that `main`
+measured is `main`'s, not a break. Re-run `stall-settings-store`, `mail-sweep`, `stall-sweep` and
+`stall-settings-route` over the merged `store.ts`, `watch.ts` and `coord/routes.ts`.
 
 **`mail-routes.test.ts`.** If `main` has added a kebab union, `isStallSettingsKebab` keeps its own place and its failure
 message. Re-run `mail-routes`.
@@ -7615,12 +7927,17 @@ The release lane carries the server, and nothing rolls a box by hand.
    The orchestrator writes nothing through this door. Every write and every arming is the operator's, and R38's
    gates are unchanged.
 5. **Record and dispatch.** Record W1's merge, the release tag and the view reading in the programme ledger. Then
-   dispatch W2, which depends on W1 being merged. W2 defines 4035 and 4036, cites D-4034, and carries the residue
-   left to it:
-   - `stallConfirmLines`' line for a quiet time raised but still below the built-in;
+   dispatch W2, which depends on W1 being merged. W2 defines 4035 and 4036, cites D-4034, D-4037 and D-4038, and
+   carries the residue left to it, as W2's plan settles it (W2's implementation is authoritative unless it
+   contradicts the spec):
    - the `refused` toast's `{detail}`, when the body has none or Fastify's 500 puts the cause in `message`;
    - the label wordings Task 1 chose;
-   - whether `dueFromOff` takes a `{label}` slot;
-   - `chosen.level: 'unreadable'` on an absent row, which checks no radio.
+   - `chosen.level: 'unreadable'` on an absent row, which checks no radio;
+   - `effective` with `next` and `filesExceed` left out after a view-reader fault: no Next step block and no
+     files-exceed line, the reading itself still shown;
+   - a files-only reader fault under a fallback, which answers `{ measured: false }` and shows as Unknown beside the
+     fallback line: accepted bug-path residue (D-4038), with no new wire word.
+   `dueFromOff` is not on the list: Task 1 kept §13's wording, with the full label "Off" written out and no `{label}`
+   slot, and W2 renders the key as it is.
 6. **A rollback to a pre-W1 build is safe.** It ignores the table, and with the seed still in place nothing re-arms.
    The confirm and files-exceed warnings matter only once a choice has been written.

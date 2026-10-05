@@ -61,32 +61,38 @@ edit by content: each task quotes the text it replaces, and each quoted text occ
 
 The prototype of every task was built and measured on branch `proto/sws-w2`:
 - **Base.** It sits on W1 Task 1's prototype commit `2fb0123f7` (L0 wire types and texts, and the L1 core). W1's later
-  prototype commits (`bb5bee7b4` to `ad2155ff4`) change no file under `shared/` or `pwa/`: `git diff --stat 2fb0123f7
-  ad2155ff4 -- shared/ pwa/` is empty, so the L0 this wave builds on is all of W1's. Its stall export count is 36 at
-  both commits.
-- **Commits.** `ac0388f60` (Task 1), `56a615f51` (Task 2), `fc33c1563` (Task 3), `ff342df12` (Task 4). The red and
-  green counts and the mutation tables below are MEASURED, not derived, and each task's code is byte-identical to its
-  prototype commit (checked by script).
+  prototype commits (`bb5bee7b4` to `ad2155ff4`, and its fix-round commits `d513b887f` and `a5fa943c6`) change no file
+  under `shared/` or `pwa/`: `git diff --stat 2fb0123f7 a5fa943c6 -- shared/ pwa/` is empty, so the L0 this wave
+  builds on is all of W1's. Its stall export count is 36 at `2fb0123f7`, `ad2155ff4`, `d513b887f` and `a5fa943c6`.
+- **Commits.** `ac0388f60` (Task 1), `56a615f51` (Task 2), `fc33c1563` (Task 3), `ff342df12` (Task 4), then the
+  review's fix round: `9fe8fd3a7` (Task 1), `4937088a1` (Task 3), `825fd1965` (Task 4), `619424bf7` (Task 3, one
+  test comment reworded), then the final fix round: `80fb75b35` (Task 3, the repeat-line catch-all and its
+  expectations removed, D-4037) and `e13dc1a6a` (Task 4, README's confirm clause drops "or below the built-in",
+  D-4037). The red and green counts and the mutation tables below are MEASURED on the fix rounds' commits
+  (`825fd1965` for the suites; at the tip `e13dc1a6a`, Task 3's and Task 4's whole tables, `settings-screen`
+  `183 passed (183)`, the whole PWA suite, the build and every README suite of Task 4 Step 7, re-measured), not
+  derived, unless a line says "derived". Each task's code is byte-identical to the prototype's file at the tip
+  `e13dc1a6a` (checked by script).
 - **Diff against `2fb0123f7`:**
 
   | File | Added/removed |
   |---|---|
-  | `README.md` | 15/1 |
+  | `README.md` | 17/1 |
   | `pwa/src/components/QuickConfirm.tsx` | 12/2 |
-  | `pwa/src/fleet/useStallWatchView.ts` | 252/0 |
+  | `pwa/src/fleet/useStallWatchView.ts` | 259/0 |
   | `pwa/src/lib/api.ts` | 16/1 |
   | `pwa/src/screens/SettingsScreen.tsx` | 13/7 |
-  | `pwa/src/screens/StallWatchSection.tsx` | 398/0 |
+  | `pwa/src/screens/StallWatchSection.tsx` | 399/0 |
   | `pwa/test/primitives.test.tsx` | 20/0 |
-  | `pwa/test/settings-screen.test.tsx` | 626/1 |
-  | `pwa/test/use-stall-watch-view.test.tsx` | 483/0 |
-  | `server/test/stall-settings-readme.test.ts` | 77/0 |
+  | `pwa/test/settings-screen.test.tsx` | 688/1 |
+  | `pwa/test/use-stall-watch-view.test.tsx` | 502/0 |
+  | `server/test/stall-settings-readme.test.ts` | 81/0 |
 
 - **Since then.** `origin/main` has moved to `d12b5aba0` (#282, #283), which touched README.md, CLAUDE.md and docs only,
   and no `pwa/` file. README's Settings paragraph moves from ≈939 to ≈946, and the line Task 4 edits from ≈953 to
   ≈960. CLAUDE.md :10's size claim now reads `~5700`.
-- **Merge probes.** `git merge-tree --write-tree` of `proto/sws-w2` exits 0 against `d12b5aba0`, and exits 0 against
-  the whole W1 prototype `ad2155ff4`.
+- **Merge probes.** `git merge-tree --write-tree` of `proto/sws-w2` at its tip `e13dc1a6a` exits 0 against `d12b5aba0`,
+  and exits 0 against the whole W1 prototype at its tip `a5fa943c6` (as `825fd1965` did against `d513b887f`).
 
 ## Preconditions (check before the baseline; stop and report if one fails)
 
@@ -100,10 +106,16 @@ The prototype of every task was built and measured on branch `proto/sws-w2`:
    - `git show origin/main:server/src/coord/routes.ts | grep -cE "app\.(get|post)\('/api/coord/stall-watch'"` → `2`;
    - `git show origin/main:shared/api.ts | grep -cE '^export interface (StallWatchView|StallConfirmRequired) '` → `2`;
    - `git show origin/main:shared/api.ts | grep -cE '^export (const STALL_|type Stall|interface Stall|function
-     (is|as)Stall)'` → `36` (measured at both W1 prototype commits).
+     (is|as)Stall)'` → `36` (measured at all four W1 prototype commits named above);
+   - `git show origin/main:server/src/coord/stallsettings.ts | grep -cE '^export const STALL_(QUIET_(MIN|MAX|STEP)_MS|NOTICE_WINDOW_MS) '`
+     → `4` (Task 4's pin imports these four L1 bounds; measured at the W1 prototype tip `a5fa943c6`);
+   - `git show origin/main:server/src/coord/stall.ts | grep -c '^export const STALL_QUIET_MS '` → `1` (Task 4's pin
+     imports the built-in quiet time).
 
-   If the last count differs, a W1 fix round reshaped L0. Before the baseline, check that every name Task 1 and Task 3
-   import is still exported, and name each difference in the wave-done mail. A missing name is a stop.
+   If the L0 count differs, a W1 fix round reshaped L0. Before the baseline, check that every name Task 1 and Task 3
+   import is still exported, and name each difference in the wave-done mail. If either L1 count differs, a W1 fix round
+   renamed a bound: Task 4's pin would then red on an import, not on the five measured messages. A missing name, in L0
+   or L1, is a stop.
 3. **The migration slot.** This wave takes no migration slot and never edits `server/src/coord/schema.ts`. W1's slot
    must already be on `main`: `git show origin/main:server/src/coord/schema.ts | grep -c 'CREATE TABLE stall_settings'`
    prints `1`. The slot was `MIGRATIONS[16]` (user_version 16 → 17) at the prototype. W1 measured it and may have moved
@@ -120,20 +132,23 @@ The prototype of every task was built and measured on branch `proto/sws-w2`:
 
 ## Baseline (the step before Task 1)
 
+Each line below is its own Bash call, in the foreground, with a timeout of at least 600000 ms: one test file per
+command, never a loop over several (Global Constraints, "How to run tests").
+
 ```bash
-cd "$(git rev-parse --show-toplevel)/pwa"
-for f in settings-screen.test.tsx primitives.test.tsx api.test.ts use-updates-view.test.tsx caps-control.test.tsx \
-         app.test.tsx fleet-screen.test.tsx; do
-  printf '%s: ' "$f"; ./node_modules/.bin/vitest run "test/$f" | grep -E '^ +Tests '
-done
-./node_modules/.bin/tsc --noEmit -p . && echo tsc-clean
-cd "$(git rev-parse --show-toplevel)/server"
-./node_modules/.bin/vitest run test/single-definition.test.ts | grep -E '^ +Tests '
-./node_modules/.bin/vitest run test/stall-settings.test.ts | grep -E '^ +Tests '
-./node_modules/.bin/vitest run test/pools-prose.test.ts | grep -E '^ +Tests '
-./node_modules/.bin/vitest run test/session-hook.test.ts \
-  -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus' | grep -E '^ +Tests '
-wc -l < ../README.md; sed -n 10p ../CLAUDE.md | grep -oE '~[0-9]+ lines'
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/settings-screen.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/primitives.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/api.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/use-updates-view.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/caps-control.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/app.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/fleet-screen.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/tsc --noEmit -p . && echo tsc-clean
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/single-definition.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/stall-settings.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/pools-prose.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus' | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)" && wc -l < README.md && sed -n 10p CLAUDE.md | grep -oE '~[0-9]+ lines'
 ```
 
 Expected at the prototype base:
@@ -152,16 +167,20 @@ Expected at the prototype base:
 | `pools-prose` | `Tests 27 passed (27)` |
 | README citation instrument | `Tests 7 passed \| 328 skipped (335)` |
 
-- **`stall-settings`.** Its count is `main`'s after W1: it was 62 at W1 Task 1's prototype and rises with W1's later
-  tasks. Record what `main` gives.
+- **`stall-settings`.** Its count is `main`'s after W1, and W1's later tasks raise it: 62 at W1 Task 1's prototype
+  (`2fb0123f7`), and `114 passed (114)` at the W1 prototype's tip `a5fa943c6` (measured). A W1 fix round
+  that lands after that tip moves it again. Record what `main` gives; every later step that names this suite expects
+  that recorded figure, never 62.
 - **README size.** README has 5729 lines at `d12b5aba0`, plus W1's net +14 (the W1 prototype measured 28/14), so expect
-  about 5743 against a claim of `~5700`. Task 4 adds 14 lines. `pools-prose` allows a gap of 100, so the headroom before
-  Task 4 must be at least 15. If it is less, Task 4's own remedy applies: re-measure CLAUDE.md :10 to the nearest
-  hundred, and add CLAUDE.md to that commit and to the claims.
-- **The whole PWA suite.** Run it once as well (`./node_modules/.bin/vitest run`, foreground). Expected: 105 files and
-  3237 tests. That figure is derived from the measured 106 files and 3266 tests after Task 1, less its 29 rows. Under
-  load, reds in `contrast`, `swap-sheet`, `session-pickers` or `fleet-screen` are timeouts: re-run each alone with
-  `--testTimeout=240000` before calling it a break.
+  about 5743 against a claim of `~5700`. Task 4 adds 16 lines. `pools-prose` allows a gap of at most 100 (its row is
+  `toBeLessThanOrEqual(100)`; the prototype measured a gap of exactly 100 green), so the headroom before Task 4 must be
+  at least 16. If it is less, Task 4's own remedy applies: re-measure CLAUDE.md :10 to the nearest hundred, and add
+  CLAUDE.md to that commit and to the claims.
+- **The whole PWA suite.** Run it once as well (`./node_modules/.bin/vitest run`, foreground, its own command).
+  Expected: 105 files and 3237 tests. That figure is derived from the measured 106 files and 3320 tests after Task 4,
+  less this wave's 83 rows (31 in Task 1, 1 in Task 2, 51 in Task 3). Under load, reds in `contrast`, `swap-sheet`,
+  `session-pickers` or `fleet-screen` are timeouts: re-run each alone with `--testTimeout=240000` before calling it a
+  break.
 
 Record every line in the wave-done mail. If another PR has landed rows in any of these suites since, the totals are
 `main`'s, and every total below rises by the same amount.
@@ -175,8 +194,11 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
   `confirm`. A 409 `confirm-required` that passes `asStallConfirm` opens the sheet from the server's `effect`. Set
   re-sends the same body with `confirm: effectKey`. Cancel sends nothing. The section never previews a choice.
 - **The server's answer is what is shown, never the tap; never optimistic** (§13, P2). A 2xx view is installed with
-  `settle(view)`. An unreadable 2xx gives `toast(UNCONFIRMED_TEXT)`, then `reload()`. Any other refusal gives
-  `STALL_CONFIRM_TEXT.refused` with its detail, then `reload()`.
+  `settle(view)`. An unreadable 2xx gives `toast(UNCONFIRMED_TEXT)`, then `reload()`. So does a write whose answer
+  never arrived (a network failure after the POST may have left): it may have landed, so it never says "Nothing was
+  changed" (§15's "A write's reply cannot be read" row). Any other refusal gives `STALL_CONFIRM_TEXT.refused` with its
+  detail (the server's `detail`, else the 500 body's `message`, else the error's own text), then `reload()`. The
+  controls are locked while a write is in flight or its sheet is open.
 - **Not-configured wins over a landed view** (§13, D-4035). Only 501 `not-configured` and 404 `not-found` map to
   `not-configured`, and both status and code must match. The section's whole body is then `STALL_NOT_AVAILABLE_TEXT`:
   no Now block, no control, no checked radio.
@@ -194,7 +216,7 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
   without being edited.
 - **Out of the wave's lanes:** `shared/`, `server/src`, `agent/`, `ccd/`, `deploy/` and `server/src/coord/schema.ts`
   (§18: W2 is the PWA section; W1's L0 and routes are complete).
-- **README is in the citation corpus.** Its edit adds 14 lines after ≈953. The citation instrument must read
+- **README is in the citation corpus.** Its edit adds 16 lines after ≈953. The citation instrument must read
   `7 passed | 328 skipped (335)` before and after, and `pools-prose` (the size claim within 100 lines) must stay green.
 - **Mutation-table discipline.** Every new guard ships with a mutation measured red when the guard is deleted or
   changed (§17; doctrine: "a comment is a request; a red suite is a mechanism"). The tasks' tables were measured on the
@@ -209,7 +231,7 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
     and `fleet-screen`.
 - **Deviation numbers.**
   - This plan defines exactly two: D-4035 and D-4036.
-  - It cites D-4033 and D-4034, which the W1 plan defines.
+  - It cites D-4033, D-4034, D-4037 and D-4038, which the W1 plan defines.
   - The coordinator holds this programme's reserve numbers. A departure found during this wave goes into the
     wave-done mail by slug, and the coordinator assigns its number then.
   - Never write any other number, never a range and never a placeholder (`dtbd.test.ts` reds one). Name any further
@@ -225,11 +247,13 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
      an old choice ("Off, Chosen here", radio checked) that no longer applies, while the shadow backlog goes out
      (§15's rollback row).
    - **Task 1.** The hook keeps the last view beside the failure. Pinned by "P7: reads only 501 not-configured and 404
-     not-found as not-configured; every other pairing is failed" (mutations P7a and P7b) and by "keeps the last good
-     view across a failed, a malformed and a not-configured poll…".
+     not-found as not-configured; every other pairing is failed" (mutations P7a, P7b and P7c) and by "keeps the last
+     good view across a failed, a malformed and a not-configured poll…".
    - **Task 3.** The section must check `failure` first. Pinned by "P1b: a 404 not-found after a landed view replaces
-     the whole body — no Now block, no radio checked" and "P1b: a 501 not-configured first read is the not-available
-     text, not the unread line" (X2).
+     the whole body — no Now block, no radio checked" (X2, which renders the view first), and by "P1b: a 501
+     not-configured first read is the not-available text, not the unread line" (X47, which lets the not-available
+     body render only over a landed view). X2 cannot red the 501 row: on a first read there is no view to render
+     first.
 2. **A poll racing a write.**
    - **Risk.** A poll issued before a write and landing after it must not overwrite the write's reply. A rejected stale
      poll must not raise a failure.
@@ -241,20 +265,26 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
    - **Task 3.** Pinned by these rows: "P3: a 409 opens the sheet from its effect; Cancel sends nothing more…" (X4),
      "P3: Set re-POSTs the same body with confirm equal to effectKey…" (X5), "P3: a write answered 2xx at once…" (X6),
      and "P3c: a key the server no longer matches opens a fresh sheet…" (X7).
-   - **For the reviewer.** Read the section for any branch that decides a confirm or previews a choice. X6 reds 8 rows
-     when the section decides one.
+   - **The lock.** The controls are disabled while a write is in flight or its sheet is open, and `choose` sends nothing
+     while they are: "P3: the controls are locked while a write is in flight…" (X44 drops `busy` from the lock, X45
+     drops the `choose` guard), with the sheet half in the 409 row.
+   - **For the reviewer.** Read the section for any branch that decides a confirm or previews a choice. X6 reds 12
+     rows when the section decides one.
 4. **The sheet says what the write does.** The operator decides from these lines. A wrong line arms a stage on false
    premises.
    - **Task 3.** `stallConfirmLines` is pinned by "the order: does, turn-ons, stops, the held line, what falls due, the
      quiet lines, the files-exceed line", by the P3b row (Off over a busy file: "Busy delivery turns back on…", X8), and
-     by the P3d rows: mail-off variants X10, X11 and X13; the quiet line by what runs after X12; the dialog line X14;
-     the held line X15 to X17; quietRepeat X18.
+     by the P3d rows: mail-off variants X10, X11, X13, X56 and X58; the quiet line by what runs after X12; the dialog
+     line X14; the held line X15 to X17; and quietRepeat X18. A quiet-time raise adds no line of its own: W1 asks no
+     confirm for one (`quiet-raise-asks-nothing` (D-4037)).
    - **Task 2.** `QuickConfirm` renders them one paragraph each: "renders one consequence paragraph per line of a list,
      and one for a string" (P8a to P8c).
 5. **Only the server's answer is drawn, and a malformed one draws nothing.**
    - **Task 3, refusals.** A refused write leaves the stored radio checked: "P2: a refused write toasts the server's
-     detail, re-reads, and leaves the stored radio checked" (X3, X41). An unreadable 2xx installs nothing and re-reads
-     (X40, X42).
+     detail, re-reads, and leaves the stored radio checked" (X3, X41). A cancelled or refused quiet write leaves the
+     select on the stored value (X46). A 500 toasts the cause the server put in its `message` (X59). An unreadable 2xx
+     installs nothing and re-reads (X40, X42), and so does a write whose answer never arrived, which says the change
+     could not be confirmed, never "Nothing was changed" (X48, X60).
    - **Task 3, stored and unmeasured states.** An absent or unreadable stored level checks no radio, and the quiet
      select shows no value the server did not answer (X38). An unmeasured registry reads "Unknown", never Off (M6: X32
      and X33).
@@ -262,22 +292,25 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
      - `asStallWatchView` refuses a malformed fallback (G4) and drops malformed counts with one warn (G9).
      - A quiet range is readable only with `stepMs > 0` and at most 1000 steps (G10, G11). Without that bound,
        `quietChoices` would iterate a hostile range forever.
-     - `stallWriteRefusal` never yields an empty detail (G15, and "falls back to the error's own text…").
+     - `stallWriteRefusal` never yields an empty detail (G15, and "falls back to the error's own text…"), takes the 500
+       body's `message` (G17), and reads a rejection that is not an `ApiError` as unconfirmed (G18).
+     - Every flag of the 409 effect, the key's type, the chosen row's `updatedAt` and `stored`, the counts' `since`
+       and `windowMs`, and the visible-only re-poll each have a row (G19 to G33).
 
 ## File Structure
 
 | File | Change | Task |
 |---|---|---|
 | `pwa/src/lib/api.ts` | `stallWatch` and `setStallWatch` on `createApi`'s object (16/1) | 1 |
-| `pwa/src/fleet/useStallWatchView.ts` | **new** (252 lines): `STALL_WATCH_POLL_MS`, `StallWatchFailure`, `StallWatchPoll`, `asStallWatchView`, `asStallConfirm`, `StallWriteRefusal`, `stallWriteRefusal`, `useStallWatchView` | 1 |
-| `pwa/test/use-stall-watch-view.test.tsx` | **new** (483 lines, 29 rows), beside `use-updates-view.test.tsx` | 1 |
+| `pwa/src/fleet/useStallWatchView.ts` | **new** (259 lines): `STALL_WATCH_POLL_MS`, `StallWatchFailure`, `StallWatchPoll`, `asStallWatchView`, `asStallConfirm`, `StallWriteRefusal`, `stallWriteRefusal`, `useStallWatchView` | 1 |
+| `pwa/test/use-stall-watch-view.test.tsx` | **new** (502 lines, 31 rows), beside `use-updates-view.test.tsx` | 1 |
 | `pwa/src/components/QuickConfirm.tsx` | `consequence: string \| string[]`, one `<p className="qc-consequence">` per line (12/2); `onConfirm(); onClose();` moves to ≈44–45 | 2 |
 | `pwa/test/primitives.test.tsx` | one row in the `QuickConfirm` describe, before `// — Toast —` (≈302) (20/0) | 2 |
-| `pwa/src/screens/StallWatchSection.tsx` | **new** (398 lines): the section and its pure helpers | 3 |
+| `pwa/src/screens/StallWatchSection.tsx` | **new** (399 lines): the section and its pure helpers | 3 |
 | `pwa/src/screens/SettingsScreen.tsx` | header comment (≈1–7, "Two sections and no more"); the Notifications row label (≈650) and its comment; `<StallWatchSection />` after `<NotificationsSection/>`; the "ONE poll" comment (≈677) (13/7) | 3 |
-| `pwa/test/settings-screen.test.tsx` | the label pin (≈1771) moved; the new import (≈33); three describes, 47 rows (26 helpers, 18 section, 3 scans) (626/1) | 3 |
-| `README.md` | the Settings paragraph gains "Settings has a third section, **Stall watch** …" (one line becomes fifteen; ≈953 at `77f8d63a5`, ≈960 at `d12b5aba0`) | 4 |
-| `server/test/stall-settings-readme.test.ts` | **new** (77 lines, 5 rows): the sentence pinned to L0 and L1, the route, one lead sentence after Notifications, no device word | 4 |
+| `pwa/test/settings-screen.test.tsx` | the label pin (≈1771) moved; the new import (≈33); three describes, 51 rows (26 helpers, 22 section, 3 scans) (688/1) | 3 |
+| `README.md` | the Settings paragraph gains "Settings has a third section, **Stall watch** …" (one line becomes seventeen; ≈953 at `77f8d63a5`, ≈960 at `d12b5aba0`) | 4 |
+| `server/test/stall-settings-readme.test.ts` | **new** (81 lines, 5 rows): the sentence pinned to L0 and L1, the route, one lead sentence after Notifications, no device word (the PWA's own device-word list) | 4 |
 
 **Deliberately unchanged** (measured):
 - **`shared/api.ts`.** W1's L0 holds every string the section shows.
@@ -288,7 +321,8 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
 - **`pwa/src/fleet/AbandonSheet.tsx` :8 and `pwa/src/fleet/SwapSheet.tsx` :459.** Each cites `QuickConfirm.tsx:33-34`,
   already one line off at `77f8d63a5`. They stay as history, and no test pins them.
 - **README ≈951 (≈958 at `d12b5aba0`), "the phone-push bell for this browser".** Spec §13 measured that README does
-  not spell the renamed label, and §18 gives W2's README edit as the third-section sentence only.
+  not spell the renamed label, and §18 gives W2's README edit as the third-section sentence only. It is put to the
+  operator under "Open questions for the operator" below.
 - **README ≈3751, the strict runbook's "`rm` it to go back".** That residue is W1's (§20, coordinator lens).
 
 ---
@@ -303,10 +337,10 @@ their tests and a mutation table.
 **Files:**
 - Modify: `pwa/src/lib/api.ts`: the `shared/api` type import (≈5) gains `StallWatchRequest` and `StallWatchView`;
   `createApi`'s returned object gains `stallWatch` and `setStallWatch`, inserted after `setCoordCaps` (≈1045–1046).
-- Create: `pwa/src/fleet/useStallWatchView.ts` (252 lines): `STALL_WATCH_POLL_MS`, `StallWatchFailure`,
+- Create: `pwa/src/fleet/useStallWatchView.ts` (259 lines): `STALL_WATCH_POLL_MS`, `StallWatchFailure`,
   `StallWatchPoll`, `asStallWatchView`, `asStallConfirm`, `StallWriteRefusal`, `stallWriteRefusal`,
-  `useStallWatchView`, and the module-private `NOT_CONFIGURED_ANSWERS` and `failureOf`.
-- Test: `pwa/test/use-stall-watch-view.test.tsx` (new, 483 lines, 29 rows), beside `use-updates-view.test.tsx`.
+  `useStallWatchView`, and the module-private `nonBlank`, `NOT_CONFIGURED_ANSWERS` and `failureOf`.
+- Test: `pwa/test/use-stall-watch-view.test.tsx` (new, 502 lines, 31 rows), beside `use-updates-view.test.tsx`.
 
 **Interfaces:**
 - Consumes, from `shared/api.ts` (W1 Task 1's L0, appended after `MAIL_REPLAY_MS`): `STALL_HELD_TEXT`, `STALL_LEVELS`,
@@ -317,7 +351,9 @@ their tests and a mutation table.
   `createApi`'s private `getJson` and `postJsonOr` (≈491, ≈554).
 - Consumes, from the server (W1, spec §10): `GET`/`POST /api/coord/stall-watch`, answering 200
   `{ ok: true, ...StallWatchView }`, 501 `{ ok: false, error: 'not-configured' }`, 409 `StallConfirmRequired`, 400
-  `{ ok: false, error: 'bad-request', detail }`; and an older server's `/api/*` not-found answer, 404
+  `{ ok: false, error: 'bad-request', detail }`, and Fastify's own 500 `{ statusCode, error, message }` when the route
+  throws (W1 keeps it on purpose, and its `message` names the cause: a stored row that cannot be read, or a second
+  conflict); and an older server's `/api/*` not-found answer, 404
   `{ ok: false, error: 'not-found' }` (`server.ts` ≈3472). The tests mock all of it.
 - Produces (Tasks 2 onward read these):
 
@@ -337,7 +373,8 @@ export function asStallWatchView(raw: unknown): StallWatchView | null;
 export function asStallConfirm(raw: unknown): StallConfirmRequired | null;
 export type StallWriteRefusal =
   | { kind: 'confirm'; confirm: StallConfirmRequired }
-  | { kind: 'refused'; detail: string };
+  | { kind: 'refused'; detail: string }
+  | { kind: 'unconfirmed' };
 export function stallWriteRefusal(err: unknown): StallWriteRefusal;
 export function useStallWatchView(pollMs?: number): StallWatchPoll;
 ```
@@ -354,10 +391,20 @@ export function useStallWatchView(pollMs?: number): StallWatchPoll;
   mode too; `reload` there is a no-op, as in `useUpdatesView`.
 - **No `refresh()`** (§13): the returned object has exactly `view`, `failure`, `reload` and `settle`, and a row pins it.
 - **Residue (§20), the `refused` toast's empty slot,** for both cases §20 names (a 409 whose body fails
-  `asStallConfirm`, and Fastify's 500): `stallWriteRefusal`'s `detail` is the server's own `detail` when it is a
-  non-blank string, and otherwise `apiErrorText(err)`, the app's existing floor: the error code (`confirm-required`,
-  `bad-request`), Fastify's `Internal Server Error`, `request failed (<status>)` for a non-JSON body, or the network
-  error's message. No new string is added, and L0 is not touched.
+  `asStallConfirm`, and Fastify's 500), and W1's hand-off on the same slot ("when the body has none or Fastify's 500
+  puts the cause in `message`"): an `ApiError`'s `detail` is the first non-blank string of the server's own `detail`,
+  the body's `message` (Fastify's 500 carries the cause the route threw: "stall settings unreadable, nothing written:
+  …" or "… changed outside the server twice during one write; nothing written"), and `apiErrorText(err)`, the app's
+  existing floor: the error code (`confirm-required`, `bad-request`), Fastify's `Internal Server Error` when its
+  `message` is blank, or `request failed (<status>)` for a non-JSON body. No new string is added, and L0 is not
+  touched.
+- **A rejection that is not an `ApiError`** (a network failure, after which the POST may have landed) is
+  `{ kind: 'unconfirmed' }`, never a refusal: "Nothing was changed" would be a claim nobody measured. The section
+  answers it as it answers an unreadable 2xx (Task 3). W1's L0 has no text of its own for this case and W2 adds none,
+  so the section uses the PWA's one existing text for an answer that could not be read, `UNCONFIRMED_TEXT`, which
+  spec §13 step 3 and §15's "A write's reply cannot be read" row already prescribe, followed by a re-read that shows
+  what was stored. Its lead word, "Saved", overstates a request that never left; the re-read corrects it within one
+  answer, and the wording is listed for the operator under "Open questions for the operator".
 - **The wire guard's two choices §12 leaves open.** A present but malformed `next` or `filesExceed` is dropped and read
   as not stated, like a missing one, with the one `console.warn` that also counts dropped `counts` elements. A present
   but malformed `fallback` refuses the whole answer, because reading it as `null` would claim the choice applies when
@@ -395,7 +442,8 @@ Create `pwa/test/use-stall-watch-view.test.tsx`:
 //    would claim the choice applies when the server said it does not.
 //  • asStallConfirm: the 409 `confirm-required` body, accepted only whole — a sheet built from part of an effect
 //    would understate what the write does.
-//  • stallWriteRefusal: a write's rejection read as a confirm to show, or a refusal with a detail that is never empty.
+//  • stallWriteRefusal: a write's rejection read as a confirm to show, a refusal with a detail that is never empty, or
+//    (a network failure, which may have landed) an unconfirmed write.
 //
 // The hook adds `settle(view)` to useUpdatesView's shape: a write's reply wins over any poll issued before it (P4).
 // Only 501 `not-configured` and 404 `not-found` read as not-configured, each status with its own code (P7).
@@ -558,6 +606,7 @@ describe('asStallWatchView — a malformed answer is a failure, never a level', 
       ['notices.ok absent', { ...v, notices: { since: 0, windowMs: 1, counts: [] } }],
       ['notices.counts not an array', { ...v, notices: { ok: true, since: 0, windowMs: 1, counts: {} } }],
       ['notices.windowMs absent', { ...v, notices: { ok: true, since: 0, counts: [] } }],
+      ['notices.since absent', { ...v, notices: { ok: true, windowMs: 1, counts: [] } }],
     ];
     for (const [name, raw] of cases) expect(asStallWatchView(raw), name).toBeNull();
   });
@@ -632,8 +681,13 @@ describe('asStallConfirm — the 409 body, accepted only whole', () => {
       ['effect.measured absent', confirmBody({ effect: { ...effect(), measured: undefined } })],
       ['an unknown stage turning on', confirmBody({ effect: effect({ turnsOn: ['checks', 'runs'] }) })],
       ['turnsOff not an array', confirmBody({ effect: effect({ turnsOff: 'wave2' }) })],
+      ['leavesWave2 absent', confirmBody({ effect: effect({ leavesWave2: undefined }) })],
       ['heldByBox absent', confirmBody({ effect: effect({ heldByBox: undefined }) })],
+      ['quietLowered absent', confirmBody({ effect: effect({ quietLowered: undefined }) })],
+      ['filesExceed absent', confirmBody({ effect: effect({ filesExceed: undefined }) })],
+      ['before missing a stage', confirmBody({ effect: effect({ before: { runs: true } }) })],
       ['after missing a stage', confirmBody({ effect: effect({ after: { runs: true } }) })],
+      ['quietMs.before absent', confirmBody({ effect: effect({ quietMs: { after: 1 } }) })],
       ['quietMs.after absent', confirmBody({ effect: effect({ quietMs: { before: 1 } }) })],
       ['mailOff absent', confirmBody({ effect: effect({ mailOff: undefined }) })],
     ];
@@ -641,7 +695,7 @@ describe('asStallConfirm — the 409 body, accepted only whole', () => {
   });
 });
 
-describe('stallWriteRefusal — a confirm to show, or a refusal whose detail is never empty', () => {
+describe('stallWriteRefusal — a confirm to show, a refusal whose detail is never empty, or an unconfirmed write', () => {
   it('reads a 409 with a readable confirm body as a confirm', () => {
     const body = confirmBody();
     expect(stallWriteRefusal(new ApiError(409, body))).toEqual({ kind: 'confirm', confirm: body });
@@ -661,13 +715,25 @@ describe('stallWriteRefusal — a confirm to show, or a refusal whose detail is 
     expect(stallWriteRefusal(err)).toEqual({ kind: 'refused', detail: 'unknown key: loudness' });
   });
 
-  it("falls back to the error's own text when the body has no detail: Fastify's 500, a blank detail, raw text", () => {
-    const fastify500 = new ApiError(500, { statusCode: 500, error: 'Internal Server Error', message: 'boom' });
-    expect(stallWriteRefusal(fastify500)).toEqual({ kind: 'refused', detail: 'Internal Server Error' });
+  it("takes Fastify's message when the body has no detail: a 500 names the cause the route threw", () => {
+    const cause = 'stall settings unreadable, nothing written: disk gone';
+    const fastify500 = new ApiError(500, { statusCode: 500, error: 'Internal Server Error', message: cause });
+    expect(stallWriteRefusal(fastify500)).toEqual({ kind: 'refused', detail: cause });
+    const both = new ApiError(400, { ok: false, error: 'bad-request', detail: 'unknown key: loudness', message: 'other' });
+    expect(stallWriteRefusal(both)).toEqual({ kind: 'refused', detail: 'unknown key: loudness' });
+  });
+
+  it("falls back to the error's own text when the body has neither: a blank detail or message, raw text", () => {
+    const bare500 = new ApiError(500, { statusCode: 500, error: 'Internal Server Error', message: '  ' });
+    expect(stallWriteRefusal(bare500)).toEqual({ kind: 'refused', detail: 'Internal Server Error' });
     const blank = new ApiError(400, { ok: false, error: 'bad-request', detail: '   ' });
     expect(stallWriteRefusal(blank)).toEqual({ kind: 'refused', detail: 'bad-request' });
     expect(stallWriteRefusal(new ApiError(502, 'Bad Gateway'))).toEqual({ kind: 'refused', detail: 'request failed (502)' });
-    expect(stallWriteRefusal(new TypeError('Failed to fetch'))).toEqual({ kind: 'refused', detail: 'Failed to fetch' });
+  });
+
+  it('reads a rejection that is not an ApiError as unconfirmed, never a refusal: the POST may have landed', () => {
+    expect(stallWriteRefusal(new TypeError('Failed to fetch'))).toEqual({ kind: 'unconfirmed' });
+    expect(stallWriteRefusal(new Error('aborted'))).toEqual({ kind: 'unconfirmed' });
   });
 });
 
@@ -1082,26 +1148,33 @@ export function asStallConfirm(raw: unknown): StallConfirmRequired | null {
   return isWriteEffect(raw.effect) ? (raw as unknown as StallConfirmRequired) : null;
 }
 
-/** A write's rejection, read: the confirm the sheet shows, or a refusal whose `detail` fills `STALL_CONFIRM_TEXT.refused`. */
+/** A write's rejection, read: the confirm the sheet shows, a refusal whose `detail` fills `STALL_CONFIRM_TEXT.refused`,
+ *  or an answer that never arrived, which may have stored the write and so is never called a refusal. */
 export type StallWriteRefusal =
   | { kind: 'confirm'; confirm: StallConfirmRequired }
-  | { kind: 'refused'; detail: string };
+  | { kind: 'refused'; detail: string }
+  | { kind: 'unconfirmed' };
+
+/** A string with something in it, trimmed; anything else is null. */
+const nonBlank = (v: unknown): string | null => (typeof v === 'string' && v.trim().length > 0 ? v.trim() : null);
 
 /**
  * A confirm needs BOTH the 409 status and a body `asStallConfirm` reads, as not-configured needs both its status and
- * its code. Every other rejection is a refusal. Its detail is the server's own `detail` when it sends a non-blank one
- * (a 400 naming an unknown key), and otherwise the error's own text through `apiErrorText`: a `confirm-required` body
- * that does not read, Fastify's 500 (`Internal Server Error`) and a network failure carry no `detail`, and the
- * refusal line must not render with an empty slot.
+ * its code. Every other `ApiError` is a refusal: the server answered, so nothing was written. Its detail is the first
+ * non-blank of the server's own `detail` (a 400 naming an unknown key), the body's `message` (Fastify's 500 carries the
+ * cause the route threw there, such as a stored row that cannot be read), and the error's own text through
+ * `apiErrorText` (a `confirm-required` body that does not read, a non-JSON body), so the refusal line never renders
+ * with an empty slot.
+ *
+ * A rejection that is not an `ApiError` is a network failure, and the POST may have left before it: the write may
+ * have landed. It is `unconfirmed`, never a refusal, so the section never says "Nothing was changed" about it.
  */
 export function stallWriteRefusal(err: unknown): StallWriteRefusal {
-  if (err instanceof ApiError) {
-    const confirm = err.status === 409 ? asStallConfirm(err.body) : null;
-    if (confirm !== null) return { kind: 'confirm', confirm };
-    const detail = isObject(err.body) ? err.body.detail : undefined;
-    if (typeof detail === 'string' && detail.trim().length > 0) return { kind: 'refused', detail: detail.trim() };
-  }
-  return { kind: 'refused', detail: apiErrorText(err) };
+  if (!(err instanceof ApiError)) return { kind: 'unconfirmed' };
+  const confirm = err.status === 409 ? asStallConfirm(err.body) : null;
+  if (confirm !== null) return { kind: 'confirm', confirm };
+  const body = isObject(err.body) ? err.body : {};
+  return { kind: 'refused', detail: nonBlank(body.detail) ?? nonBlank(body.message) ?? apiErrorText(err) };
 }
 
 /** The two answers that mean "not available on this server", each status with its own code: 501 `not-configured` (no
@@ -1174,7 +1247,7 @@ export function useStallWatchView(pollMs: number = STALL_WATCH_POLL_MS): StallWa
 
 Run: `cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/use-stall-watch-view.test.tsx`
 
-Expected (measured): `Test Files  1 passed (1)`, `Tests  29 passed (29)`.
+Expected (measured): `Test Files  1 passed (1)`, `Tests  31 passed (31)`.
 
 - [ ] **Step 7: Typecheck**
 
@@ -1192,34 +1265,55 @@ cd "$(git rev-parse --show-toplevel)"
 git add pwa/src/lib/api.ts pwa/src/fleet/useStallWatchView.ts pwa/test/use-stall-watch-view.test.tsx
 ```
 
-For each row, replace the quoted text (each occurs exactly once in its file) with the mutation, run
+For each row, replace the quoted text with the mutation, run
 `cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/use-stall-watch-view.test.tsx`,
-record the red, then restore with `git checkout -- <file>`. The control is Step 6's `29 passed`. `H` is
-`pwa/src/fleet/useStallWatchView.ts`; `A` is `pwa/src/lib/api.ts`.
+record the red, then restore with `git checkout -- <file>`. The control is Step 6's `31 passed`. `H` is
+`pwa/src/fleet/useStallWatchView.ts`; `A` is `pwa/src/lib/api.ts`. Each quoted text occurs exactly once in its file,
+except G1's and G2's, which occur twice (measured `2`): find each by the arm its row names, `(raw) => {` or
+`(err: unknown) => {`, each of which occurs once. A row whose mutation text needs no whole line quotes the fragment it
+replaces.
 
 | # | Guard | File: mutation | Red (measured), failing rows |
 |---|---|---|---|
-| P4 | settle wins over a stale poll | H: delete the line `    issued.current += 1;   // every poll issued before this write now lands stale` | `2 failed`: "P4: settle installs a write's reply, and a poll issued before it that lands after it never overwrites it"; "P4: a poll issued before settle that REJECTS after it reports no failure, and settle clears an earlier one" |
-| P7a | only 404 `not-found` reads not-configured | H: `    && NOT_CONFIGURED_ANSWERS.some(([status, code]) => err.status === status && (err.body as { error?: unknown }).error === code)` → `    && (err.status === 404 \|\| NOT_CONFIGURED_ANSWERS.some(([status, code]) => err.status === status && (err.body as { error?: unknown }).error === code))` (map every 404) | `1 failed`: "P7: reads only 501 not-configured and 404 not-found as not-configured; every other pairing is failed" |
-| P7b | only 501 `not-configured` reads not-configured | H: the same line → `    && (err.status === 501 \|\| NOT_CONFIGURED_ANSWERS.some(([status, code]) => err.status === status && (err.body as { error?: unknown }).error === code))` (map every 501) | `1 failed`: the P7 row |
-| G1 | newest issued wins, answer arm | H: in the `(raw) => {` arm, `          if (!live \|\| mine !== issued.current) return;` → `          if (!live) return;` | `2 failed`: "keeps the newest issued poll authoritative when an older request resolves or rejects last"; the first P4 row |
-| G2 | newest issued wins, failure arm | H: the same in the `(err: unknown) => {` arm | `2 failed`: the newest-issued row; the second P4 row |
+| P4 | settle wins over a stale poll | H: delete the line `    issued.current += 1;   // every poll issued before this write now lands stale` | `2 failed`: "P4: a poll issued before settle that REJECTS after it reports no failure, and settle clears an earlier one"; "P4: settle installs a write's reply, and a poll issued before it that lands after it never overwrites it" |
+| P7a | only 404 `not-found` reads not-configured | H: `    && NOT_CONFIGURED_ANSWERS.some(([status, code]) => err.status === status && (err.body as { error?: unknown }).error === code)` → `    && (err.status === 404 \|\| NOT_CONFIGURED_ANSWERS.some(([status, code]) => err.status === status && (err.body as { error?: unknown }).error === code))` | `1 failed`: "P7: reads only 501 not-configured and 404 not-found as not-configured; every other pairing is failed" |
+| P7b | only 501 `not-configured` reads not-configured | H: `    && NOT_CONFIGURED_ANSWERS.some(([status, code]) => err.status === status && (err.body as { error?: unknown }).error === code)` → `    && (err.status === 501 \|\| NOT_CONFIGURED_ANSWERS.some(([status, code]) => err.status === status && (err.body as { error?: unknown }).error === code))` | `1 failed`: "P7: reads only 501 not-configured and 404 not-found as not-configured; every other pairing is failed" |
+| P7c | 501 `not-configured` reads not-configured | H: `[[501, 'not-configured'], [404, 'not-found']]` → `[[404, 'not-found']]` | `1 failed`: "P7: reads only 501 not-configured and 404 not-found as not-configured; every other pairing is failed" |
+| G1 | newest issued wins, answer arm | H: in the `(raw) => {` arm, `          if (!live \|\| mine !== issued.current) return;` → `          if (!live) return;` | `2 failed`: "P4: settle installs a write's reply, and a poll issued before it that lands after it never overwrites it"; "keeps the newest issued poll authoritative when an older request resolves or rejects last" |
+| G2 | newest issued wins, failure arm | H: in the `(err: unknown) => {` arm, `          if (!live \|\| mine !== issued.current) return;` → `          if (!live) return;` | `2 failed`: "P4: a poll issued before settle that REJECTS after it reports no failure, and settle clears an earlier one"; "keeps the newest issued poll authoritative when an older request resolves or rejects last" |
 | G3 | a missing `fallback` permits | H: `if (fallback !== undefined && fallback !== null && !isFallback(fallback)) return null;` → `if (fallback !== null && !isFallback(fallback)) return null;` | `1 failed`: "reads a MISSING fallback as none stated, with no warning; refuses a MALFORMED one" |
-| G4 | a malformed `fallback` refuses | H: delete the line `  if (fallback !== undefined && fallback !== null && !isFallback(fallback)) return null;` | `1 failed`: the same row |
+| G4 | a malformed `fallback` refuses | H: delete the line `  if (fallback !== undefined && fallback !== null && !isFallback(fallback)) return null;` | `1 failed`: "reads a MISSING fallback as none stated, with no warning; refuses a MALFORMED one" |
 | G5 | an unknown effective level is a failure, never a level | H: `if (!isOneOf(LEVEL_READINGS, v.level) \|\|` → `if (typeof v.level !== 'string' \|\|` | `1 failed`: "refuses a non-object, and every missing or malformed required part" |
-| G6 | `chosen.level` is a choice | H: `(v.level === 'unreadable' \|\| isStallLevelChoice(v.level))` → `(typeof v.level === 'string')` | `1 failed`: the same row |
+| G6 | `chosen.level` is a choice | H: `(v.level === 'unreadable' \|\| isStallLevelChoice(v.level))` → `(typeof v.level === 'string')` | `1 failed`: "refuses a non-object, and every missing or malformed required part" |
 | G7 | a missing `next` permits | H: `const badNext = v.next !== undefined && !isNextStep(v.next);` → `const badNext = !isNextStep(v.next);` | `1 failed`: "reads a missing next or filesExceed as not stated, passing the answer through unchanged" |
-| G8 | a malformed `next` is dropped | H: the same line → `const badNext = false;` | `1 failed`: "drops a malformed next or filesExceed as not stated, keeps the rest, and warns exactly once" |
+| G8 | a malformed `next` is dropped | H: `const badNext = v.next !== undefined && !isNextStep(v.next);` → `const badNext = false;` | `1 failed`: "drops a malformed next or filesExceed as not stated, keeps the rest, and warns exactly once" |
 | G9 | malformed counts are dropped | H: `v.counts.filter(isNoticeCount)` → `v.counts.filter(() => true)` | `1 failed`: "drops a malformed counts element, keeps the others, and warns exactly once" |
 | G10 | a quiet step is positive | H: `    && stepMs > 0 && minMs` → `    && minMs` | `1 failed`: "refuses a non-object, and every missing or malformed required part" |
-| G11 | a quiet range can be listed | H: delete ` && (maxMs - minMs) / stepMs <= QUIET_STEPS_MAX` | `1 failed`: the same row |
+| G11 | a quiet range can be listed | H: delete ` && (maxMs - minMs) / stepMs <= QUIET_STEPS_MAX` | `1 failed`: "refuses a non-object, and every missing or malformed required part" |
 | G12 | a confirm is `confirm-required` | H: delete `raw.error !== 'confirm-required' \|\| ` | `1 failed`: "refuses another code, a missing or non-string key, and any effect it cannot read whole" |
-| G13 | a confirm's stages are known | H: `const isStageList = (v: unknown): boolean => Array.isArray(v) && v.every((s) => isOneOf(STALL_STAGES, s));` → `const isStageList = (v: unknown): boolean => Array.isArray(v);` | `1 failed`: the same row |
+| G13 | a confirm's stages are known | H: `const isStageList = (v: unknown): boolean => Array.isArray(v) && v.every((s) => isOneOf(STALL_STAGES, s));` → `const isStageList = (v: unknown): boolean => Array.isArray(v);` | `1 failed`: "refuses another code, a missing or non-string key, and any effect it cannot read whole" |
 | G14 | a confirm needs the 409 | H: `const confirm = err.status === 409 ? asStallConfirm(err.body) : null;` → `const confirm = asStallConfirm(err.body);` | `1 failed`: "reads a confirm body on any other status as a refusal: the status and the code must both match" |
-| G15 | the refusal detail is never blank | H: `if (typeof detail === 'string' && detail.trim().length > 0) return` → `if (typeof detail === 'string') return` | `1 failed`: "falls back to the error's own text when the body has no detail: Fastify's 500, a blank detail, raw text" |
+| G15 | the refusal detail is never blank | H: `const nonBlank = (v: unknown): string \| null => (typeof v === 'string' && v.trim().length > 0 ? v.trim() : null);` → `const nonBlank = (v: unknown): string \| null => (typeof v === 'string' ? v : null);` | `1 failed`: "falls back to the error's own text when the body has neither: a blank detail or message, raw text" |
 | G16 | a write's unreadable 2xx degrades | A: `      postJsonOr<StallWatchView \| 'unreadable'>('/api/coord/stall-watch', 'unreadable', body),` → `      postJson<StallWatchView \| 'unreadable'>('/api/coord/stall-watch', body),` | `1 failed`: "answers `unreadable` when a 2xx write comes back unparseable — the write may have landed (D-1150)" |
+| G17 | a 500's `message` names the cause | H: `nonBlank(body.detail) ?? nonBlank(body.message) ?? apiErrorText(err)` → `nonBlank(body.detail) ?? apiErrorText(err)` | `1 failed`: "takes Fastify's message when the body has no detail: a 500 names the cause the route threw" |
+| G18 | a network failure is unconfirmed, never refused | H: `  if (!(err instanceof ApiError)) return { kind: 'unconfirmed' };` → `  if (!(err instanceof ApiError)) return { kind: 'refused', detail: apiErrorText(err) };` | `1 failed`: "reads a rejection that is not an ApiError as unconfirmed, never a refusal: the POST may have landed" |
+| G19 | the confirm's key is a string | H: `raw.error !== 'confirm-required' \|\| typeof raw.effectKey !== 'string'` → `raw.error !== 'confirm-required'` | `2 failed`: "refuses another code, a missing or non-string key, and any effect it cannot read whole"; "reads a 409 whose body is not a readable confirm as a refusal that still names something" |
+| G20 | the effect's `leavesWave2` | H: `    && typeof v.leavesWave2 === 'boolean' && typeof v.heldByBox === 'boolean'` → `    && typeof v.heldByBox === 'boolean'` | `1 failed`: "refuses another code, a missing or non-string key, and any effect it cannot read whole" |
+| G21 | the effect's `heldByBox` | H: `    && typeof v.leavesWave2 === 'boolean' && typeof v.heldByBox === 'boolean'` → `    && typeof v.leavesWave2 === 'boolean'` | `1 failed`: "refuses another code, a missing or non-string key, and any effect it cannot read whole" |
+| G22 | the effect's `quietLowered` | H: `    && typeof v.quietLowered === 'boolean' && typeof v.filesExceed === 'boolean'` → `    && typeof v.filesExceed === 'boolean'` | `1 failed`: "refuses another code, a missing or non-string key, and any effect it cannot read whole" |
+| G23 | the effect's `filesExceed` | H: `    && typeof v.quietLowered === 'boolean' && typeof v.filesExceed === 'boolean'` → `    && typeof v.quietLowered === 'boolean'` | `1 failed`: "refuses another code, a missing or non-string key, and any effect it cannot read whole" |
+| G24 | the effect's `before` stages | H: `    && isFlags(v.before, STAGE_FLAGS) && isFlags(v.after, STAGE_FLAGS)` → `    && isFlags(v.after, STAGE_FLAGS)` | `1 failed`: "refuses another code, a missing or non-string key, and any effect it cannot read whole" |
+| G25 | the effect's `after` stages | H: `    && isFlags(v.before, STAGE_FLAGS) && isFlags(v.after, STAGE_FLAGS)` → `    && isFlags(v.before, STAGE_FLAGS)` | `1 failed`: "refuses another code, a missing or non-string key, and any effect it cannot read whole" |
+| G26 | the effect's `quietMs.before` | H: `    && isObject(quietMs) && isNum(quietMs.before) && isNum(quietMs.after)` → `    && isObject(quietMs) && isNum(quietMs.after)` | `1 failed`: "refuses another code, a missing or non-string key, and any effect it cannot read whole" |
+| G27 | the effect's `quietMs.after` | H: `    && isObject(quietMs) && isNum(quietMs.before) && isNum(quietMs.after)` → `    && isObject(quietMs) && isNum(quietMs.before)` | `1 failed`: "refuses another code, a missing or non-string key, and any effect it cannot read whole" |
+| G28 | the effect's `mailOff` | H: `    && typeof v.mailOff === 'boolean';` → `    && true;` | `1 failed`: "refuses another code, a missing or non-string key, and any effect it cannot read whole" |
+| G29 | `chosen.updatedAt` | H: delete the line `  && (v.updatedAt === null \|\| isNum(v.updatedAt))` | `1 failed`: "refuses a non-object, and every missing or malformed required part" |
+| G30 | `chosen.stored` | H: `  && isOneOf(STALL_STORED_STATES, v.stored);` → `  && true;` | `1 failed`: "refuses a non-object, and every missing or malformed required part" |
+| G31 | the counts' `since` | H: `if (v.ok !== true \|\| !isNum(v.since) \|\| !isNum(v.windowMs)` → `if (v.ok !== true \|\| !isNum(v.windowMs)` | `1 failed`: "refuses a non-object, and every missing or malformed required part" |
+| G32 | the counts' `windowMs` | H: `if (v.ok !== true \|\| !isNum(v.since) \|\| !isNum(v.windowMs)` → `if (v.ok !== true \|\| !isNum(v.since)` | `1 failed`: "refuses a non-object, and every missing or malformed required part" |
+| G33 | only a visible page re-polls | H: `      if (document.visibilityState === 'visible') load();` → `      load();` | `1 failed`: "re-polls once when the page becomes visible, and not when it is hidden" |
 
-Every row measured `28 passed (29)` beside its one failure, or `27 passed (29)` beside its two. Then:
+Every row measured `30 passed (31)` beside its one failure, or `29 passed (31)` beside its two. Then:
 
 ```bash
 cd "$(git rev-parse --show-toplevel)" && git status --short
@@ -1230,21 +1324,24 @@ all staged, nothing unstaged.
 
 - [ ] **Step 9: The regression suites**
 
+Each line is its own foreground Bash call (timeout at least 600000 ms):
+
 ```bash
-cd "$(git rev-parse --show-toplevel)/pwa"
-for f in api.test.ts use-updates-view.test.tsx settings-screen.test.tsx caps-control.test.tsx; do
-  ./node_modules/.bin/vitest run test/$f | grep -E '^ +Tests '
-done
-./node_modules/.bin/vitest run | grep -E '^ +(Test Files|Tests) '
-cd ../server && ./node_modules/.bin/vitest run test/single-definition.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/api.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/use-updates-view.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/settings-screen.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/caps-control.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run | grep -E '^ +(Test Files|Tests) '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/single-definition.test.ts | grep -E '^ +Tests '
 ```
 
-Expected (measured): `102 passed (102)`, `30 passed (30)`, `132 passed (132)`, `16 passed (16)`; the whole PWA suite
-`106` files and `3266` tests; `single-definition` `274 passed (274)` (it walks `pwa/src`, so it sees the new file).
-On the prototype the whole-suite run under load showed `10 failed | 3256 passed (3266)`, all of them 5-second test
-timeouts in `contrast.test.ts` (9) and `swap-sheet.test.tsx` (1), neither of which this task touches; alone, with
-`--testTimeout=240000`, they measured `256 passed (256)` and `44 passed (44)`. Re-run any such red alone that way
-before calling it real.
+Expected: `102 passed (102)`, `30 passed (30)`, `132 passed (132)`, `16 passed (16)` (measured at the first
+prototype; Task 1's fix round touches none of these files); the whole PWA suite `106` files and `3268` tests (derived:
+the measured 3320 after Task 4, less Task 2's 1 row and Task 3's 51); `single-definition` `274 passed (274)` (it walks
+`pwa/src`, so it sees the new file; measured at `825fd1965`). On the first prototype the whole-suite run under load
+showed `10 failed | 3256 passed (3266)`, all of them 5-second test timeouts in `contrast.test.ts` (9) and
+`swap-sheet.test.tsx` (1), neither of which this task touches; alone, with `--testTimeout=240000`, they measured
+`256 passed (256)` and `44 passed (44)`. Re-run any such red alone that way before calling it real.
 
 - [ ] **Step 10: Commit**
 
@@ -1258,8 +1355,10 @@ api.stallWatch and api.setStallWatch, the latter through postJsonOr for
 setCoordCaps' reason (D-1150): an unreadable 2xx may have stored the
 value. A 409 rejects with ApiError like every non-2xx; the server
 decides the confirm (server-decides-the-confirm (D-4033)), and
-stallWriteRefusal reads the rejection as a confirm to show or a refusal
-whose detail is never blank.
+stallWriteRefusal reads the rejection as a confirm to show, a refusal
+whose detail is never blank (the server's detail, else the 500 body's
+message, else the error's own text), or, for a network failure that may
+have landed, an unconfirmed write that is never called a refusal.
 
 useStallWatchView is useUpdatesView's shape plus settle, with no
 refresh: settle installs a write's reply and bumps the shared request
@@ -1384,7 +1483,7 @@ Three edits in `pwa/src/components/QuickConfirm.tsx`. Each quoted "before" line 
 (Step 1's `grep -c`).
 
 (a) ≈4, the header comment's last line:
-`// toast). Cancel and scrim both just close.` → these five lines:
+`// toast). Cancel and scrim both just close.` → these six lines (that line kept, then five new):
 
 ```tsx
 // toast). Cancel and scrim both just close.
@@ -1505,19 +1604,33 @@ Every test file that imports `QuickConfirm` or a component that renders one (`Fl
 `SwapSheet`, `FleetHostBanner`, `PrSheet`), measured by
 `grep -lE "from '\.\./src/(screens/FleetScreen|fleet/SessionActionsSheet|fleet/SwapSheet|fleet/FleetHostBanner|session/PrSheet|components/QuickConfirm)'" test/*.tsx test/*.ts`:
 
+Each line is its own foreground Bash call (timeout at least 600000 ms), one file per command:
+
 ```bash
-cd "$(git rev-parse --show-toplevel)/pwa"
-./node_modules/.bin/vitest run test/account-pool-chip.test.tsx test/archive-all-guard.test.tsx \
-  test/auth-door.test.tsx test/child-reclaim-banner.test.tsx test/coord-banner.test.tsx \
-  test/fleet-class-chooser.test.tsx test/fleet-host-banner.test.tsx test/fleet-screen.test.tsx \
-  test/lifecycle-ui.test.tsx test/offline.test.ts test/primitives.test.tsx test/pr-sheet.test.tsx \
-  test/session-actions-sheet.test.tsx test/session-lifecycle.test.tsx test/substrate-banner.test.tsx \
-  test/swap-sheet.test.tsx test/tap-targets.test.tsx
-./node_modules/.bin/vitest run
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/account-pool-chip.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/archive-all-guard.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/auth-door.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/child-reclaim-banner.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/coord-banner.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/fleet-class-chooser.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/fleet-host-banner.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/fleet-screen.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/lifecycle-ui.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/offline.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/primitives.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/pr-sheet.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/session-actions-sheet.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/session-lifecycle.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/substrate-banner.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/swap-sheet.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/tap-targets.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run | grep -E '^ +(Test Files|Tests) '
 ```
 
-Expected (measured): `Test Files  17 passed (17)`, `Tests  549 passed (549)`; and the whole PWA suite
-`Test Files  106 passed (106)`, `Tests  3267 passed (3267)` on a quiet box. Measured on the prototype at load average
+Expected: the seventeen files' `Tests` lines sum to `549 passed` (measured at the first prototype as one 17-file
+batch, `Test Files  17 passed (17)`, `Tests  549 passed (549)`; no file there changes in W2's fix round); and the
+whole PWA suite `Test Files  106 passed (106)`, `Tests  3269 passed (3269)` on a quiet box (derived: the measured
+3320 after Task 4, less Task 3's 51 rows). Measured on the prototype at load average
 ≈42, two whole-suite runs went `4 failed | 3263 passed` and `2 failed | 3265 passed`, each a different set among
 `contrast.test.ts` (two `the gate fails a mutated tree` rows), `fleet-screen.test.tsx` (`opens the roster-derived
 pool picker from a project card`) and `session-pickers.test.tsx` (two rows); each file, re-run alone with
@@ -1573,7 +1686,7 @@ The control is Step 5's green, `22 passed (22)`, on the unmutated commit.
 table.
 
 **Files:**
-- Create: `pwa/src/screens/StallWatchSection.tsx` (398 lines): `fillStallText`, `quietText`, `StallQuietChoice`,
+- Create: `pwa/src/screens/StallWatchSection.tsx` (399 lines): `fillStallText`, `quietText`, `StallQuietChoice`,
   `quietChoices`, `StallNowTone`, `StallNowLine`, `stallNowLines`, `stallNextLines`, `stallCountLine`,
   `stallConfirmTitle`, `stallConfirmLines`, `StallWatchSection`, and the private `StallWatchBody`. It sits beside
   `SettingsScreen.tsx` in `pwa/src/screens/`, where the screen's sections live: measured at 77f8d63a5,
@@ -1599,8 +1712,8 @@ table.
   `useStallWatchView(pollMs?: number): StallWatchPoll` with `StallWatchPoll { view: StallWatchView | null; failure:
   StallWatchFailure | null; reload: () => void; settle: (view: StallWatchView) => void }`;
   `asStallWatchView(raw: unknown): StallWatchView | null`; `stallWriteRefusal(err: unknown): StallWriteRefusal`, where
-  `StallWriteRefusal = { kind: 'confirm'; confirm: StallConfirmRequired } | { kind: 'refused'; detail: string }` and
-  `detail` is never blank; `api.stallWatch: () => Promise<StallWatchView>`; `api.setStallWatch: (body:
+  `StallWriteRefusal = { kind: 'confirm'; confirm: StallConfirmRequired } | { kind: 'refused'; detail: string } |
+  { kind: 'unconfirmed' }`, `detail` is never blank, and `unconfirmed` is a rejection that is not an `ApiError`; `api.stallWatch: () => Promise<StallWatchView>`; `api.setStallWatch: (body:
   StallWatchRequest) => Promise<StallWatchView | 'unreadable'>`.
 - Consumes, from Task 2 (`pwa/src/components/QuickConfirm.tsx`): `QuickConfirm(props: QuickConfirmProps)` with
   `consequence: string | string[]`; Confirm runs `onConfirm(); onClose();` in that order.
@@ -1629,12 +1742,27 @@ export function StallWatchSection(): ReactNode;
   target's `does` first, then one line per `turnsOn` stage, then the `stops` lines in §5.1 order, then the held line,
   what falls due, the quiet lines and the files-exceed line. §15's "listed Busy delivery stops first" is read as
   "listed it", not as an order.
-- **A sheet with a title and no body** (§20's second item: a quiet raise that stays below the built-in at Log). The
-  server decided the confirm; the section adds no line of its own, so `stallConfirmLines` answers `[]` and
-  `QuickConfirm` (Task 2) renders the title and both buttons. A row pins it.
+- **A quiet-time raise opens no sheet** (§20's second item: a quiet time raised but still below the built-in, at Log,
+  or at Everything with alerts off, would open a sheet with a title and no body lines). W1 settles it in L1,
+  `quiet-raise-asks-nothing` (D-4037): `quietLowered` is true only when the effective quiet time after the write is
+  strictly lower than the one before, so a raise alone needs no confirm and the section opens no sheet for it.
+  `stallConfirmLines` adds no line for a raise, and no L0 text is added. The row "P3d: a quiet time raised but still
+  below the built-in repeats the check note, with no due line" stays from this task's first cut: it pins the lines'
+  own guard over such an effect (no due line, the Check repeat line), which W1 no longer sends.
 - **A refusal with no `detail`** (§20's third item, and Fastify's 500): settled by Task 1's `stallWriteRefusal`,
-  whose `detail` falls back to `apiErrorText`, so the toast's slot is never empty. The section calls it and adds
-  nothing.
+  whose `detail` falls back to the 500 body's `message` and then to `apiErrorText`, so the toast's slot is never
+  empty and a 500 names its cause. The section calls it and adds nothing. Pinned by "P2: a 500 toasts the cause the
+  server named in its message…" (X59).
+- **A write whose answer never arrived** (a network failure): Task 1 reads it as `unconfirmed`, and the section
+  toasts `UNCONFIRMED_TEXT` and re-reads, as for an unreadable 2xx, never "Nothing was changed". Pinned by "a write
+  whose answer never arrived…" (X48, X60).
+- **The lock** (§13 item 3): `busy || pending !== null` disables both fieldsets, and `choose` refuses to write while
+  locked, because a dispatched event can still reach a disabled control's handler (measured: with the guard deleted,
+  that row's change on the disabled select and click on a disabled radio each send a write, 3 calls where 1 is
+  expected). Pinned by "P3: the controls are locked while a write is in flight…" (X44, X45).
+- **The `dueFromOff` line keeps §13's wording**, "Off recorded nothing. …", with no `{label}` slot: W1 decided it in
+  its L0 (Off's full label, not a short form, which §12's slot rule is about), and the section renders the key as
+  given. Pinned by "P3d: checks from a running watch are due; from Off, dueFromOff".
 - **An absent row checks no radio** (§20's seventh item): `chosen.level` is `'unreadable'` for an absent row, and the
   section checks a radio only when `chosen.level` equals its value. A row pins it with `stored: 'absent'`.
 - **The quiet select for a value the list does not hold** (an unreadable `quietMs`, or a stored value equal to the
@@ -1650,19 +1778,26 @@ export function StallWatchSection(): ReactNode;
 
 - [ ] **Step 1: Re-anchor**
 
+The copies go to a fresh `mktemp` directory inside the workspace's git-ignored scratch (`.superpowers/` is in
+`.gitignore`), never to a fixed name in a shared `/tmp`, so two workers on one box cannot read each other's copy.
+Run the block as one Bash call (`$T` lives only in that shell):
+
 ```bash
 cd "$(git rev-parse --show-toplevel)"
-git show HEAD:pwa/src/screens/SettingsScreen.tsx > /tmp/ss.tsx; git show HEAD:pwa/test/settings-screen.test.tsx > /tmp/sst.tsx
-grep -c -F 'design 2026-09-20 §13). Two sections and no more — Updates (the channel,' /tmp/ss.tsx
-grep -c -F "import { NotificationBell } from '../fleet/NotificationBell';" /tmp/ss.tsx
-grep -c -F '//   * The PHONE-PUSH toggle is the literal <NotificationBell/> — the same' /tmp/ss.tsx
-grep -c -F '          <span>Phone notifications for this browser</span>' /tmp/ss.tsx
-grep -c -F '  // ONE poll and ONE clock for the whole screen: every section reads the same' /tmp/ss.tsx
-grep -c -F '      <NotificationsSection view={poll.view} reload={poll.reload} />' /tmp/ss.tsx
-grep -c -F "    expect(within(section).getByText('Phone notifications for this browser')).toBeInTheDocument();" /tmp/sst.tsx
-grep -c -F "import { declValue, ruleIn } from './cssRule';" /tmp/sst.tsx
-wc -l < /tmp/sst.tsx
+mkdir -p .superpowers/sdd/stall-watch-settings-w2
+T="$(mktemp -d .superpowers/sdd/stall-watch-settings-w2/reanchor.XXXXXX)"
+git show HEAD:pwa/src/screens/SettingsScreen.tsx > "$T/ss.tsx"; git show HEAD:pwa/test/settings-screen.test.tsx > "$T/sst.tsx"
+grep -c -F 'design 2026-09-20 §13). Two sections and no more — Updates (the channel,' "$T/ss.tsx"
+grep -c -F "import { NotificationBell } from '../fleet/NotificationBell';" "$T/ss.tsx"
+grep -c -F '//   * The PHONE-PUSH toggle is the literal <NotificationBell/> — the same' "$T/ss.tsx"
+grep -c -F '          <span>Phone notifications for this browser</span>' "$T/ss.tsx"
+grep -c -F '  // ONE poll and ONE clock for the whole screen: every section reads the same' "$T/ss.tsx"
+grep -c -F '      <NotificationsSection view={poll.view} reload={poll.reload} />' "$T/ss.tsx"
+grep -c -F "    expect(within(section).getByText('Phone notifications for this browser')).toBeInTheDocument();" "$T/sst.tsx"
+grep -c -F "import { declValue, ruleIn } from './cssRule';" "$T/sst.tsx"
+wc -l < "$T/sst.tsx"
 ls pwa/src/screens/StallWatchSection.tsx 2>&1 | tail -1
+rm -r "$T"
 ```
 
 Expected (measured at the prototype's base): `1` for each of the eight `grep -c` (lines ≈2, ≈21, ≈554, ≈650, ≈677,
@@ -2019,9 +2154,6 @@ describe('SettingsScreen — stall watch: helpers (stall-watch-settings W2 Task 
     const lines = stallConfirmLines(swEffect({ before: swStages(), after: swStages(), quietLowered: true,
       quietMs: { before: SW_H / 2, after: SW_H } }), { quietMs: SW_H }, 2 * SW_H);
     expect(lines).toEqual([fillStallText(STALL_CONFIRM_TEXT.quietRepeat, swValue(SW_H))]);
-    // §20's residue: at Log the same raise has nothing to say, and the sheet is its title alone.
-    expect(stallConfirmLines(swEffect({ quietLowered: true, quietMs: { before: SW_H / 2, after: SW_H } }),
-      { quietMs: SW_H }, 2 * SW_H)).toEqual([]);
   });
 
   it('P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not', () => {
@@ -2290,18 +2422,83 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   });
+
+  it('a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads', async () => {
+    const { read } = await mount(swView());
+    vi.spyOn(api, 'setStallWatch').mockRejectedValue(new TypeError('Failed to fetch'));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/^Nothing was changed/)).toBeNull();
+    expect(radio(STALL_LEVEL_TEXT.log.label)).not.toBeChecked();
+  });
+
+  it('P2: a 500 toasts the cause the server named in its message, and re-reads', async () => {
+    const { read } = await mount(swView());
+    const cause = 'stall settings unreadable, nothing written: disk gone';
+    vi.spyOn(api, 'setStallWatch').mockRejectedValue(
+      new ApiError(500, { statusCode: 500, error: 'Internal Server Error', message: cause }));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    expect(await screen.findByText(`Nothing was changed: ${cause}`)).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  });
+
+  it('P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap', async () => {
+    const { read } = await mount(swView({ chosen: swChosen({ quietMs: SW_H }),
+      quiet: { ...swView().quiet, effectiveMs: SW_H, source: 'chosen' } }));
+    const write = vi.spyOn(api, 'setStallWatch')
+      .mockRejectedValueOnce(swConfirm(swEffect({ quietLowered: true, quietMs: { before: SW_H, after: SW_H / 2 } }), 'key-q'))
+      .mockRejectedValueOnce(new ApiError(400, { ok: false, error: 'bad-request', detail: 'quietMs must be a 30-minute step' }));
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: String(SW_H / 2) } });
+    const sheet = await screen.findByRole('dialog');
+    expect(select.value).toBe(String(SW_H));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(select.value).toBe(String(SW_H));
+    fireEvent.change(select, { target: { value: String(3 * SW_H) } });
+    expect(await screen.findByText('Nothing was changed: quietMs must be a 30-minute step')).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(select.value).toBe(String(SW_H));
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+
+  it('P3: the controls are locked while a write is in flight: a second choice sends nothing, and the answer unlocks them', async () => {
+    await mount(swView());
+    const flight = Promise.withResolvers<StallWatchView>();
+    const write = vi.spyOn(api, 'setStallWatch').mockReturnValue(flight.promise);
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet });
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    for (const r of within(section()).getAllByRole('radio')) expect(r).toBeDisabled();
+    expect(select).toBeDisabled();
+    fireEvent.change(select, { target: { value: String(SW_H) } });
+    fireEvent.click(radio(STALL_LEVEL_TEXT.all.label));
+    expect(write).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      flight.resolve(swView({ chosen: swChosen({ level: 'log' }),
+        effective: swEffective({ source: 'chosen', level: 'log', stages: SW_LOG }) }));
+      await flight.promise;
+    });
+    await waitFor(() => expect(radio(STALL_LEVEL_TEXT.log.label)).toBeChecked());
+    expect(radio(STALL_LEVEL_TEXT.all.label)).toBeEnabled();
+    expect(select).toBeEnabled();
+    expect(write).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('SettingsScreen — stall watch: source scans (P6, P9)', () => {
   const sectionSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'StallWatchSection.tsx'), 'utf8');
+  const hookSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'useStallWatchView.ts'), 'utf8');
   const DEVICE_WORD = /\b(phones?|mobiles?|desktops?|tablets?|laptops?|iphones?|ipads?|android|touchscreens?|handsets?)\b/i;
   const DEVICE_BRANCH = /matchMedia|useMediaQuery|userAgent|maxTouchPoints|ontouchstart|pointer:\s*coarse|innerWidth/;
   const l0Strings = (v: unknown): string[] =>
     typeof v === 'string' ? [v] : typeof v === 'object' && v !== null ? Object.values(v).flatMap(l0Strings) : [];
 
-  it('P6: the section has no device branch and no device word', () => {
-    expect(sectionSrc).not.toMatch(DEVICE_BRANCH);
-    expect(sectionSrc).not.toMatch(DEVICE_WORD);
+  it('P6: the section and its hook have no device branch and no device word', () => {
+    for (const [name, src] of [['StallWatchSection.tsx', sectionSrc], ['useStallWatchView.ts', hookSrc]]) {
+      expect(src, name).not.toMatch(DEVICE_BRANCH);
+      expect(src, name).not.toMatch(DEVICE_WORD);
+    }
   });
 
   it('P6: no L0 STALL_* string names a device, and the Notifications row says push', () => {
@@ -2548,6 +2745,7 @@ export function stallConfirmLines(effect: StallWriteEffect, request: StallWatchR
 
   if (effect.quietLowered) {
     const slots = { value: quietText(effect.quietMs.after) };
+    const repeat = fillStallText(mailOff ? STALL_CONFIRM_TEXT.quietRepeatMailOff : STALL_CONFIRM_TEXT.quietRepeat, slots);
     if (effect.quietMs.after < effect.quietMs.before) {
       if (!after.runs) lines.push(STALL_CONFIRM_TEXT.quietOff);
       else if (!after.checks) lines.push(fillStallText(STALL_CONFIRM_TEXT.quietRecorded, slots));
@@ -2557,9 +2755,7 @@ export function stallConfirmLines(effect: StallWriteEffect, request: StallWatchR
         lines.push(fillStallText(mailOff ? STALL_CONFIRM_TEXT.quietDueMailOff : STALL_CONFIRM_TEXT.quietDue, slots));
       }
     }
-    if (after.checks && !after.wave2 && effect.quietMs.after < builtInMs) {
-      lines.push(fillStallText(mailOff ? STALL_CONFIRM_TEXT.quietRepeatMailOff : STALL_CONFIRM_TEXT.quietRepeat, slots));
-    }
+    if (after.checks && !after.wave2 && effect.quietMs.after < builtInMs) lines.push(repeat);
     if (after.alerts) lines.push(fillStallText(STALL_CONFIRM_TEXT.quietDialogs, slots));
   }
   if (effect.filesExceed) lines.push(STALL_FILES_EXCEED_TEXT);
@@ -2621,7 +2817,8 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
 
   // Only the field moved, and `confirm` only as the key the server sent. Every answer is the server's: a reply
   // that reads is settled, one that does not may have landed (UNCONFIRMED_TEXT, then a re-read), a 409 the guard
-  // reads opens the sheet, and any other refusal is toasted with the server's detail before a re-read.
+  // reads opens the sheet, and any other refusal is toasted with the server's detail before a re-read. A rejection
+  // that never reached an answer (a network failure) may have landed too, so it says so, never "Nothing was changed".
   const write = (request: StallWatchRequest, confirm?: string): void => {
     setBusy(true);
     void api.setStallWatch(confirm === undefined ? request : { ...request, confirm })
@@ -2641,7 +2838,8 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
             setPending({ request, confirm: refusal.confirm });
             return;
           }
-          toast(fillStallText(STALL_CONFIRM_TEXT.refused, { detail: refusal.detail }), 'error');
+          if (refusal.kind === 'unconfirmed') toast(UNCONFIRMED_TEXT);
+          else toast(fillStallText(STALL_CONFIRM_TEXT.refused, { detail: refusal.detail }), 'error');
           reload();
         },
       )
@@ -2831,33 +3029,43 @@ with
 
 Run: `cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/settings-screen.test.tsx | grep -E '^ +Tests '`
 
-Expected (measured): `Tests  179 passed (179)`: the 132 already there, and 47 new (26 helpers, 18 section, 3 scans).
+Expected (measured): `Tests  183 passed (183)`: the 132 already there, and 51 new (26 helpers, 22 section, 3 scans).
 
 - [ ] **Step 6: The regression suites, the typecheck and the build**
 
+Each line is its own foreground Bash call (timeout at least 600000 ms): one test file per command, the build alone and
+the whole PWA suite alone, so no single call can run past the tool's 600 s limit under load and lose its output.
+
 ```bash
-cd "$(git rev-parse --show-toplevel)/pwa"
-for f in settings-screen use-stall-watch-view primitives app fleet-screen; do
-  printf '%s ' $f; ./node_modules/.bin/vitest run test/$f.test.tsx | grep -E '^ +Tests '
-done
-./node_modules/.bin/tsc --noEmit -p . && echo tsc-clean
-npm run build 2>&1 | grep -E 'built in|error'
-npm run test 2>&1 | grep -E '^ +(Test Files|Tests) '
-cd ../server
-for f in single-definition stall-settings child-reclaim-generation no-routing-keystroke-from-server resume-reclaim-l0 pane-history-route run-routes; do
-  printf '%s ' $f; ./node_modules/.bin/vitest run test/$f.test.ts | grep -E '^ +Tests '
-done
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/settings-screen.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/use-stall-watch-view.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/primitives.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/app.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/fleet-screen.test.tsx | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/tsc --noEmit -p . && echo tsc-clean
+cd "$(git rev-parse --show-toplevel)/pwa" && npm run build 2>&1 | grep -E 'built in|error'
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run 2>&1 | grep -E '^ +(Test Files|Tests) '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/single-definition.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/stall-settings.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/child-reclaim-generation.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/no-routing-keystroke-from-server.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/resume-reclaim-l0.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/pane-history-route.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/run-routes.test.ts | grep -E '^ +Tests '
 ```
 
-Expected (measured): `settings-screen Tests 179 passed (179)`, `use-stall-watch-view Tests 29 passed (29)`,
-`primitives Tests 22 passed (22)`, `app Tests 17 passed (17)`, `fleet-screen Tests 98 passed (98)`; `tsc-clean`;
-`✓ built in …` and no error; the full PWA suite `Test Files 106 passed (106)`, `Tests 3314 passed (3314)` (the
-second full run, on the committed tree). The first full run measured `1 failed | 3313 passed`, the failure `session-pickers.test.tsx > a tap on High calls api.route
-once, never api.prompt, and renders queued` at its 5000 ms timeout under load (5645 ms); alone it is
-`Tests 30 passed (30)`, at the default timeout and with `--testTimeout=240000`. It touches no Settings code. A red
-there is re-run alone before it is called real. The server scans that walk `pwa/src` stay green and unedited:
-`single-definition 274`, `stall-settings 62`, `child-reclaim-generation 23`, `no-routing-keystroke-from-server 3`,
-`resume-reclaim-l0 18`, `pane-history-route 23`, `run-routes 230`, each `passed`.
+Expected, in order (measured at `825fd1965` unless named): `Tests  183 passed (183)`, `Tests  31 passed (31)`,
+`Tests  22 passed (22)`, `Tests  17 passed (17)`, `Tests  98 passed (98)` (the last three measured at the first
+prototype; the fix round changes none of their files, and the whole-suite run below passed them); `tsc-clean`; `✓ built in …` and no error (measured `✓ built in 2.32s`); the whole PWA suite
+`Test Files  106 passed (106)`, `Tests  3320 passed (3320)`, measured green in one run at load average ≈25. The first
+prototype's whole-suite runs under heavier load measured one `session-pickers.test.tsx` row (`a tap on High calls
+api.route once, never api.prompt, and renders queued`) over its 5000 ms timeout (5645 ms); alone it is
+`Tests 30 passed (30)`. It touches no Settings code; a red there is re-run alone before it is called real. The
+server scans that walk `pwa/src` stay green and unedited: `single-definition 274`, `child-reclaim-generation 23`,
+`no-routing-keystroke-from-server 3`, `resume-reclaim-l0 18`, `pane-history-route 23`, `run-routes 230`, each
+`passed` (measured at `825fd1965`). `stall-settings` reads the count the Baseline recorded from `main` after W1, not
+the prototype's: it measured 62 at W1 Task 1 and `114 passed (114)` at the W1 prototype's tip `a5fa943c6`,
+and W1's later tasks and fix rounds raise it.
 
 - [ ] **Step 7: Commit**
 
@@ -2884,7 +3092,12 @@ notifications-label-says-push (D-4036), its pin moved with it.
 SettingsScreen's header names three sections and its ONE-poll comment
 names the section's own hook.
 
-settings-screen.test.tsx: 47 rows (P1, P1b, P2, P3, P3b, P3c, P3d, P5,
+The controls are locked while a write is in flight or its sheet is
+open. A 500 toasts the cause the server named; a write whose answer
+never arrived toasts the unconfirmed line and re-reads, never "Nothing
+was changed".
+
+settings-screen.test.tsx: 51 rows (P1, P1b, P2, P3, P3b, P3c, P3d, P5,
 P6, P9-P12, M6, M24), each guard measured red under its mutation.
 MSG
 )"
@@ -2894,57 +3107,85 @@ MSG
 
 Apply each mutation alone to the committed tree, run
 `cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run test/settings-screen.test.tsx`, record
-the failing count, restore with `git checkout -- pwa/src/screens/StallWatchSection.tsx pwa/src/screens/SettingsScreen.tsx`,
-and end with `git status --short` empty. The control is Step 5's green, 179 passed. Every row was measured on the
-prototype (`StallWatchSection.tsx` is `SWS` below; every count is out of 179).
+the failing count and names, restore with
+`git checkout -- pwa/src/screens/StallWatchSection.tsx pwa/src/screens/SettingsScreen.tsx pwa/src/fleet/useStallWatchView.ts`,
+and end with `git status --short` empty. The
+control is Step 5's green, `183 passed (183)`. Every row was measured on the prototype at `4937088a1` (the same files
+as `825fd1965`), and the whole table again at the tip `e13dc1a6a`, after the final fix round removed the repeat-line
+catch-all (D-4037): X14 and X18 moved, X57 went with the catch-all, X58 now guards the repeat line's mail-off
+variant at Check, and every other row is unchanged. `SWS` is
+`pwa/src/screens/StallWatchSection.tsx` and `H` is `pwa/src/fleet/useStallWatchView.ts`; X51, X59 and X60 mutate `H`
+and are run against this file, so the section's rows that depend on Task 1 are measured here too. Each quoted text
+occurs exactly once in its file, except the `          reload();` that X40 and X41 quote, which occurs twice in
+`SWS`: each of those two rows names its arm (the line after the fulfilled arm's `toast(UNCONFIRMED_TEXT);`, or after
+the rejection arm's `'error');`).
 
-| # | Guard | Mutation (in `SWS` unless named) | Red in (measured failing count, test names) |
+| # | Guard | Mutation | Red (measured failing count out of 183, test names) |
 |---|---|---|---|
-| X1 | P1 three-state render | `failure === 'failed' ? (` in `StallWatchSection` → `false ? (`: a failed first read draws the skeleton | `1 failed`: `P1: pending is a skeleton, a failed first read says so, and a view renders — three states, never folded` |
-| X2 | P1b not-configured wins | render `view !== null` before `failure === 'not-configured'`, as the Updates section does | `1 failed`: `P1b: a 404 not-found after a landed view replaces the whole body — no Now block, no radio checked` |
-| X3 | P2 checked from the server | add `const [tapped, setTapped] = useState<StallLevelChoice \| null>(null);`; `checked={(tapped ?? view.chosen.level) === value}`; `onChange={() => { setTapped(value); choose({ level: value }); }}` | `3 failed`: `P3: a 409 opens the sheet from its effect; Cancel sends nothing more and leaves the stored choice checked`; `P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked`; `an unreadable 2xx says the write may have landed and re-reads; it installs nothing` |
-| X4 | P3 Cancel sends nothing | `onClose={() => { if (pending !== null) write(pending.request); setPending(null); }}` | `3 failed`: `P3: a 409 opens the sheet from its effect; Cancel sends nothing more and leaves the stored choice checked`; `P3: Set re-POSTs the same body with confirm equal to effectKey, and the 2xx settles`; `P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key` |
-| X5 | P3 re-POST carries the key | `write(pending.request, pending.confirm.effectKey)` → `write(pending.request)` | `2 failed`: `P3: Set re-POSTs the same body with confirm equal to effectKey, and the 2xx settles`; `P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key` |
-| X6 | P3 the server decides the confirm | `choose` opens the sheet itself (`setPending({ request, confirm: { ok: false, error: 'confirm-required', effect: { measured: false }, effectKey: '' } })`) instead of writing | `8 failed`: `P3: a write answered 2xx at once sends only the field moved, opens no sheet, and settles the reply`; `P3: the quiet select writes { quietMs } alone, and "Built-in" writes default`; `P3: a 409 opens the sheet from its effect; Cancel sends nothing more and leaves the stored choice checked`; `P3: Set re-POSTs the same body with confirm equal to effectKey, and the 2xx settles`; `P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key`; `P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked`; `an unreadable 2xx says the write may have landed and re-reads; it installs nothing`; `a 2xx body that fails the wire guard is the same unconfirmed outcome` |
-| X7 | P3c a stale key opens a fresh sheet | `if (refusal.kind === 'confirm') {` → `if (refusal.kind === 'confirm' && confirm === undefined) {` | `1 failed`: `P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key` |
-| X8 | P3b Off over a busy file says back on | `if (turnsOnNow(s) && !after.runs) lines.push` → `if (false) lines.push` | `1 failed`: `P3b: Off over a busy file says busy delivery comes back, never the generic turn-on line` |
-| X9 | P3d busy delivery alone is not `due` | add `'busyDelivery'` to `NOTICE_STAGES` | `2 failed`: `P3b: Off over a busy file says busy delivery comes back, never the generic turn-on line`; `P3d: busy delivery alone makes mail due, never a recorded notice` |
-| X10 | P3d due lines under mail off | `if (!mailOff) lines.push(before.runs` → `if (true) lines.push(before.runs` | `1 failed`: `P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not` |
-| X11 | P3d `dueMailBack` under mail off | `mailOff ? STALL_CONFIRM_TEXT.dueMailBack : STALL_CONFIRM_TEXT.dueMail` → `STALL_CONFIRM_TEXT.dueMail` | `1 failed`: `P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not` |
-| X12 | P3d the quiet line by what runs after | the `!after.runs`, `!after.checks` and `after.wave2` arms → `false` | `2 failed`: `P3d: a lowered quiet time is worded by what runs after the write: off, Log, Check, Everything; dialogs with alerts`; `P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not` |
-| X13 | P3d `quietDueMailOff` | `mailOff ? STALL_CONFIRM_TEXT.quietDueMailOff : STALL_CONFIRM_TEXT.quietDue` → `STALL_CONFIRM_TEXT.quietDue` | `1 failed`: `P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not` |
-| X14 | P3d the dialog line | delete `if (after.alerts) lines.push(fillStallText(STALL_CONFIRM_TEXT.quietDialogs, slots));` | `3 failed`: `the order: does, turn-ons, stops, the held line, what falls due, the quiet lines, the files-exceed line`; `P3d: a lowered quiet time is worded by what runs after the write: off, Log, Check, Everything; dialogs with alerts`; `P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not` |
-| X15 | P3d the held line | delete `if (effect.heldByBox) lines.push(STALL_CONFIRM_TEXT.heldByBox);` | `1 failed`: `P3d: stages held by the kill switch take their turn-on lines and the held line — no backOn, nothing due` |
-| X16 | P3d a held stage never takes `backOn` | `if (turnsOnNow(s) && !after.runs)` → `if (!after.runs)` | `1 failed`: `P3d: stages held by the kill switch take their turn-on lines and the held line — no backOn, nothing due` |
-| X17 | P3d a held stage makes nothing due | `const on = effect.turnsOn.filter(turnsOnNow);` → `const on = effect.turnsOn;` | `1 failed`: `P3d: stages held by the kill switch take their turn-on lines and the held line — no backOn, nothing due` |
-| X18 | P3d `quietRepeat` below the built-in | its `if (after.checks && !after.wave2 && effect.quietMs.after < builtInMs)` → `if (false)` | `4 failed`: `the order: does, turn-ons, stops, the held line, what falls due, the quiet lines, the files-exceed line`; `P3d: a lowered quiet time is worded by what runs after the write: off, Log, Check, Everything; dialogs with alerts`; `P3d: a quiet time raised but still below the built-in repeats the check note, with no due line`; `P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not` |
-| X19 | `leavesWave2` shows the further checks' stops | delete the `effect.leavesWave2 && !effect.turnsOff.includes('wave2')` line | `1 failed`: `leaving the further checks shows the wave2 stops line once, from either reading` |
-| X20 | P5 the footnote always shows | show the footnote only when `notices.ok` and some count is non-zero | `1 failed`: `P5: the run-less footnote is always shown — zero counts, and counts that could not be read` |
-| X21 | P6 no device branch | `const locked = busy \|\| pending !== null \|\| window.matchMedia('(max-width: 600px)').matches;` | `1 failed`: `P6: the section has no device branch and no device word` |
-| X22 | P6 the renamed label (D-4036) | `SettingsScreen.tsx`: the label back to "Phone notifications for this browser" | `2 failed`: `reuses the literal NotificationBell where the browser can do Web Push`; `P6: no L0 STALL_* string names a device, and the Notifications row says push` |
-| X23 | P9 no level id in the section | the busy-gate-off condition as `['log', 'check', 'alert'].includes(level)` | `1 failed`: `P9: the section spells no level id — every level reaches it from L0` |
-| X24 | P9 busy-gate-off names one cause | drop `&& !held.mailOff` from the busy-gate-off condition | `1 failed`: `P9: the busy-gate-off note shows for a files-read level without the gate, and only for that cause` |
-| X25 | P10 the held source | `sourceLine` answers `STALL_SOURCE_TEXT.chosen` for `held` | `1 failed`: `P10: a held source names the chosen level and the reason, never "Chosen here"` |
-| X26 | P10 `none` draws no Next step | `stallNextLines` answers the top line for `kind: 'none'` | `2 failed`: `P10: the Next step renders from the wire — none and a missing next show nothing, an empty waitsOn no gates`; `P10: next.kind none shows no Next step, and a step with an empty waitsOn shows no "Waits on:"` |
-| X27 | P10 no "Waits on:" for an empty list | `next.waitsOn.length > 0` → `next.lead !== STALL_NEXT_TEXT.top` | `1 failed`: `P10: next.kind none shows no Next step, and a step with an empty waitsOn shows no "Waits on:"` |
-| X28 | P11 the files-exceed line | delete the `effective.filesExceed === true` line | `1 failed`: `P11: the files-exceed line follows effective.filesExceed, and nothing else` |
-| X29 | P11 only on `filesExceed` | `effective.filesExceed === true` → `effective.source !== 'files'` | `1 failed`: `P11: the files-exceed line follows effective.filesExceed, and nothing else` |
-| X30 | P12 the `both` line | delete `if (level && quiet) return STALL_STORED_TEXT.both;` | `1 failed`: `P12: exactly one stored line whenever the stored row does not apply whole, and the fallback line` |
-| X31 | P12 the fallback line | delete the `view.fallback !== null` line | `1 failed`: `P12: exactly one stored line whenever the stored row does not apply whole, and the fallback line` |
-| X32 | M6 Unknown is never Off (Now) | `push(STALL_SECTION_TEXT.unknown, 'head')` → `push(STALL_LEVEL_TEXT.off.label, 'head')` | `2 failed`: `M6: an unmeasured reading is "Unknown", never Off — and the chosen values still show`; `M6: an unmeasured reading renders "Unknown" and "they say: unknown", and no level is read as Off` |
-| X33 | M6 "they say: unknown" | `STALL_SECTION_TEXT.theySayUnknown` → the `theySay` text filled with Off's label | `1 failed`: `M6: an unmeasured reading renders "Unknown" and "they say: unknown", and no level is read as Off` |
-| X34 | M6 the sheet's `unknown` line | `return [STALL_CONFIRM_TEXT.unknown];` → `return [];` | `1 failed`: `M6: the unmeasured effect gives the one unknown line` |
-| X35 | M24 the hazard condition | `stages.alerts && stages.wave2 && !stages.busyDelivery && !held.mailOff` → `stages.alerts && !held.mailOff` | `1 failed`: `M24: the hazard line shows for alerts and the further checks without busy delivery, and not under mail off` |
-| X36 | M24 its mail-off exception | drop `&& !held.mailOff` from the hazard condition | `1 failed`: `M24: the hazard line shows for alerts and the further checks without busy delivery, and not under mail off` |
-| X37 | the built-in appears once | `if (ms !== builtInMs) choices.push` → `if (true) choices.push` | `2 failed`: `quietChoices: the built-in first, then every step from min to max except the built-in, which appears once`; `renders the Now block, the Next step, the quiet time and the counts from the view` |
-| X38 | the select shows no value it does not hold | delete the `quietValue === QUIET_NONE` empty option | `1 failed`: `an absent or unreadable stored level checks no radio, and the quiet select shows no built-in it does not hold` |
-| X39 | `fillStallText` reads `$` literally | `String.replace` with a string per slot instead of the replacer function | `1 failed`: `fillStallText fills each named slot, leaves a slot it was not given, and reads a $ in a value literally` |
-| X40 | an unconfirmed write re-reads | delete `reload();` after `toast(UNCONFIRMED_TEXT);` | `2 failed`: `an unreadable 2xx says the write may have landed and re-reads; it installs nothing`; `a 2xx body that fails the wire guard is the same unconfirmed outcome` |
-| X41 | a refused write re-reads | delete `reload();` after the `refused` toast | `1 failed`: `P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked` |
-| X42 | a 2xx goes through the wire guard | `asStallWatchView(answer)` → `(answer as StallWatchView)` | `1 failed`: `a 2xx body that fails the wire guard is the same unconfirmed outcome` |
-| X43 | the section is mounted | `SettingsScreen.tsx`: delete `<StallWatchSection />` | `18 failed`: every row of the section `describe`, the placement row included |
+| X1 | P1 three-state render | SWS: `) : failure === 'failed' ? (` → `) : false ? (` | `1 failed`: "P1: pending is a skeleton, a failed first read says so, and a view renders — three states, never folded" |
+| X2 | P1b not-configured wins over a landed view | SWS: render `view !== null` before `failure === 'not-configured'`, as the Updates section does (swap the first two arms of `StallWatchSection`'s conditional) | `1 failed`: "P1b: a 404 not-found after a landed view replaces the whole body — no Now block, no radio checked" |
+| X3 | P2 checked from the server | SWS: add `const [tapped, setTapped] = useState<StallLevelChoice \| null>(null);` after `const locked = …`; `checked={(tapped ?? view.chosen.level) === value}`; `onChange={() => { setTapped(value); choose({ level: value }); }}` | `5 failed`: "P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked"; "P3: a 409 opens the sheet from its effect; Cancel sends nothing more and leaves the stored choice checked"; "P3: the controls are locked while a write is in flight: a second choice sends nothing, and the answer unlocks them"; "a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads"; "an unreadable 2xx says the write may have landed and re-reads; it installs nothing" |
+| X4 | P3 Cancel sends nothing | SWS: `onClose={() => setPending(null)}` → `onClose={() => { if (pending !== null) write(pending.request); setPending(null); }}` | `4 failed`: "P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap"; "P3: Set re-POSTs the same body with confirm equal to effectKey, and the 2xx settles"; "P3: a 409 opens the sheet from its effect; Cancel sends nothing more and leaves the stored choice checked"; "P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key" |
+| X5 | P3 re-POST carries the key | SWS: `write(pending.request, pending.confirm.effectKey)` → `write(pending.request)` | `2 failed`: "P3: Set re-POSTs the same body with confirm equal to effectKey, and the 2xx settles"; "P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key" |
+| X6 | P3 the server decides the confirm | SWS: `if (!locked) write(request);` → `if (!locked) setPending({ request, confirm: { ok: false, error: 'confirm-required', effect: { measured: false }, effectKey: '' } });` | `12 failed`: "P2: a 500 toasts the cause the server named in its message, and re-reads"; "P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap"; "P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked"; "P3: Set re-POSTs the same body with confirm equal to effectKey, and the 2xx settles"; "P3: a 409 opens the sheet from its effect; Cancel sends nothing more and leaves the stored choice checked"; "P3: a write answered 2xx at once sends only the field moved, opens no sheet, and settles the reply"; "P3: the controls are locked while a write is in flight: a second choice sends nothing, and the answer unlocks them"; "P3: the quiet select writes { quietMs } alone, and "Built-in" writes default"; "P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key"; "a 2xx body that fails the wire guard is the same unconfirmed outcome"; "a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads"; "an unreadable 2xx says the write may have landed and re-reads; it installs nothing" |
+| X7 | P3c a stale key opens a fresh sheet | SWS: `if (refusal.kind === 'confirm') {` → `if (refusal.kind === 'confirm' && confirm === undefined) {` | `1 failed`: "P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key" |
+| X8 | P3b Off over a busy file says back on | SWS: `if (turnsOnNow(s) && !after.runs) lines.push` → `if (false) lines.push` | `1 failed`: "P3b: Off over a busy file says busy delivery comes back, never the generic turn-on line" |
+| X9 | P3d busy delivery alone is not `due` | SWS: `['checks', 'alerts', 'wave2']` → `['checks', 'alerts', 'wave2', 'busyDelivery']` | `2 failed`: "P3b: Off over a busy file says busy delivery comes back, never the generic turn-on line"; "P3d: busy delivery alone makes mail due, never a recorded notice" |
+| X10 | P3d due lines under mail off | SWS: `if (!mailOff) lines.push(before.runs` → `if (true) lines.push(before.runs` | `1 failed`: "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not" |
+| X11 | P3d `dueMailBack` under mail off | SWS: `mailOff ? STALL_CONFIRM_TEXT.dueMailBack : STALL_CONFIRM_TEXT.dueMail` → `STALL_CONFIRM_TEXT.dueMail` | `1 failed`: "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not" |
+| X12 | P3d the quiet line by what runs after | SWS: `if (!after.runs) lines.push(STALL_CONFIRM_TEXT.quietOff)`, `else if (!after.checks) lines.push(fillStallText(STALL_CONFIRM_TEXT.quietRecorded` and `      else if (after.wave2) {`: each condition → `false` | `2 failed`: "P3d: a lowered quiet time is worded by what runs after the write: off, Log, Check, Everything; dialogs with alerts"; "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not" |
+| X13 | P3d `quietDueMailOff` | SWS: `mailOff ? STALL_CONFIRM_TEXT.quietDueMailOff : STALL_CONFIRM_TEXT.quietDue` → `STALL_CONFIRM_TEXT.quietDue` | `1 failed`: "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not" |
+| X14 | P3d the dialog line | SWS: delete the line `    if (after.alerts) lines.push(fillStallText(STALL_CONFIRM_TEXT.quietDialogs, slots));` | `3 failed`: "P3d: a lowered quiet time is worded by what runs after the write: off, Log, Check, Everything; dialogs with alerts"; "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not"; "the order: does, turn-ons, stops, the held line, what falls due, the quiet lines, the files-exceed line" |
+| X15 | P3d the held line | SWS: delete the line `  if (effect.heldByBox) lines.push(STALL_CONFIRM_TEXT.heldByBox);` | `1 failed`: "P3d: stages held by the kill switch take their turn-on lines and the held line — no backOn, nothing due" |
+| X16 | P3d a held stage never takes `backOn` | SWS: `if (turnsOnNow(s) && !after.runs)` → `if (!after.runs)` | `1 failed`: "P3d: stages held by the kill switch take their turn-on lines and the held line — no backOn, nothing due" |
+| X17 | P3d a held stage makes nothing due | SWS: `const on = effect.turnsOn.filter(turnsOnNow);` → `const on = effect.turnsOn;` | `1 failed`: "P3d: stages held by the kill switch take their turn-on lines and the held line — no backOn, nothing due" |
+| X18 | P3d `quietRepeat` below the built-in | SWS: `    if (after.checks && !after.wave2 && effect.quietMs.after < builtInMs) lines.push(repeat);` → `    if (false) lines.push(repeat);` | `4 failed`: "P3d: a lowered quiet time is worded by what runs after the write: off, Log, Check, Everything; dialogs with alerts"; "P3d: a quiet time raised but still below the built-in repeats the check note, with no due line"; "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not"; "the order: does, turn-ons, stops, the held line, what falls due, the quiet lines, the files-exceed line" |
+| X19 | `leavesWave2` shows the further checks' stops | SWS: delete the line `  if (effect.leavesWave2 && !effect.turnsOff.includes('wave2')) lines.push(STALL_STAGE_TEXT.wave2.stops);` | `1 failed`: "leaving the further checks shows the wave2 stops line once, from either reading" |
+| X20 | P5 the footnote always shows | SWS: `      <p className="settings-note">{STALL_RUNLESS_FOOTNOTE}</p>` → `      {view.notices.ok && view.notices.counts.some((c) => c.sent + c.shadow > 0) && <p className="settings-note">{STALL_RUNLESS_FOOTNOTE}</p>}` | `1 failed`: "P5: the run-less footnote is always shown — zero counts, and counts that could not be read" |
+| X21 | P6 no device branch (section) | SWS: `const locked = busy \|\| pending !== null;` → `const locked = busy \|\| pending !== null \|\| window.matchMedia('(max-width: 600px)').matches;` | `1 failed`: "P6: the section and its hook have no device branch and no device word" |
+| X22 | P6 the renamed label (D-4036) | `SettingsScreen.tsx`: `<span>Push notifications for this browser</span>` → `<span>Phone notifications for this browser</span>` | `2 failed`: "reuses the literal NotificationBell where the browser can do Web Push"; "P6: no L0 STALL_* string names a device, and the Notifications row says push" |
+| X23 | P9 no level id in the section | SWS: `} else if (effective.source === 'files' && stages.runs && level !== 'custom' && !held.mailOff) {` → `} else if (effective.source === 'files' && ['log', 'check', 'alert'].includes(level) && !held.mailOff) {` | `1 failed`: "P9: the section spells no level id — every level reaches it from L0" |
+| X24 | P9 busy-gate-off names one cause | SWS: `level !== 'custom' && !held.mailOff) {` → `level !== 'custom') {` | `1 failed`: "P9: the busy-gate-off note shows for a files-read level without the gate, and only for that cause" |
+| X25 | P10 the held source | SWS: insert `  if (effective.source === 'held') return STALL_SOURCE_TEXT.chosen;` as `sourceLine`'s first line | `1 failed`: "P10: a held source names the chosen level and the reason, never "Chosen here"" |
+| X26 | P10 `none` draws no Next step | SWS: `effective.next.kind === 'none') return null;` → `effective.next.kind === 'none') return { lead: STALL_NEXT_TEXT.top, waitsOn: [] };` | `3 failed`: "M6: an unmeasured reading is "Unknown", never Off — and the chosen values still show"; "P10: the Next step renders from the wire — none and a missing next show nothing, an empty waitsOn no gates"; "P10: next.kind none shows no Next step, and a step with an empty waitsOn shows no "Waits on:"" |
+| X27 | P10 no "Waits on:" for an empty list | SWS: `next.waitsOn.length > 0` → `next.lead !== STALL_NEXT_TEXT.top` | `1 failed`: "P10: next.kind none shows no Next step, and a step with an empty waitsOn shows no "Waits on:"" |
+| X28 | P11 the files-exceed line | SWS: delete the line `    if (effective.filesExceed === true) push(STALL_FILES_EXCEED_TEXT, 'warn');` | `1 failed`: "P11: the files-exceed line follows effective.filesExceed, and nothing else" |
+| X29 | P11 only on `filesExceed` | SWS: `effective.filesExceed === true` → `effective.source !== 'files'` | `1 failed`: "P11: the files-exceed line follows effective.filesExceed, and nothing else" |
+| X30 | P12 the `both` line | SWS: delete the line `  if (level && quiet) return STALL_STORED_TEXT.both;` | `1 failed`: "P12: exactly one stored line whenever the stored row does not apply whole, and the fallback line" |
+| X31 | P12 the fallback line | SWS: delete the line `  if (view.fallback !== null) push(fillStallText(STALL_FALLBACK_TEXT, { reason: view.fallback.reason }), 'warn');` | `1 failed`: "P12: exactly one stored line whenever the stored row does not apply whole, and the fallback line" |
+| X32 | M6 Unknown is never Off (Now) | SWS: `push(STALL_SECTION_TEXT.unknown, 'head')` → `push(STALL_LEVEL_TEXT.off.label, 'head')` | `2 failed`: "M6: an unmeasured reading is "Unknown", never Off — and the chosen values still show"; "M6: an unmeasured reading renders "Unknown" and "they say: unknown", and no level is read as Off" |
+| X33 | M6 "they say: unknown" | SWS: `: STALL_SECTION_TEXT.theySayUnknown;` → `: fillStallText(STALL_SECTION_TEXT.theySay, { level: STALL_LEVEL_TEXT.off.label });` | `1 failed`: "M6: an unmeasured reading renders "Unknown" and "they say: unknown", and no level is read as Off" |
+| X34 | M6 the sheet's `unknown` line | SWS: `return [STALL_CONFIRM_TEXT.unknown];` → `return [];` | `1 failed`: "M6: the unmeasured effect gives the one unknown line" |
+| X35 | M24 the hazard condition | SWS: `stages.alerts && stages.wave2 && !stages.busyDelivery && !held.mailOff` → `stages.alerts && !held.mailOff` | `1 failed`: "M24: the hazard line shows for alerts and the further checks without busy delivery, and not under mail off" |
+| X36 | M24 its mail-off exception | SWS: `stages.alerts && stages.wave2 && !stages.busyDelivery && !held.mailOff` → `stages.alerts && stages.wave2 && !stages.busyDelivery` | `1 failed`: "M24: the hazard line shows for alerts and the further checks without busy delivery, and not under mail off" |
+| X37 | the built-in appears once | SWS: `if (ms !== builtInMs) choices.push` → `if (true) choices.push` | `2 failed`: "quietChoices: the built-in first, then every step from min to max except the built-in, which appears once"; "renders the Now block, the Next step, the quiet time and the counts from the view" |
+| X38 | the select shows no value it does not hold | SWS: delete the line `          {quietValue === QUIET_NONE && <option value={QUIET_NONE} disabled hidden />}` | `1 failed`: "an absent or unreadable stored level checks no radio, and the quiet select shows no built-in it does not hold" |
+| X39 | `fillStallText` reads `$` literally | SWS: `return text.replace(/\{(\w+)\}/g, (whole, key: string) => (Object.hasOwn(slots, key) ? (slots[key] ?? whole) : whole));` → `return Object.entries(slots).reduce((t, [k, v]) => t.replace(`{${k}}`, v), text);` | `1 failed`: "fillStallText fills each named slot, leaves a slot it was not given, and reads a $ in a value literally" |
+| X40 | an unconfirmed write re-reads | SWS: delete the `          reload();` after the fulfilled arm's `          toast(UNCONFIRMED_TEXT);` | `2 failed`: "a 2xx body that fails the wire guard is the same unconfirmed outcome"; "an unreadable 2xx says the write may have landed and re-reads; it installs nothing" |
+| X41 | a refused or unconfirmed rejection re-reads | SWS: delete the `          reload();` after the rejection arm's `else toast(…, 'error');` line | `4 failed`: "P2: a 500 toasts the cause the server named in its message, and re-reads"; "P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap"; "P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked"; "a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads" |
+| X42 | a 2xx goes through the wire guard | SWS: `asStallWatchView(answer)` → `(answer as StallWatchView)` | `1 failed`: "a 2xx body that fails the wire guard is the same unconfirmed outcome" |
+| X43 | the section is mounted | `SettingsScreen.tsx`: delete the line `      <StallWatchSection />` | `22 failed`: "M6: an unmeasured reading renders "Unknown" and "they say: unknown", and no level is read as Off"; "P10: next.kind none shows no Next step, and a step with an empty waitsOn shows no "Waits on:""; "P1: a later failed read keeps the landed view and adds the stale line"; "P1: pending is a skeleton, a failed first read says so, and a view renders — three states, never folded"; "P1b: a 404 not-found after a landed view replaces the whole body — no Now block, no radio checked"; "P1b: a 501 not-configured first read is the not-available text, not the unread line"; "P2: a 500 toasts the cause the server named in its message, and re-reads"; "P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap"; "P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked"; "P3: Set re-POSTs the same body with confirm equal to effectKey, and the 2xx settles"; "P3: a 409 opens the sheet from its effect; Cancel sends nothing more and leaves the stored choice checked"; "P3: a write answered 2xx at once sends only the field moved, opens no sheet, and settles the reply"; "P3: the controls are locked while a write is in flight: a second choice sends nothing, and the answer unlocks them"; "P3: the quiet select writes { quietMs } alone, and "Built-in" writes default"; "P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key"; "P5: the run-less footnote is always shown — zero counts, and counts that could not be read"; "a 2xx body that fails the wire guard is the same unconfirmed outcome"; "a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads"; "an absent or unreadable stored level checks no radio, and the quiet select shows no built-in it does not hold"; "an unreadable 2xx says the write may have landed and re-reads; it installs nothing"; "is the third section, after Notifications, titled Stall watch"; "renders the Now block, the Next step, the quiet time and the counts from the view" |
+| X44 | P3 the lock covers a write in flight (§13 item 3) | SWS: `const locked = busy \|\| pending !== null;` → `const locked = pending !== null;` | `1 failed`: "P3: the controls are locked while a write is in flight: a second choice sends nothing, and the answer unlocks them" |
+| X45 | P3 `choose` sends nothing while locked | SWS: `if (!locked) write(request);` → `write(request);` | `1 failed`: "P3: the controls are locked while a write is in flight: a second choice sends nothing, and the answer unlocks them" |
+| X46 | P2 the quiet select from the server, never the tap | SWS: add `const [tappedQuiet, setTappedQuiet] = useState<string \| null>(null);` after `const locked = …`; `value={quietValue}` → `value={tappedQuiet ?? quietValue}`; the select's `onChange` also runs `setTappedQuiet(e.target.value)` before `choose(…)` | `1 failed`: "P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap" |
+| X47 | P1b a 501 first read is not available | SWS: `{failure === 'not-configured' ? (` → `{failure === 'not-configured' && view !== null ? (` | `1 failed`: "P1b: a 501 not-configured first read is the not-available text, not the unread line" |
+| X48 | a network failure is never "Nothing was changed" | SWS: `          if (refusal.kind === 'unconfirmed') toast(UNCONFIRMED_TEXT);` and the `else ` before the next `toast(` deleted, so every non-confirm rejection takes the `refused` toast | `1 failed`: "a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads" |
+| X49 | P3c the fresh sheet shows the fresh effect, never the first | SWS: `setPending({ request, confirm: refusal.confirm });` → `setPending({ request, confirm: confirm === undefined \|\| pending === null ? refusal.confirm : { ...refusal.confirm, effect: pending.confirm.effect } });` | `1 failed`: "P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key" |
+| X50 | P6 no device word (section) | SWS: append the line `// the same on a phone` to the file | `1 failed`: "P6: the section and its hook have no device branch and no device word" |
+| X51 | P6 no device branch (hook) | H: `export const STALL_WATCH_POLL_MS = 60_000;` → `export const STALL_WATCH_POLL_MS = window.innerWidth < 600 ? 120_000 : 60_000;` | `1 failed`: "P6: the section and its hook have no device branch and no device word" |
+| X52 | P12 the `absent` line | SWS: delete the line `  if (chosen.stored === 'absent') return STALL_STORED_TEXT.absent;` | `2 failed`: "P12: exactly one stored line whenever the stored row does not apply whole, and the fallback line"; "an absent or unreadable stored level checks no radio, and the quiet select shows no built-in it does not hold" |
+| X53 | P12 the `unreadable` line | SWS: delete the line `  if (chosen.stored === 'unreadable') return STALL_STORED_TEXT.unreadable;` | `2 failed`: "M6: an unmeasured reading is "Unknown", never Off — and the chosen values still show"; "P12: exactly one stored line whenever the stored row does not apply whole, and the fallback line" |
+| X54 | P12 the `level` line | SWS: delete the line `  if (level) return STALL_STORED_TEXT.level;` | `1 failed`: "P12: exactly one stored line whenever the stored row does not apply whole, and the fallback line" |
+| X55 | P12 the `quiet` line | SWS: `return quiet ? STALL_STORED_TEXT.quiet : null;` → `return null;` | `1 failed`: "P12: exactly one stored line whenever the stored row does not apply whole, and the fallback line" |
+| X56 | P3d the due group under mail off | SWS: delete the line `    else lines.push(after.alerts ? STALL_CONFIRM_TEXT.dueMailOff : STALL_CONFIRM_TEXT.dueMailOffHeld);` | `1 failed`: "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not" |
+| X58 | P3d the repeat line at Check takes `quietRepeatMailOff` under mail off | SWS: `mailOff ? STALL_CONFIRM_TEXT.quietRepeatMailOff : STALL_CONFIRM_TEXT.quietRepeat` → `STALL_CONFIRM_TEXT.quietRepeat` (in `const repeat = …`) | `1 failed`: "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not" |
+| X59 | Task 1's 500 `message` arm, seen in the section | H: `nonBlank(body.detail) ?? nonBlank(body.message) ?? apiErrorText(err)` → `nonBlank(body.detail) ?? apiErrorText(err)` | `1 failed`: "P2: a 500 toasts the cause the server named in its message, and re-reads" |
+| X60 | Task 1's unconfirmed arm, seen in the section | H: `  if (!(err instanceof ApiError)) return { kind: 'unconfirmed' };` → `  if (!(err instanceof ApiError)) return { kind: 'refused', detail: apiErrorText(err) };` | `1 failed`: "a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads" |
 
-Every row reds, so no guard here is unpinned.
+Every row reds, so no guard here is unpinned. Rows X44 to X60 were added by the plan review's fix round. X57, added
+with them for the repeat line on a raise, was removed with that line by the final fix round (D-4037), so the table has
+no X57. X58 stays, re-described as the guard of the repeat line's mail-off variant at Check and re-measured at the tip
+`e13dc1a6a`. X14 and X18 are back at their first counts, 3 and 4.
 
 ---
 
@@ -2955,8 +3196,8 @@ Every row reds, so no guard here is unpinned.
 **Files:**
 - Modify: `README.md` (≈953 at `77f8d63a5`, ≈960 at `origin/main` `d12b5aba0`): the Settings paragraph (it opens
   `**Settings, the update banner and release pushes (update-management W3).**`, ≈939) gains its third section after the
-  Notifications sentence and before "In remote mode". One line becomes fifteen: `git diff --numstat` reads `15	1`.
-- Create: `server/test/stall-settings-readme.test.ts` (77 lines): the README pin, five rows.
+  Notifications sentence and before "In remote mode". One line becomes seventeen: `git diff --numstat` reads `17	1`.
+- Create: `server/test/stall-settings-readme.test.ts` (81 lines): the README pin, five rows.
 - Test: `server/test/stall-settings-readme.test.ts`.
 - Run unedited: the whole PWA suite, the PWA build, `server/test/typecheck-tests.test.ts`,
   `single-definition.test.ts`, `topology-clean.test.ts`, the README citation instrument in `session-hook.test.ts`, and
@@ -2970,7 +3211,8 @@ Every row reds, so no guard here is unpinned.
   - `export const STALL_SECTION_TEXT: { readonly title: 'Stall watch'; … }` (≈9310).
 - Consumes, from `server/src/coord/stallsettings.ts` (W1): `export const STALL_QUIET_MIN_MS = 30 * 60_000;`,
   `export const STALL_QUIET_MAX_MS = 12 * 3_600_000;`, `export const STALL_QUIET_STEP_MS = 30 * 60_000;`,
-  `export const STALL_NOTICE_WINDOW_MS = 48 * 3_600_000;` (≈60–64).
+  `export const STALL_NOTICE_WINDOW_MS = 48 * 3_600_000;` (≈67–71 at the W1 prototype's `ad2155ff4`, `d513b887f`
+  and tip `a5fa943c6`; ≈60–64 at W1 Task 1's `2fb0123f7`; find them by content).
 - Consumes, from `server/src/coord/stall.ts`: `export const STALL_QUIET_MS = 2 * 3_600_000;` (≈302), the built-in quiet
   time the view reports as `quiet.builtInMs`.
 - Consumes, from W2 Tasks 1–3: the section as shipped (`StallWatchSection.tsx`, `useStallWatchView`'s
@@ -2981,18 +3223,23 @@ Every row reds, so no guard here is unpinned.
 it describes, and never restates, the ladder: the six labels are spelled once in L0 and the pin reads them from there.
 A renamed level (row 3), a moved bound or window (row 4), a dropped route (row 2), a second copy of the lead sentence or
 the section placed before Notifications (row 1), or a device word (row 5, the operator's 2026-10-05 "no device
-distinction", §2) each reds one row. The paragraph's existing "the phone-push bell" (≈951) is left as it is: §13
-measured that nothing in README spells the Notifications row's label, so `notifications-label-says-push` (D-4036)
-reaches no README line, and row 5 scans the third section's sentences only.
+distinction", §2) each reds one row. Row 5 uses the PWA's own device-word list, the plural-aware `DEVICE_WORD` of
+`pwa/test/settings-screen.test.tsx`'s P6 scan, spelled again in the pin because a server test cannot import a PWA test
+file. The sentence also says exactly when a write asks for confirmation, as spec §10's `stallNeedsConfirm` decides it
+with W1's `quiet-raise-asks-nothing` (D-4037): a stage turning on, leaving the further checks, a quiet time moved below
+the one before (never a raise), and every write while the registry cannot be listed. The paragraph's existing "the
+phone-push bell" (≈951) is left as it is: §13 measured that nothing in README spells the Notifications row's label, so
+`notifications-label-says-push` (D-4036) reaches no README line, and row 5 scans the third section's sentences only.
+That phrase is put to the operator under "Open questions for the operator".
 
-**README is in the citation corpus.** The edit adds 14 lines inside one paragraph. The citation instrument stays
+**README is in the citation corpus.** The edit adds 16 lines inside one paragraph. The citation instrument stays
 `7 passed | 328 skipped (335)`, measured before and after:
 `./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'`.
 
 **README's size claim.** `pools-prose.test.ts` holds `CLAUDE.md`'s `README.md` (~N lines) within 100 lines of the file.
-Measured on the prototype (claim `~5600`): README 5684 → 5698, a gap of 98. At `origin/main` `d12b5aba0` the claim
-reads `~5700` and README 5729; this task adds 14, so with W1's README lines the gap stays under 100 unless W1 added
-more than 57. Step 7 runs `pools-prose`; if its size row reds, set the figure in `CLAUDE.md`'s line 10
+Measured on the prototype (claim `~5600`): README 5684 → 5700, a gap of exactly 100, green (the row is
+`toBeLessThanOrEqual(100)`). At `origin/main` `d12b5aba0` the claim reads `~5700` and README 5729; this task adds 16,
+so with W1's README lines the gap stays within 100 unless W1 added more than 55 (the W1 prototype adds 14). Step 7 runs `pools-prose`; if its size row reds, set the figure in `CLAUDE.md`'s line 10
 (`**`README.md` (~5700 lines)`) to the measured `wc -l < README.md` rounded to the nearest hundred, and add
 `CLAUDE.md` to Step 8's `git add`.
 
@@ -3055,6 +3302,10 @@ function stallSentences(): string {
   return p.slice(start, end);
 }
 
+/** The device words the PWA's own P6 scan refuses (`pwa/test/settings-screen.test.tsx`, its `DEVICE_WORD`), the same
+ *  list spelled again here: a server test cannot import a PWA test file. */
+const DEVICE_WORD = /\b(phones?|mobiles?|desktops?|tablets?|laptops?|iphones?|ipads?|android|touchscreens?|handsets?)\b/i;
+
 /** A duration the way the section writes one: "30 min", "2 h", "1 h 30 min". */
 function duration(ms: number): string {
   const h = Math.floor(ms / 3_600_000);
@@ -3089,7 +3340,7 @@ describe("README's Settings paragraph names the Stall watch section (design 2026
   });
 
   it('names no device, as the section itself names none (§2, 2026-10-05)', () => {
-    expect(stallSentences()).not.toMatch(/\b(phone|mobile|desktop|tablet|laptop|touch)\b/i);
+    expect(stallSentences()).not.toMatch(DEVICE_WORD);
   });
 });
 ```
@@ -3113,7 +3364,7 @@ In `README.md`, replace this ONE line (`grep -c` reads `1`, Step 1):
 as the fleet intent's `notify` through `POST /api/updates/intent`. In remote mode the foot of the fleet screen always
 ```
 
-with these fifteen lines (the next line, beginning `carries \`BuildLine\``, is unchanged):
+with these seventeen lines (the next line, beginning `carries \`BuildLine\``, is unchanged):
 
 ```
 as the fleet intent's `notify` through `POST /api/updates/intent`. Settings has a third section, **Stall watch**
@@ -3125,15 +3376,17 @@ controls are the **Level** — `Follow the fleet box's files` (the default, toda
 each including the ones below it: `Off`, `Log only`, `Check silent workers`, `Alert coordinator and you`,
 `Deliver mail to busy sessions`, `Everything` — and the **Quiet time before a worker check** (built-in 2 h; 30 min
 to 12 h in 30 min steps), which also times the pushes about a dialog left open. The checked option is the stored
-answer, never the tap. A write that turns something on, leaves the further checks or lowers the quiet time answers
-409 with what it would do, and the section opens one confirm sheet from that answer; **Set** re-sends the write with
-the server's key, so nothing is written until the operator has confirmed what the server will do. The choice is one
-row in `coord.db` and applies to the whole fleet. It never overrides `stall-watch-disabled`, `mail-disabled` or
-`mail-gate-strict`; a lost row, or a field of it that cannot be read, means the files and the built-in quiet time.
+answer, never the tap. The server answers 409, with what the write would do, to any write that would turn something
+on, leave the further checks, or move the quiet time below what it was, and to every write
+while the fleet box's files cannot be read; the section opens one confirm sheet from that answer, and **Set**
+re-sends the write with the server's key, so nothing is written until the operator has confirmed what the server
+will do. The choice is one row in `coord.db` and applies to the whole fleet. It never overrides
+`stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`; a lost row, or a field of it that cannot be read,
+means the files and the built-in quiet time.
 A server without the route shows the section as not available. In remote mode the foot of the fleet screen always
 ```
 
-Every line is at most 116 characters. The marker names are spelled as the README already spells them; README is not
+Every line is at most 116 characters (the longest, 116). The marker names are spelled as the README already spells them; README is not
 under `single-definition.test.ts`'s `ROOTS` (`shared`, `server/src`, `pwa/src`, `agent/src`), and Step 7 re-runs that
 suite and `topology-clean` all the same.
 
@@ -3148,7 +3401,7 @@ cd server && ./node_modules/.bin/vitest run test/stall-settings-readme.test.ts |
   -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus' | grep -E '^ +Tests '
 ```
 
-Expected (measured): `15	1	README.md`; Step 1's count plus 14 (5698 on the prototype); `Tests  5 passed (5)`;
+Expected (measured): `17	1	README.md`; Step 1's count plus 16 (5700 on the prototype); `Tests  5 passed (5)`;
 `Tests  7 passed | 328 skipped (335)`, unchanged.
 
 - [ ] **Step 6: The mutation table**
@@ -3163,8 +3416,18 @@ file, runs the pin, and restores that file's bytes; the last line must print the
 #!/usr/bin/env python3
 """W2 Task 4's mutation rows. Run from the repo root before the commit: each row edits one file, runs the README
 pin, restores the file's bytes, and the last line prints `git status --short`, which must list only this task's two
-changes."""
-import re, subprocess
+changes. Row A reads README at `README_BASE` (default `HEAD`, the commit before this task's README edit)."""
+import os, re, subprocess
+
+def third_before_second(s):
+    """Move the third section's sentences, whole, to just before the Notifications sentence."""
+    start = s.index('Settings has a third section, **Stall watch**')
+    end = s.index('In remote mode', start)
+    block = s[start:end]
+    s = s[:start] + s[end:]
+    at = s.index('Settings has a second section, **Notifications**')
+    return s[:at] + block + s[at:]
+
 ROWS = {
   'A README as at HEAD': ('README.md', None, None),
   'B rename the log label': ('shared/api.ts', "    label: 'Log only',", "    label: 'Log',"),
@@ -3174,16 +3437,25 @@ ROWS = {
   'F a device word in README': ('README.md', 'whenever the page is shown again. It shows', 'whenever the page is shown again on a phone. It shows'),
   'G a second lead sentence': ('README.md', 'APPEND', '\nSettings has a third section, **Stall watch**, again.\n'),
   'H drop the route from README': ('README.md', 'read and written through `/api/coord/stall-watch` by a poll', 'read and written by a poll'),
+  'I built-in quiet time 3 h': ('server/src/coord/stall.ts', 'export const STALL_QUIET_MS = 2 * 3_600_000;', 'export const STALL_QUIET_MS = 3 * 3_600_000;'),
+  'J quiet minimum 1 h': ('server/src/coord/stallsettings.ts', 'export const STALL_QUIET_MIN_MS = 30 * 60_000;', 'export const STALL_QUIET_MIN_MS = 60 * 60_000;'),
+  'K quiet step 1 h': ('server/src/coord/stallsettings.ts', 'export const STALL_QUIET_STEP_MS = 30 * 60_000;', 'export const STALL_QUIET_STEP_MS = 60 * 60_000;'),
+  'L third section before Notifications': ('README.md', third_before_second, None),
+  'M a plural or brand device word in README': ('README.md', 'whenever the page is shown again. It shows', 'whenever the page is shown again, on Android too. It shows'),
 }
 for name, (f, old, new) in ROWS.items():
     bak = open(f).read()
     if old is None:
-        s = subprocess.run(['git', 'show', f'HEAD:{f}'], capture_output=True, text=True, check=True).stdout
+        base = os.environ.get('README_BASE', 'HEAD')
+        s = subprocess.run(['git', 'show', f'{base}:{f}'], capture_output=True, text=True, check=True).stdout
+    elif callable(old):
+        s = old(bak)
     elif old == 'APPEND':
         s = bak + new
     else:
         assert bak.count(old) == 1, (name, bak.count(old))
         s = bak.replace(old, new)
+    assert s != bak, name
     open(f, 'w').write(s)
     try:
         r = subprocess.run(['./node_modules/.bin/vitest', 'run', 'test/stall-settings-readme.test.ts'],
@@ -3201,9 +3473,13 @@ print(repr(subprocess.run(['git', 'status', '--short'], capture_output=True, tex
 cd "$(git rev-parse --show-toplevel)" && python3 "$INSTR/readme-mutate.py"
 ```
 
+On the real branch leave `README_BASE` unset: `HEAD` is Task 3's commit, which has no third section. The prototype
+had Task 4 committed already, so it was measured with `README_BASE=fc33c1563` (its Task 3 commit), in one foreground
+call under the 600 s limit (13 rows).
+
 | Row | Guard | Mutation | Red in | Measured |
 |---|---|---|---|---|
-| A | The third section is stated | README as at `HEAD` (the sentence absent) | stall-settings-readme | 5 failed (5): all five rows |
+| A | The third section is stated | README as at `README_BASE` (the sentence absent) | stall-settings-readme | 5 failed (5): all five rows |
 | B | The levels are named by their shipped labels | `STALL_LEVEL_TEXT.log.label` `'Log only'` → `'Log'` | stall-settings-readme | 1 failed: "names the Follow choice and the six levels by their shipped labels, in the ladder's order" |
 | C | The bounds are the shipped bounds | `STALL_QUIET_MAX_MS` 12 h → 11 h | stall-settings-readme | 1 failed: "states the quiet time's built-in value, bounds and step, and the counts' window, as the build ships them" |
 | D | The window is the shipped window | `STALL_NOTICE_WINDOW_MS` 48 h → 24 h | stall-settings-readme | 1 failed: the same row as C |
@@ -3211,51 +3487,70 @@ cd "$(git rev-parse --show-toplevel)" && python3 "$INSTR/readme-mutate.py"
 | F | No device word | "shown again" → "shown again on a phone" | stall-settings-readme | 1 failed: "names no device, as the section itself names none (§2, 2026-10-05)" |
 | G | One lead sentence | append a second "Settings has a third section, **Stall watch**" | stall-settings-readme | 1 failed: "names a third section, once, after the Notifications section" |
 | H | The route is named | drop "through `` `/api/coord/stall-watch` ``" | stall-settings-readme | 1 failed: "names the route the section reads and writes" |
+| I | The built-in is the shipped built-in | `STALL_QUIET_MS` 2 h → 3 h (`stall.ts`) | stall-settings-readme | 1 failed: the same row as C |
+| J | The minimum is the shipped minimum | `STALL_QUIET_MIN_MS` 30 min → 60 min | stall-settings-readme | 1 failed: the same row as C |
+| K | The step is the shipped step | `STALL_QUIET_STEP_MS` 30 min → 60 min | stall-settings-readme | 1 failed: the same row as C |
+| L | The section comes after Notifications | move the third section's sentences, whole, to just before "Settings has a second section, **Notifications**" | stall-settings-readme | 2 failed: "names a third section, once, after the Notifications section"; "names no device, as the section itself names none (§2, 2026-10-05)" (the moved block's sentences now run to "In remote mode" across the Notifications sentence, whose "phone-push bell" the device row finds) |
+| M | No device word, plural or brand | "shown again" → "shown again, on Android too" | stall-settings-readme | 1 failed: "names no device, as the section itself names none (§2, 2026-10-05)" (the earlier six-word pattern passed this row) |
 
 The last line prints `' M README.md\n?? server/test/stall-settings-readme.test.ts\n'`. Rows B, C and D also red W1's
 `stall-settings.test.ts` and the PWA suites that read those constants; the runner runs the pin alone, by design.
 
 - [ ] **Step 7: The whole-wave checks**
 
+Every line below is its own foreground Bash call with a timeout of at least 600000 ms: one test file per command, the
+whole PWA suite alone and the build alone, so no call can pass the tool's 600 s limit under load and lose its output.
+
 PWA, the whole suite and the build (the build's script is `tsc --noEmit && vite build`, so it is the PWA typecheck too):
 
 ```bash
-cd "$(git rev-parse --show-toplevel)/pwa"
-./node_modules/.bin/vitest run | grep -E '^ +(Test Files|Tests) '
-npm run build 2>&1 | grep -E 'built in|error|files generated'
+cd "$(git rev-parse --show-toplevel)/pwa" && ./node_modules/.bin/vitest run | grep -E '^ +(Test Files|Tests) '
+cd "$(git rev-parse --show-toplevel)/pwa" && npm run build 2>&1 | grep -E 'built in|error|files generated'
 ```
 
-Expected: `Test Files  106 passed (106)`, `Tests  3314 passed (3314)` on the prototype (the counts include W2 Tasks 1–3's
-rows; on the real branch they are `main`'s plus those). Measured on the prototype under load average 46:
-`Tests  4 failed | 3310 passed (3314)`, all four in `test/contrast.test.ts`'s "the gate fails a mutated tree" describe,
-each over the 5000 ms default timeout (5087 ms, 7986 ms); re-run alone,
-`./node_modules/.bin/vitest run test/contrast.test.ts --testTimeout=240000` gave `Tests  256 passed (256)`. A red there
-is load until it reds alone. The build: `✓ built in 3.48s` and `files generated` (`sw.js`); the >500 kB chunk warning
-is `main`'s, not this wave's. `server/dist-pwa/` is gitignored, so `git status` does not move.
+Expected: `Test Files  106 passed (106)`, `Tests  3320 passed (3320)` on the prototype at `825fd1965`, measured green
+at load average ≈25 (the counts include W2 Tasks 1–3's 83 rows; on the real branch they are `main`'s plus those). The
+first prototype, under load average 46, measured `Tests  4 failed | 3310 passed (3314)`, all four in
+`test/contrast.test.ts`'s "the gate fails a mutated tree" describe, each over the 5000 ms default timeout (5087 ms,
+7986 ms); re-run alone, `./node_modules/.bin/vitest run test/contrast.test.ts --testTimeout=240000` gave
+`Tests  256 passed (256)`. A red there is load until it reds alone. The build: `✓ built in 2.32s` and
+`files generated` (`sw.js`); the >500 kB chunk warning is `main`'s, not this wave's. `server/dist-pwa/` is gitignored,
+so `git status` does not move.
 
 Server: the typecheck, the typecheck suite (its PWA row needs `pwa/node_modules`, installed by `npm ci` in `pwa/`),
 the single-definition and topology scans, and every suite that reads README as prose:
 
 ```bash
-cd "$(git rev-parse --show-toplevel)/server"
-./node_modules/.bin/tsc --noEmit -p . && echo src-ok
-./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json && echo tests-ok
-for f in typecheck-tests single-definition topology-clean pools-prose oss-metadata readme-holds readme-roster-mirror \
-         box-token-census child-reclaim-prose crossrepo-prose license coordinator-skill worker-skill reviewer-skill \
-         stall-settings stall-vocabulary; do
-  printf '%s: ' "$f"; ./node_modules/.bin/vitest run "test/$f.test.ts" | grep -E '^ +Tests '
-done
-./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts -t README | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/tsc --noEmit -p . && echo src-ok
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json && echo tests-ok
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/single-definition.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/topology-clean.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/pools-prose.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/oss-metadata.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/readme-holds.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/readme-roster-mirror.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/box-token-census.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/child-reclaim-prose.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/crossrepo-prose.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/license.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/worker-skill.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/reviewer-skill.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/stall-settings.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/stall-vocabulary.test.ts | grep -E '^ +Tests '
+cd "$(git rev-parse --show-toplevel)/server" && ./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts -t README | grep -E '^ +Tests '
 ```
 
-Expected (measured on the prototype; a suite W1 extended reads `main`'s count plus W1's rows): `src-ok`, `tests-ok`;
-typecheck-tests 12 passed (12); single-definition 274 passed (274); topology-clean 55 passed (55); pools-prose 27
-passed (27); oss-metadata 22 passed (22); readme-holds 17 passed (17); readme-roster-mirror 5 passed (5);
-box-token-census 23 passed (23); child-reclaim-prose 4 passed (4); crossrepo-prose 17 passed (17); license 15 passed
-(15); coordinator-skill 160 passed (160); worker-skill 51 passed (51); reviewer-skill 14 passed (14); stall-settings
-62 passed (62) at W1 Task 1 (W1's later tasks add rows); stall-vocabulary 179 passed (179); ccrc-install-graphify's
-README rows 9 passed | 49 skipped (58). `typecheck-tests` and `session-hook` are known load flakes: re-run a red one
-alone with `--testTimeout=240000` before calling it a break.
+Expected (each measured at `825fd1965`; a suite W1 extended reads `main`'s count plus W1's rows): `src-ok`,
+`tests-ok`; typecheck-tests 12 passed (12); single-definition 274 passed (274); topology-clean 55 passed (55);
+pools-prose 27 passed (27); oss-metadata 22 passed (22); readme-holds 17 passed (17); readme-roster-mirror 5 passed
+(5); box-token-census 23 passed (23); child-reclaim-prose 4 passed (4); crossrepo-prose 17 passed (17); license 15
+passed (15); coordinator-skill 160 passed (160); worker-skill 51 passed (51); reviewer-skill 14 passed (14);
+stall-settings: the count the Baseline recorded from `main` (114 passed (114) at the W1 prototype's tip
+`a5fa943c6`, 62 at W1 Task 1); stall-vocabulary 179 passed (179); ccrc-install-graphify's README rows 9 passed | 49
+skipped (58). `typecheck-tests` and `session-hook` are known load flakes: re-run a red one alone with
+`--testTimeout=240000` before calling it a break.
 
 - [ ] **Step 8: Commit**
 
@@ -3268,9 +3563,12 @@ docs(readme): the Settings paragraph names the Stall watch section, pinned to th
 The paragraph that tours /settings gains its third section (design 2026-10-05, §18 W2): the route, what the Now block
 shows, the Level choices by their L0 labels, the quiet time's built-in value, bounds and step, the 409 confirm the
 server decides (D-4033 server-decides-the-confirm) and the not-available reading of a server without the route
-(D-4035 older-server-404-reads-not-configured). server/test/stall-settings-readme.test.ts pins those facts to L0 and
-L1: a renamed level, a moved bound or window, a dropped route, a second lead sentence or a device word each reds one
-row. The README citation instrument stays at 7 passed | 328 skipped.
+(D-4035 older-server-404-reads-not-configured). It says exactly when a write asks for confirmation: a stage turning
+on, leaving the further checks, a quiet time below the one before (never a raise, D-4037 quiet-raise-asks-nothing),
+and every write while the fleet box's files cannot be read. server/test/stall-settings-readme.test.ts pins those
+facts to L0 and L1: a renamed level, a moved bound, step, built-in or window, a dropped route, a second lead sentence,
+the section placed before Notifications, or a device word (the PWA's own list) each reds a row. The README citation
+instrument stays at 7 passed | 328 skipped.
 MSG
 )"
 ```
@@ -3295,8 +3593,9 @@ and the coordinator assigns its number.
     watchdog`, a copy of the Updates discipline would keep showing the old choice with its radio checked. That choice
     no longer applies, and every notice it recorded in shadow is going out (§15's rollback row).
   - **Pinned by:**
-    - Task 1's P7 row (mutations P7a, every 404; P7b, every 501);
-    - Task 3's two P1b rows (X2, the view rendered first).
+    - Task 1's P7 row (mutations P7a, every 404; P7b, every 501; P7c, the 501 pair dropped);
+    - Task 3's P1b 404 row (X2, the view rendered first) and its P1b 501 first-read row (X47, the not-available body
+      only over a landed view). X2 alone cannot red the 501 row: on a first read no view has landed.
   - **Cost if wrong:**
     - A 404 `not-found` that is not a rollback blanks the section to "not available" until the next good poll clears
       the failure. A proxy misroute under a TLS-terminating front is one such case. During that window the stored
@@ -3311,20 +3610,26 @@ and the coordinator assigns its number.
     does the block's comment ("The PHONE-PUSH toggle" becomes "The PUSH toggle").
   - **Why:** the operator's 2026-10-05 directive: "same functionality identical across anywhere the PWA is installed".
     Alert's `does` text points at this row, so the row must not name a device either.
-  - **Pinned by:**
-    - "P6: no L0 STALL_* string names a device, and the Notifications row says push" (X22, the label put back to Phone);
-    - Task 4's no-device row over the README sentence.
+  - **Pinned by:** "P6: no L0 STALL_* string names a device, and the Notifications row says push" and the moved
+    label pin in "reuses the literal NotificationBell where the browser can do Web Push", both red under X22 (the label
+    put back to Phone). Nothing else pins this number: Task 4's no-device row scans only the third section's
+    sentences, which never spell the Notifications label, so it stays green if the label reverts.
   - **Cost if wrong:**
     - One label, and one moved test line.
-    - README ≈951 still says "the phone-push bell for this browser". That is outside this number's text, and is left
-      for the operator (see the open questions this plan's tasks record).
+    - README ≈951 still says "the phone-push bell for this browser". That is outside this number's text and outside
+      §18's README edit, and is put to the operator under "Open questions for the operator" below.
 
-**Numbers this wave cites but does not define.** The W1 plan defines both. Defining either here too would red
+**Numbers this wave cites but does not define.** The W1 plan defines all four. Defining any of them here too would red
 `deviation-refs`' two-plans row.
 - D-4033 is `server-decides-the-confirm`. W2 is its client half: Task 1's `asStallConfirm` and `stallWriteRefusal`,
   and Task 3's sheet, which re-sends `effectKey`.
 - D-4034 is `confirm-on-stage-diff`. W1 computes the effect, and W2 renders the sheet: Task 3's `stallConfirmLines`,
   and Task 2's list form of `QuickConfirm`.
+- D-4037 is `quiet-raise-asks-nothing`. W1's `quietLowered` is true only for a quiet time brought strictly lower, so a
+  raise alone asks for no confirm and opens no sheet. W2 adds no line for a raise and no L0 text (Task 3's choices;
+  Task 4's README clause).
+- D-4038 is `view-reads-stages-with-the-resolution`. W1's view reads the resolved stages with the resolution, so a
+  reader fault over a listed registry never answers `{ measured: false }`. W2 renders what arrives (Residue, below).
 
 **Departures found during this wave's execution** are numbered by the coordinator at wave-done, from the programme's
 reserve. None is defined here, and none is written as a number in code or commits before then: a departure goes into
@@ -3336,8 +3641,10 @@ Each is pinned, and the plan takes no number for any of them:
   most 1000 steps (G10, G11).
 - `malformed-fallback-refuses-the-answer` (Task 1). A malformed `next` or `filesExceed` is dropped as not stated, with
   one warning. A malformed `fallback` refuses the whole answer (G4, G7, G8).
-- `unanswered-write-reads-refused` (Task 1). A rejection that is not an `ApiError` (a network failure after the POST
-  left) reads as `refused`.
+- `unanswered-write-reads-unconfirmed` (Tasks 1 and 3). A rejection that is not an `ApiError` (a network failure,
+  after which the POST may have landed) reads as `unconfirmed`: the section toasts `UNCONFIRMED_TEXT` and re-reads,
+  as §15's "A write's reply cannot be read" row does for an unreadable 2xx, and never says "Nothing was changed" (G18,
+  X48, X60).
 - `quiet-select-shows-no-unanswered-value` (Task 3). A stored quiet time the list does not hold selects one empty,
   hidden, disabled option (X38).
 - `readme-section-sentence-pinned-to-l0` (Task 4). A new server test file the spec does not name.
@@ -3350,31 +3657,58 @@ From spec §20, each settled where the task names it:
     held line, the due lines, the quiet lines and the files-exceed line.
   - §15's wording is read as "listed it", not as an order.
   - Pinned by "the order: does, turn-ons, stops, the held line, what falls due, the quiet lines, the files-exceed line".
-- **"A quiet-time raise that stays below the built-in … opens a sheet with a title and no body lines"** (Tasks 2 and 3).
-  It is accepted as is:
-  - the server decided the confirm;
-  - the section adds no line of its own;
-  - `stallConfirmLines` answers `[]`;
-  - `QuickConfirm` given `consequence: []` renders no paragraph, and still renders the title, Set and Cancel. That is
-    pinned in Task 2's P8 row and in Task 3's "P3d: a quiet time raised but still below the built-in…".
+- **"A quiet-time raise that stays below the built-in … opens a sheet with a title and no body lines"** (Task 3).
+  Settled in W1 by `quiet-raise-asks-nothing` (D-4037), which W1's plan defines:
+  - `quietLowered` is true only when the effective quiet time after the write is strictly lower than the one before,
+    so a raise alone needs no confirm, and the section opens no sheet for it;
+  - `stallConfirmLines` adds no line for a raise, every case §13 already words is unchanged, no L0 text is added,
+    and W2 touches no `shared/`;
+  - Task 4's README clause says a quiet time moved below the one before, never a raise.
 
-  Whether the server should ask at all is W1's `stallNeedsConfirm`, and this wave does not decide it.
+  W1 pins the rule (its Task 2 quiet row and the `D-4037: a raise never asks` mutation row). `QuickConfirm` still
+  renders a bare title for `consequence: []` (Task 2's P8 row), but no stall watch sheet passes one: every confirm
+  has a stage line, a stops line, a quiet line for a lowering, or the unknown line.
+- **What `effective` carries after a view-reader fault** (W1's hand-off; `view-reads-stages-with-the-resolution`
+  (D-4038)). W1 reads the resolved stages with the resolution, so a reader fault over a listed registry never
+  answers `{ measured: false }`:
+  - a throw in `stallNextStep` or `stallFilesExceed` sends `effective` with `measured: true` and `next` and
+    `filesExceed` left out. W2 reads both as not stated: no Next step block and no files-exceed line, and the reading
+    itself is still drawn. Pinned by G7, the P10 row "the Next step renders from the wire — none and a missing next
+    show nothing, an empty waitsOn no gates", and P11 (X28, X29);
+  - a `stallStages` throw claims W1's fallback, so the section shows the files-only reading and the fallback line
+    (X31) naming the fault;
+  - accepted by D-4038 as bug-path residue, with no new wire word: a files-only reader throwing under a fallback
+    answers `{ measured: false }`, which the section shows as Unknown (M6) beside that fallback line.
+- **`dueFromOff` and a `{label}` slot** (W1's hand-off list). Settled: the line keeps §13's approved wording, "Off
+  recorded nothing. …", with no `{label}` slot. W1 decided it in its L0 ("Off" is the level's full label, and §12's
+  slot rule is about short forms), and W2 renders `STALL_CONFIRM_TEXT.dueFromOff` as given. Pinned by "P3d: checks
+  from a running watch are due; from Off, dueFromOff".
 - **"A 409 whose body fails `asStallConfirm` becomes the `refused` toast, but a `confirm-required` body carries no
   `detail`"** (Task 1). `stallWriteRefusal` falls back to `apiErrorText(err)`, which gives the error code
   (`confirm-required`), so the slot is never empty. Pinned by "reads a 409 whose body is not a readable confirm as a
   refusal that still names something".
-- **"Fastify's 500 body has no `detail`, so the `refused` toast's slot renders empty"** (Task 1).
-  - The same fallback gives "Internal Server Error", which is `ApiError`'s message from the body's `error` field.
-  - A non-JSON body gives "request failed (<status>)", and a network failure gives its own message.
-  - A blank server `detail` is ignored.
-  - No new L0 string. Pinned by "falls back to the error's own text when the body has no detail: Fastify's 500, a blank
-    detail, raw text" (G15).
+- **"Fastify's 500 body has no `detail`, so the `refused` toast's slot renders empty"** (Task 1), and W1's hand-off
+  on the same slot ("when the body has none or Fastify's 500 puts the cause in `message`").
+  - A 500 toasts the cause the route threw, from the body's `message` ("Nothing was changed: stall settings
+    unreadable, nothing written: …"). Pinned by "takes Fastify's message when the body has no detail…" (G17) and the
+    section's "P2: a 500 toasts the cause the server named in its message…" (X59).
+  - A blank `message` falls back to "Internal Server Error", `ApiError`'s message from the body's `error` field; a
+    non-JSON body gives "request failed (<status>)"; a blank server `detail` is ignored. Pinned by "falls back to the
+    error's own text when the body has neither…" (G15).
+  - A network failure is not a refusal at all: it reads `unconfirmed` (below).
+  - No new L0 string.
+- **A write whose answer never arrived** (the plan review; §15's "A write's reply cannot be read" row). A rejection
+  that is not an `ApiError` may have stored the write, so it gives `toast(UNCONFIRMED_TEXT)` and a re-read, never
+  "Nothing was changed". W1 provides no L0 text for it and W2 adds none, so the PWA's existing `UNCONFIRMED_TEXT` is
+  used, the text §13 step 3 and §15 already prescribe for an answer that could not be read. Pinned by G18, X48 and
+  X60.
 - **"An absent row sends `chosen.level` `'unreadable'`, so no radio is checked"** (Task 3). The section checks a radio
   only on `chosen.level === value`. Pinned by the `stored: 'absent'` render row ("an absent or unreadable stored level
   checks no radio…"), which also shows the absent stored line.
 
 **Not settled here.** These are W1's, or the operator's:
-- the view builder's behaviour when `stallLevelOf` or `stallStages` throws, and whether its catch warns;
+- the view builder's behaviour when `stallLevelOf` or `stallStages` throws (W1's D-4038; its hand-off is above), and
+  whether its catch warns;
 - `stallNextStep`'s row-to-arming conversion;
 - the `held` object and the `source` of the fallback reading;
 - `stallEffectKey` over a `null` `updatedAt`;
@@ -3387,6 +3721,17 @@ Two of the remaining items reach this wave's screen unchanged, and the section d
 - **A row with both fields unreadable takes two writes to repair.** §13 step 1 sends only the field that moved.
 - **A remote `readdir` that alternates between `null` and a listing opens a fresh sheet on every Set.** The section
   follows §13 step 4 and adds no bound.
+
+## Open questions for the operator
+
+Neither blocks the wave; each is the operator's to rule on, and the wave-done mail repeats them.
+- **README ≈951 (≈958 at `d12b5aba0`), "the phone-push bell for this browser".** It is in the Settings paragraph W2
+  edits, but outside D-4036 (which renames the Notifications row's label, a string README never spells) and outside
+  §18's README edit list (the third-section sentence only). Rewording it to "the push bell for this browser" would
+  carry the 2026-10-05 "no device distinction" directive into README.
+- **`UNCONFIRMED_TEXT` for a write whose answer never arrived.** Its lead word, "Saved —", overstates a request that
+  may never have left; the re-read that follows shows what was stored within one answer. A text that says only "could
+  not be confirmed" would need an L0 or PWA string that neither wave adds today.
 
 ## If this PR is overtaken before it merges
 
@@ -3403,8 +3748,9 @@ up, and nothing here spells the number. If a fix round here seems to need storag
 coordinator by slug, never a slot taken in this wave.
 
 **Likely overtakers, by file:**
-- **W1 fix rounds or a follow-up that reshapes L0.** If a `STALL_*` text or a wire type changes on `main`:
-  - re-run Precondition 2's export check;
+- **W1 fix rounds or a follow-up that reshapes L0 or L1.** If a `STALL_*` text, a wire type or one of Task 4's L1
+  bounds changes on `main`:
+  - re-run all of Precondition 2's export checks, the L0 count and both L1 counts;
   - re-run `use-stall-watch-view`, `settings-screen` and `stall-settings-readme`.
 
   Most rows fill from L0 and move with it. A row that reds on a changed text is a finding. Fix the row to read L0;
