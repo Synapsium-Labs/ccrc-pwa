@@ -4980,8 +4980,8 @@ untouched; every write is `jq`-gated and backed up to `~/ccrc-backups/<ts>/`.
 The managed entry is one command, `bash "$HOME/.cc-sessions/session-hook.sh"`,
 registered under every event the hook's `case` block handles — `PreToolUse`
 (matcher `*`), `PostToolUse`, `PermissionRequest`, `UserPromptSubmit`, `Stop`,
-`StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact` and
-`SessionStart`; `Notification` is not among them. The installer's event list
+`StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`,
+`SessionStart` and `SessionEnd`; `Notification` is not among them. The installer's event list
 and the hook's `case` arms are one set written twice, and `server/test/install-session-hooks.test.ts` derives the
 expected one from the hook's `case` block, because they once drifted and a
 `SessionStart` arm sat dead on the fleet for months (D-306). The installer also
@@ -5502,7 +5502,9 @@ file under `~/.ccrc/hook-capture/<id>/` (at most 200; the first line a meta
 line naming the pane's session id, then the payload as sent). Raw captures
 carry prompts, paths and tool arguments and never leave the box:
 `node deploy/hook-capture-reduce.mjs <dir>` reduces a directory to key paths,
-types and validated tokens, and only that is fit to commit. Every other
+types and validated tokens, and only that is fit to commit. `SessionEnd` is
+registered for the delegation broker's measurement (spec 2026-10-04 §5.3): it is captured
+in a `-hookcap` session and otherwise writes nothing. The reducer's `delegation` block (`--root <label>=<path>` classifies `cwd`) reports tool names from a fixed set, Agent/Workflow key names, isolation as a token and ordinals in place of ids — still no value, id or path. Every other
 session pays one string test for the arm.
 
 Known real-format subtleties already encoded:

@@ -502,7 +502,7 @@ describe('event → state mapping', () => {
     expect(readState().state).toBe('working');
   });
   it('an unrecognized event writes nothing', () => {
-    run({ hook_event_name: 'SessionEnd' });
+    run({ hook_event_name: 'Notification' });
     expect(fs.existsSync(stateFile())).toBe(false);
   });
 });
