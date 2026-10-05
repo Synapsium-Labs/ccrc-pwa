@@ -1735,6 +1735,29 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - **Also:** the worker found that `list-units --plain` prints no marker column for failed units. systemctl's man
       page says the same: `--plain` omits the bullet circles. So the crash-shaped listing parses correctly, and not
       only on systemd 255.
+  - **2026-10-05 19:13 UTC, the Ctrl-C fix's review (mail 3574), ruled (answer mail 3575).** The fix landed as
+    `26d3a4d7`. Its number, reserve 3988, is written bare here because it is defined on the worker's branch, not this
+    one. Its shape: the launcher runs async, and the sweep shell waits on it under an INT trap that TERMs the launcher
+    and re-raises.
+    - **What the review measured:**
+      - A SIGINT after the launch loop ends the run by INT within 0.01 s, with 0 survivors and no dir left.
+      - A SIGINT during the loop can kill the launcher between a fork and that job's `.pid` write. At 120 units, one
+        job then leaks: 9 of 12 group-INT runs on the head, against 2 of 12 on the Task 6 base. The leaked job is a
+        read-only verify that ends by itself in about 8 s.
+    - **A correction to 18:24:** the review could not reproduce a lost group INT on the base. Only an INT to the sweep
+      shell alone was lost. So "on the branch a Ctrl-C is lost" is unproven for a terminal's Ctrl-C. The wave-done
+      says which shape a terminal sends and what the base did with it.
+    - **Ruled: one fix round under the same number, after Task 7.**
+      - The launcher traps TERM to a stop flag, so every forked job gets its `.pid`. The handler waits for the
+        launcher.
+      - W21's launch-loop variant runs four shapes, each asserting 0 survivors: INT to the group, INT to the shell
+        alone, TERM to the group, and TERM to the shell alone.
+      - Base and head are measured with the same harness. The number's text points D-3972 (e) at the async launch.
+    - **The stopping line:**
+      - A shape that still leaks, but is no worse than the base, lands, and the leak goes to residue (R17's class).
+      - Any shape worse than the base reverts the fix to the Task 6 block. Both INT behaviours then go to residue, and
+        the number is recorded as "taken and reverted".
+      - There is no third reshape.
   - **Noise, not this programme's:** `map-build` on `main` went red at `00f8a193` and `4100ae1c`, with five files
     "newly failing under trace". Every test leg was green. At `be93d159` only `boot.test.ts` still failed under trace,
     and at `1eda8630` none did. This belongs to the CI test-selection tooling.
