@@ -225,8 +225,11 @@ undone.
      pane is idle only when its live file reads `idle` and the predicate is false. A measured busy refuses
      `409 session-busy` (`interrupt:true` lets it proceed). Whatever could not be read is not busy but unmeasured,
      and refuses `409 status-unknown` whatever the consents (3881): no config dir, tmux `unknown`, an unread pane
-     pid, an absent or unreadable live file, a status word `_ws_status` could not extract, and, the server's own
-     stricter arm, a missing frame row. Without `interrupt:true` it is re-read at the stop, so a turn begun during
+     pid, an absent or unreadable live file, a status word `_ws_status` could not extract, and the server's own two
+     stricter arms: a missing frame row, and a live file that is present but malformed (not JSON, or no string
+     `sessionId`), from which ccd's grep may still read a word. The word is read from the PARSED file, and a `status`
+     that is not a string is no word; a file that is not compact JSON (`"status": "idle"`) still diverges from ccd's
+     grep, which no observed writer produces. Without `interrupt:true` it is re-read at the stop, so a turn begun during
      the claim reads or the programme end refuses `409 session-busy` (or `status-unknown`, if the state became
      unreadable), naming any runs already ended.
      The same fail-closed read applies to a workspace whenever `programme:'end'` or `interrupt:true` is set: the end
