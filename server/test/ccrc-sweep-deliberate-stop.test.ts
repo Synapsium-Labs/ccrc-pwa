@@ -178,6 +178,11 @@ describe('the move INTO wave 11: the pre-wave-11 _upd_sweep (frozen, v0.0.60–v
     expect(box.env['XDG_RUNTIME_DIR']!.startsWith(box.home)).toBe(true);
     expect(box.env['DBUS_SESSION_BUS_ADDRESS']!.startsWith(`unix:path=${box.home}`)).toBe(true);
     expect(box.env['HOME']).toBe(box.home);
+    // The check covers the env the spawn carries: an override that moves the bus off the fixture HOME is refused
+    // BEFORE any spawn (no systemctl call is recorded).
+    expect(() => runSweep(box, { frozen: FROZEN_SWEEP, env: { XDG_RUNTIME_DIR: '/run/user/0' } }))
+      .toThrow(/assertNoRealTool: XDG_RUNTIME_DIR=\/run\/user\/0/);
+    expect(calls(box)).toEqual([]);
   }, 60_000);
 
   itLinux('X2 stamped stop caught in the window: the sweep returns 0', () => {

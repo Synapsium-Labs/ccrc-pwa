@@ -309,7 +309,10 @@ export interface RunOpts {
 
 /** `_upd_sweep` out of the sourced `ccd/ccrc` (and the frozen file over it, when named), on the Linux arm, contained. */
 export function runSweep(box: Box, o: RunOpts = {}): { code: number; stdout: string; stderr: string } {
-  assertContained(box);
+  // The check runs on the env the spawn will CARRY (box.env plus the case's overrides), never on box.env alone:
+  // an `o.env` that sets PATH or a bus name would otherwise reach the spawn unchecked.
+  const env = { ...box.env, ...(o.env ?? {}) };
+  assertContained({ home: box.home, env });
   const reporting = o.reporting === undefined ? ''
     : `UPD_REPORTING=1; UPD_REPORT_PID=${o.reporting.pid}; UPD_REPORT_TARGET=v0.0.85; UPD_FROM=auto; UPD_REPORT_STARTED=1`;
   const script = [
@@ -317,7 +320,7 @@ export function runSweep(box: Box, o: RunOpts = {}): { code: number; stdout: str
     'UPD_BACKUP_DIR="$HOME/ccrc-backups/fixture"', reporting, '_upd_sweep', 'rc=$?', o.tail ?? '', 'exit $rc',
   ].filter((s) => s !== '').join('; ');
   const r = spawnSync(BASH, ['-c', script, 'ccrc-under-test', CCRC_SRC, o.frozen ?? ''], {
-    env: { ...box.env, ...o.env }, encoding: 'utf8', timeout: o.timeout ?? 45_000,
+    env, encoding: 'utf8', timeout: o.timeout ?? 45_000,
     killSignal: o.killSignal ?? 'SIGTERM',
   });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
