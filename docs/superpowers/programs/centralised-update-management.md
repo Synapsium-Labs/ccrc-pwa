@@ -1758,6 +1758,33 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - Any shape worse than the base reverts the fix to the Task 6 block. Both INT behaviours then go to residue, and
         the number is recorded as "taken and reverted".
       - There is no third reshape.
+  - **2026-10-05 20:46 UTC, the fix's round 2 (question mail 3588), ruled KEEP (answer mail 3589).**
+    - **The approved launcher TERM trap measured worse than the base.** Each job and its bash briefly inherit the
+      handler, so a TERM that lands then is lost. TERM to the shell alone leaked 18 of 36 runs, against the base's 4
+      of 36.
+    - **What landed instead:** the worker's round carries the same flag as a FILE (`$vdir/stop`, read at each loop
+      top), as `63f1cc15`. That is a different mechanism from the one approved. It was landed and then asked about, and
+      the ruling says that next time it is asked first.
+    - **Leaked runs, Task 6 base `e92b38cd` against head `63f1cc15`** (24 or more per shape per sha):
+
+      | Shape | Base | Head |
+      |---|---|---|
+      | INT to the group | 5/24 | 0/24 |
+      | INT to the shell alone | 1/24, and the INT was swallowed in 24/24 | 0/24 |
+      | TERM to the group | 28/72 | 30/96 (39% to 31%) |
+      | TERM to the shell alone | 4/36, and the TERM was swallowed in 32/36 with a dir left in 26/36 | 0/24 |
+
+      The head left no dir in any shape. No shape is worse than the base.
+    - **Why keep:** the stopping line judged the round's outcome against the base, and the file is the flag that was
+      approved.
+    - **Two finishing changes, and then the signal path is closed for this wave:**
+      - **Delete the INT handler and its save and restore of the caller's trap.** Dropping it reds nothing, because
+        the async launcher lets an untrapped INT end the sweep shell at `wait`, and the exit chain's first entry stops
+        the launcher. If the four shapes get worse without it, it is restored and pinned.
+      - **Pin the loop-top check by its bound.** Signal a 120-unit sweep once 10 `.pid` files exist, and assert the
+        final count stays within a measured slack. If the box cannot separate the two cases, the check is listed as an
+        unpinned bound.
+    - **To residue (R17):** the TERM-to-the-group leak and the rejected trap.
   - **Noise, not this programme's:** `map-build` on `main` went red at `00f8a193` and `4100ae1c`, with five files
     "newly failing under trace". Every test leg was green. At `be93d159` only `boot.test.ts` still failed under trace,
     and at `1eda8630` none did. This belongs to the CI test-selection tooling.
@@ -1916,6 +1943,12 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   the sweep's pid alone during one of them leaves the verify and its `sleep` to finish, read-only, within seconds. A
   unit stop kills the whole cgroup and leaves nothing. This is the same class as `main`'s serial loop. One fix would be
   to run each foreground call as a recorded job that the kill can reach.
+  - **Added 20:46 UTC, from the Ctrl-C fix's round 2:**
+    - **A TERM to the whole process group** still leaks one job in about 31% of runs. The launcher dies between a fork
+      and that job's `.pid` write, so the kill never sees the job. On the base the rate was 39%. The sender is a unit
+      stop, which TERMs the whole cgroup anyway, and the leaked verify is read-only and ends by itself in about 8 s.
+    - **Do not retry a TERM trap in the launcher.** It was measured and rejected: the jobs briefly inherit its
+      handler, and a TERM to the shell alone then leaked 18 of 36 runs.
 ## Next-wave brief
 
 **Wave 2 (run 128) — dispatched 2026-09-23.** The brief as sent is the plan's path and sha, tasks 1–15, execution
