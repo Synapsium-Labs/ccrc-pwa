@@ -449,7 +449,7 @@ carries it (spec §5.1, amended 2026-09-24).
     residue.
   - **Not yet ruled:** this report also lacks the refute pass (the same brief omission). Mail 3505 asks for it, and
     review 267 stays open until it arrives.
-- **2026-10-05 11:01 — review 267 ruled; fix round 1 sent** (mail 3507). The review run closed `done`, keeping its
+- **2026-10-05 11:00 — review 267 ruled; fix round 1 sent** (mail 3507). The review run closed `done`, keeping its
   workspace.
   - **The panel** (votes in `review-267-3f9cca09-panel.md`): 18 Sonnet refuters, none died.
     - CONFIRMED: F1, F3, F4, F5, F6.
