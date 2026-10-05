@@ -108,3 +108,92 @@ export function plantPython3(home: string, mode: 'missing' | 'too-old' | 'raises
   fs.writeFileSync(stub, ['#!/bin/sh', ...body, ''].join('\n'), { mode: 0o755 });
   fs.chmodSync(stub, 0o755);
 }
+
+// ---- Task 7: the PATH git recorder, and a contained shell run for an argv a JS string cannot carry ----
+// Spec 2026-10-01 section 2 (j), "Git calls are recorded at PATH level": the helper's git is a python
+// subprocess that finds `git` on PATH, so a bash-function stub (the NOGIT idiom) never sees it. A wrapper FILE
+// in `harnessBin(home)`, the first PATH entry of every contained env, does. The imports are aliased: this block
+// sits below the file's own imports and binds no name they may already bind.
+import fsRec from 'node:fs';
+import pathRec from 'node:path';
+import { harnessBin as recorderBin } from './ccdWsHelpers.js';
+
+/** One git call the recorder saw: the argv after `git`, and every `GIT_*` and `LC_ALL` variable it ran under. */
+export interface RecordedGitCall { argv: string[]; env: Record<string, string> }
+
+/** The recorder's separator bytes. No argv token or environment value a docs test plants carries one. */
+const GITREC_FIELD = '\x1f';
+const GITREC_PART = '\x1e';
+const GITREC_END = '\x1d';
+
+/** A single-quoted sh word. */
+const gitrecQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * Plant `harnessBin(home)/git`: it appends one record per call (the argv, then the `GIT_*`/`LC_ALL`
+ * environment) to `<home>/docs-git-calls`, then `exec`s `REAL_GIT` by absolute path. Planting again replaces
+ * the wrapper and empties the log.
+ *
+ * `failWhen` and `sleepWhen` are argv substrings, matched against the space-joined argv as sh `case` arms: a
+ * `sleepWhen` match sleeps `sleepS` seconds (default 30) before the real git runs; a `failWhen` match prints
+ * `git recorder: planted failure` to stderr and exits 128 without running it. Both record the call first. The
+ * fixture's own git (`h.git`, `makeRepo`) runs under the host PATH, so it is never recorded.
+ */
+export function plantGitRecorder(
+  home: string, opts: { failWhen?: string[]; sleepWhen?: string[]; sleepS?: number } = {},
+): { calls(): RecordedGitCall[]; reset(): void } {
+  const log = pathRec.join(home, 'docs-git-calls');
+  const arms = (patterns: readonly string[], action: string): string[] => (patterns.length === 0 ? [] : [
+    'case " $* " in',
+    ...patterns.map((p) => `  *${gitrecQuote(p)}*) ${action} ;;`),
+    'esac',
+  ]);
+  const wrapper = pathRec.join(recorderBin(home), 'git');
+  fsRec.writeFileSync(wrapper, [
+    '#!/bin/sh',
+    '# The docs PATH git recorder (server/test/ccdDocsHelpers.ts). Each argv token and each NAME=value is ended',
+    '# by 0x1f, the two parts are split by 0x1e, and the record is ended by 0x1d.',
+    '{',
+    `  for a in "$@"; do printf '%s\\037' "$a"; done`,
+    `  printf '\\036'`,
+    `  awk 'BEGIN { for (k in ENVIRON) if (k ~ /^GIT_/ || k == "LC_ALL") printf "%s=%s\\037", k, ENVIRON[k] }'`,
+    `  printf '\\035'`,
+    `} >> ${gitrecQuote(log)}`,
+    ...arms(opts.sleepWhen ?? [], `sleep ${opts.sleepS ?? 30}`),
+    ...arms(opts.failWhen ?? [], `echo 'git recorder: planted failure' >&2; exit 128`),
+    `exec ${gitrecQuote(REAL_GIT)} "$@"`,
+    '',
+  ].join('\n'), { mode: 0o755 });
+  fsRec.chmodSync(wrapper, 0o755);
+  fsRec.rmSync(log, { force: true });
+  const tokens = (s: string): string[] => s.split(GITREC_FIELD).slice(0, -1);
+  return {
+    calls: () => {
+      if (!fsRec.existsSync(log)) return [];
+      return fsRec.readFileSync(log, 'utf8').split(GITREC_END).slice(0, -1).map((rec) => {
+        const cut = rec.indexOf(GITREC_PART);
+        if (cut < 0) throw new Error(`git recorder: a record with no environment part: ${JSON.stringify(rec)}`);
+        const env: Record<string, string> = {};
+        for (const kv of tokens(rec.slice(cut + 1))) {
+          const eq = kv.indexOf('=');
+          env[kv.slice(0, eq)] = kv.slice(eq + 1);
+        }
+        return { argv: tokens(rec.slice(0, cut)), env };
+      });
+    },
+    reset: () => fsRec.rmSync(log, { force: true }),
+  };
+}
+
+/** `bash -c <script> <CCD>`, contained exactly as `runCcdDocs` is, for an argv a JS string cannot carry (bytes
+ *  that are not UTF-8): the script builds it inside the contained shell, for example as a
+ *  `--path "$(printf '\377.md')"` token, and reaches ccd as "$0". Never throws; stdout is not trimmed. The
+ *  `timeout` bounds a hang, which no vitest test timeout can interrupt in a synchronous spawn. */
+export function runCcdDocsShell(h: CcdHarness, script: string, cwd: string = h.home): DocsRun {
+  const r = spawnSync('bash', ['-c', script, CCD], {
+    encoding: 'utf8', cwd, timeout: 120_000, maxBuffer: 64 * 1024 * 1024,
+    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
+  });
+  if (r.error) return { code: -1, stdout: r.stdout ?? '', stderr: `${r.stderr ?? ''}spawn error: ${String(r.error)}` };
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}

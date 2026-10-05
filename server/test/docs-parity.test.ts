@@ -274,3 +274,101 @@ describe('the helper source: one write, python 3.8, ASCII, and its section marke
       .toEqual(['docs-fetch', 'docs-index', 'docs-show', 'docs-tree']);
   });
 });
+
+// ---- Task 7: row 48, the rest of the parity block (spec 2026-10-01 section 2 (j) row 48) ----
+// The helper's `# docs-parity: begin` / `# docs-parity: end` block holds one single-line `NAME=` literal per value
+// `shared/docs.ts` declares and ccd enforces. Each is compared BY VALUE (the module imported, the attribute as
+// JSON), its assignment is counted (exactly one, via `pyLiteral`), and the block's names are held equal to the
+// table in both directions, so a literal added on one side only is red. Every import is aliased: this block sits
+// below the file's own imports and binds no name they, or a later task's block, may bind.
+import * as parityL0 from '../../shared/docs.js';
+import { makeCcdHarness as harnessForParity } from './ccdWsHelpers.js';
+import {
+  docsHelperSource as helperSourceForParity, pyLiteral as literalForParity, unitJson as unitForParity,
+} from './docsHelperPy.js';
+
+describe('the helper parity block equals shared/docs.ts, by value and in both directions (row 48)', () => {
+  const PARITY: readonly (readonly [string, unknown])[] = [
+    ['PROJECT_RE', parityL0.DOCS_PROJECT_RE_BODY],
+    ['BARE_REF_RE', parityL0.DOCS_BARE_REF_RE_BODY],
+    ['REF_MAX_CHARS', parityL0.DOCS_REF_MAX_CHARS],
+    ['QUALIFIED_PREFIX_RE', parityL0.DOCS_QUALIFIED_PREFIX_RE_BODY],
+    ['QUALIFIED_RE', parityL0.DOCS_QUALIFIED_REF_RE_BODY],
+    ['SHA_RE', parityL0.DOCS_SHA_RE_BODY],
+    ['SECTION_RE', parityL0.DOCS_SECTION_RE_BODY],
+    ['REL_PATH_RE', parityL0.DOCS_REL_PATH_RE_BODY],
+    ['FINGERPRINT_RE', parityL0.DOCS_FINGERPRINT_RE_BODY],
+    ['MAX_BYTES_RE', parityL0.DOCS_MAX_BYTES_RE_BODY],
+    ['PATH_EXCLUDED_CATEGORIES', parityL0.DOCS_PATH_EXCLUDED_CATEGORIES],
+    ['PATH_EXCLUDED_RANGES', parityL0.DOCS_PATH_EXCLUDED_RANGES],
+    ['PATH_MAX_BYTES', parityL0.DOCS_PATH_MAX_BYTES],
+    ['PATH_MAX_COMPONENT_BYTES', parityL0.DOCS_PATH_MAX_COMPONENT_BYTES],
+    ['PATH_MAX_DEPTH', parityL0.DOCS_PATH_MAX_DEPTH],
+    ['DOCS_MAX_FILE_BYTES', parityL0.DOCS_MAX_FILE_BYTES],
+    ['DOCS_MAX_ANSWER_BYTES', parityL0.DOCS_MAX_ANSWER_BYTES],
+    ['DOCS_MAX_LISTING_WIRE_BYTES', parityL0.DOCS_MAX_LISTING_WIRE_BYTES],
+    ['DOCS_MAX_ENTRIES', parityL0.DOCS_MAX_ENTRIES],
+    ['DOCS_DRAFT_HASH_BUDGET', parityL0.DOCS_DRAFT_HASH_BUDGET],
+    ['DOCS_MAX_DRAFTS', parityL0.DOCS_MAX_DRAFTS],
+    ['DOCS_FETCH_MIN_INTERVAL_MS', parityL0.DOCS_FETCH_MIN_INTERVAL_MS],
+  ];
+  /** The block's other names, each compared in its own shape: SECTIONS as ordered pairs (below), FAILURES as a set
+   *  and REDACT_RULES rule by rule (Task 6's row-48 cases above). */
+  const OTHERS = ['SECTIONS', 'FAILURES', 'REDACT_RULES'];
+  /** The caps among them: each must be its own integer literal in the helper, never an expression or an alias. */
+  const CAPS = ['REF_MAX_CHARS', 'PATH_MAX_BYTES', 'PATH_MAX_COMPONENT_BYTES', 'PATH_MAX_DEPTH', 'DOCS_MAX_FILE_BYTES',
+    'DOCS_MAX_ANSWER_BYTES', 'DOCS_MAX_LISTING_WIRE_BYTES', 'DOCS_MAX_ENTRIES', 'DOCS_DRAFT_HASH_BUDGET',
+    'DOCS_MAX_DRAFTS', 'DOCS_FETCH_MIN_INTERVAL_MS'];
+  /** Read per case, never at collection: a missing marker reds these cases, not the whole file. */
+  const src = (): string => helperSourceForParity();
+  const home = harnessForParity('ccd-docs-parity-').home;
+  type Measured = { values: Record<string, unknown>; sections: [string, string][] };
+  /** One unit run for the whole table, taken by the first case that needs it. */
+  let measured: Measured | undefined;
+  const py = (): Measured => {
+    if (measured === undefined) {
+      measured = unitForParity<Measured>(home, `
+import json
+NAMES = json.loads(${JSON.stringify(JSON.stringify(PARITY.map(([n]) => n)))})
+out({'values': {n: getattr(H, n) for n in NAMES}, 'sections': [list(p) for p in H.SECTIONS.items()]})
+`);
+    }
+    return measured;
+  };
+
+  it.each(PARITY.map(([n, v]) => [n, v] as const))('%s in the helper equals its shared/docs.ts value', (name, ts) => {
+    expect(Object.keys(py().values)).toContain(name);
+    expect(py().values[name]).toEqual(ts);
+  });
+
+  it('SECTIONS equals DOC_SECTIONS as ORDERED pairs (the order is the listing order)', () => {
+    expect(py().sections).toEqual(Object.entries(parityL0.DOC_SECTIONS));
+  });
+
+  it('QUALIFIED_RE and SECTION_RE are DERIVED in the helper, never pasted copies', () => {
+    expect(literalForParity(src(), 'QUALIFIED_RE')).toBe('QUALIFIED_PREFIX_RE+BARE_REF_RE');
+    expect(literalForParity(src(), 'SECTION_RE')).toBe("'|'.join(SECTIONS)");
+  });
+
+  it('every cap is its own integer literal', () => {
+    for (const n of CAPS) expect(literalForParity(src(), n), n).toMatch(/^[1-9][0-9]*$/);
+  });
+
+  it('the block between the docs-parity markers holds exactly the table, in both directions', () => {
+    const lines = src().split('\n');
+    const begin = lines.indexOf('# docs-parity: begin');
+    const end = lines.indexOf('# docs-parity: end');
+    expect(begin, 'the begin marker').toBeGreaterThanOrEqual(0);
+    expect(end, 'the end marker, after the begin marker').toBeGreaterThan(begin);
+    const names = lines.slice(begin + 1, end)
+      .filter((l) => l.trim() !== '' && !l.startsWith('#'))
+      .map((l) => /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(l)?.[1] ?? `<not a single-line NAME= literal: ${l}>`);
+    expect([...names].sort()).toEqual([...PARITY.map(([n]) => n), ...OTHERS].sort());
+  });
+
+  it('every table name has exactly one assignment in the helper source', () => {
+    for (const n of [...PARITY.map(([name]) => name), ...OTHERS]) {
+      expect(literalForParity(src(), n).length, n).toBeGreaterThan(0);
+    }
+  });
+});

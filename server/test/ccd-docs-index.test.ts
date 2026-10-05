@@ -410,3 +410,285 @@ out({'line': line.decode('utf-8'), 'framed': H.framed_len(line), 'framedAscii': 
     expect(got.verbs).toEqual(['docs-fetch', 'docs-index', 'docs-show', 'docs-tree']);
   });
 });
+
+// ---- Task 7: argv grammar end to end (spec 2026-10-01 section 2 (j) rows 1, 4, 58 and 63) ----
+// Every refusal is decided by `read_args` before discovery and before any git call. Until Task 8 nothing in the
+// helper calls git at all, so the zero-call assertions below hold trivially today; they are what keeps every later
+// task's git runner behind the grammar. The recorder's own CONTROL proves it sees a python-spawned git, so an empty
+// `calls()` is a measurement, not a blind spot. Every import is aliased: this block sits below the file's own
+// imports and binds no name they, or a later task's block, may bind.
+import fsArgv from 'node:fs';
+import pathArgv from 'node:path';
+import { makeCcdHarness as harnessForArgv } from './ccdWsHelpers.js';
+import {
+  parseOneLine as oneLineOfArgv, plantGitRecorder as recorderForArgv, runCcdDocs as runArgv,
+  runCcdDocsShell as shellForArgv,
+} from './ccdDocsHelpers.js';
+import { unitJson as unitForArgv } from './docsHelperPy.js';
+
+describe('the PATH git recorder sees the git a python helper spawns (CONTROL for every zero-call row)', () => {
+  const h = harnessForArgv('ccd-docs-');
+
+  it('records argv byte-exact and the GIT_*/LC_ALL environment, then runs the real git', () => {
+    const rec = recorderForArgv(h.home);
+    const r = unitForArgv<{ rc: number; out: string }>(h.home, `
+import os, subprocess
+p = subprocess.run(['git', '-c', 'docs.probe=a b\\nc', '--version'], stdout=subprocess.PIPE,
+                   env=dict(os.environ, LC_ALL='C', GIT_NO_LAZY_FETCH='1'))
+out({'rc': p.returncode, 'out': p.stdout.decode()})
+`);
+    expect(r.rc).toBe(0);
+    expect(r.out).toMatch(/^git version /);
+    const calls = rec.calls();
+    expect(calls.map((c) => c.argv)).toEqual([['-c', 'docs.probe=a b\nc', '--version']]);
+    expect(calls[0]!.env).toMatchObject({ LC_ALL: 'C', GIT_NO_LAZY_FETCH: '1' });
+    rec.reset();
+    expect(rec.calls()).toEqual([]);
+  });
+
+  it('failWhen refuses a matching call with rc 128 after recording it; sleepWhen delays one', () => {
+    const rec = recorderForArgv(h.home, { failWhen: ['merge-base'], sleepWhen: ['--version'], sleepS: 1 });
+    const r = unitForArgv<{ failRc: number; failErr: string; slowRc: number; slowMs: number }>(h.home, `
+import subprocess, time
+f = subprocess.run(['git', 'merge-base', '--is-ancestor', 'a', 'b'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+t = time.monotonic()
+s = subprocess.run(['git', '--version'], stdout=subprocess.PIPE)
+out({'failRc': f.returncode, 'failErr': f.stderr.decode(), 'slowRc': s.returncode,
+     'slowMs': (time.monotonic() - t) * 1000})
+`);
+    expect(r.failRc).toBe(128);
+    expect(r.failErr).toContain('git recorder: planted failure');
+    expect(r.slowRc).toBe(0);
+    expect(r.slowMs).toBeGreaterThanOrEqual(900);
+    expect(rec.calls().map((c) => c.argv)).toEqual([['merge-base', '--is-ancestor', 'a', 'b'], ['--version']]);
+  });
+});
+
+describe('docs argv grammar through the dispatcher: refused before any git call (rows 1, 4, 58, 63)', () => {
+  const h = harnessForArgv('ccd-docs-');
+  const main = h.makeRepo('demo');
+  /** A cwd inside a repository's docs tree (row 4): the answer must not depend on where ccd was started. */
+  const docsCwd = pathArgv.join(main, 'docs', 'superpowers');
+  fsArgv.mkdirSync(docsCwd, { recursive: true });
+  const rec = recorderForArgv(h.home);
+  const C40 = '0123456789abcdef'.repeat(3).slice(0, 40);
+  const F64 = '0123456789abcdef'.repeat(4);
+
+  type ShowValues = Partial<Record<'project' | 'commit' | 'ref' | 'branch' | 'head' | 'section' | 'path' | 'fp', string>>;
+  const committed = (o: ShowValues = {}): string[] => [
+    'docs-show', '--project', o.project ?? 'demo', '--commit', o.commit ?? C40, '--ref', o.ref ?? 'refs/heads/main',
+    '--section', o.section ?? 'specs', '--path', o.path ?? 'README.md', '--max-bytes', '2097152',
+  ];
+  const draft = (o: ShowValues = {}): string[] => [
+    'docs-show', '--project', o.project ?? 'demo', '--draft-branch', o.branch ?? 'ws/a', '--head', o.head ?? C40,
+    '--section', o.section ?? 'specs', '--path', o.path ?? 'README.md', '--fingerprint', o.fp ?? F64,
+    '--max-bytes', '2097152',
+  ];
+
+  /** The answer without its clock, for comparing two runs of one argv. */
+  const timeless = (o: Record<string, unknown>): Record<string, unknown> => {
+    const { elapsedMs: _elapsed, ...rest } = o;
+    return rest;
+  };
+
+  /** One run: rc 0, exactly one JSON line, the envelope naming `word`, and ZERO git calls in the recorder. */
+  const refused = (args: string[], word: string, cwd?: string): Record<string, unknown> => {
+    rec.reset();
+    const r = runArgv(h, args, undefined, cwd);
+    expect(r.code, r.stderr).toBe(0);
+    const o = oneLineOfArgv(r);
+    expect(o).toMatchObject({ v: 1, verb: args[0], ok: false, failure: word });
+    expect(typeof o['elapsedMs']).toBe('number');
+    expect(rec.calls()).toEqual([]);
+    return o;
+  };
+
+  it.each(['-x', 'main~1', 'main:docs', 'a..b', 'x.lock/y', 'HEAD', 'refs/tags/v', '\u{00e9}', '@{-1}'])(
+    'row 1: docs-tree --ref %j answers bad-ref', (ref) => {
+      refused(['docs-tree', '--project', 'demo', '--ref', ref], 'bad-ref');
+    });
+
+  it.each(['..', '.git', 'a/b', '-x', 'a'.repeat(101), '-h', '--help'])(
+    'rows 1 and 58: docs-tree --project %j answers bad-project', (project) => {
+      refused(['docs-tree', '--project', project], 'bad-project');
+    });
+
+  it.each([
+    ['docs-tree', ['docs-tree', '--project', '--help', '--ref', 'main']],
+    ['docs-show (committed)', committed({ project: '--help' })],
+    ['docs-show (draft)', draft({ project: '-h' })],
+    ['docs-fetch', ['docs-fetch', '--project', '--help']],
+    ['docs-fetch --branch', ['docs-fetch', '--project', '-h', '--branch', 'main']],
+  ])('row 58: a flag-shaped project in %s is a VALUE, refused as bad-project', (_label, args) => {
+    refused(args, 'bad-project');
+  });
+
+  it.each([
+    ['--commit of 39 hex', committed({ commit: C40.slice(1) }), 'bad-commit'],
+    ['--commit in upper case', committed({ commit: C40.toUpperCase() }), 'bad-commit'],
+    ['a bare --ref (show takes the served, qualified ref only)', committed({ ref: 'main' }), 'bad-ref'],
+    ['--ref refs/remotes/upstream/main', committed({ ref: 'refs/remotes/upstream/main' }), 'bad-ref'],
+    ['--section programs', committed({ section: 'programs' }), 'bad-section'],
+    ['a qualified --draft-branch (bare only)', draft({ branch: 'refs/heads/ws/a' }), 'bad-ref'],
+    ['--head of 39 hex', draft({ head: C40.slice(1) }), 'bad-commit'],
+    ['--fingerprint in upper case', draft({ fp: F64.toUpperCase() }), 'bad-fingerprint'],
+    ['--fingerprint of 40 hex', draft({ fp: C40 }), 'bad-fingerprint'],
+    ['a qualified --branch on fetch (bare only)', ['docs-fetch', '--project', 'demo', '--branch', 'refs/heads/main'], 'bad-ref'],
+    ['--branch a..b on fetch', ['docs-fetch', '--project', 'demo', '--branch', 'a..b'], 'bad-ref'],
+  ])('row 58: %s answers its word', (_label, args, word) => {
+    refused(args, word);
+  });
+
+  it.each([
+    ['project before commit', committed({ project: '-x', commit: 'abc' }), 'bad-project'],
+    ['commit before ref', committed({ commit: 'abc', ref: 'main' }), 'bad-commit'],
+    ['ref before section', committed({ ref: 'main', section: 'programs' }), 'bad-ref'],
+    ['section before path', committed({ section: 'programs', path: 'a//b' }), 'bad-section'],
+    ['draft branch before head', draft({ branch: 'a..b', head: 'abc' }), 'bad-ref'],
+    ['path before fingerprint', draft({ path: './a', fp: 'abc' }), 'bad-path'],
+    ['project before ref on tree', ['docs-tree', '--project', '..', '--ref', 'a..b'], 'bad-project'],
+    ['project before branch on fetch', ['docs-fetch', '--project', '..', '--branch', 'a..b'], 'bad-project'],
+  ])('the first refusal in argv order wins: %s', (_label, args, word) => {
+    refused(args, word);
+  });
+
+  it.each([
+    ['../../README.md'], ['a//b'], ['./a'], ['a/'], ['/a'],
+    ['a\u{0085}b.md'], ['a\u{202e}b.md'],
+  ])('row 4: --path %j answers bad-path, and identically from a docs/superpowers cwd', (p) => {
+    const here = refused(committed({ path: p }), 'bad-path');
+    const there = refused(committed({ path: p }), 'bad-path', docsCwd);
+    expect(timeless(there)).toEqual(timeless(here));
+    refused(draft({ path: p }), 'bad-path');
+  });
+
+  it('row 4: a --path that is not UTF-8, built inside the contained shell, answers bad-path from either cwd', () => {
+    const script = `exec bash "$0" docs-show --project demo --commit ${C40} --ref refs/heads/main --section specs `
+      + `--path "$(printf '\\377.md')" --max-bytes 2097152`;
+    const answers = [h.home, docsCwd].map((cwd) => {
+      rec.reset();
+      const r = shellForArgv(h, script, cwd);
+      expect(r.code, r.stderr).toBe(0);
+      const o = oneLineOfArgv(r);
+      expect(o).toMatchObject({ v: 1, verb: 'docs-show', ok: false, failure: 'bad-path' });
+      expect(rec.calls()).toEqual([]);
+      return timeless(o);
+    });
+    expect(answers[1]).toEqual(answers[0]);
+  });
+
+  it.each([
+    ['U+200B, a zero-width twin of a real name', 'READ\u{200b}ME.md'],
+    ['U+2028', 'a\u{2028}b.md'],
+    ['U+E000', '\u{e000}.md'],
+    ['U+0378, unassigned in every Unicode version', '\u{0378}.md'],
+    ['U+FE0F, a variation selector', 'a\u{fe0f}.md'],
+  ])('row 63: a path holding %s answers bad-path', (_label, p) => {
+    refused(committed({ path: p }), 'bad-path');
+    refused(draft({ path: p }), 'bad-path');
+  });
+
+  it.each([
+    ['docs-tree with no --ref', ['docs-tree', '--project', 'demo']],
+    ['docs-tree with a bare --ref', ['docs-tree', '--project', 'demo', '--ref', 'ws/a']],
+    ['docs-tree with a qualified --ref', ['docs-tree', '--project', 'demo', '--ref', 'refs/remotes/origin/main']],
+    ['docs-show committed', committed()],
+    ['docs-show draft', draft({ path: 'caf\u{00e9}/\u{6587}.md' })],
+    ['docs-show with --path --commit, a VALUE (row 58)', committed({ path: '--commit' })],
+    ['docs-show with --path -x, a VALUE (row 58)', committed({ path: '-x' })],
+    ['docs-fetch with no --branch', ['docs-fetch', '--project', 'demo']],
+    ['docs-fetch with --branch', ['docs-fetch', '--project', 'example-project', '--branch', 'ws/a']],
+  ])('CONTROL: well-formed argv passes the grammar: %s answers no bad-* word', (_label, args) => {
+    const r = runArgv(h, args);
+    expect(r.code, r.stderr).toBe(0);
+    const o = oneLineOfArgv(r);
+    expect(o).toMatchObject({ v: 1, verb: args[0] });
+    expect(String(o['failure'] ?? '')).not.toMatch(/^bad-/);
+  });
+});
+
+describe('read_args: the fixed-index reader the verbs consume (units)', () => {
+  const h = harnessForArgv('ccd-docs-');
+  const C40 = '0123456789abcdef'.repeat(3).slice(0, 40);
+  const F64 = '0123456789abcdef'.repeat(4);
+  type Read = { args: string; fields: Record<string, unknown> } | { refused: string } | { raised: string; msg: string };
+  /** `H.read_args` over each case in ONE unit run: a tuple by its class and fields, a refusal by its Fail's
+   *  word, any other exception by its class and message. */
+  const readAll = (cases: readonly (readonly [string, readonly string[]])[]): Read[] => unitForArgv<Read[]>(h.home, `
+import json
+def probe(verb, rest):
+    try:
+        a = H.read_args(verb, rest)
+    except H.Fail as e:
+        return {'refused': e.word}
+    except Exception as e:
+        return {'raised': type(e).__name__, 'msg': str(e)}
+    return {'args': type(a).__name__, 'fields': dict(a._asdict())}
+out([probe(v, r) for v, r in json.loads(${JSON.stringify(JSON.stringify(cases))})])
+`);
+  const committed = ['--project', 'demo', '--commit', C40, '--ref', 'refs/heads/main', '--section', 'specs',
+    '--path', 'caf\u{00e9}/a.md', '--max-bytes', '2097152'];
+  const draft = ['--project', 'demo', '--draft-branch', 'ws/a', '--head', C40, '--section', 'plans', '--path', 'b.md',
+    '--fingerprint', F64, '--max-bytes', '1'];
+
+  it('the tuples later tasks consume carry exactly these fields, in this order', () => {
+    const fields = unitForArgv<Record<string, string[]>>(h.home, `
+out({n: list(getattr(H, n)._fields) for n in ['Ctx', 'IndexArgs', 'TreeArgs', 'ShowCommittedArgs', 'ShowDraftArgs', 'FetchArgs']})
+`);
+    expect(fields).toEqual({
+      Ctx: ['verb', 'root', 'worktrees', 'reg', 't0'],
+      IndexArgs: [],
+      TreeArgs: ['project', 'ref'],
+      ShowCommittedArgs: ['project', 'commit', 'ref', 'section', 'path', 'max_bytes'],
+      ShowDraftArgs: ['project', 'branch', 'head', 'section', 'path', 'fp', 'max_bytes'],
+      FetchArgs: ['project', 'branch'],
+    });
+  });
+
+  it('reads each well-formed shape into its tuple; --max-bytes becomes an int, an absent option None', () => {
+    expect(readAll([
+      ['docs-index', ['--all']],
+      ['docs-tree', ['--project', 'demo']],
+      ['docs-tree', ['--project', 'demo', '--ref', 'refs/remotes/origin/ws/a']],
+      ['docs-show', committed],
+      ['docs-show', draft],
+      ['docs-fetch', ['--project', 'demo']],
+      ['docs-fetch', ['--project', 'demo', '--branch', 'ws/a']],
+    ])).toEqual([
+      { args: 'IndexArgs', fields: {} },
+      { args: 'TreeArgs', fields: { project: 'demo', ref: null } },
+      { args: 'TreeArgs', fields: { project: 'demo', ref: 'refs/remotes/origin/ws/a' } },
+      { args: 'ShowCommittedArgs', fields: { project: 'demo', commit: C40, ref: 'refs/heads/main', section: 'specs',
+        path: 'caf\u{00e9}/a.md', max_bytes: 2097152 } },
+      { args: 'ShowDraftArgs', fields: { project: 'demo', branch: 'ws/a', head: C40, section: 'plans', path: 'b.md',
+        fp: F64, max_bytes: 1 } },
+      { args: 'FetchArgs', fields: { project: 'demo', branch: null } },
+      { args: 'FetchArgs', fields: { project: 'demo', branch: 'ws/a' } },
+    ]);
+  });
+
+  it('a value that fails its grammar raises its bad-* Fail; a broken SHAPE is a contract break, never a bad-* word', () => {
+    const swap = (rest: readonly string[], i: number, v: string): string[] => rest.map((t, j) => (j === i ? v : t));
+    const got = readAll([
+      ['docs-tree', ['--project', '-h']],
+      ['docs-show', swap(draft, 9, 'a//b')],
+      ['docs-fetch', ['--project', 'demo', '--branch', 'HEAD']],
+      ['docs-index', []],
+      ['docs-index', ['--all', '--all']],
+      ['docs-tree', ['--ref', 'main', '--project', 'demo']],
+      ['docs-tree', ['--project', 'demo', '--ref']],
+      ['docs-show', swap(committed, 11, '012')],
+      ['docs-show', swap(committed, 11, '0')],
+      ['docs-show', swap(draft, 13, '123456789')],
+      ['docs-show', draft.slice(0, 12)],
+      ['docs-show', swap(committed, 4, '--section')],
+      ['docs-fetch', ['--project', 'demo', '--ref', 'main']],
+      ['docs-nope', ['--all']],
+    ]);
+    expect(got.slice(0, 3)).toEqual([{ refused: 'bad-project' }, { refused: 'bad-path' }, { refused: 'bad-ref' }]);
+    for (const [i, r] of got.slice(3).entries()) {
+      expect(r, `case ${i + 3}`).toMatchObject({ raised: 'RuntimeError' });
+      expect((r as { msg: string }).msg, `case ${i + 3}`).toMatch(/^docs argv contract: /);
+    }
+  });
+});

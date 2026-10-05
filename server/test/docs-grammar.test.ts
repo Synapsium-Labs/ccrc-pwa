@@ -311,3 +311,196 @@ describe('row 2: the bare-ref grammar is a strict subset of git check-ref-format
       .toBeGreaterThan(0);
   }, 120000);
 });
+
+// ---- Task 7: one grammar on both sides (spec 2026-10-01 section 2 (j) rows 2, 3 and 63, python halves) ----
+// The L0 predicates and `_docs_py`'s `valid_*` judge ONE corpus (every row above, plus the category rows and the
+// helper's own edge cases), every grammar over every string, in one unit call, and the verdicts must be identical;
+// ten samples then go end to end through the dispatcher. The corpus uses only code points assigned in Unicode 12.1
+// or earlier (python 3.8's table), plus U+0378 and U+FDD0, which are Cn in every version, so a newer runtime's
+// table cannot move a verdict. Row 2's python half reuses this file's `fuzzCorpus()`, the seeded 5000 strings the
+// git proof above runs. Every import is aliased: this block sits below the file's own imports and binds no name
+// they, or a later task's block, may bind.
+import fsGrammar from 'node:fs';
+import pathGrammar from 'node:path';
+import * as grammarL0 from '../../shared/docs.js';
+import { makeCcdHarness as harnessForGrammar } from './ccdWsHelpers.js';
+import { parseOneLine as oneLineOfGrammar, runCcdDocs as runForGrammar } from './ccdDocsHelpers.js';
+import { unitJson as unitForGrammar } from './docsHelperPy.js';
+
+describe('one grammar on both sides: L0 predicates and _docs_py agree (rows 2, 3, 63)', () => {
+  const h = harnessForGrammar('ccd-docs-');
+  const hex40 = '0123456789abcdef'.repeat(3).slice(0, 40);
+  const hex64 = '0123456789abcdef'.repeat(4);
+  const E = '\u{00e9}';        // 2 UTF-8 bytes
+  const GRIN = '\u{1f600}';    // 4 UTF-8 bytes
+  const run = (n: number, c = 'a'): string => c.repeat(n);
+  const deep = (n: number): string => Array.from({ length: n }, () => 'a').join('/');
+  /** The category rows: 'a' + the code point + 'b.md', refused (row 63) and then accepted. */
+  const CATEGORY_REFUSED: readonly string[] = [
+    0x200b, 0x2028, 0x2029, 0xe000, 0xf0000, 0x0378, 0xfdd0, 0xfe0f, 0xfe00, 0xe0100, 0xe01ef,
+    0x061c, 0x200e, 0x200f, 0x202a, 0x202e, 0x2066, 0x2069, 0xfeff,
+  ].map((n) => `a${String.fromCodePoint(n)}b.md`);
+  const LONE_SURROGATES: readonly string[] = ['a\u{d800}b.md', 'a\u{dfff}b.md', 'a\u{dcff}b.md'];
+  const CATEGORY_ACCEPTED: readonly string[] = [`a${E}b.md`, 'a\u{6587}b.md', `a${GRIN}b.md`];
+
+  const CORPUS: readonly string[] = [
+    // projects
+    'demo', 'example-project', '_a', 'a.b-c_d', '0', run(100), '', '..', '.', '.git', 'a/b', '-x', 'a b', run(101), E,
+    '-h', '--help', 'demo\n',
+    // bare refs, with python's `$`-before-a-newline hazard
+    'main', 'ws/foo', 'ws/a', 'HEADX', 'a.lock.b', 'release-1.2_x', run(200, 'b'), 'main~1', 'main:docs', 'a..b',
+    'x.lock/y', 'x.lock', 'HEAD', 'refs/tags/v', 'refs/heads/x', '@{-1}', 'a/', '/a', 'a.', 'a/.b', 'a//b', 'a*b',
+    'a^b', run(201, 'b'), 'HEAD\n', 'main\n',
+    // qualified refs
+    'refs/heads/ws/a', 'refs/remotes/origin/x', 'refs/remotes/origin/x/y', 'refs/heads/' + run(200, 'b'),
+    'refs/remotes/origin/' + run(200, 'b'), 'refs/heads/' + run(201, 'b'), 'refs/remotes/upstream/x', 'refs/tags/x',
+    'refs/heads/', 'refs/remotes/origin/', 'refs/heads/HEAD', 'refs/heads/refs/x', 'refs/heads/a..b',
+    'refs/heads//x', 'refs/heads/-x', 'x', 'refs/remotes/x', 'refs/remotes/origin/a..b',
+    // commits and fingerprints
+    hex40, hex64, hex40.slice(1), hex40 + 'a', hex64.slice(1), hex64 + 'a', hex64 + '0', hex40.toUpperCase(),
+    hex64.toUpperCase(), 'g' + hex40.slice(1), hex40 + '\n', hex40.slice(0, 7),
+    // max-bytes, with digits from outside ASCII
+    '1', '9', '10', '2097152', '12345678', '99999999', '012', '123456789', '-1', '1e6', ' 1', '1.0', '1\n',
+    '\u{ff11}\u{ff12}', '\u{0661}\u{0662}',
+    // sections
+    'specs', 'plans', 'product-design', 'conventions', 'Specs', 'spec', 'specsx', 'plans|specs', 'product',
+    'programs', 'specs\n',
+    // rel paths: accepted, each bound at its edge from both sides, and refused
+    'x.md', 'a/b/c.md', '2026-10-01-design.md', '.hidden.md', 'a/..x', '..a', 'a..', 'x/.config', `${E}.md`,
+    '\u{6587}.md', `${GRIN}.png`, 'README.md',
+    [204, 204, 204, 204, 204].map((n) => run(n)).join('/'), [204, 204, 204, 204, 205].map((n) => run(n)).join('/'),
+    [E.repeat(102), E.repeat(102), E.repeat(102), E.repeat(102), E.repeat(102)].join('/'),
+    [E.repeat(102), E.repeat(102), E.repeat(102), E.repeat(102), E.repeat(102) + 'a'].join('/'),
+    [E.repeat(103), E.repeat(103), E.repeat(103), E.repeat(103), E.repeat(103)].join('/'),
+    run(255), run(256), E.repeat(127) + 'a', E.repeat(128), GRIN.repeat(63) + 'abc', GRIN.repeat(64),
+    deep(16), deep(17),
+    '../../README.md', 'a/../b', 'a/./b', './a', 'a/..', 'a\u{0000}b', 'a\u{001f}b', 'a\u{007f}b', 'a\u{0085}b',
+    'a\u{009f}b', 'a\nb', 'a\tb', 'a\u{202e}b.md', 'READ\u{200b}ME.md',
+    // the category rows
+    ...CATEGORY_REFUSED, ...LONE_SURROGATES, ...CATEGORY_ACCEPTED,
+  ];
+
+  const TS: Record<string, (s: string) => boolean> = {
+    project: grammarL0.isDocsProject,
+    bare: grammarL0.isDocsBareRef,
+    qualified: grammarL0.isDocsQualifiedRef,
+    ref: (s) => grammarL0.parseDocsRef(s) !== null,
+    commit: grammarL0.isDocsCommit,
+    section: grammarL0.isDocsSection,
+    fingerprint: grammarL0.isDocsFingerprint,
+    maxBytes: grammarL0.isDocsMaxBytes,
+    path: grammarL0.isDocsRelPath,
+  };
+  const PY = `{
+    'project': H.valid_project, 'bare': H.valid_bare_ref, 'qualified': H.valid_qualified_ref, 'ref': H.valid_ref,
+    'commit': H.valid_sha, 'section': H.valid_section, 'fingerprint': H.valid_fingerprint,
+    'maxBytes': H.valid_max_bytes, 'path': lambda s: H.valid_rel_path(s) is not None,
+}`;
+
+  /** The named grammars over every string of `strings`, judged by `_docs_py` in ONE unit run. The strings travel
+   *  as a JSON file, so a lone surrogate or a NUL reaches python exactly as JavaScript holds it. */
+  const pyVerdicts = (name: string, strings: readonly string[], keys: readonly string[] = Object.keys(TS)):
+    { n: number; verdicts: Record<string, boolean[]> } => {
+    const file = pathGrammar.join(h.home, `${name}.json`);
+    fsGrammar.writeFileSync(file, JSON.stringify(strings));
+    return unitForGrammar(h.home, `
+import json
+C = json.load(open(${JSON.stringify(file)}, encoding='utf-8'))
+V = ${PY}
+K = json.loads(${JSON.stringify(JSON.stringify(keys))})
+out({'n': len(C), 'verdicts': {k: [bool(V[k](s)) for s in C] for k in K}})
+`);
+  };
+
+  it('row 3: every grammar gives every corpus string the same verdict in TS and in python', () => {
+    const py = pyVerdicts('grammar-corpus', CORPUS);
+    expect(py.n).toBe(CORPUS.length);
+    expect(Object.keys(py.verdicts).sort()).toEqual(Object.keys(TS).sort());
+    const disagree: string[] = [];
+    for (const [k, f] of Object.entries(TS)) {
+      CORPUS.forEach((s, i) => {
+        const ts = f(s);
+        const p = py.verdicts[k]![i];
+        if (ts !== p) disagree.push(`${k} ${JSON.stringify(s).slice(0, 72)}: ts=${ts} py=${p}`);
+      });
+    }
+    expect(disagree).toEqual([]);
+  });
+
+  it('row 3 (vacuity): each grammar accepts some corpus string and refuses another', () => {
+    for (const [k, f] of Object.entries(TS)) {
+      const accepted = CORPUS.filter((s) => f(s)).length;
+      expect(accepted, `${k} accepts nothing`).toBeGreaterThan(0);
+      expect(accepted, `${k} refuses nothing`).toBeLessThan(CORPUS.length);
+    }
+  });
+
+  it('row 63: the category rows are refused on both sides, and the named accepts accepted', () => {
+    const rows = [...CATEGORY_REFUSED, ...LONE_SURROGATES, ...CATEGORY_ACCEPTED];
+    const want = [...CATEGORY_REFUSED.map(() => false), ...LONE_SURROGATES.map(() => false),
+      ...CATEGORY_ACCEPTED.map(() => true)];
+    expect(pyVerdicts('category-rows', rows, ['path']).verdicts['path']).toEqual(want);
+    expect(rows.map(grammarL0.isDocsRelPath)).toEqual(want);
+  });
+
+  it('row 2 (python half): over the seeded 5000-string fuzz, valid_bare_ref accepts exactly what isDocsBareRef does', () => {
+    const fuzz = fuzzCorpus();
+    expect(fuzz).toHaveLength(5000);
+    const py = pyVerdicts('bare-ref-fuzz', fuzz, ['bare']).verdicts['bare']!;
+    const ts = fuzz.map(grammarL0.isDocsBareRef);
+    expect(ts.filter(Boolean).length, 'the fuzz must accept something, or the comparison is vacuous').toBeGreaterThan(0);
+    expect(ts.filter((v) => !v).length, 'the fuzz must refuse something').toBeGreaterThan(0);
+    expect(fuzz.filter((s, i) => ts[i] !== py[i])).toEqual([]);
+  });
+
+  /** The word the L0 predicates give `argv`, applied in the helper's decided order; null when all pass. */
+  const l0Word = (argv: readonly string[]): string | null => {
+    const value = new Map<string, string>();
+    for (let i = 1; i + 1 < argv.length; i += 2) value.set(argv[i]!, argv[i + 1]!);
+    const bareOrQualified = (s: string): boolean => grammarL0.parseDocsRef(s) !== null;
+    const order: [string, (s: string) => boolean, string][] = argv[0] === 'docs-tree'
+      ? [['--project', grammarL0.isDocsProject, 'bad-project'], ['--ref', bareOrQualified, 'bad-ref']]
+      : argv[0] === 'docs-fetch'
+        ? [['--project', grammarL0.isDocsProject, 'bad-project'], ['--branch', grammarL0.isDocsBareRef, 'bad-ref']]
+        : value.has('--commit')
+          ? [['--project', grammarL0.isDocsProject, 'bad-project'], ['--commit', grammarL0.isDocsCommit, 'bad-commit'],
+            ['--ref', grammarL0.isDocsQualifiedRef, 'bad-ref'], ['--section', grammarL0.isDocsSection, 'bad-section'],
+            ['--path', grammarL0.isDocsRelPath, 'bad-path']]
+          : [['--project', grammarL0.isDocsProject, 'bad-project'], ['--draft-branch', grammarL0.isDocsBareRef, 'bad-ref'],
+            ['--head', grammarL0.isDocsCommit, 'bad-commit'], ['--section', grammarL0.isDocsSection, 'bad-section'],
+            ['--path', grammarL0.isDocsRelPath, 'bad-path'], ['--fingerprint', grammarL0.isDocsFingerprint, 'bad-fingerprint']];
+    for (const [flag, ok, word] of order) {
+      const s = value.get(flag);
+      if (s !== undefined && !ok(s)) return word;
+    }
+    return null;
+  };
+  const show = (path: string, commit = hex40): string[] => ['docs-show', '--project', 'demo', '--commit', commit,
+    '--ref', 'refs/heads/main', '--section', 'specs', '--path', path, '--max-bytes', '2097152'];
+  const SAMPLES: readonly (readonly string[])[] = [
+    ['docs-tree', '--project', 'demo', '--ref', 'main~1'],
+    ['docs-tree', '--project', '-h'],
+    ['docs-tree', '--project', 'demo', '--ref', 'refs/remotes/upstream/x'],
+    ['docs-tree', '--project', 'demo', '--ref', 'refs/remotes/origin/x/y'],
+    show('README.md', hex40.toUpperCase()),
+    show('a//b'),
+    show('READ\u{200b}ME.md'),
+    show(`caf${E}/\u{6587}.md`),
+    ['docs-show', '--project', 'demo', '--draft-branch', 'ws/a', '--head', hex40, '--section', 'plans', '--path', 'x.md',
+      '--fingerprint', hex64.toUpperCase(), '--max-bytes', '1'],
+    ['docs-fetch', '--project', 'demo', '--branch', 'a..b'],
+  ];
+
+  it('row 3: ten samples through the dispatcher answer the word the L0 predicates give', () => {
+    expect(SAMPLES.length).toBe(10);
+    expect(SAMPLES.filter((a) => l0Word(a) === null).length, 'the samples must include accepted argv').toBeGreaterThan(0);
+    for (const argv of SAMPLES) {
+      const r = runForGrammar(h, [...argv]);
+      expect(r.code, `${argv.join(' ')}: ${r.stderr}`).toBe(0);
+      const o = oneLineOfGrammar(r);
+      const want = l0Word(argv);
+      if (want === null) expect(String(o['failure'] ?? ''), argv.join(' ')).not.toMatch(/^bad-/);
+      else expect(o['failure'], argv.join(' ')).toBe(want);
+    }
+  });
+});

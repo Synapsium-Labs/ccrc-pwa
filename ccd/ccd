@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b8a229fe0e1fdb5a08bdfba57b2f5d64d37a245d5a0f38db26fb3aaa7687163d
+# ccrc:generated 1 sha256=94b66edc8e2c253ecdea49a3abb513a731add4fc74623df34c2efb9dcec27945
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28430,6 +28430,29 @@ HELPER_FAILED_DETAIL_MAX_BYTES = 512
 # declares, each compared with its TS twin by docs-parity.test.ts, in both
 # directions. Nothing but those literals and comments goes between the markers.
 # docs-parity: begin
+SECTIONS={'specs':'docs/superpowers/specs','plans':'docs/superpowers/plans','product-design':'docs/product-design','conventions':'docs/conventions'}
+PROJECT_RE=r'[A-Za-z0-9_][A-Za-z0-9._-]{0,99}'
+BARE_REF_RE=r'(?!HEAD$)(?!refs/)(?!.*\.\.)(?!.*\.lock(?:/|$))(?!.*\.(?:/|$))[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*'
+REF_MAX_CHARS=200
+QUALIFIED_PREFIX_RE=r'(?:refs/heads/|refs/remotes/origin/)'
+QUALIFIED_RE=QUALIFIED_PREFIX_RE+BARE_REF_RE
+SHA_RE=r'[0-9a-f]{40}|[0-9a-f]{64}'
+SECTION_RE='|'.join(SECTIONS)
+REL_PATH_RE=r'(?!/)(?!.*/$)(?!.*//)(?!(?:.*/)?\.\.?(?:/|$))[^\u0000-\u001f\u007f-\u009f]{1,1024}'
+FINGERPRINT_RE=r'[0-9a-f]{64}'
+MAX_BYTES_RE=r'[1-9][0-9]{0,7}'
+PATH_EXCLUDED_CATEGORIES=('Cf','Zl','Zp','Co','Cn')
+PATH_EXCLUDED_RANGES=((0xfe00,0xfe0f),(0xe0100,0xe01ef))
+PATH_MAX_BYTES=1024
+PATH_MAX_COMPONENT_BYTES=255
+PATH_MAX_DEPTH=16
+DOCS_MAX_FILE_BYTES=4194304
+DOCS_MAX_ANSWER_BYTES=6291456
+DOCS_MAX_LISTING_WIRE_BYTES=1048576
+DOCS_MAX_ENTRIES=5000
+DOCS_DRAFT_HASH_BUDGET=33554432
+DOCS_MAX_DRAFTS=1000
+DOCS_FETCH_MIN_INTERVAL_MS=10000
 # FAILURES is DOCS_CCD_FAILURES: every word a ccd docs answer may carry.
 FAILURES=frozenset({'bad-project','bad-ref','bad-commit','bad-section','bad-path','bad-fingerprint','unknown-project','not-a-git-repo','linked-worktree','shared-repo','partial-clone','repo-unreadable','no-default-branch','unresolved-ref','ref-not-commit','unknown-commit','not-a-commit','object-missing','absent-path','not-a-file','symlink-in-path','too-large','too-many-entries','unreadable-path','worktree-gone','ambiguous-worktree','untrusted-worktree','worktree-moved','draft-changed','remote-absent','remote-branch-absent','fetch-auth-failed','fetch-rejected-objects','fetch-transport','ref-locked','fetch-too-soon','fetch-timeout','fetch-failed','git-failed','git-timeout','helper-unavailable','helper-failed'})
 # REDACT_RULES is DOCS_REDACT_RULES: (pattern, suffix), applied in order and
@@ -28519,6 +28542,166 @@ def framed_len(line):
     return len(json.dumps(line, ensure_ascii=False).encode('utf-8'))
 
 # ===== docs: grammar =====
+# The argument grammars and the fixed-index argv reader (spec 2026-10-01, section 2 (a) and (i)).
+# Every pattern is a parity-bound literal from the block above, matched with re.fullmatch, so python's
+# `$`-before-a-trailing-newline never decides a verdict. read_args runs before discovery and before any
+# git call (row 1). The imports repeat the header's where they overlap: a section names what it uses.
+import os
+import re
+import unicodedata
+from collections import namedtuple
+
+
+def valid_project(s):
+    return re.fullmatch(PROJECT_RE, s) is not None
+
+
+def valid_bare_ref(s):
+    return len(s) <= REF_MAX_CHARS and re.fullmatch(BARE_REF_RE, s) is not None
+
+
+def valid_qualified_ref(s):
+    # QUALIFIED_RE whole, then REF_MAX_CHARS on the bare remainder after the prefix, as L0 bounds it.
+    if re.fullmatch(QUALIFIED_RE, s) is None:
+        return False
+    return len(s) - re.match(QUALIFIED_PREFIX_RE, s).end() <= REF_MAX_CHARS
+
+
+def valid_ref(s):
+    # The two grammars are disjoint: a bare name may not start with refs/.
+    return valid_bare_ref(s) or valid_qualified_ref(s)
+
+
+def valid_sha(s):
+    # Grammar only. Whether the length is the repository's object format is decided after discovery.
+    return re.fullmatch(SHA_RE, s) is not None
+
+
+def valid_section(s):
+    return re.fullmatch(SECTION_RE, s) is not None
+
+
+def valid_fingerprint(s):
+    return re.fullmatch(FINGERPRINT_RE, s) is not None
+
+
+def valid_max_bytes(s):
+    return re.fullmatch(MAX_BYTES_RE, s) is not None
+
+
+def valid_rel_path(arg):
+    """The rel-path value as a strict-UTF-8 str, or None when any rule refuses it.
+
+    argv arrives decoded with surrogateescape, so os.fsencode gives back the exact bytes, and a strict
+    decode of them is the strict-UTF-8 rule. A str that cannot be encoded at all (a lone surrogate,
+    which only a unit can pass) is refused the same way. Then the pattern, then the category and
+    selector check, then the byte, component and depth bounds, all measured on those bytes."""
+    try:
+        raw = os.fsencode(arg)
+        s = raw.decode('utf-8')
+    except UnicodeError:
+        return None
+    if re.fullmatch(REL_PATH_RE, s) is None:
+        return None
+    for ch in s:
+        if unicodedata.category(ch) in PATH_EXCLUDED_CATEGORIES:
+            return None
+        cp = ord(ch)
+        if any(lo <= cp <= hi for lo, hi in PATH_EXCLUDED_RANGES):
+            return None
+    if len(raw) > PATH_MAX_BYTES:
+        return None
+    parts = raw.split(b'/')
+    if len(parts) > PATH_MAX_DEPTH or any(len(p) > PATH_MAX_COMPONENT_BYTES for p in parts):
+        return None
+    return s
+
+
+# What every verb receives (the context), and one argument tuple per argv shape. Later sections read
+# these fields by name; the field order is pinned by a unit in ccd-docs-index.test.ts.
+Ctx = namedtuple('Ctx', ['verb', 'root', 'worktrees', 'reg', 't0'])
+IndexArgs = namedtuple('IndexArgs', [])
+TreeArgs = namedtuple('TreeArgs', ['project', 'ref'])
+ShowCommittedArgs = namedtuple('ShowCommittedArgs', ['project', 'commit', 'ref', 'section', 'path', 'max_bytes'])
+ShowDraftArgs = namedtuple('ShowDraftArgs', ['project', 'branch', 'head', 'section', 'path', 'fp', 'max_bytes'])
+FetchArgs = namedtuple('FetchArgs', ['project', 'branch'])
+
+SHOW_COMMITTED_FLAGS = ('--project', '--commit', '--ref', '--section', '--path', '--max-bytes')
+SHOW_DRAFT_FLAGS = ('--project', '--draft-branch', '--head', '--section', '--path', '--fingerprint', '--max-bytes')
+
+
+def _contract(ok, what):
+    """A shape the bash front already checked, asserted again. A break is a defect in ccd, not bad
+    input: it raises, run() answers helper-failed, and no bad-* word is ever given for it. Never an
+    assert statement, which python -O would strip."""
+    if not ok:
+        raise RuntimeError('docs argv contract: ' + what)
+
+
+def _refuse(ok, word):
+    # `raise fail(word)`: the raise is explicit here, whatever fail() itself does with the Fail it builds.
+    if not ok:
+        raise fail(word)
+
+
+def _values(rest, flags):
+    """The values, read by FIXED INDEX: flag i at index 2*i, its value at 2*i+1. A value slot is never
+    read as a flag, so `-h` or `--commit` there is a value like any other."""
+    _contract(len(rest) == 2 * len(flags), '%d tokens where %d were expected' % (len(rest), 2 * len(flags)))
+    for i, flag in enumerate(flags):
+        _contract(rest[2 * i] == flag, flag + ' expected at index ' + str(2 * i))
+    return [rest[2 * i + 1] for i in range(len(flags))]
+
+
+def _one_or_two(rest, second):
+    # `--project P`, or `--project P <second> V`: the two shapes tree and fetch take.
+    if len(rest) == 4:
+        return _values(rest, ('--project', second))
+    return _values(rest, ('--project',)) + [None]
+
+
+def read_args(verb, rest):
+    """The verb's arguments, validated in argv order; the first refusal wins and raises its bad-* Fail.
+
+    Order: tree -- project, ref (bare or qualified). show committed -- project, commit, ref (qualified
+    only), section, path. show draft -- project, draft branch (bare), head, section, path, fingerprint.
+    fetch -- project, branch (bare). --max-bytes is the front's grammar: re-asserted, never refused."""
+    rest = list(rest)
+    if verb == 'docs-index':
+        _contract(rest == ['--all'], 'docs-index takes exactly --all')
+        return IndexArgs()
+    if verb == 'docs-tree':
+        project, ref = _one_or_two(rest, '--ref')
+        _refuse(valid_project(project), 'bad-project')
+        _refuse(ref is None or valid_ref(ref), 'bad-ref')
+        return TreeArgs(project, ref)
+    if verb == 'docs-show' and len(rest) > 2 and rest[2] == '--commit':
+        project, commit, ref, section, raw_path, max_bytes = _values(rest, SHOW_COMMITTED_FLAGS)
+        _contract(valid_max_bytes(max_bytes), '--max-bytes outside its grammar')
+        _refuse(valid_project(project), 'bad-project')
+        _refuse(valid_sha(commit), 'bad-commit')
+        _refuse(valid_qualified_ref(ref), 'bad-ref')
+        _refuse(valid_section(section), 'bad-section')
+        rel = valid_rel_path(raw_path)
+        _refuse(rel is not None, 'bad-path')
+        return ShowCommittedArgs(project, commit, ref, section, rel, int(max_bytes))
+    if verb == 'docs-show':
+        project, branch, head, section, raw_path, fp, max_bytes = _values(rest, SHOW_DRAFT_FLAGS)
+        _contract(valid_max_bytes(max_bytes), '--max-bytes outside its grammar')
+        _refuse(valid_project(project), 'bad-project')
+        _refuse(valid_bare_ref(branch), 'bad-ref')
+        _refuse(valid_sha(head), 'bad-commit')
+        _refuse(valid_section(section), 'bad-section')
+        rel = valid_rel_path(raw_path)
+        _refuse(rel is not None, 'bad-path')
+        _refuse(valid_fingerprint(fp), 'bad-fingerprint')
+        return ShowDraftArgs(project, branch, head, section, rel, fp, int(max_bytes))
+    if verb == 'docs-fetch':
+        project, branch = _one_or_two(rest, '--branch')
+        _refuse(valid_project(project), 'bad-project')
+        _refuse(branch is None or valid_bare_ref(branch), 'bad-ref')
+        return FetchArgs(project, branch)
+    raise RuntimeError('docs argv contract: no argument reader for ' + repr(verb))
 
 # ===== docs: runner =====
 
