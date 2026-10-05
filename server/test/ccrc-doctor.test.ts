@@ -3571,7 +3571,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   // and removes only the FUNCTION, so every constant the guard also checks
   // stays present — a dropped `_box_unit_env` term is the only thing that can
   // red this pin. `BUE_VAL=on` is preset AFTER sourcing ccrc (a shell
-  // assignment, never an env entry — `ccd/ccrc:2910` resets it at file scope
+  // assignment, never an env entry — `ccd/ccrc:2937` resets it at file scope
   // on load) in case some path through the ungoverned body reads it, but in
   // THIS harness (`PATH` pointing nowhere) it never gets the chance.
   // MEASURED (wave 9, R11-F2), with the guard's `|| ! declare -F _box_unit_env`
@@ -3840,7 +3840,10 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     };
 
     // PLATFORM-ONLY: splitting or skipping a file whole on a CR, NUL or non-UTF-8 byte is systemd's
-    // EnvironmentFile= behaviour; bash's `. file` does neither. The macOS whole-file cases are E5d and E14d.
+    // EnvironmentFile= behaviour. bash's `. file` splits on none of them and checks no UTF-8. A NUL it neither splits on
+    // nor skips: the launchd job's /bin/bash 3.2 stops reading the file at its first NUL (bash 5.2 strips each NUL
+    // instead — measured, and why an earlier comment here said "neither"). The macOS whole-file cases are E5d, E14d and
+    // E19d (a NUL, D-3832).
     itLinux('E15: the EXPOSURE file is split or skipped whole by systemd — ccrc.env says `on`, the exposure file `off` (or a key the reader would have decided) — not measured, never a false ARMED (main: `on`)', () => {
       for (const [label, shape, phrase] of WHOLE_FILE) {
         const home = healthy('ccrc-doctor-auth-e15-');
@@ -3851,7 +3854,8 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     });
 
     // PLATFORM-ONLY: splitting or skipping a file whole on a CR, NUL or non-UTF-8 byte is systemd's
-    // EnvironmentFile= behaviour; bash's `. file` does neither. Its pair is E15; the macOS whole-file cases are E5d and E14d.
+    // EnvironmentFile= behaviour; bash's `. file` does neither (a NUL truncates the file under /bin/bash 3.2 — E15's
+    // comment). Its pair is E15; the macOS whole-file cases are E5d, E14d and E19d.
     itLinux('E16: ccrc.env is split or skipped whole by systemd — with the flag on in it and no exposure file, not measured, never a false OFF or ARMED (main: a false OFF for a CR, a false ARMED for NUL and non-UTF-8)', () => {
       for (const [label, shape, phrase] of WHOLE_FILE) {
         const home = noPassBox('ccrc-doctor-auth-e16-', '');
@@ -3870,6 +3874,25 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       writeCcrcEnv(off, `${readEnv(off)}CCRC_AUTH=on\n`);
       writeFileSync(expPath(off), 'CCRC_AUTH=off\nFOO="a\n\r\n # \xff\n', 'latin1');
       expectWholeFileWarn(runDoctor(off).stdout, expPath(off), 'non-ASCII byte in a NAME=value line', 'false OFF');
+    });
+
+    // PLATFORM-ONLY: the launchd job's /bin/bash 3.2 stops reading a file at its first NUL byte (`_evalfile` hands it to
+    // the parser as a C string), so the job never sets what follows it. Its Linux pair is E15's NUL row (systemd skips the
+    // file whole); the reader table U4 runs both readers on every platform.
+    itDarwin('E19d: a NUL byte anywhere in the exposure file on macOS — above the key, inside its value, or in a comment above it — is not measured, naming the file and the NUL, never a PASS ARMED (D-3832; f74f5e90: PASS, the gate off)', () => {
+      const shapes: Array<[string, string]> = [
+        ['a NUL at the end of a line above the key', 'X=1\0\nCCRC_AUTH=on\n'],
+        ['a NUL inside the value', 'CCRC_AUTH=o\0n\n'],
+        ['a NUL in a comment above the key', '# c\0\nCCRC_AUTH=on\n'],
+      ];
+      for (const [label, bytes] of shapes) {
+        const home = healthy('ccrc-doctor-auth-e19d-');
+        writeCcrcEnv(home, `${readEnv(home)}CCRC_AUTH=off\n`);
+        writeFileSync(expPath(home), bytes, 'latin1');
+        const r = runDoctor(home);
+        expectWholeFileWarn(r.stdout, expPath(home), 'NUL byte', label);
+        expect(r.stdout, label).not.toMatch(/^PASS update-exposure: .*CCRC_AUTH=on/m);
+      }
     });
 
     itLinux('E17: the control — a valid UTF-8 em dash in a COMMENT of the exposure file reads ARMED as before (the real writer\'s own first line carries one)', () => {
@@ -3986,6 +4009,13 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       ['control: a trailing tab', 'CCRC_AUTH=on\t\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
       ['control: export', 'export CCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [3, '', '']],
       ['control: export of another name', 'export FOO=1\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
+      // Fix round 1, F2: `unit` mode's export arm is `export<ws>+KEY<ws>*=` (D-3823's "never a longer key that begins with
+      // KEY") — an export of a LONGER key that ends in KEY, or of a value that spells `KEY=`, names another key.
+      ['export of a longer key ending in the key', 'export OLD_CCRC_HOST=203.0.113.7\nCCRC_HOST=127.0.0.1\n', null, 'CCRC_HOST', { rc: 0, val: '127.0.0.1', src: 'env' }, [0, '127.0.0.1', 'env']],
+      ['export of a value that spells the key', 'export NOTE=CCRC_AUTH=x\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
+      ['export of a longer key ending in the key, a space before =', 'export OLD_CCRC_HOST =203.0.113.7\nCCRC_HOST=127.0.0.1\n', null, 'CCRC_HOST', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [0, '127.0.0.1', 'env']],
+      ['control: export with a space before =', 'export CCRC_AUTH =on\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [3, '', '']],
+      ['control: export of the key, tabs around it', 'export\t\tCCRC_AUTH\t=on\n', null, 'CCRC_AUTH', { rc: 3, file: 'env', line: 1, cause: 'shape' }, [3, '', '']],
       ['control: a comment', '# comment\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
       ['control: a comment ending in a backslash', '# x \\\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [3, '', '']],
       ['control: single quotes', 'CCRC_AUTH=\'on\'\n', null, 'CCRC_AUTH', { rc: 0, val: 'on', src: 'env' }, [0, 'on', 'env']],
@@ -4014,6 +4044,34 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
           expect([a.why, a.fix], label).toEqual(['', '']);
         }
       });
+    });
+
+    // Fix round 1, F1 (D-3832): /bin/bash 3.2's `. file` stops at the first NUL byte in the FILE, so the launchd job sets
+    // what comes before it and nothing after; `read` drops the NUL, so the plain test passed such a file and decided the
+    // key (review 265: rc 0 `on`, a false ARMED). Every row here is rc 3 on BOTH feeders — on Linux by D-3831's whole-file
+    // rule — and on Darwin the reason names the file and the cause, with no line number.
+    /** `[label, ccrc.env, exposure file, key, the file the reason names]`. */
+    const U4: Array<[string, string, string | null, string, 'env' | 'exp']> = [
+      ['a NUL at the end of a line above the key', 'CCRC_AUTH=off\n', 'X=1\0\nCCRC_AUTH=on\n', 'CCRC_AUTH', 'exp'],
+      ['a NUL inside the value', 'CCRC_AUTH=off\n', 'CCRC_AUTH=o\0n\n', 'CCRC_AUTH', 'exp'],
+      ['a NUL in a comment above the key', 'CCRC_AUTH=off\n', '# c\0\nCCRC_AUTH=on\n', 'CCRC_AUTH', 'exp'],
+      ['a NUL in ccrc.env, no exposure file', 'X=1\0\nCCRC_AUTH=on\n', null, 'CCRC_AUTH', 'env'],
+      ['every key: CCRC_HOST through a NUL exposure file', 'CCRC_HOST=127.0.0.1\n', 'X=1\0\nCCRC_AUTH=on\n', 'CCRC_HOST', 'exp'],
+    ];
+    const u4Rows: UnitEnvRow[] = U4.map(([label, env, exp, key]) => ({ label, env, exp, key }));
+
+    it('U4: a NUL byte anywhere in either file is rc 3 for every key on Darwin, naming the file and "a NUL byte", never a line or the bytes — and rc 3 on Linux too (D-3832; main and f74f5e90: Darwin rc 0 `on`)', () => {
+      for (const os of ['darwin', 'linux'] as const) {
+        const got = unitEnvAnswers(u4Rows, os);
+        U4.forEach(([label, , , , which], i) => {
+          const a = got[i]!;
+          const file = which === 'env' ? a.envPath : a.expPath;
+          expect([a.rc, a.val, a.src], `${os}: ${label}`).toEqual([3, '', '']);
+          expect(a.why.startsWith(`${file} holds a NUL byte`), `${os}: ${label}: ${a.why}`).toBe(true);
+          expect(a.fix, `${os}: ${label}`).toContain(`remove the NUL byte from ${file}`);
+          if (os === 'darwin') expect(a.why, label).toContain('/bin/bash, which stops reading a file at its first NUL byte');
+        });
+      }
     });
 
     it('U3l: the same rows with CCD_OS=linux — `unit` mode\'s answers, the platform split stated as data: one set of bytes, two feeders', () => {
@@ -8251,7 +8309,7 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
   // BOTH files intact and removes only the FUNCTION (never `unset
   // CCRC_EXPOSURE_FILE`, which the guard tests first and would mask the
   // mutation), with `BUE_VAL=on` preset AFTER sourcing ccrc as a shell
-  // assignment (an env entry is reset at ccrc's own file scope, `:2910`) — a
+  // assignment (an env entry is reset at ccrc's own file scope, `:2937`) — a
   // guard missing this term reads that stale value as ARMED instead of
   // failing shut.
   it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, not a stale ARMED PASS', () => {

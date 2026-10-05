@@ -12634,6 +12634,39 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
       assertNoExtras(home);
     });
 
+    it('B10: the clock steps BACK between the floor and the backup (an NTP step, a DST fall-back) — this run\'s own dir sorts below the floor, and its own-path guard alone keeps it at KEEP=0', () => {
+      // Fix round 1, F3 (review 265): `cmd_backup` reads the floor with `date +%Y%m%d-%H%M%S`, then `_upd_backup` names
+      // its dir with a second such call. A `date` in the fixture's own bin (first on updateEnv's PATH) answers that
+      // format with 20300101-000000 the first time and 20250601-000000 after, so the floor does NOT cover the own dir:
+      // only `[ "$d" = "$UPD_BACKUP_DIR" ] && continue` does. Every other format runs the system's date. No real clock
+      // is touched.
+      const home = freshUpdateBox('ccrc-w9-r10g-b10-');
+      plantDir(home, '20250101-000000');
+      const realDate = ['/bin/date', '/usr/bin/date'].find((p) => existsSync(p));
+      expect(realDate, 'a system date for every other format').toBeDefined();
+      const calls = join(home, 'date-ts-calls');
+      const stub = join(home, '.local', 'bin', 'date');
+      writeFileSync(stub, [
+        '#!/bin/sh',
+        'if [ "$#" -eq 1 ] && [ "$1" = "+%Y%m%d-%H%M%S" ]; then',
+        `  echo x >> '${calls}'`,
+        `  if [ "$(wc -l < '${calls}')" -eq 1 ]; then echo 20300101-000000; else echo 20250601-000000; fi`,
+        '  exit 0',
+        'fi',
+        `exec '${realDate}' "$@"`,
+        '',
+      ].join('\n'));
+      chmodSync(stub, 0o755);
+      const r = runBackup(home, [], { CCRC_BACKUP_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      const own = ownDir(r);
+      expect(own, 'the backup took the stepped-back second, below the floor').toBe(join(backupRoot(home), '20250601-000000'));
+      expect(readFileSync(calls, 'utf8').split('\n').filter(Boolean).length, 'the floor read, then the backup\'s name').toBeGreaterThanOrEqual(2);
+      expect(existsSync(own), `this run's own backup ${own} must survive a floor that does not cover it`).toBe(true);
+      expect(has(home, '20250101-000000'), 'the prune ran: the unprotected earlier dir went').toBe(false);
+      assertNoExtras(home);
+    });
+
     it('_bak_gc and _bak_prune each call _bak_keepset, and [ -f "$d/coord.db" ] appears once in ccd/ccrc (one selection)', () => {
       const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
       const body = (name: string): string => {

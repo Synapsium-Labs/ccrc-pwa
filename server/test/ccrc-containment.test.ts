@@ -5,9 +5,12 @@
 //        rule `ccrcContainedEnv` is built on. A checker nothing can make red is a comment.
 //   3b — the one per-builder pin that lives HERE: `keepDigest`'s env (`installTreeFixture.ts` registers no
 //        tests). The other builders pin themselves in their own files.
-//   3c — the census: a text scan of the five files that build ccrc envs, so a builder that slides back to
-//        `ghContainedEnv(home, { ...process.env … })`, or a raw spawn of the real `ccd/ccrc` that hands the
-//        parent's env bare, reds here and names its line.
+//   3c — the census: a text scan of the five files that build ccrc envs, for TWO shapes only — a builder that
+//        slides back to `ghContainedEnv(home, { ...process.env … })`, and a new `...process.env, HOME: home`
+//        literal — each reds here and names its line. It cannot see a raw spawn of the real `ccd/ccrc` with no
+//        `env` option, with `env: process.env`, or with `{ ...process.env, HOME: <any other name> }` (fix round 1,
+//        F5: a scan for raw `ccd/ccrc` spawns is residue). The per-builder pins and `assertNoRealTool` are what
+//        hold those today.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import {
@@ -256,7 +259,9 @@ describe('keepDigest\'s env (wave 9 R9-F8, 3b)', () => {
   });
 });
 
-describe('the census — no builder or raw spawn of the real ccd/ccrc hands the parent\'s env bare (wave 9 R10d, 3c)', () => {
+// Two shapes only (fix round 1, F5): a raw `ccd/ccrc` spawn with no `env`, with `env: process.env`, or with
+// `{ ...process.env, HOME: dir }` is invisible to both scans below.
+describe('the census — two shapes of a bare parent env: a `ghContainedEnv({ ...process.env` builder, and the `...process.env, HOME: home` literal (wave 9 R10d, 3c)', () => {
   const FILES = ['ccrc-update.test.ts', 'ccrc-install.test.ts', 'ccrc-cli.test.ts', 'ccrc-install-graphify.test.ts',
     'installTreeFixture.ts'] as const;
   const lineOf = (src: string, at: number): number => src.slice(0, at).split('\n').length;

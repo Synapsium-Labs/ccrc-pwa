@@ -2758,12 +2758,12 @@ _box_server_addr() {
 #          line (a comment's too — systemd before v254 continued it, v254+ does
 #          not, and this reader does not know which runs), a backslash in the
 #          value, a quote that is not one whole pair, a quote left open on an
-#          earlier line, an `export` prefix.
+#          earlier line, an `export` prefix on the key itself (`export<ws>KEY<ws>=`).
 #   shell  the launchd job's `set -a; . file` (Darwin). Called ONLY on a file
 #          `_box_env_shell_plain` passed, so every assignment line is plain: an
 #          `export` word and trailing spaces and tabs are dropped, as bash does.
 _box_env_value() {   # <file> <key> [unit|shell]
-  local file="$1" key="$2" mode="${3:-}" line v="" found=0 und=0 prevcont=0 qtaint=0 rest
+  local file="$1" key="$2" mode="${3:-}" line v="" found=0 und=0 prevcont=0 qtaint=0 rest xk
   # Space, tab, CR — systemd's set, minus the newline `read` has consumed. A
   # variable rather than a literal bracket expression because a tab and a CR
   # typed inline are invisible in a diff and one stray edit from being deleted.
@@ -2780,8 +2780,15 @@ _box_env_value() {   # <file> <key> [unit|shell]
     if [ "$mode" = unit ]; then
       # Wave 9 R10e (D-3823): shapes systemd may read and this reader cannot decide.
       case "$line" in
-        "$key"[$' \t']*=*|"export"[$' \t']*"$key"[$' \t']*=*|"export"[$' \t']*"$key="*) und=1 ;;
+        "$key"[$' \t']*=*) und=1 ;;
         "$key="*) { [ "$prevcont" -eq 1 ] || [ "$qtaint" -eq 1 ]; } && und=1 ;;
+        # `export`, one or more spaces or tabs, exactly KEY, optional spaces or tabs, `=` — D-3823's own text, "never a
+        # longer key that begins with KEY" (fix round 1, F2): `export OLD_KEY=…` and `export NOTE=KEY=…` name another key.
+        export[$' \t']*)
+          xk="${line#export}"; xk="${xk#"${xk%%[!$' \t']*}"}"
+          case "$xk" in
+            "$key"*) xk="${xk#"$key"}"; xk="${xk#"${xk%%[!$' \t']*}"}"; case "$xk" in =*) und=1 ;; esac ;;
+          esac ;;
       esac
       # A QUOTE THAT MAY SPAN LINES: systemd's '-quoted and "-quoted values can span lines, so a non-comment line
       # whose value carries a quote that is not ONE WHOLE PAIR on that line taints every later key line (never
@@ -2825,12 +2832,16 @@ _box_env_value() {   # <file> <key> [unit|shell]
 
 # _box_env_shell_plain <file> — Darwin only (wave 9 R10a, round-2 ruling R-A). rc 0 when every line is blank, a
 # comment, or `[export<ws>]NAME=` + a shell-inert value / one whole '…' pair / one whole "…" pair with no $, backtick,
-# \ or " inside, then only spaces/tabs; and no line holds a CR. rc 1 otherwise: BEP_LINE is the first failing line's
-# NUMBER and BEP_CAUSE is `cr` or `shape`. It never records the line's bytes — ccrc.env holds tokens. Called
-# directly, never in `$(…)`, so the out-params reach the caller.
+# \ or " inside, then only spaces/tabs; no line holds a CR; and the file holds no NUL byte (D-3832: /bin/bash 3.2's
+# `. file` stops at the first NUL, so the job sets what comes before it and nothing after, while `read` below drops the
+# NUL and would pass the file — so it is found first, by `_box_env_has_nul`, never by `read`). rc 1 otherwise: BEP_LINE
+# is the first failing line's NUMBER (0 for a NUL: the cause is the file's, so no line is named) and BEP_CAUSE is `nul`,
+# `cr` or `shape`. It never records the line's bytes — ccrc.env holds tokens. Called directly, never in `$(…)`, so the
+# out-params reach the caller.
 _box_env_shell_plain() {   # <file>
   local file="$1" raw rest name val inner n=0
   BEP_LINE=0; BEP_CAUSE=""
+  if _box_env_has_nul "$file"; then BEP_CAUSE=nul; return 1; fi
   while IFS= read -r raw || [ -n "$raw" ]; do
     n=$((n + 1))
     case "$raw" in *$'\r'*) BEP_LINE=$n; BEP_CAUSE=cr; return 1 ;; esac
@@ -2850,6 +2861,15 @@ _box_env_shell_plain() {   # <file>
     BEP_LINE=$n; BEP_CAUSE=shape; return 1
   done < "$file"
   return 0
+}
+
+# _box_env_has_nul <file> — rc 0 iff the file holds a NUL byte: both arms' one detector (`_box_env_unit_whole`, D-3831;
+# `_box_env_shell_plain`, D-3832). `read` drops a NUL, so it is never trusted to report one: a `read -d ''` that
+# SUCCEEDS stopped at a NUL. rc 1 for a file with none, and for one that cannot be opened (both callers read only a
+# file already measured readable).
+_box_env_has_nul() {   # <file>
+  local chunk
+  IFS= read -r -d '' chunk < "$1"
 }
 
 # _box_env_qopen <line> — `unit` mode's one spelling of "a quote that may span lines" (wave 9 R10e, D-3823; reused by
@@ -2884,13 +2904,13 @@ _box_env_qopen() {   # <line>
 # between assignments. A non-comment line that ends in `\` or whose quote may span lines (`_box_env_qopen`) puts a
 # later `#` line inside a VALUE, which systemd does UTF-8-check, so in such a file the exemption is off for the WHOLE
 # file (conservative: a comment before the opener counts too, and it can only cost a "not measured"). BEW_LINE is the first offending line's NUMBER (0 for `nul`); the bytes are never
-# recorded. NUL is detected without trusting `read`, which drops it: a `read -d ''` that succeeds found one. Called
-# directly, never in `$(…)`.
+# recorded. NUL is detected without trusting `read`, which drops it: `_box_env_has_nul`, the detector the Darwin arm
+# shares (D-3832). Called directly, never in `$(…)`.
 _box_env_unit_whole() {   # <file>
-  local file="$1" line chunk trimmed n=0 spans=0 cmtline=0
+  local file="$1" line trimmed n=0 spans=0 cmtline=0
   local LC_ALL=C ws=$' \t\r'
   BEW_LINE=0; BEW_CAUSE=""
-  while IFS= read -r -d '' chunk; do BEW_CAUSE=nul; return 1; done < "$file"
+  if _box_env_has_nul "$file"; then BEW_CAUSE=nul; return 1; fi
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
     line="${line%$'\r'}"
@@ -2921,8 +2941,8 @@ BUE_ENV=""     # ccrc.env's state: ok | unreadable | absent
 BUE_EXP=""     # the exposure file's state: absent | readable | unreadable
 BUE_WHY=""     # rc 3 only (wave 9 R10e, D-3823): the cause, as a clause naming the file; "" otherwise
 BUE_FIX=""     # rc 3 only: the remedy clause for that cause
-BEP_LINE=0     # _box_env_shell_plain: the first failing line's NUMBER (never its bytes)
-BEP_CAUSE=""   # _box_env_shell_plain: cr | shape
+BEP_LINE=0     # _box_env_shell_plain: the first failing line's NUMBER (0 for a NUL byte; never its bytes)
+BEP_CAUSE=""   # _box_env_shell_plain: nul | cr | shape
 BEW_LINE=0     # _box_env_unit_whole: the first offending line's NUMBER (0 for a NUL byte; never its bytes)
 BEW_CAUSE=""   # _box_env_unit_whole: cr | nul | utf8
 
@@ -2941,7 +2961,7 @@ BEW_CAUSE=""   # _box_env_unit_whole: cr | nul | utf8
 # rc 3 UNMEASURED, the SECOND unmeasured state (rc 2 is the unreadable exposure file, checked first on both platforms):
 # on Linux a readable file names the key in a shape this reader does not decide (an exposure file that DECIDES the key
 # still wins over an undecidable ccrc.env, by presence, as the second `EnvironmentFile=` does); on Darwin either
-# readable file is not plain assignments throughout, and then EVERY key is rc 3. BUE_WHY is the cause as a clause
+# readable file is not plain assignments throughout (a NUL byte anywhere counts, D-3832), and then EVERY key is rc 3. BUE_WHY is the cause as a clause
 # naming the file (and, on Darwin, the line NUMBER, never its bytes — ccrc.env holds tokens); BUE_FIX is its remedy clause.
 _box_unit_env() {   # <KEY>
   local key="$1" v rc envund=0 expund=0 f envwhole="" envline=0 expwhole="" expline=0 whole wline
@@ -3029,6 +3049,9 @@ _box_unit_env_shell() {   # <KEY>
   [ -z "$bad" ] && return 0
   BUE_VAL=""; BUE_SRC=""; BUE_NAMED=0
   case "$BEP_CAUSE" in
+    # D-3832: no line number — /bin/bash 3.2 drops everything after the first NUL in the FILE, so the cause is the file's.
+    nul) BUE_WHY="$bad holds a NUL byte, and on macOS the launchd job sources both env files with /bin/bash, which stops reading a file at its first NUL byte, so what the job sets from that file is not decided here"
+         BUE_FIX="remove the NUL byte from $bad (ccrc expose rewrites the exposure file)" ;;
     cr) BUE_WHY="$bad line $BEP_LINE carries a carriage return, which bash keeps in the value — on macOS the launchd job sources both env files with bash"
         BUE_FIX="save $bad without carriage returns (ccrc expose rewrites the exposure file)" ;;
     *)  BUE_WHY="$bad line $BEP_LINE is not a plain NAME=value line, and on macOS the launchd job sources both env files with bash, so that line can change what they set"
@@ -21642,7 +21665,10 @@ _bak_prune() {
 }
 
 # ── _bak_keepset — which two earlier dirs a prune keeps beyond the floor (wave 9 R10g, D-3825) ──
-# The ONE spelling of `_bak_gc`'s selection, shared with `_bak_prune`, so the two pruners cannot drift on WHAT is protected.
+# The ONE spelling of the two extra keeps' SELECTION, shared by `_bak_gc` and `_bak_prune`: which earlier coord.db snapshot
+# and which earlier tree backup are kept, and the own-dir and floor pair that selection skips over. That is all that is
+# shared (fix round 1, F4). The four-line removal filter that APPLIES the keeps — own dir, floor, snapshot, tree — is
+# written twice, once in each pruner's loop, and nothing pins the two copies to each other.
 # The two extra keeps are chosen among dirs NOT already protected (below the floor, not this run's own): the protected
 # ones are kept anyway, so picking one of them would protect nothing. READS BAK_DIRS (`_bak_list` first), UPD_BACKUP_DIR and
 # UPD_BAK_FLOOR; WRITES BAK_KEEP_SNAP (the newest earlier coord.db snapshot) and BAK_KEEP_TREE (the newest earlier tree
