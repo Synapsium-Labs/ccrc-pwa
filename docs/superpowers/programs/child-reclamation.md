@@ -44,6 +44,23 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-05 18:47 — #282 merged, and wave 5 dispatched as run 260 to `ccrc-pwa-quiet-meadow`.**
+  - **The docs PR.** The required checks passed on `e453ef1b`. Main had moved by #240, #280, #281 and #250, none of
+    which touches these files, and the merge was clean. #282 merged as `6f6923cd`, and the four docs files on main
+    equal the tested tree.
+  - **The brief.**
+    - It names `homeRepoRoot`, `planRepoPath` and planSha `6f6923cd`.
+    - It names the execution skill `superpowers:subagent-driven-development`.
+    - It fixes the task order: 0b, 0c, 1 to 9 with 2b, 4b, 4c, 4d, 6b, 9b and 9c, then 10.
+    - It states A1's hard boundary, and the block written singly.
+    - It ends at the PR: no hand rollout.
+  - **The dispatch** carried 19 items and the route `{opus, xhigh, sonnet, workflow on, compact 40}`, and answered
+    `ok`: not resumed, brief queued, skill present.
+  - **Overlaps.** `ccrc-pwa-soft-basin` agreed to the rule (mail 3563), with one addition. Run 271 also edits
+    README.md, in the registered-events paragraph and the capture section. So the second lander re-runs
+    `session-hook.test.ts` IN FULL, where a README collision would show. The brief carries that. `ccrc-pwa-quiet-river`
+    has not replied to mail 3560 by dispatch, so the proposed rule stands.
+
 - **2026-10-05 18:35 — wave 5's pre-flight, the coordinator's rulings R38–R47 (contract §11), and the split into
   waves 5 and 6.**
   - **The pre-flight.** It read the 2026-09-22 plan against `334fb722a`, and the live fleet read-only.
