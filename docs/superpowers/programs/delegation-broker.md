@@ -27,10 +27,213 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 
 ## Measurement matrix (wave 1 fills this section)
 
-Wave 1's Task 9 writes the corpus answers here — per spec §8.1 question and Claude Code version, from the committed
-fixture corpus (`server/test/fixtures/delegation/matrix.json`) — plus the on-box census (projects by label, never by
-name) and the hook-side costs. After wave 1 merges, the coordinator adds the real-lane cross-check (two lanes) under
-its own heading. Until both are here, nothing in waves 2–6 may depend on a hook field (spec §8.1).
+Wave 1's answers to spec §8.1, per Claude Code version, read from the committed corpus
+(`server/test/fixtures/delegation/matrix.json`, derived by `server/test/delegation-rig/build-matrix.mjs` from 98
+synthetic rig captures: mock API, fixture HOME, fixture repo). The on-box census names projects by label only, and
+the hook-side costs are below. After wave 1 merges, the coordinator adds the real-lane cross-check (two lanes, D-3995)
+under its own heading. Until that is here, nothing in waves 2–6 may depend on a hook field (spec §8.1).
+
+**Versions covered:** 2.1.280, 2.1.281, 2.1.285, 2.1.286, 2.1.287, 2.1.288 and 2.1.289, each with 14 scenarios, and
+all 98 cells are `measured`. The fleet's installed lanes run 2.1.285 (one lane), 2.1.286 (four lanes) and 2.1.289 (ten
+lanes), measured read-only on 2026-10-05. **Every installed lane version is covered**, and no lane runs a version the
+corpus lacks.
+
+**Scenario → §8.1 source** (the matrix is keyed by version × scenario, D-3998):
+- Agent: `agent-plain`.
+- Isolated Agent: `agent-iso-unchanged`, `agent-iso-changed`, `agent-iso-dirty`, `agent-iso-bg`, `interrupt-exit`
+  and `parent-kill`.
+- Workflow worker: `wf-plain`.
+- Isolated Workflow worker: `wf-iso`, `wf-iso-resume` and `wf-limit-pause`.
+- Raw `git worktree add` from Bash: `raw-worktree`.
+- The session itself (Q5, which has no delegation source): `clear-compact-resume` and `swap-resume`.
+
+### Corpus answers (plan Task 9 Step 1)
+
+Status is read first: an unmeasured cell would print `unmeasured`, and none did. Inside a measured cell, "—" means
+not observed. Session ids appear as ordinals (`s1`, `s2`), never as values.
+
+| Question (scenario) | 2.1.280 | 2.1.281 | 2.1.285 | 2.1.286 | 2.1.287 | 2.1.288 | 2.1.289 |
+|---|---|---|---|---|---|---|---|
+| Q1 SubagentStart count; agent types (wf-plain) | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` |
+| Q1 SubagentStart count (wf-iso) | 2 | 2 | 2 | 2 | 2 | 2 | 2 |
+| Q2 tool name (agent-plain) | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` |
+| Q2 `isolation` in PreToolUse input (agent-iso-unchanged) | yes | yes | yes | yes | yes | yes | yes |
+| Q3 `agent_id` names `agent-<id>` (agent-iso-changed) | yes | yes | yes | yes | yes | yes | yes |
+| Q3 meta carries `worktreePath` (agent / wf) | all / all | all / all | all / all | all / all | all / all | all / all | all / all |
+| Q3 admin records named by a meta (agent / wf) | all / all | all / all | all / all | all / all | all / all | all / all | all / all |
+| Q3 `CLAUDE_BASE` (agent / wf / raw) | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none |
+| Q4 subagent Bash: count, with `agent_id` (agent-plain) | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 |
+| Q4 subagent Bash: parent's session id / `cwd` in worktree | all / all | all / all | all / all | all / all | all / all | all / all | all / all |
+| Q5 SessionStarts (clear-compact-resume) | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 |
+| Q5 SessionStarts (swap-resume) | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 |
+| Q6 trees left: unchanged / changed / dirty / bg / killed / interrupted / raw | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 |
+| Q6 SessionEnd: interrupt-exit reasons / parent-kill count | none / 0 | none / 0 | none / 0 | none / 0 | none / 0 | none / 0 | none / 0 |
+| Q7 wf-iso-resume: probes missed / records before kill / at end | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 |
+| Q7 wf-limit-pause: probes missed | none | none | none | none | none | none | none |
+
+What the table cannot show, read from the same fixtures' event order and key sets. Each item holds on all seven
+versions unless it names one.
+- **Every Agent and Workflow call launched in the background.** The launch's PostToolUse returned at once with an
+  async-launch response. The parent's Stop then fired still counting one background task. The
+  subagent's SubagentStop came later, and the result reached the parent only as a task-notification user turn.
+  D-4005 recorded this on 2.1.289, where the smoke run was made; the corpus measures it on **all seven**. The
+  scenarios asked the mock for `run_in_background: false`, and no PreToolUse input carried that key. **A foreground
+  Agent call is therefore unmeasured on every version.**
+- The Agent launch response names the subagent's agent id, the same id SubagentStart carries. The Workflow launch
+  response names the workflow run id, which names that run's `wf_<run>-<n>` admin records and its
+  `subagents/workflows/wf_<run>/` meta directory, and it names a task id. Each Workflow worker's SubagentStart
+  `agent_id` names its meta file. The task id, or the agent id for an Agent, is the id that the parent's Stop
+  `background_tasks` and the closing task notification carry.
+- SubagentStart and the launch's PostToolUse arrive in either order within one version. In agent-iso-changed, for
+  example, the launch came first on 2.1.280, 2.1.288 and 2.1.289, and SubagentStart came first on the other four.
+- The Workflow PreToolUse input is the script alone. A worker's isolation is spelled inside the script text, never as
+  a `tool_input` key.
+- **Q5 compact is a measurement LIMIT, not "never fired".** The hook exits for a `compact` SessionStart before its
+  capture arm (`ccd/session-hook.sh:2905`). That is the stall-watch exclusion its arm comment documents at
+  `:2919-2922`. Compaction shows only as PreCompact/PostCompact, which carried the pre-compaction session id, and the
+  rig's resume by that id continued under it. During `/compact`, one SubagentStop fired with an agent id, an empty
+  agent type, and no SubagentStart. On 2.1.289 the resumed turn's Stop was not captured (two Stops where the other
+  versions show three), and the session-id sequence is unaffected.
+- **SessionEnd:** clear-compact-resume captured two on every version, one for `/clear` (fired under the old id just
+  before the new id's SessionStart) and one for the final `/exit`. The SIGKILL between them fired none. swap-resume
+  captured two, one for each `/exit`. interrupt-exit (Escape, then `/exit`, while a background agent ran) and
+  parent-kill captured **none**. The matrix does not say whether that `/exit` completed.
+- **Q6 removal:** an unchanged isolated tree was removed natively for Agent and for Workflow. In wf-iso, the unchanged
+  worker's tree went and the committing worker's tree stayed (its record holds the commit), and wf-limit-pause left nothing. Committed, dirty,
+  background, interrupted and killed trees all stayed. Interrupted and killed agents emitted no SubagentStop and no
+  task notification.
+- **Q7:** in wf-iso-resume the hung worker **did not re-run within the probe window** after the parent's SIGKILL and
+  `--resume`. No further SubagentStart fired, and the record left at the end is the one the before-kill snapshot
+  held. In wf-limit-pause the worker answered after its mock 429 under one SubagentStart and one SubagentStop, and its
+  probe was reached on every version. Whether a mock 429 provokes Claude Code's five-hour pause stays unknown
+  (`wf-limit-pause-is-an-attempt`, D-3997).
+- Q2 asked `Agent` or `Task`: the mock offers both names and Claude Code chose `Agent` every time (D-3994). A `Task`
+  spelling is not observed, not excluded.
+
+### Hook-side costs (Q8)
+
+This is a bash micro-benchmark of the operations, not of the wave-2 hook (`q8-spool-cost-is-a-micro-benchmark`,
+D-4000). It ran against `this-repo`'s main checkout, which held 74 admin records when the benchmark ran (72 at the
+census). The repository with the most records is `project-1` (181), but its path is not read, so `this-repo` stood
+in for it. The box was loaded: load average 46.81 / 41.83 / 37.04 on 16 CPUs, unchanged across the three repeats.
+
+| Operation (1000 iterations, 3 repeats) | seconds per 1000 | per operation |
+|---|---|---|
+| list `<common-dir>/worktrees/*` (bash glob, no fork) | 0.570, 0.749, 0.597 | 0.57–0.75 ms |
+| find the common dir (`read` of `.git`, no fork) | 0.047, 0.028, 0.051 | 0.03–0.05 ms |
+| one ~1 KiB spool append (`printf >>`) | 0.106, 0.274, 0.210 | 0.11–0.27 ms |
+
+The budget is the PostToolUse p95 pinned in `session-hook.test.ts`: 150 ms is the CI allowance and 50 ms is the
+target. A worktree-mentioning Bash call costs two listings plus one append, at most about 1.8 ms at 74 records. Scaling
+linearly to `project-1`'s 181 records gives about 1.8 ms per listing. That figure is an extrapolation, not a
+measurement.
+
+### On-box census (read-only, fleet box, 2026-10-05)
+
+From `deploy/delegation-census.mjs` `.totals`. `adminRead` was `ok` for all five labels.
+
+| label | records | agent | wf | other | metaFound | metaMissing | metaMalformed | metaPathless | homesUnreadable | multiHome | worktreeAbsent | byAge | byParent |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| this-repo | 72 | 12 | 7 | 53 | 19 | 0 | 0 | 0 | 0 | 8 | 14 | <1h 72 | ccd-workspace 17, main-checkout 2 |
+| project-1 | 181 | 73 | 1 | 107 | 74 | 0 | 0 | 1 | 0 | 64 | 5 | <1h 5, <1d 8, <7d 165, >=7d 3 | other 59, ccd-workspace 12, mixed 3 |
+| project-2 | 51 | 20 | 7 | 24 | 27 | 0 | 0 | 7 | 0 | 10 | 3 | <1h 13, <7d 1, >=7d 37 | ccd-workspace 18, main-checkout 8, mixed 1 |
+| project-3 | 6 | 2 | 0 | 4 | 2 | 0 | 0 | 0 | 0 | 1 | 0 | <1h 4, <7d 2 | ccd-workspace 2 |
+| project-4 | 2 | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | <1h 1, >=7d 1 | — |
+
+`metaMalformed`, `metaPathless`, `homesUnreadable` and `adminRead: 'not-main'` are the census's additive fields
+(D-4008). The census records show more than the totals.
+- Every `agent-*` and `wf_*` record, 123 of 123, carries a `CLAUDE_BASE` that agrees with its first `logs/HEAD` line.
+- Every found meta's `worktreePath` equals its record's path.
+- Three `other` records carry a `CLAUDE_BASE` too (`project-1` 2, `project-2` 1).
+- Every `worktreeAbsent` record is of kind `other`.
+- Two records are `locked`.
+
+**Caveats.**
+- `ageBucket` is the admin directory's mtime. It measures time since the last git activity on that record, **not the
+  record's age**. Measured live, `this-repo` went from 48 `<1d` / 24 `<1h` to 72 `<1h` within minutes, with no census
+  write.
+- The `other` kind is large (`this-repo` 53 of 72), because ccd's own `ws/*` worktrees and any non-Claude worktree
+  land there.
+
+**Q9, as a proxy** (`q9-parent-class-is-a-proxy`, D-4001). `byParent` classes the working directory of each found
+meta's parent.
+- `main-checkout` is ALSO where every ccd `<wrapper>-<project>` session runs, so it cannot tell a ccd parent from a
+  non-ccd one.
+- `other` means neither the main checkout nor under the ccd workspace root. That could be a subdirectory, another
+  checkout, or a session outside ccd.
+
+Across the 122 found metas: `ccd-workspace` 49, `main-checkout` 10, `other` 59 and `mixed` 4. The non-ccd share is
+therefore bounded only to between 0 and 73 of 122 (about 60%), and `project-1` carries almost all of it. Wave 2's
+spool answers Q9 exactly: a tree whose parent wrote no spool line had a non-ccd parent.
+
+**Q10, from source** (`incarnation-is-the-row-generation`, D-3996). `$REG/<id>.generation` (D-2605) serves as a
+parent's registry incarnation.
+- It is minted once, by a no-clobber `link`, in `_reg_generation_mint` (`ccd/ccd:3791`).
+- It is never rewritten. It is removed only when the row is purged (`ccd/ccd:4091`).
+- It is read through an owned alias in `_reg_generation_read` (`ccd/ccd:3752`).
+- The hook sees it as `CCRC_SESSION_GENERATION` (`_hook_generation_ok`, `ccd/session-hook.sh:1303-1304`). ccd sets
+  that variable only when the read succeeds at spawn, and otherwise spawns without it, with a warning
+  (`ccd/ccd:20528-20553`). **So wave 2 reads the FILE, not the variable.**
+
+### Amendments the measurement forces
+
+- `delegation-posttooluse-is-a-launch` — on every version the Agent and Workflow PostToolUse arrives at launch as an
+  async acknowledgement and the work ends later, so "PostToolUse = completion / failure" holds for Bash only. An
+  Agent or Workflow activity's terminal evidence is its SubagentStop or the task notification (agent-*, wf-* cells)
+  — spec §5.3 hook table, §5.2 execution, §5.11 terminal evidence.
+- `launch-response-names-the-upstream-id` — the Agent launch response carries the subagent's agent id, and the
+  Workflow launch response carries the workflow run id that names its `wf_` records and meta directory. Together
+  they are the only spool-side join from a parent's `tool_use_id` to either, so the envelope gains them as validated
+  tokens (every agent-*, wf-* cell) — spec §5.3 envelope, §5.4 rung 2.
+- `activity-keyed-by-agent-id-not-arrival` — SubagentStart and the launch's PostToolUse arrive in either order within
+  one version (agent-iso-changed), so an Agent activity's upstream id is its agent id whichever event comes first,
+  never the `tool_use_id` — spec §5.2 activity id.
+- `run-end-is-a-task-notification` — a launch ends, for the parent, as a task-notification user turn naming the
+  launch's task id, and that id leaves the next Stop's `background_tasks`. This is the only "workflow-run-ended
+  evidence" the corpus shows, so the spool records that task id and never the prompt text (wf-plain, wf-iso,
+  wf-limit-pause) — spec §5.2 execution, §5.11.
+- `workflow-isolation-is-in-the-script` — the Workflow PreToolUse input is the script alone, so
+  `tool_input.isolation` never exists for a Workflow. A worker's isolation is read from its meta's
+  `spawnedWithWorktree` / `worktreePath` (wf-plain, wf-iso) — spec §5.3 PreToolUse row.
+- `sessionend-on-clear-is-a-rotation` — a SessionEnd fires under the old id immediately before the `clear`
+  SessionStart under the new one, so a SessionEnd's reason separates an id rotation from an exit, and the
+  session-UUID history records the pair as one rotation (clear-compact-resume) — spec §5.3 SessionEnd row,
+  §5.2 `delegation_sessions`.
+- `sessionend-absent-on-an-interrupted-exit` — interrupt-exit captured no SessionEnd on any version, just as
+  parent-kill captured none, while a plain `/exit` did. "A killed parent cannot fire SessionEnd" therefore has no usable converse:
+  neither presence nor absence says how a session ended (interrupt-exit, parent-kill, swap-resume) — spec §3.1,
+  §5.3, §5.11.
+- `interrupted-agent-has-no-terminal-event` — an interrupted or killed isolated agent leaves its tree, unchanged
+  included, with a SubagentStart and no SubagentStop or task notification. Under the ephemeral rule, an interrupted
+  agent whose parent lives on is never due, so wave 2 must name what ends it (interrupt-exit, parent-kill) —
+  spec §5.11 clocks and terminal evidence, §5.2 execution.
+- `workflow-worker-not-rerun-after-restart` — after a parent SIGKILL and `--resume`, the hung isolated worker did not
+  re-run within the probe window, and its record stayed. "A paused workflow is not ended" must not wait on a resume
+  the corpus never saw (wf-iso-resume, probe missed on all seven) — spec §5.11, §5.12 restart.
+- `compact-sessionstart-is-not-captured` — the hook exits for a `compact` SessionStart before capture, and compaction
+  showed no id change in PreCompact/PostCompact. "Rotates on compaction" is unmeasured, and wave 2's spool line for
+  that SessionStart must be written inside its arm before the exit (clear-compact-resume) — spec §3 `_sync_uuid` row,
+  §5.2, §5.3.
+- `compaction-fires-an-unpaired-subagentstop` — `/compact` emits a SubagentStop with an agent id, an empty agent
+  type, and no SubagentStart or launch, so a SubagentStop alone never opens an activity (clear-compact-resume) —
+  spec §5.2 activity, §5.3.
+- `raw-worktree-base-is-the-first-log-line` — a raw `git worktree add` record has no `CLAUDE_BASE` and has a first
+  `logs/HEAD` line, so §5.5's fallback is a rung-4 lease's only creation base (raw-worktree, `otherClaudeBase` none)
+  — spec §5.5 census, §5.2 lease identity.
+- `claude-base-outside-the-name-patterns` — three census records, named neither `agent-` nor `wf_`, carry a
+  `CLAUDE_BASE` that agrees with their first log line. `CLAUDE_BASE` therefore does not mark the two delegated kinds,
+  and Claude Code makes a tree shape the rig does not cover. Such trees route to rungs 3–4 by name like any other
+  — spec §5.4 rung 2, §5.14.
+- `admin-record-without-its-tree` — 22 records (`this-repo` 14, `project-1` 5, `project-2` 3; census
+  `worktreeAbsent`) name a worktree directory that is gone. The workspace dimension has no value for that state, so
+  the census extension reports it distinctly, never as `present` — spec §5.2 workspace, §5.5 census.
+- `incarnation-is-the-row-generation-file` — the parent's incarnation is `$REG/<id>.generation`, read from the file,
+  because `CCRC_SESSION_GENERATION` is absent on every spawn whose generation read failed (Q10 above, D-3996) —
+  spec §5.1 parent key.
+
+### Real-lane cross-check
+
+Pending: the coordinator runs it after wave 1 merges, per the plan's "After the merge" steps.
 
 ## Decisions & deviations
 
