@@ -5703,13 +5703,19 @@ _check_models() {
 # — `docs-index --all` writes nothing, never fetches and enumerates no
 # worktree (§2 (h)) — under a deadline, and classifies its one-line answer.
 # It is the first check in this file that runs a ccd verb against the live
-# box, and it also runs inside `ccrc update`'s closing doctor
-# (`_inst_doctor_tail` in ccd/ccrc), which gates the migration finish and the
-# version GC and makes the update exit 3 on a FAIL. So a FAIL here has that
-# consequence: a box whose ccd cannot answer Docs updates, keeps its
-# `ccrc.migrating` tree and its older versions until the next gate passes, and
-# exits 3 — the FAIL is honest (the box is on the new build, but Docs cannot
-# run on it), and it is meant to be seen, not swallowed. A WARN never gates.
+# box, and it runs in every doctor, including the tail of an install or an
+# update. What a FAIL here costs depends on the path, because only one of them
+# lets doctor gate anything:
+#   (1) A plain `ccrc install`: `_inst_doctor_tail` in ccd/ccrc is its own
+#       gate (the update lock is free), so a FAIL keeps `~/ccrc.migrating`,
+#       skips `_ver_gc`, and the install exits 1.
+#   (2) `ccrc update`, and `ccrc rollback`'s kept spine: the staged spine's
+#       doctor tail finds the updater's lock held and gates nothing. The
+#       verb's health gate decides the migration finish and the version GC,
+#       so a docs FAIL strands neither; it turns the verb's exit into 3
+#       (D-3114), with the box on the new build and Docs unable to run on it.
+# Either way the FAIL is honest and meant to be seen, not swallowed. A WARN
+# never gates (`cmd_doctor` returns 1 only when a check FAILed).
 #
 # THE PYTHON FLOOR LIVES IN ccd, NOT HERE (C2). `_check_python3` stays a
 # presence check; the 3.8 floor is ccd's docs bash front, which answers
