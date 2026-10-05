@@ -3150,6 +3150,23 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   a temp sibling and move in after every bundle passes). Each closed shape has a row and a measured mutation. Base64
   is a declared limit; every non-loopback URL is refused, so a Claude Code help link in a payload fails the corpus
   closed rather than passing.
+- **D-4008** — `census-malformed-and-unreadable-distinct` (Task 8 review): the plan's census folded an unparsable meta
+  into `found:true, keys:[]` (identical to a valid meta with no `worktreePath` — an overloaded value at a seam), a
+  malformed or path-less wf meta into `metaMissing`, and an unreadable home into "nothing there". It now reports
+  `meta.malformed` and `meta.pathless` separately (a path-less meta is the ordinary shape, never malformed),
+  `totals.metaMalformed`, `totals.metaPathless`, `totals.homesUnreadable`, and `adminRead: 'not-main'` for a linked
+  worktree passed as `--repo`; meta key NAMES print only from an allow-list of Claude Code's own meta keys (an
+  id-shaped key name became `(unprintable)`); `--repo` / `--ccd-root` are resolved (a trailing slash had turned
+  `main-checkout` into `other`) and a relative `gitdir` resolves against its admin record. Additive to the plan's
+  `Census` shape; each with a row and a measured mutation.
+- **D-4009** — `matrix-unmeasured-arms-and-pins` (Task 7 review): the plan's builder counted an event with an
+  unparseable payload in `events` but derived every question field without it, so a lost `SubagentStart` read as a
+  MEASURED zero (Review Focus 4); it is now `unmeasured`, reason `unparseable payload`. Also: a corrupt fixture is
+  `fixture unreadable` (no longer `no fixture`), a fixture whose `version`/`scenario` disagree with its path is
+  `fixture misplaced`, a non-version directory is named on stderr by ordinal rather than dropped, and
+  `transcriptNamesAgent` judges every `SubagentStop` (a stop missing its fields was `null`, "none observed"). The
+  plan's untested guards — no events, the 200-event cap, the main-loop filter on `agentTool`, the `Task` spelling —
+  gained rows and measured mutations.
 
 ## Self-review (record)
 
