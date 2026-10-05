@@ -22,7 +22,7 @@ file in the fleet registry. No marker has a writer in the tree.
 | 4 | the coordinator and worker clauses (spec §6.1, §6.2) and the continuity amendment (§6.3) | skills (reach homes through `ccrc update`) | #232 | **merged** `4a3de53ea` (2026-10-03 22:59, R22); skills reach homes through `ccrc update` |
 | 5 | follow-ups: indexes for the stall watch's mail read (a migration); a curated sweep of wave 2's parked minors; wave 3's follow-ups and its review's pins | server | #237 | **merged** `7e858c8bf` (2026-10-04 12:40, R26) |
 | 6 | the wave-2 review's fixes: G1 (the `worker` alias hides fix rounds from the quiet arm), G2 (busy-gate holds misreported as mail-stuck/coord-deaf), G3 (the dialog cap keyed per dialog), G4 (run-less latches across a restart) | server | #241 | **merged** `698f679da` (2026-10-04 21:21, R33); live at the next auto-update |
-| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`); Task 4 server comments | #246 | **in review** — fix round done at `376d1ffb1` (2026-10-05), re-measured; review run 264 (R36) |
+| 7 | coordinator clause 16 amended (R2 with R17-F1, operator-approved 2026-10-04); the stop clause's wake-list scans (R17-F2, R21-F1) | skills (reach homes through `ccrc update`); Task 4 server comments | #246 | **accepted** at `376d1ffb1` (review 264, R37); run 259 at `merging`, awaiting the operator's merge after the last ledger PR |
 
 Waves 1 and 2 ran before this ledger existed, under subagent-driven development in one session; their records are
 the two plans' own "Deviations found" sections and their PRs. Run-tracked waves start at 3.
@@ -617,6 +617,29 @@ Output: `w2-shadow-review.json` in the coordinator notes.
   - **Review run 264** is dispatched to a fresh reviewer, with the held-out panel and a fix-round lens. Its brief rules
     the stopping line: it reports a wording that the comment claims is closed but that passes, never a new shape of
     evasion.
+- **R37 (coordinator, 2026-10-05 03:33): wave 7 is accepted.** Review run 264 (`ccrc-pwa-clear-canyon`) read the
+  fix round at `376d1ffb1`: 31 panel agents, no errors, 6 confirmed (folded into 3), 3 refuted.
+  - **What it measured.** Every suite is green, and C1–C11, W1–W23 and W22c are identical to the worker's evidence. The
+    reviewer's own controls show C11's red is the fix and W5's second red is the anchor. The tree merged with
+    `a6daa9cf4` is green: coordinator-skill 160, worker-skill 51, the citation instrument 7 passed. Run 264 closed
+    `done` on its own fingerprint.
+  - **Rulings:**
+    - **F1, the ledger's act, done here.** D-3807 is cited at the tip but defined only on this branch, and its entry
+      described the split before the fix round. The entry now describes the extended split and the evasions left
+      open. The plan's "This plan alone defines D-3805 and D-3806" and "exactly two" now name D-3807 as well. The
+      last ledger PR carries them and merges BEFORE #246, the same order R32 set for wave 6.
+    - **F2, accepted as residue.** `JUDGED_STATES` mirrors `stallVerdictInner`'s `unknown` hold as a literal, as R35
+      prescribed, and the set is exact today. A new active state reds `run-states.test.ts`; a new hold on an existing
+      active state would not.
+    - **F3, accepted.** The comment says the split cuts "before a bare plural"; the lookahead cuts an s-ending plural
+      followed by `you`/`that`/`which`. No wake gets through, because the wordings that pass fall under the comment's
+      own catch-all. D-3807's entry now states the lookahead precisely. A fix round for one comment would cost a review
+      cycle for nothing that changes.
+  - Run 259 advances to `merging`. The operator's merge decides the order: the last ledger PR first, then #246.
+  - **Still with the operator:** review 262's F1 (clause 16's "the next mail to or from the worker" against the
+    server's on-the-run read) and R31's worker-clause sentence. If both are declined or left open, #246 merges as it
+    is and both stay recorded residue. If either is approved, it becomes a fix round on #246, or a follow-up PR if
+    #246 has merged, under a fresh allocation.
 - **Routing note:** the `subagent` route field takes `haiku` or `sonnet` only (the roster's subagent class list); a
   review run's Opus lenses come from the panel script, so its route names `sonnet` there.
 - **Deviation block: twenty numbers, the first of them 3788** (allocated once, 2026-10-02, before wave 3's run-open;

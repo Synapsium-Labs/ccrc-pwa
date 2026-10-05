@@ -59,7 +59,7 @@ spec 38/1, `server/test/coordinator-skill.test.ts` 49/4, `server/test/worker-ski
 ## Preconditions (check before the baseline; stop and report if one fails)
 
 1. **This plan is on `origin/main`.** `git ls-tree origin/main docs/superpowers/plans/2026-10-04-stall-watch-w7-wait-clause-amendment.md`
-   prints one line. This plan alone defines D-3805 and D-3806, and Tasks 1–3 write both into tracked comments and the
+   prints one line. This plan alone defines D-3805 and D-3806 (and D-3807, added at wave-done), and Tasks 1–3 write both into tracked comments and the
    spec. (The ledger's definition-derived high-water on `main` is D-3884, measured, so `deviation-refs`' floor row stays
    green either way; the precondition is the ledger discipline, not that row.)
 2. **Clause 16 on `main` is the 2026-09-29 text.** `git show origin/main:ccd/coordinator-skill/SKILL.md | grep -c 'which the watch reads as the run waiting on you until your next mail'`
@@ -101,7 +101,8 @@ spec 38/1, `server/test/coordinator-skill.test.ts` 49/4, `server/test/worker-ski
   FOREGROUND, timeout at least 600000 ms, ONE FILE PER COMMAND: `./node_modules/.bin/vitest run test/<file>.test.ts`.
   Never bare `npx vitest`. A red in a known load flake (`session-hook`, `typecheck-tests`, `pr-sweep`, `ccd-ws-gc`,
   `ccd-session-state`, `ccd-bounded-reads`) is re-run in isolation before it is called a break.
-- **Deviation numbers: exactly two, issued by the coordinator**, defined under "Deviations found": D-3805 and D-3806.
+- **Deviation numbers: exactly two at planning, issued by the coordinator**, defined under "Deviations found": D-3805 and
+  D-3806. A third, D-3807, was assigned at wave-done and is defined there too.
   Code comments and the spec cite each by slug and number. Never write any other number, never a range, never a
   placeholder (`dtbd.test.ts` reds one). Name any further departure in the wave-done mail by slug; the coordinator
   assigns its number.
@@ -183,8 +184,16 @@ One more number, assigned by the coordinator at wave-done (ledger R34):
   stop clause's wake list on commas only. Task 2's review found three wordings that passed every row: "…and a
   background task you started", "or any background task" and "; a sleep you started". The split now also cuts on `;`
   and on `and`/`or` before a determiner (`a`, `an`, `any`, `the`, `your`, `one`). Four mutation rows (W11 to W14) go
-  red on it. The row's comment states its stopping line and lists the evasions it does not close (a modifier after
-  "asks", and a `. ` inside a member), the shape the contract-grade guards in this tree take. The other two departures
+  red on it. Review 262's fix round (ledger R35) extended the same split under this number:
+  - six more determiners: `another`, `other`, `some`, `every`, `each` and `its`;
+  - a cut on `or`/`and` before an s-ending plural (optionally after `background`) followed by `you`, `that` or `which`;
+  - an anchor on the background member's tail, so that nothing after its kinds may add a member.
+
+  Rows W15 to W22 go red on these, W22c is the anchor's control and passes, and W23 is scan-only. The row's comment
+  states the stopping line and lists the evasions it leaves open: any text after "asks" in the mail member that the
+  split does not cut, a coordination before "asks", "plus" or "as well as" after the kinds, and a `. ` or a new
+  sentence. This is the shape the contract-grade guards in this tree take. Review 264 measured the lookahead narrower
+  than the comment's "before a bare plural"; the wordings that pass fall under the comment's own catch-all. The other two departures
   that wave-done names carry no number: an escaped-backtick fix to a row message that did not parse as written (same
   text), and Task 4's docstrings scoped to serial replays (comments only).
 
