@@ -3141,6 +3141,15 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   or not owned by the user before it resolves anything (roots now live in the shared `/tmp`); `setup` guards the
   PHYSICAL root as well as its spelling; `check-scenario` refuses an `answerDialog` or `type` that is not a one-line
   string, so a scenario cannot forge a `notes` line Task 7 parses.
+- **D-4007** — `sanitize-leak-shapes-closed` (Task 5 and its review): the plan's T5-M3 row SURVIVED its own mutation
+  (measured 0 red; the `(key)` finding is pushed by index whatever `seg` is) and now uses residue-bearing keys so it
+  bites; and the plan's allowlist let residue through that a leak probe found — a `:`-joined path (the `ABS` lookbehind
+  excluded `:`), `//`-led hosts and `file:///…`, `..` traversal, case and digit variants of the user and host words,
+  `SK-ANT-`, munged foreign paths, `\/` / `\u002f` / `%2f` escapes, an unchecked scenario directory name, silently
+  dropped bundles, a stack trace naming paths, and a half-written corpus on a mid-write failure (fixtures now build in
+  a temp sibling and move in after every bundle passes). Each closed shape has a row and a measured mutation. Base64
+  is a declared limit; every non-loopback URL is refused, so a Claude Code help link in a payload fails the corpus
+  closed rather than passing.
 
 ## Self-review (record)
 
