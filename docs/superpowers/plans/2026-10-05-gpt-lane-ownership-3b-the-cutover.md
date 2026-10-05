@@ -304,6 +304,13 @@ Part B (the controller, the operator present)
 
 ## Operator rulings to confirm at plan review
 
+**Ruled by the operator at plan review, 2026-10-05:**
+- **R-O1: order X, lane 2 first.** The execution-ledger slug `second-lane-first-accepts-z4-refusals` therefore fires at lane 2's flip, and D-4056 applies.
+- **R-O6: the fleet-wide pause in the PWA** (D-4054).
+- **R-C10: the targeted route**, so `ccgpt-runtime build` (B2) and the one `enable --now` of ccrc's instance run inside the authorised windows.
+- **Part A executes subagent-driven.**
+- The rest (R-O2 to R-O5, R-O7 to R-O9, R-S1, R-C11) were not put separately. They stand as recommended below until the operator rules otherwise, and B1 records each with the census it is taken on.
+
 The operator rules each at plan review. B1 records each ruling with the census it was taken on.
 
 - **R-O1, which lane goes first: a measured fork.** Since Plan 3a's drafting the session counts have reversed: lane 1, the lane with a registry, has 6 live sessions, and lane 2 has 1. Plan 3a's "lane 1 first" was conditional on lane 1 being idle, and it no longer is.
@@ -312,7 +319,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
     - Lane 2 needs `init codex` after its flip (Z3), and its rollback needs `ccrc models <lane-id> rm`.
     - **The Z4 consequence.** From lane 2's flip until lane 1's, the roster carries a codex row while lane 1 is still external, has a registry, and runs its proxy on the box-global config (measured: the `pgrep -f` match above). So any hourly refresh in which lane 1's render changed is refused `restart-failed`: `ccrc models refresh --all` exits 1, and `ccrc-models.service` reads failed. The refusal fires before any write, so lane 1 keeps serving on its unchanged config, and the next run retries.
     - The refusal's own remedy text says "Stop that proxy by hand … or flip lane … to codex". Under order X the proxy is never stopped by hand, because lane 1's sessions run on it. The remedy is lane 1's own window.
-    - Refusals are not expected to change doctor's classes. Doctor's `services` check measures `ccrc-models.timer` active, not the oneshot's last result, and the probe still writes lane 1's catalogue. B1 records doctor's classes, and any change is a stop for re-ruling. The one expected change is doctor's `codex` row: after lane 2's flip it is one WARN for the still-enabled, unattributable flat `ccgpt-usage.timer` until lane 1's flip (⟦D:flat-foreign-timer-warns-until-lane-one-flips⟧).
+    - Refusals are not expected to change doctor's classes. Doctor's `services` check measures `ccrc-models.timer` active, not the oneshot's last result, and the probe still writes lane 1's catalogue. B1 records doctor's classes, and any change is a stop for re-ruling. The one expected change is doctor's `codex` row: after lane 2's flip it is one WARN for the still-enabled, unattributable flat `ccgpt-usage.timer` until lane 1's flip (D-4056).
   - **Order Y: lane 1 first, then lane 2.** This is Plan 3a's recommendation. After lane 1's flip no external lane has a registry, so Z4 can never fire. But the first live run parks and un-parks six sessions, a failed first turn rolls back a six-session lane, and lane 1's entry file is the symlink.
   - **The read-only monitor under order X** is B4's criterion 8 (`b4-sample.sh`, fifth argument `<still-external-lane-id>`), sampled until lane 1's flip. B1 Step 4's `b1-z4.sh` measures how often lane 1's render changes (R-O1's input), and B3 Step 19 records the window's own baseline. The rule for reading Z4's refusal (the row's reason carries `ccrc will not stop it`, never the bare code word `restart-failed`) is stated once, in B4.
   - **Recommendation: order X, lane 2 first.** It is the smallest blast radius for the first live run, one parked session. Z4's bounded degradation is accepted and monitored until lane 1's flip (execution-ledger slug `second-lane-first-accepts-z4-refusals`, minted only if R-O1 rules lane 2 first). B4's "no `restart-failed` row" criterion reads the flipped lane only, and lane 1's expected refusals under order X are recorded, not counted. Under order X, lane 1's window follows B4 without an extended soak, because every hour between the flips is a degraded hour.
@@ -331,7 +338,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
 - **R-O5, mirroring the lanes' exec blocks into the server box's roster:** yes, after both lanes pass B4, under the optional third authorisation, with critic #14's census first (B6). The server reads its roster at boot only, so the mirror's `agreed` waits for its next start, by default the next auto-update landing on the server box. A hand `systemctl --user restart ccrc.service` there runs only under the mirror authorisation, and the operator reads agreement in the PWA (ruling R9).
 - **R-O6, the auto-update pause, amended by measurement.**
   - A per-box pause exists only through the API: `POST /api/updates/intent` with `{"scope":"<nodeId>","auto":"off"}`. The route is session-gated, so only the operator can call it. The PWA's Settings screen writes only the fleet scope `*`.
-  - **Recommendation:** for each lane's window, the operator pauses fleet-wide in the PWA (`auto` off on `*`), records the prior `auto` and `channel` (and any `pinnedTag`), and restores them after verification (⟦D:update-pause-is-fleet-scoped⟧).
+  - **Recommendation:** for each lane's window, the operator pauses fleet-wide in the PWA (`auto` off on `*`), records the prior `auto` and `channel` (and any `pinnedTag`), and restores them after verification (D-4054).
   - The controller reads the state read-only through `ccrc update --check`'s `projection=` and `ccrc channel`'s `auto`. On the fleet box it allows up to 60 s of projection lag, the `ccd-update-sync.timer` interval, before trusting either.
   - `auto: "off"` stops the scheduler only, not a hand update or a PWA apply tap. `~/.ccrc/update.lock` is not a pause mechanism.
   - If restoring a non-`off` `auto` on `*` answers 409 `auto-needs-rollback-gate`, the fleet stays paused and the operator rules.
@@ -359,7 +366,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
 >   - Step 0's grep shows no third one.
 > - **A-7, handed on.** This task edits no spec line. It states the pointer and the §21 item text, and Task A7 applies them.
 > - **S1.** The change is inert on the live shape. That roster is readable and jq is present, so `_codex_lanes` answers rc 0 and every row takes the answer it takes today.
-> - **F2 / F4.** Each suite command runs census-wrapped (`r11`, Global Constraints). The departure is named by slug, `⟦D:codex-kind-read-fails-closed⟧`. Fixture ids are `codex-a`, `codex-b` and `ext-a`.
+> - **F2 / F4.** Each suite command runs census-wrapped (`r11`, Global Constraints). The departure is named by slug, `D-4046`. Fixture ids are `codex-a`, `codex-b` and `ext-a`.
 
 **Files:**
 - Modify: `ccd/ccrc`, three hunks, each located by name and never by line. The file is not stamped (D-3171), and `ccd/ccd` is not touched.
@@ -385,7 +392,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
   - `_models_probe_codex_env <id>`: on 2 it returns the lane library's rc (1 or 2), and the probe never runs. `_models_refresh_one` then records the forwarded line as the row's `reason`.
   - `_models_litellm <id>`: on 2 it refuses `{"ok":false,"error":"roster-invalid"|"missing-dependency",…}` with exit 1, before either arm. Nothing is rendered, pgrep is not asked, and nothing is stopped.
   - **Handed to Task A7** (A7 applies it, and its `## 21` assigns the item number `<n>`):
-    - **The pointer.** Spec `:982` (`grep -n "A codex lane's probe has no default" docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`), the bullet whose lead is `**A codex lane's probe has no default.**`, gets ` (amended: §21.<n>, ⟦D:codex-kind-read-fails-closed⟧)` at the line's end, after `For every other row the function unsets only the marker and the interpreter.`, as Task A7's table places it. It is a same-line edit, and no line moves.
+    - **The pointer.** Spec `:982` (`grep -n "A codex lane's probe has no default" docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`), the bullet whose lead is `**A codex lane's probe has no default.**`, gets ` (amended: §21.<n>, D-4046)` at the line's end, after `For every other row the function unsets only the marker and the interpreter.`, as Task A7's table places it. It is a same-line edit, and no line moves.
     - **The §21 item**, appended by A7 under the heading `### 21.<n> A roster that cannot say which rows are codex-kind (§20.1, §20.2)`:
       - `_models_litellm_codex`, the one reader of "is this row codex-kind" outside the install spine and doctor, answers three ways: codex, not codex, or cannot tell (`_codex_lanes` rc 1 `roster-invalid`, rc 2 `missing-dependency`). On the third answer the lane library's own line reaches stderr and is never discarded.
       - The probe-input seam, `_models_probe_codex_env`, refuses "cannot tell" with that line and the library's rc, as it refuses a `_codex_row` refusal. The probe never runs, so a codex row is never probed down the external path's default token directory, and a refresh row's `reason` is that line.
@@ -424,7 +431,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
   - In `server/test/ccrc-models.test.ts`, inside the Plan 3a Task 1 describe, add the following directly after the case `a codex row that does not validate is refused with _codex_row's own rc and sentence, and its probe is never handed a directory`:
 
     ```ts
-      // Plan 3b Task A1 (⟦D:codex-kind-read-fails-closed⟧): a
+      // Plan 3b Task A1 (D-4046): a
       // roster whose codex rows the lane library cannot tell is refused HERE, in that
       // library's own word, line and rc, and the probe never runs. Read as "not
       // codex", an exec.kind "codex" row went down the external fetch, whose token
@@ -557,7 +564,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
     # row (`_codex_row`). A codex row that does not validate is refused with
     # `_codex_row`'s own rc and sentence, and the probe never runs.
     # A ROSTER THAT CANNOT SAY (Plan 3b Task A1,
-    # ⟦D:codex-kind-read-fails-closed⟧): `_models_litellm_codex`
+    # D-4046): `_models_litellm_codex`
     # rc 2 is refused the same way. The lane library's own `ccrc codex:
     # roster-invalid:` or `missing-dependency:` line is already on stderr, its rc
     # is returned, and the probe never runs. Never "not codex": that arm hands an
@@ -600,7 +607,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
 
     ```bash
     # WHICH ARM, AND WHETHER IT CAN BE TOLD (D-3482; Plan 3b Task A1,
-    # ⟦D:codex-kind-read-fails-closed⟧): `exec.kind == "codex"`
+    # D-4046): `exec.kind == "codex"`
     # read off ~/.ccrc/accounts.json by the lane library's ONE reader of that
     # question (`_codex_lanes`) — never accounts.sh's CCRC_CODEX_BACKEND, which is
     # keyed on `telemetry` and names today's EXTERNAL live lanes. THREE answers,
@@ -659,7 +666,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
     New:
 
     ```bash
-      # WHICH ARM (Plan 3b Task A1, ⟦D:codex-kind-read-fails-closed⟧):
+      # WHICH ARM (Plan 3b Task A1, D-4046):
       # refused in the lane library's own word, `_codex_row`'s propagation, and its
       # own line is already on stderr. The external arm would render a codex row's
       # model list into the box-global file another repository's LiteLLM reads;
@@ -808,7 +815,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
 >   Each now says what was measured.
 > - **A-7, handed on.** This task edits no spec line. It states the two pointers (`:1039`, and `:1035` by controller ruling NC-1) and the §21 item text, and Task A7 applies them.
 > - **S1.** The change is inert on the live shape: no `ccrc-codex-usage@<id>.timer` instance exists there (census), so the surplus set is empty and doctor's codex check still SKIPs. With no codex lane and no instance, the converge still prints `none`.
-> - **F2 / F4.** Census-wrapped commands. Slugs: `⟦D:usage-withdrawal-is-re-measured⟧` and `⟦D:surplus-ccrc-usage-timer-warns⟧`.
+> - **F2 / F4.** Census-wrapped commands. Slugs: `D-4047` and `D-4048`.
 
 **Files:**
 - Modify: `ccd/ccrc`, `_inst_codex_usage` only (`grep -n '^_inst_codex_usage() {' ccd/ccrc`): its header comment gains one paragraph, and its two disables gain the re-read. Both sit below `ccd/ccrc:11635`, the highest line the compaction-card corpus cites. The file is not stamped.
@@ -839,8 +846,8 @@ The operator rules each at plan review. B1 records each ruling with the census i
   - `_check_codex` no longer SKIPs while `DR_CODEX_USAGE_SURPLUS` is non-empty or the set is unlistable. The left-lane-state WARN's last clause reads `ccrc's own ccrc-codex-usage@<id>.timer still reads it (the WARN naming that timer says how to withdraw it)` for a surplus id, and is byte for byte today's for every other id.
   - `_dr_codex_usage`, when both `ccgpt-usage@<id>.timer` and `ccrc-codex-usage@<id>.timer` are enabled, WARNs `<id>: another repository's <f> is enabled, and ccrc's own <t> is enabled too, so two publishers race this lane's ~/.cc-limits row and two token refreshes its OAuth directory`. Its remedy names ccrc's withdrawal first. The withheld-only case keeps today's sentence.
   - **Handed to Task A7** (A7 applies it, and its `## 21` assigns `<m>`):
-    - **The pointer.** On spec `:1039` (`grep -n "A withdrawal systemd refuses leaves" docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`), `naming every lane whose timer is still enabled.` becomes `naming every lane whose timer is still enabled. (amended: §21.2, ⟦D:usage-withdrawal-is-re-measured⟧, ⟦D:surplus-ccrc-usage-timer-warns⟧)`, as Task A7's table writes it. It is a same-line edit, and no line moves.
-    - **The second pointer** (controller ruling NC-1). On spec `:1035` (`grep -n 'Beside a foreign instance' docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`), the §20.4 bullet `- **Beside a foreign instance.** …` gets ` (amended: §21.2, ⟦D:surplus-ccrc-usage-timer-warns⟧)` directly after `WARNs with the operator's own disable as the remedy`, before its full stop, as Task A7's table writes it. This task's both-enabled WARN names ccrc's withdrawal first, so that sentence's remedy is now the withheld case's only. It is a same-line edit, and no line moves.
+    - **The pointer.** On spec `:1039` (`grep -n "A withdrawal systemd refuses leaves" docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`), `naming every lane whose timer is still enabled.` becomes `naming every lane whose timer is still enabled. (amended: §21.2, D-4047, D-4048)`, as Task A7's table writes it. It is a same-line edit, and no line moves.
+    - **The second pointer** (controller ruling NC-1). On spec `:1035` (`grep -n 'Beside a foreign instance' docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`), the §20.4 bullet `- **Beside a foreign instance.** …` gets ` (amended: §21.2, D-4048)` directly after `WARNs with the operator's own disable as the remedy`, before its full stop, as Task A7's table writes it. This task's both-enabled WARN names ccrc's withdrawal first, so that sentence's remedy is now the withheld case's only. It is a same-line edit, and no line moves.
     - **The §21 item**, appended under `### 21.<m> A withdrawal is re-measured, and doctor names a ccrc usage timer no lane owns (§20.3, §20.4)`:
       - A withdrawal counts only when a re-read of `timers.target.wants/` finds the link gone, at both of `_inst_codex_usage`'s disables, and at `_uninst_codex_usage`'s. A disable the manager answers 0 while the link stays gets the refused withdrawal's own stderr line and `NOT CONVERGED` step: it is the same fact, ccrc's timer still enabled, and the same remedy. This is the reading account removal already has (§20.4's last bullet).
       - `_check_codex` WARNs, one line per id, on every enabled `ccrc-codex-usage@<id>.timer` whose id is not a codex lane now. The set is read by `_codex_usage_enabled_ids` (no roster) minus the codex lanes. The remedy is `systemctl --user disable --now ccrc-codex-usage@<id>.timer`, ccrc's own unit, with the next update's converge as the automatic cure.
@@ -956,7 +963,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
   - `server/test/ccrc-doctor.test.ts`, file level, directly below `function usageBox(…) { … }`:
 
     ```ts
-    /** Plan 3b Task A2 (⟦D:surplus-ccrc-usage-timer-warns⟧): the surplus row,
+    /** Plan 3b Task A2 (D-4048): the surplus row,
      *  measured, recorded and printed alone, for `usageRows`' `script`. */
     const SURPLUS_ROWS = [
       'DRX_CLASS=(); DRX_WHAT=(); DRX_FIX=()',
@@ -1143,7 +1150,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
     ```bash
     # (`_inst_enable_timer`).
     # A WITHDRAWAL IS RE-MEASURED, never read off the exit code (Plan 3b Task A2,
-    # ⟦D:usage-withdrawal-is-re-measured⟧): both disables below count only when a
+    # D-4047): both disables below count only when a
     # re-read of the manager's link finds it gone, `_acct_remove_usage`'s
     # reading. A disable the manager answers 0 while the link stays is the
     # refused withdrawal's own could-not-disable line and NOT CONVERGED step,
@@ -1212,7 +1219,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
 
     ```bash
       # (1) WHO publishes this lane's row.
-      # BOTH ARMED (Plan 3b Task A2, ⟦D:surplus-ccrc-usage-timer-warns⟧):
+      # BOTH ARMED (Plan 3b Task A2, D-4048):
       # the converge withdraws ccrc's own while the foreign one stands, but a
       # withdrawal the manager refused, or answered while the link stayed,
       # leaves both, and "ccrc withholds its own" would be false over a link
@@ -1243,7 +1250,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
     }
 
     # ── the usage timer ccrc left enabled for an id that is no longer a Codex lane ──
-    # Plan 3b Task A2 (⟦D:surplus-ccrc-usage-timer-warns⟧). The rows above
+    # Plan 3b Task A2 (D-4048). The rows above
     # walk TODAY's codex lanes, so a flip back whose withdrawal never happened left
     # `ccrc-codex-usage@<id>.timer` polling with no row to name it. Two causes: no
     # `ccrc install` since the roster edit, or a disable the manager answered while
@@ -1513,10 +1520,10 @@ The operator rules each at plan review. B1 records each ruling with the census i
 
 > Rulings applied:
 > - **A-3.** `_acct_remove_usage` waits for `ccrc-codex-usage@<id>.service` to go inactive before the limits row is removed, and never stops it. The wait is bounded by `CCRC_ACCT_USAGE_WAIT_S` (default 300, the unit's `TimeoutStartSec`) and prints a waiting line. At the bound the removal refuses `usage-refresh-in-flight`, with a retry sentence, before any limits-row deletion. The retry is pinned.
-> - **The retry premise, measured, and the one change it forces.** On `be93d159` `cmd_account remove` calls `_acct_remove_usage` after the roster drop (`grep -n '^  _acct_remove_usage "$id"; ' ccd/ccrc`, below `_acct_write_op "$stands" drop …`). A refusal there could never be retried: the retry's own `_acct_lane` runs `deploy/account-op.mjs`'s `lane` op, which refuses `unknown-id` for an id the roster no longer names. So this task moves the call to just before the drop. Every step before that point repeats as a no-op on a second run, which makes the ruling's "a retry is safe" true. That move is its own departure, `⟦D:usage-quiesce-before-the-roster-drop⟧`.
+> - **The retry premise, measured, and the one change it forces.** On `be93d159` `cmd_account remove` calls `_acct_remove_usage` after the roster drop (`grep -n '^  _acct_remove_usage "$id"; ' ccd/ccrc`, below `_acct_write_op "$stands" drop …`). A refusal there could never be retried: the retry's own `_acct_lane` runs `deploy/account-op.mjs`'s `lane` op, which refuses `unknown-id` for an id the roster no longer names. So this task moves the call to just before the drop. Every step before that point repeats as a no-op on a second run, which makes the ruling's "a retry is safe" true. That move is its own departure, `D-4050`.
 > - **A-7, handed on.** This task edits no spec line. It states the §21.3 wording and the `:1042` pointer below, and Task A7 applies them.
 > - **S1.** Inert on the live shape: the box has ccrc's template pair placed and no instance, so a removal asks the user manager one read-only `is-active`, reads `inactive`, and goes on as before. No step of this plan runs `ccrc account remove` on the live box.
-> - **F2 / F4.** Census-wrapped commands, red first, a mutation row per guard. Slugs: `⟦D:account-removal-waits-for-usage-refresh⟧` and `⟦D:usage-quiesce-before-the-roster-drop⟧`.
+> - **F2 / F4.** Census-wrapped commands, red first, a mutation row per guard. Slugs: `D-4049` and `D-4050`.
 
 **Files:**
 - Modify: `ccd/ccrc`:
@@ -1544,9 +1551,9 @@ The operator rules each at plan review. B1 records each ruling with the census i
   - **The unmeasured operator step, verbatim:** `ccrc's usage poll ccrc-codex-usage@<id>.service may still be running for the removed account <id>: the user manager did not say (systemctl --user is-active answered "<state>"), so this removal did not wait for it, and a poll that was running may write $HOME/.cc-limits/<id>.json again after this removal. Run: systemctl --user is-active ccrc-codex-usage@<id>.service — once it reads inactive, remove $HOME/.cc-limits/<id>.json by hand if it is there.`
   - `cmd_account remove` runs `_acct_remove_usage` after the home sweep and before the roster drop, and passes it the drop's own what-still-stands clause. When the timer link was removed, that clause gains `ccrc's usage timer for <id> was disabled; 'ccrc install' enables it again for a lane that is still codex.`
   - **Handed to Task A7:**
-    - **The pointer** on spec `:1042` (`grep -n 'and the removal still completes' docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`) is the one A7's table already lists, with this task's second slug added: ` (amended: §21.3, ⟦D:account-removal-waits-for-usage-refresh⟧, ⟦D:usage-quiesce-before-the-roster-drop⟧)`, directly after `and the removal still completes`, before its full stop. It is a same-line edit.
-    - **§21.3, as it should read at the tip.** Keep A7's first three bullets, and add `⟦D:usage-quiesce-before-the-roster-drop⟧` to the third. Replace its last bullet, "A removal with no running refresh is unchanged", with these three:
-      - `ccrc account remove` runs this half after the home sweep and before the roster drop, where Plan 3a ran it after the drop. A refusal after the drop could not be retried, because a second run refuses `unknown-id` for an id the roster no longer names (⟦D:usage-quiesce-before-the-roster-drop⟧). The wait therefore holds the placement lock the removal already holds, for at most the bound.
+    - **The pointer** on spec `:1042` (`grep -n 'and the removal still completes' docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`) is the one A7's table already lists, with this task's second slug added: ` (amended: §21.3, D-4049, D-4050)`, directly after `and the removal still completes`, before its full stop. It is a same-line edit.
+    - **§21.3, as it should read at the tip.** Keep A7's first three bullets, and add `D-4050` to the third. Replace its last bullet, "A removal with no running refresh is unchanged", with these three:
+      - `ccrc account remove` runs this half after the home sweep and before the roster drop, where Plan 3a ran it after the drop. A refusal after the drop could not be retried, because a second run refuses `unknown-id` for an id the roster no longer names (D-4050). The wait therefore holds the placement lock the removal already holds, for at most the bound.
       - It asks the manager only on Linux, with ccrc's template `ccrc-codex-usage@.service` placed, whether or not the timer is still enabled. A retry finds the timer already disabled. A box without the template, and macOS, ask nothing.
       - A manager that does not say whether the poll runs is unmeasured, never done. The removal completes, with an operator step naming the row to remove by hand once the poll reads inactive. A removal that finds no poll running completes as before.
     - **§21.12's `‹A3›` cell** is this task's six `it(` titles, in `ccrc-account.test.ts`.
@@ -1634,7 +1641,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
      *  answers the lane library. `keepLink` makes it a manager that answers 0 and
      *  leaves the link where it was (C15).
      *
-     *  Plan 3b Task A3 (⟦D:account-removal-waits-for-usage-refresh⟧): EVERY argv
+     *  Plan 3b Task A3 (D-4049): EVERY argv
      *  naming ccrc's usage SERVICE, `ccrc-codex-usage@<id>.service`, is answered
      *  here and never passed on. It is recorded to `usage-svc-calls` with what
      *  stood at that moment: the lane's limits row (`row=present|absent`) and its
@@ -1693,8 +1700,8 @@ The operator rules each at plan review. B1 records each ruling with the census i
   - In `describe('ccrc account remove')`, directly after C15's closing `});`, add:
 
     ```ts
-      // ── Plan 3b Task A3 (⟦D:account-removal-waits-for-usage-refresh⟧,
-      // ⟦D:usage-quiesce-before-the-roster-drop⟧): a usage poll the timer already
+      // ── Plan 3b Task A3 (D-4049,
+      // D-4050): a usage poll the timer already
       // fired is WAITED for, never stopped, before the roster drop and before the
       // limits row. `ext-a` (C14's shape) keeps every other manager question out of
       // the run, so `systemctl-poison` stays absent: nothing else was asked.
@@ -1875,7 +1882,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
     # when it did not). Every byte the manager says goes to stderr: `_acct_remove`'s
     # stdout is one JSON object.
     #
-    # THEN IT WAITS, AND IT NEVER STOPS (⟦D:account-removal-waits-for-usage-refresh⟧).
+    # THEN IT WAITS, AND IT NEVER STOPS (D-4049).
     # Disabling the timer does not end the `ccrc-codex-usage@<id>.service` it had
     # already fired: a oneshot runs to the end of its poll, and that poll may be
     # part-way through the Authenticator's write of the lane's `auth.json`. A stop
@@ -1895,7 +1902,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
     # FIRST because a timer still enabled could fire a new poll between an
     # `inactive` read and the row's `rm`.
     #
-    # THE CALLER RUNS IT BEFORE THE ROSTER DROP (⟦D:usage-quiesce-before-the-roster-drop⟧).
+    # THE CALLER RUNS IT BEFORE THE ROSTER DROP (D-4050).
     # Plan 3a ran it after the drop, where it could not refuse. A refusal there could
     # not be retried, because `_acct_lane` answers `unknown-id` for an id the roster no
     # longer names. Before the drop, every earlier step repeats as a no-op on a second
@@ -2091,7 +2098,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
 > - **Which word.** The loop has no failure-code field. A failed row is `{id, ok:false, reason}`, and `reason` is a sentence. `litellm: "failed"` was retired from the row by the STOP-THEN-WRITE ruling, whose comment the block carries: the row's `litellm` vocabulary is `rendered|unchanged|skipped`. So this task mints no word and revives none. A render that fails with nothing to read becomes the existing failed row, and its reason is its sibling's sentence shape, `_models_litellm exited <rc> with no answer`. Two steps up, the `materialise` failure already says `materialise exited <rc> with no answer`.
 > - **The reading rule** (for Part B's soak gate, Task B4, which states it): on a `probe:"codex"` row, only `ok:true` with `litellm` `rendered` or `unchanged` says the codex arm rendered. `skipped` on such a row is a failure signal on every build, this fix or not.
 > - **S1.** Inert on the live shape. Every refusal `_models_litellm` makes today goes through `_models_refuse`, which always prints a JSON body with a `detail`, so only a killed or crashed render reaches the changed branch. Lane 1's hourly row changes only on such a run, and then it truthfully reads `ok:false`, so `refresh --all` exits 1.
-> - **F2 / F4.** Census-wrapped commands, red first, a mutation row per guard. Slug: `⟦D:bodyless-litellm-failure-fails-the-row⟧`.
+> - **F2 / F4.** Census-wrapped commands, red first, a mutation row per guard. Slug: `D-4051`.
 
 **Files:**
 - Modify: `ccd/ccrc`, the `refresh` arm of `cmd_models`: the LiteLLM block that starts at `grep -n '^          lit="skipped"$' ccd/ccrc` (`:10587` at `be93d159`; Task A1's edits sit above it, so re-derive it by that locator). Five lines change and the line count stays the same, so no line the compaction-card corpus cites moves. The file is not stamped.
@@ -2146,7 +2153,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
   - At the end of `describe('refresh runs the litellm step for a codex lane (§5)')`, after the case `'a lane whose restart fails is a FAILED row, and the run exits 1'`:
 
     ```ts
-      // Plan 3b Task A4 (⟦D:bodyless-litellm-failure-fails-the-row⟧): a render that
+      // Plan 3b Task A4 (D-4051): a render that
       // FAILS with no `.detail` to read — no stdout at all (a killed subshell), an
       // envelope with no `detail`, or bytes that are not JSON — is a FAILED row
       // naming its exit, never `ok:true` with the `skipped` default and never the
@@ -2226,7 +2233,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
     New:
 
     ```bash
-                  # bug this ruling fixes; so is one with no .detail (Plan 3b A4, ⟦D:bodyless-litellm-failure-fails-the-row⟧).
+                  # bug this ruling fixes; so is one with no .detail (Plan 3b A4, D-4051).
                   lreason="$(printf '%s' "$lbody" | tail -n1 | jq -r '.detail // empty' 2>/dev/null)"; [ -n "$lreason" ] || lreason="_models_litellm exited $lrc with no answer"
     ```
 
@@ -2384,9 +2391,9 @@ The operator rules each at plan review. B1 records each ruling with the census i
     The rc is 2, the worst class printed. An ABSENT root still SKIPs, byte for byte.
   - **(c)** Take a `~/.cc-sessions/<sid>.wrapper` that is a regular file but cannot be opened. It counts once into `DRX_UNASKED`, and the first such sid becomes `DRX_UNASKED_SID`. It is never "another lane's" and never live. When the lane's LiteLLM tier is down, `_dr_cx_tiers`' existing WARN therefore fires: `…whether any of this lane's registered sessions is live could not be asked (N unanswered) — unmeasured, not idle`, remedy `ask by hand (systemctl --user status claude-session@<sid>.service); …`. A `.wrapper` in ccd's own writer shape is still read as before. That shape is `_reg_set`'s `printf '%s'`, with NO trailing newline.
   - **For Part B.** The soak gate's "doctor clean" (B4), and every Part B step that reads `ccrc doctor`'s `codex` row, now cannot read "unmeasured" as PASS or SKIP on these three paths.
-  - **For Task A7's §21**, one item and one same-line pointer, under `⟦D:codex-doctor-unmeasured-is-not-skip⟧` (reconcile slug list): §21.5 departs from §20.3's "SKIPs … on an empty codex population" (:1007) and from `_dr_cx_bins`' cmp-absent early return.
+  - **For Task A7's §21**, one item and one same-line pointer, under `D-4052` (reconcile slug list): §21.5 departs from §20.3's "SKIPs … on an empty codex population" (:1007) and from `_dr_cx_bins`' cmp-absent early return.
     - The §21 item text: "**Doctor's `codex` row tells unmeasured from absent (Plan 3b Task A5).** If `~/.ccrc/codex` exists and cannot be listed (a directory this user cannot read and search, or anything that is not a directory), lane state is unmeasured: a WARN, never the empty-population SKIP. With no `cmp` on PATH, only the byte compare is unmeasured. A GPT-lane executable missing from `~/.local/bin` or from the shipped tree still FAILs by name, and the WARN names the files left uncompared. A session `.wrapper` that cannot be read counts as a session that may be on the lane: unanswered, never another lane's, never idle."
-    - The pointer goes at the end of spec line 1007, §20.3's `- **Placement and skips.** …` bullet: ` (amended: §21.5, ⟦D:codex-doctor-unmeasured-is-not-skip⟧)`, as Task A7's table writes it.
+    - The pointer goes at the end of spec line 1007, §20.3's `- **Placement and skips.** …` bullet: ` (amended: §21.5, D-4052)`, as Task A7's table writes it.
 
 **Why:**
 
@@ -3281,7 +3288,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
   - the other repository's stop always names its lane;
   - a per-box update pause is API-only.
 
-  §15 step 3 and §20.9 are consistent with all three but name none, so each is stated once, in §21.9–§21.11, as amendment prose. None contradicts a sentence above, so none carries a pointer. §21.9 also records the one order departure, the entry file's move before the roster flip (⟦D:entry-moved-aside-not-the-launcher⟧).
+  §15 step 3 and §20.9 are consistent with all three but name none, so each is stated once, in §21.9–§21.11, as amendment prose. None contradicts a sentence above, so none carries a pointer. §21.9 also records the one order departure, the entry file's move before the roster flip (D-4053).
 - **Append, never insert.** The tree cites this spec by line number:
   - `ccd/ccgpt-usage.py` cites §5.4 line 333;
   - `ccd/ccrc-models-probe` cites about line 497;
@@ -3342,29 +3349,29 @@ Plan 3b (`docs/superpowers/plans/2026-10-05-gpt-lane-ownership-3b-the-cutover.md
 
 ### 21.1 Every reader of "is this row codex-kind" fails closed (§20.1, §20.2)
 
-- **Three answers, not two.** `_models_litellm_codex` answers 0 for a row that is `exec.kind: "codex"`, 1 for a row that is not, and 2 when the roster cannot say which rows are: `_codex_lanes`' rc 1 (`roster-invalid`) or rc 2 (`missing-dependency`). On 2 it forwards `_codex_lanes`' own sentence to stderr instead of discarding it. An undecidable roster no longer answers "not codex" (⟦D:codex-kind-read-fails-closed⟧).
+- **Three answers, not two.** `_models_litellm_codex` answers 0 for a row that is `exec.kind: "codex"`, 1 for a row that is not, and 2 when the roster cannot say which rows are: `_codex_lanes`' rc 1 (`roster-invalid`) or rc 2 (`missing-dependency`). On 2 it forwards `_codex_lanes`' own sentence to stderr instead of discarding it. An undecidable roster no longer answers "not codex" (D-4046).
 - **Every reader refuses on 2, in the forwarded word.** `_models_probe_codex_env` refuses, and the probe never runs, so a row that may be codex-kind never reaches the external fetch and its token-directory default, the class D-3706 names. `_models_litellm`'s dispatcher refuses rather than falling through to the external arm. Every other reader of the answer does the same. Each refusal carries `roster-invalid` or `missing-dependency`, as `_codex_row`'s propagation already does, and no new word is minted.
 - `_models_litellm_stop_blocked` (§20.2, D-3753) already failed closed on the same input, and is unchanged.
 - On a readable roster with jq on PATH the answers are the base's, 0 and 1, so a roster with no codex row, the live shape included, behaves exactly as before.
 
 ### 21.2 The usage converge re-measures a withdrawal, and doctor names a ccrc timer with no codex lane (§20.3, §20.4)
 
-- **A withdrawal counts only when the link is gone.** After each `systemctl --user disable --now` in `_inst_codex_usage` (the withdrawal of an id that is no longer a codex lane, and the withdrawal beside another repository's instance) and in `_uninst_codex_usage`, ccrc re-measures `_codex_usage_enabled`. The instance is counted withdrawn, or stopped, only when that re-measure agrees. A disable the manager answers 0 while the link stays is the refusal §20.4 already describes: its own stderr line with the command, and the run's `NOT CONVERGED` line names that lane too (uninstall's own `failed` line, for `_uninst_codex_usage`). It is the re-read account removal already made (§20.4, C15) (⟦D:usage-withdrawal-is-re-measured⟧).
-- **Doctor names a surplus ccrc timer.** `_check_codex`'s usage rows gain one WARN line of their own for every enabled `ccrc-codex-usage@<id>.timer` whose id is not a codex lane now: a flip back whose withdrawal did not take, or a roster edit no install has converged yet. Such a timer still polls, refreshes that lane's token and rewrites `~/.cc-limits/<id>.json`, so it is a finding of its own, never folded into the left-state row. Its remedy is the exact `systemctl --user disable --now ccrc-codex-usage@<id>.timer`, because no ccrc fixer withdraws a unit, and it names the next update's converge as the automatic cure. That is ccrc's own unit, so naming it breaks nothing §20.4 forbids. On Darwin the row answers the stated not-applicable §20.8 gives every usage row (⟦D:surplus-ccrc-usage-timer-warns⟧).
+- **A withdrawal counts only when the link is gone.** After each `systemctl --user disable --now` in `_inst_codex_usage` (the withdrawal of an id that is no longer a codex lane, and the withdrawal beside another repository's instance) and in `_uninst_codex_usage`, ccrc re-measures `_codex_usage_enabled`. The instance is counted withdrawn, or stopped, only when that re-measure agrees. A disable the manager answers 0 while the link stays is the refusal §20.4 already describes: its own stderr line with the command, and the run's `NOT CONVERGED` line names that lane too (uninstall's own `failed` line, for `_uninst_codex_usage`). It is the re-read account removal already made (§20.4, C15) (D-4047).
+- **Doctor names a surplus ccrc timer.** `_check_codex`'s usage rows gain one WARN line of their own for every enabled `ccrc-codex-usage@<id>.timer` whose id is not a codex lane now: a flip back whose withdrawal did not take, or a roster edit no install has converged yet. Such a timer still polls, refreshes that lane's token and rewrites `~/.cc-limits/<id>.json`, so it is a finding of its own, never folded into the left-state row. Its remedy is the exact `systemctl --user disable --now ccrc-codex-usage@<id>.timer`, because no ccrc fixer withdraws a unit, and it names the next update's converge as the automatic cure. That is ccrc's own unit, so naming it breaks nothing §20.4 forbids. On Darwin the row answers the stated not-applicable §20.8 gives every usage row (D-4048).
 - **Doctor says what the links say.** Such an id is a subject on its own, so the empty-population SKIP never stands over it, and a set that cannot be listed is its own WARN, unmeasured. The left-lane-state WARN says "nothing of ccrc's reads it" only when no such timer is enabled for that id. The second-writer WARN says ccrc withholds its own timer only when that timer is not enabled; when both are enabled, it says both publishers are armed and names ccrc's withdrawal first, so §20.4's "with the operator's own disable as the remedy" is the withheld case's remedy.
 
 ### 21.3 Account removal waits for an in-flight usage refresh (§13, §20.4)
 
 - After it disables the timer, `_acct_remove_usage` waits for `ccrc-codex-usage@<id>.service` to go inactive before the limits row, `~/.cc-limits/<id>.json`, is removed. It never stops that service: a oneshot mid-refresh may be writing the lane's `auth.json` through the library (§21.7), and a stop could cut that write short.
 - The wait prints a waiting line and is bounded by `CCRC_ACCT_USAGE_WAIT_S`, default 300, the unit's own `TimeoutStartSec` (D-3707).
-- When the bound expires, the removal refuses by name, `usage-refresh-in-flight`, with a sentence telling the operator to retry, before any limits-row deletion. Every step before the wait is idempotent, so the retry is safe, and Plan 3b pins that. So §20.4's "the removal still completes" holds for a disable the manager refuses or answers while the link stays, and not for a refresh still running when the bound expires (⟦D:account-removal-waits-for-usage-refresh⟧, ⟦D:usage-quiesce-before-the-roster-drop⟧).
-- `ccrc account remove` runs this half after the home sweep and before the roster drop, where Plan 3a ran it after the drop. A refusal after the drop could not be retried, because a second run refuses `unknown-id` for an id the roster no longer names (⟦D:usage-quiesce-before-the-roster-drop⟧). The wait therefore holds the placement lock the removal already holds, for at most the bound.
+- When the bound expires, the removal refuses by name, `usage-refresh-in-flight`, with a sentence telling the operator to retry, before any limits-row deletion. Every step before the wait is idempotent, so the retry is safe, and Plan 3b pins that. So §20.4's "the removal still completes" holds for a disable the manager refuses or answers while the link stays, and not for a refresh still running when the bound expires (D-4049, D-4050).
+- `ccrc account remove` runs this half after the home sweep and before the roster drop, where Plan 3a ran it after the drop. A refusal after the drop could not be retried, because a second run refuses `unknown-id` for an id the roster no longer names (D-4050). The wait therefore holds the placement lock the removal already holds, for at most the bound.
 - It asks the manager only on Linux, with ccrc's template `ccrc-codex-usage@.service` placed, whether or not the timer is still enabled. A retry finds the timer already disabled. A box without the template, and macOS, ask nothing.
 - A manager that does not say whether the poll runs is unmeasured, never done. The removal completes, with an operator step naming the row to remove by hand once the poll reads inactive. A removal that finds no poll running completes as before.
 
 ### 21.4 A LiteLLM render that fails with no answer is a failed row (§8, §20.2)
 
-- In `ccrc models refresh`, once a lane's catalogue probe and `materialise` have succeeded and its probe is `codex`, the LiteLLM step runs. When `_models_litellm` exits non-zero and its body carries no non-empty `.detail` (nothing on stdout, as from a killed subshell or any exit that does not pass through `_models_refuse`; a body with no `.detail` or a `null` one; or bytes that are not JSON), the row is `ok: false` with a non-empty `reason` naming that exit, as a `materialise` failure two steps earlier already is. It is never `ok: true` with `litellm: "skipped"`. `litellm: "failed"` stays retired from the row's vocabulary, and the same block reads `.detail // empty`, as the `materialise` block does (⟦D:bodyless-litellm-failure-fails-the-row⟧).
+- In `ccrc models refresh`, once a lane's catalogue probe and `materialise` have succeeded and its probe is `codex`, the LiteLLM step runs. When `_models_litellm` exits non-zero and its body carries no non-empty `.detail` (nothing on stdout, as from a killed subshell or any exit that does not pass through `_models_refuse`; a body with no `.detail` or a `null` one; or bytes that are not JSON), the row is `ok: false` with a non-empty `reason` naming that exit, as a `materialise` failure two steps earlier already is. It is never `ok: true` with `litellm: "skipped"`. `litellm: "failed"` stays retired from the row's vocabulary, and the same block reads `.detail // empty`, as the `materialise` block does (D-4051).
 - **The reading rule.** On a `probe: "codex"` row, only `ok: true` with `litellm` set to `rendered` or `unchanged` says the LiteLLM step ran and succeeded. `skipped` on such a row is a failure signal on every build, this fix or not. Plan 3b's soak gate counts a refresh as having taken a codex lane's arm only on such a row, for an id the roster names `exec.kind: "codex"`.
 
 ### 21.5 Doctor's codex check reads "unmeasured" where it cannot tell (§12, §20.3)
@@ -3372,7 +3379,7 @@ Plan 3b (`docs/superpowers/plans/2026-10-05-gpt-lane-ownership-3b-the-cutover.md
 - **A missing `cmp` skips only the byte compare.** `_dr_cx_bins` no longer returns at its cmp-absent WARN. A GPT-lane executable that is missing or not executable, or that has no shipped tree to compare against, is still found and FAILs in its own words. Only the drift compare is named "not compared", as a WARN.
 - **An unlistable lane-state root is unmeasured, never "no Codex lane".** When `~/.ccrc/codex` exists but cannot be listed, `_check_codex` WARNs that the lane state there is unmeasured, instead of SKIPping as if it were empty.
 - **An unreadable `.wrapper` is unmeasured.** `_dr_cx_sessions` counts a session whose `.wrapper` file cannot be read as one that may be on the lane, the "unmeasured, not idle" count of §20.3, never as another lane's session.
-- All three are codex-lane-only paths. On a box with no codex lane and no lane-state root, doctor's `codex` row is still one SKIP, unless a ccrc usage timer is still enabled for an id that is no longer a codex lane (§21.2) (⟦D:codex-doctor-unmeasured-is-not-skip⟧).
+- All three are codex-lane-only paths. On a box with no codex lane and no lane-state root, doctor's `codex` row is still one SKIP, unless a ccrc usage timer is still enabled for an id that is no longer a codex lane (§21.2) (D-4052).
 
 ### 21.6 The models writer path is type-tested too (§20.3)
 
@@ -3399,7 +3406,7 @@ Plan 3b (`docs/superpowers/plans/2026-10-05-gpt-lane-ownership-3b-the-cutover.md
 - §15 step 3's "move an unowned launcher aside" is, for each lane, exactly that lane's own entry file, `~/.local/bin/<id>`: the path `ccrc wrappers` writes for a codex row. It is renamed beside itself with a `.pre-ccrc-<UTC>` suffix before `ccrc wrappers` runs. Where the entry file is a symlink, the link is moved and its target is never touched.
 - The other repository's shared launcher, `~/.local/bin/ccgpt`, is never moved, edited or deleted in Plan 3b, because every still-external lane's entry file execs it until that lane's own flip. Plan 4 removes it, with the rest of §15 step 4.
 - A rollback moves the entry file back with one `mv`, after ccrc's tiers for the lane are stopped and ccrc's marker-verified launcher is removed.
-- The move comes before the roster row turns codex-kind, the reverse of §15 step 3's listed order, so no claimer (`ccrc wrappers`, `_fix_wrappers`, an install) ever meets a codex row over a foreign launcher (⟦D:entry-moved-aside-not-the-launcher⟧).
+- The move comes before the roster row turns codex-kind, the reverse of §15 step 3's listed order, so no claimer (`ccrc wrappers`, `_fix_wrappers`, an install) ever meets a codex row over a foreign launcher (D-4053).
 
 ### 21.10 The other repository's stop names its lane, and runs only before that lane's flip (§15 step 3, §20.2)
 
@@ -3438,13 +3445,13 @@ Expected: `ENDS-WITH-NEWLINE`, then `1`, then `12`. The heredoc's first line is 
 | Line at `be93d159` | Old text (exact) | New text |
 |---|---|---|
 | 497 | `Nothing in ccrc — doctor, installer, publisher, probe or test — ever reads the contents of an OAuth file.` | the same, then ` (amended: §21.7)` |
-| 982 | the §20.1 bullet `- **A codex lane's probe has no default.** …`, ending `For every other row the function unsets only the marker and the interpreter.` | the same, then ` (amended: §21.1, ⟦D:codex-kind-read-fails-closed⟧)` |
+| 982 | the §20.1 bullet `- **A codex lane's probe has no default.** …`, ending `For every other row the function unsets only the marker and the interpreter.` | the same, then ` (amended: §21.1, D-4046)` |
 | 993 | ``- **No device flow outside `ccrc codex login`.**`` | the same, then ` (amended: §21.8)` |
-| 1007 | the §20.3 bullet `- **Placement and skips.** …`, ending ``because the `wrappers` check already FAILs it (D-3723).`` | the same, then ` (amended: §21.5, ⟦D:codex-doctor-unmeasured-is-not-skip⟧)` |
+| 1007 | the §20.3 bullet `- **Placement and skips.** …`, ending ``because the `wrappers` check already FAILs it (D-3723).`` | the same, then ` (amended: §21.5, D-4052)` |
 | 1024 | the §20.3 bullet ``- **Every lane file `deploy/models-op.mjs` reads is type-tested first**, …``, ending `that is a carried follow-up, not a claim of this bullet.` | the same, then ` (amended: §21.6)` |
-| 1035 | the §20.4 bullet `- **Beside a foreign instance.** …`, whose first sentence ends ``and `_check_codex` WARNs with the operator's own disable as the remedy.`` | the same, with ` (amended: §21.2, ⟦D:surplus-ccrc-usage-timer-warns⟧)` inserted directly after `WARNs with the operator's own disable as the remedy`, before its full stop |
-| 1039 | ``  - A withdrawal systemd refuses leaves ccrc's timer enabled. It gets its own stderr line with the command, and the run ends with a `NOT CONVERGED` line naming every lane whose timer is still enabled.`` | the same, then ` (amended: §21.2, ⟦D:usage-withdrawal-is-re-measured⟧, ⟦D:surplus-ccrc-usage-timer-warns⟧)` |
-| 1042 | the §20.4 bullet `- **Uninstall and account removal.** …`, whose fourth sentence is `It reports the link removed only when a re-read finds it gone; a disable the manager refuses, or answers while the link stays, is reported as an operator step, and the removal still completes.` | the same, with ` (amended: §21.3, ⟦D:account-removal-waits-for-usage-refresh⟧, ⟦D:usage-quiesce-before-the-roster-drop⟧)` inserted directly after `and the removal still completes`, before its full stop |
+| 1035 | the §20.4 bullet `- **Beside a foreign instance.** …`, whose first sentence ends ``and `_check_codex` WARNs with the operator's own disable as the remedy.`` | the same, with ` (amended: §21.2, D-4048)` inserted directly after `WARNs with the operator's own disable as the remedy`, before its full stop |
+| 1039 | ``  - A withdrawal systemd refuses leaves ccrc's timer enabled. It gets its own stderr line with the command, and the run ends with a `NOT CONVERGED` line naming every lane whose timer is still enabled.`` | the same, then ` (amended: §21.2, D-4047, D-4048)` |
+| 1042 | the §20.4 bullet `- **Uninstall and account removal.** …`, whose fourth sentence is `It reports the link removed only when a re-read finds it gone; a disable the manager refuses, or answers while the link stays, is reported as an operator step, and the removal still completes.` | the same, with ` (amended: §21.3, D-4049, D-4050)` inserted directly after `and the removal still completes`, before its full stop |
 
 Lines 982 and 1024 are quoted by their first and last clauses, and line 1035 by its lead and the clause its pointer follows, because each is a single line over 600 characters. The locators below match each one whole.
 
@@ -3466,19 +3473,19 @@ const EDITS = [
   [/^Nothing in ccrc — doctor, installer, publisher, probe or test — ever reads the contents of an OAuth file\.$/,
     'an OAuth file.', ' (amended: §21.7)'],
   [/^- \*\*A codex lane's probe has no default\.\*\* .*For every other row the function unsets only the marker and the interpreter\.$/,
-    'unsets only the marker and the interpreter.', ' (amended: §21.1, ⟦D:codex-kind-read-fails-closed⟧)'],
+    'unsets only the marker and the interpreter.', ' (amended: §21.1, D-4046)'],
   [/^- \*\*No device flow outside `ccrc codex login`\.\*\*$/,
     '`ccrc codex login`.**', ' (amended: §21.8)'],
   [/^- \*\*Placement and skips\.\*\* The check sits after `models` in the check table\..*already FAILs it \(D-3723\)\.$/,
-    'already FAILs it (D-3723).', ' (amended: §21.5, ⟦D:codex-doctor-unmeasured-is-not-skip⟧)'],
+    'already FAILs it (D-3723).', ' (amended: §21.5, D-4052)'],
   [/^- \*\*Every lane file `deploy\/models-op\.mjs` reads is type-tested first\*\*.*that is a carried follow-up, not a claim of this bullet\.$/,
     'not a claim of this bullet.', ' (amended: §21.6)'],
   [/^- \*\*Beside a foreign instance\.\*\* .*`_check_codex` WARNs with the operator's own disable as the remedy\. Two publishers /,
-    "WARNs with the operator's own disable as the remedy", ' (amended: §21.2, ⟦D:surplus-ccrc-usage-timer-warns⟧)'],
+    "WARNs with the operator's own disable as the remedy", ' (amended: §21.2, D-4048)'],
   [/^  - A withdrawal systemd refuses leaves ccrc's timer enabled\. .*naming every lane whose timer is still enabled\.$/,
-    'whose timer is still enabled.', ' (amended: §21.2, ⟦D:usage-withdrawal-is-re-measured⟧, ⟦D:surplus-ccrc-usage-timer-warns⟧)'],
+    'whose timer is still enabled.', ' (amended: §21.2, D-4047, D-4048)'],
   [/^- \*\*Uninstall and account removal\.\*\* .*and the removal still completes\. §19\.8's .*no longer holds\.$/,
-    'and the removal still completes', ' (amended: §21.3, ⟦D:account-removal-waits-for-usage-refresh⟧, ⟦D:usage-quiesce-before-the-roster-drop⟧)'],
+    'and the removal still completes', ' (amended: §21.3, D-4049, D-4050)'],
 ];
 const bad = [];
 const at = EDITS.map(([re, after], k) => {
@@ -4868,7 +4875,7 @@ python3 "$PB/b1-reference.py" "$VALUES" "$P/deploy/reference-fleet.md"
 
 **Rollback (the runtime-build authorisation).** `ccgpt-runtime` has no verb that removes a generation. Its verbs are `build`, `check`, `python` and `probe-source`, and its only remover is the prune a later passing build runs. The only ccrc verb that removes the runtime is `ccrc uninstall`, which removes far more. So the rollback has two forms:
 - **Default: keep it.** While no roster row is codex, nothing runs it and no check reads it (Why, above), and the next build reuses or prunes it. Rolling B2 back is "do not flip yet".
-- **Remove it, only on the operator's word** (for example, for disk). Remove the directory by path, behind three guards measured in the same call ⟦D:runtime-removed-by-path-on-rollback⟧:
+- **Remove it, only on the operator's word** (for example, for disk). Remove the directory by path, behind three guards measured in the same call D-4055:
 
 ```bash
 . "<abs scratch>/plan3b-exec/plan3b-env.sh"
@@ -4948,7 +4955,7 @@ else echo "refused: codex rows $n, tier records $s, processes $p; nothing remove
 - **One procedure, three parameters.** The two lanes differ in exactly the facts the table below names. Writing the procedure once keeps the order (R-O1) an operator ruling, not a rewrite. Each difference is a parameter checked at Step 0, so a lane whose live shape is not the one its parameters claim stops before anything is done.
 - **Parking first (R-O2, ruling B-2).** A surviving Claude Code process carries the other repository's gateway key. And once the entry file is aside, a respawn fails five times inside `StartLimitIntervalSec=120` and systemd marks the unit failed. So no live session may sit on the lane between Step 6 and Step 18. `ccd swap` carries the conversation, and `ccd` is the authority on the pool question: its refusal is the stop.
 - **The foreign stop is lane-explicit and happens only before this lane's flip (ruling B-4).** The other repository's stop stops units by name, `ccgpt-<id>-{litellm,shim}.service`, which are exactly ccrc's tier names (spec §19.2). With `CCGPT_ACCOUNT_ID` unset it names lane 1. A non-lane-1 id also needs both ports, and the launcher refuses without them (`_require_lane_ports`, measured). So the stop always runs through the lane's own entry file, with the id set: that form carries both ports and names only this lane's two units.
-- **The entry file moves before the roster says codex.** From the moment the row is codex-kind, every claimer of `~/.local/bin/<lane-id>` would meet a foreign file there: `ccrc wrappers`, doctor's `_fix_wrappers`, and an install's wrappers step. Each would refuse and report a degraded step. Moving the file first means no reader ever sees a codex row over a foreign launcher. Spec §15.3 lists the exec-block write before the move, so the order is a departure ⟦D:entry-moved-aside-not-the-launcher⟧.
+- **The entry file moves before the roster says codex.** From the moment the row is codex-kind, every claimer of `~/.local/bin/<lane-id>` would meet a foreign file there: `ccrc wrappers`, doctor's `_fix_wrappers`, and an install's wrappers step. Each would refuse and report a degraded step. Moving the file first means no reader ever sees a codex row over a foreign launcher. Spec §15.3 lists the exec-block write before the move, so the order is a departure D-4053.
 - **Adoption, not re-login (ruling B-7, spec §9.2).** The row's `authDir` is the lane's existing OAuth directory, and its ports are the lane's existing pair (R-O3). Step 12's refresh is the first act that runs LiteLLM's `Authenticator` against that directory under ccrc's runtime. It runs before any tier starts and before any session returns, so a dead refresh token stops the window at `login-required` rather than inside a tier process that would start a device flow (Plan 3a Task 1, hazard 3).
 - **One writer per limits row (ruling B-5, R-C10).** The operator's disable of the lane's foreign timer precedes both the roster flip and ccrc's enable. Only in that order is the next auto-update's `_inst_codex_usage` converge a no-op, and never a withdrawal.
 
@@ -4967,7 +4974,7 @@ else echo "refused: codex rows $n, tier records $s, processes $p; nothing remove
 |---|---|---|
 | The box before the flip | No codex row. ccrc's external arm may still run the bare `ccgpt stop`, which names lane 1's units, on an hourly changed render while lane 1's proxy runs (Z1). The window therefore avoids the `ccrc-models.timer` fire (Step 0) | One codex row, `<other-lane-id>`. Z4 refuses the external arm's stop. This run never names `<other-lane-id>` in a `ccgpt` invocation, and Steps 2, 6 and 16 re-measure that its tiers still run |
 | After the flip | **If this is lane 2:** lane 1 is now an external lane with a registry and a proxy on the box-global config. Until lane 1's flip, any hourly refresh whose lane-1 render changed is refused (`restart-failed`, `ccrc models refresh --all` exit 1, `ccrc-models.service` failed), and lane 1 keeps serving on its unchanged config. Step 19 arms the read-only monitor, and B4 reads it. **If this is lane 1:** no external lane has a registry, so Z4 cannot fire | No external lane is left. Z4 cannot fire |
-| Doctor's `codex` row at Step 16(g) | lane 1: `PASS codex: 1 Codex lane(s): …`. Lane 2: one `WARN codex:` line for the flat `ccgpt-usage.timer`, which stays enabled, unattributable, until lane 1's flip ⟦D:flat-foreign-timer-warns-until-lane-one-flips⟧ | `PASS codex: 2 Codex lane(s): …` |
+| Doctor's `codex` row at Step 16(g) | lane 1: `PASS codex: 1 Codex lane(s): …`. Lane 2: one `WARN codex:` line for the flat `ccgpt-usage.timer`, which stays enabled, unattributable, until lane 1's flip D-4056 | `PASS codex: 2 Codex lane(s): …` |
 | Roster parse at Step 9 | one codex row | two codex rows. Their four ports are pairwise distinct (`parseRoster`'s whole-roster gate) |
 
 **What "stop" means here.** Halt at the step. Run the rollback table below from the highest step reached, in its order, and report to the operator. Nothing is overridden: no `--force`, no `--cross-pool` without the operator's named decision, no hand kill of a unit or a port holder.
@@ -5441,7 +5448,7 @@ Every bash block below begins with `export PATH="$HOME/.local/bin:$PATH"`, becau
     ```
     - **Expect:**
       - lane 1, either ordinal, and lane 2 on the second flip: `PASS codex: <1 or 2> Codex lane(s): <ids> (…; ccrc-codex-usage@<lane-id>.timer enabled, usage row <n>s old); runtime gen-…; the four GPT-lane executables match the shipped tree`;
-      - lane 2 on the first flip: exactly one codex line, `WARN codex: another repository's ccgpt-usage.timer is enabled on this box; it names no lane, so ccrc cannot tell whether it is a second publisher of a codex lane's ~/.cc-limits row` ⟦D:flat-foreign-timer-warns-until-lane-one-flips⟧;
+      - lane 2 on the first flip: exactly one codex line, `WARN codex: another repository's ccgpt-usage.timer is enabled on this box; it names no lane, so ccrc cannot tell whether it is a second publisher of a codex lane's ~/.cc-limits row` D-4056;
       - `diff` shows only the `codex` pair changing. Every other check keeps its checkpoint class.
   - **Second flip only:** `ccrc codex status '<other-lane-id>' --json | jq -c '[.tiers.litellm.state, .tiers.shim.state]'` still prints `["running","running"]`.
   - **Stop if:** any line differs. Never `ccrc doctor --fix` inside the window: a WARN never triggers it, and a FAIL here is a rollback.
@@ -5481,7 +5488,7 @@ Every bash block below begins with `export PATH="$HOME/.local/bin:$PATH"`, becau
     jq -r --argjson t "$(cat "$W/unpark-<session-id>.epoch")" 'if (.turnAt // 0) > $t then "first turn: \(.state) err=\(.err)" else "first turn: not yet" end' "$HOME/.cc-sessions/<session-id>.turn.json"
     ```
     - **Expect:** `first turn: done err=null`.
-    - The window stays open until every un-parked session prints that line. At the operator's word, a session that has not yet taken a turn hands its watch to B4 (it reads `unpark-<session-id>.epoch`), and the window closes over it ⟦D:first-turn-watch-may-outlive-the-window⟧.
+    - The window stays open until every un-parked session prints that line. At the operator's word, a session that has not yet taken a turn hands its watch to B4 (it reads `unpark-<session-id>.epoch`), and the window closes over it D-4057.
   - **Stop if:** a swap dies, the unit is not `active`, the restart count rises, any launcher refusal line appears, or a first turn ends `failed`. That session is swapped straight back out to `<park-target-wrapper>`, with `ccd swap '<session-id>' '<park-target-wrapper>'` at its next idle point, and the lane rolls back (critic #20).
   - **Rollback if reached:** RB2 for every session already back on the lane, then RB3 onward.
 
@@ -5590,7 +5597,7 @@ A row's own failure stops the rollback and goes to the operator; it is never for
 | 1 | refresh | at least one `ccrc-models.timer` run since the gate opened whose row for this lane takes the codex arm, by the reading rule below, and no failed or `skipped` row for this lane | ROLLBACK: a restart-class row (`could not be stopped`, `did not start again`, `is DOWN`) or a foreign-tier row. STOP: `login-required`; an `ok:true` row reading `skipped`; any other failed row; a run with no row for this lane; a `rendered` row while the lane's own `litellm.yaml` is older than the gate | B-10 ("at least one refresh taking the codex arm", "no `restart-failed` row for the flipped lane"); A-4 |
 | 2 | service | `ccrc-models.timer` active; `ccrc-models.service` not failed | STOP: a dead timer, or a failed service the sample cannot attribute. EXPECTED (lane-2-first, between lanes): failed on the still-external lane's Z4 row alone | B-1 |
 | 3 | usage | the other repository's timer for this lane disabled and inactive; `ccrc-codex-usage@<lane-id>.timer` enabled and active; at least four publishes since the gate opened; the row's `ts` belongs to ccrc's last publish | ROLLBACK: the row older than 1800 s, or any gap between ccrc's publishes longer than 1800 s (two 15-minute intervals). STOP: a second writer (the foreign timer back on, or a `ts` ccrc's last run did not write) | B-10 ("a usage row refreshing every 15 min from a single writer"); carry-forward stop criteria |
-| 4 | doctor | no FAIL line; no WARN on a check that did not WARN in `<doctor-baseline>`; `PASS codex` naming this lane | ROLLBACK: a codex FAIL naming a foreign tier or listener. STOP: any other FAIL, a new WARN, any other codex WARN. EXPECTED (lane-2-first, between lanes): codex's one WARN is the flat `ccgpt-usage.timer` ⟦D:flat-foreign-timer-warns-until-lane-one-flips⟧ | B-10 ("doctor clean") |
+| 4 | doctor | no FAIL line; no WARN on a check that did not WARN in `<doctor-baseline>`; `PASS codex` naming this lane | ROLLBACK: a codex FAIL naming a foreign tier or listener. STOP: any other FAIL, a new WARN, any other codex WARN. EXPECTED (lane-2-first, between lanes): codex's one WARN is the flat `ccgpt-usage.timer` D-4056 | B-10 ("doctor clean") |
 | 5 | tiers | `ccrc codex status <lane-id> --json` reads both tiers `running`; no gateway 401 in the lane's tier logs since the gate opened (counted, never printed) | ROLLBACK: a tier reading `foreign`, or any 401. STOP: a tier log shorter than at the gate's start (its count is unmeasured), or a tier `stopped` while sessions run | carry-forward stop criteria (a gateway 401, a foreign-listener finding) |
 | 6 | sessions | at least one supervised session on the lane shows a completed turn (`.turn.json` state `done` with a `turnAt` after the gate opened: a turn that began after the gate and ended, never a restart that only re-stamped `at`) | ROLLBACK: a launcher refusal (`ccrc-codex: <code>:`) or start-limit line in any `claude-session@<session-id>` journal, or a failed `claude-session@<session-id>` unit. STOP: a session ending on a `failed` turn (ruling B-2's first-turn rule) | B-10 ("a real session turn"); carry-forward stop criteria |
 | 7 | update | one update landed on the box since the gate opened (`ccrc version` moved, `~/.ccrc/update.json` phase `done`), and its journal shows `install: codex runtime:` re-measured, `install: codex tiers:` measured, and this lane in `install: codex-usage: enabled for …`, with no `NOT …` or `restart FAILED` line | STOP: auto-update reads `off`; a landing that ended `reverted` or `failed`; a landing whose codex lines carry a NOT/FAILED line or are missing from the journal | B-10 ("one auto-update landing while the lane is codex"); carry-forward critic #4 |
@@ -6395,7 +6402,7 @@ A row's own failure stops the rollback and goes to the operator; it is never for
   - **What it changes on today's live shape (no codex row): nothing that runs on a success path.**
     - A1's refusals fire only when the roster cannot be classified. Today that read falls through to the external path, and after the merge it refuses `roster-invalid` or `missing-dependency`, a failure path only.
     - A2's re-measure and WARN are reached only with a ccrc usage instance enabled, and none exists.
-    - A3: every `ccrc account remove` on a Linux box with ccrc's template `ccrc-codex-usage@.service` placed (the fleet box has it) now makes one read-only `systemctl --user is-active ccrc-codex-usage@<id>.service` call. Its usage half runs before the roster drop, so the report lists the usage entries before the drop (⟦D:usage-quiesce-before-the-roster-drop⟧). The wait is reached only while that service runs, and no instance exists. A manager that does not answer adds an operator step. No Part B step runs `ccrc account remove`.
+    - A3: every `ccrc account remove` on a Linux box with ccrc's template `ccrc-codex-usage@.service` placed (the fleet box has it) now makes one read-only `systemctl --user is-active ccrc-codex-usage@<id>.service` call. Its usage half runs before the roster drop, so the report lists the usage entries before the drop (D-4050). The wait is reached only while that service runs, and no instance exists. A manager that does not answer adds an operator step. No Part B step runs `ccrc account remove`.
     - A4 changes the hourly refresh row of lane 1, the external lane with a codex-probe registry, but only when its render step fails with no body or with a body lacking `.detail`. That row then reads `ok:false` with a reason instead of `ok:true`/`skipped` (or reason `null`). `refresh --all` then exits 1, truthfully.
     - A5's three changes sit on `_check_codex` paths past its SKIP, and today it SKIPs.
     - A6's type test answers the same for the regular files on the box. Only a non-regular file now refuses where it would have blocked.
@@ -6404,7 +6411,7 @@ A row's own failure stops the rollback and goes to the operator; it is never for
 - **The runtime-build authorisation (B2; pre-lane, critic #13):**
   - `ccgpt-runtime build`, then `ccgpt-runtime check`, recording the raw-shape canary;
   - writes only under `~/.ccrc/runtime/codex/` (about 650 MB; B1 has proved at least 2 GB free).
-  - Rollback: keep it by default, because nothing reads the runtime until a codex row exists. Only on the operator's word, remove `~/.ccrc/runtime/codex` by path behind B2's three guards (⟦D:runtime-removed-by-path-on-rollback⟧).
+  - Rollback: keep it by default, because nothing reads the runtime until a codex row exists. Only on the operator's word, remove `~/.ccrc/runtime/codex` by path behind B2's three guards (D-4055).
 - **[LW <lane-id>], the lane's per-lane authorisation, with a named window (`<UTC>` start, `<window-end-UTC>` end).** B3 tags its acts with it, and B5 Step 4 calls the second one "the second lane's per-lane authorisation"; [OP] marks the operator's own act and [RO] a read-only one. A B4 STOP repair or ROLLBACK for the lane reopens it: the operator names a new window (start and end, recorded in `rulings.txt`), auto-update is paused again (RB1), and the same acts and rollback rows apply. It covers every act below, and nothing else:
   - the auto-update pause and its restore, the operator's own PWA acts (R-O6);
   - `ccd swap <session-id> <park-target-wrapper>` for each live session on the lane, the symmetric un-park `ccd swap <session-id> <lane-id>`, and, on a failed first turn, the swap back out. This covers both lanes, now that both carry sessions;
@@ -6513,7 +6520,7 @@ Every bullet of Plan 3a's carry-forward Plan-3b part, and every "Final-review fo
 | Step 3, critic #3: back up `settings.json` (mode kept) and the models files; restore on rollback | B3 | B-8's list |
 | Step 3, critic #5: account disable and enable; the `last-enabled-home` refusal | B3 | B1 confirms other placeable homes exist |
 | Step 3, critic #7: never the foreign stop for a migrated lane; rollback stops ccrc first | B3; Global Constraints | B-4, and B-8's rollback order |
-| Step 3, critic #4: pause auto-update for the window only | B3; **R-O6, amended** | Fleet-wide PWA pause recommended, because a per-box pause is API-only (⟦D:update-pause-is-fleet-scoped⟧) |
+| Step 3, critic #4: pause auto-update for the window only | B3; **R-O6, amended** | Fleet-wide PWA pause recommended, because a per-box pause is API-only (D-4054) |
 | Step 3: rollback per step reached | B3 | B-8's order |
 | Step 3: `login-required` stops for `ccrc codex login` with the operator | B3 | B-7 |
 | Step 3, hazard 3: the tier's `Authenticator` on a dead token; prove a refresh first; read catalogue age and `auth.json` mtime | B3, B1; A7 (§21 pointer on `:993`) | Review Focus 5 |
@@ -6577,26 +6584,26 @@ Every bullet of Plan 3a's carry-forward Plan-3b part, and every "Final-review fo
 | R-O8's documents are not GPT-lane-specific | Plan 4 Task 1 (trim in place) |
 | `ccgpt` has no tier-only start verb | B3's rollback; [Authorisation shapes](#authorisation-shapes) |
 | `_uninst_codex_usage` counts a stop on the exit code alone | A2 (ruling R7) |
-| `cmd_account remove` runs its usage half after the roster drop, so a refusal there could not be retried | A3 (⟦D:usage-quiesce-before-the-roster-drop⟧) |
+| `cmd_account remove` runs its usage half after the roster drop, so a refusal there could not be retried | A3 (D-4050) |
 | `account-op.mjs`' and `models-op.mjs`' other by-name reads | Follow-up ticket |
 | An exit-0, empty-body render reads `unchanged` | Follow-up ticket; B4's mtime cross-check |
 
 ## Deviations found
 
-Named by slug; the controller mints each number from the allocator after review and substitutes it (never a range). A6 carries none: it closes §20.3's own carried follow-up (conformance).
+Each number below was issued by the allocator (`POST /api/ledger/deviations`, through `ccrc-api ledger allocate`) on 2026-10-05, in one issue of twelve, after the operator's rulings at plan review; each is defined once, here. A6 carries none: it closes §20.3's own carried follow-up (conformance).
 
-- **⟦D:codex-kind-read-fails-closed⟧** (A1). `_models_litellm_codex` widens to three answers (0 codex, 1 not codex, 2 cannot tell, forwarding `_codex_lanes`' sentence), and every reader refuses on 2 in `roster-invalid`/`missing-dependency` instead of folding an undecidable roster into "not codex", departing from spec §20.1's "for every other row" sentence.
-- **⟦D:usage-withdrawal-is-re-measured⟧** (A2). `_inst_codex_usage` counts an instance withdrawn only when `_codex_usage_enabled` re-measures its link gone after `disable --now`; a 0 answer with the link left is the existing NOT CONVERGED refusal, and `_uninst_codex_usage` counts a timer stopped only on the same re-measure (its rc-only count, ruling R7), departing from spec §20.4's rc-only withdrawal.
-- **⟦D:surplus-ccrc-usage-timer-warns⟧** (A2). Doctor's codex usage rows gain their own WARN naming any enabled `ccrc-codex-usage@<id>.timer` whose id is not a codex lane now, with ccrc's own withdrawal as the remedy, a row spec §20.3/§20.4 do not have.
-- **⟦D:account-removal-waits-for-usage-refresh⟧** (A3). `_acct_remove_usage` waits, bounded by `CCRC_ACCT_USAGE_WAIT_S` (default 300), for `ccrc-codex-usage@<id>.service` to go inactive, never stops it, and refuses `usage-refresh-in-flight` before any limits-row deletion at the bound, departing from spec §20.4's "the removal still completes".
-- **⟦D:usage-quiesce-before-the-roster-drop⟧** (A3). _acct_remove_usage moves from after the roster drop (Plan 3a's position) to directly before it, because a usage-refresh-in-flight refusal after the drop could not be retried (the retry's _acct_lane refuses unknown-id), while every step before the drop repeats as a no-op.
-- **⟦D:bodyless-litellm-failure-fails-the-row⟧** (A4). A refresh row whose `_models_litellm` step exits non-zero with no readable `.detail` (no stdout, no or a `null` `.detail`, or bytes that are not JSON) is `ok:false` with a non-empty reason, never `ok:true, litellm:"skipped"`, with the same block's `.detail` read folded to `.detail // empty`.
-- **⟦D:codex-doctor-unmeasured-is-not-skip⟧** (A5). Doctor's codex check reads unmeasured where it cannot tell: a missing `cmp` skips only the byte compare, an unlistable `~/.ccrc/codex` WARNs instead of SKIPping, and an unreadable `.wrapper` counts as a session that may be on the lane.
-- **⟦D:entry-moved-aside-not-the-launcher⟧** (B3). The carry-forward's "move the launcher aside" moves only the lane's entry file `~/.local/bin/<lane-id>` (lane 1's symlink as a link, never its target), and never the shared `~/.local/bin/ccgpt`, which Plan 3b never moves, edits or deletes. That entry file is moved aside (Step 8) before the roster row becomes codex-kind (Step 9), which reverses spec §15.3's listed order, so that no claimer (ccrc wrappers, doctor's _fix_wrappers, an install) ever sees a codex row over a foreign launcher.
-- **⟦D:update-pause-is-fleet-scoped⟧** (B3). R-O6's per-lane-window auto-update pause is taken fleet-wide (auto off on scope '*' through the PWA) instead of for the one box, because a per-node pause is reachable only through the session-gated API.
-- **⟦D:runtime-removed-by-path-on-rollback⟧** (B2). ccgpt-runtime has no verb that removes a generation, so B2's optional rollback (only on the operator's word) removes ~/.ccrc/runtime/codex by path, behind three guards measured in the same call: no codex roster row, no lane <tier>.started record, and no process argv naming the directory. This departs from spec §5.2's 'ccgpt-runtime owns ~/.ccrc/runtime/codex/ whole'.
-- **⟦D:flat-foreign-timer-warns-until-lane-one-flips⟧** (B3/B4). Under the lane-2-first order, doctor's codex row after lane 2's flip is one WARN for the still-enabled, unattributable flat ccgpt-usage.timer (lane 1's publisher), not PASS, and this is accepted until lane 1's own flip disables that timer.
-- **⟦D:first-turn-watch-may-outlive-the-window⟧** (B3). An un-parked session that has not yet taken its first turn on the lane may, at the operator's word, hand its first-turn watch (critic #20's failed-first-turn rollback trigger) to B4's soak instead of holding the lane window open.
+- **D-4046** (A1) — `_models_litellm_codex` widens to three answers (0 codex, 1 not codex, 2 cannot tell, forwarding `_codex_lanes`' sentence), and every reader refuses on 2 in `roster-invalid`/`missing-dependency` instead of folding an undecidable roster into "not codex", departing from spec §20.1's "for every other row" sentence.
+- **D-4047** (A2) — `_inst_codex_usage` counts an instance withdrawn only when `_codex_usage_enabled` re-measures its link gone after `disable --now`; a 0 answer with the link left is the existing NOT CONVERGED refusal, and `_uninst_codex_usage` counts a timer stopped only on the same re-measure (its rc-only count, ruling R7), departing from spec §20.4's rc-only withdrawal.
+- **D-4048** (A2) — Doctor's codex usage rows gain their own WARN naming any enabled `ccrc-codex-usage@<id>.timer` whose id is not a codex lane now, with ccrc's own withdrawal as the remedy, a row spec §20.3/§20.4 do not have.
+- **D-4049** (A3) — `_acct_remove_usage` waits, bounded by `CCRC_ACCT_USAGE_WAIT_S` (default 300), for `ccrc-codex-usage@<id>.service` to go inactive, never stops it, and refuses `usage-refresh-in-flight` before any limits-row deletion at the bound, departing from spec §20.4's "the removal still completes".
+- **D-4050** (A3) — _acct_remove_usage moves from after the roster drop (Plan 3a's position) to directly before it, because a usage-refresh-in-flight refusal after the drop could not be retried (the retry's _acct_lane refuses unknown-id), while every step before the drop repeats as a no-op.
+- **D-4051** (A4) — A refresh row whose `_models_litellm` step exits non-zero with no readable `.detail` (no stdout, no or a `null` `.detail`, or bytes that are not JSON) is `ok:false` with a non-empty reason, never `ok:true, litellm:"skipped"`, with the same block's `.detail` read folded to `.detail // empty`.
+- **D-4052** (A5) — Doctor's codex check reads unmeasured where it cannot tell: a missing `cmp` skips only the byte compare, an unlistable `~/.ccrc/codex` WARNs instead of SKIPping, and an unreadable `.wrapper` counts as a session that may be on the lane.
+- **D-4053** (B3) — The carry-forward's "move the launcher aside" moves only the lane's entry file `~/.local/bin/<lane-id>` (lane 1's symlink as a link, never its target), and never the shared `~/.local/bin/ccgpt`, which Plan 3b never moves, edits or deletes. That entry file is moved aside (Step 8) before the roster row becomes codex-kind (Step 9), which reverses spec §15.3's listed order, so that no claimer (ccrc wrappers, doctor's _fix_wrappers, an install) ever sees a codex row over a foreign launcher.
+- **D-4054** (B3) — R-O6's per-lane-window auto-update pause is taken fleet-wide (auto off on scope '*' through the PWA) instead of for the one box, because a per-node pause is reachable only through the session-gated API.
+- **D-4055** (B2) — ccgpt-runtime has no verb that removes a generation, so B2's optional rollback (only on the operator's word) removes ~/.ccrc/runtime/codex by path, behind three guards measured in the same call: no codex roster row, no lane <tier>.started record, and no process argv naming the directory. This departs from spec §5.2's 'ccgpt-runtime owns ~/.ccrc/runtime/codex/ whole'.
+- **D-4056** (B3/B4) — Under the lane-2-first order, doctor's codex row after lane 2's flip is one WARN for the still-enabled, unattributable flat ccgpt-usage.timer (lane 1's publisher), not PASS, and this is accepted until lane 1's own flip disables that timer.
+- **D-4057** (B3) — An un-parked session that has not yet taken its first turn on the lane may, at the operator's word, hand its first-turn watch (critic #20's failed-first-turn rollback trigger) to B4's soak instead of holding the lane window open.
 
 **Part B execution-ledger slugs** (minted only when they fire, during the runbook): `runtime-built-before-the-roster-flip`, `lane-without-a-registry-inits-after-the-flip`, `both-foreign-usage-timers-retired-per-lane` (carried from Plan 3a), and `second-lane-first-accepts-z4-refusals` (fires only if the operator rules R-O1 = lane 2 first).
 
