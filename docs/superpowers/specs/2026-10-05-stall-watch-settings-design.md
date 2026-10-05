@@ -113,8 +113,10 @@ The one timing an operator might reasonably want to change, the 2 h quiet time b
 
 1. The operator can read the watch's effective arming and quiet time in the PWA, see where each comes from, and see
    what the next step waits on.
-2. The operator can choose a ladder level, or "Follow the fleet box's files", and a quiet time, from Settings on any
-   device. The control settles on the server's re-read answer.
+2. The operator can choose a ladder level, or "Follow the fleet box's files", and a quiet time, in Settings. The
+   choice lives on the server, in one row of its coordination database (§8), and applies to the whole fleet. The
+   browser keeps no copy: wherever the PWA is open, it reads that one row, and after a change the control shows what
+   the server stored, not what was tapped.
 3. A stall sweep and a mail sweep given the same registry listing and the same stored row resolve the same arming,
    because both call one never-throwing helper over one pure function. When the mail gate moves into busy delivery
    while the server runs, whether by a chosen level, by Follow or by a file touched by hand, the stall sweep's
