@@ -578,7 +578,7 @@ a swap; an operator `/model opus` survives an auto-home.
 manual, PWA and `swap-self` move), `ccd stop`'s (a later `start` or `enable` respawns from the record) and
 `ccd ws-archive`'s (`ws-restore` does); the stops that end the row (`ws-rm`, `forget`, the reap and reclaim
 tails) are not, `_swap_refuse`'s restart follows `cmd_swap`'s own stop, and a spawn that follows no ccd stop (a
-supervisor revival, `_supervised_start`'s unsupervised fallbacks, `ws-restore`) keeps the choice too, because the keep
+supervisor revival, `_supervised_start`'s unsupervised fallbacks) keeps the choice too, because the keep
 sits in `_spawn_start`, the one choke point of every spawn. A one-shot marker, which means Claude Code is not running
 (a stop whose pane kill failed on a session not proven gone clears it), makes a restart read once (and log at most
 once per kind). A `/model` and an `/effort` are written by one `cmd_route` call, so a pair the record refuses is
@@ -592,11 +592,11 @@ first row, written at this ccd's first spawn of the row (or first journalled key
 none) — and no command older than it is read, because an older ccd typed its keystrokes unjournalled; a value
 outside the vocabulary is logged by name when it is one token, by size otherwise; and a stop that cannot read at
 all (no floor yet, a transcript that is not a readable regular file, no python, a failed reader), or whose newest
-`/model` or `/effort` has no acknowledgement in the wording this ccd recognises (drifted wording, or a command Claude
-Code itself refused), logs `unmeasured`, once per keep. §9's stage-7 row counts the keep-time stops whose `/model` ccd
+`/model` or `/effort` has no acknowledgement in the wording this ccd recognises (drifted wording, a command Claude
+Code itself refused, or a dismissed `/effort` slider: `Kept effort level as …`), logs `unmeasured`, once per keep. §9's stage-7 row counts the keep-time stops whose `/model` ccd
 logged as outside the vocabulary or refused, with `stops_that_could_not_read_the_transcript` beside it (it counts KEEPS that
 could not measure, one per `unmeasured` line, keeps at a spawn and the acknowledgement-drift line included, and a refused
-command repeats at every restart until a later one is acknowledged); it counts those STOPS, not
+command repeats at every keep until a later operator command of its kind is acknowledged, a ccd keystroke not clearing it); it counts those STOPS, not
 distinct choices or restarts, because a `/model` ccd cannot keep is logged again at every later keep until a newer
 command replaces it, and a session stopped for good, or archived and then removed, is counted although no restart
 happened (an over-count by design). A session on a non-Anthropic lane is skipped, and a swap that crosses
@@ -611,8 +611,8 @@ command typed within `TYPED_MATCH_WINDOW` after a ccd keystroke that rotated out
 a stop since; an Anthropic-lane command typed before a round trip through a non-Anthropic lane, and never through
 a stop since (nearly empty: the outbound move is itself a swap whose keep runs on the Anthropic side); a session whose
 source account is not on the roster (`cmd_swap` dies at its "no config-dir mapping" check before the keep, and at a
-stop or revival `_transcript_path` fails on an empty config dir; deferred); a route field whose mtime cannot be
-read, which the keep does not overwrite; and an interrupted stop (if a stop dies between its keep, which writes the marker,
+stop or revival the wrapper reads as non-Anthropic (`_is_anthropic_backend`), so the keep returns before it reads; deferred); a route field whose mtime cannot be
+read, which the keep does not overwrite; a deploy-transition `/model` whose journal a `route --apply` keystroke opened first (above); and an interrupted stop (if a stop dies between its keep, which writes the marker,
 and its kill, the pane survives marked, and a later stop or revival skips its read; narrow, and closing it needs the marker
 bound to a pane instance).
 

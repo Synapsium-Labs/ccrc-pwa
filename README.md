@@ -2287,7 +2287,7 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   `_operator_choice_keep` reads the transcript for the newest acknowledged `/model` and `/effort` that no journal
   row explains and writes an operator's value through `cmd_route`'s own writer: `route <id>: class fable -> opus
   [actor=operator-session]` in `swap.log`. A spawn that follows no ccd stop (a supervisor revival, most often after
-  a pane-scope OOM kill or an `/exit`; the unsupervised fallbacks of `_supervised_start`; `ws-restore`) keeps the
+  a pane-scope OOM kill or an `/exit`; the unsupervised fallbacks of `_supervised_start`) keeps the
   choice too, because `_spawn_start`, the one choke point of every spawn, runs the keep before its own journal-floor
   write. Each keep leaves a one-shot `$REG/<id>.choicekept` marker that `_spawn_start` honours and then clears, so a
   restart reads once and logs at most once per kind (one `/model` line, one `/effort` line). The marker means Claude
@@ -2309,18 +2309,18 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   `operator-choice <id>: …` and leaves the record unchanged. A `/model` and an `/effort` are written by ONE
   `cmd_route` call, so a pair the record refuses is refused whole (`/model haiku` beside `/effort high` keeps
   neither, and two lines say so). A stop that cannot read at all, or whose newest `/model` or `/effort` has no
-  acknowledgement in the wording this ccd recognises (Claude Code's own wording drifted, or Claude Code itself
-  refused the command), logs `operator-choice <id>: unmeasured (…)`, once per keep. A field written after the keystroke (the PWA picker, a coordinator's
+  acknowledgement in the wording this ccd recognises (Claude Code's own wording drifted, Claude Code itself
+  refused the command, or the operator dismissed the `/effort` slider: `Kept effort level as …`), logs `operator-choice <id>: unmeasured (…)`, once per keep. A field written after the keystroke (the PWA picker, a coordinator's
   route, this step's last write) is the later choice and wins. `python3 deploy/measure-continuity.py --stage 7`
-  counts the writes, the restarts that logged a `/model` ccd could not keep, and, in
+  counts the writes, the stops that logged a `/model` ccd could not keep, and, in
   `stops_that_could_not_read_the_transcript`, the KEEPS that could not measure: one per `unmeasured (…)` line, so a keep at a
   spawn counts and so does the acknowledgement-drift line (a successful read of a command with no recognised acknowledgement).
-  A refused command repeats at every restart until a later one is acknowledged. The row
+  A refused command repeats at every keep until a later operator command of its kind is acknowledged (a ccd keystroke
+  does not clear it). The row
   counts keep-time STOPS that a spawn may follow, not distinct choices or restarts: a `/model` the record cannot hold
   is logged again at every later keep until a newer command replaces it, since it reverts again at each, and a
   session stopped for good, or archived and then removed, is counted although no restart happened (an over-count by
-  design). A refused command stays the newest unacknowledged one, so it reads as `unmeasured` at every keep until a
-  later command of its kind is acknowledged.
+  design).
 - **Skipped, and the known costs.** A session on a non-Anthropic lane is skipped, silently (`_is_anthropic_backend`,
   as the settle is), and a swap that crosses lanes moves the journal floor to the landing, so nothing typed on the
   other lane is read. `/model opus[1m]` is kept as `opus` and loses its 1M context (the record has no context
@@ -2338,9 +2338,10 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
   - an Anthropic-lane command typed before a round trip through a non-Anthropic lane, and never through a stop
     since (nearly empty: the outbound move is itself a swap whose keep runs on the Anthropic side);
   - a session whose source account is not on the roster: `cmd_swap` dies at its "no config-dir mapping" check
-    before the keep, and at a stop or revival `_transcript_path` fails on an empty config dir, so nothing is kept
-    (deferred);
+    before the keep, and at a stop or revival the wrapper reads as non-Anthropic (`_is_anthropic_backend`), so the keep
+    returns before it reads: nothing is kept (deferred);
   - a route field whose mtime cannot be read: the keep does not overwrite what it cannot date;
+  - a deploy-transition `/model` whose journal a `route --apply` keystroke opened first (above);
   - an interrupted stop: if a stop dies between its keep (which writes the marker) and its kill, the pane survives marked, and
     a later stop or revival skips its read, so a choice typed in between is lost (narrow; closing it needs the marker bound
     to a pane instance).

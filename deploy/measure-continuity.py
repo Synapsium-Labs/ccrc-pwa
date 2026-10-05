@@ -473,16 +473,16 @@ def stage4(ctx):
 # `/model` or `/effort` to the route record (`route <id>: <field> <old> -> <new>
 # [actor=operator-session]`), or says why it could not: a value outside the
 # vocabulary, or one the record's own checks refused (`operator-choice <id>: …`).
-# Those two are the restarts at which ccd KNOWS it reverted the operator's
-# choice, so they are the row. It counts RESTARTS, not distinct choices: a
-# `/model` ccd cannot keep is logged again at every later restart until a newer
+# Those two are the keep-time stops at which ccd KNOWS it reverted the operator's
+# choice, so they are the row. It counts STOPS (keeps), not distinct choices or restarts: a
+# `/model` ccd cannot keep is logged again at every later keep until a newer
 # command replaces it (it reverts again at each). The writes are reported
 # beside the row, and so are the stops where ccd could not read at all
 # (`operator-choice <id>: unmeasured (…)`), which MAY have reverted one — never
 # folded into the row, never dropped. The field `stops_that_could_not_read_the_transcript`
 # counts KEEPS that could not measure, one per such line: keeps at a spawn count,
 # so does the acknowledgement-drift line, and a refused command repeats at every
-# restart until a later one is acknowledged. (The key keeps its name.) Named cost: a
+# keep until a later operator command of its kind is acknowledged. (The key keeps its name.) Named cost: a
 # supervisor revival reads the transcript before its spawn and logs like a stop,
 # but a session on a non-Anthropic lane is skipped and leaves no line, so its
 # `/model` is never counted.

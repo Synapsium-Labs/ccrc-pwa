@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=794838373ad3342931d5463ce48753166f6ae35740adbbcffa3f7a8607d84e56
+# ccrc:generated 1 sha256=0c801f3ccaa842579603f84c80928635a0faf96e5e712bfc4868dbd77f56e0b8
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19345,10 +19345,10 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # (`shared/models.mjs`), pinned to it by an agreement test. A `/effort` value
 # maps through `ROUTE_EFFORTS`.
 #
-# NEVER A FAILURE IN THE STOP PATH; the silent cases are listed in README (the
-# stage-7 subsection), not here. Every path is rc 0 and the stop goes on exactly
+# NEVER A FAILURE IN THE STOP PATH; the silent cases are named below and listed in
+# README (the stage-7 subsection). Every path is rc 0 and the stop goes on exactly
 # as before. Silent where nothing was lost: no registry row, no transcript, no
-# command, a value already held, a field newer than the keystroke. Logged as
+# command, a non-Anthropic lane (skipped), a value already held, a field newer than the keystroke. Logged as
 # `operator-choice <id>: …` where the operator's choice may be lost: a value
 # outside the vocabulary or one the record's own checks refuse (`cmd_route` runs
 # in a subshell, so its `die` ends only that) — the record unchanged — and
@@ -19358,7 +19358,8 @@ _route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2
 # command with no acknowledgement in the wording this ccd knows). A choice IS
 # lost without a line in a few cases, each named in README: a command within
 # TYPED_MATCH_WINDOW after a rotated-out keystroke, a round trip through a
-# non-Anthropic lane, a /clear, an unrostered source account, and a route field
+# non-Anthropic lane, a /clear, an unrostered source account, a deploy-transition
+# /model whose journal a `route --apply` keystroke opened first, and a route field
 # whose mtime cannot be read.
 #
 # ONE READ PER RESTART. Every call leaves `$REG/<id>.choicekept`, and every
@@ -20520,7 +20521,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # keys, both composed below on the Anthropic arm. The settle's keystroke
   # (`_inject_spawn_effort`) is the NO-RECORD path only — a pre-slice-1
   # session with nothing composed here.
-  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # EVERY spawn reads, here at the one choke point: a revival (Claude Code exited — a pane-scope OOM kill, /exit — and `_supervised_start`'s two unsupervised fallbacks, ws-restore) reads; a spawn that a stop's keep already read for (swap landing, start after stop, refusal restart) does not read again (§5.7). BEFORE the floor line below, or an older ccd's session would open its journal first and the keep read nothing
+  [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # EVERY spawn reads, here at the one choke point: a revival (Claude Code exited — a pane-scope OOM kill, /exit — and `_supervised_start`'s two unsupervised fallbacks) reads; a spawn that a stop's keep already read for (swap landing, start after stop, ws-restore after ws-archive, refusal restart) does not read again (§5.7). BEFORE the floor line below, or an older ccd's session would open its journal first and the keep read nothing
   _typed_note "$id" since   # the operator-choice journal opens at this ccd's first spawn of the row: no older command is read as the operator's (session-continuity §5.7)
   rm -f "$REG/$id.choicekept"   # every spawn ends the marker: it means "a keep ran since the last spawn" (§5.7)
   local routeflags="" routeenv="" rclass rsub rwf reff inert="" rapplied
