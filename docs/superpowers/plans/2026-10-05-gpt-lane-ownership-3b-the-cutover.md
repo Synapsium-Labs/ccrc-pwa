@@ -165,7 +165,7 @@ Every task's requirements implicitly include this section. The first group binds
   **A census FAIL stops the step, and it is attributed by count before it counts,** never by printing `new-units.txt`:
 
   ```bash
-  . "<abs scratch>/plan3b-exec/plan3b-env.sh"; f="<that run's evidence dir>/new-units.txt"; fx='(^|[-@:])codex-[ab]([-.]|$)|ccrc-codex-usage@'
+  . "<abs scratch>/plan3b-exec/plan3b-env.sh"; f="<that run's evidence dir>/new-units.txt"; fx='(^|[-@:])(codex-[ab]|ext-[ab]|gen-a)([-.]|$)|ccrc-codex-usage@'
   grep -v '^gone:' "$f" | grep -cE "$fx"    # fixture-named: a leak
   grep -c '^gone:' "$f"                     # a vanished enablement link: a leak, by count
   grep -v '^gone:' "$f" | grep -vcE "$fx"   # foreign: count only
@@ -489,15 +489,15 @@ The operator rules each at plan review. B1 records each ruling with the census i
         const r = sourced('_codex_lanes() { _codex_say roster-invalid "fixture: which roster lanes are codex lanes cannot be told"; return 1; }; cmd_models refresh codex-a', [],
           { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
         expect(r.code, r.stderr).toBe(1);
-        const rows = oneObject(r)['refreshed'] as { id: string; ok: boolean; reason?: string }[];
-        expect(rows).toEqual([{ id: 'codex-a', ok: false, reason: expect.any(String) }]);
+        const rows = oneObject(r)['refreshed'] as { id: string; probe?: string; ok: boolean; reason?: string }[];
+        expect(rows).toEqual([{ id: 'codex-a', probe: 'codex', ok: false, reason: expect.any(String) }]);
         expect(rows[0]!.reason).toContain('ccrc codex: roster-invalid: fixture: which roster lanes are codex lanes cannot be told');
         expect(fs.existsSync(boxGlobal()), 'the codex row was rendered into the box-global file').toBe(false);
         for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
       });
     ```
 
-    This case is derived, not measured. If Step 2 shows the refresh refusing before any row is written, assert that envelope instead, and conform Review Focus 1's sentence to it.
+    A failed probe's row always carries `probe` (the refresh loop's failed-probe arm builds `{id, probe, ok:false, reason}`), so the case asserts `probe: 'codex'`. Measured when Task A1 ran: the row has exactly those four fields, and its reason is the lane library's forwarded line.
 
   - Re-aim the Z4 case. This is the old text, unique in the file:
 
@@ -578,8 +578,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
         1) unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
            return 0 ;;
         *) unset CCRC_CODEX_PYTHON CCRC_PROBE_LANE_KIND
-           [ "$MODELS_CODEX_UNTOLD_RC" -ne 0 ] && return "$MODELS_CODEX_UNTOLD_RC"
-           return 1 ;;
+           return "$MODELS_CODEX_UNTOLD_RC" ;;
       esac
       _codex_row "$1" || return $?
     ```
@@ -749,11 +748,11 @@ The operator rules each at plan review. B1 records each ruling with the census i
   | # | Guard | Mutation (in `ccd/ccrc`) | Goes red |
   |---|---|---|---|
   | A1-M1 | the reader never folds undecidable into "not codex" | in `_models_litellm_codex`, `ids="$(_codex_lanes)" \|\| rc=$?` → `ids="$(_codex_lanes 2>/dev/null)" \|\| return 1` | 6: both probe-seam rows, the real-library case, both dispatcher rows and the refresh case |
-  | A1-M2 | the probe seam refuses 2 | in `_models_probe_codex_env`'s `*)` arm, replace its two `return` lines with `return 0` | 4: both probe-seam rows, the real-library case (the probe runs `env`) and the refresh case (its row reads ok) |
+  | A1-M2 | the probe seam refuses 2 | in `_models_probe_codex_env`'s `*)` arm, replace `return "$MODELS_CODEX_UNTOLD_RC"` with `return 0` (the arm's one `return` line: the base-text `[ … ] && return …; return 1` pair held an unreachable `return 1`, and Task A1 dropped it) | 4: both probe-seam rows, the real-library case (the probe runs `env`) and the refresh case (its row reads ok) |
   | A1-M3 | the dispatcher refuses 2 before either arm | in `_models_litellm`, the whole `*)` arm's body → `;;` | 2: both dispatcher rows (`boxGlobal()` written, `pgrep` logged) |
   | A1-M4 | the dispatcher forwards the library's word | `[ "$MODELS_CODEX_UNTOLD" = missing-dependency ]` → `false` | 1: the dispatcher's rc 2 row (`error` reads `roster-invalid`) |
   | A1-M5 | the library's line is forwarded, never swallowed | `ids="$(_codex_lanes)" \|\| rc=$?` → `ids="$(_codex_lanes 2>/dev/null)" \|\| rc=$?` | 6: every new case's stderr or reason assertion |
-  | A1-M6 | the probe seam returns the library's rc | `[ "$MODELS_CODEX_UNTOLD_RC" -ne 0 ] && return "$MODELS_CODEX_UNTOLD_RC"` → `:` | 1: the probe-seam rc 2 row (`expected 1 to be 2`) |
+  | A1-M6 | the probe seam returns the library's rc | in the same arm, `return "$MODELS_CODEX_UNTOLD_RC"` → `return 1` | 1: the probe-seam rc 2 row (`expected 1 to be 2`) |
   | A1-M7 | Z4's own undecidable arm is still bound | Plan 3a's row 8: in `_models_litellm_stop_blocked`'s `if [ "$rc" -ne 0 ]` branch, `return 0` → `return 1` | 1: the re-aimed Z4 case |
   | A1-M8 | missing jq is its own word, never `roster-invalid` | in `_models_litellm_codex`, `[ "$rc" -eq 2 ] && MODELS_CODEX_UNTOLD=missing-dependency` → `:` | 1: the dispatcher's rc 2 row |
 
@@ -841,9 +840,9 @@ The operator rules each at plan review. B1 records each ruling with the census i
   - `_inst_codex_usage`: a withdrawal is named only when the link is measurably gone. A disable answered 0 with the link still there lands in `stuck`: the same stderr could-not-disable line, the same `NOT CONVERGED — ccrc's own usage timer is still enabled for <ids>, …` line, and the same single `codex-usage` degraded step. On the foreign arm, the lane's `NOT ENABLED` line says `… is enabled too, and this run could not disable it, so both publishers are armed.`
   - `_dr_codex_usage_surplus <codex lane id>…` sets `DR_CODEX_USAGE_SURPLUS` (an array, glob order). It returns 0 when measured, 1 when the enabled set cannot be listed, and 3 on macOS (not applicable).
   - `_dr_codex_usage_surplus_rows <that rc>` records one WARN per surplus id, or one unmeasured WARN on rc 1.
-  - **The surplus WARN, verbatim** (Part B's soak gate reads doctor clean by its absence): `WARN codex: ccrc-codex-usage@<id>.timer is still enabled, and '<id>' is not a Codex lane in $HOME/.ccrc/accounts.json, so ccrc's usage publisher still runs for '<id>' every cycle: the writer of $HOME/.cc-limits/<id>.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs`. Its remedy line: `  remedy: systemctl --user disable --now ccrc-codex-usage@<id>.timer (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws a ccrc usage timer whose id is no longer a Codex lane and re-measures the link`.
+  - **The surplus WARN, verbatim** (Part B's soak gate reads doctor clean by its absence): `WARN codex: ccrc-codex-usage@<id>.timer is still enabled, and '<id>' is not a Codex lane in $HOME/.ccrc/accounts.json, so ccrc's usage publisher for '<id>' runs whenever the manager starts that timer: the writer of $HOME/.cc-limits/<id>.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs`. Its remedy line: `  remedy: systemctl --user disable --now ccrc-codex-usage@<id>.timer (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws a ccrc usage timer whose id is no longer a Codex lane and re-measures the link`.
   - `_uninst_codex_usage`: a timer is counted in `<n> codex usage timer(s) stopped and disabled` only when its link is measurably gone. A disable answered 0 with the link still there prints that function's existing `uninstall: units: disable --now <unit> failed (continuing …)` line.
-  - `_check_codex` no longer SKIPs while `DR_CODEX_USAGE_SURPLUS` is non-empty or the set is unlistable. The left-lane-state WARN's last clause reads `ccrc's own ccrc-codex-usage@<id>.timer still reads it (the WARN naming that timer says how to withdraw it)` for a surplus id, and is byte for byte today's for every other id.
+  - `_check_codex` no longer SKIPs while `DR_CODEX_USAGE_SURPLUS` is non-empty or the set is unlistable. The left-lane-state WARN's last clause reads `ccrc's own ccrc-codex-usage@<id>.timer still reads it (the WARN naming that timer says how to withdraw it)` for a surplus id; reads `whether ccrc's own usage timer still reads it is unmeasured (the WARN on ccrc's enabled usage timers says why)` when the enabled set cannot be listed (fix round 1: the empty array an unlistable set leaves is not the empty set); and is byte for byte today's for every other id.
   - `_dr_codex_usage`, when both `ccgpt-usage@<id>.timer` and `ccrc-codex-usage@<id>.timer` are enabled, WARNs `<id>: another repository's <f> is enabled, and ccrc's own <t> is enabled too, so two publishers race this lane's ~/.cc-limits row and two token refreshes its OAuth directory`. Its remedy names ccrc's withdrawal first. The withheld-only case keeps today's sentence.
   - **Handed to Task A7** (A7 applies it, and its `## 21` assigns `<m>`):
     - **The pointer.** On spec `:1039` (`grep -n "A withdrawal systemd refuses leaves" docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`), `naming every lane whose timer is still enabled.` becomes `naming every lane whose timer is still enabled. (amended: §21.2, D-4047, D-4048)`, as Task A7's table writes it. It is a same-line edit, and no line moves.
@@ -852,7 +851,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
       - A withdrawal counts only when a re-read of `timers.target.wants/` finds the link gone, at both of `_inst_codex_usage`'s disables, and at `_uninst_codex_usage`'s. A disable the manager answers 0 while the link stays gets the refused withdrawal's own stderr line and `NOT CONVERGED` step: it is the same fact, ccrc's timer still enabled, and the same remedy. This is the reading account removal already has (§20.4's last bullet).
       - `_check_codex` WARNs, one line per id, on every enabled `ccrc-codex-usage@<id>.timer` whose id is not a codex lane now. The set is read by `_codex_usage_enabled_ids` (no roster) minus the codex lanes. The remedy is `systemctl --user disable --now ccrc-codex-usage@<id>.timer`, ccrc's own unit, with the next update's converge as the automatic cure.
       - Such an id is a subject on its own, so the empty-population SKIP never stands over it, and a set that cannot be listed is its own WARN, unmeasured. The row is not applicable on macOS.
-      - The left-lane-state WARN says "nothing of ccrc's reads it" only when no such timer is enabled for that id, because the publisher reads the `lane.json` a flip back keeps.
+      - The left-lane-state WARN says "nothing of ccrc's reads it" only when the enabled set was listed and no such timer is enabled for that id, because the publisher reads the `lane.json` a flip back keeps. It names ccrc's own timer when one is enabled, and says whether ccrc's timer still reads the state is unmeasured when the set cannot be listed.
       - The second-writer WARN says ccrc withholds its own timer only when that timer is not enabled. When both are, it says both publishers are armed, and names ccrc's withdrawal first.
 
 **Why:**
@@ -862,6 +861,13 @@ The operator rules each at plan review. B1 records each ruling with the census i
 - **Measured before the SKIP.** The surplus is measured BEFORE the empty-population SKIP. A box whose last codex lane flipped back, and whose lane state was removed by hand, has nothing else for this check to see. A SKIP there would say no ccrc lane runs over a timer that does. A set `_codex_usage_enabled_ids` cannot list is unmeasured, never empty (this codebase's overloaded-null rule), so it is its own WARN and blocks the SKIP too. `_check_wrappers` already FAILs the missing shape contract that causes it.
 - **macOS.** ccrc places no launchd job (decision 17), so the row answers not-applicable (rc 3) and records nothing. That is `_dr_codex_usage_box`'s doctrine, and it is pinned by a forced-Darwin case.
 - **One line shape.** The could-not-disable and `NOT CONVERGED` lines keep their bytes (ruling A-2: "the existing NOT CONVERGED line shape"). A refusal and an accepted-but-untaken disable are the same fact and the same operator remedy, as account removal already treats them.
+
+**As built (A7 reconciliation, after Task A2's review).** The tree differs from the drafted text below in these ways, and the tree wins:
+- **Fix round 1 (Important): an unlistable usage-timer set is unmeasured in the left-lane-state WARN too.** When `_dr_codex_usage_surplus` cannot list (rc 1), that WARN's last clause reads `whether ccrc's own usage timer still reads it is unmeasured (the WARN on ccrc's enabled usage timers says why)`, never "nothing of ccrc's reads it" (the empty array an unlistable set leaves is not the empty set). One more part-1 case pins it, `lane state left behind while the usage-timer set cannot be listed: the left-state WARN says whether ccrc's timer reads it is unmeasured — never "nothing of ccrc's reads it" (Plan 3b Task A2, fix round 1)`, so part 1 holds four new cases, not three (206 passed under the `[a-c]` filter, not 205), with mutation row A2-M16. The Step 4 loop below is the as-built `if/elif/fi`.
+- **The surplus WARN says only what the link measures** ("runs whenever the manager starts that timer", not "still runs ... every cycle"), at all three places this plan quotes it.
+- `_uninst_codex_usage`'s re-read carries a one-line `D-4047` comment, worded to avoid the phrase `disable --now`, which `install-census.test.ts` scans for in `_uninst_units`.
+- The surplus-named case's title is written `next update\'s converge`: the drafted title had an unescaped apostrophe inside a single-quoted string.
+- Mutation rows A2-M10 and Plan 3a's M14 are re-aimed at the loop's final shape (the measured `3aM14b` reds 3), and A2-M6 measured 4 reds (the drafted "2 or more").
 
 - [ ] **Step 0: record the base, check the census, re-run the locators (read-only).**
 
@@ -972,7 +978,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
       '_dr_codex_usage_surplus_rows "$s"',
       '_dr_cx_report "surplus measured"; :',
     ].join('\n');
-    const SURPLUS_WARN = (id: string): string => `WARN codex: ccrc-codex-usage@${id}.timer is still enabled, and '${id}' is not a Codex lane in $HOME/.ccrc/accounts.json, so ccrc's usage publisher still runs for '${id}' every cycle: the writer of $HOME/.cc-limits/${id}.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs`;
+    const SURPLUS_WARN = (id: string): string => `WARN codex: ccrc-codex-usage@${id}.timer is still enabled, and '${id}' is not a Codex lane in $HOME/.ccrc/accounts.json, so ccrc's usage publisher for '${id}' runs whenever the manager starts that timer: the writer of $HOME/.cc-limits/${id}.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs`;
     const SURPLUS_FIX = (id: string): string => `  remedy: systemctl --user disable --now ccrc-codex-usage@${id}.timer (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws a ccrc usage timer whose id is no longer a Codex lane and re-measures the link`;
     const UNLISTABLE_WARN = "WARN codex: ccrc's own enabled usage timers could not be listed (the wrapper shape contract could not be read), so a ccrc-codex-usage@<id>.timer left enabled for an id that is no longer a Codex lane cannot be seen — unmeasured, never none";
     const UNLISTABLE_FIX = '  remedy: ccrc install — the wrapper shape contract ships with ccrc, and the install places it again';
@@ -1021,7 +1027,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
           expect(r.asked).toEqual([]);
         });
 
-        it('a ccrc usage timer enabled for an id that is no longer a Codex lane WARNs by name — read off the manager\'s links, never the roster — remedy the exact disable, with the next update's converge as its automatic cure (Plan 3b Task A2)', () => {
+        it('a ccrc usage timer enabled for an id that is no longer a Codex lane WARNs by name — read off the manager\'s links, never the roster — remedy the exact disable, with the next update\'s converge as its automatic cure (Plan 3b Task A2)', () => {
           const home = usageBox('ccrc-doctor-usage-surplus-');
           plantCodexUsage(home, 'ext-a', { row: false });
           const r = usageRows(home, false, SURPLUS_ROWS);
@@ -1284,7 +1290,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
       fi
       for id in ${DR_CODEX_USAGE_SURPLUS[@]+"${DR_CODEX_USAGE_SURPLUS[@]}"}; do
         t="$(_codex_usage_timer "$id")"
-        _dr_cx_warn "$t is still enabled, and '$id' is not a Codex lane in \$HOME/.ccrc/accounts.json, so ccrc's usage publisher still runs for '$id' every cycle: the writer of \$HOME/.cc-limits/$id.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs" \
+        _dr_cx_warn "$t is still enabled, and '$id' is not a Codex lane in \$HOME/.ccrc/accounts.json, so ccrc's usage publisher for '$id' runs whenever the manager starts that timer: the writer of \$HOME/.cc-limits/$id.json, and of a token refresh in the authDir its lane.json names, for a lane ccrc no longer runs" \
           "systemctl --user disable --now $t (ccrc's own unit; no ccrc fixer withdraws it), or leave it to the next update, whose converge withdraws a ccrc usage timer whose id is no longer a Codex lane and re-measures the link"
       done
       return 0
@@ -1341,10 +1347,16 @@ The operator rules each at plan review. B1 records each ruling with the census i
       local left_reads
       for n in ${left[@]+"${left[@]}"}; do
         # Plan 3b Task A2: the publisher reads this lane.json, so "nothing of ccrc's
-        # reads it" is said only when no ccrc usage timer is enabled for '$n'.
+        # reads it" is said only when the enabled set WAS listed and no ccrc usage
+        # timer is enabled for '$n'. A set that could not be listed (`surplus_rc` 1)
+        # is unmeasured, never none (fix round 1): the empty array it leaves is not
+        # the empty set, and the WARN on that set says why.
         left_reads="nothing of ccrc's reads it while '$n' is not a Codex lane"
-        _dr_cx_member "$n" ${DR_CODEX_USAGE_SURPLUS[@]+"${DR_CODEX_USAGE_SURPLUS[@]}"} \
-          && left_reads="ccrc's own $(_codex_usage_timer "$n") still reads it (the WARN naming that timer says how to withdraw it)"
+        if [ "$surplus_rc" -eq 1 ]; then
+          left_reads="whether ccrc's own usage timer still reads it is unmeasured (the WARN on ccrc's enabled usage timers says why)"
+        elif _dr_cx_member "$n" ${DR_CODEX_USAGE_SURPLUS[@]+"${DR_CODEX_USAGE_SURPLUS[@]}"}; then
+          left_reads="ccrc's own $(_codex_usage_timer "$n") still reads it (the WARN naming that timer says how to withdraw it)"
+        fi
         _dr_cx_warn "lane state is left under $root/$n, and '$n' is not a Codex lane in \$HOME/.ccrc/accounts.json — a flip back to another launcher keeps it on purpose, and $left_reads" \
     ```
 
@@ -1459,12 +1471,13 @@ The operator rules each at plan review. B1 records each ruling with the census i
   | A2-M7 | unlistable is never empty | `\|\| return 1` → `\|\| return 0` | 2: the unlistable rows case and the unlistable end-to-end case |
   | A2-M8 | not applicable on macOS | delete `[ "${CCD_OS:-linux}" = darwin ] && return 3` | 1: `forced Darwin: the surplus row is not applicable…` |
   | A2-M9 | the surplus is recorded | in `_check_codex`, delete `_dr_codex_usage_surplus_rows "$surplus_rc"` | 3: the flip-back-with-timer, surplus-only and unlistable end-to-end cases (each finds a PASS) |
-  | A2-M10 | the left-state WARN states what the links say | delete the `&& left_reads=…` continuation line (and the trailing ` \` above it) | 1: the flip-back-with-timer case |
+  | A2-M10 | the left-state WARN states what the links say | in the left-state loop, `elif _dr_cx_member "$n" … ; then` → `elif false; then` (the ccrc-timer arm; as built, the loop is an `if/elif/fi`, so the `&& left_reads=…` continuation of the first draft is gone) | 1: the flip-back-with-timer case |
   | A2-M11 | both armed is said as both armed | `if _codex_usage_enabled "$f" && _codex_usage_enabled "$t"; then` → `if false; then` | 1: the re-aimed second-writer case (R6) |
   | A2-M12 | … and only when ccrc's own is enabled | the same condition → `if _codex_usage_enabled "$f"; then` | 1: the withheld-only second-writer case |
   | A2-M13 | the reader is in the loaded guard | drop `_codex_usage_enabled_ids ` from the guard's list | 1: the `it.each` row `_codex_usage_enabled_ids not loaded: …` |
   | A2-M14 | the unlistable WARN is recorded, never skipped | in `_dr_codex_usage_surplus_rows`, `if [ "$1" -eq 1 ]; then` → `if false; then` | 2: the unlistable rows case and the unlistable end-to-end case (a PASS with nothing recorded) |
 | A2-M15 | uninstall counts a stop only when re-measured | `ccd/ccrc`, in `_uninst_codex_usage`, drop ` && ! _codex_usage_enabled "$u"` | 1: the Plan 3b uninstall keep-link case |
+| A2-M16 | an unlistable set is never read as none in the left-state WARN (fix round 1) | in the left-state loop, `if [ "$surplus_rc" -eq 1 ]; then` → `if false; then` | 1: the unlistable left-state case |
 
   Plan 3a's doctor row M14 (`_dr_cx_member "$n" … || left+=("$n")` → `:`) must still red the re-aimed flip-back case. Record it as `a2-mut-3aM14`.
 
@@ -1532,7 +1545,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
 - Test: `server/test/ccrc-account.test.ts`:
   - `buildEnv`'s deleted-knob list gains `'CCRC_ACCT_USAGE_WAIT_S'`;
   - `plantUsageCtl` gains an `svc` option and a branch that answers every argv naming `ccrc-codex-usage@<id>.service`, with its docstring; a new `usageSvcCalls` beside `usageCtlCalls`; a file-level `USAGE_EXT_A` row;
-  - in `describe('ccrc account remove')`, after C15: two helpers (`seedUsageWait`, `runWith`) and six new cases.
+  - in `describe('ccrc account remove')`, after C15: two helpers (`seedUsageWait`, `runWith`) and six new cases (eleven as built, see "As built" before Step 0).
 - **Unchanged, measured:** the platform layer (`_svc_is_active` is composed as it stands, so `ccd/ccd` and `macos-platform.test.ts`'s region are untouched); `_codex_usage_timer`, `_codex_usage_enabled`, `_codex_usage_wants`, `_codex_bus_defaults`; the limits-row loop; `_uninst_codex_usage`; `server/test/codexLaneFixture.ts` (`plantCodexUsage`'s `pair`/`enabled`/`row` options suffice). C4 and C12–C15 keep their titles and assertions.
 
 **Interfaces:**
@@ -1547,16 +1560,17 @@ The operator rules each at plan review. B1 records each ruling with the census i
 
     It never asks for a stop. macOS and a box without the template ask the manager nothing.
   - **The waiting line, verbatim** (stderr): `ccrc account remove: ccrc's usage poll ccrc-codex-usage@<id>.service is running (<state>); waiting up to <n>s for it to finish before $HOME/.cc-limits/<id>.json is removed. ccrc never stops it: it may be writing the lane's OAuth token file.`
-  - **The refusal, verbatim** (the envelope's `detail`): `ccrc's usage poll ccrc-codex-usage@<id>.service for <id> still reads <state> after <n>s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before $HOME/.cc-limits/<id>.json: ccrc never stops a poll, because it may be writing the lane's OAuth token file, and a row removed under a running poll is written again. <timer sentence> <what-still-stands> Retry 'ccrc account remove --id <id>' once 'systemctl --user is-active ccrc-codex-usage@<id>.service' reads inactive: every step this run took is safe to repeat.` The timer sentence is measured at the bound. It is `ccrc's usage timer ccrc-codex-usage@<id>.timer is not enabled, so no new poll starts.` or `… is still enabled, so new polls go on starting: run systemctl --user disable --now ccrc-codex-usage@<id>.timer first.`
+  - **The refusal, verbatim** (the envelope's `detail`; the form after review): `ccrc's usage poll ccrc-codex-usage@<id>.service for <id> still reads <state> after <n>s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before $HOME/.cc-limits/<id>.json: ccrc never stops a poll, because it may be writing the lane's OAuth token file, and a row removed under a running poll is written again. <timer sentence> <what-still-stands> [<Except sentence>] Retry 'ccrc account remove --id <id>' once 'systemctl --user is-active ccrc-codex-usage@<id>.service' reads inactive: every step this run took is safe to repeat.` The timer sentence is measured at the bound. It is `ccrc's usage timer ccrc-codex-usage@<id>.timer is not enabled, so no new poll starts.` or `… is still enabled, so new polls go on starting: run systemctl --user disable --now ccrc-codex-usage@<id>.timer first.` The Except sentence (controller ruling P9: the clause "all account artifacts still stand" is false of a timer link that is gone) is added only when the timer is not enabled at the bound. It reads `Except ccrc's usage timer ccrc-codex-usage@<id>.timer: this run disabled it, so it does not stand; 'ccrc install' enables it again for a lane that is still codex.` when this run took the link, and `Except ccrc's usage timer ccrc-codex-usage@<id>.timer: it is not enabled, and this run did not disable it, so it does not stand; 'ccrc install' enables it again for a lane that is still codex.` when it did not (a retry finds the link its first run took).
   - **The unmeasured operator step, verbatim:** `ccrc's usage poll ccrc-codex-usage@<id>.service may still be running for the removed account <id>: the user manager did not say (systemctl --user is-active answered "<state>"), so this removal did not wait for it, and a poll that was running may write $HOME/.cc-limits/<id>.json again after this removal. Run: systemctl --user is-active ccrc-codex-usage@<id>.service — once it reads inactive, remove $HOME/.cc-limits/<id>.json by hand if it is there.`
-  - `cmd_account remove` runs `_acct_remove_usage` after the home sweep and before the roster drop, and passes it the drop's own what-still-stands clause. When the timer link was removed, that clause gains `ccrc's usage timer for <id> was disabled; 'ccrc install' enables it again for a lane that is still codex.`
+  - `cmd_account remove` runs `_acct_remove_usage` after the home sweep and before the roster drop, and passes it the drop's own what-still-stands clause. When the timer link was removed, that clause gains `ccrc's usage timer for <id> was disabled; 'ccrc install' enables it again for a lane that is still codex.`, and the clause the projection step takes after the drop carries the same sentence (the caller builds it once, as `usage_note`)
   - **Handed to Task A7:**
     - **The pointer** on spec `:1042` (`grep -n 'and the removal still completes' docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`) is the one A7's table already lists, with this task's second slug added: ` (amended: §21.3, D-4049, D-4050)`, directly after `and the removal still completes`, before its full stop. It is a same-line edit.
-    - **§21.3, as it should read at the tip.** Keep A7's first three bullets, and add `D-4050` to the third. Replace its last bullet, "A removal with no running refresh is unchanged", with these three:
+    - **§21.3, as it should read at the tip.** Keep A7's first three bullets, and add `D-4050` to the third. Replace its last bullet, "A removal with no running refresh is unchanged", with these four (the fourth is the review's wording, in its final form):
       - `ccrc account remove` runs this half after the home sweep and before the roster drop, where Plan 3a ran it after the drop. A refusal after the drop could not be retried, because a second run refuses `unknown-id` for an id the roster no longer names (D-4050). The wait therefore holds the placement lock the removal already holds, for at most the bound.
       - It asks the manager only on Linux, with ccrc's template `ccrc-codex-usage@.service` placed, whether or not the timer is still enabled. A retry finds the timer already disabled. A box without the template, and macOS, ask nothing.
       - A manager that does not say whether the poll runs is unmeasured, never done. The removal completes, with an operator step naming the row to remove by hand once the poll reads inactive. A removal that finds no poll running completes as before.
-    - **§21.12's `‹A3›` cell** is this task's six `it(` titles, in `ccrc-account.test.ts`.
+      - At the bound the removal refuses `usage-refresh-in-flight`, after ccrc's timer for the lane has been disabled and before the roster drop and before the limits row. When the link measures not enabled at the bound, the refusal corrects its own "all account artifacts still stand" clause with one sentence saying whether this run disabled the timer or did not (a retry finds the timer its first run took). When this run took the link, the drop and projection refusals carry the same correction. A retry re-runs every earlier step as a no-op.
+    - **§21.12's `‹A3›` cell** is this task's eleven `it(` titles as built (the six drafted, the refusal case split in three, and four added at review: see "As built" before Step 0), in `ccrc-account.test.ts`.
 
 **Why:**
 - **The race.** `_acct_remove_usage` names only the timer. `systemctl --user disable --now ccrc-codex-usage@<id>.timer` stops the timer, not the `ccrc-codex-usage@<id>.service` it already fired. That unit is `Type=oneshot` with `TimeoutStartSec=300` (`deploy/systemd/ccrc-codex-usage@.service`), so a fired poll runs to its end whatever the timer does. `cmd_account remove` then `rm -f`s `~/.cc-limits/<id>.json` in the same function, with nothing in between asking about the service. A poll still running rewrites the row the removal just deleted. The server tolerates that ghost row (`server/src/limits.ts`' `inRoster`), but the removal's own report is false. On a codex lane the poll also reads the lane's `lane.json`, which the file reap after the drop deletes.
@@ -1572,6 +1586,13 @@ The operator rules each at plan review. B1 records each ruling with the census i
 - **The lock.** By the drop the removal holds the placement lock (`_acct_marker_lock`, held to exit), so ccd placements wait while the poll is waited for. That wait is bounded by `CCRC_ACCT_USAGE_WAIT_S`, and in practice it is one poll: a token refresh plus one request the publisher bounds at 30 s (the unit's own comment). Releasing the lock early would reopen the census race the lock exists for.
 - **Only where a poll can run.** The manager is asked only on Linux, with ccrc's template placed, never on the timer's link alone, because a retry finds the link already gone. No template means no instance can run, so C4's external removal still asks no manager. macOS places no usage unit (decision 17), the same reason `_dr_codex_usage_box` gives for its early return.
 - **One line moved, not grown.** The caller stays a single line, as Plan 3a's was, so `_acct_remove` keeps its length. The argument lives in `_acct_remove_usage`'s header, below every cited line.
+
+**As built (A7 reconciliation, after Task A3's review).** `ccrc-account.test.ts` holds eleven A3 cases (342 passed in the whole file, 331 + 11), not the six drafted below. The Step 1 test code below is the first-round shape; the tree's test file is authoritative, and the tree wins where they differ:
+- The drafted refusal-and-retry case is three cases: a poll still running at the bound REFUSES `usage-refresh-in-flight`; a retry into the same still-running poll finds the timer already disabled; and a disable the manager answers 0 while the link stays leaves the timer enabled at the bound. Each is ONE removal, so `seedUsageWait` takes an optional `{ enabled, keepLink }`. The "refusal is retryable" case is unchanged.
+- Three cases are new: a poll whose last run ended `failed` is DONE (the removal completes at once, with no waiting line); a roster drop that cannot write, after this run disabled the usage timer, says so; and a projection that cannot be regenerated, after this run disabled the usage timer, says so. The drop case pins the timer sentence the caller adds to the drop's what-still-stands clause (the Interfaces' last bullet), and the projection case pins the same sentence in the projection's clause.
+- **Controller ruling P9, and the review's correction.** The drafted refusal ends `<timer sentence> <what-still-stands> Retry ...`, and "all account artifacts still stand" is false once the timer link is gone. The tree measures the link at the bound and, when it is not enabled, adds one `Except ccrc's usage timer ...` sentence before the retry (see the Interfaces). The caller builds `usage_note` once and appends it to the drop's and the projection's `stands`.
+- Controller ruling P2: Step 6's D-reference check is a set check, never a count. Controller ruling R-C11: the bound's default stays 300.
+- The in-flight state list is spelled `active|activating|deactivating|reloading|refreshing`, as `ccd/ccrc` spells it at three other places. Mutation rows M1-M11 are re-measured and M12-M17 added (the table below).
 
 - [ ] **Step 0: record the base, run the base suite, and re-run the locators (read-only).**
 
@@ -1602,7 +1623,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
   r11 a3-base-account ./node_modules/.bin/vitest run test/ccrc-account.test.ts
   ```
 
-  Expected: green, `census: clean … command exit 0`. Record its `Tests <P> passed | <K> skipped (<T>)` line (331 tests at `be93d159` on Linux; A1 and A2 add none to this file). Step 3 expects `<P + 6>` passed and the same `<K>` skipped.
+  Expected: green, `census: clean … command exit 0`. Record its `Tests <P> passed | <K> skipped (<T>)` line (331 tests at `be93d159` on Linux; A1 and A2 add none to this file). Step 3 expects `<P + 11>` passed and the same `<K>` skipped.
 
 - [ ] **Step 1: write the failing tests** in `server/test/ccrc-account.test.ts`.
   - `buildEnv`. Old (unique):
@@ -1863,7 +1884,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
     New:
 
     ```bash
-      _acct_remove_usage "$id" "$stands"; [ -z "$ACCT_USAGE_REMOVED" ] || { removed+=("$ACCT_USAGE_REMOVED"); stands="$stands ccrc's usage timer for $id was disabled; 'ccrc install' enables it again for a lane that is still codex."; }; [ -z "$ACCT_USAGE_STEP" ] || operator_steps+=("$ACCT_USAGE_STEP"); [ -z "$ACCT_USAGE_WAIT_STEP" ] || operator_steps+=("$ACCT_USAGE_WAIT_STEP")
+      _acct_remove_usage "$id" "$stands"; [ -z "$ACCT_USAGE_REMOVED" ] || { removed+=("$ACCT_USAGE_REMOVED"); usage_note=" ccrc's usage timer for $id was disabled; 'ccrc install' enables it again for a lane that is still codex."; }; stands="$stands$usage_note"; [ -z "$ACCT_USAGE_STEP" ] || operator_steps+=("$ACCT_USAGE_STEP"); [ -z "$ACCT_USAGE_WAIT_STEP" ] || operator_steps+=("$ACCT_USAGE_WAIT_STEP")
       _acct_write_op "$stands" drop --file "$(_acct_roster_path)" --id "$id" --stands "$stands"
     ```
 
@@ -1891,8 +1912,8 @@ The operator rules each at plan review. B1 records each ruling with the census i
     # written again by it. So the service is read through `_svc_is_active` once a
     # second, for at most `_acct_usage_wait_secs`, with one waiting line on stderr:
     #   * `inactive`, `failed`: done;
-    #   * `activating` (a oneshot reads it for its WHOLE run — never `active`),
-    #     `active`, `deactivating`, `reloading`, `refreshing`: in flight;
+    #   * `active`, `activating` (a oneshot reads it for its WHOLE run — never
+    #     `active`), `deactivating`, `reloading`, `refreshing`: in flight;
     #   * anything else, the EMPTY answer of a manager that did not reply included:
     #     UNMEASURED, never done. The removal goes on, and ACCT_USAGE_WAIT_STEP says
     #     so. Refusing would make every removal impossible on a box whose user bus
@@ -1900,7 +1921,12 @@ The operator rules each at plan review. B1 records each ruling with the census i
     # At the bound it REFUSES `usage-refresh-in-flight`, ending its sentence with the
     # caller's what-still-stands clause ($2) and the retry. The timer is disabled
     # FIRST because a timer still enabled could fire a new poll between an
-    # `inactive` read and the row's `rm`.
+    # `inactive` read and the row's `rm`. That clause says "all account artifacts
+    # still stand", which is false of a timer link that is gone, so whenever the link
+    # measures not enabled at the bound the refusal adds ONE sentence, "Except ccrc's
+    # usage timer ...", that says whose doing it is: this run's disable, or not this
+    # run's (a retry finds the link its first run took). The caller's drop and
+    # projection clauses get the same correction for a link this run took.
     #
     # THE CALLER RUNS IT BEFORE THE ROSTER DROP (D-4050).
     # Plan 3a ran it after the drop, where it could not refuse. A refusal there could
@@ -1932,7 +1958,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
     }
     _acct_remove_usage() {   # <id> <what-still-stands>
       ACCT_USAGE_REMOVED=''; ACCT_USAGE_STEP=''; ACCT_USAGE_WAIT_STEP=''
-      local u s tpl state limit t0 said=0 timer
+      local u s tpl state limit t0 said=0 timer still="${2:-}"
       u="$(_codex_usage_timer "$1")"; s="${u%.timer}.service"; tpl="$BOX_UNIT_DIR/${s%%@*}@.service"
       if _codex_usage_enabled "$u"; then
         _codex_bus_defaults
@@ -1950,7 +1976,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
         state="$(_svc_is_active "$s")"
         case "$state" in
           inactive|failed) return 0 ;;
-          activating|active|deactivating|reloading|refreshing) : ;;
+          active|activating|deactivating|reloading|refreshing) : ;;
           *)
             ACCT_USAGE_WAIT_STEP="ccrc's usage poll $s may still be running for the removed account $1: the user manager did not say (systemctl --user is-active answered \"$state\"), so this removal did not wait for it, and a poll that was running may write \$HOME/.cc-limits/$1.json again after this removal. Run: systemctl --user is-active $s — once it reads inactive, remove \$HOME/.cc-limits/$1.json by hand if it is there."
             return 0 ;;
@@ -1960,9 +1986,17 @@ The operator rules each at plan review. B1 records each ruling with the census i
           said=1
         fi
         if [ $(( SECONDS - t0 )) -ge "$limit" ]; then
-          timer="ccrc's usage timer $u is not enabled, so no new poll starts."
-          _codex_usage_enabled "$u" && timer="ccrc's usage timer $u is still enabled, so new polls go on starting: run systemctl --user disable --now $u first."
-          _acct_refuse 1 usage-refresh-in-flight "ccrc's usage poll $s for $1 still reads $state after ${limit}s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before \$HOME/.cc-limits/$1.json: ccrc never stops a poll, because it may be writing the lane's OAuth token file, and a row removed under a running poll is written again. $timer $2 Retry 'ccrc account remove --id $1' once 'systemctl --user is-active $s' reads inactive: every step this run took is safe to repeat."
+          if _codex_usage_enabled "$u"; then
+            timer="ccrc's usage timer $u is still enabled, so new polls go on starting: run systemctl --user disable --now $u first."
+          else
+            timer="ccrc's usage timer $u is not enabled, so no new poll starts."
+            if [ -n "$ACCT_USAGE_REMOVED" ]; then
+              still="$still Except ccrc's usage timer $u: this run disabled it, so it does not stand; 'ccrc install' enables it again for a lane that is still codex."
+            else
+              still="$still Except ccrc's usage timer $u: it is not enabled, and this run did not disable it, so it does not stand; 'ccrc install' enables it again for a lane that is still codex."
+            fi
+          fi
+          _acct_refuse 1 usage-refresh-in-flight "ccrc's usage poll $s for $1 still reads $state after ${limit}s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before \$HOME/.cc-limits/$1.json: ccrc never stops a poll, because it may be writing the lane's OAuth token file, and a row removed under a running poll is written again. $timer $still Retry 'ccrc account remove --id $1' once 'systemctl --user is-active $s' reads inactive: every step this run took is safe to repeat."
         fi
         sleep 1
       done
@@ -1970,6 +2004,8 @@ The operator rules each at plan review. B1 records each ruling with the census i
     ```
 
     The disable's two lines (`if systemctl --user disable --now "$u" >&2 && ! _codex_usage_enabled "$u"; then` and the `ACCT_USAGE_STEP=` sentence) keep their bytes. Only their indent moves, so Plan 3a's re-measure row (its A4g, bound by C15) still applies.
+
+    As built (fix round 1), the caller also appends `$usage_note` to the `stands` it hands `_acct_projection` (`usage_note` is declared on `_acct_remove`'s existing `local` line, so no line moves), and the refusal measures the timer link at the bound: see the Interfaces and "As built" above Step 0.
 
 - [ ] **Step 4: run green, and prove nothing cited moved.**
 
@@ -1988,7 +2024,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
   r11 a3-green ./node_modules/.bin/vitest run test/ccrc-account.test.ts
   ```
 
-  Expected: `anchor unmoved`, `the usage half runs directly before the drop`, `0`, `0`, then `Tests <P + 6> passed | <K> skipped` against Step 0's record, under `census: clean … command exit 0`. The new waits make the file about 6 s slower.
+  Expected: `anchor unmoved`, `the usage half runs directly before the drop`, `0`, `0`, then `Tests <P + 11> passed | <K> skipped` against Step 0's record (the drafted six plus the as-built five), under `census: clean … command exit 0`. The new waits make the file about 6 s slower.
 
   Then the neighbours, each its own foreground call:
 
@@ -2025,28 +2061,34 @@ The operator rules each at plan review. B1 records each ruling with the census i
     r11 a3-mut-<row> timeout 300 ./node_modules/.bin/vitest run test/ccrc-account.test.ts -t 'Plan 3b Task A3|C1[2-5]:|C4: never reaps'
     ```
 
-  - Then restore and prove the restore, and re-run the row's command labelled `a3-mut-<row>-green` (expected: 11 passed):
+  - Then restore and prove the restore, and re-run the row's command labelled `a3-mut-<row>-green` (expected: 16 passed, the five neighbours and the eleven A3 cases):
 
     ```bash
     . "<abs scratch>/plan3b-exec/plan3b-env.sh"
     cp "$SCRATCH/a3-mut/ccrc" ccd/ccrc && git diff --quiet -- ccd/ccrc && echo restored
     ```
 
-  - The red counts below are derived from the cases, not yet measured. Record the measured ones. If a row does not red, report that, and never add code to force a bind.
+  - The red counts below are the ones measured when Task A3 ran (after its review fixes). If a row does not red, report that, and never add code to force a bind.
 
   | # | Guard | Mutation (in `ccd/ccrc`) | Goes red |
   |---|---|---|---|
-  | A3-M1 | the service is read at all | in `_acct_remove_usage`, `state="$(_svc_is_active "$s")"` → `state=inactive` | 4: waited for, refuses at the bound, retryable, unmeasured |
-  | A3-M2 | `activating` is in flight (a running oneshot's only word) | the in-flight arm `activating\|active\|deactivating\|reloading\|refreshing)` → `active\|deactivating\|reloading\|refreshing)` | 3: waited for (two reads, not three, and an operator step), refuses at the bound, retryable |
+  | A3-M1 | the service is read at all | in `_acct_remove_usage`, `state="$(_svc_is_active "$s")"` → `state=inactive` | 8 (measured): waited for, refuses at the bound, retry into the same poll, the kept link, retryable, unmeasured, `failed` is done, the drop clause |
+  | A3-M2 | `activating` is in flight (a running oneshot's only word) | the in-flight arm `active\|activating\|deactivating\|reloading\|refreshing)` → `active\|deactivating\|reloading\|refreshing)` | 5 (measured): waited for, refuses at the bound, retry into the same poll, the kept link, retryable |
   | A3-M3 | `active` is in flight | the same arm without `active` | 1: waited for (its first read is `active`) |
-  | A3-M4 | the bound refuses | the `_acct_refuse 1 usage-refresh-in-flight …` line → `return 0` | 2: refuses at the bound, retryable (its first run exits 0) |
+  | A3-M4 | the bound refuses | the `_acct_refuse 1 usage-refresh-in-flight …` line → `return 0` | 4 (measured): refuses at the bound, retry into the same poll, the kept link, retryable |
   | A3-M5 | never a stop | insert `_svc_stop "$s"` on its own line directly above `sleep 1` | 3: waited for, refuses at the bound, retryable (each records a `--user stop …` line) |
-  | A3-M6 | before the drop | delete the new caller line, and re-insert Plan 3a's caller line (Step 3's deleted line, with `"$stands"` added after `"$id"`) directly above `for f in "$CCRC_LIMITS_DIR/$id.json"` | 4: waited for and unmeasured (`roster=dropped`), refuses at the bound (the roster was dropped), retryable (its second run refuses `unknown-id`) |
+  | A3-M6 | before the drop | delete the new caller line, and re-insert Plan 3a's caller line (Step 3's deleted line, with `"$stands"` added after `"$id"`) directly above `for f in "$CCRC_LIMITS_DIR/$id.json"` | 9 (measured): every case that reads the roster state or a clause: waited for, refuses at the bound, retry into the same poll, the kept link, retryable, unmeasured, `failed` is done, the drop clause, the projection clause |
   | A3-M7 | unmeasured is never done | the `*)` arm's `ACCT_USAGE_WAIT_STEP="…"` line → `:` | 1: unmeasured |
   | A3-M8 | only where a poll can run | delete the line `{ [ -e "$tpl" ] \|\| [ -L "$tpl" ]; } \|\| return 0` | 1: C4 (`an external removal asked a service manager`) |
-  | A3-M9 | macOS asks nothing | delete the line `[ "$CCD_OS" != darwin ] \|\| return 0` | 1: macOS (`wait=` carries the unmeasured step) |
-  | A3-M10 | the knob is read | in `_acct_usage_wait_secs`, `local s="${CCRC_ACCT_USAGE_WAIT_S:-300}"` → `local s=300` | 4: the bound case (`7` reads 300), waited for (its line says `300s`), and the refusal and retry cases, which run the stand-in to its 30-read cap and exit 0 after about 30 s |
+  | A3-M9 | macOS asks nothing | delete the line `[ "$CCD_OS" != darwin ] \|\| return 0` | 1: macOS (`wait=` carries the unmeasured step); reds on a Linux host only |
+  | A3-M10 | the knob is read | in `_acct_usage_wait_secs`, `local s="${CCRC_ACCT_USAGE_WAIT_S:-300}"` → `local s=300` | 6 (measured): the bound case, waited for, and the four refusal cases, which run the stand-in to its 30-read cap |
   | A3-M11 | base 10 | `s=$(( 10#$s ))` → `s=$(( s ))` | 1: the bound case (`010` reads 8) |
+  | A3-M12 | the refusal says this run disabled the timer (review) | the "this run disabled it" `still="$still Except …"` line → `:` | 1: refuses at the bound |
+  | A3-M13 | the link is measured at the bound, so a kept link is never reported gone (review) | in the refusal, `if _codex_usage_enabled "$u"; then` → `if false; then` | 1: the kept link |
+  | A3-M14 | the drop clause carries the timer sentence (review) | in the caller, delete `stands="$stands$usage_note";` | 1: the drop clause |
+  | A3-M15 | `failed` is done, never in flight (review) | move `failed` from the done arm into the in-flight arm | 1: `failed` is done |
+  | A3-M16 | the projection clause carries the timer sentence (review) | remove `$usage_note` from the projection's `stands` | 1: the projection clause |
+  | A3-M17 | a retry's refusal says it did not disable the timer (review) | the "not this run's doing" `still="$still Except …"` line → `:` | 1: retry into the same poll |
 
 - [ ] **Step 6: scope and residue check,** against this task's own base:
 
@@ -2059,8 +2101,8 @@ The operator rules each at plan review. B1 records each ruling with the census i
   # → untouched
   git diff "$BASE" -- ccd/ccrc | grep '^+' | grep -cE '_svc_stop|systemctl --user stop|writeFileSync'
   # → 0
-  git diff "$BASE" -- ccd/ccrc server/test/ccrc-account.test.ts | grep '^+' | grep -c 'D-[0-9]'
-  # → 1: the header's existing D-3707 (the unit's TimeoutStartSec). Any other hit is a number nobody issued: remove it
+  git diff "$BASE" -- ccd/ccrc server/test/ccrc-account.test.ts | grep '^+' | grep -oE 'D-[0-9]+' | sort -u | tr '\n' ' '
+  # → D-3707 D-4049 D-4050 (in any count): the header's existing D-3707 (the unit's TimeoutStartSec) and this task's two issued numbers. Any other number is one nobody issued. Never remove an issued number to satisfy a count
   ```
 
 - [ ] **Step 7: commit.**
@@ -2142,7 +2184,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
   grep -c 'mreason="materialise exited $mat_rc with no answer"' ccd/ccrc
   # → 1: the sibling this block copies
   printf '' | jq -r '.detail'; echo "rc=$?"
-  # → an empty line, then rc=0: the mechanism of the fold
+  # → nothing on stdout, then rc=0: the mechanism of the fold
   grep -rn 'refreshed' server/src pwa/src agent/src shared --include=*.ts --include=*.tsx --include=*.mjs | grep -c litellm
   # → 0: no code consumer of the row
   grep -n '^# ── THE CODEX LANE LIBRARY (spec' ccd/ccrc > "$SCRATCH/a4-anchor"; cat "$SCRATCH/a4-anchor"
@@ -2360,10 +2402,10 @@ The operator rules each at plan review. B1 records each ruling with the census i
   - **(b)** `_check_codex`'s left-state scan:
     - the loop is `grep -nF 'for d in "$root"/*/; do' ccd/ccrc-doctor-checks` (:5982);
     - the empty-population `if` sits below it, after Task A2's surplus lines (:5987 at `be93d159`, before A2);
-    - add one block after the `for n in ${left[@]+"${left[@]}"}; do` loop (:6037-6040), just before `_dr_cx_report`.
+    - add one block after the `for n in ${left[@]+"${left[@]}"}; do` loop (:6045-6048 at `be93d159` and at the rebased base; the content locator, the remedy ending `ccrc never deletes a lane's state on a flip`, is the unique one), just before `_dr_cx_report`.
   - **(c)** `_dr_cx_sessions` (`grep -n '^_dr_cx_sessions() {' ccd/ccrc-doctor-checks`; :6580-6596), and its header comment (:6573-6579).
-- Modify `server/test/ccrc-doctor.test.ts` to add seven cases:
-  - five in `describeCodex('ccrc doctor: codex, part 1 — …')`: three for (a), two for (b);
+- Modify `server/test/ccrc-doctor.test.ts` to add eleven cases as built (seven drafted, four added at review: see "As built" before Step 0):
+  - nine in `describeCodex('ccrc doctor: codex, part 1 — …')`: three for (a), six for (b);
   - two in `describeCodex('ccrc doctor: codex, part 2 — …')`, for (c).
 - **Not modified:**
   - `_fix_codex`. It already places a missing executable when there is no `cmp`, and names every other file "not compared" (`ccrc-doctor.test.ts`, "with no cmp on PATH, only a missing or non-executable file is placed…").
@@ -2425,6 +2467,8 @@ The operator rules each at plan review. B1 records each ruling with the census i
 - An unreadable wrapper is counted without asking its unit, because which lane it is on is the unknown. The existing remedy, "ask by hand (… status claude-session@<sid>.service); if one is live, start the lane", is then the right one.
 - `[ -f "$wf" ]` stays first, so a FIFO at a `.wrapper` path is still never opened (D-2380's class).
 
+**As built (A7 reconciliation, after Task A5's review).** `ccrc-doctor.test.ts` holds eleven A5 cases, not seven: the seven drafted below, plus four added at review so that every conjunct of the unlistable-root test reds alone when mutated. Part 1 holds nine (three for (a), six for (b)) and part 2 two. The added cases are a dangling symlink where `~/.ccrc/codex` belongs (fails `-e`, held by `-L`), a regular file of mode 0755 (fails `-d` alone), a mode-0300 directory (fails `-r` alone) and a mode-0600 directory (fails `-x` alone); the last two skip as root. The unreadable-`.wrapper` case asserts on `stderr`, because its drafted `stdout` assertion could never fail (measured vacuous), and the no-cmp tree-absent case also asserts the anchored WARN that omits the tree-absent file. Mutation rows M10-M15 each red only their own case. The whole-file doctor parts read 217 / 123 / 348 passed. The Step 1 code below is the first-round shape; the tree's test file is authoritative.
+
 - [ ] **Step 0: Base, subjects, census baseline.**
 
   ```bash
@@ -2439,7 +2483,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
 
   Expected:
   - each grep prints exactly one line;
-  - vitest prints `Tests  43 passed`, which is part 1's 31 cases plus part 2's 12 at `be93d159`, plus whatever Tasks A1-A4 added to those two describes. Re-derive it and record it;
+  - vitest prints `Tests  47 passed` as built (the plan drafted 43, part 1's 31 cases plus part 2's 12 at `be93d159`; Tasks A2-A4 and the three cases main added since make 47). Re-derive it and record it;
   - the last line is `census: clean — no unit or link change, 0 fixture processes left; command exit 0`.
 
   On a box with no `python3` the two describes are skipped (`describeCodex`). Stop and report that, because no case below would run.
@@ -2555,7 +2599,9 @@ The operator rules each at plan review. B1 records each ruling with the census i
       const re = /^WARN codex: codex-a's LiteLLM tier is not running, and whether any of this lane's registered sessions is live could not be asked \(1 unanswered\) — unmeasured, not idle$/m;
       expect(r.stdout, r.stdout).toMatch(re);
       expect(remedyAfter(r.stdout, re)).toBe('  remedy: ask by hand (systemctl --user status claude-session@proj-b.service); if one is live, start the lane: ccrc codex start codex-a');
-      expect(r.stdout).not.toMatch(/Permission denied/);
+      // stderr, not stdout: `cmd_doctor` carries only a check's stdout, so bash's own
+      // open-failure line would reach the real stderr, which `runDoctor` returns apart.
+      expect(r.stderr).not.toMatch(/Permission denied/);
       noRunnerBugLine(r.stdout, 'codex');
     });
 
@@ -2689,7 +2735,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
     # own "Permission denied" never reaches doctor's output.
     ```
 
-  - **The loop body.** Replace these four lines with the block below:
+  - **The loop body.** Replace these THREE lines with the block below (the `case "$(_svc_is_active …)"` line and everything below it stay):
     - `    w=''; { IFS= read -r w < "$wf"; } 2>/dev/null`
     - `    [ "$w" = "$id" ] || continue`
     - `    sid="${wf##*/}"; sid="${sid%.wrapper}"`
@@ -2745,18 +2791,18 @@ The operator rules each at plan review. B1 records each ruling with the census i
   ```
 
   Expected:
-  - `a5-green` is `Tests  7 passed (7)`, or `5 passed | 2 skipped` as root.
-  - `a5-reg-parts` is Step 0's count plus 7, all passed.
+  - `a5-green` is `Tests  7 passed (7)` of the first draft (`Tests  11 passed` as built, with the four cases added at review), or fewer as root: the mode-000, 0300, 0600 and unreadable-`.wrapper` cases skip.
+  - `a5-reg-parts` is Step 0's count plus the added cases (7 drafted, 11 as built), all passed.
   - Every other run is green.
   - Each run's last line is `census: clean …; command exit 0`.
 
-  Then, before the commit, run the file whole as the Global Constraints' three complementary parts: `a5-whole-1`, `a5-whole-2` and `a5-whole-3`. The part filtered `'^ccrc doctor: [a-c]'` holds every new case. All three parts are green, and their sum is the file's count before this task plus 7.
+  Then, before the commit, run the file whole as the Global Constraints' three complementary parts: `a5-whole-1`, `a5-whole-2` and `a5-whole-3`. The part filtered `'^ccrc doctor: [a-c]'` holds every new case. All three parts are green, and their sum is the file's count before this task plus the added cases (7 drafted, 11 as built).
 
 - [ ] **Step 7: Mutation table, measured both ways.** First commit the task as WIP:
 
   ```bash
   . "<abs scratch>/plan3b-exec/plan3b-env.sh"
-  git add -A && git commit -qm 'wip: task A5' && git status --short   # → empty
+  git add ccd/ccrc-doctor-checks server/test/ccrc-doctor.test.ts && git commit -qm 'wip: task A5' && git status --short   # → empty (files staged by name, never `git add -A`: controller ruling P8)
   ```
 
   Each row is three calls, with exactly one row in flight:
@@ -3004,7 +3050,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
 
   ```bash
   . "<abs scratch>/plan3b-exec/plan3b-env.sh"; cd server
-  r11 a6-red-sd ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'readRegular'
+  r11 a6-red-sd ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'type-tested read is DEFINED once'
   ```
 
   Expected (predicted; report a difference, never adjust a case):
@@ -3200,7 +3246,7 @@ The operator rules each at plan review. B1 records each ruling with the census i
 
   ```bash
   . "<abs scratch>/plan3b-exec/plan3b-env.sh"
-  git add -A && git commit -qm 'wip: task A6' && git status --short   # → empty
+  git add deploy/models-op.mjs server/test/models-op.test.ts server/test/single-definition.test.ts shared/modelenv.d.mts shared/modelenv.mjs && git commit -qm 'wip: task A6' && git status --short   # → empty (files staged by name, never `git add -A`: controller ruling P8)
   ```
 
   Each row is Task A5 Step 7's three calls: back up every file the row edits, apply the edit and run, then restore and prove it with `git diff --quiet`. Change only the row id, the `files`, the suite and the filter. Every run is `r11 a6-6-<row> timeout -k 10 540 ./node_modules/.bin/vitest run <suite> -t '<filter>'`. A blocked case is ended by `bounded()`'s 10 s bound, and the outer `timeout` is belt and braces.
@@ -3211,10 +3257,10 @@ The operator rules each at plan review. B1 records each ruling with the census i
   | M2 | `shared/modelenv.mjs`: the same edit in `clearSettingsEnv` | models-op `'Plan 3b A-6'` | 1: the rm FIFO case, by deadline |
   | M3 | `deploy/models-op.mjs`: in `readRoster`, `raw = readRegular(file);` → `raw = readFileSync(file, 'utf8');` | models-op `'Plan 3b A-6'` | 1: the roster FIFO case, by deadline |
   | M4 | `shared/modelenv.mjs`: delete `readRegular`'s `if (!statSync(p).isFile()) throw …;` line | models-op `'FIFO'` | 8: all five MF-2 cases and the three new FIFO cases, each by deadline. This proves models-op's five MF-2 reads now go through the shared helper |
-  | M5 | `deploy/models-op.mjs`: delete `  readRegular,` from the modelenv import, and insert `function readRegular(p) { return readFileSync(p, 'utf8'); }` directly below the pointer comment (a second, untyped copy) | single-definition `'readRegular'`, then models-op `'FIFO'` (two runs, one restore) | 1 (the pin); then 6: the five MF-2 cases and the roster case, by deadline. The two settings cases stay green, because they read through the shared helper |
-  | M6 | `shared/modelenv.mjs`: in `mergeSettingsEnv`'s catch, `if (e.code !== 'ENOENT') {` → `if (e.code !== 'ENOENT' && e.code !== 'ENOTREG') {` (a FIFO read as absent) | models-op `'Plan 3b A-6'` | 1: the materialise FIFO case. The rename replaces the FIFO, and the op exits 0 |
+  | M5 | `deploy/models-op.mjs`: delete `  readRegular,` from the modelenv import, and insert `function readRegular(p) { return readFileSync(p, 'utf8'); }` directly below the pointer comment (a second, untyped copy) | single-definition `'type-tested read is DEFINED once'`, then models-op `'FIFO'` (two runs, one restore) | 1 (the pin); then 6: the five MF-2 cases and the roster case, by deadline. The two settings cases stay green, because they read through the shared helper |
+  | M6 | `shared/modelenv.mjs`: in `mergeSettingsEnv`'s catch, `if (e.code !== 'ENOENT') {` → `if (e.code !== 'ENOENT' && e.code !== 'ENOTREG') {` (a FIFO read as absent) | models-op `'Plan 3b A-6'` | 2 (measured): the materialise FIFO case, where the rename replaces the FIFO and the op exits 0, and the DIRECTORY control, because a directory is also `ENOTREG`, so it reads as absent and falls to a rename that fails in write-side words |
 
-  Under every row, the directory control and the two EISDIR pins stay green. Confirm that by adding `\|unlinks its own tmp` to M1's filter once. If a row does not red, report it, and never add code to force it.
+  Under every row but M6, the directory control stays green; under every row, the two EISDIR pins stay green. Confirm that by adding `\|unlinks its own tmp` to M1's filter once. If a row does not red, report it, and never add code to force it.
 
 - [ ] **Step 7: Commit.**
 
@@ -3547,7 +3593,9 @@ A count that answers otherwise, or a reading that contradicts a bullet, means on
 - the bullet is wrong about the code, so correct the bullet in §21;
 - the code is short of its task, so report to the controller and stop. That is the A-task's failure, not this step's to repair.
 
-Then fill §21.12. Replace each of `‹A1›`, `‹A2-converge›`, `‹A2-doctor›`, `‹A3›`, `‹A4›`, `‹A5›` and `‹A6›` with the exact `it(` titles of the cases that task's mutation table names, read from the suites at the tip (`grep -nF "it('" server/test/<file>.test.ts`). Each title is quoted and prefixed with its file, in §20.10's form: `` `ccrc-models.test.ts`: "<title>", and "<title>" ``.
+Then fill §21.12. Replace each of `‹A1›`, `‹A2-converge›`, `‹A2-doctor›`, `‹A3›`, `‹A4›`, `‹A5›` and `‹A6›` with the exact `it(` titles of the cases that task's mutation table names, read from the suites at the tip (`./node_modules/.bin/vitest list test/<file>.test.ts --json > "$SCRATCH/<name>.json"`, read from a scratch path and never a tracked one, because a case title may be `it(`, `itLinux(`, `itSystemd(`, `itCodex(`, `it.skipIf(…)(` or `it.each(…)(`, which a grep for `it('` misses; `git status --porcelain` shows no unintended change afterwards). Each title is quoted and prefixed with its file, in §20.10's form: `` `ccrc-models.test.ts`: "<title>", and "<title>" ``.
+
+As built, Step 3 corrected §21 in these ways, and the committed spec is authoritative: §21.1 says the answer has exactly two readers (the drafted "every other reader" was vacuous) and that any other non-zero `_codex_lanes` rc reads `roster-invalid`. §21.2 says the surplus WARN states only what the link measures, that the left-lane-state WARN's last clause follows the listing (its unlistable case reads unmeasured), and that on Darwin the measure answers not-applicable and records no row. §21.3 states that `failed` is done, the bound in whole seconds, the refusal's timer correction, and the drop and projection clauses. §21.5 words the missing-`cmp` WARN as it is, and names the three conditions that keep the codex row a SKIP (the drafted last bullet left out two WARN cases). §21.12 is filled from `vitest list` output, so `itSystemd`, `itCodex`, `it.skipIf` and `it.each` titles are all in it; the A5 cell also names the two absent-root SKIP controls, and the A2 doctor cell holds twelve titles.
 
 ```bash
 . "<abs scratch>/plan3b-exec/plan3b-env.sh"
@@ -3598,7 +3646,7 @@ SPEC=docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md
 node "$SCRATCH/a7-r9.cjs" "$(cat "$SCRATCH/a7-base")" "$SPEC" "$SCRATCH"; echo "rc=$?"
 ```
 
-Expected: `R9: 1111 lines above §21 unmoved; 8 pointer-only edits; 91 lines appended`, then `rc=0`. 91 is the appended block's measured length, the leading blank line plus §21's 90 lines, re-measured at review on a scratch copy of the spec at `be93d159` with numbers standing in for the slugs (the drafted text was 87, before review added bullets to §21.2, §21.3 and §21.9). Step 3's fills are in-line, so they change no count. A different count from a Step 3 correction is fine, provided it is the block's own `wc -l`.
+Expected: `R9: 1111 lines above §21 unmoved; 8 pointer-only edits; 91 lines appended` (92 as built, after Step 3's corrections), then `rc=0`. 91 is the appended block's measured length, the leading blank line plus §21's 90 lines, re-measured at review on a scratch copy of the spec at `be93d159` with numbers standing in for the slugs (the drafted text was 87, before review added bullets to §21.2, §21.3 and §21.9). Step 3's fills are in-line, so they change no count. A different count from a Step 3 correction is fine, provided it is the block's own `wc -l`.
 
 **Mutations of the proof.** Each runs on a scratch copy, so the worktree's spec is never edited and there is nothing to restore. None of them can block, so none needs a `timeout`.
 
@@ -3783,7 +3831,7 @@ git log --format='%an <%ae> | %cn <%ce>' "$BASE"..HEAD | sort -u
 jq -r '.accounts[].id' "$HOME/.ccrc/accounts.json" | grep -cxE 'codex-a|codex-b|ext-a|ext-b|gen-a'   # expected: 0, a count only
 find "$SCRATCH" "${TMPDIR:-/tmp}"/plan3b* -maxdepth 4 -path "$SCRATCH/census-controls" -prune -o \
   \( -name new-units.txt -o -name leaks.txt \) -size +0c -print 2>/dev/null > "$SCRATCH/a7-gate-hits"
-fx='(^|[-@:])codex-[ab]([-.]|$)|ccrc-codex-usage@'
+fx='(^|[-@:])(codex-[ab]|ext-[ab]|gen-a)([-.]|$)|ccrc-codex-usage@'
 grep '/new-units\.txt$' "$SCRATCH/a7-gate-hits" | while IFS= read -r f; do
   { grep -v '^gone:' "$f" | grep -qE "$fx" || grep -q '^gone:' "$f"; } && echo "$f"; done | wc -l   # expected: 0
 while IFS= read -r f; do [ -e "$(dirname "$f")/attributed-foreign" ] || echo "$f"; done < "$SCRATCH/a7-gate-hits" | wc -l   # expected: 0
