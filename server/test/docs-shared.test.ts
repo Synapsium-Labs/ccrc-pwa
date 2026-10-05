@@ -499,3 +499,289 @@ describe('docs ccd wire types: canned answers compile against the types', () => 
     expect([verbs, kind, ctx, stamped, unknownWord, hex, verb, later, folder]).toHaveLength(9);
   });
 });
+
+// ---- (F)-(G): content classes, the raster table, class caps, response headers and wrappers, resolveDocRef ----
+// Spec 5.1, 5.3, 6.1, 3.5, 3.6 and 4.11; the L0 cases of M5.3 and M5.7. APPENDED by Task 3. The two imports
+// below bind fresh names only (a namespace and an alias), so no name an earlier block of this file imports is
+// bound twice; `describe`, `it` and `expect` come from the file's own first import.
+import * as DocsFG from '../../shared/docs.js';
+import { readFileSync as readDocsSourceFG } from 'node:fs';
+
+/** Bytes from a string of char codes 0-255 (no `Buffer`, so a row reads as the bytes it names). */
+const bytesFG = (s: string): Uint8Array => Uint8Array.from(s, (c) => c.charCodeAt(0));
+
+describe('(F) contentClass (spec 5.1; M5.3, L0 cases)', () => {
+  it.each([
+    ['A.PNG', 'raster'],
+    ['x.png.html', 'html'],
+    ['.png', 'other'],
+    ['a.b/.png', 'other'],
+    ['.notes.md', 'other'],
+    ['x.', 'other'],
+    ['README', 'other'],
+    ['x.mar\u212Adown', 'other'],
+    ['x.\u00e9', 'other'],
+    ['x.svgz', 'other'],
+    ['x.xhtml', 'text'],
+    ['x.svg', 'svg'],
+    ['a/b.c/README', 'other'],
+    ['a.md/README', 'other'],
+    ['x.abcdefghijk', 'other'],
+    ['x.pdf', 'other'],
+    ['x.woff2', 'other'],
+    ['x.tar.gz', 'other'],
+    ['dir/Notes.MarkDown', 'markdown'],
+    ['photo.JPEG', 'raster'],
+  ] as const)('%s is %s', (p, cls) => {
+    expect(DocsFG.contentClass(p)).toBe(cls);
+  });
+
+  it('CONTROL: the U+212A row is one toLowerCase() gets wrong, so it pins the ASCII-only lowering', () => {
+    expect('x.mar\u212Adown'.toLowerCase()).toBe('x.markdown');
+  });
+
+  it('the table is spec 5.1 verbatim', () => {
+    expect(DocsFG.DOC_CONTENT_CLASS_BY_EXT).toEqual({
+      md: 'markdown', markdown: 'markdown',
+      png: 'raster', jpg: 'raster', jpeg: 'raster', gif: 'raster', webp: 'raster',
+      svg: 'svg', html: 'html', htm: 'html',
+      txt: 'text', json: 'text', yaml: 'text', yml: 'text', toml: 'text', csv: 'text', tsv: 'text', log: 'text',
+      ts: 'text', tsx: 'text', js: 'text', mjs: 'text', cjs: 'text', css: 'text', py: 'text', sh: 'text',
+      sql: 'text', diff: 'text', patch: 'text', xml: 'text', xsl: 'text', xhtml: 'text',
+    });
+  });
+
+  it('maps every table key as declared, in either ASCII case, by the final component alone', () => {
+    for (const [ext, cls] of Object.entries(DocsFG.DOC_CONTENT_CLASS_BY_EXT)) {
+      expect(DocsFG.contentClass(`x.${ext}`), ext).toBe(cls);
+      expect(DocsFG.contentClass(`a.b/X.${ext.toUpperCase()}`), ext).toBe(cls);
+    }
+  });
+});
+
+describe('(F) DOCS_CLASS_CAP (spec 6.1)', () => {
+  it('holds each class to its cap', () => {
+    expect(DocsFG.DOCS_CLASS_CAP).toEqual({
+      markdown: 2097152, raster: 2097152, svg: 2097152, html: 2097152, text: 2097152, other: 2097152,
+    });
+  });
+
+  it('each value is its source constant', () => {
+    for (const cls of ['raster', 'svg'] as const) {
+      expect(DocsFG.DOCS_CLASS_CAP[cls], cls).toBe(DocsFG.DOCS_MAX_IMAGE_BYTES);
+    }
+    for (const cls of ['markdown', 'html', 'text', 'other'] as const) {
+      expect(DocsFG.DOCS_CLASS_CAP[cls], cls).toBe(DocsFG.DOCS_MAX_DOC_BYTES);
+    }
+  });
+
+  it('names its source constant per class in the source text, because the two caps are equal today', () => {
+    // A swap of DOCS_MAX_IMAGE_BYTES for DOCS_MAX_DOC_BYTES is invisible to the value checks above while both
+    // are 2 MiB; it stops being invisible the day either one moves. The declaration says which is which.
+    const src = readDocsSourceFG(new URL('../../shared/docs.ts', import.meta.url), 'utf8');
+    const decl = /^export const DOCS_CLASS_CAP: Record<DocContentClass, number> = \{\n([\s\S]*?)\n\};$/m.exec(src);
+    expect(decl, 'the DOCS_CLASS_CAP declaration was not found').not.toBeNull();
+    const named = Object.fromEntries([...(decl?.[1] ?? '').matchAll(/(\w+): (\w+),/g)].map((m) => [m[1], m[2]]));
+    expect(named).toEqual({
+      markdown: 'DOCS_MAX_DOC_BYTES', raster: 'DOCS_MAX_IMAGE_BYTES', svg: 'DOCS_MAX_IMAGE_BYTES',
+      html: 'DOCS_MAX_DOC_BYTES', text: 'DOCS_MAX_DOC_BYTES', other: 'DOCS_MAX_DOC_BYTES',
+    });
+  });
+});
+
+describe('(F) the raster table and sniffRaster (spec 5.1)', () => {
+  const SAMPLE: Record<DocsFG.RasterType, Uint8Array> = {
+    png: bytesFG('\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR'),
+    jpeg: bytesFG('\xff\xd8\xff\xe0\x00\x10JFIF\x00'),
+    gif: bytesFG('GIF89a\x01\x00\x01\x00'),
+    webp: bytesFG('RIFF\x1a\x00\x00\x00WEBPVP8 '),
+  };
+  const TYPES = ['png', 'jpeg', 'gif', 'webp'] as const;
+
+  it('names each type its MIME, and every raster extension of the class table its type', () => {
+    expect(Object.fromEntries(TYPES.map((t) => [t, DocsFG.DOCS_RASTER_TYPES[t].mime]))).toEqual({
+      png: 'image/png', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+    });
+    expect(Object.keys(DocsFG.DOCS_RASTER_TYPES)).toEqual([...TYPES]);
+    expect(DocsFG.DOCS_RASTER_EXT).toEqual({ png: 'png', jpg: 'jpeg', jpeg: 'jpeg', gif: 'gif', webp: 'webp' });
+    const rasterExts = Object.entries(DocsFG.DOC_CONTENT_CLASS_BY_EXT).filter(([, c]) => c === 'raster').map(([e]) => e);
+    expect(Object.keys(DocsFG.DOCS_RASTER_EXT).sort()).toEqual(rasterExts.sort());
+  });
+
+  it('matches only on the diagonal of the 4x4 (declared, actual) matrix', () => {
+    for (const declared of TYPES) {
+      for (const actual of TYPES) {
+        expect(DocsFG.sniffRaster(declared, SAMPLE[actual]), `${declared} declared, ${actual} bytes`)
+          .toBe(declared === actual ? 'match' : 'mismatch');
+      }
+    }
+  });
+
+  it.each([
+    ['SVG bytes', bytesFG('<svg xmlns="http://www.w3.org/2000/svg"/>')],
+    ['empty input', new Uint8Array(0)],
+    ['the first three bytes of the PNG signature', bytesFG('\x89PN')],
+    ['the first three bytes of a GIF header', bytesFG('GIF')],
+  ] as const)('%s mismatch every type', (_label, b) => {
+    for (const t of TYPES) expect(DocsFG.sniffRaster(t, b), t).toBe('mismatch');
+  });
+
+  it('accepts both GIF headers and nothing between them', () => {
+    expect(DocsFG.sniffRaster('gif', bytesFG('GIF87a\x01\x00'))).toBe('match');
+    expect(DocsFG.sniffRaster('gif', bytesFG('GIF89a\x01\x00'))).toBe('match');
+    expect(DocsFG.sniffRaster('gif', bytesFG('GIF88a\x01\x00'))).toBe('mismatch');
+  });
+
+  it('needs both RIFF at offset 0 and WEBP at offset 8 for webp', () => {
+    expect(DocsFG.sniffRaster('webp', bytesFG('RIFF\x00\x00\x00\x00WEBP'))).toBe('match');
+    expect(DocsFG.sniffRaster('webp', bytesFG('RIFF\x00\x00\x00\x00WAVE')), 'a RIFF that is not WEBP').toBe('mismatch');
+    expect(DocsFG.sniffRaster('webp', bytesFG('XXXX\x00\x00\x00\x00WEBP')), 'WEBP without RIFF').toBe('mismatch');
+    expect(DocsFG.sniffRaster('webp', bytesFG('RIFFWEBP\x00\x00\x00\x00')), 'WEBP at offset 4').toBe('mismatch');
+    expect(DocsFG.sniffRaster('webp', bytesFG('RIFF\x00\x00\x00\x00WEB')), 'truncated at 11 bytes').toBe('mismatch');
+  });
+});
+
+describe('(F) the docs response headers (spec 5.3)', () => {
+  it('carries the approved CSP, exactly', () => {
+    expect(DocsFG.DOCS_RESPONSE_CSP)
+      .toBe("default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'");
+  });
+
+  it('carries the four headers with exact values, the CSP by reference', () => {
+    expect(DocsFG.DOCS_RESPONSE_HEADERS).toEqual({
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': DocsFG.DOCS_RESPONSE_CSP,
+      'referrer-policy': 'no-referrer',
+      'cross-origin-resource-policy': 'same-origin',
+    });
+  });
+
+  it('allows JSON and the four raster types, and nothing a browser would render as a document', () => {
+    expect(DocsFG.DOCS_ALLOWED_CONTENT_TYPES)
+      .toEqual(['application/json; charset=utf-8', 'image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+    for (const t of ['text/html', 'text/html; charset=utf-8', 'image/svg+xml', 'text/plain', 'application/octet-stream', 'application/xml']) {
+      expect(DocsFG.DOCS_ALLOWED_CONTENT_TYPES, t).not.toContain(t);
+    }
+  });
+});
+
+describe('(F) the HTTP response wrappers (spec 3.5, 3.6): compiled by typecheck-tests', () => {
+  const SHOW: DocsFG.DocsShowOk = {
+    v: 1, verb: 'docs-show', ok: true, elapsedMs: 0, source: 'committed', section: 'specs', path: 'a.md',
+    size: 2, sha256: '0'.repeat(64), encoding: 'utf8', text: 'hi', commit: '0'.repeat(40), blob: '0'.repeat(40),
+    mode: '100644', onRef: 'contains',
+  };
+  const BUSY: DocsFG.DocsFailureBody = { ok: false, failure: 'docs-busy', lane: 'read', retryAfterMs: 3000 };
+
+  it('a file answer carries every class but raster', () => {
+    const file: DocsFG.DocsFileResponse = { ok: true, contentClass: 'markdown', show: SHOW, from: 'cache' };
+    const rasterAsJson: DocsFG.DocsFileResponse = {
+      ok: true,
+      // @ts-expect-error a raster never rides the JSON envelope; its bytes are the answer (spec 3.6)
+      contentClass: 'raster',
+      show: SHOW,
+      from: 'ccd',
+    };
+    expect([file.contentClass, rasterAsJson.from]).toEqual(['markdown', 'ccd']);
+  });
+
+  it('a refresh answer carries one of three fetch arms, and a tree or a failure body', () => {
+    const fetches: DocsFG.DocsRefreshFetch[] = [
+      { state: 'ran', answer: { v: 1, verb: 'docs-fetch', ok: true, elapsedMs: 0, branch: 'main',
+        trackedRef: 'refs/remotes/origin/main', defaultVia: 'default:origin-head', before: null,
+        after: '0'.repeat(40), moved: 'created', stamp: 'written' } },
+      { state: 'failed', failure: BUSY },
+      { state: 'skipped', why: 'local-ref' },
+    ];
+    const refresh: DocsFG.DocsRefreshResponse = { ok: true, fetch: { state: 'skipped', why: 'local-ref' }, tree: BUSY };
+    // Compile-time only: a tree answer's `tree` is ccd's DocsTreeOk, unchanged.
+    const treeOf = (r: DocsFG.DocsTreeResponse): DocsFG.DocsTreeOk => r.tree;
+    const projects: DocsFG.DocsProjectsResponse = {
+      ok: true, cacheAgeMs: null,
+      index: { v: 1, verb: 'docs-index', ok: true, elapsedMs: 0, unlisted: 0, duplicates: [], projects: [] },
+    };
+    expect(fetches.map((f) => f.state)).toEqual(['ran', 'failed', 'skipped']);
+    expect(refresh.tree.ok).toBe(false);
+    expect(projects.cacheAgeMs).toBeNull();
+    expect(typeof treeOf).toBe('function');
+  });
+});
+
+describe('(G) resolveDocRef (spec 4.11; M5.7, L0 cases)', () => {
+  type From = { section: DocsFG.DocSectionSlug; path: string };
+  const SPEC: From = { section: 'specs', path: 'a.md' };
+  const PLAN: From = { section: 'plans', path: 'p.md' };
+  const NESTED: From = { section: 'specs', path: 'sub/n.md' };
+  const refused = (why: string) => ({ kind: 'refused', why });
+  const doc = (section: string, path: string, fragment: string | null = null) => ({ kind: 'doc', section, path, fragment });
+  const repo = (repoPath: string) => ({ kind: 'repo', repoPath });
+
+  it.each([
+    ['a tab inside javascript:', SPEC, 'java\tscript:alert(1)', refused('malformed')],
+    ['a newline inside javascript:', SPEC, 'java\nscript:alert(1)', refused('malformed')],
+    ['javascript:', SPEC, 'javascript:alert(1)', refused('scheme')],
+    ['a leading space', SPEC, ' https://h/x', { kind: 'external', url: 'https://h/x', scheme: 'https', origin: 'https://h' }],
+    ['C0 and whitespace at both ends', SPEC, '\u0001\thttps://h/x\n ', { kind: 'external', url: 'https://h/x', scheme: 'https', origin: 'https://h' }],
+    ['HTTPS://h/x', SPEC, 'HTTPS://h/x', { kind: 'external', url: 'https://h/x', scheme: 'https', origin: 'https://h' }],
+    ['http with port, query and fragment', SPEC, 'http://h:8080/x?y#z', { kind: 'external', url: 'http://h:8080/x?y#z', scheme: 'http', origin: 'http://h:8080' }],
+    ['mailto:', SPEC, 'mailto:a@example.invalid', { kind: 'external', url: 'mailto:a@example.invalid', scheme: 'mailto', origin: null }],
+    ['an http URL that does not parse', SPEC, 'https://', refused('malformed')],
+    ['another scheme', SPEC, 'ftp://h/x', refused('scheme')],
+    ['a drive-letter lookalike', SPEC, 'c:/x', refused('scheme')],
+    ['data:', SPEC, 'data:image/png;base64,AAAA', { kind: 'self-contained', scheme: 'data' }],
+    ['DATA: in upper case', SPEC, 'DATA:,x', { kind: 'self-contained', scheme: 'data' }],
+    ['blob:', SPEC, 'blob:https://h/0000', { kind: 'self-contained', scheme: 'blob' }],
+    ['//h/x', SPEC, '//h/x', refused('protocol-relative')],
+    ['a leading double backslash', SPEC, '\\\\h\\x', refused('malformed')],
+    ['a backslash after /', SPEC, '/\\h/x', refused('malformed')],
+    ['a backslash inside a relative path', SPEC, 'a\\b.md', refused('malformed')],
+    ['/api/x', SPEC, '/api/x', refused('root-relative')],
+    ['empty', SPEC, '', refused('empty')],
+    ['only whitespace', SPEC, ' \t\n', refused('empty')],
+    ['#f', SPEC, '#f', { kind: 'fragment', fragment: 'f' }],
+    ['a space inside a fragment', SPEC, '#a b', refused('malformed')],
+    ['# alone', SPEC, '#', { kind: 'fragment', fragment: '' }],
+    ['x.png?q#f', SPEC, 'x.png?q#f', doc('specs', 'x.png', 'f')],
+    ['a ? inside the fragment', SPEC, 'x.md#a?b', doc('specs', 'x.md', 'a?b')],
+    ['specs/a.md from plans', PLAN, 'specs/a.md', doc('plans', 'specs/a.md')],
+    ['../plans/x.md from specs', SPEC, '../plans/x.md', doc('plans', 'x.md')],
+    ['a section-name lookalike', SPEC, '../specs-old/a.md', repo('docs/superpowers/specs-old/a.md')],
+    ['product-design from specs', SPEC, '../../product-design/m.html', doc('product-design', 'm.html')],
+    ['conventions from specs', SPEC, '../../conventions/c.md', doc('conventions', 'c.md')],
+    ['../../README.md from a top-level spec', SPEC, '../../README.md', repo('docs/README.md')],
+    ['../../../README.md from a top-level spec', SPEC, '../../../README.md', repo('README.md')],
+    ['%2e%2e/%2e%2e/x', SPEC, '%2e%2e/%2e%2e/x', repo('docs/x')],
+    ['a/../../../../x, which climbs exactly to the root', SPEC, 'a/../../../../x', repo('x')],
+    ['four levels up from three', SPEC, '../../../../x', refused('above-root')],
+    ['a/../../../../../x', SPEC, 'a/../../../../../x', refused('above-root')],
+    ['an encoded climb past the root', SPEC, '%2e%2e/%2E%2E/.%2e/%2e./x', refused('above-root')],
+    ['x.md from a nested spec', NESTED, 'x.md', doc('specs', 'sub/x.md')],
+    ['../x.md from a nested spec', NESTED, '../x.md', doc('specs', 'x.md')],
+    ['%2541.md, decoded once', SPEC, '%2541.md', doc('specs', '%41.md')],
+    ['%252e%252e/x.md, decoded once', SPEC, '%252e%252e/x.md', doc('specs', '%2e%2e/x.md')],
+    ['a raw non-ASCII name', SPEC, '\u00e9.md', doc('specs', '\u00e9.md')],
+    ['the same name percent-encoded', SPEC, '%C3%A9.md', doc('specs', '\u00e9.md')],
+    ['an encoded /', SPEC, 'a%2Fb.md', refused('bad-path')],
+    ['an encoded NUL', SPEC, '%00.md', refused('bad-path')],
+    ['an encoded U+202E', SPEC, '%E2%80%AE.md', refused('bad-path')],
+    ['a bad percent sequence', SPEC, '%zz.md', refused('bad-path')],
+    ['the section directory itself', SPEC, './', refused('bad-path')],
+    ['a trailing slash', SPEC, 'sub/', refused('bad-path')],
+    ['a query alone', SPEC, '?q', refused('bad-path')],
+    ['the repository root', SPEC, '../../../', refused('bad-path')],
+    ['an encoded NUL outside the sections', SPEC, '../../../%00', refused('bad-path')],
+    ['a page in a directory named a#b', { section: 'specs', path: 'a#b/c.md' }, 'y.md', doc('specs', 'a#b/y.md')],
+    ['a page in a directory named %2e%2e', { section: 'specs', path: '%2e%2e/c.md' }, 'y.md', doc('specs', '%2e%2e/y.md')],
+    ['a page path outside the grammar', { section: 'specs', path: '../c.md' }, 'y.md', refused('bad-path')],
+  ] as const)('%s', (_label, from, ref, want) => {
+    expect(DocsFG.resolveDocRef(from, ref)).toEqual(want);
+  });
+
+  it('CONTROL: URL itself clamps a climb at the root, so the above-root rows pin the walk and not URL', () => {
+    expect(new URL('../../../../x', 'https://docs.invalid/docs/superpowers/specs/').pathname).toBe('/x');
+  });
+
+  it('CONTROL: a browser deletes a tab inside a scheme, so java<TAB>script: is malformed rather than inert', () => {
+    expect(new URL('java\tscript:alert(1)').protocol).toBe('javascript:');
+  });
+});

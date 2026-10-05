@@ -4463,3 +4463,71 @@ describe('docs failure vocabulary, redactor and ccd wire types are declared once
     expect(src).toMatch(/^export type DocsFailure = keyof typeof DOCS_FAILURES;$/m);
   });
 });
+
+// Native Docs reader, W1 Task 3 (spec 5.1, 5.3, 6.1, 3.5, 4.11): the content-class table, the raster table,
+// the class caps, the docs response headers, the HTTP wrappers and the link resolver each have ONE declaring
+// file, shared/docs.ts. The server's file route and its onSend hook (W2) and the PWA's renderer and link policy
+// (W5, W6) import them; a second copy would be a second answer to "what class is this file", "what may this
+// route send" or "where does this link go". APPENDED after the file's last line: `session-hook.test.ts`'s
+// citation audit cites this file by line, so nothing above may move.
+describe('docs content classes, headers, wrappers and resolver are declared once, in shared/docs.ts (docs W1 Task 3)', () => {
+  const TYPES = [
+    'DocContentClass', 'RasterType', 'RasterMime', 'DocRefResolution',
+    'DocsProjectsResponse', 'DocsTreeResponse', 'DocsFileResponse', 'DocsRefreshFetch', 'DocsRefreshResponse',
+  ] as const;
+  const VALUES = [
+    'DOC_CONTENT_CLASS_BY_EXT', 'DOCS_CLASS_CAP', 'DOCS_RASTER_TYPES', 'DOCS_RASTER_EXT',
+    'DOCS_RESPONSE_CSP', 'DOCS_RESPONSE_HEADERS', 'DOCS_ALLOWED_CONTENT_TYPES',
+  ] as const;
+  const FUNCTIONS = ['contentClass', 'sniffRaster', 'resolveDocRef'] as const;
+  // The declaration shapes of the update-control-plane block above: a type needs its `=` (or `interface`), so
+  // an inline `type X,` import specifier is not a holder; a value is a `const`/`let`/`var`; a function is a
+  // `function` declaration. `export` is optional throughout: an un-exported local copy is still a copy.
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  const VALUE_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
+  const FUNCTION_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\b`, 'm');
+  const holdersOf = (def: RegExp): string[] => ALL.filter((f) => def.test(readFileSync(f, 'utf8'))).map(rel);
+
+  it('CONTROL: each pattern sees a planted declaration, exported or not, and not an import or a use', () => {
+    expect(TYPE_DEF('DocContentClass').test("export type DocContentClass = 'markdown';")).toBe(true);
+    expect(TYPE_DEF('DocContentClass').test("type DocContentClass = 'a';"), 'an un-exported copy').toBe(true);
+    expect(TYPE_DEF('DocsFileResponse').test('export interface DocsFileResponse { ok: true }')).toBe(true);
+    expect(TYPE_DEF('DocContentClass').test("import {\n  type DocContentClass,\n} from '../../../shared/docs.js';"),
+      'an import specifier').toBe(false);
+    expect(TYPE_DEF('DocContentClass').test("  contentClass: Exclude<DocContentClass, 'raster'>;"), 'a use').toBe(false);
+    expect(VALUE_DEF('DOCS_CLASS_CAP').test('export const DOCS_CLASS_CAP: Record<DocContentClass, number> = {')).toBe(true);
+    expect(VALUE_DEF('DOCS_CLASS_CAP').test('const DOCS_CLASS_CAP = {};'), 'an un-exported copy').toBe(true);
+    expect(VALUE_DEF('DOCS_CLASS_CAP').test("import { DOCS_CLASS_CAP } from '../../../shared/docs.js';"), 'an import').toBe(false);
+    expect(VALUE_DEF('DOCS_CLASS_CAP').test('  const cap = DOCS_CLASS_CAP[cls];'), 'a use').toBe(false);
+    expect(FUNCTION_DEF('contentClass').test('export function contentClass(path: string): DocContentClass {')).toBe(true);
+    expect(FUNCTION_DEF('contentClass').test('function contentClass(p: string) {'), 'an un-exported copy').toBe(true);
+    expect(FUNCTION_DEF('contentClass').test('  const cls = contentClass(pin.path);'), 'a call').toBe(false);
+  });
+
+  for (const name of TYPES) {
+    it(`declares the type ${name} once, in shared/docs.ts`, () => {
+      expect(holdersOf(TYPE_DEF(name))).toEqual(['shared/docs.ts']);
+    });
+  }
+
+  it('declares every table and header value once, in shared/docs.ts', () => {
+    for (const name of VALUES) expect(holdersOf(VALUE_DEF(name)), name).toEqual(['shared/docs.ts']);
+  });
+
+  it('declares contentClass, sniffRaster and resolveDocRef once, in shared/docs.ts', () => {
+    for (const name of FUNCTIONS) expect(holdersOf(FUNCTION_DEF(name)), name).toEqual(['shared/docs.ts']);
+  });
+
+  it("spells the docs CSP text once: the server's hook and the browser leg import DOCS_RESPONSE_CSP", () => {
+    const CSP_TEXT = "img-src data:; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'";
+    expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(CSP_TEXT)).map(rel)).toEqual(['shared/docs.ts']);
+  });
+
+  it('spells the PNG signature once: the L1 raster verdict wraps sniffRaster rather than copying the table', () => {
+    const PNG_MAGIC = /0x89\s*,\s*0x50\s*,\s*0x4e\s*,\s*0x47/i;
+    expect(PNG_MAGIC.test('[0x89, 0x50, 0x4E, 0x47, 0x0d]'), 'CONTROL: a copy in another case').toBe(true);
+    expect(PNG_MAGIC.test('[0x89, 0x51, 0x4e, 0x47]'), 'CONTROL: another signature').toBe(false);
+    expect(ALL.filter((f) => PNG_MAGIC.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+  });
+});

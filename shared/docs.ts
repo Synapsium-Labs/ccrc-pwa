@@ -604,3 +604,251 @@ export type DocsIndexRow = DocsIndexOk['projects'][number];
 export type DocsCcdFailure = {
   v: 1; verb: DocsVerb; ok: false; elapsedMs: number; failure: DocsFailure; detail?: string; retryAfterMs?: number;
 } & DocsFailureContext;
+
+// ---------------------------------------------------------------------------
+// (F) Content class, raster table, class caps, response headers, response
+// wrappers (spec 5.1, 5.3, 6.1, 3.5, 3.6). One table for both sides: the
+// server picks a file's representation and its `--max-bytes` from these, and
+// the PWA picks its renderer and its "too large" sentence from the same ones.
+// ---------------------------------------------------------------------------
+
+export type DocContentClass = 'markdown' | 'raster' | 'svg' | 'html' | 'text' | 'other';
+
+/** The extension table, spec 5.1 verbatim. `xml`, `xsl` and `xhtml` are TEXT: shown as source, never as a
+ *  document. Anything unlisted (`pdf`, `mht`, `svgz`, fonts) is `other`, download only. */
+export const DOC_CONTENT_CLASS_BY_EXT = {
+  md: 'markdown', markdown: 'markdown',
+  png: 'raster', jpg: 'raster', jpeg: 'raster', gif: 'raster', webp: 'raster',
+  svg: 'svg', html: 'html', htm: 'html',
+  txt: 'text', json: 'text', yaml: 'text', yml: 'text', toml: 'text', csv: 'text', tsv: 'text', log: 'text',
+  ts: 'text', tsx: 'text', js: 'text', mjs: 'text', cjs: 'text', css: 'text', py: 'text', sh: 'text',
+  sql: 'text', diff: 'text', patch: 'text', xml: 'text', xsl: 'text', xhtml: 'text',
+} as const satisfies Record<string, DocContentClass>;
+
+type DocExt = keyof typeof DOC_CONTENT_CLASS_BY_EXT;
+
+/** An extension's shape after lowering: 1-10 characters of `a-z0-9` (spec 5.1). */
+const DOC_EXT_RE = /^[a-z0-9]{1,10}$/;
+
+/** `A-Z` to `a-z` by char code, and nothing else. Never the built-in lowering: it maps U+212A KELVIN SIGN
+ *  to `k`, so a file whose extension is spelled with it would class as `markdown` while git and the file
+ *  system hold a different name (spec 5.1, M5.3). */
+function asciiLower(s: string): string {
+  let out = '';
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    out += c >= 0x41 && c <= 0x5a ? String.fromCharCode(c + 0x20) : s.charAt(i);
+  }
+  return out;
+}
+
+function isDocExt(ext: string): ext is DocExt {
+  return Object.prototype.hasOwnProperty.call(DOC_CONTENT_CLASS_BY_EXT, ext);
+}
+
+/** The class of a docs path, decided by its FINAL component alone (spec 5.1): the text after that component's
+ *  last `.`, lowered ASCII-only, 1-10 characters of `a-z0-9`, looked up in the table. A dotfile (a final
+ *  component that starts with `.`, such as `.png`), a name with no `.`, a bad extension and an unlisted one
+ *  are all `other`. */
+export function contentClass(path: string): DocContentClass {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  if (name.startsWith('.')) return 'other';
+  const dot = name.lastIndexOf('.');
+  if (dot < 0) return 'other';
+  const ext = asciiLower(name.slice(dot + 1));
+  if (!DOC_EXT_RE.test(ext) || !isDocExt(ext)) return 'other';
+  return DOC_CONTENT_CLASS_BY_EXT[ext];
+}
+
+/** Each class's size cap (spec 6.1): the `--max-bytes N` the server passes to `ccd docs-show`, and the bound the
+ *  PWA holds a listed size to before it asks. Derived from the two caps above, never a literal of its own. The
+ *  two caps are equal today, so `docs-shared.test.ts` pins the derivation by its source text as well. */
+export const DOCS_CLASS_CAP: Record<DocContentClass, number> = {
+  markdown: DOCS_MAX_DOC_BYTES,
+  raster: DOCS_MAX_IMAGE_BYTES,
+  svg: DOCS_MAX_IMAGE_BYTES,
+  html: DOCS_MAX_DOC_BYTES,
+  text: DOCS_MAX_DOC_BYTES,
+  other: DOCS_MAX_DOC_BYTES,
+};
+
+/** The raster types the file route answers as bytes, each with its MIME type and its magic: a type matches when
+ *  EVERY run of ANY ONE of its alternatives is present at its offset (spec 5.1). */
+export const DOCS_RASTER_TYPES = {
+  png:  { mime: 'image/png',  magic: [[{ at: 0, bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] }]] },
+  jpeg: { mime: 'image/jpeg', magic: [[{ at: 0, bytes: [0xff, 0xd8, 0xff] }]] },
+  gif:  { mime: 'image/gif',  magic: [[{ at: 0, bytes: [0x47, 0x49, 0x46, 0x38, 0x37, 0x61] }], [{ at: 0, bytes: [0x47, 0x49, 0x46, 0x38, 0x39, 0x61] }]] },
+  webp: { mime: 'image/webp', magic: [[{ at: 0, bytes: [0x52, 0x49, 0x46, 0x46] }, { at: 8, bytes: [0x57, 0x45, 0x42, 0x50] }]] },
+} as const;
+export type RasterType = keyof typeof DOCS_RASTER_TYPES;
+export type RasterMime = (typeof DOCS_RASTER_TYPES)[RasterType]['mime'];
+export const DOCS_RASTER_EXT: Record<'png' | 'jpg' | 'jpeg' | 'gif' | 'webp', RasterType> =
+  { png: 'png', jpg: 'jpeg', jpeg: 'jpeg', gif: 'gif', webp: 'webp' };
+
+/** One run of magic bytes at an offset: the shape every alternative in the table above has. */
+type MagicRun = { readonly at: number; readonly bytes: readonly number[] };
+
+/** Whether `bytes` are what `declared` says they are. Under `nosniff` the declared type must be true of the
+ *  bytes, so a `.png` holding JPEG bytes is a `mismatch`; so is input too short to hold the magic. */
+export function sniffRaster(declared: RasterType, bytes: Uint8Array): 'match' | 'mismatch' {
+  const alternatives: readonly (readonly MagicRun[])[] = DOCS_RASTER_TYPES[declared].magic;
+  for (const runs of alternatives) {
+    if (runs.every((run) => run.bytes.every((b, i) => bytes[run.at + i] === b))) return 'match';
+  }
+  return 'mismatch';
+}
+
+/** The headers every docs response carries (spec 5.3). The values live here so the server's `onSend` hook and
+ *  the real-browser leg use the same bytes. */
+export const DOCS_RESPONSE_CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'";
+export const DOCS_RESPONSE_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'content-security-policy': DOCS_RESPONSE_CSP,
+  'referrer-policy': 'no-referrer',
+  'cross-origin-resource-policy': 'same-origin',
+} as const;
+/** The only content types a docs route may send: JSON, and the four raster types from their own table. */
+export const DOCS_ALLOWED_CONTENT_TYPES: readonly string[] =
+  ['application/json; charset=utf-8', ...Object.values(DOCS_RASTER_TYPES).map((t) => t.mime)];
+
+/** The HTTP answers (spec 3.5). They wrap ccd's answers unchanged, so no adapter narrows. A raster never rides
+ *  this JSON: its bytes are the answer (spec 3.6), which is why `contentClass` here excludes it. */
+export interface DocsProjectsResponse { ok: true; index: DocsIndexOk; cacheAgeMs: number | null } // null: ccd answered this very request
+export interface DocsTreeResponse { ok: true; tree: DocsTreeOk; refreshDue: boolean }
+export interface DocsFileResponse { ok: true; contentClass: Exclude<DocContentClass, 'raster'>;
+  show: DocsShowOk; from: 'ccd' | 'cache' }               // a cache hit is marked, never passed off as ccd's
+export type DocsRefreshFetch =
+  | { state: 'ran'; answer: DocsFetchOk }
+  | { state: 'failed'; failure: DocsFailureBody }
+  | { state: 'skipped'; why: 'local-ref' };
+export interface DocsRefreshResponse { ok: true; fetch: DocsRefreshFetch; tree: DocsTreeResponse | DocsFailureBody }
+
+// ---------------------------------------------------------------------------
+// (G) resolveDocRef (spec 4.11): where a link or an image reference inside a
+// docs page points. Pure, and shared by the Markdown pipeline (W5) and the
+// mockup viewer (W6), so a link means one thing in both.
+// ---------------------------------------------------------------------------
+
+export type DocRefResolution =
+  | { kind: 'doc'; section: DocSectionSlug; path: string; fragment: string | null }
+  | { kind: 'repo'; repoPath: string }                              // inside the repo, outside the four sections
+  | { kind: 'fragment'; fragment: string }
+  | { kind: 'external'; url: string; scheme: 'http' | 'https' | 'mailto'; origin: string | null }
+  | { kind: 'self-contained'; scheme: 'data' | 'blob' }
+  | { kind: 'refused'; why: 'empty' | 'malformed' | 'scheme' | 'protocol-relative' | 'root-relative' | 'above-root' | 'bad-path' };
+
+type DocRefRefusal = Extract<DocRefResolution, { kind: 'refused' }>['why'];
+
+const refusedRef = (why: DocRefRefusal): DocRefResolution => ({ kind: 'refused', why });
+
+/** What a browser strips from both ends of an attribute URL: C0 controls and space. */
+const DOC_REF_EDGE_RE = /^[\x00-\x20]+|[\x00-\x20]+$/g;
+/** What a browser would delete or reinterpret further in (a tab inside `java<TAB>script:`, a backslash read as
+ *  `/`): C0, space, DEL and backslash anywhere. Refused, never deleted-and-continued. */
+const DOC_REF_MALFORMED_RE = /[\x00-\x20\x7f\\]/;
+const DOC_REF_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+/** The sentinel origin a relative reference is resolved under. `.invalid` never resolves (RFC 2606). */
+const DOC_REF_ORIGIN = 'https://docs.invalid';
+
+/** The WHATWG URL parser's dot segments: `.` or `%2e`, and `..`, `.%2e`, `%2e.` or `%2e%2e`, ASCII
+ *  case-insensitive. */
+function isSingleDotSegment(seg: string): boolean {
+  const s = asciiLower(seg);
+  return s === '.' || s === '%2e';
+}
+
+function isDoubleDotSegment(seg: string): boolean {
+  const s = asciiLower(seg);
+  return s === '..' || s === '.%2e' || s === '%2e.' || s === '%2e%2e';
+}
+
+/** Whether walking `refPath` from a directory `depth` levels below the repository root pops past the root.
+ *  `URL` cannot say: popping an empty path is a no-op in the WHATWG parser, so `../../../../x` from three levels
+ *  down comes back as `/x`, indistinguishable from a link to the root. This walk applies the parser's own
+ *  segment rules to the same text and counts what it clamps. */
+function climbsAboveRoot(depth: number, refPath: string): boolean {
+  let d = depth;
+  for (const seg of refPath.split('/')) {
+    if (isDoubleDotSegment(seg)) {
+      d -= 1;
+      if (d < 0) return true;
+    } else if (!isSingleDotSegment(seg)) {
+      d += 1;
+    }
+  }
+  return false;
+}
+
+function resolveSchemeRef(raw: string): DocRefResolution {
+  const scheme = asciiLower(raw.slice(0, raw.indexOf(':')));
+  switch (scheme) {
+    case 'data':
+    case 'blob':
+      return { kind: 'self-contained', scheme };
+    case 'http':
+    case 'https':
+    case 'mailto': {
+      let u: URL;
+      try {
+        u = new URL(raw);
+      } catch {
+        return refusedRef('malformed');
+      }
+      // A mailto URL's origin is the opaque string 'null'; the answer says "no origin" as null instead.
+      return { kind: 'external', url: u.href, scheme, origin: scheme === 'mailto' ? null : u.origin };
+    }
+    default:
+      return refusedRef('scheme');
+  }
+}
+
+/** Resolve `ref`, written in the page at `from`, in spec 4.11's step order:
+ *  1. trim leading and trailing C0 controls and space;
+ *  2. any C0, space, DEL or backslash still present is `malformed`;
+ *  3. empty, then a leading `#` (`fragment`), then a scheme (`external` for http, https and mailto,
+ *     `self-contained` for data and blob, otherwise refused `scheme`), then a leading `//`, then a leading `/`;
+ *  4. otherwise resolve against the page's directory under the sentinel origin, require that origin, drop the
+ *     query, keep the fragment (the raw text after the first `#`, or null when there is none) and decode each
+ *     path segment exactly once; a throw is `bad-path`;
+ *  5. a climb above the repository root is `above-root`; under one of the four section paths the remainder must
+ *     pass the rel-path grammar to be `doc`; any other in-repo path that passes it is `repo`; anything else is
+ *     `bad-path`.
+ *  Every directory segment of the page's own path is percent-encoded before it joins the base, so a directory
+ *  named `a#b` or `%2e%2e` stays one literal segment; the page's path must itself pass the rel-path grammar. */
+export function resolveDocRef(from: { section: DocSectionSlug; path: string }, ref: string): DocRefResolution {
+  const raw = ref.replace(DOC_REF_EDGE_RE, '');
+  if (DOC_REF_MALFORMED_RE.test(raw)) return refusedRef('malformed');
+  if (raw === '') return refusedRef('empty');
+  if (raw.startsWith('#')) return { kind: 'fragment', fragment: raw.slice(1) };
+  if (DOC_REF_SCHEME_RE.test(raw)) return resolveSchemeRef(raw);
+  if (raw.startsWith('//')) return refusedRef('protocol-relative');
+  if (raw.startsWith('/')) return refusedRef('root-relative');
+
+  if (!isDocsRelPath(from.path)) return refusedRef('bad-path');
+  const dir = docRepoPath(from.section, from.path).split('/').slice(0, -1);
+  const hash = raw.indexOf('#');
+  const fragment = hash < 0 ? null : raw.slice(hash + 1);
+  let segments: string[];
+  try {
+    const u = new URL(raw, DOC_REF_ORIGIN + '/' + dir.map((s) => encodeURIComponent(s)).join('/') + '/');
+    if (u.origin !== DOC_REF_ORIGIN) return refusedRef('malformed');
+    segments = u.pathname.slice(1).split('/').map((s) => decodeURIComponent(s));
+  } catch {
+    return refusedRef('bad-path');
+  }
+  // A decoded `%2F` would turn one segment into two when the path is joined: no file name holds a `/`.
+  if (segments.some((s) => s.includes('/'))) return refusedRef('bad-path');
+
+  const end = raw.search(/[?#]/);
+  if (climbsAboveRoot(dir.length, end < 0 ? raw : raw.slice(0, end))) return refusedRef('above-root');
+
+  const repoPath = segments.join('/');
+  for (const slug of DOC_SECTION_SLUGS) {
+    const prefix = DOC_SECTIONS[slug] + '/';
+    if (repoPath.startsWith(prefix)) {
+      const rest = repoPath.slice(prefix.length);
+      return isDocsRelPath(rest) ? { kind: 'doc', section: slug, path: rest, fragment } : refusedRef('bad-path');
+    }
+  }
+  return isDocsRelPath(repoPath) ? { kind: 'repo', repoPath } : refusedRef('bad-path');
+}
