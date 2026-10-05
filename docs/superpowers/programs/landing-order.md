@@ -433,6 +433,22 @@ carries it (spec §5.1, amended 2026-09-24).
     the fix round owns it.
   - **Main moved** under the branch (#247, #249, #246). #246 edits coordinator-skill.test.ts; the review judges the
     merged tree.
+- **2026-10-05 10:40 — review 267 reported** (mail 3504; `~/.cc-clips/ccrc-pwa-bright-hollow/review-267-3f9cca09.md`).
+  - **What it found:** six findings. All suites are green apart from one doctor case that fails under load and passes
+    alone. Every mutation row matches the worker's table. The merged tree is clean.
+  - **F1 gates Task 7. The macOS fail-open is jq 1.8, not macOS.** At session-hook.sh:3590, jq 1.8 binds `as $wp` to
+    the whole `and` chain, so `startswith(true)` errors and the deny fails open on every heredoc. Reproduced on Linux
+    with jq 1.8.1 and 1.8.2: 22/82 at the tip and 20/71 on main, the macOS counts. A one-paren prototype passes
+    82/82 on jq 1.7, 1.8.1 and 1.8.2. This fleet runs jq 1.7.1, so it is not live here; it would be on any box with
+    jq 1.8.
+  - **F2:** doctor's `jq_regex` PASSes on jq 1.8, so the runbook's PASS read overstates.
+  - **F3:** the over-cap flag shapes are a regression against main. The worker's `splits` closure is NOT linear on
+    jq 1.7 (43 s at 100 KB). A fixed-string split variant runs in 60–234 ms, catches all four shapes, and costs +12
+    over 129 over-cap matches in two days.
+  - **F4–F6 are minor:** two over-cap mutations survive; the runbook grep does not prove 2048; README and plan text
+    residue.
+  - **Not yet ruled:** this report also lacks the refute pass (the same brief omission). Mail 3505 asks for it, and
+    review 267 stays open until it arrives.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
