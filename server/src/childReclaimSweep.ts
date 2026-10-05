@@ -11,7 +11,7 @@
 // follows (wave 3's `reclaimChild`) re-reads, and ccd re-proves inside its lock
 // at the instant of deletion — this file narrows the window, it does not close it.
 import {
-  SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isChildReclaimKeptWord, lcRefusalWord,
+  CHILD_RECLAIM_KEPT_WORDS, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isChildReclaimKeptWord, lcRefusalWord,
   type ChildMark, type ChildReclaimAttention, type ChildReclaimKeptWord, type LcRefusalToken, type LifecycleAct,
   type LifecycleOutcome, type MirroredLifecycleEvent, type RunState,
 } from '../../shared/api.js';
@@ -962,4 +962,82 @@ export function childReclaimAttention(i: ChildReclaimAttentionInput): ChildRecla
     }
   }
   return out;
+}
+
+/** One marked child the sweep keeps on purpose (spec §5.9): the attention list's `kept` arm. */
+export type ChildReclaimKeptAttention = Extract<ChildReclaimAttention, { readonly kind: 'kept' }>;
+
+/** More children than this answering ONE kept word collapse into one line (spec §5.9): after a lost
+ *  or rebuilt coordination database every child answers the same word at once. */
+export const CHILD_RECLAIM_KEPT_MANY_OVER = 5;
+
+const childReclaimBySession = (a: { readonly sessionId: string }, b: { readonly sessionId: string }): number =>
+  (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0);
+
+/** The attention list's kept arm (spec §5.9): one item per recorded verdict that is not eligible and
+ *  answers a KEPT word, for a row this listing still carries as a child (`live` → the marker's run id,
+ *  null when the row is no longer a child) and that has no `terminal` item, because ccd's own terminal
+ *  word outranks the sweep's, as on the chip. Doubt words, `held` and the ordinary words never reach it.
+ *  The sentence is the sweep table's, so the banner and the chip say the same thing. Ordered by session
+ *  id. Pure and deterministic: the coord frame's byte-equality guard emits once per change. */
+export function childReclaimKeptItems(i: {
+  readonly verdicts: ReadonlyMap<string, ChildReclaimSweepVerdict>;
+  readonly live: ReadonlyMap<string, number | null>;
+  readonly mirrorArms: readonly ChildReclaimJournalAttention[];
+}): ChildReclaimKeptAttention[] {
+  const terminal = new Set(i.mirrorArms.filter((a) => a.kind === 'terminal').map((a) => a.sessionId));
+  const out: ChildReclaimKeptAttention[] = [];
+  for (const [sessionId, v] of i.verdicts) {
+    if (v.eligible || !isChildReclaimKeptWord(v.why)) continue;
+    const runId = i.live.get(sessionId);
+    if (typeof runId !== 'number') continue;
+    if (terminal.has(sessionId)) continue;
+    out.push({ kind: 'kept', sessionId, runId, word: v.why, sentence: CHILD_RECLAIM_SKIP[v.why].sentence });
+  }
+  return out.sort(childReclaimBySession);
+}
+
+/** The sentence of a collapsed kept line (spec §5.9): the count, then the one reason each child is kept for. */
+export function childReclaimKeptManySentence(word: ChildReclaimKeptWord, n: number): string {
+  return `${n} child workspaces are kept for the same reason. For each one: ${CHILD_RECLAIM_SKIP[word].sentence}`;
+}
+
+/** What the kept items list as (spec §5.9): a word answered by MORE than `CHILD_RECLAIM_KEPT_MANY_OVER`
+ *  children becomes ONE `kept-many` item naming every one of them; every other word's items stay single.
+ *  The singles come first, ordered by session id, then the groups, in the word list's order. */
+export function childReclaimKeptList(items: readonly ChildReclaimKeptAttention[]): ChildReclaimAttention[] {
+  const sorted = [...items].sort(childReclaimBySession);
+  const singles: ChildReclaimKeptAttention[] = [];
+  const groups: ChildReclaimAttention[] = [];
+  for (const word of CHILD_RECLAIM_KEPT_WORDS) {
+    const these = sorted.filter((a) => a.word === word);
+    if (these.length > CHILD_RECLAIM_KEPT_MANY_OVER) {
+      groups.push({
+        kind: 'kept-many', word,
+        members: these.map((a) => ({ sessionId: a.sessionId, runId: a.runId })),
+        sentence: childReclaimKeptManySentence(word, these.length),
+      });
+    } else {
+      singles.push(...these);
+    }
+  }
+  return [...singles.sort(childReclaimBySession), ...groups];
+}
+
+/** The whole attention list (spec §5.9): the mirror arms, then the kept arm, with ONE item per child.
+ *  A `kept` item replaces that child's `failing` item (a kept child is never asked, so its failure run
+ *  can stand past the ceiling, and the failing sentence — "ccrc retries it" — would be false of it). A
+ *  child whose recorded verdict is `held` has no `failing` item either, for the same reason: it is never
+ *  asked while the hold stands. Only `held` withholds — a doubt word keeps wave 4's failing item — and a
+ *  `terminal` item is never filtered. With no verdict recorded the failing arm stands as it always did. */
+export function childReclaimAttentionWithKept(
+  mirrorArms: readonly ChildReclaimJournalAttention[], kept: readonly ChildReclaimKeptAttention[],
+  verdicts: ReadonlyMap<string, ChildReclaimSweepVerdict>,
+): ChildReclaimAttention[] {
+  const keptIds = new Set(kept.map((a) => a.sessionId));
+  const heldIds = new Set([...verdicts].filter(([, v]) => !v.eligible && v.why === 'held').map(([id]) => id));
+  return [
+    ...mirrorArms.filter((a) => !(a.kind === 'failing' && (keptIds.has(a.sessionId) || heldIds.has(a.sessionId)))),
+    ...childReclaimKeptList(kept),
+  ];
 }

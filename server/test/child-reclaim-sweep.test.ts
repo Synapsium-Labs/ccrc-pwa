@@ -36,7 +36,8 @@ import { ACTOR_FLAGS_CAP, CCD_ARGV, RECLAIM_CAP, RECLAIM_PAUSE_CAP } from '../sr
 import { refusalSentence } from '../src/wsaudit.js';
 import { NotifyLog } from '../src/notifylog.js';
 import {
-  CHILD_RECLAIM_DEFER_CEILING_MS, childReclaimBackoffMs, childReclaimFailingSentence, childReclaimJournalRow,
+  CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_SKIP, childReclaimBackoffMs, childReclaimFailingSentence,
+  childReclaimJournalRow, childReclaimKeptManySentence,
 } from '../src/childReclaimSweep.js';
 import {
   CHILD_RECLAIM_TOKEN_KIND, childReclaimGeneration, childReclaimHasCoordinated, childReclaimLatest,
@@ -252,6 +253,26 @@ const finishedChild = (f: ReturnType<typeof fixture>, id = 'demo-a'): number => 
   f.plant(id, { child: String(r.id) });
   return r.id;
 };
+
+/** The coordinating case: `id`'s own claim is opened and abandoned at its create's instant (the fixture clock
+ *  does not move), inside the coordination fence's skew, so it is this generation's own and the verdict is
+ *  `coordinating`. Returns the minting run's id. */
+const coordinatingChild = (f: ReturnType<typeof fixture>, id = 'demo-a'): number => {
+  const r1 = f.openRun();
+  f.abandon(r1);
+  f.plant(id, { child: String(r1.id) });
+  const coordRun = f.coord.openRun({ program: `other-${id}`, title: `other-${id}`, project: 'demo', wave: 1,
+    waveOf: null, claimedBy: id });
+  if (!('id' in coordRun)) throw new Error(`coordRun refused: ${JSON.stringify(coordRun)}`);
+  f.abandon({ id: coordRun.id, program: `other-${id}` });
+  return r1.id;
+};
+
+/** The WHOLE attention list as one label per item, `kept-many` (which has no `sessionId`) included, so an
+ *  exact-list assertion cannot skip an item it did not expect. */
+const attentionLabels = (f: ReturnType<typeof fixture>): string[] =>
+  (f.watcher.currentCoord()?.childReclaimAttention ?? [])
+    .map((a) => (a.kind === 'kept-many' ? `kept-many:${a.word}` : `${a.kind}:${a.sessionId}`));
 
 const deferredAs = (why: 'presence' | 'state-changed', req: ChildReclaimRequest): ChildReclaimOutcome =>
   ({ kind: 'deferred', sessionId: req.sessionId, runId: req.runId, why, detail: `deferred: ${why}` });
@@ -888,7 +909,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
     expect(f.requests).toEqual([]);
     await f.watcher.tick();
-    expect(f.watcher.currentCoord()?.childReclaimAttention.flatMap((a) => ('sessionId' in a ? [a.sessionId] : []))).toEqual(['demo-b']);
+    expect(attentionLabels(f)).toEqual(['terminal:demo-b']);
   });
 
   it('does nothing on a box that advertises reclaim-v1 but not reclaim-pause-v1, and still REPORTS', async () => {
@@ -899,7 +920,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
     expect(f.requests).toEqual([]);
     await f.watcher.tick();
-    expect(f.watcher.currentCoord()?.childReclaimAttention.flatMap((a) => ('sessionId' in a ? [a.sessionId] : []))).toEqual(['demo-b']);
+    expect(attentionLabels(f)).toEqual(['terminal:demo-b']);
   });
 
   it('passes deferExpired only once a PRESENCE defer has lasted the ceiling — and hands the executor when deferral began', async () => {
@@ -1345,7 +1366,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
     const g = fixture({ coord: f.coord, home: f.home });
     await g.pass();
     await g.watcher.tick();
-    expect(g.watcher.currentCoord()?.childReclaimAttention.flatMap((a) => ('sessionId' in a ? [a.sessionId] : []))).toEqual(['demo-a']);
+    expect(attentionLabels(g)).toEqual(['terminal:demo-a']);
   });
 
   it('lists a child whose reclaim has kept FAILING past the ceiling, with the failure\'s sentence — and keeps asking for it', async () => {
@@ -1424,7 +1445,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
     f.next(); await f.pass();
     await f.watcher.tick();
     const listed = f.watcher.currentCoord()?.childReclaimAttention ?? [];
-    expect(listed.flatMap((a) => ('sessionId' in a ? [a.sessionId] : []))).toEqual(['demo-a']);
+    expect(attentionLabels(f)).toEqual(['failing:demo-a']);
     expect(listed[0]!.sentence).not.toMatch(/keeps retrying/);
     expect(listed[0]!.sentence).toContain('While automatic reclamation is running, ccrc retries it');
     expect(f.requests, 'the paused lane asked for the child it lists').toEqual([]);
@@ -2135,18 +2156,6 @@ describe('S2: seeded rows at the lane — every licence rests on a continuous ep
 // "No verdict yet" is its own value, `null` for every child or an id absent from the map, and never
 // reads as eligible.
 describe('currentChildReclaimVerdicts — the sweep\'s verdicts, visible (wave 5)', () => {
-  /** The coordinating case: demo-a's own claim is opened and abandoned at its create's instant
-   *  (the fixture clock does not move), inside the coordination fence's skew, so it is this
-   *  generation's own and the verdict is `coordinating`. */
-  const coordinatingChild = (f: ReturnType<typeof fixture>): void => {
-    const r1 = f.openRun();
-    f.abandon(r1);
-    f.plant('demo-a', { child: String(r1.id) });
-    const coordRun = f.coord.openRun({ program: 'other-prog', title: 'other-prog', project: 'demo', wave: 1,
-      waveOf: null, claimedBy: 'demo-a' });
-    if (!('id' in coordRun)) throw new Error(`coordRun refused: ${JSON.stringify(coordRun)}`);
-    f.abandon({ id: coordRun.id, program: 'other-prog' });
-  };
   /** The three children: demo-a coordinating, demo-b finished (eligible), demo-c under a person's hold.
    *  Returns demo-b's minting run id. */
   const three = (f: ReturnType<typeof fixture>): number => {
@@ -2251,5 +2260,264 @@ describe('currentChildReclaimVerdicts — the sweep\'s verdicts, visible (wave 5
       .filter((l) => l.includes('demo-a') && l.includes('never reclaimed automatically'));
     expect(lines).toHaveLength(1);
     expect(lines[0]).not.toMatch(/\bever\b/);
+  });
+});
+
+// The attention list's kept arm, at the lane (spec §5.9). The list's one write is made on both sides
+// of the switch: the mirror arms every pass derive, then the kept arm from the verdicts as they stand
+// (the last judging pass's, or its kept verdicts alone), one item per child, and no failing item for a
+// child whose recorded verdict is `held`. The kept feed row is written once per child per word per
+// process, from a judging pass alone.
+describe('the attention list\'s kept arm — the sweep\'s kept verdicts, listed and fed once (wave 5)', () => {
+  const KEPT_TITLE = 'child reclaim kept';
+  /** A `NotifyLog` loaded as the production path's is, so the kept feed row has somewhere to land. */
+  const feedFixture = async () => {
+    const home = mkTmp('ccrc-child-reclaim-sweep-kept-');
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    return { home, notifyLog };
+  };
+  const keptRows = (f: ReturnType<typeof fixture>) => f.coord.feedEvents(50).filter((e) => e.title === KEPT_TITLE);
+  const attention = (f: ReturnType<typeof fixture>) => f.watcher.currentCoord()?.childReclaimAttention;
+  const keptItem = (sessionId: string, runId: number) => ({
+    kind: 'kept', sessionId, runId, word: 'coordinating', sentence: CHILD_RECLAIM_SKIP.coordinating.sentence,
+  });
+  /** A child whose marker names a run the database does not hold: `minting-run-absent`, a kept word. */
+  const orphanedChild = (f: ReturnType<typeof fixture>, id: string): void => { f.plant(id, { child: '9999' }); };
+
+  it('(vi) a coordinating child is listed from the first pass, never asked, and fed ONCE however many passes run', async () => {
+    const { home, notifyLog } = await feedFixture();
+    const f = fixture({ home, notifyLog });
+    const runId = coordinatingChild(f);
+    await f.pass();
+    await f.watcher.tick();
+    expect(attention(f)).toEqual([keptItem('demo-a', runId)]);
+    f.next(); await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    expect(keptRows(f)).toHaveLength(1);
+    expect(keptRows(f)[0]).toMatchObject({ kind: 'run', sessionId: 'demo-a', runId });
+    expect(keptRows(f)[0]!.body).toBe(`demo-a, child of run #${runId}: ${CHILD_RECLAIM_SKIP.coordinating.sentence}`);
+  });
+
+  it('(vii) a restart lists the item after its own first pass, and writes exactly one more row', async () => {
+    const { home, notifyLog } = await feedFixture();
+    const f = fixture({ home, notifyLog });
+    const runId = coordinatingChild(f);
+    await f.pass();
+    expect(keptRows(f)).toHaveLength(1);
+    const g = fixture({ coord: f.coord, home: f.home, notifyLog });
+    await g.pass();
+    await g.watcher.tick();
+    expect(attention(g)).toEqual([keptItem('demo-a', runId)]);
+    expect(keptRows(g)).toHaveLength(2);
+    g.next(); await g.pass();
+    expect(keptRows(g), 'the same process fed the same word twice').toHaveLength(2);
+  });
+
+  it('(vi) the row is per WORD too: a child kept for a second word is fed once for it', async () => {
+    const { home, notifyLog } = await feedFixture();
+    const f = fixture({ home, notifyLog });
+    coordinatingChild(f);
+    await f.pass();
+    expect(keptRows(f)).toHaveLength(1);
+    writeFileSync(path.join(f.reg, 'demo-a.child'), '9999');  // now its marker names a run the database does not hold
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a')).toEqual({ eligible: false, why: 'minting-run-absent' });
+    expect(attentionLabels(f)).toEqual(['kept:demo-a']);
+    expect(keptRows(f).map((e) => e.body)).toEqual([
+      expect.stringContaining(CHILD_RECLAIM_SKIP.coordinating.sentence),
+      expect.stringContaining(CHILD_RECLAIM_SKIP['minting-run-absent'].sentence),
+    ]);
+    f.next(); await f.pass();
+    expect(keptRows(f), 'a word already fed was fed again').toHaveLength(2);
+  });
+
+  it('(viii) a raised pause keeps the kept verdict and the item, and writes no new row', async () => {
+    const { home, notifyLog } = await feedFixture();
+    const f = fixture({ home, notifyLog });
+    const runId = coordinatingChild(f);
+    await f.pass();
+    await f.watcher.tick();
+    expect(attention(f)).toEqual([keptItem('demo-a', runId)]);
+    writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a')).toEqual({ eligible: false, why: 'coordinating' });
+    expect(attention(f), 'a pause erased the kept item').toEqual([keptItem('demo-a', runId)]);
+    expect(keptRows(f)).toHaveLength(1);
+    rmSync(path.join(f.reg, 'reclaim-paused'));
+    f.next(); await f.pass();
+    expect(keptRows(f), 'lowering the pause fed the same word again').toHaveLength(1);
+  });
+
+  it('(viii) a box without a reclaim capability lists nothing kept — it never judged — and still reports the mirror arms', async () => {
+    const { home, notifyLog } = await feedFixture();
+    const f = fixture({ home, notifyLog, cap: false });
+    coordinatingChild(f);
+    finishedChild(f, 'demo-b');
+    f.journal('demo-b', 'refused', 'tree-unreadable');
+    await f.pass();
+    await f.watcher.tick();
+    expect(attentionLabels(f)).toEqual(['terminal:demo-b']);
+    expect(keptRows(f)).toEqual([]);
+  });
+
+  it('(ix) a pass whose mirror read throws leaves the list exactly as it was', async () => {
+    const f = fixture();
+    const runId = coordinatingChild(f);
+    await f.pass();
+    await f.watcher.tick();
+    const before = attention(f);
+    expect(before, 'the kept item must be listed first, or this case is vacuous').toEqual([keptItem('demo-a', runId)]);
+    f.next();
+    const spy = vi.spyOn(f.coord, 'childReclaimSessionIds')
+      .mockImplementation(() => { throw new Error('mirror unreadable'); });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await f.pass();
+    await f.watcher.tick();                                   // same clock as the pass just above — no side dispatch
+    spy.mockRestore();
+    expect(attention(f)).toEqual(before);
+  });
+
+  it('(x) a recycled id is a NEW child: once the registry stops listing it, a later workspace under it is fed again', async () => {
+    const { home, notifyLog } = await feedFixture();
+    const f = fixture({ home, notifyLog });
+    orphanedChild(f, 'demo-a');
+    await f.pass();
+    await f.watcher.tick();
+    expect(attentionLabels(f)).toEqual(['kept:demo-a']);
+    expect(keptRows(f)).toHaveLength(1);
+    for (const n of readdirSync(f.reg)) if (n.startsWith('demo-a.')) rmSync(path.join(f.reg, n));
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(attentionLabels(f), 'a vanished row stayed listed').toEqual([]);
+    expect(keptRows(f)).toHaveLength(1);
+    orphanedChild(f, 'demo-a');                               // the same id, a new workspace
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(attentionLabels(f)).toEqual(['kept:demo-a']);
+    expect(keptRows(f), 'the recycled id was not fed as a new child').toHaveLength(2);
+  });
+
+  it('(xi) after a lost database, six children kept for one word are ONE collapsed line, and six feed rows', async () => {
+    const { home, notifyLog } = await feedFixture();
+    const f = fixture({ home, notifyLog });
+    const ids = ['demo-m1', 'demo-m2', 'demo-m3', 'demo-m4', 'demo-m5', 'demo-m6'];
+    for (const id of ids) orphanedChild(f, id);
+    await f.pass();
+    await f.watcher.tick();
+    expect(attention(f)).toEqual([{
+      kind: 'kept-many', word: 'minting-run-absent',
+      members: ids.map((sessionId) => ({ sessionId, runId: 9999 })),
+      sentence: childReclaimKeptManySentence('minting-run-absent', 6),
+    }]);
+    expect(keptRows(f).map((e) => e.sessionId).sort()).toEqual(ids);
+    f.next(); await f.pass();
+    expect(keptRows(f), 'a collapsed line fed again').toHaveLength(6);
+  });
+
+  it('(xi) five children kept for one word stay five items', async () => {
+    const f = fixture();
+    const ids = ['demo-m1', 'demo-m2', 'demo-m3', 'demo-m4', 'demo-m5'];
+    for (const id of ids) orphanedChild(f, id);
+    await f.pass();
+    await f.watcher.tick();
+    expect(attentionLabels(f)).toEqual(ids.map((id) => `kept:${id}`));
+  });
+
+  it('a feed archive that throws degrades the row and never the list: one warning, the item listed, the log flushed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { home, notifyLog } = await feedFixture();
+    const f = fixture({ home, notifyLog });
+    const runId = coordinatingChild(f);
+    vi.spyOn(f.coord, 'recordFeedEvent').mockImplementation(() => { throw new Error('archive full'); });
+    const flush = vi.spyOn(notifyLog, 'flush');
+    await f.pass();
+    await f.watcher.tick();
+    expect(attention(f)).toEqual([keptItem('demo-a', runId)]);
+    expect(warn.mock.calls.map((c) => String(c[0])))
+      .toContain('ccrc-server: recordFeedEvent failed (archive full) — child reclaim kept, feed archive degraded');
+    expect(flush).toHaveBeenCalled();
+  });
+
+  it('(xii) a kept child with a standing failure run is listed ONCE, as kept', async () => {
+    const f = fixture();
+    const runId = coordinatingChild(f);
+    f.journal('demo-a', 'failed', 'pin-failed');
+    const since = f.now();
+    await f.pass();
+    f.advance(CHILD_RECLAIM_DEFER_CEILING_MS);
+    f.journal('demo-a', 'intent', null);
+    f.journal('demo-a', 'failed', 'pin-failed');              // still failing, a ceiling later
+    expect(f.latestOf('demo-a')).toMatchObject({ outcome: 'failed', failingSince: since });
+    await f.pass();
+    await f.watcher.tick();
+    expect(attention(f)).toEqual([keptItem('demo-a', runId)]);
+    expect(f.requests, 'a kept child was asked for').toEqual([]);
+  });
+
+  it('(xiv) a held child\'s failure run past the ceiling is not on the banner; with no verdict recorded it is', async () => {
+    const f = fixture();
+    const r = f.openRun(); f.abandon(r);
+    f.plant('demo-c', { child: String(r.id), hold: 'kept by hand' });
+    f.journal('demo-c', 'failed', 'pin-failed');
+    const since = f.now();
+    await f.pass();
+    f.advance(CHILD_RECLAIM_DEFER_CEILING_MS);
+    f.journal('demo-c', 'intent', null);
+    f.journal('demo-c', 'failed', 'pin-failed');              // still failing, a ceiling later
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-c')).toEqual({ eligible: false, why: 'held' });
+    expect(attention(f)).toEqual([]);
+    expect(f.requests).toEqual([]);
+    // A pause drops `held` (a transient verdict), so wave 4's failing arm stands unchanged.
+    writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-c')).toBeUndefined();
+    expect(attention(f)).toEqual([{
+      kind: 'failing', sessionId: 'demo-c', runId: r.id, token: 'pin-failed',
+      sentence: childReclaimFailingSentence(lcRefusalWord('pin-failed') ?? refusalSentence('pin-failed')), at: since,
+    }]);
+  });
+
+  it('(xv) a kept verdict retained across a pause does not outlive a terminal refusal the mirror has since recorded', async () => {
+    const { home, notifyLog } = await feedFixture();
+    const f = fixture({ home, notifyLog });
+    const runId = coordinatingChild(f);
+    await f.pass();
+    await f.watcher.tick();
+    expect(attention(f)).toEqual([keptItem('demo-a', runId)]);
+    writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
+    f.journal('demo-a', 'refused', 'tree-unreadable');
+    const at = f.now();
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a'), 'the kept verdict was retained').toEqual({ eligible: false, why: 'coordinating' });
+    expect(attention(f)).toEqual([{
+      kind: 'terminal', sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at,
+    }]);
+    expect(keptRows(f)).toHaveLength(1);
+  });
+
+  it('a doubt verdict and an ordinary one reach neither the list nor the feed', async () => {
+    const { home, notifyLog } = await feedFixture();
+    const f = fixture({ home, notifyLog });
+    // `hold-unmeasured` (doubt): a hold no run of this child's own can account for is `held`, so the doubt
+    // case is a registry row whose marker cannot be read.
+    finishedChild(f, 'demo-a');
+    writeFileSync(path.join(f.reg, 'demo-a.child'), 'not-a-run-id');
+    // `minting-run-open` (ordinary): the minting run is still open and names this session.
+    const open = f.openRun();
+    f.coord.setSession(open.id, 'demo-b');
+    f.plant('demo-b', { child: String(open.id) });
+    await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-a')).toEqual({ eligible: false, why: 'marker-unreadable' });
+    expect(f.watcher.currentChildReclaimVerdicts()?.get('demo-b')).toEqual({ eligible: false, why: 'minting-run-open' });
+    expect(attentionLabels(f)).toEqual([]);
+    expect(keptRows(f)).toEqual([]);
   });
 });

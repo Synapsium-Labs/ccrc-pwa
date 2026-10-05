@@ -15,17 +15,19 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_PRE_LOCK_TOKEN, CHILD_RECLAIM_PRESENCE_DEFERS, CHILD_RECLAIM_SKIP,
-  childReclaimAskOrder, childReclaimAttention,
+  CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_KEPT_MANY_OVER, CHILD_RECLAIM_PRE_LOCK_TOKEN,
+  CHILD_RECLAIM_PRESENCE_DEFERS, CHILD_RECLAIM_SKIP,
+  childReclaimAskOrder, childReclaimAttention, childReclaimAttentionWithKept,
   childReclaimBackoffMs, childReclaimCoordinated, childReclaimDeferExpired, childReclaimDue,
   childReclaimFailingPastCeiling, childReclaimFailingSentence, childReclaimFailureLine, childReclaimFirstSighting,
-  childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptVerdicts,
+  childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptItems, childReclaimKeptList,
+  childReclaimKeptManySentence, childReclaimKeptVerdicts,
   childReclaimNextEntry, childReclaimSameGeneration, childReclaimSweepVerdict, childReclaimTerminalRefusal,
   isChildReclaimPreLockToken,
   type ChildReclaimAsk, type ChildReclaimCoordinatorClaim, type ChildReclaimHoldCandidate,
-  type ChildReclaimJournalRow, type ChildReclaimLaneNow,
-  type ChildReclaimSweepEntry, type ChildReclaimSweepInput, type ChildReclaimSweepOutcome,
-  type ChildReclaimSweepVerdict, type ChildReclaimTokenKind,
+  type ChildReclaimJournalAttention, type ChildReclaimJournalRow, type ChildReclaimKeptAttention,
+  type ChildReclaimLaneNow, type ChildReclaimSweepEntry, type ChildReclaimSweepInput, type ChildReclaimSweepOutcome,
+  type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict, type ChildReclaimTokenKind,
 } from '../src/childReclaimSweep.js';
 import {
   HOLD_NO_REASON, HOLD_UNREADABLE,
@@ -1416,5 +1418,156 @@ describe('a pre-lock refusal is a failure line, never a terminal refusal (spec �
     }
     // Guards the guard: the predicate still answers true for a terminal token.
     expect(childReclaimTerminalRefusal(refusal('tree-unreadable'), kindOf)).toBe(true);
+  });
+});
+
+// The attention list's kept arm (spec §5.9): the children the sweep keeps on purpose, from the
+// verdicts it recorded, filtered to the current listing; the collapse a lost database needs; and
+// the one-item-per-child rule that lets a kept item replace a failing one and a held child go
+// unlisted by the failing arm. Pure: every input is an argument.
+describe('the attention list\'s kept arm (spec §5.9)', () => {
+  const ELIGIBLE: ChildReclaimSweepVerdict = { eligible: true, runId: 7 };
+  const skipped = (why: Exclude<ChildReclaimSweepSkip, 'hold-retired'>): ChildReclaimSweepVerdict =>
+    ({ eligible: false, why });
+  const verdictsOf = (rows: readonly (readonly [string, ChildReclaimSweepVerdict])[]) =>
+    new Map<string, ChildReclaimSweepVerdict>(rows);
+  /** Every id listed as a child of run 7 unless told otherwise. */
+  const listed = (ids: readonly string[], runId: number | null = 7) =>
+    new Map<string, number | null>(ids.map((id): [string, number | null] => [id, runId]));
+  const terminalFor = (sessionId: string): ChildReclaimJournalAttention =>
+    ({ kind: 'terminal', sessionId, runId: 7, token: 'tree-unreadable', sentence: 'sentence for tree-unreadable', at: NOW });
+  const failingFor = (sessionId: string): ChildReclaimJournalAttention =>
+    ({ kind: 'failing', sessionId, runId: 7, token: 'pin-failed', sentence: 'sentence for pin-failed', at: NOW });
+  const keptFor = (sessionId: string, word: ChildReclaimKeptWord, runId = 7): ChildReclaimKeptAttention =>
+    ({ kind: 'kept', sessionId, runId, word, sentence: CHILD_RECLAIM_SKIP[word].sentence });
+
+  it('(i) lists exactly the verdicts that are not eligible AND answer a kept word', () => {
+    const verdicts = verdictsOf([
+      ['a', skipped('coordinating')], ['b', skipped('hold-unmeasured')], ['c', skipped('held')],
+      ['d', skipped('review-report-live')], ['e', ELIGIBLE],
+    ]);
+    expect(childReclaimKeptItems({ verdicts, live: listed(['a', 'b', 'c', 'd', 'e']), mirrorArms: [] })).toEqual([
+      { kind: 'kept', sessionId: 'a', runId: 7, word: 'coordinating', sentence: CHILD_RECLAIM_SKIP.coordinating.sentence },
+    ]);
+  });
+
+  it('(i) every kept word is listed, and its sentence is the sweep table\'s own', () => {
+    const verdicts = verdictsOf(CHILD_RECLAIM_KEPT_WORDS.map((w, n): [string, ChildReclaimSweepVerdict] =>
+      [`k${n}`, skipped(w)]));
+    const items = childReclaimKeptItems({ verdicts, live: listed([...verdicts.keys()]), mirrorArms: [] });
+    expect(items.map((a) => a.word)).toEqual([...CHILD_RECLAIM_KEPT_WORDS]);
+    for (const a of items) expect(a.sentence, a.word).toBe(CHILD_RECLAIM_SKIP[a.word].sentence);
+  });
+
+  it('(i) the items are ordered by session id, whatever order the verdicts were recorded in', () => {
+    const verdicts = verdictsOf([['c', skipped('coordinating')], ['a', skipped('coordinating')], ['b', skipped('coordinating')]]);
+    expect(childReclaimKeptItems({ verdicts, live: listed(['a', 'b', 'c']), mirrorArms: [] }).map((a) => a.sessionId))
+      .toEqual(['a', 'b', 'c']);
+  });
+
+  it('(ii) a child with a TERMINAL item gets no kept item; a failing item does not suppress one', () => {
+    const verdicts = verdictsOf([['a', skipped('coordinating')]]);
+    const live = listed(['a']);
+    expect(childReclaimKeptItems({ verdicts, live, mirrorArms: [terminalFor('a')] })).toEqual([]);
+    expect(childReclaimKeptItems({ verdicts, live, mirrorArms: [failingFor('a')] })).toEqual([keptFor('a', 'coordinating')]);
+    // A terminal item for ANOTHER child changes nothing for this one.
+    expect(childReclaimKeptItems({ verdicts, live, mirrorArms: [terminalFor('b')] })).toEqual([keptFor('a', 'coordinating')]);
+  });
+
+  it('(iii) a verdict whose row is not listed, or no longer a child, lists nothing', () => {
+    const verdicts = verdictsOf([['a', skipped('coordinating')], ['b', skipped('coordinating')]]);
+    expect(childReclaimKeptItems({ verdicts, live: new Map(), mirrorArms: [] })).toEqual([]);
+    expect(childReclaimKeptItems({ verdicts, live: new Map<string, number | null>([['a', null], ['b', 7]]), mirrorArms: [] }))
+      .toEqual([keptFor('b', 'coordinating')]);
+  });
+
+  it('(iii) an item carries the run id the listing\'s own marker names, not any other', () => {
+    const verdicts = verdictsOf([['a', skipped('minting-run-absent')]]);
+    expect(childReclaimKeptItems({ verdicts, live: listed(['a'], 9999), mirrorArms: [] }))
+      .toEqual([keptFor('a', 'minting-run-absent', 9999)]);
+  });
+
+  it('(iv) more than five children answering one kept word collapse into ONE line that names them', () => {
+    expect(CHILD_RECLAIM_KEPT_MANY_OVER).toBe(5);
+    const six = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6'];
+    const items = [
+      ...six.map((id) => keptFor(id, 'minting-run-absent', 9999)),
+      keptFor('c1', 'coordinating'),
+    ];
+    expect(childReclaimKeptList(items)).toEqual([
+      keptFor('c1', 'coordinating'),
+      { kind: 'kept-many', word: 'minting-run-absent',
+        members: six.map((sessionId) => ({ sessionId, runId: 9999 })),
+        sentence: childReclaimKeptManySentence('minting-run-absent', 6) },
+    ]);
+  });
+
+  it('(iv) five children answering one kept word stay five single items', () => {
+    const five = ['m1', 'm2', 'm3', 'm4', 'm5'];
+    const items = five.map((id) => keptFor(id, 'minting-run-absent', 9999));
+    expect(childReclaimKeptList(items)).toEqual(items);
+  });
+
+  it('(iv) the singles are ordered by session id across words, not grouped by word', () => {
+    expect(childReclaimKeptList([keptFor('b', 'coordinating'), keptFor('a', 'not-a-workspace'), keptFor('c', 'coordinating')]))
+      .toEqual([keptFor('a', 'not-a-workspace'), keptFor('b', 'coordinating'), keptFor('c', 'coordinating')]);
+  });
+
+  it('(iv) the count is per WORD: six children over two words stay single', () => {
+    const items = [
+      ...['a1', 'a2', 'a3'].map((id) => keptFor(id, 'coordinating')),
+      ...['b1', 'b2', 'b3'].map((id) => keptFor(id, 'minting-run-absent', 9999)),
+    ];
+    expect(childReclaimKeptList(items)).toEqual(items);
+  });
+
+  it('(iv) two collapsed words follow the singles, in the order of the word list; members are ordered by session id', () => {
+    const six = (word: ChildReclaimKeptWord, prefix: string) =>
+      ['6', '5', '4', '3', '2', '1'].map((n) => keptFor(`${prefix}${n}`, word));
+    const out = childReclaimKeptList([
+      ...six('not-a-workspace', 'w'), keptFor('s1', 'child-birth-unplaced'), ...six('coordinating', 'c'),
+    ]);
+    expect(out.map((a) => (a.kind === 'kept-many' ? `many:${a.word}` : `${a.kind}:${'sessionId' in a ? a.sessionId : ''}`)))
+      .toEqual(['kept:s1', 'many:coordinating', 'many:not-a-workspace']);
+    const first = out[1]!;
+    expect(first.kind === 'kept-many' ? first.members.map((m) => m.sessionId) : null)
+      .toEqual(['c1', 'c2', 'c3', 'c4', 'c5', 'c6']);
+  });
+
+  it('(iv) the collapsed sentence states the count, then each child\'s own sentence', () => {
+    expect(childReclaimKeptManySentence('minting-run-absent', 6)).toBe(
+      `6 child workspaces are kept for the same reason. For each one: ${CHILD_RECLAIM_SKIP['minting-run-absent'].sentence}`);
+  });
+
+  it('(v) one item per child: a kept item replaces that child\'s failing item, and a terminal item stands', () => {
+    expect(childReclaimAttentionWithKept(
+      [failingFor('a'), terminalFor('b')], [keptFor('a', 'coordinating')], new Map(),
+    )).toEqual([terminalFor('b'), keptFor('a', 'coordinating')]);
+  });
+
+  it('(v) a kept item for one child withholds no other child\'s failing item, and a terminal item is never filtered', () => {
+    expect(childReclaimAttentionWithKept(
+      [failingFor('a'), failingFor('b'), terminalFor('a')], [keptFor('a', 'coordinating')], new Map(),
+    )).toEqual([failingFor('b'), terminalFor('a'), keptFor('a', 'coordinating')]);
+  });
+
+  it('(xiii) a held child\'s failing item is withheld, and nothing else is', () => {
+    const verdicts = verdictsOf([
+      ['a', skipped('held')], ['b', skipped('held')], ['d', skipped('hold-unmeasured')],
+    ]);
+    expect(childReclaimAttentionWithKept(
+      [failingFor('a'), terminalFor('b'), failingFor('c'), failingFor('d')], [], verdicts,
+    )).toEqual([terminalFor('b'), failingFor('c'), failingFor('d')]);
+  });
+
+  it('(xiii) a child whose recorded verdict is eligible, ordinary or a doubt keeps its failing item', () => {
+    const verdicts = verdictsOf([['a', ELIGIBLE], ['b', skipped('review-report-live')], ['c', skipped('marker-unreadable')]]);
+    expect(childReclaimAttentionWithKept([failingFor('a'), failingFor('b'), failingFor('c')], [], verdicts))
+      .toEqual([failingFor('a'), failingFor('b'), failingFor('c')]);
+  });
+
+  it('(xiii) with no verdicts at all the mirror arms stand exactly as wave 4 shipped them', () => {
+    const arms = [failingFor('a'), terminalFor('b')];
+    expect(childReclaimAttentionWithKept(arms, [], new Map())).toEqual(arms);
   });
 });

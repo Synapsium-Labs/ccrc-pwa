@@ -30,8 +30,8 @@ import { askActions, askKey } from './askkey.js';
 import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  ChildMark, ChildReclaimAttention, CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth,
-  MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
+  ChildMark, ChildReclaimAttention, ChildReclaimKeptWord, CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion,
+  LifecycleHealth, MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
   SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
@@ -83,16 +83,18 @@ import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
   childReclaimBornAt, childReclaimGeneration, childReclaimLatest, childReclaimTokenKind, reclaimChild,
-  releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
+  recordChildReclaimKeptFeed, releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
   type ChildReclaimReleaseRequest, type ChildReclaimRequest,
 } from './coord/childReclaim.js';
 import {
-  childReclaimAskOrder, childReclaimAttention, childReclaimDeferExpired, childReclaimDue, childReclaimFirstSighting,
-  childReclaimHoldRead, childReclaimJournalRow, childReclaimNextEntry, childReclaimSameGeneration,
+  childReclaimAskOrder, childReclaimAttention, childReclaimAttentionWithKept, childReclaimDeferExpired, childReclaimDue,
+  childReclaimFirstSighting, childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptItems,
+  childReclaimNextEntry, childReclaimSameGeneration,
   childReclaimSweepVerdict, childReclaimTerminalRefusal, type ChildReclaimAsk, type ChildReclaimCoordinatorClaim,
   childReclaimKeptVerdicts, type ChildReclaimHoldCandidate,
   type ChildReclaimHoldCandidatesRead, type ChildReclaimHoldOpenRead, type ChildReclaimHoldRead,
-  type ChildReclaimJournalRow, type ChildReclaimLaneNow, type ChildReclaimMintingRunRead,
+  type ChildReclaimJournalAttention, type ChildReclaimJournalRow, type ChildReclaimKeptAttention,
+  type ChildReclaimLaneNow, type ChildReclaimMintingRunRead,
   type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead, type ChildReclaimSweepEntry,
   type ChildReclaimSweepOutcome, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
 } from './childReclaimSweep.js';
@@ -831,8 +833,15 @@ export class FleetWatcher {
    *  failed) — the same places the sweep state is cleared — reduces it to its KEPT verdicts
    *  (`childReclaimKeptVerdicts`, L1): the attention list keeps listing those, so the chip keeps
    *  saying them. `null` until this process's first judging pass. IN MEMORY ONLY. Replaced
-   *  whole, never mutated. */
+   *  whole, never mutated. Read by the run chip, through `currentChildReclaimVerdicts()`, and by
+   *  the attention list's one write: its kept arm, and the failing items it withholds for a held
+   *  child. */
   private childReclaimJudged: ReadonlyMap<string, ChildReclaimSweepVerdict> | null = null;
+  /** Which kept words this process has fed for which child: one `child reclaim kept` feed row per
+   *  child, per word, per process (spec §5.9); pruned when the registry stops listing the child, so
+   *  a later workspace under a recycled id is a new child. IN MEMORY ONLY: a restart feeds each
+   *  kept child once more. */
+  private childReclaimKeptReported = new Map<string, Set<ChildReclaimKeptWord>>();
   /** The seventh lane's clock — the journal mirror. `sweepLifecycle` below
    *  carries the lane's own docstring; this is only the clock field, same
    *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
@@ -1040,18 +1049,20 @@ export class FleetWatcher {
    *  erased, across an unlistable tick, the same retain-don't-erase rule the
    *  fail-shut return in `tick()` applies to every map it guards. */
   private childMarks: ReadonlyMap<string, ChildMark> | null = null;
-  /** The reclaim attention list as `sweepChildReclaim` last derived it from
-   *  the lifecycle mirror (child-reclamation wave 4). `emitCoord` reads it on
-   *  every tick; the sweep's MIRROR DERIVATION is its ONLY writer, on its own
-   *  slower clock, so a frame never waits on a database read. A cache of that
-   *  derivation's result, never a memo of anything else: no executor answer
-   *  writes it (spec §5.9: "derived from the lifecycle mirror so a restart
-   *  does not lose it" — every terminal refusal reaches the mirror through
-   *  ccd's own journal line, `ws-reclaim`'s or the one `ws-audit --reclaim`
-   *  writes for a terminal verdict, and every failure through `ws-reclaim`'s
-   *  `_lc_fail`; the mirror is the ONLY source). `[]` until the first
-   *  sweep — which runs on the first tick after a restart, so the list is
-   *  rebuilt from the mirror within one tick rather than lost. */
+  /** The reclaim attention list (spec §5.9), as `sweepChildReclaim` last wrote it. `emitCoord` reads
+   *  it on every tick; it is written in ONE place, `childReclaimPublishAttention`, on the sweep's own
+   *  slower clock, so a frame never waits on a database read.
+   *  - Its `terminal` and `failing` arms are derived from the lifecycle mirror by EVERY pass, so a
+   *    restart does not lose them.
+   *  - Its `kept` and `kept-many` arms come from the verdicts as they stand: the last judging pass's,
+   *    or its kept verdicts alone after a pass that judged nothing, so a raised switch or a missing
+   *    capability does not erase them.
+   *  - A child has one item: a kept item replaces its failing item, and a terminal item stands. A
+   *    child whose recorded verdict is `held` has no failing item; with no verdict recorded, the
+   *    failing arm stands.
+   *  - It is never fed by an executor answer, and never by a sweep entry (`ChildReclaimSweepEntry`).
+   *  `[]` until the first sweep — which runs on the first tick after a restart, so the mirror arms are
+   *  rebuilt within one tick, and the kept arm at the first judging pass, rather than lost. */
   private childReclaimAttentionList: readonly ChildReclaimAttention[] = [];
   /** `emitPools`'s byte-equality guard and last measured value — `lastCoordJson`
    *  and `coord`'s idiom, for their reasons. `null` until a tick has measured,
@@ -3139,8 +3150,8 @@ export class FleetWatcher {
     if (this.lastChildReclaimSweep !== null && mono - this.lastChildReclaimSweep < CHILD_RECLAIM_SWEEP_MS) return;
     this.lastChildReclaimSweep = mono;
 
-    // ONE — the attention list, and the pass's coordination-history read,
-    // from the mirror ALONE (spec §5.9: "derived from the lifecycle mirror so
+    // ONE — the attention list's mirror arms, and the pass's coordination-history
+    // read, from the mirror ALONE (spec §5.9: "derived from the lifecycle mirror so
     // a restart does not lose it"), BEFORE either early return below: a
     // paused fleet, or a fleet host without both `reclaim-v1` and
     // `reclaim-pause-v1`, still has children standing under terminal
@@ -3196,9 +3207,12 @@ export class FleetWatcher {
     }
     const live = new Map<string, number | null>(
       records.map((r): [string, number | null] => [r.id, r.child.kind === 'child' ? r.child.runId : null]));
-    // The ONLY write of the list: the mirror derivation's result. No executor
+    // A kept word is fed once per child per process, and "per child" ends with the registry row: a
+    // later workspace under a recycled id is a new child (spec §5.9).
+    for (const id of [...this.childReclaimKeptReported.keys()]) if (!live.has(id)) this.childReclaimKeptReported.delete(id);
+    // The mirror arms; the list itself is written once, by `childReclaimPublishAttention`. No executor
     // answer ever writes it (spec §5.9 — see the `.then` below).
-    this.childReclaimAttentionList = childReclaimAttention({
+    const mirrorArms = childReclaimAttention({
       latest, live, kindOf: childReclaimTokenKind, sentenceFor: refusalSentence, nowMs: now,
     });
 
@@ -3215,6 +3229,7 @@ export class FleetWatcher {
     if (!capSupported(this.deps.fleetState, RECLAIM_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)
         || names.includes(RECLAIM_PAUSE_MARKER)) {
       if (this.childReclaimJudged !== null) this.childReclaimJudged = childReclaimKeptVerdicts(this.childReclaimJudged);
+      this.childReclaimPublishAttention(mirrorArms, live);
       this.childReclaimSweepState.clear();
       this.childReclaimHoldRetiredSeen.clear();
       this.childReclaimReleaseAnswered.clear();
@@ -3432,6 +3447,15 @@ export class FleetWatcher {
       due.push({ r, entry, runId: v.runId, id: r.id });
     }
     this.childReclaimJudged = judged;
+    // The list's second publish, and the kept feed row: judging passes only, so a paused or capability-less
+    // pass lists what it kept and writes nothing (spec §5.9). Recorded, never pushed.
+    for (const a of this.childReclaimPublishAttention(mirrorArms, live)) {
+      const words = this.childReclaimKeptReported.get(a.sessionId) ?? new Set<ChildReclaimKeptWord>();
+      if (words.has(a.word)) continue;
+      words.add(a.word);
+      this.childReclaimKeptReported.set(a.sessionId, words);
+      recordChildReclaimKeptFeed({ coord, notifyLog: this.deps.notifyLog }, a);
+    }
 
     // FOUR — the bound: at most `CHILD_RECLAIM_MAX_IN_FLIGHT` destructive
     // verbs in flight from this automatic trigger at once (spec §5.7, "On
@@ -3629,6 +3653,18 @@ export class FleetWatcher {
     const windowUids = new Set(window.map((e) => e.uid).filter((u): u is string => u !== null));
     const extra = creates.filter((c) => c.uid === null || !windowUids.has(c.uid));
     return extra.length === 0 ? window : [...extra, ...window];
+  }
+
+  /** THE ONE WRITE of the attention list (spec §5.9): the mirror arms this pass derived, then the kept
+   *  arm from the verdicts as they stand (the last judging pass's, or its kept verdicts alone), filtered
+   *  to this listing, with no failing item for a child whose recorded verdict is `held`. L1 decides
+   *  every item; this method only assigns. Returns the kept items it listed, for the feed row. */
+  private childReclaimPublishAttention(mirrorArms: readonly ChildReclaimJournalAttention[],
+    live: ReadonlyMap<string, number | null>): ChildReclaimKeptAttention[] {
+    const verdicts = this.childReclaimJudged ?? new Map<string, ChildReclaimSweepVerdict>();
+    const kept = childReclaimKeptItems({ verdicts, live, mirrorArms });
+    this.childReclaimAttentionList = childReclaimAttentionWithKept(mirrorArms, kept, verdicts);
+    return kept;
   }
 
   /** Absence is logged and skipped (spec §5.7) — ONCE per child per condition

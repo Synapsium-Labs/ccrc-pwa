@@ -10,7 +10,7 @@ import { refusalSentence } from '../wsaudit.js';
 import { CHILD_BIRTH_SKEW_MS, type ChildSpentVerdict } from './childSpent.js';
 import {
   CHILD_RECLAIM_SKIP, childReclaimCoordinated, childReclaimFailingPastCeiling, childReclaimFailingSentence, childReclaimFailureLine,
-  childReclaimJournalRow, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
+  childReclaimJournalRow, type ChildReclaimKeptAttention, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
 } from '../childReclaimSweep.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
@@ -1276,6 +1276,33 @@ function recordChildReclaimFeed(
   } catch (err) {
     console.warn('ccrc-server: recordFeedEvent failed '
       + `(${err instanceof Error ? err.message : String(err)}) — child reclaim ${o.kind}, feed archive degraded`);
+  } finally {
+    void log.flush();
+  }
+}
+
+/** The title of the one feed row a kept child writes (spec §5.9). */
+export const CHILD_RECLAIM_KEPT_FEED_TITLE = 'child reclaim kept';
+
+/**
+ * ONE feed row for a child the sweep keeps on purpose (spec §5.9), in `recordChildReclaimFeed`'s idiom
+ * exactly: `kind: 'run'`, recorded and NEVER pushed; a missing log degrades the record and never the
+ * sweep; `recordFeedEvent` throws synchronously and is caught; the flush is in a `finally`. The caller
+ * decides when to write it — once per child, per word, per process — so this writes whatever it is
+ * handed, and the row says what the attention item says.
+ */
+export function recordChildReclaimKeptFeed(
+  deps: Pick<ChildReclaimDeps, 'coord' | 'notifyLog'>, a: ChildReclaimKeptAttention,
+): void {
+  const log = deps.notifyLog;
+  if (!log) return;
+  try {
+    const ev = log.record({ kind: 'run', sessionId: a.sessionId, runId: a.runId,
+      title: CHILD_RECLAIM_KEPT_FEED_TITLE, body: `${a.sessionId}, child of run #${a.runId}: ${a.sentence}` });
+    deps.coord.recordFeedEvent(log.epoch, ev);
+  } catch (err) {
+    console.warn('ccrc-server: recordFeedEvent failed '
+      + `(${err instanceof Error ? err.message : String(err)}) — child reclaim kept, feed archive degraded`);
   } finally {
     void log.flush();
   }
