@@ -1056,6 +1056,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       longer pressing.
       - STATUS: fleet and server v0.0.84, newest v0.0.84, backups fleet 98M/server 510M, disk free fleet 80G/work
         volume 213G/server 33G, no anomalies.
+    - **2026-10-05 14:27 UTC — v0.0.85 published at 14:14 (#253, the graph sweep's `MemoryMax` raised from 4G to
+      6G).** Neither box has moved 13 min in, which is within the 30-min catalogue poll. Watched to its end.
+      - STATUS: fleet and server v0.0.84, newest v0.0.85, backups fleet 98M/server 510M, disk free fleet 107G/work
+        volume 235G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
