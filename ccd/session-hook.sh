@@ -3510,10 +3510,13 @@ fi
 # or a jq killed for memory fails this deny OPEN (above), so an unbounded
 # command was a way past it. Over the cap the program asks the RAW command one
 # question, with a fixed-string segment rule (`ocwords`): split the command on
-# each of `;` `&` `|` `(` `)` `<` `>` and the newline, and in any one segment
-# find `gh` (not preceded by a letter, digit or `_`), then `pr` as a word, then
-# `merge` as a word that a blank, the end of the segment or a backtick ends,
-# each searched for after the one before (one leftmost match each, so linear).
+# each of `;` `&` `|` and the newline, the separators between COMMANDS, and in
+# any one segment find `gh` (not preceded by a letter, digit or `_`), then `pr`
+# as a word, then `merge` as a word that a blank, the end of the segment, a
+# backtick, `(`, `)`, `<` or `>` ends, each searched for after the one before
+# (one leftmost match each, so linear). The redirections and parentheses do
+# not split: a gh flag's value may hold them (`gh -R $(echo o/r) pr merge`,
+# `gh -R o/r<x pr merge`), and a merge is still a merge there.
 # gh's own flags may stand between the words (`gh -R o/r pr merge`, `gh pr -R
 # o/r merge`), which main's full parse refuses (landing-order wave 3's fix
 # round, review 267 F3). Yes: the arm reads it as a merge it could not
@@ -3526,11 +3529,17 @@ fi
 # `;`, 14 s at 100 KB of `gh;`), and a hook that times out fails this deny
 # OPEN. A `contains("gh") and contains("merge")` prefilter, whole and per
 # segment, keeps the word tests off nearly every segment. Measured through
-# the whole hook at 100 KB, on jq 1.7 and 1.8.2: 100 to 330 ms on `;`, `gh;`,
-# `gh pr merged;`, newlines and `gh merge ` repeated. The word rule, not two
-# bare substrings, because `gh` is inside "though" and "high" and `merge`
-# inside "merged": the two substrings matched 1,340 of 4,478 over-cap fleet
-# commands in two days, mostly prose.
+# the whole hook at 100 KB, on jq 1.7 and 1.8.2: 90 to 320 ms on `;`, `gh;`,
+# `gh pr merged;`, newlines, `gh merge ` and, the worst, `gh merge;` repeated
+# (many segments that pass the prefilter). The scan's worst case at 100 KB is
+# about 40% of the sync-advisory 1500 ms bound (~600 ms through the hook on a
+# loaded box, ~300 ms idle), not the parse's quarter above. The cost is
+# linear in the length, so that shape would cross the bound near 250 KB. The
+# word rule, not two bare substrings, because `gh` is inside "though" and
+# "high" and `merge` inside "merged": the two substrings matched 1,340 of
+# 4,478 over-cap fleet commands in one two-day window, mostly prose. The
+# in-order search slices by `match` offsets, which jq 1.7 and 1.8 count in
+# codepoints (measured correct after é and an emoji); jq 1.6 is unverified.
 # Only where the deny already applies: a session with no wave hold and no
 # child marker is never refused, under the cap or over it. THE VALUE IS
 # MEASURED: the largest round size at which the worst quote-dense shape
@@ -3542,18 +3551,23 @@ fi
 # THE COST, said: a held session's long command whose raw text reads as a
 # `gh pr merge` — a PR body or a mail that QUOTES it — is refused until it is
 # split or rephrased. The coordinator accepted it: of 3,537 over-cap fleet
-# commands in two days, the segment rule refuses 12 more than a word-bounded
-# three-word match would. The backtick is a STRICTER OVER-CAP READING, NOT A
-# CLOSURE: a bare `` `gh pr merge` `` is refused over the cap because the
-# end class holds a backtick, while legacy backticks still pass under the cap
-# (listed above). WHAT PASSES OVER THE CAP, said, each measured through this
-# hook, held, padded past the cap: `bash -c "gh pr merge"` and `eval "gh pr
-# merge"` (the closing quote is not in the end class; `bash -c "gh pr merge
-# 42"` is refused), `gh pr \<newline> merge` (a continuation), quoting inside
-# a word (`g"h" pr merge`, `gh p""r merge`), a variable (`x=gh; $x pr merge`)
-# and an alias. `gh<newline>pr<newline>merge` passes too, rightly: bash reads
-# three commands. Classified, not closed (the stopping line, ruled
-# 2026-10-03).
+# commands in another two-day window, the segment rule refuses at most 12
+# more than a word-bounded three-word match would (that count measured the
+# three word tests unordered; the in-order search is stricter). The backtick
+# is a STRICTER OVER-CAP READING, NOT A CLOSURE: a bare `` `gh pr merge` `` is
+# refused over the cap because the end class holds a backtick, while legacy
+# backticks still pass under the cap (listed above). WHAT PASSES OVER THE
+# CAP, said, each measured through this hook, held, padded past the cap:
+# `bash -c "gh pr merge"` and `eval "gh pr merge"` (the closing quote is not
+# in the end class; `bash -c "gh pr merge 42"` is refused), `gh pr \<newline>
+# merge` (a continuation), quoting inside a word (`g"h" pr merge`, `gh p""r
+# merge`), a variable (`x=gh; $x pr merge`), an alias, a separator inside a
+# quoted flag value or inside a substitution that holds `;` `&` `|` or a
+# newline (`gh pr -R "a;b" merge 42`), and a NUL next to a word (`gh pr
+# merge\0 42`, which passes over the cap and is denied under it; bash strips
+# NUL from command text and Node refuses it in spawn arguments).
+# `gh<newline>pr<newline>merge` passes too, rightly: bash reads three
+# commands. Classified, not closed (the stopping line, ruled 2026-10-03).
 # The cap also BOUNDS every superlinear walk above: the strip and GH_MERGE_RE
 # never read more than MERGE_PARSE_CAP bytes, so the 36-200 KB timings above
 # are what the cap prevents, not what a command costs.
@@ -3612,9 +3626,9 @@ def qs($h):
       | if $done | not then null else "<<" + $rest + "\n" + (if .x == "" and .q == null then .b | subs else "" end) end end
     elif startswith("$((") or startswith("((") or startswith("$[") or startswith("$$") then .
     else "" end) end;
-def ocsegs: reduce (";", "&", "|", "(", ")", "<", ">", "\n") as $s ([.]; map(split($s)) | add);
+def ocsegs: reduce (";", "&", "|", "\n") as $s ([.]; map(split($s)) | add);
 def ocafter($re): . as $s | [match($re)] | if length == 0 then empty else $s[.[0].offset + .[0].length:] end;
-def ocmerge: ocafter("(^|[^A-Za-z0-9_])gh(?=\\s)") | ocafter("\\spr(?=\\s|$)") | ocafter("\\smerge($|[\\s`])");
+def ocmerge: ocafter("(^|[^A-Za-z0-9_])gh(?=\\s)") | ocafter("\\spr(?=\\s|$)") | ocafter("\\smerge($|[\\s`()<>])");
 def ocwords: contains("gh") and contains("merge")
   and any(ocsegs[] | select(contains("gh") and contains("merge")) | ocmerge; true);
 def capped(f): (.tool_input.command // "") as $c

@@ -51,7 +51,7 @@ const sized = (unit: string, tail: string, bytes: number): string =>
 
 /** One PreToolUse Bash call through the real hook. Exit 0 and a silent stderr
  *  are the hook's standing contract, asserted on every call. */
-const bash = (command: string): { deny: string | null; stdout: string } => {
+const bash = (command: string, nulStderr = false): { deny: string | null; stdout: string } => {
   const r = spawnSync('bash', [HOOK], {
     input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: home }),
     encoding: 'utf8',
@@ -59,7 +59,8 @@ const bash = (command: string): { deny: string | null; stdout: string } => {
       TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
   });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
-  expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
+  // A NUL in the command makes bash warn on stderr, on any command, at a line before the merge arm.
+  if (!nulStderr) expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   const line = r.stdout.trim();
   if (line === '') return { deny: null, stdout: '' };
   const j = JSON.parse(line) as { hookSpecificOutput: { permissionDecision?: string; permissionDecisionReason?: string } };
@@ -314,14 +315,57 @@ describe('the worker merge deny', () => {
 
     it.each([
       ['an operator after `merge`: `;`', 'gh pr merge;echo ok'],
-      ['an operator after `merge`: `)`', 'x=$(gh pr merge)'],
+      ['an operator after `merge`: `)` closing a substitution', 'x=$(gh pr merge)'],
+      ['an operator after `merge`: a bare `)`', 'gh pr merge)'],
       ['an operator after `merge`: `|`', 'gh pr merge|cat'],
+      ['an operator after `merge`: `&&`', 'gh pr merge&&echo ok'],
+      ['a redirection after `merge`: `>`', 'gh pr merge>out'],
+      ['a redirection after `merge`: `<`', 'gh pr merge<in'],
+      ['a paren after `merge`: `(`', 'gh pr merge(x)'],
+      ['a subshell: `(gh pr merge)`', '(gh pr merge)'],
       ['a TAB between the words', 'gh\tpr\tmerge 42'],
     ])('refuses %s over the cap (review 267 F4)', (_n, c) => {
       hold(WAVE_HOLD);
       const d = bash(over(c)).deny;
       expect(d, `an over-cap ${JSON.stringify(c)} was let through`).not.toBeNull();
       expect(d).toContain('parse cap');
+    });
+
+    // A flag's VALUE may hold a substitution, a redirection or a paren, and main's
+    // full parse refuses all of them (review 267 I1): only `;` `&` `|` and the newline
+    // split a command, so none of these splits the three words apart.
+    it.each([
+      'gh -R $(echo o/r) pr merge 42',
+      'gh -R "$(git remote get-url origin)" pr merge 42',
+      'gh --repo=$(echo o/r) pr merge 42',
+      'gh pr -R $(echo o/r) merge 42',
+      'gh -R o/r<x pr merge 42',
+      'gh pr --repo o/r>x merge 42',
+    ])('refuses a flag value that holds a substitution or a redirection over the cap — %s (review 267 I1)', (c) => {
+      hold(WAVE_HOLD);
+      const d = bash(over(c)).deny;
+      expect(d, `an over-cap ${c} was let through`).not.toBeNull();
+      expect(d).toContain('parse cap');
+    });
+
+    it.each([
+      ['a separator inside a quoted flag value', 'gh pr -R "a;b" merge 42'],
+    ])('LISTED over-cap pass, not a closure: %s', (_n, c) => {
+      hold(WAVE_HOLD);
+      expect(bash(over(c)).deny, `the listed pass ${JSON.stringify(c)} was refused: update the hook header's list`).toBeNull();
+    });
+
+    it('LISTED over-cap pass, not a closure: a NUL next to the word is denied under the cap and passes over it', () => {
+      hold(WAVE_HOLD);
+      // bash strips NUL from command text (and warns on stderr, for any command holding one).
+      expect(bash('gh pr merge\u0000 42', true).deny, 'under the cap the strip reads it').not.toBeNull();
+      expect(bash(over('gh pr merge\u0000 42'), true).deny, 'the listed pass was refused: update the hook header\'s list').toBeNull();
+    });
+
+    it('reads a merge after multi-byte text: the in-order search slices by codepoint offsets', () => {
+      hold(WAVE_HOLD);
+      expect(bash(over('é😀 gh -R o/r pr merge 42')).deny, 'a multi-byte prefix misaligned the slice').not.toBeNull();
+      expect(bash(over('é😀 gh pr view 3 merged')).deny).toBeNull();
     });
 
     it('refuses a bare backtick `gh pr merge` over the cap — a STRICTER over-cap reading, not a closure: under the cap it passes', () => {
@@ -335,6 +379,7 @@ describe('the worker merge deny', () => {
     it.each([
       ['prose with `gh` and `merge` inside other words', 'though it merged high'],
       ['`gh` but not a merge', 'gh pr view 3'],
+      ['`(merge)` is not a merge word: a blank must precede it', 'gh pr view 3 (merge)'],
       ['a `gh` that is the tail of another word', 'sigh pr merge it'],
       ['`gh`, `pr` and `merge` on three lines: bash reads three commands, none a merge', 'gh\npr\nmerge'],
     ])('lets an over-cap command through that is not a merge — %s', (_n, c) => {
@@ -345,13 +390,15 @@ describe('the worker merge deny', () => {
     // Each at 100 KB, through the whole hook, held: none is a merge, and each
     // must clear the 1500 ms whole-hook bound the sync advisory is held to.
     // `splits` over `;` or `gh;` took 43 to 52 s and 14 s here (jq 1.7); the
-    // fixed-string split and the prefilter cost 100 to 330 ms (review 267 F3).
+    // fixed-string split and the prefilter cost 90 to 320 ms (review 267 F3).
+    // The last shape is the worst measured: many segments that pass the prefilter.
     it.each([
       ['`;` only', ';'],
       ['`gh;` repeated', 'gh;'],
       ['`gh pr merged;` repeated', 'gh pr merged;'],
       ['newlines only', '\n'],
       ['one long line holding `gh` and `merge` as words, no separator', 'gh merge '],
+      ['`gh merge;` repeated: many segments that pass the prefilter (the worst shape measured)', 'gh merge;'],
     ])('answers 100 KB of %s over the cap in bounded time, denying none of it', (_n, unit) => {
       hold(WAVE_HOLD);
       const c = sized(unit, '', 100000);
