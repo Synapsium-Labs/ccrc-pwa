@@ -8419,7 +8419,7 @@ _acct_unprovision() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
 }
 
 _acct_remove() {
-  local id="" v="" flag="" item="" sid="" field="" f="" model="" stands="" modelfiles="" lane_dir="" tier="" unit="" port="" q=0
+  local id="" v="" flag="" item="" sid="" field="" f="" model="" stands="" modelfiles="" lane_dir="" tier="" unit="" port="" q=0 usage_note=""
   local keepcred=0 seen_id=0 seen_keep=0 was_placeable=0 rc=0 already=0
   local -a rehomed=() rehomed_fields=() kept=() removed=() operator_steps=() lane_before=() lane_left=()
   while [ $# -gt 0 ]; do
@@ -8627,9 +8627,9 @@ _acct_remove() {
   # the `--stands` key covers node's own refusals, which `_acct_run_op` re-emits
   # verbatim and bash may not reword.
   stands="Registry fields already rehomed to $ACCT_UPSTREAM_ID: ${rehomed_fields[*]:-none}. ccrc-managed settings, hooks, and skills were swept from $ACCT_REMOVE_CFG. The roster entry and all account artifacts still stand; the config directory and transcript history remain intentionally."
-  _acct_remove_usage "$id" "$stands"; [ -z "$ACCT_USAGE_REMOVED" ] || { removed+=("$ACCT_USAGE_REMOVED"); stands="$stands ccrc's usage timer for $id was disabled; 'ccrc install' enables it again for a lane that is still codex."; }; [ -z "$ACCT_USAGE_STEP" ] || operator_steps+=("$ACCT_USAGE_STEP"); [ -z "$ACCT_USAGE_WAIT_STEP" ] || operator_steps+=("$ACCT_USAGE_WAIT_STEP")
+  _acct_remove_usage "$id" "$stands"; [ -z "$ACCT_USAGE_REMOVED" ] || { removed+=("$ACCT_USAGE_REMOVED"); usage_note=" ccrc's usage timer for $id was disabled; 'ccrc install' enables it again for a lane that is still codex."; }; stands="$stands$usage_note"; [ -z "$ACCT_USAGE_STEP" ] || operator_steps+=("$ACCT_USAGE_STEP"); [ -z "$ACCT_USAGE_WAIT_STEP" ] || operator_steps+=("$ACCT_USAGE_WAIT_STEP")
   _acct_write_op "$stands" drop --file "$(_acct_roster_path)" --id "$id" --stands "$stands"
-  stands="The roster no longer contains $id, but \$HOME/.ccrc/accounts.sh still projects the old roster and all account artifacts still stand. Registry fields and home cleanup are not rolled back; the config directory and transcript history remain intentionally."
+  stands="The roster no longer contains $id, but \$HOME/.ccrc/accounts.sh still projects the old roster and all account artifacts still stand. Registry fields and home cleanup are not rolled back; the config directory and transcript history remain intentionally.$usage_note"
   _acct_projection "$stands"
 
   # THE CODEX LANE'S FILES, NOW THAT NO ROW NAMES IT. The stop arm above says
@@ -22502,8 +22502,8 @@ _uninst_codex_usage() {
 # written again by it. So the service is read through `_svc_is_active` once a
 # second, for at most `_acct_usage_wait_secs`, with one waiting line on stderr:
 #   * `inactive`, `failed`: done;
-#   * `activating` (a oneshot reads it for its WHOLE run — never `active`),
-#     `active`, `deactivating`, `reloading`, `refreshing`: in flight;
+#   * `active`, `activating` (a oneshot reads it for its WHOLE run — never
+#     `active`), `deactivating`, `reloading`, `refreshing`: in flight;
 #   * anything else, the EMPTY answer of a manager that did not reply included:
 #     UNMEASURED, never done. The removal goes on, and ACCT_USAGE_WAIT_STEP says
 #     so. Refusing would make every removal impossible on a box whose user bus
@@ -22512,9 +22512,11 @@ _uninst_codex_usage() {
 # caller's what-still-stands clause ($2) and the retry. The timer is disabled
 # FIRST because a timer still enabled could fire a new poll between an
 # `inactive` read and the row's `rm`. That clause says "all account artifacts
-# still stand", which is false of the timer link this run just took, so when
-# ACCT_USAGE_REMOVED is set the refusal adds the one sentence that says so (the
-# caller's own drop clause gets the same correction after this returns).
+# still stand", which is false of a timer link that is gone, so whenever the link
+# measures not enabled at the bound the refusal adds ONE sentence, "Except ccrc's
+# usage timer ...", that says whose doing it is: this run's disable, or not this
+# run's (a retry finds the link its first run took). The caller's drop and
+# projection clauses get the same correction for a link this run took.
 #
 # THE CALLER RUNS IT BEFORE THE ROSTER DROP (D-4050).
 # Plan 3a ran it after the drop, where it could not refuse. A refusal there could
@@ -22564,7 +22566,7 @@ _acct_remove_usage() {   # <id> <what-still-stands>
     state="$(_svc_is_active "$s")"
     case "$state" in
       inactive|failed) return 0 ;;
-      activating|active|deactivating|reloading|refreshing) : ;;
+      active|activating|deactivating|reloading|refreshing) : ;;
       *)
         ACCT_USAGE_WAIT_STEP="ccrc's usage poll $s may still be running for the removed account $1: the user manager did not say (systemctl --user is-active answered \"$state\"), so this removal did not wait for it, and a poll that was running may write \$HOME/.cc-limits/$1.json again after this removal. Run: systemctl --user is-active $s — once it reads inactive, remove \$HOME/.cc-limits/$1.json by hand if it is there."
         return 0 ;;
@@ -22574,9 +22576,16 @@ _acct_remove_usage() {   # <id> <what-still-stands>
       said=1
     fi
     if [ $(( SECONDS - t0 )) -ge "$limit" ]; then
-      timer="ccrc's usage timer $u is not enabled, so no new poll starts."
-      _codex_usage_enabled "$u" && timer="ccrc's usage timer $u is still enabled, so new polls go on starting: run systemctl --user disable --now $u first."
-      [ -z "$ACCT_USAGE_REMOVED" ] || still="$still This run also disabled ccrc's usage timer $u, so that one artifact no longer stands; 'ccrc install' enables it again for a lane that is still codex."
+      if _codex_usage_enabled "$u"; then
+        timer="ccrc's usage timer $u is still enabled, so new polls go on starting: run systemctl --user disable --now $u first."
+      else
+        timer="ccrc's usage timer $u is not enabled, so no new poll starts."
+        if [ -n "$ACCT_USAGE_REMOVED" ]; then
+          still="$still Except ccrc's usage timer $u: this run disabled it, so it does not stand; 'ccrc install' enables it again for a lane that is still codex."
+        else
+          still="$still Except ccrc's usage timer $u: it is not enabled, and this run did not disable it, so it does not stand; 'ccrc install' enables it again for a lane that is still codex."
+        fi
+      fi
       _acct_refuse 1 usage-refresh-in-flight "ccrc's usage poll $s for $1 still reads $state after ${limit}s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before \$HOME/.cc-limits/$1.json: ccrc never stops a poll, because it may be writing the lane's OAuth token file, and a row removed under a running poll is written again. $timer $still Retry 'ccrc account remove --id $1' once 'systemctl --user is-active $s' reads inactive: every step this run took is safe to repeat."
     fi
     sleep 1

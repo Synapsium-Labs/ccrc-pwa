@@ -6126,6 +6126,8 @@ describe('ccrc account remove', () => {
     expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toContain(`"${lane.id}"`);
   });
 
+  // Plan 3b Task A3 (D-4049): this run now also asks `is-active ccrc-codex-usage@ext-a.service`; plantUsageCtl's
+  // stand-in answers it before the poison stub ever sees it, so `systemctl-poison` stays absent and the title (frozen) holds.
   itSystemd('C14: an EXTERNAL account still carrying the ccrc usage timer its codex days enabled has it disabled too — and asks the manager nothing else (C4 stands)', () => {
     const home = box('ccrc-account-remove-external-usage-');
     seedRosterJson(home, [UPSTREAM,
@@ -6174,12 +6176,12 @@ describe('ccrc account remove', () => {
   // fired is WAITED for, never stopped, before the roster drop and before the
   // limits row. `ext-a` (C14's shape) keeps every other manager question out of
   // the run, so `systemctl-poison` stays absent: nothing else was asked.
-  const seedUsageWait = (home: string, svc: string[]): { link: string; row: string; ctl: string } => {
+  const seedUsageWait = (home: string, svc: string[], o: { enabled?: boolean; keepLink?: boolean } = {}): { link: string; row: string; ctl: string } => {
     seedRosterJson(home, [UPSTREAM, USAGE_EXT_A, HOMEABLE('team-shared', 'blue')]);
     for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
     plantLauncher(home, 'ext-a', '#!/bin/sh\n# somebody else wrote this\nexit 0\n');
-    const { link, row } = plantCodexUsage(home, 'ext-a');
-    const ctl = plantUsageCtl(home, { svc });
+    const { link, row } = plantCodexUsage(home, 'ext-a', { enabled: o.enabled });
+    const ctl = plantUsageCtl(home, { svc, keepLink: o.keepLink });
     plantTmux(home, []);
     return { link, row, ctl };
   };
@@ -6217,10 +6219,10 @@ describe('ccrc account remove', () => {
     expect(detail.startsWith(`ccrc's usage poll ${SVC} for ext-a still reads activating after 2s (CCRC_ACCT_USAGE_WAIT_S), so this removal stopped before the roster drop and before $HOME/.cc-limits/ext-a.json: ccrc never stops a poll, because it may be writing the lane's OAuth token file, and a row removed under a running poll is written again.`), detail).toBe(true);
     expect(detail).toContain('ccrc\'s usage timer ccrc-codex-usage@ext-a.timer is not enabled, so no new poll starts.');
     expect(detail).toContain('The roster entry and all account artifacts still stand');
-    // P9: THIS run withdrew the timer, so the refusal says so, beside the clause that says what stands.
-    const WITHDREW = 'This run also disabled ccrc\'s usage timer ccrc-codex-usage@ext-a.timer, so that one artifact no longer stands; \'ccrc install\' enables it again for a lane that is still codex.';
+    // P9: THIS run disabled the timer, so the refusal corrects the clause that says what stands, in one sentence.
+    const WITHDREW = 'Except ccrc\'s usage timer ccrc-codex-usage@ext-a.timer: this run disabled it, so it does not stand; \'ccrc install\' enables it again for a lane that is still codex.';
     expect(detail, 'the refusal claims everything stands after it disabled the timer').toContain(WITHDREW);
-    expect(detail.indexOf(WITHDREW), 'the withdrawal sentence must follow the clause it corrects').toBeGreaterThan(detail.indexOf('The roster entry and all account artifacts still stand'));
+    expect(detail.indexOf(WITHDREW), 'the correction must follow the clause it corrects').toBeGreaterThan(detail.indexOf('The roster entry and all account artifacts still stand'));
     expect(detail.endsWith(`Retry 'ccrc account remove --id ext-a' once 'systemctl --user is-active ${SVC}' reads inactive: every step this run took is safe to repeat.`), detail).toBe(true);
     expect(r.stderr).toMatch(/^ccrc account remove: ccrc's usage poll ccrc-codex-usage@ext-a\.service is running \(activating\); waiting up to 2s /m);
     expect(readFileSync(roster, 'utf8'), 'the roster was dropped past a running poll').toBe(rosterBefore);
@@ -6230,25 +6232,47 @@ describe('ccrc account remove', () => {
     expect(calls.length, 'the bound was not waited out').toBeGreaterThanOrEqual(2);
     for (const c of calls) expect(c).toBe(`--user is-active ${SVC} row=present roster=named`);
     expect(existsSync(join(home, 'systemctl-poison'))).toBe(false);
+  });
 
-    // THE RETRY INTO THE SAME POLL: the timer is already gone, so this run disabled nothing, and its
-    // refusal measures the link at the bound and claims no withdrawal of its own.
+  // THE RETRY INTO THE SAME POLL: the timer is already gone (a first run took it), so this run disables nothing,
+  // and its refusal measures the link at the bound and claims no disable of its own.
+  itSystemd('Plan 3b Task A3: a retry into the same still-running poll finds the timer already disabled — it refuses again, says it did not disable it, and asks for no second disable', () => {
+    const home = box('ccrc-account-remove-usage-in-flight-again-');
+    const { link, row, ctl } = seedUsageWait(home, ['activating'], { enabled: false });
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
     const again = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '2' });
     expect(again.code).toBe(1);
     const aj = oneObject(again);
     expect(aj['error']).toBe('usage-refresh-in-flight');
-    expect(String(aj['detail'])).toContain('ccrc\'s usage timer ccrc-codex-usage@ext-a.timer is not enabled, so no new poll starts.');
-    expect(String(aj['detail']), 'a run that disabled nothing claimed a withdrawal').not.toContain('This run also disabled');
-    expect(usageCtlCalls(home), 'the retry disabled a timer that was already disabled').toEqual(['--user disable --now ccrc-codex-usage@ext-a.timer']);
+    const detail = String(aj['detail']);
+    expect(detail).toContain('ccrc\'s usage timer ccrc-codex-usage@ext-a.timer is not enabled, so no new poll starts.');
+    const NOT_THIS_RUNS = 'Except ccrc\'s usage timer ccrc-codex-usage@ext-a.timer: it is not enabled, and this run did not disable it, so it does not stand; \'ccrc install\' enables it again for a lane that is still codex.';
+    expect(detail, 'the retry left "all account artifacts still stand" uncorrected for a link that is gone').toContain(NOT_THIS_RUNS);
+    expect(detail.indexOf(NOT_THIS_RUNS)).toBeGreaterThan(detail.indexOf('The roster entry and all account artifacts still stand'));
+    expect(detail, 'a run that disabled nothing claimed a disable').not.toContain('this run disabled it');
+    expect(detail.endsWith(`Retry 'ccrc account remove --id ext-a' once 'systemctl --user is-active ${SVC}' reads inactive: every step this run took is safe to repeat.`), detail).toBe(true);
+    expect(usageCtlCalls(home), 'the retry disabled a timer that was already disabled').toEqual([]);
+    expect(lexists(link)).toBe(false);
+    expect(existsSync(row), 'the limits row was deleted under a running poll').toBe(true);
     expect(readFileSync(roster, 'utf8')).toBe(rosterBefore);
+  });
 
-    // A DISABLE THE MANAGER ANSWERS 0 WHILE THE LINK STAYS: still enabled at the bound, and the refusal says so.
-    plantCodexUsage(home, 'ext-a');
-    const stuck = runWith(home, plantUsageCtl(home, { keepLink: true, svc: ['activating'] }), { CCRC_ACCT_USAGE_WAIT_S: '2' });
+  // A DISABLE THE MANAGER ANSWERS 0 WHILE THE LINK STAYS: still enabled at the bound, and the refusal says so.
+  itSystemd('Plan 3b Task A3: a disable the manager answers 0 while the link stays leaves the timer enabled at the bound — the refusal says new polls go on starting and claims no disable', () => {
+    const home = box('ccrc-account-remove-usage-in-flight-stuck-');
+    const { link, row, ctl } = seedUsageWait(home, ['activating'], { keepLink: true });
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const rosterBefore = readFileSync(roster, 'utf8');
+    const stuck = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '2' });
     expect(stuck.code).toBe(1);
     const sj = oneObject(stuck);
+    expect(sj['error']).toBe('usage-refresh-in-flight');
     expect(String(sj['detail'])).toContain('ccrc\'s usage timer ccrc-codex-usage@ext-a.timer is still enabled, so new polls go on starting: run systemctl --user disable --now ccrc-codex-usage@ext-a.timer first.');
-    expect(String(sj['detail']), 'a disable that did not take claimed a withdrawal').not.toContain('This run also disabled');
+    expect(String(sj['detail']), 'a disable that did not take claimed a withdrawal').not.toContain('Except ccrc\'s usage timer');
+    expect(usageCtlCalls(home), 'the disable was asked, and answered 0').toEqual(['--user disable --now ccrc-codex-usage@ext-a.timer']);
+    expect(lexists(link), 'the link the manager left standing').toBe(true);
+    expect(existsSync(row)).toBe(true);
     expect(readFileSync(roster, 'utf8')).toBe(rosterBefore);
   });
 
@@ -6302,6 +6326,19 @@ describe('ccrc account remove', () => {
     expect(r.stderr).not.toMatch(/waiting up to/);
   });
 
+  itSystemd('Plan 3b Task A3: a poll whose last run ended `failed` is DONE — the removal completes at once, with no waiting line and no operator step for the poll', () => {
+    const home = box('ccrc-account-remove-usage-failed-');
+    const { link, row, ctl } = seedUsageWait(home, ['failed']);
+    const r = runWith(home, ctl, { CCRC_ACCT_USAGE_WAIT_S: '2' });   // a mutation that waits on `failed` refuses at 2s
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    expect(usageSvcCalls(home), 'one read: `failed` writes nothing more, so nothing is waited for').toEqual([`--user is-active ${SVC} row=present roster=named`]);
+    expect(r.stderr).not.toMatch(/waiting up to/);
+    expect(((j['operator-steps'] ?? []) as string[]).filter((x) => x.includes(SVC)), 'a failed poll was read as unmeasured').toEqual([]);
+    expect(lexists(link)).toBe(false);
+    expect(existsSync(row), 'the limits row survived the removal').toBe(false);
+  });
+
   itSystemd('Plan 3b Task A3: a roster drop that cannot write, after this run disabled the usage timer, says so — the drop\'s own clause names the withdrawn timer', () => {
     const home = box('ccrc-account-remove-usage-drop-fails-');
     const { link, row, ctl } = seedUsageWait(home, []);   // no word: the stand-in answers inactive, so nothing waits
@@ -6320,6 +6357,33 @@ describe('ccrc account remove', () => {
     } finally {
       chmodSync(join(home, '.ccrc'), 0o700);
     }
+  });
+
+  itSystemd('Plan 3b Task A3: a projection that cannot be regenerated, after this run disabled the usage timer, says so — the projection clause names the withdrawn timer too', () => {
+    const home = box('ccrc-account-remove-usage-projection-fails-');
+    const { link, row, ctl } = seedUsageWait(home, []);
+    // The generator replaced by one that refuses (C-projection's lever): the drop SUCCEEDS and the projection does not.
+    const deploy = join(home, 'ccrc', 'deploy');
+    rmSync(deploy);
+    mkdirSync(deploy);
+    for (const name of readdirSync(join(REPO, 'deploy'))) {
+      if (name === 'gen-accounts.mjs') continue;
+      symlinkSync(join(REPO, 'deploy', name), join(deploy, name));
+    }
+    writeFileSync(join(deploy, 'gen-accounts.mjs'),
+      "process.stderr.write('gen-accounts: remedy: this generator was replaced by a fixture\\n');\n"
+      + 'process.exit(1);\n');
+    const r = runWith(home, ctl);
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('projection-failed');
+    const d = String(j['detail']);
+    expect(d).toContain('The roster no longer contains ext-a');
+    expect(d, 'the projection clause claims every artifact stands after this run disabled the timer')
+      .toContain('all account artifacts still stand. Registry fields and home cleanup are not rolled back; the config directory and transcript history remain intentionally. ccrc\'s usage timer for ext-a was disabled; \'ccrc install\' enables it again for a lane that is still codex.');
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).not.toContain('"ext-a"');
+    expect(lexists(link), 'the usage half did not run before the drop').toBe(false);
+    expect(existsSync(row), 'the limits row went before the projection step').toBe(true);
   });
 
   it('Plan 3b Task A3: on macOS no manager is asked about a usage poll — ccrc places no usage unit there (decision 17)', () => {
