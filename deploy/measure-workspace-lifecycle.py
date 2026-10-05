@@ -24,8 +24,8 @@ Rows (one `name: value` per line; detail lines are indented):
   archived_over_7d_held       the same, held (listed: stage 3 routes these to attention)
   archive_returns             returns from archive in the journal: an `archive` done, then the next return act
                               done on the same session (start ensure restore swap spawn unarchive); a second
-                              archive restarts the clock; a removal or a re-creation (destroy purge reap forget create)
-                              ends it
+                              archive restarts the clock; a removal or a re-creation (destroy purge reap forget create
+                              expire reclaim) ends it
   archive_return_max_s        the longest of them
   archive_returns_over_6d     those later than 6 days — spec §9's kill-rule band
   archive_returns_over_7d     those later than 7 days — any here holds stage 3 until the operator has seen it
@@ -40,9 +40,15 @@ import argparse, collections, datetime, json, os, sqlite3, sys, time
 TERMINAL = ('done', 'failed')
 # ccd's `_LC_ACTS` members that bring an archived workspace back (spec §3).
 RETURN_ACTS = ('start', 'ensure', 'restore', 'swap', 'spawn', 'unarchive')
-# ccd's `_LC_ACTS` members that END an archive without returning from it: a removal, or a new workspace created
-# under the same id (a reused slug). What follows either is a new workspace's life, never a return.
-ENDS_THE_ARCHIVE = ('destroy', 'purge', 'reap', 'forget', 'create')
+# ccd's `_LC_ACTS` members that END an archive without returning from it: a removal (`expire` and `reclaim` among
+# them — the server's two teardowns), or a new workspace created under the same id (a reused slug). What follows
+# either is a new workspace's life, never a return.
+ENDS_THE_ARCHIVE = ('destroy', 'purge', 'reap', 'forget', 'create', 'expire', 'reclaim')
+# ccd's `_LC_ACTS` members that neither return from an archive nor end it. With `archive` itself, the three lists
+# classify every act exactly once — measure-workspace-lifecycle.test.ts runs ccd's array and reds on an act that has
+# no place here, so a new act is decided, never silently ignored.
+NEUTRAL_ACTS = ('attic-drop', 'claim', 'enable', 'gc', 'hold', 'release', 'rename', 'rehome', 'route', 'stop',
+                'supervise', 'unsupervise')
 WEEK_S = 7 * 86400
 # Rows that stay at the top level of a card, released or not (spec §5.1).
 NEEDS_PERSON = ('attention', 'working')
@@ -73,12 +79,28 @@ def open_db(path):
         fail(f'cannot open {path} read-only: {e}')
 
 
+def close_time(text):
+    """The server's rule for a close time (`persistedInt` in `lastRunBySession`, server/src/coord/store.ts): the column
+    CAST to text, read as a number, is a positive safe integer — anything else (NULL, zero, a negative, a fraction, a
+    word) is doubt, None. The SAME answer for every text CAST makes of an INTEGER or REAL value, and for decimal TEXT;
+    `_` is refused because Python's float() reads `1_000` and JavaScript's Number() does not. One divergence is left,
+    stated: a hand-written TEXT value in JavaScript's own radix spellings (`0x10`, `0b1`, `0o7`) is a number to the
+    server and doubt here — no writer produces one (the server writes closedAt as an integer)."""
+    if text is None or '_' in text:
+        return None
+    try:
+        v = float(text)
+    except ValueError:
+        return None
+    return int(v) if v.is_integer() and 1 <= v <= 2 ** 53 - 1 else None
+
+
 def released_computed(sessions, runs):
     """The six conditions of spec §5.1, from the runs and the snapshot's registry facts."""
     newest, open_workers, open_claimants = {}, set(), set()
     for rid, sid, state, claimed, closed in runs:
         if sid is not None and (sid not in newest or rid > newest[sid][0]):
-            newest[sid] = (rid, state, closed)
+            newest[sid] = (rid, state, close_time(closed))
         if state not in TERMINAL:
             if sid is not None:
                 open_workers.add(sid)
@@ -112,7 +134,7 @@ def main():
     sessions = [s for s in snap['sessions'] if isinstance(s, dict)]
     db = open_db(a.db)
     try:
-        runs = db.execute('SELECT id, sessionId, state, claimedBy, closedAt FROM runs').fetchall()
+        runs = db.execute('SELECT id, sessionId, state, claimedBy, CAST(closedAt AS TEXT) FROM runs').fetchall()
         journal = db.execute(
             'SELECT sessionId, act, outcome, at FROM lifecycle_events '
             "WHERE outcome = 'done' AND sessionId IS NOT NULL ORDER BY at, id").fetchall()
