@@ -698,6 +698,7 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
           ev(5, 'SessionStart', { session_id: 'T', source: 'clear' }),
           // a subagent-side Bash event WITHOUT agent_id: found by its DLG-ACK- marker all the same
           ev(6, 'PostToolUse', { session_id: 'S', tool_name: 'Bash', tool_input: { command: 'echo DLG-ACK-1' }, cwd: '/rig/repo/.claude/worktrees/agent-x1' }),
+          ev(7, 'SubagentStop', { session_id: 'S', agent_id: 'x1', agent_transcript_path: '/rig/home/agent-x1.jsonl' }),
         ],
         disk: {
           admin: {
@@ -739,7 +740,83 @@ describe('build-matrix.mjs (the corpus -> matrix.json, derived)', () => {
       sessionEnd: { count: 0, reasons: [] }, sessionIds: 2, sessionStarts: [['startup', 's1'], ['clear', 's2']],
       subagentBash: { count: 2, withAgentId: 1, firstSessionId: 'all', cwdInWorktree: 'all' },
       snapshots: { 'before-kill': ['agent-x1'] },
+      transcriptNamesAgent: 'all',
+      events: {
+        SubagentStop: { count: 1, withAgentId: 1, keys: ['agent_id', 'agent_transcript_path', 'session_id'] },
+        PreToolUse: { count: 2, withAgentId: 1, keys: ['agent_id', 'cwd', 'session_id', 'tool_input', 'tool_name'] },
+        SessionStart: { count: 2, withAgentId: 0, keys: ['session_id', 'source'] },
+      },
     });
+  });
+
+  /** One version, one scenario: the fixture's file contents (an object is JSON-encoded, a string written raw). */
+  function one(content: unknown): { cell: Record<string, any>; r: ReturnType<typeof build>; fix: string } {
+    const fix = mkTmp('ccrc-dlg-mx1-');
+    const scen = mkTmp('ccrc-dlg-sc1-');
+    fs.writeFileSync(path.join(scen, 's.json'), '{}');
+    fs.mkdirSync(path.join(fix, '2.1.1'), { recursive: true });
+    fs.writeFileSync(path.join(fix, '2.1.1', 's.json'), typeof content === 'string' ? content : JSON.stringify(content));
+    const r = build([fix, scen]);
+    expect(r.status, r.stderr).toBe(0);
+    return { cell: JSON.parse(r.stdout).cells['2.1.1/s'], r, fix };
+  }
+  const main = (seq: number, tool: string, input: Record<string, unknown> = {}) => ev(seq, 'PreToolUse', { session_id: 'S', tool_name: tool, tool_input: input });
+
+  it('an event with an unparseable payload makes the cell unmeasured, never a measured zero', () => {
+    const { cell } = one(fixture({ events: [ev(1, 'SessionStart', { session_id: 'S' }), { seq: 2, dtMs: 2, event: 'SubagentStart', envSid: 'u', payload: null }] }));
+    expect(cell).toEqual({ status: 'unmeasured', reason: 'unparseable payload', eventsSeen: { SessionStart: 1, SubagentStart: 1 } });
+  });
+
+  it('a SubagentStop missing either field is counted against transcriptNamesAgent, not skipped', () => {
+    const good = ev(1, 'SubagentStop', { session_id: 'S', agent_id: 'a', agent_transcript_path: '/rig/h/agent-a.jsonl' });
+    const noId = ev(2, 'SubagentStop', { session_id: 'S', agent_transcript_path: '/rig/h/agent-a.jsonl' });
+    const noPath = ev(3, 'SubagentStop', { session_id: 'S', agent_id: 'b' });
+    expect(one(fixture({ events: [noId] })).cell.transcriptNamesAgent).toBe('none');
+    expect(one(fixture({ events: [noPath] })).cell.transcriptNamesAgent).toBe('none');
+    expect(one(fixture({ events: [good, noId] })).cell.transcriptNamesAgent).toBe('some');
+    expect(one(fixture({ events: [good] })).cell.transcriptNamesAgent).toBe('all');
+    expect(one(fixture({ events: [ev(1, 'SessionStart', { session_id: 'S' })] })).cell.transcriptNamesAgent).toBeNull();
+  });
+
+  it('a corrupt fixture is unreadable, not absent', () => {
+    expect(one('{ not json').cell).toEqual({ status: 'unmeasured', reason: 'fixture unreadable' });
+    expect(one('[]').cell).toEqual({ status: 'unmeasured', reason: 'fixture unreadable' });
+    expect(one(fixture({ events: 'x' })).cell).toEqual({ status: 'unmeasured', reason: 'fixture unreadable' });
+  });
+
+  it('a non-version directory is skipped with one stderr line that does not name it', () => {
+    const fix = mkTmp('ccrc-dlg-mx2-');
+    const scen = mkTmp('ccrc-dlg-sc2-');
+    fs.writeFileSync(path.join(scen, 's.json'), '{}');
+    fs.mkdirSync(path.join(fix, '2.1.1'));
+    fs.mkdirSync(path.join(fix, 'home-secret-dir'));
+    fs.writeFileSync(path.join(fix, 'matrix.json'), '{}');
+    const r = build([fix, scen]);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).versions).toEqual(['2.1.1']);
+    expect(r.stderr.trim().split('\n')).toEqual(['build-matrix: skipped a non-version directory (#1)']);
+    expect(r.stderr).not.toContain('secret');
+  });
+
+  it('a fixture that names another version or scenario than its path is misplaced', () => {
+    expect(one(fixture({ version: '2.1.2', scenario: 's', events: [ev(1, 'SessionStart', { session_id: 'S' })] })).cell).toEqual({ status: 'unmeasured', reason: 'fixture misplaced' });
+    expect(one(fixture({ version: '2.1.1', scenario: 'other', events: [ev(1, 'SessionStart', { session_id: 'S' })] })).cell).toEqual({ status: 'unmeasured', reason: 'fixture misplaced' });
+    expect(one(fixture({ version: '2.1.1', scenario: 's', events: [ev(1, 'SessionStart', { session_id: 'S' })] })).cell.status).toBe('measured');
+  });
+
+  it('an empty fixture and a capture-cap fixture are unmeasured with no question field; one under the cap is measured', () => {
+    expect(one(fixture({ notes: ['x'] })).cell).toEqual({ status: 'unmeasured', reason: 'x', eventsSeen: {} });
+    expect(one(fixture({})).cell).toEqual({ status: 'unmeasured', reason: 'no events captured', eventsSeen: {} });
+    const many = (n: number) => Array.from({ length: n }, (_, i) => ev(i + 1, 'SessionStart', { session_id: 'S' }));
+    expect(one(fixture({ events: many(200) })).cell).toEqual({ status: 'unmeasured', reason: 'capture cap reached', eventsSeen: { SessionStart: 200 } });
+    expect(one(fixture({ events: many(199) })).cell.status).toBe('measured');
+  });
+
+  it('agentTool is the MAIN loop\'s Agent call even when a subagent-side call comes first, and a Task call is Task', () => {
+    const sub = ev(1, 'PreToolUse', { session_id: 'S', agent_id: 'x1', tool_name: 'Agent', tool_input: {} });
+    expect(one(fixture({ events: [sub, main(2, 'Agent', { isolation: 'worktree' })] })).cell).toMatchObject({ agentTool: 'Agent', agentIsolationInInput: true });
+    expect(one(fixture({ events: [main(1, 'Task')] })).cell).toMatchObject({ agentTool: 'Task', agentIsolationInInput: false });
+    expect(one(fixture({ events: [sub] })).cell).toMatchObject({ agentTool: null, agentIsolationInInput: null });
   });
 
   it('sorts versions numerically and lists every scenario of the scenarios directory', () => {

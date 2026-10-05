@@ -5,6 +5,8 @@
 // aborted run, the capture cap) is `unmeasured` and carries no question field, so every value in a
 // `measured` cell was observed; inside one, `null` means "not observed in this run", never "unmeasured".
 // A PROBE that was not reached (`probe [...]: not reached`) is an outcome, recorded in `probesMissed`.
+// An unparseable payload, a file that does not parse, and a fixture filed under another version or scenario
+// than it names are `unmeasured` too (reasons `unparseable payload`, `fixture unreadable`, `fixture misplaced`).
 // Usage: node build-matrix.mjs <fixtures-dir> <scenarios-dir> [--write]
 import fs from 'node:fs';
 import path from 'node:path';
@@ -35,6 +37,10 @@ function cell(f) {
   if (f.events.length === 0) return { status: 'unmeasured', reason: f.notes.join('; ') || 'no events captured', eventsSeen: seen };
   if (failed.length > 0) return { status: 'unmeasured', reason: failed.join('; '), eventsSeen: seen };
   if (f.events.length >= CAPTURE_CAP) return { status: 'unmeasured', reason: 'capture cap reached', eventsSeen: seen };
+  // Every question field below reads payloads. An event whose payload did not parse would count in `events`
+  // yet vanish from the fields, so `subagentStarts: 0` could sit beside `events.SubagentStart.count: 1` and
+  // read as "never fired" when nothing was measured: such a run is unmeasured.
+  if (f.events.some((e) => !e.payload)) return { status: 'unmeasured', reason: 'unparseable payload', eventsSeen: seen };
 
   const by = {};
   for (const e of f.events) {
@@ -61,7 +67,7 @@ function cell(f) {
   // agent_id — whether they carry an agent_id is one of the questions.
   const acks = withP.filter((e) => (e.event === 'PreToolUse' || e.event === 'PostToolUse') && e.payload.tool_name === 'Bash'
     && typeof e.payload.tool_input?.command === 'string' && e.payload.tool_input.command.includes('DLG-ACK-'));
-  const stops = withP.filter((e) => e.event === 'SubagentStop' && isStr(e.payload.agent_transcript_path) && isStr(e.payload.agent_id));
+  const stops = withP.filter((e) => e.event === 'SubagentStop');
   const ends = withP.filter((e) => e.event === 'SessionEnd');
   const probesMissed = f.notes.map((n) => PROBE_NOTE.exec(n)).filter(Boolean).flatMap((m) => JSON.parse(m[1])).sort();
   const snapshots = Object.fromEntries(Object.entries(f.disk.snapshots ?? {}).sort()
@@ -93,19 +99,31 @@ function cell(f) {
       firstSessionId: share(acks, (e) => e.payload.session_id === firstSid),
       cwdInWorktree: share(acks, (e) => isStr(e.payload.cwd) && e.payload.cwd.startsWith('/rig/repo/.claude/worktrees/')),
     },
-    transcriptNamesAgent: share(stops, (e) => path.basename(e.payload.agent_transcript_path) === `agent-${e.payload.agent_id}.jsonl`),
+    transcriptNamesAgent: share(stops, (e) => isStr(e.payload.agent_transcript_path) && isStr(e.payload.agent_id)
+      && path.basename(e.payload.agent_transcript_path) === `agent-${e.payload.agent_id}.jsonl`),
     snapshots,
   };
 }
 
-const versions = fs.readdirSync(fixDir).filter((n) => VERSION.test(n) && fs.statSync(path.join(fixDir, n)).isDirectory()).sort(cmpV);
+const dirs = fs.readdirSync(fixDir).sort().filter((n) => fs.statSync(path.join(fixDir, n)).isDirectory());
+// A directory that is not a version is skipped LOUDLY, by ordinal: its name could be residue.
+dirs.forEach((n, i) => { if (!VERSION.test(n)) process.stderr.write(`build-matrix: skipped a non-version directory (#${i})\n`); });
+// The Fixture shape cell() reads; anything else is a corrupt file, not an absent one.
+const shaped = (f) => f !== null && typeof f === 'object' && Array.isArray(f.events) && Array.isArray(f.notes) && Array.isArray(f.labels)
+  && f.disk !== null && typeof f.disk === 'object' && f.disk.admin !== null && typeof f.disk.admin === 'object'
+  && Array.isArray(f.disk.worktreesLeft) && f.disk.metas !== null && typeof f.disk.metas === 'object';
+const versions = dirs.filter((n) => VERSION.test(n)).sort(cmpV);
 const scenarios = fs.readdirSync(scenDir).filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -'.json'.length)).sort();
 const cells = {};
 for (const v of versions) {
   for (const s of scenarios) {
+    const file = path.join(fixDir, v, `${s}.json`);
     let f = null;
-    try { f = JSON.parse(fs.readFileSync(path.join(fixDir, v, `${s}.json`), 'utf8')); } catch { f = null; }
-    cells[`${v}/${s}`] = f === null ? { status: 'unmeasured', reason: 'no fixture' } : cell(f);
+    if (!fs.existsSync(file)) { cells[`${v}/${s}`] = { status: 'unmeasured', reason: 'no fixture' }; continue; }
+    try { f = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { f = null; }
+    if (!shaped(f)) cells[`${v}/${s}`] = { status: 'unmeasured', reason: 'fixture unreadable' };
+    else if (f.version !== v || f.scenario !== s) cells[`${v}/${s}`] = { status: 'unmeasured', reason: 'fixture misplaced' };
+    else cells[`${v}/${s}`] = cell(f);
   }
 }
 const text = `${JSON.stringify({ v: 1, versions, scenarios, cells }, null, 1)}\n`;
