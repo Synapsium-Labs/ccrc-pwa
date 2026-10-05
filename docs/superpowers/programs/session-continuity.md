@@ -324,7 +324,7 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - **The brief was re-dated at dispatch.** #215 merged at `b40f4145` (22:10) before it, so the overlap line now says
     the branch already carries it and the plan's anchors in ccd/ccd, ccd/ccrc and session-hook.test.ts must be
     re-measured.
-- **2026-10-05 10:15 — wave 3's wave-done** (mail 3469; PR #250 at `b00849ee`): every task done.
+- **2026-10-05 10:00 — wave 3's wave-done** (mail 3469; PR #250 at `b00849ee`): every task done.
   - **Numbers defined:** 3896–3905 and 3921. The worker also used all four spares:
     - 3922: the journal floor follows rotation;
     - 3923: one transcript read per restart (`choicekept`);

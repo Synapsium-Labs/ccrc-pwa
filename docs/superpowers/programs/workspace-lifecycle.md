@@ -394,7 +394,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **The plan workflow** (wf_0b9331f4-22e): an Opus drafter prototyping in its own worktree; four Opus lenses (spec,
     safety and data loss, replay, test honesty); an Opus reviser; a Sonnet replay verifier. The plan goes to branch
     `docs/workspace-lifecycle-wave3-plan`.
-- **2026-10-05 10:20 — wave 3's plan is ready: #252** (`93771c0b2`, 5,290 lines, 10 tasks, 14 departure slugs).
+- **2026-10-05 10:07 — wave 3's plan is ready: #252** (`93771c0b2`, 5,290 lines, 10 tasks, 14 departure slugs).
   - **How it was made:** the drafter prototyped every task. Four Opus lenses reviewed it, none unverified. The
     reviser applied 23 findings and rejected 5 with reasons. A Sonnet verifier replayed all 128 blocks onto main
     `4100ae1c9`: each matched exactly once, every stage's red and green counts agreed, and 20 sampled mutation rows
@@ -457,7 +457,7 @@ wave 2's deploy converges, check that `/health` reports the merge's tag and that
 
 Wave 3 (the `ws-expire` verb, AGENT-FIRST) is open as run 245 (planned), with deviation numbers 3886 to 3895,
 written bare. Wave 3b (the lane) is planned after it merges.
-- **Its plan is #252** (2026-10-05 10:20 entry; numbers 3886–3895 and 3958–3965). It dispatches once
+- **Its plan is #252** (2026-10-05 10:07 entry; numbers 3886–3895 and 3958–3965). It dispatches once
   child-reclamation wave 4 (#215, merged `b40f4145`) is deployed.
 - **Its plan's FIRST commit is wave 2's residue** from review 244 (`~/.cc-clips/ccrc-pwa-still-canyon/review-244-53f31389.md`):
   - F1: `stopVerdict` reads `status` only when it is a string, and its docstring and the 3881 entry name the

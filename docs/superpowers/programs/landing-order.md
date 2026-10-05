@@ -417,7 +417,7 @@ carries it (spec §5.1, amended 2026-09-24).
     the operator and to the update-management coordinator.
   - **The brief was re-dated at dispatch.** #215 merged at `b40f4145` (22:10) before it, so the overlap line now says
     the branch already carries it and the plan's anchors in its files must be re-measured.
-- **2026-10-05 10:15 — wave 3's wave-done** (mail 3457; PR #248 at `3f9cca09`): the plan's five tasks, the
+- **2026-10-05 10:00 — wave 3's wave-done** (mail 3457; PR #248 at `3f9cca09`): the plan's five tasks, the
   amendment, and 3906–3915 defined. 3916–3920 are unused.
   - **Re-measured:** the tip matches the claim, and every required Linux check is green. The worker's reds are load
     (each green alone) or tmp-sweep, which is red on main. The run went to `awaiting-review`, and its five items were
