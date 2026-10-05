@@ -21180,7 +21180,7 @@ _upd_sweep() {
         ( _upd_sweep_launch "$vdir" "$verify" "$i" "$j" ) 2>"$vdir/launch.err" &
         lpid=$!; printf '%s\n' "$lpid" >"$vdir/launcher.proc"
         wait "$lpid" || lrc=$?
-        : >"$vdir/launcher.proc"; lpid=""
+        lpid=""; : >"$vdir/launcher.proc"
         eval "${ltrap:-trap - INT}"
         if [ "$lrc" -ne 0 ]; then
           _upd_sweep_kill "$vdir"
