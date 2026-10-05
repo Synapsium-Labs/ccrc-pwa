@@ -2866,9 +2866,11 @@ _box_env_shell_plain() {   # <file>
 # _box_env_has_nul <file> — rc 0 iff the file holds a NUL byte: both arms' one detector (`_box_env_unit_whole`, D-3831;
 # `_box_env_shell_plain`, D-3832). `read` drops a NUL, so it is never trusted to report one: a `read -d ''` that
 # SUCCEEDS stopped at a NUL. rc 1 for a file with none, and for one that cannot be opened (both callers read only a
-# file already measured readable).
+# file already measured readable). It reads BYTES under its own `LC_ALL=C` (D-3833): under a UTF-8 locale bash's `read`
+# takes an incomplete lead byte (0xC2-0xF4) and the NUL after it as one character, never sees the delimiter, and
+# answers "no NUL" — so it never leans on a caller's locale.
 _box_env_has_nul() {   # <file>
-  local chunk
+  local chunk LC_ALL=C
   IFS= read -r -d '' chunk < "$1"
 }
 
@@ -3015,8 +3017,11 @@ _box_unit_env() {   # <KEY>
 }
 # _box_unit_env_shell — the Darwin arm (round-2 ruling R-A): BOTH readable files must pass `_box_env_shell_plain`
 # before either is read; one that fails makes every key rc 3. ccrc.env is checked first, as bash sources it first.
+# The WHOLE arm reads bytes (D-3833): `local LC_ALL=C` here reaches `_box_env_shell_plain`, `_box_env_has_nul` and
+# shell-mode `_box_env_value` by bash's dynamic scope. Under a UTF-8 locale a line ending in a lone lead byte swallowed
+# its newline (two lines read as one), and a lead byte before a NUL hid the NUL; the launchd job's /bin/bash reads bytes.
 _box_unit_env_shell() {   # <KEY>
-  local key="$1" v rc bad=""
+  local key="$1" v rc bad="" LC_ALL=C
   if [ -e "$BOX_ENV_FILE" ]; then
     if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
       BUE_ENV=ok

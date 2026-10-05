@@ -3008,20 +3008,37 @@ const expectUndecided = (detail: string, file: string): void => {
 interface UnitEnvRow { label: string; env: string | null; exp: string | 'UNREADABLE' | null; key: string }
 interface UnitEnvAnswer { rc: number; val: string; src: string; why: string; fix: string; envPath: string; expPath: string }
 
+/** The UTF-8 locale this host's bash really runs under (D-3833's pins): the first candidate under which bash counts the
+ *  two-byte `é` as ONE character. A locale that is not installed falls back to C silently, which would make a UTF-8
+ *  row hollow — so the probe measures the effect, and a host with none THROWS (the case fails, never skips). Linux
+ *  runners carry `C.UTF-8`; macOS ships `en_US.UTF-8`, tried second. */
+function utf8Locale(): string {
+  for (const loc of ['C.UTF-8', 'en_US.UTF-8']) {
+    const r = spawnSync(BASH, ['-c', `x=$'\\xc3\\xa9'; printf '%s' "\${#x}"`], { encoding: 'utf8', env: { LC_ALL: loc } });
+    if (r.status === 0 && r.stdout === '1') return loc;
+  }
+  throw new Error('no UTF-8 locale takes effect in bash on this host (C.UTF-8, en_US.UTF-8): the UTF-8 rows cannot run');
+}
+
 /** `_box_unit_env <key>` over each row's fixture files, with `CCD_OS` set AFTER sourcing (so the Darwin arm runs on
- *  every platform). One bash for all rows; every result goes through a file, so no `$(…)` eats a byte. */
-function unitEnvAnswers(rows: UnitEnvRow[], os: 'linux' | 'darwin'): UnitEnvAnswer[] {
+ *  every platform). One bash for all rows; every result goes through a file, so no `$(…)` eats a byte. The files are
+ *  written byte for byte (latin1: every row below `\u0100`). `locale` replaces the harness's `LC_ALL=C` (D-3833), and
+ *  the run first proves it took effect — bash counts `é` as one character — or exits 7, which fails the case. */
+function unitEnvAnswers(rows: UnitEnvRow[], os: 'linux' | 'darwin', locale = 'C'): UnitEnvAnswer[] {
   const dir = mkTmp('ccrc-doctor-unitenv-');
   rows.forEach((row, i) => {
     const d = join(dir, `r${i}`);
     mkdirSync(d, { recursive: true });
-    if (row.env !== null) writeFileSync(join(d, 'ccrc.env'), row.env);
+    if (row.env !== null) writeFileSync(join(d, 'ccrc.env'), row.env, 'latin1');
     if (row.exp === 'UNREADABLE') mkdirSync(join(d, 'exposure.env'));
-    else if (row.exp !== null) writeFileSync(join(d, 'exposure.env'), row.exp);
+    else if (row.exp !== null) writeFileSync(join(d, 'exposure.env'), row.exp, 'latin1');
     writeFileSync(join(d, 'key'), row.key);
   });
+  const proof = locale === 'C' ? [] : [
+    `x=$'\\xc3\\xa9'; [ "\${#x}" -eq 1 ] || { echo "LC_ALL=${locale} did not take effect: \${#x} characters in a 2-byte é" >&2; exit 7; }`,
+  ];
   const script = [
-    'set -uo pipefail', `. ${shq(CCRC_SRC)}`, `CCD_OS=${os}`,
+    'set -uo pipefail', ...proof, `. ${shq(CCRC_SRC)}`, `CCD_OS=${os}`,
     `for ((i=0;i<${rows.length};i++)); do d=${shq(dir)}/r$i`,
     '  BOX_ENV_FILE=$d/ccrc.env; CCRC_EXPOSURE_FILE=$d/exposure.env; read -r key < "$d/key"',
     '  _box_unit_env "$key"; rc=$?',
@@ -3029,7 +3046,7 @@ function unitEnvAnswers(rows: UnitEnvRow[], os: 'linux' | 'darwin'): UnitEnvAnsw
     '  printf "%s" "$BUE_WHY" > "$d/why"; printf "%s" "$BUE_FIX" > "$d/fix"',
     'done',
   ].join('\n');
-  const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { HOME: dir, PATH: join(dir, 'no-bin'), LC_ALL: 'C' } });
+  const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { HOME: dir, PATH: join(dir, 'no-bin'), LC_ALL: locale } });
   expect(r.status, r.stderr).toBe(0);
   return rows.map((_, i) => {
     const d = join(dir, `r${i}`);
@@ -3571,7 +3588,7 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   // and removes only the FUNCTION, so every constant the guard also checks
   // stays present — a dropped `_box_unit_env` term is the only thing that can
   // red this pin. `BUE_VAL=on` is preset AFTER sourcing ccrc (a shell
-  // assignment, never an env entry — `ccd/ccrc:2937` resets it at file scope
+  // assignment, never an env entry — `ccd/ccrc:2939` resets it at file scope
   // on load) in case some path through the ungoverned body reads it, but in
   // THIS harness (`PATH` pointing nowhere) it never gets the chance.
   // MEASURED (wave 9, R11-F2), with the guard's `|| ! declare -F _box_unit_env`
@@ -4072,6 +4089,61 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
           if (os === 'darwin') expect(a.why, label).toContain('/bin/bash, which stops reading a file at its first NUL byte');
         });
       }
+    });
+
+    // Fix round 2 (D-3833, review 266 F1/F2): every row above runs under the harness's LC_ALL=C. Under a UTF-8 locale bash
+    // `read`s CHARACTERS: an incomplete lead byte (0xC3) takes the NUL after it (the NUL is never seen) or the newline
+    // after it (two lines read as one). The Darwin arm now reads bytes whatever the caller's locale; these rows run it
+    // under a UTF-8 one, proved in effect first.
+    // The F2 row is DARWIN ONLY, deliberately: `unit` mode's own line loop (Linux) still reads in the caller's locale,
+    // so under UTF-8 it reads that file as ccrc.env's `on` where systemd hands the unit `off` — measured identical at
+    // b40f4145, f74f5e90 and 670d25fd. Round 2's bar forbids changing a Linux verdict, so it is reported, not fixed here.
+    /** `[label, ccrc.env, exposure file, the answer: rc 3 naming the exposure file's NUL, or the decided value, the feeders]`. */
+    const U4U: Array<[string, string, string, { rc: 3 } | { rc: 0; val: string }, Array<'darwin' | 'linux'>]> = [
+      ['F1: a lead byte right before the NUL', 'CCRC_AUTH=off\n', '# caf\xc3\0\nCCRC_AUTH=on\n', { rc: 3 }, ['darwin', 'linux']],
+      ['the NUL as the last byte, after a lead byte', 'CCRC_AUTH=off\n', 'CCRC_AUTH=on\n#\xc3\0', { rc: 3 }, ['darwin', 'linux']],
+      ['F2: a comment ending in a lone lead byte keeps its newline', 'CCRC_AUTH=on\n', '# caf\xc3\nCCRC_AUTH=off\n', { rc: 0, val: 'off' }, ['darwin']],
+    ];
+
+    it('U4u: under a UTF-8 locale, a lead byte before a NUL still reads rc 3, and a comment ending in a lead byte does not swallow the next line on Darwin (D-3833; 670d25fd under UTF-8: Darwin rc 0 `on`, twice)', () => {
+      const loc = utf8Locale();
+      const rows: UnitEnvRow[] = U4U.map(([label, env, exp]) => ({ label, env, exp, key: 'CCRC_AUTH' }));
+      for (const os of ['darwin', 'linux'] as const) {
+        const got = unitEnvAnswers(rows, os, loc);
+        U4U.forEach(([label, , , want, oses], i) => {
+          if (!oses.includes(os)) return;
+          const a = got[i]!;
+          const tag = `${os} under LC_ALL=${loc}: ${label}`;
+          if (want.rc === 3) {
+            expect([a.rc, a.val, a.src], tag).toEqual([3, '', '']);
+            expect(a.why.startsWith(`${a.expPath} holds a NUL byte`), `${tag}: ${a.why}`).toBe(true);
+          } else {
+            expect([a.rc, a.val, a.src], tag).toEqual([0, want.val, a.expPath]);
+          }
+        });
+      }
+    });
+
+    it('U4n: `_box_env_has_nul` alone, called with NO caller pinning a locale, under a UTF-8 one — it reads bytes itself, so neither arm\'s answer leans on its caller (D-3833)', () => {
+      const loc = utf8Locale();
+      const dir = mkTmp('ccrc-doctor-hasnul-');
+      /** `[label, bytes, rc]`: 0 = a NUL is there, 1 = none. */
+      const files: Array<[string, string, number]> = [
+        ['a lead byte right before the NUL', '# caf\xc3\0\nCCRC_AUTH=on\n', 0],
+        ['the NUL as the last byte, after a lead byte', 'CCRC_AUTH=on\n#\xc3\0', 0],
+        ['a three-byte lead pair before the NUL', '# \xe2\x80\0\n', 0],
+        ['control: high bytes and no NUL', '# caf\xc3\nX=\xe2\x80\x94\n', 1],
+      ];
+      files.forEach(([, bytes], i) => writeFileSync(join(dir, `f${i}`), bytes, 'latin1'));
+      const script = [
+        `x=$'\\xc3\\xa9'; [ "\${#x}" -eq 1 ] || { echo "LC_ALL=${loc} did not take effect" >&2; exit 7; }`,
+        `. ${shq(CCRC_SRC)}`,
+        `for ((i=0;i<${files.length};i++)); do _box_env_has_nul ${shq(dir)}/f$i; echo $?; done`,
+      ].join('\n');
+      const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { HOME: dir, PATH: join(dir, 'no-bin'), LC_ALL: loc } });
+      expect(r.status, r.stderr).toBe(0);
+      const rcs = r.stdout.trim().split('\n').map(Number);
+      files.forEach(([label, , want], i) => expect(rcs[i], `LC_ALL=${loc}: ${label}`).toBe(want));
     });
 
     it('U3l: the same rows with CCD_OS=linux — `unit` mode\'s answers, the platform split stated as data: one set of bytes, two feeders', () => {
@@ -8309,7 +8381,7 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
   // BOTH files intact and removes only the FUNCTION (never `unset
   // CCRC_EXPOSURE_FILE`, which the guard tests first and would mask the
   // mutation), with `BUE_VAL=on` preset AFTER sourcing ccrc as a shell
-  // assignment (an env entry is reset at ccrc's own file scope, `:2937`) — a
+  // assignment (an env entry is reset at ccrc's own file scope, `:2939`) — a
   // guard missing this term reads that stale value as ARMED instead of
   // failing shut.
   it('the not-loaded guard also requires _box_unit_env — dropping only that function still FAILs, not a stale ARMED PASS', () => {
