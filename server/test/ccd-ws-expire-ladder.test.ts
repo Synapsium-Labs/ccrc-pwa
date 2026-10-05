@@ -8,7 +8,6 @@
 // `containment-unproven`) — with rung 5 asked MORE of for an expiry: a detached pane and a live unit refuse `live`.
 // FIXTURE HOME ONLY (`wsExpireFixture.ts`).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
@@ -435,7 +434,7 @@ describe('rung 5 on Darwin — a cwd under the worktree, asked of lsof', () => {
   const binDir = (name: string, ps?: string): string => {
     const d = path.join(h.home, name);
     fs.mkdirSync(d);
-    fs.symlinkSync(execFileSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).trim(), path.join(d, 'python3'));
+    fs.symlinkSync(h.sh('command -v python3').trim(), path.join(d, 'python3'));   // through the harness: all three poisons
     if (ps !== undefined) fs.writeFileSync(path.join(d, 'ps'), `#!/bin/sh\n${ps}\n`, { mode: 0o755 });
     return d;
   };
@@ -478,7 +477,7 @@ describe('rung 5 on Darwin — a cwd under the worktree, asked of lsof', () => {
   it('(c) a pid the KERNEL no longer has is skipped — whether ps answers an error or says nothing', () => {
     const { wt } = makeArchived(h);
     // A real pid, finished AND REAPED before the listing names it (bash waits for it), so `kill(pid, 0)` is ESRCH.
-    const gone = Number(execFileSync('bash', ['-c', 'sleep 0 & echo $!; wait'], { encoding: 'utf8' }).trim());
+    const gone = Number(h.sh('sleep 0 & echo $!; wait').trim());   // through the harness: all three poisons
     const pre = (extra: string): string => lsof(listing(gone, fs.realpathSync(wt))) + extra;
     expect(expireEvalOf(h, { pre: pre('') }).verdict, 'the real ps: no such process').toBe('expirable');
     for (const ps of ['exit 1', 'echo "ps: it broke" >&2; exit 2', 'kill -9 $$']) {
